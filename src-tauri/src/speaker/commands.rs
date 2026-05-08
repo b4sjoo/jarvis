@@ -1,15 +1,15 @@
 // Jarvis AI Speech Detection, and capture system audio (speaker output) as a stream of f32 samples.
 use crate::speaker::{AudioDevice, SpeakerInput};
 use anyhow::Result;
-use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
+use base64::{Engine as _, engine::general_purpose::STANDARD as B64};
 use futures_util::StreamExt;
 use hound::{WavSpec, WavWriter};
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 use std::io::Cursor;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter, Listener, Manager};
 use tauri_plugin_shell::ShellExt;
 use tracing::{error, warn};
@@ -44,11 +44,42 @@ impl Default for VadConfig {
     }
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MeetingAudioStatus {
+    pub active: bool,
+    pub system_capture_active: bool,
+    pub capture_owner: Option<String>,
+    pub device_id: Option<String>,
+    pub sample_rate: Option<u32>,
+    pub vad_enabled: bool,
+    pub started_at_ms: Option<u64>,
+}
+
 #[tauri::command]
 pub async fn start_system_audio_capture(
     app: AppHandle,
     vad_config: Option<VadConfig>,
     device_id: Option<String>,
+) -> Result<(), String> {
+    start_audio_capture(app, vad_config, device_id, "system").await
+}
+
+#[tauri::command]
+pub async fn start_meeting_audio_session(
+    app: AppHandle,
+    vad_config: Option<VadConfig>,
+    device_id: Option<String>,
+) -> Result<MeetingAudioStatus, String> {
+    start_audio_capture(app.clone(), vad_config, device_id, "meeting").await?;
+    get_meeting_audio_status(app).await
+}
+
+async fn start_audio_capture(
+    app: AppHandle,
+    vad_config: Option<VadConfig>,
+    device_id: Option<String>,
+    capture_owner: &'static str,
 ) -> Result<(), String> {
     let state = app.state::<crate::AudioState>();
 
@@ -74,6 +105,7 @@ pub async fn start_system_audio_capture(
         *vad_cfg = config;
     }
 
+    let requested_device_id = device_id.clone();
     let input = SpeakerInput::new_with_device(device_id).map_err(|e| {
         error!("Failed to create speaker input: {}", e);
         format!("Failed to access system audio: {}", e)
@@ -103,6 +135,23 @@ pub async fn start_system_audio_capture(
         .is_capturing
         .lock()
         .map_err(|e| format!("Failed to set capturing state: {}", e))? = true;
+    *state
+        .capture_owner
+        .lock()
+        .map_err(|e| format!("Failed to set capture owner: {}", e))? =
+        Some(capture_owner.to_string());
+    *state
+        .capture_device_id
+        .lock()
+        .map_err(|e| format!("Failed to set capture device: {}", e))? = requested_device_id;
+    *state
+        .sample_rate
+        .lock()
+        .map_err(|e| format!("Failed to set sample rate: {}", e))? = Some(sr);
+    *state
+        .started_at_ms
+        .lock()
+        .map_err(|e| format!("Failed to set capture start time: {}", e))? = Some(now_ms());
 
     // Emit capture started event
     let _ = app_clone.emit("capture-started", sr);
@@ -121,6 +170,8 @@ pub async fn start_system_audio_capture(
                 *guard = None;
             };
         }
+        clear_capture_state(&*state);
+        let _ = app_clone.emit("capture-stopped", ());
     });
 
     *state_clone
@@ -477,11 +528,8 @@ pub async fn stop_system_audio_capture(app: AppHandle) -> Result<(), String> {
     // LONGER delay for proper cleanup (300ms instead of 150ms)
     tokio::time::sleep(tokio::time::Duration::from_millis(300)).await;
 
-    // Mark as not capturing
-    *state
-        .is_capturing
-        .lock()
-        .map_err(|e| format!("Failed to update capturing state: {}", e))? = false;
+    // Mark as not capturing and clear capture metadata
+    clear_capture_state(&*state);
 
     // Additional cleanup delay (CRITICAL for mic indicator)
     tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
@@ -489,6 +537,56 @@ pub async fn stop_system_audio_capture(app: AppHandle) -> Result<(), String> {
     // Emit stopped event
     let _ = app.emit("capture-stopped", ());
     Ok(())
+}
+
+#[tauri::command]
+pub async fn stop_meeting_audio_session(app: AppHandle) -> Result<MeetingAudioStatus, String> {
+    stop_system_audio_capture(app.clone()).await?;
+    get_meeting_audio_status(app).await
+}
+
+#[tauri::command]
+pub async fn get_meeting_audio_status(app: AppHandle) -> Result<MeetingAudioStatus, String> {
+    let state = app.state::<crate::AudioState>();
+
+    let system_capture_active = *state
+        .is_capturing
+        .lock()
+        .map_err(|e| format!("Failed to get capture status: {}", e))?;
+    let capture_owner = state
+        .capture_owner
+        .lock()
+        .map_err(|e| format!("Failed to get capture owner: {}", e))?
+        .clone();
+    let device_id = state
+        .capture_device_id
+        .lock()
+        .map_err(|e| format!("Failed to get capture device: {}", e))?
+        .clone();
+    let sample_rate = *state
+        .sample_rate
+        .lock()
+        .map_err(|e| format!("Failed to get sample rate: {}", e))?;
+    let started_at_ms = *state
+        .started_at_ms
+        .lock()
+        .map_err(|e| format!("Failed to get capture start time: {}", e))?;
+    let vad_enabled = state
+        .vad_config
+        .lock()
+        .map_err(|e| format!("Failed to get VAD config: {}", e))?
+        .enabled;
+    let active = system_capture_active && capture_owner.as_deref() == Some("meeting");
+
+    Ok(MeetingAudioStatus {
+        active,
+        system_capture_active,
+        capture_owner,
+        device_id,
+        sample_rate,
+        vad_enabled,
+        started_at_ms,
+    })
 }
 
 /// Manual stop for continuous recording
@@ -623,4 +721,29 @@ pub fn get_output_devices() -> Result<Vec<AudioDevice>, String> {
         error!("Failed to get output devices: {}", e);
         format!("Failed to get output devices: {}", e)
     })
+}
+
+fn clear_capture_state(state: &crate::AudioState) {
+    if let Ok(mut is_capturing) = state.is_capturing.lock() {
+        *is_capturing = false;
+    }
+    if let Ok(mut owner) = state.capture_owner.lock() {
+        *owner = None;
+    }
+    if let Ok(mut device_id) = state.capture_device_id.lock() {
+        *device_id = None;
+    }
+    if let Ok(mut sample_rate) = state.sample_rate.lock() {
+        *sample_rate = None;
+    }
+    if let Ok(mut started_at_ms) = state.started_at_ms.lock() {
+        *started_at_ms = None;
+    }
+}
+
+fn now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as u64)
+        .unwrap_or(0)
 }

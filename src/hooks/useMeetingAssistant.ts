@@ -1,11 +1,16 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { STORAGE_KEYS } from "@/config";
 import { useApp } from "@/contexts";
+import { safeLocalStorage } from "@/lib";
 import {
   AdvisorEngine,
   MeetingAssistantState,
   MeetingAudioConfig,
+  MeetingAudioStatus,
+  MeetingAssistantSettings,
+  MeetingPrivacyMode,
   MeetingContextManager,
   MeetingSetupWarning,
   base64WavToBlob,
@@ -24,6 +29,10 @@ const MISSING_AI_MESSAGE =
   "Choose an AI provider in Dev Space to receive live suggestions.";
 const MISSING_VISION_MESSAGE =
   "Choose an image-capable AI provider to analyze screen context.";
+const LOCAL_ONLY_UNAVAILABLE_MESSAGE =
+  "Local-only meeting mode needs local STT before it can start.";
+const SCREEN_CONTEXT_DISABLED_MESSAGE =
+  "Enable Text+Screen privacy mode before capturing screen context.";
 
 const DEFAULT_MEETING_AUDIO_CONFIG: MeetingAudioConfig = {
   enabled: true,
@@ -44,7 +53,49 @@ const INITIAL_STATE: MeetingAssistantState = {
   latestSuggestion: null,
   partialSuggestion: "",
   error: null,
+  audioStatus: null,
+  settings: {
+    screenContextEnabled: false,
+    privacyMode: "text-to-cloud",
+  },
 };
+
+const DEFAULT_MEETING_ASSISTANT_SETTINGS = INITIAL_STATE.settings;
+
+function readMeetingAssistantSettings(): MeetingAssistantSettings {
+  const stored = safeLocalStorage.getItem(
+    STORAGE_KEYS.MEETING_ASSISTANT_SETTINGS
+  );
+
+  if (!stored) return DEFAULT_MEETING_ASSISTANT_SETTINGS;
+
+  try {
+    const parsed = JSON.parse(stored) as Partial<MeetingAssistantSettings>;
+    const privacyMode = isMeetingPrivacyMode(parsed.privacyMode)
+      ? parsed.privacyMode
+      : DEFAULT_MEETING_ASSISTANT_SETTINGS.privacyMode;
+
+    return {
+      screenContextEnabled:
+        typeof parsed.screenContextEnabled === "boolean"
+          ? parsed.screenContextEnabled
+          : DEFAULT_MEETING_ASSISTANT_SETTINGS.screenContextEnabled,
+      privacyMode,
+    };
+  } catch {
+    return DEFAULT_MEETING_ASSISTANT_SETTINGS;
+  }
+}
+
+function isMeetingPrivacyMode(
+  value: unknown
+): value is MeetingPrivacyMode {
+  return (
+    value === "memory-only" ||
+    value === "text-to-cloud" ||
+    value === "text-and-screen-to-cloud"
+  );
+}
 
 function withTimeout<T>(
   promise: Promise<T>,
@@ -75,7 +126,10 @@ export function useMeetingAssistant() {
     selectedAudioDevices,
   } = useApp();
 
-  const [state, setState] = useState<MeetingAssistantState>(INITIAL_STATE);
+  const [state, setState] = useState<MeetingAssistantState>(() => ({
+    ...INITIAL_STATE,
+    settings: readMeetingAssistantSettings(),
+  }));
   const contextManagerRef = useRef(new MeetingContextManager());
   const advisorEngineRef = useRef(new AdvisorEngine());
   const activeRef = useRef(false);
@@ -110,6 +164,14 @@ export function useMeetingAssistant() {
       });
     }
 
+    if (state.settings.privacyMode === "memory-only") {
+      warnings.push({
+        code: "local-only-unavailable",
+        severity: "blocking",
+        message: LOCAL_ONLY_UNAVAILABLE_MESSAGE,
+      });
+    }
+
     if (!aiProvider) {
       warnings.push({
         code: "ai-provider-missing",
@@ -125,7 +187,7 @@ export function useMeetingAssistant() {
     }
 
     return warnings;
-  }, [aiProvider, sttProvider]);
+  }, [aiProvider, state.settings.privacyMode, sttProvider]);
 
   const clearAdvisorDebounce = useCallback(() => {
     if (advisorDebounceTimerRef.current !== null) {
@@ -134,6 +196,48 @@ export function useMeetingAssistant() {
     }
   }, []);
 
+  const updateSettings = useCallback(
+    (resolveSettings: (previous: MeetingAssistantSettings) => MeetingAssistantSettings) => {
+      setState((previous) => {
+        const settings = resolveSettings(previous.settings);
+        safeLocalStorage.setItem(
+          STORAGE_KEYS.MEETING_ASSISTANT_SETTINGS,
+          JSON.stringify(settings)
+        );
+
+        return {
+          ...previous,
+          settings,
+        };
+      });
+    },
+    []
+  );
+
+  const setScreenContextEnabled = useCallback(
+    (screenContextEnabled: boolean) => {
+      updateSettings((previous) => ({
+        ...previous,
+        screenContextEnabled,
+        privacyMode: screenContextEnabled
+          ? "text-and-screen-to-cloud"
+          : "text-to-cloud",
+      }));
+    },
+    [updateSettings]
+  );
+
+  const setPrivacyMode = useCallback(
+    (privacyMode: MeetingPrivacyMode) => {
+      updateSettings((previous) => ({
+        ...previous,
+        privacyMode,
+        screenContextEnabled: privacyMode === "text-and-screen-to-cloud",
+      }));
+    },
+    [updateSettings]
+  );
+
   const stop = useCallback(async () => {
     activeRef.current = false;
     clearAdvisorDebounce();
@@ -141,8 +245,12 @@ export function useMeetingAssistant() {
     screenAnalysisAbortRef.current?.abort();
     screenAnalysisAbortRef.current = null;
 
+    let audioStatus: MeetingAudioStatus | null = null;
+
     try {
-      await invoke("stop_system_audio_capture");
+      audioStatus = await invoke<MeetingAudioStatus>(
+        "stop_meeting_audio_session"
+      );
     } catch (error) {
       console.warn("Failed to stop meeting audio capture", error);
     }
@@ -152,6 +260,7 @@ export function useMeetingAssistant() {
       status: "idle",
       partialSuggestion: "",
       error: null,
+      audioStatus,
     }));
   }, [clearAdvisorDebounce]);
 
@@ -252,8 +361,12 @@ export function useMeetingAssistant() {
         screenAnalysisAbortRef.current?.abort();
         screenAnalysisAbortRef.current = null;
 
+        let audioStatus: MeetingAudioStatus | null = null;
+
         try {
-          await invoke("stop_system_audio_capture");
+          audioStatus = await invoke<MeetingAudioStatus>(
+            "stop_meeting_audio_session"
+          );
         } catch (error) {
           console.warn("Failed to stop meeting audio capture", error);
         }
@@ -263,6 +376,7 @@ export function useMeetingAssistant() {
           status: "error",
           partialSuggestion: "",
           error: MISSING_STT_MESSAGE,
+          audioStatus,
         }));
         return;
       }
@@ -326,6 +440,21 @@ export function useMeetingAssistant() {
   );
 
   const startCapture = useCallback(async (resetContext: boolean) => {
+    if (state.settings.privacyMode === "memory-only") {
+      activeRef.current = false;
+      clearAdvisorDebounce();
+      advisorEngineRef.current.cancelCurrentRequest();
+      screenAnalysisAbortRef.current?.abort();
+      screenAnalysisAbortRef.current = null;
+      setState((previous) => ({
+        ...previous,
+        status: "error",
+        partialSuggestion: "",
+        error: LOCAL_ONLY_UNAVAILABLE_MESSAGE,
+      }));
+      return;
+    }
+
     if (!sttProvider) {
       activeRef.current = false;
       clearAdvisorDebounce();
@@ -370,7 +499,7 @@ export function useMeetingAssistant() {
       advisorEngineRef.current.cancelCurrentRequest();
       activeRef.current = true;
 
-      await invoke("stop_system_audio_capture");
+      await invoke<MeetingAudioStatus>("stop_meeting_audio_session");
 
       const deviceId =
         selectedAudioDevices.output.id &&
@@ -378,20 +507,24 @@ export function useMeetingAssistant() {
           ? selectedAudioDevices.output.id
           : null;
 
-      await invoke("start_system_audio_capture", {
-        vadConfig: DEFAULT_MEETING_AUDIO_CONFIG,
-        deviceId,
-      });
+      const audioStatus = await invoke<MeetingAudioStatus>(
+        "start_meeting_audio_session",
+        {
+          vadConfig: DEFAULT_MEETING_AUDIO_CONFIG,
+          deviceId,
+        }
+      );
 
       const contextState = contextManagerRef.current.getState();
 
       setState((previous) => ({
-        ...(resetContext ? INITIAL_STATE : previous),
+        ...(resetContext ? { ...INITIAL_STATE, settings: previous.settings } : previous),
         status: "listening",
         transcriptTurns: contextState.transcriptTurns,
         screenObservations: contextState.screenObservations,
         partialSuggestion: "",
         error: null,
+        audioStatus,
       }));
     } catch (error) {
       activeRef.current = false;
@@ -407,6 +540,7 @@ export function useMeetingAssistant() {
   }, [
     clearAdvisorDebounce,
     selectedAudioDevices.output.id,
+    state.settings.privacyMode,
     sttProvider,
   ]);
 
@@ -425,8 +559,12 @@ export function useMeetingAssistant() {
     screenAnalysisAbortRef.current?.abort();
     screenAnalysisAbortRef.current = null;
 
+    let audioStatus: MeetingAudioStatus | null = null;
+
     try {
-      await invoke("stop_system_audio_capture");
+      audioStatus = await invoke<MeetingAudioStatus>(
+        "stop_meeting_audio_session"
+      );
     } catch (error) {
       console.warn("Failed to pause meeting audio capture", error);
     }
@@ -436,6 +574,7 @@ export function useMeetingAssistant() {
       status: "paused",
       partialSuggestion: "",
       error: null,
+      audioStatus,
     }));
   }, [clearAdvisorDebounce]);
 
@@ -443,6 +582,17 @@ export function useMeetingAssistant() {
     let analysisController: AbortController | null = null;
 
     try {
+      if (
+        !state.settings.screenContextEnabled ||
+        state.settings.privacyMode !== "text-and-screen-to-cloud"
+      ) {
+        setState((previous) => ({
+          ...previous,
+          error: SCREEN_CONTEXT_DISABLED_MESSAGE,
+        }));
+        return;
+      }
+
       const observation = await captureScreenObservation({
         previousHash: latestScreenHashRef.current,
       });
@@ -522,7 +672,7 @@ export function useMeetingAssistant() {
             : "Failed to capture screen context.",
         }));
     }
-  }, [aiProvider, scheduleAdvisor, selectedAIProvider]);
+  }, [aiProvider, scheduleAdvisor, selectedAIProvider, state.settings]);
 
   useEffect(() => {
     let unlistenSpeech: (() => void) | undefined;
@@ -552,6 +702,8 @@ export function useMeetingAssistant() {
   return {
     ...state,
     setupWarnings,
+    setPrivacyMode,
+    setScreenContextEnabled,
     start,
     pause,
     resume,

@@ -70,7 +70,8 @@ export interface AdvisorSuggestion {
 export type MeetingSetupWarningCode =
   | "stt-provider-missing"
   | "ai-provider-missing"
-  | "vision-provider-missing";
+  | "vision-provider-missing"
+  | "local-only-unavailable";
 
 export interface MeetingSetupWarning {
   code: MeetingSetupWarningCode;
@@ -120,6 +121,26 @@ export interface MeetingAudioConfig {
   max_recording_duration_secs: number;
 }
 
+export interface MeetingAudioStatus {
+  active: boolean;
+  systemCaptureActive: boolean;
+  captureOwner: string | null;
+  deviceId: string | null;
+  sampleRate: number | null;
+  vadEnabled: boolean;
+  startedAtMs: number | null;
+}
+
+export type MeetingPrivacyMode =
+  | "memory-only"
+  | "text-to-cloud"
+  | "text-and-screen-to-cloud";
+
+export interface MeetingAssistantSettings {
+  screenContextEnabled: boolean;
+  privacyMode: MeetingPrivacyMode;
+}
+
 export interface MeetingAssistantState {
   status: MeetingAssistantStatus;
   transcriptTurns: TranscriptTurn[];
@@ -127,4 +148,6 @@ export interface MeetingAssistantState {
   latestSuggestion: AdvisorSuggestion | null;
   partialSuggestion: string;
   error: string | null;
+  audioStatus: MeetingAudioStatus | null;
+  settings: MeetingAssistantSettings;
 }

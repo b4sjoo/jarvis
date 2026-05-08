@@ -5,6 +5,7 @@ import {
   PopoverContent,
   PopoverTrigger,
   ScrollArea,
+  Switch,
 } from "@/components";
 import { useMeetingAssistant } from "@/hooks";
 import { cn } from "@/lib/utils";
@@ -30,6 +31,12 @@ const statusLabel = {
   error: "Needs attention",
 };
 
+const privacyOptions = [
+  { id: "memory-only", label: "Memory" },
+  { id: "text-to-cloud", label: "Text" },
+  { id: "text-and-screen-to-cloud", label: "Text+Screen" },
+] as const;
+
 export const MeetingAssistant = () => {
   const meeting = useMeetingAssistant();
   const [open, setOpen] = useState(false);
@@ -52,6 +59,9 @@ export const MeetingAssistant = () => {
     meeting.status === "listening" ||
     meeting.status === "transcribing" ||
     meeting.status === "thinking";
+  const screenContextAllowed =
+    meeting.settings.screenContextEnabled &&
+    meeting.settings.privacyMode === "text-and-screen-to-cloud";
 
   const title = useMemo(() => {
     if (meeting.error) return meeting.error;
@@ -146,7 +156,7 @@ export const MeetingAssistant = () => {
                 className="h-8 w-8"
                 title="Capture current screen context"
                 onClick={meeting.captureScreenContext}
-                disabled={meeting.status === "starting"}
+                disabled={meeting.status === "starting" || !screenContextAllowed}
               >
                 <CameraIcon className="h-4 w-4" />
               </Button>
@@ -184,6 +194,40 @@ export const MeetingAssistant = () => {
 
           <ScrollArea className="min-h-0 flex-1">
             <div className="space-y-3 p-3">
+              <section className="rounded-md border border-border/70 p-3">
+                <div className="mb-2 flex items-center justify-between gap-2">
+                  <div className="text-xs font-semibold">Privacy</div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-[10px] text-muted-foreground">
+                      Screen
+                    </span>
+                    <Switch
+                      checked={screenContextAllowed}
+                      onCheckedChange={meeting.setScreenContextEnabled}
+                    />
+                  </div>
+                </div>
+                <div className="grid grid-cols-3 gap-1">
+                  {privacyOptions.map((option) => (
+                    <Button
+                      key={option.id}
+                      size="sm"
+                      variant={
+                        meeting.settings.privacyMode === option.id
+                          ? "default"
+                          : "outline"
+                      }
+                      className="h-7 px-1 text-[10px]"
+                      onClick={() => {
+                        meeting.setPrivacyMode(option.id);
+                      }}
+                    >
+                      {option.label}
+                    </Button>
+                  ))}
+                </div>
+              </section>
+
               {meeting.setupWarnings.length > 0 ? (
                 <section className="rounded-md border border-amber-200 bg-amber-50 p-3">
                   <div className="text-xs font-medium text-amber-900">
@@ -256,11 +300,21 @@ export const MeetingAssistant = () => {
                 </p>
               </section>
 
-              <section className="grid grid-cols-2 gap-2">
+              <section className="grid grid-cols-3 gap-2">
                 <Metric label="Turns" value={meeting.transcriptTurns.length} />
                 <Metric
                   label="Screen"
                   value={meeting.screenObservations.length}
+                />
+                <Metric
+                  label="Audio"
+                  value={
+                    meeting.audioStatus?.sampleRate
+                      ? `${Math.round(meeting.audioStatus.sampleRate / 1000)}k`
+                      : meeting.audioStatus?.active
+                        ? "On"
+                        : "Off"
+                  }
                 />
               </section>
             </div>
@@ -316,7 +370,7 @@ export const MeetingAssistant = () => {
   );
 };
 
-const Metric = ({ label, value }: { label: string; value: number }) => {
+const Metric = ({ label, value }: { label: string; value: number | string }) => {
   return (
     <div className="rounded-md border border-border/70 p-2">
       <div className="text-[10px] text-muted-foreground">{label}</div>

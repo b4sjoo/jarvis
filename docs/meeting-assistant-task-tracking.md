@@ -59,8 +59,8 @@ Exit criteria:
 
 Goal: turn existing system audio capture into meeting transcript input.
 
-- [ ] Add Rust meeting audio command wrapper around existing system audio capture.
-- [ ] Add `MeetingAudioConfig` and `MeetingAudioStatus` types.
+- [x] Add Rust meeting audio command wrapper around existing system audio capture.
+- [x] Add `MeetingAudioConfig` and `MeetingAudioStatus` types.
 - [x] Reuse `speech-detected` event in meeting mode.
 - [x] Convert base64 WAV event payload into browser `Blob`.
 - [x] Route blob through `TranscriptionService`.
@@ -131,7 +131,7 @@ Goal: provide visual context from screen sharing or shared pages.
 - [x] Add `ScreenObservation` to context manager.
 - [x] Send screenshot to vision-capable provider only when triggered.
 - [x] Include latest visual summary in advisor prompt.
-- [ ] Add setting to disable screen context entirely.
+- [x] Add setting to disable screen context entirely.
 - [x] Avoid persisting screenshots by default.
 - [x] Add simple duplicate suppression if same screenshot is captured repeatedly.
 
@@ -168,9 +168,9 @@ Goal: make limits explicit and prevent accidental data exposure.
 - [ ] Add one-tap hide shortcut.
 - [ ] Hide overlay during self-capture where possible.
 - [ ] Add privacy mode setting:
-  - [ ] Local only placeholder.
-  - [ ] Text to cloud.
-  - [ ] Text and selected images to cloud.
+  - [x] Local only placeholder.
+  - [x] Text to cloud.
+  - [x] Text and selected images to cloud.
 - [ ] Add raw audio persistence guard.
 - [ ] Add screenshot persistence guard.
 - [x] Remove analytics, hosted API, updater, license gates, and commercial UI from Jarvis.
@@ -263,8 +263,8 @@ Exit criteria:
 
 ## Immediate Next Tasks
 
-1. Add a meeting-specific Rust command wrapper and status command around existing system audio capture.
-2. Add a settings switch for screen context and a privacy mode selector.
-3. Add manual regenerate and make-shorter actions for suggestions.
-4. Add hotkey-triggered screen context capture.
-5. Run real Zoom, Google Meet, and Teams smoke tests on macOS.
+1. Add manual regenerate and make-shorter actions for suggestions.
+2. Add hotkey-triggered screen context capture.
+3. Run real Zoom, Google Meet, and Teams smoke tests on macOS.
+4. Re-run Rust validation after full Xcode is selected for `xcodebuild`.
+5. Decide whether local-only mode should ship as disabled UI or stay as a visible placeholder.
