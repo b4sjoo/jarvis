@@ -9,9 +9,9 @@
 
 ## Current Phase
 
-Phase 0: Design and implementation preparation.
+Phase 1: Meeting Assistant MVP implementation.
 
-No application code changes have been made for the meeting assistant feature yet. This document tracks planned implementation work after low-level design review.
+Design decisions are locked for the personal macOS MVP. Current work is focused on stabilizing the audio-to-transcript-to-advice loop, keeping data in memory by default, and exposing only manual screen context until the automatic observation path is safer.
 
 ## Milestone 0: Design Review and Scope Lock
 
@@ -22,12 +22,12 @@ Goal: agree on MVP boundaries before touching production code.
 - [x] Choose Tauri/Jarvis as MVP base with native macOS migration path.
 - [x] Write low-level design document.
 - [x] Write task tracking document.
-- [ ] Review and approve MVP scope.
-- [ ] Decide first supported OS target.
-- [ ] Decide default STT provider strategy.
-- [ ] Decide default LLM provider strategy.
-- [ ] Decide transcript retention policy.
-- [ ] Decide whether microphone capture is included in v1.
+- [x] Review and approve MVP scope.
+- [x] Decide first supported OS target.
+- [x] Decide default STT provider strategy.
+- [x] Decide default LLM provider strategy.
+- [x] Decide transcript retention policy.
+- [x] Decide whether microphone capture is included in v1.
 
 Exit criteria:
 
@@ -66,10 +66,10 @@ Goal: turn existing system audio capture into meeting transcript input.
 - [x] Route blob through `TranscriptionService`.
 - [x] Normalize transcript into `TranscriptTurn`.
 - [x] Append turns to `MeetingContextManager`.
-- [ ] Show latest transcript in temporary debug overlay.
-- [ ] Handle missing system audio permission.
+- [x] Show latest transcript in temporary debug overlay.
+- [x] Handle missing system audio permission.
 - [x] Handle STT provider missing.
-- [ ] Handle STT timeout.
+- [x] Handle STT timeout.
 
 Exit criteria:
 
@@ -83,13 +83,13 @@ Exit criteria:
 Goal: generate useful short suggestions from transcript context.
 
 - [x] Implement advisor trigger on finalized `them` turn.
-- [ ] Add 500-1000 ms debounce.
+- [x] Add 500-1000 ms debounce.
 - [x] Cancel stale in-flight advisor request on newer turn.
 - [x] Build compact advisor prompt from latest transcript turns.
 - [x] Reuse existing `fetchAIResponse` streaming path.
 - [x] Parse output into `AdvisorSuggestion`.
-- [ ] Display streaming suggestions in overlay.
-- [ ] Add error state for missing AI provider.
+- [x] Display streaming suggestions in overlay.
+- [x] Add error state for missing AI provider.
 - [ ] Add manual "regenerate" action.
 - [ ] Add manual "make shorter" action if simple to support.
 
@@ -106,10 +106,10 @@ Goal: create a meeting-specific overlay that is useful under pressure.
 - [x] Add meeting assistant UI components under `src/pages/app/components/meeting`.
 - [x] Show capture/listening status.
 - [x] Show latest transcript snippet.
-- [ ] Show "Meaning" section.
+- [x] Show "Meaning" section.
 - [x] Show "Suggested reply" section.
-- [ ] Show "Clarifying question" section.
-- [ ] Add pause/resume control.
+- [x] Show "Clarifying question" section.
+- [x] Add pause/resume control.
 - [x] Add hide overlay control.
 - [x] Ensure UI fits inside existing overlay window dimensions.
 - [x] Avoid adding marketing/explanatory text inside the tool surface.
@@ -126,13 +126,14 @@ Exit criteria:
 Goal: provide visual context from screen sharing or shared pages.
 
 - [ ] Add hotkey-triggered current-screen capture for meeting context.
-- [ ] Reuse existing `capture_to_base64`.
-- [ ] Add `ScreenObservation` to context manager.
-- [ ] Send screenshot to vision-capable provider only when triggered.
-- [ ] Include latest visual summary in advisor prompt.
+- [x] Add manual overlay-triggered current-screen capture for meeting context.
+- [x] Reuse existing `capture_to_base64`.
+- [x] Add `ScreenObservation` to context manager.
+- [x] Send screenshot to vision-capable provider only when triggered.
+- [x] Include latest visual summary in advisor prompt.
 - [ ] Add setting to disable screen context entirely.
-- [ ] Avoid persisting screenshots by default.
-- [ ] Add simple duplicate suppression if same screenshot is captured repeatedly.
+- [x] Avoid persisting screenshots by default.
+- [x] Add simple duplicate suppression if same screenshot is captured repeatedly.
 
 Exit criteria:
 
@@ -248,7 +249,7 @@ Exit criteria:
 | AI suggestions are too verbose | Medium | Strict advisor prompt and UI output limits | Open |
 | Screen observation costs too much | Medium | Add hash/diff/rate limit, default to manual hotkey | Open |
 | Existing inherited code is too coupled | Medium | Add meeting modules first, then refactor hooks | Open |
-| Privacy expectations are unclear | High | Add explicit privacy mode and no raw persistence defaults | Open |
+| Privacy expectations are unclear | High | Add explicit privacy mode and no raw persistence defaults | Mitigating |
 
 ## Decision Log
 
@@ -258,11 +259,12 @@ Exit criteria:
 | 2026-05-07 | Keep native macOS migration path open | SwiftUI/AppKit is likely the best production architecture for macOS-only long term |
 | 2026-05-07 | Avoid absolute invisibility guarantee | Modern screen capture paths may still capture overlays |
 | 2026-05-08 | Rebrand as Jarvis and pause commercial scope | Project is personal-use only; removed hosted API, telemetry, updater, license gates, promotional UI, and commercial README content |
+| 2026-05-08 | Lock personal MVP defaults | macOS-only, BYOK/custom providers, in-memory transcripts, no v1 microphone capture, manual screen context first, no invisibility guarantee |
 
-## Immediate Next Tasks After Review
+## Immediate Next Tasks
 
-1. Confirm MVP feature boundary.
-2. Confirm provider defaults.
-3. Create meeting type definitions.
-4. Create pure TypeScript context manager.
-5. Wire existing system audio events into meeting transcript flow.
+1. Add a meeting-specific Rust command wrapper and status command around existing system audio capture.
+2. Add a settings switch for screen context and a privacy mode selector.
+3. Add manual regenerate and make-shorter actions for suggestions.
+4. Add hotkey-triggered screen context capture.
+5. Run real Zoom, Google Meet, and Teams smoke tests on macOS.

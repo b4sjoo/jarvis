@@ -102,7 +102,7 @@ Behavior:
 - Runs VAD to identify speech segments.
 - Sends speech segments to STT.
 - Adds final transcripts to meeting context.
-- Captures screen observations on a low-frequency schedule or hotkey.
+- Captures screen observations manually from the overlay for the MVP.
 - Generates short suggestions when a new colleague turn is detected.
 
 ### 4.2 Manual Assist Mode
@@ -291,8 +291,9 @@ Responsibilities:
 MVP behavior:
 
 - Use existing `capture_to_base64`.
-- Use timer-based capture behind a setting.
-- Send screenshot to vision-capable LLM only when explicitly enabled or hotkey-triggered.
+- Trigger capture manually from the meeting overlay first.
+- Keep automatic observation disabled until rate limits, privacy copy, and model cost controls are in place.
+- Send screenshot-derived context to the advisor only when explicitly triggered.
 
 Future behavior:
 
@@ -413,9 +414,10 @@ MVP UI shape:
 MVP:
 
 - Reuse existing AI and STT provider configuration.
-- Prefer a low-latency cloud STT provider for real-time usage.
-- Prefer a low-latency cloud LLM for suggestion generation.
-- Keep BYOK/custom provider support through existing Jarvis custom curl flow where possible.
+- Use BYOK/custom providers only; do not ship a hosted default provider for this personal fork.
+- Treat STT provider configuration as required before meeting capture starts.
+- Treat AI provider configuration as required for live suggestions, while allowing transcript capture to continue if the AI provider is missing.
+- Prefer low-latency cloud STT and LLM providers during personal testing, configured through the existing Jarvis custom curl flow.
 
 Future:
 
@@ -504,11 +506,22 @@ If Tauri blocks production quality, migrate module by module:
 
 The MVP should avoid hard-coding meeting logic into React components so this migration remains realistic.
 
-## 13. Open Questions
+## 13. Resolved MVP Decisions
 
-- Which operating system is the first supported target: macOS only, or cross-platform?
-- Which STT provider should be the default for MVP?
-- Should the user microphone be captured in v1 to distinguish "me" from "them"?
-- Should meeting transcripts be saved locally, or only kept in memory?
-- How aggressive should automatic screen observation be by default?
-- What wording should the UI use for visibility limitations?
+Date: 2026-05-08
+
+- First supported platform: macOS only.
+- Provider default: BYOK/custom provider configuration only; no hosted commercial default.
+- Transcript retention: in memory only for the MVP.
+- Raw audio retention: never persist by default.
+- Screenshot retention: never persist by default in meeting mode.
+- Microphone capture: excluded from v1; system audio turns are labeled `them` or `unknown`.
+- Screen context: manual overlay capture first; automatic observation is a later opt-in feature.
+- Visibility wording: screen-share resistant, not invisible or undetectable.
+
+## 14. Remaining Open Questions
+
+- Which concrete STT provider gives the best latency and accuracy for the user's real meetings?
+- Which concrete LLM provider is fast enough for live suggestions under BYOK?
+- Should Jarvis add local OCR before multimodal screenshot analysis?
+- What exact hide shortcut and screen-share workflow feel safest in daily use?

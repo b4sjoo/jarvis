@@ -38,10 +38,12 @@ export function buildAdvisorUserMessage(context: AdvisorPromptContext) {
     context.glossaryText || "No glossary.",
     "</glossary>",
     "<output>",
-    "If the latest turn contains a question or request, output: meaning in Chinese, suggested English reply, and clarifying question if needed.",
-    "If it only contains jargon, define the jargon simply.",
+    "If help is useful, respond in this exact compact format:",
+    "Meaning: one short Chinese sentence explaining what the colleague likely means.",
+    "Reply: one ready-to-say English sentence, or '-' if no reply is needed.",
+    "Question: one safe clarifying question, or '-' if not needed.",
+    "If it only contains jargon, put the simple Chinese definition under Meaning and use '-' for Reply and Question.",
     "If no help is needed, output a single dash.",
     "</output>",
   ].join("\n");
 }
-

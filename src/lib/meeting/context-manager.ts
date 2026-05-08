@@ -82,6 +82,20 @@ export class MeetingContextManager {
     };
   }
 
+  updateScreenObservation(
+    observationId: string,
+    updates: Partial<ScreenObservation>
+  ) {
+    this.state = {
+      ...this.state,
+      screenObservations: this.state.screenObservations.map((observation) =>
+        observation.id === observationId
+          ? { ...observation, ...updates }
+          : observation
+      ),
+    };
+  }
+
   updateRollingSummary(rollingSummary: string) {
     this.state = {
       ...this.state,
@@ -159,4 +173,3 @@ export class MeetingContextManager {
 export function createMeetingId(prefix: string) {
   return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 }
-

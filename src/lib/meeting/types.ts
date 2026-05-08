@@ -67,6 +67,17 @@ export interface AdvisorSuggestion {
   confidence: "low" | "medium" | "high";
 }
 
+export type MeetingSetupWarningCode =
+  | "stt-provider-missing"
+  | "ai-provider-missing"
+  | "vision-provider-missing";
+
+export interface MeetingSetupWarning {
+  code: MeetingSetupWarningCode;
+  severity: "blocking" | "warning";
+  message: string;
+}
+
 export interface AdvisorPromptContext {
   transcript: string;
   screenContext: string;
@@ -117,4 +128,3 @@ export interface MeetingAssistantState {
   partialSuggestion: string;
   error: string | null;
 }
-
