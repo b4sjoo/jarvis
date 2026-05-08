@@ -90,8 +90,8 @@ Goal: generate useful short suggestions from transcript context.
 - [x] Parse output into `AdvisorSuggestion`.
 - [x] Display streaming suggestions in overlay.
 - [x] Add error state for missing AI provider.
-- [ ] Add manual "regenerate" action.
-- [ ] Add manual "make shorter" action if simple to support.
+- [x] Add manual "regenerate" action.
+- [x] Add manual "make shorter" action if simple to support.
 
 Exit criteria:
 

@@ -35,7 +35,10 @@ export class AdvisorEngine {
     this.currentAbortController = new AbortController();
 
     const systemPrompt = buildAdvisorSystemPrompt();
-    const userMessage = buildAdvisorUserMessage(request.promptContext);
+    const userMessage = buildAdvisorUserMessage(request.promptContext, {
+      currentSuggestion: request.currentSuggestion,
+      mode: request.mode ?? "live",
+    });
     let accumulated = "";
 
     for await (const chunk of fetchAIResponse({
@@ -92,4 +95,3 @@ function inferSuggestionKind(content: string): AdvisorSuggestion["kind"] {
   }
   return "answer";
 }
-

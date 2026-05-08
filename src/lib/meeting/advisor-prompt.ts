@@ -1,4 +1,4 @@
-import { AdvisorPromptContext } from "./types";
+import { AdvisorPromptContext, AdvisorRequestMode } from "./types";
 
 export function buildAdvisorSystemPrompt() {
   return [
@@ -13,12 +13,22 @@ export function buildAdvisorSystemPrompt() {
   ].join(" ");
 }
 
-export function buildAdvisorUserMessage(context: AdvisorPromptContext) {
+interface AdvisorUserMessageOptions {
+  mode?: AdvisorRequestMode;
+  currentSuggestion?: string;
+}
+
+export function buildAdvisorUserMessage(
+  context: AdvisorPromptContext,
+  options: AdvisorUserMessageOptions = {}
+) {
   const latestTurn = context.latestTurn
     ? `${context.latestTurn.speaker}: ${context.latestTurn.text}`
     : "None";
+  const mode = options.mode ?? "live";
+  const previousSuggestion = options.currentSuggestion?.trim();
 
-  return [
+  const sections = [
     "<latest_turn>",
     latestTurn,
     "</latest_turn>",
@@ -37,6 +47,20 @@ export function buildAdvisorUserMessage(context: AdvisorPromptContext) {
     "<glossary>",
     context.glossaryText || "No glossary.",
     "</glossary>",
+  ];
+
+  if (previousSuggestion) {
+    sections.push(
+      "<previous_suggestion>",
+      previousSuggestion,
+      "</previous_suggestion>"
+    );
+  }
+
+  sections.push(
+    "<mode>",
+    mode,
+    "</mode>",
     "<output>",
     "If help is useful, respond in this exact compact format:",
     "Meaning: one short Chinese sentence explaining what the colleague likely means.",
@@ -44,6 +68,28 @@ export function buildAdvisorUserMessage(context: AdvisorPromptContext) {
     "Question: one safe clarifying question, or '-' if not needed.",
     "If it only contains jargon, put the simple Chinese definition under Meaning and use '-' for Reply and Question.",
     "If no help is needed, output a single dash.",
-    "</output>",
-  ].join("\n");
+    ...buildModeInstructions(mode),
+    "</output>"
+  );
+
+  return sections.join("\n");
+}
+
+function buildModeInstructions(mode: AdvisorRequestMode) {
+  if (mode === "regenerate") {
+    return [
+      "Generate a fresh alternative to any previous suggestion.",
+      "Keep the same compact format, but avoid repeating the same wording.",
+    ];
+  }
+
+  if (mode === "shorter") {
+    return [
+      "Rewrite the previous suggestion to be shorter.",
+      "Keep only the most useful point in each section.",
+      "If a section is not essential, return '-' for that section.",
+    ];
+  }
+
+  return [];
 }

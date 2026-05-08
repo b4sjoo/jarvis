@@ -6,6 +6,7 @@ import { useApp } from "@/contexts";
 import { safeLocalStorage } from "@/lib";
 import {
   AdvisorEngine,
+  AdvisorRequestMode,
   MeetingAssistantState,
   MeetingAudioConfig,
   MeetingAudioStatus,
@@ -33,6 +34,9 @@ const LOCAL_ONLY_UNAVAILABLE_MESSAGE =
   "Local-only meeting mode needs local STT before it can start.";
 const SCREEN_CONTEXT_DISABLED_MESSAGE =
   "Enable Text+Screen privacy mode before capturing screen context.";
+const NO_MEETING_CONTEXT_MESSAGE =
+  "Jarvis needs transcript or screen context before it can suggest.";
+const NO_SUGGESTION_MESSAGE = "There is no suggestion to shorten yet.";
 
 const DEFAULT_MEETING_AUDIO_CONFIG: MeetingAudioConfig = {
   enabled: true,
@@ -115,6 +119,12 @@ function withTimeout<T>(
       }
     });
   });
+}
+
+interface RunAdvisorOptions {
+  force?: boolean;
+  mode?: AdvisorRequestMode;
+  currentSuggestion?: string;
 }
 
 export function useMeetingAssistant() {
@@ -264,13 +274,32 @@ export function useMeetingAssistant() {
     }));
   }, [clearAdvisorDebounce]);
 
-  const runAdvisor = useCallback(async () => {
-    if (!activeRef.current) return;
+  const runAdvisor = useCallback(async (options: RunAdvisorOptions = {}) => {
+    const mode = options.mode ?? "live";
+    const force = options.force ?? false;
+
+    if (!activeRef.current && !force) return;
 
     const promptContext = contextManagerRef.current.buildAdvisorPromptContext();
     const latestTurn = promptContext.latestTurn;
+    const hasContext = Boolean(
+      promptContext.latestTurn ||
+        promptContext.transcript.trim() ||
+        promptContext.screenContext.trim()
+    );
 
-    if (!advisorEngineRef.current.shouldRequestSuggestion(latestTurn)) {
+    if (
+      !force &&
+      !advisorEngineRef.current.shouldRequestSuggestion(latestTurn)
+    ) {
+      return;
+    }
+
+    if (force && !hasContext && !options.currentSuggestion?.trim()) {
+      setState((previous) => ({
+        ...previous,
+        error: NO_MEETING_CONTEXT_MESSAGE,
+      }));
       return;
     }
 
@@ -284,7 +313,8 @@ export function useMeetingAssistant() {
       return;
     }
 
-    const requestId = `advisor_${Date.now()}`;
+    const returnStatus = state.status;
+    const requestId = `advisor_${mode}_${Date.now()}`;
     contextManagerRef.current.setLastAdvisorRequestId(requestId);
 
     setState((previous) => ({
@@ -299,9 +329,11 @@ export function useMeetingAssistant() {
     try {
       for await (const event of advisorEngineRef.current.streamSuggestion({
         requestId,
+        mode,
         promptContext,
         provider: aiProvider,
         selectedProvider: selectedAIProvider,
+        currentSuggestion: options.currentSuggestion,
       })) {
         finalContent = event.accumulated;
         setState((previous) => ({
@@ -317,7 +349,11 @@ export function useMeetingAssistant() {
 
       setState((previous) => ({
         ...previous,
-        status: activeRef.current ? "listening" : "idle",
+        status: activeRef.current
+          ? "listening"
+          : returnStatus === "paused"
+            ? "paused"
+            : "idle",
         latestSuggestion: advisorEngineRef.current.toSuggestion(
           requestId,
           finalContent,
@@ -326,11 +362,15 @@ export function useMeetingAssistant() {
         ),
       }));
     } catch (error) {
-      if (!activeRef.current) return;
+      if (!activeRef.current && !force) return;
 
       setState((previous) => ({
         ...previous,
-        status: activeRef.current ? "listening" : "idle",
+        status: activeRef.current
+          ? "listening"
+          : returnStatus === "paused"
+            ? "paused"
+            : "idle",
         partialSuggestion: "",
         error:
           error instanceof Error
@@ -338,7 +378,7 @@ export function useMeetingAssistant() {
             : "Failed to generate meeting suggestion.",
       }));
     }
-  }, [aiProvider, selectedAIProvider]);
+  }, [aiProvider, selectedAIProvider, state.status]);
 
   const scheduleAdvisor = useCallback(() => {
     if (!activeRef.current) return;
@@ -518,7 +558,9 @@ export function useMeetingAssistant() {
       const contextState = contextManagerRef.current.getState();
 
       setState((previous) => ({
-        ...(resetContext ? { ...INITIAL_STATE, settings: previous.settings } : previous),
+        ...(resetContext
+          ? { ...INITIAL_STATE, settings: previous.settings }
+          : previous),
         status: "listening",
         transcriptTurns: contextState.transcriptTurns,
         screenObservations: contextState.screenObservations,
@@ -674,6 +716,33 @@ export function useMeetingAssistant() {
     }
   }, [aiProvider, scheduleAdvisor, selectedAIProvider, state.settings]);
 
+  const currentSuggestionText =
+    state.partialSuggestion || state.latestSuggestion?.content || "";
+
+  const regenerateSuggestion = useCallback(async () => {
+    await runAdvisor({
+      force: true,
+      mode: "regenerate",
+      currentSuggestion: currentSuggestionText,
+    });
+  }, [currentSuggestionText, runAdvisor]);
+
+  const makeSuggestionShorter = useCallback(async () => {
+    if (!currentSuggestionText.trim()) {
+      setState((previous) => ({
+        ...previous,
+        error: NO_SUGGESTION_MESSAGE,
+      }));
+      return;
+    }
+
+    await runAdvisor({
+      force: true,
+      mode: "shorter",
+      currentSuggestion: currentSuggestionText,
+    });
+  }, [currentSuggestionText, runAdvisor]);
+
   useEffect(() => {
     let unlistenSpeech: (() => void) | undefined;
 
@@ -709,6 +778,8 @@ export function useMeetingAssistant() {
     resume,
     stop,
     captureScreenContext,
+    regenerateSuggestion,
+    makeSuggestionShorter,
     isActive: activeRef.current,
   };
 }

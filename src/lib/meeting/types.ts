@@ -57,6 +57,8 @@ export type AdvisorSuggestionKind =
   | "context"
   | "silent";
 
+export type AdvisorRequestMode = "live" | "regenerate" | "shorter";
+
 export interface AdvisorSuggestion {
   id: string;
   kind: AdvisorSuggestionKind;
@@ -102,9 +104,11 @@ export interface MeetingProviderConfig {
 
 export interface MeetingAdvisorRequest {
   requestId: string;
+  mode?: AdvisorRequestMode;
   promptContext: AdvisorPromptContext;
   provider: TYPE_PROVIDER | undefined;
   selectedProvider: SelectedProviderState;
+  currentSuggestion?: string;
   history?: Message[];
   signal?: AbortSignal;
 }

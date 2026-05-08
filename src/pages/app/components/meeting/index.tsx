@@ -14,9 +14,11 @@ import {
   CameraIcon,
   Loader2Icon,
   MessageSquareTextIcon,
+  Minimize2Icon,
   PauseIcon,
   PlayIcon,
   RadioIcon,
+  RefreshCwIcon,
   SquareIcon,
 } from "lucide-react";
 import { useMemo, useState } from "react";
@@ -62,6 +64,9 @@ export const MeetingAssistant = () => {
   const screenContextAllowed =
     meeting.settings.screenContextEnabled &&
     meeting.settings.privacyMode === "text-and-screen-to-cloud";
+  const hasMeetingContext =
+    meeting.transcriptTurns.length > 0 || meeting.screenObservations.length > 0;
+  const hasSuggestion = Boolean(displaySuggestion.trim());
 
   const title = useMemo(() => {
     if (meeting.error) return meeting.error;
@@ -320,7 +325,7 @@ export const MeetingAssistant = () => {
             </div>
           </ScrollArea>
 
-          <div className="flex items-center justify-between gap-2 border-t border-border/50 p-2">
+          <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border/50 p-2">
             <Button
               size="sm"
               variant="ghost"
@@ -332,7 +337,29 @@ export const MeetingAssistant = () => {
               <PauseIcon className="h-3.5 w-3.5" />
               Hide panel
             </Button>
-            <div className="flex items-center gap-1.5">
+            <div className="flex flex-wrap items-center justify-end gap-1.5">
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-8 gap-1.5 text-xs"
+                title="Regenerate suggestion"
+                onClick={meeting.regenerateSuggestion}
+                disabled={isBusy || !hasMeetingContext}
+              >
+                <RefreshCwIcon className="h-3.5 w-3.5" />
+                Regenerate
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-8 gap-1.5 text-xs"
+                title="Make suggestion shorter"
+                onClick={meeting.makeSuggestionShorter}
+                disabled={isBusy || !hasSuggestion}
+              >
+                <Minimize2Icon className="h-3.5 w-3.5" />
+                Shorter
+              </Button>
               <Button
                 size="sm"
                 variant="outline"
