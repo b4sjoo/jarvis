@@ -125,7 +125,7 @@ Exit criteria:
 
 Goal: provide visual context from screen sharing or shared pages.
 
-- [ ] Add hotkey-triggered current-screen capture for meeting context.
+- [x] Add hotkey-triggered current-screen capture for meeting context.
 - [x] Add manual overlay-triggered current-screen capture for meeting context.
 - [x] Reuse existing `capture_to_base64`.
 - [x] Add `ScreenObservation` to context manager.

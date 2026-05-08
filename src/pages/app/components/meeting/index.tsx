@@ -160,7 +160,9 @@ export const MeetingAssistant = () => {
                 variant="outline"
                 className="h-8 w-8"
                 title="Capture current screen context"
-                onClick={meeting.captureScreenContext}
+                onClick={() => {
+                  void meeting.captureScreenContext();
+                }}
                 disabled={meeting.status === "starting" || !screenContextAllowed}
               >
                 <CameraIcon className="h-4 w-4" />

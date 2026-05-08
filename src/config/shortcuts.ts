@@ -71,4 +71,14 @@ export const DEFAULT_SHORTCUT_ACTIONS: ShortcutAction[] = [
       linux: "ctrl+shift+s",
     },
   },
+  {
+    id: "meeting_screen_context",
+    name: "Meeting Screen Context",
+    description: "Capture current screen context for the meeting assistant",
+    defaultKey: {
+      macos: "cmd+shift+e",
+      windows: "ctrl+shift+e",
+      linux: "ctrl+shift+e",
+    },
+  },
 ];

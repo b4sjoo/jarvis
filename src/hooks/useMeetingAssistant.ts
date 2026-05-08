@@ -14,11 +14,13 @@ import {
   MeetingPrivacyMode,
   MeetingContextManager,
   MeetingSetupWarning,
+  ScreenObservation,
   base64WavToBlob,
   captureScreenObservation,
   summarizeScreenObservation,
   transcribeMeetingAudio,
 } from "@/lib/meeting";
+import { useShortcuts } from "./useShortcuts";
 
 const ADVISOR_DEBOUNCE_MS = 750;
 const STT_TIMEOUT_MS = 30_000;
@@ -620,101 +622,118 @@ export function useMeetingAssistant() {
     }));
   }, [clearAdvisorDebounce]);
 
-  const captureScreenContext = useCallback(async () => {
-    let analysisController: AbortController | null = null;
+  const captureScreenContext = useCallback(
+    async (source: ScreenObservation["source"] = "full-screen") => {
+      let analysisController: AbortController | null = null;
 
-    try {
-      if (
-        !state.settings.screenContextEnabled ||
-        state.settings.privacyMode !== "text-and-screen-to-cloud"
-      ) {
+      try {
+        if (
+          !state.settings.screenContextEnabled ||
+          state.settings.privacyMode !== "text-and-screen-to-cloud"
+        ) {
+          setState((previous) => ({
+            ...previous,
+            error: SCREEN_CONTEXT_DISABLED_MESSAGE,
+          }));
+          return;
+        }
+
+        const observation = await captureScreenObservation({
+          source,
+          previousHash: latestScreenHashRef.current,
+        });
+
+        latestScreenHashRef.current = observation.hash;
+
+        if (!observation.changed) return;
+
+        contextManagerRef.current.addScreenObservation(observation);
+        const contextState = contextManagerRef.current.getState();
+
         setState((previous) => ({
           ...previous,
-          error: SCREEN_CONTEXT_DISABLED_MESSAGE,
+          screenObservations: contextState.screenObservations,
+          error: null,
         }));
-        return;
-      }
 
-      const observation = await captureScreenObservation({
-        previousHash: latestScreenHashRef.current,
-      });
+        if (!aiProvider) {
+          setState((previous) => ({
+            ...previous,
+            error: MISSING_AI_MESSAGE,
+          }));
+          return;
+        }
 
-      latestScreenHashRef.current = observation.hash;
+        if (!aiProvider.curl.includes("{{IMAGE}}")) {
+          setState((previous) => ({
+            ...previous,
+            error: MISSING_VISION_MESSAGE,
+          }));
+          return;
+        }
 
-      if (!observation.changed) return;
+        screenAnalysisAbortRef.current?.abort();
+        analysisController = new AbortController();
+        screenAnalysisAbortRef.current = analysisController;
 
-      contextManagerRef.current.addScreenObservation(observation);
-      const contextState = contextManagerRef.current.getState();
+        const visualSummary = await withTimeout(
+          summarizeScreenObservation({
+            observation,
+            provider: aiProvider,
+            selectedProvider: selectedAIProvider,
+            signal: analysisController.signal,
+          }),
+          SCREEN_ANALYSIS_TIMEOUT_MS,
+          "Screen context analysis timed out."
+        );
 
-      setState((previous) => ({
-        ...previous,
-        screenObservations: contextState.screenObservations,
-        error: null,
-      }));
-
-      if (!aiProvider) {
-        setState((previous) => ({
-          ...previous,
-          error: MISSING_AI_MESSAGE,
-        }));
-        return;
-      }
-
-      if (!aiProvider.curl.includes("{{IMAGE}}")) {
-        setState((previous) => ({
-          ...previous,
-          error: MISSING_VISION_MESSAGE,
-        }));
-        return;
-      }
-
-      screenAnalysisAbortRef.current?.abort();
-      analysisController = new AbortController();
-      screenAnalysisAbortRef.current = analysisController;
-
-      const visualSummary = await withTimeout(
-        summarizeScreenObservation({
-          observation,
-          provider: aiProvider,
-          selectedProvider: selectedAIProvider,
-          signal: analysisController.signal,
-        }),
-        SCREEN_ANALYSIS_TIMEOUT_MS,
-        "Screen context analysis timed out."
-      );
-
-      if (screenAnalysisAbortRef.current !== analysisController) return;
-      screenAnalysisAbortRef.current = null;
-
-      contextManagerRef.current.updateScreenObservation(observation.id, {
-        visualSummary,
-      });
-      const updatedContextState = contextManagerRef.current.getState();
-
-      setState((previous) => ({
-        ...previous,
-        screenObservations: updatedContextState.screenObservations,
-        error: null,
-      }));
-
-      scheduleAdvisor();
-    } catch (error) {
-      analysisController?.abort();
-      if (screenAnalysisAbortRef.current === analysisController) {
+        if (screenAnalysisAbortRef.current !== analysisController) return;
         screenAnalysisAbortRef.current = null;
-      }
 
-      if (error instanceof Error && error.name === "AbortError") return;
+        contextManagerRef.current.updateScreenObservation(observation.id, {
+          visualSummary,
+        });
+        const updatedContextState = contextManagerRef.current.getState();
 
-      setState((previous) => ({
-        ...previous,
-        error:
-          error instanceof Error
-            ? error.message
-            : "Failed to capture screen context.",
+        setState((previous) => ({
+          ...previous,
+          screenObservations: updatedContextState.screenObservations,
+          error: null,
         }));
-    }
-  }, [aiProvider, scheduleAdvisor, selectedAIProvider, state.settings]);
+
+        scheduleAdvisor();
+      } catch (error) {
+        analysisController?.abort();
+        if (screenAnalysisAbortRef.current === analysisController) {
+          screenAnalysisAbortRef.current = null;
+        }
+
+        if (error instanceof Error && error.name === "AbortError") return;
+
+        setState((previous) => ({
+          ...previous,
+          error:
+            error instanceof Error
+              ? error.message
+              : "Failed to capture screen context.",
+        }));
+      }
+    },
+    [aiProvider, scheduleAdvisor, selectedAIProvider, state.settings]
+  );
+
+  const meetingShortcutCallbacks = useMemo(
+    () => ({
+      meeting_screen_context: () => {
+        void captureScreenContext("hotkey");
+      },
+    }),
+    [captureScreenContext]
+  );
+
+  useShortcuts({
+    customShortcuts: meetingShortcutCallbacks,
+  });
 
   const currentSuggestionText =
     state.partialSuggestion || state.latestSuggestion?.content || "";
