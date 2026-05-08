@@ -102,8 +102,9 @@ Behavior:
 - Runs VAD to identify speech segments.
 - Sends speech segments to STT.
 - Adds final transcripts to meeting context.
-- Captures screen observations manually from the overlay for the MVP.
+- Captures screen observations manually from the overlay or the meeting screen-context hotkey.
 - Generates short suggestions when a new colleague turn is detected.
+- Allows manual suggestion refinement through regenerate and make-shorter actions.
 
 ### 4.2 Manual Assist Mode
 
@@ -235,11 +236,11 @@ Required improvements:
 - Add better cleanup after capture stop.
 - Add device-change handling later.
 
-Proposed new commands:
+Implemented meeting commands:
 
 ```rust
-start_meeting_audio_session(config: MeetingAudioConfig) -> Result<(), String>
-stop_meeting_audio_session() -> Result<(), String>
+start_meeting_audio_session(config: MeetingAudioConfig) -> Result<MeetingAudioStatus, String>
+stop_meeting_audio_session() -> Result<MeetingAudioStatus, String>
 get_meeting_audio_status() -> Result<MeetingAudioStatus, String>
 ```
 
@@ -291,14 +292,15 @@ Responsibilities:
 MVP behavior:
 
 - Use existing `capture_to_base64`.
-- Trigger capture manually from the meeting overlay first.
+- Trigger capture manually from the meeting overlay or the meeting screen-context hotkey.
+- Suppress repeated analysis when the screenshot hash has not changed.
 - Keep automatic observation disabled until rate limits, privacy copy, and model cost controls are in place.
 - Send screenshot-derived context to the advisor only when explicitly triggered.
 
 Future behavior:
 
 - Add local OCR.
-- Add hash/diff change detection.
+- Add stronger hash/diff change detection.
 - Add region-of-interest extraction.
 - Add ScreenCaptureKit/Apple Vision path in native macOS spike.
 
@@ -343,6 +345,7 @@ Responsibilities:
 - Stream LLM response.
 - Cancel stale in-flight requests when a newer turn arrives.
 - Normalize output into `AdvisorSuggestion`.
+- Support explicit regenerate and make-shorter requests against the current meeting context.
 
 Trigger rules:
 
@@ -375,6 +378,8 @@ Responsibilities:
 - Show latest transcript snippet.
 - Show current suggestions.
 - Provide pause/resume/hide controls.
+- Provide privacy mode and screen-context controls.
+- Provide regenerate and shorter controls for suggestions.
 - Expose shortcuts.
 
 MVP UI shape:
@@ -402,9 +407,9 @@ MVP UI shape:
 
 ### 7.2 Screen-to-Context Flow
 
-1. User presses screen-context hotkey or auto observation interval fires.
+1. User presses the screen-context hotkey or clicks the overlay screen-context button.
 2. Frontend calls `capture_to_base64`.
-3. Screen service computes basic hash if available.
+3. Screen service computes a basic hash.
 4. If changed, screenshot is analyzed.
 5. Observation is appended to context.
 6. Next advisor request includes latest relevant screen context.
@@ -443,10 +448,10 @@ Data stance:
 - Do not persist raw audio by default.
 - Do not persist raw screenshots by default in meeting mode.
 - Make any cloud upload explicit through provider settings.
-- Add a future privacy mode selector:
-  - Local only
-  - Text to cloud
-  - Text and selected images to cloud
+- Provide a privacy mode selector:
+  - Local only placeholder, blocked until local STT exists.
+  - Text to cloud.
+  - Text and selected images to cloud.
 
 ## 10. Error Handling
 
@@ -484,6 +489,12 @@ Integration tests:
 - VAD speech event to STT service.
 - Screenshot capture to screen observation.
 - Advisor cancellation on new turn.
+
+Current automated checks:
+
+- `npm run build`
+- `cargo check`
+- `git diff --check`
 
 Manual test matrix:
 

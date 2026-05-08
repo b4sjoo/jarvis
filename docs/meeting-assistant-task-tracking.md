@@ -11,7 +11,7 @@
 
 Phase 1: Meeting Assistant MVP implementation.
 
-Design decisions are locked for the personal macOS MVP. Current work is focused on stabilizing the audio-to-transcript-to-advice loop, keeping data in memory by default, and exposing only manual screen context until the automatic observation path is safer.
+Design decisions are locked for the personal macOS MVP. Current work has a validated audio-to-transcript-to-advice loop, explicit privacy modes, manual and hotkey-triggered screen context, and advisor refinement controls. The next focus is live-meeting QA, visibility hardening, and provider latency improvements.
 
 ## Milestone 0: Design Review and Scope Lock
 
@@ -246,8 +246,8 @@ Exit criteria:
 | Overlay appears during some screen sharing modes | High | Avoid absolute invisibility claims, add hide shortcut, recommend window sharing/second display | Open |
 | System audio capture fails on some macOS/device combinations | High | Keep fallback path, improve permission and device handling | Open |
 | STT latency too high | High | Add streaming STT provider interface | Open |
-| AI suggestions are too verbose | Medium | Strict advisor prompt and UI output limits | Open |
-| Screen observation costs too much | Medium | Add hash/diff/rate limit, default to manual hotkey | Open |
+| AI suggestions are too verbose | Medium | Strict advisor prompt, UI output limits, regenerate and shorter controls | Mitigating |
+| Screen observation costs too much | Medium | Keep observation manual/hotkey-only, suppress duplicate screenshots, add rate limits before automatic mode | Mitigating |
 | Existing inherited code is too coupled | Medium | Add meeting modules first, then refactor hooks | Open |
 | Privacy expectations are unclear | High | Add explicit privacy mode and no raw persistence defaults | Mitigating |
 
@@ -261,10 +261,18 @@ Exit criteria:
 | 2026-05-08 | Rebrand as Jarvis and pause commercial scope | Project is personal-use only; removed hosted API, telemetry, updater, license gates, promotional UI, and commercial README content |
 | 2026-05-08 | Lock personal MVP defaults | macOS-only, BYOK/custom providers, in-memory transcripts, no v1 microphone capture, manual screen context first, no invisibility guarantee |
 
+## Validation Snapshot
+
+Last validated: 2026-05-08.
+
+- `npm run build` passes.
+- `cargo check` passes after selecting full Xcode as the active developer directory.
+- `git diff --check` passes before commits in the current phase.
+
 ## Immediate Next Tasks
 
-1. Add manual regenerate and make-shorter actions for suggestions.
-2. Add hotkey-triggered screen context capture.
-3. Run real Zoom, Google Meet, and Teams smoke tests on macOS.
-4. Re-run Rust validation after full Xcode is selected for `xcodebuild`.
-5. Decide whether local-only mode should ship as disabled UI or stay as a visible placeholder.
+1. Run real Zoom, Google Meet, and Teams smoke tests on macOS.
+2. Check small overlay window and common laptop viewport layouts.
+3. Add visibility caveat in onboarding/settings and a one-tap hide shortcut.
+4. Add raw audio and screenshot persistence guards as explicit code-level invariants.
+5. Design the streaming STT provider interface before investing in automatic screen observation.
