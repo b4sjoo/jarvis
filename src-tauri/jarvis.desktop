@@ -1,0 +1,10 @@
+[Desktop Entry]
+Categories=Utility;
+Type=Application
+Name=Jarvis
+Comment=Personal desktop meeting assistant
+Exec=jarvis
+Icon=jarvis
+Terminal=false
+StartupNotify=true
+StartupWMClass=jarvis
