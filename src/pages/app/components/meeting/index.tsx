@@ -21,7 +21,7 @@ import {
   RefreshCwIcon,
   SquareIcon,
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 const statusLabel = {
   idle: "Ready",
@@ -38,6 +38,14 @@ const privacyOptions = [
   { id: "text-to-cloud", label: "Text" },
   { id: "text-and-screen-to-cloud", label: "Text+Screen" },
 ] as const;
+
+const HOTKEY_CAPTURE_SETTLE_MS = 180;
+
+function waitForHotkeyCaptureSettle() {
+  return new Promise<void>((resolve) => {
+    window.setTimeout(resolve, HOTKEY_CAPTURE_SETTLE_MS);
+  });
+}
 
 export const MeetingAssistant = () => {
   const meeting = useMeetingAssistant();
@@ -77,14 +85,29 @@ export const MeetingAssistant = () => {
     return "Open meeting assistant";
   }, [meeting.error]);
 
+  const captureScreenContextFromHotkey = useCallback(async () => {
+    if (open) {
+      setOpen(false);
+      await waitForHotkeyCaptureSettle();
+      await resizeWindow(false);
+      await waitForHotkeyCaptureSettle();
+    }
+
+    await meeting.captureScreenContext("hotkey", {
+      onCaptured: () => {
+        setOpen(true);
+      },
+    });
+    setOpen(true);
+  }, [meeting.captureScreenContext, open, resizeWindow]);
+
   const meetingShortcutCallbacks = useMemo(
     () => ({
       meeting_screen_context: () => {
-        setOpen(true);
-        void meeting.captureScreenContext("hotkey");
+        void captureScreenContextFromHotkey();
       },
     }),
-    [meeting.captureScreenContext]
+    [captureScreenContextFromHotkey]
   );
 
   useShortcuts({

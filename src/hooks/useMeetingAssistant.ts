@@ -128,6 +128,10 @@ interface RunAdvisorOptions {
   currentSuggestion?: string;
 }
 
+interface CaptureScreenContextOptions {
+  onCaptured?: () => void;
+}
+
 export function useMeetingAssistant() {
   const {
     selectedSttProvider,
@@ -622,7 +626,10 @@ export function useMeetingAssistant() {
   }, [clearAdvisorDebounce]);
 
   const captureScreenContext = useCallback(
-    async (source: ScreenObservation["source"] = "full-screen") => {
+    async (
+      source: ScreenObservation["source"] = "full-screen",
+      options: CaptureScreenContextOptions = {}
+    ) => {
       let analysisController: AbortController | null = null;
       const returnStatus = state.status;
       const idleReturnStatus = returnStatus === "paused" ? "paused" : "idle";
@@ -643,6 +650,7 @@ export function useMeetingAssistant() {
           source,
           previousHash: latestScreenHashRef.current,
         });
+        options.onCaptured?.();
 
         latestScreenHashRef.current = observation.hash;
 
