@@ -11,7 +11,7 @@
 
 Phase 1: Meeting Assistant MVP implementation.
 
-Design decisions are locked for the personal macOS MVP. Current work has a validated audio-to-transcript-to-advice loop, explicit privacy modes, manual and hotkey-triggered screen context, and advisor refinement controls. The next focus is live-meeting QA, visibility hardening, and provider latency improvements.
+Design decisions are locked for the personal macOS MVP. Current work has a validated audio-to-transcript-to-advice loop, explicit privacy modes, manual and hotkey-triggered screen context, and advisor refinement controls. The `Cmd+Shift+E` screen-context hotkey now works as an explicit one-shot advisor path: it can hide the meeting panel, capture the current screen, analyze it, and reopen the panel with the generated guidance. The next focus is live-meeting QA, visibility hardening, and provider latency improvements.
 
 ## Milestone 0: Design Review and Scope Lock
 
@@ -133,7 +133,8 @@ Goal: provide visual context from screen sharing or shared pages.
 - [x] Include latest visual summary in advisor prompt.
 - [x] Add setting to disable screen context entirely.
 - [x] Avoid persisting screenshots by default.
-- [x] Add simple duplicate suppression if same screenshot is captured repeatedly.
+- [x] Add screenshot hash metadata for future duplicate suppression and rate limiting.
+- [x] Force a suggestion after manual or hotkey-triggered screen context, even when meeting audio is not actively listening.
 
 Exit criteria:
 
@@ -147,7 +148,7 @@ Goal: add low-frequency, low-noise visual awareness.
 
 - [ ] Add optional observation interval setting.
 - [ ] Capture at conservative default interval.
-- [ ] Add screenshot hash calculation.
+- [x] Add screenshot hash calculation.
 - [ ] Skip analysis when image hash is unchanged.
 - [ ] Add rough rate limit for vision calls.
 - [ ] Add "analyze now" override.
@@ -166,7 +167,7 @@ Goal: make limits explicit and prevent accidental data exposure.
 - [ ] Add product copy that avoids "guaranteed invisible" claims.
 - [ ] Add visibility caveat in onboarding/settings.
 - [ ] Add one-tap hide shortcut.
-- [ ] Hide overlay during self-capture where possible.
+- [~] Hide overlay during self-capture where possible.
 - [ ] Add privacy mode setting:
   - [x] Local only placeholder.
   - [x] Text to cloud.
@@ -247,7 +248,7 @@ Exit criteria:
 | System audio capture fails on some macOS/device combinations | High | Keep fallback path, improve permission and device handling | Open |
 | STT latency too high | High | Add streaming STT provider interface | Open |
 | AI suggestions are too verbose | Medium | Strict advisor prompt, UI output limits, regenerate and shorter controls | Mitigating |
-| Screen observation costs too much | Medium | Keep observation manual/hotkey-only, suppress duplicate screenshots, add rate limits before automatic mode | Mitigating |
+| Screen observation costs too much | Medium | Keep observation manual/hotkey-only, keep hash metadata, add duplicate suppression and rate limits before automatic mode | Mitigating |
 | Existing inherited code is too coupled | Medium | Add meeting modules first, then refactor hooks | Open |
 | Privacy expectations are unclear | High | Add explicit privacy mode and no raw persistence defaults | Mitigating |
 
@@ -260,14 +261,16 @@ Exit criteria:
 | 2026-05-07 | Avoid absolute invisibility guarantee | Modern screen capture paths may still capture overlays |
 | 2026-05-08 | Rebrand as Jarvis and pause commercial scope | Project is personal-use only; removed hosted API, telemetry, updater, license gates, promotional UI, and commercial README content |
 | 2026-05-08 | Lock personal MVP defaults | macOS-only, BYOK/custom providers, in-memory transcripts, no v1 microphone capture, manual screen context first, no invisibility guarantee |
+| 2026-05-09 | Make screen-context hotkey a one-shot advisor path | `Cmd+Shift+E` hides the meeting panel before capture, analyzes the current screen, then reopens the panel with guidance even when audio listening is not active |
 
 ## Validation Snapshot
 
-Last validated: 2026-05-08.
+Last validated: 2026-05-09.
 
 - `npm run build` passes.
 - `cargo check` passes after selecting full Xcode as the active developer directory.
 - `git diff --check` passes before commits in the current phase.
+- Manual screen-context test passes well enough for the next live-meeting smoke test.
 
 ## Immediate Next Tasks
 

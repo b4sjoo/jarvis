@@ -9,7 +9,7 @@ The current goal is narrow: help me understand software engineering meetings fas
 - Tauri + React desktop shell is running.
 - Screen-share-safe overlay behavior is inherited from the original app foundation.
 - Meeting assistant modules have been added for transcript context, screen observations, prompt construction, and advisor suggestions.
-- The visible UI milestone is working in the browser preview.
+- The meeting overlay opens in the desktop app, supports explicit `Text+Screen` privacy mode, and can generate screen-context suggestions from the meeting hotkey.
 
 ## Personal-Use Scope
 
@@ -70,6 +70,13 @@ Jarvis expects you to configure local/custom providers before relying on meeting
 - AI providers are configured from curl commands with variables such as `{{TEXT}}`, `{{SYSTEM_PROMPT}}`, and optionally `{{IMAGE}}`.
 - Speech providers are configured from curl commands that accept uploaded audio.
 - System prompts and assistant behavior can be edited in the dashboard.
+
+## Meeting Assistant Usage
+
+- Open the floating Brain button to show the Meeting Assistant panel.
+- Use the panel's Privacy selector to switch between `Text` and `Text+Screen`.
+- `Cmd+Shift+E` captures the current meeting screen context, briefly hides the panel before capture, then reopens the panel with the generated suggestion.
+- `Cmd+Shift+S` remains the separate manual screenshot/completion shortcut.
 
 ## Privacy
 

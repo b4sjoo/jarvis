@@ -286,19 +286,21 @@ Responsibilities:
 
 - Capture current screen or selected region.
 - Run low-frequency observation loop when enabled.
-- Avoid repeated analysis of unchanged screenshots.
+- Compute screenshot hash metadata for future duplicate suppression and rate limiting.
 - Produce `ScreenObservation`.
 
 MVP behavior:
 
 - Use existing `capture_to_base64`.
 - Trigger capture manually from the meeting overlay or the meeting screen-context hotkey.
-- Suppress repeated analysis when the screenshot hash has not changed.
+- Treat manual and hotkey-triggered captures as explicit user intent, so they should produce visible feedback and can force an advisor request even when meeting audio is not actively listening.
+- Hide the meeting panel before hotkey self-capture where possible, then reopen it after capture so the screenshot is more likely to represent the meeting screen instead of Jarvis itself.
 - Keep automatic observation disabled until rate limits, privacy copy, and model cost controls are in place.
 - Send screenshot-derived context to the advisor only when explicitly triggered.
 
 Future behavior:
 
+- Suppress repeated analysis when automatic observation sees an unchanged screenshot hash.
 - Add local OCR.
 - Add stronger hash/diff change detection.
 - Add region-of-interest extraction.
@@ -408,11 +410,13 @@ MVP UI shape:
 ### 7.2 Screen-to-Context Flow
 
 1. User presses the screen-context hotkey or clicks the overlay screen-context button.
-2. Frontend calls `capture_to_base64`.
-3. Screen service computes a basic hash.
-4. If changed, screenshot is analyzed.
-5. Observation is appended to context.
-6. Next advisor request includes latest relevant screen context.
+2. For the hotkey path, the frontend closes the meeting panel and briefly shrinks the overlay before capture where possible.
+3. Frontend calls `capture_to_base64`.
+4. Screen service computes a basic hash.
+5. Screenshot is analyzed by the configured vision-capable provider.
+6. Observation is appended to context.
+7. If meeting audio is actively listening, the next advisor request includes latest relevant screen context.
+8. If meeting audio is not active, the screen-context action forces a one-shot advisor request so the panel still shows a useful result.
 
 ## 8. Provider Strategy
 
