@@ -624,6 +624,8 @@ export function useMeetingAssistant() {
   const captureScreenContext = useCallback(
     async (source: ScreenObservation["source"] = "full-screen") => {
       let analysisController: AbortController | null = null;
+      const returnStatus = state.status;
+      const idleReturnStatus = returnStatus === "paused" ? "paused" : "idle";
 
       try {
         if (
@@ -644,13 +646,12 @@ export function useMeetingAssistant() {
 
         latestScreenHashRef.current = observation.hash;
 
-        if (!observation.changed) return;
-
         contextManagerRef.current.addScreenObservation(observation);
         const contextState = contextManagerRef.current.getState();
 
         setState((previous) => ({
           ...previous,
+          status: "thinking",
           screenObservations: contextState.screenObservations,
           error: null,
         }));
@@ -658,6 +659,7 @@ export function useMeetingAssistant() {
         if (!aiProvider) {
           setState((previous) => ({
             ...previous,
+            status: activeRef.current ? "listening" : idleReturnStatus,
             error: MISSING_AI_MESSAGE,
           }));
           return;
@@ -666,6 +668,7 @@ export function useMeetingAssistant() {
         if (!aiProvider.curl.includes("{{IMAGE}}")) {
           setState((previous) => ({
             ...previous,
+            status: activeRef.current ? "listening" : idleReturnStatus,
             error: MISSING_VISION_MESSAGE,
           }));
           return;
@@ -700,7 +703,11 @@ export function useMeetingAssistant() {
           error: null,
         }));
 
-        scheduleAdvisor();
+        if (activeRef.current) {
+          scheduleAdvisor();
+        } else {
+          await runAdvisor({ force: true });
+        }
       } catch (error) {
         analysisController?.abort();
         if (screenAnalysisAbortRef.current === analysisController) {
@@ -711,6 +718,7 @@ export function useMeetingAssistant() {
 
         setState((previous) => ({
           ...previous,
+          status: activeRef.current ? "listening" : "error",
           error:
             error instanceof Error
               ? error.message
@@ -718,7 +726,14 @@ export function useMeetingAssistant() {
         }));
       }
     },
-    [aiProvider, scheduleAdvisor, selectedAIProvider, state.settings]
+    [
+      aiProvider,
+      runAdvisor,
+      scheduleAdvisor,
+      selectedAIProvider,
+      state.settings,
+      state.status,
+    ]
   );
 
   const currentSuggestionText =
