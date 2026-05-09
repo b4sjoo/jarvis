@@ -7,7 +7,7 @@ import {
   ScrollArea,
   Switch,
 } from "@/components";
-import { useMeetingAssistant, useShortcuts } from "@/hooks";
+import { useMeetingAssistant, useShortcuts, useWindowResize } from "@/hooks";
 import { cn } from "@/lib/utils";
 import {
   BrainIcon,
@@ -21,7 +21,7 @@ import {
   RefreshCwIcon,
   SquareIcon,
 } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 const statusLabel = {
   idle: "Ready",
@@ -41,6 +41,7 @@ const privacyOptions = [
 
 export const MeetingAssistant = () => {
   const meeting = useMeetingAssistant();
+  const { resizeWindow } = useWindowResize();
   const [open, setOpen] = useState(false);
 
   const latestTurn =
@@ -69,13 +70,12 @@ export const MeetingAssistant = () => {
   const hasSuggestion = Boolean(displaySuggestion.trim());
 
   const title = useMemo(() => {
-    if (meeting.error) return meeting.error;
-    if (isPaused) return "Resume meeting assistant";
-    if (isRunning || meeting.status === "starting") {
-      return "Stop meeting assistant";
+    if (meeting.error) {
+      return `Meeting assistant needs attention: ${meeting.error}`;
     }
-    return "Start meeting assistant";
-  }, [isPaused, isRunning, meeting.error, meeting.status]);
+
+    return "Open meeting assistant";
+  }, [meeting.error]);
 
   const meetingShortcutCallbacks = useMemo(
     () => ({
@@ -90,6 +90,10 @@ export const MeetingAssistant = () => {
   useShortcuts({
     customShortcuts: meetingShortcutCallbacks,
   });
+
+  useEffect(() => {
+    void resizeWindow(open);
+  }, [open, resizeWindow]);
 
   const handleToggle = async () => {
     setOpen(true);
@@ -120,7 +124,6 @@ export const MeetingAssistant = () => {
           size="icon"
           variant={isRunning ? "default" : "outline"}
           title={title}
-          onClick={handleToggle}
           className={cn(
             "cursor-pointer",
             meeting.error && "border-red-300 bg-red-50 hover:bg-red-100"
