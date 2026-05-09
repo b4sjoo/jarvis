@@ -20,7 +20,6 @@ import {
   summarizeScreenObservation,
   transcribeMeetingAudio,
 } from "@/lib/meeting";
-import { useShortcuts } from "./useShortcuts";
 
 const ADVISOR_DEBOUNCE_MS = 750;
 const STT_TIMEOUT_MS = 30_000;
@@ -721,19 +720,6 @@ export function useMeetingAssistant() {
     },
     [aiProvider, scheduleAdvisor, selectedAIProvider, state.settings]
   );
-
-  const meetingShortcutCallbacks = useMemo(
-    () => ({
-      meeting_screen_context: () => {
-        void captureScreenContext("hotkey");
-      },
-    }),
-    [captureScreenContext]
-  );
-
-  useShortcuts({
-    customShortcuts: meetingShortcutCallbacks,
-  });
 
   const currentSuggestionText =
     state.partialSuggestion || state.latestSuggestion?.content || "";

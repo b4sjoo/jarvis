@@ -7,7 +7,7 @@ import {
   ScrollArea,
   Switch,
 } from "@/components";
-import { useMeetingAssistant } from "@/hooks";
+import { useMeetingAssistant, useShortcuts } from "@/hooks";
 import { cn } from "@/lib/utils";
 import {
   BrainIcon,
@@ -76,6 +76,20 @@ export const MeetingAssistant = () => {
     }
     return "Start meeting assistant";
   }, [isPaused, isRunning, meeting.error, meeting.status]);
+
+  const meetingShortcutCallbacks = useMemo(
+    () => ({
+      meeting_screen_context: () => {
+        setOpen(true);
+        void meeting.captureScreenContext("hotkey");
+      },
+    }),
+    [meeting.captureScreenContext]
+  );
+
+  useShortcuts({
+    customShortcuts: meetingShortcutCallbacks,
+  });
 
   const handleToggle = async () => {
     setOpen(true);
