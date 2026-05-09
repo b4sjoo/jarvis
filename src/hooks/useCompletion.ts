@@ -1,7 +1,7 @@
 import { useState, useCallback, useRef, useEffect } from "react";
 import { useWindowResize } from "./useWindow";
 import { useGlobalShortcuts } from "@/hooks";
-import { MAX_FILES } from "@/config";
+import { MAX_FILES, STORAGE_KEYS } from "@/config";
 import { useApp } from "@/contexts";
 import {
   fetchAIResponse,
@@ -14,6 +14,7 @@ import {
   generateMessageId,
   generateRequestId,
   getResponseSettings,
+  safeLocalStorage,
 } from "@/lib";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -40,6 +41,11 @@ interface ChatConversation {
   messages: ChatMessage[];
   createdAt: number;
   updatedAt: number;
+}
+
+interface SelectedProviderState {
+  provider: string;
+  variables: Record<string, string>;
 }
 
 interface CompletionState {
@@ -84,6 +90,34 @@ export const useCompletion = () => {
   const screenshotInitiatedByThisContext = useRef(false);
 
   const { resizeWindow } = useWindowResize();
+
+  const resolveSelectedAIProvider = useCallback((): SelectedProviderState => {
+    if (selectedAIProvider.provider) {
+      return selectedAIProvider;
+    }
+
+    const stored = safeLocalStorage.getItem(STORAGE_KEYS.SELECTED_AI_PROVIDER);
+    if (!stored) {
+      return selectedAIProvider;
+    }
+
+    try {
+      const parsed = JSON.parse(stored) as Partial<SelectedProviderState>;
+      if (typeof parsed.provider === "string" && parsed.provider.trim()) {
+        return {
+          provider: parsed.provider,
+          variables:
+            parsed.variables && typeof parsed.variables === "object"
+              ? (parsed.variables as Record<string, string>)
+              : {},
+        };
+      }
+    } catch {
+      // Ignore malformed local storage and use context state below.
+    }
+
+    return selectedAIProvider;
+  }, [selectedAIProvider]);
 
   useEffect(() => {
     screenshotConfigRef.current = screenshotConfiguration;
@@ -180,8 +214,9 @@ export const useCompletion = () => {
         let fullResponse = "";
 
         const useManagedApi = await shouldUseManagedAPI();
+        const activeSelectedAIProvider = resolveSelectedAIProvider();
         // Check if AI provider is configured
-        if (!selectedAIProvider.provider && !useManagedApi) {
+        if (!activeSelectedAIProvider.provider && !useManagedApi) {
           setState((prev) => ({
             ...prev,
             error: "Please select an AI provider in settings",
@@ -190,7 +225,7 @@ export const useCompletion = () => {
         }
 
         const provider = allAiProviders.find(
-          (p) => p.id === selectedAIProvider.provider
+          (p) => p.id === activeSelectedAIProvider.provider
         );
         if (!provider && !useManagedApi) {
           setState((prev) => ({
@@ -212,7 +247,7 @@ export const useCompletion = () => {
           // Use the fetchAIResponse function with signal
           for await (const chunk of fetchAIResponse({
             provider: useManagedApi ? undefined : provider,
-            selectedProvider: selectedAIProvider,
+            selectedProvider: activeSelectedAIProvider,
             systemPrompt: systemPrompt || undefined,
             history: messageHistory,
             userMessage: input,
@@ -287,7 +322,7 @@ export const useCompletion = () => {
     [
       state.input,
       state.attachedFiles,
-      selectedAIProvider,
+      resolveSelectedAIProvider,
       allAiProviders,
       systemPrompt,
       state.conversationHistory,
@@ -583,8 +618,9 @@ export const useCompletion = () => {
             let fullResponse = "";
 
             const useManagedApi = await shouldUseManagedAPI();
+            const activeSelectedAIProvider = resolveSelectedAIProvider();
             // Check if AI provider is configured
-            if (!selectedAIProvider.provider && !useManagedApi) {
+            if (!activeSelectedAIProvider.provider && !useManagedApi) {
               setState((prev) => ({
                 ...prev,
                 error: "Please select an AI provider in settings",
@@ -593,7 +629,7 @@ export const useCompletion = () => {
             }
 
             const provider = allAiProviders.find(
-              (p) => p.id === selectedAIProvider.provider
+              (p) => p.id === activeSelectedAIProvider.provider
             );
             if (!provider && !useManagedApi) {
               setState((prev) => ({
@@ -615,7 +651,7 @@ export const useCompletion = () => {
             // Use the fetchAIResponse function with image and signal
             for await (const chunk of fetchAIResponse({
               provider: useManagedApi ? undefined : provider,
-              selectedProvider: selectedAIProvider,
+              selectedProvider: activeSelectedAIProvider,
               systemPrompt: systemPrompt || undefined,
               history: messageHistory,
               userMessage: prompt,
@@ -701,7 +737,7 @@ export const useCompletion = () => {
     [
       state.attachedFiles.length,
       state.conversationHistory,
-      selectedAIProvider,
+      resolveSelectedAIProvider,
       allAiProviders,
       systemPrompt,
       saveCurrentConversation,
