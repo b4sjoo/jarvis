@@ -11,7 +11,10 @@ const isAnyPopoverOpen = (): boolean => {
 };
 
 export const useWindowResize = () => {
-  const resizeWindow = useCallback(async (expanded: boolean) => {
+  const resizeWindow = useCallback(async (
+    expanded: boolean,
+    options: { width?: number; height?: number } = {}
+  ) => {
     try {
       const window = getCurrentWebviewWindow();
 
@@ -19,11 +22,12 @@ export const useWindowResize = () => {
         return;
       }
 
-      const newHeight = expanded ? 600 : 54;
+      const newHeight = options.height ?? (expanded ? 600 : 54);
 
       await invoke("set_window_height", {
         window,
         height: newHeight,
+        width: options.width,
       });
     } catch (error) {
       console.error("Failed to resize window:", error);

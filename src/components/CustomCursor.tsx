@@ -9,6 +9,25 @@ export const CustomCursor = () => {
   useEffect(() => {
     let rafId: number;
 
+    const shouldUseCustomCursor = () => {
+      const root = document.documentElement;
+      if (root.dataset.nativeCursorOverride === "true") {
+        return false;
+      }
+
+      return (
+        getComputedStyle(root).getPropertyValue("--cursor-type").trim() ===
+        "none"
+      );
+    };
+
+    const hideCursor = () => {
+      isVisibleRef.current = false;
+      if (cursorRef.current) {
+        cursorRef.current.style.opacity = "0";
+      }
+    };
+
     const updateCursorPosition = () => {
       if (cursorRef.current && isVisibleRef.current) {
         cursorRef.current.style.transform = `translate3d(${positionRef.current.x}px, ${positionRef.current.y}px, 0)`;
@@ -17,6 +36,11 @@ export const CustomCursor = () => {
     };
 
     const handleMouseMove = (e: MouseEvent) => {
+      if (!shouldUseCustomCursor()) {
+        hideCursor();
+        return;
+      }
+
       positionRef.current = { x: e.clientX, y: e.clientY };
 
       if (!isVisibleRef.current) {
@@ -28,18 +52,18 @@ export const CustomCursor = () => {
     };
 
     const handleMouseLeave = () => {
-      isVisibleRef.current = false;
-      if (cursorRef.current) {
-        cursorRef.current.style.opacity = "0";
-      }
+      hideCursor();
     };
 
     const handleWindowBlur = () => {
-      isVisibleRef.current = false;
-      if (cursorRef.current) {
-        cursorRef.current.style.display = "0";
-      }
+      hideCursor();
     };
+
+    const observer = new MutationObserver(() => {
+      if (!shouldUseCustomCursor()) {
+        hideCursor();
+      }
+    });
 
     // Start the animation loop
     rafId = requestAnimationFrame(updateCursorPosition);
@@ -48,11 +72,16 @@ export const CustomCursor = () => {
     document.addEventListener("mousemove", handleMouseMove, { passive: true });
     document.addEventListener("mouseleave", handleMouseLeave);
     window.addEventListener("blur", handleWindowBlur);
+    observer.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ["data-native-cursor-override", "style"],
+    });
 
     return () => {
       document.removeEventListener("mousemove", handleMouseMove);
       document.removeEventListener("mouseleave", handleMouseLeave);
       window.removeEventListener("blur", handleWindowBlur);
+      observer.disconnect();
       cancelAnimationFrame(rafId);
     };
   }, []);
@@ -60,7 +89,7 @@ export const CustomCursor = () => {
   return (
     <div
       ref={cursorRef}
-      className="fixed top-0 left-0 pointer-events-none z-[9999] opacity-0 will-change-transform"
+      className="jarvis-custom-cursor fixed top-0 left-0 pointer-events-none z-[9999] opacity-0 will-change-transform"
       style={{
         transform: "translate3d(0px, 0px, 0)",
         transition: "opacity 0.1s ease-out",

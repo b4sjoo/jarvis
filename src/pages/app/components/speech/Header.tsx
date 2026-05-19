@@ -6,7 +6,10 @@ type StatusType = "ready" | "listening" | "recording" | "processing" | "ai-proce
 type Props = {
   setupRequired: boolean;
   setIsPopoverOpen: React.Dispatch<React.SetStateAction<boolean>>;
-  resizeWindow: (expanded: boolean) => Promise<void>;
+  resizeWindow: (
+    expanded: boolean,
+    options?: { width?: number; height?: number }
+  ) => Promise<void>;
   capturing: boolean;
   isVadMode: boolean;
   isRecording: boolean;

@@ -168,6 +168,15 @@
   cursor: var(--cursor-type) !important;
 }
 
+html[data-native-cursor-override="true"] *,
+html[data-native-cursor-override="true"] {
+  cursor: default !important;
+}
+
+html[data-native-cursor-override="true"] .jarvis-custom-cursor {
+  opacity: 0 !important;
+}
+
 html {
   overscroll-behavior: none;
 }

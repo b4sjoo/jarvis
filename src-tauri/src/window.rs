@@ -4,6 +4,9 @@ use tauri::{App, AppHandle, Manager, Runtime, WebviewWindow, WebviewWindowBuilde
 
 // The offset from the top of the screen to the window
 const TOP_OFFSET: i32 = 54;
+const DEFAULT_WINDOW_WIDTH: f64 = 600.0;
+const MIN_WINDOW_WIDTH: f64 = 360.0;
+const WINDOW_SIDE_MARGIN: f64 = 32.0;
 
 /// Sets up the main window with custom positioning
 pub fn setup_main_window(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
@@ -33,18 +36,24 @@ pub fn position_window_top_center(
     window: &WebviewWindow,
     y_offset: i32,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    // Get the primary monitor
-    if let Some(monitor) = window.primary_monitor()? {
+    let monitor = match window.current_monitor()? {
+        Some(monitor) => Some(monitor),
+        None => window.primary_monitor()?,
+    };
+
+    if let Some(monitor) = monitor {
         let monitor_size = monitor.size();
+        let monitor_position = monitor.position();
         let window_size = window.outer_size()?;
 
         // Calculate center X position
-        let center_x = (monitor_size.width as i32 - window_size.width as i32) / 2;
+        let center_x =
+            monitor_position.x + (monitor_size.width as i32 - window_size.width as i32) / 2;
 
         // Set the window position
         window.set_position(tauri::Position::Physical(tauri::PhysicalPosition {
             x: center_x,
-            y: y_offset,
+            y: monitor_position.y + y_offset,
         }))?;
     }
 
@@ -71,16 +80,48 @@ pub fn center_window_completely(window: &WebviewWindow) -> Result<(), Box<dyn st
 }
 
 #[tauri::command]
-pub fn set_window_height(window: tauri::WebviewWindow, height: u32) -> Result<(), String> {
+pub fn set_window_height(
+    window: tauri::WebviewWindow,
+    height: u32,
+    width: Option<u32>,
+) -> Result<(), String> {
     use tauri::{LogicalSize, Size};
 
-    // Simply set the window size with fixed width and new height
-    let new_size = LogicalSize::new(600.0, height as f64);
+    let requested_width = width
+        .map(|value| value as f64)
+        .unwrap_or(DEFAULT_WINDOW_WIDTH);
+    let window_width = clamp_logical_window_width(&window, requested_width)?;
+    let new_size = LogicalSize::new(window_width, height as f64);
     window
         .set_size(Size::Logical(new_size))
         .map_err(|e| format!("Failed to resize window: {}", e))?;
+    position_window_top_center(&window, TOP_OFFSET)
+        .map_err(|e| format!("Failed to reposition window: {}", e))?;
 
     Ok(())
+}
+
+fn clamp_logical_window_width(window: &WebviewWindow, requested_width: f64) -> Result<f64, String> {
+    let scale_factor = window
+        .scale_factor()
+        .map_err(|e| format!("Failed to get window scale factor: {}", e))?;
+    let monitor = match window
+        .current_monitor()
+        .map_err(|e| format!("Failed to get current monitor: {}", e))?
+    {
+        Some(monitor) => Some(monitor),
+        None => window
+            .primary_monitor()
+            .map_err(|e| format!("Failed to get primary monitor: {}", e))?,
+    };
+
+    if let Some(monitor) = monitor {
+        let logical_monitor_width = monitor.size().width as f64 / scale_factor.max(1.0);
+        let max_width = (logical_monitor_width - WINDOW_SIDE_MARGIN).max(MIN_WINDOW_WIDTH);
+        return Ok(requested_width.min(max_width).max(MIN_WINDOW_WIDTH));
+    }
+
+    Ok(requested_width.max(MIN_WINDOW_WIDTH))
 }
 
 #[tauri::command]

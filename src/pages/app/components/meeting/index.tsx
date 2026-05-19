@@ -45,6 +45,10 @@ const privacyOptions = [
 ] as const;
 
 const HOTKEY_CAPTURE_SETTLE_MS = 180;
+const MEETING_PANEL_WIDTH = 920;
+const PANEL_WIDTH_CLASS = "w-[920px] max-w-[100vw]";
+const WRAP_TEXT_CLASS =
+  "min-w-0 whitespace-pre-wrap break-words [overflow-wrap:anywhere]";
 
 function waitForHotkeyCaptureSettle() {
   return new Promise<void>((resolve) => {
@@ -134,8 +138,23 @@ export const MeetingAssistant = () => {
   });
 
   useEffect(() => {
-    void resizeWindow(open);
+    void resizeWindow(open, open ? { width: MEETING_PANEL_WIDTH } : undefined);
   }, [open, resizeWindow]);
+
+  useEffect(() => {
+    const root = document.documentElement;
+
+    if (!open) {
+      delete root.dataset.nativeCursorOverride;
+      return;
+    }
+
+    root.dataset.nativeCursorOverride = "true";
+
+    return () => {
+      delete root.dataset.nativeCursorOverride;
+    };
+  }, [open]);
 
   const handleToggle = async () => {
     setOpen(true);
@@ -197,9 +216,12 @@ export const MeetingAssistant = () => {
         align="start"
         side="bottom"
         sideOffset={8}
-        className="w-screen overflow-hidden border-input/50 p-0"
+        className={cn(
+          PANEL_WIDTH_CLASS,
+          "overflow-hidden border-input/50 p-0"
+        )}
       >
-        <div className="flex h-[calc(100vh-4rem)] flex-col overflow-hidden">
+        <div className="flex h-[calc(100vh-4rem)] w-full max-w-full flex-col overflow-hidden">
           <div className="flex items-center justify-between gap-2 border-b border-border/50 p-3">
             <div className="flex min-w-0 items-center gap-2">
               <BrainIcon className="h-4 w-4 shrink-0 text-primary" />
@@ -268,9 +290,9 @@ export const MeetingAssistant = () => {
             </div>
           </div>
 
-          <ScrollArea className="min-h-0 flex-1">
-            <div className="space-y-3 p-3">
-              <section className="rounded-md border border-border/70 p-3">
+          <ScrollArea className="min-h-0 flex-1 overflow-hidden">
+            <div className="min-w-0 max-w-full space-y-3 overflow-x-hidden p-3">
+              <section className="min-w-0 overflow-hidden rounded-md border border-border/70 p-3">
                 <div className="mb-2 flex items-center justify-between gap-2">
                   <div className="text-xs font-semibold">Privacy</div>
                   <div className="flex items-center gap-2">
@@ -305,7 +327,7 @@ export const MeetingAssistant = () => {
               </section>
 
               {meeting.setupWarnings.length > 0 ? (
-                <section className="rounded-md border border-amber-200 bg-amber-50 p-3">
+                <section className="min-w-0 overflow-hidden rounded-md border border-amber-200 bg-amber-50 p-3">
                   <div className="text-xs font-medium text-amber-900">
                     Setup
                   </div>
@@ -314,6 +336,7 @@ export const MeetingAssistant = () => {
                       <div
                         key={warning.code}
                         className={cn(
+                          WRAP_TEXT_CLASS,
                           "text-xs",
                           warning.severity === "blocking"
                             ? "text-red-700"
@@ -328,27 +351,32 @@ export const MeetingAssistant = () => {
               ) : null}
 
               {meeting.error ? (
-                <section className="rounded-md border border-red-200 bg-red-50 p-3">
+                <section className="min-w-0 overflow-hidden rounded-md border border-red-200 bg-red-50 p-3">
                   <div className="text-xs font-medium text-red-800">Error</div>
-                  <div className="mt-1 text-xs text-red-700">
+                  <div className={cn(WRAP_TEXT_CLASS, "mt-1 text-xs text-red-700")}>
                     {meeting.error}
                   </div>
                 </section>
               ) : null}
 
-              <section className="rounded-md border border-border/70 p-3">
+              <section className="min-w-0 overflow-hidden rounded-md border border-border/70 p-3">
                 <div className="mb-2 flex items-center gap-2 text-xs font-semibold">
                   <MessageSquareTextIcon className="h-3.5 w-3.5" />
                   Latest transcript
                 </div>
-                <p className="min-h-10 whitespace-pre-wrap text-xs leading-5 text-muted-foreground">
+                <p
+                  className={cn(
+                    WRAP_TEXT_CLASS,
+                    "min-h-10 text-xs leading-5 text-muted-foreground"
+                  )}
+                >
                   {latestTurn?.text || "Waiting for meeting audio."}
                 </p>
               </section>
 
               {isScreenTaskSuggestion ? (
                 <>
-                  <section className="rounded-md border border-border/70 p-3">
+                  <section className="min-w-0 overflow-hidden rounded-md border border-border/70 p-3">
                     <div className="mb-2 flex items-center gap-2 text-xs font-semibold">
                       <BrainIcon className="h-3.5 w-3.5" />
                       Screen task
@@ -371,65 +399,95 @@ export const MeetingAssistant = () => {
                     </div>
                   </section>
 
-                  <section className="rounded-md border border-border/70 p-3">
+                  <section className="min-w-0 overflow-hidden rounded-md border border-border/70 p-3">
                     <div className="mb-2 flex items-center gap-2 text-xs font-semibold">
                       <MessageSquareTextIcon className="h-3.5 w-3.5" />
                       Approach
                     </div>
-                    <p className="min-h-14 whitespace-pre-wrap text-xs leading-5">
+                    <p
+                      className={cn(
+                        WRAP_TEXT_CLASS,
+                        "min-h-14 text-xs leading-5"
+                      )}
+                    >
                       {suggestionSections.approach || "Not needed yet."}
                     </p>
                   </section>
 
-                  <section className="rounded-md border border-border/70 p-3">
+                  <section className="min-w-0 overflow-hidden rounded-md border border-border/70 p-3">
                     <div className="mb-2 flex items-center gap-2 text-xs font-semibold">
                       <MessageSquareTextIcon className="h-3.5 w-3.5" />
                       Code & complexity
                     </div>
                     {suggestionSections.code ? (
-                      <pre className="max-h-56 overflow-auto whitespace-pre-wrap rounded-sm bg-muted p-2 text-[11px] leading-4">
+                      <pre
+                        className={cn(
+                          WRAP_TEXT_CLASS,
+                          "max-h-56 overflow-y-auto overflow-x-hidden rounded-sm bg-muted p-2 text-[11px] leading-4"
+                        )}
+                      >
                         {suggestionSections.code}
                       </pre>
                     ) : (
-                      <p className="text-xs leading-5 text-muted-foreground">
+                      <p
+                        className={cn(
+                          WRAP_TEXT_CLASS,
+                          "text-xs leading-5 text-muted-foreground"
+                        )}
+                      >
                         No code needed.
                       </p>
                     )}
-                    <p className="mt-2 whitespace-pre-wrap text-xs leading-5">
+                    <p className={cn(WRAP_TEXT_CLASS, "mt-2 text-xs leading-5")}>
                       {suggestionSections.complexity || "No complexity note."}
                     </p>
                   </section>
                 </>
               ) : (
                 <>
-                  <section className="rounded-md border border-border/70 p-3">
+                  <section className="min-w-0 overflow-hidden rounded-md border border-border/70 p-3">
                     <div className="mb-2 flex items-center gap-2 text-xs font-semibold">
                       <BrainIcon className="h-3.5 w-3.5" />
                       Meaning
                     </div>
-                    <p className="min-h-14 whitespace-pre-wrap text-xs leading-5">
+                    <p
+                      className={cn(
+                        WRAP_TEXT_CLASS,
+                        "min-h-14 text-xs leading-5"
+                      )}
+                    >
                       {suggestionSections.meaning || "Waiting for context."}
                     </p>
                   </section>
 
-                  <section className="rounded-md border border-border/70 p-3">
+                  <section className="min-w-0 overflow-hidden rounded-md border border-border/70 p-3">
                     <div className="mb-2 flex items-center gap-2 text-xs font-semibold">
                       <MessageSquareTextIcon className="h-3.5 w-3.5" />
                       Suggested reply
                     </div>
-                    <p className="min-h-20 whitespace-pre-wrap text-xs leading-5">
+                    <p
+                      className={cn(
+                        WRAP_TEXT_CLASS,
+                        "min-h-20 text-xs leading-5"
+                      )}
+                    >
                       {suggestionSections.reply || "Waiting for suggestion."}
                     </p>
                   </section>
                 </>
               )}
 
-              <section className="rounded-md border border-border/70 p-3">
+              <section className="min-w-0 overflow-hidden rounded-md border border-border/70 p-3">
                 <div className="mb-2 flex items-center gap-2 text-xs font-semibold">
                   <MessageSquareTextIcon className="h-3.5 w-3.5" />
                   Clarifying question
                 </div>
-                <p className="min-h-14 whitespace-pre-wrap text-xs leading-5">
+                <p
+                  className={cn(
+                    WRAP_TEXT_CLASS,
+                    "min-h-14 text-xs leading-5"
+                  )}
+                >
                   {showClarifyingQuestion
                     ? clarifyingQuestion
                     : clarifyingQuestion
@@ -502,7 +560,7 @@ export const MeetingAssistant = () => {
               </section>
 
               {latestCaptureTarget ? (
-                <section className="rounded-md border border-border/70 p-3">
+                <section className="min-w-0 overflow-hidden rounded-md border border-border/70 p-3">
                   <div className="mb-2 flex items-center gap-2 text-xs font-semibold">
                     <CameraIcon className="h-3.5 w-3.5" />
                     Last capture
@@ -510,10 +568,20 @@ export const MeetingAssistant = () => {
                   <div className="truncate text-xs">
                     {formatCaptureTargetName(latestCaptureTarget)}
                   </div>
-                  <div className="mt-1 text-[10px] text-muted-foreground">
+                  <div
+                    className={cn(
+                      WRAP_TEXT_CLASS,
+                      "mt-1 text-[10px] text-muted-foreground"
+                    )}
+                  >
                     {formatCaptureTargetBounds(latestCaptureTarget)}
                   </div>
-                  <div className="mt-1 text-[10px] text-muted-foreground">
+                  <div
+                    className={cn(
+                      WRAP_TEXT_CLASS,
+                      "mt-1 text-[10px] text-muted-foreground"
+                    )}
+                  >
                     {formatCaptureTargetMethod(latestCaptureTarget)}
                   </div>
                   {latestScreenObservation?.analysisPromptSource ? (
@@ -555,7 +623,7 @@ export const MeetingAssistant = () => {
             </div>
           </ScrollArea>
 
-          <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border/50 p-2">
+          <div className="flex min-w-0 max-w-full flex-wrap items-center justify-between gap-2 overflow-hidden border-t border-border/50 p-2">
             <Button
               size="sm"
               variant="ghost"
@@ -567,7 +635,7 @@ export const MeetingAssistant = () => {
               <PauseIcon className="h-3.5 w-3.5" />
               Hide panel
             </Button>
-            <div className="flex flex-wrap items-center justify-end gap-1.5">
+            <div className="flex min-w-0 flex-wrap items-center justify-end gap-1.5">
               <Button
                 size="sm"
                 variant="outline"
@@ -648,7 +716,7 @@ const SuggestionBlock = ({
       <div className="mb-1 text-[10px] font-medium uppercase text-muted-foreground">
         {label}
       </div>
-      <p className="whitespace-pre-wrap text-xs leading-5">{value}</p>
+      <p className={cn(WRAP_TEXT_CLASS, "text-xs leading-5")}>{value}</p>
     </div>
   );
 };

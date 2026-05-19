@@ -19,7 +19,8 @@ Current implementation status:
 - Explicit screen captures now create an `activeScreenTask` and produce structured screen-task answers directly from the vision provider.
 - Later transcript turns use the active screen task as the anchor and update the technical answer as clarification or follow-up context arrives.
 - Initial user testing reports the screen-anchored behavior is materially better than the previous generic screen-only path.
-- Remaining high-impact gaps are cursor/focus capture, validation with real mock meetings, and lifecycle controls such as manual task dismiss or timeout.
+- The Meeting Assistant panel now has a fixed expanded width, wrapped long-response layout, and native cursor override while open.
+- Remaining high-impact gaps are cursor-centered question focus selection, broader validation with mock meetings, and lifecycle controls such as manual task dismiss or timeout.
 
 ## Milestone 0: Design Review and Scope Lock
 
@@ -120,7 +121,8 @@ Goal: create a meeting-specific overlay that is useful under pressure.
 - [x] Add one-click clarifying-question feedback controls.
 - [x] Add pause/resume control.
 - [x] Add hide overlay control.
-- [x] Ensure UI fits inside existing overlay window dimensions.
+- [x] Ensure UI uses a fixed expanded width and wraps long responses instead of growing horizontally.
+- [x] Restore native cursor behavior while the Meeting Assistant panel is open.
 - [x] Avoid adding marketing/explanatory text inside the tool surface.
 - [ ] Check small window and common laptop viewport layouts.
 
@@ -325,7 +327,8 @@ Exit criteria:
 | Screen observation costs too much | Medium | Keep observation manual/hotkey-only, keep hash metadata, add duplicate suppression and rate limits before automatic mode | Mitigating |
 | Existing inherited code is too coupled | Medium | Add meeting modules first, then refactor hooks | Open |
 | Privacy expectations are unclear | High | Add explicit privacy mode and no raw persistence defaults | Mitigating |
-| Screen and audio semantics are underspecified | High | Pause implementation and review screen-anchored technical question design before continuing | Active |
+| Screen and audio semantics are underspecified | High | Screen-anchored task model implemented; continue validating with mock meetings | Mitigating |
+| Transparent overlay can hide the system cursor | Medium | Use native cursor while Meeting Assistant is expanded and hide the custom cursor layer | Mitigated |
 
 ## Decision Log
 
@@ -343,6 +346,8 @@ Exit criteria:
 | 2026-05-19 | Honor Screenshot Auto prompt in meeting screen analysis | Meeting screen context uses the configured screenshot auto prompt when Screenshot settings are in `Auto` mode |
 | 2026-05-19 | Add screen-only advisor behavior | Temporary guard to stop screenshot-only requests from inventing colleagues, speakers, or meeting dialogue |
 | 2026-05-19 | Pause implementation for screen/audio fusion design review | Real use case is screen-anchored technical Q&A with audio as supplemental clarification; task tracking is updated before further implementation |
+| 2026-05-19 | Fix Meeting Assistant expanded layout | Long responses wrap inside a fixed-width panel; native window width is requested explicitly and clamped to the current monitor |
+| 2026-05-19 | Use native cursor while Meeting Assistant is open | Avoid cursor loss caused by hidden/custom cursor styling over the enlarged transparent Tauri window |
 
 ## Validation Snapshot
 
@@ -352,11 +357,11 @@ Last validated: 2026-05-19.
 - `cargo check` passes after selecting full Xcode as the active developer directory.
 - `git diff --check` passes before commits in the current phase.
 - Manual screen-context test passes well enough for the next live-meeting smoke test.
+- Manual Meeting Assistant layout and cursor tests passed after expanding the panel and overriding custom cursor behavior.
 
 ## Immediate Next Tasks
 
-1. User reviews Milestone 5A and approves or revises the screen-anchored design.
-2. Decide whether to keep, revise, or revert the uncommitted prototype changes for Screenshot Auto prompt, clarifying controls, and `screen-only`.
-3. Update the low-level design with the approved screen/audio fusion event flow.
-4. Resume implementation only after the design review is complete.
-5. After the design pivot is implemented, return to Zoom, Google Meet, and Teams smoke tests.
+1. Continue mock-meeting validation with Zoom first, then Google Meet and Teams.
+2. Add manual clear/dismiss for stale active screen tasks if testing shows task carryover.
+3. Define cursor-centered question focus selection for screens with multiple questions or distractors.
+4. Add duplicate-screenshot suppression and rate limiting before automatic observation mode.

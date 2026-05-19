@@ -435,6 +435,9 @@ Responsibilities:
 MVP UI shape:
 
 - Compact top overlay.
+- Expanded Meeting Assistant uses a fixed target width, clamped to the current monitor, and grows vertically through scrollable content rather than expanding horizontally.
+- Long transcript, answer, code, complexity, debug, and error text must wrap inside the panel with horizontal overflow hidden.
+- While the Meeting Assistant panel is open, the main webview temporarily overrides hidden/custom cursor styling and uses the native system cursor. This prevents cursor loss when the pointer leaves visible panel content but remains inside the transparent Tauri window rectangle.
 - Normal transcript-driven sections:
   - Meaning
   - Suggested reply
@@ -601,6 +604,8 @@ Date: 2026-05-08
 - Microphone capture: excluded from v1; system audio turns are labeled `them` or `unknown`.
 - Screen context: manual overlay capture first; automatic observation is a later opt-in feature.
 - Visibility wording: screen-share resistant, not invisible or undetectable.
+- Meeting Assistant layout: use a fixed expanded panel width with wrapped content instead of letting long model responses resize the native window.
+- Meeting Assistant cursor behavior: use native cursor while the expanded panel is open, then restore the normal hidden/custom cursor behavior after closing.
 
 ## 14. Remaining Open Questions
 
