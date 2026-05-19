@@ -7,6 +7,8 @@ import { safeLocalStorage } from "@/lib";
 import {
   AdvisorEngine,
   AdvisorRequestMode,
+  ClarifyingQuestionAnswer,
+  ClarifyingQuestionFeedback,
   MeetingAssistantState,
   MeetingAudioConfig,
   MeetingAudioStatus,
@@ -17,7 +19,11 @@ import {
   ScreenObservation,
   base64WavToBlob,
   captureScreenObservation,
-  summarizeScreenObservation,
+  createMeetingId,
+  extractScreenTaskQuestion,
+  inferScreenTaskKind,
+  inferScreenTaskLanguage,
+  solveScreenAnchoredTask,
   transcribeMeetingAudio,
 } from "@/lib/meeting";
 
@@ -126,6 +132,7 @@ interface RunAdvisorOptions {
   force?: boolean;
   mode?: AdvisorRequestMode;
   currentSuggestion?: string;
+  clarifyingFeedback?: ClarifyingQuestionFeedback;
 }
 
 interface CaptureScreenContextOptions {
@@ -134,6 +141,7 @@ interface CaptureScreenContextOptions {
 
 export function useMeetingAssistant() {
   const {
+    screenshotConfiguration,
     selectedSttProvider,
     allSttProviders,
     selectedAIProvider,
@@ -339,6 +347,7 @@ export function useMeetingAssistant() {
         provider: aiProvider,
         selectedProvider: selectedAIProvider,
         currentSuggestion: options.currentSuggestion,
+        clarifyingFeedback: options.clarifyingFeedback,
       })) {
         finalContent = event.accumulated;
         setState((previous) => ({
@@ -347,7 +356,31 @@ export function useMeetingAssistant() {
         }));
       }
 
-      const contextState = contextManagerRef.current.getState();
+      let contextState = contextManagerRef.current.getState();
+
+      if (
+        mode === "screen-anchored" &&
+        contextState.activeScreenTask &&
+        finalContent.trim()
+      ) {
+        contextManagerRef.current.setActiveScreenTask({
+          ...contextState.activeScreenTask,
+          updatedAt: Date.now(),
+          question:
+            extractScreenTaskQuestion(finalContent) ||
+            contextState.activeScreenTask.question,
+          kind: inferScreenTaskKind(finalContent),
+          language:
+            inferScreenTaskLanguage(finalContent) ||
+            contextState.activeScreenTask.language,
+          content: finalContent.trim(),
+          basedOnTurnIds: latestTurn
+            ? [...contextState.activeScreenTask.basedOnTurnIds, latestTurn.id]
+            : contextState.activeScreenTask.basedOnTurnIds,
+        });
+        contextState = contextManagerRef.current.getState();
+      }
+
       const latestObservationIds = contextState.screenObservations.map(
         (observation) => observation.id
       );
@@ -365,6 +398,7 @@ export function useMeetingAssistant() {
           latestTurn ? [latestTurn.id] : [],
           latestObservationIds
         ),
+        activeScreenTask: contextState.activeScreenTask,
       }));
     } catch (error) {
       if (!activeRef.current && !force) return;
@@ -385,13 +419,13 @@ export function useMeetingAssistant() {
     }
   }, [aiProvider, selectedAIProvider, state.status]);
 
-  const scheduleAdvisor = useCallback(() => {
+  const scheduleAdvisor = useCallback((mode: AdvisorRequestMode = "live") => {
     if (!activeRef.current) return;
 
     clearAdvisorDebounce();
     advisorDebounceTimerRef.current = window.setTimeout(() => {
       advisorDebounceTimerRef.current = null;
-      void runAdvisor();
+      void runAdvisor({ mode });
     }, ADVISOR_DEBOUNCE_MS);
   }, [clearAdvisorDebounce, runAdvisor]);
 
@@ -459,9 +493,12 @@ export function useMeetingAssistant() {
           ...previous,
           status: activeRef.current ? "listening" : "idle",
           transcriptTurns: contextState.transcriptTurns,
+          activeScreenTask: contextState.activeScreenTask,
         }));
 
-        scheduleAdvisor();
+        scheduleAdvisor(
+          contextState.activeScreenTask ? "screen-anchored" : "live"
+        );
       } catch (error) {
         if (!activeRef.current) return;
 
@@ -569,6 +606,7 @@ export function useMeetingAssistant() {
         status: "listening",
         transcriptTurns: contextState.transcriptTurns,
         screenObservations: contextState.screenObservations,
+        activeScreenTask: contextState.activeScreenTask,
         partialSuggestion: "",
         error: null,
         audioStatus,
@@ -686,11 +724,17 @@ export function useMeetingAssistant() {
         analysisController = new AbortController();
         screenAnalysisAbortRef.current = analysisController;
 
-        const visualSummary = await withTimeout(
-          summarizeScreenObservation({
+        const autoPrompt = getMeetingScreenAutoPrompt(screenshotConfiguration);
+        const analysisContextState = contextManagerRef.current.getState();
+        const screenTaskContent = await withTimeout(
+          solveScreenAnchoredTask({
             observation,
             provider: aiProvider,
             selectedProvider: selectedAIProvider,
+            recentTranscript: formatRecentTranscript(
+              analysisContextState.transcriptTurns
+            ),
+            autoPrompt,
             signal: analysisController.signal,
           }),
           SCREEN_ANALYSIS_TIMEOUT_MS,
@@ -701,21 +745,65 @@ export function useMeetingAssistant() {
         screenAnalysisAbortRef.current = null;
 
         contextManagerRef.current.updateScreenObservation(observation.id, {
-          visualSummary,
+          visualSummary: screenTaskContent,
+          analysisPromptSource: autoPrompt
+            ? "screenshot-auto-prompt"
+            : "meeting-default",
         });
-        const updatedContextState = contextManagerRef.current.getState();
+
+        let updatedContextState = contextManagerRef.current.getState();
+        const basedOnTurnIds = updatedContextState.transcriptTurns
+          .slice(-6)
+          .map((turn) => turn.id);
+        const requestId = createMeetingId("screen_task");
+        const question = extractScreenTaskQuestion(screenTaskContent);
+
+        if (screenTaskContent.trim()) {
+          contextManagerRef.current.setActiveScreenTask({
+            id: requestId,
+            observationId: observation.id,
+            createdAt: Date.now(),
+            updatedAt: Date.now(),
+            question: question || undefined,
+            kind: inferScreenTaskKind(screenTaskContent),
+            language: inferScreenTaskLanguage(screenTaskContent),
+            content: screenTaskContent,
+            basedOnTurnIds,
+            basedOnObservationId: observation.id,
+          });
+        } else {
+          contextManagerRef.current.clearActiveScreenTask();
+        }
+
+        updatedContextState = contextManagerRef.current.getState();
 
         setState((previous) => ({
           ...previous,
+          status: activeRef.current ? "listening" : idleReturnStatus,
+          partialSuggestion: "",
           screenObservations: updatedContextState.screenObservations,
+          activeScreenTask: updatedContextState.activeScreenTask,
+          latestSuggestion: screenTaskContent.trim()
+            ? {
+                id: requestId,
+                kind: "screen-task",
+                content: screenTaskContent.trim(),
+                createdAt: Date.now(),
+                basedOnTurnIds,
+                basedOnObservationIds: [observation.id],
+                confidence: "medium",
+              }
+            : {
+                id: requestId,
+                kind: "silent",
+                content: "",
+                createdAt: Date.now(),
+                basedOnTurnIds,
+                basedOnObservationIds: [observation.id],
+                confidence: "low",
+              },
           error: null,
         }));
-
-        if (activeRef.current) {
-          scheduleAdvisor();
-        } else {
-          await runAdvisor({ force: true });
-        }
       } catch (error) {
         analysisController?.abort();
         if (screenAnalysisAbortRef.current === analysisController) {
@@ -736,9 +824,8 @@ export function useMeetingAssistant() {
     },
     [
       aiProvider,
-      runAdvisor,
-      scheduleAdvisor,
       selectedAIProvider,
+      screenshotConfiguration,
       state.settings,
       state.status,
     ]
@@ -770,6 +857,28 @@ export function useMeetingAssistant() {
       currentSuggestion: currentSuggestionText,
     });
   }, [currentSuggestionText, runAdvisor]);
+
+  const answerClarifyingQuestion = useCallback(
+    async (question: string, answer: ClarifyingQuestionAnswer) => {
+      const trimmedQuestion = question.trim();
+      if (!trimmedQuestion) return;
+
+      const hasActiveScreenTask = Boolean(
+        contextManagerRef.current.getState().activeScreenTask
+      );
+
+      await runAdvisor({
+        force: true,
+        mode: hasActiveScreenTask ? "screen-anchored" : "clarifying-answer",
+        currentSuggestion: currentSuggestionText,
+        clarifyingFeedback: {
+          question: trimmedQuestion,
+          answer,
+        },
+      });
+    },
+    [currentSuggestionText, runAdvisor]
+  );
 
   useEffect(() => {
     let unlistenSpeech: (() => void) | undefined;
@@ -808,6 +917,28 @@ export function useMeetingAssistant() {
     captureScreenContext,
     regenerateSuggestion,
     makeSuggestionShorter,
+    answerClarifyingQuestion,
     isActive: activeRef.current,
   };
+}
+
+function getMeetingScreenAutoPrompt(
+  screenshotConfiguration: { mode: string; autoPrompt?: string }
+) {
+  if (screenshotConfiguration.mode !== "auto") return undefined;
+
+  const trimmedPrompt = screenshotConfiguration.autoPrompt?.trim();
+  return trimmedPrompt || undefined;
+}
+
+function formatRecentTranscript(
+  turns: MeetingAssistantState["transcriptTurns"]
+) {
+  return turns
+    .slice(-8)
+    .map((turn) => {
+      const speaker = turn.speaker === "me" ? "Me" : "Them";
+      return `${speaker}: ${turn.text}`;
+    })
+    .join("\n");
 }

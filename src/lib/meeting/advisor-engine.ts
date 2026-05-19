@@ -37,6 +37,7 @@ export class AdvisorEngine {
     const systemPrompt = buildAdvisorSystemPrompt();
     const userMessage = buildAdvisorUserMessage(request.promptContext, {
       currentSuggestion: request.currentSuggestion,
+      clarifyingFeedback: request.clarifyingFeedback,
       mode: request.mode ?? "live",
     });
     let accumulated = "";
@@ -87,6 +88,13 @@ export function transcriptTurnsToMessages(turns: TranscriptTurn[]): Message[] {
 function inferSuggestionKind(content: string): AdvisorSuggestion["kind"] {
   const normalized = content.trim().toLowerCase();
   if (!normalized || normalized === "-") return "silent";
+  if (
+    normalized.includes("question:") &&
+    normalized.includes("answer:") &&
+    (normalized.includes("approach:") || normalized.includes("complexity:"))
+  ) {
+    return "screen-task";
+  }
   if (normalized.includes("clarifying") || normalized.includes("澄清")) {
     return "clarifying-question";
   }

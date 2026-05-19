@@ -9,9 +9,17 @@
 
 ## Current Phase
 
-Phase 1: Meeting Assistant MVP implementation.
+Phase 1: Meeting Assistant MVP implementation has resumed with screen-anchored technical question mode as the active workstream.
 
-Design decisions are locked for the personal macOS MVP. Current work has a validated audio-to-transcript-to-advice loop, explicit privacy modes, manual and hotkey-triggered screen context, and advisor refinement controls. The `Cmd+Shift+E` screen-context hotkey now works as an explicit one-shot advisor path: it can hide the meeting panel, capture the frontmost active window via monitor-crop, analyze it, and reopen the panel with generated guidance plus capture-target debug metadata. The next focus is live-meeting QA, visibility hardening, and provider latency improvements.
+Current work has a validated audio-to-transcript-to-advice loop, explicit privacy modes, manual and hotkey-triggered active-window capture, and capture-target debug metadata. Recent testing showed that the earlier `screen-only` direction was too narrow for the real use case: screen content should be the anchor for technical questions, while meeting audio should act as clarification, modification, or follow-up context.
+
+Current implementation status:
+
+- Screenshot Auto prompt wiring, clarifying-question quick actions, and hallucination guards are retained.
+- Explicit screen captures now create an `activeScreenTask` and produce structured screen-task answers directly from the vision provider.
+- Later transcript turns use the active screen task as the anchor and update the technical answer as clarification or follow-up context arrives.
+- Initial user testing reports the screen-anchored behavior is materially better than the previous generic screen-only path.
+- Remaining high-impact gaps are cursor/focus capture, validation with real mock meetings, and lifecycle controls such as manual task dismiss or timeout.
 
 ## Milestone 0: Design Review and Scope Lock
 
@@ -109,6 +117,7 @@ Goal: create a meeting-specific overlay that is useful under pressure.
 - [x] Show "Meaning" section.
 - [x] Show "Suggested reply" section.
 - [x] Show "Clarifying question" section.
+- [x] Add one-click clarifying-question feedback controls.
 - [x] Add pause/resume control.
 - [x] Add hide overlay control.
 - [x] Ensure UI fits inside existing overlay window dimensions.
@@ -133,6 +142,8 @@ Goal: provide visual context from screen sharing or shared pages.
 - [x] Store capture target debug metadata on `ScreenObservation`.
 - [x] Use monitor-crop active-window capture to handle Zoom/video host windows.
 - [x] Show a capture preview thumbnail, capture method, image size, monitor, and top window candidates in debug metadata.
+- [x] Reuse Screenshot Auto mode's auto prompt for Meeting Assistant screen analysis.
+- [x] Add screen-only advisor mode to avoid inventing colleagues when a capture has no transcript.
 - [x] Send screenshot to vision-capable provider only when triggered.
 - [x] Include latest visual summary in advisor prompt.
 - [x] Add setting to disable screen context entirely.
@@ -145,6 +156,65 @@ Exit criteria:
 - User can press a hotkey to explain the frontmost active window.
 - Latest screen context improves subsequent suggestions.
 - Screen context can be disabled independently from audio.
+
+## Milestone 5A: Screen-Anchored Technical Question Mode
+
+Goal: redesign screen context from generic screenshot explanation into a technical question solver where screen content is the primary task and audio is supplemental context.
+
+- [x] Identify product mismatch in current `screen-only` approach.
+- [x] Define target use case: Notepad, IDE, VSCode-like editor, or shared page containing a technical question.
+- [x] Define audio role: clarification, modification, follow-up, or extra constraints for the visible screen question.
+- [x] Decide whether to keep, revise, or revert the uncommitted `screen-only` prototype patch.
+- [x] Update the low-level design after review to describe screen-anchored task state and event flow.
+- [~] Define and implement `activeScreenTask` lifecycle:
+  - starts on explicit screen capture.
+  - stores visible question, task classification, relevant screenshot metadata, and recent audio context.
+  - receives later transcript turns as clarification or follow-up.
+  - currently ends on new meaningful capture or cleared non-question capture.
+  - manual dismiss, stop-clear semantics, and timeout still need product validation.
+- [x] Define screen task classification:
+  - open field-knowledge question.
+  - coding/algorithm question.
+  - ambiguous or multiple-question screen.
+  - non-question screen context.
+- [x] Define answer contract for field-knowledge questions:
+  - concise professional answer.
+  - meeting-ready English wording.
+  - optional short Chinese explanation only when helpful.
+- [x] Define answer contract for coding questions:
+  - default language: Python unless the screen specifies another language.
+  - algorithm idea.
+  - implementation.
+  - time complexity.
+  - space complexity.
+  - explanation concise enough for live conversation.
+- [ ] Define cursor/focus behavior:
+  - record mouse position at capture time.
+  - prioritize text or question near cursor when multiple questions or distractors are visible.
+  - consider sending both focused crop and full active-window image.
+- [x] Decide how Screenshot Auto prompt should interact with meeting mode:
+  - recommended: treat it as user preference/instruction, not as the primary system contract.
+  - it must not override technical-question output requirements.
+- [x] Redesign Meeting Assistant output sections for screen tasks:
+  - `Question`.
+  - `Answer`.
+  - `Approach`.
+  - `Code`.
+  - `Complexity`.
+  - `Clarifying question`.
+- [x] Define how quick clarifying controls apply to active screen tasks.
+- [x] Update task priority after user review.
+- [~] Validate quality in mock meetings with both field-knowledge and coding questions.
+  - Initial user feedback on the new implementation is positive.
+  - Broader scenario coverage is still needed before calling this complete.
+- [ ] Add manual clear/dismiss for the active screen task if testing shows stale task carryover.
+
+Exit criteria:
+
+- Explicit capture returns a structured technical answer anchored to the active window.
+- Later audio can update the same answer as clarification/follow-up context.
+- Meeting UI supports screen-task sections and quick clarifying controls.
+- Remaining focus/lifecycle hardening tasks are tracked separately.
 
 ## Milestone 6: Automatic Screen Observation
 
@@ -255,6 +325,7 @@ Exit criteria:
 | Screen observation costs too much | Medium | Keep observation manual/hotkey-only, keep hash metadata, add duplicate suppression and rate limits before automatic mode | Mitigating |
 | Existing inherited code is too coupled | Medium | Add meeting modules first, then refactor hooks | Open |
 | Privacy expectations are unclear | High | Add explicit privacy mode and no raw persistence defaults | Mitigating |
+| Screen and audio semantics are underspecified | High | Pause implementation and review screen-anchored technical question design before continuing | Active |
 
 ## Decision Log
 
@@ -268,10 +339,14 @@ Exit criteria:
 | 2026-05-09 | Make screen-context hotkey a one-shot advisor path | `Cmd+Shift+E` hides the meeting panel before capture, analyzes the current screen, then reopens the panel with guidance even when audio listening is not active |
 | 2026-05-18 | Prefer active-window capture for meeting screen context | Meeting screen context no longer depends on the Jarvis overlay monitor; each observation records target app/window/bounds and active-window fallback reasons |
 | 2026-05-18 | Capture active-window regions from the composed monitor image | Zoom can expose host windows such as `CptHost / ZOOM Sharing Frame Window`; monitor-crop capture should match the visible shared content more reliably than direct window capture |
+| 2026-05-19 | Close the clarifying-question interaction loop | Clarifying questions now provide `Yes`, `No`, `Not sure`, and `Dismiss` actions; clicked answers feed the next advisor request without requiring typing |
+| 2026-05-19 | Honor Screenshot Auto prompt in meeting screen analysis | Meeting screen context uses the configured screenshot auto prompt when Screenshot settings are in `Auto` mode |
+| 2026-05-19 | Add screen-only advisor behavior | Temporary guard to stop screenshot-only requests from inventing colleagues, speakers, or meeting dialogue |
+| 2026-05-19 | Pause implementation for screen/audio fusion design review | Real use case is screen-anchored technical Q&A with audio as supplemental clarification; task tracking is updated before further implementation |
 
 ## Validation Snapshot
 
-Last validated: 2026-05-09.
+Last validated: 2026-05-19.
 
 - `npm run build` passes.
 - `cargo check` passes after selecting full Xcode as the active developer directory.
@@ -280,8 +355,8 @@ Last validated: 2026-05-09.
 
 ## Immediate Next Tasks
 
-1. Run real Zoom, Google Meet, and Teams smoke tests on macOS.
-2. Check small overlay window and common laptop viewport layouts.
-3. Add visibility caveat in onboarding/settings and a one-tap hide shortcut.
-4. Add raw audio and screenshot persistence guards as explicit code-level invariants.
-5. Design the streaming STT provider interface before investing in automatic screen observation.
+1. User reviews Milestone 5A and approves or revises the screen-anchored design.
+2. Decide whether to keep, revise, or revert the uncommitted prototype changes for Screenshot Auto prompt, clarifying controls, and `screen-only`.
+3. Update the low-level design with the approved screen/audio fusion event flow.
+4. Resume implementation only after the design review is complete.
+5. After the design pivot is implemented, return to Zoom, Google Meet, and Teams smoke tests.

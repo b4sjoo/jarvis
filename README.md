@@ -10,6 +10,8 @@ The current goal is narrow: help me understand software engineering meetings fas
 - Screen-share-safe overlay behavior is inherited from the original app foundation.
 - Meeting assistant modules have been added for transcript context, screen observations, prompt construction, and advisor suggestions.
 - The meeting overlay opens in the desktop app, supports explicit `Text+Screen` privacy mode, and can generate screen-context suggestions from the meeting hotkey.
+- Explicit screen captures now produce screen-anchored technical answers with `Question`, `Answer`, `Approach`, `Code`, `Complexity`, and `Clarifying question` sections.
+- Initial personal testing shows the screen-anchored flow is more useful than the earlier generic screen explanation path.
 
 ## Personal-Use Scope
 
@@ -76,7 +78,10 @@ Jarvis expects you to configure local/custom providers before relying on meeting
 - Open the floating Brain button to show the Meeting Assistant panel.
 - Use the panel's Privacy selector to switch between `Text` and `Text+Screen`.
 - `Cmd+Shift+E` captures the frontmost active window for meeting context, briefly hides the panel before capture, then reopens the panel with the generated suggestion.
+- Screen capture is treated as the primary technical question source; recent meeting audio is used as clarification or follow-up context.
 - The Meeting Assistant panel shows a compact `Last capture` debug row with a preview thumbnail, captured app/window, capture method, image size, bounds, and top window candidates.
+- When Screenshot settings are in `Auto` mode, Meeting Assistant screen analysis treats the configured screenshot auto prompt as user preference while preserving the screen-task answer format.
+- Clarifying questions include quick `Yes`, `No`, `Not sure`, and `Dismiss` controls so you can steer follow-up suggestions without typing during a meeting.
 - `Cmd+Shift+S` remains the separate manual screenshot/completion shortcut.
 
 ## Privacy

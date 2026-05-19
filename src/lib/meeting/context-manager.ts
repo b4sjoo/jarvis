@@ -1,4 +1,5 @@
 import {
+  ActiveScreenTask,
   AdvisorPromptContext,
   GlossaryEntry,
   MeetingContextState,
@@ -43,6 +44,9 @@ export class MeetingContextManager {
       ...this.state,
       transcriptTurns: [...this.state.transcriptTurns],
       screenObservations: [...this.state.screenObservations],
+      activeScreenTask: this.state.activeScreenTask
+        ? { ...this.state.activeScreenTask }
+        : undefined,
       glossary: [...this.state.glossary],
     };
   }
@@ -96,6 +100,20 @@ export class MeetingContextManager {
     };
   }
 
+  setActiveScreenTask(task: ActiveScreenTask) {
+    this.state = {
+      ...this.state,
+      activeScreenTask: { ...task },
+    };
+  }
+
+  clearActiveScreenTask() {
+    this.state = {
+      ...this.state,
+      activeScreenTask: undefined,
+    };
+  }
+
   updateRollingSummary(rollingSummary: string) {
     this.state = {
       ...this.state,
@@ -131,6 +149,9 @@ export class MeetingContextManager {
     return {
       transcript: this.formatTranscript(),
       screenContext: this.formatScreenContext(),
+      activeScreenTask: this.state.activeScreenTask
+        ? { ...this.state.activeScreenTask }
+        : undefined,
       rollingSummary: this.state.rollingSummary,
       userProfileContext: this.state.userProfileContext,
       glossaryText: this.formatGlossary(),
@@ -154,13 +175,31 @@ export class MeetingContextManager {
   }
 
   private formatScreenContext() {
-    return this.state.screenObservations
+    const activeTaskContext = this.state.activeScreenTask
+      ? [
+          "Active screen task:",
+          this.state.activeScreenTask.question
+            ? `Question: ${this.state.activeScreenTask.question}`
+            : undefined,
+          `Kind: ${this.state.activeScreenTask.kind}`,
+          this.state.activeScreenTask.language
+            ? `Language: ${this.state.activeScreenTask.language}`
+            : undefined,
+          this.state.activeScreenTask.content,
+        ]
+          .filter(Boolean)
+          .join("\n")
+      : "";
+
+    const observationContext = this.state.screenObservations
       .map((observation) => {
         const text = observation.visualSummary || observation.ocrText || "";
         return text.trim();
       })
       .filter(Boolean)
       .join("\n\n");
+
+    return [activeTaskContext, observationContext].filter(Boolean).join("\n\n");
   }
 
   private formatGlossary() {

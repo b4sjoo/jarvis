@@ -29,11 +29,16 @@ export interface ScreenObservation {
   imageBase64?: string;
   ocrText?: string;
   visualSummary?: string;
+  analysisPromptSource?: ScreenObservationPromptSource;
   hash?: string;
   changed: boolean;
   confidence?: number;
   captureTarget?: ScreenCaptureTarget;
 }
+
+export type ScreenObservationPromptSource =
+  | "meeting-default"
+  | "screenshot-auto-prompt";
 
 export interface ScreenCaptureTarget {
   targetType: "active-window" | "current-monitor" | "selection";
@@ -71,20 +76,55 @@ export interface MeetingContextState {
   startedAt: number;
   transcriptTurns: TranscriptTurn[];
   screenObservations: ScreenObservation[];
+  activeScreenTask?: ActiveScreenTask;
   rollingSummary: string;
   userProfileContext: string;
   glossary: GlossaryEntry[];
   lastAdvisorRequestId?: string;
 }
 
+export type ScreenTaskKind =
+  | "coding"
+  | "field-knowledge"
+  | "ambiguous"
+  | "non-question"
+  | "unknown";
+
+export interface ActiveScreenTask {
+  id: string;
+  observationId: string;
+  createdAt: number;
+  updatedAt: number;
+  question?: string;
+  kind: ScreenTaskKind;
+  language?: string;
+  content: string;
+  basedOnTurnIds: string[];
+  basedOnObservationId: string;
+}
+
 export type AdvisorSuggestionKind =
   | "answer"
+  | "screen-task"
   | "clarifying-question"
   | "jargon"
   | "context"
   | "silent";
 
-export type AdvisorRequestMode = "live" | "regenerate" | "shorter";
+export type AdvisorRequestMode =
+  | "live"
+  | "regenerate"
+  | "shorter"
+  | "screen-only"
+  | "screen-anchored"
+  | "clarifying-answer";
+
+export type ClarifyingQuestionAnswer = "yes" | "no" | "not-sure";
+
+export interface ClarifyingQuestionFeedback {
+  question: string;
+  answer: ClarifyingQuestionAnswer;
+}
 
 export interface AdvisorSuggestion {
   id: string;
@@ -111,6 +151,7 @@ export interface MeetingSetupWarning {
 export interface AdvisorPromptContext {
   transcript: string;
   screenContext: string;
+  activeScreenTask?: ActiveScreenTask;
   rollingSummary: string;
   userProfileContext: string;
   glossaryText: string;
@@ -136,6 +177,7 @@ export interface MeetingAdvisorRequest {
   provider: TYPE_PROVIDER | undefined;
   selectedProvider: SelectedProviderState;
   currentSuggestion?: string;
+  clarifyingFeedback?: ClarifyingQuestionFeedback;
   history?: Message[];
   signal?: AbortSignal;
 }
@@ -176,6 +218,7 @@ export interface MeetingAssistantState {
   status: MeetingAssistantStatus;
   transcriptTurns: TranscriptTurn[];
   screenObservations: ScreenObservation[];
+  activeScreenTask?: ActiveScreenTask;
   latestSuggestion: AdvisorSuggestion | null;
   partialSuggestion: string;
   error: string | null;

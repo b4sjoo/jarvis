@@ -103,7 +103,9 @@ Behavior:
 - Sends speech segments to STT.
 - Adds final transcripts to meeting context.
 - Captures screen observations manually from the overlay or the meeting screen-context hotkey, preferring the frontmost active window for meeting context.
-- Generates short suggestions when a new colleague turn is detected.
+- For explicit screen captures, treats the visible technical question as the primary task and produces a structured answer directly from the vision-capable provider.
+- Uses later transcript turns as clarification, modification, or follow-up context for the active screen task.
+- Generates short suggestions when a new colleague turn is detected and no active screen task is in focus.
 - Allows manual suggestion refinement through regenerate and make-shorter actions.
 
 ### 4.2 Manual Assist Mode
@@ -157,13 +159,15 @@ interface ScreenObservation {
   imageBase64?: string;
   ocrText?: string;
   visualSummary?: string;
+  analysisPromptSource?: "meeting-default" | "screenshot-auto-prompt";
   hash?: string;
   changed: boolean;
   confidence?: number;
+  captureTarget?: ScreenCaptureTarget;
 }
 ```
 
-MVP can use image-to-LLM directly. Later versions should add local OCR and hash-based change detection.
+MVP uses image-to-LLM directly. Meeting mode treats `visualSummary` as the compact model-produced screen-task answer for explicit captures. Later versions should add local OCR, cursor-centered focus crops, and stronger hash-based change detection.
 
 ### 5.3 MeetingContextState
 
@@ -173,6 +177,7 @@ interface MeetingContextState {
   startedAt: number;
   transcriptTurns: TranscriptTurn[];
   screenObservations: ScreenObservation[];
+  activeScreenTask?: ActiveScreenTask;
   rollingSummary: string;
   userProfileContext: string;
   glossary: GlossaryEntry[];
@@ -180,11 +185,40 @@ interface MeetingContextState {
 }
 ```
 
-### 5.4 AdvisorSuggestion
+### 5.4 ActiveScreenTask
+
+```ts
+type ScreenTaskKind =
+  | "coding"
+  | "field-knowledge"
+  | "ambiguous"
+  | "non-question"
+  | "unknown";
+
+interface ActiveScreenTask {
+  id: string;
+  observationId: string;
+  createdAt: number;
+  updatedAt: number;
+  question?: string;
+  kind: ScreenTaskKind;
+  language?: string;
+  content: string;
+  basedOnTurnIds: string[];
+  basedOnObservationId: string;
+}
+```
+
+`ActiveScreenTask` starts on explicit screen capture. It anchors later audio turns so the advisor treats speech as clarification, modification, or follow-up context for the visible technical question. New captures replace the active task. Manual dismiss and timeout semantics remain a near-term hardening task.
+
+Initial user feedback on the screen-anchored implementation is positive. The remaining design risk is less about the core interaction model and more about focus selection, stale-task lifecycle, and broader meeting-scenario validation.
+
+### 5.5 AdvisorSuggestion
 
 ```ts
 type AdvisorSuggestionKind =
   | "answer"
+  | "screen-task"
   | "clarifying-question"
   | "jargon"
   | "context"
@@ -296,7 +330,13 @@ MVP behavior:
 - Prefer active-window capture for meeting context, using monitor-crop capture of the selected window bounds so video/share surfaces inside Zoom are captured from the composed screen image.
 - Fall back to direct window capture, then current-monitor capture, when the preferred active-window path is unavailable.
 - Store compact capture target metadata on each `ScreenObservation`: target type, capture method, app name, window title, monitor, image size, bounds, fallback reason, top window candidates, and an in-panel thumbnail preview.
-- Treat manual and hotkey-triggered captures as explicit user intent, so they should produce visible feedback and can force an advisor request even when meeting audio is not actively listening.
+- If Screenshot settings are in `Auto` mode and an auto prompt is configured, treat it as user preference while preserving the meeting screen-task answer contract.
+- Treat explicit screen captures as visible technical tasks, not meeting dialogue; the advisor must not invent colleagues, speakers, or questions when no transcript exists.
+- Treat manual and hotkey-triggered captures as explicit user intent, so they should produce visible feedback directly from the vision provider even when meeting audio is not actively listening.
+- Create or replace `activeScreenTask` when a meaningful visible question is found.
+- Classify the screen task as coding, field knowledge, ambiguous, non-question, or unknown.
+- For coding tasks, default to Python unless the screen specifies another language and include approach, implementation, time complexity, and space complexity.
+- For field-knowledge tasks, produce a concise professional answer that can be said in a meeting.
 - Hide the meeting panel before hotkey self-capture where possible, then reopen it after capture so the screenshot is more likely to represent the meeting screen instead of Jarvis itself.
 - Keep automatic observation disabled until rate limits, privacy copy, and model cost controls are in place.
 - Send screenshot-derived context to the advisor only when explicitly triggered.
@@ -322,6 +362,7 @@ Responsibilities:
 
 - Maintain rolling transcript window.
 - Maintain recent screen observations.
+- Maintain the active screen task created by explicit screen capture.
 - Maintain rolling summary.
 - Maintain user profile context and glossary.
 - Build compact prompt input for advisor.
@@ -351,10 +392,12 @@ Responsibilities:
 - Cancel stale in-flight requests when a newer turn arrives.
 - Normalize output into `AdvisorSuggestion`.
 - Support explicit regenerate and make-shorter requests against the current meeting context.
+- In `screen-anchored` mode, use `activeScreenTask` as the anchor and treat the newest transcript turn as clarification or follow-up.
 
 Trigger rules:
 
 - Trigger on final `them` turn.
+- If an `activeScreenTask` exists, run the advisor in `screen-anchored` mode for later transcript turns.
 - Debounce 500-1000 ms.
 - Skip small talk when confidence is high.
 - Cancel older advisor request if a new turn arrives.
@@ -366,6 +409,7 @@ Prompt output policy:
 - Include a ready-to-say English answer when the user is likely expected to respond.
 - Include a clarifying question when confidence is low.
 - Avoid long essays.
+- For screen-anchored technical questions, use structured sections: `Question`, `Answer`, `Approach`, `Code`, `Complexity`, and `Clarifying question`.
 
 ### 6.6 Overlay Store and UI
 
@@ -385,14 +429,22 @@ Responsibilities:
 - Provide pause/resume/hide controls.
 - Provide privacy mode and screen-context controls.
 - Provide regenerate and shorter controls for suggestions.
+- Provide one-click clarifying-question controls: `Yes`, `No`, `Not sure`, and `Dismiss`.
 - Expose shortcuts.
 
 MVP UI shape:
 
 - Compact top overlay.
-- Sections:
+- Normal transcript-driven sections:
   - Meaning
   - Suggested reply
+  - Clarifying question
+- Screen-task sections:
+  - Question
+  - Answer
+  - Approach
+  - Code
+  - Complexity
   - Clarifying question
 - Minimal text, no dashboard-style marketing.
 
@@ -410,7 +462,7 @@ MVP UI shape:
 8. Existing `fetchAIResponse` streams the answer.
 9. Overlay renders suggestions as chunks arrive.
 
-### 7.2 Screen-to-Context Flow
+### 7.2 Screen-to-Task Flow
 
 1. User presses the screen-context hotkey or clicks the overlay screen-context button.
 2. For the hotkey path, the frontend closes the meeting panel and briefly shrinks the overlay before capture where possible.
@@ -419,10 +471,20 @@ MVP UI shape:
 5. Rust captures the monitor containing that window and crops to the active window bounds; this avoids Zoom/video host windows whose direct window backing image may not match visible content.
 6. If monitor-crop capture fails, Rust falls back to direct window capture and records the fallback reason; if active-window capture fails completely, Rust falls back to the previous current-monitor capture path.
 7. Screen service computes a basic hash and stores capture target debug metadata.
-8. Screenshot is analyzed by the configured vision-capable provider.
-9. Observation is appended to context.
-10. If meeting audio is actively listening, the next advisor request includes latest relevant screen context.
-11. If meeting audio is not active, the screen-context action forces a one-shot advisor request so the panel still shows a useful result.
+8. Screenshot is analyzed by the configured vision-capable provider with a screen-anchored technical-question prompt.
+9. Recent transcript turns are included as supplemental clarification, not as the primary task.
+10. Screenshot Auto prompt is included as user preference if configured, but cannot override the screen-task answer contract.
+11. A meaningful result creates or replaces `activeScreenTask`.
+12. Overlay renders the structured screen-task answer directly.
+13. Later transcript turns run `screen-anchored` advisor updates against the active task.
+
+### 7.3 Clarifying Question Feedback Flow
+
+1. Advisor output may include a `Question` section when context is ambiguous.
+2. The Meeting Assistant UI renders quick answer controls beneath the question.
+3. `Yes`, `No`, and `Not sure` send the selected answer back to the advisor as `clarifying_feedback`.
+4. If an active screen task exists, the advisor updates the screen-task answer using the selected answer as an explicit constraint; otherwise it regenerates a compact meeting suggestion.
+5. `Dismiss` hides the current question locally without changing meeting context.
 
 ## 8. Provider Strategy
 

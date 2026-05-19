@@ -8,11 +8,14 @@ import {
   Switch,
 } from "@/components";
 import { useMeetingAssistant, useShortcuts, useWindowResize } from "@/hooks";
-import type { ScreenCaptureTarget } from "@/lib/meeting";
+import type { ClarifyingQuestionAnswer, ScreenCaptureTarget } from "@/lib/meeting";
 import { cn } from "@/lib/utils";
 import {
   BrainIcon,
   CameraIcon,
+  CheckIcon,
+  EyeOffIcon,
+  HelpCircleIcon,
   Loader2Icon,
   MessageSquareTextIcon,
   Minimize2Icon,
@@ -21,6 +24,7 @@ import {
   RadioIcon,
   RefreshCwIcon,
   SquareIcon,
+  XIcon,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
@@ -52,6 +56,9 @@ export const MeetingAssistant = () => {
   const meeting = useMeetingAssistant();
   const { resizeWindow } = useWindowResize();
   const [open, setOpen] = useState(false);
+  const [dismissedQuestionKey, setDismissedQuestionKey] = useState<
+    string | null
+  >(null);
 
   const latestTurn =
     meeting.transcriptTurns[meeting.transcriptTurns.length - 1];
@@ -63,6 +70,14 @@ export const MeetingAssistant = () => {
   const suggestionSections = useMemo(
     () => parseSuggestionSections(displaySuggestion),
     [displaySuggestion]
+  );
+  const clarifyingQuestion = suggestionSections.question.trim();
+  const isScreenTaskSuggestion = suggestionSections.isScreenTask;
+  const clarifyingQuestionKey = clarifyingQuestion
+    ? `${meeting.latestSuggestion?.id ?? displaySuggestion}:${clarifyingQuestion}`
+    : "";
+  const showClarifyingQuestion = Boolean(
+    clarifyingQuestion && dismissedQuestionKey !== clarifyingQuestionKey
   );
   const isBusy =
     meeting.status === "starting" ||
@@ -143,6 +158,16 @@ export const MeetingAssistant = () => {
       await meeting.pause();
     }
   };
+
+  const handleClarifyingAnswer = useCallback(
+    (answer: ClarifyingQuestionAnswer) => {
+      if (!clarifyingQuestion) return;
+
+      setDismissedQuestionKey(null);
+      void meeting.answerClarifyingQuestion(clarifyingQuestion, answer);
+    },
+    [clarifyingQuestion, meeting.answerClarifyingQuestion]
+  );
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
@@ -321,25 +346,83 @@ export const MeetingAssistant = () => {
                 </p>
               </section>
 
-              <section className="rounded-md border border-border/70 p-3">
-                <div className="mb-2 flex items-center gap-2 text-xs font-semibold">
-                  <BrainIcon className="h-3.5 w-3.5" />
-                  Meaning
-                </div>
-                <p className="min-h-14 whitespace-pre-wrap text-xs leading-5">
-                  {suggestionSections.meaning || "Waiting for context."}
-                </p>
-              </section>
+              {isScreenTaskSuggestion ? (
+                <>
+                  <section className="rounded-md border border-border/70 p-3">
+                    <div className="mb-2 flex items-center gap-2 text-xs font-semibold">
+                      <BrainIcon className="h-3.5 w-3.5" />
+                      Screen task
+                    </div>
+                    <div className="space-y-2">
+                      <SuggestionBlock
+                        label="Question"
+                        value={
+                          suggestionSections.screenQuestion ||
+                          "Waiting for focused question."
+                        }
+                      />
+                      <SuggestionBlock
+                        label="Answer"
+                        value={
+                          suggestionSections.answer ||
+                          "Waiting for screen answer."
+                        }
+                      />
+                    </div>
+                  </section>
 
-              <section className="rounded-md border border-border/70 p-3">
-                <div className="mb-2 flex items-center gap-2 text-xs font-semibold">
-                  <MessageSquareTextIcon className="h-3.5 w-3.5" />
-                  Suggested reply
-                </div>
-                <p className="min-h-20 whitespace-pre-wrap text-xs leading-5">
-                  {suggestionSections.reply || "Waiting for suggestion."}
-                </p>
-              </section>
+                  <section className="rounded-md border border-border/70 p-3">
+                    <div className="mb-2 flex items-center gap-2 text-xs font-semibold">
+                      <MessageSquareTextIcon className="h-3.5 w-3.5" />
+                      Approach
+                    </div>
+                    <p className="min-h-14 whitespace-pre-wrap text-xs leading-5">
+                      {suggestionSections.approach || "Not needed yet."}
+                    </p>
+                  </section>
+
+                  <section className="rounded-md border border-border/70 p-3">
+                    <div className="mb-2 flex items-center gap-2 text-xs font-semibold">
+                      <MessageSquareTextIcon className="h-3.5 w-3.5" />
+                      Code & complexity
+                    </div>
+                    {suggestionSections.code ? (
+                      <pre className="max-h-56 overflow-auto whitespace-pre-wrap rounded-sm bg-muted p-2 text-[11px] leading-4">
+                        {suggestionSections.code}
+                      </pre>
+                    ) : (
+                      <p className="text-xs leading-5 text-muted-foreground">
+                        No code needed.
+                      </p>
+                    )}
+                    <p className="mt-2 whitespace-pre-wrap text-xs leading-5">
+                      {suggestionSections.complexity || "No complexity note."}
+                    </p>
+                  </section>
+                </>
+              ) : (
+                <>
+                  <section className="rounded-md border border-border/70 p-3">
+                    <div className="mb-2 flex items-center gap-2 text-xs font-semibold">
+                      <BrainIcon className="h-3.5 w-3.5" />
+                      Meaning
+                    </div>
+                    <p className="min-h-14 whitespace-pre-wrap text-xs leading-5">
+                      {suggestionSections.meaning || "Waiting for context."}
+                    </p>
+                  </section>
+
+                  <section className="rounded-md border border-border/70 p-3">
+                    <div className="mb-2 flex items-center gap-2 text-xs font-semibold">
+                      <MessageSquareTextIcon className="h-3.5 w-3.5" />
+                      Suggested reply
+                    </div>
+                    <p className="min-h-20 whitespace-pre-wrap text-xs leading-5">
+                      {suggestionSections.reply || "Waiting for suggestion."}
+                    </p>
+                  </section>
+                </>
+              )}
 
               <section className="rounded-md border border-border/70 p-3">
                 <div className="mb-2 flex items-center gap-2 text-xs font-semibold">
@@ -347,8 +430,57 @@ export const MeetingAssistant = () => {
                   Clarifying question
                 </div>
                 <p className="min-h-14 whitespace-pre-wrap text-xs leading-5">
-                  {suggestionSections.question || "Not needed yet."}
+                  {showClarifyingQuestion
+                    ? clarifyingQuestion
+                    : clarifyingQuestion
+                      ? "Dismissed for this suggestion."
+                      : "Not needed yet."}
                 </p>
+                {showClarifyingQuestion ? (
+                  <div className="mt-3 grid grid-cols-2 gap-1.5">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="h-7 gap-1 px-2 text-[10px]"
+                      onClick={() => handleClarifyingAnswer("yes")}
+                      disabled={isBusy}
+                    >
+                      <CheckIcon className="h-3 w-3" />
+                      Yes
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="h-7 gap-1 px-2 text-[10px]"
+                      onClick={() => handleClarifyingAnswer("no")}
+                      disabled={isBusy}
+                    >
+                      <XIcon className="h-3 w-3" />
+                      No
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="h-7 gap-1 px-2 text-[10px]"
+                      onClick={() => handleClarifyingAnswer("not-sure")}
+                      disabled={isBusy}
+                    >
+                      <HelpCircleIcon className="h-3 w-3" />
+                      Not sure
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="h-7 gap-1 px-2 text-[10px]"
+                      onClick={() => {
+                        setDismissedQuestionKey(clarifyingQuestionKey);
+                      }}
+                    >
+                      <EyeOffIcon className="h-3 w-3" />
+                      Dismiss
+                    </Button>
+                  </div>
+                ) : null}
               </section>
 
               <section className="grid grid-cols-3 gap-2">
@@ -384,6 +516,14 @@ export const MeetingAssistant = () => {
                   <div className="mt-1 text-[10px] text-muted-foreground">
                     {formatCaptureTargetMethod(latestCaptureTarget)}
                   </div>
+                  {latestScreenObservation?.analysisPromptSource ? (
+                    <div className="mt-1 text-[10px] text-muted-foreground">
+                      Prompt:{" "}
+                      {formatScreenPromptSource(
+                        latestScreenObservation.analysisPromptSource
+                      )}
+                    </div>
+                  ) : null}
                   {latestCaptureTarget.fallbackReason ? (
                     <div className="mt-1 text-[10px] text-amber-700">
                       {latestCaptureTarget.fallbackReason}
@@ -496,6 +636,23 @@ const Metric = ({ label, value }: { label: string; value: number | string }) => 
   );
 };
 
+const SuggestionBlock = ({
+  label,
+  value,
+}: {
+  label: string;
+  value: string;
+}) => {
+  return (
+    <div>
+      <div className="mb-1 text-[10px] font-medium uppercase text-muted-foreground">
+        {label}
+      </div>
+      <p className="whitespace-pre-wrap text-xs leading-5">{value}</p>
+    </div>
+  );
+};
+
 function formatCaptureTargetName(target: ScreenCaptureTarget) {
   const prefix =
     target.targetType === "active-window" ? "Active window" : "Monitor";
@@ -533,11 +690,21 @@ function formatCaptureCandidate(
   return `${name || "Untitled"} ${candidate.width}x${candidate.height}${reason}`;
 }
 
+function formatScreenPromptSource(source: string) {
+  return source === "screenshot-auto-prompt"
+    ? "Screenshot auto prompt"
+    : "Meeting default";
+}
+
 const sectionBoundaryLabels = [
   "Meaning",
   "Reply",
   "Suggested reply",
   "Question",
+  "Answer",
+  "Approach",
+  "Code",
+  "Complexity",
   "Clarifying question",
 ];
 
@@ -549,24 +716,47 @@ function parseSuggestionSections(content: string) {
       meaning: "",
       reply: "",
       question: "",
+      screenQuestion: "",
+      answer: "",
+      approach: "",
+      code: "",
+      complexity: "",
+      isScreenTask: false,
     };
   }
 
+  const screenQuestion = readSuggestionSection(trimmedContent, ["Question"]);
+  const answer = readSuggestionSection(trimmedContent, ["Answer"]);
+  const approach = readSuggestionSection(trimmedContent, ["Approach"]);
+  const code = readSuggestionSection(trimmedContent, ["Code"]);
+  const complexity = readSuggestionSection(trimmedContent, ["Complexity"]);
+  const clarifyingQuestion = readSuggestionSection(trimmedContent, [
+    "Clarifying question",
+  ]);
+  const isScreenTask = Boolean(answer || approach || code || complexity);
   const meaning = readSuggestionSection(trimmedContent, ["Meaning"]);
   const reply = readSuggestionSection(trimmedContent, [
     "Reply",
     "Suggested reply",
   ]);
-  const question = readSuggestionSection(trimmedContent, [
-    "Question",
-    "Clarifying question",
-  ]);
+  const question = isScreenTask
+    ? clarifyingQuestion
+    : readSuggestionSection(trimmedContent, [
+        "Question",
+        "Clarifying question",
+      ]);
   const hasStructuredSections = Boolean(meaning || reply || question);
 
   return {
     meaning,
     reply: reply || (hasStructuredSections ? "" : trimmedContent),
     question,
+    screenQuestion,
+    answer,
+    approach,
+    code,
+    complexity,
+    isScreenTask,
   };
 }
 
