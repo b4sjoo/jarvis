@@ -102,7 +102,7 @@ Behavior:
 - Runs VAD to identify speech segments.
 - Sends speech segments to STT.
 - Adds final transcripts to meeting context.
-- Captures screen observations manually from the overlay or the meeting screen-context hotkey.
+- Captures screen observations manually from the overlay or the meeting screen-context hotkey, preferring the frontmost active window for meeting context.
 - Generates short suggestions when a new colleague turn is detected.
 - Allows manual suggestion refinement through regenerate and make-shorter actions.
 
@@ -284,15 +284,18 @@ Initial files:
 
 Responsibilities:
 
-- Capture current screen or selected region.
+- Capture the frontmost active window, current monitor fallback, or selected region.
 - Run low-frequency observation loop when enabled.
 - Compute screenshot hash metadata for future duplicate suppression and rate limiting.
 - Produce `ScreenObservation`.
 
 MVP behavior:
 
-- Use existing `capture_to_base64`.
+- Preserve existing `capture_to_base64` for the separate manual screenshot path and use a meeting-specific capture command for screen context.
 - Trigger capture manually from the meeting overlay or the meeting screen-context hotkey.
+- Prefer active-window capture for meeting context, using monitor-crop capture of the selected window bounds so video/share surfaces inside Zoom are captured from the composed screen image.
+- Fall back to direct window capture, then current-monitor capture, when the preferred active-window path is unavailable.
+- Store compact capture target metadata on each `ScreenObservation`: target type, capture method, app name, window title, monitor, image size, bounds, fallback reason, top window candidates, and an in-panel thumbnail preview.
 - Treat manual and hotkey-triggered captures as explicit user intent, so they should produce visible feedback and can force an advisor request even when meeting audio is not actively listening.
 - Hide the meeting panel before hotkey self-capture where possible, then reopen it after capture so the screenshot is more likely to represent the meeting screen instead of Jarvis itself.
 - Keep automatic observation disabled until rate limits, privacy copy, and model cost controls are in place.
@@ -411,12 +414,15 @@ MVP UI shape:
 
 1. User presses the screen-context hotkey or clicks the overlay screen-context button.
 2. For the hotkey path, the frontend closes the meeting panel and briefly shrinks the overlay before capture where possible.
-3. Frontend calls `capture_to_base64`.
-4. Screen service computes a basic hash.
-5. Screenshot is analyzed by the configured vision-capable provider.
-6. Observation is appended to context.
-7. If meeting audio is actively listening, the next advisor request includes latest relevant screen context.
-8. If meeting audio is not active, the screen-context action forces a one-shot advisor request so the panel still shows a useful result.
+3. Frontend calls the meeting-specific capture command with `target: "active-window"`.
+4. Rust selects the first suitable non-Jarvis foreground window from `xcap::Window::all()`.
+5. Rust captures the monitor containing that window and crops to the active window bounds; this avoids Zoom/video host windows whose direct window backing image may not match visible content.
+6. If monitor-crop capture fails, Rust falls back to direct window capture and records the fallback reason; if active-window capture fails completely, Rust falls back to the previous current-monitor capture path.
+7. Screen service computes a basic hash and stores capture target debug metadata.
+8. Screenshot is analyzed by the configured vision-capable provider.
+9. Observation is appended to context.
+10. If meeting audio is actively listening, the next advisor request includes latest relevant screen context.
+11. If meeting audio is not active, the screen-context action forces a one-shot advisor request so the panel still shows a useful result.
 
 ## 8. Provider Strategy
 

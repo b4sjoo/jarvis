@@ -32,6 +32,33 @@ export interface ScreenObservation {
   hash?: string;
   changed: boolean;
   confidence?: number;
+  captureTarget?: ScreenCaptureTarget;
+}
+
+export interface ScreenCaptureTarget {
+  targetType: "active-window" | "current-monitor" | "selection";
+  captureMethod?: string;
+  appName?: string;
+  title?: string;
+  monitorName?: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  imageWidth?: number;
+  imageHeight?: number;
+  fallbackReason?: string;
+  candidates?: ScreenCaptureCandidate[];
+}
+
+export interface ScreenCaptureCandidate {
+  appName: string;
+  title: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  skippedReason?: string;
 }
 
 export interface GlossaryEntry {

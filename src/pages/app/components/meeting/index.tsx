@@ -8,6 +8,7 @@ import {
   Switch,
 } from "@/components";
 import { useMeetingAssistant, useShortcuts, useWindowResize } from "@/hooks";
+import type { ScreenCaptureTarget } from "@/lib/meeting";
 import { cn } from "@/lib/utils";
 import {
   BrainIcon,
@@ -54,6 +55,9 @@ export const MeetingAssistant = () => {
 
   const latestTurn =
     meeting.transcriptTurns[meeting.transcriptTurns.length - 1];
+  const latestScreenObservation =
+    meeting.screenObservations[meeting.screenObservations.length - 1];
+  const latestCaptureTarget = latestScreenObservation?.captureTarget;
   const displaySuggestion =
     meeting.partialSuggestion || meeting.latestSuggestion?.content || "";
   const suggestionSections = useMemo(
@@ -364,6 +368,50 @@ export const MeetingAssistant = () => {
                   }
                 />
               </section>
+
+              {latestCaptureTarget ? (
+                <section className="rounded-md border border-border/70 p-3">
+                  <div className="mb-2 flex items-center gap-2 text-xs font-semibold">
+                    <CameraIcon className="h-3.5 w-3.5" />
+                    Last capture
+                  </div>
+                  <div className="truncate text-xs">
+                    {formatCaptureTargetName(latestCaptureTarget)}
+                  </div>
+                  <div className="mt-1 text-[10px] text-muted-foreground">
+                    {formatCaptureTargetBounds(latestCaptureTarget)}
+                  </div>
+                  <div className="mt-1 text-[10px] text-muted-foreground">
+                    {formatCaptureTargetMethod(latestCaptureTarget)}
+                  </div>
+                  {latestCaptureTarget.fallbackReason ? (
+                    <div className="mt-1 text-[10px] text-amber-700">
+                      {latestCaptureTarget.fallbackReason}
+                    </div>
+                  ) : null}
+                  {latestScreenObservation?.imageBase64 ? (
+                    <img
+                      alt="Last captured screen preview"
+                      src={`data:image/png;base64,${latestScreenObservation.imageBase64}`}
+                      className="mt-2 h-20 w-full rounded-sm border border-border/50 object-cover"
+                    />
+                  ) : null}
+                  {latestCaptureTarget.candidates?.length ? (
+                    <div className="mt-2 space-y-1 border-t border-border/50 pt-2">
+                      {latestCaptureTarget.candidates
+                        .slice(0, 4)
+                        .map((candidate, index) => (
+                          <div
+                            key={`${candidate.appName}-${candidate.title}-${index}`}
+                            className="truncate text-[10px] text-muted-foreground"
+                          >
+                            {index + 1}. {formatCaptureCandidate(candidate)}
+                          </div>
+                        ))}
+                    </div>
+                  ) : null}
+                </section>
+              ) : null}
             </div>
           </ScrollArea>
 
@@ -447,6 +495,43 @@ const Metric = ({ label, value }: { label: string; value: number | string }) => 
     </div>
   );
 };
+
+function formatCaptureTargetName(target: ScreenCaptureTarget) {
+  const prefix =
+    target.targetType === "active-window" ? "Active window" : "Monitor";
+  const appName = target.appName?.trim();
+  const title = target.title?.trim();
+
+  if (appName && title) return `${prefix}: ${appName} - ${title}`;
+  if (title) return `${prefix}: ${title}`;
+  if (appName) return `${prefix}: ${appName}`;
+  return prefix;
+}
+
+function formatCaptureTargetBounds(target: ScreenCaptureTarget) {
+  return `${target.width}x${target.height} at ${target.x},${target.y}`;
+}
+
+function formatCaptureTargetMethod(target: ScreenCaptureTarget) {
+  const parts = [
+    target.captureMethod,
+    target.monitorName,
+    target.imageWidth && target.imageHeight
+      ? `image ${target.imageWidth}x${target.imageHeight}`
+      : undefined,
+  ].filter(Boolean);
+
+  return parts.join(" / ");
+}
+
+function formatCaptureCandidate(
+  candidate: NonNullable<ScreenCaptureTarget["candidates"]>[number]
+) {
+  const name = [candidate.appName, candidate.title].filter(Boolean).join(" - ");
+  const reason = candidate.skippedReason ? ` (${candidate.skippedReason})` : "";
+
+  return `${name || "Untitled"} ${candidate.width}x${candidate.height}${reason}`;
+}
 
 const sectionBoundaryLabels = [
   "Meaning",

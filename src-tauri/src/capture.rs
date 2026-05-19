@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex};
 use std::{thread, time::Duration};
 use tauri::Emitter;
 use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
-use xcap::Monitor;
+use xcap::{Monitor, Window as XcapWindow};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SelectionCoords {
@@ -21,6 +21,43 @@ pub struct SelectionCoords {
 #[derive(Debug, Clone)]
 pub struct MonitorInfo {
     pub image: image::RgbaImage,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CaptureTargetInfo {
+    pub target_type: String,
+    pub capture_method: String,
+    pub app_name: Option<String>,
+    pub title: Option<String>,
+    pub monitor_name: Option<String>,
+    pub x: i32,
+    pub y: i32,
+    pub width: u32,
+    pub height: u32,
+    pub image_width: u32,
+    pub image_height: u32,
+    pub fallback_reason: Option<String>,
+    pub candidates: Vec<CaptureCandidateInfo>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CaptureCandidateInfo {
+    pub app_name: String,
+    pub title: String,
+    pub x: i32,
+    pub y: i32,
+    pub width: u32,
+    pub height: u32,
+    pub skipped_reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CaptureToBase64Result {
+    pub image_base64: String,
+    pub target: CaptureTargetInfo,
 }
 
 // Store captured images from all monitors temporarily for cropping
@@ -261,8 +298,197 @@ pub async fn capture_selected_area(
     Ok(base64_str)
 }
 
-#[tauri::command]
-pub async fn capture_to_base64(window: tauri::WebviewWindow) -> Result<String, String> {
+fn encode_image_to_base64(image: &image::RgbaImage) -> Result<String, String> {
+    let mut png_buffer = Vec::new();
+    PngEncoder::new(&mut png_buffer)
+        .write_image(
+            image.as_raw(),
+            image.width(),
+            image.height(),
+            ColorType::Rgba8.into(),
+        )
+        .map_err(|e| format!("Failed to encode to PNG: {}", e))?;
+
+    Ok(base64::engine::general_purpose::STANDARD.encode(png_buffer))
+}
+
+fn is_jarvis_window(window: &XcapWindow) -> bool {
+    let app_name = window.app_name().trim().to_lowercase();
+    let title = window.title().trim().to_lowercase();
+
+    app_name.contains("jarvis") || title == "jarvis - ai assistant"
+}
+
+fn active_window_skip_reason(window: &XcapWindow) -> Option<String> {
+    if window.is_minimized() {
+        return Some("minimized".to_string());
+    }
+    if is_jarvis_window(window) {
+        return Some("jarvis".to_string());
+    }
+    if window.title().trim().is_empty() {
+        return Some("empty-title".to_string());
+    }
+    if window.width() < 160 || window.height() < 120 {
+        return Some("too-small".to_string());
+    }
+
+    None
+}
+
+fn is_active_window_candidate(window: &XcapWindow) -> bool {
+    active_window_skip_reason(window).is_none()
+}
+
+fn capture_candidates(windows: &[XcapWindow]) -> Vec<CaptureCandidateInfo> {
+    windows
+        .iter()
+        .take(8)
+        .map(|window| CaptureCandidateInfo {
+            app_name: window.app_name().to_string(),
+            title: window.title().to_string(),
+            x: window.x(),
+            y: window.y(),
+            width: window.width(),
+            height: window.height(),
+            skipped_reason: active_window_skip_reason(window),
+        })
+        .collect()
+}
+
+fn window_monitor_crop(window: &XcapWindow) -> Result<(image::RgbaImage, String), String> {
+    let monitors = Monitor::all().map_err(|e| format!("Failed to get monitors: {}", e))?;
+    if monitors.is_empty() {
+        return Err("No monitors found".to_string());
+    }
+
+    let window_left = window.x();
+    let window_top = window.y();
+    let window_right = window_left.saturating_add(window.width() as i32);
+    let window_bottom = window_top.saturating_add(window.height() as i32);
+
+    let mut best_monitor: Option<Monitor> = None;
+    let mut best_area: i64 = 0;
+
+    for monitor in monitors {
+        let monitor_left = monitor.x();
+        let monitor_top = monitor.y();
+        let monitor_right = monitor_left.saturating_add(monitor.width() as i32);
+        let monitor_bottom = monitor_top.saturating_add(monitor.height() as i32);
+
+        let overlap_width =
+            (window_right.min(monitor_right) - window_left.max(monitor_left)).max(0);
+        let overlap_height =
+            (window_bottom.min(monitor_bottom) - window_top.max(monitor_top)).max(0);
+        let area = (overlap_width as i64) * (overlap_height as i64);
+
+        if area > best_area {
+            best_area = area;
+            best_monitor = Some(monitor);
+        }
+    }
+
+    let monitor = best_monitor.ok_or_else(|| "Window does not overlap a monitor".to_string())?;
+    let monitor_image = monitor
+        .capture_image()
+        .map_err(|e| format!("Failed to capture monitor for active-window crop: {}", e))?;
+
+    let scale_x = monitor_image.width() as f64 / monitor.width().max(1) as f64;
+    let scale_y = monitor_image.height() as f64 / monitor.height().max(1) as f64;
+
+    let crop_left = window_left.max(monitor.x());
+    let crop_top = window_top.max(monitor.y());
+    let crop_right = window_right.min(monitor.x().saturating_add(monitor.width() as i32));
+    let crop_bottom = window_bottom.min(monitor.y().saturating_add(monitor.height() as i32));
+
+    let crop_x = ((crop_left - monitor.x()) as f64 * scale_x)
+        .round()
+        .max(0.0) as u32;
+    let crop_y = ((crop_top - monitor.y()) as f64 * scale_y).round().max(0.0) as u32;
+    let crop_width = ((crop_right - crop_left).max(0) as f64 * scale_x).round() as u32;
+    let crop_height = ((crop_bottom - crop_top).max(0) as f64 * scale_y).round() as u32;
+
+    if crop_width == 0 || crop_height == 0 {
+        return Err("Active window crop has zero size".to_string());
+    }
+
+    let crop_width = crop_width.min(monitor_image.width().saturating_sub(crop_x));
+    let crop_height = crop_height.min(monitor_image.height().saturating_sub(crop_y));
+
+    if crop_width == 0 || crop_height == 0 {
+        return Err("Active window crop is outside monitor image bounds".to_string());
+    }
+
+    let cropped = monitor_image
+        .view(crop_x, crop_y, crop_width, crop_height)
+        .to_image();
+
+    Ok((cropped, monitor.name().to_string()))
+}
+
+async fn capture_active_window_to_base64() -> Result<CaptureToBase64Result, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let windows = XcapWindow::all().map_err(|e| format!("Failed to get windows: {}", e))?;
+        let candidates = capture_candidates(&windows);
+        let window = windows
+            .into_iter()
+            .find(is_active_window_candidate)
+            .ok_or_else(|| "No suitable active window found".to_string())?;
+
+        let (image, capture_method, monitor_name, fallback_reason) =
+            match window_monitor_crop(&window) {
+                Ok((image, monitor_name)) => (
+                    image,
+                    "active-window-monitor-crop".to_string(),
+                    Some(monitor_name),
+                    None,
+                ),
+                Err(crop_error) => {
+                    let image = window
+                        .capture_image()
+                        .map_err(|e| format!("Failed to capture active window: {}", e))?;
+                    (
+                        image,
+                        "active-window-api".to_string(),
+                        Some(window.current_monitor().name().to_string()),
+                        Some(format!(
+                            "Monitor crop failed; used window API fallback: {}",
+                            crop_error
+                        )),
+                    )
+                }
+            };
+
+        let target = CaptureTargetInfo {
+            target_type: "active-window".to_string(),
+            capture_method,
+            app_name: Some(window.app_name().to_string()),
+            title: Some(window.title().to_string()),
+            monitor_name,
+            x: window.x(),
+            y: window.y(),
+            width: window.width(),
+            height: window.height(),
+            image_width: image.width(),
+            image_height: image.height(),
+            fallback_reason,
+            candidates,
+        };
+
+        let image_base64 = encode_image_to_base64(&image)?;
+
+        Ok(CaptureToBase64Result {
+            image_base64,
+            target,
+        })
+    })
+    .await
+    .map_err(|e| format!("Task panicked: {}", e))?
+}
+
+async fn capture_current_monitor_to_base64(
+    window: tauri::WebviewWindow,
+) -> Result<CaptureToBase64Result, String> {
     let monitor_fallback = window
         .current_monitor()
         .ok()
@@ -373,19 +599,56 @@ pub async fn capture_to_base64(window: tauri::WebviewWindow) -> Result<String, S
         let image = monitor
             .capture_image()
             .map_err(|e| format!("Failed to capture image: {}", e))?;
-        let mut png_buffer = Vec::new();
-        PngEncoder::new(&mut png_buffer)
-            .write_image(
-                image.as_raw(),
-                image.width(),
-                image.height(),
-                ColorType::Rgba8.into(),
-            )
-            .map_err(|e| format!("Failed to encode to PNG: {}", e))?;
-        let base64_str = base64::engine::general_purpose::STANDARD.encode(png_buffer);
 
-        Ok(base64_str)
+        let target = CaptureTargetInfo {
+            target_type: "current-monitor".to_string(),
+            capture_method: "current-monitor".to_string(),
+            app_name: None,
+            title: Some(monitor.name().to_string()),
+            monitor_name: Some(monitor.name().to_string()),
+            x: monitor.x(),
+            y: monitor.y(),
+            width: monitor.width(),
+            height: monitor.height(),
+            image_width: image.width(),
+            image_height: image.height(),
+            fallback_reason: None,
+            candidates: Vec::new(),
+        };
+
+        let image_base64 = encode_image_to_base64(&image)?;
+
+        Ok(CaptureToBase64Result {
+            image_base64,
+            target,
+        })
     })
     .await
     .map_err(|e| format!("Task panicked: {}", e))?
+}
+
+#[tauri::command]
+pub async fn capture_screen_context_to_base64(
+    window: tauri::WebviewWindow,
+    target: Option<String>,
+) -> Result<CaptureToBase64Result, String> {
+    match target.as_deref().unwrap_or("active-window") {
+        "active-window" => match capture_active_window_to_base64().await {
+            Ok(result) => Ok(result),
+            Err(error) => {
+                let mut result = capture_current_monitor_to_base64(window).await?;
+                result.target.fallback_reason =
+                    Some(format!("Active window capture failed: {}", error));
+                Ok(result)
+            }
+        },
+        "current-monitor" => capture_current_monitor_to_base64(window).await,
+        unknown => Err(format!("Unsupported screen context target: {}", unknown)),
+    }
+}
+
+#[tauri::command]
+pub async fn capture_to_base64(window: tauri::WebviewWindow) -> Result<String, String> {
+    let result = capture_current_monitor_to_base64(window).await?;
+    Ok(result.image_base64)
 }

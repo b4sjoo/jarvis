@@ -61,6 +61,7 @@ pub fn run() {
             window::toggle_dashboard,
             window::move_window,
             capture::capture_to_base64,
+            capture::capture_screen_context_to_base64,
             capture::start_screen_capture,
             capture::capture_selected_area,
             capture::close_overlay_window,

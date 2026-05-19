@@ -11,7 +11,7 @@
 
 Phase 1: Meeting Assistant MVP implementation.
 
-Design decisions are locked for the personal macOS MVP. Current work has a validated audio-to-transcript-to-advice loop, explicit privacy modes, manual and hotkey-triggered screen context, and advisor refinement controls. The `Cmd+Shift+E` screen-context hotkey now works as an explicit one-shot advisor path: it can hide the meeting panel, capture the current screen, analyze it, and reopen the panel with the generated guidance. The next focus is live-meeting QA, visibility hardening, and provider latency improvements.
+Design decisions are locked for the personal macOS MVP. Current work has a validated audio-to-transcript-to-advice loop, explicit privacy modes, manual and hotkey-triggered screen context, and advisor refinement controls. The `Cmd+Shift+E` screen-context hotkey now works as an explicit one-shot advisor path: it can hide the meeting panel, capture the frontmost active window via monitor-crop, analyze it, and reopen the panel with generated guidance plus capture-target debug metadata. The next focus is live-meeting QA, visibility hardening, and provider latency improvements.
 
 ## Milestone 0: Design Review and Scope Lock
 
@@ -125,10 +125,14 @@ Exit criteria:
 
 Goal: provide visual context from screen sharing or shared pages.
 
-- [x] Add hotkey-triggered current-screen capture for meeting context.
-- [x] Add manual overlay-triggered current-screen capture for meeting context.
-- [x] Reuse existing `capture_to_base64`.
+- [x] Add hotkey-triggered active-window capture for meeting context.
+- [x] Add manual overlay-triggered active-window capture for meeting context.
+- [x] Preserve existing `capture_to_base64` for the separate manual screenshot path.
+- [x] Add current-monitor fallback for active-window capture failure.
 - [x] Add `ScreenObservation` to context manager.
+- [x] Store capture target debug metadata on `ScreenObservation`.
+- [x] Use monitor-crop active-window capture to handle Zoom/video host windows.
+- [x] Show a capture preview thumbnail, capture method, image size, monitor, and top window candidates in debug metadata.
 - [x] Send screenshot to vision-capable provider only when triggered.
 - [x] Include latest visual summary in advisor prompt.
 - [x] Add setting to disable screen context entirely.
@@ -138,7 +142,7 @@ Goal: provide visual context from screen sharing or shared pages.
 
 Exit criteria:
 
-- User can press a hotkey to explain current screen.
+- User can press a hotkey to explain the frontmost active window.
 - Latest screen context improves subsequent suggestions.
 - Screen context can be disabled independently from audio.
 
@@ -262,6 +266,8 @@ Exit criteria:
 | 2026-05-08 | Rebrand as Jarvis and pause commercial scope | Project is personal-use only; removed hosted API, telemetry, updater, license gates, promotional UI, and commercial README content |
 | 2026-05-08 | Lock personal MVP defaults | macOS-only, BYOK/custom providers, in-memory transcripts, no v1 microphone capture, manual screen context first, no invisibility guarantee |
 | 2026-05-09 | Make screen-context hotkey a one-shot advisor path | `Cmd+Shift+E` hides the meeting panel before capture, analyzes the current screen, then reopens the panel with guidance even when audio listening is not active |
+| 2026-05-18 | Prefer active-window capture for meeting screen context | Meeting screen context no longer depends on the Jarvis overlay monitor; each observation records target app/window/bounds and active-window fallback reasons |
+| 2026-05-18 | Capture active-window regions from the composed monitor image | Zoom can expose host windows such as `CptHost / ZOOM Sharing Frame Window`; monitor-crop capture should match the visible shared content more reliably than direct window capture |
 
 ## Validation Snapshot
 

@@ -1,12 +1,19 @@
 import { invoke } from "@tauri-apps/api/core";
 import { fetchAIResponse } from "@/lib/functions";
 import { TYPE_PROVIDER } from "@/types";
-import { ScreenObservation, SelectedProviderState } from "./types";
+import {
+  ScreenCaptureTarget,
+  ScreenObservation,
+  SelectedProviderState,
+} from "./types";
 import { createMeetingId } from "./context-manager";
+
+export type ScreenCaptureTargetType = "active-window" | "current-monitor";
 
 export interface CaptureScreenObservationOptions {
   source?: ScreenObservation["source"];
   previousHash?: string;
+  target?: ScreenCaptureTargetType;
 }
 
 export interface SummarizeScreenObservationOptions {
@@ -14,6 +21,11 @@ export interface SummarizeScreenObservationOptions {
   provider: TYPE_PROVIDER | undefined;
   selectedProvider: SelectedProviderState;
   signal?: AbortSignal;
+}
+
+interface CaptureScreenContextResponse {
+  imageBase64: string;
+  target: ScreenCaptureTarget;
 }
 
 const SCREEN_CONTEXT_SYSTEM_PROMPT = [
@@ -32,8 +44,13 @@ const SCREEN_CONTEXT_USER_MESSAGE = [
 export async function captureScreenObservation({
   source = "hotkey",
   previousHash,
+  target = "active-window",
 }: CaptureScreenObservationOptions = {}): Promise<ScreenObservation> {
-  const imageBase64 = await invoke<string>("capture_to_base64");
+  const capture = await invoke<CaptureScreenContextResponse>(
+    "capture_screen_context_to_base64",
+    { target }
+  );
+  const imageBase64 = capture.imageBase64;
   const hash = hashBase64(imageBase64);
 
   return {
@@ -43,6 +60,7 @@ export async function captureScreenObservation({
     imageBase64,
     hash,
     changed: hash !== previousHash,
+    captureTarget: capture.target,
   };
 }
 

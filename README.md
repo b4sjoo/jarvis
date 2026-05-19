@@ -75,7 +75,8 @@ Jarvis expects you to configure local/custom providers before relying on meeting
 
 - Open the floating Brain button to show the Meeting Assistant panel.
 - Use the panel's Privacy selector to switch between `Text` and `Text+Screen`.
-- `Cmd+Shift+E` captures the current meeting screen context, briefly hides the panel before capture, then reopens the panel with the generated suggestion.
+- `Cmd+Shift+E` captures the frontmost active window for meeting context, briefly hides the panel before capture, then reopens the panel with the generated suggestion.
+- The Meeting Assistant panel shows a compact `Last capture` debug row with a preview thumbnail, captured app/window, capture method, image size, bounds, and top window candidates.
 - `Cmd+Shift+S` remains the separate manual screenshot/completion shortcut.
 
 ## Privacy
