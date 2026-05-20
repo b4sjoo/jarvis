@@ -30,6 +30,9 @@ import {
 const ADVISOR_DEBOUNCE_MS = 750;
 const STT_TIMEOUT_MS = 30_000;
 const SCREEN_ANALYSIS_TIMEOUT_MS = 45_000;
+const DEFAULT_ACTIVE_SCREEN_TASK_TIMEOUT_MINUTES = 30;
+const MIN_ACTIVE_SCREEN_TASK_TIMEOUT_MINUTES = 5;
+const MAX_ACTIVE_SCREEN_TASK_TIMEOUT_MINUTES = 240;
 
 const MISSING_STT_MESSAGE =
   "Choose a speech-to-text provider in Dev Space before starting Jarvis.";
@@ -68,6 +71,7 @@ const INITIAL_STATE: MeetingAssistantState = {
   settings: {
     screenContextEnabled: false,
     privacyMode: "text-to-cloud",
+    activeScreenTaskTimeoutMinutes: DEFAULT_ACTIVE_SCREEN_TASK_TIMEOUT_MINUTES,
   },
 };
 
@@ -92,10 +96,53 @@ function readMeetingAssistantSettings(): MeetingAssistantSettings {
           ? parsed.screenContextEnabled
           : DEFAULT_MEETING_ASSISTANT_SETTINGS.screenContextEnabled,
       privacyMode,
+      activeScreenTaskTimeoutMinutes:
+        normalizeActiveScreenTaskTimeoutMinutes(
+          parsed.activeScreenTaskTimeoutMinutes
+        ),
     };
   } catch {
     return DEFAULT_MEETING_ASSISTANT_SETTINGS;
   }
+}
+
+function normalizeActiveScreenTaskTimeoutMinutes(value: unknown) {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return DEFAULT_ACTIVE_SCREEN_TASK_TIMEOUT_MINUTES;
+  }
+
+  return Math.min(
+    MAX_ACTIVE_SCREEN_TASK_TIMEOUT_MINUTES,
+    Math.max(MIN_ACTIVE_SCREEN_TASK_TIMEOUT_MINUTES, Math.round(value))
+  );
+}
+
+function getActiveScreenTaskExpiresAt(
+  settings: MeetingAssistantSettings,
+  now = Date.now()
+) {
+  return now + settings.activeScreenTaskTimeoutMinutes * 60_000;
+}
+
+function clearActiveScreenTaskState(
+  previous: MeetingAssistantState
+): MeetingAssistantState {
+  return {
+    ...previous,
+    activeScreenTask: undefined,
+    partialSuggestion: "",
+    latestSuggestion:
+      previous.latestSuggestion?.kind === "screen-task"
+        ? null
+        : previous.latestSuggestion,
+    status:
+      previous.status === "thinking"
+        ? previous.audioStatus?.active
+          ? "listening"
+          : "idle"
+        : previous.status,
+    error: null,
+  };
 }
 
 function isMeetingPrivacyMode(
@@ -261,12 +308,54 @@ export function useMeetingAssistant() {
     [updateSettings]
   );
 
+  const setActiveScreenTaskTimeoutMinutes = useCallback(
+    (activeScreenTaskTimeoutMinutes: number) => {
+      const normalizedTimeoutMinutes =
+        normalizeActiveScreenTaskTimeoutMinutes(
+          activeScreenTaskTimeoutMinutes
+        );
+
+      updateSettings((previous) => ({
+        ...previous,
+        activeScreenTaskTimeoutMinutes: normalizedTimeoutMinutes,
+      }));
+
+      const activeScreenTask =
+        contextManagerRef.current.getState().activeScreenTask;
+
+      if (activeScreenTask) {
+        const now = Date.now();
+        contextManagerRef.current.setActiveScreenTask({
+          ...activeScreenTask,
+          updatedAt: now,
+          expiresAt: now + normalizedTimeoutMinutes * 60_000,
+        });
+        const contextState = contextManagerRef.current.getState();
+        setState((previous) => ({
+          ...previous,
+          activeScreenTask: contextState.activeScreenTask,
+        }));
+      }
+    },
+    [updateSettings]
+  );
+
+  const clearActiveScreenTask = useCallback(() => {
+    clearAdvisorDebounce();
+    advisorEngineRef.current.cancelCurrentRequest();
+    screenAnalysisAbortRef.current?.abort();
+    screenAnalysisAbortRef.current = null;
+    contextManagerRef.current.clearActiveScreenTask();
+    setState(clearActiveScreenTaskState);
+  }, [clearAdvisorDebounce]);
+
   const stop = useCallback(async () => {
     activeRef.current = false;
     clearAdvisorDebounce();
     advisorEngineRef.current.cancelCurrentRequest();
     screenAnalysisAbortRef.current?.abort();
     screenAnalysisAbortRef.current = null;
+    contextManagerRef.current.clearActiveScreenTask();
 
     let audioStatus: MeetingAudioStatus | null = null;
 
@@ -281,6 +370,11 @@ export function useMeetingAssistant() {
     setState((previous) => ({
       ...previous,
       status: "idle",
+      activeScreenTask: undefined,
+      latestSuggestion:
+        previous.latestSuggestion?.kind === "screen-task"
+          ? null
+          : previous.latestSuggestion,
       partialSuggestion: "",
       error: null,
       audioStatus,
@@ -363,9 +457,11 @@ export function useMeetingAssistant() {
         contextState.activeScreenTask &&
         finalContent.trim()
       ) {
+        const updatedAt = Date.now();
         contextManagerRef.current.setActiveScreenTask({
           ...contextState.activeScreenTask,
-          updatedAt: Date.now(),
+          updatedAt,
+          expiresAt: getActiveScreenTaskExpiresAt(state.settings, updatedAt),
           question:
             extractScreenTaskQuestion(finalContent) ||
             contextState.activeScreenTask.question,
@@ -417,7 +513,7 @@ export function useMeetingAssistant() {
             : "Failed to generate meeting suggestion.",
       }));
     }
-  }, [aiProvider, selectedAIProvider, state.status]);
+  }, [aiProvider, selectedAIProvider, state.settings, state.status]);
 
   const scheduleAdvisor = useCallback((mode: AdvisorRequestMode = "live") => {
     if (!activeRef.current) return;
@@ -757,15 +853,18 @@ export function useMeetingAssistant() {
           .map((turn) => turn.id);
         const requestId = createMeetingId("screen_task");
         const question = extractScreenTaskQuestion(screenTaskContent);
+        const taskKind = inferScreenTaskKind(screenTaskContent);
+        const now = Date.now();
 
-        if (screenTaskContent.trim()) {
+        if (screenTaskContent.trim() && taskKind !== "non-question") {
           contextManagerRef.current.setActiveScreenTask({
             id: requestId,
             observationId: observation.id,
-            createdAt: Date.now(),
-            updatedAt: Date.now(),
+            createdAt: now,
+            updatedAt: now,
+            expiresAt: getActiveScreenTaskExpiresAt(state.settings, now),
             question: question || undefined,
-            kind: inferScreenTaskKind(screenTaskContent),
+            kind: taskKind,
             language: inferScreenTaskLanguage(screenTaskContent),
             content: screenTaskContent,
             basedOnTurnIds,
@@ -897,6 +996,18 @@ export function useMeetingAssistant() {
   }, [handleSpeechDetected]);
 
   useEffect(() => {
+    const intervalId = window.setInterval(() => {
+      if (contextManagerRef.current.clearExpiredActiveScreenTask()) {
+        setState(clearActiveScreenTaskState);
+      }
+    }, 60_000);
+
+    return () => {
+      window.clearInterval(intervalId);
+    };
+  }, []);
+
+  useEffect(() => {
     return () => {
       clearAdvisorDebounce();
       if (activeRef.current) {
@@ -910,10 +1021,12 @@ export function useMeetingAssistant() {
     setupWarnings,
     setPrivacyMode,
     setScreenContextEnabled,
+    setActiveScreenTaskTimeoutMinutes,
     start,
     pause,
     resume,
     stop,
+    clearActiveScreenTask,
     captureScreenContext,
     regenerateSuggestion,
     makeSuggestionShorter,

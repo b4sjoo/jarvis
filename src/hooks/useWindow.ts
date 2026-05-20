@@ -13,12 +13,12 @@ const isAnyPopoverOpen = (): boolean => {
 export const useWindowResize = () => {
   const resizeWindow = useCallback(async (
     expanded: boolean,
-    options: { width?: number; height?: number } = {}
+    options: { width?: number; height?: number; force?: boolean } = {}
   ) => {
     try {
       const window = getCurrentWebviewWindow();
 
-      if (!expanded && isAnyPopoverOpen()) {
+      if (!expanded && !options.force && isAnyPopoverOpen()) {
         return;
       }
 

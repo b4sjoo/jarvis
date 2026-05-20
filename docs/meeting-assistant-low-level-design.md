@@ -200,6 +200,7 @@ interface ActiveScreenTask {
   observationId: string;
   createdAt: number;
   updatedAt: number;
+  expiresAt?: number;
   question?: string;
   kind: ScreenTaskKind;
   language?: string;
@@ -209,7 +210,7 @@ interface ActiveScreenTask {
 }
 ```
 
-`ActiveScreenTask` starts on explicit screen capture. It anchors later audio turns so the advisor treats speech as clarification, modification, or follow-up context for the visible technical question. New captures replace the active task. Manual dismiss and timeout semantics remain a near-term hardening task.
+`ActiveScreenTask` starts on explicit screen capture. It anchors later audio turns so the advisor treats speech as clarification, modification, or follow-up context for the visible technical question. New captures replace the active task. The task can be cleared manually, clears when the meeting assistant stops, and expires after a configurable inactivity timeout. The default is 30 minutes of inactivity, long enough for a real technical discussion but short enough to avoid stale task carryover across unrelated meeting topics.
 
 Initial user feedback on the screen-anchored implementation is positive. The remaining design risk is less about the core interaction model and more about focus selection, stale-task lifecycle, and broader meeting-scenario validation.
 
@@ -513,7 +514,8 @@ The app should not promise absolute invisibility during screen sharing.
 Implementation stance:
 
 - Use transparent overlay, content protection, skip taskbar, and platform-specific panel behavior.
-- Provide a reliable hide shortcut.
+- Provide a reliable emergency hide path through the existing hide/show shortcut.
+- Emergency hide should collapse the Meeting Assistant panel, shrink the overlay to compact height, clear cursor overrides, and keep meeting audio capture running.
 - Hide overlay during self-capture where possible.
 - Prefer single-window sharing or second display use.
 - Do not claim "undetectable" or "guaranteed hidden" in product text.
@@ -606,10 +608,12 @@ Date: 2026-05-08
 - Visibility wording: screen-share resistant, not invisible or undetectable.
 - Meeting Assistant layout: use a fixed expanded panel width with wrapped content instead of letting long model responses resize the native window.
 - Meeting Assistant cursor behavior: use native cursor while the expanded panel is open, then restore the normal hidden/custom cursor behavior after closing.
+- Active screen task lifecycle: manual clear, stop-clear, and configurable inactivity timeout defaulting to 30 minutes.
+- Emergency hide: reuse the existing hide/show shortcut as a reliable meeting-time panic action that collapses UI without stopping audio capture.
 
 ## 14. Remaining Open Questions
 
 - Which concrete STT provider gives the best latency and accuracy for the user's real meetings?
 - Which concrete LLM provider is fast enough for live suggestions under BYOK?
 - Should Jarvis add local OCR before multimodal screenshot analysis?
-- What exact hide shortcut and screen-share workflow feel safest in daily use?
+- What screen-share workflow guidance should be documented after more Zoom, Google Meet, and Teams testing?

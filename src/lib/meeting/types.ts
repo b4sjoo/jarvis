@@ -95,6 +95,7 @@ export interface ActiveScreenTask {
   observationId: string;
   createdAt: number;
   updatedAt: number;
+  expiresAt?: number;
   question?: string;
   kind: ScreenTaskKind;
   language?: string;
@@ -212,6 +213,7 @@ export type MeetingPrivacyMode =
 export interface MeetingAssistantSettings {
   screenContextEnabled: boolean;
   privacyMode: MeetingPrivacyMode;
+  activeScreenTaskTimeoutMinutes: number;
 }
 
 export interface MeetingAssistantState {

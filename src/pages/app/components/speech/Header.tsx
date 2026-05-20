@@ -8,7 +8,7 @@ type Props = {
   setIsPopoverOpen: React.Dispatch<React.SetStateAction<boolean>>;
   resizeWindow: (
     expanded: boolean,
-    options?: { width?: number; height?: number }
+    options?: { width?: number; height?: number; force?: boolean }
   ) => Promise<void>;
   capturing: boolean;
   isVadMode: boolean;

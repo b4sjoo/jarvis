@@ -113,7 +113,7 @@ export interface UseCompletionReturn {
   /** Function to resize the application window based on UI state */
   resizeWindow: (
     expanded: boolean,
-    options?: { width?: number; height?: number }
+    options?: { width?: number; height?: number; force?: boolean }
   ) => Promise<void>;
 
   // Files popover management

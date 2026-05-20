@@ -9,9 +9,9 @@
 
 ## Current Phase
 
-Phase 1: Meeting Assistant MVP implementation has resumed with screen-anchored technical question mode as the active workstream.
+Phase 2: Meeting Assistant MVP is usable after self-testing and informal meeting testing. The active workstream is now performance and UX tuning.
 
-Current work has a validated audio-to-transcript-to-advice loop, explicit privacy modes, manual and hotkey-triggered active-window capture, and capture-target debug metadata. Recent testing showed that the earlier `screen-only` direction was too narrow for the real use case: screen content should be the anchor for technical questions, while meeting audio should act as clarification, modification, or follow-up context.
+Current work has a validated audio-to-transcript-to-advice loop, explicit privacy modes, manual and hotkey-triggered active-window capture, capture-target debug metadata, a usable screen-anchored technical question flow, active task lifecycle controls, and a reliable emergency hide path.
 
 Current implementation status:
 
@@ -20,7 +20,10 @@ Current implementation status:
 - Later transcript turns use the active screen task as the anchor and update the technical answer as clarification or follow-up context arrives.
 - Initial user testing reports the screen-anchored behavior is materially better than the previous generic screen-only path.
 - The Meeting Assistant panel now has a fixed expanded width, wrapped long-response layout, and native cursor override while open.
-- Remaining high-impact gaps are cursor-centered question focus selection, broader validation with mock meetings, and lifecycle controls such as manual task dismiss or timeout.
+- Active screen tasks can be manually cleared, are cleared on stop, and expire after a configurable inactivity window that defaults to 30 minutes.
+- The existing hide/show shortcut now acts as an emergency hide path that collapses the Meeting Assistant UI without stopping meeting audio capture.
+- User validation confirms the active task lifecycle and emergency hide workflow are usable enough to move into tuning.
+- Cursor-centered question focus selection, broader validation, and performance baselines are in the tuning backlog.
 
 ## Milestone 0: Design Review and Scope Lock
 
@@ -168,12 +171,13 @@ Goal: redesign screen context from generic screenshot explanation into a technic
 - [x] Define audio role: clarification, modification, follow-up, or extra constraints for the visible screen question.
 - [x] Decide whether to keep, revise, or revert the uncommitted `screen-only` prototype patch.
 - [x] Update the low-level design after review to describe screen-anchored task state and event flow.
-- [~] Define and implement `activeScreenTask` lifecycle:
+- [x] Define and implement `activeScreenTask` lifecycle:
   - starts on explicit screen capture.
   - stores visible question, task classification, relevant screenshot metadata, and recent audio context.
   - receives later transcript turns as clarification or follow-up.
-  - currently ends on new meaningful capture or cleared non-question capture.
-  - manual dismiss, stop-clear semantics, and timeout still need product validation.
+  - ends on new meaningful capture, cleared non-question capture, manual clear, stop, or inactivity expiry.
+  - inactivity timeout is configurable from the Meeting Assistant panel.
+  - default timeout is 30 minutes of inactivity so a long discussion does not drop context too aggressively.
 - [x] Define screen task classification:
   - open field-knowledge question.
   - coding/algorithm question.
@@ -209,7 +213,8 @@ Goal: redesign screen context from generic screenshot explanation into a technic
 - [~] Validate quality in mock meetings with both field-knowledge and coding questions.
   - Initial user feedback on the new implementation is positive.
   - Broader scenario coverage is still needed before calling this complete.
-- [ ] Add manual clear/dismiss for the active screen task if testing shows stale task carryover.
+- [x] Add manual clear/dismiss for the active screen task.
+- [x] Add configurable active screen task inactivity timeout.
 
 Exit criteria:
 
@@ -242,7 +247,12 @@ Goal: make limits explicit and prevent accidental data exposure.
 
 - [ ] Add product copy that avoids "guaranteed invisible" claims.
 - [ ] Add visibility caveat in onboarding/settings.
-- [ ] Add one-tap hide shortcut.
+- [x] Add reliable emergency hide behavior on the existing hide/show shortcut.
+  - Collapse the Meeting Assistant panel.
+  - Shrink the overlay back to compact size.
+  - Clear native cursor override.
+  - Keep meeting audio capture running.
+  - Do not clear transcript by default.
 - [~] Hide overlay during self-capture where possible.
 - [ ] Add privacy mode setting:
   - [x] Local only placeholder.
@@ -348,6 +358,9 @@ Exit criteria:
 | 2026-05-19 | Pause implementation for screen/audio fusion design review | Real use case is screen-anchored technical Q&A with audio as supplemental clarification; task tracking is updated before further implementation |
 | 2026-05-19 | Fix Meeting Assistant expanded layout | Long responses wrap inside a fixed-width panel; native window width is requested explicitly and clamped to the current monitor |
 | 2026-05-19 | Use native cursor while Meeting Assistant is open | Avoid cursor loss caused by hidden/custom cursor styling over the enlarged transparent Tauri window |
+| 2026-05-19 | Add active screen task lifecycle controls | Screen tasks can be cleared manually, clear on stop, and expire after a configurable task memory window that defaults to 30 minutes |
+| 2026-05-19 | Harden emergency hide | Existing hide/show shortcut collapses Meeting Assistant UI and keeps meeting audio capture running |
+| 2026-05-19 | Enter tuning phase | Active task lifecycle and emergency hide passed user validation; next work should focus on performance and meeting UX refinements |
 
 ## Validation Snapshot
 
@@ -358,10 +371,12 @@ Last validated: 2026-05-19.
 - `git diff --check` passes before commits in the current phase.
 - Manual screen-context test passes well enough for the next live-meeting smoke test.
 - Manual Meeting Assistant layout and cursor tests passed after expanding the panel and overriding custom cursor behavior.
+- `npm run build`, `cargo check`, and `git diff --check` pass after active task lifecycle and emergency hide changes.
+- User verified active task lifecycle and emergency hide behavior are usable.
 
 ## Immediate Next Tasks
 
-1. Continue mock-meeting validation with Zoom first, then Google Meet and Teams.
-2. Add manual clear/dismiss for stale active screen tasks if testing shows task carryover.
-3. Define cursor-centered question focus selection for screens with multiple questions or distractors.
-4. Add duplicate-screenshot suppression and rate limiting before automatic observation mode.
+1. Enter performance and UX tuning.
+2. Add lightweight latency and resource measurements instead of building a full benchmark system upfront.
+3. Continue mock-meeting validation with Zoom first, then Google Meet and Teams.
+4. Define cursor-centered question focus selection for screens with multiple questions or distractors.

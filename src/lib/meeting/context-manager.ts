@@ -40,6 +40,8 @@ export class MeetingContextManager {
   }
 
   getState(): MeetingContextState {
+    this.clearExpiredActiveScreenTask();
+
     return {
       ...this.state,
       transcriptTurns: [...this.state.transcriptTurns],
@@ -114,6 +116,17 @@ export class MeetingContextManager {
     };
   }
 
+  clearExpiredActiveScreenTask(now = Date.now()) {
+    const task = this.state.activeScreenTask;
+
+    if (!task?.expiresAt || task.expiresAt > now) {
+      return false;
+    }
+
+    this.clearActiveScreenTask();
+    return true;
+  }
+
   updateRollingSummary(rollingSummary: string) {
     this.state = {
       ...this.state,
@@ -143,6 +156,8 @@ export class MeetingContextManager {
   }
 
   buildAdvisorPromptContext(): AdvisorPromptContext {
+    this.clearExpiredActiveScreenTask();
+
     const latestTurn =
       this.state.transcriptTurns[this.state.transcriptTurns.length - 1];
 

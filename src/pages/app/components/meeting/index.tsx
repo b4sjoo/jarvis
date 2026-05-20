@@ -10,10 +10,12 @@ import {
 import { useMeetingAssistant, useShortcuts, useWindowResize } from "@/hooks";
 import type { ClarifyingQuestionAnswer, ScreenCaptureTarget } from "@/lib/meeting";
 import { cn } from "@/lib/utils";
+import { listen } from "@tauri-apps/api/event";
 import {
   BrainIcon,
   CameraIcon,
   CheckIcon,
+  ClockIcon,
   EyeOffIcon,
   HelpCircleIcon,
   Loader2Icon,
@@ -24,6 +26,7 @@ import {
   RadioIcon,
   RefreshCwIcon,
   SquareIcon,
+  Trash2Icon,
   XIcon,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -49,6 +52,7 @@ const MEETING_PANEL_WIDTH = 920;
 const PANEL_WIDTH_CLASS = "w-[920px] max-w-[100vw]";
 const WRAP_TEXT_CLASS =
   "min-w-0 whitespace-pre-wrap break-words [overflow-wrap:anywhere]";
+const TASK_TIMEOUT_OPTIONS = [15, 30, 60, 120] as const;
 
 function waitForHotkeyCaptureSettle() {
   return new Promise<void>((resolve) => {
@@ -140,6 +144,24 @@ export const MeetingAssistant = () => {
   useEffect(() => {
     void resizeWindow(open, open ? { width: MEETING_PANEL_WIDTH } : undefined);
   }, [open, resizeWindow]);
+
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+
+    const setupEmergencyHideListener = async () => {
+      unlisten = await listen("jarvis-emergency-hide", () => {
+        setOpen(false);
+        delete document.documentElement.dataset.nativeCursorOverride;
+        void resizeWindow(false, { force: true });
+      });
+    };
+
+    void setupEmergencyHideListener();
+
+    return () => {
+      unlisten?.();
+    };
+  }, [resizeWindow]);
 
   useEffect(() => {
     const root = document.documentElement;
@@ -323,6 +345,32 @@ export const MeetingAssistant = () => {
                       {option.label}
                     </Button>
                   ))}
+                </div>
+                <div className="mt-2 border-t border-border/50 pt-2">
+                  <div className="mb-1.5 flex items-center gap-1.5 text-[10px] font-medium text-muted-foreground">
+                    <ClockIcon className="h-3 w-3" />
+                    Task memory
+                  </div>
+                  <div className="grid grid-cols-4 gap-1">
+                    {TASK_TIMEOUT_OPTIONS.map((minutes) => (
+                      <Button
+                        key={minutes}
+                        size="sm"
+                        variant={
+                          meeting.settings.activeScreenTaskTimeoutMinutes ===
+                          minutes
+                            ? "default"
+                            : "outline"
+                        }
+                        className="h-7 px-1 text-[10px]"
+                        onClick={() => {
+                          meeting.setActiveScreenTaskTimeoutMinutes(minutes);
+                        }}
+                      >
+                        {formatTaskTimeout(minutes)}
+                      </Button>
+                    ))}
+                  </div>
                 </div>
               </section>
 
@@ -640,6 +688,17 @@ export const MeetingAssistant = () => {
                 size="sm"
                 variant="outline"
                 className="h-8 gap-1.5 text-xs"
+                title="Clear active screen task"
+                onClick={meeting.clearActiveScreenTask}
+                disabled={!meeting.activeScreenTask}
+              >
+                <Trash2Icon className="h-3.5 w-3.5" />
+                Clear task
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-8 gap-1.5 text-xs"
                 title="Regenerate suggestion"
                 onClick={meeting.regenerateSuggestion}
                 disabled={isBusy || !hasMeetingContext}
@@ -756,6 +815,11 @@ function formatCaptureCandidate(
   const reason = candidate.skippedReason ? ` (${candidate.skippedReason})` : "";
 
   return `${name || "Untitled"} ${candidate.width}x${candidate.height}${reason}`;
+}
+
+function formatTaskTimeout(minutes: number) {
+  if (minutes >= 60) return `${minutes / 60}h`;
+  return `${minutes}m`;
 }
 
 function formatScreenPromptSource(source: string) {

@@ -81,6 +81,8 @@ Jarvis expects you to configure local/custom providers before relying on meeting
 - Screen capture is treated as the primary technical question source; recent meeting audio is used as clarification or follow-up context.
 - The Meeting Assistant panel uses a fixed expanded width and wraps long answers vertically so responses do not push the window wider during a meeting.
 - While the Meeting Assistant panel is open, Jarvis uses the native system cursor instead of its hidden/custom cursor mode to avoid cursor loss when moving across the transparent overlay area.
+- Use `Clear task` when a screen question is no longer relevant. Screen tasks expire after the configured task memory window, which defaults to 30 minutes.
+- `Cmd+\` is the emergency hide/show shortcut. Hiding collapses the Meeting Assistant UI without stopping meeting audio capture.
 - The Meeting Assistant panel shows a compact `Last capture` debug row with a preview thumbnail, captured app/window, capture method, image size, bounds, and top window candidates.
 - When Screenshot settings are in `Auto` mode, Meeting Assistant screen analysis treats the configured screenshot auto prompt as user preference while preserving the screen-task answer format.
 - Clarifying questions include quick `Yes`, `No`, `Not sure`, and `Dismiss` controls so you can steer follow-up suggestions without typing during a meeting.

@@ -169,7 +169,13 @@ fn handle_toggle_window<R: Runtime>(app: &AppHandle<R>) {
             eprintln!("Failed to emit toggle-window-visibility event: {}", e);
         }
 
+        if *is_hidden {
+            let _ = window.emit("jarvis-emergency-hide", json!({}));
+        }
+
         if !*is_hidden {
+            let _ = window.emit("jarvis-emergency-hide", json!({}));
+
             if let Err(e) = window.show() {
                 eprintln!("Failed to show window: {}", e);
             }
@@ -186,6 +192,8 @@ fn handle_toggle_window<R: Runtime>(app: &AppHandle<R>) {
     #[cfg(not(target_os = "windows"))]
     match window.is_visible() {
         Ok(true) => {
+            let _ = window.emit("jarvis-emergency-hide", json!({}));
+
             #[cfg(target_os = "macos")]
             {
                 let panel = app.get_webview_window("main").unwrap();
@@ -197,6 +205,8 @@ fn handle_toggle_window<R: Runtime>(app: &AppHandle<R>) {
             }
         }
         Ok(false) => {
+            let _ = window.emit("jarvis-emergency-hide", json!({}));
+
             // Window is hidden, show it and handle app icon based on user settings
             if let Err(e) = window.show() {
                 eprintln!("Failed to show window: {}", e);
