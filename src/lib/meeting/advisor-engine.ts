@@ -41,6 +41,15 @@ export class AdvisorEngine {
       mode: request.mode ?? "live",
     });
     let accumulated = "";
+    let firstTokenSeen = false;
+
+    request.trace?.onRequest?.({
+      systemPrompt,
+      userMessage,
+      imageCount: 0,
+      providerId: request.provider?.id,
+      mode: request.mode,
+    });
 
     for await (const chunk of fetchAIResponse({
       provider: request.provider,
@@ -51,6 +60,11 @@ export class AdvisorEngine {
       imagesBase64: [],
       signal: this.currentAbortController.signal,
     })) {
+      if (!firstTokenSeen) {
+        firstTokenSeen = true;
+        request.trace?.onFirstToken?.();
+      }
+
       accumulated += chunk;
       yield {
         requestId: request.requestId,
@@ -58,6 +72,8 @@ export class AdvisorEngine {
         accumulated,
       };
     }
+
+    request.trace?.onComplete?.(accumulated);
   }
 
   toSuggestion(

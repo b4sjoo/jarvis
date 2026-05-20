@@ -15,6 +15,8 @@ let globalEventListeners: {
 
 // Global debounce for screenshot events to prevent duplicates
 let lastScreenshotEventTime = 0;
+let lastCustomShortcutEventTimes: Map<string, number> = new Map();
+const CUSTOM_SHORTCUT_DEBOUNCE_MS = 750;
 
 // Global callback refs
 let globalInputRef: HTMLInputElement | null = null;
@@ -225,6 +227,16 @@ export const useGlobalShortcuts = () => {
           "custom-shortcut-triggered",
           (event) => {
             const actionId = event.payload.action;
+            const now = Date.now();
+            const lastEventTime =
+              lastCustomShortcutEventTimes.get(actionId) ?? 0;
+
+            if (now - lastEventTime < CUSTOM_SHORTCUT_DEBOUNCE_MS) {
+              return;
+            }
+
+            lastCustomShortcutEventTimes.set(actionId, now);
+
             const callback = globalCustomShortcutCallbacks.get(actionId);
             if (callback) {
               callback();

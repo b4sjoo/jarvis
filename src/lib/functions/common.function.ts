@@ -1,5 +1,12 @@
 import { Message } from "@/types";
 
+export interface ImageInput {
+  base64: string;
+  mediaType?: string;
+}
+
+const DEFAULT_IMAGE_MEDIA_TYPE = "image/png";
+
 export function getByPath(obj: any, path: string): any {
   if (!path) return obj;
   return path
@@ -55,7 +62,7 @@ export function extractVariables(
 
   const doNotInclude = includeAll
     ? []
-    : ["SYSTEM_PROMPT", "TEXT", "IMAGE", "AUDIO"];
+    : ["SYSTEM_PROMPT", "TEXT", "IMAGE", "IMAGE_MEDIA_TYPE", "AUDIO"];
 
   const filteredVariables = uniqueVariables?.filter(
     (variable) => !doNotInclude?.includes(variable)
@@ -77,10 +84,36 @@ export function extractVariables(
 export function processUserMessageTemplate(
   template: any,
   userMessage: string,
-  imagesBase64: string[] = []
+  imagesBase64: Array<string | ImageInput> = []
 ): any {
   const escapeForJson = (value: string) =>
     JSON.stringify(value ?? "").slice(1, -1);
+  const normalizeImage = (image: string | ImageInput): ImageInput =>
+    typeof image === "string"
+      ? { base64: image, mediaType: DEFAULT_IMAGE_MEDIA_TYPE }
+      : {
+          base64: image.base64,
+          mediaType: image.mediaType || DEFAULT_IMAGE_MEDIA_TYPE,
+        };
+  const replaceImagePlaceholders = (
+    imageTemplate: any,
+    image: string | ImageInput
+  ) => {
+    const normalized = normalizeImage(image);
+    const mediaType = normalized.mediaType || DEFAULT_IMAGE_MEDIA_TYPE;
+
+    return JSON.stringify(imageTemplate)
+      .replace(
+        /data:image\/png;base64,\{\{IMAGE\}\}/g,
+        `data:${mediaType};base64,{{IMAGE}}`
+      )
+      .replace(
+        /"media_type":"image\/png"/g,
+        `"media_type":"${mediaType}"`
+      )
+      .replace(/\{\{IMAGE_MEDIA_TYPE\}\}/g, mediaType)
+      .replace(/\{\{IMAGE\}\}/g, normalized.base64);
+  };
 
   const templateStr = JSON.stringify(template).replace(
     /\{\{TEXT\}\}/g,
@@ -99,10 +132,7 @@ export function processUserMessageTemplate(
         const imageParts =
           imagesBase64.length > 0
             ? imagesBase64.map((img) => {
-                const partStr = JSON.stringify(imageTemplate).replace(
-                  /\{\{IMAGE\}\}/g,
-                  img
-                );
+                const partStr = replaceImagePlaceholders(imageTemplate, img);
                 return JSON.parse(partStr);
               })
             : [];
@@ -140,7 +170,7 @@ export function buildDynamicMessages(
   messagesTemplate: any[],
   history: Message[],
   userMessage: string,
-  imagesBase64: string[] = []
+  imagesBase64: Array<string | ImageInput> = []
 ): any[] {
   const userMessageTemplateIndex = messagesTemplate.findIndex((m) =>
     JSON.stringify(m).includes("{{TEXT}}")

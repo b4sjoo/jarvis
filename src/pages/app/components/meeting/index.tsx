@@ -8,10 +8,15 @@ import {
   Switch,
 } from "@/components";
 import { useMeetingAssistant, useShortcuts, useWindowResize } from "@/hooks";
-import type { ClarifyingQuestionAnswer, ScreenCaptureTarget } from "@/lib/meeting";
+import type {
+  ClarifyingQuestionAnswer,
+  MeetingTrace,
+  ScreenCaptureTarget,
+} from "@/lib/meeting";
 import { cn } from "@/lib/utils";
 import { listen } from "@tauri-apps/api/event";
 import {
+  ActivityIcon,
   BrainIcon,
   CameraIcon,
   CheckIcon,
@@ -29,7 +34,7 @@ import {
   Trash2Icon,
   XIcon,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 const statusLabel = {
   idle: "Ready",
@@ -48,6 +53,7 @@ const privacyOptions = [
 ] as const;
 
 const HOTKEY_CAPTURE_SETTLE_MS = 180;
+const HOTKEY_CAPTURE_DEBOUNCE_MS = 1_000;
 const MEETING_PANEL_WIDTH = 920;
 const PANEL_WIDTH_CLASS = "w-[920px] max-w-[100vw]";
 const WRAP_TEXT_CLASS =
@@ -67,11 +73,17 @@ export const MeetingAssistant = () => {
   const [dismissedQuestionKey, setDismissedQuestionKey] = useState<
     string | null
   >(null);
+  const screenHotkeyInFlightRef = useRef(false);
+  const lastScreenHotkeyAtRef = useRef(0);
 
   const latestTurn =
     meeting.transcriptTurns[meeting.transcriptTurns.length - 1];
   const latestScreenObservation =
     meeting.screenObservations[meeting.screenObservations.length - 1];
+  const latestTrace =
+    meeting.traces.find(
+      (trace) => trace.status === "running" || trace.status === "success"
+    ) ?? meeting.traces[0];
   const latestCaptureTarget = latestScreenObservation?.captureTarget;
   const displaySuggestion =
     meeting.partialSuggestion || meeting.latestSuggestion?.content || "";
@@ -113,19 +125,36 @@ export const MeetingAssistant = () => {
   }, [meeting.error]);
 
   const captureScreenContextFromHotkey = useCallback(async () => {
-    if (open) {
-      setOpen(false);
-      await waitForHotkeyCaptureSettle();
-      await resizeWindow(false);
-      await waitForHotkeyCaptureSettle();
+    const requestedAt = Date.now();
+
+    if (
+      screenHotkeyInFlightRef.current ||
+      requestedAt - lastScreenHotkeyAtRef.current < HOTKEY_CAPTURE_DEBOUNCE_MS
+    ) {
+      return;
     }
 
-    await meeting.captureScreenContext("hotkey", {
-      onCaptured: () => {
-        setOpen(true);
-      },
-    });
-    setOpen(true);
+    screenHotkeyInFlightRef.current = true;
+    lastScreenHotkeyAtRef.current = requestedAt;
+
+    try {
+      if (open) {
+        setOpen(false);
+        await waitForHotkeyCaptureSettle();
+        await resizeWindow(false);
+        await waitForHotkeyCaptureSettle();
+      }
+
+      await meeting.captureScreenContext("hotkey", {
+        requestedAt,
+        onCaptured: () => {
+          setOpen(true);
+        },
+      });
+      setOpen(true);
+    } finally {
+      screenHotkeyInFlightRef.current = false;
+    }
   }, [meeting.captureScreenContext, open, resizeWindow]);
 
   const meetingShortcutCallbacks = useMemo(
@@ -372,6 +401,16 @@ export const MeetingAssistant = () => {
                     ))}
                   </div>
                 </div>
+                <div className="mt-2 flex items-center justify-between gap-2 border-t border-border/50 pt-2">
+                  <div className="flex items-center gap-1.5 text-[10px] font-medium text-muted-foreground">
+                    <ActivityIcon className="h-3 w-3" />
+                    Debug Mode
+                  </div>
+                  <Switch
+                    checked={meeting.settings.debugMode}
+                    onCheckedChange={meeting.setDebugMode}
+                  />
+                </div>
               </section>
 
               {meeting.setupWarnings.length > 0 ? (
@@ -607,7 +646,69 @@ export const MeetingAssistant = () => {
                 />
               </section>
 
-              {latestCaptureTarget ? (
+              {meeting.settings.debugMode && latestTrace ? (
+                <section className="min-w-0 overflow-hidden rounded-md border border-border/70 p-3">
+                  <div className="mb-2 flex items-center justify-between gap-2">
+                    <div className="flex min-w-0 items-center gap-2 text-xs font-semibold">
+                      <ActivityIcon className="h-3.5 w-3.5" />
+                      <span className="truncate">
+                        Trace: {formatTraceTitle(latestTrace)}
+                      </span>
+                    </div>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="h-7 shrink-0 px-2 text-[10px]"
+                      onClick={meeting.clearTraces}
+                    >
+                      Clear
+                    </Button>
+                  </div>
+                  <div className="space-y-1">
+                    {latestTrace.steps.map((step) => (
+                      <div
+                        key={step.id}
+                        className="flex min-w-0 items-center justify-between gap-2 text-[10px]"
+                      >
+                        <span className="min-w-0 truncate text-muted-foreground">
+                          {step.name}
+                        </span>
+                        <span className="shrink-0 font-mono">
+                          {formatTraceDuration(step.durationMs)}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                  {latestTrace.inputs.length || latestTrace.outputs.length ? (
+                    <details className="mt-2 border-t border-border/50 pt-2">
+                      <summary className="cursor-pointer text-[10px] font-medium text-muted-foreground">
+                        Raw model I/O
+                      </summary>
+                      <div className="mt-2 space-y-2">
+                        {[...latestTrace.inputs, ...latestTrace.outputs].map(
+                          (item, index) => (
+                            <div key={`${item.label}-${index}`}>
+                              <div className="mb-1 text-[10px] font-medium uppercase text-muted-foreground">
+                                {item.label}
+                              </div>
+                              <pre
+                                className={cn(
+                                  WRAP_TEXT_CLASS,
+                                  "max-h-40 overflow-y-auto overflow-x-hidden rounded-sm bg-muted p-2 text-[10px] leading-4"
+                                )}
+                              >
+                                {item.value}
+                              </pre>
+                            </div>
+                          )
+                        )}
+                      </div>
+                    </details>
+                  ) : null}
+                </section>
+              ) : null}
+
+              {meeting.settings.debugMode && latestCaptureTarget ? (
                 <section className="min-w-0 overflow-hidden rounded-md border border-border/70 p-3">
                   <div className="mb-2 flex items-center gap-2 text-xs font-semibold">
                     <CameraIcon className="h-3.5 w-3.5" />
@@ -648,7 +749,9 @@ export const MeetingAssistant = () => {
                   {latestScreenObservation?.imageBase64 ? (
                     <img
                       alt="Last captured screen preview"
-                      src={`data:image/png;base64,${latestScreenObservation.imageBase64}`}
+                      src={`data:${
+                        latestScreenObservation.imageMediaType || "image/png"
+                      };base64,${latestScreenObservation.imageBase64}`}
                       className="mt-2 h-20 w-full rounded-sm border border-border/50 object-cover"
                     />
                   ) : null}
@@ -803,6 +906,7 @@ function formatCaptureTargetMethod(target: ScreenCaptureTarget) {
     target.imageWidth && target.imageHeight
       ? `image ${target.imageWidth}x${target.imageHeight}`
       : undefined,
+    target.optimizedForScreenContext ? "optimized" : undefined,
   ].filter(Boolean);
 
   return parts.join(" / ");
@@ -820,6 +924,17 @@ function formatCaptureCandidate(
 function formatTaskTimeout(minutes: number) {
   if (minutes >= 60) return `${minutes / 60}h`;
   return `${minutes}m`;
+}
+
+function formatTraceTitle(trace: MeetingTrace) {
+  const status = trace.status === "running" ? "running" : trace.status;
+  return `${trace.kind} / ${status} / ${formatTraceDuration(trace.durationMs)}`;
+}
+
+function formatTraceDuration(durationMs: number | undefined) {
+  if (durationMs === undefined) return "...";
+  if (durationMs < 1000) return `${durationMs}ms`;
+  return `${(durationMs / 1000).toFixed(1)}s`;
 }
 
 function formatScreenPromptSource(source: string) {

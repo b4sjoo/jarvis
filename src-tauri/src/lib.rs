@@ -29,6 +29,11 @@ fn get_app_version() -> String {
     env!("CARGO_PKG_VERSION").to_string()
 }
 
+#[tauri::command]
+fn write_meeting_trace_log(message: String) {
+    eprintln!("{}", message);
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let mut builder = tauri::Builder::default()
@@ -56,6 +61,7 @@ pub fn run() {
     let mut builder = builder
         .invoke_handler(tauri::generate_handler![
             get_app_version,
+            write_meeting_trace_log,
             window::set_window_height,
             window::open_dashboard,
             window::toggle_dashboard,

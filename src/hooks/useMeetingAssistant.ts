@@ -16,6 +16,7 @@ import {
   MeetingPrivacyMode,
   MeetingContextManager,
   MeetingSetupWarning,
+  MeetingTraceStore,
   ScreenObservation,
   base64WavToBlob,
   captureScreenObservation,
@@ -66,12 +67,14 @@ const INITIAL_STATE: MeetingAssistantState = {
   screenObservations: [],
   latestSuggestion: null,
   partialSuggestion: "",
+  traces: [],
   error: null,
   audioStatus: null,
   settings: {
     screenContextEnabled: false,
     privacyMode: "text-to-cloud",
     activeScreenTaskTimeoutMinutes: DEFAULT_ACTIVE_SCREEN_TASK_TIMEOUT_MINUTES,
+    debugMode: false,
   },
 };
 
@@ -100,6 +103,10 @@ function readMeetingAssistantSettings(): MeetingAssistantSettings {
         normalizeActiveScreenTaskTimeoutMinutes(
           parsed.activeScreenTaskTimeoutMinutes
         ),
+      debugMode:
+        typeof parsed.debugMode === "boolean"
+          ? parsed.debugMode
+          : DEFAULT_MEETING_ASSISTANT_SETTINGS.debugMode,
     };
   } catch {
     return DEFAULT_MEETING_ASSISTANT_SETTINGS;
@@ -180,10 +187,12 @@ interface RunAdvisorOptions {
   mode?: AdvisorRequestMode;
   currentSuggestion?: string;
   clarifyingFeedback?: ClarifyingQuestionFeedback;
+  traceId?: string;
 }
 
 interface CaptureScreenContextOptions {
   onCaptured?: () => void;
+  requestedAt?: number;
 }
 
 export function useMeetingAssistant() {
@@ -202,10 +211,12 @@ export function useMeetingAssistant() {
   }));
   const contextManagerRef = useRef(new MeetingContextManager());
   const advisorEngineRef = useRef(new AdvisorEngine());
+  const traceStoreRef = useRef(new MeetingTraceStore());
   const activeRef = useRef(false);
   const latestScreenHashRef = useRef<string | undefined>(undefined);
   const advisorDebounceTimerRef = useRef<number | null>(null);
   const screenAnalysisAbortRef = useRef<AbortController | null>(null);
+  const screenCaptureInFlightRef = useRef(false);
 
   const sttProvider = useMemo(
     () =>
@@ -264,6 +275,10 @@ export function useMeetingAssistant() {
       window.clearTimeout(advisorDebounceTimerRef.current);
       advisorDebounceTimerRef.current = null;
     }
+  }, []);
+
+  const clearTraces = useCallback(() => {
+    traceStoreRef.current.clear();
   }, []);
 
   const updateSettings = useCallback(
@@ -340,6 +355,17 @@ export function useMeetingAssistant() {
     [updateSettings]
   );
 
+  const setDebugMode = useCallback(
+    (debugMode: boolean) => {
+      traceStoreRef.current.setDebugEnabled(debugMode);
+      updateSettings((previous) => ({
+        ...previous,
+        debugMode,
+      }));
+    },
+    [updateSettings]
+  );
+
   const clearActiveScreenTask = useCallback(() => {
     clearAdvisorDebounce();
     advisorEngineRef.current.cancelCurrentRequest();
@@ -384,8 +410,15 @@ export function useMeetingAssistant() {
   const runAdvisor = useCallback(async (options: RunAdvisorOptions = {}) => {
     const mode = options.mode ?? "live";
     const force = options.force ?? false;
+    const traceId = options.traceId;
+    let advisorStepId: string | undefined;
 
-    if (!activeRef.current && !force) return;
+    if (!activeRef.current && !force) {
+      if (traceId) {
+        traceStoreRef.current.finishTrace(traceId, "cancelled");
+      }
+      return;
+    }
 
     const promptContext = contextManagerRef.current.buildAdvisorPromptContext();
     const latestTurn = promptContext.latestTurn;
@@ -399,10 +432,22 @@ export function useMeetingAssistant() {
       !force &&
       !advisorEngineRef.current.shouldRequestSuggestion(latestTurn)
     ) {
+      if (traceId) {
+        const skippedStepId = traceStoreRef.current.startStep(
+          traceId,
+          "Advisor skipped",
+          { reason: "turn did not require suggestion" }
+        );
+        traceStoreRef.current.finishStep(traceId, skippedStepId, "success");
+        traceStoreRef.current.finishTrace(traceId, "success");
+      }
       return;
     }
 
     if (force && !hasContext && !options.currentSuggestion?.trim()) {
+      if (traceId) {
+        traceStoreRef.current.finishTrace(traceId, "error", NO_MEETING_CONTEXT_MESSAGE);
+      }
       setState((previous) => ({
         ...previous,
         error: NO_MEETING_CONTEXT_MESSAGE,
@@ -411,6 +456,9 @@ export function useMeetingAssistant() {
     }
 
     if (!aiProvider) {
+      if (traceId) {
+        traceStoreRef.current.finishTrace(traceId, "error", MISSING_AI_MESSAGE);
+      }
       setState((previous) => ({
         ...previous,
         status: activeRef.current ? "listening" : previous.status,
@@ -442,6 +490,44 @@ export function useMeetingAssistant() {
         selectedProvider: selectedAIProvider,
         currentSuggestion: options.currentSuggestion,
         clarifyingFeedback: options.clarifyingFeedback,
+        trace: traceId
+          ? {
+              onRequest: (input) => {
+                traceStoreRef.current.recordInput(
+                  traceId,
+                  "advisor model input",
+                  formatTraceModelInput(input.systemPrompt, input.userMessage),
+                  {
+                    providerId: input.providerId,
+                    mode: input.mode,
+                    imageCount: input.imageCount,
+                  }
+                );
+                advisorStepId = traceStoreRef.current.startStep(
+                  traceId,
+                  "Advisor model response",
+                  {
+                    providerId: input.providerId,
+                    mode: input.mode,
+                    promptChars:
+                      input.systemPrompt.length + input.userMessage.length,
+                  }
+                );
+              },
+              onFirstToken: () => {
+                traceStoreRef.current.updateMetadata(traceId, {
+                  advisorFirstTokenAt: Date.now(),
+                });
+              },
+              onComplete: (output) => {
+                traceStoreRef.current.recordOutput(
+                  traceId,
+                  "advisor raw output",
+                  output
+                );
+              },
+            }
+          : undefined,
       })) {
         finalContent = event.accumulated;
         setState((previous) => ({
@@ -496,7 +582,23 @@ export function useMeetingAssistant() {
         ),
         activeScreenTask: contextState.activeScreenTask,
       }));
+      if (traceId) {
+        traceStoreRef.current.finishStep(traceId, advisorStepId, "success", {
+          outputChars: finalContent.length,
+        });
+        traceStoreRef.current.finishTrace(traceId, "success");
+      }
     } catch (error) {
+      if (traceId) {
+        traceStoreRef.current.finishStep(
+          traceId,
+          advisorStepId,
+          "error",
+          undefined,
+          error
+        );
+        traceStoreRef.current.finishTrace(traceId, "error", error);
+      }
       if (!activeRef.current && !force) return;
 
       setState((previous) => ({
@@ -515,19 +617,28 @@ export function useMeetingAssistant() {
     }
   }, [aiProvider, selectedAIProvider, state.settings, state.status]);
 
-  const scheduleAdvisor = useCallback((mode: AdvisorRequestMode = "live") => {
+  const scheduleAdvisor = useCallback((
+    mode: AdvisorRequestMode = "live",
+    traceId?: string
+  ) => {
     if (!activeRef.current) return;
 
     clearAdvisorDebounce();
     advisorDebounceTimerRef.current = window.setTimeout(() => {
       advisorDebounceTimerRef.current = null;
-      void runAdvisor({ mode });
+      void runAdvisor({ mode, traceId });
     }, ADVISOR_DEBOUNCE_MS);
   }, [clearAdvisorDebounce, runAdvisor]);
 
   const handleSpeechDetected = useCallback(
     async (base64Audio: string) => {
       if (!activeRef.current) return;
+
+      const trace = traceStoreRef.current.startTrace("voice", {
+        audioBase64Chars: base64Audio.length,
+      });
+      let audioBlobStepId: string | undefined;
+      let sttStepId: string | undefined;
 
       if (!sttProvider) {
         activeRef.current = false;
@@ -546,6 +657,7 @@ export function useMeetingAssistant() {
           console.warn("Failed to stop meeting audio capture", error);
         }
 
+        traceStoreRef.current.finishTrace(trace.id, "error", MISSING_STT_MESSAGE);
         setState((previous) => ({
           ...previous,
           status: "error",
@@ -563,7 +675,34 @@ export function useMeetingAssistant() {
       }));
 
       try {
+        audioBlobStepId = traceStoreRef.current.startStep(
+          trace.id,
+          "Audio blob created"
+        );
         const audio = base64WavToBlob(base64Audio);
+        traceStoreRef.current.finishStep(trace.id, audioBlobStepId, "success", {
+          audioBytes: audio.size,
+          audioType: audio.type,
+        });
+
+        traceStoreRef.current.recordInput(
+          trace.id,
+          "stt input metadata",
+          "Raw audio bytes are not stored in traces.",
+          {
+            providerId: sttProvider.id,
+            audioBytes: audio.size,
+            audioType: audio.type,
+          }
+        );
+        sttStepId = traceStoreRef.current.startStep(
+          trace.id,
+          "STT request",
+          {
+            providerId: sttProvider.id,
+            audioBytes: audio.size,
+          }
+        );
         const turn = await withTimeout(
           transcribeMeetingAudio({
             audio,
@@ -573,8 +712,12 @@ export function useMeetingAssistant() {
           STT_TIMEOUT_MS,
           "Speech-to-text timed out. Jarvis is still listening."
         );
+        traceStoreRef.current.finishStep(trace.id, sttStepId, "success", {
+          transcriptChars: turn?.text.length ?? 0,
+        });
 
         if (!turn) {
+          traceStoreRef.current.finishTrace(trace.id, "success");
           setState((previous) => ({
             ...previous,
             status: activeRef.current ? "listening" : "idle",
@@ -582,8 +725,22 @@ export function useMeetingAssistant() {
           return;
         }
 
+        traceStoreRef.current.recordOutput(
+          trace.id,
+          "stt raw output",
+          turn.text,
+          { turnId: turn.id }
+        );
         contextManagerRef.current.addTranscriptTurn(turn);
         const contextState = contextManagerRef.current.getState();
+        const appendStepId = traceStoreRef.current.startStep(
+          trace.id,
+          "Transcript appended",
+          { turnId: turn.id }
+        );
+        traceStoreRef.current.finishStep(trace.id, appendStepId, "success", {
+          transcriptTurns: contextState.transcriptTurns.length,
+        });
 
         setState((previous) => ({
           ...previous,
@@ -592,10 +749,33 @@ export function useMeetingAssistant() {
           activeScreenTask: contextState.activeScreenTask,
         }));
 
+        const debounceStepId = traceStoreRef.current.startStep(
+          trace.id,
+          "Advisor debounce scheduled",
+          { debounceMs: ADVISOR_DEBOUNCE_MS }
+        );
+        traceStoreRef.current.finishStep(trace.id, debounceStepId, "success");
         scheduleAdvisor(
-          contextState.activeScreenTask ? "screen-anchored" : "live"
+          contextState.activeScreenTask ? "screen-anchored" : "live",
+          trace.id
         );
       } catch (error) {
+        traceStoreRef.current.finishStep(
+          trace.id,
+          audioBlobStepId,
+          "error",
+          undefined,
+          error
+        );
+        traceStoreRef.current.finishStep(
+          trace.id,
+          sttStepId,
+          "error",
+          undefined,
+          error
+        );
+        traceStoreRef.current.finishTrace(trace.id, "error", error);
+
         if (!activeRef.current) return;
 
         setState((previous) => ({
@@ -764,9 +944,25 @@ export function useMeetingAssistant() {
       source: ScreenObservation["source"] = "full-screen",
       options: CaptureScreenContextOptions = {}
     ) => {
+      if (screenCaptureInFlightRef.current) {
+        return;
+      }
+
+      screenCaptureInFlightRef.current = true;
+      const trace = traceStoreRef.current.startTrace(
+        "screen",
+        {
+          source,
+          privacyMode: state.settings.privacyMode,
+          screenContextEnabled: state.settings.screenContextEnabled,
+        },
+        options.requestedAt
+      );
       let analysisController: AbortController | null = null;
       const returnStatus = state.status;
       const idleReturnStatus = returnStatus === "paused" ? "paused" : "idle";
+      let captureStepId: string | undefined;
+      let modelStepId: string | undefined;
 
       try {
         if (
@@ -777,16 +973,45 @@ export function useMeetingAssistant() {
             ...previous,
             error: SCREEN_CONTEXT_DISABLED_MESSAGE,
           }));
+          traceStoreRef.current.finishTrace(
+            trace.id,
+            "error",
+            SCREEN_CONTEXT_DISABLED_MESSAGE
+          );
           return;
         }
 
+        captureStepId = traceStoreRef.current.startStep(
+          trace.id,
+          "Screen capture command",
+          { target: "active-window" }
+        );
         const observation = await captureScreenObservation({
           source,
           previousHash: latestScreenHashRef.current,
         });
+        traceStoreRef.current.finishStep(trace.id, captureStepId, "success", {
+          changed: observation.changed,
+          hash: observation.hash,
+          imageChars: observation.imageBase64?.length ?? 0,
+          imageMediaType: observation.imageMediaType,
+          captureTarget: observation.captureTarget,
+        });
         options.onCaptured?.();
 
         latestScreenHashRef.current = observation.hash;
+        traceStoreRef.current.recordOutput(
+          trace.id,
+          "capture metadata",
+          formatTraceMetadata({
+            observationId: observation.id,
+            changed: observation.changed,
+            hash: observation.hash,
+            captureTarget: observation.captureTarget,
+            imageBase64Chars: observation.imageBase64?.length ?? 0,
+            imageMediaType: observation.imageMediaType,
+          })
+        );
 
         contextManagerRef.current.addScreenObservation(observation);
         const contextState = contextManagerRef.current.getState();
@@ -795,10 +1020,12 @@ export function useMeetingAssistant() {
           ...previous,
           status: "thinking",
           screenObservations: contextState.screenObservations,
+          partialSuggestion: "",
           error: null,
         }));
 
         if (!aiProvider) {
+          traceStoreRef.current.finishTrace(trace.id, "error", MISSING_AI_MESSAGE);
           setState((previous) => ({
             ...previous,
             status: activeRef.current ? "listening" : idleReturnStatus,
@@ -808,6 +1035,11 @@ export function useMeetingAssistant() {
         }
 
         if (!aiProvider.curl.includes("{{IMAGE}}")) {
+          traceStoreRef.current.finishTrace(
+            trace.id,
+            "error",
+            MISSING_VISION_MESSAGE
+          );
           setState((previous) => ({
             ...previous,
             status: activeRef.current ? "listening" : idleReturnStatus,
@@ -832,12 +1064,74 @@ export function useMeetingAssistant() {
             ),
             autoPrompt,
             signal: analysisController.signal,
+            trace: {
+              onRequest: (input) => {
+                traceStoreRef.current.recordInput(
+                  trace.id,
+                  "screen model input",
+                  formatTraceModelInput(input.systemPrompt, input.userMessage),
+                  {
+                    providerId: input.providerId,
+                    mode: input.mode,
+                    imageCount: input.imageCount,
+                    imageMediaType: input.imageMediaType,
+                    imageBase64Stored: false,
+                  }
+                );
+                modelStepId = traceStoreRef.current.startStep(
+                  trace.id,
+                  "Screen model response",
+                  {
+                    providerId: input.providerId,
+                    promptChars:
+                      input.systemPrompt.length + input.userMessage.length,
+                    imageCount: input.imageCount,
+                    imageMediaType: input.imageMediaType,
+                  }
+                );
+              },
+              onFirstToken: () => {
+                traceStoreRef.current.updateMetadata(trace.id, {
+                  screenFirstTokenAt: Date.now(),
+                });
+              },
+              onComplete: (output) => {
+                traceStoreRef.current.recordOutput(
+                  trace.id,
+                  "screen model raw output",
+                  output
+                );
+              },
+            },
+            onPartialContent: (partialContent) => {
+              if (screenAnalysisAbortRef.current !== analysisController) {
+                return;
+              }
+
+              setState((previous) => ({
+                ...previous,
+                status: "thinking",
+                partialSuggestion: partialContent,
+              }));
+            },
           }),
           SCREEN_ANALYSIS_TIMEOUT_MS,
           "Screen context analysis timed out."
         );
 
-        if (screenAnalysisAbortRef.current !== analysisController) return;
+        if (screenAnalysisAbortRef.current !== analysisController) {
+          traceStoreRef.current.finishStep(
+            trace.id,
+            modelStepId,
+            "cancelled"
+          );
+          traceStoreRef.current.finishTrace(trace.id, "cancelled");
+          return;
+        }
+
+        traceStoreRef.current.finishStep(trace.id, modelStepId, "success", {
+          outputChars: screenTaskContent.length,
+        });
         screenAnalysisAbortRef.current = null;
 
         contextManagerRef.current.updateScreenObservation(observation.id, {
@@ -875,6 +1169,14 @@ export function useMeetingAssistant() {
         }
 
         updatedContextState = contextManagerRef.current.getState();
+        const uiStepId = traceStoreRef.current.startStep(
+          trace.id,
+          "Meeting Assistant state updated",
+          {
+            activeScreenTaskId: updatedContextState.activeScreenTask?.id,
+            suggestionKind: screenTaskContent.trim() ? "screen-task" : "silent",
+          }
+        );
 
         setState((previous) => ({
           ...previous,
@@ -903,13 +1205,41 @@ export function useMeetingAssistant() {
               },
           error: null,
         }));
+        traceStoreRef.current.finishStep(trace.id, uiStepId, "success");
+        traceStoreRef.current.finishTrace(trace.id, "success");
       } catch (error) {
         analysisController?.abort();
         if (screenAnalysisAbortRef.current === analysisController) {
           screenAnalysisAbortRef.current = null;
         }
 
-        if (error instanceof Error && error.name === "AbortError") return;
+        if (error instanceof Error && error.name === "AbortError") {
+          traceStoreRef.current.finishStep(
+            trace.id,
+            modelStepId,
+            "cancelled",
+            undefined,
+            error
+          );
+          traceStoreRef.current.finishTrace(trace.id, "cancelled", error);
+          return;
+        }
+
+        traceStoreRef.current.finishStep(
+          trace.id,
+          captureStepId,
+          "error",
+          undefined,
+          error
+        );
+        traceStoreRef.current.finishStep(
+          trace.id,
+          modelStepId,
+          "error",
+          undefined,
+          error
+        );
+        traceStoreRef.current.finishTrace(trace.id, "error", error);
 
         setState((previous) => ({
           ...previous,
@@ -919,6 +1249,8 @@ export function useMeetingAssistant() {
               ? error.message
               : "Failed to capture screen context.",
         }));
+      } finally {
+        screenCaptureInFlightRef.current = false;
       }
     },
     [
@@ -980,6 +1312,19 @@ export function useMeetingAssistant() {
   );
 
   useEffect(() => {
+    traceStoreRef.current.subscribe((traces) => {
+      setState((previous) => ({
+        ...previous,
+        traces,
+      }));
+    });
+  }, []);
+
+  useEffect(() => {
+    traceStoreRef.current.setDebugEnabled(state.settings.debugMode);
+  }, [state.settings.debugMode]);
+
+  useEffect(() => {
     let unlistenSpeech: (() => void) | undefined;
 
     const setupListeners = async () => {
@@ -1022,11 +1367,13 @@ export function useMeetingAssistant() {
     setPrivacyMode,
     setScreenContextEnabled,
     setActiveScreenTaskTimeoutMinutes,
+    setDebugMode,
     start,
     pause,
     resume,
     stop,
     clearActiveScreenTask,
+    clearTraces,
     captureScreenContext,
     regenerateSuggestion,
     makeSuggestionShorter,
@@ -1054,4 +1401,19 @@ function formatRecentTranscript(
       return `${speaker}: ${turn.text}`;
     })
     .join("\n");
+}
+
+function formatTraceModelInput(systemPrompt: string, userMessage: string) {
+  return [
+    "<system_prompt>",
+    systemPrompt,
+    "</system_prompt>",
+    "<user_message>",
+    userMessage,
+    "</user_message>",
+  ].join("\n");
+}
+
+function formatTraceMetadata(metadata: Record<string, unknown>) {
+  return JSON.stringify(metadata, null, 2);
 }

@@ -3,6 +3,7 @@ import { fetchAIResponse } from "@/lib/functions";
 import { TYPE_PROVIDER } from "@/types";
 import {
   ScreenCaptureTarget,
+  MeetingModelTraceCallbacks,
   ScreenObservation,
   ScreenTaskKind,
   SelectedProviderState,
@@ -23,6 +24,7 @@ export interface SummarizeScreenObservationOptions {
   selectedProvider: SelectedProviderState;
   autoPrompt?: string;
   signal?: AbortSignal;
+  trace?: MeetingModelTraceCallbacks;
 }
 
 export interface SolveScreenAnchoredTaskOptions {
@@ -32,10 +34,13 @@ export interface SolveScreenAnchoredTaskOptions {
   recentTranscript?: string;
   autoPrompt?: string;
   signal?: AbortSignal;
+  trace?: MeetingModelTraceCallbacks;
+  onPartialContent?: (content: string) => void;
 }
 
 interface CaptureScreenContextResponse {
   imageBase64: string;
+  imageMediaType?: string;
   target: ScreenCaptureTarget;
 }
 
@@ -74,6 +79,7 @@ export async function captureScreenObservation({
     { target }
   );
   const imageBase64 = capture.imageBase64;
+  const imageMediaType = capture.imageMediaType || "image/png";
   const hash = hashBase64(imageBase64);
 
   return {
@@ -81,6 +87,7 @@ export async function captureScreenObservation({
     capturedAt: Date.now(),
     source,
     imageBase64,
+    imageMediaType,
     hash,
     changed: hash !== previousHash,
     captureTarget: capture.target,
@@ -93,6 +100,7 @@ export async function summarizeScreenObservation({
   selectedProvider,
   autoPrompt,
   signal,
+  trace,
 }: SummarizeScreenObservationOptions) {
   if (!observation.imageBase64) return "";
 
@@ -107,21 +115,48 @@ export async function summarizeScreenObservation({
   }
 
   let content = "";
+  let firstTokenSeen = false;
+  const userMessage = buildScreenContextUserMessage(autoPrompt);
+
+  trace?.onRequest?.({
+    systemPrompt: SCREEN_CONTEXT_SYSTEM_PROMPT,
+    userMessage,
+    imageCount: observation.imageBase64 ? 1 : 0,
+    imageMediaType: observation.imageMediaType || "image/png",
+    providerId: provider.id,
+    mode: "screen-task",
+  });
+
+  const imageInput = {
+    base64: observation.imageBase64,
+    mediaType: observation.imageMediaType || "image/png",
+  };
 
   for await (const chunk of fetchAIResponse({
     provider,
     selectedProvider,
     systemPrompt: SCREEN_CONTEXT_SYSTEM_PROMPT,
-    userMessage: buildScreenContextUserMessage(autoPrompt),
-    imagesBase64: [observation.imageBase64],
+    userMessage,
+    imagesBase64: [imageInput],
     signal,
   })) {
+    if (!firstTokenSeen) {
+      firstTokenSeen = true;
+      trace?.onFirstToken?.();
+    }
     content += chunk;
+  }
+
+  if (signal?.aborted) {
+    throw createAbortError();
   }
 
   const trimmed = content.trim();
 
-  return trimmed === "-" ? "" : trimmed;
+  const output = trimmed === "-" ? "" : trimmed;
+  trace?.onComplete?.(output);
+
+  return output;
 }
 
 export async function solveScreenAnchoredTask({
@@ -131,6 +166,8 @@ export async function solveScreenAnchoredTask({
   recentTranscript,
   autoPrompt,
   signal,
+  trace,
+  onPartialContent,
 }: SolveScreenAnchoredTaskOptions) {
   if (!observation.imageBase64) return "";
 
@@ -145,25 +182,53 @@ export async function solveScreenAnchoredTask({
   }
 
   let content = "";
+  let firstTokenSeen = false;
+  const userMessage = buildScreenTaskUserMessage({
+    observation,
+    recentTranscript,
+    autoPrompt,
+  });
+
+  trace?.onRequest?.({
+    systemPrompt: SCREEN_TASK_SYSTEM_PROMPT,
+    userMessage,
+    imageCount: observation.imageBase64 ? 1 : 0,
+    imageMediaType: observation.imageMediaType || "image/png",
+    providerId: provider.id,
+    mode: "screen-task",
+  });
+
+  const imageInput = {
+    base64: observation.imageBase64,
+    mediaType: observation.imageMediaType || "image/png",
+  };
 
   for await (const chunk of fetchAIResponse({
     provider,
     selectedProvider,
     systemPrompt: SCREEN_TASK_SYSTEM_PROMPT,
-    userMessage: buildScreenTaskUserMessage({
-      observation,
-      recentTranscript,
-      autoPrompt,
-    }),
-    imagesBase64: [observation.imageBase64],
+    userMessage,
+    imagesBase64: [imageInput],
     signal,
   })) {
+    if (!firstTokenSeen) {
+      firstTokenSeen = true;
+      trace?.onFirstToken?.();
+    }
     content += chunk;
+    onPartialContent?.(content);
+  }
+
+  if (signal?.aborted) {
+    throw createAbortError();
   }
 
   const trimmed = content.trim();
 
-  return trimmed === "-" ? "" : trimmed;
+  const output = trimmed === "-" ? "" : trimmed;
+  trace?.onComplete?.(output);
+
+  return output;
 }
 
 function buildScreenContextUserMessage(autoPrompt: string | undefined) {
@@ -179,6 +244,12 @@ function buildScreenContextUserMessage(autoPrompt: string | undefined) {
     "Describe only the visible screen. Do not say a colleague asked or means something unless that is visible in the screenshot.",
     "If there is no useful visible context, return a single dash.",
   ].join("\n");
+}
+
+function createAbortError() {
+  const error = new Error("Screen analysis cancelled.");
+  error.name = "AbortError";
+  return error;
 }
 
 function buildScreenTaskUserMessage({

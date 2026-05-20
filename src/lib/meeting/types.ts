@@ -27,6 +27,7 @@ export interface ScreenObservation {
   capturedAt: number;
   source: "full-screen" | "selection" | "hotkey";
   imageBase64?: string;
+  imageMediaType?: string;
   ocrText?: string;
   visualSummary?: string;
   analysisPromptSource?: ScreenObservationPromptSource;
@@ -52,8 +53,20 @@ export interface ScreenCaptureTarget {
   height: number;
   imageWidth?: number;
   imageHeight?: number;
+  originalImageWidth?: number;
+  originalImageHeight?: number;
+  optimizedForScreenContext?: boolean;
+  captureTimingsMs?: ScreenCaptureTimings;
   fallbackReason?: string;
   candidates?: ScreenCaptureCandidate[];
+}
+
+export interface ScreenCaptureTimings {
+  totalMs?: number;
+  windowLookupMs?: number;
+  imageCaptureMs?: number;
+  imageOptimizeMs?: number;
+  imageEncodeMs?: number;
 }
 
 export interface ScreenCaptureCandidate {
@@ -181,6 +194,20 @@ export interface MeetingAdvisorRequest {
   clarifyingFeedback?: ClarifyingQuestionFeedback;
   history?: Message[];
   signal?: AbortSignal;
+  trace?: MeetingModelTraceCallbacks;
+}
+
+export interface MeetingModelTraceCallbacks {
+  onRequest?: (input: {
+    systemPrompt: string;
+    userMessage: string;
+    imageCount: number;
+    imageMediaType?: string;
+    providerId?: string;
+    mode?: AdvisorRequestMode | "screen-task";
+  }) => void;
+  onFirstToken?: () => void;
+  onComplete?: (output: string) => void;
 }
 
 export interface MeetingAudioConfig {
@@ -214,6 +241,43 @@ export interface MeetingAssistantSettings {
   screenContextEnabled: boolean;
   privacyMode: MeetingPrivacyMode;
   activeScreenTaskTimeoutMinutes: number;
+  debugMode: boolean;
+}
+
+export type MeetingTraceKind = "screen" | "voice";
+
+export type MeetingTraceStatus = "running" | "success" | "error" | "cancelled";
+
+export interface MeetingTraceStep {
+  id: string;
+  name: string;
+  status: MeetingTraceStatus;
+  startedAt: number;
+  endedAt?: number;
+  durationMs?: number;
+  metadata?: Record<string, unknown>;
+  error?: string;
+}
+
+export interface MeetingTraceIO {
+  label: string;
+  value: string;
+  metadata?: Record<string, unknown>;
+  recordedAt: number;
+}
+
+export interface MeetingTrace {
+  id: string;
+  kind: MeetingTraceKind;
+  status: MeetingTraceStatus;
+  startedAt: number;
+  endedAt?: number;
+  durationMs?: number;
+  steps: MeetingTraceStep[];
+  inputs: MeetingTraceIO[];
+  outputs: MeetingTraceIO[];
+  metadata?: Record<string, unknown>;
+  error?: string;
 }
 
 export interface MeetingAssistantState {
@@ -221,6 +285,7 @@ export interface MeetingAssistantState {
   transcriptTurns: TranscriptTurn[];
   screenObservations: ScreenObservation[];
   activeScreenTask?: ActiveScreenTask;
+  traces: MeetingTrace[];
   latestSuggestion: AdvisorSuggestion | null;
   partialSuggestion: string;
   error: string | null;

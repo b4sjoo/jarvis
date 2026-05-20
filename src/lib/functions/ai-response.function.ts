@@ -4,6 +4,7 @@ import {
   extractVariables,
   getByPath,
   getStreamingContent,
+  ImageInput,
 } from "./common.function";
 import { Message, TYPE_PROVIDER } from "@/types";
 import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
@@ -48,7 +49,7 @@ export async function* fetchAIResponse(params: {
   systemPrompt?: string;
   history?: Message[];
   userMessage: string;
-  imagesBase64?: string[];
+  imagesBase64?: Array<string | ImageInput>;
   signal?: AbortSignal;
 }): AsyncIterable<string> {
   try {
@@ -136,6 +137,7 @@ export async function* fetchAIResponse(params: {
         ])
       ),
       SYSTEM_PROMPT: enhancedSystemPrompt || "",
+      IMAGE_MEDIA_TYPE: getFirstImageMediaType(imagesBase64),
     };
 
     bodyObj = deepVariableReplacer(bodyObj, allVariables);
@@ -279,4 +281,13 @@ export async function* fetchAIResponse(params: {
       }`
     );
   }
+}
+
+function getFirstImageMediaType(images: Array<string | ImageInput>) {
+  const firstImage = images[0];
+  if (typeof firstImage === "object" && firstImage?.mediaType) {
+    return firstImage.mediaType;
+  }
+
+  return "image/png";
 }
