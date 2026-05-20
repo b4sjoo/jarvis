@@ -24,6 +24,8 @@ import {
   extractScreenTaskQuestion,
   inferScreenTaskKind,
   inferScreenTaskLanguage,
+  parseMeetingTraceMetrics,
+  serializeMeetingTraceMetrics,
   solveScreenAnchoredTask,
   transcribeMeetingAudio,
 } from "@/lib/meeting";
@@ -34,6 +36,7 @@ const SCREEN_ANALYSIS_TIMEOUT_MS = 45_000;
 const DEFAULT_ACTIVE_SCREEN_TASK_TIMEOUT_MINUTES = 30;
 const MIN_ACTIVE_SCREEN_TASK_TIMEOUT_MINUTES = 5;
 const MAX_ACTIVE_SCREEN_TASK_TIMEOUT_MINUTES = 240;
+const TRACE_METRICS_PERSIST_DEBOUNCE_MS = 750;
 
 const MISSING_STT_MESSAGE =
   "Choose a speech-to-text provider in Dev Space before starting Jarvis.";
@@ -212,6 +215,9 @@ export function useMeetingAssistant() {
   const contextManagerRef = useRef(new MeetingContextManager());
   const advisorEngineRef = useRef(new AdvisorEngine());
   const traceStoreRef = useRef(new MeetingTraceStore());
+  const traceMetricsPersistTimerRef = useRef<number | null>(null);
+  const traceMetricsPersistenceReadyRef = useRef(false);
+  const lastTraceMetricsPayloadRef = useRef<string | null>(null);
   const activeRef = useRef(false);
   const latestScreenHashRef = useRef<string | undefined>(undefined);
   const advisorDebounceTimerRef = useRef<number | null>(null);
@@ -279,6 +285,28 @@ export function useMeetingAssistant() {
 
   const clearTraces = useCallback(() => {
     traceStoreRef.current.clear();
+  }, []);
+
+  const scheduleTraceMetricsPersistence = useCallback(() => {
+    if (!traceMetricsPersistenceReadyRef.current) return;
+
+    if (traceMetricsPersistTimerRef.current !== null) {
+      window.clearTimeout(traceMetricsPersistTimerRef.current);
+    }
+
+    traceMetricsPersistTimerRef.current = window.setTimeout(() => {
+      traceMetricsPersistTimerRef.current = null;
+      const payload = serializeMeetingTraceMetrics(
+        traceStoreRef.current.getPersistableTraces()
+      );
+
+      if (payload === lastTraceMetricsPayloadRef.current) return;
+      lastTraceMetricsPayloadRef.current = payload;
+
+      void invoke("write_meeting_trace_metrics", { payload }).catch((error) => {
+        console.warn("Failed to persist meeting trace metrics", error);
+      });
+    }, TRACE_METRICS_PERSIST_DEBOUNCE_MS);
   }, []);
 
   const updateSettings = useCallback(
@@ -1316,13 +1344,49 @@ export function useMeetingAssistant() {
   );
 
   useEffect(() => {
+    let cancelled = false;
+
+    const loadPersistedTraceMetrics = async () => {
+      try {
+        const payload = await invoke<string>("read_meeting_trace_metrics");
+        if (cancelled) return;
+
+        const traces = parseMeetingTraceMetrics(payload);
+        lastTraceMetricsPayloadRef.current = traces.length
+          ? serializeMeetingTraceMetrics(traces)
+          : null;
+        if (traces.length) {
+          traceStoreRef.current.hydrate(traces);
+        }
+      } catch (error) {
+        console.warn("Failed to load meeting trace metrics", error);
+      } finally {
+        if (!cancelled) {
+          traceMetricsPersistenceReadyRef.current = true;
+        }
+      }
+    };
+
+    void loadPersistedTraceMetrics();
+
+    return () => {
+      cancelled = true;
+      if (traceMetricsPersistTimerRef.current !== null) {
+        window.clearTimeout(traceMetricsPersistTimerRef.current);
+        traceMetricsPersistTimerRef.current = null;
+      }
+    };
+  }, []);
+
+  useEffect(() => {
     traceStoreRef.current.subscribe((traces) => {
       setState((previous) => ({
         ...previous,
         traces,
       }));
+      scheduleTraceMetricsPersistence();
     });
-  }, []);
+  }, [scheduleTraceMetricsPersistence]);
 
   useEffect(() => {
     traceStoreRef.current.setDebugEnabled(state.settings.debugMode);

@@ -114,6 +114,8 @@ Metrics:
 
 ## P0: Lightweight Latency And Quality Baseline
 
+Status: implemented for the first tuning pass. Debug Mode shows recent p50/p90 metrics, and sanitized metrics persist across app restarts for later local debugging.
+
 ### Problem
 
 Debug traces are useful per incident, but manual trace reading does not scale. We need a small aggregate view to understand whether tuning improves real usage.
@@ -127,7 +129,7 @@ Add an in-memory metrics summary over recent traces:
 - Image payload size and output length summaries.
 - Error/cancelled/success counts.
 
-Keep this local and debug-only at first.
+Keep this local and debug-only at first. Persist only sanitized metric records to disk so future debugging can compare app sessions without saving raw prompts, raw model outputs, screenshots, or audio.
 
 ### Expected Impact
 
@@ -139,7 +141,7 @@ Keep this local and debug-only at first.
 
 - Metrics UI can clutter the Meeting Assistant if exposed too aggressively.
 - Aggregates can hide scenario-specific failures.
-- Trace data should remain in memory unless export is explicitly requested later.
+- Raw trace data should remain in memory unless export is explicitly requested later; persisted history must stay sanitized.
 
 ### Validation
 
@@ -152,7 +154,10 @@ Metrics should answer:
 Candidate acceptance:
 
 - Debug Mode shows a compact `Recent latency` section.
+- Jarvis writes a local `meeting-trace-metrics.json` history and loads it on startup.
+- Persisted history includes timing, status, payload sizes, provider IDs, and sanitized capture metadata only.
 - No raw screenshots or audio are persisted.
+- No raw model/STT prompts or outputs are persisted in the metrics history.
 - Existing trace details remain available for deep debugging.
 
 ### Open Questions
@@ -160,6 +165,7 @@ Candidate acceptance:
 - Should the summary live inside Meeting Assistant Debug Mode or a separate dev/debug panel?
 - Should p50/p90 be calculated over the latest 10, 20, or configurable number of traces?
 - Do we need manual scenario labels before aggregation becomes useful?
+- Should persisted metrics keep only the latest 20 records, or should we eventually retain a longer rolling history for multi-day tuning? Decide after using the current metrics during future optimization tasks.
 
 ## P0/P1: Screen And Voice Fusion Hardening
 

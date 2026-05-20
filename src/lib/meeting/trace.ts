@@ -9,6 +9,8 @@ import { createMeetingId } from "./context-manager";
 import { invoke } from "@tauri-apps/api/core";
 
 const MAX_TRACE_ITEMS = 20;
+const DEFAULT_SUMMARY_WINDOW_SIZE = 20;
+const PERSISTED_TRACE_METRICS_VERSION = 1;
 
 export class MeetingTraceStore {
   private traces: MeetingTrace[] = [];
@@ -34,6 +36,18 @@ export class MeetingTraceStore {
 
   getTraces() {
     return this.traces.map(cloneTrace);
+  }
+
+  hydrate(traces: MeetingTrace[]) {
+    this.traces = traces
+      .map(sanitizeTraceForPersistence)
+      .sort((left, right) => right.startedAt - left.startedAt)
+      .slice(0, MAX_TRACE_ITEMS);
+    this.emit();
+  }
+
+  getPersistableTraces() {
+    return this.traces.map(sanitizeTraceForPersistence);
   }
 
   clear() {
@@ -231,6 +245,352 @@ export class MeetingTraceStore {
     console.info(message);
     void invoke("write_meeting_trace_log", { message }).catch(() => {});
   }
+}
+
+export interface MeetingTraceValueSummary {
+  count: number;
+  p50?: number;
+  p90?: number;
+}
+
+export interface MeetingTraceKindSummary {
+  total: number;
+  success: number;
+  error: number;
+  cancelled: number;
+  running: number;
+  totalDurationMs: MeetingTraceValueSummary;
+  captureDurationMs?: MeetingTraceValueSummary;
+  firstTokenLatencyMs?: MeetingTraceValueSummary;
+  modelDurationMs?: MeetingTraceValueSummary;
+  sttDurationMs?: MeetingTraceValueSummary;
+  advisorFirstTokenLatencyMs?: MeetingTraceValueSummary;
+  advisorDurationMs?: MeetingTraceValueSummary;
+  imagePayloadChars?: MeetingTraceValueSummary;
+  audioBytes?: MeetingTraceValueSummary;
+  outputChars?: MeetingTraceValueSummary;
+}
+
+export interface MeetingTraceSummary {
+  windowSize: number;
+  traceCount: number;
+  screen: MeetingTraceKindSummary;
+  voice: MeetingTraceKindSummary;
+}
+
+export interface PersistedMeetingTraceMetrics {
+  version: number;
+  savedAt: number;
+  traces: MeetingTrace[];
+}
+
+export function serializeMeetingTraceMetrics(traces: MeetingTrace[]) {
+  const payload: PersistedMeetingTraceMetrics = {
+    version: PERSISTED_TRACE_METRICS_VERSION,
+    savedAt: Date.now(),
+    traces: traces.map(sanitizeTraceForPersistence),
+  };
+
+  return JSON.stringify(payload, null, 2);
+}
+
+export function parseMeetingTraceMetrics(payload: string): MeetingTrace[] {
+  if (!payload.trim()) return [];
+
+  try {
+    const parsed = JSON.parse(payload) as Partial<PersistedMeetingTraceMetrics>;
+    if (!Array.isArray(parsed.traces)) return [];
+
+    return parsed.traces
+      .filter(isMeetingTraceLike)
+      .map(sanitizeTraceForPersistence)
+      .sort((left, right) => right.startedAt - left.startedAt)
+      .slice(0, MAX_TRACE_ITEMS);
+  } catch {
+    return [];
+  }
+}
+
+export function summarizeMeetingTraces(
+  traces: MeetingTrace[],
+  windowSize = DEFAULT_SUMMARY_WINDOW_SIZE
+): MeetingTraceSummary {
+  const recentTraces = traces.slice(0, windowSize);
+
+  return {
+    windowSize,
+    traceCount: recentTraces.length,
+    screen: summarizeTraceKind(
+      recentTraces.filter((trace) => trace.kind === "screen"),
+      "screen"
+    ),
+    voice: summarizeTraceKind(
+      recentTraces.filter((trace) => trace.kind === "voice"),
+      "voice"
+    ),
+  };
+}
+
+function summarizeTraceKind(
+  traces: MeetingTrace[],
+  kind: MeetingTraceKind
+): MeetingTraceKindSummary {
+  const summary: MeetingTraceKindSummary = {
+    total: traces.length,
+    success: traces.filter((trace) => trace.status === "success").length,
+    error: traces.filter((trace) => trace.status === "error").length,
+    cancelled: traces.filter((trace) => trace.status === "cancelled").length,
+    running: traces.filter((trace) => trace.status === "running").length,
+    totalDurationMs: summarizeValues(
+      traces.map((trace) => trace.durationMs).filter(isNumber)
+    ),
+  };
+
+  if (kind === "screen") {
+    summary.captureDurationMs = summarizeValues(
+      stepDurations(traces, "Screen capture command")
+    );
+    summary.firstTokenLatencyMs = summarizeValues(
+      traceMetadataLatencies(traces, "screenFirstTokenAt", "startedAt")
+    );
+    summary.modelDurationMs = summarizeValues(
+      stepDurations(traces, "Screen model response")
+    );
+    summary.imagePayloadChars = summarizeValues(
+      traces
+        .map((trace) => {
+          const captureStep = findStep(trace, "Screen capture command");
+          const imageChars = readNumber(captureStep?.metadata?.imageChars) ?? 0;
+          const focusImageChars =
+            readNumber(captureStep?.metadata?.focusImageChars) ?? 0;
+          const totalChars = imageChars + focusImageChars;
+          return totalChars > 0 ? totalChars : undefined;
+        })
+        .filter(isNumber)
+    );
+    summary.outputChars = summarizeValues(
+      stepMetadataValues(traces, "Screen model response", "outputChars")
+    );
+  } else {
+    summary.sttDurationMs = summarizeValues(stepDurations(traces, "STT request"));
+    summary.advisorFirstTokenLatencyMs = summarizeValues(
+      traceMetadataLatencies(traces, "advisorFirstTokenAt", "startedAt")
+    );
+    summary.advisorDurationMs = summarizeValues(
+      stepDurations(traces, "Advisor model response")
+    );
+    summary.audioBytes = summarizeValues(
+      stepMetadataValues(traces, "Audio blob created", "audioBytes")
+    );
+    summary.outputChars = summarizeValues(
+      stepMetadataValues(traces, "Advisor model response", "outputChars")
+    );
+  }
+
+  return summary;
+}
+
+function summarizeValues(values: number[]): MeetingTraceValueSummary {
+  const sortedValues = values
+    .filter((value) => Number.isFinite(value))
+    .sort((left, right) => left - right);
+
+  return {
+    count: sortedValues.length,
+    p50: percentile(sortedValues, 0.5),
+    p90: percentile(sortedValues, 0.9),
+  };
+}
+
+function percentile(sortedValues: number[], percentileValue: number) {
+  if (!sortedValues.length) return undefined;
+
+  const index = Math.min(
+    sortedValues.length - 1,
+    Math.max(0, Math.ceil(sortedValues.length * percentileValue) - 1)
+  );
+
+  return sortedValues[index];
+}
+
+function stepDurations(traces: MeetingTrace[], stepName: string) {
+  return traces
+    .map((trace) => findStep(trace, stepName)?.durationMs)
+    .filter(isNumber);
+}
+
+function stepMetadataValues(
+  traces: MeetingTrace[],
+  stepName: string,
+  metadataKey: string
+) {
+  return traces
+    .map((trace) => readNumber(findStep(trace, stepName)?.metadata?.[metadataKey]))
+    .filter(isNumber);
+}
+
+function traceMetadataLatencies(
+  traces: MeetingTrace[],
+  metadataKey: string,
+  baseKey: "startedAt"
+) {
+  return traces
+    .map((trace) => {
+      const timestamp = readNumber(trace.metadata?.[metadataKey]);
+      const baseTimestamp = trace[baseKey];
+
+      if (!timestamp || !baseTimestamp) return undefined;
+      return timestamp - baseTimestamp;
+    })
+    .filter(isNumber);
+}
+
+function findStep(trace: MeetingTrace, stepName: string) {
+  return trace.steps.find((step) => step.name === stepName);
+}
+
+function readNumber(value: unknown) {
+  return typeof value === "number" && Number.isFinite(value)
+    ? value
+    : undefined;
+}
+
+function isNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value);
+}
+
+function sanitizeTraceForPersistence(trace: MeetingTrace): MeetingTrace {
+  return {
+    id: trace.id,
+    kind: trace.kind,
+    status: trace.status,
+    startedAt: trace.startedAt,
+    endedAt: trace.endedAt,
+    durationMs: trace.durationMs,
+    steps: trace.steps.map((step) => ({
+      id: step.id,
+      name: step.name,
+      status: step.status,
+      startedAt: step.startedAt,
+      endedAt: step.endedAt,
+      durationMs: step.durationMs,
+      metadata: sanitizeMetadata(step.metadata),
+      error: step.error,
+    })),
+    inputs: [],
+    outputs: [],
+    metadata: sanitizeMetadata(trace.metadata),
+    error: trace.error,
+  };
+}
+
+function sanitizeMetadata(metadata: Record<string, unknown> | undefined) {
+  if (!metadata) return undefined;
+
+  const sanitized: Record<string, unknown> = {};
+
+  for (const [key, value] of Object.entries(metadata)) {
+    if (key === "captureTarget" && isRecord(value)) {
+      sanitized.captureTarget = sanitizeCaptureTargetMetadata(value);
+      continue;
+    }
+
+    if (isPersistableMetadataValue(value)) {
+      sanitized[key] = value;
+    }
+  }
+
+  return Object.keys(sanitized).length ? sanitized : undefined;
+}
+
+function sanitizeCaptureTargetMetadata(target: Record<string, unknown>) {
+  const sanitized: Record<string, unknown> = {};
+  const directKeys = [
+    "targetType",
+    "captureMethod",
+    "appName",
+    "monitorName",
+    "x",
+    "y",
+    "width",
+    "height",
+    "imageWidth",
+    "imageHeight",
+    "originalImageWidth",
+    "originalImageHeight",
+    "optimizedForScreenContext",
+    "fallbackReason",
+  ];
+
+  for (const key of directKeys) {
+    const value = target[key];
+    if (isPersistableMetadataValue(value)) {
+      sanitized[key] = value;
+    }
+  }
+
+  if (isRecord(target.captureTimingsMs)) {
+    sanitized.captureTimingsMs = sanitizeNumericRecord(target.captureTimingsMs);
+  }
+
+  if (isRecord(target.cursor)) {
+    sanitized.cursor = sanitizeNumericRecord(target.cursor, [
+      "insideTarget",
+      "source",
+    ]);
+  }
+
+  if (isRecord(target.focusRegion)) {
+    sanitized.focusRegion = sanitizeNumericRecord(target.focusRegion, [
+      "source",
+    ]);
+  }
+
+  return sanitized;
+}
+
+function sanitizeNumericRecord(
+  record: Record<string, unknown>,
+  extraKeys: string[] = []
+) {
+  const sanitized: Record<string, unknown> = {};
+
+  for (const [key, value] of Object.entries(record)) {
+    if (typeof value === "number" && Number.isFinite(value)) {
+      sanitized[key] = value;
+    }
+  }
+
+  for (const key of extraKeys) {
+    const value = record[key];
+    if (isPersistableMetadataValue(value)) {
+      sanitized[key] = value;
+    }
+  }
+
+  return sanitized;
+}
+
+function isPersistableMetadataValue(value: unknown) {
+  return (
+    typeof value === "string" ||
+    typeof value === "number" ||
+    typeof value === "boolean"
+  );
+}
+
+function isMeetingTraceLike(value: unknown): value is MeetingTrace {
+  if (!isRecord(value)) return false;
+  return (
+    typeof value.id === "string" &&
+    (value.kind === "screen" || value.kind === "voice") &&
+    typeof value.startedAt === "number" &&
+    Array.isArray(value.steps)
+  );
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
 function cloneTrace(trace: MeetingTrace): MeetingTrace {

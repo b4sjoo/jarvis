@@ -12,8 +12,12 @@ import { useMeetingAssistant, useShortcuts, useWindowResize } from "@/hooks";
 import type {
   ClarifyingQuestionAnswer,
   MeetingTrace,
+  MeetingTraceKindSummary,
+  MeetingTraceSummary,
+  MeetingTraceValueSummary,
   ScreenCaptureTarget,
 } from "@/lib/meeting";
+import { summarizeMeetingTraces } from "@/lib/meeting";
 import { cn } from "@/lib/utils";
 import { listen } from "@tauri-apps/api/event";
 import {
@@ -86,6 +90,10 @@ export const MeetingAssistant = () => {
     meeting.traces.find(
       (trace) => trace.status === "running" || trace.status === "success"
     ) ?? meeting.traces[0];
+  const traceSummary = useMemo(
+    () => summarizeMeetingTraces(meeting.traces),
+    [meeting.traces]
+  );
   const latestCaptureTarget = latestScreenObservation?.captureTarget;
   const displaySuggestion =
     meeting.partialSuggestion || meeting.latestSuggestion?.content || "";
@@ -646,6 +654,10 @@ export const MeetingAssistant = () => {
                 />
               </section>
 
+              {meeting.settings.debugMode && traceSummary.traceCount ? (
+                <TraceBaselinePanel summary={traceSummary} />
+              ) : null}
+
               {meeting.settings.debugMode && latestTrace ? (
                 <section className="min-w-0 overflow-hidden rounded-md border border-border/70 p-3">
                   <div className="mb-2 flex items-center justify-between gap-2">
@@ -894,6 +906,127 @@ const Metric = ({ label, value }: { label: string; value: number | string }) => 
   );
 };
 
+const TraceBaselinePanel = ({
+  summary,
+}: {
+  summary: MeetingTraceSummary;
+}) => {
+  return (
+    <section className="min-w-0 overflow-hidden rounded-md border border-border/70 p-3">
+      <div className="mb-2 flex min-w-0 items-center justify-between gap-2">
+        <div className="flex min-w-0 items-center gap-2 text-xs font-semibold">
+          <ClockIcon className="h-3.5 w-3.5" />
+          <span className="truncate">Recent latency baseline</span>
+        </div>
+        <span className="shrink-0 text-[10px] text-muted-foreground">
+          latest {summary.traceCount}/{summary.windowSize} traces, p50 / p90
+        </span>
+      </div>
+      <div className="grid gap-2 md:grid-cols-2">
+        <TraceKindSummaryCard
+          title="Screen"
+          emptyLabel="No screen traces yet"
+          summary={summary.screen}
+          rows={[
+            ["Status", formatTraceStatusCounts(summary.screen)],
+            [
+              "Capture",
+              formatTraceValueRange(summary.screen.captureDurationMs),
+            ],
+            [
+              "First token",
+              formatTraceValueRange(summary.screen.firstTokenLatencyMs),
+            ],
+            ["Model", formatTraceValueRange(summary.screen.modelDurationMs)],
+            ["Total", formatTraceValueRange(summary.screen.totalDurationMs)],
+            [
+              "Image payload",
+              formatTraceValueRange(
+                summary.screen.imagePayloadChars,
+                formatPayloadSize
+              ),
+            ],
+            [
+              "Output",
+              formatTraceValueRange(summary.screen.outputChars, formatChars),
+            ],
+          ]}
+        />
+        <TraceKindSummaryCard
+          title="Voice"
+          emptyLabel="No voice traces yet"
+          summary={summary.voice}
+          rows={[
+            ["Status", formatTraceStatusCounts(summary.voice)],
+            ["STT", formatTraceValueRange(summary.voice.sttDurationMs)],
+            [
+              "First token",
+              formatTraceValueRange(
+                summary.voice.advisorFirstTokenLatencyMs
+              ),
+            ],
+            [
+              "Advisor",
+              formatTraceValueRange(summary.voice.advisorDurationMs),
+            ],
+            ["Total", formatTraceValueRange(summary.voice.totalDurationMs)],
+            [
+              "Audio",
+              formatTraceValueRange(summary.voice.audioBytes, formatPayloadSize),
+            ],
+            [
+              "Output",
+              formatTraceValueRange(summary.voice.outputChars, formatChars),
+            ],
+          ]}
+        />
+      </div>
+    </section>
+  );
+};
+
+const TraceKindSummaryCard = ({
+  title,
+  emptyLabel,
+  summary,
+  rows,
+}: {
+  title: string;
+  emptyLabel: string;
+  summary: MeetingTraceKindSummary;
+  rows: Array<[string, string]>;
+}) => {
+  return (
+    <div className="min-w-0 rounded-sm bg-muted/40 p-2">
+      <div className="mb-1 flex items-center justify-between gap-2">
+        <div className="text-[10px] font-semibold uppercase text-muted-foreground">
+          {title}
+        </div>
+        <div className="text-[10px] text-muted-foreground">
+          {summary.total} traces
+        </div>
+      </div>
+      {summary.total ? (
+        <div className="space-y-1">
+          {rows.map(([label, value]) => (
+            <div
+              key={label}
+              className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] gap-2 text-[10px]"
+            >
+              <span className="min-w-0 truncate text-muted-foreground">
+                {label}
+              </span>
+              <span className="shrink-0 font-mono">{value}</span>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div className="text-[10px] text-muted-foreground">{emptyLabel}</div>
+      )}
+    </div>
+  );
+};
+
 const MEETING_MARKDOWN_CLASS =
   "text-xs leading-5 [&_code]:text-[10px] [&_li]:my-0.5 [&_ol]:my-1 [&_p]:my-0 [&_pre]:my-2 [&_pre]:max-h-72 [&_pre]:overflow-auto [&_strong]:font-semibold [&_ul]:my-1";
 
@@ -1002,6 +1135,38 @@ function formatTraceDuration(durationMs: number | undefined) {
   if (durationMs === undefined) return "...";
   if (durationMs < 1000) return `${durationMs}ms`;
   return `${(durationMs / 1000).toFixed(1)}s`;
+}
+
+function formatTraceStatusCounts(summary: MeetingTraceKindSummary) {
+  const parts = [
+    `${summary.success} ok`,
+    summary.cancelled ? `${summary.cancelled} cancel` : undefined,
+    summary.error ? `${summary.error} err` : undefined,
+    summary.running ? `${summary.running} run` : undefined,
+  ].filter(Boolean);
+
+  return parts.join(" / ");
+}
+
+function formatTraceValueRange(
+  summary: MeetingTraceValueSummary | undefined,
+  formatter: (value: number | undefined) => string = formatTraceDuration
+) {
+  if (!summary?.count) return "-";
+  return `${formatter(summary.p50)} / ${formatter(summary.p90)}`;
+}
+
+function formatPayloadSize(value: number | undefined) {
+  if (value === undefined) return "...";
+  if (value < 1024) return `${Math.round(value)}B`;
+  if (value < 1024 * 1024) return `${Math.round(value / 1024)}KB`;
+  return `${(value / (1024 * 1024)).toFixed(1)}MB`;
+}
+
+function formatChars(value: number | undefined) {
+  if (value === undefined) return "...";
+  if (value < 1000) return `${Math.round(value)}`;
+  return `${(value / 1000).toFixed(1)}k`;
 }
 
 function formatScreenPromptSource(source: string) {

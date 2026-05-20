@@ -3,6 +3,7 @@ mod db;
 mod shortcuts;
 mod window;
 use std::sync::{Arc, Mutex};
+use std::{fs, path::PathBuf};
 use tauri::{AppHandle, Manager, WebviewWindow};
 use tokio::task::JoinHandle;
 mod speaker;
@@ -11,7 +12,7 @@ use speaker::VadConfig;
 
 #[cfg(target_os = "macos")]
 #[allow(deprecated)]
-use tauri_nspanel::{WebviewWindowExt, cocoa::appkit::NSWindowCollectionBehavior, panel_delegate};
+use tauri_nspanel::{cocoa::appkit::NSWindowCollectionBehavior, panel_delegate, WebviewWindowExt};
 
 #[derive(Default)]
 pub struct AudioState {
@@ -32,6 +33,49 @@ fn get_app_version() -> String {
 #[tauri::command]
 fn write_meeting_trace_log(message: String) {
     eprintln!("{}", message);
+}
+
+const MEETING_TRACE_METRICS_FILE: &str = "meeting-trace-metrics.json";
+const MEETING_TRACE_METRICS_MAX_BYTES: usize = 2 * 1024 * 1024;
+
+#[tauri::command]
+fn read_meeting_trace_metrics(app: AppHandle) -> Result<String, String> {
+    let path = meeting_trace_metrics_path(&app)?;
+
+    match fs::read_to_string(path) {
+        Ok(contents) => Ok(contents),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
+        Err(error) => Err(format!("Failed to read meeting trace metrics: {}", error)),
+    }
+}
+
+#[tauri::command]
+fn write_meeting_trace_metrics(app: AppHandle, payload: String) -> Result<(), String> {
+    if payload.len() > MEETING_TRACE_METRICS_MAX_BYTES {
+        return Err("Meeting trace metrics payload is too large.".to_string());
+    }
+
+    let path = meeting_trace_metrics_path(&app)?;
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|error| {
+            format!(
+                "Failed to create meeting trace metrics directory: {}",
+                error
+            )
+        })?;
+    }
+
+    fs::write(path, payload)
+        .map_err(|error| format!("Failed to write meeting trace metrics: {}", error))
+}
+
+fn meeting_trace_metrics_path(app: &AppHandle) -> Result<PathBuf, String> {
+    let app_data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| format!("Failed to resolve app data directory: {}", error))?;
+
+    Ok(app_data_dir.join(MEETING_TRACE_METRICS_FILE))
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -62,6 +106,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_app_version,
             write_meeting_trace_log,
+            read_meeting_trace_metrics,
+            write_meeting_trace_metrics,
             window::set_window_height,
             window::open_dashboard,
             window::toggle_dashboard,

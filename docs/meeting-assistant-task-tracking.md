@@ -404,6 +404,7 @@ Exit criteria:
 | 2026-05-20 | Prioritize capture latency and payload size | Debug traces showed screen resize, image encoding, and oversized image payloads could dominate end-to-end latency, so meeting screen-context captures now use 2048px downscale, JPEG encoding, media-type-aware provider requests, and optimized dev builds for image-related crates |
 | 2026-05-20 | Render screen-task Answer first | Current answer and approach length is acceptable; the next UX improvement is display priority, so screen-task prompts and UI put `Answer` before supporting sections |
 | 2026-05-20 | Complete first focus-aware screen targeting pass | Cursor metadata alone and rectangular crops were insufficient; the accepted path sends a horizontal focus band as Image 1 and the full active-window screenshot as Image 2, with a direct-answer/language-selection contract and markdown/math renderer hardening |
+| 2026-05-20 | Persist sanitized trace metrics | Debug metrics are useful across restarts, but raw meeting content should stay out of disk history; persist timing/status/payload metadata only and keep revisiting metric quality during later tuning tasks |
 
 ## Validation Snapshot
 
@@ -422,10 +423,13 @@ Last validated: 2026-05-20.
 - User validation confirms the first cursor/focus-aware targeting pass now chooses the intended question and visible language in normal cases, even when the cursor is only near the relevant area.
 - Known boundary: if the cursor is deliberately placed on a clear distractor such as another question's horizontal row, answering that distractor is expected.
 - User validation confirms markdown emphasis and common complexity math now render readably in Meeting Assistant sections.
+- First lightweight baseline implementation adds Debug Mode p50/p90 summaries for recent screen and voice traces.
+- Baseline metrics now persist sanitized local history across app restarts without saving raw prompts, raw model outputs, screenshots, or audio.
+- User validation confirms persisted metrics reload correctly after restarting Jarvis and can be read back for per-run debugging.
 
 ## Immediate Next Tasks
 
-1. Add lightweight aggregate latency and quality baselines so repeated tuning changes can be compared without reading raw traces one by one.
-2. Keep OCR plus cursor-nearest text-block extraction as a later fallback only if explicit distractor-row cases become important.
-3. Continue mock-meeting validation with Zoom first, then Google Meet and Teams.
-4. Keep Knowledge / Memory Base deferred until trace baselines and screen/voice fusion are more stable.
+1. Use persisted metrics during the next optimization tasks and revisit whether the fields/window size are sufficient.
+2. Decide whether the persisted metrics window should stay at latest 20 traces or become configurable after more data accumulates.
+3. Keep OCR plus cursor-nearest text-block extraction as a later fallback only if explicit distractor-row cases become important.
+4. Continue mock-meeting validation with Zoom first, then Google Meet and Teams.

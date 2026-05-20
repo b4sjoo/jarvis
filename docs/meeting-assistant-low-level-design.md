@@ -471,6 +471,8 @@ MVP behavior:
 - Keep Debug Mode off by default so the meeting UI stays focused during normal use.
 - Expose the latest traces and last capture details in the Meeting Assistant panel only when Debug Mode is enabled.
 - Emit timestamped terminal trace logs in Debug Mode, including trace lifecycle events and step durations.
+- Persist sanitized trace metrics to the local app data directory as `meeting-trace-metrics.json` and load them on startup so latency baselines survive app restarts.
+- Persisted metrics exclude raw prompts, raw model/STT outputs, screenshots, and audio. They keep status, durations, provider IDs, payload sizes, output lengths, and sanitized capture metadata.
 - Treat screen capture as a single-flight workflow: debounce repeated custom shortcut events, ignore duplicate hotkey calls while a capture is running, and mark aborted model steps as `cancelled` rather than successful empty outputs.
 - Downscale meeting screen-context images to a 2048px long edge and encode them as JPEG so model payloads stay small while preserving readable technical text.
 - Use a low-latency image path for meeting screen-context captures; live response latency is more important than lossless screenshots in this workflow. The separate manual screenshot path still uses PNG, and the Tauri dev profile optimizes image-related crates so local testing reflects real meeting-time performance more closely.
