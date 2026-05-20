@@ -105,6 +105,8 @@ Behavior:
 - Captures screen observations manually from the overlay or the meeting screen-context hotkey, preferring the frontmost active window for meeting context.
 - For explicit screen captures, treats the visible technical question as the primary task and produces a structured answer directly from the vision-capable provider.
 - Uses later transcript turns as clarification, modification, or follow-up context for the active screen task.
+- Treats the target live scenario as an interview-like task session: one-on-one, task blocks last roughly 15-30 minutes, the other speaker usually provides questions or constraints, and the user is usually solving.
+- Supports the product concept that a task block may be screen-seeded, voice-seeded, or mixed, even though the current code still uses `ActiveScreenTask` as the concrete stored task type.
 - Generates short suggestions when a new colleague turn is detected and no active screen task is in focus.
 - Allows manual suggestion refinement through regenerate and make-shorter actions.
 
@@ -213,6 +215,8 @@ interface ActiveScreenTask {
 
 `ActiveScreenTask` starts on explicit screen capture. It anchors later audio turns so the advisor treats speech as clarification, modification, or follow-up context for the visible technical question. New captures replace the active task. The task can be cleared manually, clears when the meeting assistant stops, and expires after a configurable inactivity timeout. The default is 30 minutes of inactivity, long enough for a real technical discussion but short enough to avoid stale task carryover across unrelated meeting topics.
 
+Conceptually, the product is moving toward `ActiveMeetingTask`: a task session may be created by a screen capture, a clear voice-only technical question, or a mix of both. The first strong task signal creates the task; later screen or voice signals steer it. The first implementation should avoid a large type migration and instead improve prompt-level behavior around screen-seeded, voice-seeded, and mixed task blocks.
+
 Initial user feedback on the screen-anchored implementation is positive. The remaining design risk is less about the core interaction model and more about focus selection, stale-task lifecycle, and broader meeting-scenario validation.
 
 ### 5.5 AdvisorSuggestion
@@ -306,6 +310,9 @@ MVP behavior:
 Future behavior:
 
 - Support streaming STT with partial and final results.
+- Keep transcription prompt behavior literal and non-answering. Promptable STT providers should preserve original language, code-mixing, technical terms, product names, abbreviations, and code tokens.
+- Use marker/sentinel stripping if a streaming transcription prompt needs fixed scaffolding that should not enter `TranscriptTurn.text`.
+- Buffer outgoing audio while a realtime provider connection is warming up, then flush in order when ready.
 - Add microphone capture as `speaker: "me"`.
 - Trigger advisor only when `them` turn ends.
 
@@ -414,6 +421,7 @@ Prompt output policy:
 - Include a clarifying question when confidence is low.
 - Avoid long essays.
 - For screen-anchored technical questions, use structured sections: `Question`, `Answer`, `Approach`, `Code`, `Complexity`, and `Clarifying question`.
+- Do not rely on STT to answer, classify task state, or rewrite speaker intent. The advisor owns reasoning; transcription owns literal speech text.
 
 ### 6.6 Overlay Store and UI
 
@@ -541,6 +549,8 @@ MVP:
 Future:
 
 - Add streaming STT provider abstraction.
+- Evaluate OpenAI Realtime-style transcription as a future low-latency provider path after prompt-level interview task fusion is validated.
+- Add partial/final transcript events, provider endpointing/manual commit, and transcript latency metrics if realtime STT is implemented.
 - Add local STT option.
 - Add local OCR option.
 - Add local LLM option for privacy mode.

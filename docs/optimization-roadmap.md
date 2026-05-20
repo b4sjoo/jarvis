@@ -169,42 +169,54 @@ Candidate acceptance:
 
 ## P0/P1: Screen And Voice Fusion Hardening
 
+See also: [interview-task-fusion-assignment-brief.md](interview-task-fusion-assignment-brief.md).
+
 ### Problem
 
-The current design treats screen as the primary task and voice as supplemental clarification. That is the right product direction, but the semantics of speech are still coarse.
+The current design treats screen as the primary task and voice as supplemental clarification. That is useful for screenshot-driven questions, but the real target scenario is narrower and more interview-like:
 
-In a real meeting, speech after a screenshot can mean:
+- One-on-one.
+- The other speaker is usually the interviewer, requester, or question owner.
+- The user is usually the solver.
+- Discussion is organized into 15-30 minute task blocks.
+- Most speech inside a block is relevant context, not random ambient chatter.
+- A task can be screen-seeded, voice-seeded, or mixed.
 
-- Add a constraint.
-- Ask a follow-up.
-- Change the target question.
-- Disagree with or correct the previous answer.
-- Be unrelated meeting chatter.
+This changes the design emphasis. Jarvis should not overfit to generic multi-person meeting classification. It should preserve task continuity while correctly interpreting new speech as constraints, follow-ups, corrections, or strong task-switch signals.
 
-Jarvis should distinguish these cases better.
+Important product principle:
+
+First strong task signal creates the task; later signals steer it.
+
+Strong task signals can be an explicit screen capture with a visible question, a clear voice-only technical question, or an explicit user action. Screen is not guaranteed to be continuously present.
 
 ### Proposed Direction
 
-Introduce a lightweight turn classifier before updating an active screen task:
+Do not start with a separate classifier or broad topic model. Start with prompt-level interview task fusion:
 
-- `clarification`: modifies the active task constraints.
-- `follow-up`: asks a new question about the same task.
-- `new-topic`: likely requires a new capture or clears active task influence.
-- `ambient`: should not change the active screen task.
+- If a screen task exists, default to treating later speech as relevant to that task unless there is a strong switch signal.
+- If no screen task exists and the latest transcript is a clear technical question, handle it as a voice-seeded task-like moment.
+- If speech adds a constraint, revise the current answer or approach.
+- If speech asks a follow-up, answer the current follow-up without fully re-solving unless needed.
+- If speech appears to introduce a new task, ask a click-answerable confirmation or suggest recapture; do not automatically clear context in the first implementation.
+- If speech is low-value chatter, stay quiet or produce a very low-friction response.
 
-Start as prompt-only logic inside the advisor request. Move to a separate classifier only if traces show repeated mistakes.
+Keep the existing `ActiveScreenTask` type for now. Conceptually document an `ActiveMeetingTask`, but defer a full data-model rename until prompt-level behavior proves valuable.
 
 ### Expected Impact
 
 - Fewer stale-context answers.
 - Better follow-up handling.
-- Less overreaction to unrelated speech.
+- Better support for pure voice interview questions.
+- Less overreaction to weak or ambiguous topic changes.
 
 ### Risks
 
 - Extra classification can add latency if implemented as a separate model call.
-- Prompt-only classification may be inconsistent.
+- Prompt-only task fusion may be inconsistent.
 - Misclassification could suppress useful follow-up context.
+- Voice-seeded tasks may be weaker than screen-seeded tasks because there is no visual source of truth.
+- Delaying the `ActiveMeetingTask` refactor may keep some naming mismatches in code.
 
 ### Validation
 
@@ -212,13 +224,18 @@ Scenario set:
 
 - Screen question plus spoken constraint.
 - Screen question plus spoken follow-up.
-- Screen question followed by unrelated meeting chat.
-- New question verbally introduced without a new screenshot.
+- Voice-only technical question with no screenshot.
+- Voice-seeded task plus spoken constraint.
+- Voice-seeded task followed by a screen capture.
+- Strong task-switch phrase such as "next question" or "let's move on".
+- Weakly related chatter inside a task block.
 
 Metrics:
 
 - Correct follow-up binding rate.
 - Stale active task incidents.
+- Voice-only useful answer rate.
+- Task-switch confirmation usefulness.
 - User-initiated clear task frequency.
 
 ### Open Questions
@@ -226,6 +243,98 @@ Metrics:
 - Should speech ever automatically clear an active screen task?
 - Should Jarvis ask a click-answerable clarification when it suspects topic switch?
 - Should transcript turns show whether they were bound to the active screen task?
+- When should we rename `ActiveScreenTask` to `ActiveMeetingTask` in code rather than docs only?
+- Should voice-seeded tasks be stored in the same lifecycle as screen-seeded tasks, or only influence prompt context in the first pass?
+
+## P1: Realtime Transcript Quality Optimization
+
+Status: documented from the local `brainwave` repo review. Do not implement before the prompt-level interview task fusion slice unless voice tests show transcript latency or cleanup quality is blocking.
+
+### Problem
+
+Jarvis voice quality depends on two different layers:
+
+- Transcription should produce literal, timely speech text.
+- The advisor should reason over task state and decide what help to show.
+
+If those layers blur, Jarvis can answer too early, rewrite the speaker's intent, translate code-mixed speech, or lose technical terms. If transcription is too slow, voice-only and follow-up task blocks become less useful even when the advisor prompt is good.
+
+### Brainwave Takeaways
+
+The local `brainwave` project is a useful reference for the voice pipeline:
+
+- It treats the realtime model as a transcript improver, not an assistant that answers questions.
+- Its prompt explicitly preserves language, code-mixing, jargon, product names, and technical terms.
+- It removes filler conservatively and outputs plain text.
+- It uses a fixed marker/sentinel around transcript output so UI code can strip prompt scaffolding.
+- It streams audio to a realtime provider, commits a turn, and receives text deltas.
+- It buffers audio until the realtime connection is ready.
+- It keeps replay/debug audio as a deliberate tool, not something Jarvis should persist by default.
+
+### Proposed Direction
+
+Keep this as a separate workstream from interview task fusion.
+
+P0 constraints for all voice work:
+
+- STT/transcript cleanup must be literal and non-answering.
+- Preserve original language and code-mixing.
+- Preserve technical terms, product names, abbreviations, and code tokens.
+- Do not infer hidden intent in the transcription layer.
+- Do not persist raw audio by default.
+
+P1 implementation candidates:
+
+- Add a transcript-cleanup prompt contract for providers that support promptable transcription.
+- Add a streaming STT provider interface with partial and final transcript events.
+- Evaluate an OpenAI Realtime transcription path using 24 kHz PCM, provider endpointing/manual commit, and text deltas.
+- Add transcript trace metrics for speech-end-to-final-transcript latency and partial-transcript latency.
+- Add sentinel/marker stripping so streaming transcript output cannot leak prompt scaffolding into the Meeting Assistant UI.
+
+P2 candidates:
+
+- Add opt-in debug replay for selected audio sessions.
+- Compare realtime cloud STT with local STT once local privacy mode becomes important.
+- Add transcript quality labels or manual corrections for repeated jargon errors.
+
+### Expected Impact
+
+- Better pure voice task support.
+- Faster follow-up recognition inside a task block.
+- Fewer errors on mixed Chinese/English or technical vocabulary.
+- Cleaner separation between what was said and what Jarvis recommends.
+
+### Risks
+
+- Realtime provider integration can become a large architecture task.
+- Streaming partials can create noisy advisor triggers if endpointing is weak.
+- Raw audio replay/debug creates privacy risk if enabled casually.
+- Provider-specific model names and APIs can change, so this work should be isolated behind the provider interface.
+
+### Validation
+
+Scenario set:
+
+- Voice-only technical question with code-mixed English and Chinese.
+- Spoken algorithm question with technical terms and abbreviations.
+- Follow-up constraint after a screen-seeded task.
+- Short utterance where filler removal should not change meaning.
+- Long 15-30 minute task block with several final transcript turns.
+
+Metrics:
+
+- Speech-end-to-final-transcript latency.
+- First partial transcript latency, if streaming exists.
+- Transcript correction rate for technical terms.
+- Missed follow-up binding incidents caused by late or poor transcript text.
+- Advisor false-trigger rate from partial transcripts.
+
+### Open Questions
+
+- Should realtime STT come before `ActiveMeetingTask` migration, or only after prompt-level fusion exposes a transcript bottleneck?
+- Should transcript cleanup be provider-specific, or should Jarvis add a separate local cleanup pass?
+- What is the minimum useful streaming interface: partial/final text only, or timestamps/confidence as well?
+- Should opt-in audio replay ever store raw audio on disk, or only in memory during a debug session?
 
 ## P1: Structured Screen Answer State
 
@@ -459,10 +568,11 @@ Avoid embeddings, semantic cache, and complex retrieval until there is a clear n
 1. Cursor and focus-aware screen capture.
 2. Lightweight latency and quality baseline.
 3. Screen and voice fusion hardening.
-4. Structured screen answer state.
-5. Response action ergonomics.
-6. Trace export and replay.
-7. Automatic screen observation.
-8. Knowledge and memory base.
+4. Realtime transcript quality optimization.
+5. Structured screen answer state.
+6. Response action ergonomics.
+7. Trace export and replay.
+8. Automatic screen observation.
+9. Knowledge and memory base.
 
-The recommended next implementation slice is either cursor/focus-aware capture or latency baseline. Cursor/focus improves answer correctness; latency baseline improves our ability to judge every later optimization.
+The recommended next implementation slice remains prompt-level interview task fusion. Realtime transcript quality should follow if voice-only tests show that transcript latency, transcript cleanup, or technical-term accuracy is now the main bottleneck.

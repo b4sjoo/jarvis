@@ -26,6 +26,7 @@ Current implementation status:
 - User validation confirms the active task lifecycle and emergency hide workflow are usable enough to move into tuning.
 - Cursor/focus-aware question and language selection has completed its first tuning pass; performance baselines and screen/voice fusion hardening remain in the tuning backlog.
 - The tuning backlog is expanded in `docs/optimization-roadmap.md` so review can happen one optimization at a time before implementation.
+- Brainwave has been reviewed as a voice-pipeline reference. Its main lesson is to keep transcription literal, language-preserving, and non-answering while leaving task reasoning inside the Meeting Assistant advisor/context layer.
 
 ## Milestone 0: Design Review and Scope Lock
 
@@ -288,7 +289,13 @@ Goal: improve real-time quality beyond current request/response STT.
 - [ ] Design streaming STT provider interface.
 - [ ] Add partial/final transcript model.
 - [ ] Evaluate cloud streaming STT candidates.
+- [ ] Evaluate OpenAI Realtime transcription as a possible future provider path.
+- [ ] Define a literal, non-answering transcript cleanup prompt contract for promptable STT providers.
+- [ ] Preserve original language, code-mixing, technical terms, product names, and code tokens in transcript cleanup.
+- [ ] Add sentinel/marker stripping if streaming transcript output includes prompt scaffolding.
 - [ ] Add provider-specific endpointing support where available.
+- [ ] Add speech-end-to-final-transcript and first-partial-transcript metrics if streaming STT is implemented.
+- [ ] Keep raw audio replay/storage opt-in only for explicit debug sessions.
 - [ ] Add local STT spike task.
 - [ ] Add local OCR spike task.
 - [ ] Add local LLM spike task.
@@ -373,6 +380,7 @@ Exit criteria:
 | Overlay appears during some screen sharing modes | High | Avoid absolute invisibility claims, add hide shortcut, recommend window sharing/second display | Open |
 | System audio capture fails on some macOS/device combinations | High | Keep fallback path, improve permission and device handling | Open |
 | STT latency too high | High | Add streaming STT provider interface | Open |
+| STT rewrites or translates technical speech | High | Keep transcript cleanup literal, language-preserving, and non-answering; preserve jargon/code tokens | Open |
 | AI suggestions are too verbose | Medium | Strict advisor prompt, UI output limits, regenerate and shorter controls | Mitigating |
 | Screen observation costs too much | Medium | Keep observation manual/hotkey-only, keep hash metadata, add duplicate suppression and rate limits before automatic mode | Mitigating |
 | Existing inherited code is too coupled | Medium | Add meeting modules first, then refactor hooks | Open |
@@ -405,6 +413,8 @@ Exit criteria:
 | 2026-05-20 | Render screen-task Answer first | Current answer and approach length is acceptable; the next UX improvement is display priority, so screen-task prompts and UI put `Answer` before supporting sections |
 | 2026-05-20 | Complete first focus-aware screen targeting pass | Cursor metadata alone and rectangular crops were insufficient; the accepted path sends a horizontal focus band as Image 1 and the full active-window screenshot as Image 2, with a direct-answer/language-selection contract and markdown/math renderer hardening |
 | 2026-05-20 | Persist sanitized trace metrics | Debug metrics are useful across restarts, but raw meeting content should stay out of disk history; persist timing/status/payload metadata only and keep revisiting metric quality during later tuning tasks |
+| 2026-05-20 | Reframe screen/voice fusion as interview task fusion | Target scenario is one-on-one and task-block oriented; a task can be screen-seeded, voice-seeded, or mixed, so the first pass should preserve task continuity instead of building a broad meeting-topic classifier |
+| 2026-05-20 | Use Brainwave as voice-pipeline reference | Borrow literal transcript cleanup, language/jargon preservation, realtime partial/final transcript ideas, and marker stripping; do not borrow default raw audio replay or move task reasoning into STT |
 
 ## Validation Snapshot
 
@@ -429,7 +439,9 @@ Last validated: 2026-05-20.
 
 ## Immediate Next Tasks
 
-1. Use persisted metrics during the next optimization tasks and revisit whether the fields/window size are sufficient.
-2. Decide whether the persisted metrics window should stay at latest 20 traces or become configurable after more data accumulates.
-3. Keep OCR plus cursor-nearest text-block extraction as a later fallback only if explicit distractor-row cases become important.
-4. Continue mock-meeting validation with Zoom first, then Google Meet and Teams.
+1. P0: Review `docs/interview-task-fusion-assignment-brief.md` before implementation.
+2. P0: Implement prompt-level interview task fusion before considering a separate classifier or `ActiveMeetingTask` type migration.
+3. P0: Preserve the STT/advisor boundary during task fusion; STT should stay literal, language-preserving, and non-answering.
+4. P1: Use persisted metrics during implementation testing and revisit whether the fields/window size are sufficient.
+5. P1: After prompt-level fusion, evaluate whether transcript latency/cleanup quality justifies starting realtime STT work.
+6. P1: Continue mock-meeting validation with screen-seeded, voice-seeded, and mixed task blocks.

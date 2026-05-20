@@ -18,6 +18,7 @@ The MVP is already usable after self-testing and informal meeting testing. Core 
 - Transcript to live advice.
 - Active-window screen capture to screen-anchored technical answers.
 - Meeting audio as clarification or follow-up context for the active screen task.
+- Interview-like task continuity where a task block may be screen-seeded, voice-seeded, or mixed.
 - Manual task clearing and configurable task memory.
 - Emergency hide through the existing hide/show shortcut.
 
@@ -129,6 +130,9 @@ Use a small repeated scenario set before major prompt, UI, or provider changes.
 - Coding or algorithm screen question in a VSCode-like window.
 - Screen question with a spoken clarification.
 - Screen question followed by a spoken follow-up.
+- Voice-only technical question with no screen task.
+- Voice-seeded task followed by additional constraints or follow-up questions.
+- Mixed task: voice introduces a problem, then a screen capture adds code or written context.
 - Multiple visible questions where one is visually emphasized.
 - Stale task switch: old question cleared, new question captured.
 - Long model response that must wrap cleanly.
@@ -142,10 +146,11 @@ The detailed review backlog now lives in [optimization-roadmap.md](optimization-
 
 1. Completed: improve screen focus selection for multiple-question or noisy screens with cursor metadata, horizontal focus band capture, focus-band-first image ordering, and a direct-answer prompt contract.
 2. Add lightweight aggregate latency and quality baselines.
-3. Harden screen and voice fusion for clarification, follow-up, topic switch, and ambient speech.
-4. Move screen-task answers toward more structured state only where parser drift still hurts reliability.
-5. Add response actions only after the core critical path remains calm and compact.
-6. Continue Zoom first, then Google Meet and Teams validation.
+3. Harden interview-like task fusion for screen-seeded, voice-seeded, and mixed task blocks.
+4. Evaluate realtime transcript quality work if voice-only or follow-up tests show transcript latency, cleanup, or technical-term accuracy is the bottleneck.
+5. Move screen-task answers toward more structured state only where parser drift still hurts reliability.
+6. Add response actions only after the core critical path remains calm and compact.
+7. Continue Zoom first, then Google Meet and Teams validation.
 
 ## Observability Scope
 
@@ -168,6 +173,8 @@ For screen-task UX, the current answer and approach length is acceptable. The fi
 The first focus-aware screen targeting pass is also complete. Jarvis records cursor metadata, creates a cursor-centered horizontal focus band when the cursor is inside the active capture target, sends that band before the full active-window screenshot, and treats visible language selection near the focus area as stronger than the Python default. User testing now shows stable question and language recognition in normal cases; the known boundary is an explicit distractor row under the cursor.
 
 During that pass, Meeting Assistant rendering was hardened as well: language-qualified code sections are parsed into the dedicated `Code` panel, outer code fences are stripped there, and markdown/math-like model output is normalized before display.
+
+Brainwave review takeaway: treat voice transcription as a separate, literal input layer. Jarvis should borrow its language-preserving transcript cleanup philosophy, marker-stripping idea, and realtime partial/final transcript direction, while keeping task reasoning in the Meeting Assistant advisor and keeping raw audio replay/storage opt-in only.
 
 ## Deferred: Knowledge / Memory Base
 
