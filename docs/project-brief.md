@@ -160,6 +160,8 @@ The first observability pass found and fixed two concrete screen workflow bottle
 
 Current screen-context captures use single-flight execution, native sub-step timings, 2048px JPEG payloads, and media-type-aware provider requests. The latest user trace reached about 7.5 seconds end-to-end with first token about 4.5 seconds after trigger, which is usable enough to continue tuning answer compactness and quality.
 
+For screen-task UX, the current answer and approach length is acceptable. The next tuning decision is display priority: keep the complete structured answer, but prompt and render `Answer` first so the user sees meeting-ready wording before supporting details.
+
 ## Deferred: Knowledge / Memory Base
 
 Knowledge and memory are valuable for answer quality and context reliability, but they should follow the observability pass. The first useful version should stay lightweight:

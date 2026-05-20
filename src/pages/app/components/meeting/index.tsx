@@ -463,10 +463,25 @@ export const MeetingAssistant = () => {
 
               {isScreenTaskSuggestion ? (
                 <>
-                  <section className="min-w-0 overflow-hidden rounded-md border border-border/70 p-3">
+                  <section className="min-w-0 overflow-hidden rounded-md border border-primary/30 bg-primary/5 p-3">
                     <div className="mb-2 flex items-center gap-2 text-xs font-semibold">
                       <BrainIcon className="h-3.5 w-3.5" />
-                      Screen task
+                      Answer
+                    </div>
+                    <p
+                      className={cn(
+                        WRAP_TEXT_CLASS,
+                        "min-h-14 text-sm font-medium leading-6"
+                      )}
+                    >
+                      {suggestionSections.answer || "Waiting for screen answer."}
+                    </p>
+                  </section>
+
+                  <section className="min-w-0 overflow-hidden rounded-md border border-border/70 p-3">
+                    <div className="mb-2 flex items-center gap-2 text-xs font-semibold">
+                      <MessageSquareTextIcon className="h-3.5 w-3.5" />
+                      Task details
                     </div>
                     <div className="space-y-2">
                       <SuggestionBlock
@@ -477,28 +492,10 @@ export const MeetingAssistant = () => {
                         }
                       />
                       <SuggestionBlock
-                        label="Answer"
-                        value={
-                          suggestionSections.answer ||
-                          "Waiting for screen answer."
-                        }
+                        label="Approach"
+                        value={suggestionSections.approach || "Not needed yet."}
                       />
                     </div>
-                  </section>
-
-                  <section className="min-w-0 overflow-hidden rounded-md border border-border/70 p-3">
-                    <div className="mb-2 flex items-center gap-2 text-xs font-semibold">
-                      <MessageSquareTextIcon className="h-3.5 w-3.5" />
-                      Approach
-                    </div>
-                    <p
-                      className={cn(
-                        WRAP_TEXT_CLASS,
-                        "min-h-14 text-xs leading-5"
-                      )}
-                    >
-                      {suggestionSections.approach || "Not needed yet."}
-                    </p>
                   </section>
 
                   <section className="min-w-0 overflow-hidden rounded-md border border-border/70 p-3">

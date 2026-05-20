@@ -203,8 +203,8 @@ Goal: redesign screen context from generic screenshot explanation into a technic
   - recommended: treat it as user preference/instruction, not as the primary system contract.
   - it must not override technical-question output requirements.
 - [x] Redesign Meeting Assistant output sections for screen tasks:
+  - `Answer` is rendered first as the highest-priority meeting-ready content.
   - `Question`.
-  - `Answer`.
   - `Approach`.
   - `Code`.
   - `Complexity`.
@@ -216,6 +216,7 @@ Goal: redesign screen context from generic screenshot explanation into a technic
   - Broader scenario coverage is still needed before calling this complete.
 - [x] Add manual clear/dismiss for the active screen task.
 - [x] Add configurable active screen task inactivity timeout.
+- [x] Prioritize `Answer` in the screen-task prompt and UI without shortening the accepted answer/approach length.
 
 Exit criteria:
 
@@ -390,6 +391,7 @@ Exit criteria:
 | 2026-05-19 | Harden emergency hide | Existing hide/show shortcut collapses Meeting Assistant UI and keeps meeting audio capture running |
 | 2026-05-19 | Enter tuning phase | Active task lifecycle and emergency hide passed user validation; next work should focus on performance and meeting UX refinements |
 | 2026-05-20 | Prioritize capture latency and payload size | Debug traces showed screen resize, image encoding, and oversized image payloads could dominate end-to-end latency, so meeting screen-context captures now use 2048px downscale, JPEG encoding, media-type-aware provider requests, and optimized dev builds for image-related crates |
+| 2026-05-20 | Render screen-task Answer first | Current answer and approach length is acceptable; the next UX improvement is display priority, so screen-task prompts and UI put `Answer` before supporting sections |
 
 ## Validation Snapshot
 

@@ -67,6 +67,7 @@ const SCREEN_TASK_SYSTEM_PROMPT = [
   "If the transcript changes constraints or asks a follow-up, incorporate it, but never let transcript speculation override visible screen content.",
   "Do not invent colleagues, speakers, meeting dialogue, hidden requirements, or screen content.",
   "Keep the answer useful during a live meeting: compact, direct, and technically precise.",
+  "Output the Answer section first so the user can start speaking before reading supporting details.",
 ].join(" ");
 
 export async function captureScreenObservation({
@@ -285,19 +286,20 @@ function buildScreenTaskUserMessage({
   sections.push(
     "<task>",
     "Read the screenshot and answer the main visible software-engineering question.",
+    "Use Answer as the first section. Put supporting details after it.",
     "If it is a coding/algorithm question, output:",
-    "Question: restate the exact visible problem or the best focused version.",
     "Answer: one concise summary of the optimal approach.",
     "Approach: explain the reasoning in a few direct bullets or short sentences.",
     "Code: provide Python code unless another language is visible in the screenshot.",
     "Complexity: include time and space complexity.",
+    "Question: restate the exact visible problem or the best focused version.",
     "Clarifying question: one click-answerable question if a constraint is missing, otherwise '-'.",
     "If it is a field-knowledge question, output:",
-    "Question: restate the visible question.",
     "Answer: concise professional meeting-ready answer.",
     "Approach: brief reasoning or key points.",
     "Code: -",
     "Complexity: -",
+    "Question: restate the visible question.",
     "Clarifying question: one click-answerable question if useful, otherwise '-'.",
     "If no meaningful question is visible, output a single dash.",
     "Use these exact section labels.",

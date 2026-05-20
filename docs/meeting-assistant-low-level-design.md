@@ -472,6 +472,7 @@ MVP behavior:
 - Use a low-latency image path for meeting screen-context captures; live response latency is more important than lossless screenshots in this workflow. The separate manual screenshot path still uses PNG, and the Tauri dev profile optimizes image-related crates so local testing reflects real meeting-time performance more closely.
 - Stream partial screen-task model output into the Meeting Assistant panel as chunks arrive, reducing perceived latency from full completion time to first useful token time.
 - Include native capture sub-step timings in capture metadata so slow captures can be attributed to window lookup, image capture, image optimization, or image encoding.
+- Keep screen-task output structured, but render `Answer` first as the highest-priority meeting-ready content. `Question`, `Approach`, `Code`, `Complexity`, and `Clarifying question` remain available as supporting sections.
 
 Future behavior:
 
@@ -507,7 +508,7 @@ Future behavior:
 10. Recent transcript turns are included as supplemental clarification, not as the primary task.
 11. Screenshot Auto prompt is included as user preference if configured, but cannot override the screen-task answer contract.
 12. A meaningful result creates or replaces `activeScreenTask`.
-13. Overlay renders partial and final structured screen-task answer content.
+13. Overlay renders partial and final structured screen-task answer content, with `Answer` shown first and supporting sections below it.
 14. Later transcript turns run `screen-anchored` advisor updates against the active task.
 
 ### 7.3 Clarifying Question Feedback Flow
