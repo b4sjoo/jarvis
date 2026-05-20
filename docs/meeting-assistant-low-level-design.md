@@ -452,6 +452,33 @@ MVP UI shape:
   - Clarifying question
 - Minimal text, no dashboard-style marketing.
 
+### 6.7 Observability and Metrics
+
+Owner: TypeScript for MVP.
+
+MVP behavior:
+
+- Keep meeting traces in memory only.
+- Do not persist raw audio bytes or raw screenshots by default.
+- Record screen workflow traces from capture trigger through model output and Meeting Assistant state update.
+- Record voice workflow traces from speech detection through STT, transcript append, advisor request, and suggestion output.
+- Store raw text prompts and raw text model/STT outputs for local debugging.
+- Store image and audio metadata such as byte counts, capture target, provider ID, and timing.
+- Keep Debug Mode off by default so the meeting UI stays focused during normal use.
+- Expose the latest traces and last capture details in the Meeting Assistant panel only when Debug Mode is enabled.
+- Emit timestamped terminal trace logs in Debug Mode, including trace lifecycle events and step durations.
+- Treat screen capture as a single-flight workflow: debounce repeated custom shortcut events, ignore duplicate hotkey calls while a capture is running, and mark aborted model steps as `cancelled` rather than successful empty outputs.
+- Downscale meeting screen-context images to a 2048px long edge and encode them as JPEG so model payloads stay small while preserving readable technical text.
+- Use a low-latency image path for meeting screen-context captures; live response latency is more important than lossless screenshots in this workflow. The separate manual screenshot path still uses PNG, and the Tauri dev profile optimizes image-related crates so local testing reflects real meeting-time performance more closely.
+- Stream partial screen-task model output into the Meeting Assistant panel as chunks arrive, reducing perceived latency from full completion time to first useful token time.
+- Include native capture sub-step timings in capture metadata so slow captures can be attributed to window lookup, image capture, image optimization, or image encoding.
+
+Future behavior:
+
+- Optional trace export.
+- Explicit opt-in persisted debug sessions with retention controls.
+- Aggregated latency summaries for repeated scenario tests.
+
 ## 7. Event Flow
 
 ### 7.1 Audio-to-Advice Flow
@@ -474,13 +501,14 @@ MVP UI shape:
 4. Rust selects the first suitable non-Jarvis foreground window from `xcap::Window::all()`.
 5. Rust captures the monitor containing that window and crops to the active window bounds; this avoids Zoom/video host windows whose direct window backing image may not match visible content.
 6. If monitor-crop capture fails, Rust falls back to direct window capture and records the fallback reason; if active-window capture fails completely, Rust falls back to the previous current-monitor capture path.
-7. Screen service computes a basic hash and stores capture target debug metadata.
-8. Screenshot is analyzed by the configured vision-capable provider with a screen-anchored technical-question prompt.
-9. Recent transcript turns are included as supplemental clarification, not as the primary task.
-10. Screenshot Auto prompt is included as user preference if configured, but cannot override the screen-task answer contract.
-11. A meaningful result creates or replaces `activeScreenTask`.
-12. Overlay renders the structured screen-task answer directly.
-13. Later transcript turns run `screen-anchored` advisor updates against the active task.
+7. Rust downscales the image for screen-context use, encodes it with a low-latency JPEG path, and records capture sub-step timings.
+8. Screen service computes a basic hash and stores capture target debug metadata.
+9. Screenshot is analyzed by the configured vision-capable provider with a screen-anchored technical-question prompt.
+10. Recent transcript turns are included as supplemental clarification, not as the primary task.
+11. Screenshot Auto prompt is included as user preference if configured, but cannot override the screen-task answer contract.
+12. A meaningful result creates or replaces `activeScreenTask`.
+13. Overlay renders partial and final structured screen-task answer content.
+14. Later transcript turns run `screen-anchored` advisor updates against the active task.
 
 ### 7.3 Clarifying Question Feedback Flow
 

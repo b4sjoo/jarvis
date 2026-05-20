@@ -11,6 +11,8 @@ The current goal is narrow: help me understand software engineering meetings fas
 - Meeting assistant modules have been added for transcript context, screen observations, prompt construction, and advisor suggestions.
 - The meeting overlay opens in the desktop app, supports explicit `Text+Screen` privacy mode, and can generate screen-context suggestions from the meeting hotkey.
 - Explicit screen captures now produce screen-anchored technical answers with `Question`, `Answer`, `Approach`, `Code`, `Complexity`, and `Clarifying question` sections.
+- Debug Mode provides local screen/voice workflow traces, raw text model/STT I/O, capture metadata, and timestamped terminal trace logs.
+- Meeting screen-context captures are downscaled and JPEG-encoded before model submission to keep payloads small enough for live use.
 - Initial personal testing shows the screen-anchored flow is more useful than the earlier generic screen explanation path.
 
 ## Personal-Use Scope
@@ -83,7 +85,9 @@ Jarvis expects you to configure local/custom providers before relying on meeting
 - While the Meeting Assistant panel is open, Jarvis uses the native system cursor instead of its hidden/custom cursor mode to avoid cursor loss when moving across the transparent overlay area.
 - Use `Clear task` when a screen question is no longer relevant. Screen tasks expire after the configured task memory window, which defaults to 30 minutes.
 - `Cmd+\` is the emergency hide/show shortcut. Hiding collapses the Meeting Assistant UI without stopping meeting audio capture.
-- The Meeting Assistant panel shows a compact `Last capture` debug row with a preview thumbnail, captured app/window, capture method, image size, bounds, and top window candidates.
+- Enable `Debug Mode` in the Meeting Assistant panel to show recent screen and voice trace details, raw text model/STT I/O, and timestamped terminal trace logs. Debug Mode defaults off; raw audio bytes and screenshots are not stored in traces by default.
+- `Debug Mode` also shows a compact `Last capture` row with a preview thumbnail, captured app/window, capture method, image size, bounds, and top window candidates.
+- Screen-context debug traces include image media type, base64 payload size, capture sub-step timings, first-token timing, and model completion timing.
 - When Screenshot settings are in `Auto` mode, Meeting Assistant screen analysis treats the configured screenshot auto prompt as user preference while preserving the screen-task answer format.
 - Clarifying questions include quick `Yes`, `No`, `Not sure`, and `Dismiss` controls so you can steer follow-up suggestions without typing during a meeting.
 - `Cmd+Shift+S` remains the separate manual screenshot/completion shortcut.

@@ -22,6 +22,7 @@ Current implementation status:
 - The Meeting Assistant panel now has a fixed expanded width, wrapped long-response layout, and native cursor override while open.
 - Active screen tasks can be manually cleared, are cleared on stop, and expire after a configurable inactivity window that defaults to 30 minutes.
 - The existing hide/show shortcut now acts as an emergency hide path that collapses the Meeting Assistant UI without stopping meeting audio capture.
+- Observability work has started with in-memory screen and voice workflow traces in the Meeting Assistant panel.
 - User validation confirms the active task lifecycle and emergency hide workflow are usable enough to move into tuning.
 - Cursor-centered question focus selection, broader validation, and performance baselines are in the tuning backlog.
 
@@ -326,6 +327,33 @@ Exit criteria:
 - Known limitations documented.
 - MVP is stable enough for personal daily use.
 
+## Milestone 11: Observability and Metrics
+
+Goal: make the critical meeting workflows debuggable and measurable before prompt and UX tuning.
+
+- [x] Create in-memory trace storage for meeting workflows.
+- [x] Trace screen workflow from trigger/capture through model response and Meeting Assistant state update.
+- [x] Trace voice workflow from speech detection through STT, transcript append, advisor request, and suggestion output.
+- [x] Show latest trace timings in the Meeting Assistant panel.
+- [x] Show raw text model/STT input and output in a local debug view.
+- [x] Avoid storing raw audio bytes and screenshots in traces by default.
+- [x] Gate trace detail and last capture diagnostics behind Debug Mode.
+- [x] Emit timestamped terminal logs for trace lifecycle and step timing while Debug Mode is enabled.
+- [x] Debounce duplicate custom shortcut events and make screen capture single-flight.
+- [x] Mark aborted screen model steps as cancelled instead of successful empty outputs.
+- [x] Downscale and JPEG-encode meeting screen-context images before model submission to reduce payload size.
+- [x] Stream partial screen-task answers into the Meeting Assistant panel while the model is still generating.
+- [x] Add native capture sub-step timings to debug metadata.
+- [x] Optimize native screen-context image processing, payload size, and dev-profile image crate compilation after traces showed local image processing and oversized payloads dominated latency.
+- [ ] Add trace export if repeated testing needs offline comparison.
+- [ ] Add aggregated latency summary after enough manual traces are collected.
+
+Exit criteria:
+
+- A slow or incorrect critical moment can be inspected from Debug Mode without opening browser developer tools.
+- Screen and voice workflows expose step-level latency and raw text I/O.
+- Trace behavior remains local and privacy-conscious by default.
+
 ## Risk Register
 
 | Risk | Impact | Mitigation | Status |
@@ -361,10 +389,11 @@ Exit criteria:
 | 2026-05-19 | Add active screen task lifecycle controls | Screen tasks can be cleared manually, clear on stop, and expire after a configurable task memory window that defaults to 30 minutes |
 | 2026-05-19 | Harden emergency hide | Existing hide/show shortcut collapses Meeting Assistant UI and keeps meeting audio capture running |
 | 2026-05-19 | Enter tuning phase | Active task lifecycle and emergency hide passed user validation; next work should focus on performance and meeting UX refinements |
+| 2026-05-20 | Prioritize capture latency and payload size | Debug traces showed screen resize, image encoding, and oversized image payloads could dominate end-to-end latency, so meeting screen-context captures now use 2048px downscale, JPEG encoding, media-type-aware provider requests, and optimized dev builds for image-related crates |
 
 ## Validation Snapshot
 
-Last validated: 2026-05-19.
+Last validated: 2026-05-20.
 
 - `npm run build` passes.
 - `cargo check` passes after selecting full Xcode as the active developer directory.
@@ -373,10 +402,13 @@ Last validated: 2026-05-19.
 - Manual Meeting Assistant layout and cursor tests passed after expanding the panel and overriding custom cursor behavior.
 - `npm run build`, `cargo check`, and `git diff --check` pass after active task lifecycle and emergency hide changes.
 - User verified active task lifecycle and emergency hide behavior are usable.
+- Observability trace validation confirms the duplicate hotkey/cancelled empty-output issue is resolved.
+- Screen-context capture optimization reduced a reproduced slow capture from about 39.7s end-to-end to about 7.5s end-to-end in user testing.
+- Latest validated screen-context trace: `image/jpeg`, about 558K base64 chars, capture about 2.0s, first token about 4.5s after trigger, full answer about 7.5s after trigger.
 
 ## Immediate Next Tasks
 
-1. Enter performance and UX tuning.
-2. Add lightweight latency and resource measurements instead of building a full benchmark system upfront.
+1. Use the new trace panel during mock meetings to identify the slowest or lowest-quality steps.
+2. Add aggregated latency summaries if per-trace inspection is not enough.
 3. Continue mock-meeting validation with Zoom first, then Google Meet and Teams.
-4. Define cursor-centered question focus selection for screens with multiple questions or distractors.
+4. Keep Knowledge / Memory Base deferred until observability data shows where personalization helps most.

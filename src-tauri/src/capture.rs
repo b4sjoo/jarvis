@@ -1,11 +1,14 @@
 use base64::Engine;
-use image::codecs::png::PngEncoder;
+use image::codecs::jpeg::JpegEncoder;
+use image::codecs::png::{CompressionType, FilterType as PngFilterType, PngEncoder};
+use image::imageops::{resize, FilterType as ResizeFilterType};
 use image::{ColorType, GenericImageView, ImageEncoder};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::{thread, time::Duration};
+use std::thread;
+use std::time::{Duration, Instant};
 use tauri::Emitter;
 use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
 use xcap::{Monitor, Window as XcapWindow};
@@ -37,8 +40,22 @@ pub struct CaptureTargetInfo {
     pub height: u32,
     pub image_width: u32,
     pub image_height: u32,
+    pub original_image_width: Option<u32>,
+    pub original_image_height: Option<u32>,
+    pub optimized_for_screen_context: bool,
+    pub capture_timings_ms: Option<CaptureTimingInfo>,
     pub fallback_reason: Option<String>,
     pub candidates: Vec<CaptureCandidateInfo>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CaptureTimingInfo {
+    pub total_ms: u64,
+    pub window_lookup_ms: Option<u64>,
+    pub image_capture_ms: u64,
+    pub image_optimize_ms: u64,
+    pub image_encode_ms: u64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -57,8 +74,14 @@ pub struct CaptureCandidateInfo {
 #[serde(rename_all = "camelCase")]
 pub struct CaptureToBase64Result {
     pub image_base64: String,
+    pub image_media_type: String,
     pub target: CaptureTargetInfo,
 }
+
+const SCREEN_CONTEXT_MAX_LONG_EDGE: u32 = 2048;
+const SCREEN_CONTEXT_JPEG_QUALITY: u8 = 82;
+const IMAGE_MEDIA_TYPE_PNG: &str = "image/png";
+const IMAGE_MEDIA_TYPE_JPEG: &str = "image/jpeg";
 
 // Store captured images from all monitors temporarily for cropping
 pub struct CaptureState {
@@ -265,18 +288,7 @@ pub async fn capture_selected_area(
     // Crop the image to the selected area
     let cropped = monitor_info.image.view(x, y, width, height).to_image();
 
-    // Encode to PNG and base64
-    let mut png_buffer = Vec::new();
-    PngEncoder::new(&mut png_buffer)
-        .write_image(
-            cropped.as_raw(),
-            cropped.width(),
-            cropped.height(),
-            ColorType::Rgba8.into(),
-        )
-        .map_err(|e| format!("Failed to encode to PNG: {}", e))?;
-
-    let base64_str = base64::engine::general_purpose::STANDARD.encode(png_buffer);
+    let base64_str = encode_png_image_to_base64(&cropped)?;
 
     captured_monitors.clear();
     drop(captured_monitors);
@@ -298,9 +310,13 @@ pub async fn capture_selected_area(
     Ok(base64_str)
 }
 
-fn encode_image_to_base64(image: &image::RgbaImage) -> Result<String, String> {
+fn encode_png_image_to_base64(image: &image::RgbaImage) -> Result<String, String> {
     let mut png_buffer = Vec::new();
-    PngEncoder::new(&mut png_buffer)
+    PngEncoder::new_with_quality(
+        &mut png_buffer,
+        CompressionType::Fast,
+        PngFilterType::Adaptive,
+    )
         .write_image(
             image.as_raw(),
             image.width(),
@@ -310,6 +326,45 @@ fn encode_image_to_base64(image: &image::RgbaImage) -> Result<String, String> {
         .map_err(|e| format!("Failed to encode to PNG: {}", e))?;
 
     Ok(base64::engine::general_purpose::STANDARD.encode(png_buffer))
+}
+
+fn encode_jpeg_image_to_base64(image: &image::RgbaImage) -> Result<String, String> {
+    let mut rgb_buffer = Vec::with_capacity((image.width() * image.height() * 3) as usize);
+    for pixel in image.as_raw().chunks_exact(4) {
+        rgb_buffer.extend_from_slice(&pixel[..3]);
+    }
+
+    let mut jpeg_buffer = Vec::new();
+    JpegEncoder::new_with_quality(&mut jpeg_buffer, SCREEN_CONTEXT_JPEG_QUALITY)
+        .write_image(
+            &rgb_buffer,
+            image.width(),
+            image.height(),
+            ColorType::Rgb8.into(),
+        )
+        .map_err(|e| format!("Failed to encode to JPEG: {}", e))?;
+
+    Ok(base64::engine::general_purpose::STANDARD.encode(jpeg_buffer))
+}
+
+fn optimize_screen_context_image(image: image::RgbaImage) -> image::RgbaImage {
+    let width = image.width();
+    let height = image.height();
+    let long_edge = width.max(height);
+
+    if long_edge <= SCREEN_CONTEXT_MAX_LONG_EDGE {
+        return image;
+    }
+
+    let scale = SCREEN_CONTEXT_MAX_LONG_EDGE as f64 / long_edge as f64;
+    let next_width = ((width as f64 * scale).round() as u32).max(1);
+    let next_height = ((height as f64 * scale).round() as u32).max(1);
+
+    resize(&image, next_width, next_height, ResizeFilterType::Nearest)
+}
+
+fn elapsed_ms(start: Instant) -> u64 {
+    start.elapsed().as_millis().min(u64::MAX as u128) as u64
 }
 
 fn is_jarvis_window(window: &XcapWindow) -> bool {
@@ -428,13 +483,17 @@ fn window_monitor_crop(window: &XcapWindow) -> Result<(image::RgbaImage, String)
 
 async fn capture_active_window_to_base64() -> Result<CaptureToBase64Result, String> {
     tauri::async_runtime::spawn_blocking(move || {
+        let total_started_at = Instant::now();
+        let lookup_started_at = Instant::now();
         let windows = XcapWindow::all().map_err(|e| format!("Failed to get windows: {}", e))?;
         let candidates = capture_candidates(&windows);
         let window = windows
             .into_iter()
             .find(is_active_window_candidate)
             .ok_or_else(|| "No suitable active window found".to_string())?;
+        let window_lookup_ms = elapsed_ms(lookup_started_at);
 
+        let capture_started_at = Instant::now();
         let (image, capture_method, monitor_name, fallback_reason) =
             match window_monitor_crop(&window) {
                 Ok((image, monitor_name)) => (
@@ -458,6 +517,19 @@ async fn capture_active_window_to_base64() -> Result<CaptureToBase64Result, Stri
                     )
                 }
             };
+        let image_capture_ms = elapsed_ms(capture_started_at);
+        let original_image_width = image.width();
+        let original_image_height = image.height();
+
+        let optimize_started_at = Instant::now();
+        let image = optimize_screen_context_image(image);
+        let image_optimize_ms = elapsed_ms(optimize_started_at);
+        let optimized_for_screen_context =
+            image.width() != original_image_width || image.height() != original_image_height;
+
+        let encode_started_at = Instant::now();
+        let image_base64 = encode_jpeg_image_to_base64(&image)?;
+        let image_encode_ms = elapsed_ms(encode_started_at);
 
         let target = CaptureTargetInfo {
             target_type: "active-window".to_string(),
@@ -471,14 +543,23 @@ async fn capture_active_window_to_base64() -> Result<CaptureToBase64Result, Stri
             height: window.height(),
             image_width: image.width(),
             image_height: image.height(),
+            original_image_width: Some(original_image_width),
+            original_image_height: Some(original_image_height),
+            optimized_for_screen_context,
+            capture_timings_ms: Some(CaptureTimingInfo {
+                total_ms: elapsed_ms(total_started_at),
+                window_lookup_ms: Some(window_lookup_ms),
+                image_capture_ms,
+                image_optimize_ms,
+                image_encode_ms,
+            }),
             fallback_reason,
             candidates,
         };
 
-        let image_base64 = encode_image_to_base64(&image)?;
-
         Ok(CaptureToBase64Result {
             image_base64,
+            image_media_type: IMAGE_MEDIA_TYPE_JPEG.to_string(),
             target,
         })
     })
@@ -488,6 +569,7 @@ async fn capture_active_window_to_base64() -> Result<CaptureToBase64Result, Stri
 
 async fn capture_current_monitor_to_base64(
     window: tauri::WebviewWindow,
+    optimize_for_screen_context: bool,
 ) -> Result<CaptureToBase64Result, String> {
     let monitor_fallback = window
         .current_monitor()
@@ -536,6 +618,7 @@ async fn capture_current_monitor_to_base64(
         geometry;
 
     tauri::async_runtime::spawn_blocking(move || {
+        let total_started_at = Instant::now();
         let monitors = Monitor::all().map_err(|e| format!("Failed to get monitors: {}", e))?;
         if monitors.is_empty() {
             return Err("No monitors found".to_string());
@@ -596,9 +679,37 @@ async fn capture_current_monitor_to_base64(
             })
             .ok_or_else(|| "Failed to determine target monitor".to_string())?;
 
+        let capture_started_at = Instant::now();
         let image = monitor
             .capture_image()
             .map_err(|e| format!("Failed to capture image: {}", e))?;
+        let image_capture_ms = elapsed_ms(capture_started_at);
+        let original_image_width = image.width();
+        let original_image_height = image.height();
+
+        let optimize_started_at = Instant::now();
+        let image = if optimize_for_screen_context {
+            optimize_screen_context_image(image)
+        } else {
+            image
+        };
+        let image_optimize_ms = elapsed_ms(optimize_started_at);
+        let optimized_for_screen_context =
+            image.width() != original_image_width || image.height() != original_image_height;
+
+        let encode_started_at = Instant::now();
+        let (image_base64, image_media_type) = if optimize_for_screen_context {
+            (
+                encode_jpeg_image_to_base64(&image)?,
+                IMAGE_MEDIA_TYPE_JPEG.to_string(),
+            )
+        } else {
+            (
+                encode_png_image_to_base64(&image)?,
+                IMAGE_MEDIA_TYPE_PNG.to_string(),
+            )
+        };
+        let image_encode_ms = elapsed_ms(encode_started_at);
 
         let target = CaptureTargetInfo {
             target_type: "current-monitor".to_string(),
@@ -612,14 +723,23 @@ async fn capture_current_monitor_to_base64(
             height: monitor.height(),
             image_width: image.width(),
             image_height: image.height(),
+            original_image_width: Some(original_image_width),
+            original_image_height: Some(original_image_height),
+            optimized_for_screen_context,
+            capture_timings_ms: Some(CaptureTimingInfo {
+                total_ms: elapsed_ms(total_started_at),
+                window_lookup_ms: None,
+                image_capture_ms,
+                image_optimize_ms,
+                image_encode_ms,
+            }),
             fallback_reason: None,
             candidates: Vec::new(),
         };
 
-        let image_base64 = encode_image_to_base64(&image)?;
-
         Ok(CaptureToBase64Result {
             image_base64,
+            image_media_type,
             target,
         })
     })
@@ -636,19 +756,19 @@ pub async fn capture_screen_context_to_base64(
         "active-window" => match capture_active_window_to_base64().await {
             Ok(result) => Ok(result),
             Err(error) => {
-                let mut result = capture_current_monitor_to_base64(window).await?;
+                let mut result = capture_current_monitor_to_base64(window, true).await?;
                 result.target.fallback_reason =
                     Some(format!("Active window capture failed: {}", error));
                 Ok(result)
             }
         },
-        "current-monitor" => capture_current_monitor_to_base64(window).await,
+        "current-monitor" => capture_current_monitor_to_base64(window, true).await,
         unknown => Err(format!("Unsupported screen context target: {}", unknown)),
     }
 }
 
 #[tauri::command]
 pub async fn capture_to_base64(window: tauri::WebviewWindow) -> Result<String, String> {
-    let result = capture_current_monitor_to_base64(window).await?;
+    let result = capture_current_monitor_to_base64(window, false).await?;
     Ok(result.image_base64)
 }
