@@ -157,6 +157,7 @@ interface ScreenObservation {
   capturedAt: number;
   source: "full-screen" | "selection" | "hotkey";
   imageBase64?: string;
+  focusImageBase64?: string;
   ocrText?: string;
   visualSummary?: string;
   analysisPromptSource?: "meeting-default" | "screenshot-auto-prompt";
@@ -167,7 +168,7 @@ interface ScreenObservation {
 }
 ```
 
-MVP uses image-to-LLM directly. Meeting mode treats `visualSummary` as the compact model-produced screen-task answer for explicit captures. Later versions should add local OCR, cursor-centered focus crops, and stronger hash-based change detection.
+MVP uses image-to-LLM directly. Meeting mode treats `visualSummary` as the compact model-produced screen-task answer for explicit captures. Current screen context can include a cursor-centered horizontal focus band before the full active-window image so the model anchors on the cursor-adjacent target first. Later versions should add local OCR and stronger hash-based change detection.
 
 ### 5.3 MeetingContextState
 
@@ -330,13 +331,15 @@ MVP behavior:
 - Trigger capture manually from the meeting overlay or the meeting screen-context hotkey.
 - Prefer active-window capture for meeting context, using monitor-crop capture of the selected window bounds so video/share surfaces inside Zoom are captured from the composed screen image.
 - Fall back to direct window capture, then current-monitor capture, when the preferred active-window path is unavailable.
-- Store compact capture target metadata on each `ScreenObservation`: target type, capture method, app name, window title, monitor, image size, bounds, fallback reason, top window candidates, and an in-panel thumbnail preview.
+- Store compact capture target metadata on each `ScreenObservation`: target type, capture method, app name, window title, monitor, image size, bounds, cursor focus hint, focus band metadata, fallback reason, top window candidates, and in-panel thumbnail previews.
+- When cursor focus metadata is available and the cursor is inside the captured target, send the cursor-centered horizontal focus band as Image 1 and the full active-window image as Image 2. The focus band is the primary disambiguation signal for multiple visible questions, active code region, language selector, or UI option; the full image is only surrounding context after the target is selected.
 - If Screenshot settings are in `Auto` mode and an auto prompt is configured, treat it as user preference while preserving the meeting screen-task answer contract.
 - Treat explicit screen captures as visible technical tasks, not meeting dialogue; the advisor must not invent colleagues, speakers, or questions when no transcript exists.
 - Treat manual and hotkey-triggered captures as explicit user intent, so they should produce visible feedback directly from the vision provider even when meeting audio is not actively listening.
 - Create or replace `activeScreenTask` when a meaningful visible question is found.
 - Classify the screen task as coding, field knowledge, ambiguous, non-question, or unknown.
 - For coding tasks, default to Python unless the screen specifies another language and include approach, implementation, time complexity, and space complexity.
+- For coding tasks, treat a visible selected language near the cursor focus band as stronger than the Python default, including TypeScript as distinct from JavaScript.
 - For field-knowledge tasks, produce a concise professional answer that can be said in a meeting.
 - Hide the meeting panel before hotkey self-capture where possible, then reopen it after capture so the screenshot is more likely to represent the meeting screen instead of Jarvis itself.
 - Keep automatic observation disabled until rate limits, privacy copy, and model cost controls are in place.
@@ -450,6 +453,7 @@ MVP UI shape:
   - Code
   - Complexity
   - Clarifying question
+- Render model-output text sections through markdown/math normalization and keep implementation code in the dedicated `Code` panel, including outputs labeled `Code (Language):` or `Implementation:`.
 - Minimal text, no dashboard-style marketing.
 
 ### 6.7 Observability and Metrics
@@ -502,14 +506,17 @@ Future behavior:
 4. Rust selects the first suitable non-Jarvis foreground window from `xcap::Window::all()`.
 5. Rust captures the monitor containing that window and crops to the active window bounds; this avoids Zoom/video host windows whose direct window backing image may not match visible content.
 6. If monitor-crop capture fails, Rust falls back to direct window capture and records the fallback reason; if active-window capture fails completely, Rust falls back to the previous current-monitor capture path.
-7. Rust downscales the image for screen-context use, encodes it with a low-latency JPEG path, and records capture sub-step timings.
-8. Screen service computes a basic hash and stores capture target debug metadata.
-9. Screenshot is analyzed by the configured vision-capable provider with a screen-anchored technical-question prompt.
-10. Recent transcript turns are included as supplemental clarification, not as the primary task.
-11. Screenshot Auto prompt is included as user preference if configured, but cannot override the screen-task answer contract.
-12. A meaningful result creates or replaces `activeScreenTask`.
-13. Overlay renders partial and final structured screen-task answer content, with `Answer` shown first and supporting sections below it.
-14. Later transcript turns run `screen-anchored` advisor updates against the active task.
+7. Rust records cursor focus metadata when available: global coordinates, target-relative coordinates, normalized position, and whether the cursor was inside the captured target.
+8. If the cursor is inside the captured target, Rust creates a cursor-centered horizontal focus band before full-image downscaling.
+9. Rust downscales the full image for screen-context use, encodes the full image and focus band with a low-latency JPEG path, and records capture sub-step timings.
+10. Screen service computes a basic hash and stores capture target debug metadata.
+11. Screenshot is analyzed by the configured vision-capable provider with a screen-anchored technical-question prompt.
+12. Recent transcript turns are included as supplemental clarification, not as the primary task.
+13. Cursor focus metadata and image order instructions tell the model to use Image 1, when it is a focus band, as the primary clue for active question or visible UI selection and use the full screenshot only as context.
+14. Screenshot Auto prompt is included as user preference if configured, but cannot override the screen-task answer contract.
+15. A meaningful result creates or replaces `activeScreenTask`.
+16. Overlay renders partial and final structured screen-task answer content, with `Answer` shown first, markdown/math-normalized supporting text below it, and code-fence-stripped implementation content in the dedicated code panel.
+17. Later transcript turns run `screen-anchored` advisor updates against the active task.
 
 ### 7.3 Clarifying Question Feedback Flow
 

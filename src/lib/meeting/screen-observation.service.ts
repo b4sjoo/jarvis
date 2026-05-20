@@ -41,6 +41,8 @@ export interface SolveScreenAnchoredTaskOptions {
 interface CaptureScreenContextResponse {
   imageBase64: string;
   imageMediaType?: string;
+  focusImageBase64?: string;
+  focusImageMediaType?: string;
   target: ScreenCaptureTarget;
 }
 
@@ -62,8 +64,10 @@ const SCREEN_TASK_SYSTEM_PROMPT = [
   "You are Jarvis, a private live meeting assistant for a non-native English speaker working as a software engineer.",
   "The screenshot is the primary source of truth. Recent transcript is only supplemental clarification, modification, or follow-up.",
   "Focus on the visible technical question near the user's active work area. If there are multiple questions or distracting text, choose the question most likely being worked on.",
+  "If a cursor-centered horizontal focus band is provided, treat it as the primary visual input for selecting the user's current work area while keeping the full screenshot only as surrounding context.",
   "If the screen shows an open field-knowledge question, give a concise and professional answer the user can say in a meeting.",
-  "If the screen shows a coding or algorithm question, default to Python unless the screenshot asks for another language. Give the algorithm idea, implementation, and exact time and space complexity.",
+  "If the screen shows a coding or algorithm question, default to Python unless the screenshot shows another selected or requested language. Give the algorithm idea, implementation, and exact time and space complexity.",
+  "Answer directly. Do not describe that you identified, selected, focused on, or can see a question; only put the restated problem in the Question section.",
   "If the transcript changes constraints or asks a follow-up, incorporate it, but never let transcript speculation override visible screen content.",
   "Do not invent colleagues, speakers, meeting dialogue, hidden requirements, or screen content.",
   "Keep the answer useful during a live meeting: compact, direct, and technically precise.",
@@ -89,6 +93,8 @@ export async function captureScreenObservation({
     source,
     imageBase64,
     imageMediaType,
+    focusImageBase64: capture.focusImageBase64,
+    focusImageMediaType: capture.focusImageMediaType,
     hash,
     changed: hash !== previousHash,
     captureTarget: capture.target,
@@ -189,27 +195,23 @@ export async function solveScreenAnchoredTask({
     recentTranscript,
     autoPrompt,
   });
+  const imageInputs = buildScreenTaskImageInputs(observation);
 
   trace?.onRequest?.({
     systemPrompt: SCREEN_TASK_SYSTEM_PROMPT,
     userMessage,
-    imageCount: observation.imageBase64 ? 1 : 0,
-    imageMediaType: observation.imageMediaType || "image/png",
+    imageCount: imageInputs.length,
+    imageMediaType: imageInputs[0]?.mediaType || observation.imageMediaType || "image/png",
     providerId: provider.id,
     mode: "screen-task",
   });
-
-  const imageInput = {
-    base64: observation.imageBase64,
-    mediaType: observation.imageMediaType || "image/png",
-  };
 
   for await (const chunk of fetchAIResponse({
     provider,
     selectedProvider,
     systemPrompt: SCREEN_TASK_SYSTEM_PROMPT,
     userMessage,
-    imagesBase64: [imageInput],
+    imagesBase64: imageInputs,
     signal,
   })) {
     if (!firstTokenSeen) {
@@ -247,6 +249,25 @@ function buildScreenContextUserMessage(autoPrompt: string | undefined) {
   ].join("\n");
 }
 
+function buildScreenTaskImageInputs(observation: ScreenObservation) {
+  const fullImage = {
+    base64: observation.imageBase64 || "",
+    mediaType: observation.imageMediaType || "image/png",
+  };
+
+  if (observation.focusImageBase64) {
+    return [
+      {
+        base64: observation.focusImageBase64,
+        mediaType: observation.focusImageMediaType || "image/jpeg",
+      },
+      fullImage,
+    ].filter((image) => image.base64.trim().length > 0);
+  }
+
+  return [fullImage].filter((image) => image.base64.trim().length > 0);
+}
+
 function createAbortError() {
   const error = new Error("Screen analysis cancelled.");
   error.name = "AbortError";
@@ -269,6 +290,12 @@ function buildScreenTaskUserMessage({
     "<capture_target>",
     target,
     "</capture_target>",
+    "<focus_hint>",
+    formatCursorFocusForPrompt(observation.captureTarget),
+    "</focus_hint>",
+    "<image_order>",
+    formatImageOrderForPrompt(observation),
+    "</image_order>",
     "<recent_transcript>",
     recentTranscript?.trim() || "No transcript context yet.",
     "</recent_transcript>",
@@ -286,16 +313,25 @@ function buildScreenTaskUserMessage({
   sections.push(
     "<task>",
     "Read the screenshot and answer the main visible software-engineering question.",
-    "Use Answer as the first section. Put supporting details after it.",
+    "If a focus band is present, Image 1 is the cursor-centered horizontal focus band and Image 2 is the full active-window context.",
+    "If no focus band is present, Image 1 is the full active-window screenshot.",
+    "When the focus band is present, first identify the active question, active code region, visible language setting, or UI option from Image 1. Use Image 2 only to recover surrounding context for that selected target.",
+    "Do not answer an earlier, higher, or larger question from the full screenshot when the focus band indicates a different target.",
+    "If the focus band shows a selected programming language, language dropdown, or language tab, treat that as an explicit language requirement even if the problem statement is only fully readable in the full screenshot.",
+    "Language priority is: selected language in the focus band, explicit language in the full screenshot, transcript clarification, then Python default. Treat TypeScript as TypeScript, not JavaScript. Treat Go or Golang as Go.",
+    "If the focus band contains multiple nearby questions, prefer the text block closest to the cursor position inside the focus band.",
+    "If the visible UI or focus band indicates a non-Python language, use that language instead of the Python default.",
+    "Use Answer as the first section. The Answer section must directly answer the selected target; do not say which question you identified, selected, or focused on.",
+    "Put supporting details after Answer. Do not put code blocks in Approach; code belongs only in Code.",
     "If it is a coding/algorithm question, output:",
-    "Answer: one concise summary of the optimal approach.",
-    "Approach: explain the reasoning in a few direct bullets or short sentences.",
-    "Code: provide Python code unless another language is visible in the screenshot.",
+    "Answer: directly state the optimal approach in the selected/requested language.",
+    "Approach: explain the reasoning in a few direct bullets or short sentences, without code blocks.",
+    "Code: provide code in the selected/requested language, or Python if no language is visible.",
     "Complexity: include time and space complexity.",
     "Question: restate the exact visible problem or the best focused version.",
     "Clarifying question: one click-answerable question if a constraint is missing, otherwise '-'.",
     "If it is a field-knowledge question, output:",
-    "Answer: concise professional meeting-ready answer.",
+    "Answer: directly answer the selected visible question in concise professional meeting-ready wording.",
     "Approach: brief reasoning or key points.",
     "Code: -",
     "Complexity: -",
@@ -319,6 +355,51 @@ function formatCaptureTargetForPrompt(target: ScreenCaptureTarget) {
   ].filter(Boolean);
 
   return parts.join(", ");
+}
+
+function formatCursorFocusForPrompt(target: ScreenCaptureTarget | undefined) {
+  const cursor = target?.cursor;
+  if (!cursor) {
+    return "No cursor focus hint was available for this capture.";
+  }
+
+  const global = `global=${cursor.globalX},${cursor.globalY}`;
+  const relative = `target=${cursor.targetX},${cursor.targetY}`;
+  const normalized =
+    cursor.normalizedX !== undefined && cursor.normalizedY !== undefined
+      ? `normalized=${Math.round(cursor.normalizedX * 100)}%,${Math.round(
+          cursor.normalizedY * 100
+        )}%`
+      : "normalized=unavailable";
+
+  if (!cursor.insideTarget) {
+    return [
+      `Cursor focus hint: outside captured target (${global}; ${relative}).`,
+      "Do not use this cursor position to choose a question.",
+    ].join(" ");
+  }
+
+  return [
+    `Cursor focus hint: inside captured target (${global}; ${relative}; ${normalized}).`,
+    target.focusRegion
+      ? `A cursor-centered horizontal focus band is included as the first image (${target.focusRegion.imageWidth}x${target.focusRegion.imageHeight}); use it to identify the active question or UI selection before reading the full screenshot.`
+      : "No focus band is included, so use the cursor coordinates only as metadata.",
+    "When multiple plausible questions or distracting text are visible, prioritize the question, code region, language selector, or UI option closest to this cursor position.",
+    "Do not choose an earlier or higher page question when the focus band clearly shows a different active question or visible language option.",
+  ].join(" ");
+}
+
+function formatImageOrderForPrompt(observation: ScreenObservation) {
+  if (!observation.focusImageBase64 || !observation.captureTarget?.focusRegion) {
+    return "Image 1: full active-window screenshot. No cursor-centered horizontal focus band was included.";
+  }
+
+  const region = observation.captureTarget.focusRegion;
+  return [
+    `Image 1: cursor-centered horizontal focus band (${region.imageWidth}x${region.imageHeight}) from source region ${region.width}x${region.height}@${region.x},${region.y}; cursor at ${region.cursorX},${region.cursorY} in the band.`,
+    "Image 2: full active-window screenshot.",
+    "Use Image 1 to choose the current row, nearby text block, language selector, or UI option the user is pointing at. Use Image 2 only as context after that choice.",
+  ].join(" ");
 }
 
 export function extractScreenTaskQuestion(content: string) {
@@ -347,23 +428,29 @@ export function inferScreenTaskKind(content: string): ScreenTaskKind {
 }
 
 export function inferScreenTaskLanguage(content: string) {
-  const codeSection = readLabeledSection(content, ["Code"]).toLowerCase();
+  const codeSection = readLabeledSection(content, [
+    "Code",
+    "Implementation",
+  ]).toLowerCase();
   const normalized = `${content}\n${codeSection}`.toLowerCase();
 
-  if (normalized.includes("```python") || normalized.includes("python")) {
-    return "Python";
-  }
   if (normalized.includes("```typescript") || normalized.includes("typescript")) {
     return "TypeScript";
   }
   if (normalized.includes("```javascript") || normalized.includes("javascript")) {
     return "JavaScript";
   }
+  if (/\b(```go|golang|go)\b/i.test(normalized)) {
+    return "Go";
+  }
   if (normalized.includes("```java") || normalized.includes("java")) {
     return "Java";
   }
   if (normalized.includes("```cpp") || normalized.includes("c++")) {
     return "C++";
+  }
+  if (normalized.includes("```python") || normalized.includes("python")) {
+    return "Python";
   }
 
   return undefined;
@@ -375,13 +462,14 @@ function readLabeledSection(content: string, labels: string[]) {
     "Answer",
     "Approach",
     "Code",
+    "Implementation",
     "Complexity",
     "Clarifying question",
   ];
   const labelPattern = labels.map(escapeRegExp).join("|");
   const boundaryPattern = boundaryLabels.map(escapeRegExp).join("|");
   const pattern = new RegExp(
-    `(?:^|\\n)\\s*(?:[-*]\\s*)?(?:${labelPattern})\\s*:\\s*([\\s\\S]*?)(?=\\n\\s*(?:[-*]\\s*)?(?:${boundaryPattern})\\s*:|$)`,
+    `(?:^|\\n)\\s*(?:[-*]\\s*)?(?:${labelPattern})(?:\\s*\\([^\\n:)]*\\))?\\s*:\\s*([\\s\\S]*?)(?=\\n\\s*(?:[-*]\\s*)?(?:${boundaryPattern})(?:\\s*\\([^\\n:)]*\\))?\\s*:|$)`,
     "i"
   );
   const match = pattern.exec(content);

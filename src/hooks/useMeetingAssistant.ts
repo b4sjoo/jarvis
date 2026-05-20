@@ -995,6 +995,8 @@ export function useMeetingAssistant() {
           hash: observation.hash,
           imageChars: observation.imageBase64?.length ?? 0,
           imageMediaType: observation.imageMediaType,
+          focusImageChars: observation.focusImageBase64?.length ?? 0,
+          focusImageMediaType: observation.focusImageMediaType,
           captureTarget: observation.captureTarget,
         });
         options.onCaptured?.();
@@ -1010,6 +1012,8 @@ export function useMeetingAssistant() {
             captureTarget: observation.captureTarget,
             imageBase64Chars: observation.imageBase64?.length ?? 0,
             imageMediaType: observation.imageMediaType,
+            focusImageBase64Chars: observation.focusImageBase64?.length ?? 0,
+            focusImageMediaType: observation.focusImageMediaType,
           })
         );
 

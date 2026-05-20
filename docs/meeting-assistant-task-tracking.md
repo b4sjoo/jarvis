@@ -24,7 +24,8 @@ Current implementation status:
 - The existing hide/show shortcut now acts as an emergency hide path that collapses the Meeting Assistant UI without stopping meeting audio capture.
 - Observability work has started with in-memory screen and voice workflow traces in the Meeting Assistant panel.
 - User validation confirms the active task lifecycle and emergency hide workflow are usable enough to move into tuning.
-- Cursor-centered question focus selection, broader validation, and performance baselines are in the tuning backlog.
+- Cursor/focus-aware question and language selection has completed its first tuning pass; performance baselines and screen/voice fusion hardening remain in the tuning backlog.
+- The tuning backlog is expanded in `docs/optimization-roadmap.md` so review can happen one optimization at a time before implementation.
 
 ## Milestone 0: Design Review and Scope Lock
 
@@ -195,15 +196,19 @@ Goal: redesign screen context from generic screenshot explanation into a technic
   - time complexity.
   - space complexity.
   - explanation concise enough for live conversation.
-- [ ] Define cursor/focus behavior:
-  - record mouse position at capture time.
+- [x] Define cursor/focus behavior:
+  - record mouse position at capture time when the platform can provide it.
+  - pass target-relative cursor metadata to the screen-task prompt as a focus hint.
+  - send a cursor-centered horizontal focus band as the first screen-task image, followed by the full active-window image as context, when the cursor is inside the captured target.
   - prioritize text or question near cursor when multiple questions or distractors are visible.
-  - consider sending both focused crop and full active-window image.
+  - use the focus band as the primary visual anchor for cursor-adjacent questions, language selectors, or UI options, so visible non-Python language selections can override the Python default.
+  - show cursor focus metadata and focus band preview in Debug Mode Last capture.
 - [x] Decide how Screenshot Auto prompt should interact with meeting mode:
   - recommended: treat it as user preference/instruction, not as the primary system contract.
   - it must not override technical-question output requirements.
 - [x] Redesign Meeting Assistant output sections for screen tasks:
   - `Answer` is rendered first as the highest-priority meeting-ready content.
+  - `Answer` must directly answer the selected visible question, not narrate which question was detected.
   - `Question`.
   - `Approach`.
   - `Code`.
@@ -217,6 +222,12 @@ Goal: redesign screen context from generic screenshot explanation into a technic
 - [x] Add manual clear/dismiss for the active screen task.
 - [x] Add configurable active screen task inactivity timeout.
 - [x] Prioritize `Answer` in the screen-task prompt and UI without shortening the accepted answer/approach length.
+- [x] Tighten screen-task output contract so `Answer` is direct, `Approach` stays explanation-only, and code blocks belong in `Code`.
+- [x] Parse `Code (Language):` and `Implementation:` section labels as `Code` so language-qualified code blocks do not stay under `Approach`.
+- [x] Render all Meeting Assistant model-output text blocks with markdown support and normalize common math delimiters (`$...$`, `$$...$$`, `\(...\)`, `\[...\]`) for readable complexity output.
+- [x] Strip outer code fences from parsed `Code` sections before displaying them in the dedicated code panel.
+- [x] Validate focus-band-first screen targeting with noisy multi-question pages and non-Python language selectors.
+- [ ] Continue hardening screen-task section parsing for less structured model drift.
 
 Exit criteria:
 
@@ -392,6 +403,7 @@ Exit criteria:
 | 2026-05-19 | Enter tuning phase | Active task lifecycle and emergency hide passed user validation; next work should focus on performance and meeting UX refinements |
 | 2026-05-20 | Prioritize capture latency and payload size | Debug traces showed screen resize, image encoding, and oversized image payloads could dominate end-to-end latency, so meeting screen-context captures now use 2048px downscale, JPEG encoding, media-type-aware provider requests, and optimized dev builds for image-related crates |
 | 2026-05-20 | Render screen-task Answer first | Current answer and approach length is acceptable; the next UX improvement is display priority, so screen-task prompts and UI put `Answer` before supporting sections |
+| 2026-05-20 | Complete first focus-aware screen targeting pass | Cursor metadata alone and rectangular crops were insufficient; the accepted path sends a horizontal focus band as Image 1 and the full active-window screenshot as Image 2, with a direct-answer/language-selection contract and markdown/math renderer hardening |
 
 ## Validation Snapshot
 
@@ -407,10 +419,13 @@ Last validated: 2026-05-20.
 - Observability trace validation confirms the duplicate hotkey/cancelled empty-output issue is resolved.
 - Screen-context capture optimization reduced a reproduced slow capture from about 39.7s end-to-end to about 7.5s end-to-end in user testing.
 - Latest validated screen-context trace: `image/jpeg`, about 558K base64 chars, capture about 2.0s, first token about 4.5s after trigger, full answer about 7.5s after trigger.
+- User validation confirms the first cursor/focus-aware targeting pass now chooses the intended question and visible language in normal cases, even when the cursor is only near the relevant area.
+- Known boundary: if the cursor is deliberately placed on a clear distractor such as another question's horizontal row, answering that distractor is expected.
+- User validation confirms markdown emphasis and common complexity math now render readably in Meeting Assistant sections.
 
 ## Immediate Next Tasks
 
-1. Use the new trace panel during mock meetings to identify the slowest or lowest-quality steps.
-2. Add aggregated latency summaries if per-trace inspection is not enough.
+1. Add lightweight aggregate latency and quality baselines so repeated tuning changes can be compared without reading raw traces one by one.
+2. Keep OCR plus cursor-nearest text-block extraction as a later fallback only if explicit distractor-row cases become important.
 3. Continue mock-meeting validation with Zoom first, then Google Meet and Teams.
-4. Keep Knowledge / Memory Base deferred until observability data shows where personalization helps most.
+4. Keep Knowledge / Memory Base deferred until trace baselines and screen/voice fusion are more stable.

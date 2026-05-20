@@ -44,6 +44,8 @@ pub struct CaptureTargetInfo {
     pub original_image_height: Option<u32>,
     pub optimized_for_screen_context: bool,
     pub capture_timings_ms: Option<CaptureTimingInfo>,
+    pub cursor: Option<CaptureCursorInfo>,
+    pub focus_region: Option<CaptureFocusRegionInfo>,
     pub fallback_reason: Option<String>,
     pub candidates: Vec<CaptureCandidateInfo>,
 }
@@ -56,6 +58,41 @@ pub struct CaptureTimingInfo {
     pub image_capture_ms: u64,
     pub image_optimize_ms: u64,
     pub image_encode_ms: u64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CaptureCursorInfo {
+    pub global_x: i32,
+    pub global_y: i32,
+    pub target_x: i32,
+    pub target_y: i32,
+    pub normalized_x: Option<f64>,
+    pub normalized_y: Option<f64>,
+    pub inside_target: bool,
+    pub source: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CaptureFocusRegionInfo {
+    pub x: u32,
+    pub y: u32,
+    pub width: u32,
+    pub height: u32,
+    pub image_width: u32,
+    pub image_height: u32,
+    pub original_image_width: u32,
+    pub original_image_height: u32,
+    pub cursor_x: u32,
+    pub cursor_y: u32,
+    pub source: String,
+}
+
+#[derive(Debug, Clone)]
+struct FocusCropResult {
+    image: image::RgbaImage,
+    region: CaptureFocusRegionInfo,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -75,10 +112,16 @@ pub struct CaptureCandidateInfo {
 pub struct CaptureToBase64Result {
     pub image_base64: String,
     pub image_media_type: String,
+    pub focus_image_base64: Option<String>,
+    pub focus_image_media_type: Option<String>,
     pub target: CaptureTargetInfo,
 }
 
 const SCREEN_CONTEXT_MAX_LONG_EDGE: u32 = 2048;
+const SCREEN_CONTEXT_FOCUS_CROP_MAX_LONG_EDGE: u32 = 1280;
+const SCREEN_CONTEXT_FOCUS_BAND_HEIGHT_RATIO: f64 = 0.18;
+const SCREEN_CONTEXT_FOCUS_BAND_MIN_HEIGHT: u32 = 260;
+const SCREEN_CONTEXT_FOCUS_BAND_MAX_HEIGHT: u32 = 420;
 const SCREEN_CONTEXT_JPEG_QUALITY: u8 = 82;
 const IMAGE_MEDIA_TYPE_PNG: &str = "image/png";
 const IMAGE_MEDIA_TYPE_JPEG: &str = "image/jpeg";
@@ -317,13 +360,13 @@ fn encode_png_image_to_base64(image: &image::RgbaImage) -> Result<String, String
         CompressionType::Fast,
         PngFilterType::Adaptive,
     )
-        .write_image(
-            image.as_raw(),
-            image.width(),
-            image.height(),
-            ColorType::Rgba8.into(),
-        )
-        .map_err(|e| format!("Failed to encode to PNG: {}", e))?;
+    .write_image(
+        image.as_raw(),
+        image.width(),
+        image.height(),
+        ColorType::Rgba8.into(),
+    )
+    .map_err(|e| format!("Failed to encode to PNG: {}", e))?;
 
     Ok(base64::engine::general_purpose::STANDARD.encode(png_buffer))
 }
@@ -348,15 +391,23 @@ fn encode_jpeg_image_to_base64(image: &image::RgbaImage) -> Result<String, Strin
 }
 
 fn optimize_screen_context_image(image: image::RgbaImage) -> image::RgbaImage {
+    optimize_image_to_long_edge(image, SCREEN_CONTEXT_MAX_LONG_EDGE)
+}
+
+fn optimize_focus_crop_image(image: image::RgbaImage) -> image::RgbaImage {
+    optimize_image_to_long_edge(image, SCREEN_CONTEXT_FOCUS_CROP_MAX_LONG_EDGE)
+}
+
+fn optimize_image_to_long_edge(image: image::RgbaImage, max_long_edge: u32) -> image::RgbaImage {
     let width = image.width();
     let height = image.height();
     let long_edge = width.max(height);
 
-    if long_edge <= SCREEN_CONTEXT_MAX_LONG_EDGE {
+    if long_edge <= max_long_edge {
         return image;
     }
 
-    let scale = SCREEN_CONTEXT_MAX_LONG_EDGE as f64 / long_edge as f64;
+    let scale = max_long_edge as f64 / long_edge as f64;
     let next_width = ((width as f64 * scale).round() as u32).max(1);
     let next_height = ((height as f64 * scale).round() as u32).max(1);
 
@@ -393,6 +444,130 @@ fn active_window_skip_reason(window: &XcapWindow) -> Option<String> {
 
 fn is_active_window_candidate(window: &XcapWindow) -> bool {
     active_window_skip_reason(window).is_none()
+}
+
+fn capture_cursor_info_for_bounds(
+    cursor: Option<(i32, i32)>,
+    target_x: i32,
+    target_y: i32,
+    target_width: u32,
+    target_height: u32,
+) -> Option<CaptureCursorInfo> {
+    let (global_x, global_y) = cursor?;
+    let relative_x = global_x - target_x;
+    let relative_y = global_y - target_y;
+    let target_width_i32 = target_width as i32;
+    let target_height_i32 = target_height as i32;
+    let inside_target = relative_x >= 0
+        && relative_y >= 0
+        && relative_x < target_width_i32
+        && relative_y < target_height_i32;
+
+    Some(CaptureCursorInfo {
+        global_x,
+        global_y,
+        target_x: relative_x,
+        target_y: relative_y,
+        normalized_x: inside_target.then(|| relative_x as f64 / target_width.max(1) as f64),
+        normalized_y: inside_target.then(|| relative_y as f64 / target_height.max(1) as f64),
+        inside_target,
+        source: current_cursor_position_source().to_string(),
+    })
+}
+
+fn build_cursor_focus_crop(
+    image: &image::RgbaImage,
+    cursor: Option<&CaptureCursorInfo>,
+    target_width: u32,
+    target_height: u32,
+) -> Option<FocusCropResult> {
+    let cursor = cursor?;
+    if !cursor.inside_target || target_width == 0 || target_height == 0 {
+        return None;
+    }
+
+    let image_width = image.width();
+    let image_height = image.height();
+    if image_width == 0 || image_height == 0 {
+        return None;
+    }
+
+    let cursor_x = ((cursor.target_x.max(0) as f64 / target_width.max(1) as f64)
+        * image_width as f64)
+        .round()
+        .clamp(0.0, image_width.saturating_sub(1) as f64) as u32;
+    let cursor_y = ((cursor.target_y.max(0) as f64 / target_height.max(1) as f64)
+        * image_height as f64)
+        .round()
+        .clamp(0.0, image_height.saturating_sub(1) as f64) as u32;
+
+    let crop_width = image_width;
+    let crop_height = ((image_height as f64 * SCREEN_CONTEXT_FOCUS_BAND_HEIGHT_RATIO).round()
+        as u32)
+        .max(SCREEN_CONTEXT_FOCUS_BAND_MIN_HEIGHT)
+        .min(SCREEN_CONTEXT_FOCUS_BAND_MAX_HEIGHT)
+        .min(image_height)
+        .max(1);
+    let crop_x = 0;
+    let crop_y = centered_crop_start(cursor_y, crop_height, image_height);
+
+    let cropped = image
+        .view(crop_x, crop_y, crop_width, crop_height)
+        .to_image();
+    let optimized = optimize_focus_crop_image(cropped);
+    let optimized_width = optimized.width();
+    let optimized_height = optimized.height();
+    let scale_x = optimized_width as f64 / crop_width.max(1) as f64;
+    let scale_y = optimized_height as f64 / crop_height.max(1) as f64;
+
+    Some(FocusCropResult {
+        image: optimized,
+        region: CaptureFocusRegionInfo {
+            x: crop_x,
+            y: crop_y,
+            width: crop_width,
+            height: crop_height,
+            image_width: optimized_width,
+            image_height: optimized_height,
+            original_image_width: image_width,
+            original_image_height: image_height,
+            cursor_x: ((cursor_x - crop_x) as f64 * scale_x).round() as u32,
+            cursor_y: ((cursor_y - crop_y) as f64 * scale_y).round() as u32,
+            source: "cursor-horizontal-band".to_string(),
+        },
+    })
+}
+
+fn centered_crop_start(center: u32, size: u32, max: u32) -> u32 {
+    if size >= max {
+        return 0;
+    }
+
+    center
+        .saturating_sub(size / 2)
+        .min(max.saturating_sub(size))
+}
+
+#[cfg(target_os = "macos")]
+fn current_cursor_position() -> Option<(i32, i32)> {
+    let event = cidre::cg::Event::with_src(None)?;
+    let location = event.location();
+    Some((location.x.round() as i32, location.y.round() as i32))
+}
+
+#[cfg(not(target_os = "macos"))]
+fn current_cursor_position() -> Option<(i32, i32)> {
+    None
+}
+
+#[cfg(target_os = "macos")]
+fn current_cursor_position_source() -> &'static str {
+    "cg-event-location"
+}
+
+#[cfg(not(target_os = "macos"))]
+fn current_cursor_position_source() -> &'static str {
+    "unavailable"
 }
 
 fn capture_candidates(windows: &[XcapWindow]) -> Vec<CaptureCandidateInfo> {
@@ -492,6 +667,13 @@ async fn capture_active_window_to_base64() -> Result<CaptureToBase64Result, Stri
             .find(is_active_window_candidate)
             .ok_or_else(|| "No suitable active window found".to_string())?;
         let window_lookup_ms = elapsed_ms(lookup_started_at);
+        let cursor = capture_cursor_info_for_bounds(
+            current_cursor_position(),
+            window.x(),
+            window.y(),
+            window.width(),
+            window.height(),
+        );
 
         let capture_started_at = Instant::now();
         let (image, capture_method, monitor_name, fallback_reason) =
@@ -520,6 +702,8 @@ async fn capture_active_window_to_base64() -> Result<CaptureToBase64Result, Stri
         let image_capture_ms = elapsed_ms(capture_started_at);
         let original_image_width = image.width();
         let original_image_height = image.height();
+        let focus_crop =
+            build_cursor_focus_crop(&image, cursor.as_ref(), window.width(), window.height());
 
         let optimize_started_at = Instant::now();
         let image = optimize_screen_context_image(image);
@@ -529,6 +713,16 @@ async fn capture_active_window_to_base64() -> Result<CaptureToBase64Result, Stri
 
         let encode_started_at = Instant::now();
         let image_base64 = encode_jpeg_image_to_base64(&image)?;
+        let (focus_image_base64, focus_image_media_type, focus_region) =
+            if let Some(focus_crop) = focus_crop {
+                (
+                    Some(encode_jpeg_image_to_base64(&focus_crop.image)?),
+                    Some(IMAGE_MEDIA_TYPE_JPEG.to_string()),
+                    Some(focus_crop.region),
+                )
+            } else {
+                (None, None, None)
+            };
         let image_encode_ms = elapsed_ms(encode_started_at);
 
         let target = CaptureTargetInfo {
@@ -553,6 +747,8 @@ async fn capture_active_window_to_base64() -> Result<CaptureToBase64Result, Stri
                 image_optimize_ms,
                 image_encode_ms,
             }),
+            cursor,
+            focus_region,
             fallback_reason,
             candidates,
         };
@@ -560,6 +756,8 @@ async fn capture_active_window_to_base64() -> Result<CaptureToBase64Result, Stri
         Ok(CaptureToBase64Result {
             image_base64,
             image_media_type: IMAGE_MEDIA_TYPE_JPEG.to_string(),
+            focus_image_base64,
+            focus_image_media_type,
             target,
         })
     })
@@ -678,6 +876,13 @@ async fn capture_current_monitor_to_base64(
                 }
             })
             .ok_or_else(|| "Failed to determine target monitor".to_string())?;
+        let cursor = capture_cursor_info_for_bounds(
+            current_cursor_position(),
+            monitor.x(),
+            monitor.y(),
+            monitor.width(),
+            monitor.height(),
+        );
 
         let capture_started_at = Instant::now();
         let image = monitor
@@ -686,6 +891,11 @@ async fn capture_current_monitor_to_base64(
         let image_capture_ms = elapsed_ms(capture_started_at);
         let original_image_width = image.width();
         let original_image_height = image.height();
+        let focus_crop = if optimize_for_screen_context {
+            build_cursor_focus_crop(&image, cursor.as_ref(), monitor.width(), monitor.height())
+        } else {
+            None
+        };
 
         let optimize_started_at = Instant::now();
         let image = if optimize_for_screen_context {
@@ -709,6 +919,16 @@ async fn capture_current_monitor_to_base64(
                 IMAGE_MEDIA_TYPE_PNG.to_string(),
             )
         };
+        let (focus_image_base64, focus_image_media_type, focus_region) =
+            if let Some(focus_crop) = focus_crop {
+                (
+                    Some(encode_jpeg_image_to_base64(&focus_crop.image)?),
+                    Some(IMAGE_MEDIA_TYPE_JPEG.to_string()),
+                    Some(focus_crop.region),
+                )
+            } else {
+                (None, None, None)
+            };
         let image_encode_ms = elapsed_ms(encode_started_at);
 
         let target = CaptureTargetInfo {
@@ -733,6 +953,8 @@ async fn capture_current_monitor_to_base64(
                 image_optimize_ms,
                 image_encode_ms,
             }),
+            cursor,
+            focus_region,
             fallback_reason: None,
             candidates: Vec::new(),
         };
@@ -740,6 +962,8 @@ async fn capture_current_monitor_to_base64(
         Ok(CaptureToBase64Result {
             image_base64,
             image_media_type,
+            focus_image_base64,
+            focus_image_media_type,
             target,
         })
     })

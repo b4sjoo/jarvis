@@ -1,6 +1,7 @@
 import {
   Badge,
   Button,
+  Markdown,
   Popover,
   PopoverContent,
   PopoverTrigger,
@@ -26,6 +27,7 @@ import {
   Loader2Icon,
   MessageSquareTextIcon,
   Minimize2Icon,
+  MousePointer2Icon,
   PauseIcon,
   PlayIcon,
   RadioIcon,
@@ -468,14 +470,15 @@ export const MeetingAssistant = () => {
                       <BrainIcon className="h-3.5 w-3.5" />
                       Answer
                     </div>
-                    <p
+                    <MeetingMarkdownText
                       className={cn(
                         WRAP_TEXT_CLASS,
                         "min-h-14 text-sm font-medium leading-6"
                       )}
-                    >
-                      {suggestionSections.answer || "Waiting for screen answer."}
-                    </p>
+                      value={
+                        suggestionSections.answer || "Waiting for screen answer."
+                      }
+                    />
                   </section>
 
                   <section className="min-w-0 overflow-hidden rounded-md border border-border/70 p-3">
@@ -510,7 +513,7 @@ export const MeetingAssistant = () => {
                           "max-h-56 overflow-y-auto overflow-x-hidden rounded-sm bg-muted p-2 text-[11px] leading-4"
                         )}
                       >
-                        {suggestionSections.code}
+                        {stripCodeFence(suggestionSections.code)}
                       </pre>
                     ) : (
                       <p
@@ -522,9 +525,10 @@ export const MeetingAssistant = () => {
                         No code needed.
                       </p>
                     )}
-                    <p className={cn(WRAP_TEXT_CLASS, "mt-2 text-xs leading-5")}>
-                      {suggestionSections.complexity || "No complexity note."}
-                    </p>
+                    <MeetingMarkdownText
+                      className={cn(WRAP_TEXT_CLASS, "mt-2 text-xs leading-5")}
+                      value={suggestionSections.complexity || "No complexity note."}
+                    />
                   </section>
                 </>
               ) : (
@@ -534,14 +538,13 @@ export const MeetingAssistant = () => {
                       <BrainIcon className="h-3.5 w-3.5" />
                       Meaning
                     </div>
-                    <p
+                    <MeetingMarkdownText
                       className={cn(
                         WRAP_TEXT_CLASS,
                         "min-h-14 text-xs leading-5"
                       )}
-                    >
-                      {suggestionSections.meaning || "Waiting for context."}
-                    </p>
+                      value={suggestionSections.meaning || "Waiting for context."}
+                    />
                   </section>
 
                   <section className="min-w-0 overflow-hidden rounded-md border border-border/70 p-3">
@@ -549,14 +552,13 @@ export const MeetingAssistant = () => {
                       <MessageSquareTextIcon className="h-3.5 w-3.5" />
                       Suggested reply
                     </div>
-                    <p
+                    <MeetingMarkdownText
                       className={cn(
                         WRAP_TEXT_CLASS,
                         "min-h-20 text-xs leading-5"
                       )}
-                    >
-                      {suggestionSections.reply || "Waiting for suggestion."}
-                    </p>
+                      value={suggestionSections.reply || "Waiting for suggestion."}
+                    />
                   </section>
                 </>
               )}
@@ -566,18 +568,19 @@ export const MeetingAssistant = () => {
                   <MessageSquareTextIcon className="h-3.5 w-3.5" />
                   Clarifying question
                 </div>
-                <p
+                <MeetingMarkdownText
                   className={cn(
                     WRAP_TEXT_CLASS,
                     "min-h-14 text-xs leading-5"
                   )}
-                >
-                  {showClarifyingQuestion
-                    ? clarifyingQuestion
-                    : clarifyingQuestion
-                      ? "Dismissed for this suggestion."
-                      : "Not needed yet."}
-                </p>
+                  value={
+                    showClarifyingQuestion
+                      ? clarifyingQuestion
+                      : clarifyingQuestion
+                        ? "Dismissed for this suggestion."
+                        : "Not needed yet."
+                  }
+                />
                 {showClarifyingQuestion ? (
                   <div className="mt-3 grid grid-cols-2 gap-1.5">
                     <Button
@@ -730,6 +733,19 @@ export const MeetingAssistant = () => {
                   >
                     {formatCaptureTargetMethod(latestCaptureTarget)}
                   </div>
+                  {latestCaptureTarget.cursor ? (
+                    <div
+                      className={cn(
+                        WRAP_TEXT_CLASS,
+                        "mt-1 flex items-start gap-1 text-[10px] text-muted-foreground"
+                      )}
+                    >
+                      <MousePointer2Icon className="mt-0.5 h-3 w-3 shrink-0" />
+                      <span>
+                        {formatCaptureCursorFocus(latestCaptureTarget)}
+                      </span>
+                    </div>
+                  ) : null}
                   {latestScreenObservation?.analysisPromptSource ? (
                     <div className="mt-1 text-[10px] text-muted-foreground">
                       Prompt:{" "}
@@ -751,6 +767,21 @@ export const MeetingAssistant = () => {
                       };base64,${latestScreenObservation.imageBase64}`}
                       className="mt-2 h-20 w-full rounded-sm border border-border/50 object-cover"
                     />
+                  ) : null}
+                  {latestScreenObservation?.focusImageBase64 ? (
+                    <div className="mt-2">
+                      <div className="mb-1 text-[10px] font-medium uppercase text-muted-foreground">
+                        Focus band
+                      </div>
+                      <img
+                        alt="Cursor focus band preview"
+                        src={`data:${
+                          latestScreenObservation.focusImageMediaType ||
+                          "image/jpeg"
+                        };base64,${latestScreenObservation.focusImageBase64}`}
+                        className="h-24 w-full rounded-sm border border-border/50 object-cover"
+                      />
+                    </div>
                   ) : null}
                   {latestCaptureTarget.candidates?.length ? (
                     <div className="mt-2 space-y-1 border-t border-border/50 pt-2">
@@ -863,6 +894,23 @@ const Metric = ({ label, value }: { label: string; value: number | string }) => 
   );
 };
 
+const MEETING_MARKDOWN_CLASS =
+  "text-xs leading-5 [&_code]:text-[10px] [&_li]:my-0.5 [&_ol]:my-1 [&_p]:my-0 [&_pre]:my-2 [&_pre]:max-h-72 [&_pre]:overflow-auto [&_strong]:font-semibold [&_ul]:my-1";
+
+const MeetingMarkdownText = ({
+  value,
+  className,
+}: {
+  value: string;
+  className?: string;
+}) => {
+  return (
+    <div className={cn(MEETING_MARKDOWN_CLASS, className)}>
+      <Markdown>{normalizeMeetingMarkdown(value)}</Markdown>
+    </div>
+  );
+};
+
 const SuggestionBlock = ({
   label,
   value,
@@ -875,7 +923,7 @@ const SuggestionBlock = ({
       <div className="mb-1 text-[10px] font-medium uppercase text-muted-foreground">
         {label}
       </div>
-      <p className={cn(WRAP_TEXT_CLASS, "text-xs leading-5")}>{value}</p>
+      <MeetingMarkdownText className={WRAP_TEXT_CLASS} value={value} />
     </div>
   );
 };
@@ -907,6 +955,28 @@ function formatCaptureTargetMethod(target: ScreenCaptureTarget) {
   ].filter(Boolean);
 
   return parts.join(" / ");
+}
+
+function formatCaptureCursorFocus(target: ScreenCaptureTarget) {
+  const cursor = target.cursor;
+  if (!cursor) return "No cursor focus hint";
+
+  const normalized =
+    cursor.normalizedX !== undefined && cursor.normalizedY !== undefined
+      ? ` / ${Math.round(cursor.normalizedX * 100)}%,${Math.round(
+          cursor.normalizedY * 100
+        )}%`
+      : "";
+  const position = `cursor ${cursor.targetX},${cursor.targetY}${normalized}`;
+  const source = cursor.source ? ` / ${cursor.source}` : "";
+
+  const focus = target.focusRegion
+    ? ` / band ${target.focusRegion.imageWidth}x${target.focusRegion.imageHeight}`
+    : "";
+
+  return `${position} / ${
+    cursor.insideTarget ? "inside target" : "outside target"
+  }${focus}${source}`;
 }
 
 function formatCaptureCandidate(
@@ -948,6 +1018,7 @@ const sectionBoundaryLabels = [
   "Answer",
   "Approach",
   "Code",
+  "Implementation",
   "Complexity",
   "Clarifying question",
 ];
@@ -972,7 +1043,10 @@ function parseSuggestionSections(content: string) {
   const screenQuestion = readSuggestionSection(trimmedContent, ["Question"]);
   const answer = readSuggestionSection(trimmedContent, ["Answer"]);
   const approach = readSuggestionSection(trimmedContent, ["Approach"]);
-  const code = readSuggestionSection(trimmedContent, ["Code"]);
+  const code = readSuggestionSection(trimmedContent, [
+    "Code",
+    "Implementation",
+  ]);
   const complexity = readSuggestionSection(trimmedContent, ["Complexity"]);
   const clarifyingQuestion = readSuggestionSection(trimmedContent, [
     "Clarifying question",
@@ -1008,12 +1082,66 @@ function readSuggestionSection(content: string, labels: string[]) {
   const labelPattern = labels.map(escapeRegExp).join("|");
   const boundaryPattern = sectionBoundaryLabels.map(escapeRegExp).join("|");
   const pattern = new RegExp(
-    `(?:^|\\n)\\s*(?:[-*]\\s*)?(?:${labelPattern})\\s*:\\s*([\\s\\S]*?)(?=\\n\\s*(?:[-*]\\s*)?(?:${boundaryPattern})\\s*:|$)`,
+    `(?:^|\\n)\\s*(?:[-*]\\s*)?(?:${labelPattern})(?:\\s*\\([^\\n:)]*\\))?\\s*:\\s*([\\s\\S]*?)(?=\\n\\s*(?:[-*]\\s*)?(?:${boundaryPattern})(?:\\s*\\([^\\n:)]*\\))?\\s*:|$)`,
     "i"
   );
   const match = pattern.exec(content);
 
   return sanitizeSectionText(match?.[1] ?? "");
+}
+
+function normalizeMeetingMarkdown(value: string) {
+  return value
+    .split(/(```[\s\S]*?```)/g)
+    .map((segment) =>
+      segment.startsWith("```") ? segment : normalizeMeetingMathText(segment)
+    )
+    .join("");
+}
+
+function normalizeMeetingMathText(value: string) {
+  return value
+    .replace(/\\\$\\\$([\s\S]*?)\\\$\\\$/g, (_, expression: string) =>
+      normalizeMathExpression(expression)
+    )
+    .replace(/\$\$([\s\S]*?)\$\$/g, (_, expression: string) =>
+      normalizeMathExpression(expression)
+    )
+    .replace(/\\\(([\s\S]*?)\\\)/g, (_, expression: string) =>
+      normalizeMathExpression(expression)
+    )
+    .replace(/\\\[([\s\S]*?)\\\]/g, (_, expression: string) =>
+      normalizeMathExpression(expression)
+    )
+    .replace(/\\\$([^$\n]+?)\\\$/g, (_, expression: string) =>
+      normalizeMathExpression(expression)
+    )
+    .replace(/(^|[^\\$])\$([^$\n]+?)\$/g, (_, prefix: string, expression: string) =>
+      `${prefix}${normalizeMathExpression(expression)}`
+    );
+}
+
+function stripCodeFence(value: string) {
+  const trimmed = value.trim();
+  const match = /^```[^\n]*\n([\s\S]*?)\n?```$/.exec(trimmed);
+
+  return match?.[1]?.trimEnd() ?? value;
+}
+
+function normalizeMathExpression(expression: string) {
+  return expression
+    .trim()
+    .replace(/\\(?:text|mathrm)\{([^{}]*)\}/g, "$1")
+    .replace(/\\times/g, "x")
+    .replace(/\\cdot/g, "*")
+    .replace(/\\leq/g, "<=")
+    .replace(/\\geq/g, ">=")
+    .replace(/\\neq/g, "!=")
+    .replace(/\\left|\\right/g, "")
+    .replace(/\\log/g, "log")
+    .replace(/[{}]/g, "")
+    .replace(/\\([a-zA-Z]+)/g, "$1")
+    .replace(/\s+/g, " ");
 }
 
 function sanitizeSectionText(value: string) {

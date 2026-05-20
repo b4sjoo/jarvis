@@ -28,6 +28,8 @@ export interface ScreenObservation {
   source: "full-screen" | "selection" | "hotkey";
   imageBase64?: string;
   imageMediaType?: string;
+  focusImageBase64?: string;
+  focusImageMediaType?: string;
   ocrText?: string;
   visualSummary?: string;
   analysisPromptSource?: ScreenObservationPromptSource;
@@ -57,6 +59,8 @@ export interface ScreenCaptureTarget {
   originalImageHeight?: number;
   optimizedForScreenContext?: boolean;
   captureTimingsMs?: ScreenCaptureTimings;
+  cursor?: ScreenCaptureCursorFocus;
+  focusRegion?: ScreenCaptureFocusRegion;
   fallbackReason?: string;
   candidates?: ScreenCaptureCandidate[];
 }
@@ -67,6 +71,31 @@ export interface ScreenCaptureTimings {
   imageCaptureMs?: number;
   imageOptimizeMs?: number;
   imageEncodeMs?: number;
+}
+
+export interface ScreenCaptureCursorFocus {
+  globalX: number;
+  globalY: number;
+  targetX: number;
+  targetY: number;
+  normalizedX?: number;
+  normalizedY?: number;
+  insideTarget: boolean;
+  source?: string;
+}
+
+export interface ScreenCaptureFocusRegion {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  imageWidth: number;
+  imageHeight: number;
+  originalImageWidth: number;
+  originalImageHeight: number;
+  cursorX: number;
+  cursorY: number;
+  source?: string;
 }
 
 export interface ScreenCaptureCandidate {

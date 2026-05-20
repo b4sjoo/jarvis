@@ -138,11 +138,14 @@ Use a small repeated scenario set before major prompt, UI, or provider changes.
 
 ## Near-Term Tuning Priorities
 
-1. Add lightweight latency and resource instrumentation.
-2. Measure answer speed and usefulness against the scenario suite.
-3. Tune prompts and response formatting based on repeated failures.
-4. Improve screen focus selection for multiple-question or noisy screens.
-5. Continue Zoom first, then Google Meet and Teams validation.
+The detailed review backlog now lives in [optimization-roadmap.md](optimization-roadmap.md). The short version:
+
+1. Completed: improve screen focus selection for multiple-question or noisy screens with cursor metadata, horizontal focus band capture, focus-band-first image ordering, and a direct-answer prompt contract.
+2. Add lightweight aggregate latency and quality baselines.
+3. Harden screen and voice fusion for clarification, follow-up, topic switch, and ambient speech.
+4. Move screen-task answers toward more structured state only where parser drift still hurts reliability.
+5. Add response actions only after the core critical path remains calm and compact.
+6. Continue Zoom first, then Google Meet and Teams validation.
 
 ## Observability Scope
 
@@ -160,7 +163,11 @@ The first observability pass found and fixed two concrete screen workflow bottle
 
 Current screen-context captures use single-flight execution, native sub-step timings, 2048px JPEG payloads, and media-type-aware provider requests. The latest user trace reached about 7.5 seconds end-to-end with first token about 4.5 seconds after trigger, which is usable enough to continue tuning answer compactness and quality.
 
-For screen-task UX, the current answer and approach length is acceptable. The next tuning decision is display priority: keep the complete structured answer, but prompt and render `Answer` first so the user sees meeting-ready wording before supporting details.
+For screen-task UX, the current answer and approach length is acceptable. The first display-priority pass is complete: screen-task prompts and the Meeting Assistant UI now put `Answer` before supporting sections so the user sees meeting-ready wording first.
+
+The first focus-aware screen targeting pass is also complete. Jarvis records cursor metadata, creates a cursor-centered horizontal focus band when the cursor is inside the active capture target, sends that band before the full active-window screenshot, and treats visible language selection near the focus area as stronger than the Python default. User testing now shows stable question and language recognition in normal cases; the known boundary is an explicit distractor row under the cursor.
+
+During that pass, Meeting Assistant rendering was hardened as well: language-qualified code sections are parsed into the dedicated `Code` panel, outer code fences are stripped there, and markdown/math-like model output is normalized before display.
 
 ## Deferred: Knowledge / Memory Base
 
