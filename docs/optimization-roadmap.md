@@ -505,15 +505,20 @@ First slice implementation:
 ### Problem
 
 When answer quality issues are subtle, screenshots and prompts need to be inspected outside the live meeting moment. Current traces are in-memory and local, which is good for privacy but limited for deeper debugging.
+Manual export alone is not enough for voice traces because they can refresh quickly; by the time the user decides to export, the useful trace may no longer be the latest visible trace.
 
 ### Proposed Direction
 
-Add explicit opt-in trace export:
+Add Debug Mode trace export with both automatic and manual paths:
 
-- Export selected trace as JSON.
+- When Debug Mode is enabled, automatically export completed traces that end in `error`.
+- When Debug Mode is enabled, automatically export completed slow traces using the current metrics-derived thresholds: screen traces at 15 seconds and voice traces at 20 seconds.
+- Keep a manual `Export` button for the currently visible trace.
+- Export each trace as JSON under the local app data `meeting-trace-exports` directory.
 - Include prompt text, model output, timing, provider metadata, capture metadata.
 - Do not include raw screenshot or audio by default.
 - Optionally include image only if the user explicitly chooses a debug export with media.
+- Keep auto export enabled for personal-use tuning; revisit the default before any production release.
 
 Replay can come later:
 
@@ -525,24 +530,31 @@ Replay can come later:
 - Easier prompt iteration.
 - Better bug reports for ourselves.
 - Safer debugging because export is explicit.
+- Better capture of fast-refreshing voice errors and unusually slow traces without requiring the user to click at the exact right time.
 
 ### Risks
 
 - Export files can contain sensitive prompt, transcript, or screen metadata.
 - Replay can become a large feature if overbuilt.
 - Including images requires careful consent and labeling.
+- Auto export can accumulate local files if Debug Mode stays on for long sessions.
 
 ### Validation
 
 - Exported JSON is readable and complete enough for diagnosis.
 - Default export excludes raw screenshots and audio.
 - UI makes sensitivity clear.
+- Error traces export automatically while Debug Mode is enabled.
+- Screen traces longer than 15 seconds export automatically while Debug Mode is enabled.
+- Voice traces longer than 20 seconds export automatically while Debug Mode is enabled.
+- Manual export still works for the currently visible trace.
+- A manual exported screen trace was inspected successfully: it parsed as JSON, contained the screen model input/output and capture timings, and contained no raw screenshot or audio payload.
 
 ### Open Questions
 
-- Where should exports be saved?
-- Should export be a Debug Mode-only feature?
+- Should the slow-trace threshold become configurable after a few sessions?
 - Should image inclusion be a separate one-time checkbox?
+- Should Jarvis add a cleanup policy for old trace export files?
 
 ## P2: Automatic Screen Observation
 
@@ -641,4 +653,4 @@ Avoid embeddings, semantic cache, and complex retrieval until there is a clear n
 8. Automatic screen observation.
 9. Knowledge and memory base.
 
-The recommended next implementation slice remains prompt-level interview task fusion. Realtime transcript quality should follow if voice-only tests show that transcript latency, transcript cleanup, or technical-term accuracy is now the main bottleneck.
+After Debug Trace Export, the next roadmap item to review is Automatic Screen Observation. It remains a P2 feature because it changes the privacy/cost profile; implementation should start only after the manual capture workflow stays reliable in real use. Knowledge and memory base follows after the observation decision, unless field-knowledge personalization becomes the dominant product gap first.

@@ -753,15 +753,39 @@ export const MeetingAssistant = () => {
                         Trace: {formatTraceTitle(latestTrace)}
                       </span>
                     </div>
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      className="h-7 shrink-0 px-2 text-[10px]"
-                      onClick={meeting.clearTraces}
-                    >
-                      Clear
-                    </Button>
+                    <div className="flex shrink-0 items-center gap-1">
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        className="h-7 px-2 text-[10px]"
+                        title="Export this trace to local app data"
+                        onClick={() => {
+                          void meeting.exportTrace(latestTrace.id);
+                        }}
+                      >
+                        Export
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        className="h-7 px-2 text-[10px]"
+                        onClick={meeting.clearTraces}
+                      >
+                        Clear
+                      </Button>
+                    </div>
                   </div>
+                  {meeting.lastTraceExport ? (
+                    <div
+                      className="mb-2 flex min-w-0 items-center gap-1 text-[10px] text-muted-foreground"
+                      title={meeting.lastTraceExport.path}
+                    >
+                      <span className="shrink-0">Last export:</span>
+                      <span className="min-w-0 truncate font-mono">
+                        {formatTraceExportName(meeting.lastTraceExport.path)}
+                      </span>
+                    </div>
+                  ) : null}
                   <div className="space-y-1">
                     {latestTrace.steps.map((step) => (
                       <div
@@ -1560,6 +1584,10 @@ function formatTraceDuration(durationMs: number | undefined) {
   if (durationMs === undefined) return "...";
   if (durationMs < 1000) return `${durationMs}ms`;
   return `${(durationMs / 1000).toFixed(1)}s`;
+}
+
+function formatTraceExportName(path: string) {
+  return path.split(/[\\/]/).pop() || path;
 }
 
 function formatTraceStatusCounts(summary: MeetingTraceKindSummary) {

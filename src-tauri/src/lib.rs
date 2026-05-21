@@ -37,6 +37,8 @@ fn write_meeting_trace_log(message: String) {
 
 const MEETING_TRACE_METRICS_FILE: &str = "meeting-trace-metrics.json";
 const MEETING_TRACE_METRICS_MAX_BYTES: usize = 2 * 1024 * 1024;
+const MEETING_TRACE_EXPORTS_DIR: &str = "meeting-trace-exports";
+const MEETING_TRACE_EXPORT_MAX_BYTES: usize = 10 * 1024 * 1024;
 
 #[tauri::command]
 fn read_meeting_trace_metrics(app: AppHandle) -> Result<String, String> {
@@ -67,6 +69,63 @@ fn write_meeting_trace_metrics(app: AppHandle, payload: String) -> Result<(), St
 
     fs::write(path, payload)
         .map_err(|error| format!("Failed to write meeting trace metrics: {}", error))
+}
+
+#[tauri::command]
+fn export_meeting_trace(
+    app: AppHandle,
+    file_name: String,
+    payload: String,
+) -> Result<String, String> {
+    if payload.len() > MEETING_TRACE_EXPORT_MAX_BYTES {
+        return Err("Meeting trace export payload is too large.".to_string());
+    }
+
+    let safe_file_name = sanitize_trace_export_file_name(&file_name);
+    let app_data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| format!("Failed to resolve app data directory: {}", error))?;
+    let export_dir = app_data_dir.join(MEETING_TRACE_EXPORTS_DIR);
+
+    fs::create_dir_all(&export_dir)
+        .map_err(|error| format!("Failed to create meeting trace export directory: {}", error))?;
+
+    let path = export_dir.join(safe_file_name);
+    fs::write(&path, payload)
+        .map_err(|error| format!("Failed to export meeting trace: {}", error))?;
+
+    Ok(path.to_string_lossy().to_string())
+}
+
+fn sanitize_trace_export_file_name(file_name: &str) -> String {
+    let sanitized: String = file_name
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric()
+                || character == '-'
+                || character == '_'
+                || character == '.'
+            {
+                character
+            } else {
+                '-'
+            }
+        })
+        .collect();
+
+    let trimmed = sanitized.trim_matches('-');
+    let file_name = if trimmed.is_empty() {
+        "jarvis-trace-export.json".to_string()
+    } else {
+        trimmed.to_string()
+    };
+
+    if file_name.ends_with(".json") {
+        file_name
+    } else {
+        format!("{}.json", file_name)
+    }
 }
 
 fn meeting_trace_metrics_path(app: &AppHandle) -> Result<PathBuf, String> {
@@ -108,6 +167,7 @@ pub fn run() {
             write_meeting_trace_log,
             read_meeting_trace_metrics,
             write_meeting_trace_metrics,
+            export_meeting_trace,
             window::set_window_height,
             window::open_dashboard,
             window::toggle_dashboard,

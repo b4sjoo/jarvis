@@ -1,5 +1,6 @@
 import {
   MeetingTrace,
+  MeetingTraceExportTrigger,
   MeetingTraceIO,
   MeetingTraceKind,
   MeetingTraceStatus,
@@ -11,6 +12,7 @@ import { invoke } from "@tauri-apps/api/core";
 const MAX_TRACE_ITEMS = 500;
 const DEFAULT_SUMMARY_WINDOW_SIZE = 20;
 const PERSISTED_TRACE_METRICS_VERSION = 1;
+const MEETING_TRACE_EXPORT_VERSION = 1;
 
 export class MeetingTraceStore {
   private traces: MeetingTrace[] = [];
@@ -284,11 +286,50 @@ export interface PersistedMeetingTraceMetrics {
   traces: MeetingTrace[];
 }
 
+export interface MeetingTraceExportOptions {
+  trigger: MeetingTraceExportTrigger;
+  slowThresholdMs?: number;
+}
+
+export interface ExportedMeetingTrace {
+  version: number;
+  exportedAt: number;
+  trigger: MeetingTraceExportTrigger;
+  slowThresholdMs?: number;
+  privacy: {
+    rawScreenshotsIncluded: false;
+    rawAudioIncluded: false;
+    note: string;
+  };
+  trace: MeetingTrace;
+}
+
 export function serializeMeetingTraceMetrics(traces: MeetingTrace[]) {
   const payload: PersistedMeetingTraceMetrics = {
     version: PERSISTED_TRACE_METRICS_VERSION,
     savedAt: Date.now(),
     traces: traces.map(sanitizeTraceForPersistence),
+  };
+
+  return JSON.stringify(payload, null, 2);
+}
+
+export function serializeMeetingTraceExport(
+  trace: MeetingTrace,
+  options: MeetingTraceExportOptions
+) {
+  const payload: ExportedMeetingTrace = {
+    version: MEETING_TRACE_EXPORT_VERSION,
+    exportedAt: Date.now(),
+    trigger: options.trigger,
+    slowThresholdMs: options.slowThresholdMs,
+    privacy: {
+      rawScreenshotsIncluded: false,
+      rawAudioIncluded: false,
+      note:
+        "This export keeps text prompts, model/STT outputs, timing, status, and metadata. Raw screenshots, screenshot base64, raw audio, and audio base64 are not included by default.",
+    },
+    trace: sanitizeTraceForExport(trace),
   };
 
   return JSON.stringify(payload, null, 2);
@@ -328,6 +369,27 @@ export function summarizeMeetingTraces(
       recentTraces.filter((trace) => trace.kind === "voice"),
       "voice"
     ),
+  };
+}
+
+function sanitizeTraceForExport(trace: MeetingTrace): MeetingTrace {
+  return {
+    ...cloneTrace(trace),
+    steps: trace.steps.map((step) => ({
+      ...step,
+      metadata: sanitizeExportMetadata(step.metadata),
+    })),
+    inputs: trace.inputs.map((input) => ({
+      ...input,
+      value: sanitizeExportText(input.value),
+      metadata: sanitizeExportMetadata(input.metadata),
+    })),
+    outputs: trace.outputs.map((output) => ({
+      ...output,
+      value: sanitizeExportText(output.value),
+      metadata: sanitizeExportMetadata(output.metadata),
+    })),
+    metadata: sanitizeExportMetadata(trace.metadata),
   };
 }
 
@@ -388,6 +450,51 @@ function summarizeTraceKind(
   }
 
   return summary;
+}
+
+function sanitizeExportMetadata(metadata: Record<string, unknown> | undefined) {
+  if (!metadata) return undefined;
+  return sanitizeExportValue(metadata) as Record<string, unknown>;
+}
+
+function sanitizeExportValue(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map(sanitizeExportValue);
+  }
+
+  if (isRecord(value)) {
+    const sanitized: Record<string, unknown> = {};
+
+    for (const [key, nestedValue] of Object.entries(value)) {
+      const normalizedKey = key.toLowerCase();
+      if (
+        typeof nestedValue === "string" &&
+        (normalizedKey.includes("base64") ||
+          normalizedKey.includes("rawaudio") ||
+          normalizedKey.includes("raw_audio"))
+      ) {
+        sanitized[key] = `[redacted ${key}; chars=${nestedValue.length}]`;
+        continue;
+      }
+
+      sanitized[key] = sanitizeExportValue(nestedValue);
+    }
+
+    return sanitized;
+  }
+
+  if (typeof value === "string") {
+    return sanitizeExportText(value);
+  }
+
+  return value;
+}
+
+function sanitizeExportText(value: string) {
+  return value.replace(
+    /data:(?:image|audio)\/[a-zA-Z0-9.+-]+;base64,[A-Za-z0-9+/=]+/g,
+    (match) => `[redacted media data url; chars=${match.length}]`
+  );
 }
 
 function summarizeValues(values: number[]): MeetingTraceValueSummary {

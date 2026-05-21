@@ -20,6 +20,9 @@ import {
   MeetingContextManager,
   MeetingSetupWarning,
   MeetingTraceStore,
+  MeetingTrace,
+  MeetingTraceExportRecord,
+  MeetingTraceExportTrigger,
   ScreenObservation,
   base64WavToBlob,
   captureScreenObservation,
@@ -29,6 +32,7 @@ import {
   inferScreenTaskLanguage,
   parseMeetingTraceMetrics,
   parseScreenTaskAnswer,
+  serializeMeetingTraceExport,
   serializeMeetingTraceMetrics,
   solveScreenAnchoredTask,
   transcribeMeetingAudio,
@@ -41,6 +45,13 @@ const DEFAULT_ACTIVE_SCREEN_TASK_TIMEOUT_MINUTES = 30;
 const MIN_ACTIVE_SCREEN_TASK_TIMEOUT_MINUTES = 5;
 const MAX_ACTIVE_SCREEN_TASK_TIMEOUT_MINUTES = 240;
 const TRACE_METRICS_PERSIST_DEBOUNCE_MS = 750;
+const TRACE_AUTO_EXPORT_SLOW_THRESHOLDS_MS: Record<
+  MeetingTrace["kind"],
+  number
+> = {
+  screen: 15_000,
+  voice: 20_000,
+};
 
 const MISSING_STT_MESSAGE =
   "Choose a speech-to-text provider in Dev Space before starting Jarvis.";
@@ -342,6 +353,32 @@ function readCompactSection(content: string, label: string) {
   return value === "-" ? "" : value;
 }
 
+function shouldAutoExportTrace(trace: MeetingTrace) {
+  if (trace.status === "running") return false;
+  if (trace.status === "error") return true;
+  return (trace.durationMs ?? 0) >= getTraceAutoExportSlowThresholdMs(trace);
+}
+
+function getAutoExportTrigger(
+  trace: MeetingTrace
+): MeetingTraceExportTrigger {
+  return trace.status === "error" ? "auto-error" : "auto-slow";
+}
+
+function getTraceAutoExportSlowThresholdMs(trace: Pick<MeetingTrace, "kind">) {
+  return TRACE_AUTO_EXPORT_SLOW_THRESHOLDS_MS[trace.kind];
+}
+
+function createTraceExportFileName(
+  trace: MeetingTrace,
+  trigger: MeetingTraceExportTrigger
+) {
+  const timestamp = new Date(trace.startedAt)
+    .toISOString()
+    .replace(/[:.]/g, "-");
+  return `jarvis-trace-${trace.kind}-${trigger}-${timestamp}-${trace.id}.json`;
+}
+
 function isMeetingPrivacyMode(
   value: unknown
 ): value is MeetingPrivacyMode {
@@ -406,6 +443,8 @@ export function useMeetingAssistant() {
   const traceMetricsPersistTimerRef = useRef<number | null>(null);
   const traceMetricsPersistenceReadyRef = useRef(false);
   const lastTraceMetricsPayloadRef = useRef<string | null>(null);
+  const autoExportProcessedTraceIdsRef = useRef(new Set<string>());
+  const debugModeRef = useRef(INITIAL_STATE.settings.debugMode);
   const activeRef = useRef(false);
   const latestScreenHashRef = useRef<string | undefined>(undefined);
   const advisorDebounceTimerRef = useRef<number | null>(null);
@@ -499,6 +538,94 @@ export function useMeetingAssistant() {
       });
     }, TRACE_METRICS_PERSIST_DEBOUNCE_MS);
   }, []);
+
+  const exportTraceObject = useCallback(
+    async (
+      trace: MeetingTrace,
+      trigger: MeetingTraceExportTrigger = "manual"
+    ) => {
+      const payload = serializeMeetingTraceExport(trace, {
+        trigger,
+        slowThresholdMs: getTraceAutoExportSlowThresholdMs(trace),
+      });
+      const fileName = createTraceExportFileName(trace, trigger);
+      const path = await invoke<string>("export_meeting_trace", {
+        fileName,
+        payload,
+      });
+      const record: MeetingTraceExportRecord = {
+        traceId: trace.id,
+        path,
+        trigger,
+        exportedAt: Date.now(),
+      };
+
+      setState((previous) => ({
+        ...previous,
+        lastTraceExport: record,
+      }));
+
+      return record;
+    },
+    []
+  );
+
+  const maybeAutoExportTraces = useCallback(
+    (traces: MeetingTrace[]) => {
+      for (const trace of traces) {
+        if (trace.status === "running") continue;
+        if (autoExportProcessedTraceIdsRef.current.has(trace.id)) continue;
+
+        autoExportProcessedTraceIdsRef.current.add(trace.id);
+
+        if (
+          !traceMetricsPersistenceReadyRef.current ||
+          !debugModeRef.current ||
+          !shouldAutoExportTrace(trace)
+        ) {
+          continue;
+        }
+
+        void exportTraceObject(trace, getAutoExportTrigger(trace)).catch(
+          (error) => {
+            console.warn("Failed to auto-export meeting trace", error);
+          }
+        );
+      }
+    },
+    [exportTraceObject]
+  );
+
+  const exportTrace = useCallback(
+    async (traceId?: string) => {
+      const traces = traceStoreRef.current.getTraces();
+      const trace = traceId
+        ? traces.find((candidate) => candidate.id === traceId)
+        : traces.find((candidate) => candidate.status !== "running") ??
+          traces[0];
+
+      if (!trace) {
+        setState((previous) => ({
+          ...previous,
+          error: "There is no trace to export yet.",
+        }));
+        return;
+      }
+
+      try {
+        await exportTraceObject(trace, "manual");
+      } catch (error) {
+        setState((previous) => ({
+          ...previous,
+          error:
+            error instanceof Error
+              ? error.message
+              : "Failed to export meeting trace.",
+        }));
+      }
+    },
+    [exportTraceObject]
+  );
 
   const updateSettings = useCallback(
     (resolveSettings: (previous: MeetingAssistantSettings) => MeetingAssistantSettings) => {
@@ -1734,10 +1861,12 @@ export function useMeetingAssistant() {
         traces,
       }));
       scheduleTraceMetricsPersistence();
+      maybeAutoExportTraces(traces);
     });
-  }, [scheduleTraceMetricsPersistence]);
+  }, [maybeAutoExportTraces, scheduleTraceMetricsPersistence]);
 
   useEffect(() => {
+    debugModeRef.current = state.settings.debugMode;
     traceStoreRef.current.setDebugEnabled(state.settings.debugMode);
   }, [state.settings.debugMode]);
 
@@ -1806,6 +1935,7 @@ export function useMeetingAssistant() {
     clearActiveScreenTask,
     clearTraces,
     captureScreenContext,
+    exportTrace,
     regenerateSuggestion,
     applyResponseAction,
     answerClarifyingQuestion,

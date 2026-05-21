@@ -345,6 +345,15 @@ export interface MeetingTrace {
   error?: string;
 }
 
+export type MeetingTraceExportTrigger = "manual" | "auto-error" | "auto-slow";
+
+export interface MeetingTraceExportRecord {
+  traceId: string;
+  path: string;
+  trigger: MeetingTraceExportTrigger;
+  exportedAt: number;
+}
+
 export interface MeetingAssistantState {
   status: MeetingAssistantStatus;
   transcriptTurns: TranscriptTurn[];
@@ -356,4 +365,5 @@ export interface MeetingAssistantState {
   error: string | null;
   audioStatus: MeetingAudioStatus | null;
   settings: MeetingAssistantSettings;
+  lastTraceExport?: MeetingTraceExportRecord;
 }

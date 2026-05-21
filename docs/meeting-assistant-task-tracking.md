@@ -310,6 +310,28 @@ Exit criteria:
 - Normal meeting mode remains compact because settings are behind `Configurations`.
 - Headphone/system-audio panel stays focused on speech capture behavior.
 
+## Milestone 5D: Debug Trace Export
+
+Goal: make high-value debug traces available after fast-refreshing meeting moments without requiring manual copy/paste from terminal logs.
+
+- [x] Define Debug Mode trace export behavior in the optimization roadmap.
+- [x] Add local trace export command writing JSON to app data `meeting-trace-exports`.
+- [x] Export completed error traces automatically while Debug Mode is enabled.
+- [x] Export completed slow traces automatically while Debug Mode is enabled, using current metrics-derived thresholds: screen >= 15s and voice >= 20s.
+- [x] Add manual `Export` action for the currently visible Debug Mode trace.
+- [x] Keep default exports text/metadata-only: prompts, outputs, timing, provider metadata, capture metadata, status, and errors.
+- [x] Exclude raw screenshots, screenshot base64, raw audio, and audio base64 from default exports.
+- [x] Validate exported JSON from a manual screen trace: parseable file, complete timing/input/output metadata, and no raw screenshot/audio payload.
+- [x] Keep slow-threshold configurability as a later cleanup item rather than blocking this slice.
+
+Exit criteria:
+
+- Error traces are preserved even when voice traces refresh quickly.
+- Unusually slow traces are exported without manual timing.
+- Manual export remains available for the latest visible trace.
+- Exported JSON is readable enough for prompt, latency, and provider debugging.
+- Production-readiness review can later disable or narrow auto export by default.
+
 ## Milestone 6: Automatic Screen Observation
 
 Goal: add low-frequency, low-noise visual awareness.
@@ -495,6 +517,7 @@ Exit criteria:
 | 2026-05-21 | Remove main UI response auto-scroll setting | Auto-scroll did not support the desired answer/code review flow; Response Settings now focuses on length and language |
 | 2026-05-21 | Separate model-call response config domains | Direct Jarvis conversations keep main UI `RESPONSE_SETTINGS`; Meeting Assistant advisor/screen calls bypass that global prompt injection and use Meeting Assistant settings only |
 | 2026-05-21 | Refine response actions after quick testing | Remove `Shorter`; rename `Chinese` action to `Bilingual`; keep `Speakable` and `Focus` separate because one optimizes sayable wording and the other re-centers technical content; preserve coding `Code` sections during action regeneration |
+| 2026-05-21 | Add Debug Mode auto trace export | Personal-use tuning benefits from preserving fast-refreshing error and slow traces; current persisted metrics support screen >= 15s and voice >= 20s as auto-export thresholds, while keeping raw screenshots/audio out of default exports |
 
 ## Validation Snapshot
 
@@ -524,6 +547,7 @@ Last validated: 2026-05-21.
 - Response action and Meeting Assistant ergonomics implementation builds successfully; `npm run build` and `git diff --check` pass after response config domain separation, main UI auto-scroll removal, and the English assignment brief update.
 - Quick response-action feedback is incorporated in docs and implementation: `Shorter` removed, `Chinese` action renamed to `Bilingual`, and coding action outputs guarded against losing `Code`.
 - `npm run build` and `git diff --check` pass after the `Bilingual`/code-preservation response action refinement.
+- Debug trace export is implemented for manual export plus Debug Mode automatic export of error/slow traces; a manual exported screen trace was inspected and confirmed parseable, complete enough for debugging, and free of raw screenshot/audio payloads.
 
 ## Immediate Next Tasks
 
@@ -534,5 +558,5 @@ Last validated: 2026-05-21.
 5. P0: Watch low-signal filtering quality, especially whether useful short constraints are accidentally ignored or filler still triggers advisor calls.
 6. P0: Watch task-switch confirmation usefulness and whether explicit `New task` / `Same task` actions feel fast enough during live use.
 7. P1: Use persisted metrics during future tuning and revisit whether 500 retained sanitized records plus latest-20 baselines are enough.
-8. P1: Start realtime STT or transcript cleanup work only if transcript latency, technical-term accuracy, or code-mixed speech becomes the dominant failure.
+8. P1: Start realtime STT or transcript cleanup work only if transcript latency, transcript cleanup, or technical-term accuracy becomes the dominant failure.
 9. P1: Consider `ActiveMeetingTask` only if voice-seeded tasks need durable multi-turn state beyond transcript context.
