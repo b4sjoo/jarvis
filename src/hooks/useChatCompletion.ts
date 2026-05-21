@@ -10,7 +10,6 @@ import {
   MESSAGE_ID_OFFSET,
   generateMessageId,
   generateRequestId,
-  getResponseSettings,
 } from "@/lib";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -86,13 +85,6 @@ export const useChatCompletion = (
   useEffect(() => {
     screenshotConfigRef.current = screenshotConfiguration;
   }, [screenshotConfiguration]);
-
-  const scrollToBottom = () => {
-    const responseSettings = getResponseSettings();
-    if (responseSettings.autoScroll) {
-      messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-    }
-  };
 
   const setInput = useCallback((value: string) => {
     setState((prev) => ({ ...prev, input: value }));
@@ -218,9 +210,6 @@ export const useChatCompletion = (
           attachedFiles: [],
         }));
 
-        // Scroll to bottom after adding user message
-        setTimeout(scrollToBottom, 100);
-
         let fullResponse = "";
 
         try {
@@ -275,9 +264,6 @@ export const useChatCompletion = (
             }
 
             setMessages(updatedWithResponse);
-
-            // Auto-scroll during streaming
-            scrollToBottom();
           }
         } catch (e: any) {
           // Only show error if this is still the current request and not aborted

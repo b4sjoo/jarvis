@@ -2,6 +2,8 @@ import {
   AdvisorPromptContext,
   AdvisorRequestMode,
   ClarifyingQuestionFeedback,
+  MeetingResponseActionMode,
+  MeetingResponseConfig,
 } from "./types";
 
 export function buildAdvisorSystemPrompt() {
@@ -28,6 +30,8 @@ interface AdvisorUserMessageOptions {
   mode?: AdvisorRequestMode;
   currentSuggestion?: string;
   clarifyingFeedback?: ClarifyingQuestionFeedback;
+  responseAction?: MeetingResponseActionMode;
+  responseConfig?: MeetingResponseConfig;
 }
 
 export function buildAdvisorUserMessage(
@@ -79,6 +83,9 @@ export function buildAdvisorUserMessage(
     "<glossary>",
     context.glossaryText || "No glossary.",
     "</glossary>",
+    "<response_preferences>",
+    formatResponsePreferences(options.responseConfig),
+    "</response_preferences>",
   ];
 
   if (previousSuggestion) {
@@ -98,6 +105,26 @@ export function buildAdvisorUserMessage(
       )}`,
       "</clarifying_feedback>"
     );
+  }
+
+  if (mode === "response-action") {
+    sections.push(
+      "<mode>",
+      mode,
+      "</mode>",
+      "<response_action>",
+      options.responseAction ?? "focus",
+      "</response_action>",
+      "<output>",
+      "Transform <previous_suggestion> for the requested response action. Treat it as source material, not as a new independent question.",
+      "Preserve the active task, visible question, and technical constraints. Do not invent new screen content, hidden requirements, speakers, or meeting dialogue.",
+      "If <previous_suggestion> is empty or only '-', output a single dash.",
+      ...buildResponseActionInstructions(options.responseAction ?? "focus"),
+      ...buildResponseConfigInstructions(options.responseConfig),
+      "</output>"
+    );
+
+    return sections.join("\n");
   }
 
   if (mode === "screen-anchored") {
@@ -124,6 +151,7 @@ export function buildAdvisorUserMessage(
       "Clarifying question: one click-answerable question if a missing constraint matters, otherwise '-'.",
       "Do not invent colleagues, speakers, or hidden requirements.",
       ...buildModeInstructions(mode),
+      ...buildResponseConfigInstructions(options.responseConfig),
       "</output>"
     );
 
@@ -147,10 +175,95 @@ export function buildAdvisorUserMessage(
     ...buildVoiceSeededInstructions(contextMode),
     "If no help is needed, output a single dash.",
     ...buildModeInstructions(mode),
+    ...buildResponseConfigInstructions(options.responseConfig),
     "</output>"
   );
 
   return sections.join("\n");
+}
+
+function formatResponsePreferences(config: MeetingResponseConfig | undefined) {
+  if (!config) {
+    return "Length: normal\nLanguage: auto";
+  }
+
+  return [
+    `Length: ${config.length}`,
+    `Natural language: ${config.language}`,
+    "These preferences affect answer wording and explanation depth. They do not override visible programming language requirements.",
+  ].join("\n");
+}
+
+function buildResponseConfigInstructions(
+  config: MeetingResponseConfig | undefined
+) {
+  if (!config) return [];
+
+  const instructions: string[] = [];
+
+  if (config.length === "short") {
+    instructions.push(
+      "Response length preference: keep the answer as short as possible while preserving the main actionable point."
+    );
+  } else if (config.length === "detailed") {
+    instructions.push(
+      "Response length preference: include enough reasoning, caveats, or implementation detail to support the answer, while staying useful during a live meeting."
+    );
+  } else {
+    instructions.push(
+      "Response length preference: use the default compact Jarvis style."
+    );
+  }
+
+  if (config.language === "english") {
+    instructions.push(
+      "Natural language preference: answer in meeting-ready English unless a Chinese meaning section is explicitly required by the output format."
+    );
+  } else if (config.language === "chinese") {
+    instructions.push(
+      "Natural language preference: explain in concise Chinese while preserving important English technical terms. Do not translate programming language names or code identifiers."
+    );
+  } else {
+    instructions.push(
+      "Natural language preference: use the language that best fits the visible task and transcript context."
+    );
+  }
+
+  return instructions;
+}
+
+function buildResponseActionInstructions(action: MeetingResponseActionMode) {
+  if (action === "speakable") {
+    return [
+      "Action goal: produce a speakable answer the user can say out loud.",
+      "Use this exact compact format:",
+      "Meaning: -",
+      "Reply: one to three short professional English sentences.",
+      "Question: -",
+      "Avoid code blocks. Mention complexity only when it is central to the answer.",
+    ];
+  }
+
+  if (action === "chinese") {
+    return [
+      "Action goal: help the user quickly understand the current answer in Chinese.",
+      "Use this exact compact format:",
+      "Meaning: concise Chinese explanation of the current answer or approach.",
+      "Reply: -",
+      "Question: -",
+      "Preserve important English technical terms such as RAG, heap, rate limiter, TypeScript, or O(n).",
+      "Avoid long teaching mode.",
+    ];
+  }
+
+  return [
+    "Action goal: focus the current answer on the most useful technical angle.",
+    "Use this exact compact format:",
+    "Meaning: concise focus summary of the most useful section, such as implementation detail, tradeoff, complexity, or key reasoning.",
+    "Reply: one short meeting-ready English sentence if useful, otherwise '-'.",
+    "Question: one click-answerable clarifying question only if a missing constraint matters, otherwise '-'.",
+    "If code is central, summarize the implementation idea instead of dumping a full code block.",
+  ];
 }
 
 function buildContextInstructions(contextMode: string) {

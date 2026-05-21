@@ -2,19 +2,16 @@ import { STORAGE_KEYS } from "@/config";
 import {
   DEFAULT_RESPONSE_LENGTH,
   DEFAULT_LANGUAGE,
-  DEFAULT_AUTO_SCROLL,
 } from "../response-settings.constants";
 
 export interface ResponseSettings {
   responseLength: string;
   language: string;
-  autoScroll: boolean;
 }
 
 export const DEFAULT_RESPONSE_SETTINGS: ResponseSettings = {
   responseLength: DEFAULT_RESPONSE_LENGTH,
   language: DEFAULT_LANGUAGE,
-  autoScroll: DEFAULT_AUTO_SCROLL,
 };
 
 /**
@@ -34,10 +31,6 @@ export const getResponseSettings = (): ResponseSettings => {
         parsedSettings.responseLength ||
         DEFAULT_RESPONSE_SETTINGS.responseLength,
       language: parsedSettings.language || DEFAULT_RESPONSE_SETTINGS.language,
-      autoScroll:
-        parsedSettings.autoScroll !== undefined
-          ? parsedSettings.autoScroll
-          : DEFAULT_RESPONSE_SETTINGS.autoScroll,
     };
   } catch (error) {
     console.error("Failed to get response settings:", error);
@@ -77,16 +70,6 @@ export const updateResponseLength = (
 export const updateLanguage = (language: string): ResponseSettings => {
   const currentSettings = getResponseSettings();
   const newSettings = { ...currentSettings, language };
-  setResponseSettings(newSettings);
-  return newSettings;
-};
-
-/**
- * Update auto-scroll
- */
-export const updateAutoScroll = (autoScroll: boolean): ResponseSettings => {
-  const currentSettings = getResponseSettings();
-  const newSettings = { ...currentSettings, autoScroll };
   setResponseSettings(newSettings);
   return newSettings;
 };

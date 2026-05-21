@@ -4,6 +4,7 @@ import { TYPE_PROVIDER } from "@/types";
 import {
   ScreenCaptureTarget,
   MeetingModelTraceCallbacks,
+  MeetingResponseConfig,
   ScreenObservation,
   ScreenTaskKind,
   SelectedProviderState,
@@ -34,6 +35,7 @@ export interface SolveScreenAnchoredTaskOptions {
   selectedProvider: SelectedProviderState;
   recentTranscript?: string;
   autoPrompt?: string;
+  responseConfig?: MeetingResponseConfig;
   signal?: AbortSignal;
   trace?: MeetingModelTraceCallbacks;
   onPartialContent?: (content: string) => void;
@@ -147,6 +149,7 @@ export async function summarizeScreenObservation({
     userMessage,
     imagesBase64: [imageInput],
     signal,
+    applyResponseSettings: false,
   })) {
     if (!firstTokenSeen) {
       firstTokenSeen = true;
@@ -173,6 +176,7 @@ export async function solveScreenAnchoredTask({
   selectedProvider,
   recentTranscript,
   autoPrompt,
+  responseConfig,
   signal,
   trace,
   onPartialContent,
@@ -195,6 +199,7 @@ export async function solveScreenAnchoredTask({
     observation,
     recentTranscript,
     autoPrompt,
+    responseConfig,
   });
   const imageInputs = buildScreenTaskImageInputs(observation);
 
@@ -205,6 +210,7 @@ export async function solveScreenAnchoredTask({
     imageMediaType: imageInputs[0]?.mediaType || observation.imageMediaType || "image/png",
     providerId: provider.id,
     mode: "screen-task",
+    responseConfig,
   });
 
   for await (const chunk of fetchAIResponse({
@@ -214,6 +220,7 @@ export async function solveScreenAnchoredTask({
     userMessage,
     imagesBase64: imageInputs,
     signal,
+    applyResponseSettings: false,
   })) {
     if (!firstTokenSeen) {
       firstTokenSeen = true;
@@ -279,10 +286,12 @@ function buildScreenTaskUserMessage({
   observation,
   recentTranscript,
   autoPrompt,
+  responseConfig,
 }: {
   observation: ScreenObservation;
   recentTranscript?: string;
   autoPrompt?: string;
+  responseConfig?: MeetingResponseConfig;
 }) {
   const target = observation.captureTarget
     ? formatCaptureTargetForPrompt(observation.captureTarget)
@@ -300,6 +309,9 @@ function buildScreenTaskUserMessage({
     "<recent_transcript>",
     recentTranscript?.trim() || "No transcript context yet.",
     "</recent_transcript>",
+    "<response_preferences>",
+    formatScreenTaskResponsePreferences(responseConfig),
+    "</response_preferences>",
   ];
 
   if (autoPrompt?.trim()) {
@@ -324,6 +336,7 @@ function buildScreenTaskUserMessage({
     "If the visible UI or focus band indicates a non-Python language, use that language instead of the Python default.",
     "Use Answer as the first section. The Answer section must directly answer the selected target; do not say which question you identified, selected, or focused on.",
     "Put supporting details after Answer. Do not put code blocks in Approach; code belongs only in Code.",
+    "Follow the natural language response preferences when choosing answer length and explanation language. Do not let those preferences override the selected programming language for code.",
     "If it is a coding/algorithm question, output:",
     "Answer: directly state the optimal approach in the selected/requested language.",
     "Approach: explain the reasoning in a few direct bullets or short sentences, without code blocks.",
@@ -344,6 +357,33 @@ function buildScreenTaskUserMessage({
   );
 
   return sections.join("\n");
+}
+
+function formatScreenTaskResponsePreferences(
+  config: MeetingResponseConfig | undefined
+) {
+  if (!config) {
+    return "Length: normal\nNatural language: auto";
+  }
+
+  const length =
+    config.length === "short"
+      ? "short; keep sections compact while preserving required labels"
+      : config.length === "detailed"
+        ? "detailed; include more reasoning or implementation detail when useful"
+        : "normal; use the default compact Jarvis style";
+  const language =
+    config.language === "english"
+      ? "English; use meeting-ready English for prose"
+      : config.language === "chinese"
+        ? "Chinese; explain prose in concise Chinese while preserving technical terms"
+        : "auto; follow visible task and transcript context";
+
+  return [
+    `Length: ${length}`,
+    `Natural language: ${language}`,
+    "Programming language for code must still follow visible screen language, transcript constraints, then Python default.",
+  ].join("\n");
 }
 
 function formatCaptureTargetForPrompt(target: ScreenCaptureTarget) {

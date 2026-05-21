@@ -13,7 +13,11 @@ import {
   MeetingAudioConfig,
   MeetingAudioStatus,
   MeetingAssistantSettings,
+  MeetingAudioProfile,
   MeetingPrivacyMode,
+  MeetingResponseActionMode,
+  MeetingResponseConfig,
+  MeetingResponseLength,
   MeetingContextManager,
   MeetingSetupWarning,
   MeetingTraceStore,
@@ -51,7 +55,7 @@ const SCREEN_CONTEXT_DISABLED_MESSAGE =
   "Enable Text+Screen privacy mode before capturing screen context.";
 const NO_MEETING_CONTEXT_MESSAGE =
   "Jarvis needs transcript or screen context before it can suggest.";
-const NO_SUGGESTION_MESSAGE = "There is no suggestion to shorten yet.";
+const NO_SUGGESTION_MESSAGE = "There is no suggestion to update yet.";
 
 const DEFAULT_MEETING_AUDIO_CONFIG: MeetingAudioConfig = {
   enabled: true,
@@ -63,6 +67,32 @@ const DEFAULT_MEETING_AUDIO_CONFIG: MeetingAudioConfig = {
   pre_speech_chunks: 12,
   noise_gate_threshold: 0.003,
   max_recording_duration_secs: 180,
+};
+
+const MEETING_AUDIO_PROFILE_CONFIGS: Record<
+  Exclude<MeetingAudioProfile, "custom">,
+  Pick<MeetingAudioConfig, "sensitivity_rms" | "noise_gate_threshold" | "silence_chunks">
+> = {
+  quiet: {
+    sensitivity_rms: 0.015,
+    noise_gate_threshold: 0.005,
+    silence_chunks: 55,
+  },
+  balanced: {
+    sensitivity_rms: 0.012,
+    noise_gate_threshold: 0.003,
+    silence_chunks: 45,
+  },
+  sensitive: {
+    sensitivity_rms: 0.008,
+    noise_gate_threshold: 0.002,
+    silence_chunks: 35,
+  },
+};
+
+const DEFAULT_MEETING_RESPONSE_CONFIG: MeetingResponseConfig = {
+  length: "normal",
+  language: "auto",
 };
 
 const INITIAL_STATE: MeetingAssistantState = {
@@ -79,6 +109,11 @@ const INITIAL_STATE: MeetingAssistantState = {
     privacyMode: "text-to-cloud",
     activeScreenTaskTimeoutMinutes: DEFAULT_ACTIVE_SCREEN_TASK_TIMEOUT_MINUTES,
     debugMode: false,
+    response: DEFAULT_MEETING_RESPONSE_CONFIG,
+    audio: {
+      profile: "balanced",
+      config: DEFAULT_MEETING_AUDIO_CONFIG,
+    },
   },
 };
 
@@ -111,10 +146,114 @@ function readMeetingAssistantSettings(): MeetingAssistantSettings {
         typeof parsed.debugMode === "boolean"
           ? parsed.debugMode
           : DEFAULT_MEETING_ASSISTANT_SETTINGS.debugMode,
+      response: normalizeMeetingResponseConfig(parsed.response),
+      audio: normalizeMeetingAudioSettings(parsed.audio),
     };
   } catch {
     return DEFAULT_MEETING_ASSISTANT_SETTINGS;
   }
+}
+
+function normalizeMeetingResponseConfig(
+  value: unknown
+): MeetingResponseConfig {
+  const parsed = isRecord(value) ? value : {};
+  return {
+    length:
+      parsed.length === "short" ||
+      parsed.length === "normal" ||
+      parsed.length === "detailed"
+        ? parsed.length
+        : DEFAULT_MEETING_RESPONSE_CONFIG.length,
+    language:
+      parsed.language === "auto" ||
+      parsed.language === "english" ||
+      parsed.language === "chinese"
+        ? parsed.language
+        : DEFAULT_MEETING_RESPONSE_CONFIG.language,
+  };
+}
+
+function getNextShorterResponseLength(
+  length: MeetingResponseLength
+): MeetingResponseLength {
+  return length === "detailed" ? "normal" : "short";
+}
+
+function normalizeMeetingAudioSettings(value: unknown) {
+  const parsed = isRecord(value) ? value : {};
+  const profile = normalizeMeetingAudioProfile(parsed.profile);
+  return {
+    profile,
+    config: normalizeMeetingAudioConfig(parsed.config, profile),
+  };
+}
+
+function normalizeMeetingAudioProfile(value: unknown): MeetingAudioProfile {
+  return value === "quiet" ||
+    value === "balanced" ||
+    value === "sensitive" ||
+    value === "custom"
+    ? value
+    : "balanced";
+}
+
+function normalizeMeetingAudioConfig(
+  value: unknown,
+  profile: MeetingAudioProfile = "balanced"
+): MeetingAudioConfig {
+  const parsed = isRecord(value) ? value : {};
+  const profileDefaults =
+    profile === "custom"
+      ? DEFAULT_MEETING_AUDIO_CONFIG
+      : {
+          ...DEFAULT_MEETING_AUDIO_CONFIG,
+          ...MEETING_AUDIO_PROFILE_CONFIGS[profile],
+        };
+
+  return {
+    enabled:
+      typeof parsed.enabled === "boolean"
+        ? parsed.enabled
+        : profileDefaults.enabled,
+    hop_size: normalizeNumber(parsed.hop_size, profileDefaults.hop_size),
+    sensitivity_rms: normalizeNumber(
+      parsed.sensitivity_rms,
+      profileDefaults.sensitivity_rms
+    ),
+    peak_threshold: normalizeNumber(
+      parsed.peak_threshold,
+      profileDefaults.peak_threshold
+    ),
+    silence_chunks: normalizeNumber(
+      parsed.silence_chunks,
+      profileDefaults.silence_chunks
+    ),
+    min_speech_chunks: normalizeNumber(
+      parsed.min_speech_chunks,
+      profileDefaults.min_speech_chunks
+    ),
+    pre_speech_chunks: normalizeNumber(
+      parsed.pre_speech_chunks,
+      profileDefaults.pre_speech_chunks
+    ),
+    noise_gate_threshold: normalizeNumber(
+      parsed.noise_gate_threshold,
+      profileDefaults.noise_gate_threshold
+    ),
+    max_recording_duration_secs: normalizeNumber(
+      parsed.max_recording_duration_secs,
+      profileDefaults.max_recording_duration_secs
+    ),
+  };
+}
+
+function normalizeNumber(value: unknown, fallback: number) {
+  return typeof value === "number" && Number.isFinite(value) ? value : fallback;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
 }
 
 function normalizeActiveScreenTaskTimeoutMinutes(value: unknown) {
@@ -189,6 +328,8 @@ function withTimeout<T>(
 interface RunAdvisorOptions {
   force?: boolean;
   mode?: AdvisorRequestMode;
+  responseAction?: MeetingResponseActionMode;
+  responseConfigOverride?: MeetingResponseConfig;
   currentSuggestion?: string;
   clarifyingFeedback?: ClarifyingQuestionFeedback;
   traceId?: string;
@@ -398,6 +539,50 @@ export function useMeetingAssistant() {
     [updateSettings]
   );
 
+  const setResponseConfig = useCallback(
+    (response: MeetingResponseConfig) => {
+      updateSettings((previous) => ({
+        ...previous,
+        response,
+      }));
+    },
+    [updateSettings]
+  );
+
+  const setMeetingAudioProfile = useCallback(
+    (profile: MeetingAudioProfile) => {
+      const profileConfig =
+        profile === "custom"
+          ? DEFAULT_MEETING_AUDIO_CONFIG
+          : {
+              ...DEFAULT_MEETING_AUDIO_CONFIG,
+              ...MEETING_AUDIO_PROFILE_CONFIGS[profile],
+            };
+
+      updateSettings((previous) => ({
+        ...previous,
+        audio: {
+          profile,
+          config: profileConfig,
+        },
+      }));
+    },
+    [updateSettings]
+  );
+
+  const setMeetingAudioConfig = useCallback(
+    (config: MeetingAudioConfig) => {
+      updateSettings((previous) => ({
+        ...previous,
+        audio: {
+          profile: "custom",
+          config: normalizeMeetingAudioConfig(config, "custom"),
+        },
+      }));
+    },
+    [updateSettings]
+  );
+
   const clearActiveScreenTask = useCallback(() => {
     clearAdvisorDebounce();
     advisorEngineRef.current.cancelCurrentRequest();
@@ -502,6 +687,8 @@ export function useMeetingAssistant() {
 
     const returnStatus = state.status;
     const requestId = `advisor_${mode}_${Date.now()}`;
+    const responseConfig =
+      options.responseConfigOverride ?? state.settings.response;
     contextManagerRef.current.setLastAdvisorRequestId(requestId);
 
     setState((previous) => ({
@@ -520,6 +707,8 @@ export function useMeetingAssistant() {
         promptContext,
         provider: aiProvider,
         selectedProvider: selectedAIProvider,
+        responseAction: options.responseAction,
+        responseConfig,
         currentSuggestion: options.currentSuggestion,
         clarifyingFeedback: options.clarifyingFeedback,
         trace: traceId
@@ -532,6 +721,8 @@ export function useMeetingAssistant() {
                   {
                     providerId: input.providerId,
                     mode: input.mode,
+                    responseAction: input.responseAction,
+                    responseConfig: input.responseConfig,
                     imageCount: input.imageCount,
                   }
                 );
@@ -541,6 +732,9 @@ export function useMeetingAssistant() {
                   {
                     providerId: input.providerId,
                     mode: input.mode,
+                    responseAction: input.responseAction,
+                    responseLength: input.responseConfig?.length,
+                    responseLanguage: input.responseConfig?.language,
                     promptChars:
                       input.systemPrompt.length + input.userMessage.length,
                   }
@@ -988,7 +1182,7 @@ export function useMeetingAssistant() {
       const audioStatus = await invoke<MeetingAudioStatus>(
         "start_meeting_audio_session",
         {
-          vadConfig: DEFAULT_MEETING_AUDIO_CONFIG,
+          vadConfig: state.settings.audio.config,
           deviceId,
         }
       );
@@ -1187,6 +1381,7 @@ export function useMeetingAssistant() {
               analysisContextState.transcriptTurns
             ),
             autoPrompt,
+            responseConfig: state.settings.response,
             signal: analysisController.signal,
             trace: {
               onRequest: (input) => {
@@ -1199,6 +1394,7 @@ export function useMeetingAssistant() {
                     mode: input.mode,
                     imageCount: input.imageCount,
                     imageMediaType: input.imageMediaType,
+                    responseConfig: input.responseConfig,
                     imageBase64Stored: false,
                   }
                 );
@@ -1211,6 +1407,8 @@ export function useMeetingAssistant() {
                       input.systemPrompt.length + input.userMessage.length,
                     imageCount: input.imageCount,
                     imageMediaType: input.imageMediaType,
+                    responseLength: input.responseConfig?.length,
+                    responseLanguage: input.responseConfig?.language,
                   }
                 );
               },
@@ -1411,10 +1609,34 @@ export function useMeetingAssistant() {
 
     await runAdvisor({
       force: true,
-      mode: "shorter",
+      mode: "regenerate",
+      responseConfigOverride: {
+        ...state.settings.response,
+        length: getNextShorterResponseLength(state.settings.response.length),
+      },
       currentSuggestion: currentSuggestionText,
     });
-  }, [currentSuggestionText, runAdvisor]);
+  }, [currentSuggestionText, runAdvisor, state.settings.response]);
+
+  const applyResponseAction = useCallback(
+    async (responseAction: MeetingResponseActionMode) => {
+      if (!currentSuggestionText.trim()) {
+        setState((previous) => ({
+          ...previous,
+          error: NO_SUGGESTION_MESSAGE,
+        }));
+        return;
+      }
+
+      await runAdvisor({
+        force: true,
+        mode: "response-action",
+        responseAction,
+        currentSuggestion: currentSuggestionText,
+      });
+    },
+    [currentSuggestionText, runAdvisor]
+  );
 
   const answerClarifyingQuestion = useCallback(
     async (question: string, answer: ClarifyingQuestionAnswer) => {
@@ -1542,6 +1764,9 @@ export function useMeetingAssistant() {
     setScreenContextEnabled,
     setActiveScreenTaskTimeoutMinutes,
     setDebugMode,
+    setResponseConfig,
+    setMeetingAudioProfile,
+    setMeetingAudioConfig,
     start,
     pause,
     resume,
@@ -1551,6 +1776,7 @@ export function useMeetingAssistant() {
     captureScreenContext,
     regenerateSuggestion,
     makeSuggestionShorter,
+    applyResponseAction,
     answerClarifyingQuestion,
     isActive: activeRef.current,
   };

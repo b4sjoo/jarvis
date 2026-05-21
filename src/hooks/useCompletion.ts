@@ -13,7 +13,6 @@ import {
   generateConversationId,
   generateMessageId,
   generateRequestId,
-  getResponseSettings,
   safeLocalStorage,
 } from "@/lib";
 import { invoke } from "@tauri-apps/api/core";
@@ -811,27 +810,6 @@ export const useCompletion = () => {
     resizeWindow,
     isFilesPopoverOpen,
   ]);
-
-  // Auto scroll to bottom when response updates
-  useEffect(() => {
-    const responseSettings = getResponseSettings();
-    if (
-      !keepEngaged &&
-      state.response &&
-      scrollAreaRef.current &&
-      responseSettings.autoScroll
-    ) {
-      const scrollElement = scrollAreaRef.current.querySelector(
-        "[data-radix-scroll-area-viewport]"
-      );
-      if (scrollElement) {
-        scrollElement.scrollTo({
-          top: scrollElement.scrollHeight,
-          behavior: "smooth",
-        });
-      }
-    }
-  }, [state.response, keepEngaged]);
 
   // Keyboard arrow key support for scrolling
   useEffect(() => {

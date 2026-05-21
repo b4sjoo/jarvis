@@ -12,26 +12,32 @@ import curl2Json from "@bany/curl-to-json";
 import { getResponseSettings, RESPONSE_LENGTHS, LANGUAGES } from "@/lib";
 import { MARKDOWN_FORMATTING_INSTRUCTIONS } from "@/config/constants";
 
-function buildEnhancedSystemPrompt(baseSystemPrompt?: string): string {
-  const responseSettings = getResponseSettings();
+function buildEnhancedSystemPrompt(
+  baseSystemPrompt?: string,
+  applyResponseSettings = true
+): string {
   const prompts: string[] = [];
 
   if (baseSystemPrompt) {
     prompts.push(baseSystemPrompt);
   }
 
-  const lengthOption = RESPONSE_LENGTHS.find(
-    (l) => l.id === responseSettings.responseLength
-  );
-  if (lengthOption?.prompt?.trim()) {
-    prompts.push(lengthOption.prompt);
-  }
+  if (applyResponseSettings) {
+    const responseSettings = getResponseSettings();
 
-  const languageOption = LANGUAGES.find(
-    (l) => l.id === responseSettings.language
-  );
-  if (languageOption?.prompt?.trim()) {
-    prompts.push(languageOption.prompt);
+    const lengthOption = RESPONSE_LENGTHS.find(
+      (l) => l.id === responseSettings.responseLength
+    );
+    if (lengthOption?.prompt?.trim()) {
+      prompts.push(lengthOption.prompt);
+    }
+
+    const languageOption = LANGUAGES.find(
+      (l) => l.id === responseSettings.language
+    );
+    if (languageOption?.prompt?.trim()) {
+      prompts.push(languageOption.prompt);
+    }
   }
 
   // Add markdown formatting instructions
@@ -51,6 +57,7 @@ export async function* fetchAIResponse(params: {
   userMessage: string;
   imagesBase64?: Array<string | ImageInput>;
   signal?: AbortSignal;
+  applyResponseSettings?: boolean;
 }): AsyncIterable<string> {
   try {
     const {
@@ -61,6 +68,7 @@ export async function* fetchAIResponse(params: {
       userMessage,
       imagesBase64 = [],
       signal,
+      applyResponseSettings = true,
     } = params;
 
     // Check if already aborted
@@ -68,7 +76,10 @@ export async function* fetchAIResponse(params: {
       return;
     }
 
-    const enhancedSystemPrompt = buildEnhancedSystemPrompt(systemPrompt);
+    const enhancedSystemPrompt = buildEnhancedSystemPrompt(
+      systemPrompt,
+      applyResponseSettings
+    );
 
     if (!provider) {
       throw new Error(`Provider not provided`);

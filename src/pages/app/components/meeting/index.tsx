@@ -1,16 +1,24 @@
 import {
   Badge,
   Button,
+  Label,
   Markdown,
   Popover,
   PopoverContent,
   PopoverTrigger,
   ScrollArea,
+  Slider,
   Switch,
 } from "@/components";
 import { useMeetingAssistant, useShortcuts, useWindowResize } from "@/hooks";
 import type {
   ClarifyingQuestionAnswer,
+  MeetingAudioConfig,
+  MeetingAudioProfile,
+  MeetingResponseActionMode,
+  MeetingResponseConfig,
+  MeetingResponseLanguage,
+  MeetingResponseLength,
   MeetingTrace,
   MeetingTraceKindSummary,
   MeetingTraceSummary,
@@ -31,22 +39,32 @@ import {
   BrainIcon,
   CameraIcon,
   CheckIcon,
+  ChevronDownIcon,
   ClockIcon,
   EyeOffIcon,
   HelpCircleIcon,
+  LanguagesIcon,
   Loader2Icon,
   MessageSquareTextIcon,
-  Minimize2Icon,
   MousePointer2Icon,
   PauseIcon,
   PlayIcon,
   RadioIcon,
-  RefreshCwIcon,
+  SettingsIcon,
+  SlidersHorizontalIcon,
   SquareIcon,
   Trash2Icon,
+  Volume2Icon,
   XIcon,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 
 const statusLabel = {
   idle: "Ready",
@@ -63,6 +81,42 @@ const privacyOptions = [
   { id: "text-to-cloud", label: "Text" },
   { id: "text-and-screen-to-cloud", label: "Text+Screen" },
 ] as const;
+
+const responseLengthOptions: Array<{
+  id: MeetingResponseLength;
+  label: string;
+}> = [
+  { id: "short", label: "Short" },
+  { id: "normal", label: "Normal" },
+  { id: "detailed", label: "Detailed" },
+];
+
+const responseLanguageOptions: Array<{
+  id: MeetingResponseLanguage;
+  label: string;
+}> = [
+  { id: "auto", label: "Auto" },
+  { id: "english", label: "English" },
+  { id: "chinese", label: "Chinese" },
+];
+
+const meetingAudioProfileOptions: Array<{
+  id: Exclude<MeetingAudioProfile, "custom">;
+  label: string;
+}> = [
+  { id: "quiet", label: "Quiet" },
+  { id: "balanced", label: "Balanced" },
+  { id: "sensitive", label: "Sensitive" },
+];
+
+const responseActionOptions: Array<{
+  id: MeetingResponseActionMode;
+  label: string;
+}> = [
+  { id: "speakable", label: "Speakable" },
+  { id: "chinese", label: "Chinese" },
+  { id: "focus", label: "Focus" },
+];
 
 const HOTKEY_CAPTURE_SETTLE_MS = 180;
 const HOTKEY_CAPTURE_DEBOUNCE_MS = 1_000;
@@ -82,6 +136,7 @@ export const MeetingAssistant = () => {
   const meeting = useMeetingAssistant();
   const { resizeWindow } = useWindowResize();
   const [open, setOpen] = useState(false);
+  const [configurationsOpen, setConfigurationsOpen] = useState(false);
   const [dismissedQuestionKey, setDismissedQuestionKey] = useState<
     string | null
   >(null);
@@ -378,75 +433,26 @@ export const MeetingAssistant = () => {
 
           <ScrollArea className="min-h-0 flex-1 overflow-hidden">
             <div className="min-w-0 max-w-full space-y-3 overflow-x-hidden p-3">
-              <section className="min-w-0 overflow-hidden rounded-md border border-border/70 p-3">
-                <div className="mb-2 flex items-center justify-between gap-2">
-                  <div className="text-xs font-semibold">Privacy</div>
-                  <div className="flex items-center gap-2">
-                    <span className="text-[10px] text-muted-foreground">
-                      Screen
-                    </span>
-                    <Switch
-                      checked={screenContextAllowed}
-                      onCheckedChange={meeting.setScreenContextEnabled}
-                    />
-                  </div>
-                </div>
-                <div className="grid grid-cols-3 gap-1">
-                  {privacyOptions.map((option) => (
-                    <Button
-                      key={option.id}
-                      size="sm"
-                      variant={
-                        meeting.settings.privacyMode === option.id
-                          ? "default"
-                          : "outline"
-                      }
-                      className="h-7 px-1 text-[10px]"
-                      onClick={() => {
-                        meeting.setPrivacyMode(option.id);
-                      }}
-                    >
-                      {option.label}
-                    </Button>
-                  ))}
-                </div>
-                <div className="mt-2 border-t border-border/50 pt-2">
-                  <div className="mb-1.5 flex items-center gap-1.5 text-[10px] font-medium text-muted-foreground">
-                    <ClockIcon className="h-3 w-3" />
-                    Task memory
-                  </div>
-                  <div className="grid grid-cols-4 gap-1">
-                    {TASK_TIMEOUT_OPTIONS.map((minutes) => (
-                      <Button
-                        key={minutes}
-                        size="sm"
-                        variant={
-                          meeting.settings.activeScreenTaskTimeoutMinutes ===
-                          minutes
-                            ? "default"
-                            : "outline"
-                        }
-                        className="h-7 px-1 text-[10px]"
-                        onClick={() => {
-                          meeting.setActiveScreenTaskTimeoutMinutes(minutes);
-                        }}
-                      >
-                        {formatTaskTimeout(minutes)}
-                      </Button>
-                    ))}
-                  </div>
-                </div>
-                <div className="mt-2 flex items-center justify-between gap-2 border-t border-border/50 pt-2">
-                  <div className="flex items-center gap-1.5 text-[10px] font-medium text-muted-foreground">
-                    <ActivityIcon className="h-3 w-3" />
-                    Debug Mode
-                  </div>
-                  <Switch
-                    checked={meeting.settings.debugMode}
-                    onCheckedChange={meeting.setDebugMode}
-                  />
-                </div>
-              </section>
+              <ConfigurationsPanel
+                open={configurationsOpen}
+                onOpenChange={setConfigurationsOpen}
+                responseConfig={meeting.settings.response}
+                onResponseConfigChange={meeting.setResponseConfig}
+                privacyMode={meeting.settings.privacyMode}
+                onPrivacyModeChange={meeting.setPrivacyMode}
+                activeScreenTaskTimeoutMinutes={
+                  meeting.settings.activeScreenTaskTimeoutMinutes
+                }
+                onActiveScreenTaskTimeoutMinutesChange={
+                  meeting.setActiveScreenTaskTimeoutMinutes
+                }
+                audioProfile={meeting.settings.audio.profile}
+                audioConfig={meeting.settings.audio.config}
+                onAudioProfileChange={meeting.setMeetingAudioProfile}
+                onAudioConfigChange={meeting.setMeetingAudioConfig}
+                debugMode={meeting.settings.debugMode}
+                onDebugModeChange={meeting.setDebugMode}
+              />
 
               {meeting.setupWarnings.length > 0 ? (
                 <section className="min-w-0 overflow-hidden rounded-md border border-amber-200 bg-amber-50 p-3">
@@ -595,6 +601,49 @@ export const MeetingAssistant = () => {
                   </section>
                 </>
               )}
+
+              <section className="min-w-0 overflow-hidden rounded-md border border-border/70 p-2.5">
+                <div className="mb-2 flex items-center gap-2 text-xs font-semibold">
+                  <SlidersHorizontalIcon className="h-3.5 w-3.5" />
+                  Response actions
+                </div>
+                <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-5">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="h-7 px-2 text-[10px]"
+                    title="Regenerate with the current Meeting Assistant response settings"
+                    onClick={meeting.regenerateSuggestion}
+                    disabled={isBusy || !hasMeetingContext}
+                  >
+                    Regenerate
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="h-7 px-2 text-[10px]"
+                    title="Regenerate one length level shorter without changing saved settings"
+                    onClick={meeting.makeSuggestionShorter}
+                    disabled={isBusy || !hasSuggestion}
+                  >
+                    Shorter
+                  </Button>
+                  {responseActionOptions.map((action) => (
+                    <Button
+                      key={action.id}
+                      size="sm"
+                      variant="outline"
+                      className="h-7 px-2 text-[10px]"
+                      onClick={() => {
+                        void meeting.applyResponseAction(action.id);
+                      }}
+                      disabled={isBusy || !hasSuggestion}
+                    >
+                      {action.label}
+                    </Button>
+                  ))}
+                </div>
+              </section>
 
               <section className="min-w-0 overflow-hidden rounded-md border border-border/70 p-3">
                 <div className="mb-2 flex items-center gap-2 text-xs font-semibold">
@@ -891,28 +940,6 @@ export const MeetingAssistant = () => {
                 size="sm"
                 variant="outline"
                 className="h-8 gap-1.5 text-xs"
-                title="Regenerate suggestion"
-                onClick={meeting.regenerateSuggestion}
-                disabled={isBusy || !hasMeetingContext}
-              >
-                <RefreshCwIcon className="h-3.5 w-3.5" />
-                Regenerate
-              </Button>
-              <Button
-                size="sm"
-                variant="outline"
-                className="h-8 gap-1.5 text-xs"
-                title="Make suggestion shorter"
-                onClick={meeting.makeSuggestionShorter}
-                disabled={isBusy || !hasSuggestion}
-              >
-                <Minimize2Icon className="h-3.5 w-3.5" />
-                Shorter
-              </Button>
-              <Button
-                size="sm"
-                variant="outline"
-                className="h-8 gap-1.5 text-xs"
                 onClick={handlePauseResume}
                 disabled={!isRunning && !isPaused}
               >
@@ -943,6 +970,346 @@ export const MeetingAssistant = () => {
         </div>
       </PopoverContent>
     </Popover>
+  );
+};
+
+const ConfigurationsPanel = ({
+  open,
+  onOpenChange,
+  responseConfig,
+  onResponseConfigChange,
+  privacyMode,
+  onPrivacyModeChange,
+  activeScreenTaskTimeoutMinutes,
+  onActiveScreenTaskTimeoutMinutesChange,
+  audioProfile,
+  audioConfig,
+  onAudioProfileChange,
+  onAudioConfigChange,
+  debugMode,
+  onDebugModeChange,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  responseConfig: MeetingResponseConfig;
+  onResponseConfigChange: (config: MeetingResponseConfig) => void;
+  privacyMode: (typeof privacyOptions)[number]["id"];
+  onPrivacyModeChange: (mode: (typeof privacyOptions)[number]["id"]) => void;
+  activeScreenTaskTimeoutMinutes: number;
+  onActiveScreenTaskTimeoutMinutesChange: (minutes: number) => void;
+  audioProfile: MeetingAudioProfile;
+  audioConfig: MeetingAudioConfig;
+  onAudioProfileChange: (profile: MeetingAudioProfile) => void;
+  onAudioConfigChange: (config: MeetingAudioConfig) => void;
+  debugMode: boolean;
+  onDebugModeChange: (enabled: boolean) => void;
+}) => {
+  return (
+    <section className="min-w-0 overflow-hidden rounded-md border border-border/70">
+      <button
+        type="button"
+        className="flex w-full items-center justify-between gap-2 p-3 text-left transition-colors hover:bg-muted/40"
+        onClick={() => onOpenChange(!open)}
+      >
+        <div className="flex min-w-0 items-center gap-2">
+          <SettingsIcon className="h-3.5 w-3.5 shrink-0" />
+          <div className="min-w-0">
+            <div className="text-xs font-semibold">Configurations</div>
+            <div className="truncate text-[10px] text-muted-foreground">
+              Meeting-only settings, independent from main UI
+            </div>
+          </div>
+        </div>
+        <ChevronDownIcon
+          className={cn(
+            "h-4 w-4 shrink-0 text-muted-foreground transition-transform",
+            open && "rotate-180"
+          )}
+        />
+      </button>
+
+      {open ? (
+        <div className="space-y-3 border-t border-border/50 p-3">
+          <ConfigurationGroup
+            icon={<LanguagesIcon className="h-3.5 w-3.5" />}
+            title="Response"
+          >
+            <ConfigButtonGrid
+              label="Length"
+              options={responseLengthOptions}
+              value={responseConfig.length}
+              onChange={(length) => {
+                onResponseConfigChange({
+                  ...responseConfig,
+                  length,
+                });
+              }}
+            />
+            <ConfigButtonGrid
+              label="Language"
+              options={responseLanguageOptions}
+              value={responseConfig.language}
+              onChange={(language) => {
+                onResponseConfigChange({
+                  ...responseConfig,
+                  language,
+                });
+              }}
+            />
+          </ConfigurationGroup>
+
+          <ConfigurationGroup
+            icon={<ClockIcon className="h-3.5 w-3.5" />}
+            title="Context"
+          >
+            <div>
+              <div className="mb-1.5 flex items-center justify-between gap-2">
+                <Label className="text-[10px] font-medium uppercase text-muted-foreground">
+                  Privacy
+                </Label>
+              </div>
+              <div className="grid grid-cols-3 gap-1">
+                {privacyOptions.map((option) => (
+                  <Button
+                    key={option.id}
+                    size="sm"
+                    variant={privacyMode === option.id ? "default" : "outline"}
+                    className="h-7 px-1 text-[10px]"
+                    onClick={() => {
+                      onPrivacyModeChange(option.id);
+                    }}
+                  >
+                    {option.label}
+                  </Button>
+                ))}
+              </div>
+            </div>
+
+            <div>
+              <Label className="mb-1.5 block text-[10px] font-medium uppercase text-muted-foreground">
+                Task memory
+              </Label>
+              <div className="grid grid-cols-4 gap-1">
+                {TASK_TIMEOUT_OPTIONS.map((minutes) => (
+                  <Button
+                    key={minutes}
+                    size="sm"
+                    variant={
+                      activeScreenTaskTimeoutMinutes === minutes
+                        ? "default"
+                        : "outline"
+                    }
+                    className="h-7 px-1 text-[10px]"
+                    onClick={() => {
+                      onActiveScreenTaskTimeoutMinutesChange(minutes);
+                    }}
+                  >
+                    {formatTaskTimeout(minutes)}
+                  </Button>
+                ))}
+              </div>
+            </div>
+          </ConfigurationGroup>
+
+          <ConfigurationGroup
+            icon={<Volume2Icon className="h-3.5 w-3.5" />}
+            title="Audio"
+          >
+            <div>
+              <Label className="mb-1.5 block text-[10px] font-medium uppercase text-muted-foreground">
+                Profile
+              </Label>
+              <div className="grid grid-cols-3 gap-1">
+                {meetingAudioProfileOptions.map((option) => (
+                  <Button
+                    key={option.id}
+                    size="sm"
+                    variant={
+                      audioProfile === option.id ? "default" : "outline"
+                    }
+                    className="h-7 px-1 text-[10px]"
+                    onClick={() => {
+                      onAudioProfileChange(option.id);
+                    }}
+                  >
+                    {option.label}
+                  </Button>
+                ))}
+              </div>
+              {audioProfile === "custom" ? (
+                <div className="mt-1 text-[10px] text-muted-foreground">
+                  Custom values
+                </div>
+              ) : null}
+            </div>
+
+            <MeetingAudioSlider
+              label="Speech sensitivity"
+              value={audioConfig.sensitivity_rms * 1000}
+              displayValue={(audioConfig.sensitivity_rms * 1000).toFixed(1)}
+              min={1}
+              max={20}
+              step={0.5}
+              onChange={(value) => {
+                onAudioConfigChange({
+                  ...audioConfig,
+                  sensitivity_rms: value / 1000,
+                });
+              }}
+            />
+            <MeetingAudioSlider
+              label="Silence duration"
+              value={audioConfig.silence_chunks}
+              displayValue={formatSilenceDuration(audioConfig)}
+              min={20}
+              max={180}
+              step={5}
+              onChange={(value) => {
+                onAudioConfigChange({
+                  ...audioConfig,
+                  silence_chunks: Math.round(value),
+                });
+              }}
+            />
+            <MeetingAudioSlider
+              label="Noise gate"
+              value={audioConfig.noise_gate_threshold * 1000}
+              displayValue={(audioConfig.noise_gate_threshold * 1000).toFixed(
+                1
+              )}
+              min={0}
+              max={10}
+              step={0.1}
+              onChange={(value) => {
+                onAudioConfigChange({
+                  ...audioConfig,
+                  noise_gate_threshold: value / 1000,
+                });
+              }}
+            />
+            <MeetingAudioSlider
+              label="Max segment"
+              value={audioConfig.max_recording_duration_secs}
+              displayValue={`${Math.round(
+                audioConfig.max_recording_duration_secs / 60
+              )}m`}
+              min={30}
+              max={300}
+              step={15}
+              onChange={(value) => {
+                onAudioConfigChange({
+                  ...audioConfig,
+                  max_recording_duration_secs: Math.round(value),
+                });
+              }}
+            />
+          </ConfigurationGroup>
+
+          <ConfigurationGroup
+            icon={<ActivityIcon className="h-3.5 w-3.5" />}
+            title="Debug"
+          >
+            <div className="flex items-center justify-between gap-2">
+              <div className="text-[10px] font-medium uppercase text-muted-foreground">
+                Debug Mode
+              </div>
+              <Switch checked={debugMode} onCheckedChange={onDebugModeChange} />
+            </div>
+          </ConfigurationGroup>
+        </div>
+      ) : null}
+    </section>
+  );
+};
+
+const ConfigurationGroup = ({
+  icon,
+  title,
+  children,
+}: {
+  icon: ReactNode;
+  title: string;
+  children: ReactNode;
+}) => {
+  return (
+    <div className="space-y-2 border-t border-border/50 pt-3 first:border-t-0 first:pt-0">
+      <div className="flex items-center gap-1.5 text-xs font-semibold">
+        {icon}
+        {title}
+      </div>
+      <div className="space-y-2">{children}</div>
+    </div>
+  );
+};
+
+const ConfigButtonGrid = <T extends string>({
+  label,
+  options,
+  value,
+  onChange,
+}: {
+  label: string;
+  options: Array<{ id: T; label: string }>;
+  value: T;
+  onChange: (value: T) => void;
+}) => {
+  return (
+    <div>
+      <Label className="mb-1.5 block text-[10px] font-medium uppercase text-muted-foreground">
+        {label}
+      </Label>
+      <div className="grid grid-cols-3 gap-1">
+        {options.map((option) => (
+          <Button
+            key={option.id}
+            size="sm"
+            variant={value === option.id ? "default" : "outline"}
+            className="h-7 px-1 text-[10px]"
+            onClick={() => {
+              onChange(option.id);
+            }}
+          >
+            {option.label}
+          </Button>
+        ))}
+      </div>
+    </div>
+  );
+};
+
+const MeetingAudioSlider = ({
+  label,
+  value,
+  displayValue,
+  min,
+  max,
+  step,
+  onChange,
+}: {
+  label: string;
+  value: number;
+  displayValue: string;
+  min: number;
+  max: number;
+  step: number;
+  onChange: (value: number) => void;
+}) => {
+  return (
+    <div className="space-y-1.5">
+      <Label className="flex items-center justify-between text-[10px] font-medium uppercase text-muted-foreground">
+        <span>{label}</span>
+        <span className="font-normal normal-case">{displayValue}</span>
+      </Label>
+      <Slider
+        value={[value]}
+        min={min}
+        max={max}
+        step={step}
+        onValueChange={([nextValue]) => {
+          onChange(nextValue);
+        }}
+      />
+    </div>
   );
 };
 
@@ -1173,6 +1540,11 @@ function formatCaptureCandidate(
 function formatTaskTimeout(minutes: number) {
   if (minutes >= 60) return `${minutes / 60}h`;
   return `${minutes}m`;
+}
+
+function formatSilenceDuration(config: MeetingAudioConfig) {
+  const seconds = (config.silence_chunks * config.hop_size) / 44100;
+  return `${seconds.toFixed(1)}s`;
 }
 
 function formatTraceTitle(trace: MeetingTrace) {

@@ -1,8 +1,4 @@
-import {
-  ResponseLength,
-  LanguageSelector,
-  AutoScrollToggle,
-} from "./components";
+import { ResponseLength, LanguageSelector } from "./components";
 import { PageLayout } from "@/layouts";
 
 const Responses = () => {
@@ -14,8 +10,6 @@ const Responses = () => {
       <ResponseLength />
 
       <LanguageSelector />
-
-      <AutoScrollToggle />
     </PageLayout>
   );
 };

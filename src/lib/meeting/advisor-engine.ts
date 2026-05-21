@@ -44,6 +44,8 @@ export class AdvisorEngine {
       currentSuggestion: request.currentSuggestion,
       clarifyingFeedback: request.clarifyingFeedback,
       mode: request.mode ?? "live",
+      responseAction: request.responseAction,
+      responseConfig: request.responseConfig,
     });
     let accumulated = "";
     let firstTokenSeen = false;
@@ -54,6 +56,8 @@ export class AdvisorEngine {
       imageCount: 0,
       providerId: request.provider?.id,
       mode: request.mode,
+      responseAction: request.responseAction,
+      responseConfig: request.responseConfig,
     });
 
     for await (const chunk of fetchAIResponse({
@@ -64,6 +68,7 @@ export class AdvisorEngine {
       userMessage,
       imagesBase64: [],
       signal: abortController.signal,
+      applyResponseSettings: false,
     })) {
       if (!firstTokenSeen) {
         firstTokenSeen = true;

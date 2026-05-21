@@ -30,6 +30,7 @@ Current implementation status:
 - Prompt-level interview task fusion has completed its first implementation slice: screen-seeded follow-ups, voice-only technical questions, explicit task-switch confirmation, low-signal speech filtering, stable speech listener registration, cancelled advisor tracing, and longer sanitized metrics history are now in code.
 - Task memory expiration is rolling. Meaningful screen-task updates refresh `expiresAt`; low-signal ignored speech does not; changing the timeout setting recalculates expiry from the current time; manual clear or `New task` clears the active task.
 - Structured screen answer state has completed its first implementation slice: screen-task output is parsed in `src/lib/meeting`, completed suggestions can carry parsed sections, partial streaming output is parsed on demand, and Debug Mode can inspect parsed screen-answer fields alongside raw output.
+- Response action and Meeting Assistant ergonomics has completed a first implementation slice: `Regenerate`, `Shorter`, `Speakable`, `Chinese`, and `Focus` actions are available on the current suggestion; response length/language preferences and Meeting Assistant-specific audio settings are grouped under a collapsible `Configurations` panel; `Clear task` remains in the bottom workflow controls; main UI auto-scroll response behavior is removed; headphone/system-audio help no longer carries generic screenshot or shortcut documentation.
 
 ## Milestone 0: Design Review and Scope Lock
 
@@ -273,6 +274,41 @@ Exit criteria:
 - Low-value utterances do not repeatedly re-solve the active task.
 - No classifier model call or `ActiveMeetingTask` data migration is introduced in this slice.
 
+## Milestone 5C: Meeting Assistant Ergonomics First Slice
+
+Goal: make Meeting Assistant easier to tune and act on during a live meeting without opening unrelated panels or typing follow-up prompts.
+
+- [x] Write a dedicated assignment brief for response actions and Meeting Assistant ergonomics.
+- [x] Add typed response action modes: `speakable`, `chinese`, and `focus`.
+- [x] Add Meeting Assistant response configuration for answer length and natural language preference.
+- [x] Add Meeting Assistant-specific audio configuration with profile, speech sensitivity, silence duration, noise gate, and max segment duration.
+- [x] Persist Meeting Assistant response/audio settings inside `meeting_assistant_settings` instead of reusing headphone/system-audio `vad_config`.
+- [x] Pass Meeting Assistant audio config into `start_meeting_audio_session`.
+- [x] Pass response configuration into advisor prompts and screen-task prompts.
+- [x] Add `Speakable`, `Chinese`, and `Focus` buttons on the current suggestion.
+- [x] Move `Regenerate` and `Shorter` into the Response actions row.
+- [x] Make `Shorter` reuse Meeting Assistant response length semantics with temporary length downgrade instead of a separate saved setting.
+- [x] Add a collapsible `Configurations` panel.
+- [x] Move privacy, task memory, response, audio, and Debug Mode into `Configurations`.
+- [x] Keep `Clear task` in the bottom workflow controls.
+- [x] Define `Auto` language as natural-language answer selection from screen/transcript context, without overriding visible programming-language choice.
+- [x] Keep Meeting Assistant response config independent from main UI response config.
+- [x] Disable shared main UI `RESPONSE_SETTINGS` prompt injection for Meeting Assistant advisor and screen-analysis model calls.
+- [x] Remove main UI response auto-scroll behavior and config.
+- [x] Replace the `Configurations` header value summary with a short independence note.
+- [x] Remove general keyboard shortcut and screenshot help from the headphone/system-audio help panel.
+- [~] Validate response action quality in real Meeting Assistant usage.
+- [~] Validate whether Meeting Assistant audio tuning should update an already-running audio session or only apply on restart/resume.
+
+Exit criteria:
+
+- The user can adjust response length and natural language preference from Meeting Assistant.
+- The user can tune Meeting Assistant audio sensitivity from Meeting Assistant.
+- One-click response actions transform the current answer without clearing active task context.
+- Main UI response settings cannot overwrite Meeting Assistant response settings, including through the shared model-call layer.
+- Normal meeting mode remains compact because settings are behind `Configurations`.
+- Headphone/system-audio panel stays focused on speech capture behavior.
+
 ## Milestone 6: Automatic Screen Observation
 
 Goal: add low-frequency, low-noise visual awareness.
@@ -454,6 +490,9 @@ Exit criteria:
 | 2026-05-20 | Use Brainwave as voice-pipeline reference | Borrow literal transcript cleanup, language/jargon preservation, realtime partial/final transcript ideas, and marker stripping; do not borrow default raw audio replay or move task reasoning into STT |
 | 2026-05-21 | Complete prompt-level interview task fusion first slice | Keep `ActiveScreenTask`, add prompt-level screen/voice fusion, local low-signal filtering, explicit task-switch confirmation, stable speech listener registration, cancelled advisor traces, safe provider prompt replacement, and 500-record sanitized trace history |
 | 2026-05-21 | Prioritize structured screen answer state before realtime STT | Current voice tests are acceptable; moving screen-task parsing into meeting-domain code improves UI stability and prepares response actions/replay without changing provider behavior |
+| 2026-05-21 | Refine Meeting Assistant ergonomics scope | Remove redundant Screen toggle and duplicate config-level Clear task; group `Regenerate`/`Shorter` with response actions; keep Meeting Assistant response config independent from main UI response config; define `Auto` as natural-language auto selection |
+| 2026-05-21 | Remove main UI response auto-scroll setting | Auto-scroll did not support the desired answer/code review flow; Response Settings now focuses on length and language |
+| 2026-05-21 | Separate model-call response config domains | Direct Jarvis conversations keep main UI `RESPONSE_SETTINGS`; Meeting Assistant advisor/screen calls bypass that global prompt injection and use Meeting Assistant settings only |
 
 ## Validation Snapshot
 
@@ -480,13 +519,16 @@ Last validated: 2026-05-20.
 - Low-value speech behavior is improved with local filtering; continue watching false negatives and false positives during real use.
 - `npm run build` and `git diff --check` pass for the interview task fusion first slice.
 - Structured screen answer parser builds successfully and keeps raw output as fallback; `npm run build` and `git diff --check` pass after the first implementation slice.
+- Response action and Meeting Assistant ergonomics implementation builds successfully; `npm run build` and `git diff --check` pass after response config domain separation, main UI auto-scroll removal, and the English assignment brief update.
 
 ## Immediate Next Tasks
 
-1. P1: Validate Structured Screen Answer State with fresh screen-task outputs across Python, TypeScript, JavaScript, Go, Java, and field-knowledge questions.
-2. P0: Continue mock-meeting and real-use validation with screen-seeded, voice-seeded, and mixed task blocks.
-3. P0: Watch low-signal filtering quality, especially whether useful short constraints are accidentally ignored or filler still triggers advisor calls.
-4. P0: Watch task-switch confirmation usefulness and whether explicit `New task` / `Same task` actions feel fast enough during live use.
-5. P1: Use persisted metrics during future tuning and revisit whether 500 retained sanitized records plus latest-20 baselines are enough.
-6. P1: Start realtime STT or transcript cleanup work only if transcript latency, technical-term accuracy, or code-mixed speech becomes the dominant failure.
-7. P1: Consider `ActiveMeetingTask` only if voice-seeded tasks need durable multi-turn state beyond transcript context.
+1. P1: Manually validate Meeting Assistant `Configurations`, including response length/language persistence, independence from main UI response settings, and audio profile changes after restart/resume.
+2. P1: Validate `Regenerate`, `Shorter`, `Speakable`, `Chinese`, and `Focus` on screen-task and voice-only suggestions.
+3. P1: Validate Structured Screen Answer State with fresh screen-task outputs across Python, TypeScript, JavaScript, Go, Java, and field-knowledge questions.
+4. P0: Continue mock-meeting and real-use validation with screen-seeded, voice-seeded, and mixed task blocks.
+5. P0: Watch low-signal filtering quality, especially whether useful short constraints are accidentally ignored or filler still triggers advisor calls.
+6. P0: Watch task-switch confirmation usefulness and whether explicit `New task` / `Same task` actions feel fast enough during live use.
+7. P1: Use persisted metrics during future tuning and revisit whether 500 retained sanitized records plus latest-20 baselines are enough.
+8. P1: Start realtime STT or transcript cleanup work only if transcript latency, technical-term accuracy, or code-mixed speech becomes the dominant failure.
+9. P1: Consider `ActiveMeetingTask` only if voice-seeded tasks need durable multi-turn state beyond transcript context.

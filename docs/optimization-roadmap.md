@@ -22,6 +22,7 @@ As of 2026-05-20:
 - The first prompt-level interview task fusion slice is implemented: screen-seeded tasks accept spoken follow-ups and constraints, clear voice-only technical questions receive live task-like help, explicit task-switch phrases ask for confirmation, and common low-value filler is filtered before advisor calls.
 - Sanitized trace metrics retain up to 500 local records for later debugging, while p50/p90 dashboard summaries still use the latest 20 traces.
 - Structured screen answer state has a first implementation: screen-task output is parsed in `src/lib/meeting`, completed screen-task suggestions can carry parsed sections, streaming partials are parsed on demand in the UI, and Debug Mode can inspect parsed sections alongside raw output.
+- Meeting Assistant ergonomics has a first implementation: response actions, response length/language preferences, Meeting Assistant-specific audio tuning, and context/debug controls now live behind a collapsible `Configurations` surface. `Regenerate` and `Shorter` are grouped with response actions; `Clear task` remains in the bottom workflow controls. Main UI auto-scroll response behavior has been removed.
 
 ## Priority Model
 
@@ -433,46 +434,70 @@ Metrics:
 
 ## P1: Response Action Ergonomics
 
+Status: first implementation complete. Needs manual Meeting Assistant UI and model-output validation.
+
 ### Problem
 
 Meeting moments often need a different response style than the first generated answer. The current `Regenerate` and `Shorter` actions help, but they are broad.
+Meeting Assistant also needs a single in-panel configuration surface so response, context, audio, and debug controls can be adjusted during a meeting without using the headphone/system-audio panel.
 
 ### Proposed Direction
 
-Add small, click-based actions that map to common meeting needs:
+First slice implementation:
 
-- `Say it more naturally`
-- `Short speaking answer`
-- `Explain in Chinese`
-- `Focus on code`
-- `Focus on tradeoffs`
-- `Ask a clarifying question`
-
-These should be actions on the current active screen task or latest suggestion, not global prompt settings.
+- Add `Speakable`, `Chinese`, and `Focus` actions on the latest suggestion.
+- Move `Regenerate` and `Shorter` into the same response action row.
+- Make `Shorter` reuse Meeting Assistant response length semantics by temporarily downgrading length (`Detailed -> Normal`, `Normal -> Short`, `Short -> Short`) without mutating saved settings.
+- Keep actions scoped to the current active screen task or latest suggestion.
+- Add a collapsible Meeting Assistant `Configurations` section.
+- Move privacy mode, task memory, response, audio, and Debug Mode into `Configurations`.
+- Keep `Clear task` in the bottom low-frequency workflow controls.
+- Add `Response` controls for answer length (`Short`, `Normal`, `Detailed`) and natural language preference (`Auto`, `English`, `Chinese`).
+- Define `Auto` language as natural-language answer selection from screen/transcript context. It must not override visible programming-language choice.
+- Add Meeting Assistant-specific `Audio` controls for profile, speech sensitivity, silence duration, noise gate, and max segment duration.
+- Keep Meeting Assistant audio settings persisted separately from headphone/system-audio VAD settings.
+- Keep Meeting Assistant response settings persisted separately from the main UI response settings.
+- Bypass main UI `RESPONSE_SETTINGS` injection for Meeting Assistant advisor and screen-analysis calls; keep it enabled by default for direct Jarvis model conversations.
+- Treat Meeting Assistant length options as meeting-specific semantics, not aliases of main UI response length:
+  `Short` means live short answer, `Normal` means compact default, and `Detailed` means more reasoning while still meeting-ready.
+- Remove main UI auto-scroll behavior and config because it conflicts with reviewing answer and code sections side by side.
+- Remove general keyboard shortcut and screenshot help from the headphone/system-audio panel.
 
 ### Expected Impact
 
 - Less typing during meetings.
 - Faster conversion from technical answer to speakable response.
 - Better support for non-native English pressure moments.
+- Faster Meeting Assistant tuning without leaving the panel.
+- Less confusion between headphone/system-audio settings and Meeting Assistant settings.
 
 ### Risks
 
 - Too many buttons can clutter the panel.
 - Extra model calls add latency and cost.
-- Some actions overlap with existing `Shorter`.
+- Response language preference could be confused with programming language selection if prompt priority is not explicit.
+- Meeting Assistant audio tuning changes take effect on meeting audio start/resume, so users may expect live changes before they are wired.
 
 ### Validation
 
 - User can perform common refinement with one click.
 - Result appears without losing the active task context.
 - UI remains calm and compact.
+- `Response length` changes new Meeting Assistant prompts.
+- `Language` changes natural-language explanation without overriding visible programming language.
+- Main UI response language/length settings do not overwrite Meeting Assistant response settings.
+- Meeting Assistant model calls do not receive the main UI response length/language prompt injection from `fetchAIResponse`.
+- `Shorter` regenerates with a shorter temporary Meeting Assistant length setting without changing the saved selection.
+- Meeting Assistant audio settings persist and are passed to `start_meeting_audio_session`.
+- Headphone/system-audio help no longer contains general screenshot or global shortcut content.
+- Main UI Response Settings no longer expose or apply auto-scroll behavior.
 
 ### Open Questions
 
-- Which two or three actions should ship first?
-- Should actions be always visible or hidden behind a compact menu?
-- Should actions modify the existing answer or create a new suggestion entry?
+- Do action results replacing the current suggestion feel too lossy, or should Jarvis add a small answer history/alternate view?
+- Should `Focus` stay adaptive, or split into explicit `Code`, `Tradeoffs`, and `Complexity` actions after testing?
+- Should Meeting Assistant audio config changes apply live to an active session, or is restart/resume good enough?
+- Should `Configurations` remember expanded/collapsed state across launches?
 
 ## P1: Trace Export And Replay
 

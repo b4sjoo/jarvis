@@ -171,7 +171,19 @@ export type AdvisorRequestMode =
   | "shorter"
   | "screen-only"
   | "screen-anchored"
-  | "clarifying-answer";
+  | "clarifying-answer"
+  | "response-action";
+
+export type MeetingResponseActionMode = "speakable" | "chinese" | "focus";
+
+export type MeetingResponseLength = "short" | "normal" | "detailed";
+
+export type MeetingResponseLanguage = "auto" | "english" | "chinese";
+
+export interface MeetingResponseConfig {
+  length: MeetingResponseLength;
+  language: MeetingResponseLanguage;
+}
 
 export type ClarifyingQuestionAnswer = "yes" | "no" | "not-sure";
 
@@ -228,6 +240,8 @@ export interface MeetingProviderConfig {
 export interface MeetingAdvisorRequest {
   requestId: string;
   mode?: AdvisorRequestMode;
+  responseAction?: MeetingResponseActionMode;
+  responseConfig?: MeetingResponseConfig;
   promptContext: AdvisorPromptContext;
   provider: TYPE_PROVIDER | undefined;
   selectedProvider: SelectedProviderState;
@@ -246,6 +260,8 @@ export interface MeetingModelTraceCallbacks {
     imageMediaType?: string;
     providerId?: string;
     mode?: AdvisorRequestMode | "screen-task";
+    responseAction?: MeetingResponseActionMode;
+    responseConfig?: MeetingResponseConfig;
   }) => void;
   onFirstToken?: () => void;
   onComplete?: (output: string) => void;
@@ -261,6 +277,13 @@ export interface MeetingAudioConfig {
   pre_speech_chunks: number;
   noise_gate_threshold: number;
   max_recording_duration_secs: number;
+}
+
+export type MeetingAudioProfile = "quiet" | "balanced" | "sensitive" | "custom";
+
+export interface MeetingAudioSettings {
+  profile: MeetingAudioProfile;
+  config: MeetingAudioConfig;
 }
 
 export interface MeetingAudioStatus {
@@ -283,6 +306,8 @@ export interface MeetingAssistantSettings {
   privacyMode: MeetingPrivacyMode;
   activeScreenTaskTimeoutMinutes: number;
   debugMode: boolean;
+  response: MeetingResponseConfig;
+  audio: MeetingAudioSettings;
 }
 
 export type MeetingTraceKind = "screen" | "voice";
