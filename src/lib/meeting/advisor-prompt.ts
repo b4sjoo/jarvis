@@ -119,6 +119,8 @@ export function buildAdvisorUserMessage(
       "Transform <previous_suggestion> for the requested response action. Treat it as source material, not as a new independent question.",
       "Preserve the active task, visible question, and technical constraints. Do not invent new screen content, hidden requirements, speakers, or meeting dialogue.",
       "If <previous_suggestion> is empty or only '-', output a single dash.",
+      "If <previous_suggestion> contains a non-empty Code or Implementation section, keep the screen-task section format: Question, Answer, Approach, Code, Complexity, Clarifying question.",
+      "For coding tasks, preserve the Code section unless the latest explicit constraint requires changing it. Do not move code into Approach.",
       ...buildResponseActionInstructions(options.responseAction ?? "focus"),
       ...buildResponseConfigInstructions(options.responseConfig),
       "</output>"
@@ -236,33 +238,37 @@ function buildResponseActionInstructions(action: MeetingResponseActionMode) {
   if (action === "speakable") {
     return [
       "Action goal: produce a speakable answer the user can say out loud.",
-      "Use this exact compact format:",
+      "For non-coding suggestions, use this exact compact format:",
       "Meaning: -",
       "Reply: one to three short professional English sentences.",
       "Question: -",
-      "Avoid code blocks. Mention complexity only when it is central to the answer.",
+      "For coding suggestions, keep the required screen-task section labels and put the speakable wording in Answer and Approach while preserving Code and Complexity.",
+      "Avoid adding new code blocks outside the Code section. Mention complexity only when it is central to the answer.",
     ];
   }
 
-  if (action === "chinese") {
+  if (action === "bilingual") {
     return [
-      "Action goal: help the user quickly understand the current answer in Chinese.",
-      "Use this exact compact format:",
+      "Action goal: provide a bilingual version of the current answer.",
+      "For non-coding suggestions, use this exact compact format:",
       "Meaning: concise Chinese explanation of the current answer or approach.",
-      "Reply: -",
+      "Reply: concise English version the user can say in a meeting.",
       "Question: -",
+      "For coding suggestions, keep the required screen-task section labels. Make Answer and Approach bilingual, with English first and concise Chinese support after it.",
       "Preserve important English technical terms such as RAG, heap, rate limiter, TypeScript, or O(n).",
+      "Do not duplicate the Code section in two languages; keep code once.",
       "Avoid long teaching mode.",
     ];
   }
 
   return [
     "Action goal: focus the current answer on the most useful technical angle.",
-    "Use this exact compact format:",
+    "For non-coding suggestions, use this exact compact format:",
     "Meaning: concise focus summary of the most useful section, such as implementation detail, tradeoff, complexity, or key reasoning.",
     "Reply: one short meeting-ready English sentence if useful, otherwise '-'.",
     "Question: one click-answerable clarifying question only if a missing constraint matters, otherwise '-'.",
-    "If code is central, summarize the implementation idea instead of dumping a full code block.",
+    "For coding suggestions, keep the required screen-task section labels and focus Answer and Approach on implementation details, edge cases, or complexity while preserving Code.",
+    "If code is central, keep it in the Code section instead of dumping it into Approach.",
   ];
 }
 
@@ -342,14 +348,6 @@ function buildModeInstructions(mode: AdvisorRequestMode) {
     return [
       "Generate a fresh alternative to any previous suggestion.",
       "Keep the same compact format, but avoid repeating the same wording.",
-    ];
-  }
-
-  if (mode === "shorter") {
-    return [
-      "Rewrite the previous suggestion to be shorter.",
-      "Keep only the most useful point in each section.",
-      "If a section is not essential, return '-' for that section.",
     ];
   }
 

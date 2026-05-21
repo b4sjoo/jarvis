@@ -112,10 +112,23 @@ const meetingAudioProfileOptions: Array<{
 const responseActionOptions: Array<{
   id: MeetingResponseActionMode;
   label: string;
+  title: string;
 }> = [
-  { id: "speakable", label: "Speakable" },
-  { id: "chinese", label: "Chinese" },
-  { id: "focus", label: "Focus" },
+  {
+    id: "speakable",
+    label: "Speakable",
+    title: "Rewrite the current answer as something you can say aloud",
+  },
+  {
+    id: "bilingual",
+    label: "Bilingual",
+    title: "Show concise English and Chinese wording for the current answer",
+  },
+  {
+    id: "focus",
+    label: "Focus",
+    title: "Refocus the current answer on the most useful technical point",
+  },
 ];
 
 const HOTKEY_CAPTURE_SETTLE_MS = 180;
@@ -607,7 +620,7 @@ export const MeetingAssistant = () => {
                   <SlidersHorizontalIcon className="h-3.5 w-3.5" />
                   Response actions
                 </div>
-                <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-5">
+                <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-4">
                   <Button
                     size="sm"
                     variant="outline"
@@ -618,22 +631,13 @@ export const MeetingAssistant = () => {
                   >
                     Regenerate
                   </Button>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    className="h-7 px-2 text-[10px]"
-                    title="Regenerate one length level shorter without changing saved settings"
-                    onClick={meeting.makeSuggestionShorter}
-                    disabled={isBusy || !hasSuggestion}
-                  >
-                    Shorter
-                  </Button>
                   {responseActionOptions.map((action) => (
                     <Button
                       key={action.id}
                       size="sm"
                       variant="outline"
                       className="h-7 px-2 text-[10px]"
+                      title={action.title}
                       onClick={() => {
                         void meeting.applyResponseAction(action.id);
                       }}

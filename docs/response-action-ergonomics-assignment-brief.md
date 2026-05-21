@@ -18,7 +18,7 @@ This work does not change Jarvis's core meeting-understanding model. It reduces 
 Jarvis can now produce useful screen-anchored and voice-seeded technical answers, but several meeting-time friction points remain:
 
 - The answer may be technically correct but not phrased as something the user can say aloud.
-- The user sometimes needs a quick Chinese explanation to understand the reasoning behind the answer.
+- The user sometimes needs a quick bilingual version: English wording they can say, plus concise Chinese support for fast understanding.
 - Different meetings need different answer lengths, from one-line replies to more detailed reasoning.
 - Meeting Assistant had fixed VAD settings even though the headphone panel already exposed speech sensitivity, silence duration, and noise gate controls.
 - Meeting Assistant settings were scattered in the main panel instead of living in one predictable place.
@@ -35,9 +35,9 @@ Create a quiet, compact, predictable Meeting Assistant control layer for two cor
 
 The first version should support:
 
-- Grouping `Regenerate`, `Shorter`, and targeted response actions in one action row.
+- Grouping `Regenerate` and targeted response actions in one action row.
 - Rewriting the current answer as something the user can say aloud in English.
-- Explaining the current answer in Chinese.
+- Producing a bilingual version of the current answer.
 - Focusing the current answer on the most useful technical point.
 - Adjusting default response length and natural-language preference.
 - Adjusting Meeting Assistant audio listening parameters.
@@ -54,17 +54,17 @@ Base actions:
 | Action | Intent | Output Behavior |
 |---|---|---|
 | `Regenerate` | Regenerate the current suggestion with the current Meeting Assistant response config. | Follows current length and language settings. |
-| `Shorter` | Regenerate one length level shorter without mutating saved settings. | `Detailed -> Normal`, `Normal -> Short`, `Short -> Short`. |
 
 Rewrite actions:
 
 | Action | Intent | Output Behavior |
 |---|---|---|
-| `Speakable` | Rewrite the current answer into something the user can naturally say in a meeting. | Short, direct, English; avoid code unless required. |
-| `Chinese` | Explain the current answer or reasoning in Chinese. | Concise Chinese, preserving key English technical terms. |
-| `Focus` | Focus the current answer on the most useful technical part. | Prefer code, tradeoffs, complexity, or key reasoning. |
+| `Speakable` | Rewrite the current answer into something the user can naturally say in a meeting. | Short, direct, English. For coding tasks, keep the code section available. |
+| `Bilingual` | Provide English wording plus concise Chinese support. | English first, concise Chinese explanation second, preserving key English technical terms. |
+| `Focus` | Focus the current answer on the most useful technical part. | Prefer implementation details, edge cases, complexity, tradeoffs, or key reasoning. For coding tasks, keep the code section available. |
 
 Actions must preserve current active task context and only update the current suggestion presentation.
+For coding tasks, response actions must preserve the `Code` section unless a later explicit constraint requires changing it. This is a hard reliability rule, because losing the implementation breaks the live interview workflow.
 
 ### 2. Meeting Assistant Configurations
 
@@ -128,7 +128,7 @@ This task can reuse existing Jarvis infrastructure:
 - Completed screen-task suggestions can carry `screenTaskAnswer`.
 - `screenTaskAnswer` already has structured fields such as `question`, `answer`, `approach`, `code`, `complexity`, and `clarifyingQuestion`.
 - `activeScreenTask` preserves the current screen-seeded task context.
-- Advisor requests already support `regenerate`, `shorter`, `screen-anchored`, and `clarifying-answer` modes.
+- Advisor requests already support `regenerate`, `screen-anchored`, and `clarifying-answer` modes.
 - Debug traces already record model input/output and step timing.
 - The native meeting audio session already accepts `vadConfig`.
 - Meeting Assistant previously used fixed `DEFAULT_MEETING_AUDIO_CONFIG`; the missing pieces were UI state, persistence, and wiring.
@@ -157,7 +157,7 @@ This slice does not:
 - Meeting-time actions should be one-click whenever possible.
 - Response actions must preserve active task context.
 - Response actions should work best on screen-task suggestions and degrade gracefully for voice-only suggestions.
-- Existing `Regenerate`, `Shorter`, pause/resume, clear task, and emergency hide workflows must keep working.
+- Existing `Regenerate`, pause/resume, clear task, and emergency hide workflows must keep working.
 - The first version should use the currently selected AI provider and existing model request path.
 - Debug traces should record action mode and response configuration.
 - Meeting Assistant audio settings must be stored separately from headphone/system-audio settings.
@@ -173,7 +173,7 @@ This slice does not:
 Recommended layout:
 
 - Keep the main answer area as the highest-priority content.
-- Add a compact response action row near the answer controls with `Regenerate`, `Shorter`, `Speakable`, `Chinese`, and `Focus`.
+- Add a compact response action row near the answer controls with `Regenerate`, `Speakable`, `Bilingual`, and `Focus`.
 - Add a collapsible `Configurations` section in Meeting Assistant.
 - Move privacy, task memory, and Debug Mode into `Configurations`.
 - Put audio tuning inside the `Audio` group.
@@ -183,9 +183,8 @@ Recommended layout:
 Text labels are acceptable for response actions because meeting-time clarity matters more than visual minimalism:
 
 - `Regenerate`
-- `Shorter`
 - `Speakable`
-- `Chinese`
+- `Bilingual`
 - `Focus`
 
 Configuration labels should stay practical. Avoid long in-app explanations unless a setting is easy to misuse.
@@ -206,19 +205,23 @@ General rules:
 
 - Output one to three English sentences.
 - Sound natural, professional, and sayable.
-- Avoid code blocks.
+- For coding tasks, keep the screen-task section format and preserve the `Code` section.
+- Avoid code blocks outside the `Code` section.
 - Mention complexity only when it is central to the answer.
 
-`Chinese`:
+`Bilingual`:
 
-- Explain concisely in Chinese.
+- Provide concise English wording plus concise Chinese support.
+- Put English first so the user can speak it directly.
 - Preserve key English technical terms such as `RAG`, `heap`, `rate limiter`, `TypeScript`, and `O(n)`.
+- For coding tasks, keep code only once in the `Code` section.
 - Avoid long tutorial-style explanations.
 
 `Focus`:
 
 - Choose the most useful focus point from the structured fields.
 - If code exists, prefer implementation details, edge cases, or complexity.
+- For coding tasks, keep the screen-task section format and preserve the `Code` section.
 - If no code exists, prefer tradeoffs, complexity, or key reasoning.
 - Keep output compact.
 
@@ -229,7 +232,7 @@ Response configuration prompt:
 - `Detailed` can include more reasoning, code, or tradeoffs where useful.
 - `Auto` language chooses natural answer language from screen and transcript context without overriding visible programming language.
 - `English` prefers meeting-ready English.
-- `Chinese` prefers Chinese explanation while preserving key English technical terms.
+- `Chinese` language preference prefers Chinese explanation while preserving key English technical terms.
 
 ## Technical Direction
 
@@ -256,7 +259,8 @@ Likely code areas:
   - Add `applyResponseAction(actionMode)`.
   - Persist Meeting Assistant response and audio config.
   - Pass persisted audio config to `start_meeting_audio_session`.
-  - Implement `Shorter` as a temporary Meeting Assistant response length downgrade.
+  - Remove `Shorter` after testing showed it overlapped with `Speakable`.
+  - Add a guard that preserves coding-task `Code` sections when action regeneration omits them.
   - Keep Meeting Assistant audio config separate from system-audio `vad_config`.
   - Keep Meeting Assistant response config separate from main UI `RESPONSE_SETTINGS`.
 - `src/pages/app/components/meeting/index.tsx`
@@ -283,7 +287,7 @@ Reusable patterns:
 
 - VAD sliders and presets from the headphone/system-audio panel.
 - Current Meeting Assistant privacy, task-memory, and debug controls.
-- Existing `Regenerate` and `Shorter` advisor flows.
+- Existing `Regenerate` advisor flow.
 
 ## Persistence Direction
 
@@ -306,8 +310,9 @@ Code outputs:
 - Typed response configuration and audio configuration.
 - Action-specific advisor prompt handling.
 - One-click action controls in Meeting Assistant.
-- `Regenerate` and `Shorter` moved into response action controls.
-- `Shorter` reuses Meeting Assistant response length downgrade semantics.
+- `Regenerate` moved into response action controls.
+- `Shorter` removed from the action row after testing showed low differentiation from `Speakable`.
+- Coding response actions preserve `Code` sections when the source suggestion includes implementation.
 - Collapsible `Configurations` section.
 - Persisted Meeting Assistant audio config wired into native audio start.
 - Response config wired into Meeting Assistant prompt paths.
@@ -332,15 +337,13 @@ Validation outputs:
 
 | Scenario | Expected Behavior |
 |---|---|
-| Screen coding task has a full answer, click `Speakable` | Returns concise, natural English wording without unnecessary code blocks. |
-| Screen algorithm task, click `Chinese` | Explains the algorithm and complexity in Chinese while preserving key technical terms. |
-| Screen coding task has a code section, click `Focus` | Focuses on implementation, edge cases, or complexity instead of repeating every section. |
+| Screen coding task has a full answer, click `Speakable` | Returns concise, natural English wording while preserving the `Code` section. |
+| Screen algorithm task, click `Bilingual` | Provides English wording plus concise Chinese support while preserving key technical terms and the `Code` section. |
+| Screen coding task has a code section, click `Focus` | Focuses on implementation, edge cases, or complexity while preserving the `Code` section. |
 | Field-knowledge question, click `Speakable` | Generates meeting-ready English wording. |
-| Voice-only technical suggestion, click `Chinese` | Explains the current suggestion without requiring screen context. |
+| Voice-only technical suggestion, click `Bilingual` | Provides English wording plus Chinese support without requiring screen context. |
 | No current suggestion | Action controls are disabled or hidden. |
 | Active screen task exists | Actions do not clear active task; they only update suggestion content. |
-| Meeting response length is `Detailed`, click `Shorter` | Regenerates with `Normal` length without mutating saved `Detailed` setting. |
-| Meeting response length is `Normal`, click `Shorter` | Regenerates with `Short` length without mutating saved `Normal` setting. |
 | Meeting response length is `Short` | New Meeting Assistant answers are visibly compact. |
 | Meeting language is `Chinese` | New answers prefer Chinese explanation while preserving key English technical terms. |
 | Meeting language is `Auto` | Natural answer language follows screen/transcript context; code language still follows visible selection or Python fallback. |
@@ -357,8 +360,9 @@ Validation outputs:
 ## Success Criteria
 
 - The user can rewrite an answer into a sayable version with one click.
-- The user can get a Chinese explanation with one click.
+- The user can get bilingual English/Chinese support with one click.
 - The user can focus a broad answer without typing.
+- Coding-task response actions preserve code implementation when code was present in the source answer.
 - The user can adjust Meeting Assistant answer length and language from Meeting Assistant.
 - The user can tune Meeting Assistant audio sensitivity from Meeting Assistant.
 - Privacy, task memory, audio, response, and debug controls have one unified location.
@@ -372,9 +376,10 @@ Validation outputs:
 ## Risks
 
 - Too many visible controls can clutter the panel.
-- If prompts are not distinct enough, `Speakable`, `Chinese`, or `Focus` may behave like plain regeneration.
+- If prompts are not distinct enough, `Speakable`, `Bilingual`, or `Focus` may behave like plain regeneration.
 - Extra model calls add latency and cost.
 - If action output replaces the original answer, the user may lose useful detail.
+- If model output ignores the requested section format, code-side guards must preserve implementation sections.
 - `Focus` can feel unpredictable if rules are too broad.
 - Audio tuning controls can be too low-level for quick meeting use.
 - Response config priority can conflict with task-specific prompt rules if boundaries are unclear.
@@ -382,8 +387,10 @@ Validation outputs:
 ## Decisions
 
 - Response action controls are directly visible.
-- `Regenerate` and `Shorter` belong with response actions, not bottom workflow controls.
-- `Shorter` uses a temporary Meeting Assistant response length downgrade instead of a separate prompt branch.
+- `Regenerate` belongs with response actions, not bottom workflow controls.
+- `Shorter` is removed because its design purpose overlapped with `Speakable` and added UI noise.
+- `Chinese` action is renamed to `Bilingual` so one click always gives English wording plus Chinese support, independent of the saved language preference.
+- `Speakable` and `Focus` remain separate: `Speakable` optimizes for what the user can say aloud; `Focus` re-centers the answer on the most useful technical point.
 - Meeting Assistant response config and main UI response config are independently persisted.
 - `fetchAIResponse` injects main UI response settings by default only for direct Jarvis conversation paths.
 - Meeting Assistant advisor and screen calls pass `applyResponseSettings: false`.
@@ -397,7 +404,7 @@ Validation outputs:
 - Should action results replace the current suggestion, or should Jarvis later add an alternate-answer view?
 - Should `Speakable` eventually become the default first display field?
 - If `Focus` is unstable, should it split into explicit `Code`, `Tradeoffs`, and `Complexity` actions?
-- Should action output preserve screen-task section format or use a compact `Meaning / Reply / Question` format?
+- Should non-coding action output preserve screen-task section format or use a compact `Meaning / Reply / Question` format?
 - Should `Configurations` remember expanded/collapsed state across launches?
 - Should a narrow `Personal guidance` field exist later, or should preferences stay structured only?
 
@@ -407,7 +414,7 @@ Validation outputs:
 2. Move privacy, task memory, and debug controls into it.
 3. Add response length and language controls and wire them into prompts.
 4. Add Meeting Assistant audio presets and persist them separately from system-audio settings.
-5. Add response action buttons and place `Regenerate` / `Shorter` in the same row.
+5. Add response action buttons and place `Regenerate` in the same row.
 6. Remove generic shortcut and screenshot help from the headphone/system-audio panel.
 7. Remove main UI auto-scroll response behavior and config.
 8. Add the model-call boundary that keeps main UI response settings out of Meeting Assistant calls.

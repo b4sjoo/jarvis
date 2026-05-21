@@ -17,7 +17,6 @@ import {
   MeetingPrivacyMode,
   MeetingResponseActionMode,
   MeetingResponseConfig,
-  MeetingResponseLength,
   MeetingContextManager,
   MeetingSetupWarning,
   MeetingTraceStore,
@@ -174,12 +173,6 @@ function normalizeMeetingResponseConfig(
   };
 }
 
-function getNextShorterResponseLength(
-  length: MeetingResponseLength
-): MeetingResponseLength {
-  return length === "detailed" ? "normal" : "short";
-}
-
 function normalizeMeetingAudioSettings(value: unknown) {
   const parsed = isRecord(value) ? value : {};
   const profile = normalizeMeetingAudioProfile(parsed.profile);
@@ -295,6 +288,60 @@ function clearActiveScreenTaskState(
   };
 }
 
+function preserveCodingResponseActionSections(
+  generatedContent: string,
+  sourceSuggestion: string | undefined
+) {
+  const source = sourceSuggestion?.trim();
+  if (!source) return generatedContent;
+
+  const sourceAnswer = parseScreenTaskAnswer(source);
+  const sourceCode = sourceAnswer.code?.trim();
+  if (!sourceCode) return generatedContent;
+
+  const generatedAnswer = parseScreenTaskAnswer(generatedContent);
+  if (generatedAnswer.code?.trim()) return generatedContent;
+
+  const compactAnswer = readCompactActionAnswer(generatedContent);
+
+  return [
+    `Question: ${generatedAnswer.question || sourceAnswer.question || "-"}`,
+    `Answer: ${generatedAnswer.answer || compactAnswer || sourceAnswer.answer || "-"}`,
+    `Approach: ${generatedAnswer.approach || sourceAnswer.approach || "-"}`,
+    ["Code:", "```", sourceCode, "```"].join("\n"),
+    `Complexity: ${generatedAnswer.complexity || sourceAnswer.complexity || "-"}`,
+    `Clarifying question: ${
+      generatedAnswer.clarifyingQuestion ||
+      sourceAnswer.clarifyingQuestion ||
+      "-"
+    }`,
+  ].join("\n\n");
+}
+
+function readCompactActionAnswer(content: string) {
+  const meaning = readCompactSection(content, "Meaning");
+  const reply = readCompactSection(content, "Reply");
+  const question = readCompactSection(content, "Question");
+  const parts = [reply, meaning].filter(Boolean);
+
+  if (parts.length > 0) return parts.join("\n\n");
+  if (question) return question;
+
+  const trimmed = content.trim();
+  return trimmed === "-" ? "" : trimmed;
+}
+
+function readCompactSection(content: string, label: string) {
+  const labels = ["Meaning", "Reply", "Question"];
+  const boundary = labels.join("|");
+  const pattern = new RegExp(
+    `(?:^|\\n)\\s*${label}\\s*:\\s*([\\s\\S]*?)(?=\\n\\s*(?:${boundary})\\s*:|$)`,
+    "i"
+  );
+  const value = pattern.exec(content)?.[1]?.trim() ?? "";
+  return value === "-" ? "" : value;
+}
+
 function isMeetingPrivacyMode(
   value: unknown
 ): value is MeetingPrivacyMode {
@@ -329,7 +376,6 @@ interface RunAdvisorOptions {
   force?: boolean;
   mode?: AdvisorRequestMode;
   responseAction?: MeetingResponseActionMode;
-  responseConfigOverride?: MeetingResponseConfig;
   currentSuggestion?: string;
   clarifyingFeedback?: ClarifyingQuestionFeedback;
   traceId?: string;
@@ -687,8 +733,7 @@ export function useMeetingAssistant() {
 
     const returnStatus = state.status;
     const requestId = `advisor_${mode}_${Date.now()}`;
-    const responseConfig =
-      options.responseConfigOverride ?? state.settings.response;
+    const responseConfig = state.settings.response;
     contextManagerRef.current.setLastAdvisorRequestId(requestId);
 
     setState((previous) => ({
@@ -760,6 +805,13 @@ export function useMeetingAssistant() {
           ...previous,
           partialSuggestion: event.accumulated,
         }));
+      }
+
+      if (mode === "response-action") {
+        finalContent = preserveCodingResponseActionSections(
+          finalContent,
+          options.currentSuggestion
+        );
       }
 
       let contextState = contextManagerRef.current.getState();
@@ -1598,26 +1650,6 @@ export function useMeetingAssistant() {
     });
   }, [currentSuggestionText, runAdvisor]);
 
-  const makeSuggestionShorter = useCallback(async () => {
-    if (!currentSuggestionText.trim()) {
-      setState((previous) => ({
-        ...previous,
-        error: NO_SUGGESTION_MESSAGE,
-      }));
-      return;
-    }
-
-    await runAdvisor({
-      force: true,
-      mode: "regenerate",
-      responseConfigOverride: {
-        ...state.settings.response,
-        length: getNextShorterResponseLength(state.settings.response.length),
-      },
-      currentSuggestion: currentSuggestionText,
-    });
-  }, [currentSuggestionText, runAdvisor, state.settings.response]);
-
   const applyResponseAction = useCallback(
     async (responseAction: MeetingResponseActionMode) => {
       if (!currentSuggestionText.trim()) {
@@ -1775,7 +1807,6 @@ export function useMeetingAssistant() {
     clearTraces,
     captureScreenContext,
     regenerateSuggestion,
-    makeSuggestionShorter,
     applyResponseAction,
     answerClarifyingQuestion,
     isActive: activeRef.current,

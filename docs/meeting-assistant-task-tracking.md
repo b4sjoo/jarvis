@@ -30,7 +30,7 @@ Current implementation status:
 - Prompt-level interview task fusion has completed its first implementation slice: screen-seeded follow-ups, voice-only technical questions, explicit task-switch confirmation, low-signal speech filtering, stable speech listener registration, cancelled advisor tracing, and longer sanitized metrics history are now in code.
 - Task memory expiration is rolling. Meaningful screen-task updates refresh `expiresAt`; low-signal ignored speech does not; changing the timeout setting recalculates expiry from the current time; manual clear or `New task` clears the active task.
 - Structured screen answer state has completed its first implementation slice: screen-task output is parsed in `src/lib/meeting`, completed suggestions can carry parsed sections, partial streaming output is parsed on demand, and Debug Mode can inspect parsed screen-answer fields alongside raw output.
-- Response action and Meeting Assistant ergonomics has completed a first implementation slice: `Regenerate`, `Shorter`, `Speakable`, `Chinese`, and `Focus` actions are available on the current suggestion; response length/language preferences and Meeting Assistant-specific audio settings are grouped under a collapsible `Configurations` panel; `Clear task` remains in the bottom workflow controls; main UI auto-scroll response behavior is removed; headphone/system-audio help no longer carries generic screenshot or shortcut documentation.
+- Response action and Meeting Assistant ergonomics has completed a first implementation slice: `Regenerate`, `Speakable`, `Bilingual`, and `Focus` actions are available on the current suggestion; `Shorter` was removed after quick testing showed low differentiation from `Speakable`; coding response actions now preserve implementation sections when source answers include code; response length/language preferences and Meeting Assistant-specific audio settings are grouped under a collapsible `Configurations` panel; `Clear task` remains in the bottom workflow controls; main UI auto-scroll response behavior is removed; headphone/system-audio help no longer carries generic screenshot or shortcut documentation.
 
 ## Milestone 0: Design Review and Scope Lock
 
@@ -279,15 +279,16 @@ Exit criteria:
 Goal: make Meeting Assistant easier to tune and act on during a live meeting without opening unrelated panels or typing follow-up prompts.
 
 - [x] Write a dedicated assignment brief for response actions and Meeting Assistant ergonomics.
-- [x] Add typed response action modes: `speakable`, `chinese`, and `focus`.
+- [x] Add typed response action modes: `speakable`, `bilingual`, and `focus`.
 - [x] Add Meeting Assistant response configuration for answer length and natural language preference.
 - [x] Add Meeting Assistant-specific audio configuration with profile, speech sensitivity, silence duration, noise gate, and max segment duration.
 - [x] Persist Meeting Assistant response/audio settings inside `meeting_assistant_settings` instead of reusing headphone/system-audio `vad_config`.
 - [x] Pass Meeting Assistant audio config into `start_meeting_audio_session`.
 - [x] Pass response configuration into advisor prompts and screen-task prompts.
-- [x] Add `Speakable`, `Chinese`, and `Focus` buttons on the current suggestion.
-- [x] Move `Regenerate` and `Shorter` into the Response actions row.
-- [x] Make `Shorter` reuse Meeting Assistant response length semantics with temporary length downgrade instead of a separate saved setting.
+- [x] Add `Speakable`, `Bilingual`, and `Focus` buttons on the current suggestion.
+- [x] Move `Regenerate` into the Response actions row.
+- [x] Remove `Shorter` after quick testing showed it overlapped with `Speakable`.
+- [x] Preserve coding-task `Code` sections when response action regeneration omits implementation.
 - [x] Add a collapsible `Configurations` panel.
 - [x] Move privacy, task memory, response, audio, and Debug Mode into `Configurations`.
 - [x] Keep `Clear task` in the bottom workflow controls.
@@ -493,10 +494,11 @@ Exit criteria:
 | 2026-05-21 | Refine Meeting Assistant ergonomics scope | Remove redundant Screen toggle and duplicate config-level Clear task; group `Regenerate`/`Shorter` with response actions; keep Meeting Assistant response config independent from main UI response config; define `Auto` as natural-language auto selection |
 | 2026-05-21 | Remove main UI response auto-scroll setting | Auto-scroll did not support the desired answer/code review flow; Response Settings now focuses on length and language |
 | 2026-05-21 | Separate model-call response config domains | Direct Jarvis conversations keep main UI `RESPONSE_SETTINGS`; Meeting Assistant advisor/screen calls bypass that global prompt injection and use Meeting Assistant settings only |
+| 2026-05-21 | Refine response actions after quick testing | Remove `Shorter`; rename `Chinese` action to `Bilingual`; keep `Speakable` and `Focus` separate because one optimizes sayable wording and the other re-centers technical content; preserve coding `Code` sections during action regeneration |
 
 ## Validation Snapshot
 
-Last validated: 2026-05-20.
+Last validated: 2026-05-21.
 
 - `npm run build` passes.
 - `cargo check` passes after selecting full Xcode as the active developer directory.
@@ -520,11 +522,13 @@ Last validated: 2026-05-20.
 - `npm run build` and `git diff --check` pass for the interview task fusion first slice.
 - Structured screen answer parser builds successfully and keeps raw output as fallback; `npm run build` and `git diff --check` pass after the first implementation slice.
 - Response action and Meeting Assistant ergonomics implementation builds successfully; `npm run build` and `git diff --check` pass after response config domain separation, main UI auto-scroll removal, and the English assignment brief update.
+- Quick response-action feedback is incorporated in docs and implementation: `Shorter` removed, `Chinese` action renamed to `Bilingual`, and coding action outputs guarded against losing `Code`.
+- `npm run build` and `git diff --check` pass after the `Bilingual`/code-preservation response action refinement.
 
 ## Immediate Next Tasks
 
 1. P1: Manually validate Meeting Assistant `Configurations`, including response length/language persistence, independence from main UI response settings, and audio profile changes after restart/resume.
-2. P1: Validate `Regenerate`, `Shorter`, `Speakable`, `Chinese`, and `Focus` on screen-task and voice-only suggestions.
+2. P1: Validate `Regenerate`, `Speakable`, `Bilingual`, and `Focus` on screen-task and voice-only suggestions, especially coding-task code preservation.
 3. P1: Validate Structured Screen Answer State with fresh screen-task outputs across Python, TypeScript, JavaScript, Go, Java, and field-knowledge questions.
 4. P0: Continue mock-meeting and real-use validation with screen-seeded, voice-seeded, and mixed task blocks.
 5. P0: Watch low-signal filtering quality, especially whether useful short constraints are accidentally ignored or filler still triggers advisor calls.

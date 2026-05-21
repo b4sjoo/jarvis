@@ -22,7 +22,7 @@ As of 2026-05-20:
 - The first prompt-level interview task fusion slice is implemented: screen-seeded tasks accept spoken follow-ups and constraints, clear voice-only technical questions receive live task-like help, explicit task-switch phrases ask for confirmation, and common low-value filler is filtered before advisor calls.
 - Sanitized trace metrics retain up to 500 local records for later debugging, while p50/p90 dashboard summaries still use the latest 20 traces.
 - Structured screen answer state has a first implementation: screen-task output is parsed in `src/lib/meeting`, completed screen-task suggestions can carry parsed sections, streaming partials are parsed on demand in the UI, and Debug Mode can inspect parsed sections alongside raw output.
-- Meeting Assistant ergonomics has a first implementation: response actions, response length/language preferences, Meeting Assistant-specific audio tuning, and context/debug controls now live behind a collapsible `Configurations` surface. `Regenerate` and `Shorter` are grouped with response actions; `Clear task` remains in the bottom workflow controls. Main UI auto-scroll response behavior has been removed.
+- Meeting Assistant ergonomics has a first implementation: response actions, response length/language preferences, Meeting Assistant-specific audio tuning, and context/debug controls now live behind a collapsible `Configurations` surface. `Regenerate` is grouped with `Speakable`, `Bilingual`, and `Focus`; `Shorter` was removed after quick testing showed low differentiation from `Speakable`; `Clear task` remains in the bottom workflow controls. Main UI auto-scroll response behavior has been removed.
 
 ## Priority Model
 
@@ -438,16 +438,17 @@ Status: first implementation complete. Needs manual Meeting Assistant UI and mod
 
 ### Problem
 
-Meeting moments often need a different response style than the first generated answer. The current `Regenerate` and `Shorter` actions help, but they are broad.
+Meeting moments often need a different response style than the first generated answer. `Regenerate` helps, but targeted actions are more useful when the user needs sayable wording, bilingual support, or technical focus.
 Meeting Assistant also needs a single in-panel configuration surface so response, context, audio, and debug controls can be adjusted during a meeting without using the headphone/system-audio panel.
 
 ### Proposed Direction
 
 First slice implementation:
 
-- Add `Speakable`, `Chinese`, and `Focus` actions on the latest suggestion.
-- Move `Regenerate` and `Shorter` into the same response action row.
-- Make `Shorter` reuse Meeting Assistant response length semantics by temporarily downgrading length (`Detailed -> Normal`, `Normal -> Short`, `Short -> Short`) without mutating saved settings.
+- Add `Speakable`, `Bilingual`, and `Focus` actions on the latest suggestion.
+- Move `Regenerate` into the same response action row.
+- Remove `Shorter` because it overlaps with `Speakable` in meeting use and adds UI noise.
+- Preserve coding-task `Code` sections during action regeneration. If the model omits code from a coding action output, the UI layer restores the source implementation section.
 - Keep actions scoped to the current active screen task or latest suggestion.
 - Add a collapsible Meeting Assistant `Configurations` section.
 - Move privacy mode, task memory, response, audio, and Debug Mode into `Configurations`.
@@ -487,7 +488,7 @@ First slice implementation:
 - `Language` changes natural-language explanation without overriding visible programming language.
 - Main UI response language/length settings do not overwrite Meeting Assistant response settings.
 - Meeting Assistant model calls do not receive the main UI response length/language prompt injection from `fetchAIResponse`.
-- `Shorter` regenerates with a shorter temporary Meeting Assistant length setting without changing the saved selection.
+- Coding response actions preserve implementation when the source suggestion has a `Code` section.
 - Meeting Assistant audio settings persist and are passed to `start_meeting_audio_session`.
 - Headphone/system-audio help no longer contains general screenshot or global shortcut content.
 - Main UI Response Settings no longer expose or apply auto-scroll behavior.

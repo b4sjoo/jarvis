@@ -168,13 +168,12 @@ export type AdvisorSuggestionKind =
 export type AdvisorRequestMode =
   | "live"
   | "regenerate"
-  | "shorter"
   | "screen-only"
   | "screen-anchored"
   | "clarifying-answer"
   | "response-action";
 
-export type MeetingResponseActionMode = "speakable" | "chinese" | "focus";
+export type MeetingResponseActionMode = "speakable" | "bilingual" | "focus";
 
 export type MeetingResponseLength = "short" | "normal" | "detailed";
 
