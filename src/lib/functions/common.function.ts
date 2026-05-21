@@ -115,8 +115,7 @@ export function processUserMessageTemplate(
       .replace(/\{\{IMAGE\}\}/g, normalized.base64);
   };
 
-  const templateStr = JSON.stringify(template).replace(
-    /\{\{TEXT\}\}/g,
+  const templateStr = JSON.stringify(template).replace(/\{\{TEXT\}\}/g, () =>
     escapeForJson(userMessage)
   );
   const result = JSON.parse(templateStr);
@@ -206,7 +205,10 @@ export function deepVariableReplacer(
   if (typeof node === "string") {
     let result = node;
     for (const [key, value] of Object.entries(variables)) {
-      result = result.replace(new RegExp(`\\{\\{${key}\\}\\}`, "g"), value);
+      result = result.replace(
+        new RegExp(`\\{\\{${key}\\}\\}`, "g"),
+        () => value
+      );
     }
     return result;
   }

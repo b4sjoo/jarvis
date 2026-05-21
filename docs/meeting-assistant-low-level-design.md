@@ -213,7 +213,9 @@ interface ActiveScreenTask {
 }
 ```
 
-`ActiveScreenTask` starts on explicit screen capture. It anchors later audio turns so the advisor treats speech as clarification, modification, or follow-up context for the visible technical question. New captures replace the active task. The task can be cleared manually, clears when the meeting assistant stops, and expires after a configurable inactivity timeout. The default is 30 minutes of inactivity, long enough for a real technical discussion but short enough to avoid stale task carryover across unrelated meeting topics.
+`ActiveScreenTask` starts on explicit screen capture. It anchors later audio turns so the advisor treats speech as clarification, modification, follow-up, correction, or possible task-switch context for the visible technical question. New captures replace the active task. The task can be cleared manually, clears when the meeting assistant stops, and expires after a configurable inactivity timeout. The default is 30 minutes of inactivity, long enough for a real technical discussion but short enough to avoid stale task carryover across unrelated meeting topics.
+
+The timeout is rolling, not a fixed wall-clock cleanup interval. A meaningful screen-task update refreshes `updatedAt` and `expiresAt` from the update time. Ignored low-signal speech does not refresh the task. Changing the timeout setting recalculates the current task expiry from the current time. Explicit `Clear task` and task-switch `New task` actions clear the active task immediately.
 
 Conceptually, the product is moving toward `ActiveMeetingTask`: a task session may be created by a screen capture, a clear voice-only technical question, or a mix of both. The first strong task signal creates the task; later screen or voice signals steer it. The first implementation should avoid a large type migration and instead improve prompt-level behavior around screen-seeded, voice-seeded, and mixed task blocks.
 
@@ -403,14 +405,15 @@ Responsibilities:
 - Cancel stale in-flight requests when a newer turn arrives.
 - Normalize output into `AdvisorSuggestion`.
 - Support explicit regenerate and make-shorter requests against the current meeting context.
-- In `screen-anchored` mode, use `activeScreenTask` as the anchor and treat the newest transcript turn as clarification or follow-up.
+- In `screen-anchored` mode, use `activeScreenTask` as the anchor and treat the newest transcript turn as clarification, constraint, follow-up, correction, or possible task switch.
 
 Trigger rules:
 
 - Trigger on final `them` turn.
 - If an `activeScreenTask` exists, run the advisor in `screen-anchored` mode for later transcript turns.
 - Debounce 500-1000 ms.
-- Skip small talk when confidence is high.
+- Filter common low-signal filler locally before appending transcript turns or calling the advisor.
+- Ask for a click-answerable confirmation on explicit task-switch phrases instead of automatically clearing or reusing the task.
 - Cancel older advisor request if a new turn arrives.
 
 Prompt output policy:

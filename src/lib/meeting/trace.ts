@@ -8,7 +8,7 @@ import {
 import { createMeetingId } from "./context-manager";
 import { invoke } from "@tauri-apps/api/core";
 
-const MAX_TRACE_ITEMS = 20;
+const MAX_TRACE_ITEMS = 500;
 const DEFAULT_SUMMARY_WINDOW_SIZE = 20;
 const PERSISTED_TRACE_METRICS_VERSION = 1;
 

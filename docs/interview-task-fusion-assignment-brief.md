@@ -85,9 +85,9 @@ Priority implications:
 
 First pass:
 
-- Update advisor prompts for interview task continuity.
-- Improve `screen-anchored` behavior so voice can be treated as constraint, follow-up, correction, or strong switch signal.
-- Improve transcript-only behavior so clear technical voice questions receive task-like answers rather than generic meeting advice.
+- [x] Update advisor prompts for interview task continuity.
+- [x] Improve `screen-anchored` behavior so voice can be treated as constraint, follow-up, correction, or strong switch signal.
+- [x] Improve transcript-only behavior so clear technical voice questions receive task-like answers rather than generic meeting advice.
 - Preserve the current `ActiveScreenTask` type in code.
 - Document the conceptual direction toward `ActiveMeetingTask`, but do not migrate the type system yet.
 - Do not add a separate LLM classifier call.
@@ -95,6 +95,21 @@ First pass:
 - Keep using persisted metrics and Debug Mode traces to inspect behavior.
 - Preserve the STT/advisor boundary: do not move task reasoning into transcription cleanup.
 - If transcript cleanup prompt changes are needed, keep them literal and non-answering.
+
+First pass implementation notes:
+
+- The advisor prompt now treats the default scenario as a one-on-one technical interview or task discussion.
+- `screen-anchored` advisor prompts internally classify the latest transcript as constraint, follow-up, correction, strong task switch, or low-value speech.
+- Clear voice-only technical questions now receive task-like live suggestions without requiring a screenshot.
+- Strong local task-switch phrases such as "next question" or "下一题" produce a click-answerable confirmation instead of silently clearing or reusing stale context.
+- Low-signal filler speech is filtered before it enters meeting context and is traced as `Transcript ignored`.
+- The active screen task is only refreshed by meaningful screen-task output. Empty output, `-`, and task-switch clarifying questions do not refresh task content or expiry.
+- Task expiry is rolling by `updatedAt`/`expiresAt`, not a fixed wall-clock bucket. A meaningful screen-task update refreshes expiry from the update time; low-value ignored speech does not refresh it; changing the timeout setting recalculates the current task expiry from the current time.
+- Manual clear and the `New task` quick action clear the current active task. `Same task` keeps it.
+- The speech event listener now uses a single stable listener that dispatches to the latest handler, avoiding duplicate STT traces from stale listeners.
+- Cancelled advisor requests are traced as `cancelled` instead of successful empty outputs.
+- Provider prompt template replacement is escaped safely so markdown/math content cannot trigger JSON replacement parsing errors.
+- Sanitized trace history now retains up to 500 local trace metric records, while the dashboard baseline still summarizes the latest 20.
 
 Potential later pass:
 
@@ -186,8 +201,9 @@ Use persisted Debug Mode metrics and manual notes:
 ## Open Questions
 
 - When should voice-seeded tasks become first-class persisted state?
-- Should a suspected task switch render quick actions such as `Same task`, `New task`, and `Dismiss`?
-- Should task block duration remain governed by the existing active task timeout, or should voice activity refresh it?
+- Should voice-seeded tasks need first-class state only after tests show multi-turn voice-only blocks lose useful context?
+- Resolved for this slice: suspected task switches render quick actions such as `Same task`, `New task`, and `Dismiss`.
+- Resolved for this slice: task block duration remains governed by the active task inactivity timeout. Meaningful active-task updates refresh expiry; low-value filler speech does not.
 - Should the latest transcript turn show whether it was bound to the active task?
 - Which failures justify adding a separate classifier model call despite latency cost?
 - Which failures justify prioritizing realtime STT before `ActiveMeetingTask` state migration?
@@ -300,21 +316,22 @@ System prompt additions:
 
 Code outputs:
 
-- Updated advisor prompt logic for interview task fusion.
-- Existing UI output formats continue to render without parser changes.
-- Screen-seeded follow-ups and constraints produce direct updated answers.
-- Voice-only technical questions produce useful task-like suggestions.
-- Suspected task switches produce cautious click-answerable clarifying questions instead of stale answers.
+- [x] Updated advisor prompt logic for interview task fusion.
+- [x] Existing UI output formats continue to render without parser changes.
+- [x] Screen-seeded follow-ups and constraints produce direct updated answers.
+- [x] Voice-only technical questions produce useful task-like suggestions.
+- [x] Suspected task switches produce cautious click-answerable clarifying questions instead of stale answers.
+- [x] Low-value utterances are filtered locally before they trigger advisor bandwidth.
 
 Documentation outputs:
 
-- Update task tracking with implementation status and validation notes.
-- Update this brief if implementation discovers a scope adjustment.
+- [x] Update task tracking with implementation status and validation notes.
+- [x] Update this brief if implementation discovers a scope adjustment.
 
 Verification outputs:
 
-- `npm run build`.
-- `git diff --check`.
+- [x] `npm run build`.
+- [x] `git diff --check`.
 - `cargo check` only if Rust/Tauri files are touched, or before a broader release-style commit.
 
 ### Manual Validation Matrix
@@ -323,13 +340,13 @@ Use these before committing:
 
 | Scenario | Expected behavior |
 |---|---|
-| Screen coding task, then "Can you do it in O(1) space?" | `screen-anchored` answer revises approach/complexity against the same task |
-| Screen system design task, then "How would this scale to multiple regions?" | Answer focuses on scale follow-up without losing original task |
-| Screen task, then "next question" | Jarvis asks whether to treat it as a new task or suggests recapture; it does not silently reuse stale context |
-| No screen task, "How would you design a rate limiter?" | `live` response gives a concise useful answer direction |
-| No screen task, "What is the time complexity of binary search?" | `live` response answers directly and briefly |
-| Filler/logistics speech | Jarvis returns `-` or minimal help, not a full technical answer |
-| Code-mixed technical speech | Jarvis preserves technical terms and does not translate away the ask |
+| Screen coding task, then "Can you do it in O(1) space?" | Validated: `screen-anchored` answer revises approach/complexity against the same task |
+| Screen system design task, then "How would this scale to multiple regions?" | Validated: answer focuses on scale follow-up without losing original task |
+| Screen task, then "next question" | Partially validated: Jarvis no longer gives stale redundant answers; local confirmation is now implemented for explicit switch phrases |
+| No screen task, "How would you design a rate limiter?" | Validated: `live` response gives a concise useful answer direction |
+| No screen task, "What is the time complexity of binary search?" | Validated: `live` response answers directly and briefly |
+| Filler/logistics speech | Improved: low-signal local filter now suppresses common filler before advisor calls |
+| Code-mixed technical speech | Validated: Jarvis preserves technical terms such as RAG and can add Chinese guidance |
 
 ### Cut Line For This Slice
 

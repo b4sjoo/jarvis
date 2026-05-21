@@ -19,6 +19,8 @@ As of 2026-05-20:
 - Screen-task UI now renders `Answer` first while keeping `Question`, `Approach`, `Code`, `Complexity`, and `Clarifying question` available as supporting sections.
 - The first cursor/focus-aware capture pass is implemented and validated for the current model setup: Jarvis sends a cursor-centered horizontal focus band first, then the full active-window screenshot as context.
 - Meeting Assistant model output now has parser and renderer hardening for language-qualified `Code` sections, markdown emphasis, and common math notation in complexity text.
+- The first prompt-level interview task fusion slice is implemented: screen-seeded tasks accept spoken follow-ups and constraints, clear voice-only technical questions receive live task-like help, explicit task-switch phrases ask for confirmation, and common low-value filler is filtered before advisor calls.
+- Sanitized trace metrics retain up to 500 local records for later debugging, while p50/p90 dashboard summaries still use the latest 20 traces.
 
 ## Priority Model
 
@@ -171,6 +173,8 @@ Candidate acceptance:
 
 See also: [interview-task-fusion-assignment-brief.md](interview-task-fusion-assignment-brief.md).
 
+Status: implemented for the first prompt-level slice. Continue validating before considering `ActiveMeetingTask`, realtime STT, or a classifier call.
+
 ### Problem
 
 The current design treats screen as the primary task and voice as supplemental clarification. That is useful for screenshot-driven questions, but the real target scenario is narrower and more interview-like:
@@ -202,6 +206,17 @@ Do not start with a separate classifier or broad topic model. Start with prompt-
 - If speech is low-value chatter, stay quiet or produce a very low-friction response.
 
 Keep the existing `ActiveScreenTask` type for now. Conceptually document an `ActiveMeetingTask`, but defer a full data-model rename until prompt-level behavior proves valuable.
+
+Current behavior:
+
+- The advisor prompt now uses one-on-one, task-block assumptions by default.
+- `screen-anchored` mode asks the model to interpret the newest transcript as constraint, follow-up, correction, strong task switch, or low-value speech.
+- Clear voice-only technical questions are handled as voice-seeded task moments in the compact live format.
+- Strong local task-switch phrases produce a click-answerable confirmation instead of automatically clearing or reusing context.
+- Common filler and low-value short utterances are filtered before transcript append and advisor scheduling; Debug Mode traces this as `Transcript ignored`.
+- Active task expiry remains rolling. Meaningful screen-task updates refresh expiry from the update time; ignored filler does not refresh it; timeout-setting changes recalculate the current task expiry from the current time.
+- The speech listener is registered once and dispatches through the latest handler, which avoids duplicate STT traces from stale provider state.
+- Cancelled advisor requests are traced as `cancelled`, and provider prompt replacement is escaped safely for markdown/math-heavy prompts.
 
 ### Expected Impact
 
@@ -238,13 +253,24 @@ Metrics:
 - Task-switch confirmation usefulness.
 - User-initiated clear task frequency.
 
+Current validation result:
+
+- Screen task plus spoken constraint: validated in dummy meeting.
+- Screen task plus spoken follow-up: validated in dummy meeting.
+- Voice-only technical question: validated in dummy meeting.
+- Voice-only algorithm question: validated in dummy meeting; code in the compact live answer is acceptable for now.
+- Code-mixed speech: validated for preserving technical terms such as RAG with Chinese guidance.
+- Task switch: partially validated; the app avoids redundant stale answers and now has explicit confirmation for local switch phrases.
+- Low-value speech: improved with local filtering; continue watching whether useful short constraints are filtered too aggressively.
+
 ### Open Questions
 
-- Should speech ever automatically clear an active screen task?
-- Should Jarvis ask a click-answerable clarification when it suspects topic switch?
-- Should transcript turns show whether they were bound to the active screen task?
-- When should we rename `ActiveScreenTask` to `ActiveMeetingTask` in code rather than docs only?
-- Should voice-seeded tasks be stored in the same lifecycle as screen-seeded tasks, or only influence prompt context in the first pass?
+- Resolved for this slice: speech should not automatically clear an active screen task.
+- Resolved for this slice: explicit task-switch language should ask a click-answerable clarification.
+- Open: should transcript turns show whether they were bound to the active screen task?
+- Open: when should we rename `ActiveScreenTask` to `ActiveMeetingTask` in code rather than docs only?
+- Open: should voice-seeded tasks be stored in the same lifecycle as screen-seeded tasks, or only influence prompt context until tests prove otherwise?
+- Open: should low-signal thresholds become configurable if real use shows false positives or false negatives?
 
 ## P1: Realtime Transcript Quality Optimization
 

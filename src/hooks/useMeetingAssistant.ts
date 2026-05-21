@@ -223,6 +223,9 @@ export function useMeetingAssistant() {
   const advisorDebounceTimerRef = useRef<number | null>(null);
   const screenAnalysisAbortRef = useRef<AbortController | null>(null);
   const screenCaptureInFlightRef = useRef(false);
+  const speechDetectedHandlerRef = useRef<
+    ((base64Audio: string) => void) | undefined
+  >(undefined);
 
   const sttProvider = useMemo(
     () =>
@@ -569,9 +572,15 @@ export function useMeetingAssistant() {
       if (
         mode === "screen-anchored" &&
         contextState.activeScreenTask &&
-        finalContent.trim()
+        shouldUpdateActiveScreenTaskFromAdvisorOutput(finalContent)
       ) {
         const updatedAt = Date.now();
+        const basedOnTurnIds =
+          latestTurn &&
+          !contextState.activeScreenTask.basedOnTurnIds.includes(latestTurn.id)
+            ? [...contextState.activeScreenTask.basedOnTurnIds, latestTurn.id]
+            : contextState.activeScreenTask.basedOnTurnIds;
+
         contextManagerRef.current.setActiveScreenTask({
           ...contextState.activeScreenTask,
           updatedAt,
@@ -584,9 +593,7 @@ export function useMeetingAssistant() {
             inferScreenTaskLanguage(finalContent) ||
             contextState.activeScreenTask.language,
           content: finalContent.trim(),
-          basedOnTurnIds: latestTurn
-            ? [...contextState.activeScreenTask.basedOnTurnIds, latestTurn.id]
-            : contextState.activeScreenTask.basedOnTurnIds,
+          basedOnTurnIds,
         });
         contextState = contextManagerRef.current.getState();
       }
@@ -617,6 +624,28 @@ export function useMeetingAssistant() {
         traceStoreRef.current.finishTrace(traceId, "success");
       }
     } catch (error) {
+      if (error instanceof Error && error.name === "AbortError") {
+        if (traceId) {
+          traceStoreRef.current.finishStep(
+            traceId,
+            advisorStepId,
+            "cancelled",
+            undefined,
+            error
+          );
+          traceStoreRef.current.finishTrace(traceId, "cancelled", error);
+        }
+
+        if (activeRef.current) {
+          setState((previous) => ({
+            ...previous,
+            status: "listening",
+            partialSuggestion: "",
+          }));
+        }
+        return;
+      }
+
       if (traceId) {
         traceStoreRef.current.finishStep(
           traceId,
@@ -759,6 +788,62 @@ export function useMeetingAssistant() {
           turn.text,
           { turnId: turn.id }
         );
+
+        const activeScreenTask = contextManagerRef.current.getState()
+          .activeScreenTask;
+
+        if (activeScreenTask && isTaskSwitchTranscript(turn.text)) {
+          const switchStepId = traceStoreRef.current.startStep(
+            trace.id,
+            "Task switch confirmation requested",
+            {
+              turnId: turn.id,
+              activeScreenTaskId: activeScreenTask.id,
+              transcriptChars: turn.text.trim().length,
+            }
+          );
+          traceStoreRef.current.finishStep(trace.id, switchStepId, "success");
+          traceStoreRef.current.finishTrace(trace.id, "success");
+          setState((previous) => ({
+            ...previous,
+            status: activeRef.current ? "listening" : "idle",
+            partialSuggestion: "",
+            latestSuggestion: {
+              id: createMeetingId("task_switch"),
+              kind: "clarifying-question",
+              content: [
+                "Meaning: 这听起来像是在切换到新题或新任务。",
+                "Reply: -",
+                "Question: Should I treat this as a new task?",
+              ].join("\n"),
+              createdAt: Date.now(),
+              basedOnTurnIds: [turn.id],
+              basedOnObservationIds: [activeScreenTask.observationId],
+              confidence: "medium",
+            },
+          }));
+          return;
+        }
+
+        if (shouldIgnoreLowSignalTranscript(turn.text, Boolean(activeScreenTask))) {
+          const ignoredStepId = traceStoreRef.current.startStep(
+            trace.id,
+            "Transcript ignored",
+            {
+              reason: "low-signal",
+              transcriptChars: turn.text.trim().length,
+              activeScreenTask: Boolean(activeScreenTask),
+            }
+          );
+          traceStoreRef.current.finishStep(trace.id, ignoredStepId, "success");
+          traceStoreRef.current.finishTrace(trace.id, "success");
+          setState((previous) => ({
+            ...previous,
+            status: activeRef.current ? "listening" : "idle",
+          }));
+          return;
+        }
+
         contextManagerRef.current.addTranscriptTurn(turn);
         const contextState = contextManagerRef.current.getState();
         const appendStepId = traceStoreRef.current.startStep(
@@ -824,6 +909,12 @@ export function useMeetingAssistant() {
       sttProvider,
     ]
   );
+
+  useEffect(() => {
+    speechDetectedHandlerRef.current = (base64Audio: string) => {
+      void handleSpeechDetected(base64Audio);
+    };
+  }, [handleSpeechDetected]);
 
   const startCapture = useCallback(async (resetContext: boolean) => {
     if (state.settings.privacyMode === "memory-only") {
@@ -1393,20 +1484,31 @@ export function useMeetingAssistant() {
   }, [state.settings.debugMode]);
 
   useEffect(() => {
+    let disposed = false;
     let unlistenSpeech: (() => void) | undefined;
 
     const setupListeners = async () => {
-      unlistenSpeech = await listen<string>("speech-detected", (event) => {
-        void handleSpeechDetected(event.payload);
+      const unlisten = await listen<string>("speech-detected", (event) => {
+        speechDetectedHandlerRef.current?.(event.payload);
       });
+
+      if (disposed) {
+        unlisten();
+        return;
+      }
+
+      unlistenSpeech = unlisten;
     };
 
-    void setupListeners();
+    void setupListeners().catch((error) => {
+      console.warn("Failed to setup meeting speech listener", error);
+    });
 
     return () => {
+      disposed = true;
       unlistenSpeech?.();
     };
-  }, [handleSpeechDetected]);
+  }, []);
 
   useEffect(() => {
     const intervalId = window.setInterval(() => {
@@ -1484,4 +1586,137 @@ function formatTraceModelInput(systemPrompt: string, userMessage: string) {
 
 function formatTraceMetadata(metadata: Record<string, unknown>) {
   return JSON.stringify(metadata, null, 2);
+}
+
+function shouldUpdateActiveScreenTaskFromAdvisorOutput(content: string) {
+  const normalized = content.trim().toLowerCase();
+
+  if (!normalized || normalized === "-") return false;
+
+  if (!normalized.includes("clarifying question:")) return true;
+
+  return !(
+    normalized.includes("new task") ||
+    normalized.includes("new question") ||
+    normalized.includes("next question") ||
+    normalized.includes("recapture") ||
+    normalized.includes("capture or state")
+  );
+}
+
+function shouldIgnoreLowSignalTranscript(
+  transcript: string,
+  hasActiveScreenTask: boolean
+) {
+  const trimmed = transcript.trim();
+  if (!trimmed) return true;
+
+  const normalized = trimmed
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}+#.()]+/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  if (!normalized) return true;
+  if (hasTechnicalSignal(trimmed) || hasFollowUpSignal(trimmed)) return false;
+
+  const fillerPhrases = new Set([
+    "ah",
+    "eh",
+    "er",
+    "hmm",
+    "mm",
+    "mhm",
+    "uh",
+    "um",
+    "yeah",
+    "yep",
+    "yes",
+    "no",
+    "ok",
+    "okay",
+    "got it",
+    "thanks",
+    "thank you",
+    "cool",
+    "right",
+    "sure",
+    "sounds good",
+    "that sounds good",
+    "make sense",
+    "makes sense",
+    "i see",
+    "let me see",
+    "one second",
+    "just a second",
+    "give me a second",
+    "hold on",
+    "wait a second",
+    "no problem",
+    "all good",
+    "great",
+    "perfect",
+    "嗯",
+    "嗯嗯",
+    "呃",
+    "啊",
+    "哦",
+    "好",
+    "好的",
+    "对",
+    "是",
+    "是的",
+    "可以",
+    "谢谢",
+    "没问题",
+    "明白",
+    "懂了",
+    "了解",
+    "等一下",
+    "稍等",
+  ]);
+
+  if (fillerPhrases.has(normalized)) return true;
+
+  if (hasActiveScreenTask) {
+    return normalized.length < 40;
+  }
+
+  return normalized.length < 12 && !trimmed.includes("?");
+}
+
+function hasTechnicalSignal(text: string) {
+  return (
+    /\b(o\s*\(?\s*1|o\s*\(?\s*n|api|async|binary|cache|client|complexity|database|design|dp|embedding|graph|grpc|hash|heap|http|java|javascript|latency|leetcode|memory|python|queue|rag|rate limiter|recursion|rust|scale|search|server|space|sql|stack|thread|time|tree|typescript|vector)\b/i.test(
+      text
+    ) ||
+    /算法|复杂度|缓存|数据库|队列|栈|堆|树|图|递归|并发|异步|接口|系统设计|限流|负载均衡|向量|嵌入/.test(
+      text
+    )
+  );
+}
+
+function hasFollowUpSignal(text: string) {
+  return /\b(can|could|would|should|how|why|what|when|where|which|explain|optimi[sz]e|improve|change|update|revise|shorter|follow up|edge case|tradeoff|constraint|requirement|same|different|another|instead)\b/i.test(
+    text
+  );
+}
+
+function isTaskSwitchTranscript(text: string) {
+  const normalized = text
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  if (!normalized) return false;
+
+  return (
+    /\b(next question|next task|new question|new task|move on|moving on|let s move on|let us move on|switch topic|different question|another question|start over)\b/i.test(
+      normalized
+    ) ||
+    /下一题|下一个问题|下个问题|换一题|换个题|换个问题|新问题|新任务|进入下一|继续下一|换话题/.test(
+      text
+    )
+  );
 }

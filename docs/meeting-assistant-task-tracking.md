@@ -27,6 +27,8 @@ Current implementation status:
 - Cursor/focus-aware question and language selection has completed its first tuning pass; performance baselines and screen/voice fusion hardening remain in the tuning backlog.
 - The tuning backlog is expanded in `docs/optimization-roadmap.md` so review can happen one optimization at a time before implementation.
 - Brainwave has been reviewed as a voice-pipeline reference. Its main lesson is to keep transcription literal, language-preserving, and non-answering while leaving task reasoning inside the Meeting Assistant advisor/context layer.
+- Prompt-level interview task fusion has completed its first implementation slice: screen-seeded follow-ups, voice-only technical questions, explicit task-switch confirmation, low-signal speech filtering, stable speech listener registration, cancelled advisor tracing, and longer sanitized metrics history are now in code.
+- Task memory expiration is rolling. Meaningful screen-task updates refresh `expiresAt`; low-signal ignored speech does not; changing the timeout setting recalculates expiry from the current time; manual clear or `New task` clears the active task.
 
 ## Milestone 0: Design Review and Scope Lock
 
@@ -237,6 +239,34 @@ Exit criteria:
 - Meeting UI supports screen-task sections and quick clarifying controls.
 - Remaining focus/lifecycle hardening tasks are tracked separately.
 
+## Milestone 5B: Interview Task Fusion First Slice
+
+Goal: make Jarvis handle one-on-one interview-like task blocks where tasks can be screen-seeded, voice-seeded, or mixed.
+
+- [x] Keep STT literal and non-answering; task reasoning stays in the Meeting Assistant advisor/context layer.
+- [x] Update advisor prompts with interview task-block assumptions.
+- [x] Treat later speech on an active screen task as constraint, follow-up, correction, strong task switch, or low-value speech.
+- [x] Keep `ActiveScreenTask` as the current code type and defer `ActiveMeetingTask` migration.
+- [x] Support clear voice-only technical questions without requiring a screenshot.
+- [x] Ask for confirmation on explicit task-switch phrases instead of silently clearing or reusing stale context.
+- [x] Add `New task`, `Same task`, `Not sure`, and `Dismiss` style quick actions for task-switch confirmations.
+- [x] Filter common low-value filler before appending transcript turns or calling the advisor.
+- [x] Trace ignored low-signal transcript turns as `Transcript ignored`.
+- [x] Avoid refreshing active task content or expiry from empty output, `-`, or task-switch clarifying questions.
+- [x] Make speech event listener registration stable so stale handlers do not create duplicate STT traces.
+- [x] Mark aborted advisor requests as `cancelled` instead of successful empty outputs.
+- [x] Escape provider prompt template replacements safely for markdown/math-heavy prompts.
+- [x] Keep persisted metrics sanitized while increasing local history to 500 records.
+- [~] Continue mock-meeting and real-use validation for low-signal false positives, stale-task incidents, and voice-only multi-turn behavior.
+
+Exit criteria:
+
+- Screen-seeded tasks handle spoken constraints and follow-ups directly.
+- Voice-only technical questions produce useful task-like help.
+- Explicit task-switch language asks for confirmation.
+- Low-value utterances do not repeatedly re-solve the active task.
+- No classifier model call or `ActiveMeetingTask` data migration is introduced in this slice.
+
 ## Milestone 6: Automatic Screen Observation
 
 Goal: add low-frequency, low-noise visual awareness.
@@ -364,8 +394,9 @@ Goal: make the critical meeting workflows debuggable and measurable before promp
 - [x] Stream partial screen-task answers into the Meeting Assistant panel while the model is still generating.
 - [x] Add native capture sub-step timings to debug metadata.
 - [x] Optimize native screen-context image processing, payload size, and dev-profile image crate compilation after traces showed local image processing and oversized payloads dominated latency.
+- [x] Add aggregated p50/p90 latency summaries for recent screen and voice traces in Debug Mode.
+- [x] Persist sanitized trace metrics locally across app restarts.
 - [ ] Add trace export if repeated testing needs offline comparison.
-- [ ] Add aggregated latency summary after enough manual traces are collected.
 
 Exit criteria:
 
@@ -415,6 +446,7 @@ Exit criteria:
 | 2026-05-20 | Persist sanitized trace metrics | Debug metrics are useful across restarts, but raw meeting content should stay out of disk history; persist timing/status/payload metadata only and keep revisiting metric quality during later tuning tasks |
 | 2026-05-20 | Reframe screen/voice fusion as interview task fusion | Target scenario is one-on-one and task-block oriented; a task can be screen-seeded, voice-seeded, or mixed, so the first pass should preserve task continuity instead of building a broad meeting-topic classifier |
 | 2026-05-20 | Use Brainwave as voice-pipeline reference | Borrow literal transcript cleanup, language/jargon preservation, realtime partial/final transcript ideas, and marker stripping; do not borrow default raw audio replay or move task reasoning into STT |
+| 2026-05-21 | Complete prompt-level interview task fusion first slice | Keep `ActiveScreenTask`, add prompt-level screen/voice fusion, local low-signal filtering, explicit task-switch confirmation, stable speech listener registration, cancelled advisor traces, safe provider prompt replacement, and 500-record sanitized trace history |
 
 ## Validation Snapshot
 
@@ -436,12 +468,16 @@ Last validated: 2026-05-20.
 - First lightweight baseline implementation adds Debug Mode p50/p90 summaries for recent screen and voice traces.
 - Baseline metrics now persist sanitized local history across app restarts without saving raw prompts, raw model outputs, screenshots, or audio.
 - User validation confirms persisted metrics reload correctly after restarting Jarvis and can be read back for per-run debugging.
+- Dummy meeting validation for interview task fusion is broadly positive: screen task plus constraint, screen task plus follow-up, voice-only technical question, voice-only algorithm question, and code-mixed speech all work in current testing.
+- Task switch behavior is partially validated: Jarvis avoids redundant stale answers, and explicit local switch phrases now produce a confirmation workflow.
+- Low-value speech behavior is improved with local filtering; continue watching false negatives and false positives during real use.
+- `npm run build` and `git diff --check` pass for the interview task fusion first slice.
 
 ## Immediate Next Tasks
 
-1. P0: Review `docs/interview-task-fusion-assignment-brief.md` before implementation.
-2. P0: Implement prompt-level interview task fusion before considering a separate classifier or `ActiveMeetingTask` type migration.
-3. P0: Preserve the STT/advisor boundary during task fusion; STT should stay literal, language-preserving, and non-answering.
-4. P1: Use persisted metrics during implementation testing and revisit whether the fields/window size are sufficient.
-5. P1: After prompt-level fusion, evaluate whether transcript latency/cleanup quality justifies starting realtime STT work.
-6. P1: Continue mock-meeting validation with screen-seeded, voice-seeded, and mixed task blocks.
+1. P0: Continue mock-meeting and real-use validation with screen-seeded, voice-seeded, and mixed task blocks.
+2. P0: Watch low-signal filtering quality, especially whether useful short constraints are accidentally ignored or filler still triggers advisor calls.
+3. P0: Watch task-switch confirmation usefulness and whether explicit `New task` / `Same task` actions feel fast enough during live use.
+4. P1: Use persisted metrics during future tuning and revisit whether 500 retained sanitized records plus latest-20 baselines are enough.
+5. P1: Start realtime STT or transcript cleanup work only if transcript latency, technical-term accuracy, or code-mixed speech becomes the dominant failure.
+6. P1: Consider `ActiveMeetingTask` only if voice-seeded tasks need durable multi-turn state beyond transcript context.

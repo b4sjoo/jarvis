@@ -32,7 +32,8 @@ export class AdvisorEngine {
     request: Omit<MeetingAdvisorRequest, "signal">
   ): AsyncIterable<AdvisorEngineChunk> {
     this.cancelCurrentRequest();
-    this.currentAbortController = new AbortController();
+    const abortController = new AbortController();
+    this.currentAbortController = abortController;
 
     const systemPrompt = buildAdvisorSystemPrompt();
     const userMessage = buildAdvisorUserMessage(request.promptContext, {
@@ -58,7 +59,7 @@ export class AdvisorEngine {
       history: request.history ?? [],
       userMessage,
       imagesBase64: [],
-      signal: this.currentAbortController.signal,
+      signal: abortController.signal,
     })) {
       if (!firstTokenSeen) {
         firstTokenSeen = true;
@@ -73,7 +74,15 @@ export class AdvisorEngine {
       };
     }
 
+    if (abortController.signal.aborted) {
+      throw createAbortError();
+    }
+
     request.trace?.onComplete?.(accumulated);
+
+    if (this.currentAbortController === abortController) {
+      this.currentAbortController = null;
+    }
   }
 
   toSuggestion(
@@ -92,6 +101,12 @@ export class AdvisorEngine {
       confidence: content.trim().startsWith("?") ? "low" : "medium",
     };
   }
+}
+
+function createAbortError() {
+  const error = new Error("Advisor request cancelled.");
+  error.name = "AbortError";
+  return error;
 }
 
 export function transcriptTurnsToMessages(turns: TranscriptTurn[]): Message[] {

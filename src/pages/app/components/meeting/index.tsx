@@ -109,6 +109,8 @@ export const MeetingAssistant = () => {
   const showClarifyingQuestion = Boolean(
     clarifyingQuestion && dismissedQuestionKey !== clarifyingQuestionKey
   );
+  const isTaskSwitchClarifyingQuestion =
+    isTaskSwitchQuestion(clarifyingQuestion);
   const isBusy =
     meeting.status === "starting" ||
     meeting.status === "transcribing" ||
@@ -248,6 +250,19 @@ export const MeetingAssistant = () => {
     },
     [clarifyingQuestion, meeting.answerClarifyingQuestion]
   );
+
+  const handleNewTaskConfirmation = useCallback(() => {
+    if (!clarifyingQuestionKey) return;
+
+    meeting.clearActiveScreenTask();
+    setDismissedQuestionKey(clarifyingQuestionKey);
+  }, [clarifyingQuestionKey, meeting.clearActiveScreenTask]);
+
+  const handleSameTaskConfirmation = useCallback(() => {
+    if (!clarifyingQuestionKey) return;
+
+    setDismissedQuestionKey(clarifyingQuestionKey);
+  }, [clarifyingQuestionKey]);
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
@@ -595,21 +610,29 @@ export const MeetingAssistant = () => {
                       size="sm"
                       variant="outline"
                       className="h-7 gap-1 px-2 text-[10px]"
-                      onClick={() => handleClarifyingAnswer("yes")}
+                      onClick={
+                        isTaskSwitchClarifyingQuestion
+                          ? handleNewTaskConfirmation
+                          : () => handleClarifyingAnswer("yes")
+                      }
                       disabled={isBusy}
                     >
                       <CheckIcon className="h-3 w-3" />
-                      Yes
+                      {isTaskSwitchClarifyingQuestion ? "New task" : "Yes"}
                     </Button>
                     <Button
                       size="sm"
                       variant="outline"
                       className="h-7 gap-1 px-2 text-[10px]"
-                      onClick={() => handleClarifyingAnswer("no")}
+                      onClick={
+                        isTaskSwitchClarifyingQuestion
+                          ? handleSameTaskConfirmation
+                          : () => handleClarifyingAnswer("no")
+                      }
                       disabled={isBusy}
                     >
                       <XIcon className="h-3 w-3" />
-                      No
+                      {isTaskSwitchClarifyingQuestion ? "Same task" : "No"}
                     </Button>
                     <Button
                       size="sm"
@@ -1173,6 +1196,12 @@ function formatScreenPromptSource(source: string) {
   return source === "screenshot-auto-prompt"
     ? "Screenshot auto prompt"
     : "Meeting default";
+}
+
+function isTaskSwitchQuestion(question: string) {
+  return /\bnew task|new question|next question|treat this as a new task\b/i.test(
+    question
+  );
 }
 
 const sectionBoundaryLabels = [
