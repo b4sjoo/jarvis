@@ -146,6 +146,17 @@ export interface ActiveScreenTask {
   basedOnObservationId: string;
 }
 
+export interface ScreenTaskAnswer {
+  question?: string;
+  answer?: string;
+  approach?: string;
+  code?: string;
+  complexity?: string;
+  clarifyingQuestion?: string;
+  rawContent: string;
+  parsedAt: number;
+}
+
 export type AdvisorSuggestionKind =
   | "answer"
   | "screen-task"
@@ -173,6 +184,7 @@ export interface AdvisorSuggestion {
   id: string;
   kind: AdvisorSuggestionKind;
   content: string;
+  screenTaskAnswer?: ScreenTaskAnswer;
   createdAt: number;
   basedOnTurnIds: string[];
   basedOnObservationIds: string[];

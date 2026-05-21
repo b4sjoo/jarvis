@@ -25,6 +25,7 @@ import {
   inferScreenTaskKind,
   inferScreenTaskLanguage,
   parseMeetingTraceMetrics,
+  parseScreenTaskAnswer,
   serializeMeetingTraceMetrics,
   solveScreenAnchoredTask,
   transcribeMeetingAudio,
@@ -1312,6 +1313,9 @@ export function useMeetingAssistant() {
                 id: requestId,
                 kind: "screen-task",
                 content: screenTaskContent.trim(),
+                screenTaskAnswer: parseScreenTaskAnswer(
+                  screenTaskContent.trim()
+                ),
                 createdAt: Date.now(),
                 basedOnTurnIds,
                 basedOnObservationIds: [observation.id],

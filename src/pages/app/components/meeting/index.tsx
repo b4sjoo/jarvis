@@ -16,8 +16,14 @@ import type {
   MeetingTraceSummary,
   MeetingTraceValueSummary,
   ScreenCaptureTarget,
+  ScreenTaskAnswer,
 } from "@/lib/meeting";
-import { summarizeMeetingTraces } from "@/lib/meeting";
+import {
+  hasScreenTaskAnswerContent,
+  parseScreenTaskAnswer,
+  stripOuterCodeFence,
+  summarizeMeetingTraces,
+} from "@/lib/meeting";
 import { cn } from "@/lib/utils";
 import { listen } from "@tauri-apps/api/event";
 import {
@@ -97,9 +103,13 @@ export const MeetingAssistant = () => {
   const latestCaptureTarget = latestScreenObservation?.captureTarget;
   const displaySuggestion =
     meeting.partialSuggestion || meeting.latestSuggestion?.content || "";
+  const completedScreenTaskAnswer =
+    meeting.partialSuggestion || !meeting.latestSuggestion?.screenTaskAnswer
+      ? undefined
+      : meeting.latestSuggestion.screenTaskAnswer;
   const suggestionSections = useMemo(
-    () => parseSuggestionSections(displaySuggestion),
-    [displaySuggestion]
+    () => parseSuggestionSections(displaySuggestion, completedScreenTaskAnswer),
+    [completedScreenTaskAnswer, displaySuggestion]
   );
   const clarifyingQuestion = suggestionSections.question.trim();
   const isScreenTaskSuggestion = suggestionSections.isScreenTask;
@@ -536,7 +546,7 @@ export const MeetingAssistant = () => {
                           "max-h-56 overflow-y-auto overflow-x-hidden rounded-sm bg-muted p-2 text-[11px] leading-4"
                         )}
                       >
-                        {stripCodeFence(suggestionSections.code)}
+                        {stripOuterCodeFence(suggestionSections.code)}
                       </pre>
                     ) : (
                       <p
@@ -738,6 +748,22 @@ export const MeetingAssistant = () => {
                           )
                         )}
                       </div>
+                    </details>
+                  ) : null}
+                  {isScreenTaskSuggestion &&
+                  hasScreenTaskAnswerContent(suggestionSections.screenAnswer) ? (
+                    <details className="mt-2 border-t border-border/50 pt-2">
+                      <summary className="cursor-pointer text-[10px] font-medium text-muted-foreground">
+                        Parsed screen answer
+                      </summary>
+                      <pre
+                        className={cn(
+                          WRAP_TEXT_CLASS,
+                          "mt-2 max-h-40 overflow-y-auto overflow-x-hidden rounded-sm bg-muted p-2 text-[10px] leading-4"
+                        )}
+                      >
+                        {formatParsedScreenAnswer(suggestionSections.screenAnswer)}
+                      </pre>
                     </details>
                   ) : null}
                 </section>
@@ -1217,8 +1243,15 @@ const sectionBoundaryLabels = [
   "Clarifying question",
 ];
 
-function parseSuggestionSections(content: string) {
+function parseSuggestionSections(
+  content: string,
+  screenTaskAnswer?: ScreenTaskAnswer
+) {
   const trimmedContent = sanitizeSectionText(content);
+  const parsedScreenTaskAnswer =
+    screenTaskAnswer?.rawContent === trimmedContent
+      ? screenTaskAnswer
+      : parseScreenTaskAnswer(trimmedContent);
 
   if (!trimmedContent) {
     return {
@@ -1230,21 +1263,17 @@ function parseSuggestionSections(content: string) {
       approach: "",
       code: "",
       complexity: "",
+      screenAnswer: parsedScreenTaskAnswer,
       isScreenTask: false,
     };
   }
 
-  const screenQuestion = readSuggestionSection(trimmedContent, ["Question"]);
-  const answer = readSuggestionSection(trimmedContent, ["Answer"]);
-  const approach = readSuggestionSection(trimmedContent, ["Approach"]);
-  const code = readSuggestionSection(trimmedContent, [
-    "Code",
-    "Implementation",
-  ]);
-  const complexity = readSuggestionSection(trimmedContent, ["Complexity"]);
-  const clarifyingQuestion = readSuggestionSection(trimmedContent, [
-    "Clarifying question",
-  ]);
+  const screenQuestion = parsedScreenTaskAnswer.question ?? "";
+  const answer = parsedScreenTaskAnswer.answer ?? "";
+  const approach = parsedScreenTaskAnswer.approach ?? "";
+  const code = parsedScreenTaskAnswer.code ?? "";
+  const complexity = parsedScreenTaskAnswer.complexity ?? "";
+  const clarifyingQuestion = parsedScreenTaskAnswer.clarifyingQuestion ?? "";
   const isScreenTask = Boolean(answer || approach || code || complexity);
   const meaning = readSuggestionSection(trimmedContent, ["Meaning"]);
   const reply = readSuggestionSection(trimmedContent, [
@@ -1268,6 +1297,7 @@ function parseSuggestionSections(content: string) {
     approach,
     code,
     complexity,
+    screenAnswer: parsedScreenTaskAnswer,
     isScreenTask,
   };
 }
@@ -1315,13 +1345,6 @@ function normalizeMeetingMathText(value: string) {
     );
 }
 
-function stripCodeFence(value: string) {
-  const trimmed = value.trim();
-  const match = /^```[^\n]*\n([\s\S]*?)\n?```$/.exec(trimmed);
-
-  return match?.[1]?.trimEnd() ?? value;
-}
-
 function normalizeMathExpression(expression: string) {
   return expression
     .trim()
@@ -1349,4 +1372,21 @@ function sanitizeSectionText(value: string) {
 
 function escapeRegExp(value: string) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function formatParsedScreenAnswer(answer: ScreenTaskAnswer) {
+  return JSON.stringify(
+    {
+      question: answer.question ?? "",
+      answer: answer.answer ?? "",
+      approach: answer.approach ?? "",
+      codeChars: answer.code?.length ?? 0,
+      complexity: answer.complexity ?? "",
+      clarifyingQuestion: answer.clarifyingQuestion ?? "",
+      rawChars: answer.rawContent.length,
+      parsedAt: new Date(answer.parsedAt).toISOString(),
+    },
+    null,
+    2
+  );
 }

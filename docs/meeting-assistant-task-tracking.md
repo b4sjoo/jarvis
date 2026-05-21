@@ -29,6 +29,7 @@ Current implementation status:
 - Brainwave has been reviewed as a voice-pipeline reference. Its main lesson is to keep transcription literal, language-preserving, and non-answering while leaving task reasoning inside the Meeting Assistant advisor/context layer.
 - Prompt-level interview task fusion has completed its first implementation slice: screen-seeded follow-ups, voice-only technical questions, explicit task-switch confirmation, low-signal speech filtering, stable speech listener registration, cancelled advisor tracing, and longer sanitized metrics history are now in code.
 - Task memory expiration is rolling. Meaningful screen-task updates refresh `expiresAt`; low-signal ignored speech does not; changing the timeout setting recalculates expiry from the current time; manual clear or `New task` clears the active task.
+- Structured screen answer state has completed its first implementation slice: screen-task output is parsed in `src/lib/meeting`, completed suggestions can carry parsed sections, partial streaming output is parsed on demand, and Debug Mode can inspect parsed screen-answer fields alongside raw output.
 
 ## Milestone 0: Design Review and Scope Lock
 
@@ -230,7 +231,12 @@ Goal: redesign screen context from generic screenshot explanation into a technic
 - [x] Render all Meeting Assistant model-output text blocks with markdown support and normalize common math delimiters (`$...$`, `$$...$$`, `\(...\)`, `\[...\]`) for readable complexity output.
 - [x] Strip outer code fences from parsed `Code` sections before displaying them in the dedicated code panel.
 - [x] Validate focus-band-first screen targeting with noisy multi-question pages and non-Python language selectors.
-- [ ] Continue hardening screen-task section parsing for less structured model drift.
+- [x] Move screen-task answer parsing into reusable meeting-domain code.
+- [x] Add optional structured screen-answer state to completed screen-task suggestions.
+- [x] Parse streaming partial screen-task output on demand so partial answer rendering continues to work.
+- [x] Extract accidental code fences from `Approach` into `Code` when the model drifts.
+- [x] Show parsed screen-answer sections in Debug Mode.
+- [ ] Continue validating screen-task section parsing for less structured model drift.
 
 Exit criteria:
 
@@ -447,6 +453,7 @@ Exit criteria:
 | 2026-05-20 | Reframe screen/voice fusion as interview task fusion | Target scenario is one-on-one and task-block oriented; a task can be screen-seeded, voice-seeded, or mixed, so the first pass should preserve task continuity instead of building a broad meeting-topic classifier |
 | 2026-05-20 | Use Brainwave as voice-pipeline reference | Borrow literal transcript cleanup, language/jargon preservation, realtime partial/final transcript ideas, and marker stripping; do not borrow default raw audio replay or move task reasoning into STT |
 | 2026-05-21 | Complete prompt-level interview task fusion first slice | Keep `ActiveScreenTask`, add prompt-level screen/voice fusion, local low-signal filtering, explicit task-switch confirmation, stable speech listener registration, cancelled advisor traces, safe provider prompt replacement, and 500-record sanitized trace history |
+| 2026-05-21 | Prioritize structured screen answer state before realtime STT | Current voice tests are acceptable; moving screen-task parsing into meeting-domain code improves UI stability and prepares response actions/replay without changing provider behavior |
 
 ## Validation Snapshot
 
@@ -472,12 +479,14 @@ Last validated: 2026-05-20.
 - Task switch behavior is partially validated: Jarvis avoids redundant stale answers, and explicit local switch phrases now produce a confirmation workflow.
 - Low-value speech behavior is improved with local filtering; continue watching false negatives and false positives during real use.
 - `npm run build` and `git diff --check` pass for the interview task fusion first slice.
+- Structured screen answer parser builds successfully and keeps raw output as fallback; `npm run build` and `git diff --check` pass after the first implementation slice.
 
 ## Immediate Next Tasks
 
-1. P0: Continue mock-meeting and real-use validation with screen-seeded, voice-seeded, and mixed task blocks.
-2. P0: Watch low-signal filtering quality, especially whether useful short constraints are accidentally ignored or filler still triggers advisor calls.
-3. P0: Watch task-switch confirmation usefulness and whether explicit `New task` / `Same task` actions feel fast enough during live use.
-4. P1: Use persisted metrics during future tuning and revisit whether 500 retained sanitized records plus latest-20 baselines are enough.
-5. P1: Start realtime STT or transcript cleanup work only if transcript latency, technical-term accuracy, or code-mixed speech becomes the dominant failure.
-6. P1: Consider `ActiveMeetingTask` only if voice-seeded tasks need durable multi-turn state beyond transcript context.
+1. P1: Validate Structured Screen Answer State with fresh screen-task outputs across Python, TypeScript, JavaScript, Go, Java, and field-knowledge questions.
+2. P0: Continue mock-meeting and real-use validation with screen-seeded, voice-seeded, and mixed task blocks.
+3. P0: Watch low-signal filtering quality, especially whether useful short constraints are accidentally ignored or filler still triggers advisor calls.
+4. P0: Watch task-switch confirmation usefulness and whether explicit `New task` / `Same task` actions feel fast enough during live use.
+5. P1: Use persisted metrics during future tuning and revisit whether 500 retained sanitized records plus latest-20 baselines are enough.
+6. P1: Start realtime STT or transcript cleanup work only if transcript latency, technical-term accuracy, or code-mixed speech becomes the dominant failure.
+7. P1: Consider `ActiveMeetingTask` only if voice-seeded tasks need durable multi-turn state beyond transcript context.

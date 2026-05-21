@@ -9,6 +9,7 @@ import {
   SelectedProviderState,
 } from "./types";
 import { createMeetingId } from "./context-manager";
+import { parseScreenTaskAnswer } from "./screen-task-answer";
 
 export type ScreenCaptureTargetType = "active-window" | "current-monitor";
 
@@ -403,11 +404,12 @@ function formatImageOrderForPrompt(observation: ScreenObservation) {
 }
 
 export function extractScreenTaskQuestion(content: string) {
-  return readLabeledSection(content, ["Question"]);
+  return parseScreenTaskAnswer(content).question ?? "";
 }
 
 export function inferScreenTaskKind(content: string): ScreenTaskKind {
   const normalized = content.toLowerCase();
+  const screenTaskAnswer = parseScreenTaskAnswer(content);
 
   if (!normalized.trim() || normalized.trim() === "-") return "non-question";
 
@@ -415,12 +417,12 @@ export function inferScreenTaskKind(content: string): ScreenTaskKind {
     /\b(o\(|time complexity|space complexity|algorithm|leetcode|python|java|typescript|javascript|array|tree|graph|dp|dynamic programming)\b/i.test(
       content
     ) ||
-    readLabeledSection(content, ["Code"]).trim().length > 5
+    (screenTaskAnswer.code ?? "").trim().length > 5
   ) {
     return "coding";
   }
 
-  if (readLabeledSection(content, ["Question", "Answer"]).trim()) {
+  if (screenTaskAnswer.question || screenTaskAnswer.answer) {
     return "field-knowledge";
   }
 
@@ -428,10 +430,7 @@ export function inferScreenTaskKind(content: string): ScreenTaskKind {
 }
 
 export function inferScreenTaskLanguage(content: string) {
-  const codeSection = readLabeledSection(content, [
-    "Code",
-    "Implementation",
-  ]).toLowerCase();
+  const codeSection = (parseScreenTaskAnswer(content).code ?? "").toLowerCase();
   const normalized = `${content}\n${codeSection}`.toLowerCase();
 
   if (normalized.includes("```typescript") || normalized.includes("typescript")) {
@@ -454,34 +453,6 @@ export function inferScreenTaskLanguage(content: string) {
   }
 
   return undefined;
-}
-
-function readLabeledSection(content: string, labels: string[]) {
-  const boundaryLabels = [
-    "Question",
-    "Answer",
-    "Approach",
-    "Code",
-    "Implementation",
-    "Complexity",
-    "Clarifying question",
-  ];
-  const labelPattern = labels.map(escapeRegExp).join("|");
-  const boundaryPattern = boundaryLabels.map(escapeRegExp).join("|");
-  const pattern = new RegExp(
-    `(?:^|\\n)\\s*(?:[-*]\\s*)?(?:${labelPattern})(?:\\s*\\([^\\n:)]*\\))?\\s*:\\s*([\\s\\S]*?)(?=\\n\\s*(?:[-*]\\s*)?(?:${boundaryPattern})(?:\\s*\\([^\\n:)]*\\))?\\s*:|$)`,
-    "i"
-  );
-  const match = pattern.exec(content);
-
-  return (match?.[1] ?? "")
-    .trim()
-    .replace(/^[-*]\s*/, "")
-    .trim();
-}
-
-function escapeRegExp(value: string) {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 export function hashBase64(value: string) {
