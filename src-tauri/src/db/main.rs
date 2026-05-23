@@ -17,5 +17,12 @@ pub fn migrations() -> Vec<Migration> {
             sql: include_str!("migrations/chat-history.sql"),
             kind: MigrationKind::Up,
         },
+        // Migration 3: Create knowledge memory base tables
+        Migration {
+            version: 3,
+            description: "create_knowledge_memory_base_tables",
+            sql: include_str!("migrations/knowledge-memory-base.sql"),
+            kind: MigrationKind::Up,
+        },
     ]
 }

@@ -36,6 +36,7 @@ export interface SolveScreenAnchoredTaskOptions {
   recentTranscript?: string;
   autoPrompt?: string;
   responseConfig?: MeetingResponseConfig;
+  memoryContext?: string;
   signal?: AbortSignal;
   trace?: MeetingModelTraceCallbacks;
   onPartialContent?: (content: string) => void;
@@ -69,9 +70,11 @@ const SCREEN_TASK_SYSTEM_PROMPT = [
   "Focus on the visible technical question near the user's active work area. If there are multiple questions or distracting text, choose the question most likely being worked on.",
   "If a cursor-centered horizontal focus band is provided, treat it as the primary visual input for selecting the user's current work area while keeping the full screenshot only as surrounding context.",
   "If the screen shows an open field-knowledge question, give a concise and professional answer the user can say in a meeting.",
+  "If the screen shows a behavioral interview question, give a concise first-person STAR-style story using relevant memory context when available.",
   "If the screen shows a coding or algorithm question, default to Python unless the screenshot shows another selected or requested language. Give the algorithm idea, implementation, and exact time and space complexity.",
   "Answer directly. Do not describe that you identified, selected, focused on, or can see a question; only put the restated problem in the Question section.",
   "If the transcript changes constraints or asks a follow-up, incorporate it, but never let transcript speculation override visible screen content.",
+  "Treat memory context as background only. The screenshot, focus band, visible language selection, and latest transcript have higher priority than memory.",
   "Do not invent colleagues, speakers, meeting dialogue, hidden requirements, or screen content.",
   "Keep the answer useful during a live meeting: compact, direct, and technically precise.",
   "Output the Answer section first so the user can start speaking before reading supporting details.",
@@ -177,6 +180,7 @@ export async function solveScreenAnchoredTask({
   recentTranscript,
   autoPrompt,
   responseConfig,
+  memoryContext,
   signal,
   trace,
   onPartialContent,
@@ -200,6 +204,7 @@ export async function solveScreenAnchoredTask({
     recentTranscript,
     autoPrompt,
     responseConfig,
+    memoryContext,
   });
   const imageInputs = buildScreenTaskImageInputs(observation);
 
@@ -207,7 +212,8 @@ export async function solveScreenAnchoredTask({
     systemPrompt: SCREEN_TASK_SYSTEM_PROMPT,
     userMessage,
     imageCount: imageInputs.length,
-    imageMediaType: imageInputs[0]?.mediaType || observation.imageMediaType || "image/png",
+    imageMediaType:
+      imageInputs[0]?.mediaType || observation.imageMediaType || "image/png",
     providerId: provider.id,
     mode: "screen-task",
     responseConfig,
@@ -287,11 +293,13 @@ function buildScreenTaskUserMessage({
   recentTranscript,
   autoPrompt,
   responseConfig,
+  memoryContext,
 }: {
   observation: ScreenObservation;
   recentTranscript?: string;
   autoPrompt?: string;
   responseConfig?: MeetingResponseConfig;
+  memoryContext?: string;
 }) {
   const target = observation.captureTarget
     ? formatCaptureTargetForPrompt(observation.captureTarget)
@@ -312,6 +320,9 @@ function buildScreenTaskUserMessage({
     "<response_preferences>",
     formatScreenTaskResponsePreferences(responseConfig),
     "</response_preferences>",
+    "<memory_context>",
+    memoryContext?.trim() || "No memory context was injected.",
+    "</memory_context>",
   ];
 
   if (autoPrompt?.trim()) {
@@ -337,6 +348,9 @@ function buildScreenTaskUserMessage({
     "Use Answer as the first section. The Answer section must directly answer the selected target; do not say which question you identified, selected, or focused on.",
     "Put supporting details after Answer. Do not put code blocks in Approach; code belongs only in Code.",
     "Follow the natural language response preferences when choosing answer length and explanation language. Do not let those preferences override the selected programming language for code.",
+    "Use memory only for stable background knowledge. Do not let memory override visible problem constraints, visible language selection, or spoken follow-up constraints.",
+    "For behavioral interview questions, prefer a concrete first-person story from memory context. Do not invent facts, employers, project names, teammates, metrics, timelines, or outcomes not supported by memory or visible text.",
+    "If memory supports only a qualitative outcome, state the outcome qualitatively instead of adding unsupported numbers, dates, durations, or speed claims.",
     "If it is a coding/algorithm question, output:",
     "Answer: directly state the optimal approach in the selected/requested language.",
     "Approach: explain the reasoning in a few direct bullets or short sentences, without code blocks.",
@@ -344,6 +358,13 @@ function buildScreenTaskUserMessage({
     "Complexity: include time and space complexity.",
     "Question: restate the exact visible problem or the best focused version.",
     "Clarifying question: one click-answerable question if a constraint is missing, otherwise '-'.",
+    "If it is a behavioral interview question, output:",
+    "Answer: give a compact first-person story that directly answers what happened, what decision path you took, and whether it turned out correct.",
+    "Approach: briefly name why this example fits the question and the key decision/tradeoff.",
+    "Code: -",
+    "Complexity: -",
+    "Question: restate the visible behavioral question.",
+    "Clarifying question: one click-answerable question if useful, otherwise '-'.",
     "If it is a field-knowledge question, output:",
     "Answer: directly answer the selected visible question in concise professional meeting-ready wording.",
     "Approach: brief reasoning or key points.",

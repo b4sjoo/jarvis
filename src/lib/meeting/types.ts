@@ -1,4 +1,5 @@
 import { Message, TYPE_PROVIDER } from "@/types";
+import type { MemoryRetrievalResult } from "@/lib/memory/types";
 
 export type TranscriptSpeaker = "them" | "me" | "unknown";
 
@@ -221,6 +222,7 @@ export interface AdvisorPromptContext {
   rollingSummary: string;
   userProfileContext: string;
   glossaryText: string;
+  memoryContext?: string;
   latestTurn?: TranscriptTurn;
 }
 
@@ -304,6 +306,7 @@ export interface MeetingAssistantSettings {
   screenContextEnabled: boolean;
   privacyMode: MeetingPrivacyMode;
   activeScreenTaskTimeoutMinutes: number;
+  useMemory: boolean;
   debugMode: boolean;
   response: MeetingResponseConfig;
   audio: MeetingAudioSettings;
@@ -365,5 +368,6 @@ export interface MeetingAssistantState {
   error: string | null;
   audioStatus: MeetingAudioStatus | null;
   settings: MeetingAssistantSettings;
+  lastMemoryContext?: MemoryRetrievalResult;
   lastTraceExport?: MeetingTraceExportRecord;
 }

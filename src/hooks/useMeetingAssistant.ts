@@ -5,7 +5,14 @@ import { STORAGE_KEYS } from "@/config";
 import { useApp } from "@/contexts";
 import { safeLocalStorage } from "@/lib";
 import {
+  formatMemorySelectionForTrace,
+  retrieveMemoryContext,
+  type MemoryRetrievalResult,
+  type MemoryUseCase,
+} from "@/lib/memory";
+import {
   AdvisorEngine,
+  AdvisorPromptContext,
   AdvisorRequestMode,
   ClarifyingQuestionAnswer,
   ClarifyingQuestionFeedback,
@@ -118,6 +125,7 @@ const INITIAL_STATE: MeetingAssistantState = {
     screenContextEnabled: false,
     privacyMode: "text-to-cloud",
     activeScreenTaskTimeoutMinutes: DEFAULT_ACTIVE_SCREEN_TASK_TIMEOUT_MINUTES,
+    useMemory: true,
     debugMode: false,
     response: DEFAULT_MEETING_RESPONSE_CONFIG,
     audio: {
@@ -152,6 +160,10 @@ function readMeetingAssistantSettings(): MeetingAssistantSettings {
         normalizeActiveScreenTaskTimeoutMinutes(
           parsed.activeScreenTaskTimeoutMinutes
         ),
+      useMemory:
+        typeof parsed.useMemory === "boolean"
+          ? parsed.useMemory
+          : DEFAULT_MEETING_ASSISTANT_SETTINGS.useMemory,
       debugMode:
         typeof parsed.debugMode === "boolean"
           ? parsed.debugMode
@@ -712,6 +724,16 @@ export function useMeetingAssistant() {
     [updateSettings]
   );
 
+  const setUseMemory = useCallback(
+    (useMemory: boolean) => {
+      updateSettings((previous) => ({
+        ...previous,
+        useMemory,
+      }));
+    },
+    [updateSettings]
+  );
+
   const setResponseConfig = useCallback(
     (response: MeetingResponseConfig) => {
       updateSettings((previous) => ({
@@ -754,6 +776,81 @@ export function useMeetingAssistant() {
       }));
     },
     [updateSettings]
+  );
+
+  const loadMemoryForPrompt = useCallback(
+    async ({
+      traceId,
+      query,
+      source,
+      useCase,
+    }: {
+      traceId?: string;
+      query: string;
+      source: "advisor" | "screen";
+      useCase?: MemoryUseCase;
+    }): Promise<MemoryRetrievalResult | undefined> => {
+      if (!state.settings.useMemory) return undefined;
+      const resolvedUseCase = useCase ?? inferMemoryUseCaseFromQuery(query);
+
+      let memoryStepId: string | undefined;
+      try {
+        if (traceId) {
+          memoryStepId = traceStoreRef.current.startStep(
+            traceId,
+            "Memory retrieval",
+            { source, useCase: resolvedUseCase, queryChars: query.length }
+          );
+        }
+
+        const memoryContext = await retrieveMemoryContext({
+          query,
+          useCase: resolvedUseCase,
+        });
+
+        if (traceId) {
+          traceStoreRef.current.recordOutput(
+            traceId,
+            "injected memory context",
+            formatMemorySelectionForTrace(memoryContext),
+            {
+              selectedEntries: memoryContext.entries.length,
+              useCase: resolvedUseCase,
+              candidateCount: memoryContext.candidateCount,
+              rejectedCount: memoryContext.rejectedCount,
+              totalChars: memoryContext.totalChars,
+            }
+          );
+          traceStoreRef.current.finishStep(traceId, memoryStepId, "success", {
+            selectedEntries: memoryContext.entries.length,
+            useCase: resolvedUseCase,
+            candidateCount: memoryContext.candidateCount,
+            rejectedCount: memoryContext.rejectedCount,
+            totalChars: memoryContext.totalChars,
+          });
+        }
+
+        setState((previous) => ({
+          ...previous,
+          lastMemoryContext: memoryContext,
+        }));
+
+        return memoryContext;
+      } catch (error) {
+        if (traceId) {
+          traceStoreRef.current.finishStep(
+            traceId,
+            memoryStepId,
+            "error",
+            undefined,
+            error
+          );
+        }
+        console.warn("Failed to retrieve meeting memory context", error);
+        return undefined;
+      }
+    },
+    [state.settings.useMemory]
   );
 
   const clearActiveScreenTask = useCallback(() => {
@@ -810,7 +907,7 @@ export function useMeetingAssistant() {
       return;
     }
 
-    const promptContext = contextManagerRef.current.buildAdvisorPromptContext();
+    let promptContext = contextManagerRef.current.buildAdvisorPromptContext();
     const latestTurn = promptContext.latestTurn;
     const hasContext = Boolean(
       promptContext.latestTurn ||
@@ -869,6 +966,24 @@ export function useMeetingAssistant() {
       partialSuggestion: "",
       error: null,
     }));
+
+    const advisorMemoryQuery = buildAdvisorMemoryQuery(
+      promptContext,
+      mode,
+      options.currentSuggestion
+    );
+    const memoryContext = await loadMemoryForPrompt({
+      traceId,
+      source: "advisor",
+      query: advisorMemoryQuery,
+      useCase: inferMemoryUseCaseFromQuery(advisorMemoryQuery),
+    });
+    if (memoryContext) {
+      promptContext = {
+        ...promptContext,
+        memoryContext: memoryContext.contextText,
+      };
+    }
 
     let finalContent = "";
 
@@ -1046,7 +1161,13 @@ export function useMeetingAssistant() {
             : "Failed to generate meeting suggestion.",
       }));
     }
-  }, [aiProvider, selectedAIProvider, state.settings, state.status]);
+  }, [
+    aiProvider,
+    loadMemoryForPrompt,
+    selectedAIProvider,
+    state.settings,
+    state.status,
+  ]);
 
   const scheduleAdvisor = useCallback((
     mode: AdvisorRequestMode = "live",
@@ -1551,16 +1672,29 @@ export function useMeetingAssistant() {
 
         const autoPrompt = getMeetingScreenAutoPrompt(screenshotConfiguration);
         const analysisContextState = contextManagerRef.current.getState();
+        const recentTranscript = formatRecentTranscript(
+          analysisContextState.transcriptTurns
+        );
+        const screenMemoryQuery = buildScreenMemoryQuery({
+          observation,
+          recentTranscript,
+          autoPrompt,
+        });
+        const memoryContext = await loadMemoryForPrompt({
+          traceId: trace.id,
+          source: "screen",
+          query: screenMemoryQuery,
+          useCase: inferMemoryUseCaseFromQuery(screenMemoryQuery),
+        });
         const screenTaskContent = await withTimeout(
           solveScreenAnchoredTask({
             observation,
             provider: aiProvider,
             selectedProvider: selectedAIProvider,
-            recentTranscript: formatRecentTranscript(
-              analysisContextState.transcriptTurns
-            ),
+            recentTranscript,
             autoPrompt,
             responseConfig: state.settings.response,
+            memoryContext: memoryContext?.contextText,
             signal: analysisController.signal,
             trace: {
               onRequest: (input) => {
@@ -1759,6 +1893,7 @@ export function useMeetingAssistant() {
     },
     [
       aiProvider,
+      loadMemoryForPrompt,
       selectedAIProvider,
       screenshotConfiguration,
       state.settings,
@@ -1924,6 +2059,7 @@ export function useMeetingAssistant() {
     setPrivacyMode,
     setScreenContextEnabled,
     setActiveScreenTaskTimeoutMinutes,
+    setUseMemory,
     setDebugMode,
     setResponseConfig,
     setMeetingAudioProfile,
@@ -1977,6 +2113,80 @@ function formatTraceModelInput(systemPrompt: string, userMessage: string) {
 
 function formatTraceMetadata(metadata: Record<string, unknown>) {
   return JSON.stringify(metadata, null, 2);
+}
+
+function buildAdvisorMemoryQuery(
+  context: AdvisorPromptContext,
+  mode: AdvisorRequestMode,
+  currentSuggestion?: string
+) {
+  return [
+    `mode: ${mode}`,
+    context.latestTurn ? `latest: ${context.latestTurn.text}` : undefined,
+    context.activeScreenTask
+      ? `active task: ${context.activeScreenTask.question || ""}\n${context.activeScreenTask.content}`
+      : undefined,
+    context.transcript ? `transcript:\n${context.transcript}` : undefined,
+    context.screenContext ? `screen:\n${context.screenContext}` : undefined,
+    currentSuggestion ? `current suggestion:\n${currentSuggestion}` : undefined,
+  ]
+    .filter(Boolean)
+    .join("\n\n")
+    .slice(-8000);
+}
+
+function buildScreenMemoryQuery({
+  observation,
+  recentTranscript,
+  autoPrompt,
+}: {
+  observation: ScreenObservation;
+  recentTranscript?: string;
+  autoPrompt?: string;
+}) {
+  const captureTarget = observation.captureTarget;
+  return [
+    "mode: screen-task",
+    captureTarget?.appName ? `app: ${captureTarget.appName}` : undefined,
+    captureTarget?.title ? `title: ${captureTarget.title}` : undefined,
+    recentTranscript ? `recent transcript:\n${recentTranscript}` : undefined,
+    autoPrompt ? `screen prompt preference:\n${autoPrompt}` : undefined,
+  ]
+    .filter(Boolean)
+    .join("\n\n")
+    .slice(-8000);
+}
+
+function inferMemoryUseCaseFromQuery(query: string): MemoryUseCase {
+  const normalized = query.toLowerCase();
+
+  const behavioralMarkers = [
+    "behavior",
+    "behaviour",
+    "leadership principle",
+    "star",
+    "interview story",
+    "tell me about a time",
+    "disagree",
+    "conflict",
+    "ownership",
+    "bias for action",
+    "customer obsession",
+  ];
+
+  if (behavioralMarkers.some((marker) => normalized.includes(marker))) {
+    return "behavioral_interview";
+  }
+
+  if (
+    /\b(leetcode|algorithm|coding|complexity|typescript|javascript|python|java|rust|go|golang|dp|graph|tree|heap|stack|queue)\b/.test(
+      normalized
+    )
+  ) {
+    return "coding_interview";
+  }
+
+  return "meeting_assistant";
 }
 
 function shouldUpdateActiveScreenTaskFromAdvisorOutput(content: string) {

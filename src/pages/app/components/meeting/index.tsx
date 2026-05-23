@@ -459,6 +459,8 @@ export const MeetingAssistant = () => {
                 onActiveScreenTaskTimeoutMinutesChange={
                   meeting.setActiveScreenTaskTimeoutMinutes
                 }
+                useMemory={meeting.settings.useMemory}
+                onUseMemoryChange={meeting.setUseMemory}
                 audioProfile={meeting.settings.audio.profile}
                 audioConfig={meeting.settings.audio.config}
                 onAudioProfileChange={meeting.setMeetingAudioProfile}
@@ -744,6 +746,40 @@ export const MeetingAssistant = () => {
                 <TraceBaselinePanel summary={traceSummary} />
               ) : null}
 
+              {meeting.settings.debugMode &&
+              meeting.lastMemoryContext?.entries.length ? (
+                <section className="min-w-0 overflow-hidden rounded-md border border-border/70 p-3">
+                  <div className="mb-2 flex items-center gap-2 text-xs font-semibold">
+                    <BrainIcon className="h-3.5 w-3.5" />
+                    Injected memory
+                  </div>
+                  <div className="space-y-2">
+                    {meeting.lastMemoryContext.entries.map((item) => (
+                      <details
+                        key={item.entry.id}
+                        className="rounded-sm border border-border/60 p-2"
+                      >
+                        <summary className="cursor-pointer text-[10px] font-medium">
+                          {item.entry.title}
+                        </summary>
+                        <div className="mt-1 text-[10px] text-muted-foreground">
+                          score {item.score} /{" "}
+                          {item.matchReason.join(", ") || "always"}
+                        </div>
+                        <pre
+                          className={cn(
+                            WRAP_TEXT_CLASS,
+                            "mt-2 max-h-32 overflow-y-auto overflow-x-hidden rounded-sm bg-muted p-2 text-[10px] leading-4"
+                          )}
+                        >
+                          {item.injectedContent}
+                        </pre>
+                      </details>
+                    ))}
+                  </div>
+                </section>
+              ) : null}
+
               {meeting.settings.debugMode && latestTrace ? (
                 <section className="min-w-0 overflow-hidden rounded-md border border-border/70 p-3">
                   <div className="mb-2 flex items-center justify-between gap-2">
@@ -1010,6 +1046,8 @@ const ConfigurationsPanel = ({
   onPrivacyModeChange,
   activeScreenTaskTimeoutMinutes,
   onActiveScreenTaskTimeoutMinutesChange,
+  useMemory,
+  onUseMemoryChange,
   audioProfile,
   audioConfig,
   onAudioProfileChange,
@@ -1025,6 +1063,8 @@ const ConfigurationsPanel = ({
   onPrivacyModeChange: (mode: (typeof privacyOptions)[number]["id"]) => void;
   activeScreenTaskTimeoutMinutes: number;
   onActiveScreenTaskTimeoutMinutesChange: (minutes: number) => void;
+  useMemory: boolean;
+  onUseMemoryChange: (enabled: boolean) => void;
   audioProfile: MeetingAudioProfile;
   audioConfig: MeetingAudioConfig;
   onAudioProfileChange: (profile: MeetingAudioProfile) => void;
@@ -1136,6 +1176,18 @@ const ConfigurationsPanel = ({
                   </Button>
                 ))}
               </div>
+            </div>
+
+            <div className="flex items-center justify-between gap-2 rounded-sm border border-border/60 p-2">
+              <div>
+                <div className="text-[10px] font-medium uppercase text-muted-foreground">
+                  Use Memory
+                </div>
+                <div className="mt-0.5 text-[10px] text-muted-foreground">
+                  Local curated entries only
+                </div>
+              </div>
+              <Switch checked={useMemory} onCheckedChange={onUseMemoryChange} />
             </div>
           </ConfigurationGroup>
 
