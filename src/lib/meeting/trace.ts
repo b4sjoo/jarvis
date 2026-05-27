@@ -263,6 +263,7 @@ export interface MeetingTraceKindSummary {
   running: number;
   totalDurationMs: MeetingTraceValueSummary;
   captureDurationMs?: MeetingTraceValueSummary;
+  preflightDurationMs?: MeetingTraceValueSummary;
   firstTokenLatencyMs?: MeetingTraceValueSummary;
   modelDurationMs?: MeetingTraceValueSummary;
   sttDurationMs?: MeetingTraceValueSummary;
@@ -411,6 +412,9 @@ function summarizeTraceKind(
   if (kind === "screen") {
     summary.captureDurationMs = summarizeValues(
       stepDurations(traces, "Screen capture command")
+    );
+    summary.preflightDurationMs = summarizeValues(
+      stepDurations(traces, "Screen preflight")
     );
     summary.firstTokenLatencyMs = summarizeValues(
       traceMetadataLatencies(traces, "screenFirstTokenAt", "startedAt")

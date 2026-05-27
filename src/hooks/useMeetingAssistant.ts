@@ -31,14 +31,19 @@ import {
   MeetingTraceExportRecord,
   MeetingTraceExportTrigger,
   ScreenObservation,
+  ScreenPreflightResult,
   base64WavToBlob,
+  buildAmazonLeadershipPrincipleMemoryHint,
+  buildInterviewSessionMemoryHint,
   captureScreenObservation,
   createMeetingId,
+  detectInterviewCompany,
   extractScreenTaskQuestion,
   inferScreenTaskKind,
   inferScreenTaskLanguage,
   parseMeetingTraceMetrics,
   parseScreenTaskAnswer,
+  preflightScreenObservation,
   serializeMeetingTraceExport,
   serializeMeetingTraceMetrics,
   solveScreenAnchoredTask,
@@ -47,6 +52,8 @@ import {
 
 const ADVISOR_DEBOUNCE_MS = 750;
 const STT_TIMEOUT_MS = 30_000;
+const SCREEN_PREFLIGHT_TIMEOUT_MS = 10_000;
+const SCREEN_PREFLIGHT_SKIP_COMPANY_CONFIDENCE = 0.9;
 const SCREEN_ANALYSIS_TIMEOUT_MS = 45_000;
 const DEFAULT_ACTIVE_SCREEN_TASK_TIMEOUT_MINUTES = 30;
 const MIN_ACTIVE_SCREEN_TASK_TIMEOUT_MINUTES = 5;
@@ -116,6 +123,7 @@ const INITIAL_STATE: MeetingAssistantState = {
   status: "idle",
   transcriptTurns: [],
   screenObservations: [],
+  interviewSessionContext: undefined,
   latestSuggestion: null,
   partialSuggestion: "",
   traces: [],
@@ -869,6 +877,7 @@ export function useMeetingAssistant() {
     screenAnalysisAbortRef.current?.abort();
     screenAnalysisAbortRef.current = null;
     contextManagerRef.current.clearActiveScreenTask();
+    contextManagerRef.current.clearInterviewSessionContext();
 
     let audioStatus: MeetingAudioStatus | null = null;
 
@@ -884,6 +893,7 @@ export function useMeetingAssistant() {
       ...previous,
       status: "idle",
       activeScreenTask: undefined,
+      interviewSessionContext: undefined,
       latestSuggestion:
         previous.latestSuggestion?.kind === "screen-task"
           ? null
@@ -1104,6 +1114,7 @@ export function useMeetingAssistant() {
           latestTurn ? [latestTurn.id] : [],
           latestObservationIds
         ),
+        interviewSessionContext: contextState.interviewSessionContext,
         activeScreenTask: contextState.activeScreenTask,
       }));
       if (traceId) {
@@ -1339,7 +1350,8 @@ export function useMeetingAssistant() {
           return;
         }
 
-        contextManagerRef.current.addTranscriptTurn(turn);
+        const interviewContextUpdate =
+          contextManagerRef.current.addTranscriptTurn(turn);
         const contextState = contextManagerRef.current.getState();
         const appendStepId = traceStoreRef.current.startStep(
           trace.id,
@@ -1350,10 +1362,38 @@ export function useMeetingAssistant() {
           transcriptTurns: contextState.transcriptTurns.length,
         });
 
+        if (interviewContextUpdate?.changed) {
+          const targetCompany =
+            interviewContextUpdate.targetCompany ??
+            contextState.interviewSessionContext?.targetCompany;
+          const interviewStepId = traceStoreRef.current.startStep(
+            trace.id,
+            "Interview session context updated",
+            {
+              targetCompany: targetCompany?.value,
+              confidence: targetCompany?.confidence,
+              source: targetCompany?.source,
+            }
+          );
+          traceStoreRef.current.finishStep(
+            trace.id,
+            interviewStepId,
+            "success",
+            {
+              evidenceChars: targetCompany?.evidence.length ?? 0,
+            }
+          );
+          traceStoreRef.current.updateMetadata(trace.id, {
+            targetCompany: targetCompany?.value,
+            targetCompanyConfidence: targetCompany?.confidence,
+          });
+        }
+
         setState((previous) => ({
           ...previous,
           status: activeRef.current ? "listening" : "idle",
           transcriptTurns: contextState.transcriptTurns,
+          interviewSessionContext: contextState.interviewSessionContext,
           activeScreenTask: contextState.activeScreenTask,
         }));
 
@@ -1496,6 +1536,7 @@ export function useMeetingAssistant() {
         status: "listening",
         transcriptTurns: contextState.transcriptTurns,
         screenObservations: contextState.screenObservations,
+        interviewSessionContext: contextState.interviewSessionContext,
         activeScreenTask: contextState.activeScreenTask,
         partialSuggestion: "",
         error: null,
@@ -1576,6 +1617,7 @@ export function useMeetingAssistant() {
       const returnStatus = state.status;
       const idleReturnStatus = returnStatus === "paused" ? "paused" : "idle";
       let captureStepId: string | undefined;
+      let preflightStepId: string | undefined;
       let modelStepId: string | undefined;
 
       try {
@@ -1675,10 +1717,162 @@ export function useMeetingAssistant() {
         const recentTranscript = formatRecentTranscript(
           analysisContextState.transcriptTurns
         );
+        let screenPreflight: ScreenPreflightResult | undefined;
+        const confidentTargetCompany =
+          analysisContextState.interviewSessionContext?.targetCompany;
+        const shouldRunScreenPreflight =
+          state.settings.useMemory &&
+          (!confidentTargetCompany ||
+            confidentTargetCompany.confidence <
+              SCREEN_PREFLIGHT_SKIP_COMPANY_CONFIDENCE);
+
+        if (shouldRunScreenPreflight) {
+          try {
+            screenPreflight = await withTimeout(
+              preflightScreenObservation({
+                observation,
+                provider: aiProvider,
+                selectedProvider: selectedAIProvider,
+                recentTranscript,
+                signal: analysisController.signal,
+                trace: {
+                  onRequest: (input) => {
+                    traceStoreRef.current.recordInput(
+                      trace.id,
+                      "screen preflight input",
+                      formatTraceModelInput(
+                        input.systemPrompt,
+                        input.userMessage
+                      ),
+                      {
+                        providerId: input.providerId,
+                        mode: input.mode,
+                        imageCount: input.imageCount,
+                        imageMediaType: input.imageMediaType,
+                        imageBase64Stored: false,
+                      }
+                    );
+                    preflightStepId = traceStoreRef.current.startStep(
+                      trace.id,
+                      "Screen preflight",
+                      {
+                        providerId: input.providerId,
+                        imageCount: input.imageCount,
+                        imageMediaType: input.imageMediaType,
+                      }
+                    );
+                  },
+                  onFirstToken: () => {
+                    traceStoreRef.current.updateMetadata(trace.id, {
+                      screenPreflightFirstTokenAt: Date.now(),
+                    });
+                  },
+                  onComplete: (output) => {
+                    traceStoreRef.current.recordOutput(
+                      trace.id,
+                      "screen preflight raw output",
+                      output
+                    );
+                  },
+                },
+              }),
+              SCREEN_PREFLIGHT_TIMEOUT_MS,
+              "Screen preflight timed out."
+            );
+            const preflightContextUpdate =
+              contextManagerRef.current.updateInterviewSessionContextFromScreenText(
+                [
+                  screenPreflight.targetCompany
+                    ? `${screenPreflight.targetCompany} interview`
+                    : undefined,
+                  screenPreflight.question,
+                ]
+                  .filter(Boolean)
+                  .join("\n"),
+                [
+                  screenPreflight.targetCompany,
+                  screenPreflight.question,
+                ]
+                  .filter(Boolean)
+                  .join(" - ")
+              );
+            const targetCompany =
+              preflightContextUpdate?.targetCompany ??
+              contextManagerRef.current.getState().interviewSessionContext
+                ?.targetCompany;
+
+            traceStoreRef.current.finishStep(
+              trace.id,
+              preflightStepId,
+              "success",
+              {
+                questionChars: screenPreflight.question?.length ?? 0,
+                targetCompany: screenPreflight.targetCompany,
+                behavioral: screenPreflight.isBehavioralInterview,
+                amazonLeadershipPrinciple:
+                  screenPreflight.amazonLeadershipPrinciple,
+                contextUpdated: Boolean(preflightContextUpdate?.changed),
+              }
+            );
+
+            if (preflightContextUpdate?.changed) {
+              const interviewStepId = traceStoreRef.current.startStep(
+                trace.id,
+                "Interview session context updated",
+                {
+                  targetCompany: targetCompany?.value,
+                  confidence: targetCompany?.confidence,
+                  source: targetCompany?.source,
+                }
+              );
+              traceStoreRef.current.finishStep(
+                trace.id,
+                interviewStepId,
+                "success",
+                {
+                  evidenceChars: targetCompany?.evidence.length ?? 0,
+                }
+              );
+              traceStoreRef.current.updateMetadata(trace.id, {
+                targetCompany: targetCompany?.value,
+                targetCompanyConfidence: targetCompany?.confidence,
+              });
+              setState((previous) => ({
+                ...previous,
+                interviewSessionContext:
+                  contextManagerRef.current.getState().interviewSessionContext,
+              }));
+            }
+          } catch (error) {
+            traceStoreRef.current.finishStep(
+              trace.id,
+              preflightStepId,
+              "error",
+              undefined,
+              error
+            );
+            console.warn("Screen preflight failed; continuing without it", error);
+          }
+        } else if (state.settings.useMemory && confidentTargetCompany) {
+          const skippedStepId = traceStoreRef.current.startStep(
+            trace.id,
+            "Screen preflight skipped",
+            {
+              reason: "confident-target-company",
+              targetCompany: confidentTargetCompany.value,
+              confidence: confidentTargetCompany.confidence,
+              threshold: SCREEN_PREFLIGHT_SKIP_COMPANY_CONFIDENCE,
+            }
+          );
+          traceStoreRef.current.finishStep(trace.id, skippedStepId, "success");
+        }
+
+        const preflightContextState = contextManagerRef.current.getState();
         const screenMemoryQuery = buildScreenMemoryQuery({
           observation,
-          recentTranscript,
           autoPrompt,
+          interviewSessionContext: preflightContextState.interviewSessionContext,
+          screenPreflight,
         });
         const memoryContext = await loadMemoryForPrompt({
           traceId: trace.id,
@@ -1695,6 +1889,9 @@ export function useMeetingAssistant() {
             autoPrompt,
             responseConfig: state.settings.response,
             memoryContext: memoryContext?.contextText,
+            interviewSessionContext:
+              preflightContextState.interviewSessionContext,
+            screenPreflight,
             signal: analysisController.signal,
             trace: {
               onRequest: (input) => {
@@ -1819,6 +2016,7 @@ export function useMeetingAssistant() {
           partialSuggestion: "",
           screenObservations: updatedContextState.screenObservations,
           activeScreenTask: updatedContextState.activeScreenTask,
+          interviewSessionContext: updatedContextState.interviewSessionContext,
           latestSuggestion: screenTaskContent.trim()
             ? {
                 id: requestId,
@@ -2120,8 +2318,26 @@ function buildAdvisorMemoryQuery(
   mode: AdvisorRequestMode,
   currentSuggestion?: string
 ) {
+  const interviewHint = buildInterviewSessionMemoryHint(
+    context.interviewSessionContext
+  );
+  const amazonLpHint = buildAmazonLeadershipPrincipleMemoryHint(
+    context.interviewSessionContext,
+    [
+      context.latestTurn?.text,
+      context.activeScreenTask?.question,
+      context.activeScreenTask?.content,
+      context.transcript,
+      currentSuggestion,
+    ]
+      .filter(Boolean)
+      .join("\n")
+  );
+
   return [
     `mode: ${mode}`,
+    interviewHint || undefined,
+    amazonLpHint || undefined,
     context.latestTurn ? `latest: ${context.latestTurn.text}` : undefined,
     context.activeScreenTask
       ? `active task: ${context.activeScreenTask.question || ""}\n${context.activeScreenTask.content}`
@@ -2137,19 +2353,39 @@ function buildAdvisorMemoryQuery(
 
 function buildScreenMemoryQuery({
   observation,
-  recentTranscript,
   autoPrompt,
+  interviewSessionContext,
+  screenPreflight,
 }: {
   observation: ScreenObservation;
-  recentTranscript?: string;
   autoPrompt?: string;
+  interviewSessionContext?: AdvisorPromptContext["interviewSessionContext"];
+  screenPreflight?: ScreenPreflightResult;
 }) {
   const captureTarget = observation.captureTarget;
+  const interviewHint = buildInterviewSessionMemoryHint(interviewSessionContext);
+  const amazonLpHint = buildAmazonLeadershipPrincipleMemoryHint(
+    interviewSessionContext,
+    [
+      screenPreflight?.question,
+      screenPreflight?.amazonLeadershipPrinciple,
+    ]
+      .filter(Boolean)
+      .join("\n")
+  );
+
   return [
     "mode: screen-task",
+    interviewHint || undefined,
+    amazonLpHint || undefined,
+    screenPreflight?.question
+      ? `screen preflight question:\n${screenPreflight.question}`
+      : undefined,
+    screenPreflight?.isBehavioralInterview
+      ? "screen preflight use case: behavioral interview"
+      : undefined,
     captureTarget?.appName ? `app: ${captureTarget.appName}` : undefined,
     captureTarget?.title ? `title: ${captureTarget.title}` : undefined,
-    recentTranscript ? `recent transcript:\n${recentTranscript}` : undefined,
     autoPrompt ? `screen prompt preference:\n${autoPrompt}` : undefined,
   ]
     .filter(Boolean)
@@ -2219,6 +2455,7 @@ function shouldIgnoreLowSignalTranscript(
     .trim();
 
   if (!normalized) return true;
+  if (detectInterviewCompany(trimmed)) return false;
   if (hasTechnicalSignal(trimmed) || hasFollowUpSignal(trimmed)) return false;
 
   const fillerPhrases = new Set([

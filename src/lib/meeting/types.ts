@@ -119,6 +119,7 @@ export interface MeetingContextState {
   startedAt: number;
   transcriptTurns: TranscriptTurn[];
   screenObservations: ScreenObservation[];
+  interviewSessionContext?: InterviewSessionContext;
   activeScreenTask?: ActiveScreenTask;
   rollingSummary: string;
   userProfileContext: string;
@@ -145,6 +146,21 @@ export interface ActiveScreenTask {
   content: string;
   basedOnTurnIds: string[];
   basedOnObservationId: string;
+}
+
+export type InterviewSessionContextSource = "transcript" | "screen" | "manual";
+
+export interface InterviewTargetCompany {
+  value: string;
+  normalized: string;
+  confidence: number;
+  source: InterviewSessionContextSource;
+  evidence: string;
+  updatedAt: number;
+}
+
+export interface InterviewSessionContext {
+  targetCompany?: InterviewTargetCompany;
 }
 
 export interface ScreenTaskAnswer {
@@ -218,6 +234,7 @@ export interface MeetingSetupWarning {
 export interface AdvisorPromptContext {
   transcript: string;
   screenContext: string;
+  interviewSessionContext?: InterviewSessionContext;
   activeScreenTask?: ActiveScreenTask;
   rollingSummary: string;
   userProfileContext: string;
@@ -260,7 +277,7 @@ export interface MeetingModelTraceCallbacks {
     imageCount: number;
     imageMediaType?: string;
     providerId?: string;
-    mode?: AdvisorRequestMode | "screen-task";
+    mode?: AdvisorRequestMode | "screen-task" | "screen-preflight";
     responseAction?: MeetingResponseActionMode;
     responseConfig?: MeetingResponseConfig;
   }) => void;
@@ -361,6 +378,7 @@ export interface MeetingAssistantState {
   status: MeetingAssistantStatus;
   transcriptTurns: TranscriptTurn[];
   screenObservations: ScreenObservation[];
+  interviewSessionContext?: InterviewSessionContext;
   activeScreenTask?: ActiveScreenTask;
   traces: MeetingTrace[];
   latestSuggestion: AdvisorSuggestion | null;

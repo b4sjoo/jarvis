@@ -5,6 +5,7 @@ import {
   MeetingResponseActionMode,
   MeetingResponseConfig,
 } from "./types";
+import { formatInterviewSessionContextForPrompt } from "./interview-session-context";
 
 export function buildAdvisorSystemPrompt() {
   return [
@@ -72,6 +73,9 @@ export function buildAdvisorUserMessage(
     "<screen_context>",
     context.screenContext || "No screen context.",
     "</screen_context>",
+    "<interview_session_context>",
+    formatInterviewSessionContextForPrompt(context.interviewSessionContext),
+    "</interview_session_context>",
     "<active_screen_task>",
     context.activeScreenTask
       ? formatActiveScreenTask(context.activeScreenTask)
@@ -147,6 +151,8 @@ export function buildAdvisorUserMessage(
       "If the transcript adds a constraint, revise the active task answer, approach, code, or complexity accordingly.",
       "If the transcript asks a follow-up, answer the follow-up directly while preserving the active screen task as context.",
       "If the transcript corrects a requirement, acknowledge the corrected constraint through the revised answer; do not argue with the transcript.",
+      "Use <interview_session_context> to personalize interview style across tasks, especially target company expectations, but do not let it override the active screen task or latest transcript.",
+      "If the target company is Amazon and this is a behavioral answer, use any injected Amazon Leadership Principle rubric to demonstrate Strength signals and avoid Concern signals. Do not explicitly name the principle unless it helps.",
       "If the transcript is a strong task switch, do not silently reuse or clear the old task. Put '-' for Answer, Approach, Code, and Complexity, then ask a yes/no Clarifying question such as 'Should I treat this as a new task?'.",
       "If the transcript is low-value chatter or logistics, output a single dash and do not re-solve the active task.",
       "If <clarifying_feedback> answers a task-switch confirmation with Yes, ask the user to capture or state the new task. If it answers No, continue with the current active task.",
@@ -179,6 +185,8 @@ export function buildAdvisorUserMessage(
     "Question: one safe clarifying question, or '-' if not needed.",
     "If it only contains jargon, put the simple Chinese definition under Meaning and use '-' for Reply and Question.",
     "Do not mention a colleague, speaker, or someone asking a question unless the transcript explicitly contains that person or question.",
+    "Use <interview_session_context> as cross-task interview context, especially the target company. Do not infer a company if it is not present there or in the latest transcript.",
+    "For Amazon behavioral interview moments, use injected Leadership Principle guidance to shape the answer toward Strength signals and away from Concern signals without inventing facts.",
     ...buildContextInstructions(contextMode),
     ...buildVoiceSeededInstructions(contextMode),
     "If no help is needed, output a single dash.",

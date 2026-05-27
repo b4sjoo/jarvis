@@ -13,6 +13,7 @@ import {
 import { useMeetingAssistant, useShortcuts, useWindowResize } from "@/hooks";
 import type {
   ClarifyingQuestionAnswer,
+  InterviewTargetCompany,
   MeetingAudioConfig,
   MeetingAudioProfile,
   MeetingResponseActionMode,
@@ -747,6 +748,29 @@ export const MeetingAssistant = () => {
               ) : null}
 
               {meeting.settings.debugMode &&
+              meeting.interviewSessionContext?.targetCompany ? (
+                <section className="min-w-0 overflow-hidden rounded-md border border-border/70 p-3">
+                  <div className="mb-2 flex items-center gap-2 text-xs font-semibold">
+                    <BrainIcon className="h-3.5 w-3.5" />
+                    Interview context
+                  </div>
+                  <div className="text-xs font-medium">
+                    {meeting.interviewSessionContext.targetCompany.value}
+                  </div>
+                  <div
+                    className={cn(
+                      WRAP_TEXT_CLASS,
+                      "mt-1 text-[10px] text-muted-foreground"
+                    )}
+                  >
+                    {formatInterviewTargetCompany(
+                      meeting.interviewSessionContext.targetCompany
+                    )}
+                  </div>
+                </section>
+              ) : null}
+
+              {meeting.settings.debugMode &&
               meeting.lastMemoryContext?.entries.length ? (
                 <section className="min-w-0 overflow-hidden rounded-md border border-border/70 p-3">
                   <div className="mb-2 flex items-center gap-2 text-xs font-semibold">
@@ -1430,6 +1454,10 @@ const TraceBaselinePanel = ({
               formatTraceValueRange(summary.screen.captureDurationMs),
             ],
             [
+              "Preflight",
+              formatTraceValueRange(summary.screen.preflightDurationMs),
+            ],
+            [
               "First token",
               formatTraceValueRange(summary.screen.firstTokenLatencyMs),
             ],
@@ -1828,6 +1856,16 @@ function sanitizeSectionText(value: string) {
 
 function escapeRegExp(value: string) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function formatInterviewTargetCompany(company: InterviewTargetCompany) {
+  return [
+    `source ${company.source}`,
+    `confidence ${Math.round(company.confidence * 100)}%`,
+    company.evidence ? `evidence: ${company.evidence}` : undefined,
+  ]
+    .filter(Boolean)
+    .join(" / ");
 }
 
 function formatParsedScreenAnswer(answer: ScreenTaskAnswer) {

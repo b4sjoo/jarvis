@@ -3,6 +3,7 @@ import { fetchAIResponse } from "@/lib/functions";
 import { TYPE_PROVIDER } from "@/types";
 import {
   ScreenCaptureTarget,
+  InterviewSessionContext,
   MeetingModelTraceCallbacks,
   MeetingResponseConfig,
   ScreenObservation,
@@ -10,6 +11,7 @@ import {
   SelectedProviderState,
 } from "./types";
 import { createMeetingId } from "./context-manager";
+import { formatInterviewSessionContextForPrompt } from "./interview-session-context";
 import { parseScreenTaskAnswer } from "./screen-task-answer";
 
 export type ScreenCaptureTargetType = "active-window" | "current-monitor";
@@ -29,6 +31,15 @@ export interface SummarizeScreenObservationOptions {
   trace?: MeetingModelTraceCallbacks;
 }
 
+export interface PreflightScreenObservationOptions {
+  observation: ScreenObservation;
+  provider: TYPE_PROVIDER | undefined;
+  selectedProvider: SelectedProviderState;
+  recentTranscript?: string;
+  signal?: AbortSignal;
+  trace?: MeetingModelTraceCallbacks;
+}
+
 export interface SolveScreenAnchoredTaskOptions {
   observation: ScreenObservation;
   provider: TYPE_PROVIDER | undefined;
@@ -37,9 +48,18 @@ export interface SolveScreenAnchoredTaskOptions {
   autoPrompt?: string;
   responseConfig?: MeetingResponseConfig;
   memoryContext?: string;
+  interviewSessionContext?: InterviewSessionContext;
+  screenPreflight?: ScreenPreflightResult;
   signal?: AbortSignal;
   trace?: MeetingModelTraceCallbacks;
   onPartialContent?: (content: string) => void;
+}
+
+export interface ScreenPreflightResult {
+  question?: string;
+  targetCompany?: string;
+  isBehavioralInterview?: boolean;
+  amazonLeadershipPrinciple?: string;
 }
 
 interface CaptureScreenContextResponse {
@@ -62,6 +82,14 @@ const SCREEN_CONTEXT_USER_MESSAGE = [
   "Summarize the visible screen in 1-3 short bullets.",
   "Keep file names, page titles, error messages, function names, and requirements when visible.",
   "If there is no useful meeting context, return a single dash.",
+].join(" ");
+
+const SCREEN_PREFLIGHT_SYSTEM_PROMPT = [
+  "You are a fast metadata extractor for Jarvis.",
+  "Read the screenshot and return only compact JSON.",
+  "Extract visible interview metadata; do not answer the question.",
+  "If a cursor-centered focus band is provided, use it to choose the active question.",
+  "Do not infer hidden meeting context that is not visible.",
 ].join(" ");
 
 const SCREEN_TASK_SYSTEM_PROMPT = [
@@ -173,6 +201,70 @@ export async function summarizeScreenObservation({
   return output;
 }
 
+export async function preflightScreenObservation({
+  observation,
+  provider,
+  selectedProvider,
+  recentTranscript,
+  signal,
+  trace,
+}: PreflightScreenObservationOptions): Promise<ScreenPreflightResult> {
+  if (!observation.imageBase64) return {};
+
+  if (!provider) {
+    throw new Error("Choose an AI provider to analyze screen context.");
+  }
+
+  if (!provider.curl.includes("{{IMAGE}}")) {
+    throw new Error(
+      "Selected AI provider does not support image input for screen context."
+    );
+  }
+
+  let content = "";
+  let firstTokenSeen = false;
+  const userMessage = buildScreenPreflightUserMessage({
+    observation,
+    recentTranscript,
+  });
+  const imageInputs = buildScreenPreflightImageInputs(observation);
+
+  trace?.onRequest?.({
+    systemPrompt: SCREEN_PREFLIGHT_SYSTEM_PROMPT,
+    userMessage,
+    imageCount: imageInputs.length,
+    imageMediaType:
+      imageInputs[0]?.mediaType || observation.imageMediaType || "image/png",
+    providerId: provider.id,
+    mode: "screen-preflight",
+  });
+
+  for await (const chunk of fetchAIResponse({
+    provider,
+    selectedProvider,
+    systemPrompt: SCREEN_PREFLIGHT_SYSTEM_PROMPT,
+    userMessage,
+    imagesBase64: imageInputs,
+    signal,
+    applyResponseSettings: false,
+  })) {
+    if (!firstTokenSeen) {
+      firstTokenSeen = true;
+      trace?.onFirstToken?.();
+    }
+    content += chunk;
+  }
+
+  if (signal?.aborted) {
+    throw createAbortError();
+  }
+
+  const parsed = parseScreenPreflightOutput(content.trim());
+  trace?.onComplete?.(content.trim());
+
+  return parsed;
+}
+
 export async function solveScreenAnchoredTask({
   observation,
   provider,
@@ -181,6 +273,8 @@ export async function solveScreenAnchoredTask({
   autoPrompt,
   responseConfig,
   memoryContext,
+  interviewSessionContext,
+  screenPreflight,
   signal,
   trace,
   onPartialContent,
@@ -205,6 +299,8 @@ export async function solveScreenAnchoredTask({
     autoPrompt,
     responseConfig,
     memoryContext,
+    interviewSessionContext,
+    screenPreflight,
   });
   const imageInputs = buildScreenTaskImageInputs(observation);
 
@@ -263,7 +359,65 @@ function buildScreenContextUserMessage(autoPrompt: string | undefined) {
   ].join("\n");
 }
 
+function buildScreenPreflightUserMessage({
+  observation,
+  recentTranscript,
+}: {
+  observation: ScreenObservation;
+  recentTranscript?: string;
+}) {
+  const target = observation.captureTarget
+    ? formatCaptureTargetForPrompt(observation.captureTarget)
+    : "Unknown capture target";
+
+  return [
+    "<capture_target>",
+    target,
+    "</capture_target>",
+    "<focus_hint>",
+    formatCursorFocusForPrompt(observation.captureTarget),
+    "</focus_hint>",
+    "<image_order>",
+    formatImageOrderForPrompt(observation),
+    "</image_order>",
+    "<recent_transcript>",
+    recentTranscript?.trim()
+      ? "Transcript content is intentionally omitted for speed and to avoid confusing visible company detection."
+      : "No transcript context yet.",
+    "</recent_transcript>",
+    "<task>",
+    "Return JSON only, with no Markdown fences.",
+    "Schema:",
+    '{"question": string|null, "targetCompany": string|null, "isBehavioralInterview": boolean, "amazonLeadershipPrinciple": string|null}',
+    "question: the active visible interview/software-engineering question near the cursor, or null.",
+    "targetCompany: a visible company name such as Amazon, Google, Microsoft, Meta, Anthropic, OpenAI, Stripe, Airbnb, or null. Use visible text like 'from Amazon' if present.",
+    "isBehavioralInterview: true only for behavioral/story questions, not coding or field-knowledge questions.",
+    "amazonLeadershipPrinciple: if targetCompany is Amazon and the question clearly maps to one Amazon Leadership Principle, return its name; otherwise null.",
+    "For Amazon, prefer Bias for Action when the question asks about moving forward, acting quickly, reversible decisions, or deciding whether to gather more information before acting.",
+    "</task>",
+  ].join("\n");
+}
+
 function buildScreenTaskImageInputs(observation: ScreenObservation) {
+  const fullImage = {
+    base64: observation.imageBase64 || "",
+    mediaType: observation.imageMediaType || "image/png",
+  };
+
+  if (observation.focusImageBase64) {
+    return [
+      {
+        base64: observation.focusImageBase64,
+        mediaType: observation.focusImageMediaType || "image/jpeg",
+      },
+      fullImage,
+    ].filter((image) => image.base64.trim().length > 0);
+  }
+
+  return [fullImage].filter((image) => image.base64.trim().length > 0);
+}
+
+function buildScreenPreflightImageInputs(observation: ScreenObservation) {
   const fullImage = {
     base64: observation.imageBase64 || "",
     mediaType: observation.imageMediaType || "image/png",
@@ -294,12 +448,16 @@ function buildScreenTaskUserMessage({
   autoPrompt,
   responseConfig,
   memoryContext,
+  interviewSessionContext,
+  screenPreflight,
 }: {
   observation: ScreenObservation;
   recentTranscript?: string;
   autoPrompt?: string;
   responseConfig?: MeetingResponseConfig;
   memoryContext?: string;
+  interviewSessionContext?: InterviewSessionContext;
+  screenPreflight?: ScreenPreflightResult;
 }) {
   const target = observation.captureTarget
     ? formatCaptureTargetForPrompt(observation.captureTarget)
@@ -317,6 +475,12 @@ function buildScreenTaskUserMessage({
     "<recent_transcript>",
     recentTranscript?.trim() || "No transcript context yet.",
     "</recent_transcript>",
+    "<interview_session_context>",
+    formatInterviewSessionContextForPrompt(interviewSessionContext),
+    "</interview_session_context>",
+    "<screen_preflight>",
+    formatScreenPreflightForPrompt(screenPreflight),
+    "</screen_preflight>",
     "<response_preferences>",
     formatScreenTaskResponsePreferences(responseConfig),
     "</response_preferences>",
@@ -349,7 +513,9 @@ function buildScreenTaskUserMessage({
     "Put supporting details after Answer. Do not put code blocks in Approach; code belongs only in Code.",
     "Follow the natural language response preferences when choosing answer length and explanation language. Do not let those preferences override the selected programming language for code.",
     "Use memory only for stable background knowledge. Do not let memory override visible problem constraints, visible language selection, or spoken follow-up constraints.",
+    "Use <screen_preflight> only as a lightweight metadata hint. If the screenshot contradicts it, trust the screenshot.",
     "For behavioral interview questions, prefer a concrete first-person story from memory context. Do not invent facts, employers, project names, teammates, metrics, timelines, or outcomes not supported by memory or visible text.",
+    "Use <interview_session_context> to personalize behavioral interview answers across screen tasks. If the target company is Amazon and injected memory includes Leadership Principle guidance, internally classify the visible question to the closest principle, demonstrate Strength signals, and avoid Concern signals. Do not explicitly name the principle unless asked or useful.",
     "If memory supports only a qualitative outcome, state the outcome qualitatively instead of adding unsupported numbers, dates, durations, or speed claims.",
     "If it is a coding/algorithm question, output:",
     "Answer: directly state the optimal approach in the selected/requested language.",
@@ -378,6 +544,44 @@ function buildScreenTaskUserMessage({
   );
 
   return sections.join("\n");
+}
+
+function formatScreenPreflightForPrompt(
+  screenPreflight: ScreenPreflightResult | undefined
+) {
+  if (!screenPreflight) {
+    return "No screen preflight metadata was extracted.";
+  }
+
+  return JSON.stringify(screenPreflight);
+}
+
+function parseScreenPreflightOutput(output: string): ScreenPreflightResult {
+  if (!output) return {};
+
+  const jsonText = output.match(/\{[\s\S]*\}/)?.[0] ?? output;
+  try {
+    const parsed = JSON.parse(jsonText) as Record<string, unknown>;
+    return {
+      question: readOptionalString(parsed.question),
+      targetCompany: readOptionalString(parsed.targetCompany),
+      isBehavioralInterview:
+        typeof parsed.isBehavioralInterview === "boolean"
+          ? parsed.isBehavioralInterview
+          : undefined,
+      amazonLeadershipPrinciple: readOptionalString(
+        parsed.amazonLeadershipPrinciple
+      ),
+    };
+  } catch {
+    return {
+      question: output.slice(0, 500),
+    };
+  }
+}
+
+function readOptionalString(value: unknown) {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
 function formatScreenTaskResponsePreferences(

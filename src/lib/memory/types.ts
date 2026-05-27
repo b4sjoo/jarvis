@@ -1,6 +1,10 @@
 export type MemoryScope = "global" | "project";
 
-export type MemoryCollection = "profiles" | "project_docs" | "question_bank";
+export type MemoryCollection =
+  | "profiles"
+  | "project_docs"
+  | "question_bank"
+  | "interview_guide";
 
 export type MemoryConfidentiality = "normal" | "sensitive" | "confidential";
 
@@ -39,6 +43,8 @@ export type MemorySourceRole =
   | "promotion_doc"
   | "behavioral_bank"
   | "technical_question_bank"
+  | "company_profile"
+  | "leadership_principle_rubric"
   | "project_summary"
   | "design_doc"
   | "implementation_plan"

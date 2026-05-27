@@ -13,6 +13,7 @@ const MEMORY_SOURCE_COLLECTIONS = [
   "profiles",
   "project_docs",
   "question_bank",
+  "interview_guide",
 ] as const;
 
 const MEMORY_SCOPES = ["global", "project"] as const;
@@ -55,6 +56,8 @@ const MEMORY_SOURCE_ROLES = [
   "promotion_doc",
   "behavioral_bank",
   "technical_question_bank",
+  "company_profile",
+  "leadership_principle_rubric",
   "project_summary",
   "design_doc",
   "implementation_plan",
@@ -415,6 +418,8 @@ function inferSourceCanonicality(
   if (curationStatus === "stale") return "stale";
   if (
     sourceRole === "project_summary" ||
+    sourceRole === "company_profile" ||
+    sourceRole === "leadership_principle_rubric" ||
     sourceRole === "promotion_doc" ||
     sourceRole === "resume"
   ) {

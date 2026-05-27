@@ -38,7 +38,12 @@ export async function retrieveMemoryContext({
     .filter((entry) => entry.injectionMode === "always" || entry.priority === "pinned")
     .map((entry) => scoreMemoryEntry(entry, queryTokens, useCase, projectId, true));
   const retrievalEntries = eligibleEntries
-    .filter((entry) => entry.injectionMode === "retrieval" && entry.priority !== "pinned")
+    .filter(
+      (entry) =>
+        entry.injectionMode === "retrieval" &&
+        entry.priority !== "pinned" &&
+        hasRequiredTaggedHints(entry, query)
+    )
     .map((entry) => scoreMemoryEntry(entry, queryTokens, useCase, projectId, false))
     .filter(hasRetrievalMatch)
     .sort((left, right) => right.score - left.score)
@@ -226,6 +231,39 @@ function dedupeRetrievedEntries(entries: RetrievedMemoryEntry[]) {
 function hasRetrievalMatch(item: RetrievedMemoryEntry) {
   return item.matchReason.some((reason) =>
     /^(project|title|tags|keywords|content):/.test(reason)
+  );
+}
+
+function hasRequiredTaggedHints(
+  entry: MemoryEntry,
+  query: string
+) {
+  const normalizedQuery = query.toLowerCase();
+  const companyTags = entry.tags
+    .map((tag) => tag.toLowerCase())
+    .filter((tag) => tag.startsWith("company:"))
+    .map((tag) => tag.slice("company:".length).trim())
+    .filter(Boolean);
+
+  if (
+    companyTags.length &&
+    !companyTags.some((company) =>
+      normalizedQuery.includes(`company:${company}`)
+    )
+  ) {
+    return false;
+  }
+
+  const lpTags = entry.tags
+    .map((tag) => tag.toLowerCase())
+    .filter((tag) => tag.startsWith("lp:"))
+    .map((tag) => tag.slice("lp:".length).trim())
+    .filter(Boolean);
+
+  if (!lpTags.length) return true;
+
+  return lpTags.some((principle) =>
+    normalizedQuery.includes(`lp:${principle}`)
   );
 }
 

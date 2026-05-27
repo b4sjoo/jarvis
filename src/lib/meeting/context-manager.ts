@@ -2,10 +2,15 @@ import {
   ActiveScreenTask,
   AdvisorPromptContext,
   GlossaryEntry,
+  InterviewSessionContext,
   MeetingContextState,
   ScreenObservation,
   TranscriptTurn,
 } from "./types";
+import {
+  updateInterviewSessionContextFromScreenText,
+  updateInterviewSessionContextFromTurn,
+} from "./interview-session-context";
 
 const DEFAULT_TRANSCRIPT_WINDOW_MS = 2 * 60 * 1000;
 const DEFAULT_MAX_SCREEN_OBSERVATIONS = 5;
@@ -46,6 +51,9 @@ export class MeetingContextManager {
       ...this.state,
       transcriptTurns: [...this.state.transcriptTurns],
       screenObservations: [...this.state.screenObservations],
+      interviewSessionContext: cloneInterviewSessionContext(
+        this.state.interviewSessionContext
+      ),
       activeScreenTask: this.state.activeScreenTask
         ? { ...this.state.activeScreenTask }
         : undefined,
@@ -59,6 +67,7 @@ export class MeetingContextManager {
       startedAt: Date.now(),
       transcriptTurns: [],
       screenObservations: [],
+      interviewSessionContext: undefined,
       rollingSummary: "",
       userProfileContext: options.userProfileContext ?? "",
       glossary: options.glossary ?? [],
@@ -69,13 +78,22 @@ export class MeetingContextManager {
     const trimmedText = turn.text.trim();
     if (!trimmedText) return;
 
+    const nextTurns = this.trimTranscriptWindow([
+      ...this.state.transcriptTurns,
+      { ...turn, text: trimmedText },
+    ]);
+    const interviewContextUpdate = updateInterviewSessionContextFromTurn(
+      this.state.interviewSessionContext,
+      { ...turn, text: trimmedText }
+    );
+
     this.state = {
       ...this.state,
-      transcriptTurns: this.trimTranscriptWindow([
-        ...this.state.transcriptTurns,
-        { ...turn, text: trimmedText },
-      ]),
+      transcriptTurns: nextTurns,
+      interviewSessionContext: interviewContextUpdate.context,
     };
+
+    return interviewContextUpdate;
   }
 
   addScreenObservation(observation: ScreenObservation) {
@@ -86,6 +104,21 @@ export class MeetingContextManager {
         observation,
       ].slice(-this.maxScreenObservations),
     };
+  }
+
+  updateInterviewSessionContextFromScreenText(text: string, evidence?: string) {
+    const interviewContextUpdate = updateInterviewSessionContextFromScreenText(
+      this.state.interviewSessionContext,
+      text,
+      evidence
+    );
+
+    this.state = {
+      ...this.state,
+      interviewSessionContext: interviewContextUpdate.context,
+    };
+
+    return interviewContextUpdate;
   }
 
   updateScreenObservation(
@@ -113,6 +146,13 @@ export class MeetingContextManager {
     this.state = {
       ...this.state,
       activeScreenTask: undefined,
+    };
+  }
+
+  clearInterviewSessionContext() {
+    this.state = {
+      ...this.state,
+      interviewSessionContext: undefined,
     };
   }
 
@@ -164,6 +204,9 @@ export class MeetingContextManager {
     return {
       transcript: this.formatTranscript(),
       screenContext: this.formatScreenContext(),
+      interviewSessionContext: cloneInterviewSessionContext(
+        this.state.interviewSessionContext
+      ),
       activeScreenTask: this.state.activeScreenTask
         ? { ...this.state.activeScreenTask }
         : undefined,
@@ -226,4 +269,17 @@ export class MeetingContextManager {
 
 export function createMeetingId(prefix: string) {
   return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function cloneInterviewSessionContext(
+  context: InterviewSessionContext | undefined
+) {
+  if (!context) return undefined;
+
+  return {
+    ...context,
+    targetCompany: context.targetCompany
+      ? { ...context.targetCompany }
+      : undefined,
+  };
 }

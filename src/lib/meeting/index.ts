@@ -1,6 +1,7 @@
 export * from "./advisor-engine";
 export * from "./advisor-prompt";
 export * from "./context-manager";
+export * from "./interview-session-context";
 export * from "./screen-observation.service";
 export * from "./screen-task-answer";
 export * from "./trace";
