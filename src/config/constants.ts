@@ -13,6 +13,7 @@ export const STORAGE_KEYS = {
   SYSTEM_AUDIO_CONTEXT: "system_audio_context",
   SYSTEM_AUDIO_QUICK_ACTIONS: "system_audio_quick_actions",
   MEETING_ASSISTANT_SETTINGS: "meeting_assistant_settings",
+  MEETING_INTERVIEW_BRIEF: "meeting_interview_brief",
   CUSTOMIZABLE: "customizable",
   MANAGED_API_ENABLED: "managed_api_enabled",
   SHORTCUTS: "shortcuts",

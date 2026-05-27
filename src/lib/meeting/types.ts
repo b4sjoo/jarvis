@@ -119,6 +119,7 @@ export interface MeetingContextState {
   startedAt: number;
   transcriptTurns: TranscriptTurn[];
   screenObservations: ScreenObservation[];
+  interviewSessionBrief?: InterviewSessionBrief;
   interviewSessionContext?: InterviewSessionContext;
   activeScreenTask?: ActiveScreenTask;
   rollingSummary: string;
@@ -148,7 +149,11 @@ export interface ActiveScreenTask {
   basedOnObservationId: string;
 }
 
-export type InterviewSessionContextSource = "transcript" | "screen" | "manual";
+export type InterviewSessionContextSource =
+  | "transcript"
+  | "screen"
+  | "manual"
+  | "brief";
 
 export interface InterviewTargetCompany {
   value: string;
@@ -161,6 +166,23 @@ export interface InterviewTargetCompany {
 
 export interface InterviewSessionContext {
   targetCompany?: InterviewTargetCompany;
+}
+
+export type InterviewBriefType =
+  | "behavioral"
+  | "coding"
+  | "system-design"
+  | "project-deep-dive"
+  | "mixed";
+
+export interface InterviewSessionBrief {
+  targetCompany: string;
+  targetCompanyNormalized?: string;
+  companyLocked: boolean;
+  interviewTypes: InterviewBriefType[];
+  focusAreas: string;
+  notes: string;
+  updatedAt?: number;
 }
 
 export interface ScreenTaskAnswer {
@@ -234,6 +256,7 @@ export interface MeetingSetupWarning {
 export interface AdvisorPromptContext {
   transcript: string;
   screenContext: string;
+  interviewSessionBrief?: InterviewSessionBrief;
   interviewSessionContext?: InterviewSessionContext;
   activeScreenTask?: ActiveScreenTask;
   rollingSummary: string;
@@ -378,6 +401,7 @@ export interface MeetingAssistantState {
   status: MeetingAssistantStatus;
   transcriptTurns: TranscriptTurn[];
   screenObservations: ScreenObservation[];
+  interviewSessionBrief?: InterviewSessionBrief;
   interviewSessionContext?: InterviewSessionContext;
   activeScreenTask?: ActiveScreenTask;
   traces: MeetingTrace[];

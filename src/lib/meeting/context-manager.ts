@@ -2,12 +2,15 @@ import {
   ActiveScreenTask,
   AdvisorPromptContext,
   GlossaryEntry,
+  InterviewSessionBrief,
   InterviewSessionContext,
   MeetingContextState,
   ScreenObservation,
   TranscriptTurn,
 } from "./types";
 import {
+  createInterviewSessionContextFromBrief,
+  updateInterviewSessionContextFromBrief,
   updateInterviewSessionContextFromScreenText,
   updateInterviewSessionContextFromTurn,
 } from "./interview-session-context";
@@ -20,6 +23,7 @@ export interface MeetingContextManagerOptions {
   maxScreenObservations?: number;
   userProfileContext?: string;
   glossary?: GlossaryEntry[];
+  interviewSessionBrief?: InterviewSessionBrief;
 }
 
 export class MeetingContextManager {
@@ -38,6 +42,12 @@ export class MeetingContextManager {
       startedAt: Date.now(),
       transcriptTurns: [],
       screenObservations: [],
+      interviewSessionBrief: cloneInterviewSessionBrief(
+        options.interviewSessionBrief
+      ),
+      interviewSessionContext: createInterviewSessionContextFromBrief(
+        options.interviewSessionBrief
+      ),
       rollingSummary: "",
       userProfileContext: options.userProfileContext ?? "",
       glossary: options.glossary ?? [],
@@ -51,6 +61,9 @@ export class MeetingContextManager {
       ...this.state,
       transcriptTurns: [...this.state.transcriptTurns],
       screenObservations: [...this.state.screenObservations],
+      interviewSessionBrief: cloneInterviewSessionBrief(
+        this.state.interviewSessionBrief
+      ),
       interviewSessionContext: cloneInterviewSessionContext(
         this.state.interviewSessionContext
       ),
@@ -62,12 +75,16 @@ export class MeetingContextManager {
   }
 
   reset(options: MeetingContextManagerOptions = {}) {
+    const interviewSessionBrief =
+      options.interviewSessionBrief ?? this.state.interviewSessionBrief;
     this.state = {
       sessionId: createMeetingId("meeting"),
       startedAt: Date.now(),
       transcriptTurns: [],
       screenObservations: [],
-      interviewSessionContext: undefined,
+      interviewSessionBrief: cloneInterviewSessionBrief(interviewSessionBrief),
+      interviewSessionContext:
+        createInterviewSessionContextFromBrief(interviewSessionBrief),
       rollingSummary: "",
       userProfileContext: options.userProfileContext ?? "",
       glossary: options.glossary ?? [],
@@ -152,8 +169,25 @@ export class MeetingContextManager {
   clearInterviewSessionContext() {
     this.state = {
       ...this.state,
-      interviewSessionContext: undefined,
+      interviewSessionContext: createInterviewSessionContextFromBrief(
+        this.state.interviewSessionBrief
+      ),
     };
+  }
+
+  setInterviewSessionBrief(brief: InterviewSessionBrief | undefined) {
+    const interviewContextUpdate = updateInterviewSessionContextFromBrief(
+      this.state.interviewSessionContext,
+      brief
+    );
+
+    this.state = {
+      ...this.state,
+      interviewSessionBrief: cloneInterviewSessionBrief(brief),
+      interviewSessionContext: interviewContextUpdate.context,
+    };
+
+    return interviewContextUpdate;
   }
 
   clearExpiredActiveScreenTask(now = Date.now()) {
@@ -204,6 +238,9 @@ export class MeetingContextManager {
     return {
       transcript: this.formatTranscript(),
       screenContext: this.formatScreenContext(),
+      interviewSessionBrief: cloneInterviewSessionBrief(
+        this.state.interviewSessionBrief
+      ),
       interviewSessionContext: cloneInterviewSessionContext(
         this.state.interviewSessionContext
       ),
@@ -281,5 +318,16 @@ function cloneInterviewSessionContext(
     targetCompany: context.targetCompany
       ? { ...context.targetCompany }
       : undefined,
+  };
+}
+
+function cloneInterviewSessionBrief(
+  brief: InterviewSessionBrief | undefined
+) {
+  if (!brief) return undefined;
+
+  return {
+    ...brief,
+    interviewTypes: [...brief.interviewTypes],
   };
 }

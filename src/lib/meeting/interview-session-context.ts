@@ -1,4 +1,5 @@
 import type {
+  InterviewSessionBrief,
   InterviewSessionContext,
   InterviewSessionContextSource,
   InterviewTargetCompany,
@@ -88,6 +89,13 @@ const COMPANY_DEFINITIONS: CompanyDefinition[] = [
     aliases: ["xai", "x ai"],
   },
 ];
+
+export const INTERVIEW_COMPANY_OPTIONS = COMPANY_DEFINITIONS.map(
+  (company) => ({
+    value: company.displayName,
+    normalized: company.normalized,
+  })
+);
 
 const INTERVIEW_CONTEXT_MARKERS = [
   "interview",
@@ -523,6 +531,92 @@ export function updateInterviewSessionContextFromScreenText(
   );
 }
 
+export function createInterviewSessionContextFromBrief(
+  brief: InterviewSessionBrief | undefined,
+  now = Date.now()
+): InterviewSessionContext | undefined {
+  const detectedCompany = createInterviewTargetCompanyFromBrief(brief, now);
+  return detectedCompany ? { targetCompany: detectedCompany } : undefined;
+}
+
+export function updateInterviewSessionContextFromBrief(
+  currentContext: InterviewSessionContext | undefined,
+  brief: InterviewSessionBrief | undefined,
+  now = Date.now()
+): InterviewSessionUpdate {
+  const detectedCompany = createInterviewTargetCompanyFromBrief(brief, now);
+
+  if (!detectedCompany) {
+    const context = currentContext ? { ...currentContext } : {};
+    const changed = context.targetCompany?.source === "brief";
+    if (changed) {
+      delete context.targetCompany;
+    }
+    return { context, changed };
+  }
+
+  const context = currentContext ? { ...currentContext } : {};
+  const previous = context.targetCompany;
+  context.targetCompany = detectedCompany;
+
+  const changed = !previous ||
+    previous.normalized !== detectedCompany.normalized ||
+    previous.source !== detectedCompany.source ||
+    previous.confidence !== detectedCompany.confidence;
+
+  return {
+    context,
+    changed,
+    targetCompany: detectedCompany,
+  };
+}
+
+export function normalizeInterviewBriefCompany(
+  companyName: string | undefined
+) {
+  const trimmed = companyName?.trim();
+  if (!trimmed) return undefined;
+
+  const detectedCompany = detectInterviewCompany(
+    `${trimmed} interview`,
+    Date.now(),
+    "brief",
+    trimmed
+  );
+
+  if (detectedCompany) {
+    return {
+      value: detectedCompany.value,
+      normalized: detectedCompany.normalized,
+    };
+  }
+
+  const normalized = normalizeForMatching(trimmed).replace(/\s+/g, "-");
+  return normalized
+    ? {
+        value: trimmed,
+        normalized,
+      }
+    : undefined;
+}
+
+function createInterviewTargetCompanyFromBrief(
+  brief: InterviewSessionBrief | undefined,
+  now = Date.now()
+): InterviewTargetCompany | undefined {
+  const company = normalizeInterviewBriefCompany(brief?.targetCompany);
+  if (!company) return undefined;
+
+  return {
+    value: company.value,
+    normalized: company.normalized,
+    confidence: brief?.companyLocked === false ? 0.82 : 1,
+    source: "brief",
+    evidence: "Interview Session Brief",
+    updatedAt: brief?.updatedAt ?? now,
+  };
+}
+
 function updateInterviewSessionContextWithDetectedCompany(
   currentContext: InterviewSessionContext | undefined,
   detectedCompany: InterviewTargetCompany | undefined
@@ -665,6 +759,32 @@ export function formatInterviewSessionContextForPrompt(
   ].join("\n");
 }
 
+export function formatInterviewSessionBriefForPrompt(
+  brief: InterviewSessionBrief | undefined
+) {
+  if (!brief || isInterviewSessionBriefEmpty(brief)) {
+    return "No interview session brief has been provided.";
+  }
+
+  const company = normalizeInterviewBriefCompany(brief.targetCompany);
+  return [
+    company ? `Target company: ${company.value}` : undefined,
+    company
+      ? `Company lock: ${brief.companyLocked === false ? "off" : "on"}`
+      : undefined,
+    brief.interviewTypes.length
+      ? `Interview type: ${brief.interviewTypes.join(", ")}`
+      : undefined,
+    brief.focusAreas.trim()
+      ? `Expected focus: ${brief.focusAreas.trim()}`
+      : undefined,
+    brief.notes.trim() ? `Notes: ${brief.notes.trim()}` : undefined,
+    "Use this as user-provided pre-meeting background context. It can guide retrieval and answer style, but visible screen content and latest spoken constraints still win.",
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
 export function buildInterviewSessionMemoryHint(
   context: InterviewSessionContext | undefined
 ) {
@@ -677,6 +797,39 @@ export function buildInterviewSessionMemoryHint(
   ]
     .filter(Boolean)
     .join("\n");
+}
+
+export function buildInterviewSessionBriefMemoryHint(
+  brief: InterviewSessionBrief | undefined
+) {
+  if (!brief || isInterviewSessionBriefEmpty(brief)) return "";
+
+  const company = normalizeInterviewBriefCompany(brief.targetCompany);
+  return [
+    "interview session brief",
+    company ? `interview target company: ${company.value}` : undefined,
+    company ? `company:${company.normalized}` : undefined,
+    brief.companyLocked !== false ? "company locked by user brief" : undefined,
+    brief.interviewTypes.length
+      ? `interview type: ${brief.interviewTypes.join(", ")}`
+      : undefined,
+    brief.focusAreas.trim() ? `focus areas: ${brief.focusAreas.trim()}` : undefined,
+    brief.notes.trim() ? `brief notes: ${brief.notes.trim()}` : undefined,
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+export function isInterviewSessionBriefEmpty(
+  brief: InterviewSessionBrief | undefined
+) {
+  if (!brief) return true;
+  return (
+    !brief.targetCompany.trim() &&
+    brief.interviewTypes.length === 0 &&
+    !brief.focusAreas.trim() &&
+    !brief.notes.trim()
+  );
 }
 
 export function classifyAmazonLeadershipPrinciple(

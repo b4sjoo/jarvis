@@ -4,6 +4,7 @@ import { TYPE_PROVIDER } from "@/types";
 import {
   ScreenCaptureTarget,
   InterviewSessionContext,
+  InterviewSessionBrief,
   MeetingModelTraceCallbacks,
   MeetingResponseConfig,
   ScreenObservation,
@@ -11,7 +12,10 @@ import {
   SelectedProviderState,
 } from "./types";
 import { createMeetingId } from "./context-manager";
-import { formatInterviewSessionContextForPrompt } from "./interview-session-context";
+import {
+  formatInterviewSessionBriefForPrompt,
+  formatInterviewSessionContextForPrompt,
+} from "./interview-session-context";
 import { parseScreenTaskAnswer } from "./screen-task-answer";
 
 export type ScreenCaptureTargetType = "active-window" | "current-monitor";
@@ -48,6 +52,7 @@ export interface SolveScreenAnchoredTaskOptions {
   autoPrompt?: string;
   responseConfig?: MeetingResponseConfig;
   memoryContext?: string;
+  interviewSessionBrief?: InterviewSessionBrief;
   interviewSessionContext?: InterviewSessionContext;
   screenPreflight?: ScreenPreflightResult;
   signal?: AbortSignal;
@@ -273,6 +278,7 @@ export async function solveScreenAnchoredTask({
   autoPrompt,
   responseConfig,
   memoryContext,
+  interviewSessionBrief,
   interviewSessionContext,
   screenPreflight,
   signal,
@@ -299,6 +305,7 @@ export async function solveScreenAnchoredTask({
     autoPrompt,
     responseConfig,
     memoryContext,
+    interviewSessionBrief,
     interviewSessionContext,
     screenPreflight,
   });
@@ -448,6 +455,7 @@ function buildScreenTaskUserMessage({
   autoPrompt,
   responseConfig,
   memoryContext,
+  interviewSessionBrief,
   interviewSessionContext,
   screenPreflight,
 }: {
@@ -456,6 +464,7 @@ function buildScreenTaskUserMessage({
   autoPrompt?: string;
   responseConfig?: MeetingResponseConfig;
   memoryContext?: string;
+  interviewSessionBrief?: InterviewSessionBrief;
   interviewSessionContext?: InterviewSessionContext;
   screenPreflight?: ScreenPreflightResult;
 }) {
@@ -475,6 +484,9 @@ function buildScreenTaskUserMessage({
     "<recent_transcript>",
     recentTranscript?.trim() || "No transcript context yet.",
     "</recent_transcript>",
+    "<interview_session_brief>",
+    formatInterviewSessionBriefForPrompt(interviewSessionBrief),
+    "</interview_session_brief>",
     "<interview_session_context>",
     formatInterviewSessionContextForPrompt(interviewSessionContext),
     "</interview_session_context>",

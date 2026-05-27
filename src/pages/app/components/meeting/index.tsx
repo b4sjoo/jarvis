@@ -1,6 +1,7 @@
 import {
   Badge,
   Button,
+  Input,
   Label,
   Markdown,
   Popover,
@@ -9,10 +10,13 @@ import {
   ScrollArea,
   Slider,
   Switch,
+  Textarea,
 } from "@/components";
 import { useMeetingAssistant, useShortcuts, useWindowResize } from "@/hooks";
 import type {
   ClarifyingQuestionAnswer,
+  InterviewBriefType,
+  InterviewSessionBrief,
   InterviewTargetCompany,
   MeetingAudioConfig,
   MeetingAudioProfile,
@@ -43,6 +47,7 @@ import {
   ChevronDownIcon,
   ClockIcon,
   EyeOffIcon,
+  FileTextIcon,
   HelpCircleIcon,
   LanguagesIcon,
   Loader2Icon,
@@ -140,6 +145,26 @@ const WRAP_TEXT_CLASS =
   "min-w-0 whitespace-pre-wrap break-words [overflow-wrap:anywhere]";
 const TASK_TIMEOUT_OPTIONS = [15, 30, 60, 120] as const;
 
+const EMPTY_INTERVIEW_SESSION_BRIEF: InterviewSessionBrief = {
+  targetCompany: "",
+  targetCompanyNormalized: undefined,
+  companyLocked: true,
+  interviewTypes: [],
+  focusAreas: "",
+  notes: "",
+};
+
+const interviewBriefTypeOptions: Array<{
+  id: InterviewBriefType;
+  label: string;
+}> = [
+  { id: "behavioral", label: "Behavioral" },
+  { id: "coding", label: "Coding" },
+  { id: "system-design", label: "System design" },
+  { id: "project-deep-dive", label: "Project deep-dive" },
+  { id: "mixed", label: "Mixed" },
+];
+
 function waitForHotkeyCaptureSettle() {
   return new Promise<void>((resolve) => {
     window.setTimeout(resolve, HOTKEY_CAPTURE_SETTLE_MS);
@@ -151,6 +176,7 @@ export const MeetingAssistant = () => {
   const { resizeWindow } = useWindowResize();
   const [open, setOpen] = useState(false);
   const [configurationsOpen, setConfigurationsOpen] = useState(false);
+  const [interviewBriefOpen, setInterviewBriefOpen] = useState(false);
   const [dismissedQuestionKey, setDismissedQuestionKey] = useState<
     string | null
   >(null);
@@ -468,6 +494,14 @@ export const MeetingAssistant = () => {
                 onAudioConfigChange={meeting.setMeetingAudioConfig}
                 debugMode={meeting.settings.debugMode}
                 onDebugModeChange={meeting.setDebugMode}
+              />
+
+              <InterviewSessionBriefPanel
+                open={interviewBriefOpen}
+                onOpenChange={setInterviewBriefOpen}
+                brief={meeting.interviewSessionBrief}
+                onBriefChange={meeting.setInterviewSessionBrief}
+                onClear={meeting.clearInterviewSessionBrief}
               />
 
               {meeting.setupWarnings.length > 0 ? (
@@ -1061,6 +1095,177 @@ export const MeetingAssistant = () => {
   );
 };
 
+const InterviewSessionBriefPanel = ({
+  open,
+  onOpenChange,
+  brief,
+  onBriefChange,
+  onClear,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  brief?: InterviewSessionBrief;
+  onBriefChange: (brief: InterviewSessionBrief | undefined) => void;
+  onClear: () => void;
+}) => {
+  const editableBrief = getEditableInterviewSessionBrief(brief);
+  const hasBrief = !isEditableInterviewSessionBriefEmpty(editableBrief);
+
+  const updateBrief = (patch: Partial<InterviewSessionBrief>) => {
+    onBriefChange({
+      ...editableBrief,
+      ...patch,
+      updatedAt: Date.now(),
+    });
+  };
+
+  return (
+    <section className="min-w-0 overflow-hidden rounded-md border border-border/70">
+      <button
+        type="button"
+        className="flex w-full items-center justify-between gap-2 p-3 text-left transition-colors hover:bg-muted/40"
+        onClick={() => onOpenChange(!open)}
+      >
+        <div className="flex min-w-0 items-center gap-2">
+          <FileTextIcon className="h-3.5 w-3.5 shrink-0" />
+          <div className="min-w-0">
+            <div className="text-xs font-semibold">Interview Brief</div>
+            <div className="truncate text-[10px] text-muted-foreground">
+              {formatInterviewBriefSummary(editableBrief)}
+            </div>
+          </div>
+        </div>
+        <div className="flex shrink-0 items-center gap-2">
+          {hasBrief ? (
+            <Badge variant="outline" className="h-5 px-1.5 text-[10px]">
+              Active
+            </Badge>
+          ) : null}
+          <ChevronDownIcon
+            className={cn(
+              "h-4 w-4 text-muted-foreground transition-transform",
+              open && "rotate-180"
+            )}
+          />
+        </div>
+      </button>
+
+      {open ? (
+        <div className="space-y-3 border-t border-border/50 p-3">
+          <div className="grid gap-2 md:grid-cols-[minmax(0,1fr)_auto]">
+            <div className="min-w-0">
+              <Label className="mb-1.5 block text-[10px] font-medium uppercase text-muted-foreground">
+                Target company
+              </Label>
+              <Input
+                value={editableBrief.targetCompany}
+                placeholder="Amazon, OpenAI, Anthropic..."
+                className="h-8 text-xs"
+                onChange={(event) => {
+                  updateBrief({ targetCompany: event.currentTarget.value });
+                }}
+              />
+            </div>
+            <div className="flex min-w-[170px] items-center justify-between gap-2 rounded-sm border border-border/60 p-2">
+              <div>
+                <div className="text-[10px] font-medium uppercase text-muted-foreground">
+                  Lock company
+                </div>
+                <div className="mt-0.5 text-[10px] text-muted-foreground">
+                  Skip inference when set
+                </div>
+              </div>
+              <Switch
+                checked={editableBrief.companyLocked}
+                onCheckedChange={(companyLocked) => {
+                  updateBrief({ companyLocked });
+                }}
+              />
+            </div>
+          </div>
+
+          <div>
+            <Label className="mb-1.5 block text-[10px] font-medium uppercase text-muted-foreground">
+              Interview type
+            </Label>
+            <div className="grid grid-cols-2 gap-1 md:grid-cols-5">
+              {interviewBriefTypeOptions.map((option) => {
+                const selected = editableBrief.interviewTypes.includes(
+                  option.id
+                );
+
+                return (
+                  <Button
+                    key={option.id}
+                    size="sm"
+                    variant={selected ? "default" : "outline"}
+                    className="h-7 px-1 text-[10px]"
+                    onClick={() => {
+                      updateBrief({
+                        interviewTypes: selected
+                          ? editableBrief.interviewTypes.filter(
+                              (type) => type !== option.id
+                            )
+                          : [...editableBrief.interviewTypes, option.id],
+                      });
+                    }}
+                  >
+                    {option.label}
+                  </Button>
+                );
+              })}
+            </div>
+          </div>
+
+          <div>
+            <Label className="mb-1.5 block text-[10px] font-medium uppercase text-muted-foreground">
+              Focus areas
+            </Label>
+            <Textarea
+              value={editableBrief.focusAreas}
+              placeholder="Leadership principles, likely topics, system design themes..."
+              className="min-h-16 resize-none text-xs"
+              onChange={(event) => {
+                updateBrief({ focusAreas: event.currentTarget.value });
+              }}
+            />
+          </div>
+
+          <div>
+            <Label className="mb-1.5 block text-[10px] font-medium uppercase text-muted-foreground">
+              Notes
+            </Label>
+            <Textarea
+              value={editableBrief.notes}
+              placeholder="Anything known before the call: interviewer hints, role scope, expected round length..."
+              className="min-h-20 resize-none text-xs"
+              onChange={(event) => {
+                updateBrief({ notes: event.currentTarget.value });
+              }}
+            />
+          </div>
+
+          <div className="flex items-center justify-between gap-2">
+            <div className="min-w-0 text-[10px] text-muted-foreground">
+              Used as session background context, independent from software
+              configuration.
+            </div>
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-7 shrink-0 text-[10px]"
+              disabled={!hasBrief}
+              onClick={onClear}
+            >
+              Clear
+            </Button>
+          </div>
+        </div>
+      ) : null}
+    </section>
+  );
+};
+
 const ConfigurationsPanel = ({
   open,
   onOpenChange,
@@ -1648,6 +1853,52 @@ function formatCaptureCandidate(
 function formatTaskTimeout(minutes: number) {
   if (minutes >= 60) return `${minutes / 60}h`;
   return `${minutes}m`;
+}
+
+function getEditableInterviewSessionBrief(
+  brief: InterviewSessionBrief | undefined
+): InterviewSessionBrief {
+  return {
+    ...EMPTY_INTERVIEW_SESSION_BRIEF,
+    ...brief,
+    interviewTypes: brief?.interviewTypes ?? [],
+    companyLocked: brief?.companyLocked ?? true,
+    focusAreas: brief?.focusAreas ?? "",
+    notes: brief?.notes ?? "",
+  };
+}
+
+function isEditableInterviewSessionBriefEmpty(brief: InterviewSessionBrief) {
+  return (
+    !brief.targetCompany.trim() &&
+    brief.interviewTypes.length === 0 &&
+    !brief.focusAreas.trim() &&
+    !brief.notes.trim()
+  );
+}
+
+function formatInterviewBriefSummary(brief: InterviewSessionBrief) {
+  if (isEditableInterviewSessionBriefEmpty(brief)) {
+    return "No pre-meeting background context";
+  }
+
+  const parts = [
+    brief.targetCompany.trim() || undefined,
+    brief.companyLocked && brief.targetCompany.trim() ? "locked" : undefined,
+    brief.interviewTypes.length
+      ? brief.interviewTypes.map(formatInterviewBriefType).join(", ")
+      : undefined,
+    brief.focusAreas.trim() || brief.notes.trim() || undefined,
+  ].filter(Boolean);
+
+  return parts.join(" / ");
+}
+
+function formatInterviewBriefType(type: InterviewBriefType) {
+  return (
+    interviewBriefTypeOptions.find((option) => option.id === type)?.label ??
+    type
+  );
 }
 
 function formatSilenceDuration(config: MeetingAudioConfig) {

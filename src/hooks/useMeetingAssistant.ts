@@ -21,6 +21,8 @@ import {
   MeetingAudioStatus,
   MeetingAssistantSettings,
   MeetingAudioProfile,
+  InterviewBriefType,
+  InterviewSessionBrief,
   MeetingPrivacyMode,
   MeetingResponseActionMode,
   MeetingResponseConfig,
@@ -34,10 +36,14 @@ import {
   ScreenPreflightResult,
   base64WavToBlob,
   buildAmazonLeadershipPrincipleMemoryHint,
+  buildInterviewSessionBriefMemoryHint,
   buildInterviewSessionMemoryHint,
   captureScreenObservation,
+  createInterviewSessionContextFromBrief,
   createMeetingId,
   detectInterviewCompany,
+  isInterviewSessionBriefEmpty,
+  normalizeInterviewBriefCompany,
   extractScreenTaskQuestion,
   inferScreenTaskKind,
   inferScreenTaskLanguage,
@@ -119,10 +125,20 @@ const DEFAULT_MEETING_RESPONSE_CONFIG: MeetingResponseConfig = {
   language: "auto",
 };
 
+const DEFAULT_INTERVIEW_SESSION_BRIEF: InterviewSessionBrief = {
+  targetCompany: "",
+  targetCompanyNormalized: undefined,
+  companyLocked: true,
+  interviewTypes: [],
+  focusAreas: "",
+  notes: "",
+};
+
 const INITIAL_STATE: MeetingAssistantState = {
   status: "idle",
   transcriptTurns: [],
   screenObservations: [],
+  interviewSessionBrief: undefined,
   interviewSessionContext: undefined,
   latestSuggestion: null,
   partialSuggestion: "",
@@ -182,6 +198,70 @@ function readMeetingAssistantSettings(): MeetingAssistantSettings {
   } catch {
     return DEFAULT_MEETING_ASSISTANT_SETTINGS;
   }
+}
+
+function readInterviewSessionBrief(): InterviewSessionBrief | undefined {
+  const stored = safeLocalStorage.getItem(STORAGE_KEYS.MEETING_INTERVIEW_BRIEF);
+  if (!stored) return undefined;
+
+  try {
+    return normalizeInterviewSessionBrief(JSON.parse(stored));
+  } catch {
+    return undefined;
+  }
+}
+
+function persistInterviewSessionBrief(
+  brief: InterviewSessionBrief | undefined
+) {
+  if (!brief || isInterviewSessionBriefEmpty(brief)) {
+    safeLocalStorage.removeItem(STORAGE_KEYS.MEETING_INTERVIEW_BRIEF);
+    return;
+  }
+
+  safeLocalStorage.setItem(
+    STORAGE_KEYS.MEETING_INTERVIEW_BRIEF,
+    JSON.stringify(brief)
+  );
+}
+
+function normalizeInterviewSessionBrief(
+  value: unknown
+): InterviewSessionBrief | undefined {
+  const parsed = isRecord(value) ? value : {};
+  const targetCompany =
+    typeof parsed.targetCompany === "string" ? parsed.targetCompany : "";
+  const company = normalizeInterviewBriefCompany(targetCompany);
+  const interviewTypes = Array.isArray(parsed.interviewTypes)
+    ? parsed.interviewTypes.filter(isInterviewBriefType)
+    : [];
+
+  const brief: InterviewSessionBrief = {
+    ...DEFAULT_INTERVIEW_SESSION_BRIEF,
+    targetCompany,
+    targetCompanyNormalized: company?.normalized,
+    companyLocked:
+      typeof parsed.companyLocked === "boolean"
+        ? parsed.companyLocked
+        : DEFAULT_INTERVIEW_SESSION_BRIEF.companyLocked,
+    interviewTypes: Array.from(new Set(interviewTypes)),
+    focusAreas: typeof parsed.focusAreas === "string" ? parsed.focusAreas : "",
+    notes: typeof parsed.notes === "string" ? parsed.notes : "",
+    updatedAt:
+      typeof parsed.updatedAt === "number" ? parsed.updatedAt : Date.now(),
+  };
+
+  return isInterviewSessionBriefEmpty(brief) ? undefined : brief;
+}
+
+function isInterviewBriefType(value: unknown): value is InterviewBriefType {
+  return (
+    value === "behavioral" ||
+    value === "coding" ||
+    value === "system-design" ||
+    value === "project-deep-dive" ||
+    value === "mixed"
+  );
 }
 
 function normalizeMeetingResponseConfig(
@@ -453,11 +533,28 @@ export function useMeetingAssistant() {
     selectedAudioDevices,
   } = useApp();
 
+  const initialInterviewSessionBriefRef = useRef<
+    InterviewSessionBrief | null | undefined
+  >(undefined);
+  if (initialInterviewSessionBriefRef.current === undefined) {
+    initialInterviewSessionBriefRef.current =
+      readInterviewSessionBrief() ?? null;
+  }
+  const initialInterviewSessionBrief =
+    initialInterviewSessionBriefRef.current ?? undefined;
   const [state, setState] = useState<MeetingAssistantState>(() => ({
     ...INITIAL_STATE,
     settings: readMeetingAssistantSettings(),
+    interviewSessionBrief: initialInterviewSessionBrief,
+    interviewSessionContext: createInterviewSessionContextFromBrief(
+      initialInterviewSessionBrief
+    ),
   }));
-  const contextManagerRef = useRef(new MeetingContextManager());
+  const contextManagerRef = useRef(
+    new MeetingContextManager({
+      interviewSessionBrief: initialInterviewSessionBrief,
+    })
+  );
   const advisorEngineRef = useRef(new AdvisorEngine());
   const traceStoreRef = useRef(new MeetingTraceStore());
   const traceMetricsPersistTimerRef = useRef<number | null>(null);
@@ -664,6 +761,34 @@ export function useMeetingAssistant() {
     },
     []
   );
+
+  const setInterviewSessionBrief = useCallback(
+    (brief: InterviewSessionBrief | undefined) => {
+      const normalizedBrief = normalizeInterviewSessionBrief(brief);
+      persistInterviewSessionBrief(normalizedBrief);
+      contextManagerRef.current.setInterviewSessionBrief(normalizedBrief);
+      const contextState = contextManagerRef.current.getState();
+
+      setState((previous) => ({
+        ...previous,
+        interviewSessionBrief: contextState.interviewSessionBrief,
+        interviewSessionContext: contextState.interviewSessionContext,
+      }));
+    },
+    []
+  );
+
+  const clearInterviewSessionBrief = useCallback(() => {
+    persistInterviewSessionBrief(undefined);
+    contextManagerRef.current.setInterviewSessionBrief(undefined);
+    const contextState = contextManagerRef.current.getState();
+
+    setState((previous) => ({
+      ...previous,
+      interviewSessionBrief: undefined,
+      interviewSessionContext: contextState.interviewSessionContext,
+    }));
+  }, []);
 
   const setScreenContextEnabled = useCallback(
     (screenContextEnabled: boolean) => {
@@ -878,6 +1003,7 @@ export function useMeetingAssistant() {
     screenAnalysisAbortRef.current = null;
     contextManagerRef.current.clearActiveScreenTask();
     contextManagerRef.current.clearInterviewSessionContext();
+    const contextState = contextManagerRef.current.getState();
 
     let audioStatus: MeetingAudioStatus | null = null;
 
@@ -893,7 +1019,8 @@ export function useMeetingAssistant() {
       ...previous,
       status: "idle",
       activeScreenTask: undefined,
-      interviewSessionContext: undefined,
+      interviewSessionBrief: contextState.interviewSessionBrief,
+      interviewSessionContext: contextState.interviewSessionContext,
       latestSuggestion:
         previous.latestSuggestion?.kind === "screen-task"
           ? null
@@ -1531,11 +1658,16 @@ export function useMeetingAssistant() {
 
       setState((previous) => ({
         ...(resetContext
-          ? { ...INITIAL_STATE, settings: previous.settings }
+          ? {
+              ...INITIAL_STATE,
+              settings: previous.settings,
+              interviewSessionBrief: contextState.interviewSessionBrief,
+            }
           : previous),
         status: "listening",
         transcriptTurns: contextState.transcriptTurns,
         screenObservations: contextState.screenObservations,
+        interviewSessionBrief: contextState.interviewSessionBrief,
         interviewSessionContext: contextState.interviewSessionContext,
         activeScreenTask: contextState.activeScreenTask,
         partialSuggestion: "",
@@ -1871,6 +2003,7 @@ export function useMeetingAssistant() {
         const screenMemoryQuery = buildScreenMemoryQuery({
           observation,
           autoPrompt,
+          interviewSessionBrief: preflightContextState.interviewSessionBrief,
           interviewSessionContext: preflightContextState.interviewSessionContext,
           screenPreflight,
         });
@@ -1889,6 +2022,7 @@ export function useMeetingAssistant() {
             autoPrompt,
             responseConfig: state.settings.response,
             memoryContext: memoryContext?.contextText,
+            interviewSessionBrief: preflightContextState.interviewSessionBrief,
             interviewSessionContext:
               preflightContextState.interviewSessionContext,
             screenPreflight,
@@ -2257,6 +2391,8 @@ export function useMeetingAssistant() {
     setPrivacyMode,
     setScreenContextEnabled,
     setActiveScreenTaskTimeoutMinutes,
+    setInterviewSessionBrief,
+    clearInterviewSessionBrief,
     setUseMemory,
     setDebugMode,
     setResponseConfig,
@@ -2318,12 +2454,16 @@ function buildAdvisorMemoryQuery(
   mode: AdvisorRequestMode,
   currentSuggestion?: string
 ) {
+  const interviewBriefHint = buildInterviewSessionBriefMemoryHint(
+    context.interviewSessionBrief
+  );
   const interviewHint = buildInterviewSessionMemoryHint(
     context.interviewSessionContext
   );
   const amazonLpHint = buildAmazonLeadershipPrincipleMemoryHint(
     context.interviewSessionContext,
     [
+      interviewBriefHint,
       context.latestTurn?.text,
       context.activeScreenTask?.question,
       context.activeScreenTask?.content,
@@ -2336,6 +2476,7 @@ function buildAdvisorMemoryQuery(
 
   return [
     `mode: ${mode}`,
+    interviewBriefHint || undefined,
     interviewHint || undefined,
     amazonLpHint || undefined,
     context.latestTurn ? `latest: ${context.latestTurn.text}` : undefined,
@@ -2354,19 +2495,24 @@ function buildAdvisorMemoryQuery(
 function buildScreenMemoryQuery({
   observation,
   autoPrompt,
+  interviewSessionBrief,
   interviewSessionContext,
   screenPreflight,
 }: {
   observation: ScreenObservation;
   autoPrompt?: string;
+  interviewSessionBrief?: AdvisorPromptContext["interviewSessionBrief"];
   interviewSessionContext?: AdvisorPromptContext["interviewSessionContext"];
   screenPreflight?: ScreenPreflightResult;
 }) {
   const captureTarget = observation.captureTarget;
+  const interviewBriefHint =
+    buildInterviewSessionBriefMemoryHint(interviewSessionBrief);
   const interviewHint = buildInterviewSessionMemoryHint(interviewSessionContext);
   const amazonLpHint = buildAmazonLeadershipPrincipleMemoryHint(
     interviewSessionContext,
     [
+      interviewBriefHint,
       screenPreflight?.question,
       screenPreflight?.amazonLeadershipPrinciple,
     ]
@@ -2376,6 +2522,7 @@ function buildScreenMemoryQuery({
 
   return [
     "mode: screen-task",
+    interviewBriefHint || undefined,
     interviewHint || undefined,
     amazonLpHint || undefined,
     screenPreflight?.question
