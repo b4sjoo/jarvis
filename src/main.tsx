@@ -5,6 +5,7 @@ import { AppProvider, ThemeProvider } from "./contexts";
 import "./global.css";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import AppRoutes from "./routes";
+import { MeetingFocusWindow } from "./pages/app/components/meeting/focus-window";
 
 const isTauriRuntime =
   typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
@@ -17,6 +18,22 @@ if (windowLabel.startsWith("capture-overlay-")) {
   ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
     <React.StrictMode>
       <Overlay monitorIndex={monitorIndex} />
+    </React.StrictMode>
+  );
+} else if (windowLabel === "meeting-focus-answer") {
+  ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
+    <React.StrictMode>
+      <ThemeProvider>
+        <MeetingFocusWindow kind="answer" />
+      </ThemeProvider>
+    </React.StrictMode>
+  );
+} else if (windowLabel === "meeting-focus-controls") {
+  ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
+    <React.StrictMode>
+      <ThemeProvider>
+        <MeetingFocusWindow kind="controls" />
+      </ThemeProvider>
     </React.StrictMode>
   );
 } else {

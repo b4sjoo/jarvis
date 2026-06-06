@@ -2,7 +2,12 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "Capability for the main window on macOS",
-  "windows": ["main", "dashboard"],
+  "windows": [
+    "main",
+    "dashboard",
+    "meeting-focus-answer",
+    "meeting-focus-controls"
+  ],
   "platforms": ["macOS"],
   "permissions": [
     "core:default",

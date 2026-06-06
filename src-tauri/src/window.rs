@@ -7,6 +7,14 @@ const TOP_OFFSET: i32 = 54;
 const DEFAULT_WINDOW_WIDTH: f64 = 600.0;
 const MIN_WINDOW_WIDTH: f64 = 360.0;
 const WINDOW_SIDE_MARGIN: f64 = 32.0;
+const FOCUS_ANSWER_WINDOW_LABEL: &str = "meeting-focus-answer";
+const FOCUS_CONTROLS_WINDOW_LABEL: &str = "meeting-focus-controls";
+const FOCUS_ANSWER_WIDTH: f64 = 920.0;
+const FOCUS_ANSWER_HEIGHT: f64 = 620.0;
+const FOCUS_CONTROLS_WIDTH: f64 = 920.0;
+const FOCUS_CONTROLS_HEIGHT: f64 = 190.0;
+const FOCUS_TOP_MARGIN: i32 = 12;
+const FOCUS_BOTTOM_MARGIN: i32 = 56;
 
 /// Sets up the main window with custom positioning
 pub fn setup_main_window(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
@@ -223,6 +231,161 @@ pub fn create_dashboard_window<R: Runtime>(
     setup_dashboard_close_handler(&window);
 
     Ok(window)
+}
+
+#[tauri::command]
+pub fn show_meeting_focus_windows(app: tauri::AppHandle) -> Result<(), String> {
+    let answer = ensure_focus_window(
+        &app,
+        FOCUS_ANSWER_WINDOW_LABEL,
+        "/meeting-focus-answer",
+        "Jarvis Focus Answer",
+        FOCUS_ANSWER_WIDTH,
+        FOCUS_ANSWER_HEIGHT,
+    )?;
+    let controls = ensure_focus_window(
+        &app,
+        FOCUS_CONTROLS_WINDOW_LABEL,
+        "/meeting-focus-controls",
+        "Jarvis Focus Controls",
+        FOCUS_CONTROLS_WIDTH,
+        FOCUS_CONTROLS_HEIGHT,
+    )?;
+
+    position_focus_window(&app, &answer, FocusWindowPlacement::Top)?;
+    position_focus_window(&app, &controls, FocusWindowPlacement::Bottom)?;
+
+    answer
+        .show()
+        .map_err(|e| format!("Failed to show focus answer window: {}", e))?;
+    controls
+        .show()
+        .map_err(|e| format!("Failed to show focus controls window: {}", e))?;
+
+    Ok(())
+}
+
+#[tauri::command]
+pub fn hide_meeting_focus_windows(app: tauri::AppHandle) -> Result<(), String> {
+    for label in [FOCUS_ANSWER_WINDOW_LABEL, FOCUS_CONTROLS_WINDOW_LABEL] {
+        if let Some(window) = app.get_webview_window(label) {
+            window
+                .hide()
+                .map_err(|e| format!("Failed to hide {}: {}", label, e))?;
+        }
+    }
+
+    Ok(())
+}
+
+enum FocusWindowPlacement {
+    Top,
+    Bottom,
+}
+
+fn ensure_focus_window<R: Runtime>(
+    app: &AppHandle<R>,
+    label: &str,
+    route: &str,
+    title: &str,
+    width: f64,
+    height: f64,
+) -> Result<WebviewWindow<R>, String> {
+    if let Some(window) = app.get_webview_window(label) {
+        return Ok(window);
+    }
+
+    let base_builder = WebviewWindowBuilder::new(app, label, tauri::WebviewUrl::App(route.into()));
+
+    #[cfg(target_os = "macos")]
+    let base_builder = base_builder
+        .title(title)
+        .decorations(false)
+        .transparent(true)
+        .shadow(false)
+        .always_on_top(true)
+        .visible_on_all_workspaces(true)
+        .skip_taskbar(true)
+        .content_protected(true)
+        .resizable(false)
+        .focused(false)
+        .inner_size(width, height)
+        .visible(false);
+
+    #[cfg(not(target_os = "macos"))]
+    let base_builder = base_builder
+        .title(title)
+        .decorations(false)
+        .transparent(true)
+        .always_on_top(true)
+        .skip_taskbar(true)
+        .content_protected(true)
+        .resizable(false)
+        .focused(false)
+        .inner_size(width, height)
+        .visible(false);
+
+    let window = base_builder
+        .build()
+        .map_err(|e| format!("Failed to create {}: {}", label, e))?;
+    setup_focus_close_handler(&window);
+
+    Ok(window)
+}
+
+fn position_focus_window<R: Runtime>(
+    app: &AppHandle<R>,
+    window: &WebviewWindow<R>,
+    placement: FocusWindowPlacement,
+) -> Result<(), String> {
+    let reference_window = app
+        .get_webview_window("main")
+        .or_else(|| app.webview_windows().values().next().cloned())
+        .ok_or_else(|| "No reference window found for Focus Mode".to_string())?;
+    let monitor = match reference_window
+        .current_monitor()
+        .map_err(|e| format!("Failed to get current monitor: {}", e))?
+    {
+        Some(monitor) => Some(monitor),
+        None => reference_window
+            .primary_monitor()
+            .map_err(|e| format!("Failed to get primary monitor: {}", e))?,
+    }
+    .ok_or_else(|| "No monitor found for Focus Mode".to_string())?;
+    let monitor_size = monitor.size();
+    let monitor_position = monitor.position();
+    let window_size = window
+        .outer_size()
+        .map_err(|e| format!("Failed to get focus window size: {}", e))?;
+    let x = monitor_position.x + (monitor_size.width as i32 - window_size.width as i32) / 2;
+    let y = match placement {
+        FocusWindowPlacement::Top => monitor_position.y + FOCUS_TOP_MARGIN,
+        FocusWindowPlacement::Bottom => {
+            monitor_position.y + monitor_size.height as i32 - window_size.height as i32
+                - FOCUS_BOTTOM_MARGIN
+        }
+    };
+
+    window
+        .set_position(tauri::Position::Physical(tauri::PhysicalPosition {
+            x,
+            y: y.max(monitor_position.y),
+        }))
+        .map_err(|e| format!("Failed to position focus window: {}", e))?;
+
+    Ok(())
+}
+
+fn setup_focus_close_handler<R: Runtime>(window: &WebviewWindow<R>) {
+    let window_clone = window.clone();
+    window.on_window_event(move |event| {
+        if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+            api.prevent_close();
+            if let Err(e) = window_clone.hide() {
+                eprintln!("Failed to hide Focus Mode window on close: {}", e);
+            }
+        }
+    });
 }
 
 /// Sets up the close event handler for the dashboard window

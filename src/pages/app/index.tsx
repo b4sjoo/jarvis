@@ -13,11 +13,13 @@ import { invoke } from "@tauri-apps/api/core";
 import { ErrorBoundary } from "react-error-boundary";
 import { ErrorLayout } from "@/layouts";
 import { getPlatform } from "@/lib";
+import { useState } from "react";
 
 const App = () => {
   const { isHidden, systemAudio } = useApp();
   const { customizable } = useAppContext();
   const platform = getPlatform();
+  const [meetingFocusModeActive, setMeetingFocusModeActive] = useState(false);
 
   const openDashboard = async () => {
     try {
@@ -42,10 +44,18 @@ const App = () => {
           isHidden ? "hidden pointer-events-none" : ""
         }`}
       >
-        <Card className="w-full flex flex-row items-center gap-2 p-2">
-          <SystemAudio {...systemAudio} />
-          <MeetingAssistant />
-          {systemAudio?.capturing ? (
+        <Card
+          className={`w-full flex flex-row items-center gap-2 ${
+            meetingFocusModeActive
+              ? "pointer-events-none border-transparent bg-transparent p-0 shadow-none"
+              : "p-2"
+          }`}
+        >
+          {meetingFocusModeActive ? null : <SystemAudio {...systemAudio} />}
+          <MeetingAssistant
+            onFocusModeActiveChange={setMeetingFocusModeActive}
+          />
+          {!meetingFocusModeActive && systemAudio?.capturing ? (
             <div className="flex flex-row items-center gap-2 justify-between w-full">
               <div className="flex flex-1 items-center gap-2">
                 <AudioVisualizer isRecording={systemAudio?.capturing} />
@@ -62,25 +72,27 @@ const App = () => {
             </div>
           ) : null}
 
-          <div
-            className={`${
-              systemAudio?.capturing
-                ? "hidden w-full fade-out transition-all duration-300"
-                : "w-full flex flex-row gap-2 items-center"
-            }`}
-          >
-            <Completion isHidden={isHidden} />
-            <Button
-              size={"icon"}
-              className="cursor-pointer"
-              title="Open Dev Space"
-              onClick={openDashboard}
+          {!meetingFocusModeActive ? (
+            <div
+              className={`${
+                systemAudio?.capturing
+                  ? "hidden w-full fade-out transition-all duration-300"
+                  : "w-full flex flex-row gap-2 items-center"
+              }`}
             >
-              <SparklesIcon className="h-4 w-4" />
-            </Button>
-          </div>
+              <Completion isHidden={isHidden} />
+              <Button
+                size={"icon"}
+                className="cursor-pointer"
+                title="Open Dev Space"
+                onClick={openDashboard}
+              >
+                <SparklesIcon className="h-4 w-4" />
+              </Button>
+            </div>
+          ) : null}
 
-          <DragButton />
+          {meetingFocusModeActive ? null : <DragButton />}
         </Card>
         {customizable.cursor.type === "invisible" && platform !== "linux" ? (
           <CustomCursor />

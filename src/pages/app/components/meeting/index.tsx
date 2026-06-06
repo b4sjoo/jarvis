@@ -29,6 +29,8 @@ import type {
   MeetingResponseConfig,
   MeetingResponseLanguage,
   MeetingResponseLength,
+  MeetingFocusAction,
+  MeetingFocusSnapshot,
   MeetingTrace,
   MeetingTraceKindSummary,
   MeetingTraceSummary,
@@ -38,6 +40,8 @@ import type {
   SpeechCorrection,
 } from "@/lib/meeting";
 import {
+  MEETING_FOCUS_ACTION_EVENT,
+  MEETING_FOCUS_SNAPSHOT_EVENT,
   hasScreenTaskAnswerContent,
   parseScreenTaskAnswer,
   stripOuterCodeFence,
@@ -45,7 +49,8 @@ import {
 } from "@/lib/meeting";
 import { safeLocalStorage } from "@/lib";
 import { cn } from "@/lib/utils";
-import { listen } from "@tauri-apps/api/event";
+import { invoke } from "@tauri-apps/api/core";
+import { emit, listen } from "@tauri-apps/api/event";
 import {
   ActivityIcon,
   BrainIcon,
@@ -248,7 +253,13 @@ function waitForHotkeyCaptureSettle() {
   });
 }
 
-export const MeetingAssistant = () => {
+type MeetingAssistantProps = {
+  onFocusModeActiveChange?: (active: boolean) => void;
+};
+
+export const MeetingAssistant = ({
+  onFocusModeActiveChange,
+}: MeetingAssistantProps = {}) => {
   const meeting = useMeetingAssistant();
   const { resizeWindow } = useWindowResize();
   const [open, setOpen] = useState(false);
@@ -260,6 +271,7 @@ export const MeetingAssistant = () => {
   const [isFocusMode, setIsFocusMode] = useState(
     () => safeLocalStorage.getItem(STORAGE_KEYS.MEETING_FOCUS_MODE) === "true"
   );
+  const [focusWindowsVisible, setFocusWindowsVisible] = useState(false);
   const [speechCorrectionInput, setSpeechCorrectionInput] = useState("");
   const screenHotkeyInFlightRef = useRef(false);
   const lastScreenHotkeyAtRef = useRef(0);
@@ -319,6 +331,63 @@ export const MeetingAssistant = () => {
   const hasMeetingContext =
     meeting.transcriptTurns.length > 0 || meeting.screenObservations.length > 0;
   const hasSuggestion = Boolean(displaySuggestion.trim());
+  const focusModeActive = open && isFocusMode;
+  const editableBriefForFocus = useMemo(
+    () => getEditableInterviewSessionBrief(meeting.interviewSessionBrief),
+    [meeting.interviewSessionBrief]
+  );
+  const focusSnapshot = useMemo<MeetingFocusSnapshot>(
+    () => ({
+      active: focusModeActive,
+      sections: {
+        chineseThinking: suggestionSections.chineseThinking,
+        answer: suggestionSections.answer,
+        reply: suggestionSections.reply,
+        code: suggestionSections.code,
+        complexity: suggestionSections.complexity,
+        question: suggestionSections.question,
+        clarifyingOptions: suggestionSections.clarifyingOptions,
+        isScreenTask: suggestionSections.isScreenTask,
+      },
+      latestTurnText: latestTurn?.text || "Waiting for meeting audio.",
+      statusLabel: statusLabel[meeting.status],
+      error: meeting.error,
+      isBusy,
+      showClarifyingQuestion,
+      clarifyingQuestion,
+      isTaskSwitchClarifyingQuestion,
+      interviewTypes: editableBriefForFocus.interviewTypes,
+      speechCorrections: meeting.speechCorrections.slice(-4).map((item) => ({
+        id: item.id,
+        input: item.input,
+        from: item.from,
+        to: item.to,
+        term: item.term,
+        appliedCount: item.appliedCount,
+      })),
+    }),
+    [
+      clarifyingQuestion,
+      editableBriefForFocus.interviewTypes,
+      focusModeActive,
+      isBusy,
+      isTaskSwitchClarifyingQuestion,
+      latestTurn?.text,
+      meeting.error,
+      meeting.speechCorrections,
+      meeting.status,
+      showClarifyingQuestion,
+      suggestionSections.answer,
+      suggestionSections.chineseThinking,
+      suggestionSections.clarifyingOptions,
+      suggestionSections.code,
+      suggestionSections.complexity,
+      suggestionSections.isScreenTask,
+      suggestionSections.question,
+      suggestionSections.reply,
+    ]
+  );
+  const focusSnapshotRef = useRef(focusSnapshot);
 
   const title = useMemo(() => {
     if (meeting.error) {
@@ -380,8 +449,74 @@ export const MeetingAssistant = () => {
   }, [isFocusMode, open, setFocusModePreference]);
 
   useEffect(() => {
+    if (focusModeActive && focusWindowsVisible) {
+      void resizeWindow(false, { force: true });
+      return;
+    }
+
     void resizeWindow(open, open ? { width: MEETING_PANEL_WIDTH } : undefined);
-  }, [open, resizeWindow]);
+  }, [focusModeActive, focusWindowsVisible, open, resizeWindow]);
+
+  useEffect(() => {
+    onFocusModeActiveChange?.(focusModeActive);
+
+    return () => {
+      if (focusModeActive) {
+        onFocusModeActiveChange?.(false);
+      }
+    };
+  }, [focusModeActive, onFocusModeActiveChange]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const syncFocusWindows = async () => {
+      if (!focusModeActive) {
+        setFocusWindowsVisible(false);
+        try {
+          await invoke("hide_meeting_focus_windows");
+        } catch (error) {
+          console.error("Failed to hide Focus Mode windows:", error);
+        }
+        return;
+      }
+
+      try {
+        await invoke("show_meeting_focus_windows");
+        if (!cancelled) {
+          setFocusWindowsVisible(true);
+        }
+      } catch (error) {
+        console.error("Failed to show Focus Mode windows:", error);
+        if (!cancelled) {
+          setFocusWindowsVisible(false);
+        }
+      }
+    };
+
+    void syncFocusWindows();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [focusModeActive]);
+
+  useEffect(() => {
+    focusSnapshotRef.current = focusSnapshot;
+  }, [focusSnapshot]);
+
+  useEffect(() => {
+    if (!focusModeActive || !focusWindowsVisible) return;
+
+    void emit(MEETING_FOCUS_SNAPSHOT_EVENT, focusSnapshot);
+    const retry = window.setTimeout(() => {
+      void emit(MEETING_FOCUS_SNAPSHOT_EVENT, focusSnapshot);
+    }, 250);
+
+    return () => {
+      window.clearTimeout(retry);
+    };
+  }, [focusModeActive, focusSnapshot, focusWindowsVisible]);
 
   useEffect(() => {
     let unlisten: (() => void) | undefined;
@@ -527,6 +662,82 @@ export const MeetingAssistant = () => {
     setDismissedQuestionKey(clarifyingQuestionKey);
   }, [clarifyingQuestionKey]);
 
+  const updateFocusInterviewTypes = useCallback(
+    (interviewTypes: InterviewBriefType[]) => {
+      const nextBrief: InterviewSessionBrief = {
+        ...editableBriefForFocus,
+        interviewTypes,
+        updatedAt: Date.now(),
+      };
+      meeting.setInterviewSessionBrief(
+        isEditableInterviewSessionBriefEmpty(nextBrief) ? undefined : nextBrief
+      );
+    },
+    [editableBriefForFocus, meeting.setInterviewSessionBrief]
+  );
+
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+
+    const setupFocusActionListener = async () => {
+      unlisten = await listen<MeetingFocusAction>(
+        MEETING_FOCUS_ACTION_EVENT,
+        (event) => {
+          const action = event.payload;
+
+          switch (action.type) {
+            case "request-snapshot":
+              void emit(MEETING_FOCUS_SNAPSHOT_EVENT, focusSnapshotRef.current);
+              break;
+            case "toggle-listening":
+              void handleFocusListeningShortcut();
+              break;
+            case "regenerate":
+              handleRegenerateShortcut();
+              break;
+            case "capture-screen":
+              void meeting.captureScreenContext();
+              break;
+            case "submit-correction":
+              void meeting.submitSpeechCorrection(action.correction);
+              break;
+            case "update-interview-types":
+              updateFocusInterviewTypes(action.interviewTypes);
+              break;
+            case "clarifying-answer":
+              handleClarifyingAnswer(action.answer, action.option);
+              break;
+            case "new-task":
+              handleNewTaskConfirmation();
+              break;
+            case "same-task":
+              handleSameTaskConfirmation();
+              break;
+            case "dismiss-clarifying-question":
+              setDismissedQuestionKey(clarifyingQuestionKey);
+              break;
+          }
+        }
+      );
+    };
+
+    void setupFocusActionListener();
+
+    return () => {
+      unlisten?.();
+    };
+  }, [
+    clarifyingQuestionKey,
+    handleClarifyingAnswer,
+    handleFocusListeningShortcut,
+    handleNewTaskConfirmation,
+    handleRegenerateShortcut,
+    handleSameTaskConfirmation,
+    meeting.captureScreenContext,
+    meeting.submitSpeechCorrection,
+    updateFocusInterviewTypes,
+  ]);
+
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
@@ -536,7 +747,8 @@ export const MeetingAssistant = () => {
           title={title}
           className={cn(
             "cursor-pointer",
-            meeting.error && "border-red-300 bg-red-50 hover:bg-red-100"
+            meeting.error && "border-red-300 bg-red-50 hover:bg-red-100",
+            focusModeActive && "pointer-events-none opacity-0"
           )}
         >
           {isBusy ? (
@@ -551,15 +763,16 @@ export const MeetingAssistant = () => {
         </Button>
       </PopoverTrigger>
 
-      <PopoverContent
-        align="start"
-        side="bottom"
-        sideOffset={8}
-        className={cn(
-          PANEL_WIDTH_CLASS,
-          "overflow-hidden border-input/50 p-0"
-        )}
-      >
+      {!focusModeActive || !focusWindowsVisible ? (
+        <PopoverContent
+          align="start"
+          side="bottom"
+          sideOffset={8}
+          className={cn(
+            PANEL_WIDTH_CLASS,
+            "overflow-hidden border-input/50 p-0"
+          )}
+        >
         <div className="flex h-[calc(100vh-4rem)] w-full max-w-full flex-col overflow-hidden">
           {!isFocusMode ? (
             <div className="flex items-center justify-between gap-2 border-b border-border/50 p-3">
@@ -1402,7 +1615,8 @@ export const MeetingAssistant = () => {
             </>
           )}
         </div>
-      </PopoverContent>
+        </PopoverContent>
+      ) : null}
     </Popover>
   );
 };
