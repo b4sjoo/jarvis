@@ -619,8 +619,12 @@ function sanitizeCaptureTargetMetadata(target: Record<string, unknown>) {
   const directKeys = [
     "targetType",
     "captureMethod",
+    "windowId",
     "appName",
+    "title",
     "monitorName",
+    "zOrderIndex",
+    "selectionReason",
     "x",
     "y",
     "width",

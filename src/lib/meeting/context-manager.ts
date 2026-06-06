@@ -113,6 +113,26 @@ export class MeetingContextManager {
     return interviewContextUpdate;
   }
 
+  updateTranscriptTurnText(turnId: string, text: string) {
+    const trimmedText = text.trim();
+    if (!trimmedText) return false;
+
+    let changed = false;
+    const transcriptTurns = this.state.transcriptTurns.map((turn) => {
+      if (turn.id !== turnId || turn.text === trimmedText) return turn;
+      changed = true;
+      return { ...turn, text: trimmedText };
+    });
+
+    if (!changed) return false;
+
+    this.state = {
+      ...this.state,
+      transcriptTurns,
+    };
+    return true;
+  }
+
   addScreenObservation(observation: ScreenObservation) {
     this.state = {
       ...this.state,

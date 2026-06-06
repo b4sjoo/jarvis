@@ -7,7 +7,10 @@ import { safeLocalStorage } from "@/lib";
 import {
   formatMemorySelectionForTrace,
   retrieveMemoryContext,
+  type MemoryAskFrame,
+  type MemoryQuestionType,
   type MemoryRetrievalResult,
+  type MemoryTopicDomain,
   type MemoryUseCase,
 } from "@/lib/memory";
 import {
@@ -34,6 +37,9 @@ import {
   MeetingTraceExportTrigger,
   ScreenObservation,
   ScreenPreflightResult,
+  SpeechCorrection,
+  SpeechCorrectionRule,
+  TraceHumanEvaluation,
   base64WavToBlob,
   buildAmazonLeadershipPrincipleMemoryHint,
   buildInterviewSessionBriefMemoryHint,
@@ -50,10 +56,17 @@ import {
   parseMeetingTraceMetrics,
   parseScreenTaskAnswer,
   preflightScreenObservation,
+  readTraceHumanEvaluations,
+  buildSpeechBiasContext,
+  formatSpeechBiasPromptForTrace,
+  normalizeTranscriptWithSpeechBias,
+  parseEmergencySpeechCorrection,
   serializeMeetingTraceExport,
   serializeMeetingTraceMetrics,
   solveScreenAnchoredTask,
   transcribeMeetingAudio,
+  upsertTraceHumanEvaluation,
+  persistTraceHumanEvaluations,
 } from "@/lib/meeting";
 
 const ADVISOR_DEBOUNCE_MS = 750;
@@ -82,7 +95,7 @@ const MISSING_VISION_MESSAGE =
 const LOCAL_ONLY_UNAVAILABLE_MESSAGE =
   "Local-only meeting mode needs local STT before it can start.";
 const SCREEN_CONTEXT_DISABLED_MESSAGE =
-  "Enable Text+Screen privacy mode before capturing screen context.";
+  "Enable Cloud API mode before capturing screen context.";
 const NO_MEETING_CONTEXT_MESSAGE =
   "Jarvis needs transcript or screen context before it can suggest.";
 const NO_SUGGESTION_MESSAGE = "There is no suggestion to update yet.";
@@ -134,6 +147,14 @@ const DEFAULT_INTERVIEW_SESSION_BRIEF: InterviewSessionBrief = {
   notes: "",
 };
 
+const CONCRETE_INTERVIEW_TYPES: Exclude<InterviewBriefType, "mixed">[] = [
+  "behavioral",
+  "coding",
+  "system-design",
+  "ai-ml-system-design",
+  "project-deep-dive",
+];
+
 const INITIAL_STATE: MeetingAssistantState = {
   status: "idle",
   transcriptTurns: [],
@@ -146,8 +167,8 @@ const INITIAL_STATE: MeetingAssistantState = {
   error: null,
   audioStatus: null,
   settings: {
-    screenContextEnabled: false,
-    privacyMode: "text-to-cloud",
+    screenContextEnabled: true,
+    privacyMode: "text-and-screen-to-cloud",
     activeScreenTaskTimeoutMinutes: DEFAULT_ACTIVE_SCREEN_TASK_TIMEOUT_MINUTES,
     useMemory: true,
     debugMode: false,
@@ -157,6 +178,8 @@ const INITIAL_STATE: MeetingAssistantState = {
       config: DEFAULT_MEETING_AUDIO_CONFIG,
     },
   },
+  humanEvaluations: [],
+  speechCorrections: [],
 };
 
 const DEFAULT_MEETING_ASSISTANT_SETTINGS = INITIAL_STATE.settings;
@@ -175,10 +198,7 @@ function readMeetingAssistantSettings(): MeetingAssistantSettings {
       : DEFAULT_MEETING_ASSISTANT_SETTINGS.privacyMode;
 
     return {
-      screenContextEnabled:
-        typeof parsed.screenContextEnabled === "boolean"
-          ? parsed.screenContextEnabled
-          : DEFAULT_MEETING_ASSISTANT_SETTINGS.screenContextEnabled,
+      screenContextEnabled: privacyMode === "text-and-screen-to-cloud",
       privacyMode,
       activeScreenTaskTimeoutMinutes:
         normalizeActiveScreenTaskTimeoutMinutes(
@@ -235,6 +255,8 @@ function normalizeInterviewSessionBrief(
   const interviewTypes = Array.isArray(parsed.interviewTypes)
     ? parsed.interviewTypes.filter(isInterviewBriefType)
     : [];
+  const normalizedInterviewTypes =
+    normalizeInterviewBriefTypes(interviewTypes);
 
   const brief: InterviewSessionBrief = {
     ...DEFAULT_INTERVIEW_SESSION_BRIEF,
@@ -244,7 +266,7 @@ function normalizeInterviewSessionBrief(
       typeof parsed.companyLocked === "boolean"
         ? parsed.companyLocked
         : DEFAULT_INTERVIEW_SESSION_BRIEF.companyLocked,
-    interviewTypes: Array.from(new Set(interviewTypes)),
+    interviewTypes: normalizedInterviewTypes,
     focusAreas: typeof parsed.focusAreas === "string" ? parsed.focusAreas : "",
     notes: typeof parsed.notes === "string" ? parsed.notes : "",
     updatedAt:
@@ -254,11 +276,28 @@ function normalizeInterviewSessionBrief(
   return isInterviewSessionBriefEmpty(brief) ? undefined : brief;
 }
 
+function normalizeInterviewBriefTypes(
+  interviewTypes: InterviewBriefType[]
+): InterviewBriefType[] {
+  const uniqueTypes = Array.from(new Set(interviewTypes));
+  const hasMixed = uniqueTypes.includes("mixed");
+  const concreteTypes = CONCRETE_INTERVIEW_TYPES.filter((type) =>
+    uniqueTypes.includes(type)
+  );
+
+  if (hasMixed || concreteTypes.length === CONCRETE_INTERVIEW_TYPES.length) {
+    return [...CONCRETE_INTERVIEW_TYPES, "mixed"];
+  }
+
+  return concreteTypes;
+}
+
 function isInterviewBriefType(value: unknown): value is InterviewBriefType {
   return (
     value === "behavioral" ||
     value === "coding" ||
     value === "system-design" ||
+    value === "ai-ml-system-design" ||
     value === "project-deep-dive" ||
     value === "mixed"
   );
@@ -430,10 +469,12 @@ function preserveCodingResponseActionSections(
 }
 
 function readCompactActionAnswer(content: string) {
-  const meaning = readCompactSection(content, "Meaning");
+  const chineseThinking =
+    readCompactSection(content, "中文思路") ||
+    readCompactSection(content, "Meaning");
   const reply = readCompactSection(content, "Reply");
   const question = readCompactSection(content, "Question");
-  const parts = [reply, meaning].filter(Boolean);
+  const parts = [reply, chineseThinking].filter(Boolean);
 
   if (parts.length > 0) return parts.join("\n\n");
   if (question) return question;
@@ -443,7 +484,7 @@ function readCompactActionAnswer(content: string) {
 }
 
 function readCompactSection(content: string, label: string) {
-  const labels = ["Meaning", "Reply", "Question"];
+  const labels = ["中文思路", "Meaning", "Reply", "Question"];
   const boundary = labels.join("|");
   const pattern = new RegExp(
     `(?:^|\\n)\\s*${label}\\s*:\\s*([\\s\\S]*?)(?=\\n\\s*(?:${boundary})\\s*:|$)`,
@@ -484,7 +525,6 @@ function isMeetingPrivacyMode(
 ): value is MeetingPrivacyMode {
   return (
     value === "memory-only" ||
-    value === "text-to-cloud" ||
     value === "text-and-screen-to-cloud"
   );
 }
@@ -523,6 +563,15 @@ interface CaptureScreenContextOptions {
   requestedAt?: number;
 }
 
+interface QueuedSpeechSegment {
+  base64Audio: string;
+  sessionId: string;
+  sequence: number;
+  queuedAt: number;
+  traceId: string;
+  queueStepId: string;
+}
+
 export function useMeetingAssistant() {
   const {
     screenshotConfiguration,
@@ -549,6 +598,7 @@ export function useMeetingAssistant() {
     interviewSessionContext: createInterviewSessionContextFromBrief(
       initialInterviewSessionBrief
     ),
+    humanEvaluations: readTraceHumanEvaluations(),
   }));
   const contextManagerRef = useRef(
     new MeetingContextManager({
@@ -567,6 +617,10 @@ export function useMeetingAssistant() {
   const advisorDebounceTimerRef = useRef<number | null>(null);
   const screenAnalysisAbortRef = useRef<AbortController | null>(null);
   const screenCaptureInFlightRef = useRef(false);
+  const audioSessionIdRef = useRef(createMeetingId("audio_session"));
+  const audioSegmentSeqRef = useRef(0);
+  const audioQueueTailRef = useRef<Promise<void>>(Promise.resolve());
+  const speechCorrectionsRef = useRef<SpeechCorrection[]>([]);
   const speechDetectedHandlerRef = useRef<
     ((base64Audio: string) => void) | undefined
   >(undefined);
@@ -630,9 +684,70 @@ export function useMeetingAssistant() {
     }
   }, []);
 
+  const startAudioProcessingSession = useCallback(() => {
+    const sessionId = createMeetingId("audio_session");
+    audioSessionIdRef.current = sessionId;
+    audioSegmentSeqRef.current = 0;
+    audioQueueTailRef.current = Promise.resolve();
+    return sessionId;
+  }, []);
+
+  const invalidateAudioProcessingSession = useCallback(() => {
+    audioSessionIdRef.current = createMeetingId("audio_session_inactive");
+    audioSegmentSeqRef.current = 0;
+    audioQueueTailRef.current = Promise.resolve();
+  }, []);
+
+  const isCurrentAudioSegment = useCallback((segment: QueuedSpeechSegment) => {
+    return activeRef.current && audioSessionIdRef.current === segment.sessionId;
+  }, []);
+
   const clearTraces = useCallback(() => {
     traceStoreRef.current.clear();
   }, []);
+
+  const updateTraceHumanEvaluation = useCallback(
+    (traceId: string, patch: Partial<TraceHumanEvaluation>) => {
+      const trace = traceStoreRef.current
+        .getTraces()
+        .find((candidate) => candidate.id === traceId);
+      if (!trace) return;
+
+      setState((previous) => {
+        const humanEvaluations = upsertTraceHumanEvaluation(
+          previous.humanEvaluations,
+          trace.id,
+          trace.kind,
+          patch
+        );
+        persistTraceHumanEvaluations(humanEvaluations);
+        return {
+          ...previous,
+          humanEvaluations,
+        };
+      });
+    },
+    []
+  );
+
+  const incrementAppliedSpeechCorrections = useCallback(
+    (rules: SpeechCorrectionRule[]) => {
+      if (!rules.length) return;
+
+      setState((previous) => {
+        const speechCorrections = applySpeechCorrectionRuleCounts(
+          previous.speechCorrections,
+          rules
+        );
+        speechCorrectionsRef.current = speechCorrections;
+        return {
+          ...previous,
+          speechCorrections,
+        };
+      });
+    },
+    []
+  );
 
   const scheduleTraceMetricsPersistence = useCallback(() => {
     if (!traceMetricsPersistenceReadyRef.current) return;
@@ -797,7 +912,7 @@ export function useMeetingAssistant() {
         screenContextEnabled,
         privacyMode: screenContextEnabled
           ? "text-and-screen-to-cloud"
-          : "text-to-cloud",
+          : "memory-only",
       }));
     },
     [updateSettings]
@@ -917,14 +1032,27 @@ export function useMeetingAssistant() {
       query,
       source,
       useCase,
+      questionType,
+      askFrame,
+      topicDomain,
+      projectAnchor,
     }: {
       traceId?: string;
       query: string;
       source: "advisor" | "screen";
       useCase?: MemoryUseCase;
+      questionType?: MemoryQuestionType;
+      askFrame?: MemoryAskFrame;
+      topicDomain?: MemoryTopicDomain;
+      projectAnchor?: string;
     }): Promise<MemoryRetrievalResult | undefined> => {
       if (!state.settings.useMemory) return undefined;
       const resolvedUseCase = useCase ?? inferMemoryUseCaseFromQuery(query);
+      const resolvedQuestionType =
+        questionType ?? inferMemoryQuestionTypeFromQuery(query);
+      const interviewTypes =
+        contextManagerRef.current.getState().interviewSessionBrief
+          ?.interviewTypes;
 
       let memoryStepId: string | undefined;
       try {
@@ -932,13 +1060,27 @@ export function useMeetingAssistant() {
           memoryStepId = traceStoreRef.current.startStep(
             traceId,
             "Memory retrieval",
-            { source, useCase: resolvedUseCase, queryChars: query.length }
+            {
+              source,
+              useCase: resolvedUseCase,
+              questionType: resolvedQuestionType,
+              askFrame,
+              topicDomain,
+              projectAnchor,
+              interviewTypes,
+              queryChars: query.length,
+            }
           );
         }
 
         const memoryContext = await retrieveMemoryContext({
           query,
           useCase: resolvedUseCase,
+          questionType: resolvedQuestionType,
+          askFrame,
+          topicDomain,
+          projectAnchor,
+          interviewTypes,
         });
 
         if (traceId) {
@@ -949,6 +1091,11 @@ export function useMeetingAssistant() {
             {
               selectedEntries: memoryContext.entries.length,
               useCase: resolvedUseCase,
+              questionType: resolvedQuestionType,
+              askFrame,
+              topicDomain,
+              projectAnchor,
+              interviewTypes,
               candidateCount: memoryContext.candidateCount,
               rejectedCount: memoryContext.rejectedCount,
               totalChars: memoryContext.totalChars,
@@ -957,6 +1104,11 @@ export function useMeetingAssistant() {
           traceStoreRef.current.finishStep(traceId, memoryStepId, "success", {
             selectedEntries: memoryContext.entries.length,
             useCase: resolvedUseCase,
+            questionType: resolvedQuestionType,
+            askFrame,
+            topicDomain,
+            projectAnchor,
+            interviewTypes,
             candidateCount: memoryContext.candidateCount,
             rejectedCount: memoryContext.rejectedCount,
             totalChars: memoryContext.totalChars,
@@ -997,6 +1149,7 @@ export function useMeetingAssistant() {
 
   const stop = useCallback(async () => {
     activeRef.current = false;
+    invalidateAudioProcessingSession();
     clearAdvisorDebounce();
     advisorEngineRef.current.cancelCurrentRequest();
     screenAnalysisAbortRef.current?.abort();
@@ -1029,7 +1182,7 @@ export function useMeetingAssistant() {
       error: null,
       audioStatus,
     }));
-  }, [clearAdvisorDebounce]);
+  }, [clearAdvisorDebounce, invalidateAudioProcessingSession]);
 
   const runAdvisor = useCallback(async (options: RunAdvisorOptions = {}) => {
     const mode = options.mode ?? "live";
@@ -1114,6 +1267,18 @@ export function useMeetingAssistant() {
       source: "advisor",
       query: advisorMemoryQuery,
       useCase: inferMemoryUseCaseFromQuery(advisorMemoryQuery),
+      questionType: promptContext.activeScreenTask
+        ? readMemoryQuestionType(promptContext.activeScreenTask.kind)
+        : undefined,
+      askFrame: promptContext.activeScreenTask?.classifier?.askFrame
+        ? readMemoryAskFrame(promptContext.activeScreenTask.classifier.askFrame)
+        : inferMemoryAskFrameFromQuery(advisorMemoryQuery),
+      topicDomain: promptContext.activeScreenTask?.classifier?.topicDomain
+        ? readMemoryTopicDomain(
+            promptContext.activeScreenTask.classifier.topicDomain
+          )
+        : inferMemoryTopicDomainFromQuery(advisorMemoryQuery),
+      projectAnchor: promptContext.activeScreenTask?.classifier?.projectAnchor,
     });
     if (memoryContext) {
       promptContext = {
@@ -1320,18 +1485,44 @@ export function useMeetingAssistant() {
     }, ADVISOR_DEBOUNCE_MS);
   }, [clearAdvisorDebounce, runAdvisor]);
 
-  const handleSpeechDetected = useCallback(
-    async (base64Audio: string) => {
-      if (!activeRef.current) return;
-
-      const trace = traceStoreRef.current.startTrace("voice", {
-        audioBase64Chars: base64Audio.length,
-      });
+  const processQueuedSpeechSegment = useCallback(
+    async (segment: QueuedSpeechSegment) => {
+      const traceId = segment.traceId;
       let audioBlobStepId: string | undefined;
       let sttStepId: string | undefined;
+      const staleReason = "Audio segment belongs to a stale meeting session.";
+
+      if (!isCurrentAudioSegment(segment)) {
+        traceStoreRef.current.finishStep(
+          traceId,
+          segment.queueStepId,
+          "cancelled",
+          {
+            reason: "stale-before-processing",
+            audioSegmentSeq: segment.sequence,
+            audioSessionId: segment.sessionId,
+            currentAudioSessionId: audioSessionIdRef.current,
+            queueWaitMs: Date.now() - segment.queuedAt,
+          }
+        );
+        traceStoreRef.current.finishTrace(traceId, "cancelled", staleReason);
+        return;
+      }
+
+      traceStoreRef.current.finishStep(
+        traceId,
+        segment.queueStepId,
+        "success",
+        {
+          audioSegmentSeq: segment.sequence,
+          audioSessionId: segment.sessionId,
+          queueWaitMs: Date.now() - segment.queuedAt,
+        }
+      );
 
       if (!sttProvider) {
         activeRef.current = false;
+        invalidateAudioProcessingSession();
         clearAdvisorDebounce();
         advisorEngineRef.current.cancelCurrentRequest();
         screenAnalysisAbortRef.current?.abort();
@@ -1347,7 +1538,7 @@ export function useMeetingAssistant() {
           console.warn("Failed to stop meeting audio capture", error);
         }
 
-        traceStoreRef.current.finishTrace(trace.id, "error", MISSING_STT_MESSAGE);
+        traceStoreRef.current.finishTrace(traceId, "error", MISSING_STT_MESSAGE);
         setState((previous) => ({
           ...previous,
           status: "error",
@@ -1366,31 +1557,60 @@ export function useMeetingAssistant() {
 
       try {
         audioBlobStepId = traceStoreRef.current.startStep(
-          trace.id,
-          "Audio blob created"
+          traceId,
+          "Audio blob created",
+          {
+            audioSegmentSeq: segment.sequence,
+            audioSessionId: segment.sessionId,
+          }
         );
-        const audio = base64WavToBlob(base64Audio);
-        traceStoreRef.current.finishStep(trace.id, audioBlobStepId, "success", {
+        const audio = base64WavToBlob(segment.base64Audio);
+        traceStoreRef.current.finishStep(traceId, audioBlobStepId, "success", {
           audioBytes: audio.size,
           audioType: audio.type,
         });
 
+        const speechBias = buildSpeechBiasContext(
+          contextManagerRef.current.getState(),
+          speechCorrectionsRef.current
+        );
         traceStoreRef.current.recordInput(
-          trace.id,
+          traceId,
+          "speech bias context",
+          formatSpeechBiasPromptForTrace(speechBias),
+          {
+            termCount: speechBias.terms.length,
+            ruleCount: speechBias.correctionRules.length,
+            promptChars: speechBias.prompt.length,
+            terms: speechBias.terms.map((term) => term.term),
+          }
+        );
+
+        traceStoreRef.current.recordInput(
+          traceId,
           "stt input metadata",
           "Raw audio bytes are not stored in traces.",
           {
             providerId: sttProvider.id,
             audioBytes: audio.size,
             audioType: audio.type,
+            audioSegmentSeq: segment.sequence,
+            audioSessionId: segment.sessionId,
+            speechBiasTermCount: speechBias.terms.length,
+            speechBiasRuleCount: speechBias.correctionRules.length,
+            speechBiasPromptChars: speechBias.prompt.length,
           }
         );
         sttStepId = traceStoreRef.current.startStep(
-          trace.id,
+          traceId,
           "STT request",
           {
             providerId: sttProvider.id,
             audioBytes: audio.size,
+            audioSegmentSeq: segment.sequence,
+            audioSessionId: segment.sessionId,
+            speechBiasTermCount: speechBias.terms.length,
+            speechBiasRuleCount: speechBias.correctionRules.length,
           }
         );
         const turn = await withTimeout(
@@ -1398,16 +1618,70 @@ export function useMeetingAssistant() {
             audio,
             provider: sttProvider,
             selectedProvider: selectedSttProvider,
+            prompt: speechBias.prompt,
+            terms: speechBias.terms.map((term) => term.term),
           }),
           STT_TIMEOUT_MS,
           "Speech-to-text timed out. Jarvis is still listening."
         );
-        traceStoreRef.current.finishStep(trace.id, sttStepId, "success", {
+        traceStoreRef.current.finishStep(traceId, sttStepId, "success", {
           transcriptChars: turn?.text.length ?? 0,
         });
 
+        if (turn) {
+          traceStoreRef.current.recordOutput(
+            traceId,
+            "stt raw output",
+            turn.text,
+            {
+              turnId: turn.id,
+              audioSegmentSeq: segment.sequence,
+              audioSessionId: segment.sessionId,
+            }
+          );
+          const normalized = normalizeTranscriptWithSpeechBias(
+            turn.text,
+            speechBias
+          );
+          if (normalized.changed) {
+            turn.text = normalized.text;
+            incrementAppliedSpeechCorrections(normalized.appliedRules);
+            traceStoreRef.current.recordOutput(
+              traceId,
+              "stt normalized output",
+              normalized.text,
+              {
+                turnId: turn.id,
+                appliedRules: normalized.appliedRules.map(
+                  (rule) => `${rule.from}->${rule.to}`
+                ),
+                audioSegmentSeq: segment.sequence,
+                audioSessionId: segment.sessionId,
+              }
+            );
+          }
+        }
+
+        if (!isCurrentAudioSegment(segment)) {
+          const droppedStepId = traceStoreRef.current.startStep(
+            traceId,
+            "Transcript dropped",
+            {
+              reason: "stale-after-stt",
+              turnId: turn?.id,
+              transcriptChars: turn?.text.trim().length ?? 0,
+              audioSegmentSeq: segment.sequence,
+              audioSessionId: segment.sessionId,
+              currentAudioSessionId: audioSessionIdRef.current,
+            }
+          );
+          traceStoreRef.current.finishStep(traceId, droppedStepId, "success");
+          traceStoreRef.current.finishTrace(traceId, "cancelled", staleReason);
+          return;
+        }
+
         if (!turn) {
-          traceStoreRef.current.finishTrace(trace.id, "success");
+          traceStoreRef.current.finishTrace(traceId, "success");
           setState((previous) => ({
             ...previous,
             status: activeRef.current ? "listening" : "idle",
@@ -1415,19 +1689,12 @@ export function useMeetingAssistant() {
           return;
         }
 
-        traceStoreRef.current.recordOutput(
-          trace.id,
-          "stt raw output",
-          turn.text,
-          { turnId: turn.id }
-        );
-
         const activeScreenTask = contextManagerRef.current.getState()
           .activeScreenTask;
 
         if (activeScreenTask && isTaskSwitchTranscript(turn.text)) {
           const switchStepId = traceStoreRef.current.startStep(
-            trace.id,
+            traceId,
             "Task switch confirmation requested",
             {
               turnId: turn.id,
@@ -1435,8 +1702,8 @@ export function useMeetingAssistant() {
               transcriptChars: turn.text.trim().length,
             }
           );
-          traceStoreRef.current.finishStep(trace.id, switchStepId, "success");
-          traceStoreRef.current.finishTrace(trace.id, "success");
+          traceStoreRef.current.finishStep(traceId, switchStepId, "success");
+          traceStoreRef.current.finishTrace(traceId, "success");
           setState((previous) => ({
             ...previous,
             status: activeRef.current ? "listening" : "idle",
@@ -1445,7 +1712,7 @@ export function useMeetingAssistant() {
               id: createMeetingId("task_switch"),
               kind: "clarifying-question",
               content: [
-                "Meaning: 这听起来像是在切换到新题或新任务。",
+                "中文思路: 这听起来像是在切换到新题或新任务。",
                 "Reply: -",
                 "Question: Should I treat this as a new task?",
               ].join("\n"),
@@ -1460,7 +1727,7 @@ export function useMeetingAssistant() {
 
         if (shouldIgnoreLowSignalTranscript(turn.text, Boolean(activeScreenTask))) {
           const ignoredStepId = traceStoreRef.current.startStep(
-            trace.id,
+            traceId,
             "Transcript ignored",
             {
               reason: "low-signal",
@@ -1468,8 +1735,8 @@ export function useMeetingAssistant() {
               activeScreenTask: Boolean(activeScreenTask),
             }
           );
-          traceStoreRef.current.finishStep(trace.id, ignoredStepId, "success");
-          traceStoreRef.current.finishTrace(trace.id, "success");
+          traceStoreRef.current.finishStep(traceId, ignoredStepId, "success");
+          traceStoreRef.current.finishTrace(traceId, "success");
           setState((previous) => ({
             ...previous,
             status: activeRef.current ? "listening" : "idle",
@@ -1481,11 +1748,15 @@ export function useMeetingAssistant() {
           contextManagerRef.current.addTranscriptTurn(turn);
         const contextState = contextManagerRef.current.getState();
         const appendStepId = traceStoreRef.current.startStep(
-          trace.id,
+          traceId,
           "Transcript appended",
-          { turnId: turn.id }
+          {
+            turnId: turn.id,
+            audioSegmentSeq: segment.sequence,
+            audioSessionId: segment.sessionId,
+          }
         );
-        traceStoreRef.current.finishStep(trace.id, appendStepId, "success", {
+        traceStoreRef.current.finishStep(traceId, appendStepId, "success", {
           transcriptTurns: contextState.transcriptTurns.length,
         });
 
@@ -1494,7 +1765,7 @@ export function useMeetingAssistant() {
             interviewContextUpdate.targetCompany ??
             contextState.interviewSessionContext?.targetCompany;
           const interviewStepId = traceStoreRef.current.startStep(
-            trace.id,
+            traceId,
             "Interview session context updated",
             {
               targetCompany: targetCompany?.value,
@@ -1503,14 +1774,14 @@ export function useMeetingAssistant() {
             }
           );
           traceStoreRef.current.finishStep(
-            trace.id,
+            traceId,
             interviewStepId,
             "success",
             {
               evidenceChars: targetCompany?.evidence.length ?? 0,
             }
           );
-          traceStoreRef.current.updateMetadata(trace.id, {
+          traceStoreRef.current.updateMetadata(traceId, {
             targetCompany: targetCompany?.value,
             targetCompanyConfidence: targetCompany?.confidence,
           });
@@ -1525,33 +1796,39 @@ export function useMeetingAssistant() {
         }));
 
         const debounceStepId = traceStoreRef.current.startStep(
-          trace.id,
+          traceId,
           "Advisor debounce scheduled",
           { debounceMs: ADVISOR_DEBOUNCE_MS }
         );
-        traceStoreRef.current.finishStep(trace.id, debounceStepId, "success");
+        traceStoreRef.current.finishStep(traceId, debounceStepId, "success");
         scheduleAdvisor(
           contextState.activeScreenTask ? "screen-anchored" : "live",
-          trace.id
+          traceId
         );
       } catch (error) {
+        const stillCurrent = isCurrentAudioSegment(segment);
+        const traceStatus = stillCurrent ? "error" : "cancelled";
         traceStoreRef.current.finishStep(
-          trace.id,
+          traceId,
           audioBlobStepId,
-          "error",
+          traceStatus,
           undefined,
           error
         );
         traceStoreRef.current.finishStep(
-          trace.id,
+          traceId,
           sttStepId,
-          "error",
+          traceStatus,
           undefined,
           error
         );
-        traceStoreRef.current.finishTrace(trace.id, "error", error);
+        traceStoreRef.current.finishTrace(
+          traceId,
+          traceStatus,
+          stillCurrent ? error : staleReason
+        );
 
-        if (!activeRef.current) return;
+        if (!stillCurrent) return;
 
         setState((previous) => ({
           ...previous,
@@ -1566,21 +1843,65 @@ export function useMeetingAssistant() {
     },
     [
       clearAdvisorDebounce,
+      incrementAppliedSpeechCorrections,
+      invalidateAudioProcessingSession,
+      isCurrentAudioSegment,
       scheduleAdvisor,
       selectedSttProvider,
       sttProvider,
     ]
   );
 
+  const enqueueSpeechDetected = useCallback(
+    (base64Audio: string) => {
+      if (!activeRef.current) return;
+
+      const sessionId = audioSessionIdRef.current;
+      const sequence = audioSegmentSeqRef.current + 1;
+      audioSegmentSeqRef.current = sequence;
+
+      const trace = traceStoreRef.current.startTrace("voice", {
+        audioBase64Chars: base64Audio.length,
+        audioSegmentSeq: sequence,
+        audioSessionId: sessionId,
+      });
+      const queueStepId = traceStoreRef.current.startStep(
+        trace.id,
+        "Audio segment queued",
+        {
+          audioSegmentSeq: sequence,
+          audioSessionId: sessionId,
+        }
+      );
+      const segment: QueuedSpeechSegment = {
+        base64Audio,
+        sessionId,
+        sequence,
+        queuedAt: Date.now(),
+        traceId: trace.id,
+        queueStepId,
+      };
+
+      audioQueueTailRef.current = audioQueueTailRef.current
+        .catch(() => undefined)
+        .then(() => processQueuedSpeechSegment(segment))
+        .catch((error) => {
+          console.warn("Failed to process queued meeting audio segment", error);
+        });
+    },
+    [processQueuedSpeechSegment]
+  );
+
   useEffect(() => {
     speechDetectedHandlerRef.current = (base64Audio: string) => {
-      void handleSpeechDetected(base64Audio);
+      enqueueSpeechDetected(base64Audio);
     };
-  }, [handleSpeechDetected]);
+  }, [enqueueSpeechDetected]);
 
   const startCapture = useCallback(async (resetContext: boolean) => {
     if (state.settings.privacyMode === "memory-only") {
       activeRef.current = false;
+      invalidateAudioProcessingSession();
       clearAdvisorDebounce();
       advisorEngineRef.current.cancelCurrentRequest();
       screenAnalysisAbortRef.current?.abort();
@@ -1596,6 +1917,7 @@ export function useMeetingAssistant() {
 
     if (!sttProvider) {
       activeRef.current = false;
+      invalidateAudioProcessingSession();
       clearAdvisorDebounce();
       advisorEngineRef.current.cancelCurrentRequest();
       screenAnalysisAbortRef.current?.abort();
@@ -1629,6 +1951,7 @@ export function useMeetingAssistant() {
 
       if (resetContext) {
         contextManagerRef.current.reset();
+        speechCorrectionsRef.current = [];
         latestScreenHashRef.current = undefined;
         screenAnalysisAbortRef.current?.abort();
         screenAnalysisAbortRef.current = null;
@@ -1636,7 +1959,8 @@ export function useMeetingAssistant() {
 
       clearAdvisorDebounce();
       advisorEngineRef.current.cancelCurrentRequest();
-      activeRef.current = true;
+      activeRef.current = false;
+      invalidateAudioProcessingSession();
 
       await invoke<MeetingAudioStatus>("stop_meeting_audio_session");
 
@@ -1645,6 +1969,9 @@ export function useMeetingAssistant() {
         selectedAudioDevices.output.id !== "default"
           ? selectedAudioDevices.output.id
           : null;
+
+      startAudioProcessingSession();
+      activeRef.current = true;
 
       const audioStatus = await invoke<MeetingAudioStatus>(
         "start_meeting_audio_session",
@@ -1662,6 +1989,7 @@ export function useMeetingAssistant() {
               ...INITIAL_STATE,
               settings: previous.settings,
               interviewSessionBrief: contextState.interviewSessionBrief,
+              speechCorrections: [],
             }
           : previous),
         status: "listening",
@@ -1676,6 +2004,7 @@ export function useMeetingAssistant() {
       }));
     } catch (error) {
       activeRef.current = false;
+      invalidateAudioProcessingSession();
       setState((previous) => ({
         ...previous,
         status: "error",
@@ -1687,7 +2016,10 @@ export function useMeetingAssistant() {
     }
   }, [
     clearAdvisorDebounce,
+    invalidateAudioProcessingSession,
     selectedAudioDevices.output.id,
+    startAudioProcessingSession,
+    state.settings.audio.config,
     state.settings.privacyMode,
     sttProvider,
   ]);
@@ -1702,6 +2034,7 @@ export function useMeetingAssistant() {
 
   const pause = useCallback(async () => {
     activeRef.current = false;
+    invalidateAudioProcessingSession();
     clearAdvisorDebounce();
     advisorEngineRef.current.cancelCurrentRequest();
     screenAnalysisAbortRef.current?.abort();
@@ -1724,7 +2057,7 @@ export function useMeetingAssistant() {
       error: null,
       audioStatus,
     }));
-  }, [clearAdvisorDebounce]);
+  }, [clearAdvisorDebounce, invalidateAudioProcessingSession]);
 
   const captureScreenContext = useCallback(
     async (
@@ -1940,12 +2273,24 @@ export function useMeetingAssistant() {
               {
                 questionChars: screenPreflight.question?.length ?? 0,
                 targetCompany: screenPreflight.targetCompany,
+                questionType: screenPreflight.questionType,
+                askFrame: screenPreflight.askFrame,
+                topicDomain: screenPreflight.topicDomain,
+                projectAnchor: screenPreflight.projectAnchor,
+                classifierConfidence: screenPreflight.confidence,
                 behavioral: screenPreflight.isBehavioralInterview,
                 amazonLeadershipPrinciple:
                   screenPreflight.amazonLeadershipPrinciple,
                 contextUpdated: Boolean(preflightContextUpdate?.changed),
               }
             );
+            traceStoreRef.current.updateMetadata(trace.id, {
+              questionType: screenPreflight.questionType,
+              askFrame: screenPreflight.askFrame,
+              topicDomain: screenPreflight.topicDomain,
+              projectAnchor: screenPreflight.projectAnchor,
+              classifierConfidence: screenPreflight.confidence,
+            });
 
             if (preflightContextUpdate?.changed) {
               const interviewStepId = traceStoreRef.current.startStep(
@@ -1968,6 +2313,11 @@ export function useMeetingAssistant() {
               traceStoreRef.current.updateMetadata(trace.id, {
                 targetCompany: targetCompany?.value,
                 targetCompanyConfidence: targetCompany?.confidence,
+                questionType: screenPreflight.questionType,
+                askFrame: screenPreflight.askFrame,
+                topicDomain: screenPreflight.topicDomain,
+                projectAnchor: screenPreflight.projectAnchor,
+                classifierConfidence: screenPreflight.confidence,
               });
               setState((previous) => ({
                 ...previous,
@@ -2012,6 +2362,19 @@ export function useMeetingAssistant() {
           source: "screen",
           query: screenMemoryQuery,
           useCase: inferMemoryUseCaseFromQuery(screenMemoryQuery),
+          questionType: inferMemoryQuestionTypeFromScreenPreflight(
+            screenMemoryQuery,
+            screenPreflight
+          ),
+          askFrame: inferMemoryAskFrameFromScreenPreflight(
+            screenMemoryQuery,
+            screenPreflight
+          ),
+          topicDomain: inferMemoryTopicDomainFromScreenPreflight(
+            screenMemoryQuery,
+            screenPreflight
+          ),
+          projectAnchor: screenPreflight?.projectAnchor,
         });
         const screenTaskContent = await withTimeout(
           solveScreenAnchoredTask({
@@ -2113,7 +2476,11 @@ export function useMeetingAssistant() {
           .map((turn) => turn.id);
         const requestId = createMeetingId("screen_task");
         const question = extractScreenTaskQuestion(screenTaskContent);
-        const taskKind = inferScreenTaskKind(screenTaskContent);
+        const taskKind =
+          screenPreflight?.questionType &&
+          screenPreflight.questionType !== "unknown"
+            ? screenPreflight.questionType
+            : inferScreenTaskKind(screenTaskContent);
         const now = Date.now();
 
         if (screenTaskContent.trim() && taskKind !== "non-question") {
@@ -2126,6 +2493,13 @@ export function useMeetingAssistant() {
             question: question || undefined,
             kind: taskKind,
             language: inferScreenTaskLanguage(screenTaskContent),
+            classifier: {
+              questionType: taskKind,
+              askFrame: screenPreflight?.askFrame,
+              topicDomain: screenPreflight?.topicDomain,
+              projectAnchor: screenPreflight?.projectAnchor,
+              confidence: screenPreflight?.confidence,
+            },
             content: screenTaskContent,
             basedOnTurnIds,
             basedOnObservationId: observation.id,
@@ -2265,7 +2639,11 @@ export function useMeetingAssistant() {
   );
 
   const answerClarifyingQuestion = useCallback(
-    async (question: string, answer: ClarifyingQuestionAnswer) => {
+    async (
+      question: string,
+      answer: ClarifyingQuestionAnswer,
+      option?: { label?: string; value?: string }
+    ) => {
       const trimmedQuestion = question.trim();
       if (!trimmedQuestion) return;
 
@@ -2280,8 +2658,129 @@ export function useMeetingAssistant() {
         clarifyingFeedback: {
           question: trimmedQuestion,
           answer,
+          answerLabel: option?.label,
+          answerValue: option?.value,
         },
       });
+    },
+    [currentSuggestionText, runAdvisor]
+  );
+
+  const submitSpeechCorrection = useCallback(
+    async (input: string) => {
+      const correction = parseEmergencySpeechCorrection(input);
+      if (!correction) {
+        setState((previous) => ({
+          ...previous,
+          error: "Enter a short correction, for example: RAG not rec.",
+        }));
+        return;
+      }
+
+      const trace = traceStoreRef.current.startTrace("voice", {
+        source: "emergency-correction",
+        correctionInputChars: input.trim().length,
+      });
+      traceStoreRef.current.recordInput(
+        trace.id,
+        "emergency speech correction",
+        correction.input,
+        {
+          from: correction.from,
+          to: correction.to,
+          term: correction.term,
+        }
+      );
+
+      const nextCorrections = [
+        ...speechCorrectionsRef.current.filter(
+          (candidate) => candidate.input !== correction.input
+        ),
+        correction,
+      ].slice(-12);
+
+      const contextState = contextManagerRef.current.getState();
+      const latestTurn =
+        contextState.transcriptTurns[contextState.transcriptTurns.length - 1];
+      const speechBias = buildSpeechBiasContext(contextState, nextCorrections);
+      traceStoreRef.current.recordInput(
+        trace.id,
+        "speech bias context",
+        formatSpeechBiasPromptForTrace(speechBias),
+        {
+          termCount: speechBias.terms.length,
+          ruleCount: speechBias.correctionRules.length,
+          promptChars: speechBias.prompt.length,
+          terms: speechBias.terms.map((term) => term.term),
+        }
+      );
+
+      let updatedCorrections = nextCorrections;
+      let didUpdateTranscript = false;
+      let nextContextState = contextState;
+
+      if (latestTurn) {
+        const normalized = normalizeTranscriptWithSpeechBias(
+          latestTurn.text,
+          speechBias
+        );
+        if (normalized.changed) {
+          contextManagerRef.current.updateTranscriptTurnText(
+            latestTurn.id,
+            normalized.text
+          );
+          didUpdateTranscript = true;
+          updatedCorrections = applySpeechCorrectionRuleCounts(
+            nextCorrections,
+            normalized.appliedRules
+          );
+          speechCorrectionsRef.current = updatedCorrections;
+          nextContextState = contextManagerRef.current.getState();
+          traceStoreRef.current.recordOutput(
+            trace.id,
+            "corrected latest transcript",
+            normalized.text,
+            {
+              turnId: latestTurn.id,
+              previousText: latestTurn.text,
+              appliedRules: normalized.appliedRules.map(
+                (rule) => `${rule.from}->${rule.to}`
+              ),
+            }
+          );
+        }
+      }
+
+      if (!didUpdateTranscript) {
+        speechCorrectionsRef.current = updatedCorrections;
+        traceStoreRef.current.recordOutput(
+          trace.id,
+          "correction stored",
+          "Stored as speech bias for future audio segments.",
+          {
+            latestTurnId: latestTurn?.id,
+          }
+        );
+      }
+
+      setState((previous) => ({
+        ...previous,
+        error: null,
+        speechCorrections: updatedCorrections,
+        transcriptTurns: nextContextState.transcriptTurns,
+        interviewSessionContext: nextContextState.interviewSessionContext,
+        activeScreenTask: nextContextState.activeScreenTask,
+      }));
+
+      traceStoreRef.current.finishTrace(trace.id, "success");
+
+      if (didUpdateTranscript) {
+        await runAdvisor({
+          force: true,
+          mode: nextContextState.activeScreenTask ? "screen-anchored" : "live",
+          currentSuggestion: currentSuggestionText,
+        });
+      }
     },
     [currentSuggestionText, runAdvisor]
   );
@@ -2406,11 +2905,40 @@ export function useMeetingAssistant() {
     clearTraces,
     captureScreenContext,
     exportTrace,
+    updateTraceHumanEvaluation,
     regenerateSuggestion,
     applyResponseAction,
     answerClarifyingQuestion,
+    submitSpeechCorrection,
     isActive: activeRef.current,
   };
+}
+
+function applySpeechCorrectionRuleCounts(
+  corrections: SpeechCorrection[],
+  rules: SpeechCorrectionRule[]
+) {
+  if (!rules.length) return corrections;
+
+  return corrections.map((correction) => {
+    const matched = rules.some((rule) => {
+      if (rule.source !== "emergency" && correction.from) return false;
+      if (correction.from && correction.to) {
+        return (
+          correction.from.toLowerCase() === rule.from.toLowerCase() &&
+          correction.to.toLowerCase() === rule.to.toLowerCase()
+        );
+      }
+      return (
+        correction.to?.toLowerCase() === rule.to.toLowerCase() ||
+        correction.term?.toLowerCase() === rule.to.toLowerCase()
+      );
+    });
+
+    return matched
+      ? { ...correction, appliedCount: correction.appliedCount + 1 }
+      : correction;
+  });
 }
 
 function getMeetingScreenAutoPrompt(
@@ -2481,7 +3009,22 @@ function buildAdvisorMemoryQuery(
     amazonLpHint || undefined,
     context.latestTurn ? `latest: ${context.latestTurn.text}` : undefined,
     context.activeScreenTask
-      ? `active task: ${context.activeScreenTask.question || ""}\n${context.activeScreenTask.content}`
+      ? [
+          `active task: ${context.activeScreenTask.question || ""}`,
+          `active task type: ${context.activeScreenTask.kind}`,
+          context.activeScreenTask.classifier?.askFrame
+            ? `active task ask frame: ${context.activeScreenTask.classifier.askFrame}`
+            : undefined,
+          context.activeScreenTask.classifier?.topicDomain
+            ? `active task topic domain: ${context.activeScreenTask.classifier.topicDomain}`
+            : undefined,
+          context.activeScreenTask.classifier?.projectAnchor
+            ? `active task project anchor: ${context.activeScreenTask.classifier.projectAnchor}`
+            : undefined,
+          context.activeScreenTask.content,
+        ]
+          .filter(Boolean)
+          .join("\n")
       : undefined,
     context.transcript ? `transcript:\n${context.transcript}` : undefined,
     context.screenContext ? `screen:\n${context.screenContext}` : undefined,
@@ -2528,6 +3071,18 @@ function buildScreenMemoryQuery({
     screenPreflight?.question
       ? `screen preflight question:\n${screenPreflight.question}`
       : undefined,
+    screenPreflight?.questionType
+      ? `question type: ${screenPreflight.questionType}`
+      : undefined,
+    screenPreflight?.askFrame
+      ? `ask frame: ${screenPreflight.askFrame}`
+      : undefined,
+    screenPreflight?.topicDomain
+      ? `topic domain: ${screenPreflight.topicDomain}`
+      : undefined,
+    screenPreflight?.projectAnchor
+      ? `project anchor: ${screenPreflight.projectAnchor}`
+      : undefined,
     screenPreflight?.isBehavioralInterview
       ? "screen preflight use case: behavioral interview"
       : undefined,
@@ -2570,6 +3125,199 @@ function inferMemoryUseCaseFromQuery(query: string): MemoryUseCase {
   }
 
   return "meeting_assistant";
+}
+
+function inferMemoryQuestionTypeFromScreenPreflight(
+  query: string,
+  screenPreflight: ScreenPreflightResult | undefined
+): MemoryQuestionType {
+  if (screenPreflight?.isBehavioralInterview) return "behavioral";
+  const classifierQuestionType = readMemoryQuestionType(
+    screenPreflight?.questionType
+  );
+  if (classifierQuestionType) return classifierQuestionType;
+  return inferMemoryQuestionTypeFromQuery(
+    [screenPreflight?.question, query].filter(Boolean).join("\n")
+  );
+}
+
+function inferMemoryAskFrameFromScreenPreflight(
+  query: string,
+  screenPreflight: ScreenPreflightResult | undefined
+): MemoryAskFrame {
+  const classifierAskFrame = readMemoryAskFrame(screenPreflight?.askFrame);
+  if (classifierAskFrame) return classifierAskFrame;
+  return inferMemoryAskFrameFromQuery(
+    [screenPreflight?.question, query].filter(Boolean).join("\n")
+  );
+}
+
+function inferMemoryTopicDomainFromScreenPreflight(
+  query: string,
+  screenPreflight: ScreenPreflightResult | undefined
+): MemoryTopicDomain {
+  const classifierTopicDomain = readMemoryTopicDomain(
+    screenPreflight?.topicDomain
+  );
+  if (classifierTopicDomain) return classifierTopicDomain;
+  return inferMemoryTopicDomainFromQuery(
+    [screenPreflight?.question, query].filter(Boolean).join("\n")
+  );
+}
+
+function inferMemoryQuestionTypeFromQuery(query: string): MemoryQuestionType {
+  const normalized = query.toLowerCase();
+
+  if (
+    /\b(leetcode|algorithm|coding|complexity|typescript|javascript|python|java|rust|go|golang|dp|graph|tree|heap|stack|queue)\b/.test(
+      normalized
+    )
+  ) {
+    return "coding";
+  }
+
+  if (
+    /\b(project deep dive|project dive|deep dive|tell me about your project|walk me through your project|technical deep dive|your most complex project|previous project|past project|your work on)\b/.test(
+      normalized
+    )
+  ) {
+    return "project-deep-dive";
+  }
+
+  if (
+    hasAiMlDesignSignal(normalized)
+  ) {
+    return "ai-ml-system-design";
+  }
+
+  if (
+    /\b(system design|design a|design an|architecture|distributed system|high concurrency|scalability|ticket selling|rate limiter|consistent|consistency|database sharding)\b/.test(
+      normalized
+    )
+  ) {
+    return "general-system-design";
+  }
+
+  if (
+    /\b(behavior|behaviour|leadership principle|star|tell me about a time|give me an example|conflict|disagree|failed|commitment|ownership|bias for action|customer obsession)\b/.test(
+      normalized
+    )
+  ) {
+    return "behavioral";
+  }
+
+  return "unknown";
+}
+
+function readMemoryQuestionType(
+  value: string | undefined
+): MemoryQuestionType | undefined {
+  if (
+    value === "behavioral" ||
+    value === "coding" ||
+    value === "system-design" ||
+    value === "general-system-design" ||
+    value === "ai-ml-system-design" ||
+    value === "project-deep-dive" ||
+    value === "field-knowledge" ||
+    value === "unknown"
+  ) {
+    return value;
+  }
+  if (value === "non-question") return "unknown";
+  return undefined;
+}
+
+function readMemoryAskFrame(
+  value: string | undefined
+): MemoryAskFrame | undefined {
+  if (
+    value === "hypothetical-design" ||
+    value === "past-project" ||
+    value === "ambiguous" ||
+    value === "direct-answer" ||
+    value === "unknown"
+  ) {
+    return value;
+  }
+  return undefined;
+}
+
+function readMemoryTopicDomain(
+  value: string | undefined
+): MemoryTopicDomain | undefined {
+  if (
+    value === "ai-ml-infra" ||
+    value === "agentic-ai" ||
+    value === "search" ||
+    value === "backend" ||
+    value === "unknown"
+  ) {
+    return value;
+  }
+  return undefined;
+}
+
+function inferMemoryAskFrameFromQuery(query: string): MemoryAskFrame {
+  const normalized = query.toLowerCase();
+  if (
+    /\b(tell me about your|walk me through your|your project|previous project|past project|what did you build|how did you implement|deep dive)\b/.test(
+      normalized
+    )
+  ) {
+    return "past-project";
+  }
+  if (
+    /\b(design a|design an|design the|how would you design|build a|architect a|propose an architecture)\b/.test(
+      normalized
+    )
+  ) {
+    return "hypothetical-design";
+  }
+  if (/\b(explain|what is|compare|why|tradeoff|trade-off)\b/.test(normalized)) {
+    return "direct-answer";
+  }
+  return "unknown";
+}
+
+function inferMemoryTopicDomainFromQuery(query: string): MemoryTopicDomain {
+  const normalized = query.toLowerCase();
+  if (/\b(agent|agentic|tool use|planner|memory base|kmb)\b/.test(normalized)) {
+    return "agentic-ai";
+  }
+  if (
+    /\b(search|semantic search|ranking|retrieval|opensearch|vector search|neural search)\b/.test(
+      normalized
+    )
+  ) {
+    return "search";
+  }
+  if (
+    /\b(ai|ml|llm|rag|retrieval augmented generation|embedding|model serving|inference|fine tuning|training|evaluation|evals)\b/.test(
+      normalized
+    )
+  ) {
+    return "ai-ml-infra";
+  }
+  if (
+    /\b(backend|api|database|distributed|scalability|consistency|sharding|cache|queue|microservice)\b/.test(
+      normalized
+    )
+  ) {
+    return "backend";
+  }
+  return "unknown";
+}
+
+function hasAiMlDesignSignal(normalized: string) {
+  return (
+    /\b(ai|ml|llm|rag|retrieval augmented generation|embedding|model serving|inference|vector database|agentic|model routing|evals|fine tuning|training pipeline)\b/.test(
+      normalized
+    ) &&
+    /\b(system design|design a|design an|architecture|pipeline|platform|service|build|scalability|latency|throughput)\b/.test(
+      normalized
+    )
+  );
 }
 
 function shouldUpdateActiveScreenTaskFromAdvisorOutput(content: string) {

@@ -10,6 +10,9 @@ import {
   ScreenObservation,
   ScreenTaskKind,
   SelectedProviderState,
+  TaskAskFrame,
+  TaskClassifierMetadata,
+  TaskTopicDomain,
 } from "./types";
 import { createMeetingId } from "./context-manager";
 import {
@@ -60,7 +63,7 @@ export interface SolveScreenAnchoredTaskOptions {
   onPartialContent?: (content: string) => void;
 }
 
-export interface ScreenPreflightResult {
+export interface ScreenPreflightResult extends TaskClassifierMetadata {
   question?: string;
   targetCompany?: string;
   isBehavioralInterview?: boolean;
@@ -110,7 +113,7 @@ const SCREEN_TASK_SYSTEM_PROMPT = [
   "Treat memory context as background only. The screenshot, focus band, visible language selection, and latest transcript have higher priority than memory.",
   "Do not invent colleagues, speakers, meeting dialogue, hidden requirements, or screen content.",
   "Keep the answer useful during a live meeting: compact, direct, and technically precise.",
-  "Output the Answer section first so the user can start speaking before reading supporting details.",
+  "Output the 中文思路 section first so the user can quickly understand the answer plan before speaking.",
 ].join(" ");
 
 export async function captureScreenObservation({
@@ -395,8 +398,13 @@ function buildScreenPreflightUserMessage({
     "<task>",
     "Return JSON only, with no Markdown fences.",
     "Schema:",
-    '{"question": string|null, "targetCompany": string|null, "isBehavioralInterview": boolean, "amazonLeadershipPrinciple": string|null}',
+    '{"question": string|null, "questionType": "behavioral"|"coding"|"general-system-design"|"ai-ml-system-design"|"project-deep-dive"|"field-knowledge"|"unknown", "askFrame": "hypothetical-design"|"past-project"|"ambiguous"|"direct-answer"|"unknown", "topicDomain": "ai-ml-infra"|"agentic-ai"|"search"|"backend"|"unknown", "projectAnchor": string|null, "confidence": number, "targetCompany": string|null, "isBehavioralInterview": boolean, "amazonLeadershipPrinciple": string|null}',
     "question: the active visible interview/software-engineering question near the cursor, or null.",
+    "questionType: classify the question. Use ai-ml-system-design for hypothetical AI/ML infra design such as RAG, model serving, agent memory, evaluation, retrieval, vector search, model routing, or AI platform architecture. Use general-system-design for non-AI backend/system design such as ticket selling, rate limiter, chat, booking, feeds, or storage systems. Use project-deep-dive when the question asks about a project the candidate built, their role, tradeoffs, architecture, impact, or lessons.",
+    "askFrame: hypothetical-design for future/imagined design questions; past-project for questions about the candidate's actual past work; ambiguous when it asks both about an existing project and a future improvement; direct-answer for field knowledge, coding, or behavioral questions.",
+    "topicDomain: choose agentic-ai for agents, memory, tool use, planning, or agent frameworks; ai-ml-infra for model serving, RAG, vector DB, embeddings, evaluation, data/model pipelines, or ML platforms; search for search/retrieval/ranking systems; backend for general backend systems.",
+    "projectAnchor: if the question visibly names or clearly points to a project, return that project name, such as Agentic Memory, Model Interface, NeuralSearch, BeagleStone, AOS Release, or null.",
+    "confidence: number from 0 to 1 for the classifier fields.",
     "targetCompany: a visible company name such as Amazon, Google, Microsoft, Meta, Anthropic, OpenAI, Stripe, Airbnb, or null. Use visible text like 'from Amazon' if present.",
     "isBehavioralInterview: true only for behavioral/story questions, not coding or field-knowledge questions.",
     "amazonLeadershipPrinciple: if targetCompany is Amazon and the question clearly maps to one Amazon Leadership Principle, return its name; otherwise null.",
@@ -521,35 +529,71 @@ function buildScreenTaskUserMessage({
     "Language priority is: selected language in the focus band, explicit language in the full screenshot, transcript clarification, then Python default. Treat TypeScript as TypeScript, not JavaScript. Treat Go or Golang as Go.",
     "If the focus band contains multiple nearby questions, prefer the text block closest to the cursor position inside the focus band.",
     "If the visible UI or focus band indicates a non-Python language, use that language instead of the Python default.",
-    "Use Answer as the first section. The Answer section must directly answer the selected target; do not say which question you identified, selected, or focused on.",
+    "Use 中文思路 as the first section. It must give the concise Chinese reasoning path the user can glance at first.",
+    "The Answer section must directly answer the selected target in meeting-ready wording; do not say which question you identified, selected, or focused on.",
     "Put supporting details after Answer. Do not put code blocks in Approach; code belongs only in Code.",
     "Follow the natural language response preferences when choosing answer length and explanation language. Do not let those preferences override the selected programming language for code.",
     "Use memory only for stable background knowledge. Do not let memory override visible problem constraints, visible language selection, or spoken follow-up constraints.",
     "Use <screen_preflight> only as a lightweight metadata hint. If the screenshot contradicts it, trust the screenshot.",
+    "If <screen_preflight> includes questionType, askFrame, topicDomain, or projectAnchor, use those fields to choose the output contract and memory usage policy.",
+    "If askFrame is ambiguous between an existing project deep dive and a future system design improvement, do not guess. Ask a clarifying question such as whether to discuss the existing implementation first or propose a future design improvement.",
     "For behavioral interview questions, prefer a concrete first-person story from memory context. Do not invent facts, employers, project names, teammates, metrics, timelines, or outcomes not supported by memory or visible text.",
     "Use <interview_session_context> to personalize behavioral interview answers across screen tasks. If the target company is Amazon and injected memory includes Leadership Principle guidance, internally classify the visible question to the closest principle, demonstrate Strength signals, and avoid Concern signals. Do not explicitly name the principle unless asked or useful.",
     "If memory supports only a qualitative outcome, state the outcome qualitatively instead of adding unsupported numbers, dates, durations, or speed claims.",
     "If it is a coding/algorithm question, output:",
+    "中文思路: 用中文简洁说明解题步骤、关键不变量、以及为什么是最优。",
     "Answer: directly state the optimal approach in the selected/requested language.",
     "Approach: explain the reasoning in a few direct bullets or short sentences, without code blocks.",
     "Code: provide code in the selected/requested language, or Python if no language is visible.",
     "Complexity: include time and space complexity.",
     "Question: restate the exact visible problem or the best focused version.",
     "Clarifying question: one click-answerable question if a constraint is missing, otherwise '-'.",
+    "Clarifying options: two short option labels if the clarifying question has two plausible directions, otherwise '-'.",
     "If it is a behavioral interview question, output:",
+    "中文思路: 用中文概括选用哪个故事、主线动作、风险/取舍、以及要避免的表达坑。",
     "Answer: give a compact first-person story that directly answers what happened, what decision path you took, and whether it turned out correct.",
     "Approach: briefly name why this example fits the question and the key decision/tradeoff.",
     "Code: -",
     "Complexity: -",
     "Question: restate the visible behavioral question.",
     "Clarifying question: one click-answerable question if useful, otherwise '-'.",
+    "Clarifying options: two short option labels if useful, otherwise '-'.",
+    "If it is an AI/ML system design question, output:",
+    "中文思路: 用中文先给 AI/ML infra 设计抓手：目标/指标、数据来源、retrieval/model layer、serving path、evaluation/feedback loop、latency/cost/safety，以及建议先问的问题。",
+    "Answer: give a short opening answer or framing statement. If important requirements are missing, do not fake a full design; propose the first AI/ML design direction and ask for the highest-value clarification.",
+    "Approach: outline objective and success metrics, data and indexing/retrieval path, model/serving architecture, evaluation and feedback loop, scaling, latency/cost, reliability, and safety tradeoffs.",
+    "Code: -",
+    "Complexity: include throughput, storage, latency budget, model/retrieval cost, or algorithmic complexity only when applicable; otherwise '-'.",
+    "Question: restate the visible AI/ML system design question.",
+    "Clarifying question: one concrete question that would most improve the design, such as target metric, traffic scale, latency budget, data freshness, evaluation standard, or safety constraint; otherwise '-'.",
+    "Clarifying options: two short option labels if the clarification is a choice, otherwise '-'.",
+    "If it is a general backend/system design question, output:",
+    "中文思路: 用中文先给通用系统设计抓手：核心需求、规模、API/data model、consistency、latency、可靠性、成本取舍，以及建议先问的问题。",
+    "Answer: give a short opening answer or framing statement. If important requirements are missing, do not fake a full design; propose the first backend design direction and ask for the highest-value clarification.",
+    "Approach: outline requirements, APIs/data model, architecture, scaling, consistency, reliability, observability, and tradeoffs.",
+    "Code: -",
+    "Complexity: include throughput, storage, latency, or algorithmic complexity only when applicable; otherwise '-'.",
+    "Question: restate the visible general system design question.",
+    "Clarifying question: one concrete question that would most improve the design, such as scale, consistency, latency, or product constraint; otherwise '-'.",
+    "Clarifying options: two short option labels if the clarification is a choice, otherwise '-'.",
+    "If it is a project deep-dive question, output:",
+    "中文思路: 用中文概括项目背景、你的角色、架构、难点、关键技术决策、tradeoff、validation、impact。",
+    "Answer: give a compact first-person technical project narrative grounded in memory; do not invent unsupported facts, metrics, employers, teammates, timelines, or outcomes.",
+    "Approach: structure the deep dive as context, my role, architecture, hard problem, decision/tradeoff, validation/debugging, impact, and lesson.",
+    "Code: -",
+    "Complexity: -",
+    "Question: restate the visible project deep-dive question.",
+    "Clarifying question: one click-answerable question if the interviewer direction is ambiguous, otherwise '-'.",
+    "Clarifying options: two short option labels if useful, otherwise '-'.",
     "If it is a field-knowledge question, output:",
+    "中文思路: 用中文列出回答结构和关键技术点。",
     "Answer: directly answer the selected visible question in concise professional meeting-ready wording.",
     "Approach: brief reasoning or key points.",
     "Code: -",
     "Complexity: -",
     "Question: restate the visible question.",
     "Clarifying question: one click-answerable question if useful, otherwise '-'.",
+    "Clarifying options: two short option labels if useful, otherwise '-'.",
     "If no meaningful question is visible, output a single dash.",
     "Use these exact section labels.",
     "</task>"
@@ -574,8 +618,25 @@ function parseScreenPreflightOutput(output: string): ScreenPreflightResult {
   const jsonText = output.match(/\{[\s\S]*\}/)?.[0] ?? output;
   try {
     const parsed = JSON.parse(jsonText) as Record<string, unknown>;
+    const question = readOptionalString(parsed.question);
+    const fallbackClassifier = inferTaskClassifierFromText(question ?? output);
     return {
-      question: readOptionalString(parsed.question),
+      question,
+      questionType:
+        readScreenTaskKind(parsed.questionType) ??
+        fallbackClassifier.questionType,
+      askFrame:
+        readTaskAskFrame(parsed.askFrame) ?? fallbackClassifier.askFrame,
+      topicDomain:
+        readTaskTopicDomain(parsed.topicDomain) ??
+        fallbackClassifier.topicDomain,
+      projectAnchor:
+        readOptionalString(parsed.projectAnchor) ??
+        fallbackClassifier.projectAnchor,
+      confidence:
+        typeof parsed.confidence === "number"
+          ? clampConfidence(parsed.confidence)
+          : fallbackClassifier.confidence,
       targetCompany: readOptionalString(parsed.targetCompany),
       isBehavioralInterview:
         typeof parsed.isBehavioralInterview === "boolean"
@@ -586,14 +647,151 @@ function parseScreenPreflightOutput(output: string): ScreenPreflightResult {
       ),
     };
   } catch {
+    const fallbackClassifier = inferTaskClassifierFromText(output);
     return {
       question: output.slice(0, 500),
+      ...fallbackClassifier,
     };
   }
 }
 
 function readOptionalString(value: unknown) {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function readScreenTaskKind(value: unknown): ScreenTaskKind | undefined {
+  if (typeof value !== "string") return undefined;
+  if (
+    value === "behavioral" ||
+    value === "coding" ||
+    value === "system-design" ||
+    value === "general-system-design" ||
+    value === "ai-ml-system-design" ||
+    value === "project-deep-dive" ||
+    value === "field-knowledge" ||
+    value === "ambiguous" ||
+    value === "non-question" ||
+    value === "unknown"
+  ) {
+    return value;
+  }
+  return undefined;
+}
+
+function readTaskAskFrame(value: unknown): TaskAskFrame | undefined {
+  if (typeof value !== "string") return undefined;
+  if (
+    value === "hypothetical-design" ||
+    value === "past-project" ||
+    value === "ambiguous" ||
+    value === "direct-answer" ||
+    value === "unknown"
+  ) {
+    return value;
+  }
+  return undefined;
+}
+
+function readTaskTopicDomain(value: unknown): TaskTopicDomain | undefined {
+  if (typeof value !== "string") return undefined;
+  if (
+    value === "ai-ml-infra" ||
+    value === "agentic-ai" ||
+    value === "search" ||
+    value === "backend" ||
+    value === "unknown"
+  ) {
+    return value;
+  }
+  return undefined;
+}
+
+function clampConfidence(value: number) {
+  if (!Number.isFinite(value)) return undefined;
+  return Math.max(0, Math.min(1, value));
+}
+
+function inferTaskClassifierFromText(text: string): TaskClassifierMetadata {
+  const normalized = text.toLowerCase();
+  const questionType = inferScreenTaskKind(text);
+  const askFrame = inferAskFrame(normalized, questionType);
+  const topicDomain = inferTopicDomain(normalized);
+
+  return {
+    questionType,
+    askFrame,
+    topicDomain,
+    projectAnchor: inferProjectAnchor(text),
+    confidence: questionType === "unknown" ? 0.35 : 0.65,
+  };
+}
+
+function inferAskFrame(
+  normalized: string,
+  questionType: ScreenTaskKind
+): TaskAskFrame {
+  const hasPastProjectSignal =
+    /\b(your project|you built|you designed|you implemented|walk me through|tell me about|your role|tradeoff you made|impact|lesson)\b/.test(
+      normalized
+    );
+  const hasHypotheticalSignal =
+    /\b(how would you|design a|design an|build a|architect|propose|improve|what would you do)\b/.test(
+      normalized
+    );
+
+  if (hasPastProjectSignal && hasHypotheticalSignal) return "ambiguous";
+  if (hasPastProjectSignal || questionType === "project-deep-dive") {
+    return "past-project";
+  }
+  if (
+    hasHypotheticalSignal ||
+    questionType === "general-system-design" ||
+    questionType === "ai-ml-system-design" ||
+    questionType === "system-design"
+  ) {
+    return "hypothetical-design";
+  }
+  if (questionType === "unknown") return "unknown";
+  return "direct-answer";
+}
+
+function inferTopicDomain(normalized: string): TaskTopicDomain {
+  if (/\b(agent|agentic|memory|tool use|planner|planning)\b/.test(normalized)) {
+    return "agentic-ai";
+  }
+  if (
+    /\b(rag|retrieval augmented|embedding|vector|model serving|llm|ml|ai|model routing|evaluation|eval|inference|fine-tuning|feature store)\b/.test(
+      normalized
+    )
+  ) {
+    return "ai-ml-infra";
+  }
+  if (/\b(search|ranking|retrieval|query|indexing)\b/.test(normalized)) {
+    return "search";
+  }
+  if (
+    /\b(rate limiter|ticket|booking|chat|feed|database|cache|queue|backend|microservice)\b/.test(
+      normalized
+    )
+  ) {
+    return "backend";
+  }
+  return "unknown";
+}
+
+function inferProjectAnchor(text: string) {
+  const projects = [
+    "Agentic Memory",
+    "Model Interface",
+    "NeuralSearch",
+    "Managed Semantic Search",
+    "BeagleStone",
+    "AOS Release",
+    "Oasis",
+    "Throttling",
+  ];
+  const normalized = text.toLowerCase();
+  return projects.find((project) => normalized.includes(project.toLowerCase()));
 }
 
 function formatScreenTaskResponsePreferences(
@@ -629,6 +827,8 @@ function formatCaptureTargetForPrompt(target: ScreenCaptureTarget) {
     target.appName ? `app=${target.appName}` : undefined,
     target.title ? `title=${target.title}` : undefined,
     target.captureMethod ? `method=${target.captureMethod}` : undefined,
+    target.selectionReason ? `selection=${target.selectionReason}` : undefined,
+    target.zOrderIndex !== undefined ? `zOrder=${target.zOrderIndex}` : undefined,
     `bounds=${target.width}x${target.height}@${target.x},${target.y}`,
   ].filter(Boolean);
 
@@ -697,6 +897,41 @@ export function inferScreenTaskKind(content: string): ScreenTaskKind {
     (screenTaskAnswer.code ?? "").trim().length > 5
   ) {
     return "coding";
+  }
+
+  if (
+    /\b(project deep dive|project dive|technical deep dive|tell me about your project|walk me through your project|your most complex project|your role|tradeoff you made|system you built|architecture you built|implementation you built)\b/i.test(
+      content
+    )
+  ) {
+    return "project-deep-dive";
+  }
+
+  if (
+    /\b(rag|retrieval augmented|llm|large language model|embedding|vector database|vector db|model serving|model routing|inference service|ml platform|ai platform|agent memory|agentic memory|agent framework|evaluation pipeline|eval pipeline|fine-tuning|feature store)\b/i.test(
+      content
+    ) &&
+    /\b(system design|design a|design an|how would you|build a|architect|architecture|scalability|serving|pipeline|platform)\b/i.test(
+      content
+    )
+  ) {
+    return "ai-ml-system-design";
+  }
+
+  if (
+    /\b(system design|design a|design an|architecture|distributed system|high concurrency|scalability|rate limiter|ticket selling|double-booking|consistency|sharding|booking system|chat system)\b/i.test(
+      content
+    )
+  ) {
+    return "general-system-design";
+  }
+
+  if (
+    /\b(behavioral|behavioural|leadership principle|tell me about a time|give me an example|commitment|conflict|disagree|ownership|customer obsession|bias for action)\b/i.test(
+      content
+    )
+  ) {
+    return "behavioral";
   }
 
   if (screenTaskAnswer.question || screenTaskAnswer.answer) {

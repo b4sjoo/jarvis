@@ -23,6 +23,49 @@ export interface TranscriptTurn {
   confidence?: number;
 }
 
+export type SpeechBiasTermSource =
+  | "brief"
+  | "active-task"
+  | "glossary"
+  | "transcript"
+  | "correction"
+  | "domain";
+
+export interface SpeechBiasTerm {
+  term: string;
+  source: SpeechBiasTermSource;
+  weight: "normal" | "high";
+}
+
+export interface SpeechCorrectionRule {
+  from: string;
+  to: string;
+  source: "emergency" | "bias";
+  reason: string;
+}
+
+export interface SpeechBiasContext {
+  terms: SpeechBiasTerm[];
+  correctionRules: SpeechCorrectionRule[];
+  prompt: string;
+}
+
+export interface SpeechCorrection {
+  id: string;
+  input: string;
+  term?: string;
+  from?: string;
+  to?: string;
+  createdAt: number;
+  appliedCount: number;
+}
+
+export interface SpeechNormalizationResult {
+  text: string;
+  changed: boolean;
+  appliedRules: SpeechCorrectionRule[];
+}
+
 export interface ScreenObservation {
   id: string;
   capturedAt: number;
@@ -47,9 +90,12 @@ export type ScreenObservationPromptSource =
 export interface ScreenCaptureTarget {
   targetType: "active-window" | "current-monitor" | "selection";
   captureMethod?: string;
+  windowId?: number;
   appName?: string;
   title?: string;
   monitorName?: string;
+  zOrderIndex?: number;
+  selectionReason?: string;
   x: number;
   y: number;
   width: number;
@@ -100,12 +146,18 @@ export interface ScreenCaptureFocusRegion {
 }
 
 export interface ScreenCaptureCandidate {
+  windowId?: number;
   appName: string;
   title: string;
+  zOrderIndex?: number;
   x: number;
   y: number;
   width: number;
   height: number;
+  containsCursor?: boolean;
+  selected?: boolean;
+  selectionScore?: number;
+  selectionReason?: string;
   skippedReason?: string;
 }
 
@@ -129,11 +181,38 @@ export interface MeetingContextState {
 }
 
 export type ScreenTaskKind =
+  | "behavioral"
   | "coding"
+  | "system-design"
+  | "general-system-design"
+  | "ai-ml-system-design"
+  | "project-deep-dive"
   | "field-knowledge"
   | "ambiguous"
   | "non-question"
   | "unknown";
+
+export type TaskAskFrame =
+  | "hypothetical-design"
+  | "past-project"
+  | "ambiguous"
+  | "direct-answer"
+  | "unknown";
+
+export type TaskTopicDomain =
+  | "ai-ml-infra"
+  | "agentic-ai"
+  | "search"
+  | "backend"
+  | "unknown";
+
+export interface TaskClassifierMetadata {
+  questionType?: ScreenTaskKind;
+  askFrame?: TaskAskFrame;
+  topicDomain?: TaskTopicDomain;
+  projectAnchor?: string;
+  confidence?: number;
+}
 
 export interface ActiveScreenTask {
   id: string;
@@ -144,6 +223,7 @@ export interface ActiveScreenTask {
   question?: string;
   kind: ScreenTaskKind;
   language?: string;
+  classifier?: TaskClassifierMetadata;
   content: string;
   basedOnTurnIds: string[];
   basedOnObservationId: string;
@@ -172,6 +252,7 @@ export type InterviewBriefType =
   | "behavioral"
   | "coding"
   | "system-design"
+  | "ai-ml-system-design"
   | "project-deep-dive"
   | "mixed";
 
@@ -186,12 +267,14 @@ export interface InterviewSessionBrief {
 }
 
 export interface ScreenTaskAnswer {
+  chineseThinking?: string;
   question?: string;
   answer?: string;
   approach?: string;
   code?: string;
   complexity?: string;
   clarifyingQuestion?: string;
+  clarifyingOptions?: ClarifyingQuestionOption[];
   rawContent: string;
   parsedAt: number;
 }
@@ -212,7 +295,7 @@ export type AdvisorRequestMode =
   | "clarifying-answer"
   | "response-action";
 
-export type MeetingResponseActionMode = "speakable" | "bilingual" | "focus";
+export type MeetingResponseActionMode = "speakable" | "focus";
 
 export type MeetingResponseLength = "short" | "normal" | "detailed";
 
@@ -223,11 +306,23 @@ export interface MeetingResponseConfig {
   language: MeetingResponseLanguage;
 }
 
-export type ClarifyingQuestionAnswer = "yes" | "no" | "not-sure";
+export type ClarifyingQuestionAnswer =
+  | "yes"
+  | "no"
+  | "not-sure"
+  | "option";
+
+export interface ClarifyingQuestionOption {
+  id: string;
+  label: string;
+  value: string;
+}
 
 export interface ClarifyingQuestionFeedback {
   question: string;
   answer: ClarifyingQuestionAnswer;
+  answerLabel?: string;
+  answerValue?: string;
 }
 
 export interface AdvisorSuggestion {
@@ -339,7 +434,6 @@ export interface MeetingAudioStatus {
 
 export type MeetingPrivacyMode =
   | "memory-only"
-  | "text-to-cloud"
   | "text-and-screen-to-cloud";
 
 export interface MeetingAssistantSettings {
@@ -397,6 +491,46 @@ export interface MeetingTraceExportRecord {
   exportedAt: number;
 }
 
+export type HumanEvalQuestionType =
+  | "behavioral"
+  | "coding"
+  | "system-design"
+  | "general-system-design"
+  | "ai-ml-system-design"
+  | "project-deep-dive"
+  | "field-knowledge"
+  | "unknown";
+
+export type HumanEvalTaskQuality = "success" | "partial" | "fail";
+
+export type HumanEvalFailureReason =
+  | "wrong-question-type"
+  | "wrong-company"
+  | "wrong-memory"
+  | "missing-memory"
+  | "wrong-answer"
+  | "too-short"
+  | "too-slow"
+  | "stt-error"
+  | "capture-error"
+  | "other";
+
+export interface TraceHumanEvaluation {
+  id: string;
+  traceId: string;
+  traceKind: MeetingTraceKind;
+  createdAt: number;
+  updatedAt: number;
+  correctedQuestionType?: HumanEvalQuestionType;
+  correctedCompany?: string;
+  memoryRelevant?: boolean;
+  memoryMissing?: boolean;
+  memoryWrong?: boolean;
+  taskQuality?: HumanEvalTaskQuality;
+  failureReasons: HumanEvalFailureReason[];
+  notes?: string;
+}
+
 export interface MeetingAssistantState {
   status: MeetingAssistantStatus;
   transcriptTurns: TranscriptTurn[];
@@ -412,4 +546,6 @@ export interface MeetingAssistantState {
   settings: MeetingAssistantSettings;
   lastMemoryContext?: MemoryRetrievalResult;
   lastTraceExport?: MeetingTraceExportRecord;
+  humanEvaluations: TraceHumanEvaluation[];
+  speechCorrections: SpeechCorrection[];
 }

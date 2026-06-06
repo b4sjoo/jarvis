@@ -5,7 +5,8 @@ export const SPEECH_TO_TEXT_PROVIDERS = [
     curl: `curl -X POST "https://api.openai.com/v1/audio/transcriptions" \\
       -H "Authorization: Bearer {{API_KEY}}" \\
       -F "file={{AUDIO}}" \\
-      -F "model={{MODEL}}"`,
+      -F "model={{MODEL}}" \\
+      -F "prompt={{STT_PROMPT}}"`,
     responseContentPath: "text",
     streaming: false,
   },
@@ -18,6 +19,7 @@ export const SPEECH_TO_TEXT_PROVIDERS = [
       -F model={{MODEL}} \\
       -F temperature=0 \\
       -F response_format=text \\
+      -F prompt={{STT_PROMPT}} \\
       -F language=en`,
     responseContentPath: "text",
     streaming: false,

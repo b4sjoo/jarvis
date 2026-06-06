@@ -15,6 +15,8 @@ export interface STTParams {
     variables: Record<string, string>;
   };
   audio: File | Blob;
+  prompt?: string;
+  terms?: string[];
 }
 
 /**
@@ -24,7 +26,7 @@ export async function fetchSTT(params: STTParams): Promise<string> {
   let warnings: string[] = [];
 
   try {
-    const { provider, selectedProvider, audio } = params;
+    const { provider, selectedProvider, audio, prompt, terms = [] } = params;
 
     if (!provider) throw new Error("Provider not provided");
     if (!selectedProvider) throw new Error("Selected provider not provided");
@@ -51,13 +53,15 @@ export async function fetchSTT(params: STTParams): Promise<string> {
     // }
 
     // Build variable map
-    const allVariables = {
+    const allVariables: Record<string, string> = {
       ...Object.fromEntries(
         Object.entries(selectedProvider.variables).map(([key, value]) => [
           key.toUpperCase(),
           value,
         ])
       ),
+      STT_PROMPT: prompt ?? "",
+      STT_TERMS: terms.join(", "),
     };
 
     // Prepare request

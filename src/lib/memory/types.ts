@@ -120,6 +120,38 @@ export type MemoryUseCase =
   | "answer_alignment"
   | "general_chat";
 
+export type MemoryInterviewType =
+  | "behavioral"
+  | "coding"
+  | "system-design"
+  | "ai-ml-system-design"
+  | "project-deep-dive"
+  | "mixed";
+
+export type MemoryQuestionType =
+  | "behavioral"
+  | "coding"
+  | "system-design"
+  | "general-system-design"
+  | "ai-ml-system-design"
+  | "project-deep-dive"
+  | "field-knowledge"
+  | "unknown";
+
+export type MemoryAskFrame =
+  | "hypothetical-design"
+  | "past-project"
+  | "ambiguous"
+  | "direct-answer"
+  | "unknown";
+
+export type MemoryTopicDomain =
+  | "ai-ml-infra"
+  | "agentic-ai"
+  | "search"
+  | "backend"
+  | "unknown";
+
 export type MemoryPriority = "low" | "normal" | "high" | "pinned";
 
 export interface MemoryEntry {
@@ -182,6 +214,11 @@ export interface MemoryRetrievalRequest {
   query: string;
   useCase: MemoryUseCase;
   projectId?: string;
+  interviewTypes?: MemoryInterviewType[];
+  questionType?: MemoryQuestionType;
+  askFrame?: MemoryAskFrame;
+  topicDomain?: MemoryTopicDomain;
+  projectAnchor?: string;
   maxEntries?: number;
   maxChars?: number;
   perEntryMaxChars?: number;

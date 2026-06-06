@@ -7,6 +7,8 @@ export interface TranscribeMeetingAudioParams {
   audio: Blob;
   provider: TYPE_PROVIDER | undefined;
   selectedProvider: SelectedProviderState;
+  prompt?: string;
+  terms?: string[];
   speaker?: TranscriptTurn["speaker"];
   source?: TranscriptTurn["source"];
   startedAt?: number;
@@ -17,6 +19,8 @@ export async function transcribeMeetingAudio({
   audio,
   provider,
   selectedProvider,
+  prompt,
+  terms,
   speaker = "them",
   source = "system-audio",
   startedAt,
@@ -27,6 +31,8 @@ export async function transcribeMeetingAudio({
     provider,
     selectedProvider,
     audio,
+    prompt,
+    terms,
   });
   const trimmedText = text.trim();
 
@@ -53,4 +59,3 @@ export function base64WavToBlob(base64Audio: string) {
 
   return new Blob([bytes], { type: "audio/wav" });
 }
-
