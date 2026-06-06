@@ -31,9 +31,12 @@ pub struct MonitorInfo {
 pub struct CaptureTargetInfo {
     pub target_type: String,
     pub capture_method: String,
+    pub window_id: Option<u32>,
     pub app_name: Option<String>,
     pub title: Option<String>,
     pub monitor_name: Option<String>,
+    pub z_order_index: Option<usize>,
+    pub selection_reason: Option<String>,
     pub x: i32,
     pub y: i32,
     pub width: u32,
@@ -98,12 +101,18 @@ struct FocusCropResult {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CaptureCandidateInfo {
+    pub window_id: u32,
     pub app_name: String,
     pub title: String,
+    pub z_order_index: usize,
     pub x: i32,
     pub y: i32,
     pub width: u32,
     pub height: u32,
+    pub contains_cursor: bool,
+    pub selected: bool,
+    pub selection_score: Option<i64>,
+    pub selection_reason: Option<String>,
     pub skipped_reason: Option<String>,
 }
 
@@ -123,6 +132,7 @@ const SCREEN_CONTEXT_FOCUS_BAND_HEIGHT_RATIO: f64 = 0.18;
 const SCREEN_CONTEXT_FOCUS_BAND_MIN_HEIGHT: u32 = 260;
 const SCREEN_CONTEXT_FOCUS_BAND_MAX_HEIGHT: u32 = 420;
 const SCREEN_CONTEXT_JPEG_QUALITY: u8 = 82;
+const MAX_CAPTURE_CANDIDATES: usize = 12;
 const IMAGE_MEDIA_TYPE_PNG: &str = "image/png";
 const IMAGE_MEDIA_TYPE_JPEG: &str = "image/jpeg";
 
@@ -446,6 +456,105 @@ fn is_active_window_candidate(window: &XcapWindow) -> bool {
     active_window_skip_reason(window).is_none()
 }
 
+fn window_contains_point(window: &XcapWindow, point: Option<(i32, i32)>) -> bool {
+    let Some((x, y)) = point else {
+        return false;
+    };
+
+    let window_right = window.x().saturating_add(window.width() as i32);
+    let window_bottom = window.y().saturating_add(window.height() as i32);
+
+    x >= window.x() && y >= window.y() && x < window_right && y < window_bottom
+}
+
+fn active_window_candidate_score(
+    window: &XcapWindow,
+    z_order_index: usize,
+    cursor: Option<(i32, i32)>,
+) -> Option<i64> {
+    if !is_active_window_candidate(window) {
+        return None;
+    }
+
+    let front_to_back_score = 100_000_i64.saturating_sub(z_order_index as i64);
+    let cursor_score = if window_contains_point(window, cursor) {
+        10_000
+    } else {
+        0
+    };
+
+    Some(front_to_back_score + cursor_score)
+}
+
+fn active_window_selection_reason(
+    window: &XcapWindow,
+    z_order_index: usize,
+    cursor: Option<(i32, i32)>,
+    selected: bool,
+) -> Option<String> {
+    if !is_active_window_candidate(window) {
+        return None;
+    }
+
+    if window_contains_point(window, cursor) {
+        return Some(if selected {
+            "selected:cursor-inside-suitable-window".to_string()
+        } else {
+            "cursor-inside-candidate".to_string()
+        });
+    }
+
+    if z_order_index == 0 {
+        return Some(if selected {
+            "selected:frontmost-list-order".to_string()
+        } else {
+            "frontmost-list-order-candidate".to_string()
+        });
+    }
+
+    selected.then(|| "selected:first-suitable-list-order".to_string())
+}
+
+fn select_active_window_candidate(
+    windows: &[XcapWindow],
+    cursor: Option<(i32, i32)>,
+) -> Result<(XcapWindow, usize, String), String> {
+    let first_suitable = windows
+        .iter()
+        .enumerate()
+        .find(|(_, window)| is_active_window_candidate(window));
+
+    let cursor_suitable = windows
+        .iter()
+        .enumerate()
+        .find(|(_, window)| {
+            is_active_window_candidate(window) && window_contains_point(window, cursor)
+        });
+
+    let (selected_index, selected_window, selection_reason) =
+        if let Some((index, window)) = cursor_suitable {
+            (
+                index,
+                window.clone(),
+                "cursor-inside-suitable-window".to_string(),
+            )
+        } else if let Some((index, window)) = first_suitable {
+            (
+                index,
+                window.clone(),
+                if index == 0 {
+                    "frontmost-list-order".to_string()
+                } else {
+                    "first-suitable-list-order".to_string()
+                },
+            )
+        } else {
+            return Err("No suitable active window found".to_string());
+        };
+
+    Ok((selected_window, selected_index, selection_reason))
+}
+
 fn capture_cursor_info_for_bounds(
     cursor: Option<(i32, i32)>,
     target_x: i32,
@@ -570,20 +679,61 @@ fn current_cursor_position_source() -> &'static str {
     "unavailable"
 }
 
-fn capture_candidates(windows: &[XcapWindow]) -> Vec<CaptureCandidateInfo> {
-    windows
+fn capture_candidates(
+    windows: &[XcapWindow],
+    selected_window_id: u32,
+    cursor: Option<(i32, i32)>,
+) -> Vec<CaptureCandidateInfo> {
+    let selected_index = windows
         .iter()
-        .take(8)
-        .map(|window| CaptureCandidateInfo {
-            app_name: window.app_name().to_string(),
-            title: window.title().to_string(),
-            x: window.x(),
-            y: window.y(),
-            width: window.width(),
-            height: window.height(),
-            skipped_reason: active_window_skip_reason(window),
-        })
-        .collect()
+        .position(|window| window.id() == selected_window_id);
+    let mut included_selected = false;
+    let mut candidates = Vec::new();
+
+    for (index, window) in windows.iter().enumerate() {
+        if index >= MAX_CAPTURE_CANDIDATES && Some(index) != selected_index {
+            continue;
+        }
+
+        let selected = window.id() == selected_window_id;
+        included_selected = included_selected || selected;
+        candidates.push(capture_candidate_info(window, index, cursor, selected));
+    }
+
+    if !included_selected {
+        if let Some((index, window)) = windows
+            .iter()
+            .enumerate()
+            .find(|(_, window)| window.id() == selected_window_id)
+        {
+            candidates.push(capture_candidate_info(window, index, cursor, true));
+        }
+    }
+
+    candidates
+}
+
+fn capture_candidate_info(
+    window: &XcapWindow,
+    z_order_index: usize,
+    cursor: Option<(i32, i32)>,
+    selected: bool,
+) -> CaptureCandidateInfo {
+    CaptureCandidateInfo {
+        window_id: window.id(),
+        app_name: window.app_name().to_string(),
+        title: window.title().to_string(),
+        z_order_index,
+        x: window.x(),
+        y: window.y(),
+        width: window.width(),
+        height: window.height(),
+        contains_cursor: window_contains_point(window, cursor),
+        selected,
+        selection_score: active_window_candidate_score(window, z_order_index, cursor),
+        selection_reason: active_window_selection_reason(window, z_order_index, cursor, selected),
+        skipped_reason: active_window_skip_reason(window),
+    }
 }
 
 fn window_monitor_crop(window: &XcapWindow) -> Result<(image::RgbaImage, String), String> {
@@ -661,14 +811,13 @@ async fn capture_active_window_to_base64() -> Result<CaptureToBase64Result, Stri
         let total_started_at = Instant::now();
         let lookup_started_at = Instant::now();
         let windows = XcapWindow::all().map_err(|e| format!("Failed to get windows: {}", e))?;
-        let candidates = capture_candidates(&windows);
-        let window = windows
-            .into_iter()
-            .find(is_active_window_candidate)
-            .ok_or_else(|| "No suitable active window found".to_string())?;
+        let cursor_position = current_cursor_position();
+        let (window, z_order_index, selection_reason) =
+            select_active_window_candidate(&windows, cursor_position)?;
+        let candidates = capture_candidates(&windows, window.id(), cursor_position);
         let window_lookup_ms = elapsed_ms(lookup_started_at);
         let cursor = capture_cursor_info_for_bounds(
-            current_cursor_position(),
+            cursor_position,
             window.x(),
             window.y(),
             window.width(),
@@ -728,9 +877,12 @@ async fn capture_active_window_to_base64() -> Result<CaptureToBase64Result, Stri
         let target = CaptureTargetInfo {
             target_type: "active-window".to_string(),
             capture_method,
+            window_id: Some(window.id()),
             app_name: Some(window.app_name().to_string()),
             title: Some(window.title().to_string()),
             monitor_name,
+            z_order_index: Some(z_order_index),
+            selection_reason: Some(selection_reason),
             x: window.x(),
             y: window.y(),
             width: window.width(),
@@ -934,9 +1086,12 @@ async fn capture_current_monitor_to_base64(
         let target = CaptureTargetInfo {
             target_type: "current-monitor".to_string(),
             capture_method: "current-monitor".to_string(),
+            window_id: None,
             app_name: None,
             title: Some(monitor.name().to_string()),
             monitor_name: Some(monitor.name().to_string()),
+            z_order_index: None,
+            selection_reason: None,
             x: monitor.x(),
             y: monitor.y(),
             width: monitor.width(),
