@@ -203,7 +203,7 @@ function MeetingFocusControlsWindow({
           <div className="shrink-0 text-[10px] font-medium uppercase text-muted-foreground">
             Type
           </div>
-          <div className="flex min-w-0 flex-wrap gap-1">
+          <div className="flex min-w-0 flex-wrap gap-1.5">
             {interviewBriefTypeOptions.map((option) => {
               const selected = interviewTypes.includes(option.id);
               return (
@@ -211,7 +211,7 @@ function MeetingFocusControlsWindow({
                   key={option.id}
                   size="sm"
                   variant={selected ? "default" : "outline"}
-                  className="h-8 shrink-0 px-2 text-[10px]"
+                  className="h-8 min-w-[88px] shrink-0 px-3 text-[10px]"
                   title={option.label}
                   onClick={() => updateInterviewTypes(option.id)}
                 >
@@ -232,23 +232,26 @@ function MeetingFocusControlsWindow({
           </Badge>
         </div>
 
-        <div className="mt-2 grid min-h-0 flex-1 grid-cols-[1fr_1.1fr] gap-3">
-          <div className="min-w-0 overflow-hidden">
-            <div className="mb-1 flex min-w-0 items-center gap-1.5 text-[10px] font-medium text-muted-foreground">
-              <MessageSquareTextIcon className="h-3 w-3 shrink-0" />
+        <div className="mt-2 flex min-h-0 flex-1 flex-col gap-2">
+          <div className="flex min-w-0 flex-1 flex-col overflow-hidden rounded-md border border-border/50 bg-muted/20 px-3 py-2">
+            <div className="mb-1 flex min-w-0 items-center gap-1.5 text-[11px] font-medium text-muted-foreground">
+              <MessageSquareTextIcon className="h-3.5 w-3.5 shrink-0" />
               <span className="truncate">Latest transcript</span>
             </div>
             <p
               className={cn(
                 WRAP_TEXT_CLASS,
-                "line-clamp-3 text-[12px] leading-5 text-muted-foreground"
+                "line-clamp-3 text-[13px] leading-5 text-muted-foreground"
               )}
             >
               {snapshot.latestTurnText}
             </p>
           </div>
 
-          <div className="min-w-0">
+          <div className="mt-auto min-w-0 shrink-0">
+            <div className="mb-1 text-[11px] font-medium text-muted-foreground">
+              Correction
+            </div>
             <div className="flex min-w-0 gap-1.5">
               <Input
                 value={correction}
@@ -260,13 +263,13 @@ function MeetingFocusControlsWindow({
                   }
                 }}
                 placeholder="Correction: RAG not rec / Glean"
-                className="h-8 min-w-0 text-[11px]"
+                className="h-9 min-w-0 text-[12px]"
                 disabled={!snapshot.active}
               />
               <Button
                 size="sm"
                 variant="outline"
-                className="h-8 shrink-0 gap-1 px-2 text-[10px]"
+                className="h-9 shrink-0 gap-1 px-3 text-[11px]"
                 onClick={submitCorrection}
                 disabled={!snapshot.active || !correction.trim()}
               >
