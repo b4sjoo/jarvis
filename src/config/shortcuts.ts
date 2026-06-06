@@ -81,4 +81,34 @@ export const DEFAULT_SHORTCUT_ACTIONS: ShortcutAction[] = [
       linux: "ctrl+shift+e",
     },
   },
+  {
+    id: "meeting_focus_mode",
+    name: "Meeting Focus Mode",
+    description: "Toggle Focus Mode for the meeting assistant",
+    defaultKey: {
+      macos: "cmd+shift+j",
+      windows: "ctrl+shift+j",
+      linux: "ctrl+shift+j",
+    },
+  },
+  {
+    id: "meeting_toggle_listening",
+    name: "Meeting Toggle Listening",
+    description: "Start, pause, or resume Meeting Assistant listening",
+    defaultKey: {
+      macos: "cmd+shift+l",
+      windows: "ctrl+shift+l",
+      linux: "ctrl+shift+l",
+    },
+  },
+  {
+    id: "meeting_regenerate",
+    name: "Meeting Regenerate",
+    description: "Regenerate the current Meeting Assistant suggestion",
+    defaultKey: {
+      macos: "cmd+shift+u",
+      windows: "ctrl+shift+u",
+      linux: "ctrl+shift+u",
+    },
+  },
 ];
