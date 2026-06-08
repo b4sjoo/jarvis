@@ -66,13 +66,24 @@ export function hasScreenTaskAnswerContent(answer: ScreenTaskAnswer) {
 export function readScreenTaskSection(content: string, labels: string[]) {
   const labelPattern = labels.map(escapeRegExp).join("|");
   const boundaryPattern = SCREEN_TASK_SECTION_LABELS.map(escapeRegExp).join("|");
+  const labelLinePattern = buildSectionLabelLinePattern(labelPattern);
+  const boundaryLinePattern = buildSectionLabelLinePattern(boundaryPattern);
   const pattern = new RegExp(
-    `(?:^|\\n)\\s*(?:[-*]\\s*)?(?:${labelPattern})(?:\\s*\\([^\\n:)]*\\))?\\s*:\\s*([\\s\\S]*?)(?=\\n\\s*(?:[-*]\\s*)?(?:${boundaryPattern})(?:\\s*\\([^\\n:)]*\\))?\\s*:|$)`,
+    `(?:^|\\n)\\s*${labelLinePattern}([\\s\\S]*?)(?=\\n\\s*${boundaryLinePattern}|$)`,
     "i"
   );
   const match = pattern.exec(content);
 
   return sanitizeScreenTaskSection(match?.[1] ?? "");
+}
+
+function buildSectionLabelLinePattern(labelPattern: string) {
+  const emphasis = "(?:\\*\\*|__)?";
+  const prefix = `(?:#{1,6}\\s*)?(?:[-*]\\s*)?${emphasis}`;
+  const label = `(?:${labelPattern})(?:\\s*\\([^\\n:：)]*\\))?`;
+  const separator = `(?:\\s*[:：]\\s*${emphasis}\\s*|${emphasis}\\s*[:：]\\s*|${emphasis}\\s*(?:\\n|$))`;
+
+  return `${prefix}${label}${separator}`;
 }
 
 export function sanitizeScreenTaskSection(value: string) {

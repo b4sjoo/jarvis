@@ -33,6 +33,8 @@ import { type ReactNode, useEffect, useState } from "react";
 
 const WRAP_TEXT_CLASS =
   "min-w-0 whitespace-pre-wrap break-words [overflow-wrap:anywhere]";
+const CHINESE_THINKING_TEXT_CLASS =
+  "min-w-0 break-words text-sm font-semibold leading-5 [overflow-wrap:anywhere] [&_*]:leading-5 [&_li]:my-0 [&_ol]:my-0 [&_p]:my-0 [&_p+p]:mt-1 [&_ul]:my-0";
 const MEETING_MARKDOWN_CLASS =
   "text-xs leading-5 [&_code]:text-[10px] [&_li]:my-0.5 [&_ol]:my-1 [&_p]:my-0 [&_pre]:my-2 [&_pre]:max-h-72 [&_pre]:overflow-auto [&_strong]:font-semibold [&_ul]:my-1";
 
@@ -103,17 +105,14 @@ function MeetingFocusAnswerWindow({
       <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-lg border border-border/70 bg-background/95 shadow-lg backdrop-blur">
         <ScrollArea className="min-h-0 flex-1 overflow-hidden">
           <div className="min-w-0 space-y-2 overflow-x-hidden p-3">
-            <section className="min-w-0 overflow-hidden rounded-md border border-primary/30 bg-primary/5 p-3">
-              <div className="mb-2 flex items-center gap-2 text-xs font-semibold">
+            <section className="min-w-0 overflow-hidden rounded-md border border-primary/30 bg-primary/5 p-2.5">
+              <div className="mb-1 flex items-center gap-2 text-xs font-semibold">
                 <BrainIcon className="h-3.5 w-3.5" />
                 中文思路
               </div>
               <MeetingMarkdownText
-                className={cn(
-                  WRAP_TEXT_CLASS,
-                  "min-h-12 text-sm font-semibold leading-6"
-                )}
-                value={focusThinking}
+                className={CHINESE_THINKING_TEXT_CLASS}
+                value={formatChineseThinkingText(focusThinking)}
               />
             </section>
 
@@ -449,6 +448,15 @@ function toggleInterviewBriefType(
     concreteTypes.length === concreteInterviewBriefTypes.length;
 
   return allConcreteSelected ? [...concreteTypes, "mixed"] : concreteTypes;
+}
+
+function formatChineseThinkingText(value: string) {
+  return value
+    .trim()
+    .replace(/\r\n/g, "\n")
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n[ \t]+/g, "\n")
+    .replace(/\n{2,}/g, "\n");
 }
 
 function normalizeMeetingMarkdown(value: string) {

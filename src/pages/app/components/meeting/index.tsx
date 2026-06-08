@@ -188,6 +188,8 @@ const MEETING_PANEL_WIDTH = 920;
 const PANEL_WIDTH_CLASS = "w-[920px] max-w-[100vw]";
 const WRAP_TEXT_CLASS =
   "min-w-0 whitespace-pre-wrap break-words [overflow-wrap:anywhere]";
+const CHINESE_THINKING_TEXT_CLASS =
+  "min-w-0 break-words text-sm font-semibold leading-5 [overflow-wrap:anywhere] [&_*]:leading-5 [&_li]:my-0 [&_ol]:my-0 [&_p]:my-0 [&_p+p]:mt-1 [&_ul]:my-0";
 const TASK_TIMEOUT_OPTIONS = [15, 30, 60, 120] as const;
 const FOCUS_MODE_SHORTCUT_LABEL = "Cmd+Shift+J";
 const FOCUS_LISTENING_SHORTCUT_LABEL = "Cmd+Shift+L";
@@ -1026,18 +1028,17 @@ export const MeetingAssistant = ({
 
               {isScreenTaskSuggestion ? (
                 <>
-                  <section className="min-w-0 overflow-hidden rounded-md border border-primary/30 bg-primary/5 p-3">
-                    <div className="mb-2 flex items-center gap-2 text-xs font-semibold">
+                  <section className="min-w-0 overflow-hidden rounded-md border border-primary/30 bg-primary/5 p-2.5">
+                    <div className="mb-1 flex items-center gap-2 text-xs font-semibold">
                       <BrainIcon className="h-3.5 w-3.5" />
                       中文思路
                     </div>
                     <MeetingMarkdownText
-                      className={cn(
-                        WRAP_TEXT_CLASS,
-                        "min-h-12 text-sm font-medium leading-6"
-                      )}
+                      className={CHINESE_THINKING_TEXT_CLASS}
                       value={
-                        suggestionSections.chineseThinking ||
+                        formatChineseThinkingText(
+                          suggestionSections.chineseThinking
+                        ) ||
                         "等待 Jarvis 总结中文思路。"
                       }
                     />
@@ -1111,18 +1112,17 @@ export const MeetingAssistant = ({
                 </>
               ) : (
                 <>
-                  <section className="min-w-0 overflow-hidden rounded-md border border-border/70 p-3">
-                    <div className="mb-2 flex items-center gap-2 text-xs font-semibold">
+                  <section className="min-w-0 overflow-hidden rounded-md border border-border/70 p-2.5">
+                    <div className="mb-1 flex items-center gap-2 text-xs font-semibold">
                       <BrainIcon className="h-3.5 w-3.5" />
                       中文思路
                     </div>
                     <MeetingMarkdownText
-                      className={cn(
-                        WRAP_TEXT_CLASS,
-                        "min-h-14 text-xs leading-5"
-                      )}
+                      className={CHINESE_THINKING_TEXT_CLASS}
                       value={
-                        suggestionSections.chineseThinking ||
+                        formatChineseThinkingText(
+                          suggestionSections.chineseThinking
+                        ) ||
                         "等待 Jarvis 给出中文思路。"
                       }
                     />
@@ -1693,17 +1693,14 @@ const FocusModePanel = ({
       <div className="flex h-full min-h-0 flex-col overflow-hidden">
         <ScrollArea className="min-h-0 flex-1 overflow-hidden">
           <div className="min-w-0 max-w-full space-y-3 overflow-x-hidden p-3 pb-44">
-            <section className="min-w-0 overflow-hidden rounded-md border border-primary/30 bg-primary/5 p-3">
-              <div className="mb-2 flex items-center gap-2 text-xs font-semibold">
+            <section className="min-w-0 overflow-hidden rounded-md border border-primary/30 bg-primary/5 p-2.5">
+              <div className="mb-1 flex items-center gap-2 text-xs font-semibold">
                 <BrainIcon className="h-3.5 w-3.5" />
                 中文思路
               </div>
               <MeetingMarkdownText
-                className={cn(
-                  WRAP_TEXT_CLASS,
-                  "min-h-14 text-sm font-semibold leading-6"
-                )}
-                value={focusThinking}
+                className={CHINESE_THINKING_TEXT_CLASS}
+                value={formatChineseThinkingText(focusThinking)}
               />
             </section>
 
@@ -3111,7 +3108,7 @@ function parseSuggestionSections(
   }
 
   const screenQuestion = parsedScreenTaskAnswer.question ?? "";
-  const chineseThinking =
+  const parsedChineseThinking =
     parsedScreenTaskAnswer.chineseThinking ??
     readSuggestionSection(trimmedContent, [
       "中文思路",
@@ -3129,6 +3126,15 @@ function parseSuggestionSections(
     "Reply",
     "Suggested reply",
   ]);
+  const chineseThinking =
+    parsedChineseThinking ||
+    buildChineseThinkingFallback({
+      answer,
+      approach,
+      reply,
+      question: screenQuestion,
+      isScreenTask,
+    });
   const question = isScreenTask
     ? clarifyingQuestion
     : readSuggestionSection(trimmedContent, [
@@ -3156,13 +3162,69 @@ function parseSuggestionSections(
 function readSuggestionSection(content: string, labels: string[]) {
   const labelPattern = labels.map(escapeRegExp).join("|");
   const boundaryPattern = sectionBoundaryLabels.map(escapeRegExp).join("|");
+  const labelLinePattern = buildSectionLabelLinePattern(labelPattern);
+  const boundaryLinePattern = buildSectionLabelLinePattern(boundaryPattern);
   const pattern = new RegExp(
-    `(?:^|\\n)\\s*(?:[-*]\\s*)?(?:${labelPattern})(?:\\s*\\([^\\n:)]*\\))?\\s*:\\s*([\\s\\S]*?)(?=\\n\\s*(?:[-*]\\s*)?(?:${boundaryPattern})(?:\\s*\\([^\\n:)]*\\))?\\s*:|$)`,
+    `(?:^|\\n)\\s*${labelLinePattern}([\\s\\S]*?)(?=\\n\\s*${boundaryLinePattern}|$)`,
     "i"
   );
   const match = pattern.exec(content);
 
   return sanitizeSectionText(match?.[1] ?? "");
+}
+
+function buildSectionLabelLinePattern(labelPattern: string) {
+  const emphasis = "(?:\\*\\*|__)?";
+  const prefix = `(?:#{1,6}\\s*)?(?:[-*]\\s*)?${emphasis}`;
+  const label = `(?:${labelPattern})(?:\\s*\\([^\\n:：)]*\\))?`;
+  const separator = `(?:\\s*[:：]\\s*${emphasis}\\s*|${emphasis}\\s*[:：]\\s*|${emphasis}\\s*(?:\\n|$))`;
+
+  return `${prefix}${label}${separator}`;
+}
+
+function buildChineseThinkingFallback({
+  answer,
+  approach,
+  reply,
+  question,
+  isScreenTask,
+}: {
+  answer: string;
+  approach: string;
+  reply: string;
+  question: string;
+  isScreenTask: boolean;
+}) {
+  const source = [approach, answer, reply].find((value) => value.trim());
+  if (!source) return "";
+
+  if (isScreenTask) {
+    if (approach.trim()) return `先按这个思路组织回答：${toCompactChineseHint(approach)}`;
+    if (answer.trim()) return `先给结论，再补关键理由：${toCompactChineseHint(answer)}`;
+    return question.trim()
+      ? `先确认题目焦点，再围绕 ${toCompactChineseHint(question)} 回答。`
+      : "";
+  }
+
+  return `先把意思压缩成可说出口的主线：${toCompactChineseHint(source)}`;
+}
+
+function toCompactChineseHint(value: string) {
+  return stripOuterCodeFence(value)
+    .replace(/```[\s\S]*?```/g, " ")
+    .replace(/\*\*/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 180);
+}
+
+function formatChineseThinkingText(value: string) {
+  return value
+    .trim()
+    .replace(/\r\n/g, "\n")
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n[ \t]+/g, "\n")
+    .replace(/\n{2,}/g, "\n");
 }
 
 function normalizeMeetingMarkdown(value: string) {
