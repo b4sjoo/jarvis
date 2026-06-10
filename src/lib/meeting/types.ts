@@ -229,6 +229,8 @@ export interface TaskClassifierMetadata {
   topicDomain?: TaskTopicDomain;
   projectAnchor?: string;
   confidence?: number;
+  overrideSource?: "interview-type-selector";
+  overrideAt?: number;
 }
 
 export type InterviewPlaybookId =
@@ -473,6 +475,8 @@ export interface MeetingAudioSettings {
   config: MeetingAudioConfig;
 }
 
+export interface MeetingCodingModelSettings extends SelectedProviderState {}
+
 export interface MeetingAudioStatus {
   active: boolean;
   systemCaptureActive: boolean;
@@ -495,6 +499,7 @@ export interface MeetingAssistantSettings {
   debugMode: boolean;
   microphoneContextEnabled: boolean;
   response: MeetingResponseConfig;
+  codingModel: MeetingCodingModelSettings;
   audio: MeetingAudioSettings;
 }
 

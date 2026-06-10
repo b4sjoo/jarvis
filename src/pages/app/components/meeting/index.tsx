@@ -25,6 +25,7 @@ import type {
   InterviewTargetCompany,
   MeetingAudioConfig,
   MeetingAudioProfile,
+  MeetingCodingModelSettings,
   MeetingResponseActionMode,
   MeetingResponseConfig,
   MeetingResponseLanguage,
@@ -47,8 +48,9 @@ import {
   stripOuterCodeFence,
   summarizeMeetingTraces,
 } from "@/lib/meeting";
-import { safeLocalStorage } from "@/lib";
+import { extractVariables, safeLocalStorage } from "@/lib";
 import { cn } from "@/lib/utils";
+import type { TYPE_PROVIDER } from "@/types";
 import { invoke } from "@tauri-apps/api/core";
 import { emit, listen } from "@tauri-apps/api/event";
 import {
@@ -225,7 +227,8 @@ const concreteInterviewBriefTypes = interviewBriefTypeOptions
 
 function toggleInterviewBriefType(
   currentTypes: InterviewBriefType[],
-  type: InterviewBriefType
+  type: InterviewBriefType,
+  forceSingleConcrete = false
 ): InterviewBriefType[] {
   const current = new Set(currentTypes);
 
@@ -234,6 +237,10 @@ function toggleInterviewBriefType(
       current.has(candidate)
     );
     return allSelected ? [] : [...concreteInterviewBriefTypes, "mixed"];
+  }
+
+  if (forceSingleConcrete) {
+    return [type];
   }
 
   if (current.has(type)) {
@@ -467,6 +474,7 @@ export const MeetingAssistant = ({
       clarifyingQuestion,
       isTaskSwitchClarifyingQuestion,
       interviewTypes: editableBriefForFocus.interviewTypes,
+      hasActiveScreenTask: Boolean(meeting.activeScreenTask),
       speechCorrections: meeting.speechCorrections.slice(-4).map((item) => ({
         id: item.id,
         input: item.input,
@@ -483,6 +491,7 @@ export const MeetingAssistant = ({
       isBusy,
       isTaskSwitchClarifyingQuestion,
       latestTurn?.text,
+      meeting.activeScreenTask,
       meeting.error,
       meeting.speechCorrections,
       meeting.status,
@@ -983,6 +992,7 @@ export const MeetingAssistant = ({
               suggestionSections={displaySuggestionSections}
               codingArtifactCached={codingArtifactDisplay.isCached}
               isScreenTaskSuggestion={isScreenTaskSuggestion}
+              hasActiveScreenTask={Boolean(meeting.activeScreenTask)}
               latestTurnText={latestTurn?.text || "Waiting for meeting audio."}
               speechCorrectionInput={speechCorrectionInput}
               onSpeechCorrectionInputChange={setSpeechCorrectionInput}
@@ -1013,6 +1023,9 @@ export const MeetingAssistant = ({
                 onOpenChange={setConfigurationsOpen}
                 responseConfig={meeting.settings.response}
                 onResponseConfigChange={meeting.setResponseConfig}
+                codingModel={meeting.settings.codingModel}
+                onCodingModelChange={meeting.setCodingModelConfig}
+                aiProviders={meeting.aiProviders}
                 privacyMode={meeting.settings.privacyMode}
                 onPrivacyModeChange={meeting.setPrivacyMode}
                 activeScreenTaskTimeoutMinutes={
@@ -1041,6 +1054,7 @@ export const MeetingAssistant = ({
                 open={interviewBriefOpen}
                 onOpenChange={setInterviewBriefOpen}
                 brief={meeting.interviewSessionBrief}
+                hasActiveScreenTask={Boolean(meeting.activeScreenTask)}
                 onBriefChange={meeting.setInterviewSessionBrief}
                 onClear={meeting.clearInterviewSessionBrief}
               />
@@ -1765,6 +1779,7 @@ const FocusModePanel = ({
   suggestionSections,
   codingArtifactCached,
   isScreenTaskSuggestion,
+  hasActiveScreenTask,
   latestTurnText,
   speechCorrectionInput,
   onSpeechCorrectionInputChange,
@@ -1787,6 +1802,7 @@ const FocusModePanel = ({
   suggestionSections: ReturnType<typeof parseSuggestionSections>;
   codingArtifactCached: boolean;
   isScreenTaskSuggestion: boolean;
+  hasActiveScreenTask: boolean;
   latestTurnText: string;
   speechCorrectionInput: string;
   onSpeechCorrectionInputChange: (value: string) => void;
@@ -1930,6 +1946,7 @@ const FocusModePanel = ({
               compact
               value={editableBrief.interviewTypes}
               onChange={updateInterviewTypes}
+              forceSingleConcrete={hasActiveScreenTask}
             />
             <span
               className={cn(
@@ -1982,10 +1999,12 @@ const InterviewTypeButtonGrid = ({
   value,
   onChange,
   compact = false,
+  forceSingleConcrete = false,
 }: {
   value: InterviewBriefType[];
   onChange: (value: InterviewBriefType[]) => void;
   compact?: boolean;
+  forceSingleConcrete?: boolean;
 }) => {
   return (
     <div
@@ -2009,7 +2028,13 @@ const InterviewTypeButtonGrid = ({
             )}
             title={option.label}
             onClick={() => {
-              onChange(toggleInterviewBriefType(value, option.id));
+              onChange(
+                toggleInterviewBriefType(
+                  value,
+                  option.id,
+                  forceSingleConcrete
+                )
+              );
             }}
           >
             {compact ? option.shortLabel : option.label}
@@ -2186,12 +2211,14 @@ const InterviewSessionBriefPanel = ({
   open,
   onOpenChange,
   brief,
+  hasActiveScreenTask,
   onBriefChange,
   onClear,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   brief?: InterviewSessionBrief;
+  hasActiveScreenTask: boolean;
   onBriefChange: (brief: InterviewSessionBrief | undefined) => void;
   onClear: () => void;
 }) => {
@@ -2277,6 +2304,7 @@ const InterviewSessionBriefPanel = ({
             </Label>
             <InterviewTypeButtonGrid
               value={editableBrief.interviewTypes}
+              forceSingleConcrete={hasActiveScreenTask}
               onChange={(interviewTypes) => {
                 updateBrief({ interviewTypes });
               }}
@@ -2337,6 +2365,9 @@ const ConfigurationsPanel = ({
   onOpenChange,
   responseConfig,
   onResponseConfigChange,
+  codingModel,
+  onCodingModelChange,
+  aiProviders,
   privacyMode,
   onPrivacyModeChange,
   activeScreenTaskTimeoutMinutes,
@@ -2356,6 +2387,9 @@ const ConfigurationsPanel = ({
   onOpenChange: (open: boolean) => void;
   responseConfig: MeetingResponseConfig;
   onResponseConfigChange: (config: MeetingResponseConfig) => void;
+  codingModel: MeetingCodingModelSettings;
+  onCodingModelChange: (config: MeetingCodingModelSettings) => void;
+  aiProviders: TYPE_PROVIDER[];
   privacyMode: (typeof privacyOptions)[number]["id"];
   onPrivacyModeChange: (mode: (typeof privacyOptions)[number]["id"]) => void;
   activeScreenTaskTimeoutMinutes: number;
@@ -2422,6 +2456,11 @@ const ConfigurationsPanel = ({
                   language,
                 });
               }}
+            />
+            <CodingModelConfig
+              providers={aiProviders}
+              value={codingModel}
+              onChange={onCodingModelChange}
             />
           </ConfigurationGroup>
 
@@ -2613,6 +2652,86 @@ const ConfigurationsPanel = ({
         </div>
       ) : null}
     </section>
+  );
+};
+
+const CodingModelConfig = ({
+  providers,
+  value,
+  onChange,
+}: {
+  providers: TYPE_PROVIDER[];
+  value: MeetingCodingModelSettings;
+  onChange: (config: MeetingCodingModelSettings) => void;
+}) => {
+  const selectedProvider = providers.find(
+    (provider) => provider.id === value.provider
+  );
+  const variables = extractVariables(selectedProvider?.curl ?? "");
+
+  return (
+    <div className="space-y-2 rounded-sm border border-border/60 p-2">
+      <div>
+        <Label className="mb-1.5 block text-[10px] font-medium uppercase text-muted-foreground">
+          Coding model
+        </Label>
+        <select
+          className="h-8 w-full rounded-sm border border-border bg-background px-2 text-xs outline-none transition-colors focus:border-foreground/40"
+          value={value.provider}
+          onChange={(event) => {
+            onChange({
+              provider: event.target.value,
+              variables: {},
+            });
+          }}
+        >
+          <option value="">Same as main model</option>
+          {providers
+            .filter(
+              (provider): provider is TYPE_PROVIDER & { id: string } =>
+                Boolean(provider.id)
+            )
+            .map((provider, index) => (
+              <option key={provider.id} value={provider.id}>
+                {provider.id || `Provider ${index + 1}`}
+              </option>
+            ))}
+        </select>
+        <div className="mt-1 text-[10px] text-muted-foreground">
+          Used only for confirmed coding tasks
+        </div>
+      </div>
+
+      {selectedProvider && variables.length > 0 ? (
+        <div className="space-y-1.5">
+          {variables.map((variable) => (
+            <div key={variable.key}>
+              <Label className="mb-1 block text-[10px] font-medium uppercase text-muted-foreground">
+                {variable.value}
+              </Label>
+              <Input
+                className="h-8 text-xs"
+                type={
+                  /key|token|secret|password/i.test(variable.key)
+                    ? "password"
+                    : "text"
+                }
+                value={value.variables[variable.key] ?? ""}
+                onChange={(event) => {
+                  onChange({
+                    ...value,
+                    variables: {
+                      ...value.variables,
+                      [variable.key]: event.target.value,
+                    },
+                  });
+                }}
+              />
+            </div>
+          ))}
+        </div>
+      ) : null}
+    </div>
   );
 };
 

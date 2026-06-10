@@ -37,6 +37,7 @@ export type MeetingFocusSnapshot = {
   clarifyingQuestion: string;
   isTaskSwitchClarifyingQuestion: boolean;
   interviewTypes: InterviewBriefType[];
+  hasActiveScreenTask: boolean;
   speechCorrections: MeetingFocusSpeechCorrectionSnapshot[];
 };
 
@@ -76,5 +77,6 @@ export const EMPTY_MEETING_FOCUS_SNAPSHOT: MeetingFocusSnapshot = {
   clarifyingQuestion: "",
   isTaskSwitchClarifyingQuestion: false,
   interviewTypes: [],
+  hasActiveScreenTask: false,
   speechCorrections: [],
 };

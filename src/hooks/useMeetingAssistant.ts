@@ -6,6 +6,7 @@ import { STORAGE_KEYS } from "@/config";
 import { useApp } from "@/contexts";
 import { safeLocalStorage } from "@/lib";
 import { floatArrayToWav } from "@/lib/utils";
+import type { TYPE_PROVIDER } from "@/types";
 import {
   formatMemorySelectionForTrace,
   retrieveMemoryContext,
@@ -20,6 +21,7 @@ import {
   AdvisorEngine,
   AdvisorPromptContext,
   AdvisorRequestMode,
+  ActiveScreenTask,
   ClarifyingQuestionAnswer,
   ClarifyingQuestionFeedback,
   MeetingAssistantState,
@@ -27,6 +29,7 @@ import {
   MeetingAudioStatus,
   MeetingAssistantSettings,
   MeetingAudioProfile,
+  MeetingCodingModelSettings,
   InterviewBriefType,
   InterviewSessionBrief,
   MeetingPrivacyMode,
@@ -41,8 +44,12 @@ import {
   PENDING_CONFIRMATION_TTL_MS,
   ScreenObservation,
   ScreenPreflightResult,
+  ScreenTaskKind,
+  SelectedProviderState,
   SpeechCorrection,
   SpeechCorrectionRule,
+  TaskAskFrame,
+  TaskTopicDomain,
   TraceHumanEvaluation,
   TranscriptTurn,
   base64WavToBlob,
@@ -150,6 +157,11 @@ const DEFAULT_MEETING_RESPONSE_CONFIG: MeetingResponseConfig = {
   language: "auto",
 };
 
+const DEFAULT_MEETING_CODING_MODEL_SETTINGS: MeetingCodingModelSettings = {
+  provider: "",
+  variables: {},
+};
+
 const DEFAULT_INTERVIEW_SESSION_BRIEF: InterviewSessionBrief = {
   targetCompany: "",
   targetCompanyNormalized: undefined,
@@ -186,6 +198,7 @@ const INITIAL_STATE: MeetingAssistantState = {
     debugMode: false,
     microphoneContextEnabled: true,
     response: DEFAULT_MEETING_RESPONSE_CONFIG,
+    codingModel: DEFAULT_MEETING_CODING_MODEL_SETTINGS,
     audio: {
       profile: "balanced",
       config: DEFAULT_MEETING_AUDIO_CONFIG,
@@ -230,6 +243,7 @@ function readMeetingAssistantSettings(): MeetingAssistantSettings {
           ? parsed.microphoneContextEnabled
           : DEFAULT_MEETING_ASSISTANT_SETTINGS.microphoneContextEnabled,
       response: normalizeMeetingResponseConfig(parsed.response),
+      codingModel: normalizeMeetingCodingModelSettings(parsed.codingModel),
       audio: normalizeMeetingAudioSettings(parsed.audio),
     };
   } catch {
@@ -320,6 +334,88 @@ function isInterviewBriefType(value: unknown): value is InterviewBriefType {
   );
 }
 
+function readSingleConcreteInterviewTypeOverride(
+  brief: InterviewSessionBrief | undefined
+): ScreenTaskKind | undefined {
+  if (!brief?.interviewTypes.length || brief.interviewTypes.includes("mixed")) {
+    return undefined;
+  }
+
+  const concreteTypes = brief.interviewTypes.filter(
+    (type): type is Exclude<InterviewBriefType, "mixed"> => type !== "mixed"
+  );
+
+  if (concreteTypes.length !== 1) return undefined;
+
+  const [type] = concreteTypes;
+  return type === "system-design" ? "general-system-design" : type;
+}
+
+function normalizeScreenTaskKindForOverrideComparison(
+  kind: ScreenTaskKind | undefined
+) {
+  return kind === "system-design" ? "general-system-design" : kind;
+}
+
+function isInterviewTypeOverrideMismatch(
+  activeKind: ScreenTaskKind,
+  overrideKind: ScreenTaskKind
+) {
+  return (
+    normalizeScreenTaskKindForOverrideComparison(activeKind) !==
+    normalizeScreenTaskKindForOverrideComparison(overrideKind)
+  );
+}
+
+function getManualOverrideAskFrame(kind: ScreenTaskKind): TaskAskFrame {
+  if (kind === "project-deep-dive") return "past-project";
+  if (kind === "general-system-design" || kind === "system-design") {
+    return "hypothetical-design";
+  }
+  if (kind === "ai-ml-system-design") return "hypothetical-design";
+  return "direct-answer";
+}
+
+function getManualOverrideTopicDomain(
+  kind: ScreenTaskKind,
+  existingTopicDomain: TaskTopicDomain | undefined
+): TaskTopicDomain | undefined {
+  if (kind === "ai-ml-system-design") return "ai-ml-infra";
+  if (kind === "general-system-design" || kind === "system-design") {
+    return existingTopicDomain && existingTopicDomain !== "unknown"
+      ? existingTopicDomain
+      : "backend";
+  }
+  return existingTopicDomain;
+}
+
+function formatScreenTaskKindLabel(kind: ScreenTaskKind) {
+  if (kind === "ai-ml-system-design") return "AI/ML system design";
+  if (kind === "general-system-design" || kind === "system-design") {
+    return "system design";
+  }
+  if (kind === "project-deep-dive") return "project deep dive";
+  if (kind === "field-knowledge") return "field knowledge";
+  return kind;
+}
+
+function buildManualInterviewTypeOverrideContent(
+  task: ActiveScreenTask,
+  correctedKind: ScreenTaskKind
+) {
+  const question = task.question || extractScreenTaskQuestion(task.content);
+  return [
+    question ? `Question: ${question}` : undefined,
+    `Manual interview type correction: treat this active task as ${formatScreenTaskKindLabel(
+      correctedKind
+    )}.`,
+    "Regenerate the answer from the corrected type. Treat any prior generated answer as stale.",
+    task.language ? `Language: ${task.language}` : undefined,
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
 function normalizeMeetingResponseConfig(
   value: unknown
 ): MeetingResponseConfig {
@@ -337,6 +433,24 @@ function normalizeMeetingResponseConfig(
       parsed.language === "chinese"
         ? parsed.language
         : DEFAULT_MEETING_RESPONSE_CONFIG.language,
+  };
+}
+
+function normalizeMeetingCodingModelSettings(
+  value: unknown
+): MeetingCodingModelSettings {
+  const parsed = isRecord(value) ? value : {};
+  const rawVariables = isRecord(parsed.variables) ? parsed.variables : {};
+  const variables = Object.fromEntries(
+    Object.entries(rawVariables).filter(
+      (entry): entry is [string, string] =>
+        typeof entry[0] === "string" && typeof entry[1] === "string"
+    )
+  );
+
+  return {
+    provider: typeof parsed.provider === "string" ? parsed.provider : "",
+    variables,
   };
 }
 
@@ -604,6 +718,32 @@ interface PendingConfirmation {
   timeoutId: number;
 }
 
+interface PendingInterviewTypeOverride {
+  taskId: string;
+  traceId: string;
+  correctedKind: ScreenTaskKind;
+}
+
+interface MeetingModelRouteResolution {
+  provider: TYPE_PROVIDER | undefined;
+  selectedProvider: SelectedProviderState;
+  route: "main" | "coding-override";
+  reason: string;
+  fallbackReason?: string;
+  mainProviderId?: string;
+  codingProviderId?: string;
+}
+
+function formatMeetingModelRouteForTrace(route: MeetingModelRouteResolution) {
+  return {
+    modelRoute: route.route,
+    modelRouteReason: route.reason,
+    modelRouteFallbackReason: route.fallbackReason,
+    mainProviderId: route.mainProviderId,
+    codingProviderId: route.codingProviderId,
+  };
+}
+
 export function useMeetingAssistant() {
   const {
     screenshotConfiguration,
@@ -654,6 +794,8 @@ export function useMeetingAssistant() {
   const systemAudioQueueTailRef = useRef<Promise<void>>(Promise.resolve());
   const microphoneAudioQueueTailRef = useRef<Promise<void>>(Promise.resolve());
   const pendingConfirmationRef = useRef<PendingConfirmation | null>(null);
+  const pendingInterviewTypeOverrideRef =
+    useRef<PendingInterviewTypeOverride | null>(null);
   const speechCorrectionsRef = useRef<SpeechCorrection[]>([]);
   const microphoneContextEnabledRef = useRef(
     INITIAL_STATE.settings.microphoneContextEnabled
@@ -676,6 +818,74 @@ export function useMeetingAssistant() {
         (candidate) => candidate.id === selectedAIProvider.provider
       ),
     [allAiProviders, selectedAIProvider.provider]
+  );
+
+  const codingAiProvider = useMemo(
+    () =>
+      allAiProviders.find(
+        (candidate) => candidate.id === state.settings.codingModel.provider
+      ),
+    [allAiProviders, state.settings.codingModel.provider]
+  );
+
+  const resolveMeetingModelRoute = useCallback(
+    ({
+      useCodingModel,
+      requiresVision = false,
+      reason,
+    }: {
+      useCodingModel: boolean;
+      requiresVision?: boolean;
+      reason: string;
+    }): MeetingModelRouteResolution => {
+      const mainRoute: MeetingModelRouteResolution = {
+        provider: aiProvider,
+        selectedProvider: selectedAIProvider,
+        route: "main",
+        reason,
+        mainProviderId: aiProvider?.id,
+        codingProviderId: state.settings.codingModel.provider || undefined,
+      };
+
+      if (!useCodingModel) return mainRoute;
+
+      if (!state.settings.codingModel.provider) {
+        return {
+          ...mainRoute,
+          fallbackReason: "coding-provider-not-configured",
+        };
+      }
+
+      if (!codingAiProvider) {
+        return {
+          ...mainRoute,
+          fallbackReason: "coding-provider-not-found",
+        };
+      }
+
+      if (requiresVision && !codingAiProvider.curl.includes("{{IMAGE}}")) {
+        return {
+          ...mainRoute,
+          fallbackReason: "coding-provider-no-vision",
+          codingProviderId: codingAiProvider.id,
+        };
+      }
+
+      return {
+        provider: codingAiProvider,
+        selectedProvider: state.settings.codingModel,
+        route: "coding-override",
+        reason,
+        mainProviderId: aiProvider?.id,
+        codingProviderId: codingAiProvider.id,
+      };
+    },
+    [
+      aiProvider,
+      codingAiProvider,
+      selectedAIProvider,
+      state.settings.codingModel,
+    ]
   );
 
   const setupWarnings = useMemo<MeetingSetupWarning[]>(() => {
@@ -947,17 +1157,130 @@ export function useMeetingAssistant() {
   const setInterviewSessionBrief = useCallback(
     (brief: InterviewSessionBrief | undefined) => {
       const normalizedBrief = normalizeInterviewSessionBrief(brief);
+      const previousContextState = contextManagerRef.current.getState();
+      const previousOverrideKind = readSingleConcreteInterviewTypeOverride(
+        previousContextState.interviewSessionBrief
+      );
       persistInterviewSessionBrief(normalizedBrief);
       contextManagerRef.current.setInterviewSessionBrief(normalizedBrief);
-      const contextState = contextManagerRef.current.getState();
+      let contextState = contextManagerRef.current.getState();
+      const correctedKind =
+        readSingleConcreteInterviewTypeOverride(normalizedBrief);
+      const interviewTypeOverrideChanged =
+        normalizeScreenTaskKindForOverrideComparison(previousOverrideKind) !==
+        normalizeScreenTaskKindForOverrideComparison(correctedKind);
+      const activeScreenTask = contextState.activeScreenTask;
+
+      if (
+        activeScreenTask &&
+        correctedKind &&
+        interviewTypeOverrideChanged &&
+        isInterviewTypeOverrideMismatch(activeScreenTask.kind, correctedKind)
+      ) {
+        const now = Date.now();
+        const askFrame = getManualOverrideAskFrame(correctedKind);
+        const topicDomain = getManualOverrideTopicDomain(
+          correctedKind,
+          activeScreenTask.classifier?.topicDomain
+        );
+        const correctedContent = buildManualInterviewTypeOverrideContent(
+          activeScreenTask,
+          correctedKind
+        );
+        const correctedQuery = [
+          activeScreenTask.question,
+          correctedContent,
+          contextState.transcriptTurns
+            .slice(-4)
+            .map((turn) => turn.text)
+            .join("\n"),
+        ]
+          .filter(Boolean)
+          .join("\n");
+        const correctedPlaybook = selectInterviewPlaybook({
+          query: correctedQuery,
+          questionType: correctedKind,
+          askFrame,
+          topicDomain,
+          projectAnchor: activeScreenTask.classifier?.projectAnchor,
+          classifierConfidence: 1,
+          interviewSessionBrief: normalizedBrief,
+          interviewSessionContext: contextState.interviewSessionContext,
+        });
+        const correctedTask: ActiveScreenTask = {
+          ...activeScreenTask,
+          updatedAt: now,
+          expiresAt: getActiveScreenTaskExpiresAt(state.settings, now),
+          question:
+            activeScreenTask.question ||
+            extractScreenTaskQuestion(activeScreenTask.content),
+          kind: correctedKind,
+          classifier: {
+            ...activeScreenTask.classifier,
+            questionType: correctedKind,
+            askFrame,
+            topicDomain,
+            confidence: 1,
+            overrideSource: "interview-type-selector",
+            overrideAt: now,
+          },
+          playbook: correctedPlaybook
+            ? {
+                ...correctedPlaybook,
+                confidence: 1,
+                reason: `${correctedPlaybook.reason}; manual interview type override`,
+              }
+            : undefined,
+          content: correctedContent,
+        };
+        const trace = traceStoreRef.current.startTrace("screen", {
+          source: "interview-type-override",
+          activeScreenTaskId: activeScreenTask.id,
+          previousQuestionType: activeScreenTask.kind,
+          correctedQuestionType: correctedKind,
+          ...formatInterviewPlaybookForTrace(correctedTask.playbook),
+        });
+        const overrideStepId = traceStoreRef.current.startStep(
+          trace.id,
+          "Interview type override applied",
+          {
+            activeScreenTaskId: activeScreenTask.id,
+            previousQuestionType: activeScreenTask.kind,
+            correctedQuestionType: correctedKind,
+            interviewTypes: normalizedBrief?.interviewTypes,
+          }
+        );
+
+        contextManagerRef.current.setActiveScreenTask(correctedTask);
+        contextManagerRef.current.updateScreenObservation(
+          activeScreenTask.observationId,
+          {
+            visualSummary: correctedContent,
+            analysisPromptSource: "meeting-default",
+          }
+        );
+        traceStoreRef.current.finishStep(
+          trace.id,
+          overrideStepId,
+          "success"
+        );
+        pendingInterviewTypeOverrideRef.current = {
+          taskId: correctedTask.id,
+          traceId: trace.id,
+          correctedKind,
+        };
+        contextState = contextManagerRef.current.getState();
+      }
 
       setState((previous) => ({
         ...previous,
         interviewSessionBrief: contextState.interviewSessionBrief,
         interviewSessionContext: contextState.interviewSessionContext,
+        screenObservations: contextState.screenObservations,
+        activeScreenTask: contextState.activeScreenTask,
       }));
     },
-    []
+    [state.settings]
   );
 
   const clearInterviewSessionBrief = useCallback(() => {
@@ -1069,6 +1392,16 @@ export function useMeetingAssistant() {
       updateSettings((previous) => ({
         ...previous,
         response,
+      }));
+    },
+    [updateSettings]
+  );
+
+  const setCodingModelConfig = useCallback(
+    (codingModel: MeetingCodingModelSettings) => {
+      updateSettings((previous) => ({
+        ...previous,
+        codingModel: normalizeMeetingCodingModelSettings(codingModel),
       }));
     },
     [updateSettings]
@@ -1415,6 +1748,22 @@ export function useMeetingAssistant() {
       interviewPlaybook: advisorPlaybook,
     };
 
+    const advisorUsesCodingModel =
+      promptContext.activeScreenTask?.kind === "coding" ||
+      promptContext.activeScreenTask?.classifier?.questionType === "coding" ||
+      advisorPlaybook?.id === "coding_algorithm";
+    const advisorModelRoute = resolveMeetingModelRoute({
+      useCodingModel: advisorUsesCodingModel,
+      reason: advisorUsesCodingModel
+        ? "active-coding-task"
+        : "advisor-main",
+    });
+    const advisorModelRouteMetadata =
+      formatMeetingModelRouteForTrace(advisorModelRoute);
+    if (traceId) {
+      traceStoreRef.current.updateMetadata(traceId, advisorModelRouteMetadata);
+    }
+
     let finalContent = "";
 
     try {
@@ -1422,8 +1771,8 @@ export function useMeetingAssistant() {
         requestId,
         mode,
         promptContext,
-        provider: aiProvider,
-        selectedProvider: selectedAIProvider,
+        provider: advisorModelRoute.provider,
+        selectedProvider: advisorModelRoute.selectedProvider,
         responseAction: options.responseAction,
         responseConfig,
         currentSuggestion: options.currentSuggestion,
@@ -1440,6 +1789,7 @@ export function useMeetingAssistant() {
                     mode: input.mode,
                     responseAction: input.responseAction,
                     responseConfig: input.responseConfig,
+                    ...advisorModelRouteMetadata,
                     imageCount: input.imageCount,
                   }
                 );
@@ -1452,6 +1802,7 @@ export function useMeetingAssistant() {
                     responseAction: input.responseAction,
                     responseLength: input.responseConfig?.length,
                     responseLanguage: input.responseConfig?.language,
+                    ...advisorModelRouteMetadata,
                     promptChars:
                       input.systemPrompt.length + input.userMessage.length,
                   }
@@ -1507,7 +1858,11 @@ export function useMeetingAssistant() {
           question:
             extractScreenTaskQuestion(finalContent) ||
             contextState.activeScreenTask.question,
-          kind: inferScreenTaskKind(finalContent),
+          kind:
+            contextState.activeScreenTask.classifier?.overrideSource ===
+            "interview-type-selector"
+              ? contextState.activeScreenTask.kind
+              : inferScreenTaskKind(finalContent),
           language:
             inferScreenTaskLanguage(finalContent) ||
             contextState.activeScreenTask.language,
@@ -1540,6 +1895,7 @@ export function useMeetingAssistant() {
       if (traceId) {
         traceStoreRef.current.finishStep(traceId, advisorStepId, "success", {
           outputChars: finalContent.length,
+          ...advisorModelRouteMetadata,
         });
         traceStoreRef.current.finishTrace(traceId, "success");
       }
@@ -1595,6 +1951,7 @@ export function useMeetingAssistant() {
   }, [
     aiProvider,
     loadMemoryForPrompt,
+    resolveMeetingModelRoute,
     selectedAIProvider,
     state.settings,
     state.status,
@@ -2975,11 +3332,25 @@ export function useMeetingAssistant() {
           projectAnchor: screenPreflight?.projectAnchor,
           memoryPolicy: screenPlaybook?.memoryPolicy,
         });
+        const screenUsesCodingModel =
+          (screenPreflight?.questionType ?? screenMemoryQuestionType) ===
+            "coding" || screenPlaybook?.id === "coding_algorithm";
+        const screenModelRoute = resolveMeetingModelRoute({
+          useCodingModel: screenUsesCodingModel,
+          requiresVision: true,
+          reason: screenUsesCodingModel ? "screen-coding-task" : "screen-main",
+        });
+        const screenModelRouteMetadata =
+          formatMeetingModelRouteForTrace(screenModelRoute);
+        traceStoreRef.current.updateMetadata(
+          trace.id,
+          screenModelRouteMetadata
+        );
         const screenTaskContent = await withTimeout(
           solveScreenAnchoredTask({
             observation,
-            provider: aiProvider,
-            selectedProvider: selectedAIProvider,
+            provider: screenModelRoute.provider,
+            selectedProvider: screenModelRoute.selectedProvider,
             recentTranscript,
             autoPrompt,
             responseConfig: state.settings.response,
@@ -3002,6 +3373,7 @@ export function useMeetingAssistant() {
                     imageCount: input.imageCount,
                     imageMediaType: input.imageMediaType,
                     responseConfig: input.responseConfig,
+                    ...screenModelRouteMetadata,
                     imageBase64Stored: false,
                   }
                 );
@@ -3016,6 +3388,7 @@ export function useMeetingAssistant() {
                     imageMediaType: input.imageMediaType,
                     responseLength: input.responseConfig?.length,
                     responseLanguage: input.responseConfig?.language,
+                    ...screenModelRouteMetadata,
                   }
                 );
               },
@@ -3060,6 +3433,7 @@ export function useMeetingAssistant() {
 
         traceStoreRef.current.finishStep(trace.id, modelStepId, "success", {
           outputChars: screenTaskContent.length,
+          ...screenModelRouteMetadata,
         });
         screenAnalysisAbortRef.current = null;
 
@@ -3201,6 +3575,7 @@ export function useMeetingAssistant() {
     [
       aiProvider,
       loadMemoryForPrompt,
+      resolveMeetingModelRoute,
       selectedAIProvider,
       screenshotConfiguration,
       state.settings,
@@ -3210,6 +3585,36 @@ export function useMeetingAssistant() {
 
   const currentSuggestionText =
     state.partialSuggestion || state.latestSuggestion?.content || "";
+
+  useEffect(() => {
+    const pending = pendingInterviewTypeOverrideRef.current;
+    if (!pending) return;
+
+    if (!state.activeScreenTask) {
+      pendingInterviewTypeOverrideRef.current = null;
+      traceStoreRef.current.finishTrace(
+        pending.traceId,
+        "cancelled",
+        "Active task was cleared before regeneration."
+      );
+      return;
+    }
+
+    if (
+      state.activeScreenTask.id !== pending.taskId ||
+      normalizeScreenTaskKindForOverrideComparison(state.activeScreenTask.kind) !==
+        normalizeScreenTaskKindForOverrideComparison(pending.correctedKind)
+    ) {
+      return;
+    }
+
+    pendingInterviewTypeOverrideRef.current = null;
+    void runAdvisor({
+      force: true,
+      mode: "screen-anchored",
+      traceId: pending.traceId,
+    });
+  }, [runAdvisor, state.activeScreenTask]);
 
   const regenerateSuggestion = useCallback(async () => {
     await runAdvisor({
@@ -3498,6 +3903,7 @@ export function useMeetingAssistant() {
     setMicrophoneContextEnabled,
     toggleMicrophoneContext,
     setResponseConfig,
+    setCodingModelConfig,
     setMeetingAudioProfile,
     setMeetingAudioConfig,
     start,
@@ -3513,6 +3919,7 @@ export function useMeetingAssistant() {
     applyResponseAction,
     answerClarifyingQuestion,
     submitSpeechCorrection,
+    aiProviders: allAiProviders,
     isActive: activeRef.current,
   };
 }

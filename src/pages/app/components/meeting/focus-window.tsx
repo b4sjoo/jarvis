@@ -183,7 +183,11 @@ function MeetingFocusControlsWindow({
   const updateInterviewTypes = (type: InterviewBriefType) => {
     sendFocusAction({
       type: "update-interview-types",
-      interviewTypes: toggleInterviewBriefType(interviewTypes, type),
+      interviewTypes: toggleInterviewBriefType(
+        interviewTypes,
+        type,
+        snapshot.hasActiveScreenTask
+      ),
     });
   };
 
@@ -424,7 +428,8 @@ function sendFocusAction(action: MeetingFocusAction) {
 
 function toggleInterviewBriefType(
   currentTypes: InterviewBriefType[],
-  type: InterviewBriefType
+  type: InterviewBriefType,
+  forceSingleConcrete = false
 ): InterviewBriefType[] {
   const current = new Set(currentTypes);
 
@@ -433,6 +438,10 @@ function toggleInterviewBriefType(
       current.has(candidate)
     );
     return allSelected ? [] : [...concreteInterviewBriefTypes, "mixed"];
+  }
+
+  if (forceSingleConcrete) {
+    return [type];
   }
 
   if (current.has(type)) {
