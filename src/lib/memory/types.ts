@@ -128,6 +128,8 @@ export type MemoryInterviewType =
   | "project-deep-dive"
   | "mixed";
 
+export type MemoryInterviewFamily = Exclude<MemoryInterviewType, "mixed">;
+
 export type MemoryQuestionType =
   | "behavioral"
   | "coding"
@@ -219,6 +221,16 @@ export interface MemoryRetrievalRequest {
   askFrame?: MemoryAskFrame;
   topicDomain?: MemoryTopicDomain;
   projectAnchor?: string;
+  memoryPolicy?: MemoryRetrievalPolicy;
+  maxEntries?: number;
+  maxChars?: number;
+  perEntryMaxChars?: number;
+}
+
+export interface MemoryRetrievalPolicy {
+  id: string;
+  allowedFamilies?: MemoryInterviewFamily[];
+  blockedFamilies?: MemoryInterviewFamily[];
   maxEntries?: number;
   maxChars?: number;
   perEntryMaxChars?: number;

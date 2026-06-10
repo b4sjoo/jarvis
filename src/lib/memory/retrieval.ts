@@ -5,9 +5,11 @@ import {
 import type {
   MemoryEntry,
   MemoryAskFrame,
+  MemoryInterviewFamily,
   MemoryInterviewType,
   MemoryQuestionType,
   MemoryRetrievalRequest,
+  MemoryRetrievalPolicy,
   MemoryRetrievalResult,
   MemoryTopicDomain,
   MemoryUseCase,
@@ -34,13 +36,20 @@ export async function retrieveMemoryContext({
   askFrame,
   topicDomain,
   projectAnchor,
+  memoryPolicy,
   maxEntries = DEFAULT_MAX_ENTRIES,
   maxChars = DEFAULT_MAX_CHARS,
   perEntryMaxChars = DEFAULT_PER_ENTRY_MAX_CHARS,
 }: MemoryRetrievalRequest): Promise<MemoryRetrievalResult> {
   const entries = await getEnabledMemoryEntries();
   const eligibleEntries = entries.filter((entry) =>
-    isEntryEligible(entry, useCase, interviewTypes, questionType)
+    isEntryEligible(
+      entry,
+      useCase,
+      interviewTypes,
+      questionType,
+      memoryPolicy
+    )
   );
   const queryTokens = tokenize(query);
   const scoringContext = {
@@ -67,11 +76,15 @@ export async function retrieveMemoryContext({
     .map((entry) => scoreMemoryEntry(entry, queryTokens, scoringContext, false))
     .filter(hasRetrievalMatch)
     .sort((left, right) => right.score - left.score)
-    .slice(0, maxEntries);
+    .slice(0, memoryPolicy?.maxEntries ?? maxEntries);
 
   const selected = dedupeRetrievedEntries([...alwaysEntries, ...retrievalEntries])
     .sort((left, right) => right.score - left.score);
-  const budgeted = applyMemoryBudget(selected, maxChars, perEntryMaxChars);
+  const budgeted = applyMemoryBudget(
+    selected,
+    memoryPolicy?.maxChars ?? maxChars,
+    memoryPolicy?.perEntryMaxChars ?? perEntryMaxChars
+  );
 
   if (budgeted.entries.length) {
     void markMemoryEntriesUsed(budgeted.entries.map((entry) => entry.entry.id));
@@ -112,7 +125,8 @@ function isEntryEligible(
   entry: MemoryEntry,
   useCase: MemoryUseCase,
   interviewTypes: MemoryInterviewType[] | undefined,
-  questionType: MemoryQuestionType | undefined
+  questionType: MemoryQuestionType | undefined,
+  memoryPolicy: MemoryRetrievalPolicy | undefined
 ) {
   if (!entry.enabled) return false;
   if (entry.injectionMode === "manual_only" || entry.injectionMode === "never") {
@@ -125,19 +139,26 @@ function isEntryEligible(
     entry.useCases.includes(useCase) ||
     entry.useCases.includes("meeting_assistant") ||
     entry.useCases.includes("general_chat")
-  ) && isEntryAllowedByInterviewGate(entry, interviewTypes, questionType);
+  ) && isEntryAllowedByInterviewGate(
+    entry,
+    interviewTypes,
+    questionType,
+    memoryPolicy
+  );
 }
 
 function isEntryAllowedByInterviewGate(
   entry: MemoryEntry,
   interviewTypes: MemoryInterviewType[] | undefined,
-  questionType: MemoryQuestionType | undefined
+  questionType: MemoryQuestionType | undefined,
+  memoryPolicy: MemoryRetrievalPolicy | undefined
 ) {
   const family = inferEntryInterviewFamily(entry);
   if (!family || family === "general") return true;
 
   const allowedTypes = normalizeAllowedInterviewTypes(interviewTypes);
   if (allowedTypes && !allowedTypes.has(family)) return false;
+  if (!isFamilyAllowedByMemoryPolicy(family, memoryPolicy)) return false;
 
   if (
     questionType &&
@@ -153,6 +174,26 @@ function isEntryAllowedByInterviewGate(
     questionType !== "unknown" &&
     questionType !== "behavioral" &&
     family === "behavioral"
+  ) {
+    return false;
+  }
+
+  return true;
+}
+
+function isFamilyAllowedByMemoryPolicy(
+  family: MemoryInterviewFamily,
+  memoryPolicy: MemoryRetrievalPolicy | undefined
+) {
+  if (!memoryPolicy) return true;
+
+  if (memoryPolicy.blockedFamilies?.includes(family)) {
+    return false;
+  }
+
+  if (
+    memoryPolicy.allowedFamilies?.length &&
+    !memoryPolicy.allowedFamilies.includes(family)
   ) {
     return false;
   }

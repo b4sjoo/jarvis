@@ -9,6 +9,7 @@ import {
   MeetingResponseConfig,
   ScreenObservation,
   ScreenTaskKind,
+  SelectedInterviewPlaybook,
   SelectedProviderState,
   TaskAskFrame,
   TaskClassifierMetadata,
@@ -19,6 +20,7 @@ import {
   formatInterviewSessionBriefForPrompt,
   formatInterviewSessionContextForPrompt,
 } from "./interview-session-context";
+import { formatInterviewPlaybookForPrompt } from "./interview-playbook";
 import { parseScreenTaskAnswer } from "./screen-task-answer";
 
 export type ScreenCaptureTargetType = "active-window" | "current-monitor";
@@ -58,6 +60,7 @@ export interface SolveScreenAnchoredTaskOptions {
   interviewSessionBrief?: InterviewSessionBrief;
   interviewSessionContext?: InterviewSessionContext;
   screenPreflight?: ScreenPreflightResult;
+  interviewPlaybook?: SelectedInterviewPlaybook;
   signal?: AbortSignal;
   trace?: MeetingModelTraceCallbacks;
   onPartialContent?: (content: string) => void;
@@ -284,6 +287,7 @@ export async function solveScreenAnchoredTask({
   interviewSessionBrief,
   interviewSessionContext,
   screenPreflight,
+  interviewPlaybook,
   signal,
   trace,
   onPartialContent,
@@ -311,6 +315,7 @@ export async function solveScreenAnchoredTask({
     interviewSessionBrief,
     interviewSessionContext,
     screenPreflight,
+    interviewPlaybook,
   });
   const imageInputs = buildScreenTaskImageInputs(observation);
 
@@ -467,6 +472,7 @@ function buildScreenTaskUserMessage({
   interviewSessionBrief,
   interviewSessionContext,
   screenPreflight,
+  interviewPlaybook,
 }: {
   observation: ScreenObservation;
   recentTranscript?: string;
@@ -476,6 +482,7 @@ function buildScreenTaskUserMessage({
   interviewSessionBrief?: InterviewSessionBrief;
   interviewSessionContext?: InterviewSessionContext;
   screenPreflight?: ScreenPreflightResult;
+  interviewPlaybook?: SelectedInterviewPlaybook;
 }) {
   const target = observation.captureTarget
     ? formatCaptureTargetForPrompt(observation.captureTarget)
@@ -502,6 +509,9 @@ function buildScreenTaskUserMessage({
     "<screen_preflight>",
     formatScreenPreflightForPrompt(screenPreflight),
     "</screen_preflight>",
+    "<interview_playbook>",
+    formatInterviewPlaybookForPrompt(interviewPlaybook),
+    "</interview_playbook>",
     "<response_preferences>",
     formatScreenTaskResponsePreferences(responseConfig),
     "</response_preferences>",
@@ -537,6 +547,7 @@ function buildScreenTaskUserMessage({
     "Use memory only for stable background knowledge. Do not let memory override visible problem constraints, visible language selection, or spoken follow-up constraints.",
     "Use <screen_preflight> only as a lightweight metadata hint. If the screenshot contradicts it, trust the screenshot.",
     "If <screen_preflight> includes questionType, askFrame, topicDomain, or projectAnchor, use those fields to choose the output contract and memory usage policy.",
+    "Use <interview_playbook> as the runtime strategy for the selected question type: follow its first move, clarifying strategy, output contract, and follow-up policy unless the screenshot or transcript contradicts it.",
     "If askFrame is ambiguous between an existing project deep dive and a future system design improvement, do not guess. Ask a clarifying question such as whether to discuss the existing implementation first or propose a future design improvement.",
     "For behavioral interview questions, prefer a concrete first-person story from memory context. Do not invent facts, employers, project names, teammates, metrics, timelines, or outcomes not supported by memory or visible text.",
     "Use <interview_session_context> to personalize behavioral interview answers across screen tasks. If the target company is Amazon and injected memory includes Leadership Principle guidance, internally classify the visible question to the closest principle, demonstrate Strength signals, and avoid Concern signals. Do not explicitly name the principle unless asked or useful.",

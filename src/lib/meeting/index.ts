@@ -3,6 +3,7 @@ export * from "./advisor-prompt";
 export * from "./context-manager";
 export * from "./focus-window";
 export * from "./human-evaluation";
+export * from "./interview-playbook";
 export * from "./interview-session-context";
 export * from "./screen-observation.service";
 export * from "./screen-task-answer";

@@ -294,6 +294,7 @@ export class MeetingContextManager {
       rollingSummary: this.state.rollingSummary,
       userProfileContext: this.state.userProfileContext,
       glossaryText: this.formatGlossary(),
+      interviewPlaybook: this.state.activeScreenTask?.playbook,
       latestTurn,
     };
   }

@@ -1,5 +1,8 @@
 import { Message, TYPE_PROVIDER } from "@/types";
-import type { MemoryRetrievalResult } from "@/lib/memory/types";
+import type {
+  MemoryRetrievalPolicy,
+  MemoryRetrievalResult,
+} from "@/lib/memory/types";
 
 export type TranscriptSpeaker = "them" | "me" | "unknown";
 
@@ -228,6 +231,38 @@ export interface TaskClassifierMetadata {
   confidence?: number;
 }
 
+export type InterviewPlaybookId =
+  | "behavioral_story"
+  | "coding_algorithm"
+  | "general_system_design"
+  | "aiml_system_design"
+  | "project_deep_dive"
+  | "aiml_field_knowledge";
+
+export type InterviewPlaybookPhase =
+  | "story_selection"
+  | "solution_planning"
+  | "requirement_clarification"
+  | "design_framing"
+  | "project_narrative"
+  | "concept_explanation"
+  | "follow_up";
+
+export interface SelectedInterviewPlaybook {
+  id: InterviewPlaybookId;
+  label: string;
+  phase: InterviewPlaybookPhase;
+  subtype?: string;
+  questionType: ScreenTaskKind;
+  confidence: number;
+  reason: string;
+  memoryPolicy: MemoryRetrievalPolicy;
+  firstMove: string;
+  clarifyingStrategy: string;
+  outputContract: string;
+  followUpPolicy: string;
+}
+
 export interface ActiveScreenTask {
   id: string;
   observationId: string;
@@ -238,6 +273,7 @@ export interface ActiveScreenTask {
   kind: ScreenTaskKind;
   language?: string;
   classifier?: TaskClassifierMetadata;
+  playbook?: SelectedInterviewPlaybook;
   content: string;
   basedOnTurnIds: string[];
   basedOnObservationId: string;
@@ -372,6 +408,7 @@ export interface AdvisorPromptContext {
   userProfileContext: string;
   glossaryText: string;
   memoryContext?: string;
+  interviewPlaybook?: SelectedInterviewPlaybook;
   latestTurn?: TranscriptTurn;
 }
 
@@ -520,6 +557,8 @@ export type HumanEvalTaskQuality = "success" | "partial" | "fail";
 
 export type HumanEvalFailureReason =
   | "wrong-question-type"
+  | "wrong-playbook"
+  | "wrong-playbook-phase"
   | "wrong-company"
   | "wrong-memory"
   | "missing-memory"
@@ -538,6 +577,9 @@ export interface TraceHumanEvaluation {
   updatedAt: number;
   correctedQuestionType?: HumanEvalQuestionType;
   correctedCompany?: string;
+  playbookCorrect?: boolean;
+  playbookWrong?: boolean;
+  playbookWrongPhase?: boolean;
   memoryRelevant?: boolean;
   memoryMissing?: boolean;
   memoryWrong?: boolean;

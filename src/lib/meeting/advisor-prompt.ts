@@ -9,6 +9,7 @@ import {
   formatInterviewSessionBriefForPrompt,
   formatInterviewSessionContextForPrompt,
 } from "./interview-session-context";
+import { formatInterviewPlaybookForPrompt } from "./interview-playbook";
 
 export function buildAdvisorSystemPrompt() {
   return [
@@ -91,6 +92,9 @@ export function buildAdvisorUserMessage(
       ? formatActiveScreenTask(context.activeScreenTask)
       : "No active screen task.",
     "</active_screen_task>",
+    "<interview_playbook>",
+    formatInterviewPlaybookForPrompt(context.interviewPlaybook),
+    "</interview_playbook>",
     "<rolling_summary>",
     context.rollingSummary || "No summary yet.",
     "</rolling_summary>",
@@ -162,6 +166,7 @@ export function buildAdvisorUserMessage(
       "If the transcript asks a follow-up, answer the follow-up directly while preserving the active screen task as context.",
       "If the transcript corrects a requirement, acknowledge the corrected constraint through the revised answer; do not argue with the transcript.",
       "Use <interview_session_brief> and <interview_session_context> to personalize interview style across tasks, especially target company expectations, but do not let them override the active screen task or latest transcript.",
+      "Use <interview_playbook> as the procedural strategy for this active task. Follow its first move, clarifying strategy, output contract, and follow-up policy unless the active screen task or latest transcript contradicts it.",
       "If the target company is Amazon and this is a behavioral answer, use any injected Amazon Leadership Principle rubric to demonstrate Strength signals and avoid Concern signals. Do not explicitly name the principle unless it helps.",
       "If the active task kind is ai-ml-system-design, answer as a forward-looking AI/ML infrastructure design: clarify objective/metrics, data/retrieval/model path, serving path, evaluation/feedback, latency/cost/safety, and tradeoffs.",
       "If the active task kind is general-system-design or system-design, answer as a general backend/distributed system design: requirements, API/data model, architecture, scaling, consistency, reliability, observability, and tradeoffs.",
@@ -202,6 +207,7 @@ export function buildAdvisorUserMessage(
     "If it only contains jargon, put the simple Chinese definition under 中文思路 and use '-' for Reply and Question.",
     "Do not mention a colleague, speaker, or someone asking a question unless the transcript explicitly contains that person or question.",
     "Use <interview_session_brief> as user-provided pre-meeting background and <interview_session_context> as cross-task inferred context, especially the target company. Do not infer a different company if the brief locks one.",
+    "Use <interview_playbook> as procedural guidance when present. It should shape the next move without overriding transcript facts.",
     "For Amazon behavioral interview moments, use injected Leadership Principle guidance to shape the answer toward Strength signals and away from Concern signals without inventing facts.",
     ...buildContextInstructions(contextMode),
     ...buildVoiceSeededInstructions(contextMode),

@@ -151,8 +151,7 @@ const humanEvalQuestionTypeOptions: Array<{
   { id: "behavioral", label: "Behavioral" },
   { id: "coding", label: "Coding" },
   { id: "ai-ml-system-design", label: "AI/ML design" },
-  { id: "general-system-design", label: "General design" },
-  { id: "system-design", label: "System design" },
+  { id: "general-system-design", label: "System design" },
   { id: "project-deep-dive", label: "Project dive" },
   { id: "field-knowledge", label: "Field knowledge" },
   { id: "unknown", label: "Unknown" },
@@ -172,6 +171,8 @@ const humanEvalFailureReasonOptions: Array<{
   label: string;
 }> = [
   { id: "wrong-question-type", label: "Type" },
+  { id: "wrong-playbook", label: "Playbook" },
+  { id: "wrong-playbook-phase", label: "Phase" },
   { id: "wrong-company", label: "Company" },
   { id: "wrong-memory", label: "Wrong memory" },
   { id: "missing-memory", label: "Missing memory" },
@@ -1546,6 +1547,12 @@ export const MeetingAssistant = ({
                     detectedQuestionType={formatDetectedQuestionType(
                       latestTrace.metadata?.questionType
                     )}
+                    detectedPlaybook={formatDetectedQuestionType(
+                      latestTrace.metadata?.playbookId
+                    )}
+                    detectedPlaybookPhase={formatDetectedQuestionType(
+                      latestTrace.metadata?.playbookPhase
+                    )}
                     evaluation={latestTraceEvaluation}
                     onUpdate={(patch) => {
                       meeting.updateTraceHumanEvaluation(latestTrace.id, patch);
@@ -2836,14 +2843,21 @@ const TraceKindSummaryCard = ({
 
 const TraceHumanEvaluationPanel = ({
   detectedQuestionType,
+  detectedPlaybook,
+  detectedPlaybookPhase,
   evaluation,
   onUpdate,
 }: {
   detectedQuestionType?: string;
+  detectedPlaybook?: string;
+  detectedPlaybookPhase?: string;
   evaluation:
     | {
         taskQuality?: HumanEvalTaskQuality;
         correctedQuestionType?: HumanEvalQuestionType;
+        playbookCorrect?: boolean;
+        playbookWrong?: boolean;
+        playbookWrongPhase?: boolean;
         memoryRelevant?: boolean;
         memoryMissing?: boolean;
         memoryWrong?: boolean;
@@ -2853,6 +2867,9 @@ const TraceHumanEvaluationPanel = ({
   onUpdate: (patch: {
     taskQuality?: HumanEvalTaskQuality;
     correctedQuestionType?: HumanEvalQuestionType;
+    playbookCorrect?: boolean;
+    playbookWrong?: boolean;
+    playbookWrongPhase?: boolean;
     memoryRelevant?: boolean;
     memoryMissing?: boolean;
     memoryWrong?: boolean;
@@ -2879,6 +2896,18 @@ const TraceHumanEvaluationPanel = ({
           <div className="rounded-sm bg-muted/40 p-2 text-[10px]">
             <span className="text-muted-foreground">Detected type: </span>
             <span className="font-mono">{detectedQuestionType}</span>
+          </div>
+        ) : null}
+        {detectedPlaybook ? (
+          <div className="rounded-sm bg-muted/40 p-2 text-[10px]">
+            <span className="text-muted-foreground">Playbook: </span>
+            <span className="font-mono">{detectedPlaybook}</span>
+            {detectedPlaybookPhase ? (
+              <>
+                <span className="text-muted-foreground"> / phase: </span>
+                <span className="font-mono">{detectedPlaybookPhase}</span>
+              </>
+            ) : null}
           </div>
         ) : null}
         <div>
@@ -2925,6 +2954,45 @@ const TraceHumanEvaluationPanel = ({
                 {option.label}
               </Button>
             ))}
+          </div>
+        </div>
+        <div>
+          <div className="mb-1 text-[10px] font-medium uppercase text-muted-foreground">
+            Playbook
+          </div>
+          <div className="flex flex-wrap gap-1">
+            <Button
+              size="sm"
+              variant={evaluation?.playbookCorrect ? "default" : "outline"}
+              className="h-6 px-2 text-[10px]"
+              onClick={() => {
+                onUpdate({ playbookCorrect: !evaluation?.playbookCorrect });
+              }}
+            >
+              Playbook OK
+            </Button>
+            <Button
+              size="sm"
+              variant={evaluation?.playbookWrong ? "default" : "outline"}
+              className="h-6 px-2 text-[10px]"
+              onClick={() => {
+                onUpdate({ playbookWrong: !evaluation?.playbookWrong });
+              }}
+            >
+              Wrong playbook
+            </Button>
+            <Button
+              size="sm"
+              variant={evaluation?.playbookWrongPhase ? "default" : "outline"}
+              className="h-6 px-2 text-[10px]"
+              onClick={() => {
+                onUpdate({
+                  playbookWrongPhase: !evaluation?.playbookWrongPhase,
+                });
+              }}
+            >
+              Wrong phase
+            </Button>
           </div>
         </div>
         <div>
@@ -3005,6 +3073,10 @@ const TraceClassifierMetadata = ({
     ["Domain", metadata.topicDomain],
     ["Project", metadata.projectAnchor],
     ["Confidence", metadata.classifierConfidence],
+    ["Playbook", metadata.playbookId],
+    ["Phase", metadata.playbookPhase],
+    ["Subtype", metadata.playbookSubtype],
+    ["Policy", metadata.playbookAllowedFamilies],
     ] satisfies Array<[string, unknown]>
   ).filter(
     (row): row is [string, Exclude<unknown, undefined | null | "">] =>

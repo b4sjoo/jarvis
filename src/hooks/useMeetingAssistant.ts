@@ -11,6 +11,7 @@ import {
   retrieveMemoryContext,
   type MemoryAskFrame,
   type MemoryQuestionType,
+  type MemoryRetrievalPolicy,
   type MemoryRetrievalResult,
   type MemoryTopicDomain,
   type MemoryUseCase,
@@ -64,6 +65,8 @@ import {
   parseMeetingTraceMetrics,
   parseScreenTaskAnswer,
   preflightScreenObservation,
+  selectInterviewPlaybook,
+  formatInterviewPlaybookForTrace,
   readTraceHumanEvaluations,
   buildSpeechBiasContext,
   formatSpeechBiasPromptForTrace,
@@ -1115,6 +1118,7 @@ export function useMeetingAssistant() {
       askFrame,
       topicDomain,
       projectAnchor,
+      memoryPolicy,
     }: {
       traceId?: string;
       query: string;
@@ -1124,6 +1128,7 @@ export function useMeetingAssistant() {
       askFrame?: MemoryAskFrame;
       topicDomain?: MemoryTopicDomain;
       projectAnchor?: string;
+      memoryPolicy?: MemoryRetrievalPolicy;
     }): Promise<MemoryRetrievalResult | undefined> => {
       if (!state.settings.useMemory) return undefined;
       const resolvedQuestionType =
@@ -1150,6 +1155,9 @@ export function useMeetingAssistant() {
               topicDomain,
               projectAnchor,
               interviewTypes,
+              memoryPolicyId: memoryPolicy?.id,
+              allowedFamilies: memoryPolicy?.allowedFamilies,
+              blockedFamilies: memoryPolicy?.blockedFamilies,
               queryChars: query.length,
             }
           );
@@ -1163,6 +1171,7 @@ export function useMeetingAssistant() {
           topicDomain,
           projectAnchor,
           interviewTypes,
+          memoryPolicy,
         });
 
         if (traceId) {
@@ -1178,6 +1187,9 @@ export function useMeetingAssistant() {
               topicDomain,
               projectAnchor,
               interviewTypes,
+              memoryPolicyId: memoryPolicy?.id,
+              allowedFamilies: memoryPolicy?.allowedFamilies,
+              blockedFamilies: memoryPolicy?.blockedFamilies,
               candidateCount: memoryContext.candidateCount,
               rejectedCount: memoryContext.rejectedCount,
               totalChars: memoryContext.totalChars,
@@ -1191,6 +1203,9 @@ export function useMeetingAssistant() {
             topicDomain,
             projectAnchor,
             interviewTypes,
+            memoryPolicyId: memoryPolicy?.id,
+            allowedFamilies: memoryPolicy?.allowedFamilies,
+            blockedFamilies: memoryPolicy?.blockedFamilies,
             candidateCount: memoryContext.candidateCount,
             rejectedCount: memoryContext.rejectedCount,
             totalChars: memoryContext.totalChars,
@@ -1344,30 +1359,61 @@ export function useMeetingAssistant() {
       mode,
       options.currentSuggestion
     );
+    const advisorQuestionType = promptContext.activeScreenTask
+      ? readMemoryQuestionType(promptContext.activeScreenTask.kind)
+      : inferMemoryQuestionTypeFromQuery(advisorMemoryQuery);
+    const advisorAskFrame = promptContext.activeScreenTask?.classifier?.askFrame
+      ? readMemoryAskFrame(promptContext.activeScreenTask.classifier.askFrame)
+      : inferMemoryAskFrameFromQuery(advisorMemoryQuery);
+    const advisorTopicDomain = promptContext.activeScreenTask?.classifier
+      ?.topicDomain
+      ? readMemoryTopicDomain(
+          promptContext.activeScreenTask.classifier.topicDomain
+        )
+      : inferMemoryTopicDomainFromQuery(advisorMemoryQuery);
+    const advisorPlaybook =
+      promptContext.activeScreenTask?.playbook ??
+      selectInterviewPlaybook({
+        query: advisorMemoryQuery,
+        questionType: promptContext.activeScreenTask?.kind ?? advisorQuestionType,
+        askFrame: advisorAskFrame,
+        topicDomain: advisorTopicDomain,
+        projectAnchor: promptContext.activeScreenTask?.classifier?.projectAnchor,
+        classifierConfidence:
+          promptContext.activeScreenTask?.classifier?.confidence,
+        interviewSessionBrief: promptContext.interviewSessionBrief,
+        interviewSessionContext: promptContext.interviewSessionContext,
+      });
+
+    if (traceId) {
+      const playbookMetadata = formatInterviewPlaybookForTrace(advisorPlaybook);
+      traceStoreRef.current.updateMetadata(traceId, playbookMetadata);
+      if (advisorPlaybook) {
+        const playbookStepId = traceStoreRef.current.startStep(
+          traceId,
+          "Interview playbook selected",
+          playbookMetadata
+        );
+        traceStoreRef.current.finishStep(traceId, playbookStepId, "success");
+      }
+    }
+
     const memoryContext = await loadMemoryForPrompt({
       traceId,
       source: "advisor",
       query: advisorMemoryQuery,
       useCase: inferMemoryUseCaseFromQuery(advisorMemoryQuery),
-      questionType: promptContext.activeScreenTask
-        ? readMemoryQuestionType(promptContext.activeScreenTask.kind)
-        : undefined,
-      askFrame: promptContext.activeScreenTask?.classifier?.askFrame
-        ? readMemoryAskFrame(promptContext.activeScreenTask.classifier.askFrame)
-        : inferMemoryAskFrameFromQuery(advisorMemoryQuery),
-      topicDomain: promptContext.activeScreenTask?.classifier?.topicDomain
-        ? readMemoryTopicDomain(
-            promptContext.activeScreenTask.classifier.topicDomain
-          )
-        : inferMemoryTopicDomainFromQuery(advisorMemoryQuery),
+      questionType: advisorQuestionType,
+      askFrame: advisorAskFrame,
+      topicDomain: advisorTopicDomain,
       projectAnchor: promptContext.activeScreenTask?.classifier?.projectAnchor,
+      memoryPolicy: advisorPlaybook?.memoryPolicy,
     });
-    if (memoryContext) {
-      promptContext = {
-        ...promptContext,
-        memoryContext: memoryContext.contextText,
-      };
-    }
+    promptContext = {
+      ...promptContext,
+      memoryContext: memoryContext?.contextText,
+      interviewPlaybook: advisorPlaybook,
+    };
 
     let finalContent = "";
 
@@ -2882,24 +2928,52 @@ export function useMeetingAssistant() {
           interviewSessionContext: preflightContextState.interviewSessionContext,
           screenPreflight,
         });
+        const screenMemoryQuestionType =
+          inferMemoryQuestionTypeFromScreenPreflight(
+            screenMemoryQuery,
+            screenPreflight
+          );
+        const screenMemoryAskFrame = inferMemoryAskFrameFromScreenPreflight(
+          screenMemoryQuery,
+          screenPreflight
+        );
+        const screenMemoryTopicDomain =
+          inferMemoryTopicDomainFromScreenPreflight(
+            screenMemoryQuery,
+            screenPreflight
+          );
+        const screenPlaybook = selectInterviewPlaybook({
+          query: screenMemoryQuery,
+          questionType: screenPreflight?.questionType ?? screenMemoryQuestionType,
+          askFrame: screenPreflight?.askFrame ?? screenMemoryAskFrame,
+          topicDomain: screenPreflight?.topicDomain ?? screenMemoryTopicDomain,
+          projectAnchor: screenPreflight?.projectAnchor,
+          classifierConfidence: screenPreflight?.confidence,
+          interviewSessionBrief: preflightContextState.interviewSessionBrief,
+          interviewSessionContext: preflightContextState.interviewSessionContext,
+        });
+        const screenPlaybookMetadata =
+          formatInterviewPlaybookForTrace(screenPlaybook);
+        traceStoreRef.current.updateMetadata(trace.id, screenPlaybookMetadata);
+        if (screenPlaybook) {
+          const playbookStepId = traceStoreRef.current.startStep(
+            trace.id,
+            "Interview playbook selected",
+            screenPlaybookMetadata
+          );
+          traceStoreRef.current.finishStep(trace.id, playbookStepId, "success");
+        }
+
         const memoryContext = await loadMemoryForPrompt({
           traceId: trace.id,
           source: "screen",
           query: screenMemoryQuery,
           useCase: inferMemoryUseCaseFromQuery(screenMemoryQuery),
-          questionType: inferMemoryQuestionTypeFromScreenPreflight(
-            screenMemoryQuery,
-            screenPreflight
-          ),
-          askFrame: inferMemoryAskFrameFromScreenPreflight(
-            screenMemoryQuery,
-            screenPreflight
-          ),
-          topicDomain: inferMemoryTopicDomainFromScreenPreflight(
-            screenMemoryQuery,
-            screenPreflight
-          ),
+          questionType: screenMemoryQuestionType,
+          askFrame: screenMemoryAskFrame,
+          topicDomain: screenMemoryTopicDomain,
           projectAnchor: screenPreflight?.projectAnchor,
+          memoryPolicy: screenPlaybook?.memoryPolicy,
         });
         const screenTaskContent = await withTimeout(
           solveScreenAnchoredTask({
@@ -2914,6 +2988,7 @@ export function useMeetingAssistant() {
             interviewSessionContext:
               preflightContextState.interviewSessionContext,
             screenPreflight,
+            interviewPlaybook: screenPlaybook,
             signal: analysisController.signal,
             trace: {
               onRequest: (input) => {
@@ -3025,6 +3100,7 @@ export function useMeetingAssistant() {
               projectAnchor: screenPreflight?.projectAnchor,
               confidence: screenPreflight?.confidence,
             },
+            playbook: screenPlaybook,
             content: screenTaskContent,
             basedOnTurnIds,
             basedOnObservationId: observation.id,
