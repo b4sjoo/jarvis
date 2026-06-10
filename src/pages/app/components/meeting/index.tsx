@@ -260,6 +260,14 @@ type MeetingAssistantProps = {
   onFocusModeActiveChange?: (active: boolean) => void;
 };
 
+type CodingArtifactCache = {
+  taskId: string;
+  code: string;
+  complexity: string;
+  updatedAt: number;
+  sourceSuggestionId?: string;
+};
+
 export const MeetingAssistant = ({
   onFocusModeActiveChange,
 }: MeetingAssistantProps = {}) => {
@@ -276,6 +284,8 @@ export const MeetingAssistant = ({
   );
   const [focusWindowsVisible, setFocusWindowsVisible] = useState(false);
   const [speechCorrectionInput, setSpeechCorrectionInput] = useState("");
+  const [codingArtifactCache, setCodingArtifactCache] =
+    useState<CodingArtifactCache | null>(null);
   const screenHotkeyInFlightRef = useRef(false);
   const lastScreenHotkeyAtRef = useRef(0);
 
@@ -313,6 +323,90 @@ export const MeetingAssistant = ({
   const suggestionSections = useMemo(
     () => parseSuggestionSections(displaySuggestion, completedScreenTaskAnswer),
     [completedScreenTaskAnswer, displaySuggestion]
+  );
+  const activeScreenTaskId = meeting.activeScreenTask?.id ?? "";
+  const activeScreenTaskKind = meeting.activeScreenTask?.kind;
+  useEffect(() => {
+    if (!activeScreenTaskId) {
+      setCodingArtifactCache(null);
+      return;
+    }
+
+    if (meeting.partialSuggestion) return;
+
+    setCodingArtifactCache((previous) => {
+      const artifactPatch = readCodingArtifactPatch({
+        activeTaskKind: activeScreenTaskKind,
+        hasExistingCache: Boolean(previous),
+        sections: suggestionSections,
+      });
+
+      if (!artifactPatch) return previous;
+
+      const nextCode = artifactPatch.code || previous?.code || "";
+      const nextComplexity =
+        artifactPatch.complexity || previous?.complexity || "";
+
+      if (!nextCode && !nextComplexity) return null;
+
+      const sourceSuggestionId = meeting.latestSuggestion?.id;
+      if (
+        previous &&
+        previous.taskId === activeScreenTaskId &&
+        previous.code === nextCode &&
+        previous.complexity === nextComplexity &&
+        previous.sourceSuggestionId === sourceSuggestionId
+      ) {
+        return previous;
+      }
+
+      return {
+        taskId: activeScreenTaskId,
+        code: nextCode,
+        complexity: nextComplexity,
+        updatedAt: Date.now(),
+        sourceSuggestionId,
+      };
+    });
+  }, [
+    activeScreenTaskId,
+    activeScreenTaskKind,
+    meeting.latestSuggestion?.id,
+    meeting.partialSuggestion,
+    suggestionSections.answer,
+    suggestionSections.approach,
+    suggestionSections.code,
+    suggestionSections.complexity,
+    suggestionSections.screenQuestion,
+  ]);
+  const codingArtifactDisplay = useMemo(() => {
+    return resolveCodingArtifactDisplay({
+      activeTaskKind: activeScreenTaskKind,
+      cache: codingArtifactCache,
+      taskId: activeScreenTaskId,
+      sections: suggestionSections,
+    });
+  }, [
+    activeScreenTaskId,
+    activeScreenTaskKind,
+    codingArtifactCache,
+    suggestionSections.answer,
+    suggestionSections.approach,
+    suggestionSections.code,
+    suggestionSections.complexity,
+    suggestionSections.screenQuestion,
+  ]);
+  const displaySuggestionSections = useMemo(
+    () => ({
+      ...suggestionSections,
+      code: codingArtifactDisplay.code,
+      complexity: codingArtifactDisplay.complexity,
+    }),
+    [
+      codingArtifactDisplay.code,
+      codingArtifactDisplay.complexity,
+      suggestionSections,
+    ]
   );
   const latestTraceEvaluation = latestTrace
     ? meeting.humanEvaluations.find(
@@ -355,14 +449,14 @@ export const MeetingAssistant = ({
     () => ({
       active: focusModeActive,
       sections: {
-        chineseThinking: suggestionSections.chineseThinking,
-        answer: suggestionSections.answer,
-        reply: suggestionSections.reply,
-        code: suggestionSections.code,
-        complexity: suggestionSections.complexity,
-        question: suggestionSections.question,
-        clarifyingOptions: suggestionSections.clarifyingOptions,
-        isScreenTask: suggestionSections.isScreenTask,
+        chineseThinking: displaySuggestionSections.chineseThinking,
+        answer: displaySuggestionSections.answer,
+        reply: displaySuggestionSections.reply,
+        code: displaySuggestionSections.code,
+        complexity: displaySuggestionSections.complexity,
+        question: displaySuggestionSections.question,
+        clarifyingOptions: displaySuggestionSections.clarifyingOptions,
+        isScreenTask: displaySuggestionSections.isScreenTask,
       },
       latestTurnText: latestTurn?.text || "Waiting for meeting audio.",
       statusLabel: statusLabel[meeting.status],
@@ -392,14 +486,14 @@ export const MeetingAssistant = ({
       meeting.speechCorrections,
       meeting.status,
       showClarifyingQuestion,
-      suggestionSections.answer,
-      suggestionSections.chineseThinking,
-      suggestionSections.clarifyingOptions,
-      suggestionSections.code,
-      suggestionSections.complexity,
-      suggestionSections.isScreenTask,
-      suggestionSections.question,
-      suggestionSections.reply,
+      displaySuggestionSections.answer,
+      displaySuggestionSections.chineseThinking,
+      displaySuggestionSections.clarifyingOptions,
+      displaySuggestionSections.code,
+      displaySuggestionSections.complexity,
+      displaySuggestionSections.isScreenTask,
+      displaySuggestionSections.question,
+      displaySuggestionSections.reply,
     ]
   );
   const focusSnapshotRef = useRef(focusSnapshot);
@@ -885,7 +979,8 @@ export const MeetingAssistant = ({
 
           {isFocusMode ? (
             <FocusModePanel
-              suggestionSections={suggestionSections}
+              suggestionSections={displaySuggestionSections}
+              codingArtifactCached={codingArtifactDisplay.isCached}
               isScreenTaskSuggestion={isScreenTaskSuggestion}
               latestTurnText={latestTurn?.text || "Waiting for meeting audio."}
               speechCorrectionInput={speechCorrectionInput}
@@ -1101,35 +1196,12 @@ export const MeetingAssistant = ({
                     </div>
                   </section>
 
-                  <section className="min-w-0 overflow-hidden rounded-md border border-border/70 p-3">
-                    <div className="mb-2 flex items-center gap-2 text-xs font-semibold">
-                      <MessageSquareTextIcon className="h-3.5 w-3.5" />
-                      Code & complexity
-                    </div>
-                    {suggestionSections.code ? (
-                      <pre
-                        className={cn(
-                          WRAP_TEXT_CLASS,
-                          "max-h-56 overflow-y-auto overflow-x-hidden rounded-sm bg-muted p-2 text-[11px] leading-4"
-                        )}
-                      >
-                        {stripOuterCodeFence(suggestionSections.code)}
-                      </pre>
-                    ) : (
-                      <p
-                        className={cn(
-                          WRAP_TEXT_CLASS,
-                          "text-xs leading-5 text-muted-foreground"
-                        )}
-                      >
-                        No code needed.
-                      </p>
-                    )}
-                    <MeetingMarkdownText
-                      className={cn(WRAP_TEXT_CLASS, "mt-2 text-xs leading-5")}
-                      value={suggestionSections.complexity || "No complexity note."}
-                    />
-                  </section>
+                  <CodingArtifactSection
+                    code={displaySuggestionSections.code}
+                    complexity={displaySuggestionSections.complexity}
+                    isCached={codingArtifactDisplay.isCached}
+                    showEmptyState
+                  />
                 </>
               ) : (
                 <>
@@ -1162,6 +1234,15 @@ export const MeetingAssistant = ({
                       value={suggestionSections.reply || "Waiting for suggestion."}
                     />
                   </section>
+
+                  {displaySuggestionSections.code ||
+                  displaySuggestionSections.complexity ? (
+                    <CodingArtifactSection
+                      code={displaySuggestionSections.code}
+                      complexity={displaySuggestionSections.complexity}
+                      isCached={codingArtifactDisplay.isCached}
+                    />
+                  ) : null}
                 </>
               )}
 
@@ -1675,6 +1756,7 @@ export const MeetingAssistant = ({
 
 const FocusModePanel = ({
   suggestionSections,
+  codingArtifactCached,
   isScreenTaskSuggestion,
   latestTurnText,
   speechCorrectionInput,
@@ -1696,6 +1778,7 @@ const FocusModePanel = ({
   onBriefChange,
 }: {
   suggestionSections: ReturnType<typeof parseSuggestionSections>;
+  codingArtifactCached: boolean;
   isScreenTaskSuggestion: boolean;
   latestTurnText: string;
   speechCorrectionInput: string;
@@ -1775,6 +1858,14 @@ const FocusModePanel = ({
                 <div className="mb-2 flex items-center gap-2 text-xs font-semibold">
                   <MessageSquareTextIcon className="h-3.5 w-3.5" />
                   Code & complexity
+                  {codingArtifactCached ? (
+                    <Badge
+                      variant="outline"
+                      className="ml-auto rounded-sm px-1.5 py-0 text-[10px] font-normal"
+                    >
+                      cached
+                    </Badge>
+                  ) : null}
                 </div>
                 {suggestionSections.code ? (
                   <pre
@@ -2970,6 +3061,62 @@ const SuggestionBlock = ({
   );
 };
 
+const CodingArtifactSection = ({
+  code,
+  complexity,
+  isCached,
+  showEmptyState = false,
+}: {
+  code: string;
+  complexity: string;
+  isCached: boolean;
+  showEmptyState?: boolean;
+}) => {
+  if (!showEmptyState && !code && !complexity) return null;
+
+  return (
+    <section className="min-w-0 overflow-hidden rounded-md border border-border/70 p-3">
+      <div className="mb-2 flex items-center gap-2 text-xs font-semibold">
+        <MessageSquareTextIcon className="h-3.5 w-3.5" />
+        Code & complexity
+        {isCached ? (
+          <Badge
+            variant="outline"
+            className="ml-auto rounded-sm px-1.5 py-0 text-[10px] font-normal"
+          >
+            cached
+          </Badge>
+        ) : null}
+      </div>
+      {code ? (
+        <pre
+          className={cn(
+            WRAP_TEXT_CLASS,
+            "max-h-56 overflow-y-auto overflow-x-hidden rounded-sm bg-muted p-2 text-[11px] leading-4"
+          )}
+        >
+          {stripOuterCodeFence(code)}
+        </pre>
+      ) : showEmptyState ? (
+        <p
+          className={cn(
+            WRAP_TEXT_CLASS,
+            "text-xs leading-5 text-muted-foreground"
+          )}
+        >
+          No code needed.
+        </p>
+      ) : null}
+      {complexity || showEmptyState ? (
+        <MeetingMarkdownText
+          className={cn(WRAP_TEXT_CLASS, "mt-2 text-xs leading-5")}
+          value={complexity || "No complexity note."}
+        />
+      ) : null}
+    </section>
+  );
+};
+
 function formatCaptureTargetName(target: ScreenCaptureTarget) {
   const prefix =
     target.targetType === "active-window" ? "Active window" : "Monitor";
@@ -3250,6 +3397,87 @@ function parseSuggestionSections(
     screenAnswer: parsedScreenTaskAnswer,
     isScreenTask,
   };
+}
+
+function readCodingArtifactPatch({
+  activeTaskKind,
+  hasExistingCache,
+  sections,
+}: {
+  activeTaskKind?: string;
+  hasExistingCache: boolean;
+  sections: ReturnType<typeof parseSuggestionSections>;
+}) {
+  const code = normalizeCodingArtifactText(sections.code);
+  const complexity = normalizeCodingArtifactText(sections.complexity);
+  if (!code && !complexity) return undefined;
+
+  if (code || activeTaskKind === "coding") {
+    return { code, complexity };
+  }
+
+  if (hasExistingCache && complexity && isCodingArtifactUpdate(sections)) {
+    return { code, complexity };
+  }
+
+  return undefined;
+}
+
+function resolveCodingArtifactDisplay({
+  activeTaskKind,
+  cache,
+  taskId,
+  sections,
+}: {
+  activeTaskKind?: string;
+  cache: CodingArtifactCache | null;
+  taskId: string;
+  sections: ReturnType<typeof parseSuggestionSections>;
+}) {
+  if (!taskId) return { code: "", complexity: "", isCached: false };
+
+  const artifactPatch = readCodingArtifactPatch({
+    activeTaskKind,
+    hasExistingCache: Boolean(cache),
+    sections,
+  });
+
+  if (artifactPatch) {
+    return {
+      code: artifactPatch.code || cache?.code || "",
+      complexity: artifactPatch.complexity || cache?.complexity || "",
+      isCached: false,
+    };
+  }
+
+  if (cache) {
+    return {
+      code: cache.code,
+      complexity: cache.complexity,
+      isCached: true,
+    };
+  }
+
+  return { code: "", complexity: "", isCached: false };
+}
+
+function normalizeCodingArtifactText(value: string | undefined) {
+  const normalized = stripOuterCodeFence(value ?? "").trim();
+  return normalized === "-" ? "" : normalized;
+}
+
+function isCodingArtifactUpdate(
+  sections: ReturnType<typeof parseSuggestionSections>
+) {
+  return /\b(time complexity|space complexity|complexity|implementation|implement|algorithm|code|solution|optimi[sz]e)\b|o\s*\(/i.test(
+    [
+      sections.screenQuestion,
+      sections.answer,
+      sections.approach,
+      sections.complexity,
+      sections.screenAnswer?.rawContent,
+    ].join("\n")
+  );
 }
 
 function readSuggestionSection(content: string, labels: string[]) {
