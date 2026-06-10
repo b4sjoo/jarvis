@@ -111,4 +111,14 @@ export const DEFAULT_SHORTCUT_ACTIONS: ShortcutAction[] = [
       linux: "ctrl+shift+u",
     },
   },
+  {
+    id: "meeting_toggle_microphone_context",
+    name: "Meeting Mic Context",
+    description: "Toggle microphone-side context capture for Meeting Assistant",
+    defaultKey: {
+      macos: "cmd+shift+v",
+      windows: "ctrl+shift+v",
+      linux: "ctrl+shift+v",
+    },
+  },
 ];

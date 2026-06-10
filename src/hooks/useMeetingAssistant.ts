@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { useMicVAD } from "@ricky0123/vad-react";
 import { STORAGE_KEYS } from "@/config";
 import { useApp } from "@/contexts";
 import { safeLocalStorage } from "@/lib";
+import { floatArrayToWav } from "@/lib/utils";
 import {
   formatMemorySelectionForTrace,
   retrieveMemoryContext,
@@ -35,11 +37,13 @@ import {
   MeetingTrace,
   MeetingTraceExportRecord,
   MeetingTraceExportTrigger,
+  PENDING_CONFIRMATION_TTL_MS,
   ScreenObservation,
   ScreenPreflightResult,
   SpeechCorrection,
   SpeechCorrectionRule,
   TraceHumanEvaluation,
+  TranscriptTurn,
   base64WavToBlob,
   buildAmazonLeadershipPrincipleMemoryHint,
   buildInterviewSessionBriefMemoryHint,
@@ -48,11 +52,15 @@ import {
   createInterviewSessionContextFromBrief,
   createMeetingId,
   detectInterviewCompany,
+  classifyMeTurn,
+  findDuplicateSystemAudioTurnForMeTurn,
+  findRecentMeClarificationForTurn,
   isInterviewSessionBriefEmpty,
   normalizeInterviewBriefCompany,
   extractScreenTaskQuestion,
   inferScreenTaskKind,
   inferScreenTaskLanguage,
+  isShortConfirmationLike,
   parseMeetingTraceMetrics,
   parseScreenTaskAnswer,
   preflightScreenObservation,
@@ -64,6 +72,8 @@ import {
   serializeMeetingTraceExport,
   serializeMeetingTraceMetrics,
   solveScreenAnchoredTask,
+  shouldIncludeTurnInAdvisorPrompt,
+  shouldSuppressDuplicateSystemAudioTurn,
   transcribeMeetingAudio,
   upsertTraceHumanEvaluation,
   persistTraceHumanEvaluations,
@@ -172,6 +182,7 @@ const INITIAL_STATE: MeetingAssistantState = {
     activeScreenTaskTimeoutMinutes: DEFAULT_ACTIVE_SCREEN_TASK_TIMEOUT_MINUTES,
     useMemory: true,
     debugMode: false,
+    microphoneContextEnabled: true,
     response: DEFAULT_MEETING_RESPONSE_CONFIG,
     audio: {
       profile: "balanced",
@@ -212,6 +223,10 @@ function readMeetingAssistantSettings(): MeetingAssistantSettings {
         typeof parsed.debugMode === "boolean"
           ? parsed.debugMode
           : DEFAULT_MEETING_ASSISTANT_SETTINGS.debugMode,
+      microphoneContextEnabled:
+        typeof parsed.microphoneContextEnabled === "boolean"
+          ? parsed.microphoneContextEnabled
+          : DEFAULT_MEETING_ASSISTANT_SETTINGS.microphoneContextEnabled,
       response: normalizeMeetingResponseConfig(parsed.response),
       audio: normalizeMeetingAudioSettings(parsed.audio),
     };
@@ -564,12 +579,27 @@ interface CaptureScreenContextOptions {
 }
 
 interface QueuedSpeechSegment {
-  base64Audio: string;
+  base64Audio?: string;
+  audioBlob?: Blob;
+  audioBase64Chars: number;
+  audioBytes?: number;
+  audioType?: string;
   sessionId: string;
   sequence: number;
   queuedAt: number;
+  startedAt?: number;
+  endedAt?: number;
+  speaker: TranscriptTurn["speaker"];
+  source: TranscriptTurn["source"];
   traceId: string;
   queueStepId: string;
+}
+
+interface PendingConfirmation {
+  turn: TranscriptTurn;
+  segment: QueuedSpeechSegment;
+  heldAt: number;
+  timeoutId: number;
 }
 
 export function useMeetingAssistant() {
@@ -619,8 +649,13 @@ export function useMeetingAssistant() {
   const screenCaptureInFlightRef = useRef(false);
   const audioSessionIdRef = useRef(createMeetingId("audio_session"));
   const audioSegmentSeqRef = useRef(0);
-  const audioQueueTailRef = useRef<Promise<void>>(Promise.resolve());
+  const systemAudioQueueTailRef = useRef<Promise<void>>(Promise.resolve());
+  const microphoneAudioQueueTailRef = useRef<Promise<void>>(Promise.resolve());
+  const pendingConfirmationRef = useRef<PendingConfirmation | null>(null);
   const speechCorrectionsRef = useRef<SpeechCorrection[]>([]);
+  const microphoneContextEnabledRef = useRef(
+    INITIAL_STATE.settings.microphoneContextEnabled
+  );
   const speechDetectedHandlerRef = useRef<
     ((base64Audio: string) => void) | undefined
   >(undefined);
@@ -684,19 +719,49 @@ export function useMeetingAssistant() {
     }
   }, []);
 
+  const clearPendingConfirmation = useCallback((reason: string) => {
+    const pending = pendingConfirmationRef.current;
+    if (!pending) return;
+
+    window.clearTimeout(pending.timeoutId);
+    pendingConfirmationRef.current = null;
+
+    const expiredStepId = traceStoreRef.current.startStep(
+      pending.segment.traceId,
+      "Pending confirmation expired",
+      {
+        reason,
+        turnId: pending.turn.id,
+        heldMs: Date.now() - pending.heldAt,
+        audioSegmentSeq: pending.segment.sequence,
+        audioSessionId: pending.segment.sessionId,
+      }
+    );
+    traceStoreRef.current.finishStep(
+      pending.segment.traceId,
+      expiredStepId,
+      "success"
+    );
+    traceStoreRef.current.finishTrace(pending.segment.traceId, "success");
+  }, []);
+
   const startAudioProcessingSession = useCallback(() => {
     const sessionId = createMeetingId("audio_session");
     audioSessionIdRef.current = sessionId;
     audioSegmentSeqRef.current = 0;
-    audioQueueTailRef.current = Promise.resolve();
+    systemAudioQueueTailRef.current = Promise.resolve();
+    microphoneAudioQueueTailRef.current = Promise.resolve();
+    clearPendingConfirmation("session-restarted");
     return sessionId;
-  }, []);
+  }, [clearPendingConfirmation]);
 
   const invalidateAudioProcessingSession = useCallback(() => {
     audioSessionIdRef.current = createMeetingId("audio_session_inactive");
     audioSegmentSeqRef.current = 0;
-    audioQueueTailRef.current = Promise.resolve();
-  }, []);
+    systemAudioQueueTailRef.current = Promise.resolve();
+    microphoneAudioQueueTailRef.current = Promise.resolve();
+    clearPendingConfirmation("session-invalidated");
+  }, [clearPendingConfirmation]);
 
   const isCurrentAudioSegment = useCallback((segment: QueuedSpeechSegment) => {
     return activeRef.current && audioSessionIdRef.current === segment.sessionId;
@@ -971,6 +1036,21 @@ export function useMeetingAssistant() {
     },
     [updateSettings]
   );
+
+  const setMicrophoneContextEnabled = useCallback(
+    (microphoneContextEnabled: boolean) => {
+      microphoneContextEnabledRef.current = microphoneContextEnabled;
+      updateSettings((previous) => ({
+        ...previous,
+        microphoneContextEnabled,
+      }));
+    },
+    [updateSettings]
+  );
+
+  const toggleMicrophoneContext = useCallback(() => {
+    setMicrophoneContextEnabled(!microphoneContextEnabledRef.current);
+  }, [setMicrophoneContextEnabled]);
 
   const setUseMemory = useCallback(
     (useMemory: boolean) => {
@@ -1485,6 +1565,215 @@ export function useMeetingAssistant() {
     }, ADVISOR_DEBOUNCE_MS);
   }, [clearAdvisorDebounce, runAdvisor]);
 
+  const appendTranscriptTurnForTrace = useCallback(
+    (
+      turn: TranscriptTurn,
+      traceId: string,
+      segment: QueuedSpeechSegment,
+      metadata: Record<string, unknown> = {}
+    ) => {
+      const interviewContextUpdate =
+        contextManagerRef.current.addTranscriptTurn(turn);
+      const contextState = contextManagerRef.current.getState();
+      const appendStepId = traceStoreRef.current.startStep(
+        traceId,
+        "Transcript appended",
+        {
+          turnId: turn.id,
+          speaker: turn.speaker,
+          source: turn.source,
+          audioSegmentSeq: segment.sequence,
+          audioSessionId: segment.sessionId,
+          contextTier: turn.contextTier,
+          contextPromptEligible: turn.contextPromptEligible,
+          contextFusionStatus: turn.contextFusionStatus,
+          ...metadata,
+        }
+      );
+      traceStoreRef.current.finishStep(traceId, appendStepId, "success", {
+        transcriptTurns: contextState.transcriptTurns.length,
+      });
+
+      if (interviewContextUpdate?.changed) {
+        const targetCompany =
+          interviewContextUpdate.targetCompany ??
+          contextState.interviewSessionContext?.targetCompany;
+        const interviewStepId = traceStoreRef.current.startStep(
+          traceId,
+          "Interview session context updated",
+          {
+            targetCompany: targetCompany?.value,
+            confidence: targetCompany?.confidence,
+            source: targetCompany?.source,
+          }
+        );
+        traceStoreRef.current.finishStep(
+          traceId,
+          interviewStepId,
+          "success",
+          {
+            evidenceChars: targetCompany?.evidence.length ?? 0,
+          }
+        );
+        traceStoreRef.current.updateMetadata(traceId, {
+          targetCompany: targetCompany?.value,
+          targetCompanyConfidence: targetCompany?.confidence,
+        });
+      }
+
+      setState((previous) => ({
+        ...previous,
+        status: activeRef.current ? "listening" : "idle",
+        transcriptTurns: contextState.transcriptTurns,
+        interviewSessionContext: contextState.interviewSessionContext,
+        activeScreenTask: contextState.activeScreenTask,
+      }));
+
+      return { contextState, interviewContextUpdate };
+    },
+    []
+  );
+
+  const promoteMeTurnForFusion = useCallback(
+    (meTurn: TranscriptTurn, relatedTurnId: string) => {
+      contextManagerRef.current.updateTranscriptTurnContext(meTurn.id, {
+        contextPromptEligible: true,
+        contextFusionStatus: "paired",
+        relatedTurnIds: Array.from(
+          new Set([...(meTurn.relatedTurnIds ?? []), relatedTurnId])
+        ),
+      });
+    },
+    []
+  );
+
+  const resolvePendingConfirmationForMeTurn = useCallback(
+    (meTurn: TranscriptTurn) => {
+      const pending = pendingConfirmationRef.current;
+      if (!pending) return false;
+
+      if (!isCurrentAudioSegment(pending.segment)) {
+        clearPendingConfirmation("stale-pending-confirmation");
+        return false;
+      }
+
+      const match = findRecentMeClarificationForTurn(pending.turn, [meTurn]);
+      if (!match) return false;
+
+      window.clearTimeout(pending.timeoutId);
+      pendingConfirmationRef.current = null;
+      promoteMeTurnForFusion(meTurn, pending.turn.id);
+
+      const pairStepId = traceStoreRef.current.startStep(
+        pending.segment.traceId,
+        "Clarification pair detected",
+        {
+          reason: match.reason,
+          meTurnId: meTurn.id,
+          themTurnId: pending.turn.id,
+          heldMs: Date.now() - pending.heldAt,
+          audioSegmentSeq: pending.segment.sequence,
+          audioSessionId: pending.segment.sessionId,
+        }
+      );
+      traceStoreRef.current.finishStep(
+        pending.segment.traceId,
+        pairStepId,
+        "success"
+      );
+
+      pending.turn.contextFusionStatus = "paired";
+      pending.turn.relatedTurnIds = [meTurn.id];
+      const { contextState } = appendTranscriptTurnForTrace(
+        pending.turn,
+        pending.segment.traceId,
+        pending.segment,
+        {
+          fusedWithTurnId: meTurn.id,
+        }
+      );
+      const debounceStepId = traceStoreRef.current.startStep(
+        pending.segment.traceId,
+        "Advisor debounce scheduled",
+        { debounceMs: ADVISOR_DEBOUNCE_MS, reason: "clarification-pair" }
+      );
+      traceStoreRef.current.finishStep(
+        pending.segment.traceId,
+        debounceStepId,
+        "success"
+      );
+      scheduleAdvisor(
+        contextState.activeScreenTask ? "screen-anchored" : "live",
+        pending.segment.traceId
+      );
+
+      return true;
+    },
+    [
+      appendTranscriptTurnForTrace,
+      clearPendingConfirmation,
+      isCurrentAudioSegment,
+      promoteMeTurnForFusion,
+      scheduleAdvisor,
+    ]
+  );
+
+  const holdPendingConfirmation = useCallback(
+    (turn: TranscriptTurn, segment: QueuedSpeechSegment) => {
+      clearPendingConfirmation("replaced-by-new-pending-confirmation");
+
+      const heldAt = Date.now();
+      const heldStepId = traceStoreRef.current.startStep(
+        segment.traceId,
+        "Pending confirmation held",
+        {
+          turnId: turn.id,
+          ttlMs: PENDING_CONFIRMATION_TTL_MS,
+          audioSegmentSeq: segment.sequence,
+          audioSessionId: segment.sessionId,
+          transcriptChars: turn.text.trim().length,
+        }
+      );
+      traceStoreRef.current.finishStep(segment.traceId, heldStepId, "success");
+
+      const timeoutId = window.setTimeout(() => {
+        const pending = pendingConfirmationRef.current;
+        if (!pending || pending.turn.id !== turn.id) return;
+
+        pendingConfirmationRef.current = null;
+        const expiredStepId = traceStoreRef.current.startStep(
+          segment.traceId,
+          "Pending confirmation expired",
+          {
+            turnId: turn.id,
+            heldMs: Date.now() - heldAt,
+            audioSegmentSeq: segment.sequence,
+            audioSessionId: segment.sessionId,
+          }
+        );
+        traceStoreRef.current.finishStep(
+          segment.traceId,
+          expiredStepId,
+          "success"
+        );
+        traceStoreRef.current.finishTrace(segment.traceId, "success");
+      }, PENDING_CONFIRMATION_TTL_MS);
+
+      pendingConfirmationRef.current = {
+        turn,
+        segment,
+        heldAt,
+        timeoutId,
+      };
+
+      setState((previous) => ({
+        ...previous,
+        status: activeRef.current ? "listening" : "idle",
+      }));
+    },
+    [clearPendingConfirmation]
+  );
+
   const processQueuedSpeechSegment = useCallback(
     async (segment: QueuedSpeechSegment) => {
       const traceId = segment.traceId;
@@ -1501,6 +1790,8 @@ export function useMeetingAssistant() {
             reason: "stale-before-processing",
             audioSegmentSeq: segment.sequence,
             audioSessionId: segment.sessionId,
+            speaker: segment.speaker,
+            source: segment.source,
             currentAudioSessionId: audioSessionIdRef.current,
             queueWaitMs: Date.now() - segment.queuedAt,
           }
@@ -1516,6 +1807,8 @@ export function useMeetingAssistant() {
         {
           audioSegmentSeq: segment.sequence,
           audioSessionId: segment.sessionId,
+          speaker: segment.speaker,
+          source: segment.source,
           queueWaitMs: Date.now() - segment.queuedAt,
         }
       );
@@ -1564,10 +1857,17 @@ export function useMeetingAssistant() {
             audioSessionId: segment.sessionId,
           }
         );
-        const audio = base64WavToBlob(segment.base64Audio);
+        const audio = segment.audioBlob ?? (
+          segment.base64Audio ? base64WavToBlob(segment.base64Audio) : null
+        );
+        if (!audio) {
+          throw new Error("Audio segment did not include audio payload.");
+        }
         traceStoreRef.current.finishStep(traceId, audioBlobStepId, "success", {
           audioBytes: audio.size,
           audioType: audio.type,
+          speaker: segment.speaker,
+          source: segment.source,
         });
 
         const speechBias = buildSpeechBiasContext(
@@ -1596,6 +1896,8 @@ export function useMeetingAssistant() {
             audioType: audio.type,
             audioSegmentSeq: segment.sequence,
             audioSessionId: segment.sessionId,
+            speaker: segment.speaker,
+            source: segment.source,
             speechBiasTermCount: speechBias.terms.length,
             speechBiasRuleCount: speechBias.correctionRules.length,
             speechBiasPromptChars: speechBias.prompt.length,
@@ -1609,6 +1911,8 @@ export function useMeetingAssistant() {
             audioBytes: audio.size,
             audioSegmentSeq: segment.sequence,
             audioSessionId: segment.sessionId,
+            speaker: segment.speaker,
+            source: segment.source,
             speechBiasTermCount: speechBias.terms.length,
             speechBiasRuleCount: speechBias.correctionRules.length,
           }
@@ -1620,6 +1924,10 @@ export function useMeetingAssistant() {
             selectedProvider: selectedSttProvider,
             prompt: speechBias.prompt,
             terms: speechBias.terms.map((term) => term.term),
+            speaker: segment.speaker,
+            source: segment.source,
+            startedAt: segment.startedAt,
+            endedAt: segment.endedAt,
           }),
           STT_TIMEOUT_MS,
           "Speech-to-text timed out. Jarvis is still listening."
@@ -1637,6 +1945,8 @@ export function useMeetingAssistant() {
               turnId: turn.id,
               audioSegmentSeq: segment.sequence,
               audioSessionId: segment.sessionId,
+              speaker: segment.speaker,
+              source: segment.source,
             }
           );
           const normalized = normalizeTranscriptWithSpeechBias(
@@ -1689,8 +1999,114 @@ export function useMeetingAssistant() {
           return;
         }
 
+        turn.audioSegmentSeq = segment.sequence;
+        turn.audioSessionId = segment.sessionId;
+
         const activeScreenTask = contextManagerRef.current.getState()
           .activeScreenTask;
+
+        if (turn.speaker === "me") {
+          const classification = classifyMeTurn(turn, Boolean(activeScreenTask));
+          turn.contextTier = classification.tier;
+          turn.contextPromptEligible = classification.promptEligible;
+          turn.contextFusionStatus = classification.promptEligible
+            ? "pending"
+            : "debug-only";
+
+          const classificationStepId = traceStoreRef.current.startStep(
+            traceId,
+            "Microphone transcript classified",
+            {
+              turnId: turn.id,
+              contextTier: classification.tier,
+              contextPromptEligible: classification.promptEligible,
+              wordEquivalent: classification.wordEquivalent,
+              durationMs: classification.durationMs,
+              hasClarificationSignal: classification.hasClarificationSignal,
+              audioSegmentSeq: segment.sequence,
+              audioSessionId: segment.sessionId,
+            }
+          );
+          traceStoreRef.current.finishStep(
+            traceId,
+            classificationStepId,
+            "success"
+          );
+
+          const duplicateDecision = findDuplicateSystemAudioTurnForMeTurn(
+            turn,
+            contextManagerRef.current.getState().transcriptTurns
+          );
+          if (duplicateDecision.confidence !== "low") {
+            turn.contextPromptEligible = false;
+            turn.contextFusionStatus = "duplicate-suppressed";
+            turn.relatedTurnIds = duplicateDecision.matchedTurn?.id
+              ? [duplicateDecision.matchedTurn.id]
+              : [];
+            const duplicateStepId = traceStoreRef.current.startStep(
+              traceId,
+              "Duplicate transcript suppressed",
+              {
+                direction: "microphone-arrived-after-system-audio",
+                matchedTurnId: duplicateDecision.matchedTurn?.id,
+                tokenJaccard: duplicateDecision.tokenJaccard,
+                trigramDice: duplicateDecision.trigramDice,
+                timeDeltaMs: duplicateDecision.timeDeltaMs,
+                overlapRatio: duplicateDecision.overlapRatio,
+                confidence: duplicateDecision.confidence,
+                reason: duplicateDecision.reason,
+              }
+            );
+            traceStoreRef.current.finishStep(
+              traceId,
+              duplicateStepId,
+              "success"
+            );
+            traceStoreRef.current.finishTrace(traceId, "success");
+            setState((previous) => ({
+              ...previous,
+              status: activeRef.current ? "listening" : "idle",
+            }));
+            return;
+          }
+
+          appendTranscriptTurnForTrace(turn, traceId, segment);
+          resolvePendingConfirmationForMeTurn(turn);
+          traceStoreRef.current.finishTrace(traceId, "success");
+          return;
+        }
+
+        const duplicateDecision = shouldSuppressDuplicateSystemAudioTurn(
+          turn,
+          contextManagerRef.current.getState().transcriptTurns
+        );
+        if (duplicateDecision.suppress) {
+          turn.contextFusionStatus = "duplicate-suppressed";
+          const duplicateStepId = traceStoreRef.current.startStep(
+            traceId,
+            "Duplicate transcript suppressed",
+            {
+              direction: "system-audio-echo-of-microphone",
+              matchedTurnId: duplicateDecision.matchedTurn?.id,
+              tokenJaccard: duplicateDecision.tokenJaccard,
+              trigramDice: duplicateDecision.trigramDice,
+              timeDeltaMs: duplicateDecision.timeDeltaMs,
+              overlapRatio: duplicateDecision.overlapRatio,
+              reason: duplicateDecision.reason,
+            }
+          );
+          traceStoreRef.current.finishStep(
+            traceId,
+            duplicateStepId,
+            "success"
+          );
+          traceStoreRef.current.finishTrace(traceId, "success");
+          setState((previous) => ({
+            ...previous,
+            status: activeRef.current ? "listening" : "idle",
+          }));
+          return;
+        }
 
         if (activeScreenTask && isTaskSwitchTranscript(turn.text)) {
           const switchStepId = traceStoreRef.current.startStep(
@@ -1726,6 +2142,56 @@ export function useMeetingAssistant() {
         }
 
         if (shouldIgnoreLowSignalTranscript(turn.text, Boolean(activeScreenTask))) {
+          const clarificationMatch = findRecentMeClarificationForTurn(
+            turn,
+            contextManagerRef.current.getState().transcriptTurns
+          );
+          if (clarificationMatch) {
+            promoteMeTurnForFusion(clarificationMatch.meTurn, turn.id);
+            turn.contextFusionStatus = "paired";
+            turn.relatedTurnIds = [clarificationMatch.meTurn.id];
+            const pairStepId = traceStoreRef.current.startStep(
+              traceId,
+              "Clarification pair detected",
+              {
+                reason: clarificationMatch.reason,
+                meTurnId: clarificationMatch.meTurn.id,
+                themTurnId: turn.id,
+                audioSegmentSeq: segment.sequence,
+                audioSessionId: segment.sessionId,
+              }
+            );
+            traceStoreRef.current.finishStep(traceId, pairStepId, "success");
+            const { contextState } = appendTranscriptTurnForTrace(
+              turn,
+              traceId,
+              segment,
+              {
+                fusedWithTurnId: clarificationMatch.meTurn.id,
+              }
+            );
+            const debounceStepId = traceStoreRef.current.startStep(
+              traceId,
+              "Advisor debounce scheduled",
+              { debounceMs: ADVISOR_DEBOUNCE_MS, reason: "clarification-pair" }
+            );
+            traceStoreRef.current.finishStep(
+              traceId,
+              debounceStepId,
+              "success"
+            );
+            scheduleAdvisor(
+              contextState.activeScreenTask ? "screen-anchored" : "live",
+              traceId
+            );
+            return;
+          }
+
+          if (isShortConfirmationLike(turn.text)) {
+            holdPendingConfirmation(turn, segment);
+            return;
+          }
+
           const ignoredStepId = traceStoreRef.current.startStep(
             traceId,
             "Transcript ignored",
@@ -1744,56 +2210,11 @@ export function useMeetingAssistant() {
           return;
         }
 
-        const interviewContextUpdate =
-          contextManagerRef.current.addTranscriptTurn(turn);
-        const contextState = contextManagerRef.current.getState();
-        const appendStepId = traceStoreRef.current.startStep(
+        const { contextState } = appendTranscriptTurnForTrace(
+          turn,
           traceId,
-          "Transcript appended",
-          {
-            turnId: turn.id,
-            audioSegmentSeq: segment.sequence,
-            audioSessionId: segment.sessionId,
-          }
+          segment
         );
-        traceStoreRef.current.finishStep(traceId, appendStepId, "success", {
-          transcriptTurns: contextState.transcriptTurns.length,
-        });
-
-        if (interviewContextUpdate?.changed) {
-          const targetCompany =
-            interviewContextUpdate.targetCompany ??
-            contextState.interviewSessionContext?.targetCompany;
-          const interviewStepId = traceStoreRef.current.startStep(
-            traceId,
-            "Interview session context updated",
-            {
-              targetCompany: targetCompany?.value,
-              confidence: targetCompany?.confidence,
-              source: targetCompany?.source,
-            }
-          );
-          traceStoreRef.current.finishStep(
-            traceId,
-            interviewStepId,
-            "success",
-            {
-              evidenceChars: targetCompany?.evidence.length ?? 0,
-            }
-          );
-          traceStoreRef.current.updateMetadata(traceId, {
-            targetCompany: targetCompany?.value,
-            targetCompanyConfidence: targetCompany?.confidence,
-          });
-        }
-
-        setState((previous) => ({
-          ...previous,
-          status: activeRef.current ? "listening" : "idle",
-          transcriptTurns: contextState.transcriptTurns,
-          interviewSessionContext: contextState.interviewSessionContext,
-          activeScreenTask: contextState.activeScreenTask,
-        }));
 
         const debounceStepId = traceStoreRef.current.startStep(
           traceId,
@@ -1842,10 +2263,14 @@ export function useMeetingAssistant() {
       }
     },
     [
+      appendTranscriptTurnForTrace,
       clearAdvisorDebounce,
+      holdPendingConfirmation,
       incrementAppliedSpeechCorrections,
       invalidateAudioProcessingSession,
       isCurrentAudioSegment,
+      promoteMeTurnForFusion,
+      resolvePendingConfirmationForMeTurn,
       scheduleAdvisor,
       selectedSttProvider,
       sttProvider,
@@ -1859,44 +2284,160 @@ export function useMeetingAssistant() {
       const sessionId = audioSessionIdRef.current;
       const sequence = audioSegmentSeqRef.current + 1;
       audioSegmentSeqRef.current = sequence;
+      const queuedAt = Date.now();
 
       const trace = traceStoreRef.current.startTrace("voice", {
         audioBase64Chars: base64Audio.length,
         audioSegmentSeq: sequence,
         audioSessionId: sessionId,
+        speaker: "them",
+        source: "system-audio",
       });
       const queueStepId = traceStoreRef.current.startStep(
         trace.id,
-        "Audio segment queued",
+        "System audio speech queued",
         {
           audioSegmentSeq: sequence,
           audioSessionId: sessionId,
+          speaker: "them",
+          source: "system-audio",
         }
       );
       const segment: QueuedSpeechSegment = {
         base64Audio,
+        audioBase64Chars: base64Audio.length,
         sessionId,
         sequence,
-        queuedAt: Date.now(),
+        queuedAt,
+        speaker: "them",
+        source: "system-audio",
         traceId: trace.id,
         queueStepId,
       };
 
-      audioQueueTailRef.current = audioQueueTailRef.current
+      systemAudioQueueTailRef.current = systemAudioQueueTailRef.current
         .catch(() => undefined)
         .then(() => processQueuedSpeechSegment(segment))
         .catch((error) => {
-          console.warn("Failed to process queued meeting audio segment", error);
+          console.warn("Failed to process queued system audio segment", error);
         });
     },
     [processQueuedSpeechSegment]
   );
+
+  const enqueueMicrophoneSpeech = useCallback(
+    (audioBlob: Blob, startedAt: number, endedAt: number) => {
+      if (!activeRef.current || !microphoneContextEnabledRef.current) return;
+
+      const sessionId = audioSessionIdRef.current;
+      const sequence = audioSegmentSeqRef.current + 1;
+      audioSegmentSeqRef.current = sequence;
+      const queuedAt = Date.now();
+
+      const trace = traceStoreRef.current.startTrace("voice", {
+        audioBytes: audioBlob.size,
+        audioType: audioBlob.type,
+        audioSegmentSeq: sequence,
+        audioSessionId: sessionId,
+        speaker: "me",
+        source: "microphone",
+      });
+      const queueStepId = traceStoreRef.current.startStep(
+        trace.id,
+        "Microphone speech queued",
+        {
+          audioSegmentSeq: sequence,
+          audioSessionId: sessionId,
+          speaker: "me",
+          source: "microphone",
+          startedAt,
+          endedAt,
+        }
+      );
+      const segment: QueuedSpeechSegment = {
+        audioBlob,
+        audioBase64Chars: 0,
+        audioBytes: audioBlob.size,
+        audioType: audioBlob.type,
+        sessionId,
+        sequence,
+        queuedAt,
+        startedAt,
+        endedAt,
+        speaker: "me",
+        source: "microphone",
+        traceId: trace.id,
+        queueStepId,
+      };
+
+      microphoneAudioQueueTailRef.current = microphoneAudioQueueTailRef.current
+        .catch(() => undefined)
+        .then(() => processQueuedSpeechSegment(segment))
+        .catch((error) => {
+          console.warn("Failed to process queued microphone segment", error);
+        });
+    },
+    [processQueuedSpeechSegment]
+  );
+
+  const microphoneAudioConstraints = useMemo<MediaTrackConstraints>(() => {
+    const inputDeviceId = selectedAudioDevices.input.id;
+    return inputDeviceId && inputDeviceId !== "default"
+      ? { deviceId: { exact: inputDeviceId } }
+      : {};
+  }, [selectedAudioDevices.input.id]);
+
+  const microphoneVad = useMicVAD({
+    userSpeakingThreshold: 0.6,
+    startOnLoad: false,
+    additionalAudioConstraints: microphoneAudioConstraints,
+    onSpeechEnd: (audio) => {
+      if (!activeRef.current || !microphoneContextEnabledRef.current) return;
+
+      const endedAt = Date.now();
+      const durationMs = Math.round((audio.length / 16_000) * 1000);
+      const startedAt = endedAt - durationMs;
+      const audioBlob = floatArrayToWav(audio, 16_000, "wav");
+      enqueueMicrophoneSpeech(audioBlob, startedAt, endedAt);
+    },
+  });
 
   useEffect(() => {
     speechDetectedHandlerRef.current = (base64Audio: string) => {
       enqueueSpeechDetected(base64Audio);
     };
   }, [enqueueSpeechDetected]);
+
+  useEffect(() => {
+    microphoneContextEnabledRef.current =
+      state.settings.microphoneContextEnabled;
+  }, [state.settings.microphoneContextEnabled]);
+
+  useEffect(() => {
+    const shouldListen =
+      activeRef.current &&
+      state.settings.microphoneContextEnabled &&
+      (state.status === "listening" ||
+        state.status === "transcribing" ||
+        state.status === "thinking");
+
+    if (shouldListen) {
+      if (!microphoneVad.listening) {
+        microphoneVad.start();
+      }
+      return;
+    }
+
+    if (microphoneVad.listening) {
+      microphoneVad.pause();
+    }
+  }, [
+    microphoneVad.listening,
+    microphoneVad.pause,
+    microphoneVad.start,
+    state.settings.microphoneContextEnabled,
+    state.status,
+  ]);
 
   const startCapture = useCallback(async (resetContext: boolean) => {
     if (state.settings.privacyMode === "memory-only") {
@@ -2894,6 +3435,8 @@ export function useMeetingAssistant() {
     clearInterviewSessionBrief,
     setUseMemory,
     setDebugMode,
+    setMicrophoneContextEnabled,
+    toggleMicrophoneContext,
     setResponseConfig,
     setMeetingAudioProfile,
     setMeetingAudioConfig,
@@ -2954,6 +3497,7 @@ function formatRecentTranscript(
   turns: MeetingAssistantState["transcriptTurns"]
 ) {
   return turns
+    .filter(shouldIncludeTurnInAdvisorPrompt)
     .slice(-8)
     .map((turn) => {
       const speaker = turn.speaker === "me" ? "Me" : "Them";

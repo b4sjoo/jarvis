@@ -9,4 +9,5 @@ export * from "./screen-task-answer";
 export * from "./speech-bias";
 export * from "./trace";
 export * from "./transcription.service";
+export * from "./transcript-fusion";
 export * from "./types";

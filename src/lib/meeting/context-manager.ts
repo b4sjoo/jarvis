@@ -14,6 +14,7 @@ import {
   updateInterviewSessionContextFromScreenText,
   updateInterviewSessionContextFromTurn,
 } from "./interview-session-context";
+import { shouldIncludeTurnInAdvisorPrompt } from "./transcript-fusion";
 
 const DEFAULT_TRANSCRIPT_WINDOW_MS = 2 * 60 * 1000;
 const DEFAULT_MAX_SCREEN_OBSERVATIONS = 5;
@@ -122,6 +123,29 @@ export class MeetingContextManager {
       if (turn.id !== turnId || turn.text === trimmedText) return turn;
       changed = true;
       return { ...turn, text: trimmedText };
+    });
+
+    if (!changed) return false;
+
+    this.state = {
+      ...this.state,
+      transcriptTurns,
+    };
+    return true;
+  }
+
+  updateTranscriptTurnContext(
+    turnId: string,
+    updates: Pick<
+      TranscriptTurn,
+      "contextPromptEligible" | "contextFusionStatus" | "relatedTurnIds"
+    >
+  ) {
+    let changed = false;
+    const transcriptTurns = this.state.transcriptTurns.map((turn) => {
+      if (turn.id !== turnId) return turn;
+      changed = true;
+      return { ...turn, ...updates };
     });
 
     if (!changed) return false;
@@ -282,8 +306,10 @@ export class MeetingContextManager {
 
   private formatTranscript() {
     return this.state.transcriptTurns
+      .filter(shouldIncludeTurnInAdvisorPrompt)
       .map((turn) => {
-        const speaker = turn.speaker === "me" ? "Me" : "Them";
+        const speaker =
+          turn.speaker === "me" ? "Me (clarification)" : "Them";
         return `${speaker}: ${turn.text}`;
       })
       .join("\n");

@@ -21,6 +21,20 @@ export interface TranscriptTurn {
   isFinal: boolean;
   source: "system-audio" | "microphone";
   confidence?: number;
+  audioSegmentSeq?: number;
+  audioSessionId?: string;
+  contextTier?:
+    | "me_clarification_short"
+    | "me_clarification_medium"
+    | "me_attempted_answer_long";
+  contextPromptEligible?: boolean;
+  contextFusionStatus?:
+    | "none"
+    | "pending"
+    | "paired"
+    | "duplicate-suppressed"
+    | "debug-only";
+  relatedTurnIds?: string[];
 }
 
 export type SpeechBiasTermSource =
@@ -442,6 +456,7 @@ export interface MeetingAssistantSettings {
   activeScreenTaskTimeoutMinutes: number;
   useMemory: boolean;
   debugMode: boolean;
+  microphoneContextEnabled: boolean;
   response: MeetingResponseConfig;
   audio: MeetingAudioSettings;
 }

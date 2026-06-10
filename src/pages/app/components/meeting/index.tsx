@@ -63,6 +63,7 @@ import {
   HelpCircleIcon,
   LanguagesIcon,
   Loader2Icon,
+  MicIcon,
   MessageSquareTextIcon,
   MousePointer2Icon,
   PauseIcon,
@@ -278,8 +279,20 @@ export const MeetingAssistant = ({
   const screenHotkeyInFlightRef = useRef(false);
   const lastScreenHotkeyAtRef = useRef(0);
 
-  const latestTurn =
-    meeting.transcriptTurns[meeting.transcriptTurns.length - 1];
+  const latestTurn = [...meeting.transcriptTurns]
+    .reverse()
+    .find(
+      (turn) =>
+        turn.speaker !== "me" &&
+        turn.contextFusionStatus !== "duplicate-suppressed"
+    );
+  const recentMeTurns = meeting.transcriptTurns
+    .filter(
+      (turn) =>
+        turn.speaker === "me" &&
+        turn.contextFusionStatus !== "duplicate-suppressed"
+    )
+    .slice(-4);
   const latestScreenObservation =
     meeting.screenObservations[meeting.screenObservations.length - 1];
   const latestTrace =
@@ -617,11 +630,13 @@ export const MeetingAssistant = ({
         void handleFocusListeningShortcut();
       },
       meeting_regenerate: handleRegenerateShortcut,
+      meeting_toggle_microphone_context: meeting.toggleMicrophoneContext,
     }),
     [
       captureScreenContextFromHotkey,
       handleFocusListeningShortcut,
       handleRegenerateShortcut,
+      meeting.toggleMicrophoneContext,
       toggleFocusMode,
     ]
   );
@@ -916,6 +931,12 @@ export const MeetingAssistant = ({
                 audioConfig={meeting.settings.audio.config}
                 onAudioProfileChange={meeting.setMeetingAudioProfile}
                 onAudioConfigChange={meeting.setMeetingAudioConfig}
+                microphoneContextEnabled={
+                  meeting.settings.microphoneContextEnabled
+                }
+                onMicrophoneContextEnabledChange={
+                  meeting.setMicrophoneContextEnabled
+                }
                 debugMode={meeting.settings.debugMode}
                 onDebugModeChange={meeting.setDebugMode}
               />
@@ -1316,6 +1337,34 @@ export const MeetingAssistant = ({
                     {formatInterviewTargetCompany(
                       meeting.interviewSessionContext.targetCompany
                     )}
+                  </div>
+                </section>
+              ) : null}
+
+              {meeting.settings.debugMode && recentMeTurns.length ? (
+                <section className="min-w-0 overflow-hidden rounded-md border border-border/70 p-3">
+                  <div className="mb-2 flex items-center gap-2 text-xs font-semibold">
+                    <MicIcon className="h-3.5 w-3.5" />
+                    Microphone context
+                  </div>
+                  <div className="space-y-1">
+                    {recentMeTurns.map((turn) => (
+                      <div
+                        key={turn.id}
+                        className={cn(
+                          WRAP_TEXT_CLASS,
+                          "rounded-sm bg-muted/50 p-2 text-[10px] leading-4 text-muted-foreground"
+                        )}
+                      >
+                        <div className="mb-0.5 font-mono uppercase">
+                          {turn.contextTier ?? "me"} /{" "}
+                          {turn.contextPromptEligible
+                            ? "prompt"
+                            : "debug-only"}
+                        </div>
+                        {turn.text}
+                      </div>
+                    ))}
                   </div>
                 </section>
               ) : null}
@@ -2197,6 +2246,8 @@ const ConfigurationsPanel = ({
   audioConfig,
   onAudioProfileChange,
   onAudioConfigChange,
+  microphoneContextEnabled,
+  onMicrophoneContextEnabledChange,
   debugMode,
   onDebugModeChange,
 }: {
@@ -2214,6 +2265,8 @@ const ConfigurationsPanel = ({
   audioConfig: MeetingAudioConfig;
   onAudioProfileChange: (profile: MeetingAudioProfile) => void;
   onAudioConfigChange: (config: MeetingAudioConfig) => void;
+  microphoneContextEnabled: boolean;
+  onMicrophoneContextEnabledChange: (enabled: boolean) => void;
   debugMode: boolean;
   onDebugModeChange: (enabled: boolean) => void;
 }) => {
@@ -2340,6 +2393,21 @@ const ConfigurationsPanel = ({
             icon={<Volume2Icon className="h-3.5 w-3.5" />}
             title="Audio"
           >
+            <div className="flex items-center justify-between gap-2 rounded-sm border border-border/60 p-2">
+              <div>
+                <div className="text-[10px] font-medium uppercase text-muted-foreground">
+                  Mic Context
+                </div>
+                <div className="mt-0.5 text-[10px] text-muted-foreground">
+                  Capture your short clarifications as local context
+                </div>
+              </div>
+              <Switch
+                checked={microphoneContextEnabled}
+                onCheckedChange={onMicrophoneContextEnabledChange}
+              />
+            </div>
+
             <div>
               <Label className="mb-1.5 block text-[10px] font-medium uppercase text-muted-foreground">
                 Profile
