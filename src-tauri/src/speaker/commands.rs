@@ -1,14 +1,14 @@
 // Jarvis AI Speech Detection, and capture system audio (speaker output) as a stream of f32 samples.
 use crate::speaker::{AudioDevice, SpeakerInput};
 use anyhow::Result;
-use base64::{Engine as _, engine::general_purpose::STANDARD as B64};
+use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
 use futures_util::StreamExt;
 use hound::{WavSpec, WavWriter};
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 use std::io::Cursor;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter, Listener, Manager};
 use tauri_plugin_shell::ShellExt;

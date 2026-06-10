@@ -6,6 +6,7 @@ import {
   InterviewSessionContext,
   InterviewSessionBrief,
   MeetingModelTraceCallbacks,
+  MeetingModelRequestOptions,
   MeetingResponseConfig,
   ScreenObservation,
   ScreenTaskKind,
@@ -62,6 +63,7 @@ export interface SolveScreenAnchoredTaskOptions {
   screenPreflight?: ScreenPreflightResult;
   interviewPlaybook?: SelectedInterviewPlaybook;
   signal?: AbortSignal;
+  requestOptions?: MeetingModelRequestOptions;
   trace?: MeetingModelTraceCallbacks;
   onPartialContent?: (content: string) => void;
 }
@@ -111,6 +113,7 @@ const SCREEN_TASK_SYSTEM_PROMPT = [
   "If the screen shows an open field-knowledge question, give a concise and professional answer the user can say in a meeting.",
   "If the screen shows a behavioral interview question, give a concise first-person STAR-style story using relevant memory context when available.",
   "If the screen shows a coding or algorithm question, default to Python unless the screenshot shows another selected or requested language. Give the algorithm idea, implementation, and exact time and space complexity.",
+  "For coding or algorithm questions, prioritize a complete runnable implementation over lengthy explanation. Keep 中文思路 and Approach compact enough that the Code section can finish.",
   "Answer directly. Do not describe that you identified, selected, focused on, or can see a question; only put the restated problem in the Question section.",
   "If the transcript changes constraints or asks a follow-up, incorporate it, but never let transcript speculation override visible screen content.",
   "Treat memory context as background only. The screenshot, focus band, visible language selection, and latest transcript have higher priority than memory.",
@@ -289,6 +292,7 @@ export async function solveScreenAnchoredTask({
   screenPreflight,
   interviewPlaybook,
   signal,
+  requestOptions,
   trace,
   onPartialContent,
 }: SolveScreenAnchoredTaskOptions) {
@@ -328,6 +332,7 @@ export async function solveScreenAnchoredTask({
     providerId: provider.id,
     mode: "screen-task",
     responseConfig,
+    requestOptions,
   });
 
   for await (const chunk of fetchAIResponse({
@@ -338,6 +343,7 @@ export async function solveScreenAnchoredTask({
     imagesBase64: imageInputs,
     signal,
     applyResponseSettings: false,
+    requestOptions,
   })) {
     if (!firstTokenSeen) {
       firstTokenSeen = true;

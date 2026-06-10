@@ -361,7 +361,8 @@ fn position_focus_window<R: Runtime>(
     let y = match placement {
         FocusWindowPlacement::Top => monitor_position.y + FOCUS_TOP_MARGIN,
         FocusWindowPlacement::Bottom => {
-            monitor_position.y + monitor_size.height as i32 - window_size.height as i32
+            monitor_position.y + monitor_size.height as i32
+                - window_size.height as i32
                 - FOCUS_BOTTOM_MARGIN
         }
     };

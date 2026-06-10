@@ -30,6 +30,7 @@ import type {
   MeetingResponseConfig,
   MeetingResponseLanguage,
   MeetingResponseLength,
+  MeetingSessionRecordingState,
   MeetingFocusAction,
   MeetingFocusSnapshot,
   MeetingTrace,
@@ -1048,6 +1049,8 @@ export const MeetingAssistant = ({
                 }
                 debugMode={meeting.settings.debugMode}
                 onDebugModeChange={meeting.setDebugMode}
+                sessionRecording={meeting.sessionRecording}
+                onSessionRecordingChange={meeting.setSessionRecordingEnabled}
               />
 
               <InterviewSessionBriefPanel
@@ -2382,6 +2385,8 @@ const ConfigurationsPanel = ({
   onMicrophoneContextEnabledChange,
   debugMode,
   onDebugModeChange,
+  sessionRecording,
+  onSessionRecordingChange,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -2404,6 +2409,8 @@ const ConfigurationsPanel = ({
   onMicrophoneContextEnabledChange: (enabled: boolean) => void;
   debugMode: boolean;
   onDebugModeChange: (enabled: boolean) => void;
+  sessionRecording: MeetingSessionRecordingState;
+  onSessionRecordingChange: (enabled: boolean) => void;
 }) => {
   return (
     <section className="min-w-0 overflow-hidden rounded-md border border-border/70">
@@ -2647,6 +2654,50 @@ const ConfigurationsPanel = ({
                 Debug Mode
               </div>
               <Switch checked={debugMode} onCheckedChange={onDebugModeChange} />
+            </div>
+            <div className="space-y-1.5 rounded-sm border border-border/60 p-2">
+              <div className="flex items-center justify-between gap-2">
+                <div>
+                  <div className="text-[10px] font-medium uppercase text-muted-foreground">
+                    Session Recording
+                  </div>
+                  <div className="mt-0.5 text-[10px] text-muted-foreground">
+                    Local evaluation corpus, no audio
+                  </div>
+                </div>
+                <Switch
+                  checked={sessionRecording.active}
+                  onCheckedChange={onSessionRecordingChange}
+                />
+              </div>
+              {sessionRecording.active ? (
+                <div className="space-y-1 text-[10px] text-muted-foreground">
+                  <div className="flex min-w-0 items-center gap-1">
+                    <span className="shrink-0">Session:</span>
+                    <span className="min-w-0 truncate font-mono">
+                      {sessionRecording.sessionId}
+                    </span>
+                  </div>
+                  <div className="flex min-w-0 items-center gap-1">
+                    <span className="shrink-0">Folder:</span>
+                    <span
+                      className="min-w-0 truncate font-mono"
+                      title={sessionRecording.folderPath}
+                    >
+                      {sessionRecording.folderPath}
+                    </span>
+                  </div>
+                  <div>
+                    {sessionRecording.eventCount} events /{" "}
+                    {sessionRecording.artifactCount} artifacts
+                  </div>
+                </div>
+              ) : null}
+              {sessionRecording.lastError ? (
+                <div className="text-[10px] text-red-600">
+                  {sessionRecording.lastError}
+                </div>
+              ) : null}
             </div>
           </ConfigurationGroup>
         </div>

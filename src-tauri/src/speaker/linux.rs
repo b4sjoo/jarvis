@@ -2,6 +2,8 @@
 use super::AudioDevice;
 use anyhow::{anyhow, Result};
 use futures_util::Stream;
+use libpulse_binding as pulse;
+use libpulse_simple_binding as psimple;
 use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::rc::Rc;
@@ -10,8 +12,6 @@ use std::task::{Poll, Waker};
 use std::thread;
 use tracing::error;
 use tracing::warn;
-use libpulse_binding as pulse;
-use libpulse_simple_binding as psimple;
 
 use psimple::Simple;
 use pulse::context::introspect::Introspector;

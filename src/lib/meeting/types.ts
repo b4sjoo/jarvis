@@ -438,7 +438,13 @@ export interface MeetingAdvisorRequest {
   clarifyingFeedback?: ClarifyingQuestionFeedback;
   history?: Message[];
   signal?: AbortSignal;
+  requestOptions?: MeetingModelRequestOptions;
   trace?: MeetingModelTraceCallbacks;
+}
+
+export interface MeetingModelRequestOptions {
+  timeoutMs?: number;
+  maxOutputTokens?: number;
 }
 
 export interface MeetingModelTraceCallbacks {
@@ -451,6 +457,7 @@ export interface MeetingModelTraceCallbacks {
     mode?: AdvisorRequestMode | "screen-task" | "screen-preflight";
     responseAction?: MeetingResponseActionMode;
     responseConfig?: MeetingResponseConfig;
+    requestOptions?: MeetingModelRequestOptions;
   }) => void;
   onFirstToken?: () => void;
   onComplete?: (output: string) => void;
@@ -548,6 +555,18 @@ export interface MeetingTraceExportRecord {
   exportedAt: number;
 }
 
+export interface MeetingSessionRecordingState {
+  active: boolean;
+  sessionId?: string;
+  folderName?: string;
+  folderPath?: string;
+  startedAt?: number;
+  endedAt?: number;
+  eventCount: number;
+  artifactCount: number;
+  lastError?: string;
+}
+
 export type HumanEvalQuestionType =
   | "behavioral"
   | "coding"
@@ -608,6 +627,7 @@ export interface MeetingAssistantState {
   settings: MeetingAssistantSettings;
   lastMemoryContext?: MemoryRetrievalResult;
   lastTraceExport?: MeetingTraceExportRecord;
+  sessionRecording: MeetingSessionRecordingState;
   humanEvaluations: TraceHumanEvaluation[];
   speechCorrections: SpeechCorrection[];
 }

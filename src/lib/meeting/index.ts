@@ -7,6 +7,7 @@ export * from "./interview-playbook";
 export * from "./interview-session-context";
 export * from "./screen-observation.service";
 export * from "./screen-task-answer";
+export * from "./session-recording";
 export * from "./speech-bias";
 export * from "./trace";
 export * from "./transcription.service";

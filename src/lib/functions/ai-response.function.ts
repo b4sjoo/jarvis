@@ -12,6 +12,11 @@ import curl2Json from "@bany/curl-to-json";
 import { getResponseSettings, RESPONSE_LENGTHS, LANGUAGES } from "@/lib";
 import { MARKDOWN_FORMATTING_INSTRUCTIONS } from "@/config/constants";
 
+export interface AIResponseRequestOptions {
+  timeoutMs?: number;
+  maxOutputTokens?: number;
+}
+
 function buildEnhancedSystemPrompt(
   baseSystemPrompt?: string,
   applyResponseSettings = true
@@ -58,7 +63,10 @@ export async function* fetchAIResponse(params: {
   imagesBase64?: Array<string | ImageInput>;
   signal?: AbortSignal;
   applyResponseSettings?: boolean;
+  requestOptions?: AIResponseRequestOptions;
 }): AsyncIterable<string> {
+  let cleanupRequestSignal = () => {};
+
   try {
     const {
       provider,
@@ -69,10 +77,13 @@ export async function* fetchAIResponse(params: {
       imagesBase64 = [],
       signal,
       applyResponseSettings = true,
+      requestOptions,
     } = params;
+    const requestSignal = createRequestSignal(signal, requestOptions?.timeoutMs);
+    cleanupRequestSignal = requestSignal.cleanup;
 
     // Check if already aborted
-    if (signal?.aborted) {
+    if (requestSignal.signal?.aborted) {
       return;
     }
 
@@ -153,6 +164,7 @@ export async function* fetchAIResponse(params: {
 
     bodyObj = deepVariableReplacer(bodyObj, allVariables);
     let url = deepVariableReplacer(curlJson.url || "", allVariables);
+    applyAIRequestOptionsToBody(bodyObj, provider, url, requestOptions);
 
     const headers = deepVariableReplacer(curlJson.header || {}, allVariables);
     headers["Content-Type"] = "application/json";
@@ -178,14 +190,19 @@ export async function* fetchAIResponse(params: {
         method: curlJson.method || "POST",
         headers,
         body: curlJson.method === "GET" ? undefined : JSON.stringify(bodyObj),
-        signal,
+        signal: requestSignal.signal,
       });
     } catch (fetchError) {
       // Check if aborted
       if (
-        signal?.aborted ||
+        requestSignal.signal?.aborted ||
         (fetchError instanceof Error && fetchError.name === "AbortError")
       ) {
+        if (requestSignal.timedOut()) {
+          throw new Error(
+            `AI request timed out after ${requestOptions?.timeoutMs}ms.`
+          );
+        }
         return; // Silently return on abort
       }
       yield `Network error during API request: ${
@@ -232,8 +249,13 @@ export async function* fetchAIResponse(params: {
 
     while (true) {
       // Check if aborted
-      if (signal?.aborted) {
+      if (requestSignal.signal?.aborted) {
         reader.cancel();
+        if (requestSignal.timedOut()) {
+          throw new Error(
+            `AI request timed out after ${requestOptions?.timeoutMs}ms.`
+          );
+        }
         return;
       }
 
@@ -243,9 +265,14 @@ export async function* fetchAIResponse(params: {
       } catch (readError) {
         // Check if aborted
         if (
-          signal?.aborted ||
+          requestSignal.signal?.aborted ||
           (readError instanceof Error && readError.name === "AbortError")
         ) {
+          if (requestSignal.timedOut()) {
+            throw new Error(
+              `AI request timed out after ${requestOptions?.timeoutMs}ms.`
+            );
+          }
           return; // Silently return on abort
         }
         yield `Error reading stream: ${
@@ -257,8 +284,13 @@ export async function* fetchAIResponse(params: {
       if (done) break;
 
       // Check if aborted before processing
-      if (signal?.aborted) {
+      if (requestSignal.signal?.aborted) {
         reader.cancel();
+        if (requestSignal.timedOut()) {
+          throw new Error(
+            `AI request timed out after ${requestOptions?.timeoutMs}ms.`
+          );
+        }
         return;
       }
 
@@ -291,6 +323,8 @@ export async function* fetchAIResponse(params: {
         error instanceof Error ? error.message : "Unknown error"
       }`
     );
+  } finally {
+    cleanupRequestSignal();
   }
 }
 
@@ -301,4 +335,101 @@ function getFirstImageMediaType(images: Array<string | ImageInput>) {
   }
 
   return "image/png";
+}
+
+function createRequestSignal(
+  externalSignal: AbortSignal | undefined,
+  timeoutMs: number | undefined
+) {
+  if (!timeoutMs || timeoutMs <= 0) {
+    return {
+      signal: externalSignal,
+      cleanup: () => {},
+      timedOut: () => false,
+    };
+  }
+
+  const controller = new AbortController();
+  let timedOut = false;
+  const abortFromExternalSignal = () => controller.abort();
+  const timeoutId = window.setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, timeoutMs);
+
+  if (externalSignal?.aborted) {
+    controller.abort();
+  } else {
+    externalSignal?.addEventListener("abort", abortFromExternalSignal, {
+      once: true,
+    });
+  }
+
+  return {
+    signal: controller.signal,
+    cleanup: () => {
+      window.clearTimeout(timeoutId);
+      externalSignal?.removeEventListener("abort", abortFromExternalSignal);
+    },
+    timedOut: () => timedOut,
+  };
+}
+
+function applyAIRequestOptionsToBody(
+  bodyObj: any,
+  provider: TYPE_PROVIDER,
+  url: string,
+  requestOptions: AIResponseRequestOptions | undefined
+) {
+  if (!requestOptions?.maxOutputTokens || !bodyObj || typeof bodyObj !== "object") {
+    return;
+  }
+
+  const maxOutputTokens = Math.max(
+    1,
+    Math.floor(requestOptions.maxOutputTokens)
+  );
+  const hasOwn = (key: string) =>
+    Object.prototype.hasOwnProperty.call(bodyObj, key);
+
+  if (hasOwn("max_completion_tokens")) {
+    bodyObj.max_completion_tokens = maxOutputTokens;
+    return;
+  }
+
+  if (hasOwn("max_tokens")) {
+    bodyObj.max_tokens = maxOutputTokens;
+    return;
+  }
+
+  if (
+    bodyObj.generationConfig &&
+    typeof bodyObj.generationConfig === "object"
+  ) {
+    bodyObj.generationConfig.maxOutputTokens = maxOutputTokens;
+    return;
+  }
+
+  switch (provider.id) {
+    case "openai":
+    case "groq":
+      bodyObj.max_completion_tokens = maxOutputTokens;
+      return;
+    case "claude":
+    case "gemini":
+    case "grok":
+    case "mistral":
+    case "perplexity":
+    case "openrouter":
+    case "ollama":
+    case "cohere":
+      bodyObj.max_tokens = maxOutputTokens;
+      return;
+    default:
+      break;
+  }
+
+  if (url.includes("/chat/completions")) {
+    bodyObj.max_completion_tokens = maxOutputTokens;
+  }
 }

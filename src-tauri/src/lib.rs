@@ -2,6 +2,9 @@ mod capture;
 mod db;
 mod shortcuts;
 mod window;
+use base64::{engine::general_purpose, Engine as _};
+use std::fs::OpenOptions;
+use std::path::{Component, Path};
 use std::sync::{Arc, Mutex};
 use std::{fs, path::PathBuf};
 use tauri::{AppHandle, Manager, WebviewWindow};
@@ -39,6 +42,9 @@ const MEETING_TRACE_METRICS_FILE: &str = "meeting-trace-metrics.json";
 const MEETING_TRACE_METRICS_MAX_BYTES: usize = 2 * 1024 * 1024;
 const MEETING_TRACE_EXPORTS_DIR: &str = "meeting-trace-exports";
 const MEETING_TRACE_EXPORT_MAX_BYTES: usize = 10 * 1024 * 1024;
+const MEETING_SESSION_RECORDINGS_DIR: &str = "meeting-session-recordings";
+const MEETING_SESSION_RECORDING_TEXT_MAX_BYTES: usize = 50 * 1024 * 1024;
+const MEETING_SESSION_RECORDING_BASE64_MAX_BYTES: usize = 80 * 1024 * 1024;
 
 #[tauri::command]
 fn read_meeting_trace_metrics(app: AppHandle) -> Result<String, String> {
@@ -98,6 +104,105 @@ fn export_meeting_trace(
     Ok(path.to_string_lossy().to_string())
 }
 
+#[tauri::command]
+fn start_meeting_session_recording(
+    app: AppHandle,
+    folder_name: String,
+    manifest_payload: String,
+    readme_payload: String,
+) -> Result<String, String> {
+    if manifest_payload.len() > MEETING_SESSION_RECORDING_TEXT_MAX_BYTES {
+        return Err("Meeting session recording manifest is too large.".to_string());
+    }
+    if readme_payload.len() > MEETING_SESSION_RECORDING_TEXT_MAX_BYTES {
+        return Err("Meeting session recording README is too large.".to_string());
+    }
+
+    let session_dir = meeting_session_recording_dir(&app, &folder_name)?;
+    fs::create_dir_all(&session_dir).map_err(|error| {
+        format!(
+            "Failed to create meeting session recording directory: {}",
+            error
+        )
+    })?;
+
+    fs::write(session_dir.join("manifest.json"), manifest_payload)
+        .map_err(|error| format!("Failed to write session manifest: {}", error))?;
+    fs::write(session_dir.join("README.md"), readme_payload)
+        .map_err(|error| format!("Failed to write session README: {}", error))?;
+
+    Ok(session_dir.to_string_lossy().to_string())
+}
+
+#[tauri::command]
+fn write_meeting_session_recording_text(
+    app: AppHandle,
+    folder_name: String,
+    relative_path: String,
+    payload: String,
+    append: bool,
+) -> Result<String, String> {
+    if payload.len() > MEETING_SESSION_RECORDING_TEXT_MAX_BYTES {
+        return Err("Meeting session recording text payload is too large.".to_string());
+    }
+
+    let path = meeting_session_recording_file_path(&app, &folder_name, &relative_path)?;
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|error| {
+            format!(
+                "Failed to create meeting session recording directory: {}",
+                error
+            )
+        })?;
+    }
+
+    if append {
+        let mut file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+            .map_err(|error| format!("Failed to open session recording file: {}", error))?;
+        use std::io::Write;
+        file.write_all(payload.as_bytes())
+            .map_err(|error| format!("Failed to append session recording file: {}", error))?;
+    } else {
+        fs::write(&path, payload)
+            .map_err(|error| format!("Failed to write session recording file: {}", error))?;
+    }
+
+    Ok(path.to_string_lossy().to_string())
+}
+
+#[tauri::command]
+fn write_meeting_session_recording_base64(
+    app: AppHandle,
+    folder_name: String,
+    relative_path: String,
+    base64_payload: String,
+) -> Result<String, String> {
+    if base64_payload.len() > MEETING_SESSION_RECORDING_BASE64_MAX_BYTES {
+        return Err("Meeting session recording binary payload is too large.".to_string());
+    }
+
+    let bytes = general_purpose::STANDARD
+        .decode(base64_payload.as_bytes())
+        .map_err(|error| format!("Failed to decode session recording base64: {}", error))?;
+    let path = meeting_session_recording_file_path(&app, &folder_name, &relative_path)?;
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|error| {
+            format!(
+                "Failed to create meeting session recording directory: {}",
+                error
+            )
+        })?;
+    }
+
+    fs::write(&path, bytes)
+        .map_err(|error| format!("Failed to write session recording binary file: {}", error))?;
+
+    Ok(path.to_string_lossy().to_string())
+}
+
 fn sanitize_trace_export_file_name(file_name: &str) -> String {
     let sanitized: String = file_name
         .chars()
@@ -126,6 +231,102 @@ fn sanitize_trace_export_file_name(file_name: &str) -> String {
     } else {
         format!("{}.json", file_name)
     }
+}
+
+fn sanitize_session_recording_folder_name(folder_name: &str) -> String {
+    let sanitized: String = folder_name
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric()
+                || character == '-'
+                || character == '_'
+                || character == '.'
+            {
+                character
+            } else {
+                '-'
+            }
+        })
+        .collect();
+    let trimmed = sanitized.trim_matches(['-', '.']);
+
+    if trimmed.is_empty() {
+        "session-recording".to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
+fn sanitize_session_recording_path_component(component: &str) -> String {
+    let sanitized: String = component
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric()
+                || character == '-'
+                || character == '_'
+                || character == '.'
+            {
+                character
+            } else {
+                '-'
+            }
+        })
+        .collect();
+    let trimmed = sanitized.trim_matches(['-', '.']);
+
+    if trimmed.is_empty() {
+        "artifact".to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
+fn sanitize_session_recording_relative_path(relative_path: &str) -> Result<PathBuf, String> {
+    let path = Path::new(relative_path);
+    let mut sanitized = PathBuf::new();
+
+    for component in path.components() {
+        match component {
+            Component::Normal(value) => {
+                sanitized.push(sanitize_session_recording_path_component(
+                    &value.to_string_lossy(),
+                ));
+            }
+            Component::CurDir => {}
+            Component::ParentDir | Component::RootDir | Component::Prefix(_) => {
+                return Err("Invalid session recording relative path.".to_string());
+            }
+        }
+    }
+
+    if sanitized.as_os_str().is_empty() {
+        return Err("Session recording relative path is empty.".to_string());
+    }
+
+    Ok(sanitized)
+}
+
+fn meeting_session_recording_dir(app: &AppHandle, folder_name: &str) -> Result<PathBuf, String> {
+    let app_data_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| format!("Failed to resolve app data directory: {}", error))?;
+    let safe_folder_name = sanitize_session_recording_folder_name(folder_name);
+
+    Ok(app_data_dir
+        .join(MEETING_SESSION_RECORDINGS_DIR)
+        .join(safe_folder_name))
+}
+
+fn meeting_session_recording_file_path(
+    app: &AppHandle,
+    folder_name: &str,
+    relative_path: &str,
+) -> Result<PathBuf, String> {
+    let session_dir = meeting_session_recording_dir(app, folder_name)?;
+    let safe_relative_path = sanitize_session_recording_relative_path(relative_path)?;
+
+    Ok(session_dir.join(safe_relative_path))
 }
 
 fn meeting_trace_metrics_path(app: &AppHandle) -> Result<PathBuf, String> {
@@ -168,6 +369,9 @@ pub fn run() {
             read_meeting_trace_metrics,
             write_meeting_trace_metrics,
             export_meeting_trace,
+            start_meeting_session_recording,
+            write_meeting_session_recording_text,
+            write_meeting_session_recording_base64,
             window::set_window_height,
             window::open_dashboard,
             window::toggle_dashboard,

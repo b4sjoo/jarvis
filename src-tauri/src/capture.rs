@@ -524,12 +524,9 @@ fn select_active_window_candidate(
         .enumerate()
         .find(|(_, window)| is_active_window_candidate(window));
 
-    let cursor_suitable = windows
-        .iter()
-        .enumerate()
-        .find(|(_, window)| {
-            is_active_window_candidate(window) && window_contains_point(window, cursor)
-        });
+    let cursor_suitable = windows.iter().enumerate().find(|(_, window)| {
+        is_active_window_candidate(window) && window_contains_point(window, cursor)
+    });
 
     let (selected_index, selected_window, selection_reason) =
         if let Some((index, window)) = cursor_suitable {

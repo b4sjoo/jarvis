@@ -58,6 +58,7 @@ export class AdvisorEngine {
       mode: request.mode,
       responseAction: request.responseAction,
       responseConfig: request.responseConfig,
+      requestOptions: request.requestOptions,
     });
 
     for await (const chunk of fetchAIResponse({
@@ -69,6 +70,7 @@ export class AdvisorEngine {
       imagesBase64: [],
       signal: abortController.signal,
       applyResponseSettings: false,
+      requestOptions: request.requestOptions,
     })) {
       if (!firstTokenSeen) {
         firstTokenSeen = true;
