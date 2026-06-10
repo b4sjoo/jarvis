@@ -82,7 +82,6 @@ import {
 const ADVISOR_DEBOUNCE_MS = 750;
 const STT_TIMEOUT_MS = 30_000;
 const SCREEN_PREFLIGHT_TIMEOUT_MS = 10_000;
-const SCREEN_PREFLIGHT_SKIP_COMPANY_CONFIDENCE = 0.9;
 const SCREEN_ANALYSIS_TIMEOUT_MS = 45_000;
 const DEFAULT_ACTIVE_SCREEN_TASK_TIMEOUT_MINUTES = 30;
 const MIN_ACTIVE_SCREEN_TASK_TIMEOUT_MINUTES = 5;
@@ -1127,9 +1126,12 @@ export function useMeetingAssistant() {
       projectAnchor?: string;
     }): Promise<MemoryRetrievalResult | undefined> => {
       if (!state.settings.useMemory) return undefined;
-      const resolvedUseCase = useCase ?? inferMemoryUseCaseFromQuery(query);
       const resolvedQuestionType =
         questionType ?? inferMemoryQuestionTypeFromQuery(query);
+      const resolvedUseCase = normalizeMemoryUseCaseForQuestionType(
+        useCase ?? inferMemoryUseCaseFromQuery(query),
+        resolvedQuestionType
+      );
       const interviewTypes =
         contextManagerRef.current.getState().interviewSessionBrief
           ?.interviewTypes;
@@ -2724,13 +2726,7 @@ export function useMeetingAssistant() {
           analysisContextState.transcriptTurns
         );
         let screenPreflight: ScreenPreflightResult | undefined;
-        const confidentTargetCompany =
-          analysisContextState.interviewSessionContext?.targetCompany;
-        const shouldRunScreenPreflight =
-          state.settings.useMemory &&
-          (!confidentTargetCompany ||
-            confidentTargetCompany.confidence <
-              SCREEN_PREFLIGHT_SKIP_COMPANY_CONFIDENCE);
+        const shouldRunScreenPreflight = state.settings.useMemory;
 
         if (shouldRunScreenPreflight) {
           try {
@@ -2876,18 +2872,6 @@ export function useMeetingAssistant() {
             );
             console.warn("Screen preflight failed; continuing without it", error);
           }
-        } else if (state.settings.useMemory && confidentTargetCompany) {
-          const skippedStepId = traceStoreRef.current.startStep(
-            trace.id,
-            "Screen preflight skipped",
-            {
-              reason: "confident-target-company",
-              targetCompany: confidentTargetCompany.value,
-              confidence: confidentTargetCompany.confidence,
-              threshold: SCREEN_PREFLIGHT_SKIP_COMPANY_CONFIDENCE,
-            }
-          );
-          traceStoreRef.current.finishStep(trace.id, skippedStepId, "success");
         }
 
         const preflightContextState = contextManagerRef.current.getState();
@@ -3671,14 +3655,35 @@ function inferMemoryUseCaseFromQuery(query: string): MemoryUseCase {
   return "meeting_assistant";
 }
 
+function normalizeMemoryUseCaseForQuestionType(
+  useCase: MemoryUseCase,
+  questionType: MemoryQuestionType
+): MemoryUseCase {
+  if (questionType === "behavioral") return "behavioral_interview";
+  if (questionType === "coding") return "coding_interview";
+  if (
+    questionType === "general-system-design" ||
+    questionType === "system-design" ||
+    questionType === "ai-ml-system-design" ||
+    questionType === "project-deep-dive" ||
+    questionType === "field-knowledge"
+  ) {
+    return useCase === "behavioral_interview" ? "meeting_assistant" : useCase;
+  }
+  return useCase;
+}
+
 function inferMemoryQuestionTypeFromScreenPreflight(
   query: string,
   screenPreflight: ScreenPreflightResult | undefined
 ): MemoryQuestionType {
-  if (screenPreflight?.isBehavioralInterview) return "behavioral";
   const classifierQuestionType = readMemoryQuestionType(
     screenPreflight?.questionType
   );
+  if (classifierQuestionType && classifierQuestionType !== "unknown") {
+    return classifierQuestionType;
+  }
+  if (screenPreflight?.isBehavioralInterview) return "behavioral";
   if (classifierQuestionType) return classifierQuestionType;
   return inferMemoryQuestionTypeFromQuery(
     [screenPreflight?.question, query].filter(Boolean).join("\n")
@@ -3743,7 +3748,18 @@ function inferMemoryQuestionTypeFromQuery(query: string): MemoryQuestionType {
   }
 
   if (
-    /\b(behavior|behaviour|leadership principle|star|tell me about a time|give me an example|conflict|disagree|failed|commitment|ownership|bias for action|customer obsession)\b/.test(
+    /\b(what is|what are|explain|compare|why|how does|tradeoff|trade-off|pros and cons|advantages|disadvantages)\b/.test(
+      normalized
+    ) &&
+    /\b(ai|ml|llm|rag|retrieval augmented generation|embedding|vector database|vector db|model serving|inference|fine tuning|finetuning|training|evaluation|evals|transformer|attention|tokenization|lora|qlora|rlhf|dpo|agent|agentic|mcp|kv cache|quantization|cap theorem|consistent hashing|sharding|replication|cache|queue|database|distributed)\b/.test(
+      normalized
+    )
+  ) {
+    return "field-knowledge";
+  }
+
+  if (
+    /\b(behavior|behaviour|leadership principle|star|tell me about a time|give me an example of a time|describe a time|have you ever|conflict|disagree|failed|commitment|ownership|bias for action|customer obsession)\b/.test(
       normalized
     )
   ) {

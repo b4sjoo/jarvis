@@ -879,26 +879,20 @@ export function buildAmazonLeadershipPrincipleMemoryHint(
 
 function isLikelyBehavioralInterviewText(text: string) {
   const normalizedText = normalizeForMatching(text);
-  return [
-    "behavior",
-    "behaviour",
-    "leadership principle",
-    "tell me about",
-    "give me an example",
-    "example of how",
-    "a time when",
-    "situation",
-    "conflict",
-    "disagree",
-    "decision",
-    "tradeoff",
-    "trade off",
-    "ownership",
-    "save costs",
-    "eliminate waste",
-    "question bank",
-    "interview story",
-  ].some((marker) => normalizedText.includes(marker));
+  return (
+    /\b(behavior|behaviour|leadership principle|interview story|star)\b/.test(
+      normalizedText
+    ) ||
+    /\b(tell me about|describe|give me an example of)\b.{0,40}\b(a time|when you|your experience|you had to|you were|you did|how you)\b/.test(
+      normalizedText
+    ) ||
+    /\b(a time when|situation where|have you ever|what did you do)\b/.test(
+      normalizedText
+    ) ||
+    /\b(conflict|disagree|failed|missed a commitment|commitment you promised|ownership|bias for action|customer obsession|save costs|eliminate waste)\b/.test(
+      normalizedText
+    )
+  );
 }
 
 function normalizeForMatching(value: string) {

@@ -1462,6 +1462,9 @@ export const MeetingAssistant = ({
                     ))}
                   </div>
                   <TraceHumanEvaluationPanel
+                    detectedQuestionType={formatDetectedQuestionType(
+                      latestTrace.metadata?.questionType
+                    )}
                     evaluation={latestTraceEvaluation}
                     onUpdate={(patch) => {
                       meeting.updateTraceHumanEvaluation(latestTrace.id, patch);
@@ -2741,9 +2744,11 @@ const TraceKindSummaryCard = ({
 };
 
 const TraceHumanEvaluationPanel = ({
+  detectedQuestionType,
   evaluation,
   onUpdate,
 }: {
+  detectedQuestionType?: string;
   evaluation:
     | {
         taskQuality?: HumanEvalTaskQuality;
@@ -2779,22 +2784,33 @@ const TraceHumanEvaluationPanel = ({
         Human evaluation
       </summary>
       <div className="mt-2 space-y-2">
-        <div className="flex flex-wrap gap-1">
-          {humanEvalQualityOptions.map((option) => (
-            <Button
-              key={option.id}
-              size="sm"
-              variant={
-                evaluation?.taskQuality === option.id ? "default" : "outline"
-              }
-              className="h-6 px-2 text-[10px]"
-              onClick={() => {
-                onUpdate({ taskQuality: option.id });
-              }}
-            >
-              {option.label}
-            </Button>
-          ))}
+        {detectedQuestionType ? (
+          <div className="rounded-sm bg-muted/40 p-2 text-[10px]">
+            <span className="text-muted-foreground">Detected type: </span>
+            <span className="font-mono">{detectedQuestionType}</span>
+          </div>
+        ) : null}
+        <div>
+          <div className="mb-1 text-[10px] font-medium uppercase text-muted-foreground">
+            Task quality
+          </div>
+          <div className="flex flex-wrap gap-1">
+            {humanEvalQualityOptions.map((option) => (
+              <Button
+                key={option.id}
+                size="sm"
+                variant={
+                  evaluation?.taskQuality === option.id ? "default" : "outline"
+                }
+                className="h-6 px-2 text-[10px]"
+                onClick={() => {
+                  onUpdate({ taskQuality: option.id });
+                }}
+              >
+                {option.label}
+              </Button>
+            ))}
+          </div>
         </div>
         <div>
           <div className="mb-1 text-[10px] font-medium uppercase text-muted-foreground">
@@ -2820,37 +2836,42 @@ const TraceHumanEvaluationPanel = ({
             ))}
           </div>
         </div>
-        <div className="flex flex-wrap gap-1">
-          <Button
-            size="sm"
-            variant={evaluation?.memoryRelevant ? "default" : "outline"}
-            className="h-6 px-2 text-[10px]"
-            onClick={() => {
-              onUpdate({ memoryRelevant: !evaluation?.memoryRelevant });
-            }}
-          >
-            Memory OK
-          </Button>
-          <Button
-            size="sm"
-            variant={evaluation?.memoryMissing ? "default" : "outline"}
-            className="h-6 px-2 text-[10px]"
-            onClick={() => {
-              onUpdate({ memoryMissing: !evaluation?.memoryMissing });
-            }}
-          >
-            Missing memory
-          </Button>
-          <Button
-            size="sm"
-            variant={evaluation?.memoryWrong ? "default" : "outline"}
-            className="h-6 px-2 text-[10px]"
-            onClick={() => {
-              onUpdate({ memoryWrong: !evaluation?.memoryWrong });
-            }}
-          >
-            Wrong memory
-          </Button>
+        <div>
+          <div className="mb-1 text-[10px] font-medium uppercase text-muted-foreground">
+            Memory retrieval
+          </div>
+          <div className="flex flex-wrap gap-1">
+            <Button
+              size="sm"
+              variant={evaluation?.memoryRelevant ? "default" : "outline"}
+              className="h-6 px-2 text-[10px]"
+              onClick={() => {
+                onUpdate({ memoryRelevant: !evaluation?.memoryRelevant });
+              }}
+            >
+              Memory OK
+            </Button>
+            <Button
+              size="sm"
+              variant={evaluation?.memoryMissing ? "default" : "outline"}
+              className="h-6 px-2 text-[10px]"
+              onClick={() => {
+                onUpdate({ memoryMissing: !evaluation?.memoryMissing });
+              }}
+            >
+              Missing memory
+            </Button>
+            <Button
+              size="sm"
+              variant={evaluation?.memoryWrong ? "default" : "outline"}
+              className="h-6 px-2 text-[10px]"
+              onClick={() => {
+                onUpdate({ memoryWrong: !evaluation?.memoryWrong });
+              }}
+            >
+              Wrong memory
+            </Button>
+          </div>
         </div>
         <div>
           <div className="mb-1 text-[10px] font-medium uppercase text-muted-foreground">
@@ -2877,6 +2898,10 @@ const TraceHumanEvaluationPanel = ({
   );
 };
 
+function formatDetectedQuestionType(value: unknown) {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
 const TraceClassifierMetadata = ({
   metadata,
 }: {
@@ -2884,7 +2909,7 @@ const TraceClassifierMetadata = ({
 }) => {
   const rows = (
     [
-    ["Question", metadata.questionType],
+    ["Detected type", metadata.questionType],
     ["Frame", metadata.askFrame],
     ["Domain", metadata.topicDomain],
     ["Project", metadata.projectAnchor],

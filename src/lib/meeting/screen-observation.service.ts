@@ -400,13 +400,14 @@ function buildScreenPreflightUserMessage({
     "Schema:",
     '{"question": string|null, "questionType": "behavioral"|"coding"|"general-system-design"|"ai-ml-system-design"|"project-deep-dive"|"field-knowledge"|"unknown", "askFrame": "hypothetical-design"|"past-project"|"ambiguous"|"direct-answer"|"unknown", "topicDomain": "ai-ml-infra"|"agentic-ai"|"search"|"backend"|"unknown", "projectAnchor": string|null, "confidence": number, "targetCompany": string|null, "isBehavioralInterview": boolean, "amazonLeadershipPrinciple": string|null}',
     "question: the active visible interview/software-engineering question near the cursor, or null.",
-    "questionType: classify the question. Use ai-ml-system-design for hypothetical AI/ML infra design such as RAG, model serving, agent memory, evaluation, retrieval, vector search, model routing, or AI platform architecture. Use general-system-design for non-AI backend/system design such as ticket selling, rate limiter, chat, booking, feeds, or storage systems. Use project-deep-dive when the question asks about a project the candidate built, their role, tradeoffs, architecture, impact, or lessons.",
+    "questionType: classify the question. Use ai-ml-system-design for hypothetical AI/ML infra design such as RAG, model serving, agent memory, evaluation, retrieval, vector search, model routing, or AI platform architecture. Use general-system-design for non-AI backend/system design such as ticket selling, rate limiter, chat, booking, feeds, or storage systems. Use field-knowledge for direct conceptual questions such as 'what is X', 'explain X', 'compare X and Y', or 'what are the tradeoffs of X' when they do not ask to design a system. Use project-deep-dive when the question asks about a project the candidate built, their role, tradeoffs, architecture, impact, or lessons.",
     "askFrame: hypothetical-design for future/imagined design questions; past-project for questions about the candidate's actual past work; ambiguous when it asks both about an existing project and a future improvement; direct-answer for field knowledge, coding, or behavioral questions.",
     "topicDomain: choose agentic-ai for agents, memory, tool use, planning, or agent frameworks; ai-ml-infra for model serving, RAG, vector DB, embeddings, evaluation, data/model pipelines, or ML platforms; search for search/retrieval/ranking systems; backend for general backend systems.",
     "projectAnchor: if the question visibly names or clearly points to a project, return that project name, such as Agentic Memory, Model Interface, NeuralSearch, BeagleStone, AOS Release, or null.",
     "confidence: number from 0 to 1 for the classifier fields.",
     "targetCompany: a visible company name such as Amazon, Google, Microsoft, Meta, Anthropic, OpenAI, Stripe, Airbnb, or null. Use visible text like 'from Amazon' if present.",
-    "isBehavioralInterview: true only for behavioral/story questions, not coding or field-knowledge questions.",
+    "Do not classify as behavioral only because the target company is visible, because the interview type includes behavioral, or because a previous question was behavioral.",
+    "isBehavioralInterview: true only for personal story questions asking about the candidate's past behavior, decisions, conflict, failure, leadership, or examples from experience. It must be false for coding, field-knowledge, AI/ML system design, general system design, and project deep-dive questions.",
     "amazonLeadershipPrinciple: if targetCompany is Amazon and the question clearly maps to one Amazon Leadership Principle, return its name; otherwise null.",
     "For Amazon, prefer Bias for Action when the question asks about moving forward, acting quickly, reversible decisions, or deciding whether to gather more information before acting.",
     "</task>",
@@ -560,7 +561,7 @@ function buildScreenTaskUserMessage({
     "Clarifying options: two short option labels if useful, otherwise '-'.",
     "If it is an AI/ML system design question, output:",
     "中文思路: 用中文先给 AI/ML infra 设计抓手：目标/指标、数据来源、retrieval/model layer、serving path、evaluation/feedback loop、latency/cost/safety，以及建议先问的问题。",
-    "Answer: give a short opening answer or framing statement. If important requirements are missing, do not fake a full design; propose the first AI/ML design direction and ask for the highest-value clarification.",
+    "Answer: give a short opening answer or framing statement, then include 2-3 requirement clarification questions that would materially change the design, such as target metric, traffic scale, latency budget, data freshness, evaluation standard, or safety constraint. If important requirements are missing, do not fake a full design; propose the first AI/ML design direction and ask for the highest-value clarification.",
     "Approach: outline objective and success metrics, data and indexing/retrieval path, model/serving architecture, evaluation and feedback loop, scaling, latency/cost, reliability, and safety tradeoffs.",
     "Code: -",
     "Complexity: include throughput, storage, latency budget, model/retrieval cost, or algorithmic complexity only when applicable; otherwise '-'.",
@@ -569,7 +570,7 @@ function buildScreenTaskUserMessage({
     "Clarifying options: two short option labels if the clarification is a choice, otherwise '-'.",
     "If it is a general backend/system design question, output:",
     "中文思路: 用中文先给通用系统设计抓手：核心需求、规模、API/data model、consistency、latency、可靠性、成本取舍，以及建议先问的问题。",
-    "Answer: give a short opening answer or framing statement. If important requirements are missing, do not fake a full design; propose the first backend design direction and ask for the highest-value clarification.",
+    "Answer: give a short opening answer or framing statement, include a rough QPS/capacity estimate if traffic numbers are visible, and include 2-3 requirement clarification questions that would materially change the design. If scale is not visible, explicitly say you would first ask for DAU/actions-per-user/peak factor before estimating QPS; use QPS = users * actions_per_user_per_day / 86400 * peak_factor as the default estimation frame. If important requirements are missing, do not fake a full design; propose the first backend design direction and ask for the highest-value clarification.",
     "Approach: outline requirements, APIs/data model, architecture, scaling, consistency, reliability, observability, and tradeoffs.",
     "Code: -",
     "Complexity: include throughput, storage, latency, or algorithmic complexity only when applicable; otherwise '-'.",
@@ -927,7 +928,18 @@ export function inferScreenTaskKind(content: string): ScreenTaskKind {
   }
 
   if (
-    /\b(behavioral|behavioural|leadership principle|tell me about a time|give me an example|commitment|conflict|disagree|ownership|customer obsession|bias for action)\b/i.test(
+    /\b(what is|what are|explain|compare|why|how does|tradeoff|trade-off|pros and cons|advantages|disadvantages)\b/i.test(
+      content
+    ) &&
+    /\b(ai|ml|llm|rag|retrieval augmented generation|embedding|vector database|vector db|model serving|inference|fine tuning|finetuning|training|evaluation|evals|transformer|attention|tokenization|lora|qlora|rlhf|dpo|agent|agentic|mcp|kv cache|quantization|cap theorem|consistent hashing|sharding|replication|cache|queue|database|distributed)\b/i.test(
+      content
+    )
+  ) {
+    return "field-knowledge";
+  }
+
+  if (
+    /\b(behavioral|behavioural|leadership principle|tell me about a time|give me an example of a time|describe a time|have you ever|commitment|conflict|disagree|ownership|customer obsession|bias for action)\b/i.test(
       content
     )
   ) {
