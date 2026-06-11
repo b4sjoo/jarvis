@@ -17,6 +17,7 @@ import { useMeetingAssistant, useShortcuts, useWindowResize } from "@/hooks";
 import type {
   ClarifyingQuestionAnswer,
   ClarifyingQuestionOption,
+  AdvisorSuggestion,
   HumanEvalFailureReason,
   HumanEvalQuestionType,
   HumanEvalTaskQuality,
@@ -417,6 +418,14 @@ export const MeetingAssistant = ({
       suggestionSections,
     ]
   );
+  const latestReliableAnswerPreview = useMemo(
+    () =>
+      formatLatestReliableAnswerPreview(
+        meeting.latestReliableSuggestion,
+        displaySuggestion
+      ),
+    [displaySuggestion, meeting.latestReliableSuggestion]
+  );
   const latestTraceEvaluation = latestTrace
     ? meeting.humanEvaluations.find(
         (evaluation) => evaluation.traceId === latestTrace.id
@@ -467,6 +476,7 @@ export const MeetingAssistant = ({
         clarifyingOptions: displaySuggestionSections.clarifyingOptions,
         isScreenTask: displaySuggestionSections.isScreenTask,
       },
+      latestReliableAnswer: latestReliableAnswerPreview,
       latestTurnText: latestTurn?.text || "Waiting for meeting audio.",
       statusLabel: statusLabel[meeting.status],
       error: meeting.error,
@@ -491,6 +501,7 @@ export const MeetingAssistant = ({
       focusModeActive,
       isBusy,
       isTaskSwitchClarifyingQuestion,
+      latestReliableAnswerPreview,
       latestTurn?.text,
       meeting.activeScreenTask,
       meeting.error,
@@ -1263,6 +1274,19 @@ export const MeetingAssistant = ({
                   ) : null}
                 </>
               )}
+
+              {latestReliableAnswerPreview ? (
+                <section className="min-w-0 overflow-hidden rounded-md border border-border/60 bg-muted/30 p-2.5">
+                  <div className="mb-1 flex items-center gap-2 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                    <ClockIcon className="h-3 w-3" />
+                    Previous reliable answer
+                  </div>
+                  <MeetingMarkdownText
+                    className={cn(WRAP_TEXT_CLASS, "text-[11px] leading-5 text-muted-foreground")}
+                    value={latestReliableAnswerPreview}
+                  />
+                </section>
+              ) : null}
 
               <section className="min-w-0 overflow-hidden rounded-md border border-border/70 p-2.5">
                 <div className="mb-2 flex items-center gap-2 text-xs font-semibold">
@@ -3639,6 +3663,36 @@ function parseSuggestionSections(
     screenAnswer: parsedScreenTaskAnswer,
     isScreenTask,
   };
+}
+
+function formatLatestReliableAnswerPreview(
+  suggestion: AdvisorSuggestion | null | undefined,
+  currentContent: string
+) {
+  if (!suggestion?.content.trim()) return "";
+  const cachedContent = suggestion.content.trim();
+  if (cachedContent === currentContent.trim()) return "";
+
+  const sections = parseSuggestionSections(
+    cachedContent,
+    suggestion.screenTaskAnswer
+  );
+  const preview =
+    sections.answer ||
+    sections.reply ||
+    sections.chineseThinking ||
+    cachedContent;
+
+  return truncateInlineText(preview, 520);
+}
+
+function truncateInlineText(value: string, maxChars: number) {
+  const normalized = value
+    .replace(/\n{3,}/g, "\n\n")
+    .replace(/[ \t]+/g, " ")
+    .trim();
+  if (normalized.length <= maxChars) return normalized;
+  return `${normalized.slice(0, maxChars).trimEnd()}...`;
 }
 
 function readCodingArtifactPatch({

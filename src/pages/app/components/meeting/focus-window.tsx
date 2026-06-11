@@ -23,6 +23,7 @@ import { emit, listen } from "@tauri-apps/api/event";
 import {
   BrainIcon,
   CheckIcon,
+  ClockIcon,
   Code2Icon,
   HelpCircleIcon,
   MessageSquareTextIcon,
@@ -163,6 +164,22 @@ function MeetingFocusAnswerWindow({
                   value={snapshot.clarifyingQuestion}
                 />
                 <FocusClarifyingActionButtons snapshot={snapshot} />
+              </section>
+            ) : null}
+
+            {snapshot.latestReliableAnswer ? (
+              <section className="min-w-0 overflow-hidden rounded-md border border-border/60 bg-muted/30 p-2.5">
+                <div className="mb-1 flex items-center gap-2 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                  <ClockIcon className="h-3 w-3" />
+                  Previous reliable answer
+                </div>
+                <MeetingMarkdownText
+                  className={cn(
+                    WRAP_TEXT_CLASS,
+                    "text-[11px] leading-5 text-muted-foreground"
+                  )}
+                  value={snapshot.latestReliableAnswer}
+                />
               </section>
             ) : null}
           </div>

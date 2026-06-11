@@ -104,6 +104,7 @@ export function classifyMeTurn(
 
 export function shouldIncludeTurnInAdvisorPrompt(turn: TranscriptTurn) {
   if (turn.contextFusionStatus === "duplicate-suppressed") return false;
+  if (turn.contextPromptEligible === false) return false;
   if (turn.speaker !== "me") return true;
   return turn.contextPromptEligible === true;
 }
@@ -155,7 +156,11 @@ export function isShortConfirmationLike(text: string) {
   const normalized = normalizeSpeechText(text);
   if (!normalized) return false;
   if (CONFIRMATION_PHRASES.has(normalized)) return true;
-  return calculateWordEquivalent(text) <= 6 && !/[?？]/.test(text);
+  if (calculateWordEquivalent(text) > 6 || /[?？]/.test(text)) return false;
+
+  return /\b(option|first|second|third|left|right|implementation|design|yes|no)\b/i.test(
+    normalized
+  );
 }
 
 export function shouldSuppressDuplicateSystemAudioTurn(

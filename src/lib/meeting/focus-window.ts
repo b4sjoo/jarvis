@@ -29,6 +29,7 @@ export type MeetingFocusSpeechCorrectionSnapshot = Pick<
 export type MeetingFocusSnapshot = {
   active: boolean;
   sections: MeetingFocusSectionsSnapshot;
+  latestReliableAnswer: string;
   latestTurnText: string;
   statusLabel: string;
   error: string | null;
@@ -69,6 +70,7 @@ export const EMPTY_MEETING_FOCUS_SNAPSHOT: MeetingFocusSnapshot = {
     clarifyingOptions: [],
     isScreenTask: false,
   },
+  latestReliableAnswer: "",
   latestTurnText: "Waiting for meeting audio.",
   statusLabel: "Ready",
   error: null,

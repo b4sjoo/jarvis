@@ -20,6 +20,7 @@ import {
 import {
   AdvisorEngine,
   AdvisorPromptContext,
+  AdvisorSuggestion,
   AdvisorRequestMode,
   ActiveScreenTask,
   ClarifyingQuestionAnswer,
@@ -61,6 +62,7 @@ import {
   createInterviewSessionContextFromBrief,
   createMeetingId,
   detectInterviewCompany,
+  calculateWordEquivalent,
   classifyMeTurn,
   findDuplicateSystemAudioTurnForMeTurn,
   findRecentMeClarificationForTurn,
@@ -191,6 +193,7 @@ const INITIAL_STATE: MeetingAssistantState = {
   interviewSessionBrief: undefined,
   interviewSessionContext: undefined,
   latestSuggestion: null,
+  latestReliableSuggestion: null,
   partialSuggestion: "",
   traces: [],
   error: null,
@@ -569,6 +572,7 @@ function clearActiveScreenTaskState(
       previous.latestSuggestion?.kind === "screen-task"
         ? null
         : previous.latestSuggestion,
+    latestReliableSuggestion: null,
     status:
       previous.status === "thinking"
         ? previous.audioStatus?.active
@@ -577,6 +581,71 @@ function clearActiveScreenTaskState(
         : previous.status,
     error: null,
   };
+}
+
+function withLatestReliableSuggestion(
+  previous: MeetingAssistantState,
+  nextSuggestion: AdvisorSuggestion
+): Pick<MeetingAssistantState, "latestSuggestion" | "latestReliableSuggestion"> {
+  const previousSuggestion = previous.latestSuggestion;
+  const latestReliableSuggestion =
+    previousSuggestion &&
+    isCacheableReliableSuggestion(previousSuggestion) &&
+    previousSuggestion.content.trim() !== nextSuggestion.content.trim()
+      ? previousSuggestion
+      : previous.latestReliableSuggestion;
+
+  return {
+    latestSuggestion: nextSuggestion,
+    latestReliableSuggestion,
+  };
+}
+
+function isCacheableReliableSuggestion(suggestion: AdvisorSuggestion) {
+  const content = suggestion.content.trim();
+  if (!content || content === "-") return false;
+  if (suggestion.kind === "silent" || suggestion.kind === "clarifying-question") {
+    return false;
+  }
+
+  return (
+    suggestion.kind === "screen-task" ||
+    suggestion.kind === "answer" ||
+    content.length >= 80
+  );
+}
+
+type AdvisorTurnGateAction = "ignore" | "append-only" | "answer-refresh";
+
+interface AdvisorTurnGateDecision {
+  action: AdvisorTurnGateAction;
+  reason: string;
+  contextPromptEligible: boolean;
+}
+
+type AdvisorTaskRelation =
+  | "new-parent"
+  | "followup-parent"
+  | "child-probe"
+  | "unknown";
+
+type AdvisorSubtaskIntent =
+  | "concept-probe"
+  | "implementation-probe"
+  | "complexity-probe"
+  | "metric-probe"
+  | "clarification"
+  | "unknown";
+
+interface AdvisorTaskSignals {
+  questionType: MemoryQuestionType;
+  askFrame: MemoryAskFrame;
+  topicDomain: MemoryTopicDomain;
+  query: string;
+  taskRelation: AdvisorTaskRelation;
+  subtaskIntent: AdvisorSubtaskIntent;
+  source: string;
+  reuseActivePlaybook: boolean;
 }
 
 function preserveCodingResponseActionSections(
@@ -1797,6 +1866,7 @@ export function useMeetingAssistant() {
         previous.latestSuggestion?.kind === "screen-task"
           ? null
           : previous.latestSuggestion,
+      latestReliableSuggestion: null,
       partialSuggestion: "",
       error: null,
       audioStatus,
@@ -1885,23 +1955,32 @@ export function useMeetingAssistant() {
       mode,
       options.currentSuggestion
     );
-    const advisorQuestionType = promptContext.activeScreenTask
-      ? readMemoryQuestionType(promptContext.activeScreenTask.kind)
-      : inferMemoryQuestionTypeFromQuery(advisorMemoryQuery);
-    const advisorAskFrame = promptContext.activeScreenTask?.classifier?.askFrame
-      ? readMemoryAskFrame(promptContext.activeScreenTask.classifier.askFrame)
-      : inferMemoryAskFrameFromQuery(advisorMemoryQuery);
-    const advisorTopicDomain = promptContext.activeScreenTask?.classifier
-      ?.topicDomain
-      ? readMemoryTopicDomain(
-          promptContext.activeScreenTask.classifier.topicDomain
-        )
-      : inferMemoryTopicDomainFromQuery(advisorMemoryQuery);
+    const advisorTaskSignals = resolveAdvisorTaskSignals(
+      promptContext,
+      advisorMemoryQuery
+    );
+    const advisorQuestionType = advisorTaskSignals.questionType;
+    const advisorAskFrame = advisorTaskSignals.askFrame;
+    const advisorTopicDomain = advisorTaskSignals.topicDomain;
     const advisorPlaybook =
-      promptContext.activeScreenTask?.playbook ??
-      selectInterviewPlaybook({
+      advisorTaskSignals.reuseActivePlaybook
+        ? promptContext.activeScreenTask?.playbook ??
+          selectInterviewPlaybook({
+            query: advisorTaskSignals.query,
+            questionType:
+              promptContext.activeScreenTask?.kind ?? advisorQuestionType,
+            askFrame: advisorAskFrame,
+            topicDomain: advisorTopicDomain,
+            projectAnchor:
+              promptContext.activeScreenTask?.classifier?.projectAnchor,
+            classifierConfidence:
+              promptContext.activeScreenTask?.classifier?.confidence,
+            interviewSessionBrief: promptContext.interviewSessionBrief,
+            interviewSessionContext: promptContext.interviewSessionContext,
+          })
+        : selectInterviewPlaybook({
         query: advisorMemoryQuery,
-        questionType: promptContext.activeScreenTask?.kind ?? advisorQuestionType,
+        questionType: advisorQuestionType,
         askFrame: advisorAskFrame,
         topicDomain: advisorTopicDomain,
         projectAnchor: promptContext.activeScreenTask?.classifier?.projectAnchor,
@@ -1913,12 +1992,29 @@ export function useMeetingAssistant() {
 
     if (traceId) {
       const playbookMetadata = formatInterviewPlaybookForTrace(advisorPlaybook);
-      traceStoreRef.current.updateMetadata(traceId, playbookMetadata);
+      traceStoreRef.current.updateMetadata(traceId, {
+        ...playbookMetadata,
+        questionType: advisorQuestionType,
+        askFrame: advisorAskFrame,
+        topicDomain: advisorTopicDomain,
+        taskRelation: advisorTaskSignals.taskRelation,
+        subtaskIntent: advisorTaskSignals.subtaskIntent,
+        taskSignalSource: advisorTaskSignals.source,
+        parentTaskId: promptContext.activeScreenTask?.id,
+      });
       if (advisorPlaybook) {
         const playbookStepId = traceStoreRef.current.startStep(
           traceId,
           "Interview playbook selected",
-          playbookMetadata
+          {
+            ...playbookMetadata,
+            questionType: advisorQuestionType,
+            askFrame: advisorAskFrame,
+            topicDomain: advisorTopicDomain,
+            taskRelation: advisorTaskSignals.taskRelation,
+            subtaskIntent: advisorTaskSignals.subtaskIntent,
+            taskSignalSource: advisorTaskSignals.source,
+          }
         );
         traceStoreRef.current.finishStep(traceId, playbookStepId, "success");
       }
@@ -1933,8 +2029,8 @@ export function useMeetingAssistant() {
       traceId,
       taskId: promptContext.activeScreenTask?.id,
       source: "advisor",
-      query: advisorMemoryQuery,
-      useCase: inferMemoryUseCaseFromQuery(advisorMemoryQuery),
+      query: advisorTaskSignals.query,
+      useCase: inferMemoryUseCaseFromQuery(advisorTaskSignals.query),
       questionType: advisorQuestionType,
       askFrame: advisorAskFrame,
       topicDomain: advisorTopicDomain,
@@ -2117,19 +2213,21 @@ export function useMeetingAssistant() {
         (observation) => observation.id
       );
 
+      const nextSuggestion = advisorEngineRef.current.toSuggestion(
+        requestId,
+        finalContent,
+        latestTurn ? [latestTurn.id] : [],
+        latestObservationIds
+      );
+
       setState((previous) => ({
         ...previous,
+        ...withLatestReliableSuggestion(previous, nextSuggestion),
         status: activeRef.current
           ? "listening"
           : returnStatus === "paused"
             ? "paused"
             : "idle",
-        latestSuggestion: advisorEngineRef.current.toSuggestion(
-          requestId,
-          finalContent,
-          latestTurn ? [latestTurn.id] : [],
-          latestObservationIds
-        ),
         interviewSessionContext: contextState.interviewSessionContext,
         activeScreenTask: contextState.activeScreenTask,
       }));
@@ -2767,83 +2865,148 @@ export function useMeetingAssistant() {
           );
           traceStoreRef.current.finishStep(traceId, switchStepId, "success");
           traceStoreRef.current.finishTrace(traceId, "success");
+          const taskSwitchSuggestion: AdvisorSuggestion = {
+            id: createMeetingId("task_switch"),
+            kind: "clarifying-question",
+            content: [
+              "中文思路: 这听起来像是在切换到新题或新任务。",
+              "Reply: -",
+              "Question: Should I treat this as a new task?",
+            ].join("\n"),
+            createdAt: Date.now(),
+            basedOnTurnIds: [turn.id],
+            basedOnObservationIds: [activeScreenTask.observationId],
+            confidence: "medium",
+          };
           setState((previous) => ({
             ...previous,
+            ...withLatestReliableSuggestion(previous, taskSwitchSuggestion),
             status: activeRef.current ? "listening" : "idle",
             partialSuggestion: "",
-            latestSuggestion: {
-              id: createMeetingId("task_switch"),
-              kind: "clarifying-question",
-              content: [
-                "中文思路: 这听起来像是在切换到新题或新任务。",
-                "Reply: -",
-                "Question: Should I treat this as a new task?",
-              ].join("\n"),
-              createdAt: Date.now(),
-              basedOnTurnIds: [turn.id],
-              basedOnObservationIds: [activeScreenTask.observationId],
-              confidence: "medium",
-            },
           }));
           return;
         }
 
-        if (shouldIgnoreLowSignalTranscript(turn.text, Boolean(activeScreenTask))) {
-          const clarificationMatch = findRecentMeClarificationForTurn(
-            turn,
-            contextManagerRef.current.getState().transcriptTurns
+        const previousTurns = contextManagerRef.current.getState()
+          .transcriptTurns;
+        const clarificationMatch = findRecentMeClarificationForTurn(
+          turn,
+          previousTurns
+        );
+        if (clarificationMatch) {
+          promoteMeTurnForFusion(clarificationMatch.meTurn, turn.id);
+          turn.contextPromptEligible = true;
+          turn.contextFusionStatus = "paired";
+          turn.relatedTurnIds = [clarificationMatch.meTurn.id];
+          traceStoreRef.current.updateMetadata(traceId, {
+            turnGateAction: "answer-refresh",
+            turnGateReason: "clarification-pair",
+          });
+          const gateStepId = traceStoreRef.current.startStep(
+            traceId,
+            "Advisor turn gate",
+            {
+              action: "answer-refresh",
+              reason: "clarification-pair",
+              turnId: turn.id,
+              transcriptChars: turn.text.trim().length,
+              activeScreenTask: Boolean(activeScreenTask),
+              audioSegmentSeq: segment.sequence,
+              audioSessionId: segment.sessionId,
+            }
           );
-          if (clarificationMatch) {
-            promoteMeTurnForFusion(clarificationMatch.meTurn, turn.id);
-            turn.contextFusionStatus = "paired";
-            turn.relatedTurnIds = [clarificationMatch.meTurn.id];
-            const pairStepId = traceStoreRef.current.startStep(
-              traceId,
-              "Clarification pair detected",
-              {
-                reason: clarificationMatch.reason,
-                meTurnId: clarificationMatch.meTurn.id,
-                themTurnId: turn.id,
-                audioSegmentSeq: segment.sequence,
-                audioSessionId: segment.sessionId,
-              }
-            );
-            traceStoreRef.current.finishStep(traceId, pairStepId, "success");
-            const { contextState } = appendTranscriptTurnForTrace(
-              turn,
-              traceId,
-              segment,
-              {
-                fusedWithTurnId: clarificationMatch.meTurn.id,
-              }
-            );
-            const debounceStepId = traceStoreRef.current.startStep(
-              traceId,
-              "Advisor debounce scheduled",
-              { debounceMs: ADVISOR_DEBOUNCE_MS, reason: "clarification-pair" }
-            );
-            traceStoreRef.current.finishStep(
-              traceId,
-              debounceStepId,
-              "success"
-            );
-            scheduleAdvisor(
-              contextState.activeScreenTask ? "screen-anchored" : "live",
-              traceId
-            );
-            return;
-          }
+          traceStoreRef.current.finishStep(traceId, gateStepId, "success");
+          const pairStepId = traceStoreRef.current.startStep(
+            traceId,
+            "Clarification pair detected",
+            {
+              reason: clarificationMatch.reason,
+              meTurnId: clarificationMatch.meTurn.id,
+              themTurnId: turn.id,
+              audioSegmentSeq: segment.sequence,
+              audioSessionId: segment.sessionId,
+            }
+          );
+          traceStoreRef.current.finishStep(traceId, pairStepId, "success");
+          const { contextState } = appendTranscriptTurnForTrace(
+            turn,
+            traceId,
+            segment,
+            {
+              fusedWithTurnId: clarificationMatch.meTurn.id,
+              turnGateAction: "answer-refresh",
+              turnGateReason: "clarification-pair",
+            }
+          );
+          const debounceStepId = traceStoreRef.current.startStep(
+            traceId,
+            "Advisor debounce scheduled",
+            { debounceMs: ADVISOR_DEBOUNCE_MS, reason: "clarification-pair" }
+          );
+          traceStoreRef.current.finishStep(traceId, debounceStepId, "success");
+          scheduleAdvisor(
+            contextState.activeScreenTask ? "screen-anchored" : "live",
+            traceId
+          );
+          return;
+        }
 
-          if (isShortConfirmationLike(turn.text)) {
-            holdPendingConfirmation(turn, segment);
-            return;
-          }
+        if (
+          isShortConfirmationLike(turn.text) &&
+          !hasConstraintOrCorrectionSignal(turn.text)
+        ) {
+          traceStoreRef.current.updateMetadata(traceId, {
+            turnGateAction: "ignore",
+            turnGateReason: "pending-short-confirmation",
+          });
+          const gateStepId = traceStoreRef.current.startStep(
+            traceId,
+            "Advisor turn gate",
+            {
+              action: "ignore",
+              reason: "pending-short-confirmation",
+              turnId: turn.id,
+              transcriptChars: turn.text.trim().length,
+              activeScreenTask: Boolean(activeScreenTask),
+              audioSegmentSeq: segment.sequence,
+              audioSessionId: segment.sessionId,
+            }
+          );
+          traceStoreRef.current.finishStep(traceId, gateStepId, "success");
+          holdPendingConfirmation(turn, segment);
+          return;
+        }
 
+        const turnGate = evaluateThemTurnForAdvisor(turn, {
+          hasActiveScreenTask: Boolean(activeScreenTask),
+        });
+        traceStoreRef.current.updateMetadata(traceId, {
+          turnGateAction: turnGate.action,
+          turnGateReason: turnGate.reason,
+        });
+        const gateStepId = traceStoreRef.current.startStep(
+          traceId,
+          "Advisor turn gate",
+          {
+            action: turnGate.action,
+            reason: turnGate.reason,
+            turnId: turn.id,
+            transcriptChars: turn.text.trim().length,
+            wordEquivalent: calculateWordEquivalent(turn.text),
+            activeScreenTask: Boolean(activeScreenTask),
+            contextPromptEligible: turnGate.contextPromptEligible,
+            audioSegmentSeq: segment.sequence,
+            audioSessionId: segment.sessionId,
+          }
+        );
+        traceStoreRef.current.finishStep(traceId, gateStepId, "success");
+
+        if (turnGate.action === "ignore") {
           const ignoredStepId = traceStoreRef.current.startStep(
             traceId,
             "Transcript ignored",
             {
-              reason: "low-signal",
+              reason: turnGate.reason,
               transcriptChars: turn.text.trim().length,
               activeScreenTask: Boolean(activeScreenTask),
             }
@@ -2857,16 +3020,30 @@ export function useMeetingAssistant() {
           return;
         }
 
+        turn.contextPromptEligible = turnGate.contextPromptEligible;
+        turn.contextFusionStatus = turnGate.contextPromptEligible
+          ? "none"
+          : "debug-only";
+
         const { contextState } = appendTranscriptTurnForTrace(
           turn,
           traceId,
-          segment
+          segment,
+          {
+            turnGateAction: turnGate.action,
+            turnGateReason: turnGate.reason,
+          }
         );
+
+        if (turnGate.action !== "answer-refresh") {
+          traceStoreRef.current.finishTrace(traceId, "success");
+          return;
+        }
 
         const debounceStepId = traceStoreRef.current.startStep(
           traceId,
           "Advisor debounce scheduled",
-          { debounceMs: ADVISOR_DEBOUNCE_MS }
+          { debounceMs: ADVISOR_DEBOUNCE_MS, reason: turnGate.reason }
         );
         traceStoreRef.current.finishStep(traceId, debounceStepId, "success");
         scheduleAdvisor(
@@ -3804,35 +3981,35 @@ export function useMeetingAssistant() {
           }
         );
 
+        const nextSuggestion: AdvisorSuggestion = screenTaskContent.trim()
+          ? {
+              id: requestId,
+              kind: "screen-task",
+              content: screenTaskContent.trim(),
+              screenTaskAnswer: parseScreenTaskAnswer(screenTaskContent.trim()),
+              createdAt: Date.now(),
+              basedOnTurnIds,
+              basedOnObservationIds: [observation.id],
+              confidence: "medium",
+            }
+          : {
+              id: requestId,
+              kind: "silent",
+              content: "",
+              createdAt: Date.now(),
+              basedOnTurnIds,
+              basedOnObservationIds: [observation.id],
+              confidence: "low",
+            };
+
         setState((previous) => ({
           ...previous,
+          ...withLatestReliableSuggestion(previous, nextSuggestion),
           status: activeRef.current ? "listening" : idleReturnStatus,
           partialSuggestion: "",
           screenObservations: updatedContextState.screenObservations,
           activeScreenTask: updatedContextState.activeScreenTask,
           interviewSessionContext: updatedContextState.interviewSessionContext,
-          latestSuggestion: screenTaskContent.trim()
-            ? {
-                id: requestId,
-                kind: "screen-task",
-                content: screenTaskContent.trim(),
-                screenTaskAnswer: parseScreenTaskAnswer(
-                  screenTaskContent.trim()
-                ),
-                createdAt: Date.now(),
-                basedOnTurnIds,
-                basedOnObservationIds: [observation.id],
-                confidence: "medium",
-              }
-            : {
-                id: requestId,
-                kind: "silent",
-                content: "",
-                createdAt: Date.now(),
-                basedOnTurnIds,
-                basedOnObservationIds: [observation.id],
-                confidence: "low",
-              },
           error: null,
         }));
         traceStoreRef.current.finishStep(trace.id, uiStepId, "success");
@@ -4365,6 +4542,184 @@ function buildAdvisorMemoryQuery(
     .slice(-8000);
 }
 
+function resolveAdvisorTaskSignals(
+  context: AdvisorPromptContext,
+  fallbackQuery: string
+): AdvisorTaskSignals {
+  const latestThemText =
+    context.latestTurn?.speaker === "them" ? context.latestTurn.text.trim() : "";
+  const latestUsefulText =
+    latestThemText && calculateWordEquivalent(latestThemText) >= 3
+      ? latestThemText
+      : "";
+  const latestQuestionType = latestUsefulText
+    ? inferMemoryQuestionTypeFromQuery(latestUsefulText)
+    : "unknown";
+  const latestAskFrame = latestUsefulText
+    ? inferMemoryAskFrameFromQuery(latestUsefulText)
+    : "unknown";
+  const latestTopicDomain = latestUsefulText
+    ? inferMemoryTopicDomainFromQuery(latestUsefulText)
+    : "unknown";
+  const activeQuestionType = readMemoryQuestionType(
+    context.activeScreenTask?.kind
+  );
+
+  if (context.activeScreenTask && activeQuestionType) {
+    const useLatestAsChild = shouldUseLatestTurnAsChildProbe({
+      activeQuestionType,
+      latestQuestionType,
+      latestText: latestUsefulText,
+    });
+
+    if (useLatestAsChild) {
+      return {
+        questionType: latestQuestionType,
+        askFrame: latestAskFrame,
+        topicDomain: latestTopicDomain,
+        query: buildFocusedAdvisorTaskQuery(context, latestUsefulText),
+        taskRelation: "child-probe",
+        subtaskIntent: inferAdvisorSubtaskIntent(
+          latestUsefulText,
+          latestQuestionType
+        ),
+        source: "latest-turn-child-probe",
+        reuseActivePlaybook: false,
+      };
+    }
+
+    return {
+      questionType: activeQuestionType,
+      askFrame:
+        readMemoryAskFrame(context.activeScreenTask.classifier?.askFrame) ??
+        latestAskFrame ??
+        inferMemoryAskFrameFromQuery(fallbackQuery),
+      topicDomain:
+        readMemoryTopicDomain(context.activeScreenTask.classifier?.topicDomain) ??
+        latestTopicDomain ??
+        inferMemoryTopicDomainFromQuery(fallbackQuery),
+      query: buildFocusedAdvisorTaskQuery(context, latestUsefulText),
+      taskRelation: latestUsefulText ? "followup-parent" : "unknown",
+      subtaskIntent: inferAdvisorSubtaskIntent(
+        latestUsefulText,
+        activeQuestionType
+      ),
+      source: "active-parent",
+      reuseActivePlaybook: true,
+    };
+  }
+
+  const questionType =
+    latestQuestionType !== "unknown"
+      ? latestQuestionType
+      : inferMemoryQuestionTypeFromQuery(fallbackQuery);
+
+  return {
+    questionType,
+    askFrame:
+      latestAskFrame !== "unknown"
+        ? latestAskFrame
+        : inferMemoryAskFrameFromQuery(fallbackQuery),
+    topicDomain:
+      latestTopicDomain !== "unknown"
+        ? latestTopicDomain
+        : inferMemoryTopicDomainFromQuery(fallbackQuery),
+    query: latestUsefulText
+      ? buildFocusedAdvisorTaskQuery(context, latestUsefulText)
+      : fallbackQuery,
+    taskRelation: "new-parent",
+    subtaskIntent: inferAdvisorSubtaskIntent(latestUsefulText, questionType),
+    source: latestUsefulText ? "latest-turn" : "fallback-query",
+    reuseActivePlaybook: false,
+  };
+}
+
+function buildFocusedAdvisorTaskQuery(
+  context: AdvisorPromptContext,
+  latestText: string
+) {
+  const interviewBriefHint = buildInterviewSessionBriefMemoryHint(
+    context.interviewSessionBrief
+  );
+  const interviewHint = buildInterviewSessionMemoryHint(
+    context.interviewSessionContext
+  );
+
+  return [
+    interviewBriefHint || undefined,
+    interviewHint || undefined,
+    latestText ? `latest: ${latestText}` : undefined,
+    context.activeScreenTask
+      ? [
+          `active parent task: ${context.activeScreenTask.question || ""}`,
+          `active parent type: ${context.activeScreenTask.kind}`,
+          context.activeScreenTask.classifier?.askFrame
+            ? `active parent ask frame: ${context.activeScreenTask.classifier.askFrame}`
+            : undefined,
+          context.activeScreenTask.classifier?.topicDomain
+            ? `active parent topic domain: ${context.activeScreenTask.classifier.topicDomain}`
+            : undefined,
+          context.activeScreenTask.classifier?.projectAnchor
+            ? `active parent project anchor: ${context.activeScreenTask.classifier.projectAnchor}`
+            : undefined,
+        ]
+          .filter(Boolean)
+          .join("\n")
+      : undefined,
+  ]
+    .filter(Boolean)
+    .join("\n\n")
+    .slice(-4000);
+}
+
+function shouldUseLatestTurnAsChildProbe({
+  activeQuestionType,
+  latestQuestionType,
+  latestText,
+}: {
+  activeQuestionType: MemoryQuestionType;
+  latestQuestionType: MemoryQuestionType;
+  latestText: string;
+}) {
+  if (!latestText || latestQuestionType === "unknown") return false;
+  if (latestQuestionType === activeQuestionType) return false;
+
+  const parentAllowsChild =
+    activeQuestionType === "ai-ml-system-design" ||
+    activeQuestionType === "general-system-design" ||
+    activeQuestionType === "project-deep-dive";
+  if (!parentAllowsChild) return false;
+
+  if (latestQuestionType === "field-knowledge") return true;
+  if (latestQuestionType === "coding") return true;
+
+  return false;
+}
+
+function inferAdvisorSubtaskIntent(
+  text: string,
+  questionType: MemoryQuestionType
+): AdvisorSubtaskIntent {
+  const normalized = text.toLowerCase();
+  if (!normalized.trim()) return "unknown";
+  if (questionType === "coding" || /\b(code|implement|write|function)\b/.test(normalized)) {
+    return "implementation-probe";
+  }
+  if (/\b(complexity|time|space|big o|optimi[sz]e)\b/.test(normalized)) {
+    return "complexity-probe";
+  }
+  if (/\b(metric|metrics|evaluate|evaluation|success|quality|accuracy|precision|recall|latency|p99|throughput|qps)\b/.test(normalized)) {
+    return "metric-probe";
+  }
+  if (/\b(what is|explain|compare|why|how does|principle|tradeoff|trade-off)\b/.test(normalized)) {
+    return "concept-probe";
+  }
+  if (/\b(clarify|constraint|assume|requirement|instead|not)\b/.test(normalized)) {
+    return "clarification";
+  }
+  return "unknown";
+}
+
 function buildScreenMemoryQuery({
   observation,
   autoPrompt,
@@ -4698,6 +5053,220 @@ function shouldUpdateActiveScreenTaskFromAdvisorOutput(content: string) {
   );
 }
 
+function evaluateThemTurnForAdvisor(
+  turn: TranscriptTurn,
+  options: { hasActiveScreenTask: boolean }
+): AdvisorTurnGateDecision {
+  const trimmed = turn.text.trim();
+  if (!trimmed) {
+    return {
+      action: "ignore",
+      reason: "empty-transcript",
+      contextPromptEligible: false,
+    };
+  }
+
+  const normalized = normalizeTranscriptForGate(trimmed);
+  const wordEquivalent = calculateWordEquivalent(trimmed);
+  const hasQuestion = hasQuestionOrTaskSignal(trimmed);
+  const hasConstraintOrCorrection = hasConstraintOrCorrectionSignal(trimmed);
+
+  if (hasConstraintOrCorrection) {
+    return {
+      action: "answer-refresh",
+      reason: "constraint-or-correction",
+      contextPromptEligible: true,
+    };
+  }
+
+  if (isLowValueAcknowledgement(normalized)) {
+    return {
+      action: "ignore",
+      reason: "low-value-acknowledgement",
+      contextPromptEligible: false,
+    };
+  }
+
+  if (isMeetingLogisticsTranscript(normalized)) {
+    return {
+      action: "append-only",
+      reason: "meeting-logistics",
+      contextPromptEligible: false,
+    };
+  }
+
+  if (detectInterviewCompany(trimmed) && !hasQuestion && wordEquivalent <= 18) {
+    return {
+      action: "append-only",
+      reason: "company-context-only",
+      contextPromptEligible: false,
+    };
+  }
+
+  if (hasQuestion) {
+    return {
+      action: "answer-refresh",
+      reason: "question-or-task-prompt",
+      contextPromptEligible: true,
+    };
+  }
+
+  if (
+    options.hasActiveScreenTask &&
+    wordEquivalent <= 10 &&
+    !hasTechnicalSignal(trimmed)
+  ) {
+    return {
+      action: "ignore",
+      reason: "short-nontechnical-followup",
+      contextPromptEligible: false,
+    };
+  }
+
+  if (shouldIgnoreLowSignalTranscript(trimmed, options.hasActiveScreenTask)) {
+    return {
+      action: "ignore",
+      reason: "low-signal",
+      contextPromptEligible: false,
+    };
+  }
+
+  if (options.hasActiveScreenTask && hasFollowUpSignal(trimmed)) {
+    return {
+      action: "answer-refresh",
+      reason: "active-task-followup",
+      contextPromptEligible: true,
+    };
+  }
+
+  if (hasTechnicalSignal(trimmed) && wordEquivalent >= 4) {
+    return {
+      action: "answer-refresh",
+      reason: "technical-content",
+      contextPromptEligible: true,
+    };
+  }
+
+  if (wordEquivalent < 8) {
+    return {
+      action: "ignore",
+      reason: "short-low-information",
+      contextPromptEligible: false,
+    };
+  }
+
+  return {
+    action: "answer-refresh",
+    reason: "substantive-transcript",
+    contextPromptEligible: true,
+  };
+}
+
+function normalizeTranscriptForGate(text: string) {
+  return text
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}+#.()]+/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function hasQuestionOrTaskSignal(text: string) {
+  const normalized = normalizeTranscriptForGate(text);
+  return (
+    /[?？]/.test(text) ||
+    /\b(can you|could you|would you|how would|how do|what is|what are|why|explain|describe|tell me|walk me through|design|build|implement|code|solve|compare|estimate|evaluate)\b/i.test(
+      text
+    ) ||
+    /请|怎么|如何|为什么|解释|设计|实现|写一个|比较|估算/.test(text) ||
+    /\b(system design|design a|design an|leetcode|algorithm|coding question|behavioral question)\b/i.test(
+      normalized
+    )
+  );
+}
+
+function hasConstraintOrCorrectionSignal(text: string) {
+  const normalized = normalizeTranscriptForGate(text);
+  const hasCorrectionVerb =
+    /\b(not|instead|rather than|use|using|assume|constraint|requirement|actually|i mean|correction|clarify|with|without)\b/i.test(
+      normalized
+    );
+  const hasTechnicalObject =
+    /\b(rag|retrieval augmented generation|rec|recommendation|python|java|javascript|typescript|go|golang|rust|c\+\+|sql|redis|postgres|mysql|qps|tps|latency|throughput|p99|memory|space|time|complexity|scale|users|requests|million|billion|k|m)\b/i.test(
+      normalized
+    );
+  const hasNumericConstraint =
+    /\b\d+\s*(qps|tps|rps|users|requests|ms|s|seconds|minutes|kb|mb|gb|tb|k|m|million|billion)\b/i.test(
+      normalized
+    );
+  const hasDirectCorrection =
+    /\b(rag\s+(not|instead of)|not\s+rec|not\s+recommendation|use\s+(go|golang|python|java|javascript|typescript|rust|c\+\+)|in\s+(go|golang|python|java|javascript|typescript|rust|c\+\+))\b/i.test(
+      normalized
+    );
+
+  return (
+    (hasCorrectionVerb && hasTechnicalObject) ||
+    hasNumericConstraint ||
+    hasDirectCorrection
+  );
+}
+
+function isLowValueAcknowledgement(normalized: string) {
+  if (!normalized) return true;
+
+  const phrases = new Set([
+    "ah",
+    "eh",
+    "er",
+    "hmm",
+    "mm",
+    "mhm",
+    "uh",
+    "um",
+    "yeah",
+    "yep",
+    "yes",
+    "no",
+    "ok",
+    "okay",
+    "right",
+    "sure",
+    "cool",
+    "great",
+    "nice",
+    "that s nice",
+    "that is nice",
+    "sounds good",
+    "that sounds good",
+    "i see",
+    "got it",
+    "makes sense",
+    "make sense",
+    "so that s it",
+    "so that is it",
+    "that s it",
+    "that is it",
+  ]);
+
+  if (phrases.has(normalized)) return true;
+
+  return /^(yeah|ok|okay|right|sure|cool|great|nice|thanks|thank you)[\s,.!]*(that s|that is)?[\s\w,.!]*$/i.test(
+    normalized
+  ) && calculateWordEquivalent(normalized) <= 6;
+}
+
+function isMeetingLogisticsTranscript(normalized: string) {
+  if (!normalized) return false;
+
+  return (
+    /\b(let me|i ll|i will|give me|one second|just a second|hold on|wait a second|give me a second|give me some time|take a look|share my screen|sharing my screen|open the screen|start our interview|start the interview|time to start|let s start|let us start|let me search|let me think|let me check)\b/i.test(
+      normalized
+    ) ||
+    /等一下|稍等|我看一下|我想一下|我分享屏幕|开始面试|开始吧/.test(
+      normalized
+    )
+  );
+}
+
 function shouldIgnoreLowSignalTranscript(
   transcript: string,
   hasActiveScreenTask: boolean
@@ -4782,7 +5351,7 @@ function shouldIgnoreLowSignalTranscript(
 
 function hasTechnicalSignal(text: string) {
   return (
-    /\b(o\s*\(?\s*1|o\s*\(?\s*n|api|async|binary|cache|client|complexity|database|design|dp|embedding|graph|grpc|hash|heap|http|java|javascript|latency|leetcode|memory|python|queue|rag|rate limiter|recursion|rust|scale|search|server|space|sql|stack|thread|time|tree|typescript|vector)\b/i.test(
+    /\b(o\s*\(?\s*1|o\s*\(?\s*n|api|async|binary|cache|client|complexity|database|design|dp|embedding|graph|grpc|hash|heap|http|java|javascript|latency|leetcode|memory|python|queue|rag|rate limiter|recursion|rust|scale|search|server|space|sql|stack|thread|tree|typescript|vector)\b/i.test(
       text
     ) ||
     /算法|复杂度|缓存|数据库|队列|栈|堆|树|图|递归|并发|异步|接口|系统设计|限流|负载均衡|向量|嵌入/.test(

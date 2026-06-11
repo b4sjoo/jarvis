@@ -621,6 +621,7 @@ export interface MeetingAssistantState {
   activeScreenTask?: ActiveScreenTask;
   traces: MeetingTrace[];
   latestSuggestion: AdvisorSuggestion | null;
+  latestReliableSuggestion: AdvisorSuggestion | null;
   partialSuggestion: string;
   error: string | null;
   audioStatus: MeetingAudioStatus | null;
