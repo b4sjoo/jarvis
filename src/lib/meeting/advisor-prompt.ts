@@ -31,6 +31,8 @@ export function buildAdvisorSystemPrompt() {
     "Treat memory context as user-provided background only. Visible screen content, latest transcript, and active task constraints have higher priority than memory.",
     "If memory conflicts with the current task, follow the current task and mention the conflict only if it is useful.",
     "When using memory for behavioral or interview answers, do not add unsupported metrics, timelines, dates, or impact claims. If memory only supports a qualitative outcome, keep the outcome qualitative.",
+    "For behavioral and project-deep-dive answers, supported facts can come from memory context, visible screen text, Them transcript, Interview Brief, or explicit user correction. A previous assistant answer or a Me attempted answer is not a fact source by itself.",
+    "If a project-deep-dive prompt lacks a supported project anchor, ask a clarifying question or choose the closest supported project from memory instead of inventing a first-person project.",
     "If there is screen context but no transcript, treat it as visible screen content only, not as something a colleague said.",
     "If an active screen task is present, use it as the anchor and treat new transcript as clarification, follow-up, correction, or a possible strong task switch.",
     "Never claim certainty about facts not present in the transcript or screen context.",
@@ -92,6 +94,11 @@ export function buildAdvisorUserMessage(
       ? formatActiveScreenTask(context.activeScreenTask)
       : "No active screen task.",
     "</active_screen_task>",
+    "<active_interview_task>",
+    context.activeInterviewTask
+      ? formatActiveInterviewTask(context.activeInterviewTask)
+      : "No active interview task.",
+    "</active_interview_task>",
     "<interview_playbook>",
     formatInterviewPlaybookForPrompt(context.interviewPlaybook),
     "</interview_playbook>",
@@ -166,10 +173,12 @@ export function buildAdvisorUserMessage(
       "If the transcript asks a follow-up, answer the follow-up directly while preserving the active screen task as context.",
       "If the transcript corrects a requirement, acknowledge the corrected constraint through the revised answer; do not argue with the transcript.",
       "Use <interview_session_brief> and <interview_session_context> to personalize interview style across tasks, especially target company expectations, but do not let them override the active screen task or latest transcript.",
+      "Use <active_interview_task> to preserve the stable parent task across short child probes. Do not restart requirement clarification when the latest turn is a child probe or resume of the same parent.",
       "Use <interview_playbook> as the procedural strategy for this active task. Follow its first move, clarifying strategy, output contract, and follow-up policy unless the active screen task or latest transcript contradicts it.",
       "If <interview_playbook> questionType differs from <active_screen_task> Kind, treat the latest transcript as a child probe inside the active parent task. Answer the local probe without clearing, restarting, or rewriting the parent task.",
       "If the target company is Amazon and this is a behavioral answer, use any injected Amazon Leadership Principle rubric to demonstrate Strength signals and avoid Concern signals. Do not explicitly name the principle unless it helps.",
       "If the active task kind is ai-ml-system-design, answer as a forward-looking AI/ML infrastructure design: clarify objective/metrics, data/retrieval/model path, serving path, evaluation/feedback, latency/cost/safety, and tradeoffs.",
+      "For AI/ML or agent system-design follow-ups about metrics, logs, evaluation, quality, faster/cheaper/better, or observability, be concrete: include north-star metric, online product metrics, offline eval metrics, agent trajectory metrics, latency/cost metrics, safety/guardrail metrics, and a log schema with trace/correlation id plus key event fields.",
       "If the active task kind is general-system-design or system-design, answer as a general backend/distributed system design: requirements, API/data model, architecture, scaling, consistency, reliability, observability, and tradeoffs.",
       "If the active task kind is project-deep-dive, answer as a fact-bound first-person project discussion: my role, architecture, hard problem, decision/tradeoff, validation/debugging, impact, and lesson. Do not turn it into a hypothetical design unless the transcript asks for future improvement.",
       "If the active task ask frame is ambiguous, prioritize a clarifying question about whether the interviewer wants the existing implementation or a future design improvement.",
@@ -208,7 +217,9 @@ export function buildAdvisorUserMessage(
     "If it only contains jargon, put the simple Chinese definition under 中文思路 and use '-' for Reply and Question.",
     "Do not mention a colleague, speaker, or someone asking a question unless the transcript explicitly contains that person or question.",
     "Use <interview_session_brief> as user-provided pre-meeting background and <interview_session_context> as cross-task inferred context, especially the target company. Do not infer a different company if the brief locks one.",
+    "Use <active_interview_task> to preserve the current interview parent task and avoid importing facts from a previous unrelated block.",
     "Use <interview_playbook> as procedural guidance when present. It should shape the next move without overriding transcript facts.",
+    "For AI/ML or agent system-design questions about metrics, logs, evaluation, quality, faster/cheaper/better, or observability, avoid generic measurement language. Name concrete metric categories, define what each measures, and include the required log/trace fields.",
     "For Amazon behavioral interview moments, use injected Leadership Principle guidance to shape the answer toward Strength signals and away from Concern signals without inventing facts.",
     ...buildContextInstructions(contextMode),
     ...buildVoiceSeededInstructions(contextMode),
@@ -398,6 +409,39 @@ function formatActiveScreenTask(
     task.question ? `Question: ${task.question}` : undefined,
     "Current answer:",
     task.content,
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+function formatActiveInterviewTask(
+  task: NonNullable<AdvisorPromptContext["activeInterviewTask"]>
+) {
+  return [
+    `Parent id: ${task.id}`,
+    `Source: ${task.source}`,
+    `Stable kind: ${task.stableKind}`,
+    `Topic: ${task.topic || "unknown"}`,
+    `Playbook phase: ${task.playbookPhase}`,
+    task.supportedFactAnchors.length
+      ? `Supported fact anchors: ${task.supportedFactAnchors.join(", ")}`
+      : undefined,
+    task.child
+      ? [
+          "Active child probe:",
+          `Kind: ${task.child.questionType}`,
+          `Intent: ${task.child.intent}`,
+          `Question: ${task.child.question}`,
+          task.child.compactSummary
+            ? `Compact summary: ${task.child.compactSummary}`
+            : undefined,
+        ]
+          .filter(Boolean)
+          .join("\n")
+      : undefined,
+    task.latestUsefulAnswer
+      ? `Latest useful answer summary: ${task.latestUsefulAnswer.slice(0, 700)}`
+      : undefined,
   ]
     .filter(Boolean)
     .join("\n");

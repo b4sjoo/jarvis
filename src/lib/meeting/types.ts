@@ -191,6 +191,7 @@ export interface MeetingContextState {
   interviewSessionBrief?: InterviewSessionBrief;
   interviewSessionContext?: InterviewSessionContext;
   activeScreenTask?: ActiveScreenTask;
+  activeInterviewTask?: ActiveInterviewParent;
   rollingSummary: string;
   userProfileContext: string;
   glossary: GlossaryEntry[];
@@ -279,6 +280,61 @@ export interface ActiveScreenTask {
   content: string;
   basedOnTurnIds: string[];
   basedOnObservationId: string;
+}
+
+export type InterviewTaskRelation =
+  | "new-parent"
+  | "followup-parent"
+  | "child-probe"
+  | "resume-parent"
+  | "logistics"
+  | "correction"
+  | "unknown";
+
+export type InterviewSubtaskIntent =
+  | "concept-probe"
+  | "implementation-probe"
+  | "complexity-probe"
+  | "metric-probe"
+  | "qps-estimation"
+  | "project-detail"
+  | "story-detail"
+  | "clarification"
+  | "low-value"
+  | "unknown";
+
+export interface ActiveInterviewChild {
+  id: string;
+  createdAt: number;
+  updatedAt: number;
+  questionType: ScreenTaskKind;
+  relation: "child-probe";
+  intent: InterviewSubtaskIntent;
+  question: string;
+  compactSummary?: string;
+  artifactId?: string;
+  basedOnTurnIds: string[];
+  basedOnObservationIds: string[];
+}
+
+export interface ActiveInterviewParent {
+  id: string;
+  source: "screen" | "voice";
+  stableKind: ScreenTaskKind;
+  topic: string;
+  playbook?: SelectedInterviewPlaybook;
+  playbookPhase: InterviewPlaybookPhase;
+  phaseProgress: Record<string, boolean>;
+  supportedFactAnchors: string[];
+  latestUsefulAnswer?: string;
+  previousUsefulAnswer?: string;
+  createdAt: number;
+  updatedAt: number;
+  expiresAt?: number;
+  startTurnId?: string;
+  startObservationId?: string;
+  child?: ActiveInterviewChild;
+  revisions: number;
 }
 
 export type InterviewSessionContextSource =
@@ -406,6 +462,7 @@ export interface AdvisorPromptContext {
   interviewSessionBrief?: InterviewSessionBrief;
   interviewSessionContext?: InterviewSessionContext;
   activeScreenTask?: ActiveScreenTask;
+  activeInterviewTask?: ActiveInterviewParent;
   rollingSummary: string;
   userProfileContext: string;
   glossaryText: string;
@@ -619,6 +676,7 @@ export interface MeetingAssistantState {
   interviewSessionBrief?: InterviewSessionBrief;
   interviewSessionContext?: InterviewSessionContext;
   activeScreenTask?: ActiveScreenTask;
+  activeInterviewTask?: ActiveInterviewParent;
   traces: MeetingTrace[];
   latestSuggestion: AdvisorSuggestion | null;
   latestReliableSuggestion: AdvisorSuggestion | null;

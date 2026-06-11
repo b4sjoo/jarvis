@@ -579,7 +579,7 @@ function buildScreenTaskUserMessage({
     "If it is an AI/ML system design question, output:",
     "中文思路: 用中文先给 AI/ML infra 设计抓手：目标/指标、数据来源、retrieval/model layer、serving path、evaluation/feedback loop、latency/cost/safety，以及建议先问的问题。",
     "Answer: give a short opening answer or framing statement, then include 2-3 requirement clarification questions that would materially change the design, such as target metric, traffic scale, latency budget, data freshness, evaluation standard, or safety constraint. If important requirements are missing, do not fake a full design; propose the first AI/ML design direction and ask for the highest-value clarification.",
-    "Approach: outline objective and success metrics, data and indexing/retrieval path, model/serving architecture, evaluation and feedback loop, scaling, latency/cost, reliability, and safety tradeoffs.",
+    "Approach: outline objective and success metrics, data and indexing/retrieval path, model/serving architecture, evaluation and feedback loop, scaling, latency/cost, reliability, and safety tradeoffs. If the visible question asks about metrics, logs, evaluation, quality, observability, or whether the agent/system improved, include concrete north-star, online, offline eval, agent trajectory, latency/cost, and guardrail metrics plus a log schema with trace/correlation id and event fields.",
     "Code: -",
     "Complexity: include throughput, storage, latency budget, model/retrieval cost, or algorithmic complexity only when applicable; otherwise '-'.",
     "Question: restate the visible AI/ML system design question.",

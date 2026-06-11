@@ -55,9 +55,11 @@ export async function retrieveMemoryContext({
   const scoringContext = {
     useCase,
     projectId,
+    questionType,
     askFrame,
     topicDomain,
     projectAnchor,
+    query,
   };
   const alwaysEntries = eligibleEntries
     .filter(
@@ -305,9 +307,11 @@ function isGuidanceOrQuestionBankEntry(entry: MemoryEntry) {
 interface MemoryScoringContext {
   useCase: MemoryUseCase;
   projectId?: string;
+  questionType?: MemoryQuestionType;
   askFrame?: MemoryAskFrame;
   topicDomain?: MemoryTopicDomain;
   projectAnchor?: string;
+  query: string;
 }
 
 function scoreMemoryEntry(
@@ -339,6 +343,35 @@ function scoreMemoryEntry(
   }
 
   const searchable = buildEntrySearchableText(entry);
+
+  if (context.questionType === "behavioral") {
+    if (isBehavioralStoryAnchorEntry(entry)) {
+      score += 26;
+      matchReason.push("behavioral:story-anchor");
+    }
+    if (entry.type === "answer_template") {
+      score += 18;
+      matchReason.push("behavioral:answer-template");
+    }
+  }
+
+  if (
+    context.questionType === "project-deep-dive" &&
+    isProjectSpecificEntry(entry)
+  ) {
+    score += 18;
+    matchReason.push("project:fact-anchor");
+  }
+
+  if (
+    context.questionType === "ai-ml-system-design" &&
+    isMetricsOrLogsQuery(context.query) &&
+    isObservabilityEvaluationEntry(searchable)
+  ) {
+    score += 34;
+    matchReason.push("aiml:metrics-observability");
+  }
+
   if (context.projectAnchor) {
     const anchorTokens = tokenize(context.projectAnchor);
     const anchorMatches = countTokenOverlap(anchorTokens, tokenize(searchable));
@@ -406,6 +439,33 @@ function scoreMemoryEntry(
     matchReason,
     injectedContent: entry.content,
   };
+}
+
+function isBehavioralStoryAnchorEntry(entry: MemoryEntry) {
+  return (
+    entry.type === "personal_story" ||
+    entry.type === "resume_fact" ||
+    entry.type === "answer_evidence" ||
+    entry.type === "achievement_metric" ||
+    entry.type === "project_context" ||
+    /\b(story|behavioral|impact|situation|action|result|saved|deadline|ownership|frugality)\b/i.test(
+      [entry.title, entry.tags.join(" "), entry.keywords.join(" ")]
+        .filter(Boolean)
+        .join(" ")
+    )
+  );
+}
+
+function isMetricsOrLogsQuery(query: string) {
+  return /\b(metric|metrics|measure|evaluate|evaluation|eval|success|quality|accuracy|precision|recall|latency|p95|p99|throughput|qps|log|logs|logging|observability|trace|trajectory|cost|guardrail|monitor)\b/i.test(
+    query
+  );
+}
+
+function isObservabilityEvaluationEntry(searchable: string) {
+  return /\b(observability|metric|metrics|evaluation|eval|logs|logging|trace|trajectory|tool-call|tool call|success rate|invalid action|latency|p95|p99|cost|guardrail|monitoring|offline eval|online metric)\b/i.test(
+    searchable
+  );
 }
 
 function buildEntrySearchableText(entry: MemoryEntry) {
@@ -560,7 +620,13 @@ function dedupeRetrievedEntries(entries: RetrievedMemoryEntry[]) {
 
 function hasRetrievalMatch(item: RetrievedMemoryEntry) {
   return item.matchReason.some((reason) =>
-    /^(project|projectAnchor|topic|askFrame|title|tags|keywords|content):/.test(reason)
+    /^(project|projectAnchor|topic|askFrame|title|tags|keywords|content):/.test(
+      reason
+    ) ||
+    reason === "behavioral:story-anchor" ||
+    reason === "behavioral:answer-template" ||
+    reason === "project:fact-anchor" ||
+    reason === "aiml:metrics-observability"
   );
 }
 

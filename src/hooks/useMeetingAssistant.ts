@@ -22,6 +22,7 @@ import {
   AdvisorPromptContext,
   AdvisorSuggestion,
   AdvisorRequestMode,
+  ActiveInterviewParent,
   ActiveScreenTask,
   ClarifyingQuestionAnswer,
   ClarifyingQuestionFeedback,
@@ -32,6 +33,8 @@ import {
   MeetingAudioProfile,
   MeetingCodingModelSettings,
   InterviewBriefType,
+  InterviewSubtaskIntent,
+  InterviewTaskRelation,
   InterviewSessionBrief,
   MeetingPrivacyMode,
   MeetingResponseActionMode,
@@ -567,6 +570,7 @@ function clearActiveScreenTaskState(
   return {
     ...previous,
     activeScreenTask: undefined,
+    activeInterviewTask: undefined,
     partialSuggestion: "",
     latestSuggestion:
       previous.latestSuggestion?.kind === "screen-task"
@@ -585,15 +589,18 @@ function clearActiveScreenTaskState(
 
 function withLatestReliableSuggestion(
   previous: MeetingAssistantState,
-  nextSuggestion: AdvisorSuggestion
+  nextSuggestion: AdvisorSuggestion,
+  options: { clearPrevious?: boolean } = {}
 ): Pick<MeetingAssistantState, "latestSuggestion" | "latestReliableSuggestion"> {
   const previousSuggestion = previous.latestSuggestion;
   const latestReliableSuggestion =
-    previousSuggestion &&
-    isCacheableReliableSuggestion(previousSuggestion) &&
-    previousSuggestion.content.trim() !== nextSuggestion.content.trim()
-      ? previousSuggestion
-      : previous.latestReliableSuggestion;
+    options.clearPrevious
+      ? null
+      : previousSuggestion &&
+          isCacheableReliableSuggestion(previousSuggestion) &&
+          previousSuggestion.content.trim() !== nextSuggestion.content.trim()
+        ? previousSuggestion
+        : previous.latestReliableSuggestion;
 
   return {
     latestSuggestion: nextSuggestion,
@@ -615,7 +622,17 @@ function isCacheableReliableSuggestion(suggestion: AdvisorSuggestion) {
   );
 }
 
-type AdvisorTurnGateAction = "ignore" | "append-only" | "answer-refresh";
+interface InterviewTaskContinuityResult {
+  task?: ActiveInterviewParent;
+  startedNewParent: boolean;
+  clearedParent: boolean;
+}
+
+type AdvisorTurnGateAction =
+  | "ignore"
+  | "append-only"
+  | "state-update"
+  | "answer-refresh";
 
 interface AdvisorTurnGateDecision {
   action: AdvisorTurnGateAction;
@@ -623,27 +640,13 @@ interface AdvisorTurnGateDecision {
   contextPromptEligible: boolean;
 }
 
-type AdvisorTaskRelation =
-  | "new-parent"
-  | "followup-parent"
-  | "child-probe"
-  | "unknown";
-
-type AdvisorSubtaskIntent =
-  | "concept-probe"
-  | "implementation-probe"
-  | "complexity-probe"
-  | "metric-probe"
-  | "clarification"
-  | "unknown";
-
 interface AdvisorTaskSignals {
   questionType: MemoryQuestionType;
   askFrame: MemoryAskFrame;
   topicDomain: MemoryTopicDomain;
   query: string;
-  taskRelation: AdvisorTaskRelation;
-  subtaskIntent: AdvisorSubtaskIntent;
+  taskRelation: InterviewTaskRelation;
+  subtaskIntent: InterviewSubtaskIntent;
   source: string;
   reuseActivePlaybook: boolean;
 }
@@ -1484,6 +1487,9 @@ export function useMeetingAssistant() {
         );
 
         contextManagerRef.current.setActiveScreenTask(correctedTask);
+        contextManagerRef.current.setActiveInterviewTask(
+          buildInterviewParentFromScreenTask(correctedTask)
+        );
         sessionRecordingManagerRef.current?.recordTaskSnapshot(
           correctedTask,
           trace.id
@@ -1514,6 +1520,7 @@ export function useMeetingAssistant() {
         interviewSessionContext: contextState.interviewSessionContext,
         screenObservations: contextState.screenObservations,
         activeScreenTask: contextState.activeScreenTask,
+        activeInterviewTask: contextState.activeInterviewTask,
       }));
     },
     [state.settings]
@@ -1577,10 +1584,20 @@ export function useMeetingAssistant() {
           updatedAt: now,
           expiresAt: now + normalizedTimeoutMinutes * 60_000,
         });
+        const activeInterviewTask =
+          contextManagerRef.current.getState().activeInterviewTask;
+        if (activeInterviewTask?.source === "screen") {
+          contextManagerRef.current.setActiveInterviewTask({
+            ...activeInterviewTask,
+            updatedAt: now,
+            expiresAt: now + normalizedTimeoutMinutes * 60_000,
+          });
+        }
         const contextState = contextManagerRef.current.getState();
         setState((previous) => ({
           ...previous,
           activeScreenTask: contextState.activeScreenTask,
+          activeInterviewTask: contextState.activeInterviewTask,
         }));
       }
     },
@@ -1830,6 +1847,7 @@ export function useMeetingAssistant() {
     screenAnalysisAbortRef.current?.abort();
     screenAnalysisAbortRef.current = null;
     contextManagerRef.current.clearActiveScreenTask();
+    contextManagerRef.current.clearActiveInterviewTask();
     setState(clearActiveScreenTaskState);
   }, [clearAdvisorDebounce]);
 
@@ -1841,6 +1859,7 @@ export function useMeetingAssistant() {
     screenAnalysisAbortRef.current?.abort();
     screenAnalysisAbortRef.current = null;
     contextManagerRef.current.clearActiveScreenTask();
+    contextManagerRef.current.clearActiveInterviewTask();
     contextManagerRef.current.clearInterviewSessionContext();
     const contextState = contextManagerRef.current.getState();
 
@@ -1860,6 +1879,7 @@ export function useMeetingAssistant() {
       ...previous,
       status: "idle",
       activeScreenTask: undefined,
+      activeInterviewTask: undefined,
       interviewSessionBrief: contextState.interviewSessionBrief,
       interviewSessionContext: contextState.interviewSessionContext,
       latestSuggestion:
@@ -1965,14 +1985,18 @@ export function useMeetingAssistant() {
     const advisorPlaybook =
       advisorTaskSignals.reuseActivePlaybook
         ? promptContext.activeScreenTask?.playbook ??
+          promptContext.activeInterviewTask?.playbook ??
           selectInterviewPlaybook({
             query: advisorTaskSignals.query,
             questionType:
-              promptContext.activeScreenTask?.kind ?? advisorQuestionType,
+              promptContext.activeScreenTask?.kind ??
+              promptContext.activeInterviewTask?.stableKind ??
+              advisorQuestionType,
             askFrame: advisorAskFrame,
             topicDomain: advisorTopicDomain,
             projectAnchor:
-              promptContext.activeScreenTask?.classifier?.projectAnchor,
+              promptContext.activeScreenTask?.classifier?.projectAnchor ??
+              promptContext.activeInterviewTask?.supportedFactAnchors[0],
             classifierConfidence:
               promptContext.activeScreenTask?.classifier?.confidence,
             interviewSessionBrief: promptContext.interviewSessionBrief,
@@ -1983,7 +2007,9 @@ export function useMeetingAssistant() {
         questionType: advisorQuestionType,
         askFrame: advisorAskFrame,
         topicDomain: advisorTopicDomain,
-        projectAnchor: promptContext.activeScreenTask?.classifier?.projectAnchor,
+        projectAnchor:
+          promptContext.activeScreenTask?.classifier?.projectAnchor ??
+          promptContext.activeInterviewTask?.supportedFactAnchors[0],
         classifierConfidence:
           promptContext.activeScreenTask?.classifier?.confidence,
         interviewSessionBrief: promptContext.interviewSessionBrief,
@@ -2000,7 +2026,11 @@ export function useMeetingAssistant() {
         taskRelation: advisorTaskSignals.taskRelation,
         subtaskIntent: advisorTaskSignals.subtaskIntent,
         taskSignalSource: advisorTaskSignals.source,
-        parentTaskId: promptContext.activeScreenTask?.id,
+        parentTaskId:
+          promptContext.activeInterviewTask?.id ?? promptContext.activeScreenTask?.id,
+        parentTaskKind:
+          promptContext.activeInterviewTask?.stableKind ??
+          promptContext.activeScreenTask?.kind,
       });
       if (advisorPlaybook) {
         const playbookStepId = traceStoreRef.current.startStep(
@@ -2014,6 +2044,9 @@ export function useMeetingAssistant() {
             taskRelation: advisorTaskSignals.taskRelation,
             subtaskIntent: advisorTaskSignals.subtaskIntent,
             taskSignalSource: advisorTaskSignals.source,
+            parentTaskId:
+              promptContext.activeInterviewTask?.id ??
+              promptContext.activeScreenTask?.id,
           }
         );
         traceStoreRef.current.finishStep(traceId, playbookStepId, "success");
@@ -2021,20 +2054,22 @@ export function useMeetingAssistant() {
       sessionRecordingManagerRef.current?.recordPlaybookSelection(
         traceId,
         playbookMetadata,
-        promptContext.activeScreenTask?.id
+        promptContext.activeInterviewTask?.id ?? promptContext.activeScreenTask?.id
       );
     }
 
     const memoryContext = await loadMemoryForPrompt({
       traceId,
-      taskId: promptContext.activeScreenTask?.id,
+      taskId: promptContext.activeInterviewTask?.id ?? promptContext.activeScreenTask?.id,
       source: "advisor",
       query: advisorTaskSignals.query,
       useCase: inferMemoryUseCaseFromQuery(advisorTaskSignals.query),
       questionType: advisorQuestionType,
       askFrame: advisorAskFrame,
       topicDomain: advisorTopicDomain,
-      projectAnchor: promptContext.activeScreenTask?.classifier?.projectAnchor,
+      projectAnchor:
+        promptContext.activeScreenTask?.classifier?.projectAnchor ??
+        promptContext.activeInterviewTask?.supportedFactAnchors[0],
       memoryPolicy: advisorPlaybook?.memoryPolicy,
     });
     promptContext = {
@@ -2046,6 +2081,7 @@ export function useMeetingAssistant() {
     const advisorUsesCodingModel =
       promptContext.activeScreenTask?.kind === "coding" ||
       promptContext.activeScreenTask?.classifier?.questionType === "coding" ||
+      promptContext.activeInterviewTask?.stableKind === "coding" ||
       advisorPlaybook?.id === "coding_algorithm";
     const advisorModelRoute = resolveMeetingModelRoute({
       useCodingModel: advisorUsesCodingModel,
@@ -2097,7 +2133,9 @@ export function useMeetingAssistant() {
                 );
                 sessionRecordingManagerRef.current?.recordModelInput({
                   traceId,
-                  taskId: promptContext.activeScreenTask?.id,
+                  taskId:
+                    promptContext.activeInterviewTask?.id ??
+                    promptContext.activeScreenTask?.id,
                   label: "advisor model input",
                   value: formatTraceModelInput(
                     input.systemPrompt,
@@ -2142,7 +2180,9 @@ export function useMeetingAssistant() {
                 );
                 sessionRecordingManagerRef.current?.recordModelOutput({
                   traceId,
-                  taskId: promptContext.activeScreenTask?.id,
+                  taskId:
+                    promptContext.activeInterviewTask?.id ??
+                    promptContext.activeScreenTask?.id,
                   label: "advisor raw output",
                   value: output,
                   metadata: {
@@ -2169,6 +2209,52 @@ export function useMeetingAssistant() {
       }
 
       let contextState = contextManagerRef.current.getState();
+      const existingInterviewTask =
+        contextState.activeInterviewTask ??
+        (contextState.activeScreenTask
+          ? buildInterviewParentFromScreenTask(contextState.activeScreenTask)
+          : undefined);
+      const continuity = updateInterviewTaskContinuityForAnswer({
+        existingTask: existingInterviewTask,
+        source: contextState.activeScreenTask ? "screen" : "voice",
+        questionType:
+          advisorTaskSignals.taskRelation === "followup-parent" &&
+          existingInterviewTask
+            ? existingInterviewTask.stableKind
+            : advisorQuestionType,
+        relation: advisorTaskSignals.taskRelation,
+        subtaskIntent: advisorTaskSignals.subtaskIntent,
+        question:
+          contextState.activeScreenTask?.question ??
+          latestTurn?.text ??
+          extractScreenTaskQuestion(finalContent),
+        finalContent,
+        playbook: advisorPlaybook,
+        latestTurn,
+        observationId: contextState.activeScreenTask?.basedOnObservationId,
+        expiresAt: getActiveScreenTaskExpiresAt(state.settings),
+        supportedFactAnchors: extractSupportedFactAnchorsFromMemory(memoryContext),
+      });
+
+      if (continuity.task) {
+        contextManagerRef.current.setActiveInterviewTask(continuity.task);
+        contextState = contextManagerRef.current.getState();
+      }
+
+      if (traceId) {
+        traceStoreRef.current.updateMetadata(traceId, {
+          activeInterviewParentId: contextState.activeInterviewTask?.id,
+          activeInterviewParentKind: contextState.activeInterviewTask?.stableKind,
+          activeInterviewParentPhase:
+            contextState.activeInterviewTask?.playbookPhase,
+          activeInterviewChildId: contextState.activeInterviewTask?.child?.id,
+          activeInterviewChildKind:
+            contextState.activeInterviewTask?.child?.questionType,
+          activeInterviewChildIntent:
+            contextState.activeInterviewTask?.child?.intent,
+          startedNewInterviewParent: continuity.startedNewParent,
+        });
+      }
 
       if (
         mode === "screen-anchored" &&
@@ -2222,7 +2308,9 @@ export function useMeetingAssistant() {
 
       setState((previous) => ({
         ...previous,
-        ...withLatestReliableSuggestion(previous, nextSuggestion),
+        ...withLatestReliableSuggestion(previous, nextSuggestion, {
+          clearPrevious: continuity.startedNewParent,
+        }),
         status: activeRef.current
           ? "listening"
           : returnStatus === "paused"
@@ -2230,6 +2318,7 @@ export function useMeetingAssistant() {
             : "idle",
         interviewSessionContext: contextState.interviewSessionContext,
         activeScreenTask: contextState.activeScreenTask,
+        activeInterviewTask: contextState.activeInterviewTask,
       }));
       if (traceId) {
         traceStoreRef.current.finishStep(traceId, advisorStepId, "success", {
@@ -2372,6 +2461,7 @@ export function useMeetingAssistant() {
         transcriptTurns: contextState.transcriptTurns,
         interviewSessionContext: contextState.interviewSessionContext,
         activeScreenTask: contextState.activeScreenTask,
+        activeInterviewTask: contextState.activeInterviewTask,
       }));
 
       return { contextState, interviewContextUpdate };
@@ -2747,11 +2837,15 @@ export function useMeetingAssistant() {
         turn.audioSegmentSeq = segment.sequence;
         turn.audioSessionId = segment.sessionId;
 
-        const activeScreenTask = contextManagerRef.current.getState()
-          .activeScreenTask;
+        const activeContextState = contextManagerRef.current.getState();
+        const activeScreenTask = activeContextState.activeScreenTask;
+        const activeInterviewTask = activeContextState.activeInterviewTask;
+        const hasActiveInterviewTask = Boolean(
+          activeScreenTask || activeInterviewTask
+        );
 
         if (turn.speaker === "me") {
-          const classification = classifyMeTurn(turn, Boolean(activeScreenTask));
+          const classification = classifyMeTurn(turn, hasActiveInterviewTask);
           turn.contextTier = classification.tier;
           turn.contextPromptEligible = classification.promptEligible;
           turn.contextFusionStatus = classification.promptEligible
@@ -2853,13 +2947,14 @@ export function useMeetingAssistant() {
           return;
         }
 
-        if (activeScreenTask && isTaskSwitchTranscript(turn.text)) {
+        if (hasActiveInterviewTask && isTaskSwitchTranscript(turn.text)) {
           const switchStepId = traceStoreRef.current.startStep(
             traceId,
             "Task switch confirmation requested",
             {
               turnId: turn.id,
-              activeScreenTaskId: activeScreenTask.id,
+              activeScreenTaskId: activeScreenTask?.id,
+              activeInterviewTaskId: activeInterviewTask?.id,
               transcriptChars: turn.text.trim().length,
             }
           );
@@ -2875,7 +2970,9 @@ export function useMeetingAssistant() {
             ].join("\n"),
             createdAt: Date.now(),
             basedOnTurnIds: [turn.id],
-            basedOnObservationIds: [activeScreenTask.observationId],
+            basedOnObservationIds: activeScreenTask
+              ? [activeScreenTask.observationId]
+              : [],
             confidence: "medium",
           };
           setState((previous) => ({
@@ -2978,7 +3075,7 @@ export function useMeetingAssistant() {
         }
 
         const turnGate = evaluateThemTurnForAdvisor(turn, {
-          hasActiveScreenTask: Boolean(activeScreenTask),
+          hasActiveTask: hasActiveInterviewTask,
         });
         traceStoreRef.current.updateMetadata(traceId, {
           turnGateAction: turnGate.action,
@@ -2994,6 +3091,7 @@ export function useMeetingAssistant() {
             transcriptChars: turn.text.trim().length,
             wordEquivalent: calculateWordEquivalent(turn.text),
             activeScreenTask: Boolean(activeScreenTask),
+            activeInterviewTask: Boolean(activeInterviewTask),
             contextPromptEligible: turnGate.contextPromptEligible,
             audioSegmentSeq: segment.sequence,
             audioSessionId: segment.sessionId,
@@ -3009,6 +3107,7 @@ export function useMeetingAssistant() {
               reason: turnGate.reason,
               transcriptChars: turn.text.trim().length,
               activeScreenTask: Boolean(activeScreenTask),
+              activeInterviewTask: Boolean(activeInterviewTask),
             }
           );
           traceStoreRef.current.finishStep(traceId, ignoredStepId, "success");
@@ -3034,6 +3133,53 @@ export function useMeetingAssistant() {
             turnGateReason: turnGate.reason,
           }
         );
+
+        if (turnGate.action === "state-update") {
+          const stateUpdatedTask = buildStateUpdatedInterviewTask(
+            contextState.activeInterviewTask,
+            turn
+          );
+          if (stateUpdatedTask) {
+            contextManagerRef.current.setActiveInterviewTask(stateUpdatedTask);
+          }
+          const nextContextState = contextManagerRef.current.getState();
+          traceStoreRef.current.updateMetadata(traceId, {
+            turnGateAction: "state-update",
+            turnGateReason: turnGate.reason,
+            activeInterviewParentId: nextContextState.activeInterviewTask?.id,
+            activeInterviewParentKind:
+              nextContextState.activeInterviewTask?.stableKind,
+            activeInterviewParentPhase:
+              nextContextState.activeInterviewTask?.playbookPhase,
+          });
+          const stateUpdateStepId = traceStoreRef.current.startStep(
+            traceId,
+            "Interview task state updated",
+            {
+              reason: turnGate.reason,
+              turnId: turn.id,
+              activeInterviewTaskId: nextContextState.activeInterviewTask?.id,
+              activeInterviewTaskKind:
+                nextContextState.activeInterviewTask?.stableKind,
+              transcriptChars: turn.text.trim().length,
+            }
+          );
+          traceStoreRef.current.finishStep(
+            traceId,
+            stateUpdateStepId,
+            "success"
+          );
+          traceStoreRef.current.finishTrace(traceId, "success");
+          setState((previous) => ({
+            ...previous,
+            status: activeRef.current ? "listening" : "idle",
+            transcriptTurns: nextContextState.transcriptTurns,
+            interviewSessionContext: nextContextState.interviewSessionContext,
+            activeScreenTask: nextContextState.activeScreenTask,
+            activeInterviewTask: nextContextState.activeInterviewTask,
+          }));
+          return;
+        }
 
         if (turnGate.action !== "answer-refresh") {
           traceStoreRef.current.finishTrace(traceId, "success");
@@ -3363,6 +3509,7 @@ export function useMeetingAssistant() {
         interviewSessionBrief: contextState.interviewSessionBrief,
         interviewSessionContext: contextState.interviewSessionContext,
         activeScreenTask: contextState.activeScreenTask,
+        activeInterviewTask: contextState.activeInterviewTask,
         partialSuggestion: "",
         error: null,
         audioStatus,
@@ -3940,7 +4087,7 @@ export function useMeetingAssistant() {
         const now = Date.now();
 
         if (screenTaskContent.trim() && taskKind !== "non-question") {
-          contextManagerRef.current.setActiveScreenTask({
+          const activeScreenTask: ActiveScreenTask = {
             id: requestId,
             observationId: observation.id,
             createdAt: now,
@@ -3960,9 +4107,40 @@ export function useMeetingAssistant() {
             content: screenTaskContent,
             basedOnTurnIds,
             basedOnObservationId: observation.id,
+          };
+          contextManagerRef.current.setActiveScreenTask(activeScreenTask);
+
+          const screenContinuity = updateInterviewTaskContinuityForAnswer({
+            existingTask: contextManagerRef.current.getState().activeInterviewTask,
+            source: "screen",
+            questionType: taskKind,
+            relation: "new-parent",
+            subtaskIntent: inferAdvisorSubtaskIntent(
+              question || screenTaskContent,
+              readMemoryQuestionType(taskKind) ?? "unknown"
+            ),
+            question: question || undefined,
+            finalContent: screenTaskContent,
+            playbook: screenPlaybook,
+            observationId: observation.id,
+            expiresAt: getActiveScreenTaskExpiresAt(state.settings, now),
+            supportedFactAnchors:
+              extractSupportedFactAnchorsFromMemory(memoryContext),
+          });
+          if (screenContinuity.task) {
+            contextManagerRef.current.setActiveInterviewTask(
+              screenContinuity.task
+            );
+          }
+          traceStoreRef.current.updateMetadata(trace.id, {
+            activeInterviewParentId: screenContinuity.task?.id,
+            activeInterviewParentKind: screenContinuity.task?.stableKind,
+            activeInterviewParentPhase: screenContinuity.task?.playbookPhase,
+            startedNewInterviewParent: screenContinuity.startedNewParent,
           });
         } else {
           contextManagerRef.current.clearActiveScreenTask();
+          contextManagerRef.current.clearActiveInterviewTask();
         }
 
         updatedContextState = contextManagerRef.current.getState();
@@ -4004,11 +4182,14 @@ export function useMeetingAssistant() {
 
         setState((previous) => ({
           ...previous,
-          ...withLatestReliableSuggestion(previous, nextSuggestion),
+          ...withLatestReliableSuggestion(previous, nextSuggestion, {
+            clearPrevious: Boolean(updatedContextState.activeInterviewTask),
+          }),
           status: activeRef.current ? "listening" : idleReturnStatus,
           partialSuggestion: "",
           screenObservations: updatedContextState.screenObservations,
           activeScreenTask: updatedContextState.activeScreenTask,
+          activeInterviewTask: updatedContextState.activeInterviewTask,
           interviewSessionContext: updatedContextState.interviewSessionContext,
           error: null,
         }));
@@ -4264,6 +4445,7 @@ export function useMeetingAssistant() {
         transcriptTurns: nextContextState.transcriptTurns,
         interviewSessionContext: nextContextState.interviewSessionContext,
         activeScreenTask: nextContextState.activeScreenTask,
+        activeInterviewTask: nextContextState.activeInterviewTask,
       }));
 
       traceStoreRef.current.finishTrace(trace.id, "success");
@@ -4562,10 +4744,40 @@ function resolveAdvisorTaskSignals(
     ? inferMemoryTopicDomainFromQuery(latestUsefulText)
     : "unknown";
   const activeQuestionType = readMemoryQuestionType(
-    context.activeScreenTask?.kind
+    context.activeScreenTask?.kind ?? context.activeInterviewTask?.stableKind
   );
 
-  if (context.activeScreenTask && activeQuestionType) {
+  if ((context.activeScreenTask || context.activeInterviewTask) && activeQuestionType) {
+    const latestParentKind = normalizeInterviewParentKind(latestQuestionType);
+    const latestIsParentKind = Boolean(
+      latestParentKind && isParentInterviewKind(latestParentKind)
+    );
+    const latestLooksLikeTask =
+      latestUsefulText &&
+      (hasQuestionOrTaskSignal(latestUsefulText) ||
+        isTaskSwitchTranscript(latestUsefulText));
+    const shouldStartNewParent =
+      Boolean(latestLooksLikeTask) &&
+      latestIsParentKind &&
+      latestParentKind !== undefined &&
+      !isCompatibleParentKind(activeQuestionType, latestParentKind);
+
+    if (shouldStartNewParent) {
+      return {
+        questionType: latestQuestionType,
+        askFrame: latestAskFrame,
+        topicDomain: latestTopicDomain,
+        query: buildFocusedAdvisorTaskQuery(context, latestUsefulText),
+        taskRelation: "new-parent",
+        subtaskIntent: inferAdvisorSubtaskIntent(
+          latestUsefulText,
+          latestQuestionType
+        ),
+        source: "latest-turn-new-parent",
+        reuseActivePlaybook: false,
+      };
+    }
+
     const useLatestAsChild = shouldUseLatestTurnAsChildProbe({
       activeQuestionType,
       latestQuestionType,
@@ -4588,18 +4800,40 @@ function resolveAdvisorTaskSignals(
       };
     }
 
+    const hasActiveChild = Boolean(context.activeInterviewTask?.child);
+    const shouldResumeParent =
+      hasActiveChild &&
+      latestUsefulText &&
+      (latestQuestionType === activeQuestionType ||
+        isResumeParentTranscript(latestUsefulText) ||
+        inferAdvisorSubtaskIntent(latestUsefulText, activeQuestionType) ===
+          "metric-probe" ||
+        inferAdvisorSubtaskIntent(latestUsefulText, activeQuestionType) ===
+          "qps-estimation");
+    const taskRelation: InterviewTaskRelation = shouldResumeParent
+      ? "resume-parent"
+      : latestUsefulText && hasConstraintOrCorrectionSignal(latestUsefulText)
+        ? "correction"
+        : latestUsefulText && isMeetingLogisticsTranscript(
+            normalizeTranscriptForGate(latestUsefulText)
+          )
+          ? "logistics"
+          : latestUsefulText
+            ? "followup-parent"
+            : "unknown";
+
     return {
       questionType: activeQuestionType,
       askFrame:
-        readMemoryAskFrame(context.activeScreenTask.classifier?.askFrame) ??
+        readMemoryAskFrame(context.activeScreenTask?.classifier?.askFrame) ??
         latestAskFrame ??
         inferMemoryAskFrameFromQuery(fallbackQuery),
       topicDomain:
-        readMemoryTopicDomain(context.activeScreenTask.classifier?.topicDomain) ??
+        readMemoryTopicDomain(context.activeScreenTask?.classifier?.topicDomain) ??
         latestTopicDomain ??
         inferMemoryTopicDomainFromQuery(fallbackQuery),
       query: buildFocusedAdvisorTaskQuery(context, latestUsefulText),
-      taskRelation: latestUsefulText ? "followup-parent" : "unknown",
+      taskRelation,
       subtaskIntent: inferAdvisorSubtaskIntent(
         latestUsefulText,
         activeQuestionType
@@ -4665,6 +4899,17 @@ function buildFocusedAdvisorTaskQuery(
         ]
           .filter(Boolean)
           .join("\n")
+      : context.activeInterviewTask
+        ? [
+            `active parent task: ${context.activeInterviewTask.topic}`,
+            `active parent type: ${context.activeInterviewTask.stableKind}`,
+            `active parent phase: ${context.activeInterviewTask.playbookPhase}`,
+            context.activeInterviewTask.supportedFactAnchors.length
+              ? `active parent fact anchors: ${context.activeInterviewTask.supportedFactAnchors.join(", ")}`
+              : undefined,
+          ]
+            .filter(Boolean)
+            .join("\n")
       : undefined,
   ]
     .filter(Boolean)
@@ -4696,12 +4941,29 @@ function shouldUseLatestTurnAsChildProbe({
   return false;
 }
 
+function isResumeParentTranscript(text: string) {
+  const normalized = normalizeTranscriptForGate(text);
+  if (!normalized) return false;
+
+  return (
+    /\b(back to|return to|go back to|continue|resume|for this system|for this design|for the original question|for the previous question|for the system we discussed|how would you evaluate|how do you measure|what metrics|what logs|observability)\b/i.test(
+      normalized
+    ) ||
+    /回到|继续刚才|刚才那个系统|刚才的问题|这个系统|这个设计|怎么评估|什么指标|哪些日志|可观测/.test(
+      text
+    )
+  );
+}
+
 function inferAdvisorSubtaskIntent(
   text: string,
   questionType: MemoryQuestionType
-): AdvisorSubtaskIntent {
+): InterviewSubtaskIntent {
   const normalized = text.toLowerCase();
   if (!normalized.trim()) return "unknown";
+  if (/\b(qps|throughput|traffic|dau|mau|peak|capacity|scale)\b/.test(normalized)) {
+    return "qps-estimation";
+  }
   if (questionType === "coding" || /\b(code|implement|write|function)\b/.test(normalized)) {
     return "implementation-probe";
   }
@@ -4714,10 +4976,343 @@ function inferAdvisorSubtaskIntent(
   if (/\b(what is|explain|compare|why|how does|principle|tradeoff|trade-off)\b/.test(normalized)) {
     return "concept-probe";
   }
+  if (/\b(project|implementation|architecture|debug|incident|root cause|role|impact)\b/.test(normalized)) {
+    return questionType === "behavioral" ? "story-detail" : "project-detail";
+  }
   if (/\b(clarify|constraint|assume|requirement|instead|not)\b/.test(normalized)) {
     return "clarification";
   }
   return "unknown";
+}
+
+function buildStateUpdatedInterviewTask(
+  task: ActiveInterviewParent | undefined,
+  turn: TranscriptTurn
+): ActiveInterviewParent | undefined {
+  if (!task) return undefined;
+
+  const now = Date.now();
+  return {
+    ...task,
+    updatedAt: now,
+    expiresAt: task.expiresAt
+      ? Math.max(task.expiresAt, now + 5 * 60_000)
+      : undefined,
+    revisions: task.revisions + 1,
+    child:
+      task.child && isResumeParentTranscript(turn.text)
+        ? undefined
+        : task.child,
+  };
+}
+
+function updateInterviewTaskContinuityForAnswer({
+  existingTask,
+  source,
+  questionType,
+  relation,
+  subtaskIntent,
+  question,
+  finalContent,
+  playbook,
+  latestTurn,
+  observationId,
+  expiresAt,
+  supportedFactAnchors,
+}: {
+  existingTask?: ActiveInterviewParent;
+  source: "screen" | "voice";
+  questionType: MemoryQuestionType | ScreenTaskKind;
+  relation: InterviewTaskRelation;
+  subtaskIntent: InterviewSubtaskIntent;
+  question?: string;
+  finalContent: string;
+  playbook?: ActiveInterviewParent["playbook"];
+  latestTurn?: TranscriptTurn;
+  observationId?: string;
+  expiresAt?: number;
+  supportedFactAnchors?: string[];
+}): InterviewTaskContinuityResult {
+  const kind = normalizeInterviewParentKind(questionType);
+  const now = Date.now();
+  const trimmedContent = finalContent.trim();
+  const isUsefulAnswer = Boolean(trimmedContent && trimmedContent !== "-");
+  const topic =
+    question?.trim() ||
+    extractScreenTaskQuestion(trimmedContent) ||
+    latestTurn?.text.trim() ||
+    existingTask?.topic ||
+    "Unknown interview task";
+  const anchors = mergeSupportedFactAnchors(
+    existingTask?.supportedFactAnchors,
+    supportedFactAnchors
+  );
+
+  if (!kind || !isParentInterviewKind(kind)) {
+    if (relation === "child-probe" && existingTask && isUsefulAnswer) {
+      const child = buildActiveInterviewChild({
+        questionType: kind ?? "field-knowledge",
+        subtaskIntent,
+        question: topic,
+        finalContent: trimmedContent,
+        latestTurn,
+        observationId,
+      });
+
+      return {
+        task: {
+          ...existingTask,
+          updatedAt: now,
+          expiresAt,
+          child,
+          revisions: existingTask.revisions + 1,
+        },
+        startedNewParent: false,
+        clearedParent: false,
+      };
+    }
+
+    return {
+      task: existingTask,
+      startedNewParent: false,
+      clearedParent: false,
+    };
+  }
+
+  const shouldStartNewParent =
+    !existingTask ||
+    relation === "new-parent" ||
+    relation === "unknown" ||
+    !isCompatibleParentKind(existingTask.stableKind, kind);
+
+  if (shouldStartNewParent) {
+    return {
+      task: {
+        id: createMeetingId("interview_parent"),
+        source,
+        stableKind: kind,
+        topic,
+        playbook,
+        playbookPhase: playbook?.phase ?? "follow_up",
+        phaseProgress: playbook?.phase ? { [playbook.phase]: true } : {},
+        supportedFactAnchors: anchors,
+        latestUsefulAnswer: isUsefulAnswer
+          ? buildCompactAnswerSummary(trimmedContent)
+          : undefined,
+        previousUsefulAnswer: undefined,
+        createdAt: now,
+        updatedAt: now,
+        expiresAt,
+        startTurnId: latestTurn?.id,
+        startObservationId: observationId,
+        revisions: 1,
+      },
+      startedNewParent: true,
+      clearedParent: false,
+    };
+  }
+
+  if (relation === "child-probe") {
+    return {
+      task: {
+        ...existingTask,
+        updatedAt: now,
+        expiresAt,
+        child: isUsefulAnswer
+          ? buildActiveInterviewChild({
+              questionType: kind,
+              subtaskIntent,
+              question: topic,
+              finalContent: trimmedContent,
+              latestTurn,
+              observationId,
+            })
+          : existingTask.child,
+        supportedFactAnchors: anchors,
+        revisions: existingTask.revisions + 1,
+      },
+      startedNewParent: false,
+      clearedParent: false,
+    };
+  }
+
+  return {
+    task: {
+      ...existingTask,
+      updatedAt: now,
+      expiresAt,
+      playbook: playbook ?? existingTask.playbook,
+      playbookPhase: playbook?.phase ?? existingTask.playbookPhase,
+      phaseProgress: {
+        ...existingTask.phaseProgress,
+        ...(playbook?.phase ? { [playbook.phase]: true } : {}),
+      },
+      supportedFactAnchors: anchors,
+      previousUsefulAnswer:
+        isUsefulAnswer && existingTask.latestUsefulAnswer
+          ? existingTask.latestUsefulAnswer
+          : existingTask.previousUsefulAnswer,
+      latestUsefulAnswer: isUsefulAnswer
+        ? buildCompactAnswerSummary(trimmedContent)
+        : existingTask.latestUsefulAnswer,
+      child: relation === "resume-parent" ? undefined : existingTask.child,
+      revisions: existingTask.revisions + 1,
+    },
+    startedNewParent: false,
+    clearedParent: false,
+  };
+}
+
+function buildInterviewParentFromScreenTask(
+  task: ActiveScreenTask
+): ActiveInterviewParent {
+  const kind = normalizeInterviewParentKind(task.kind) ?? "unknown";
+  return {
+    id: task.id,
+    source: "screen",
+    stableKind: kind,
+    topic: task.question || extractScreenTaskQuestion(task.content) || "Screen task",
+    playbook: task.playbook,
+    playbookPhase: task.playbook?.phase ?? "follow_up",
+    phaseProgress: task.playbook?.phase ? { [task.playbook.phase]: true } : {},
+    supportedFactAnchors: [
+      task.classifier?.projectAnchor,
+      task.playbook?.label,
+    ].filter(Boolean) as string[],
+    latestUsefulAnswer: buildCompactAnswerSummary(task.content),
+    previousUsefulAnswer: undefined,
+    createdAt: task.createdAt,
+    updatedAt: task.updatedAt,
+    expiresAt: task.expiresAt,
+    startObservationId: task.basedOnObservationId,
+    revisions: 1,
+  };
+}
+
+function buildActiveInterviewChild({
+  questionType,
+  subtaskIntent,
+  question,
+  finalContent,
+  latestTurn,
+  observationId,
+}: {
+  questionType: ScreenTaskKind;
+  subtaskIntent: InterviewSubtaskIntent;
+  question: string;
+  finalContent: string;
+  latestTurn?: TranscriptTurn;
+  observationId?: string;
+}) {
+  const now = Date.now();
+  return {
+    id: createMeetingId("interview_child"),
+    createdAt: now,
+    updatedAt: now,
+    questionType,
+    relation: "child-probe" as const,
+    intent: subtaskIntent,
+    question,
+    compactSummary: buildCompactChildSummary({
+      questionType,
+      subtaskIntent,
+      question,
+      finalContent,
+    }),
+    basedOnTurnIds: latestTurn ? [latestTurn.id] : [],
+    basedOnObservationIds: observationId ? [observationId] : [],
+  };
+}
+
+function buildCompactChildSummary({
+  questionType,
+  subtaskIntent,
+  question,
+  finalContent,
+}: {
+  questionType: ScreenTaskKind;
+  subtaskIntent: InterviewSubtaskIntent;
+  question: string;
+  finalContent: string;
+}) {
+  const parsedSummary = buildCompactAnswerSummary(finalContent);
+  const fallbackSummary = finalContent
+    .replace(/```[\s\S]*?```/g, "[code omitted]")
+    .replace(/\s+/g, " ")
+    .trim();
+  const summary = parsedSummary || fallbackSummary;
+
+  return [
+    `Child kind: ${questionType}`,
+    `Intent: ${subtaskIntent}`,
+    `Question: ${question}`,
+    summary ? `Summary: ${summary.slice(0, 500)}` : undefined,
+  ]
+    .filter(Boolean)
+    .join("\n")
+    .slice(0, 800);
+}
+
+function normalizeInterviewParentKind(
+  questionType: MemoryQuestionType | ScreenTaskKind
+): ScreenTaskKind | undefined {
+  if (!questionType || questionType === "unknown") return undefined;
+  if (questionType === "system-design") return "general-system-design";
+  return questionType;
+}
+
+function isParentInterviewKind(kind: ScreenTaskKind) {
+  return (
+    kind === "behavioral" ||
+    kind === "coding" ||
+    kind === "general-system-design" ||
+    kind === "ai-ml-system-design" ||
+    kind === "project-deep-dive"
+  );
+}
+
+function isCompatibleParentKind(left: ScreenTaskKind, right: ScreenTaskKind) {
+  if (left === right) return true;
+  return (
+    (left === "general-system-design" && right === "system-design") ||
+    (left === "system-design" && right === "general-system-design")
+  );
+}
+
+function buildCompactAnswerSummary(content: string) {
+  const parsed = parseScreenTaskAnswer(content);
+  return [
+    parsed.question ? `Question: ${parsed.question}` : undefined,
+    parsed.answer ? `Answer: ${parsed.answer}` : undefined,
+    parsed.approach ? `Approach: ${parsed.approach}` : undefined,
+    parsed.complexity ? `Complexity: ${parsed.complexity}` : undefined,
+  ]
+    .filter(Boolean)
+    .join("\n")
+    .replace(/\s+\n/g, "\n")
+    .slice(0, 1000);
+}
+
+function mergeSupportedFactAnchors(
+  previous: string[] | undefined,
+  next: string[] | undefined
+) {
+  return Array.from(new Set([...(previous ?? []), ...(next ?? [])]))
+    .filter(Boolean)
+    .slice(0, 12);
+}
+
+function extractSupportedFactAnchorsFromMemory(
+  memoryContext: MemoryRetrievalResult | null | undefined
+) {
+  if (!memoryContext?.entries.length) return [];
+  return memoryContext.entries
+    .map((item) => {
+      const entry = item.entry;
+      return entry.projectName || entry.projectId || entry.title || entry.id;
+    })
+    .filter(Boolean)
+    .slice(0, 8);
 }
 
 function buildScreenMemoryQuery({
@@ -5055,7 +5650,7 @@ function shouldUpdateActiveScreenTaskFromAdvisorOutput(content: string) {
 
 function evaluateThemTurnForAdvisor(
   turn: TranscriptTurn,
-  options: { hasActiveScreenTask: boolean }
+  options: { hasActiveTask: boolean }
 ): AdvisorTurnGateDecision {
   const trimmed = turn.text.trim();
   if (!trimmed) {
@@ -5097,7 +5692,7 @@ function evaluateThemTurnForAdvisor(
 
   if (detectInterviewCompany(trimmed) && !hasQuestion && wordEquivalent <= 18) {
     return {
-      action: "append-only",
+      action: "state-update",
       reason: "company-context-only",
       contextPromptEligible: false,
     };
@@ -5112,7 +5707,7 @@ function evaluateThemTurnForAdvisor(
   }
 
   if (
-    options.hasActiveScreenTask &&
+    options.hasActiveTask &&
     wordEquivalent <= 10 &&
     !hasTechnicalSignal(trimmed)
   ) {
@@ -5123,7 +5718,7 @@ function evaluateThemTurnForAdvisor(
     };
   }
 
-  if (shouldIgnoreLowSignalTranscript(trimmed, options.hasActiveScreenTask)) {
+  if (shouldIgnoreLowSignalTranscript(trimmed, options.hasActiveTask)) {
     return {
       action: "ignore",
       reason: "low-signal",
@@ -5131,7 +5726,7 @@ function evaluateThemTurnForAdvisor(
     };
   }
 
-  if (options.hasActiveScreenTask && hasFollowUpSignal(trimmed)) {
+  if (options.hasActiveTask && hasFollowUpSignal(trimmed)) {
     return {
       action: "answer-refresh",
       reason: "active-task-followup",

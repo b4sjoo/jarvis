@@ -1,4 +1,5 @@
 import {
+  ActiveInterviewParent,
   ActiveScreenTask,
   AdvisorPromptContext,
   GlossaryEntry,
@@ -71,6 +72,9 @@ export class MeetingContextManager {
       activeScreenTask: this.state.activeScreenTask
         ? { ...this.state.activeScreenTask }
         : undefined,
+      activeInterviewTask: cloneActiveInterviewTask(
+        this.state.activeInterviewTask
+      ),
       glossary: [...this.state.glossary],
     };
   }
@@ -207,6 +211,24 @@ export class MeetingContextManager {
     this.state = {
       ...this.state,
       activeScreenTask: undefined,
+      activeInterviewTask:
+        this.state.activeInterviewTask?.source === "screen"
+          ? undefined
+          : this.state.activeInterviewTask,
+    };
+  }
+
+  setActiveInterviewTask(task: ActiveInterviewParent) {
+    this.state = {
+      ...this.state,
+      activeInterviewTask: cloneActiveInterviewTask(task),
+    };
+  }
+
+  clearActiveInterviewTask() {
+    this.state = {
+      ...this.state,
+      activeInterviewTask: undefined,
     };
   }
 
@@ -236,13 +258,31 @@ export class MeetingContextManager {
 
   clearExpiredActiveScreenTask(now = Date.now()) {
     const task = this.state.activeScreenTask;
+    const interviewTask = this.state.activeInterviewTask;
+    let changed = false;
 
-    if (!task?.expiresAt || task.expiresAt > now) {
-      return false;
+    if (task?.expiresAt && task.expiresAt <= now) {
+      this.state = {
+        ...this.state,
+        activeScreenTask: undefined,
+        activeInterviewTask:
+          interviewTask?.source === "screen" ? undefined : interviewTask,
+      };
+      changed = true;
     }
 
-    this.clearActiveScreenTask();
-    return true;
+    if (
+      this.state.activeInterviewTask?.expiresAt &&
+      this.state.activeInterviewTask.expiresAt <= now
+    ) {
+      this.state = {
+        ...this.state,
+        activeInterviewTask: undefined,
+      };
+      changed = true;
+    }
+
+    return changed;
   }
 
   updateRollingSummary(rollingSummary: string) {
@@ -291,10 +331,15 @@ export class MeetingContextManager {
       activeScreenTask: this.state.activeScreenTask
         ? { ...this.state.activeScreenTask }
         : undefined,
+      activeInterviewTask: cloneActiveInterviewTask(
+        this.state.activeInterviewTask
+      ),
       rollingSummary: this.state.rollingSummary,
       userProfileContext: this.state.userProfileContext,
       glossaryText: this.formatGlossary(),
-      interviewPlaybook: this.state.activeScreenTask?.playbook,
+      interviewPlaybook:
+        this.state.activeScreenTask?.playbook ??
+        this.state.activeInterviewTask?.playbook,
       latestTurn,
     };
   }
@@ -376,5 +421,19 @@ function cloneInterviewSessionBrief(
   return {
     ...brief,
     interviewTypes: [...brief.interviewTypes],
+  };
+}
+
+function cloneActiveInterviewTask(
+  task: ActiveInterviewParent | undefined
+): ActiveInterviewParent | undefined {
+  if (!task) return undefined;
+
+  return {
+    ...task,
+    playbook: task.playbook ? { ...task.playbook } : undefined,
+    phaseProgress: { ...task.phaseProgress },
+    supportedFactAnchors: [...task.supportedFactAnchors],
+    child: task.child ? { ...task.child } : undefined,
   };
 }
