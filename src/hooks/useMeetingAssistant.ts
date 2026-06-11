@@ -28,6 +28,7 @@ import {
   ClarifyingQuestionAnswer,
   ClarifyingQuestionFeedback,
   MeetingAssistantState,
+  MeetingAssistantStatus,
   MeetingAudioConfig,
   MeetingAudioStatus,
   MeetingAssistantSettings,
@@ -918,6 +919,141 @@ export function useMeetingAssistant() {
     ((base64Audio: string) => void) | undefined
   >(undefined);
 
+  const clearPendingConfirmationForRuntimeReset = useCallback((reason: string) => {
+    const pending = pendingConfirmationRef.current;
+    if (!pending) return;
+
+    window.clearTimeout(pending.timeoutId);
+    pendingConfirmationRef.current = null;
+
+    const resetStepId = traceStoreRef.current.startStep(
+      pending.segment.traceId,
+      "Pending confirmation cleared by runtime reset",
+      {
+        reason,
+        turnId: pending.turn.id,
+        heldMs: Date.now() - pending.heldAt,
+        audioSegmentSeq: pending.segment.sequence,
+        audioSessionId: pending.segment.sessionId,
+      }
+    );
+    traceStoreRef.current.finishStep(
+      pending.segment.traceId,
+      resetStepId,
+      "cancelled"
+    );
+    traceStoreRef.current.finishTrace(
+      pending.segment.traceId,
+      "cancelled",
+      `Pending confirmation cleared by runtime reset: ${reason}`
+    );
+  }, []);
+
+  const resetMeetingRuntimeForNewSession = useCallback(
+    (reason: string) => {
+      const previousContext = contextManagerRef.current.getState();
+      const previousTraceCount = traceStoreRef.current
+        .getTraces()
+        .filter((trace) => trace.status !== "running").length;
+      const previousSpeechCorrectionCount = speechCorrectionsRef.current.length;
+      const hadExistingRuntimeState = Boolean(
+        previousContext.transcriptTurns.length ||
+          previousContext.screenObservations.length ||
+          previousContext.activeScreenTask ||
+          previousContext.activeInterviewTask ||
+          previousContext.activeMeetingTask ||
+          previousTraceCount ||
+          previousSpeechCorrectionCount ||
+          latestScreenHashRef.current ||
+          pendingConfirmationRef.current ||
+          pendingInterviewTypeOverrideRef.current
+      );
+
+      if (advisorDebounceTimerRef.current !== null) {
+        window.clearTimeout(advisorDebounceTimerRef.current);
+        advisorDebounceTimerRef.current = null;
+      }
+      advisorEngineRef.current.cancelCurrentRequest();
+      screenAnalysisAbortRef.current?.abort();
+      screenAnalysisAbortRef.current = null;
+      screenCaptureInFlightRef.current = false;
+      pendingInterviewTypeOverrideRef.current = null;
+      speechCorrectionsRef.current = [];
+      latestScreenHashRef.current = undefined;
+
+      audioSessionIdRef.current = createMeetingId(
+        activeRef.current ? "audio_session" : "audio_session_inactive"
+      );
+      audioSegmentSeqRef.current = 0;
+      systemAudioQueueTailRef.current = Promise.resolve();
+      microphoneAudioQueueTailRef.current = Promise.resolve();
+      clearPendingConfirmationForRuntimeReset(reason);
+
+      contextManagerRef.current.reset({
+        interviewSessionBrief: previousContext.interviewSessionBrief,
+        userProfileContext: previousContext.userProfileContext,
+        glossary: previousContext.glossary,
+      });
+      const contextState = contextManagerRef.current.getState();
+      const nextStatus: MeetingAssistantStatus =
+        activeRef.current ? "listening" : "idle";
+
+      setState((previous) => ({
+        ...previous,
+        status:
+          previous.status === "paused" && !activeRef.current
+            ? "paused"
+            : nextStatus,
+        transcriptTurns: contextState.transcriptTurns,
+        screenObservations: contextState.screenObservations,
+        interviewSessionBrief: contextState.interviewSessionBrief,
+        interviewSessionContext: contextState.interviewSessionContext,
+        activeScreenTask: undefined,
+        activeInterviewTask: undefined,
+        activeMeetingTask: undefined,
+        latestSuggestion: null,
+        latestReliableSuggestion: null,
+        partialSuggestion: "",
+        lastMemoryContext: undefined,
+        error: null,
+        speechCorrections: [],
+      }));
+
+      return {
+        reason,
+        hadExistingRuntimeState,
+        previousTranscriptTurns: previousContext.transcriptTurns.length,
+        previousScreenObservations: previousContext.screenObservations.length,
+        previousCompletedTraces: previousTraceCount,
+        previousSpeechCorrections: previousSpeechCorrectionCount,
+        hadActiveMeetingTask: Boolean(previousContext.activeMeetingTask),
+        hadActiveScreenTask: Boolean(previousContext.activeScreenTask),
+        hadActiveInterviewTask: Boolean(previousContext.activeInterviewTask),
+        cleared: [
+          "transcriptTurns",
+          "screenObservations",
+          "activeScreenTask",
+          "activeInterviewTask",
+          "activeMeetingTask",
+          "latestSuggestion",
+          "latestReliableSuggestion",
+          "partialSuggestion",
+          "lastMemoryContext",
+          "speechCorrections",
+          "pendingConfirmation",
+          "pendingInterviewTypeOverride",
+          "advisorDebounce",
+          "screenAnalysis",
+          "latestScreenHash",
+          "audioQueues",
+        ],
+        currentSessionOnly: true,
+        backfill: false,
+      };
+    },
+    [clearPendingConfirmationForRuntimeReset]
+  );
+
   const sttProvider = useMemo(
     () =>
       allSttProviders.find(
@@ -1040,6 +1176,9 @@ export function useMeetingAssistant() {
 
   const startSessionRecording = useCallback(async () => {
     try {
+      const resetBoundary = resetMeetingRuntimeForNewSession(
+        "session-recording-started"
+      );
       const contextState = contextManagerRef.current.getState();
       sessionRecordedTraceIdsRef.current.clear();
       const sessionRecording = await sessionRecordingManagerRef.current?.start({
@@ -1055,28 +1194,17 @@ export function useMeetingAssistant() {
           sttProviderId: selectedSttProvider.provider,
         }),
       });
-      const hadExistingRuntimeState = Boolean(
-        contextState.transcriptTurns.length ||
-          contextState.screenObservations.length ||
-          contextState.activeScreenTask ||
-          contextState.activeInterviewTask ||
-          traceStoreRef.current.getTraces().some((trace) => trace.status !== "running")
-      );
       sessionRecordingManagerRef.current?.recordRuntimeBoundary(
-        hadExistingRuntimeState ? "runtime-continued" : "runtime-reset",
+        "runtime-reset",
         {
-          reason: "session-recording-started",
-          currentSessionOnly: true,
-          backfill: false,
+          ...resetBoundary,
           transcriptTurns: contextState.transcriptTurns.length,
           screenObservations: contextState.screenObservations.length,
           hasActiveMeetingTask: Boolean(contextState.activeMeetingTask),
           ...getActiveMeetingTaskTraceMetadata(contextState.activeMeetingTask),
           hasActiveScreenTask: Boolean(contextState.activeScreenTask),
           hasActiveInterviewTask: Boolean(contextState.activeInterviewTask),
-          completedTraces: traceStoreRef.current
-            .getTraces()
-            .filter((trace) => trace.status !== "running").length,
+          completedTraces: 0,
         }
       );
 
@@ -1108,6 +1236,7 @@ export function useMeetingAssistant() {
     selectedSttProvider.provider,
     state.settings,
     sttProvider,
+    resetMeetingRuntimeForNewSession,
   ]);
 
   const stopSessionRecording = useCallback(async (reason = "manual") => {
@@ -3579,12 +3708,14 @@ export function useMeetingAssistant() {
         return;
       }
 
-      if (resetContext) {
-        contextManagerRef.current.reset();
-        speechCorrectionsRef.current = [];
-        latestScreenHashRef.current = undefined;
-        screenAnalysisAbortRef.current?.abort();
-        screenAnalysisAbortRef.current = null;
+      const resetBoundary = resetContext
+        ? resetMeetingRuntimeForNewSession("meeting-assistant-started")
+        : undefined;
+      if (resetBoundary) {
+        sessionRecordingManagerRef.current?.recordRuntimeBoundary(
+          "runtime-reset",
+          resetBoundary
+        );
       }
 
       clearAdvisorDebounce();
@@ -3614,14 +3745,7 @@ export function useMeetingAssistant() {
       const contextState = contextManagerRef.current.getState();
 
       setState((previous) => ({
-        ...(resetContext
-          ? {
-              ...INITIAL_STATE,
-              settings: previous.settings,
-              interviewSessionBrief: contextState.interviewSessionBrief,
-              speechCorrections: [],
-            }
-          : previous),
+        ...previous,
         status: "listening",
         transcriptTurns: contextState.transcriptTurns,
         screenObservations: contextState.screenObservations,
@@ -3630,6 +3754,12 @@ export function useMeetingAssistant() {
         activeScreenTask: contextState.activeScreenTask,
         activeInterviewTask: contextState.activeInterviewTask,
         activeMeetingTask: contextState.activeMeetingTask,
+        latestSuggestion: resetContext ? null : previous.latestSuggestion,
+        latestReliableSuggestion: resetContext
+          ? null
+          : previous.latestReliableSuggestion,
+        lastMemoryContext: resetContext ? undefined : previous.lastMemoryContext,
+        speechCorrections: resetContext ? [] : previous.speechCorrections,
         partialSuggestion: "",
         error: null,
         audioStatus,
@@ -3651,6 +3781,7 @@ export function useMeetingAssistant() {
     invalidateAudioProcessingSession,
     selectedAudioDevices.output.id,
     startAudioProcessingSession,
+    resetMeetingRuntimeForNewSession,
     state.settings.audio.config,
     state.settings.privacyMode,
     sttProvider,
