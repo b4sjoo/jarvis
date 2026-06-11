@@ -88,6 +88,15 @@ import {
   serializeMeetingTraceExport,
   serializeMeetingTraceMetrics,
   SessionRecordingManager,
+  areCompatibleQuestionTypes,
+  inferCanonicalQuestionTypeFromText,
+  isParentCanonicalQuestionType,
+  normalizeCanonicalQuestionType,
+  normalizeInterviewBriefTypes as normalizeTaxonomyInterviewBriefTypes,
+  normalizeQuestionTypeAlias,
+  readInterviewBriefType,
+  readSingleConcreteInterviewTypeOverride as readTaxonomySingleConcreteInterviewTypeOverride,
+  toMemoryUseCaseForQuestionType,
   solveScreenAnchoredTask,
   shouldIncludeTurnInAdvisorPrompt,
   shouldSuppressDuplicateSystemAudioTurn,
@@ -180,14 +189,6 @@ const DEFAULT_INTERVIEW_SESSION_BRIEF: InterviewSessionBrief = {
   focusAreas: "",
   notes: "",
 };
-
-const CONCRETE_INTERVIEW_TYPES: Exclude<InterviewBriefType, "mixed">[] = [
-  "behavioral",
-  "coding",
-  "system-design",
-  "ai-ml-system-design",
-  "project-deep-dive",
-];
 
 const INITIAL_STATE: MeetingAssistantState = {
   status: "idle",
@@ -300,7 +301,9 @@ function normalizeInterviewSessionBrief(
     typeof parsed.targetCompany === "string" ? parsed.targetCompany : "";
   const company = normalizeInterviewBriefCompany(targetCompany);
   const interviewTypes = Array.isArray(parsed.interviewTypes)
-    ? parsed.interviewTypes.filter(isInterviewBriefType)
+    ? parsed.interviewTypes
+        .map(readInterviewBriefType)
+        .filter((type): type is InterviewBriefType => Boolean(type))
     : [];
   const normalizedInterviewTypes =
     normalizeInterviewBriefTypes(interviewTypes);
@@ -326,51 +329,35 @@ function normalizeInterviewSessionBrief(
 function normalizeInterviewBriefTypes(
   interviewTypes: InterviewBriefType[]
 ): InterviewBriefType[] {
-  const uniqueTypes = Array.from(new Set(interviewTypes));
-  const hasMixed = uniqueTypes.includes("mixed");
-  const concreteTypes = CONCRETE_INTERVIEW_TYPES.filter((type) =>
-    uniqueTypes.includes(type)
-  );
-
-  if (hasMixed || concreteTypes.length === CONCRETE_INTERVIEW_TYPES.length) {
-    return [...CONCRETE_INTERVIEW_TYPES, "mixed"];
-  }
-
-  return concreteTypes;
-}
-
-function isInterviewBriefType(value: unknown): value is InterviewBriefType {
-  return (
-    value === "behavioral" ||
-    value === "coding" ||
-    value === "system-design" ||
-    value === "ai-ml-system-design" ||
-    value === "project-deep-dive" ||
-    value === "mixed"
-  );
+  return normalizeTaxonomyInterviewBriefTypes(interviewTypes);
 }
 
 function readSingleConcreteInterviewTypeOverride(
   brief: InterviewSessionBrief | undefined
 ): ScreenTaskKind | undefined {
-  if (!brief?.interviewTypes.length || brief.interviewTypes.includes("mixed")) {
-    return undefined;
-  }
-
-  const concreteTypes = brief.interviewTypes.filter(
-    (type): type is Exclude<InterviewBriefType, "mixed"> => type !== "mixed"
-  );
-
-  if (concreteTypes.length !== 1) return undefined;
-
-  const [type] = concreteTypes;
-  return type === "system-design" ? "general-system-design" : type;
+  return readTaxonomySingleConcreteInterviewTypeOverride(brief);
 }
 
 function normalizeScreenTaskKindForOverrideComparison(
   kind: ScreenTaskKind | undefined
 ) {
-  return kind === "system-design" ? "general-system-design" : kind;
+  return normalizeQuestionTypeAlias(kind);
+}
+
+function formatQuestionTypeTraceMetadata(
+  questionType: ScreenTaskKind | MemoryQuestionType | undefined,
+  rawQuestionType?: string
+) {
+  const normalizedQuestionType = normalizeQuestionTypeAlias(questionType);
+  const canonicalQuestionType = normalizeCanonicalQuestionType(
+    normalizedQuestionType
+  );
+
+  return {
+    questionType: normalizedQuestionType,
+    rawQuestionType: rawQuestionType ?? questionType,
+    canonicalQuestionType,
+  };
 }
 
 function isInterviewTypeOverrideMismatch(
@@ -1470,6 +1457,11 @@ export function useMeetingAssistant() {
           activeScreenTaskId: activeScreenTask.id,
           previousQuestionType: activeScreenTask.kind,
           correctedQuestionType: correctedKind,
+          previousCanonicalQuestionType: normalizeCanonicalQuestionType(
+            activeScreenTask.kind
+          ),
+          correctedCanonicalQuestionType:
+            normalizeCanonicalQuestionType(correctedKind),
           ...formatInterviewPlaybookForTrace(correctedTask.playbook),
         });
         const overrideStepId = traceStoreRef.current.startStep(
@@ -1479,6 +1471,11 @@ export function useMeetingAssistant() {
             activeScreenTaskId: activeScreenTask.id,
             previousQuestionType: activeScreenTask.kind,
             correctedQuestionType: correctedKind,
+            previousCanonicalQuestionType: normalizeCanonicalQuestionType(
+              activeScreenTask.kind
+            ),
+            correctedCanonicalQuestionType:
+              normalizeCanonicalQuestionType(correctedKind),
             interviewTypes: normalizedBrief?.interviewTypes,
           }
         );
@@ -1715,7 +1712,6 @@ export function useMeetingAssistant() {
       projectAnchor?: string;
       memoryPolicy?: MemoryRetrievalPolicy;
     }): Promise<MemoryRetrievalResult | undefined> => {
-      if (!state.settings.useMemory) return undefined;
       const resolvedQuestionType =
         questionType ?? inferMemoryQuestionTypeFromQuery(query);
       const resolvedUseCase = normalizeMemoryUseCaseForQuestionType(
@@ -1727,8 +1723,43 @@ export function useMeetingAssistant() {
           ?.interviewTypes;
 
       let memoryStepId: string | undefined;
+      if (!state.settings.useMemory) {
+        if (traceId) {
+          memoryStepId = traceStoreRef.current.startStep(
+            traceId,
+            "Memory retrieval",
+            {
+              source,
+              skippedReason: "use-memory-disabled",
+              useCase: resolvedUseCase,
+              questionType: resolvedQuestionType,
+              askFrame,
+              topicDomain,
+              projectAnchor,
+              interviewTypes,
+              memoryPolicyId: memoryPolicy?.id,
+              allowedFamilies: memoryPolicy?.allowedFamilies,
+              blockedFamilies: memoryPolicy?.blockedFamilies,
+              queryChars: query.length,
+            }
+          );
+          traceStoreRef.current.finishStep(traceId, memoryStepId, "cancelled", {
+            skippedReason: "use-memory-disabled",
+            memoryRetrievalEnabled: false,
+          });
+          traceStoreRef.current.updateMetadata(traceId, {
+            memoryRetrievalEnabled: false,
+            memoryRetrievalSkippedReason: "use-memory-disabled",
+          });
+        }
+        return undefined;
+      }
+
       try {
         if (traceId) {
+          traceStoreRef.current.updateMetadata(traceId, {
+            memoryRetrievalEnabled: true,
+          });
           memoryStepId = traceStoreRef.current.startStep(
             traceId,
             "Memory retrieval",
@@ -3696,7 +3727,14 @@ export function useMeetingAssistant() {
           analysisContextState.transcriptTurns
         );
         let screenPreflight: ScreenPreflightResult | undefined;
-        const shouldRunScreenPreflight = state.settings.useMemory;
+        const shouldRunScreenPreflight = state.settings.screenContextEnabled;
+        traceStoreRef.current.updateMetadata(trace.id, {
+          screenPreflightEnabled: shouldRunScreenPreflight,
+          memoryRetrievalEnabled: state.settings.useMemory,
+          memoryRetrievalSkippedReason: state.settings.useMemory
+            ? undefined
+            : "use-memory-disabled",
+        });
 
         if (shouldRunScreenPreflight) {
           try {
@@ -3800,7 +3838,10 @@ export function useMeetingAssistant() {
               {
                 questionChars: screenPreflight.question?.length ?? 0,
                 targetCompany: screenPreflight.targetCompany,
-                questionType: screenPreflight.questionType,
+                ...formatQuestionTypeTraceMetadata(
+                  screenPreflight.questionType,
+                  screenPreflight.rawQuestionType
+                ),
                 askFrame: screenPreflight.askFrame,
                 topicDomain: screenPreflight.topicDomain,
                 projectAnchor: screenPreflight.projectAnchor,
@@ -3812,7 +3853,10 @@ export function useMeetingAssistant() {
               }
             );
             traceStoreRef.current.updateMetadata(trace.id, {
-              questionType: screenPreflight.questionType,
+              ...formatQuestionTypeTraceMetadata(
+                screenPreflight.questionType,
+                screenPreflight.rawQuestionType
+              ),
               askFrame: screenPreflight.askFrame,
               topicDomain: screenPreflight.topicDomain,
               projectAnchor: screenPreflight.projectAnchor,
@@ -3840,7 +3884,10 @@ export function useMeetingAssistant() {
               traceStoreRef.current.updateMetadata(trace.id, {
                 targetCompany: targetCompany?.value,
                 targetCompanyConfidence: targetCompany?.confidence,
-                questionType: screenPreflight.questionType,
+                ...formatQuestionTypeTraceMetadata(
+                  screenPreflight.questionType,
+                  screenPreflight.rawQuestionType
+                ),
                 askFrame: screenPreflight.askFrame,
                 topicDomain: screenPreflight.topicDomain,
                 projectAnchor: screenPreflight.projectAnchor,
@@ -4081,6 +4128,13 @@ export function useMeetingAssistant() {
           screenPreflight.questionType !== "unknown"
             ? screenPreflight.questionType
             : inferScreenTaskKind(screenTaskContent);
+        traceStoreRef.current.updateMetadata(
+          trace.id,
+          formatQuestionTypeTraceMetadata(
+            taskKind,
+            screenPreflight?.rawQuestionType
+          )
+        );
         const now = Date.now();
 
         if (screenTaskContent.trim() && taskKind !== "non-question") {
@@ -5253,27 +5307,17 @@ function buildCompactChildSummary({
 function normalizeInterviewParentKind(
   questionType: MemoryQuestionType | ScreenTaskKind
 ): ScreenTaskKind | undefined {
-  if (!questionType || questionType === "unknown") return undefined;
-  if (questionType === "system-design") return "general-system-design";
-  return questionType;
+  const canonical = normalizeCanonicalQuestionType(questionType);
+  return canonical && canonical !== "unknown" ? canonical : undefined;
 }
 
 function isParentInterviewKind(kind: ScreenTaskKind) {
-  return (
-    kind === "behavioral" ||
-    kind === "coding" ||
-    kind === "general-system-design" ||
-    kind === "ai-ml-system-design" ||
-    kind === "project-deep-dive"
-  );
+  const canonical = normalizeCanonicalQuestionType(kind);
+  return Boolean(canonical && isParentCanonicalQuestionType(canonical));
 }
 
 function isCompatibleParentKind(left: ScreenTaskKind, right: ScreenTaskKind) {
-  if (left === right) return true;
-  return (
-    (left === "general-system-design" && right === "system-design") ||
-    (left === "system-design" && right === "general-system-design")
-  );
+  return areCompatibleQuestionTypes(left, right);
 }
 
 function buildCompactAnswerSummary(content: string) {
@@ -5408,18 +5452,10 @@ function normalizeMemoryUseCaseForQuestionType(
   useCase: MemoryUseCase,
   questionType: MemoryQuestionType
 ): MemoryUseCase {
-  if (questionType === "behavioral") return "behavioral_interview";
-  if (questionType === "coding") return "coding_interview";
-  if (
-    questionType === "general-system-design" ||
-    questionType === "system-design" ||
-    questionType === "ai-ml-system-design" ||
-    questionType === "project-deep-dive" ||
-    questionType === "field-knowledge"
-  ) {
-    return useCase === "behavioral_interview" ? "meeting_assistant" : useCase;
-  }
-  return useCase;
+  const canonical = normalizeCanonicalQuestionType(questionType);
+  return canonical
+    ? toMemoryUseCaseForQuestionType(useCase, canonical)
+    : useCase;
 }
 
 function inferMemoryQuestionTypeFromScreenPreflight(
@@ -5464,75 +5500,14 @@ function inferMemoryTopicDomainFromScreenPreflight(
 }
 
 function inferMemoryQuestionTypeFromQuery(query: string): MemoryQuestionType {
-  const normalized = query.toLowerCase();
-
-  if (
-    /\b(leetcode|algorithm|coding|complexity|typescript|javascript|python|java|rust|go|golang|dp|graph|tree|heap|stack|queue)\b/.test(
-      normalized
-    )
-  ) {
-    return "coding";
-  }
-
-  if (
-    /\b(project deep dive|project dive|deep dive|tell me about your project|walk me through your project|technical deep dive|your most complex project|previous project|past project|your work on)\b/.test(
-      normalized
-    )
-  ) {
-    return "project-deep-dive";
-  }
-
-  if (
-    hasAiMlDesignSignal(normalized)
-  ) {
-    return "ai-ml-system-design";
-  }
-
-  if (
-    /\b(system design|design a|design an|architecture|distributed system|high concurrency|scalability|ticket selling|rate limiter|consistent|consistency|database sharding)\b/.test(
-      normalized
-    )
-  ) {
-    return "general-system-design";
-  }
-
-  if (
-    /\b(what is|what are|explain|compare|why|how does|tradeoff|trade-off|pros and cons|advantages|disadvantages)\b/.test(
-      normalized
-    ) &&
-    /\b(ai|ml|llm|rag|retrieval augmented generation|embedding|vector database|vector db|model serving|inference|fine tuning|finetuning|training|evaluation|evals|transformer|attention|tokenization|lora|qlora|rlhf|dpo|agent|agentic|mcp|kv cache|quantization|cap theorem|consistent hashing|sharding|replication|cache|queue|database|distributed)\b/.test(
-      normalized
-    )
-  ) {
-    return "field-knowledge";
-  }
-
-  if (
-    /\b(behavior|behaviour|leadership principle|star|tell me about a time|give me an example of a time|describe a time|have you ever|conflict|disagree|failed|commitment|ownership|bias for action|customer obsession)\b/.test(
-      normalized
-    )
-  ) {
-    return "behavioral";
-  }
-
-  return "unknown";
+  return inferCanonicalQuestionTypeFromText(query) ?? "unknown";
 }
 
 function readMemoryQuestionType(
   value: string | undefined
 ): MemoryQuestionType | undefined {
-  if (
-    value === "behavioral" ||
-    value === "coding" ||
-    value === "system-design" ||
-    value === "general-system-design" ||
-    value === "ai-ml-system-design" ||
-    value === "project-deep-dive" ||
-    value === "field-knowledge" ||
-    value === "unknown"
-  ) {
-    return value;
-  }
+  const canonical = normalizeCanonicalQuestionType(value);
+  if (canonical) return canonical;
   if (value === "non-question") return "unknown";
   return undefined;
 }
@@ -5616,17 +5591,6 @@ function inferMemoryTopicDomainFromQuery(query: string): MemoryTopicDomain {
     return "backend";
   }
   return "unknown";
-}
-
-function hasAiMlDesignSignal(normalized: string) {
-  return (
-    /\b(ai|ml|llm|rag|retrieval augmented generation|embedding|model serving|inference|vector database|agentic|model routing|evals|fine tuning|training pipeline)\b/.test(
-      normalized
-    ) &&
-    /\b(system design|design a|design an|architecture|pipeline|platform|service|build|scalability|latency|throughput)\b/.test(
-      normalized
-    )
-  );
 }
 
 function shouldUpdateActiveScreenTaskFromAdvisorOutput(content: string) {

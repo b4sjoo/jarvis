@@ -13,6 +13,13 @@ import type {
   TaskAskFrame,
   TaskTopicDomain,
 } from "./types";
+import {
+  allMemoryInterviewFamilies,
+  inferCanonicalQuestionTypeFromText,
+  normalizeCanonicalQuestionType,
+  readSingleConcreteInterviewTypeOverride,
+  type CanonicalQuestionType,
+} from "./task-taxonomy";
 
 export interface SelectInterviewPlaybookInput {
   query?: string;
@@ -25,14 +32,6 @@ export interface SelectInterviewPlaybookInput {
   interviewSessionBrief?: InterviewSessionBrief;
   interviewSessionContext?: InterviewSessionContext;
 }
-
-const ALL_INTERVIEW_FAMILIES: MemoryInterviewFamily[] = [
-  "behavioral",
-  "coding",
-  "system-design",
-  "ai-ml-system-design",
-  "project-deep-dive",
-];
 
 export function selectInterviewPlaybook({
   query = "",
@@ -53,18 +52,13 @@ export function selectInterviewPlaybook({
     };
   }
 
-  const normalizedQuestionType = normalizeQuestionType(
+  const normalizedQuestionType = resolvePlaybookQuestionType(
     questionType,
     query,
     interviewSessionBrief
   );
 
-  if (
-    !normalizedQuestionType ||
-    normalizedQuestionType === "unknown" ||
-    normalizedQuestionType === "ambiguous" ||
-    normalizedQuestionType === "non-question"
-  ) {
+  if (!normalizedQuestionType || normalizedQuestionType === "unknown") {
     return undefined;
   }
 
@@ -122,10 +116,7 @@ export function selectInterviewPlaybook({
     });
   }
 
-  if (
-    normalizedQuestionType === "general-system-design" ||
-    normalizedQuestionType === "system-design"
-  ) {
+  if (normalizedQuestionType === "general-system-design") {
     return createPlaybook({
       id: "general_system_design",
       label: "General System Design",
@@ -291,7 +282,7 @@ function createPlaybook({
   label: string;
   phase: InterviewPlaybookPhase;
   subtype?: string;
-  questionType: ScreenTaskKind;
+  questionType: CanonicalQuestionType;
   confidence: number;
   reason: string;
   allowedFamilies: MemoryInterviewFamily[];
@@ -302,7 +293,7 @@ function createPlaybook({
   maxEntries: number;
   maxChars: number;
 }): SelectedInterviewPlaybook {
-  const blockedFamilies = ALL_INTERVIEW_FAMILIES.filter(
+  const blockedFamilies = allMemoryInterviewFamilies().filter(
     (family) => !allowedFamilies.includes(family)
   );
 
@@ -329,85 +320,23 @@ function createPlaybook({
   };
 }
 
-function normalizeQuestionType(
+function resolvePlaybookQuestionType(
   questionType: ScreenTaskKind | MemoryQuestionType | undefined,
   query: string,
   interviewSessionBrief: InterviewSessionBrief | undefined
-): ScreenTaskKind | undefined {
-  if (
-    questionType &&
-    questionType !== "unknown" &&
-    questionType !== "ambiguous" &&
-    questionType !== "non-question"
-  ) {
-    return questionType === "system-design"
-      ? "general-system-design"
-      : questionType;
-  }
+): CanonicalQuestionType | undefined {
+  const normalized = normalizeCanonicalQuestionType(questionType);
+  if (normalized && normalized !== "unknown") return normalized;
 
-  const inferred = inferQuestionTypeFromText(query);
+  const inferred = inferCanonicalQuestionTypeFromText(query);
   if (inferred) return inferred;
 
-  const configuredTypes = interviewSessionBrief?.interviewTypes.filter(
-    (type) => type !== "mixed"
+  const configured = readSingleConcreteInterviewTypeOverride(
+    interviewSessionBrief
   );
-  if (configuredTypes?.length === 1) {
-    const configured = configuredTypes[0];
-    return configured === "system-design" ? "general-system-design" : configured;
-  }
+  if (configured) return configured;
 
-  return questionType;
-}
-
-function inferQuestionTypeFromText(text: string): ScreenTaskKind | undefined {
-  const normalized = text.toLowerCase();
-  if (!normalized.trim()) return undefined;
-
-  if (
-    /\b(leetcode|algorithm|coding|complexity|dynamic programming|binary tree|graph|heap|stack|queue)\b/.test(
-      normalized
-    )
-  ) {
-    return "coding";
-  }
-
-  if (
-    /\b(tell me about a time|give me an example|describe a time|conflict|disagree|missed a commitment|leadership principle|ownership|failure|mistake)\b/.test(
-      normalized
-    )
-  ) {
-    return "behavioral";
-  }
-
-  if (
-    /\b(project deep dive|walk me through your project|your role|system you built|tradeoff you made|impact of your project)\b/.test(
-      normalized
-    )
-  ) {
-    return "project-deep-dive";
-  }
-
-  const hasDesignSignal =
-    /\b(design a|design an|architect|architecture|system design|build a|scalability|serving path|pipeline)\b/.test(
-      normalized
-    );
-  const hasAimlSignal =
-    /\b(ai|ml|machine learning|llm|rag|retrieval augmented|embedding|vector|model serving|agent|evaluation|eval|fine-tuning|feature store)\b/.test(
-      normalized
-    );
-
-  if (hasDesignSignal && hasAimlSignal) return "ai-ml-system-design";
-  if (hasDesignSignal) return "general-system-design";
-
-  if (
-    /\b(what is|what are|explain|compare|tradeoff|trade-off|how does|why)\b/.test(
-      normalized
-    )
-  ) {
-    return "field-knowledge";
-  }
-
-  return undefined;
+  return normalized;
 }
 
 function inferAimlSystemDesignSubtype(
@@ -442,7 +371,7 @@ function buildSelectionReason({
   interviewSessionBrief,
   interviewSessionContext,
 }: {
-  questionType: ScreenTaskKind;
+  questionType: CanonicalQuestionType;
   askFrame?: TaskAskFrame;
   topicDomain?: TaskTopicDomain;
   projectAnchor?: string;

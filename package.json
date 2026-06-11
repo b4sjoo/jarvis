@@ -33,6 +33,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
+    "test": "tsc -p tsconfig.test.json && node --test .tmp-tests/tests/**/*.test.js",
     "preview": "vite preview",
     "tauri": "tauri"
   },

@@ -1,9 +1,14 @@
 import { STORAGE_KEYS } from "@/config";
 import { safeLocalStorage } from "@/lib";
 import type {
+  HumanEvalQuestionType,
   MeetingTraceKind,
   TraceHumanEvaluation,
 } from "./types";
+import {
+  fromHumanEvalQuestionType,
+  toHumanEvalQuestionType,
+} from "./task-taxonomy";
 
 const MAX_HUMAN_EVALUATIONS = 500;
 
@@ -53,7 +58,7 @@ export function upsertTraceHumanEvaluation(
     createdAt: existing?.createdAt ?? now,
     updatedAt: now,
     ...existing,
-    ...patch,
+    ...normalizeHumanEvaluationPatch(patch),
     failureReasons: patch.failureReasons ?? existing?.failureReasons ?? [],
   };
 
@@ -66,6 +71,19 @@ export function upsertTraceHumanEvaluation(
   }
 
   return [...evaluations, next].slice(-MAX_HUMAN_EVALUATIONS);
+}
+
+function normalizeHumanEvaluationPatch(
+  patch: Partial<TraceHumanEvaluation>
+): Partial<TraceHumanEvaluation> {
+  if (!patch.correctedQuestionType) return patch;
+  const correctedQuestionType = normalizeHumanEvalQuestionType(
+    patch.correctedQuestionType
+  );
+  return {
+    ...patch,
+    correctedQuestionType,
+  };
 }
 
 function normalizeTraceHumanEvaluation(
@@ -83,7 +101,9 @@ function normalizeTraceHumanEvaluation(
       typeof candidate.createdAt === "number" ? candidate.createdAt : Date.now(),
     updatedAt:
       typeof candidate.updatedAt === "number" ? candidate.updatedAt : Date.now(),
-    correctedQuestionType: candidate.correctedQuestionType,
+    correctedQuestionType: normalizeHumanEvalQuestionType(
+      candidate.correctedQuestionType
+    ),
     correctedCompany: candidate.correctedCompany,
     playbookCorrect: candidate.playbookCorrect,
     playbookWrong: candidate.playbookWrong,
@@ -97,6 +117,13 @@ function normalizeTraceHumanEvaluation(
       : [],
     notes: candidate.notes,
   };
+}
+
+function normalizeHumanEvalQuestionType(
+  questionType: HumanEvalQuestionType | undefined
+): HumanEvalQuestionType | undefined {
+  const canonical = fromHumanEvalQuestionType(questionType);
+  return canonical ? toHumanEvalQuestionType(canonical) : undefined;
 }
 
 function createHumanEvalId() {

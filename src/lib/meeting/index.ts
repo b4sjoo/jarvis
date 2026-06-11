@@ -9,6 +9,7 @@ export * from "./screen-observation.service";
 export * from "./screen-task-answer";
 export * from "./session-recording";
 export * from "./speech-bias";
+export * from "./task-taxonomy";
 export * from "./trace";
 export * from "./transcription.service";
 export * from "./transcript-fusion";

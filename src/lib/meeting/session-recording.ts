@@ -114,6 +114,8 @@ interface SessionCompactTraceSummary {
   activeInterviewParentId?: string;
   activeInterviewChildId?: string;
   questionType?: string;
+  rawQuestionType?: string;
+  canonicalQuestionType?: string;
   askFrame?: string;
   topicDomain?: string;
   projectAnchor?: string;
@@ -1056,7 +1058,14 @@ function buildCompactTraceSummary({
       metadataSources,
       "activeInterviewChildId"
     ),
-    questionType: readFirstString(metadataSources, "questionType"),
+    questionType:
+      readFirstString(metadataSources, "canonicalQuestionType") ??
+      readFirstString(metadataSources, "questionType"),
+    rawQuestionType: readFirstString(metadataSources, "rawQuestionType"),
+    canonicalQuestionType: readFirstString(
+      metadataSources,
+      "canonicalQuestionType"
+    ),
     askFrame: readFirstString(metadataSources, "askFrame"),
     topicDomain: readFirstString(metadataSources, "topicDomain"),
     projectAnchor: readFirstString(metadataSources, "projectAnchor"),

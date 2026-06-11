@@ -23,6 +23,11 @@ import {
 } from "./interview-session-context";
 import { formatInterviewPlaybookForPrompt } from "./interview-playbook";
 import { parseScreenTaskAnswer } from "./screen-task-answer";
+import {
+  normalizeCanonicalQuestionType,
+  normalizeQuestionTypeAlias,
+  type CanonicalQuestionType,
+} from "./task-taxonomy";
 
 export type ScreenCaptureTargetType = "active-window" | "current-monitor";
 
@@ -70,6 +75,8 @@ export interface SolveScreenAnchoredTaskOptions {
 
 export interface ScreenPreflightResult extends TaskClassifierMetadata {
   question?: string;
+  rawQuestionType?: string;
+  canonicalQuestionType?: CanonicalQuestionType;
   targetCompany?: string;
   isBehavioralInterview?: boolean;
   amazonLeadershipPrinciple?: string;
@@ -638,11 +645,14 @@ function parseScreenPreflightOutput(output: string): ScreenPreflightResult {
     const parsed = JSON.parse(jsonText) as Record<string, unknown>;
     const question = readOptionalString(parsed.question);
     const fallbackClassifier = inferTaskClassifierFromText(question ?? output);
+    const rawQuestionType = readOptionalString(parsed.questionType);
+    const questionType =
+      readScreenTaskKind(rawQuestionType) ?? fallbackClassifier.questionType;
     return {
       question,
-      questionType:
-        readScreenTaskKind(parsed.questionType) ??
-        fallbackClassifier.questionType,
+      rawQuestionType,
+      questionType,
+      canonicalQuestionType: normalizeCanonicalQuestionType(questionType),
       askFrame:
         readTaskAskFrame(parsed.askFrame) ?? fallbackClassifier.askFrame,
       topicDomain:
@@ -669,6 +679,9 @@ function parseScreenPreflightOutput(output: string): ScreenPreflightResult {
     return {
       question: output.slice(0, 500),
       ...fallbackClassifier,
+      canonicalQuestionType: normalizeCanonicalQuestionType(
+        fallbackClassifier.questionType
+      ),
     };
   }
 }
@@ -678,22 +691,7 @@ function readOptionalString(value: unknown) {
 }
 
 function readScreenTaskKind(value: unknown): ScreenTaskKind | undefined {
-  if (typeof value !== "string") return undefined;
-  if (
-    value === "behavioral" ||
-    value === "coding" ||
-    value === "system-design" ||
-    value === "general-system-design" ||
-    value === "ai-ml-system-design" ||
-    value === "project-deep-dive" ||
-    value === "field-knowledge" ||
-    value === "ambiguous" ||
-    value === "non-question" ||
-    value === "unknown"
-  ) {
-    return value;
-  }
-  return undefined;
+  return normalizeQuestionTypeAlias(value);
 }
 
 function readTaskAskFrame(value: unknown): TaskAskFrame | undefined {
@@ -764,8 +762,7 @@ function inferAskFrame(
   if (
     hasHypotheticalSignal ||
     questionType === "general-system-design" ||
-    questionType === "ai-ml-system-design" ||
-    questionType === "system-design"
+    questionType === "ai-ml-system-design"
   ) {
     return "hypothetical-design";
   }

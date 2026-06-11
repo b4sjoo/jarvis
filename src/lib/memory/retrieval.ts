@@ -15,6 +15,10 @@ import type {
   MemoryUseCase,
   RetrievedMemoryEntry,
 } from "./types";
+import {
+  isQuestionTypeCompatibleWithMemoryFamily,
+  normalizeMemoryInterviewTypes,
+} from "@/lib/meeting/task-taxonomy";
 
 const DEFAULT_MAX_ENTRIES = 5;
 const DEFAULT_MAX_CHARS = 6000;
@@ -166,7 +170,7 @@ function isEntryAllowedByInterviewGate(
     questionType &&
     questionType !== "unknown" &&
     questionType !== "field-knowledge" &&
-    !isQuestionTypeCompatibleWithFamily(questionType, family)
+    !isQuestionTypeCompatibleWithMemoryFamily(questionType, family)
   ) {
     return false;
   }
@@ -203,32 +207,16 @@ function isFamilyAllowedByMemoryPolicy(
   return true;
 }
 
-function isQuestionTypeCompatibleWithFamily(
-  questionType: MemoryQuestionType,
-  family: Exclude<MemoryInterviewType, "mixed">
-) {
-  if (questionType === family) return true;
-  if (
-    questionType === "general-system-design" &&
-    family === "system-design"
-  ) {
-    return true;
-  }
-  if (questionType === "system-design" && family === "system-design") {
-    return true;
-  }
-  return false;
-}
-
 function normalizeAllowedInterviewTypes(
   interviewTypes: MemoryInterviewType[] | undefined
 ) {
-  if (!interviewTypes?.length || interviewTypes.includes("mixed")) {
+  const normalized = normalizeMemoryInterviewTypes(interviewTypes);
+  if (!normalized?.length || normalized.includes("mixed")) {
     return undefined;
   }
 
   return new Set(
-    interviewTypes.filter(
+    normalized.filter(
       (type): type is Exclude<MemoryInterviewType, "mixed"> =>
         type !== "mixed"
     )
