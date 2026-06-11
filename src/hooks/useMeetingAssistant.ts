@@ -24,6 +24,7 @@ import {
   AdvisorRequestMode,
   ActiveInterviewParent,
   ActiveScreenTask,
+  CanonicalQuestionType,
   ClarifyingQuestionAnswer,
   ClarifyingQuestionFeedback,
   MeetingAssistantState,
@@ -47,8 +48,10 @@ import {
   MeetingTraceExportTrigger,
   MeetingModelRequestOptions,
   PENDING_CONFIRMATION_TTL_MS,
+  ParentQuestionType,
   ScreenObservation,
   ScreenPreflightResult,
+  ScreenQuestionType,
   ScreenTaskKind,
   SelectedProviderState,
   SpeechCorrection,
@@ -334,7 +337,7 @@ function normalizeInterviewBriefTypes(
 
 function readSingleConcreteInterviewTypeOverride(
   brief: InterviewSessionBrief | undefined
-): ScreenTaskKind | undefined {
+): CanonicalQuestionType | undefined {
   return readTaxonomySingleConcreteInterviewTypeOverride(brief);
 }
 
@@ -358,6 +361,21 @@ function formatQuestionTypeTraceMetadata(
     rawQuestionType: rawQuestionType ?? questionType,
     canonicalQuestionType,
   };
+}
+
+function normalizeScreenQuestionType(
+  questionType: ScreenTaskKind | MemoryQuestionType | undefined
+): ScreenQuestionType | undefined {
+  return normalizeQuestionTypeAlias(questionType);
+}
+
+function normalizeParentQuestionType(
+  questionType: ScreenTaskKind | MemoryQuestionType | undefined
+): ParentQuestionType | undefined {
+  const canonical = normalizeCanonicalQuestionType(questionType);
+  return canonical && isParentCanonicalQuestionType(canonical)
+    ? canonical
+    : undefined;
 }
 
 function isInterviewTypeOverrideMismatch(
@@ -1397,6 +1415,7 @@ export function useMeetingAssistant() {
         isInterviewTypeOverrideMismatch(activeScreenTask.kind, correctedKind)
       ) {
         const now = Date.now();
+        const correctedScreenKind: ScreenQuestionType = correctedKind;
         const askFrame = getManualOverrideAskFrame(correctedKind);
         const topicDomain = getManualOverrideTopicDomain(
           correctedKind,
@@ -1433,10 +1452,10 @@ export function useMeetingAssistant() {
           question:
             activeScreenTask.question ||
             extractScreenTaskQuestion(activeScreenTask.content),
-          kind: correctedKind,
+          kind: correctedScreenKind,
           classifier: {
             ...activeScreenTask.classifier,
-            questionType: correctedKind,
+            questionType: correctedScreenKind,
             askFrame,
             topicDomain,
             confidence: 1,
@@ -1481,9 +1500,10 @@ export function useMeetingAssistant() {
         );
 
         contextManagerRef.current.setActiveScreenTask(correctedTask);
-        contextManagerRef.current.setActiveInterviewTask(
-          buildInterviewParentFromScreenTask(correctedTask)
-        );
+        const correctedParent = buildInterviewParentFromScreenTask(correctedTask);
+        if (correctedParent) {
+          contextManagerRef.current.setActiveInterviewTask(correctedParent);
+        }
         sessionRecordingManagerRef.current?.recordTaskSnapshot(
           correctedTask,
           trace.id
@@ -1503,7 +1523,7 @@ export function useMeetingAssistant() {
         pendingInterviewTypeOverrideRef.current = {
           taskId: correctedTask.id,
           traceId: trace.id,
-          correctedKind,
+          correctedKind: correctedScreenKind,
         };
         contextState = contextManagerRef.current.getState();
       }
@@ -2307,7 +2327,8 @@ export function useMeetingAssistant() {
             contextState.activeScreenTask.classifier?.overrideSource ===
             "interview-type-selector"
               ? contextState.activeScreenTask.kind
-              : inferScreenTaskKind(finalContent),
+              : normalizeScreenQuestionType(inferScreenTaskKind(finalContent)) ??
+                contextState.activeScreenTask.kind,
           language:
             inferScreenTaskLanguage(finalContent) ||
             contextState.activeScreenTask.language,
@@ -4123,11 +4144,12 @@ export function useMeetingAssistant() {
           .map((turn) => turn.id);
         const requestId = createMeetingId("screen_task");
         const question = extractScreenTaskQuestion(screenTaskContent);
-        const taskKind =
+        const rawTaskKind =
           screenPreflight?.questionType &&
           screenPreflight.questionType !== "unknown"
             ? screenPreflight.questionType
             : inferScreenTaskKind(screenTaskContent);
+        const taskKind = normalizeScreenQuestionType(rawTaskKind) ?? "unknown";
         traceStoreRef.current.updateMetadata(
           trace.id,
           formatQuestionTypeTraceMetadata(
@@ -4799,6 +4821,7 @@ function resolveAdvisorTaskSignals(
   );
 
   if ((context.activeScreenTask || context.activeInterviewTask) && activeQuestionType) {
+    const activeParentKind = normalizeInterviewParentKind(activeQuestionType);
     const latestParentKind = normalizeInterviewParentKind(latestQuestionType);
     const latestIsParentKind = Boolean(
       latestParentKind && isParentInterviewKind(latestParentKind)
@@ -4809,9 +4832,10 @@ function resolveAdvisorTaskSignals(
         isTaskSwitchTranscript(latestUsefulText));
     const shouldStartNewParent =
       Boolean(latestLooksLikeTask) &&
+      activeParentKind !== undefined &&
       latestIsParentKind &&
       latestParentKind !== undefined &&
-      !isCompatibleParentKind(activeQuestionType, latestParentKind);
+      !isCompatibleParentKind(activeParentKind, latestParentKind);
 
     if (shouldStartNewParent) {
       return {
@@ -5085,6 +5109,8 @@ function updateInterviewTaskContinuityForAnswer({
   supportedFactAnchors?: string[];
 }): InterviewTaskContinuityResult {
   const kind = normalizeInterviewParentKind(questionType);
+  const childQuestionType =
+    normalizeCanonicalQuestionType(questionType) ?? "unknown";
   const now = Date.now();
   const trimmedContent = finalContent.trim();
   const isUsefulAnswer = Boolean(trimmedContent && trimmedContent !== "-");
@@ -5102,7 +5128,7 @@ function updateInterviewTaskContinuityForAnswer({
   if (!kind || !isParentInterviewKind(kind)) {
     if (relation === "child-probe" && existingTask && isUsefulAnswer) {
       const child = buildActiveInterviewChild({
-        questionType: kind ?? "field-knowledge",
+        questionType: childQuestionType,
         subtaskIntent,
         question: topic,
         finalContent: trimmedContent,
@@ -5171,7 +5197,7 @@ function updateInterviewTaskContinuityForAnswer({
         expiresAt,
         child: isUsefulAnswer
           ? buildActiveInterviewChild({
-              questionType: kind,
+              questionType: childQuestionType,
               subtaskIntent,
               question: topic,
               finalContent: trimmedContent,
@@ -5216,8 +5242,10 @@ function updateInterviewTaskContinuityForAnswer({
 
 function buildInterviewParentFromScreenTask(
   task: ActiveScreenTask
-): ActiveInterviewParent {
-  const kind = normalizeInterviewParentKind(task.kind) ?? "unknown";
+): ActiveInterviewParent | undefined {
+  const kind = normalizeInterviewParentKind(task.kind);
+  if (!kind) return undefined;
+
   return {
     id: task.id,
     source: "screen",
@@ -5248,7 +5276,7 @@ function buildActiveInterviewChild({
   latestTurn,
   observationId,
 }: {
-  questionType: ScreenTaskKind;
+  questionType: CanonicalQuestionType;
   subtaskIntent: InterviewSubtaskIntent;
   question: string;
   finalContent: string;
@@ -5281,7 +5309,7 @@ function buildCompactChildSummary({
   question,
   finalContent,
 }: {
-  questionType: ScreenTaskKind;
+  questionType: CanonicalQuestionType;
   subtaskIntent: InterviewSubtaskIntent;
   question: string;
   finalContent: string;
@@ -5306,17 +5334,18 @@ function buildCompactChildSummary({
 
 function normalizeInterviewParentKind(
   questionType: MemoryQuestionType | ScreenTaskKind
-): ScreenTaskKind | undefined {
-  const canonical = normalizeCanonicalQuestionType(questionType);
-  return canonical && canonical !== "unknown" ? canonical : undefined;
+): ParentQuestionType | undefined {
+  return normalizeParentQuestionType(questionType);
 }
 
-function isParentInterviewKind(kind: ScreenTaskKind) {
-  const canonical = normalizeCanonicalQuestionType(kind);
-  return Boolean(canonical && isParentCanonicalQuestionType(canonical));
+function isParentInterviewKind(kind: CanonicalQuestionType | undefined) {
+  return Boolean(kind && isParentCanonicalQuestionType(kind));
 }
 
-function isCompatibleParentKind(left: ScreenTaskKind, right: ScreenTaskKind) {
+function isCompatibleParentKind(
+  left: ParentQuestionType,
+  right: ParentQuestionType
+) {
   return areCompatibleQuestionTypes(left, right);
 }
 

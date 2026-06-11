@@ -3,6 +3,13 @@ import type {
   MemoryRetrievalPolicy,
   MemoryRetrievalResult,
 } from "@/lib/memory/types";
+import type {
+  CanonicalQuestionType,
+  LegacyQuestionTypeAlias,
+  TaxonomyHumanEvalQuestionType,
+  TaxonomyInterviewBriefType,
+  TransitionalQuestionType,
+} from "./task-taxonomy";
 
 export type TranscriptSpeaker = "them" | "me" | "unknown";
 
@@ -198,17 +205,16 @@ export interface MeetingContextState {
   lastAdvisorRequestId?: string;
 }
 
-export type ScreenTaskKind =
-  | "behavioral"
-  | "coding"
-  | "system-design"
-  | "general-system-design"
-  | "ai-ml-system-design"
-  | "project-deep-dive"
-  | "field-knowledge"
-  | "ambiguous"
-  | "non-question"
-  | "unknown";
+export type ScreenQuestionType =
+  | CanonicalQuestionType
+  | TransitionalQuestionType;
+
+export type ScreenTaskKind = ScreenQuestionType | LegacyQuestionTypeAlias;
+
+export type ParentQuestionType = Exclude<
+  CanonicalQuestionType,
+  "field-knowledge" | "unknown"
+>;
 
 export type TaskAskFrame =
   | "hypothetical-design"
@@ -225,7 +231,7 @@ export type TaskTopicDomain =
   | "unknown";
 
 export interface TaskClassifierMetadata {
-  questionType?: ScreenTaskKind;
+  questionType?: ScreenQuestionType;
   askFrame?: TaskAskFrame;
   topicDomain?: TaskTopicDomain;
   projectAnchor?: string;
@@ -256,7 +262,7 @@ export interface SelectedInterviewPlaybook {
   label: string;
   phase: InterviewPlaybookPhase;
   subtype?: string;
-  questionType: ScreenTaskKind;
+  questionType: CanonicalQuestionType;
   confidence: number;
   reason: string;
   memoryPolicy: MemoryRetrievalPolicy;
@@ -273,7 +279,7 @@ export interface ActiveScreenTask {
   updatedAt: number;
   expiresAt?: number;
   question?: string;
-  kind: ScreenTaskKind;
+  kind: ScreenQuestionType;
   language?: string;
   classifier?: TaskClassifierMetadata;
   playbook?: SelectedInterviewPlaybook;
@@ -307,7 +313,7 @@ export interface ActiveInterviewChild {
   id: string;
   createdAt: number;
   updatedAt: number;
-  questionType: ScreenTaskKind;
+  questionType: CanonicalQuestionType;
   relation: "child-probe";
   intent: InterviewSubtaskIntent;
   question: string;
@@ -320,7 +326,7 @@ export interface ActiveInterviewChild {
 export interface ActiveInterviewParent {
   id: string;
   source: "screen" | "voice";
-  stableKind: ScreenTaskKind;
+  stableKind: ParentQuestionType;
   topic: string;
   playbook?: SelectedInterviewPlaybook;
   playbookPhase: InterviewPlaybookPhase;
@@ -356,13 +362,7 @@ export interface InterviewSessionContext {
   targetCompany?: InterviewTargetCompany;
 }
 
-export type InterviewBriefType =
-  | "behavioral"
-  | "coding"
-  | "system-design"
-  | "ai-ml-system-design"
-  | "project-deep-dive"
-  | "mixed";
+export type InterviewBriefType = TaxonomyInterviewBriefType;
 
 export interface InterviewSessionBrief {
   targetCompany: string;
@@ -624,15 +624,7 @@ export interface MeetingSessionRecordingState {
   lastError?: string;
 }
 
-export type HumanEvalQuestionType =
-  | "behavioral"
-  | "coding"
-  | "system-design"
-  | "general-system-design"
-  | "ai-ml-system-design"
-  | "project-deep-dive"
-  | "field-knowledge"
-  | "unknown";
+export type HumanEvalQuestionType = TaxonomyHumanEvalQuestionType;
 
 export type HumanEvalTaskQuality = "success" | "partial" | "fail";
 

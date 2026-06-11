@@ -9,7 +9,7 @@ import {
   MeetingModelRequestOptions,
   MeetingResponseConfig,
   ScreenObservation,
-  ScreenTaskKind,
+  ScreenQuestionType,
   SelectedInterviewPlaybook,
   SelectedProviderState,
   TaskAskFrame,
@@ -690,7 +690,7 @@ function readOptionalString(value: unknown) {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
-function readScreenTaskKind(value: unknown): ScreenTaskKind | undefined {
+function readScreenTaskKind(value: unknown): ScreenQuestionType | undefined {
   return normalizeQuestionTypeAlias(value);
 }
 
@@ -744,7 +744,7 @@ function inferTaskClassifierFromText(text: string): TaskClassifierMetadata {
 
 function inferAskFrame(
   normalized: string,
-  questionType: ScreenTaskKind
+  questionType: ScreenQuestionType
 ): TaskAskFrame {
   const hasPastProjectSignal =
     /\b(your project|you built|you designed|you implemented|walk me through|tell me about|your role|tradeoff you made|impact|lesson)\b/.test(
@@ -899,7 +899,7 @@ export function extractScreenTaskQuestion(content: string) {
   return parseScreenTaskAnswer(content).question ?? "";
 }
 
-export function inferScreenTaskKind(content: string): ScreenTaskKind {
+export function inferScreenTaskKind(content: string): ScreenQuestionType {
   const normalized = content.toLowerCase();
   const screenTaskAnswer = parseScreenTaskAnswer(content);
 
