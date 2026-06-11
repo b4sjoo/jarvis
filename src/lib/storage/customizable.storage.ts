@@ -18,11 +18,13 @@ export interface CustomizableState {
 }
 
 export const DEFAULT_CUSTOMIZABLE_STATE: CustomizableState = {
-  appIcon: { isVisible: true },
+  appIcon: { isVisible: false },
   alwaysOnTop: { isEnabled: false },
   autostart: { isEnabled: true },
   cursor: { type: "invisible" },
 };
+
+const DOCK_STEALTH_MIGRATION_VERSION = "2026-06-default-hidden";
 
 /**
  * Get customizable state from localStorage
@@ -31,18 +33,37 @@ export const getCustomizableState = (): CustomizableState => {
   try {
     const stored = localStorage.getItem(STORAGE_KEYS.CUSTOMIZABLE);
     if (!stored) {
+      localStorage.setItem(
+        STORAGE_KEYS.CUSTOMIZABLE_DOCK_STEALTH_MIGRATED,
+        DOCK_STEALTH_MIGRATION_VERSION
+      );
       return DEFAULT_CUSTOMIZABLE_STATE;
     }
 
     const parsedState = JSON.parse(stored);
 
-    return {
+    const state: CustomizableState = {
       appIcon: parsedState.appIcon || DEFAULT_CUSTOMIZABLE_STATE.appIcon,
       alwaysOnTop:
         parsedState.alwaysOnTop || DEFAULT_CUSTOMIZABLE_STATE.alwaysOnTop,
       autostart: parsedState.autostart || DEFAULT_CUSTOMIZABLE_STATE.autostart,
       cursor: parsedState.cursor || DEFAULT_CUSTOMIZABLE_STATE.cursor,
     };
+
+    const migrationVersion = localStorage.getItem(
+      STORAGE_KEYS.CUSTOMIZABLE_DOCK_STEALTH_MIGRATED
+    );
+    if (migrationVersion !== DOCK_STEALTH_MIGRATION_VERSION) {
+      const migratedState = { ...state, appIcon: { isVisible: false } };
+      setCustomizableState(migratedState);
+      localStorage.setItem(
+        STORAGE_KEYS.CUSTOMIZABLE_DOCK_STEALTH_MIGRATED,
+        DOCK_STEALTH_MIGRATION_VERSION
+      );
+      return migratedState;
+    }
+
+    return state;
   } catch (error) {
     console.error("Failed to get customizable state:", error);
     return DEFAULT_CUSTOMIZABLE_STATE;

@@ -406,6 +406,16 @@ pub fn run() {
             speaker::get_output_devices,
         ])
         .setup(|app| {
+            #[cfg(target_os = "macos")]
+            {
+                if let Err(e) = app
+                    .handle()
+                    .set_activation_policy(tauri::ActivationPolicy::Accessory)
+                {
+                    eprintln!("Failed to initialize hidden Dock activation policy: {}", e);
+                }
+            }
+
             // Setup main window positioning
             window::setup_main_window(app).expect("Failed to setup main window");
             #[cfg(target_os = "macos")]
