@@ -54,6 +54,8 @@ interface SessionRecordingEvent {
     | "trace-metrics"
     | "human-evaluation"
     | "task-snapshot"
+    | "runtime-reset"
+    | "runtime-continued"
     | "error";
   createdAt: number;
   source: "meeting-assistant";
@@ -69,6 +71,11 @@ interface ActiveSessionRecording {
   eventCount: number;
   artifactCount: number;
   lastError?: string;
+  manifestBase: ReturnType<typeof buildSessionRecordingManifest>;
+  recordedTraceIds: Set<string>;
+  recordedTaskIds: Set<string>;
+  recordedTurnIds: Set<string>;
+  recordedObservationIds: Set<string>;
 }
 
 export class SessionRecordingManager {
@@ -124,6 +131,17 @@ export class SessionRecordingManager {
       manifestPayload: JSON.stringify(initialManifest, null, 2),
       readmePayload: buildSessionRecordingReadme(sessionId),
     });
+    const manifestBase = buildSessionRecordingManifest({
+      status: "running",
+      sessionId,
+      folderName,
+      folderPath,
+      startedAt,
+      settings: options.settings,
+      interviewSessionBrief: options.interviewSessionBrief,
+      interviewSessionContext: options.interviewSessionContext,
+      providerSummary: options.providerSummary,
+    });
 
     this.activeSession = {
       sessionId,
@@ -132,23 +150,15 @@ export class SessionRecordingManager {
       startedAt,
       eventCount: 0,
       artifactCount: 0,
+      manifestBase,
+      recordedTraceIds: new Set(),
+      recordedTaskIds: new Set(),
+      recordedTurnIds: new Set(),
+      recordedObservationIds: new Set(),
     };
     this.emit();
 
-    await this.writeJson(
-      "manifest.json",
-      buildSessionRecordingManifest({
-        status: "running",
-        sessionId,
-        folderName,
-        folderPath,
-        startedAt,
-        settings: options.settings,
-        interviewSessionBrief: options.interviewSessionBrief,
-        interviewSessionContext: options.interviewSessionContext,
-        providerSummary: options.providerSummary,
-      })
-    );
+    await this.writeJson("manifest.json", manifestBase);
     await this.writeJson("settings/meeting-assistant-settings.json", {
       savedAt: Date.now(),
       settings: sanitizeMeetingAssistantSettings(options.settings),
@@ -176,34 +186,39 @@ export class SessionRecordingManager {
 
     const endedAt = Date.now();
     this.recordEvent("session-stopped", { reason, endedAt });
+    await this.writeQueue.catch(() => {});
     await this.writeJson("manifest.json", {
-      version: SESSION_RECORDING_SCHEMA_VERSION,
+      ...session.manifestBase,
       status: "stopped",
-      privacy: {
-        rawAudioIncluded: false,
-        note: "Session recordings include text, screenshots, prompts, outputs, memory retrieval, metrics, and human labels. Raw audio is not recorded.",
-      },
-      sessionId: session.sessionId,
-      folderName: session.folderName,
-      folderPath: session.folderPath,
-      startedAt: session.startedAt,
       endedAt,
       durationMs: endedAt - session.startedAt,
+      stopReason: reason,
       eventCount: session.eventCount,
       artifactCount: session.artifactCount,
       lastError: session.lastError,
     });
-    await this.writeQueue.catch(() => {});
 
     this.activeSession = undefined;
     this.emit();
     return this.getState();
   }
 
+  canRecordTrace(trace: Pick<MeetingTrace, "startedAt">) {
+    return Boolean(
+      this.activeSession && trace.startedAt >= this.activeSession.startedAt
+    );
+  }
+
+  hasRecordedTrace(traceId: string) {
+    return Boolean(this.activeSession?.recordedTraceIds.has(traceId));
+  }
+
   recordTranscriptTurn(turn: TranscriptTurn) {
-    if (!this.activeSession) return;
+    const session = this.activeSession;
+    if (!session) return;
 
     const payload = `${JSON.stringify(turn)}\n`;
+    session.recordedTurnIds.add(turn.id);
     this.enqueue(async () => {
       await this.writeText("transcripts/turns.jsonl", payload, true);
       await this.writeText(
@@ -224,9 +239,12 @@ export class SessionRecordingManager {
   }
 
   recordScreenCapture(observation: ScreenObservation, traceId?: string) {
-    if (!this.activeSession) return;
+    const session = this.activeSession;
+    if (!session) return;
 
     const artifactRefs: string[] = [];
+    session.recordedObservationIds.add(observation.id);
+    if (traceId) session.recordedTraceIds.add(traceId);
     const extension = imageExtension(observation.imageMediaType);
     const focusExtension = imageExtension(observation.focusImageMediaType);
     const basePath = `screenshots/${observation.id}`;
@@ -287,9 +305,12 @@ export class SessionRecordingManager {
     value: string;
     metadata?: Record<string, unknown>;
   }) {
-    if (!this.activeSession) return;
+    const session = this.activeSession;
+    if (!session) return;
 
     const path = buildTraceArtifactPath(traceId, "prompts", label, "txt");
+    session.recordedTraceIds.add(traceId);
+    if (taskId) session.recordedTaskIds.add(taskId);
     this.enqueue(() => this.writeText(path, value));
     this.recordEvent("model-input", { label, valueChars: value.length, metadata }, [
       path,
@@ -309,9 +330,12 @@ export class SessionRecordingManager {
     value: string;
     metadata?: Record<string, unknown>;
   }) {
-    if (!this.activeSession) return;
+    const session = this.activeSession;
+    if (!session) return;
 
     const path = buildTraceArtifactPath(traceId, "outputs", label, "md");
+    session.recordedTraceIds.add(traceId);
+    if (taskId) session.recordedTaskIds.add(taskId);
     this.enqueue(() => this.writeText(path, value));
     this.recordEvent("model-output", { label, valueChars: value.length, metadata }, [
       path,
@@ -333,9 +357,12 @@ export class SessionRecordingManager {
     memoryContext: MemoryRetrievalResult;
     metadata?: Record<string, unknown>;
   }) {
-    if (!this.activeSession) return;
+    const session = this.activeSession;
+    if (!session) return;
 
     const baseName = `${traceId ?? createMeetingId("memory")}-${Date.now()}`;
+    if (traceId) session.recordedTraceIds.add(traceId);
+    if (taskId) session.recordedTaskIds.add(taskId);
     const jsonPath = `memory/${sanitizeFilePart(baseName)}.json`;
     const contextPath = `memory/${sanitizeFilePart(baseName)}.context.md`;
     this.enqueue(async () => {
@@ -369,14 +396,20 @@ export class SessionRecordingManager {
     metadata: Record<string, unknown>,
     taskId?: string
   ) {
-    if (!this.activeSession) return;
+    const session = this.activeSession;
+    if (!session) return;
+    if (traceId) session.recordedTraceIds.add(traceId);
+    if (taskId) session.recordedTaskIds.add(taskId);
     this.recordEvent("playbook-selected", metadata, undefined, traceId, taskId);
   }
 
   recordTaskSnapshot(task: ActiveScreenTask, traceId?: string) {
-    if (!this.activeSession) return;
+    const session = this.activeSession;
+    if (!session) return;
 
     const path = `tasks/${sanitizeFilePart(task.id)}/task.json`;
+    session.recordedTaskIds.add(task.id);
+    if (traceId) session.recordedTraceIds.add(traceId);
     this.enqueue(() => this.writeJson(path, task));
     this.recordEvent(
       "task-snapshot",
@@ -393,10 +426,13 @@ export class SessionRecordingManager {
   }
 
   recordTrace(trace: MeetingTrace, trigger: MeetingTraceExportTrigger) {
-    if (!this.activeSession || trace.status === "running") return;
+    const session = this.activeSession;
+    if (!session || trace.status === "running") return;
+    if (!this.canRecordTrace(trace)) return;
 
     const path = `traces/${sanitizeFilePart(trace.id)}.json`;
     const payload = serializeMeetingTraceExport(trace, { trigger });
+    session.recordedTraceIds.add(trace.id);
     this.enqueue(() => this.writeText(path, payload));
     this.recordEvent(
       "trace-export",
@@ -413,33 +449,49 @@ export class SessionRecordingManager {
   }
 
   recordTraceMetrics(payload: string) {
-    if (!this.activeSession) return;
+    const session = this.activeSession;
+    if (!session) return;
 
-    const compactPayload = compactJsonLine(payload);
+    const filteredPayload = filterTraceMetricsPayload(
+      payload,
+      session.recordedTraceIds
+    );
+    const compactPayload = compactJsonLine(filteredPayload);
     this.enqueue(async () => {
-      await this.writeText("metrics/trace-metrics.json", payload);
+      await this.writeText("metrics/trace-metrics.json", filteredPayload);
       await this.writeText("metrics/trace-metrics.jsonl", compactPayload, true);
     });
-    this.recordEvent("trace-metrics", { payloadChars: payload.length }, [
-      "metrics/trace-metrics.json",
-      "metrics/trace-metrics.jsonl",
-    ]);
+    this.recordEvent(
+      "trace-metrics",
+      {
+        payloadChars: filteredPayload.length,
+        recordedTraceCount: session.recordedTraceIds.size,
+      },
+      ["metrics/trace-metrics.json", "metrics/trace-metrics.jsonl"]
+    );
   }
 
   recordHumanEvaluations(evaluations: TraceHumanEvaluation[]) {
-    if (!this.activeSession) return;
+    const session = this.activeSession;
+    if (!session) return;
+    const sessionEvaluations = evaluations.filter((evaluation) =>
+      session.recordedTraceIds.has(evaluation.traceId)
+    );
+    if (!sessionEvaluations.length) return;
 
     const payload = JSON.stringify(
       {
         savedAt: Date.now(),
-        evaluations,
+        sessionId: session.sessionId,
+        evaluations: sessionEvaluations,
       },
       null,
       2
     );
     const compactPayload = JSON.stringify({
       savedAt: Date.now(),
-      evaluations,
+      sessionId: session.sessionId,
+      evaluations: sessionEvaluations,
     });
     this.enqueue(async () => {
       await this.writeText("human-evaluation/evaluations.json", payload);
@@ -450,8 +502,16 @@ export class SessionRecordingManager {
       );
     });
     this.recordEvent("human-evaluation", {
-      evaluationCount: evaluations.length,
+      evaluationCount: sessionEvaluations.length,
     }, ["human-evaluation/evaluations.json"]);
+  }
+
+  recordRuntimeBoundary(
+    kind: "runtime-reset" | "runtime-continued",
+    metadata?: Record<string, unknown>
+  ) {
+    if (!this.activeSession) return;
+    this.recordEvent(kind, metadata);
   }
 
   recordError(error: unknown, metadata?: Record<string, unknown>) {
@@ -669,5 +729,26 @@ function compactJsonLine(payload: string) {
     return `${JSON.stringify(JSON.parse(payload))}\n`;
   } catch {
     return `${JSON.stringify({ rawPayload: payload })}\n`;
+  }
+}
+
+function filterTraceMetricsPayload(payload: string, recordedTraceIds: Set<string>) {
+  try {
+    const parsed = JSON.parse(payload) as { traces?: MeetingTrace[] };
+    if (!Array.isArray(parsed.traces)) return payload;
+
+    return JSON.stringify(
+      {
+        ...parsed,
+        currentSessionOnly: true,
+        traces: parsed.traces.filter((trace) =>
+          recordedTraceIds.has(trace.id)
+        ),
+      },
+      null,
+      2
+    );
+  } catch {
+    return payload;
   }
 }

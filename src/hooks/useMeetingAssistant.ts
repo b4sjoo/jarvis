@@ -1048,31 +1048,28 @@ export function useMeetingAssistant() {
           sttProviderId: selectedSttProvider.provider,
         }),
       });
-
-      if (state.humanEvaluations.length) {
-        sessionRecordingManagerRef.current?.recordHumanEvaluations(
-          state.humanEvaluations
-        );
-      }
-      for (const turn of contextState.transcriptTurns) {
-        sessionRecordingManagerRef.current?.recordTranscriptTurn(turn);
-      }
-      for (const observation of contextState.screenObservations) {
-        sessionRecordingManagerRef.current?.recordScreenCapture(observation);
-      }
-      if (contextState.activeScreenTask) {
-        sessionRecordingManagerRef.current?.recordTaskSnapshot(
-          contextState.activeScreenTask
-        );
-      }
-      for (const trace of traceStoreRef.current.getTraces()) {
-        if (trace.status === "running") continue;
-        sessionRecordedTraceIdsRef.current.add(trace.id);
-        sessionRecordingManagerRef.current?.recordTrace(
-          trace,
-          getAutoExportTrigger(trace)
-        );
-      }
+      const hadExistingRuntimeState = Boolean(
+        contextState.transcriptTurns.length ||
+          contextState.screenObservations.length ||
+          contextState.activeScreenTask ||
+          contextState.activeInterviewTask ||
+          traceStoreRef.current.getTraces().some((trace) => trace.status !== "running")
+      );
+      sessionRecordingManagerRef.current?.recordRuntimeBoundary(
+        hadExistingRuntimeState ? "runtime-continued" : "runtime-reset",
+        {
+          reason: "session-recording-started",
+          currentSessionOnly: true,
+          backfill: false,
+          transcriptTurns: contextState.transcriptTurns.length,
+          screenObservations: contextState.screenObservations.length,
+          hasActiveScreenTask: Boolean(contextState.activeScreenTask),
+          hasActiveInterviewTask: Boolean(contextState.activeInterviewTask),
+          completedTraces: traceStoreRef.current
+            .getTraces()
+            .filter((trace) => trace.status !== "running").length,
+        }
+      );
 
       if (sessionRecording) {
         setState((previous) => ({
@@ -1100,7 +1097,6 @@ export function useMeetingAssistant() {
     codingAiProvider,
     selectedAIProvider.provider,
     selectedSttProvider.provider,
-    state.humanEvaluations,
     state.settings,
     sttProvider,
   ]);
@@ -1305,6 +1301,7 @@ export function useMeetingAssistant() {
   const recordCompletedTracesForSession = useCallback((traces: MeetingTrace[]) => {
     for (const trace of traces) {
       if (trace.status === "running") continue;
+      if (!sessionRecordingManagerRef.current?.canRecordTrace(trace)) continue;
       if (sessionRecordedTraceIdsRef.current.has(trace.id)) continue;
       sessionRecordedTraceIdsRef.current.add(trace.id);
       sessionRecordingManagerRef.current?.recordTrace(
