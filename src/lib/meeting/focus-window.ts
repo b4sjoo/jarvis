@@ -4,6 +4,7 @@ import type {
   InterviewBriefType,
   SpeechCorrection,
 } from "./types";
+import type { getActiveMeetingTaskFocusSummary } from "./active-meeting-task";
 
 export const MEETING_FOCUS_SNAPSHOT_EVENT = "meeting-focus-snapshot";
 export const MEETING_FOCUS_ACTION_EVENT = "meeting-focus-action";
@@ -26,6 +27,10 @@ export type MeetingFocusSpeechCorrectionSnapshot = Pick<
   "id" | "input" | "from" | "to" | "term" | "appliedCount"
 >;
 
+export type MeetingFocusActiveTaskSnapshot = ReturnType<
+  typeof getActiveMeetingTaskFocusSummary
+>;
+
 export type MeetingFocusSnapshot = {
   active: boolean;
   sections: MeetingFocusSectionsSnapshot;
@@ -38,6 +43,7 @@ export type MeetingFocusSnapshot = {
   clarifyingQuestion: string;
   isTaskSwitchClarifyingQuestion: boolean;
   interviewTypes: InterviewBriefType[];
+  activeTask?: MeetingFocusActiveTaskSnapshot;
   hasActiveScreenTask: boolean;
   speechCorrections: MeetingFocusSpeechCorrectionSnapshot[];
 };
@@ -79,6 +85,7 @@ export const EMPTY_MEETING_FOCUS_SNAPSHOT: MeetingFocusSnapshot = {
   clarifyingQuestion: "",
   isTaskSwitchClarifyingQuestion: false,
   interviewTypes: [],
+  activeTask: undefined,
   hasActiveScreenTask: false,
   speechCorrections: [],
 };

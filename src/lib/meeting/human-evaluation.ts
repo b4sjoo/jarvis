@@ -7,6 +7,7 @@ import type {
 } from "./types";
 import {
   fromHumanEvalQuestionType,
+  normalizeQuestionTypeAlias,
   toHumanEvalQuestionType,
 } from "./task-taxonomy";
 
@@ -76,12 +77,19 @@ export function upsertTraceHumanEvaluation(
 function normalizeHumanEvaluationPatch(
   patch: Partial<TraceHumanEvaluation>
 ): Partial<TraceHumanEvaluation> {
-  if (!patch.correctedQuestionType) return patch;
+  const questionType = normalizeQuestionTypeAlias(patch.questionType);
+  if (!patch.correctedQuestionType) {
+    return {
+      ...patch,
+      questionType,
+    };
+  }
   const correctedQuestionType = normalizeHumanEvalQuestionType(
     patch.correctedQuestionType
   );
   return {
     ...patch,
+    questionType,
     correctedQuestionType,
   };
 }
@@ -97,6 +105,22 @@ function normalizeTraceHumanEvaluation(
     id: typeof candidate.id === "string" ? candidate.id : createHumanEvalId(),
     traceId: candidate.traceId,
     traceKind: candidate.traceKind,
+    taskId: typeof candidate.taskId === "string" ? candidate.taskId : undefined,
+    parentTaskId:
+      typeof candidate.parentTaskId === "string"
+        ? candidate.parentTaskId
+        : undefined,
+    childTaskId:
+      typeof candidate.childTaskId === "string"
+        ? candidate.childTaskId
+        : undefined,
+    taskSource:
+      candidate.taskSource === "screen" ||
+      candidate.taskSource === "voice" ||
+      candidate.taskSource === "mixed"
+        ? candidate.taskSource
+        : undefined,
+    questionType: normalizeQuestionTypeAlias(candidate.questionType),
     createdAt:
       typeof candidate.createdAt === "number" ? candidate.createdAt : Date.now(),
     updatedAt:

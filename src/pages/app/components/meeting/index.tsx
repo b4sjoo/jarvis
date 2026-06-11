@@ -45,6 +45,7 @@ import type {
 import {
   MEETING_FOCUS_ACTION_EVENT,
   MEETING_FOCUS_SNAPSHOT_EVENT,
+  getActiveMeetingTaskFocusSummary,
   hasScreenTaskAnswerContent,
   parseScreenTaskAnswer,
   stripOuterCodeFence,
@@ -335,9 +336,12 @@ export const MeetingAssistant = ({
     [completedScreenTaskAnswer, displaySuggestion]
   );
   const activeScreenTaskId = meeting.activeScreenTask?.id ?? "";
-  const activeScreenTaskKind = meeting.activeScreenTask?.kind;
+  const activeParentTaskId =
+    meeting.activeMeetingTask?.parent.id ?? activeScreenTaskId;
+  const activeTaskKind =
+    meeting.activeMeetingTask?.parent.questionType ?? meeting.activeScreenTask?.kind;
   useEffect(() => {
-    if (!activeScreenTaskId) {
+    if (!activeParentTaskId) {
       setCodingArtifactCache(null);
       return;
     }
@@ -346,7 +350,7 @@ export const MeetingAssistant = ({
 
     setCodingArtifactCache((previous) => {
       const artifactPatch = readCodingArtifactPatch({
-        activeTaskKind: activeScreenTaskKind,
+        activeTaskKind,
         hasExistingCache: Boolean(previous),
         sections: suggestionSections,
       });
@@ -362,7 +366,7 @@ export const MeetingAssistant = ({
       const sourceSuggestionId = meeting.latestSuggestion?.id;
       if (
         previous &&
-        previous.taskId === activeScreenTaskId &&
+        previous.taskId === activeParentTaskId &&
         previous.code === nextCode &&
         previous.complexity === nextComplexity &&
         previous.sourceSuggestionId === sourceSuggestionId
@@ -371,7 +375,7 @@ export const MeetingAssistant = ({
       }
 
       return {
-        taskId: activeScreenTaskId,
+        taskId: activeParentTaskId,
         code: nextCode,
         complexity: nextComplexity,
         updatedAt: Date.now(),
@@ -379,8 +383,8 @@ export const MeetingAssistant = ({
       };
     });
   }, [
-    activeScreenTaskId,
-    activeScreenTaskKind,
+    activeParentTaskId,
+    activeTaskKind,
     meeting.latestSuggestion?.id,
     meeting.partialSuggestion,
     suggestionSections.answer,
@@ -391,14 +395,14 @@ export const MeetingAssistant = ({
   ]);
   const codingArtifactDisplay = useMemo(() => {
     return resolveCodingArtifactDisplay({
-      activeTaskKind: activeScreenTaskKind,
+      activeTaskKind,
       cache: codingArtifactCache,
-      taskId: activeScreenTaskId,
+      taskId: activeParentTaskId,
       sections: suggestionSections,
     });
   }, [
-    activeScreenTaskId,
-    activeScreenTaskKind,
+    activeParentTaskId,
+    activeTaskKind,
     codingArtifactCache,
     suggestionSections.answer,
     suggestionSections.approach,
@@ -485,6 +489,7 @@ export const MeetingAssistant = ({
       clarifyingQuestion,
       isTaskSwitchClarifyingQuestion,
       interviewTypes: editableBriefForFocus.interviewTypes,
+      activeTask: getActiveMeetingTaskFocusSummary(meeting.activeMeetingTask),
       hasActiveScreenTask: Boolean(meeting.activeScreenTask),
       speechCorrections: meeting.speechCorrections.slice(-4).map((item) => ({
         id: item.id,
@@ -503,6 +508,7 @@ export const MeetingAssistant = ({
       isTaskSwitchClarifyingQuestion,
       latestReliableAnswerPreview,
       latestTurn?.text,
+      meeting.activeMeetingTask,
       meeting.activeScreenTask,
       meeting.error,
       meeting.speechCorrections,

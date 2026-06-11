@@ -16,6 +16,7 @@ import {
   updateInterviewSessionContextFromTurn,
 } from "./interview-session-context";
 import { shouldIncludeTurnInAdvisorPrompt } from "./transcript-fusion";
+import { buildActiveMeetingTask } from "./active-meeting-task";
 
 const DEFAULT_TRANSCRIPT_WINDOW_MS = 2 * 60 * 1000;
 const DEFAULT_MAX_SCREEN_OBSERVATIONS = 5;
@@ -58,6 +59,7 @@ export class MeetingContextManager {
 
   getState(): MeetingContextState {
     this.clearExpiredActiveScreenTask();
+    const activeMeetingTask = this.buildActiveMeetingTask();
 
     return {
       ...this.state,
@@ -75,6 +77,7 @@ export class MeetingContextManager {
       activeInterviewTask: cloneActiveInterviewTask(
         this.state.activeInterviewTask
       ),
+      activeMeetingTask,
       glossary: [...this.state.glossary],
     };
   }
@@ -318,6 +321,7 @@ export class MeetingContextManager {
 
     const latestTurn =
       this.state.transcriptTurns[this.state.transcriptTurns.length - 1];
+    const activeMeetingTask = this.buildActiveMeetingTask();
 
     return {
       transcript: this.formatTranscript(),
@@ -334,6 +338,7 @@ export class MeetingContextManager {
       activeInterviewTask: cloneActiveInterviewTask(
         this.state.activeInterviewTask
       ),
+      activeMeetingTask,
       rollingSummary: this.state.rollingSummary,
       userProfileContext: this.state.userProfileContext,
       glossaryText: this.formatGlossary(),
@@ -342,6 +347,15 @@ export class MeetingContextManager {
         this.state.activeInterviewTask?.playbook,
       latestTurn,
     };
+  }
+
+  private buildActiveMeetingTask() {
+    return buildActiveMeetingTask({
+      activeScreenTask: this.state.activeScreenTask,
+      activeInterviewTask: this.state.activeInterviewTask,
+      latestObservation:
+        this.state.screenObservations[this.state.screenObservations.length - 1],
+    });
   }
 
   private trimTranscriptWindow(turns: TranscriptTurn[]) {

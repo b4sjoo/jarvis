@@ -10,6 +10,7 @@ import type {
   TaxonomyInterviewBriefType,
   TransitionalQuestionType,
 } from "./task-taxonomy";
+import type { ActiveMeetingTask } from "./active-meeting-task";
 
 export type TranscriptSpeaker = "them" | "me" | "unknown";
 
@@ -199,6 +200,7 @@ export interface MeetingContextState {
   interviewSessionContext?: InterviewSessionContext;
   activeScreenTask?: ActiveScreenTask;
   activeInterviewTask?: ActiveInterviewParent;
+  activeMeetingTask?: ActiveMeetingTask;
   rollingSummary: string;
   userProfileContext: string;
   glossary: GlossaryEntry[];
@@ -463,6 +465,7 @@ export interface AdvisorPromptContext {
   interviewSessionContext?: InterviewSessionContext;
   activeScreenTask?: ActiveScreenTask;
   activeInterviewTask?: ActiveInterviewParent;
+  activeMeetingTask?: ActiveMeetingTask;
   rollingSummary: string;
   userProfileContext: string;
   glossaryText: string;
@@ -646,6 +649,11 @@ export interface TraceHumanEvaluation {
   id: string;
   traceId: string;
   traceKind: MeetingTraceKind;
+  taskId?: string;
+  parentTaskId?: string;
+  childTaskId?: string;
+  taskSource?: "screen" | "voice" | "mixed";
+  questionType?: ScreenQuestionType;
   createdAt: number;
   updatedAt: number;
   correctedQuestionType?: HumanEvalQuestionType;
@@ -669,6 +677,7 @@ export interface MeetingAssistantState {
   interviewSessionContext?: InterviewSessionContext;
   activeScreenTask?: ActiveScreenTask;
   activeInterviewTask?: ActiveInterviewParent;
+  activeMeetingTask?: ActiveMeetingTask;
   traces: MeetingTrace[];
   latestSuggestion: AdvisorSuggestion | null;
   latestReliableSuggestion: AdvisorSuggestion | null;

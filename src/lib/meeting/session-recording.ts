@@ -13,6 +13,8 @@ import {
   TraceHumanEvaluation,
   TranscriptTurn,
 } from "./types";
+import type { ActiveMeetingTask } from "./active-meeting-task";
+import { formatActiveMeetingTaskForRecording } from "./active-meeting-task";
 import { createMeetingId } from "./context-manager";
 import { serializeMeetingTraceExport } from "./trace";
 
@@ -56,6 +58,7 @@ interface SessionRecordingEvent {
     | "trace-metrics"
     | "human-evaluation"
     | "task-snapshot"
+    | "active-meeting-task-snapshot"
     | "runtime-reset"
     | "runtime-continued"
     | "error";
@@ -111,6 +114,10 @@ interface SessionCompactTraceSummary {
   taskIds: string[];
   primaryTaskId?: string;
   activeScreenTaskId?: string;
+  activeMeetingTaskId?: string;
+  activeMeetingTaskSource?: string;
+  activeMeetingParentId?: string;
+  activeMeetingChildId?: string;
   activeInterviewParentId?: string;
   activeInterviewChildId?: string;
   questionType?: string;
@@ -557,6 +564,46 @@ export class SessionRecordingManager {
     );
   }
 
+  recordActiveMeetingTaskSnapshot(task: ActiveMeetingTask, traceId?: string) {
+    const session = this.activeSession;
+    if (!session) return;
+
+    const path = `tasks/${sanitizeFilePart(task.id)}/active-meeting-task.json`;
+    const snapshotsPath = `tasks/${sanitizeFilePart(task.id)}/snapshots.jsonl`;
+    const payload = {
+      recordedAt: new Date().toISOString(),
+      traceId,
+      task: formatActiveMeetingTaskForRecording(task),
+    };
+    session.recordedTaskIds.add(task.id);
+    session.recordedTaskIds.add(task.parent.id);
+    if (task.screen?.activeScreenTaskId) {
+      session.recordedTaskIds.add(task.screen.activeScreenTaskId);
+    }
+    if (traceId) session.recordedTraceIds.add(traceId);
+    this.enqueue(() => this.writeJson(path, payload));
+    this.enqueue(() => this.appendJsonl(snapshotsPath, payload));
+    this.recordEvent(
+      "active-meeting-task-snapshot",
+      {
+        activeMeetingTaskId: task.id,
+        activeMeetingTaskSource: task.source,
+        activeMeetingParentId: task.parent.id,
+        activeMeetingParentQuestionType: task.parent.questionType,
+        activeMeetingParentPhase: task.parent.playbookPhase,
+        activeMeetingChildId: task.child?.id,
+        activeMeetingChildQuestionType: task.child?.questionType,
+        activeMeetingChildIntent: task.child?.intent,
+        activeScreenTaskId: task.screen?.activeScreenTaskId,
+        hasScreenContext: Boolean(task.screen),
+        divergence: task.divergence?.reason,
+      },
+      [path, snapshotsPath],
+      traceId,
+      task.id
+    );
+  }
+
   recordTrace(trace: MeetingTrace, trigger: MeetingTraceExportTrigger) {
     const session = this.activeSession;
     if (!session || trace.status === "running") return;
@@ -813,6 +860,10 @@ export class SessionRecordingManager {
     await this.writeText(relativePath, JSON.stringify(value, null, 2));
   }
 
+  private async appendJsonl(relativePath: string, value: unknown) {
+    await this.writeText(relativePath, `${JSON.stringify(value)}\n`, true);
+  }
+
   private async writeText(relativePath: string, payload: string, append = false) {
     const session = this.activeSession;
     if (!session) return;
@@ -1049,6 +1100,19 @@ function buildCompactTraceSummary({
     error: trace.error,
     taskIds,
     primaryTaskId: taskIds[0],
+    activeMeetingTaskId: readFirstString(metadataSources, "activeMeetingTaskId"),
+    activeMeetingTaskSource: readFirstString(
+      metadataSources,
+      "activeMeetingTaskSource"
+    ),
+    activeMeetingParentId: readFirstString(
+      metadataSources,
+      "activeMeetingParentId"
+    ),
+    activeMeetingChildId: readFirstString(
+      metadataSources,
+      "activeMeetingChildId"
+    ),
     activeScreenTaskId: readFirstString(metadataSources, "activeScreenTaskId"),
     activeInterviewParentId: readFirstString(
       metadataSources,
@@ -1222,6 +1286,9 @@ function collectTaskIdsFromMetadata(
   const taskIds = [
     explicitTaskId,
     readString(metadata?.taskId),
+    readString(metadata?.activeMeetingTaskId),
+    readString(metadata?.activeMeetingParentId),
+    readString(metadata?.activeMeetingChildId),
     readString(metadata?.activeScreenTaskId),
     readString(metadata?.activeInterviewParentId),
     readString(metadata?.activeInterviewChildId),

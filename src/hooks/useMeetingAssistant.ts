@@ -107,6 +107,7 @@ import {
   upsertTraceHumanEvaluation,
   persistTraceHumanEvaluations,
   buildSessionRecordingProviderSummary,
+  getActiveMeetingTaskTraceMetadata,
 } from "@/lib/meeting";
 
 const ADVISOR_DEBOUNCE_MS = 750;
@@ -589,6 +590,7 @@ function clearActiveScreenTaskState(
           : "idle"
         : previous.status,
     error: null,
+    activeMeetingTask: undefined,
   };
 }
 
@@ -1068,6 +1070,8 @@ export function useMeetingAssistant() {
           backfill: false,
           transcriptTurns: contextState.transcriptTurns.length,
           screenObservations: contextState.screenObservations.length,
+          hasActiveMeetingTask: Boolean(contextState.activeMeetingTask),
+          ...getActiveMeetingTaskTraceMetadata(contextState.activeMeetingTask),
           hasActiveScreenTask: Boolean(contextState.activeScreenTask),
           hasActiveInterviewTask: Boolean(contextState.activeInterviewTask),
           completedTraces: traceStoreRef.current
@@ -1208,13 +1212,45 @@ export function useMeetingAssistant() {
         .getTraces()
         .find((candidate) => candidate.id === traceId);
       if (!trace) return;
+      const activeMeetingTask =
+        contextManagerRef.current.getState().activeMeetingTask;
+      const evaluationPatch: Partial<TraceHumanEvaluation> = {
+        taskId:
+          readStringFromTraceMetadata(trace.metadata, "activeMeetingTaskId") ??
+          readStringFromTraceMetadata(trace.metadata, "activeInterviewParentId") ??
+          readStringFromTraceMetadata(trace.metadata, "activeScreenTaskId") ??
+          activeMeetingTask?.id,
+        parentTaskId:
+          readStringFromTraceMetadata(trace.metadata, "activeMeetingParentId") ??
+          readStringFromTraceMetadata(trace.metadata, "activeInterviewParentId") ??
+          activeMeetingTask?.parent.id,
+        childTaskId:
+          readStringFromTraceMetadata(trace.metadata, "activeMeetingChildId") ??
+          readStringFromTraceMetadata(trace.metadata, "activeInterviewChildId") ??
+          activeMeetingTask?.child?.id,
+        taskSource:
+          readTaskSourceFromTraceMetadata(trace.metadata) ??
+          activeMeetingTask?.source,
+        questionType:
+          normalizeQuestionTypeAlias(
+            readStringFromTraceMetadata(
+              trace.metadata,
+              "activeMeetingParentQuestionType"
+            ) ??
+              readStringFromTraceMetadata(
+                trace.metadata,
+                "canonicalQuestionType"
+              )
+          ) ?? activeMeetingTask?.parent.questionType,
+        ...patch,
+      };
 
       setState((previous) => {
         const humanEvaluations = upsertTraceHumanEvaluation(
           previous.humanEvaluations,
           trace.id,
           trace.kind,
-          patch
+          evaluationPatch
         );
         persistTraceHumanEvaluations(humanEvaluations);
         sessionRecordingManagerRef.current?.recordHumanEvaluations(
@@ -1508,6 +1544,18 @@ export function useMeetingAssistant() {
           correctedTask,
           trace.id
         );
+        const correctedContextState = contextManagerRef.current.getState();
+        traceStoreRef.current.updateMetadata(trace.id, {
+          ...getActiveMeetingTaskTraceMetadata(
+            correctedContextState.activeMeetingTask
+          ),
+        });
+        if (correctedContextState.activeMeetingTask) {
+          sessionRecordingManagerRef.current?.recordActiveMeetingTaskSnapshot(
+            correctedContextState.activeMeetingTask,
+            trace.id
+          );
+        }
         contextManagerRef.current.updateScreenObservation(
           activeScreenTask.observationId,
           {
@@ -1535,6 +1583,7 @@ export function useMeetingAssistant() {
         screenObservations: contextState.screenObservations,
         activeScreenTask: contextState.activeScreenTask,
         activeInterviewTask: contextState.activeInterviewTask,
+        activeMeetingTask: contextState.activeMeetingTask,
       }));
     },
     [state.settings]
@@ -1612,6 +1661,7 @@ export function useMeetingAssistant() {
           ...previous,
           activeScreenTask: contextState.activeScreenTask,
           activeInterviewTask: contextState.activeInterviewTask,
+          activeMeetingTask: contextState.activeMeetingTask,
         }));
       }
     },
@@ -1960,6 +2010,10 @@ export function useMeetingAssistant() {
 
     let promptContext = contextManagerRef.current.buildAdvisorPromptContext();
     const latestTurn = promptContext.latestTurn;
+    const activeMeetingTaskId =
+      promptContext.activeMeetingTask?.id ??
+      promptContext.activeInterviewTask?.id ??
+      promptContext.activeScreenTask?.id;
     const hasContext = Boolean(
       promptContext.latestTurn ||
         promptContext.transcript.trim() ||
@@ -2074,11 +2128,12 @@ export function useMeetingAssistant() {
         taskRelation: advisorTaskSignals.taskRelation,
         subtaskIntent: advisorTaskSignals.subtaskIntent,
         taskSignalSource: advisorTaskSignals.source,
-        parentTaskId:
-          promptContext.activeInterviewTask?.id ?? promptContext.activeScreenTask?.id,
+        parentTaskId: activeMeetingTaskId,
         parentTaskKind:
+          promptContext.activeMeetingTask?.parent.questionType ??
           promptContext.activeInterviewTask?.stableKind ??
           promptContext.activeScreenTask?.kind,
+        ...getActiveMeetingTaskTraceMetadata(promptContext.activeMeetingTask),
       });
       if (advisorPlaybook) {
         const playbookStepId = traceStoreRef.current.startStep(
@@ -2092,9 +2147,8 @@ export function useMeetingAssistant() {
             taskRelation: advisorTaskSignals.taskRelation,
             subtaskIntent: advisorTaskSignals.subtaskIntent,
             taskSignalSource: advisorTaskSignals.source,
-            parentTaskId:
-              promptContext.activeInterviewTask?.id ??
-              promptContext.activeScreenTask?.id,
+            parentTaskId: activeMeetingTaskId,
+            ...getActiveMeetingTaskTraceMetadata(promptContext.activeMeetingTask),
           }
         );
         traceStoreRef.current.finishStep(traceId, playbookStepId, "success");
@@ -2102,13 +2156,13 @@ export function useMeetingAssistant() {
       sessionRecordingManagerRef.current?.recordPlaybookSelection(
         traceId,
         playbookMetadata,
-        promptContext.activeInterviewTask?.id ?? promptContext.activeScreenTask?.id
+        activeMeetingTaskId
       );
     }
 
     const memoryContext = await loadMemoryForPrompt({
       traceId,
-      taskId: promptContext.activeInterviewTask?.id ?? promptContext.activeScreenTask?.id,
+      taskId: activeMeetingTaskId,
       source: "advisor",
       query: advisorTaskSignals.query,
       useCase: inferMemoryUseCaseFromQuery(advisorTaskSignals.query),
@@ -2181,9 +2235,7 @@ export function useMeetingAssistant() {
                 );
                 sessionRecordingManagerRef.current?.recordModelInput({
                   traceId,
-                  taskId:
-                    promptContext.activeInterviewTask?.id ??
-                    promptContext.activeScreenTask?.id,
+                  taskId: activeMeetingTaskId,
                   label: "advisor model input",
                   value: formatTraceModelInput(
                     input.systemPrompt,
@@ -2228,9 +2280,7 @@ export function useMeetingAssistant() {
                 );
                 sessionRecordingManagerRef.current?.recordModelOutput({
                   traceId,
-                  taskId:
-                    promptContext.activeInterviewTask?.id ??
-                    promptContext.activeScreenTask?.id,
+                  taskId: activeMeetingTaskId,
                   label: "advisor raw output",
                   value: output,
                   metadata: {
@@ -2291,6 +2341,7 @@ export function useMeetingAssistant() {
 
       if (traceId) {
         traceStoreRef.current.updateMetadata(traceId, {
+          ...getActiveMeetingTaskTraceMetadata(contextState.activeMeetingTask),
           activeInterviewParentId: contextState.activeInterviewTask?.id,
           activeInterviewParentKind: contextState.activeInterviewTask?.stableKind,
           activeInterviewParentPhase:
@@ -2344,6 +2395,13 @@ export function useMeetingAssistant() {
         }
       }
 
+      if (traceId && contextState.activeMeetingTask) {
+        sessionRecordingManagerRef.current?.recordActiveMeetingTaskSnapshot(
+          contextState.activeMeetingTask,
+          traceId
+        );
+      }
+
       const latestObservationIds = contextState.screenObservations.map(
         (observation) => observation.id
       );
@@ -2368,6 +2426,7 @@ export function useMeetingAssistant() {
         interviewSessionContext: contextState.interviewSessionContext,
         activeScreenTask: contextState.activeScreenTask,
         activeInterviewTask: contextState.activeInterviewTask,
+        activeMeetingTask: contextState.activeMeetingTask,
       }));
       if (traceId) {
         traceStoreRef.current.finishStep(traceId, advisorStepId, "success", {
@@ -2511,6 +2570,7 @@ export function useMeetingAssistant() {
         interviewSessionContext: contextState.interviewSessionContext,
         activeScreenTask: contextState.activeScreenTask,
         activeInterviewTask: contextState.activeInterviewTask,
+        activeMeetingTask: contextState.activeMeetingTask,
       }));
 
       return { contextState, interviewContextUpdate };
@@ -2587,7 +2647,7 @@ export function useMeetingAssistant() {
         "success"
       );
       scheduleAdvisor(
-        contextState.activeScreenTask ? "screen-anchored" : "live",
+        contextState.activeMeetingTask?.screen ? "screen-anchored" : "live",
         pending.segment.traceId
       );
 
@@ -3002,6 +3062,9 @@ export function useMeetingAssistant() {
             "Task switch confirmation requested",
             {
               turnId: turn.id,
+              ...getActiveMeetingTaskTraceMetadata(
+                activeContextState.activeMeetingTask
+              ),
               activeScreenTaskId: activeScreenTask?.id,
               activeInterviewTaskId: activeInterviewTask?.id,
               transcriptChars: turn.text.trim().length,
@@ -3091,7 +3154,7 @@ export function useMeetingAssistant() {
           );
           traceStoreRef.current.finishStep(traceId, debounceStepId, "success");
           scheduleAdvisor(
-            contextState.activeScreenTask ? "screen-anchored" : "live",
+            contextState.activeMeetingTask?.screen ? "screen-anchored" : "live",
             traceId
           );
           return;
@@ -3195,6 +3258,9 @@ export function useMeetingAssistant() {
           traceStoreRef.current.updateMetadata(traceId, {
             turnGateAction: "state-update",
             turnGateReason: turnGate.reason,
+            ...getActiveMeetingTaskTraceMetadata(
+              nextContextState.activeMeetingTask
+            ),
             activeInterviewParentId: nextContextState.activeInterviewTask?.id,
             activeInterviewParentKind:
               nextContextState.activeInterviewTask?.stableKind,
@@ -3207,6 +3273,9 @@ export function useMeetingAssistant() {
             {
               reason: turnGate.reason,
               turnId: turn.id,
+              ...getActiveMeetingTaskTraceMetadata(
+                nextContextState.activeMeetingTask
+              ),
               activeInterviewTaskId: nextContextState.activeInterviewTask?.id,
               activeInterviewTaskKind:
                 nextContextState.activeInterviewTask?.stableKind,
@@ -3226,6 +3295,7 @@ export function useMeetingAssistant() {
             interviewSessionContext: nextContextState.interviewSessionContext,
             activeScreenTask: nextContextState.activeScreenTask,
             activeInterviewTask: nextContextState.activeInterviewTask,
+            activeMeetingTask: nextContextState.activeMeetingTask,
           }));
           return;
         }
@@ -3242,7 +3312,7 @@ export function useMeetingAssistant() {
         );
         traceStoreRef.current.finishStep(traceId, debounceStepId, "success");
         scheduleAdvisor(
-          contextState.activeScreenTask ? "screen-anchored" : "live",
+          contextState.activeMeetingTask?.screen ? "screen-anchored" : "live",
           traceId
         );
       } catch (error) {
@@ -3559,6 +3629,7 @@ export function useMeetingAssistant() {
         interviewSessionContext: contextState.interviewSessionContext,
         activeScreenTask: contextState.activeScreenTask,
         activeInterviewTask: contextState.activeInterviewTask,
+        activeMeetingTask: contextState.activeMeetingTask,
         partialSuggestion: "",
         error: null,
         audioStatus,
@@ -4217,9 +4288,20 @@ export function useMeetingAssistant() {
         }
 
         updatedContextState = contextManagerRef.current.getState();
+        traceStoreRef.current.updateMetadata(trace.id, {
+          ...getActiveMeetingTaskTraceMetadata(
+            updatedContextState.activeMeetingTask
+          ),
+        });
         if (updatedContextState.activeScreenTask) {
           sessionRecordingManagerRef.current?.recordTaskSnapshot(
             updatedContextState.activeScreenTask,
+            trace.id
+          );
+        }
+        if (updatedContextState.activeMeetingTask) {
+          sessionRecordingManagerRef.current?.recordActiveMeetingTaskSnapshot(
+            updatedContextState.activeMeetingTask,
             trace.id
           );
         }
@@ -4227,6 +4309,8 @@ export function useMeetingAssistant() {
           trace.id,
           "Meeting Assistant state updated",
           {
+            activeMeetingTaskId: updatedContextState.activeMeetingTask?.id,
+            activeMeetingTaskSource: updatedContextState.activeMeetingTask?.source,
             activeScreenTaskId: updatedContextState.activeScreenTask?.id,
             suggestionKind: screenTaskContent.trim() ? "screen-task" : "silent",
           }
@@ -4263,6 +4347,7 @@ export function useMeetingAssistant() {
           screenObservations: updatedContextState.screenObservations,
           activeScreenTask: updatedContextState.activeScreenTask,
           activeInterviewTask: updatedContextState.activeInterviewTask,
+          activeMeetingTask: updatedContextState.activeMeetingTask,
           interviewSessionContext: updatedContextState.interviewSessionContext,
           error: null,
         }));
@@ -4396,7 +4481,7 @@ export function useMeetingAssistant() {
       if (!trimmedQuestion) return;
 
       const hasActiveScreenTask = Boolean(
-        contextManagerRef.current.getState().activeScreenTask
+        contextManagerRef.current.getState().activeMeetingTask?.screen
       );
 
       await runAdvisor({
@@ -4519,6 +4604,7 @@ export function useMeetingAssistant() {
         interviewSessionContext: nextContextState.interviewSessionContext,
         activeScreenTask: nextContextState.activeScreenTask,
         activeInterviewTask: nextContextState.activeInterviewTask,
+        activeMeetingTask: nextContextState.activeMeetingTask,
       }));
 
       traceStoreRef.current.finishTrace(trace.id, "success");
@@ -4526,7 +4612,9 @@ export function useMeetingAssistant() {
       if (didUpdateTranscript) {
         await runAdvisor({
           force: true,
-          mode: nextContextState.activeScreenTask ? "screen-anchored" : "live",
+          mode: nextContextState.activeMeetingTask?.screen
+            ? "screen-anchored"
+            : "live",
           currentSuggestion: currentSuggestionText,
         });
       }
@@ -4737,6 +4825,23 @@ function formatTraceModelInput(systemPrompt: string, userMessage: string) {
 
 function formatTraceMetadata(metadata: Record<string, unknown>) {
   return JSON.stringify(metadata, null, 2);
+}
+
+function readStringFromTraceMetadata(
+  metadata: Record<string, unknown> | undefined,
+  key: string
+) {
+  const value = metadata?.[key];
+  return typeof value === "string" && value.trim() ? value : undefined;
+}
+
+function readTaskSourceFromTraceMetadata(
+  metadata: Record<string, unknown> | undefined
+) {
+  const value = readStringFromTraceMetadata(metadata, "activeMeetingTaskSource");
+  return value === "screen" || value === "voice" || value === "mixed"
+    ? value
+    : undefined;
 }
 
 function buildAdvisorMemoryQuery(

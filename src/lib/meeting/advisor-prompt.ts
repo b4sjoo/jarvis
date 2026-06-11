@@ -10,6 +10,7 @@ import {
   formatInterviewSessionContextForPrompt,
 } from "./interview-session-context";
 import { formatInterviewPlaybookForPrompt } from "./interview-playbook";
+import { formatActiveMeetingTaskForPrompt } from "./active-meeting-task";
 
 export function buildAdvisorSystemPrompt() {
   return [
@@ -59,7 +60,7 @@ export function buildAdvisorUserMessage(
   const previousSuggestion = options.currentSuggestion?.trim();
   const hasTranscript = Boolean(context.transcript.trim() || context.latestTurn);
   const hasScreenContext = Boolean(context.screenContext.trim());
-  const hasActiveScreenTask = Boolean(context.activeScreenTask);
+  const hasActiveScreenTask = Boolean(context.activeMeetingTask?.screen ?? context.activeScreenTask);
   const contextMode = hasActiveScreenTask
     ? "screen-anchored"
     : hasTranscript && hasScreenContext
@@ -89,6 +90,9 @@ export function buildAdvisorUserMessage(
     "<interview_session_context>",
     formatInterviewSessionContextForPrompt(context.interviewSessionContext),
     "</interview_session_context>",
+    "<active_meeting_task>",
+    formatActiveMeetingTaskForPrompt(context.activeMeetingTask),
+    "</active_meeting_task>",
     "<active_screen_task>",
     context.activeScreenTask
       ? formatActiveScreenTask(context.activeScreenTask)
@@ -173,9 +177,10 @@ export function buildAdvisorUserMessage(
       "If the transcript asks a follow-up, answer the follow-up directly while preserving the active screen task as context.",
       "If the transcript corrects a requirement, acknowledge the corrected constraint through the revised answer; do not argue with the transcript.",
       "Use <interview_session_brief> and <interview_session_context> to personalize interview style across tasks, especially target company expectations, but do not let them override the active screen task or latest transcript.",
-      "Use <active_interview_task> to preserve the stable parent task across short child probes. Do not restart requirement clarification when the latest turn is a child probe or resume of the same parent.",
+      "Use <active_meeting_task> as the primary task identity and continuity source. Use <active_interview_task> and <active_screen_task> only as temporary compatibility detail.",
+      "Use <active_meeting_task> to preserve the stable parent task across short child probes. Do not restart requirement clarification when the latest turn is a child probe or resume of the same parent.",
       "Use <interview_playbook> as the procedural strategy for this active task. Follow its first move, clarifying strategy, output contract, and follow-up policy unless the active screen task or latest transcript contradicts it.",
-      "If <interview_playbook> questionType differs from <active_screen_task> Kind, treat the latest transcript as a child probe inside the active parent task. Answer the local probe without clearing, restarting, or rewriting the parent task.",
+      "If <interview_playbook> questionType differs from <active_meeting_task> parent Question type, treat the latest transcript as a child probe inside the active parent task. Answer the local probe without clearing, restarting, or rewriting the parent task.",
       "If the target company is Amazon and this is a behavioral answer, use any injected Amazon Leadership Principle rubric to demonstrate Strength signals and avoid Concern signals. Do not explicitly name the principle unless it helps.",
       "If the active task kind is ai-ml-system-design, answer as a forward-looking AI/ML infrastructure design: clarify objective/metrics, data/retrieval/model path, serving path, evaluation/feedback, latency/cost/safety, and tradeoffs.",
       "For AI/ML or agent system-design follow-ups about metrics, logs, evaluation, quality, faster/cheaper/better, or observability, be concrete: include north-star metric, online product metrics, offline eval metrics, agent trajectory metrics, latency/cost metrics, safety/guardrail metrics, and a log schema with trace/correlation id plus key event fields.",
@@ -217,7 +222,7 @@ export function buildAdvisorUserMessage(
     "If it only contains jargon, put the simple Chinese definition under 中文思路 and use '-' for Reply and Question.",
     "Do not mention a colleague, speaker, or someone asking a question unless the transcript explicitly contains that person or question.",
     "Use <interview_session_brief> as user-provided pre-meeting background and <interview_session_context> as cross-task inferred context, especially the target company. Do not infer a different company if the brief locks one.",
-    "Use <active_interview_task> to preserve the current interview parent task and avoid importing facts from a previous unrelated block.",
+    "Use <active_meeting_task> as the primary active task state. It preserves the current interview parent task, optional child probe, and optional screen context. Avoid importing facts from a previous unrelated block.",
     "Use <interview_playbook> as procedural guidance when present. It should shape the next move without overriding transcript facts.",
     "For AI/ML or agent system-design questions about metrics, logs, evaluation, quality, faster/cheaper/better, or observability, avoid generic measurement language. Name concrete metric categories, define what each measures, and include the required log/trace fields.",
     "For Amazon behavioral interview moments, use injected Leadership Principle guidance to shape the answer toward Strength signals and away from Concern signals without inventing facts.",
