@@ -159,6 +159,7 @@ const SCREEN_CONTEXT_DISABLED_MESSAGE =
 const NO_MEETING_CONTEXT_MESSAGE =
   "Jarvis needs transcript or screen context before it can suggest.";
 const NO_SUGGESTION_MESSAGE = "There is no suggestion to update yet.";
+const NO_ACTIVE_TASK_MESSAGE = "There is no active task to advance yet.";
 
 const DEFAULT_MEETING_AUDIO_CONFIG: MeetingAudioConfig = {
   enabled: true,
@@ -2377,6 +2378,10 @@ export function useMeetingAssistant() {
     const returnStatus = state.status;
     const requestId = `advisor_${mode}_${Date.now()}`;
     const responseConfig = state.settings.response;
+    const manualPhaseAdvance = options.responseAction === "next-phase";
+    const manualPhaseAdvanceFromPhase =
+      promptContext.activeMeetingTask?.parent.playbookPhase ??
+      promptContext.activeInterviewTask?.playbookPhase;
     contextManagerRef.current.setLastAdvisorRequestId(requestId);
 
     setState((previous) => ({
@@ -2469,6 +2474,8 @@ export function useMeetingAssistant() {
         openingRouteKind: advisorTaskSignals.openingRoute?.kind,
         openingRouteCommitParent:
           advisorTaskSignals.openingRoute?.commitParent,
+        manualPhaseAdvance,
+        manualPhaseAdvanceFromPhase,
         parentTaskId: activeMeetingTaskId,
         parentTaskKind:
           promptContext.activeMeetingTask?.parent.questionType ??
@@ -2492,6 +2499,8 @@ export function useMeetingAssistant() {
             openingRouteKind: advisorTaskSignals.openingRoute?.kind,
             openingRouteCommitParent:
               advisorTaskSignals.openingRoute?.commitParent,
+            manualPhaseAdvance,
+            manualPhaseAdvanceFromPhase,
             parentTaskId: activeMeetingTaskId,
             ...getActiveMeetingTaskTraceMetadata(promptContext.activeMeetingTask),
           }
@@ -2605,6 +2614,8 @@ export function useMeetingAssistant() {
                     providerId: input.providerId,
                     mode: input.mode,
                     responseAction: input.responseAction,
+                    manualPhaseAdvance,
+                    manualPhaseAdvanceFromPhase,
                     responseConfig: input.responseConfig,
                     requestOptions: input.requestOptions,
                     ...advisorModelRouteMetadata,
@@ -2623,6 +2634,8 @@ export function useMeetingAssistant() {
                     providerId: input.providerId,
                     mode: input.mode,
                     responseAction: input.responseAction,
+                    manualPhaseAdvance,
+                    manualPhaseAdvanceFromPhase,
                     responseConfig: input.responseConfig,
                     requestOptions: input.requestOptions,
                     ...advisorModelRouteMetadata,
@@ -2636,6 +2649,8 @@ export function useMeetingAssistant() {
                     providerId: input.providerId,
                     mode: input.mode,
                     responseAction: input.responseAction,
+                    manualPhaseAdvance,
+                    manualPhaseAdvanceFromPhase,
                     responseLength: input.responseConfig?.length,
                     responseLanguage: input.responseConfig?.language,
                     requestOptions: input.requestOptions,
@@ -4964,6 +4979,14 @@ export function useMeetingAssistant() {
         return;
       }
 
+      if (responseAction === "next-phase" && !state.activeMeetingTask) {
+        setState((previous) => ({
+          ...previous,
+          error: NO_ACTIVE_TASK_MESSAGE,
+        }));
+        return;
+      }
+
       await runAdvisor({
         force: true,
         mode: "response-action",
@@ -4971,7 +4994,7 @@ export function useMeetingAssistant() {
         currentSuggestion: currentSuggestionText,
       });
     },
-    [currentSuggestionText, runAdvisor]
+    [currentSuggestionText, runAdvisor, state.activeMeetingTask]
   );
 
   const answerClarifyingQuestion = useCallback(

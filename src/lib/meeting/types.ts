@@ -434,7 +434,7 @@ export type AdvisorRequestMode =
   | "clarifying-answer"
   | "response-action";
 
-export type MeetingResponseActionMode = "speakable" | "focus";
+export type MeetingResponseActionMode = "speakable" | "next-phase";
 
 export type MeetingResponseLength = "short" | "normal" | "detailed";
 

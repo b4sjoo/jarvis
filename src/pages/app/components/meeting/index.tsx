@@ -150,9 +150,9 @@ const responseActionOptions: Array<{
     title: "Rewrite the current answer as something you can say aloud",
   },
   {
-    id: "focus",
-    label: "Focus",
-    title: "Refocus the current answer on the most useful technical point",
+    id: "next-phase",
+    label: "Next",
+    title: "Advance the current task to the next useful playbook phase",
   },
 ];
 
@@ -1430,7 +1430,11 @@ export const MeetingAssistant = ({
                       onClick={() => {
                         void meeting.applyResponseAction(action.id);
                       }}
-                      disabled={isBusy || !hasSuggestion}
+                      disabled={
+                        isBusy ||
+                        !hasSuggestion ||
+                        (action.id === "next-phase" && !hasActiveMeetingTask)
+                      }
                     >
                       {action.label}
                     </Button>
