@@ -1,4 +1,5 @@
 import type { ScreenTaskAnswer } from "./types";
+import { parseClarifyingOptionsText } from "./clarifying-options";
 
 const SCREEN_TASK_SECTION_LABELS = [
   "中文思路",
@@ -33,7 +34,7 @@ export function parseScreenTaskAnswer(content: string): ScreenTaskAnswer {
   const clarifyingQuestion = readScreenTaskSection(rawContent, [
     "Clarifying question",
   ]);
-  const clarifyingOptions = parseClarifyingOptions(
+  const clarifyingOptions = parseClarifyingOptionsText(
     readScreenTaskSection(rawContent, ["Clarifying options"])
   );
   const extractedCode = extractFirstCodeFence(rawApproach);
@@ -122,27 +123,6 @@ function extractFirstCodeFence(value: string) {
     fence: match[0],
     code: stripOuterCodeFence(match[0]),
   };
-}
-
-function parseClarifyingOptions(value: string) {
-  const sanitized = sanitizeScreenTaskSection(value);
-  if (!sanitized) return undefined;
-
-  const withoutBrackets = sanitized.replace(/^\[|\]$/g, "");
-  const candidates = withoutBrackets
-    .split(/\n|\||,|;/)
-    .map((candidate) => candidate.replace(/^[-*\d.)\s]+/, "").trim())
-    .filter(Boolean)
-    .filter((candidate) => candidate !== "-")
-    .slice(0, 4);
-
-  if (!candidates.length) return undefined;
-
-  return candidates.map((label, index) => ({
-    id: `option-${index + 1}`,
-    label,
-    value: label,
-  }));
 }
 
 function escapeRegExp(value: string) {

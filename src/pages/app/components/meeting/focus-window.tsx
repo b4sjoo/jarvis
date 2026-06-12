@@ -27,6 +27,7 @@ import {
   Code2Icon,
   FileTextIcon,
   HelpCircleIcon,
+  Loader2Icon,
   MessageSquareTextIcon,
   SendIcon,
   XIcon,
@@ -345,62 +346,81 @@ function FocusClarifyingActionButtons({
   snapshot: MeetingFocusSnapshot;
 }) {
   const options = snapshot.sections.clarifyingOptions;
+  const selectedAnswerLabel = snapshot.selectedClarifyingAnswerLabel;
 
   return (
-    <div className="mt-3 grid grid-cols-2 gap-1.5">
-      {snapshot.isTaskSwitchClarifyingQuestion || options.length < 2 ? (
-        <>
-          <FocusClarifyingButton
-            icon={<CheckIcon className="h-3 w-3" />}
-            label={snapshot.isTaskSwitchClarifyingQuestion ? "New task" : "Yes"}
-            disabled={snapshot.isBusy}
-            onClick={() => {
-              if (snapshot.isTaskSwitchClarifyingQuestion) {
-                sendFocusAction({ type: "new-task" });
-                return;
+    <div className="mt-3 space-y-2">
+      <div className="grid grid-cols-2 gap-1.5">
+        {snapshot.isTaskSwitchClarifyingQuestion || options.length < 2 ? (
+          <>
+            <FocusClarifyingButton
+              icon={<CheckIcon className="h-3 w-3 shrink-0" />}
+              label={
+                snapshot.isTaskSwitchClarifyingQuestion ? "New task" : "Yes"
               }
-              sendClarifyingAnswer("yes");
-            }}
-          />
-          <FocusClarifyingButton
-            icon={<XIcon className="h-3 w-3" />}
-            label={snapshot.isTaskSwitchClarifyingQuestion ? "Same task" : "No"}
-            disabled={snapshot.isBusy}
-            onClick={() => {
-              if (snapshot.isTaskSwitchClarifyingQuestion) {
-                sendFocusAction({ type: "same-task" });
-                return;
-              }
-              sendClarifyingAnswer("no");
-            }}
-          />
-        </>
-      ) : (
-        options.slice(0, 4).map((option) => (
-          <FocusClarifyingButton
-            key={option.id}
-            label={option.label}
-            title={option.label}
-            disabled={snapshot.isBusy}
-            onClick={() => {
-              sendClarifyingAnswer("option", {
-                label: option.label,
-                value: option.value,
-              });
-            }}
-          />
-        ))
-      )}
-      <FocusClarifyingButton
-        label="Not sure"
-        disabled={snapshot.isBusy}
-        onClick={() => sendClarifyingAnswer("not-sure")}
-      />
-      <FocusClarifyingButton
-        label="Dismiss"
-        disabled={snapshot.isBusy}
-        onClick={() => sendFocusAction({ type: "dismiss-clarifying-question" })}
-      />
+              selected={selectedAnswerLabel === "New task" || selectedAnswerLabel === "Yes"}
+              disabled={snapshot.isBusy}
+              onClick={() => {
+                if (snapshot.isTaskSwitchClarifyingQuestion) {
+                  sendFocusAction({ type: "new-task" });
+                  return;
+                }
+                sendClarifyingAnswer("yes");
+              }}
+            />
+            <FocusClarifyingButton
+              icon={<XIcon className="h-3 w-3 shrink-0" />}
+              label={snapshot.isTaskSwitchClarifyingQuestion ? "Same task" : "No"}
+              selected={selectedAnswerLabel === "Same task" || selectedAnswerLabel === "No"}
+              disabled={snapshot.isBusy}
+              onClick={() => {
+                if (snapshot.isTaskSwitchClarifyingQuestion) {
+                  sendFocusAction({ type: "same-task" });
+                  return;
+                }
+                sendClarifyingAnswer("no");
+              }}
+            />
+          </>
+        ) : (
+          options.slice(0, 4).map((option) => (
+            <FocusClarifyingButton
+              key={option.id}
+              label={option.label}
+              title={option.label}
+              selected={selectedAnswerLabel === option.label}
+              disabled={snapshot.isBusy}
+              onClick={() => {
+                sendClarifyingAnswer("option", {
+                  label: option.label,
+                  value: option.value,
+                });
+              }}
+            />
+          ))
+        )}
+        <FocusClarifyingButton
+          label="Not sure"
+          selected={selectedAnswerLabel === "Not sure"}
+          disabled={snapshot.isBusy}
+          onClick={() => sendClarifyingAnswer("not-sure")}
+        />
+        <FocusClarifyingButton
+          label="Dismiss"
+          disabled={snapshot.isBusy}
+          onClick={() => sendFocusAction({ type: "dismiss-clarifying-question" })}
+        />
+      </div>
+      {selectedAnswerLabel ? (
+        <div className="flex min-w-0 items-center gap-1.5 rounded-sm bg-primary/10 px-2 py-1 text-[10px] text-primary">
+          {snapshot.isBusy ? (
+            <Loader2Icon className="h-3 w-3 animate-spin" />
+          ) : null}
+          <span className="min-w-0 truncate">
+            Selected: {selectedAnswerLabel}. Jarvis is updating.
+          </span>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -409,26 +429,31 @@ function FocusClarifyingButton({
   label,
   title,
   icon,
+  selected,
   disabled,
   onClick,
 }: {
   label: string;
   title?: string;
   icon?: ReactNode;
+  selected?: boolean;
   disabled: boolean;
   onClick: () => void;
 }) {
   return (
     <Button
       size="sm"
-      variant="outline"
-      className="h-8 min-w-0 gap-1 px-2 text-[10px]"
+      variant={selected ? "default" : "outline"}
+      className="h-auto min-h-8 min-w-0 gap-1 px-2 py-1.5 text-[10px] leading-3"
       title={title}
       onClick={onClick}
       disabled={disabled}
+      aria-pressed={selected}
     >
       {icon}
-      <span className="truncate">{label}</span>
+      <span className="min-w-0 whitespace-normal break-words text-left">
+        {label}
+      </span>
     </Button>
   );
 }

@@ -42,6 +42,7 @@ export type MeetingFocusSnapshot = {
   isBusy: boolean;
   showClarifyingQuestion: boolean;
   clarifyingQuestion: string;
+  selectedClarifyingAnswerLabel?: string;
   isTaskSwitchClarifyingQuestion: boolean;
   interviewTypes: InterviewBriefType[];
   activeTask?: MeetingFocusActiveTaskSnapshot;
@@ -85,6 +86,7 @@ export const EMPTY_MEETING_FOCUS_SNAPSHOT: MeetingFocusSnapshot = {
   isBusy: false,
   showClarifyingQuestion: false,
   clarifyingQuestion: "",
+  selectedClarifyingAnswerLabel: undefined,
   isTaskSwitchClarifyingQuestion: false,
   interviewTypes: [],
   activeTask: undefined,

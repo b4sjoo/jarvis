@@ -49,6 +49,7 @@ import type {
 import {
   MEETING_FOCUS_ACTION_EVENT,
   MEETING_FOCUS_SNAPSHOT_EVENT,
+  getDisplayClarifyingOptions,
   getActiveMeetingTaskFocusSummary,
   hasScreenTaskAnswerContent,
   parseScreenTaskAnswer,
@@ -301,6 +302,13 @@ type CodingArtifactCache = {
   sourceSuggestionId?: string;
 };
 
+type ClarifyingSelectionState = {
+  questionKey: string;
+  label: string;
+  value?: string;
+  submittedAt: number;
+};
+
 export const MeetingAssistant = ({
   onFocusModeActiveChange,
 }: MeetingAssistantProps = {}) => {
@@ -312,6 +320,8 @@ export const MeetingAssistant = ({
   const [dismissedQuestionKey, setDismissedQuestionKey] = useState<
     string | null
   >(null);
+  const [clarifyingSelection, setClarifyingSelection] =
+    useState<ClarifyingSelectionState | null>(null);
   const [isFocusMode, setIsFocusMode] = useState(
     () => safeLocalStorage.getItem(STORAGE_KEYS.MEETING_FOCUS_MODE) === "true"
   );
@@ -470,16 +480,33 @@ export const MeetingAssistant = ({
       matchReason: item.matchReason,
     })) ?? [];
   const clarifyingQuestion = suggestionSections.question.trim();
-  const clarifyingOptions = suggestionSections.clarifyingOptions ?? [];
+  const rawClarifyingOptions = suggestionSections.clarifyingOptions ?? [];
   const isScreenTaskSuggestion = suggestionSections.isScreenTask;
   const clarifyingQuestionKey = clarifyingQuestion
     ? `${meeting.latestSuggestion?.id ?? displaySuggestion}:${clarifyingQuestion}`
     : "";
+  const clarifyingOptions = useMemo(
+    () =>
+      getDisplayClarifyingOptions({
+        question: clarifyingQuestion,
+        options: rawClarifyingOptions,
+      }),
+    [clarifyingQuestion, rawClarifyingOptions]
+  );
+  const activeClarifyingSelection =
+    clarifyingSelection?.questionKey === clarifyingQuestionKey
+      ? clarifyingSelection
+      : null;
   const showClarifyingQuestion = Boolean(
     clarifyingQuestion && dismissedQuestionKey !== clarifyingQuestionKey
   );
   const isTaskSwitchClarifyingQuestion =
     isTaskSwitchQuestion(clarifyingQuestion);
+  useEffect(() => {
+    if (!clarifyingSelection) return;
+    if (clarifyingSelection.questionKey === clarifyingQuestionKey) return;
+    setClarifyingSelection(null);
+  }, [clarifyingQuestionKey, clarifyingSelection]);
   const isBusy =
     meeting.status === "starting" ||
     meeting.status === "transcribing" ||
@@ -512,7 +539,7 @@ export const MeetingAssistant = ({
         code: displaySuggestionSections.code,
         complexity: displaySuggestionSections.complexity,
         question: displaySuggestionSections.question,
-        clarifyingOptions: displaySuggestionSections.clarifyingOptions,
+        clarifyingOptions: clarifyingOptions,
         isScreenTask: displaySuggestionSections.isScreenTask,
       },
       latestReliableAnswer: latestReliableAnswerPreview,
@@ -522,6 +549,7 @@ export const MeetingAssistant = ({
       isBusy,
       showClarifyingQuestion,
       clarifyingQuestion,
+      selectedClarifyingAnswerLabel: activeClarifyingSelection?.label,
       isTaskSwitchClarifyingQuestion,
       interviewTypes: editableBriefForFocus.interviewTypes,
       activeTask: getActiveMeetingTaskFocusSummary(meeting.activeMeetingTask),
@@ -537,6 +565,7 @@ export const MeetingAssistant = ({
     }),
     [
       clarifyingQuestion,
+      activeClarifyingSelection?.label,
       editableBriefForFocus.interviewTypes,
       focusModeActive,
       isBusy,
@@ -551,7 +580,7 @@ export const MeetingAssistant = ({
       showClarifyingQuestion,
       displaySuggestionSections.answer,
       displaySuggestionSections.chineseThinking,
-      displaySuggestionSections.clarifyingOptions,
+      clarifyingOptions,
       displaySuggestionSections.code,
       displaySuggestionSections.complexity,
       displaySuggestionSections.isScreenTask,
@@ -809,10 +838,25 @@ export const MeetingAssistant = ({
     ) => {
       if (!clarifyingQuestion) return;
 
+      const label =
+        option?.label ||
+        (answer === "yes"
+          ? "Yes"
+          : answer === "no"
+            ? "No"
+            : answer === "not-sure"
+              ? "Not sure"
+              : "Selected option");
+      setClarifyingSelection({
+        questionKey: clarifyingQuestionKey,
+        label,
+        value: option?.value,
+        submittedAt: Date.now(),
+      });
       setDismissedQuestionKey(null);
       void meeting.answerClarifyingQuestion(clarifyingQuestion, answer, option);
     },
-    [clarifyingQuestion, meeting.answerClarifyingQuestion]
+    [clarifyingQuestion, clarifyingQuestionKey, meeting.answerClarifyingQuestion]
   );
 
   const handleSpeechCorrectionSubmit = useCallback(() => {
@@ -826,6 +870,11 @@ export const MeetingAssistant = ({
   const handleNewTaskConfirmation = useCallback(() => {
     if (!clarifyingQuestionKey) return;
 
+    setClarifyingSelection({
+      questionKey: clarifyingQuestionKey,
+      label: "New task",
+      submittedAt: Date.now(),
+    });
     meeting.clearActiveScreenTask();
     setDismissedQuestionKey(clarifyingQuestionKey);
   }, [clarifyingQuestionKey, meeting.clearActiveScreenTask]);
@@ -833,6 +882,11 @@ export const MeetingAssistant = ({
   const handleSameTaskConfirmation = useCallback(() => {
     if (!clarifyingQuestionKey) return;
 
+    setClarifyingSelection({
+      questionKey: clarifyingQuestionKey,
+      label: "Same task",
+      submittedAt: Date.now(),
+    });
     setDismissedQuestionKey(clarifyingQuestionKey);
   }, [clarifyingQuestionKey]);
 
@@ -1057,6 +1111,7 @@ export const MeetingAssistant = ({
               showClarifyingQuestion={showClarifyingQuestion}
               clarifyingQuestion={clarifyingQuestion}
               clarifyingOptions={clarifyingOptions}
+              selectedClarifyingAnswerLabel={activeClarifyingSelection?.label}
               isTaskSwitchClarifyingQuestion={isTaskSwitchClarifyingQuestion}
               onClarifyingAnswer={handleClarifyingAnswer}
               onNewTaskConfirmation={handleNewTaskConfirmation}
@@ -1395,81 +1450,20 @@ export const MeetingAssistant = ({
                   }
                 />
                 {showClarifyingQuestion ? (
-                  <div className="mt-3 grid grid-cols-2 gap-1.5">
-                    {isTaskSwitchClarifyingQuestion ||
-                    clarifyingOptions.length < 2 ? (
-                      <>
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          className="h-7 gap-1 px-2 text-[10px]"
-                          onClick={
-                            isTaskSwitchClarifyingQuestion
-                              ? handleNewTaskConfirmation
-                              : () => handleClarifyingAnswer("yes")
-                          }
-                          disabled={isBusy}
-                        >
-                          <CheckIcon className="h-3 w-3" />
-                          {isTaskSwitchClarifyingQuestion ? "New task" : "Yes"}
-                        </Button>
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          className="h-7 gap-1 px-2 text-[10px]"
-                          onClick={
-                            isTaskSwitchClarifyingQuestion
-                              ? handleSameTaskConfirmation
-                              : () => handleClarifyingAnswer("no")
-                          }
-                          disabled={isBusy}
-                        >
-                          <XIcon className="h-3 w-3" />
-                          {isTaskSwitchClarifyingQuestion ? "Same task" : "No"}
-                        </Button>
-                      </>
-                    ) : (
-                      clarifyingOptions.slice(0, 4).map((option) => (
-                        <Button
-                          key={option.id}
-                          size="sm"
-                          variant="outline"
-                          className="h-7 min-w-0 px-2 text-[10px]"
-                          title={option.label}
-                          onClick={() => {
-                            handleClarifyingAnswer("option", {
-                              label: option.label,
-                              value: option.value,
-                            });
-                          }}
-                          disabled={isBusy}
-                        >
-                          <span className="truncate">{option.label}</span>
-                        </Button>
-                      ))
-                    )}
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      className="h-7 gap-1 px-2 text-[10px]"
-                      onClick={() => handleClarifyingAnswer("not-sure")}
-                      disabled={isBusy}
-                    >
-                      <HelpCircleIcon className="h-3 w-3" />
-                      Not sure
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      className="h-7 gap-1 px-2 text-[10px]"
-                      onClick={() => {
-                        setDismissedQuestionKey(clarifyingQuestionKey);
-                      }}
-                    >
-                      <EyeOffIcon className="h-3 w-3" />
-                      Dismiss
-                    </Button>
-                  </div>
+                  <ClarifyingActionButtons
+                    isBusy={isBusy}
+                    selectedAnswerLabel={activeClarifyingSelection?.label}
+                    isTaskSwitchClarifyingQuestion={
+                      isTaskSwitchClarifyingQuestion
+                    }
+                    clarifyingOptions={clarifyingOptions}
+                    onClarifyingAnswer={handleClarifyingAnswer}
+                    onNewTaskConfirmation={handleNewTaskConfirmation}
+                    onSameTaskConfirmation={handleSameTaskConfirmation}
+                    onDismiss={() => {
+                      setDismissedQuestionKey(clarifyingQuestionKey);
+                    }}
+                  />
                 ) : null}
               </section>
 
@@ -1880,6 +1874,7 @@ const FocusModePanel = ({
   showClarifyingQuestion,
   clarifyingQuestion,
   clarifyingOptions,
+  selectedClarifyingAnswerLabel,
   isTaskSwitchClarifyingQuestion,
   onClarifyingAnswer,
   onNewTaskConfirmation,
@@ -1903,6 +1898,7 @@ const FocusModePanel = ({
   showClarifyingQuestion: boolean;
   clarifyingQuestion: string;
   clarifyingOptions: ClarifyingQuestionOption[];
+  selectedClarifyingAnswerLabel?: string;
   isTaskSwitchClarifyingQuestion: boolean;
   onClarifyingAnswer: (
     answer: ClarifyingQuestionAnswer,
@@ -2027,6 +2023,7 @@ const FocusModePanel = ({
                     isTaskSwitchClarifyingQuestion
                   }
                   clarifyingOptions={clarifyingOptions}
+                  selectedAnswerLabel={selectedClarifyingAnswerLabel}
                   onClarifyingAnswer={onClarifyingAnswer}
                   onNewTaskConfirmation={onNewTaskConfirmation}
                   onSameTaskConfirmation={onSameTaskConfirmation}
@@ -2215,6 +2212,7 @@ const SpeechCorrectionControl = ({
 
 const ClarifyingActionButtons = ({
   isBusy,
+  selectedAnswerLabel,
   isTaskSwitchClarifyingQuestion,
   clarifyingOptions,
   onClarifyingAnswer,
@@ -2223,6 +2221,7 @@ const ClarifyingActionButtons = ({
   onDismiss,
 }: {
   isBusy: boolean;
+  selectedAnswerLabel?: string;
   isTaskSwitchClarifyingQuestion: boolean;
   clarifyingOptions: ClarifyingQuestionOption[];
   onClarifyingAnswer: (
@@ -2233,78 +2232,97 @@ const ClarifyingActionButtons = ({
   onSameTaskConfirmation: () => void;
   onDismiss: () => void;
 }) => {
-  return (
-    <div className="mt-3 grid grid-cols-2 gap-1.5">
-      {isTaskSwitchClarifyingQuestion || clarifyingOptions.length < 2 ? (
-        <>
-          <Button
-            size="sm"
-            variant="outline"
-            className="h-7 gap-1 px-2 text-[10px]"
-            onClick={
-              isTaskSwitchClarifyingQuestion
-                ? onNewTaskConfirmation
-                : () => onClarifyingAnswer("yes")
-            }
-            disabled={isBusy}
-          >
-            <CheckIcon className="h-3 w-3" />
-            {isTaskSwitchClarifyingQuestion ? "New task" : "Yes"}
-          </Button>
-          <Button
-            size="sm"
-            variant="outline"
-            className="h-7 gap-1 px-2 text-[10px]"
-            onClick={
-              isTaskSwitchClarifyingQuestion
-                ? onSameTaskConfirmation
-                : () => onClarifyingAnswer("no")
-            }
-            disabled={isBusy}
-          >
-            <XIcon className="h-3 w-3" />
-            {isTaskSwitchClarifyingQuestion ? "Same task" : "No"}
-          </Button>
-        </>
-      ) : (
-        clarifyingOptions.slice(0, 4).map((option) => (
-          <Button
-            key={option.id}
-            size="sm"
-            variant="outline"
-            className="h-7 min-w-0 px-2 text-[10px]"
-            title={option.label}
-            onClick={() => {
-              onClarifyingAnswer("option", {
-                label: option.label,
-                value: option.value,
-              });
-            }}
-            disabled={isBusy}
-          >
-            <span className="truncate">{option.label}</span>
-          </Button>
-        ))
-      )}
+  const renderButton = ({
+    label,
+    icon,
+    onClick,
+    variant = "outline",
+    key,
+  }: {
+    label: string;
+    icon?: ReactNode;
+    onClick: () => void;
+    variant?: "outline" | "ghost";
+    key?: string;
+  }) => {
+    const isSelected = selectedAnswerLabel === label;
+
+    return (
       <Button
+        key={key}
         size="sm"
-        variant="outline"
-        className="h-7 gap-1 px-2 text-[10px]"
-        onClick={() => onClarifyingAnswer("not-sure")}
+        variant={isSelected ? "default" : variant}
+        className={cn(
+          "h-auto min-h-8 min-w-0 gap-1 px-2 py-1.5 text-[10px] leading-3",
+          isSelected ? "border-primary" : ""
+        )}
+        title={label}
+        onClick={onClick}
         disabled={isBusy}
+        aria-pressed={isSelected}
       >
-        <HelpCircleIcon className="h-3 w-3" />
-        Not sure
+        {icon}
+        <span className="min-w-0 whitespace-normal break-words text-left">
+          {label}
+        </span>
       </Button>
-      <Button
-        size="sm"
-        variant="ghost"
-        className="h-7 gap-1 px-2 text-[10px]"
-        onClick={onDismiss}
-      >
-        <EyeOffIcon className="h-3 w-3" />
-        Dismiss
-      </Button>
+    );
+  };
+
+  return (
+    <div className="mt-3 space-y-2">
+      <div className="grid grid-cols-2 gap-1.5">
+        {isTaskSwitchClarifyingQuestion || clarifyingOptions.length < 2 ? (
+          <>
+            {renderButton({
+              icon: <CheckIcon className="h-3 w-3 shrink-0" />,
+              label: isTaskSwitchClarifyingQuestion ? "New task" : "Yes",
+              onClick: isTaskSwitchClarifyingQuestion
+                ? onNewTaskConfirmation
+                : () => onClarifyingAnswer("yes"),
+            })}
+            {renderButton({
+              icon: <XIcon className="h-3 w-3 shrink-0" />,
+              label: isTaskSwitchClarifyingQuestion ? "Same task" : "No",
+              onClick: isTaskSwitchClarifyingQuestion
+                ? onSameTaskConfirmation
+                : () => onClarifyingAnswer("no"),
+            })}
+          </>
+        ) : (
+          clarifyingOptions.slice(0, 4).map((option) =>
+            renderButton({
+              key: option.id,
+              label: option.label,
+              onClick: () => {
+                onClarifyingAnswer("option", {
+                  label: option.label,
+                  value: option.value,
+                });
+              },
+            })
+          )
+        )}
+        {renderButton({
+          icon: <HelpCircleIcon className="h-3 w-3 shrink-0" />,
+          label: "Not sure",
+          onClick: () => onClarifyingAnswer("not-sure"),
+        })}
+        {renderButton({
+          icon: <EyeOffIcon className="h-3 w-3 shrink-0" />,
+          label: "Dismiss",
+          onClick: onDismiss,
+          variant: "ghost",
+        })}
+      </div>
+      {selectedAnswerLabel ? (
+        <div className="flex min-w-0 items-center gap-1.5 rounded-sm bg-primary/10 px-2 py-1 text-[10px] text-primary">
+          {isBusy ? <Loader2Icon className="h-3 w-3 animate-spin" /> : null}
+          <span className="min-w-0 truncate">
+            Selected: {selectedAnswerLabel}. Jarvis is updating.
+          </span>
+        </div>
+      ) : null}
     </div>
   );
 };

@@ -207,7 +207,7 @@ export function buildAdvisorUserMessage(
       "Code: Python code unless another language is required, or '-' for non-coding tasks.",
       "Complexity: time and space complexity for coding tasks, or '-' otherwise.",
       "Clarifying question: one click-answerable question if a missing constraint matters, otherwise '-'.",
-      "Clarifying options: two short option labels if the clarifying question has two plausible directions, otherwise '-'.",
+      "Clarifying options: 2-4 short option labels when the clarifying question has concrete choices; put each option on its own line or separate with '|'. Use '-' only for yes/no questions or when no concrete choices exist.",
       "For coding tasks, 中文思路 must stay Chinese while Question, Answer, Approach, Complexity, Clarifying question, and Clarifying options must default to meeting-ready English. Whiteboard must be '-'. The Code section must use the selected/requested programming language.",
       "Do not invent colleagues, speakers, or hidden requirements.",
       ...buildModeInstructions(mode),
@@ -553,6 +553,10 @@ function formatClarifyingAnswer(feedback: ClarifyingQuestionFeedback) {
   if (feedback.answer === "option") {
     return [feedback.answerLabel, feedback.answerValue]
       .filter(Boolean)
+      .filter(
+        (value, index, values) =>
+          values.findIndex((item) => item === value) === index
+      )
       .join(" - ");
   }
   if (feedback.answer === "yes") return "Yes";

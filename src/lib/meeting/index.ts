@@ -1,6 +1,7 @@
 export * from "./advisor-engine";
 export * from "./advisor-prompt";
 export * from "./active-meeting-task";
+export * from "./clarifying-options";
 export * from "./context-manager";
 export * from "./fact-anchor-guardrail";
 export * from "./focus-window";
