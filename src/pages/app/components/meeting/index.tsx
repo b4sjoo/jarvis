@@ -226,6 +226,7 @@ const TASK_TIMEOUT_OPTIONS = [15, 30, 60, 120] as const;
 const FOCUS_MODE_SHORTCUT_LABEL = "Cmd+Shift+J";
 const FOCUS_LISTENING_SHORTCUT_LABEL = "Cmd+Shift+L";
 const FOCUS_REGENERATE_SHORTCUT_LABEL = "Cmd+Shift+U";
+const FOCUS_NEXT_PHASE_SHORTCUT_LABEL = "Cmd+Shift+Right";
 
 const EMPTY_INTERVIEW_SESSION_BRIEF: InterviewSessionBrief = {
   targetCompany: "",
@@ -813,6 +814,18 @@ export const MeetingAssistant = ({
     void meeting.regenerateSuggestion();
   }, [hasMeetingContext, isBusy, meeting.regenerateSuggestion]);
 
+  const handleNextPhaseShortcut = useCallback(() => {
+    if (isBusy || !hasSuggestion || !hasActiveMeetingTask) return;
+
+    setOpen(true);
+    void meeting.applyResponseAction("next-phase");
+  }, [
+    hasActiveMeetingTask,
+    hasSuggestion,
+    isBusy,
+    meeting.applyResponseAction,
+  ]);
+
   const meetingShortcutCallbacks = useMemo(
     () => ({
       meeting_screen_context: () => {
@@ -823,11 +836,13 @@ export const MeetingAssistant = ({
         void handleFocusListeningShortcut();
       },
       meeting_regenerate: handleRegenerateShortcut,
+      meeting_next_phase: handleNextPhaseShortcut,
       meeting_toggle_microphone_context: meeting.toggleMicrophoneContext,
     }),
     [
       captureScreenContextFromHotkey,
       handleFocusListeningShortcut,
+      handleNextPhaseShortcut,
       handleRegenerateShortcut,
       meeting.toggleMicrophoneContext,
       toggleFocusMode,
@@ -2068,6 +2083,7 @@ const FocusModePanel = ({
                 `Focus ${FOCUS_MODE_SHORTCUT_LABEL}`,
                 `Listen ${FOCUS_LISTENING_SHORTCUT_LABEL}`,
                 `Regenerate ${FOCUS_REGENERATE_SHORTCUT_LABEL}`,
+                `Next ${FOCUS_NEXT_PHASE_SHORTCUT_LABEL}`,
               ].join(" / ")}
             >
               {error ? "Error" : statusLabel[status]}

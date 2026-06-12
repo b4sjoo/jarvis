@@ -112,6 +112,17 @@ export const DEFAULT_SHORTCUT_ACTIONS: ShortcutAction[] = [
     },
   },
   {
+    id: "meeting_next_phase",
+    name: "Meeting Next Phase",
+    description:
+      "Advance the current Meeting Assistant task to the next playbook phase",
+    defaultKey: {
+      macos: "cmd+shift+right",
+      windows: "ctrl+shift+right",
+      linux: "ctrl+shift+right",
+    },
+  },
+  {
     id: "meeting_toggle_microphone_context",
     name: "Meeting Mic Context",
     description: "Toggle microphone-side context capture for Meeting Assistant",
