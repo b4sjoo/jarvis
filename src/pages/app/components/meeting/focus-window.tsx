@@ -254,33 +254,6 @@ function MeetingFocusControlsWindow({
         </div>
 
         <div className="mt-2 flex min-h-0 flex-1 flex-col gap-2">
-          {snapshot.activeTask ? (
-            <div className="min-w-0 rounded-md border border-border/50 bg-muted/20 px-3 py-2">
-              <div className="mb-1 flex min-w-0 items-center gap-1.5 text-[11px] font-medium text-muted-foreground">
-                <BrainIcon className="h-3.5 w-3.5 shrink-0" />
-                <span className="truncate">Active task</span>
-              </div>
-              <div className="flex min-w-0 flex-wrap gap-1">
-                <Badge variant="outline" className="max-w-full rounded-sm px-1.5 py-0 text-[10px]">
-                  <span className="truncate">{snapshot.activeTask.source}</span>
-                </Badge>
-                <Badge variant="outline" className="max-w-full rounded-sm px-1.5 py-0 text-[10px]">
-                  <span className="truncate">{snapshot.activeTask.questionType}</span>
-                </Badge>
-                <Badge variant="outline" className="max-w-full rounded-sm px-1.5 py-0 text-[10px]">
-                  <span className="truncate">{snapshot.activeTask.playbookPhase}</span>
-                </Badge>
-                {snapshot.activeTask.child ? (
-                  <Badge variant="outline" className="max-w-full rounded-sm px-1.5 py-0 text-[10px]">
-                    <span className="truncate">
-                      child: {snapshot.activeTask.child.questionType}
-                    </span>
-                  </Badge>
-                ) : null}
-              </div>
-            </div>
-          ) : null}
-
           <div className="flex min-w-0 flex-1 flex-col overflow-hidden rounded-md border border-border/50 bg-muted/20 px-3 py-2">
             <div className="mb-1 flex min-w-0 items-center gap-1.5 text-[11px] font-medium text-muted-foreground">
               <MessageSquareTextIcon className="h-3.5 w-3.5 shrink-0" />
