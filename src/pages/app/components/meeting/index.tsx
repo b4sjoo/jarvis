@@ -508,6 +508,7 @@ export const MeetingAssistant = ({
         chineseThinking: displaySuggestionSections.chineseThinking,
         answer: displaySuggestionSections.answer,
         reply: displaySuggestionSections.reply,
+        whiteboard: displaySuggestionSections.whiteboard,
         code: displaySuggestionSections.code,
         complexity: displaySuggestionSections.complexity,
         question: displaySuggestionSections.question,
@@ -1245,6 +1246,19 @@ export const MeetingAssistant = ({
                     />
                   </section>
 
+                  {suggestionSections.whiteboard ? (
+                    <section className="min-w-0 overflow-hidden rounded-md border border-border/70 bg-muted/20 p-3">
+                      <div className="mb-2 flex items-center gap-2 text-xs font-semibold">
+                        <FileTextIcon className="h-3.5 w-3.5" />
+                        Whiteboard
+                      </div>
+                      <MeetingMarkdownText
+                        className={cn(WRAP_TEXT_CLASS, "text-xs leading-5")}
+                        value={suggestionSections.whiteboard}
+                      />
+                    </section>
+                  ) : null}
+
                   <section className="min-w-0 overflow-hidden rounded-md border border-border/70 p-3">
                     <div className="mb-2 flex items-center gap-2 text-xs font-semibold">
                       <MessageSquareTextIcon className="h-3.5 w-3.5" />
@@ -1950,6 +1964,19 @@ const FocusModePanel = ({
                 value={focusAnswer || "Waiting for answer."}
               />
             </section>
+
+            {suggestionSections.whiteboard ? (
+              <section className="min-w-0 overflow-hidden rounded-md border border-border/70 bg-muted/20 p-3">
+                <div className="mb-2 flex items-center gap-2 text-xs font-semibold">
+                  <FileTextIcon className="h-3.5 w-3.5" />
+                  Whiteboard
+                </div>
+                <MeetingMarkdownText
+                  className={cn(WRAP_TEXT_CLASS, "text-xs leading-5")}
+                  value={suggestionSections.whiteboard}
+                />
+              </section>
+            ) : null}
 
             {suggestionSections.code || suggestionSections.complexity ? (
               <section className="min-w-0 overflow-hidden rounded-md border border-border/70 p-3">
@@ -3929,6 +3956,8 @@ const sectionBoundaryLabels = [
   "Question",
   "Answer",
   "Approach",
+  "Whiteboard",
+  "Infrastructure diagram",
   "Code",
   "Implementation",
   "Complexity",
@@ -3955,6 +3984,7 @@ function parseSuggestionSections(
       screenQuestion: "",
       answer: "",
       approach: "",
+      whiteboard: "",
       code: "",
       complexity: "",
       clarifyingOptions: [],
@@ -3973,11 +4003,17 @@ function parseSuggestionSections(
     ]);
   const answer = parsedScreenTaskAnswer.answer ?? "";
   const approach = parsedScreenTaskAnswer.approach ?? "";
+  const whiteboard =
+    parsedScreenTaskAnswer.whiteboard ??
+    readSuggestionSection(trimmedContent, [
+      "Whiteboard",
+      "Infrastructure diagram",
+    ]);
   const code = parsedScreenTaskAnswer.code ?? "";
   const complexity = parsedScreenTaskAnswer.complexity ?? "";
   const clarifyingQuestion = parsedScreenTaskAnswer.clarifyingQuestion ?? "";
   const clarifyingOptions = parsedScreenTaskAnswer.clarifyingOptions ?? [];
-  const isScreenTask = Boolean(answer || approach || code || complexity);
+  const isScreenTask = Boolean(answer || approach || whiteboard || code || complexity);
   const reply = readSuggestionSection(trimmedContent, [
     "Reply",
     "Suggested reply",
@@ -4007,6 +4043,7 @@ function parseSuggestionSections(
     screenQuestion,
     answer,
     approach,
+    whiteboard,
     code,
     complexity,
     clarifyingOptions,
@@ -4271,6 +4308,7 @@ function formatParsedScreenAnswer(answer: ScreenTaskAnswer) {
       question: answer.question ?? "",
       answer: answer.answer ?? "",
       approach: answer.approach ?? "",
+      whiteboardChars: answer.whiteboard?.length ?? 0,
       codeChars: answer.code?.length ?? 0,
       complexity: answer.complexity ?? "",
       clarifyingQuestion: answer.clarifyingQuestion ?? "",

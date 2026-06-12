@@ -6,6 +6,8 @@ const SCREEN_TASK_SECTION_LABELS = [
   "Question",
   "Answer",
   "Approach",
+  "Whiteboard",
+  "Infrastructure diagram",
   "Code",
   "Implementation",
   "Complexity",
@@ -22,6 +24,10 @@ export function parseScreenTaskAnswer(content: string): ScreenTaskAnswer {
   const question = readScreenTaskSection(rawContent, ["Question"]);
   const answer = readScreenTaskSection(rawContent, ["Answer"]);
   const rawApproach = readScreenTaskSection(rawContent, ["Approach"]);
+  const whiteboard = readScreenTaskSection(rawContent, [
+    "Whiteboard",
+    "Infrastructure diagram",
+  ]);
   const rawCode = readScreenTaskSection(rawContent, ["Code", "Implementation"]);
   const complexity = readScreenTaskSection(rawContent, ["Complexity"]);
   const clarifyingQuestion = readScreenTaskSection(rawContent, [
@@ -41,6 +47,7 @@ export function parseScreenTaskAnswer(content: string): ScreenTaskAnswer {
     question: question || undefined,
     answer: answer || undefined,
     approach: approach || undefined,
+    whiteboard: whiteboard || undefined,
     code: code || undefined,
     complexity: complexity || undefined,
     clarifyingQuestion: clarifyingQuestion || undefined,
@@ -56,6 +63,7 @@ export function hasScreenTaskAnswerContent(answer: ScreenTaskAnswer) {
       answer.question ||
       answer.answer ||
       answer.approach ||
+      answer.whiteboard ||
       answer.code ||
       answer.complexity ||
       answer.clarifyingQuestion ||

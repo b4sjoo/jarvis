@@ -6442,6 +6442,7 @@ function buildCompactAnswerSummary(content: string) {
     parsed.question ? `Question: ${parsed.question}` : undefined,
     parsed.answer ? `Answer: ${parsed.answer}` : undefined,
     parsed.approach ? `Approach: ${parsed.approach}` : undefined,
+    parsed.whiteboard ? `Whiteboard: ${parsed.whiteboard}` : undefined,
     parsed.complexity ? `Complexity: ${parsed.complexity}` : undefined,
   ]
     .filter(Boolean)

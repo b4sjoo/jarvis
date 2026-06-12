@@ -15,6 +15,7 @@ export type MeetingFocusSectionsSnapshot = {
   chineseThinking: string;
   answer: string;
   reply: string;
+  whiteboard: string;
   code: string;
   complexity: string;
   question: string;
@@ -70,6 +71,7 @@ export const EMPTY_MEETING_FOCUS_SNAPSHOT: MeetingFocusSnapshot = {
     chineseThinking: "",
     answer: "",
     reply: "",
+    whiteboard: "",
     code: "",
     complexity: "",
     question: "",

@@ -25,6 +25,7 @@ import {
   CheckIcon,
   ClockIcon,
   Code2Icon,
+  FileTextIcon,
   HelpCircleIcon,
   MessageSquareTextIcon,
   SendIcon,
@@ -127,6 +128,19 @@ function MeetingFocusAnswerWindow({
                 value={focusAnswer || "Waiting for answer."}
               />
             </section>
+
+            {sections.whiteboard ? (
+              <section className="min-w-0 overflow-hidden rounded-md border border-border/70 bg-muted/20 p-3">
+                <div className="mb-2 flex items-center gap-2 text-xs font-semibold">
+                  <FileTextIcon className="h-3.5 w-3.5" />
+                  Whiteboard
+                </div>
+                <MeetingMarkdownText
+                  className={cn(WRAP_TEXT_CLASS, "text-xs leading-5")}
+                  value={sections.whiteboard}
+                />
+              </section>
+            ) : null}
 
             {sections.code || sections.complexity ? (
               <section className="min-w-0 overflow-hidden rounded-md border border-border/70 p-3">

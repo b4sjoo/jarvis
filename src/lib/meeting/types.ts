@@ -408,6 +408,7 @@ export interface ScreenTaskAnswer {
   question?: string;
   answer?: string;
   approach?: string;
+  whiteboard?: string;
   code?: string;
   complexity?: string;
   clarifyingQuestion?: string;

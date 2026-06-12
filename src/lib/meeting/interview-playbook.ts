@@ -130,7 +130,7 @@ export function selectInterviewPlaybook({
       clarifyingStrategy:
         "Prefer concrete requirement questions: DAU/actions/peak factor, consistency vs latency, single-region vs global, and out-of-scope boundaries.",
       outputContract:
-        "Answer can be a short opening plus 2-3 high-value clarifying questions. Approach should outline requirements, APIs/data model, architecture, scaling, correctness, reliability, and observability.",
+        "Answer can be a short opening plus 2-3 high-value clarifying questions. Approach should outline requirements, APIs/data model, architecture, scaling, correctness, reliability, and observability. Whiteboard should provide a concise pasteable architecture artifact when scope is clear enough or the interviewer asks to write/draw/explain layers.",
       followUpPolicy:
         "Follow-ups should update the affected phase: capacity, data model, write path, consistency, failure mode, or deep dive subsystem.",
       maxEntries: 6,
@@ -154,7 +154,7 @@ export function selectInterviewPlaybook({
       clarifyingStrategy:
         "Ask for target metric, traffic/latency, data freshness, evaluation standard, feedback loop, safety/privacy boundary, or rollout constraint.",
       outputContract:
-        "Answer should open with the design framing and include requirement clarifications when missing. Approach should cover data, model/retrieval, serving, eval, monitoring, rollout, and tradeoffs.",
+        "Answer should open with the design framing and include requirement clarifications when missing. Approach should cover data, model/retrieval, serving, eval, monitoring, rollout, and tradeoffs. Whiteboard should provide a concise pasteable architecture artifact when scope is clear enough or the interviewer asks to write/draw/explain layers.",
       followUpPolicy:
         "Follow-ups should update the relevant AI/ML layer: data, retrieval, model, orchestration, eval, observability, safety, or rollout.",
       maxEntries: 6,
