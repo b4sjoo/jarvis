@@ -5097,6 +5097,40 @@ export function useMeetingAssistant() {
         }
       );
 
+      let repairTraceId: string | undefined;
+      if (didUpdateTranscript || semanticRepairDecision.shouldRegenerate) {
+        const repairTrace = traceStoreRef.current.startTrace("voice", {
+          source: "emergency-correction-repair",
+          parentCorrectionTraceId: trace.id,
+          correctionRegenerationReason: semanticRepairDecision.reason,
+          semanticCorrectionApplied: semanticRepairDecision.shouldRegenerate,
+          correctedLatestTranscript: didUpdateTranscript,
+          activeMeetingTaskId: nextContextState.activeMeetingTask?.id,
+          activeMeetingParentQuestionType:
+            nextContextState.activeMeetingTask?.parent.questionType,
+        });
+        repairTraceId = repairTrace.id;
+        traceStoreRef.current.recordInput(
+          repairTrace.id,
+          "emergency correction repair context",
+          [
+            `Correction: ${correction.input}`,
+            `Target: ${correction.to ?? correction.term ?? "-"}`,
+            `From: ${correction.from ?? "-"}`,
+            `Reason: ${semanticRepairDecision.reason}`,
+          ].join("\n"),
+          {
+            parentCorrectionTraceId: trace.id,
+            correctionTarget: correction.to ?? correction.term,
+            correctionSource: correction.from,
+            correctedLatestTranscript: didUpdateTranscript,
+          }
+        );
+        traceStoreRef.current.updateMetadata(trace.id, {
+          repairTraceId,
+        });
+      }
+
       setState((previous) => ({
         ...previous,
         error: null,
@@ -5117,6 +5151,7 @@ export function useMeetingAssistant() {
             ? "screen-anchored"
             : "live",
           currentSuggestion: currentSuggestionText,
+          traceId: repairTraceId,
         });
       }
     },
@@ -6324,6 +6359,7 @@ function decideScreenTaskRelation({
     .filter(Boolean)
     .join("\n");
   const overlap = countSignificantTokenOverlap(screenText, parentText);
+  const semanticSimilarity = calculateTaskTextSimilarity(screenText, parentText);
   const correctionOverlap = countCorrectionTermOverlap(corrections, screenText);
   const screenProjectAnchor = screenPreflight?.projectAnchor;
   const projectAnchorMatches = screenProjectAnchor
@@ -6348,11 +6384,27 @@ function decideScreenTaskRelation({
     };
   }
 
+  if (semanticSimilarity >= 0.34) {
+    return {
+      relation: "resume-parent",
+      reason: `screen-parent-semantic-similarity:${semanticSimilarity.toFixed(2)}`,
+      confidence: Math.min(0.88, 0.58 + semanticSimilarity),
+    };
+  }
+
   if (overlap >= 2) {
     return {
-      relation: "followup-parent",
+      relation: "resume-parent",
       reason: `screen-parent-token-overlap:${overlap}`,
       confidence: Math.min(0.84, 0.55 + overlap * 0.08),
+    };
+  }
+
+  if (semanticSimilarity >= 0.22 && hasSharedDomainSignal(screenText, parentText)) {
+    return {
+      relation: "followup-parent",
+      reason: `screen-parent-domain-similarity:${semanticSimilarity.toFixed(2)}`,
+      confidence: Math.min(0.78, 0.52 + semanticSimilarity),
     };
   }
 
@@ -6404,6 +6456,39 @@ function countSignificantTokenOverlap(left: string, right: string) {
     if (rightTokens.has(token)) count += 1;
   }
   return count;
+}
+
+function calculateTaskTextSimilarity(left: string, right: string) {
+  const leftTokens = extractSignificantTokens(left);
+  const rightTokens = extractSignificantTokens(right);
+  if (!leftTokens.size || !rightTokens.size) return 0;
+
+  let intersection = 0;
+  for (const token of leftTokens) {
+    if (rightTokens.has(token)) intersection += 1;
+  }
+
+  const union = new Set([...leftTokens, ...rightTokens]).size;
+  return union ? intersection / union : 0;
+}
+
+function hasSharedDomainSignal(left: string, right: string) {
+  const domains = [
+    ["rag", "retrieval", "embedding", "vector", "llm", "agent"],
+    ["trip", "planning", "travel", "recommendation", "recommender"],
+    ["uber", "ride", "driver", "location", "matching", "dispatch"],
+    ["instagram", "feed", "photo", "social", "follow", "post"],
+    ["ticket", "booking", "seat", "inventory", "payment"],
+    ["agentic", "memory", "consolidation", "context"],
+  ];
+  const leftNormalized = normalizeTranscriptForGate(left);
+  const rightNormalized = normalizeTranscriptForGate(right);
+
+  return domains.some((signals) => {
+    const leftHits = signals.filter((signal) => leftNormalized.includes(signal));
+    const rightHits = signals.filter((signal) => rightNormalized.includes(signal));
+    return leftHits.length > 0 && rightHits.length > 0;
+  });
 }
 
 function extractSignificantTokens(text: string) {

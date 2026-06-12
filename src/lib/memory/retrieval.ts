@@ -21,6 +21,7 @@ import {
   isQuestionTypeCompatibleWithMemoryFamily,
   normalizeMemoryInterviewTypes,
 } from "@/lib/meeting/task-taxonomy";
+import { isMemoryProjectAnchorCompatible } from "./project-anchor.js";
 
 const DEFAULT_MAX_ENTRIES = 5;
 const DEFAULT_MAX_CHARS = 6000;
@@ -676,27 +677,7 @@ function isProjectAnchorMismatch(
   entry: MemoryEntry,
   strictProjectAnchor: string | undefined
 ) {
-  const anchor = strictProjectAnchor?.trim();
-  if (!anchor || !isProjectSpecificEntry(entry)) return false;
-  if (isGlobalProjectAnchorExemptEntry(entry)) return false;
-
-  const anchorTokens = tokenize(anchor);
-  const searchable = buildEntrySearchableText(entry);
-  const overlap = countTokenOverlap(anchorTokens, tokenize(searchable));
-
-  return overlap === 0;
-}
-
-function isGlobalProjectAnchorExemptEntry(entry: MemoryEntry) {
-  return (
-    entry.scope === "global" &&
-    (entry.type === "profile" ||
-      entry.type === "preference" ||
-      entry.type === "resume_fact" ||
-      entry.type === "answer_template" ||
-      entry.type === "evaluation_criteria" ||
-      entry.type === "interview_framework")
-  );
+  return !isMemoryProjectAnchorCompatible(entry, strictProjectAnchor);
 }
 
 function isSystemDesignGuidanceEntry(entry: MemoryEntry) {
