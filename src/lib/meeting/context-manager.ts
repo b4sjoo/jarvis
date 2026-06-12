@@ -412,21 +412,50 @@ export class MeetingContextManager {
   }
 
   private formatScreenContext() {
-    const activeTaskContext = this.state.activeScreenTask
+    const activeMeetingTask = this.buildActiveMeetingTask();
+    const activeTaskContext = activeMeetingTask?.screen
       ? [
-          "Active screen task:",
-          this.state.activeScreenTask.question
-            ? `Question: ${this.state.activeScreenTask.question}`
+          "Active meeting screen context:",
+          `Task id: ${activeMeetingTask.id}`,
+          `Source: ${activeMeetingTask.source}`,
+          `Question type: ${activeMeetingTask.parent.questionType}`,
+          activeMeetingTask.parent.topic
+            ? `Topic: ${activeMeetingTask.parent.topic}`
             : undefined,
-          `Kind: ${this.state.activeScreenTask.kind}`,
-          this.state.activeScreenTask.language
-            ? `Language: ${this.state.activeScreenTask.language}`
+          activeMeetingTask.screen.question
+            ? `Screen question: ${activeMeetingTask.screen.question}`
             : undefined,
-          this.state.activeScreenTask.content,
+          activeMeetingTask.screen.language
+            ? `Language: ${activeMeetingTask.screen.language}`
+            : undefined,
+          activeMeetingTask.screen.askFrame
+            ? `Ask frame: ${activeMeetingTask.screen.askFrame}`
+            : undefined,
+          activeMeetingTask.screen.topicDomain
+            ? `Topic domain: ${activeMeetingTask.screen.topicDomain}`
+            : undefined,
+          activeMeetingTask.screen.projectAnchor
+            ? `Project anchor: ${activeMeetingTask.screen.projectAnchor}`
+            : undefined,
+          activeMeetingTask.screen.content,
         ]
           .filter(Boolean)
           .join("\n")
-      : "";
+      : this.state.activeScreenTask
+        ? [
+            "Active screen task:",
+            this.state.activeScreenTask.question
+              ? `Question: ${this.state.activeScreenTask.question}`
+              : undefined,
+            `Kind: ${this.state.activeScreenTask.kind}`,
+            this.state.activeScreenTask.language
+              ? `Language: ${this.state.activeScreenTask.language}`
+              : undefined,
+            this.state.activeScreenTask.content,
+          ]
+            .filter(Boolean)
+            .join("\n")
+        : "";
 
     const observationContext = this.state.screenObservations
       .map((observation) => {

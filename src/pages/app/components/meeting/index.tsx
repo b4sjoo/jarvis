@@ -367,11 +367,23 @@ export const MeetingAssistant = ({
     () => parseSuggestionSections(displaySuggestion, completedScreenTaskAnswer),
     [completedScreenTaskAnswer, displaySuggestion]
   );
-  const activeScreenTaskId = meeting.activeScreenTask?.id ?? "";
+  const activeScreenTaskId =
+    meeting.activeMeetingTask?.screen?.activeScreenTaskId ??
+    meeting.activeScreenTask?.id ??
+    "";
+  const hasActiveMeetingTask = Boolean(
+    meeting.activeMeetingTask ??
+      meeting.activeScreenTask ??
+      meeting.activeInterviewTask
+  );
+  const hasActiveMeetingScreenContext = Boolean(
+    meeting.activeMeetingTask?.screen ?? meeting.activeScreenTask
+  );
   const activeParentTaskId =
     meeting.activeMeetingTask?.parent.id ?? activeScreenTaskId;
   const activeTaskKind =
-    meeting.activeMeetingTask?.parent.questionType ?? meeting.activeScreenTask?.kind;
+    meeting.activeMeetingTask?.parent.questionType ??
+    meeting.activeScreenTask?.kind;
   useEffect(() => {
     if (!activeParentTaskId) {
       setCodingArtifactCache(null);
@@ -553,7 +565,8 @@ export const MeetingAssistant = ({
       isTaskSwitchClarifyingQuestion,
       interviewTypes: editableBriefForFocus.interviewTypes,
       activeTask: getActiveMeetingTaskFocusSummary(meeting.activeMeetingTask),
-      hasActiveScreenTask: Boolean(meeting.activeScreenTask),
+      hasActiveMeetingTask,
+      hasActiveScreenTask: hasActiveMeetingScreenContext,
       speechCorrections: meeting.speechCorrections.slice(-4).map((item) => ({
         id: item.id,
         input: item.input,
@@ -574,6 +587,8 @@ export const MeetingAssistant = ({
       latestTurn?.text,
       meeting.activeMeetingTask,
       meeting.activeScreenTask,
+      hasActiveMeetingTask,
+      hasActiveMeetingScreenContext,
       meeting.error,
       meeting.speechCorrections,
       meeting.status,
@@ -586,6 +601,7 @@ export const MeetingAssistant = ({
       displaySuggestionSections.isScreenTask,
       displaySuggestionSections.question,
       displaySuggestionSections.reply,
+      displaySuggestionSections.whiteboard,
     ]
   );
   const focusSnapshotRef = useRef(focusSnapshot);
@@ -1099,7 +1115,7 @@ export const MeetingAssistant = ({
               suggestionSections={displaySuggestionSections}
               codingArtifactCached={codingArtifactDisplay.isCached}
               isScreenTaskSuggestion={isScreenTaskSuggestion}
-              hasActiveScreenTask={Boolean(meeting.activeScreenTask)}
+              hasActiveMeetingTask={hasActiveMeetingTask}
               latestTurnText={latestTurn?.text || "Waiting for meeting audio."}
               speechCorrectionInput={speechCorrectionInput}
               onSpeechCorrectionInputChange={setSpeechCorrectionInput}
@@ -1164,7 +1180,7 @@ export const MeetingAssistant = ({
                 open={interviewBriefOpen}
                 onOpenChange={setInterviewBriefOpen}
                 brief={meeting.interviewSessionBrief}
-                hasActiveScreenTask={Boolean(meeting.activeScreenTask)}
+                hasActiveMeetingTask={hasActiveMeetingTask}
                 onBriefChange={meeting.setInterviewSessionBrief}
                 onClear={meeting.clearInterviewSessionBrief}
               />
@@ -1811,9 +1827,9 @@ export const MeetingAssistant = ({
                 size="sm"
                 variant="outline"
                 className="h-8 gap-1.5 text-xs"
-                title="Clear active screen task"
+                title="Clear active task"
                 onClick={meeting.clearActiveScreenTask}
-                disabled={!meeting.activeScreenTask}
+                disabled={!hasActiveMeetingTask}
               >
                 <Trash2Icon className="h-3.5 w-3.5" />
                 Clear task
@@ -1862,7 +1878,7 @@ const FocusModePanel = ({
   suggestionSections,
   codingArtifactCached,
   isScreenTaskSuggestion,
-  hasActiveScreenTask,
+  hasActiveMeetingTask,
   latestTurnText,
   speechCorrectionInput,
   onSpeechCorrectionInputChange,
@@ -1886,7 +1902,7 @@ const FocusModePanel = ({
   suggestionSections: ReturnType<typeof parseSuggestionSections>;
   codingArtifactCached: boolean;
   isScreenTaskSuggestion: boolean;
-  hasActiveScreenTask: boolean;
+  hasActiveMeetingTask: boolean;
   latestTurnText: string;
   speechCorrectionInput: string;
   onSpeechCorrectionInputChange: (value: string) => void;
@@ -2045,7 +2061,7 @@ const FocusModePanel = ({
               compact
               value={editableBrief.interviewTypes}
               onChange={updateInterviewTypes}
-              forceSingleConcrete={hasActiveScreenTask}
+              forceSingleConcrete={hasActiveMeetingTask}
             />
             <span
               className={cn(
@@ -2331,14 +2347,14 @@ const InterviewSessionBriefPanel = ({
   open,
   onOpenChange,
   brief,
-  hasActiveScreenTask,
+  hasActiveMeetingTask,
   onBriefChange,
   onClear,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   brief?: InterviewSessionBrief;
-  hasActiveScreenTask: boolean;
+  hasActiveMeetingTask: boolean;
   onBriefChange: (brief: InterviewSessionBrief | undefined) => void;
   onClear: () => void;
 }) => {
@@ -2424,7 +2440,7 @@ const InterviewSessionBriefPanel = ({
             </Label>
             <InterviewTypeButtonGrid
               value={editableBrief.interviewTypes}
-              forceSingleConcrete={hasActiveScreenTask}
+              forceSingleConcrete={hasActiveMeetingTask}
               onChange={(interviewTypes) => {
                 updateBrief({ interviewTypes });
               }}

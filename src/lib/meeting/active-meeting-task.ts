@@ -8,6 +8,8 @@ import type {
   ScreenObservation,
   ScreenQuestionType,
   SelectedInterviewPlaybook,
+  TaskAskFrame,
+  TaskTopicDomain,
 } from "./types";
 import {
   isParentCanonicalQuestionType,
@@ -64,6 +66,10 @@ export interface ActiveMeetingScreenContext {
   captureTarget?: ScreenCaptureTarget;
   language?: string;
   question?: string;
+  askFrame?: TaskAskFrame;
+  topicDomain?: TaskTopicDomain;
+  projectAnchor?: string;
+  classifierConfidence?: number;
   latestScreenAnswer?: string;
   content?: string;
 }
@@ -138,6 +144,10 @@ export function getActiveMeetingTaskTraceMetadata(
     activeMeetingChildQuestionType: task.child?.questionType,
     activeMeetingChildIntent: task.child?.intent,
     activeMeetingScreenTaskId: task.screen?.activeScreenTaskId,
+    activeMeetingScreenAskFrame: task.screen?.askFrame,
+    activeMeetingScreenTopicDomain: task.screen?.topicDomain,
+    activeMeetingScreenProjectAnchor: task.screen?.projectAnchor,
+    activeMeetingScreenClassifierConfidence: task.screen?.classifierConfidence,
     activeMeetingTaskDivergence: task.divergence?.reason,
   };
 }
@@ -179,6 +189,18 @@ export function formatActiveMeetingTaskForPrompt(
           `- Observation id: ${task.screen.observationId}`,
           task.screen.language ? `- Language: ${task.screen.language}` : undefined,
           task.screen.question ? `- Question: ${task.screen.question}` : undefined,
+          task.screen.askFrame
+            ? `- Ask frame: ${task.screen.askFrame}`
+            : undefined,
+          task.screen.topicDomain
+            ? `- Topic domain: ${task.screen.topicDomain}`
+            : undefined,
+          task.screen.projectAnchor
+            ? `- Project anchor: ${task.screen.projectAnchor}`
+            : undefined,
+          typeof task.screen.classifierConfidence === "number"
+            ? `- Classifier confidence: ${task.screen.classifierConfidence}`
+            : undefined,
           task.screen.captureTarget?.appName
             ? `- App: ${task.screen.captureTarget.appName}`
             : undefined,
@@ -312,6 +334,10 @@ function buildScreenContext(
         : undefined,
     language: task.language,
     question: task.question,
+    askFrame: task.classifier?.askFrame,
+    topicDomain: task.classifier?.topicDomain,
+    projectAnchor: task.classifier?.projectAnchor,
+    classifierConfidence: task.classifier?.confidence,
     latestScreenAnswer: task.content,
     content: task.content,
   };

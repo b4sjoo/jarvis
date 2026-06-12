@@ -436,20 +436,21 @@ function formatOpeningRouteForPrompt(
 function formatSourceSpecificTaskContext(context: AdvisorPromptContext) {
   if (context.activeMeetingTask) {
     const parts = [
-      context.activeScreenTask
+      context.activeMeetingTask.screen
         ? [
             "Screen source metadata:",
-            context.activeScreenTask.classifier?.askFrame
-              ? `Ask frame: ${context.activeScreenTask.classifier.askFrame}`
+            context.activeMeetingTask.screen.askFrame
+              ? `Ask frame: ${context.activeMeetingTask.screen.askFrame}`
               : undefined,
-            context.activeScreenTask.classifier?.topicDomain
-              ? `Topic domain: ${context.activeScreenTask.classifier.topicDomain}`
+            context.activeMeetingTask.screen.topicDomain
+              ? `Topic domain: ${context.activeMeetingTask.screen.topicDomain}`
               : undefined,
-            context.activeScreenTask.classifier?.projectAnchor
-              ? `Project anchor: ${context.activeScreenTask.classifier.projectAnchor}`
+            context.activeMeetingTask.screen.projectAnchor
+              ? `Project anchor: ${context.activeMeetingTask.screen.projectAnchor}`
               : undefined,
-            typeof context.activeScreenTask.classifier?.confidence === "number"
-              ? `Classifier confidence: ${context.activeScreenTask.classifier.confidence}`
+            typeof context.activeMeetingTask.screen.classifierConfidence ===
+            "number"
+              ? `Classifier confidence: ${context.activeMeetingTask.screen.classifierConfidence}`
               : undefined,
           ]
             .filter(Boolean)

@@ -27,6 +27,8 @@ test("builds a screen-only active meeting task from legacy screen state", () => 
   assert.equal(task?.parent.questionType, "coding");
   assert.equal(task?.screen?.activeScreenTaskId, "screen_task_1");
   assert.equal(task?.screen?.captureTarget?.appName, "Cursor");
+  assert.equal(task?.screen?.askFrame, "direct-answer");
+  assert.equal(task?.screen?.topicDomain, "backend");
   assert.equal(task?.child, undefined);
 });
 
@@ -97,7 +99,9 @@ test("exposes trace metadata and prompt text for evaluation corpus linking", () 
   assert.equal(metadata.activeMeetingTaskId, "parent_1");
   assert.equal(metadata.activeMeetingParentQuestionType, "coding");
   assert.equal(metadata.activeMeetingScreenTaskId, "screen_task_1");
+  assert.equal(metadata.activeMeetingScreenAskFrame, "direct-answer");
   assert.match(formatActiveMeetingTaskForPrompt(task), /<|Task id: parent_1/);
+  assert.match(formatActiveMeetingTaskForPrompt(task), /Ask frame: direct-answer/);
 });
 
 test("surfaces screen/interview divergence instead of silently hiding it", () => {
@@ -126,6 +130,12 @@ function makeScreenTask(
     question: "Solve two sum",
     kind: "coding",
     language: "python",
+    classifier: {
+      questionType: "coding",
+      askFrame: "direct-answer",
+      topicDomain: "backend",
+      confidence: 0.9,
+    },
     content: "Question: Two Sum\nAnswer: Use a hash map.",
     basedOnTurnIds: [],
     basedOnObservationId: "obs_1",

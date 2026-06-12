@@ -4821,7 +4821,13 @@ export function useMeetingAssistant() {
     const pending = pendingInterviewTypeOverrideRef.current;
     if (!pending) return;
 
-    if (!state.activeScreenTask) {
+    const activeMeetingTask = state.activeMeetingTask;
+    const pendingScreenTaskId =
+      activeMeetingTask?.screen?.activeScreenTaskId ?? state.activeScreenTask?.id;
+    const pendingQuestionType =
+      activeMeetingTask?.parent.questionType ?? state.activeScreenTask?.kind;
+
+    if (!activeMeetingTask && !state.activeScreenTask) {
       pendingInterviewTypeOverrideRef.current = null;
       traceStoreRef.current.finishTrace(
         pending.traceId,
@@ -4832,8 +4838,8 @@ export function useMeetingAssistant() {
     }
 
     if (
-      state.activeScreenTask.id !== pending.taskId ||
-      normalizeScreenTaskKindForOverrideComparison(state.activeScreenTask.kind) !==
+      pendingScreenTaskId !== pending.taskId ||
+      normalizeScreenTaskKindForOverrideComparison(pendingQuestionType) !==
         normalizeScreenTaskKindForOverrideComparison(pending.correctedKind)
     ) {
       return;
@@ -4845,7 +4851,7 @@ export function useMeetingAssistant() {
       mode: "screen-anchored",
       traceId: pending.traceId,
     });
-  }, [runAdvisor, state.activeScreenTask]);
+  }, [runAdvisor, state.activeMeetingTask, state.activeScreenTask]);
 
   const regenerateSuggestion = useCallback(async () => {
     await runAdvisor({
@@ -5455,21 +5461,31 @@ function getAdvisorActivePlaybook(context: AdvisorPromptContext) {
 function getAdvisorActiveProjectAnchor(context: AdvisorPromptContext) {
   return (
     context.activeMeetingTask?.parent.supportedFactAnchors[0] ??
+    context.activeMeetingTask?.screen?.projectAnchor ??
     context.activeScreenTask?.classifier?.projectAnchor ??
     context.activeInterviewTask?.supportedFactAnchors[0]
   );
 }
 
 function getAdvisorActiveClassifierConfidence(context: AdvisorPromptContext) {
-  return context.activeScreenTask?.classifier?.confidence;
+  return (
+    context.activeMeetingTask?.screen?.classifierConfidence ??
+    context.activeScreenTask?.classifier?.confidence
+  );
 }
 
 function getAdvisorActiveAskFrame(context: AdvisorPromptContext) {
-  return readMemoryAskFrame(context.activeScreenTask?.classifier?.askFrame);
+  return readMemoryAskFrame(
+    context.activeMeetingTask?.screen?.askFrame ??
+      context.activeScreenTask?.classifier?.askFrame
+  );
 }
 
 function getAdvisorActiveTopicDomain(context: AdvisorPromptContext) {
-  return readMemoryTopicDomain(context.activeScreenTask?.classifier?.topicDomain);
+  return readMemoryTopicDomain(
+    context.activeMeetingTask?.screen?.topicDomain ??
+      context.activeScreenTask?.classifier?.topicDomain
+  );
 }
 
 function hasAdvisorActiveChild(context: AdvisorPromptContext) {
@@ -5499,6 +5515,15 @@ function formatAdvisorActiveTaskForQuery(
         : undefined,
       context.activeMeetingTask.screen?.question
         ? `${label} screen question: ${context.activeMeetingTask.screen.question}`
+        : undefined,
+      context.activeMeetingTask.screen?.askFrame
+        ? `${label} ask frame: ${context.activeMeetingTask.screen.askFrame}`
+        : undefined,
+      context.activeMeetingTask.screen?.topicDomain
+        ? `${label} topic domain: ${context.activeMeetingTask.screen.topicDomain}`
+        : undefined,
+      context.activeMeetingTask.screen?.projectAnchor
+        ? `${label} project anchor: ${context.activeMeetingTask.screen.projectAnchor}`
         : undefined,
       context.activeMeetingTask.screen?.latestScreenAnswer
         ? `${label} screen answer:\n${context.activeMeetingTask.screen.latestScreenAnswer}`
