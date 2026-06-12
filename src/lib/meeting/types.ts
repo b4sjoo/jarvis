@@ -697,6 +697,68 @@ export interface TraceHumanEvaluation {
   notes?: string;
 }
 
+export type HumanEvaluationVerdict =
+  | "ok"
+  | "partial"
+  | "wrong"
+  | "missing"
+  | "forbidden"
+  | "not_applicable";
+
+export interface HumanEvaluationVerdictBlock {
+  verdict: HumanEvaluationVerdict;
+  reasons: string[];
+  note?: string;
+}
+
+export type MemoryEntryEvaluationLabelValue =
+  | "relevant"
+  | "irrelevant"
+  | "forbidden";
+
+export interface MemoryEntryEvaluationLabel {
+  memoryId: string;
+  title?: string;
+  label: MemoryEntryEvaluationLabelValue;
+  reason?: string;
+}
+
+export interface MissingExpectedMemoryLabel {
+  id?: string;
+  note?: string;
+}
+
+export interface QuestionHumanEvaluation {
+  id: string;
+  sessionId?: string;
+  questionId: string;
+  taskId?: string;
+  parentTaskId?: string;
+  childTaskId?: string;
+  taskSource?: "screen" | "voice" | "mixed";
+  traceIds: string[];
+  questionType?: HumanEvalQuestionType;
+  correctedQuestionType?: HumanEvalQuestionType;
+  company?: string;
+  correctedCompany?: string;
+  relation?: string;
+  correctedRelation?: string;
+  playbookId?: string;
+  detectedPlaybookPhase?: string;
+  correctedPlaybookPhase?: string;
+  classification: HumanEvaluationVerdictBlock;
+  playbook: HumanEvaluationVerdictBlock;
+  playbookPhase: HumanEvaluationVerdictBlock;
+  memory: HumanEvaluationVerdictBlock;
+  guardrail: HumanEvaluationVerdictBlock;
+  answer: HumanEvaluationVerdictBlock;
+  memoryEntryLabels: MemoryEntryEvaluationLabel[];
+  missingExpectedMemory: MissingExpectedMemoryLabel[];
+  notes?: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
 export interface MeetingAssistantState {
   status: MeetingAssistantStatus;
   transcriptTurns: TranscriptTurn[];
@@ -717,5 +779,6 @@ export interface MeetingAssistantState {
   lastTraceExport?: MeetingTraceExportRecord;
   sessionRecording: MeetingSessionRecordingState;
   humanEvaluations: TraceHumanEvaluation[];
+  questionEvaluations: QuestionHumanEvaluation[];
   speechCorrections: SpeechCorrection[];
 }

@@ -9,6 +9,7 @@ import {
   MeetingSessionRecordingState,
   MeetingTrace,
   MeetingTraceExportTrigger,
+  QuestionHumanEvaluation,
   ScreenObservation,
   TraceHumanEvaluation,
   TranscriptTurn,
@@ -58,6 +59,7 @@ interface SessionRecordingEvent {
     | "trace-export"
     | "trace-metrics"
     | "human-evaluation"
+    | "question-human-evaluation"
     | "task-snapshot"
     | "active-meeting-task-snapshot"
     | "runtime-reset"
@@ -705,6 +707,57 @@ export class SessionRecordingManager {
     this.recordEvent("human-evaluation", {
       evaluationCount: sessionEvaluations.length,
     }, ["human-evaluation/evaluations.json"]);
+  }
+
+  recordQuestionHumanEvaluations(evaluations: QuestionHumanEvaluation[]) {
+    const session = this.activeSession;
+    if (!session) return;
+    const sessionEvaluations = evaluations.filter((evaluation) => {
+      if (
+        evaluation.traceIds.some((traceId) => session.recordedTraceIds.has(traceId))
+      ) {
+        return true;
+      }
+      return [
+        evaluation.taskId,
+        evaluation.parentTaskId,
+        evaluation.childTaskId,
+      ].some((taskId) => taskId && session.recordedTaskIds.has(taskId));
+    });
+    if (!sessionEvaluations.length) return;
+
+    const payload = JSON.stringify(
+      {
+        savedAt: Date.now(),
+        sessionId: session.sessionId,
+        evaluations: sessionEvaluations,
+      },
+      null,
+      2
+    );
+    const compactPayload = JSON.stringify({
+      savedAt: Date.now(),
+      sessionId: session.sessionId,
+      evaluations: sessionEvaluations,
+    });
+    this.enqueue(async () => {
+      await this.writeText(
+        "human-evaluation/question-evaluations.json",
+        payload
+      );
+      await this.writeText(
+        "human-evaluation/question-evaluations.jsonl",
+        `${compactPayload}\n`,
+        true
+      );
+    });
+    this.recordEvent(
+      "question-human-evaluation",
+      {
+        evaluationCount: sessionEvaluations.length,
+      },
+      ["human-evaluation/question-evaluations.json"]
+    );
   }
 
   recordRuntimeBoundary(

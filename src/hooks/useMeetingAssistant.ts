@@ -50,6 +50,8 @@ import {
   MeetingModelRequestOptions,
   PENDING_CONFIRMATION_TTL_MS,
   ParentQuestionType,
+  QuestionEvaluationIdentity,
+  QuestionHumanEvaluation,
   ScreenObservation,
   ScreenPreflightResult,
   ScreenQuestionType,
@@ -85,6 +87,7 @@ import {
   selectInterviewPlaybook,
   formatInterviewPlaybookForTrace,
   readTraceHumanEvaluations,
+  readQuestionHumanEvaluations,
   buildSpeechBiasContext,
   formatSpeechBiasPromptForTrace,
   normalizeTranscriptWithSpeechBias,
@@ -100,13 +103,17 @@ import {
   normalizeQuestionTypeAlias,
   readInterviewBriefType,
   readSingleConcreteInterviewTypeOverride as readTaxonomySingleConcreteInterviewTypeOverride,
+  toHumanEvalQuestionType,
   toMemoryUseCaseForQuestionType,
   solveScreenAnchoredTask,
   shouldIncludeTurnInAdvisorPrompt,
   shouldSuppressDuplicateSystemAudioTurn,
   transcribeMeetingAudio,
   upsertTraceHumanEvaluation,
+  upsertQuestionHumanEvaluation,
+  buildQuestionEvaluationPatchFromTrace,
   persistTraceHumanEvaluations,
+  persistQuestionHumanEvaluations,
   buildSessionRecordingProviderSummary,
   buildFactAnchorDecision,
   formatFactAnchorDecisionForTrace,
@@ -229,6 +236,7 @@ const INITIAL_STATE: MeetingAssistantState = {
     artifactCount: 0,
   },
   humanEvaluations: [],
+  questionEvaluations: [],
   speechCorrections: [],
 };
 
@@ -874,6 +882,7 @@ export function useMeetingAssistant() {
       initialInterviewSessionBrief
     ),
     humanEvaluations: readTraceHumanEvaluations(),
+    questionEvaluations: readQuestionHumanEvaluations(),
   }));
   const sessionRecordingManagerRef = useRef<SessionRecordingManager | null>(
     null
@@ -1337,6 +1346,76 @@ export function useMeetingAssistant() {
     traceStoreRef.current.clear();
   }, []);
 
+  const buildQuestionEvaluationIdentity = useCallback(
+    (
+      trace: MeetingTrace,
+      evaluationPatch: Partial<TraceHumanEvaluation>,
+      sessionId?: string
+    ): QuestionEvaluationIdentity => {
+      const contextState = contextManagerRef.current.getState();
+      const activeMeetingTask = contextState.activeMeetingTask;
+      const canonicalQuestionType = normalizeCanonicalQuestionType(
+        normalizeQuestionTypeAlias(
+          evaluationPatch.questionType ??
+            readStringFromTraceMetadata(
+              trace.metadata,
+              "activeMeetingParentQuestionType"
+            ) ??
+            readStringFromTraceMetadata(trace.metadata, "canonicalQuestionType") ??
+            readStringFromTraceMetadata(trace.metadata, "questionType") ??
+            activeMeetingTask?.parent.questionType
+        )
+      );
+      const questionType = canonicalQuestionType
+        ? toHumanEvalQuestionType(canonicalQuestionType)
+        : undefined;
+
+      return {
+        sessionId,
+        traceId: trace.id,
+        traceKind: trace.kind,
+        taskId:
+          evaluationPatch.taskId ??
+          readStringFromTraceMetadata(trace.metadata, "activeMeetingTaskId") ??
+          readStringFromTraceMetadata(trace.metadata, "activeInterviewParentId") ??
+          readStringFromTraceMetadata(trace.metadata, "activeScreenTaskId") ??
+          activeMeetingTask?.id,
+        parentTaskId:
+          evaluationPatch.parentTaskId ??
+          readStringFromTraceMetadata(trace.metadata, "activeMeetingParentId") ??
+          readStringFromTraceMetadata(trace.metadata, "activeInterviewParentId") ??
+          activeMeetingTask?.parent.id,
+        childTaskId:
+          evaluationPatch.childTaskId ??
+          readStringFromTraceMetadata(trace.metadata, "activeMeetingChildId") ??
+          readStringFromTraceMetadata(trace.metadata, "activeInterviewChildId") ??
+          activeMeetingTask?.child?.id,
+        taskSource:
+          evaluationPatch.taskSource ??
+          readTaskSourceFromTraceMetadata(trace.metadata) ??
+          activeMeetingTask?.source,
+        questionType,
+        company:
+          readStringFromTraceMetadata(trace.metadata, "targetCompany") ??
+          readStringFromTraceMetadata(trace.metadata, "screenTargetCompany") ??
+          contextState.interviewSessionContext?.targetCompany?.value ??
+          contextState.interviewSessionBrief?.targetCompany,
+        relation:
+          readStringFromTraceMetadata(trace.metadata, "taskRelation") ??
+          readStringFromTraceMetadata(trace.metadata, "relationToActiveTask") ??
+          readStringFromTraceMetadata(trace.metadata, "turnGateReason"),
+        playbookId:
+          readStringFromTraceMetadata(trace.metadata, "playbookId") ??
+          activeMeetingTask?.parent.playbook?.id,
+        playbookPhase:
+          readStringFromTraceMetadata(trace.metadata, "playbookPhase") ??
+          readStringFromTraceMetadata(trace.metadata, "activeMeetingParentPhase") ??
+          activeMeetingTask?.parent.playbookPhase,
+      };
+    },
+    []
+  );
+
   const updateTraceHumanEvaluation = useCallback(
     (traceId: string, patch: Partial<TraceHumanEvaluation>) => {
       const trace = traceStoreRef.current
@@ -1383,17 +1462,70 @@ export function useMeetingAssistant() {
           trace.kind,
           evaluationPatch
         );
+        const traceEvaluation = humanEvaluations.find(
+          (evaluation) => evaluation.traceId === trace.id
+        );
+        const questionEvaluations = traceEvaluation
+          ? upsertQuestionHumanEvaluation(
+              previous.questionEvaluations,
+              buildQuestionEvaluationIdentity(
+                trace,
+                traceEvaluation,
+                previous.sessionRecording.sessionId
+              ),
+              buildQuestionEvaluationPatchFromTrace(traceEvaluation)
+            )
+          : previous.questionEvaluations;
         persistTraceHumanEvaluations(humanEvaluations);
+        persistQuestionHumanEvaluations(questionEvaluations);
         sessionRecordingManagerRef.current?.recordHumanEvaluations(
           humanEvaluations
+        );
+        sessionRecordingManagerRef.current?.recordQuestionHumanEvaluations(
+          questionEvaluations
         );
         return {
           ...previous,
           humanEvaluations,
+          questionEvaluations,
         };
       });
     },
-    []
+    [buildQuestionEvaluationIdentity]
+  );
+
+  const updateQuestionHumanEvaluation = useCallback(
+    (traceId: string, patch: Partial<QuestionHumanEvaluation>) => {
+      const trace = traceStoreRef.current
+        .getTraces()
+        .find((candidate) => candidate.id === traceId);
+      if (!trace) return;
+
+      setState((previous) => {
+        const traceEvaluation = previous.humanEvaluations.find(
+          (evaluation) => evaluation.traceId === trace.id
+        );
+        const identity = buildQuestionEvaluationIdentity(
+          trace,
+          traceEvaluation ?? {},
+          previous.sessionRecording.sessionId
+        );
+        const questionEvaluations = upsertQuestionHumanEvaluation(
+          previous.questionEvaluations,
+          identity,
+          patch
+        );
+        persistQuestionHumanEvaluations(questionEvaluations);
+        sessionRecordingManagerRef.current?.recordQuestionHumanEvaluations(
+          questionEvaluations
+        );
+        return {
+          ...previous,
+          questionEvaluations,
+        };
+      });
+    },
+    [buildQuestionEvaluationIdentity]
   );
 
   const incrementAppliedSpeechCorrections = useCallback(
@@ -4934,6 +5066,7 @@ export function useMeetingAssistant() {
     captureScreenContext,
     exportTrace,
     updateTraceHumanEvaluation,
+    updateQuestionHumanEvaluation,
     regenerateSuggestion,
     applyResponseAction,
     answerClarifyingQuestion,

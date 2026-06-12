@@ -21,6 +21,8 @@ import type {
   HumanEvalFailureReason,
   HumanEvalQuestionType,
   HumanEvalTaskQuality,
+  HumanEvaluationVerdict,
+  HumanEvaluationVerdictBlock,
   InterviewBriefType,
   InterviewSessionBrief,
   InterviewTargetCompany,
@@ -38,6 +40,8 @@ import type {
   MeetingTraceKindSummary,
   MeetingTraceSummary,
   MeetingTraceValueSummary,
+  MemoryEntryEvaluationLabelValue,
+  QuestionHumanEvaluation,
   ScreenCaptureTarget,
   ScreenTaskAnswer,
   SpeechCorrection,
@@ -187,6 +191,24 @@ const humanEvalFailureReasonOptions: Array<{
   { id: "stt-error", label: "STT" },
   { id: "capture-error", label: "Capture" },
   { id: "other", label: "Other" },
+];
+
+const humanEvaluationVerdictLabel: Record<HumanEvaluationVerdict, string> = {
+  ok: "OK",
+  partial: "Partial",
+  wrong: "Wrong",
+  missing: "Missing",
+  forbidden: "Forbidden",
+  not_applicable: "N/A",
+};
+
+const memoryEntryLabelOptions: Array<{
+  id: MemoryEntryEvaluationLabelValue;
+  label: string;
+}> = [
+  { id: "relevant", label: "Relevant" },
+  { id: "irrelevant", label: "Irrelevant" },
+  { id: "forbidden", label: "Forbidden" },
 ];
 
 const HOTKEY_CAPTURE_SETTLE_MS = 180;
@@ -435,6 +457,18 @@ export const MeetingAssistant = ({
         (evaluation) => evaluation.traceId === latestTrace.id
       )
     : undefined;
+  const latestQuestionEvaluation = latestTrace
+    ? meeting.questionEvaluations.find((evaluation) =>
+        evaluation.traceIds.includes(latestTrace.id)
+      )
+    : undefined;
+  const latestMemoryEvaluationEntries =
+    meeting.lastMemoryContext?.entries.map((item) => ({
+      id: item.entry.id,
+      title: item.entry.title,
+      score: item.score,
+      matchReason: item.matchReason,
+    })) ?? [];
   const clarifyingQuestion = suggestionSections.question.trim();
   const clarifyingOptions = suggestionSections.clarifyingOptions ?? [];
   const isScreenTaskSuggestion = suggestionSections.isScreenTask;
@@ -1601,8 +1635,16 @@ export const MeetingAssistant = ({
                       latestTrace.metadata?.playbookPhase
                     )}
                     evaluation={latestTraceEvaluation}
+                    questionEvaluation={latestQuestionEvaluation}
+                    memoryEntries={latestMemoryEvaluationEntries}
                     onUpdate={(patch) => {
                       meeting.updateTraceHumanEvaluation(latestTrace.id, patch);
+                    }}
+                    onUpdateQuestion={(patch) => {
+                      meeting.updateQuestionHumanEvaluation(
+                        latestTrace.id,
+                        patch
+                      );
                     }}
                   />
                   {latestTrace.inputs.length || latestTrace.outputs.length ? (
@@ -3046,7 +3088,10 @@ const TraceHumanEvaluationPanel = ({
   detectedPlaybook,
   detectedPlaybookPhase,
   evaluation,
+  questionEvaluation,
+  memoryEntries,
   onUpdate,
+  onUpdateQuestion,
 }: {
   detectedQuestionType?: string;
   detectedPlaybook?: string;
@@ -3064,6 +3109,13 @@ const TraceHumanEvaluationPanel = ({
         failureReasons: HumanEvalFailureReason[];
       }
     | undefined;
+  questionEvaluation: QuestionHumanEvaluation | undefined;
+  memoryEntries: Array<{
+    id: string;
+    title: string;
+    score: number;
+    matchReason: string[];
+  }>;
   onUpdate: (patch: {
     taskQuality?: HumanEvalTaskQuality;
     correctedQuestionType?: HumanEvalQuestionType;
@@ -3075,8 +3127,10 @@ const TraceHumanEvaluationPanel = ({
     memoryWrong?: boolean;
     failureReasons?: HumanEvalFailureReason[];
   }) => void;
+  onUpdateQuestion: (patch: Partial<QuestionHumanEvaluation>) => void;
 }) => {
   const failureReasons = evaluation?.failureReasons ?? [];
+  const [missingMemoryNote, setMissingMemoryNote] = useState("");
 
   const toggleFailureReason = (reason: HumanEvalFailureReason) => {
     onUpdate({
@@ -3084,6 +3138,48 @@ const TraceHumanEvaluationPanel = ({
         ? failureReasons.filter((candidate) => candidate !== reason)
         : [...failureReasons, reason],
     });
+  };
+
+  const updateQuestionVerdict = (
+    field:
+      | "classification"
+      | "playbook"
+      | "playbookPhase"
+      | "memory"
+      | "guardrail"
+      | "answer",
+    verdict: HumanEvaluationVerdict,
+    reasons: string[]
+  ) => {
+    onUpdateQuestion({
+      [field]: {
+        verdict,
+        reasons,
+      },
+    } as Partial<QuestionHumanEvaluation>);
+  };
+
+  const updateMemoryEntryLabel = (
+    memoryId: string,
+    title: string,
+    label: MemoryEntryEvaluationLabelValue
+  ) => {
+    onUpdateQuestion({
+      memoryEntryLabels: [{ memoryId, title, label }],
+    });
+  };
+
+  const addMissingMemoryNote = () => {
+    const note = missingMemoryNote.trim();
+    if (!note) return;
+    onUpdateQuestion({
+      missingExpectedMemory: [{ note }],
+      memory: {
+        verdict: "missing",
+        reasons: ["missing-expected-memory"],
+      },
+    });
+    setMissingMemoryNote("");
   };
 
   return (
@@ -3232,6 +3328,218 @@ const TraceHumanEvaluationPanel = ({
             </Button>
           </div>
         </div>
+        <div className="rounded-sm border border-border/60 p-2">
+          <div className="mb-2 flex min-w-0 items-center justify-between gap-2">
+            <div className="text-[10px] font-medium uppercase text-muted-foreground">
+              Question evaluation v2
+            </div>
+            {questionEvaluation?.questionId ? (
+              <div
+                className="min-w-0 truncate font-mono text-[10px] text-muted-foreground"
+                title={questionEvaluation.questionId}
+              >
+                {questionEvaluation.questionId}
+              </div>
+            ) : null}
+          </div>
+          <div className="grid grid-cols-2 gap-1 text-[10px]">
+            <QuestionVerdictRow
+              label="Classification"
+              value={questionEvaluation?.classification}
+            />
+            <QuestionVerdictRow
+              label="Playbook"
+              value={questionEvaluation?.playbook}
+            />
+            <QuestionVerdictRow
+              label="Phase"
+              value={questionEvaluation?.playbookPhase}
+            />
+            <QuestionVerdictRow
+              label="Memory"
+              value={questionEvaluation?.memory}
+            />
+            <QuestionVerdictRow
+              label="Guardrail"
+              value={questionEvaluation?.guardrail}
+            />
+            <QuestionVerdictRow
+              label="Answer"
+              value={questionEvaluation?.answer}
+            />
+          </div>
+          <div className="mt-2">
+            <div className="mb-1 text-[10px] font-medium uppercase text-muted-foreground">
+              Guardrail verdict
+            </div>
+            <div className="flex flex-wrap gap-1">
+              {[
+                { label: "OK", verdict: "ok", reason: "confirmed" },
+                {
+                  label: "Too strict",
+                  verdict: "wrong",
+                  reason: "over-conservative",
+                },
+                { label: "Too loose", verdict: "wrong", reason: "too-loose" },
+              ].map((option) => (
+                <Button
+                  key={option.reason}
+                  size="sm"
+                  variant={
+                    hasVerdictReason(
+                      questionEvaluation?.guardrail,
+                      option.verdict as HumanEvaluationVerdict,
+                      option.reason
+                    )
+                      ? "default"
+                      : "outline"
+                  }
+                  className="h-6 px-2 text-[10px]"
+                  onClick={() => {
+                    updateQuestionVerdict(
+                      "guardrail",
+                      option.verdict as HumanEvaluationVerdict,
+                      [option.reason]
+                    );
+                  }}
+                >
+                  {option.label}
+                </Button>
+              ))}
+            </div>
+          </div>
+          <div className="mt-2">
+            <div className="mb-1 text-[10px] font-medium uppercase text-muted-foreground">
+              Answer verdict
+            </div>
+            <div className="flex flex-wrap gap-1">
+              {[
+                { label: "Useful", verdict: "ok", reason: "useful" },
+                {
+                  label: "Partial",
+                  verdict: "partial",
+                  reason: "partially-useful",
+                },
+                { label: "Wrong", verdict: "wrong", reason: "wrong-answer" },
+                { label: "Too shallow", verdict: "partial", reason: "too-shallow" },
+              ].map((option) => (
+                <Button
+                  key={option.reason}
+                  size="sm"
+                  variant={
+                    hasVerdictReason(
+                      questionEvaluation?.answer,
+                      option.verdict as HumanEvaluationVerdict,
+                      option.reason
+                    )
+                      ? "default"
+                      : "outline"
+                  }
+                  className="h-6 px-2 text-[10px]"
+                  onClick={() => {
+                    updateQuestionVerdict(
+                      "answer",
+                      option.verdict as HumanEvaluationVerdict,
+                      [option.reason]
+                    );
+                  }}
+                >
+                  {option.label}
+                </Button>
+              ))}
+            </div>
+          </div>
+          <div className="mt-2">
+            <div className="mb-1 text-[10px] font-medium uppercase text-muted-foreground">
+              Memory entry labels
+            </div>
+            {memoryEntries.length ? (
+              <div className="space-y-1">
+                {memoryEntries.map((entry) => {
+                  const selectedLabel = questionEvaluation?.memoryEntryLabels.find(
+                    (label) => label.memoryId === entry.id
+                  )?.label;
+                  return (
+                    <div
+                      key={entry.id}
+                      className="min-w-0 rounded-sm bg-muted/40 p-2"
+                    >
+                      <div
+                        className="mb-1 truncate text-[10px] font-medium"
+                        title={entry.title}
+                      >
+                        {entry.title}
+                      </div>
+                      <div className="mb-1 truncate font-mono text-[9px] text-muted-foreground">
+                        {entry.id} / score {entry.score} /{" "}
+                        {entry.matchReason.join(", ") || "always"}
+                      </div>
+                      <div className="flex flex-wrap gap-1">
+                        {memoryEntryLabelOptions.map((option) => (
+                          <Button
+                            key={option.id}
+                            size="sm"
+                            variant={
+                              selectedLabel === option.id ? "default" : "outline"
+                            }
+                            className="h-6 px-2 text-[10px]"
+                            onClick={() =>
+                              updateMemoryEntryLabel(
+                                entry.id,
+                                entry.title,
+                                option.id
+                              )
+                            }
+                          >
+                            {option.label}
+                          </Button>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            ) : (
+              <div className="text-[10px] text-muted-foreground">
+                No injected memory entries on the latest trace.
+              </div>
+            )}
+          </div>
+          <div className="mt-2">
+            <div className="mb-1 text-[10px] font-medium uppercase text-muted-foreground">
+              Missing expected memory
+            </div>
+            <div className="flex gap-1">
+              <Textarea
+                value={missingMemoryNote}
+                onChange={(event) => setMissingMemoryNote(event.target.value)}
+                placeholder="Memory id or short note"
+                className="min-h-8 text-[10px]"
+              />
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-8 shrink-0 px-2 text-[10px]"
+                onClick={addMissingMemoryNote}
+              >
+                Add
+              </Button>
+            </div>
+            {questionEvaluation?.missingExpectedMemory.length ? (
+              <div className="mt-1 space-y-1">
+                {questionEvaluation.missingExpectedMemory.map((item, index) => (
+                  <div
+                    key={`${item.id ?? item.note}-${index}`}
+                    className="truncate text-[10px] text-muted-foreground"
+                    title={item.id ?? item.note}
+                  >
+                    {item.id ?? item.note}
+                  </div>
+                ))}
+              </div>
+            ) : null}
+          </div>
+        </div>
         <div>
           <div className="mb-1 text-[10px] font-medium uppercase text-muted-foreground">
             Failure reasons
@@ -3256,6 +3564,42 @@ const TraceHumanEvaluationPanel = ({
     </details>
   );
 };
+
+const QuestionVerdictRow = ({
+  label,
+  value,
+}: {
+  label: string;
+  value?: HumanEvaluationVerdictBlock;
+}) => {
+  return (
+    <div className="min-w-0 rounded-sm bg-muted/40 p-1.5">
+      <div className="text-[9px] text-muted-foreground">{label}</div>
+      <div
+        className="truncate text-[10px] font-medium"
+        title={formatHumanEvaluationVerdictBlock(value)}
+      >
+        {formatHumanEvaluationVerdictBlock(value)}
+      </div>
+    </div>
+  );
+};
+
+function formatHumanEvaluationVerdictBlock(
+  value: HumanEvaluationVerdictBlock | undefined
+) {
+  if (!value) return humanEvaluationVerdictLabel.not_applicable;
+  const label = humanEvaluationVerdictLabel[value.verdict];
+  return value.reasons.length ? `${label}: ${value.reasons.join(", ")}` : label;
+}
+
+function hasVerdictReason(
+  value: HumanEvaluationVerdictBlock | undefined,
+  verdict: HumanEvaluationVerdict,
+  reason: string
+) {
+  return value?.verdict === verdict && value.reasons.includes(reason);
+}
 
 function formatDetectedQuestionType(value: unknown) {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
