@@ -8,6 +8,7 @@ import {
   MeetingModelTraceCallbacks,
   MeetingModelRequestOptions,
   MeetingResponseConfig,
+  FactAnchorDecision,
   ScreenObservation,
   ScreenQuestionType,
   SelectedInterviewPlaybook,
@@ -22,6 +23,7 @@ import {
   formatInterviewSessionContextForPrompt,
 } from "./interview-session-context";
 import { formatInterviewPlaybookForPrompt } from "./interview-playbook";
+import { formatFactAnchorDecisionForPrompt } from "./fact-anchor-guardrail";
 import { parseScreenTaskAnswer } from "./screen-task-answer";
 import {
   normalizeCanonicalQuestionType,
@@ -67,6 +69,7 @@ export interface SolveScreenAnchoredTaskOptions {
   interviewSessionContext?: InterviewSessionContext;
   screenPreflight?: ScreenPreflightResult;
   interviewPlaybook?: SelectedInterviewPlaybook;
+  factAnchorDecision?: FactAnchorDecision;
   signal?: AbortSignal;
   requestOptions?: MeetingModelRequestOptions;
   trace?: MeetingModelTraceCallbacks;
@@ -298,6 +301,7 @@ export async function solveScreenAnchoredTask({
   interviewSessionContext,
   screenPreflight,
   interviewPlaybook,
+  factAnchorDecision,
   signal,
   requestOptions,
   trace,
@@ -327,6 +331,7 @@ export async function solveScreenAnchoredTask({
     interviewSessionContext,
     screenPreflight,
     interviewPlaybook,
+    factAnchorDecision,
   });
   const imageInputs = buildScreenTaskImageInputs(observation);
 
@@ -486,6 +491,7 @@ function buildScreenTaskUserMessage({
   interviewSessionContext,
   screenPreflight,
   interviewPlaybook,
+  factAnchorDecision,
 }: {
   observation: ScreenObservation;
   recentTranscript?: string;
@@ -496,6 +502,7 @@ function buildScreenTaskUserMessage({
   interviewSessionContext?: InterviewSessionContext;
   screenPreflight?: ScreenPreflightResult;
   interviewPlaybook?: SelectedInterviewPlaybook;
+  factAnchorDecision?: FactAnchorDecision;
 }) {
   const target = observation.captureTarget
     ? formatCaptureTargetForPrompt(observation.captureTarget)
@@ -531,6 +538,9 @@ function buildScreenTaskUserMessage({
     "<memory_context>",
     memoryContext?.trim() || "No memory context was injected.",
     "</memory_context>",
+    "<fact_anchor_guardrail>",
+    formatFactAnchorDecisionForPrompt(factAnchorDecision),
+    "</fact_anchor_guardrail>",
   ];
 
   if (autoPrompt?.trim()) {
@@ -563,6 +573,8 @@ function buildScreenTaskUserMessage({
     "Use <interview_playbook> as the runtime strategy for the selected question type: follow its first move, clarifying strategy, output contract, and follow-up policy unless the screenshot or transcript contradicts it.",
     "If askFrame is ambiguous between an existing project deep dive and a future system design improvement, do not guess. Ask a clarifying question such as whether to discuss the existing implementation first or propose a future design improvement.",
     "For behavioral interview questions, prefer a concrete first-person story from memory context. Do not invent facts, employers, project names, teammates, metrics, timelines, or outcomes not supported by memory or visible text.",
+    "For behavioral and project deep-dive questions, obey <fact_anchor_guardrail>. If Action is ask-clarification or offer-supported-choices, do not invent a first-person story or project. Use 中文思路 to say the missing supported anchor, keep Answer safe, and ask the user to choose or clarify the project/story.",
+    "If <fact_anchor_guardrail> Action is answer-with-caveats, use only supported facts and avoid unsupported employers, project names, teammates, dates, metrics, ownership, or impact claims.",
     "Use <interview_session_context> to personalize behavioral interview answers across screen tasks. If the target company is Amazon and injected memory includes Leadership Principle guidance, internally classify the visible question to the closest principle, demonstrate Strength signals, and avoid Concern signals. Do not explicitly name the principle unless asked or useful.",
     "If memory supports only a qualitative outcome, state the outcome qualitatively instead of adding unsupported numbers, dates, durations, or speed claims.",
     "If it is a coding/algorithm question, output:",

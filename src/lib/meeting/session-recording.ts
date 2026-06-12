@@ -53,6 +53,7 @@ interface SessionRecordingEvent {
     | "model-input"
     | "model-output"
     | "memory-retrieval"
+    | "fact-anchor-decision"
     | "playbook-selected"
     | "trace-export"
     | "trace-metrics"
@@ -540,6 +541,18 @@ export class SessionRecordingManager {
     if (traceId) session.recordedTraceIds.add(traceId);
     if (taskId) session.recordedTaskIds.add(taskId);
     this.recordEvent("playbook-selected", metadata, undefined, traceId, taskId);
+  }
+
+  recordFactAnchorDecision(
+    traceId: string | undefined,
+    metadata: Record<string, unknown>,
+    taskId?: string
+  ) {
+    const session = this.activeSession;
+    if (!session) return;
+    if (traceId) session.recordedTraceIds.add(traceId);
+    if (taskId) session.recordedTaskIds.add(taskId);
+    this.recordEvent("fact-anchor-decision", metadata, undefined, traceId, taskId);
   }
 
   recordTaskSnapshot(task: ActiveScreenTask, traceId?: string) {

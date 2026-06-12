@@ -108,6 +108,8 @@ import {
   upsertTraceHumanEvaluation,
   persistTraceHumanEvaluations,
   buildSessionRecordingProviderSummary,
+  buildFactAnchorDecision,
+  formatFactAnchorDecisionForTrace,
   getActiveMeetingTaskTraceMetadata,
 } from "@/lib/meeting";
 
@@ -2289,10 +2291,38 @@ export function useMeetingAssistant() {
       projectAnchor: getAdvisorActiveProjectAnchor(promptContext),
       memoryPolicy: advisorPlaybook?.memoryPolicy,
     });
+    const factAnchorDecision = buildFactAnchorDecision({
+      questionType: advisorQuestionType,
+      memoryContext,
+      activeFactAnchors:
+        promptContext.activeMeetingTask?.parent.supportedFactAnchors ??
+        promptContext.activeInterviewTask?.supportedFactAnchors,
+      projectAnchor: getAdvisorActiveProjectAnchor(promptContext),
+    });
+    if (traceId) {
+      const factAnchorMetadata = {
+        source: "advisor",
+        questionType: advisorQuestionType,
+        ...formatFactAnchorDecisionForTrace(factAnchorDecision),
+      };
+      traceStoreRef.current.updateMetadata(traceId, factAnchorMetadata);
+      const factAnchorStepId = traceStoreRef.current.startStep(
+        traceId,
+        "Fact anchor guardrail",
+        factAnchorMetadata
+      );
+      traceStoreRef.current.finishStep(traceId, factAnchorStepId, "success");
+      sessionRecordingManagerRef.current?.recordFactAnchorDecision(
+        traceId,
+        factAnchorMetadata,
+        activeMeetingTaskId
+      );
+    }
     promptContext = {
       ...promptContext,
       memoryContext: memoryContext?.contextText,
       interviewPlaybook: advisorPlaybook,
+      factAnchorDecision,
     };
 
     const advisorUsesCodingModel =
@@ -4179,6 +4209,32 @@ export function useMeetingAssistant() {
           projectAnchor: screenPreflight?.projectAnchor,
           memoryPolicy: screenPlaybook?.memoryPolicy,
         });
+        const screenFactAnchorDecision = buildFactAnchorDecision({
+          questionType: screenMemoryQuestionType,
+          memoryContext,
+          activeFactAnchors: [],
+          projectAnchor: screenPreflight?.projectAnchor,
+        });
+        const factAnchorMetadata = {
+          source: "screen",
+          questionType: screenMemoryQuestionType,
+          ...formatFactAnchorDecisionForTrace(screenFactAnchorDecision),
+        };
+        traceStoreRef.current.updateMetadata(trace.id, factAnchorMetadata);
+        const factAnchorStepId = traceStoreRef.current.startStep(
+          trace.id,
+          "Fact anchor guardrail",
+          factAnchorMetadata
+        );
+        traceStoreRef.current.finishStep(
+          trace.id,
+          factAnchorStepId,
+          "success"
+        );
+        sessionRecordingManagerRef.current?.recordFactAnchorDecision(
+          trace.id,
+          factAnchorMetadata
+        );
         const screenUsesCodingModel =
           (screenPreflight?.questionType ?? screenMemoryQuestionType) ===
             "coding" || screenPlaybook?.id === "coding_algorithm";
@@ -4212,6 +4268,7 @@ export function useMeetingAssistant() {
               preflightContextState.interviewSessionContext,
             screenPreflight,
             interviewPlaybook: screenPlaybook,
+            factAnchorDecision: screenFactAnchorDecision,
             signal: analysisController.signal,
             requestOptions: screenModelRequestOptions,
             trace: {

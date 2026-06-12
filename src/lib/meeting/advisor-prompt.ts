@@ -11,6 +11,7 @@ import {
 } from "./interview-session-context";
 import { formatInterviewPlaybookForPrompt } from "./interview-playbook";
 import { formatActiveMeetingTaskForPrompt } from "./active-meeting-task";
+import { formatFactAnchorDecisionForPrompt } from "./fact-anchor-guardrail";
 
 export function buildAdvisorSystemPrompt() {
   return [
@@ -114,6 +115,9 @@ export function buildAdvisorUserMessage(
     "<memory_context>",
     context.memoryContext || "No memory context was injected.",
     "</memory_context>",
+    "<fact_anchor_guardrail>",
+    formatFactAnchorDecisionForPrompt(context.factAnchorDecision),
+    "</fact_anchor_guardrail>",
     "<response_preferences>",
     formatResponsePreferences(options.responseConfig),
     "</response_preferences>",
@@ -178,6 +182,8 @@ export function buildAdvisorUserMessage(
       "Use <interview_playbook> as the procedural strategy for this active task. Follow its first move, clarifying strategy, output contract, and follow-up policy unless the active screen task or latest transcript contradicts it.",
       "If <interview_playbook> questionType differs from <active_meeting_task> parent Question type, treat the latest transcript as a child probe inside the active parent task. Answer the local probe without clearing, restarting, or rewriting the parent task.",
       "If the target company is Amazon and this is a behavioral answer, use any injected Amazon Leadership Principle rubric to demonstrate Strength signals and avoid Concern signals. Do not explicitly name the principle unless it helps.",
+      "For behavioral and project-deep-dive answers, obey <fact_anchor_guardrail>. If Action is ask-clarification or offer-supported-choices, do not invent a first-person story or project. Put a brief Chinese warning in 中文思路, put '-' or a safe setup sentence in Answer, and put the needed story/project selection in Clarifying question and Clarifying options.",
+      "If <fact_anchor_guardrail> Action is answer-with-caveats, use only supported facts and explicitly avoid unsupported employers, project names, timelines, teammates, metrics, ownership, or impact claims.",
       "If the active task kind is ai-ml-system-design, answer as a forward-looking AI/ML infrastructure design: clarify objective/metrics, data/retrieval/model path, serving path, evaluation/feedback, latency/cost/safety, and tradeoffs.",
       "For AI/ML or agent system-design follow-ups about metrics, logs, evaluation, quality, faster/cheaper/better, or observability, be concrete: include north-star metric, online product metrics, offline eval metrics, agent trajectory metrics, latency/cost metrics, safety/guardrail metrics, and a log schema with trace/correlation id plus key event fields.",
       "If the active task kind is general-system-design or system-design, answer as a general backend/distributed system design: requirements, API/data model, architecture, scaling, consistency, reliability, observability, and tradeoffs.",
@@ -222,6 +228,7 @@ export function buildAdvisorUserMessage(
     "Use <interview_playbook> as procedural guidance when present. It should shape the next move without overriding transcript facts.",
     "For AI/ML or agent system-design questions about metrics, logs, evaluation, quality, faster/cheaper/better, or observability, avoid generic measurement language. Name concrete metric categories, define what each measures, and include the required log/trace fields.",
     "For Amazon behavioral interview moments, use injected Leadership Principle guidance to shape the answer toward Strength signals and away from Concern signals without inventing facts.",
+    "For behavioral and project-deep-dive moments, obey <fact_anchor_guardrail>. If it says ask-clarification or offer-supported-choices, do not fabricate a first-person story or project; ask the user to choose a supported anchor or clarify the intended project/story.",
     ...buildContextInstructions(contextMode),
     ...buildVoiceSeededInstructions(contextMode),
     "If no help is needed, output a single dash.",

@@ -274,6 +274,33 @@ export interface SelectedInterviewPlaybook {
   followUpPolicy: string;
 }
 
+export type FactAnchorState =
+  | "strong-anchor"
+  | "weak-anchor"
+  | "no-anchor"
+  | "not-required";
+
+export type FactAnchorRequiredFor =
+  | "behavioral"
+  | "project-deep-dive"
+  | "none";
+
+export type FactAnchorAction =
+  | "answer-with-anchor"
+  | "answer-with-caveats"
+  | "ask-clarification"
+  | "offer-supported-choices";
+
+export interface FactAnchorDecision {
+  state: FactAnchorState;
+  requiredFor: FactAnchorRequiredFor;
+  supportedAnchorIds: string[];
+  supportedAnchorTitles: string[];
+  selectedAnchorId?: string;
+  missingAnchorReason?: string;
+  action: FactAnchorAction;
+}
+
 export interface ActiveScreenTask {
   id: string;
   observationId: string;
@@ -471,6 +498,7 @@ export interface AdvisorPromptContext {
   glossaryText: string;
   memoryContext?: string;
   interviewPlaybook?: SelectedInterviewPlaybook;
+  factAnchorDecision?: FactAnchorDecision;
   latestTurn?: TranscriptTurn;
 }
 
