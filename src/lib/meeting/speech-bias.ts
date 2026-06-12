@@ -98,24 +98,36 @@ export function buildSpeechBiasContext(
     addTerm(entry.term, "glossary", "high");
   }
 
-  const activeTask = context.activeScreenTask;
+  const activeTask = context.activeMeetingTask;
   if (activeTask) {
-    addTerm(activeTask.classifier?.projectAnchor, "active-task", "high");
+    addTerm(activeTask.parent.topic, "active-task", "high");
+    for (const anchor of activeTask.parent.supportedFactAnchors) {
+      addTerm(anchor, "active-task", "high");
+    }
     for (const term of extractLikelyTerms(
       [
-        activeTask.question,
-        activeTask.content.slice(0, 1200),
-        activeTask.classifier?.projectAnchor,
+        activeTask.parent.topic,
+        activeTask.parent.latestUsefulAnswer?.slice(0, 700),
+        activeTask.screen?.question,
+        activeTask.screen?.content?.slice(0, 900),
+        activeTask.child?.question,
+        activeTask.child?.compactSummary,
+        activeTask.parent.supportedFactAnchors.join("\n"),
       ].join("\n")
     )) {
       addTerm(term, "active-task", "high");
     }
 
-    if (activeTask.classifier?.topicDomain === "ai-ml-infra") {
+    const taskText = [
+      activeTask.parent.topic,
+      activeTask.screen?.question,
+      activeTask.parent.supportedFactAnchors.join(" "),
+    ].join(" ");
+    if (hasAnyTerm(taskText, AI_ML_DOMAIN_TERMS)) {
       for (const term of AI_ML_DOMAIN_TERMS) addTerm(term, "domain");
-    } else if (activeTask.classifier?.topicDomain === "agentic-ai") {
+    } else if (hasAnyTerm(taskText, AGENTIC_DOMAIN_TERMS)) {
       for (const term of AGENTIC_DOMAIN_TERMS) addTerm(term, "domain");
-    } else if (activeTask.classifier?.topicDomain === "search") {
+    } else if (hasAnyTerm(taskText, SEARCH_DOMAIN_TERMS)) {
       for (const term of SEARCH_DOMAIN_TERMS) addTerm(term, "domain");
     }
   }
@@ -143,6 +155,11 @@ export function buildSpeechBiasContext(
     correctionRules,
     prompt,
   };
+}
+
+function hasAnyTerm(text: string, terms: string[]) {
+  const normalizedText = text.toLowerCase();
+  return terms.some((term) => normalizedText.includes(term.toLowerCase()));
 }
 
 export function parseEmergencySpeechCorrection(

@@ -29,6 +29,11 @@ export interface MeetingContextManagerOptions {
   interviewSessionBrief?: InterviewSessionBrief;
 }
 
+export interface ActiveMeetingTaskStatePatch {
+  activeScreenTask?: ActiveScreenTask | null;
+  activeInterviewTask?: ActiveInterviewParent | null;
+}
+
 export class MeetingContextManager {
   private state: MeetingContextState;
   private readonly transcriptWindowMs: number;
@@ -58,7 +63,7 @@ export class MeetingContextManager {
   }
 
   getState(): MeetingContextState {
-    this.clearExpiredActiveScreenTask();
+    this.clearExpiredActiveMeetingTask();
     const activeMeetingTask = this.buildActiveMeetingTask();
 
     return {
@@ -210,6 +215,32 @@ export class MeetingContextManager {
     };
   }
 
+  setActiveMeetingTaskState(patch: ActiveMeetingTaskStatePatch) {
+    const nextState = { ...this.state };
+
+    if ("activeScreenTask" in patch) {
+      nextState.activeScreenTask = patch.activeScreenTask
+        ? { ...patch.activeScreenTask }
+        : undefined;
+    }
+
+    if ("activeInterviewTask" in patch) {
+      nextState.activeInterviewTask = cloneActiveInterviewTask(
+        patch.activeInterviewTask ?? undefined
+      );
+    }
+
+    this.state = nextState;
+  }
+
+  clearActiveMeetingTask() {
+    this.state = {
+      ...this.state,
+      activeScreenTask: undefined,
+      activeInterviewTask: undefined,
+    };
+  }
+
   clearActiveScreenTask() {
     this.state = {
       ...this.state,
@@ -259,7 +290,7 @@ export class MeetingContextManager {
     return interviewContextUpdate;
   }
 
-  clearExpiredActiveScreenTask(now = Date.now()) {
+  clearExpiredActiveMeetingTask(now = Date.now()) {
     const task = this.state.activeScreenTask;
     const interviewTask = this.state.activeInterviewTask;
     let changed = false;
@@ -286,6 +317,10 @@ export class MeetingContextManager {
     }
 
     return changed;
+  }
+
+  clearExpiredActiveScreenTask(now = Date.now()) {
+    return this.clearExpiredActiveMeetingTask(now);
   }
 
   updateRollingSummary(rollingSummary: string) {
@@ -317,7 +352,7 @@ export class MeetingContextManager {
   }
 
   buildAdvisorPromptContext(): AdvisorPromptContext {
-    this.clearExpiredActiveScreenTask();
+    this.clearExpiredActiveMeetingTask();
 
     const latestTurn =
       this.state.transcriptTurns[this.state.transcriptTurns.length - 1];
