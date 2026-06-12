@@ -92,7 +92,15 @@ function makeMemoryResult(
       0
     ),
     candidateCount: entries.length,
+    eligibleCount: entries.length,
     rejectedCount: 0,
+    rejectSummary: [],
+    policySnapshot: {
+      useCase: "behavioral_interview",
+      maxEntries: 5,
+      maxChars: 6000,
+      perEntryMaxChars: 1200,
+    },
   };
 }
 

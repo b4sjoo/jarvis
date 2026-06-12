@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { TYPE_PROVIDER } from "@/types";
-import { MemoryRetrievalResult } from "@/lib/memory";
+import type { MemoryRejectSummary, MemoryRetrievalResult } from "@/lib/memory";
 import {
   ActiveScreenTask,
   InterviewSessionBrief,
@@ -174,7 +174,9 @@ interface SessionCompactTraceSummary {
   memory?: {
     selectedEntries?: number;
     candidateCount?: number;
+    eligibleCount?: number;
     rejectedCount?: number;
+    rejectSummary?: MemoryRejectSummary[];
     totalChars?: number;
     useCase?: string;
   };
@@ -521,7 +523,9 @@ export class SessionRecordingManager {
         queryChars: query.length,
         selectedEntries: memoryContext.entries.length,
         candidateCount: memoryContext.candidateCount,
+        eligibleCount: memoryContext.eligibleCount,
         rejectedCount: memoryContext.rejectedCount,
+        rejectSummary: memoryContext.rejectSummary,
         totalChars: memoryContext.totalChars,
         metadata,
       },
@@ -1187,7 +1191,11 @@ function buildCompactTraceSummary({
       ? {
           selectedEntries: readNumber(memoryStep.metadata?.selectedEntries),
           candidateCount: readNumber(memoryStep.metadata?.candidateCount),
+          eligibleCount: readNumber(memoryStep.metadata?.eligibleCount),
           rejectedCount: readNumber(memoryStep.metadata?.rejectedCount),
+          rejectSummary: readMemoryRejectSummary(
+            memoryStep.metadata?.rejectSummary
+          ),
           totalChars: readNumber(memoryStep.metadata?.totalChars),
           useCase: readString(memoryStep.metadata?.useCase),
         }
@@ -1347,6 +1355,33 @@ function readNumber(value: unknown) {
   return typeof value === "number" && Number.isFinite(value)
     ? value
     : undefined;
+}
+
+function readMemoryRejectSummary(value: unknown): MemoryRejectSummary[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+
+  const summary = value.flatMap((item): MemoryRejectSummary[] => {
+    if (!isRecord(item)) return [];
+    const reason = readString(item.reason);
+    const count = readNumber(item.count);
+    if (!reason || count === undefined) return [];
+
+    return [
+      {
+        reason: reason as MemoryRejectSummary["reason"],
+        count,
+        sampleEntryIds: readStringList(item.sampleEntryIds),
+        sampleTitles: readStringList(item.sampleTitles),
+      },
+    ];
+  });
+
+  return summary.length ? summary : undefined;
+}
+
+function readStringList(value: unknown) {
+  if (!Array.isArray(value)) return [];
+  return value.filter((item): item is string => typeof item === "string");
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

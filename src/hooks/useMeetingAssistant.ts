@@ -2008,7 +2008,10 @@ export function useMeetingAssistant() {
               allowedFamilies: memoryPolicy?.allowedFamilies,
               blockedFamilies: memoryPolicy?.blockedFamilies,
               candidateCount: memoryContext.candidateCount,
+              eligibleCount: memoryContext.eligibleCount,
               rejectedCount: memoryContext.rejectedCount,
+              rejectSummary: memoryContext.rejectSummary,
+              memoryPolicySnapshot: memoryContext.policySnapshot,
               totalChars: memoryContext.totalChars,
             }
           );
@@ -2042,7 +2045,10 @@ export function useMeetingAssistant() {
             allowedFamilies: memoryPolicy?.allowedFamilies,
             blockedFamilies: memoryPolicy?.blockedFamilies,
             candidateCount: memoryContext.candidateCount,
+            eligibleCount: memoryContext.eligibleCount,
             rejectedCount: memoryContext.rejectedCount,
+            rejectSummary: memoryContext.rejectSummary,
+            memoryPolicySnapshot: memoryContext.policySnapshot,
             totalChars: memoryContext.totalChars,
           });
         }

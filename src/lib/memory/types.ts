@@ -236,6 +236,41 @@ export interface MemoryRetrievalPolicy {
   perEntryMaxChars?: number;
 }
 
+export type MemoryRejectReason =
+  | "disabled"
+  | "manual-or-never"
+  | "uncurated"
+  | "use-case-mismatch"
+  | "brief-interview-type-blocked"
+  | "playbook-family-blocked"
+  | "question-type-family-mismatch"
+  | "behavioral-family-blocked"
+  | "missing-required-tag-hint"
+  | "no-retrieval-match"
+  | "budget-truncated";
+
+export interface MemoryRejectSummary {
+  reason: MemoryRejectReason;
+  count: number;
+  sampleEntryIds: string[];
+  sampleTitles: string[];
+}
+
+export interface MemoryPolicySnapshot {
+  useCase: MemoryUseCase;
+  interviewTypes?: MemoryInterviewType[];
+  questionType?: MemoryQuestionType;
+  askFrame?: MemoryAskFrame;
+  topicDomain?: MemoryTopicDomain;
+  projectAnchor?: string;
+  memoryPolicyId?: string;
+  allowedFamilies?: MemoryInterviewFamily[];
+  blockedFamilies?: MemoryInterviewFamily[];
+  maxEntries: number;
+  maxChars: number;
+  perEntryMaxChars: number;
+}
+
 export interface RetrievedMemoryEntry {
   entry: MemoryEntry;
   score: number;
@@ -248,5 +283,8 @@ export interface MemoryRetrievalResult {
   contextText: string;
   totalChars: number;
   candidateCount: number;
+  eligibleCount: number;
   rejectedCount: number;
+  rejectSummary: MemoryRejectSummary[];
+  policySnapshot: MemoryPolicySnapshot;
 }
