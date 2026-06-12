@@ -12,6 +12,7 @@ import {
 import { formatInterviewPlaybookForPrompt } from "./interview-playbook";
 import { formatActiveMeetingTaskForPrompt } from "./active-meeting-task";
 import { formatFactAnchorDecisionForPrompt } from "./fact-anchor-guardrail";
+import { formatPlaybookPhaseDecisionForPrompt } from "./playbook-phase";
 
 export function buildAdvisorSystemPrompt() {
   return [
@@ -103,6 +104,12 @@ export function buildAdvisorUserMessage(
     "<interview_playbook>",
     formatInterviewPlaybookForPrompt(context.interviewPlaybook),
     "</interview_playbook>",
+    "<playbook_phase_state>",
+    formatPlaybookPhaseDecisionForPrompt(
+      context.playbookPhaseDecision,
+      context.activeMeetingTask
+    ),
+    "</playbook_phase_state>",
     "<opening_route>",
     formatOpeningRouteForPrompt(context.openingRoute),
     "</opening_route>",

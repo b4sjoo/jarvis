@@ -87,6 +87,9 @@ import {
   parseScreenTaskAnswer,
   preflightScreenObservation,
   selectInterviewPlaybook,
+  applyPlaybookPhaseDecisionToProgress,
+  decidePlaybookPhaseProgression,
+  formatPlaybookPhaseDecisionForTrace,
   formatInterviewPlaybookForTrace,
   readTraceHumanEvaluations,
   readQuestionHumanEvaluations,
@@ -120,6 +123,7 @@ import {
   buildFactAnchorDecision,
   formatFactAnchorDecisionForTrace,
   getActiveMeetingTaskTraceMetadata,
+  PlaybookPhaseDecision,
 } from "@/lib/meeting";
 
 const ADVISOR_DEBOUNCE_MS = 750;
@@ -2411,11 +2415,35 @@ export function useMeetingAssistant() {
             interviewSessionBrief: promptContext.interviewSessionBrief,
             interviewSessionContext: promptContext.interviewSessionContext,
           });
+    const playbookPhaseDecision = decidePlaybookPhaseProgression({
+      questionType:
+        (advisorTaskSignals.taskRelation === "followup-parent" ||
+          advisorTaskSignals.taskRelation === "resume-parent" ||
+          advisorTaskSignals.taskRelation === "child-probe") &&
+        getAdvisorActiveQuestionType(promptContext)
+          ? getAdvisorActiveQuestionType(promptContext)
+          : advisorQuestionType,
+      playbookId: advisorPlaybook?.id,
+      currentPhase:
+        promptContext.activeMeetingTask?.parent.playbookPhase ??
+        promptContext.activeInterviewTask?.playbookPhase ??
+        advisorPlaybook?.phase,
+      phaseProgress:
+        promptContext.activeMeetingTask?.parent.phaseProgress ??
+        promptContext.activeInterviewTask?.phaseProgress,
+      latestTurnText: latestTurn?.text,
+      currentQuestion: advisorTaskSignals.query,
+      currentAnswer: options.currentSuggestion,
+      relation: advisorTaskSignals.taskRelation,
+      subtaskIntent: advisorTaskSignals.subtaskIntent,
+      askFrame: advisorAskFrame ?? getAdvisorActiveAskFrame(promptContext),
+    });
 
     if (traceId) {
       const playbookMetadata = formatInterviewPlaybookForTrace(advisorPlaybook);
       traceStoreRef.current.updateMetadata(traceId, {
         ...playbookMetadata,
+        ...formatPlaybookPhaseDecisionForTrace(playbookPhaseDecision),
         questionType: advisorQuestionType,
         askFrame: advisorAskFrame,
         topicDomain: advisorTopicDomain,
@@ -2438,6 +2466,7 @@ export function useMeetingAssistant() {
           "Interview playbook selected",
           {
             ...playbookMetadata,
+            ...formatPlaybookPhaseDecisionForTrace(playbookPhaseDecision),
             questionType: advisorQuestionType,
             askFrame: advisorAskFrame,
             topicDomain: advisorTopicDomain,
@@ -2456,7 +2485,10 @@ export function useMeetingAssistant() {
       }
       sessionRecordingManagerRef.current?.recordPlaybookSelection(
         traceId,
-        playbookMetadata,
+        {
+          ...playbookMetadata,
+          ...formatPlaybookPhaseDecisionForTrace(playbookPhaseDecision),
+        },
         activeMeetingTaskId
       );
     }
@@ -2507,6 +2539,7 @@ export function useMeetingAssistant() {
       ...promptContext,
       memoryContext: memoryContext?.contextText,
       interviewPlaybook: advisorPlaybook,
+      playbookPhaseDecision,
       factAnchorDecision,
       openingRoute: advisorTaskSignals.openingRoute,
     };
@@ -2664,6 +2697,7 @@ export function useMeetingAssistant() {
               extractScreenTaskQuestion(finalContent),
             finalContent,
             playbook: advisorPlaybook,
+            phaseDecision: playbookPhaseDecision,
             latestTurn,
             observationId: contextState.activeScreenTask?.basedOnObservationId,
             expiresAt: getActiveScreenTaskExpiresAt(state.settings),
@@ -2720,6 +2754,7 @@ export function useMeetingAssistant() {
 
       if (traceId) {
         traceStoreRef.current.updateMetadata(traceId, {
+          ...formatPlaybookPhaseDecisionForTrace(playbookPhaseDecision),
           ...getActiveMeetingTaskTraceMetadata(contextState.activeMeetingTask),
           activeInterviewParentId: contextState.activeInterviewTask?.id,
           activeInterviewParentKind: contextState.activeInterviewTask?.stableKind,
@@ -4383,20 +4418,51 @@ export function useMeetingAssistant() {
           interviewSessionBrief: preflightContextState.interviewSessionBrief,
           interviewSessionContext: preflightContextState.interviewSessionContext,
         });
+        const screenPhaseDecision = decidePlaybookPhaseProgression({
+          questionType: screenPreflight?.questionType ?? screenMemoryQuestionType,
+          playbookId: screenPlaybook?.id,
+          currentPhase:
+            preflightContextState.activeMeetingTask?.parent.playbookPhase ??
+            preflightContextState.activeInterviewTask?.playbookPhase ??
+            screenPlaybook?.phase,
+          phaseProgress:
+            preflightContextState.activeMeetingTask?.parent.phaseProgress ??
+            preflightContextState.activeInterviewTask?.phaseProgress,
+          latestTurnText: recentTranscript,
+          currentQuestion: screenPreflight?.question ?? screenMemoryQuery,
+          relation:
+            preflightContextState.activeMeetingTask &&
+            areCompatibleQuestionTypes(
+              preflightContextState.activeMeetingTask.parent.questionType,
+              screenPreflight?.questionType ?? screenMemoryQuestionType
+            )
+              ? "resume-parent"
+              : "new-parent",
+          askFrame: screenPreflight?.askFrame ?? screenMemoryAskFrame,
+        });
         const screenPlaybookMetadata =
           formatInterviewPlaybookForTrace(screenPlaybook);
-        traceStoreRef.current.updateMetadata(trace.id, screenPlaybookMetadata);
+        traceStoreRef.current.updateMetadata(trace.id, {
+          ...screenPlaybookMetadata,
+          ...formatPlaybookPhaseDecisionForTrace(screenPhaseDecision),
+        });
         if (screenPlaybook) {
           const playbookStepId = traceStoreRef.current.startStep(
             trace.id,
             "Interview playbook selected",
-            screenPlaybookMetadata
+            {
+              ...screenPlaybookMetadata,
+              ...formatPlaybookPhaseDecisionForTrace(screenPhaseDecision),
+            }
           );
           traceStoreRef.current.finishStep(trace.id, playbookStepId, "success");
         }
         sessionRecordingManagerRef.current?.recordPlaybookSelection(
           trace.id,
-          screenPlaybookMetadata
+          {
+            ...screenPlaybookMetadata,
+            ...formatPlaybookPhaseDecisionForTrace(screenPhaseDecision),
+          }
         );
 
         const memoryContext = await loadMemoryForPrompt({
@@ -4469,6 +4535,7 @@ export function useMeetingAssistant() {
               preflightContextState.interviewSessionContext,
             screenPreflight,
             interviewPlaybook: screenPlaybook,
+            playbookPhaseDecision: screenPhaseDecision,
             factAnchorDecision: screenFactAnchorDecision,
             signal: analysisController.signal,
             requestOptions: screenModelRequestOptions,
@@ -4666,6 +4733,7 @@ export function useMeetingAssistant() {
             question: question || undefined,
             finalContent: screenTaskContent,
             playbook: screenPlaybook,
+            phaseDecision: screenPhaseDecision,
             observationId: observation.id,
             expiresAt: getActiveScreenTaskExpiresAt(state.settings, now),
             supportedFactAnchors:
@@ -5978,6 +6046,7 @@ function updateInterviewTaskContinuityForAnswer({
   question,
   finalContent,
   playbook,
+  phaseDecision,
   latestTurn,
   observationId,
   expiresAt,
@@ -5991,6 +6060,7 @@ function updateInterviewTaskContinuityForAnswer({
   question?: string;
   finalContent: string;
   playbook?: ActiveInterviewParent["playbook"];
+  phaseDecision?: PlaybookPhaseDecision;
   latestTurn?: TranscriptTurn;
   observationId?: string;
   expiresAt?: number;
@@ -6058,8 +6128,12 @@ function updateInterviewTaskContinuityForAnswer({
         stableKind: kind,
         topic,
         playbook,
-        playbookPhase: playbook?.phase ?? "follow_up",
-        phaseProgress: playbook?.phase ? { [playbook.phase]: true } : {},
+        playbookPhase: phaseDecision?.phase ?? playbook?.phase ?? "follow_up",
+        phaseProgress: applyPlaybookPhaseDecisionToProgress(
+          playbook?.phase ? { [playbook.phase]: true } : {},
+          phaseDecision,
+          playbook?.phase
+        ),
         supportedFactAnchors: anchors,
         latestUsefulAnswer: isUsefulAnswer
           ? buildCompactAnswerSummary(trimmedContent)
@@ -6107,11 +6181,13 @@ function updateInterviewTaskContinuityForAnswer({
       updatedAt: now,
       expiresAt,
       playbook: playbook ?? existingTask.playbook,
-      playbookPhase: playbook?.phase ?? existingTask.playbookPhase,
-      phaseProgress: {
-        ...existingTask.phaseProgress,
-        ...(playbook?.phase ? { [playbook.phase]: true } : {}),
-      },
+      playbookPhase:
+        phaseDecision?.phase ?? playbook?.phase ?? existingTask.playbookPhase,
+      phaseProgress: applyPlaybookPhaseDecisionToProgress(
+        existingTask.phaseProgress,
+        phaseDecision,
+        playbook?.phase
+      ),
       supportedFactAnchors: anchors,
       previousUsefulAnswer:
         isUsefulAnswer && existingTask.latestUsefulAnswer

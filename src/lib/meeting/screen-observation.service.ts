@@ -24,6 +24,10 @@ import {
 } from "./interview-session-context";
 import { formatInterviewPlaybookForPrompt } from "./interview-playbook";
 import { formatFactAnchorDecisionForPrompt } from "./fact-anchor-guardrail";
+import {
+  formatPlaybookPhaseDecisionForPrompt,
+  type PlaybookPhaseDecision,
+} from "./playbook-phase";
 import { parseScreenTaskAnswer } from "./screen-task-answer";
 import {
   normalizeCanonicalQuestionType,
@@ -69,6 +73,7 @@ export interface SolveScreenAnchoredTaskOptions {
   interviewSessionContext?: InterviewSessionContext;
   screenPreflight?: ScreenPreflightResult;
   interviewPlaybook?: SelectedInterviewPlaybook;
+  playbookPhaseDecision?: PlaybookPhaseDecision;
   factAnchorDecision?: FactAnchorDecision;
   signal?: AbortSignal;
   requestOptions?: MeetingModelRequestOptions;
@@ -302,6 +307,7 @@ export async function solveScreenAnchoredTask({
   interviewSessionContext,
   screenPreflight,
   interviewPlaybook,
+  playbookPhaseDecision,
   factAnchorDecision,
   signal,
   requestOptions,
@@ -332,6 +338,7 @@ export async function solveScreenAnchoredTask({
     interviewSessionContext,
     screenPreflight,
     interviewPlaybook,
+    playbookPhaseDecision,
     factAnchorDecision,
   });
   const imageInputs = buildScreenTaskImageInputs(observation);
@@ -492,6 +499,7 @@ function buildScreenTaskUserMessage({
   interviewSessionContext,
   screenPreflight,
   interviewPlaybook,
+  playbookPhaseDecision,
   factAnchorDecision,
 }: {
   observation: ScreenObservation;
@@ -503,6 +511,7 @@ function buildScreenTaskUserMessage({
   interviewSessionContext?: InterviewSessionContext;
   screenPreflight?: ScreenPreflightResult;
   interviewPlaybook?: SelectedInterviewPlaybook;
+  playbookPhaseDecision?: PlaybookPhaseDecision;
   factAnchorDecision?: FactAnchorDecision;
 }) {
   const target = observation.captureTarget
@@ -533,6 +542,9 @@ function buildScreenTaskUserMessage({
     "<interview_playbook>",
     formatInterviewPlaybookForPrompt(interviewPlaybook),
     "</interview_playbook>",
+    "<playbook_phase_state>",
+    formatPlaybookPhaseDecisionForPrompt(playbookPhaseDecision, undefined),
+    "</playbook_phase_state>",
     "<response_preferences>",
     formatScreenTaskResponsePreferences(responseConfig),
     "</response_preferences>",
@@ -572,6 +584,7 @@ function buildScreenTaskUserMessage({
     "Use <screen_preflight> only as a lightweight metadata hint. If the screenshot contradicts it, trust the screenshot.",
     "If <screen_preflight> includes questionType, askFrame, topicDomain, or projectAnchor, use those fields to choose the output contract and memory usage policy.",
     "Use <interview_playbook> as the runtime strategy for the selected question type: follow its first move, clarifying strategy, output contract, and follow-up policy unless the screenshot or transcript contradicts it.",
+    "Use <playbook_phase_state> to avoid repeating completed phases and to decide whether this turn is asking for requirements, scale, architecture, metrics, or a whiteboard artifact.",
     "If askFrame is ambiguous between an existing project deep dive and a future system design improvement, do not guess. Ask a clarifying question such as whether to discuss the existing implementation first or propose a future design improvement.",
     "For general-system-design and AI/ML system-design tasks, include a Whiteboard section when the design is scoped enough or the visible/transcript prompt asks to write, draw, explain layers, explain architecture, or whiteboard it. Use plain text directly; do not ask whether to use plain text or ASCII. Whiteboard should cover scope/assumptions, scale or QPS when applicable, core APIs, data model, components, critical read/write or retrieval/serving flow, consistency/bottleneck, reliability, and observability.",
     "For behavioral interview questions, prefer a concrete first-person story from memory context. Do not invent facts, employers, project names, teammates, metrics, timelines, or outcomes not supported by memory or visible text.",

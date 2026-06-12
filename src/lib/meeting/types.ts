@@ -11,6 +11,7 @@ import type {
   TransitionalQuestionType,
 } from "./task-taxonomy";
 import type { ActiveMeetingTask } from "./active-meeting-task";
+import type { PlaybookPhaseDecision } from "./playbook-phase";
 
 export type TranscriptSpeaker = "them" | "me" | "unknown";
 
@@ -499,6 +500,7 @@ export interface AdvisorPromptContext {
   glossaryText: string;
   memoryContext?: string;
   interviewPlaybook?: SelectedInterviewPlaybook;
+  playbookPhaseDecision?: PlaybookPhaseDecision;
   factAnchorDecision?: FactAnchorDecision;
   openingRoute?: OpeningRouteContext;
   latestTurn?: TranscriptTurn;
