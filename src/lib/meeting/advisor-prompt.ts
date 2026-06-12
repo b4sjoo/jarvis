@@ -60,8 +60,11 @@ export function buildAdvisorUserMessage(
   const previousSuggestion = options.currentSuggestion?.trim();
   const hasTranscript = Boolean(context.transcript.trim() || context.latestTurn);
   const hasScreenContext = Boolean(context.screenContext.trim());
-  const hasActiveScreenTask = Boolean(context.activeMeetingTask?.screen ?? context.activeScreenTask);
-  const contextMode = hasActiveScreenTask
+  const hasScreenAnchoredTask = Boolean(
+    context.activeMeetingTask?.screen ??
+      (!context.activeMeetingTask && context.activeScreenTask)
+  );
+  const contextMode = hasScreenAnchoredTask
     ? "screen-anchored"
     : hasTranscript && hasScreenContext
       ? "transcript-and-screen"
@@ -93,16 +96,9 @@ export function buildAdvisorUserMessage(
     "<active_meeting_task>",
     formatActiveMeetingTaskForPrompt(context.activeMeetingTask),
     "</active_meeting_task>",
-    "<active_screen_task>",
-    context.activeScreenTask
-      ? formatActiveScreenTask(context.activeScreenTask)
-      : "No active screen task.",
-    "</active_screen_task>",
-    "<active_interview_task>",
-    context.activeInterviewTask
-      ? formatActiveInterviewTask(context.activeInterviewTask)
-      : "No active interview task.",
-    "</active_interview_task>",
+    "<source_specific_task_context>",
+    formatSourceSpecificTaskContext(context),
+    "</source_specific_task_context>",
     "<interview_playbook>",
     formatInterviewPlaybookForPrompt(context.interviewPlaybook),
     "</interview_playbook>",
@@ -391,6 +387,63 @@ function buildModeInstructions(mode: AdvisorRequestMode) {
   }
 
   return [];
+}
+
+function formatSourceSpecificTaskContext(context: AdvisorPromptContext) {
+  if (context.activeMeetingTask) {
+    const parts = [
+      context.activeScreenTask
+        ? [
+            "Screen source metadata:",
+            context.activeScreenTask.classifier?.askFrame
+              ? `Ask frame: ${context.activeScreenTask.classifier.askFrame}`
+              : undefined,
+            context.activeScreenTask.classifier?.topicDomain
+              ? `Topic domain: ${context.activeScreenTask.classifier.topicDomain}`
+              : undefined,
+            context.activeScreenTask.classifier?.projectAnchor
+              ? `Project anchor: ${context.activeScreenTask.classifier.projectAnchor}`
+              : undefined,
+            typeof context.activeScreenTask.classifier?.confidence === "number"
+              ? `Classifier confidence: ${context.activeScreenTask.classifier.confidence}`
+              : undefined,
+          ]
+            .filter(Boolean)
+            .join("\n")
+        : undefined,
+      context.activeInterviewTask
+        ? [
+            "Interview source metadata:",
+            `Source: ${context.activeInterviewTask.source}`,
+            `Revisions: ${context.activeInterviewTask.revisions}`,
+          ]
+            .filter(Boolean)
+            .join("\n")
+        : undefined,
+    ].filter(Boolean);
+
+    return parts.length
+      ? parts.join("\n\n")
+      : "Source-specific task context is represented in active_meeting_task.";
+  }
+
+  return [
+    context.activeScreenTask
+      ? ["Legacy screen task fallback:", formatActiveScreenTask(context.activeScreenTask)]
+          .filter(Boolean)
+          .join("\n")
+      : undefined,
+    context.activeInterviewTask
+      ? [
+          "Legacy interview task fallback:",
+          formatActiveInterviewTask(context.activeInterviewTask),
+        ]
+          .filter(Boolean)
+          .join("\n")
+      : undefined,
+  ]
+    .filter(Boolean)
+    .join("\n\n") || "No source-specific task context.";
 }
 
 function formatActiveScreenTask(

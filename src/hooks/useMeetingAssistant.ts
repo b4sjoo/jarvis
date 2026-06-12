@@ -2139,10 +2139,7 @@ export function useMeetingAssistant() {
 
     let promptContext = contextManagerRef.current.buildAdvisorPromptContext();
     const latestTurn = promptContext.latestTurn;
-    const activeMeetingTaskId =
-      promptContext.activeMeetingTask?.id ??
-      promptContext.activeInterviewTask?.id ??
-      promptContext.activeScreenTask?.id;
+    const activeMeetingTaskId = getAdvisorActiveTaskId(promptContext);
     const hasContext = Boolean(
       promptContext.latestTurn ||
         promptContext.transcript.trim() ||
@@ -2215,37 +2212,29 @@ export function useMeetingAssistant() {
     const advisorTopicDomain = advisorTaskSignals.topicDomain;
     const advisorPlaybook =
       advisorTaskSignals.reuseActivePlaybook
-        ? promptContext.activeScreenTask?.playbook ??
-          promptContext.activeInterviewTask?.playbook ??
+        ? getAdvisorActivePlaybook(promptContext) ??
           selectInterviewPlaybook({
             query: advisorTaskSignals.query,
             questionType:
-              promptContext.activeScreenTask?.kind ??
-              promptContext.activeInterviewTask?.stableKind ??
+              getAdvisorActiveQuestionType(promptContext) ??
               advisorQuestionType,
             askFrame: advisorAskFrame,
             topicDomain: advisorTopicDomain,
-            projectAnchor:
-              promptContext.activeScreenTask?.classifier?.projectAnchor ??
-              promptContext.activeInterviewTask?.supportedFactAnchors[0],
-            classifierConfidence:
-              promptContext.activeScreenTask?.classifier?.confidence,
+            projectAnchor: getAdvisorActiveProjectAnchor(promptContext),
+            classifierConfidence: getAdvisorActiveClassifierConfidence(promptContext),
             interviewSessionBrief: promptContext.interviewSessionBrief,
             interviewSessionContext: promptContext.interviewSessionContext,
           })
         : selectInterviewPlaybook({
-        query: advisorMemoryQuery,
-        questionType: advisorQuestionType,
-        askFrame: advisorAskFrame,
-        topicDomain: advisorTopicDomain,
-        projectAnchor:
-          promptContext.activeScreenTask?.classifier?.projectAnchor ??
-          promptContext.activeInterviewTask?.supportedFactAnchors[0],
-        classifierConfidence:
-          promptContext.activeScreenTask?.classifier?.confidence,
-        interviewSessionBrief: promptContext.interviewSessionBrief,
-        interviewSessionContext: promptContext.interviewSessionContext,
-      });
+            query: advisorTaskSignals.query,
+            questionType: advisorQuestionType,
+            askFrame: advisorAskFrame,
+            topicDomain: advisorTopicDomain,
+            projectAnchor: getAdvisorActiveProjectAnchor(promptContext),
+            classifierConfidence: getAdvisorActiveClassifierConfidence(promptContext),
+            interviewSessionBrief: promptContext.interviewSessionBrief,
+            interviewSessionContext: promptContext.interviewSessionContext,
+          });
 
     if (traceId) {
       const playbookMetadata = formatInterviewPlaybookForTrace(advisorPlaybook);
@@ -2260,8 +2249,7 @@ export function useMeetingAssistant() {
         parentTaskId: activeMeetingTaskId,
         parentTaskKind:
           promptContext.activeMeetingTask?.parent.questionType ??
-          promptContext.activeInterviewTask?.stableKind ??
-          promptContext.activeScreenTask?.kind,
+          getAdvisorActiveQuestionType(promptContext),
         ...getActiveMeetingTaskTraceMetadata(promptContext.activeMeetingTask),
       });
       if (advisorPlaybook) {
@@ -2298,9 +2286,7 @@ export function useMeetingAssistant() {
       questionType: advisorQuestionType,
       askFrame: advisorAskFrame,
       topicDomain: advisorTopicDomain,
-      projectAnchor:
-        promptContext.activeScreenTask?.classifier?.projectAnchor ??
-        promptContext.activeInterviewTask?.supportedFactAnchors[0],
+      projectAnchor: getAdvisorActiveProjectAnchor(promptContext),
       memoryPolicy: advisorPlaybook?.memoryPolicy,
     });
     promptContext = {
@@ -2310,9 +2296,9 @@ export function useMeetingAssistant() {
     };
 
     const advisorUsesCodingModel =
-      promptContext.activeScreenTask?.kind === "coding" ||
+      getAdvisorActiveQuestionType(promptContext) === "coding" ||
+      getAdvisorActiveChildQuestionType(promptContext) === "coding" ||
       promptContext.activeScreenTask?.classifier?.questionType === "coding" ||
-      promptContext.activeInterviewTask?.stableKind === "coding" ||
       advisorPlaybook?.id === "coding_algorithm";
     const advisorModelRoute = resolveMeetingModelRoute({
       useCodingModel: advisorUsesCodingModel,
@@ -4975,6 +4961,138 @@ function readTaskSourceFromTraceMetadata(
     : undefined;
 }
 
+function getAdvisorActiveTaskId(context: AdvisorPromptContext) {
+  return (
+    context.activeMeetingTask?.id ??
+    context.activeInterviewTask?.id ??
+    context.activeScreenTask?.id
+  );
+}
+
+function hasAdvisorActiveTask(context: AdvisorPromptContext) {
+  return Boolean(
+    context.activeMeetingTask ?? context.activeScreenTask ?? context.activeInterviewTask
+  );
+}
+
+function getAdvisorActiveQuestionType(context: AdvisorPromptContext) {
+  const questionType = readMemoryQuestionType(
+    context.activeMeetingTask?.parent.questionType ??
+      context.activeScreenTask?.kind ??
+      context.activeInterviewTask?.stableKind
+  );
+  return questionType === "unknown" ? undefined : questionType;
+}
+
+function getAdvisorActiveChildQuestionType(context: AdvisorPromptContext) {
+  return readMemoryQuestionType(
+    context.activeMeetingTask?.child?.questionType ??
+      context.activeInterviewTask?.child?.questionType
+  );
+}
+
+function getAdvisorActivePlaybook(context: AdvisorPromptContext) {
+  return (
+    context.activeMeetingTask?.parent.playbook ??
+    context.activeScreenTask?.playbook ??
+    context.activeInterviewTask?.playbook
+  );
+}
+
+function getAdvisorActiveProjectAnchor(context: AdvisorPromptContext) {
+  return (
+    context.activeMeetingTask?.parent.supportedFactAnchors[0] ??
+    context.activeScreenTask?.classifier?.projectAnchor ??
+    context.activeInterviewTask?.supportedFactAnchors[0]
+  );
+}
+
+function getAdvisorActiveClassifierConfidence(context: AdvisorPromptContext) {
+  return context.activeScreenTask?.classifier?.confidence;
+}
+
+function getAdvisorActiveAskFrame(context: AdvisorPromptContext) {
+  return readMemoryAskFrame(context.activeScreenTask?.classifier?.askFrame);
+}
+
+function getAdvisorActiveTopicDomain(context: AdvisorPromptContext) {
+  return readMemoryTopicDomain(context.activeScreenTask?.classifier?.topicDomain);
+}
+
+function hasAdvisorActiveChild(context: AdvisorPromptContext) {
+  return Boolean(context.activeMeetingTask?.child ?? context.activeInterviewTask?.child);
+}
+
+function formatAdvisorActiveTaskForQuery(
+  context: AdvisorPromptContext,
+  label = "active task"
+) {
+  if (context.activeMeetingTask) {
+    return [
+      `${label}: ${context.activeMeetingTask.parent.topic || ""}`,
+      `${label} id: ${context.activeMeetingTask.id}`,
+      `${label} source: ${context.activeMeetingTask.source}`,
+      `${label} type: ${context.activeMeetingTask.parent.questionType}`,
+      `${label} phase: ${context.activeMeetingTask.parent.playbookPhase}`,
+      context.activeMeetingTask.parent.supportedFactAnchors.length
+        ? `${label} fact anchors: ${context.activeMeetingTask.parent.supportedFactAnchors.join(", ")}`
+        : undefined,
+      context.activeMeetingTask.child
+        ? [
+            `${label} child type: ${context.activeMeetingTask.child.questionType}`,
+            `${label} child intent: ${context.activeMeetingTask.child.intent}`,
+            `${label} child question: ${context.activeMeetingTask.child.question}`,
+          ].join("\n")
+        : undefined,
+      context.activeMeetingTask.screen?.question
+        ? `${label} screen question: ${context.activeMeetingTask.screen.question}`
+        : undefined,
+      context.activeMeetingTask.screen?.latestScreenAnswer
+        ? `${label} screen answer:\n${context.activeMeetingTask.screen.latestScreenAnswer}`
+        : undefined,
+      context.activeMeetingTask.parent.latestUsefulAnswer
+        ? `${label} latest useful answer:\n${context.activeMeetingTask.parent.latestUsefulAnswer}`
+        : undefined,
+    ]
+      .filter(Boolean)
+      .join("\n");
+  }
+
+  if (context.activeScreenTask) {
+    return [
+      `${label}: ${context.activeScreenTask.question || ""}`,
+      `${label} type: ${context.activeScreenTask.kind}`,
+      context.activeScreenTask.classifier?.askFrame
+        ? `${label} ask frame: ${context.activeScreenTask.classifier.askFrame}`
+        : undefined,
+      context.activeScreenTask.classifier?.topicDomain
+        ? `${label} topic domain: ${context.activeScreenTask.classifier.topicDomain}`
+        : undefined,
+      context.activeScreenTask.classifier?.projectAnchor
+        ? `${label} project anchor: ${context.activeScreenTask.classifier.projectAnchor}`
+        : undefined,
+      context.activeScreenTask.content,
+    ]
+      .filter(Boolean)
+      .join("\n");
+  }
+
+  if (context.activeInterviewTask) {
+    return [
+      `${label}: ${context.activeInterviewTask.topic}`,
+      `${label} type: ${context.activeInterviewTask.stableKind}`,
+      `${label} phase: ${context.activeInterviewTask.playbookPhase}`,
+      context.activeInterviewTask.supportedFactAnchors.length
+        ? `${label} fact anchors: ${context.activeInterviewTask.supportedFactAnchors.join(", ")}`
+        : undefined,
+    ]
+      .filter(Boolean)
+      .join("\n");
+  }
+
+  return "";
+}
+
 function buildAdvisorMemoryQuery(
   context: AdvisorPromptContext,
   mode: AdvisorRequestMode,
@@ -4991,8 +5109,7 @@ function buildAdvisorMemoryQuery(
     [
       interviewBriefHint,
       context.latestTurn?.text,
-      context.activeScreenTask?.question,
-      context.activeScreenTask?.content,
+      formatAdvisorActiveTaskForQuery(context),
       context.transcript,
       currentSuggestion,
     ]
@@ -5006,24 +5123,7 @@ function buildAdvisorMemoryQuery(
     interviewHint || undefined,
     amazonLpHint || undefined,
     context.latestTurn ? `latest: ${context.latestTurn.text}` : undefined,
-    context.activeScreenTask
-      ? [
-          `active task: ${context.activeScreenTask.question || ""}`,
-          `active task type: ${context.activeScreenTask.kind}`,
-          context.activeScreenTask.classifier?.askFrame
-            ? `active task ask frame: ${context.activeScreenTask.classifier.askFrame}`
-            : undefined,
-          context.activeScreenTask.classifier?.topicDomain
-            ? `active task topic domain: ${context.activeScreenTask.classifier.topicDomain}`
-            : undefined,
-          context.activeScreenTask.classifier?.projectAnchor
-            ? `active task project anchor: ${context.activeScreenTask.classifier.projectAnchor}`
-            : undefined,
-          context.activeScreenTask.content,
-        ]
-          .filter(Boolean)
-          .join("\n")
-      : undefined,
+    formatAdvisorActiveTaskForQuery(context) || undefined,
     context.transcript ? `transcript:\n${context.transcript}` : undefined,
     context.screenContext ? `screen:\n${context.screenContext}` : undefined,
     currentSuggestion ? `current suggestion:\n${currentSuggestion}` : undefined,
@@ -5052,11 +5152,9 @@ function resolveAdvisorTaskSignals(
   const latestTopicDomain = latestUsefulText
     ? inferMemoryTopicDomainFromQuery(latestUsefulText)
     : "unknown";
-  const activeQuestionType = readMemoryQuestionType(
-    context.activeScreenTask?.kind ?? context.activeInterviewTask?.stableKind
-  );
+  const activeQuestionType = getAdvisorActiveQuestionType(context);
 
-  if ((context.activeScreenTask || context.activeInterviewTask) && activeQuestionType) {
+  if (hasAdvisorActiveTask(context) && activeQuestionType) {
     const activeParentKind = normalizeInterviewParentKind(activeQuestionType);
     const latestParentKind = normalizeInterviewParentKind(latestQuestionType);
     const latestIsParentKind = Boolean(
@@ -5111,7 +5209,7 @@ function resolveAdvisorTaskSignals(
       };
     }
 
-    const hasActiveChild = Boolean(context.activeInterviewTask?.child);
+    const hasActiveChild = hasAdvisorActiveChild(context);
     const shouldResumeParent =
       hasActiveChild &&
       latestUsefulText &&
@@ -5136,11 +5234,11 @@ function resolveAdvisorTaskSignals(
     return {
       questionType: activeQuestionType,
       askFrame:
-        readMemoryAskFrame(context.activeScreenTask?.classifier?.askFrame) ??
+        getAdvisorActiveAskFrame(context) ??
         latestAskFrame ??
         inferMemoryAskFrameFromQuery(fallbackQuery),
       topicDomain:
-        readMemoryTopicDomain(context.activeScreenTask?.classifier?.topicDomain) ??
+        getAdvisorActiveTopicDomain(context) ??
         latestTopicDomain ??
         inferMemoryTopicDomainFromQuery(fallbackQuery),
       query: buildFocusedAdvisorTaskQuery(context, latestUsefulText),
@@ -5194,34 +5292,7 @@ function buildFocusedAdvisorTaskQuery(
     interviewBriefHint || undefined,
     interviewHint || undefined,
     latestText ? `latest: ${latestText}` : undefined,
-    context.activeScreenTask
-      ? [
-          `active parent task: ${context.activeScreenTask.question || ""}`,
-          `active parent type: ${context.activeScreenTask.kind}`,
-          context.activeScreenTask.classifier?.askFrame
-            ? `active parent ask frame: ${context.activeScreenTask.classifier.askFrame}`
-            : undefined,
-          context.activeScreenTask.classifier?.topicDomain
-            ? `active parent topic domain: ${context.activeScreenTask.classifier.topicDomain}`
-            : undefined,
-          context.activeScreenTask.classifier?.projectAnchor
-            ? `active parent project anchor: ${context.activeScreenTask.classifier.projectAnchor}`
-            : undefined,
-        ]
-          .filter(Boolean)
-          .join("\n")
-      : context.activeInterviewTask
-        ? [
-            `active parent task: ${context.activeInterviewTask.topic}`,
-            `active parent type: ${context.activeInterviewTask.stableKind}`,
-            `active parent phase: ${context.activeInterviewTask.playbookPhase}`,
-            context.activeInterviewTask.supportedFactAnchors.length
-              ? `active parent fact anchors: ${context.activeInterviewTask.supportedFactAnchors.join(", ")}`
-              : undefined,
-          ]
-            .filter(Boolean)
-            .join("\n")
-      : undefined,
+    formatAdvisorActiveTaskForQuery(context, "active parent") || undefined,
   ]
     .filter(Boolean)
     .join("\n\n")

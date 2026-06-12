@@ -343,6 +343,7 @@ export class MeetingContextManager {
       userProfileContext: this.state.userProfileContext,
       glossaryText: this.formatGlossary(),
       interviewPlaybook:
+        activeMeetingTask?.parent.playbook ??
         this.state.activeScreenTask?.playbook ??
         this.state.activeInterviewTask?.playbook,
       latestTurn,
