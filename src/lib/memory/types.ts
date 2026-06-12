@@ -231,6 +231,7 @@ export interface MemoryRetrievalPolicy {
   id: string;
   allowedFamilies?: MemoryInterviewFamily[];
   blockedFamilies?: MemoryInterviewFamily[];
+  strictProjectAnchor?: string;
   maxEntries?: number;
   maxChars?: number;
   perEntryMaxChars?: number;
@@ -245,6 +246,7 @@ export type MemoryRejectReason =
   | "playbook-family-blocked"
   | "question-type-family-mismatch"
   | "behavioral-family-blocked"
+  | "project-anchor-mismatch"
   | "missing-required-tag-hint"
   | "no-retrieval-match"
   | "budget-truncated";
@@ -266,6 +268,7 @@ export interface MemoryPolicySnapshot {
   memoryPolicyId?: string;
   allowedFamilies?: MemoryInterviewFamily[];
   blockedFamilies?: MemoryInterviewFamily[];
+  strictProjectAnchor?: string;
   maxEntries: number;
   maxChars: number;
   perEntryMaxChars: number;

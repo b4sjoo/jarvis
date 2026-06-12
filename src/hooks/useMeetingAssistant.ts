@@ -34,6 +34,7 @@ import {
   MeetingAssistantSettings,
   MeetingAudioProfile,
   MeetingCodingModelSettings,
+  MeetingContextState,
   InterviewBriefType,
   InterviewSubtaskIntent,
   InterviewTaskRelation,
@@ -662,6 +663,7 @@ interface AdvisorTaskSignals {
   questionType: MemoryQuestionType;
   askFrame: MemoryAskFrame;
   topicDomain: MemoryTopicDomain;
+  projectAnchor?: string;
   query: string;
   taskRelation: InterviewTaskRelation;
   subtaskIntent: InterviewSubtaskIntent;
@@ -2054,6 +2056,12 @@ export function useMeetingAssistant() {
       const interviewTypes =
         contextManagerRef.current.getState().interviewSessionBrief
           ?.interviewTypes;
+      const effectiveMemoryPolicy = applyStrictProjectAnchorPolicy({
+        memoryPolicy,
+        questionType: resolvedQuestionType,
+        projectAnchor,
+        query,
+      });
 
       let memoryStepId: string | undefined;
       if (!state.settings.useMemory) {
@@ -2070,9 +2078,10 @@ export function useMeetingAssistant() {
               topicDomain,
               projectAnchor,
               interviewTypes,
-              memoryPolicyId: memoryPolicy?.id,
-              allowedFamilies: memoryPolicy?.allowedFamilies,
-              blockedFamilies: memoryPolicy?.blockedFamilies,
+              memoryPolicyId: effectiveMemoryPolicy?.id,
+              allowedFamilies: effectiveMemoryPolicy?.allowedFamilies,
+              blockedFamilies: effectiveMemoryPolicy?.blockedFamilies,
+              strictProjectAnchor: effectiveMemoryPolicy?.strictProjectAnchor,
               queryChars: query.length,
             }
           );
@@ -2104,9 +2113,10 @@ export function useMeetingAssistant() {
               topicDomain,
               projectAnchor,
               interviewTypes,
-              memoryPolicyId: memoryPolicy?.id,
-              allowedFamilies: memoryPolicy?.allowedFamilies,
-              blockedFamilies: memoryPolicy?.blockedFamilies,
+              memoryPolicyId: effectiveMemoryPolicy?.id,
+              allowedFamilies: effectiveMemoryPolicy?.allowedFamilies,
+              blockedFamilies: effectiveMemoryPolicy?.blockedFamilies,
+              strictProjectAnchor: effectiveMemoryPolicy?.strictProjectAnchor,
               queryChars: query.length,
             }
           );
@@ -2120,7 +2130,7 @@ export function useMeetingAssistant() {
           topicDomain,
           projectAnchor,
           interviewTypes,
-          memoryPolicy,
+          memoryPolicy: effectiveMemoryPolicy,
         });
 
         if (traceId) {
@@ -2136,9 +2146,10 @@ export function useMeetingAssistant() {
               topicDomain,
               projectAnchor,
               interviewTypes,
-              memoryPolicyId: memoryPolicy?.id,
-              allowedFamilies: memoryPolicy?.allowedFamilies,
-              blockedFamilies: memoryPolicy?.blockedFamilies,
+              memoryPolicyId: effectiveMemoryPolicy?.id,
+              allowedFamilies: effectiveMemoryPolicy?.allowedFamilies,
+              blockedFamilies: effectiveMemoryPolicy?.blockedFamilies,
+              strictProjectAnchor: effectiveMemoryPolicy?.strictProjectAnchor,
               candidateCount: memoryContext.candidateCount,
               eligibleCount: memoryContext.eligibleCount,
               rejectedCount: memoryContext.rejectedCount,
@@ -2160,9 +2171,10 @@ export function useMeetingAssistant() {
               topicDomain,
               projectAnchor,
               interviewTypes,
-              memoryPolicyId: memoryPolicy?.id,
-              allowedFamilies: memoryPolicy?.allowedFamilies,
-              blockedFamilies: memoryPolicy?.blockedFamilies,
+              memoryPolicyId: effectiveMemoryPolicy?.id,
+              allowedFamilies: effectiveMemoryPolicy?.allowedFamilies,
+              blockedFamilies: effectiveMemoryPolicy?.blockedFamilies,
+              strictProjectAnchor: effectiveMemoryPolicy?.strictProjectAnchor,
             },
           });
           traceStoreRef.current.finishStep(traceId, memoryStepId, "success", {
@@ -2173,9 +2185,10 @@ export function useMeetingAssistant() {
             topicDomain,
             projectAnchor,
             interviewTypes,
-            memoryPolicyId: memoryPolicy?.id,
-            allowedFamilies: memoryPolicy?.allowedFamilies,
-            blockedFamilies: memoryPolicy?.blockedFamilies,
+            memoryPolicyId: effectiveMemoryPolicy?.id,
+            allowedFamilies: effectiveMemoryPolicy?.allowedFamilies,
+            blockedFamilies: effectiveMemoryPolicy?.blockedFamilies,
+            strictProjectAnchor: effectiveMemoryPolicy?.strictProjectAnchor,
             candidateCount: memoryContext.candidateCount,
             eligibleCount: memoryContext.eligibleCount,
             rejectedCount: memoryContext.rejectedCount,
@@ -2350,6 +2363,9 @@ export function useMeetingAssistant() {
     const advisorQuestionType = advisorTaskSignals.questionType;
     const advisorAskFrame = advisorTaskSignals.askFrame;
     const advisorTopicDomain = advisorTaskSignals.topicDomain;
+    const advisorProjectAnchor =
+      advisorTaskSignals.projectAnchor ??
+      getAdvisorActiveProjectAnchor(promptContext);
     const advisorPlaybook =
       advisorTaskSignals.reuseActivePlaybook
         ? getAdvisorActivePlaybook(promptContext) ??
@@ -2360,7 +2376,7 @@ export function useMeetingAssistant() {
               advisorQuestionType,
             askFrame: advisorAskFrame,
             topicDomain: advisorTopicDomain,
-            projectAnchor: getAdvisorActiveProjectAnchor(promptContext),
+            projectAnchor: advisorProjectAnchor,
             classifierConfidence: getAdvisorActiveClassifierConfidence(promptContext),
             interviewSessionBrief: promptContext.interviewSessionBrief,
             interviewSessionContext: promptContext.interviewSessionContext,
@@ -2370,7 +2386,7 @@ export function useMeetingAssistant() {
             questionType: advisorQuestionType,
             askFrame: advisorAskFrame,
             topicDomain: advisorTopicDomain,
-            projectAnchor: getAdvisorActiveProjectAnchor(promptContext),
+            projectAnchor: advisorProjectAnchor,
             classifierConfidence: getAdvisorActiveClassifierConfidence(promptContext),
             interviewSessionBrief: promptContext.interviewSessionBrief,
             interviewSessionContext: promptContext.interviewSessionContext,
@@ -2383,6 +2399,7 @@ export function useMeetingAssistant() {
         questionType: advisorQuestionType,
         askFrame: advisorAskFrame,
         topicDomain: advisorTopicDomain,
+        projectAnchor: advisorProjectAnchor,
         taskRelation: advisorTaskSignals.taskRelation,
         subtaskIntent: advisorTaskSignals.subtaskIntent,
         taskSignalSource: advisorTaskSignals.source,
@@ -2401,6 +2418,7 @@ export function useMeetingAssistant() {
             questionType: advisorQuestionType,
             askFrame: advisorAskFrame,
             topicDomain: advisorTopicDomain,
+            projectAnchor: advisorProjectAnchor,
             taskRelation: advisorTaskSignals.taskRelation,
             subtaskIntent: advisorTaskSignals.subtaskIntent,
             taskSignalSource: advisorTaskSignals.source,
@@ -2426,7 +2444,7 @@ export function useMeetingAssistant() {
       questionType: advisorQuestionType,
       askFrame: advisorAskFrame,
       topicDomain: advisorTopicDomain,
-      projectAnchor: getAdvisorActiveProjectAnchor(promptContext),
+      projectAnchor: advisorProjectAnchor,
       memoryPolicy: advisorPlaybook?.memoryPolicy,
     });
     const factAnchorDecision = buildFactAnchorDecision({
@@ -2435,7 +2453,7 @@ export function useMeetingAssistant() {
       activeFactAnchors:
         promptContext.activeMeetingTask?.parent.supportedFactAnchors ??
         promptContext.activeInterviewTask?.supportedFactAnchors,
-      projectAnchor: getAdvisorActiveProjectAnchor(promptContext),
+      projectAnchor: advisorProjectAnchor,
     });
     if (traceId) {
       const factAnchorMetadata = {
@@ -2614,7 +2632,10 @@ export function useMeetingAssistant() {
         latestTurn,
         observationId: contextState.activeScreenTask?.basedOnObservationId,
         expiresAt: getActiveScreenTaskExpiresAt(state.settings),
-        supportedFactAnchors: extractSupportedFactAnchorsFromMemory(memoryContext),
+        supportedFactAnchors: mergeSupportedFactAnchors(
+          advisorProjectAnchor ? [advisorProjectAnchor] : undefined,
+          extractSupportedFactAnchorsFromMemory(memoryContext)
+        ),
       });
 
       if (continuity.task) {
@@ -4541,6 +4562,7 @@ export function useMeetingAssistant() {
           )
         );
         const now = Date.now();
+        let screenStartedNewInterviewParent = false;
 
         if (screenTaskContent.trim() && taskKind !== "non-question") {
           const activeScreenTask: ActiveScreenTask = {
@@ -4566,11 +4588,35 @@ export function useMeetingAssistant() {
           };
           contextManagerRef.current.setActiveScreenTask(activeScreenTask);
 
+          const screenRelationDecision = decideScreenTaskRelation({
+            existingTask: contextManagerRef.current.getState().activeInterviewTask,
+            taskKind,
+            question: question || undefined,
+            screenContent: screenTaskContent,
+            screenPreflight,
+            corrections: speechCorrectionsRef.current,
+          });
+          traceStoreRef.current.updateMetadata(trace.id, {
+            screenTaskRelation: screenRelationDecision.relation,
+            screenTaskRelationReason: screenRelationDecision.reason,
+            screenTaskRelationConfidence: screenRelationDecision.confidence,
+          });
+          const screenRelationStepId = traceStoreRef.current.startStep(
+            trace.id,
+            "Screen task relation decided",
+            screenRelationDecision
+          );
+          traceStoreRef.current.finishStep(
+            trace.id,
+            screenRelationStepId,
+            "success"
+          );
+
           const screenContinuity = updateInterviewTaskContinuityForAnswer({
             existingTask: contextManagerRef.current.getState().activeInterviewTask,
             source: "screen",
             questionType: taskKind,
-            relation: "new-parent",
+            relation: screenRelationDecision.relation,
             subtaskIntent: inferAdvisorSubtaskIntent(
               question || screenTaskContent,
               readMemoryQuestionType(taskKind) ?? "unknown"
@@ -4581,13 +4627,19 @@ export function useMeetingAssistant() {
             observationId: observation.id,
             expiresAt: getActiveScreenTaskExpiresAt(state.settings, now),
             supportedFactAnchors:
-              extractSupportedFactAnchorsFromMemory(memoryContext),
+              mergeSupportedFactAnchors(
+                screenPreflight?.projectAnchor
+                  ? [screenPreflight.projectAnchor]
+                  : undefined,
+                extractSupportedFactAnchorsFromMemory(memoryContext)
+              ),
           });
           if (screenContinuity.task) {
             contextManagerRef.current.setActiveInterviewTask(
               screenContinuity.task
             );
           }
+          screenStartedNewInterviewParent = screenContinuity.startedNewParent;
           traceStoreRef.current.updateMetadata(trace.id, {
             activeInterviewParentId: screenContinuity.task?.id,
             activeInterviewParentKind: screenContinuity.task?.stableKind,
@@ -4652,7 +4704,7 @@ export function useMeetingAssistant() {
         setState((previous) => ({
           ...previous,
           ...withLatestReliableSuggestion(previous, nextSuggestion, {
-            clearPrevious: Boolean(updatedContextState.activeInterviewTask),
+            clearPrevious: screenStartedNewInterviewParent,
           }),
           status: activeRef.current ? "listening" : idleReturnStatus,
           partialSuggestion: "",
@@ -4908,6 +4960,29 @@ export function useMeetingAssistant() {
         );
       }
 
+      const semanticRepairDecision = decideEmergencyCorrectionRepair({
+        correction,
+        contextState: nextContextState,
+        latestTurnText: latestTurn?.text,
+        currentSuggestion: currentSuggestionText,
+      });
+      traceStoreRef.current.updateMetadata(trace.id, {
+        correctionRegenerationReason: semanticRepairDecision.reason,
+        semanticCorrectionApplied: semanticRepairDecision.shouldRegenerate,
+      });
+      traceStoreRef.current.recordOutput(
+        trace.id,
+        "semantic correction decision",
+        semanticRepairDecision.reason,
+        {
+          shouldRegenerate: semanticRepairDecision.shouldRegenerate,
+          correctionTarget: correction.to ?? correction.term,
+          activeMeetingTaskId: nextContextState.activeMeetingTask?.id,
+          activeMeetingParentQuestionType:
+            nextContextState.activeMeetingTask?.parent.questionType,
+        }
+      );
+
       setState((previous) => ({
         ...previous,
         error: null,
@@ -4921,7 +4996,7 @@ export function useMeetingAssistant() {
 
       traceStoreRef.current.finishTrace(trace.id, "success");
 
-      if (didUpdateTranscript) {
+      if (didUpdateTranscript || semanticRepairDecision.shouldRegenerate) {
         await runAdvisor({
           force: true,
           mode: nextContextState.activeMeetingTask?.screen
@@ -5101,6 +5176,137 @@ function applySpeechCorrectionRuleCounts(
       ? { ...correction, appliedCount: correction.appliedCount + 1 }
       : correction;
   });
+}
+
+function applyStrictProjectAnchorPolicy({
+  memoryPolicy,
+  questionType,
+  projectAnchor,
+  query,
+}: {
+  memoryPolicy: MemoryRetrievalPolicy | undefined;
+  questionType: MemoryQuestionType | undefined;
+  projectAnchor: string | undefined;
+  query: string;
+}): MemoryRetrievalPolicy | undefined {
+  const anchor = projectAnchor?.trim();
+  if (
+    questionType !== "project-deep-dive" ||
+    !anchor ||
+    isCrossProjectComparisonQuery(query)
+  ) {
+    return memoryPolicy;
+  }
+
+  return {
+    id: memoryPolicy?.id ?? "project-anchor-strict",
+    ...memoryPolicy,
+    strictProjectAnchor: anchor,
+  };
+}
+
+function isCrossProjectComparisonQuery(query: string) {
+  return /\b(compare|comparison|another|other project|different project|similar project|transfer|analogy|alternative|else)\b/i.test(
+    query
+  );
+}
+
+function decideEmergencyCorrectionRepair({
+  correction,
+  contextState,
+  latestTurnText,
+  currentSuggestion,
+}: {
+  correction: SpeechCorrection;
+  contextState: MeetingContextState;
+  latestTurnText?: string;
+  currentSuggestion?: string;
+}) {
+  const correctionTarget = (correction.to ?? correction.term ?? "").trim();
+  const correctionSource = correction.from?.trim();
+  const activeTask = contextState.activeMeetingTask;
+  const hasActiveSurface = Boolean(
+    activeTask || currentSuggestion?.trim() || latestTurnText?.trim()
+  );
+
+  if (!hasActiveSurface || !correctionTarget) {
+    return {
+      shouldRegenerate: false,
+      reason: "no-active-task-or-correction-target",
+    };
+  }
+
+  const activeText = [
+    activeTask?.parent.questionType,
+    activeTask?.parent.topic,
+    activeTask?.parent.supportedFactAnchors.join(" "),
+    activeTask?.child?.question,
+    activeTask?.screen?.question,
+    activeTask?.screen?.content,
+    contextState.activeScreenTask?.question,
+    contextState.activeScreenTask?.content,
+    contextState.activeInterviewTask?.topic,
+    latestTurnText,
+    currentSuggestion,
+  ]
+    .filter(Boolean)
+    .join("\n");
+  const normalizedActiveText = normalizeTranscriptForGate(activeText);
+  const normalizedTarget = normalizeTranscriptForGate(correctionTarget);
+  const normalizedSource = correctionSource
+    ? normalizeTranscriptForGate(correctionSource)
+    : "";
+
+  if (
+    normalizedSource &&
+    normalizedActiveText.includes(normalizedSource) &&
+    normalizedTarget
+  ) {
+    return {
+      shouldRegenerate: true,
+      reason: "source-term-present-in-active-context",
+    };
+  }
+
+  if (isHighImpactCorrectionTerm(correctionTarget)) {
+    return {
+      shouldRegenerate: true,
+      reason: "high-impact-correction-term",
+    };
+  }
+
+  if (
+    activeTask &&
+    hasTechnicalSignal(correctionTarget) &&
+    (activeTask.parent.questionType === "ai-ml-system-design" ||
+      activeTask.parent.questionType === "general-system-design" ||
+      activeTask.parent.questionType === "project-deep-dive" ||
+      activeTask.parent.questionType === "coding" ||
+      activeTask.child?.questionType === "field-knowledge")
+  ) {
+    return {
+      shouldRegenerate: true,
+      reason: "technical-correction-with-active-task",
+    };
+  }
+
+  if (normalizedTarget && normalizedActiveText.includes(normalizedTarget)) {
+    return {
+      shouldRegenerate: true,
+      reason: "target-term-present-in-active-context",
+    };
+  }
+
+  return {
+    shouldRegenerate: false,
+    reason: "stored-for-future-speech-bias",
+  };
+}
+
+function isHighImpactCorrectionTerm(term: string) {
+  return /\b(rag|retrieval augmented generation|glean|mcp|agentic memory|vector search|embedding|llm|openai|anthropic|aws|amazon|google|microsoft|redis|kafka|postgres|java|python|typescript|javascript|go|golang|rust|c\+\+)\b/i.test(
+    term
+  );
 }
 
 function getMeetingScreenAutoPrompt(
@@ -5339,15 +5545,20 @@ function resolveAdvisorTaskSignals(
     latestThemText && calculateWordEquivalent(latestThemText) >= 3
       ? latestThemText
       : "";
-  const latestQuestionType = latestUsefulText
-    ? inferMemoryQuestionTypeFromQuery(latestUsefulText)
-    : "unknown";
-  const latestAskFrame = latestUsefulText
-    ? inferMemoryAskFrameFromQuery(latestUsefulText)
-    : "unknown";
-  const latestTopicDomain = latestUsefulText
-    ? inferMemoryTopicDomainFromQuery(latestUsefulText)
-    : "unknown";
+  const openingRoute = latestUsefulText
+    ? detectOpeningTaskRoute(latestUsefulText)
+    : undefined;
+  const latestQuestionType = openingRoute?.questionType ??
+    (latestUsefulText ? inferMemoryQuestionTypeFromQuery(latestUsefulText) : "unknown");
+  const latestAskFrame =
+    openingRoute?.askFrame ??
+    (latestUsefulText ? inferMemoryAskFrameFromQuery(latestUsefulText) : "unknown");
+  const latestTopicDomain =
+    openingRoute?.topicDomain ??
+    (latestUsefulText
+      ? inferMemoryTopicDomainFromQuery(latestUsefulText)
+      : "unknown");
+  const latestProjectAnchor = openingRoute?.projectAnchor;
   const activeQuestionType = getAdvisorActiveQuestionType(context);
 
   if (hasAdvisorActiveTask(context) && activeQuestionType) {
@@ -5378,7 +5589,8 @@ function resolveAdvisorTaskSignals(
           latestUsefulText,
           latestQuestionType
         ),
-        source: "latest-turn-new-parent",
+        projectAnchor: latestProjectAnchor,
+        source: openingRoute?.source ?? "latest-turn-new-parent",
         reuseActivePlaybook: false,
       };
     }
@@ -5400,6 +5612,7 @@ function resolveAdvisorTaskSignals(
           latestUsefulText,
           latestQuestionType
         ),
+        projectAnchor: latestProjectAnchor,
         source: "latest-turn-child-probe",
         reuseActivePlaybook: false,
       };
@@ -5437,6 +5650,7 @@ function resolveAdvisorTaskSignals(
         getAdvisorActiveTopicDomain(context) ??
         latestTopicDomain ??
         inferMemoryTopicDomainFromQuery(fallbackQuery),
+      projectAnchor: latestProjectAnchor,
       query: buildFocusedAdvisorTaskQuery(context, latestUsefulText),
       taskRelation,
       subtaskIntent: inferAdvisorSubtaskIntent(
@@ -5468,9 +5682,90 @@ function resolveAdvisorTaskSignals(
       : fallbackQuery,
     taskRelation: "new-parent",
     subtaskIntent: inferAdvisorSubtaskIntent(latestUsefulText, questionType),
-    source: latestUsefulText ? "latest-turn" : "fallback-query",
+    projectAnchor: latestProjectAnchor,
+    source: openingRoute?.source ?? (latestUsefulText ? "latest-turn" : "fallback-query"),
     reuseActivePlaybook: false,
   };
+}
+
+function detectOpeningTaskRoute(text: string):
+  | {
+      questionType: MemoryQuestionType;
+      askFrame: MemoryAskFrame;
+      topicDomain: MemoryTopicDomain;
+      projectAnchor?: string;
+      source: string;
+    }
+  | undefined {
+  const normalized = normalizeTranscriptForGate(text);
+  if (!normalized) return undefined;
+
+  const projectAnchor = inferOpeningProjectAnchor(text);
+  const asksSelfIntro =
+    /\b(introduce yourself|tell me about yourself|walk me through your background|walk me through your resume|your experience|your background|about yourself)\b/i.test(
+      text
+    );
+  const asksProjectIntro =
+    /\b(tell me about|walk me through|describe|explain)\b/i.test(text) &&
+    (projectAnchor ||
+      /\b(project|work you did|system you built|technical difficulty|hardest part|tradeoff|proud of)\b/i.test(
+        normalized
+      ));
+  const asksProjectProudOrHard =
+    /\b(project.*proud|proud.*project|hardest part|technical difficult|technical challenge|why did you choose|how did you build|how did you design|how did you implement)\b/i.test(
+      normalized
+    );
+
+  if (!asksSelfIntro && !asksProjectIntro && !asksProjectProudOrHard) {
+    return undefined;
+  }
+
+  return {
+    questionType: "project-deep-dive",
+    askFrame: "past-project",
+    topicDomain: inferOpeningTopicDomain(projectAnchor, text),
+    projectAnchor,
+    source: asksSelfIntro
+      ? "opening-route-self-intro"
+      : "opening-route-project-intro",
+  };
+}
+
+function inferOpeningProjectAnchor(text: string) {
+  const normalized = normalizeTranscriptForGate(text);
+  const anchors: Array<[RegExp, string]> = [
+    [/\bagentic memory\b/i, "Agentic Memory"],
+    [/\bmodel interface\b/i, "Model Interface"],
+    [/\bmanaged semantic search\b/i, "Managed Semantic Search"],
+    [/\bsemantic search\b/i, "Managed Semantic Search"],
+    [/\bthrottling\b|\bquota\b|\brate limit/i, "Throttling"],
+    [/\boasis\b/i, "Oasis"],
+    [/\bneural search\b|\bneuralsearch\b/i, "NeuralSearch"],
+    [/\bbeaglestone\b/i, "BeagleStone Migration"],
+    [/\baos release\b|\bopensearch release\b/i, "AOS Release"],
+    [/\bml commons\b/i, "ML Commons"],
+  ];
+
+  for (const [pattern, anchor] of anchors) {
+    if (pattern.test(normalized) || pattern.test(text)) return anchor;
+  }
+
+  return undefined;
+}
+
+function inferOpeningTopicDomain(
+  projectAnchor: string | undefined,
+  text: string
+): MemoryTopicDomain {
+  const normalized = normalizeTranscriptForGate(`${projectAnchor ?? ""} ${text}`);
+  if (/\b(agentic|memory|llm|model|ml|ai|rag|semantic|neural)\b/i.test(normalized)) {
+    return "ai-ml-infra";
+  }
+  if (/\b(search|opensearch|aos)\b/i.test(normalized)) return "search";
+  if (/\b(throttling|quota|rate limit|backend|service)\b/i.test(normalized)) {
+    return "backend";
+  }
+  return "unknown";
 }
 
 function buildFocusedAdvisorTaskQuery(
@@ -5769,6 +6064,230 @@ function buildInterviewParentFromScreenTask(
     startObservationId: task.basedOnObservationId,
     revisions: 1,
   };
+}
+
+function decideScreenTaskRelation({
+  existingTask,
+  taskKind,
+  question,
+  screenContent,
+  screenPreflight,
+  corrections,
+}: {
+  existingTask?: ActiveInterviewParent;
+  taskKind: ScreenTaskKind;
+  question?: string;
+  screenContent: string;
+  screenPreflight?: ScreenPreflightResult;
+  corrections: SpeechCorrection[];
+}): {
+  relation: InterviewTaskRelation;
+  reason: string;
+  confidence: number;
+} {
+  const nextKind = normalizeInterviewParentKind(taskKind);
+  const nextQuestionType = readMemoryQuestionType(taskKind) ?? "unknown";
+
+  if (!existingTask) {
+    return {
+      relation: "new-parent",
+      reason: "no-existing-parent",
+      confidence: 0.95,
+    };
+  }
+
+  if (!nextKind || !isParentInterviewKind(nextKind)) {
+    if (
+      shouldUseLatestTurnAsChildProbe({
+        activeQuestionType: existingTask.stableKind,
+        latestQuestionType: nextQuestionType,
+        latestText: question || screenContent,
+      })
+    ) {
+      return {
+        relation: "child-probe",
+        reason: "screen-nonparent-child-probe",
+        confidence: 0.82,
+      };
+    }
+
+    return {
+      relation: "followup-parent",
+      reason: "screen-nonparent-followup",
+      confidence: 0.58,
+    };
+  }
+
+  if (!isCompatibleParentKind(existingTask.stableKind, nextKind)) {
+    if (
+      shouldUseLatestTurnAsChildProbe({
+        activeQuestionType: existingTask.stableKind,
+        latestQuestionType: nextQuestionType,
+        latestText: question || screenContent,
+      })
+    ) {
+      return {
+        relation: "child-probe",
+        reason: "screen-compatible-child-probe",
+        confidence: 0.78,
+      };
+    }
+
+    return {
+      relation: "new-parent",
+      reason: "screen-parent-kind-mismatch",
+      confidence: 0.9,
+    };
+  }
+
+  const screenText = [
+    question,
+    screenPreflight?.question,
+    screenPreflight?.projectAnchor,
+    screenContent.slice(0, 1200),
+  ]
+    .filter(Boolean)
+    .join("\n");
+  const parentText = [
+    existingTask.topic,
+    existingTask.supportedFactAnchors.join(" "),
+    existingTask.latestUsefulAnswer,
+    existingTask.child?.question,
+    existingTask.child?.compactSummary,
+  ]
+    .filter(Boolean)
+    .join("\n");
+  const overlap = countSignificantTokenOverlap(screenText, parentText);
+  const correctionOverlap = countCorrectionTermOverlap(corrections, screenText);
+  const screenProjectAnchor = screenPreflight?.projectAnchor;
+  const projectAnchorMatches = screenProjectAnchor
+    ? existingTask.supportedFactAnchors.some((anchor) =>
+        areLoosePhrasesSimilar(anchor, screenProjectAnchor)
+      )
+    : false;
+
+  if (projectAnchorMatches) {
+    return {
+      relation: "resume-parent",
+      reason: "screen-project-anchor-matches-parent",
+      confidence: 0.9,
+    };
+  }
+
+  if (correctionOverlap > 0) {
+    return {
+      relation: "resume-parent",
+      reason: "screen-contains-recent-correction-term",
+      confidence: 0.86,
+    };
+  }
+
+  if (overlap >= 2) {
+    return {
+      relation: "followup-parent",
+      reason: `screen-parent-token-overlap:${overlap}`,
+      confidence: Math.min(0.84, 0.55 + overlap * 0.08),
+    };
+  }
+
+  if (
+    existingTask.stableKind === "ai-ml-system-design" &&
+    nextKind === "ai-ml-system-design" &&
+    hasAimlDesignOverlap(screenText, parentText)
+  ) {
+    return {
+      relation: "followup-parent",
+      reason: "screen-aiml-design-overlap",
+      confidence: 0.76,
+    };
+  }
+
+  if (nextKind === "coding") {
+    return {
+      relation: "new-parent",
+      reason: "screen-coding-without-parent-overlap",
+      confidence: 0.8,
+    };
+  }
+
+  return {
+    relation: "new-parent",
+    reason: "screen-compatible-kind-low-overlap",
+    confidence: 0.62,
+  };
+}
+
+function countCorrectionTermOverlap(
+  corrections: SpeechCorrection[],
+  text: string
+) {
+  const normalized = normalizeTranscriptForGate(text);
+  return corrections
+    .slice(-5)
+    .map((correction) => correction.to ?? correction.term)
+    .filter((term): term is string => Boolean(term?.trim()))
+    .filter((term) => normalized.includes(normalizeTranscriptForGate(term)))
+    .length;
+}
+
+function countSignificantTokenOverlap(left: string, right: string) {
+  const leftTokens = extractSignificantTokens(left);
+  const rightTokens = extractSignificantTokens(right);
+  let count = 0;
+  for (const token of leftTokens) {
+    if (rightTokens.has(token)) count += 1;
+  }
+  return count;
+}
+
+function extractSignificantTokens(text: string) {
+  const stopWords = new Set([
+    "the",
+    "and",
+    "for",
+    "with",
+    "this",
+    "that",
+    "you",
+    "your",
+    "can",
+    "how",
+    "what",
+    "why",
+    "tell",
+    "about",
+    "design",
+    "system",
+    "question",
+    "answer",
+    "approach",
+  ]);
+  return new Set(
+    normalizeTranscriptForGate(text)
+      .split(" ")
+      .filter((token) => token.length >= 3 && !stopWords.has(token))
+      .slice(0, 80)
+  );
+}
+
+function areLoosePhrasesSimilar(left: string, right: string) {
+  const normalizedLeft = normalizeTranscriptForGate(left);
+  const normalizedRight = normalizeTranscriptForGate(right);
+  if (!normalizedLeft || !normalizedRight) return false;
+  return (
+    normalizedLeft.includes(normalizedRight) ||
+    normalizedRight.includes(normalizedLeft) ||
+    countSignificantTokenOverlap(left, right) >= 2
+  );
+}
+
+function hasAimlDesignOverlap(left: string, right: string) {
+  const combined = `${left}\n${right}`.toLowerCase();
+  const hasRagOrRetrieval =
+    /\b(rag|retrieval|recommendation|recommender|trip|planning|destination|activity|agent|llm|embedding|vector)\b/i.test(
+      combined
+    );
+  return hasRagOrRetrieval && countSignificantTokenOverlap(left, right) >= 1;
 }
 
 function buildActiveInterviewChild({

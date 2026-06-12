@@ -219,6 +219,7 @@ function buildMemoryPolicySnapshot({
     memoryPolicyId: memoryPolicy?.id,
     allowedFamilies: memoryPolicy?.allowedFamilies,
     blockedFamilies: memoryPolicy?.blockedFamilies,
+    strictProjectAnchor: memoryPolicy?.strictProjectAnchor,
     maxEntries: memoryPolicy?.maxEntries ?? maxEntries,
     maxChars: memoryPolicy?.maxChars ?? maxChars,
     perEntryMaxChars: memoryPolicy?.perEntryMaxChars ?? perEntryMaxChars,
@@ -285,6 +286,10 @@ function getEntryEligibilityDecision(
   );
   if (gateRejectReason) {
     return { eligible: false as const, reason: gateRejectReason };
+  }
+
+  if (isProjectAnchorMismatch(entry, memoryPolicy?.strictProjectAnchor)) {
+    return { eligible: false as const, reason: "project-anchor-mismatch" as const };
   }
 
   return { eligible: true as const };
@@ -664,6 +669,33 @@ function isProjectSpecificEntry(entry: MemoryEntry) {
       "decision_record",
       "investigation_note",
     ].includes(entry.type)
+  );
+}
+
+function isProjectAnchorMismatch(
+  entry: MemoryEntry,
+  strictProjectAnchor: string | undefined
+) {
+  const anchor = strictProjectAnchor?.trim();
+  if (!anchor || !isProjectSpecificEntry(entry)) return false;
+  if (isGlobalProjectAnchorExemptEntry(entry)) return false;
+
+  const anchorTokens = tokenize(anchor);
+  const searchable = buildEntrySearchableText(entry);
+  const overlap = countTokenOverlap(anchorTokens, tokenize(searchable));
+
+  return overlap === 0;
+}
+
+function isGlobalProjectAnchorExemptEntry(entry: MemoryEntry) {
+  return (
+    entry.scope === "global" &&
+    (entry.type === "profile" ||
+      entry.type === "preference" ||
+      entry.type === "resume_fact" ||
+      entry.type === "answer_template" ||
+      entry.type === "evaluation_criteria" ||
+      entry.type === "interview_framework")
   );
 }
 
