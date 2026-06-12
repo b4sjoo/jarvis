@@ -100,7 +100,11 @@ export class AdvisorEngine {
     requestId: string,
     content: string,
     basedOnTurnIds: string[],
-    basedOnObservationIds: string[]
+    basedOnObservationIds: string[],
+    taskMetadata: Pick<
+      AdvisorSuggestion,
+      "taskId" | "parentTaskId" | "childTaskId" | "taskSource" | "questionType"
+    > = {}
   ): AdvisorSuggestion {
     const kind = inferSuggestionKind(content);
     const screenTaskAnswer =
@@ -115,6 +119,7 @@ export class AdvisorEngine {
           ? screenTaskAnswer
           : undefined,
       createdAt: Date.now(),
+      ...taskMetadata,
       basedOnTurnIds,
       basedOnObservationIds,
       confidence: content.trim().startsWith("?") ? "low" : "medium",

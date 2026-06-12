@@ -123,6 +123,8 @@ import {
   buildFactAnchorDecision,
   formatFactAnchorDecisionForTrace,
   getActiveMeetingTaskTraceMetadata,
+  areSuggestionsForSameParentTask,
+  buildSuggestionTaskMetadata,
   PlaybookPhaseDecision,
 } from "@/lib/meeting";
 
@@ -617,14 +619,25 @@ function withLatestReliableSuggestion(
   options: { clearPrevious?: boolean } = {}
 ): Pick<MeetingAssistantState, "latestSuggestion" | "latestReliableSuggestion"> {
   const previousSuggestion = previous.latestSuggestion;
+  const previousSuggestionMatchesTask = areSuggestionsForSameParentTask(
+    previousSuggestion,
+    nextSuggestion
+  );
+  const existingReliableMatchesTask = areSuggestionsForSameParentTask(
+    previous.latestReliableSuggestion,
+    nextSuggestion
+  );
   const latestReliableSuggestion =
     options.clearPrevious
       ? null
       : previousSuggestion &&
+          previousSuggestionMatchesTask &&
           isCacheableReliableSuggestion(previousSuggestion) &&
           previousSuggestion.content.trim() !== nextSuggestion.content.trim()
         ? previousSuggestion
-        : previous.latestReliableSuggestion;
+        : existingReliableMatchesTask
+          ? previous.latestReliableSuggestion
+          : null;
 
   return {
     latestSuggestion: nextSuggestion,
@@ -2415,14 +2428,16 @@ export function useMeetingAssistant() {
             interviewSessionBrief: promptContext.interviewSessionBrief,
             interviewSessionContext: promptContext.interviewSessionContext,
           });
-    const playbookPhaseDecision = decidePlaybookPhaseProgression({
-      questionType:
-        (advisorTaskSignals.taskRelation === "followup-parent" ||
-          advisorTaskSignals.taskRelation === "resume-parent" ||
-          advisorTaskSignals.taskRelation === "child-probe") &&
+    const advisorPhaseQuestionType = normalizeQuestionTypeAlias(
+      (advisorTaskSignals.taskRelation === "followup-parent" ||
+        advisorTaskSignals.taskRelation === "resume-parent" ||
+        advisorTaskSignals.taskRelation === "child-probe") &&
         getAdvisorActiveQuestionType(promptContext)
-          ? getAdvisorActiveQuestionType(promptContext)
-          : advisorQuestionType,
+        ? getAdvisorActiveQuestionType(promptContext)
+        : advisorQuestionType
+    );
+    const playbookPhaseDecision = decidePlaybookPhaseProgression({
+      questionType: advisorPhaseQuestionType,
       playbookId: advisorPlaybook?.id,
       currentPhase:
         promptContext.activeMeetingTask?.parent.playbookPhase ??
@@ -2791,7 +2806,8 @@ export function useMeetingAssistant() {
         requestId,
         finalContent,
         latestTurn ? [latestTurn.id] : [],
-        latestObservationIds
+        latestObservationIds,
+        buildSuggestionTaskMetadata(contextState.activeMeetingTask)
       );
 
       setState((previous) => ({
@@ -3462,6 +3478,7 @@ export function useMeetingAssistant() {
               "Question: Should I treat this as a new task?",
             ].join("\n"),
             createdAt: Date.now(),
+            ...buildSuggestionTaskMetadata(activeContextState.activeMeetingTask),
             basedOnTurnIds: [turn.id],
             basedOnObservationIds: activeScreenTask
               ? [activeScreenTask.observationId]
@@ -4419,7 +4436,9 @@ export function useMeetingAssistant() {
           interviewSessionContext: preflightContextState.interviewSessionContext,
         });
         const screenPhaseDecision = decidePlaybookPhaseProgression({
-          questionType: screenPreflight?.questionType ?? screenMemoryQuestionType,
+          questionType: normalizeQuestionTypeAlias(
+            screenPreflight?.questionType ?? screenMemoryQuestionType
+          ),
           playbookId: screenPlaybook?.id,
           currentPhase:
             preflightContextState.activeMeetingTask?.parent.playbookPhase ??
@@ -4795,6 +4814,9 @@ export function useMeetingAssistant() {
               content: screenTaskContent.trim(),
               screenTaskAnswer: parseScreenTaskAnswer(screenTaskContent.trim()),
               createdAt: Date.now(),
+              ...buildSuggestionTaskMetadata(
+                updatedContextState.activeMeetingTask
+              ),
               basedOnTurnIds,
               basedOnObservationIds: [observation.id],
               confidence: "medium",
@@ -4804,6 +4826,9 @@ export function useMeetingAssistant() {
               kind: "silent",
               content: "",
               createdAt: Date.now(),
+              ...buildSuggestionTaskMetadata(
+                updatedContextState.activeMeetingTask
+              ),
               basedOnTurnIds,
               basedOnObservationIds: [observation.id],
               confidence: "low",

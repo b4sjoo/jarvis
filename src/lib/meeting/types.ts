@@ -470,6 +470,11 @@ export interface AdvisorSuggestion {
   content: string;
   screenTaskAnswer?: ScreenTaskAnswer;
   createdAt: number;
+  taskId?: string;
+  parentTaskId?: string;
+  childTaskId?: string;
+  taskSource?: "screen" | "voice" | "mixed";
+  questionType?: ScreenQuestionType;
   basedOnTurnIds: string[];
   basedOnObservationIds: string[];
   confidence: "low" | "medium" | "high";
