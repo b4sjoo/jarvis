@@ -14,9 +14,9 @@ import {
   updateInterviewSessionContextFromBrief,
   updateInterviewSessionContextFromScreenText,
   updateInterviewSessionContextFromTurn,
-} from "./interview-session-context";
-import { shouldIncludeTurnInAdvisorPrompt } from "./transcript-fusion";
-import { buildActiveMeetingTask } from "./active-meeting-task";
+} from "./interview-session-context.js";
+import { shouldIncludeTurnInAdvisorPrompt } from "./transcript-fusion.js";
+import { buildActiveMeetingTask } from "./active-meeting-task.js";
 
 const DEFAULT_TRANSCRIPT_WINDOW_MS = 2 * 60 * 1000;
 const DEFAULT_MAX_SCREEN_OBSERVATIONS = 5;

@@ -49,8 +49,10 @@ import type {
 import {
   MEETING_FOCUS_ACTION_EVENT,
   MEETING_FOCUS_SNAPSHOT_EVENT,
+  getActiveMeetingParentQuestionType,
   getDisplayClarifyingOptions,
   getActiveMeetingTaskFocusSummary,
+  getActiveMeetingTaskId,
   hasScreenTaskAnswerContent,
   parseScreenTaskAnswer,
   stripOuterCodeFence,
@@ -367,23 +369,13 @@ export const MeetingAssistant = ({
     () => parseSuggestionSections(displaySuggestion, completedScreenTaskAnswer),
     [completedScreenTaskAnswer, displaySuggestion]
   );
-  const activeScreenTaskId =
-    meeting.activeMeetingTask?.screen?.activeScreenTaskId ??
-    meeting.activeScreenTask?.id ??
-    "";
-  const hasActiveMeetingTask = Boolean(
-    meeting.activeMeetingTask ??
-      meeting.activeScreenTask ??
-      meeting.activeInterviewTask
-  );
-  const hasActiveMeetingScreenContext = Boolean(
-    meeting.activeMeetingTask?.screen ?? meeting.activeScreenTask
-  );
+  const hasActiveMeetingTask = Boolean(meeting.activeMeetingTask);
+  const hasActiveMeetingScreenContext = Boolean(meeting.activeMeetingTask?.screen);
   const activeParentTaskId =
-    meeting.activeMeetingTask?.parent.id ?? activeScreenTaskId;
-  const activeTaskKind =
-    meeting.activeMeetingTask?.parent.questionType ??
-    meeting.activeScreenTask?.kind;
+    getActiveMeetingTaskId(meeting.activeMeetingTask) ?? "";
+  const activeTaskKind = getActiveMeetingParentQuestionType(
+    meeting.activeMeetingTask
+  );
   useEffect(() => {
     if (!activeParentTaskId) {
       setCodingArtifactCache(null);
@@ -586,7 +578,6 @@ export const MeetingAssistant = ({
       latestReliableAnswerPreview,
       latestTurn?.text,
       meeting.activeMeetingTask,
-      meeting.activeScreenTask,
       hasActiveMeetingTask,
       hasActiveMeetingScreenContext,
       meeting.error,
