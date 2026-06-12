@@ -156,6 +156,7 @@ export function buildAdvisorUserMessage(
       "If <previous_suggestion> is empty or only '-', output a single dash.",
       "If <previous_suggestion> contains a non-empty Code or Implementation section, keep the screen-task section format: 中文思路, Question, Answer, Approach, Code, Complexity, Clarifying question, Clarifying options.",
       "For coding tasks, preserve the Code section unless the latest explicit constraint requires changing it. Do not move code into Approach.",
+      "For coding tasks, keep 中文思路 in Chinese, but keep Question, Answer, Approach, Complexity, Clarifying question, and Clarifying options in meeting-ready English unless the user explicitly asks to translate the coding answer.",
       ...buildResponseActionInstructions(options.responseAction ?? "focus"),
       ...buildResponseConfigInstructions(options.responseConfig),
       "</output>"
@@ -201,6 +202,7 @@ export function buildAdvisorUserMessage(
       "Complexity: time and space complexity for coding tasks, or '-' otherwise.",
       "Clarifying question: one click-answerable question if a missing constraint matters, otherwise '-'.",
       "Clarifying options: two short option labels if the clarifying question has two plausible directions, otherwise '-'.",
+      "For coding tasks, 中文思路 must stay Chinese while Question, Answer, Approach, Complexity, Clarifying question, and Clarifying options must default to meeting-ready English. The Code section must use the selected/requested programming language.",
       "Do not invent colleagues, speakers, or hidden requirements.",
       ...buildModeInstructions(mode),
       ...buildResponseConfigInstructions(options.responseConfig),
@@ -299,6 +301,7 @@ function buildResponseActionInstructions(action: MeetingResponseActionMode) {
       "Reply: one to three short professional English sentences.",
       "Question: -",
       "For coding suggestions, keep the required screen-task section labels and put the speakable wording in Answer and Approach while preserving Code and Complexity.",
+      "For coding suggestions, keep Answer, Approach, Complexity, and clarifying text in meeting-ready English while 中文思路 remains Chinese.",
       "Avoid adding new code blocks outside the Code section. Mention complexity only when it is central to the answer.",
     ];
   }
@@ -310,6 +313,7 @@ function buildResponseActionInstructions(action: MeetingResponseActionMode) {
     "Reply: one short meeting-ready English sentence if useful, otherwise '-'.",
     "Question: one click-answerable clarifying question only if a missing constraint matters, otherwise '-'.",
     "For coding suggestions, keep the required screen-task section labels and focus 中文思路, Answer, and Approach on implementation details, edge cases, or complexity while preserving Code.",
+    "For coding suggestions, keep Answer, Approach, Complexity, and clarifying text in meeting-ready English while 中文思路 remains Chinese.",
     "If code is central, keep it in the Code section instead of dumping it into Approach.",
   ];
 }

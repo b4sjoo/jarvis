@@ -108,7 +108,7 @@ export function selectInterviewPlaybook({
       clarifyingStrategy:
         "Ask only when a constraint changes the optimal algorithm, input format, or requested language.",
       outputContract:
-        "中文思路 first, then Answer, Approach, Code, Complexity, Question, Clarifying question, Clarifying options. Code belongs only in Code.",
+        "中文思路 first in Chinese. Question, Answer, Approach, Complexity, Clarifying question, and Clarifying options should default to meeting-ready English. Code belongs only in Code and must use the selected/requested programming language.",
       followUpPolicy:
         "If a follow-up is non-coding, keep existing coding artifacts unless the task is reset or the follow-up explicitly changes implementation or complexity.",
       maxEntries: 4,

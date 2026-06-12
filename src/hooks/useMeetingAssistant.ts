@@ -686,8 +686,14 @@ function preserveCodingResponseActionSections(
   if (generatedAnswer.code?.trim()) return generatedContent;
 
   const compactAnswer = readCompactActionAnswer(generatedContent);
+  const clarifyingOptions =
+    formatClarifyingOptionsForSection(generatedAnswer.clarifyingOptions) ||
+    formatClarifyingOptionsForSection(sourceAnswer.clarifyingOptions);
 
   return [
+    `中文思路: ${
+      generatedAnswer.chineseThinking || sourceAnswer.chineseThinking || "-"
+    }`,
     `Question: ${generatedAnswer.question || sourceAnswer.question || "-"}`,
     `Answer: ${generatedAnswer.answer || compactAnswer || sourceAnswer.answer || "-"}`,
     `Approach: ${generatedAnswer.approach || sourceAnswer.approach || "-"}`,
@@ -698,7 +704,14 @@ function preserveCodingResponseActionSections(
       sourceAnswer.clarifyingQuestion ||
       "-"
     }`,
+    `Clarifying options: ${clarifyingOptions || "-"}`,
   ].join("\n\n");
+}
+
+function formatClarifyingOptionsForSection(
+  options: ReturnType<typeof parseScreenTaskAnswer>["clarifyingOptions"]
+) {
+  return options?.map((option) => option.label).filter(Boolean).join(" | ");
 }
 
 function readCompactActionAnswer(content: string) {
