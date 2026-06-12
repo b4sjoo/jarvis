@@ -103,6 +103,9 @@ export function buildAdvisorUserMessage(
     "<interview_playbook>",
     formatInterviewPlaybookForPrompt(context.interviewPlaybook),
     "</interview_playbook>",
+    "<opening_route>",
+    formatOpeningRouteForPrompt(context.openingRoute),
+    "</opening_route>",
     "<rolling_summary>",
     context.rollingSummary || "No summary yet.",
     "</rolling_summary>",
@@ -181,6 +184,7 @@ export function buildAdvisorUserMessage(
       "Use <active_meeting_task> as the primary task identity and continuity source. Use <active_interview_task> and <active_screen_task> only as temporary compatibility detail.",
       "Use <active_meeting_task> to preserve the stable parent task across short child probes. Do not restart requirement clarification when the latest turn is a child probe or resume of the same parent.",
       "Use <interview_playbook> as the procedural strategy for this active task. Follow its first move, clarifying strategy, output contract, and follow-up policy unless the active screen task or latest transcript contradicts it.",
+      "If <opening_route> is present, follow its template-backed opening frame. If it says commitParent=false, answer the opening without treating it as a durable project parent.",
       "If <interview_playbook> questionType differs from <active_meeting_task> parent Question type, treat the latest transcript as a child probe inside the active parent task. Answer the local probe without clearing, restarting, or rewriting the parent task.",
       "If the target company is Amazon and this is a behavioral answer, use any injected Amazon Leadership Principle rubric to demonstrate Strength signals and avoid Concern signals. Do not explicitly name the principle unless it helps.",
       "For behavioral and project-deep-dive answers, obey <fact_anchor_guardrail>. If Action is ask-clarification or offer-supported-choices, do not invent a first-person story or project. Put a brief Chinese warning in 中文思路, put '-' or a safe setup sentence in Answer, and put the needed story/project selection in Clarifying question and Clarifying options.",
@@ -228,6 +232,7 @@ export function buildAdvisorUserMessage(
     "Use <interview_session_brief> as user-provided pre-meeting background and <interview_session_context> as cross-task inferred context, especially the target company. Do not infer a different company if the brief locks one.",
     "Use <active_meeting_task> as the primary active task state. It preserves the current interview parent task, optional child probe, and optional screen context. Avoid importing facts from a previous unrelated block.",
     "Use <interview_playbook> as procedural guidance when present. It should shape the next move without overriding transcript facts.",
+    "If <opening_route> is present, use the template-backed opening guidance. For self-intro or resume walkthrough, Reply should be a 45-60 second English answer with current positioning, relevant past work, AI/ML infrastructure throughline, and target role/company relevance; do not create a permanent project narrative from it. For project-intro, Reply should be a 60-90 second English answer with problem, importance, core design, key tradeoff/difficulty, validation or impact, and likely follow-up hooks.",
     "For AI/ML or agent system-design questions about metrics, logs, evaluation, quality, faster/cheaper/better, or observability, avoid generic measurement language. Name concrete metric categories, define what each measures, and include the required log/trace fields.",
     "For Amazon behavioral interview moments, use injected Leadership Principle guidance to shape the answer toward Strength signals and away from Concern signals without inventing facts.",
     "For behavioral and project-deep-dive moments, obey <fact_anchor_guardrail>. If it says ask-clarification or offer-supported-choices, do not fabricate a first-person story or project; ask the user to choose a supported anchor or clarify the intended project/story.",
@@ -398,6 +403,32 @@ function buildModeInstructions(mode: AdvisorRequestMode) {
   }
 
   return [];
+}
+
+function formatOpeningRouteForPrompt(
+  openingRoute: AdvisorPromptContext["openingRoute"]
+) {
+  if (!openingRoute) {
+    return "No template-backed opening route was detected.";
+  }
+
+  const frame =
+    openingRoute.kind === "project-intro"
+      ? "Project intro frame: problem before the project -> why it mattered -> core design decision -> key tradeoff or technical difficulty -> validation/impact -> likely follow-up hooks."
+      : "Self intro frame: current positioning -> relevant past work -> AI/ML infrastructure throughline -> target role/company relevance.";
+
+  return [
+    `kind: ${openingRoute.kind}`,
+    `source: ${openingRoute.source}`,
+    `commitParent: ${openingRoute.commitParent}`,
+    openingRoute.projectAnchor
+      ? `projectAnchor: ${openingRoute.projectAnchor}`
+      : undefined,
+    frame,
+    "Use only supported facts from transcript, Interview Brief, session context, memory, or explicit user correction.",
+  ]
+    .filter(Boolean)
+    .join("\n");
 }
 
 function formatSourceSpecificTaskContext(context: AdvisorPromptContext) {

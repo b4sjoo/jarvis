@@ -50,6 +50,7 @@ import {
   MeetingTraceExportTrigger,
   MeetingModelRequestOptions,
   PENDING_CONFIRMATION_TTL_MS,
+  OpeningRouteContext,
   ParentQuestionType,
   QuestionEvaluationIdentity,
   QuestionHumanEvaluation,
@@ -669,6 +670,7 @@ interface AdvisorTaskSignals {
   subtaskIntent: InterviewSubtaskIntent;
   source: string;
   reuseActivePlaybook: boolean;
+  openingRoute?: OpeningRouteContext;
 }
 
 function preserveCodingResponseActionSections(
@@ -2383,7 +2385,9 @@ export function useMeetingAssistant() {
       advisorTaskSignals.projectAnchor ??
       getAdvisorActiveProjectAnchor(promptContext);
     const advisorPlaybook =
-      advisorTaskSignals.reuseActivePlaybook
+      advisorTaskSignals.openingRoute?.commitParent === false
+        ? undefined
+        : advisorTaskSignals.reuseActivePlaybook
         ? getAdvisorActivePlaybook(promptContext) ??
           selectInterviewPlaybook({
             query: advisorTaskSignals.query,
@@ -2419,6 +2423,9 @@ export function useMeetingAssistant() {
         taskRelation: advisorTaskSignals.taskRelation,
         subtaskIntent: advisorTaskSignals.subtaskIntent,
         taskSignalSource: advisorTaskSignals.source,
+        openingRouteKind: advisorTaskSignals.openingRoute?.kind,
+        openingRouteCommitParent:
+          advisorTaskSignals.openingRoute?.commitParent,
         parentTaskId: activeMeetingTaskId,
         parentTaskKind:
           promptContext.activeMeetingTask?.parent.questionType ??
@@ -2438,6 +2445,9 @@ export function useMeetingAssistant() {
             taskRelation: advisorTaskSignals.taskRelation,
             subtaskIntent: advisorTaskSignals.subtaskIntent,
             taskSignalSource: advisorTaskSignals.source,
+            openingRouteKind: advisorTaskSignals.openingRoute?.kind,
+            openingRouteCommitParent:
+              advisorTaskSignals.openingRoute?.commitParent,
             parentTaskId: activeMeetingTaskId,
             ...getActiveMeetingTaskTraceMetadata(promptContext.activeMeetingTask),
           }
@@ -2464,7 +2474,10 @@ export function useMeetingAssistant() {
       memoryPolicy: advisorPlaybook?.memoryPolicy,
     });
     const factAnchorDecision = buildFactAnchorDecision({
-      questionType: advisorQuestionType,
+      questionType:
+        advisorTaskSignals.openingRoute?.commitParent === false
+          ? undefined
+          : advisorQuestionType,
       memoryContext,
       activeFactAnchors:
         promptContext.activeMeetingTask?.parent.supportedFactAnchors ??
@@ -2495,6 +2508,7 @@ export function useMeetingAssistant() {
       memoryContext: memoryContext?.contextText,
       interviewPlaybook: advisorPlaybook,
       factAnchorDecision,
+      openingRoute: advisorTaskSignals.openingRoute,
     };
 
     const advisorUsesCodingModel =
@@ -2631,30 +2645,38 @@ export function useMeetingAssistant() {
       const advisorEvidenceSource = contextState.activeMeetingTask?.screen
         ? "screen"
         : "voice";
-      const continuity = updateInterviewTaskContinuityForAnswer({
-        existingTask: existingInterviewTask,
-        source: advisorEvidenceSource,
-        questionType:
-          advisorTaskSignals.taskRelation === "followup-parent" &&
-          existingInterviewTask
-            ? existingInterviewTask.stableKind
-            : advisorQuestionType,
-        relation: advisorTaskSignals.taskRelation,
-        subtaskIntent: advisorTaskSignals.subtaskIntent,
-        question:
-          contextState.activeScreenTask?.question ??
-          latestTurn?.text ??
-          extractScreenTaskQuestion(finalContent),
-        finalContent,
-        playbook: advisorPlaybook,
-        latestTurn,
-        observationId: contextState.activeScreenTask?.basedOnObservationId,
-        expiresAt: getActiveScreenTaskExpiresAt(state.settings),
-        supportedFactAnchors: mergeSupportedFactAnchors(
-          advisorProjectAnchor ? [advisorProjectAnchor] : undefined,
-          extractSupportedFactAnchorsFromMemory(memoryContext)
-        ),
-      });
+      const shouldCommitAdvisorParent =
+        advisorTaskSignals.openingRoute?.commitParent !== false;
+      const continuity = shouldCommitAdvisorParent
+        ? updateInterviewTaskContinuityForAnswer({
+            existingTask: existingInterviewTask,
+            source: advisorEvidenceSource,
+            questionType:
+              advisorTaskSignals.taskRelation === "followup-parent" &&
+              existingInterviewTask
+                ? existingInterviewTask.stableKind
+                : advisorQuestionType,
+            relation: advisorTaskSignals.taskRelation,
+            subtaskIntent: advisorTaskSignals.subtaskIntent,
+            question:
+              contextState.activeScreenTask?.question ??
+              latestTurn?.text ??
+              extractScreenTaskQuestion(finalContent),
+            finalContent,
+            playbook: advisorPlaybook,
+            latestTurn,
+            observationId: contextState.activeScreenTask?.basedOnObservationId,
+            expiresAt: getActiveScreenTaskExpiresAt(state.settings),
+            supportedFactAnchors: mergeSupportedFactAnchors(
+              advisorProjectAnchor ? [advisorProjectAnchor] : undefined,
+              extractSupportedFactAnchorsFromMemory(memoryContext)
+            ),
+          })
+        : {
+            task: existingInterviewTask,
+            startedNewParent: false,
+            clearedParent: false,
+          };
       let nextActiveScreenTask = contextState.activeScreenTask;
 
       if (
@@ -5621,6 +5643,7 @@ function resolveAdvisorTaskSignals(
         projectAnchor: latestProjectAnchor,
         source: openingRoute?.source ?? "latest-turn-new-parent",
         reuseActivePlaybook: false,
+        openingRoute,
       };
     }
 
@@ -5644,6 +5667,7 @@ function resolveAdvisorTaskSignals(
         projectAnchor: latestProjectAnchor,
         source: "latest-turn-child-probe",
         reuseActivePlaybook: false,
+        openingRoute,
       };
     }
 
@@ -5688,6 +5712,7 @@ function resolveAdvisorTaskSignals(
       ),
       source: "active-parent",
       reuseActivePlaybook: true,
+      openingRoute,
     };
   }
 
@@ -5714,26 +5739,29 @@ function resolveAdvisorTaskSignals(
     projectAnchor: latestProjectAnchor,
     source: openingRoute?.source ?? (latestUsefulText ? "latest-turn" : "fallback-query"),
     reuseActivePlaybook: false,
+    openingRoute,
   };
 }
 
 function detectOpeningTaskRoute(text: string):
-  | {
+  | (OpeningRouteContext & {
       questionType: MemoryQuestionType;
       askFrame: MemoryAskFrame;
       topicDomain: MemoryTopicDomain;
-      projectAnchor?: string;
-      source: string;
-    }
+    })
   | undefined {
   const normalized = normalizeTranscriptForGate(text);
   if (!normalized) return undefined;
 
   const projectAnchor = inferOpeningProjectAnchor(text);
-  const asksSelfIntro =
-    /\b(introduce yourself|tell me about yourself|walk me through your background|walk me through your resume|your experience|your background|about yourself)\b/i.test(
+  const asksResumeWalkthrough =
+    /\b(walk me through|tell me about|briefly summarize|summarize)\b/i.test(
       text
-    );
+    ) && /\b(your resume|your background|your experience|your career)\b/i.test(text);
+  const asksSelfIntro =
+    /\b(introduce yourself|tell me about yourself|about yourself|start with your background|briefly introduce)\b/i.test(
+      text
+    ) || asksResumeWalkthrough;
   const asksProjectIntro =
     /\b(tell me about|walk me through|describe|explain)\b/i.test(text) &&
     (projectAnchor ||
@@ -5749,14 +5777,22 @@ function detectOpeningTaskRoute(text: string):
     return undefined;
   }
 
+  const openingKind = asksSelfIntro
+    ? asksResumeWalkthrough
+      ? "resume-walkthrough"
+      : "self-intro"
+    : "project-intro";
+
   return {
     questionType: "project-deep-dive",
     askFrame: "past-project",
     topicDomain: inferOpeningTopicDomain(projectAnchor, text),
     projectAnchor,
+    kind: openingKind,
     source: asksSelfIntro
       ? "opening-route-self-intro"
       : "opening-route-project-intro",
+    commitParent: !asksSelfIntro,
   };
 }
 

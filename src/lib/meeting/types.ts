@@ -499,7 +499,20 @@ export interface AdvisorPromptContext {
   memoryContext?: string;
   interviewPlaybook?: SelectedInterviewPlaybook;
   factAnchorDecision?: FactAnchorDecision;
+  openingRoute?: OpeningRouteContext;
   latestTurn?: TranscriptTurn;
+}
+
+export type OpeningRouteKind =
+  | "self-intro"
+  | "resume-walkthrough"
+  | "project-intro";
+
+export interface OpeningRouteContext {
+  kind: OpeningRouteKind;
+  source: string;
+  projectAnchor?: string;
+  commitParent: boolean;
 }
 
 export interface SelectedProviderState {
