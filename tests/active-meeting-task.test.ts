@@ -2,8 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   buildActiveMeetingTask,
+  collectActiveMeetingTaskIdentityIds,
   formatActiveMeetingTaskForPrompt,
   getActiveMeetingTaskTraceMetadata,
+  resolveActiveMeetingTaskIdentity,
 } from "../src/lib/meeting/active-meeting-task.js";
 import type {
   ActiveInterviewParent,
@@ -145,6 +147,92 @@ test("surfaces screen/interview divergence instead of silently hiding it", () =>
   assert.equal(task?.divergence?.reason, "question-type-mismatch");
   assert.equal(task?.divergence?.screenQuestionType, "coding");
   assert.equal(task?.divergence?.parentQuestionType, "behavioral");
+});
+
+test("resolves active meeting task identity from canonical metadata first", () => {
+  const task = buildActiveMeetingTask({
+    activeScreenTask: makeScreenTask(),
+    activeInterviewTask: makeInterviewTask({
+      stableKind: "coding",
+      startObservationId: "obs_1",
+    }),
+  });
+
+  const identity = resolveActiveMeetingTaskIdentity({
+    activeMeetingTask: task,
+    metadata: {
+      activeMeetingTaskId: "canonical_task",
+      activeMeetingParentId: "canonical_parent",
+      activeMeetingChildId: "canonical_child",
+      activeMeetingTaskSource: "mixed",
+      activeInterviewParentId: "legacy_parent",
+      activeScreenTaskId: "legacy_screen",
+    },
+  });
+
+  assert.deepEqual(identity, {
+    taskId: "canonical_task",
+    parentTaskId: "canonical_parent",
+    childTaskId: "canonical_child",
+    taskSource: "mixed",
+  });
+});
+
+test("resolves legacy task identity when canonical metadata is absent", () => {
+  const identity = resolveActiveMeetingTaskIdentity({
+    metadata: {
+      activeInterviewParentId: "legacy_parent",
+      activeInterviewChildId: "legacy_child",
+      activeScreenTaskId: "legacy_screen",
+    },
+  });
+
+  assert.deepEqual(identity, {
+    taskId: "legacy_parent",
+    parentTaskId: "legacy_parent",
+    childTaskId: "legacy_child",
+    taskSource: undefined,
+  });
+  assert.deepEqual(
+    collectActiveMeetingTaskIdentityIds({
+      metadata: {
+        activeInterviewParentId: "legacy_parent",
+        activeInterviewChildId: "legacy_child",
+        activeScreenTaskId: "legacy_screen",
+      },
+    }),
+    ["legacy_parent", "legacy_child", "legacy_screen"]
+  );
+});
+
+test("falls back to active meeting task only when trace metadata has no identity", () => {
+  const task = buildActiveMeetingTask({
+    activeInterviewTask: makeInterviewTask({
+      source: "voice",
+      child: {
+        id: "child_1",
+        createdAt: now,
+        updatedAt: now + 1,
+        questionType: "field-knowledge",
+        relation: "child-probe",
+        intent: "concept-probe",
+        question: "What is RAG?",
+        basedOnTurnIds: ["turn_1"],
+        basedOnObservationIds: [],
+      },
+    }),
+  });
+
+  const identity = resolveActiveMeetingTaskIdentity({
+    activeMeetingTask: task,
+  });
+
+  assert.deepEqual(identity, {
+    taskId: "parent_1",
+    parentTaskId: "parent_1",
+    childTaskId: "child_1",
+    taskSource: "voice",
+  });
 });
 
 function makeScreenTask(

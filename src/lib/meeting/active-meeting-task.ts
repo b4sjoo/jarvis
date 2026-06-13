@@ -84,6 +84,13 @@ export interface ActiveMeetingTaskDivergence {
   parentQuestionType?: ScreenQuestionType;
 }
 
+export interface ActiveMeetingTaskIdentityResolution {
+  taskId?: string;
+  parentTaskId?: string;
+  childTaskId?: string;
+  taskSource?: ActiveMeetingTaskSource;
+}
+
 export function buildActiveMeetingTask(input: {
   activeScreenTask?: ActiveScreenTask;
   activeInterviewTask?: ActiveInterviewParent;
@@ -123,6 +130,77 @@ export function buildActiveMeetingTask(input: {
 
 export function getActiveMeetingTaskId(task: ActiveMeetingTask | undefined) {
   return task?.id;
+}
+
+export function resolveActiveMeetingTaskIdentity(input: {
+  metadata?: Record<string, unknown>;
+  activeMeetingTask?: ActiveMeetingTask;
+  explicitTaskId?: string;
+}): ActiveMeetingTaskIdentityResolution {
+  const { metadata, activeMeetingTask, explicitTaskId } = input;
+  const activeMeetingTaskId = readMetadataString(
+    metadata,
+    "activeMeetingTaskId"
+  );
+  const activeMeetingParentId = readMetadataString(
+    metadata,
+    "activeMeetingParentId"
+  );
+  const activeMeetingChildId = readMetadataString(
+    metadata,
+    "activeMeetingChildId"
+  );
+  const legacyInterviewParentId = readMetadataString(
+    metadata,
+    "activeInterviewParentId"
+  );
+  const legacyInterviewChildId = readMetadataString(
+    metadata,
+    "activeInterviewChildId"
+  );
+  const legacyScreenTaskId = readMetadataString(metadata, "activeScreenTaskId");
+  const metadataTaskId =
+    activeMeetingTaskId ??
+    activeMeetingParentId ??
+    readMetadataString(metadata, "taskId") ??
+    explicitTaskId ??
+    legacyInterviewParentId ??
+    legacyScreenTaskId;
+  const metadataParentTaskId =
+    activeMeetingParentId ??
+    activeMeetingTaskId ??
+    legacyInterviewParentId ??
+    legacyScreenTaskId;
+
+  return {
+    taskId: metadataTaskId ?? activeMeetingTask?.id,
+    parentTaskId: metadataParentTaskId ?? activeMeetingTask?.parent.id,
+    childTaskId:
+      activeMeetingChildId ??
+      legacyInterviewChildId ??
+      activeMeetingTask?.child?.id,
+    taskSource:
+      readMetadataTaskSource(metadata, "activeMeetingTaskSource") ??
+      activeMeetingTask?.source,
+  };
+}
+
+export function collectActiveMeetingTaskIdentityIds(input: {
+  metadata?: Record<string, unknown>;
+  activeMeetingTask?: ActiveMeetingTask;
+  explicitTaskId?: string;
+}) {
+  const identity = resolveActiveMeetingTaskIdentity(input);
+  return uniqueStrings([
+    input.explicitTaskId,
+    readMetadataString(input.metadata, "taskId"),
+    identity.taskId,
+    identity.parentTaskId,
+    identity.childTaskId,
+    readMetadataString(input.metadata, "activeScreenTaskId"),
+    readMetadataString(input.metadata, "activeInterviewParentId"),
+    readMetadataString(input.metadata, "activeInterviewChildId"),
+  ]);
 }
 
 export function getActiveMeetingParentQuestionType(
@@ -413,4 +491,28 @@ function detectDivergence(
   }
 
   return undefined;
+}
+
+function readMetadataString(
+  metadata: Record<string, unknown> | undefined,
+  key: string
+) {
+  const value = metadata?.[key];
+  return typeof value === "string" && value.trim() ? value : undefined;
+}
+
+function readMetadataTaskSource(
+  metadata: Record<string, unknown> | undefined,
+  key: string
+): ActiveMeetingTaskSource | undefined {
+  const value = readMetadataString(metadata, key);
+  return value === "screen" || value === "voice" || value === "mixed"
+    ? value
+    : undefined;
+}
+
+function uniqueStrings(values: Array<string | undefined>) {
+  return Array.from(
+    new Set(values.filter((value): value is string => Boolean(value)))
+  );
 }

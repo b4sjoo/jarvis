@@ -97,6 +97,7 @@ import {
   readTraceHumanEvaluations,
   readQuestionHumanEvaluations,
   readMeetingEvalTraceMetadata,
+  resolveActiveMeetingTaskIdentity,
   buildSpeechBiasContext,
   formatSpeechBiasPromptForTrace,
   normalizeTranscriptWithSpeechBias,
@@ -1413,31 +1414,21 @@ export function useMeetingAssistant() {
       const traceEvalMetadata = readMeetingEvalTraceMetadata([trace.metadata]);
       const activeWhiteboardEvalMetadata =
         buildWhiteboardEvalTraceMetadata(activeMeetingTask);
+      const activeTaskIdentity = resolveActiveMeetingTaskIdentity({
+        metadata: trace.metadata,
+        activeMeetingTask,
+      });
 
       return {
         sessionId,
         traceId: trace.id,
         traceKind: trace.kind,
-        taskId:
-          evaluationPatch.taskId ??
-          readStringFromTraceMetadata(trace.metadata, "activeMeetingTaskId") ??
-          readStringFromTraceMetadata(trace.metadata, "activeInterviewParentId") ??
-          readStringFromTraceMetadata(trace.metadata, "activeScreenTaskId") ??
-          activeMeetingTask?.id,
+        taskId: evaluationPatch.taskId ?? activeTaskIdentity.taskId,
         parentTaskId:
-          evaluationPatch.parentTaskId ??
-          readStringFromTraceMetadata(trace.metadata, "activeMeetingParentId") ??
-          readStringFromTraceMetadata(trace.metadata, "activeInterviewParentId") ??
-          activeMeetingTask?.parent.id,
+          evaluationPatch.parentTaskId ?? activeTaskIdentity.parentTaskId,
         childTaskId:
-          evaluationPatch.childTaskId ??
-          readStringFromTraceMetadata(trace.metadata, "activeMeetingChildId") ??
-          readStringFromTraceMetadata(trace.metadata, "activeInterviewChildId") ??
-          activeMeetingTask?.child?.id,
-        taskSource:
-          evaluationPatch.taskSource ??
-          readTaskSourceFromTraceMetadata(trace.metadata) ??
-          activeMeetingTask?.source,
+          evaluationPatch.childTaskId ?? activeTaskIdentity.childTaskId,
+        taskSource: evaluationPatch.taskSource ?? activeTaskIdentity.taskSource,
         questionType,
         company:
           readStringFromTraceMetadata(trace.metadata, "targetCompany") ??
@@ -1485,23 +1476,15 @@ export function useMeetingAssistant() {
       if (!trace) return;
       const activeMeetingTask =
         contextManagerRef.current.getState().activeMeetingTask;
+      const activeTaskIdentity = resolveActiveMeetingTaskIdentity({
+        metadata: trace.metadata,
+        activeMeetingTask,
+      });
       const evaluationPatch: Partial<TraceHumanEvaluation> = {
-        taskId:
-          readStringFromTraceMetadata(trace.metadata, "activeMeetingTaskId") ??
-          readStringFromTraceMetadata(trace.metadata, "activeInterviewParentId") ??
-          readStringFromTraceMetadata(trace.metadata, "activeScreenTaskId") ??
-          activeMeetingTask?.id,
-        parentTaskId:
-          readStringFromTraceMetadata(trace.metadata, "activeMeetingParentId") ??
-          readStringFromTraceMetadata(trace.metadata, "activeInterviewParentId") ??
-          activeMeetingTask?.parent.id,
-        childTaskId:
-          readStringFromTraceMetadata(trace.metadata, "activeMeetingChildId") ??
-          readStringFromTraceMetadata(trace.metadata, "activeInterviewChildId") ??
-          activeMeetingTask?.child?.id,
-        taskSource:
-          readTaskSourceFromTraceMetadata(trace.metadata) ??
-          activeMeetingTask?.source,
+        taskId: activeTaskIdentity.taskId,
+        parentTaskId: activeTaskIdentity.parentTaskId,
+        childTaskId: activeTaskIdentity.childTaskId,
+        taskSource: activeTaskIdentity.taskSource,
         questionType:
           normalizeQuestionTypeAlias(
             readStringFromTraceMetadata(
@@ -5666,26 +5649,6 @@ function readNumberFromTraceMetadata(
 ) {
   const value = metadata?.[key];
   return typeof value === "number" && Number.isFinite(value)
-    ? value
-    : undefined;
-}
-
-function readStringArrayFromTraceMetadata(
-  metadata: Record<string, unknown> | undefined,
-  key: string
-) {
-  const value = metadata?.[key];
-  if (!Array.isArray(value)) return [];
-  return value.filter(
-    (item): item is string => typeof item === "string" && Boolean(item.trim())
-  );
-}
-
-function readTaskSourceFromTraceMetadata(
-  metadata: Record<string, unknown> | undefined
-) {
-  const value = readStringFromTraceMetadata(metadata, "activeMeetingTaskSource");
-  return value === "screen" || value === "voice" || value === "mixed"
     ? value
     : undefined;
 }

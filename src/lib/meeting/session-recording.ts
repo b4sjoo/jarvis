@@ -15,7 +15,10 @@ import {
   TranscriptTurn,
 } from "./types";
 import type { ActiveMeetingTask } from "./active-meeting-task";
-import { formatActiveMeetingTaskForRecording } from "./active-meeting-task.js";
+import {
+  collectActiveMeetingTaskIdentityIds,
+  formatActiveMeetingTaskForRecording,
+} from "./active-meeting-task.js";
 import { createMeetingId } from "./context-manager.js";
 import { readMeetingEvalTraceMetadata } from "./eval-trace-metadata.js";
 import {
@@ -1406,18 +1409,18 @@ function collectTaskIdsFromMetadata(
   metadata?: Record<string, unknown>,
   explicitTaskId?: string
 ) {
-  const taskIds = [
+  const taskIds = collectActiveMeetingTaskIdentityIds({
+    metadata,
+    explicitTaskId,
+  });
+  return uniqueStrings([
+    ...taskIds,
     explicitTaskId,
     readString(metadata?.taskId),
-    readString(metadata?.activeMeetingTaskId),
-    readString(metadata?.activeMeetingParentId),
-    readString(metadata?.activeMeetingChildId),
     readString(metadata?.activeScreenTaskId),
     readString(metadata?.activeInterviewParentId),
     readString(metadata?.activeInterviewChildId),
-  ];
-
-  return uniqueStrings(taskIds);
+  ]);
 }
 
 function summarizeCaptureTarget(value: unknown): SessionCompactTraceSummary["captureTarget"] {
