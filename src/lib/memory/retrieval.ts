@@ -6,6 +6,7 @@ import type {
   MemoryEntry,
   MemoryAskFrame,
   MemoryInterviewType,
+  MemoryOverlaySelectionSummary,
   MemoryPolicySnapshot,
   MemoryQuestionType,
   MemoryRejectReason,
@@ -22,6 +23,10 @@ import {
   normalizeMemoryInterviewTypes,
 } from "@/lib/meeting/task-taxonomy";
 import { isMemoryProjectAnchorCompatible } from "./project-anchor.js";
+import {
+  getDiagramOverlayGateRejectReason,
+  isDiagramOverlayMemoryEntry,
+} from "./diagram-overlay.js";
 
 const DEFAULT_MAX_ENTRIES = 5;
 const DEFAULT_MAX_CHARS = 6000;
@@ -50,6 +55,7 @@ export async function retrieveMemoryContext({
 }: MemoryRetrievalRequest): Promise<MemoryRetrievalResult> {
   const entries = await getMemoryEntries();
   const rejectRecorder = createMemoryRejectRecorder();
+  const overlayRejectRecorder = createMemoryRejectRecorder();
   const policySnapshot = buildMemoryPolicySnapshot({
     useCase,
     interviewTypes,
@@ -70,12 +76,16 @@ export async function retrieveMemoryContext({
       useCase,
       interviewTypes,
       questionType,
-      memoryPolicy
+      memoryPolicy,
+      query
     );
     if (decision.eligible) {
       eligibleEntries.push(entry);
     } else {
       rejectRecorder.record(decision.reason, entry);
+      if (isDiagramOverlayMemoryEntry(entry)) {
+        overlayRejectRecorder.record(decision.reason, entry);
+      }
     }
   }
 
@@ -96,6 +106,9 @@ export async function retrieveMemoryContext({
       taggedEntries.push(entry);
     } else {
       rejectRecorder.record("missing-required-tag-hint", entry);
+      if (isDiagramOverlayMemoryEntry(entry)) {
+        overlayRejectRecorder.record("missing-required-tag-hint", entry);
+      }
     }
   }
 
@@ -108,7 +121,12 @@ export async function retrieveMemoryContext({
   const retrievalEntries = scoredRetrievalEntries
     .filter((item) => {
       const matched = hasRetrievalMatch(item);
-      if (!matched) rejectRecorder.record("no-retrieval-match", item.entry);
+      if (!matched) {
+        rejectRecorder.record("no-retrieval-match", item.entry);
+        if (isDiagramOverlayMemoryEntry(item.entry)) {
+          overlayRejectRecorder.record("no-retrieval-match", item.entry);
+        }
+      }
       return matched;
     })
     .sort((left, right) => right.score - left.score)
@@ -123,6 +141,9 @@ export async function retrieveMemoryContext({
   );
   for (const item of budgeted.omittedEntries) {
     rejectRecorder.record("budget-truncated", item.entry);
+    if (isDiagramOverlayMemoryEntry(item.entry)) {
+      overlayRejectRecorder.record("budget-truncated", item.entry);
+    }
   }
 
   if (budgeted.entries.length) {
@@ -137,14 +158,23 @@ export async function retrieveMemoryContext({
     eligibleCount: eligibleEntries.length,
     rejectedCount: rejectRecorder.total(),
     rejectSummary: rejectRecorder.summary(),
+    overlaySelection: buildMemoryOverlaySelectionSummary(
+      budgeted.entries,
+      overlayRejectRecorder.summary()
+    ),
     policySnapshot,
   };
 }
 
 export function formatMemorySelectionForTrace(result: MemoryRetrievalResult) {
   const rejectSummary = formatMemoryRejectSummaryForTrace(result.rejectSummary);
+  const overlaySummary = formatOverlaySelectionForTrace(
+    result.overlaySelection
+  );
   if (!result.entries.length) {
-    return ["No memory entries injected.", "", rejectSummary].join("\n");
+    return ["No memory entries injected.", "", rejectSummary, overlaySummary]
+      .filter(Boolean)
+      .join("\n");
   }
 
   const selected = result.entries
@@ -163,7 +193,31 @@ export function formatMemorySelectionForTrace(result: MemoryRetrievalResult) {
     })
     .join("\n\n---\n\n");
 
-  return [selected, rejectSummary].join("\n\n---\n\n");
+  return [selected, rejectSummary, overlaySummary]
+    .filter(Boolean)
+    .join("\n\n---\n\n");
+}
+
+function formatOverlaySelectionForTrace(
+  overlaySelection: MemoryOverlaySelectionSummary | undefined
+) {
+  if (!overlaySelection) return "";
+
+  return [
+    "Memory overlay selection:",
+    overlaySelection.selectedEntryIds.length
+      ? `- selected: ${overlaySelection.selectedEntryIds.join(", ")}`
+      : "- selected: none",
+    `- rejectedCount: ${overlaySelection.rejectedCount}`,
+    ...overlaySelection.rejectSummary.map(
+      (item) =>
+        `- ${item.reason}: ${item.count}${
+          item.sampleEntryIds.length
+            ? ` (${item.sampleEntryIds.join(", ")})`
+            : ""
+        }`
+    ),
+  ].join("\n");
 }
 
 function formatMemoryRejectSummaryForTrace(summary: MemoryRejectSummary[]) {
@@ -262,7 +316,8 @@ function getEntryEligibilityDecision(
   useCase: MemoryUseCase,
   interviewTypes: MemoryInterviewType[] | undefined,
   questionType: MemoryQuestionType | undefined,
-  memoryPolicy: MemoryRetrievalPolicy | undefined
+  memoryPolicy: MemoryRetrievalPolicy | undefined,
+  query: string
 ) {
   if (!entry.enabled) return { eligible: false as const, reason: "disabled" as const };
   if (entry.injectionMode === "manual_only" || entry.injectionMode === "never") {
@@ -277,6 +332,16 @@ function getEntryEligibilityDecision(
     entry.useCases.includes("general_chat");
   if (!useCaseMatched) {
     return { eligible: false as const, reason: "use-case-mismatch" as const };
+  }
+  if (isDiagramOverlayMemoryEntry(entry)) {
+    const diagramRejectReason = getDiagramOverlayGateRejectReason(
+      entry,
+      questionType,
+      query
+    );
+    if (diagramRejectReason) {
+      return { eligible: false as const, reason: diagramRejectReason };
+    }
   }
 
   const gateRejectReason = getInterviewGateRejectReason(
@@ -375,6 +440,10 @@ function inferEntryInterviewFamily(
     .join(" ")
     .toLowerCase();
 
+  if (isDiagramOverlayMemoryEntry(entry)) {
+    return inferDiagramOverlayFamily(searchable);
+  }
+
   if (
     entry.type === "behavioral_question" ||
     entry.useCases.includes("behavioral_interview") ||
@@ -424,8 +493,21 @@ function isGuidanceOrQuestionBankEntry(entry: MemoryEntry) {
     entry.type === "behavioral_question" ||
     entry.type === "technical_question" ||
     entry.type === "coding_question" ||
-    entry.type === "cached_answer"
+    entry.type === "cached_answer" ||
+    isDiagramOverlayMemoryEntry(entry)
   );
+}
+
+function inferDiagramOverlayFamily(searchable: string) {
+  if (
+    /\b(ai\/ml|ml|machine learning|rag|retrieval augmented generation|llm|agent|embedding|vector|model|evaluation|feature|training|inference|rerank|context builder)\b/.test(
+      searchable
+    )
+  ) {
+    return "ai-ml-system-design" as const;
+  }
+
+  return "system-design" as const;
 }
 
 interface MemoryScoringContext {
@@ -494,6 +576,19 @@ function scoreMemoryEntry(
   ) {
     score += 34;
     matchReason.push("aiml:metrics-observability");
+  }
+
+  if (isDiagramOverlayMemoryEntry(entry)) {
+    score += 24;
+    matchReason.push("diagram:overlay");
+    const diagramSignalMatches = countDiagramOverlaySignalOverlap(
+      context.query,
+      searchable
+    );
+    if (diagramSignalMatches) {
+      score += Math.min(diagramSignalMatches * 7, 28);
+      matchReason.push(`diagram-signals:${diagramSignalMatches}`);
+    }
   }
 
   if (context.projectAnchor) {
@@ -592,6 +687,42 @@ function isObservabilityEvaluationEntry(searchable: string) {
   );
 }
 
+function countDiagramOverlaySignalOverlap(query: string, searchable: string) {
+  const queryTokens = tokenize(query);
+  const diagramSignals = [
+    "rag",
+    "retrieval",
+    "ranking",
+    "rerank",
+    "embedding",
+    "vector",
+    "llm",
+    "agent",
+    "context",
+    "trace",
+    "evaluation",
+    "eval",
+    "feature",
+    "training",
+    "serving",
+    "inventory",
+    "reservation",
+    "booking",
+    "feed",
+    "fanout",
+    "geo",
+    "location",
+    "matching",
+    "cache",
+    "index",
+    "cdc",
+  ];
+
+  return diagramSignals.filter(
+    (signal) => queryTokens.has(signal) && searchable.includes(signal)
+  ).length;
+}
+
 function buildEntrySearchableText(entry: MemoryEntry) {
   return [
     entry.projectId,
@@ -685,10 +816,27 @@ function isSystemDesignGuidanceEntry(entry: MemoryEntry) {
   return (
     entry.type === "interview_framework" ||
     entry.type === "evaluation_criteria" ||
+    isDiagramOverlayMemoryEntry(entry) ||
     /\b(system design|architecture|distributed|scalability|consistency)\b/.test(
       searchable
     )
   );
+}
+
+function buildMemoryOverlaySelectionSummary(
+  entries: RetrievedMemoryEntry[],
+  rejectSummary: MemoryRejectSummary[]
+): MemoryOverlaySelectionSummary {
+  const selected = entries.filter((item) =>
+    isDiagramOverlayMemoryEntry(item.entry)
+  );
+
+  return {
+    selectedEntryIds: selected.map((item) => item.entry.id),
+    selectedTitles: selected.map((item) => item.entry.title),
+    rejectedCount: rejectSummary.reduce((total, item) => total + item.count, 0),
+    rejectSummary,
+  };
 }
 
 function applyMemoryBudget(

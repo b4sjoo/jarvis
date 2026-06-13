@@ -70,6 +70,7 @@ const MEMORY_SOURCE_ROLES = [
   "threat_model",
   "api_guide",
   "prompt_template",
+  "diagram_doc",
   "code_patch",
   "dev_context",
   "misc",
@@ -98,6 +99,8 @@ const MEMORY_ENTRY_TYPES = [
   "answer_template",
   "cached_answer",
   "evaluation_criteria",
+  "architecture_diagram",
+  "whiteboard_overlay",
 ] as const;
 const MEMORY_PRIORITIES = ["low", "normal", "high", "pinned"] as const;
 const MEMORY_INJECTION_MODES = [
@@ -110,6 +113,9 @@ const MEMORY_USE_CASES = [
   "meeting_assistant",
   "coding_interview",
   "behavioral_interview",
+  "system_design_interview",
+  "aiml_system_design_interview",
+  "project_deep_dive",
   "answer_alignment",
   "general_chat",
 ] as const;

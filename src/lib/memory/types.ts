@@ -57,6 +57,7 @@ export type MemorySourceRole =
   | "threat_model"
   | "api_guide"
   | "prompt_template"
+  | "diagram_doc"
   | "code_patch"
   | "dev_context"
   | "misc";
@@ -105,7 +106,9 @@ export type MemoryEntryType =
   | "coding_question"
   | "answer_template"
   | "cached_answer"
-  | "evaluation_criteria";
+  | "evaluation_criteria"
+  | "architecture_diagram"
+  | "whiteboard_overlay";
 
 export type MemoryInjectionMode =
   | "always"
@@ -117,6 +120,9 @@ export type MemoryUseCase =
   | "meeting_assistant"
   | "coding_interview"
   | "behavioral_interview"
+  | "system_design_interview"
+  | "aiml_system_design_interview"
+  | "project_deep_dive"
   | "answer_alignment"
   | "general_chat";
 
@@ -246,6 +252,7 @@ export type MemoryRejectReason =
   | "playbook-family-blocked"
   | "question-type-family-mismatch"
   | "behavioral-family-blocked"
+  | "diagram-overlay-question-type-blocked"
   | "project-anchor-mismatch"
   | "missing-required-tag-hint"
   | "no-retrieval-match"
@@ -289,5 +296,13 @@ export interface MemoryRetrievalResult {
   eligibleCount: number;
   rejectedCount: number;
   rejectSummary: MemoryRejectSummary[];
+  overlaySelection?: MemoryOverlaySelectionSummary;
   policySnapshot: MemoryPolicySnapshot;
+}
+
+export interface MemoryOverlaySelectionSummary {
+  selectedEntryIds: string[];
+  selectedTitles: string[];
+  rejectedCount: number;
+  rejectSummary: MemoryRejectSummary[];
 }
