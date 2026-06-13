@@ -182,6 +182,23 @@ interface SessionCompactTraceSummary {
     totalChars?: number;
     useCase?: string;
   };
+  whiteboard?: {
+    artifactId?: string;
+    revision?: number;
+    domainTrack?: string;
+  };
+  manualPhase?: {
+    from?: string;
+    to?: string;
+    targetArtifact?: string;
+    guardStatus?: string;
+    committed?: boolean;
+  };
+  diagramOverlay?: {
+    selectedEntryIds: string[];
+    rejectedCount?: number;
+    rejectSummary?: MemoryRejectSummary[];
+  };
   artifacts: {
     traceExportPath: string;
     summaryPath: string;
@@ -1253,6 +1270,9 @@ function buildCompactTraceSummary({
           useCase: readString(memoryStep.metadata?.useCase),
         }
       : undefined,
+    whiteboard: buildWhiteboardTraceSummary(metadataSources),
+    manualPhase: buildManualPhaseTraceSummary(metadataSources),
+    diagramOverlay: buildDiagramOverlayTraceSummary(metadataSources),
     artifacts: {
       traceExportPath,
       summaryPath,
@@ -1398,6 +1418,113 @@ function readFirstString(
   }
 
   return undefined;
+}
+
+function readFirstNumber(
+  metadataSources: Record<string, unknown>[],
+  key: string
+) {
+  for (const metadata of metadataSources) {
+    const value = readNumber(metadata[key]);
+    if (value !== undefined) return value;
+  }
+
+  return undefined;
+}
+
+function readFirstBoolean(
+  metadataSources: Record<string, unknown>[],
+  key: string
+) {
+  for (const metadata of metadataSources) {
+    const value = metadata[key];
+    if (typeof value === "boolean") return value;
+  }
+
+  return undefined;
+}
+
+function readFirstStringList(
+  metadataSources: Record<string, unknown>[],
+  key: string
+) {
+  for (const metadata of metadataSources) {
+    const values = readStringList(metadata[key]);
+    if (values.length) return values;
+  }
+
+  return [];
+}
+
+function buildWhiteboardTraceSummary(
+  metadataSources: Record<string, unknown>[]
+): SessionCompactTraceSummary["whiteboard"] {
+  const artifactId = readFirstString(metadataSources, "whiteboardArtifactId");
+  const revision = readFirstNumber(metadataSources, "whiteboardArtifactRevision");
+  const domainTrack = readFirstString(
+    metadataSources,
+    "whiteboardArtifactDomainTrack"
+  );
+  if (!artifactId && revision === undefined && !domainTrack) return undefined;
+  return {
+    artifactId,
+    revision,
+    domainTrack,
+  };
+}
+
+function buildManualPhaseTraceSummary(
+  metadataSources: Record<string, unknown>[]
+): SessionCompactTraceSummary["manualPhase"] {
+  const from = readFirstString(metadataSources, "manualPhaseFrom");
+  const to = readFirstString(metadataSources, "manualPhaseTo");
+  const targetArtifact = readFirstString(
+    metadataSources,
+    "manualPhaseTargetArtifact"
+  );
+  const guardStatus = readFirstString(metadataSources, "manualPhaseGuardStatus");
+  const committed = readFirstBoolean(metadataSources, "manualPhaseAdvanceCommitted");
+  if (
+    !from &&
+    !to &&
+    !targetArtifact &&
+    !guardStatus &&
+    committed === undefined
+  ) {
+    return undefined;
+  }
+  return {
+    from,
+    to,
+    targetArtifact,
+    guardStatus,
+    committed,
+  };
+}
+
+function buildDiagramOverlayTraceSummary(
+  metadataSources: Record<string, unknown>[]
+): SessionCompactTraceSummary["diagramOverlay"] {
+  const selectedEntryIds = readFirstStringList(
+    metadataSources,
+    "selectedDiagramOverlayIds"
+  );
+  const rejectedCount = readFirstNumber(
+    metadataSources,
+    "rejectedDiagramOverlayCount"
+  );
+  const rejectSummary = readMemoryRejectSummary(
+    metadataSources.find((metadata) => metadata.diagramOverlayRejectSummary)
+      ?.diagramOverlayRejectSummary
+  );
+  if (!selectedEntryIds.length && rejectedCount === undefined && !rejectSummary) {
+    return undefined;
+  }
+  return {
+    selectedEntryIds,
+    rejectedCount,
+    rejectSummary,
+  };
 }
 
 function readString(value: unknown) {

@@ -38,6 +38,15 @@ export interface QuestionEvaluationIdentity {
   relation?: string;
   playbookId?: string;
   playbookPhase?: string;
+  whiteboardArtifactId?: string;
+  whiteboardArtifactRevision?: number;
+  whiteboardArtifactDomainTrack?: string;
+  manualPhaseFrom?: string;
+  manualPhaseTo?: string;
+  manualPhaseTargetArtifact?: string;
+  manualPhaseGuardStatus?: string;
+  selectedDiagramOverlayIds?: string[];
+  rejectedDiagramOverlayCount?: number;
 }
 
 export function readTraceHumanEvaluations(): TraceHumanEvaluation[] {
@@ -178,6 +187,43 @@ export function upsertQuestionHumanEvaluation(
       identity.playbookPhase,
     correctedPlaybookPhase:
       patch.correctedPlaybookPhase ?? existing?.correctedPlaybookPhase,
+    detectedWhiteboardArtifactId:
+      patch.detectedWhiteboardArtifactId ??
+      existing?.detectedWhiteboardArtifactId ??
+      identity.whiteboardArtifactId,
+    detectedWhiteboardArtifactRevision:
+      patch.detectedWhiteboardArtifactRevision ??
+      existing?.detectedWhiteboardArtifactRevision ??
+      identity.whiteboardArtifactRevision,
+    detectedWhiteboardArtifactDomainTrack:
+      patch.detectedWhiteboardArtifactDomainTrack ??
+      existing?.detectedWhiteboardArtifactDomainTrack ??
+      identity.whiteboardArtifactDomainTrack,
+    detectedManualPhaseFrom:
+      patch.detectedManualPhaseFrom ??
+      existing?.detectedManualPhaseFrom ??
+      identity.manualPhaseFrom,
+    detectedManualPhaseTo:
+      patch.detectedManualPhaseTo ??
+      existing?.detectedManualPhaseTo ??
+      identity.manualPhaseTo,
+    detectedManualPhaseTargetArtifact:
+      patch.detectedManualPhaseTargetArtifact ??
+      existing?.detectedManualPhaseTargetArtifact ??
+      identity.manualPhaseTargetArtifact,
+    detectedManualPhaseGuardStatus:
+      patch.detectedManualPhaseGuardStatus ??
+      existing?.detectedManualPhaseGuardStatus ??
+      identity.manualPhaseGuardStatus,
+    selectedDiagramOverlayIds: uniqueStrings([
+      ...(existing?.selectedDiagramOverlayIds ?? []),
+      ...(identity.selectedDiagramOverlayIds ?? []),
+      ...(patch.selectedDiagramOverlayIds ?? []),
+    ]),
+    rejectedDiagramOverlayCount:
+      patch.rejectedDiagramOverlayCount ??
+      existing?.rejectedDiagramOverlayCount ??
+      identity.rejectedDiagramOverlayCount,
     classification: mergeVerdictBlock(
       existing?.classification,
       patch.classification
@@ -188,6 +234,15 @@ export function upsertQuestionHumanEvaluation(
       patch.playbookPhase
     ),
     memory: mergeVerdictBlock(existing?.memory, patch.memory),
+    whiteboard: mergeVerdictBlock(existing?.whiteboard, patch.whiteboard),
+    manualPhaseTransition: mergeVerdictBlock(
+      existing?.manualPhaseTransition,
+      patch.manualPhaseTransition
+    ),
+    diagramOverlay: mergeVerdictBlock(
+      existing?.diagramOverlay,
+      patch.diagramOverlay
+    ),
     guardrail: mergeVerdictBlock(existing?.guardrail, patch.guardrail),
     answer: mergeVerdictBlock(existing?.answer, patch.answer),
     memoryEntryLabels: mergeMemoryEntryLabels(
@@ -345,10 +400,40 @@ function normalizeQuestionHumanEvaluation(
     playbookId: readOptionalString(candidate.playbookId),
     detectedPlaybookPhase: readOptionalString(candidate.detectedPlaybookPhase),
     correctedPlaybookPhase: readOptionalString(candidate.correctedPlaybookPhase),
+    detectedWhiteboardArtifactId: readOptionalString(
+      candidate.detectedWhiteboardArtifactId
+    ),
+    detectedWhiteboardArtifactRevision:
+      typeof candidate.detectedWhiteboardArtifactRevision === "number"
+        ? candidate.detectedWhiteboardArtifactRevision
+        : undefined,
+    detectedWhiteboardArtifactDomainTrack: readOptionalString(
+      candidate.detectedWhiteboardArtifactDomainTrack
+    ),
+    detectedManualPhaseFrom: readOptionalString(candidate.detectedManualPhaseFrom),
+    detectedManualPhaseTo: readOptionalString(candidate.detectedManualPhaseTo),
+    detectedManualPhaseTargetArtifact: readOptionalString(
+      candidate.detectedManualPhaseTargetArtifact
+    ),
+    detectedManualPhaseGuardStatus: readOptionalString(
+      candidate.detectedManualPhaseGuardStatus
+    ),
+    selectedDiagramOverlayIds: Array.isArray(candidate.selectedDiagramOverlayIds)
+      ? uniqueStrings(candidate.selectedDiagramOverlayIds)
+      : [],
+    rejectedDiagramOverlayCount:
+      typeof candidate.rejectedDiagramOverlayCount === "number"
+        ? candidate.rejectedDiagramOverlayCount
+        : undefined,
     classification: normalizeVerdictBlock(candidate.classification),
     playbook: normalizeVerdictBlock(candidate.playbook),
     playbookPhase: normalizeVerdictBlock(candidate.playbookPhase),
     memory: normalizeVerdictBlock(candidate.memory),
+    whiteboard: normalizeVerdictBlock(candidate.whiteboard),
+    manualPhaseTransition: normalizeVerdictBlock(
+      candidate.manualPhaseTransition
+    ),
+    diagramOverlay: normalizeVerdictBlock(candidate.diagramOverlay),
     guardrail: normalizeVerdictBlock(candidate.guardrail),
     answer: normalizeVerdictBlock(candidate.answer),
     memoryEntryLabels: normalizeMemoryEntryLabels(candidate.memoryEntryLabels),

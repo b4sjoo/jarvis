@@ -98,3 +98,66 @@ test("bridges legacy trace labels into question-level verdict blocks", () => {
     reasons: ["partially-useful"],
   });
 });
+
+test("stores whiteboard, manual next, and diagram overlay evaluation fields", () => {
+  const evaluations = upsertQuestionHumanEvaluation(
+    [],
+    {
+      sessionId: "session_1",
+      traceId: "trace_1",
+      traceKind: "screen",
+      taskId: "task_1",
+      parentTaskId: "parent_1",
+      taskSource: "mixed",
+      questionType: "general-system-design",
+      playbookId: "general_system_design",
+      playbookPhase: "design_framing",
+      whiteboardArtifactId: "whiteboard_1",
+      whiteboardArtifactRevision: 2,
+      whiteboardArtifactDomainTrack: "general_sd",
+      manualPhaseFrom: "requirement_clarification",
+      manualPhaseTo: "design_framing",
+      manualPhaseTargetArtifact: "whiteboard",
+      manualPhaseGuardStatus: "advanced",
+      selectedDiagramOverlayIds: ["mem_overlay_geo_dynamic_matching"],
+      rejectedDiagramOverlayCount: 3,
+    },
+    {
+      whiteboard: {
+        verdict: "ok",
+        reasons: ["whiteboard-useful"],
+      },
+      manualPhaseTransition: {
+        verdict: "ok",
+        reasons: ["manual-next-good"],
+      },
+      diagramOverlay: {
+        verdict: "partial",
+        reasons: ["overlay-distracting"],
+      },
+    }
+  );
+
+  assert.equal(evaluations.length, 1);
+  assert.equal(evaluations[0].detectedWhiteboardArtifactId, "whiteboard_1");
+  assert.equal(evaluations[0].detectedWhiteboardArtifactRevision, 2);
+  assert.equal(evaluations[0].detectedWhiteboardArtifactDomainTrack, "general_sd");
+  assert.equal(evaluations[0].detectedManualPhaseFrom, "requirement_clarification");
+  assert.equal(evaluations[0].detectedManualPhaseTo, "design_framing");
+  assert.equal(evaluations[0].detectedManualPhaseTargetArtifact, "whiteboard");
+  assert.equal(evaluations[0].detectedManualPhaseGuardStatus, "advanced");
+  assert.deepEqual(evaluations[0].selectedDiagramOverlayIds, [
+    "mem_overlay_geo_dynamic_matching",
+  ]);
+  assert.equal(evaluations[0].rejectedDiagramOverlayCount, 3);
+  assert.equal(evaluations[0].whiteboard.verdict, "ok");
+  assert.deepEqual(evaluations[0].whiteboard.reasons, ["whiteboard-useful"]);
+  assert.equal(evaluations[0].manualPhaseTransition.verdict, "ok");
+  assert.deepEqual(evaluations[0].manualPhaseTransition.reasons, [
+    "manual-next-good",
+  ]);
+  assert.equal(evaluations[0].diagramOverlay.verdict, "partial");
+  assert.deepEqual(evaluations[0].diagramOverlay.reasons, [
+    "overlay-distracting",
+  ]);
+});

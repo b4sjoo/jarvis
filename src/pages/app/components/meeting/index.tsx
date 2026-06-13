@@ -3249,6 +3249,9 @@ const TraceHumanEvaluationPanel = ({
       | "playbook"
       | "playbookPhase"
       | "memory"
+      | "whiteboard"
+      | "manualPhaseTransition"
+      | "diagramOverlay"
       | "guardrail"
       | "answer",
     verdict: HumanEvaluationVerdict,
@@ -3463,6 +3466,18 @@ const TraceHumanEvaluationPanel = ({
               value={questionEvaluation?.memory}
             />
             <QuestionVerdictRow
+              label="Whiteboard"
+              value={questionEvaluation?.whiteboard}
+            />
+            <QuestionVerdictRow
+              label="Next"
+              value={questionEvaluation?.manualPhaseTransition}
+            />
+            <QuestionVerdictRow
+              label="Overlay"
+              value={questionEvaluation?.diagramOverlay}
+            />
+            <QuestionVerdictRow
               label="Guardrail"
               value={questionEvaluation?.guardrail}
             />
@@ -3501,6 +3516,191 @@ const TraceHumanEvaluationPanel = ({
                   onClick={() => {
                     updateQuestionVerdict(
                       "guardrail",
+                      option.verdict as HumanEvaluationVerdict,
+                      [option.reason]
+                    );
+                  }}
+                >
+                  {option.label}
+                </Button>
+              ))}
+            </div>
+          </div>
+          <div className="mt-2">
+            <div className="mb-1 text-[10px] font-medium uppercase text-muted-foreground">
+              Whiteboard artifact
+            </div>
+            {questionEvaluation?.detectedWhiteboardArtifactId ? (
+              <div
+                className="mb-1 truncate font-mono text-[9px] text-muted-foreground"
+                title={questionEvaluation.detectedWhiteboardArtifactId}
+              >
+                {questionEvaluation.detectedWhiteboardArtifactId}
+                {typeof questionEvaluation.detectedWhiteboardArtifactRevision ===
+                "number"
+                  ? ` / r${questionEvaluation.detectedWhiteboardArtifactRevision}`
+                  : ""}
+                {questionEvaluation.detectedWhiteboardArtifactDomainTrack
+                  ? ` / ${questionEvaluation.detectedWhiteboardArtifactDomainTrack}`
+                  : ""}
+              </div>
+            ) : null}
+            <div className="flex flex-wrap gap-1">
+              {[
+                { label: "Useful", verdict: "ok", reason: "whiteboard-useful" },
+                { label: "Stale", verdict: "wrong", reason: "whiteboard-stale" },
+                {
+                  label: "Generic",
+                  verdict: "partial",
+                  reason: "whiteboard-too-generic",
+                },
+                {
+                  label: "Missing",
+                  verdict: "missing",
+                  reason: "whiteboard-missing",
+                },
+              ].map((option) => (
+                <Button
+                  key={option.reason}
+                  size="sm"
+                  variant={
+                    hasVerdictReason(
+                      questionEvaluation?.whiteboard,
+                      option.verdict as HumanEvaluationVerdict,
+                      option.reason
+                    )
+                      ? "default"
+                      : "outline"
+                  }
+                  className="h-6 px-2 text-[10px]"
+                  onClick={() => {
+                    updateQuestionVerdict(
+                      "whiteboard",
+                      option.verdict as HumanEvaluationVerdict,
+                      [option.reason]
+                    );
+                  }}
+                >
+                  {option.label}
+                </Button>
+              ))}
+            </div>
+          </div>
+          <div className="mt-2">
+            <div className="mb-1 text-[10px] font-medium uppercase text-muted-foreground">
+              Manual Next / phase
+            </div>
+            {questionEvaluation?.detectedManualPhaseFrom ||
+            questionEvaluation?.detectedManualPhaseTo ? (
+              <div className="mb-1 truncate font-mono text-[9px] text-muted-foreground">
+                {questionEvaluation.detectedManualPhaseFrom ?? "?"} {"->"}{" "}
+                {questionEvaluation.detectedManualPhaseTo ?? "?"}
+                {questionEvaluation.detectedManualPhaseTargetArtifact
+                  ? ` / ${questionEvaluation.detectedManualPhaseTargetArtifact}`
+                  : ""}
+                {questionEvaluation.detectedManualPhaseGuardStatus
+                  ? ` / ${questionEvaluation.detectedManualPhaseGuardStatus}`
+                  : ""}
+              </div>
+            ) : null}
+            <div className="flex flex-wrap gap-1">
+              {[
+                { label: "Good", verdict: "ok", reason: "manual-next-good" },
+                {
+                  label: "Wrong",
+                  verdict: "wrong",
+                  reason: "manual-next-wrong-phase",
+                },
+                {
+                  label: "Too many clicks",
+                  verdict: "partial",
+                  reason: "manual-next-too-granular",
+                },
+                {
+                  label: "No effect",
+                  verdict: "wrong",
+                  reason: "manual-next-no-effect",
+                },
+              ].map((option) => (
+                <Button
+                  key={option.reason}
+                  size="sm"
+                  variant={
+                    hasVerdictReason(
+                      questionEvaluation?.manualPhaseTransition,
+                      option.verdict as HumanEvaluationVerdict,
+                      option.reason
+                    )
+                      ? "default"
+                      : "outline"
+                  }
+                  className="h-6 px-2 text-[10px]"
+                  onClick={() => {
+                    updateQuestionVerdict(
+                      "manualPhaseTransition",
+                      option.verdict as HumanEvaluationVerdict,
+                      [option.reason]
+                    );
+                  }}
+                >
+                  {option.label}
+                </Button>
+              ))}
+            </div>
+          </div>
+          <div className="mt-2">
+            <div className="mb-1 text-[10px] font-medium uppercase text-muted-foreground">
+              Diagram overlay
+            </div>
+            {questionEvaluation?.selectedDiagramOverlayIds.length ? (
+              <div
+                className="mb-1 truncate font-mono text-[9px] text-muted-foreground"
+                title={questionEvaluation.selectedDiagramOverlayIds.join(", ")}
+              >
+                selected: {questionEvaluation.selectedDiagramOverlayIds.join(", ")}
+              </div>
+            ) : null}
+            {typeof questionEvaluation?.rejectedDiagramOverlayCount ===
+            "number" ? (
+              <div className="mb-1 font-mono text-[9px] text-muted-foreground">
+                rejected: {questionEvaluation.rejectedDiagramOverlayCount}
+              </div>
+            ) : null}
+            <div className="flex flex-wrap gap-1">
+              {[
+                { label: "Useful", verdict: "ok", reason: "overlay-useful" },
+                {
+                  label: "Wrong family",
+                  verdict: "forbidden",
+                  reason: "overlay-wrong-family",
+                },
+                {
+                  label: "Missing",
+                  verdict: "missing",
+                  reason: "overlay-missing",
+                },
+                {
+                  label: "Distracting",
+                  verdict: "partial",
+                  reason: "overlay-distracting",
+                },
+              ].map((option) => (
+                <Button
+                  key={option.reason}
+                  size="sm"
+                  variant={
+                    hasVerdictReason(
+                      questionEvaluation?.diagramOverlay,
+                      option.verdict as HumanEvaluationVerdict,
+                      option.reason
+                    )
+                      ? "default"
+                      : "outline"
+                  }
+                  className="h-6 px-2 text-[10px]"
+                  onClick={() => {
+                    updateQuestionVerdict(
+                      "diagramOverlay",
                       option.verdict as HumanEvaluationVerdict,
                       [option.reason]
                     );

@@ -1449,6 +1449,43 @@ export function useMeetingAssistant() {
           readStringFromTraceMetadata(trace.metadata, "playbookPhase") ??
           readStringFromTraceMetadata(trace.metadata, "activeMeetingParentPhase") ??
           activeMeetingTask?.parent.playbookPhase,
+        whiteboardArtifactId:
+          readStringFromTraceMetadata(trace.metadata, "whiteboardArtifactId") ??
+          activeMeetingTask?.parent.whiteboardArtifact?.id,
+        whiteboardArtifactRevision:
+          readNumberFromTraceMetadata(
+            trace.metadata,
+            "whiteboardArtifactRevision"
+          ) ?? activeMeetingTask?.parent.whiteboardArtifact?.revision,
+        whiteboardArtifactDomainTrack:
+          readStringFromTraceMetadata(
+            trace.metadata,
+            "whiteboardArtifactDomainTrack"
+          ) ?? activeMeetingTask?.parent.whiteboardArtifact?.domainTrack,
+        manualPhaseFrom: readStringFromTraceMetadata(
+          trace.metadata,
+          "manualPhaseFrom"
+        ),
+        manualPhaseTo: readStringFromTraceMetadata(
+          trace.metadata,
+          "manualPhaseTo"
+        ),
+        manualPhaseTargetArtifact: readStringFromTraceMetadata(
+          trace.metadata,
+          "manualPhaseTargetArtifact"
+        ),
+        manualPhaseGuardStatus: readStringFromTraceMetadata(
+          trace.metadata,
+          "manualPhaseGuardStatus"
+        ),
+        selectedDiagramOverlayIds: readStringArrayFromTraceMetadata(
+          trace.metadata,
+          "selectedDiagramOverlayIds"
+        ),
+        rejectedDiagramOverlayCount: readNumberFromTraceMetadata(
+          trace.metadata,
+          "rejectedDiagramOverlayCount"
+        ),
       };
     },
     []
@@ -2195,6 +2232,12 @@ export function useMeetingAssistant() {
               eligibleCount: memoryContext.eligibleCount,
               rejectedCount: memoryContext.rejectedCount,
               rejectSummary: memoryContext.rejectSummary,
+              selectedDiagramOverlayIds:
+                memoryContext.overlaySelection?.selectedEntryIds,
+              rejectedDiagramOverlayCount:
+                memoryContext.overlaySelection?.rejectedCount,
+              diagramOverlayRejectSummary:
+                memoryContext.overlaySelection?.rejectSummary,
               memoryPolicySnapshot: memoryContext.policySnapshot,
               totalChars: memoryContext.totalChars,
             }
@@ -2216,6 +2259,12 @@ export function useMeetingAssistant() {
               allowedFamilies: effectiveMemoryPolicy?.allowedFamilies,
               blockedFamilies: effectiveMemoryPolicy?.blockedFamilies,
               strictProjectAnchor: effectiveMemoryPolicy?.strictProjectAnchor,
+              selectedDiagramOverlayIds:
+                memoryContext.overlaySelection?.selectedEntryIds,
+              rejectedDiagramOverlayCount:
+                memoryContext.overlaySelection?.rejectedCount,
+              diagramOverlayRejectSummary:
+                memoryContext.overlaySelection?.rejectSummary,
             },
           });
           traceStoreRef.current.finishStep(traceId, memoryStepId, "success", {
@@ -2234,8 +2283,22 @@ export function useMeetingAssistant() {
             eligibleCount: memoryContext.eligibleCount,
             rejectedCount: memoryContext.rejectedCount,
             rejectSummary: memoryContext.rejectSummary,
+            selectedDiagramOverlayIds:
+              memoryContext.overlaySelection?.selectedEntryIds,
+            rejectedDiagramOverlayCount:
+              memoryContext.overlaySelection?.rejectedCount,
+            diagramOverlayRejectSummary:
+              memoryContext.overlaySelection?.rejectSummary,
             memoryPolicySnapshot: memoryContext.policySnapshot,
             totalChars: memoryContext.totalChars,
+          });
+          traceStoreRef.current.updateMetadata(traceId, {
+            selectedDiagramOverlayIds:
+              memoryContext.overlaySelection?.selectedEntryIds,
+            rejectedDiagramOverlayCount:
+              memoryContext.overlaySelection?.rejectedCount,
+            diagramOverlayRejectSummary:
+              memoryContext.overlaySelection?.rejectSummary,
           });
         }
 
@@ -5626,6 +5689,27 @@ function readStringFromTraceMetadata(
 ) {
   const value = metadata?.[key];
   return typeof value === "string" && value.trim() ? value : undefined;
+}
+
+function readNumberFromTraceMetadata(
+  metadata: Record<string, unknown> | undefined,
+  key: string
+) {
+  const value = metadata?.[key];
+  return typeof value === "number" && Number.isFinite(value)
+    ? value
+    : undefined;
+}
+
+function readStringArrayFromTraceMetadata(
+  metadata: Record<string, unknown> | undefined,
+  key: string
+) {
+  const value = metadata?.[key];
+  if (!Array.isArray(value)) return [];
+  return value.filter(
+    (item): item is string => typeof item === "string" && Boolean(item.trim())
+  );
 }
 
 function readTaskSourceFromTraceMetadata(
