@@ -1135,6 +1135,7 @@ export const MeetingAssistant = ({
             <FocusModePanel
               suggestionSections={displaySuggestionSections}
               codingArtifactCached={codingArtifactDisplay.isCached}
+              whiteboardArtifactCached={whiteboardArtifactDisplay.isCached}
               isScreenTaskSuggestion={isScreenTaskSuggestion}
               hasActiveMeetingTask={hasActiveMeetingTask}
               latestTurnText={latestTurn?.text || "Waiting for meeting audio."}
@@ -1910,6 +1911,7 @@ export const MeetingAssistant = ({
 const FocusModePanel = ({
   suggestionSections,
   codingArtifactCached,
+  whiteboardArtifactCached,
   isScreenTaskSuggestion,
   hasActiveMeetingTask,
   latestTurnText,
@@ -1934,6 +1936,7 @@ const FocusModePanel = ({
 }: {
   suggestionSections: ReturnType<typeof parseSuggestionSections>;
   codingArtifactCached: boolean;
+  whiteboardArtifactCached: boolean;
   isScreenTaskSuggestion: boolean;
   hasActiveMeetingTask: boolean;
   latestTurnText: string;
@@ -2010,12 +2013,12 @@ const FocusModePanel = ({
               />
             </section>
 
-            {displaySuggestionSections.whiteboard ? (
+            {suggestionSections.whiteboard ? (
               <section className="min-w-0 overflow-hidden rounded-md border border-border/70 bg-muted/20 p-3">
                 <div className="mb-2 flex items-center gap-2 text-xs font-semibold">
                   <FileTextIcon className="h-3.5 w-3.5" />
                   Whiteboard
-                  {whiteboardArtifactDisplay.isCached ? (
+                  {whiteboardArtifactCached ? (
                     <Badge
                       variant="outline"
                       className="ml-auto rounded-sm px-1.5 py-0 text-[10px] font-normal"
@@ -2026,7 +2029,7 @@ const FocusModePanel = ({
                 </div>
                 <MeetingMarkdownText
                   className={cn(WRAP_TEXT_CLASS, "text-xs leading-5")}
-                  value={displaySuggestionSections.whiteboard}
+                  value={suggestionSections.whiteboard}
                 />
               </section>
             ) : null}
