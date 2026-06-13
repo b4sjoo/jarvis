@@ -17,6 +17,7 @@ import {
 import type { ActiveMeetingTask } from "./active-meeting-task";
 import { formatActiveMeetingTaskForRecording } from "./active-meeting-task";
 import { createMeetingId } from "./context-manager";
+import { readMeetingEvalTraceMetadata } from "./eval-trace-metadata";
 import { serializeMeetingTraceExport } from "./trace";
 
 const SESSION_RECORDING_SCHEMA_VERSION = 1;
@@ -1432,39 +1433,13 @@ function readFirstNumber(
   return undefined;
 }
 
-function readFirstBoolean(
-  metadataSources: Record<string, unknown>[],
-  key: string
-) {
-  for (const metadata of metadataSources) {
-    const value = metadata[key];
-    if (typeof value === "boolean") return value;
-  }
-
-  return undefined;
-}
-
-function readFirstStringList(
-  metadataSources: Record<string, unknown>[],
-  key: string
-) {
-  for (const metadata of metadataSources) {
-    const values = readStringList(metadata[key]);
-    if (values.length) return values;
-  }
-
-  return [];
-}
-
 function buildWhiteboardTraceSummary(
   metadataSources: Record<string, unknown>[]
 ): SessionCompactTraceSummary["whiteboard"] {
-  const artifactId = readFirstString(metadataSources, "whiteboardArtifactId");
-  const revision = readFirstNumber(metadataSources, "whiteboardArtifactRevision");
-  const domainTrack = readFirstString(
-    metadataSources,
-    "whiteboardArtifactDomainTrack"
-  );
+  const metadata = readMeetingEvalTraceMetadata(metadataSources);
+  const artifactId = metadata.whiteboardArtifactId;
+  const revision = metadata.whiteboardArtifactRevision;
+  const domainTrack = metadata.whiteboardArtifactDomainTrack;
   if (!artifactId && revision === undefined && !domainTrack) return undefined;
   return {
     artifactId,
@@ -1476,14 +1451,12 @@ function buildWhiteboardTraceSummary(
 function buildManualPhaseTraceSummary(
   metadataSources: Record<string, unknown>[]
 ): SessionCompactTraceSummary["manualPhase"] {
-  const from = readFirstString(metadataSources, "manualPhaseFrom");
-  const to = readFirstString(metadataSources, "manualPhaseTo");
-  const targetArtifact = readFirstString(
-    metadataSources,
-    "manualPhaseTargetArtifact"
-  );
-  const guardStatus = readFirstString(metadataSources, "manualPhaseGuardStatus");
-  const committed = readFirstBoolean(metadataSources, "manualPhaseAdvanceCommitted");
+  const metadata = readMeetingEvalTraceMetadata(metadataSources);
+  const from = metadata.manualPhaseFrom;
+  const to = metadata.manualPhaseTo;
+  const targetArtifact = metadata.manualPhaseTargetArtifact;
+  const guardStatus = metadata.manualPhaseGuardStatus;
+  const committed = metadata.manualPhaseAdvanceCommitted;
   if (
     !from &&
     !to &&
@@ -1505,18 +1478,10 @@ function buildManualPhaseTraceSummary(
 function buildDiagramOverlayTraceSummary(
   metadataSources: Record<string, unknown>[]
 ): SessionCompactTraceSummary["diagramOverlay"] {
-  const selectedEntryIds = readFirstStringList(
-    metadataSources,
-    "selectedDiagramOverlayIds"
-  );
-  const rejectedCount = readFirstNumber(
-    metadataSources,
-    "rejectedDiagramOverlayCount"
-  );
-  const rejectSummary = readMemoryRejectSummary(
-    metadataSources.find((metadata) => metadata.diagramOverlayRejectSummary)
-      ?.diagramOverlayRejectSummary
-  );
+  const metadata = readMeetingEvalTraceMetadata(metadataSources);
+  const selectedEntryIds = metadata.selectedDiagramOverlayIds ?? [];
+  const rejectedCount = metadata.rejectedDiagramOverlayCount;
+  const rejectSummary = metadata.diagramOverlayRejectSummary;
   if (!selectedEntryIds.length && rejectedCount === undefined && !rejectSummary) {
     return undefined;
   }

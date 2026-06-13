@@ -68,8 +68,10 @@ import {
   TranscriptTurn,
   base64WavToBlob,
   buildAmazonLeadershipPrincipleMemoryHint,
+  buildDiagramOverlayEvalTraceMetadata,
   buildInterviewSessionBriefMemoryHint,
   buildInterviewSessionMemoryHint,
+  buildWhiteboardEvalTraceMetadata,
   captureScreenObservation,
   createInterviewSessionContextFromBrief,
   createMeetingId,
@@ -94,6 +96,7 @@ import {
   formatInterviewPlaybookForTrace,
   readTraceHumanEvaluations,
   readQuestionHumanEvaluations,
+  readMeetingEvalTraceMetadata,
   buildSpeechBiasContext,
   formatSpeechBiasPromptForTrace,
   normalizeTranscriptWithSpeechBias,
@@ -1407,6 +1410,9 @@ export function useMeetingAssistant() {
       const questionType = canonicalQuestionType
         ? toHumanEvalQuestionType(canonicalQuestionType)
         : undefined;
+      const traceEvalMetadata = readMeetingEvalTraceMetadata([trace.metadata]);
+      const activeWhiteboardEvalMetadata =
+        buildWhiteboardEvalTraceMetadata(activeMeetingTask);
 
       return {
         sessionId,
@@ -1450,42 +1456,22 @@ export function useMeetingAssistant() {
           readStringFromTraceMetadata(trace.metadata, "activeMeetingParentPhase") ??
           activeMeetingTask?.parent.playbookPhase,
         whiteboardArtifactId:
-          readStringFromTraceMetadata(trace.metadata, "whiteboardArtifactId") ??
-          activeMeetingTask?.parent.whiteboardArtifact?.id,
+          traceEvalMetadata.whiteboardArtifactId ??
+          activeWhiteboardEvalMetadata.whiteboardArtifactId,
         whiteboardArtifactRevision:
-          readNumberFromTraceMetadata(
-            trace.metadata,
-            "whiteboardArtifactRevision"
-          ) ?? activeMeetingTask?.parent.whiteboardArtifact?.revision,
+          traceEvalMetadata.whiteboardArtifactRevision ??
+          activeWhiteboardEvalMetadata.whiteboardArtifactRevision,
         whiteboardArtifactDomainTrack:
-          readStringFromTraceMetadata(
-            trace.metadata,
-            "whiteboardArtifactDomainTrack"
-          ) ?? activeMeetingTask?.parent.whiteboardArtifact?.domainTrack,
-        manualPhaseFrom: readStringFromTraceMetadata(
-          trace.metadata,
-          "manualPhaseFrom"
-        ),
-        manualPhaseTo: readStringFromTraceMetadata(
-          trace.metadata,
-          "manualPhaseTo"
-        ),
-        manualPhaseTargetArtifact: readStringFromTraceMetadata(
-          trace.metadata,
-          "manualPhaseTargetArtifact"
-        ),
-        manualPhaseGuardStatus: readStringFromTraceMetadata(
-          trace.metadata,
-          "manualPhaseGuardStatus"
-        ),
-        selectedDiagramOverlayIds: readStringArrayFromTraceMetadata(
-          trace.metadata,
-          "selectedDiagramOverlayIds"
-        ),
-        rejectedDiagramOverlayCount: readNumberFromTraceMetadata(
-          trace.metadata,
-          "rejectedDiagramOverlayCount"
-        ),
+          traceEvalMetadata.whiteboardArtifactDomainTrack ??
+          activeWhiteboardEvalMetadata.whiteboardArtifactDomainTrack,
+        manualPhaseFrom: traceEvalMetadata.manualPhaseFrom,
+        manualPhaseTo: traceEvalMetadata.manualPhaseTo,
+        manualPhaseTargetArtifact: traceEvalMetadata.manualPhaseTargetArtifact,
+        manualPhaseGuardStatus: traceEvalMetadata.manualPhaseGuardStatus,
+        selectedDiagramOverlayIds:
+          traceEvalMetadata.selectedDiagramOverlayIds ?? [],
+        rejectedDiagramOverlayCount:
+          traceEvalMetadata.rejectedDiagramOverlayCount,
       };
     },
     []
@@ -2210,6 +2196,8 @@ export function useMeetingAssistant() {
           interviewTypes,
           memoryPolicy: effectiveMemoryPolicy,
         });
+        const diagramOverlayTraceMetadata =
+          buildDiagramOverlayEvalTraceMetadata(memoryContext.overlaySelection);
 
         if (traceId) {
           traceStoreRef.current.recordOutput(
@@ -2232,12 +2220,7 @@ export function useMeetingAssistant() {
               eligibleCount: memoryContext.eligibleCount,
               rejectedCount: memoryContext.rejectedCount,
               rejectSummary: memoryContext.rejectSummary,
-              selectedDiagramOverlayIds:
-                memoryContext.overlaySelection?.selectedEntryIds,
-              rejectedDiagramOverlayCount:
-                memoryContext.overlaySelection?.rejectedCount,
-              diagramOverlayRejectSummary:
-                memoryContext.overlaySelection?.rejectSummary,
+              ...diagramOverlayTraceMetadata,
               memoryPolicySnapshot: memoryContext.policySnapshot,
               totalChars: memoryContext.totalChars,
             }
@@ -2259,12 +2242,7 @@ export function useMeetingAssistant() {
               allowedFamilies: effectiveMemoryPolicy?.allowedFamilies,
               blockedFamilies: effectiveMemoryPolicy?.blockedFamilies,
               strictProjectAnchor: effectiveMemoryPolicy?.strictProjectAnchor,
-              selectedDiagramOverlayIds:
-                memoryContext.overlaySelection?.selectedEntryIds,
-              rejectedDiagramOverlayCount:
-                memoryContext.overlaySelection?.rejectedCount,
-              diagramOverlayRejectSummary:
-                memoryContext.overlaySelection?.rejectSummary,
+              ...diagramOverlayTraceMetadata,
             },
           });
           traceStoreRef.current.finishStep(traceId, memoryStepId, "success", {
@@ -2283,23 +2261,14 @@ export function useMeetingAssistant() {
             eligibleCount: memoryContext.eligibleCount,
             rejectedCount: memoryContext.rejectedCount,
             rejectSummary: memoryContext.rejectSummary,
-            selectedDiagramOverlayIds:
-              memoryContext.overlaySelection?.selectedEntryIds,
-            rejectedDiagramOverlayCount:
-              memoryContext.overlaySelection?.rejectedCount,
-            diagramOverlayRejectSummary:
-              memoryContext.overlaySelection?.rejectSummary,
+            ...diagramOverlayTraceMetadata,
             memoryPolicySnapshot: memoryContext.policySnapshot,
             totalChars: memoryContext.totalChars,
           });
-          traceStoreRef.current.updateMetadata(traceId, {
-            selectedDiagramOverlayIds:
-              memoryContext.overlaySelection?.selectedEntryIds,
-            rejectedDiagramOverlayCount:
-              memoryContext.overlaySelection?.rejectedCount,
-            diagramOverlayRejectSummary:
-              memoryContext.overlaySelection?.rejectSummary,
-          });
+          traceStoreRef.current.updateMetadata(
+            traceId,
+            diagramOverlayTraceMetadata
+          );
         }
 
         setState((previous) => ({
