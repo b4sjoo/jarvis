@@ -81,7 +81,6 @@ import {
   normalizeInterviewBriefCompany,
   extractScreenTaskQuestion,
   inferScreenTaskKind,
-  inferScreenTaskLanguage,
   isShortConfirmationLike,
   parseMeetingTraceMetrics,
   parseScreenTaskAnswer,
@@ -99,6 +98,7 @@ import {
   parseEmergencySpeechCorrection,
   serializeMeetingTraceExport,
   serializeMeetingTraceMetrics,
+  inferTrustedProgrammingLanguage,
   SessionRecordingManager,
   areCompatibleQuestionTypes,
   inferCanonicalQuestionTypeFromText,
@@ -2769,8 +2769,10 @@ export function useMeetingAssistant() {
               : normalizeScreenQuestionType(inferScreenTaskKind(finalContent)) ??
                 nextActiveScreenTask.kind,
           language:
-            inferScreenTaskLanguage(finalContent) ||
-            nextActiveScreenTask.language,
+            inferTrustedProgrammingLanguage({
+              textHints: [latestTurn?.text],
+              activeTaskLanguage: nextActiveScreenTask.language,
+            }).language ?? nextActiveScreenTask.language,
           content: finalContent.trim(),
           basedOnTurnIds,
         };
@@ -4709,6 +4711,15 @@ export function useMeetingAssistant() {
 
         if (screenTaskContent.trim() && taskKind !== "non-question") {
           const existingInterviewTask = updatedContextState.activeInterviewTask;
+          const screenLanguage = inferTrustedProgrammingLanguage({
+            screenPreflightLanguage: screenPreflight?.programmingLanguage,
+            textHints: [screenPreflight?.question, question, recentTranscript],
+            codeFenceContent: screenTaskContent,
+          });
+          traceStoreRef.current.updateMetadata(trace.id, {
+            programmingLanguage: screenLanguage.language,
+            programmingLanguageSource: screenLanguage.source,
+          });
           const activeScreenTask: ActiveScreenTask = {
             id: requestId,
             observationId: observation.id,
@@ -4717,7 +4728,7 @@ export function useMeetingAssistant() {
             expiresAt: getActiveScreenTaskExpiresAt(state.settings, now),
             question: question || undefined,
             kind: taskKind,
-            language: inferScreenTaskLanguage(screenTaskContent),
+            language: screenLanguage.language,
             classifier: {
               questionType: taskKind,
               askFrame: screenPreflight?.askFrame,

@@ -16,6 +16,7 @@
   "include": [
     "src/vite-env.d.ts",
     "tests/**/*.ts",
+    "src/lib/meeting/programming-language.ts",
     "src/lib/meeting/task-taxonomy.ts"
   ]
 }

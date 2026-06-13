@@ -34,6 +34,10 @@ import {
   normalizeQuestionTypeAlias,
   type CanonicalQuestionType,
 } from "./task-taxonomy";
+import {
+  inferProgrammingLanguageFromCodeFence,
+  normalizeProgrammingLanguageName,
+} from "./programming-language";
 
 export type ScreenCaptureTargetType = "active-window" | "current-monitor";
 
@@ -83,6 +87,7 @@ export interface SolveScreenAnchoredTaskOptions {
 
 export interface ScreenPreflightResult extends TaskClassifierMetadata {
   question?: string;
+  programmingLanguage?: string;
   rawQuestionType?: string;
   canonicalQuestionType?: CanonicalQuestionType;
   targetCompany?: string;
@@ -429,12 +434,13 @@ function buildScreenPreflightUserMessage({
     "<task>",
     "Return JSON only, with no Markdown fences.",
     "Schema:",
-    '{"question": string|null, "questionType": "behavioral"|"coding"|"general-system-design"|"ai-ml-system-design"|"project-deep-dive"|"field-knowledge"|"unknown", "askFrame": "hypothetical-design"|"past-project"|"ambiguous"|"direct-answer"|"unknown", "topicDomain": "ai-ml-infra"|"agentic-ai"|"search"|"backend"|"unknown", "projectAnchor": string|null, "confidence": number, "targetCompany": string|null, "isBehavioralInterview": boolean, "amazonLeadershipPrinciple": string|null}',
+    '{"question": string|null, "questionType": "behavioral"|"coding"|"general-system-design"|"ai-ml-system-design"|"project-deep-dive"|"field-knowledge"|"unknown", "askFrame": "hypothetical-design"|"past-project"|"ambiguous"|"direct-answer"|"unknown", "topicDomain": "ai-ml-infra"|"agentic-ai"|"search"|"backend"|"unknown", "projectAnchor": string|null, "programmingLanguage": string|null, "confidence": number, "targetCompany": string|null, "isBehavioralInterview": boolean, "amazonLeadershipPrinciple": string|null}',
     "question: the active visible interview/software-engineering question near the cursor, or null.",
     "questionType: classify the question. Use ai-ml-system-design for hypothetical AI/ML infra design such as RAG, model serving, agent memory, evaluation, retrieval, vector search, model routing, or AI platform architecture. Use general-system-design for non-AI backend/system design such as ticket selling, rate limiter, chat, booking, feeds, or storage systems. Use field-knowledge for direct conceptual questions such as 'what is X', 'explain X', 'compare X and Y', or 'what are the tradeoffs of X' when they do not ask to design a system. Use project-deep-dive when the question asks about a project the candidate built, their role, tradeoffs, architecture, impact, or lessons.",
     "askFrame: hypothetical-design for future/imagined design questions; past-project for questions about the candidate's actual past work; ambiguous when it asks both about an existing project and a future improvement; direct-answer for field knowledge, coding, or behavioral questions.",
     "topicDomain: choose agentic-ai for agents, memory, tool use, planning, or agent frameworks; ai-ml-infra for model serving, RAG, vector DB, embeddings, evaluation, data/model pipelines, or ML platforms; search for search/retrieval/ranking systems; backend for general backend systems.",
     "projectAnchor: if the question visibly names or clearly points to a project, return that project name, such as Agentic Memory, Model Interface, NeuralSearch, BeagleStone, AOS Release, or null.",
+    "programmingLanguage: for coding questions, return the visible selected/requested programming language such as Python, Java, Go, TypeScript, JavaScript, C++, Rust, Kotlin, Swift, or null. Only use visible screen evidence, not general problem text.",
     "confidence: number from 0 to 1 for the classifier fields.",
     "targetCompany: a visible company name such as Amazon, Google, Microsoft, Meta, Anthropic, OpenAI, Stripe, Airbnb, or null. Use visible text like 'from Amazon' if present.",
     "Do not classify as behavioral only because the target company is visible, because the interview type includes behavioral, or because a previous question was behavioral.",
@@ -694,6 +700,9 @@ function parseScreenPreflightOutput(output: string): ScreenPreflightResult {
       projectAnchor:
         readOptionalString(parsed.projectAnchor) ??
         fallbackClassifier.projectAnchor,
+      programmingLanguage: normalizeProgrammingLanguageName(
+        readOptionalString(parsed.programmingLanguage)
+      ),
       confidence:
         typeof parsed.confidence === "number"
           ? clampConfidence(parsed.confidence)
@@ -1001,29 +1010,7 @@ export function inferScreenTaskKind(content: string): ScreenQuestionType {
 }
 
 export function inferScreenTaskLanguage(content: string) {
-  const codeSection = (parseScreenTaskAnswer(content).code ?? "").toLowerCase();
-  const normalized = `${content}\n${codeSection}`.toLowerCase();
-
-  if (normalized.includes("```typescript") || normalized.includes("typescript")) {
-    return "TypeScript";
-  }
-  if (normalized.includes("```javascript") || normalized.includes("javascript")) {
-    return "JavaScript";
-  }
-  if (/\b(```go|golang|go)\b/i.test(normalized)) {
-    return "Go";
-  }
-  if (normalized.includes("```java") || normalized.includes("java")) {
-    return "Java";
-  }
-  if (normalized.includes("```cpp") || normalized.includes("c++")) {
-    return "C++";
-  }
-  if (normalized.includes("```python") || normalized.includes("python")) {
-    return "Python";
-  }
-
-  return undefined;
+  return inferProgrammingLanguageFromCodeFence(content);
 }
 
 export function hashBase64(value: string) {
