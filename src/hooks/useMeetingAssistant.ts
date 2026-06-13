@@ -6522,10 +6522,9 @@ function buildInterviewParentFromScreenTask(
     playbook: task.playbook,
     playbookPhase: task.playbook?.phase ?? "follow_up",
     phaseProgress: task.playbook?.phase ? { [task.playbook.phase]: true } : {},
-    supportedFactAnchors: [
-      task.classifier?.projectAnchor,
-      task.playbook?.label,
-    ].filter(Boolean) as string[],
+    supportedFactAnchors: task.classifier?.projectAnchor
+      ? [task.classifier.projectAnchor]
+      : [],
     latestUsefulAnswer: buildCompactAnswerSummary(task.content),
     previousUsefulAnswer: undefined,
     whiteboardArtifact,

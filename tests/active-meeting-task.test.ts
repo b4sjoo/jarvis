@@ -32,6 +32,35 @@ test("builds a screen-only active meeting task from legacy screen state", () => 
   assert.equal(task?.child, undefined);
 });
 
+test("does not treat playbook labels as supported fact anchors", () => {
+  const task = buildActiveMeetingTask({
+    activeScreenTask: makeScreenTask({
+      kind: "project-deep-dive",
+      classifier: {
+        questionType: "project-deep-dive",
+        askFrame: "past-project",
+        topicDomain: "agentic-ai",
+        confidence: 0.9,
+      },
+      playbook: {
+        id: "project_deep_dive",
+        label: "Project Deep Dive",
+        phase: "project_narrative",
+        questionType: "project-deep-dive",
+        confidence: 0.9,
+        reason: "test",
+        memoryPolicy: { id: "project-deep-dive" },
+        firstMove: "summarize the project",
+        clarifyingStrategy: "ask only if needed",
+        outputContract: "project narrative",
+        followUpPolicy: "continue the parent task",
+      },
+    }),
+  });
+
+  assert.deepEqual(task?.parent.supportedFactAnchors, []);
+});
+
 test("builds a voice-only active meeting task from active interview parent", () => {
   const interviewTask = makeInterviewTask({ source: "voice" });
   const task = buildActiveMeetingTask({ activeInterviewTask: interviewTask });
