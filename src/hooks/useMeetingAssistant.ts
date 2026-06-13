@@ -42,6 +42,7 @@ import {
   MeetingPrivacyMode,
   MeetingResponseActionMode,
   MeetingResponseConfig,
+  WhiteboardUpdateSource,
   MeetingContextManager,
   MeetingSetupWarning,
   MeetingTraceStore,
@@ -99,6 +100,7 @@ import {
   serializeMeetingTraceExport,
   serializeMeetingTraceMetrics,
   inferTrustedProgrammingLanguage,
+  updateWhiteboardArtifactFromAnswer,
   SessionRecordingManager,
   areCompatibleQuestionTypes,
   inferCanonicalQuestionTypeFromText,
@@ -2730,6 +2732,11 @@ export function useMeetingAssistant() {
             phaseDecision: playbookPhaseDecision,
             latestTurn,
             observationId: contextState.activeScreenTask?.basedOnObservationId,
+            traceId,
+            selectedOverlayIds: extractSelectedOverlayIdsFromMemory(memoryContext),
+            whiteboardUpdateSource: manualPhaseAdvance
+              ? "manual-next"
+              : "model-output",
             expiresAt: getActiveScreenTaskExpiresAt(state.settings),
             supportedFactAnchors: mergeSupportedFactAnchors(
               advisorProjectAnchor ? [advisorProjectAnchor] : undefined,
@@ -4780,6 +4787,12 @@ export function useMeetingAssistant() {
             playbook: screenPlaybook,
             phaseDecision: screenPhaseDecision,
             observationId: observation.id,
+            traceId: trace.id,
+            selectedOverlayIds: extractSelectedOverlayIdsFromMemory(memoryContext),
+            whiteboardUpdateSource:
+              screenRelationDecision.relation === "resume-parent"
+                ? "screen-merge"
+                : "model-output",
             expiresAt: getActiveScreenTaskExpiresAt(state.settings, now),
             supportedFactAnchors:
               mergeSupportedFactAnchors(
@@ -6143,6 +6156,9 @@ function updateInterviewTaskContinuityForAnswer({
   phaseDecision,
   latestTurn,
   observationId,
+  traceId,
+  whiteboardUpdateSource,
+  selectedOverlayIds,
   expiresAt,
   supportedFactAnchors,
 }: {
@@ -6157,6 +6173,9 @@ function updateInterviewTaskContinuityForAnswer({
   phaseDecision?: PlaybookPhaseDecision;
   latestTurn?: TranscriptTurn;
   observationId?: string;
+  traceId?: string;
+  whiteboardUpdateSource?: WhiteboardUpdateSource;
+  selectedOverlayIds?: string[];
   expiresAt?: number;
   supportedFactAnchors?: string[];
 }): InterviewTaskContinuityResult {
@@ -6187,6 +6206,18 @@ function updateInterviewTaskContinuityForAnswer({
         latestTurn,
         observationId,
       });
+      const whiteboardArtifact = updateWhiteboardArtifactFromAnswer({
+        existing: existingTask.whiteboardArtifact,
+        parentTaskId: existingTask.id,
+        parentQuestionType: existingTask.stableKind,
+        parentTopic: existingTask.topic,
+        finalContent: trimmedContent,
+        phase: phaseDecision?.phase ?? existingTask.playbookPhase,
+        traceId,
+        selectedOverlayIds,
+        updateSource: whiteboardUpdateSource ?? "model-output",
+        now,
+      });
 
       return {
         task: {
@@ -6194,6 +6225,7 @@ function updateInterviewTaskContinuityForAnswer({
           updatedAt: now,
           expiresAt,
           child,
+          whiteboardArtifact,
           revisions: existingTask.revisions + 1,
         },
         startedNewParent: false,
@@ -6215,14 +6247,28 @@ function updateInterviewTaskContinuityForAnswer({
     !isCompatibleParentKind(existingTask.stableKind, kind);
 
   if (shouldStartNewParent) {
+    const parentId = createMeetingId("interview_parent");
+    const nextPhase = phaseDecision?.phase ?? playbook?.phase ?? "follow_up";
+    const whiteboardArtifact = updateWhiteboardArtifactFromAnswer({
+      parentTaskId: parentId,
+      parentQuestionType: kind,
+      parentTopic: topic,
+      finalContent: trimmedContent,
+      phase: nextPhase,
+      traceId,
+      selectedOverlayIds,
+      updateSource: whiteboardUpdateSource ?? "new-parent",
+      now,
+    });
+
     return {
       task: {
-        id: createMeetingId("interview_parent"),
+        id: parentId,
         source,
         stableKind: kind,
         topic,
         playbook,
-        playbookPhase: phaseDecision?.phase ?? playbook?.phase ?? "follow_up",
+        playbookPhase: nextPhase,
         phaseProgress: applyPlaybookPhaseDecisionToProgress(
           playbook?.phase ? { [playbook.phase]: true } : {},
           phaseDecision,
@@ -6233,6 +6279,7 @@ function updateInterviewTaskContinuityForAnswer({
           ? buildCompactAnswerSummary(trimmedContent)
           : undefined,
         previousUsefulAnswer: undefined,
+        whiteboardArtifact,
         createdAt: now,
         updatedAt: now,
         expiresAt,
@@ -6246,6 +6293,19 @@ function updateInterviewTaskContinuityForAnswer({
   }
 
   if (relation === "child-probe") {
+    const whiteboardArtifact = updateWhiteboardArtifactFromAnswer({
+      existing: existingTask.whiteboardArtifact,
+      parentTaskId: existingTask.id,
+      parentQuestionType: existingTask.stableKind,
+      parentTopic: existingTask.topic,
+      finalContent: trimmedContent,
+      phase: phaseDecision?.phase ?? existingTask.playbookPhase,
+      traceId,
+      selectedOverlayIds,
+      updateSource: whiteboardUpdateSource ?? "model-output",
+      now,
+    });
+
     return {
       task: {
         ...existingTask,
@@ -6262,6 +6322,7 @@ function updateInterviewTaskContinuityForAnswer({
             })
           : existingTask.child,
         supportedFactAnchors: anchors,
+        whiteboardArtifact,
         revisions: existingTask.revisions + 1,
       },
       startedNewParent: false,
@@ -6283,6 +6344,18 @@ function updateInterviewTaskContinuityForAnswer({
         playbook?.phase
       ),
       supportedFactAnchors: anchors,
+      whiteboardArtifact: updateWhiteboardArtifactFromAnswer({
+        existing: existingTask.whiteboardArtifact,
+        parentTaskId: existingTask.id,
+        parentQuestionType: existingTask.stableKind,
+        parentTopic: existingTask.topic,
+        finalContent: trimmedContent,
+        phase: phaseDecision?.phase ?? playbook?.phase ?? existingTask.playbookPhase,
+        traceId,
+        selectedOverlayIds,
+        updateSource: whiteboardUpdateSource ?? "model-output",
+        now,
+      }),
       previousUsefulAnswer:
         isUsefulAnswer && existingTask.latestUsefulAnswer
           ? existingTask.latestUsefulAnswer
@@ -6303,6 +6376,17 @@ function buildInterviewParentFromScreenTask(
 ): ActiveInterviewParent | undefined {
   const kind = normalizeInterviewParentKind(task.kind);
   if (!kind) return undefined;
+  const whiteboardArtifact = updateWhiteboardArtifactFromAnswer({
+    parentTaskId: task.id,
+    parentQuestionType: kind,
+    parentTopic:
+      task.question || extractScreenTaskQuestion(task.content) || "Screen task",
+    finalContent: task.content,
+    phase: task.playbook?.phase ?? "follow_up",
+    selectedOverlayIds: [],
+    updateSource: "model-output",
+    now: task.updatedAt,
+  });
 
   return {
     id: task.id,
@@ -6318,6 +6402,7 @@ function buildInterviewParentFromScreenTask(
     ].filter(Boolean) as string[],
     latestUsefulAnswer: buildCompactAnswerSummary(task.content),
     previousUsefulAnswer: undefined,
+    whiteboardArtifact,
     createdAt: task.createdAt,
     updatedAt: task.updatedAt,
     expiresAt: task.expiresAt,
@@ -6716,6 +6801,12 @@ function extractSupportedFactAnchorsFromMemory(
     })
     .filter(Boolean)
     .slice(0, 8);
+}
+
+function extractSelectedOverlayIdsFromMemory(
+  memoryContext: MemoryRetrievalResult | null | undefined
+) {
+  return memoryContext?.overlaySelection?.selectedEntryIds ?? [];
 }
 
 function buildScreenMemoryQuery({

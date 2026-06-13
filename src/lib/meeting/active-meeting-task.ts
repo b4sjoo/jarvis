@@ -10,6 +10,7 @@ import type {
   SelectedInterviewPlaybook,
   TaskAskFrame,
   TaskTopicDomain,
+  WhiteboardArtifact,
 } from "./types";
 import {
   isParentCanonicalQuestionType,
@@ -37,6 +38,7 @@ export interface ActiveMeetingParent {
   supportedFactAnchors: string[];
   latestUsefulAnswer?: string;
   previousUsefulAnswer?: string;
+  whiteboardArtifact?: WhiteboardArtifact;
   createdAt: number;
   updatedAt: number;
   expiresAt?: number;
@@ -149,6 +151,10 @@ export function getActiveMeetingTaskTraceMetadata(
     activeMeetingScreenProjectAnchor: task.screen?.projectAnchor,
     activeMeetingScreenClassifierConfidence: task.screen?.classifierConfidence,
     activeMeetingTaskDivergence: task.divergence?.reason,
+    whiteboardArtifactId: task.parent.whiteboardArtifact?.id,
+    whiteboardArtifactRevision: task.parent.whiteboardArtifact?.revision,
+    whiteboardArtifactDomainTrack:
+      task.parent.whiteboardArtifact?.domainTrack,
   };
 }
 
@@ -217,6 +223,20 @@ export function formatActiveMeetingTaskForPrompt(
     task.parent.latestUsefulAnswer
       ? `Latest useful answer summary: ${task.parent.latestUsefulAnswer.slice(0, 900)}`
       : undefined,
+    task.parent.whiteboardArtifact
+      ? [
+          "Active whiteboard artifact:",
+          `- Artifact id: ${task.parent.whiteboardArtifact.id}`,
+          `- Revision: ${task.parent.whiteboardArtifact.revision}`,
+          `- Domain track: ${task.parent.whiteboardArtifact.domainTrack}`,
+          task.parent.whiteboardArtifact.selectedOverlayIds.length
+            ? `- Selected overlays: ${task.parent.whiteboardArtifact.selectedOverlayIds.join(", ")}`
+            : undefined,
+          `- Summary: ${task.parent.whiteboardArtifact.summary.slice(0, 700)}`,
+        ]
+          .filter(Boolean)
+          .join("\n")
+      : undefined,
     task.parent.previousUsefulAnswer
       ? `Previous useful answer summary: ${task.parent.previousUsefulAnswer.slice(0, 600)}`
       : undefined,
@@ -277,6 +297,9 @@ function buildParentFromInterviewTask(
     supportedFactAnchors: [...task.supportedFactAnchors],
     latestUsefulAnswer: task.latestUsefulAnswer,
     previousUsefulAnswer: task.previousUsefulAnswer,
+    whiteboardArtifact: task.whiteboardArtifact
+      ? { ...task.whiteboardArtifact }
+      : undefined,
     createdAt: task.createdAt,
     updatedAt: task.updatedAt,
     expiresAt: task.expiresAt,

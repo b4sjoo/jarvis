@@ -353,6 +353,38 @@ export interface ActiveInterviewChild {
   basedOnObservationIds: string[];
 }
 
+export type WhiteboardDomainTrack =
+  | "general_sd"
+  | "ml_sd"
+  | "genai_sd"
+  | "hybrid";
+
+export type WhiteboardUpdateSource =
+  | "model-output"
+  | "manual-next"
+  | "screen-merge"
+  | "correction-regenerate"
+  | "task-reset"
+  | "new-parent";
+
+export interface WhiteboardArtifact {
+  id: string;
+  parentTaskId: string;
+  domainTrack: WhiteboardDomainTrack;
+  archetypeIds: string[];
+  selectedOverlayIds: string[];
+  currentPhase: InterviewPlaybookPhase;
+  title: string;
+  content: string;
+  summary: string;
+  revision: number;
+  createdTraceId?: string;
+  lastUpdatedTraceId?: string;
+  updateSource: WhiteboardUpdateSource;
+  updatedAt: number;
+  createdAt: number;
+}
+
 export interface ActiveInterviewParent {
   id: string;
   source: "screen" | "voice";
@@ -364,6 +396,7 @@ export interface ActiveInterviewParent {
   supportedFactAnchors: string[];
   latestUsefulAnswer?: string;
   previousUsefulAnswer?: string;
+  whiteboardArtifact?: WhiteboardArtifact;
   createdAt: number;
   updatedAt: number;
   expiresAt?: number;

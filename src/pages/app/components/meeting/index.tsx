@@ -447,9 +447,23 @@ export const MeetingAssistant = ({
     suggestionSections.complexity,
     suggestionSections.screenQuestion,
   ]);
+  const whiteboardArtifactDisplay = useMemo(() => {
+    return resolveWhiteboardArtifactDisplay({
+      activeTaskKind,
+      artifact: meeting.activeMeetingTask?.parent.whiteboardArtifact,
+      taskId: activeParentTaskId,
+      sections: suggestionSections,
+    });
+  }, [
+    activeParentTaskId,
+    activeTaskKind,
+    meeting.activeMeetingTask?.parent.whiteboardArtifact,
+    suggestionSections.whiteboard,
+  ]);
   const displaySuggestionSections = useMemo(
     () => ({
       ...suggestionSections,
+      whiteboard: whiteboardArtifactDisplay.whiteboard,
       code: codingArtifactDisplay.code,
       complexity: codingArtifactDisplay.complexity,
     }),
@@ -457,6 +471,7 @@ export const MeetingAssistant = ({
       codingArtifactDisplay.code,
       codingArtifactDisplay.complexity,
       suggestionSections,
+      whiteboardArtifactDisplay.whiteboard,
     ]
   );
   const latestReliableAnswerPreview = useMemo(
@@ -1323,15 +1338,23 @@ export const MeetingAssistant = ({
                     />
                   </section>
 
-                  {suggestionSections.whiteboard ? (
+                  {displaySuggestionSections.whiteboard ? (
                     <section className="min-w-0 overflow-hidden rounded-md border border-border/70 bg-muted/20 p-3">
                       <div className="mb-2 flex items-center gap-2 text-xs font-semibold">
                         <FileTextIcon className="h-3.5 w-3.5" />
                         Whiteboard
+                        {whiteboardArtifactDisplay.isCached ? (
+                          <Badge
+                            variant="outline"
+                            className="ml-auto rounded-sm px-1.5 py-0 text-[10px] font-normal"
+                          >
+                            cached
+                          </Badge>
+                        ) : null}
                       </div>
                       <MeetingMarkdownText
                         className={cn(WRAP_TEXT_CLASS, "text-xs leading-5")}
-                        value={suggestionSections.whiteboard}
+                        value={displaySuggestionSections.whiteboard}
                       />
                     </section>
                   ) : null}
@@ -1987,15 +2010,23 @@ const FocusModePanel = ({
               />
             </section>
 
-            {suggestionSections.whiteboard ? (
+            {displaySuggestionSections.whiteboard ? (
               <section className="min-w-0 overflow-hidden rounded-md border border-border/70 bg-muted/20 p-3">
                 <div className="mb-2 flex items-center gap-2 text-xs font-semibold">
                   <FileTextIcon className="h-3.5 w-3.5" />
                   Whiteboard
+                  {whiteboardArtifactDisplay.isCached ? (
+                    <Badge
+                      variant="outline"
+                      className="ml-auto rounded-sm px-1.5 py-0 text-[10px] font-normal"
+                    >
+                      cached
+                    </Badge>
+                  ) : null}
                 </div>
                 <MeetingMarkdownText
                   className={cn(WRAP_TEXT_CLASS, "text-xs leading-5")}
-                  value={suggestionSections.whiteboard}
+                  value={displaySuggestionSections.whiteboard}
                 />
               </section>
             ) : null}
@@ -4187,6 +4218,45 @@ function resolveCodingArtifactDisplay({
   }
 
   return { code: "", complexity: "", isCached: false };
+}
+
+function resolveWhiteboardArtifactDisplay({
+  activeTaskKind,
+  artifact,
+  taskId,
+  sections,
+}: {
+  activeTaskKind?: string;
+  artifact?: { parentTaskId: string; content: string };
+  taskId: string;
+  sections: ReturnType<typeof parseSuggestionSections>;
+}) {
+  const sectionWhiteboard = normalizeWhiteboardArtifactText(sections.whiteboard);
+  if (sectionWhiteboard) {
+    return { whiteboard: sectionWhiteboard, isCached: false };
+  }
+
+  if (
+    taskId &&
+    artifact?.parentTaskId === taskId &&
+    isWhiteboardDisplayTask(activeTaskKind)
+  ) {
+    return { whiteboard: artifact.content, isCached: true };
+  }
+
+  return { whiteboard: "", isCached: false };
+}
+
+function normalizeWhiteboardArtifactText(value: string | undefined) {
+  const normalized = value?.trim();
+  return normalized && normalized !== "-" ? normalized : "";
+}
+
+function isWhiteboardDisplayTask(activeTaskKind: string | undefined) {
+  return (
+    activeTaskKind === "general-system-design" ||
+    activeTaskKind === "ai-ml-system-design"
+  );
 }
 
 function normalizeCodingArtifactText(value: string | undefined) {

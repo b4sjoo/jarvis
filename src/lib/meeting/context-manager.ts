@@ -514,5 +514,8 @@ function cloneActiveInterviewTask(
     phaseProgress: { ...task.phaseProgress },
     supportedFactAnchors: [...task.supportedFactAnchors],
     child: task.child ? { ...task.child } : undefined,
+    whiteboardArtifact: task.whiteboardArtifact
+      ? { ...task.whiteboardArtifact }
+      : undefined,
   };
 }

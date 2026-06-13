@@ -20,3 +20,4 @@ export * from "./trace";
 export * from "./transcription.service";
 export * from "./transcript-fusion";
 export * from "./types";
+export * from "./whiteboard-artifact";
