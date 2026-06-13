@@ -15,10 +15,14 @@ import {
   TranscriptTurn,
 } from "./types";
 import type { ActiveMeetingTask } from "./active-meeting-task";
-import { formatActiveMeetingTaskForRecording } from "./active-meeting-task";
-import { createMeetingId } from "./context-manager";
-import { readMeetingEvalTraceMetadata } from "./eval-trace-metadata";
-import { serializeMeetingTraceExport } from "./trace";
+import { formatActiveMeetingTaskForRecording } from "./active-meeting-task.js";
+import { createMeetingId } from "./context-manager.js";
+import { readMeetingEvalTraceMetadata } from "./eval-trace-metadata.js";
+import {
+  buildSessionTaskReviewIndex,
+  type SessionTaskReviewIndex,
+} from "./session-task-review-index.js";
+import { serializeMeetingTraceExport } from "./trace.js";
 
 const SESSION_RECORDING_SCHEMA_VERSION = 1;
 const SESSION_TRACE_SUMMARY_SCHEMA_VERSION = 1;
@@ -87,6 +91,7 @@ interface ActiveSessionRecording {
   recordedObservationIds: Set<string>;
   traceSessionIndex: Map<string, SessionTraceIndexEntry>;
   traceSummaries: Map<string, SessionCompactTraceSummary>;
+  questionHumanEvaluations: Map<string, QuestionHumanEvaluation>;
 }
 
 interface SessionTraceIndexEntry {
@@ -104,7 +109,7 @@ interface SessionTraceIndexEntry {
   traceDurationMs?: number;
 }
 
-interface SessionCompactTraceSummary {
+export interface SessionCompactTraceSummary {
   version: number;
   sessionId: string;
   traceId: string;
@@ -317,6 +322,7 @@ export class SessionRecordingManager {
       recordedObservationIds: new Set(),
       traceSessionIndex: new Map(),
       traceSummaries: new Map(),
+      questionHumanEvaluations: new Map(),
     };
     this.emit();
 
@@ -758,6 +764,14 @@ export class SessionRecordingManager {
       sessionId: session.sessionId,
       evaluations: sessionEvaluations,
     });
+    for (const evaluation of sessionEvaluations) {
+      session.questionHumanEvaluations.set(evaluation.questionId, evaluation);
+    }
+    const reviewIndex = buildSessionTaskReviewIndex(
+      session.sessionId,
+      Array.from(session.traceSummaries.values()),
+      Array.from(session.questionHumanEvaluations.values())
+    );
     this.enqueue(async () => {
       await this.writeText(
         "human-evaluation/question-evaluations.json",
@@ -768,6 +782,7 @@ export class SessionRecordingManager {
         `${compactPayload}\n`,
         true
       );
+      await this.writeTaskReviewIndex(reviewIndex);
     });
     this.recordEvent(
       "question-human-evaluation",
@@ -924,6 +939,11 @@ export class SessionRecordingManager {
       session.sessionId,
       summaries
     );
+    const reviewIndex = buildSessionTaskReviewIndex(
+      session.sessionId,
+      summaries,
+      Array.from(session.questionHumanEvaluations.values())
+    );
 
     this.enqueue(async () => {
       if (!existing) {
@@ -941,11 +961,19 @@ export class SessionRecordingManager {
       });
       await this.writeJson(summaryPath, summary);
       await this.writeJson("metrics/session-summary.json", sessionSummary);
+      await this.writeTaskReviewIndex(reviewIndex);
     });
   }
 
   private async writeJson(relativePath: string, value: unknown) {
     await this.writeText(relativePath, JSON.stringify(value, null, 2));
+  }
+
+  private async writeTaskReviewIndex(index: SessionTaskReviewIndex) {
+    await this.writeJson("tasks/review-index.latest.json", index);
+    for (const task of index.tasks) {
+      await this.writeJson(task.artifacts.reviewSummaryPath, task);
+    }
   }
 
   private async appendJsonl(relativePath: string, value: unknown) {

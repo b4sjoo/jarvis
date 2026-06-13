@@ -14,6 +14,7 @@ export * from "./interview-session-context";
 export * from "./screen-observation.service";
 export * from "./screen-task-answer";
 export * from "./session-recording";
+export * from "./session-task-review-index";
 export * from "./speech-bias";
 export * from "./suggestion-task";
 export * from "./task-taxonomy";
