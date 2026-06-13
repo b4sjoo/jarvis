@@ -88,6 +88,7 @@ import {
   preflightScreenObservation,
   selectInterviewPlaybook,
   applyPlaybookPhaseDecisionToProgress,
+  decideManualNextPhaseTransition,
   decidePlaybookPhaseProgression,
   formatPlaybookPhaseDecisionForTrace,
   formatInterviewPlaybookForTrace,
@@ -2443,23 +2444,62 @@ export function useMeetingAssistant() {
         ? getAdvisorActiveQuestionType(promptContext)
         : advisorQuestionType
     );
-    const playbookPhaseDecision = decidePlaybookPhaseProgression({
-      questionType: advisorPhaseQuestionType,
-      playbookId: advisorPlaybook?.id,
-      currentPhase:
-        promptContext.activeMeetingTask?.parent.playbookPhase ??
-        promptContext.activeInterviewTask?.playbookPhase ??
-        advisorPlaybook?.phase,
-      phaseProgress:
-        promptContext.activeMeetingTask?.parent.phaseProgress ??
-        promptContext.activeInterviewTask?.phaseProgress,
-      latestTurnText: latestTurn?.text,
-      currentQuestion: advisorTaskSignals.query,
-      currentAnswer: options.currentSuggestion,
-      relation: advisorTaskSignals.taskRelation,
-      subtaskIntent: advisorTaskSignals.subtaskIntent,
-      askFrame: advisorAskFrame ?? getAdvisorActiveAskFrame(promptContext),
-    });
+    const playbookPhaseDecision = manualPhaseAdvance
+      ? decideManualNextPhaseTransition(promptContext.activeMeetingTask)
+      : decidePlaybookPhaseProgression({
+          questionType: advisorPhaseQuestionType,
+          playbookId: advisorPlaybook?.id,
+          currentPhase:
+            promptContext.activeMeetingTask?.parent.playbookPhase ??
+            promptContext.activeInterviewTask?.playbookPhase ??
+            advisorPlaybook?.phase,
+          phaseProgress:
+            promptContext.activeMeetingTask?.parent.phaseProgress ??
+            promptContext.activeInterviewTask?.phaseProgress,
+          latestTurnText: latestTurn?.text,
+          currentQuestion: advisorTaskSignals.query,
+          currentAnswer: options.currentSuggestion,
+          relation: advisorTaskSignals.taskRelation,
+          subtaskIntent: advisorTaskSignals.subtaskIntent,
+          askFrame: advisorAskFrame ?? getAdvisorActiveAskFrame(promptContext),
+        });
+    let manualPhaseAdvanceCommitted = false;
+
+    if (
+      manualPhaseAdvance &&
+      playbookPhaseDecision.guardStatus === "advanced"
+    ) {
+      const contextState = contextManagerRef.current.getState();
+      const existingInterviewTask =
+        contextState.activeInterviewTask ??
+        (contextState.activeScreenTask
+          ? buildInterviewParentFromScreenTask(contextState.activeScreenTask)
+          : undefined);
+
+      if (existingInterviewTask) {
+        const now = Date.now();
+        const updatedInterviewTask: ActiveInterviewParent = {
+          ...existingInterviewTask,
+          playbook: advisorPlaybook ?? existingInterviewTask.playbook,
+          playbookPhase: playbookPhaseDecision.phase,
+          phaseProgress: applyPlaybookPhaseDecisionToProgress(
+            existingInterviewTask.phaseProgress,
+            playbookPhaseDecision,
+            existingInterviewTask.playbookPhase
+          ),
+          child: undefined,
+          updatedAt: now,
+          revisions: existingInterviewTask.revisions + 1,
+        };
+
+        contextManagerRef.current.setActiveMeetingTaskState({
+          activeScreenTask: contextState.activeScreenTask,
+          activeInterviewTask: updatedInterviewTask,
+        });
+        promptContext = contextManagerRef.current.buildAdvisorPromptContext();
+        manualPhaseAdvanceCommitted = true;
+      }
+    }
 
     if (traceId) {
       const playbookMetadata = formatInterviewPlaybookForTrace(advisorPlaybook);
@@ -2478,6 +2518,7 @@ export function useMeetingAssistant() {
           advisorTaskSignals.openingRoute?.commitParent,
         manualPhaseAdvance,
         manualPhaseAdvanceFromPhase,
+        manualPhaseAdvanceCommitted,
         parentTaskId: activeMeetingTaskId,
         parentTaskKind:
           promptContext.activeMeetingTask?.parent.questionType ??
@@ -2503,6 +2544,7 @@ export function useMeetingAssistant() {
               advisorTaskSignals.openingRoute?.commitParent,
             manualPhaseAdvance,
             manualPhaseAdvanceFromPhase,
+            manualPhaseAdvanceCommitted,
             parentTaskId: activeMeetingTaskId,
             ...getActiveMeetingTaskTraceMetadata(promptContext.activeMeetingTask),
           }

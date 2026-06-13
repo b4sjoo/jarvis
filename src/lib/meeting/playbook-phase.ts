@@ -38,11 +38,29 @@ export type PlaybookPhaseDecisionAction =
   | "resume-parent"
   | "child-probe";
 
+export type PlaybookPhaseDecisionSource = "automatic" | "manual-next";
+
+export type PlaybookPhaseTargetArtifact =
+  | "answer"
+  | "whiteboard"
+  | "code"
+  | "none";
+
+export type PlaybookPhaseGuardStatus =
+  | "automatic"
+  | "advanced"
+  | "blocked-no-parent";
+
 export interface PlaybookPhaseDecision {
   phase: InterviewPlaybookPhase;
   flags: PlaybookPhaseFlag[];
   action: PlaybookPhaseDecisionAction;
   reason: string;
+  source?: PlaybookPhaseDecisionSource;
+  targetArtifact?: PlaybookPhaseTargetArtifact;
+  guardStatus?: PlaybookPhaseGuardStatus;
+  manualPhaseFrom?: InterviewPlaybookPhase;
+  manualPhaseTo?: InterviewPlaybookPhase;
 }
 
 export interface PlaybookPhaseDecisionInput {
@@ -313,6 +331,49 @@ export function decidePlaybookPhaseProgression(
     flags,
     action,
     reason: buildReason(questionType, currentPhase, phase, flags, input.relation),
+    source: "automatic",
+    guardStatus: "automatic",
+  };
+}
+
+export function decideManualNextPhaseTransition(
+  task: ActiveMeetingTask | undefined
+): PlaybookPhaseDecision {
+  if (!task) {
+    return {
+      phase: "follow_up",
+      flags: [],
+      action: "stay",
+      reason: "manual-next blocked because no active parent task exists",
+      source: "manual-next",
+      targetArtifact: "none",
+      guardStatus: "blocked-no-parent",
+    };
+  }
+
+  const questionType = normalizeCanonicalQuestionType(task.parent.questionType);
+  const currentPhase = task.parent.playbookPhase;
+  const phaseProgress = task.parent.phaseProgress;
+  const flags = chooseManualNextFlags(questionType, currentPhase, phaseProgress);
+  const phase = chooseManualNextPhase(questionType, currentPhase);
+  const targetArtifact = chooseManualNextTargetArtifact(questionType, flags);
+
+  return {
+    phase,
+    flags,
+    action: "advance",
+    reason: buildManualNextReason({
+      questionType,
+      currentPhase,
+      phase,
+      flags,
+      targetArtifact,
+    }),
+    source: "manual-next",
+    targetArtifact,
+    guardStatus: "advanced",
+    manualPhaseFrom: currentPhase,
+    manualPhaseTo: phase,
   };
 }
 
@@ -349,7 +410,14 @@ export function formatPlaybookPhaseDecisionForPrompt(
       ? `Completed phase/progress flags: ${completed.join(", ")}`
       : "Completed phase/progress flags: none",
     decision ? `Decision action: ${decision.action}` : undefined,
+    decision?.source ? `Decision source: ${decision.source}` : undefined,
     decision ? `Recommended phase: ${decision.phase}` : undefined,
+    decision?.manualPhaseFrom && decision.manualPhaseTo
+      ? `Manual phase transition: ${decision.manualPhaseFrom} -> ${decision.manualPhaseTo}`
+      : undefined,
+    decision?.targetArtifact
+      ? `Target artifact this turn: ${decision.targetArtifact}`
+      : undefined,
     decision?.flags.length
       ? `Requested phase flags this turn: ${decision.flags.join(", ")}`
       : decision
@@ -359,8 +427,10 @@ export function formatPlaybookPhaseDecisionForPrompt(
     "",
     "Behavioral rules:",
     "- Do not repeat completed requirement clarification unless the latest turn adds a new requirement or constraint.",
+    "- If Decision source is manual-next, treat the phase transition as already chosen by the user: do not ask whether to advance and do not restart an earlier phase.",
     "- If Decision action is child-probe, answer the local child probe while preserving the parent trajectory and make it easy to resume the parent.",
     "- If Decision action is resume-parent, continue from the stored phase/progress instead of restarting the playbook first move.",
+    "- If Target artifact is whiteboard, update or produce the Whiteboard artifact as the main output.",
     "- If requested flags include whiteboard, produce the Whiteboard artifact directly; do not ask whether to use plain text or ASCII.",
     "- If requested flags include evaluation_metrics, be concrete about metrics, logs, evaluation, and feedback-loop signals.",
   ];
@@ -374,10 +444,119 @@ export function formatPlaybookPhaseDecisionForTrace(
   if (!decision) return {};
   return {
     playbookPhaseDecisionAction: decision.action,
+    playbookPhaseDecisionSource: decision.source,
     playbookPhaseDecisionPhase: decision.phase,
     playbookPhaseDecisionFlags: decision.flags,
     playbookPhaseDecisionReason: decision.reason,
+    manualPhaseFrom: decision.manualPhaseFrom,
+    manualPhaseTo: decision.manualPhaseTo,
+    manualPhaseTargetArtifact: decision.targetArtifact,
+    manualPhaseGuardStatus: decision.guardStatus,
   };
+}
+
+function chooseManualNextPhase(
+  questionType: CanonicalQuestionType | undefined,
+  currentPhase: InterviewPlaybookPhase
+): InterviewPlaybookPhase {
+  if (
+    questionType === "general-system-design" ||
+    questionType === "ai-ml-system-design"
+  ) {
+    return "design_framing";
+  }
+  if (questionType === "behavioral") return "follow_up";
+  if (questionType === "project-deep-dive") return "follow_up";
+  if (questionType === "field-knowledge") return "follow_up";
+  if (questionType === "coding") return "solution_planning";
+  return currentPhase === "follow_up" ? "follow_up" : currentPhase;
+}
+
+function chooseManualNextFlags(
+  questionType: CanonicalQuestionType | undefined,
+  currentPhase: InterviewPlaybookPhase,
+  phaseProgress: Record<string, boolean> | undefined
+): PlaybookPhaseFlag[] {
+  if (questionType === "general-system-design") {
+    if (currentPhase === "requirement_clarification") {
+      return ["scale_qps", "api_data_model", "architecture", "whiteboard"];
+    }
+    if (!hasProgress(phaseProgress, "deep_dive_subsystem")) {
+      return ["deep_dive_subsystem", "consistency_reliability", "whiteboard"];
+    }
+    return ["consistency_reliability", "tradeoffs_wrapup", "whiteboard"];
+  }
+
+  if (questionType === "ai-ml-system-design") {
+    if (currentPhase === "requirement_clarification") {
+      return [
+        "objective_metrics",
+        "data_retrieval_model_path",
+        "serving_architecture",
+        "whiteboard",
+      ];
+    }
+    if (!hasProgress(phaseProgress, "evaluation_metrics")) {
+      return ["evaluation_metrics", "latency_cost_safety", "whiteboard"];
+    }
+    return ["evaluation_metrics", "tradeoffs_wrapup", "whiteboard"];
+  }
+
+  if (questionType === "project-deep-dive") {
+    if (!hasProgress(phaseProgress, "hard_problem")) {
+      return ["hard_problem", "architecture"];
+    }
+    if (!hasProgress(phaseProgress, "tradeoff_decision")) {
+      return ["tradeoff_decision", "validation_debugging"];
+    }
+    return ["impact_lesson", "tradeoffs_wrapup"];
+  }
+
+  if (questionType === "behavioral") {
+    return ["impact_lesson", "tradeoffs_wrapup"];
+  }
+
+  if (questionType === "coding") {
+    return ["architecture", "latency_cost_safety"];
+  }
+
+  if (questionType === "field-knowledge") {
+    return ["tradeoffs_wrapup"];
+  }
+
+  return [];
+}
+
+function chooseManualNextTargetArtifact(
+  questionType: CanonicalQuestionType | undefined,
+  flags: PlaybookPhaseFlag[]
+): PlaybookPhaseTargetArtifact {
+  if (flags.includes("whiteboard")) return "whiteboard";
+  if (questionType === "coding") return "code";
+  if (!questionType) return "none";
+  return "answer";
+}
+
+function buildManualNextReason({
+  questionType,
+  currentPhase,
+  phase,
+  flags,
+  targetArtifact,
+}: {
+  questionType: CanonicalQuestionType | undefined;
+  currentPhase: InterviewPlaybookPhase;
+  phase: InterviewPlaybookPhase;
+  flags: PlaybookPhaseFlag[];
+  targetArtifact: PlaybookPhaseTargetArtifact;
+}) {
+  return [
+    "manual-next",
+    questionType ? `type=${questionType}` : "type=unknown",
+    `${currentPhase}->${phase}`,
+    `target=${targetArtifact}`,
+    flags.length ? `flags=${flags.join(",")}` : "flags=none",
+  ].join("; ");
 }
 
 function detectQuestionTypeFlags(

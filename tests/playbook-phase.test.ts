@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   applyPlaybookPhaseDecisionToProgress,
+  decideManualNextPhaseTransition,
   decidePlaybookPhaseProgression,
   formatPlaybookPhaseDecisionForPrompt,
   formatPlaybookPhaseDecisionForTrace,
@@ -95,4 +96,72 @@ test("project deep dive records hard problem and tradeoff progress", () => {
   assert.ok(decision.flags.includes("hard_problem"));
   assert.ok(decision.flags.includes("tradeoff_decision"));
   assert.ok(decision.flags.includes("tradeoffs_wrapup"));
+});
+
+test("manual next deterministically advances general system design to whiteboard", () => {
+  const decision = decideManualNextPhaseTransition({
+    id: "task_1",
+    source: "voice",
+    parent: {
+      id: "parent_1",
+      questionType: "general-system-design",
+      topic: "Design an Uber-like app",
+      playbookPhase: "requirement_clarification",
+      phaseProgress: { requirements: true },
+      supportedFactAnchors: [],
+      createdAt: 1,
+      updatedAt: 1,
+    },
+  });
+
+  assert.equal(decision.source, "manual-next");
+  assert.equal(decision.action, "advance");
+  assert.equal(decision.phase, "design_framing");
+  assert.equal(decision.targetArtifact, "whiteboard");
+  assert.equal(decision.manualPhaseFrom, "requirement_clarification");
+  assert.equal(decision.manualPhaseTo, "design_framing");
+  assert.ok(decision.flags.includes("whiteboard"));
+  assert.ok(decision.flags.includes("scale_qps"));
+  assert.match(
+    formatPlaybookPhaseDecisionForPrompt(decision, undefined),
+    /manual-next/
+  );
+});
+
+test("manual next advances AI/ML design without restarting requirements", () => {
+  const decision = decideManualNextPhaseTransition({
+    id: "task_2",
+    source: "mixed",
+    parent: {
+      id: "parent_2",
+      questionType: "ai-ml-system-design",
+      topic: "RAG trip planner",
+      playbookPhase: "design_framing",
+      phaseProgress: {
+        requirements: true,
+        design_framing: true,
+        data_retrieval_model_path: true,
+      },
+      supportedFactAnchors: [],
+      createdAt: 1,
+      updatedAt: 1,
+    },
+  });
+
+  assert.equal(decision.phase, "design_framing");
+  assert.equal(decision.targetArtifact, "whiteboard");
+  assert.ok(decision.flags.includes("evaluation_metrics"));
+  assert.ok(decision.flags.includes("latency_cost_safety"));
+  assert.deepEqual(
+    formatPlaybookPhaseDecisionForTrace(decision).manualPhaseGuardStatus,
+    "advanced"
+  );
+});
+
+test("manual next is blocked without an active task", () => {
+  const decision = decideManualNextPhaseTransition(undefined);
+
+  assert.equal(decision.action, "stay");
+  assert.equal(decision.guardStatus, "blocked-no-parent");
+  assert.equal(decision.targetArtifact, "none");
 });
