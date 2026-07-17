@@ -59,6 +59,7 @@ export interface PlaybookPhaseDecision {
   source?: PlaybookPhaseDecisionSource;
   targetArtifact?: PlaybookPhaseTargetArtifact;
   guardStatus?: PlaybookPhaseGuardStatus;
+  phaseFrom?: InterviewPlaybookPhase;
   manualPhaseFrom?: InterviewPlaybookPhase;
   manualPhaseTo?: InterviewPlaybookPhase;
 }
@@ -333,6 +334,7 @@ export function decidePlaybookPhaseProgression(
     reason: buildReason(questionType, currentPhase, phase, flags, input.relation),
     source: "automatic",
     guardStatus: "automatic",
+    phaseFrom: currentPhase,
   };
 }
 
@@ -372,6 +374,7 @@ export function decideManualNextPhaseTransition(
     source: "manual-next",
     targetArtifact,
     guardStatus: "advanced",
+    phaseFrom: currentPhase,
     manualPhaseFrom: currentPhase,
     manualPhaseTo: phase,
   };
@@ -385,6 +388,7 @@ export function applyPlaybookPhaseDecisionToProgress(
   const next = { ...(progress ?? {}) };
   if (playbookPhase) next[playbookPhase] = true;
   if (!decision || decision.action === "child-probe") return next;
+  if (decision.phaseFrom) next[decision.phaseFrom] = true;
   next[decision.phase] = true;
   for (const flag of decision.flags) {
     next[flag] = true;
@@ -448,6 +452,7 @@ export function formatPlaybookPhaseDecisionForTrace(
     playbookPhaseDecisionPhase: decision.phase,
     playbookPhaseDecisionFlags: decision.flags,
     playbookPhaseDecisionReason: decision.reason,
+    playbookPhaseDecisionFrom: decision.phaseFrom,
     manualPhaseFrom: decision.manualPhaseFrom,
     manualPhaseTo: decision.manualPhaseTo,
     manualPhaseTargetArtifact: decision.targetArtifact,

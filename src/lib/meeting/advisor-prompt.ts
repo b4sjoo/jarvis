@@ -9,7 +9,10 @@ import {
   formatInterviewSessionBriefForPrompt,
   formatInterviewSessionContextForPrompt,
 } from "./interview-session-context";
-import { formatInterviewPlaybookForPrompt } from "./interview-playbook";
+import {
+  formatInterviewPlaybookForPrompt,
+  withInterviewPlaybookPhase,
+} from "./interview-playbook";
 import { formatActiveMeetingTaskForPrompt } from "./active-meeting-task";
 import { formatFactAnchorDecisionForPrompt } from "./fact-anchor-guardrail";
 import { formatPlaybookPhaseDecisionForPrompt } from "./playbook-phase";
@@ -66,6 +69,10 @@ export function buildAdvisorUserMessage(
     context.activeMeetingTask?.screen ??
       (!context.activeMeetingTask && context.activeScreenTask)
   );
+  const runtimePlaybook = withInterviewPlaybookPhase(
+    context.interviewPlaybook,
+    context.playbookPhaseDecision?.phase ?? context.activeMeetingTask?.parent.playbookPhase
+  );
   const contextMode = hasScreenAnchoredTask
     ? "screen-anchored"
     : hasTranscript && hasScreenContext
@@ -102,7 +109,7 @@ export function buildAdvisorUserMessage(
     formatSourceSpecificTaskContext(context),
     "</source_specific_task_context>",
     "<interview_playbook>",
-    formatInterviewPlaybookForPrompt(context.interviewPlaybook),
+    formatInterviewPlaybookForPrompt(runtimePlaybook),
     "</interview_playbook>",
     "<playbook_phase_state>",
     formatPlaybookPhaseDecisionForPrompt(

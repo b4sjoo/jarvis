@@ -22,7 +22,10 @@ import {
   formatInterviewSessionBriefForPrompt,
   formatInterviewSessionContextForPrompt,
 } from "./interview-session-context";
-import { formatInterviewPlaybookForPrompt } from "./interview-playbook";
+import {
+  formatInterviewPlaybookForPrompt,
+  withInterviewPlaybookPhase,
+} from "./interview-playbook";
 import { formatFactAnchorDecisionForPrompt } from "./fact-anchor-guardrail";
 import {
   formatPlaybookPhaseDecisionForPrompt,
@@ -520,6 +523,10 @@ function buildScreenTaskUserMessage({
   playbookPhaseDecision?: PlaybookPhaseDecision;
   factAnchorDecision?: FactAnchorDecision;
 }) {
+  const runtimePlaybook = withInterviewPlaybookPhase(
+    interviewPlaybook,
+    playbookPhaseDecision?.phase
+  );
   const target = observation.captureTarget
     ? formatCaptureTargetForPrompt(observation.captureTarget)
     : "Unknown capture target";
@@ -546,7 +553,7 @@ function buildScreenTaskUserMessage({
     formatScreenPreflightForPrompt(screenPreflight),
     "</screen_preflight>",
     "<interview_playbook>",
-    formatInterviewPlaybookForPrompt(interviewPlaybook),
+    formatInterviewPlaybookForPrompt(runtimePlaybook),
     "</interview_playbook>",
     "<playbook_phase_state>",
     formatPlaybookPhaseDecisionForPrompt(playbookPhaseDecision, undefined),

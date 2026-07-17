@@ -234,6 +234,14 @@ export function formatInterviewPlaybookForPrompt(
     .join("\n");
 }
 
+export function withInterviewPlaybookPhase(
+  playbook: SelectedInterviewPlaybook | undefined,
+  phase: SelectedInterviewPlaybook["phase"] | undefined
+) {
+  if (!playbook || !phase || playbook.phase === phase) return playbook;
+  return { ...playbook, phase };
+}
+
 export function formatInterviewPlaybookForTrace(
   playbook: SelectedInterviewPlaybook | undefined
 ) {

@@ -19,10 +19,36 @@ test("routes general system design whiteboard requests to design framing", () =>
   });
 
   assert.equal(decision.phase, "design_framing");
+  assert.equal(decision.phaseFrom, "requirement_clarification");
   assert.equal(decision.action, "advance");
   assert.ok(decision.flags.includes("whiteboard"));
   assert.ok(decision.flags.includes("architecture"));
   assert.match(formatPlaybookPhaseDecisionForPrompt(decision, undefined), /Whiteboard/);
+});
+
+test("keeps previous phase progress when automatic phase advances", () => {
+  const decision = decidePlaybookPhaseProgression({
+    questionType: "general-system-design",
+    playbookId: "general_system_design",
+    currentPhase: "requirement_clarification",
+    phaseProgress: {},
+    latestTurnText: "Let's move into the high level architecture.",
+    relation: "new-parent",
+  });
+  const progress = applyPlaybookPhaseDecisionToProgress(
+    {},
+    decision,
+    decision.phase
+  );
+
+  assert.equal(decision.phase, "design_framing");
+  assert.equal(decision.phaseFrom, "requirement_clarification");
+  assert.equal(progress.requirement_clarification, true);
+  assert.equal(progress.design_framing, true);
+  assert.equal(
+    formatPlaybookPhaseDecisionForTrace(decision).playbookPhaseDecisionFrom,
+    "requirement_clarification"
+  );
 });
 
 test("marks AI/ML metrics follow-up as evaluation metrics", () => {
