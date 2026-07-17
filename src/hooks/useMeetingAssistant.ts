@@ -3339,7 +3339,7 @@ export function useMeetingAssistant() {
             speechBiasRuleCount: speechBias.correctionRules.length,
           }
         );
-        const turn = await withTimeout(
+        const transcription = await withTimeout(
           transcribeMeetingAudio({
             audio,
             provider: sttProvider,
@@ -3354,23 +3354,58 @@ export function useMeetingAssistant() {
           STT_TIMEOUT_MS,
           "Speech-to-text timed out. Jarvis is still listening."
         );
+        const { rawText, turn, validation } = transcription;
+        const sttValidationMetadata = {
+          sttValidationDisposition: validation.disposition,
+          sttValidationReason: validation.reason,
+          sttPromptSimilarity: validation.promptSimilarity,
+          sttNormalizedTranscriptChars:
+            validation.normalizedTranscriptChars,
+          sttNormalizedPromptChars: validation.normalizedPromptChars,
+          sttAudioDurationMs: validation.audioDurationMs,
+          sttTranscriptCharsPerSecond:
+            validation.transcriptCharsPerSecond,
+          sttDensitySuspicious: validation.densitySuspicious,
+        };
         traceStoreRef.current.finishStep(traceId, sttStepId, "success", {
-          transcriptChars: turn?.text.length ?? 0,
+          transcriptChars: rawText.length,
+          ...sttValidationMetadata,
         });
+        traceStoreRef.current.updateMetadata(
+          traceId,
+          sttValidationMetadata
+        );
+        const validationStepId = traceStoreRef.current.startStep(
+          traceId,
+          "STT output validation",
+          sttValidationMetadata
+        );
+        traceStoreRef.current.finishStep(
+          traceId,
+          validationStepId,
+          "success"
+        );
 
-        if (turn) {
+        if (rawText) {
+          const rejected = validation.disposition === "rejected";
+          const recordedText = rejected ? rawText.slice(0, 2_000) : rawText;
           traceStoreRef.current.recordOutput(
             traceId,
-            "stt raw output",
-            turn.text,
+            rejected ? "stt rejected output" : "stt raw output",
+            recordedText,
             {
-              turnId: turn.id,
+              turnId: turn?.id,
               audioSegmentSeq: segment.sequence,
               audioSessionId: segment.sessionId,
               speaker: segment.speaker,
               source: segment.source,
+              ...sttValidationMetadata,
+              rawOutputTruncated: recordedText.length < rawText.length,
             }
           );
+        }
+
+        if (turn) {
           const normalized = normalizeTranscriptWithSpeechBias(
             turn.text,
             speechBias

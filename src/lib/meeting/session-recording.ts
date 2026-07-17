@@ -143,6 +143,14 @@ export interface SessionCompactTraceSummary {
   playbookSubtype?: string;
   turnGateAction?: string;
   turnGateReason?: string;
+  sttValidation?: {
+    disposition: string;
+    reason?: string;
+    promptSimilarity?: number;
+    audioDurationMs?: number;
+    transcriptCharsPerSecond?: number;
+    densitySuspicious?: boolean;
+  };
   providerId?: string;
   mode?: string;
   responseLength?: string;
@@ -237,6 +245,11 @@ interface SessionTraceKindAggregate {
   captureDurationMs: SessionNumberAggregate;
   sttDurationMs: SessionNumberAggregate;
   advisorDurationMs: SessionNumberAggregate;
+  sttValidation: {
+    accepted: number;
+    empty: number;
+    rejected: number;
+  };
 }
 
 interface SessionNumberAggregate {
@@ -1257,6 +1270,7 @@ function buildCompactTraceSummary({
     playbookSubtype: readFirstString(metadataSources, "playbookSubtype"),
     turnGateAction: readFirstString(metadataSources, "turnGateAction"),
     turnGateReason: readFirstString(metadataSources, "turnGateReason"),
+    sttValidation: buildSttValidationTraceSummary(metadataSources),
     providerId: readString(modelStep?.metadata?.providerId),
     mode: readString(modelStep?.metadata?.mode),
     responseLength: readString(modelStep?.metadata?.responseLength),
@@ -1359,6 +1373,48 @@ function aggregateTraceKind(
     advisorDurationMs: aggregateNumbers(
       summaries.map((summary) => summary.timingsMs.advisor)
     ),
+    sttValidation: {
+      accepted: summaries.filter(
+        (summary) => summary.sttValidation?.disposition === "accepted"
+      ).length,
+      empty: summaries.filter(
+        (summary) => summary.sttValidation?.disposition === "empty"
+      ).length,
+      rejected: summaries.filter(
+        (summary) => summary.sttValidation?.disposition === "rejected"
+      ).length,
+    },
+  };
+}
+
+function buildSttValidationTraceSummary(
+  metadataSources: Record<string, unknown>[]
+): SessionCompactTraceSummary["sttValidation"] {
+  const disposition = readFirstString(
+    metadataSources,
+    "sttValidationDisposition"
+  );
+  if (!disposition) return undefined;
+
+  return {
+    disposition,
+    reason: readFirstString(metadataSources, "sttValidationReason"),
+    promptSimilarity: readFirstNumberFromMetadata(
+      metadataSources,
+      "sttPromptSimilarity"
+    ),
+    audioDurationMs: readFirstNumberFromMetadata(
+      metadataSources,
+      "sttAudioDurationMs"
+    ),
+    transcriptCharsPerSecond: readFirstNumberFromMetadata(
+      metadataSources,
+      "sttTranscriptCharsPerSecond"
+    ),
+    densitySuspicious: readFirstBoolean(
+      metadataSources,
+      "sttDensitySuspicious"
+    ),
   };
 }
 
@@ -1452,13 +1508,25 @@ function readFirstString(
   return undefined;
 }
 
-function readFirstNumber(
+function readFirstNumberFromMetadata(
   metadataSources: Record<string, unknown>[],
   key: string
 ) {
   for (const metadata of metadataSources) {
     const value = readNumber(metadata[key]);
     if (value !== undefined) return value;
+  }
+
+  return undefined;
+}
+
+function readFirstBoolean(
+  metadataSources: Record<string, unknown>[],
+  key: string
+) {
+  for (const metadata of metadataSources) {
+    const value = metadata[key];
+    if (typeof value === "boolean") return value;
   }
 
   return undefined;

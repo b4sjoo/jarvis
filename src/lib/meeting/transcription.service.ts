@@ -2,6 +2,10 @@ import { fetchSTT } from "@/lib/functions";
 import { TYPE_PROVIDER } from "@/types";
 import { SelectedProviderState, TranscriptTurn } from "./types";
 import { createMeetingId } from "./context-manager";
+import {
+  TranscriptValidationDecision,
+  validateTranscriptCandidate,
+} from "./transcript-validation";
 
 export interface TranscribeMeetingAudioParams {
   audio: Blob;
@@ -15,6 +19,12 @@ export interface TranscribeMeetingAudioParams {
   endedAt?: number;
 }
 
+export interface MeetingTranscriptionResult {
+  rawText: string;
+  turn: TranscriptTurn | null;
+  validation: TranscriptValidationDecision;
+}
+
 export async function transcribeMeetingAudio({
   audio,
   provider,
@@ -25,7 +35,7 @@ export async function transcribeMeetingAudio({
   source = "system-audio",
   startedAt,
   endedAt,
-}: TranscribeMeetingAudioParams): Promise<TranscriptTurn | null> {
+}: TranscribeMeetingAudioParams): Promise<MeetingTranscriptionResult> {
   const timestamp = Date.now();
   const text = await fetchSTT({
     provider,
@@ -35,17 +45,33 @@ export async function transcribeMeetingAudio({
     terms,
   });
   const trimmedText = text.trim();
+  const validation = validateTranscriptCandidate({
+    text: trimmedText,
+    speechBiasPrompt: prompt,
+    startedAt,
+    endedAt,
+  });
 
-  if (!trimmedText) return null;
+  if (validation.disposition !== "accepted") {
+    return {
+      rawText: trimmedText,
+      turn: null,
+      validation,
+    };
+  }
 
   return {
-    id: createMeetingId("turn"),
-    speaker,
-    text: trimmedText,
-    startedAt: startedAt ?? timestamp,
-    endedAt: endedAt ?? Date.now(),
-    isFinal: true,
-    source,
+    rawText: trimmedText,
+    validation,
+    turn: {
+      id: createMeetingId("turn"),
+      speaker,
+      text: trimmedText,
+      startedAt: startedAt ?? timestamp,
+      endedAt: endedAt ?? Date.now(),
+      isFinal: true,
+      source,
+    },
   };
 }
 
