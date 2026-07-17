@@ -54,6 +54,7 @@ import {
   getActiveMeetingTaskFocusSummary,
   getActiveMeetingTaskId,
   hasScreenTaskAnswerContent,
+  normalizeCanonicalQuestionType,
   parseScreenTaskAnswer,
   stripOuterCodeFence,
   summarizeMeetingTraces,
@@ -572,6 +573,13 @@ export const MeetingAssistant = ({
       selectedClarifyingAnswerLabel: activeClarifyingSelection?.label,
       isTaskSwitchClarifyingQuestion,
       interviewTypes: editableBriefForFocus.interviewTypes,
+      effectiveQuestionType:
+        normalizeCanonicalQuestionType(
+          meeting.activeMeetingTask?.child?.questionType ?? activeTaskKind
+        ),
+      questionTypeCorrected:
+        meeting.activeScreenTask?.classifier?.overrideSource ===
+        "interview-type-selector",
       activeTask: getActiveMeetingTaskFocusSummary(meeting.activeMeetingTask),
       hasActiveMeetingTask,
       hasActiveScreenTask: hasActiveMeetingScreenContext,
@@ -594,6 +602,8 @@ export const MeetingAssistant = ({
       latestReliableAnswerPreview,
       latestTurn?.text,
       meeting.activeMeetingTask,
+      activeTaskKind,
+      meeting.activeScreenTask?.classifier?.overrideSource,
       hasActiveMeetingTask,
       hasActiveMeetingScreenContext,
       meeting.error,

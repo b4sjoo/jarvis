@@ -5,6 +5,7 @@ import type {
   SpeechCorrection,
 } from "./types";
 import type { getActiveMeetingTaskFocusSummary } from "./active-meeting-task";
+import type { CanonicalQuestionType } from "./task-taxonomy";
 
 export const MEETING_FOCUS_SNAPSHOT_EVENT = "meeting-focus-snapshot";
 export const MEETING_FOCUS_ACTION_EVENT = "meeting-focus-action";
@@ -45,6 +46,8 @@ export type MeetingFocusSnapshot = {
   selectedClarifyingAnswerLabel?: string;
   isTaskSwitchClarifyingQuestion: boolean;
   interviewTypes: InterviewBriefType[];
+  effectiveQuestionType?: CanonicalQuestionType;
+  questionTypeCorrected: boolean;
   activeTask?: MeetingFocusActiveTaskSnapshot;
   hasActiveMeetingTask: boolean;
   hasActiveScreenTask: boolean;
@@ -90,6 +93,8 @@ export const EMPTY_MEETING_FOCUS_SNAPSHOT: MeetingFocusSnapshot = {
   selectedClarifyingAnswerLabel: undefined,
   isTaskSwitchClarifyingQuestion: false,
   interviewTypes: [],
+  effectiveQuestionType: undefined,
+  questionTypeCorrected: false,
   activeTask: undefined,
   hasActiveMeetingTask: false,
   hasActiveScreenTask: false,

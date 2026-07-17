@@ -108,7 +108,9 @@ import {
   updateWhiteboardArtifactFromAnswer,
   SessionRecordingManager,
   areCompatibleQuestionTypes,
+  canQuestionTypeDecisionOverrideParent,
   inferCanonicalQuestionTypeFromText,
+  inferQuestionTypeDecisionFromText,
   isParentCanonicalQuestionType,
   normalizeCanonicalQuestionType,
   normalizeInterviewBriefTypes as normalizeTaxonomyInterviewBriefTypes,
@@ -117,6 +119,7 @@ import {
   readSingleConcreteInterviewTypeOverride as readTaxonomySingleConcreteInterviewTypeOverride,
   toHumanEvalQuestionType,
   toMemoryUseCaseForQuestionType,
+  type QuestionTypeInferenceDecision,
   solveScreenAnchoredTask,
   shouldIncludeTurnInAdvisorPrompt,
   shouldSuppressDuplicateSystemAudioTurn,
@@ -687,6 +690,7 @@ interface AdvisorTurnGateDecision {
 
 interface AdvisorTaskSignals {
   questionType: MemoryQuestionType;
+  questionTypeDecision?: QuestionTypeInferenceDecision;
   askFrame: MemoryAskFrame;
   topicDomain: MemoryTopicDomain;
   projectAnchor?: string;
@@ -2516,6 +2520,9 @@ export function useMeetingAssistant() {
       }
     }
 
+    const questionTypeTraceMetadata =
+      formatAdvisorQuestionTypeDecisionForTrace(advisorTaskSignals);
+
     if (traceId) {
       const playbookMetadata = formatInterviewPlaybookForTrace(advisorPlaybook);
       traceStoreRef.current.updateMetadata(traceId, {
@@ -2528,6 +2535,7 @@ export function useMeetingAssistant() {
         taskRelation: advisorTaskSignals.taskRelation,
         subtaskIntent: advisorTaskSignals.subtaskIntent,
         taskSignalSource: advisorTaskSignals.source,
+        ...questionTypeTraceMetadata,
         openingRouteKind: advisorTaskSignals.openingRoute?.kind,
         openingRouteCommitParent:
           advisorTaskSignals.openingRoute?.commitParent,
@@ -2554,6 +2562,7 @@ export function useMeetingAssistant() {
             taskRelation: advisorTaskSignals.taskRelation,
             subtaskIntent: advisorTaskSignals.subtaskIntent,
             taskSignalSource: advisorTaskSignals.source,
+            ...questionTypeTraceMetadata,
             openingRouteKind: advisorTaskSignals.openingRoute?.kind,
             openingRouteCommitParent:
               advisorTaskSignals.openingRoute?.commitParent,
@@ -2571,6 +2580,7 @@ export function useMeetingAssistant() {
         {
           ...playbookMetadata,
           ...formatPlaybookPhaseDecisionForTrace(playbookPhaseDecision),
+          ...questionTypeTraceMetadata,
         },
         activeMeetingTaskId
       );
@@ -5892,8 +5902,12 @@ function resolveAdvisorTaskSignals(
   const openingRoute = latestUsefulText
     ? detectOpeningTaskRoute(latestUsefulText)
     : undefined;
+  const latestQuestionTypeDecision = latestUsefulText
+    ? inferQuestionTypeDecisionFromText(latestUsefulText)
+    : undefined;
   const latestQuestionType = openingRoute?.questionType ??
-    (latestUsefulText ? inferMemoryQuestionTypeFromQuery(latestUsefulText) : "unknown");
+    latestQuestionTypeDecision?.type ??
+    "unknown";
   const latestAskFrame =
     openingRoute?.askFrame ??
     (latestUsefulText ? inferMemoryAskFrameFromQuery(latestUsefulText) : "unknown");
@@ -5915,16 +5929,28 @@ function resolveAdvisorTaskSignals(
       latestUsefulText &&
       (hasQuestionOrTaskSignal(latestUsefulText) ||
         isTaskSwitchTranscript(latestUsefulText));
+    const latestHasParentOverrideAuthority = Boolean(
+      openingRoute ||
+        canQuestionTypeDecisionOverrideParent(latestQuestionTypeDecision)
+    );
+    const useLatestAsChild = shouldUseLatestTurnAsChildProbe({
+      activeQuestionType,
+      latestQuestionType,
+      latestText: latestUsefulText,
+    });
     const shouldStartNewParent =
       Boolean(latestLooksLikeTask) &&
+      latestHasParentOverrideAuthority &&
       activeParentKind !== undefined &&
       latestIsParentKind &&
       latestParentKind !== undefined &&
-      !isCompatibleParentKind(activeParentKind, latestParentKind);
+      !isCompatibleParentKind(activeParentKind, latestParentKind) &&
+      (!useLatestAsChild || isTaskSwitchTranscript(latestUsefulText));
 
     if (shouldStartNewParent) {
       return {
         questionType: latestQuestionType,
+        questionTypeDecision: latestQuestionTypeDecision,
         askFrame: latestAskFrame,
         topicDomain: latestTopicDomain,
         query: buildFocusedAdvisorTaskQuery(context, latestUsefulText),
@@ -5940,15 +5966,10 @@ function resolveAdvisorTaskSignals(
       };
     }
 
-    const useLatestAsChild = shouldUseLatestTurnAsChildProbe({
-      activeQuestionType,
-      latestQuestionType,
-      latestText: latestUsefulText,
-    });
-
     if (useLatestAsChild) {
       return {
         questionType: latestQuestionType,
+        questionTypeDecision: latestQuestionTypeDecision,
         askFrame: latestAskFrame,
         topicDomain: latestTopicDomain,
         query: buildFocusedAdvisorTaskQuery(context, latestUsefulText),
@@ -5988,6 +6009,7 @@ function resolveAdvisorTaskSignals(
 
     return {
       questionType: activeQuestionType,
+      questionTypeDecision: latestQuestionTypeDecision,
       askFrame:
         getAdvisorActiveAskFrame(context) ??
         latestAskFrame ??
@@ -6016,6 +6038,7 @@ function resolveAdvisorTaskSignals(
 
   return {
     questionType,
+    questionTypeDecision: latestQuestionTypeDecision,
     askFrame:
       latestAskFrame !== "unknown"
         ? latestAskFrame
@@ -6033,6 +6056,56 @@ function resolveAdvisorTaskSignals(
     source: openingRoute?.source ?? (latestUsefulText ? "latest-turn" : "fallback-query"),
     reuseActivePlaybook: false,
     openingRoute,
+  };
+}
+
+function formatAdvisorQuestionTypeDecisionForTrace(
+  signals: AdvisorTaskSignals
+) {
+  if (signals.openingRoute) {
+    return {
+      questionTypeInferenceType: signals.questionType,
+      questionTypeConfidence: 1,
+      questionTypeMargin: 1,
+      questionTypeEvidence: [
+        `opening-route:${signals.openingRoute.kind}`,
+      ],
+      ambiguousCodingTerms:
+        signals.questionTypeDecision?.ambiguousTerms ?? [],
+      questionTypeScores: signals.questionTypeDecision?.scores ?? {},
+      questionTypeDecisionSource: signals.openingRoute.source,
+      pastProjectSignals:
+        signals.questionType === "project-deep-dive"
+          ? [`opening-route:${signals.openingRoute.kind}`]
+          : [],
+    };
+  }
+
+  const decision = signals.questionTypeDecision;
+  if (!decision) {
+    return {
+      questionTypeInferenceType: "unknown",
+      questionTypeConfidence: 0,
+      questionTypeMargin: 0,
+      questionTypeEvidence: [],
+      ambiguousCodingTerms: [],
+      questionTypeScores: {},
+      questionTypeDecisionSource: signals.source,
+      pastProjectSignals: [],
+    };
+  }
+
+  return {
+    questionTypeInferenceType: decision.type ?? "unknown",
+    questionTypeConfidence: decision.confidence,
+    questionTypeMargin: decision.margin,
+    questionTypeEvidence: decision.evidence,
+    ambiguousCodingTerms: decision.ambiguousTerms,
+    questionTypeScores: decision.scores,
+    questionTypeDecisionSource: decision.source,
+    pastProjectSignals: decision.evidence.filter((item) =>
+      item.includes("project")
+    ),
   };
 }
 

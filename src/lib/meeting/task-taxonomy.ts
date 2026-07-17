@@ -37,6 +37,33 @@ export type TaxonomyInterviewBriefType =
   | "project-deep-dive"
   | "mixed";
 
+export type QuestionTypeInferenceSource = "lightweight-text";
+
+export interface QuestionTypeInferenceDecision {
+  type?: CanonicalQuestionType;
+  confidence: number;
+  margin: number;
+  source: QuestionTypeInferenceSource;
+  evidence: string[];
+  ambiguousTerms: string[];
+  scores: Partial<Record<CanonicalQuestionType, number>>;
+}
+
+export const QUESTION_TYPE_INFERENCE_MIN_CONFIDENCE = 0.65;
+export const QUESTION_TYPE_INFERENCE_MIN_MARGIN = 0.2;
+export const QUESTION_TYPE_PARENT_OVERRIDE_CONFIDENCE = 0.8;
+export const QUESTION_TYPE_PARENT_OVERRIDE_MARGIN = 0.25;
+
+export function canQuestionTypeDecisionOverrideParent(
+  decision: QuestionTypeInferenceDecision | undefined
+) {
+  return Boolean(
+    decision?.type &&
+      decision.confidence >= QUESTION_TYPE_PARENT_OVERRIDE_CONFIDENCE &&
+      decision.margin >= QUESTION_TYPE_PARENT_OVERRIDE_MARGIN
+  );
+}
+
 export const CANONICAL_QUESTION_TYPES: CanonicalQuestionType[] = [
   "behavioral",
   "coding",
@@ -294,55 +321,210 @@ export function normalizeMemoryInterviewTypes(
   return normalized.length ? Array.from(new Set(normalized)) : undefined;
 }
 
+export function inferQuestionTypeDecisionFromText(
+  text: string
+): QuestionTypeInferenceDecision {
+  const normalized = text.toLowerCase();
+  const scores: Partial<Record<CanonicalQuestionType, number>> = {};
+  const evidence: string[] = [];
+  const ambiguousTerms = collectQuestionTypeTerms(normalized);
+
+  if (!normalized.trim()) {
+    return {
+      confidence: 0,
+      margin: 0,
+      source: "lightweight-text",
+      evidence,
+      ambiguousTerms,
+      scores,
+    };
+  }
+
+  const addEvidence = (
+    type: CanonicalQuestionType,
+    score: number,
+    label: string
+  ) => {
+    scores[type] = Math.max(scores[type] ?? 0, score);
+    if (!evidence.includes(label)) evidence.push(label);
+  };
+
+  const hasBehavioralFrame =
+    /\b(tell me about a time|give me an example|describe a time|conflict|disagree|missed a commitment|leadership principle|ownership|failure|mistake)\b/.test(
+      normalized
+    );
+
+  if (hasBehavioralFrame) {
+    addEvidence("behavioral", 1, "behavioral-story-frame");
+  }
+
+  const hasStrongPastProjectFrame =
+    /\b(have you|did you|when you|how did you|what was your|who were your|walk me through|tell me about|describe)\b.{0,100}\b(shipped|built|implemented|owned|launched|deployed|operated|scaled|tested|validated|project|system|feature|contribution|role|partners|stakeholders)\b/.test(
+      normalized
+    ) ||
+    /\b(your|personal|specific)\s+(contribution|role|ownership|impact|work)\b/.test(
+      normalized
+    ) ||
+    /\b(system you built|tradeoff you made|impact of your project|previous project|past project|your work on|project deep dive|project dive|technical deep dive)\b/.test(
+      normalized
+    ) ||
+    /\bwhat\b.{0,80}\b(api|backend|database|vector|cache|storage|framework|technology|technologies|systems?)\b.{0,40}\bdid you use\b/.test(
+      normalized
+    ) ||
+    /\bhow did you (test|validate|launch|deploy|operate|scale|monitor) (it|this|that|the system|the feature)\b/.test(
+      normalized
+    ) ||
+    /\bwho were your (primary )?(partners|stakeholders|collaborators)\b/.test(
+      normalized
+    );
+  const hasProjectStackContext =
+    /\b(your|personal|our|production|backend|frontend|full|technology|technical|tech)\s+(contribution to the )?stack\b/.test(
+      normalized
+    );
+  const hasExplicitProjectStackFrame =
+    /\bwhat is your (tech|technology|technical) stack\b/.test(normalized) ||
+    /\b(your|personal|specific) contribution to (the )?stack\b/.test(
+      normalized
+    ) ||
+    /\bstack (you|your team) (built|used|owned|shipped)\b/.test(normalized);
+  const hasProductionProjectContext =
+    /\b(in|into|before|to) production\b/.test(normalized) &&
+    /\b(you|your|did|shipped|built|implemented|tested|launched|deployed)\b/.test(
+      normalized
+    );
+
+  if (!hasBehavioralFrame && hasStrongPastProjectFrame) {
+    addEvidence("project-deep-dive", 0.95, "past-project-intent");
+  }
+  if (!hasBehavioralFrame && hasExplicitProjectStackFrame) {
+    addEvidence("project-deep-dive", 0.92, "project-stack-context");
+  }
+  if (!hasBehavioralFrame && hasProductionProjectContext) {
+    addEvidence("project-deep-dive", 0.86, "production-project-context");
+  }
+
+  const hasCodingActionObject =
+    /\b(write|implement|complete|code)\s+(a |an |the |this |that )?(function|method|class|algorithm|stack|queue|heap|binary tree|linked list|graph|sort|sorting|search|solution)\b/.test(
+      normalized
+    ) ||
+    /\b(solve|code)\s+(this|the|a)\s+(problem|question|algorithm)\b/.test(
+      normalized
+    );
+  const hasCodingArtifact =
+    /\b(leetcode|hackerrank|coding problem|class solution|test cases?|input array|output array|return the|function signature)\b/.test(
+      normalized
+    ) || /\b(def|function|public static|class)\s+[a-z_$][\w$]*\s*\(/.test(normalized);
+  const hasComplexityRequest =
+    /\b(time|space) complexity\b|\bbig[ -]?o\b/.test(normalized);
+
+  if (hasCodingActionObject) {
+    addEvidence("coding", 0.96, "coding-action-object");
+  }
+  if (hasCodingArtifact) {
+    addEvidence("coding", 0.94, "coding-artifact");
+  }
+  if (hasComplexityRequest) {
+    addEvidence("coding", 0.9, "complexity-request");
+  }
+
+  const hasHypotheticalDesignFrame =
+    /\bsystem design\b/.test(normalized) ||
+    /\b(design|architect|build)\s+(a|an|the|this)\b/.test(normalized) ||
+    /\b(how would you|can you|please)\s+(design|architect|build|implement)\b/.test(
+      normalized
+    ) ||
+    /\b(implement|build)\s+(a|an|the)\s+(scalable|distributed|highly available|fault tolerant)\b/.test(
+      normalized
+    );
+  const hasSystemDesignObject =
+    /\b(system|service|platform|application|app|api|backend|pipeline|architecture|infrastructure|distributed system|ticketing|booking|chat|feed|rate limiter)\b/.test(
+      normalized
+    );
+  const hasScaleOrRequirementContext =
+    /\b(qps|throughput|traffic|scale|scalable|availability|reliability|latency|storage|database|microservice|requirements?|consistency|partition|load balancer)\b/.test(
+      normalized
+    );
+  const hasAimlContext =
+    /\b(ai|ml|machine learning|llm|rag|retrieval augmented|embedding|vector|model serving|agent|evaluation|eval|fine-tuning|feature store|recommender)\b/.test(
+      normalized
+    );
+  const hasStrongSystemDesignFrame =
+    !hasStrongPastProjectFrame &&
+    !hasExplicitProjectStackFrame &&
+    hasHypotheticalDesignFrame &&
+    (hasSystemDesignObject || hasScaleOrRequirementContext);
+
+  if (hasStrongSystemDesignFrame && hasAimlContext) {
+    addEvidence("ai-ml-system-design", 0.96, "hypothetical-ai-ml-design");
+  } else if (hasStrongSystemDesignFrame) {
+    addEvidence("general-system-design", 0.93, "hypothetical-system-design");
+  }
+
+  const hasConceptQuestion =
+    /\b(what is|what are|explain|compare|why|how does|tradeoff|trade-off|pros and cons|advantages|disadvantages)\b/.test(
+      normalized
+    );
+  if (
+    hasConceptQuestion &&
+    !hasBehavioralFrame &&
+    !hasStrongPastProjectFrame &&
+    !hasExplicitProjectStackFrame &&
+    !hasStrongSystemDesignFrame &&
+    !hasComplexityRequest
+  ) {
+    addEvidence("field-knowledge", 0.88, "direct-concept-question");
+  }
+
+  if (/\b(implement|build|write|solve)\b/.test(normalized)) {
+    evidence.push("weak-action-verb");
+  }
+  if (hasProjectStackContext && !hasExplicitProjectStackFrame) {
+    evidence.push("ambiguous-stack-context");
+  }
+
+  const ranked = Object.entries(scores)
+    .map(([type, score]) => ({
+      type: type as CanonicalQuestionType,
+      score,
+    }))
+    .sort((left, right) => right.score - left.score);
+  const top = ranked[0];
+  const runnerUp = ranked[1];
+  const confidence = roundTaxonomyScore(top?.score ?? 0);
+  const margin = roundTaxonomyScore(
+    Math.max(0, (top?.score ?? 0) - (runnerUp?.score ?? 0))
+  );
+  const type =
+    top &&
+    confidence >= QUESTION_TYPE_INFERENCE_MIN_CONFIDENCE &&
+    margin >= QUESTION_TYPE_INFERENCE_MIN_MARGIN
+      ? top.type
+      : undefined;
+
+  return {
+    type,
+    confidence,
+    margin,
+    source: "lightweight-text",
+    evidence,
+    ambiguousTerms,
+    scores,
+  };
+}
+
 export function inferCanonicalQuestionTypeFromText(
   text: string
 ): CanonicalQuestionType | undefined {
-  const normalized = text.toLowerCase();
-  if (!normalized.trim()) return undefined;
+  return inferQuestionTypeDecisionFromText(text).type;
+}
 
-  if (
-    /\b(leetcode|algorithm|coding|complexity|typescript|javascript|python|java|rust|go|golang|dp|dynamic programming|binary tree|graph|heap|stack|queue)\b/.test(
-      normalized
-    )
-  ) {
-    return "coding";
-  }
+function collectQuestionTypeTerms(text: string) {
+  const terms = text.match(
+    /\b(implement|build|write|solve|typescript|javascript|python|java|rust|go|golang|algorithm|binary tree|linked list|graph|heap|stack|queue|dp|dynamic programming)\b/g
+  );
+  return terms ? Array.from(new Set(terms)) : [];
+}
 
-  if (
-    /\b(tell me about a time|give me an example|describe a time|conflict|disagree|missed a commitment|leadership principle|ownership|failure|mistake)\b/.test(
-      normalized
-    )
-  ) {
-    return "behavioral";
-  }
-
-  if (
-    /\b(project deep dive|project dive|technical deep dive|walk me through your project|your role|system you built|tradeoff you made|impact of your project|previous project|past project|your work on)\b/.test(
-      normalized
-    )
-  ) {
-    return "project-deep-dive";
-  }
-
-  const hasDesignSignal =
-    /\b(system design|design a|design an|architect|architecture|build a|scalability|serving path|pipeline|distributed system)\b/.test(
-      normalized
-    );
-  const hasAimlSignal =
-    /\b(ai|ml|machine learning|llm|rag|retrieval augmented|embedding|vector|model serving|agent|evaluation|eval|fine-tuning|feature store)\b/.test(
-      normalized
-    );
-
-  if (hasDesignSignal && hasAimlSignal) return "ai-ml-system-design";
-  if (hasDesignSignal) return "general-system-design";
-
-  if (
-    /\b(what is|what are|explain|compare|why|how does|tradeoff|trade-off|pros and cons|advantages|disadvantages)\b/.test(
-      normalized
-    )
-  ) {
-    return "field-knowledge";
-  }
-
-  return undefined;
+function roundTaxonomyScore(value: number) {
+  return Math.round(value * 100) / 100;
 }

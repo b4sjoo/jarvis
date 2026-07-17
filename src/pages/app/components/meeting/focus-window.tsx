@@ -6,6 +6,7 @@ import {
   ScrollArea,
 } from "@/components";
 import type {
+  CanonicalQuestionType,
   ClarifyingQuestionAnswer,
   InterviewBriefType,
   MeetingFocusAction,
@@ -210,10 +211,22 @@ function MeetingFocusControlsWindow({
   snapshot: MeetingFocusSnapshot;
 }) {
   const [correction, setCorrection] = useState("");
+  const [pendingTypeCorrection, setPendingTypeCorrection] = useState<{
+    type: CanonicalQuestionType;
+    sawBusy: boolean;
+  } | null>(null);
   const interviewTypes = snapshot.interviewTypes;
   const hasActiveTask = Boolean(snapshot.activeTask);
 
   const updateInterviewTypes = (type: InterviewBriefType) => {
+    const correctionTarget = toCanonicalFocusQuestionType(type);
+    if (
+      hasActiveTask &&
+      correctionTarget &&
+      correctionTarget !== snapshot.effectiveQuestionType
+    ) {
+      setPendingTypeCorrection({ type: correctionTarget, sawBusy: false });
+    }
     sendFocusAction({
       type: "update-interview-types",
       interviewTypes: toggleInterviewBriefType(
@@ -223,6 +236,43 @@ function MeetingFocusControlsWindow({
       ),
     });
   };
+
+  useEffect(() => {
+    if (!pendingTypeCorrection) return;
+
+    if (snapshot.isBusy && !pendingTypeCorrection.sawBusy) {
+      setPendingTypeCorrection((current) =>
+        current ? { ...current, sawBusy: true } : current
+      );
+      return;
+    }
+
+    if (
+      pendingTypeCorrection.sawBusy &&
+      !snapshot.isBusy &&
+      snapshot.effectiveQuestionType === pendingTypeCorrection.type
+    ) {
+      setPendingTypeCorrection(null);
+    }
+  }, [
+    pendingTypeCorrection,
+    snapshot.effectiveQuestionType,
+    snapshot.isBusy,
+  ]);
+
+  const effectiveTypeLabel = formatFocusQuestionType(
+    snapshot.effectiveQuestionType
+  );
+  const typeStatusLabel = pendingTypeCorrection
+    ? `Correcting to ${formatFocusQuestionType(pendingTypeCorrection.type)}...`
+    : `Current: ${effectiveTypeLabel}${
+        snapshot.questionTypeCorrected ? " · corrected" : ""
+      }`;
+  const typeStatusTitle = snapshot.activeTask?.child
+    ? `${typeStatusLabel}; parent: ${formatFocusQuestionType(
+        snapshot.activeTask.questionType
+      )}`
+    : typeStatusLabel;
 
   const submitCorrection = () => {
     const trimmed = correction.trim();
@@ -239,6 +289,16 @@ function MeetingFocusControlsWindow({
           <div className="shrink-0 text-[10px] font-medium uppercase text-muted-foreground">
             Type
           </div>
+          <Badge
+            variant="outline"
+            className="h-7 max-w-[180px] shrink-0 rounded-md px-2 text-[10px]"
+            title={typeStatusTitle}
+          >
+            {pendingTypeCorrection ? (
+              <Loader2Icon className="mr-1 h-3 w-3 shrink-0 animate-spin" />
+            ) : null}
+            <span className="truncate">{typeStatusLabel}</span>
+          </Badge>
           <div className="flex min-w-0 flex-wrap gap-1.5">
             {interviewBriefTypeOptions.map((option) => {
               const selected = interviewTypes.includes(option.id);
@@ -514,6 +574,23 @@ function toggleInterviewBriefType(
     concreteTypes.length === concreteInterviewBriefTypes.length;
 
   return allConcreteSelected ? [...concreteTypes, "mixed"] : concreteTypes;
+}
+
+function toCanonicalFocusQuestionType(
+  type: InterviewBriefType
+): CanonicalQuestionType | undefined {
+  if (type === "mixed") return undefined;
+  return type === "system-design" ? "general-system-design" : type;
+}
+
+function formatFocusQuestionType(type: string | undefined) {
+  if (type === "behavioral") return "Behavioral";
+  if (type === "coding") return "Coding";
+  if (type === "general-system-design") return "General SD";
+  if (type === "ai-ml-system-design") return "AI/ML SD";
+  if (type === "project-deep-dive") return "Project";
+  if (type === "field-knowledge") return "Field Knowledge";
+  return "Unknown";
 }
 
 function formatChineseThinkingText(value: string) {
