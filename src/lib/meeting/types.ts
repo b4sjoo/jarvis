@@ -406,6 +406,48 @@ export interface ActiveInterviewParent {
   revisions: number;
 }
 
+export type ManualQuestionTypeCorrectionSource =
+  | "focus-mode"
+  | "normal-mode";
+
+export type ManualQuestionTypeCorrectionTarget =
+  | "parent"
+  | "child"
+  | "resume-parent";
+
+export type ManualQuestionTypeCorrectionStatus =
+  | "pending"
+  | "applied"
+  | "failed";
+
+export type ManualQuestionTypeRegenerationStatus =
+  | "idle"
+  | "running"
+  | "succeeded"
+  | "failed"
+  | "cancelled";
+
+export interface ManualQuestionTypeCorrection {
+  eventId: string;
+  taskId: string;
+  parentTaskId: string;
+  childTaskId?: string;
+  questionId: string;
+  source: ManualQuestionTypeCorrectionSource;
+  target: ManualQuestionTypeCorrectionTarget;
+  detectedType: CanonicalQuestionType;
+  correctedType: CanonicalQuestionType;
+  correctionTraceId: string;
+  regenerationTraceId?: string;
+  evaluationId?: string;
+  status: ManualQuestionTypeCorrectionStatus;
+  regenerationStatus: ManualQuestionTypeRegenerationStatus;
+  requestedAt: number;
+  appliedAt?: number;
+  completedAt?: number;
+  error?: string;
+}
+
 export type InterviewSessionContextSource =
   | "transcript"
   | "screen"
@@ -793,6 +835,10 @@ export interface QuestionHumanEvaluation {
   traceIds: string[];
   questionType?: HumanEvalQuestionType;
   correctedQuestionType?: HumanEvalQuestionType;
+  manualQuestionTypeCorrectionId?: string;
+  manualQuestionTypeCorrectionTraceId?: string;
+  manualQuestionTypeRegenerationTraceId?: string;
+  manualQuestionTypeCorrectionSource?: ManualQuestionTypeCorrectionSource;
   company?: string;
   correctedCompany?: string;
   relation?: string;
@@ -834,6 +880,7 @@ export interface MeetingAssistantState {
   activeScreenTask?: ActiveScreenTask;
   activeInterviewTask?: ActiveInterviewParent;
   activeMeetingTask?: ActiveMeetingTask;
+  manualQuestionTypeCorrection?: ManualQuestionTypeCorrection;
   traces: MeetingTrace[];
   latestSuggestion: AdvisorSuggestion | null;
   latestReliableSuggestion: AdvisorSuggestion | null;

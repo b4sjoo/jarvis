@@ -2,6 +2,8 @@ import type {
   ClarifyingQuestionAnswer,
   ClarifyingQuestionOption,
   InterviewBriefType,
+  ManualQuestionTypeCorrection,
+  ManualQuestionTypeCorrectionSource,
   SpeechCorrection,
 } from "./types";
 import type { getActiveMeetingTaskFocusSummary } from "./active-meeting-task";
@@ -48,6 +50,7 @@ export type MeetingFocusSnapshot = {
   interviewTypes: InterviewBriefType[];
   effectiveQuestionType?: CanonicalQuestionType;
   questionTypeCorrected: boolean;
+  manualQuestionTypeCorrection?: ManualQuestionTypeCorrection;
   activeTask?: MeetingFocusActiveTaskSnapshot;
   hasActiveMeetingTask: boolean;
   hasActiveScreenTask: boolean;
@@ -60,6 +63,11 @@ export type MeetingFocusAction =
   | { type: "regenerate" }
   | { type: "capture-screen" }
   | { type: "submit-correction"; correction: string }
+  | {
+      type: "correct-question-type";
+      correctedType: CanonicalQuestionType;
+      source: ManualQuestionTypeCorrectionSource;
+    }
   | { type: "update-interview-types"; interviewTypes: InterviewBriefType[] }
   | {
       type: "clarifying-answer";
@@ -95,6 +103,7 @@ export const EMPTY_MEETING_FOCUS_SNAPSHOT: MeetingFocusSnapshot = {
   interviewTypes: [],
   effectiveQuestionType: undefined,
   questionTypeCorrected: false,
+  manualQuestionTypeCorrection: undefined,
   activeTask: undefined,
   hasActiveMeetingTask: false,
   hasActiveScreenTask: false,

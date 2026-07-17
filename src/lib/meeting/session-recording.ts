@@ -9,6 +9,7 @@ import {
   MeetingSessionRecordingState,
   MeetingTrace,
   MeetingTraceExportTrigger,
+  ManualQuestionTypeCorrection,
   QuestionHumanEvaluation,
   ScreenObservation,
   TraceHumanEvaluation,
@@ -70,6 +71,7 @@ interface SessionRecordingEvent {
     | "question-human-evaluation"
     | "task-snapshot"
     | "active-meeting-task-snapshot"
+    | "manual-question-type-correction"
     | "runtime-reset"
     | "runtime-continued"
     | "error";
@@ -660,6 +662,46 @@ export class SessionRecordingManager {
       [path, snapshotsPath],
       traceId,
       task.id
+    );
+  }
+
+  recordManualQuestionTypeCorrection(
+    correction: ManualQuestionTypeCorrection
+  ) {
+    const session = this.activeSession;
+    if (!session) return;
+
+    const path = `tasks/${sanitizeFilePart(
+      correction.taskId
+    )}/manual-question-type-corrections.jsonl`;
+    session.recordedTaskIds.add(correction.taskId);
+    session.recordedTaskIds.add(correction.parentTaskId);
+    session.recordedTraceIds.add(correction.correctionTraceId);
+    if (correction.regenerationTraceId) {
+      session.recordedTraceIds.add(correction.regenerationTraceId);
+    }
+    this.enqueue(() => this.appendJsonl(path, correction));
+    this.recordEvent(
+      "manual-question-type-correction",
+      {
+        manualQuestionTypeCorrectionId: correction.eventId,
+        questionId: correction.questionId,
+        parentTaskId: correction.parentTaskId,
+        childTaskId: correction.childTaskId,
+        detectedQuestionType: correction.detectedType,
+        correctedQuestionType: correction.correctedType,
+        correctionSource: correction.source,
+        correctionTarget: correction.target,
+        correctionStatus: correction.status,
+        regenerationStatus: correction.regenerationStatus,
+        correctionTraceId: correction.correctionTraceId,
+        regenerationTraceId: correction.regenerationTraceId,
+        evaluationId: correction.evaluationId,
+        error: correction.error,
+      },
+      [path],
+      correction.correctionTraceId,
+      correction.taskId
     );
   }
 
@@ -1266,7 +1308,10 @@ function buildCompactTraceSummary({
     topicDomain: readFirstString(metadataSources, "topicDomain"),
     projectAnchor: readFirstString(metadataSources, "projectAnchor"),
     playbookId: readFirstString(metadataSources, "playbookId"),
-    playbookPhase: readFirstString(metadataSources, "playbookPhase"),
+    playbookPhase:
+      readFirstString(metadataSources, "activeMeetingParentPhase") ??
+      readFirstString(metadataSources, "playbookPhaseDecisionPhase") ??
+      readFirstString(metadataSources, "playbookPhase"),
     playbookSubtype: readFirstString(metadataSources, "playbookSubtype"),
     turnGateAction: readFirstString(metadataSources, "turnGateAction"),
     turnGateReason: readFirstString(metadataSources, "turnGateReason"),

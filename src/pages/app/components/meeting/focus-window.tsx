@@ -211,22 +211,26 @@ function MeetingFocusControlsWindow({
   snapshot: MeetingFocusSnapshot;
 }) {
   const [correction, setCorrection] = useState("");
-  const [pendingTypeCorrection, setPendingTypeCorrection] = useState<{
-    type: CanonicalQuestionType;
-    sawBusy: boolean;
-  } | null>(null);
   const interviewTypes = snapshot.interviewTypes;
   const hasActiveTask = Boolean(snapshot.activeTask);
+  const activeCorrection =
+    snapshot.manualQuestionTypeCorrection?.taskId === snapshot.activeTask?.id
+      ? snapshot.manualQuestionTypeCorrection
+      : undefined;
 
   const updateInterviewTypes = (type: InterviewBriefType) => {
     const correctionTarget = toCanonicalFocusQuestionType(type);
-    if (
-      hasActiveTask &&
-      correctionTarget &&
-      correctionTarget !== snapshot.effectiveQuestionType
-    ) {
-      setPendingTypeCorrection({ type: correctionTarget, sawBusy: false });
+    if (hasActiveTask) {
+      if (correctionTarget) {
+        sendFocusAction({
+          type: "correct-question-type",
+          correctedType: correctionTarget,
+          source: "focus-mode",
+        });
+      }
+      return;
     }
+
     sendFocusAction({
       type: "update-interview-types",
       interviewTypes: toggleInterviewBriefType(
@@ -237,37 +241,23 @@ function MeetingFocusControlsWindow({
     });
   };
 
-  useEffect(() => {
-    if (!pendingTypeCorrection) return;
-
-    if (snapshot.isBusy && !pendingTypeCorrection.sawBusy) {
-      setPendingTypeCorrection((current) =>
-        current ? { ...current, sawBusy: true } : current
-      );
-      return;
-    }
-
-    if (
-      pendingTypeCorrection.sawBusy &&
-      !snapshot.isBusy &&
-      snapshot.effectiveQuestionType === pendingTypeCorrection.type
-    ) {
-      setPendingTypeCorrection(null);
-    }
-  }, [
-    pendingTypeCorrection,
-    snapshot.effectiveQuestionType,
-    snapshot.isBusy,
-  ]);
-
   const effectiveTypeLabel = formatFocusQuestionType(
     snapshot.effectiveQuestionType
   );
-  const typeStatusLabel = pendingTypeCorrection
-    ? `Correcting to ${formatFocusQuestionType(pendingTypeCorrection.type)}...`
-    : `Current: ${effectiveTypeLabel}${
-        snapshot.questionTypeCorrected ? " · corrected" : ""
-      }`;
+  const correctionRunning =
+    activeCorrection?.status === "pending" ||
+    activeCorrection?.regenerationStatus === "running";
+  const typeStatusLabel = correctionRunning
+    ? `Correcting to ${formatFocusQuestionType(
+        activeCorrection.correctedType
+      )}...`
+    : activeCorrection?.regenerationStatus === "failed"
+      ? `Corrected: ${formatFocusQuestionType(
+          activeCorrection.correctedType
+        )} · retry failed`
+      : `Current: ${effectiveTypeLabel}${
+          snapshot.questionTypeCorrected ? " · corrected" : ""
+        }`;
   const typeStatusTitle = snapshot.activeTask?.child
     ? `${typeStatusLabel}; parent: ${formatFocusQuestionType(
         snapshot.activeTask.questionType
@@ -294,27 +284,33 @@ function MeetingFocusControlsWindow({
             className="h-7 max-w-[180px] shrink-0 rounded-md px-2 text-[10px]"
             title={typeStatusTitle}
           >
-            {pendingTypeCorrection ? (
+            {correctionRunning ? (
               <Loader2Icon className="mr-1 h-3 w-3 shrink-0 animate-spin" />
             ) : null}
             <span className="truncate">{typeStatusLabel}</span>
           </Badge>
           <div className="flex min-w-0 flex-wrap gap-1.5">
-            {interviewBriefTypeOptions.map((option) => {
-              const selected = interviewTypes.includes(option.id);
-              return (
-                <Button
-                  key={option.id}
-                  size="sm"
-                  variant={selected ? "default" : "outline"}
-                  className="h-8 min-w-[88px] shrink-0 px-3 text-[10px]"
-                  title={option.label}
-                  onClick={() => updateInterviewTypes(option.id)}
-                >
-                  {option.shortLabel}
-                </Button>
-              );
-            })}
+            {interviewBriefTypeOptions
+              .filter((option) => !hasActiveTask || option.id !== "mixed")
+              .map((option) => {
+                const selected = hasActiveTask
+                  ? toCanonicalFocusQuestionType(option.id) ===
+                    snapshot.effectiveQuestionType
+                  : interviewTypes.includes(option.id);
+                return (
+                  <Button
+                    key={option.id}
+                    size="sm"
+                    variant={selected ? "default" : "outline"}
+                    className="h-8 min-w-[88px] shrink-0 px-3 text-[10px]"
+                    title={option.label}
+                    onClick={() => updateInterviewTypes(option.id)}
+                    disabled={correctionRunning}
+                  >
+                    {option.shortLabel}
+                  </Button>
+                );
+              })}
           </div>
           <Badge
             variant="outline"

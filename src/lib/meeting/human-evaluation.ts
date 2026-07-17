@@ -173,6 +173,18 @@ export function upsertQuestionHumanEvaluation(
     correctedQuestionType:
       normalizeHumanEvalQuestionType(patch.correctedQuestionType) ??
       existing?.correctedQuestionType,
+    manualQuestionTypeCorrectionId:
+      patch.manualQuestionTypeCorrectionId ??
+      existing?.manualQuestionTypeCorrectionId,
+    manualQuestionTypeCorrectionTraceId:
+      patch.manualQuestionTypeCorrectionTraceId ??
+      existing?.manualQuestionTypeCorrectionTraceId,
+    manualQuestionTypeRegenerationTraceId:
+      patch.manualQuestionTypeRegenerationTraceId ??
+      existing?.manualQuestionTypeRegenerationTraceId,
+    manualQuestionTypeCorrectionSource:
+      patch.manualQuestionTypeCorrectionSource ??
+      existing?.manualQuestionTypeCorrectionSource,
     company: patch.company ?? existing?.company ?? identity.company,
     correctedCompany:
       patch.correctedCompany ?? existing?.correctedCompany,
@@ -393,6 +405,20 @@ function normalizeQuestionHumanEvaluation(
     correctedQuestionType: normalizeHumanEvalQuestionType(
       candidate.correctedQuestionType
     ),
+    manualQuestionTypeCorrectionId: readOptionalString(
+      candidate.manualQuestionTypeCorrectionId
+    ),
+    manualQuestionTypeCorrectionTraceId: readOptionalString(
+      candidate.manualQuestionTypeCorrectionTraceId
+    ),
+    manualQuestionTypeRegenerationTraceId: readOptionalString(
+      candidate.manualQuestionTypeRegenerationTraceId
+    ),
+    manualQuestionTypeCorrectionSource:
+      candidate.manualQuestionTypeCorrectionSource === "focus-mode" ||
+      candidate.manualQuestionTypeCorrectionSource === "normal-mode"
+        ? candidate.manualQuestionTypeCorrectionSource
+        : undefined,
     company: readOptionalString(candidate.company),
     correctedCompany: readOptionalString(candidate.correctedCompany),
     relation: readOptionalString(candidate.relation),

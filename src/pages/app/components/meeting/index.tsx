@@ -17,6 +17,7 @@ import { useMeetingAssistant, useShortcuts, useWindowResize } from "@/hooks";
 import type {
   ClarifyingQuestionAnswer,
   ClarifyingQuestionOption,
+  CanonicalQuestionType,
   AdvisorSuggestion,
   HumanEvalFailureReason,
   HumanEvalQuestionType,
@@ -34,6 +35,7 @@ import type {
   MeetingResponseLanguage,
   MeetingResponseLength,
   MeetingSessionRecordingState,
+  ManualQuestionTypeCorrection,
   MeetingFocusAction,
   MeetingFocusSnapshot,
   MeetingTrace,
@@ -549,6 +551,14 @@ export const MeetingAssistant = ({
     () => getEditableInterviewSessionBrief(meeting.interviewSessionBrief),
     [meeting.interviewSessionBrief]
   );
+  const effectiveQuestionType = normalizeCanonicalQuestionType(
+    meeting.activeMeetingTask?.child?.questionType ?? activeTaskKind
+  );
+  const activeManualQuestionTypeCorrection =
+    meeting.manualQuestionTypeCorrection?.taskId ===
+    meeting.activeMeetingTask?.id
+      ? meeting.manualQuestionTypeCorrection
+      : undefined;
   const focusSnapshot = useMemo<MeetingFocusSnapshot>(
     () => ({
       active: focusModeActive,
@@ -573,13 +583,12 @@ export const MeetingAssistant = ({
       selectedClarifyingAnswerLabel: activeClarifyingSelection?.label,
       isTaskSwitchClarifyingQuestion,
       interviewTypes: editableBriefForFocus.interviewTypes,
-      effectiveQuestionType:
-        normalizeCanonicalQuestionType(
-          meeting.activeMeetingTask?.child?.questionType ?? activeTaskKind
-        ),
+      effectiveQuestionType,
       questionTypeCorrected:
+        Boolean(activeManualQuestionTypeCorrection) ||
         meeting.activeScreenTask?.classifier?.overrideSource ===
-        "interview-type-selector",
+          "interview-type-selector",
+      manualQuestionTypeCorrection: activeManualQuestionTypeCorrection,
       activeTask: getActiveMeetingTaskFocusSummary(meeting.activeMeetingTask),
       hasActiveMeetingTask,
       hasActiveScreenTask: hasActiveMeetingScreenContext,
@@ -603,6 +612,8 @@ export const MeetingAssistant = ({
       latestTurn?.text,
       meeting.activeMeetingTask,
       activeTaskKind,
+      activeManualQuestionTypeCorrection,
+      effectiveQuestionType,
       meeting.activeScreenTask?.classifier?.overrideSource,
       hasActiveMeetingTask,
       hasActiveMeetingScreenContext,
@@ -976,6 +987,12 @@ export const MeetingAssistant = ({
             case "submit-correction":
               void meeting.submitSpeechCorrection(action.correction);
               break;
+            case "correct-question-type":
+              void meeting.correctActiveQuestionType(
+                action.correctedType,
+                action.source
+              );
+              break;
             case "update-interview-types":
               updateFocusInterviewTypes(action.interviewTypes);
               break;
@@ -1009,6 +1026,7 @@ export const MeetingAssistant = ({
     handleRegenerateShortcut,
     handleSameTaskConfirmation,
     meeting.captureScreenContext,
+    meeting.correctActiveQuestionType,
     meeting.submitSpeechCorrection,
     updateFocusInterviewTypes,
   ]);
@@ -1148,6 +1166,16 @@ export const MeetingAssistant = ({
               whiteboardArtifactCached={whiteboardArtifactDisplay.isCached}
               isScreenTaskSuggestion={isScreenTaskSuggestion}
               hasActiveMeetingTask={hasActiveMeetingTask}
+              effectiveQuestionType={effectiveQuestionType}
+              manualQuestionTypeCorrection={
+                activeManualQuestionTypeCorrection
+              }
+              onCorrectQuestionType={(correctedType) => {
+                void meeting.correctActiveQuestionType(
+                  correctedType,
+                  "focus-mode"
+                );
+              }}
               latestTurnText={latestTurn?.text || "Waiting for meeting audio."}
               speechCorrectionInput={speechCorrectionInput}
               onSpeechCorrectionInputChange={setSpeechCorrectionInput}
@@ -1212,7 +1240,6 @@ export const MeetingAssistant = ({
                 open={interviewBriefOpen}
                 onOpenChange={setInterviewBriefOpen}
                 brief={meeting.interviewSessionBrief}
-                hasActiveMeetingTask={hasActiveMeetingTask}
                 onBriefChange={meeting.setInterviewSessionBrief}
                 onClear={meeting.clearInterviewSessionBrief}
               />
@@ -1458,6 +1485,24 @@ export const MeetingAssistant = ({
                   <SlidersHorizontalIcon className="h-3.5 w-3.5" />
                   Response actions
                 </div>
+                {hasActiveMeetingTask ? (
+                  <div className="mb-2 min-w-0 border-b border-border/50 pb-2">
+                    <div className="mb-1 text-[10px] font-medium uppercase text-muted-foreground">
+                      Current question type
+                    </div>
+                    <CurrentQuestionTypeControl
+                      compact
+                      effectiveType={effectiveQuestionType}
+                      correction={activeManualQuestionTypeCorrection}
+                      onCorrect={(correctedType) => {
+                        void meeting.correctActiveQuestionType(
+                          correctedType,
+                          "normal-mode"
+                        );
+                      }}
+                    />
+                  </div>
+                ) : null}
                 <div className="grid grid-cols-3 gap-1.5">
                   <Button
                     size="sm"
@@ -1700,7 +1745,7 @@ export const MeetingAssistant = ({
                       latestTrace.metadata?.playbookId
                     )}
                     detectedPlaybookPhase={formatDetectedQuestionType(
-                      latestTrace.metadata?.playbookPhase
+                      getTraceEffectivePlaybookPhase(latestTrace.metadata)
                     )}
                     evaluation={latestTraceEvaluation}
                     questionEvaluation={latestQuestionEvaluation}
@@ -1924,6 +1969,9 @@ const FocusModePanel = ({
   whiteboardArtifactCached,
   isScreenTaskSuggestion,
   hasActiveMeetingTask,
+  effectiveQuestionType,
+  manualQuestionTypeCorrection,
+  onCorrectQuestionType,
   latestTurnText,
   speechCorrectionInput,
   onSpeechCorrectionInputChange,
@@ -1949,6 +1997,9 @@ const FocusModePanel = ({
   whiteboardArtifactCached: boolean;
   isScreenTaskSuggestion: boolean;
   hasActiveMeetingTask: boolean;
+  effectiveQuestionType?: CanonicalQuestionType;
+  manualQuestionTypeCorrection?: ManualQuestionTypeCorrection;
+  onCorrectQuestionType: (type: CanonicalQuestionType) => void;
   latestTurnText: string;
   speechCorrectionInput: string;
   onSpeechCorrectionInputChange: (value: string) => void;
@@ -2111,12 +2162,20 @@ const FocusModePanel = ({
             <div className="shrink-0 text-[10px] font-medium uppercase text-muted-foreground">
               Type
             </div>
-            <InterviewTypeButtonGrid
-              compact
-              value={editableBrief.interviewTypes}
-              onChange={updateInterviewTypes}
-              forceSingleConcrete={hasActiveMeetingTask}
-            />
+            {hasActiveMeetingTask ? (
+              <CurrentQuestionTypeControl
+                compact
+                effectiveType={effectiveQuestionType}
+                correction={manualQuestionTypeCorrection}
+                onCorrect={onCorrectQuestionType}
+              />
+            ) : (
+              <InterviewTypeButtonGrid
+                compact
+                value={editableBrief.interviewTypes}
+                onChange={updateInterviewTypes}
+              />
+            )}
             <span
               className={cn(
                 "ml-auto shrink-0 text-[10px]",
@@ -2211,6 +2270,74 @@ const InterviewTypeButtonGrid = ({
           </Button>
         );
       })}
+    </div>
+  );
+};
+
+const CurrentQuestionTypeControl = ({
+  effectiveType,
+  correction,
+  onCorrect,
+  compact = false,
+}: {
+  effectiveType?: CanonicalQuestionType;
+  correction?: ManualQuestionTypeCorrection;
+  onCorrect: (type: CanonicalQuestionType) => void;
+  compact?: boolean;
+}) => {
+  const isPending =
+    correction?.status === "pending" ||
+    correction?.regenerationStatus === "running";
+  const statusLabel = isPending
+    ? `Correcting to ${formatQuestionTypeLabel(correction.correctedType)}...`
+    : correction?.regenerationStatus === "failed"
+      ? `Type corrected to ${formatQuestionTypeLabel(
+          correction.correctedType
+        )}; regeneration failed`
+      : correction?.regenerationStatus === "succeeded"
+        ? `Corrected to ${formatQuestionTypeLabel(correction.correctedType)}`
+        : undefined;
+
+  return (
+    <div className="flex min-w-0 flex-wrap items-center gap-1">
+      {interviewBriefTypeOptions
+        .filter((option) => option.id !== "mixed")
+        .map((option) => {
+          const canonicalType = normalizeCanonicalQuestionType(option.id);
+          if (!canonicalType) return null;
+          const selected = canonicalType === effectiveType;
+
+          return (
+            <Button
+              key={option.id}
+              size="sm"
+              variant={selected ? "default" : "outline"}
+              className={cn(
+                "h-7 min-w-[72px] px-2 text-[10px]",
+                compact && "h-6 min-w-[64px] shrink-0 px-1.5"
+              )}
+              title={`Correct the current question to ${option.label}`}
+              disabled={isPending}
+              onClick={() => onCorrect(canonicalType)}
+            >
+              {option.shortLabel}
+            </Button>
+          );
+        })}
+      {statusLabel ? (
+        <span
+          className={cn(
+            "ml-1 flex min-w-0 items-center gap-1 text-[10px] text-muted-foreground",
+            correction?.regenerationStatus === "failed" && "text-red-700"
+          )}
+          title={correction?.error || statusLabel}
+        >
+          {isPending ? (
+            <Loader2Icon className="h-3 w-3 shrink-0 animate-spin" />
+          ) : null}
+          <span className="max-w-44 truncate">{statusLabel}</span>
+        </span>
+      ) : null}
     </div>
   );
 };
@@ -2402,14 +2529,12 @@ const InterviewSessionBriefPanel = ({
   open,
   onOpenChange,
   brief,
-  hasActiveMeetingTask,
   onBriefChange,
   onClear,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   brief?: InterviewSessionBrief;
-  hasActiveMeetingTask: boolean;
   onBriefChange: (brief: InterviewSessionBrief | undefined) => void;
   onClear: () => void;
 }) => {
@@ -2495,7 +2620,6 @@ const InterviewSessionBriefPanel = ({
             </Label>
             <InterviewTypeButtonGrid
               value={editableBrief.interviewTypes}
-              forceSingleConcrete={hasActiveMeetingTask}
               onChange={(interviewTypes) => {
                 updateBrief({ interviewTypes });
               }}
@@ -3921,6 +4045,24 @@ function formatDetectedQuestionType(value: unknown) {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
+function getTraceEffectivePlaybookPhase(
+  metadata: Record<string, unknown> | undefined
+) {
+  return (
+    readStringMetadata(metadata, "activeMeetingParentPhase") ??
+    readStringMetadata(metadata, "playbookPhaseDecisionPhase") ??
+    readStringMetadata(metadata, "playbookPhase")
+  );
+}
+
+function readStringMetadata(
+  metadata: Record<string, unknown> | undefined,
+  key: string
+) {
+  const value = metadata?.[key];
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
 const TraceClassifierMetadata = ({
   metadata,
 }: {
@@ -3934,7 +4076,7 @@ const TraceClassifierMetadata = ({
     ["Project", metadata.projectAnchor],
     ["Confidence", metadata.classifierConfidence],
     ["Playbook", metadata.playbookId],
-    ["Phase", metadata.playbookPhase],
+    ["Phase", getTraceEffectivePlaybookPhase(metadata)],
     ["Subtype", metadata.playbookSubtype],
     ["Policy", metadata.playbookAllowedFamilies],
     ] satisfies Array<[string, unknown]>
@@ -4170,6 +4312,14 @@ function formatInterviewBriefType(type: InterviewBriefType) {
     interviewBriefTypeOptions.find((option) => option.id === type)?.label ??
     type
   );
+}
+
+function formatQuestionTypeLabel(type: CanonicalQuestionType) {
+  if (type === "general-system-design") return "General system design";
+  if (type === "ai-ml-system-design") return "AI/ML system design";
+  if (type === "project-deep-dive") return "Project deep-dive";
+  if (type === "field-knowledge") return "Field knowledge";
+  return type.charAt(0).toUpperCase() + type.slice(1);
 }
 
 function formatSilenceDuration(config: MeetingAudioConfig) {

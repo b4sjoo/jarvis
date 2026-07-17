@@ -42,6 +42,8 @@ import {
   MeetingPrivacyMode,
   MeetingResponseActionMode,
   MeetingResponseConfig,
+  ManualQuestionTypeCorrection,
+  ManualQuestionTypeCorrectionSource,
   WhiteboardUpdateSource,
   MeetingContextManager,
   MeetingSetupWarning,
@@ -94,6 +96,7 @@ import {
   decidePlaybookPhaseProgression,
   formatPlaybookPhaseDecisionForTrace,
   formatInterviewPlaybookForTrace,
+  withInterviewPlaybookPhase,
   readTraceHumanEvaluations,
   readQuestionHumanEvaluations,
   readMeetingEvalTraceMetadata,
@@ -116,7 +119,6 @@ import {
   normalizeInterviewBriefTypes as normalizeTaxonomyInterviewBriefTypes,
   normalizeQuestionTypeAlias,
   readInterviewBriefType,
-  readSingleConcreteInterviewTypeOverride as readTaxonomySingleConcreteInterviewTypeOverride,
   toHumanEvalQuestionType,
   toMemoryUseCaseForQuestionType,
   type QuestionTypeInferenceDecision,
@@ -127,6 +129,8 @@ import {
   upsertTraceHumanEvaluation,
   upsertQuestionHumanEvaluation,
   buildQuestionEvaluationPatchFromTrace,
+  decideManualQuestionTypeCorrection,
+  applyManualQuestionTypeCorrectionToParent,
   persistTraceHumanEvaluations,
   persistQuestionHumanEvaluations,
   buildSessionRecordingProviderSummary,
@@ -366,18 +370,6 @@ function normalizeInterviewBriefTypes(
   return normalizeTaxonomyInterviewBriefTypes(interviewTypes);
 }
 
-function readSingleConcreteInterviewTypeOverride(
-  brief: InterviewSessionBrief | undefined
-): CanonicalQuestionType | undefined {
-  return readTaxonomySingleConcreteInterviewTypeOverride(brief);
-}
-
-function normalizeScreenTaskKindForOverrideComparison(
-  kind: ScreenTaskKind | undefined
-) {
-  return normalizeQuestionTypeAlias(kind);
-}
-
 function formatQuestionTypeTraceMetadata(
   questionType: ScreenTaskKind | MemoryQuestionType | undefined,
   rawQuestionType?: string
@@ -407,16 +399,6 @@ function normalizeParentQuestionType(
   return canonical && isParentCanonicalQuestionType(canonical)
     ? canonical
     : undefined;
-}
-
-function isInterviewTypeOverrideMismatch(
-  activeKind: ScreenTaskKind,
-  overrideKind: ScreenTaskKind
-) {
-  return (
-    normalizeScreenTaskKindForOverrideComparison(activeKind) !==
-    normalizeScreenTaskKindForOverrideComparison(overrideKind)
-  );
 }
 
 function getManualOverrideAskFrame(kind: ScreenTaskKind): TaskAskFrame {
@@ -466,6 +448,43 @@ function buildManualInterviewTypeOverrideContent(
   ]
     .filter(Boolean)
     .join("\n");
+}
+
+function applyManualQuestionTypeCorrectionToScreenTask({
+  task,
+  correctedType,
+  correctedPlaybook,
+  askFrame,
+  topicDomain,
+  now,
+  expiresAt,
+}: {
+  task: ActiveScreenTask;
+  correctedType: CanonicalQuestionType;
+  correctedPlaybook?: ActiveScreenTask["playbook"];
+  askFrame: TaskAskFrame;
+  topicDomain?: TaskTopicDomain;
+  now: number;
+  expiresAt?: number;
+}): ActiveScreenTask {
+  return {
+    ...task,
+    updatedAt: now,
+    expiresAt,
+    question: task.question || extractScreenTaskQuestion(task.content),
+    kind: correctedType,
+    classifier: {
+      ...task.classifier,
+      questionType: correctedType,
+      askFrame,
+      topicDomain,
+      confidence: 1,
+      overrideSource: "interview-type-selector",
+      overrideAt: now,
+    },
+    playbook: correctedPlaybook,
+    content: buildManualInterviewTypeOverrideContent(task, correctedType),
+  };
 }
 
 function normalizeMeetingResponseConfig(
@@ -621,6 +640,7 @@ function clearActiveScreenTaskState(
         : previous.status,
     error: null,
     activeMeetingTask: undefined,
+    manualQuestionTypeCorrection: undefined,
   };
 }
 
@@ -833,6 +853,7 @@ interface RunAdvisorOptions {
   currentSuggestion?: string;
   clarifyingFeedback?: ClarifyingQuestionFeedback;
   traceId?: string;
+  manualQuestionTypeCorrection?: ManualQuestionTypeCorrection;
 }
 
 interface CaptureScreenContextOptions {
@@ -862,12 +883,6 @@ interface PendingConfirmation {
   segment: QueuedSpeechSegment;
   heldAt: number;
   timeoutId: number;
-}
-
-interface PendingInterviewTypeOverride {
-  taskId: string;
-  traceId: string;
-  correctedKind: ScreenTaskKind;
 }
 
 interface MeetingModelRouteResolution {
@@ -961,13 +976,12 @@ export function useMeetingAssistant() {
   const advisorDebounceTimerRef = useRef<number | null>(null);
   const screenAnalysisAbortRef = useRef<AbortController | null>(null);
   const screenCaptureInFlightRef = useRef(false);
+  const manualQuestionTypeCorrectionInFlightRef = useRef(false);
   const audioSessionIdRef = useRef(createMeetingId("audio_session"));
   const audioSegmentSeqRef = useRef(0);
   const systemAudioQueueTailRef = useRef<Promise<void>>(Promise.resolve());
   const microphoneAudioQueueTailRef = useRef<Promise<void>>(Promise.resolve());
   const pendingConfirmationRef = useRef<PendingConfirmation | null>(null);
-  const pendingInterviewTypeOverrideRef =
-    useRef<PendingInterviewTypeOverride | null>(null);
   const speechCorrectionsRef = useRef<SpeechCorrection[]>([]);
   const microphoneContextEnabledRef = useRef(
     INITIAL_STATE.settings.microphoneContextEnabled
@@ -1022,8 +1036,7 @@ export function useMeetingAssistant() {
           previousTraceCount ||
           previousSpeechCorrectionCount ||
           latestScreenHashRef.current ||
-          pendingConfirmationRef.current ||
-          pendingInterviewTypeOverrideRef.current
+          pendingConfirmationRef.current
       );
 
       if (advisorDebounceTimerRef.current !== null) {
@@ -1034,7 +1047,7 @@ export function useMeetingAssistant() {
       screenAnalysisAbortRef.current?.abort();
       screenAnalysisAbortRef.current = null;
       screenCaptureInFlightRef.current = false;
-      pendingInterviewTypeOverrideRef.current = null;
+      manualQuestionTypeCorrectionInFlightRef.current = false;
       speechCorrectionsRef.current = [];
       latestScreenHashRef.current = undefined;
 
@@ -1074,6 +1087,7 @@ export function useMeetingAssistant() {
         lastMemoryContext: undefined,
         error: null,
         speechCorrections: [],
+        manualQuestionTypeCorrection: undefined,
       }));
 
       return {
@@ -1098,7 +1112,6 @@ export function useMeetingAssistant() {
           "lastMemoryContext",
           "speechCorrections",
           "pendingConfirmation",
-          "pendingInterviewTypeOverride",
           "advisorDebounce",
           "screenAnalysis",
           "latestScreenHash",
@@ -1447,8 +1460,9 @@ export function useMeetingAssistant() {
           readStringFromTraceMetadata(trace.metadata, "playbookId") ??
           activeMeetingTask?.parent.playbook?.id,
         playbookPhase:
-          readStringFromTraceMetadata(trace.metadata, "playbookPhase") ??
           readStringFromTraceMetadata(trace.metadata, "activeMeetingParentPhase") ??
+          readStringFromTraceMetadata(trace.metadata, "playbookPhaseDecisionPhase") ??
+          readStringFromTraceMetadata(trace.metadata, "playbookPhase") ??
           activeMeetingTask?.parent.playbookPhase,
         whiteboardArtifactId:
           traceEvalMetadata.whiteboardArtifactId ??
@@ -1741,151 +1755,9 @@ export function useMeetingAssistant() {
   const setInterviewSessionBrief = useCallback(
     (brief: InterviewSessionBrief | undefined) => {
       const normalizedBrief = normalizeInterviewSessionBrief(brief);
-      const previousContextState = contextManagerRef.current.getState();
-      const previousOverrideKind = readSingleConcreteInterviewTypeOverride(
-        previousContextState.interviewSessionBrief
-      );
       persistInterviewSessionBrief(normalizedBrief);
       contextManagerRef.current.setInterviewSessionBrief(normalizedBrief);
-      let contextState = contextManagerRef.current.getState();
-      const correctedKind =
-        readSingleConcreteInterviewTypeOverride(normalizedBrief);
-      const interviewTypeOverrideChanged =
-        normalizeScreenTaskKindForOverrideComparison(previousOverrideKind) !==
-        normalizeScreenTaskKindForOverrideComparison(correctedKind);
-      const activeScreenTask = contextState.activeScreenTask;
-
-      if (
-        activeScreenTask &&
-        correctedKind &&
-        interviewTypeOverrideChanged &&
-        isInterviewTypeOverrideMismatch(activeScreenTask.kind, correctedKind)
-      ) {
-        const now = Date.now();
-        const correctedScreenKind: ScreenQuestionType = correctedKind;
-        const askFrame = getManualOverrideAskFrame(correctedKind);
-        const topicDomain = getManualOverrideTopicDomain(
-          correctedKind,
-          activeScreenTask.classifier?.topicDomain
-        );
-        const correctedContent = buildManualInterviewTypeOverrideContent(
-          activeScreenTask,
-          correctedKind
-        );
-        const correctedQuery = [
-          activeScreenTask.question,
-          correctedContent,
-          contextState.transcriptTurns
-            .slice(-4)
-            .map((turn) => turn.text)
-            .join("\n"),
-        ]
-          .filter(Boolean)
-          .join("\n");
-        const correctedPlaybook = selectInterviewPlaybook({
-          query: correctedQuery,
-          questionType: correctedKind,
-          askFrame,
-          topicDomain,
-          projectAnchor: activeScreenTask.classifier?.projectAnchor,
-          classifierConfidence: 1,
-          interviewSessionBrief: normalizedBrief,
-          interviewSessionContext: contextState.interviewSessionContext,
-        });
-        const correctedTask: ActiveScreenTask = {
-          ...activeScreenTask,
-          updatedAt: now,
-          expiresAt: getActiveScreenTaskExpiresAt(state.settings, now),
-          question:
-            activeScreenTask.question ||
-            extractScreenTaskQuestion(activeScreenTask.content),
-          kind: correctedScreenKind,
-          classifier: {
-            ...activeScreenTask.classifier,
-            questionType: correctedScreenKind,
-            askFrame,
-            topicDomain,
-            confidence: 1,
-            overrideSource: "interview-type-selector",
-            overrideAt: now,
-          },
-          playbook: correctedPlaybook
-            ? {
-                ...correctedPlaybook,
-                confidence: 1,
-                reason: `${correctedPlaybook.reason}; manual interview type override`,
-              }
-            : undefined,
-          content: correctedContent,
-        };
-        const trace = traceStoreRef.current.startTrace("screen", {
-          source: "interview-type-override",
-          activeScreenTaskId: activeScreenTask.id,
-          previousQuestionType: activeScreenTask.kind,
-          correctedQuestionType: correctedKind,
-          previousCanonicalQuestionType: normalizeCanonicalQuestionType(
-            activeScreenTask.kind
-          ),
-          correctedCanonicalQuestionType:
-            normalizeCanonicalQuestionType(correctedKind),
-          ...formatInterviewPlaybookForTrace(correctedTask.playbook),
-        });
-        const overrideStepId = traceStoreRef.current.startStep(
-          trace.id,
-          "Interview type override applied",
-          {
-            activeScreenTaskId: activeScreenTask.id,
-            previousQuestionType: activeScreenTask.kind,
-            correctedQuestionType: correctedKind,
-            previousCanonicalQuestionType: normalizeCanonicalQuestionType(
-              activeScreenTask.kind
-            ),
-            correctedCanonicalQuestionType:
-              normalizeCanonicalQuestionType(correctedKind),
-            interviewTypes: normalizedBrief?.interviewTypes,
-          }
-        );
-
-        const correctedParent = buildInterviewParentFromScreenTask(correctedTask);
-        contextManagerRef.current.setActiveMeetingTaskState({
-          activeScreenTask: correctedTask,
-          activeInterviewTask: correctedParent ?? null,
-        });
-        sessionRecordingManagerRef.current?.recordTaskSnapshot(
-          correctedTask,
-          trace.id
-        );
-        const correctedContextState = contextManagerRef.current.getState();
-        traceStoreRef.current.updateMetadata(trace.id, {
-          ...getActiveMeetingTaskTraceMetadata(
-            correctedContextState.activeMeetingTask
-          ),
-        });
-        if (correctedContextState.activeMeetingTask) {
-          sessionRecordingManagerRef.current?.recordActiveMeetingTaskSnapshot(
-            correctedContextState.activeMeetingTask,
-            trace.id
-          );
-        }
-        contextManagerRef.current.updateScreenObservation(
-          activeScreenTask.observationId,
-          {
-            visualSummary: correctedContent,
-            analysisPromptSource: "meeting-default",
-          }
-        );
-        traceStoreRef.current.finishStep(
-          trace.id,
-          overrideStepId,
-          "success"
-        );
-        pendingInterviewTypeOverrideRef.current = {
-          taskId: correctedTask.id,
-          traceId: trace.id,
-          correctedKind: correctedScreenKind,
-        };
-        contextState = contextManagerRef.current.getState();
-      }
+      const contextState = contextManagerRef.current.getState();
 
       setState((previous) => ({
         ...previous,
@@ -1897,7 +1769,7 @@ export function useMeetingAssistant() {
         activeMeetingTask: contextState.activeMeetingTask,
       }));
     },
-    [state.settings]
+    []
   );
 
   const clearInterviewSessionBrief = useCallback(() => {
@@ -2254,7 +2126,7 @@ export function useMeetingAssistant() {
           });
           traceStoreRef.current.updateMetadata(
             traceId,
-            diagramOverlayTraceMetadata
+            { ...diagramOverlayTraceMetadata }
           );
         }
 
@@ -2325,6 +2197,7 @@ export function useMeetingAssistant() {
           ? null
           : previous.latestSuggestion,
       latestReliableSuggestion: null,
+      manualQuestionTypeCorrection: undefined,
       partialSuggestion: "",
       error: null,
       audioStatus,
@@ -2418,10 +2291,16 @@ export function useMeetingAssistant() {
       mode,
       options.currentSuggestion
     );
-    const advisorTaskSignals = resolveAdvisorTaskSignals(
+    const resolvedAdvisorTaskSignals = resolveAdvisorTaskSignals(
       promptContext,
       advisorMemoryQuery
     );
+    const advisorTaskSignals = options.manualQuestionTypeCorrection
+      ? applyManualQuestionTypeCorrectionToAdvisorSignals(
+          resolvedAdvisorTaskSignals,
+          options.manualQuestionTypeCorrection
+        )
+      : resolvedAdvisorTaskSignals;
     const advisorQuestionType = advisorTaskSignals.questionType;
     const advisorAskFrame = advisorTaskSignals.askFrame;
     const advisorTopicDomain = advisorTaskSignals.topicDomain;
@@ -2497,9 +2376,13 @@ export function useMeetingAssistant() {
 
       if (existingInterviewTask) {
         const now = Date.now();
+        const updatedPlaybook = withInterviewPlaybookPhase(
+          advisorPlaybook ?? existingInterviewTask.playbook,
+          playbookPhaseDecision.phase
+        );
         const updatedInterviewTask: ActiveInterviewParent = {
           ...existingInterviewTask,
-          playbook: advisorPlaybook ?? existingInterviewTask.playbook,
+          playbook: updatedPlaybook,
           playbookPhase: playbookPhaseDecision.phase,
           phaseProgress: applyPlaybookPhaseDecisionToProgress(
             existingInterviewTask.phaseProgress,
@@ -2520,11 +2403,16 @@ export function useMeetingAssistant() {
       }
     }
 
+    const advisorRuntimePlaybook = withInterviewPlaybookPhase(
+      advisorPlaybook ?? promptContext.activeMeetingTask?.parent.playbook,
+      playbookPhaseDecision.phase
+    );
     const questionTypeTraceMetadata =
       formatAdvisorQuestionTypeDecisionForTrace(advisorTaskSignals);
 
     if (traceId) {
-      const playbookMetadata = formatInterviewPlaybookForTrace(advisorPlaybook);
+      const playbookMetadata =
+        formatInterviewPlaybookForTrace(advisorRuntimePlaybook);
       traceStoreRef.current.updateMetadata(traceId, {
         ...playbookMetadata,
         ...formatPlaybookPhaseDecisionForTrace(playbookPhaseDecision),
@@ -2536,6 +2424,9 @@ export function useMeetingAssistant() {
         subtaskIntent: advisorTaskSignals.subtaskIntent,
         taskSignalSource: advisorTaskSignals.source,
         ...questionTypeTraceMetadata,
+        ...formatManualQuestionTypeCorrectionForTrace(
+          options.manualQuestionTypeCorrection
+        ),
         openingRouteKind: advisorTaskSignals.openingRoute?.kind,
         openingRouteCommitParent:
           advisorTaskSignals.openingRoute?.commitParent,
@@ -2548,7 +2439,7 @@ export function useMeetingAssistant() {
           getAdvisorActiveQuestionType(promptContext),
         ...getActiveMeetingTaskTraceMetadata(promptContext.activeMeetingTask),
       });
-      if (advisorPlaybook) {
+      if (advisorRuntimePlaybook) {
         const playbookStepId = traceStoreRef.current.startStep(
           traceId,
           "Interview playbook selected",
@@ -2596,7 +2487,7 @@ export function useMeetingAssistant() {
       askFrame: advisorAskFrame,
       topicDomain: advisorTopicDomain,
       projectAnchor: advisorProjectAnchor,
-      memoryPolicy: advisorPlaybook?.memoryPolicy,
+      memoryPolicy: advisorRuntimePlaybook?.memoryPolicy,
     });
     const factAnchorDecision = buildFactAnchorDecision({
       questionType:
@@ -2631,7 +2522,7 @@ export function useMeetingAssistant() {
     promptContext = {
       ...promptContext,
       memoryContext: memoryContext?.contextText,
-      interviewPlaybook: advisorPlaybook,
+      interviewPlaybook: advisorRuntimePlaybook,
       playbookPhaseDecision,
       factAnchorDecision,
       openingRoute: advisorTaskSignals.openingRoute,
@@ -2640,7 +2531,7 @@ export function useMeetingAssistant() {
     const advisorUsesCodingModel =
       getAdvisorActiveQuestionType(promptContext) === "coding" ||
       getAdvisorActiveChildQuestionType(promptContext) === "coding" ||
-      advisorPlaybook?.id === "coding_algorithm";
+      advisorRuntimePlaybook?.id === "coding_algorithm";
     const advisorModelRoute = resolveMeetingModelRoute({
       useCodingModel: advisorUsesCodingModel,
       reason: advisorUsesCodingModel
@@ -2795,7 +2686,7 @@ export function useMeetingAssistant() {
               latestTurn?.text ??
               extractScreenTaskQuestion(finalContent),
             finalContent,
-            playbook: advisorPlaybook,
+            playbook: advisorRuntimePlaybook,
             phaseDecision: playbookPhaseDecision,
             latestTurn,
             observationId: contextState.activeScreenTask?.basedOnObservationId,
@@ -4585,13 +4476,17 @@ export function useMeetingAssistant() {
               : "new-parent",
           askFrame: screenPreflight?.askFrame ?? screenMemoryAskFrame,
         });
+        const screenRuntimePlaybook = withInterviewPlaybookPhase(
+          screenPlaybook,
+          screenPhaseDecision.phase
+        );
         const screenPlaybookMetadata =
-          formatInterviewPlaybookForTrace(screenPlaybook);
+          formatInterviewPlaybookForTrace(screenRuntimePlaybook);
         traceStoreRef.current.updateMetadata(trace.id, {
           ...screenPlaybookMetadata,
           ...formatPlaybookPhaseDecisionForTrace(screenPhaseDecision),
         });
-        if (screenPlaybook) {
+        if (screenRuntimePlaybook) {
           const playbookStepId = traceStoreRef.current.startStep(
             trace.id,
             "Interview playbook selected",
@@ -4619,7 +4514,7 @@ export function useMeetingAssistant() {
           askFrame: screenMemoryAskFrame,
           topicDomain: screenMemoryTopicDomain,
           projectAnchor: screenPreflight?.projectAnchor,
-          memoryPolicy: screenPlaybook?.memoryPolicy,
+          memoryPolicy: screenRuntimePlaybook?.memoryPolicy,
         });
         const screenFactAnchorDecision = buildFactAnchorDecision({
           questionType: screenMemoryQuestionType,
@@ -4649,7 +4544,7 @@ export function useMeetingAssistant() {
         );
         const screenUsesCodingModel =
           (screenPreflight?.questionType ?? screenMemoryQuestionType) ===
-            "coding" || screenPlaybook?.id === "coding_algorithm";
+            "coding" || screenRuntimePlaybook?.id === "coding_algorithm";
         const screenModelRoute = resolveMeetingModelRoute({
           useCodingModel: screenUsesCodingModel,
           requiresVision: true,
@@ -4679,7 +4574,7 @@ export function useMeetingAssistant() {
             interviewSessionContext:
               preflightContextState.interviewSessionContext,
             screenPreflight,
-            interviewPlaybook: screenPlaybook,
+            interviewPlaybook: screenRuntimePlaybook,
             playbookPhaseDecision: screenPhaseDecision,
             factAnchorDecision: screenFactAnchorDecision,
             signal: analysisController.signal,
@@ -4845,7 +4740,7 @@ export function useMeetingAssistant() {
               projectAnchor: screenPreflight?.projectAnchor,
               confidence: screenPreflight?.confidence,
             },
-            playbook: screenPlaybook,
+            playbook: screenRuntimePlaybook,
             content: screenTaskContent,
             basedOnTurnIds,
             basedOnObservationId: observation.id,
@@ -4886,7 +4781,7 @@ export function useMeetingAssistant() {
             ),
             question: question || undefined,
             finalContent: screenTaskContent,
-            playbook: screenPlaybook,
+            playbook: screenRuntimePlaybook,
             phaseDecision: screenPhaseDecision,
             observationId: observation.id,
             traceId: trace.id,
@@ -5051,41 +4946,374 @@ export function useMeetingAssistant() {
   const currentSuggestionText =
     state.partialSuggestion || state.latestSuggestion?.content || "";
 
-  useEffect(() => {
-    const pending = pendingInterviewTypeOverrideRef.current;
-    if (!pending) return;
+  const correctActiveQuestionType = useCallback(
+    async (
+      correctedType: CanonicalQuestionType,
+      source: ManualQuestionTypeCorrectionSource = "normal-mode"
+    ) => {
+      if (manualQuestionTypeCorrectionInFlightRef.current) return;
 
-    const activeMeetingTask = state.activeMeetingTask;
-    const pendingScreenTaskId =
-      activeMeetingTask?.screen?.activeScreenTaskId ?? state.activeScreenTask?.id;
-    const pendingQuestionType =
-      activeMeetingTask?.parent.questionType ?? state.activeScreenTask?.kind;
+      const contextState = contextManagerRef.current.getState();
+      const activeTask = contextState.activeMeetingTask;
+      if (!activeTask) {
+        setState((previous) => ({
+          ...previous,
+          error: "There is no active question to correct.",
+        }));
+        return;
+      }
 
-    if (!activeMeetingTask && !state.activeScreenTask) {
-      pendingInterviewTypeOverrideRef.current = null;
-      traceStoreRef.current.finishTrace(
-        pending.traceId,
-        "cancelled",
-        "Active task was cleared before regeneration."
+      const decision = decideManualQuestionTypeCorrection(
+        activeTask,
+        correctedType
       );
-      return;
-    }
+      if (decision.noOp || !decision.target) return;
 
-    if (
-      pendingScreenTaskId !== pending.taskId ||
-      normalizeScreenTaskKindForOverrideComparison(pendingQuestionType) !==
-        normalizeScreenTaskKindForOverrideComparison(pending.correctedKind)
-    ) {
-      return;
-    }
+      const existingParent =
+        contextState.activeInterviewTask ??
+        (contextState.activeScreenTask
+          ? buildInterviewParentFromScreenTask(contextState.activeScreenTask)
+          : undefined) ??
+        buildCorrectionParentFromActiveMeetingTask(activeTask, correctedType);
+      if (!existingParent) {
+        setState((previous) => ({
+          ...previous,
+          error: "The active question has no repairable parent task.",
+        }));
+        return;
+      }
 
-    pendingInterviewTypeOverrideRef.current = null;
-    void runAdvisor({
-      force: true,
-      mode: "screen-anchored",
-      traceId: pending.traceId,
-    });
-  }, [runAdvisor, state.activeMeetingTask, state.activeScreenTask]);
+      manualQuestionTypeCorrectionInFlightRef.current = true;
+      clearAdvisorDebounce();
+      advisorEngineRef.current.cancelCurrentRequest();
+
+      const requestedAt = Date.now();
+      const correctionTrace = traceStoreRef.current.startTrace(
+        activeTask.screen ? "screen" : "voice",
+        {
+          source: "manual-question-type-correction",
+          manualQuestionTypeCorrectionSource: source,
+          manualQuestionTypeCorrectionTarget: decision.target,
+          detectedQuestionType: decision.detectedType,
+          correctedQuestionType: decision.correctedType,
+          correctionDecisionReason: decision.reason,
+          ...getActiveMeetingTaskTraceMetadata(activeTask),
+        }
+      );
+      const eventId = createMeetingId("question_type_correction");
+      const questionId = activeTask.child?.id ?? activeTask.parent.id;
+      let correction: ManualQuestionTypeCorrection = {
+        eventId,
+        taskId: activeTask.id,
+        parentTaskId: activeTask.parent.id,
+        childTaskId: activeTask.child?.id,
+        questionId,
+        source,
+        target: decision.target,
+        detectedType: decision.detectedType,
+        correctedType: decision.correctedType,
+        correctionTraceId: correctionTrace.id,
+        status: "pending",
+        regenerationStatus: "idle",
+        requestedAt,
+      };
+      traceStoreRef.current.updateMetadata(correctionTrace.id, {
+        manualQuestionTypeCorrectionId: eventId,
+      });
+      setState((previous) => ({
+        ...previous,
+        manualQuestionTypeCorrection: correction,
+        error: null,
+      }));
+      sessionRecordingManagerRef.current?.recordActiveMeetingTaskSnapshot(
+        activeTask,
+        correctionTrace.id
+      );
+      sessionRecordingManagerRef.current?.recordManualQuestionTypeCorrection(
+        correction
+      );
+
+      const mutationStepId = traceStoreRef.current.startStep(
+        correctionTrace.id,
+        "Active meeting task type corrected",
+        {
+          manualQuestionTypeCorrectionId: eventId,
+          target: decision.target,
+          detectedQuestionType: decision.detectedType,
+          correctedQuestionType: decision.correctedType,
+        }
+      );
+      let mutationApplied = false;
+
+      try {
+        const activeScreenTask = contextState.activeScreenTask;
+        const askFrame = getManualOverrideAskFrame(correctedType);
+        const topicDomain = getManualOverrideTopicDomain(
+          correctedType,
+          activeScreenTask?.classifier?.topicDomain
+        );
+        const correctionQuery = [
+          activeTask.child?.question,
+          activeTask.screen?.question,
+          activeTask.parent.topic,
+          contextState.transcriptTurns
+            .slice(-4)
+            .map((turn) => turn.text)
+            .join("\n"),
+        ]
+          .filter(Boolean)
+          .join("\n");
+        const selectedPlaybook =
+          decision.target === "resume-parent"
+            ? existingParent.playbook
+            : selectInterviewPlaybook({
+                query: correctionQuery,
+                questionType: correctedType,
+                askFrame,
+                topicDomain,
+                projectAnchor: activeTask.screen?.projectAnchor,
+                classifierConfidence: 1,
+                interviewSessionBrief: contextState.interviewSessionBrief,
+                interviewSessionContext: contextState.interviewSessionContext,
+              });
+        const correctedPlaybook = selectedPlaybook
+          ? {
+              ...selectedPlaybook,
+              confidence: 1,
+              reason: `${selectedPlaybook.reason}; authoritative manual runtime correction`,
+            }
+          : undefined;
+        const expiresAt = getActiveScreenTaskExpiresAt(
+          state.settings,
+          requestedAt
+        );
+        const correctedParent = applyManualQuestionTypeCorrectionToParent({
+          parent: existingParent,
+          decision,
+          correctedPlaybook,
+          now: requestedAt,
+          expiresAt,
+        });
+        const correctedScreenTask = activeScreenTask
+          ? applyManualQuestionTypeCorrectionToScreenTask({
+              task: activeScreenTask,
+              correctedType,
+              correctedPlaybook,
+              askFrame,
+              topicDomain,
+              now: requestedAt,
+              expiresAt,
+            })
+          : undefined;
+
+        contextManagerRef.current.setActiveMeetingTaskState({
+          activeScreenTask: correctedScreenTask ?? null,
+          activeInterviewTask: correctedParent,
+        });
+        if (correctedScreenTask) {
+          contextManagerRef.current.updateScreenObservation(
+            correctedScreenTask.observationId,
+            {
+              visualSummary: correctedScreenTask.content,
+              analysisPromptSource: "meeting-default",
+            }
+          );
+        }
+        const correctedContextState = contextManagerRef.current.getState();
+        const correctedActiveTask = correctedContextState.activeMeetingTask;
+        if (!correctedActiveTask) {
+          throw new Error("The corrected active meeting task could not be built.");
+        }
+        mutationApplied = true;
+
+        correction = {
+          ...correction,
+          status: "applied",
+          appliedAt: Date.now(),
+        };
+        traceStoreRef.current.updateMetadata(correctionTrace.id, {
+          ...formatInterviewPlaybookForTrace(correctedPlaybook),
+          ...getActiveMeetingTaskTraceMetadata(correctedActiveTask),
+          correctionStatus: correction.status,
+        });
+        traceStoreRef.current.finishStep(
+          correctionTrace.id,
+          mutationStepId,
+          "success"
+        );
+        traceStoreRef.current.finishTrace(correctionTrace.id, "success");
+        sessionRecordingManagerRef.current?.recordActiveMeetingTaskSnapshot(
+          correctedActiveTask,
+          correctionTrace.id
+        );
+        if (correctedScreenTask) {
+          sessionRecordingManagerRef.current?.recordTaskSnapshot(
+            correctedScreenTask,
+            correctionTrace.id
+          );
+        }
+
+        const regenerationTrace = traceStoreRef.current.startTrace(
+          correctedActiveTask.screen ? "screen" : "voice",
+          {
+            source: "manual-question-type-correction-regeneration",
+            parentCorrectionTraceId: correctionTrace.id,
+            manualQuestionTypeCorrectionId: eventId,
+            detectedQuestionType: decision.detectedType,
+            correctedQuestionType: decision.correctedType,
+            manualQuestionTypeCorrectionTarget: decision.target,
+            ...getActiveMeetingTaskTraceMetadata(correctedActiveTask),
+          }
+        );
+        correction = {
+          ...correction,
+          regenerationTraceId: regenerationTrace.id,
+          regenerationStatus: "running",
+        };
+
+        const questionEvaluations = upsertQuestionHumanEvaluation(
+          state.questionEvaluations,
+          {
+            sessionId:
+              state.sessionRecording.sessionId ?? correctedContextState.sessionId,
+            traceId: correctionTrace.id,
+            traceKind: correctionTrace.kind,
+            taskId: correctedActiveTask.id,
+            parentTaskId: correctedActiveTask.parent.id,
+            childTaskId: activeTask.child?.id,
+            taskSource: correctedActiveTask.source,
+            questionType: toHumanEvalQuestionType(decision.detectedType),
+            playbookId: correctedPlaybook?.id,
+            playbookPhase: correctedPlaybook?.phase,
+          },
+          {
+            questionId,
+            traceIds: [correctionTrace.id, regenerationTrace.id],
+            questionType: toHumanEvalQuestionType(decision.detectedType),
+            correctedQuestionType: toHumanEvalQuestionType(
+              decision.correctedType
+            ),
+            manualQuestionTypeCorrectionId: eventId,
+            manualQuestionTypeCorrectionTraceId: correctionTrace.id,
+            manualQuestionTypeRegenerationTraceId: regenerationTrace.id,
+            manualQuestionTypeCorrectionSource: source,
+            classification: {
+              verdict: "wrong",
+              reasons: ["manual-runtime-correction"],
+            },
+          }
+        );
+        const evaluation = questionEvaluations.find(
+          (candidate) => candidate.questionId === questionId
+        );
+        correction = {
+          ...correction,
+          evaluationId: evaluation?.id,
+        };
+        persistQuestionHumanEvaluations(questionEvaluations);
+        sessionRecordingManagerRef.current?.recordQuestionHumanEvaluations(
+          questionEvaluations
+        );
+        sessionRecordingManagerRef.current?.recordManualQuestionTypeCorrection(
+          correction
+        );
+        setState((previous) => ({
+          ...previous,
+          activeScreenTask: correctedContextState.activeScreenTask,
+          activeInterviewTask: correctedContextState.activeInterviewTask,
+          activeMeetingTask: correctedActiveTask,
+          screenObservations: correctedContextState.screenObservations,
+          questionEvaluations,
+          manualQuestionTypeCorrection: correction,
+          error: null,
+        }));
+
+        await runAdvisor({
+          force: true,
+          mode: correctedActiveTask.screen ? "screen-anchored" : "live",
+          traceId: regenerationTrace.id,
+          manualQuestionTypeCorrection: correction,
+        });
+        const regenerationStatus = traceStoreRef.current
+          .getTraces()
+          .find((trace) => trace.id === regenerationTrace.id)?.status;
+        correction = {
+          ...correction,
+          regenerationStatus:
+            regenerationStatus === "success"
+              ? "succeeded"
+              : regenerationStatus === "cancelled"
+                ? "cancelled"
+                : "failed",
+          completedAt: Date.now(),
+          error:
+            regenerationStatus === "error"
+              ? "Answer regeneration failed. The corrected task type was kept."
+              : undefined,
+        };
+        sessionRecordingManagerRef.current?.recordManualQuestionTypeCorrection(
+          correction
+        );
+        setState((previous) => ({
+          ...previous,
+          manualQuestionTypeCorrection: correction,
+        }));
+      } catch (error) {
+        correction = {
+          ...correction,
+          status: mutationApplied ? "applied" : "failed",
+          regenerationStatus: mutationApplied ? "failed" : "idle",
+          completedAt: Date.now(),
+          error:
+            mutationApplied
+              ? `The task type was corrected, but answer regeneration failed: ${
+                  error instanceof Error ? error.message : "unknown error"
+                }`
+              : error instanceof Error
+                ? error.message
+                : "Failed to correct the active question type.",
+        };
+        if (!mutationApplied) {
+          traceStoreRef.current.finishStep(
+            correctionTrace.id,
+            mutationStepId,
+            "error",
+            undefined,
+            error
+          );
+          traceStoreRef.current.finishTrace(correctionTrace.id, "error", error);
+        } else if (correction.regenerationTraceId) {
+          const regenerationTrace = traceStoreRef.current
+            .getTraces()
+            .find((trace) => trace.id === correction.regenerationTraceId);
+          if (regenerationTrace?.status === "running") {
+            traceStoreRef.current.finishTrace(
+              correction.regenerationTraceId,
+              "error",
+              error
+            );
+          }
+        }
+        sessionRecordingManagerRef.current?.recordManualQuestionTypeCorrection(
+          correction
+        );
+        setState((previous) => ({
+          ...previous,
+          manualQuestionTypeCorrection: correction,
+          error: correction.error ?? null,
+        }));
+      } finally {
+        manualQuestionTypeCorrectionInFlightRef.current = false;
+      }
+    },
+    [
+      clearAdvisorDebounce,
+      runAdvisor,
+      state.questionEvaluations,
+      state.sessionRecording.sessionId,
+      state.settings,
+    ]
+  );
 
   const regenerateSuggestion = useCallback(async () => {
     await runAdvisor({
@@ -5479,6 +5707,7 @@ export function useMeetingAssistant() {
     exportTrace,
     updateTraceHumanEvaluation,
     updateQuestionHumanEvaluation,
+    correctActiveQuestionType,
     regenerateSuggestion,
     applyResponseAction,
     answerClarifyingQuestion,
@@ -5686,16 +5915,6 @@ function readStringFromTraceMetadata(
 ) {
   const value = metadata?.[key];
   return typeof value === "string" && value.trim() ? value : undefined;
-}
-
-function readNumberFromTraceMetadata(
-  metadata: Record<string, unknown> | undefined,
-  key: string
-) {
-  const value = metadata?.[key];
-  return typeof value === "number" && Number.isFinite(value)
-    ? value
-    : undefined;
 }
 
 function getAdvisorActiveTaskId(context: AdvisorPromptContext) {
@@ -6109,6 +6328,50 @@ function formatAdvisorQuestionTypeDecisionForTrace(
   };
 }
 
+function applyManualQuestionTypeCorrectionToAdvisorSignals(
+  signals: AdvisorTaskSignals,
+  correction: ManualQuestionTypeCorrection
+): AdvisorTaskSignals {
+  const taskRelation: InterviewTaskRelation =
+    correction.target === "child"
+      ? "child-probe"
+      : correction.target === "resume-parent"
+        ? "resume-parent"
+        : "followup-parent";
+
+  return {
+    ...signals,
+    questionType: correction.correctedType,
+    query: [
+      signals.query,
+      `Authoritative manual correction: treat the current question as ${formatScreenTaskKindLabel(
+        correction.correctedType
+      )}.`,
+      "Ignore the previous automatic type for routing, memory, playbook, and model selection.",
+    ]
+      .filter(Boolean)
+      .join("\n"),
+    taskRelation,
+    source: "manual-question-type-correction",
+    reuseActivePlaybook: correction.target !== "child",
+  };
+}
+
+function formatManualQuestionTypeCorrectionForTrace(
+  correction: ManualQuestionTypeCorrection | undefined
+) {
+  if (!correction) return {};
+  return {
+    manualQuestionTypeCorrectionId: correction.eventId,
+    manualQuestionTypeCorrectionSource: correction.source,
+    manualQuestionTypeCorrectionTarget: correction.target,
+    detectedQuestionType: correction.detectedType,
+    correctedQuestionType: correction.correctedType,
+    correctionTraceId: correction.correctionTraceId,
+    regenerationTraceId: correction.regenerationTraceId,
+  };
+}
+
 function detectOpeningTaskRoute(text: string):
   | (OpeningRouteContext & {
       questionType: MemoryQuestionType;
@@ -6415,6 +6678,7 @@ function updateInterviewTaskContinuityForAnswer({
   if (shouldStartNewParent) {
     const parentId = createMeetingId("interview_parent");
     const nextPhase = phaseDecision?.phase ?? playbook?.phase ?? "follow_up";
+    const storedPlaybook = withInterviewPlaybookPhase(playbook, nextPhase);
     const whiteboardArtifact = updateWhiteboardArtifactFromAnswer({
       parentTaskId: parentId,
       parentQuestionType: kind,
@@ -6433,12 +6697,12 @@ function updateInterviewTaskContinuityForAnswer({
         source,
         stableKind: kind,
         topic,
-        playbook,
+        playbook: storedPlaybook,
         playbookPhase: nextPhase,
         phaseProgress: applyPlaybookPhaseDecisionToProgress(
-          playbook?.phase ? { [playbook.phase]: true } : {},
+          storedPlaybook?.phase ? { [storedPlaybook.phase]: true } : {},
           phaseDecision,
-          playbook?.phase
+          storedPlaybook?.phase
         ),
         supportedFactAnchors: anchors,
         latestUsefulAnswer: isUsefulAnswer
@@ -6496,18 +6760,24 @@ function updateInterviewTaskContinuityForAnswer({
     };
   }
 
+  const nextPhase =
+    phaseDecision?.phase ?? playbook?.phase ?? existingTask.playbookPhase;
+  const storedPlaybook = withInterviewPlaybookPhase(
+    playbook ?? existingTask.playbook,
+    nextPhase
+  );
+
   return {
     task: {
       ...existingTask,
       updatedAt: now,
       expiresAt,
-      playbook: playbook ?? existingTask.playbook,
-      playbookPhase:
-        phaseDecision?.phase ?? playbook?.phase ?? existingTask.playbookPhase,
+      playbook: storedPlaybook,
+      playbookPhase: nextPhase,
       phaseProgress: applyPlaybookPhaseDecisionToProgress(
         existingTask.phaseProgress,
         phaseDecision,
-        playbook?.phase
+        storedPlaybook?.phase
       ),
       supportedFactAnchors: anchors,
       whiteboardArtifact: updateWhiteboardArtifactFromAnswer({
@@ -6516,7 +6786,7 @@ function updateInterviewTaskContinuityForAnswer({
         parentQuestionType: existingTask.stableKind,
         parentTopic: existingTask.topic,
         finalContent: trimmedContent,
-        phase: phaseDecision?.phase ?? playbook?.phase ?? existingTask.playbookPhase,
+        phase: nextPhase,
         traceId,
         selectedOverlayIds,
         updateSource: whiteboardUpdateSource ?? "model-output",
@@ -6573,6 +6843,37 @@ function buildInterviewParentFromScreenTask(
     expiresAt: task.expiresAt,
     startObservationId: task.basedOnObservationId,
     revisions: 1,
+  };
+}
+
+function buildCorrectionParentFromActiveMeetingTask(
+  task: NonNullable<MeetingContextState["activeMeetingTask"]>,
+  correctedType: CanonicalQuestionType
+): ActiveInterviewParent | undefined {
+  if (!isParentCanonicalQuestionType(correctedType)) return undefined;
+
+  return {
+    id: task.parent.id,
+    source: task.screen ? "screen" : "voice",
+    stableKind: correctedType,
+    topic:
+      task.child?.question ||
+      task.screen?.question ||
+      task.parent.topic ||
+      "Current interview question",
+    playbook: task.parent.playbook,
+    playbookPhase: task.parent.playbookPhase,
+    phaseProgress: task.parent.phaseProgress,
+    supportedFactAnchors: task.parent.supportedFactAnchors,
+    latestUsefulAnswer: task.parent.latestUsefulAnswer,
+    previousUsefulAnswer: task.parent.previousUsefulAnswer,
+    whiteboardArtifact: task.parent.whiteboardArtifact,
+    createdAt: task.parent.createdAt,
+    updatedAt: task.parent.updatedAt,
+    expiresAt: task.parent.expiresAt,
+    startTurnId: task.parent.startTurnId,
+    startObservationId: task.parent.startObservationId,
+    revisions: task.parent.revisions ?? 0,
   };
 }
 

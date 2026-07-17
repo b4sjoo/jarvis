@@ -161,3 +161,54 @@ test("stores whiteboard, manual next, and diagram overlay evaluation fields", ()
     "overlay-distracting",
   ]);
 });
+
+test("stores manual runtime type correction as HITL classification feedback", () => {
+  const evaluations = upsertQuestionHumanEvaluation(
+    [],
+    {
+      sessionId: "session_1",
+      traceId: "correction_trace_1",
+      traceKind: "voice",
+      taskId: "task_1",
+      parentTaskId: "parent_1",
+      taskSource: "voice",
+      questionType: "project-deep-dive",
+    },
+    {
+      correctedQuestionType: "coding",
+      manualQuestionTypeCorrectionId: "correction_1",
+      manualQuestionTypeCorrectionTraceId: "correction_trace_1",
+      manualQuestionTypeRegenerationTraceId: "regeneration_trace_1",
+      manualQuestionTypeCorrectionSource: "focus-mode",
+      classification: {
+        verdict: "wrong",
+        reasons: ["manual-runtime-correction"],
+      },
+    }
+  );
+
+  assert.equal(evaluations.length, 1);
+  assert.equal(evaluations[0].questionId, "parent_1");
+  assert.equal(evaluations[0].questionType, "project-deep-dive");
+  assert.equal(evaluations[0].correctedQuestionType, "coding");
+  assert.equal(
+    evaluations[0].manualQuestionTypeCorrectionId,
+    "correction_1"
+  );
+  assert.equal(
+    evaluations[0].manualQuestionTypeCorrectionTraceId,
+    "correction_trace_1"
+  );
+  assert.equal(
+    evaluations[0].manualQuestionTypeRegenerationTraceId,
+    "regeneration_trace_1"
+  );
+  assert.equal(
+    evaluations[0].manualQuestionTypeCorrectionSource,
+    "focus-mode"
+  );
+  assert.equal(evaluations[0].classification.verdict, "wrong");
+  assert.deepEqual(evaluations[0].classification.reasons, [
+    "manual-runtime-correction",
+  ]);
+});
