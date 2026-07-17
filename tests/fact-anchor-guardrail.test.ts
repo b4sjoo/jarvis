@@ -17,7 +17,7 @@ test("allows behavioral answers when selected memory contains a supported story 
       makeRetrievedEntry({
         entry: makeMemoryEntry({
           id: "mem_story_aos_cleanup",
-          type: "answer_template",
+          type: "personal_story",
           title: "AOS cleanup cost-saving story",
           content:
             "Situation: shared AOS test account had 400+ inactive clusters. Action: cleanup. Result: saved over $30,000/month.",
@@ -31,6 +31,78 @@ test("allows behavioral answers when selected memory contains a supported story 
   assert.equal(decision.state, "strong-anchor");
   assert.equal(decision.action, "answer-with-anchor");
   assert.equal(decision.selectedAnchorId, "mem_story_aos_cleanup");
+  assert.deepEqual(decision.supportedAnchorTitles, ["AOS cleanup"]);
+});
+
+test("does not promote a story template to fact evidence", () => {
+  const decision = buildFactAnchorDecision({
+    questionType: "behavioral",
+    memoryContext: makeMemoryResult([
+      makeRetrievedEntry({
+        entry: makeMemoryEntry({
+          id: "mem_story_template",
+          type: "answer_template",
+          title: "AOS cleanup cost-saving story",
+          content: "Situation, action, and measurable impact template.",
+          projectName: "AOS cleanup",
+          evidenceEntryIds: ["mem_aos_evidence"],
+        }),
+        matchReason: ["behavioral:story-anchor"],
+      }),
+    ]),
+  });
+
+  assert.equal(decision.state, "weak-anchor");
+  assert.equal(decision.action, "answer-with-caveats");
+  assert.deepEqual(decision.supportedAnchorTitles, []);
+});
+
+test("does not promote global field guidance to a project fact anchor", () => {
+  const decision = buildFactAnchorDecision({
+    questionType: "project-deep-dive",
+    memoryContext: makeMemoryResult([
+      makeRetrievedEntry({
+        entry: makeMemoryEntry({
+          id: "mem_rag_failure_modes",
+          type: "field_note",
+          title: "RAG failure modes",
+          content: "Generic retrieval and grounding guidance.",
+          projectName: "Agentic Memory",
+        }),
+        matchReason: ["project:fact-anchor"],
+      }),
+    ]),
+  });
+
+  assert.equal(decision.state, "weak-anchor");
+  assert.deepEqual(decision.supportedAnchorTitles, []);
+});
+
+test("uses separately retrieved linked evidence instead of its answer template", () => {
+  const decision = buildFactAnchorDecision({
+    questionType: "behavioral",
+    memoryContext: makeMemoryResult([
+      makeRetrievedEntry({
+        entry: makeMemoryEntry({
+          id: "mem_story_template",
+          type: "answer_template",
+          title: "Cost-saving answer template",
+          evidenceEntryIds: ["mem_aos_evidence"],
+        }),
+      }),
+      makeRetrievedEntry({
+        entry: makeMemoryEntry({
+          id: "mem_aos_evidence",
+          type: "answer_evidence",
+          title: "AOS cleanup evidence",
+          projectName: "AOS cleanup",
+        }),
+      }),
+    ]),
+  });
+
+  assert.equal(decision.state, "strong-anchor");
+  assert.equal(decision.selectedAnchorId, "mem_aos_evidence");
   assert.deepEqual(decision.supportedAnchorTitles, ["AOS cleanup"]);
 });
 

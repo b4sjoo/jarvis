@@ -197,6 +197,12 @@ export interface SessionCompactTraceSummary {
     candidateCount?: number;
     eligibleCount?: number;
     rejectedCount?: number;
+    factEvidenceCount?: number;
+    guidanceCount?: number;
+    templateCount?: number;
+    overlayCount?: number;
+    anchorEligibleCount?: number;
+    anchorIneligibleCount?: number;
     rejectSummary?: MemoryRejectSummary[];
     totalChars?: number;
     useCase?: string;
@@ -1354,6 +1360,24 @@ function buildCompactTraceSummary({
           candidateCount: readNumber(memoryStep.metadata?.candidateCount),
           eligibleCount: readNumber(memoryStep.metadata?.eligibleCount),
           rejectedCount: readNumber(memoryStep.metadata?.rejectedCount),
+          factEvidenceCount: readNumber(
+            memoryStep.metadata?.runtimeMemoryFactEvidenceCount
+          ),
+          guidanceCount: readNumber(
+            memoryStep.metadata?.runtimeMemoryGuidanceCount
+          ),
+          templateCount: readNumber(
+            memoryStep.metadata?.runtimeMemoryTemplateCount
+          ),
+          overlayCount: readNumber(
+            memoryStep.metadata?.runtimeMemoryOverlayCount
+          ),
+          anchorEligibleCount: readNumber(
+            memoryStep.metadata?.runtimeMemoryAnchorEligibleCount
+          ),
+          anchorIneligibleCount: readNumber(
+            memoryStep.metadata?.runtimeMemoryAnchorIneligibleCount
+          ),
           rejectSummary: readMemoryRejectSummary(
             memoryStep.metadata?.rejectSummary
           ),

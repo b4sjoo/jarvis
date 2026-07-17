@@ -401,9 +401,7 @@ function buildParentFromScreenTask(task: ActiveScreenTask): ActiveMeetingParent 
     playbook: task.playbook ? { ...task.playbook } : undefined,
     playbookPhase: task.playbook?.phase ?? "follow_up",
     phaseProgress: {},
-    supportedFactAnchors: task.classifier?.projectAnchor
-      ? [task.classifier.projectAnchor]
-      : [],
+    supportedFactAnchors: [],
     latestUsefulAnswer: task.content,
     createdAt: task.createdAt,
     updatedAt: task.updatedAt,

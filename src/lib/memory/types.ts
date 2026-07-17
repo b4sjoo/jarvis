@@ -162,6 +162,18 @@ export type MemoryTopicDomain =
 
 export type MemoryPriority = "low" | "normal" | "high" | "pinned";
 
+export type RuntimeMemoryRole =
+  | "fact-evidence"
+  | "guidance"
+  | "template"
+  | "overlay";
+
+export interface RuntimeMemoryRoleDecision {
+  role: RuntimeMemoryRole;
+  anchorEligible: boolean;
+  anchorEligibilityReason: string;
+}
+
 export interface MemoryEntry {
   id: string;
   sourceIds: string[];
@@ -286,6 +298,7 @@ export interface RetrievedMemoryEntry {
   score: number;
   matchReason: string[];
   injectedContent: string;
+  runtimeRole?: RuntimeMemoryRoleDecision;
 }
 
 export interface MemoryRetrievalResult {

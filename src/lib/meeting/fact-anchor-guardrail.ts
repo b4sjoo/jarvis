@@ -1,29 +1,16 @@
 import type {
-  MemoryEntry,
   MemoryQuestionType,
   MemoryRetrievalResult,
   RetrievedMemoryEntry,
 } from "@/lib/memory";
+import {
+  getRuntimeFactAnchorLabel,
+  resolveRetrievedMemoryRole,
+} from "../memory/runtime-role.js";
 import type {
   FactAnchorDecision,
   FactAnchorRequiredFor,
 } from "./types";
-
-const FACT_ANCHOR_ENTRY_TYPES = new Set<MemoryEntry["type"]>([
-  "resume_fact",
-  "personal_story",
-  "achievement_metric",
-  "answer_evidence",
-  "working_summary",
-  "project_context",
-  "design_doc",
-  "implementation_note",
-  "decision_record",
-  "investigation_note",
-  "threat_model",
-  "field_note",
-  "cached_answer",
-]);
 
 const GENERIC_ANCHOR_TITLES = new Set([
   "behavioral story",
@@ -59,10 +46,7 @@ export function buildFactAnchorDecision({
     };
   }
 
-  const memoryAnchors = collectFactAnchorEntries(
-    memoryContext?.entries ?? [],
-    requiredFor
-  );
+  const memoryAnchors = collectFactAnchorEntries(memoryContext?.entries ?? []);
   const activeAnchors = normalizeActiveFactAnchors(activeFactAnchors);
   const supportedAnchorIds = uniqueStrings([
     ...memoryAnchors.map((item) => item.entry.id),
@@ -158,41 +142,15 @@ function getFactAnchorRequirement(
 }
 
 function collectFactAnchorEntries(
-  entries: RetrievedMemoryEntry[],
-  requiredFor: Exclude<FactAnchorRequiredFor, "none">
+  entries: RetrievedMemoryEntry[]
 ) {
-  return entries.filter((item) =>
-    isFactAnchorEntry(item.entry, requiredFor, item.matchReason)
+  return entries.filter(
+    (item) => resolveRetrievedMemoryRole(item).anchorEligible
   );
 }
 
-function isFactAnchorEntry(
-  entry: MemoryEntry,
-  requiredFor: Exclude<FactAnchorRequiredFor, "none">,
-  matchReason: string[]
-) {
-  if (FACT_ANCHOR_ENTRY_TYPES.has(entry.type)) return true;
-  if (entry.projectId || entry.projectName) return true;
-  if (matchReason.includes("behavioral:story-anchor")) return true;
-  if (matchReason.includes("project:fact-anchor")) return true;
-
-  if (
-    requiredFor === "behavioral" &&
-    (entry.type === "answer_template" || entry.type === "cached_answer")
-  ) {
-    return /\b(situation|action|result|impact|story|deadline|saved|cost|ownership|commitment|tradeoff)\b/i.test(
-      [entry.title, entry.summary, entry.content.slice(0, 1200)]
-        .filter(Boolean)
-        .join(" ")
-    );
-  }
-
-  return false;
-}
-
 function formatMemoryAnchorTitle(item: RetrievedMemoryEntry) {
-  const entry = item.entry;
-  return entry.projectName || entry.projectId || entry.title || entry.id;
+  return getRuntimeFactAnchorLabel(item.entry);
 }
 
 function normalizeActiveFactAnchors(anchors: string[]) {

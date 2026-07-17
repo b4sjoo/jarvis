@@ -8,6 +8,8 @@ import { safeLocalStorage } from "@/lib";
 import { floatArrayToWav } from "@/lib/utils";
 import type { TYPE_PROVIDER } from "@/types";
 import {
+  buildRuntimeMemoryRoleTelemetry,
+  extractRuntimeFactAnchorLabels,
   formatMemorySelectionForTrace,
   retrieveMemoryContext,
   type MemoryAskFrame,
@@ -2057,6 +2059,22 @@ export function useMeetingAssistant() {
         });
         const diagramOverlayTraceMetadata =
           buildDiagramOverlayEvalTraceMetadata(memoryContext.overlaySelection);
+        const memoryRoleTelemetry = buildRuntimeMemoryRoleTelemetry(
+          memoryContext.entries
+        );
+        const memoryRoleTraceMetadata = {
+          runtimeMemoryRoleCounts: memoryRoleTelemetry.counts,
+          runtimeMemoryFactEvidenceCount:
+            memoryRoleTelemetry.counts["fact-evidence"],
+          runtimeMemoryGuidanceCount: memoryRoleTelemetry.counts.guidance,
+          runtimeMemoryTemplateCount: memoryRoleTelemetry.counts.template,
+          runtimeMemoryOverlayCount: memoryRoleTelemetry.counts.overlay,
+          runtimeMemoryAnchorEligibleCount:
+            memoryRoleTelemetry.anchorEligibleCount,
+          runtimeMemoryAnchorIneligibleCount:
+            memoryRoleTelemetry.anchorIneligibleCount,
+          runtimeMemoryRoles: memoryRoleTelemetry.entries,
+        };
 
         if (traceId) {
           traceStoreRef.current.recordOutput(
@@ -2080,6 +2098,7 @@ export function useMeetingAssistant() {
               rejectedCount: memoryContext.rejectedCount,
               rejectSummary: memoryContext.rejectSummary,
               ...diagramOverlayTraceMetadata,
+              ...memoryRoleTraceMetadata,
               memoryPolicySnapshot: memoryContext.policySnapshot,
               totalChars: memoryContext.totalChars,
             }
@@ -2102,6 +2121,7 @@ export function useMeetingAssistant() {
               blockedFamilies: effectiveMemoryPolicy?.blockedFamilies,
               strictProjectAnchor: effectiveMemoryPolicy?.strictProjectAnchor,
               ...diagramOverlayTraceMetadata,
+              ...memoryRoleTraceMetadata,
             },
           });
           traceStoreRef.current.finishStep(traceId, memoryStepId, "success", {
@@ -2121,12 +2141,16 @@ export function useMeetingAssistant() {
             rejectedCount: memoryContext.rejectedCount,
             rejectSummary: memoryContext.rejectSummary,
             ...diagramOverlayTraceMetadata,
+            ...memoryRoleTraceMetadata,
             memoryPolicySnapshot: memoryContext.policySnapshot,
             totalChars: memoryContext.totalChars,
           });
           traceStoreRef.current.updateMetadata(
             traceId,
-            { ...diagramOverlayTraceMetadata }
+            {
+              ...diagramOverlayTraceMetadata,
+              ...memoryRoleTraceMetadata,
+            }
           );
         }
 
@@ -2696,10 +2720,8 @@ export function useMeetingAssistant() {
               ? "manual-next"
               : "model-output",
             expiresAt: getActiveScreenTaskExpiresAt(state.settings),
-            supportedFactAnchors: mergeSupportedFactAnchors(
-              advisorProjectAnchor ? [advisorProjectAnchor] : undefined,
-              extractSupportedFactAnchorsFromMemory(memoryContext)
-            ),
+            supportedFactAnchors:
+              extractSupportedFactAnchorsFromMemory(memoryContext),
           })
         : {
             task: existingInterviewTask,
@@ -4792,12 +4814,7 @@ export function useMeetingAssistant() {
                 : "model-output",
             expiresAt: getActiveScreenTaskExpiresAt(state.settings, now),
             supportedFactAnchors:
-              mergeSupportedFactAnchors(
-                screenPreflight?.projectAnchor
-                  ? [screenPreflight.projectAnchor]
-                  : undefined,
-                extractSupportedFactAnchorsFromMemory(memoryContext)
-              ),
+              extractSupportedFactAnchorsFromMemory(memoryContext),
           });
           contextManagerRef.current.setActiveMeetingTaskState({
             activeScreenTask,
@@ -6620,8 +6637,12 @@ function updateInterviewTaskContinuityForAnswer({
     latestTurn?.text.trim() ||
     existingTask?.topic ||
     "Unknown interview task";
-  const anchors = mergeSupportedFactAnchors(
+  const continuingTaskAnchors = mergeSupportedFactAnchors(
     existingTask?.supportedFactAnchors,
+    supportedFactAnchors
+  );
+  const newParentAnchors = mergeSupportedFactAnchors(
+    undefined,
     supportedFactAnchors
   );
 
@@ -6704,7 +6725,7 @@ function updateInterviewTaskContinuityForAnswer({
           phaseDecision,
           storedPlaybook?.phase
         ),
-        supportedFactAnchors: anchors,
+        supportedFactAnchors: newParentAnchors,
         latestUsefulAnswer: isUsefulAnswer
           ? buildCompactAnswerSummary(trimmedContent)
           : undefined,
@@ -6751,7 +6772,7 @@ function updateInterviewTaskContinuityForAnswer({
               observationId,
             })
           : existingTask.child,
-        supportedFactAnchors: anchors,
+        supportedFactAnchors: continuingTaskAnchors,
         whiteboardArtifact,
         revisions: existingTask.revisions + 1,
       },
@@ -6779,7 +6800,7 @@ function updateInterviewTaskContinuityForAnswer({
         phaseDecision,
         storedPlaybook?.phase
       ),
-      supportedFactAnchors: anchors,
+      supportedFactAnchors: continuingTaskAnchors,
       whiteboardArtifact: updateWhiteboardArtifactFromAnswer({
         existing: existingTask.whiteboardArtifact,
         parentTaskId: existingTask.id,
@@ -6832,9 +6853,7 @@ function buildInterviewParentFromScreenTask(
     playbook: task.playbook,
     playbookPhase: task.playbook?.phase ?? "follow_up",
     phaseProgress: task.playbook?.phase ? { [task.playbook.phase]: true } : {},
-    supportedFactAnchors: task.classifier?.projectAnchor
-      ? [task.classifier.projectAnchor]
-      : [],
+    supportedFactAnchors: [],
     latestUsefulAnswer: buildCompactAnswerSummary(task.content),
     previousUsefulAnswer: undefined,
     whiteboardArtifact,
@@ -7259,14 +7278,7 @@ function mergeSupportedFactAnchors(
 function extractSupportedFactAnchorsFromMemory(
   memoryContext: MemoryRetrievalResult | null | undefined
 ) {
-  if (!memoryContext?.entries.length) return [];
-  return memoryContext.entries
-    .map((item) => {
-      const entry = item.entry;
-      return entry.projectName || entry.projectId || entry.title || entry.id;
-    })
-    .filter(Boolean)
-    .slice(0, 8);
+  return extractRuntimeFactAnchorLabels(memoryContext?.entries ?? []);
 }
 
 function extractSelectedOverlayIdsFromMemory(
