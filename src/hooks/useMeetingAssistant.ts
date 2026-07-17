@@ -138,7 +138,11 @@ import {
   persistQuestionHumanEvaluations,
   buildSessionRecordingProviderSummary,
   buildFactAnchorDecision,
+  detectPersonalEvidenceRequirement,
   formatFactAnchorDecisionForTrace,
+  formatProjectBindingDecisionForTrace,
+  projectBindingMatchesProjectHint,
+  resolveProjectBinding,
   getActiveMeetingTaskTraceMetadata,
   areSuggestionsForSameParentTask,
   buildSuggestionTaskMetadata,
@@ -1981,6 +1985,7 @@ export function useMeetingAssistant() {
       topicDomain,
       projectAnchor,
       memoryPolicy,
+      forceStrictProjectAnchor,
       taskId,
     }: {
       traceId?: string;
@@ -1993,6 +1998,7 @@ export function useMeetingAssistant() {
       topicDomain?: MemoryTopicDomain;
       projectAnchor?: string;
       memoryPolicy?: MemoryRetrievalPolicy;
+      forceStrictProjectAnchor?: boolean;
     }): Promise<MemoryRetrievalResult | undefined> => {
       const resolvedQuestionType =
         questionType ?? inferMemoryQuestionTypeFromQuery(query);
@@ -2008,6 +2014,7 @@ export function useMeetingAssistant() {
         questionType: resolvedQuestionType,
         projectAnchor,
         query,
+        force: forceStrictProjectAnchor,
       });
 
       let memoryStepId: string | undefined;
@@ -2534,6 +2541,38 @@ export function useMeetingAssistant() {
       topicDomain: advisorTopicDomain,
       projectAnchor: advisorProjectAnchor,
       memoryPolicy: advisorRuntimePlaybook?.memoryPolicy,
+      forceStrictProjectAnchor: Boolean(
+        (promptContext.activeMeetingTask?.parent.projectBinding ??
+          promptContext.activeInterviewTask?.projectBinding) &&
+          advisorTaskSignals.taskRelation !== "new-parent" &&
+          advisorTaskSignals.taskRelation !== "unknown"
+      ),
+    });
+    const advisorPersonalEvidenceDecision = detectPersonalEvidenceRequirement({
+      questionText: advisorTaskSignals.query,
+      questionType: advisorQuestionType,
+      mode: state.settings.personalEvidenceGuardrailMode,
+    });
+    const projectBindingDecision = resolveProjectBinding({
+      existingBinding:
+        promptContext.activeMeetingTask?.parent.projectBinding ??
+        promptContext.activeInterviewTask?.projectBinding,
+      questionType: advisorQuestionType,
+      relation: advisorTaskSignals.taskRelation,
+      requiresProjectBinding:
+        advisorTaskSignals.openingRoute?.commitParent !== false &&
+        (advisorQuestionType === "project-deep-dive" ||
+          (advisorPersonalEvidenceDecision.enforced &&
+            advisorPersonalEvidenceDecision.requirement ===
+              "autobiographical-project")),
+      projectAnchor: advisorProjectAnchor,
+      explicitProjectSelection:
+        options.clarifyingFeedback?.answer === "option"
+          ? options.clarifyingFeedback.answerValue ??
+            options.clarifyingFeedback.answerLabel
+          : undefined,
+      explicitSelectionSource: "user-selection",
+      memoryContext,
     });
     const factAnchorDecision = buildFactAnchorDecision({
       questionType:
@@ -2548,8 +2587,31 @@ export function useMeetingAssistant() {
         promptContext.activeMeetingTask?.parent.supportedFactAnchors ??
         promptContext.activeInterviewTask?.supportedFactAnchors,
       projectAnchor: advisorProjectAnchor,
+      personalEvidenceDecision: advisorPersonalEvidenceDecision,
+      projectBindingDecision,
     });
     if (traceId) {
+      const projectBindingMetadata = {
+        source: "advisor",
+        questionType: advisorQuestionType,
+        ...formatProjectBindingDecisionForTrace(projectBindingDecision),
+      };
+      traceStoreRef.current.updateMetadata(traceId, projectBindingMetadata);
+      const projectBindingStepId = traceStoreRef.current.startStep(
+        traceId,
+        "Project binding decision",
+        projectBindingMetadata
+      );
+      traceStoreRef.current.finishStep(
+        traceId,
+        projectBindingStepId,
+        "success"
+      );
+      sessionRecordingManagerRef.current?.recordProjectBindingDecision(
+        traceId,
+        projectBindingMetadata,
+        activeMeetingTaskId
+      );
       const factAnchorMetadata = {
         source: "advisor",
         questionType: advisorQuestionType,
@@ -2574,6 +2636,7 @@ export function useMeetingAssistant() {
       interviewPlaybook: advisorRuntimePlaybook,
       playbookPhaseDecision,
       factAnchorDecision,
+      projectBindingDecision,
       openingRoute: advisorTaskSignals.openingRoute,
     };
 
@@ -2746,7 +2809,10 @@ export function useMeetingAssistant() {
               : "model-output",
             expiresAt: getActiveScreenTaskExpiresAt(state.settings),
             supportedFactAnchors:
-              extractSupportedFactAnchorsFromMemory(memoryContext),
+              projectBindingDecision.binding
+                ? [projectBindingDecision.binding.projectName]
+                : extractSupportedFactAnchorsFromMemory(memoryContext),
+            projectBinding: projectBindingDecision.binding,
           })
         : {
             task: existingInterviewTask,
@@ -4489,6 +4555,30 @@ export function useMeetingAssistant() {
             screenMemoryQuery,
             screenPreflight
           );
+        const provisionalScreenTaskRelation =
+          resolveProvisionalScreenTaskRelation({
+            existingTask:
+              preflightContextState.activeInterviewTask ??
+              (preflightContextState.activeMeetingTask?.screen &&
+              preflightContextState.activeScreenTask
+                ? buildInterviewParentFromScreenTask(
+                    preflightContextState.activeScreenTask
+                  )
+                : undefined),
+            questionType:
+              screenPreflight?.questionType ?? screenMemoryQuestionType,
+            projectAnchor: screenPreflight?.projectAnchor,
+            questionText: screenPreflight?.question ?? screenMemoryQuery,
+          });
+        const existingScreenProjectBinding =
+          preflightContextState.activeMeetingTask?.parent.projectBinding ??
+          preflightContextState.activeInterviewTask?.projectBinding;
+        const screenRetrievalProjectAnchor =
+          provisionalScreenTaskRelation === "new-parent"
+            ? screenPreflight?.projectAnchor
+            : existingScreenProjectBinding?.projectName ??
+              existingScreenProjectBinding?.projectId ??
+              screenPreflight?.projectAnchor;
         const screenPlaybook = selectInterviewPlaybook({
           query: screenMemoryQuery,
           questionType: screenPreflight?.questionType ?? screenMemoryQuestionType,
@@ -4513,14 +4603,7 @@ export function useMeetingAssistant() {
             preflightContextState.activeInterviewTask?.phaseProgress,
           latestTurnText: recentTranscript,
           currentQuestion: screenPreflight?.question ?? screenMemoryQuery,
-          relation:
-            preflightContextState.activeMeetingTask &&
-            areCompatibleQuestionTypes(
-              preflightContextState.activeMeetingTask.parent.questionType,
-              screenPreflight?.questionType ?? screenMemoryQuestionType
-            )
-              ? "resume-parent"
-              : "new-parent",
+          relation: provisionalScreenTaskRelation,
           askFrame: screenPreflight?.askFrame ?? screenMemoryAskFrame,
         });
         const screenRuntimePlaybook = withInterviewPlaybookPhase(
@@ -4560,8 +4643,31 @@ export function useMeetingAssistant() {
           questionType: screenMemoryQuestionType,
           askFrame: screenMemoryAskFrame,
           topicDomain: screenMemoryTopicDomain,
-          projectAnchor: screenPreflight?.projectAnchor,
+          projectAnchor: screenRetrievalProjectAnchor,
           memoryPolicy: screenRuntimePlaybook?.memoryPolicy,
+          forceStrictProjectAnchor: Boolean(
+            existingScreenProjectBinding &&
+              provisionalScreenTaskRelation !== "new-parent"
+          ),
+        });
+        const screenPersonalEvidenceDecision =
+          detectPersonalEvidenceRequirement({
+            questionText: screenPreflight?.question ?? screenMemoryQuery,
+            questionType: screenMemoryQuestionType,
+            mode: state.settings.personalEvidenceGuardrailMode,
+          });
+        const screenProjectBindingDecision = resolveProjectBinding({
+          existingBinding:
+            existingScreenProjectBinding,
+          questionType: screenMemoryQuestionType,
+          relation: provisionalScreenTaskRelation,
+          requiresProjectBinding:
+            screenMemoryQuestionType === "project-deep-dive" ||
+            (screenPersonalEvidenceDecision.enforced &&
+              screenPersonalEvidenceDecision.requirement ===
+                "autobiographical-project"),
+          projectAnchor: screenPreflight?.projectAnchor,
+          memoryContext,
         });
         const screenFactAnchorDecision = buildFactAnchorDecision({
           questionType: screenMemoryQuestionType,
@@ -4569,9 +4675,43 @@ export function useMeetingAssistant() {
           personalEvidenceGuardrailMode:
             state.settings.personalEvidenceGuardrailMode,
           memoryContext,
-          activeFactAnchors: [],
+          activeFactAnchors:
+            preflightContextState.activeMeetingTask?.parent
+              .supportedFactAnchors ??
+            preflightContextState.activeInterviewTask?.supportedFactAnchors ??
+            [],
           projectAnchor: screenPreflight?.projectAnchor,
+          personalEvidenceDecision: screenPersonalEvidenceDecision,
+          projectBindingDecision: screenProjectBindingDecision,
         });
+        const projectBindingMetadata = {
+          source: "screen",
+          stage: "pre-model",
+          questionType: screenMemoryQuestionType,
+          provisionalTaskRelation: provisionalScreenTaskRelation,
+          retrievalProjectAnchor: screenRetrievalProjectAnchor,
+          ...formatProjectBindingDecisionForTrace(
+            screenProjectBindingDecision
+          ),
+        };
+        traceStoreRef.current.updateMetadata(
+          trace.id,
+          projectBindingMetadata
+        );
+        const projectBindingStepId = traceStoreRef.current.startStep(
+          trace.id,
+          "Project binding decision",
+          projectBindingMetadata
+        );
+        traceStoreRef.current.finishStep(
+          trace.id,
+          projectBindingStepId,
+          "success"
+        );
+        sessionRecordingManagerRef.current?.recordProjectBindingDecision(
+          trace.id,
+          projectBindingMetadata
+        );
         const factAnchorMetadata = {
           source: "screen",
           questionType: screenMemoryQuestionType,
@@ -4627,6 +4767,7 @@ export function useMeetingAssistant() {
             interviewPlaybook: screenRuntimePlaybook,
             playbookPhaseDecision: screenPhaseDecision,
             factAnchorDecision: screenFactAnchorDecision,
+            projectBindingDecision: screenProjectBindingDecision,
             signal: analysisController.signal,
             requestOptions: screenModelRequestOptions,
             trace: {
@@ -4820,6 +4961,48 @@ export function useMeetingAssistant() {
             "success"
           );
 
+          const reconciledScreenProjectBindingDecision =
+            resolveProjectBinding({
+              existingBinding: existingInterviewTask?.projectBinding,
+              questionType: screenMemoryQuestionType,
+              relation: screenRelationDecision.relation,
+              requiresProjectBinding:
+                screenMemoryQuestionType === "project-deep-dive" ||
+                (screenPersonalEvidenceDecision.enforced &&
+                  screenPersonalEvidenceDecision.requirement ===
+                    "autobiographical-project"),
+              projectAnchor: screenPreflight?.projectAnchor,
+              memoryContext,
+            });
+          const reconciledProjectBindingMetadata = {
+            source: "screen",
+            stage: "continuity-reconciliation",
+            questionType: screenMemoryQuestionType,
+            finalTaskRelation: screenRelationDecision.relation,
+            ...formatProjectBindingDecisionForTrace(
+              reconciledScreenProjectBindingDecision
+            ),
+          };
+          traceStoreRef.current.updateMetadata(
+            trace.id,
+            reconciledProjectBindingMetadata
+          );
+          const projectBindingReconciliationStepId =
+            traceStoreRef.current.startStep(
+              trace.id,
+              "Project binding continuity reconciliation",
+              reconciledProjectBindingMetadata
+            );
+          traceStoreRef.current.finishStep(
+            trace.id,
+            projectBindingReconciliationStepId,
+            "success"
+          );
+          sessionRecordingManagerRef.current?.recordProjectBindingDecision(
+            trace.id,
+            reconciledProjectBindingMetadata
+          );
+
           const screenContinuity = updateInterviewTaskContinuityForAnswer({
             existingTask: existingInterviewTask,
             source: "screen",
@@ -4842,7 +5025,11 @@ export function useMeetingAssistant() {
                 : "model-output",
             expiresAt: getActiveScreenTaskExpiresAt(state.settings, now),
             supportedFactAnchors:
-              extractSupportedFactAnchorsFromMemory(memoryContext),
+              reconciledScreenProjectBindingDecision.binding
+                ? [reconciledScreenProjectBindingDecision.binding.projectName]
+                : extractSupportedFactAnchorsFromMemory(memoryContext),
+            projectBinding:
+              reconciledScreenProjectBindingDecision.binding,
           });
           contextManagerRef.current.setActiveMeetingTaskState({
             activeScreenTask,
@@ -5795,15 +5982,17 @@ function applyStrictProjectAnchorPolicy({
   questionType,
   projectAnchor,
   query,
+  force = false,
 }: {
   memoryPolicy: MemoryRetrievalPolicy | undefined;
   questionType: MemoryQuestionType | undefined;
   projectAnchor: string | undefined;
   query: string;
+  force?: boolean;
 }): MemoryRetrievalPolicy | undefined {
   const anchor = projectAnchor?.trim();
   if (
-    questionType !== "project-deep-dive" ||
+    (!force && questionType !== "project-deep-dive") ||
     !anchor ||
     isCrossProjectComparisonQuery(query)
   ) {
@@ -6003,6 +6192,10 @@ function getAdvisorActivePlaybook(context: AdvisorPromptContext) {
 
 function getAdvisorActiveProjectAnchor(context: AdvisorPromptContext) {
   return (
+    context.activeMeetingTask?.parent.projectBinding?.projectName ??
+    context.activeMeetingTask?.parent.projectBinding?.projectId ??
+    context.activeInterviewTask?.projectBinding?.projectName ??
+    context.activeInterviewTask?.projectBinding?.projectId ??
     context.activeMeetingTask?.parent.supportedFactAnchors[0] ??
     context.activeMeetingTask?.screen?.projectAnchor ??
     context.activeScreenTask?.classifier?.projectAnchor ??
@@ -6636,6 +6829,7 @@ function updateInterviewTaskContinuityForAnswer({
   selectedOverlayIds,
   expiresAt,
   supportedFactAnchors,
+  projectBinding,
 }: {
   existingTask?: ActiveInterviewParent;
   source: "screen" | "voice";
@@ -6653,6 +6847,7 @@ function updateInterviewTaskContinuityForAnswer({
   selectedOverlayIds?: string[];
   expiresAt?: number;
   supportedFactAnchors?: string[];
+  projectBinding?: ActiveInterviewParent["projectBinding"];
 }): InterviewTaskContinuityResult {
   const kind = normalizeInterviewParentKind(questionType);
   const childQuestionType =
@@ -6754,6 +6949,7 @@ function updateInterviewTaskContinuityForAnswer({
           phaseDecision,
           storedPlaybook?.phase
         ),
+        projectBinding,
         supportedFactAnchors: newParentAnchors,
         latestUsefulAnswer: isUsefulAnswer
           ? buildCompactAnswerSummary(trimmedContent)
@@ -6801,6 +6997,7 @@ function updateInterviewTaskContinuityForAnswer({
               observationId,
             })
           : existingTask.child,
+        projectBinding: projectBinding ?? existingTask.projectBinding,
         supportedFactAnchors: continuingTaskAnchors,
         whiteboardArtifact,
         revisions: existingTask.revisions + 1,
@@ -6829,6 +7026,7 @@ function updateInterviewTaskContinuityForAnswer({
         phaseDecision,
         storedPlaybook?.phase
       ),
+      projectBinding: projectBinding ?? existingTask.projectBinding,
       supportedFactAnchors: continuingTaskAnchors,
       whiteboardArtifact: updateWhiteboardArtifactFromAnswer({
         existing: existingTask.whiteboardArtifact,
@@ -6912,6 +7110,12 @@ function buildCorrectionParentFromActiveMeetingTask(
     playbook: task.parent.playbook,
     playbookPhase: task.parent.playbookPhase,
     phaseProgress: task.parent.phaseProgress,
+    projectBinding: task.parent.projectBinding
+      ? {
+          ...task.parent.projectBinding,
+          evidenceEntryIds: [...task.parent.projectBinding.evidenceEntryIds],
+        }
+      : undefined,
     supportedFactAnchors: task.parent.supportedFactAnchors,
     latestUsefulAnswer: task.parent.latestUsefulAnswer,
     previousUsefulAnswer: task.parent.previousUsefulAnswer,
@@ -6923,6 +7127,47 @@ function buildCorrectionParentFromActiveMeetingTask(
     startObservationId: task.parent.startObservationId,
     revisions: task.parent.revisions ?? 0,
   };
+}
+
+function resolveProvisionalScreenTaskRelation({
+  existingTask,
+  questionType,
+  projectAnchor,
+  questionText,
+}: {
+  existingTask?: ActiveInterviewParent;
+  questionType: MemoryQuestionType | ScreenTaskKind;
+  projectAnchor?: string;
+  questionText?: string;
+}): InterviewTaskRelation {
+  if (!existingTask) return "new-parent";
+
+  if (
+    existingTask.projectBinding &&
+    projectAnchor?.trim() &&
+    !projectBindingMatchesProjectHint(
+      existingTask.projectBinding,
+      projectAnchor
+    )
+  ) {
+    return "new-parent";
+  }
+
+  const nextKind = normalizeInterviewParentKind(questionType);
+  if (!nextKind) return "child-probe";
+  if (isCompatibleParentKind(existingTask.stableKind, nextKind)) {
+    return "resume-parent";
+  }
+  if (
+    shouldUseLatestTurnAsChildProbe({
+      activeQuestionType: existingTask.stableKind,
+      latestQuestionType: readMemoryQuestionType(questionType) ?? "unknown",
+      latestText: questionText ?? "",
+    })
+  ) {
+    return "child-probe";
+  }
+  return "new-parent";
 }
 
 function decideScreenTaskRelation({
@@ -7009,6 +7254,7 @@ function decideScreenTaskRelation({
     .join("\n");
   const parentText = [
     existingTask.topic,
+    existingTask.projectBinding?.projectName,
     existingTask.supportedFactAnchors.join(" "),
     existingTask.latestUsefulAnswer,
     existingTask.child?.question,
@@ -7021,7 +7267,13 @@ function decideScreenTaskRelation({
   const correctionOverlap = countCorrectionTermOverlap(corrections, screenText);
   const screenProjectAnchor = screenPreflight?.projectAnchor;
   const projectAnchorMatches = screenProjectAnchor
-    ? existingTask.supportedFactAnchors.some((anchor) =>
+    ? (existingTask.projectBinding
+        ? projectBindingMatchesProjectHint(
+            existingTask.projectBinding,
+            screenProjectAnchor
+          )
+        : false) ||
+      existingTask.supportedFactAnchors.some((anchor) =>
         areLoosePhrasesSimilar(anchor, screenProjectAnchor)
       )
     : false;

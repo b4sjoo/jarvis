@@ -141,6 +141,7 @@ export function applyManualQuestionTypeCorrectionToParent({
     playbookPhase: nextPhase,
     phaseProgress: { [nextPhase]: true },
     child: undefined,
+    projectBinding: undefined,
     supportedFactAnchors: [],
     previousUsefulAnswer:
       parent.latestUsefulAnswer ?? parent.previousUsefulAnswer,

@@ -9,6 +9,7 @@ import {
   MeetingModelRequestOptions,
   MeetingResponseConfig,
   FactAnchorDecision,
+  ProjectBindingDecision,
   ScreenObservation,
   ScreenQuestionType,
   SelectedInterviewPlaybook,
@@ -27,6 +28,7 @@ import {
   withInterviewPlaybookPhase,
 } from "./interview-playbook";
 import { formatFactAnchorDecisionForPrompt } from "./fact-anchor-guardrail";
+import { formatProjectBindingDecisionForPrompt } from "./project-binding";
 import {
   formatPlaybookPhaseDecisionForPrompt,
   type PlaybookPhaseDecision,
@@ -82,6 +84,7 @@ export interface SolveScreenAnchoredTaskOptions {
   interviewPlaybook?: SelectedInterviewPlaybook;
   playbookPhaseDecision?: PlaybookPhaseDecision;
   factAnchorDecision?: FactAnchorDecision;
+  projectBindingDecision?: ProjectBindingDecision;
   signal?: AbortSignal;
   requestOptions?: MeetingModelRequestOptions;
   trace?: MeetingModelTraceCallbacks;
@@ -318,6 +321,7 @@ export async function solveScreenAnchoredTask({
   interviewPlaybook,
   playbookPhaseDecision,
   factAnchorDecision,
+  projectBindingDecision,
   signal,
   requestOptions,
   trace,
@@ -349,6 +353,7 @@ export async function solveScreenAnchoredTask({
     interviewPlaybook,
     playbookPhaseDecision,
     factAnchorDecision,
+    projectBindingDecision,
   });
   const imageInputs = buildScreenTaskImageInputs(observation);
 
@@ -511,6 +516,7 @@ function buildScreenTaskUserMessage({
   interviewPlaybook,
   playbookPhaseDecision,
   factAnchorDecision,
+  projectBindingDecision,
 }: {
   observation: ScreenObservation;
   recentTranscript?: string;
@@ -523,6 +529,7 @@ function buildScreenTaskUserMessage({
   interviewPlaybook?: SelectedInterviewPlaybook;
   playbookPhaseDecision?: PlaybookPhaseDecision;
   factAnchorDecision?: FactAnchorDecision;
+  projectBindingDecision?: ProjectBindingDecision;
 }) {
   const runtimePlaybook = withInterviewPlaybookPhase(
     interviewPlaybook,
@@ -565,6 +572,9 @@ function buildScreenTaskUserMessage({
     "<memory_context>",
     memoryContext?.trim() || "No memory context was injected.",
     "</memory_context>",
+    "<project_binding>",
+    formatProjectBindingDecisionForPrompt(projectBindingDecision),
+    "</project_binding>",
     "<fact_anchor_guardrail>",
     formatFactAnchorDecisionForPrompt(factAnchorDecision),
     "</fact_anchor_guardrail>",
@@ -604,6 +614,7 @@ function buildScreenTaskUserMessage({
     "For general-system-design and AI/ML system-design tasks, include a Whiteboard section when the design is scoped enough or the visible/transcript prompt asks to write, draw, explain layers, explain architecture, or whiteboard it. Use plain text directly; do not ask whether to use plain text or ASCII. Whiteboard should cover scope/assumptions, scale or QPS when applicable, core APIs, data model, components, critical read/write or retrieval/serving flow, consistency/bottleneck, reliability, and observability.",
     "For behavioral interview questions, prefer a concrete first-person story from eligible fact-evidence memory. Do not invent facts, employers, project names, teammates, metrics, timelines, or outcomes from guidance, templates, overlays, or unsupported visible text.",
     "Obey <fact_anchor_guardrail> whenever it requires personal evidence, even if the screen preflight classified the question as coding, field knowledge, system design, or unknown. If Action is ask-clarification or offer-supported-choices, do not invent a first-person story or project. Use 中文思路 to say the missing supported anchor, keep Answer safe, and ask the user to choose or clarify the project/story.",
+    "Obey <project_binding>. A bound project is the exclusive source identity for first-person project facts in this parent task. If Action is needs-selection, list the eligible project names in Clarifying options and do not choose or blend projects silently.",
     "If <fact_anchor_guardrail> Action is answer-with-caveats, use only supported facts and avoid unsupported employers, project names, teammates, dates, metrics, ownership, or impact claims.",
     "Use <interview_session_context> to personalize behavioral interview answers across screen tasks. If the target company is Amazon and injected memory includes Leadership Principle guidance, internally classify the visible question to the closest principle, demonstrate Strength signals, and avoid Concern signals. Do not explicitly name the principle unless asked or useful.",
     "If memory supports only a qualitative outcome, state the outcome qualitatively instead of adding unsupported numbers, dates, durations, or speed claims.",

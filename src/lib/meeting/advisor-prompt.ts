@@ -16,6 +16,7 @@ import {
 import { formatActiveMeetingTaskForPrompt } from "./active-meeting-task";
 import { formatFactAnchorDecisionForPrompt } from "./fact-anchor-guardrail";
 import { formatPlaybookPhaseDecisionForPrompt } from "./playbook-phase";
+import { formatProjectBindingDecisionForPrompt } from "./project-binding";
 
 export function buildAdvisorSystemPrompt() {
   return [
@@ -36,6 +37,7 @@ export function buildAdvisorSystemPrompt() {
     "Do not invent colleagues, speakers, questions, intentions, or meeting dialogue that are not present in the transcript or screen context.",
     "Treat memory context as user-provided background only. Visible screen content, latest transcript, and active task constraints have higher priority than memory.",
     "Within memory context, only entries in runtime_role=fact-evidence with anchor_eligible=true may support first-person professional facts. Guidance, template, and overlay entries may shape explanation, wording, or diagrams but cannot prove that the user performed a project or achieved an outcome.",
+    "When a project binding is present, it is the exclusive project identity for first-person facts in the current parent task. Do not silently replace it with a different retrieved project.",
     "If memory conflicts with the current task, follow the current task and mention the conflict only if it is useful.",
     "When using memory for behavioral or interview answers, do not add unsupported metrics, timelines, dates, or impact claims. If memory only supports a qualitative outcome, keep the outcome qualitative.",
     "For behavioral and project-deep-dive answers, supported facts can come from eligible fact-evidence memory, visible screen text, Them transcript, Interview Brief, or explicit user correction. A previous assistant answer, a Me attempted answer, memory guidance, or an answer template is not a fact source by itself.",
@@ -133,6 +135,9 @@ export function buildAdvisorUserMessage(
     "<memory_context>",
     context.memoryContext || "No memory context was injected.",
     "</memory_context>",
+    "<project_binding>",
+    formatProjectBindingDecisionForPrompt(context.projectBindingDecision),
+    "</project_binding>",
     "<fact_anchor_guardrail>",
     formatFactAnchorDecisionForPrompt(context.factAnchorDecision),
     "</fact_anchor_guardrail>",
@@ -203,6 +208,7 @@ export function buildAdvisorUserMessage(
       "If <interview_playbook> questionType differs from <active_meeting_task> parent Question type, treat the latest transcript as a child probe inside the active parent task. Answer the local probe without clearing, restarting, or rewriting the parent task.",
       "If the target company is Amazon and this is a behavioral answer, use any injected Amazon Leadership Principle rubric to demonstrate Strength signals and avoid Concern signals. Do not explicitly name the principle unless it helps.",
       "Obey <fact_anchor_guardrail> whenever it requires personal evidence, even if the current question type is coding, field knowledge, system design, or unknown. If Action is ask-clarification or offer-supported-choices, do not invent a first-person story or project. Put a brief Chinese warning in 中文思路, put '-' or a safe setup sentence in Answer, and put the needed story/project selection in Clarifying question and Clarifying options.",
+      "Obey <project_binding>. If it has a bound project, use only that project's eligible evidence for first-person claims. If Action is needs-selection, put the eligible project names in Clarifying options and do not silently choose one.",
       "If <fact_anchor_guardrail> Action is answer-with-caveats, use only supported facts and explicitly avoid unsupported employers, project names, timelines, teammates, metrics, ownership, or impact claims.",
       "If the active task kind is ai-ml-system-design, answer as a forward-looking AI/ML infrastructure design: clarify objective/metrics, data/retrieval/model path, serving path, evaluation/feedback, latency/cost/safety, and tradeoffs.",
       "For AI/ML or agent system-design follow-ups about metrics, logs, evaluation, quality, faster/cheaper/better, or observability, be concrete: include north-star metric, online product metrics, offline eval metrics, agent trajectory metrics, latency/cost metrics, safety/guardrail metrics, and a log schema with trace/correlation id plus key event fields.",
@@ -253,6 +259,7 @@ export function buildAdvisorUserMessage(
     "For AI/ML or agent system-design questions about metrics, logs, evaluation, quality, faster/cheaper/better, or observability, avoid generic measurement language. Name concrete metric categories, define what each measures, and include the required log/trace fields.",
     "For Amazon behavioral interview moments, use injected Leadership Principle guidance to shape the answer toward Strength signals and away from Concern signals without inventing facts.",
     "Obey <fact_anchor_guardrail> whenever it requires personal evidence, regardless of the current question type. If it says ask-clarification or offer-supported-choices, do not fabricate a first-person story or project; ask the user to choose a supported anchor or clarify the intended project/story.",
+    "Obey <project_binding>. Preserve a bound project across its follow-ups and child probes. If it needs selection, ask the user to choose from the eligible project names instead of blending projects.",
     ...buildContextInstructions(contextMode),
     ...buildVoiceSeededInstructions(contextMode),
     "If no help is needed, output a single dash.",

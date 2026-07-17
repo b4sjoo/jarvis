@@ -10,7 +10,9 @@ import {
 import type {
   FactAnchorDecision,
   FactAnchorRequiredFor,
+  PersonalEvidenceDecision,
   PersonalEvidenceGuardrailMode,
+  ProjectBindingDecision,
 } from "./types";
 import { detectPersonalEvidenceRequirement } from "./personal-evidence-guardrail.js";
 
@@ -31,6 +33,8 @@ export interface BuildFactAnchorDecisionInput {
   memoryContext?: MemoryRetrievalResult | null;
   activeFactAnchors?: string[];
   projectAnchor?: string;
+  personalEvidenceDecision?: PersonalEvidenceDecision;
+  projectBindingDecision?: ProjectBindingDecision;
 }
 
 export function buildFactAnchorDecision({
@@ -40,12 +44,16 @@ export function buildFactAnchorDecision({
   memoryContext,
   activeFactAnchors = [],
   projectAnchor,
+  personalEvidenceDecision,
+  projectBindingDecision,
 }: BuildFactAnchorDecisionInput): FactAnchorDecision {
-  const personalEvidence = detectPersonalEvidenceRequirement({
-    questionText,
-    questionType,
-    mode: personalEvidenceGuardrailMode,
-  });
+  const personalEvidence =
+    personalEvidenceDecision ??
+    detectPersonalEvidenceRequirement({
+      questionText,
+      questionType,
+      mode: personalEvidenceGuardrailMode,
+    });
   const requiredFor = getFactAnchorRequirement(questionType, personalEvidence);
   if (requiredFor === "none") {
     return {
@@ -64,8 +72,38 @@ export function buildFactAnchorDecision({
     };
   }
 
-  const memoryAnchors = collectFactAnchorEntries(memoryContext?.entries ?? []);
-  const activeAnchors = normalizeActiveFactAnchors(activeFactAnchors);
+  if (
+    requiredFor === "project-deep-dive" &&
+    projectBindingDecision?.action === "needs-selection"
+  ) {
+    const candidateTitles = projectBindingDecision.candidates.map(
+      (candidate) => candidate.projectName
+    );
+    return {
+      state: candidateTitles.length ? "weak-anchor" : "no-anchor",
+      requiredFor,
+      supportedAnchorIds: [],
+      supportedAnchorTitles: candidateTitles,
+      action: candidateTitles.length
+        ? "offer-supported-choices"
+        : "ask-clarification",
+      missingAnchorReason: candidateTitles.length
+        ? "Multiple eligible project evidence sets were retrieved, so Jarvis must not choose one silently."
+        : "No eligible project evidence was retrieved for the requested first-person project answer.",
+      personalEvidence,
+      unsupportedClaimRisk: "high",
+    };
+  }
+
+  const memoryAnchors = collectFactAnchorEntries(
+    memoryContext?.entries ?? [],
+    projectBindingDecision
+  );
+  const activeAnchors = projectBindingDecision?.binding
+    ? normalizeActiveFactAnchors(activeFactAnchors).filter((anchor) =>
+        activeAnchorMatchesBinding(anchor, projectBindingDecision.binding!)
+      )
+    : normalizeActiveFactAnchors(activeFactAnchors);
   const supportedAnchorIds = uniqueStrings([
     ...memoryAnchors.map((item) => item.entry.id),
     ...activeAnchors,
@@ -197,10 +235,25 @@ function getFactAnchorRequirement(
 }
 
 function collectFactAnchorEntries(
-  entries: RetrievedMemoryEntry[]
+  entries: RetrievedMemoryEntry[],
+  projectBindingDecision?: ProjectBindingDecision
 ) {
-  return entries.filter(
+  const eligible = entries.filter(
     (item) => resolveRetrievedMemoryRole(item).anchorEligible
+  );
+  const binding = projectBindingDecision?.binding;
+  if (!binding) return eligible;
+
+  const evidenceIds = new Set(binding.evidenceEntryIds);
+  return eligible.filter(
+    (item) =>
+      evidenceIds.has(item.entry.id) ||
+      projectIdentityMatchesBinding(
+        item.entry.projectId,
+        item.entry.projectName,
+        binding.projectId,
+        binding.projectName
+      )
   );
 }
 
@@ -215,6 +268,49 @@ function normalizeActiveFactAnchors(anchors: string[]) {
       .filter(Boolean)
       .filter((anchor) => !GENERIC_ANCHOR_TITLES.has(anchor.toLowerCase()))
   ).slice(0, 8);
+}
+
+function activeAnchorMatchesBinding(
+  anchor: string,
+  binding: NonNullable<ProjectBindingDecision["binding"]>
+) {
+  return projectIdentityMatchesBinding(
+    anchor,
+    anchor,
+    binding.projectId,
+    binding.projectName
+  );
+}
+
+function projectIdentityMatchesBinding(
+  projectId: string | undefined,
+  projectName: string | undefined,
+  bindingProjectId: string | undefined,
+  bindingProjectName: string
+) {
+  const itemIdentities = [projectId, projectName]
+    .map(normalizeProjectIdentity)
+    .filter(Boolean);
+  const bindingIdentities = [bindingProjectId, bindingProjectName]
+    .map(normalizeProjectIdentity)
+    .filter(Boolean);
+  return itemIdentities.some((itemIdentity) =>
+    bindingIdentities.some(
+      (bindingIdentity) =>
+        itemIdentity === bindingIdentity ||
+        (itemIdentity.length >= 4 && bindingIdentity.includes(itemIdentity)) ||
+        (bindingIdentity.length >= 4 && itemIdentity.includes(bindingIdentity))
+    )
+  );
+}
+
+function normalizeProjectIdentity(value: string | undefined) {
+  return (value ?? "")
+    .normalize("NFKC")
+    .toLowerCase()
+    .replace(/\b(project|system|feature)\b/g, "")
+    .replace(/[^\p{L}\p{N}]+/gu, "")
+    .trim();
 }
 
 function uniqueStrings(values: Array<string | undefined>) {

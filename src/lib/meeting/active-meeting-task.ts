@@ -4,6 +4,7 @@ import type {
   ActiveScreenTask,
   InterviewPlaybookPhase,
   InterviewSubtaskIntent,
+  ProjectBinding,
   ScreenCaptureTarget,
   ScreenObservation,
   ScreenQuestionType,
@@ -35,6 +36,7 @@ export interface ActiveMeetingParent {
   playbook?: SelectedInterviewPlaybook;
   playbookPhase: InterviewPlaybookPhase;
   phaseProgress: Record<string, boolean>;
+  projectBinding?: ProjectBinding;
   supportedFactAnchors: string[];
   latestUsefulAnswer?: string;
   previousUsefulAnswer?: string;
@@ -220,6 +222,14 @@ export function getActiveMeetingTaskTraceMetadata(
     activeMeetingParentId: task.parent.id,
     activeMeetingParentQuestionType: task.parent.questionType,
     activeMeetingParentPhase: task.parent.playbookPhase,
+    activeMeetingProjectBindingId: task.parent.projectBinding?.projectId,
+    activeMeetingProjectBindingName: task.parent.projectBinding?.projectName,
+    activeMeetingProjectBindingEntryId:
+      task.parent.projectBinding?.primaryEntryId,
+    activeMeetingProjectBindingSource: task.parent.projectBinding?.source,
+    activeMeetingProjectBindingConfidence:
+      task.parent.projectBinding?.confidence,
+    activeMeetingProjectBindingRevision: task.parent.projectBinding?.revision,
     activeMeetingChildId: task.child?.id,
     activeMeetingChildQuestionType: task.child?.questionType,
     activeMeetingChildIntent: task.child?.intent,
@@ -249,6 +259,9 @@ export function formatActiveMeetingTaskForPrompt(
     `- Question type: ${task.parent.questionType}`,
     `- Topic: ${task.parent.topic || "unknown"}`,
     `- Playbook phase: ${task.parent.playbookPhase}`,
+    task.parent.projectBinding
+      ? `- Bound project: ${task.parent.projectBinding.projectName} (source=${task.parent.projectBinding.source}, confidence=${task.parent.projectBinding.confidence.toFixed(2)})`
+      : undefined,
     task.parent.supportedFactAnchors.length
       ? `- Supported fact anchors: ${task.parent.supportedFactAnchors.join(", ")}`
       : undefined,
@@ -332,7 +345,17 @@ export function formatActiveMeetingTaskForRecording(
   return {
     id: task.id,
     source: task.source,
-    parent: { ...task.parent },
+    parent: {
+      ...task.parent,
+      phaseProgress: { ...task.parent.phaseProgress },
+      supportedFactAnchors: [...task.parent.supportedFactAnchors],
+      projectBinding: task.parent.projectBinding
+        ? {
+            ...task.parent.projectBinding,
+            evidenceEntryIds: [...task.parent.projectBinding.evidenceEntryIds],
+          }
+        : undefined,
+    },
     child: task.child ? { ...task.child } : undefined,
     screen: task.screen ? { ...task.screen } : undefined,
     divergence: task.divergence ? { ...task.divergence } : undefined,
@@ -373,6 +396,12 @@ function buildParentFromInterviewTask(
     playbookPhase: task.playbookPhase,
     phaseProgress: { ...task.phaseProgress },
     supportedFactAnchors: [...task.supportedFactAnchors],
+    projectBinding: task.projectBinding
+      ? {
+          ...task.projectBinding,
+          evidenceEntryIds: [...task.projectBinding.evidenceEntryIds],
+        }
+      : undefined,
     latestUsefulAnswer: task.latestUsefulAnswer,
     previousUsefulAnswer: task.previousUsefulAnswer,
     whiteboardArtifact: task.whiteboardArtifact

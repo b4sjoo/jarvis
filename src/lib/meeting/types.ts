@@ -312,6 +312,46 @@ export interface PersonalEvidenceDecision {
   enforced: boolean;
 }
 
+export type ProjectBindingSource =
+  | "interview-brief"
+  | "memory"
+  | "user-selection"
+  | "correction";
+
+export interface ProjectBinding {
+  projectId?: string;
+  projectName: string;
+  primaryEntryId: string;
+  evidenceEntryIds: string[];
+  source: ProjectBindingSource;
+  confidence: number;
+  lockedAt: number;
+  revision: number;
+  reason: string;
+}
+
+export interface ProjectBindingCandidate {
+  projectId?: string;
+  projectName: string;
+  primaryEntryId: string;
+  evidenceEntryIds: string[];
+  score: number;
+}
+
+export type ProjectBindingAction =
+  | "not-applicable"
+  | "preserve"
+  | "bind"
+  | "needs-selection";
+
+export interface ProjectBindingDecision {
+  action: ProjectBindingAction;
+  binding?: ProjectBinding;
+  candidates: ProjectBindingCandidate[];
+  changed: boolean;
+  reason: string;
+}
+
 export interface FactAnchorDecision {
   state: FactAnchorState;
   requiredFor: FactAnchorRequiredFor;
@@ -415,6 +455,7 @@ export interface ActiveInterviewParent {
   playbook?: SelectedInterviewPlaybook;
   playbookPhase: InterviewPlaybookPhase;
   phaseProgress: Record<string, boolean>;
+  projectBinding?: ProjectBinding;
   supportedFactAnchors: string[];
   latestUsefulAnswer?: string;
   previousUsefulAnswer?: string;
@@ -604,6 +645,7 @@ export interface AdvisorPromptContext {
   interviewPlaybook?: SelectedInterviewPlaybook;
   playbookPhaseDecision?: PlaybookPhaseDecision;
   factAnchorDecision?: FactAnchorDecision;
+  projectBindingDecision?: ProjectBindingDecision;
   openingRoute?: OpeningRouteContext;
   latestTurn?: TranscriptTurn;
 }

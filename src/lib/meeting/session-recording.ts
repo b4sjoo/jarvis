@@ -64,6 +64,7 @@ interface SessionRecordingEvent {
     | "model-output"
     | "memory-retrieval"
     | "fact-anchor-decision"
+    | "project-binding-decision"
     | "playbook-selected"
     | "trace-export"
     | "trace-metrics"
@@ -152,6 +153,18 @@ export interface SessionCompactTraceSummary {
     mode?: string;
     enforced?: boolean;
     unsupportedClaimRisk?: string;
+  };
+  projectBinding?: {
+    action?: string;
+    reason?: string;
+    changed?: boolean;
+    projectId?: string;
+    projectName?: string;
+    primaryEntryId?: string;
+    source?: string;
+    confidence?: number;
+    revision?: number;
+    candidateCount?: number;
   };
   sttValidation?: {
     disposition: string;
@@ -617,6 +630,24 @@ export class SessionRecordingManager {
     this.recordEvent("fact-anchor-decision", metadata, undefined, traceId, taskId);
   }
 
+  recordProjectBindingDecision(
+    traceId: string | undefined,
+    metadata: Record<string, unknown>,
+    taskId?: string
+  ) {
+    const session = this.activeSession;
+    if (!session) return;
+    if (traceId) session.recordedTraceIds.add(traceId);
+    if (taskId) session.recordedTaskIds.add(taskId);
+    this.recordEvent(
+      "project-binding-decision",
+      metadata,
+      undefined,
+      traceId,
+      taskId
+    );
+  }
+
   recordTaskSnapshot(task: ActiveScreenTask, traceId?: string) {
     const session = this.activeSession;
     if (!session) return;
@@ -666,6 +697,17 @@ export class SessionRecordingManager {
         activeMeetingParentId: task.parent.id,
         activeMeetingParentQuestionType: task.parent.questionType,
         activeMeetingParentPhase: task.parent.playbookPhase,
+        activeMeetingProjectBindingId: task.parent.projectBinding?.projectId,
+        activeMeetingProjectBindingName:
+          task.parent.projectBinding?.projectName,
+        activeMeetingProjectBindingEntryId:
+          task.parent.projectBinding?.primaryEntryId,
+        activeMeetingProjectBindingSource:
+          task.parent.projectBinding?.source,
+        activeMeetingProjectBindingConfidence:
+          task.parent.projectBinding?.confidence,
+        activeMeetingProjectBindingRevision:
+          task.parent.projectBinding?.revision,
         activeMeetingChildId: task.child?.id,
         activeMeetingChildQuestionType: task.child?.questionType,
         activeMeetingChildIntent: task.child?.intent,
@@ -1353,6 +1395,42 @@ function buildCompactTraceSummary({
       unsupportedClaimRisk: readFirstString(
         metadataSources,
         "unsupportedClaimRisk"
+      ),
+    },
+    projectBinding: {
+      action: readFirstString(metadataSources, "projectBindingAction"),
+      reason: readFirstString(metadataSources, "projectBindingReason"),
+      changed: readFirstBoolean(metadataSources, "projectBindingChanged"),
+      projectId:
+        readFirstString(metadataSources, "projectBindingProjectId") ??
+        readFirstString(metadataSources, "activeMeetingProjectBindingId"),
+      projectName:
+        readFirstString(metadataSources, "projectBindingProjectName") ??
+        readFirstString(metadataSources, "activeMeetingProjectBindingName"),
+      primaryEntryId:
+        readFirstString(metadataSources, "projectBindingPrimaryEntryId") ??
+        readFirstString(metadataSources, "activeMeetingProjectBindingEntryId"),
+      source:
+        readFirstString(metadataSources, "projectBindingSource") ??
+        readFirstString(metadataSources, "activeMeetingProjectBindingSource"),
+      confidence:
+        readFirstNumberFromMetadata(
+          metadataSources,
+          "projectBindingConfidence"
+        ) ??
+        readFirstNumberFromMetadata(
+          metadataSources,
+          "activeMeetingProjectBindingConfidence"
+        ),
+      revision:
+        readFirstNumberFromMetadata(metadataSources, "projectBindingRevision") ??
+        readFirstNumberFromMetadata(
+          metadataSources,
+          "activeMeetingProjectBindingRevision"
+        ),
+      candidateCount: readFirstNumberFromMetadata(
+        metadataSources,
+        "projectBindingCandidateCount"
       ),
     },
     sttValidation: buildSttValidationTraceSummary(metadataSources),

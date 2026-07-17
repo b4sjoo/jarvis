@@ -512,6 +512,12 @@ function cloneActiveInterviewTask(
     ...task,
     playbook: task.playbook ? { ...task.playbook } : undefined,
     phaseProgress: { ...task.phaseProgress },
+    projectBinding: task.projectBinding
+      ? {
+          ...task.projectBinding,
+          evidenceEntryIds: [...task.projectBinding.evidenceEntryIds],
+        }
+      : undefined,
     supportedFactAnchors: [...task.supportedFactAnchors],
     child: task.child ? { ...task.child } : undefined,
     whiteboardArtifact: task.whiteboardArtifact

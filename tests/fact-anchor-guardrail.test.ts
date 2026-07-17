@@ -196,6 +196,99 @@ test("does not enforce a hypothetical implementation request", () => {
   assert.equal(decision.state, "not-required");
 });
 
+test("offers project choices instead of blending multiple eligible projects", () => {
+  const decision = buildFactAnchorDecision({
+    questionType: "project-deep-dive",
+    memoryContext: makeMemoryResult([
+      makeRetrievedEntry({
+        entry: makeMemoryEntry({
+          id: "mem_agentic",
+          projectId: "agentic-memory",
+          projectName: "Agentic Memory",
+        }),
+      }),
+      makeRetrievedEntry({
+        entry: makeMemoryEntry({
+          id: "mem_model_interface",
+          projectId: "model-interface",
+          projectName: "Model Interface",
+        }),
+      }),
+    ]),
+    projectBindingDecision: {
+      action: "needs-selection",
+      candidates: [
+        {
+          projectId: "agentic-memory",
+          projectName: "Agentic Memory",
+          primaryEntryId: "mem_agentic",
+          evidenceEntryIds: ["mem_agentic"],
+          score: 100,
+        },
+        {
+          projectId: "model-interface",
+          projectName: "Model Interface",
+          primaryEntryId: "mem_model_interface",
+          evidenceEntryIds: ["mem_model_interface"],
+          score: 90,
+        },
+      ],
+      changed: false,
+      reason: "multiple-eligible-evidence-projects",
+    },
+  });
+
+  assert.equal(decision.action, "offer-supported-choices");
+  assert.deepEqual(decision.supportedAnchorTitles, [
+    "Agentic Memory",
+    "Model Interface",
+  ]);
+  assert.equal(decision.unsupportedClaimRisk, "high");
+});
+
+test("a project binding filters unrelated retrieved fact evidence", () => {
+  const decision = buildFactAnchorDecision({
+    questionType: "project-deep-dive",
+    memoryContext: makeMemoryResult([
+      makeRetrievedEntry({
+        entry: makeMemoryEntry({
+          id: "mem_model_interface",
+          projectId: "model-interface",
+          projectName: "Model Interface",
+        }),
+      }),
+      makeRetrievedEntry({
+        entry: makeMemoryEntry({
+          id: "mem_agentic",
+          projectId: "agentic-memory",
+          projectName: "Agentic Memory",
+        }),
+      }),
+    ]),
+    projectBindingDecision: {
+      action: "preserve",
+      binding: {
+        projectId: "agentic-memory",
+        projectName: "Agentic Memory",
+        primaryEntryId: "mem_agentic",
+        evidenceEntryIds: ["mem_agentic"],
+        source: "memory",
+        confidence: 0.96,
+        lockedAt: 1,
+        revision: 1,
+        reason: "test-binding",
+      },
+      candidates: [],
+      changed: false,
+      reason: "existing-parent-binding-is-authoritative",
+    },
+  });
+
+  assert.equal(decision.selectedAnchorId, "mem_agentic");
+  assert.deepEqual(decision.supportedAnchorIds, ["mem_agentic"]);
+  assert.deepEqual(decision.supportedAnchorTitles, ["Agentic Memory"]);
+});
+
 function makeMemoryResult(
   entries: RetrievedMemoryEntry[]
 ): MemoryRetrievalResult {

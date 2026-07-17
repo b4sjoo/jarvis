@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   buildActiveMeetingTask,
   collectActiveMeetingTaskIdentityIds,
+  formatActiveMeetingTaskForRecording,
   formatActiveMeetingTaskForPrompt,
   getActiveMeetingTaskTraceMetadata,
   resolveActiveMeetingTaskIdentity,
@@ -133,6 +134,42 @@ test("exposes trace metadata and prompt text for evaluation corpus linking", () 
   assert.equal(metadata.activeMeetingScreenAskFrame, "direct-answer");
   assert.match(formatActiveMeetingTaskForPrompt(task), /<|Task id: parent_1/);
   assert.match(formatActiveMeetingTaskForPrompt(task), /Ask frame: direct-answer/);
+});
+
+test("exposes and safely records the canonical project binding", () => {
+  const task = buildActiveMeetingTask({
+    activeInterviewTask: makeInterviewTask({
+      stableKind: "project-deep-dive",
+      projectBinding: {
+        projectId: "agentic-memory",
+        projectName: "Agentic Memory",
+        primaryEntryId: "mem_agentic",
+        evidenceEntryIds: ["mem_agentic", "mem_agentic_tradeoff"],
+        source: "memory",
+        confidence: 0.96,
+        lockedAt: now,
+        revision: 1,
+        reason: "one-eligible-evidence-project",
+      },
+    }),
+  });
+
+  assert.equal(
+    getActiveMeetingTaskTraceMetadata(task)
+      .activeMeetingProjectBindingName,
+    "Agentic Memory"
+  );
+  assert.match(
+    formatActiveMeetingTaskForPrompt(task),
+    /Bound project: Agentic Memory/
+  );
+
+  const recorded = formatActiveMeetingTaskForRecording(task!);
+  recorded.parent.projectBinding?.evidenceEntryIds.push("mutated-copy");
+  assert.deepEqual(task?.parent.projectBinding?.evidenceEntryIds, [
+    "mem_agentic",
+    "mem_agentic_tradeoff",
+  ]);
 });
 
 test("surfaces screen/interview divergence instead of silently hiding it", () => {
