@@ -292,6 +292,26 @@ export type FactAnchorAction =
   | "ask-clarification"
   | "offer-supported-choices";
 
+export type PersonalEvidenceRequirement =
+  | "not-required"
+  | "autobiographical-project"
+  | "autobiographical-behavioral"
+  | "personal-logistics";
+
+export type PersonalEvidenceConfidenceTier = "low" | "medium" | "high";
+
+export type PersonalEvidenceGuardrailMode = "enforcement" | "shadow";
+
+export interface PersonalEvidenceDecision {
+  requirement: PersonalEvidenceRequirement;
+  confidence: number;
+  confidenceTier: PersonalEvidenceConfidenceTier;
+  signals: string[];
+  counterSignals: string[];
+  mode: PersonalEvidenceGuardrailMode;
+  enforced: boolean;
+}
+
 export interface FactAnchorDecision {
   state: FactAnchorState;
   requiredFor: FactAnchorRequiredFor;
@@ -300,6 +320,8 @@ export interface FactAnchorDecision {
   selectedAnchorId?: string;
   missingAnchorReason?: string;
   action: FactAnchorAction;
+  personalEvidence: PersonalEvidenceDecision;
+  unsupportedClaimRisk: "none" | "guarded" | "high" | "shadow-observed";
 }
 
 export interface ActiveScreenTask {
@@ -687,6 +709,7 @@ export interface MeetingAssistantSettings {
   privacyMode: MeetingPrivacyMode;
   activeScreenTaskTimeoutMinutes: number;
   useMemory: boolean;
+  personalEvidenceGuardrailMode: PersonalEvidenceGuardrailMode;
   debugMode: boolean;
   microphoneContextEnabled: boolean;
   response: MeetingResponseConfig;

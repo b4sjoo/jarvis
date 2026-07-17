@@ -145,6 +145,14 @@ export interface SessionCompactTraceSummary {
   playbookSubtype?: string;
   turnGateAction?: string;
   turnGateReason?: string;
+  personalEvidence?: {
+    requirement?: string;
+    confidence?: number;
+    confidenceTier?: string;
+    mode?: string;
+    enforced?: boolean;
+    unsupportedClaimRisk?: string;
+  };
   sttValidation?: {
     disposition: string;
     reason?: string;
@@ -1321,6 +1329,32 @@ function buildCompactTraceSummary({
     playbookSubtype: readFirstString(metadataSources, "playbookSubtype"),
     turnGateAction: readFirstString(metadataSources, "turnGateAction"),
     turnGateReason: readFirstString(metadataSources, "turnGateReason"),
+    personalEvidence: {
+      requirement: readFirstString(
+        metadataSources,
+        "personalEvidenceRequirement"
+      ),
+      confidence: readFirstNumberFromMetadata(
+        metadataSources,
+        "personalEvidenceConfidence"
+      ),
+      confidenceTier: readFirstString(
+        metadataSources,
+        "personalEvidenceConfidenceTier"
+      ),
+      mode: readFirstString(
+        metadataSources,
+        "personalEvidenceGuardrailMode"
+      ),
+      enforced: readFirstBoolean(
+        metadataSources,
+        "personalEvidenceEnforced"
+      ),
+      unsupportedClaimRisk: readFirstString(
+        metadataSources,
+        "unsupportedClaimRisk"
+      ),
+    },
     sttValidation: buildSttValidationTraceSummary(metadataSources),
     providerId: readString(modelStep?.metadata?.providerId),
     mode: readString(modelStep?.metadata?.mode),

@@ -43,6 +43,7 @@ import type {
   MeetingTraceSummary,
   MeetingTraceValueSummary,
   MemoryEntryEvaluationLabelValue,
+  PersonalEvidenceGuardrailMode,
   QuestionHumanEvaluation,
   ScreenCaptureTarget,
   ScreenTaskAnswer,
@@ -1220,6 +1221,12 @@ export const MeetingAssistant = ({
                 }
                 useMemory={meeting.settings.useMemory}
                 onUseMemoryChange={meeting.setUseMemory}
+                personalEvidenceGuardrailMode={
+                  meeting.settings.personalEvidenceGuardrailMode
+                }
+                onPersonalEvidenceGuardrailModeChange={
+                  meeting.setPersonalEvidenceGuardrailMode
+                }
                 audioProfile={meeting.settings.audio.profile}
                 audioConfig={meeting.settings.audio.config}
                 onAudioProfileChange={meeting.setMeetingAudioProfile}
@@ -2689,6 +2696,8 @@ const ConfigurationsPanel = ({
   onActiveScreenTaskTimeoutMinutesChange,
   useMemory,
   onUseMemoryChange,
+  personalEvidenceGuardrailMode,
+  onPersonalEvidenceGuardrailModeChange,
   audioProfile,
   audioConfig,
   onAudioProfileChange,
@@ -2713,6 +2722,10 @@ const ConfigurationsPanel = ({
   onActiveScreenTaskTimeoutMinutesChange: (minutes: number) => void;
   useMemory: boolean;
   onUseMemoryChange: (enabled: boolean) => void;
+  personalEvidenceGuardrailMode: PersonalEvidenceGuardrailMode;
+  onPersonalEvidenceGuardrailModeChange: (
+    mode: PersonalEvidenceGuardrailMode
+  ) => void;
   audioProfile: MeetingAudioProfile;
   audioConfig: MeetingAudioConfig;
   onAudioProfileChange: (profile: MeetingAudioProfile) => void;
@@ -2845,6 +2858,27 @@ const ConfigurationsPanel = ({
                 </div>
               </div>
               <Switch checked={useMemory} onCheckedChange={onUseMemoryChange} />
+            </div>
+
+            <div className="flex items-center justify-between gap-2 rounded-sm border border-border/60 p-2">
+              <div>
+                <div className="text-[10px] font-medium uppercase text-muted-foreground">
+                  Personal Fact Guardrail
+                </div>
+                <div className="mt-0.5 text-[10px] text-muted-foreground">
+                  {personalEvidenceGuardrailMode === "enforcement"
+                    ? "Enforcement mode"
+                    : "Shadow mode (trace only)"}
+                </div>
+              </div>
+              <Switch
+                checked={personalEvidenceGuardrailMode === "enforcement"}
+                onCheckedChange={(enabled) => {
+                  onPersonalEvidenceGuardrailModeChange(
+                    enabled ? "enforcement" : "shadow"
+                  );
+                }}
+              />
             </div>
           </ConfigurationGroup>
 

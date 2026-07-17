@@ -42,6 +42,7 @@ import {
   InterviewTaskRelation,
   InterviewSessionBrief,
   MeetingPrivacyMode,
+  PersonalEvidenceGuardrailMode,
   MeetingResponseActionMode,
   MeetingResponseConfig,
   ManualQuestionTypeCorrection,
@@ -246,6 +247,7 @@ const INITIAL_STATE: MeetingAssistantState = {
     privacyMode: "text-and-screen-to-cloud",
     activeScreenTaskTimeoutMinutes: DEFAULT_ACTIVE_SCREEN_TASK_TIMEOUT_MINUTES,
     useMemory: true,
+    personalEvidenceGuardrailMode: "enforcement",
     debugMode: false,
     microphoneContextEnabled: true,
     response: DEFAULT_MEETING_RESPONSE_CONFIG,
@@ -291,6 +293,10 @@ function readMeetingAssistantSettings(): MeetingAssistantSettings {
         typeof parsed.useMemory === "boolean"
           ? parsed.useMemory
           : DEFAULT_MEETING_ASSISTANT_SETTINGS.useMemory,
+      personalEvidenceGuardrailMode:
+        isPersonalEvidenceGuardrailMode(parsed.personalEvidenceGuardrailMode)
+          ? parsed.personalEvidenceGuardrailMode
+          : DEFAULT_MEETING_ASSISTANT_SETTINGS.personalEvidenceGuardrailMode,
       debugMode:
         typeof parsed.debugMode === "boolean"
           ? parsed.debugMode
@@ -826,6 +832,12 @@ function isMeetingPrivacyMode(
     value === "memory-only" ||
     value === "text-and-screen-to-cloud"
   );
+}
+
+function isPersonalEvidenceGuardrailMode(
+  value: unknown
+): value is PersonalEvidenceGuardrailMode {
+  return value === "enforcement" || value === "shadow";
 }
 
 function withTimeout<T>(
@@ -1894,6 +1906,16 @@ export function useMeetingAssistant() {
     [updateSettings]
   );
 
+  const setPersonalEvidenceGuardrailMode = useCallback(
+    (personalEvidenceGuardrailMode: PersonalEvidenceGuardrailMode) => {
+      updateSettings((previous) => ({
+        ...previous,
+        personalEvidenceGuardrailMode,
+      }));
+    },
+    [updateSettings]
+  );
+
   const setResponseConfig = useCallback(
     (response: MeetingResponseConfig) => {
       updateSettings((previous) => ({
@@ -2518,6 +2540,9 @@ export function useMeetingAssistant() {
         advisorTaskSignals.openingRoute?.commitParent === false
           ? undefined
           : advisorQuestionType,
+      questionText: advisorTaskSignals.query,
+      personalEvidenceGuardrailMode:
+        state.settings.personalEvidenceGuardrailMode,
       memoryContext,
       activeFactAnchors:
         promptContext.activeMeetingTask?.parent.supportedFactAnchors ??
@@ -4540,6 +4565,9 @@ export function useMeetingAssistant() {
         });
         const screenFactAnchorDecision = buildFactAnchorDecision({
           questionType: screenMemoryQuestionType,
+          questionText: screenPreflight?.question ?? screenMemoryQuery,
+          personalEvidenceGuardrailMode:
+            state.settings.personalEvidenceGuardrailMode,
           memoryContext,
           activeFactAnchors: [],
           projectAnchor: screenPreflight?.projectAnchor,
@@ -5706,6 +5734,7 @@ export function useMeetingAssistant() {
     setInterviewSessionBrief,
     clearInterviewSessionBrief,
     setUseMemory,
+    setPersonalEvidenceGuardrailMode,
     setDebugMode,
     setMicrophoneContextEnabled,
     toggleMicrophoneContext,

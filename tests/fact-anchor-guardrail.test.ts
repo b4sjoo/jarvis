@@ -153,6 +153,49 @@ test("does not require fact anchors for coding or system design tasks", () => {
   assert.equal(decision.requiredFor, "none");
 });
 
+test("enforces personal project evidence even when taxonomy says coding", () => {
+  const decision = buildFactAnchorDecision({
+    questionType: "coding",
+    questionText: "What did you implement in this feature?",
+    personalEvidenceGuardrailMode: "enforcement",
+    memoryContext: makeMemoryResult([]),
+  });
+
+  assert.equal(decision.personalEvidence.enforced, true);
+  assert.equal(decision.requiredFor, "project-deep-dive");
+  assert.equal(decision.state, "no-anchor");
+  assert.equal(decision.action, "ask-clarification");
+  assert.equal(decision.unsupportedClaimRisk, "high");
+});
+
+test("shadow mode records the personal evidence signal without changing behavior", () => {
+  const decision = buildFactAnchorDecision({
+    questionType: "coding",
+    questionText: "What did you implement in this feature?",
+    personalEvidenceGuardrailMode: "shadow",
+    memoryContext: makeMemoryResult([]),
+  });
+
+  assert.equal(decision.personalEvidence.confidenceTier, "high");
+  assert.equal(decision.personalEvidence.enforced, false);
+  assert.equal(decision.requiredFor, "none");
+  assert.equal(decision.state, "not-required");
+  assert.equal(decision.unsupportedClaimRisk, "shadow-observed");
+});
+
+test("does not enforce a hypothetical implementation request", () => {
+  const decision = buildFactAnchorDecision({
+    questionType: "coding",
+    questionText: "How would you implement a stack with two queues?",
+    personalEvidenceGuardrailMode: "enforcement",
+    memoryContext: makeMemoryResult([]),
+  });
+
+  assert.equal(decision.personalEvidence.requirement, "not-required");
+  assert.equal(decision.requiredFor, "none");
+  assert.equal(decision.state, "not-required");
+});
+
 function makeMemoryResult(
   entries: RetrievedMemoryEntry[]
 ): MemoryRetrievalResult {
