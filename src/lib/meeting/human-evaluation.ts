@@ -27,6 +27,7 @@ const DEFAULT_VERDICT_BLOCK: HumanEvaluationVerdictBlock = {
 
 export interface QuestionEvaluationIdentity {
   sessionId?: string;
+  questionId?: string;
   traceId: string;
   traceKind: MeetingTraceKind;
   taskId?: string;
@@ -143,7 +144,16 @@ export function upsertQuestionHumanEvaluation(
   patch: Partial<QuestionHumanEvaluation>
 ) {
   const now = Date.now();
-  const questionId = resolveQuestionId(identity, patch);
+  const explicitQuestionId = patch.questionId ?? identity.questionId;
+  const legacyTraceMatch = explicitQuestionId
+    ? undefined
+    : evaluations.find((evaluation) =>
+        evaluation.traceIds.includes(identity.traceId)
+      );
+  const questionId =
+    explicitQuestionId ??
+    legacyTraceMatch?.questionId ??
+    resolveQuestionId(identity);
   const existingIndex = evaluations.findIndex(
     (evaluation) => evaluation.questionId === questionId
   );
@@ -503,15 +513,9 @@ function createQuestionHumanEvalId() {
 }
 
 function resolveQuestionId(
-  identity: QuestionEvaluationIdentity,
-  patch: Partial<QuestionHumanEvaluation>
+  identity: QuestionEvaluationIdentity
 ) {
-  return (
-    patch.questionId ??
-    identity.parentTaskId ??
-    identity.taskId ??
-    `trace:${identity.traceId}`
-  );
+  return `trace:${identity.traceId}`;
 }
 
 function buildClassificationVerdict(

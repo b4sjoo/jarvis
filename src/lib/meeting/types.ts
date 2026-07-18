@@ -651,6 +651,7 @@ export interface ClarifyingQuestionFeedback {
 
 export interface AdvisorSuggestion {
   id: string;
+  sourceTraceId?: string;
   kind: AdvisorSuggestionKind;
   content: string;
   meetingAnswer?: ParsedMeetingAnswer;

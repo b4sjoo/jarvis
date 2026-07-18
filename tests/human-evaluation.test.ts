@@ -6,7 +6,7 @@ import {
 } from "../src/lib/meeting/human-evaluation.js";
 import type { TraceHumanEvaluation } from "../src/lib/meeting/types.js";
 
-test("merges question-level evaluations by stable parent task id", () => {
+test("keeps meaningful questions separate within one parent trajectory", () => {
   const first = upsertQuestionHumanEvaluation(
     [],
     {
@@ -26,7 +26,7 @@ test("merges question-level evaluations by stable parent task id", () => {
     }
   );
 
-  const merged = upsertQuestionHumanEvaluation(
+  const separated = upsertQuestionHumanEvaluation(
     first,
     {
       sessionId: "session_1",
@@ -48,15 +48,43 @@ test("merges question-level evaluations by stable parent task id", () => {
     }
   );
 
-  assert.equal(merged.length, 1);
-  assert.equal(merged[0].questionId, "parent_1");
-  assert.deepEqual(merged[0].traceIds, ["trace_1", "trace_2"]);
-  assert.equal(merged[0].detectedPlaybookPhase, "story_selection");
-  assert.equal(merged[0].guardrail.verdict, "ok");
-  assert.equal(merged[0].memoryEntryLabels.length, 1);
-  assert.equal(merged[0].memoryEntryLabels[0].memoryId, "mem_aos_cleanup");
-  assert.equal(merged[0].memoryEntryLabels[0].title, "AOS cleanup");
-  assert.equal(merged[0].memoryEntryLabels[0].label, "relevant");
+  assert.equal(separated.length, 2);
+  assert.equal(separated[0].questionId, "trace:trace_1");
+  assert.equal(separated[1].questionId, "trace:trace_2");
+  assert.deepEqual(separated[0].traceIds, ["trace_1"]);
+  assert.deepEqual(separated[1].traceIds, ["trace_2"]);
+  assert.equal(separated[0].detectedPlaybookPhase, "story_selection");
+  assert.equal(separated[0].guardrail.verdict, "ok");
+  assert.equal(separated[1].memoryEntryLabels.length, 1);
+  assert.equal(separated[1].memoryEntryLabels[0].memoryId, "mem_aos_cleanup");
+  assert.equal(separated[1].memoryEntryLabels[0].title, "AOS cleanup");
+  assert.equal(separated[1].memoryEntryLabels[0].label, "relevant");
+});
+
+test("preserves a legacy parent-scoped record when its trace is relabeled", () => {
+  const existing = upsertQuestionHumanEvaluation(
+    [],
+    {
+      traceId: "trace_legacy",
+      traceKind: "voice",
+      parentTaskId: "parent_legacy",
+    },
+    { questionId: "parent_legacy" }
+  );
+
+  const updated = upsertQuestionHumanEvaluation(
+    existing,
+    {
+      traceId: "trace_legacy",
+      traceKind: "voice",
+      parentTaskId: "parent_legacy",
+    },
+    { answer: { verdict: "ok", reasons: ["confirmed"] } }
+  );
+
+  assert.equal(updated.length, 1);
+  assert.equal(updated[0].questionId, "parent_legacy");
+  assert.equal(updated[0].answer.verdict, "ok");
 });
 
 test("bridges legacy trace labels into question-level verdict blocks", () => {
@@ -175,6 +203,8 @@ test("stores manual runtime type correction as HITL classification feedback", ()
       questionType: "project-deep-dive",
     },
     {
+      questionId: "trace:answer_trace_1",
+      traceIds: ["answer_trace_1", "regeneration_trace_1"],
       correctedQuestionType: "coding",
       manualQuestionTypeCorrectionId: "correction_1",
       manualQuestionTypeCorrectionTraceId: "correction_trace_1",
@@ -188,7 +218,12 @@ test("stores manual runtime type correction as HITL classification feedback", ()
   );
 
   assert.equal(evaluations.length, 1);
-  assert.equal(evaluations[0].questionId, "parent_1");
+  assert.equal(evaluations[0].questionId, "trace:answer_trace_1");
+  assert.deepEqual(evaluations[0].traceIds, [
+    "correction_trace_1",
+    "answer_trace_1",
+    "regeneration_trace_1",
+  ]);
   assert.equal(evaluations[0].questionType, "project-deep-dive");
   assert.equal(evaluations[0].correctedQuestionType, "coding");
   assert.equal(

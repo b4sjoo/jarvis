@@ -24,6 +24,7 @@ import {
   AdvisorPromptContext,
   AdvisorSuggestion,
   AdvisorRequestMode,
+  ActiveMeetingTask,
   ActiveInterviewParent,
   ActiveScreenTask,
   CanonicalQuestionType,
@@ -667,6 +668,44 @@ function isScreenAnchoredSuggestion(
     suggestion?.taskSource === "screen" ||
     suggestion?.taskSource === "mixed"
   );
+}
+
+function resolveCorrectionQuestionInstance(
+  evaluations: QuestionHumanEvaluation[],
+  suggestion: AdvisorSuggestion | null,
+  activeTask: ActiveMeetingTask,
+  fallbackTraceId: string
+) {
+  const suggestionMatchesTask = Boolean(
+    suggestion &&
+      suggestion.parentTaskId === activeTask.parent.id &&
+      (!activeTask.child?.id || suggestion.childTaskId === activeTask.child.id)
+  );
+  const sourceTraceId = suggestionMatchesTask && suggestion
+    ? suggestion?.sourceTraceId
+    : undefined;
+  const sourceEvaluation = sourceTraceId
+    ? evaluations.find((evaluation) =>
+        evaluation.traceIds.includes(sourceTraceId)
+      )
+    : undefined;
+  const latestTaskEvaluation = [...evaluations]
+    .reverse()
+    .find(
+      (evaluation) =>
+        evaluation.parentTaskId === activeTask.parent.id &&
+        (!activeTask.child?.id ||
+          evaluation.childTaskId === activeTask.child.id)
+    );
+
+  return {
+    questionId:
+      sourceEvaluation?.questionId ??
+      (sourceTraceId ? `trace:${sourceTraceId}` : undefined) ??
+      latestTaskEvaluation?.questionId ??
+      `trace:${fallbackTraceId}`,
+    sourceTraceId,
+  };
 }
 
 function withLatestReliableSuggestion(
@@ -1441,6 +1480,10 @@ export function useMeetingAssistant() {
 
       return {
         sessionId,
+        questionId: readStringFromTraceMetadata(
+          trace.metadata,
+          "questionInstanceId"
+        ),
         traceId: trace.id,
         traceKind: trace.kind,
         taskId: evaluationPatch.taskId ?? activeTaskIdentity.taskId,
@@ -2923,14 +2966,17 @@ export function useMeetingAssistant() {
         (observation) => observation.id
       );
 
-      const nextSuggestion = advisorEngineRef.current.toSuggestion(
-        requestId,
-        finalContent,
-        latestTurn ? [latestTurn.id] : [],
-        latestObservationIds,
-        buildSuggestionTaskMetadata(contextState.activeMeetingTask),
-        parsedMeetingAnswer
-      );
+      const nextSuggestion = {
+        ...advisorEngineRef.current.toSuggestion(
+          requestId,
+          finalContent,
+          latestTurn ? [latestTurn.id] : [],
+          latestObservationIds,
+          buildSuggestionTaskMetadata(contextState.activeMeetingTask),
+          parsedMeetingAnswer
+        ),
+        sourceTraceId: traceId,
+      };
 
       setState((previous) => ({
         ...previous,
@@ -3639,6 +3685,7 @@ export function useMeetingAssistant() {
           });
           const taskSwitchSuggestion: AdvisorSuggestion = {
             id: createMeetingId("task_switch"),
+            sourceTraceId: traceId,
             kind: "clarifying-question",
             content: taskSwitchContent,
             meetingAnswer: taskSwitchAnswer,
@@ -5149,6 +5196,7 @@ export function useMeetingAssistant() {
         const nextSuggestion: AdvisorSuggestion = screenTaskContent.trim()
           ? {
               id: requestId,
+              sourceTraceId: trace.id,
               kind: "answer",
               content: screenTaskContent.trim(),
               meetingAnswer: parsedScreenMeetingAnswer,
@@ -5163,6 +5211,7 @@ export function useMeetingAssistant() {
             }
           : {
               id: requestId,
+              sourceTraceId: trace.id,
               kind: "silent",
               content: "",
               createdAt: Date.now(),
@@ -5292,6 +5341,7 @@ export function useMeetingAssistant() {
       advisorEngineRef.current.cancelCurrentRequest();
 
       const requestedAt = Date.now();
+      const eventId = createMeetingId("question_type_correction");
       const correctionTrace = traceStoreRef.current.startTrace(
         activeTask.screen ? "screen" : "voice",
         {
@@ -5304,8 +5354,13 @@ export function useMeetingAssistant() {
           ...getActiveMeetingTaskTraceMetadata(activeTask),
         }
       );
-      const eventId = createMeetingId("question_type_correction");
-      const questionId = activeTask.child?.id ?? activeTask.parent.id;
+      const correctionQuestion = resolveCorrectionQuestionInstance(
+        state.questionEvaluations,
+        state.latestSuggestion,
+        activeTask,
+        correctionTrace.id
+      );
+      const questionId = correctionQuestion.questionId;
       let correction: ManualQuestionTypeCorrection = {
         eventId,
         taskId: activeTask.id,
@@ -5323,6 +5378,8 @@ export function useMeetingAssistant() {
       };
       traceStoreRef.current.updateMetadata(correctionTrace.id, {
         manualQuestionTypeCorrectionId: eventId,
+        questionInstanceId: questionId,
+        questionOriginTraceId: correctionQuestion.sourceTraceId,
       });
       setState((previous) => ({
         ...previous,
@@ -5461,6 +5518,8 @@ export function useMeetingAssistant() {
           correctedActiveTask.screen ? "screen" : "voice",
           {
             source: "manual-question-type-correction-regeneration",
+            questionInstanceId: questionId,
+            questionOriginTraceId: correctionQuestion.sourceTraceId,
             parentCorrectionTraceId: correctionTrace.id,
             manualQuestionTypeCorrectionId: eventId,
             detectedQuestionType: decision.detectedType,
@@ -5492,7 +5551,13 @@ export function useMeetingAssistant() {
           },
           {
             questionId,
-            traceIds: [correctionTrace.id, regenerationTrace.id],
+            traceIds: [
+              ...(correctionQuestion.sourceTraceId
+                ? [correctionQuestion.sourceTraceId]
+                : []),
+              correctionTrace.id,
+              regenerationTrace.id,
+            ],
             questionType: toHumanEvalQuestionType(decision.detectedType),
             correctedQuestionType: toHumanEvalQuestionType(
               decision.correctedType
@@ -5613,6 +5678,7 @@ export function useMeetingAssistant() {
     [
       clearAdvisorDebounce,
       runAdvisor,
+      state.latestSuggestion,
       state.questionEvaluations,
       state.sessionRecording.sessionId,
       state.settings,
