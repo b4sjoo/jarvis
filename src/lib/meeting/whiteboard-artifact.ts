@@ -1,10 +1,12 @@
 import type {
   InterviewPlaybookPhase,
   ParentQuestionType,
+  ParsedMeetingAnswer,
   WhiteboardArtifact,
   WhiteboardDomainTrack,
   WhiteboardUpdateSource,
 } from "./types";
+import { parseMeetingAnswer } from "./meeting-answer.js";
 
 export interface WhiteboardArtifactUpdateInput {
   existing?: WhiteboardArtifact;
@@ -12,6 +14,7 @@ export interface WhiteboardArtifactUpdateInput {
   parentQuestionType: ParentQuestionType;
   parentTopic: string;
   finalContent: string;
+  parsedAnswer?: ParsedMeetingAnswer;
   phase: InterviewPlaybookPhase;
   traceId?: string;
   selectedOverlayIds?: string[];
@@ -25,6 +28,7 @@ export function updateWhiteboardArtifactFromAnswer({
   parentQuestionType,
   parentTopic,
   finalContent,
+  parsedAnswer,
   phase,
   traceId,
   selectedOverlayIds = [],
@@ -33,9 +37,10 @@ export function updateWhiteboardArtifactFromAnswer({
 }: WhiteboardArtifactUpdateInput): WhiteboardArtifact | undefined {
   if (!isWhiteboardParentType(parentQuestionType)) return undefined;
 
-  const whiteboard = normalizeWhiteboardText(
-    readWhiteboardSection(finalContent)
-  );
+  const parsed = parsedAnswer ?? parseMeetingAnswer(finalContent);
+  if (parsed.parseStatus === "partial") return existing;
+
+  const whiteboard = normalizeWhiteboardText(parsed.sections.whiteboard);
 
   if (!whiteboard) {
     return existing;
@@ -112,49 +117,6 @@ function normalizeWhiteboardText(value: string | undefined) {
     .replace(/\n{3,}/g, "\n\n");
   if (!normalized || normalized === "-") return "";
   return normalized;
-}
-
-const WHITEBOARD_SECTION_LABELS = [
-  "中文思路",
-  "Chinese thinking",
-  "Question",
-  "Answer",
-  "Approach",
-  "Whiteboard",
-  "Infrastructure diagram",
-  "Code",
-  "Implementation",
-  "Complexity",
-  "Clarifying question",
-  "Clarifying options",
-];
-
-function readWhiteboardSection(content: string) {
-  const labels = ["Whiteboard", "Infrastructure diagram"];
-  const labelPattern = labels.map(escapeRegExp).join("|");
-  const boundaryPattern = WHITEBOARD_SECTION_LABELS.map(escapeRegExp).join("|");
-  const labelLinePattern = buildSectionLabelLinePattern(labelPattern);
-  const boundaryLinePattern = buildSectionLabelLinePattern(boundaryPattern);
-  const pattern = new RegExp(
-    `(?:^|\\n)\\s*${labelLinePattern}([\\s\\S]*?)(?=\\n\\s*${boundaryLinePattern}|$)`,
-    "i"
-  );
-  const match = pattern.exec(content.trim());
-
-  return match?.[1] ?? "";
-}
-
-function buildSectionLabelLinePattern(labelPattern: string) {
-  const emphasis = "(?:\\*\\*|__)?";
-  const prefix = `(?:#{1,6}\\s*)?(?:[-*]\\s*)?${emphasis}`;
-  const label = `(?:${labelPattern})(?:\\s*\\([^\\n:：)]*\\))?`;
-  const separator = `(?:\\s*[:：]\\s*${emphasis}\\s*|${emphasis}\\s*[:：]\\s*|${emphasis}\\s*(?:\\n|$))`;
-
-  return `${prefix}${label}${separator}`;
-}
-
-function escapeRegExp(value: string) {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function inferWhiteboardDomainTrack(

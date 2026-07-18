@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  buildMeetingAnswerSummary,
+  formatMeetingAnswerTraceMetadata,
   parseMeetingAnswer,
   readMeetingAnswerSection,
 } from "../src/lib/meeting/meeting-answer.js";
@@ -140,4 +142,47 @@ Clarifying options: 1k | 10k | 100k`;
     readMeetingAnswerSection(content, ["Clarifying question"]),
     "What is the peak QPS?"
   );
+});
+
+test("builds a bounded continuity summary from a legacy live reply", () => {
+  const parsed = parseMeetingAnswer(`中文思路: 不重复注入双语内容。
+Reply: Explain the stable parent task first.
+Question: Architecture or rollout?
+Code:
+\`\`\`typescript
+const ignored = true;
+\`\`\``);
+  const summary = buildMeetingAnswerSummary(parsed);
+
+  assert.equal(summary.text, "Answer: Explain the stable parent task first.");
+  assert.equal(summary.source, "reply-alias");
+  assert.deepEqual(summary.includedSections, ["Answer"]);
+  assert.equal(summary.excludedCode, true);
+});
+
+test("does not produce continuity for partial output", () => {
+  const parsed = parseMeetingAnswer("Answer:");
+  const summary = buildMeetingAnswerSummary(parsed);
+
+  assert.equal(summary.text, "");
+  assert.equal(summary.chars, 0);
+  assert.equal(summary.parseStatus, "partial");
+});
+
+test("does not overwrite continuity with a low-value acknowledgement", () => {
+  const parsed = parseMeetingAnswer("Reply: Sure.");
+  const summary = buildMeetingAnswerSummary(parsed);
+
+  assert.equal(summary.text, "");
+  assert.deepEqual(summary.includedSections, []);
+});
+
+test("records bounded answer-contract trace metadata", () => {
+  const parsed = parseMeetingAnswer("Answer: Keep the trace compact.");
+  const metadata = formatMeetingAnswerTraceMetadata(parsed);
+
+  assert.equal(metadata.answerContractVersion, "meeting-answer-v2");
+  assert.equal(metadata.answerParseStatus, "parsed");
+  assert.equal(metadata.latestUsefulAnswerChars, 31);
+  assert.deepEqual(metadata.continuitySummaryIncludedSections, ["Answer"]);
 });

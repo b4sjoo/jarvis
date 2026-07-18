@@ -95,3 +95,28 @@ test("increments revision when the whiteboard changes", () => {
   assert.equal(updated.updateSource, "manual-next");
   assert.match(updated.content, /rerank/);
 });
+
+test("preserves the current whiteboard when model output is partial", () => {
+  const artifact = updateWhiteboardArtifactFromAnswer({
+    parentTaskId: "parent_1",
+    parentQuestionType: "general-system-design",
+    parentTopic: "Design a ticket selling system",
+    finalContent: WHITEBOARD_ANSWER,
+    phase: "design_framing",
+    updateSource: "model-output",
+    now: 1,
+  });
+
+  const preserved = updateWhiteboardArtifactFromAnswer({
+    existing: artifact,
+    parentTaskId: "parent_1",
+    parentQuestionType: "general-system-design",
+    parentTopic: "Design a ticket selling system",
+    finalContent: "Whiteboard:",
+    phase: "follow_up",
+    updateSource: "model-output",
+    now: 2,
+  });
+
+  assert.equal(preserved, artifact);
+});

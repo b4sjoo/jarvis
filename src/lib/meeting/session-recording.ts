@@ -29,7 +29,7 @@ import {
 import { serializeMeetingTraceExport } from "./trace.js";
 
 const SESSION_RECORDING_SCHEMA_VERSION = 1;
-const SESSION_TRACE_SUMMARY_SCHEMA_VERSION = 1;
+const SESSION_TRACE_SUMMARY_SCHEMA_VERSION = 2;
 const SESSION_TRACE_INDEX_SCHEMA_VERSION = 1;
 
 interface SessionRecordingStartOptions {
@@ -180,6 +180,20 @@ export interface SessionCompactTraceSummary {
   responseLanguage?: string;
   modelRoute?: string;
   modelRouteReason?: string;
+  answer?: {
+    contractVersion?: string;
+    profile?: string;
+    parseStatus?: string;
+    primarySource?: string;
+    recognizedSections: string[];
+    missingExpectedSections: string[];
+    latestUsefulAnswerChars?: number;
+    latestUsefulAnswerSource?: string;
+    continuitySummaryIncludedSections: string[];
+    continuitySummaryExcludedCode?: boolean;
+    codeArtifactDecision?: string;
+    whiteboardArtifactDecision?: string;
+  };
   captureTarget?: {
     targetType?: string;
     captureMethod?: string;
@@ -1440,6 +1454,50 @@ function buildCompactTraceSummary({
     responseLanguage: readString(modelStep?.metadata?.responseLanguage),
     modelRoute: readFirstString(metadataSources, "modelRoute"),
     modelRouteReason: readFirstString(metadataSources, "modelRouteReason"),
+    answer: {
+      contractVersion: readFirstString(
+        metadataSources,
+        "answerContractVersion"
+      ),
+      profile: readFirstString(metadataSources, "answerProfile"),
+      parseStatus: readFirstString(metadataSources, "answerParseStatus"),
+      primarySource: readFirstString(
+        metadataSources,
+        "answerPrimarySource"
+      ),
+      recognizedSections: readFirstStringList(
+        metadataSources,
+        "answerRecognizedSections"
+      ),
+      missingExpectedSections: readFirstStringList(
+        metadataSources,
+        "answerMissingExpectedSections"
+      ),
+      latestUsefulAnswerChars: readFirstNumberFromMetadata(
+        metadataSources,
+        "latestUsefulAnswerChars"
+      ),
+      latestUsefulAnswerSource: readFirstString(
+        metadataSources,
+        "latestUsefulAnswerSource"
+      ),
+      continuitySummaryIncludedSections: readFirstStringList(
+        metadataSources,
+        "continuitySummaryIncludedSections"
+      ),
+      continuitySummaryExcludedCode: readFirstBoolean(
+        metadataSources,
+        "continuitySummaryExcludedCode"
+      ),
+      codeArtifactDecision: readFirstString(
+        metadataSources,
+        "answerCodeArtifactDecision"
+      ),
+      whiteboardArtifactDecision: readFirstString(
+        metadataSources,
+        "answerWhiteboardArtifactDecision"
+      ),
+    },
     captureTarget: summarizeCaptureTarget(captureStep?.metadata?.captureTarget),
     timingsMs: {
       total: trace.durationMs,
@@ -1687,6 +1745,18 @@ function readFirstString(
   }
 
   return undefined;
+}
+
+function readFirstStringList(
+  metadataSources: Record<string, unknown>[],
+  key: string
+) {
+  for (const metadata of metadataSources) {
+    const value = readStringList(metadata[key]);
+    if (value.length) return value;
+  }
+
+  return [];
 }
 
 function readFirstNumberFromMetadata(

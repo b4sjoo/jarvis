@@ -1,4 +1,4 @@
-import type { ScreenTaskAnswer } from "./types";
+import type { ParsedMeetingAnswer, ScreenTaskAnswer } from "./types";
 import {
   parseMeetingAnswer,
   readMeetingAnswerSection,
@@ -8,7 +8,12 @@ import {
 } from "./meeting-answer.js";
 
 export function parseScreenTaskAnswer(content: string): ScreenTaskAnswer {
-  const parsed = parseMeetingAnswer(content);
+  return screenTaskAnswerFromParsedMeetingAnswer(parseMeetingAnswer(content));
+}
+
+export function screenTaskAnswerFromParsedMeetingAnswer(
+  parsed: ParsedMeetingAnswer
+): ScreenTaskAnswer {
   const sections = parsed.sections;
 
   return {

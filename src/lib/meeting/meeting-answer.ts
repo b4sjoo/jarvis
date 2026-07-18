@@ -1,5 +1,7 @@
 import type {
   MeetingAnswerContractVersion,
+  MeetingAnswerParseStatus,
+  MeetingAnswerPrimarySource,
   MeetingAnswerProfile,
   MeetingAnswerSections,
   ParsedMeetingAnswer,
@@ -91,6 +93,17 @@ const EXPECTED_PROFILE_SECTIONS: Record<MeetingAnswerProfile, string[]> = {
   ],
   "system-design": ["中文思路", "Question", "Answer", "Approach"],
 };
+
+const DEFAULT_SUMMARY_MAX_CHARS = 1000;
+
+export interface MeetingAnswerSummaryDecision {
+  text: string;
+  source: MeetingAnswerPrimarySource;
+  chars: number;
+  parseStatus: MeetingAnswerParseStatus;
+  includedSections: string[];
+  excludedCode: boolean;
+}
 
 export function parseMeetingAnswer(
   content: string,
@@ -232,6 +245,93 @@ export function stripOuterMeetingAnswerCodeFence(value: string) {
   return match?.[1]?.trimEnd() ?? trimmed;
 }
 
+export function buildMeetingAnswerSummary(
+  parsed: ParsedMeetingAnswer,
+  maxChars = DEFAULT_SUMMARY_MAX_CHARS
+): MeetingAnswerSummaryDecision {
+  const excludedCode = Boolean(
+    parsed.sections.code || /```[\s\S]*?```/.test(parsed.rawContent)
+  );
+
+  if (
+    parsed.parseStatus === "empty" ||
+    parsed.parseStatus === "partial" ||
+    !parsed.rawContent
+  ) {
+    return {
+      text: "",
+      source: parsed.primaryAnswerSource,
+      chars: 0,
+      parseStatus: parsed.parseStatus,
+      includedSections: [],
+      excludedCode,
+    };
+  }
+
+  const includedSections: string[] = [];
+  const parts: string[] = [];
+  const append = (label: string, value: string | undefined) => {
+    const boundedValue = normalizeMeetingAnswerSummaryText(value);
+    if (!boundedValue) return;
+    includedSections.push(label);
+    parts.push(`${label}: ${boundedValue}`);
+  };
+
+  append("Answer", parsed.sections.answer);
+  if (parsed.contractVersion !== "legacy-live-v1") {
+    append("Question", parsed.sections.question);
+  }
+  append("Approach", parsed.sections.approach);
+  append("Whiteboard", parsed.sections.whiteboard);
+  append("Complexity", parsed.sections.complexity);
+
+  if (
+    includedSections.length === 1 &&
+    includedSections[0] === "Answer" &&
+    isLowValueMeetingAnswer(parsed.sections.answer)
+  ) {
+    return {
+      text: "",
+      source: parsed.primaryAnswerSource,
+      chars: 0,
+      parseStatus: parsed.parseStatus,
+      includedSections: [],
+      excludedCode,
+    };
+  }
+
+  const text = parts.join("\n").slice(0, Math.max(0, maxChars)).trim();
+
+  return {
+    text,
+    source: parsed.primaryAnswerSource,
+    chars: text.length,
+    parseStatus: parsed.parseStatus,
+    includedSections,
+    excludedCode,
+  };
+}
+
+export function formatMeetingAnswerTraceMetadata(
+  parsed: ParsedMeetingAnswer,
+  summary = buildMeetingAnswerSummary(parsed)
+): Record<string, unknown> {
+  return {
+    answerContractVersion: parsed.contractVersion,
+    answerProfile: parsed.profile,
+    answerParseStatus: parsed.parseStatus,
+    answerPrimarySource: parsed.primaryAnswerSource,
+    answerRecognizedSections: parsed.recognizedLabels,
+    answerMissingExpectedSections: parsed.missingExpectedSections,
+    latestUsefulAnswerChars: summary.chars,
+    latestUsefulAnswerSource: summary.source,
+    continuitySummaryIncludedSections: summary.includedSections,
+    continuitySummaryExcludedCode: summary.excludedCode,
+    answerCodeSectionPresent: Boolean(parsed.sections.code),
+    answerWhiteboardSectionPresent: Boolean(parsed.sections.whiteboard),
+  };
+}
+
 function inferContractVersion({
   canonicalAnswer,
   legacyReply,
@@ -245,6 +345,26 @@ function inferContractVersion({
   if (canonicalAnswer) return "meeting-answer-v2";
   if (recognizedLabels.length > 0) return "legacy-screen-v1";
   return "unstructured";
+}
+
+function normalizeMeetingAnswerSummaryText(value: string | undefined) {
+  return value
+    ?.replace(/```[\s\S]*?```/g, "[code omitted]")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function isLowValueMeetingAnswer(value: string | undefined) {
+  const normalized = value
+    ?.trim()
+    .toLowerCase()
+    .replace(/[^a-z\u4e00-\u9fff]+/g, " ")
+    .trim();
+  if (!normalized) return true;
+
+  return /^(sure|ok|okay|yes|no|right|got it|sounds good|明白|好的|可以|对)$/.test(
+    normalized
+  );
 }
 
 function inferMeetingAnswerProfile(

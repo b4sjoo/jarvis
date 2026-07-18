@@ -58,6 +58,7 @@ import {
   PENDING_CONFIRMATION_TTL_MS,
   OpeningRouteContext,
   ParentQuestionType,
+  ParsedMeetingAnswer,
   QuestionEvaluationIdentity,
   QuestionHumanEvaluation,
   ScreenObservation,
@@ -90,8 +91,12 @@ import {
   extractScreenTaskQuestion,
   inferScreenTaskKind,
   isShortConfirmationLike,
+  buildMeetingAnswerSummary,
+  formatMeetingAnswerTraceMetadata,
+  parseMeetingAnswer,
   parseMeetingTraceMetrics,
   parseScreenTaskAnswer,
+  screenTaskAnswerFromParsedMeetingAnswer,
   preflightScreenObservation,
   selectInterviewPlaybook,
   applyPlaybookPhaseDecisionToProgress,
@@ -2771,6 +2776,18 @@ export function useMeetingAssistant() {
         );
       }
 
+      const parsedMeetingAnswer = parseMeetingAnswer(finalContent);
+      const meetingAnswerSummary = buildMeetingAnswerSummary(
+        parsedMeetingAnswer
+      );
+      const meetingAnswerMetadata = formatMeetingAnswerTraceMetadata(
+        parsedMeetingAnswer,
+        meetingAnswerSummary
+      );
+      if (traceId) {
+        traceStoreRef.current.updateMetadata(traceId, meetingAnswerMetadata);
+      }
+
       let contextState = contextManagerRef.current.getState();
       const existingInterviewTask =
         contextState.activeInterviewTask ??
@@ -2798,6 +2815,7 @@ export function useMeetingAssistant() {
               latestTurn?.text ??
               extractScreenTaskQuestion(finalContent),
             finalContent,
+            parsedAnswer: parsedMeetingAnswer,
             playbook: advisorRuntimePlaybook,
             phaseDecision: playbookPhaseDecision,
             latestTurn,
@@ -2819,6 +2837,28 @@ export function useMeetingAssistant() {
             startedNewParent: false,
             clearedParent: false,
           };
+      const previousWhiteboard = existingInterviewTask?.whiteboardArtifact;
+      const nextWhiteboard = continuity.task?.whiteboardArtifact;
+      const whiteboardArtifactDecision = parsedMeetingAnswer.sections.whiteboard
+        ? nextWhiteboard
+          ? !previousWhiteboard
+            ? "produced"
+            : previousWhiteboard.revision !== nextWhiteboard.revision
+              ? "updated"
+              : "preserved"
+          : "ignored"
+        : previousWhiteboard
+          ? "preserved"
+          : "none";
+      const answerArtifactMetadata = {
+        answerCodeArtifactDecision: parsedMeetingAnswer.sections.code
+          ? "produced"
+          : "none",
+        answerWhiteboardArtifactDecision: whiteboardArtifactDecision,
+      };
+      if (traceId) {
+        traceStoreRef.current.updateMetadata(traceId, answerArtifactMetadata);
+      }
       let nextActiveScreenTask = contextState.activeScreenTask;
 
       if (
@@ -2902,7 +2942,8 @@ export function useMeetingAssistant() {
         finalContent,
         latestTurn ? [latestTurn.id] : [],
         latestObservationIds,
-        buildSuggestionTaskMetadata(contextState.activeMeetingTask)
+        buildSuggestionTaskMetadata(contextState.activeMeetingTask),
+        parsedMeetingAnswer
       );
 
       setState((previous) => ({
@@ -2924,6 +2965,8 @@ export function useMeetingAssistant() {
         traceStoreRef.current.finishStep(traceId, advisorStepId, "success", {
           outputChars: finalContent.length,
           ...advisorModelRouteMetadata,
+          ...meetingAnswerMetadata,
+          ...answerArtifactMetadata,
         });
         traceStoreRef.current.finishTrace(traceId, "success");
       }
@@ -4869,9 +4912,23 @@ export function useMeetingAssistant() {
           return;
         }
 
+        const parsedScreenMeetingAnswer = parseMeetingAnswer(screenTaskContent);
+        const screenMeetingAnswerSummary = buildMeetingAnswerSummary(
+          parsedScreenMeetingAnswer
+        );
+        const screenMeetingAnswerMetadata = formatMeetingAnswerTraceMetadata(
+          parsedScreenMeetingAnswer,
+          screenMeetingAnswerSummary
+        );
+        traceStoreRef.current.updateMetadata(
+          trace.id,
+          screenMeetingAnswerMetadata
+        );
+
         traceStoreRef.current.finishStep(trace.id, modelStepId, "success", {
           outputChars: screenTaskContent.length,
           ...screenModelRouteMetadata,
+          ...screenMeetingAnswerMetadata,
         });
         screenAnalysisAbortRef.current = null;
 
@@ -5014,6 +5071,7 @@ export function useMeetingAssistant() {
             ),
             question: question || undefined,
             finalContent: screenTaskContent,
+            parsedAnswer: parsedScreenMeetingAnswer,
             playbook: screenRuntimePlaybook,
             phaseDecision: screenPhaseDecision,
             observationId: observation.id,
@@ -5030,6 +5088,24 @@ export function useMeetingAssistant() {
                 : extractSupportedFactAnchorsFromMemory(memoryContext),
             projectBinding:
               reconciledScreenProjectBindingDecision.binding,
+          });
+          const previousWhiteboard =
+            existingInterviewTask?.whiteboardArtifact;
+          const nextWhiteboard = screenContinuity.task?.whiteboardArtifact;
+          traceStoreRef.current.updateMetadata(trace.id, {
+            answerCodeArtifactDecision: parsedScreenMeetingAnswer.sections.code
+              ? "produced"
+              : "none",
+            answerWhiteboardArtifactDecision:
+              parsedScreenMeetingAnswer.sections.whiteboard && nextWhiteboard
+                ? !previousWhiteboard
+                  ? "produced"
+                  : previousWhiteboard.revision !== nextWhiteboard.revision
+                    ? "updated"
+                    : "preserved"
+                : previousWhiteboard
+                  ? "preserved"
+                  : "none",
           });
           contextManagerRef.current.setActiveMeetingTaskState({
             activeScreenTask,
@@ -5080,7 +5156,9 @@ export function useMeetingAssistant() {
               id: requestId,
               kind: "screen-task",
               content: screenTaskContent.trim(),
-              screenTaskAnswer: parseScreenTaskAnswer(screenTaskContent.trim()),
+              screenTaskAnswer: screenTaskAnswerFromParsedMeetingAnswer(
+                parsedScreenMeetingAnswer
+              ),
               createdAt: Date.now(),
               ...buildSuggestionTaskMetadata(
                 updatedContextState.activeMeetingTask
@@ -6820,6 +6898,7 @@ function updateInterviewTaskContinuityForAnswer({
   subtaskIntent,
   question,
   finalContent,
+  parsedAnswer,
   playbook,
   phaseDecision,
   latestTurn,
@@ -6838,6 +6917,7 @@ function updateInterviewTaskContinuityForAnswer({
   subtaskIntent: InterviewSubtaskIntent;
   question?: string;
   finalContent: string;
+  parsedAnswer?: ParsedMeetingAnswer;
   playbook?: ActiveInterviewParent["playbook"];
   phaseDecision?: PlaybookPhaseDecision;
   latestTurn?: TranscriptTurn;
@@ -6854,7 +6934,9 @@ function updateInterviewTaskContinuityForAnswer({
     normalizeCanonicalQuestionType(questionType) ?? "unknown";
   const now = Date.now();
   const trimmedContent = finalContent.trim();
-  const isUsefulAnswer = Boolean(trimmedContent && trimmedContent !== "-");
+  const parsed = parsedAnswer ?? parseMeetingAnswer(trimmedContent);
+  const summaryDecision = buildMeetingAnswerSummary(parsed);
+  const isUsefulAnswer = Boolean(summaryDecision.text);
   const topic =
     question?.trim() ||
     extractScreenTaskQuestion(trimmedContent) ||
@@ -6876,7 +6958,7 @@ function updateInterviewTaskContinuityForAnswer({
         questionType: childQuestionType,
         subtaskIntent,
         question: topic,
-        finalContent: trimmedContent,
+        parsedAnswer: parsed,
         latestTurn,
         observationId,
       });
@@ -6886,6 +6968,7 @@ function updateInterviewTaskContinuityForAnswer({
         parentQuestionType: existingTask.stableKind,
         parentTopic: existingTask.topic,
         finalContent: trimmedContent,
+        parsedAnswer: parsed,
         phase: phaseDecision?.phase ?? existingTask.playbookPhase,
         traceId,
         selectedOverlayIds,
@@ -6929,6 +7012,7 @@ function updateInterviewTaskContinuityForAnswer({
       parentQuestionType: kind,
       parentTopic: topic,
       finalContent: trimmedContent,
+      parsedAnswer: parsed,
       phase: nextPhase,
       traceId,
       selectedOverlayIds,
@@ -6952,7 +7036,7 @@ function updateInterviewTaskContinuityForAnswer({
         projectBinding,
         supportedFactAnchors: newParentAnchors,
         latestUsefulAnswer: isUsefulAnswer
-          ? buildCompactAnswerSummary(trimmedContent)
+          ? summaryDecision.text
           : undefined,
         previousUsefulAnswer: undefined,
         whiteboardArtifact,
@@ -6975,6 +7059,7 @@ function updateInterviewTaskContinuityForAnswer({
       parentQuestionType: existingTask.stableKind,
       parentTopic: existingTask.topic,
       finalContent: trimmedContent,
+      parsedAnswer: parsed,
       phase: phaseDecision?.phase ?? existingTask.playbookPhase,
       traceId,
       selectedOverlayIds,
@@ -6992,7 +7077,7 @@ function updateInterviewTaskContinuityForAnswer({
               questionType: childQuestionType,
               subtaskIntent,
               question: topic,
-              finalContent: trimmedContent,
+              parsedAnswer: parsed,
               latestTurn,
               observationId,
             })
@@ -7034,6 +7119,7 @@ function updateInterviewTaskContinuityForAnswer({
         parentQuestionType: existingTask.stableKind,
         parentTopic: existingTask.topic,
         finalContent: trimmedContent,
+        parsedAnswer: parsed,
         phase: nextPhase,
         traceId,
         selectedOverlayIds,
@@ -7045,7 +7131,7 @@ function updateInterviewTaskContinuityForAnswer({
           ? existingTask.latestUsefulAnswer
           : existingTask.previousUsefulAnswer,
       latestUsefulAnswer: isUsefulAnswer
-        ? buildCompactAnswerSummary(trimmedContent)
+        ? summaryDecision.text
         : existingTask.latestUsefulAnswer,
       child: relation === "resume-parent" ? undefined : existingTask.child,
       revisions: existingTask.revisions + 1,
@@ -7455,14 +7541,14 @@ function buildActiveInterviewChild({
   questionType,
   subtaskIntent,
   question,
-  finalContent,
+  parsedAnswer,
   latestTurn,
   observationId,
 }: {
   questionType: CanonicalQuestionType;
   subtaskIntent: InterviewSubtaskIntent;
   question: string;
-  finalContent: string;
+  parsedAnswer: ParsedMeetingAnswer;
   latestTurn?: TranscriptTurn;
   observationId?: string;
 }) {
@@ -7479,7 +7565,7 @@ function buildActiveInterviewChild({
       questionType,
       subtaskIntent,
       question,
-      finalContent,
+      parsedAnswer,
     }),
     basedOnTurnIds: latestTurn ? [latestTurn.id] : [],
     basedOnObservationIds: observationId ? [observationId] : [],
@@ -7490,19 +7576,14 @@ function buildCompactChildSummary({
   questionType,
   subtaskIntent,
   question,
-  finalContent,
+  parsedAnswer,
 }: {
   questionType: CanonicalQuestionType;
   subtaskIntent: InterviewSubtaskIntent;
   question: string;
-  finalContent: string;
+  parsedAnswer: ParsedMeetingAnswer;
 }) {
-  const parsedSummary = buildCompactAnswerSummary(finalContent);
-  const fallbackSummary = finalContent
-    .replace(/```[\s\S]*?```/g, "[code omitted]")
-    .replace(/\s+/g, " ")
-    .trim();
-  const summary = parsedSummary || fallbackSummary;
+  const summary = buildMeetingAnswerSummary(parsedAnswer).text;
 
   return [
     `Child kind: ${questionType}`,
@@ -7533,18 +7614,7 @@ function isCompatibleParentKind(
 }
 
 function buildCompactAnswerSummary(content: string) {
-  const parsed = parseScreenTaskAnswer(content);
-  return [
-    parsed.question ? `Question: ${parsed.question}` : undefined,
-    parsed.answer ? `Answer: ${parsed.answer}` : undefined,
-    parsed.approach ? `Approach: ${parsed.approach}` : undefined,
-    parsed.whiteboard ? `Whiteboard: ${parsed.whiteboard}` : undefined,
-    parsed.complexity ? `Complexity: ${parsed.complexity}` : undefined,
-  ]
-    .filter(Boolean)
-    .join("\n")
-    .replace(/\s+\n/g, "\n")
-    .slice(0, 1000);
+  return buildMeetingAnswerSummary(parseMeetingAnswer(content)).text;
 }
 
 function mergeSupportedFactAnchors(

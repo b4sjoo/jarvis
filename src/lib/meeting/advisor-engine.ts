@@ -3,12 +3,14 @@ import { Message } from "@/types";
 import {
   AdvisorSuggestion,
   MeetingAdvisorRequest,
+  ParsedMeetingAnswer,
   TranscriptTurn,
 } from "./types";
 import { buildAdvisorSystemPrompt, buildAdvisorUserMessage } from "./advisor-prompt";
 import {
   hasScreenTaskAnswerContent,
   parseScreenTaskAnswer,
+  screenTaskAnswerFromParsedMeetingAnswer,
 } from "./screen-task-answer";
 
 export interface AdvisorEngineChunk {
@@ -104,11 +106,16 @@ export class AdvisorEngine {
     taskMetadata: Pick<
       AdvisorSuggestion,
       "taskId" | "parentTaskId" | "childTaskId" | "taskSource" | "questionType"
-    > = {}
+    > = {},
+    parsedAnswer?: ParsedMeetingAnswer
   ): AdvisorSuggestion {
-    const kind = inferSuggestionKind(content);
+    const kind = inferSuggestionKind(content, parsedAnswer);
     const screenTaskAnswer =
-      kind === "screen-task" ? parseScreenTaskAnswer(content) : undefined;
+      kind === "screen-task"
+        ? parsedAnswer
+          ? screenTaskAnswerFromParsedMeetingAnswer(parsedAnswer)
+          : parseScreenTaskAnswer(content)
+        : undefined;
 
     return {
       id: requestId,
@@ -140,9 +147,14 @@ export function transcriptTurnsToMessages(turns: TranscriptTurn[]): Message[] {
   }));
 }
 
-function inferSuggestionKind(content: string): AdvisorSuggestion["kind"] {
+function inferSuggestionKind(
+  content: string,
+  parsedAnswer?: ParsedMeetingAnswer
+): AdvisorSuggestion["kind"] {
   const normalized = content.trim().toLowerCase();
-  const screenTaskAnswer = parseScreenTaskAnswer(content);
+  const screenTaskAnswer = parsedAnswer
+    ? screenTaskAnswerFromParsedMeetingAnswer(parsedAnswer)
+    : parseScreenTaskAnswer(content);
 
   if (!normalized || normalized === "-") return "silent";
   if (hasScreenTaskAnswerContent(screenTaskAnswer) && screenTaskAnswer.answer) {
