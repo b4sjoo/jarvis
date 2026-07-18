@@ -30,6 +30,7 @@ import type {
   MeetingAudioConfig,
   MeetingAudioProfile,
   MeetingCodingModelSettings,
+  MeetingAnswerDisplayModel,
   MeetingResponseActionMode,
   MeetingResponseConfig,
   MeetingResponseLanguage,
@@ -38,7 +39,7 @@ import type {
   ManualQuestionTypeCorrection,
   MeetingFocusAction,
   MeetingFocusSnapshot,
-  MeetingAnswerProfile,
+  ParsedMeetingAnswer,
   MeetingTrace,
   MeetingTraceKindSummary,
   MeetingTraceSummary,
@@ -47,7 +48,6 @@ import type {
   PersonalEvidenceGuardrailMode,
   QuestionHumanEvaluation,
   ScreenCaptureTarget,
-  ScreenTaskAnswer,
   SpeechCorrection,
 } from "@/lib/meeting";
 import {
@@ -57,9 +57,9 @@ import {
   getDisplayClarifyingOptions,
   getActiveMeetingTaskFocusSummary,
   getActiveMeetingTaskId,
-  hasScreenTaskAnswerContent,
+  buildMeetingAnswerDisplayModel,
   normalizeCanonicalQuestionType,
-  parseScreenTaskAnswer,
+  overlayMeetingAnswerArtifacts,
   resolveMeetingAnswerProfile,
   stripOuterCodeFence,
   summarizeMeetingTraces,
@@ -368,23 +368,23 @@ export const MeetingAssistant = ({
   const latestCaptureTarget = latestScreenObservation?.captureTarget;
   const displaySuggestion =
     meeting.partialSuggestion || meeting.latestSuggestion?.content || "";
-  const completedScreenTaskAnswer =
-    meeting.partialSuggestion || !meeting.latestSuggestion?.screenTaskAnswer
+  const completedMeetingAnswer =
+    meeting.partialSuggestion || !meeting.latestSuggestion?.meetingAnswer
       ? undefined
-      : meeting.latestSuggestion.screenTaskAnswer;
+      : meeting.latestSuggestion.meetingAnswer;
   const suggestionSections = useMemo(
     () =>
-      parseSuggestionSections(
-        displaySuggestion,
-        completedScreenTaskAnswer,
-        meeting.partialSuggestion
+      buildMeetingAnswerDisplayModel({
+        content: displaySuggestion,
+        parsedAnswer: completedMeetingAnswer,
+        expectedProfile: meeting.partialSuggestion
           ? resolveMeetingAnswerProfile(
               getActiveMeetingParentQuestionType(meeting.activeMeetingTask)
             )
-          : meeting.latestSuggestion?.answerProfile
-      ),
+          : meeting.latestSuggestion?.answerProfile,
+      }),
     [
-      completedScreenTaskAnswer,
+      completedMeetingAnswer,
       displaySuggestion,
       meeting.activeMeetingTask,
       meeting.latestSuggestion?.answerProfile,
@@ -445,11 +445,11 @@ export const MeetingAssistant = ({
     activeTaskKind,
     meeting.latestSuggestion?.id,
     meeting.partialSuggestion,
-    suggestionSections.answer,
+    suggestionSections.primaryAnswer,
     suggestionSections.approach,
     suggestionSections.code,
     suggestionSections.complexity,
-    suggestionSections.screenQuestion,
+    suggestionSections.focusedQuestion,
   ]);
   const codingArtifactDisplay = useMemo(() => {
     return resolveCodingArtifactDisplay({
@@ -462,11 +462,11 @@ export const MeetingAssistant = ({
     activeParentTaskId,
     activeTaskKind,
     codingArtifactCache,
-    suggestionSections.answer,
+    suggestionSections.primaryAnswer,
     suggestionSections.approach,
     suggestionSections.code,
     suggestionSections.complexity,
-    suggestionSections.screenQuestion,
+    suggestionSections.focusedQuestion,
   ]);
   const whiteboardArtifactDisplay = useMemo(() => {
     return resolveWhiteboardArtifactDisplay({
@@ -482,8 +482,7 @@ export const MeetingAssistant = ({
     suggestionSections.whiteboard,
   ]);
   const displaySuggestionSections = useMemo(
-    () => ({
-      ...suggestionSections,
+    () => overlayMeetingAnswerArtifacts(suggestionSections, {
       whiteboard: whiteboardArtifactDisplay.whiteboard,
       code: codingArtifactDisplay.code,
       complexity: codingArtifactDisplay.complexity,
@@ -520,9 +519,9 @@ export const MeetingAssistant = ({
       score: item.score,
       matchReason: item.matchReason,
     })) ?? [];
-  const clarifyingQuestion = suggestionSections.question.trim();
+  const clarifyingQuestion = suggestionSections.clarifyingQuestion.trim();
   const rawClarifyingOptions = suggestionSections.clarifyingOptions ?? [];
-  const isScreenTaskSuggestion = suggestionSections.isScreenTask;
+  const hasTechnicalDetails = suggestionSections.hasTechnicalDetails;
   const clarifyingQuestionKey = clarifyingQuestion
     ? `${meeting.latestSuggestion?.id ?? displaySuggestion}:${clarifyingQuestion}`
     : "";
@@ -582,14 +581,16 @@ export const MeetingAssistant = ({
       active: focusModeActive,
       sections: {
         chineseThinking: displaySuggestionSections.chineseThinking,
-        answer: displaySuggestionSections.answer,
-        reply: displaySuggestionSections.reply,
+        primaryAnswer: displaySuggestionSections.primaryAnswer,
+        focusedQuestion: displaySuggestionSections.focusedQuestion,
+        approach: displaySuggestionSections.approach,
         whiteboard: displaySuggestionSections.whiteboard,
         code: displaySuggestionSections.code,
         complexity: displaySuggestionSections.complexity,
-        question: displaySuggestionSections.question,
+        clarifyingQuestion: displaySuggestionSections.clarifyingQuestion,
         clarifyingOptions: clarifyingOptions,
-        isScreenTask: displaySuggestionSections.isScreenTask,
+        profile: displaySuggestionSections.profile,
+        hasTechnicalDetails: displaySuggestionSections.hasTechnicalDetails,
       },
       latestReliableAnswer: latestReliableAnswerPreview,
       latestTurnText: latestTurn?.text || "Waiting for meeting audio.",
@@ -639,14 +640,16 @@ export const MeetingAssistant = ({
       meeting.speechCorrections,
       meeting.status,
       showClarifyingQuestion,
-      displaySuggestionSections.answer,
+      displaySuggestionSections.primaryAnswer,
       displaySuggestionSections.chineseThinking,
       clarifyingOptions,
       displaySuggestionSections.code,
       displaySuggestionSections.complexity,
-      displaySuggestionSections.isScreenTask,
-      displaySuggestionSections.question,
-      displaySuggestionSections.reply,
+      displaySuggestionSections.focusedQuestion,
+      displaySuggestionSections.approach,
+      displaySuggestionSections.clarifyingQuestion,
+      displaySuggestionSections.profile,
+      displaySuggestionSections.hasTechnicalDetails,
       displaySuggestionSections.whiteboard,
     ]
   );
@@ -1182,7 +1185,6 @@ export const MeetingAssistant = ({
               suggestionSections={displaySuggestionSections}
               codingArtifactCached={codingArtifactDisplay.isCached}
               whiteboardArtifactCached={whiteboardArtifactDisplay.isCached}
-              isScreenTaskSuggestion={isScreenTaskSuggestion}
               hasActiveMeetingTask={hasActiveMeetingTask}
               effectiveQuestionType={effectiveQuestionType}
               manualQuestionTypeCorrection={
@@ -1366,7 +1368,7 @@ export const MeetingAssistant = ({
                 ) : null}
               </section>
 
-              {isScreenTaskSuggestion ? (
+              {hasTechnicalDetails ? (
                 <>
                   <section className="min-w-0 overflow-hidden rounded-md border border-primary/30 bg-primary/5 p-2.5">
                     <div className="mb-1 flex items-center gap-2 text-xs font-semibold">
@@ -1395,7 +1397,7 @@ export const MeetingAssistant = ({
                         "min-h-14 text-sm font-medium leading-6"
                       )}
                       value={
-                        suggestionSections.answer || "Waiting for screen answer."
+                        suggestionSections.primaryAnswer || "Waiting for answer."
                       }
                     />
                   </section>
@@ -1430,7 +1432,7 @@ export const MeetingAssistant = ({
                       <SuggestionBlock
                         label="Question"
                         value={
-                          suggestionSections.screenQuestion ||
+                          suggestionSections.focusedQuestion ||
                           "Waiting for focused question."
                         }
                       />
@@ -1469,14 +1471,17 @@ export const MeetingAssistant = ({
                   <section className="min-w-0 overflow-hidden rounded-md border border-border/70 p-3">
                     <div className="mb-2 flex items-center gap-2 text-xs font-semibold">
                       <MessageSquareTextIcon className="h-3.5 w-3.5" />
-                      Suggested reply
+                      Answer
                     </div>
                     <MeetingMarkdownText
                       className={cn(
                         WRAP_TEXT_CLASS,
                         "min-h-20 text-xs leading-5"
                       )}
-                      value={suggestionSections.reply || "Waiting for suggestion."}
+                      value={
+                        suggestionSections.primaryAnswer ||
+                        "Waiting for suggestion."
+                      }
                     />
                   </section>
 
@@ -1810,11 +1815,10 @@ export const MeetingAssistant = ({
                       </div>
                     </details>
                   ) : null}
-                  {isScreenTaskSuggestion &&
-                  hasScreenTaskAnswerContent(suggestionSections.screenAnswer) ? (
+                  {hasSuggestion ? (
                     <details className="mt-2 border-t border-border/50 pt-2">
                       <summary className="cursor-pointer text-[10px] font-medium text-muted-foreground">
-                        Parsed screen answer
+                        Parsed meeting answer
                       </summary>
                       <pre
                         className={cn(
@@ -1822,7 +1826,9 @@ export const MeetingAssistant = ({
                           "mt-2 max-h-40 overflow-y-auto overflow-x-hidden rounded-sm bg-muted p-2 text-[10px] leading-4"
                         )}
                       >
-                        {formatParsedScreenAnswer(suggestionSections.screenAnswer)}
+                        {formatParsedMeetingAnswer(
+                          suggestionSections.parsedAnswer
+                        )}
                       </pre>
                     </details>
                   ) : null}
@@ -1991,7 +1997,6 @@ const FocusModePanel = ({
   suggestionSections,
   codingArtifactCached,
   whiteboardArtifactCached,
-  isScreenTaskSuggestion,
   hasActiveMeetingTask,
   effectiveQuestionType,
   manualQuestionTypeCorrection,
@@ -2016,10 +2021,9 @@ const FocusModePanel = ({
   brief,
   onBriefChange,
 }: {
-  suggestionSections: ReturnType<typeof parseSuggestionSections>;
+  suggestionSections: MeetingAnswerDisplayModel;
   codingArtifactCached: boolean;
   whiteboardArtifactCached: boolean;
-  isScreenTaskSuggestion: boolean;
   hasActiveMeetingTask: boolean;
   effectiveQuestionType?: CanonicalQuestionType;
   manualQuestionTypeCorrection?: ManualQuestionTypeCorrection;
@@ -2048,14 +2052,9 @@ const FocusModePanel = ({
   onBriefChange: (brief: InterviewSessionBrief | undefined) => void;
 }) => {
   const editableBrief = getEditableInterviewSessionBrief(brief);
-  const focusAnswer = isScreenTaskSuggestion
-    ? suggestionSections.answer
-    : suggestionSections.reply;
+  const focusAnswer = suggestionSections.primaryAnswer;
   const focusThinking =
-    suggestionSections.chineseThinking ||
-    (isScreenTaskSuggestion
-      ? "等待 Jarvis 总结中文思路。"
-      : "等待 Jarvis 给出中文思路。");
+    suggestionSections.chineseThinking || "等待 Jarvis 给出中文思路。";
 
   const updateInterviewTypes = (interviewTypes: InterviewBriefType[]) => {
     const nextBrief: InterviewSessionBrief = {
@@ -4437,115 +4436,6 @@ function isTaskSwitchQuestion(question: string) {
   );
 }
 
-const sectionBoundaryLabels = [
-  "中文思路",
-  "Chinese thinking",
-  "Meaning",
-  "Reply",
-  "Suggested reply",
-  "Question",
-  "Answer",
-  "Approach",
-  "Whiteboard",
-  "Infrastructure diagram",
-  "Code",
-  "Implementation",
-  "Complexity",
-  "Clarifying question",
-  "Clarifying options",
-];
-
-function parseSuggestionSections(
-  content: string,
-  screenTaskAnswer?: ScreenTaskAnswer,
-  answerProfile?: MeetingAnswerProfile
-) {
-  const trimmedContent = sanitizeSectionText(content);
-  const parsedScreenTaskAnswer =
-    screenTaskAnswer?.rawContent === trimmedContent
-      ? screenTaskAnswer
-      : parseScreenTaskAnswer(trimmedContent);
-
-  if (!trimmedContent) {
-    return {
-      meaning: "",
-      reply: "",
-      question: "",
-      chineseThinking: "",
-      screenQuestion: "",
-      answer: "",
-      approach: "",
-      whiteboard: "",
-      code: "",
-      complexity: "",
-      clarifyingOptions: [],
-      screenAnswer: parsedScreenTaskAnswer,
-      isScreenTask: false,
-    };
-  }
-
-  const screenQuestion = parsedScreenTaskAnswer.question ?? "";
-  const parsedChineseThinking =
-    parsedScreenTaskAnswer.chineseThinking ??
-    readSuggestionSection(trimmedContent, [
-      "中文思路",
-      "Chinese thinking",
-      "Meaning",
-    ]);
-  const answer = parsedScreenTaskAnswer.answer ?? "";
-  const approach = parsedScreenTaskAnswer.approach ?? "";
-  const whiteboard =
-    parsedScreenTaskAnswer.whiteboard ??
-    readSuggestionSection(trimmedContent, [
-      "Whiteboard",
-      "Infrastructure diagram",
-    ]);
-  const code = parsedScreenTaskAnswer.code ?? "";
-  const complexity = parsedScreenTaskAnswer.complexity ?? "";
-  const clarifyingQuestion = parsedScreenTaskAnswer.clarifyingQuestion ?? "";
-  const clarifyingOptions = parsedScreenTaskAnswer.clarifyingOptions ?? [];
-  const isScreenTask = answerProfile
-    ? answerProfile !== "compact-spoken"
-    : Boolean(approach || whiteboard || code || complexity);
-  const legacyReply = readSuggestionSection(trimmedContent, [
-    "Reply",
-    "Suggested reply",
-  ]);
-  const reply = legacyReply || (!isScreenTask ? answer : "");
-  const chineseThinking =
-    parsedChineseThinking ||
-    buildChineseThinkingFallback({
-      answer,
-      approach,
-      reply,
-      question: screenQuestion,
-      isScreenTask,
-    });
-  const question = isScreenTask
-    ? clarifyingQuestion
-    : readSuggestionSection(trimmedContent, [
-        "Question",
-        "Clarifying question",
-      ]);
-  const hasStructuredSections = Boolean(chineseThinking || reply || question);
-
-  return {
-    meaning: chineseThinking,
-    reply: reply || (hasStructuredSections ? "" : trimmedContent),
-    question,
-    chineseThinking,
-    screenQuestion,
-    answer,
-    approach,
-    whiteboard,
-    code,
-    complexity,
-    clarifyingOptions,
-    screenAnswer: parsedScreenTaskAnswer,
-    isScreenTask,
-  };
-}
-
 function formatLatestReliableAnswerPreview(
   suggestion: AdvisorSuggestion | null | undefined,
   currentContent: string
@@ -4554,14 +4444,13 @@ function formatLatestReliableAnswerPreview(
   const cachedContent = suggestion.content.trim();
   if (cachedContent === currentContent.trim()) return "";
 
-  const sections = parseSuggestionSections(
-    cachedContent,
-    suggestion.screenTaskAnswer,
-    suggestion.answerProfile
-  );
+  const sections = buildMeetingAnswerDisplayModel({
+    content: cachedContent,
+    parsedAnswer: suggestion.meetingAnswer,
+    expectedProfile: suggestion.answerProfile,
+  });
   const preview =
-    sections.answer ||
-    sections.reply ||
+    sections.primaryAnswer ||
     sections.chineseThinking ||
     cachedContent;
 
@@ -4584,7 +4473,7 @@ function readCodingArtifactPatch({
 }: {
   activeTaskKind?: string;
   hasExistingCache: boolean;
-  sections: ReturnType<typeof parseSuggestionSections>;
+  sections: MeetingAnswerDisplayModel;
 }) {
   const code = normalizeCodingArtifactText(sections.code);
   const complexity = normalizeCodingArtifactText(sections.complexity);
@@ -4610,7 +4499,7 @@ function resolveCodingArtifactDisplay({
   activeTaskKind?: string;
   cache: CodingArtifactCache | null;
   taskId: string;
-  sections: ReturnType<typeof parseSuggestionSections>;
+  sections: MeetingAnswerDisplayModel;
 }) {
   if (!taskId) return { code: "", complexity: "", isCached: false };
 
@@ -4648,7 +4537,7 @@ function resolveWhiteboardArtifactDisplay({
   activeTaskKind?: string;
   artifact?: { parentTaskId: string; content: string };
   taskId: string;
-  sections: ReturnType<typeof parseSuggestionSections>;
+  sections: MeetingAnswerDisplayModel;
 }) {
   const sectionWhiteboard = normalizeWhiteboardArtifactText(sections.whiteboard);
   if (sectionWhiteboard) {
@@ -4683,77 +4572,16 @@ function normalizeCodingArtifactText(value: string | undefined) {
   return normalized === "-" ? "" : normalized;
 }
 
-function isCodingArtifactUpdate(
-  sections: ReturnType<typeof parseSuggestionSections>
-) {
+function isCodingArtifactUpdate(sections: MeetingAnswerDisplayModel) {
   return /\b(time complexity|space complexity|complexity|implementation|implement|algorithm|code|solution|optimi[sz]e)\b|o\s*\(/i.test(
     [
-      sections.screenQuestion,
-      sections.answer,
+      sections.focusedQuestion,
+      sections.primaryAnswer,
       sections.approach,
       sections.complexity,
-      sections.screenAnswer?.rawContent,
+      sections.parsedAnswer.rawContent,
     ].join("\n")
   );
-}
-
-function readSuggestionSection(content: string, labels: string[]) {
-  const labelPattern = labels.map(escapeRegExp).join("|");
-  const boundaryPattern = sectionBoundaryLabels.map(escapeRegExp).join("|");
-  const labelLinePattern = buildSectionLabelLinePattern(labelPattern);
-  const boundaryLinePattern = buildSectionLabelLinePattern(boundaryPattern);
-  const pattern = new RegExp(
-    `(?:^|\\n)\\s*${labelLinePattern}([\\s\\S]*?)(?=\\n\\s*${boundaryLinePattern}|$)`,
-    "i"
-  );
-  const match = pattern.exec(content);
-
-  return sanitizeSectionText(match?.[1] ?? "");
-}
-
-function buildSectionLabelLinePattern(labelPattern: string) {
-  const emphasis = "(?:\\*\\*|__)?";
-  const prefix = `(?:#{1,6}\\s*)?(?:[-*]\\s*)?${emphasis}`;
-  const label = `(?:${labelPattern})(?:\\s*\\([^\\n:：)]*\\))?`;
-  const separator = `(?:\\s*[:：]\\s*${emphasis}\\s*|${emphasis}\\s*[:：]\\s*|${emphasis}\\s*(?:\\n|$))`;
-
-  return `${prefix}${label}${separator}`;
-}
-
-function buildChineseThinkingFallback({
-  answer,
-  approach,
-  reply,
-  question,
-  isScreenTask,
-}: {
-  answer: string;
-  approach: string;
-  reply: string;
-  question: string;
-  isScreenTask: boolean;
-}) {
-  const source = [approach, answer, reply].find((value) => value.trim());
-  if (!source) return "";
-
-  if (isScreenTask) {
-    if (approach.trim()) return `先按这个思路组织回答：${toCompactChineseHint(approach)}`;
-    if (answer.trim()) return `先给结论，再补关键理由：${toCompactChineseHint(answer)}`;
-    return question.trim()
-      ? `先确认题目焦点，再围绕 ${toCompactChineseHint(question)} 回答。`
-      : "";
-  }
-
-  return `先把意思压缩成可说出口的主线：${toCompactChineseHint(source)}`;
-}
-
-function toCompactChineseHint(value: string) {
-  return stripOuterCodeFence(value)
-    .replace(/```[\s\S]*?```/g, " ")
-    .replace(/\*\*/g, "")
-    .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, 180);
 }
 
 function formatChineseThinkingText(value: string) {
@@ -4812,19 +4640,6 @@ function normalizeMathExpression(expression: string) {
     .replace(/\s+/g, " ");
 }
 
-function sanitizeSectionText(value: string) {
-  const trimmed = value
-    .trim()
-    .replace(/^[-*]\s*/, "")
-    .trim();
-
-  return trimmed === "-" ? "" : trimmed;
-}
-
-function escapeRegExp(value: string) {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
 function formatInterviewTargetCompany(company: InterviewTargetCompany) {
   return [
     `source ${company.source}`,
@@ -4835,18 +4650,24 @@ function formatInterviewTargetCompany(company: InterviewTargetCompany) {
     .join(" / ");
 }
 
-function formatParsedScreenAnswer(answer: ScreenTaskAnswer) {
+function formatParsedMeetingAnswer(answer: ParsedMeetingAnswer) {
   return JSON.stringify(
     {
-      chineseThinking: answer.chineseThinking ?? "",
-      question: answer.question ?? "",
-      answer: answer.answer ?? "",
-      approach: answer.approach ?? "",
-      whiteboardChars: answer.whiteboard?.length ?? 0,
-      codeChars: answer.code?.length ?? 0,
-      complexity: answer.complexity ?? "",
-      clarifyingQuestion: answer.clarifyingQuestion ?? "",
-      clarifyingOptions: answer.clarifyingOptions ?? [],
+      contractVersion: answer.contractVersion,
+      profile: answer.profile,
+      parseStatus: answer.parseStatus,
+      primaryAnswerSource: answer.primaryAnswerSource,
+      recognizedLabels: answer.recognizedLabels,
+      missingExpectedSections: answer.missingExpectedSections,
+      chineseThinking: answer.sections.chineseThinking ?? "",
+      question: answer.sections.question ?? "",
+      answer: answer.sections.answer ?? "",
+      approach: answer.sections.approach ?? "",
+      whiteboardChars: answer.sections.whiteboard?.length ?? 0,
+      codeChars: answer.sections.code?.length ?? 0,
+      complexity: answer.sections.complexity ?? "",
+      clarifyingQuestion: answer.sections.clarifyingQuestion ?? "",
+      clarifyingOptions: answer.sections.clarifyingOptions,
       rawChars: answer.rawContent.length,
       parsedAt: new Date(answer.parsedAt).toISOString(),
     },

@@ -4,6 +4,7 @@ import type {
   InterviewBriefType,
   ManualQuestionTypeCorrection,
   ManualQuestionTypeCorrectionSource,
+  MeetingAnswerProfile,
   SpeechCorrection,
 } from "./types";
 import type { getActiveMeetingTaskFocusSummary } from "./active-meeting-task";
@@ -16,14 +17,16 @@ export type MeetingFocusWindowKind = "answer" | "controls";
 
 export type MeetingFocusSectionsSnapshot = {
   chineseThinking: string;
-  answer: string;
-  reply: string;
+  primaryAnswer: string;
+  focusedQuestion: string;
+  approach: string;
   whiteboard: string;
   code: string;
   complexity: string;
-  question: string;
+  clarifyingQuestion: string;
   clarifyingOptions: ClarifyingQuestionOption[];
-  isScreenTask: boolean;
+  profile?: MeetingAnswerProfile;
+  hasTechnicalDetails: boolean;
 };
 
 export type MeetingFocusSpeechCorrectionSnapshot = Pick<
@@ -82,14 +85,16 @@ export const EMPTY_MEETING_FOCUS_SNAPSHOT: MeetingFocusSnapshot = {
   active: false,
   sections: {
     chineseThinking: "",
-    answer: "",
-    reply: "",
+    primaryAnswer: "",
+    focusedQuestion: "",
+    approach: "",
     whiteboard: "",
     code: "",
     complexity: "",
-    question: "",
+    clarifyingQuestion: "",
     clarifyingOptions: [],
-    isScreenTask: false,
+    profile: undefined,
+    hasTechnicalDetails: false,
   },
   latestReliableAnswer: "",
   latestTurnText: "Waiting for meeting audio.",

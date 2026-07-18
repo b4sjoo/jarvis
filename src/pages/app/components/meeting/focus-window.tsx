@@ -97,12 +97,9 @@ function MeetingFocusAnswerWindow({
   snapshot: MeetingFocusSnapshot;
 }) {
   const sections = snapshot.sections;
-  const focusAnswer = sections.isScreenTask ? sections.answer : sections.reply;
+  const focusAnswer = sections.primaryAnswer;
   const focusThinking =
-    sections.chineseThinking ||
-    (sections.isScreenTask
-      ? "等待 Jarvis 总结中文思路。"
-      : "等待 Jarvis 给出中文思路。");
+    sections.chineseThinking || "等待 Jarvis 给出中文思路。";
 
   return (
     <div className="h-screen w-screen overflow-hidden bg-transparent p-2">

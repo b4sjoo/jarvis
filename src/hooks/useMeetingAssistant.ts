@@ -95,7 +95,6 @@ import {
   formatMeetingAnswerTraceMetadata,
   parseMeetingAnswer,
   parseMeetingTraceMetrics,
-  parseScreenTaskAnswer,
   resolveMeetingAnswerProfile,
   screenTaskAnswerFromParsedMeetingAnswer,
   preflightScreenObservation,
@@ -757,14 +756,13 @@ function preserveCodingResponseActionSections(
   const source = sourceSuggestion?.trim();
   if (!source) return generatedContent;
 
-  const sourceAnswer = parseScreenTaskAnswer(source);
+  const sourceAnswer = parseMeetingAnswer(source).sections;
   const sourceCode = sourceAnswer.code?.trim();
   if (!sourceCode) return generatedContent;
 
-  const generatedAnswer = parseScreenTaskAnswer(generatedContent);
+  const generatedAnswer = parseMeetingAnswer(generatedContent).sections;
   if (generatedAnswer.code?.trim()) return generatedContent;
 
-  const compactAnswer = readCompactActionAnswer(generatedContent);
   const clarifyingOptions =
     formatClarifyingOptionsForSection(generatedAnswer.clarifyingOptions) ||
     formatClarifyingOptionsForSection(sourceAnswer.clarifyingOptions);
@@ -774,7 +772,7 @@ function preserveCodingResponseActionSections(
       generatedAnswer.chineseThinking || sourceAnswer.chineseThinking || "-"
     }`,
     `Question: ${generatedAnswer.question || sourceAnswer.question || "-"}`,
-    `Answer: ${generatedAnswer.answer || compactAnswer || sourceAnswer.answer || "-"}`,
+    `Answer: ${generatedAnswer.answer || sourceAnswer.answer || "-"}`,
     `Approach: ${generatedAnswer.approach || sourceAnswer.approach || "-"}`,
     ["Code:", "```", sourceCode, "```"].join("\n"),
     `Complexity: ${generatedAnswer.complexity || sourceAnswer.complexity || "-"}`,
@@ -788,35 +786,9 @@ function preserveCodingResponseActionSections(
 }
 
 function formatClarifyingOptionsForSection(
-  options: ReturnType<typeof parseScreenTaskAnswer>["clarifyingOptions"]
+  options: ReturnType<typeof parseMeetingAnswer>["sections"]["clarifyingOptions"]
 ) {
-  return options?.map((option) => option.label).filter(Boolean).join(" | ");
-}
-
-function readCompactActionAnswer(content: string) {
-  const chineseThinking =
-    readCompactSection(content, "中文思路") ||
-    readCompactSection(content, "Meaning");
-  const reply = readCompactSection(content, "Reply");
-  const question = readCompactSection(content, "Question");
-  const parts = [reply, chineseThinking].filter(Boolean);
-
-  if (parts.length > 0) return parts.join("\n\n");
-  if (question) return question;
-
-  const trimmed = content.trim();
-  return trimmed === "-" ? "" : trimmed;
-}
-
-function readCompactSection(content: string, label: string) {
-  const labels = ["中文思路", "Meaning", "Reply", "Question"];
-  const boundary = labels.join("|");
-  const pattern = new RegExp(
-    `(?:^|\\n)\\s*${label}\\s*:\\s*([\\s\\S]*?)(?=\\n\\s*(?:${boundary})\\s*:|$)`,
-    "i"
-  );
-  const value = pattern.exec(content)?.[1]?.trim() ?? "";
-  return value === "-" ? "" : value;
+  return options.map((option) => option.label).filter(Boolean).join(" | ");
 }
 
 function shouldAutoExportTrace(trace: MeetingTrace) {

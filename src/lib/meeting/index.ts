@@ -13,6 +13,7 @@ export * from "./programming-language";
 export * from "./interview-session-context";
 export * from "./manual-question-type-correction";
 export * from "./meeting-answer";
+export * from "./meeting-answer-display";
 export * from "./personal-evidence-guardrail";
 export * from "./project-binding";
 export * from "./screen-observation.service";
