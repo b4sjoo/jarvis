@@ -1,9 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { validateTranscriptCandidate } from "../src/lib/meeting/transcript-validation.js";
-
-const RECORDED_SPEECH_BIAS_PROMPT =
-  'Likely technical terms, company names, product names, and acronyms: Snowflake, RAG failure modes and fixes, Context engineering failure modes, Agent skills, MCP, and progressive disclosure, ML Commons Platform Smaller Features, RAG, MCP, ML, APIs, Retrieval-Augmented Generation, LLM, embedding, vector database, model serving, inference, evaluation, AI. Preserve acronyms and product names exactly. Corrections: "rec" means "RAG"; "rack" means "RAG".';
+import { RECORDED_RECRUITER_SPEECH_BIAS_PROMPT as RECORDED_SPEECH_BIAS_PROMPT } from "./fixtures/recruiter-screen-session.js";
 
 test("rejects the exact speech-bias prompt echo from the recruiter session", () => {
   const decision = validateTranscriptCandidate({
