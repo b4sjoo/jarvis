@@ -45,6 +45,7 @@ import type {
   MeetingTraceSummary,
   MeetingTraceValueSummary,
   MemoryEntryEvaluationLabelValue,
+  MemoryRetrievalEvaluationSnapshotResolution,
   PersonalEvidenceGuardrailMode,
   QuestionHumanEvaluation,
   ScreenCaptureTarget,
@@ -61,6 +62,7 @@ import {
   normalizeCanonicalQuestionType,
   overlayMeetingAnswerArtifacts,
   resolveMeetingAnswerProfile,
+  resolveTraceMemoryEvaluationSnapshot,
   stripOuterCodeFence,
   summarizeMeetingTraces,
 } from "@/lib/meeting";
@@ -512,13 +514,8 @@ export const MeetingAssistant = ({
         evaluation.traceIds.includes(latestTrace.id)
       )
     : undefined;
-  const latestMemoryEvaluationEntries =
-    meeting.lastMemoryContext?.entries.map((item) => ({
-      id: item.entry.id,
-      title: item.entry.title,
-      score: item.score,
-      matchReason: item.matchReason,
-    })) ?? [];
+  const latestMemoryEvaluationSnapshot =
+    resolveTraceMemoryEvaluationSnapshot(latestTrace);
   const clarifyingQuestion = suggestionSections.clarifyingQuestion.trim();
   const rawClarifyingOptions = suggestionSections.clarifyingOptions ?? [];
   const hasTechnicalDetails = suggestionSections.hasTechnicalDetails;
@@ -1778,7 +1775,7 @@ export const MeetingAssistant = ({
                     )}
                     evaluation={latestTraceEvaluation}
                     questionEvaluation={latestQuestionEvaluation}
-                    memoryEntries={latestMemoryEvaluationEntries}
+                    memorySnapshot={latestMemoryEvaluationSnapshot}
                     onUpdate={(patch) => {
                       meeting.updateTraceHumanEvaluation(latestTrace.id, patch);
                     }}
@@ -3379,7 +3376,7 @@ const TraceHumanEvaluationPanel = ({
   detectedPlaybookPhase,
   evaluation,
   questionEvaluation,
-  memoryEntries,
+  memorySnapshot,
   onUpdate,
   onUpdateQuestion,
 }: {
@@ -3400,12 +3397,7 @@ const TraceHumanEvaluationPanel = ({
       }
     | undefined;
   questionEvaluation: QuestionHumanEvaluation | undefined;
-  memoryEntries: Array<{
-    id: string;
-    title: string;
-    score: number;
-    matchReason: string[];
-  }>;
+  memorySnapshot: MemoryRetrievalEvaluationSnapshotResolution;
   onUpdate: (patch: {
     taskQuality?: HumanEvalTaskQuality;
     correctedQuestionType?: HumanEvalQuestionType;
@@ -3421,6 +3413,7 @@ const TraceHumanEvaluationPanel = ({
 }) => {
   const failureReasons = evaluation?.failureReasons ?? [];
   const [missingMemoryNote, setMissingMemoryNote] = useState("");
+  const memoryEntries = memorySnapshot.snapshot?.entries ?? [];
 
   const toggleFailureReason = (reason: HumanEvalFailureReason) => {
     onUpdate({
@@ -3989,9 +3982,14 @@ const TraceHumanEvaluationPanel = ({
                   );
                 })}
               </div>
+            ) : memorySnapshot.status === "empty" ? (
+              <div className="text-[10px] text-muted-foreground">
+                No memory entries were injected for this trace.
+              </div>
             ) : (
               <div className="text-[10px] text-muted-foreground">
-                No injected memory entries on the latest trace.
+                Memory evidence is unavailable for this trace. Entry labels are
+                disabled.
               </div>
             )}
           </div>

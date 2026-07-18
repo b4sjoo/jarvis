@@ -93,6 +93,7 @@ import {
   inferScreenTaskKind,
   isShortConfirmationLike,
   buildMeetingAnswerSummary,
+  buildMemoryEvaluationTraceMetadata,
   formatMeetingAnswerTraceMetadata,
   parseMeetingAnswer,
   parseMeetingTraceMetrics,
@@ -108,6 +109,7 @@ import {
   readTraceHumanEvaluations,
   readQuestionHumanEvaluations,
   readMeetingEvalTraceMetadata,
+  resolveTraceMemoryEvaluationSnapshot,
   resolveActiveMeetingTaskIdentity,
   buildSpeechBiasContext,
   formatSpeechBiasPromptForTrace,
@@ -1471,6 +1473,8 @@ export function useMeetingAssistant() {
         ? toHumanEvalQuestionType(canonicalQuestionType)
         : undefined;
       const traceEvalMetadata = readMeetingEvalTraceMetadata([trace.metadata]);
+      const memoryEvaluationSnapshot =
+        resolveTraceMemoryEvaluationSnapshot(trace).snapshot;
       const activeWhiteboardEvalMetadata =
         buildWhiteboardEvalTraceMetadata(activeMeetingTask);
       const activeTaskIdentity = resolveActiveMeetingTaskIdentity({
@@ -1527,6 +1531,7 @@ export function useMeetingAssistant() {
           traceEvalMetadata.selectedDiagramOverlayIds ?? [],
         rejectedDiagramOverlayCount:
           traceEvalMetadata.rejectedDiagramOverlayCount,
+        memoryRetrievalSnapshot: memoryEvaluationSnapshot,
       };
     },
     []
@@ -2139,6 +2144,7 @@ export function useMeetingAssistant() {
             "injected memory context",
             formatMemorySelectionForTrace(memoryContext),
             {
+              ...buildMemoryEvaluationTraceMetadata(memoryContext),
               selectedEntries: memoryContext.entries.length,
               useCase: resolvedUseCase,
               questionType: resolvedQuestionType,
@@ -5533,6 +5539,16 @@ export function useMeetingAssistant() {
           regenerationTraceId: regenerationTrace.id,
           regenerationStatus: "running",
         };
+        const correctionMemorySnapshot = correctionQuestion.sourceTraceId
+          ? resolveTraceMemoryEvaluationSnapshot(
+              traceStoreRef.current
+                .getTraces()
+                .find(
+                  (candidate) =>
+                    candidate.id === correctionQuestion.sourceTraceId
+                )
+            ).snapshot
+          : undefined;
 
         const questionEvaluations = upsertQuestionHumanEvaluation(
           state.questionEvaluations,
@@ -5548,6 +5564,7 @@ export function useMeetingAssistant() {
             questionType: toHumanEvalQuestionType(decision.detectedType),
             playbookId: correctedPlaybook?.id,
             playbookPhase: correctedPlaybook?.phase,
+            memoryRetrievalSnapshot: correctionMemorySnapshot,
           },
           {
             questionId,

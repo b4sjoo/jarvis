@@ -10,6 +10,7 @@ import type {
   QuestionHumanEvaluation,
   TraceHumanEvaluation,
 } from "./types";
+import { normalizeMemoryRetrievalEvaluationSnapshot } from "./memory-evaluation.js";
 import {
   fromHumanEvalQuestionType,
   normalizeCanonicalQuestionType,
@@ -48,6 +49,7 @@ export interface QuestionEvaluationIdentity {
   manualPhaseGuardStatus?: string;
   selectedDiagramOverlayIds?: string[];
   rejectedDiagramOverlayCount?: number;
+  memoryRetrievalSnapshot?: QuestionHumanEvaluation["memoryRetrievalSnapshot"];
 }
 
 export function readTraceHumanEvaluations(): TraceHumanEvaluation[] {
@@ -267,6 +269,12 @@ export function upsertQuestionHumanEvaluation(
     ),
     guardrail: mergeVerdictBlock(existing?.guardrail, patch.guardrail),
     answer: mergeVerdictBlock(existing?.answer, patch.answer),
+    memoryRetrievalSnapshot:
+      normalizeMemoryRetrievalEvaluationSnapshot(
+        patch.memoryRetrievalSnapshot
+      ) ??
+      existing?.memoryRetrievalSnapshot ??
+      identity.memoryRetrievalSnapshot,
     memoryEntryLabels: mergeMemoryEntryLabels(
       existing?.memoryEntryLabels ?? [],
       patch.memoryEntryLabels ?? []
@@ -472,6 +480,9 @@ function normalizeQuestionHumanEvaluation(
     diagramOverlay: normalizeVerdictBlock(candidate.diagramOverlay),
     guardrail: normalizeVerdictBlock(candidate.guardrail),
     answer: normalizeVerdictBlock(candidate.answer),
+    memoryRetrievalSnapshot: normalizeMemoryRetrievalEvaluationSnapshot(
+      candidate.memoryRetrievalSnapshot
+    ),
     memoryEntryLabels: normalizeMemoryEntryLabels(candidate.memoryEntryLabels),
     missingExpectedMemory: normalizeMissingExpectedMemory(
       candidate.missingExpectedMemory

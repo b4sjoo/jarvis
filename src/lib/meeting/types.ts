@@ -939,6 +939,24 @@ export interface MissingExpectedMemoryLabel {
   note?: string;
 }
 
+export interface MemoryEvaluationEntrySnapshot {
+  id: string;
+  title: string;
+  score: number;
+  matchReason: string[];
+}
+
+export interface MemoryRetrievalEvaluationSnapshot {
+  traceId: string;
+  status: "available" | "empty";
+  entries: MemoryEvaluationEntrySnapshot[];
+}
+
+export interface MemoryRetrievalEvaluationSnapshotResolution {
+  status: "available" | "empty" | "unavailable";
+  snapshot?: MemoryRetrievalEvaluationSnapshot;
+}
+
 export interface QuestionHumanEvaluation {
   id: string;
   sessionId?: string;
@@ -979,6 +997,7 @@ export interface QuestionHumanEvaluation {
   diagramOverlay: HumanEvaluationVerdictBlock;
   guardrail: HumanEvaluationVerdictBlock;
   answer: HumanEvaluationVerdictBlock;
+  memoryRetrievalSnapshot?: MemoryRetrievalEvaluationSnapshot;
   memoryEntryLabels: MemoryEntryEvaluationLabel[];
   missingExpectedMemory: MissingExpectedMemoryLabel[];
   notes?: string;

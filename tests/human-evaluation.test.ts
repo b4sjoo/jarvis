@@ -87,6 +87,51 @@ test("preserves a legacy parent-scoped record when its trace is relabeled", () =
   assert.equal(updated[0].answer.verdict, "ok");
 });
 
+test("persists trace-bound memory evidence with a question evaluation", () => {
+  const evaluations = upsertQuestionHumanEvaluation(
+    [],
+    {
+      traceId: "trace_1",
+      traceKind: "screen",
+      parentTaskId: "parent_1",
+      memoryRetrievalSnapshot: {
+        traceId: "trace_1",
+        status: "available",
+        entries: [
+          {
+            id: "mem_1",
+            title: "Project evidence",
+            score: 21,
+            matchReason: ["project:fact-anchor"],
+          },
+        ],
+      },
+    },
+    {
+      memoryEntryLabels: [
+        {
+          memoryId: "mem_1",
+          title: "Project evidence",
+          label: "relevant",
+        },
+      ],
+    }
+  );
+
+  assert.deepEqual(evaluations[0].memoryRetrievalSnapshot, {
+    traceId: "trace_1",
+    status: "available",
+    entries: [
+      {
+        id: "mem_1",
+        title: "Project evidence",
+        score: 21,
+        matchReason: ["project:fact-anchor"],
+      },
+    ],
+  });
+});
+
 test("bridges legacy trace labels into question-level verdict blocks", () => {
   const traceEvaluation: TraceHumanEvaluation = {
     id: "human_eval_1",
