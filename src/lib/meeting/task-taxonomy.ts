@@ -64,6 +64,58 @@ export function canQuestionTypeDecisionOverrideParent(
   );
 }
 
+export type LatestTurnTaxonomyBoundaryReason =
+  | "opening-route"
+  | "latest-turn-classified"
+  | "latest-turn-unknown"
+  | "missing-latest-turn";
+
+export interface LatestTurnTaxonomyBoundaryDecision {
+  questionType: CanonicalQuestionType;
+  allowsNewTaskSignal: boolean;
+  fallbackSuppressed: boolean;
+  unknownTaskMutationBlocked: boolean;
+  reason: LatestTurnTaxonomyBoundaryReason;
+}
+
+export function decideLatestTurnTaxonomyBoundary({
+  latestQuestionType,
+  hasLatestUsefulText,
+  hasOpeningRoute,
+}: {
+  latestQuestionType: CanonicalQuestionType;
+  hasLatestUsefulText: boolean;
+  hasOpeningRoute: boolean;
+}): LatestTurnTaxonomyBoundaryDecision {
+  if (!hasLatestUsefulText) {
+    return {
+      questionType: "unknown",
+      allowsNewTaskSignal: false,
+      fallbackSuppressed: true,
+      unknownTaskMutationBlocked: false,
+      reason: "missing-latest-turn",
+    };
+  }
+
+  if (latestQuestionType === "unknown") {
+    return {
+      questionType: "unknown",
+      allowsNewTaskSignal: false,
+      fallbackSuppressed: true,
+      unknownTaskMutationBlocked: true,
+      reason: "latest-turn-unknown",
+    };
+  }
+
+  return {
+    questionType: latestQuestionType,
+    allowsNewTaskSignal: true,
+    fallbackSuppressed: false,
+    unknownTaskMutationBlocked: false,
+    reason: hasOpeningRoute ? "opening-route" : "latest-turn-classified",
+  };
+}
+
 export const CANONICAL_QUESTION_TYPES: CanonicalQuestionType[] = [
   "behavioral",
   "coding",

@@ -122,6 +122,7 @@ import {
   SessionRecordingManager,
   areCompatibleQuestionTypes,
   canQuestionTypeDecisionOverrideParent,
+  decideLatestTurnTaxonomyBoundary,
   inferCanonicalQuestionTypeFromText,
   inferQuestionTypeDecisionFromText,
   isParentCanonicalQuestionType,
@@ -132,6 +133,7 @@ import {
   toHumanEvalQuestionType,
   toMemoryUseCaseForQuestionType,
   type QuestionTypeInferenceDecision,
+  type LatestTurnTaxonomyBoundaryReason,
   solveScreenAnchoredTask,
   shouldIncludeTurnInAdvisorPrompt,
   shouldSuppressDuplicateSystemAudioTurn,
@@ -785,6 +787,13 @@ interface AdvisorTaskSignals {
   source: string;
   reuseActivePlaybook: boolean;
   openingRoute?: OpeningRouteContext;
+  latestTurnAskFrame?: MemoryAskFrame;
+  latestTurnTaxonomyBoundaryReason?:
+    | LatestTurnTaxonomyBoundaryReason
+    | "active-parent-continuity"
+    | "manual-question-type-correction";
+  taxonomyFallbackSuppressed?: boolean;
+  unknownTaskMutationBlocked?: boolean;
 }
 
 function preserveCodingResponseActionSections(
@@ -6576,6 +6585,12 @@ function resolveAdvisorTaskSignals(
         source: openingRoute?.source ?? "latest-turn-new-parent",
         reuseActivePlaybook: false,
         openingRoute,
+        latestTurnAskFrame: latestAskFrame,
+        latestTurnTaxonomyBoundaryReason: openingRoute
+          ? "opening-route"
+          : "latest-turn-classified",
+        taxonomyFallbackSuppressed: false,
+        unknownTaskMutationBlocked: false,
       };
     }
 
@@ -6595,6 +6610,10 @@ function resolveAdvisorTaskSignals(
         source: "latest-turn-child-probe",
         reuseActivePlaybook: false,
         openingRoute,
+        latestTurnAskFrame: latestAskFrame,
+        latestTurnTaxonomyBoundaryReason: "active-parent-continuity",
+        taxonomyFallbackSuppressed: false,
+        unknownTaskMutationBlocked: false,
       };
     }
 
@@ -6641,42 +6660,65 @@ function resolveAdvisorTaskSignals(
       source: "active-parent",
       reuseActivePlaybook: true,
       openingRoute,
+      latestTurnAskFrame: latestAskFrame,
+      latestTurnTaxonomyBoundaryReason: "active-parent-continuity",
+      taxonomyFallbackSuppressed: false,
+      unknownTaskMutationBlocked: false,
     };
   }
 
-  const questionType =
-    latestQuestionType !== "unknown"
-      ? latestQuestionType
-      : inferMemoryQuestionTypeFromQuery(fallbackQuery);
+  const latestTurnBoundary = decideLatestTurnTaxonomyBoundary({
+    latestQuestionType:
+      normalizeCanonicalQuestionType(latestQuestionType) ?? "unknown",
+    hasLatestUsefulText: Boolean(latestUsefulText),
+    hasOpeningRoute: Boolean(openingRoute),
+  });
+  const questionType = latestTurnBoundary.questionType;
 
   return {
     questionType,
     questionTypeDecision: latestQuestionTypeDecision,
-    askFrame:
-      latestAskFrame !== "unknown"
-        ? latestAskFrame
-        : inferMemoryAskFrameFromQuery(fallbackQuery),
-    topicDomain:
-      latestTopicDomain !== "unknown"
-        ? latestTopicDomain
-        : inferMemoryTopicDomainFromQuery(fallbackQuery),
+    askFrame: latestAskFrame,
+    topicDomain: latestTopicDomain,
     query: latestUsefulText
       ? buildFocusedAdvisorTaskQuery(context, latestUsefulText)
       : fallbackQuery,
-    taskRelation: "new-parent",
+    taskRelation: latestTurnBoundary.allowsNewTaskSignal
+      ? "new-parent"
+      : "unknown",
     subtaskIntent: inferAdvisorSubtaskIntent(latestUsefulText, questionType),
     projectAnchor: latestProjectAnchor,
-    source: openingRoute?.source ?? (latestUsefulText ? "latest-turn" : "fallback-query"),
+    source:
+      openingRoute?.source ??
+      (latestTurnBoundary.allowsNewTaskSignal
+        ? "latest-turn"
+        : "latest-turn-taxonomy-boundary"),
     reuseActivePlaybook: false,
     openingRoute,
+    latestTurnAskFrame: latestAskFrame,
+    latestTurnTaxonomyBoundaryReason: latestTurnBoundary.reason,
+    taxonomyFallbackSuppressed: latestTurnBoundary.fallbackSuppressed,
+    unknownTaskMutationBlocked:
+      latestTurnBoundary.unknownTaskMutationBlocked,
   };
 }
 
 function formatAdvisorQuestionTypeDecisionForTrace(
   signals: AdvisorTaskSignals
 ) {
+  const boundaryMetadata = {
+    latestTurnAskFrame: signals.latestTurnAskFrame ?? "unknown",
+    latestTurnTaxonomyBoundaryReason:
+      signals.latestTurnTaxonomyBoundaryReason ?? "active-parent-continuity",
+    taxonomyFallbackSuppressed:
+      signals.taxonomyFallbackSuppressed ?? false,
+    unknownTaskMutationBlocked:
+      signals.unknownTaskMutationBlocked ?? false,
+  };
+
   if (signals.openingRoute) {
     return {
+      ...boundaryMetadata,
       questionTypeInferenceType: signals.questionType,
       questionTypeConfidence: 1,
       questionTypeMargin: 1,
@@ -6697,6 +6739,7 @@ function formatAdvisorQuestionTypeDecisionForTrace(
   const decision = signals.questionTypeDecision;
   if (!decision) {
     return {
+      ...boundaryMetadata,
       questionTypeInferenceType: "unknown",
       questionTypeConfidence: 0,
       questionTypeMargin: 0,
@@ -6709,6 +6752,7 @@ function formatAdvisorQuestionTypeDecisionForTrace(
   }
 
   return {
+    ...boundaryMetadata,
     questionTypeInferenceType: decision.type ?? "unknown",
     questionTypeConfidence: decision.confidence,
     questionTypeMargin: decision.margin,
@@ -6748,6 +6792,9 @@ function applyManualQuestionTypeCorrectionToAdvisorSignals(
     taskRelation,
     source: "manual-question-type-correction",
     reuseActivePlaybook: correction.target !== "child",
+    latestTurnTaxonomyBoundaryReason: "manual-question-type-correction",
+    taxonomyFallbackSuppressed: false,
+    unknownTaskMutationBlocked: false,
   };
 }
 

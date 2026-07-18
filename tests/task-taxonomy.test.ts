@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   areCompatibleQuestionTypes,
   canQuestionTypeDecisionOverrideParent,
+  decideLatestTurnTaxonomyBoundary,
   fromHumanEvalQuestionType,
   fromInterviewBriefType,
   fromMemoryQuestionType,
@@ -289,5 +290,72 @@ test("preserves explicit coding signals despite project vocabulary", () => {
       "What is the time complexity of this monotonic stack solution?"
     ),
     "coding"
+  );
+});
+
+test("blocks broad-history taxonomy fallback when the latest turn is unknown", () => {
+  assert.equal(
+    inferCanonicalQuestionTypeFromText(
+      "Implement a stack using two queues and explain the time complexity"
+    ),
+    "coding"
+  );
+
+  const latestDecision = inferQuestionTypeDecisionFromText(
+    "The control plane sends configuration to the data plane"
+  );
+  assert.equal(latestDecision.type, undefined);
+
+  const boundary = decideLatestTurnTaxonomyBoundary({
+    latestQuestionType: latestDecision.type ?? "unknown",
+    hasLatestUsefulText: true,
+    hasOpeningRoute: false,
+  });
+
+  assert.deepEqual(boundary, {
+    questionType: "unknown",
+    allowsNewTaskSignal: false,
+    fallbackSuppressed: true,
+    unknownTaskMutationBlocked: true,
+    reason: "latest-turn-unknown",
+  });
+});
+
+test("allows a strongly classified latest coding turn to open a task", () => {
+  const latestDecision = inferQuestionTypeDecisionFromText(
+    "Implement a stack using two queues"
+  );
+  assert.equal(latestDecision.type, "coding");
+
+  assert.deepEqual(
+    decideLatestTurnTaxonomyBoundary({
+      latestQuestionType: latestDecision.type ?? "unknown",
+      hasLatestUsefulText: true,
+      hasOpeningRoute: false,
+    }),
+    {
+      questionType: "coding",
+      allowsNewTaskSignal: true,
+      fallbackSuppressed: false,
+      unknownTaskMutationBlocked: false,
+      reason: "latest-turn-classified",
+    }
+  );
+});
+
+test("does not open a task when there is no latest useful interviewer turn", () => {
+  assert.deepEqual(
+    decideLatestTurnTaxonomyBoundary({
+      latestQuestionType: "unknown",
+      hasLatestUsefulText: false,
+      hasOpeningRoute: false,
+    }),
+    {
+      questionType: "unknown",
+      allowsNewTaskSignal: false,
+      fallbackSuppressed: true,
+      unknownTaskMutationBlocked: false,
+      reason: "missing-latest-turn",
+    }
   );
 });
