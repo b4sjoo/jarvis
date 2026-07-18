@@ -556,6 +556,54 @@ export interface ScreenTaskAnswer {
   parsedAt: number;
 }
 
+export type MeetingAnswerContractVersion =
+  | "meeting-answer-v2"
+  | "legacy-live-v1"
+  | "legacy-screen-v1"
+  | "unstructured";
+
+export type MeetingAnswerProfile =
+  | "compact-spoken"
+  | "technical"
+  | "coding"
+  | "system-design";
+
+export type MeetingAnswerParseStatus =
+  | "parsed"
+  | "partial"
+  | "fallback"
+  | "empty";
+
+export type MeetingAnswerPrimarySource =
+  | "answer"
+  | "reply-alias"
+  | "fallback"
+  | "none";
+
+export interface MeetingAnswerSections {
+  chineseThinking?: string;
+  question?: string;
+  answer?: string;
+  approach?: string;
+  whiteboard?: string;
+  code?: string;
+  complexity?: string;
+  clarifyingQuestion?: string;
+  clarifyingOptions: ClarifyingQuestionOption[];
+}
+
+export interface ParsedMeetingAnswer {
+  sections: MeetingAnswerSections;
+  rawContent: string;
+  contractVersion: MeetingAnswerContractVersion;
+  profile?: MeetingAnswerProfile;
+  parseStatus: MeetingAnswerParseStatus;
+  primaryAnswerSource: MeetingAnswerPrimarySource;
+  recognizedLabels: string[];
+  missingExpectedSections: string[];
+  parsedAt: number;
+}
+
 export type AdvisorSuggestionKind =
   | "answer"
   | "screen-task"
