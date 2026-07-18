@@ -5,6 +5,8 @@ const MIN_PARTIAL_PROMPT_ECHO_RATIO = 0.35;
 const SUSPICIOUS_DENSITY_MIN_CHARS = 160;
 const SUSPICIOUS_DENSITY_MAX_DURATION_MS = 3_000;
 const SUSPICIOUS_DENSITY_CHARS_PER_SECOND = 80;
+const PROVIDER_SENTINELS = new Set(["no transcription found"]);
+const PROVIDER_WARNINGS = new Set(["audio exceeds 10mb limit"]);
 
 export type TranscriptValidationDisposition =
   | "accepted"
@@ -14,6 +16,8 @@ export type TranscriptValidationDisposition =
 export type TranscriptValidationReason =
   | "valid"
   | "empty"
+  | "provider-sentinel"
+  | "provider-warning"
   | "prompt-echo-exact"
   | "prompt-echo-similar";
 
@@ -60,6 +64,19 @@ export function validateTranscriptCandidate({
     return buildDecision({
       disposition: "empty",
       reason: "empty",
+      normalizedText,
+      normalizedPrompt,
+      audioDurationMs,
+      transcriptCharsPerSecond,
+      densitySuspicious,
+    });
+  }
+
+  const providerDiagnosticReason = classifyProviderDiagnostic(text);
+  if (providerDiagnosticReason) {
+    return buildDecision({
+      disposition: "rejected",
+      reason: providerDiagnosticReason,
       normalizedText,
       normalizedPrompt,
       audioDurationMs,
@@ -127,6 +144,38 @@ export function validateTranscriptCandidate({
     transcriptCharsPerSecond,
     densitySuspicious,
   });
+}
+
+function classifyProviderDiagnostic(
+  rawText: string
+): Extract<
+  TranscriptValidationReason,
+  "provider-sentinel" | "provider-warning"
+> | null {
+  const segments = rawText
+    .split(";")
+    .map(normalizeProviderDiagnosticSegment)
+    .filter(Boolean);
+  if (segments.length === 0) return null;
+
+  const hasSentinel = segments.some((segment) =>
+    PROVIDER_SENTINELS.has(segment)
+  );
+  const hasWarning = segments.some((segment) =>
+    PROVIDER_WARNINGS.has(segment)
+  );
+  const onlyProviderDiagnostics = segments.every(
+    (segment) =>
+      PROVIDER_SENTINELS.has(segment) || PROVIDER_WARNINGS.has(segment)
+  );
+
+  if (!onlyProviderDiagnostics) return null;
+  if (hasWarning) return "provider-warning";
+  return hasSentinel ? "provider-sentinel" : null;
+}
+
+function normalizeProviderDiagnosticSegment(value: string) {
+  return normalizeValidationText(value).replace(/[.]+$/g, "").trim();
 }
 
 function normalizeValidationText(value: string) {

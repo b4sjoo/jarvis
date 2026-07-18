@@ -73,6 +73,47 @@ test("reports empty STT output without treating it as a rejected echo", () => {
   assert.equal(decision.reason, "empty");
 });
 
+test("rejects the no-transcription provider sentinel", () => {
+  const decision = validateTranscriptCandidate({
+    text: "  No transcription found.  ",
+    speechBiasPrompt: RECORDED_SPEECH_BIAS_PROMPT,
+  });
+
+  assert.equal(decision.disposition, "rejected");
+  assert.equal(decision.reason, "provider-sentinel");
+});
+
+test("rejects a provider warning followed by the no-transcription sentinel", () => {
+  const decision = validateTranscriptCandidate({
+    text: "Audio exceeds 10MB limit; No transcription found",
+    speechBiasPrompt: RECORDED_SPEECH_BIAS_PROMPT,
+  });
+
+  assert.equal(decision.disposition, "rejected");
+  assert.equal(decision.reason, "provider-warning");
+});
+
+test("accepts a real short no response", () => {
+  const decision = validateTranscriptCandidate({
+    text: "No",
+    speechBiasPrompt: RECORDED_SPEECH_BIAS_PROMPT,
+  });
+
+  assert.equal(decision.disposition, "accepted");
+  assert.equal(decision.reason, "valid");
+});
+
+test("does not reject natural speech that mentions missing transcription", () => {
+  const decision = validateTranscriptCandidate({
+    text:
+      "No transcription was found in that recording, so I checked the original notes instead.",
+    speechBiasPrompt: RECORDED_SPEECH_BIAS_PROMPT,
+  });
+
+  assert.equal(decision.disposition, "accepted");
+  assert.equal(decision.reason, "valid");
+});
+
 test("records suspicious transcript density without rejecting valid speech", () => {
   const text =
     "I would start by defining the production API boundary, the request path, the storage model, the cache policy, the reliability target, and the rollout constraints before discussing the detailed implementation.";
