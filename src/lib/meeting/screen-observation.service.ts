@@ -33,7 +33,7 @@ import {
   formatPlaybookPhaseDecisionForPrompt,
   type PlaybookPhaseDecision,
 } from "./playbook-phase";
-import { parseScreenTaskAnswer } from "./screen-task-answer";
+import { parseMeetingAnswer } from "./meeting-answer";
 import {
   normalizeCanonicalQuestionType,
   normalizeQuestionTypeAlias,
@@ -958,12 +958,12 @@ function formatImageOrderForPrompt(observation: ScreenObservation) {
 }
 
 export function extractScreenTaskQuestion(content: string) {
-  return parseScreenTaskAnswer(content).question ?? "";
+  return parseMeetingAnswer(content).sections.question ?? "";
 }
 
 export function inferScreenTaskKind(content: string): ScreenQuestionType {
   const normalized = content.toLowerCase();
-  const screenTaskAnswer = parseScreenTaskAnswer(content);
+  const meetingAnswer = parseMeetingAnswer(content).sections;
 
   if (!normalized.trim() || normalized.trim() === "-") return "non-question";
 
@@ -971,7 +971,7 @@ export function inferScreenTaskKind(content: string): ScreenQuestionType {
     /\b(o\(|time complexity|space complexity|algorithm|leetcode|python|java|typescript|javascript|array|tree|graph|dp|dynamic programming)\b/i.test(
       content
     ) ||
-    (screenTaskAnswer.code ?? "").trim().length > 5
+    (meetingAnswer.code ?? "").trim().length > 5
   ) {
     return "coding";
   }
@@ -1022,7 +1022,7 @@ export function inferScreenTaskKind(content: string): ScreenQuestionType {
     return "behavioral";
   }
 
-  if (screenTaskAnswer.question || screenTaskAnswer.answer) {
+  if (meetingAnswer.question || meetingAnswer.answer) {
     return "field-knowledge";
   }
 

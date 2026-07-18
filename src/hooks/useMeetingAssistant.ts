@@ -96,7 +96,6 @@ import {
   parseMeetingAnswer,
   parseMeetingTraceMetrics,
   resolveMeetingAnswerProfile,
-  screenTaskAnswerFromParsedMeetingAnswer,
   preflightScreenObservation,
   selectInterviewPlaybook,
   applyPlaybookPhaseDecisionToProgress,
@@ -666,8 +665,7 @@ function isScreenAnchoredSuggestion(
 ) {
   return (
     suggestion?.taskSource === "screen" ||
-    suggestion?.taskSource === "mixed" ||
-    suggestion?.kind === "screen-task"
+    suggestion?.taskSource === "mixed"
   );
 }
 
@@ -711,7 +709,6 @@ function isCacheableReliableSuggestion(suggestion: AdvisorSuggestion) {
   }
 
   return (
-    suggestion.kind === "screen-task" ||
     suggestion.kind === "answer" ||
     content.length >= 80
   );
@@ -5156,9 +5153,6 @@ export function useMeetingAssistant() {
               content: screenTaskContent.trim(),
               meetingAnswer: parsedScreenMeetingAnswer,
               answerProfile: parsedScreenMeetingAnswer.profile,
-              screenTaskAnswer: screenTaskAnswerFromParsedMeetingAnswer(
-                parsedScreenMeetingAnswer
-              ),
               createdAt: Date.now(),
               ...buildSuggestionTaskMetadata(
                 updatedContextState.activeMeetingTask

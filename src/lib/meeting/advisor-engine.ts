@@ -7,11 +7,6 @@ import {
   TranscriptTurn,
 } from "./types";
 import { buildAdvisorSystemPrompt, buildAdvisorUserMessage } from "./advisor-prompt";
-import {
-  hasScreenTaskAnswerContent,
-  parseScreenTaskAnswer,
-  screenTaskAnswerFromParsedMeetingAnswer,
-} from "./screen-task-answer";
 import { parseMeetingAnswer } from "./meeting-answer.js";
 
 export interface AdvisorEngineChunk {
@@ -113,13 +108,6 @@ export class AdvisorEngine {
   ): AdvisorSuggestion {
     const meetingAnswer = parsedAnswer ?? parseMeetingAnswer(content);
     const kind = inferSuggestionKind(content, meetingAnswer);
-    const hasScreenSource =
-      taskMetadata.taskSource === "screen" ||
-      taskMetadata.taskSource === "mixed";
-    const screenTaskAnswer =
-      hasScreenSource
-        ? screenTaskAnswerFromParsedMeetingAnswer(meetingAnswer)
-        : undefined;
 
     return {
       id: requestId,
@@ -127,10 +115,6 @@ export class AdvisorEngine {
       content: content.trim(),
       meetingAnswer,
       answerProfile: meetingAnswer.profile,
-      screenTaskAnswer:
-        screenTaskAnswer && hasScreenTaskAnswerContent(screenTaskAnswer)
-          ? screenTaskAnswer
-          : undefined,
       createdAt: Date.now(),
       ...taskMetadata,
       basedOnTurnIds,
@@ -158,13 +142,11 @@ function inferSuggestionKind(
   parsedAnswer?: ParsedMeetingAnswer
 ): AdvisorSuggestion["kind"] {
   const normalized = content.trim().toLowerCase();
-  const screenTaskAnswer = parsedAnswer
-    ? screenTaskAnswerFromParsedMeetingAnswer(parsedAnswer)
-    : parseScreenTaskAnswer(content);
+  const meetingAnswer = parsedAnswer ?? parseMeetingAnswer(content);
 
   if (!normalized || normalized === "-") return "silent";
-  if (screenTaskAnswer.answer) return "answer";
-  if (screenTaskAnswer.clarifyingQuestion) {
+  if (meetingAnswer.sections.answer) return "answer";
+  if (meetingAnswer.sections.clarifyingQuestion) {
     return "clarifying-question";
   }
   if (normalized.includes("means") || normalized.includes("意思")) {
