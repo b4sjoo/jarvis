@@ -96,6 +96,7 @@ import {
   parseMeetingAnswer,
   parseMeetingTraceMetrics,
   parseScreenTaskAnswer,
+  resolveMeetingAnswerProfile,
   screenTaskAnswerFromParsedMeetingAnswer,
   preflightScreenObservation,
   selectInterviewPlaybook,
@@ -645,7 +646,7 @@ function clearActiveScreenTaskState(
     activeInterviewTask: undefined,
     partialSuggestion: "",
     latestSuggestion:
-      previous.latestSuggestion?.kind === "screen-task"
+      isScreenAnchoredSuggestion(previous.latestSuggestion)
         ? null
         : previous.latestSuggestion,
     latestReliableSuggestion: null,
@@ -659,6 +660,16 @@ function clearActiveScreenTaskState(
     activeMeetingTask: undefined,
     manualQuestionTypeCorrection: undefined,
   };
+}
+
+function isScreenAnchoredSuggestion(
+  suggestion: AdvisorSuggestion | null | undefined
+) {
+  return (
+    suggestion?.taskSource === "screen" ||
+    suggestion?.taskSource === "mixed" ||
+    suggestion?.kind === "screen-task"
+  );
 }
 
 function withLatestReliableSuggestion(
@@ -2251,7 +2262,7 @@ export function useMeetingAssistant() {
       interviewSessionBrief: contextState.interviewSessionBrief,
       interviewSessionContext: contextState.interviewSessionContext,
       latestSuggestion:
-        previous.latestSuggestion?.kind === "screen-task"
+        isScreenAnchoredSuggestion(previous.latestSuggestion)
           ? null
           : previous.latestSuggestion,
       latestReliableSuggestion: null,
@@ -2360,6 +2371,9 @@ export function useMeetingAssistant() {
         )
       : resolvedAdvisorTaskSignals;
     const advisorQuestionType = advisorTaskSignals.questionType;
+    const advisorAnswerProfile = resolveMeetingAnswerProfile(
+      advisorQuestionType
+    );
     const advisorAskFrame = advisorTaskSignals.askFrame;
     const advisorTopicDomain = advisorTaskSignals.topicDomain;
     const advisorProjectAnchor =
@@ -2678,6 +2692,7 @@ export function useMeetingAssistant() {
         requestOptions: advisorModelRequestOptions,
         responseAction: options.responseAction,
         responseConfig,
+        answerProfile: advisorAnswerProfile,
         currentSuggestion: options.currentSuggestion,
         clarifyingFeedback: options.clarifyingFeedback,
         trace: traceId
@@ -2776,7 +2791,9 @@ export function useMeetingAssistant() {
         );
       }
 
-      const parsedMeetingAnswer = parseMeetingAnswer(finalContent);
+      const parsedMeetingAnswer = parseMeetingAnswer(finalContent, {
+        expectedProfile: advisorAnswerProfile,
+      });
       const meetingAnswerSummary = buildMeetingAnswerSummary(
         parsedMeetingAnswer
       );
@@ -3642,14 +3659,21 @@ export function useMeetingAssistant() {
           );
           traceStoreRef.current.finishStep(traceId, switchStepId, "success");
           traceStoreRef.current.finishTrace(traceId, "success");
+          const taskSwitchContent = [
+            "中文思路: 这听起来像是在切换到新题或新任务。",
+            "Answer: -",
+            "Clarifying question: Should I treat this as a new task?",
+            "Clarifying options: -",
+          ].join("\n");
+          const taskSwitchAnswer = parseMeetingAnswer(taskSwitchContent, {
+            expectedProfile: "compact-spoken",
+          });
           const taskSwitchSuggestion: AdvisorSuggestion = {
             id: createMeetingId("task_switch"),
             kind: "clarifying-question",
-            content: [
-              "中文思路: 这听起来像是在切换到新题或新任务。",
-              "Reply: -",
-              "Question: Should I treat this as a new task?",
-            ].join("\n"),
+            content: taskSwitchContent,
+            meetingAnswer: taskSwitchAnswer,
+            answerProfile: taskSwitchAnswer.profile,
             createdAt: Date.now(),
             ...buildSuggestionTaskMetadata(activeContextState.activeMeetingTask),
             basedOnTurnIds: [turn.id],
@@ -4912,7 +4936,15 @@ export function useMeetingAssistant() {
           return;
         }
 
-        const parsedScreenMeetingAnswer = parseMeetingAnswer(screenTaskContent);
+        const rawTaskKind =
+          screenPreflight?.questionType &&
+          screenPreflight.questionType !== "unknown"
+            ? screenPreflight.questionType
+            : inferScreenTaskKind(screenTaskContent);
+        const taskKind = normalizeScreenQuestionType(rawTaskKind) ?? "unknown";
+        const parsedScreenMeetingAnswer = parseMeetingAnswer(screenTaskContent, {
+          expectedProfile: resolveMeetingAnswerProfile(taskKind),
+        });
         const screenMeetingAnswerSummary = buildMeetingAnswerSummary(
           parsedScreenMeetingAnswer
         );
@@ -4945,12 +4977,6 @@ export function useMeetingAssistant() {
           .map((turn) => turn.id);
         const requestId = createMeetingId("screen_task");
         const question = extractScreenTaskQuestion(screenTaskContent);
-        const rawTaskKind =
-          screenPreflight?.questionType &&
-          screenPreflight.questionType !== "unknown"
-            ? screenPreflight.questionType
-            : inferScreenTaskKind(screenTaskContent);
-        const taskKind = normalizeScreenQuestionType(rawTaskKind) ?? "unknown";
         traceStoreRef.current.updateMetadata(
           trace.id,
           formatQuestionTypeTraceMetadata(
@@ -5147,15 +5173,17 @@ export function useMeetingAssistant() {
             activeMeetingTaskId: updatedContextState.activeMeetingTask?.id,
             activeMeetingTaskSource: updatedContextState.activeMeetingTask?.source,
             activeScreenTaskId: updatedContextState.activeScreenTask?.id,
-            suggestionKind: screenTaskContent.trim() ? "screen-task" : "silent",
+            suggestionKind: screenTaskContent.trim() ? "answer" : "silent",
           }
         );
 
         const nextSuggestion: AdvisorSuggestion = screenTaskContent.trim()
           ? {
               id: requestId,
-              kind: "screen-task",
+              kind: "answer",
               content: screenTaskContent.trim(),
+              meetingAnswer: parsedScreenMeetingAnswer,
+              answerProfile: parsedScreenMeetingAnswer.profile,
               screenTaskAnswer: screenTaskAnswerFromParsedMeetingAnswer(
                 parsedScreenMeetingAnswer
               ),
@@ -5964,7 +5992,7 @@ export function useMeetingAssistant() {
           activeMeetingTask: contextState.activeMeetingTask,
           latestSuggestion: contextState.activeMeetingTask
             ? previous.latestSuggestion
-            : previous.latestSuggestion?.kind === "screen-task"
+            : isScreenAnchoredSuggestion(previous.latestSuggestion)
               ? null
               : previous.latestSuggestion,
           latestReliableSuggestion: contextState.activeMeetingTask

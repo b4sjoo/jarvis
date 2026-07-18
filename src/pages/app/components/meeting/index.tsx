@@ -38,6 +38,7 @@ import type {
   ManualQuestionTypeCorrection,
   MeetingFocusAction,
   MeetingFocusSnapshot,
+  MeetingAnswerProfile,
   MeetingTrace,
   MeetingTraceKindSummary,
   MeetingTraceSummary,
@@ -59,6 +60,7 @@ import {
   hasScreenTaskAnswerContent,
   normalizeCanonicalQuestionType,
   parseScreenTaskAnswer,
+  resolveMeetingAnswerProfile,
   stripOuterCodeFence,
   summarizeMeetingTraces,
 } from "@/lib/meeting";
@@ -371,8 +373,23 @@ export const MeetingAssistant = ({
       ? undefined
       : meeting.latestSuggestion.screenTaskAnswer;
   const suggestionSections = useMemo(
-    () => parseSuggestionSections(displaySuggestion, completedScreenTaskAnswer),
-    [completedScreenTaskAnswer, displaySuggestion]
+    () =>
+      parseSuggestionSections(
+        displaySuggestion,
+        completedScreenTaskAnswer,
+        meeting.partialSuggestion
+          ? resolveMeetingAnswerProfile(
+              getActiveMeetingParentQuestionType(meeting.activeMeetingTask)
+            )
+          : meeting.latestSuggestion?.answerProfile
+      ),
+    [
+      completedScreenTaskAnswer,
+      displaySuggestion,
+      meeting.activeMeetingTask,
+      meeting.latestSuggestion?.answerProfile,
+      meeting.partialSuggestion,
+    ]
   );
   const hasActiveMeetingTask = Boolean(meeting.activeMeetingTask);
   const hasActiveMeetingScreenContext = Boolean(meeting.activeMeetingTask?.screen);
@@ -4440,7 +4457,8 @@ const sectionBoundaryLabels = [
 
 function parseSuggestionSections(
   content: string,
-  screenTaskAnswer?: ScreenTaskAnswer
+  screenTaskAnswer?: ScreenTaskAnswer,
+  answerProfile?: MeetingAnswerProfile
 ) {
   const trimmedContent = sanitizeSectionText(content);
   const parsedScreenTaskAnswer =
@@ -4486,11 +4504,14 @@ function parseSuggestionSections(
   const complexity = parsedScreenTaskAnswer.complexity ?? "";
   const clarifyingQuestion = parsedScreenTaskAnswer.clarifyingQuestion ?? "";
   const clarifyingOptions = parsedScreenTaskAnswer.clarifyingOptions ?? [];
-  const isScreenTask = Boolean(answer || approach || whiteboard || code || complexity);
-  const reply = readSuggestionSection(trimmedContent, [
+  const isScreenTask = answerProfile
+    ? answerProfile !== "compact-spoken"
+    : Boolean(approach || whiteboard || code || complexity);
+  const legacyReply = readSuggestionSection(trimmedContent, [
     "Reply",
     "Suggested reply",
   ]);
+  const reply = legacyReply || (!isScreenTask ? answer : "");
   const chineseThinking =
     parsedChineseThinking ||
     buildChineseThinkingFallback({
@@ -4535,7 +4556,8 @@ function formatLatestReliableAnswerPreview(
 
   const sections = parseSuggestionSections(
     cachedContent,
-    suggestion.screenTaskAnswer
+    suggestion.screenTaskAnswer,
+    suggestion.answerProfile
   );
   const preview =
     sections.answer ||

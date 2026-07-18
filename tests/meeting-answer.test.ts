@@ -5,6 +5,7 @@ import {
   formatMeetingAnswerTraceMetadata,
   parseMeetingAnswer,
   readMeetingAnswerSection,
+  resolveMeetingAnswerProfile,
 } from "../src/lib/meeting/meeting-answer.js";
 import { parseScreenTaskAnswer } from "../src/lib/meeting/screen-task-answer.js";
 
@@ -185,4 +186,14 @@ test("records bounded answer-contract trace metadata", () => {
   assert.equal(metadata.answerParseStatus, "parsed");
   assert.equal(metadata.latestUsefulAnswerChars, 31);
   assert.deepEqual(metadata.continuitySummaryIncludedSections, ["Answer"]);
+});
+
+test("maps effective question types to stable answer profiles", () => {
+  assert.equal(resolveMeetingAnswerProfile("behavioral"), "compact-spoken");
+  assert.equal(resolveMeetingAnswerProfile("field-knowledge"), "technical");
+  assert.equal(resolveMeetingAnswerProfile("coding"), "coding");
+  assert.equal(
+    resolveMeetingAnswerProfile("ai-ml-system-design"),
+    "system-design"
+  );
 });

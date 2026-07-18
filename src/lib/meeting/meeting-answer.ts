@@ -105,6 +105,21 @@ export interface MeetingAnswerSummaryDecision {
   excludedCode: boolean;
 }
 
+export function resolveMeetingAnswerProfile(
+  questionType: string | undefined
+): MeetingAnswerProfile {
+  if (questionType === "coding") return "coding";
+  if (
+    questionType === "general-system-design" ||
+    questionType === "ai-ml-system-design" ||
+    questionType === "system-design"
+  ) {
+    return "system-design";
+  }
+  if (questionType === "field-knowledge") return "technical";
+  return "compact-spoken";
+}
+
 export function parseMeetingAnswer(
   content: string,
   options: { expectedProfile?: MeetingAnswerProfile; now?: number } = {}

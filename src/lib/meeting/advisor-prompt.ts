@@ -2,9 +2,11 @@ import {
   AdvisorPromptContext,
   AdvisorRequestMode,
   ClarifyingQuestionFeedback,
+  MeetingAnswerProfile,
   MeetingResponseActionMode,
   MeetingResponseConfig,
 } from "./types";
+import { resolveMeetingAnswerProfile } from "./meeting-answer.js";
 import {
   formatInterviewSessionBriefForPrompt,
   formatInterviewSessionContextForPrompt,
@@ -55,6 +57,7 @@ interface AdvisorUserMessageOptions {
   clarifyingFeedback?: ClarifyingQuestionFeedback;
   responseAction?: MeetingResponseActionMode;
   responseConfig?: MeetingResponseConfig;
+  answerProfile?: MeetingAnswerProfile;
 }
 
 export function buildAdvisorUserMessage(
@@ -66,6 +69,14 @@ export function buildAdvisorUserMessage(
     : "None";
   const mode = options.mode ?? "live";
   const previousSuggestion = options.currentSuggestion?.trim();
+  const answerProfile =
+    options.answerProfile ??
+    resolveMeetingAnswerProfile(
+      context.interviewPlaybook?.questionType ??
+        context.activeMeetingTask?.child?.questionType ??
+        context.activeMeetingTask?.parent.questionType ??
+        context.activeScreenTask?.kind
+    );
   const hasTranscript = Boolean(context.transcript.trim() || context.latestTurn);
   const hasScreenContext = Boolean(context.screenContext.trim());
   const hasScreenAnchoredTask = Boolean(
@@ -177,10 +188,14 @@ export function buildAdvisorUserMessage(
       "Transform <previous_suggestion> for the requested response action. Treat it as source material, not as a new independent question.",
       "Preserve the active task, visible question, and technical constraints. Do not invent new screen content, hidden requirements, speakers, or meeting dialogue.",
       "If <previous_suggestion> is empty or only '-', output a single dash.",
-      "If <previous_suggestion> contains a non-empty Code or Implementation section, keep the screen-task section format: 中文思路, Question, Answer, Approach, Code, Complexity, Clarifying question, Clarifying options.",
+      "Retain the active task's canonical answer profile. If <previous_suggestion> contains Code or Whiteboard, preserve that artifact unless the requested action or latest explicit constraint changes it.",
       "For coding tasks, preserve the Code section unless the latest explicit constraint requires changing it. Do not move code into Approach.",
       "For coding tasks, keep 中文思路 in Chinese, but keep Question, Answer, Approach, Complexity, Clarifying question, and Clarifying options in meeting-ready English unless the user explicitly asks to translate the coding answer.",
-      ...buildResponseActionInstructions(options.responseAction ?? "speakable"),
+      ...buildResponseActionInstructions(
+        options.responseAction ?? "speakable",
+        answerProfile
+      ),
+      ...buildMeetingAnswerContractInstructions(answerProfile),
       ...buildResponseConfigInstructions(options.responseConfig),
       "</output>"
     );
@@ -219,16 +234,7 @@ export function buildAdvisorUserMessage(
       "If the transcript is a strong task switch, do not silently reuse or clear the old task. Put '-' for Answer, Approach, Code, and Complexity, then ask a yes/no Clarifying question such as 'Should I treat this as a new task?'.",
       "If the transcript is low-value chatter or logistics, output a single dash and do not re-solve the active task.",
       "If <clarifying_feedback> answers a task-switch confirmation with Yes, ask the user to capture or state the new task. If it answers No, continue with the current active task.",
-      "Use this exact format:",
-      "中文思路: concise Chinese reasoning path, correction summary, or next-step thinking.",
-      "Question: focused technical question.",
-      "Answer: concise meeting-ready answer or optimal solution summary.",
-      "Approach: key reasoning steps.",
-      "Whiteboard: concise pasteable architecture artifact for general-system-design or ai-ml-system-design when useful, otherwise '-'.",
-      "Code: Python code unless another language is required, or '-' for non-coding tasks.",
-      "Complexity: time and space complexity for coding tasks, or '-' otherwise.",
-      "Clarifying question: one click-answerable question if a missing constraint matters, otherwise '-'.",
-      "Clarifying options: 2-4 short option labels when the clarifying question has concrete choices; put each option on its own line or separate with '|'. Use '-' only for yes/no questions or when no concrete choices exist.",
+      ...buildMeetingAnswerContractInstructions(answerProfile),
       "For coding tasks, 中文思路 must stay Chinese while Question, Answer, Approach, Complexity, Clarifying question, and Clarifying options must default to meeting-ready English. Whiteboard must be '-'. The Code section must use the selected/requested programming language.",
       "Do not invent colleagues, speakers, or hidden requirements.",
       ...buildModeInstructions(mode),
@@ -244,18 +250,16 @@ export function buildAdvisorUserMessage(
     mode,
     "</mode>",
     "<output>",
-    "If help is useful, respond in this exact compact format:",
-    hasTranscript
-      ? "中文思路: one short Chinese sentence explaining what the latest transcript or visible screen likely means."
-      : "中文思路: one short Chinese sentence explaining only what the visible screen shows or implies.",
-    "Reply: one ready-to-say English sentence, or '-' if no reply is needed.",
-    "Question: one safe clarifying question, or '-' if not needed.",
-    "If it only contains jargon, put the simple Chinese definition under 中文思路 and use '-' for Reply and Question.",
+    "If help is useful, follow the canonical answer contract below:",
+    ...buildMeetingAnswerContractInstructions(answerProfile, {
+      hasTranscript,
+    }),
+    "If it only contains jargon, put the simple Chinese definition under 中文思路 and use '-' for Answer and Clarifying question.",
     "Do not mention a colleague, speaker, or someone asking a question unless the transcript explicitly contains that person or question.",
     "Use <interview_session_brief> as user-provided pre-meeting background and <interview_session_context> as cross-task inferred context, especially the target company. Do not infer a different company if the brief locks one.",
     "Use <active_meeting_task> as the primary active task state. It preserves the current interview parent task, optional child probe, and optional screen context. Avoid importing facts from a previous unrelated block.",
     "Use <interview_playbook> as procedural guidance when present. It should shape the next move without overriding transcript facts.",
-    "If <opening_route> is present, use the template-backed opening guidance. For self-intro or resume walkthrough, Reply should be a 45-60 second English answer with current positioning, relevant past work, AI/ML infrastructure throughline, and target role/company relevance; do not create a permanent project narrative from it. For project-intro, Reply should be a 60-90 second English answer with problem, importance, core design, key tradeoff/difficulty, validation or impact, and likely follow-up hooks.",
+    "If <opening_route> is present, use the template-backed opening guidance. For self-intro or resume walkthrough, Answer should be a 45-60 second English answer with current positioning, relevant past work, AI/ML infrastructure throughline, and target role/company relevance; do not create a permanent project narrative from it. For project-intro, Answer should be a 60-90 second English answer with problem, importance, core design, key tradeoff/difficulty, validation or impact, and likely follow-up hooks.",
     "For AI/ML or agent system-design questions about metrics, logs, evaluation, quality, faster/cheaper/better, or observability, avoid generic measurement language. Name concrete metric categories, define what each measures, and include the required log/trace fields.",
     "For Amazon behavioral interview moments, use injected Leadership Principle guidance to shape the answer toward Strength signals and away from Concern signals without inventing facts.",
     "Obey <fact_anchor_guardrail> whenever it requires personal evidence, regardless of the current question type. If it says ask-clarification or offer-supported-choices, do not fabricate a first-person story or project; ask the user to choose a supported anchor or clarify the intended project/story.",
@@ -310,7 +314,7 @@ function buildResponseConfigInstructions(
     );
   } else if (config.language === "chinese") {
     instructions.push(
-      "Natural language preference: explain in concise Chinese while preserving important English technical terms. Do not translate programming language names or code identifiers."
+      "Natural language preference: explain in concise Chinese while preserving important English technical terms, except sections whose canonical profile explicitly requires meeting-ready English. Do not translate programming language names or code identifiers."
     );
   } else {
     instructions.push(
@@ -321,15 +325,74 @@ function buildResponseConfigInstructions(
   return instructions;
 }
 
-function buildResponseActionInstructions(action: MeetingResponseActionMode) {
+function buildMeetingAnswerContractInstructions(
+  profile: MeetingAnswerProfile,
+  context: { hasTranscript?: boolean } = {}
+) {
+  const chineseThinking = context.hasTranscript === false
+    ? "中文思路: 用中文简洁说明可见内容的回答路径。"
+    : "中文思路: 用中文简洁说明回答路径、修正或下一步。";
+  const clarification = [
+    "Clarifying question: one click-answerable meeting-ready question only when a missing constraint materially affects the answer, otherwise '-'.",
+    "Clarifying options: 2-4 short option labels when the clarification has concrete choices; put each option on its own line or separate with '|'. Use '-' for yes/no or when no concrete choices exist.",
+  ];
+
+  if (profile === "coding") {
+    return [
+      "Use this exact coding profile:",
+      "中文思路: 用中文简洁说明最优算法、关键不变量和边界条件。",
+      "Question: restate the focused coding problem in meeting-ready English.",
+      "Answer: concise English summary of the optimal solution.",
+      "Approach: key reasoning and correctness argument in English.",
+      "Code: complete runnable implementation in the trusted selected programming language.",
+      "Complexity: exact time and space complexity in English.",
+      ...clarification,
+    ];
+  }
+
+  if (profile === "system-design") {
+    return [
+      "Use this exact system-design profile:",
+      chineseThinking,
+      "Question: restate the focused design problem in the requested meeting language.",
+      "Answer: concise design direction or the most useful current-phase answer in the requested meeting language.",
+      "Approach: logically ordered requirements, scale, architecture, tradeoffs, metrics, or next-step reasoning.",
+      "Whiteboard: concise evolving infrastructure artifact when the design is scoped enough, otherwise '-'.",
+      ...clarification,
+    ];
+  }
+
+  if (profile === "technical") {
+    return [
+      "Use this exact technical profile:",
+      chineseThinking,
+      "Question: restate the focused technical question in the requested meeting language.",
+      "Answer: concise professional answer in the requested meeting language.",
+      "Approach: brief reasoning, comparison, or key points.",
+      ...clarification,
+    ];
+  }
+
+  return [
+    "Use this exact compact-spoken profile:",
+    chineseThinking,
+    "Answer: one to three ready-to-say professional sentences in the requested meeting language, or '-' if no answer is useful.",
+    ...clarification,
+  ];
+}
+
+function buildResponseActionInstructions(
+  action: MeetingResponseActionMode,
+  profile: MeetingAnswerProfile
+) {
   if (action === "speakable") {
     return [
       "Action goal: produce a speakable answer the user can say out loud.",
-      "For non-coding suggestions, use this exact compact format:",
-      "中文思路: -",
-      "Reply: one to three short professional English sentences.",
-      "Question: -",
-      "For coding suggestions, keep the required screen-task section labels and put the speakable wording in Answer and Approach while preserving Code and Complexity.",
+      profile === "compact-spoken"
+        ? "Keep Answer to one to three short professional English sentences."
+        : "Keep the active technical profile and make Answer easy to say aloud without dropping required artifacts.",
+      "Use '-' for Clarifying question unless a missing constraint truly blocks a reliable answer.",
+      "For coding suggestions, put speakable wording in Answer and Approach while preserving Code and Complexity.",
       "For coding suggestions, keep Answer, Approach, Complexity, and clarifying text in meeting-ready English while 中文思路 remains Chinese.",
       "Avoid adding new code blocks outside the Code section. Mention complexity only when it is central to the answer.",
     ];
@@ -345,7 +408,7 @@ function buildResponseActionInstructions(action: MeetingResponseActionMode) {
     "For behavioral answers, prefer deepening the selected STAR story with action, tradeoff, impact, or lesson; do not invent a new story.",
     "For coding suggestions, keep the required screen-task section labels and move toward implementation details, edge cases, correctness proof, or complexity while preserving Code and Complexity.",
     "For coding suggestions, keep Answer, Approach, Complexity, and clarifying text in meeting-ready English while 中文思路 remains Chinese.",
-    "Use the normal screen-task section format when the previous suggestion is a screen-task answer. For non-coding live suggestions, keep the compact 中文思路 / Reply / Question format.",
+    "Keep the active canonical answer profile. Do not change profile because the task was seeded by voice or screen.",
   ];
 }
 
@@ -362,8 +425,8 @@ function buildContextInstructions(contextMode: string) {
       "There is no transcript in this request.",
       "Base the answer only on <screen_context>.",
       "The screen context may come from the user's configured screenshot auto prompt; preserve that intent.",
-      "Use '-' for Reply unless the visible screen clearly asks the user to say something.",
-      "Use '-' for Question unless the visible screen itself contains an ambiguity that needs a real follow-up.",
+      "Use '-' for Answer unless the visible screen clearly asks for a response.",
+      "Use '-' for Clarifying question unless the visible screen itself contains an ambiguity that needs a real follow-up.",
     ];
   }
 
@@ -391,8 +454,8 @@ function buildVoiceSeededInstructions(contextMode: string) {
 
   return [
     "If the latest transcript is a clear technical question or requirement, treat it as a voice-seeded task moment.",
-    "For voice-seeded technical questions, 中文思路 should summarize the ask in Chinese, Reply should give a concise meeting-ready English answer or response direction, and Question should ask only for a missing constraint that truly matters.",
-    "For coding or algorithm questions in voice-only mode, Reply may use two concise sentences and should mention the optimal approach and time/space complexity when possible. Do not provide a full code block in the compact live format.",
+    "For voice-seeded technical questions, 中文思路 should summarize the ask in Chinese, Answer should give a concise meeting-ready English answer or response direction, and Clarifying question should ask only for a missing constraint that truly matters.",
+    "For voice-seeded coding or algorithm questions, follow the coding profile and provide a complete implementation when enough constraints are known.",
     "If the latest transcript is filler, logistics, acknowledgement, or ambiguous chatter, output a single dash.",
     "Preserve technical terms, product names, code tokens, and code-mixed language from the transcript.",
   ];
@@ -417,14 +480,14 @@ function buildModeInstructions(mode: AdvisorRequestMode) {
     return [
       "The user clicked a quick answer to your clarifying question.",
       "Use that answer as a strong hint to update the suggested reply.",
-      "Do not repeat the same clarifying question; return '-' for Question unless a different follow-up is essential.",
+      "Do not repeat the same clarifying question; return '-' for Clarifying question unless a different follow-up is essential.",
     ];
   }
 
   if (mode === "regenerate") {
     return [
       "Generate a fresh alternative to any previous suggestion.",
-      "Keep the same compact format, but avoid repeating the same wording.",
+      "Keep the same canonical answer profile, but avoid repeating the same wording.",
     ];
   }
 

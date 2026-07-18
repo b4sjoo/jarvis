@@ -12,6 +12,7 @@ import {
   parseScreenTaskAnswer,
   screenTaskAnswerFromParsedMeetingAnswer,
 } from "./screen-task-answer";
+import { parseMeetingAnswer } from "./meeting-answer.js";
 
 export interface AdvisorEngineChunk {
   requestId: string;
@@ -48,6 +49,7 @@ export class AdvisorEngine {
       mode: request.mode ?? "live",
       responseAction: request.responseAction,
       responseConfig: request.responseConfig,
+      answerProfile: request.answerProfile,
     });
     let accumulated = "";
     let firstTokenSeen = false;
@@ -109,18 +111,22 @@ export class AdvisorEngine {
     > = {},
     parsedAnswer?: ParsedMeetingAnswer
   ): AdvisorSuggestion {
-    const kind = inferSuggestionKind(content, parsedAnswer);
+    const meetingAnswer = parsedAnswer ?? parseMeetingAnswer(content);
+    const kind = inferSuggestionKind(content, meetingAnswer);
+    const hasScreenSource =
+      taskMetadata.taskSource === "screen" ||
+      taskMetadata.taskSource === "mixed";
     const screenTaskAnswer =
-      kind === "screen-task"
-        ? parsedAnswer
-          ? screenTaskAnswerFromParsedMeetingAnswer(parsedAnswer)
-          : parseScreenTaskAnswer(content)
+      hasScreenSource
+        ? screenTaskAnswerFromParsedMeetingAnswer(meetingAnswer)
         : undefined;
 
     return {
       id: requestId,
       kind,
       content: content.trim(),
+      meetingAnswer,
+      answerProfile: meetingAnswer.profile,
       screenTaskAnswer:
         screenTaskAnswer && hasScreenTaskAnswerContent(screenTaskAnswer)
           ? screenTaskAnswer
@@ -157,10 +163,8 @@ function inferSuggestionKind(
     : parseScreenTaskAnswer(content);
 
   if (!normalized || normalized === "-") return "silent";
-  if (hasScreenTaskAnswerContent(screenTaskAnswer) && screenTaskAnswer.answer) {
-    return "screen-task";
-  }
-  if (normalized.includes("clarifying") || normalized.includes("澄清")) {
+  if (screenTaskAnswer.answer) return "answer";
+  if (screenTaskAnswer.clarifyingQuestion) {
     return "clarifying-question";
   }
   if (normalized.includes("means") || normalized.includes("意思")) {

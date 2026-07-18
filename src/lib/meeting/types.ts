@@ -606,6 +606,7 @@ export interface ParsedMeetingAnswer {
 
 export type AdvisorSuggestionKind =
   | "answer"
+  /** @deprecated Legacy persisted value; new suggestions use taskSource. */
   | "screen-task"
   | "clarifying-question"
   | "jargon"
@@ -654,6 +655,9 @@ export interface AdvisorSuggestion {
   id: string;
   kind: AdvisorSuggestionKind;
   content: string;
+  meetingAnswer?: ParsedMeetingAnswer;
+  answerProfile?: MeetingAnswerProfile;
+  /** @deprecated Use meetingAnswer while legacy consumers migrate. */
   screenTaskAnswer?: ScreenTaskAnswer;
   createdAt: number;
   taskId?: string;
@@ -727,6 +731,7 @@ export interface MeetingAdvisorRequest {
   mode?: AdvisorRequestMode;
   responseAction?: MeetingResponseActionMode;
   responseConfig?: MeetingResponseConfig;
+  answerProfile?: MeetingAnswerProfile;
   promptContext: AdvisorPromptContext;
   provider: TYPE_PROVIDER | undefined;
   selectedProvider: SelectedProviderState;
