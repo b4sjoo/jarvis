@@ -28,6 +28,9 @@ test("builds a task-level review index from trace summaries and evaluations", ()
     playbookPhase: "whiteboard",
     turnGateAction: "regenerate",
     turnGateReason: "meaningful-follow-up",
+    sentenceBufferOperationId: "sentence_buffer_1",
+    sentenceBufferOperationRole: "terminal",
+    sentenceBufferOutcome: "merged",
     sentenceBufferDisposition: "merged-and-bypassed",
     sentenceBufferFlushReason: "next-them-fragment",
     sentenceBufferFragmentCount: 2,
@@ -75,6 +78,7 @@ test("builds a task-level review index from trace summaries and evaluations", ()
   assert.deepEqual(task.playbookPhases, ["whiteboard"]);
   assert.equal(task.memorySelectedEntriesTotal, 3);
   assert.equal(task.memoryRejectedCountTotal, 2);
+  assert.equal(task.sentenceBufferOperationCount, 1);
   assert.equal(task.sentenceBufferMergedCount, 1);
   assert.equal(task.sentenceBufferTimeoutCount, 0);
   assert.equal(task.sentenceBufferAddedLatencyMsTotal, 850);
@@ -110,7 +114,7 @@ function buildQuestionEvaluation(): QuestionHumanEvaluation {
   return {
     id: "question_eval_1",
     sessionId: "session_1",
-    questionId: "task_parent",
+    questionId: "question_instance_1",
     taskId: "task_parent",
     parentTaskId: "task_parent",
     childTaskId: "task_child",
@@ -143,5 +147,118 @@ function buildQuestionEvaluation(): QuestionHumanEvaluation {
     missingExpectedMemory: [],
     createdAt: 3000,
     updatedAt: 3000,
+  };
+}
+
+test("keeps question identity out of task rows and aggregates one buffer operation", () => {
+  const sourceTrace = buildBufferTrace({
+    traceId: "trace_source",
+    role: "source-fragment",
+    disposition: "merged-into-next",
+  });
+  const terminalTrace = buildBufferTrace({
+    traceId: "trace_terminal",
+    role: "terminal",
+    disposition: "merged-and-bypassed",
+  });
+  const evaluation = buildQuestionEvaluation();
+  evaluation.questionId = "question_instance_not_a_task";
+  evaluation.traceIds = ["trace_terminal"];
+
+  const index = buildSessionTaskReviewIndex(
+    "session_1",
+    [sourceTrace, terminalTrace],
+    [evaluation]
+  );
+
+  assert.equal(
+    index.tasks.some((task) => task.taskId === "question_instance_not_a_task"),
+    false
+  );
+  const parent = index.tasks.find((task) => task.taskId === "task_parent");
+  assert.ok(parent);
+  assert.equal(parent.sentenceBufferOperationCount, 1);
+  assert.equal(parent.sentenceBufferMergedCount, 1);
+  assert.equal(parent.sentenceBufferAddedLatencyMsTotal, 850);
+});
+
+test("leaves question-only evaluations unassigned instead of creating phantom tasks", () => {
+  const evaluation = buildQuestionEvaluation();
+  evaluation.questionId = "question_without_task";
+  evaluation.taskId = undefined;
+  evaluation.parentTaskId = undefined;
+  evaluation.childTaskId = undefined;
+  evaluation.traceIds = [];
+
+  const index = buildSessionTaskReviewIndex("session_1", [], [evaluation]);
+
+  assert.equal(index.taskCount, 0);
+  assert.deepEqual(index.tasks, []);
+});
+
+test("counts a timeout terminal once and ignores its source evidence", () => {
+  const sourceTrace = buildBufferTrace({
+    traceId: "trace_timeout_source",
+    role: "source-fragment",
+    disposition: "buffered",
+    outcome: undefined,
+  });
+  const terminalTrace = buildBufferTrace({
+    traceId: "trace_timeout_terminal",
+    role: "terminal",
+    disposition: "flushed-incomplete",
+    outcome: "timeout",
+  });
+  terminalTrace.sentenceBufferFlushReason = "timeout";
+
+  const index = buildSessionTaskReviewIndex(
+    "session_1",
+    [sourceTrace, terminalTrace],
+    []
+  );
+  const parent = index.tasks.find((task) => task.taskId === "task_parent");
+
+  assert.ok(parent);
+  assert.equal(parent.sentenceBufferOperationCount, 1);
+  assert.equal(parent.sentenceBufferMergedCount, 0);
+  assert.equal(parent.sentenceBufferTimeoutCount, 1);
+  assert.equal(parent.sentenceBufferAddedLatencyMsTotal, 850);
+});
+
+function buildBufferTrace({
+  traceId,
+  role,
+  disposition,
+  outcome = "merged",
+}: {
+  traceId: string;
+  role: "source-fragment" | "terminal";
+  disposition: string;
+  outcome?: "merged" | "timeout";
+}): TaskReviewTraceSummary {
+  return {
+    version: 3,
+    sessionId: "session_1",
+    traceId,
+    traceKind: "voice",
+    status: "success",
+    startedAt: traceId === "trace_source" ? 1000 : 1100,
+    taskIds: ["task_parent"],
+    primaryTaskId: "task_parent",
+    activeMeetingTaskId: "task_parent",
+    activeMeetingParentId: "task_parent",
+    sentenceBufferOperationId: traceId.includes("timeout")
+      ? "sentence_buffer_timeout"
+      : "sentence_buffer_shared",
+    sentenceBufferOperationRole: role,
+    sentenceBufferOutcome: outcome,
+    sentenceBufferDisposition: disposition,
+    sentenceBufferFlushReason: "next-them-fragment",
+    sentenceBufferFragmentCount: 2,
+    sentenceBufferAddedLatencyMs: 850,
+    artifacts: {
+      traceExportPath: `traces/${traceId}.json`,
+      summaryPath: `traces/${traceId}/summary.json`,
+    },
   };
 }

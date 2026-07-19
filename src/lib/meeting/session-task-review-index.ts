@@ -1,7 +1,7 @@
 import type { MemoryRejectSummary } from "@/lib/memory";
 import type { MeetingTrace, QuestionHumanEvaluation } from "./types";
 
-export const SESSION_TASK_REVIEW_INDEX_SCHEMA_VERSION = 1;
+export const SESSION_TASK_REVIEW_INDEX_SCHEMA_VERSION = 2;
 
 export interface TaskReviewTraceSummary {
   version: number;
@@ -32,6 +32,9 @@ export interface TaskReviewTraceSummary {
   advisorTurnEnforcement?: string;
   advisorWouldSuppress?: boolean;
   advisorExecutionAuthorized?: boolean;
+  sentenceBufferOperationId?: string;
+  sentenceBufferOperationRole?: string;
+  sentenceBufferOutcome?: string;
   sentenceBufferDisposition?: string;
   sentenceBufferFlushReason?: string;
   sentenceBufferFragmentCount?: number;
@@ -98,6 +101,7 @@ export interface SessionTaskReviewSummary {
   advisorTurnIntents: string[];
   advisorExecutionSuppressedCount: number;
   advisorShadowDecisionCount: number;
+  sentenceBufferOperationCount: number;
   sentenceBufferMergedCount: number;
   sentenceBufferTimeoutCount: number;
   sentenceBufferAddedLatencyMsTotal: number;
@@ -232,6 +236,7 @@ function buildSessionTaskReviewSummary({
   const diagramOverlayRejectedCountTotal = sumDefined(
     traces.map((trace) => trace.diagramOverlay?.rejectedCount)
   );
+  const sentenceBufferOperations = collectSentenceBufferOperations(traces);
 
   return {
     version: SESSION_TASK_REVIEW_INDEX_SCHEMA_VERSION,
@@ -266,13 +271,14 @@ function buildSessionTaskReviewSummary({
     advisorShadowDecisionCount: traces.filter(
       (trace) => trace.advisorTurnEnforcement === "shadow"
     ).length,
-    sentenceBufferMergedCount: traces.filter((trace) =>
-      trace.sentenceBufferDisposition?.startsWith("merged")
+    sentenceBufferOperationCount: sentenceBufferOperations.length,
+    sentenceBufferMergedCount: sentenceBufferOperations.filter(
+      (trace) => getSentenceBufferOutcome(trace) === "merged"
     ).length,
-    sentenceBufferTimeoutCount: traces.filter(
-      (trace) => trace.sentenceBufferFlushReason === "timeout"
+    sentenceBufferTimeoutCount: sentenceBufferOperations.filter(
+      (trace) => getSentenceBufferOutcome(trace) === "timeout"
     ).length,
-    sentenceBufferAddedLatencyMsTotal: traces.reduce(
+    sentenceBufferAddedLatencyMsTotal: sentenceBufferOperations.reduce(
       (total, trace) => total + (trace.sentenceBufferAddedLatencyMs ?? 0),
       0
     ),
@@ -377,11 +383,45 @@ function collectTaskIdsFromTraceSummary(
 
 function collectTaskIdsFromEvaluation(evaluation: QuestionHumanEvaluation) {
   return uniqueStrings([
-    evaluation.questionId,
     evaluation.taskId,
     evaluation.parentTaskId,
     evaluation.childTaskId,
   ]);
+}
+
+function collectSentenceBufferOperations(traces: TaskReviewTraceSummary[]) {
+  const operations = new Map<string, TaskReviewTraceSummary>();
+
+  for (const trace of traces) {
+    if (!isSentenceBufferTerminalTrace(trace)) continue;
+
+    const operationKey =
+      trace.sentenceBufferOperationId ?? `legacy:${trace.traceId}`;
+    if (!operations.has(operationKey)) {
+      operations.set(operationKey, trace);
+    }
+  }
+
+  return Array.from(operations.values());
+}
+
+function isSentenceBufferTerminalTrace(trace: TaskReviewTraceSummary) {
+  if (trace.sentenceBufferOperationRole) {
+    return trace.sentenceBufferOperationRole === "terminal";
+  }
+
+  if (trace.sentenceBufferDisposition === "merged-into-next") return false;
+  if (trace.sentenceBufferDisposition?.startsWith("merged")) return true;
+  if (trace.sentenceBufferFlushReason === "timeout") return true;
+  return trace.sentenceBufferDisposition === "cancelled";
+}
+
+function getSentenceBufferOutcome(trace: TaskReviewTraceSummary) {
+  if (trace.sentenceBufferOutcome) return trace.sentenceBufferOutcome;
+  if (trace.sentenceBufferFlushReason === "timeout") return "timeout";
+  if (trace.sentenceBufferDisposition?.startsWith("merged")) return "merged";
+  if (trace.sentenceBufferDisposition === "cancelled") return "cancelled";
+  return "flushed";
 }
 
 function countMemoryEntryLabels(evaluations: QuestionHumanEvaluation[]) {

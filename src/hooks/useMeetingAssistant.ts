@@ -936,6 +936,7 @@ interface PendingConfirmation {
 }
 
 interface PendingSentenceCompletion {
+  operationId: string;
   turn: TranscriptTurn;
   segment: QueuedSpeechSegment;
   heldAt: number;
@@ -948,6 +949,7 @@ interface PendingSentenceCompletion {
 }
 
 interface SentenceCompletionMergeContext {
+  operationId: string;
   firstHeldAt: number;
   fragmentTurnIds: string[];
   fragmentTraceIds: string[];
@@ -1099,6 +1101,9 @@ export function useMeetingAssistant() {
       window.clearTimeout(pending.timeoutId);
       pendingSentenceCompletionRef.current = null;
       traceStoreRef.current.updateMetadata(pending.segment.traceId, {
+        sentenceBufferOperationId: pending.operationId,
+        sentenceBufferOperationRole: "terminal",
+        sentenceBufferOutcome: "cancelled",
         sentenceBufferDisposition: "cancelled",
         sentenceBufferFlushReason: reason,
         sentenceBufferFragmentCount: pending.fragmentTurnIds.length,
@@ -3310,6 +3315,9 @@ export function useMeetingAssistant() {
 
       if (!isCurrentAudioSegment(pending.segment)) {
         traceStoreRef.current.updateMetadata(pending.segment.traceId, {
+          sentenceBufferOperationId: pending.operationId,
+          sentenceBufferOperationRole: "terminal",
+          sentenceBufferOutcome: "cancelled",
           sentenceBufferDisposition: "cancelled",
           sentenceBufferFlushReason: "stale-session",
           sentenceBufferFragmentCount: pending.fragmentTurnIds.length,
@@ -3338,6 +3346,9 @@ export function useMeetingAssistant() {
         : "debug-only";
 
       const sentenceMetadata = {
+        sentenceBufferOperationId: pending.operationId,
+        sentenceBufferOperationRole: "terminal",
+        sentenceBufferOutcome: reason === "timeout" ? "timeout" : "flushed",
         sentenceBufferDisposition: "flushed-incomplete",
         sentenceBufferFlushReason: reason,
         sentenceBufferFragmentCount: pending.fragmentTurnIds.length,
@@ -3394,6 +3405,8 @@ export function useMeetingAssistant() {
       mergeContext?: SentenceCompletionMergeContext
     ) => {
       const heldAt = Date.now();
+      const operationId =
+        mergeContext?.operationId ?? createMeetingId("sentence_buffer");
       const fragmentTurnIds = [
         ...(mergeContext?.fragmentTurnIds ?? []),
         turn.id,
@@ -3408,6 +3421,8 @@ export function useMeetingAssistant() {
       ];
       const firstHeldAt = mergeContext?.firstHeldAt ?? heldAt;
       const sentenceMetadata = {
+        sentenceBufferOperationId: operationId,
+        sentenceBufferOperationRole: "source-fragment",
         sentenceBufferDisposition: "buffered",
         sentenceBufferReason: decision.reason,
         sentenceBufferConfidence: decision.confidence,
@@ -3439,6 +3454,7 @@ export function useMeetingAssistant() {
       }, SENTENCE_COMPLETION_BUFFER_MS);
 
       pendingSentenceCompletionRef.current = {
+        operationId,
         turn,
         segment,
         heldAt,
@@ -3470,6 +3486,7 @@ export function useMeetingAssistant() {
       pendingSentenceCompletionRef.current = null;
       const addedLatencyMs = Date.now() - pending.firstHeldAt;
       const mergeContext: SentenceCompletionMergeContext = {
+        operationId: pending.operationId,
         firstHeldAt: pending.firstHeldAt,
         fragmentTurnIds: [...pending.fragmentTurnIds],
         fragmentTraceIds: [...pending.fragmentTraceIds],
@@ -3483,6 +3500,9 @@ export function useMeetingAssistant() {
       );
 
       traceStoreRef.current.updateMetadata(pending.segment.traceId, {
+        sentenceBufferOperationId: pending.operationId,
+        sentenceBufferOperationRole: "source-fragment",
+        sentenceBufferOutcome: "merged",
         sentenceBufferDisposition: "merged-into-next",
         sentenceBufferFlushReason: "next-them-fragment",
         sentenceBufferFragmentCount: pending.fragmentTurnIds.length + 1,
@@ -3508,6 +3528,9 @@ export function useMeetingAssistant() {
       traceStoreRef.current.finishTrace(pending.segment.traceId, "success");
 
       traceStoreRef.current.updateMetadata(segment.traceId, {
+        sentenceBufferOperationId: pending.operationId,
+        sentenceBufferOperationRole: "terminal",
+        sentenceBufferOutcome: "merged",
         sentenceBufferDisposition: "merged",
         sentenceBufferFlushReason: "next-them-fragment",
         sentenceBufferFragmentCount: pending.fragmentTurnIds.length + 1,
@@ -4079,6 +4102,11 @@ export function useMeetingAssistant() {
         }
 
         traceStoreRef.current.updateMetadata(traceId, {
+          sentenceBufferOperationId: sentenceMergeContext?.operationId,
+          sentenceBufferOperationRole: sentenceMergeContext
+            ? "terminal"
+            : undefined,
+          sentenceBufferOutcome: sentenceMergeContext ? "merged" : undefined,
           sentenceBufferDisposition: sentenceMergeContext
             ? "merged-and-bypassed"
             : "bypassed",

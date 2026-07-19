@@ -29,7 +29,7 @@ import {
 import { serializeMeetingTraceExport } from "./trace.js";
 
 const SESSION_RECORDING_SCHEMA_VERSION = 1;
-const SESSION_TRACE_SUMMARY_SCHEMA_VERSION = 2;
+const SESSION_TRACE_SUMMARY_SCHEMA_VERSION = 3;
 const SESSION_TRACE_INDEX_SCHEMA_VERSION = 1;
 
 interface SessionRecordingStartOptions {
@@ -152,6 +152,9 @@ export interface SessionCompactTraceSummary {
   advisorWouldSuppress?: boolean;
   advisorExecutionAuthorized?: boolean;
   advisorExecutionSuppressedReason?: string;
+  sentenceBufferOperationId?: string;
+  sentenceBufferOperationRole?: string;
+  sentenceBufferOutcome?: string;
   sentenceBufferDisposition?: string;
   sentenceBufferReason?: string;
   sentenceBufferFlushReason?: string;
@@ -1420,6 +1423,18 @@ function buildCompactTraceSummary({
     sentenceBufferDisposition: readFirstString(
       metadataSources,
       "sentenceBufferDisposition"
+    ),
+    sentenceBufferOperationId: readFirstString(
+      metadataSources,
+      "sentenceBufferOperationId"
+    ),
+    sentenceBufferOperationRole: readFirstString(
+      metadataSources,
+      "sentenceBufferOperationRole"
+    ),
+    sentenceBufferOutcome: readFirstString(
+      metadataSources,
+      "sentenceBufferOutcome"
     ),
     sentenceBufferReason: readFirstString(
       metadataSources,
