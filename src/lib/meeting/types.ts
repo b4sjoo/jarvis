@@ -903,6 +903,8 @@ export interface TraceHumanEvaluation {
   memoryRelevant?: boolean;
   memoryMissing?: boolean;
   memoryWrong?: boolean;
+  advisorGateCorrectlySkipped?: boolean;
+  advisorGateShouldAdvise?: boolean;
   taskQuality?: HumanEvalTaskQuality;
   failureReasons: HumanEvalFailureReason[];
   notes?: string;

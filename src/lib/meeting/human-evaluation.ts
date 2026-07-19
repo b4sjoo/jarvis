@@ -381,6 +381,8 @@ function normalizeTraceHumanEvaluation(
     memoryRelevant: candidate.memoryRelevant,
     memoryMissing: candidate.memoryMissing,
     memoryWrong: candidate.memoryWrong,
+    advisorGateCorrectlySkipped: candidate.advisorGateCorrectlySkipped,
+    advisorGateShouldAdvise: candidate.advisorGateShouldAdvise,
     taskQuality: candidate.taskQuality,
     failureReasons: Array.isArray(candidate.failureReasons)
       ? candidate.failureReasons

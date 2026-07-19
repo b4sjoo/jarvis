@@ -1,5 +1,6 @@
 export * from "./advisor-engine";
 export * from "./advisor-prompt";
+export * from "./advisor-turn-intent";
 export * from "./active-meeting-task";
 export * from "./clarifying-options";
 export * from "./context-manager";

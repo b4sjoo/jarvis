@@ -146,6 +146,12 @@ export interface SessionCompactTraceSummary {
   playbookSubtype?: string;
   turnGateAction?: string;
   turnGateReason?: string;
+  advisorTurnIntent?: string;
+  advisorTurnConfidence?: number;
+  advisorTurnEnforcement?: string;
+  advisorWouldSuppress?: boolean;
+  advisorExecutionAuthorized?: boolean;
+  advisorExecutionSuppressedReason?: string;
   personalEvidence?: {
     requirement?: string;
     confidence?: number;
@@ -1385,6 +1391,26 @@ function buildCompactTraceSummary({
     playbookSubtype: readFirstString(metadataSources, "playbookSubtype"),
     turnGateAction: readFirstString(metadataSources, "turnGateAction"),
     turnGateReason: readFirstString(metadataSources, "turnGateReason"),
+    advisorTurnIntent: readFirstString(metadataSources, "advisorTurnIntent"),
+    advisorTurnConfidence: readFirstNumberFromMetadata(
+      metadataSources,
+      "advisorTurnConfidence"
+    ),
+    advisorTurnEnforcement: readFirstString(
+      metadataSources,
+      "advisorTurnEnforcement"
+    ),
+    advisorWouldSuppress: readFirstBoolean(
+      metadataSources,
+      "advisorWouldSuppress"
+    ),
+    advisorExecutionAuthorized: readFirstBoolean(
+      metadataSources,
+      "advisorExecutionAuthorized"
+    ),
+    advisorExecutionSuppressedReason:
+      readFirstString(metadataSources, "memoryRetrievalSuppressedReason") ??
+      readFirstString(metadataSources, "modelExecutionSuppressedReason"),
     personalEvidence: {
       requirement: readFirstString(
         metadataSources,

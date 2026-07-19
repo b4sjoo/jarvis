@@ -24,6 +24,7 @@ import {
   AdvisorPromptContext,
   AdvisorSuggestion,
   AdvisorRequestMode,
+  AdvisorTurnIntentDecision,
   ActiveMeetingTask,
   ActiveInterviewParent,
   ActiveScreenTask,
@@ -121,8 +122,11 @@ import {
   updateWhiteboardArtifactFromAnswer,
   SessionRecordingManager,
   areCompatibleQuestionTypes,
+  authorizeAdvisorExecution,
   canQuestionTypeDecisionOverrideParent,
+  decideAdvisorTurnIntent,
   decideLatestTurnTaxonomyBoundary,
+  formatAdvisorTurnIntentForTrace,
   inferCanonicalQuestionTypeFromText,
   inferQuestionTypeDecisionFromText,
   isParentCanonicalQuestionType,
@@ -763,18 +767,6 @@ interface InterviewTaskContinuityResult {
   clearedParent: boolean;
 }
 
-type AdvisorTurnGateAction =
-  | "ignore"
-  | "append-only"
-  | "state-update"
-  | "answer-refresh";
-
-interface AdvisorTurnGateDecision {
-  action: AdvisorTurnGateAction;
-  reason: string;
-  contextPromptEligible: boolean;
-}
-
 interface AdvisorTaskSignals {
   questionType: MemoryQuestionType;
   questionTypeDecision?: QuestionTypeInferenceDecision;
@@ -907,6 +899,8 @@ interface RunAdvisorOptions {
   clarifyingFeedback?: ClarifyingQuestionFeedback;
   traceId?: string;
   manualQuestionTypeCorrection?: ManualQuestionTypeCorrection;
+  turnIntentDecision?: AdvisorTurnIntentDecision;
+  triggerTurnId?: string;
 }
 
 interface CaptureScreenContextOptions {
@@ -2326,6 +2320,94 @@ export function useMeetingAssistant() {
         promptContext.screenContext.trim()
     );
 
+    if (force && !hasContext && !options.currentSuggestion?.trim()) {
+      if (traceId) {
+        traceStoreRef.current.finishTrace(traceId, "error", NO_MEETING_CONTEXT_MESSAGE);
+      }
+      setState((previous) => ({
+        ...previous,
+        error: NO_MEETING_CONTEXT_MESSAGE,
+      }));
+      return;
+    }
+
+    const manualPhaseAdvance = options.responseAction === "next-phase";
+    const manualPhaseAdvanceFromPhase =
+      promptContext.activeMeetingTask?.parent.playbookPhase ??
+      promptContext.activeInterviewTask?.playbookPhase;
+    const advisorMemoryQuery = buildAdvisorMemoryQuery(
+      promptContext,
+      mode,
+      options.currentSuggestion
+    );
+    const resolvedAdvisorTaskSignals = resolveAdvisorTaskSignals(
+      promptContext,
+      advisorMemoryQuery
+    );
+    const advisorTaskSignals = options.manualQuestionTypeCorrection
+      ? applyManualQuestionTypeCorrectionToAdvisorSignals(
+          resolvedAdvisorTaskSignals,
+          options.manualQuestionTypeCorrection
+        )
+      : resolvedAdvisorTaskSignals;
+    const inferredTurnIntentDecision =
+      options.turnIntentDecision ??
+      (latestTurn?.speaker === "them"
+        ? evaluateThemTurnForAdvisor(latestTurn, {
+            hasActiveTask: hasAdvisorActiveTask(promptContext),
+          })
+        : undefined);
+    const hasExplicitAction = Boolean(
+      options.responseAction ||
+        options.clarifyingFeedback ||
+        options.manualQuestionTypeCorrection
+    );
+    const executionAuthorization = authorizeAdvisorExecution({
+      force,
+      hasExplicitAction,
+      decision: inferredTurnIntentDecision,
+    });
+    const questionTypeTraceMetadata =
+      formatAdvisorQuestionTypeDecisionForTrace(advisorTaskSignals);
+    if (traceId) {
+      const intentMetadata = inferredTurnIntentDecision
+        ? formatAdvisorTurnIntentForTrace(inferredTurnIntentDecision)
+        : {};
+      const executionMetadata = {
+        ...intentMetadata,
+        ...questionTypeTraceMetadata,
+        advisorExecutionAuthorized: executionAuthorization.authorized,
+        advisorExecutionAuthorizationReason: executionAuthorization.reason,
+        advisorExecutionBypassed: executionAuthorization.bypassed,
+        advisorTriggerTurnId: options.triggerTurnId,
+        memoryRetrievalSuppressedReason: executionAuthorization.authorized
+          ? undefined
+          : executionAuthorization.reason,
+        modelExecutionSuppressedReason: executionAuthorization.authorized
+          ? undefined
+          : executionAuthorization.reason,
+      };
+      traceStoreRef.current.updateMetadata(traceId, executionMetadata);
+      const intentStepId = traceStoreRef.current.startStep(
+        traceId,
+        "Advisor response-intent gate",
+        executionMetadata
+      );
+      traceStoreRef.current.finishStep(traceId, intentStepId, "success");
+    }
+
+    if (!executionAuthorization.authorized) {
+      if (traceId) {
+        traceStoreRef.current.finishTrace(traceId, "success");
+      }
+      setState((previous) => ({
+        ...previous,
+        status: activeRef.current ? "listening" : previous.status,
+        partialSuggestion: "",
+      }));
+      return;
+    }
+
     if (
       !force &&
       !advisorEngineRef.current.shouldRequestSuggestion(latestTurn)
@@ -2339,17 +2421,6 @@ export function useMeetingAssistant() {
         traceStoreRef.current.finishStep(traceId, skippedStepId, "success");
         traceStoreRef.current.finishTrace(traceId, "success");
       }
-      return;
-    }
-
-    if (force && !hasContext && !options.currentSuggestion?.trim()) {
-      if (traceId) {
-        traceStoreRef.current.finishTrace(traceId, "error", NO_MEETING_CONTEXT_MESSAGE);
-      }
-      setState((previous) => ({
-        ...previous,
-        error: NO_MEETING_CONTEXT_MESSAGE,
-      }));
       return;
     }
 
@@ -2369,10 +2440,6 @@ export function useMeetingAssistant() {
     const returnStatus = state.status;
     const requestId = `advisor_${mode}_${Date.now()}`;
     const responseConfig = state.settings.response;
-    const manualPhaseAdvance = options.responseAction === "next-phase";
-    const manualPhaseAdvanceFromPhase =
-      promptContext.activeMeetingTask?.parent.playbookPhase ??
-      promptContext.activeInterviewTask?.playbookPhase;
     contextManagerRef.current.setLastAdvisorRequestId(requestId);
 
     setState((previous) => ({
@@ -2382,21 +2449,6 @@ export function useMeetingAssistant() {
       error: null,
     }));
 
-    const advisorMemoryQuery = buildAdvisorMemoryQuery(
-      promptContext,
-      mode,
-      options.currentSuggestion
-    );
-    const resolvedAdvisorTaskSignals = resolveAdvisorTaskSignals(
-      promptContext,
-      advisorMemoryQuery
-    );
-    const advisorTaskSignals = options.manualQuestionTypeCorrection
-      ? applyManualQuestionTypeCorrectionToAdvisorSignals(
-          resolvedAdvisorTaskSignals,
-          options.manualQuestionTypeCorrection
-        )
-      : resolvedAdvisorTaskSignals;
     const advisorQuestionType = advisorTaskSignals.questionType;
     const advisorAnswerProfile = resolveMeetingAnswerProfile(
       advisorQuestionType
@@ -2506,9 +2558,6 @@ export function useMeetingAssistant() {
       advisorPlaybook ?? promptContext.activeMeetingTask?.parent.playbook,
       playbookPhaseDecision.phase
     );
-    const questionTypeTraceMetadata =
-      formatAdvisorQuestionTypeDecisionForTrace(advisorTaskSignals);
-
     if (traceId) {
       const playbookMetadata =
         formatInterviewPlaybookForTrace(advisorRuntimePlaybook);
@@ -3077,14 +3126,21 @@ export function useMeetingAssistant() {
 
   const scheduleAdvisor = useCallback((
     mode: AdvisorRequestMode = "live",
-    traceId?: string
+    traceId?: string,
+    turnIntentDecision?: AdvisorTurnIntentDecision,
+    triggerTurnId?: string
   ) => {
     if (!activeRef.current) return;
 
     clearAdvisorDebounce();
     advisorDebounceTimerRef.current = window.setTimeout(() => {
       advisorDebounceTimerRef.current = null;
-      void runAdvisor({ mode, traceId });
+      void runAdvisor({
+        mode,
+        traceId,
+        turnIntentDecision,
+        triggerTurnId,
+      });
     }, ADVISOR_DEBOUNCE_MS);
   }, [clearAdvisorDebounce, runAdvisor]);
 
@@ -3228,9 +3284,20 @@ export function useMeetingAssistant() {
         debounceStepId,
         "success"
       );
+      const turnIntentDecision = decideAdvisorTurnIntent(pending.turn.text, {
+        hasActiveTask: Boolean(contextState.activeMeetingTask),
+        hasPendingConfirmation: true,
+      });
+      traceStoreRef.current.updateMetadata(pending.segment.traceId, {
+        ...formatAdvisorTurnIntentForTrace(turnIntentDecision),
+        turnGateAction: turnIntentDecision.action,
+        turnGateReason: turnIntentDecision.reason,
+      });
       scheduleAdvisor(
         contextState.activeMeetingTask?.screen ? "screen-anchored" : "live",
-        pending.segment.traceId
+        pending.segment.traceId,
+        turnIntentDecision,
+        pending.turn.id
       );
 
       return true;
@@ -3729,12 +3796,17 @@ export function useMeetingAssistant() {
           previousTurns
         );
         if (clarificationMatch) {
+          const turnIntentDecision = decideAdvisorTurnIntent(turn.text, {
+            hasActiveTask: hasActiveInterviewTask,
+            hasPendingConfirmation: true,
+          });
           promoteMeTurnForFusion(clarificationMatch.meTurn, turn.id);
           turn.contextPromptEligible = true;
           turn.contextFusionStatus = "paired";
           turn.relatedTurnIds = [clarificationMatch.meTurn.id];
           traceStoreRef.current.updateMetadata(traceId, {
-            turnGateAction: "answer-refresh",
+            ...formatAdvisorTurnIntentForTrace(turnIntentDecision),
+            turnGateAction: turnIntentDecision.action,
             turnGateReason: "clarification-pair",
           });
           const gateStepId = traceStoreRef.current.startStep(
@@ -3743,6 +3815,7 @@ export function useMeetingAssistant() {
             {
               action: "answer-refresh",
               reason: "clarification-pair",
+              ...formatAdvisorTurnIntentForTrace(turnIntentDecision),
               turnId: turn.id,
               transcriptChars: turn.text.trim().length,
               activeScreenTask: Boolean(activeScreenTask),
@@ -3781,7 +3854,9 @@ export function useMeetingAssistant() {
           traceStoreRef.current.finishStep(traceId, debounceStepId, "success");
           scheduleAdvisor(
             contextState.activeMeetingTask?.screen ? "screen-anchored" : "live",
-            traceId
+            traceId,
+            turnIntentDecision,
+            turn.id
           );
           return;
         }
@@ -3816,8 +3891,15 @@ export function useMeetingAssistant() {
           hasActiveTask: hasActiveInterviewTask,
         });
         traceStoreRef.current.updateMetadata(traceId, {
+          ...formatAdvisorTurnIntentForTrace(turnGate),
           turnGateAction: turnGate.action,
           turnGateReason: turnGate.reason,
+          memoryRetrievalSuppressedReason: turnGate.executionAuthorized
+            ? undefined
+            : `turn-intent:${turnGate.reason}`,
+          modelExecutionSuppressedReason: turnGate.executionAuthorized
+            ? undefined
+            : `turn-intent:${turnGate.reason}`,
         });
         const gateStepId = traceStoreRef.current.startStep(
           traceId,
@@ -3825,6 +3907,7 @@ export function useMeetingAssistant() {
           {
             action: turnGate.action,
             reason: turnGate.reason,
+            ...formatAdvisorTurnIntentForTrace(turnGate),
             turnId: turn.id,
             transcriptChars: turn.text.trim().length,
             wordEquivalent: calculateWordEquivalent(turn.text),
@@ -3939,7 +4022,9 @@ export function useMeetingAssistant() {
         traceStoreRef.current.finishStep(traceId, debounceStepId, "success");
         scheduleAdvisor(
           contextState.activeMeetingTask?.screen ? "screen-anchored" : "live",
-          traceId
+          traceId,
+          turnGate,
+          turn.id
         );
       } catch (error) {
         const stillCurrent = isCurrentAudioSegment(segment);
@@ -8018,110 +8103,17 @@ function shouldUpdateActiveScreenTaskFromAdvisorOutput(content: string) {
 function evaluateThemTurnForAdvisor(
   turn: TranscriptTurn,
   options: { hasActiveTask: boolean }
-): AdvisorTurnGateDecision {
+) {
   const trimmed = turn.text.trim();
-  if (!trimmed) {
-    return {
-      action: "ignore",
-      reason: "empty-transcript",
-      contextPromptEligible: false,
-    };
-  }
-
-  const normalized = normalizeTranscriptForGate(trimmed);
-  const wordEquivalent = calculateWordEquivalent(trimmed);
   const hasQuestion = hasQuestionOrTaskSignal(trimmed);
-  const hasConstraintOrCorrection = hasConstraintOrCorrectionSignal(trimmed);
-
-  if (hasConstraintOrCorrection) {
-    return {
-      action: "answer-refresh",
-      reason: "constraint-or-correction",
-      contextPromptEligible: true,
-    };
-  }
-
-  if (isLowValueAcknowledgement(normalized)) {
-    return {
-      action: "ignore",
-      reason: "low-value-acknowledgement",
-      contextPromptEligible: false,
-    };
-  }
-
-  if (isMeetingLogisticsTranscript(normalized)) {
-    return {
-      action: "append-only",
-      reason: "meeting-logistics",
-      contextPromptEligible: false,
-    };
-  }
-
-  if (detectInterviewCompany(trimmed) && !hasQuestion && wordEquivalent <= 18) {
-    return {
-      action: "state-update",
-      reason: "company-context-only",
-      contextPromptEligible: false,
-    };
-  }
-
-  if (hasQuestion) {
-    return {
-      action: "answer-refresh",
-      reason: "question-or-task-prompt",
-      contextPromptEligible: true,
-    };
-  }
-
-  if (
-    options.hasActiveTask &&
-    wordEquivalent <= 10 &&
-    !hasTechnicalSignal(trimmed)
-  ) {
-    return {
-      action: "ignore",
-      reason: "short-nontechnical-followup",
-      contextPromptEligible: false,
-    };
-  }
-
-  if (shouldIgnoreLowSignalTranscript(trimmed, options.hasActiveTask)) {
-    return {
-      action: "ignore",
-      reason: "low-signal",
-      contextPromptEligible: false,
-    };
-  }
-
-  if (options.hasActiveTask && hasFollowUpSignal(trimmed)) {
-    return {
-      action: "answer-refresh",
-      reason: "active-task-followup",
-      contextPromptEligible: true,
-    };
-  }
-
-  if (hasTechnicalSignal(trimmed) && wordEquivalent >= 4) {
-    return {
-      action: "answer-refresh",
-      reason: "technical-content",
-      contextPromptEligible: true,
-    };
-  }
-
-  if (wordEquivalent < 8) {
-    return {
-      action: "ignore",
-      reason: "short-low-information",
-      contextPromptEligible: false,
-    };
-  }
-
-  return {
-    action: "answer-refresh",
-    reason: "substantive-transcript",
-    contextPromptEligible: true,
-  };
+  return decideAdvisorTurnIntent(trimmed, {
+    hasActiveTask: options.hasActiveTask,
+    hasCompanyContextOnly: Boolean(
+      detectInterviewCompany(trimmed) &&
+        !hasQuestion &&
+        calculateWordEquivalent(trimmed) <= 18
+    ),
+  });
 }
 
 function normalizeTranscriptForGate(text: string) {
@@ -8172,50 +8164,6 @@ function hasConstraintOrCorrectionSignal(text: string) {
   );
 }
 
-function isLowValueAcknowledgement(normalized: string) {
-  if (!normalized) return true;
-
-  const phrases = new Set([
-    "ah",
-    "eh",
-    "er",
-    "hmm",
-    "mm",
-    "mhm",
-    "uh",
-    "um",
-    "yeah",
-    "yep",
-    "yes",
-    "no",
-    "ok",
-    "okay",
-    "right",
-    "sure",
-    "cool",
-    "great",
-    "nice",
-    "that s nice",
-    "that is nice",
-    "sounds good",
-    "that sounds good",
-    "i see",
-    "got it",
-    "makes sense",
-    "make sense",
-    "so that s it",
-    "so that is it",
-    "that s it",
-    "that is it",
-  ]);
-
-  if (phrases.has(normalized)) return true;
-
-  return /^(yeah|ok|okay|right|sure|cool|great|nice|thanks|thank you)[\s,.!]*(that s|that is)?[\s\w,.!]*$/i.test(
-    normalized
-  ) && calculateWordEquivalent(normalized) <= 6;
-}
-
 function isMeetingLogisticsTranscript(normalized: string) {
   if (!normalized) return false;
 
@@ -8229,88 +8177,6 @@ function isMeetingLogisticsTranscript(normalized: string) {
   );
 }
 
-function shouldIgnoreLowSignalTranscript(
-  transcript: string,
-  hasActiveScreenTask: boolean
-) {
-  const trimmed = transcript.trim();
-  if (!trimmed) return true;
-
-  const normalized = trimmed
-    .toLowerCase()
-    .replace(/[^\p{L}\p{N}+#.()]+/gu, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-
-  if (!normalized) return true;
-  if (detectInterviewCompany(trimmed)) return false;
-  if (hasTechnicalSignal(trimmed) || hasFollowUpSignal(trimmed)) return false;
-
-  const fillerPhrases = new Set([
-    "ah",
-    "eh",
-    "er",
-    "hmm",
-    "mm",
-    "mhm",
-    "uh",
-    "um",
-    "yeah",
-    "yep",
-    "yes",
-    "no",
-    "ok",
-    "okay",
-    "got it",
-    "thanks",
-    "thank you",
-    "cool",
-    "right",
-    "sure",
-    "sounds good",
-    "that sounds good",
-    "make sense",
-    "makes sense",
-    "i see",
-    "let me see",
-    "one second",
-    "just a second",
-    "give me a second",
-    "hold on",
-    "wait a second",
-    "no problem",
-    "all good",
-    "great",
-    "perfect",
-    "嗯",
-    "嗯嗯",
-    "呃",
-    "啊",
-    "哦",
-    "好",
-    "好的",
-    "对",
-    "是",
-    "是的",
-    "可以",
-    "谢谢",
-    "没问题",
-    "明白",
-    "懂了",
-    "了解",
-    "等一下",
-    "稍等",
-  ]);
-
-  if (fillerPhrases.has(normalized)) return true;
-
-  if (hasActiveScreenTask) {
-    return normalized.length < 40;
-  }
-
-  return normalized.length < 12 && !trimmed.includes("?");
-}
-
 function hasTechnicalSignal(text: string) {
   return (
     /\b(o\s*\(?\s*1|o\s*\(?\s*n|api|async|binary|cache|client|complexity|database|design|dp|embedding|graph|grpc|hash|heap|http|java|javascript|latency|leetcode|memory|python|queue|rag|rate limiter|recursion|rust|scale|search|server|space|sql|stack|thread|tree|typescript|vector)\b/i.test(
@@ -8319,12 +8185,6 @@ function hasTechnicalSignal(text: string) {
     /算法|复杂度|缓存|数据库|队列|栈|堆|树|图|递归|并发|异步|接口|系统设计|限流|负载均衡|向量|嵌入/.test(
       text
     )
-  );
-}
-
-function hasFollowUpSignal(text: string) {
-  return /\b(can|could|would|should|how|why|what|when|where|which|explain|optimi[sz]e|improve|change|update|revise|shorter|follow up|edge case|tradeoff|constraint|requirement|same|different|another|instead)\b/i.test(
-    text
   );
 }
 

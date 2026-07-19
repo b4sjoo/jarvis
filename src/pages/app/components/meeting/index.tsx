@@ -1773,6 +1773,23 @@ export const MeetingAssistant = ({
                     detectedPlaybookPhase={formatDetectedQuestionType(
                       getTraceEffectivePlaybookPhase(latestTrace.metadata)
                     )}
+                    advisorTurnIntent={
+                      typeof latestTrace.metadata?.advisorTurnIntent === "string"
+                        ? latestTrace.metadata.advisorTurnIntent
+                        : undefined
+                    }
+                    advisorTurnEnforcement={
+                      typeof latestTrace.metadata?.advisorTurnEnforcement ===
+                      "string"
+                        ? latestTrace.metadata.advisorTurnEnforcement
+                        : undefined
+                    }
+                    advisorExecutionAuthorized={
+                      typeof latestTrace.metadata?.advisorExecutionAuthorized ===
+                      "boolean"
+                        ? latestTrace.metadata.advisorExecutionAuthorized
+                        : undefined
+                    }
                     evaluation={latestTraceEvaluation}
                     questionEvaluation={latestQuestionEvaluation}
                     memorySnapshot={latestMemoryEvaluationSnapshot}
@@ -3374,6 +3391,9 @@ const TraceHumanEvaluationPanel = ({
   detectedQuestionType,
   detectedPlaybook,
   detectedPlaybookPhase,
+  advisorTurnIntent,
+  advisorTurnEnforcement,
+  advisorExecutionAuthorized,
   evaluation,
   questionEvaluation,
   memorySnapshot,
@@ -3383,6 +3403,9 @@ const TraceHumanEvaluationPanel = ({
   detectedQuestionType?: string;
   detectedPlaybook?: string;
   detectedPlaybookPhase?: string;
+  advisorTurnIntent?: string;
+  advisorTurnEnforcement?: string;
+  advisorExecutionAuthorized?: boolean;
   evaluation:
     | {
         taskQuality?: HumanEvalTaskQuality;
@@ -3393,6 +3416,8 @@ const TraceHumanEvaluationPanel = ({
         memoryRelevant?: boolean;
         memoryMissing?: boolean;
         memoryWrong?: boolean;
+        advisorGateCorrectlySkipped?: boolean;
+        advisorGateShouldAdvise?: boolean;
         failureReasons: HumanEvalFailureReason[];
       }
     | undefined;
@@ -3407,6 +3432,8 @@ const TraceHumanEvaluationPanel = ({
     memoryRelevant?: boolean;
     memoryMissing?: boolean;
     memoryWrong?: boolean;
+    advisorGateCorrectlySkipped?: boolean;
+    advisorGateShouldAdvise?: boolean;
     failureReasons?: HumanEvalFailureReason[];
   }) => void;
   onUpdateQuestion: (patch: Partial<QuestionHumanEvaluation>) => void;
@@ -3489,6 +3516,58 @@ const TraceHumanEvaluationPanel = ({
                 <span className="text-muted-foreground"> / phase: </span>
                 <span className="font-mono">{detectedPlaybookPhase}</span>
               </>
+            ) : null}
+          </div>
+        ) : null}
+        {advisorTurnIntent ? (
+          <div className="rounded-sm border border-border/60 p-2">
+            <div className="text-[10px] font-medium uppercase text-muted-foreground">
+              Advisor gate
+            </div>
+            <div className="mt-1 font-mono text-[10px] text-muted-foreground">
+              {advisorTurnIntent}
+              {advisorTurnEnforcement ? ` / ${advisorTurnEnforcement}` : ""}
+              {typeof advisorExecutionAuthorized === "boolean"
+                ? advisorExecutionAuthorized
+                  ? " / advised"
+                  : " / skipped"
+                : ""}
+            </div>
+            {advisorExecutionAuthorized === false ? (
+              <div className="mt-2 flex flex-wrap gap-1">
+                <Button
+                  size="sm"
+                  variant={
+                    evaluation?.advisorGateCorrectlySkipped
+                      ? "default"
+                      : "outline"
+                  }
+                  className="h-6 px-2 text-[10px]"
+                  onClick={() => {
+                    onUpdate({
+                      advisorGateCorrectlySkipped: true,
+                      advisorGateShouldAdvise: false,
+                    });
+                  }}
+                >
+                  Correctly skipped
+                </Button>
+                <Button
+                  size="sm"
+                  variant={
+                    evaluation?.advisorGateShouldAdvise ? "default" : "outline"
+                  }
+                  className="h-6 px-2 text-[10px]"
+                  onClick={() => {
+                    onUpdate({
+                      advisorGateCorrectlySkipped: false,
+                      advisorGateShouldAdvise: true,
+                    });
+                  }}
+                >
+                  Should advise
+                </Button>
+              </div>
             ) : null}
           </div>
         ) : null}

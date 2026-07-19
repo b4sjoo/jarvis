@@ -28,6 +28,10 @@ export interface TaskReviewTraceSummary {
   playbookPhase?: string;
   turnGateAction?: string;
   turnGateReason?: string;
+  advisorTurnIntent?: string;
+  advisorTurnEnforcement?: string;
+  advisorWouldSuppress?: boolean;
+  advisorExecutionAuthorized?: boolean;
   modelRoute?: string;
   memory?: {
     selectedEntries?: number;
@@ -87,6 +91,9 @@ export interface SessionTaskReviewSummary {
   playbookPhases: string[];
   turnGateActions: string[];
   turnGateReasons: string[];
+  advisorTurnIntents: string[];
+  advisorExecutionSuppressedCount: number;
+  advisorShadowDecisionCount: number;
   modelRoutes: string[];
   memoryUseCases: string[];
   memorySelectedEntriesTotal?: number;
@@ -243,6 +250,15 @@ function buildSessionTaskReviewSummary({
     playbookPhases: uniqueStrings(traces.map((trace) => trace.playbookPhase)),
     turnGateActions: uniqueStrings(traces.map((trace) => trace.turnGateAction)),
     turnGateReasons: uniqueStrings(traces.map((trace) => trace.turnGateReason)),
+    advisorTurnIntents: uniqueStrings(
+      traces.map((trace) => trace.advisorTurnIntent)
+    ),
+    advisorExecutionSuppressedCount: traces.filter(
+      (trace) => trace.advisorExecutionAuthorized === false
+    ).length,
+    advisorShadowDecisionCount: traces.filter(
+      (trace) => trace.advisorTurnEnforcement === "shadow"
+    ).length,
     modelRoutes: uniqueStrings(traces.map((trace) => trace.modelRoute)),
     memoryUseCases: uniqueStrings(
       traces.map((trace) => trace.memory?.useCase)
