@@ -5,14 +5,17 @@ import {
   MeetingTraceKind,
   MeetingTraceStatus,
   MeetingTraceStep,
-} from "./types";
-import { createMeetingId } from "./context-manager";
+} from "./types.js";
+import { createMeetingId } from "./context-manager.js";
 import { invoke } from "@tauri-apps/api/core";
 
 const MAX_TRACE_ITEMS = 500;
 const DEFAULT_SUMMARY_WINDOW_SIZE = 20;
-const PERSISTED_TRACE_METRICS_VERSION = 1;
+const PERSISTED_TRACE_METRICS_VERSION = 2;
 const MEETING_TRACE_EXPORT_VERSION = 1;
+export const PERSISTED_TRACE_METRICS_BYTE_BUDGET = Math.floor(
+  1.75 * 1024 * 1024
+);
 
 export class MeetingTraceStore {
   private traces: MeetingTrace[] = [];
@@ -285,6 +288,17 @@ export interface PersistedMeetingTraceMetrics {
   version: number;
   savedAt: number;
   traces: MeetingTrace[];
+  retention?: PersistedMeetingTraceRetention;
+}
+
+export interface PersistedMeetingTraceRetention {
+  byteBudget: number;
+  retainedBytes: number;
+  sourceTraceCount: number;
+  retainedTraceCount: number;
+  droppedTraceCount: number;
+  compactedTraceCount: number;
+  order: "newest-first";
 }
 
 export interface MeetingTraceExportOptions {
@@ -306,13 +320,61 @@ export interface ExportedMeetingTrace {
 }
 
 export function serializeMeetingTraceMetrics(traces: MeetingTrace[]) {
-  const payload: PersistedMeetingTraceMetrics = {
-    version: PERSISTED_TRACE_METRICS_VERSION,
-    savedAt: Date.now(),
-    traces: traces.map(sanitizeTraceForPersistence),
-  };
+  const sanitizedTraces = traces
+    .map(sanitizeTraceForPersistence)
+    .sort((left, right) => right.startedAt - left.startedAt)
+    .slice(0, MAX_TRACE_ITEMS);
+  const sourceTraceCount = sanitizedTraces.length;
+  const savedAt = resolvePersistedTraceSavedAt(sanitizedTraces);
 
-  return JSON.stringify(payload, null, 2);
+  const serializePrefix = (retainedTraceCount: number) =>
+    stringifyPersistedTraceMetrics({
+      traces: sanitizedTraces.slice(0, retainedTraceCount),
+      savedAt,
+      sourceTraceCount,
+      compactedTraceCount: 0,
+    });
+
+  let low = 0;
+  let high = sourceTraceCount;
+  let bestPayload = serializePrefix(0);
+  let bestTraceCount = 0;
+  while (low <= high) {
+    const middle = Math.floor((low + high) / 2);
+    const candidate = serializePrefix(middle);
+    if (utf8ByteLength(candidate) <= PERSISTED_TRACE_METRICS_BYTE_BUDGET) {
+      bestPayload = candidate;
+      bestTraceCount = middle;
+      low = middle + 1;
+    } else {
+      high = middle - 1;
+    }
+  }
+
+  if (bestTraceCount > 0 || sourceTraceCount === 0) return bestPayload;
+
+  const compactedNewestTrace = compactTraceForPersistenceBudget(
+    sanitizedTraces[0]
+  );
+  const compactedPayload = stringifyPersistedTraceMetrics({
+    traces: [compactedNewestTrace],
+    savedAt,
+    sourceTraceCount,
+    compactedTraceCount: 1,
+  });
+  if (
+    utf8ByteLength(compactedPayload) <=
+    PERSISTED_TRACE_METRICS_BYTE_BUDGET
+  ) {
+    return compactedPayload;
+  }
+
+  return stringifyPersistedTraceMetrics({
+    traces: [],
+    savedAt,
+    sourceTraceCount,
+    compactedTraceCount: 0,
+  });
 }
 
 export function serializeMeetingTraceExport(
@@ -351,6 +413,107 @@ export function parseMeetingTraceMetrics(payload: string): MeetingTrace[] {
   } catch {
     return [];
   }
+}
+
+function stringifyPersistedTraceMetrics({
+  traces,
+  savedAt,
+  sourceTraceCount,
+  compactedTraceCount,
+}: {
+  traces: MeetingTrace[];
+  savedAt: number;
+  sourceTraceCount: number;
+  compactedTraceCount: number;
+}) {
+  const retention: PersistedMeetingTraceRetention = {
+    byteBudget: PERSISTED_TRACE_METRICS_BYTE_BUDGET,
+    retainedBytes: 0,
+    sourceTraceCount,
+    retainedTraceCount: traces.length,
+    droppedTraceCount: Math.max(0, sourceTraceCount - traces.length),
+    compactedTraceCount,
+    order: "newest-first",
+  };
+  const persisted: PersistedMeetingTraceMetrics = {
+    version: PERSISTED_TRACE_METRICS_VERSION,
+    savedAt,
+    traces,
+    retention,
+  };
+
+  let payload = "";
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    payload = JSON.stringify(persisted);
+    const retainedBytes = utf8ByteLength(payload);
+    if (retention.retainedBytes === retainedBytes) return payload;
+    retention.retainedBytes = retainedBytes;
+  }
+
+  return JSON.stringify(persisted);
+}
+
+function resolvePersistedTraceSavedAt(traces: MeetingTrace[]) {
+  let savedAt = 0;
+  for (const trace of traces) {
+    savedAt = Math.max(savedAt, trace.startedAt, trace.endedAt ?? 0);
+    for (const step of trace.steps) {
+      savedAt = Math.max(savedAt, step.startedAt, step.endedAt ?? 0);
+    }
+  }
+  return savedAt;
+}
+
+function compactTraceForPersistenceBudget(trace: MeetingTrace): MeetingTrace {
+  return {
+    id: trace.id,
+    kind: trace.kind,
+    status: trace.status,
+    startedAt: trace.startedAt,
+    endedAt: trace.endedAt,
+    durationMs: trace.durationMs,
+    steps: trace.steps.slice(0, 80).map((step) => ({
+      id: step.id,
+      name: truncatePersistedText(step.name, 160) ?? "",
+      status: step.status,
+      startedAt: step.startedAt,
+      endedAt: step.endedAt,
+      durationMs: step.durationMs,
+      error: truncatePersistedText(step.error, 320),
+    })),
+    inputs: [],
+    outputs: [],
+    metadata: compactPersistenceMetadata(trace.metadata),
+    error: truncatePersistedText(trace.error, 500),
+  };
+}
+
+function compactPersistenceMetadata(
+  metadata: Record<string, unknown> | undefined
+) {
+  if (!metadata) return undefined;
+
+  const compacted: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(metadata).slice(0, 80)) {
+    if (typeof value === "string") {
+      compacted[key] = truncatePersistedText(value, 320);
+    } else if (
+      typeof value === "number" ||
+      typeof value === "boolean"
+    ) {
+      compacted[key] = value;
+    }
+  }
+  return Object.keys(compacted).length ? compacted : undefined;
+}
+
+function truncatePersistedText(value: string | undefined, maxChars: number) {
+  if (!value || value.length <= maxChars) return value;
+  return `${value.slice(0, maxChars)}...`;
+}
+
+function utf8ByteLength(value: string) {
+  return new TextEncoder().encode(value).byteLength;
 }
 
 export function summarizeMeetingTraces(

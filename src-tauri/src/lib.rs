@@ -4,6 +4,7 @@ mod shortcuts;
 mod window;
 use base64::{engine::general_purpose, Engine as _};
 use std::fs::OpenOptions;
+use std::io::Write;
 use std::path::{Component, Path};
 use std::sync::{Arc, Mutex};
 use std::{fs, path::PathBuf};
@@ -73,8 +74,47 @@ fn write_meeting_trace_metrics(app: AppHandle, payload: String) -> Result<(), St
         })?;
     }
 
-    fs::write(path, payload)
+    write_file_atomically(&path, payload.as_bytes())
         .map_err(|error| format!("Failed to write meeting trace metrics: {}", error))
+}
+
+fn write_file_atomically(path: &Path, payload: &[u8]) -> Result<(), std::io::Error> {
+    let temporary_path = path.with_extension("json.tmp");
+    let mut temporary_file = OpenOptions::new()
+        .create(true)
+        .truncate(true)
+        .write(true)
+        .open(&temporary_path)?;
+    temporary_file.write_all(payload)?;
+    temporary_file.sync_all()?;
+    drop(temporary_file);
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        fs::rename(&temporary_path, path)?;
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        let backup_path = path.with_extension("json.bak");
+        if backup_path.exists() {
+            fs::remove_file(&backup_path)?;
+        }
+        if path.exists() {
+            fs::rename(path, &backup_path)?;
+        }
+        if let Err(error) = fs::rename(&temporary_path, path) {
+            if backup_path.exists() {
+                let _ = fs::rename(&backup_path, path);
+            }
+            return Err(error);
+        }
+        if backup_path.exists() {
+            fs::remove_file(backup_path)?;
+        }
+    }
+
+    Ok(())
 }
 
 #[tauri::command]

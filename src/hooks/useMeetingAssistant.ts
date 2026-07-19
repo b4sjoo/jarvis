@@ -1037,6 +1037,9 @@ export function useMeetingAssistant() {
   const advisorEngineRef = useRef(new AdvisorEngine());
   const traceStoreRef = useRef(new MeetingTraceStore());
   const traceMetricsPersistTimerRef = useRef<number | null>(null);
+  const traceMetricsPersistRetryTimerRef = useRef<number | null>(null);
+  const traceMetricsPersistQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const queuedTraceMetricsPayloadsRef = useRef(new Set<string>());
   const traceMetricsPersistenceReadyRef = useRef(false);
   const lastTraceMetricsPayloadRef = useRef<string | null>(null);
   const autoExportProcessedTraceIdsRef = useRef(new Set<string>());
@@ -1760,13 +1763,69 @@ export function useMeetingAssistant() {
       const payload = serializeMeetingTraceMetrics(
         traceStoreRef.current.getPersistableTraces()
       );
+      if (
+        payload === lastTraceMetricsPayloadRef.current ||
+        queuedTraceMetricsPayloadsRef.current.has(payload)
+      ) {
+        return;
+      }
 
-      if (payload === lastTraceMetricsPayloadRef.current) return;
-      lastTraceMetricsPayloadRef.current = payload;
+      const enqueuePersistence = (candidatePayload: string, attempt: number) => {
+        if (
+          candidatePayload === lastTraceMetricsPayloadRef.current ||
+          queuedTraceMetricsPayloadsRef.current.has(candidatePayload)
+        ) {
+          return;
+        }
 
-      void invoke("write_meeting_trace_metrics", { payload }).catch((error) => {
-        console.warn("Failed to persist meeting trace metrics", error);
-      });
+        queuedTraceMetricsPayloadsRef.current.add(candidatePayload);
+        traceMetricsPersistQueueRef.current = traceMetricsPersistQueueRef.current
+          .catch(() => undefined)
+          .then(async () => {
+            try {
+              if (candidatePayload === lastTraceMetricsPayloadRef.current) {
+                return;
+              }
+              await invoke("write_meeting_trace_metrics", {
+                payload: candidatePayload,
+              });
+              lastTraceMetricsPayloadRef.current = candidatePayload;
+            } catch (error) {
+              const errorMessage = String(error).slice(0, 320);
+              console.warn("Failed to persist meeting trace metrics", error);
+              const message = `[${new Date().toISOString()}] [meeting-trace] trace-metrics-persist-failed ${JSON.stringify(
+                { attempt: attempt + 1, error: errorMessage }
+              )}`;
+              void invoke("write_meeting_trace_log", { message }).catch(
+                () => {}
+              );
+
+              if (attempt < 1) {
+                if (traceMetricsPersistRetryTimerRef.current !== null) {
+                  window.clearTimeout(
+                    traceMetricsPersistRetryTimerRef.current
+                  );
+                }
+                traceMetricsPersistRetryTimerRef.current = window.setTimeout(
+                  () => {
+                    traceMetricsPersistRetryTimerRef.current = null;
+                    const latestPayload = serializeMeetingTraceMetrics(
+                      traceStoreRef.current.getPersistableTraces()
+                    );
+                    if (latestPayload === candidatePayload) {
+                      enqueuePersistence(candidatePayload, attempt + 1);
+                    }
+                  },
+                  750
+                );
+              }
+            } finally {
+              queuedTraceMetricsPayloadsRef.current.delete(candidatePayload);
+            }
+          });
+      };
+
+      enqueuePersistence(payload, 0);
       sessionRecordingManagerRef.current?.recordTraceMetrics(payload);
     }, TRACE_METRICS_PERSIST_DEBOUNCE_MS);
   }, []);
@@ -6480,9 +6539,7 @@ export function useMeetingAssistant() {
         if (cancelled) return;
 
         const traces = parseMeetingTraceMetrics(payload);
-        lastTraceMetricsPayloadRef.current = traces.length
-          ? serializeMeetingTraceMetrics(traces)
-          : null;
+        lastTraceMetricsPayloadRef.current = traces.length ? payload : null;
         if (traces.length) {
           traceStoreRef.current.hydrate(traces);
         }
@@ -6502,6 +6559,10 @@ export function useMeetingAssistant() {
       if (traceMetricsPersistTimerRef.current !== null) {
         window.clearTimeout(traceMetricsPersistTimerRef.current);
         traceMetricsPersistTimerRef.current = null;
+      }
+      if (traceMetricsPersistRetryTimerRef.current !== null) {
+        window.clearTimeout(traceMetricsPersistRetryTimerRef.current);
+        traceMetricsPersistRetryTimerRef.current = null;
       }
     };
   }, []);
