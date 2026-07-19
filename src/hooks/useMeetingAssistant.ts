@@ -125,12 +125,14 @@ import {
   authorizeAdvisorExecution,
   canQuestionTypeDecisionOverrideParent,
   decideAdvisorTurnIntent,
+  decideSentenceCompletion,
   decideLatestTurnTaxonomyBoundary,
   formatAdvisorTurnIntentForTrace,
   inferCanonicalQuestionTypeFromText,
   inferQuestionTypeDecisionFromText,
   isParentCanonicalQuestionType,
   normalizeCanonicalQuestionType,
+  mergeSentenceFragments,
   normalizeInterviewBriefTypes as normalizeTaxonomyInterviewBriefTypes,
   normalizeQuestionTypeAlias,
   readInterviewBriefType,
@@ -160,6 +162,7 @@ import {
   areSuggestionsForSameParentTask,
   buildSuggestionTaskMetadata,
   PlaybookPhaseDecision,
+  SENTENCE_COMPLETION_BUFFER_MS,
 } from "@/lib/meeting";
 
 const ADVISOR_DEBOUNCE_MS = 750;
@@ -932,6 +935,25 @@ interface PendingConfirmation {
   timeoutId: number;
 }
 
+interface PendingSentenceCompletion {
+  turn: TranscriptTurn;
+  segment: QueuedSpeechSegment;
+  heldAt: number;
+  firstHeldAt: number;
+  timeoutId: number;
+  continuationSequence?: number;
+  fragmentTurnIds: string[];
+  fragmentTraceIds: string[];
+  fragmentSequences: number[];
+}
+
+interface SentenceCompletionMergeContext {
+  firstHeldAt: number;
+  fragmentTurnIds: string[];
+  fragmentTraceIds: string[];
+  fragmentSequences: number[];
+}
+
 interface MeetingModelRouteResolution {
   provider: TYPE_PROVIDER | undefined;
   selectedProvider: SelectedProviderState;
@@ -1029,6 +1051,8 @@ export function useMeetingAssistant() {
   const systemAudioQueueTailRef = useRef<Promise<void>>(Promise.resolve());
   const microphoneAudioQueueTailRef = useRef<Promise<void>>(Promise.resolve());
   const pendingConfirmationRef = useRef<PendingConfirmation | null>(null);
+  const pendingSentenceCompletionRef =
+    useRef<PendingSentenceCompletion | null>(null);
   const speechCorrectionsRef = useRef<SpeechCorrection[]>([]);
   const microphoneContextEnabledRef = useRef(
     INITIAL_STATE.settings.microphoneContextEnabled
@@ -1067,6 +1091,48 @@ export function useMeetingAssistant() {
     );
   }, []);
 
+  const clearPendingSentenceCompletionForRuntimeReset = useCallback(
+    (reason: string) => {
+      const pending = pendingSentenceCompletionRef.current;
+      if (!pending) return;
+
+      window.clearTimeout(pending.timeoutId);
+      pendingSentenceCompletionRef.current = null;
+      traceStoreRef.current.updateMetadata(pending.segment.traceId, {
+        sentenceBufferDisposition: "cancelled",
+        sentenceBufferFlushReason: reason,
+        sentenceBufferFragmentCount: pending.fragmentTurnIds.length,
+        sentenceBufferAddedLatencyMs: Date.now() - pending.firstHeldAt,
+        sentenceBufferTurnIds: pending.fragmentTurnIds,
+        sentenceBufferTraceIds: pending.fragmentTraceIds,
+        sentenceBufferSegmentSequences: pending.fragmentSequences,
+      });
+      const resetStepId = traceStoreRef.current.startStep(
+        pending.segment.traceId,
+        "Sentence completion buffer cleared by runtime reset",
+        {
+          reason,
+          turnId: pending.turn.id,
+          heldMs: Date.now() - pending.firstHeldAt,
+          fragmentCount: pending.fragmentTurnIds.length,
+          audioSegmentSeq: pending.segment.sequence,
+          audioSessionId: pending.segment.sessionId,
+        }
+      );
+      traceStoreRef.current.finishStep(
+        pending.segment.traceId,
+        resetStepId,
+        "cancelled"
+      );
+      traceStoreRef.current.finishTrace(
+        pending.segment.traceId,
+        "cancelled",
+        `Sentence completion buffer cleared: ${reason}`
+      );
+    },
+    []
+  );
+
   const resetMeetingRuntimeForNewSession = useCallback(
     (reason: string) => {
       const previousContext = contextManagerRef.current.getState();
@@ -1083,7 +1149,8 @@ export function useMeetingAssistant() {
           previousTraceCount ||
           previousSpeechCorrectionCount ||
           latestScreenHashRef.current ||
-          pendingConfirmationRef.current
+          pendingConfirmationRef.current ||
+          pendingSentenceCompletionRef.current
       );
 
       if (advisorDebounceTimerRef.current !== null) {
@@ -1105,6 +1172,7 @@ export function useMeetingAssistant() {
       systemAudioQueueTailRef.current = Promise.resolve();
       microphoneAudioQueueTailRef.current = Promise.resolve();
       clearPendingConfirmationForRuntimeReset(reason);
+      clearPendingSentenceCompletionForRuntimeReset(reason);
 
       contextManagerRef.current.reset({
         interviewSessionBrief: previousContext.interviewSessionBrief,
@@ -1159,6 +1227,7 @@ export function useMeetingAssistant() {
           "lastMemoryContext",
           "speechCorrections",
           "pendingConfirmation",
+          "pendingSentenceCompletion",
           "advisorDebounce",
           "screenAnalysis",
           "latestScreenHash",
@@ -1168,7 +1237,10 @@ export function useMeetingAssistant() {
         backfill: false,
       };
     },
-    [clearPendingConfirmationForRuntimeReset]
+    [
+      clearPendingConfirmationForRuntimeReset,
+      clearPendingSentenceCompletionForRuntimeReset,
+    ]
   );
 
   const sttProvider = useMemo(
@@ -1433,8 +1505,12 @@ export function useMeetingAssistant() {
     systemAudioQueueTailRef.current = Promise.resolve();
     microphoneAudioQueueTailRef.current = Promise.resolve();
     clearPendingConfirmation("session-restarted");
+    clearPendingSentenceCompletionForRuntimeReset("session-restarted");
     return sessionId;
-  }, [clearPendingConfirmation]);
+  }, [
+    clearPendingConfirmation,
+    clearPendingSentenceCompletionForRuntimeReset,
+  ]);
 
   const invalidateAudioProcessingSession = useCallback(() => {
     audioSessionIdRef.current = createMeetingId("audio_session_inactive");
@@ -1442,7 +1518,11 @@ export function useMeetingAssistant() {
     systemAudioQueueTailRef.current = Promise.resolve();
     microphoneAudioQueueTailRef.current = Promise.resolve();
     clearPendingConfirmation("session-invalidated");
-  }, [clearPendingConfirmation]);
+    clearPendingSentenceCompletionForRuntimeReset("session-invalidated");
+  }, [
+    clearPendingConfirmation,
+    clearPendingSentenceCompletionForRuntimeReset,
+  ]);
 
   const isCurrentAudioSegment = useCallback((segment: QueuedSpeechSegment) => {
     return activeRef.current && audioSessionIdRef.current === segment.sessionId;
@@ -2244,13 +2324,17 @@ export function useMeetingAssistant() {
   );
 
   const clearActiveScreenTask = useCallback(() => {
+    clearPendingSentenceCompletionForRuntimeReset("active-task-cleared");
     clearAdvisorDebounce();
     advisorEngineRef.current.cancelCurrentRequest();
     screenAnalysisAbortRef.current?.abort();
     screenAnalysisAbortRef.current = null;
     contextManagerRef.current.clearActiveMeetingTask();
     setState(clearActiveScreenTaskState);
-  }, [clearAdvisorDebounce]);
+  }, [
+    clearAdvisorDebounce,
+    clearPendingSentenceCompletionForRuntimeReset,
+  ]);
 
   const stop = useCallback(async () => {
     activeRef.current = false;
@@ -3216,6 +3300,234 @@ export function useMeetingAssistant() {
     []
   );
 
+  const flushPendingSentenceCompletion = useCallback(
+    (reason: string) => {
+      const pending = pendingSentenceCompletionRef.current;
+      if (!pending) return false;
+
+      window.clearTimeout(pending.timeoutId);
+      pendingSentenceCompletionRef.current = null;
+
+      if (!isCurrentAudioSegment(pending.segment)) {
+        traceStoreRef.current.updateMetadata(pending.segment.traceId, {
+          sentenceBufferDisposition: "cancelled",
+          sentenceBufferFlushReason: "stale-session",
+          sentenceBufferFragmentCount: pending.fragmentTurnIds.length,
+          sentenceBufferTurnIds: pending.fragmentTurnIds,
+          sentenceBufferTraceIds: pending.fragmentTraceIds,
+          sentenceBufferSegmentSequences: pending.fragmentSequences,
+        });
+        traceStoreRef.current.finishTrace(
+          pending.segment.traceId,
+          "cancelled",
+          "Buffered sentence belongs to a stale audio session."
+        );
+        return false;
+      }
+
+      const addedLatencyMs = Date.now() - pending.firstHeldAt;
+      const intentDecision = decideAdvisorTurnIntent(pending.turn.text, {
+        hasActiveTask: Boolean(
+          contextManagerRef.current.getState().activeMeetingTask
+        ),
+        enforceBufferedIncomplete: true,
+      });
+      pending.turn.contextPromptEligible = intentDecision.contextPromptEligible;
+      pending.turn.contextFusionStatus = intentDecision.contextPromptEligible
+        ? "none"
+        : "debug-only";
+
+      const sentenceMetadata = {
+        sentenceBufferDisposition: "flushed-incomplete",
+        sentenceBufferFlushReason: reason,
+        sentenceBufferFragmentCount: pending.fragmentTurnIds.length,
+        sentenceBufferAddedLatencyMs: addedLatencyMs,
+        sentenceBufferTurnIds: pending.fragmentTurnIds,
+        sentenceBufferTraceIds: pending.fragmentTraceIds,
+        sentenceBufferSegmentSequences: pending.fragmentSequences,
+        sentenceBufferMergedTranscriptChars: pending.turn.text.length,
+      };
+      traceStoreRef.current.updateMetadata(pending.segment.traceId, {
+        ...sentenceMetadata,
+        ...formatAdvisorTurnIntentForTrace(intentDecision),
+        turnGateAction: intentDecision.action,
+        turnGateReason: intentDecision.reason,
+        memoryRetrievalSuppressedReason: `sentence-buffer:${reason}`,
+        modelExecutionSuppressedReason: `sentence-buffer:${reason}`,
+      });
+      const flushStepId = traceStoreRef.current.startStep(
+        pending.segment.traceId,
+        "Sentence completion buffer flushed",
+        {
+          ...sentenceMetadata,
+          turnId: pending.turn.id,
+          audioSegmentSeq: pending.segment.sequence,
+          audioSessionId: pending.segment.sessionId,
+        }
+      );
+      traceStoreRef.current.finishStep(
+        pending.segment.traceId,
+        flushStepId,
+        "success"
+      );
+      appendTranscriptTurnForTrace(
+        pending.turn,
+        pending.segment.traceId,
+        pending.segment,
+        {
+          ...sentenceMetadata,
+          turnGateAction: intentDecision.action,
+          turnGateReason: intentDecision.reason,
+        }
+      );
+      traceStoreRef.current.finishTrace(pending.segment.traceId, "success");
+      return true;
+    },
+    [appendTranscriptTurnForTrace, isCurrentAudioSegment]
+  );
+
+  const holdPendingSentenceCompletion = useCallback(
+    (
+      turn: TranscriptTurn,
+      segment: QueuedSpeechSegment,
+      decision: ReturnType<typeof decideSentenceCompletion>,
+      mergeContext?: SentenceCompletionMergeContext
+    ) => {
+      const heldAt = Date.now();
+      const fragmentTurnIds = [
+        ...(mergeContext?.fragmentTurnIds ?? []),
+        turn.id,
+      ];
+      const fragmentTraceIds = [
+        ...(mergeContext?.fragmentTraceIds ?? []),
+        segment.traceId,
+      ];
+      const fragmentSequences = [
+        ...(mergeContext?.fragmentSequences ?? []),
+        segment.sequence,
+      ];
+      const firstHeldAt = mergeContext?.firstHeldAt ?? heldAt;
+      const sentenceMetadata = {
+        sentenceBufferDisposition: "buffered",
+        sentenceBufferReason: decision.reason,
+        sentenceBufferConfidence: decision.confidence,
+        sentenceBufferEvidence: decision.evidence,
+        sentenceBufferFragmentCount: fragmentTurnIds.length,
+        sentenceBufferTurnIds: fragmentTurnIds,
+        sentenceBufferTraceIds: fragmentTraceIds,
+        sentenceBufferSegmentSequences: fragmentSequences,
+        sentenceBufferTimeoutMs: SENTENCE_COMPLETION_BUFFER_MS,
+      };
+      traceStoreRef.current.updateMetadata(segment.traceId, sentenceMetadata);
+      const heldStepId = traceStoreRef.current.startStep(
+        segment.traceId,
+        "Sentence completion fragment buffered",
+        {
+          ...sentenceMetadata,
+          turnId: turn.id,
+          transcriptChars: turn.text.length,
+          audioSegmentSeq: segment.sequence,
+          audioSessionId: segment.sessionId,
+        }
+      );
+      traceStoreRef.current.finishStep(segment.traceId, heldStepId, "success");
+
+      const timeoutId = window.setTimeout(() => {
+        const pending = pendingSentenceCompletionRef.current;
+        if (!pending || pending.turn.id !== turn.id) return;
+        flushPendingSentenceCompletion("timeout");
+      }, SENTENCE_COMPLETION_BUFFER_MS);
+
+      pendingSentenceCompletionRef.current = {
+        turn,
+        segment,
+        heldAt,
+        firstHeldAt,
+        timeoutId,
+        fragmentTurnIds,
+        fragmentTraceIds,
+        fragmentSequences,
+      };
+      setState((previous) => ({
+        ...previous,
+        status: activeRef.current ? "listening" : "idle",
+      }));
+    },
+    [flushPendingSentenceCompletion]
+  );
+
+  const consumePendingSentenceCompletion = useCallback(
+    (turn: TranscriptTurn, segment: QueuedSpeechSegment) => {
+      const pending = pendingSentenceCompletionRef.current;
+      if (!pending) return undefined;
+
+      if (!isCurrentAudioSegment(pending.segment)) {
+        clearPendingSentenceCompletionForRuntimeReset("stale-before-merge");
+        return undefined;
+      }
+
+      window.clearTimeout(pending.timeoutId);
+      pendingSentenceCompletionRef.current = null;
+      const addedLatencyMs = Date.now() - pending.firstHeldAt;
+      const mergeContext: SentenceCompletionMergeContext = {
+        firstHeldAt: pending.firstHeldAt,
+        fragmentTurnIds: [...pending.fragmentTurnIds],
+        fragmentTraceIds: [...pending.fragmentTraceIds],
+        fragmentSequences: [...pending.fragmentSequences],
+      };
+
+      turn.text = mergeSentenceFragments([pending.turn.text, turn.text]);
+      turn.startedAt = Math.min(pending.turn.startedAt, turn.startedAt);
+      turn.relatedTurnIds = Array.from(
+        new Set([...(turn.relatedTurnIds ?? []), ...pending.fragmentTurnIds])
+      );
+
+      traceStoreRef.current.updateMetadata(pending.segment.traceId, {
+        sentenceBufferDisposition: "merged-into-next",
+        sentenceBufferFlushReason: "next-them-fragment",
+        sentenceBufferFragmentCount: pending.fragmentTurnIds.length + 1,
+        sentenceBufferAddedLatencyMs: addedLatencyMs,
+        sentenceBufferMergedIntoTraceId: segment.traceId,
+        sentenceBufferMergedIntoTurnId: turn.id,
+      });
+      const mergedStepId = traceStoreRef.current.startStep(
+        pending.segment.traceId,
+        "Sentence completion fragment merged",
+        {
+          nextTraceId: segment.traceId,
+          nextTurnId: turn.id,
+          fragmentCount: pending.fragmentTurnIds.length + 1,
+          addedLatencyMs,
+        }
+      );
+      traceStoreRef.current.finishStep(
+        pending.segment.traceId,
+        mergedStepId,
+        "success"
+      );
+      traceStoreRef.current.finishTrace(pending.segment.traceId, "success");
+
+      traceStoreRef.current.updateMetadata(segment.traceId, {
+        sentenceBufferDisposition: "merged",
+        sentenceBufferFlushReason: "next-them-fragment",
+        sentenceBufferFragmentCount: pending.fragmentTurnIds.length + 1,
+        sentenceBufferAddedLatencyMs: addedLatencyMs,
+        sentenceBufferTurnIds: [...pending.fragmentTurnIds, turn.id],
+        sentenceBufferTraceIds: [...pending.fragmentTraceIds, segment.traceId],
+        sentenceBufferSegmentSequences: [
+          ...pending.fragmentSequences,
+          segment.sequence,
+        ],
+        sentenceBufferMergedTranscriptChars: turn.text.length,
+      });
+      return mergeContext;
+    },
+    [
+      clearPendingSentenceCompletionForRuntimeReset,
+      isCurrentAudioSegment,
+    ]
+  );
+
   const promoteMeTurnForFusion = useCallback(
     (meTurn: TranscriptTurn, relatedTurnId: string) => {
       contextManagerRef.current.updateTranscriptTurnContext(meTurn.id, {
@@ -3702,6 +4014,10 @@ export function useMeetingAssistant() {
             return;
           }
 
+          if (classification.promptEligible) {
+            flushPendingSentenceCompletion("meaningful-speaker-switch-me");
+          }
+
           appendTranscriptTurnForTrace(turn, traceId, segment);
           resolvePendingConfirmationForMeTurn(turn);
           traceStoreRef.current.finishTrace(traceId, "success");
@@ -3739,6 +4055,43 @@ export function useMeetingAssistant() {
           }));
           return;
         }
+
+        if (
+          pendingSentenceCompletionRef.current &&
+          isTaskSwitchTranscript(turn.text)
+        ) {
+          flushPendingSentenceCompletion("explicit-task-switch");
+        }
+
+        const sentenceMergeContext = consumePendingSentenceCompletion(
+          turn,
+          segment
+        );
+        const sentenceCompletionDecision = decideSentenceCompletion(turn.text);
+        if (sentenceCompletionDecision.disposition === "buffer") {
+          holdPendingSentenceCompletion(
+            turn,
+            segment,
+            sentenceCompletionDecision,
+            sentenceMergeContext
+          );
+          return;
+        }
+
+        traceStoreRef.current.updateMetadata(traceId, {
+          sentenceBufferDisposition: sentenceMergeContext
+            ? "merged-and-bypassed"
+            : "bypassed",
+          sentenceBufferReason: sentenceCompletionDecision.reason,
+          sentenceBufferConfidence: sentenceCompletionDecision.confidence,
+          sentenceBufferEvidence: sentenceCompletionDecision.evidence,
+          sentenceBufferFragmentCount:
+            (sentenceMergeContext?.fragmentTurnIds.length ?? 0) + 1,
+          sentenceBufferAddedLatencyMs: sentenceMergeContext
+            ? Date.now() - sentenceMergeContext.firstHeldAt
+            : 0,
+          sentenceBufferMergedTranscriptChars: turn.text.length,
+        });
 
         if (hasActiveInterviewTask && isTaskSwitchTranscript(turn.text)) {
           const switchStepId = traceStoreRef.current.startStep(
@@ -4065,7 +4418,10 @@ export function useMeetingAssistant() {
     [
       appendTranscriptTurnForTrace,
       clearAdvisorDebounce,
+      consumePendingSentenceCompletion,
+      flushPendingSentenceCompletion,
       holdPendingConfirmation,
+      holdPendingSentenceCompletion,
       incrementAppliedSpeechCorrections,
       invalidateAudioProcessingSession,
       isCurrentAudioSegment,
@@ -4084,6 +4440,16 @@ export function useMeetingAssistant() {
       const sessionId = audioSessionIdRef.current;
       const sequence = audioSegmentSeqRef.current + 1;
       audioSegmentSeqRef.current = sequence;
+      const pendingSentence = pendingSentenceCompletionRef.current;
+      if (pendingSentence?.segment.sessionId === sessionId) {
+        window.clearTimeout(pendingSentence.timeoutId);
+        pendingSentence.continuationSequence = sequence;
+        traceStoreRef.current.updateMetadata(pendingSentence.segment.traceId, {
+          sentenceBufferDisposition: "continuation-audio-queued",
+          sentenceBufferContinuationQueuedAt: Date.now(),
+          sentenceBufferContinuationSequence: sequence,
+        });
+      }
       const queuedAt = Date.now();
 
       const trace = traceStoreRef.current.startTrace("voice", {
@@ -4120,9 +4486,28 @@ export function useMeetingAssistant() {
         .then(() => processQueuedSpeechSegment(segment))
         .catch((error) => {
           console.warn("Failed to process queued system audio segment", error);
+        })
+        .finally(() => {
+          const pending = pendingSentenceCompletionRef.current;
+          if (
+            !pending ||
+            pending.segment.sessionId !== sessionId ||
+            pending.continuationSequence !== sequence
+          ) {
+            return;
+          }
+
+          pending.timeoutId = window.setTimeout(() => {
+            flushPendingSentenceCompletion("continuation-stt-settled-timeout");
+          }, SENTENCE_COMPLETION_BUFFER_MS);
+          traceStoreRef.current.updateMetadata(pending.segment.traceId, {
+            sentenceBufferDisposition: "continuation-stt-settled",
+            sentenceBufferContinuationSettledAt: Date.now(),
+            sentenceBufferContinuationSequence: sequence,
+          });
         });
     },
-    [processQueuedSpeechSegment]
+    [flushPendingSentenceCompletion, processQueuedSpeechSegment]
   );
 
   const enqueueMicrophoneSpeech = useCallback(
@@ -4413,6 +4798,7 @@ export function useMeetingAssistant() {
         return;
       }
 
+      flushPendingSentenceCompletion("screen-capture");
       screenCaptureInFlightRef.current = true;
       const trace = traceStoreRef.current.startTrace(
         "screen",
@@ -5387,6 +5773,7 @@ export function useMeetingAssistant() {
     },
     [
       aiProvider,
+      flushPendingSentenceCompletion,
       loadMemoryForPrompt,
       resolveMeetingModelRoute,
       selectedAIProvider,
@@ -5405,6 +5792,8 @@ export function useMeetingAssistant() {
       source: ManualQuestionTypeCorrectionSource = "normal-mode"
     ) => {
       if (manualQuestionTypeCorrectionInFlightRef.current) return;
+
+      flushPendingSentenceCompletion("manual-question-type-correction");
 
       const contextState = contextManagerRef.current.getState();
       const activeTask = contextState.activeMeetingTask;
@@ -5788,6 +6177,7 @@ export function useMeetingAssistant() {
     },
     [
       clearAdvisorDebounce,
+      flushPendingSentenceCompletion,
       runAdvisor,
       state.latestSuggestion,
       state.questionEvaluations,
@@ -5797,15 +6187,19 @@ export function useMeetingAssistant() {
   );
 
   const regenerateSuggestion = useCallback(async () => {
+    flushPendingSentenceCompletion("regenerate");
     await runAdvisor({
       force: true,
       mode: "regenerate",
       currentSuggestion: currentSuggestionText,
     });
-  }, [currentSuggestionText, runAdvisor]);
+  }, [currentSuggestionText, flushPendingSentenceCompletion, runAdvisor]);
 
   const applyResponseAction = useCallback(
     async (responseAction: MeetingResponseActionMode) => {
+      flushPendingSentenceCompletion(
+        responseAction === "next-phase" ? "manual-next" : "response-action"
+      );
       if (!currentSuggestionText.trim()) {
         setState((previous) => ({
           ...previous,
@@ -5829,7 +6223,12 @@ export function useMeetingAssistant() {
         currentSuggestion: currentSuggestionText,
       });
     },
-    [currentSuggestionText, runAdvisor, state.activeMeetingTask]
+    [
+      currentSuggestionText,
+      flushPendingSentenceCompletion,
+      runAdvisor,
+      state.activeMeetingTask,
+    ]
   );
 
   const answerClarifyingQuestion = useCallback(
@@ -5840,6 +6239,8 @@ export function useMeetingAssistant() {
     ) => {
       const trimmedQuestion = question.trim();
       if (!trimmedQuestion) return;
+
+      flushPendingSentenceCompletion("clarifying-answer");
 
       const hasActiveScreenTask = Boolean(
         contextManagerRef.current.getState().activeMeetingTask?.screen
@@ -5857,11 +6258,12 @@ export function useMeetingAssistant() {
         },
       });
     },
-    [currentSuggestionText, runAdvisor]
+    [currentSuggestionText, flushPendingSentenceCompletion, runAdvisor]
   );
 
   const submitSpeechCorrection = useCallback(
     async (input: string) => {
+      flushPendingSentenceCompletion("emergency-correction");
       const correction = parseEmergencySpeechCorrection(input);
       if (!correction) {
         setState((previous) => ({
@@ -6038,7 +6440,7 @@ export function useMeetingAssistant() {
         });
       }
     },
-    [currentSuggestionText, runAdvisor]
+    [currentSuggestionText, flushPendingSentenceCompletion, runAdvisor]
   );
 
   useEffect(() => {

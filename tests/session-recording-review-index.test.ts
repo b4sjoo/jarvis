@@ -28,6 +28,10 @@ test("builds a task-level review index from trace summaries and evaluations", ()
     playbookPhase: "whiteboard",
     turnGateAction: "regenerate",
     turnGateReason: "meaningful-follow-up",
+    sentenceBufferDisposition: "merged-and-bypassed",
+    sentenceBufferFlushReason: "next-them-fragment",
+    sentenceBufferFragmentCount: 2,
+    sentenceBufferAddedLatencyMs: 850,
     modelRoute: "main",
     memory: {
       selectedEntries: 3,
@@ -71,6 +75,9 @@ test("builds a task-level review index from trace summaries and evaluations", ()
   assert.deepEqual(task.playbookPhases, ["whiteboard"]);
   assert.equal(task.memorySelectedEntriesTotal, 3);
   assert.equal(task.memoryRejectedCountTotal, 2);
+  assert.equal(task.sentenceBufferMergedCount, 1);
+  assert.equal(task.sentenceBufferTimeoutCount, 0);
+  assert.equal(task.sentenceBufferAddedLatencyMsTotal, 850);
   assert.deepEqual(task.whiteboardArtifactIds, ["whiteboard_1"]);
   assert.deepEqual(task.manualPhaseTransitions, [
     {

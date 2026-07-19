@@ -35,7 +35,7 @@ test("preserves explicit coding and system-design requests", () => {
   }
 });
 
-test("keeps incomplete speech in shadow mode until sentence buffering exists", () => {
+test("keeps unbuffered incomplete speech in shadow mode as a fail-open fallback", () => {
   const decision = decideAdvisorTurnIntent("Can you describe...", {
     hasActiveTask: false,
   });

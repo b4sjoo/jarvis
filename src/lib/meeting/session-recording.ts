@@ -152,6 +152,12 @@ export interface SessionCompactTraceSummary {
   advisorWouldSuppress?: boolean;
   advisorExecutionAuthorized?: boolean;
   advisorExecutionSuppressedReason?: string;
+  sentenceBufferDisposition?: string;
+  sentenceBufferReason?: string;
+  sentenceBufferFlushReason?: string;
+  sentenceBufferFragmentCount?: number;
+  sentenceBufferAddedLatencyMs?: number;
+  sentenceBufferMergedTranscriptChars?: number;
   personalEvidence?: {
     requirement?: string;
     confidence?: number;
@@ -1411,6 +1417,30 @@ function buildCompactTraceSummary({
     advisorExecutionSuppressedReason:
       readFirstString(metadataSources, "memoryRetrievalSuppressedReason") ??
       readFirstString(metadataSources, "modelExecutionSuppressedReason"),
+    sentenceBufferDisposition: readFirstString(
+      metadataSources,
+      "sentenceBufferDisposition"
+    ),
+    sentenceBufferReason: readFirstString(
+      metadataSources,
+      "sentenceBufferReason"
+    ),
+    sentenceBufferFlushReason: readFirstString(
+      metadataSources,
+      "sentenceBufferFlushReason"
+    ),
+    sentenceBufferFragmentCount: readFirstNumberFromMetadata(
+      metadataSources,
+      "sentenceBufferFragmentCount"
+    ),
+    sentenceBufferAddedLatencyMs: readFirstNumberFromMetadata(
+      metadataSources,
+      "sentenceBufferAddedLatencyMs"
+    ),
+    sentenceBufferMergedTranscriptChars: readFirstNumberFromMetadata(
+      metadataSources,
+      "sentenceBufferMergedTranscriptChars"
+    ),
     personalEvidence: {
       requirement: readFirstString(
         metadataSources,

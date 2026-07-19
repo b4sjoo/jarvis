@@ -20,6 +20,7 @@ export * from "./personal-evidence-guardrail";
 export * from "./project-binding";
 export * from "./screen-observation.service";
 export * from "./screen-task-answer";
+export * from "./sentence-completion-buffer";
 export * from "./session-recording";
 export * from "./session-task-review-index";
 export * from "./speech-bias";

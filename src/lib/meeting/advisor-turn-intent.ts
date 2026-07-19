@@ -1,4 +1,5 @@
 import { calculateWordEquivalent } from "./transcript-fusion.js";
+import { decideSentenceCompletion } from "./sentence-completion-buffer.js";
 
 export type AdvisorTurnIntent =
   | "direct-question"
@@ -35,6 +36,7 @@ export interface AdvisorTurnIntentOptions {
   hasActiveTask: boolean;
   hasPendingConfirmation?: boolean;
   hasCompanyContextOnly?: boolean;
+  enforceBufferedIncomplete?: boolean;
 }
 
 export interface AdvisorExecutionAuthorization {
@@ -108,7 +110,18 @@ export function decideAdvisorTurnIntent(
     });
   }
 
-  if (isObviouslyIncomplete(trimmed, normalized)) {
+  if (decideSentenceCompletion(trimmed).disposition === "buffer") {
+    if (options.enforceBufferedIncomplete) {
+      return enforcedDecision({
+        intent: "incomplete",
+        confidence: 0.95,
+        evidence: ["buffered-incomplete-clause"],
+        action: "append-only",
+        reason: "incomplete-buffer-flushed",
+        contextPromptEligible: true,
+      });
+    }
+
     return shadowDecision({
       intent: "incomplete",
       confidence: 0.8,
@@ -476,15 +489,6 @@ function collectDeclarativeEvidence(normalized: string) {
   )
     ? ["declarative-clause"]
     : [];
-}
-
-function isObviouslyIncomplete(text: string, normalized: string) {
-  return (
-    /\.{2,}\s*$/.test(text) ||
-    /\b(the next one is|because|and|or|but|so|then|can you|could you|would you|tell me|describe|explain)\s*$/i.test(
-      normalized
-    )
-  );
 }
 
 function isLowValueAcknowledgement(normalized: string) {

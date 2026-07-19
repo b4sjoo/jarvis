@@ -32,6 +32,10 @@ export interface TaskReviewTraceSummary {
   advisorTurnEnforcement?: string;
   advisorWouldSuppress?: boolean;
   advisorExecutionAuthorized?: boolean;
+  sentenceBufferDisposition?: string;
+  sentenceBufferFlushReason?: string;
+  sentenceBufferFragmentCount?: number;
+  sentenceBufferAddedLatencyMs?: number;
   modelRoute?: string;
   memory?: {
     selectedEntries?: number;
@@ -94,6 +98,9 @@ export interface SessionTaskReviewSummary {
   advisorTurnIntents: string[];
   advisorExecutionSuppressedCount: number;
   advisorShadowDecisionCount: number;
+  sentenceBufferMergedCount: number;
+  sentenceBufferTimeoutCount: number;
+  sentenceBufferAddedLatencyMsTotal: number;
   modelRoutes: string[];
   memoryUseCases: string[];
   memorySelectedEntriesTotal?: number;
@@ -259,6 +266,16 @@ function buildSessionTaskReviewSummary({
     advisorShadowDecisionCount: traces.filter(
       (trace) => trace.advisorTurnEnforcement === "shadow"
     ).length,
+    sentenceBufferMergedCount: traces.filter((trace) =>
+      trace.sentenceBufferDisposition?.startsWith("merged")
+    ).length,
+    sentenceBufferTimeoutCount: traces.filter(
+      (trace) => trace.sentenceBufferFlushReason === "timeout"
+    ).length,
+    sentenceBufferAddedLatencyMsTotal: traces.reduce(
+      (total, trace) => total + (trace.sentenceBufferAddedLatencyMs ?? 0),
+      0
+    ),
     modelRoutes: uniqueStrings(traces.map((trace) => trace.modelRoute)),
     memoryUseCases: uniqueStrings(
       traces.map((trace) => trace.memory?.useCase)
