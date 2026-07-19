@@ -2,7 +2,9 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   createAdvisorTriggerJob,
+  decideAdvisorPhaseMutation,
   decideAdvisorJobCommit,
+  decideAdvisorTaskMutation,
   formatAdvisorTriggerJobForTrace,
 } from "../src/lib/meeting/advisor-trigger-job.js";
 import type { AdvisorPromptContext } from "../src/lib/meeting/types.js";
@@ -106,5 +108,105 @@ test("emits the job identity needed to reconstruct ownership", () => {
       advisorJobCommitAuthorized: false,
       advisorJobCommitAuthorizationReason: "active-job-mismatch",
     }
+  );
+});
+
+test("explicit response actions preserve the active parent", () => {
+  assert.deepEqual(
+    decideAdvisorTaskMutation({
+      authority: "preserve-parent",
+      resolvedRelation: "unknown",
+      hasActiveParent: true,
+      hasActiveChild: false,
+    }),
+    {
+      relation: "followup-parent",
+      commitParent: true,
+      preserveParentType: true,
+      allowExplicitRetype: false,
+      reason: "explicit-action-preserve-parent",
+    }
+  );
+
+  assert.equal(
+    decideAdvisorTaskMutation({
+      authority: "preserve-parent",
+      resolvedRelation: "logistics",
+      hasActiveParent: true,
+      hasActiveChild: true,
+    }).relation,
+    "resume-parent"
+  );
+});
+
+test("explicit response actions cannot create a parent without one", () => {
+  const decision = decideAdvisorTaskMutation({
+    authority: "preserve-parent",
+    resolvedRelation: "new-parent",
+    hasActiveParent: false,
+    hasActiveChild: false,
+  });
+
+  assert.equal(decision.commitParent, false);
+  assert.equal(decision.allowExplicitRetype, false);
+  assert.equal(decision.reason, "explicit-action-without-parent");
+});
+
+test("manual correction remains the only explicit retype authority", () => {
+  const manual = decideAdvisorTaskMutation({
+    authority: "manual-correction",
+    resolvedRelation: "child-probe",
+    hasActiveParent: true,
+    hasActiveChild: false,
+  });
+  const inputEvidence = decideAdvisorTaskMutation({
+    authority: "input-evidence",
+    resolvedRelation: "new-parent",
+    hasActiveParent: true,
+    hasActiveChild: false,
+  });
+
+  assert.equal(manual.allowExplicitRetype, true);
+  assert.equal(manual.relation, "child-probe");
+  assert.equal(inputEvidence.allowExplicitRetype, false);
+  assert.equal(inputEvidence.relation, "new-parent");
+});
+
+test("regenerate and speakable preserve phase while manual next can advance", () => {
+  const automaticDecision = {
+    phase: "design_framing" as const,
+    flags: ["architecture" as const],
+    action: "advance" as const,
+    reason: "automatic-advance",
+  };
+  const manualDecision = {
+    phase: "design_framing" as const,
+    flags: ["whiteboard" as const],
+    action: "advance" as const,
+    reason: "manual-next",
+    source: "manual-next" as const,
+  };
+
+  assert.equal(
+    decideAdvisorPhaseMutation({
+      authority: "preserve-parent",
+      manualPhaseAdvance: false,
+      currentPhase: "requirement_clarification",
+      hasActiveChild: false,
+      automaticDecision,
+      manualDecision,
+    }).phase,
+    "requirement_clarification"
+  );
+  assert.equal(
+    decideAdvisorPhaseMutation({
+      authority: "preserve-parent",
+      manualPhaseAdvance: true,
+      currentPhase: "requirement_clarification",
+      hasActiveChild: false,
+      automaticDecision,
+      manualDecision,
+    }).phase,
+    "design_framing"
   );
 });

@@ -127,7 +127,9 @@ import {
   areCompatibleQuestionTypes,
   authorizeAdvisorExecution,
   createAdvisorTriggerJob,
+  decideAdvisorPhaseMutation,
   decideAdvisorJobCommit,
+  decideAdvisorTaskMutation,
   formatAdvisorTriggerJobForTrace,
   canQuestionTypeDecisionOverrideParent,
   decideAdvisorTurnIntent,
@@ -2555,6 +2557,7 @@ export function useMeetingAssistant() {
 
   const buildAdvisorJob = useCallback((options: RunAdvisorOptions) => {
     const contextState = contextManagerRef.current.getState();
+    const promptContext = contextManagerRef.current.buildAdvisorPromptContext();
     const mode = options.mode ?? "live";
     const source: AdvisorJobSource =
       options.advisorJobSource ??
@@ -2574,13 +2577,21 @@ export function useMeetingAssistant() {
         : source === "live-turn"
           ? "input-evidence"
           : "preserve-parent");
+    const traceId =
+      options.traceId ??
+      (source === "live-turn"
+        ? undefined
+        : traceStoreRef.current.startTrace(
+            promptContext.activeMeetingTask?.screen ? "screen" : "voice",
+            { source: `advisor-${source}` }
+          ).id);
 
     return createAdvisorTriggerJob({
       source,
       mode,
-      traceId: options.traceId,
+      traceId,
       triggerTurnId: options.triggerTurnId,
-      promptContext: contextManagerRef.current.buildAdvisorPromptContext(),
+      promptContext,
       turnIntentDecision: options.turnIntentDecision,
       sessionId: contextState.sessionId,
       snapshotTurnCount: contextState.transcriptTurns.length,
@@ -2683,12 +2694,51 @@ export function useMeetingAssistant() {
       promptContext,
       advisorMemoryQuery
     );
-    const advisorTaskSignals = options.manualQuestionTypeCorrection
+    const correctedAdvisorTaskSignals = options.manualQuestionTypeCorrection
       ? applyManualQuestionTypeCorrectionToAdvisorSignals(
           resolvedAdvisorTaskSignals,
           options.manualQuestionTypeCorrection
         )
       : resolvedAdvisorTaskSignals;
+    const advisorTaskMutationDecision = decideAdvisorTaskMutation({
+      authority: advisorJob.taskMutationAuthority,
+      resolvedRelation: correctedAdvisorTaskSignals.taskRelation,
+      hasActiveParent: hasAdvisorActiveTask(promptContext),
+      hasActiveChild: hasAdvisorActiveChild(promptContext),
+    });
+    const preservedParentQuestionType = getAdvisorActiveQuestionType(promptContext);
+    const advisorTaskSignals =
+      advisorTaskMutationDecision.preserveParentType &&
+      preservedParentQuestionType
+        ? {
+            ...correctedAdvisorTaskSignals,
+            questionType: preservedParentQuestionType,
+            questionTypeDecision: undefined,
+            askFrame:
+              getAdvisorActiveAskFrame(promptContext) ??
+              correctedAdvisorTaskSignals.askFrame,
+            topicDomain:
+              getAdvisorActiveTopicDomain(promptContext) ??
+              correctedAdvisorTaskSignals.topicDomain,
+            projectAnchor:
+              getAdvisorActiveProjectAnchor(promptContext) ??
+              correctedAdvisorTaskSignals.projectAnchor,
+            query: buildExplicitActionAdvisorTaskQuery(
+              promptContext,
+              options.currentSuggestion,
+              options.clarifyingFeedback
+            ),
+            taskRelation: advisorTaskMutationDecision.relation,
+            subtaskIntent: "unknown" as InterviewSubtaskIntent,
+            source: "explicit-action-preserve-parent",
+            reuseActivePlaybook: true,
+            openingRoute: undefined,
+            latestTurnTaxonomyBoundaryReason:
+              "active-parent-continuity" as const,
+            taxonomyFallbackSuppressed: true,
+            unknownTaskMutationBlocked: true,
+          }
+        : correctedAdvisorTaskSignals;
     const inferredTurnIntentDecision =
       advisorJob.turnIntentDecision ??
       (latestTurn?.speaker === "them"
@@ -2715,6 +2765,13 @@ export function useMeetingAssistant() {
       const executionMetadata = {
         ...intentMetadata,
         ...questionTypeTraceMetadata,
+        advisorTaskMutationDecision: advisorTaskMutationDecision.reason,
+        advisorTaskMutationCommitParent:
+          advisorTaskMutationDecision.commitParent,
+        advisorTaskMutationPreserveParentType:
+          advisorTaskMutationDecision.preserveParentType,
+        advisorTaskMutationAllowExplicitRetype:
+          advisorTaskMutationDecision.allowExplicitRetype,
         advisorExecutionAuthorized: executionAuthorization.authorized,
         advisorExecutionAuthorizationReason: executionAuthorization.reason,
         advisorExecutionBypassed: executionAuthorization.bypassed,
@@ -2844,25 +2901,38 @@ export function useMeetingAssistant() {
         ? getAdvisorActiveQuestionType(promptContext)
         : advisorQuestionType
     );
-    const playbookPhaseDecision = manualPhaseAdvance
-      ? decideManualNextPhaseTransition(promptContext.activeMeetingTask)
-      : decidePlaybookPhaseProgression({
-          questionType: advisorPhaseQuestionType,
-          playbookId: advisorPlaybook?.id,
-          currentPhase:
-            promptContext.activeMeetingTask?.parent.playbookPhase ??
-            promptContext.activeInterviewTask?.playbookPhase ??
-            advisorPlaybook?.phase,
-          phaseProgress:
-            promptContext.activeMeetingTask?.parent.phaseProgress ??
-            promptContext.activeInterviewTask?.phaseProgress,
-          latestTurnText: latestTurn?.text,
-          currentQuestion: advisorTaskSignals.query,
-          currentAnswer: options.currentSuggestion,
-          relation: advisorTaskSignals.taskRelation,
-          subtaskIntent: advisorTaskSignals.subtaskIntent,
-          askFrame: advisorAskFrame ?? getAdvisorActiveAskFrame(promptContext),
-        });
+    const preservedPlaybookPhase =
+      promptContext.activeMeetingTask?.parent.playbookPhase ??
+      promptContext.activeInterviewTask?.playbookPhase ??
+      advisorPlaybook?.phase ??
+      "follow_up";
+    const automaticPlaybookPhaseDecision = decidePlaybookPhaseProgression({
+      questionType: advisorPhaseQuestionType,
+      playbookId: advisorPlaybook?.id,
+      currentPhase:
+        promptContext.activeMeetingTask?.parent.playbookPhase ??
+        promptContext.activeInterviewTask?.playbookPhase ??
+        advisorPlaybook?.phase,
+      phaseProgress:
+        promptContext.activeMeetingTask?.parent.phaseProgress ??
+        promptContext.activeInterviewTask?.phaseProgress,
+      latestTurnText: latestTurn?.text,
+      currentQuestion: advisorTaskSignals.query,
+      currentAnswer: options.currentSuggestion,
+      relation: advisorTaskSignals.taskRelation,
+      subtaskIntent: advisorTaskSignals.subtaskIntent,
+      askFrame: advisorAskFrame ?? getAdvisorActiveAskFrame(promptContext),
+    });
+    const playbookPhaseDecision = decideAdvisorPhaseMutation({
+      authority: advisorJob.taskMutationAuthority,
+      manualPhaseAdvance,
+      currentPhase: preservedPlaybookPhase,
+      hasActiveChild: hasAdvisorActiveChild(promptContext),
+      automaticDecision: automaticPlaybookPhaseDecision,
+      manualDecision: decideManualNextPhaseTransition(
+        promptContext.activeMeetingTask
+      ),
+    });
     let manualPhaseAdvanceCommitted = false;
 
     if (
@@ -2900,7 +2970,15 @@ export function useMeetingAssistant() {
           activeScreenTask: contextState.activeScreenTask,
           activeInterviewTask: updatedInterviewTask,
         });
-        promptContext = contextManagerRef.current.buildAdvisorPromptContext();
+        const phaseUpdatedContext =
+          contextManagerRef.current.buildAdvisorPromptContext();
+        promptContext = {
+          ...promptContext,
+          activeScreenTask: phaseUpdatedContext.activeScreenTask,
+          activeInterviewTask: phaseUpdatedContext.activeInterviewTask,
+          activeMeetingTask: phaseUpdatedContext.activeMeetingTask,
+          interviewPlaybook: phaseUpdatedContext.interviewPlaybook,
+        };
         manualPhaseAdvanceCommitted = true;
       }
     }
@@ -3246,6 +3324,7 @@ export function useMeetingAssistant() {
         ? "screen"
         : "voice";
       const shouldCommitAdvisorParent =
+        advisorTaskMutationDecision.commitParent &&
         advisorTaskSignals.openingRoute?.commitParent !== false;
       const continuity = shouldCommitAdvisorParent
         ? updateInterviewTaskContinuityForAnswer({
@@ -6417,6 +6496,8 @@ export function useMeetingAssistant() {
           mode: correctedActiveTask.screen ? "screen-anchored" : "live",
           traceId: regenerationTrace.id,
           manualQuestionTypeCorrection: correction,
+          advisorJobSource: "manual-correction",
+          taskMutationAuthority: "manual-correction",
         });
         const regenerationStatus = traceStoreRef.current
           .getTraces()
@@ -6507,6 +6588,8 @@ export function useMeetingAssistant() {
       force: true,
       mode: "regenerate",
       currentSuggestion: currentSuggestionText,
+      advisorJobSource: "regenerate",
+      taskMutationAuthority: "preserve-parent",
     });
   }, [currentSuggestionText, flushPendingSentenceCompletion, runAdvisor]);
 
@@ -6536,6 +6619,8 @@ export function useMeetingAssistant() {
         mode: "response-action",
         responseAction,
         currentSuggestion: currentSuggestionText,
+        advisorJobSource: "response-action",
+        taskMutationAuthority: "preserve-parent",
       });
     },
     [
@@ -6565,6 +6650,8 @@ export function useMeetingAssistant() {
         force: true,
         mode: hasActiveScreenTask ? "screen-anchored" : "clarifying-answer",
         currentSuggestion: currentSuggestionText,
+        advisorJobSource: "clarifying-answer",
+        taskMutationAuthority: "preserve-parent",
         clarifyingFeedback: {
           question: trimmedQuestion,
           answer,
@@ -6752,6 +6839,8 @@ export function useMeetingAssistant() {
             : "live",
           currentSuggestion: currentSuggestionText,
           traceId: repairTraceId,
+          advisorJobSource: "response-action",
+          taskMutationAuthority: "preserve-parent",
         });
       }
     },
@@ -7309,6 +7398,33 @@ function buildAdvisorMemoryQuery(
     context.transcript ? `transcript:\n${context.transcript}` : undefined,
     context.screenContext ? `screen:\n${context.screenContext}` : undefined,
     currentSuggestion ? `current suggestion:\n${currentSuggestion}` : undefined,
+  ]
+    .filter(Boolean)
+    .join("\n\n")
+    .slice(-8000);
+}
+
+function buildExplicitActionAdvisorTaskQuery(
+  context: AdvisorPromptContext,
+  currentSuggestion?: string,
+  clarifyingFeedback?: ClarifyingQuestionFeedback
+) {
+  const selectedClarifyingAnswer =
+    clarifyingFeedback?.answer === "option"
+      ? clarifyingFeedback.answerValue ?? clarifyingFeedback.answerLabel
+      : clarifyingFeedback?.answer;
+
+  return [
+    formatAdvisorActiveTaskForQuery(context, "active parent") || undefined,
+    currentSuggestion?.trim()
+      ? `current answer:\n${currentSuggestion.trim()}`
+      : undefined,
+    clarifyingFeedback?.question
+      ? `clarifying question: ${clarifyingFeedback.question}`
+      : undefined,
+    selectedClarifyingAnswer
+      ? `selected clarification: ${selectedClarifyingAnswer}`
+      : undefined,
   ]
     .filter(Boolean)
     .join("\n\n")

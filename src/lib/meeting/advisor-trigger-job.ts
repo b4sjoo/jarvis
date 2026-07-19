@@ -1,8 +1,11 @@
 import type { AdvisorTurnIntentDecision } from "./advisor-turn-intent.js";
 import { createMeetingId } from "./context-manager.js";
+import type { PlaybookPhaseDecision } from "./playbook-phase.js";
 import type {
   AdvisorPromptContext,
   AdvisorRequestMode,
+  InterviewPlaybookPhase,
+  InterviewTaskRelation,
 } from "./types.js";
 
 export type AdvisorJobSource =
@@ -65,6 +68,18 @@ export interface AdvisorJobCommitDecision {
     | "session-mismatch";
 }
 
+export interface AdvisorTaskMutationDecision {
+  relation: InterviewTaskRelation;
+  commitParent: boolean;
+  preserveParentType: boolean;
+  allowExplicitRetype: boolean;
+  reason:
+    | "input-evidence-authority"
+    | "manual-correction-authority"
+    | "explicit-action-preserve-parent"
+    | "explicit-action-without-parent";
+}
+
 export function createAdvisorTriggerJob(
   input: CreateAdvisorTriggerJobInput
 ): AdvisorTriggerJob {
@@ -114,6 +129,76 @@ export function decideAdvisorJobCommit(input: {
   return {
     authorized: true,
     reason: "active-job-and-session-match",
+  };
+}
+
+export function decideAdvisorTaskMutation(input: {
+  authority: AdvisorTaskMutationAuthority;
+  resolvedRelation: InterviewTaskRelation;
+  hasActiveParent: boolean;
+  hasActiveChild: boolean;
+}): AdvisorTaskMutationDecision {
+  if (input.authority === "manual-correction") {
+    return {
+      relation: input.resolvedRelation,
+      commitParent: true,
+      preserveParentType: false,
+      allowExplicitRetype: true,
+      reason: "manual-correction-authority",
+    };
+  }
+
+  if (input.authority === "input-evidence") {
+    return {
+      relation: input.resolvedRelation,
+      commitParent: true,
+      preserveParentType: false,
+      allowExplicitRetype: false,
+      reason: "input-evidence-authority",
+    };
+  }
+
+  if (!input.hasActiveParent) {
+    return {
+      relation: input.resolvedRelation,
+      commitParent: false,
+      preserveParentType: true,
+      allowExplicitRetype: false,
+      reason: "explicit-action-without-parent",
+    };
+  }
+
+  return {
+    relation: input.hasActiveChild ? "resume-parent" : "followup-parent",
+    commitParent: true,
+    preserveParentType: true,
+    allowExplicitRetype: false,
+    reason: "explicit-action-preserve-parent",
+  };
+}
+
+export function decideAdvisorPhaseMutation(input: {
+  authority: AdvisorTaskMutationAuthority;
+  manualPhaseAdvance: boolean;
+  currentPhase: InterviewPlaybookPhase;
+  hasActiveChild: boolean;
+  automaticDecision: PlaybookPhaseDecision;
+  manualDecision: PlaybookPhaseDecision;
+}): PlaybookPhaseDecision {
+  if (input.manualPhaseAdvance) return input.manualDecision;
+  if (input.authority !== "preserve-parent") {
+    return input.automaticDecision;
+  }
+
+  return {
+    phase: input.currentPhase,
+    flags: [],
+    action: input.hasActiveChild ? "resume-parent" : "stay",
+    reason: "explicit-action-preserve-parent-phase",
+    source: "automatic",
+    targetArtifact: "answer",
+    guardStatus: "automatic",
+    phaseFrom: input.currentPhase,
   };
 }
 
