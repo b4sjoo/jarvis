@@ -3,6 +3,7 @@ export * from "./advisor-prompt";
 export * from "./advisor-turn-intent";
 export * from "./active-meeting-task";
 export * from "./clarifying-options";
+export * from "./coding-artifact";
 export * from "./context-manager";
 export * from "./eval-trace-metadata";
 export * from "./fact-anchor-guardrail";

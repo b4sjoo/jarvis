@@ -1,0 +1,133 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import {
+  resolveCodingArtifactDisplay,
+  updateCodingArtifactCache,
+} from "../src/lib/meeting/coding-artifact.js";
+import { buildMeetingAnswerDisplayModel } from "../src/lib/meeting/meeting-answer-display.js";
+
+test("preserves a coding artifact across child follow-ups under one parent", () => {
+  const codingSections = sections(
+    "Question: Implement a queue.\nAnswer: Use two stacks.\nCode:\n```python\nclass Queue: pass\n```\nComplexity: O(1) amortized"
+  );
+  const cache = updateCodingArtifactCache({
+    activeParentTaskId: "parent_coding",
+    activeTaskKind: "coding",
+    cache: null,
+    sections: codingSections,
+    sourceParentTaskId: "parent_coding",
+    sourceSuggestionId: "suggestion_1",
+    updatedAt: 100,
+  });
+  assert.ok(cache);
+
+  const followUpSections = sections(
+    "Question: Why is it amortized?\nAnswer: Each item moves at most twice."
+  );
+  const display = resolveCodingArtifactDisplay({
+    activeParentTaskId: "parent_coding",
+    activeTaskKind: "coding",
+    cache,
+    sections: followUpSections,
+    sourceParentTaskId: "parent_coding",
+  });
+
+  assert.equal(display.code, "class Queue: pass");
+  assert.equal(display.complexity, "O(1) amortized");
+  assert.equal(display.isCached, true);
+});
+
+test("drops the previous coding artifact at a new parent boundary", () => {
+  const oldCache = {
+    parentTaskId: "parent_coding",
+    code: "def solve(): pass",
+    complexity: "O(n)",
+    updatedAt: 100,
+    sourceSuggestionId: "suggestion_old",
+  };
+  const behavioralSections = sections(
+    "Question: Tell me about a conflict.\nAnswer: I aligned the team."
+  );
+
+  const nextCache = updateCodingArtifactCache({
+    activeParentTaskId: "parent_behavioral",
+    activeTaskKind: "behavioral",
+    cache: oldCache,
+    sections: behavioralSections,
+    sourceParentTaskId: "parent_behavioral",
+    sourceSuggestionId: "suggestion_new",
+    updatedAt: 200,
+  });
+  const display = resolveCodingArtifactDisplay({
+    activeParentTaskId: "parent_behavioral",
+    activeTaskKind: "behavioral",
+    cache: oldCache,
+    sections: behavioralSections,
+    sourceParentTaskId: "parent_behavioral",
+  });
+
+  assert.equal(nextCache, null);
+  assert.deepEqual(display, { code: "", complexity: "", isCached: false });
+});
+
+test("rejects a stale completed suggestion from the previous parent", () => {
+  const oldCache = {
+    parentTaskId: "parent_coding",
+    code: "def old(): pass",
+    complexity: "O(1)",
+    updatedAt: 100,
+  };
+  const staleSections = sections(
+    "Question: Old coding task.\nAnswer: Old answer.\nCode:\n```python\ndef stale(): pass\n```\nComplexity: O(n)"
+  );
+
+  const nextCache = updateCodingArtifactCache({
+    activeParentTaskId: "parent_system_design",
+    activeTaskKind: "general-system-design",
+    cache: oldCache,
+    sections: staleSections,
+    sourceParentTaskId: "parent_coding",
+    sourceSuggestionId: "suggestion_old",
+    updatedAt: 200,
+  });
+  const display = resolveCodingArtifactDisplay({
+    activeParentTaskId: "parent_system_design",
+    activeTaskKind: "general-system-design",
+    cache: oldCache,
+    sections: staleSections,
+    sourceParentTaskId: "parent_coding",
+  });
+
+  assert.equal(nextCache, null);
+  assert.deepEqual(display, { code: "", complexity: "", isCached: false });
+});
+
+test("updates complexity without replacing code for an explicit child improvement", () => {
+  const cache = {
+    parentTaskId: "parent_coding",
+    code: "def solve(): pass",
+    complexity: "O(n^2)",
+    updatedAt: 100,
+  };
+  const improvementSections = sections(
+    "Question: Can you optimize the complexity?\nAnswer: Use a hash map.\nComplexity: O(n) time and O(n) space"
+  );
+
+  const nextCache = updateCodingArtifactCache({
+    activeParentTaskId: "parent_coding",
+    activeTaskKind: "coding",
+    cache,
+    sections: improvementSections,
+    sourceParentTaskId: "parent_coding",
+    sourceSuggestionId: "suggestion_2",
+    updatedAt: 200,
+  });
+
+  assert.ok(nextCache);
+  assert.equal(nextCache.code, "def solve(): pass");
+  assert.equal(nextCache.complexity, "O(n) time and O(n) space");
+});
+
+function sections(content: string) {
+  return buildMeetingAnswerDisplayModel({ content });
+}

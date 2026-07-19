@@ -31,6 +31,7 @@ import type {
   MeetingAudioProfile,
   MeetingCodingModelSettings,
   MeetingAnswerDisplayModel,
+  CodingArtifactCache,
   MeetingResponseActionMode,
   MeetingResponseConfig,
   MeetingResponseLanguage,
@@ -62,9 +63,11 @@ import {
   normalizeCanonicalQuestionType,
   overlayMeetingAnswerArtifacts,
   resolveMeetingAnswerProfile,
+  resolveCodingArtifactDisplay,
   resolveTraceMemoryEvaluationSnapshot,
   stripOuterCodeFence,
   summarizeMeetingTraces,
+  updateCodingArtifactCache,
 } from "@/lib/meeting";
 import { extractVariables, safeLocalStorage } from "@/lib";
 import { cn } from "@/lib/utils";
@@ -305,14 +308,6 @@ type MeetingAssistantProps = {
   onFocusModeActiveChange?: (active: boolean) => void;
 };
 
-type CodingArtifactCache = {
-  taskId: string;
-  code: string;
-  complexity: string;
-  updatedAt: number;
-  sourceSuggestionId?: string;
-};
-
 type ClarifyingSelectionState = {
   questionKey: string;
   label: string;
@@ -400,6 +395,11 @@ export const MeetingAssistant = ({
   const activeTaskKind = getActiveMeetingParentQuestionType(
     meeting.activeMeetingTask
   );
+  const completedSuggestionParentTaskId =
+    meeting.latestSuggestion?.parentTaskId ?? meeting.latestSuggestion?.taskId;
+  const displayedSuggestionParentTaskId = meeting.partialSuggestion
+    ? activeParentTaskId
+    : completedSuggestionParentTaskId;
   useEffect(() => {
     if (!activeParentTaskId) {
       setCodingArtifactCache(null);
@@ -409,42 +409,20 @@ export const MeetingAssistant = ({
     if (meeting.partialSuggestion) return;
 
     setCodingArtifactCache((previous) => {
-      const artifactPatch = readCodingArtifactPatch({
+      return updateCodingArtifactCache({
+        activeParentTaskId,
         activeTaskKind,
-        hasExistingCache: Boolean(previous),
+        cache: previous,
         sections: suggestionSections,
-      });
-
-      if (!artifactPatch) return previous;
-
-      const nextCode = artifactPatch.code || previous?.code || "";
-      const nextComplexity =
-        artifactPatch.complexity || previous?.complexity || "";
-
-      if (!nextCode && !nextComplexity) return null;
-
-      const sourceSuggestionId = meeting.latestSuggestion?.id;
-      if (
-        previous &&
-        previous.taskId === activeParentTaskId &&
-        previous.code === nextCode &&
-        previous.complexity === nextComplexity &&
-        previous.sourceSuggestionId === sourceSuggestionId
-      ) {
-        return previous;
-      }
-
-      return {
-        taskId: activeParentTaskId,
-        code: nextCode,
-        complexity: nextComplexity,
+        sourceParentTaskId: completedSuggestionParentTaskId,
+        sourceSuggestionId: meeting.latestSuggestion?.id,
         updatedAt: Date.now(),
-        sourceSuggestionId,
-      };
+      });
     });
   }, [
     activeParentTaskId,
     activeTaskKind,
+    completedSuggestionParentTaskId,
     meeting.latestSuggestion?.id,
     meeting.partialSuggestion,
     suggestionSections.primaryAnswer,
@@ -455,15 +433,17 @@ export const MeetingAssistant = ({
   ]);
   const codingArtifactDisplay = useMemo(() => {
     return resolveCodingArtifactDisplay({
+      activeParentTaskId,
       activeTaskKind,
       cache: codingArtifactCache,
-      taskId: activeParentTaskId,
       sections: suggestionSections,
+      sourceParentTaskId: displayedSuggestionParentTaskId,
     });
   }, [
     activeParentTaskId,
     activeTaskKind,
     codingArtifactCache,
+    displayedSuggestionParentTaskId,
     suggestionSections.primaryAnswer,
     suggestionSections.approach,
     suggestionSections.code,
@@ -4543,68 +4523,6 @@ function truncateInlineText(value: string, maxChars: number) {
   return `${normalized.slice(0, maxChars).trimEnd()}...`;
 }
 
-function readCodingArtifactPatch({
-  activeTaskKind,
-  hasExistingCache,
-  sections,
-}: {
-  activeTaskKind?: string;
-  hasExistingCache: boolean;
-  sections: MeetingAnswerDisplayModel;
-}) {
-  const code = normalizeCodingArtifactText(sections.code);
-  const complexity = normalizeCodingArtifactText(sections.complexity);
-  if (!code && !complexity) return undefined;
-
-  if (code || activeTaskKind === "coding") {
-    return { code, complexity };
-  }
-
-  if (hasExistingCache && complexity && isCodingArtifactUpdate(sections)) {
-    return { code, complexity };
-  }
-
-  return undefined;
-}
-
-function resolveCodingArtifactDisplay({
-  activeTaskKind,
-  cache,
-  taskId,
-  sections,
-}: {
-  activeTaskKind?: string;
-  cache: CodingArtifactCache | null;
-  taskId: string;
-  sections: MeetingAnswerDisplayModel;
-}) {
-  if (!taskId) return { code: "", complexity: "", isCached: false };
-
-  const artifactPatch = readCodingArtifactPatch({
-    activeTaskKind,
-    hasExistingCache: Boolean(cache),
-    sections,
-  });
-
-  if (artifactPatch) {
-    return {
-      code: artifactPatch.code || cache?.code || "",
-      complexity: artifactPatch.complexity || cache?.complexity || "",
-      isCached: false,
-    };
-  }
-
-  if (cache) {
-    return {
-      code: cache.code,
-      complexity: cache.complexity,
-      isCached: true,
-    };
-  }
-
-  return { code: "", complexity: "", isCached: false };
-}
-
 function resolveWhiteboardArtifactDisplay({
   activeTaskKind,
   artifact,
@@ -4641,23 +4559,6 @@ function isWhiteboardDisplayTask(activeTaskKind: string | undefined) {
   return (
     activeTaskKind === "general-system-design" ||
     activeTaskKind === "ai-ml-system-design"
-  );
-}
-
-function normalizeCodingArtifactText(value: string | undefined) {
-  const normalized = stripOuterCodeFence(value ?? "").trim();
-  return normalized === "-" ? "" : normalized;
-}
-
-function isCodingArtifactUpdate(sections: MeetingAnswerDisplayModel) {
-  return /\b(time complexity|space complexity|complexity|implementation|implement|algorithm|code|solution|optimi[sz]e)\b|o\s*\(/i.test(
-    [
-      sections.focusedQuestion,
-      sections.primaryAnswer,
-      sections.approach,
-      sections.complexity,
-      sections.parsedAnswer.rawContent,
-    ].join("\n")
   );
 }
 
