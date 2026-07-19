@@ -49,10 +49,112 @@ export interface QuestionTypeInferenceDecision {
   scores: Partial<Record<CanonicalQuestionType, number>>;
 }
 
+export type TaskTaxonomyAuthoritySource =
+  | "accepted-transcript"
+  | "screen-preflight"
+  | "screen-source-fallback"
+  | "interview-brief"
+  | "manual-correction"
+  | "generated-answer";
+
+export interface TaskTaxonomyAuthorityCandidate {
+  source: TaskTaxonomyAuthoritySource;
+  questionType?: QuestionTypeInput;
+}
+
+export type TaskTaxonomyAuthorityDecisionSource =
+  | Exclude<TaskTaxonomyAuthoritySource, "generated-answer">
+  | "existing-task"
+  | "none";
+
+export type TaskTaxonomyAuthorityReason =
+  | "authoritative-source-selected"
+  | "existing-task-preserved"
+  | "generated-answer-blocked"
+  | "no-authoritative-evidence";
+
+export interface TaskTaxonomyAuthorityDecision {
+  candidateType?: CanonicalQuestionType;
+  effectiveQuestionType: CanonicalQuestionType;
+  authoritySource: TaskTaxonomyAuthorityDecisionSource;
+  mutationAuthorized: boolean;
+  mutationApplied: boolean;
+  reason: TaskTaxonomyAuthorityReason;
+  generatedAnswerExcluded: boolean;
+  blockedGeneratedAnswerType?: CanonicalQuestionType;
+}
+
 export const QUESTION_TYPE_INFERENCE_MIN_CONFIDENCE = 0.65;
 export const QUESTION_TYPE_INFERENCE_MIN_MARGIN = 0.2;
 export const QUESTION_TYPE_PARENT_OVERRIDE_CONFIDENCE = 0.8;
 export const QUESTION_TYPE_PARENT_OVERRIDE_MARGIN = 0.25;
+
+export function resolveTaskTaxonomyAuthority({
+  candidates,
+  existingQuestionType,
+}: {
+  candidates: TaskTaxonomyAuthorityCandidate[];
+  existingQuestionType?: QuestionTypeInput;
+}): TaskTaxonomyAuthorityDecision {
+  const generatedAnswerCandidate = candidates.find(
+    (candidate) => candidate.source === "generated-answer"
+  );
+  const normalizedGeneratedAnswerType = normalizeCanonicalQuestionType(
+    generatedAnswerCandidate?.questionType
+  );
+  const blockedGeneratedAnswerType =
+    normalizedGeneratedAnswerType === "unknown"
+      ? undefined
+      : normalizedGeneratedAnswerType;
+  const generatedAnswerExcluded = Boolean(generatedAnswerCandidate);
+
+  for (const candidate of candidates) {
+    const questionType = normalizeCanonicalQuestionType(candidate.questionType);
+
+    if (candidate.source === "generated-answer") {
+      continue;
+    }
+
+    if (!questionType || questionType === "unknown") continue;
+
+    const existingType = normalizeCanonicalQuestionType(existingQuestionType);
+    return {
+      candidateType: questionType,
+      effectiveQuestionType: questionType,
+      authoritySource: candidate.source,
+      mutationAuthorized: true,
+      mutationApplied: existingType !== questionType,
+      reason: "authoritative-source-selected",
+      generatedAnswerExcluded,
+      blockedGeneratedAnswerType,
+    };
+  }
+
+  const existingType = normalizeCanonicalQuestionType(existingQuestionType);
+  if (existingType && existingType !== "unknown") {
+    return {
+      effectiveQuestionType: existingType,
+      authoritySource: "existing-task",
+      mutationAuthorized: false,
+      mutationApplied: false,
+      reason: "existing-task-preserved",
+      generatedAnswerExcluded,
+      blockedGeneratedAnswerType,
+    };
+  }
+
+  return {
+    effectiveQuestionType: "unknown",
+    authoritySource: "none",
+    mutationAuthorized: false,
+    mutationApplied: false,
+    reason: generatedAnswerExcluded
+      ? "generated-answer-blocked"
+      : "no-authoritative-evidence",
+    generatedAnswerExcluded,
+    blockedGeneratedAnswerType,
+  };
+}
 
 export function canQuestionTypeDecisionOverrideParent(
   decision: QuestionTypeInferenceDecision | undefined

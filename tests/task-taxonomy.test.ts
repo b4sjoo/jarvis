@@ -19,12 +19,94 @@ import {
   normalizeQuestionTypeAlias,
   readInterviewBriefType,
   readSingleConcreteInterviewTypeOverride,
+  resolveTaskTaxonomyAuthority,
   toHumanEvalQuestionType,
   toInterviewBriefType,
   toMemoryQuestionType,
   toMemoryUseCaseForQuestionType,
   toScreenTaskKind,
 } from "../src/lib/meeting/task-taxonomy.js";
+
+test("accepts ordered source evidence and rejects generated-answer taxonomy", () => {
+  assert.deepEqual(
+    resolveTaskTaxonomyAuthority({
+      candidates: [
+        { source: "screen-preflight", questionType: "unknown" },
+        {
+          source: "screen-source-fallback",
+          questionType: "general-system-design",
+        },
+        { source: "generated-answer", questionType: "coding" },
+      ],
+    }),
+    {
+      candidateType: "general-system-design",
+      effectiveQuestionType: "general-system-design",
+      authoritySource: "screen-source-fallback",
+      mutationAuthorized: true,
+      mutationApplied: true,
+      reason: "authoritative-source-selected",
+      generatedAnswerExcluded: true,
+      blockedGeneratedAnswerType: "coding",
+    }
+  );
+});
+
+test("preserves an existing task when generated output proposes a retype", () => {
+  assert.deepEqual(
+    resolveTaskTaxonomyAuthority({
+      candidates: [
+        { source: "generated-answer", questionType: "coding" },
+      ],
+      existingQuestionType: "project-deep-dive",
+    }),
+    {
+      effectiveQuestionType: "project-deep-dive",
+      authoritySource: "existing-task",
+      mutationAuthorized: false,
+      mutationApplied: false,
+      reason: "existing-task-preserved",
+      generatedAnswerExcluded: true,
+      blockedGeneratedAnswerType: "coding",
+    }
+  );
+});
+
+test("keeps unknown when generated output is the only classification signal", () => {
+  assert.deepEqual(
+    resolveTaskTaxonomyAuthority({
+      candidates: [
+        { source: "generated-answer", questionType: "coding" },
+      ],
+    }),
+    {
+      effectiveQuestionType: "unknown",
+      authoritySource: "none",
+      mutationAuthorized: false,
+      mutationApplied: false,
+      reason: "generated-answer-blocked",
+      generatedAnswerExcluded: true,
+      blockedGeneratedAnswerType: "coding",
+    }
+  );
+});
+
+test("keeps manual correction authoritative over generated answer content", () => {
+  const decision = resolveTaskTaxonomyAuthority({
+    candidates: [
+      { source: "generated-answer", questionType: "coding" },
+      { source: "manual-correction", questionType: "behavioral" },
+    ],
+    existingQuestionType: "project-deep-dive",
+  });
+
+  assert.equal(decision.effectiveQuestionType, "behavioral");
+  assert.equal(decision.authoritySource, "manual-correction");
+  assert.equal(decision.mutationAuthorized, true);
+  assert.equal(decision.mutationApplied, true);
+  assert.equal(decision.generatedAnswerExcluded, true);
+  assert.equal(decision.blockedGeneratedAnswerType, "coding");
+});
 
 test("normalizes legacy system-design alias to the canonical general-system-design type", () => {
   assert.equal(
