@@ -24,6 +24,9 @@ import {
   AdvisorPromptContext,
   AdvisorSuggestion,
   AdvisorRequestMode,
+  AdvisorTriggerJob,
+  AdvisorJobSource,
+  AdvisorTaskMutationAuthority,
   AdvisorTurnIntentDecision,
   ActiveMeetingTask,
   ActiveInterviewParent,
@@ -123,6 +126,9 @@ import {
   SessionRecordingManager,
   areCompatibleQuestionTypes,
   authorizeAdvisorExecution,
+  createAdvisorTriggerJob,
+  decideAdvisorJobCommit,
+  formatAdvisorTriggerJobForTrace,
   canQuestionTypeDecisionOverrideParent,
   decideAdvisorTurnIntent,
   decideSentenceCompletion,
@@ -904,6 +910,9 @@ interface RunAdvisorOptions {
   manualQuestionTypeCorrection?: ManualQuestionTypeCorrection;
   turnIntentDecision?: AdvisorTurnIntentDecision;
   triggerTurnId?: string;
+  advisorJob?: AdvisorTriggerJob;
+  advisorJobSource?: AdvisorJobSource;
+  taskMutationAuthority?: AdvisorTaskMutationAuthority;
 }
 
 interface CaptureScreenContextOptions {
@@ -1048,6 +1057,7 @@ export function useMeetingAssistant() {
   const activeRef = useRef(false);
   const latestScreenHashRef = useRef<string | undefined>(undefined);
   const advisorDebounceTimerRef = useRef<number | null>(null);
+  const activeAdvisorJobRef = useRef<AdvisorTriggerJob | null>(null);
   const screenAnalysisAbortRef = useRef<AbortController | null>(null);
   const screenCaptureInFlightRef = useRef(false);
   const manualQuestionTypeCorrectionInFlightRef = useRef(false);
@@ -1065,6 +1075,115 @@ export function useMeetingAssistant() {
   const speechDetectedHandlerRef = useRef<
     ((base64Audio: string) => void) | undefined
   >(undefined);
+
+  const finishRunningAdvisorJobTrace = useCallback(
+    (
+      job: AdvisorTriggerJob,
+      status: "success" | "error" | "cancelled",
+      metadata: Record<string, unknown>,
+      error?: unknown
+    ) => {
+      if (!job.traceId) return;
+
+      const trace = traceStoreRef.current
+        .getTraces()
+        .find((candidate) => candidate.id === job.traceId);
+      if (!trace || trace.status !== "running") return;
+
+      traceStoreRef.current.updateMetadata(job.traceId, metadata);
+      for (const step of trace.steps) {
+        if (step.status === "running") {
+          traceStoreRef.current.finishStep(
+            job.traceId,
+            step.id,
+            status,
+            metadata,
+            error
+          );
+        }
+      }
+      traceStoreRef.current.finishTrace(job.traceId, status, error);
+    },
+    []
+  );
+
+  const cancelActiveAdvisorJob = useCallback(
+    (
+      reason: string,
+      outcome:
+        | "replaced-before-execution"
+        | "cancelled-by-new-job"
+        | "cancelled-by-runtime-boundary" =
+        "cancelled-by-runtime-boundary"
+    ) => {
+      const hadPendingTimer = advisorDebounceTimerRef.current !== null;
+      if (advisorDebounceTimerRef.current !== null) {
+        window.clearTimeout(advisorDebounceTimerRef.current);
+        advisorDebounceTimerRef.current = null;
+      }
+
+      const job = activeAdvisorJobRef.current;
+      activeAdvisorJobRef.current = null;
+      advisorEngineRef.current.cancelCurrentRequest();
+      if (!job) return;
+
+      const resolvedOutcome = hadPendingTimer
+        ? "replaced-before-execution"
+        : outcome;
+      finishRunningAdvisorJobTrace(
+        job,
+        "cancelled",
+        formatAdvisorTriggerJobForTrace(job, resolvedOutcome, {
+          cancellationReason: reason,
+          commitAuthorized: false,
+          commitAuthorizationReason: reason,
+        }),
+        reason
+      );
+    },
+    [finishRunningAdvisorJobTrace]
+  );
+
+  const activateAdvisorJob = useCallback(
+    (job: AdvisorTriggerJob) => {
+      if (activeAdvisorJobRef.current?.id !== job.id) {
+        cancelActiveAdvisorJob(
+          `replaced-by-${job.id}`,
+          "cancelled-by-new-job"
+        );
+      }
+      activeAdvisorJobRef.current = job;
+      if (job.traceId) {
+        traceStoreRef.current.updateMetadata(
+          job.traceId,
+          formatAdvisorTriggerJobForTrace(job, "scheduled")
+        );
+      }
+    },
+    [cancelActiveAdvisorJob]
+  );
+
+  const releaseAdvisorJob = useCallback(
+    (
+      job: AdvisorTriggerJob,
+      outcome: "committed" | "suppressed" | "error",
+      extra: {
+        commitAuthorized?: boolean;
+        commitAuthorizationReason?: string;
+      } = {}
+    ) => {
+      if (job.traceId) {
+        traceStoreRef.current.updateMetadata(
+          job.traceId,
+          formatAdvisorTriggerJobForTrace(job, outcome, extra)
+        );
+      }
+      if (activeAdvisorJobRef.current?.id === job.id) {
+        activeAdvisorJobRef.current = null;
+      }
+    },
+    []
+  );
 
   const clearPendingConfirmationForRuntimeReset = useCallback((reason: string) => {
     const pending = pendingConfirmationRef.current;
@@ -1161,11 +1280,7 @@ export function useMeetingAssistant() {
           pendingSentenceCompletionRef.current
       );
 
-      if (advisorDebounceTimerRef.current !== null) {
-        window.clearTimeout(advisorDebounceTimerRef.current);
-        advisorDebounceTimerRef.current = null;
-      }
-      advisorEngineRef.current.cancelCurrentRequest();
+      cancelActiveAdvisorJob(reason);
       screenAnalysisAbortRef.current?.abort();
       screenAnalysisAbortRef.current = null;
       screenCaptureInFlightRef.current = false;
@@ -1246,6 +1361,7 @@ export function useMeetingAssistant() {
       };
     },
     [
+      cancelActiveAdvisorJob,
       clearPendingConfirmationForRuntimeReset,
       clearPendingSentenceCompletionForRuntimeReset,
     ]
@@ -1472,13 +1588,6 @@ export function useMeetingAssistant() {
     },
     [startSessionRecording, stopSessionRecording]
   );
-
-  const clearAdvisorDebounce = useCallback(() => {
-    if (advisorDebounceTimerRef.current !== null) {
-      window.clearTimeout(advisorDebounceTimerRef.current);
-      advisorDebounceTimerRef.current = null;
-    }
-  }, []);
 
   const clearPendingConfirmation = useCallback((reason: string) => {
     const pending = pendingConfirmationRef.current;
@@ -2389,22 +2498,20 @@ export function useMeetingAssistant() {
 
   const clearActiveScreenTask = useCallback(() => {
     clearPendingSentenceCompletionForRuntimeReset("active-task-cleared");
-    clearAdvisorDebounce();
-    advisorEngineRef.current.cancelCurrentRequest();
+    cancelActiveAdvisorJob("active-task-cleared");
     screenAnalysisAbortRef.current?.abort();
     screenAnalysisAbortRef.current = null;
     contextManagerRef.current.clearActiveMeetingTask();
     setState(clearActiveScreenTaskState);
   }, [
-    clearAdvisorDebounce,
+    cancelActiveAdvisorJob,
     clearPendingSentenceCompletionForRuntimeReset,
   ]);
 
   const stop = useCallback(async () => {
     activeRef.current = false;
     invalidateAudioProcessingSession();
-    clearAdvisorDebounce();
-    advisorEngineRef.current.cancelCurrentRequest();
+    cancelActiveAdvisorJob("meeting-assistant-stopped");
     screenAnalysisAbortRef.current?.abort();
     screenAnalysisAbortRef.current = null;
     contextManagerRef.current.clearActiveMeetingTask();
@@ -2441,25 +2548,105 @@ export function useMeetingAssistant() {
       audioStatus,
     }));
   }, [
-    clearAdvisorDebounce,
+    cancelActiveAdvisorJob,
     invalidateAudioProcessingSession,
     stopSessionRecording,
   ]);
 
-  const runAdvisor = useCallback(async (options: RunAdvisorOptions = {}) => {
+  const buildAdvisorJob = useCallback((options: RunAdvisorOptions) => {
+    const contextState = contextManagerRef.current.getState();
     const mode = options.mode ?? "live";
+    const source: AdvisorJobSource =
+      options.advisorJobSource ??
+      (options.manualQuestionTypeCorrection
+        ? "manual-correction"
+        : options.clarifyingFeedback
+          ? "clarifying-answer"
+          : options.responseAction
+            ? "response-action"
+            : mode === "regenerate"
+              ? "regenerate"
+              : "live-turn");
+    const taskMutationAuthority: AdvisorTaskMutationAuthority =
+      options.taskMutationAuthority ??
+      (source === "manual-correction"
+        ? "manual-correction"
+        : source === "live-turn"
+          ? "input-evidence"
+          : "preserve-parent");
+
+    return createAdvisorTriggerJob({
+      source,
+      mode,
+      traceId: options.traceId,
+      triggerTurnId: options.triggerTurnId,
+      promptContext: contextManagerRef.current.buildAdvisorPromptContext(),
+      turnIntentDecision: options.turnIntentDecision,
+      sessionId: contextState.sessionId,
+      snapshotTurnCount: contextState.transcriptTurns.length,
+      taskMutationAuthority,
+    });
+  }, []);
+
+  const runAdvisor = useCallback(async (options: RunAdvisorOptions = {}) => {
+    const advisorJob = options.advisorJob ?? buildAdvisorJob(options);
+    if (!options.advisorJob) {
+      activateAdvisorJob(advisorJob);
+    }
+    if (activeAdvisorJobRef.current?.id !== advisorJob.id) return;
+
+    const mode = advisorJob.mode;
     const force = options.force ?? false;
-    const traceId = options.traceId;
+    const traceId = advisorJob.traceId;
     let advisorStepId: string | undefined;
+    const readCommitDecision = () =>
+      decideAdvisorJobCommit({
+        job: advisorJob,
+        activeJobId: activeAdvisorJobRef.current?.id,
+        currentSessionId: contextManagerRef.current.getState().sessionId,
+      });
+    const rejectStaleCommit = () => {
+      const decision = readCommitDecision();
+      if (decision.authorized) return false;
+
+      finishRunningAdvisorJobTrace(
+        advisorJob,
+        "cancelled",
+        formatAdvisorTriggerJobForTrace(
+          advisorJob,
+          "stale-commit-rejected",
+          {
+            cancellationReason: decision.reason,
+            commitAuthorized: false,
+            commitAuthorizationReason: decision.reason,
+          }
+        ),
+        decision.reason
+      );
+      return true;
+    };
+
+    if (traceId) {
+      traceStoreRef.current.updateMetadata(
+        traceId,
+        formatAdvisorTriggerJobForTrace(advisorJob, "executing")
+      );
+    }
+
+    if (rejectStaleCommit()) return;
 
     if (!activeRef.current && !force) {
+      releaseAdvisorJob(advisorJob, "suppressed", {
+        commitAuthorized: false,
+        commitAuthorizationReason: "meeting-assistant-inactive",
+      });
       if (traceId) {
         traceStoreRef.current.finishTrace(traceId, "cancelled");
       }
       return;
     }
 
-    let promptContext = contextManagerRef.current.buildAdvisorPromptContext();
+    let promptContext = advisorJob.promptContextSnapshot;
     const latestTurn = promptContext.latestTurn;
     const activeMeetingTaskId = getAdvisorActiveTaskId(promptContext);
     const hasContext = Boolean(
@@ -2469,6 +2656,10 @@ export function useMeetingAssistant() {
     );
 
     if (force && !hasContext && !options.currentSuggestion?.trim()) {
+      releaseAdvisorJob(advisorJob, "error", {
+        commitAuthorized: false,
+        commitAuthorizationReason: "missing-meeting-context",
+      });
       if (traceId) {
         traceStoreRef.current.finishTrace(traceId, "error", NO_MEETING_CONTEXT_MESSAGE);
       }
@@ -2499,7 +2690,7 @@ export function useMeetingAssistant() {
         )
       : resolvedAdvisorTaskSignals;
     const inferredTurnIntentDecision =
-      options.turnIntentDecision ??
+      advisorJob.turnIntentDecision ??
       (latestTurn?.speaker === "them"
         ? evaluateThemTurnForAdvisor(latestTurn, {
             hasActiveTask: hasAdvisorActiveTask(promptContext),
@@ -2527,7 +2718,7 @@ export function useMeetingAssistant() {
         advisorExecutionAuthorized: executionAuthorization.authorized,
         advisorExecutionAuthorizationReason: executionAuthorization.reason,
         advisorExecutionBypassed: executionAuthorization.bypassed,
-        advisorTriggerTurnId: options.triggerTurnId,
+        advisorTriggerTurnId: advisorJob.triggerTurnId,
         memoryRetrievalSuppressedReason: executionAuthorization.authorized
           ? undefined
           : executionAuthorization.reason,
@@ -2545,6 +2736,10 @@ export function useMeetingAssistant() {
     }
 
     if (!executionAuthorization.authorized) {
+      releaseAdvisorJob(advisorJob, "suppressed", {
+        commitAuthorized: false,
+        commitAuthorizationReason: executionAuthorization.reason,
+      });
       if (traceId) {
         traceStoreRef.current.finishTrace(traceId, "success");
       }
@@ -2560,6 +2755,10 @@ export function useMeetingAssistant() {
       !force &&
       !advisorEngineRef.current.shouldRequestSuggestion(latestTurn)
     ) {
+      releaseAdvisorJob(advisorJob, "suppressed", {
+        commitAuthorized: false,
+        commitAuthorizationReason: "turn-did-not-require-suggestion",
+      });
       if (traceId) {
         const skippedStepId = traceStoreRef.current.startStep(
           traceId,
@@ -2573,6 +2772,10 @@ export function useMeetingAssistant() {
     }
 
     if (!aiProvider) {
+      releaseAdvisorJob(advisorJob, "error", {
+        commitAuthorized: false,
+        commitAuthorizationReason: "missing-ai-provider",
+      });
       if (traceId) {
         traceStoreRef.current.finishTrace(traceId, "error", MISSING_AI_MESSAGE);
       }
@@ -2791,6 +2994,7 @@ export function useMeetingAssistant() {
           advisorTaskSignals.taskRelation !== "unknown"
       ),
     });
+    if (rejectStaleCommit()) return;
     const advisorPersonalEvidenceDecision = detectPersonalEvidenceRequirement({
       questionText: advisorTaskSignals.query,
       questionType: advisorQuestionType,
@@ -3001,6 +3205,7 @@ export function useMeetingAssistant() {
             }
           : undefined,
       })) {
+        if (rejectStaleCommit()) return;
         finalContent = event.accumulated;
         setState((previous) => ({
           ...previous,
@@ -3014,6 +3219,8 @@ export function useMeetingAssistant() {
           options.currentSuggestion
         );
       }
+
+      if (rejectStaleCommit()) return;
 
       const parsedMeetingAnswer = parseMeetingAnswer(finalContent, {
         expectedProfile: advisorAnswerProfile,
@@ -3031,11 +3238,11 @@ export function useMeetingAssistant() {
 
       let contextState = contextManagerRef.current.getState();
       const existingInterviewTask =
-        contextState.activeInterviewTask ??
-        (contextState.activeMeetingTask?.screen && contextState.activeScreenTask
-          ? buildInterviewParentFromScreenTask(contextState.activeScreenTask)
+        promptContext.activeInterviewTask ??
+        (promptContext.activeMeetingTask?.screen && promptContext.activeScreenTask
+          ? buildInterviewParentFromScreenTask(promptContext.activeScreenTask)
           : undefined);
-      const advisorEvidenceSource = contextState.activeMeetingTask?.screen
+      const advisorEvidenceSource = promptContext.activeMeetingTask?.screen
         ? "screen"
         : "voice";
       const shouldCommitAdvisorParent =
@@ -3052,7 +3259,7 @@ export function useMeetingAssistant() {
             relation: advisorTaskSignals.taskRelation,
             subtaskIntent: advisorTaskSignals.subtaskIntent,
             question:
-              contextState.activeScreenTask?.question ??
+              promptContext.activeScreenTask?.question ??
               latestTurn?.text ??
               extractScreenTaskQuestion(finalContent),
             finalContent,
@@ -3060,7 +3267,7 @@ export function useMeetingAssistant() {
             playbook: advisorRuntimePlaybook,
             phaseDecision: playbookPhaseDecision,
             latestTurn,
-            observationId: contextState.activeScreenTask?.basedOnObservationId,
+            observationId: promptContext.activeScreenTask?.basedOnObservationId,
             traceId,
             selectedOverlayIds: extractSelectedOverlayIdsFromMemory(memoryContext),
             whiteboardUpdateSource: manualPhaseAdvance
@@ -3100,7 +3307,7 @@ export function useMeetingAssistant() {
       if (traceId) {
         traceStoreRef.current.updateMetadata(traceId, answerArtifactMetadata);
       }
-      let nextActiveScreenTask = contextState.activeScreenTask;
+      let nextActiveScreenTask = promptContext.activeScreenTask;
 
       if (
         mode === "screen-anchored" &&
@@ -3205,6 +3412,11 @@ export function useMeetingAssistant() {
         activeInterviewTask: contextState.activeInterviewTask,
         activeMeetingTask: contextState.activeMeetingTask,
       }));
+      const commitDecision = readCommitDecision();
+      releaseAdvisorJob(advisorJob, "committed", {
+        commitAuthorized: commitDecision.authorized,
+        commitAuthorizationReason: commitDecision.reason,
+      });
       if (traceId) {
         traceStoreRef.current.finishStep(traceId, advisorStepId, "success", {
           outputChars: finalContent.length,
@@ -3216,18 +3428,23 @@ export function useMeetingAssistant() {
       }
     } catch (error) {
       if (error instanceof Error && error.name === "AbortError") {
-        if (traceId) {
-          traceStoreRef.current.finishStep(
-            traceId,
-            advisorStepId,
-            "cancelled",
-            undefined,
-            error
-          );
-          traceStoreRef.current.finishTrace(traceId, "cancelled", error);
-        }
+        const commitDecision = readCommitDecision();
+        finishRunningAdvisorJobTrace(
+          advisorJob,
+          "cancelled",
+          formatAdvisorTriggerJobForTrace(advisorJob, "error", {
+            cancellationReason: "provider-request-aborted",
+            commitAuthorized: false,
+            commitAuthorizationReason: commitDecision.reason,
+          }),
+          error
+        );
+        releaseAdvisorJob(advisorJob, "error", {
+          commitAuthorized: false,
+          commitAuthorizationReason: commitDecision.reason,
+        });
 
-        if (activeRef.current) {
+        if (activeRef.current && commitDecision.authorized) {
           setState((previous) => ({
             ...previous,
             status: "listening",
@@ -3237,17 +3454,21 @@ export function useMeetingAssistant() {
         return;
       }
 
-      if (traceId) {
-        traceStoreRef.current.finishStep(
-          traceId,
-          advisorStepId,
-          "error",
-          undefined,
-          error
-        );
-        traceStoreRef.current.finishTrace(traceId, "error", error);
-      }
-      if (!activeRef.current && !force) return;
+      const commitDecision = readCommitDecision();
+      finishRunningAdvisorJobTrace(
+        advisorJob,
+        "error",
+        formatAdvisorTriggerJobForTrace(advisorJob, "error", {
+          commitAuthorized: false,
+          commitAuthorizationReason: commitDecision.reason,
+        }),
+        error
+      );
+      releaseAdvisorJob(advisorJob, "error", {
+        commitAuthorized: false,
+        commitAuthorizationReason: commitDecision.reason,
+      });
+      if ((!activeRef.current && !force) || !commitDecision.authorized) return;
 
       setState((previous) => ({
         ...previous,
@@ -3264,8 +3485,12 @@ export function useMeetingAssistant() {
       }));
     }
   }, [
+    activateAdvisorJob,
     aiProvider,
+    buildAdvisorJob,
+    finishRunningAdvisorJobTrace,
     loadMemoryForPrompt,
+    releaseAdvisorJob,
     resolveMeetingModelRoute,
     selectedAIProvider,
     state.settings,
@@ -3280,7 +3505,15 @@ export function useMeetingAssistant() {
   ) => {
     if (!activeRef.current) return;
 
-    clearAdvisorDebounce();
+    const advisorJob = buildAdvisorJob({
+      mode,
+      traceId,
+      turnIntentDecision,
+      triggerTurnId,
+      advisorJobSource: "live-turn",
+      taskMutationAuthority: "input-evidence",
+    });
+    activateAdvisorJob(advisorJob);
     advisorDebounceTimerRef.current = window.setTimeout(() => {
       advisorDebounceTimerRef.current = null;
       void runAdvisor({
@@ -3288,9 +3521,10 @@ export function useMeetingAssistant() {
         traceId,
         turnIntentDecision,
         triggerTurnId,
+        advisorJob,
       });
     }, ADVISOR_DEBOUNCE_MS);
-  }, [clearAdvisorDebounce, runAdvisor]);
+  }, [activateAdvisorJob, buildAdvisorJob, runAdvisor]);
 
   const appendTranscriptTurnForTrace = useCallback(
     (
@@ -3803,8 +4037,7 @@ export function useMeetingAssistant() {
       if (!sttProvider) {
         activeRef.current = false;
         invalidateAudioProcessingSession();
-        clearAdvisorDebounce();
-        advisorEngineRef.current.cancelCurrentRequest();
+        cancelActiveAdvisorJob("stt-provider-missing");
         screenAnalysisAbortRef.current?.abort();
         screenAnalysisAbortRef.current = null;
 
@@ -4504,7 +4737,7 @@ export function useMeetingAssistant() {
     },
     [
       appendTranscriptTurnForTrace,
-      clearAdvisorDebounce,
+      cancelActiveAdvisorJob,
       consumePendingSentenceCompletion,
       flushPendingSentenceCompletion,
       holdPendingConfirmation,
@@ -4715,8 +4948,7 @@ export function useMeetingAssistant() {
     if (state.settings.privacyMode === "memory-only") {
       activeRef.current = false;
       invalidateAudioProcessingSession();
-      clearAdvisorDebounce();
-      advisorEngineRef.current.cancelCurrentRequest();
+      cancelActiveAdvisorJob("local-only-mode-unavailable");
       screenAnalysisAbortRef.current?.abort();
       screenAnalysisAbortRef.current = null;
       setState((previous) => ({
@@ -4731,8 +4963,7 @@ export function useMeetingAssistant() {
     if (!sttProvider) {
       activeRef.current = false;
       invalidateAudioProcessingSession();
-      clearAdvisorDebounce();
-      advisorEngineRef.current.cancelCurrentRequest();
+      cancelActiveAdvisorJob("stt-provider-missing");
       screenAnalysisAbortRef.current?.abort();
       screenAnalysisAbortRef.current = null;
       setState((previous) => ({
@@ -4772,8 +5003,7 @@ export function useMeetingAssistant() {
         );
       }
 
-      clearAdvisorDebounce();
-      advisorEngineRef.current.cancelCurrentRequest();
+      cancelActiveAdvisorJob("meeting-audio-capture-restarting");
       activeRef.current = false;
       invalidateAudioProcessingSession();
 
@@ -4831,7 +5061,7 @@ export function useMeetingAssistant() {
       }));
     }
   }, [
-    clearAdvisorDebounce,
+    cancelActiveAdvisorJob,
     invalidateAudioProcessingSession,
     selectedAudioDevices.output.id,
     startAudioProcessingSession,
@@ -4852,8 +5082,7 @@ export function useMeetingAssistant() {
   const pause = useCallback(async () => {
     activeRef.current = false;
     invalidateAudioProcessingSession();
-    clearAdvisorDebounce();
-    advisorEngineRef.current.cancelCurrentRequest();
+    cancelActiveAdvisorJob("meeting-assistant-paused");
     screenAnalysisAbortRef.current?.abort();
     screenAnalysisAbortRef.current = null;
 
@@ -4874,7 +5103,7 @@ export function useMeetingAssistant() {
       error: null,
       audioStatus,
     }));
-  }, [clearAdvisorDebounce, invalidateAudioProcessingSession]);
+  }, [cancelActiveAdvisorJob, invalidateAudioProcessingSession]);
 
   const captureScreenContext = useCallback(
     async (
@@ -5913,8 +6142,7 @@ export function useMeetingAssistant() {
       }
 
       manualQuestionTypeCorrectionInFlightRef.current = true;
-      clearAdvisorDebounce();
-      advisorEngineRef.current.cancelCurrentRequest();
+      cancelActiveAdvisorJob("manual-question-type-correction");
 
       const requestedAt = Date.now();
       const eventId = createMeetingId("question_type_correction");
@@ -6263,7 +6491,7 @@ export function useMeetingAssistant() {
       }
     },
     [
-      clearAdvisorDebounce,
+      cancelActiveAdvisorJob,
       flushPendingSentenceCompletion,
       runAdvisor,
       state.latestSuggestion,
@@ -6643,14 +6871,14 @@ export function useMeetingAssistant() {
 
   useEffect(() => {
     return () => {
-      clearAdvisorDebounce();
+      cancelActiveAdvisorJob("component-unmounted");
       if (activeRef.current) {
         void stop();
       } else {
         void sessionRecordingManagerRef.current?.stop("component-unmounted");
       }
     };
-  }, [clearAdvisorDebounce, stop]);
+  }, [cancelActiveAdvisorJob, stop]);
 
   return {
     ...state,

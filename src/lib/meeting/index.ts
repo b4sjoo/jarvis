@@ -1,6 +1,7 @@
 export * from "./advisor-engine";
 export * from "./advisor-prompt";
 export * from "./advisor-turn-intent";
+export * from "./advisor-trigger-job";
 export * from "./active-meeting-task";
 export * from "./clarifying-options";
 export * from "./coding-artifact";
