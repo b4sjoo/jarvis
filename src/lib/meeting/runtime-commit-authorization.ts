@@ -97,6 +97,19 @@ export function createRuntimeCommitToken(input: {
   };
 }
 
+export function rebaseRuntimeCommitToken(input: {
+  token: RuntimeCommitToken;
+  snapshot: RuntimeCommitSnapshot;
+  parentPolicy?: "task-bound" | "session-only";
+}): RuntimeCommitToken {
+  return createRuntimeCommitToken({
+    operationId: input.token.operationId,
+    pipeline: input.token.pipeline,
+    snapshot: input.snapshot,
+    parentPolicy: input.parentPolicy,
+  });
+}
+
 export function authorizeRuntimeCommit(input: {
   token: RuntimeCommitToken;
   current: RuntimeCommitSnapshot;

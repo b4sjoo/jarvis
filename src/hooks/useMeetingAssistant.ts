@@ -136,6 +136,7 @@ import {
   decideAdvisorTaskMutation,
   formatAdvisorTriggerJobForTrace,
   formatRuntimeCommitAuthorizationForTrace,
+  rebaseRuntimeCommitToken,
   canQuestionTypeDecisionOverrideParent,
   decideAdvisorTurnIntent,
   decideSentenceCompletion,
@@ -2708,9 +2709,10 @@ export function useMeetingAssistant() {
     const force = options.force ?? false;
     const traceId = advisorJob.traceId;
     let advisorStepId: string | undefined;
+    let effectiveRuntimeCommitToken = advisorJob.runtimeCommitToken;
     const readCommitDecision = () =>
       authorizeRuntimeCommit({
-        token: advisorJob.runtimeCommitToken,
+        token: effectiveRuntimeCommitToken,
         current: readRuntimeCommitSnapshot(),
         currentOperationId: activeAdvisorJobRef.current?.id,
       });
@@ -3124,6 +3126,24 @@ export function useMeetingAssistant() {
           interviewPlaybook: phaseUpdatedContext.interviewPlaybook,
         };
         manualPhaseAdvanceCommitted = true;
+        effectiveRuntimeCommitToken = rebaseRuntimeCommitToken({
+          token: effectiveRuntimeCommitToken,
+          snapshot: readRuntimeCommitSnapshot(),
+        });
+        if (traceId) {
+          traceStoreRef.current.updateMetadata(traceId, {
+            runtimeCommitTokenRebased: true,
+            runtimeCommitTokenRebaseReason: "manual-phase-advance",
+            runtimeRebasedParentId:
+              effectiveRuntimeCommitToken.parentExpectation.kind === "exact"
+                ? effectiveRuntimeCommitToken.parentExpectation.parentId
+                : undefined,
+            runtimeRebasedParentRevision:
+              effectiveRuntimeCommitToken.parentExpectation.kind === "exact"
+                ? effectiveRuntimeCommitToken.parentExpectation.parentRevision
+                : undefined,
+          });
+        }
       }
     }
 
@@ -3215,7 +3235,7 @@ export function useMeetingAssistant() {
           advisorTaskSignals.taskRelation !== "new-parent" &&
           advisorTaskSignals.taskRelation !== "unknown"
       ),
-      runtimeToken: advisorJob.runtimeCommitToken,
+      runtimeToken: effectiveRuntimeCommitToken,
       currentOperationId: () => activeAdvisorJobRef.current?.id,
     });
     if (rejectStaleCommit("post-memory")) return;

@@ -14,6 +14,7 @@ import {
 import {
   authorizeRuntimeCommit,
   createRuntimeCommitToken,
+  rebaseRuntimeCommitToken,
   type RuntimeCommitSnapshot,
 } from "../src/lib/meeting/runtime-commit-authorization.js";
 import type {
@@ -227,6 +228,62 @@ test("manual next advances phase without replacing the active parent", async () 
   assert.equal(after.parentQuestionType, before.parentQuestionType);
   assert.equal(after.playbookPhase, "design_framing");
   assert.equal(after.parentRevision, (before.parentRevision ?? 0) + 1);
+});
+
+test("manual next rebases authorization before deferred memory completion", async () => {
+  const manager = new MeetingContextManager();
+  manager.setActiveInterviewTask(
+    makeParent({ playbookPhase: "requirement_clarification" })
+  );
+  const harness = new MeetingOrchestrationHarness(manager);
+  const initialToken = createHarnessToken(
+    harness,
+    "manual-next-with-memory",
+    "advisor"
+  );
+  harness.activateOperation("advisor", initialToken.operationId);
+
+  const current = manager.getState().activeInterviewTask;
+  assert.ok(current);
+  manager.setActiveInterviewTask({
+    ...current,
+    playbookPhase: "design_framing",
+    revisions: current.revisions + 1,
+  });
+  const rebasedToken = rebaseRuntimeCommitToken({
+    token: initialToken,
+    snapshot: currentRuntimeSnapshot(harness),
+  });
+
+  const memoryOperation = harness.startOperation<string>({
+    id: initialToken.operationId,
+    kind: "memory",
+    commit: ({ value, contextManager, harness: currentHarness }) => {
+      const decision = authorizeRuntimeCommit({
+        token: rebasedToken,
+        current: currentRuntimeSnapshot(currentHarness),
+        currentOperationId: currentHarness.getActiveOperationId("advisor"),
+      });
+      if (!decision.authorized) return rejected(decision.reason);
+      const parent = contextManager.getState().activeInterviewTask;
+      assert.ok(parent);
+      contextManager.setActiveInterviewTask({
+        ...parent,
+        latestUsefulAnswer: value,
+      });
+      return committed(decision.reason);
+    },
+  });
+
+  memoryOperation.resolve("Use a write-heavy location pipeline.");
+  assert.deepEqual(await memoryOperation.completion, {
+    outcome: "committed",
+    reason: "authorized",
+  });
+  assert.equal(
+    manager.getState().activeInterviewTask?.latestUsefulAnswer,
+    "Use a write-heavy location pipeline."
+  );
 });
 
 test("clears the old screen when a voice completion commits a new parent", async () => {

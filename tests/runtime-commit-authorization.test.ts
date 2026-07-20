@@ -4,6 +4,7 @@ import {
   authorizeRuntimeCommit,
   createRuntimeCommitToken,
   formatRuntimeCommitAuthorizationForTrace,
+  rebaseRuntimeCommitToken,
   type RuntimeCommitSnapshot,
 } from "../src/lib/meeting/runtime-commit-authorization.js";
 
@@ -180,5 +181,37 @@ test("formats reconstructable authorization telemetry", () => {
       runtimeCommitAuthorized: false,
       runtimeCommitAuthorizationReason: "parent-revision-mismatch",
     }
+  );
+});
+
+test("rebases one operation onto the committed parent revision", () => {
+  const original = createRuntimeCommitToken({
+    operationId: "advisor-next",
+    pipeline: "advisor",
+    snapshot: BASE_SNAPSHOT,
+  });
+  const committedPhaseSnapshot = {
+    ...BASE_SNAPSHOT,
+    parentRevision: 8,
+  };
+  const rebased = rebaseRuntimeCommitToken({
+    token: original,
+    snapshot: committedPhaseSnapshot,
+  });
+
+  assert.equal(rebased.operationId, original.operationId);
+  assert.equal(rebased.pipeline, original.pipeline);
+  assert.deepEqual(rebased.parentExpectation, {
+    kind: "exact",
+    parentId: "parent-a",
+    parentRevision: 8,
+  });
+  assert.equal(
+    authorizeRuntimeCommit({
+      token: rebased,
+      current: committedPhaseSnapshot,
+      currentOperationId: "advisor-next",
+    }).reason,
+    "authorized"
   );
 });
