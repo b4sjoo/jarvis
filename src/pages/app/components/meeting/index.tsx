@@ -398,9 +398,14 @@ export const MeetingAssistant = ({
   );
   const completedSuggestionParentTaskId =
     meeting.latestSuggestion?.parentTaskId ?? meeting.latestSuggestion?.taskId;
+  const completedSuggestionParentQuestionType =
+    meeting.latestSuggestion?.questionType;
   const displayedSuggestionParentTaskId = meeting.partialSuggestion
     ? activeParentTaskId
     : completedSuggestionParentTaskId;
+  const displayedSuggestionParentQuestionType = meeting.partialSuggestion
+    ? activeTaskKind
+    : completedSuggestionParentQuestionType;
   useEffect(() => {
     if (!activeParentTaskId) {
       setCodingArtifactCache(null);
@@ -412,10 +417,11 @@ export const MeetingAssistant = ({
     setCodingArtifactCache((previous) => {
       return updateCodingArtifactCache({
         activeParentTaskId,
-        activeTaskKind,
+        activeParentQuestionType: activeTaskKind,
         cache: previous,
         sections: suggestionSections,
         sourceParentTaskId: completedSuggestionParentTaskId,
+        sourceParentQuestionType: completedSuggestionParentQuestionType,
         sourceSuggestionId: meeting.latestSuggestion?.id,
         updatedAt: Date.now(),
       });
@@ -424,6 +430,7 @@ export const MeetingAssistant = ({
     activeParentTaskId,
     activeTaskKind,
     completedSuggestionParentTaskId,
+    completedSuggestionParentQuestionType,
     meeting.latestSuggestion?.id,
     meeting.partialSuggestion,
     suggestionSections.primaryAnswer,
@@ -435,16 +442,18 @@ export const MeetingAssistant = ({
   const codingArtifactDisplay = useMemo(() => {
     return resolveCodingArtifactDisplay({
       activeParentTaskId,
-      activeTaskKind,
+      activeParentQuestionType: activeTaskKind,
       cache: codingArtifactCache,
       sections: suggestionSections,
       sourceParentTaskId: displayedSuggestionParentTaskId,
+      sourceParentQuestionType: displayedSuggestionParentQuestionType,
     });
   }, [
     activeParentTaskId,
     activeTaskKind,
     codingArtifactCache,
     displayedSuggestionParentTaskId,
+    displayedSuggestionParentQuestionType,
     suggestionSections.primaryAnswer,
     suggestionSections.approach,
     suggestionSections.code,

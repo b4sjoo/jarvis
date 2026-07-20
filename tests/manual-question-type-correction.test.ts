@@ -27,10 +27,12 @@ test("treats selecting the effective question type as a no-op", () => {
 });
 
 test("resumes the existing parent when a child probe is corrected to the parent type", () => {
+  const whiteboard = makeWhiteboard("ml_sd");
   const parent = makeInterviewParent({
     stableKind: "ai-ml-system-design",
     playbookPhase: "design_framing",
     child: makeChild({ questionType: "field-knowledge" }),
+    whiteboardArtifact: whiteboard,
   });
   const decision = decideManualQuestionTypeCorrection(
     makeActiveTask({
@@ -52,6 +54,7 @@ test("resumes the existing parent when a child probe is corrected to the parent 
   assert.equal(next.stableKind, "ai-ml-system-design");
   assert.equal(next.playbookPhase, "design_framing");
   assert.equal(next.child, undefined);
+  assert.equal(next.whiteboardArtifact, whiteboard);
   assert.equal(next.revisions, parent.revisions + 1);
 });
 

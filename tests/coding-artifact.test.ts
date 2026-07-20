@@ -12,10 +12,11 @@ test("preserves a coding artifact across child follow-ups under one parent", () 
   );
   const cache = updateCodingArtifactCache({
     activeParentTaskId: "parent_coding",
-    activeTaskKind: "coding",
+    activeParentQuestionType: "coding",
     cache: null,
     sections: codingSections,
     sourceParentTaskId: "parent_coding",
+    sourceParentQuestionType: "coding",
     sourceSuggestionId: "suggestion_1",
     updatedAt: 100,
   });
@@ -26,10 +27,11 @@ test("preserves a coding artifact across child follow-ups under one parent", () 
   );
   const display = resolveCodingArtifactDisplay({
     activeParentTaskId: "parent_coding",
-    activeTaskKind: "coding",
+    activeParentQuestionType: "coding",
     cache,
     sections: followUpSections,
     sourceParentTaskId: "parent_coding",
+    sourceParentQuestionType: "coding",
   });
 
   assert.equal(display.code, "class Queue: pass");
@@ -40,6 +42,7 @@ test("preserves a coding artifact across child follow-ups under one parent", () 
 test("drops the previous coding artifact at a new parent boundary", () => {
   const oldCache = {
     parentTaskId: "parent_coding",
+    parentQuestionType: "coding" as const,
     code: "def solve(): pass",
     complexity: "O(n)",
     updatedAt: 100,
@@ -51,19 +54,21 @@ test("drops the previous coding artifact at a new parent boundary", () => {
 
   const nextCache = updateCodingArtifactCache({
     activeParentTaskId: "parent_behavioral",
-    activeTaskKind: "behavioral",
+    activeParentQuestionType: "behavioral",
     cache: oldCache,
     sections: behavioralSections,
     sourceParentTaskId: "parent_behavioral",
+    sourceParentQuestionType: "behavioral",
     sourceSuggestionId: "suggestion_new",
     updatedAt: 200,
   });
   const display = resolveCodingArtifactDisplay({
     activeParentTaskId: "parent_behavioral",
-    activeTaskKind: "behavioral",
+    activeParentQuestionType: "behavioral",
     cache: oldCache,
     sections: behavioralSections,
     sourceParentTaskId: "parent_behavioral",
+    sourceParentQuestionType: "behavioral",
   });
 
   assert.equal(nextCache, null);
@@ -73,6 +78,7 @@ test("drops the previous coding artifact at a new parent boundary", () => {
 test("rejects a stale completed suggestion from the previous parent", () => {
   const oldCache = {
     parentTaskId: "parent_coding",
+    parentQuestionType: "coding" as const,
     code: "def old(): pass",
     complexity: "O(1)",
     updatedAt: 100,
@@ -83,19 +89,21 @@ test("rejects a stale completed suggestion from the previous parent", () => {
 
   const nextCache = updateCodingArtifactCache({
     activeParentTaskId: "parent_system_design",
-    activeTaskKind: "general-system-design",
+    activeParentQuestionType: "general-system-design",
     cache: oldCache,
     sections: staleSections,
     sourceParentTaskId: "parent_coding",
+    sourceParentQuestionType: "coding",
     sourceSuggestionId: "suggestion_old",
     updatedAt: 200,
   });
   const display = resolveCodingArtifactDisplay({
     activeParentTaskId: "parent_system_design",
-    activeTaskKind: "general-system-design",
+    activeParentQuestionType: "general-system-design",
     cache: oldCache,
     sections: staleSections,
     sourceParentTaskId: "parent_coding",
+    sourceParentQuestionType: "coding",
   });
 
   assert.equal(nextCache, null);
@@ -105,6 +113,7 @@ test("rejects a stale completed suggestion from the previous parent", () => {
 test("updates complexity without replacing code for an explicit child improvement", () => {
   const cache = {
     parentTaskId: "parent_coding",
+    parentQuestionType: "coding" as const,
     code: "def solve(): pass",
     complexity: "O(n^2)",
     updatedAt: 100,
@@ -115,10 +124,11 @@ test("updates complexity without replacing code for an explicit child improvemen
 
   const nextCache = updateCodingArtifactCache({
     activeParentTaskId: "parent_coding",
-    activeTaskKind: "coding",
+    activeParentQuestionType: "coding",
     cache,
     sections: improvementSections,
     sourceParentTaskId: "parent_coding",
+    sourceParentQuestionType: "coding",
     sourceSuggestionId: "suggestion_2",
     updatedAt: 200,
   });
@@ -126,6 +136,73 @@ test("updates complexity without replacing code for an explicit child improvemen
   assert.ok(nextCache);
   assert.equal(nextCache.code, "def solve(): pass");
   assert.equal(nextCache.complexity, "O(n) time and O(n) space");
+});
+
+test("drops coding artifacts when a parent is retyped in place", () => {
+  const cache = {
+    parentTaskId: "parent_shared",
+    parentQuestionType: "coding" as const,
+    code: "def solve(): pass",
+    complexity: "O(n)",
+    updatedAt: 100,
+  };
+  const staleCodingSections = sections(
+    "Question: Implement it.\nAnswer: Use a scan.\nCode:\n```python\ndef stale(): pass\n```\nComplexity: O(n)"
+  );
+
+  const nextCache = updateCodingArtifactCache({
+    activeParentTaskId: "parent_shared",
+    activeParentQuestionType: "behavioral",
+    cache,
+    sections: staleCodingSections,
+    sourceParentTaskId: "parent_shared",
+    sourceParentQuestionType: "coding",
+    sourceSuggestionId: "suggestion_before_retype",
+    updatedAt: 200,
+  });
+  const display = resolveCodingArtifactDisplay({
+    activeParentTaskId: "parent_shared",
+    activeParentQuestionType: "behavioral",
+    cache,
+    sections: staleCodingSections,
+    sourceParentTaskId: "parent_shared",
+    sourceParentQuestionType: "coding",
+  });
+
+  assert.equal(nextCache, null);
+  assert.deepEqual(display, { code: "", complexity: "", isCached: false });
+});
+
+test("preserves a coding child artifact while its system-design parent is stable", () => {
+  const codingChildSections = sections(
+    "Question: Implement the loss.\nAnswer: Use cross entropy.\nCode:\n```python\ndef loss(): pass\n```\nComplexity: O(n)"
+  );
+  const cache = updateCodingArtifactCache({
+    activeParentTaskId: "parent_aiml",
+    activeParentQuestionType: "ai-ml-system-design",
+    cache: null,
+    sections: codingChildSections,
+    sourceParentTaskId: "parent_aiml",
+    sourceParentQuestionType: "ai-ml-system-design",
+    sourceSuggestionId: "suggestion_coding_child",
+    updatedAt: 100,
+  });
+  assert.ok(cache);
+
+  const display = resolveCodingArtifactDisplay({
+    activeParentTaskId: "parent_aiml",
+    activeParentQuestionType: "ai-ml-system-design",
+    cache,
+    sections: sections(
+      "Question: Why cross entropy?\nAnswer: It matches the likelihood objective."
+    ),
+    sourceParentTaskId: "parent_aiml",
+    sourceParentQuestionType: "ai-ml-system-design",
+  });
+
+  assert.equal(display.code, "def loss(): pass");
+  assert.equal(display.complexity, "O(n)");
+  assert.equal(display.isCached, true);
 });
 
 function sections(content: string) {
