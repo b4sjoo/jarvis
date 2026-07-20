@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   areSuggestionsForSameParentTask,
   buildSuggestionTaskMetadata,
+  clearSuggestionProjectionForManualCorrection,
 } from "../src/lib/meeting/suggestion-task.js";
 import type { ActiveMeetingTask, AdvisorSuggestion } from "../src/lib/meeting";
 
@@ -20,15 +21,39 @@ test("builds suggestion metadata from an active meeting task", () => {
 });
 
 test("matches suggestions only within the same parent task when scoped", () => {
-  const current = makeSuggestion({ parentTaskId: "parent_1" });
-  const previousSame = makeSuggestion({ parentTaskId: "parent_1" });
-  const previousDifferent = makeSuggestion({ parentTaskId: "parent_2" });
+  const current = makeSuggestion({
+    parentTaskId: "parent_1",
+    questionType: "coding",
+  });
+  const previousSame = makeSuggestion({
+    parentTaskId: "parent_1",
+    questionType: "coding",
+  });
+  const previousDifferent = makeSuggestion({
+    parentTaskId: "parent_2",
+    questionType: "coding",
+  });
+  const previousRetyped = makeSuggestion({
+    parentTaskId: "parent_1",
+    questionType: "behavioral",
+  });
+  const previousMissingType = makeSuggestion({ parentTaskId: "parent_1" });
   const unscoped = makeSuggestion({});
 
   assert.equal(areSuggestionsForSameParentTask(previousSame, current), true);
   assert.equal(areSuggestionsForSameParentTask(previousDifferent, current), false);
+  assert.equal(areSuggestionsForSameParentTask(previousRetyped, current), false);
+  assert.equal(areSuggestionsForSameParentTask(previousMissingType, current), false);
   assert.equal(areSuggestionsForSameParentTask(unscoped, current), false);
   assert.equal(areSuggestionsForSameParentTask(makeSuggestion({}), unscoped), true);
+});
+
+test("manual correction clears every answer projection before regeneration", () => {
+  assert.deepEqual(clearSuggestionProjectionForManualCorrection(), {
+    partialSuggestion: "",
+    latestSuggestion: null,
+    latestReliableSuggestion: null,
+  });
 });
 
 function makeActiveMeetingTask(): ActiveMeetingTask {
@@ -61,7 +86,9 @@ function makeActiveMeetingTask(): ActiveMeetingTask {
 }
 
 function makeSuggestion(
-  patch: Partial<Pick<AdvisorSuggestion, "parentTaskId" | "taskId">>
+  patch: Partial<
+    Pick<AdvisorSuggestion, "parentTaskId" | "taskId" | "questionType">
+  >
 ): AdvisorSuggestion {
   return {
     id: "suggestion_1",

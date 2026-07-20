@@ -1,5 +1,6 @@
 import type { ActiveMeetingTask } from "./active-meeting-task";
-import type { AdvisorSuggestion } from "./types";
+import type { AdvisorSuggestion, MeetingAssistantState } from "./types";
+import { normalizeCanonicalQuestionType } from "./task-taxonomy.js";
 
 export type AdvisorSuggestionTaskMetadata = Pick<
   AdvisorSuggestion,
@@ -29,7 +30,17 @@ export function areSuggestionsForSameParentTask(
   const leftTaskId = getSuggestionParentTaskId(left);
   const rightTaskId = getSuggestionParentTaskId(right);
   if (leftTaskId || rightTaskId) {
-    return Boolean(leftTaskId && rightTaskId && leftTaskId === rightTaskId);
+    if (!leftTaskId || !rightTaskId || leftTaskId !== rightTaskId) {
+      return false;
+    }
+
+    const leftQuestionType = normalizeCanonicalQuestionType(left.questionType);
+    const rightQuestionType = normalizeCanonicalQuestionType(right.questionType);
+    return Boolean(
+      leftQuestionType &&
+        rightQuestionType &&
+        leftQuestionType === rightQuestionType
+    );
   }
 
   return true;
@@ -37,4 +48,15 @@ export function areSuggestionsForSameParentTask(
 
 export function getSuggestionParentTaskId(suggestion: AdvisorSuggestion) {
   return suggestion.parentTaskId ?? suggestion.taskId;
+}
+
+export function clearSuggestionProjectionForManualCorrection(): Pick<
+  MeetingAssistantState,
+  "partialSuggestion" | "latestSuggestion" | "latestReliableSuggestion"
+> {
+  return {
+    partialSuggestion: "",
+    latestSuggestion: null,
+    latestReliableSuggestion: null,
+  };
 }

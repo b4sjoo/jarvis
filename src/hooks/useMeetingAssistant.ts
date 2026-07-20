@@ -183,6 +183,7 @@ import {
   getActiveMeetingTaskTraceMetadata,
   areSuggestionsForSameParentTask,
   buildSuggestionTaskMetadata,
+  clearSuggestionProjectionForManualCorrection,
   applyAdvisorScreenScopeToPromptContext,
   decideAdvisorScreenScope,
   decideScreenResultScope,
@@ -7006,6 +7007,8 @@ export function useMeetingAssistant() {
           ...formatInterviewPlaybookForTrace(correctedPlaybook),
           ...getActiveMeetingTaskTraceMetadata(correctedActiveTask),
           correctionStatus: correction.status,
+          correctionVisibleAnswerCleared: true,
+          correctionReliableAnswerCleared: true,
         });
         traceStoreRef.current.finishStep(
           correctionTrace.id,
@@ -7109,6 +7112,7 @@ export function useMeetingAssistant() {
         );
         setState((previous) => ({
           ...previous,
+          ...clearSuggestionProjectionForManualCorrection(),
           activeScreenTask: correctedContextState.activeScreenTask,
           activeInterviewTask: correctedContextState.activeInterviewTask,
           activeMeetingTask: correctedActiveTask,
