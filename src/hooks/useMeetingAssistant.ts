@@ -66,6 +66,7 @@ import {
   ParsedMeetingAnswer,
   QuestionEvaluationIdentity,
   QuestionHumanEvaluation,
+  QuestionInstanceLineage,
   ScreenObservation,
   ScreenPreflightResult,
   ScreenQuestionType,
@@ -113,6 +114,7 @@ import {
   readQuestionHumanEvaluations,
   readMeetingEvalTraceMetadata,
   resolveTraceMemoryEvaluationSnapshot,
+  resolveSuggestionQuestionLineage,
   resolveActiveMeetingTaskIdentity,
   buildSpeechBiasContext,
   formatSpeechBiasPromptForTrace,
@@ -932,6 +934,7 @@ interface RunAdvisorOptions {
   advisorJob?: AdvisorTriggerJob;
   advisorJobSource?: AdvisorJobSource;
   taskMutationAuthority?: AdvisorTaskMutationAuthority;
+  questionLineage?: QuestionInstanceLineage;
 }
 
 interface CaptureScreenContextOptions {
@@ -2612,6 +2615,7 @@ export function useMeetingAssistant() {
       turnIntentDecision: options.turnIntentDecision,
       sessionId: contextState.sessionId,
       snapshotTurnCount: contextState.transcriptTurns.length,
+      questionLineage: options.questionLineage,
       taskMutationAuthority,
     });
   }, []);
@@ -6621,6 +6625,15 @@ export function useMeetingAssistant() {
     ]
   );
 
+  const resolveCurrentSuggestionQuestionLineage = useCallback(
+    () =>
+      resolveSuggestionQuestionLineage({
+        suggestion: state.latestSuggestion,
+        traces: traceStoreRef.current.getTraces(),
+      }),
+    [state.latestSuggestion]
+  );
+
   const regenerateSuggestion = useCallback(async () => {
     flushPendingSentenceCompletion("regenerate");
     await runAdvisor({
@@ -6629,8 +6642,14 @@ export function useMeetingAssistant() {
       currentSuggestion: currentSuggestionText,
       advisorJobSource: "regenerate",
       taskMutationAuthority: "preserve-parent",
+      questionLineage: resolveCurrentSuggestionQuestionLineage(),
     });
-  }, [currentSuggestionText, flushPendingSentenceCompletion, runAdvisor]);
+  }, [
+    currentSuggestionText,
+    flushPendingSentenceCompletion,
+    resolveCurrentSuggestionQuestionLineage,
+    runAdvisor,
+  ]);
 
   const applyResponseAction = useCallback(
     async (responseAction: MeetingResponseActionMode) => {
@@ -6660,11 +6679,13 @@ export function useMeetingAssistant() {
         currentSuggestion: currentSuggestionText,
         advisorJobSource: "response-action",
         taskMutationAuthority: "preserve-parent",
+        questionLineage: resolveCurrentSuggestionQuestionLineage(),
       });
     },
     [
       currentSuggestionText,
       flushPendingSentenceCompletion,
+      resolveCurrentSuggestionQuestionLineage,
       runAdvisor,
       state.activeMeetingTask,
     ]
@@ -6691,6 +6712,7 @@ export function useMeetingAssistant() {
         currentSuggestion: currentSuggestionText,
         advisorJobSource: "clarifying-answer",
         taskMutationAuthority: "preserve-parent",
+        questionLineage: resolveCurrentSuggestionQuestionLineage(),
         clarifyingFeedback: {
           question: trimmedQuestion,
           answer,
@@ -6699,7 +6721,12 @@ export function useMeetingAssistant() {
         },
       });
     },
-    [currentSuggestionText, flushPendingSentenceCompletion, runAdvisor]
+    [
+      currentSuggestionText,
+      flushPendingSentenceCompletion,
+      resolveCurrentSuggestionQuestionLineage,
+      runAdvisor,
+    ]
   );
 
   const submitSpeechCorrection = useCallback(
@@ -6880,10 +6907,16 @@ export function useMeetingAssistant() {
           traceId: repairTraceId,
           advisorJobSource: "response-action",
           taskMutationAuthority: "preserve-parent",
+          questionLineage: resolveCurrentSuggestionQuestionLineage(),
         });
       }
     },
-    [currentSuggestionText, flushPendingSentenceCompletion, runAdvisor]
+    [
+      currentSuggestionText,
+      flushPendingSentenceCompletion,
+      resolveCurrentSuggestionQuestionLineage,
+      runAdvisor,
+    ]
   );
 
   useEffect(() => {

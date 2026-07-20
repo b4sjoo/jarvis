@@ -6,6 +6,7 @@ import type {
   AdvisorRequestMode,
   InterviewPlaybookPhase,
   InterviewTaskRelation,
+  QuestionInstanceLineage,
 } from "./types.js";
 
 export type AdvisorJobSource =
@@ -42,6 +43,7 @@ export interface AdvisorTriggerJob {
   expectedSessionId: string;
   expectedParentId?: string;
   expectedParentRevision?: number;
+  questionLineage?: QuestionInstanceLineage;
   taskMutationAuthority: AdvisorTaskMutationAuthority;
   snapshotTurnCount: number;
   scheduledAt: number;
@@ -56,6 +58,7 @@ export interface CreateAdvisorTriggerJobInput {
   turnIntentDecision?: AdvisorTurnIntentDecision;
   sessionId: string;
   snapshotTurnCount: number;
+  questionLineage?: QuestionInstanceLineage;
   taskMutationAuthority: AdvisorTaskMutationAuthority;
   scheduledAt?: number;
 }
@@ -101,6 +104,9 @@ export function createAdvisorTriggerJob(
     expectedParentRevision:
       snapshot.activeMeetingTask?.parent.revisions ??
       snapshot.activeInterviewTask?.revisions,
+    questionLineage: input.questionLineage
+      ? { ...input.questionLineage }
+      : undefined,
     taskMutationAuthority: input.taskMutationAuthority,
     snapshotTurnCount: input.snapshotTurnCount,
     scheduledAt: input.scheduledAt ?? Date.now(),
@@ -218,6 +224,13 @@ export function formatAdvisorTriggerJobForTrace(
     advisorJobExpectedSessionId: job.expectedSessionId,
     advisorJobExpectedParentId: job.expectedParentId,
     advisorJobExpectedParentRevision: job.expectedParentRevision,
+    ...(job.questionLineage
+      ? {
+          questionInstanceId: job.questionLineage.questionInstanceId,
+          questionOriginTraceId: job.questionLineage.questionOriginTraceId,
+          sourceSuggestionId: job.questionLineage.sourceSuggestionId,
+        }
+      : {}),
     advisorJobMutationAuthority: job.taskMutationAuthority,
     advisorJobSnapshotTurnCount: job.snapshotTurnCount,
     advisorJobSnapshotLatestTurnId: job.promptContextSnapshot.latestTurn?.id,

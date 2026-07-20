@@ -111,6 +111,28 @@ test("emits the job identity needed to reconstruct ownership", () => {
   );
 });
 
+test("emits inherited question lineage for answer-preserving actions", () => {
+  const job = createAdvisorTriggerJob({
+    source: "response-action",
+    mode: "response-action",
+    traceId: "trace-action",
+    promptContext: buildPromptContext(),
+    sessionId: "session-a",
+    snapshotTurnCount: 1,
+    taskMutationAuthority: "preserve-parent",
+    questionLineage: {
+      questionInstanceId: "trace:trace-origin",
+      questionOriginTraceId: "trace-origin",
+      sourceSuggestionId: "suggestion-origin",
+    },
+  });
+
+  const metadata = formatAdvisorTriggerJobForTrace(job, "scheduled");
+  assert.equal(metadata.questionInstanceId, "trace:trace-origin");
+  assert.equal(metadata.questionOriginTraceId, "trace-origin");
+  assert.equal(metadata.sourceSuggestionId, "suggestion-origin");
+});
+
 test("explicit response actions preserve the active parent", () => {
   assert.deepEqual(
     decideAdvisorTaskMutation({

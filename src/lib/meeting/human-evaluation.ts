@@ -1,14 +1,17 @@
 import { STORAGE_KEYS } from "../../config/constants.js";
 import { safeLocalStorage } from "../storage/helper.js";
 import type {
+  AdvisorSuggestion,
   HumanEvalQuestionType,
   HumanEvaluationVerdict,
   HumanEvaluationVerdictBlock,
   MemoryEntryEvaluationLabel,
   MissingExpectedMemoryLabel,
+  MeetingTrace,
   MeetingTraceKind,
   QuestionHumanEvaluation,
   TraceHumanEvaluation,
+  QuestionInstanceLineage,
 } from "./types";
 import { normalizeMemoryRetrievalEvaluationSnapshot } from "./memory-evaluation.js";
 import {
@@ -50,6 +53,112 @@ export interface QuestionEvaluationIdentity {
   selectedDiagramOverlayIds?: string[];
   rejectedDiagramOverlayCount?: number;
   memoryRetrievalSnapshot?: QuestionHumanEvaluation["memoryRetrievalSnapshot"];
+}
+
+export type VisibleAnswerEvaluationTargetStatus =
+  | "ready"
+  | "trace-only"
+  | "pending"
+  | "unavailable"
+  | "none";
+
+export interface VisibleAnswerEvaluationTarget {
+  status: VisibleAnswerEvaluationTargetStatus;
+  traceId?: string;
+  reason:
+    | "visible-answer-source"
+    | "latest-trace-without-suggestion"
+    | "partial-answer-in-progress"
+    | "suggestion-source-trace-missing"
+    | "suggestion-source-id-missing"
+    | "no-evaluation-target";
+}
+
+export function resolveVisibleAnswerEvaluationTarget(input: {
+  suggestion: AdvisorSuggestion | null | undefined;
+  answerInProgress?: boolean;
+  traces: Array<Pick<MeetingTrace, "id">>;
+  latestTraceId?: string;
+}): VisibleAnswerEvaluationTarget {
+  if (input.answerInProgress) {
+    return {
+      status: "pending",
+      reason: "partial-answer-in-progress",
+    };
+  }
+
+  if (input.suggestion) {
+    const sourceTraceId = input.suggestion.sourceTraceId;
+    if (!sourceTraceId) {
+      return {
+        status: "unavailable",
+        reason: "suggestion-source-id-missing",
+      };
+    }
+
+    if (!input.traces.some((trace) => trace.id === sourceTraceId)) {
+      return {
+        status: "unavailable",
+        traceId: sourceTraceId,
+        reason: "suggestion-source-trace-missing",
+      };
+    }
+
+    return {
+      status: "ready",
+      traceId: sourceTraceId,
+      reason: "visible-answer-source",
+    };
+  }
+
+  if (
+    input.latestTraceId &&
+    input.traces.some((trace) => trace.id === input.latestTraceId)
+  ) {
+    return {
+      status: "trace-only",
+      traceId: input.latestTraceId,
+      reason: "latest-trace-without-suggestion",
+    };
+  }
+
+  return {
+    status: "none",
+    reason: "no-evaluation-target",
+  };
+}
+
+export function resolveSuggestionQuestionLineage(input: {
+  suggestion: AdvisorSuggestion | null | undefined;
+  traces: Array<Pick<MeetingTrace, "id" | "metadata">>;
+}): QuestionInstanceLineage | undefined {
+  const suggestion = input.suggestion;
+  const sourceTraceId = suggestion?.sourceTraceId;
+  if (!suggestion || !sourceTraceId) return undefined;
+
+  const sourceTrace = input.traces.find((trace) => trace.id === sourceTraceId);
+  const explicitQuestionId = readMetadataString(
+    sourceTrace?.metadata,
+    "questionInstanceId"
+  );
+  const explicitOriginTraceId = readMetadataString(
+    sourceTrace?.metadata,
+    "questionOriginTraceId"
+  );
+
+  return {
+    questionInstanceId: explicitQuestionId ?? `trace:${sourceTraceId}`,
+    questionOriginTraceId: explicitOriginTraceId ?? sourceTraceId,
+    sourceSuggestionId: suggestion.id,
+  };
+}
+
+function readMetadataString(
+  metadata: Record<string, unknown> | undefined,
+  key: string
+) {
+  const value = metadata?.[key];
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
 export function readTraceHumanEvaluations(): TraceHumanEvaluation[] {

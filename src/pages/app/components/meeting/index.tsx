@@ -64,6 +64,7 @@ import {
   overlayMeetingAnswerArtifacts,
   resolveMeetingAnswerProfile,
   resolveCodingArtifactDisplay,
+  resolveVisibleAnswerEvaluationTarget,
   resolveTraceMemoryEvaluationSnapshot,
   stripOuterCodeFence,
   summarizeMeetingTraces,
@@ -484,18 +485,39 @@ export const MeetingAssistant = ({
       ),
     [displaySuggestion, meeting.latestReliableSuggestion]
   );
-  const latestTraceEvaluation = latestTrace
+  const evaluationTarget = useMemo(
+    () =>
+      resolveVisibleAnswerEvaluationTarget({
+        suggestion: meeting.latestSuggestion,
+        answerInProgress:
+          meeting.status === "thinking" &&
+          Boolean(meeting.partialSuggestion.trim()),
+        traces: meeting.traces,
+        latestTraceId: latestTrace?.id,
+      }),
+    [
+      latestTrace?.id,
+      meeting.latestSuggestion,
+      meeting.partialSuggestion,
+      meeting.status,
+      meeting.traces,
+    ]
+  );
+  const evaluationTrace = evaluationTarget.traceId
+    ? meeting.traces.find((trace) => trace.id === evaluationTarget.traceId)
+    : undefined;
+  const answerTraceEvaluation = evaluationTrace
     ? meeting.humanEvaluations.find(
-        (evaluation) => evaluation.traceId === latestTrace.id
+        (evaluation) => evaluation.traceId === evaluationTrace.id
       )
     : undefined;
-  const latestQuestionEvaluation = latestTrace
+  const answerQuestionEvaluation = evaluationTrace
     ? meeting.questionEvaluations.find((evaluation) =>
-        evaluation.traceIds.includes(latestTrace.id)
+        evaluation.traceIds.includes(evaluationTrace.id)
       )
     : undefined;
-  const latestMemoryEvaluationSnapshot =
-    resolveTraceMemoryEvaluationSnapshot(latestTrace);
+  const answerMemoryEvaluationSnapshot =
+    resolveTraceMemoryEvaluationSnapshot(evaluationTrace);
   const clarifyingQuestion = suggestionSections.clarifyingQuestion.trim();
   const rawClarifyingOptions = suggestionSections.clarifyingOptions ?? [];
   const hasTechnicalDetails = suggestionSections.hasTechnicalDetails;
@@ -1743,46 +1765,6 @@ export const MeetingAssistant = ({
                       </div>
                     ))}
                   </div>
-                  <TraceHumanEvaluationPanel
-                    detectedQuestionType={formatDetectedQuestionType(
-                      latestTrace.metadata?.questionType
-                    )}
-                    detectedPlaybook={formatDetectedQuestionType(
-                      latestTrace.metadata?.playbookId
-                    )}
-                    detectedPlaybookPhase={formatDetectedQuestionType(
-                      getTraceEffectivePlaybookPhase(latestTrace.metadata)
-                    )}
-                    advisorTurnIntent={
-                      typeof latestTrace.metadata?.advisorTurnIntent === "string"
-                        ? latestTrace.metadata.advisorTurnIntent
-                        : undefined
-                    }
-                    advisorTurnEnforcement={
-                      typeof latestTrace.metadata?.advisorTurnEnforcement ===
-                      "string"
-                        ? latestTrace.metadata.advisorTurnEnforcement
-                        : undefined
-                    }
-                    advisorExecutionAuthorized={
-                      typeof latestTrace.metadata?.advisorExecutionAuthorized ===
-                      "boolean"
-                        ? latestTrace.metadata.advisorExecutionAuthorized
-                        : undefined
-                    }
-                    evaluation={latestTraceEvaluation}
-                    questionEvaluation={latestQuestionEvaluation}
-                    memorySnapshot={latestMemoryEvaluationSnapshot}
-                    onUpdate={(patch) => {
-                      meeting.updateTraceHumanEvaluation(latestTrace.id, patch);
-                    }}
-                    onUpdateQuestion={(patch) => {
-                      meeting.updateQuestionHumanEvaluation(
-                        latestTrace.id,
-                        patch
-                      );
-                    }}
-                  />
                   {latestTrace.inputs.length || latestTrace.outputs.length ? (
                     <details className="mt-2 border-t border-border/50 pt-2">
                       <summary className="cursor-pointer text-[10px] font-medium text-muted-foreground">
@@ -1825,6 +1807,80 @@ export const MeetingAssistant = ({
                         )}
                       </pre>
                     </details>
+                  ) : null}
+                </section>
+              ) : null}
+
+              {meeting.settings.debugMode &&
+              evaluationTarget.status !== "none" ? (
+                <section className="min-w-0 overflow-hidden rounded-md border border-border/70 p-3">
+                  <div className="mb-2 text-xs font-semibold">
+                    {evaluationTarget.status === "trace-only"
+                      ? "Trace evaluation"
+                      : "Answer evaluation"}
+                  </div>
+                  {evaluationTarget.status === "pending" ? (
+                    <div className="text-[10px] text-muted-foreground">
+                      Evaluation is available after the answer finishes.
+                    </div>
+                  ) : evaluationTarget.status === "unavailable" ? (
+                    <div className="text-[10px] text-muted-foreground">
+                      The visible answer trace is unavailable. Evaluation is
+                      disabled to avoid labeling a different trace.
+                    </div>
+                  ) : evaluationTrace ? (
+                    <>
+                      <div className="mb-2 truncate text-[10px] text-muted-foreground">
+                        Evaluating: {formatTraceTitle(evaluationTrace)}
+                      </div>
+                      <TraceHumanEvaluationPanel
+                        detectedQuestionType={formatDetectedQuestionType(
+                          evaluationTrace.metadata?.questionType
+                        )}
+                        detectedPlaybook={formatDetectedQuestionType(
+                          evaluationTrace.metadata?.playbookId
+                        )}
+                        detectedPlaybookPhase={formatDetectedQuestionType(
+                          getTraceEffectivePlaybookPhase(
+                            evaluationTrace.metadata
+                          )
+                        )}
+                        advisorTurnIntent={
+                          typeof evaluationTrace.metadata?.advisorTurnIntent ===
+                          "string"
+                            ? evaluationTrace.metadata.advisorTurnIntent
+                            : undefined
+                        }
+                        advisorTurnEnforcement={
+                          typeof evaluationTrace.metadata
+                            ?.advisorTurnEnforcement === "string"
+                            ? evaluationTrace.metadata.advisorTurnEnforcement
+                            : undefined
+                        }
+                        advisorExecutionAuthorized={
+                          typeof evaluationTrace.metadata
+                            ?.advisorExecutionAuthorized === "boolean"
+                            ? evaluationTrace.metadata
+                                .advisorExecutionAuthorized
+                            : undefined
+                        }
+                        evaluation={answerTraceEvaluation}
+                        questionEvaluation={answerQuestionEvaluation}
+                        memorySnapshot={answerMemoryEvaluationSnapshot}
+                        onUpdate={(patch) => {
+                          meeting.updateTraceHumanEvaluation(
+                            evaluationTrace.id,
+                            patch
+                          );
+                        }}
+                        onUpdateQuestion={(patch) => {
+                          meeting.updateQuestionHumanEvaluation(
+                            evaluationTrace.id,
+                            patch
+                          );
+                        }}
+                      />
+                    </>
                   ) : null}
                 </section>
               ) : null}

@@ -667,6 +667,12 @@ export interface AdvisorSuggestion {
   confidence: "low" | "medium" | "high";
 }
 
+export interface QuestionInstanceLineage {
+  questionInstanceId: string;
+  questionOriginTraceId: string;
+  sourceSuggestionId?: string;
+}
+
 export type MeetingSetupWarningCode =
   | "stt-provider-missing"
   | "ai-provider-missing"

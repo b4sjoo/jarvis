@@ -2,9 +2,109 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   buildQuestionEvaluationPatchFromTrace,
+  resolveSuggestionQuestionLineage,
+  resolveVisibleAnswerEvaluationTarget,
   upsertQuestionHumanEvaluation,
 } from "../src/lib/meeting/human-evaluation.js";
-import type { TraceHumanEvaluation } from "../src/lib/meeting/types.js";
+import type {
+  AdvisorSuggestion,
+  TraceHumanEvaluation,
+} from "../src/lib/meeting/types.js";
+
+function buildSuggestion(
+  id: string,
+  sourceTraceId?: string
+): AdvisorSuggestion {
+  return {
+    id,
+    sourceTraceId,
+    kind: "answer",
+    content: "Answer: Use a queue.",
+    createdAt: 1,
+    basedOnTurnIds: [],
+    basedOnObservationIds: [],
+    confidence: "medium",
+  };
+}
+
+test("binds evaluation to the visible answer instead of a newer trace", () => {
+  assert.deepEqual(
+    resolveVisibleAnswerEvaluationTarget({
+      suggestion: buildSuggestion("suggestion_1", "trace_answer"),
+      traces: [{ id: "trace_stt" }, { id: "trace_answer" }],
+      latestTraceId: "trace_stt",
+    }),
+    {
+      status: "ready",
+      traceId: "trace_answer",
+      reason: "visible-answer-source",
+    }
+  );
+});
+
+test("does not evaluate an old trace while a partial answer is visible", () => {
+  assert.deepEqual(
+    resolveVisibleAnswerEvaluationTarget({
+      suggestion: buildSuggestion("suggestion_1", "trace_old"),
+      answerInProgress: true,
+      traces: [{ id: "trace_running" }, { id: "trace_old" }],
+      latestTraceId: "trace_running",
+    }),
+    {
+      status: "pending",
+      reason: "partial-answer-in-progress",
+    }
+  );
+});
+
+test("does not fall back when the visible answer trace is unavailable", () => {
+  assert.deepEqual(
+    resolveVisibleAnswerEvaluationTarget({
+      suggestion: buildSuggestion("suggestion_1", "trace_missing"),
+      traces: [{ id: "trace_latest" }],
+      latestTraceId: "trace_latest",
+    }),
+    {
+      status: "unavailable",
+      traceId: "trace_missing",
+      reason: "suggestion-source-trace-missing",
+    }
+  );
+});
+
+test("preserves question lineage across chained answer actions", () => {
+  assert.deepEqual(
+    resolveSuggestionQuestionLineage({
+      suggestion: buildSuggestion("suggestion_action", "trace_action"),
+      traces: [
+        {
+          id: "trace_action",
+          metadata: {
+            questionInstanceId: "trace:trace_origin",
+            questionOriginTraceId: "trace_origin",
+          },
+        },
+      ],
+    }),
+    {
+      questionInstanceId: "trace:trace_origin",
+      questionOriginTraceId: "trace_origin",
+      sourceSuggestionId: "suggestion_action",
+    }
+  );
+
+  assert.deepEqual(
+    resolveSuggestionQuestionLineage({
+      suggestion: buildSuggestion("suggestion_origin", "trace_origin"),
+      traces: [{ id: "trace_origin" }],
+    }),
+    {
+      questionInstanceId: "trace:trace_origin",
+      questionOriginTraceId: "trace_origin",
+      sourceSuggestionId: "suggestion_origin",
+    }
+  );
+});
 
 test("keeps meaningful questions separate within one parent trajectory", () => {
   const first = upsertQuestionHumanEvaluation(
