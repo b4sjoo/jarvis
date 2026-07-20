@@ -1,5 +1,6 @@
 export interface NativeSpeechDetectedEvent {
   captureSessionId: string;
+  captureGeneration: number;
   segmentSequence: number;
   owner: "meeting" | "system";
   capturedAtMs: number;
@@ -13,6 +14,7 @@ export type NativeSpeechEventRejectionReason =
   | "no-active-native-session"
   | "capture-session-mismatch"
   | "capture-owner-mismatch"
+  | "capture-generation-mismatch"
   | "non-monotonic-sequence";
 
 export type NativeSpeechEventAuthorization =
@@ -33,6 +35,7 @@ export function parseNativeSpeechDetectedEvent(
 
   const captureSessionId = payload.captureSessionId;
   const segmentSequence = payload.segmentSequence;
+  const captureGeneration = payload.captureGeneration;
   const capturedAtMs = payload.capturedAtMs;
   const sampleRate = payload.sampleRate;
   const audioBase64 = payload.audioBase64;
@@ -40,6 +43,8 @@ export function parseNativeSpeechDetectedEvent(
   if (
     typeof captureSessionId !== "string" ||
     !captureSessionId.trim() ||
+    !Number.isSafeInteger(captureGeneration) ||
+    (captureGeneration as number) < 1 ||
     !Number.isSafeInteger(segmentSequence) ||
     (segmentSequence as number) < 1 ||
     (payload.owner !== "meeting" && payload.owner !== "system") ||
@@ -57,6 +62,7 @@ export function parseNativeSpeechDetectedEvent(
 
   return {
     captureSessionId,
+    captureGeneration: captureGeneration as number,
     segmentSequence: segmentSequence as number,
     owner: payload.owner,
     capturedAtMs: capturedAtMs as number,
@@ -71,11 +77,13 @@ export function authorizeNativeSpeechDetectedEvent({
   activeCaptureSessionId,
   lastAcceptedSequence,
   expectedOwner,
+  activeCaptureGeneration,
 }: {
   payload: unknown;
   activeCaptureSessionId: string | null;
   lastAcceptedSequence: number;
   expectedOwner?: NativeSpeechDetectedEvent["owner"];
+  activeCaptureGeneration?: number | null;
 }): NativeSpeechEventAuthorization {
   const event = parseNativeSpeechDetectedEvent(payload);
   if (!event) {
@@ -102,6 +110,16 @@ export function authorizeNativeSpeechDetectedEvent({
       event,
     };
   }
+  if (
+    activeCaptureGeneration != null &&
+    event.captureGeneration !== activeCaptureGeneration
+  ) {
+    return {
+      authorized: false,
+      reason: "capture-generation-mismatch",
+      event,
+    };
+  }
   if (event.segmentSequence <= lastAcceptedSequence) {
     return {
       authorized: false,
@@ -117,6 +135,7 @@ export function buildNativeSpeechEventTraceMetadata(
 ) {
   return {
     nativeCaptureSessionId: event.captureSessionId,
+    nativeCaptureGeneration: event.captureGeneration,
     nativeSegmentSequence: event.segmentSequence,
     nativeCapturedAtMs: event.capturedAtMs,
     nativeSampleRate: event.sampleRate,

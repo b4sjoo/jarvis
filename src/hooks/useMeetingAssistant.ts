@@ -100,7 +100,9 @@ import {
   isShortConfirmationLike,
   buildMeetingAnswerSummary,
   CaptureLifecycleCoordinator,
+  authorizeNativeAudioLifecycleEvent,
   authorizeNativeSpeechDetectedEvent,
+  buildNativeAudioLifecycleTraceMetadata,
   buildNativeSpeechEventTraceMetadata,
   buildMemoryEvaluationTraceMetadata,
   formatMeetingAnswerTraceMetadata,
@@ -1136,6 +1138,7 @@ export function useMeetingAssistant() {
   const audioSessionIdRef = useRef(createMeetingId("audio_session"));
   const audioSegmentSeqRef = useRef(0);
   const nativeCaptureSessionIdRef = useRef<string | null>(null);
+  const nativeCaptureGenerationRef = useRef<number | null>(null);
   const lastNativeSegmentSequenceRef = useRef(0);
   const systemAudioQueueTailRef = useRef<Promise<void>>(Promise.resolve());
   const microphoneAudioQueueTailRef = useRef<Promise<void>>(Promise.resolve());
@@ -1729,6 +1732,7 @@ export function useMeetingAssistant() {
     audioSessionIdRef.current = createMeetingId("audio_session_inactive");
     audioSegmentSeqRef.current = 0;
     nativeCaptureSessionIdRef.current = null;
+    nativeCaptureGenerationRef.current = null;
     lastNativeSegmentSequenceRef.current = 0;
     systemAudioQueueTailRef.current = Promise.resolve();
     microphoneAudioQueueTailRef.current = Promise.resolve();
@@ -5321,6 +5325,7 @@ export function useMeetingAssistant() {
       resetContext ? "start" : "resume"
     );
     nativeCaptureSessionIdRef.current = null;
+    nativeCaptureGenerationRef.current = null;
     lastNativeSegmentSequenceRef.current = 0;
 
     if (state.settings.privacyMode === "memory-only") {
@@ -5437,7 +5442,8 @@ export function useMeetingAssistant() {
         }
 
         const nativeCaptureSessionId = audioStatus.captureSessionId?.trim();
-        if (!nativeCaptureSessionId) {
+        const nativeCaptureGeneration = audioStatus.captureGeneration;
+        if (!nativeCaptureSessionId || nativeCaptureGeneration == null) {
           await invoke<MeetingAudioStatus>("stop_meeting_audio_session");
           throw new Error(
             "Native audio capture started without a capture session id."
@@ -5446,6 +5452,7 @@ export function useMeetingAssistant() {
 
         startAudioProcessingSession();
         nativeCaptureSessionIdRef.current = nativeCaptureSessionId;
+        nativeCaptureGenerationRef.current = nativeCaptureGeneration;
         lastNativeSegmentSequenceRef.current = 0;
         activeRef.current = true;
         const contextState = contextManagerRef.current.getState();
@@ -7606,6 +7613,7 @@ export function useMeetingAssistant() {
   useEffect(() => {
     let disposed = false;
     let unlistenSpeech: (() => void) | undefined;
+    let unlistenLifecycle: (() => void) | undefined;
 
     const setupListeners = async () => {
       const unlisten = await listen<unknown>("speech-detected", (event) => {
@@ -7614,6 +7622,7 @@ export function useMeetingAssistant() {
           activeCaptureSessionId: nativeCaptureSessionIdRef.current,
           lastAcceptedSequence: lastNativeSegmentSequenceRef.current,
           expectedOwner: "meeting",
+          activeCaptureGeneration: nativeCaptureGenerationRef.current,
         });
         if (!authorization.authorized) {
           const metadata = {
@@ -7643,6 +7652,56 @@ export function useMeetingAssistant() {
       }
 
       unlistenSpeech = unlisten;
+
+      const lifecycleUnlisten = await listen<unknown>(
+        "native-audio-lifecycle",
+        (event) => {
+          const authorization = authorizeNativeAudioLifecycleEvent({
+            payload: event.payload,
+            expectedOwner: "meeting",
+            activeCaptureSessionId: nativeCaptureSessionIdRef.current,
+            activeCaptureGeneration: nativeCaptureGenerationRef.current,
+          });
+          const metadata = {
+            authorized: authorization.authorized,
+            ...(!authorization.authorized
+              ? { rejectionReason: authorization.reason }
+              : {}),
+            ...(authorization.event
+              ? buildNativeAudioLifecycleTraceMetadata(authorization.event)
+              : {}),
+          };
+          sessionRecordingManagerRef.current?.recordCaptureLifecycle(metadata);
+          console.info(
+            `[${new Date().toISOString()}] [native-audio-lifecycle]`,
+            JSON.stringify(metadata)
+          );
+          if (!authorization.authorized) return;
+          if (authorization.event.eventType === "started") return;
+
+          const terminalEvent = authorization.event;
+          activeRef.current = false;
+          invalidateAudioProcessingSession();
+          cancelActiveAdvisorJob(`native-audio-${terminalEvent.eventType}`);
+          setState((previous) => ({
+            ...previous,
+            status: "error",
+            partialSuggestion: "",
+            audioStatus: null,
+            error:
+              terminalEvent.message ||
+              (terminalEvent.eventType === "error"
+                ? "System audio capture failed."
+                : "System audio capture stopped unexpectedly."),
+          }));
+        }
+      );
+
+      if (disposed) {
+        lifecycleUnlisten();
+        return;
+      }
+      unlistenLifecycle = lifecycleUnlisten;
     };
 
     void setupListeners().catch((error) => {
@@ -7652,8 +7711,9 @@ export function useMeetingAssistant() {
     return () => {
       disposed = true;
       unlistenSpeech?.();
+      unlistenLifecycle?.();
     };
-  }, []);
+  }, [cancelActiveAdvisorJob, invalidateAudioProcessingSession]);
 
   useEffect(() => {
     const intervalId = window.setInterval(() => {

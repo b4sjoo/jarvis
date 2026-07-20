@@ -20,6 +20,7 @@ export * from "./interview-task-continuity";
 export * from "./meeting-answer";
 export * from "./meeting-answer-display";
 export * from "./native-speech-event";
+export * from "./native-audio-lifecycle";
 export * from "./memory-evaluation";
 export * from "./personal-evidence-guardrail";
 export * from "./project-binding";

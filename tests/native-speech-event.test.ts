@@ -8,6 +8,7 @@ import {
 
 const FIXTURE = {
   captureSessionId: "capture-test",
+  captureGeneration: 3,
   segmentSequence: 7,
   owner: "system",
   capturedAtMs: 1234,
