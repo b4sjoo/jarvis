@@ -7342,6 +7342,7 @@ export function useMeetingAssistant() {
       } finally {
         if (!cancelled) {
           traceMetricsPersistenceReadyRef.current = true;
+          scheduleTraceMetricsPersistence();
         }
       }
     };
@@ -7359,7 +7360,7 @@ export function useMeetingAssistant() {
         traceMetricsPersistRetryTimerRef.current = null;
       }
     };
-  }, []);
+  }, [scheduleTraceMetricsPersistence]);
 
   useEffect(() => {
     traceStoreRef.current.subscribe((traces) => {

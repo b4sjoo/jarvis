@@ -19,6 +19,7 @@ export const PERSISTED_TRACE_METRICS_BYTE_BUDGET = Math.floor(
 
 export class MeetingTraceStore {
   private traces: MeetingTrace[] = [];
+  private currentProcessTraceIds = new Set<string>();
   private onChange?: (traces: MeetingTrace[]) => void;
   private debugEnabled = false;
 
@@ -44,9 +45,29 @@ export class MeetingTraceStore {
   }
 
   hydrate(traces: MeetingTrace[]) {
-    this.traces = traces
-      .map(sanitizeTraceForPersistence)
-      .sort((left, right) => right.startedAt - left.startedAt)
+    const mergedById = new Map<string, MeetingTrace>();
+    for (const trace of traces.map(sanitizeTraceForPersistence)) {
+      mergedById.set(trace.id, trace);
+    }
+    for (const trace of this.traces) {
+      mergedById.set(trace.id, cloneTrace(trace));
+    }
+
+    const merged = Array.from(mergedById.values()).sort(compareTracesNewestFirst);
+    const currentProcessTraces = merged.filter((trace) =>
+      this.currentProcessTraceIds.has(trace.id)
+    );
+    const persistedHistory = merged.filter(
+      (trace) => !this.currentProcessTraceIds.has(trace.id)
+    );
+    this.traces = [
+      ...currentProcessTraces,
+      ...persistedHistory.slice(
+        0,
+        Math.max(0, MAX_TRACE_ITEMS - currentProcessTraces.length)
+      ),
+    ]
+      .sort(compareTracesNewestFirst)
       .slice(0, MAX_TRACE_ITEMS);
     this.emit();
   }
@@ -57,6 +78,7 @@ export class MeetingTraceStore {
 
   clear() {
     this.traces = [];
+    this.currentProcessTraceIds.clear();
     this.log("traces-cleared");
     this.emit();
   }
@@ -77,6 +99,7 @@ export class MeetingTraceStore {
       metadata,
     };
 
+    this.currentProcessTraceIds.add(trace.id);
     this.traces = [trace, ...this.traces].slice(0, MAX_TRACE_ITEMS);
     this.log("trace-started", {
       id: trace.id,
@@ -892,6 +915,10 @@ function cloneTrace(trace: MeetingTrace): MeetingTrace {
 
 function cloneMetadata(metadata: Record<string, unknown> | undefined) {
   return metadata ? { ...metadata } : undefined;
+}
+
+function compareTracesNewestFirst(left: MeetingTrace, right: MeetingTrace) {
+  return right.startedAt - left.startedAt || left.id.localeCompare(right.id);
 }
 
 function stringifyError(error: unknown) {

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  MeetingTraceStore,
   PERSISTED_TRACE_METRICS_BYTE_BUDGET,
   parseMeetingTraceMetrics,
   serializeMeetingTraceMetrics,
@@ -60,6 +61,71 @@ test("parses legacy v1 trace metrics for backward-compatible hydration", () => {
   assert.equal(parsed[0]?.id, "trace_7");
   assert.deepEqual(parsed[0]?.inputs, []);
   assert.deepEqual(parsed[0]?.outputs, []);
+});
+
+test("merges deferred hydration without dropping or freezing a live trace", async () => {
+  const store = new MeetingTraceStore();
+  let resolvePersistedRead: ((traces: MeetingTrace[]) => void) | undefined;
+  const persistedRead = new Promise<MeetingTrace[]>((resolve) => {
+    resolvePersistedRead = resolve;
+  });
+  const hydration = persistedRead.then((traces) => store.hydrate(traces));
+
+  const live = store.startTrace("voice", { source: "live" }, 5_000);
+  store.updateMetadata(live.id, { beforeHydration: true });
+  resolvePersistedRead?.([buildTrace(1, "persisted")]);
+  await hydration;
+  store.updateMetadata(live.id, { afterHydration: true });
+  store.finishTrace(live.id, "success");
+
+  const hydratedLive = store
+    .getTraces()
+    .find((trace) => trace.id === live.id);
+  assert.equal(hydratedLive?.status, "success");
+  assert.equal(hydratedLive?.metadata?.beforeHydration, true);
+  assert.equal(hydratedLive?.metadata?.afterHydration, true);
+  assert.ok(store.getTraces().some((trace) => trace.id === "trace_1"));
+});
+
+test("keeps the current-process trace when persisted history has the same id", () => {
+  const store = new MeetingTraceStore();
+  const live = store.startTrace("screen", { owner: "current" }, 5_000);
+  const collision = {
+    ...buildTrace(2, "persisted"),
+    id: live.id,
+    metadata: { owner: "persisted" },
+  };
+
+  store.hydrate([collision]);
+
+  const retained = store.getTraces().find((trace) => trace.id === live.id);
+  assert.equal(retained?.status, "running");
+  assert.equal(retained?.metadata?.owner, "current");
+});
+
+test("keeps current-process traces within deterministic newest-first bounds", () => {
+  const store = new MeetingTraceStore();
+  const live = store.startTrace("voice", { owner: "current" }, 500);
+  const history = Array.from({ length: 505 }, (_, index) =>
+    buildTrace(index, `history-${index}`)
+  );
+
+  store.hydrate(history);
+
+  const traces = store.getTraces();
+  assert.equal(traces.length, 500);
+  assert.ok(traces.some((trace) => trace.id === live.id));
+  assert.deepEqual(
+    traces.map((trace) => trace.id),
+    [...traces]
+      .sort(
+        (left, right) =>
+          right.startedAt - left.startedAt || left.id.localeCompare(right.id)
+      )
+      .map((trace) => trace.id)
+  );
+  assert.equal(traces[0]?.id, "trace_504");
+  assert.ok(!traces.some((trace) => trace.id === "trace_0"));
 });
 
 function buildTrace(index: number, note: string): MeetingTrace {
