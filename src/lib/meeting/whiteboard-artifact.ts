@@ -6,7 +6,12 @@ import type {
   WhiteboardDomainTrack,
   WhiteboardUpdateSource,
 } from "./types";
+import type { ArtifactProjectionDecision } from "./meeting-answer-display.js";
 import { parseMeetingAnswer } from "./meeting-answer.js";
+import {
+  areCompatibleParentContinuityTypes,
+  normalizeCanonicalQuestionType,
+} from "./task-taxonomy.js";
 
 export interface WhiteboardArtifactUpdateInput {
   existing?: WhiteboardArtifact;
@@ -20,6 +25,11 @@ export interface WhiteboardArtifactUpdateInput {
   selectedOverlayIds?: string[];
   updateSource: WhiteboardUpdateSource;
   now?: number;
+}
+
+export interface WhiteboardArtifactDisplay {
+  whiteboard: ArtifactProjectionDecision;
+  isCached: boolean;
 }
 
 export function updateWhiteboardArtifactFromAnswer({
@@ -95,6 +105,55 @@ export function updateWhiteboardArtifactFromAnswer({
   };
 }
 
+export function resolveWhiteboardArtifactDisplay({
+  activeParentTaskId,
+  activeParentQuestionType,
+  artifact,
+  inlineWhiteboard,
+  sourceParentTaskId,
+  sourceParentQuestionType,
+}: {
+  activeParentTaskId: string;
+  activeParentQuestionType?: string;
+  artifact?: Pick<WhiteboardArtifact, "parentTaskId" | "content">;
+  inlineWhiteboard?: string;
+  sourceParentTaskId?: string;
+  sourceParentQuestionType?: string;
+}): WhiteboardArtifactDisplay {
+  const activeType = normalizeCanonicalQuestionType(activeParentQuestionType);
+  if (
+    !activeParentTaskId ||
+    (activeType !== "general-system-design" &&
+      activeType !== "ai-ml-system-design")
+  ) {
+    return clearWhiteboardArtifactDisplay();
+  }
+
+  const sourceType = normalizeCanonicalQuestionType(sourceParentQuestionType);
+  const sourceMatchesParent =
+    sourceParentTaskId === activeParentTaskId &&
+    Boolean(sourceType) &&
+    areCompatibleParentContinuityTypes(sourceType, activeType);
+  const normalizedInline = normalizeWhiteboardText(inlineWhiteboard);
+  if (sourceMatchesParent && normalizedInline) {
+    return {
+      whiteboard: { kind: "replace", value: normalizedInline },
+      isCached: false,
+    };
+  }
+
+  if (artifact?.parentTaskId === activeParentTaskId) {
+    return {
+      whiteboard: { kind: "replace", value: artifact.content },
+      isCached: true,
+    };
+  }
+
+  return sourceMatchesParent
+    ? { whiteboard: { kind: "preserve" }, isCached: false }
+    : clearWhiteboardArtifactDisplay();
+}
+
 function createWhiteboardArtifactId() {
   return `whiteboard_artifact_${Date.now()}_${Math.random()
     .toString(36)
@@ -159,4 +218,8 @@ function uniqueIds(values: string[]) {
 function arraysEqual(left: string[], right: string[]) {
   if (left.length !== right.length) return false;
   return left.every((value, index) => value === right[index]);
+}
+
+function clearWhiteboardArtifactDisplay(): WhiteboardArtifactDisplay {
+  return { whiteboard: { kind: "clear" }, isCached: false };
 }

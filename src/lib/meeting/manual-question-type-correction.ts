@@ -5,6 +5,7 @@ import type {
   SelectedInterviewPlaybook,
 } from "./types";
 import {
+  areCompatibleParentContinuityTypes,
   isParentCanonicalQuestionType,
   normalizeCanonicalQuestionType,
   type CanonicalQuestionType,
@@ -133,6 +134,10 @@ export function applyManualQuestionTypeCorrectionToParent({
   const preserveWhiteboard =
     isWhiteboardParentType(parent.stableKind) &&
     isWhiteboardParentType(decision.correctedType);
+  const preserveAnswerContinuity = areCompatibleParentContinuityTypes(
+    parent.stableKind,
+    decision.correctedType
+  );
 
   return {
     ...parent,
@@ -143,9 +148,12 @@ export function applyManualQuestionTypeCorrectionToParent({
     child: undefined,
     projectBinding: undefined,
     supportedFactAnchors: [],
-    previousUsefulAnswer:
-      parent.latestUsefulAnswer ?? parent.previousUsefulAnswer,
-    latestUsefulAnswer: undefined,
+    previousUsefulAnswer: preserveAnswerContinuity
+      ? parent.previousUsefulAnswer
+      : undefined,
+    latestUsefulAnswer: preserveAnswerContinuity
+      ? parent.latestUsefulAnswer
+      : undefined,
     whiteboardArtifact: preserveWhiteboard
       ? parent.whiteboardArtifact
       : undefined,

@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { updateWhiteboardArtifactFromAnswer } from "../src/lib/meeting/whiteboard-artifact.js";
+import {
+  resolveWhiteboardArtifactDisplay,
+  updateWhiteboardArtifactFromAnswer,
+} from "../src/lib/meeting/whiteboard-artifact.js";
 
 const WHITEBOARD_ANSWER = `
 中文思路:
@@ -119,4 +122,48 @@ test("preserves the current whiteboard when model output is partial", () => {
   });
 
   assert.equal(preserved, artifact);
+});
+
+test("accepts inline whiteboard only from the active compatible parent", () => {
+  const accepted = resolveWhiteboardArtifactDisplay({
+    activeParentTaskId: "parent_1",
+    activeParentQuestionType: "ai-ml-system-design",
+    inlineWhiteboard: "Client -> Retrieval -> LLM",
+    sourceParentTaskId: "parent_1",
+    sourceParentQuestionType: "general-system-design",
+  });
+  assert.deepEqual(accepted, {
+    whiteboard: { kind: "replace", value: "Client -> Retrieval -> LLM" },
+    isCached: false,
+  });
+
+  const rejected = resolveWhiteboardArtifactDisplay({
+    activeParentTaskId: "parent_1",
+    activeParentQuestionType: "behavioral",
+    inlineWhiteboard: "stale diagram",
+    sourceParentTaskId: "parent_1",
+    sourceParentQuestionType: "general-system-design",
+  });
+  assert.deepEqual(rejected, {
+    whiteboard: { kind: "clear" },
+    isCached: false,
+  });
+});
+
+test("preserves a cached whiteboard across compatible system-design correction", () => {
+  const display = resolveWhiteboardArtifactDisplay({
+    activeParentTaskId: "parent_1",
+    activeParentQuestionType: "ai-ml-system-design",
+    artifact: {
+      parentTaskId: "parent_1",
+      content: "Client -> API -> Service",
+    },
+    sourceParentTaskId: "parent_1",
+    sourceParentQuestionType: "general-system-design",
+  });
+
+  assert.deepEqual(display, {
+    whiteboard: { kind: "replace", value: "Client -> API -> Service" },
+    isCached: true,
+  });
 });

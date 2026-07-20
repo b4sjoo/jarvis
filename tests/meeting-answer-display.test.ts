@@ -43,12 +43,30 @@ test("overlays parent-scoped artifacts without changing the parsed answer", () =
     expectedProfile: "coding",
   });
   const overlaid = overlayMeetingAnswerArtifacts(display, {
-    code: "def solve():\n    return 1",
-    complexity: "O(1) time and space.",
+    whiteboard: { kind: "preserve" },
+    code: { kind: "replace", value: "def solve():\n    return 1" },
+    complexity: { kind: "replace", value: "O(1) time and space." },
   });
 
   assert.equal(overlaid.primaryAnswer, display.primaryAnswer);
   assert.equal(overlaid.code, "def solve():\n    return 1");
   assert.equal(overlaid.complexity, "O(1) time and space.");
   assert.equal(overlaid.parsedAnswer, display.parsedAnswer);
+});
+
+test("an authoritative clear cannot fall back to stale parsed artifacts", () => {
+  const display = buildMeetingAnswerDisplayModel({
+    content:
+      "Answer: Old answer.\nCode:\n```python\ndef stale(): pass\n```\nComplexity: O(n)",
+    expectedProfile: "coding",
+  });
+  const overlaid = overlayMeetingAnswerArtifacts(display, {
+    whiteboard: { kind: "clear" },
+    code: { kind: "clear" },
+    complexity: { kind: "clear" },
+  });
+
+  assert.equal(overlaid.code, "");
+  assert.equal(overlaid.complexity, "");
+  assert.equal(overlaid.whiteboard, "");
 });

@@ -296,6 +296,23 @@ export function areCompatibleQuestionTypes(left: unknown, right: unknown) {
   return Boolean(normalizedLeft && normalizedRight && normalizedLeft === normalizedRight);
 }
 
+export function areCompatibleParentContinuityTypes(
+  left: unknown,
+  right: unknown
+) {
+  const normalizedLeft = normalizeCanonicalQuestionType(left);
+  const normalizedRight = normalizeCanonicalQuestionType(right);
+  if (!normalizedLeft || !normalizedRight) return false;
+  if (normalizedLeft === normalizedRight) return true;
+
+  return (
+    (normalizedLeft === "general-system-design" ||
+      normalizedLeft === "ai-ml-system-design") &&
+    (normalizedRight === "general-system-design" ||
+      normalizedRight === "ai-ml-system-design")
+  );
+}
+
 export function isParentCanonicalQuestionType(type: CanonicalQuestionType) {
   return (
     type === "behavioral" ||

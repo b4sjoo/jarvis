@@ -1,6 +1,10 @@
-import type { MeetingAnswerDisplayModel } from "./meeting-answer-display.js";
+import type {
+  ArtifactProjectionDecision,
+  MeetingAnswerDisplayModel,
+} from "./meeting-answer-display.js";
 import { stripOuterCodeFence } from "./screen-task-answer.js";
 import {
+  areCompatibleParentContinuityTypes,
   normalizeCanonicalQuestionType,
   type CanonicalQuestionType,
 } from "./task-taxonomy.js";
@@ -15,8 +19,8 @@ export interface CodingArtifactCache {
 }
 
 export interface CodingArtifactDisplay {
-  code: string;
-  complexity: string;
+  code: ArtifactProjectionDecision;
+  complexity: ArtifactProjectionDecision;
   isCached: boolean;
 }
 
@@ -131,21 +135,27 @@ export function resolveCodingArtifactDisplay({
 
   if (artifactPatch) {
     return {
-      code: artifactPatch.code || scopedCache?.code || "",
-      complexity: artifactPatch.complexity || scopedCache?.complexity || "",
+      code: replaceOrPreserveArtifact(
+        artifactPatch.code || scopedCache?.code
+      ),
+      complexity: replaceOrPreserveArtifact(
+        artifactPatch.complexity || scopedCache?.complexity
+      ),
       isCached: false,
     };
   }
 
   if (scopedCache) {
     return {
-      code: scopedCache.code,
-      complexity: scopedCache.complexity,
+      code: replaceOrClearArtifact(scopedCache.code),
+      complexity: replaceOrClearArtifact(scopedCache.complexity),
       isCached: true,
     };
   }
 
-  return emptyCodingArtifactDisplay();
+  return sourceMatchesParent
+    ? preserveCodingArtifactDisplay()
+    : emptyCodingArtifactDisplay();
 }
 
 function getScopedCodingArtifactCache(
@@ -154,7 +164,10 @@ function getScopedCodingArtifactCache(
   activeParentQuestionType: CanonicalQuestionType
 ) {
   return cache?.parentTaskId === activeParentTaskId &&
-    cache.parentQuestionType === activeParentQuestionType
+    areCompatibleParentContinuityTypes(
+      cache.parentQuestionType,
+      activeParentQuestionType
+    )
     ? cache
     : null;
 }
@@ -173,8 +186,12 @@ function doesArtifactSourceBelongToParent({
     sourceParentQuestionType
   );
   return (
-    !canonicalSourceQuestionType ||
-    canonicalSourceQuestionType === activeParentQuestionType
+    sourceParentTaskId === activeParentTaskId &&
+    Boolean(canonicalSourceQuestionType) &&
+    areCompatibleParentContinuityTypes(
+      canonicalSourceQuestionType,
+      activeParentQuestionType
+    )
   );
 }
 
@@ -220,5 +237,31 @@ function isCodingArtifactUpdate(sections: MeetingAnswerDisplayModel) {
 }
 
 function emptyCodingArtifactDisplay(): CodingArtifactDisplay {
-  return { code: "", complexity: "", isCached: false };
+  return {
+    code: { kind: "clear" },
+    complexity: { kind: "clear" },
+    isCached: false,
+  };
+}
+
+function preserveCodingArtifactDisplay(): CodingArtifactDisplay {
+  return {
+    code: { kind: "preserve" },
+    complexity: { kind: "preserve" },
+    isCached: false,
+  };
+}
+
+function replaceOrPreserveArtifact(
+  value: string | undefined
+): ArtifactProjectionDecision {
+  return value?.trim()
+    ? { kind: "replace", value }
+    : { kind: "preserve" };
+}
+
+function replaceOrClearArtifact(
+  value: string | undefined
+): ArtifactProjectionDecision {
+  return value?.trim() ? { kind: "replace", value } : { kind: "clear" };
 }

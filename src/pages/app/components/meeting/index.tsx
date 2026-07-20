@@ -64,6 +64,7 @@ import {
   overlayMeetingAnswerArtifacts,
   resolveMeetingAnswerProfile,
   resolveCodingArtifactDisplay,
+  resolveWhiteboardArtifactDisplay,
   resolveVisibleAnswerEvaluationTarget,
   resolveTraceMemoryEvaluationSnapshot,
   stripOuterCodeFence,
@@ -462,14 +463,18 @@ export const MeetingAssistant = ({
   ]);
   const whiteboardArtifactDisplay = useMemo(() => {
     return resolveWhiteboardArtifactDisplay({
-      activeTaskKind,
+      activeParentTaskId,
+      activeParentQuestionType: activeTaskKind,
       artifact: meeting.activeMeetingTask?.parent.whiteboardArtifact,
-      taskId: activeParentTaskId,
-      sections: suggestionSections,
+      inlineWhiteboard: suggestionSections.whiteboard,
+      sourceParentTaskId: displayedSuggestionParentTaskId,
+      sourceParentQuestionType: displayedSuggestionParentQuestionType,
     });
   }, [
     activeParentTaskId,
     activeTaskKind,
+    displayedSuggestionParentTaskId,
+    displayedSuggestionParentQuestionType,
     meeting.activeMeetingTask?.parent.whiteboardArtifact,
     suggestionSections.whiteboard,
   ]);
@@ -4598,45 +4603,6 @@ function truncateInlineText(value: string, maxChars: number) {
     .trim();
   if (normalized.length <= maxChars) return normalized;
   return `${normalized.slice(0, maxChars).trimEnd()}...`;
-}
-
-function resolveWhiteboardArtifactDisplay({
-  activeTaskKind,
-  artifact,
-  taskId,
-  sections,
-}: {
-  activeTaskKind?: string;
-  artifact?: { parentTaskId: string; content: string };
-  taskId: string;
-  sections: MeetingAnswerDisplayModel;
-}) {
-  const sectionWhiteboard = normalizeWhiteboardArtifactText(sections.whiteboard);
-  if (sectionWhiteboard) {
-    return { whiteboard: sectionWhiteboard, isCached: false };
-  }
-
-  if (
-    taskId &&
-    artifact?.parentTaskId === taskId &&
-    isWhiteboardDisplayTask(activeTaskKind)
-  ) {
-    return { whiteboard: artifact.content, isCached: true };
-  }
-
-  return { whiteboard: "", isCached: false };
-}
-
-function normalizeWhiteboardArtifactText(value: string | undefined) {
-  const normalized = value?.trim();
-  return normalized && normalized !== "-" ? normalized : "";
-}
-
-function isWhiteboardDisplayTask(activeTaskKind: string | undefined) {
-  return (
-    activeTaskKind === "general-system-design" ||
-    activeTaskKind === "ai-ml-system-design"
-  );
 }
 
 function formatChineseThinkingText(value: string) {

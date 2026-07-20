@@ -4,7 +4,10 @@ import {
   resolveCodingArtifactDisplay,
   updateCodingArtifactCache,
 } from "../src/lib/meeting/coding-artifact.js";
-import { buildMeetingAnswerDisplayModel } from "../src/lib/meeting/meeting-answer-display.js";
+import {
+  buildMeetingAnswerDisplayModel,
+  overlayMeetingAnswerArtifacts,
+} from "../src/lib/meeting/meeting-answer-display.js";
 
 test("preserves a coding artifact across child follow-ups under one parent", () => {
   const codingSections = sections(
@@ -34,8 +37,9 @@ test("preserves a coding artifact across child follow-ups under one parent", () 
     sourceParentQuestionType: "coding",
   });
 
-  assert.equal(display.code, "class Queue: pass");
-  assert.equal(display.complexity, "O(1) amortized");
+  const projected = projectArtifacts(followUpSections, display);
+  assert.equal(projected.code, "class Queue: pass");
+  assert.equal(projected.complexity, "O(1) amortized");
   assert.equal(display.isCached, true);
 });
 
@@ -72,7 +76,10 @@ test("drops the previous coding artifact at a new parent boundary", () => {
   });
 
   assert.equal(nextCache, null);
-  assert.deepEqual(display, { code: "", complexity: "", isCached: false });
+  const projected = projectArtifacts(behavioralSections, display);
+  assert.equal(projected.code, "");
+  assert.equal(projected.complexity, "");
+  assert.equal(display.isCached, false);
 });
 
 test("rejects a stale completed suggestion from the previous parent", () => {
@@ -107,7 +114,10 @@ test("rejects a stale completed suggestion from the previous parent", () => {
   });
 
   assert.equal(nextCache, null);
-  assert.deepEqual(display, { code: "", complexity: "", isCached: false });
+  const projected = projectArtifacts(staleSections, display);
+  assert.equal(projected.code, "");
+  assert.equal(projected.complexity, "");
+  assert.equal(display.isCached, false);
 });
 
 test("updates complexity without replacing code for an explicit child improvement", () => {
@@ -170,7 +180,10 @@ test("drops coding artifacts when a parent is retyped in place", () => {
   });
 
   assert.equal(nextCache, null);
-  assert.deepEqual(display, { code: "", complexity: "", isCached: false });
+  const projected = projectArtifacts(staleCodingSections, display);
+  assert.equal(projected.code, "");
+  assert.equal(projected.complexity, "");
+  assert.equal(display.isCached, false);
 });
 
 test("preserves a coding child artifact while its system-design parent is stable", () => {
@@ -200,11 +213,28 @@ test("preserves a coding child artifact while its system-design parent is stable
     sourceParentQuestionType: "ai-ml-system-design",
   });
 
-  assert.equal(display.code, "def loss(): pass");
-  assert.equal(display.complexity, "O(n)");
+  const projected = projectArtifacts(
+    sections(
+      "Question: Why cross entropy?\nAnswer: It matches the likelihood objective."
+    ),
+    display
+  );
+  assert.equal(projected.code, "def loss(): pass");
+  assert.equal(projected.complexity, "O(n)");
   assert.equal(display.isCached, true);
 });
 
 function sections(content: string) {
   return buildMeetingAnswerDisplayModel({ content });
+}
+
+function projectArtifacts(
+  answer: ReturnType<typeof sections>,
+  artifacts: ReturnType<typeof resolveCodingArtifactDisplay>
+) {
+  return overlayMeetingAnswerArtifacts(answer, {
+    whiteboard: { kind: "preserve" },
+    code: artifacts.code,
+    complexity: artifacts.complexity,
+  });
 }

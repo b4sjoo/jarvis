@@ -89,7 +89,7 @@ test("retypes a parent in place while resetting incompatible runtime state", () 
   assert.equal(next.playbookPhase, "project_narrative");
   assert.deepEqual(next.phaseProgress, { project_narrative: true });
   assert.deepEqual(next.supportedFactAnchors, []);
-  assert.equal(next.previousUsefulAnswer, "latest coding answer");
+  assert.equal(next.previousUsefulAnswer, undefined);
   assert.equal(next.latestUsefulAnswer, undefined);
   assert.equal(next.whiteboardArtifact, undefined);
 });
@@ -116,6 +116,30 @@ test("preserves the whiteboard when correcting between system-design parents", (
 
   assert.equal(next.stableKind, "ai-ml-system-design");
   assert.equal(next.whiteboardArtifact, whiteboard);
+});
+
+test("preserves useful-answer continuity only across compatible system-design retypes", () => {
+  const parent = makeInterviewParent({
+    stableKind: "general-system-design",
+    latestUsefulAnswer: "Current architecture summary",
+    previousUsefulAnswer: "Requirements summary",
+  });
+  const decision = decideManualQuestionTypeCorrection(
+    makeActiveTask({ questionType: "general-system-design" }),
+    "ai-ml-system-design"
+  );
+
+  const next = applyManualQuestionTypeCorrectionToParent({
+    parent,
+    decision,
+    correctedPlaybook: makePlaybook(
+      "ai-ml-system-design",
+      "requirement_clarification"
+    ),
+  });
+
+  assert.equal(next.latestUsefulAnswer, "Current architecture summary");
+  assert.equal(next.previousUsefulAnswer, "Requirements summary");
 });
 
 function makeActiveTask({

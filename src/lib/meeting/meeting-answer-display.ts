@@ -20,6 +20,11 @@ export interface MeetingAnswerDisplayModel {
   parsedAnswer: ParsedMeetingAnswer;
 }
 
+export type ArtifactProjectionDecision =
+  | { kind: "preserve" }
+  | { kind: "replace"; value: string }
+  | { kind: "clear" };
+
 export function buildMeetingAnswerDisplayModel({
   content,
   parsedAnswer,
@@ -71,21 +76,39 @@ export function buildMeetingAnswerDisplayModel({
 
 export function overlayMeetingAnswerArtifacts(
   display: MeetingAnswerDisplayModel,
-  artifacts: { whiteboard?: string; code?: string; complexity?: string }
+  artifacts: {
+    whiteboard: ArtifactProjectionDecision;
+    code: ArtifactProjectionDecision;
+    complexity: ArtifactProjectionDecision;
+  }
 ): MeetingAnswerDisplayModel {
+  const whiteboard = applyArtifactProjection(
+    display.whiteboard,
+    artifacts.whiteboard
+  );
+  const code = applyArtifactProjection(display.code, artifacts.code);
+  const complexity = applyArtifactProjection(
+    display.complexity,
+    artifacts.complexity
+  );
   return {
     ...display,
-    whiteboard: normalizeArtifactText(artifacts.whiteboard) || display.whiteboard,
-    code: normalizeArtifactText(artifacts.code) || display.code,
-    complexity:
-      normalizeArtifactText(artifacts.complexity) || display.complexity,
+    whiteboard,
+    code,
+    complexity,
     hasTechnicalDetails: Boolean(
-      display.hasTechnicalDetails ||
-        artifacts.whiteboard ||
-        artifacts.code ||
-        artifacts.complexity
+      display.hasTechnicalDetails || whiteboard || code || complexity
     ),
   };
+}
+
+function applyArtifactProjection(
+  current: string,
+  decision: ArtifactProjectionDecision
+) {
+  if (decision.kind === "clear") return "";
+  if (decision.kind === "preserve") return current;
+  return normalizeArtifactText(decision.value);
 }
 
 function buildChineseThinkingFallback({
