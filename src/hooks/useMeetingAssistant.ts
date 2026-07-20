@@ -296,6 +296,7 @@ const INITIAL_STATE: MeetingAssistantState = {
   },
   sessionRecording: {
     active: false,
+    lifecycle: "idle",
     eventCount: 0,
     artifactCount: 0,
   },

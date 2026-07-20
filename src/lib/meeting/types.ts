@@ -862,6 +862,7 @@ export interface MeetingTraceExportRecord {
 
 export interface MeetingSessionRecordingState {
   active: boolean;
+  lifecycle: "idle" | "starting" | "active" | "closing";
   sessionId?: string;
   folderName?: string;
   folderPath?: string;

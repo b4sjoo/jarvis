@@ -3088,6 +3088,10 @@ const ConfigurationsPanel = ({
                 </div>
                 <Switch
                   checked={sessionRecording.active}
+                  disabled={
+                    sessionRecording.lifecycle === "starting" ||
+                    sessionRecording.lifecycle === "closing"
+                  }
                   onCheckedChange={onSessionRecordingChange}
                 />
               </div>
@@ -3112,6 +3116,14 @@ const ConfigurationsPanel = ({
                     {sessionRecording.eventCount} events /{" "}
                     {sessionRecording.artifactCount} artifacts
                   </div>
+                </div>
+              ) : null}
+              {sessionRecording.lifecycle === "starting" ||
+              sessionRecording.lifecycle === "closing" ? (
+                <div className="text-[10px] text-muted-foreground">
+                  {sessionRecording.lifecycle === "starting"
+                    ? "Starting recording..."
+                    : "Finalizing recording..."}
                 </div>
               ) : null}
               {sessionRecording.lastError ? (
