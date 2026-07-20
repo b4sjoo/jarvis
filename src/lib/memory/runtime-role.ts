@@ -4,6 +4,7 @@ import type {
   RuntimeMemoryRole,
   RuntimeMemoryRoleDecision,
 } from "./types.js";
+import { resolveMemoryInterviewFamilies } from "./interview-family.js";
 
 const DIRECT_FACT_EVIDENCE_TYPES = new Set<MemoryEntry["type"]>([
   "resume_fact",
@@ -41,6 +42,8 @@ export interface RuntimeMemoryRoleTelemetryEntry {
   projectId?: string;
   projectName?: string;
   evidenceEntryIds: string[];
+  interviewFamilies: string[];
+  interviewFamilySource: "explicit" | "inferred" | "general";
 }
 
 export interface RuntimeMemoryRoleTelemetry {
@@ -139,6 +142,7 @@ export function buildRuntimeMemoryRoleTelemetry(
 
   const telemetryEntries = entries.map((item) => {
     const decision = resolveRetrievedMemoryRole(item);
+    const familyDecision = resolveMemoryInterviewFamilies(item.entry);
     counts[decision.role] += 1;
     if (decision.anchorEligible) anchorEligibleCount += 1;
 
@@ -151,6 +155,8 @@ export function buildRuntimeMemoryRoleTelemetry(
       projectId: item.entry.projectId,
       projectName: item.entry.projectName,
       evidenceEntryIds: [...item.entry.evidenceEntryIds],
+      interviewFamilies: familyDecision.families,
+      interviewFamilySource: familyDecision.source,
     };
   });
 

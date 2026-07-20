@@ -18,10 +18,6 @@ import type {
   MemoryUseCase,
   RetrievedMemoryEntry,
 } from "./types";
-import {
-  isQuestionTypeCompatibleWithMemoryFamily,
-  normalizeMemoryInterviewTypes,
-} from "@/lib/meeting/task-taxonomy";
 import { isMemoryProjectAnchorCompatible } from "./project-anchor.js";
 import {
   gateDiagramOverlayEntriesByDomain,
@@ -31,6 +27,7 @@ import {
   classifyRuntimeMemoryRole,
   resolveRetrievedMemoryRole,
 } from "./runtime-role.js";
+import { getMemoryInterviewFamilyGateRejectReason } from "./interview-family.js";
 
 const DEFAULT_MAX_ENTRIES = 5;
 const DEFAULT_MAX_CHARS = 6000;
@@ -389,147 +386,12 @@ function getInterviewGateRejectReason(
   questionType: MemoryQuestionType | undefined,
   memoryPolicy: MemoryRetrievalPolicy | undefined
 ): MemoryRejectReason | undefined {
-  const family = inferEntryInterviewFamily(entry);
-  if (!family || family === "general") return undefined;
-
-  const allowedTypes = normalizeAllowedInterviewTypes(interviewTypes);
-  if (allowedTypes && !allowedTypes.has(family)) {
-    return "brief-interview-type-blocked";
-  }
-
-  if (memoryPolicy?.blockedFamilies?.includes(family)) {
-    return "playbook-family-blocked";
-  }
-
-  if (
-    memoryPolicy?.allowedFamilies?.length &&
-    !memoryPolicy.allowedFamilies.includes(family)
-  ) {
-    return "playbook-family-blocked";
-  }
-
-  if (
-    questionType &&
-    questionType !== "unknown" &&
-    questionType !== "field-knowledge" &&
-    questionType !== "behavioral" &&
-    family === "behavioral"
-  ) {
-    return "behavioral-family-blocked";
-  }
-
-  if (
-    questionType &&
-    questionType !== "unknown" &&
-    questionType !== "field-knowledge" &&
-    !isQuestionTypeCompatibleWithMemoryFamily(questionType, family)
-  ) {
-    return "question-type-family-mismatch";
-  }
-
-  return undefined;
-}
-
-function normalizeAllowedInterviewTypes(
-  interviewTypes: MemoryInterviewType[] | undefined
-) {
-  const normalized = normalizeMemoryInterviewTypes(interviewTypes);
-  if (!normalized?.length || normalized.includes("mixed")) {
-    return undefined;
-  }
-
-  return new Set(
-    normalized.filter(
-      (type): type is Exclude<MemoryInterviewType, "mixed"> =>
-        type !== "mixed"
-    )
-  );
-}
-
-function inferEntryInterviewFamily(
-  entry: MemoryEntry
-):
-  | Exclude<MemoryInterviewType, "mixed">
-  | "general"
-  | undefined {
-  const searchable = [
-    entry.type,
-    entry.title,
-    entry.tags.join(" "),
-    entry.keywords.join(" "),
-    entry.useCases.join(" "),
-  ]
-    .join(" ")
-    .toLowerCase();
-
-  if (isDiagramOverlayMemoryEntry(entry)) {
-    return inferDiagramOverlayFamily(searchable);
-  }
-
-  if (
-    entry.type === "behavioral_question" ||
-    entry.useCases.includes("behavioral_interview") ||
-    /\b(behavioral|behavioural|leadership principle|lp:|star|company:amazon|rubric)\b/.test(
-      searchable
-    )
-  ) {
-    return isGuidanceOrQuestionBankEntry(entry) ? "behavioral" : undefined;
-  }
-
-  if (
-    entry.type === "coding_question" ||
-    entry.useCases.includes("coding_interview") ||
-    /\b(coding|algorithm|leetcode|data structure)\b/.test(searchable)
-  ) {
-    return isGuidanceOrQuestionBankEntry(entry) ? "coding" : undefined;
-  }
-
-  if (
-    /\b(ai\/ml|ml infra|machine learning|rag|retrieval augmented generation|model serving|model routing|vector search|embedding|agentic|agent memory|llm platform|evaluation)\b/.test(
-      searchable
-    )
-  ) {
-    return isGuidanceOrQuestionBankEntry(entry)
-      ? "ai-ml-system-design"
-      : undefined;
-  }
-
-  if (/\b(system design|architecture|distributed system)\b/.test(searchable)) {
-    return isGuidanceOrQuestionBankEntry(entry) ? "system-design" : undefined;
-  }
-
-  if (/\b(project deep dive|project dive|deep-dive)\b/.test(searchable)) {
-    return isGuidanceOrQuestionBankEntry(entry)
-      ? "project-deep-dive"
-      : undefined;
-  }
-
-  return "general";
-}
-
-function isGuidanceOrQuestionBankEntry(entry: MemoryEntry) {
-  return (
-    entry.type === "evaluation_criteria" ||
-    entry.type === "interview_framework" ||
-    entry.type === "answer_template" ||
-    entry.type === "behavioral_question" ||
-    entry.type === "technical_question" ||
-    entry.type === "coding_question" ||
-    entry.type === "cached_answer" ||
-    isDiagramOverlayMemoryEntry(entry)
-  );
-}
-
-function inferDiagramOverlayFamily(searchable: string) {
-  if (
-    /\b(ai\/ml|ml|machine learning|rag|retrieval augmented generation|llm|agent|embedding|vector|model|evaluation|feature|training|inference|rerank|context builder)\b/.test(
-      searchable
-    )
-  ) {
-    return "ai-ml-system-design" as const;
-  }
-
-  return "system-design" as const;
+  return getMemoryInterviewFamilyGateRejectReason({
+    entry,
+    interviewTypes,
+    questionType,
+    memoryPolicy,
+  });
 }
 
 interface MemoryScoringContext {

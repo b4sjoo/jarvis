@@ -119,6 +119,13 @@ const MEMORY_USE_CASES = [
   "answer_alignment",
   "general_chat",
 ] as const;
+const MEMORY_INTERVIEW_FAMILIES = [
+  "behavioral",
+  "coding",
+  "system-design",
+  "ai-ml-system-design",
+  "project-deep-dive",
+] as const;
 
 type YamlValue = string | boolean | string[] | undefined;
 type YamlRecord = Record<string, YamlValue>;
@@ -350,6 +357,11 @@ function normalizeEntryRecord(
     useCases: readEnumArray(record.useCases, MEMORY_USE_CASES, [
       "meeting_assistant",
     ]),
+    interviewFamilies: readEnumArray(
+      record.interviewFamilies,
+      MEMORY_INTERVIEW_FAMILIES,
+      []
+    ),
     confidentiality: readEnum(
       record.confidentiality,
       MEMORY_CONFIDENTIALITIES,

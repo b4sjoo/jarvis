@@ -190,6 +190,7 @@ export interface MemoryEntry {
   enabled: boolean;
   injectionMode: MemoryInjectionMode;
   useCases: MemoryUseCase[];
+  interviewFamilies?: MemoryInterviewFamily[];
   confidentiality: MemoryConfidentiality;
   curationStatus: MemoryCurationStatus;
   relatedEntryIds: string[];
