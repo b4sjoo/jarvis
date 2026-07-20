@@ -171,6 +171,8 @@ import {
   decideManualQuestionTypeCorrection,
   applyManualQuestionTypeCorrectionToParent,
   ManualCorrectionOperationCoordinator,
+  decideInterviewTaskContinuityBranch,
+  applyInterviewChildProbeTransition,
   persistTraceHumanEvaluations,
   persistQuestionHumanEvaluations,
   buildSessionRecordingProviderSummary,
@@ -8714,45 +8716,54 @@ function updateInterviewTaskContinuityForAnswer({
     undefined,
     supportedFactAnchors
   );
+  const continuityDecision = decideInterviewTaskContinuityBranch({
+    hasExistingParent: Boolean(existingTask),
+    existingParentQuestionType: existingTask?.stableKind,
+    candidateQuestionType: questionType,
+    relation,
+  });
 
-  if (!kind || !isParentInterviewKind(kind)) {
-    if (relation === "child-probe" && existingTask && isUsefulAnswer) {
-      const child = buildActiveInterviewChild({
-        questionType: childQuestionType,
-        subtaskIntent,
-        question: topic,
-        parsedAnswer: parsed,
-        latestTurn,
-        observationId,
-      });
-      const whiteboardArtifact = updateWhiteboardArtifactFromAnswer({
-        existing: existingTask.whiteboardArtifact,
-        parentTaskId: existingTask.id,
-        parentQuestionType: existingTask.stableKind,
-        parentTopic: existingTask.topic,
-        finalContent: trimmedContent,
-        parsedAnswer: parsed,
-        phase: phaseDecision?.phase ?? existingTask.playbookPhase,
-        traceId,
-        selectedOverlayIds,
-        updateSource: whiteboardUpdateSource ?? "model-output",
+  if (continuityDecision.branch === "child-probe" && existingTask) {
+    const child = isUsefulAnswer
+      ? buildActiveInterviewChild({
+          questionType: childQuestionType,
+          subtaskIntent,
+          question: topic,
+          parsedAnswer: parsed,
+          latestTurn,
+          observationId,
+        })
+      : undefined;
+    const whiteboardArtifact = updateWhiteboardArtifactFromAnswer({
+      existing: existingTask.whiteboardArtifact,
+      parentTaskId: existingTask.id,
+      parentQuestionType: existingTask.stableKind,
+      parentTopic: existingTask.topic,
+      finalContent: trimmedContent,
+      parsedAnswer: parsed,
+      phase: phaseDecision?.phase ?? existingTask.playbookPhase,
+      traceId,
+      selectedOverlayIds,
+      updateSource: whiteboardUpdateSource ?? "model-output",
+      now,
+    });
+
+    return {
+      task: applyInterviewChildProbeTransition({
+        parent: existingTask,
+        child,
+        projectBinding,
+        supportedFactAnchors: continuingTaskAnchors,
+        whiteboardArtifact,
         now,
-      });
+        expiresAt,
+      }),
+      startedNewParent: false,
+      clearedParent: false,
+    };
+  }
 
-      return {
-        task: {
-          ...existingTask,
-          updatedAt: now,
-          expiresAt,
-          child,
-          whiteboardArtifact,
-          revisions: existingTask.revisions + 1,
-        },
-        startedNewParent: false,
-        clearedParent: false,
-      };
-    }
-
+  if (continuityDecision.branch === "preserve") {
     return {
       task: existingTask,
       startedNewParent: false,
@@ -8760,13 +8771,14 @@ function updateInterviewTaskContinuityForAnswer({
     };
   }
 
-  const shouldStartNewParent =
-    !existingTask ||
-    relation === "new-parent" ||
-    relation === "unknown" ||
-    !isCompatibleParentKind(existingTask.stableKind, kind);
-
-  if (shouldStartNewParent) {
+  if (continuityDecision.branch === "new-parent") {
+    if (!kind || !isParentInterviewKind(kind)) {
+      return {
+        task: existingTask,
+        startedNewParent: false,
+        clearedParent: false,
+      };
+    }
     const parentId = createMeetingId("interview_parent");
     const nextPhase = phaseDecision?.phase ?? playbook?.phase ?? "follow_up";
     const storedPlaybook = withInterviewPlaybookPhase(playbook, nextPhase);
@@ -8815,41 +8827,9 @@ function updateInterviewTaskContinuityForAnswer({
     };
   }
 
-  if (relation === "child-probe") {
-    const whiteboardArtifact = updateWhiteboardArtifactFromAnswer({
-      existing: existingTask.whiteboardArtifact,
-      parentTaskId: existingTask.id,
-      parentQuestionType: existingTask.stableKind,
-      parentTopic: existingTask.topic,
-      finalContent: trimmedContent,
-      parsedAnswer: parsed,
-      phase: phaseDecision?.phase ?? existingTask.playbookPhase,
-      traceId,
-      selectedOverlayIds,
-      updateSource: whiteboardUpdateSource ?? "model-output",
-      now,
-    });
-
+  if (!existingTask) {
     return {
-      task: {
-        ...existingTask,
-        updatedAt: now,
-        expiresAt,
-        child: isUsefulAnswer
-          ? buildActiveInterviewChild({
-              questionType: childQuestionType,
-              subtaskIntent,
-              question: topic,
-              parsedAnswer: parsed,
-              latestTurn,
-              observationId,
-            })
-          : existingTask.child,
-        projectBinding: projectBinding ?? existingTask.projectBinding,
-        supportedFactAnchors: continuingTaskAnchors,
-        whiteboardArtifact,
-        revisions: existingTask.revisions + 1,
-      },
+      task: undefined,
       startedNewParent: false,
       clearedParent: false,
     };

@@ -1,0 +1,148 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import {
+  applyInterviewChildProbeTransition,
+  decideInterviewTaskContinuityBranch,
+} from "../src/lib/meeting/interview-task-continuity.js";
+import type {
+  ActiveInterviewChild,
+  ActiveInterviewParent,
+} from "../src/lib/meeting/types.js";
+
+test("keeps a coding probe as a child of a system-design parent", () => {
+  assert.deepEqual(
+    decideInterviewTaskContinuityBranch({
+      hasExistingParent: true,
+      existingParentQuestionType: "general-system-design",
+      candidateQuestionType: "coding",
+      relation: "child-probe",
+    }),
+    {
+      branch: "child-probe",
+      reason: "authoritative-child-relation-precedes-parent-eligibility",
+    }
+  );
+});
+
+test("keeps a coding probe under a project parent and preserves resume authority", () => {
+  assert.equal(
+    decideInterviewTaskContinuityBranch({
+      hasExistingParent: true,
+      existingParentQuestionType: "project-deep-dive",
+      candidateQuestionType: "coding",
+      relation: "child-probe",
+    }).branch,
+    "child-probe"
+  );
+  assert.equal(
+    decideInterviewTaskContinuityBranch({
+      hasExistingParent: true,
+      existingParentQuestionType: "ai-ml-system-design",
+      candidateQuestionType: "field-knowledge",
+      relation: "resume-parent",
+    }).branch,
+    "continue-parent"
+  );
+});
+
+test("allows an explicit new coding problem to replace the parent", () => {
+  assert.deepEqual(
+    decideInterviewTaskContinuityBranch({
+      hasExistingParent: true,
+      existingParentQuestionType: "general-system-design",
+      candidateQuestionType: "coding",
+      relation: "new-parent",
+    }),
+    {
+      branch: "new-parent",
+      reason: "relation-new-parent",
+    }
+  );
+});
+
+test("does not create a parent from an unscoped field-knowledge child", () => {
+  assert.equal(
+    decideInterviewTaskContinuityBranch({
+      hasExistingParent: false,
+      candidateQuestionType: "field-knowledge",
+      relation: "child-probe",
+    }).branch,
+    "preserve"
+  );
+});
+
+test("applies a child probe without replacing parent trajectory state", () => {
+  const parent = makeParent();
+  const child = makeChild();
+  const next = applyInterviewChildProbeTransition({
+    parent,
+    child,
+    supportedFactAnchors: ["agentic-memory"],
+    whiteboardArtifact: parent.whiteboardArtifact,
+    now: 2_000,
+    expiresAt: 20_000,
+  });
+
+  assert.equal(next.id, parent.id);
+  assert.equal(next.stableKind, "ai-ml-system-design");
+  assert.equal(next.playbookPhase, "design_framing");
+  assert.equal(next.projectBinding, parent.projectBinding);
+  assert.equal(next.whiteboardArtifact, parent.whiteboardArtifact);
+  assert.equal(next.child, child);
+  assert.equal(next.revisions, parent.revisions + 1);
+});
+
+function makeParent(): ActiveInterviewParent {
+  return {
+    id: "parent-1",
+    source: "voice",
+    stableKind: "ai-ml-system-design",
+    topic: "Design a RAG system",
+    playbookPhase: "design_framing",
+    phaseProgress: { design_framing: true },
+    projectBinding: {
+      projectId: "agentic-memory",
+      projectName: "Agentic Memory",
+      primaryEntryId: "memory-1",
+      evidenceEntryIds: ["memory-1"],
+      source: "memory",
+      confidence: 1,
+      lockedAt: 1_000,
+      revision: 1,
+      reason: "test",
+    },
+    supportedFactAnchors: ["agentic-memory"],
+    whiteboardArtifact: {
+      id: "whiteboard-1",
+      parentTaskId: "parent-1",
+      domainTrack: "ml_sd",
+      archetypeIds: [],
+      selectedOverlayIds: [],
+      currentPhase: "design_framing",
+      title: "RAG architecture",
+      content: "Query -> Retriever -> LLM",
+      summary: "RAG architecture",
+      revision: 1,
+      updateSource: "model-output",
+      updatedAt: 1_000,
+      createdAt: 1_000,
+    },
+    createdAt: 1_000,
+    updatedAt: 1_000,
+    revisions: 2,
+  };
+}
+
+function makeChild(): ActiveInterviewChild {
+  return {
+    id: "child-1",
+    createdAt: 2_000,
+    updatedAt: 2_000,
+    questionType: "coding",
+    relation: "child-probe",
+    intent: "implementation-probe",
+    question: "Implement the loss function",
+    basedOnTurnIds: ["turn-1"],
+    basedOnObservationIds: [],
+  };
+}
