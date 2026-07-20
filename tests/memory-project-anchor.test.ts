@@ -33,6 +33,35 @@ test("strict project anchor accepts direct project name matches", () => {
   );
 });
 
+test("strict project anchor cannot match incidental title or content text", () => {
+  const contaminatedEntry = makeMemoryEntry({
+    id: "mem_throttling_mentions_agentic",
+    title: "Agentic Memory comparison notes",
+    projectId: "throttling",
+    projectName: "Throttling",
+    content: "This document compares throttling with Agentic Memory.",
+  });
+
+  assert.equal(
+    isMemoryProjectAnchorCompatible(contaminatedEntry, "Agentic Memory"),
+    false
+  );
+});
+
+test("strict project anchor rejects project evidence without canonical identity", () => {
+  assert.equal(
+    isMemoryProjectAnchorCompatible(
+      makeMemoryEntry({
+        projectId: undefined,
+        projectName: undefined,
+        title: "Agentic Memory architecture",
+      }),
+      "Agentic Memory"
+    ),
+    false
+  );
+});
+
 test("strict project anchor exempts global reusable guidance", () => {
   const globalRubric = makeMemoryEntry({
     id: "mem_project_deep_dive_framework",

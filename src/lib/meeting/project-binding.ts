@@ -136,6 +136,15 @@ export function resolveProjectBinding({
     };
   }
 
+  if (projectAnchor?.trim()) {
+    return {
+      action: "needs-selection",
+      candidates,
+      changed: false,
+      reason: "project-hint-did-not-resolve-to-one-evidence-project",
+    };
+  }
+
   if (candidates.length === 1) {
     return {
       action: "bind",
@@ -157,9 +166,7 @@ export function resolveProjectBinding({
       action: "needs-selection",
       candidates,
       changed: false,
-      reason: projectAnchor
-        ? "project-hint-did-not-resolve-to-one-evidence-project"
-        : "multiple-eligible-evidence-projects",
+      reason: "multiple-eligible-evidence-projects",
     };
   }
 

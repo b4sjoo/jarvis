@@ -177,6 +177,24 @@ test("a screen project hint without eligible evidence cannot bind", () => {
   );
 });
 
+test("an unmatched project hint cannot auto-bind the only eligible project", () => {
+  const decision = resolveProjectBinding({
+    questionType: "project-deep-dive",
+    relation: "new-parent",
+    projectAnchor: "Microsoft MCP",
+    memoryContext: makeMemoryResult([
+      makeEvidence("mem_agentic", "agentic-memory", "Agentic Memory"),
+    ]),
+  });
+
+  assert.equal(decision.action, "needs-selection");
+  assert.equal(decision.binding, undefined);
+  assert.equal(
+    decision.reason,
+    "project-hint-did-not-resolve-to-one-evidence-project"
+  );
+});
+
 function makeBinding(): ProjectBinding {
   return {
     projectId: "agentic-memory",

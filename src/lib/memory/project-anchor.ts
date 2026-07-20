@@ -11,19 +11,13 @@ export function isMemoryProjectAnchorCompatible(
   const anchorTokens = extractProjectAnchorTokens(anchor);
   if (!anchorTokens.size) return true;
 
-  const directAnchorText = [entry.projectId, entry.projectName, entry.title]
+  const canonicalIdentityText = [entry.projectId, entry.projectName]
     .filter(Boolean)
     .join(" ");
-  if (
-    directAnchorText &&
-    hasProjectAnchorTokenCoverage(anchorTokens, tokenize(directAnchorText))
-  ) {
-    return true;
-  }
-
+  if (!canonicalIdentityText) return false;
   return hasProjectAnchorTokenCoverage(
     anchorTokens,
-    tokenize(buildEntrySearchableText(entry))
+    tokenize(canonicalIdentityText)
   );
 }
 
@@ -88,22 +82,6 @@ function hasProjectAnchorTokenCoverage(
   if (anchorTokens.size === 1) return matched === 1;
   if (anchorTokens.size === 2) return matched === 2;
   return matched >= Math.ceil(anchorTokens.size * 0.75);
-}
-
-function buildEntrySearchableText(entry: MemoryEntry) {
-  return [
-    entry.projectId,
-    entry.projectName,
-    entry.type,
-    entry.title,
-    entry.tags.join(" "),
-    entry.keywords.join(" "),
-    entry.summary,
-    entry.content.slice(0, 1000),
-  ]
-    .filter(Boolean)
-    .join(" ")
-    .toLowerCase();
 }
 
 function tokenize(text: string | undefined) {
