@@ -15,12 +15,14 @@ import { ManualScheduler } from "./manual-scheduler.js";
 export type OrchestrationOperationKind =
   | "advisor"
   | "screen"
+  | "memory"
   | "correction"
   | "recording";
 
 export type OrchestrationOperationOutcome = "committed" | "rejected";
 
 export interface RuntimeStateDigest {
+  runtimeEpoch: number;
   sessionId: string;
   parentId?: string;
   parentRevision?: number;
@@ -81,6 +83,11 @@ export class MeetingOrchestrationHarness {
   readonly scheduler = new ManualScheduler();
 
   private activeAdvisorJobId?: string;
+  private readonly activeOperationIds = new Map<
+    OrchestrationOperationKind,
+    string
+  >();
+  private runtimeEpoch = 1;
   private latestSuggestionTraceId?: string;
   private recordingSessionId?: string;
   private journalSequence = 0;
@@ -148,16 +155,43 @@ export class MeetingOrchestrationHarness {
 
   activateAdvisorJob(jobId: string) {
     this.activeAdvisorJobId = jobId;
+    this.activateOperation("advisor", jobId);
   }
 
   releaseAdvisorJob(jobId: string) {
     if (this.activeAdvisorJobId === jobId) {
       this.activeAdvisorJobId = undefined;
+      this.releaseOperation("advisor", jobId);
     }
   }
 
   getActiveAdvisorJobId() {
     return this.activeAdvisorJobId;
+  }
+
+  activateOperation(kind: OrchestrationOperationKind, operationId: string) {
+    this.activeOperationIds.set(kind, operationId);
+  }
+
+  releaseOperation(kind: OrchestrationOperationKind, operationId: string) {
+    if (this.activeOperationIds.get(kind) === operationId) {
+      this.activeOperationIds.delete(kind);
+    }
+  }
+
+  getActiveOperationId(kind: OrchestrationOperationKind) {
+    return this.activeOperationIds.get(kind);
+  }
+
+  getRuntimeEpoch() {
+    return this.runtimeEpoch;
+  }
+
+  advanceRuntimeEpoch() {
+    this.runtimeEpoch += 1;
+    this.activeAdvisorJobId = undefined;
+    this.activeOperationIds.clear();
+    return this.runtimeEpoch;
   }
 
   setLatestSuggestionTraceId(traceId: string | undefined) {
@@ -172,6 +206,7 @@ export class MeetingOrchestrationHarness {
     const state = this.contextManager.getState();
     const task = state.activeMeetingTask;
     return {
+      runtimeEpoch: this.runtimeEpoch,
       sessionId: state.sessionId,
       parentId: task?.parent.id,
       parentRevision: task?.parent.revisions,

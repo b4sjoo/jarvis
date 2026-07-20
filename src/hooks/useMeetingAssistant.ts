@@ -27,6 +27,7 @@ import {
   AdvisorTriggerJob,
   AdvisorJobSource,
   AdvisorTaskMutationAuthority,
+  RuntimeCommitToken,
   AdvisorTurnIntentDecision,
   ActiveMeetingTask,
   ActiveInterviewParent,
@@ -128,10 +129,13 @@ import {
   areCompatibleQuestionTypes,
   authorizeAdvisorExecution,
   createAdvisorTriggerJob,
+  authorizeRuntimeCommit,
+  buildRuntimeCommitSnapshot,
+  createRuntimeCommitToken,
   decideAdvisorPhaseMutation,
-  decideAdvisorJobCommit,
   decideAdvisorTaskMutation,
   formatAdvisorTriggerJobForTrace,
+  formatRuntimeCommitAuthorizationForTrace,
   canQuestionTypeDecisionOverrideParent,
   decideAdvisorTurnIntent,
   decideSentenceCompletion,
@@ -1088,8 +1092,9 @@ export function useMeetingAssistant() {
   const advisorDebounceTimerRef = useRef<number | null>(null);
   const activeAdvisorJobRef = useRef<AdvisorTriggerJob | null>(null);
   const screenAnalysisAbortRef = useRef<AbortController | null>(null);
-  const screenCaptureInFlightRef = useRef(false);
-  const manualQuestionTypeCorrectionInFlightRef = useRef(false);
+  const runtimeEpochRef = useRef(1);
+  const activeScreenOperationIdRef = useRef<string | null>(null);
+  const activeManualCorrectionOperationIdRef = useRef<string | null>(null);
   const audioSessionIdRef = useRef(createMeetingId("audio_session"));
   const audioSegmentSeqRef = useRef(0);
   const systemAudioQueueTailRef = useRef<Promise<void>>(Promise.resolve());
@@ -1104,6 +1109,27 @@ export function useMeetingAssistant() {
   const speechDetectedHandlerRef = useRef<
     ((base64Audio: string) => void) | undefined
   >(undefined);
+
+  const readRuntimeCommitSnapshot = useCallback(
+    () =>
+      buildRuntimeCommitSnapshot({
+        runtimeEpoch: runtimeEpochRef.current,
+        contextState: contextManagerRef.current.getState(),
+      }),
+    []
+  );
+
+  const advanceRuntimeEpoch = useCallback((reason: string) => {
+    const previousEpoch = runtimeEpochRef.current;
+    runtimeEpochRef.current += 1;
+    activeScreenOperationIdRef.current = null;
+    activeManualCorrectionOperationIdRef.current = null;
+    return {
+      runtimeInvalidationReason: reason,
+      previousRuntimeEpoch: previousEpoch,
+      runtimeEpoch: runtimeEpochRef.current,
+    };
+  }, []);
 
   const finishRunningAdvisorJobTrace = useCallback(
     (
@@ -1291,6 +1317,7 @@ export function useMeetingAssistant() {
 
   const resetMeetingRuntimeForNewSession = useCallback(
     (reason: string) => {
+      const runtimeBoundary = advanceRuntimeEpoch(reason);
       const previousContext = contextManagerRef.current.getState();
       const previousTraceCount = traceStoreRef.current
         .getTraces()
@@ -1312,8 +1339,6 @@ export function useMeetingAssistant() {
       cancelActiveAdvisorJob(reason);
       screenAnalysisAbortRef.current?.abort();
       screenAnalysisAbortRef.current = null;
-      screenCaptureInFlightRef.current = false;
-      manualQuestionTypeCorrectionInFlightRef.current = false;
       speechCorrectionsRef.current = [];
       latestScreenHashRef.current = undefined;
 
@@ -1358,6 +1383,7 @@ export function useMeetingAssistant() {
       }));
 
       return {
+        ...runtimeBoundary,
         reason,
         hadExistingRuntimeState,
         previousTranscriptTurns: previousContext.transcriptTurns.length,
@@ -1390,6 +1416,7 @@ export function useMeetingAssistant() {
       };
     },
     [
+      advanceRuntimeEpoch,
       cancelActiveAdvisorJob,
       clearPendingConfirmationForRuntimeReset,
       clearPendingSentenceCompletionForRuntimeReset,
@@ -2305,6 +2332,8 @@ export function useMeetingAssistant() {
       memoryPolicy,
       forceStrictProjectAnchor,
       taskId,
+      runtimeToken,
+      currentOperationId,
     }: {
       traceId?: string;
       taskId?: string;
@@ -2317,6 +2346,8 @@ export function useMeetingAssistant() {
       projectAnchor?: string;
       memoryPolicy?: MemoryRetrievalPolicy;
       forceStrictProjectAnchor?: boolean;
+      runtimeToken?: RuntimeCommitToken;
+      currentOperationId?: () => string | null | undefined;
     }): Promise<MemoryRetrievalResult | undefined> => {
       const resolvedQuestionType =
         questionType ?? inferMemoryQuestionTypeFromQuery(query);
@@ -2404,6 +2435,40 @@ export function useMeetingAssistant() {
           interviewTypes,
           memoryPolicy: effectiveMemoryPolicy,
         });
+        if (runtimeToken) {
+          const memoryRuntimeToken: RuntimeCommitToken = {
+            ...runtimeToken,
+            pipeline: "memory",
+          };
+          const runtimeDecision = authorizeRuntimeCommit({
+            token: memoryRuntimeToken,
+            current: readRuntimeCommitSnapshot(),
+            currentOperationId: currentOperationId?.(),
+          });
+          if (traceId) {
+            traceStoreRef.current.updateMetadata(
+              traceId,
+              formatRuntimeCommitAuthorizationForTrace(
+                runtimeDecision,
+                "post-memory"
+              )
+            );
+          }
+          if (!runtimeDecision.authorized) {
+            if (traceId) {
+              traceStoreRef.current.finishStep(
+                traceId,
+                memoryStepId,
+                "cancelled",
+                formatRuntimeCommitAuthorizationForTrace(
+                  runtimeDecision,
+                  "post-memory"
+                )
+              );
+            }
+            return undefined;
+          }
+        }
         const diagramOverlayTraceMetadata =
           buildDiagramOverlayEvalTraceMetadata(memoryContext.overlaySelection);
         const memoryRoleTelemetry = buildRuntimeMemoryRoleTelemetry(
@@ -2522,10 +2587,11 @@ export function useMeetingAssistant() {
         return undefined;
       }
     },
-    [state.settings.useMemory]
+    [readRuntimeCommitSnapshot, state.settings.useMemory]
   );
 
   const clearActiveScreenTask = useCallback(() => {
+    advanceRuntimeEpoch("active-task-cleared");
     clearPendingSentenceCompletionForRuntimeReset("active-task-cleared");
     cancelActiveAdvisorJob("active-task-cleared");
     screenAnalysisAbortRef.current?.abort();
@@ -2533,11 +2599,13 @@ export function useMeetingAssistant() {
     contextManagerRef.current.clearActiveMeetingTask();
     setState(clearActiveScreenTaskState);
   }, [
+    advanceRuntimeEpoch,
     cancelActiveAdvisorJob,
     clearPendingSentenceCompletionForRuntimeReset,
   ]);
 
   const stop = useCallback(async () => {
+    advanceRuntimeEpoch("meeting-assistant-stopped");
     activeRef.current = false;
     invalidateAudioProcessingSession();
     cancelActiveAdvisorJob("meeting-assistant-stopped");
@@ -2577,6 +2645,7 @@ export function useMeetingAssistant() {
       audioStatus,
     }));
   }, [
+    advanceRuntimeEpoch,
     cancelActiveAdvisorJob,
     invalidateAudioProcessingSession,
     stopSessionRecording,
@@ -2621,6 +2690,7 @@ export function useMeetingAssistant() {
       promptContext,
       turnIntentDecision: options.turnIntentDecision,
       sessionId: contextState.sessionId,
+      runtimeEpoch: runtimeEpochRef.current,
       snapshotTurnCount: contextState.transcriptTurns.length,
       questionLineage: options.questionLineage,
       taskMutationAuthority,
@@ -2639,13 +2709,21 @@ export function useMeetingAssistant() {
     const traceId = advisorJob.traceId;
     let advisorStepId: string | undefined;
     const readCommitDecision = () =>
-      decideAdvisorJobCommit({
-        job: advisorJob,
-        activeJobId: activeAdvisorJobRef.current?.id,
-        currentSessionId: contextManagerRef.current.getState().sessionId,
+      authorizeRuntimeCommit({
+        token: advisorJob.runtimeCommitToken,
+        current: readRuntimeCommitSnapshot(),
+        currentOperationId: activeAdvisorJobRef.current?.id,
       });
-    const rejectStaleCommit = () => {
-      const decision = readCommitDecision();
+    const rejectStaleCommit = (
+      stage: string,
+      decision = readCommitDecision()
+    ) => {
+      if (traceId) {
+        traceStoreRef.current.updateMetadata(
+          traceId,
+          formatRuntimeCommitAuthorizationForTrace(decision, stage)
+        );
+      }
       if (decision.authorized) return false;
 
       finishRunningAdvisorJobTrace(
@@ -2672,7 +2750,7 @@ export function useMeetingAssistant() {
       );
     }
 
-    if (rejectStaleCommit()) return;
+    if (rejectStaleCommit("pre-execution")) return;
 
     if (!activeRef.current && !force) {
       releaseAdvisorJob(advisorJob, "suppressed", {
@@ -3137,8 +3215,10 @@ export function useMeetingAssistant() {
           advisorTaskSignals.taskRelation !== "new-parent" &&
           advisorTaskSignals.taskRelation !== "unknown"
       ),
+      runtimeToken: advisorJob.runtimeCommitToken,
+      currentOperationId: () => activeAdvisorJobRef.current?.id,
     });
-    if (rejectStaleCommit()) return;
+    if (rejectStaleCommit("post-memory")) return;
     const advisorPersonalEvidenceDecision = detectPersonalEvidenceRequirement({
       questionText: advisorTaskSignals.query,
       questionType: advisorQuestionType,
@@ -3335,21 +3415,23 @@ export function useMeetingAssistant() {
                   "advisor raw output",
                   output
                 );
-                sessionRecordingManagerRef.current?.recordModelOutput({
-                  traceId,
-                  taskId: activeMeetingTaskId,
-                  label: "advisor raw output",
-                  value: output,
-                  metadata: {
-                    ...advisorModelRouteMetadata,
-                    requestOptions: advisorModelRequestOptions,
-                  },
-                });
+                if (readCommitDecision().authorized) {
+                  sessionRecordingManagerRef.current?.recordModelOutput({
+                    traceId,
+                    taskId: activeMeetingTaskId,
+                    label: "advisor raw output",
+                    value: output,
+                    metadata: {
+                      ...advisorModelRouteMetadata,
+                      requestOptions: advisorModelRequestOptions,
+                    },
+                  });
+                }
               },
             }
           : undefined,
       })) {
-        if (rejectStaleCommit()) return;
+        if (rejectStaleCommit("partial-output")) return;
         finalContent = event.accumulated;
         setState((previous) => ({
           ...previous,
@@ -3364,7 +3446,8 @@ export function useMeetingAssistant() {
         );
       }
 
-      if (rejectStaleCommit()) return;
+      const finalCommitDecision = readCommitDecision();
+      if (rejectStaleCommit("final-commit", finalCommitDecision)) return;
 
       const parsedMeetingAnswer = parseMeetingAnswer(finalContent, {
         expectedProfile: advisorAnswerProfile,
@@ -3582,10 +3665,9 @@ export function useMeetingAssistant() {
         activeInterviewTask: contextState.activeInterviewTask,
         activeMeetingTask: contextState.activeMeetingTask,
       }));
-      const commitDecision = readCommitDecision();
       releaseAdvisorJob(advisorJob, "committed", {
-        commitAuthorized: commitDecision.authorized,
-        commitAuthorizationReason: commitDecision.reason,
+        commitAuthorized: finalCommitDecision.authorized,
+        commitAuthorizationReason: finalCommitDecision.reason,
       });
       if (traceId) {
         traceStoreRef.current.finishStep(traceId, advisorStepId, "success", {
@@ -5250,6 +5332,7 @@ export function useMeetingAssistant() {
   }, [startCapture]);
 
   const pause = useCallback(async () => {
+    advanceRuntimeEpoch("meeting-assistant-paused");
     activeRef.current = false;
     invalidateAudioProcessingSession();
     cancelActiveAdvisorJob("meeting-assistant-paused");
@@ -5273,19 +5356,29 @@ export function useMeetingAssistant() {
       error: null,
       audioStatus,
     }));
-  }, [cancelActiveAdvisorJob, invalidateAudioProcessingSession]);
+  }, [
+    advanceRuntimeEpoch,
+    cancelActiveAdvisorJob,
+    invalidateAudioProcessingSession,
+  ]);
 
   const captureScreenContext = useCallback(
     async (
       source: ScreenObservation["source"] = "full-screen",
       options: CaptureScreenContextOptions = {}
     ) => {
-      if (screenCaptureInFlightRef.current) {
+      if (activeScreenOperationIdRef.current) {
         return;
       }
 
       flushPendingSentenceCompletion("screen-capture");
-      screenCaptureInFlightRef.current = true;
+      const screenOperationId = createMeetingId("screen_operation");
+      const screenRuntimeToken = createRuntimeCommitToken({
+        operationId: screenOperationId,
+        pipeline: "screen",
+        snapshot: readRuntimeCommitSnapshot(),
+      });
+      activeScreenOperationIdRef.current = screenOperationId;
       const trace = traceStoreRef.current.startTrace(
         "screen",
         {
@@ -5301,6 +5394,43 @@ export function useMeetingAssistant() {
       let captureStepId: string | undefined;
       let preflightStepId: string | undefined;
       let modelStepId: string | undefined;
+      const readScreenAuthorization = () =>
+        authorizeRuntimeCommit({
+          token: screenRuntimeToken,
+          current: readRuntimeCommitSnapshot(),
+          currentOperationId: activeScreenOperationIdRef.current,
+        });
+      const rejectStaleScreenOperation = (stage: string) => {
+        const decision = readScreenAuthorization();
+        traceStoreRef.current.updateMetadata(
+          trace.id,
+          formatRuntimeCommitAuthorizationForTrace(decision, stage)
+        );
+        if (decision.authorized) return false;
+
+        analysisController?.abort();
+        const runningTrace = traceStoreRef.current
+          .getTraces()
+          .find((candidate) => candidate.id === trace.id);
+        if (runningTrace?.status === "running") {
+          for (const step of runningTrace.steps) {
+            if (step.status === "running") {
+              traceStoreRef.current.finishStep(
+                trace.id,
+                step.id,
+                "cancelled",
+                formatRuntimeCommitAuthorizationForTrace(decision, stage)
+              );
+            }
+          }
+          traceStoreRef.current.finishTrace(
+            trace.id,
+            "cancelled",
+            decision.reason
+          );
+        }
+        return true;
+      };
 
       try {
         if (
@@ -5328,6 +5458,7 @@ export function useMeetingAssistant() {
           source,
           previousHash: latestScreenHashRef.current,
         });
+        if (rejectStaleScreenOperation("post-capture")) return;
         traceStoreRef.current.finishStep(trace.id, captureStepId, "success", {
           changed: observation.changed,
           hash: observation.hash,
@@ -5475,17 +5606,20 @@ export function useMeetingAssistant() {
                       "screen preflight raw output",
                       output
                     );
-                    sessionRecordingManagerRef.current?.recordModelOutput({
-                      traceId: trace.id,
-                      label: "screen preflight raw output",
-                      value: output,
-                    });
+                    if (readScreenAuthorization().authorized) {
+                      sessionRecordingManagerRef.current?.recordModelOutput({
+                        traceId: trace.id,
+                        label: "screen preflight raw output",
+                        value: output,
+                      });
+                    }
                   },
                 },
               }),
               SCREEN_PREFLIGHT_TIMEOUT_MS,
               "Screen preflight timed out."
             );
+            if (rejectStaleScreenOperation("post-preflight")) return;
             const preflightContextUpdate =
               contextManagerRef.current.updateInterviewSessionContextFromScreenText(
                 [
@@ -5577,6 +5711,7 @@ export function useMeetingAssistant() {
               }));
             }
           } catch (error) {
+            if (rejectStaleScreenOperation("post-preflight")) return;
             traceStoreRef.current.finishStep(
               trace.id,
               preflightStepId,
@@ -5725,7 +5860,10 @@ export function useMeetingAssistant() {
             existingScreenProjectBinding &&
               provisionalScreenTaskRelation !== "new-parent"
           ),
+          runtimeToken: screenRuntimeToken,
+          currentOperationId: () => activeScreenOperationIdRef.current,
         });
+        if (rejectStaleScreenOperation("post-memory")) return;
         const screenPersonalEvidenceDecision =
           detectPersonalEvidenceRequirement({
             questionText: screenPreflight?.question ?? screenMemoryQuery,
@@ -5908,19 +6046,32 @@ export function useMeetingAssistant() {
                   "screen model raw output",
                   output
                 );
-                sessionRecordingManagerRef.current?.recordModelOutput({
-                  traceId: trace.id,
-                  label: "screen model raw output",
-                  value: output,
-                  metadata: {
-                    ...screenModelRouteMetadata,
-                    requestOptions: screenModelRequestOptions,
-                  },
-                });
+                if (readScreenAuthorization().authorized) {
+                  sessionRecordingManagerRef.current?.recordModelOutput({
+                    traceId: trace.id,
+                    label: "screen model raw output",
+                    value: output,
+                    metadata: {
+                      ...screenModelRouteMetadata,
+                      requestOptions: screenModelRequestOptions,
+                    },
+                  });
+                }
               },
             },
             onPartialContent: (partialContent) => {
               if (screenAnalysisAbortRef.current !== analysisController) {
+                return;
+              }
+              const runtimeDecision = readScreenAuthorization();
+              if (!runtimeDecision.authorized) {
+                traceStoreRef.current.updateMetadata(
+                  trace.id,
+                  formatRuntimeCommitAuthorizationForTrace(
+                    runtimeDecision,
+                    "partial-output"
+                  )
+                );
                 return;
               }
 
@@ -5944,6 +6095,7 @@ export function useMeetingAssistant() {
           traceStoreRef.current.finishTrace(trace.id, "cancelled");
           return;
         }
+        if (rejectStaleScreenOperation("post-model")) return;
 
         const parsedScreenMeetingAnswer = parseMeetingAnswer(screenTaskContent, {
           expectedProfile: resolveMeetingAnswerProfile(taskKind),
@@ -6300,6 +6452,12 @@ export function useMeetingAssistant() {
           screenAnalysisAbortRef.current = null;
         }
 
+        const runtimeDecision = readScreenAuthorization();
+        if (!runtimeDecision.authorized) {
+          rejectStaleScreenOperation("error-boundary");
+          return;
+        }
+
         if (error instanceof Error && error.name === "AbortError") {
           traceStoreRef.current.finishStep(
             trace.id,
@@ -6337,13 +6495,16 @@ export function useMeetingAssistant() {
               : "Failed to capture screen context.",
         }));
       } finally {
-        screenCaptureInFlightRef.current = false;
+        if (activeScreenOperationIdRef.current === screenOperationId) {
+          activeScreenOperationIdRef.current = null;
+        }
       }
     },
     [
       aiProvider,
       flushPendingSentenceCompletion,
       loadMemoryForPrompt,
+      readRuntimeCommitSnapshot,
       resolveMeetingModelRoute,
       selectedAIProvider,
       screenshotConfiguration,
@@ -6360,7 +6521,7 @@ export function useMeetingAssistant() {
       correctedType: CanonicalQuestionType,
       source: ManualQuestionTypeCorrectionSource = "normal-mode"
     ) => {
-      if (manualQuestionTypeCorrectionInFlightRef.current) return;
+      if (activeManualCorrectionOperationIdRef.current) return;
 
       flushPendingSentenceCompletion("manual-question-type-correction");
 
@@ -6394,11 +6555,16 @@ export function useMeetingAssistant() {
         return;
       }
 
-      manualQuestionTypeCorrectionInFlightRef.current = true;
+      const eventId = createMeetingId("question_type_correction");
+      const correctionRuntimeToken = createRuntimeCommitToken({
+        operationId: eventId,
+        pipeline: "correction",
+        snapshot: readRuntimeCommitSnapshot(),
+      });
+      activeManualCorrectionOperationIdRef.current = eventId;
       cancelActiveAdvisorJob("manual-question-type-correction");
 
       const requestedAt = Date.now();
-      const eventId = createMeetingId("question_type_correction");
       const correctionTrace = traceStoreRef.current.startTrace(
         activeTask.screen ? "screen" : "voice",
         {
@@ -6411,6 +6577,23 @@ export function useMeetingAssistant() {
           ...getActiveMeetingTaskTraceMetadata(activeTask),
         }
       );
+      const readCorrectionAuthorization = (token: RuntimeCommitToken) =>
+        authorizeRuntimeCommit({
+          token,
+          current: readRuntimeCommitSnapshot(),
+          currentOperationId: activeManualCorrectionOperationIdRef.current,
+        });
+      const recordCorrectionAuthorization = (
+        token: RuntimeCommitToken,
+        stage: string
+      ) => {
+        const runtimeDecision = readCorrectionAuthorization(token);
+        traceStoreRef.current.updateMetadata(
+          correctionTrace.id,
+          formatRuntimeCommitAuthorizationForTrace(runtimeDecision, stage)
+        );
+        return runtimeDecision;
+      };
       const correctionQuestion = resolveCorrectionQuestionInstance(
         state.questionEvaluations,
         state.latestSuggestion,
@@ -6462,6 +6645,7 @@ export function useMeetingAssistant() {
         }
       );
       let mutationApplied = false;
+      let correctionLifecycleToken: RuntimeCommitToken | undefined;
 
       try {
         const activeScreenTask = contextState.activeScreenTask;
@@ -6524,6 +6708,28 @@ export function useMeetingAssistant() {
             })
           : undefined;
 
+        const mutationAuthorization = recordCorrectionAuthorization(
+          correctionRuntimeToken,
+          "pre-correction-mutation"
+        );
+        if (!mutationAuthorization.authorized) {
+          traceStoreRef.current.finishStep(
+            correctionTrace.id,
+            mutationStepId,
+            "cancelled",
+            formatRuntimeCommitAuthorizationForTrace(
+              mutationAuthorization,
+              "pre-correction-mutation"
+            )
+          );
+          traceStoreRef.current.finishTrace(
+            correctionTrace.id,
+            "cancelled",
+            mutationAuthorization.reason
+          );
+          return;
+        }
+
         contextManagerRef.current.setActiveMeetingTaskState({
           activeScreenTask: correctedScreenTask ?? null,
           activeInterviewTask: correctedParent,
@@ -6543,6 +6749,12 @@ export function useMeetingAssistant() {
           throw new Error("The corrected active meeting task could not be built.");
         }
         mutationApplied = true;
+        correctionLifecycleToken = createRuntimeCommitToken({
+          operationId: eventId,
+          pipeline: "correction",
+          snapshot: readRuntimeCommitSnapshot(),
+          parentPolicy: "session-only",
+        });
 
         correction = {
           ...correction,
@@ -6673,6 +6885,11 @@ export function useMeetingAssistant() {
           advisorJobSource: "manual-correction",
           taskMutationAuthority: "manual-correction",
         });
+        const completionAuthorization = recordCorrectionAuthorization(
+          correctionLifecycleToken,
+          "post-correction-regeneration"
+        );
+        if (!completionAuthorization.authorized) return;
         const regenerationStatus = traceStoreRef.current
           .getTraces()
           .find((trace) => trace.id === regenerationTrace.id)?.status;
@@ -6698,6 +6915,11 @@ export function useMeetingAssistant() {
           manualQuestionTypeCorrection: correction,
         }));
       } catch (error) {
+        const failureAuthorization = recordCorrectionAuthorization(
+          correctionLifecycleToken ?? correctionRuntimeToken,
+          "correction-error-boundary"
+        );
+        if (!failureAuthorization.authorized) return;
         correction = {
           ...correction,
           status: mutationApplied ? "applied" : "failed",
@@ -6742,12 +6964,15 @@ export function useMeetingAssistant() {
           error: correction.error ?? null,
         }));
       } finally {
-        manualQuestionTypeCorrectionInFlightRef.current = false;
+        if (activeManualCorrectionOperationIdRef.current === eventId) {
+          activeManualCorrectionOperationIdRef.current = null;
+        }
       }
     },
     [
       cancelActiveAdvisorJob,
       flushPendingSentenceCompletion,
+      readRuntimeCommitSnapshot,
       runAdvisor,
       state.latestSuggestion,
       state.questionEvaluations,

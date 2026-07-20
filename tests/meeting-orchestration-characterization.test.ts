@@ -11,6 +11,11 @@ import {
   decideAdvisorScreenScope,
   decideScreenResultScope,
 } from "../src/lib/meeting/screen-task-scope.js";
+import {
+  authorizeRuntimeCommit,
+  createRuntimeCommitToken,
+  type RuntimeCommitSnapshot,
+} from "../src/lib/meeting/runtime-commit-authorization.js";
 import type {
   ActiveInterviewParent,
   ActiveScreenTask,
@@ -33,6 +38,7 @@ test("resolves advisor jobs out of order without letting the replaced job mutate
     mode: "live",
     promptContext: manager.buildAdvisorPromptContext(),
     sessionId,
+    runtimeEpoch: harness.getRuntimeEpoch(),
     snapshotTurnCount: 0,
     taskMutationAuthority: "input-evidence",
   });
@@ -44,6 +50,7 @@ test("resolves advisor jobs out of order without letting the replaced job mutate
     mode: "live",
     promptContext: manager.buildAdvisorPromptContext(),
     sessionId,
+    runtimeEpoch: harness.getRuntimeEpoch(),
     snapshotTurnCount: 0,
     taskMutationAuthority: "input-evidence",
   });
@@ -53,12 +60,12 @@ test("resolves advisor jobs out of order without letting the replaced job mutate
   operationB.resolve("newer answer");
   assert.deepEqual(await operationB.completion, {
     outcome: "committed",
-    reason: "active-job-and-session-match",
+    reason: "authorized",
   });
   operationA.resolve("stale answer");
   assert.deepEqual(await operationA.completion, {
     outcome: "rejected",
-    reason: "active-job-mismatch",
+    reason: "parent-revision-mismatch",
   });
 
   const parent = manager.getState().activeInterviewTask;
@@ -83,6 +90,7 @@ test("rejects an advisor completion from the previous meeting session", async ()
     mode: "live",
     promptContext: manager.buildAdvisorPromptContext(),
     sessionId: manager.getState().sessionId,
+    runtimeEpoch: harness.getRuntimeEpoch(),
     snapshotTurnCount: 0,
     taskMutationAuthority: "input-evidence",
   });
@@ -111,6 +119,7 @@ test("keeps a trigger-owned question stable when a later informational turn arri
     triggerTurnId: triggerTurn.id,
     promptContext: manager.buildAdvisorPromptContext(),
     sessionId: manager.getState().sessionId,
+    runtimeEpoch: harness.getRuntimeEpoch(),
     snapshotTurnCount: 1,
     taskMutationAuthority: "input-evidence",
   });
@@ -125,7 +134,7 @@ test("keeps a trigger-owned question stable when a later informational turn arri
           const decision = decideAdvisorJobCommit({
             job,
             activeJobId: currentHarness.getActiveAdvisorJobId(),
-            currentSessionId: contextManager.getState().sessionId,
+            currentRuntime: currentRuntimeSnapshot(currentHarness),
           });
           if (!decision.authorized) {
             return rejected(decision.reason);
@@ -327,6 +336,160 @@ test("a late unknown screen result cannot replace a newer voice parent", async (
   );
 });
 
+test("rejects a screen completion from an older runtime epoch", async () => {
+  const manager = new MeetingContextManager();
+  manager.setActiveInterviewTask(makeParent());
+  const harness = new MeetingOrchestrationHarness(manager);
+  const token = createHarnessToken(harness, "screen-reset", "screen");
+  harness.activateOperation("screen", token.operationId);
+  const operation = harness.startOperation<string>({
+    id: token.operationId,
+    kind: "screen",
+    commit: ({ value, contextManager, harness: currentHarness }) => {
+      const decision = authorizeRuntimeCommit({
+        token,
+        current: currentRuntimeSnapshot(currentHarness),
+        currentOperationId: currentHarness.getActiveOperationId("screen"),
+      });
+      if (!decision.authorized) return rejected(decision.reason);
+      contextManager.setActiveInterviewTask(
+        makeParent({ latestUsefulAnswer: value })
+      );
+      return committed(decision.reason);
+    },
+  });
+
+  harness.advanceRuntimeEpoch();
+  manager.reset();
+  operation.resolve("late screen answer");
+
+  assert.deepEqual(await operation.completion, {
+    outcome: "rejected",
+    reason: "runtime-epoch-mismatch",
+  });
+  assert.equal(manager.getState().activeMeetingTask, undefined);
+});
+
+test("rejects an advisor completion after parent retype changes revision", async () => {
+  const manager = new MeetingContextManager();
+  manager.setActiveInterviewTask(makeParent());
+  const harness = new MeetingOrchestrationHarness(manager);
+  const token = createHarnessToken(harness, "advisor-before-retype", "advisor");
+  harness.activateOperation("advisor", token.operationId);
+  const operation = harness.startOperation<string>({
+    id: token.operationId,
+    kind: "advisor",
+    commit: ({ value, contextManager, harness: currentHarness }) => {
+      const decision = authorizeRuntimeCommit({
+        token,
+        current: currentRuntimeSnapshot(currentHarness),
+        currentOperationId: currentHarness.getActiveOperationId("advisor"),
+      });
+      if (!decision.authorized) return rejected(decision.reason);
+      contextManager.setActiveInterviewTask(
+        makeParent({ latestUsefulAnswer: value })
+      );
+      return committed(decision.reason);
+    },
+  });
+
+  const current = manager.getState().activeInterviewTask;
+  assert.ok(current);
+  manager.setActiveInterviewTask({
+    ...current,
+    stableKind: "behavioral",
+    revisions: current.revisions + 1,
+  });
+  operation.resolve("stale design answer");
+
+  assert.deepEqual(await operation.completion, {
+    outcome: "rejected",
+    reason: "parent-revision-mismatch",
+  });
+  assert.equal(manager.getState().activeInterviewTask?.stableKind, "behavioral");
+});
+
+test("rejects memory after reset but allows transcript-only runtime changes", async () => {
+  const manager = new MeetingContextManager();
+  manager.setActiveInterviewTask(makeParent());
+  const harness = new MeetingOrchestrationHarness(manager);
+  const acceptedToken = createHarnessToken(
+    harness,
+    "memory-transcript-only",
+    "memory"
+  );
+  harness.activateOperation("memory", acceptedToken.operationId);
+  const acceptedOperation = harness.startOperation<string>({
+    id: acceptedToken.operationId,
+    kind: "memory",
+    commit: ({ harness: currentHarness }) => {
+      const decision = authorizeRuntimeCommit({
+        token: acceptedToken,
+        current: currentRuntimeSnapshot(currentHarness),
+        currentOperationId: currentHarness.getActiveOperationId("memory"),
+      });
+      return decision.authorized
+        ? committed(decision.reason)
+        : rejected(decision.reason);
+    },
+  });
+  manager.addTranscriptTurn(makeTurn("turn-later", "One more detail", 200));
+  acceptedOperation.resolve("memory result");
+  assert.equal((await acceptedOperation.completion).outcome, "committed");
+
+  const staleToken = createHarnessToken(harness, "memory-reset", "memory");
+  harness.activateOperation("memory", staleToken.operationId);
+  const staleOperation = harness.startOperation<string>({
+    id: staleToken.operationId,
+    kind: "memory",
+    commit: ({ harness: currentHarness }) => {
+      const decision = authorizeRuntimeCommit({
+        token: staleToken,
+        current: currentRuntimeSnapshot(currentHarness),
+        currentOperationId: currentHarness.getActiveOperationId("memory"),
+      });
+      return decision.authorized
+        ? committed(decision.reason)
+        : rejected(decision.reason);
+    },
+  });
+  harness.advanceRuntimeEpoch();
+  manager.reset();
+  staleOperation.resolve("stale memory result");
+  assert.equal((await staleOperation.completion).reason, "runtime-epoch-mismatch");
+});
+
+test("rejects an old correction after a newer correction takes ownership", async () => {
+  const manager = new MeetingContextManager();
+  manager.setActiveInterviewTask(makeParent());
+  const harness = new MeetingOrchestrationHarness(manager);
+  const token = createHarnessToken(
+    harness,
+    "correction-old",
+    "correction",
+    "session-only"
+  );
+  harness.activateOperation("correction", token.operationId);
+  const operation = harness.startOperation<string>({
+    id: token.operationId,
+    kind: "correction",
+    commit: ({ harness: currentHarness }) => {
+      const decision = authorizeRuntimeCommit({
+        token,
+        current: currentRuntimeSnapshot(currentHarness),
+        currentOperationId: currentHarness.getActiveOperationId("correction"),
+      });
+      return decision.authorized
+        ? committed(decision.reason)
+        : rejected(decision.reason);
+    },
+  });
+
+  harness.activateOperation("correction", "correction-new");
+  operation.resolve("old correction completed");
+  assert.equal((await operation.completion).reason, "pipeline-owner-mismatch");
+});
+
 function createAdvisorCompletion(
   harness: MeetingOrchestrationHarness,
   job: ReturnType<typeof createAdvisorTriggerJob>,
@@ -339,7 +502,7 @@ function createAdvisorCompletion(
       const decision = decideAdvisorJobCommit({
         job,
         activeJobId: currentHarness.getActiveAdvisorJobId(),
-        currentSessionId: contextManager.getState().sessionId,
+        currentRuntime: currentRuntimeSnapshot(currentHarness),
       });
       if (!decision.authorized) {
         return rejected(decision.reason);
@@ -357,6 +520,32 @@ function createAdvisorCompletion(
       return committed(decision.reason);
     },
   });
+}
+
+function createHarnessToken(
+  harness: MeetingOrchestrationHarness,
+  operationId: string,
+  pipeline: "advisor" | "screen" | "memory" | "correction",
+  parentPolicy: "task-bound" | "session-only" = "task-bound"
+) {
+  return createRuntimeCommitToken({
+    operationId,
+    pipeline,
+    snapshot: currentRuntimeSnapshot(harness),
+    parentPolicy,
+  });
+}
+
+function currentRuntimeSnapshot(
+  harness: MeetingOrchestrationHarness
+): RuntimeCommitSnapshot {
+  const state = harness.getStateDigest();
+  return {
+    runtimeEpoch: state.runtimeEpoch,
+    sessionId: state.sessionId,
+    parentId: state.parentId,
+    parentRevision: state.parentRevision,
+  };
 }
 
 function makeParent(

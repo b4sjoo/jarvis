@@ -35,6 +35,7 @@ test("freezes the prompt inputs owned by an advisor job", () => {
     mode: "live",
     promptContext,
     sessionId: "session-a",
+    runtimeEpoch: 1,
     snapshotTurnCount: 1,
     taskMutationAuthority: "input-evidence",
   });
@@ -54,6 +55,7 @@ test("rejects a replaced job and a job from an old meeting session", () => {
     mode: "live",
     promptContext: buildPromptContext(),
     sessionId: "session-a",
+    runtimeEpoch: 1,
     snapshotTurnCount: 1,
     taskMutationAuthority: "input-evidence",
   });
@@ -62,15 +64,15 @@ test("rejects a replaced job and a job from an old meeting session", () => {
     decideAdvisorJobCommit({
       job,
       activeJobId: "newer-job",
-      currentSessionId: "session-a",
+      currentRuntime: { runtimeEpoch: 1, sessionId: "session-a" },
     }),
-    { authorized: false, reason: "active-job-mismatch" }
+    { authorized: false, reason: "pipeline-owner-mismatch" }
   );
   assert.deepEqual(
     decideAdvisorJobCommit({
       job,
       activeJobId: job.id,
-      currentSessionId: "session-b",
+      currentRuntime: { runtimeEpoch: 1, sessionId: "session-b" },
     }),
     { authorized: false, reason: "session-mismatch" }
   );
@@ -84,6 +86,7 @@ test("emits the job identity needed to reconstruct ownership", () => {
     triggerTurnId: "turn-a",
     promptContext: buildPromptContext(),
     sessionId: "session-a",
+    runtimeEpoch: 1,
     snapshotTurnCount: 3,
     taskMutationAuthority: "input-evidence",
   });
@@ -98,6 +101,7 @@ test("emits the job identity needed to reconstruct ownership", () => {
       advisorJobSource: "live-turn",
       advisorJobTriggerTurnId: "turn-a",
       advisorJobExpectedSessionId: "session-a",
+      advisorJobExpectedRuntimeEpoch: 1,
       advisorJobExpectedParentId: undefined,
       advisorJobExpectedParentRevision: undefined,
       advisorJobMutationAuthority: "input-evidence",
@@ -118,6 +122,7 @@ test("emits inherited question lineage for answer-preserving actions", () => {
     traceId: "trace-action",
     promptContext: buildPromptContext(),
     sessionId: "session-a",
+    runtimeEpoch: 1,
     snapshotTurnCount: 1,
     taskMutationAuthority: "preserve-parent",
     questionLineage: {

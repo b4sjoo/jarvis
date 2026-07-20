@@ -1,6 +1,13 @@
 import type { AdvisorTurnIntentDecision } from "./advisor-turn-intent.js";
 import { createMeetingId } from "./context-manager.js";
 import type { PlaybookPhaseDecision } from "./playbook-phase.js";
+import {
+  authorizeRuntimeCommit,
+  createRuntimeCommitToken,
+  type RuntimeCommitAuthorizationReason,
+  type RuntimeCommitSnapshot,
+  type RuntimeCommitToken,
+} from "./runtime-commit-authorization.js";
 import type {
   AdvisorPromptContext,
   AdvisorRequestMode,
@@ -43,6 +50,7 @@ export interface AdvisorTriggerJob {
   expectedSessionId: string;
   expectedParentId?: string;
   expectedParentRevision?: number;
+  runtimeCommitToken: RuntimeCommitToken;
   questionLineage?: QuestionInstanceLineage;
   taskMutationAuthority: AdvisorTaskMutationAuthority;
   snapshotTurnCount: number;
@@ -57,6 +65,7 @@ export interface CreateAdvisorTriggerJobInput {
   promptContext: AdvisorPromptContext;
   turnIntentDecision?: AdvisorTurnIntentDecision;
   sessionId: string;
+  runtimeEpoch: number;
   snapshotTurnCount: number;
   questionLineage?: QuestionInstanceLineage;
   taskMutationAuthority: AdvisorTaskMutationAuthority;
@@ -65,10 +74,7 @@ export interface CreateAdvisorTriggerJobInput {
 
 export interface AdvisorJobCommitDecision {
   authorized: boolean;
-  reason:
-    | "active-job-and-session-match"
-    | "active-job-mismatch"
-    | "session-mismatch";
+  reason: RuntimeCommitAuthorizationReason;
 }
 
 export interface AdvisorTaskMutationDecision {
@@ -87,8 +93,14 @@ export function createAdvisorTriggerJob(
   input: CreateAdvisorTriggerJobInput
 ): AdvisorTriggerJob {
   const snapshot = cloneAdvisorPromptContext(input.promptContext);
+  const id = createMeetingId("advisor_job");
+  const expectedParentId =
+    snapshot.activeMeetingTask?.parent.id ?? snapshot.activeInterviewTask?.id;
+  const expectedParentRevision =
+    snapshot.activeMeetingTask?.parent.revisions ??
+    snapshot.activeInterviewTask?.revisions;
   return {
-    id: createMeetingId("advisor_job"),
+    id,
     source: input.source,
     mode: input.mode,
     traceId: input.traceId,
@@ -98,12 +110,18 @@ export function createAdvisorTriggerJob(
       ? { ...input.turnIntentDecision }
       : undefined,
     expectedSessionId: input.sessionId,
-    expectedParentId:
-      snapshot.activeMeetingTask?.parent.id ??
-      snapshot.activeInterviewTask?.id,
-    expectedParentRevision:
-      snapshot.activeMeetingTask?.parent.revisions ??
-      snapshot.activeInterviewTask?.revisions,
+    expectedParentId,
+    expectedParentRevision,
+    runtimeCommitToken: createRuntimeCommitToken({
+      operationId: id,
+      pipeline: "advisor",
+      snapshot: {
+        runtimeEpoch: input.runtimeEpoch,
+        sessionId: input.sessionId,
+        parentId: expectedParentId,
+        parentRevision: expectedParentRevision,
+      },
+    }),
     questionLineage: input.questionLineage
       ? { ...input.questionLineage }
       : undefined,
@@ -116,26 +134,14 @@ export function createAdvisorTriggerJob(
 export function decideAdvisorJobCommit(input: {
   job: AdvisorTriggerJob;
   activeJobId?: string;
-  currentSessionId: string;
+  currentRuntime: RuntimeCommitSnapshot;
 }): AdvisorJobCommitDecision {
-  if (input.activeJobId !== input.job.id) {
-    return {
-      authorized: false,
-      reason: "active-job-mismatch",
-    };
-  }
-
-  if (input.currentSessionId !== input.job.expectedSessionId) {
-    return {
-      authorized: false,
-      reason: "session-mismatch",
-    };
-  }
-
-  return {
-    authorized: true,
-    reason: "active-job-and-session-match",
-  };
+  const decision = authorizeRuntimeCommit({
+    token: input.job.runtimeCommitToken,
+    current: input.currentRuntime,
+    currentOperationId: input.activeJobId,
+  });
+  return { authorized: decision.authorized, reason: decision.reason };
 }
 
 export function decideAdvisorTaskMutation(input: {
@@ -222,6 +228,7 @@ export function formatAdvisorTriggerJobForTrace(
     advisorJobSource: job.source,
     advisorJobTriggerTurnId: job.triggerTurnId,
     advisorJobExpectedSessionId: job.expectedSessionId,
+    advisorJobExpectedRuntimeEpoch: job.runtimeCommitToken.runtimeEpoch,
     advisorJobExpectedParentId: job.expectedParentId,
     advisorJobExpectedParentRevision: job.expectedParentRevision,
     ...(job.questionLineage
