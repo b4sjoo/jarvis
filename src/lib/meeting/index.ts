@@ -18,6 +18,7 @@ export * from "./interview-session-context";
 export * from "./manual-question-type-correction";
 export * from "./meeting-answer";
 export * from "./meeting-answer-display";
+export * from "./native-speech-event";
 export * from "./memory-evaluation";
 export * from "./personal-evidence-guardrail";
 export * from "./project-binding";

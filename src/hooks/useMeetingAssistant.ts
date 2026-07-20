@@ -53,6 +53,7 @@ import {
   MeetingResponseConfig,
   ManualQuestionTypeCorrection,
   ManualQuestionTypeCorrectionSource,
+  NativeSpeechDetectedEvent,
   WhiteboardUpdateSource,
   MeetingContextManager,
   MeetingSetupWarning,
@@ -99,6 +100,8 @@ import {
   isShortConfirmationLike,
   buildMeetingAnswerSummary,
   CaptureLifecycleCoordinator,
+  authorizeNativeSpeechDetectedEvent,
+  buildNativeSpeechEventTraceMetadata,
   buildMemoryEvaluationTraceMetadata,
   formatMeetingAnswerTraceMetadata,
   parseMeetingAnswer,
@@ -969,6 +972,9 @@ interface QueuedSpeechSegment {
   endedAt?: number;
   speaker: TranscriptTurn["speaker"];
   source: TranscriptTurn["source"];
+  nativeCaptureSessionId?: string;
+  nativeSegmentSequence?: number;
+  nativeCapturedAtMs?: number;
   traceId: string;
   queueStepId: string;
 }
@@ -1123,6 +1129,8 @@ export function useMeetingAssistant() {
   const activeManualCorrectionOperationIdRef = useRef<string | null>(null);
   const audioSessionIdRef = useRef(createMeetingId("audio_session"));
   const audioSegmentSeqRef = useRef(0);
+  const nativeCaptureSessionIdRef = useRef<string | null>(null);
+  const lastNativeSegmentSequenceRef = useRef(0);
   const systemAudioQueueTailRef = useRef<Promise<void>>(Promise.resolve());
   const microphoneAudioQueueTailRef = useRef<Promise<void>>(Promise.resolve());
   const pendingConfirmationRef = useRef<PendingConfirmation | null>(null);
@@ -1133,7 +1141,7 @@ export function useMeetingAssistant() {
     INITIAL_STATE.settings.microphoneContextEnabled
   );
   const speechDetectedHandlerRef = useRef<
-    ((base64Audio: string) => void) | undefined
+    ((event: NativeSpeechDetectedEvent) => void) | undefined
   >(undefined);
 
   const readRuntimeCommitSnapshot = useCallback(
@@ -1714,6 +1722,8 @@ export function useMeetingAssistant() {
   const invalidateAudioProcessingSession = useCallback(() => {
     audioSessionIdRef.current = createMeetingId("audio_session_inactive");
     audioSegmentSeqRef.current = 0;
+    nativeCaptureSessionIdRef.current = null;
+    lastNativeSegmentSequenceRef.current = 0;
     systemAudioQueueTailRef.current = Promise.resolve();
     microphoneAudioQueueTailRef.current = Promise.resolve();
     clearPendingConfirmation("session-invalidated");
@@ -1724,7 +1734,15 @@ export function useMeetingAssistant() {
   ]);
 
   const isCurrentAudioSegment = useCallback((segment: QueuedSpeechSegment) => {
-    return activeRef.current && audioSessionIdRef.current === segment.sessionId;
+    const ownsNativeCapture =
+      segment.source !== "system-audio" ||
+      (Boolean(segment.nativeCaptureSessionId) &&
+        nativeCaptureSessionIdRef.current === segment.nativeCaptureSessionId);
+    return (
+      activeRef.current &&
+      audioSessionIdRef.current === segment.sessionId &&
+      ownsNativeCapture
+    );
   }, []);
 
   const clearTraces = useCallback(() => {
@@ -5087,8 +5105,13 @@ export function useMeetingAssistant() {
   );
 
   const enqueueSpeechDetected = useCallback(
-    (base64Audio: string) => {
-      if (!activeRef.current) return;
+    (nativeEvent: NativeSpeechDetectedEvent) => {
+      if (
+        !activeRef.current ||
+        nativeCaptureSessionIdRef.current !== nativeEvent.captureSessionId
+      ) {
+        return;
+      }
 
       const sessionId = audioSessionIdRef.current;
       const sequence = audioSegmentSeqRef.current + 1;
@@ -5104,9 +5127,10 @@ export function useMeetingAssistant() {
         });
       }
       const queuedAt = Date.now();
+      const nativeMetadata = buildNativeSpeechEventTraceMetadata(nativeEvent);
 
       const trace = traceStoreRef.current.startTrace("voice", {
-        audioBase64Chars: base64Audio.length,
+        ...nativeMetadata,
         audioSegmentSeq: sequence,
         audioSessionId: sessionId,
         speaker: "them",
@@ -5121,16 +5145,22 @@ export function useMeetingAssistant() {
           audioSessionId: sessionId,
           speaker: "them",
           source: "system-audio",
+          nativeCaptureSessionId: nativeEvent.captureSessionId,
+          nativeSegmentSequence: nativeEvent.segmentSequence,
+          nativeCapturedAtMs: nativeEvent.capturedAtMs,
         }
       );
       const segment: QueuedSpeechSegment = {
-        base64Audio,
-        audioBase64Chars: base64Audio.length,
+        base64Audio: nativeEvent.audioBase64,
+        audioBase64Chars: nativeEvent.audioBase64.length,
         sessionId,
         sequence,
         queuedAt,
         speaker: "them",
         source: "system-audio",
+        nativeCaptureSessionId: nativeEvent.captureSessionId,
+        nativeSegmentSequence: nativeEvent.segmentSequence,
+        nativeCapturedAtMs: nativeEvent.capturedAtMs,
         traceId: trace.id,
         queueStepId,
       };
@@ -5243,8 +5273,8 @@ export function useMeetingAssistant() {
   });
 
   useEffect(() => {
-    speechDetectedHandlerRef.current = (base64Audio: string) => {
-      enqueueSpeechDetected(base64Audio);
+    speechDetectedHandlerRef.current = (event: NativeSpeechDetectedEvent) => {
+      enqueueSpeechDetected(event);
     };
   }, [enqueueSpeechDetected]);
 
@@ -5284,6 +5314,8 @@ export function useMeetingAssistant() {
     const lifecycleOperation = coordinator.claim(
       resetContext ? "start" : "resume"
     );
+    nativeCaptureSessionIdRef.current = null;
+    lastNativeSegmentSequenceRef.current = 0;
 
     if (state.settings.privacyMode === "memory-only") {
       activeRef.current = false;
@@ -5398,7 +5430,17 @@ export function useMeetingAssistant() {
           return;
         }
 
+        const nativeCaptureSessionId = audioStatus.captureSessionId?.trim();
+        if (!nativeCaptureSessionId) {
+          await invoke<MeetingAudioStatus>("stop_meeting_audio_session");
+          throw new Error(
+            "Native audio capture started without a capture session id."
+          );
+        }
+
         startAudioProcessingSession();
+        nativeCaptureSessionIdRef.current = nativeCaptureSessionId;
+        lastNativeSegmentSequenceRef.current = 0;
         activeRef.current = true;
         const contextState = contextManagerRef.current.getState();
 
@@ -7524,8 +7566,32 @@ export function useMeetingAssistant() {
     let unlistenSpeech: (() => void) | undefined;
 
     const setupListeners = async () => {
-      const unlisten = await listen<string>("speech-detected", (event) => {
-        speechDetectedHandlerRef.current?.(event.payload);
+      const unlisten = await listen<unknown>("speech-detected", (event) => {
+        const authorization = authorizeNativeSpeechDetectedEvent({
+          payload: event.payload,
+          activeCaptureSessionId: nativeCaptureSessionIdRef.current,
+          lastAcceptedSequence: lastNativeSegmentSequenceRef.current,
+        });
+        if (!authorization.authorized) {
+          const metadata = {
+            authorized: false,
+            reason: authorization.reason,
+            activeNativeCaptureSessionId: nativeCaptureSessionIdRef.current,
+            ...(authorization.event
+              ? buildNativeSpeechEventTraceMetadata(authorization.event)
+              : {}),
+          };
+          console.info(
+            `[${new Date().toISOString()}] [native-speech-event] rejected`,
+            JSON.stringify(metadata)
+          );
+          sessionRecordingManagerRef.current?.recordNativeSpeechEvent(metadata);
+          return;
+        }
+
+        lastNativeSegmentSequenceRef.current =
+          authorization.event.segmentSequence;
+        speechDetectedHandlerRef.current?.(authorization.event);
       });
 
       if (disposed) {

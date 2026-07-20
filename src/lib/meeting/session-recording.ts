@@ -74,6 +74,7 @@ interface SessionRecordingEvent {
     | "active-meeting-task-snapshot"
     | "manual-question-type-correction"
     | "capture-lifecycle"
+    | "native-speech-event"
     | "runtime-reset"
     | "runtime-continued"
     | "error";
@@ -1065,6 +1066,13 @@ export class SessionRecordingManager {
   recordCaptureLifecycle(metadata: Record<string, unknown>) {
     if (!this.getWritableSession()) return;
     this.recordEvent("capture-lifecycle", metadata);
+  }
+
+  recordNativeSpeechEvent(metadata: Record<string, unknown>) {
+    if (!this.getWritableSession()) return;
+    const { audioBase64: _audioBase64, base64Audio: _base64Audio, ...safe } =
+      metadata;
+    this.recordEvent("native-speech-event", safe);
   }
 
   recordError(error: unknown, metadata?: Record<string, unknown>) {

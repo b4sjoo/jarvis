@@ -179,6 +179,36 @@ test("rejects writes that arrive after a generation is sealed", async () => {
   assert.equal(manager.getState().lifecycle, "idle");
 });
 
+test("native speech telemetry never persists audio payloads", async () => {
+  const native = new ControlledRecordingInvoke();
+  const manager = new SessionRecordingManager(undefined, native.invoke);
+  await manager.start(START_OPTIONS);
+  await settle();
+
+  manager.recordNativeSpeechEvent({
+    authorized: false,
+    reason: "capture-session-mismatch",
+    nativeCaptureSessionId: "capture-old",
+    nativeSegmentSequence: 4,
+    audioBase64Chars: 8,
+    audioBase64: "UklGRg==",
+    base64Audio: "UklGRg==",
+  });
+  await settle();
+
+  const timelineWrites = native.calls.filter(
+    (call) =>
+      call.command === "write_meeting_session_recording_text" &&
+      stringArg(call, "relativePath") === "timeline.jsonl"
+  );
+  const payload = timelineWrites.map((call) => stringArg(call, "payload")).join("");
+  assert.match(payload, /capture-session-mismatch/);
+  assert.match(payload, /audioBase64Chars/);
+  assert.equal(payload.includes("UklGRg=="), false);
+
+  await manager.stop("test-complete");
+});
+
 const START_OPTIONS = {
   settings: {
     codingModel: {

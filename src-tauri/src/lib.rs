@@ -27,6 +27,7 @@ pub struct AudioState {
     capture_device_id: Arc<Mutex<Option<String>>>,
     sample_rate: Arc<Mutex<Option<u32>>>,
     started_at_ms: Arc<Mutex<Option<u64>>>,
+    capture_session_id: Arc<Mutex<Option<String>>>,
 }
 
 #[tauri::command]

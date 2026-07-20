@@ -19,6 +19,10 @@ import {
   generateMessageId,
 } from "@/lib";
 import { Message } from "@/types/completion";
+import {
+  authorizeNativeSpeechDetectedEvent,
+  type MeetingAudioStatus,
+} from "@/lib/meeting";
 
 // VAD Configuration interface matching Rust
 export interface VadConfig {
@@ -110,6 +114,8 @@ export function useSystemAudio() {
   const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const isSavingRef = useRef<boolean>(false);
   const scrollAreaRef = useRef<HTMLDivElement>(null);
+  const nativeCaptureSessionIdRef = useRef<string | null>(null);
+  const lastNativeSegmentSequenceRef = useRef(0);
 
   // Load context settings and VAD config from localStorage on mount
   useEffect(() => {
@@ -222,87 +228,105 @@ export function useSystemAudio() {
 
     const setupEventListener = async () => {
       try {
-        speechUnlisten = await listen("speech-detected", async (event) => {
-          try {
-            if (!capturing) return;
-
-            const base64Audio = event.payload as string;
-            // Convert to blob
-            const binaryString = atob(base64Audio);
-            const bytes = new Uint8Array(binaryString.length);
-            for (let i = 0; i < binaryString.length; i++) {
-              bytes[i] = binaryString.charCodeAt(i);
-            }
-            const audioBlob = new Blob([bytes], { type: "audio/wav" });
-
-            const useManagedApi = await shouldUseManagedAPI();
-            if (!selectedSttProvider.provider && !useManagedApi) {
-              setError("No speech provider selected.");
-              return;
-            }
-
-            const providerConfig = allSttProviders.find(
-              (p) => p.id === selectedSttProvider.provider
-            );
-
-            if (!providerConfig && !useManagedApi) {
-              setError("Speech provider config not found.");
-              return;
-            }
-
-            setIsProcessing(true);
-
-            // Add timeout wrapper for STT request (30 seconds)
-            const sttPromise = fetchSTT({
-              provider: providerConfig,
-              selectedProvider: selectedSttProvider,
-              audio: audioBlob,
-            });
-
-            const timeoutPromise = new Promise<string>((_, reject) => {
-              setTimeout(
-                () => reject(new Error("Speech transcription timed out (30s)")),
-                30000
-              );
-            });
-
+        speechUnlisten = await listen<unknown>(
+          "speech-detected",
+          async (event) => {
             try {
-              const transcription = await Promise.race([
-                sttPromise,
-                timeoutPromise,
-              ]);
+              if (!capturing) return;
 
-              if (transcription.trim()) {
-                setLastTranscription(transcription);
-                setError("");
-
-                const effectiveSystemPrompt = useSystemPrompt
-                  ? systemPrompt || DEFAULT_SYSTEM_PROMPT
-                  : contextContent || DEFAULT_SYSTEM_PROMPT;
-
-                const previousMessages = conversation.messages.map((msg) => {
-                  return { role: msg.role, content: msg.content };
-                });
-
-                await processWithAI(
-                  transcription,
-                  effectiveSystemPrompt,
-                  previousMessages
+              const authorization = authorizeNativeSpeechDetectedEvent({
+                payload: event.payload,
+                activeCaptureSessionId: nativeCaptureSessionIdRef.current,
+                lastAcceptedSequence: lastNativeSegmentSequenceRef.current,
+              });
+              if (!authorization.authorized) {
+                console.info(
+                  "Ignoring stale or invalid native speech event",
+                  authorization.reason
                 );
-              } else {
-                setError("Received empty transcription");
+                return;
               }
-            } catch (sttError: any) {
-              console.error("STT Error:", sttError);
-              setError(sttError.message || "Failed to transcribe audio");
-              setIsPopoverOpen(true);
+              lastNativeSegmentSequenceRef.current =
+                authorization.event.segmentSequence;
+              const base64Audio = authorization.event.audioBase64;
+              // Convert to blob
+              const binaryString = atob(base64Audio);
+              const bytes = new Uint8Array(binaryString.length);
+              for (let i = 0; i < binaryString.length; i++) {
+                bytes[i] = binaryString.charCodeAt(i);
+              }
+              const audioBlob = new Blob([bytes], { type: "audio/wav" });
+
+              const useManagedApi = await shouldUseManagedAPI();
+              if (!selectedSttProvider.provider && !useManagedApi) {
+                setError("No speech provider selected.");
+                return;
+              }
+
+              const providerConfig = allSttProviders.find(
+                (p) => p.id === selectedSttProvider.provider
+              );
+
+              if (!providerConfig && !useManagedApi) {
+                setError("Speech provider config not found.");
+                return;
+              }
+
+              setIsProcessing(true);
+
+              // Add timeout wrapper for STT request (30 seconds)
+              const sttPromise = fetchSTT({
+                provider: providerConfig,
+                selectedProvider: selectedSttProvider,
+                audio: audioBlob,
+              });
+
+              const timeoutPromise = new Promise<string>((_, reject) => {
+                setTimeout(
+                  () =>
+                    reject(new Error("Speech transcription timed out (30s)")),
+                  30000
+                );
+              });
+
+              try {
+                const transcription = await Promise.race([
+                  sttPromise,
+                  timeoutPromise,
+                ]);
+
+                if (transcription.trim()) {
+                  setLastTranscription(transcription);
+                  setError("");
+
+                  const effectiveSystemPrompt = useSystemPrompt
+                    ? systemPrompt || DEFAULT_SYSTEM_PROMPT
+                    : contextContent || DEFAULT_SYSTEM_PROMPT;
+
+                  const previousMessages = conversation.messages.map((msg) => {
+                    return { role: msg.role, content: msg.content };
+                  });
+
+                  await processWithAI(
+                    transcription,
+                    effectiveSystemPrompt,
+                    previousMessages
+                  );
+                } else {
+                  setError("Received empty transcription");
+                }
+              } catch (sttError: any) {
+                console.error("STT Error:", sttError);
+                setError(sttError.message || "Failed to transcribe audio");
+                setIsPopoverOpen(true);
+              }
+            } catch (err) {
+              setError("Failed to process speech");
+            } finally {
+              setIsProcessing(false);
             }
-          } catch (err) {
-            setError("Failed to process speech");
-          } finally {
-            setIsProcessing(false);
           }
-        });
+        );
       } catch (err) {
         setError("Failed to setup speech listener");
       }
@@ -439,10 +463,22 @@ export function useSystemAudio() {
           : null;
 
       // Start a new continuous recording session
-      await invoke<string>("start_system_audio_capture", {
-        vadConfig: vadConfig,
-        deviceId: deviceId,
-      });
+      const audioStatus = await invoke<MeetingAudioStatus>(
+        "start_system_audio_capture",
+        {
+          vadConfig: vadConfig,
+          deviceId: deviceId,
+        }
+      );
+      const nativeCaptureSessionId = audioStatus.captureSessionId?.trim();
+      if (!nativeCaptureSessionId) {
+        await invoke<void>("stop_system_audio_capture");
+        throw new Error(
+          "Native audio capture started without a capture session id."
+        );
+      }
+      nativeCaptureSessionIdRef.current = nativeCaptureSessionId;
+      lastNativeSegmentSequenceRef.current = 0;
     } catch (err) {
       console.error("Failed to start continuous recording:", err);
       setError(`Failed to start recording: ${err}`);
@@ -455,7 +491,9 @@ export function useSystemAudio() {
       if (!isContinuousMode || !isRecordingInContinuousMode) return;
 
       // Stop the capture without processing
-      await invoke<string>("stop_system_audio_capture");
+      nativeCaptureSessionIdRef.current = null;
+      lastNativeSegmentSequenceRef.current = 0;
+      await invoke<void>("stop_system_audio_capture");
 
       // Reset states
       setRecordingProgress(0);
@@ -586,7 +624,9 @@ export function useSystemAudio() {
 
       // VAD mode: Start recording immediately
       // Stop any existing capture
-      await invoke<string>("stop_system_audio_capture");
+      nativeCaptureSessionIdRef.current = null;
+      lastNativeSegmentSequenceRef.current = 0;
+      await invoke<void>("stop_system_audio_capture");
 
       const deviceId =
         selectedAudioDevices.output.id !== "default"
@@ -594,10 +634,22 @@ export function useSystemAudio() {
           : null;
 
       // Start capture with VAD config
-      await invoke<string>("start_system_audio_capture", {
-        vadConfig: vadConfig,
-        deviceId: deviceId,
-      });
+      const audioStatus = await invoke<MeetingAudioStatus>(
+        "start_system_audio_capture",
+        {
+          vadConfig: vadConfig,
+          deviceId: deviceId,
+        }
+      );
+      const nativeCaptureSessionId = audioStatus.captureSessionId?.trim();
+      if (!nativeCaptureSessionId) {
+        await invoke<void>("stop_system_audio_capture");
+        throw new Error(
+          "Native audio capture started without a capture session id."
+        );
+      }
+      nativeCaptureSessionIdRef.current = nativeCaptureSessionId;
+      lastNativeSegmentSequenceRef.current = 0;
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : String(err);
       setError(errorMessage);
@@ -614,7 +666,9 @@ export function useSystemAudio() {
       }
 
       // Stop the audio capture
-      await invoke<string>("stop_system_audio_capture");
+      nativeCaptureSessionIdRef.current = null;
+      lastNativeSegmentSequenceRef.current = 0;
+      await invoke<void>("stop_system_audio_capture");
 
       // Reset ALL states
       setCapturing(false);
@@ -713,6 +767,8 @@ export function useSystemAudio() {
       if (abortControllerRef.current) {
         abortControllerRef.current.abort();
       }
+      nativeCaptureSessionIdRef.current = null;
+      lastNativeSegmentSequenceRef.current = 0;
       invoke("stop_system_audio_capture").catch(() => {});
     };
   }, []);

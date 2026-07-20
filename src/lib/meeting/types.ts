@@ -796,6 +796,7 @@ export interface MeetingAudioStatus {
   sampleRate: number | null;
   vadEnabled: boolean;
   startedAtMs: number | null;
+  captureSessionId: string | null;
 }
 
 export type MeetingPrivacyMode =

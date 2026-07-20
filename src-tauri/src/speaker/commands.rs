@@ -13,6 +13,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter, Listener, Manager};
 use tauri_plugin_shell::ShellExt;
 use tracing::{error, warn};
+use uuid::Uuid;
 
 // VAD Configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -54,6 +55,19 @@ pub struct MeetingAudioStatus {
     pub sample_rate: Option<u32>,
     pub vad_enabled: bool,
     pub started_at_ms: Option<u64>,
+    pub capture_session_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NativeSpeechDetectedEvent {
+    pub capture_session_id: String,
+    pub segment_sequence: u64,
+    pub owner: &'static str,
+    pub captured_at_ms: u64,
+    pub sample_rate: u32,
+    pub media_type: &'static str,
+    pub audio_base64: String,
 }
 
 #[tauri::command]
@@ -61,8 +75,9 @@ pub async fn start_system_audio_capture(
     app: AppHandle,
     vad_config: Option<VadConfig>,
     device_id: Option<String>,
-) -> Result<(), String> {
-    start_audio_capture(app, vad_config, device_id, "system").await
+) -> Result<MeetingAudioStatus, String> {
+    start_audio_capture(app.clone(), vad_config, device_id, "system").await?;
+    get_meeting_audio_status(app).await
 }
 
 #[tauri::command]
@@ -152,6 +167,12 @@ async fn start_audio_capture(
         .started_at_ms
         .lock()
         .map_err(|e| format!("Failed to set capture start time: {}", e))? = Some(now_ms());
+    let capture_session_id = format!("capture_{}", Uuid::new_v4());
+    *state
+        .capture_session_id
+        .lock()
+        .map_err(|e| format!("Failed to set capture session id: {}", e))? =
+        Some(capture_session_id.clone());
 
     // Emit capture started event
     let _ = app_clone.emit("capture-started", sr);
@@ -159,9 +180,23 @@ async fn start_audio_capture(
     let state_clone = app.state::<crate::AudioState>();
     let task = tokio::spawn(async move {
         if vad_config.enabled {
-            run_vad_capture(app_clone.clone(), stream, sr, vad_config).await;
+            run_vad_capture(
+                app_clone.clone(),
+                stream,
+                sr,
+                vad_config,
+                capture_session_id,
+            )
+            .await;
         } else {
-            run_continuous_capture(app_clone.clone(), stream, sr, vad_config).await;
+            run_continuous_capture(
+                app_clone.clone(),
+                stream,
+                sr,
+                vad_config,
+                capture_session_id,
+            )
+            .await;
         }
 
         let state = app_clone.state::<crate::AudioState>();
@@ -188,6 +223,7 @@ async fn run_vad_capture(
     stream: impl StreamExt<Item = f32> + Unpin,
     sr: u32,
     config: VadConfig,
+    capture_session_id: String,
 ) {
     let mut stream = stream;
     let mut buffer: VecDeque<f32> = VecDeque::new();
@@ -198,6 +234,7 @@ async fn run_vad_capture(
     let mut silence_chunks = 0;
     let mut speech_chunks = 0;
     let max_samples = sr as usize * 30; // 30s safety cap per utterance
+    let mut segment_sequence = 0_u64;
 
     while let Some(sample) = stream.next().await {
         buffer.push_back(sample);
@@ -238,7 +275,13 @@ async fn run_vad_capture(
                     let normalized_buffer = normalize_audio_level(&speech_buffer, 0.1);
                     if let Ok(b64) = samples_to_wav_b64(sr, &normalized_buffer) {
                         // let duration = speech_buffer.len() as f32 / sr as f32;
-                        let _ = app.emit("speech-detected", b64);
+                        emit_speech_detected(
+                            &app,
+                            &capture_session_id,
+                            &mut segment_sequence,
+                            sr,
+                            b64,
+                        );
                     }
                     speech_buffer.clear();
                     in_speech = false;
@@ -270,7 +313,13 @@ async fn run_vad_capture(
                             let normalized_buffer = normalize_audio_level(&speech_buffer, 0.1);
                             if let Ok(b64) = samples_to_wav_b64(sr, &normalized_buffer) {
                                 // let duration = speech_buffer.len() as f32 / sr as f32;
-                                let _ = app.emit("speech-detected", b64);
+                                emit_speech_detected(
+                                    &app,
+                                    &capture_session_id,
+                                    &mut segment_sequence,
+                                    sr,
+                                    b64,
+                                );
                             } else {
                                 error!("Failed to encode speech to WAV");
                                 let _ = app.emit("audio-encoding-error", "Failed to encode speech");
@@ -313,6 +362,7 @@ async fn run_continuous_capture(
     stream: impl StreamExt<Item = f32> + Unpin,
     sr: u32,
     config: VadConfig,
+    capture_session_id: String,
 ) {
     let mut stream = stream;
     let max_samples = (sr as u64 * config.max_recording_duration_secs) as usize;
@@ -321,6 +371,7 @@ async fn run_continuous_capture(
     let mut audio_buffer = Vec::with_capacity(max_samples);
     let start_time = Instant::now();
     let max_duration = Duration::from_secs(config.max_recording_duration_secs);
+    let mut segment_sequence = 0_u64;
 
     // Atomic flag for manual stop
     let stop_flag = Arc::new(AtomicBool::new(false));
@@ -395,7 +446,7 @@ async fn run_continuous_capture(
 
         match samples_to_wav_b64(sr, &cleaned_audio) {
             Ok(b64) => {
-                let _ = app.emit("speech-detected", b64);
+                emit_speech_detected(&app, &capture_session_id, &mut segment_sequence, sr, b64);
             }
             Err(e) => {
                 error!("Failed to encode continuous audio: {}", e);
@@ -509,6 +560,26 @@ fn samples_to_wav_b64(sample_rate: u32, mono_f32: &[f32]) -> Result<String, Stri
     Ok(B64.encode(cursor.into_inner()))
 }
 
+fn emit_speech_detected(
+    app: &AppHandle,
+    capture_session_id: &str,
+    segment_sequence: &mut u64,
+    sample_rate: u32,
+    audio_base64: String,
+) {
+    *segment_sequence += 1;
+    let event = NativeSpeechDetectedEvent {
+        capture_session_id: capture_session_id.to_string(),
+        segment_sequence: *segment_sequence,
+        owner: "system",
+        captured_at_ms: now_ms(),
+        sample_rate,
+        media_type: "audio/wav",
+        audio_base64,
+    };
+    let _ = app.emit("speech-detected", event);
+}
+
 #[tauri::command]
 pub async fn stop_system_audio_capture(app: AppHandle) -> Result<(), String> {
     let state = app.state::<crate::AudioState>();
@@ -571,6 +642,11 @@ pub async fn get_meeting_audio_status(app: AppHandle) -> Result<MeetingAudioStat
         .started_at_ms
         .lock()
         .map_err(|e| format!("Failed to get capture start time: {}", e))?;
+    let capture_session_id = state
+        .capture_session_id
+        .lock()
+        .map_err(|e| format!("Failed to get capture session id: {}", e))?
+        .clone();
     let vad_enabled = state
         .vad_config
         .lock()
@@ -586,6 +662,7 @@ pub async fn get_meeting_audio_status(app: AppHandle) -> Result<MeetingAudioStat
         sample_rate,
         vad_enabled,
         started_at_ms,
+        capture_session_id,
     })
 }
 
@@ -739,6 +816,9 @@ fn clear_capture_state(state: &crate::AudioState) {
     if let Ok(mut started_at_ms) = state.started_at_ms.lock() {
         *started_at_ms = None;
     }
+    if let Ok(mut capture_session_id) = state.capture_session_id.lock() {
+        *capture_session_id = None;
+    }
 }
 
 fn now_ms() -> u64 {
@@ -746,4 +826,31 @@ fn now_ms() -> u64 {
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_millis() as u64)
         .unwrap_or(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::NativeSpeechDetectedEvent;
+
+    #[test]
+    fn serializes_native_speech_event_for_typescript_consumers() {
+        let event = NativeSpeechDetectedEvent {
+            capture_session_id: "capture-test".to_string(),
+            segment_sequence: 7,
+            owner: "system",
+            captured_at_ms: 1234,
+            sample_rate: 48_000,
+            media_type: "audio/wav",
+            audio_base64: "UklGRg==".to_string(),
+        };
+
+        let value = serde_json::to_value(event).expect("event should serialize");
+        assert_eq!(value["captureSessionId"], "capture-test");
+        assert_eq!(value["segmentSequence"], 7);
+        assert_eq!(value["owner"], "system");
+        assert_eq!(value["capturedAtMs"], 1234);
+        assert_eq!(value["sampleRate"], 48_000);
+        assert_eq!(value["mediaType"], "audio/wav");
+        assert_eq!(value["audioBase64"], "UklGRg==");
+    }
 }
