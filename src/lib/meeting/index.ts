@@ -21,6 +21,7 @@ export * from "./memory-evaluation";
 export * from "./personal-evidence-guardrail";
 export * from "./project-binding";
 export * from "./screen-observation.service";
+export * from "./screen-task-scope";
 export * from "./screen-task-answer";
 export * from "./sentence-completion-buffer";
 export * from "./session-recording";

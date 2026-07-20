@@ -7,8 +7,13 @@ import {
   decideAdvisorTaskMutation,
 } from "../src/lib/meeting/advisor-trigger-job.js";
 import { MeetingContextManager } from "../src/lib/meeting/context-manager.js";
+import {
+  decideAdvisorScreenScope,
+  decideScreenResultScope,
+} from "../src/lib/meeting/screen-task-scope.js";
 import type {
   ActiveInterviewParent,
+  ActiveScreenTask,
   AdvisorPromptContext,
   TranscriptTurn,
 } from "../src/lib/meeting/types.js";
@@ -215,6 +220,113 @@ test("manual next advances phase without replacing the active parent", async () 
   assert.equal(after.parentRevision, (before.parentRevision ?? 0) + 1);
 });
 
+test("clears the old screen when a voice completion commits a new parent", async () => {
+  const manager = new MeetingContextManager();
+  manager.setActiveMeetingTaskState({
+    activeScreenTask: makeScreenTask(),
+    activeInterviewTask: makeParent({ source: "screen" }),
+  });
+  const harness = new MeetingOrchestrationHarness(manager);
+  const operation = harness.startOperation<string>({
+    id: "voice-new-parent",
+    kind: "advisor",
+    commit: ({ value, contextManager }) => {
+      const state = contextManager.getState();
+      const decision = decideAdvisorScreenScope({
+        triggerSource: "live-turn",
+        relation: "new-parent",
+        hasActiveScreenTask: Boolean(state.activeScreenTask),
+      });
+      contextManager.setActiveMeetingTaskState({
+        activeScreenTask:
+          decision.action === "clear" ? null : state.activeScreenTask,
+        activeInterviewTask: makeParent({
+          id: "parent-voice-b",
+          source: "voice",
+          stableKind: "behavioral",
+          topic: "Tell me about a conflict",
+          latestUsefulAnswer: value,
+        }),
+      });
+      return committed(decision.reason);
+    },
+  });
+
+  operation.resolve("Use a concise STAR story.");
+  await operation.completion;
+  const state = manager.getState();
+
+  assert.equal(state.activeScreenTask, undefined);
+  assert.equal(state.activeMeetingTask?.parent.id, "parent-voice-b");
+  assert.equal(state.activeMeetingTask?.source, "voice");
+  assert.equal(state.activeMeetingTask?.screen, undefined);
+});
+
+test("a late unknown screen result cannot replace a newer voice parent", async () => {
+  const manager = new MeetingContextManager();
+  manager.setActiveMeetingTaskState({
+    activeScreenTask: makeScreenTask(),
+    activeInterviewTask: makeParent({ source: "screen" }),
+  });
+  const harness = new MeetingOrchestrationHarness(manager);
+  const screenOperation = harness.startOperation<string>({
+    id: "screen-unknown-late",
+    kind: "screen",
+    commit: ({ contextManager }) => {
+      const decision = decideScreenResultScope({
+        questionType: "unknown",
+        hasAnswer: true,
+      });
+      if (decision.mutationAuthorized) {
+        contextManager.setActiveScreenTask({
+          ...makeScreenTask(),
+          id: "screen-unknown",
+          kind: "unknown",
+        });
+      }
+      return committed(decision.reason);
+    },
+  });
+  const voiceOperation = harness.startOperation<string>({
+    id: "voice-new-parent-first",
+    kind: "advisor",
+    commit: ({ value, contextManager }) => {
+      const decision = decideAdvisorScreenScope({
+        triggerSource: "live-turn",
+        relation: "new-parent",
+        hasActiveScreenTask: Boolean(
+          contextManager.getState().activeScreenTask
+        ),
+      });
+      contextManager.setActiveMeetingTaskState({
+        activeScreenTask: decision.action === "clear" ? null : undefined,
+        activeInterviewTask: makeParent({
+          id: "parent-voice-new",
+          source: "voice",
+          stableKind: "ai-ml-system-design",
+          topic: "Design a RAG service",
+          latestUsefulAnswer: value,
+        }),
+      });
+      return committed(decision.reason);
+    },
+  });
+
+  voiceOperation.resolve("Clarify corpus size and latency.");
+  await voiceOperation.completion;
+  screenOperation.resolve("Unclassified screen answer");
+  await screenOperation.completion;
+
+  const state = manager.getState();
+  assert.equal(state.activeMeetingTask?.parent.id, "parent-voice-new");
+  assert.equal(state.activeMeetingTask?.source, "voice");
+  assert.equal(state.activeScreenTask, undefined);
+  assert.deepEqual(
+    harness.getOperationEvents("screen-unknown-late").map((entry) => entry.event),
+    ["started", "resolved", "committed"]
+  );
+});
+
 function createAdvisorCompletion(
   harness: MeetingOrchestrationHarness,
   job: ReturnType<typeof createAdvisorTriggerJob>,
@@ -275,6 +387,20 @@ function makeTurn(id: string, text: string, startedAt: number): TranscriptTurn {
     startedAt,
     endedAt: startedAt + 10,
     isFinal: true,
+  };
+}
+
+function makeScreenTask(): ActiveScreenTask {
+  return {
+    id: "screen-task-a",
+    observationId: "screen-a",
+    createdAt: 100,
+    updatedAt: 110,
+    question: "Design a ticket service",
+    kind: "general-system-design",
+    content: "Clarify scale and consistency.",
+    basedOnTurnIds: [],
+    basedOnObservationId: "screen-a",
   };
 }
 
