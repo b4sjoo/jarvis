@@ -12,6 +12,42 @@ import {
 } from "./task-taxonomy.js";
 import { isWhiteboardParentType } from "./whiteboard-artifact.js";
 
+export interface ManualCorrectionOperationClaim {
+  operationId: string;
+  supersedesOperationId?: string;
+}
+
+export class ManualCorrectionOperationCoordinator {
+  private activeOperationId: string | null = null;
+
+  claim(operationId: string): ManualCorrectionOperationClaim {
+    const supersedesOperationId = this.activeOperationId ?? undefined;
+    this.activeOperationId = operationId;
+    return {
+      operationId,
+      supersedesOperationId,
+    };
+  }
+
+  getActiveOperationId() {
+    return this.activeOperationId;
+  }
+
+  owns(operationId: string) {
+    return this.activeOperationId === operationId;
+  }
+
+  release(operationId: string) {
+    if (!this.owns(operationId)) return false;
+    this.activeOperationId = null;
+    return true;
+  }
+
+  reset() {
+    this.activeOperationId = null;
+  }
+}
+
 export interface ManualQuestionTypeCorrectionDecision {
   noOp: boolean;
   reason: string;

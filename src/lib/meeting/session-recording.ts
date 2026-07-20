@@ -884,6 +884,8 @@ export class SessionRecordingManager {
         correctionTarget: correction.target,
         correctionStatus: correction.status,
         regenerationStatus: correction.regenerationStatus,
+        supersedesCorrectionId: correction.supersedesCorrectionId,
+        supersededByCorrectionId: correction.supersededByCorrectionId,
         correctionTraceId: correction.correctionTraceId,
         regenerationTraceId: correction.regenerationTraceId,
         evaluationId: correction.evaluationId,

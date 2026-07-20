@@ -481,7 +481,8 @@ export type ManualQuestionTypeCorrectionTarget =
 export type ManualQuestionTypeCorrectionStatus =
   | "pending"
   | "applied"
-  | "failed";
+  | "failed"
+  | "superseded";
 
 export type ManualQuestionTypeRegenerationStatus =
   | "idle"
@@ -501,6 +502,8 @@ export interface ManualQuestionTypeCorrection {
   detectedType: CanonicalQuestionType;
   correctedType: CanonicalQuestionType;
   correctionTraceId: string;
+  supersedesCorrectionId?: string;
+  supersededByCorrectionId?: string;
   regenerationTraceId?: string;
   evaluationId?: string;
   status: ManualQuestionTypeCorrectionStatus;

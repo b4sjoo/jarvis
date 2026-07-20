@@ -2404,7 +2404,6 @@ const CurrentQuestionTypeControl = ({
                 compact && "h-6 min-w-[64px] shrink-0 px-1.5"
               )}
               title={`Correct the current question to ${option.label}`}
-              disabled={isPending}
               onClick={() => onCorrect(canonicalType)}
             >
               {option.shortLabel}

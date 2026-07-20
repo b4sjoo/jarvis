@@ -302,7 +302,6 @@ function MeetingFocusControlsWindow({
                     className="h-8 min-w-[88px] shrink-0 px-3 text-[10px]"
                     title={option.label}
                     onClick={() => updateInterviewTypes(option.id)}
-                    disabled={correctionRunning}
                   >
                     {option.shortLabel}
                   </Button>

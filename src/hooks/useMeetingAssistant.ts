@@ -170,6 +170,7 @@ import {
   buildQuestionEvaluationPatchFromTrace,
   decideManualQuestionTypeCorrection,
   applyManualQuestionTypeCorrectionToParent,
+  ManualCorrectionOperationCoordinator,
   persistTraceHumanEvaluations,
   persistQuestionHumanEvaluations,
   buildSessionRecordingProviderSummary,
@@ -1126,7 +1127,9 @@ export function useMeetingAssistant() {
   const screenAnalysisAbortRef = useRef<AbortController | null>(null);
   const runtimeEpochRef = useRef(1);
   const activeScreenOperationIdRef = useRef<string | null>(null);
-  const activeManualCorrectionOperationIdRef = useRef<string | null>(null);
+  const manualCorrectionOperationCoordinatorRef = useRef(
+    new ManualCorrectionOperationCoordinator()
+  );
   const audioSessionIdRef = useRef(createMeetingId("audio_session"));
   const audioSegmentSeqRef = useRef(0);
   const nativeCaptureSessionIdRef = useRef<string | null>(null);
@@ -1157,7 +1160,7 @@ export function useMeetingAssistant() {
     const previousEpoch = runtimeEpochRef.current;
     runtimeEpochRef.current += 1;
     activeScreenOperationIdRef.current = null;
-    activeManualCorrectionOperationIdRef.current = null;
+    manualCorrectionOperationCoordinatorRef.current.reset();
     return {
       runtimeInvalidationReason: reason,
       previousRuntimeEpoch: previousEpoch,
@@ -6720,8 +6723,6 @@ export function useMeetingAssistant() {
       correctedType: CanonicalQuestionType,
       source: ManualQuestionTypeCorrectionSource = "normal-mode"
     ) => {
-      if (activeManualCorrectionOperationIdRef.current) return;
-
       flushPendingSentenceCompletion("manual-question-type-correction");
 
       const contextState = contextManagerRef.current.getState();
@@ -6755,12 +6756,44 @@ export function useMeetingAssistant() {
       }
 
       const eventId = createMeetingId("question_type_correction");
+      const operationClaim =
+        manualCorrectionOperationCoordinatorRef.current.claim(eventId);
       const correctionRuntimeToken = createRuntimeCommitToken({
         operationId: eventId,
         pipeline: "correction",
         snapshot: readRuntimeCommitSnapshot(),
       });
-      activeManualCorrectionOperationIdRef.current = eventId;
+      const supersededCorrection =
+        operationClaim.supersedesOperationId &&
+        state.manualQuestionTypeCorrection?.eventId ===
+          operationClaim.supersedesOperationId
+          ? {
+              ...state.manualQuestionTypeCorrection,
+              status:
+                state.manualQuestionTypeCorrection.status === "pending"
+                  ? ("superseded" as const)
+                  : state.manualQuestionTypeCorrection.status,
+              regenerationStatus:
+                state.manualQuestionTypeCorrection.regenerationStatus ===
+                "running"
+                  ? ("cancelled" as const)
+                  : state.manualQuestionTypeCorrection.regenerationStatus,
+              supersededByCorrectionId: eventId,
+              completedAt: Date.now(),
+            }
+          : undefined;
+      if (supersededCorrection) {
+        traceStoreRef.current.updateMetadata(
+          supersededCorrection.correctionTraceId,
+          {
+            supersededByCorrectionId: eventId,
+            correctionOperationSuperseded: true,
+          }
+        );
+        sessionRecordingManagerRef.current?.recordManualQuestionTypeCorrection(
+          supersededCorrection
+        );
+      }
       cancelActiveAdvisorJob("manual-question-type-correction");
 
       const requestedAt = Date.now();
@@ -6773,6 +6806,7 @@ export function useMeetingAssistant() {
           detectedQuestionType: decision.detectedType,
           correctedQuestionType: decision.correctedType,
           correctionDecisionReason: decision.reason,
+          supersedesCorrectionId: operationClaim.supersedesOperationId,
           ...getActiveMeetingTaskTraceMetadata(activeTask),
         }
       );
@@ -6780,7 +6814,8 @@ export function useMeetingAssistant() {
         authorizeRuntimeCommit({
           token,
           current: readRuntimeCommitSnapshot(),
-          currentOperationId: activeManualCorrectionOperationIdRef.current,
+          currentOperationId:
+            manualCorrectionOperationCoordinatorRef.current.getActiveOperationId(),
         });
       const recordCorrectionAuthorization = (
         token: RuntimeCommitToken,
@@ -6811,12 +6846,14 @@ export function useMeetingAssistant() {
         detectedType: decision.detectedType,
         correctedType: decision.correctedType,
         correctionTraceId: correctionTrace.id,
+        supersedesCorrectionId: operationClaim.supersedesOperationId,
         status: "pending",
         regenerationStatus: "idle",
         requestedAt,
       };
       traceStoreRef.current.updateMetadata(correctionTrace.id, {
         manualQuestionTypeCorrectionId: eventId,
+        supersedesCorrectionId: operationClaim.supersedesOperationId,
         questionInstanceId: questionId,
         questionOriginTraceId: correctionQuestion.sourceTraceId,
       });
@@ -7191,9 +7228,7 @@ export function useMeetingAssistant() {
           error: correction.error ?? null,
         }));
       } finally {
-        if (activeManualCorrectionOperationIdRef.current === eventId) {
-          activeManualCorrectionOperationIdRef.current = null;
-        }
+        manualCorrectionOperationCoordinatorRef.current.release(eventId);
       }
     },
     [
@@ -7202,6 +7237,7 @@ export function useMeetingAssistant() {
       readRuntimeCommitSnapshot,
       runAdvisor,
       state.latestSuggestion,
+      state.manualQuestionTypeCorrection,
       state.questionEvaluations,
       state.sessionRecording.sessionId,
       state.settings,

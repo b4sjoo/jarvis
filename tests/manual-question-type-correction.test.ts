@@ -4,6 +4,7 @@ import type { ActiveMeetingTask } from "../src/lib/meeting/active-meeting-task.j
 import {
   applyManualQuestionTypeCorrectionToParent,
   decideManualQuestionTypeCorrection,
+  ManualCorrectionOperationCoordinator,
 } from "../src/lib/meeting/manual-question-type-correction.js";
 import type {
   ActiveInterviewChild,
@@ -14,6 +15,25 @@ import type {
 import type { CanonicalQuestionType } from "../src/lib/meeting/task-taxonomy.js";
 
 const now = 1_000;
+
+test("lets a newer manual correction replace the active operation", () => {
+  const coordinator = new ManualCorrectionOperationCoordinator();
+
+  assert.deepEqual(coordinator.claim("correction-a"), {
+    operationId: "correction-a",
+    supersedesOperationId: undefined,
+  });
+  assert.deepEqual(coordinator.claim("correction-b"), {
+    operationId: "correction-b",
+    supersedesOperationId: "correction-a",
+  });
+  assert.equal(coordinator.owns("correction-a"), false);
+  assert.equal(coordinator.owns("correction-b"), true);
+  assert.equal(coordinator.release("correction-a"), false);
+  assert.equal(coordinator.getActiveOperationId(), "correction-b");
+  assert.equal(coordinator.release("correction-b"), true);
+  assert.equal(coordinator.getActiveOperationId(), null);
+});
 
 test("treats selecting the effective question type as a no-op", () => {
   const decision = decideManualQuestionTypeCorrection(
