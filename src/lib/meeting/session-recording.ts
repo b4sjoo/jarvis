@@ -691,6 +691,7 @@ export class SessionRecordingManager {
     traceId,
     taskId,
     query,
+    diagramDomainQuery,
     source,
     memoryContext,
     metadata,
@@ -698,6 +699,7 @@ export class SessionRecordingManager {
     traceId?: string;
     taskId?: string;
     query: string;
+    diagramDomainQuery?: string;
     source: "advisor" | "screen";
     memoryContext: MemoryRetrievalResult;
     metadata?: Record<string, unknown>;
@@ -713,6 +715,7 @@ export class SessionRecordingManager {
     this.enqueue(session, async () => {
       await this.writeJson(session, jsonPath, {
         query,
+        diagramDomainQuery,
         source,
         metadata,
         memoryContext,
@@ -724,6 +727,7 @@ export class SessionRecordingManager {
       {
         source,
         queryChars: query.length,
+        diagramDomainQueryChars: diagramDomainQuery?.length ?? 0,
         selectedEntries: memoryContext.entries.length,
         candidateCount: memoryContext.candidateCount,
         eligibleCount: memoryContext.eligibleCount,

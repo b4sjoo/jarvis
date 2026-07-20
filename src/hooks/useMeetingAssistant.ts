@@ -35,6 +35,7 @@ import {
   CanonicalQuestionType,
   ClarifyingQuestionAnswer,
   ClarifyingQuestionFeedback,
+  DiagramDomainQueryContext,
   MeetingAssistantState,
   MeetingAssistantStatus,
   MeetingAudioConfig,
@@ -83,6 +84,7 @@ import {
   base64WavToBlob,
   buildAmazonLeadershipPrincipleMemoryHint,
   buildDiagramOverlayEvalTraceMetadata,
+  buildCurrentTaskDiagramDomainContext,
   buildInterviewSessionBriefMemoryHint,
   buildInterviewSessionMemoryHint,
   buildWhiteboardEvalTraceMetadata,
@@ -2377,6 +2379,8 @@ export function useMeetingAssistant() {
     async ({
       traceId,
       query,
+      diagramDomainContext,
+      diagramTopicDomain,
       source,
       useCase,
       questionType,
@@ -2392,6 +2396,8 @@ export function useMeetingAssistant() {
       traceId?: string;
       taskId?: string;
       query: string;
+      diagramDomainContext?: DiagramDomainQueryContext;
+      diagramTopicDomain?: MemoryTopicDomain;
       source: "advisor" | "screen";
       useCase?: MemoryUseCase;
       questionType?: MemoryQuestionType;
@@ -2440,6 +2446,13 @@ export function useMeetingAssistant() {
               blockedFamilies: effectiveMemoryPolicy?.blockedFamilies,
               strictProjectAnchor: effectiveMemoryPolicy?.strictProjectAnchor,
               queryChars: query.length,
+              diagramDomainQueryChars:
+                diagramDomainContext?.query.length ?? 0,
+              diagramDomainEvidenceSources:
+                diagramDomainContext?.evidenceSources ?? [],
+              diagramDomainParentTopicIncluded:
+                diagramDomainContext?.parentTopicIncluded ?? false,
+              diagramTopicDomain: diagramTopicDomain ?? "unknown",
             }
           );
           traceStoreRef.current.finishStep(traceId, memoryStepId, "cancelled", {
@@ -2475,12 +2488,21 @@ export function useMeetingAssistant() {
               blockedFamilies: effectiveMemoryPolicy?.blockedFamilies,
               strictProjectAnchor: effectiveMemoryPolicy?.strictProjectAnchor,
               queryChars: query.length,
+              diagramDomainQueryChars:
+                diagramDomainContext?.query.length ?? 0,
+              diagramDomainEvidenceSources:
+                diagramDomainContext?.evidenceSources ?? [],
+              diagramDomainParentTopicIncluded:
+                diagramDomainContext?.parentTopicIncluded ?? false,
+              diagramTopicDomain: diagramTopicDomain ?? "unknown",
             }
           );
         }
 
         const memoryContext = await retrieveMemoryContext({
           query,
+          diagramDomainQuery: diagramDomainContext?.query,
+          diagramTopicDomain,
           useCase: resolvedUseCase,
           questionType: resolvedQuestionType,
           askFrame,
@@ -2560,6 +2582,13 @@ export function useMeetingAssistant() {
               allowedFamilies: effectiveMemoryPolicy?.allowedFamilies,
               blockedFamilies: effectiveMemoryPolicy?.blockedFamilies,
               strictProjectAnchor: effectiveMemoryPolicy?.strictProjectAnchor,
+              diagramDomainQueryChars:
+                diagramDomainContext?.query.length ?? 0,
+              diagramDomainEvidenceSources:
+                diagramDomainContext?.evidenceSources ?? [],
+              diagramDomainParentTopicIncluded:
+                diagramDomainContext?.parentTopicIncluded ?? false,
+              diagramTopicDomain: diagramTopicDomain ?? "unknown",
               candidateCount: memoryContext.candidateCount,
               eligibleCount: memoryContext.eligibleCount,
               rejectedCount: memoryContext.rejectedCount,
@@ -2574,6 +2603,7 @@ export function useMeetingAssistant() {
             traceId,
             taskId,
             query,
+            diagramDomainQuery: diagramDomainContext?.query,
             source,
             memoryContext,
             metadata: {
@@ -2587,6 +2617,13 @@ export function useMeetingAssistant() {
               allowedFamilies: effectiveMemoryPolicy?.allowedFamilies,
               blockedFamilies: effectiveMemoryPolicy?.blockedFamilies,
               strictProjectAnchor: effectiveMemoryPolicy?.strictProjectAnchor,
+              diagramDomainQueryChars:
+                diagramDomainContext?.query.length ?? 0,
+              diagramDomainEvidenceSources:
+                diagramDomainContext?.evidenceSources ?? [],
+              diagramDomainParentTopicIncluded:
+                diagramDomainContext?.parentTopicIncluded ?? false,
+              diagramTopicDomain: diagramTopicDomain ?? "unknown",
               ...diagramOverlayTraceMetadata,
               ...memoryRoleTraceMetadata,
             },
@@ -2603,6 +2640,13 @@ export function useMeetingAssistant() {
             allowedFamilies: effectiveMemoryPolicy?.allowedFamilies,
             blockedFamilies: effectiveMemoryPolicy?.blockedFamilies,
             strictProjectAnchor: effectiveMemoryPolicy?.strictProjectAnchor,
+            diagramDomainQueryChars:
+              diagramDomainContext?.query.length ?? 0,
+            diagramDomainEvidenceSources:
+              diagramDomainContext?.evidenceSources ?? [],
+            diagramDomainParentTopicIncluded:
+              diagramDomainContext?.parentTopicIncluded ?? false,
+            diagramTopicDomain: diagramTopicDomain ?? "unknown",
             candidateCount: memoryContext.candidateCount,
             eligibleCount: memoryContext.eligibleCount,
             rejectedCount: memoryContext.rejectedCount,
@@ -2615,6 +2659,13 @@ export function useMeetingAssistant() {
           traceStoreRef.current.updateMetadata(
             traceId,
             {
+              diagramDomainQueryChars:
+                diagramDomainContext?.query.length ?? 0,
+              diagramDomainEvidenceSources:
+                diagramDomainContext?.evidenceSources ?? [],
+              diagramDomainParentTopicIncluded:
+                diagramDomainContext?.parentTopicIncluded ?? false,
+              diagramTopicDomain: diagramTopicDomain ?? "unknown",
               ...diagramOverlayTraceMetadata,
               ...memoryRoleTraceMetadata,
             }
@@ -3289,11 +3340,23 @@ export function useMeetingAssistant() {
       );
     }
 
+    const advisorDiagramDomainContext = buildCurrentTaskDiagramDomainContext({
+      currentQuestion:
+        promptContext.latestTurn?.speaker === "them"
+          ? promptContext.latestTurn.text
+          : undefined,
+      parentTopic:
+        promptContext.activeMeetingTask?.parent.topic ??
+        promptContext.activeInterviewTask?.topic,
+      relation: advisorTaskSignals.taskRelation,
+    });
     const memoryContext = await loadMemoryForPrompt({
       traceId,
       taskId: activeMeetingTaskId,
       source: "advisor",
       query: advisorTaskSignals.query,
+      diagramDomainContext: advisorDiagramDomainContext,
+      diagramTopicDomain: advisorTopicDomain,
       useCase: inferMemoryUseCaseFromQuery(advisorTaskSignals.query),
       questionType: advisorQuestionType,
       askFrame: advisorAskFrame,
@@ -6004,6 +6067,15 @@ export function useMeetingAssistant() {
             : existingScreenProjectBinding?.projectName ??
               existingScreenProjectBinding?.projectId ??
               screenPreflight?.projectAnchor;
+        const screenDiagramDomainContext =
+          buildCurrentTaskDiagramDomainContext({
+            currentQuestion: screenPreflight?.question,
+            parentTopic:
+              preflightContextState.activeMeetingTask?.parent.topic ??
+              preflightContextState.activeInterviewTask?.topic,
+            relation: provisionalScreenTaskRelation,
+            captureTitleFallback: observation.captureTarget?.title,
+          });
         const screenPlaybook = selectInterviewPlaybook({
           query: screenMemoryQuery,
           questionType: screenMemoryQuestionType,
@@ -6062,6 +6134,10 @@ export function useMeetingAssistant() {
           traceId: trace.id,
           source: "screen",
           query: screenMemoryQuery,
+          diagramDomainContext: screenDiagramDomainContext,
+          diagramTopicDomain:
+            screenPreflight?.topicDomain ??
+            inferMemoryTopicDomainFromQuery(screenDiagramDomainContext.query),
           useCase: inferMemoryUseCaseFromQuery(screenMemoryQuery),
           questionType: screenMemoryQuestionType,
           askFrame: screenMemoryAskFrame,

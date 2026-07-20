@@ -233,6 +233,8 @@ export interface MemoryImportSummary {
 
 export interface MemoryRetrievalRequest {
   query: string;
+  diagramDomainQuery?: string;
+  diagramTopicDomain?: MemoryTopicDomain;
   useCase: MemoryUseCase;
   projectId?: string;
   interviewTypes?: MemoryInterviewType[];

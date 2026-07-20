@@ -42,6 +42,8 @@ const PRIORITY_BOOST: Record<MemoryEntry["priority"], number> = {
 
 export async function retrieveMemoryContext({
   query,
+  diagramDomainQuery,
+  diagramTopicDomain,
   useCase,
   projectId,
   interviewTypes,
@@ -70,10 +72,14 @@ export async function retrieveMemoryContext({
     perEntryMaxChars,
   });
   const eligibleEntries: MemoryEntry[] = [];
+  const effectiveDiagramDomainQuery =
+    diagramDomainQuery === undefined ? query : diagramDomainQuery;
+  const effectiveDiagramTopicDomain =
+    diagramTopicDomain === undefined ? topicDomain : diagramTopicDomain;
   const diagramOverlayGate = gateDiagramOverlayEntriesByDomain(entries, {
-    query,
+    query: effectiveDiagramDomainQuery,
     questionType,
-    topicDomain,
+    topicDomain: effectiveDiagramTopicDomain,
   });
   const diagramOverlayRejections = new Map(
     diagramOverlayGate.rejected.map((item) => [item.entryId, item])

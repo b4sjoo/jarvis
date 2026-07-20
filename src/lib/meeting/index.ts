@@ -7,6 +7,7 @@ export * from "./clarifying-options";
 export * from "./coding-artifact";
 export * from "./capture-lifecycle";
 export * from "./context-manager";
+export * from "./diagram-domain-query";
 export * from "./eval-trace-metadata";
 export * from "./fact-anchor-guardrail";
 export * from "./focus-window";
