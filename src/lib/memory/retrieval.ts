@@ -24,7 +24,7 @@ import {
 } from "@/lib/meeting/task-taxonomy";
 import { isMemoryProjectAnchorCompatible } from "./project-anchor.js";
 import {
-  getDiagramOverlayGateRejectReason,
+  gateDiagramOverlayEntriesByDomain,
   isDiagramOverlayMemoryEntry,
 } from "./diagram-overlay.js";
 import {
@@ -73,15 +73,28 @@ export async function retrieveMemoryContext({
     perEntryMaxChars,
   });
   const eligibleEntries: MemoryEntry[] = [];
+  const diagramOverlayGate = gateDiagramOverlayEntriesByDomain(entries, {
+    query,
+    questionType,
+    topicDomain,
+  });
+  const diagramOverlayRejections = new Map(
+    diagramOverlayGate.rejected.map((item) => [item.entryId, item])
+  );
 
   for (const entry of entries) {
+    const diagramRejection = diagramOverlayRejections.get(entry.id);
+    if (diagramRejection) {
+      rejectRecorder.record(diagramRejection.reason, entry);
+      overlayRejectRecorder.record(diagramRejection.reason, entry);
+      continue;
+    }
     const decision = getEntryEligibilityDecision(
       entry,
       useCase,
       interviewTypes,
       questionType,
-      memoryPolicy,
-      query
+      memoryPolicy
     );
     if (decision.eligible) {
       eligibleEntries.push(entry);
@@ -164,7 +177,8 @@ export async function retrieveMemoryContext({
     rejectSummary: rejectRecorder.summary(),
     overlaySelection: buildMemoryOverlaySelectionSummary(
       budgeted.entries,
-      overlayRejectRecorder.summary()
+      overlayRejectRecorder.summary(),
+      diagramOverlayGate
     ),
     policySnapshot,
   };
@@ -217,6 +231,18 @@ function formatOverlaySelectionForTrace(
       ? `- selected: ${overlaySelection.selectedEntryIds.join(", ")}`
       : "- selected: none",
     `- rejectedCount: ${overlaySelection.rejectedCount}`,
+    `- allowedFamilies: ${
+      overlaySelection.domainGate?.allowedFamilies.join(", ") || "none"
+    }`,
+    `- domainEvidence: ${
+      overlaySelection.domainGate?.evidence.join(", ") || "none"
+    }`,
+    ...(overlaySelection.domainGate?.blockedEntries ?? []).map(
+      (item) =>
+        `- domain-blocked ${item.entryId}: actual=${
+          item.actualFamilies.join(", ") || "unknown"
+        }`
+    ),
     ...overlaySelection.rejectSummary.map(
       (item) =>
         `- ${item.reason}: ${item.count}${
@@ -324,8 +350,7 @@ function getEntryEligibilityDecision(
   useCase: MemoryUseCase,
   interviewTypes: MemoryInterviewType[] | undefined,
   questionType: MemoryQuestionType | undefined,
-  memoryPolicy: MemoryRetrievalPolicy | undefined,
-  query: string
+  memoryPolicy: MemoryRetrievalPolicy | undefined
 ) {
   if (!entry.enabled) return { eligible: false as const, reason: "disabled" as const };
   if (entry.injectionMode === "manual_only" || entry.injectionMode === "never") {
@@ -341,17 +366,6 @@ function getEntryEligibilityDecision(
   if (!useCaseMatched) {
     return { eligible: false as const, reason: "use-case-mismatch" as const };
   }
-  if (isDiagramOverlayMemoryEntry(entry)) {
-    const diagramRejectReason = getDiagramOverlayGateRejectReason(
-      entry,
-      questionType,
-      query
-    );
-    if (diagramRejectReason) {
-      return { eligible: false as const, reason: diagramRejectReason };
-    }
-  }
-
   const gateRejectReason = getInterviewGateRejectReason(
     entry,
     interviewTypes,
@@ -836,7 +850,8 @@ function isSystemDesignGuidanceEntry(entry: MemoryEntry) {
 
 function buildMemoryOverlaySelectionSummary(
   entries: RetrievedMemoryEntry[],
-  rejectSummary: MemoryRejectSummary[]
+  rejectSummary: MemoryRejectSummary[],
+  domainGateResult: ReturnType<typeof gateDiagramOverlayEntriesByDomain>
 ): MemoryOverlaySelectionSummary {
   const selected = entries.filter((item) =>
     isDiagramOverlayMemoryEntry(item.entry)
@@ -847,6 +862,16 @@ function buildMemoryOverlaySelectionSummary(
     selectedTitles: selected.map((item) => item.entry.title),
     rejectedCount: rejectSummary.reduce((total, item) => total + item.count, 0),
     rejectSummary,
+    domainGate: {
+      allowedFamilies: domainGateResult.context.allowedFamilies,
+      evidence: domainGateResult.context.evidence,
+      blockedEntries: domainGateResult.rejected
+        .filter((item) => item.reason === "diagram-overlay-domain-blocked")
+        .map((item) => ({
+          entryId: item.entryId,
+          actualFamilies: item.actualFamilies,
+        })),
+    },
   };
 }
 

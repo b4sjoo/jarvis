@@ -265,6 +265,7 @@ export type MemoryRejectReason =
   | "question-type-family-mismatch"
   | "behavioral-family-blocked"
   | "diagram-overlay-question-type-blocked"
+  | "diagram-overlay-domain-blocked"
   | "project-anchor-mismatch"
   | "missing-required-tag-hint"
   | "no-retrieval-match"
@@ -318,4 +319,24 @@ export interface MemoryOverlaySelectionSummary {
   selectedTitles: string[];
   rejectedCount: number;
   rejectSummary: MemoryRejectSummary[];
+  domainGate?: DiagramOverlayDomainGateTelemetry;
+}
+
+export type DiagramOverlayDomainFamily =
+  | "geo-matching"
+  | "scarce-inventory"
+  | "feed-fanout"
+  | "rag-app"
+  | "retrieval-ranking"
+  | "real-time-ml"
+  | "llmops-pipeline"
+  | "agent-runtime";
+
+export interface DiagramOverlayDomainGateTelemetry {
+  allowedFamilies: DiagramOverlayDomainFamily[];
+  evidence: string[];
+  blockedEntries: Array<{
+    entryId: string;
+    actualFamilies: DiagramOverlayDomainFamily[];
+  }>;
 }

@@ -18,6 +18,16 @@ test("builds diagram overlay eval trace metadata from memory selection", () => {
         sampleTitles: ["Behavioral guide"],
       },
     ],
+    domainGate: {
+      allowedFamilies: ["geo-matching"],
+      evidence: ["query:geo-matching:uber"],
+      blockedEntries: [
+        {
+          entryId: "mem_feed",
+          actualFamilies: ["feed-fanout"],
+        },
+      ],
+    },
   });
 
   assert.deepEqual(metadata.selectedDiagramOverlayIds, [
@@ -33,6 +43,15 @@ test("builds diagram overlay eval trace metadata from memory selection", () => {
       sampleTitles: ["Behavioral guide"],
     },
   ]);
+  assert.equal(metadata.diagramOverlayAllowedFamilies, "geo-matching");
+  assert.equal(
+    metadata.diagramOverlayDomainEvidence,
+    "query:geo-matching:uber"
+  );
+  assert.equal(
+    metadata.diagramOverlayDomainBlocks,
+    '[{"entryId":"mem_feed","actualFamilies":["feed-fanout"]}]'
+  );
 });
 
 test("reads whiteboard, manual phase, and overlay metadata from trace sources", () => {
@@ -58,6 +77,10 @@ test("reads whiteboard, manual phase, and overlay metadata from trace sources", 
           sampleTitles: ["Other project"],
         },
       ],
+      diagramOverlayAllowedFamilies: "rag-app",
+      diagramOverlayDomainEvidence: "query:rag-app:rag",
+      diagramOverlayDomainBlocks:
+        '[{"entryId":"mem_geo","actualFamilies":["geo-matching"]}]',
     },
   ]);
 
@@ -79,4 +102,13 @@ test("reads whiteboard, manual phase, and overlay metadata from trace sources", 
       sampleTitles: ["Other project"],
     },
   ]);
+  assert.equal(metadata.diagramOverlayAllowedFamilies, "rag-app");
+  assert.equal(
+    metadata.diagramOverlayDomainEvidence,
+    "query:rag-app:rag"
+  );
+  assert.equal(
+    metadata.diagramOverlayDomainBlocks,
+    '[{"entryId":"mem_geo","actualFamilies":["geo-matching"]}]'
+  );
 });

@@ -17,6 +17,9 @@ export const MEETING_EVAL_TRACE_KEYS = {
   selectedDiagramOverlayIds: "selectedDiagramOverlayIds",
   rejectedDiagramOverlayCount: "rejectedDiagramOverlayCount",
   diagramOverlayRejectSummary: "diagramOverlayRejectSummary",
+  diagramOverlayAllowedFamilies: "diagramOverlayAllowedFamilies",
+  diagramOverlayDomainEvidence: "diagramOverlayDomainEvidence",
+  diagramOverlayDomainBlocks: "diagramOverlayDomainBlocks",
 } as const;
 
 export interface MeetingEvalTraceMetadata {
@@ -31,6 +34,9 @@ export interface MeetingEvalTraceMetadata {
   selectedDiagramOverlayIds?: string[];
   rejectedDiagramOverlayCount?: number;
   diagramOverlayRejectSummary?: MemoryRejectSummary[];
+  diagramOverlayAllowedFamilies?: string;
+  diagramOverlayDomainEvidence?: string;
+  diagramOverlayDomainBlocks?: string;
 }
 
 export function buildWhiteboardEvalTraceMetadata(
@@ -55,6 +61,13 @@ export function buildDiagramOverlayEvalTraceMetadata(
     selectedDiagramOverlayIds: overlaySelection.selectedEntryIds,
     rejectedDiagramOverlayCount: overlaySelection.rejectedCount,
     diagramOverlayRejectSummary: overlaySelection.rejectSummary,
+    diagramOverlayAllowedFamilies:
+      overlaySelection.domainGate?.allowedFamilies.join(",") || "none",
+    diagramOverlayDomainEvidence:
+      overlaySelection.domainGate?.evidence.join(",") || "none",
+    diagramOverlayDomainBlocks: JSON.stringify(
+      overlaySelection.domainGate?.blockedEntries ?? []
+    ),
   };
 }
 
@@ -107,6 +120,18 @@ export function readMeetingEvalTraceMetadata(
     diagramOverlayRejectSummary: readFirstMemoryRejectSummary(
       sources,
       MEETING_EVAL_TRACE_KEYS.diagramOverlayRejectSummary
+    ),
+    diagramOverlayAllowedFamilies: readFirstString(
+      sources,
+      MEETING_EVAL_TRACE_KEYS.diagramOverlayAllowedFamilies
+    ),
+    diagramOverlayDomainEvidence: readFirstString(
+      sources,
+      MEETING_EVAL_TRACE_KEYS.diagramOverlayDomainEvidence
+    ),
+    diagramOverlayDomainBlocks: readFirstString(
+      sources,
+      MEETING_EVAL_TRACE_KEYS.diagramOverlayDomainBlocks
     ),
   };
 }
