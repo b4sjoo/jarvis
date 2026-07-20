@@ -20,6 +20,7 @@ export * from "./meeting-answer-display";
 export * from "./memory-evaluation";
 export * from "./personal-evidence-guardrail";
 export * from "./project-binding";
+export * from "./runtime-commit-authorization";
 export * from "./screen-observation.service";
 export * from "./screen-task-scope";
 export * from "./screen-task-answer";
