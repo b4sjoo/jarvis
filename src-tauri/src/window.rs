@@ -9,6 +9,12 @@ const MIN_WINDOW_WIDTH: f64 = 360.0;
 const WINDOW_SIDE_MARGIN: f64 = 32.0;
 const FOCUS_ANSWER_WINDOW_LABEL: &str = "meeting-focus-answer";
 const FOCUS_CONTROLS_WINDOW_LABEL: &str = "meeting-focus-controls";
+const MAIN_WINDOW_LABEL: &str = "main";
+const INTERVIEW_WINDOW_LABELS: [&str; 3] = [
+    FOCUS_ANSWER_WINDOW_LABEL,
+    FOCUS_CONTROLS_WINDOW_LABEL,
+    MAIN_WINDOW_LABEL,
+];
 const FOCUS_ANSWER_WIDTH: f64 = 920.0;
 const FOCUS_ANSWER_HEIGHT: f64 = 620.0;
 const FOCUS_CONTROLS_WIDTH: f64 = 920.0;
@@ -278,6 +284,16 @@ pub fn hide_meeting_focus_windows(app: tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+pub fn hide_interview_windows_best_effort<R: Runtime>(app: &AppHandle<R>) {
+    for label in INTERVIEW_WINDOW_LABELS {
+        if let Some(window) = app.get_webview_window(label) {
+            if let Err(error) = window.hide() {
+                eprintln!("Failed to hide interview window {}: {}", label, error);
+            }
+        }
+    }
+}
+
 enum FocusWindowPlacement {
     Top,
     Bottom,
@@ -426,4 +442,24 @@ pub fn show_dashboard_window<R: Runtime>(app: &AppHandle<R>) -> Result<(), Strin
             .map_err(|e| format!("Failed to focus new dashboard window: {}", e))?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        FOCUS_ANSWER_WINDOW_LABEL, FOCUS_CONTROLS_WINDOW_LABEL, INTERVIEW_WINDOW_LABELS,
+        MAIN_WINDOW_LABEL,
+    };
+
+    #[test]
+    fn emergency_hide_orders_focus_windows_before_the_main_window() {
+        assert_eq!(
+            INTERVIEW_WINDOW_LABELS,
+            [
+                FOCUS_ANSWER_WINDOW_LABEL,
+                FOCUS_CONTROLS_WINDOW_LABEL,
+                MAIN_WINDOW_LABEL,
+            ]
+        );
+    }
 }

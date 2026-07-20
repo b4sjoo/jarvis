@@ -10,7 +10,7 @@ use tokio::time::{sleep, Duration};
 #[cfg(target_os = "macos")]
 use tauri_nspanel::ManagerExt;
 
-use crate::window::show_dashboard_window;
+use crate::window::{hide_interview_windows_best_effort, show_dashboard_window};
 // State for window visibility
 pub struct WindowVisibility {
     #[allow(dead_code)]
@@ -165,17 +165,15 @@ fn handle_toggle_window<R: Runtime>(app: &AppHandle<R>) {
         let mut is_hidden = state.is_hidden.lock().unwrap();
         *is_hidden = !*is_hidden;
 
+        hide_interview_windows_best_effort(app);
+
         if let Err(e) = window.emit("toggle-window-visibility", *is_hidden) {
             eprintln!("Failed to emit toggle-window-visibility event: {}", e);
         }
 
-        if *is_hidden {
-            let _ = window.emit("jarvis-emergency-hide", json!({}));
-        }
+        let _ = window.emit("jarvis-emergency-hide", json!({}));
 
         if !*is_hidden {
-            let _ = window.emit("jarvis-emergency-hide", json!({}));
-
             if let Err(e) = window.show() {
                 eprintln!("Failed to show window: {}", e);
             }
@@ -192,19 +190,11 @@ fn handle_toggle_window<R: Runtime>(app: &AppHandle<R>) {
     #[cfg(not(target_os = "windows"))]
     match window.is_visible() {
         Ok(true) => {
+            hide_interview_windows_best_effort(app);
             let _ = window.emit("jarvis-emergency-hide", json!({}));
-
-            #[cfg(target_os = "macos")]
-            {
-                let panel = app.get_webview_window("main").unwrap();
-                let _ = panel.hide();
-            }
-            // Window is visible, hide it and handle app icon based on user settings
-            if let Err(e) = window.hide() {
-                eprintln!("Failed to hide window: {}", e);
-            }
         }
         Ok(false) => {
+            hide_interview_windows_best_effort(app);
             let _ = window.emit("jarvis-emergency-hide", json!({}));
 
             // Window is hidden, show it and handle app icon based on user settings
