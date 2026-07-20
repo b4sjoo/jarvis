@@ -137,6 +137,7 @@ import {
   formatAdvisorTriggerJobForTrace,
   formatRuntimeCommitAuthorizationForTrace,
   rebaseRuntimeCommitToken,
+  rebaseRuntimeCommitTokenAfterOwnedParentMutation,
   canQuestionTypeDecisionOverrideParent,
   decideAdvisorTurnIntent,
   decideSentenceCompletion,
@@ -6773,8 +6774,13 @@ export function useMeetingAssistant() {
           operationId: eventId,
           pipeline: "correction",
           snapshot: readRuntimeCommitSnapshot(),
-          parentPolicy: "session-only",
         });
+
+        const correctedParentAuthorization = recordCorrectionAuthorization(
+          correctionLifecycleToken,
+          "post-correction-mutation"
+        );
+        if (!correctedParentAuthorization.authorized) return;
 
         correction = {
           ...correction,
@@ -6905,14 +6911,37 @@ export function useMeetingAssistant() {
           advisorJobSource: "manual-correction",
           taskMutationAuthority: "manual-correction",
         });
-        const completionAuthorization = recordCorrectionAuthorization(
-          correctionLifecycleToken,
-          "post-correction-regeneration"
-        );
-        if (!completionAuthorization.authorized) return;
         const regenerationStatus = traceStoreRef.current
           .getTraces()
           .find((trace) => trace.id === regenerationTrace.id)?.status;
+        const completionToken =
+          regenerationStatus === "success"
+            ? rebaseRuntimeCommitTokenAfterOwnedParentMutation({
+                token: correctionLifecycleToken,
+                snapshot: readRuntimeCommitSnapshot(),
+                expectedRevisionDelta: 1,
+              }) ?? correctionLifecycleToken
+            : correctionLifecycleToken;
+        if (completionToken !== correctionLifecycleToken) {
+          traceStoreRef.current.updateMetadata(correctionTrace.id, {
+            correctionRuntimeCommitTokenRebased: true,
+            correctionRuntimeCommitTokenRebaseReason:
+              "owned-regeneration-parent-mutation",
+            correctionRuntimeCommitTokenParentId:
+              completionToken.parentExpectation.kind === "exact"
+                ? completionToken.parentExpectation.parentId
+                : undefined,
+            correctionRuntimeCommitTokenParentRevision:
+              completionToken.parentExpectation.kind === "exact"
+                ? completionToken.parentExpectation.parentRevision
+                : undefined,
+          });
+        }
+        const completionAuthorization = recordCorrectionAuthorization(
+          completionToken,
+          "post-correction-regeneration"
+        );
+        if (!completionAuthorization.authorized) return;
         correction = {
           ...correction,
           regenerationStatus:

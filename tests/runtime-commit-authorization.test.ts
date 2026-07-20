@@ -5,6 +5,7 @@ import {
   createRuntimeCommitToken,
   formatRuntimeCommitAuthorizationForTrace,
   rebaseRuntimeCommitToken,
+  rebaseRuntimeCommitTokenAfterOwnedParentMutation,
   type RuntimeCommitSnapshot,
 } from "../src/lib/meeting/runtime-commit-authorization.js";
 
@@ -213,5 +214,45 @@ test("rebases one operation onto the committed parent revision", () => {
       currentOperationId: "advisor-next",
     }).reason,
     "authorized"
+  );
+});
+
+test("rebases only the expected revision written by an owned parent mutation", () => {
+  const token = createRuntimeCommitToken({
+    operationId: "correction-a",
+    pipeline: "correction",
+    snapshot: BASE_SNAPSHOT,
+  });
+
+  const rebased = rebaseRuntimeCommitTokenAfterOwnedParentMutation({
+    token,
+    snapshot: { ...BASE_SNAPSHOT, parentRevision: 5 },
+    expectedRevisionDelta: 1,
+  });
+  assert.equal(rebased?.parentExpectation.kind, "exact");
+  if (rebased?.parentExpectation.kind === "exact") {
+    assert.equal(rebased.parentExpectation.parentId, "parent-a");
+    assert.equal(rebased.parentExpectation.parentRevision, 5);
+  }
+
+  assert.equal(
+    rebaseRuntimeCommitTokenAfterOwnedParentMutation({
+      token,
+      snapshot: {
+        ...BASE_SNAPSHOT,
+        parentId: "parent-b",
+        parentRevision: 5,
+      },
+      expectedRevisionDelta: 1,
+    }),
+    undefined
+  );
+  assert.equal(
+    rebaseRuntimeCommitTokenAfterOwnedParentMutation({
+      token,
+      snapshot: { ...BASE_SNAPSHOT, parentRevision: 6 },
+      expectedRevisionDelta: 1,
+    }),
+    undefined
   );
 });

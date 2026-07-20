@@ -110,6 +110,27 @@ export function rebaseRuntimeCommitToken(input: {
   });
 }
 
+export function rebaseRuntimeCommitTokenAfterOwnedParentMutation(input: {
+  token: RuntimeCommitToken;
+  snapshot: RuntimeCommitSnapshot;
+  expectedRevisionDelta: number;
+}): RuntimeCommitToken | undefined {
+  const expectation = input.token.parentExpectation;
+  if (expectation.kind !== "exact") return undefined;
+  if (input.snapshot.parentId !== expectation.parentId) return undefined;
+  if (
+    (input.snapshot.parentRevision ?? 0) !==
+    expectation.parentRevision + input.expectedRevisionDelta
+  ) {
+    return undefined;
+  }
+
+  return rebaseRuntimeCommitToken({
+    token: input.token,
+    snapshot: input.snapshot,
+  });
+}
+
 export function authorizeRuntimeCommit(input: {
   token: RuntimeCommitToken;
   current: RuntimeCommitSnapshot;

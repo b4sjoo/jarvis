@@ -15,6 +15,7 @@ import {
   authorizeRuntimeCommit,
   createRuntimeCommitToken,
   rebaseRuntimeCommitToken,
+  rebaseRuntimeCommitTokenAfterOwnedParentMutation,
   type RuntimeCommitSnapshot,
 } from "../src/lib/meeting/runtime-commit-authorization.js";
 import type {
@@ -516,6 +517,77 @@ test("rejects memory after reset but allows transcript-only runtime changes", as
   assert.equal((await staleOperation.completion).reason, "runtime-epoch-mismatch");
 });
 
+test("an exact correction token follows its one owned regeneration mutation", () => {
+  const manager = new MeetingContextManager();
+  manager.setActiveInterviewTask(makeParent());
+  const harness = new MeetingOrchestrationHarness(manager);
+  const current = manager.getState().activeInterviewTask;
+  assert.ok(current);
+  manager.setActiveInterviewTask({
+    ...current,
+    stableKind: "project-deep-dive",
+    revisions: current.revisions + 1,
+  });
+  const token = createHarnessToken(
+    harness,
+    "correction-owned-regeneration",
+    "correction"
+  );
+  harness.activateOperation("correction", token.operationId);
+
+  const corrected = manager.getState().activeInterviewTask;
+  assert.ok(corrected);
+  manager.setActiveInterviewTask({
+    ...corrected,
+    latestUsefulAnswer: "corrected answer",
+    revisions: corrected.revisions + 1,
+  });
+  const completionToken = rebaseRuntimeCommitTokenAfterOwnedParentMutation({
+    token,
+    snapshot: currentRuntimeSnapshot(harness),
+    expectedRevisionDelta: 1,
+  });
+  assert.ok(completionToken);
+  assert.equal(
+    authorizeRuntimeCommit({
+      token: completionToken,
+      current: currentRuntimeSnapshot(harness),
+      currentOperationId: harness.getActiveOperationId("correction"),
+    }).reason,
+    "authorized"
+  );
+});
+
+test("rejects correction completion after its corrected parent is replaced", () => {
+  const manager = new MeetingContextManager();
+  manager.setActiveInterviewTask(makeParent());
+  const harness = new MeetingOrchestrationHarness(manager);
+  const token = createHarnessToken(
+    harness,
+    "correction-replaced-parent",
+    "correction"
+  );
+  harness.activateOperation("correction", token.operationId);
+  manager.setActiveInterviewTask(makeParent({ id: "replacement-parent" }));
+
+  assert.equal(
+    rebaseRuntimeCommitTokenAfterOwnedParentMutation({
+      token,
+      snapshot: currentRuntimeSnapshot(harness),
+      expectedRevisionDelta: 1,
+    }),
+    undefined
+  );
+  assert.equal(
+    authorizeRuntimeCommit({
+      token,
+      current: currentRuntimeSnapshot(harness),
+      currentOperationId: harness.getActiveOperationId("correction"),
+    }).reason,
+    "parent-id-mismatch"
+  );
+});
+
 test("rejects an old correction after a newer correction takes ownership", async () => {
   const manager = new MeetingContextManager();
   manager.setActiveInterviewTask(makeParent());
@@ -523,8 +595,7 @@ test("rejects an old correction after a newer correction takes ownership", async
   const token = createHarnessToken(
     harness,
     "correction-old",
-    "correction",
-    "session-only"
+    "correction"
   );
   harness.activateOperation("correction", token.operationId);
   const operation = harness.startOperation<string>({
