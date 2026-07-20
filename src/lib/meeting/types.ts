@@ -800,6 +800,7 @@ export interface MeetingAudioStatus {
   vadEnabled: boolean;
   startedAtMs: number | null;
   captureSessionId: string | null;
+  captureGeneration: number | null;
 }
 
 export type MeetingPrivacyMode =

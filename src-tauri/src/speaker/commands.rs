@@ -15,6 +15,94 @@ use tauri_plugin_shell::ShellExt;
 use tracing::{error, warn};
 use uuid::Uuid;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NativeCaptureOwner {
+    Meeting,
+    System,
+}
+
+impl NativeCaptureOwner {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Meeting => "meeting",
+            Self::System => "system",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NativeCapturePhase {
+    Idle,
+    Starting,
+    Active,
+    Stopping,
+}
+
+impl Default for NativeCapturePhase {
+    fn default() -> Self {
+        Self::Idle
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct NativeCaptureLease {
+    owner: NativeCaptureOwner,
+    session_id: String,
+    generation: u64,
+}
+
+#[derive(Debug, Default)]
+pub struct NativeCaptureControl {
+    phase: NativeCapturePhase,
+    generation: u64,
+    lease: Option<NativeCaptureLease>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum NativeStopDecision {
+    NotRunning,
+    WrongOwner(NativeCaptureOwner),
+    Acquired(NativeCaptureLease),
+}
+
+fn claim_capture_lease(
+    control: &mut NativeCaptureControl,
+    owner: NativeCaptureOwner,
+    session_id: String,
+) -> Result<NativeCaptureLease, String> {
+    if control.phase != NativeCapturePhase::Idle || control.lease.is_some() {
+        let current_owner = control
+            .lease
+            .as_ref()
+            .map(|lease| lease.owner.as_str())
+            .unwrap_or("unknown");
+        return Err(format!("Capture already owned by {}", current_owner));
+    }
+    control.generation = control.generation.saturating_add(1);
+    let lease = NativeCaptureLease {
+        owner,
+        session_id,
+        generation: control.generation,
+    };
+    control.phase = NativeCapturePhase::Starting;
+    control.lease = Some(lease.clone());
+    Ok(lease)
+}
+
+fn begin_capture_stop(
+    control: &mut NativeCaptureControl,
+    requested_owner: NativeCaptureOwner,
+) -> NativeStopDecision {
+    let Some(lease) = control.lease.clone() else {
+        return NativeStopDecision::NotRunning;
+    };
+    if lease.owner != requested_owner {
+        return NativeStopDecision::WrongOwner(lease.owner);
+    }
+    control.phase = NativeCapturePhase::Stopping;
+    NativeStopDecision::Acquired(lease)
+}
+
 // VAD Configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VadConfig {
@@ -56,6 +144,7 @@ pub struct MeetingAudioStatus {
     pub vad_enabled: bool,
     pub started_at_ms: Option<u64>,
     pub capture_session_id: Option<String>,
+    pub capture_generation: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -76,7 +165,13 @@ pub async fn start_system_audio_capture(
     vad_config: Option<VadConfig>,
     device_id: Option<String>,
 ) -> Result<MeetingAudioStatus, String> {
-    start_audio_capture(app.clone(), vad_config, device_id, "system").await?;
+    start_audio_capture(
+        app.clone(),
+        vad_config,
+        device_id,
+        NativeCaptureOwner::System,
+    )
+    .await?;
     get_meeting_audio_status(app).await
 }
 
@@ -86,7 +181,13 @@ pub async fn start_meeting_audio_session(
     vad_config: Option<VadConfig>,
     device_id: Option<String>,
 ) -> Result<MeetingAudioStatus, String> {
-    start_audio_capture(app.clone(), vad_config, device_id, "meeting").await?;
+    start_audio_capture(
+        app.clone(),
+        vad_config,
+        device_id,
+        NativeCaptureOwner::Meeting,
+    )
+    .await?;
     get_meeting_audio_status(app).await
 }
 
@@ -94,22 +195,18 @@ async fn start_audio_capture(
     app: AppHandle,
     vad_config: Option<VadConfig>,
     device_id: Option<String>,
-    capture_owner: &'static str,
+    capture_owner: NativeCaptureOwner,
 ) -> Result<(), String> {
     let state = app.state::<crate::AudioState>();
-
-    // Check if already capturing (atomic check)
-    {
-        let guard = state
-            .stream_task
+    let capture_session_id = format!("capture_{}", Uuid::new_v4());
+    let capture_generation = {
+        let mut control = state
+            .capture_control
             .lock()
-            .map_err(|e| format!("Failed to acquire lock: {}", e))?;
-
-        if guard.is_some() {
-            warn!("Capture already running");
-            return Err("Capture already running".to_string());
-        }
-    }
+            .map_err(|e| format!("Failed to acquire capture control: {}", e))?;
+        let lease = claim_capture_lease(&mut control, capture_owner, capture_session_id.clone())?;
+        lease.generation
+    };
 
     // Update VAD config if provided
     if let Some(config) = vad_config {
@@ -121,10 +218,19 @@ async fn start_audio_capture(
     }
 
     let requested_device_id = device_id.clone();
-    let input = SpeakerInput::new_with_device(device_id).map_err(|e| {
-        error!("Failed to create speaker input: {}", e);
-        format!("Failed to access system audio: {}", e)
-    })?;
+    let input = match SpeakerInput::new_with_device(device_id) {
+        Ok(input) => input,
+        Err(e) => {
+            error!("Failed to create speaker input: {}", e);
+            release_starting_capture(
+                &state,
+                capture_owner,
+                &capture_session_id,
+                capture_generation,
+            );
+            return Err(format!("Failed to access system audio: {}", e));
+        }
+    };
 
     let stream = input.stream();
     let sr = stream.sample_rate();
@@ -132,6 +238,12 @@ async fn start_audio_capture(
     // Validate sample rate
     if !(8000..=96000).contains(&sr) {
         error!("Invalid sample rate: {}", sr);
+        release_starting_capture(
+            &state,
+            capture_owner,
+            &capture_session_id,
+            capture_generation,
+        );
         return Err(format!(
             "Invalid sample rate: {}. Expected 8000-96000 Hz",
             sr
@@ -145,16 +257,6 @@ async fn start_audio_capture(
         .map_err(|e| format!("Failed to read VAD config: {}", e))?
         .clone();
 
-    // Mark as capturing BEFORE spawning task
-    *state
-        .is_capturing
-        .lock()
-        .map_err(|e| format!("Failed to set capturing state: {}", e))? = true;
-    *state
-        .capture_owner
-        .lock()
-        .map_err(|e| format!("Failed to set capture owner: {}", e))? =
-        Some(capture_owner.to_string());
     *state
         .capture_device_id
         .lock()
@@ -167,17 +269,8 @@ async fn start_audio_capture(
         .started_at_ms
         .lock()
         .map_err(|e| format!("Failed to set capture start time: {}", e))? = Some(now_ms());
-    let capture_session_id = format!("capture_{}", Uuid::new_v4());
-    *state
-        .capture_session_id
-        .lock()
-        .map_err(|e| format!("Failed to set capture session id: {}", e))? =
-        Some(capture_session_id.clone());
-
-    // Emit capture started event
-    let _ = app_clone.emit("capture-started", sr);
-
     let state_clone = app.state::<crate::AudioState>();
+    let task_session_id = capture_session_id.clone();
     let task = tokio::spawn(async move {
         if vad_config.enabled {
             run_vad_capture(
@@ -185,7 +278,8 @@ async fn start_audio_capture(
                 stream,
                 sr,
                 vad_config,
-                capture_session_id,
+                task_session_id.clone(),
+                capture_owner,
             )
             .await;
         } else {
@@ -194,25 +288,51 @@ async fn start_audio_capture(
                 stream,
                 sr,
                 vad_config,
-                capture_session_id,
+                task_session_id.clone(),
+                capture_owner,
             )
             .await;
         }
-
-        let state = app_clone.state::<crate::AudioState>();
-        {
-            if let Ok(mut guard) = state.stream_task.lock() {
-                *guard = None;
-            };
-        }
-        clear_capture_state(&*state);
-        let _ = app_clone.emit("capture-stopped", ());
+        finish_capture_if_owner(
+            &app_clone,
+            capture_owner,
+            &task_session_id,
+            capture_generation,
+        );
     });
 
-    *state_clone
-        .stream_task
-        .lock()
-        .map_err(|e| format!("Failed to store task: {}", e))? = Some(task);
+    {
+        let mut control = state_clone
+            .capture_control
+            .lock()
+            .map_err(|e| format!("Failed to acquire capture control: {}", e))?;
+        if !control_owns(
+            &control,
+            NativeCapturePhase::Starting,
+            capture_owner,
+            &capture_session_id,
+            capture_generation,
+        ) {
+            task.abort();
+            clear_capture_metadata(&state_clone);
+            return Err("Capture start was superseded".to_string());
+        }
+        let mut task_guard = state_clone
+            .stream_task
+            .lock()
+            .map_err(|e| format!("Failed to store task: {}", e))?;
+        if task_guard.is_some() {
+            task.abort();
+            control.phase = NativeCapturePhase::Idle;
+            control.lease = None;
+            clear_capture_metadata(&state_clone);
+            return Err("Capture task slot is already occupied".to_string());
+        }
+        *task_guard = Some(task);
+        control.phase = NativeCapturePhase::Active;
+    }
+
+    let _ = app.emit("capture-started", sr);
 
     Ok(())
 }
@@ -224,6 +344,7 @@ async fn run_vad_capture(
     sr: u32,
     config: VadConfig,
     capture_session_id: String,
+    capture_owner: NativeCaptureOwner,
 ) {
     let mut stream = stream;
     let mut buffer: VecDeque<f32> = VecDeque::new();
@@ -281,6 +402,7 @@ async fn run_vad_capture(
                             &mut segment_sequence,
                             sr,
                             b64,
+                            capture_owner,
                         );
                     }
                     speech_buffer.clear();
@@ -319,6 +441,7 @@ async fn run_vad_capture(
                                     &mut segment_sequence,
                                     sr,
                                     b64,
+                                    capture_owner,
                                 );
                             } else {
                                 error!("Failed to encode speech to WAV");
@@ -363,6 +486,7 @@ async fn run_continuous_capture(
     sr: u32,
     config: VadConfig,
     capture_session_id: String,
+    capture_owner: NativeCaptureOwner,
 ) {
     let mut stream = stream;
     let max_samples = (sr as u64 * config.max_recording_duration_secs) as usize;
@@ -446,7 +570,14 @@ async fn run_continuous_capture(
 
         match samples_to_wav_b64(sr, &cleaned_audio) {
             Ok(b64) => {
-                emit_speech_detected(&app, &capture_session_id, &mut segment_sequence, sr, b64);
+                emit_speech_detected(
+                    &app,
+                    &capture_session_id,
+                    &mut segment_sequence,
+                    sr,
+                    b64,
+                    capture_owner,
+                );
             }
             Err(e) => {
                 error!("Failed to encode continuous audio: {}", e);
@@ -566,12 +697,13 @@ fn emit_speech_detected(
     segment_sequence: &mut u64,
     sample_rate: u32,
     audio_base64: String,
+    capture_owner: NativeCaptureOwner,
 ) {
     *segment_sequence += 1;
     let event = NativeSpeechDetectedEvent {
         capture_session_id: capture_session_id.to_string(),
         segment_sequence: *segment_sequence,
-        owner: "system",
+        owner: capture_owner.as_str(),
         captured_at_ms: now_ms(),
         sample_rate,
         media_type: "audio/wav",
@@ -580,39 +712,147 @@ fn emit_speech_detected(
     let _ = app.emit("speech-detected", event);
 }
 
-#[tauri::command]
-pub async fn stop_system_audio_capture(app: AppHandle) -> Result<(), String> {
-    let state = app.state::<crate::AudioState>();
+fn control_owns(
+    control: &NativeCaptureControl,
+    phase: NativeCapturePhase,
+    owner: NativeCaptureOwner,
+    session_id: &str,
+    generation: u64,
+) -> bool {
+    control.phase == phase
+        && control.lease.as_ref().is_some_and(|lease| {
+            lease.owner == owner && lease.session_id == session_id && lease.generation == generation
+        })
+}
 
-    // Abort task in separate scope (Send trait fix)
-    {
-        let mut guard = state
-            .stream_task
-            .lock()
-            .map_err(|e| format!("Failed to acquire task lock: {}", e))?;
-
-        if let Some(task) = guard.take() {
-            task.abort();
+fn release_starting_capture(
+    state: &crate::AudioState,
+    owner: NativeCaptureOwner,
+    session_id: &str,
+    generation: u64,
+) {
+    if let Ok(mut control) = state.capture_control.lock() {
+        if control_owns(
+            &control,
+            NativeCapturePhase::Starting,
+            owner,
+            session_id,
+            generation,
+        ) {
+            control.phase = NativeCapturePhase::Idle;
+            control.lease = None;
+            clear_capture_metadata(state);
         }
     }
+}
 
-    // LONGER delay for proper cleanup (300ms instead of 150ms)
+fn finish_capture_if_owner(
+    app: &AppHandle,
+    owner: NativeCaptureOwner,
+    session_id: &str,
+    generation: u64,
+) {
+    let state = app.state::<crate::AudioState>();
+    let finished = if let Ok(mut control) = state.capture_control.lock() {
+        if control_owns(
+            &control,
+            NativeCapturePhase::Active,
+            owner,
+            session_id,
+            generation,
+        ) {
+            if let Ok(mut task) = state.stream_task.lock() {
+                *task = None;
+            }
+            control.phase = NativeCapturePhase::Idle;
+            control.lease = None;
+            clear_capture_metadata(&state);
+            true
+        } else {
+            false
+        }
+    } else {
+        false
+    };
+
+    if finished {
+        let _ = app.emit("capture-stopped", ());
+    }
+}
+
+async fn stop_audio_capture_for_owner(
+    app: AppHandle,
+    requested_owner: NativeCaptureOwner,
+) -> Result<(), String> {
+    let state = app.state::<crate::AudioState>();
+    let (lease, task) = {
+        let mut control = state
+            .capture_control
+            .lock()
+            .map_err(|e| format!("Failed to acquire capture control: {}", e))?;
+        let lease = match begin_capture_stop(&mut control, requested_owner) {
+            NativeStopDecision::NotRunning => return Ok(()),
+            NativeStopDecision::WrongOwner(owner) => {
+                warn!(
+                    "Ignoring {} stop request because capture is owned by {}",
+                    requested_owner.as_str(),
+                    owner.as_str()
+                );
+                return Ok(());
+            }
+            NativeStopDecision::Acquired(lease) => lease,
+        };
+        let task = state
+            .stream_task
+            .lock()
+            .map_err(|e| format!("Failed to acquire capture task: {}", e))?
+            .take();
+        (lease, task)
+    };
+
+    if let Some(task) = task {
+        task.abort();
+    }
+
     tokio::time::sleep(tokio::time::Duration::from_millis(300)).await;
 
-    // Mark as not capturing and clear capture metadata
-    clear_capture_state(&*state);
+    let stopped = {
+        let mut control = state
+            .capture_control
+            .lock()
+            .map_err(|e| format!("Failed to acquire capture control: {}", e))?;
+        if control_owns(
+            &control,
+            NativeCapturePhase::Stopping,
+            lease.owner,
+            &lease.session_id,
+            lease.generation,
+        ) {
+            control.phase = NativeCapturePhase::Idle;
+            control.lease = None;
+            clear_capture_metadata(&state);
+            true
+        } else {
+            false
+        }
+    };
 
-    // Additional cleanup delay (CRITICAL for mic indicator)
     tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
+    if stopped {
+        let _ = app.emit("capture-stopped", ());
+    }
+    Ok(())
+}
 
-    // Emit stopped event
-    let _ = app.emit("capture-stopped", ());
+#[tauri::command]
+pub async fn stop_system_audio_capture(app: AppHandle) -> Result<(), String> {
+    stop_audio_capture_for_owner(app, NativeCaptureOwner::System).await?;
     Ok(())
 }
 
 #[tauri::command]
 pub async fn stop_meeting_audio_session(app: AppHandle) -> Result<MeetingAudioStatus, String> {
-    stop_system_audio_capture(app.clone()).await?;
+    stop_audio_capture_for_owner(app.clone(), NativeCaptureOwner::Meeting).await?;
     get_meeting_audio_status(app).await
 }
 
@@ -620,15 +860,25 @@ pub async fn stop_meeting_audio_session(app: AppHandle) -> Result<MeetingAudioSt
 pub async fn get_meeting_audio_status(app: AppHandle) -> Result<MeetingAudioStatus, String> {
     let state = app.state::<crate::AudioState>();
 
-    let system_capture_active = *state
-        .is_capturing
-        .lock()
-        .map_err(|e| format!("Failed to get capture status: {}", e))?;
-    let capture_owner = state
-        .capture_owner
-        .lock()
-        .map_err(|e| format!("Failed to get capture owner: {}", e))?
-        .clone();
+    let (system_capture_active, capture_owner, capture_session_id, capture_generation) = {
+        let control = state
+            .capture_control
+            .lock()
+            .map_err(|e| format!("Failed to get capture control: {}", e))?;
+        let active = matches!(
+            control.phase,
+            NativeCapturePhase::Starting
+                | NativeCapturePhase::Active
+                | NativeCapturePhase::Stopping
+        );
+        let owner = control
+            .lease
+            .as_ref()
+            .map(|lease| lease.owner.as_str().to_string());
+        let session_id = control.lease.as_ref().map(|lease| lease.session_id.clone());
+        let generation = control.lease.as_ref().map(|lease| lease.generation);
+        (active, owner, session_id, generation)
+    };
     let device_id = state
         .capture_device_id
         .lock()
@@ -642,11 +892,6 @@ pub async fn get_meeting_audio_status(app: AppHandle) -> Result<MeetingAudioStat
         .started_at_ms
         .lock()
         .map_err(|e| format!("Failed to get capture start time: {}", e))?;
-    let capture_session_id = state
-        .capture_session_id
-        .lock()
-        .map_err(|e| format!("Failed to get capture session id: {}", e))?
-        .clone();
     let vad_enabled = state
         .vad_config
         .lock()
@@ -663,6 +908,7 @@ pub async fn get_meeting_audio_status(app: AppHandle) -> Result<MeetingAudioStat
         vad_enabled,
         started_at_ms,
         capture_session_id,
+        capture_generation,
     })
 }
 
@@ -764,11 +1010,11 @@ pub async fn update_vad_config(app: AppHandle, config: VadConfig) -> Result<(), 
 #[tauri::command]
 pub async fn get_capture_status(app: AppHandle) -> Result<bool, String> {
     let state = app.state::<crate::AudioState>();
-    let is_capturing = *state
-        .is_capturing
+    let control = state
+        .capture_control
         .lock()
         .map_err(|e| format!("Failed to get capture status: {}", e))?;
-    Ok(is_capturing)
+    Ok(control.phase != NativeCapturePhase::Idle)
 }
 
 #[tauri::command]
@@ -800,13 +1046,7 @@ pub fn get_output_devices() -> Result<Vec<AudioDevice>, String> {
     })
 }
 
-fn clear_capture_state(state: &crate::AudioState) {
-    if let Ok(mut is_capturing) = state.is_capturing.lock() {
-        *is_capturing = false;
-    }
-    if let Ok(mut owner) = state.capture_owner.lock() {
-        *owner = None;
-    }
+fn clear_capture_metadata(state: &crate::AudioState) {
     if let Ok(mut device_id) = state.capture_device_id.lock() {
         *device_id = None;
     }
@@ -815,9 +1055,6 @@ fn clear_capture_state(state: &crate::AudioState) {
     }
     if let Ok(mut started_at_ms) = state.started_at_ms.lock() {
         *started_at_ms = None;
-    }
-    if let Ok(mut capture_session_id) = state.capture_session_id.lock() {
-        *capture_session_id = None;
     }
 }
 
@@ -830,7 +1067,10 @@ fn now_ms() -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use super::NativeSpeechDetectedEvent;
+    use super::{
+        begin_capture_stop, claim_capture_lease, NativeCaptureControl, NativeCaptureOwner,
+        NativeCapturePhase, NativeSpeechDetectedEvent, NativeStopDecision,
+    };
 
     #[test]
     fn serializes_native_speech_event_for_typescript_consumers() {
@@ -852,5 +1092,55 @@ mod tests {
         assert_eq!(value["sampleRate"], 48_000);
         assert_eq!(value["mediaType"], "audio/wav");
         assert_eq!(value["audioBase64"], "UklGRg==");
+    }
+
+    #[test]
+    fn capture_lease_generation_is_monotonic() {
+        let mut control = NativeCaptureControl::default();
+        let first = claim_capture_lease(
+            &mut control,
+            NativeCaptureOwner::Meeting,
+            "meeting-1".to_string(),
+        )
+        .expect("first capture should claim the controller");
+        control.phase = NativeCapturePhase::Idle;
+        control.lease = None;
+        let second = claim_capture_lease(
+            &mut control,
+            NativeCaptureOwner::Meeting,
+            "meeting-2".to_string(),
+        )
+        .expect("second capture should claim the controller");
+
+        assert_eq!(first.generation, 1);
+        assert_eq!(second.generation, 2);
+    }
+
+    #[test]
+    fn wrong_owner_cannot_stop_an_active_capture() {
+        let mut control = NativeCaptureControl::default();
+        claim_capture_lease(
+            &mut control,
+            NativeCaptureOwner::Meeting,
+            "meeting-1".to_string(),
+        )
+        .expect("meeting capture should claim the controller");
+        control.phase = NativeCapturePhase::Active;
+
+        assert_eq!(
+            begin_capture_stop(&mut control, NativeCaptureOwner::System),
+            NativeStopDecision::WrongOwner(NativeCaptureOwner::Meeting)
+        );
+        assert_eq!(control.phase, NativeCapturePhase::Active);
+        assert_eq!(
+            begin_capture_stop(&mut control, NativeCaptureOwner::Meeting),
+            NativeStopDecision::Acquired(
+                control
+                    .lease
+                    .clone()
+                    .expect("meeting lease should remain active")
+            )
+        );
+        assert_eq!(control.phase, NativeCapturePhase::Stopping);
     }
 }

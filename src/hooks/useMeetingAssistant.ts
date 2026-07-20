@@ -7613,6 +7613,7 @@ export function useMeetingAssistant() {
           payload: event.payload,
           activeCaptureSessionId: nativeCaptureSessionIdRef.current,
           lastAcceptedSequence: lastNativeSegmentSequenceRef.current,
+          expectedOwner: "meeting",
         });
         if (!authorization.authorized) {
           const metadata = {

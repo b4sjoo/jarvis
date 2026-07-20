@@ -1,7 +1,7 @@
 export interface NativeSpeechDetectedEvent {
   captureSessionId: string;
   segmentSequence: number;
-  owner: "system";
+  owner: "meeting" | "system";
   capturedAtMs: number;
   sampleRate: number;
   mediaType: "audio/wav";
@@ -12,6 +12,7 @@ export type NativeSpeechEventRejectionReason =
   | "invalid-envelope"
   | "no-active-native-session"
   | "capture-session-mismatch"
+  | "capture-owner-mismatch"
   | "non-monotonic-sequence";
 
 export type NativeSpeechEventAuthorization =
@@ -41,7 +42,7 @@ export function parseNativeSpeechDetectedEvent(
     !captureSessionId.trim() ||
     !Number.isSafeInteger(segmentSequence) ||
     (segmentSequence as number) < 1 ||
-    payload.owner !== "system" ||
+    (payload.owner !== "meeting" && payload.owner !== "system") ||
     !Number.isSafeInteger(capturedAtMs) ||
     (capturedAtMs as number) < 0 ||
     !Number.isSafeInteger(sampleRate) ||
@@ -57,7 +58,7 @@ export function parseNativeSpeechDetectedEvent(
   return {
     captureSessionId,
     segmentSequence: segmentSequence as number,
-    owner: "system",
+    owner: payload.owner,
     capturedAtMs: capturedAtMs as number,
     sampleRate: sampleRate as number,
     mediaType: "audio/wav",
@@ -69,10 +70,12 @@ export function authorizeNativeSpeechDetectedEvent({
   payload,
   activeCaptureSessionId,
   lastAcceptedSequence,
+  expectedOwner,
 }: {
   payload: unknown;
   activeCaptureSessionId: string | null;
   lastAcceptedSequence: number;
+  expectedOwner?: NativeSpeechDetectedEvent["owner"];
 }): NativeSpeechEventAuthorization {
   const event = parseNativeSpeechDetectedEvent(payload);
   if (!event) {
@@ -89,6 +92,13 @@ export function authorizeNativeSpeechDetectedEvent({
     return {
       authorized: false,
       reason: "capture-session-mismatch",
+      event,
+    };
+  }
+  if (expectedOwner && event.owner !== expectedOwner) {
+    return {
+      authorized: false,
+      reason: "capture-owner-mismatch",
       event,
     };
   }

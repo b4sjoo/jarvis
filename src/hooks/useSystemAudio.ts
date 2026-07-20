@@ -238,6 +238,7 @@ export function useSystemAudio() {
                 payload: event.payload,
                 activeCaptureSessionId: nativeCaptureSessionIdRef.current,
                 lastAcceptedSequence: lastNativeSegmentSequenceRef.current,
+                expectedOwner: "system",
               });
               if (!authorization.authorized) {
                 console.info(

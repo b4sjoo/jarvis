@@ -55,6 +55,20 @@ test("accepts current native segments once and in increasing order", () => {
   }
 });
 
+test("rejects a segment owned by another audio consumer", () => {
+  const decision = authorizeNativeSpeechDetectedEvent({
+    payload: FIXTURE,
+    activeCaptureSessionId: "capture-test",
+    lastAcceptedSequence: 0,
+    expectedOwner: "meeting",
+  });
+
+  assert.equal(decision.authorized, false);
+  if (!decision.authorized) {
+    assert.equal(decision.reason, "capture-owner-mismatch");
+  }
+});
+
 test("trace metadata excludes native audio payloads", () => {
   const event = parseNativeSpeechDetectedEvent(FIXTURE);
   assert.ok(event);

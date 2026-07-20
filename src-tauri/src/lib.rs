@@ -12,7 +12,7 @@ use tauri::{AppHandle, Manager, WebviewWindow};
 use tokio::task::JoinHandle;
 mod speaker;
 use capture::CaptureState;
-use speaker::VadConfig;
+use speaker::{NativeCaptureControl, VadConfig};
 
 #[cfg(target_os = "macos")]
 #[allow(deprecated)]
@@ -21,13 +21,11 @@ use tauri_nspanel::{cocoa::appkit::NSWindowCollectionBehavior, panel_delegate, W
 #[derive(Default)]
 pub struct AudioState {
     stream_task: Arc<Mutex<Option<JoinHandle<()>>>>,
+    capture_control: Arc<Mutex<NativeCaptureControl>>,
     vad_config: Arc<Mutex<VadConfig>>,
-    is_capturing: Arc<Mutex<bool>>,
-    capture_owner: Arc<Mutex<Option<String>>>,
     capture_device_id: Arc<Mutex<Option<String>>>,
     sample_rate: Arc<Mutex<Option<u32>>>,
     started_at_ms: Arc<Mutex<Option<u64>>>,
-    capture_session_id: Arc<Mutex<Option<String>>>,
 }
 
 #[tauri::command]
