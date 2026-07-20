@@ -73,6 +73,7 @@ interface SessionRecordingEvent {
     | "task-snapshot"
     | "active-meeting-task-snapshot"
     | "manual-question-type-correction"
+    | "capture-lifecycle"
     | "runtime-reset"
     | "runtime-continued"
     | "error";
@@ -1059,6 +1060,11 @@ export class SessionRecordingManager {
   ) {
     if (!this.getWritableSession()) return;
     this.recordEvent(kind, metadata);
+  }
+
+  recordCaptureLifecycle(metadata: Record<string, unknown>) {
+    if (!this.getWritableSession()) return;
+    this.recordEvent("capture-lifecycle", metadata);
   }
 
   recordError(error: unknown, metadata?: Record<string, unknown>) {

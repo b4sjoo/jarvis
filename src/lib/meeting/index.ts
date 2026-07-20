@@ -5,6 +5,7 @@ export * from "./advisor-trigger-job";
 export * from "./active-meeting-task";
 export * from "./clarifying-options";
 export * from "./coding-artifact";
+export * from "./capture-lifecycle";
 export * from "./context-manager";
 export * from "./eval-trace-metadata";
 export * from "./fact-anchor-guardrail";

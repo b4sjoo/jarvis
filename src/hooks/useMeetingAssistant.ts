@@ -98,6 +98,7 @@ import {
   extractScreenTaskQuestion,
   isShortConfirmationLike,
   buildMeetingAnswerSummary,
+  CaptureLifecycleCoordinator,
   buildMemoryEvaluationTraceMetadata,
   formatMeetingAnswerTraceMetadata,
   parseMeetingAnswer,
@@ -1089,6 +1090,29 @@ export function useMeetingAssistant() {
   const autoExportProcessedTraceIdsRef = useRef(new Set<string>());
   const sessionRecordedTraceIdsRef = useRef(new Set<string>());
   const debugModeRef = useRef(INITIAL_STATE.settings.debugMode);
+  const captureLifecycleCoordinatorRef = useRef<CaptureLifecycleCoordinator | null>(
+    null
+  );
+  if (captureLifecycleCoordinatorRef.current === null) {
+    captureLifecycleCoordinatorRef.current = new CaptureLifecycleCoordinator(
+      (event) => {
+        const metadata = {
+          operationId: event.operationId,
+          action: event.action,
+          stage: event.stage,
+          occurredAt: event.occurredAt,
+          authorized: event.authorized,
+          detail: event.detail,
+          error: event.error,
+        };
+        console.info(
+          `[${new Date(event.occurredAt).toISOString()}] [capture-lifecycle] ${event.stage}`,
+          JSON.stringify(metadata)
+        );
+        sessionRecordingManagerRef.current?.recordCaptureLifecycle(metadata);
+      }
+    );
+  }
   const activeRef = useRef(false);
   const latestScreenHashRef = useRef<string | undefined>(undefined);
   const advisorDebounceTimerRef = useRef<number | null>(null);
@@ -2607,6 +2631,8 @@ export function useMeetingAssistant() {
   ]);
 
   const stop = useCallback(async () => {
+    const coordinator = captureLifecycleCoordinatorRef.current!;
+    const lifecycleOperation = coordinator.claim("stop");
     advanceRuntimeEpoch("meeting-assistant-stopped");
     activeRef.current = false;
     invalidateAudioProcessingSession();
@@ -2617,35 +2643,51 @@ export function useMeetingAssistant() {
     contextManagerRef.current.clearInterviewSessionContext();
     const contextState = contextManagerRef.current.getState();
 
-    let audioStatus: MeetingAudioStatus | null = null;
+    await coordinator.run(lifecycleOperation, async () => {
+      let audioStatus: MeetingAudioStatus | null = null;
 
-    try {
-      audioStatus = await invoke<MeetingAudioStatus>(
-        "stop_meeting_audio_session"
-      );
-    } catch (error) {
-      console.warn("Failed to stop meeting audio capture", error);
-    }
+      try {
+        audioStatus = await invoke<MeetingAudioStatus>(
+          "stop_meeting_audio_session"
+        );
+        if (
+          !coordinator.recordNativeCompletion(
+            lifecycleOperation,
+            "stop_meeting_audio_session"
+          )
+        ) {
+          return;
+        }
+      } catch (error) {
+        console.warn("Failed to stop meeting audio capture", error);
+        if (!coordinator.authorize(lifecycleOperation, "native-stop-error")) {
+          return;
+        }
+      }
 
-    await stopSessionRecording("meeting-assistant-stopped");
+      await stopSessionRecording("meeting-assistant-stopped");
+      if (!coordinator.authorize(lifecycleOperation, "commit-stop-state")) {
+        return;
+      }
 
-    setState((previous) => ({
-      ...previous,
-      status: "idle",
-      activeScreenTask: undefined,
-      activeInterviewTask: undefined,
-      interviewSessionBrief: contextState.interviewSessionBrief,
-      interviewSessionContext: contextState.interviewSessionContext,
-      latestSuggestion:
-        isScreenAnchoredSuggestion(previous.latestSuggestion)
-          ? null
-          : previous.latestSuggestion,
-      latestReliableSuggestion: null,
-      manualQuestionTypeCorrection: undefined,
-      partialSuggestion: "",
-      error: null,
-      audioStatus,
-    }));
+      setState((previous) => ({
+        ...previous,
+        status: "idle",
+        activeScreenTask: undefined,
+        activeInterviewTask: undefined,
+        interviewSessionBrief: contextState.interviewSessionBrief,
+        interviewSessionContext: contextState.interviewSessionContext,
+        latestSuggestion:
+          isScreenAnchoredSuggestion(previous.latestSuggestion)
+            ? null
+            : previous.latestSuggestion,
+        latestReliableSuggestion: null,
+        manualQuestionTypeCorrection: undefined,
+        partialSuggestion: "",
+        error: null,
+        audioStatus,
+      }));
+    });
   }, [
     advanceRuntimeEpoch,
     cancelActiveAdvisorJob,
@@ -4308,29 +4350,47 @@ export function useMeetingAssistant() {
       );
 
       if (!sttProvider) {
+        const coordinator = captureLifecycleCoordinatorRef.current!;
+        const lifecycleOperation = coordinator.claim("stop");
         activeRef.current = false;
         invalidateAudioProcessingSession();
         cancelActiveAdvisorJob("stt-provider-missing");
         screenAnalysisAbortRef.current?.abort();
         screenAnalysisAbortRef.current = null;
 
-        let audioStatus: MeetingAudioStatus | null = null;
-
-        try {
-          audioStatus = await invoke<MeetingAudioStatus>(
-            "stop_meeting_audio_session"
-          );
-        } catch (error) {
-          console.warn("Failed to stop meeting audio capture", error);
-        }
+        const lifecycleResult = await coordinator.run(
+          lifecycleOperation,
+          async () => {
+            try {
+              const audioStatus = await invoke<MeetingAudioStatus>(
+                "stop_meeting_audio_session"
+              );
+              coordinator.recordNativeCompletion(
+                lifecycleOperation,
+                "stop_for_missing_stt_provider"
+              );
+              return audioStatus;
+            } catch (error) {
+              console.warn("Failed to stop meeting audio capture", error);
+              coordinator.authorize(
+                lifecycleOperation,
+                "missing-provider-native-stop-error"
+              );
+              return null;
+            }
+          }
+        );
 
         traceStoreRef.current.finishTrace(traceId, "error", MISSING_STT_MESSAGE);
+        if (!coordinator.authorize(lifecycleOperation, "commit-provider-error")) {
+          return;
+        }
         setState((previous) => ({
           ...previous,
           status: "error",
           partialSuggestion: "",
           error: MISSING_STT_MESSAGE,
-          audioStatus,
+          audioStatus: lifecycleResult.value ?? null,
         }));
         return;
       }
@@ -5051,6 +5111,7 @@ export function useMeetingAssistant() {
         audioSessionId: sessionId,
         speaker: "them",
         source: "system-audio",
+        ...captureLifecycleCoordinatorRef.current?.getTraceMetadata(),
       });
       const queueStepId = traceStoreRef.current.startStep(
         trace.id,
@@ -5119,6 +5180,7 @@ export function useMeetingAssistant() {
         audioSessionId: sessionId,
         speaker: "me",
         source: "microphone",
+        ...captureLifecycleCoordinatorRef.current?.getTraceMetadata(),
       });
       const queueStepId = traceStoreRef.current.startStep(
         trace.id,
@@ -5218,6 +5280,11 @@ export function useMeetingAssistant() {
   ]);
 
   const startCapture = useCallback(async (resetContext: boolean) => {
+    const coordinator = captureLifecycleCoordinatorRef.current!;
+    const lifecycleOperation = coordinator.claim(
+      resetContext ? "start" : "resume"
+    );
+
     if (state.settings.privacyMode === "memory-only") {
       activeRef.current = false;
       invalidateAudioProcessingSession();
@@ -5230,6 +5297,7 @@ export function useMeetingAssistant() {
         partialSuggestion: "",
         error: LOCAL_ONLY_UNAVAILABLE_MESSAGE,
       }));
+      coordinator.authorize(lifecycleOperation, "blocked-local-only-mode");
       return;
     }
 
@@ -5245,6 +5313,7 @@ export function useMeetingAssistant() {
         partialSuggestion: "",
         error: MISSING_STT_MESSAGE,
       }));
+      coordinator.authorize(lifecycleOperation, "blocked-stt-provider-missing");
       return;
     }
 
@@ -5255,84 +5324,133 @@ export function useMeetingAssistant() {
       error: null,
     }));
 
-    try {
-      const hasAccess = await invoke<boolean>("check_system_audio_access");
-      if (!hasAccess) {
+    await coordinator.run(lifecycleOperation, async () => {
+      let nativeStartAttempted = false;
+      try {
+        const hasAccess = await invoke<boolean>("check_system_audio_access");
+        if (
+          !coordinator.recordNativeCompletion(
+            lifecycleOperation,
+            "check_system_audio_access"
+          )
+        ) {
+          return;
+        }
+        if (!hasAccess) {
+          setState((previous) => ({
+            ...previous,
+            status: "error",
+            error: "System audio permission is required for meeting assistant.",
+          }));
+          return;
+        }
+
+        const resetBoundary = resetContext
+          ? resetMeetingRuntimeForNewSession("meeting-assistant-started")
+          : undefined;
+        if (resetBoundary) {
+          sessionRecordingManagerRef.current?.recordRuntimeBoundary(
+            "runtime-reset",
+            resetBoundary
+          );
+        }
+
+        cancelActiveAdvisorJob("meeting-audio-capture-restarting");
+        activeRef.current = false;
+        invalidateAudioProcessingSession();
+
+        await invoke<MeetingAudioStatus>("stop_meeting_audio_session");
+        if (
+          !coordinator.recordNativeCompletion(
+            lifecycleOperation,
+            "stop_before_start"
+          )
+        ) {
+          return;
+        }
+
+        const deviceId =
+          selectedAudioDevices.output.id &&
+          selectedAudioDevices.output.id !== "default"
+            ? selectedAudioDevices.output.id
+            : null;
+
+        nativeStartAttempted = true;
+        const audioStatus = await invoke<MeetingAudioStatus>(
+          "start_meeting_audio_session",
+          {
+            vadConfig: state.settings.audio.config,
+            deviceId,
+          }
+        );
+
+        if (
+          !coordinator.recordNativeCompletion(
+            lifecycleOperation,
+            "start_meeting_audio_session"
+          )
+        ) {
+          await coordinator.cleanupStale(
+            lifecycleOperation,
+            "late-native-start-completion",
+            () => invoke<MeetingAudioStatus>("stop_meeting_audio_session")
+          );
+          return;
+        }
+
+        startAudioProcessingSession();
+        activeRef.current = true;
+        const contextState = contextManagerRef.current.getState();
+
+        setState((previous) => ({
+          ...previous,
+          status: "listening",
+          transcriptTurns: contextState.transcriptTurns,
+          screenObservations: contextState.screenObservations,
+          interviewSessionBrief: contextState.interviewSessionBrief,
+          interviewSessionContext: contextState.interviewSessionContext,
+          activeScreenTask: contextState.activeScreenTask,
+          activeInterviewTask: contextState.activeInterviewTask,
+          activeMeetingTask: contextState.activeMeetingTask,
+          latestSuggestion: resetContext ? null : previous.latestSuggestion,
+          latestReliableSuggestion: resetContext
+            ? null
+            : previous.latestReliableSuggestion,
+          lastMemoryContext: resetContext
+            ? undefined
+            : previous.lastMemoryContext,
+          speechCorrections: resetContext ? [] : previous.speechCorrections,
+          partialSuggestion: "",
+          error: null,
+          audioStatus,
+        }));
+      } catch (error) {
+        const authorized = coordinator.authorize(
+          lifecycleOperation,
+          "commit-start-error"
+        );
+        if (!authorized && nativeStartAttempted) {
+          await coordinator.cleanupStale(
+            lifecycleOperation,
+            "stale-native-start-error",
+            () => invoke<MeetingAudioStatus>("stop_meeting_audio_session")
+          );
+          return;
+        }
+        if (!authorized) return;
+
+        activeRef.current = false;
+        invalidateAudioProcessingSession();
         setState((previous) => ({
           ...previous,
           status: "error",
-          error: "System audio permission is required for meeting assistant.",
+          error:
+            error instanceof Error
+              ? error.message
+              : "Failed to start meeting assistant.",
         }));
-        return;
       }
-
-      const resetBoundary = resetContext
-        ? resetMeetingRuntimeForNewSession("meeting-assistant-started")
-        : undefined;
-      if (resetBoundary) {
-        sessionRecordingManagerRef.current?.recordRuntimeBoundary(
-          "runtime-reset",
-          resetBoundary
-        );
-      }
-
-      cancelActiveAdvisorJob("meeting-audio-capture-restarting");
-      activeRef.current = false;
-      invalidateAudioProcessingSession();
-
-      await invoke<MeetingAudioStatus>("stop_meeting_audio_session");
-
-      const deviceId =
-        selectedAudioDevices.output.id &&
-        selectedAudioDevices.output.id !== "default"
-          ? selectedAudioDevices.output.id
-          : null;
-
-      startAudioProcessingSession();
-      activeRef.current = true;
-
-      const audioStatus = await invoke<MeetingAudioStatus>(
-        "start_meeting_audio_session",
-        {
-          vadConfig: state.settings.audio.config,
-          deviceId,
-        }
-      );
-
-      const contextState = contextManagerRef.current.getState();
-
-      setState((previous) => ({
-        ...previous,
-        status: "listening",
-        transcriptTurns: contextState.transcriptTurns,
-        screenObservations: contextState.screenObservations,
-        interviewSessionBrief: contextState.interviewSessionBrief,
-        interviewSessionContext: contextState.interviewSessionContext,
-        activeScreenTask: contextState.activeScreenTask,
-        activeInterviewTask: contextState.activeInterviewTask,
-        activeMeetingTask: contextState.activeMeetingTask,
-        latestSuggestion: resetContext ? null : previous.latestSuggestion,
-        latestReliableSuggestion: resetContext
-          ? null
-          : previous.latestReliableSuggestion,
-        lastMemoryContext: resetContext ? undefined : previous.lastMemoryContext,
-        speechCorrections: resetContext ? [] : previous.speechCorrections,
-        partialSuggestion: "",
-        error: null,
-        audioStatus,
-      }));
-    } catch (error) {
-      activeRef.current = false;
-      invalidateAudioProcessingSession();
-      setState((previous) => ({
-        ...previous,
-        status: "error",
-        error:
-          error instanceof Error
-            ? error.message
-            : "Failed to start meeting assistant.",
-      }));
-    }
+    });
   }, [
     cancelActiveAdvisorJob,
     invalidateAudioProcessingSession,
@@ -5353,6 +5471,8 @@ export function useMeetingAssistant() {
   }, [startCapture]);
 
   const pause = useCallback(async () => {
+    const coordinator = captureLifecycleCoordinatorRef.current!;
+    const lifecycleOperation = coordinator.claim("pause");
     advanceRuntimeEpoch("meeting-assistant-paused");
     activeRef.current = false;
     invalidateAudioProcessingSession();
@@ -5360,23 +5480,39 @@ export function useMeetingAssistant() {
     screenAnalysisAbortRef.current?.abort();
     screenAnalysisAbortRef.current = null;
 
-    let audioStatus: MeetingAudioStatus | null = null;
+    await coordinator.run(lifecycleOperation, async () => {
+      let audioStatus: MeetingAudioStatus | null = null;
 
-    try {
-      audioStatus = await invoke<MeetingAudioStatus>(
-        "stop_meeting_audio_session"
-      );
-    } catch (error) {
-      console.warn("Failed to pause meeting audio capture", error);
-    }
+      try {
+        audioStatus = await invoke<MeetingAudioStatus>(
+          "stop_meeting_audio_session"
+        );
+        if (
+          !coordinator.recordNativeCompletion(
+            lifecycleOperation,
+            "stop_meeting_audio_session"
+          )
+        ) {
+          return;
+        }
+      } catch (error) {
+        console.warn("Failed to pause meeting audio capture", error);
+        if (!coordinator.authorize(lifecycleOperation, "native-pause-error")) {
+          return;
+        }
+      }
 
-    setState((previous) => ({
-      ...previous,
-      status: "paused",
-      partialSuggestion: "",
-      error: null,
-      audioStatus,
-    }));
+      if (!coordinator.authorize(lifecycleOperation, "commit-pause-state")) {
+        return;
+      }
+      setState((previous) => ({
+        ...previous,
+        status: "paused",
+        partialSuggestion: "",
+        error: null,
+        audioStatus,
+      }));
+    });
   }, [
     advanceRuntimeEpoch,
     cancelActiveAdvisorJob,
