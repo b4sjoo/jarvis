@@ -86,7 +86,19 @@ export interface AdvisorTaskMutationDecision {
     | "input-evidence-authority"
     | "manual-correction-authority"
     | "explicit-action-preserve-parent"
-    | "explicit-action-without-parent";
+    | "explicit-action-without-parent"
+    | "turn-intent-mutation-suppressed";
+}
+
+export interface AdvisorTaskMutationAuthorization {
+  authorized: boolean;
+  reason:
+    | "substantive-input-authority"
+    | "manual-correction-authority"
+    | "explicit-action-authority"
+    | "missing-turn-intent-decision"
+    | "turn-intent-would-suppress"
+    | "turn-intent-not-answer-refresh";
 }
 
 export function createAdvisorTriggerJob(
@@ -149,7 +161,22 @@ export function decideAdvisorTaskMutation(input: {
   resolvedRelation: InterviewTaskRelation;
   hasActiveParent: boolean;
   hasActiveChild: boolean;
+  mutationAuthorized?: boolean;
 }): AdvisorTaskMutationDecision {
+  if (input.mutationAuthorized === false) {
+    return {
+      relation: input.hasActiveParent
+        ? input.hasActiveChild
+          ? "resume-parent"
+          : "followup-parent"
+        : input.resolvedRelation,
+      commitParent: false,
+      preserveParentType: true,
+      allowExplicitRetype: false,
+      reason: "turn-intent-mutation-suppressed",
+    };
+  }
+
   if (input.authority === "manual-correction") {
     return {
       relation: input.resolvedRelation,
@@ -189,8 +216,37 @@ export function decideAdvisorTaskMutation(input: {
   };
 }
 
+export function authorizeAdvisorTaskMutation(input: {
+  authority: AdvisorTaskMutationAuthority;
+  turnIntentDecision?: AdvisorTurnIntentDecision;
+}): AdvisorTaskMutationAuthorization {
+  if (input.authority === "manual-correction") {
+    return { authorized: true, reason: "manual-correction-authority" };
+  }
+  if (input.authority === "preserve-parent") {
+    return { authorized: true, reason: "explicit-action-authority" };
+  }
+
+  const decision = input.turnIntentDecision;
+  if (!decision) {
+    return { authorized: false, reason: "missing-turn-intent-decision" };
+  }
+  if (decision.wouldSuppress) {
+    return { authorized: false, reason: "turn-intent-would-suppress" };
+  }
+  if (
+    !decision.executionAuthorized ||
+    decision.action !== "answer-refresh"
+  ) {
+    return { authorized: false, reason: "turn-intent-not-answer-refresh" };
+  }
+
+  return { authorized: true, reason: "substantive-input-authority" };
+}
+
 export function decideAdvisorPhaseMutation(input: {
   authority: AdvisorTaskMutationAuthority;
+  taskMutationAuthorized?: boolean;
   manualPhaseAdvance: boolean;
   currentPhase: InterviewPlaybookPhase;
   hasActiveChild: boolean;
@@ -198,6 +254,18 @@ export function decideAdvisorPhaseMutation(input: {
   manualDecision: PlaybookPhaseDecision;
 }): PlaybookPhaseDecision {
   if (input.manualPhaseAdvance) return input.manualDecision;
+  if (input.taskMutationAuthorized === false) {
+    return {
+      phase: input.currentPhase,
+      flags: [],
+      action: input.hasActiveChild ? "resume-parent" : "stay",
+      reason: "turn-intent-mutation-suppressed",
+      source: "automatic",
+      targetArtifact: "answer",
+      guardStatus: "automatic",
+      phaseFrom: input.currentPhase,
+    };
+  }
   if (input.authority !== "preserve-parent") {
     return input.automaticDecision;
   }

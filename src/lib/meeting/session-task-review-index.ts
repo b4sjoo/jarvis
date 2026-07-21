@@ -1,7 +1,7 @@
 import type { MemoryRejectSummary } from "@/lib/memory";
 import type { MeetingTrace, QuestionHumanEvaluation } from "./types";
 
-export const SESSION_TASK_REVIEW_INDEX_SCHEMA_VERSION = 2;
+export const SESSION_TASK_REVIEW_INDEX_SCHEMA_VERSION = 3;
 
 export interface TaskReviewTraceSummary {
   version: number;
@@ -32,6 +32,9 @@ export interface TaskReviewTraceSummary {
   advisorTurnEnforcement?: string;
   advisorWouldSuppress?: boolean;
   advisorExecutionAuthorized?: boolean;
+  taskMutationAuthorized?: boolean;
+  taskMutationAuthorizationReason?: string;
+  advisorOutputDisposition?: string;
   sentenceBufferOperationId?: string;
   sentenceBufferOperationRole?: string;
   sentenceBufferOutcome?: string;
@@ -101,6 +104,7 @@ export interface SessionTaskReviewSummary {
   advisorTurnIntents: string[];
   advisorExecutionSuppressedCount: number;
   advisorShadowDecisionCount: number;
+  taskMutationSuppressedCount: number;
   sentenceBufferOperationCount: number;
   sentenceBufferMergedCount: number;
   sentenceBufferTimeoutCount: number;
@@ -270,6 +274,9 @@ function buildSessionTaskReviewSummary({
     ).length,
     advisorShadowDecisionCount: traces.filter(
       (trace) => trace.advisorTurnEnforcement === "shadow"
+    ).length,
+    taskMutationSuppressedCount: traces.filter(
+      (trace) => trace.taskMutationAuthorized === false
     ).length,
     sentenceBufferOperationCount: sentenceBufferOperations.length,
     sentenceBufferMergedCount: sentenceBufferOperations.filter(

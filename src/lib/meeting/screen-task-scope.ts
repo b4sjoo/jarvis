@@ -17,6 +17,7 @@ export type ScreenScopeDurability = "durable" | "provisional" | "none";
 export type ScreenScopeReason =
   | "no-active-screen"
   | "voice-new-parent"
+  | "turn-intent-mutation-suppressed"
   | "existing-task-continuity"
   | "explicit-action-preserve"
   | "screen-result-classified"
@@ -36,6 +37,7 @@ export function decideAdvisorScreenScope(input: {
   triggerSource: AdvisorJobSource;
   relation: InterviewTaskRelation;
   hasActiveScreenTask: boolean;
+  taskMutationAuthorized?: boolean;
 }): ScreenScopeDecision {
   if (!input.hasActiveScreenTask) {
     return {
@@ -43,6 +45,15 @@ export function decideAdvisorScreenScope(input: {
       durability: "none",
       mutationAuthorized: false,
       reason: "no-active-screen",
+    };
+  }
+
+  if (input.taskMutationAuthorized === false) {
+    return {
+      action: "keep",
+      durability: "durable",
+      mutationAuthorized: false,
+      reason: "turn-intent-mutation-suppressed",
     };
   }
 

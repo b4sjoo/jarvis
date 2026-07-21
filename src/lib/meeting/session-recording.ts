@@ -171,6 +171,9 @@ export interface SessionCompactTraceSummary {
   advisorWouldSuppress?: boolean;
   advisorExecutionAuthorized?: boolean;
   advisorExecutionSuppressedReason?: string;
+  taskMutationAuthorized?: boolean;
+  taskMutationAuthorizationReason?: string;
+  advisorOutputDisposition?: string;
   sentenceBufferOperationId?: string;
   sentenceBufferOperationRole?: string;
   sentenceBufferOutcome?: string;
@@ -1685,6 +1688,18 @@ function buildCompactTraceSummary({
     advisorExecutionSuppressedReason:
       readFirstString(metadataSources, "memoryRetrievalSuppressedReason") ??
       readFirstString(metadataSources, "modelExecutionSuppressedReason"),
+    taskMutationAuthorized: readFirstBoolean(
+      metadataSources,
+      "taskMutationAuthorized"
+    ),
+    taskMutationAuthorizationReason: readFirstString(
+      metadataSources,
+      "taskMutationAuthorizationReason"
+    ),
+    advisorOutputDisposition: readFirstString(
+      metadataSources,
+      "advisorOutputDisposition"
+    ),
     sentenceBufferDisposition: readFirstString(
       metadataSources,
       "sentenceBufferDisposition"

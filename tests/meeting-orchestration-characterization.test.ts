@@ -1,11 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  authorizeAdvisorTaskMutation,
   createAdvisorTriggerJob,
   decideAdvisorJobCommit,
   decideAdvisorPhaseMutation,
   decideAdvisorTaskMutation,
 } from "../src/lib/meeting/advisor-trigger-job.js";
+import { decideAdvisorTurnIntent } from "../src/lib/meeting/advisor-turn-intent.js";
 import { MeetingContextManager } from "../src/lib/meeting/context-manager.js";
 import {
   decideAdvisorScreenScope,
@@ -327,6 +329,81 @@ test("clears the old screen when a voice completion commits a new parent", async
   assert.equal(state.activeMeetingTask?.parent.id, "parent-voice-b");
   assert.equal(state.activeMeetingTask?.source, "voice");
   assert.equal(state.activeMeetingTask?.screen, undefined);
+});
+
+test("shadow low-value execution preserves parent, phase, answer, and whiteboard", async () => {
+  const manager = new MeetingContextManager();
+  const whiteboard = {
+    id: "whiteboard-1",
+    parentTaskId: "parent-1",
+    domainTrack: "general_sd" as const,
+    archetypeIds: [],
+    selectedOverlayIds: [],
+    currentPhase: "requirement_clarification" as const,
+    title: "Ticket service",
+    content: "Client -> API -> inventory service",
+    summary: "Inventory reservation path",
+    revision: 1,
+    updateSource: "model-output" as const,
+    updatedAt: 110,
+    createdAt: 100,
+  };
+  manager.setActiveMeetingTaskState({
+    activeScreenTask: makeScreenTask(),
+    activeInterviewTask: makeParent({ whiteboardArtifact: whiteboard }),
+  });
+  const harness = new MeetingOrchestrationHarness(manager);
+  const before = harness.getStateDigest();
+  const intent = decideAdvisorTurnIntent("Hmm.", { hasActiveTask: true });
+  const authorization = authorizeAdvisorTaskMutation({
+    authority: "input-evidence",
+    turnIntentDecision: intent,
+  });
+  const operation = harness.startOperation<string>({
+    id: "shadow-low-value",
+    kind: "advisor",
+    commit: ({ contextManager }) => {
+      const state = contextManager.getState();
+      const taskMutation = decideAdvisorTaskMutation({
+        authority: "input-evidence",
+        resolvedRelation: "new-parent",
+        hasActiveParent: true,
+        hasActiveChild: false,
+        mutationAuthorized: authorization.authorized,
+      });
+      const screenScope = decideAdvisorScreenScope({
+        triggerSource: "live-turn",
+        relation: taskMutation.relation,
+        hasActiveScreenTask: Boolean(state.activeScreenTask),
+        taskMutationAuthorized: authorization.authorized,
+      });
+      if (taskMutation.commitParent) {
+        contextManager.setActiveMeetingTaskState({
+          activeScreenTask:
+            screenScope.action === "clear" ? null : state.activeScreenTask,
+          activeInterviewTask: makeParent({
+            id: "incorrect-replacement",
+            latestUsefulAnswer: "incorrect shadow answer",
+          }),
+        });
+      }
+      return committed(taskMutation.reason);
+    },
+  });
+
+  operation.resolve("shadow model output");
+  await operation.completion;
+  const after = harness.getStateDigest();
+  const state = manager.getState();
+
+  assert.equal(authorization.authorized, false);
+  assert.deepEqual(after, before);
+  assert.equal(
+    state.activeInterviewTask?.latestUsefulAnswer,
+    "Clarify scale and consistency."
+  );
+  assert.deepEqual(state.activeInterviewTask?.whiteboardArtifact, whiteboard);
+  assert.equal(state.activeScreenTask?.id, "screen-task-a");
 });
 
 test("a late unknown screen result cannot replace a newer voice parent", async () => {

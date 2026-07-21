@@ -148,6 +148,7 @@ import {
   authorizeAdvisorExecution,
   createAdvisorTriggerJob,
   authorizeRuntimeCommit,
+  authorizeAdvisorTaskMutation,
   buildRuntimeCommitSnapshot,
   createRuntimeCommitToken,
   decideAdvisorPhaseMutation,
@@ -3224,11 +3225,36 @@ export function useMeetingAssistant() {
           options.manualQuestionTypeCorrection
         )
       : resolvedAdvisorTaskSignals;
+    const inferredTurnIntentDecision =
+      advisorJob.turnIntentDecision ??
+      (latestTurn?.speaker === "them"
+        ? evaluateThemTurnForAdvisor(latestTurn, {
+            hasActiveTask: hasAdvisorActiveTask(promptContext),
+            hasRecentQuestionContext: Boolean(
+              advisorJob.questionLineage ?? currentQuestionLineageRef.current
+            ),
+          })
+        : undefined);
+    const hasExplicitAction = Boolean(
+      options.responseAction ||
+        options.clarifyingFeedback ||
+        options.manualQuestionTypeCorrection
+    );
+    const executionAuthorization = authorizeAdvisorExecution({
+      force,
+      hasExplicitAction,
+      decision: inferredTurnIntentDecision,
+    });
+    const taskMutationAuthorization = authorizeAdvisorTaskMutation({
+      authority: advisorJob.taskMutationAuthority,
+      turnIntentDecision: inferredTurnIntentDecision,
+    });
     const advisorTaskMutationDecision = decideAdvisorTaskMutation({
       authority: advisorJob.taskMutationAuthority,
       resolvedRelation: correctedAdvisorTaskSignals.taskRelation,
       hasActiveParent: hasAdvisorActiveTask(promptContext),
       hasActiveChild: hasAdvisorActiveChild(promptContext),
+      mutationAuthorized: taskMutationAuthorization.authorized,
     });
     const preservedParentQuestionType = getAdvisorActiveQuestionType(promptContext);
     let advisorTaskSignals =
@@ -3267,6 +3293,7 @@ export function useMeetingAssistant() {
       triggerSource: advisorJob.source,
       relation: advisorTaskSignals.taskRelation,
       hasActiveScreenTask: Boolean(promptContext.activeScreenTask),
+      taskMutationAuthorized: taskMutationAuthorization.authorized,
     });
     promptContext = applyAdvisorScreenScopeToPromptContext(
       promptContext,
@@ -3283,26 +3310,6 @@ export function useMeetingAssistant() {
       };
     }
     const activeMeetingTaskId = getAdvisorActiveTaskId(promptContext);
-    const inferredTurnIntentDecision =
-      advisorJob.turnIntentDecision ??
-      (latestTurn?.speaker === "them"
-        ? evaluateThemTurnForAdvisor(latestTurn, {
-            hasActiveTask: hasAdvisorActiveTask(promptContext),
-            hasRecentQuestionContext: Boolean(
-              advisorJob.questionLineage ?? currentQuestionLineageRef.current
-            ),
-          })
-        : undefined);
-    const hasExplicitAction = Boolean(
-      options.responseAction ||
-        options.clarifyingFeedback ||
-        options.manualQuestionTypeCorrection
-    );
-    const executionAuthorization = authorizeAdvisorExecution({
-      force,
-      hasExplicitAction,
-      decision: inferredTurnIntentDecision,
-    });
     const questionLineage = createAuthorizedQuestionLineage({
       traceId,
       triggerTurnId: advisorJob.triggerTurnId ?? latestTurn?.id,
@@ -3348,6 +3355,8 @@ export function useMeetingAssistant() {
           advisorTaskMutationDecision.preserveParentType,
         advisorTaskMutationAllowExplicitRetype:
           advisorTaskMutationDecision.allowExplicitRetype,
+        taskMutationAuthorized: taskMutationAuthorization.authorized,
+        taskMutationAuthorizationReason: taskMutationAuthorization.reason,
         advisorExecutionAuthorized: executionAuthorization.authorized,
         advisorExecutionAuthorizationReason: executionAuthorization.reason,
         advisorExecutionBypassed: executionAuthorization.bypassed,
@@ -3511,6 +3520,7 @@ export function useMeetingAssistant() {
     });
     const playbookPhaseDecision = decideAdvisorPhaseMutation({
       authority: advisorJob.taskMutationAuthority,
+      taskMutationAuthorized: taskMutationAuthorization.authorized,
       manualPhaseAdvance,
       currentPhase: preservedPlaybookPhase,
       hasActiveChild: hasAdvisorActiveChild(promptContext),
@@ -3905,10 +3915,12 @@ export function useMeetingAssistant() {
       })) {
         if (rejectStaleCommit("partial-output")) return;
         finalContent = event.accumulated;
-        setState((previous) => ({
-          ...previous,
-          partialSuggestion: event.accumulated,
-        }));
+        if (taskMutationAuthorization.authorized) {
+          setState((previous) => ({
+            ...previous,
+            partialSuggestion: event.accumulated,
+          }));
+        }
       }
 
       if (mode === "response-action") {
@@ -3933,6 +3945,44 @@ export function useMeetingAssistant() {
       );
       if (traceId) {
         traceStoreRef.current.updateMetadata(traceId, meetingAnswerMetadata);
+      }
+
+      if (!taskMutationAuthorization.authorized) {
+        const shadowDispositionMetadata = {
+          advisorOutputDisposition: "shadow-observation-only",
+          advisorOutputCommittedToUi: false,
+          taskMutationAuthorized: false,
+          taskMutationAuthorizationReason: taskMutationAuthorization.reason,
+        };
+        if (traceId) {
+          traceStoreRef.current.updateMetadata(
+            traceId,
+            shadowDispositionMetadata
+          );
+        }
+        setState((previous) => ({
+          ...previous,
+          status: activeRef.current
+            ? "listening"
+            : returnStatus === "paused"
+              ? "paused"
+              : "idle",
+          partialSuggestion: "",
+        }));
+        releaseAdvisorJob(advisorJob, "suppressed", {
+          commitAuthorized: false,
+          commitAuthorizationReason: taskMutationAuthorization.reason,
+        });
+        if (traceId) {
+          traceStoreRef.current.finishStep(traceId, advisorStepId, "success", {
+            outputChars: finalContent.length,
+            ...advisorModelRouteMetadata,
+            ...meetingAnswerMetadata,
+            ...shadowDispositionMetadata,
+          });
+          traceStoreRef.current.finishTrace(traceId, "success");
+        }
+        return;
       }
 
       let contextState = contextManagerRef.current.getState();

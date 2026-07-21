@@ -28,6 +28,9 @@ test("builds a task-level review index from trace summaries and evaluations", ()
     playbookPhase: "whiteboard",
     turnGateAction: "regenerate",
     turnGateReason: "meaningful-follow-up",
+    taskMutationAuthorized: false,
+    taskMutationAuthorizationReason: "turn-intent-would-suppress",
+    advisorOutputDisposition: "shadow-observation-only",
     sentenceBufferOperationId: "sentence_buffer_1",
     sentenceBufferOperationRole: "terminal",
     sentenceBufferOutcome: "merged",
@@ -82,6 +85,7 @@ test("builds a task-level review index from trace summaries and evaluations", ()
   assert.equal(task.sentenceBufferMergedCount, 1);
   assert.equal(task.sentenceBufferTimeoutCount, 0);
   assert.equal(task.sentenceBufferAddedLatencyMsTotal, 850);
+  assert.equal(task.taskMutationSuppressedCount, 1);
   assert.deepEqual(task.whiteboardArtifactIds, ["whiteboard_1"]);
   assert.deepEqual(task.manualPhaseTransitions, [
     {

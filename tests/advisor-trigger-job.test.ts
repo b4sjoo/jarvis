@@ -1,12 +1,14 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  authorizeAdvisorTaskMutation,
   createAdvisorTriggerJob,
   decideAdvisorPhaseMutation,
   decideAdvisorJobCommit,
   decideAdvisorTaskMutation,
   formatAdvisorTriggerJobForTrace,
 } from "../src/lib/meeting/advisor-trigger-job.js";
+import { decideAdvisorTurnIntent } from "../src/lib/meeting/advisor-turn-intent.js";
 import type { AdvisorPromptContext } from "../src/lib/meeting/types.js";
 
 function buildPromptContext(): AdvisorPromptContext {
@@ -197,6 +199,77 @@ test("manual correction remains the only explicit retype authority", () => {
   assert.equal(manual.relation, "child-probe");
   assert.equal(inputEvidence.allowExplicitRetype, false);
   assert.equal(inputEvidence.relation, "new-parent");
+});
+
+test("shadow execution cannot authorize canonical task or phase mutation", () => {
+  const turnIntentDecision = decideAdvisorTurnIntent("Hmm.", {
+    hasActiveTask: true,
+  });
+  const authorization = authorizeAdvisorTaskMutation({
+    authority: "input-evidence",
+    turnIntentDecision,
+  });
+  const taskMutation = decideAdvisorTaskMutation({
+    authority: "input-evidence",
+    resolvedRelation: "new-parent",
+    hasActiveParent: true,
+    hasActiveChild: false,
+    mutationAuthorized: authorization.authorized,
+  });
+  const phaseMutation = decideAdvisorPhaseMutation({
+    authority: "input-evidence",
+    taskMutationAuthorized: authorization.authorized,
+    manualPhaseAdvance: false,
+    currentPhase: "requirement_clarification",
+    hasActiveChild: false,
+    automaticDecision: {
+      phase: "design_framing",
+      flags: ["architecture"],
+      action: "advance",
+      reason: "automatic-advance",
+    },
+    manualDecision: {
+      phase: "design_framing",
+      flags: [],
+      action: "advance",
+      reason: "manual-next",
+    },
+  });
+
+  assert.equal(turnIntentDecision.enforcement, "shadow");
+  assert.equal(turnIntentDecision.wouldSuppress, true);
+  assert.deepEqual(authorization, {
+    authorized: false,
+    reason: "turn-intent-would-suppress",
+  });
+  assert.equal(taskMutation.commitParent, false);
+  assert.equal(taskMutation.relation, "followup-parent");
+  assert.equal(taskMutation.reason, "turn-intent-mutation-suppressed");
+  assert.equal(phaseMutation.phase, "requirement_clarification");
+  assert.equal(phaseMutation.action, "stay");
+});
+
+test("substantive input and explicit actions retain canonical mutation authority", () => {
+  const substantive = decideAdvisorTurnIntent(
+    "How would you design a distributed cache?",
+    { hasActiveTask: false }
+  );
+
+  assert.deepEqual(
+    authorizeAdvisorTaskMutation({
+      authority: "input-evidence",
+      turnIntentDecision: substantive,
+    }),
+    { authorized: true, reason: "substantive-input-authority" }
+  );
+  assert.deepEqual(
+    authorizeAdvisorTaskMutation({ authority: "preserve-parent" }),
+    { authorized: true, reason: "explicit-action-authority" }
+  );
+  assert.deepEqual(
+    authorizeAdvisorTaskMutation({ authority: "manual-correction" }),
+    { authorized: true, reason: "manual-correction-authority" }
+  );
 });
 
 test("regenerate and speakable preserve phase while manual next can advance", () => {
