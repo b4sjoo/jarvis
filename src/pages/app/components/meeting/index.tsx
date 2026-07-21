@@ -30,6 +30,7 @@ import type {
   MeetingAudioConfig,
   MeetingAudioProfile,
   NativeAudioDebugFaultKind,
+  NativeAudioPauseResumeControlPresentation,
   MeetingCodingModelSettings,
   MeetingAnswerDisplayModel,
   CodingArtifactCache,
@@ -1329,6 +1330,10 @@ export const MeetingAssistant = ({
               status={meeting.status}
               error={meeting.error}
               isBusy={isBusy}
+              audioControl={audioPauseResumeControl}
+              onToggleAudio={() => {
+                void handlePauseResume();
+              }}
               showClarifyingQuestion={showClarifyingQuestion}
               clarifyingQuestion={clarifyingQuestion}
               clarifyingOptions={clarifyingOptions}
@@ -2202,6 +2207,8 @@ const FocusModePanel = ({
   status,
   error,
   isBusy,
+  audioControl,
+  onToggleAudio,
   showClarifyingQuestion,
   clarifyingQuestion,
   clarifyingOptions,
@@ -2229,6 +2236,8 @@ const FocusModePanel = ({
   status: keyof typeof statusLabel;
   error: string | null;
   isBusy: boolean;
+  audioControl: NativeAudioPauseResumeControlPresentation;
+  onToggleAudio: () => void;
   showClarifyingQuestion: boolean;
   clarifyingQuestion: string;
   clarifyingOptions: ClarifyingQuestionOption[];
@@ -2392,9 +2401,26 @@ const FocusModePanel = ({
                 onChange={updateInterviewTypes}
               />
             )}
+            <Button
+              size="sm"
+              variant={audioControl.urgent ? "destructive" : "outline"}
+              className="ml-auto h-8 min-w-[92px] shrink-0 gap-1.5 px-3 text-[10px]"
+              title={audioControl.title}
+              onClick={onToggleAudio}
+              disabled={audioControl.disabled}
+            >
+              {audioControl.busy ? (
+                <Loader2Icon className="h-3 w-3 shrink-0 animate-spin" />
+              ) : audioControl.action === "pause" ? (
+                <PauseIcon className="h-3 w-3 shrink-0" />
+              ) : (
+                <PlayIcon className="h-3 w-3 shrink-0" />
+              )}
+              {audioControl.label}
+            </Button>
             <span
               className={cn(
-                "ml-auto shrink-0 text-[10px]",
+                "shrink-0 text-[10px]",
                 error ? "text-red-700" : "text-muted-foreground"
               )}
               title={[
