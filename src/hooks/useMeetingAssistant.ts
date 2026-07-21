@@ -40,6 +40,10 @@ import {
   MeetingAssistantStatus,
   MeetingAudioConfig,
   MeetingAudioStatus,
+  NativeAudioDebugFaultKind,
+  NativeAudioDebugFaultResult,
+  NativeAudioCaptureStartMode,
+  NativeAudioManualRecoveryState,
   NativeAudioStopResult,
   MeetingAssistantSettings,
   MeetingAudioProfile,
@@ -104,7 +108,9 @@ import {
   buildMeetingAnswerSummary,
   CaptureLifecycleCoordinator,
   authorizeNativeAudioLifecycleEvent,
+  createNativeAudioManualRecoveryState,
   decideNativeAudioTerminalDisposition,
+  getNativeAudioCaptureStartPolicy,
   pruneNativeAudioRecoveryAttempts,
   authorizeNativeSpeechDetectedEvent,
   buildNativeAudioLifecycleTraceMetadata,
@@ -979,6 +985,23 @@ interface NativeAudioRecoveryAttemptContext {
   previousCaptureSessionId: string;
   previousCaptureGeneration: number;
   reason: string | null;
+  faultInjectionId?: string;
+}
+
+interface NativeAudioManualRecoveryAttemptContext {
+  id: string;
+  startedAt: number;
+  pending: NativeAudioManualRecoveryState;
+}
+
+interface NativeAudioFaultTraceContext {
+  traceId: string;
+  faultKind: NativeAudioDebugFaultKind;
+  commandStepId: string;
+  commandSettled: boolean;
+  terminalDisposition?: "expected-stop" | "recovering" | "fatal";
+  recoveryOutcome?: "success" | "error";
+  recoveryError?: string;
 }
 
 interface QueuedSpeechSegment {
@@ -1157,7 +1180,12 @@ export function useMeetingAssistant() {
   const nativeCaptureGenerationRef = useRef<number | null>(null);
   const lastNativeSegmentSequenceRef = useRef(0);
   const nativeRecoveryAttemptTimestampsRef = useRef<number[]>([]);
+  const nativeAudioManualRecoveryRef =
+    useRef<NativeAudioManualRecoveryState | null>(null);
   const handledNativeTerminalKeysRef = useRef(new Set<string>());
+  const nativeAudioFaultTracesRef = useRef(
+    new Map<string, NativeAudioFaultTraceContext>()
+  );
   const systemAudioQueueTailRef = useRef<Promise<void>>(Promise.resolve());
   const microphoneAudioQueueTailRef = useRef<Promise<void>>(Promise.resolve());
   const pendingConfirmationRef = useRef<PendingConfirmation | null>(null);
@@ -1170,6 +1198,56 @@ export function useMeetingAssistant() {
   const speechDetectedHandlerRef = useRef<
     ((event: NativeSpeechDetectedEvent) => void) | undefined
   >(undefined);
+
+  const maybeFinishNativeAudioFaultTrace = useCallback(
+    (faultInjectionId: string) => {
+      const context = nativeAudioFaultTracesRef.current.get(faultInjectionId);
+      if (!context || !context.commandSettled) return;
+
+      let status: "success" | "error" | undefined;
+      let error: string | undefined;
+      let outcome: string | undefined;
+      if (context.terminalDisposition === "fatal") {
+        status = "success";
+        outcome =
+          context.faultKind === "recoverable-stream-end"
+            ? "recovery-circuit-breaker-open"
+            : "fatal-fault-observed";
+      } else if (context.recoveryOutcome) {
+        status = context.recoveryOutcome;
+        error = context.recoveryError;
+        outcome =
+          context.recoveryOutcome === "success"
+            ? "automatic-recovery-succeeded"
+            : "automatic-recovery-failed";
+      }
+      if (!status) return;
+
+      traceStoreRef.current.updateMetadata(context.traceId, {
+        faultValidationOutcome: outcome,
+      });
+      traceStoreRef.current.finishTrace(context.traceId, status, error);
+      nativeAudioFaultTracesRef.current.delete(faultInjectionId);
+    },
+    []
+  );
+
+  const cancelNativeAudioFaultTraces = useCallback((reason: string) => {
+    for (const context of nativeAudioFaultTracesRef.current.values()) {
+      traceStoreRef.current.updateMetadata(context.traceId, {
+        faultValidationOutcome: "cancelled-by-runtime-boundary",
+        faultValidationCancelReason: reason,
+      });
+      traceStoreRef.current.finishStep(
+        context.traceId,
+        context.commandStepId,
+        "cancelled",
+        { reason }
+      );
+      traceStoreRef.current.finishTrace(context.traceId, "cancelled", reason);
+    }
+    nativeAudioFaultTracesRef.current.clear();
+  }, []);
 
   const readNativeCaptureLease = useCallback(
     () => ({
@@ -1205,6 +1283,151 @@ export function useMeetingAssistant() {
       return result;
     },
     [readNativeCaptureLease]
+  );
+
+  const injectNativeAudioFault = useCallback(
+    async (faultKind: NativeAudioDebugFaultKind) => {
+      if (!import.meta.env.DEV || !debugModeRef.current) {
+        throw new Error(
+          "Native audio fault injection is available only in a debug development build."
+        );
+      }
+
+      const expectedCaptureSessionId = nativeCaptureSessionIdRef.current;
+      const expectedCaptureGeneration = nativeCaptureGenerationRef.current;
+      if (
+        !activeRef.current ||
+        !expectedCaptureSessionId ||
+        expectedCaptureGeneration == null
+      ) {
+        throw new Error("Start Jarvis audio capture before injecting a fault.");
+      }
+
+      const faultInjectionId = createMeetingId("native_audio_fault");
+      const trace = traceStoreRef.current.startTrace("voice", {
+        source: "debug-native-audio-fault",
+        workflow: "native-audio-fault-injection",
+        syntheticValidation: true,
+        productionReliabilityEligible: false,
+        faultInjected: true,
+        faultInjectionId,
+        faultKind,
+        expectedCaptureOwner: "meeting",
+        expectedCaptureSessionId,
+        expectedCaptureGeneration,
+      });
+      const commandStepId = traceStoreRef.current.startStep(
+        trace.id,
+        "Native audio fault injection command",
+        {
+          faultInjectionId,
+          faultKind,
+          expectedCaptureSessionId,
+          expectedCaptureGeneration,
+        }
+      );
+      const context: NativeAudioFaultTraceContext = {
+        traceId: trace.id,
+        faultKind,
+        commandStepId,
+        commandSettled: false,
+      };
+      nativeAudioFaultTracesRef.current.set(faultInjectionId, context);
+      sessionRecordingManagerRef.current?.recordCaptureLifecycle({
+        stage: "debug-native-audio-fault-requested",
+        traceId: trace.id,
+        syntheticValidation: true,
+        faultInjectionId,
+        faultKind,
+        expectedCaptureOwner: "meeting",
+        expectedCaptureSessionId,
+        expectedCaptureGeneration,
+      });
+
+      try {
+        const result = await invoke<NativeAudioDebugFaultResult>(
+          "debug_inject_native_audio_fault",
+          {
+            expectedOwner: "meeting",
+            expectedCaptureSessionId,
+            expectedCaptureGeneration,
+            faultKind,
+            faultInjectionId,
+          }
+        );
+        context.commandSettled = true;
+        traceStoreRef.current.finishStep(
+          trace.id,
+          commandStepId,
+          result.disposition === "injected" ? "success" : "cancelled",
+          {
+            faultInjectionId,
+            faultKind,
+            faultDisposition: result.disposition,
+            previousCaptureSessionId:
+              result.previousStatus.captureSessionId,
+            previousCaptureGeneration:
+              result.previousStatus.captureGeneration,
+            currentCaptureSessionId: result.currentStatus.captureSessionId,
+            currentCaptureGeneration: result.currentStatus.captureGeneration,
+          }
+        );
+        traceStoreRef.current.recordOutput(
+          trace.id,
+          "native audio fault injection result",
+          JSON.stringify(result, null, 2),
+          {
+            faultInjectionId,
+            faultKind,
+            disposition: result.disposition,
+          }
+        );
+        traceStoreRef.current.updateMetadata(trace.id, {
+          faultDisposition: result.disposition,
+        });
+        sessionRecordingManagerRef.current?.recordCaptureLifecycle({
+          stage: "debug-native-audio-fault-command-finished",
+          traceId: trace.id,
+          syntheticValidation: true,
+          faultInjectionId,
+          faultKind,
+          faultDisposition: result.disposition,
+        });
+
+        if (result.disposition !== "injected") {
+          traceStoreRef.current.finishTrace(
+            trace.id,
+            "cancelled",
+            result.disposition
+          );
+          nativeAudioFaultTracesRef.current.delete(faultInjectionId);
+        } else {
+          maybeFinishNativeAudioFaultTrace(faultInjectionId);
+        }
+        return result;
+      } catch (error) {
+        context.commandSettled = true;
+        traceStoreRef.current.finishStep(
+          trace.id,
+          commandStepId,
+          "error",
+          { faultInjectionId, faultKind },
+          error
+        );
+        traceStoreRef.current.finishTrace(trace.id, "error", error);
+        nativeAudioFaultTracesRef.current.delete(faultInjectionId);
+        sessionRecordingManagerRef.current?.recordCaptureLifecycle({
+          stage: "debug-native-audio-fault-command-failed",
+          traceId: trace.id,
+          syntheticValidation: true,
+          faultInjectionId,
+          faultKind,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        throw error;
+      }
+    },
+    [maybeFinishNativeAudioFaultTrace]
   );
 
   const readRuntimeCommitSnapshot = useCallback(
@@ -2764,10 +2987,13 @@ export function useMeetingAssistant() {
   const stop = useCallback(async () => {
     const coordinator = captureLifecycleCoordinatorRef.current!;
     const lifecycleOperation = coordinator.claim("stop");
+    const nativeLeaseToStop = readNativeCaptureLease();
+    cancelNativeAudioFaultTraces("meeting-assistant-stopped");
     advanceRuntimeEpoch("meeting-assistant-stopped");
     activeRef.current = false;
     invalidateAudioProcessingSession();
     cancelActiveAdvisorJob("meeting-assistant-stopped");
+    nativeAudioManualRecoveryRef.current = null;
     screenAnalysisAbortRef.current?.abort();
     screenAnalysisAbortRef.current = null;
     contextManagerRef.current.clearActiveMeetingTask();
@@ -2778,7 +3004,7 @@ export function useMeetingAssistant() {
       let audioStatus: MeetingAudioStatus | null = null;
 
       try {
-        audioStatus = (await stopNativeMeetingCapture()).status;
+        audioStatus = (await stopNativeMeetingCapture(nativeLeaseToStop)).status;
         if (
           !coordinator.recordNativeCompletion(
             lifecycleOperation,
@@ -2815,12 +3041,15 @@ export function useMeetingAssistant() {
         partialSuggestion: "",
         error: null,
         audioStatus,
+        nativeAudioManualRecovery: undefined,
       }));
     });
   }, [
     advanceRuntimeEpoch,
+    cancelNativeAudioFaultTraces,
     cancelActiveAdvisorJob,
     invalidateAudioProcessingSession,
+    readNativeCaptureLease,
     stopNativeMeetingCapture,
     stopSessionRecording,
   ]);
@@ -5434,20 +5663,61 @@ export function useMeetingAssistant() {
 
   const startCapture = useCallback(
     async (
-      resetContext: boolean,
+      mode: NativeAudioCaptureStartMode,
       recoveryAttempt?: NativeAudioRecoveryAttemptContext
     ) => {
+      const policy = getNativeAudioCaptureStartPolicy(mode);
+      const pendingManualRecovery =
+        mode === "manual-recovery"
+          ? nativeAudioManualRecoveryRef.current
+          : null;
+      if (mode === "manual-recovery" && !pendingManualRecovery) {
+        setState((previous) => ({
+          ...previous,
+          error: "No native audio failure is waiting for manual recovery.",
+        }));
+        return;
+      }
+      const manualRecoveryAttempt:
+        | NativeAudioManualRecoveryAttemptContext
+        | undefined = pendingManualRecovery
+        ? {
+            id: createMeetingId("native_audio_manual_recovery"),
+            startedAt: Date.now(),
+            pending: pendingManualRecovery,
+          }
+        : undefined;
       const coordinator = captureLifecycleCoordinatorRef.current!;
-      const lifecycleOperation = coordinator.claim(
-        resetContext ? "start" : "resume"
-      );
+      const lifecycleOperation = coordinator.claim(policy.lifecycleAction);
       const previousNativeLease = readNativeCaptureLease();
       nativeCaptureSessionIdRef.current = null;
       nativeCaptureGenerationRef.current = null;
       lastNativeSegmentSequenceRef.current = 0;
-      if (resetContext) {
+      if (policy.resetRecoveryBudget) {
         nativeRecoveryAttemptTimestampsRef.current = [];
+      }
+      if (policy.resetContext) {
         handledNativeTerminalKeysRef.current.clear();
+        nativeAudioManualRecoveryRef.current = null;
+      }
+      if (manualRecoveryAttempt) {
+        const contextState = contextManagerRef.current.getState();
+        sessionRecordingManagerRef.current?.recordCaptureLifecycle({
+          stage: "manual-recovery-started",
+          manualRecoveryAttemptId: manualRecoveryAttempt.id,
+          recoveryStartedAt: manualRecoveryAttempt.startedAt,
+          reason: manualRecoveryAttempt.pending.reason,
+          circuitBreakerOpen:
+            manualRecoveryAttempt.pending.circuitBreakerOpen,
+          previousCaptureSessionId:
+            manualRecoveryAttempt.pending.interruptedCaptureSessionId,
+          previousCaptureGeneration:
+            manualRecoveryAttempt.pending.interruptedCaptureGeneration,
+          resetContext: policy.resetContext,
+          resetRecoveryBudget: policy.resetRecoveryBudget,
+          activeMeetingTaskId: contextState.activeMeetingTask?.id,
+          transcriptTurns: contextState.transcriptTurns.length,
+        });
       }
 
       if (state.settings.privacyMode === "memory-only") {
@@ -5463,6 +5733,14 @@ export function useMeetingAssistant() {
           error: LOCAL_ONLY_UNAVAILABLE_MESSAGE,
         }));
         coordinator.authorize(lifecycleOperation, "blocked-local-only-mode");
+        if (manualRecoveryAttempt) {
+          sessionRecordingManagerRef.current?.recordCaptureLifecycle({
+            stage: "manual-recovery-failed",
+            manualRecoveryAttemptId: manualRecoveryAttempt.id,
+            recoveryDurationMs: Date.now() - manualRecoveryAttempt.startedAt,
+            reason: "blocked-local-only-mode",
+          });
+        }
         return;
       }
 
@@ -5479,12 +5757,20 @@ export function useMeetingAssistant() {
           error: MISSING_STT_MESSAGE,
         }));
         coordinator.authorize(lifecycleOperation, "blocked-stt-provider-missing");
+        if (manualRecoveryAttempt) {
+          sessionRecordingManagerRef.current?.recordCaptureLifecycle({
+            stage: "manual-recovery-failed",
+            manualRecoveryAttemptId: manualRecoveryAttempt.id,
+            recoveryDurationMs: Date.now() - manualRecoveryAttempt.startedAt,
+            reason: "blocked-stt-provider-missing",
+          });
+        }
         return;
       }
 
       setState((previous) => ({
         ...previous,
-        status: recoveryAttempt ? "reconnecting" : "starting",
+        status: policy.pendingStatus,
         partialSuggestion: "",
         error: null,
       }));
@@ -5507,7 +5793,7 @@ export function useMeetingAssistant() {
             );
           }
 
-          const resetBoundary = resetContext
+          const resetBoundary = policy.resetContext
             ? resetMeetingRuntimeForNewSession("meeting-assistant-started")
             : undefined;
           if (resetBoundary) {
@@ -5582,6 +5868,30 @@ export function useMeetingAssistant() {
           lastNativeSegmentSequenceRef.current = 0;
           activeRef.current = true;
           const contextState = contextManagerRef.current.getState();
+          if (manualRecoveryAttempt) {
+            nativeAudioManualRecoveryRef.current = null;
+            sessionRecordingManagerRef.current?.recordCaptureLifecycle({
+              stage: "manual-recovery-succeeded",
+              manualRecoveryAttemptId: manualRecoveryAttempt.id,
+              recoveryStartedAt: manualRecoveryAttempt.startedAt,
+              recoveryDurationMs: Date.now() - manualRecoveryAttempt.startedAt,
+              estimatedAudioBlackoutMs:
+                Date.now() - manualRecoveryAttempt.pending.requiredAt,
+              previousCaptureSessionId:
+                manualRecoveryAttempt.pending.interruptedCaptureSessionId,
+              previousCaptureGeneration:
+                manualRecoveryAttempt.pending.interruptedCaptureGeneration,
+              nextCaptureSessionId: nativeCaptureSessionId,
+              nextCaptureGeneration: nativeCaptureGeneration,
+              reason: manualRecoveryAttempt.pending.reason,
+              circuitBreakerOpen:
+                manualRecoveryAttempt.pending.circuitBreakerOpen,
+              resetContext: policy.resetContext,
+              resetRecoveryBudget: policy.resetRecoveryBudget,
+              activeMeetingTaskId: contextState.activeMeetingTask?.id,
+              transcriptTurns: contextState.transcriptTurns.length,
+            });
+          }
 
           setState((previous) => ({
             ...previous,
@@ -5593,17 +5903,25 @@ export function useMeetingAssistant() {
             activeScreenTask: contextState.activeScreenTask,
             activeInterviewTask: contextState.activeInterviewTask,
             activeMeetingTask: contextState.activeMeetingTask,
-            latestSuggestion: resetContext ? null : previous.latestSuggestion,
-            latestReliableSuggestion: resetContext
+            latestSuggestion: policy.resetContext
+              ? null
+              : previous.latestSuggestion,
+            latestReliableSuggestion: policy.resetContext
               ? null
               : previous.latestReliableSuggestion,
-            lastMemoryContext: resetContext
+            lastMemoryContext: policy.resetContext
               ? undefined
               : previous.lastMemoryContext,
-            speechCorrections: resetContext ? [] : previous.speechCorrections,
+            speechCorrections: policy.resetContext
+              ? []
+              : previous.speechCorrections,
             partialSuggestion: "",
             error: null,
             audioStatus,
+            nativeAudioManualRecovery:
+              policy.resetContext || manualRecoveryAttempt
+                ? undefined
+                : previous.nativeAudioManualRecovery,
           }));
           if (recoveryAttempt) {
             sessionRecordingManagerRef.current?.recordCaptureLifecycle({
@@ -5619,7 +5937,25 @@ export function useMeetingAssistant() {
               nextCaptureSessionId: nativeCaptureSessionId,
               nextCaptureGeneration: nativeCaptureGeneration,
               reason: recoveryAttempt.reason,
+              faultInjectionId: recoveryAttempt.faultInjectionId,
             });
+            if (recoveryAttempt.faultInjectionId) {
+              const faultContext = nativeAudioFaultTracesRef.current.get(
+                recoveryAttempt.faultInjectionId
+              );
+              if (faultContext) {
+                faultContext.recoveryOutcome = "success";
+                traceStoreRef.current.updateMetadata(faultContext.traceId, {
+                  recoveryAttemptId: recoveryAttempt.id,
+                  recoveryDurationMs: Date.now() - recoveryAttempt.startedAt,
+                  recoveredCaptureSessionId: nativeCaptureSessionId,
+                  recoveredCaptureGeneration: nativeCaptureGeneration,
+                });
+              }
+              maybeFinishNativeAudioFaultTrace(
+                recoveryAttempt.faultInjectionId
+              );
+            }
           }
         } catch (error) {
           const authorized = coordinator.authorize(
@@ -5657,6 +5993,40 @@ export function useMeetingAssistant() {
               previousCaptureGeneration:
                 recoveryAttempt.previousCaptureGeneration,
               reason: recoveryAttempt.reason,
+              faultInjectionId: recoveryAttempt.faultInjectionId,
+              error: error instanceof Error ? error.message : String(error),
+            });
+            if (recoveryAttempt.faultInjectionId) {
+              const faultContext = nativeAudioFaultTracesRef.current.get(
+                recoveryAttempt.faultInjectionId
+              );
+              if (faultContext) {
+                faultContext.recoveryOutcome = "error";
+                faultContext.recoveryError =
+                  error instanceof Error ? error.message : String(error);
+                traceStoreRef.current.updateMetadata(faultContext.traceId, {
+                  recoveryAttemptId: recoveryAttempt.id,
+                  recoveryDurationMs: Date.now() - recoveryAttempt.startedAt,
+                });
+              }
+              maybeFinishNativeAudioFaultTrace(
+                recoveryAttempt.faultInjectionId
+              );
+            }
+          }
+          if (manualRecoveryAttempt) {
+            sessionRecordingManagerRef.current?.recordCaptureLifecycle({
+              stage: "manual-recovery-failed",
+              manualRecoveryAttemptId: manualRecoveryAttempt.id,
+              recoveryStartedAt: manualRecoveryAttempt.startedAt,
+              recoveryDurationMs: Date.now() - manualRecoveryAttempt.startedAt,
+              previousCaptureSessionId:
+                manualRecoveryAttempt.pending.interruptedCaptureSessionId,
+              previousCaptureGeneration:
+                manualRecoveryAttempt.pending.interruptedCaptureGeneration,
+              reason: manualRecoveryAttempt.pending.reason,
+              circuitBreakerOpen:
+                manualRecoveryAttempt.pending.circuitBreakerOpen,
               error: error instanceof Error ? error.message : String(error),
             });
           }
@@ -5673,6 +6043,7 @@ export function useMeetingAssistant() {
     }, [
       cancelActiveAdvisorJob,
       invalidateAudioProcessingSession,
+      maybeFinishNativeAudioFaultTrace,
       readNativeCaptureLease,
       selectedAudioDevices.output.id,
       startAudioProcessingSession,
@@ -5684,16 +6055,22 @@ export function useMeetingAssistant() {
     ]);
 
   const start = useCallback(async () => {
-    await startCapture(true);
+    await startCapture("fresh-start");
   }, [startCapture]);
 
   const resume = useCallback(async () => {
-    await startCapture(false);
+    await startCapture("resume");
+  }, [startCapture]);
+
+  const resumeAfterNativeFailure = useCallback(async () => {
+    await startCapture("manual-recovery");
   }, [startCapture]);
 
   const pause = useCallback(async () => {
     const coordinator = captureLifecycleCoordinatorRef.current!;
     const lifecycleOperation = coordinator.claim("pause");
+    const nativeLeaseToStop = readNativeCaptureLease();
+    cancelNativeAudioFaultTraces("meeting-assistant-paused");
     advanceRuntimeEpoch("meeting-assistant-paused");
     activeRef.current = false;
     invalidateAudioProcessingSession();
@@ -5705,7 +6082,7 @@ export function useMeetingAssistant() {
       let audioStatus: MeetingAudioStatus | null = null;
 
       try {
-        audioStatus = (await stopNativeMeetingCapture()).status;
+        audioStatus = (await stopNativeMeetingCapture(nativeLeaseToStop)).status;
         if (
           !coordinator.recordNativeCompletion(
             lifecycleOperation,
@@ -5734,8 +6111,10 @@ export function useMeetingAssistant() {
     });
   }, [
     advanceRuntimeEpoch,
+    cancelNativeAudioFaultTraces,
     cancelActiveAdvisorJob,
     invalidateAudioProcessingSession,
+    readNativeCaptureLease,
     stopNativeMeetingCapture,
   ]);
 
@@ -7929,6 +8308,20 @@ export function useMeetingAssistant() {
             terminalEvent,
             automaticRecoveryAvailable
           );
+          const faultInjectionId =
+            terminalEvent.diagnostics.faultInjectionId ?? undefined;
+          const faultTraceContext = faultInjectionId
+            ? nativeAudioFaultTracesRef.current.get(faultInjectionId)
+            : undefined;
+          if (faultTraceContext) {
+            faultTraceContext.terminalDisposition = disposition;
+            traceStoreRef.current.updateMetadata(faultTraceContext.traceId, {
+              ...buildNativeAudioLifecycleTraceMetadata(terminalEvent),
+              nativeTerminalDisposition: disposition,
+              nativeRecoveryAvailable: automaticRecoveryAvailable,
+              recoveryAttemptsInWindow: recentRecoveryAttempts.length,
+            });
+          }
 
           sessionRecordingManagerRef.current?.recordCaptureLifecycle({
             stage: "native-terminal-reconciled",
@@ -7952,6 +8345,7 @@ export function useMeetingAssistant() {
           cancelActiveAdvisorJob(`native-audio-${terminalEvent.eventType}`);
 
           if (disposition === "recovering") {
+            nativeAudioManualRecoveryRef.current = null;
             nativeRecoveryAttemptTimestampsRef.current = [
               ...recentRecoveryAttempts,
               now,
@@ -7962,6 +8356,7 @@ export function useMeetingAssistant() {
               previousCaptureSessionId: terminalEvent.captureSessionId,
               previousCaptureGeneration: terminalEvent.captureGeneration,
               reason: terminalEvent.reason,
+              faultInjectionId,
             };
             sessionRecordingManagerRef.current?.recordCaptureLifecycle({
               stage: "automatic-recovery-started",
@@ -7973,6 +8368,7 @@ export function useMeetingAssistant() {
               previousCaptureGeneration:
                 recoveryAttempt.previousCaptureGeneration,
               reason: recoveryAttempt.reason,
+              faultInjectionId,
             });
             setState((previous) => ({
               ...previous,
@@ -7980,14 +8376,32 @@ export function useMeetingAssistant() {
               partialSuggestion: "",
               audioStatus: null,
               error: null,
+              nativeAudioManualRecovery: undefined,
             }));
-            void startCapture(false, recoveryAttempt);
+            void startCapture("automatic-recovery", recoveryAttempt);
             return;
           }
 
           const circuitBreakerOpen =
             terminalEvent.recoverability === "retry-once" &&
             !automaticRecoveryAvailable;
+          const manualRecovery = createNativeAudioManualRecoveryState({
+            event: terminalEvent,
+            circuitBreakerOpen,
+            requiredAt: now,
+          });
+          nativeAudioManualRecoveryRef.current = manualRecovery;
+          sessionRecordingManagerRef.current?.recordCaptureLifecycle({
+            stage: "manual-recovery-required",
+            requiredAt: manualRecovery.requiredAt,
+            reason: manualRecovery.reason,
+            message: manualRecovery.message,
+            previousCaptureSessionId:
+              manualRecovery.interruptedCaptureSessionId,
+            previousCaptureGeneration:
+              manualRecovery.interruptedCaptureGeneration,
+            circuitBreakerOpen: manualRecovery.circuitBreakerOpen,
+          });
           setState((previous) => ({
             ...previous,
             status: "error",
@@ -8000,7 +8414,11 @@ export function useMeetingAssistant() {
                 : terminalEvent.eventType === "error"
                   ? "System audio capture failed. Resume Jarvis after checking audio access."
                   : "System audio capture stopped unexpectedly. Resume Jarvis manually."),
+            nativeAudioManualRecovery: manualRecovery,
           }));
+          if (faultInjectionId) {
+            maybeFinishNativeAudioFaultTrace(faultInjectionId);
+          }
         }
       );
 
@@ -8024,6 +8442,7 @@ export function useMeetingAssistant() {
   }, [
     cancelActiveAdvisorJob,
     invalidateAudioProcessingSession,
+    maybeFinishNativeAudioFaultTrace,
     startCapture,
   ]);
 
@@ -8083,9 +8502,11 @@ export function useMeetingAssistant() {
     start,
     pause,
     resume,
+    resumeAfterNativeFailure,
     stop,
     clearActiveScreenTask,
     clearTraces,
+    injectNativeAudioFault,
     captureScreenContext,
     exportTrace,
     updateTraceHumanEvaluation,

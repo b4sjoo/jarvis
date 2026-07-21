@@ -25,6 +25,15 @@ export type MeetingAssistantStatus =
   | "paused"
   | "error";
 
+export interface NativeAudioManualRecoveryState {
+  requiredAt: number;
+  reason: string | null;
+  message: string | null;
+  interruptedCaptureSessionId: string;
+  interruptedCaptureGeneration: number;
+  circuitBreakerOpen: boolean;
+}
+
 export interface TranscriptTurn {
   id: string;
   speaker: TranscriptSpeaker;
@@ -815,6 +824,24 @@ export interface NativeAudioStopResult {
   status: MeetingAudioStatus;
 }
 
+export type NativeAudioDebugFaultKind =
+  | "recoverable-stream-end"
+  | "fatal-capture-failure";
+
+export type NativeAudioDebugFaultDisposition =
+  | "injected"
+  | "already-idle"
+  | "stale-request"
+  | "owner-mismatch"
+  | "not-active";
+
+export interface NativeAudioDebugFaultResult {
+  disposition: NativeAudioDebugFaultDisposition;
+  faultInjectionId: string;
+  previousStatus: MeetingAudioStatus;
+  currentStatus: MeetingAudioStatus;
+}
+
 export type MeetingPrivacyMode =
   | "memory-only"
   | "text-and-screen-to-cloud";
@@ -1047,6 +1074,7 @@ export interface MeetingAssistantState {
   partialSuggestion: string;
   error: string | null;
   audioStatus: MeetingAudioStatus | null;
+  nativeAudioManualRecovery?: NativeAudioManualRecoveryState;
   settings: MeetingAssistantSettings;
   lastMemoryContext?: MemoryRetrievalResult;
   lastTraceExport?: MeetingTraceExportRecord;

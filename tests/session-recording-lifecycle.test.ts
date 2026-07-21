@@ -4,7 +4,10 @@ import {
   SessionRecordingManager,
   type SessionRecordingInvoke,
 } from "../src/lib/meeting/session-recording.js";
-import type { MeetingAssistantSettings } from "../src/lib/meeting/types.js";
+import type {
+  MeetingAssistantSettings,
+  MeetingTrace,
+} from "../src/lib/meeting/types.js";
 
 interface InvokeCall {
   command: string;
@@ -209,6 +212,56 @@ test("native speech telemetry never persists audio payloads", async () => {
   await manager.stop("test-complete");
 });
 
+test("session aggregates retain synthetic evidence without counting it as production", async () => {
+  const native = new ControlledRecordingInvoke();
+  const manager = new SessionRecordingManager(undefined, native.invoke);
+  await manager.start(START_OPTIONS);
+  await settle();
+
+  const startedAt = Date.now();
+  manager.recordTrace(buildCompletedTrace("production", startedAt), "manual");
+  manager.recordTrace(
+    buildCompletedTrace("synthetic", startedAt + 1, {
+      syntheticValidation: true,
+      faultInjected: true,
+      faultInjectionId: "native_audio_fault_1",
+      faultKind: "fatal-capture-failure",
+    }),
+    "manual"
+  );
+
+  await waitFor(
+    () =>
+      native.calls.filter(
+        (call) =>
+          call.command === "write_meeting_session_recording_text" &&
+          stringArg(call, "relativePath") === "metrics/session-summary.json"
+      ).length >= 2
+  );
+  const summaryCalls = native.calls.filter(
+    (call) =>
+      call.command === "write_meeting_session_recording_text" &&
+      stringArg(call, "relativePath") === "metrics/session-summary.json"
+  );
+  const summaryCall = summaryCalls[summaryCalls.length - 1];
+  assert.ok(summaryCall);
+  const summary = parsePayload(summaryCall);
+  assert.equal(summary.traceCount, 1);
+  assert.equal(summary.syntheticValidationTraceCount, 1);
+  assert.equal((summary.voice as { total: number }).total, 1);
+  assert.equal(summary.errors, 0);
+
+  const compactSynthetic = native.calls.find(
+    (call) =>
+      call.command === "write_meeting_session_recording_text" &&
+      stringArg(call, "relativePath") === "traces/synthetic/summary.json"
+  );
+  assert.ok(compactSynthetic);
+  assert.equal(parsePayload(compactSynthetic).syntheticValidation, true);
+
+  await manager.stop("test-complete");
+});
+
 const START_OPTIONS = {
   settings: {
     codingModel: {
@@ -225,6 +278,25 @@ const START_OPTIONS = {
     codingSupportsImages: false,
   },
 };
+
+function buildCompletedTrace(
+  id: string,
+  startedAt: number,
+  metadata: Record<string, unknown> = {}
+): MeetingTrace {
+  return {
+    id,
+    kind: "voice",
+    status: "success",
+    startedAt,
+    endedAt: startedAt + 100,
+    durationMs: 100,
+    steps: [],
+    inputs: [],
+    outputs: [],
+    metadata,
+  };
+}
 
 class ControlledRecordingInvoke {
   readonly calls: InvokeCall[] = [];

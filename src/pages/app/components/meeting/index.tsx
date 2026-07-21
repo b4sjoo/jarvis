@@ -29,6 +29,7 @@ import type {
   InterviewTargetCompany,
   MeetingAudioConfig,
   MeetingAudioProfile,
+  NativeAudioDebugFaultKind,
   MeetingCodingModelSettings,
   MeetingAnswerDisplayModel,
   CodingArtifactCache,
@@ -63,6 +64,7 @@ import {
   normalizeCanonicalQuestionType,
   overlayMeetingAnswerArtifacts,
   resolveMeetingAnswerProfile,
+  resolveNativeAudioPrimaryControlAction,
   resolveCodingArtifactDisplay,
   resolveWhiteboardArtifactDisplay,
   resolveVisibleAnswerEvaluationTarget,
@@ -318,6 +320,12 @@ type ClarifyingSelectionState = {
   submittedAt: number;
 };
 
+type NativeAudioFaultFeedback = {
+  inFlightKind?: NativeAudioDebugFaultKind;
+  status: "idle" | "success" | "error";
+  message?: string;
+};
+
 export const MeetingAssistant = ({
   onFocusModeActiveChange,
 }: MeetingAssistantProps = {}) => {
@@ -336,6 +344,8 @@ export const MeetingAssistant = ({
   );
   const [focusWindowsVisible, setFocusWindowsVisible] = useState(false);
   const [speechCorrectionInput, setSpeechCorrectionInput] = useState("");
+  const [nativeAudioFaultFeedback, setNativeAudioFaultFeedback] =
+    useState<NativeAudioFaultFeedback>({ status: "idle" });
   const [codingArtifactCache, setCodingArtifactCache] =
     useState<CodingArtifactCache | null>(null);
   const screenHotkeyInFlightRef = useRef(false);
@@ -572,6 +582,21 @@ export const MeetingAssistant = ({
     meeting.status === "listening" ||
     meeting.status === "transcribing" ||
     meeting.status === "thinking";
+  const manualAudioRecoveryRequired =
+    meeting.status === "error" && Boolean(meeting.nativeAudioManualRecovery);
+  const primaryAudioAction = resolveNativeAudioPrimaryControlAction({
+    status: meeting.status,
+    manualRecoveryRequired: manualAudioRecoveryRequired,
+  });
+  const primaryAudioActionLabel =
+    primaryAudioAction === "stop"
+      ? "Stop"
+      : primaryAudioAction === "start"
+        ? "Start"
+        : "Resume";
+  const meetingStatusLabel = manualAudioRecoveryRequired
+    ? "Resume audio"
+    : statusLabel[meeting.status];
   const screenContextAllowed =
     meeting.settings.screenContextEnabled &&
     meeting.settings.privacyMode === "text-and-screen-to-cloud";
@@ -609,7 +634,7 @@ export const MeetingAssistant = ({
       },
       latestReliableAnswer: latestReliableAnswerPreview,
       latestTurnText: latestTurn?.text || "Waiting for meeting audio.",
-      statusLabel: statusLabel[meeting.status],
+      statusLabel: meetingStatusLabel,
       error: meeting.error,
       isBusy,
       showClarifyingQuestion,
@@ -652,8 +677,10 @@ export const MeetingAssistant = ({
       hasActiveMeetingTask,
       hasActiveMeetingScreenContext,
       meeting.error,
+      meeting.nativeAudioManualRecovery,
       meeting.speechCorrections,
       meeting.status,
+      meetingStatusLabel,
       showClarifyingQuestion,
       displaySuggestionSections.primaryAnswer,
       displaySuggestionSections.chineseThinking,
@@ -671,12 +698,15 @@ export const MeetingAssistant = ({
   const focusSnapshotRef = useRef(focusSnapshot);
 
   const title = useMemo(() => {
+    if (manualAudioRecoveryRequired) {
+      return "Resume meeting audio without clearing the current interview context";
+    }
     if (meeting.error) {
       return `Meeting assistant needs attention: ${meeting.error}`;
     }
 
     return "Open meeting assistant";
-  }, [meeting.error]);
+  }, [manualAudioRecoveryRequired, meeting.error]);
 
   const captureScreenContextFromHotkey = useCallback(async () => {
     const requestedAt = Date.now();
@@ -834,20 +864,27 @@ export const MeetingAssistant = ({
 
   const handleToggle = async () => {
     setOpen(true);
-    if (isPaused) {
-      await meeting.resume();
-    } else if (
-      isRunning ||
-      meeting.status === "starting" ||
-      meeting.status === "reconnecting"
-    ) {
-      await meeting.stop();
-    } else {
-      await meeting.start();
+    switch (primaryAudioAction) {
+      case "manual-recovery":
+        await meeting.resumeAfterNativeFailure();
+        break;
+      case "resume":
+        await meeting.resume();
+        break;
+      case "stop":
+        await meeting.stop();
+        break;
+      case "start":
+        await meeting.start();
+        break;
     }
   };
 
   const handlePauseResume = async () => {
+    if (primaryAudioAction === "manual-recovery") {
+      await meeting.resumeAfterNativeFailure();
+      return;
+    }
     if (isPaused) {
       await meeting.resume();
       return;
@@ -858,6 +895,28 @@ export const MeetingAssistant = ({
     }
   };
 
+  const handleNativeAudioFaultInjection = useCallback(
+    async (faultKind: NativeAudioDebugFaultKind) => {
+      setNativeAudioFaultFeedback({ status: "idle", inFlightKind: faultKind });
+      try {
+        const result = await meeting.injectNativeAudioFault(faultKind);
+        setNativeAudioFaultFeedback({
+          status: result.disposition === "injected" ? "success" : "error",
+          message:
+            result.disposition === "injected"
+              ? `${faultKind === "recoverable-stream-end" ? "Recoverable" : "Fatal"} fault injected; lifecycle evidence is being recorded.`
+              : `Fault not injected: ${result.disposition}.`,
+        });
+      } catch (error) {
+        setNativeAudioFaultFeedback({
+          status: "error",
+          message: error instanceof Error ? error.message : String(error),
+        });
+      }
+    },
+    [meeting.injectNativeAudioFault]
+  );
+
   const handleFocusListeningShortcut = useCallback(async () => {
     setOpen(true);
 
@@ -865,6 +924,11 @@ export const MeetingAssistant = ({
       meeting.status === "starting" ||
       meeting.status === "reconnecting"
     ) {
+      return;
+    }
+
+    if (primaryAudioAction === "manual-recovery") {
+      await meeting.resumeAfterNativeFailure();
       return;
     }
 
@@ -882,8 +946,10 @@ export const MeetingAssistant = ({
   }, [
     isPaused,
     isRunning,
+    primaryAudioAction,
     meeting.pause,
     meeting.resume,
+    meeting.resumeAfterNativeFailure,
     meeting.start,
     meeting.status,
   ]);
@@ -1093,7 +1159,7 @@ export const MeetingAssistant = ({
             <Loader2Icon className="h-4 w-4 animate-spin" />
           ) : isListening ? (
             <RadioIcon className="h-4 w-4" />
-          ) : isPaused ? (
+          ) : isPaused || primaryAudioAction === "manual-recovery" ? (
             <PlayIcon className="h-4 w-4" />
           ) : (
             <BrainIcon className="h-4 w-4" />
@@ -1121,7 +1187,7 @@ export const MeetingAssistant = ({
                     Meeting Assistant
                   </div>
                   <div className="truncate text-[10px] text-muted-foreground">
-                    {statusLabel[meeting.status]}
+                    {meetingStatusLabel}
                   </div>
                 </div>
               </div>
@@ -1135,7 +1201,7 @@ export const MeetingAssistant = ({
                     meeting.error && "border-red-300 text-red-700"
                   )}
                 >
-                  {statusLabel[meeting.status]}
+                  {meetingStatusLabel}
                 </Badge>
                 <Button
                   size="sm"
@@ -1177,11 +1243,19 @@ export const MeetingAssistant = ({
                   size="icon"
                   variant="outline"
                   className="h-8 w-8"
-                  title={isPaused ? "Resume" : "Pause"}
+                  title={
+                    primaryAudioAction === "manual-recovery" || isPaused
+                      ? "Resume"
+                      : "Pause"
+                  }
                   onClick={handlePauseResume}
-                  disabled={!isRunning && !isPaused}
+                  disabled={
+                    !isRunning &&
+                    !isPaused &&
+                    primaryAudioAction !== "manual-recovery"
+                  }
                 >
-                  {isPaused ? (
+                  {isPaused || primaryAudioAction === "manual-recovery" ? (
                     <PlayIcon className="h-4 w-4" />
                   ) : (
                     <PauseIcon className="h-4 w-4" />
@@ -1189,14 +1263,12 @@ export const MeetingAssistant = ({
                 </Button>
                 <Button
                   size="icon"
-                  variant={
-                    isRunning || isBusy || isPaused ? "destructive" : "default"
-                  }
+                  variant={primaryAudioAction === "stop" ? "destructive" : "default"}
                   className="h-8 w-8"
-                  title={isRunning || isBusy || isPaused ? "Stop" : "Start"}
+                  title={primaryAudioActionLabel}
                   onClick={handleToggle}
                 >
-                  {isRunning || isBusy || isPaused ? (
+                  {primaryAudioAction === "stop" ? (
                     <SquareIcon className="h-4 w-4" />
                   ) : (
                     <PlayIcon className="h-4 w-4" />
@@ -1284,6 +1356,16 @@ export const MeetingAssistant = ({
                 }
                 debugMode={meeting.settings.debugMode}
                 onDebugModeChange={meeting.setDebugMode}
+                nativeAudioFaultAvailable={Boolean(
+                  import.meta.env.DEV &&
+                    meeting.settings.debugMode &&
+                    meeting.audioStatus?.systemCaptureActive &&
+                    meeting.audioStatus.captureOwner === "meeting" &&
+                    meeting.audioStatus.captureSessionId &&
+                    meeting.audioStatus.captureGeneration != null
+                )}
+                nativeAudioFaultFeedback={nativeAudioFaultFeedback}
+                onNativeAudioFaultInject={handleNativeAudioFaultInjection}
                 sessionRecording={meeting.sessionRecording}
                 onSessionRecordingChange={meeting.setSessionRecordingEnabled}
               />
@@ -2039,29 +2121,33 @@ export const MeetingAssistant = ({
                 variant="outline"
                 className="h-8 gap-1.5 text-xs"
                 onClick={handlePauseResume}
-                disabled={!isRunning && !isPaused}
+                disabled={
+                  !isRunning &&
+                  !isPaused &&
+                  primaryAudioAction !== "manual-recovery"
+                }
               >
-                {isPaused ? (
+                {isPaused || primaryAudioAction === "manual-recovery" ? (
                   <PlayIcon className="h-3.5 w-3.5" />
                 ) : (
                   <PauseIcon className="h-3.5 w-3.5" />
                 )}
-                {isPaused ? "Resume" : "Pause"}
+                {isPaused || primaryAudioAction === "manual-recovery"
+                  ? "Resume"
+                  : "Pause"}
               </Button>
               <Button
                 size="sm"
-                variant={
-                  isRunning || isBusy || isPaused ? "destructive" : "default"
-                }
+                variant={primaryAudioAction === "stop" ? "destructive" : "default"}
                 className="h-8 gap-1.5 text-xs"
                 onClick={handleToggle}
               >
-                {isRunning || isBusy || isPaused ? (
+                {primaryAudioAction === "stop" ? (
                   <SquareIcon className="h-3.5 w-3.5" />
                 ) : (
                   <PlayIcon className="h-3.5 w-3.5" />
                 )}
-                {isRunning || isBusy || isPaused ? "Stop" : "Start"}
+                {primaryAudioActionLabel}
               </Button>
             </div>
           </div>
@@ -2804,6 +2890,9 @@ const ConfigurationsPanel = ({
   onMicrophoneContextEnabledChange,
   debugMode,
   onDebugModeChange,
+  nativeAudioFaultAvailable,
+  nativeAudioFaultFeedback,
+  onNativeAudioFaultInject,
   sessionRecording,
   onSessionRecordingChange,
 }: {
@@ -2832,6 +2921,11 @@ const ConfigurationsPanel = ({
   onMicrophoneContextEnabledChange: (enabled: boolean) => void;
   debugMode: boolean;
   onDebugModeChange: (enabled: boolean) => void;
+  nativeAudioFaultAvailable: boolean;
+  nativeAudioFaultFeedback: NativeAudioFaultFeedback;
+  onNativeAudioFaultInject: (
+    kind: NativeAudioDebugFaultKind
+  ) => Promise<void>;
   sessionRecording: MeetingSessionRecordingState;
   onSessionRecordingChange: (enabled: boolean) => void;
 }) => {
@@ -3099,6 +3193,64 @@ const ConfigurationsPanel = ({
               </div>
               <Switch checked={debugMode} onCheckedChange={onDebugModeChange} />
             </div>
+            {import.meta.env.DEV && debugMode ? (
+              <div className="space-y-1.5 rounded-sm border border-border/60 p-2">
+                <div>
+                  <div className="text-[10px] font-medium uppercase text-muted-foreground">
+                    Native Audio Fault Test
+                  </div>
+                  <div className="mt-0.5 text-[10px] text-muted-foreground">
+                    Synthetic validation; excluded from reliability metrics
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 gap-1">
+                  {(
+                    [
+                      ["recoverable-stream-end", "Recoverable"],
+                      ["fatal-capture-failure", "Fatal"],
+                    ] as const
+                  ).map(([kind, label]) => (
+                    <Button
+                      key={kind}
+                      size="sm"
+                      variant="outline"
+                      className="h-7 px-1 text-[10px]"
+                      disabled={
+                        !nativeAudioFaultAvailable ||
+                        Boolean(nativeAudioFaultFeedback.inFlightKind)
+                      }
+                      onClick={() => {
+                        void onNativeAudioFaultInject(kind);
+                      }}
+                    >
+                      {nativeAudioFaultFeedback.inFlightKind === kind ? (
+                        <Loader2Icon className="mr-1 h-3 w-3 animate-spin" />
+                      ) : null}
+                      {label}
+                    </Button>
+                  ))}
+                </div>
+                {!nativeAudioFaultAvailable &&
+                !nativeAudioFaultFeedback.inFlightKind ? (
+                  <div className="text-[10px] text-muted-foreground">
+                    Start meeting audio to enable fault injection.
+                  </div>
+                ) : null}
+                {nativeAudioFaultFeedback.message ? (
+                  <div
+                    className={cn(
+                      WRAP_TEXT_CLASS,
+                      "text-[10px]",
+                      nativeAudioFaultFeedback.status === "error"
+                        ? "text-red-600"
+                        : "text-muted-foreground"
+                    )}
+                  >
+                    {nativeAudioFaultFeedback.message}
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
             <div className="space-y-1.5 rounded-sm border border-border/60 p-2">
               <div className="flex items-center justify-between gap-2">
                 <div>

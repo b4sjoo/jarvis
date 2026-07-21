@@ -3,10 +3,13 @@ import test from "node:test";
 import {
   authorizeNativeAudioLifecycleEvent,
   buildNativeAudioLifecycleTraceMetadata,
+  createNativeAudioManualRecoveryState,
   decideNativeAudioTerminalDisposition,
+  getNativeAudioCaptureStartPolicy,
   parseNativeAudioLifecycleEvent,
   parseNativeAudioSegmentDroppedEvent,
   pruneNativeAudioRecoveryAttempts,
+  resolveNativeAudioPrimaryControlAction,
 } from "../src/lib/meeting/native-audio-lifecycle.js";
 
 const STOPPED_EVENT = {
@@ -24,12 +27,56 @@ const STOPPED_EVENT = {
     droppedSamples: 24_000,
     consecutiveDrops: 51,
     bufferCapacity: 131_072,
+    faultInjected: false,
+    faultInjectionId: null,
+    faultKind: null,
   },
 } as const;
 
 test("parses typed native audio lifecycle envelopes", () => {
   assert.deepEqual(parseNativeAudioLifecycleEvent(STOPPED_EVENT), STOPPED_EVENT);
+  assert.deepEqual(
+    parseNativeAudioLifecycleEvent({
+      ...STOPPED_EVENT,
+      diagnostics: {
+        droppedSamples: 24_000,
+        consecutiveDrops: 51,
+        bufferCapacity: 131_072,
+      },
+    }),
+    STOPPED_EVENT
+  );
   assert.equal(parseNativeAudioLifecycleEvent({ ...STOPPED_EVENT, owner: "other" }), null);
+});
+
+test("requires complete fault identity on synthetic lifecycle envelopes", () => {
+  const injected = {
+    ...STOPPED_EVENT,
+    diagnostics: {
+      ...STOPPED_EVENT.diagnostics,
+      faultInjected: true,
+      faultInjectionId: "native_audio_fault_1",
+      faultKind: "recoverable-stream-end",
+    },
+  } as const;
+  assert.deepEqual(parseNativeAudioLifecycleEvent(injected), injected);
+  assert.equal(
+    parseNativeAudioLifecycleEvent({
+      ...injected,
+      diagnostics: { ...injected.diagnostics, faultInjectionId: null },
+    }),
+    null
+  );
+  assert.equal(
+    parseNativeAudioLifecycleEvent({
+      ...STOPPED_EVENT,
+      diagnostics: {
+        ...STOPPED_EVENT.diagnostics,
+        faultInjectionId: "unexpected",
+      },
+    }),
+    null
+  );
 });
 
 test("authorizes terminal events only for the active owner lease", () => {
@@ -70,6 +117,10 @@ test("trace metadata keeps lifecycle identity and excludes no hidden payload", (
     nativeAudioDroppedSamples: 24_000,
     nativeAudioConsecutiveDrops: 51,
     nativeAudioBufferCapacity: 131_072,
+    nativeAudioFaultInjected: false,
+    nativeAudioFaultInjectionId: null,
+    nativeAudioFaultKind: null,
+    productionReliabilityEligible: true,
   });
 });
 
@@ -111,6 +162,95 @@ test("recovery circuit breaker retains only attempts inside its time window", ()
       10_000
     ),
     [60_001, 70_000]
+  );
+});
+
+test("capture start policies keep manual recovery context and reset its acknowledged breaker", () => {
+  assert.deepEqual(getNativeAudioCaptureStartPolicy("fresh-start"), {
+    lifecycleAction: "start",
+    resetContext: true,
+    resetRecoveryBudget: true,
+    pendingStatus: "starting",
+  });
+  assert.deepEqual(getNativeAudioCaptureStartPolicy("resume"), {
+    lifecycleAction: "resume",
+    resetContext: false,
+    resetRecoveryBudget: false,
+    pendingStatus: "starting",
+  });
+  assert.deepEqual(getNativeAudioCaptureStartPolicy("automatic-recovery"), {
+    lifecycleAction: "resume",
+    resetContext: false,
+    resetRecoveryBudget: false,
+    pendingStatus: "reconnecting",
+  });
+  assert.deepEqual(getNativeAudioCaptureStartPolicy("manual-recovery"), {
+    lifecycleAction: "resume",
+    resetContext: false,
+    resetRecoveryBudget: true,
+    pendingStatus: "reconnecting",
+  });
+});
+
+test("primary audio control resumes only explicit pause or native failure state", () => {
+  assert.equal(
+    resolveNativeAudioPrimaryControlAction({
+      status: "error",
+      manualRecoveryRequired: true,
+    }),
+    "manual-recovery"
+  );
+  assert.equal(
+    resolveNativeAudioPrimaryControlAction({
+      status: "reconnecting",
+      manualRecoveryRequired: true,
+    }),
+    "stop"
+  );
+  assert.equal(
+    resolveNativeAudioPrimaryControlAction({
+      status: "error",
+      manualRecoveryRequired: false,
+    }),
+    "start"
+  );
+  assert.equal(
+    resolveNativeAudioPrimaryControlAction({
+      status: "paused",
+      manualRecoveryRequired: false,
+    }),
+    "resume"
+  );
+  assert.equal(
+    resolveNativeAudioPrimaryControlAction({
+      status: "listening",
+      manualRecoveryRequired: false,
+    }),
+    "stop"
+  );
+});
+
+test("fatal terminal evidence creates an exact manual recovery token", () => {
+  assert.deepEqual(
+    createNativeAudioManualRecoveryState({
+      event: {
+        ...STOPPED_EVENT,
+        eventType: "error",
+        reason: "capture-panic",
+        message: "capture failed",
+        recoverability: "manual",
+      },
+      circuitBreakerOpen: false,
+      requiredAt: 2_000,
+    }),
+    {
+      requiredAt: 2_000,
+      reason: "capture-panic",
+      message: "capture failed",
+      interruptedCaptureSessionId: "capture-meeting",
+      interruptedCaptureGeneration: 4,
+      circuitBreakerOpen: false,
+    }
   );
 });
 

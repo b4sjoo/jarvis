@@ -32,6 +32,15 @@ impl NativeCaptureOwner {
             Self::System => "system",
         }
     }
+
+    #[cfg(debug_assertions)]
+    fn parse(value: &str) -> Option<Self> {
+        match value {
+            "meeting" => Some(Self::Meeting),
+            "system" => Some(Self::System),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -272,6 +281,110 @@ pub struct CaptureTerminationDiagnostics {
     pub dropped_samples: u64,
     pub consecutive_drops: u32,
     pub buffer_capacity: Option<usize>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub fault_injected: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fault_injection_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fault_kind: Option<String>,
+}
+
+#[cfg(debug_assertions)]
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum DebugAudioFaultKind {
+    RecoverableStreamEnd,
+    FatalCaptureFailure,
+}
+
+#[cfg(debug_assertions)]
+impl DebugAudioFaultKind {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::RecoverableStreamEnd => "recoverable-stream-end",
+            Self::FatalCaptureFailure => "fatal-capture-failure",
+        }
+    }
+
+    fn outcome(self, fault_injection_id: &str) -> CaptureRunOutcome {
+        let (reason, recoverability) = match self {
+            Self::RecoverableStreamEnd => (
+                CaptureTerminationReason::UnknownStreamEnd,
+                CaptureRecoverability::RetryOnce,
+            ),
+            Self::FatalCaptureFailure => (
+                CaptureTerminationReason::CapturePanic,
+                CaptureRecoverability::Manual,
+            ),
+        };
+        CaptureRunOutcome {
+            reason,
+            expected: false,
+            recoverability,
+            diagnostics: CaptureTerminationDiagnostics {
+                fault_injected: true,
+                fault_injection_id: Some(fault_injection_id.to_string()),
+                fault_kind: Some(self.as_str().to_string()),
+                ..CaptureTerminationDiagnostics::default()
+            },
+        }
+    }
+}
+
+#[cfg(debug_assertions)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DebugAudioFaultDisposition {
+    Injected,
+    AlreadyIdle,
+    StaleRequest,
+    OwnerMismatch,
+    NotActive,
+}
+
+#[cfg(debug_assertions)]
+impl DebugAudioFaultDisposition {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Injected => "injected",
+            Self::AlreadyIdle => "already-idle",
+            Self::StaleRequest => "stale-request",
+            Self::OwnerMismatch => "owner-mismatch",
+            Self::NotActive => "not-active",
+        }
+    }
+}
+
+#[cfg(debug_assertions)]
+fn decide_debug_audio_fault(
+    control: &NativeCaptureControl,
+    requested_owner: NativeCaptureOwner,
+    expected_session_id: &str,
+    expected_generation: u64,
+) -> DebugAudioFaultDisposition {
+    match control.lease.as_ref() {
+        None => DebugAudioFaultDisposition::AlreadyIdle,
+        Some(lease) if lease.owner != requested_owner => DebugAudioFaultDisposition::OwnerMismatch,
+        Some(lease)
+            if lease.session_id != expected_session_id
+                || lease.generation != expected_generation =>
+        {
+            DebugAudioFaultDisposition::StaleRequest
+        }
+        Some(_) if control.phase != NativeCapturePhase::Active => {
+            DebugAudioFaultDisposition::NotActive
+        }
+        Some(_) => DebugAudioFaultDisposition::Injected,
+    }
+}
+
+#[cfg(debug_assertions)]
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DebugAudioFaultResult {
+    disposition: &'static str,
+    fault_injection_id: String,
+    previous_status: MeetingAudioStatus,
+    current_status: MeetingAudioStatus,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -302,6 +415,7 @@ impl CaptureRunOutcome {
                 dropped_samples: termination.dropped_samples,
                 consecutive_drops: termination.consecutive_drops,
                 buffer_capacity: termination.buffer_capacity,
+                ..CaptureTerminationDiagnostics::default()
             },
         }
     }
@@ -1108,6 +1222,42 @@ fn release_starting_capture(
     }
 }
 
+struct ReleasedActiveCapture {
+    #[cfg_attr(not(debug_assertions), allow(dead_code))]
+    task: Option<tokio::task::JoinHandle<()>>,
+}
+
+fn release_active_capture_if_owner(
+    state: &crate::AudioState,
+    owner: NativeCaptureOwner,
+    session_id: &str,
+    generation: u64,
+) -> Result<Option<ReleasedActiveCapture>, String> {
+    let mut control = state
+        .capture_control
+        .lock()
+        .map_err(|error| format!("Failed to acquire capture control: {}", error))?;
+    if !control_owns(
+        &control,
+        NativeCapturePhase::Active,
+        owner,
+        session_id,
+        generation,
+    ) {
+        return Ok(None);
+    }
+
+    let task = state
+        .stream_task
+        .lock()
+        .map_err(|error| format!("Failed to acquire capture task: {}", error))?
+        .take();
+    control.phase = NativeCapturePhase::Idle;
+    control.lease = None;
+    clear_capture_metadata(state);
+    Ok(Some(ReleasedActiveCapture { task }))
+}
+
 fn finish_capture_if_owner(
     app: &AppHandle,
     owner: NativeCaptureOwner,
@@ -1117,27 +1267,10 @@ fn finish_capture_if_owner(
     outcome: CaptureRunOutcome,
 ) {
     let state = app.state::<crate::AudioState>();
-    let finished = if let Ok(mut control) = state.capture_control.lock() {
-        if control_owns(
-            &control,
-            NativeCapturePhase::Active,
-            owner,
-            session_id,
-            generation,
-        ) {
-            if let Ok(mut task) = state.stream_task.lock() {
-                *task = None;
-            }
-            control.phase = NativeCapturePhase::Idle;
-            control.lease = None;
-            clear_capture_metadata(&state);
-            true
-        } else {
-            false
-        }
-    } else {
-        false
-    };
+    let finished = matches!(
+        release_active_capture_if_owner(&state, owner, session_id, generation),
+        Ok(Some(_))
+    );
 
     if finished {
         let _ = app.emit("capture-stopped", ());
@@ -1295,6 +1428,93 @@ pub async fn stop_meeting_audio_session(
     Ok(NativeAudioStopResult {
         disposition: disposition.as_str(),
         status: get_meeting_audio_status(app).await?,
+    })
+}
+
+#[cfg(debug_assertions)]
+#[tauri::command]
+pub async fn debug_inject_native_audio_fault(
+    app: AppHandle,
+    expected_owner: String,
+    expected_capture_session_id: String,
+    expected_capture_generation: u64,
+    fault_kind: DebugAudioFaultKind,
+    fault_injection_id: String,
+) -> Result<DebugAudioFaultResult, String> {
+    let owner = NativeCaptureOwner::parse(expected_owner.trim())
+        .ok_or_else(|| "Invalid debug audio fault owner".to_string())?;
+    let expected_session_id = expected_capture_session_id.trim();
+    if expected_session_id.is_empty() {
+        return Err("Debug audio fault requires a capture session id".to_string());
+    }
+    let injection_id = fault_injection_id.trim();
+    if injection_id.is_empty() || injection_id.len() > 160 {
+        return Err("Debug audio fault requires a bounded injection id".to_string());
+    }
+
+    let previous_status = get_meeting_audio_status(app.clone()).await?;
+    let state = app.state::<crate::AudioState>();
+    let disposition = {
+        let control = state
+            .capture_control
+            .lock()
+            .map_err(|error| format!("Failed to acquire capture control: {}", error))?;
+        decide_debug_audio_fault(
+            &control,
+            owner,
+            expected_session_id,
+            expected_capture_generation,
+        )
+    };
+
+    if disposition == DebugAudioFaultDisposition::Injected {
+        let released = release_active_capture_if_owner(
+            &state,
+            owner,
+            expected_session_id,
+            expected_capture_generation,
+        )?;
+        if let Some(released) = released {
+            if let Some(task) = released.task {
+                task.abort();
+            }
+            let outcome = fault_kind.outcome(injection_id);
+            let _ = app.emit("capture-stopped", ());
+            emit_capture_lifecycle(
+                &app,
+                "error",
+                owner,
+                expected_session_id,
+                expected_capture_generation,
+                Some(outcome.reason.as_str()),
+                Some(match fault_kind {
+                    DebugAudioFaultKind::RecoverableStreamEnd => {
+                        "Debug fault injection: recoverable stream termination."
+                    }
+                    DebugAudioFaultKind::FatalCaptureFailure => {
+                        "Debug fault injection: fatal capture failure."
+                    }
+                }),
+                previous_status.sample_rate,
+                outcome.expected,
+                outcome.recoverability,
+                outcome.diagnostics,
+            );
+        } else {
+            return Ok(DebugAudioFaultResult {
+                disposition: DebugAudioFaultDisposition::StaleRequest.as_str(),
+                fault_injection_id: injection_id.to_string(),
+                previous_status,
+                current_status: get_meeting_audio_status(app).await?,
+            });
+        }
+    }
+
+    Ok(DebugAudioFaultResult {
+        disposition: disposition.as_str(),
+        fault_injection_id: injection_id.to_string(),
+        previous_status,
+        current_status: get_meeting_audio_status(app).await?,
     })
 }
 
@@ -1510,11 +1730,12 @@ fn now_ms() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::{
-        begin_capture_stop, claim_capture_lease, control_owns, CaptureRecoverability,
-        CaptureRunOutcome, CaptureTerminationDiagnostics, CaptureTerminationReason,
-        NativeAudioLifecycleEvent, NativeAudioSegmentDroppedEvent, NativeCaptureControl,
-        NativeCaptureOwner, NativeCapturePhase, NativeSpeechDetectedEvent, NativeStopDecision,
-        SpeakerStreamTermination, SpeakerStreamTerminationReason,
+        begin_capture_stop, claim_capture_lease, control_owns, decide_debug_audio_fault,
+        release_active_capture_if_owner, CaptureRecoverability, CaptureRunOutcome,
+        CaptureTerminationDiagnostics, CaptureTerminationReason, DebugAudioFaultDisposition,
+        DebugAudioFaultKind, NativeAudioLifecycleEvent, NativeAudioSegmentDroppedEvent,
+        NativeCaptureControl, NativeCaptureOwner, NativeCapturePhase, NativeSpeechDetectedEvent,
+        NativeStopDecision, SpeakerStreamTermination, SpeakerStreamTerminationReason,
     };
 
     #[test]
@@ -1558,6 +1779,7 @@ mod tests {
                 dropped_samples: 9_000,
                 consecutive_drops: 51,
                 buffer_capacity: Some(131_072),
+                ..CaptureTerminationDiagnostics::default()
             },
         };
 
@@ -1759,6 +1981,126 @@ mod tests {
         assert_eq!(
             outcome.diagnostics,
             CaptureTerminationDiagnostics::default()
+        );
+    }
+
+    #[test]
+    fn debug_fault_requires_the_exact_active_capture_lease() {
+        let mut control = NativeCaptureControl::default();
+        assert_eq!(
+            decide_debug_audio_fault(&control, NativeCaptureOwner::Meeting, "meeting-1", 1,),
+            DebugAudioFaultDisposition::AlreadyIdle
+        );
+
+        let lease = claim_capture_lease(
+            &mut control,
+            NativeCaptureOwner::Meeting,
+            "meeting-1".to_string(),
+        )
+        .expect("meeting capture should claim the controller");
+        assert_eq!(
+            decide_debug_audio_fault(
+                &control,
+                NativeCaptureOwner::Meeting,
+                &lease.session_id,
+                lease.generation,
+            ),
+            DebugAudioFaultDisposition::NotActive
+        );
+        control.phase = NativeCapturePhase::Active;
+        assert_eq!(
+            decide_debug_audio_fault(
+                &control,
+                NativeCaptureOwner::System,
+                &lease.session_id,
+                lease.generation,
+            ),
+            DebugAudioFaultDisposition::OwnerMismatch
+        );
+        assert_eq!(
+            decide_debug_audio_fault(
+                &control,
+                NativeCaptureOwner::Meeting,
+                "stale-session",
+                lease.generation,
+            ),
+            DebugAudioFaultDisposition::StaleRequest
+        );
+        assert_eq!(
+            decide_debug_audio_fault(
+                &control,
+                NativeCaptureOwner::Meeting,
+                &lease.session_id,
+                lease.generation,
+            ),
+            DebugAudioFaultDisposition::Injected
+        );
+    }
+
+    #[test]
+    fn debug_fault_releases_only_the_exact_active_capture() {
+        let state = crate::AudioState::default();
+        let lease = {
+            let mut control = state
+                .capture_control
+                .lock()
+                .expect("capture control should lock");
+            let lease = claim_capture_lease(
+                &mut control,
+                NativeCaptureOwner::Meeting,
+                "meeting-1".to_string(),
+            )
+            .expect("meeting capture should claim the controller");
+            control.phase = NativeCapturePhase::Active;
+            lease
+        };
+
+        assert!(release_active_capture_if_owner(
+            &state,
+            NativeCaptureOwner::Meeting,
+            "stale-session",
+            lease.generation,
+        )
+        .expect("stale release should not fail")
+        .is_none());
+        assert!(release_active_capture_if_owner(
+            &state,
+            NativeCaptureOwner::Meeting,
+            &lease.session_id,
+            lease.generation,
+        )
+        .expect("exact release should succeed")
+        .is_some());
+
+        let control = state
+            .capture_control
+            .lock()
+            .expect("capture control should lock");
+        assert_eq!(control.phase, NativeCapturePhase::Idle);
+        assert!(control.lease.is_none());
+    }
+
+    #[test]
+    fn debug_fault_outcomes_use_the_production_lifecycle_contract() {
+        let recoverable =
+            DebugAudioFaultKind::RecoverableStreamEnd.outcome("native_audio_fault_recoverable");
+        assert_eq!(
+            recoverable.reason,
+            CaptureTerminationReason::UnknownStreamEnd
+        );
+        assert_eq!(recoverable.recoverability, CaptureRecoverability::RetryOnce);
+        assert!(recoverable.diagnostics.fault_injected);
+        assert_eq!(
+            recoverable.diagnostics.fault_kind.as_deref(),
+            Some("recoverable-stream-end")
+        );
+
+        let fatal = DebugAudioFaultKind::FatalCaptureFailure.outcome("native_audio_fault_fatal");
+        assert_eq!(fatal.reason, CaptureTerminationReason::CapturePanic);
+        assert_eq!(fatal.recoverability, CaptureRecoverability::Manual);
+        assert_eq!(
+            fatal.diagnostics.fault_injection_id.as_deref(),
+            Some("native_audio_fault_fatal")
         );
     }
 }

@@ -142,6 +142,9 @@ export interface SessionCompactTraceSummary {
   endedAt?: number;
   durationMs?: number;
   error?: string;
+  syntheticValidation?: boolean;
+  faultInjectionId?: string;
+  faultKind?: string;
   taskIds: string[];
   primaryTaskId?: string;
   activeScreenTaskId?: string;
@@ -302,6 +305,7 @@ interface SessionMetricsSummary {
   sessionId: string;
   savedAt: number;
   traceCount: number;
+  syntheticValidationTraceCount: number;
   screen: SessionTraceKindAggregate;
   voice: SessionTraceKindAggregate;
   errors: number;
@@ -1611,6 +1615,13 @@ function buildCompactTraceSummary({
     endedAt: trace.endedAt,
     durationMs: trace.durationMs,
     error: trace.error,
+    syntheticValidation:
+      readFirstBoolean(metadataSources, "syntheticValidation") ?? false,
+    faultInjectionId: readFirstString(
+      metadataSources,
+      "faultInjectionId"
+    ),
+    faultKind: readFirstString(metadataSources, "faultKind"),
     taskIds,
     primaryTaskId: taskIds[0],
     activeMeetingTaskId: readFirstString(metadataSources, "activeMeetingTaskId"),
@@ -1895,19 +1906,27 @@ function buildSessionMetricsSummary(
   sessionId: string,
   summaries: SessionCompactTraceSummary[]
 ): SessionMetricsSummary {
+  const productionSummaries = summaries.filter(
+    (summary) => !summary.syntheticValidation
+  );
   return {
     version: SESSION_TRACE_SUMMARY_SCHEMA_VERSION,
     sessionId,
     savedAt: Date.now(),
-    traceCount: summaries.length,
+    traceCount: productionSummaries.length,
+    syntheticValidationTraceCount:
+      summaries.length - productionSummaries.length,
     screen: aggregateTraceKind(
-      summaries.filter((summary) => summary.traceKind === "screen")
+      productionSummaries.filter((summary) => summary.traceKind === "screen")
     ),
     voice: aggregateTraceKind(
-      summaries.filter((summary) => summary.traceKind === "voice")
+      productionSummaries.filter((summary) => summary.traceKind === "voice")
     ),
-    errors: summaries.filter((summary) => summary.status === "error").length,
-    cancelled: summaries.filter((summary) => summary.status === "cancelled").length,
+    errors: productionSummaries.filter((summary) => summary.status === "error")
+      .length,
+    cancelled: productionSummaries.filter(
+      (summary) => summary.status === "cancelled"
+    ).length,
   };
 }
 

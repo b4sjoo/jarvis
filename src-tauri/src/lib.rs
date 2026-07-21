@@ -433,6 +433,8 @@ pub fn run() {
             speaker::stop_system_audio_capture,
             speaker::start_meeting_audio_session,
             speaker::stop_meeting_audio_session,
+            #[cfg(debug_assertions)]
+            speaker::debug_inject_native_audio_fault,
             speaker::get_meeting_audio_status,
             speaker::manual_stop_continuous,
             speaker::check_system_audio_access,

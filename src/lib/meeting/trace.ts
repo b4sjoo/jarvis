@@ -303,6 +303,7 @@ export interface MeetingTraceKindSummary {
 export interface MeetingTraceSummary {
   windowSize: number;
   traceCount: number;
+  syntheticValidationTraceCount: number;
   screen: MeetingTraceKindSummary;
   voice: MeetingTraceKindSummary;
 }
@@ -543,11 +544,17 @@ export function summarizeMeetingTraces(
   traces: MeetingTrace[],
   windowSize = DEFAULT_SUMMARY_WINDOW_SIZE
 ): MeetingTraceSummary {
-  const recentTraces = traces.slice(0, windowSize);
+  const syntheticValidationTraceCount = traces.filter(
+    isSyntheticValidationTrace
+  ).length;
+  const recentTraces = traces
+    .filter((trace) => !isSyntheticValidationTrace(trace))
+    .slice(0, windowSize);
 
   return {
     windowSize,
     traceCount: recentTraces.length,
+    syntheticValidationTraceCount,
     screen: summarizeTraceKind(
       recentTraces.filter((trace) => trace.kind === "screen"),
       "screen"
@@ -557,6 +564,10 @@ export function summarizeMeetingTraces(
       "voice"
     ),
   };
+}
+
+export function isSyntheticValidationTrace(trace: MeetingTrace) {
+  return trace.metadata?.syntheticValidation === true;
 }
 
 function sanitizeTraceForExport(trace: MeetingTrace): MeetingTrace {

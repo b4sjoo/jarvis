@@ -1,3 +1,9 @@
+import type {
+  MeetingAssistantStatus,
+  NativeAudioDebugFaultKind,
+  NativeAudioManualRecoveryState,
+} from "./types.js";
+
 export type NativeAudioCaptureOwner = "meeting" | "system";
 export type NativeAudioLifecycleEventType = "started" | "stopped" | "error";
 export type NativeAudioRecoverability =
@@ -9,6 +15,9 @@ export interface NativeAudioTerminationDiagnostics {
   droppedSamples: number;
   consecutiveDrops: number;
   bufferCapacity: number | null;
+  faultInjected: boolean;
+  faultInjectionId: string | null;
+  faultKind: NativeAudioDebugFaultKind | null;
 }
 
 export interface NativeAudioLifecycleEvent {
@@ -55,6 +64,100 @@ export type NativeAudioTerminalDisposition =
   | "recovering"
   | "fatal";
 
+export type NativeAudioCaptureStartMode =
+  | "fresh-start"
+  | "resume"
+  | "automatic-recovery"
+  | "manual-recovery";
+
+export interface NativeAudioCaptureStartPolicy {
+  lifecycleAction: "start" | "resume";
+  resetContext: boolean;
+  resetRecoveryBudget: boolean;
+  pendingStatus: "starting" | "reconnecting";
+}
+
+export type NativeAudioPrimaryControlAction =
+  | "start"
+  | "stop"
+  | "resume"
+  | "manual-recovery";
+
+export function getNativeAudioCaptureStartPolicy(
+  mode: NativeAudioCaptureStartMode
+): NativeAudioCaptureStartPolicy {
+  switch (mode) {
+    case "fresh-start":
+      return {
+        lifecycleAction: "start",
+        resetContext: true,
+        resetRecoveryBudget: true,
+        pendingStatus: "starting",
+      };
+    case "automatic-recovery":
+      return {
+        lifecycleAction: "resume",
+        resetContext: false,
+        resetRecoveryBudget: false,
+        pendingStatus: "reconnecting",
+      };
+    case "manual-recovery":
+      return {
+        lifecycleAction: "resume",
+        resetContext: false,
+        resetRecoveryBudget: true,
+        pendingStatus: "reconnecting",
+      };
+    case "resume":
+      return {
+        lifecycleAction: "resume",
+        resetContext: false,
+        resetRecoveryBudget: false,
+        pendingStatus: "starting",
+      };
+  }
+}
+
+export function resolveNativeAudioPrimaryControlAction({
+  status,
+  manualRecoveryRequired,
+}: {
+  status: MeetingAssistantStatus;
+  manualRecoveryRequired: boolean;
+}): NativeAudioPrimaryControlAction {
+  if (status === "error" && manualRecoveryRequired) return "manual-recovery";
+  if (status === "paused") return "resume";
+  if (
+    status === "starting" ||
+    status === "reconnecting" ||
+    status === "listening" ||
+    status === "transcribing" ||
+    status === "thinking"
+  ) {
+    return "stop";
+  }
+  return "start";
+}
+
+export function createNativeAudioManualRecoveryState({
+  event,
+  circuitBreakerOpen,
+  requiredAt,
+}: {
+  event: NativeAudioLifecycleEvent;
+  circuitBreakerOpen: boolean;
+  requiredAt: number;
+}): NativeAudioManualRecoveryState {
+  return {
+    requiredAt,
+    reason: event.reason,
+    message: event.message,
+    interruptedCaptureSessionId: event.captureSessionId,
+    interruptedCaptureGeneration: event.captureGeneration,
+    circuitBreakerOpen,
+  };
+}
+
 export function decideNativeAudioTerminalDisposition(
   event: NativeAudioLifecycleEvent,
   automaticRecoveryAvailable: boolean
@@ -99,6 +202,15 @@ export function parseNativeAudioLifecycleEvent(
   const expected = payload.expected;
   const recoverability = payload.recoverability;
   const diagnostics = payload.diagnostics;
+  const faultInjected = isRecord(diagnostics)
+    ? diagnostics.faultInjected ?? false
+    : false;
+  const faultInjectionId = isRecord(diagnostics)
+    ? diagnostics.faultInjectionId ?? null
+    : null;
+  const faultKind = isRecord(diagnostics)
+    ? diagnostics.faultKind ?? null
+    : null;
 
   if (
     (eventType !== "started" &&
@@ -128,7 +240,15 @@ export function parseNativeAudioLifecycleEvent(
     (diagnostics.consecutiveDrops as number) < 0 ||
     (diagnostics.bufferCapacity !== null &&
       (!Number.isSafeInteger(diagnostics.bufferCapacity) ||
-        (diagnostics.bufferCapacity as number) < 1))
+        (diagnostics.bufferCapacity as number) < 1)) ||
+    typeof faultInjected !== "boolean" ||
+    (faultInjectionId !== null &&
+      (typeof faultInjectionId !== "string" || !faultInjectionId.trim())) ||
+    (faultKind !== null &&
+      faultKind !== "recoverable-stream-end" &&
+      faultKind !== "fatal-capture-failure") ||
+    (!faultInjected && (faultInjectionId !== null || faultKind !== null)) ||
+    (faultInjected && (faultInjectionId === null || faultKind === null))
   ) {
     return null;
   }
@@ -148,6 +268,9 @@ export function parseNativeAudioLifecycleEvent(
       droppedSamples: diagnostics.droppedSamples as number,
       consecutiveDrops: diagnostics.consecutiveDrops as number,
       bufferCapacity: diagnostics.bufferCapacity as number | null,
+      faultInjected,
+      faultInjectionId: faultInjectionId as string | null,
+      faultKind: faultKind as NativeAudioDebugFaultKind | null,
     },
   };
 }
@@ -253,6 +376,10 @@ export function buildNativeAudioLifecycleTraceMetadata(
     nativeAudioDroppedSamples: event.diagnostics.droppedSamples,
     nativeAudioConsecutiveDrops: event.diagnostics.consecutiveDrops,
     nativeAudioBufferCapacity: event.diagnostics.bufferCapacity,
+    nativeAudioFaultInjected: event.diagnostics.faultInjected,
+    nativeAudioFaultInjectionId: event.diagnostics.faultInjectionId,
+    nativeAudioFaultKind: event.diagnostics.faultKind,
+    productionReliabilityEligible: !event.diagnostics.faultInjected,
   };
 }
 

@@ -5,6 +5,7 @@ import {
   PERSISTED_TRACE_METRICS_BYTE_BUDGET,
   parseMeetingTraceMetrics,
   serializeMeetingTraceMetrics,
+  summarizeMeetingTraces,
   type PersistedMeetingTraceMetrics,
 } from "../src/lib/meeting/trace.js";
 import type { MeetingTrace } from "../src/lib/meeting/types.js";
@@ -126,6 +127,24 @@ test("keeps current-process traces within deterministic newest-first bounds", ()
   );
   assert.equal(traces[0]?.id, "trace_504");
   assert.ok(!traces.some((trace) => trace.id === "trace_0"));
+});
+
+test("excludes synthetic validation traces from production reliability summaries", () => {
+  const production = buildTrace(1, "production");
+  const synthetic = {
+    ...buildTrace(2, "fault-injection"),
+    metadata: {
+      syntheticValidation: true,
+      faultInjectionId: "native_audio_fault_1",
+    },
+  };
+
+  const summary = summarizeMeetingTraces([synthetic, production]);
+
+  assert.equal(summary.traceCount, 1);
+  assert.equal(summary.syntheticValidationTraceCount, 1);
+  assert.equal(summary.voice.total, 1);
+  assert.equal(summary.screen.total, 0);
 });
 
 function buildTrace(index: number, note: string): MeetingTrace {
