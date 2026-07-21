@@ -3,9 +3,13 @@ import test from "node:test";
 import {
   areSuggestionsForSameParentTask,
   buildSuggestionTaskMetadata,
-  clearSuggestionProjectionForManualCorrection,
+  stageSuggestionProjectionForManualCorrection,
 } from "../src/lib/meeting/suggestion-task.js";
-import type { ActiveMeetingTask, AdvisorSuggestion } from "../src/lib/meeting";
+import type {
+  AdvisorSuggestion,
+  MeetingAssistantState,
+} from "../src/lib/meeting/types.js";
+import type { ActiveMeetingTask } from "../src/lib/meeting/active-meeting-task.js";
 
 test("builds suggestion metadata from an active meeting task", () => {
   const task = makeActiveMeetingTask();
@@ -48,12 +52,49 @@ test("matches suggestions only within the same parent task when scoped", () => {
   assert.equal(areSuggestionsForSameParentTask(makeSuggestion({}), unscoped), true);
 });
 
-test("manual correction clears every answer projection before regeneration", () => {
-  assert.deepEqual(clearSuggestionProjectionForManualCorrection(), {
-    partialSuggestion: "",
-    latestSuggestion: null,
+test("stages the visible answer as previous reliable content during correction", () => {
+  const latestSuggestion: AdvisorSuggestion = {
+    id: "suggestion_1",
+    sourceTraceId: "trace_1",
+    kind: "answer",
+    content: "The last reliable answer",
+    createdAt: 1,
+    basedOnTurnIds: [],
+    basedOnObservationIds: [],
+    confidence: "medium",
+  };
+  const staged = stageSuggestionProjectionForManualCorrection({
+    latestSuggestion,
     latestReliableSuggestion: null,
-  });
+  } as MeetingAssistantState);
+
+  assert.equal(staged.latestSuggestion, null);
+  assert.equal(staged.latestReliableSuggestion, latestSuggestion);
+  assert.equal(staged.partialSuggestion, "");
+});
+
+test("does not promote a clarifying question to reliable answer history", () => {
+  const previousReliable: AdvisorSuggestion = {
+    id: "suggestion_0",
+    sourceTraceId: "trace_0",
+    kind: "answer",
+    content: "Previous answer",
+    createdAt: 1,
+    basedOnTurnIds: [],
+    basedOnObservationIds: [],
+    confidence: "medium",
+  };
+  const staged = stageSuggestionProjectionForManualCorrection({
+    latestSuggestion: {
+      ...previousReliable,
+      id: "clarifying_1",
+      kind: "clarifying-question",
+      content: "Which option?",
+    },
+    latestReliableSuggestion: previousReliable,
+  } as MeetingAssistantState);
+
+  assert.equal(staged.latestReliableSuggestion, previousReliable);
 });
 
 function makeActiveMeetingTask(): ActiveMeetingTask {

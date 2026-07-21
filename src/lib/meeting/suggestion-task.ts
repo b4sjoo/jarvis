@@ -50,13 +50,30 @@ export function getSuggestionParentTaskId(suggestion: AdvisorSuggestion) {
   return suggestion.parentTaskId ?? suggestion.taskId;
 }
 
-export function clearSuggestionProjectionForManualCorrection(): Pick<
+export function stageSuggestionProjectionForManualCorrection(
+  previous: MeetingAssistantState
+): Pick<
   MeetingAssistantState,
   "partialSuggestion" | "latestSuggestion" | "latestReliableSuggestion"
 > {
+  const latestReliableSuggestion =
+    previous.latestSuggestion && isReliableSuggestion(previous.latestSuggestion)
+      ? previous.latestSuggestion
+      : previous.latestReliableSuggestion;
+
   return {
     partialSuggestion: "",
     latestSuggestion: null,
-    latestReliableSuggestion: null,
+    latestReliableSuggestion,
   };
+}
+
+function isReliableSuggestion(suggestion: AdvisorSuggestion) {
+  const content = suggestion.content.trim();
+  return Boolean(
+    content &&
+      content !== "-" &&
+      suggestion.kind !== "silent" &&
+      suggestion.kind !== "clarifying-question"
+  );
 }

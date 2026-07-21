@@ -6,7 +6,6 @@ import { STORAGE_KEYS } from "@/config";
 import { useApp } from "@/contexts";
 import { safeLocalStorage } from "@/lib";
 import { floatArrayToWav } from "@/lib/utils";
-import type { TYPE_PROVIDER } from "@/types";
 import {
   buildRuntimeMemoryRoleTelemetry,
   extractRuntimeFactAnchorLabels,
@@ -69,6 +68,7 @@ import {
   MeetingTraceExportRecord,
   MeetingTraceExportTrigger,
   MeetingModelRequestOptions,
+  MeetingModelProviderSnapshot,
   PENDING_CONFIRMATION_TTL_MS,
   OpeningRouteContext,
   ParentQuestionType,
@@ -80,7 +80,6 @@ import {
   ScreenPreflightResult,
   ScreenQuestionType,
   ScreenTaskKind,
-  SelectedProviderState,
   SpeechCorrection,
   SpeechCorrectionRule,
   TaskAskFrame,
@@ -203,7 +202,10 @@ import {
   getActiveMeetingTaskTraceMetadata,
   areSuggestionsForSameParentTask,
   buildSuggestionTaskMetadata,
-  clearSuggestionProjectionForManualCorrection,
+  stageSuggestionProjectionForManualCorrection,
+  formatMeetingModelRouteForTrace,
+  resolveMeetingModelRouteFromSnapshot,
+  resolveManualCorrectionRegenerationRoute,
   applyAdvisorScreenScopeToPromptContext,
   decideAdvisorScreenScope,
   decideScreenResultScope,
@@ -1066,28 +1068,8 @@ interface SentenceCompletionMergeContext {
   fragmentSequences: number[];
 }
 
-interface MeetingModelRouteResolution {
-  provider: TYPE_PROVIDER | undefined;
-  selectedProvider: SelectedProviderState;
-  route: "main" | "coding-override";
-  reason: string;
-  fallbackReason?: string;
-  mainProviderId?: string;
-  codingProviderId?: string;
-}
-
-function formatMeetingModelRouteForTrace(route: MeetingModelRouteResolution) {
-  return {
-    modelRoute: route.route,
-    modelRouteReason: route.reason,
-    modelRouteFallbackReason: route.fallbackReason,
-    mainProviderId: route.mainProviderId,
-    codingProviderId: route.codingProviderId,
-  };
-}
-
 function getMeetingModelRequestOptions(
-  route: MeetingModelRouteResolution
+  route: ReturnType<typeof resolveMeetingModelRouteFromSnapshot>
 ): MeetingModelRequestOptions | undefined {
   if (route.route !== "coding-override") return undefined;
 
@@ -1788,6 +1770,17 @@ export function useMeetingAssistant() {
     [allAiProviders, state.settings.codingModel.provider]
   );
 
+  const meetingModelProviderSnapshotRef = useRef<MeetingModelProviderSnapshot>({
+    providers: allAiProviders,
+    selectedProvider: selectedAIProvider,
+    codingProvider: state.settings.codingModel,
+  });
+  meetingModelProviderSnapshotRef.current = {
+    providers: allAiProviders,
+    selectedProvider: selectedAIProvider,
+    codingProvider: state.settings.codingModel,
+  };
+
   const resolveMeetingModelRoute = useCallback(
     ({
       useCodingModel,
@@ -1797,55 +1790,15 @@ export function useMeetingAssistant() {
       useCodingModel: boolean;
       requiresVision?: boolean;
       reason: string;
-    }): MeetingModelRouteResolution => {
-      const mainRoute: MeetingModelRouteResolution = {
-        provider: aiProvider,
-        selectedProvider: selectedAIProvider,
-        route: "main",
+    }) => {
+      return resolveMeetingModelRouteFromSnapshot({
+        snapshot: meetingModelProviderSnapshotRef.current,
+        useCodingModel,
+        requiresVision,
         reason,
-        mainProviderId: aiProvider?.id,
-        codingProviderId: state.settings.codingModel.provider || undefined,
-      };
-
-      if (!useCodingModel) return mainRoute;
-
-      if (!state.settings.codingModel.provider) {
-        return {
-          ...mainRoute,
-          fallbackReason: "coding-provider-not-configured",
-        };
-      }
-
-      if (!codingAiProvider) {
-        return {
-          ...mainRoute,
-          fallbackReason: "coding-provider-not-found",
-        };
-      }
-
-      if (requiresVision && !codingAiProvider.curl.includes("{{IMAGE}}")) {
-        return {
-          ...mainRoute,
-          fallbackReason: "coding-provider-no-vision",
-          codingProviderId: codingAiProvider.id,
-        };
-      }
-
-      return {
-        provider: codingAiProvider,
-        selectedProvider: state.settings.codingModel,
-        route: "coding-override",
-        reason,
-        mainProviderId: aiProvider?.id,
-        codingProviderId: codingAiProvider.id,
-      };
+      });
     },
-    [
-      aiProvider,
-      codingAiProvider,
-      selectedAIProvider,
-      state.settings.codingModel,
-    ]
+    []
   );
 
   const setupWarnings = useMemo<MeetingSetupWarning[]>(() => {
@@ -3430,7 +3383,28 @@ export function useMeetingAssistant() {
       return;
     }
 
-    if (!aiProvider) {
+    const advisorUsesCodingModel =
+      getAdvisorActiveQuestionType(promptContext) === "coding" ||
+      getAdvisorActiveChildQuestionType(promptContext) === "coding" ||
+      advisorTaskSignals.questionType === "coding";
+    const advisorModelRoute = resolveMeetingModelRoute({
+      useCodingModel: advisorUsesCodingModel,
+      reason: advisorUsesCodingModel
+        ? "active-coding-task"
+        : "advisor-main",
+    });
+    const advisorModelRouteMetadata =
+      formatMeetingModelRouteForTrace(advisorModelRoute);
+    const advisorModelRequestOptions =
+      getMeetingModelRequestOptions(advisorModelRoute);
+    if (traceId) {
+      traceStoreRef.current.updateMetadata(traceId, {
+        ...advisorModelRouteMetadata,
+        modelRequestOptions: advisorModelRequestOptions,
+      });
+    }
+
+    if (!advisorModelRoute.provider) {
       releaseAdvisorJob(advisorJob, "error", {
         commitAuthorized: false,
         commitAuthorizationReason: "missing-ai-provider",
@@ -3799,27 +3773,6 @@ export function useMeetingAssistant() {
       projectBindingDecision,
       openingRoute: advisorTaskSignals.openingRoute,
     };
-
-    const advisorUsesCodingModel =
-      getAdvisorActiveQuestionType(promptContext) === "coding" ||
-      getAdvisorActiveChildQuestionType(promptContext) === "coding" ||
-      advisorRuntimePlaybook?.id === "coding_algorithm";
-    const advisorModelRoute = resolveMeetingModelRoute({
-      useCodingModel: advisorUsesCodingModel,
-      reason: advisorUsesCodingModel
-        ? "active-coding-task"
-        : "advisor-main",
-    });
-    const advisorModelRouteMetadata =
-      formatMeetingModelRouteForTrace(advisorModelRoute);
-    const advisorModelRequestOptions =
-      getMeetingModelRequestOptions(advisorModelRoute);
-    if (traceId) {
-      traceStoreRef.current.updateMetadata(traceId, {
-        ...advisorModelRouteMetadata,
-        modelRequestOptions: advisorModelRequestOptions,
-      });
-    }
 
     let finalContent = "";
 
@@ -7614,6 +7567,12 @@ export function useMeetingAssistant() {
       cancelActiveAdvisorJob("manual-question-type-correction");
 
       const requestedAt = Date.now();
+      const correctionModelRoute = resolveManualCorrectionRegenerationRoute({
+        snapshot: meetingModelProviderSnapshotRef.current,
+        correctedType,
+      });
+      const correctionModelRouteMetadata =
+        formatMeetingModelRouteForTrace(correctionModelRoute);
       const correctionTrace = traceStoreRef.current.startTrace(
         activeTask?.screen || state.latestSuggestion?.taskSource === "screen"
           ? "screen"
@@ -7626,6 +7585,8 @@ export function useMeetingAssistant() {
           detectedQuestionType: decision.detectedType,
           correctedQuestionType: decision.correctedType,
           correctionDecisionReason: decision.reason,
+          correctionProviderAvailable: Boolean(correctionModelRoute.provider),
+          ...correctionModelRouteMetadata,
           supersedesCorrectionId: operationClaim.supersedesOperationId,
           ...formatQuestionLineageForTrace(
             provisionalLineage ?? state.currentQuestionLineage
@@ -7861,7 +7822,8 @@ export function useMeetingAssistant() {
           ...getActiveMeetingTaskTraceMetadata(correctedActiveTask),
           correctionStatus: correction.status,
           correctionVisibleAnswerCleared: true,
-          correctionReliableAnswerCleared: true,
+          correctionReliableAnswerCleared: false,
+          correctionPreviousReliableAnswerPreserved: true,
           manualCorrectionTargetSource: correctionTargetSource,
           provisionalQuestionPromoted: Boolean(provisionalLineage),
         });
@@ -7895,6 +7857,9 @@ export function useMeetingAssistant() {
             manualQuestionTypeCorrectionTarget: decision.target,
             manualCorrectionTargetSource: correctionTargetSource,
             correctionRegenerationTriggered: true,
+            correctionProviderAvailable: Boolean(correctionModelRoute.provider),
+            correctionProviderSnapshotAt: requestedAt,
+            ...correctionModelRouteMetadata,
             ...getActiveMeetingTaskTraceMetadata(correctedActiveTask),
           }
         );
@@ -7969,7 +7934,7 @@ export function useMeetingAssistant() {
         );
         setState((previous) => ({
           ...previous,
-          ...clearSuggestionProjectionForManualCorrection(),
+          ...stageSuggestionProjectionForManualCorrection(previous),
           activeScreenTask: correctedContextState.activeScreenTask,
           activeInterviewTask: correctedContextState.activeInterviewTask,
           activeMeetingTask: correctedActiveTask,
@@ -8102,6 +8067,7 @@ export function useMeetingAssistant() {
       cancelActiveAdvisorJob,
       flushPendingSentenceCompletion,
       readRuntimeCommitSnapshot,
+      resolveMeetingModelRoute,
       runAdvisor,
       state.currentQuestionLineage,
       state.latestSuggestion,

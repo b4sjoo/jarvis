@@ -21,6 +21,7 @@ export * from "./manual-question-type-correction";
 export * from "./interview-task-continuity";
 export * from "./meeting-answer";
 export * from "./meeting-answer-display";
+export * from "./meeting-model-route";
 export * from "./native-speech-event";
 export * from "./native-audio-lifecycle";
 export * from "./memory-evaluation";
