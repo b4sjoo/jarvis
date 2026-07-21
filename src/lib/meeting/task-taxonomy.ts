@@ -47,6 +47,21 @@ export interface QuestionTypeInferenceDecision {
   evidence: string[];
   ambiguousTerms: string[];
   scores: Partial<Record<CanonicalQuestionType, number>>;
+  briefPriorType?: CanonicalQuestionType;
+  briefCompatibilityDecision:
+    | "not-applicable"
+    | "applied-coding-prior"
+    | "coding-evidence-already-strong"
+    | "no-compatible-coding-evidence"
+    | "blocked-by-behavioral-frame"
+    | "blocked-by-project-frame"
+    | "blocked-by-system-design-frame";
+}
+
+export interface QuestionTypeInferenceOptions {
+  interviewSessionBrief?: {
+    interviewTypes: TaxonomyInterviewBriefType[];
+  };
 }
 
 export type TaskTaxonomyAuthoritySource =
@@ -493,12 +508,18 @@ export function normalizeMemoryInterviewTypes(
 }
 
 export function inferQuestionTypeDecisionFromText(
-  text: string
+  text: string,
+  options: QuestionTypeInferenceOptions = {}
 ): QuestionTypeInferenceDecision {
   const normalized = text.toLowerCase();
   const scores: Partial<Record<CanonicalQuestionType, number>> = {};
   const evidence: string[] = [];
   const ambiguousTerms = collectQuestionTypeTerms(normalized);
+  const briefPriorType = readSingleConcreteInterviewTypeOverride(
+    options.interviewSessionBrief
+  );
+  let briefCompatibilityDecision: QuestionTypeInferenceDecision["briefCompatibilityDecision"] =
+    briefPriorType === "coding" ? "no-compatible-coding-evidence" : "not-applicable";
 
   if (!normalized.trim()) {
     return {
@@ -508,6 +529,8 @@ export function inferQuestionTypeDecisionFromText(
       evidence,
       ambiguousTerms,
       scores,
+      briefPriorType,
+      briefCompatibilityDecision,
     };
   }
 
@@ -581,18 +604,51 @@ export function inferQuestionTypeDecisionFromText(
     /\b(solve|code)\s+(this|the|a)\s+(problem|question|algorithm)\b/.test(
       normalized
     );
+  const hasAlgorithmDesignRequest =
+    /\b(design|devise|develop|create|come up with|propose)\s+(a |an |the )?(efficient |optimal )?(algorithm|data structure|solution)\b/.test(
+      normalized
+    );
+  const hasExplicitCodeOutputRequest =
+    /\b(write|show|provide|give me|produce)\s+(the |a |an )?(full |complete |working )?(code|implementation)\b/.test(
+      normalized
+    ) ||
+    /\b(just|only)\s+(write|show|provide)\s+(the )?code\b/.test(normalized);
   const hasCodingArtifact =
-    /\b(leetcode|hackerrank|coding problem|class solution|test cases?|input array|output array|return the|function signature)\b/.test(
+    /\b(leetcode|hackerrank|coding problem|class solution|test cases?|input array|output array|return the|function signature|method signature|starter code)\b/.test(
       normalized
     ) || /\b(def|function|public static|class)\s+[a-z_$][\w$]*\s*\(/.test(normalized);
   const hasComplexityRequest =
     /\b(time|space) complexity\b|\bbig[ -]?o\b/.test(normalized);
+  const hasProgrammingLanguageConstraint =
+    /\b(use|using|in|with)\s+(python|java|javascript|typescript|go|golang|rust|c\+\+|c#|swift|kotlin)\b/.test(
+      normalized
+    );
+  const hasDataStructureOrAlgorithmObject =
+    /\b(array|linked list|stack|queue|heap|tree|graph|hash map|hash table|binary search|sorting|sort|traversal|dynamic programming|sliding window|two pointers?|recursion|backtracking)\b/.test(
+      normalized
+    );
+  const hasFunctionImplementationFrame =
+    /\b(function|method|class|api)\b.{0,50}\b(implement|implementation|return|input|output|signature|code)\b/.test(
+      normalized
+    ) ||
+    /\b(implement|write|complete)\b.{0,50}\b(function|method|class)\b/.test(
+      normalized
+    );
 
   if (hasCodingActionObject) {
     addEvidence("coding", 0.96, "coding-action-object");
   }
+  if (hasAlgorithmDesignRequest) {
+    addEvidence("coding", 0.97, "algorithm-design-request");
+  }
+  if (hasExplicitCodeOutputRequest) {
+    addEvidence("coding", 0.98, "explicit-code-output-request");
+  }
   if (hasCodingArtifact) {
     addEvidence("coding", 0.94, "coding-artifact");
+  }
+  if (hasFunctionImplementationFrame) {
+    addEvidence("coding", 0.95, "function-implementation-frame");
   }
   if (hasComplexityRequest) {
     addEvidence("coding", 0.9, "complexity-request");
@@ -629,6 +685,38 @@ export function inferQuestionTypeDecisionFromText(
     addEvidence("ai-ml-system-design", 0.96, "hypothetical-ai-ml-design");
   } else if (hasStrongSystemDesignFrame) {
     addEvidence("general-system-design", 0.93, "hypothetical-system-design");
+  }
+
+  const hasCompatibleCodingEvidence = Boolean(
+    hasAlgorithmDesignRequest ||
+      hasExplicitCodeOutputRequest ||
+      hasCodingActionObject ||
+      hasCodingArtifact ||
+      hasComplexityRequest ||
+      hasFunctionImplementationFrame ||
+      hasProgrammingLanguageConstraint ||
+      hasDataStructureOrAlgorithmObject ||
+      /\b(algorithm|code|implementation)\b/.test(normalized)
+  );
+  if (briefPriorType === "coding") {
+    if (hasBehavioralFrame) {
+      briefCompatibilityDecision = "blocked-by-behavioral-frame";
+    } else if (
+      hasStrongPastProjectFrame ||
+      hasExplicitProjectStackFrame ||
+      hasProductionProjectContext
+    ) {
+      briefCompatibilityDecision = "blocked-by-project-frame";
+    } else if (hasStrongSystemDesignFrame) {
+      briefCompatibilityDecision = "blocked-by-system-design-frame";
+    } else if (!hasCompatibleCodingEvidence) {
+      briefCompatibilityDecision = "no-compatible-coding-evidence";
+    } else if ((scores.coding ?? 0) >= QUESTION_TYPE_INFERENCE_MIN_CONFIDENCE) {
+      briefCompatibilityDecision = "coding-evidence-already-strong";
+    } else {
+      addEvidence("coding", 0.84, "coding-brief-compatible-prior");
+      briefCompatibilityDecision = "applied-coding-prior";
+    }
   }
 
   const hasConceptQuestion =
@@ -680,6 +768,8 @@ export function inferQuestionTypeDecisionFromText(
     evidence,
     ambiguousTerms,
     scores,
+    briefPriorType,
+    briefCompatibilityDecision,
   };
 }
 

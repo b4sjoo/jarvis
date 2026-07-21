@@ -375,6 +375,72 @@ test("preserves explicit coding signals despite project vocabulary", () => {
   );
 });
 
+test("recognizes algorithm design and explicit code output requests", () => {
+  for (const question of [
+    "Design an algorithm to find every text file under a directory",
+    "Come up with an optimal algorithm for sliding window maximum",
+    "Please write the complete code for this solution",
+    "Implement a method that returns all matching paths",
+  ]) {
+    const decision = inferQuestionTypeDecisionFromText(question);
+    assert.equal(decision.type, "coding", question);
+    assert.ok(decision.confidence >= 0.9, question);
+  }
+});
+
+test("uses a single Coding brief only as a compatible prior", () => {
+  const compatible = inferQuestionTypeDecisionFromText(
+    "Would the code be different if I need every matching file?",
+    { interviewSessionBrief: { interviewTypes: ["coding"] } }
+  );
+  assert.equal(compatible.type, "coding");
+  assert.equal(compatible.briefPriorType, "coding");
+  assert.equal(compatible.briefCompatibilityDecision, "applied-coding-prior");
+  assert.ok(compatible.evidence.includes("coding-brief-compatible-prior"));
+
+  const withoutEvidence = inferQuestionTypeDecisionFromText(
+    "Tell me more about that",
+    { interviewSessionBrief: { interviewTypes: ["coding"] } }
+  );
+  assert.equal(withoutEvidence.type, undefined);
+  assert.equal(
+    withoutEvidence.briefCompatibilityDecision,
+    "no-compatible-coding-evidence"
+  );
+});
+
+test("does not let a Coding brief override stronger interview frames", () => {
+  const cases = [
+    [
+      "Tell me about a time you implemented a difficult feature",
+      "behavioral",
+      "blocked-by-behavioral-frame",
+    ],
+    [
+      "How did you implement this feature in your previous project?",
+      "project-deep-dive",
+      "blocked-by-project-frame",
+    ],
+    [
+      "Implement a scalable ticketing service with high availability",
+      "general-system-design",
+      "blocked-by-system-design-frame",
+    ],
+  ] as const;
+
+  for (const [question, expectedType, expectedBriefDecision] of cases) {
+    const decision = inferQuestionTypeDecisionFromText(question, {
+      interviewSessionBrief: { interviewTypes: ["coding"] },
+    });
+    assert.equal(decision.type, expectedType, question);
+    assert.equal(
+      decision.briefCompatibilityDecision,
+      expectedBriefDecision,
+      question
+    );
+  }
+});
+
 test("blocks broad-history taxonomy fallback when the latest turn is unknown", () => {
   assert.equal(
     inferCanonicalQuestionTypeFromText(

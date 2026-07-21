@@ -9132,7 +9132,9 @@ function resolveAdvisorTaskSignals(
     ? detectOpeningTaskRoute(latestUsefulText)
     : undefined;
   const latestQuestionTypeDecision = latestUsefulText
-    ? inferQuestionTypeDecisionFromText(latestUsefulText)
+    ? inferQuestionTypeDecisionFromText(latestUsefulText, {
+        interviewSessionBrief: context.interviewSessionBrief,
+      })
     : undefined;
   const latestQuestionType = openingRoute?.questionType ??
     latestQuestionTypeDecision?.type ??
@@ -9335,6 +9337,10 @@ function formatAdvisorQuestionTypeDecisionForTrace(
       ambiguousCodingTerms:
         signals.questionTypeDecision?.ambiguousTerms ?? [],
       questionTypeScores: signals.questionTypeDecision?.scores ?? {},
+      briefPriorType: signals.questionTypeDecision?.briefPriorType,
+      briefCompatibilityDecision:
+        signals.questionTypeDecision?.briefCompatibilityDecision ??
+        "not-applicable",
       questionTypeDecisionSource: signals.openingRoute.source,
       pastProjectSignals:
         signals.questionType === "project-deep-dive"
@@ -9353,6 +9359,8 @@ function formatAdvisorQuestionTypeDecisionForTrace(
       questionTypeEvidence: [],
       ambiguousCodingTerms: [],
       questionTypeScores: {},
+      briefPriorType: undefined,
+      briefCompatibilityDecision: "not-applicable",
       questionTypeDecisionSource: signals.source,
       pastProjectSignals: [],
     };
@@ -9366,6 +9374,8 @@ function formatAdvisorQuestionTypeDecisionForTrace(
     questionTypeEvidence: decision.evidence,
     ambiguousCodingTerms: decision.ambiguousTerms,
     questionTypeScores: decision.scores,
+    briefPriorType: decision.briefPriorType,
+    briefCompatibilityDecision: decision.briefCompatibilityDecision,
     questionTypeDecisionSource: decision.source,
     pastProjectSignals: decision.evidence.filter((item) =>
       item.includes("project")
