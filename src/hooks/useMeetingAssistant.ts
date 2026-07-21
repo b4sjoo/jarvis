@@ -214,6 +214,7 @@ import {
   createAuthorizedQuestionLineage,
   formatQuestionLineageForTrace,
   promoteQuestionLineage,
+  resolveInheritedQuestionLineageForTurnIntent,
 } from "@/lib/meeting";
 
 const ADVISOR_DEBOUNCE_MS = 750;
@@ -1119,6 +1120,10 @@ export function useMeetingAssistant() {
     humanEvaluations: readTraceHumanEvaluations(),
     questionEvaluations: readQuestionHumanEvaluations(),
   }));
+  const currentQuestionLineageRef = useRef<QuestionInstanceLineage | undefined>(
+    state.currentQuestionLineage
+  );
+  currentQuestionLineageRef.current = state.currentQuestionLineage;
   const sessionRecordingManagerRef = useRef<SessionRecordingManager | null>(
     null
   );
@@ -3283,6 +3288,9 @@ export function useMeetingAssistant() {
       (latestTurn?.speaker === "them"
         ? evaluateThemTurnForAdvisor(latestTurn, {
             hasActiveTask: hasAdvisorActiveTask(promptContext),
+            hasRecentQuestionContext: Boolean(
+              advisorJob.questionLineage ?? currentQuestionLineageRef.current
+            ),
           })
         : undefined);
     const hasExplicitAction = Boolean(
@@ -4245,6 +4253,10 @@ export function useMeetingAssistant() {
       triggerTurnId,
       advisorJobSource: "live-turn",
       taskMutationAuthority: "input-evidence",
+      questionLineage: resolveInheritedQuestionLineageForTurnIntent(
+        turnIntentDecision,
+        currentQuestionLineageRef.current
+      ),
     });
     activateAdvisorJob(advisorJob);
     advisorDebounceTimerRef.current = window.setTimeout(() => {
@@ -4364,6 +4376,7 @@ export function useMeetingAssistant() {
         hasActiveTask: Boolean(
           contextManagerRef.current.getState().activeMeetingTask
         ),
+        hasRecentQuestionContext: Boolean(currentQuestionLineageRef.current),
         enforceBufferedIncomplete: true,
       });
       pending.turn.contextPromptEligible = intentDecision.contextPromptEligible;
@@ -4647,6 +4660,7 @@ export function useMeetingAssistant() {
       );
       const turnIntentDecision = decideAdvisorTurnIntent(pending.turn.text, {
         hasActiveTask: Boolean(contextState.activeMeetingTask),
+        hasRecentQuestionContext: Boolean(currentQuestionLineageRef.current),
         hasPendingConfirmation: true,
       });
       traceStoreRef.current.updateMetadata(pending.segment.traceId, {
@@ -5220,6 +5234,9 @@ export function useMeetingAssistant() {
         if (clarificationMatch) {
           const turnIntentDecision = decideAdvisorTurnIntent(turn.text, {
             hasActiveTask: hasActiveInterviewTask,
+            hasRecentQuestionContext: Boolean(
+              currentQuestionLineageRef.current
+            ),
             hasPendingConfirmation: true,
           });
           promoteMeTurnForFusion(clarificationMatch.meTurn, turn.id);
@@ -5311,6 +5328,9 @@ export function useMeetingAssistant() {
 
         const turnGate = evaluateThemTurnForAdvisor(turn, {
           hasActiveTask: hasActiveInterviewTask,
+          hasRecentQuestionContext: Boolean(
+            currentQuestionLineageRef.current
+          ),
         });
         traceStoreRef.current.updateMetadata(traceId, {
           ...formatAdvisorTurnIntentForTrace(turnGate),
@@ -10620,12 +10640,16 @@ function shouldUpdateActiveScreenTaskFromAdvisorOutput(content: string) {
 
 function evaluateThemTurnForAdvisor(
   turn: TranscriptTurn,
-  options: { hasActiveTask: boolean }
+  options: {
+    hasActiveTask: boolean;
+    hasRecentQuestionContext?: boolean;
+  }
 ) {
   const trimmed = turn.text.trim();
   const hasQuestion = hasQuestionOrTaskSignal(trimmed);
   return decideAdvisorTurnIntent(trimmed, {
     hasActiveTask: options.hasActiveTask,
+    hasRecentQuestionContext: options.hasRecentQuestionContext,
     hasCompanyContextOnly: Boolean(
       detectInterviewCompany(trimmed) &&
         !hasQuestion &&

@@ -30,10 +30,12 @@ export interface AdvisorTurnIntentDecision {
   enforcement: AdvisorTurnIntentEnforcement;
   wouldSuppress: boolean;
   executionAuthorized: boolean;
+  followupScopeSource?: "active-task" | "provisional-question" | "none";
 }
 
 export interface AdvisorTurnIntentOptions {
   hasActiveTask: boolean;
+  hasRecentQuestionContext?: boolean;
   hasPendingConfirmation?: boolean;
   hasCompanyContextOnly?: boolean;
   enforceBufferedIncomplete?: boolean;
@@ -68,6 +70,12 @@ export function decideAdvisorTurnIntent(
   const directAskEvidence = collectDirectAskEvidence(trimmed, normalized);
   const constraintEvidence = collectConstraintEvidence(normalized);
   const correctionEvidence = collectCorrectionEvidence(normalized);
+  const followupScopeSource = options.hasActiveTask
+    ? "active-task"
+    : options.hasRecentQuestionContext
+      ? "provisional-question"
+      : "none";
+  const hasQuestionScope = followupScopeSource !== "none";
 
   if (isLowValueAcknowledgement(normalized)) {
     if (options.hasPendingConfirmation) {
@@ -133,45 +141,62 @@ export function decideAdvisorTurnIntent(
   }
 
   if (correctionEvidence.length > 0) {
-    if (options.hasActiveTask) {
-      return allowedDecision({
+    if (directAskEvidence.length > 0) {
+      return withFollowupScope(allowedDecision({
+        intent: "correction",
+        confidence: 0.98,
+        evidence: [...correctionEvidence, ...directAskEvidence],
+        action: "answer-refresh",
+        reason: hasQuestionScope
+          ? "scoped-correction-direct-ask"
+          : "self-contained-correction-direct-ask",
+        contextPromptEligible: true,
+      }), followupScopeSource);
+    }
+
+    if (hasQuestionScope) {
+      return withFollowupScope(allowedDecision({
         intent: "correction",
         confidence: 0.96,
         evidence: correctionEvidence,
         action: "answer-refresh",
-        reason: "active-task-correction",
+        reason: options.hasActiveTask
+          ? "active-task-correction"
+          : "recent-question-correction",
         contextPromptEligible: true,
-      });
+      }), followupScopeSource);
     }
 
-    return enforcedDecision({
+    return withFollowupScope(enforcedDecision({
       intent: "correction",
       confidence: 0.9,
-      evidence: [...correctionEvidence, "no-active-task"],
+      evidence: [...correctionEvidence, "no-question-scope"],
       action: "append-only",
       reason: "unscoped-correction",
-    });
+    }), followupScopeSource);
   }
 
   if (constraintEvidence.length > 0) {
-    if (options.hasActiveTask) {
-      return allowedDecision({
+    if (hasQuestionScope) {
+      return withFollowupScope(allowedDecision({
         intent: "constraint-or-follow-up",
         confidence: 0.94,
         evidence: constraintEvidence,
         action: "answer-refresh",
-        reason: "active-task-constraint",
+        reason: options.hasActiveTask
+          ? "active-task-constraint"
+          : "recent-question-constraint",
         contextPromptEligible: true,
-      });
+      }), followupScopeSource);
     }
 
-    return enforcedDecision({
+    return withFollowupScope(enforcedDecision({
       intent: "informational",
       confidence: 0.88,
-      evidence: [...constraintEvidence, "no-active-task"],
+      evidence: [...constraintEvidence, "no-question-scope"],
       action: "append-only",
       reason: "unscoped-constraint",
-    });
+    }), followupScopeSource);
   }
 
   if (directAskEvidence.length > 0) {
@@ -190,23 +215,23 @@ export function decideAdvisorTurnIntent(
   const declarativeEvidence = collectDeclarativeEvidence(normalized);
 
   if (
-    options.hasActiveTask &&
+    hasQuestionScope &&
     wordEquivalent <= 6 &&
     declarativeEvidence.length === 0 &&
     (technicalEvidence.length > 0 || followUpEvidence.length > 0)
   ) {
-    return allowedDecision({
+    return withFollowupScope(allowedDecision({
       intent: "constraint-or-follow-up",
       confidence: 0.88,
       evidence: [
-        "active-task-elliptical-probe",
+        `${followupScopeSource}-elliptical-probe`,
         ...technicalEvidence,
         ...followUpEvidence,
       ],
       action: "answer-refresh",
-      reason: "active-task-elliptical-probe",
+      reason: `${followupScopeSource}-elliptical-probe`,
       contextPromptEligible: true,
-    });
+    }), followupScopeSource);
   }
 
   if (
@@ -234,7 +259,7 @@ export function decideAdvisorTurnIntent(
       reason: technicalEvidence.length > 0
         ? "technical-declarative-statement"
         : "declarative-statement",
-      contextPromptEligible: options.hasActiveTask,
+      contextPromptEligible: hasQuestionScope,
     });
   }
 
@@ -312,7 +337,15 @@ export function formatAdvisorTurnIntentForTrace(
     advisorTurnRecommendedAction: decision.recommendedAction,
     advisorWouldSuppress: decision.wouldSuppress,
     advisorExecutionAuthorized: decision.executionAuthorized,
+    followupScopeSource: decision.followupScopeSource ?? "none",
   };
+}
+
+function withFollowupScope(
+  decision: AdvisorTurnIntentDecision,
+  followupScopeSource: "active-task" | "provisional-question" | "none"
+): AdvisorTurnIntentDecision {
+  return { ...decision, followupScopeSource };
 }
 
 function allowedDecision({
@@ -456,7 +489,7 @@ function collectConstraintEvidence(normalized: string) {
 function collectCorrectionEvidence(normalized: string) {
   const evidence: string[] = [];
   if (
-    /\b(i mean|actually|correction|rather than|instead of|not (rec|recommendation|python|java|javascript|typescript|go|golang|rust|c\+\+)|rag not|not rag)\b/i.test(
+    /\b(i mean|actually|correction|rather than|instead of|over[ -]?design(?:ing|ed)?|too much design|not (?:a )?(rec|recommendation|python|java|javascript|typescript|go|golang|rust|c\+\+)|rag not|not rag)\b/i.test(
       normalized
     )
   ) {

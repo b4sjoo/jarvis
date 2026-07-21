@@ -5,6 +5,7 @@ import {
   createAuthorizedQuestionLineage,
   isCurrentQuestionLineage,
   promoteQuestionLineage,
+  resolveInheritedQuestionLineageForTurnIntent,
 } from "../src/lib/meeting/question-lineage.js";
 
 test("creates provisional lineage only for an authorized answer refresh", () => {
@@ -104,4 +105,54 @@ test("binds lineage to the visible suggestion and validates runtime ownership", 
     false
   );
   assert.equal(promoteQuestionLineage(lineage)?.identityState, "canonical");
+});
+
+test("inherits provisional lineage only for explicitly scoped follow-ups", () => {
+  const lineage = createAuthorizedQuestionLineage({
+    traceId: "trace-origin",
+    triggerTurnId: "turn-origin",
+    sessionId: "session-a",
+    runtimeEpoch: 1,
+    action: "answer-refresh",
+    executionAuthorized: true,
+  });
+  assert.ok(lineage);
+
+  assert.equal(
+    resolveInheritedQuestionLineageForTurnIntent(
+      {
+        intent: "correction",
+        confidence: 0.96,
+        evidence: ["explicit-correction"],
+        action: "answer-refresh",
+        recommendedAction: "answer-refresh",
+        reason: "recent-question-correction",
+        contextPromptEligible: true,
+        enforcement: "allow",
+        wouldSuppress: false,
+        executionAuthorized: true,
+        followupScopeSource: "provisional-question",
+      },
+      lineage
+    ),
+    lineage
+  );
+  assert.equal(
+    resolveInheritedQuestionLineageForTurnIntent(
+      {
+        intent: "direct-question",
+        confidence: 0.97,
+        evidence: ["question-mark"],
+        action: "answer-refresh",
+        recommendedAction: "answer-refresh",
+        reason: "direct-question-or-task",
+        contextPromptEligible: true,
+        enforcement: "allow",
+        wouldSuppress: false,
+        executionAuthorized: true,
+      },
+      lineage
+    ),
+    undefined
+  );
 });

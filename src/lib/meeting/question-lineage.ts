@@ -2,7 +2,10 @@ import type {
   AdvisorSuggestion,
   QuestionInstanceLineage,
 } from "./types.js";
-import type { AdvisorTurnGateAction } from "./advisor-turn-intent.js";
+import type {
+  AdvisorTurnGateAction,
+  AdvisorTurnIntentDecision,
+} from "./advisor-turn-intent.js";
 
 export interface CreateQuestionLineageInput {
   traceId?: string;
@@ -55,6 +58,15 @@ export function promoteQuestionLineage(
         ...lineage,
         identityState: "canonical",
       }
+    : undefined;
+}
+
+export function resolveInheritedQuestionLineageForTurnIntent(
+  decision: AdvisorTurnIntentDecision | undefined,
+  current: QuestionInstanceLineage | undefined
+) {
+  return decision?.followupScopeSource === "provisional-question"
+    ? current
     : undefined;
 }
 

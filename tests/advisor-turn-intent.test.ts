@@ -63,6 +63,50 @@ test("preserves active-task constraints and elliptical technical probes", () => 
   assert.equal(elliptical.executionAuthorized, true);
 });
 
+test("uses provisional question scope for corrections and follow-ups", () => {
+  const correction = decideAdvisorTurnIntent(
+    "You are over-designing it, just write the code",
+    { hasActiveTask: false, hasRecentQuestionContext: true }
+  );
+  assert.equal(correction.intent, "correction");
+  assert.equal(correction.action, "answer-refresh");
+  assert.equal(correction.reason, "scoped-correction-direct-ask");
+  assert.equal(correction.followupScopeSource, "provisional-question");
+
+  const constraint = decideAdvisorTurnIntent(
+    "Find all the text files instead of only the first one",
+    { hasActiveTask: false, hasRecentQuestionContext: true }
+  );
+  assert.equal(constraint.intent, "correction");
+  assert.equal(constraint.action, "answer-refresh");
+  assert.equal(constraint.reason, "recent-question-correction");
+  assert.equal(constraint.followupScopeSource, "provisional-question");
+});
+
+test("direct asks survive correction wording without question scope", () => {
+  const decision = decideAdvisorTurnIntent(
+    "Not a recommendation system. Can you explain RAG instead?",
+    { hasActiveTask: false, hasRecentQuestionContext: false }
+  );
+
+  assert.equal(decision.intent, "correction");
+  assert.equal(decision.action, "answer-refresh");
+  assert.equal(decision.reason, "self-contained-correction-direct-ask");
+  assert.equal(decision.followupScopeSource, "none");
+});
+
+test("keeps a truly unscoped correction append-only", () => {
+  const decision = decideAdvisorTurnIntent("Not recommendation, RAG", {
+    hasActiveTask: false,
+    hasRecentQuestionContext: false,
+  });
+
+  assert.equal(decision.intent, "correction");
+  assert.equal(decision.action, "append-only");
+  assert.equal(decision.reason, "unscoped-correction");
+  assert.equal(decision.followupScopeSource, "none");
+});
+
 test("keeps useful active-task statements without refreshing the answer", () => {
   const decision = decideAdvisorTurnIntent(
     "The cache stores the active user profiles",
