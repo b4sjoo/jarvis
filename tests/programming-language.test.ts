@@ -26,6 +26,10 @@ test("requires explicit wording before inferring language from text", () => {
     "Go"
   );
   assert.equal(
+    inferExplicitProgrammingLanguageFromText("In Python."),
+    "Python"
+  );
+  assert.equal(
     inferExplicitProgrammingLanguageFromText("Selected language: TypeScript"),
     "TypeScript"
   );

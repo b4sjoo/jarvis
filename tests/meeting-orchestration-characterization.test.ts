@@ -7,6 +7,10 @@ import {
   decideAdvisorPhaseMutation,
   decideAdvisorTaskMutation,
 } from "../src/lib/meeting/advisor-trigger-job.js";
+import {
+  createAdjacentQuestionScope,
+  resolveAdjacentConstraintInheritance,
+} from "../src/lib/meeting/adjacent-question-constraint.js";
 import { decideAdvisorTurnIntent } from "../src/lib/meeting/advisor-turn-intent.js";
 import { MeetingContextManager } from "../src/lib/meeting/context-manager.js";
 import {
@@ -20,6 +24,7 @@ import {
   rebaseRuntimeCommitTokenAfterOwnedParentMutation,
   type RuntimeCommitSnapshot,
 } from "../src/lib/meeting/runtime-commit-authorization.js";
+import { createAuthorizedQuestionLineage } from "../src/lib/meeting/question-lineage.js";
 import type {
   ActiveInterviewParent,
   ActiveScreenTask,
@@ -174,6 +179,105 @@ test("keeps a trigger-owned question stable when a later informational turn arri
     "Design a distributed cache"
   );
   assert.equal(manager.getState().transcriptTurns.length, 2);
+});
+
+test("preserves provisional question lineage when an adjacent constraint replaces its job", () => {
+  const manager = new MeetingContextManager();
+  const harness = new MeetingOrchestrationHarness(manager);
+  const questionTurn = makeTurn(
+    "turn-sort",
+    "Show me the sort method.",
+    1_000
+  );
+  manager.addTranscriptTurn(questionTurn);
+  const questionDecision = decideAdvisorTurnIntent(questionTurn.text, {
+    hasActiveTask: false,
+  });
+  const lineage = createAuthorizedQuestionLineage({
+    traceId: "trace-sort",
+    triggerTurnId: questionTurn.id,
+    sessionId: manager.getState().sessionId,
+    runtimeEpoch: harness.getRuntimeEpoch(),
+    action: questionDecision.action,
+    executionAuthorized: questionDecision.executionAuthorized,
+  });
+  assert.ok(lineage);
+  const scope = createAdjacentQuestionScope({
+    lineage,
+    questionTurnId: questionTurn.id,
+    questionTraceId: "trace-sort",
+    questionText: questionTurn.text,
+    sessionId: manager.getState().sessionId,
+    runtimeEpoch: harness.getRuntimeEpoch(),
+    now: 2_000,
+  });
+  const firstJob = createAdvisorTriggerJob({
+    source: "live-turn",
+    mode: "live",
+    traceId: "trace-sort",
+    triggerTurnId: questionTurn.id,
+    promptContext: manager.buildAdvisorPromptContext(),
+    sessionId: manager.getState().sessionId,
+    runtimeEpoch: harness.getRuntimeEpoch(),
+    snapshotTurnCount: 1,
+    questionLineage: lineage,
+    turnIntentDecision: questionDecision,
+    taskMutationAuthority: "input-evidence",
+  });
+  harness.activateAdvisorJob(firstJob.id);
+
+  const constraintTurn = makeTurn("turn-language", "In Python.", 3_000);
+  const inheritance = resolveAdjacentConstraintInheritance({
+    scope,
+    text: constraintTurn.text,
+    sessionId: manager.getState().sessionId,
+    runtimeEpoch: harness.getRuntimeEpoch(),
+    now: 4_000,
+  });
+  assert.equal(inheritance.inherited, true);
+  const constraintDecision = decideAdvisorTurnIntent(constraintTurn.text, {
+    hasActiveTask: false,
+    hasRecentQuestionContext: inheritance.inherited,
+  });
+  manager.addTranscriptTurn(constraintTurn);
+  const secondJob = createAdvisorTriggerJob({
+    source: "live-turn",
+    mode: "live",
+    traceId: "trace-language",
+    triggerTurnId: constraintTurn.id,
+    promptContext: manager.buildAdvisorPromptContext(),
+    sessionId: manager.getState().sessionId,
+    runtimeEpoch: harness.getRuntimeEpoch(),
+    snapshotTurnCount: 2,
+    questionLineage: inheritance.lineage,
+    turnIntentDecision: constraintDecision,
+    taskMutationAuthority: "input-evidence",
+  });
+  harness.activateAdvisorJob(secondJob.id);
+
+  assert.equal(
+    decideAdvisorJobCommit({
+      job: firstJob,
+      activeJobId: harness.getActiveAdvisorJobId(),
+      currentRuntime: currentRuntimeSnapshot(harness),
+    }).authorized,
+    false
+  );
+  assert.equal(
+    secondJob.questionLineage?.questionInstanceId,
+    firstJob.questionLineage?.questionInstanceId
+  );
+  assert.equal(secondJob.promptContextSnapshot.transcript.includes("In Python."), true);
+  assert.deepEqual(
+    authorizeAdvisorTaskMutation({
+      authority: secondJob.taskMutationAuthority,
+      turnIntentDecision: constraintDecision,
+    }),
+    {
+      authorized: true,
+      reason: "substantive-input-authority",
+    }
+  );
 });
 
 test("manual next advances phase without replacing the active parent", async () => {

@@ -31,7 +31,7 @@ const EXPLICIT_LANGUAGE_PATTERNS = [
     "i"
   ),
   new RegExp(
-    `\\b(?:in|with|using)\\s+(?:${LANGUAGE_TOKEN_PATTERN})\\s+(?:please|code|solution|implementation|language)?\\b`,
+    `\\b(?:in|with|using)\\s+(?:${LANGUAGE_TOKEN_PATTERN})(?:\\s+(?:please|code|solution|implementation|language))?\\b`,
     "i"
   ),
   new RegExp(

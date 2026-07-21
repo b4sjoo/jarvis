@@ -83,6 +83,43 @@ test("uses provisional question scope for corrections and follow-ups", () => {
   assert.equal(constraint.followupScopeSource, "provisional-question");
 });
 
+test("allows an explicit language constraint only with provisional question scope", () => {
+  const scoped = decideAdvisorTurnIntent("In Python.", {
+    hasActiveTask: false,
+    hasRecentQuestionContext: true,
+  });
+  assert.equal(scoped.intent, "constraint-or-follow-up");
+  assert.equal(scoped.action, "answer-refresh");
+  assert.equal(scoped.reason, "recent-question-constraint");
+  assert.equal(scoped.followupScopeSource, "provisional-question");
+  assert.ok(scoped.evidence.includes("programming-language:Python"));
+
+  const unscoped = decideAdvisorTurnIntent("In Python.", {
+    hasActiveTask: false,
+    hasRecentQuestionContext: false,
+  });
+  assert.equal(unscoped.intent, "informational");
+  assert.equal(unscoped.action, "append-only");
+  assert.equal(unscoped.reason, "unscoped-constraint");
+  assert.equal(unscoped.executionAuthorized, false);
+});
+
+test("allows each bounded adjacent constraint family with provisional scope", () => {
+  for (const text of [
+    "For 10 million users.",
+    "Return the indices.",
+    "Without extra space.",
+  ]) {
+    const decision = decideAdvisorTurnIntent(text, {
+      hasActiveTask: false,
+      hasRecentQuestionContext: true,
+    });
+    assert.equal(decision.intent, "constraint-or-follow-up", text);
+    assert.equal(decision.action, "answer-refresh", text);
+    assert.equal(decision.reason, "recent-question-constraint", text);
+  }
+});
+
 test("direct asks survive correction wording without question scope", () => {
   const decision = decideAdvisorTurnIntent(
     "Not a recommendation system. Can you explain RAG instead?",

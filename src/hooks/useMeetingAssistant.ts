@@ -32,6 +32,7 @@ import {
   ActiveMeetingTask,
   ActiveInterviewParent,
   ActiveScreenTask,
+  AdjacentQuestionScope,
   CanonicalQuestionType,
   ClarifyingQuestionAnswer,
   ClarifyingQuestionFeedback,
@@ -212,9 +213,13 @@ import {
   PlaybookPhaseDecision,
   SENTENCE_COMPLETION_BUFFER_MS,
   attachQuestionLineageToSuggestion,
+  createAdjacentQuestionScope,
   createAuthorizedQuestionLineage,
+  formatAdjacentConstraintDecisionForTrace,
+  formatAdjacentQuestionScopeForTrace,
   formatQuestionLineageForTrace,
   promoteQuestionLineage,
+  resolveAdjacentConstraintInheritance,
   resolveInheritedQuestionLineageForTurnIntent,
 } from "@/lib/meeting";
 
@@ -1125,6 +1130,7 @@ export function useMeetingAssistant() {
     state.currentQuestionLineage
   );
   currentQuestionLineageRef.current = state.currentQuestionLineage;
+  const adjacentQuestionScopeRef = useRef<AdjacentQuestionScope | null>(null);
   const sessionRecordingManagerRef = useRef<SessionRecordingManager | null>(
     null
   );
@@ -1456,6 +1462,7 @@ export function useMeetingAssistant() {
     const previousEpoch = runtimeEpochRef.current;
     runtimeEpochRef.current += 1;
     activeScreenOperationIdRef.current = null;
+    adjacentQuestionScopeRef.current = null;
     manualCorrectionOperationCoordinatorRef.current.reset();
     return {
       runtimeInvalidationReason: reason,
@@ -4181,6 +4188,14 @@ export function useMeetingAssistant() {
               nextSuggestion
             );
       nextSuggestion.questionLineage = committedQuestionLineage;
+      if (
+        committedQuestionLineage &&
+        adjacentQuestionScopeRef.current?.lineage.questionInstanceId ===
+          committedQuestionLineage.questionInstanceId
+      ) {
+        adjacentQuestionScopeRef.current = null;
+      }
+      currentQuestionLineageRef.current = committedQuestionLineage;
       if (traceId) {
         traceStoreRef.current.updateMetadata(
           traceId,
@@ -4292,7 +4307,8 @@ export function useMeetingAssistant() {
     mode: AdvisorRequestMode = "live",
     traceId?: string,
     turnIntentDecision?: AdvisorTurnIntentDecision,
-    triggerTurnId?: string
+    triggerTurnId?: string,
+    questionLineage?: QuestionInstanceLineage
   ) => {
     if (!activeRef.current) return;
 
@@ -4303,10 +4319,12 @@ export function useMeetingAssistant() {
       triggerTurnId,
       advisorJobSource: "live-turn",
       taskMutationAuthority: "input-evidence",
-      questionLineage: resolveInheritedQuestionLineageForTurnIntent(
-        turnIntentDecision,
-        currentQuestionLineageRef.current
-      ),
+      questionLineage:
+        questionLineage ??
+        resolveInheritedQuestionLineageForTurnIntent(
+          turnIntentDecision,
+          currentQuestionLineageRef.current
+        ),
     });
     activateAdvisorJob(advisorJob);
     advisorDebounceTimerRef.current = window.setTimeout(() => {
@@ -5376,10 +5394,33 @@ export function useMeetingAssistant() {
           return;
         }
 
+        const pendingAdjacentQuestionScope = hasActiveInterviewTask
+          ? null
+          : adjacentQuestionScopeRef.current;
+        const adjacentConstraintDecision =
+          resolveAdjacentConstraintInheritance({
+            scope: pendingAdjacentQuestionScope,
+            text: turn.text,
+            sessionId: activeContextState.sessionId,
+            runtimeEpoch: runtimeEpochRef.current,
+          });
+        if (adjacentConstraintDecision.shouldClearScope) {
+          adjacentQuestionScopeRef.current = null;
+        }
+        if (pendingAdjacentQuestionScope) {
+          traceStoreRef.current.updateMetadata(
+            traceId,
+            formatAdjacentConstraintDecisionForTrace(
+              adjacentConstraintDecision
+            )
+          );
+        }
+
         const turnGate = evaluateThemTurnForAdvisor(turn, {
           hasActiveTask: hasActiveInterviewTask,
           hasRecentQuestionContext: Boolean(
-            currentQuestionLineageRef.current
+            currentQuestionLineageRef.current ||
+              adjacentConstraintDecision.inherited
           ),
         });
         traceStoreRef.current.updateMetadata(traceId, {
@@ -5506,6 +5547,39 @@ export function useMeetingAssistant() {
           return;
         }
 
+        let advisorQuestionLineage = adjacentConstraintDecision.lineage;
+        if (
+          !hasActiveInterviewTask &&
+          turnGate.intent === "direct-question" &&
+          turnGate.action === "answer-refresh" &&
+          turnGate.executionAuthorized
+        ) {
+          const provisionalQuestionLineage = createAuthorizedQuestionLineage({
+            traceId,
+            triggerTurnId: turn.id,
+            sessionId: contextState.sessionId,
+            runtimeEpoch: runtimeEpochRef.current,
+            action: turnGate.action,
+            executionAuthorized: turnGate.executionAuthorized,
+          });
+          if (provisionalQuestionLineage) {
+            const adjacentQuestionScope = createAdjacentQuestionScope({
+              lineage: provisionalQuestionLineage,
+              questionTurnId: turn.id,
+              questionTraceId: traceId,
+              questionText: turn.text,
+              sessionId: contextState.sessionId,
+              runtimeEpoch: runtimeEpochRef.current,
+            });
+            adjacentQuestionScopeRef.current = adjacentQuestionScope;
+            advisorQuestionLineage = provisionalQuestionLineage;
+            traceStoreRef.current.updateMetadata(
+              traceId,
+              formatAdjacentQuestionScopeForTrace(adjacentQuestionScope)
+            );
+          }
+        }
+
         const debounceStepId = traceStoreRef.current.startStep(
           traceId,
           "Advisor debounce scheduled",
@@ -5516,7 +5590,8 @@ export function useMeetingAssistant() {
           contextState.activeMeetingTask?.screen ? "screen-anchored" : "live",
           traceId,
           turnGate,
-          turn.id
+          turn.id,
+          advisorQuestionLineage
         );
       } catch (error) {
         const stillCurrent = isCurrentAudioSegment(segment);

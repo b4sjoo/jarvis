@@ -29,7 +29,7 @@ import {
 import { serializeMeetingTraceExport } from "./trace.js";
 
 const SESSION_RECORDING_SCHEMA_VERSION = 1;
-const SESSION_TRACE_SUMMARY_SCHEMA_VERSION = 3;
+const SESSION_TRACE_SUMMARY_SCHEMA_VERSION = 4;
 const SESSION_TRACE_INDEX_SCHEMA_VERSION = 1;
 
 interface SessionRecordingStartOptions {
@@ -174,6 +174,11 @@ export interface SessionCompactTraceSummary {
   taskMutationAuthorized?: boolean;
   taskMutationAuthorizationReason?: string;
   advisorOutputDisposition?: string;
+  adjacentConstraintInherited?: boolean;
+  adjacentConstraintDecisionReason?: string;
+  adjacentConstraintKinds?: string;
+  adjacentConstraintDeltaMs?: number;
+  adjacentQuestionOriginTraceId?: string;
   sentenceBufferOperationId?: string;
   sentenceBufferOperationRole?: string;
   sentenceBufferOutcome?: string;
@@ -1699,6 +1704,26 @@ function buildCompactTraceSummary({
     advisorOutputDisposition: readFirstString(
       metadataSources,
       "advisorOutputDisposition"
+    ),
+    adjacentConstraintInherited: readFirstBoolean(
+      metadataSources,
+      "adjacentConstraintInherited"
+    ),
+    adjacentConstraintDecisionReason: readFirstString(
+      metadataSources,
+      "adjacentConstraintDecisionReason"
+    ),
+    adjacentConstraintKinds: readFirstString(
+      metadataSources,
+      "adjacentConstraintKinds"
+    ),
+    adjacentConstraintDeltaMs: readFirstNumberFromMetadata(
+      metadataSources,
+      "adjacentConstraintDeltaMs"
+    ),
+    adjacentQuestionOriginTraceId: readFirstString(
+      metadataSources,
+      "adjacentQuestionOriginTraceId"
     ),
     sentenceBufferDisposition: readFirstString(
       metadataSources,

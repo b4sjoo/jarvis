@@ -31,6 +31,11 @@ test("builds a task-level review index from trace summaries and evaluations", ()
     taskMutationAuthorized: false,
     taskMutationAuthorizationReason: "turn-intent-would-suppress",
     advisorOutputDisposition: "shadow-observation-only",
+    adjacentConstraintInherited: true,
+    adjacentConstraintDecisionReason: "inherited-explicit-constraint",
+    adjacentConstraintKinds: "programming-language",
+    adjacentConstraintDeltaMs: 2200,
+    adjacentQuestionOriginTraceId: "trace_question",
     sentenceBufferOperationId: "sentence_buffer_1",
     sentenceBufferOperationRole: "terminal",
     sentenceBufferOutcome: "merged",
@@ -86,6 +91,7 @@ test("builds a task-level review index from trace summaries and evaluations", ()
   assert.equal(task.sentenceBufferTimeoutCount, 0);
   assert.equal(task.sentenceBufferAddedLatencyMsTotal, 850);
   assert.equal(task.taskMutationSuppressedCount, 1);
+  assert.equal(task.adjacentConstraintInheritanceCount, 1);
   assert.deepEqual(task.whiteboardArtifactIds, ["whiteboard_1"]);
   assert.deepEqual(task.manualPhaseTransitions, [
     {

@@ -1,5 +1,7 @@
 import { calculateWordEquivalent } from "./transcript-fusion.js";
 import { decideSentenceCompletion } from "./sentence-completion-buffer.js";
+import { inferExplicitProgrammingLanguageFromText } from "./programming-language.js";
+import { classifyAdjacentConstraintKinds } from "./adjacent-question-constraint.js";
 
 export type AdvisorTurnIntent =
   | "direct-question"
@@ -469,6 +471,16 @@ function collectDirectAskEvidence(text: string, normalized: string) {
 
 function collectConstraintEvidence(normalized: string) {
   const evidence: string[] = [];
+  const explicitProgrammingLanguage =
+    inferExplicitProgrammingLanguageFromText(normalized);
+  if (explicitProgrammingLanguage) {
+    evidence.push(`programming-language:${explicitProgrammingLanguage}`);
+  }
+  for (const kind of classifyAdjacentConstraintKinds(normalized)) {
+    if (kind !== "programming-language") {
+      evidence.push(`explicit-${kind}`);
+    }
+  }
   if (
     /\b\d+\s*(qps|tps|rps|users|requests|ms|seconds|minutes|kb|mb|gb|tb|k|m|million|billion)\b/i.test(
       normalized
@@ -477,7 +489,7 @@ function collectConstraintEvidence(normalized: string) {
     evidence.push("numeric-constraint");
   }
   if (
-    /\b(assume|constraint|requirement|under the assumption|given that|must support|needs to support|use (python|java|javascript|typescript|go|golang|rust|c\+\+))\b/i.test(
+    /\b(assume|constraint|requirement|under the assumption|given that|must support|needs to support)\b/i.test(
       normalized
     )
   ) {
