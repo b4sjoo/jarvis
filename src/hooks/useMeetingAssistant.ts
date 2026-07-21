@@ -112,6 +112,7 @@ import {
   createNativeAudioManualRecoveryState,
   decideNativeAudioTerminalDisposition,
   getNativeAudioCaptureStartPolicy,
+  resolveNativeAudioCaptureStartFailure,
   pruneNativeAudioRecoveryAttempts,
   authorizeNativeSpeechDetectedEvent,
   buildNativeAudioLifecycleTraceMetadata,
@@ -5847,6 +5848,60 @@ export function useMeetingAssistant() {
             pending: pendingManualRecovery,
           }
         : undefined;
+      const reconcileCaptureStartFailure = (errorMessage: string) => {
+        const disposition = resolveNativeAudioCaptureStartFailure({
+          mode,
+          pendingManualRecovery,
+          automaticRecovery: recoveryAttempt
+            ? {
+                startedAt: recoveryAttempt.startedAt,
+                previousCaptureSessionId:
+                  recoveryAttempt.previousCaptureSessionId,
+                previousCaptureGeneration:
+                  recoveryAttempt.previousCaptureGeneration,
+                reason: recoveryAttempt.reason,
+              }
+            : undefined,
+          errorMessage,
+        });
+
+        nativeAudioManualRecoveryRef.current = disposition.manualRecovery;
+        if (
+          disposition.recoveryAuthority === "created" &&
+          disposition.manualRecovery
+        ) {
+          sessionRecordingManagerRef.current?.recordCaptureLifecycle({
+            stage: "manual-recovery-required",
+            source: "automatic-recovery-failed",
+            requiredAt: disposition.manualRecovery.requiredAt,
+            reason: disposition.manualRecovery.reason,
+            message: disposition.manualRecovery.message,
+            previousCaptureSessionId:
+              disposition.manualRecovery.interruptedCaptureSessionId,
+            previousCaptureGeneration:
+              disposition.manualRecovery.interruptedCaptureGeneration,
+            circuitBreakerOpen:
+              disposition.manualRecovery.circuitBreakerOpen,
+          });
+        }
+        sessionRecordingManagerRef.current?.recordCaptureLifecycle({
+          stage: "capture-start-failure-reconciled",
+          startMode: mode,
+          status: disposition.status,
+          retryAction: disposition.retryAction,
+          recoveryAuthority: disposition.recoveryAuthority,
+          resetContext: policy.resetContext,
+          error: errorMessage,
+        });
+        setState((previous) => ({
+          ...previous,
+          status: disposition.status,
+          partialSuggestion: "",
+          error: errorMessage,
+          nativeAudioManualRecovery:
+            disposition.manualRecovery ?? undefined,
+        }));
+      };
       const coordinator = captureLifecycleCoordinatorRef.current!;
       const lifecycleOperation = coordinator.claim(policy.lifecycleAction);
       const previousNativeLease = readNativeCaptureLease();
@@ -5886,12 +5941,7 @@ export function useMeetingAssistant() {
         cancelActiveAdvisorJob("local-only-mode-unavailable");
         screenAnalysisAbortRef.current?.abort();
         screenAnalysisAbortRef.current = null;
-        setState((previous) => ({
-          ...previous,
-          status: "error",
-          partialSuggestion: "",
-          error: LOCAL_ONLY_UNAVAILABLE_MESSAGE,
-        }));
+        reconcileCaptureStartFailure(LOCAL_ONLY_UNAVAILABLE_MESSAGE);
         coordinator.authorize(lifecycleOperation, "blocked-local-only-mode");
         if (manualRecoveryAttempt) {
           sessionRecordingManagerRef.current?.recordCaptureLifecycle({
@@ -5910,12 +5960,7 @@ export function useMeetingAssistant() {
         cancelActiveAdvisorJob("stt-provider-missing");
         screenAnalysisAbortRef.current?.abort();
         screenAnalysisAbortRef.current = null;
-        setState((previous) => ({
-          ...previous,
-          status: "error",
-          partialSuggestion: "",
-          error: MISSING_STT_MESSAGE,
-        }));
+        reconcileCaptureStartFailure(MISSING_STT_MESSAGE);
         coordinator.authorize(lifecycleOperation, "blocked-stt-provider-missing");
         if (manualRecoveryAttempt) {
           sessionRecordingManagerRef.current?.recordCaptureLifecycle({
@@ -6197,14 +6242,11 @@ export function useMeetingAssistant() {
               error: error instanceof Error ? error.message : String(error),
             });
           }
-          setState((previous) => ({
-            ...previous,
-            status: "error",
-            error:
-              error instanceof Error
-                ? error.message
-                : "Failed to start meeting assistant.",
-          }));
+          reconcileCaptureStartFailure(
+            error instanceof Error
+              ? error.message
+              : "Failed to start meeting assistant."
+          );
         }
       });
     }, [

@@ -11,6 +11,7 @@ import {
   parseNativeAudioSegmentDroppedEvent,
   pruneNativeAudioRecoveryAttempts,
   resolveNativeAudioPauseResumeControl,
+  resolveNativeAudioCaptureStartFailure,
   resolveNativeAudioPrimaryControlAction,
 } from "../src/lib/meeting/native-audio-lifecycle.js";
 
@@ -192,6 +193,80 @@ test("capture start policies keep manual recovery context and reset its acknowle
     resetRecoveryBudget: true,
     pendingStatus: "reconnecting",
   });
+});
+
+test("capture start failures preserve the intended retry authority", () => {
+  const pendingManualRecovery = {
+    requiredAt: 4_000,
+    reason: "capture-panic",
+    message: "capture stopped",
+    interruptedCaptureSessionId: "capture-old",
+    interruptedCaptureGeneration: 7,
+    circuitBreakerOpen: true,
+  };
+
+  assert.deepEqual(
+    resolveNativeAudioCaptureStartFailure({
+      mode: "fresh-start",
+      errorMessage: "start failed",
+    }),
+    {
+      status: "error",
+      manualRecovery: null,
+      recoveryAuthority: "none",
+      retryAction: "start",
+    }
+  );
+  assert.deepEqual(
+    resolveNativeAudioCaptureStartFailure({
+      mode: "resume",
+      errorMessage: "resume failed",
+    }),
+    {
+      status: "paused",
+      manualRecovery: null,
+      recoveryAuthority: "none",
+      retryAction: "resume",
+    }
+  );
+  assert.deepEqual(
+    resolveNativeAudioCaptureStartFailure({
+      mode: "manual-recovery",
+      pendingManualRecovery,
+      errorMessage: "manual recovery failed",
+    }),
+    {
+      status: "error",
+      manualRecovery: pendingManualRecovery,
+      recoveryAuthority: "preserved",
+      retryAction: "manual-recovery",
+    }
+  );
+  assert.deepEqual(
+    resolveNativeAudioCaptureStartFailure({
+      mode: "automatic-recovery",
+      automaticRecovery: {
+        startedAt: 5_000,
+        previousCaptureSessionId: "capture-auto",
+        previousCaptureGeneration: 8,
+        reason: "buffer-overflow",
+      },
+      errorMessage: "automatic recovery failed",
+    }),
+    {
+      status: "error",
+      manualRecovery: {
+        requiredAt: 5_000,
+        reason: "buffer-overflow",
+        message: "automatic recovery failed",
+        interruptedCaptureSessionId: "capture-auto",
+        interruptedCaptureGeneration: 8,
+        circuitBreakerOpen: false,
+      },
+      recoveryAuthority: "created",
+      retryAction: "manual-recovery",
+    }
+  );
 });
 
 test("primary audio control resumes only explicit pause or native failure state", () => {

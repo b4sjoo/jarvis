@@ -77,6 +77,20 @@ export interface NativeAudioCaptureStartPolicy {
   pendingStatus: "starting" | "reconnecting";
 }
 
+export interface NativeAudioAutomaticRecoveryFailureContext {
+  startedAt: number;
+  previousCaptureSessionId: string;
+  previousCaptureGeneration: number;
+  reason: string | null;
+}
+
+export interface NativeAudioCaptureStartFailureDisposition {
+  status: "paused" | "error";
+  manualRecovery: NativeAudioManualRecoveryState | null;
+  recoveryAuthority: "none" | "created" | "preserved";
+  retryAction: "start" | "resume" | "manual-recovery";
+}
+
 export type NativeAudioPrimaryControlAction =
   | "start"
   | "stop"
@@ -131,6 +145,61 @@ export function getNativeAudioCaptureStartPolicy(
         pendingStatus: "starting",
       };
   }
+}
+
+export function resolveNativeAudioCaptureStartFailure({
+  mode,
+  pendingManualRecovery,
+  automaticRecovery,
+  errorMessage,
+}: {
+  mode: NativeAudioCaptureStartMode;
+  pendingManualRecovery?: NativeAudioManualRecoveryState | null;
+  automaticRecovery?: NativeAudioAutomaticRecoveryFailureContext;
+  errorMessage: string;
+}): NativeAudioCaptureStartFailureDisposition {
+  if (mode === "resume") {
+    return {
+      status: "paused",
+      manualRecovery: null,
+      recoveryAuthority: "none",
+      retryAction: "resume",
+    };
+  }
+
+  if (mode === "manual-recovery" && pendingManualRecovery) {
+    return {
+      status: "error",
+      manualRecovery: pendingManualRecovery,
+      recoveryAuthority: "preserved",
+      retryAction: "manual-recovery",
+    };
+  }
+
+  if (mode === "automatic-recovery" && automaticRecovery) {
+    return {
+      status: "error",
+      manualRecovery: {
+        requiredAt: automaticRecovery.startedAt,
+        reason: automaticRecovery.reason,
+        message: errorMessage,
+        interruptedCaptureSessionId:
+          automaticRecovery.previousCaptureSessionId,
+        interruptedCaptureGeneration:
+          automaticRecovery.previousCaptureGeneration,
+        circuitBreakerOpen: false,
+      },
+      recoveryAuthority: "created",
+      retryAction: "manual-recovery",
+    };
+  }
+
+  return {
+    status: "error",
+    manualRecovery: null,
+    recoveryAuthority: "none",
+    retryAction: "start",
+  };
 }
 
 export function resolveNativeAudioPrimaryControlAction({
