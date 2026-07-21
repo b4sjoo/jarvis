@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  auditMemoryInterviewFamilyNormalization,
   getMemoryInterviewFamilyGateRejectReason,
   resolveMemoryInterviewFamilies,
 } from "../src/lib/memory/interview-family.js";
@@ -91,6 +92,78 @@ test("behavioral evaluation language does not create an AI/ML escape family", ()
   );
 
   assert.deepEqual(decision.families, ["behavioral"]);
+});
+
+test("hyphenated and underscored specialized metadata resolves to canonical families", () => {
+  assert.deepEqual(
+    resolveMemoryInterviewFamilies(
+      makeEntry({ tags: ["general-system-design"] })
+    ).families,
+    ["system-design"]
+  );
+  assert.deepEqual(
+    resolveMemoryInterviewFamilies(
+      makeEntry({ tags: ["ai_ml_system_design"] })
+    ).families,
+    ["ai-ml-system-design", "system-design"]
+  );
+  assert.deepEqual(
+    resolveMemoryInterviewFamilies(
+      makeEntry({ tags: ["project-deep-dive"] })
+    ).families,
+    ["project-deep-dive"]
+  );
+});
+
+test("hyphenated general system-design templates are blocked by the coding playbook", () => {
+  const entryIds = [
+    "mem_gsd_source_truth_derived_cdc",
+    "mem_gsd_sharding_consistent_hashing",
+    "mem_gsd_transactions_invariants_failure",
+    "mem_gsd_cache_cdn_policy",
+  ];
+
+  for (const id of entryIds) {
+    const entry = makeEntry({
+      id,
+      title: "Reusable architecture template",
+      tags: ["system-design", "general-system-design"],
+    });
+    assert.deepEqual(resolveMemoryInterviewFamilies(entry).families, [
+      "system-design",
+    ]);
+    assert.equal(
+      getMemoryInterviewFamilyGateRejectReason({
+        entry,
+        interviewTypes: ["mixed"],
+        questionType: "coding",
+        memoryPolicy: {
+          id: "coding-only",
+          allowedFamilies: ["coding"],
+        },
+      }),
+      "playbook-family-blocked"
+    );
+  }
+});
+
+test("family audit preserves truly general entries and reports no normalized alias leaks", () => {
+  const general = makeEntry({
+    id: "mem_general_preference",
+    title: "Communication preference",
+    tags: ["meeting-assistant"],
+  });
+  const specialized = makeEntry({
+    id: "mem_system_design",
+    title: "Architecture template",
+    tags: ["system-design"],
+  });
+
+  assert.deepEqual(resolveMemoryInterviewFamilies(general).families, ["general"]);
+  assert.deepEqual(
+    auditMemoryInterviewFamilyNormalization([general, specialized]),
+    []
+  );
 });
 
 function makeEntry(overrides: Partial<MemoryEntry>): MemoryEntry {

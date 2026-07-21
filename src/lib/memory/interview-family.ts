@@ -20,6 +20,11 @@ export interface MemoryInterviewFamilyDecision {
   evidence: string[];
 }
 
+export interface MemoryInterviewFamilyAuditIssue {
+  entryId: string;
+  aliases: MemoryInterviewFamily[];
+}
+
 const PROJECT_DEEP_DIVE_ENTRY_TYPES = new Set<MemoryEntry["type"]>([
   "working_summary",
   "project_context",
@@ -42,15 +47,7 @@ export function resolveMemoryInterviewFamilies(
     };
   }
 
-  const searchable = [
-    entry.type,
-    entry.title,
-    entry.tags.join(" "),
-    entry.keywords.join(" "),
-    entry.useCases.join(" "),
-  ]
-    .join(" ")
-    .toLowerCase();
+  const searchable = getNormalizedFamilyMetadata(entry);
   const families = new Set<MemoryInterviewFamily>();
   const evidence: string[] = [];
   const add = (family: MemoryInterviewFamily, reason: string) => {
@@ -76,7 +73,7 @@ export function resolveMemoryInterviewFamilies(
   }
   if (
     entry.useCases.includes("aiml_system_design_interview") ||
-    /\b(ai\/ml|ml infra|machine learning|rag|retrieval augmented generation|model serving|model routing|vector search|embedding|agentic|agent memory|llm platform|model evaluation|ml evaluation)\b/.test(
+    /\b(ai\s*\/\s*ml|ai ml|aiml|ml infra|machine learning|rag|retrieval augmented generation|model serving|model routing|vector search|embedding|agentic|agent memory|llm platform|model evaluation|ml evaluation)\b/.test(
       searchable
     )
   ) {
@@ -114,6 +111,20 @@ export function resolveMemoryInterviewFamilies(
         source: "general",
         evidence: ["no-specialized-family"],
       };
+}
+
+export function auditMemoryInterviewFamilyNormalization(
+  entries: MemoryEntry[]
+): MemoryInterviewFamilyAuditIssue[] {
+  return entries.flatMap((entry) => {
+    const aliases = inferCanonicalFamilyAliases(entry);
+    if (!aliases.length) return [];
+
+    const resolved = resolveMemoryInterviewFamilies(entry).families;
+    return resolved.some((family) => family !== "general")
+      ? []
+      : [{ entryId: entry.id, aliases }];
+  });
 }
 
 export function getMemoryInterviewFamilyGateRejectReason({
@@ -180,6 +191,44 @@ function normalizeAllowedInterviewTypes(
       (type): type is MemoryInterviewFamily => type !== "mixed"
     )
   );
+}
+
+function getNormalizedFamilyMetadata(entry: MemoryEntry) {
+  return [
+    entry.type,
+    entry.title,
+    entry.tags.join(" "),
+    entry.keywords.join(" "),
+    entry.useCases.join(" "),
+  ]
+    .join(" ")
+    .toLowerCase()
+    .replace(/[-_]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function inferCanonicalFamilyAliases(entry: MemoryEntry) {
+  const searchable = getNormalizedFamilyMetadata(entry);
+  const aliases = new Set<MemoryInterviewFamily>();
+
+  if (/\b(behavioral|behavioural)\b/.test(searchable)) {
+    aliases.add("behavioral");
+  }
+  if (/\b(coding|algorithm|data structure)\b/.test(searchable)) {
+    aliases.add("coding");
+  }
+  if (/\b(ai ml system design|aiml system design)\b/.test(searchable)) {
+    aliases.add("ai-ml-system-design");
+  }
+  if (/\b(general system design|system design)\b/.test(searchable)) {
+    aliases.add("system-design");
+  }
+  if (/\b(project deep dive|project dive)\b/.test(searchable)) {
+    aliases.add("project-deep-dive");
+  }
+
+  return uniqueFamilies(Array.from(aliases));
 }
 
 function uniqueFamilies(values: MemoryInterviewFamily[]) {

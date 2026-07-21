@@ -1,4 +1,5 @@
 import { CURATED_MEMORY_DRAFTS } from "@/lib/memory/curated-drafts";
+import { auditMemoryInterviewFamilyNormalization } from "@/lib/memory/interview-family";
 import { parseCuratedMemoryDrafts } from "@/lib/memory/parser";
 import type {
   MemoryEntry,
@@ -69,6 +70,12 @@ export async function rebuildCuratedMemoryIndex(): Promise<MemoryImportSummary> 
   const sources = dedupeById(parsedDrafts.flatMap((draft) => draft.sources));
   const entries = dedupeById(parsedDrafts.flatMap((draft) => draft.entries));
   const warnings = parsedDrafts.flatMap((draft) => draft.warnings);
+  warnings.push(
+    ...auditMemoryInterviewFamilyNormalization(entries).map(
+      (issue) =>
+        `${issue.entryId}: specialized interview-family metadata (${issue.aliases.join(", ")}) resolved as general`
+    )
+  );
   const projects = buildProjects(entries, sources);
   const importedAt = Date.now();
   const db = await getDatabase();
