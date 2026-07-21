@@ -9,6 +9,7 @@ import type {
 } from "./types";
 import type { getActiveMeetingTaskFocusSummary } from "./active-meeting-task";
 import type { CanonicalQuestionType } from "./task-taxonomy";
+import type { NativeAudioPauseResumeControlPresentation } from "./native-audio-lifecycle";
 
 export const MEETING_FOCUS_SNAPSHOT_EVENT = "meeting-focus-snapshot";
 export const MEETING_FOCUS_ACTION_EVENT = "meeting-focus-action";
@@ -46,6 +47,7 @@ export type MeetingFocusSnapshot = {
   statusLabel: string;
   error: string | null;
   isBusy: boolean;
+  audioControl: NativeAudioPauseResumeControlPresentation;
   showClarifyingQuestion: boolean;
   clarifyingQuestion: string;
   selectedClarifyingAnswerLabel?: string;
@@ -103,6 +105,14 @@ export const EMPTY_MEETING_FOCUS_SNAPSHOT: MeetingFocusSnapshot = {
   statusLabel: "Ready",
   error: null,
   isBusy: false,
+  audioControl: {
+    action: "unavailable",
+    label: "Pause",
+    title: "Start meeting audio before pausing",
+    disabled: true,
+    urgent: false,
+    busy: false,
+  },
   showClarifyingQuestion: false,
   clarifyingQuestion: "",
   selectedClarifyingAnswerLabel: undefined,

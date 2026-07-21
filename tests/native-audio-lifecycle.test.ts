@@ -3,12 +3,14 @@ import test from "node:test";
 import {
   authorizeNativeAudioLifecycleEvent,
   buildNativeAudioLifecycleTraceMetadata,
+  buildUnresolvedNativeAudioManualRecoveryMetadata,
   createNativeAudioManualRecoveryState,
   decideNativeAudioTerminalDisposition,
   getNativeAudioCaptureStartPolicy,
   parseNativeAudioLifecycleEvent,
   parseNativeAudioSegmentDroppedEvent,
   pruneNativeAudioRecoveryAttempts,
+  resolveNativeAudioPauseResumeControl,
   resolveNativeAudioPrimaryControlAction,
 } from "../src/lib/meeting/native-audio-lifecycle.js";
 
@@ -227,6 +229,99 @@ test("primary audio control resumes only explicit pause or native failure state"
       manualRecoveryRequired: false,
     }),
     "stop"
+  );
+});
+
+test("pause resume presentation keeps manual recovery urgent until it succeeds", () => {
+  assert.deepEqual(
+    resolveNativeAudioPauseResumeControl({
+      status: "error",
+      manualRecoveryPending: true,
+    }),
+    {
+      action: "manual-recovery",
+      label: "Resume audio",
+      title: "Resume meeting audio without clearing the current interview context",
+      disabled: false,
+      urgent: true,
+      busy: false,
+    }
+  );
+
+  assert.deepEqual(
+    resolveNativeAudioPauseResumeControl({
+      status: "reconnecting",
+      manualRecoveryPending: true,
+    }),
+    {
+      action: "manual-recovery",
+      label: "Resuming...",
+      title:
+        "Restoring meeting audio without clearing the current interview context",
+      disabled: true,
+      urgent: true,
+      busy: true,
+    }
+  );
+
+  assert.deepEqual(
+    resolveNativeAudioPauseResumeControl({
+      status: "listening",
+      manualRecoveryPending: false,
+    }),
+    {
+      action: "pause",
+      label: "Pause",
+      title: "Pause meeting audio",
+      disabled: false,
+      urgent: false,
+      busy: false,
+    }
+  );
+});
+
+test("pause resume presentation does not mark ordinary pause or errors urgent", () => {
+  const paused = resolveNativeAudioPauseResumeControl({
+    status: "paused",
+    manualRecoveryPending: false,
+  });
+  assert.equal(paused.action, "resume");
+  assert.equal(paused.label, "Resume");
+  assert.equal(paused.urgent, false);
+  assert.equal(paused.disabled, false);
+
+  const providerError = resolveNativeAudioPauseResumeControl({
+    status: "error",
+    manualRecoveryPending: false,
+  });
+  assert.equal(providerError.action, "unavailable");
+  assert.equal(providerError.urgent, false);
+  assert.equal(providerError.disabled, true);
+});
+
+test("unresolved manual recovery evidence preserves the outage boundary", () => {
+  assert.deepEqual(
+    buildUnresolvedNativeAudioManualRecoveryMetadata({
+      recovery: {
+        requiredAt: 5_000,
+        reason: "capture-panic",
+        message: "capture failed",
+        interruptedCaptureSessionId: "capture-old",
+        interruptedCaptureGeneration: 7,
+        circuitBreakerOpen: true,
+      },
+      stoppedAt: 8_250,
+    }),
+    {
+      stage: "manual-recovery-unresolved-at-stop",
+      requiredAt: 5_000,
+      stoppedAt: 8_250,
+      unresolvedOutageMs: 3_250,
+      reason: "capture-panic",
+      previousCaptureSessionId: "capture-old",
+      previousCaptureGeneration: 7,
+      circuitBreakerOpen: true,
+    }
   );
 });
 

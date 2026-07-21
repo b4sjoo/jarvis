@@ -83,6 +83,21 @@ export type NativeAudioPrimaryControlAction =
   | "resume"
   | "manual-recovery";
 
+export type NativeAudioPauseResumeControlAction =
+  | "pause"
+  | "resume"
+  | "manual-recovery"
+  | "unavailable";
+
+export interface NativeAudioPauseResumeControlPresentation {
+  action: NativeAudioPauseResumeControlAction;
+  label: string;
+  title: string;
+  disabled: boolean;
+  urgent: boolean;
+  busy: boolean;
+}
+
 export function getNativeAudioCaptureStartPolicy(
   mode: NativeAudioCaptureStartMode
 ): NativeAudioCaptureStartPolicy {
@@ -139,6 +154,66 @@ export function resolveNativeAudioPrimaryControlAction({
   return "start";
 }
 
+export function resolveNativeAudioPauseResumeControl({
+  status,
+  manualRecoveryPending,
+}: {
+  status: MeetingAssistantStatus;
+  manualRecoveryPending: boolean;
+}): NativeAudioPauseResumeControlPresentation {
+  if (manualRecoveryPending) {
+    const busy = status === "starting" || status === "reconnecting";
+    return {
+      action: "manual-recovery",
+      label: busy ? "Resuming..." : "Resume audio",
+      title: busy
+        ? "Restoring meeting audio without clearing the current interview context"
+        : "Resume meeting audio without clearing the current interview context",
+      disabled: busy,
+      urgent: true,
+      busy,
+    };
+  }
+
+  if (status === "paused") {
+    return {
+      action: "resume",
+      label: "Resume",
+      title: "Resume meeting audio",
+      disabled: false,
+      urgent: false,
+      busy: false,
+    };
+  }
+
+  if (
+    status === "listening" ||
+    status === "transcribing" ||
+    status === "thinking"
+  ) {
+    return {
+      action: "pause",
+      label: "Pause",
+      title: "Pause meeting audio",
+      disabled: false,
+      urgent: false,
+      busy: false,
+    };
+  }
+
+  return {
+    action: "unavailable",
+    label: "Pause",
+    title:
+      status === "starting" || status === "reconnecting"
+        ? "Meeting audio is changing state"
+        : "Start meeting audio before pausing",
+    disabled: true,
+    urgent: false,
+    busy: status === "starting" || status === "reconnecting",
+  };
+}
+
 export function createNativeAudioManualRecoveryState({
   event,
   circuitBreakerOpen,
@@ -156,6 +231,25 @@ export function createNativeAudioManualRecoveryState({
     interruptedCaptureGeneration: event.captureGeneration,
     circuitBreakerOpen,
   };
+}
+
+export function buildUnresolvedNativeAudioManualRecoveryMetadata({
+  recovery,
+  stoppedAt,
+}: {
+  recovery: NativeAudioManualRecoveryState;
+  stoppedAt: number;
+}) {
+  return {
+    stage: "manual-recovery-unresolved-at-stop",
+    requiredAt: recovery.requiredAt,
+    stoppedAt,
+    unresolvedOutageMs: Math.max(0, stoppedAt - recovery.requiredAt),
+    reason: recovery.reason,
+    previousCaptureSessionId: recovery.interruptedCaptureSessionId,
+    previousCaptureGeneration: recovery.interruptedCaptureGeneration,
+    circuitBreakerOpen: recovery.circuitBreakerOpen,
+  } as const;
 }
 
 export function decideNativeAudioTerminalDisposition(

@@ -108,6 +108,7 @@ import {
   buildMeetingAnswerSummary,
   CaptureLifecycleCoordinator,
   authorizeNativeAudioLifecycleEvent,
+  buildUnresolvedNativeAudioManualRecoveryMetadata,
   createNativeAudioManualRecoveryState,
   decideNativeAudioTerminalDisposition,
   getNativeAudioCaptureStartPolicy,
@@ -2963,6 +2964,19 @@ export function useMeetingAssistant() {
     const coordinator = captureLifecycleCoordinatorRef.current!;
     const lifecycleOperation = coordinator.claim("stop");
     const nativeLeaseToStop = readNativeCaptureLease();
+    const unresolvedManualRecovery = nativeAudioManualRecoveryRef.current;
+    if (unresolvedManualRecovery) {
+      const stoppedAt = Date.now();
+      const contextState = contextManagerRef.current.getState();
+      sessionRecordingManagerRef.current?.recordCaptureLifecycle({
+        ...buildUnresolvedNativeAudioManualRecoveryMetadata({
+          recovery: unresolvedManualRecovery,
+          stoppedAt,
+        }),
+        activeMeetingTaskId: contextState.activeMeetingTask?.id,
+        transcriptTurns: contextState.transcriptTurns.length,
+      });
+    }
     cancelNativeAudioFaultTraces("meeting-assistant-stopped");
     advanceRuntimeEpoch("meeting-assistant-stopped");
     activeRef.current = false;
@@ -6015,14 +6029,21 @@ export function useMeetingAssistant() {
           activeRef.current = true;
           const contextState = contextManagerRef.current.getState();
           if (manualRecoveryAttempt) {
+            const resumedAt = Date.now();
+            const requiredToResumedMs = Math.max(
+              0,
+              resumedAt - manualRecoveryAttempt.pending.requiredAt
+            );
             nativeAudioManualRecoveryRef.current = null;
             sessionRecordingManagerRef.current?.recordCaptureLifecycle({
               stage: "manual-recovery-succeeded",
               manualRecoveryAttemptId: manualRecoveryAttempt.id,
               recoveryStartedAt: manualRecoveryAttempt.startedAt,
-              recoveryDurationMs: Date.now() - manualRecoveryAttempt.startedAt,
-              estimatedAudioBlackoutMs:
-                Date.now() - manualRecoveryAttempt.pending.requiredAt,
+              resumedAt,
+              recoveryDurationMs:
+                resumedAt - manualRecoveryAttempt.startedAt,
+              requiredToResumedMs,
+              estimatedAudioBlackoutMs: requiredToResumedMs,
               previousCaptureSessionId:
                 manualRecoveryAttempt.pending.interruptedCaptureSessionId,
               previousCaptureGeneration:

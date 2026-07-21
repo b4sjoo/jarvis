@@ -64,6 +64,7 @@ import {
   normalizeCanonicalQuestionType,
   overlayMeetingAnswerArtifacts,
   resolveMeetingAnswerProfile,
+  resolveNativeAudioPauseResumeControl,
   resolveNativeAudioPrimaryControlAction,
   resolveCodingArtifactDisplay,
   resolveWhiteboardArtifactDisplay,
@@ -590,12 +591,23 @@ export const MeetingAssistant = ({
     meeting.status === "listening" ||
     meeting.status === "transcribing" ||
     meeting.status === "thinking";
+  const manualAudioRecoveryPending = Boolean(
+    meeting.nativeAudioManualRecovery
+  );
   const manualAudioRecoveryRequired =
-    meeting.status === "error" && Boolean(meeting.nativeAudioManualRecovery);
+    meeting.status === "error" && manualAudioRecoveryPending;
   const primaryAudioAction = resolveNativeAudioPrimaryControlAction({
     status: meeting.status,
     manualRecoveryRequired: manualAudioRecoveryRequired,
   });
+  const audioPauseResumeControl = useMemo(
+    () =>
+      resolveNativeAudioPauseResumeControl({
+        status: meeting.status,
+        manualRecoveryPending: manualAudioRecoveryPending,
+      }),
+    [manualAudioRecoveryPending, meeting.status]
+  );
   const primaryAudioActionLabel =
     primaryAudioAction === "stop"
       ? "Stop"
@@ -649,6 +661,7 @@ export const MeetingAssistant = ({
       statusLabel: meetingStatusLabel,
       error: meeting.error,
       isBusy,
+      audioControl: audioPauseResumeControl,
       showClarifyingQuestion,
       clarifyingQuestion,
       selectedClarifyingAnswerLabel: activeClarifyingSelection?.label,
@@ -697,6 +710,7 @@ export const MeetingAssistant = ({
       meeting.speechCorrections,
       meeting.status,
       meetingStatusLabel,
+      audioPauseResumeControl,
       showClarifyingQuestion,
       displaySuggestionSections.primaryAnswer,
       displaySuggestionSections.chineseThinking,
@@ -897,17 +911,18 @@ export const MeetingAssistant = ({
   };
 
   const handlePauseResume = async () => {
-    if (primaryAudioAction === "manual-recovery") {
-      await meeting.resumeAfterNativeFailure();
-      return;
-    }
-    if (isPaused) {
-      await meeting.resume();
-      return;
-    }
-
-    if (isRunning) {
-      await meeting.pause();
+    switch (audioPauseResumeControl.action) {
+      case "manual-recovery":
+        await meeting.resumeAfterNativeFailure();
+        return;
+      case "resume":
+        await meeting.resume();
+        return;
+      case "pause":
+        await meeting.pause();
+        return;
+      case "unavailable":
+        return;
     }
   };
 
@@ -1257,24 +1272,20 @@ export const MeetingAssistant = ({
                 </Button>
                 <Button
                   size="icon"
-                  variant="outline"
+                  variant={
+                    audioPauseResumeControl.urgent ? "destructive" : "outline"
+                  }
                   className="h-8 w-8"
-                  title={
-                    primaryAudioAction === "manual-recovery" || isPaused
-                      ? "Resume"
-                      : "Pause"
-                  }
+                  title={audioPauseResumeControl.title}
                   onClick={handlePauseResume}
-                  disabled={
-                    !isRunning &&
-                    !isPaused &&
-                    primaryAudioAction !== "manual-recovery"
-                  }
+                  disabled={audioPauseResumeControl.disabled}
                 >
-                  {isPaused || primaryAudioAction === "manual-recovery" ? (
-                    <PlayIcon className="h-4 w-4" />
-                  ) : (
+                  {audioPauseResumeControl.busy ? (
+                    <Loader2Icon className="h-4 w-4 animate-spin" />
+                  ) : audioPauseResumeControl.action === "pause" ? (
                     <PauseIcon className="h-4 w-4" />
+                  ) : (
+                    <PlayIcon className="h-4 w-4" />
                   )}
                 </Button>
                 <Button
@@ -2134,23 +2145,22 @@ export const MeetingAssistant = ({
               </Button>
               <Button
                 size="sm"
-                variant="outline"
-                className="h-8 gap-1.5 text-xs"
-                onClick={handlePauseResume}
-                disabled={
-                  !isRunning &&
-                  !isPaused &&
-                  primaryAudioAction !== "manual-recovery"
+                variant={
+                  audioPauseResumeControl.urgent ? "destructive" : "outline"
                 }
+                className="h-8 gap-1.5 text-xs"
+                title={audioPauseResumeControl.title}
+                onClick={handlePauseResume}
+                disabled={audioPauseResumeControl.disabled}
               >
-                {isPaused || primaryAudioAction === "manual-recovery" ? (
-                  <PlayIcon className="h-3.5 w-3.5" />
-                ) : (
+                {audioPauseResumeControl.busy ? (
+                  <Loader2Icon className="h-3.5 w-3.5 animate-spin" />
+                ) : audioPauseResumeControl.action === "pause" ? (
                   <PauseIcon className="h-3.5 w-3.5" />
+                ) : (
+                  <PlayIcon className="h-3.5 w-3.5" />
                 )}
-                {isPaused || primaryAudioAction === "manual-recovery"
-                  ? "Resume"
-                  : "Pause"}
+                {audioPauseResumeControl.label}
               </Button>
               <Button
                 size="sm"

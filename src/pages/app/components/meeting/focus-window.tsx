@@ -30,6 +30,8 @@ import {
   HelpCircleIcon,
   Loader2Icon,
   MessageSquareTextIcon,
+  PauseIcon,
+  PlayIcon,
   SendIcon,
   XIcon,
 } from "lucide-react";
@@ -313,10 +315,27 @@ function MeetingFocusControlsWindow({
                 );
               })}
           </div>
+          <Button
+            size="sm"
+            variant={snapshot.audioControl.urgent ? "destructive" : "outline"}
+            className="ml-auto h-8 min-w-[92px] shrink-0 gap-1.5 px-3 text-[10px]"
+            title={snapshot.audioControl.title}
+            onClick={() => sendFocusAction({ type: "toggle-listening" })}
+            disabled={!snapshot.active || snapshot.audioControl.disabled}
+          >
+            {snapshot.audioControl.busy ? (
+              <Loader2Icon className="h-3 w-3 shrink-0 animate-spin" />
+            ) : snapshot.audioControl.action === "pause" ? (
+              <PauseIcon className="h-3 w-3 shrink-0" />
+            ) : (
+              <PlayIcon className="h-3 w-3 shrink-0" />
+            )}
+            {snapshot.audioControl.label}
+          </Button>
           <Badge
             variant="outline"
             className={cn(
-              "ml-auto h-7 shrink-0 rounded-md px-2 text-[10px]",
+              "h-7 shrink-0 rounded-md px-2 text-[10px]",
               snapshot.error ? "border-red-300 text-red-700" : "text-muted-foreground"
             )}
             title={snapshot.error || snapshot.statusLabel}
