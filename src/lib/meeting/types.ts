@@ -491,7 +491,15 @@ export type ManualQuestionTypeCorrectionTarget =
 
 export type ManualQuestionTypeCorrectionTargetSource =
   | "active-task"
+  | "current-question"
   | "provisional-question";
+
+export type ManualCorrectionScope =
+  | "same-question-retype"
+  | "child-retype"
+  | "resume-parent"
+  | "linked-parent-extension"
+  | "independent-new-parent";
 
 export type ManualQuestionTypeCorrectionStatus =
   | "pending"
@@ -515,6 +523,12 @@ export interface ManualQuestionTypeCorrection {
   source: ManualQuestionTypeCorrectionSource;
   targetSource: ManualQuestionTypeCorrectionTargetSource;
   target: ManualQuestionTypeCorrectionTarget;
+  scope?: ManualCorrectionScope;
+  scopeReason?: string;
+  standaloneTaskScore?: number;
+  standaloneTaskEvidence?: string[];
+  continuityScore?: number;
+  continuityEvidence?: string[];
   detectedType: CanonicalQuestionType;
   correctedType: CanonicalQuestionType;
   correctionTraceId: string;

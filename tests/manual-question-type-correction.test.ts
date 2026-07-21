@@ -4,6 +4,7 @@ import type { ActiveMeetingTask } from "../src/lib/meeting/active-meeting-task.j
 import {
   applyManualQuestionTypeCorrectionToParent,
   decideManualQuestionTypeCorrection,
+  decideManualCorrectionScope,
   decideProvisionalQuestionTypeCorrection,
   resolveManualCorrectionTarget,
   ManualCorrectionOperationCoordinator,
@@ -64,7 +65,7 @@ test("promotes an unknown provisional question only to a parent type", () => {
   );
 });
 
-test("uses a visible provisional question only when there is no active task", () => {
+test("keeps current question lineage authoritative even when a parent is active", () => {
   const lineage = {
     questionInstanceId: "trace:trace_1",
     questionOriginTraceId: "trace_1",
@@ -94,15 +95,20 @@ test("uses a visible provisional question only when there is no active task", ()
     }),
     { source: "provisional-question", lineage }
   );
-  assert.equal(
+  assert.deepEqual(
     resolveManualCorrectionTarget({
       activeTask: makeActiveTask({ questionType: "behavioral" }),
       currentQuestionLineage: lineage,
       latestSuggestion,
       sessionId: "session_1",
       runtimeEpoch: 2,
-    }).source,
-    "active-task"
+    }),
+    {
+      source: "active-task",
+      task: makeActiveTask({ questionType: "behavioral" }),
+      lineage,
+      targetSource: "current-question",
+    }
   );
   assert.equal(
     resolveManualCorrectionTarget({
@@ -112,6 +118,133 @@ test("uses a visible provisional question only when there is no active task", ()
       runtimeEpoch: 3,
     }).source,
     "none"
+  );
+});
+
+test("keeps a same-origin system-design correction on the existing parent", () => {
+  const task = makeActiveTask({ questionType: "general-system-design" });
+  task.parent.startTurnId = "turn_origin";
+  const decision = decideManualQuestionTypeCorrection(
+    task,
+    "ai-ml-system-design"
+  );
+  const scope = decideManualCorrectionScope({
+    task,
+    decision,
+    lineage: makeLineage("turn_origin"),
+    latestQuestionText: "Design a RAG system for trip planning.",
+    parentQuestionText: "Design a RAG system for trip planning.",
+    classifierConfidence: 0.9,
+  });
+
+  assert.equal(scope.scope, "same-question-retype");
+  assert.equal(scope.currentQuestionIsParentOrigin, true);
+});
+
+test("splits an independent travel agent from a ride-share parent", () => {
+  const task = makeActiveTask({ questionType: "general-system-design" });
+  task.parent.topic = "Design a ride-sharing app with location tracking";
+  task.parent.startTurnId = "turn_ride_share";
+  const decision = decideManualQuestionTypeCorrection(
+    task,
+    "ai-ml-system-design"
+  );
+  const scope = decideManualCorrectionScope({
+    task,
+    decision,
+    lineage: makeLineage("turn_travel_agent"),
+    latestQuestionText:
+      "Design a self-evolving travel recommendation agent.",
+    classifierConfidence: 0.9,
+  });
+
+  assert.equal(scope.scope, "independent-new-parent");
+  assert.ok(scope.standaloneTaskScore >= 3);
+  assert.ok(scope.continuityScore <= 0);
+  assert.ok(
+    scope.continuityEvidence.includes("no-shared-product-entity-or-data")
+  );
+});
+
+test("creates a linked parent for a recommendation extension of the same app", () => {
+  const task = makeActiveTask({ questionType: "general-system-design" });
+  task.parent.topic = "Design a food delivery app";
+  task.parent.startTurnId = "turn_food_delivery";
+  const decision = decideManualQuestionTypeCorrection(
+    task,
+    "ai-ml-system-design"
+  );
+  const scope = decideManualCorrectionScope({
+    task,
+    decision,
+    lineage: makeLineage("turn_food_recommendation"),
+    latestQuestionText:
+      "For this app, design a self-evolving food recommendation agent.",
+    classifierConfidence: 0.9,
+  });
+
+  assert.equal(scope.scope, "linked-parent-extension");
+  assert.ok(scope.continuityScore >= 4);
+  assert.ok(scope.continuityEvidence.includes("explicit-same-system-marker"));
+});
+
+test("does not split elliptical follow-ups or adjacent constraints", () => {
+  const task = makeActiveTask({ questionType: "general-system-design" });
+  task.parent.topic = "Design a ride-sharing app";
+  task.parent.startTurnId = "turn_origin";
+  const decision = decideManualQuestionTypeCorrection(
+    task,
+    "ai-ml-system-design"
+  );
+
+  for (const [turnId, text] of [
+    ["turn_scale", "How would you scale it?"],
+    ["turn_language", "In Python."],
+    ["turn_qps", "Estimate QPS."],
+  ]) {
+    const scope = decideManualCorrectionScope({
+      task,
+      decision,
+      lineage: makeLineage(turnId),
+      latestQuestionText: text,
+    });
+    assert.equal(scope.scope, "same-question-retype", text);
+    assert.ok(scope.standaloneTaskScore < 3, text);
+  }
+});
+
+test("preserves child retype and resume-parent scopes", () => {
+  const child = makeChild({
+    questionType: "field-knowledge",
+    basedOnTurnIds: ["turn_child"],
+  });
+  const task = makeActiveTask({
+    questionType: "ai-ml-system-design",
+    child,
+  });
+  const childDecision = decideManualQuestionTypeCorrection(task, "coding");
+  const resumeDecision = decideManualQuestionTypeCorrection(
+    task,
+    "ai-ml-system-design"
+  );
+
+  assert.equal(
+    decideManualCorrectionScope({
+      task,
+      decision: childDecision,
+      lineage: makeLineage("turn_child"),
+      latestQuestionText: child.question,
+    }).scope,
+    "child-retype"
+  );
+  assert.equal(
+    decideManualCorrectionScope({
+      task,
+      decision: resumeDecision,
+      lineage: makeLineage("turn_child"),
+      latestQuestionText: child.question,
+    }).scope,
+    "resume-parent"
   );
 });
 
@@ -336,5 +469,17 @@ function makeWhiteboard(
     updateSource: "model-output",
     updatedAt: now,
     createdAt: now,
+  };
+}
+
+function makeLineage(triggerTurnId: string) {
+  return {
+    questionInstanceId: `trace:${triggerTurnId}`,
+    questionOriginTraceId: triggerTurnId,
+    sourceSuggestionId: `suggestion_${triggerTurnId}`,
+    triggerTurnId,
+    sessionId: "session_1",
+    runtimeEpoch: 1,
+    identityState: "canonical" as const,
   };
 }

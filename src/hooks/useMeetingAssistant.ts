@@ -184,6 +184,7 @@ import {
   upsertQuestionHumanEvaluation,
   buildQuestionEvaluationPatchFromTrace,
   decideManualQuestionTypeCorrection,
+  decideManualCorrectionScope,
   decideProvisionalQuestionTypeCorrection,
   resolveManualCorrectionTarget,
   applyManualQuestionTypeCorrectionToParent,
@@ -7492,10 +7493,38 @@ export function useMeetingAssistant() {
         targetResolution.source === "provisional-question"
           ? targetResolution.lineage
           : undefined;
+      const correctionLineage = targetResolution.lineage;
       const decision = activeTask
         ? decideManualQuestionTypeCorrection(activeTask, correctedType)
         : decideProvisionalQuestionTypeCorrection(correctedType);
       if (decision.noOp || !decision.target) return;
+
+      const correctionOriginTurn = correctionLineage?.triggerTurnId
+        ? contextState.transcriptTurns.find(
+            (turn) => turn.id === correctionLineage.triggerTurnId
+          )
+        : undefined;
+      const parentOriginTurn = activeTask?.parent.startTurnId
+        ? contextState.transcriptTurns.find(
+            (turn) => turn.id === activeTask.parent.startTurnId
+          )
+        : undefined;
+      const correctionQuestionText =
+        correctionOriginTurn?.text ??
+        state.latestSuggestion?.meetingAnswer?.sections.question ??
+        activeTask?.child?.question ??
+        activeTask?.screen?.question ??
+        activeTask?.parent.topic ??
+        "";
+      const correctionScopeDecision = decideManualCorrectionScope({
+        task: activeTask,
+        decision,
+        lineage: correctionLineage,
+        latestQuestionText: correctionQuestionText,
+        parentQuestionText:
+          parentOriginTurn?.text ?? activeTask?.parent.topic,
+        classifierConfidence: activeTask?.screen?.classifierConfidence,
+      });
 
       const existingParent =
         contextState.activeInterviewTask ??
@@ -7521,9 +7550,10 @@ export function useMeetingAssistant() {
         }));
         return;
       }
-      const correctionTargetSource = activeTask
-        ? "active-task"
-        : "provisional-question";
+      const correctionTargetSource =
+        targetResolution.source === "active-task"
+          ? targetResolution.targetSource
+          : "provisional-question";
 
       const eventId = createMeetingId("question_type_correction");
       const operationClaim =
@@ -7585,11 +7615,19 @@ export function useMeetingAssistant() {
           detectedQuestionType: decision.detectedType,
           correctedQuestionType: decision.correctedType,
           correctionDecisionReason: decision.reason,
+          manualCorrectionScope: correctionScopeDecision.scope,
+          correctionScopeReason: correctionScopeDecision.reason,
+          standaloneTaskScore:
+            correctionScopeDecision.standaloneTaskScore,
+          standaloneTaskEvidence:
+            correctionScopeDecision.standaloneTaskEvidence,
+          continuityScore: correctionScopeDecision.continuityScore,
+          continuityEvidence: correctionScopeDecision.continuityEvidence,
           correctionProviderAvailable: Boolean(correctionModelRoute.provider),
           ...correctionModelRouteMetadata,
           supersedesCorrectionId: operationClaim.supersedesOperationId,
           ...formatQuestionLineageForTrace(
-            provisionalLineage ?? state.currentQuestionLineage
+            correctionLineage ?? state.currentQuestionLineage
           ),
           ...(activeTask ? getActiveMeetingTaskTraceMetadata(activeTask) : {}),
         }
@@ -7612,10 +7650,10 @@ export function useMeetingAssistant() {
         );
         return runtimeDecision;
       };
-      const correctionQuestion = provisionalLineage
+      const correctionQuestion = correctionLineage
         ? {
-            questionId: provisionalLineage.questionInstanceId,
-            sourceTraceId: provisionalLineage.questionOriginTraceId,
+            questionId: correctionLineage.questionInstanceId,
+            sourceTraceId: correctionLineage.questionOriginTraceId,
           }
         : resolveCorrectionQuestionInstance(
             state.questionEvaluations,
@@ -7633,6 +7671,12 @@ export function useMeetingAssistant() {
         source,
         targetSource: correctionTargetSource,
         target: decision.target,
+        scope: correctionScopeDecision.scope,
+        scopeReason: correctionScopeDecision.reason,
+        standaloneTaskScore: correctionScopeDecision.standaloneTaskScore,
+        standaloneTaskEvidence: correctionScopeDecision.standaloneTaskEvidence,
+        continuityScore: correctionScopeDecision.continuityScore,
+        continuityEvidence: correctionScopeDecision.continuityEvidence,
         detectedType: decision.detectedType,
         correctedType: decision.correctedType,
         correctionTraceId: correctionTrace.id,
@@ -7685,11 +7729,7 @@ export function useMeetingAssistant() {
           correctedType,
           activeScreenTask?.classifier?.topicDomain
         );
-        const provisionalOriginTurn = provisionalLineage?.triggerTurnId
-          ? contextState.transcriptTurns.find(
-              (turn) => turn.id === provisionalLineage.triggerTurnId
-            )
-          : undefined;
+        const provisionalOriginTurn = correctionOriginTurn;
         const correctionQuery = [
           activeTask?.child?.question,
           activeTask?.screen?.question,
@@ -7857,6 +7897,8 @@ export function useMeetingAssistant() {
             manualQuestionTypeCorrectionTarget: decision.target,
             manualCorrectionTargetSource: correctionTargetSource,
             correctionRegenerationTriggered: true,
+            manualCorrectionScope: correctionScopeDecision.scope,
+            correctionScopeReason: correctionScopeDecision.reason,
             correctionProviderAvailable: Boolean(correctionModelRoute.provider),
             correctionProviderSnapshotAt: requestedAt,
             ...correctionModelRouteMetadata,
@@ -7942,7 +7984,7 @@ export function useMeetingAssistant() {
           questionEvaluations,
           manualQuestionTypeCorrection: correction,
           currentQuestionLineage: promoteQuestionLineage(
-            provisionalLineage ?? previous.currentQuestionLineage
+            correctionLineage ?? previous.currentQuestionLineage
           ),
           error: null,
         }));
@@ -7955,7 +7997,7 @@ export function useMeetingAssistant() {
           advisorJobSource: "manual-correction",
           taskMutationAuthority: "manual-correction",
           questionLineage: promoteQuestionLineage(
-            provisionalLineage ?? state.currentQuestionLineage
+            correctionLineage ?? state.currentQuestionLineage
           ),
         });
         const regenerationStatus = traceStoreRef.current
