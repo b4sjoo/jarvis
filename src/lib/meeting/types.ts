@@ -678,12 +678,17 @@ export interface AdvisorSuggestion {
   basedOnTurnIds: string[];
   basedOnObservationIds: string[];
   confidence: "low" | "medium" | "high";
+  questionLineage?: QuestionInstanceLineage;
 }
 
 export interface QuestionInstanceLineage {
   questionInstanceId: string;
   questionOriginTraceId: string;
+  triggerTurnId?: string;
   sourceSuggestionId?: string;
+  sessionId?: string;
+  runtimeEpoch?: number;
+  identityState?: "provisional" | "canonical";
 }
 
 export type MeetingSetupWarningCode =
@@ -1068,6 +1073,7 @@ export interface MeetingAssistantState {
   activeInterviewTask?: ActiveInterviewParent;
   activeMeetingTask?: ActiveMeetingTask;
   manualQuestionTypeCorrection?: ManualQuestionTypeCorrection;
+  currentQuestionLineage?: QuestionInstanceLineage;
   traces: MeetingTrace[];
   latestSuggestion: AdvisorSuggestion | null;
   latestReliableSuggestion: AdvisorSuggestion | null;

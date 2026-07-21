@@ -25,6 +25,7 @@ export * from "./native-audio-lifecycle";
 export * from "./memory-evaluation";
 export * from "./personal-evidence-guardrail";
 export * from "./project-binding";
+export * from "./question-lineage";
 export * from "./runtime-commit-authorization";
 export * from "./screen-observation.service";
 export * from "./screen-task-scope";

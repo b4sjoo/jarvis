@@ -136,6 +136,13 @@ export function resolveSuggestionQuestionLineage(input: {
   const sourceTraceId = suggestion?.sourceTraceId;
   if (!suggestion || !sourceTraceId) return undefined;
 
+  if (suggestion.questionLineage) {
+    return {
+      ...suggestion.questionLineage,
+      sourceSuggestionId: suggestion.id,
+    };
+  }
+
   const sourceTrace = input.traces.find((trace) => trace.id === sourceTraceId);
   const explicitQuestionId = readMetadataString(
     sourceTrace?.metadata,

@@ -208,6 +208,10 @@ import {
   resolveAdvisorTaskEvidenceSource,
   PlaybookPhaseDecision,
   SENTENCE_COMPLETION_BUFFER_MS,
+  attachQuestionLineageToSuggestion,
+  createAuthorizedQuestionLineage,
+  formatQuestionLineageForTrace,
+  promoteQuestionLineage,
 } from "@/lib/meeting";
 
 const ADVISOR_DEBOUNCE_MS = 750;
@@ -733,6 +737,7 @@ function clearActiveScreenTaskState(
     error: null,
     activeMeetingTask: undefined,
     manualQuestionTypeCorrection: undefined,
+    currentQuestionLineage: undefined,
   };
 }
 
@@ -1700,6 +1705,7 @@ export function useMeetingAssistant() {
         error: null,
         speechCorrections: [],
         manualQuestionTypeCorrection: undefined,
+        currentQuestionLineage: undefined,
       }));
 
       return {
@@ -3038,6 +3044,7 @@ export function useMeetingAssistant() {
             : previous.latestSuggestion,
         latestReliableSuggestion: null,
         manualQuestionTypeCorrection: undefined,
+        currentQuestionLineage: undefined,
         partialSuggestion: "",
         error: null,
         audioStatus,
@@ -3286,6 +3293,17 @@ export function useMeetingAssistant() {
       hasExplicitAction,
       decision: inferredTurnIntentDecision,
     });
+    const questionLineage = createAuthorizedQuestionLineage({
+      traceId,
+      triggerTurnId: advisorJob.triggerTurnId ?? latestTurn?.id,
+      sessionId: advisorJob.expectedSessionId,
+      runtimeEpoch: advisorJob.runtimeCommitToken.runtimeEpoch,
+      action:
+        inferredTurnIntentDecision?.action ??
+        (hasExplicitAction ? "answer-refresh" : undefined),
+      executionAuthorized: executionAuthorization.authorized,
+      inherited: advisorJob.questionLineage,
+    });
     const questionTypeTraceMetadata =
       formatAdvisorQuestionTypeDecisionForTrace(advisorTaskSignals);
     if (traceId) {
@@ -3323,6 +3341,16 @@ export function useMeetingAssistant() {
         advisorExecutionAuthorized: executionAuthorization.authorized,
         advisorExecutionAuthorizationReason: executionAuthorization.reason,
         advisorExecutionBypassed: executionAuthorization.bypassed,
+        ...formatQuestionLineageForTrace(questionLineage),
+        provisionalQuestionEligible:
+          questionLineage?.identityState === "provisional",
+        provisionalQuestionEligibilityReason: questionLineage
+          ? advisorJob.questionLineage
+            ? "inherited-question-lineage"
+            : "authorized-answer-refresh"
+          : executionAuthorization.authorized
+            ? "non-answer-refresh"
+            : executionAuthorization.reason,
         advisorTriggerTurnId: advisorJob.triggerTurnId,
         memoryRetrievalSuppressedReason: executionAuthorization.authorized
           ? undefined
@@ -4083,6 +4111,22 @@ export function useMeetingAssistant() {
         ),
         sourceTraceId: traceId,
       };
+      const committedQuestionLineage =
+        nextSuggestion.kind === "silent"
+          ? undefined
+          : attachQuestionLineageToSuggestion(
+              contextState.activeMeetingTask
+                ? promoteQuestionLineage(questionLineage)
+                : questionLineage,
+              nextSuggestion
+            );
+      nextSuggestion.questionLineage = committedQuestionLineage;
+      if (traceId) {
+        traceStoreRef.current.updateMetadata(
+          traceId,
+          formatQuestionLineageForTrace(committedQuestionLineage)
+        );
+      }
 
       setState((previous) => ({
         ...previous,
@@ -4098,6 +4142,7 @@ export function useMeetingAssistant() {
         activeScreenTask: contextState.activeScreenTask,
         activeInterviewTask: contextState.activeInterviewTask,
         activeMeetingTask: contextState.activeMeetingTask,
+        currentQuestionLineage: committedQuestionLineage,
       }));
       releaseAdvisorJob(advisorJob, "committed", {
         commitAuthorized: finalCommitDecision.authorized,
@@ -6107,6 +6152,12 @@ export function useMeetingAssistant() {
         partialSuggestion: "",
         error: null,
         audioStatus,
+        currentQuestionLineage: previous.currentQuestionLineage
+          ? {
+              ...previous.currentQuestionLineage,
+              runtimeEpoch: runtimeEpochRef.current,
+            }
+          : undefined,
       }));
     });
   }, [
@@ -7198,6 +7249,33 @@ export function useMeetingAssistant() {
               basedOnObservationIds: [observation.id],
               confidence: "low",
             };
+        const screenQuestionLineage = attachQuestionLineageToSuggestion(
+          updatedContextState.activeMeetingTask
+            ? promoteQuestionLineage(
+                createAuthorizedQuestionLineage({
+                  traceId: trace.id,
+                  triggerTurnId: basedOnTurnIds.at(-1),
+                  sessionId: updatedContextState.sessionId,
+                  runtimeEpoch: screenRuntimeToken.runtimeEpoch,
+                  action: "answer-refresh",
+                  executionAuthorized: nextSuggestion.kind !== "silent",
+                })
+              )
+            : createAuthorizedQuestionLineage({
+                traceId: trace.id,
+                triggerTurnId: basedOnTurnIds.at(-1),
+                sessionId: updatedContextState.sessionId,
+                runtimeEpoch: screenRuntimeToken.runtimeEpoch,
+                action: "answer-refresh",
+                executionAuthorized: nextSuggestion.kind !== "silent",
+              }),
+          nextSuggestion
+        );
+        nextSuggestion.questionLineage = screenQuestionLineage;
+        traceStoreRef.current.updateMetadata(
+          trace.id,
+          formatQuestionLineageForTrace(screenQuestionLineage)
+        );
 
         setState((previous) => ({
           ...previous,
@@ -7210,6 +7288,7 @@ export function useMeetingAssistant() {
           activeScreenTask: updatedContextState.activeScreenTask,
           activeInterviewTask: updatedContextState.activeInterviewTask,
           activeMeetingTask: updatedContextState.activeMeetingTask,
+          currentQuestionLineage: screenQuestionLineage,
           interviewSessionContext: updatedContextState.interviewSessionContext,
           error: null,
         }));
