@@ -623,6 +623,10 @@ export function inferQuestionTypeDecisionFromText(
     /\b(use|using|in|with)\s+(python|java|javascript|typescript|go|golang|rust|c\+\+|c#|swift|kotlin)\b/.test(
       normalized
     );
+  const hasLanguageBoundImplementationDemonstration =
+    /\b(?:show|demonstrate)\s+(?:me\s+)?how\s+(?:(?:you|we)\s+)?(?:would\s+)?(?:to\s+)?(?:write|implement|code)\b/.test(
+      normalized
+    ) && hasProgrammingLanguageConstraint;
   const hasDataStructureOrAlgorithmObject =
     /\b(array|linked list|stack|queue|heap|tree|graph|hash map|hash table|binary search|sorting|sort|traversal|dynamic programming|sliding window|two pointers?|recursion|backtracking)\b/.test(
       normalized
@@ -687,6 +691,21 @@ export function inferQuestionTypeDecisionFromText(
     addEvidence("general-system-design", 0.93, "hypothetical-system-design");
   }
 
+  if (
+    hasLanguageBoundImplementationDemonstration &&
+    !hasBehavioralFrame &&
+    !hasStrongPastProjectFrame &&
+    !hasExplicitProjectStackFrame &&
+    !hasProductionProjectContext &&
+    !hasStrongSystemDesignFrame
+  ) {
+    addEvidence(
+      "coding",
+      0.96,
+      "language-bound-implementation-demonstration"
+    );
+  }
+
   const hasCompatibleCodingEvidence = Boolean(
     hasAlgorithmDesignRequest ||
       hasExplicitCodeOutputRequest ||
@@ -694,6 +713,7 @@ export function inferQuestionTypeDecisionFromText(
       hasCodingArtifact ||
       hasComplexityRequest ||
       hasFunctionImplementationFrame ||
+      hasLanguageBoundImplementationDemonstration ||
       hasProgrammingLanguageConstraint ||
       hasDataStructureOrAlgorithmObject ||
       /\b(algorithm|code|implementation)\b/.test(normalized)

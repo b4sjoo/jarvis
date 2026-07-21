@@ -381,11 +381,35 @@ test("recognizes algorithm design and explicit code output requests", () => {
     "Come up with an optimal algorithm for sliding window maximum",
     "Please write the complete code for this solution",
     "Implement a method that returns all matching paths",
+    "Transformers, like, show how you write the transformers for me in Python.",
+    "Can you show me how to implement multi-head attention in Python?",
   ]) {
     const decision = inferQuestionTypeDecisionFromText(question);
     assert.equal(decision.type, "coding", question);
     assert.ok(decision.confidence >= 0.9, question);
   }
+});
+
+test("keeps language-bound implementation evidence behind stronger conflict frames", () => {
+  const projectDecision = inferQuestionTypeDecisionFromText(
+    "Show me how you implemented the transformer service in your previous project using Python"
+  );
+  assert.equal(projectDecision.type, "project-deep-dive");
+  assert.ok(
+    !projectDecision.evidence.includes(
+      "language-bound-implementation-demonstration"
+    )
+  );
+
+  const systemDesignDecision = inferQuestionTypeDecisionFromText(
+    "Show me how you would implement a scalable model serving platform in Python"
+  );
+  assert.equal(systemDesignDecision.type, "ai-ml-system-design");
+  assert.ok(
+    !systemDesignDecision.evidence.includes(
+      "language-bound-implementation-demonstration"
+    )
+  );
 });
 
 test("uses a single Coding brief only as a compatible prior", () => {
