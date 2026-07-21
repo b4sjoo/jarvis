@@ -172,6 +172,47 @@ test("exposes and safely records the canonical project binding", () => {
   ]);
 });
 
+test("exposes a bounded parent handoff without sharing mutable recording state", () => {
+  const task = buildActiveMeetingTask({
+    activeInterviewTask: makeInterviewTask({
+      id: "parent_recommender",
+      stableKind: "ai-ml-system-design",
+      promptTranscriptStartTurnId: "turn_recommender",
+      parentContextHandoff: {
+        sourceParentId: "parent_food_delivery",
+        transitionKind: "domain-extension",
+        sourceQuestionId: "question_recommender",
+        sharedScenarioContext: {
+          productIdentity: "food delivery",
+          domainEntities: ["users", "restaurants", "orders"],
+          applicableScaleAssumptions: [
+            { value: "10 million DAU", sourceTurnId: "turn_scale" },
+          ],
+        },
+        excludedContextKinds: ["generated-answers", "subsystem-qps"],
+      },
+    }),
+  });
+
+  assert.equal(
+    getActiveMeetingTaskTraceMetadata(task).activeMeetingParentHandoffSourceId,
+    "parent_food_delivery"
+  );
+  assert.match(
+    formatActiveMeetingTaskForPrompt(task),
+    /Product identity: food delivery/
+  );
+  assert.match(formatActiveMeetingTaskForPrompt(task), /source=turn_scale/);
+  assert.doesNotMatch(formatActiveMeetingTaskForPrompt(task), /latestUsefulAnswer/);
+
+  const recorded = formatActiveMeetingTaskForRecording(task!);
+  recorded.parent.parentContextHandoff?.excludedContextKinds.push("mutated");
+  assert.deepEqual(task?.parent.parentContextHandoff?.excludedContextKinds, [
+    "generated-answers",
+    "subsystem-qps",
+  ]);
+});
+
 test("surfaces screen/interview divergence instead of silently hiding it", () => {
   const task = buildActiveMeetingTask({
     activeScreenTask: makeScreenTask({ kind: "coding" }),

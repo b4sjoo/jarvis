@@ -442,6 +442,7 @@ export type WhiteboardUpdateSource =
 export interface WhiteboardArtifact {
   id: string;
   parentTaskId: string;
+  questionInstanceId?: string;
   domainTrack: WhiteboardDomainTrack;
   archetypeIds: string[];
   selectedOverlayIds: string[];
@@ -455,6 +456,24 @@ export interface WhiteboardArtifact {
   updateSource: WhiteboardUpdateSource;
   updatedAt: number;
   createdAt: number;
+}
+
+export interface ParentContextHandoffScaleAssumption {
+  value: string;
+  sourceTurnId?: string;
+}
+
+export interface ParentContextHandoff {
+  sourceParentId: string;
+  transitionKind: "domain-extension";
+  sourceQuestionId: string;
+  sharedScenarioContext: {
+    productIdentity?: string;
+    domainEntities?: string[];
+    applicableScaleAssumptions?: ParentContextHandoffScaleAssumption[];
+    sharedRequirements?: string[];
+  };
+  excludedContextKinds: string[];
 }
 
 export interface ActiveInterviewParent {
@@ -473,8 +492,11 @@ export interface ActiveInterviewParent {
   createdAt: number;
   updatedAt: number;
   expiresAt?: number;
+  originQuestionId?: string;
   startTurnId?: string;
   startObservationId?: string;
+  promptTranscriptStartTurnId?: string;
+  parentContextHandoff?: ParentContextHandoff;
   child?: ActiveInterviewChild;
   revisions: number;
 }
@@ -529,6 +551,12 @@ export interface ManualQuestionTypeCorrection {
   standaloneTaskEvidence?: string[];
   continuityScore?: number;
   continuityEvidence?: string[];
+  previousParentId?: string;
+  nextParentId?: string;
+  parentHandoffSourceId?: string;
+  preservedContextFields?: string[];
+  clearedContextFields?: string[];
+  promptTranscriptStartTurnId?: string;
   detectedType: CanonicalQuestionType;
   correctedType: CanonicalQuestionType;
   correctionTraceId: string;
@@ -1050,6 +1078,10 @@ export interface QuestionHumanEvaluation {
   manualQuestionTypeCorrectionTraceId?: string;
   manualQuestionTypeRegenerationTraceId?: string;
   manualQuestionTypeCorrectionSource?: ManualQuestionTypeCorrectionSource;
+  manualQuestionTypeCorrectionScope?: ManualCorrectionScope;
+  manualQuestionTypeCorrectionBoundaryReason?: string;
+  manualQuestionTypeCorrectionPreviousParentId?: string;
+  manualQuestionTypeCorrectionNextParentId?: string;
   company?: string;
   correctedCompany?: string;
   relation?: string;

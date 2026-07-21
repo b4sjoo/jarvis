@@ -52,6 +52,34 @@ test("context manager clears canonical task when legacy task state is cleared", 
   assert.equal(manager.getState().activeMeetingTask, undefined);
 });
 
+test("scopes advisor transcript to a re-rooted parent boundary", () => {
+  const manager = new MeetingContextManager();
+  manager.addTranscriptTurn(makeTurn("turn_old", "Estimate ride share GPS QPS"));
+  manager.addTranscriptTurn(
+    makeTurn(
+      "turn_new",
+      "Design a self-evolving travel recommendation agent"
+    )
+  );
+  manager.addTranscriptTurn(
+    makeTurn("turn_constraint", "Use offline and online evaluation")
+  );
+  manager.setActiveMeetingTaskState({
+    activeInterviewTask: makeInterviewTask({
+      id: "parent_travel_agent",
+      stableKind: "ai-ml-system-design",
+      topic: "Design a self-evolving travel recommendation agent",
+      startTurnId: "turn_new",
+      promptTranscriptStartTurnId: "turn_new",
+    }),
+  });
+
+  const prompt = manager.buildAdvisorPromptContext();
+  assert.doesNotMatch(prompt.transcript, /ride share GPS QPS/);
+  assert.match(prompt.transcript, /self-evolving travel recommendation agent/);
+  assert.match(prompt.transcript, /offline and online evaluation/);
+});
+
 function makeScreenTask(
   overrides: Partial<ActiveScreenTask> = {}
 ): ActiveScreenTask {
@@ -95,5 +123,17 @@ function makeInterviewTask(
     expiresAt: now + 30_000,
     revisions: 1,
     ...overrides,
+  };
+}
+
+function makeTurn(id: string, text: string) {
+  return {
+    id,
+    speaker: "them" as const,
+    text,
+    startedAt: now,
+    endedAt: now + 1,
+    isFinal: true,
+    source: "system-audio" as const,
   };
 }

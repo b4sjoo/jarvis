@@ -313,6 +313,18 @@ export function upsertQuestionHumanEvaluation(
     manualQuestionTypeCorrectionSource:
       patch.manualQuestionTypeCorrectionSource ??
       existing?.manualQuestionTypeCorrectionSource,
+    manualQuestionTypeCorrectionScope:
+      patch.manualQuestionTypeCorrectionScope ??
+      existing?.manualQuestionTypeCorrectionScope,
+    manualQuestionTypeCorrectionBoundaryReason:
+      patch.manualQuestionTypeCorrectionBoundaryReason ??
+      existing?.manualQuestionTypeCorrectionBoundaryReason,
+    manualQuestionTypeCorrectionPreviousParentId:
+      patch.manualQuestionTypeCorrectionPreviousParentId ??
+      existing?.manualQuestionTypeCorrectionPreviousParentId,
+    manualQuestionTypeCorrectionNextParentId:
+      patch.manualQuestionTypeCorrectionNextParentId ??
+      existing?.manualQuestionTypeCorrectionNextParentId,
     company: patch.company ?? existing?.company ?? identity.company,
     correctedCompany:
       patch.correctedCompany ?? existing?.correctedCompany,
@@ -555,6 +567,23 @@ function normalizeQuestionHumanEvaluation(
       candidate.manualQuestionTypeCorrectionSource === "normal-mode"
         ? candidate.manualQuestionTypeCorrectionSource
         : undefined,
+    manualQuestionTypeCorrectionScope:
+      candidate.manualQuestionTypeCorrectionScope === "same-question-retype" ||
+      candidate.manualQuestionTypeCorrectionScope === "child-retype" ||
+      candidate.manualQuestionTypeCorrectionScope === "resume-parent" ||
+      candidate.manualQuestionTypeCorrectionScope === "linked-parent-extension" ||
+      candidate.manualQuestionTypeCorrectionScope === "independent-new-parent"
+        ? candidate.manualQuestionTypeCorrectionScope
+        : undefined,
+    manualQuestionTypeCorrectionBoundaryReason: readOptionalString(
+      candidate.manualQuestionTypeCorrectionBoundaryReason
+    ),
+    manualQuestionTypeCorrectionPreviousParentId: readOptionalString(
+      candidate.manualQuestionTypeCorrectionPreviousParentId
+    ),
+    manualQuestionTypeCorrectionNextParentId: readOptionalString(
+      candidate.manualQuestionTypeCorrectionNextParentId
+    ),
     company: readOptionalString(candidate.company),
     correctedCompany: readOptionalString(candidate.correctedCompany),
     relation: readOptionalString(candidate.relation),

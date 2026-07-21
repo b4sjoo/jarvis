@@ -16,6 +16,7 @@ import {
 export interface WhiteboardArtifactUpdateInput {
   existing?: WhiteboardArtifact;
   parentTaskId: string;
+  questionInstanceId?: string;
   parentQuestionType: ParentQuestionType;
   parentTopic: string;
   finalContent: string;
@@ -35,6 +36,7 @@ export interface WhiteboardArtifactDisplay {
 export function updateWhiteboardArtifactFromAnswer({
   existing,
   parentTaskId,
+  questionInstanceId,
   parentQuestionType,
   parentTopic,
   finalContent,
@@ -66,6 +68,7 @@ export function updateWhiteboardArtifactFromAnswer({
     return {
       id: createWhiteboardArtifactId(),
       parentTaskId,
+      questionInstanceId,
       domainTrack: inferWhiteboardDomainTrack(parentQuestionType, whiteboard),
       archetypeIds: nextOverlayIds,
       selectedOverlayIds: nextOverlayIds,
@@ -92,6 +95,7 @@ export function updateWhiteboardArtifactFromAnswer({
 
   return {
     ...existing,
+    questionInstanceId: existing.questionInstanceId ?? questionInstanceId,
     domainTrack: inferWhiteboardDomainTrack(parentQuestionType, whiteboard),
     archetypeIds: uniqueIds([...existing.archetypeIds, ...nextOverlayIds]),
     selectedOverlayIds: nextOverlayIds,

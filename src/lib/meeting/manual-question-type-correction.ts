@@ -3,9 +3,11 @@ import type {
   ActiveInterviewParent,
   AdvisorSuggestion,
   ManualCorrectionScope,
+  ParentContextHandoff,
   ManualQuestionTypeCorrectionTarget,
   QuestionInstanceLineage,
   SelectedInterviewPlaybook,
+  TranscriptTurn,
 } from "./types";
 import { isCurrentQuestionLineage } from "./question-lineage.js";
 import {
@@ -121,6 +123,17 @@ export interface ManualCorrectionScopeDecision {
   currentQuestionIsChild: boolean;
 }
 
+export interface ManualCorrectionParentTransition {
+  parent: ActiveInterviewParent;
+  previousParentId: string;
+  nextParentId: string;
+  parentHandoff?: ParentContextHandoff;
+  preservedContextFields: string[];
+  clearedContextFields: string[];
+  promptTranscriptStartTurnId?: string;
+  startedNewParent: boolean;
+}
+
 export function decideManualCorrectionScope({
   task,
   decision,
@@ -129,6 +142,7 @@ export function decideManualCorrectionScope({
   parentQuestionText,
   classifierConfidence,
   explicitTaskSwitch = false,
+  currentQuestionMatchesParentOrigin = false,
 }: {
   task?: ActiveMeetingTask;
   decision: ManualQuestionTypeCorrectionDecision;
@@ -137,6 +151,7 @@ export function decideManualCorrectionScope({
   parentQuestionText?: string;
   classifierConfidence?: number;
   explicitTaskSwitch?: boolean;
+  currentQuestionMatchesParentOrigin?: boolean;
 }): ManualCorrectionScopeDecision {
   const currentQuestionIsChild = Boolean(
     task?.child &&
@@ -144,9 +159,10 @@ export function decideManualCorrectionScope({
         task.child.question.trim() === latestQuestionText.trim())
   );
   const currentQuestionIsParentOrigin = Boolean(
-    task &&
-      lineage?.triggerTurnId &&
-      task.parent.startTurnId === lineage.triggerTurnId
+    currentQuestionMatchesParentOrigin ||
+      (task &&
+        lineage?.triggerTurnId &&
+        task.parent.startTurnId === lineage.triggerTurnId)
   );
   const standalone = scoreStandaloneTask(
     latestQuestionText,
@@ -573,4 +589,273 @@ export function applyManualQuestionTypeCorrectionToParent({
     expiresAt,
     revisions: parent.revisions + 1,
   };
+}
+
+export function buildManualCorrectionParentTransition({
+  parent,
+  decision,
+  scopeDecision,
+  correctedPlaybook,
+  latestQuestionText,
+  lineage,
+  transcriptTurns,
+  newParentId,
+  source = parent.source,
+  now = Date.now(),
+  expiresAt,
+}: {
+  parent: ActiveInterviewParent;
+  decision: ManualQuestionTypeCorrectionDecision;
+  scopeDecision: ManualCorrectionScopeDecision;
+  correctedPlaybook?: SelectedInterviewPlaybook;
+  latestQuestionText: string;
+  lineage?: QuestionInstanceLineage;
+  transcriptTurns: TranscriptTurn[];
+  newParentId: string;
+  source?: "screen" | "voice";
+  now?: number;
+  expiresAt?: number;
+}): ManualCorrectionParentTransition {
+  const shouldStartNewParent =
+    decision.target !== "provisional-question" &&
+    (scopeDecision.scope === "linked-parent-extension" ||
+      scopeDecision.scope === "independent-new-parent");
+
+  if (!shouldStartNewParent) {
+    const correctedParent = applyManualQuestionTypeCorrectionToParent({
+      parent,
+      decision,
+      correctedPlaybook,
+      now,
+      expiresAt,
+    });
+    const isolatedCorrectedParent =
+      scopeDecision.scope === "same-question-retype"
+        ? {
+            ...correctedParent,
+            latestUsefulAnswer: undefined,
+            previousUsefulAnswer: undefined,
+          }
+        : correctedParent;
+    const questionInstanceId = lineage?.questionInstanceId;
+    const whiteboardArtifact = isolatedCorrectedParent.whiteboardArtifact
+      ? {
+          ...isolatedCorrectedParent.whiteboardArtifact,
+          questionInstanceId:
+            isolatedCorrectedParent.whiteboardArtifact.questionInstanceId ??
+            questionInstanceId,
+        }
+      : undefined;
+    return {
+      parent: {
+        ...isolatedCorrectedParent,
+        originQuestionId:
+          isolatedCorrectedParent.originQuestionId ?? questionInstanceId,
+        whiteboardArtifact,
+      },
+      previousParentId: parent.id,
+      nextParentId: isolatedCorrectedParent.id,
+      preservedContextFields: [
+        "parent-id",
+        "question-origin",
+        ...(whiteboardArtifact ? ["compatible-whiteboard-draft"] : []),
+      ],
+      clearedContextFields:
+        scopeDecision.scope === "child-retype" ||
+        scopeDecision.scope === "resume-parent"
+          ? []
+          : [
+              "generated-answers",
+              "unsupported-fact-anchors",
+              "incompatible-project-binding",
+            ],
+      promptTranscriptStartTurnId:
+        isolatedCorrectedParent.promptTranscriptStartTurnId,
+      startedNewParent: false,
+    };
+  }
+
+  if (!isParentCanonicalQuestionType(decision.correctedType)) {
+    return {
+      parent,
+      previousParentId: parent.id,
+      nextParentId: parent.id,
+      preservedContextFields: [],
+      clearedContextFields: [],
+      promptTranscriptStartTurnId: parent.promptTranscriptStartTurnId,
+      startedNewParent: false,
+    };
+  }
+
+  const startTurnId = lineage?.triggerTurnId;
+  const parentHandoff =
+    scopeDecision.scope === "linked-parent-extension"
+      ? buildBoundedParentContextHandoff({
+          parent,
+          sourceQuestionId:
+            lineage?.questionInstanceId ?? `question:${newParentId}`,
+          latestQuestionText,
+          transcriptTurns,
+          boundaryTurnId: startTurnId,
+        })
+      : undefined;
+  const nextPhase = correctedPlaybook?.phase ?? "follow_up";
+  const nextParent: ActiveInterviewParent = {
+    id: newParentId,
+    source,
+    stableKind: decision.correctedType,
+    topic: latestQuestionText.trim() || "Current interview question",
+    playbook: correctedPlaybook,
+    playbookPhase: nextPhase,
+    phaseProgress: { [nextPhase]: true },
+    supportedFactAnchors: [],
+    createdAt: now,
+    updatedAt: now,
+    expiresAt,
+    originQuestionId: lineage?.questionInstanceId,
+    startTurnId,
+    promptTranscriptStartTurnId: startTurnId,
+    parentContextHandoff: parentHandoff,
+    revisions: 1,
+  };
+
+  return {
+    parent: nextParent,
+    previousParentId: parent.id,
+    nextParentId: nextParent.id,
+    parentHandoff,
+    preservedContextFields: parentHandoff
+      ? [
+          "shared-product-identity",
+          "shared-domain-entities",
+          "applicable-source-backed-assumptions",
+        ]
+      : [],
+    clearedContextFields: [
+      "generated-answers",
+      "phase-progress",
+      "project-binding",
+      "fact-anchors",
+      "subsystem-qps",
+      "prior-artifacts",
+      "prior-transcript-window",
+    ],
+    promptTranscriptStartTurnId: startTurnId,
+    startedNewParent: true,
+  };
+}
+
+export function buildBoundedParentContextHandoff({
+  parent,
+  sourceQuestionId,
+  latestQuestionText,
+  transcriptTurns,
+  boundaryTurnId,
+}: {
+  parent: ActiveInterviewParent;
+  sourceQuestionId: string;
+  latestQuestionText: string;
+  transcriptTurns: TranscriptTurn[];
+  boundaryTurnId?: string;
+}): ParentContextHandoff {
+  const parentStartIndex = parent.startTurnId
+    ? transcriptTurns.findIndex((turn) => turn.id === parent.startTurnId)
+    : 0;
+  const boundaryIndex = boundaryTurnId
+    ? transcriptTurns.findIndex((turn) => turn.id === boundaryTurnId)
+    : transcriptTurns.length;
+  const safeStart = Math.max(0, parentStartIndex);
+  const safeEnd = boundaryIndex >= 0 ? boundaryIndex : transcriptTurns.length;
+  const sourceTurns = transcriptTurns.slice(safeStart, safeEnd);
+  const sourceText = [parent.topic, ...sourceTurns.map((turn) => turn.text)].join(
+    "\n"
+  );
+  const combinedText = `${sourceText}\n${latestQuestionText}`.toLowerCase();
+  const productIdentity = inferSharedProductIdentity(sourceText);
+  const domainEntities = SHARED_DOMAIN_ENTITIES.filter((entity) =>
+    new RegExp(`\\b${entity.replace(/s$/, "s?")}\\b`, "i").test(combinedText)
+  );
+  const applicableScaleAssumptions = sourceTurns
+    .filter(
+      (turn) =>
+        turn.speaker === "them" &&
+        /\b\d[\d,.]*\s*(?:[kmb]|million|billion)?\s*(?:dau|daily active users?|users?|regions?|countries?)\b/i.test(
+          turn.text
+        ) &&
+        !/\b(qps|tps|payment|gps|dispatch|storage|orders? per second)\b/i.test(
+          turn.text
+        )
+    )
+    .slice(-4)
+    .map((turn) => ({
+      value: turn.text.trim().slice(0, 220),
+      sourceTurnId: turn.id,
+    }));
+  const sharedRequirements = sourceTurns
+    .filter(
+      (turn) =>
+        turn.speaker === "them" &&
+        /\b(privacy|global availability|multi-region|latency requirement|data residency)\b/i.test(
+          turn.text
+        ) &&
+        !/\b(payment|gps|dispatch|qps|tps)\b/i.test(turn.text)
+    )
+    .slice(-4)
+    .map((turn) => `${turn.text.trim().slice(0, 180)} [source=${turn.id}]`);
+
+  return {
+    sourceParentId: parent.id,
+    transitionKind: "domain-extension",
+    sourceQuestionId,
+    sharedScenarioContext: {
+      productIdentity,
+      domainEntities: domainEntities.length ? domainEntities : undefined,
+      applicableScaleAssumptions: applicableScaleAssumptions.length
+        ? applicableScaleAssumptions
+        : undefined,
+      sharedRequirements: sharedRequirements.length
+        ? sharedRequirements
+        : undefined,
+    },
+    excludedContextKinds: [
+      "generated-answers",
+      "phase-progress",
+      "subsystem-qps",
+      "prior-artifacts",
+      "project-binding",
+      "fact-anchors",
+    ],
+  };
+}
+
+const SHARED_PRODUCT_IDENTITIES = [
+  "food delivery",
+  "ride sharing",
+  "ride-sharing",
+  "travel planning",
+  "trip planning",
+  "ticket selling",
+  "social network",
+  "e-commerce",
+];
+
+const SHARED_DOMAIN_ENTITIES = [
+  "users",
+  "restaurants",
+  "menus",
+  "orders",
+  "drivers",
+  "riders",
+  "trips",
+  "items",
+  "catalog",
+  "merchants",
+  "travelers",
+];
+
+function inferSharedProductIdentity(text: string) {
+  const normalized = normalizeDecisionText(text);
+  return SHARED_PRODUCT_IDENTITIES.find((identity) =>
+    normalized.includes(identity)
+  );
 }

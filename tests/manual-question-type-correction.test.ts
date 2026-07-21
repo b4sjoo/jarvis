@@ -3,6 +3,7 @@ import test from "node:test";
 import type { ActiveMeetingTask } from "../src/lib/meeting/active-meeting-task.js";
 import {
   applyManualQuestionTypeCorrectionToParent,
+  buildManualCorrectionParentTransition,
   decideManualQuestionTypeCorrection,
   decideManualCorrectionScope,
   decideProvisionalQuestionTypeCorrection,
@@ -14,6 +15,7 @@ import type {
   ActiveInterviewParent,
   SelectedInterviewPlaybook,
   WhiteboardArtifact,
+  TranscriptTurn,
 } from "../src/lib/meeting/types.js";
 import type { CanonicalQuestionType } from "../src/lib/meeting/task-taxonomy.js";
 
@@ -141,6 +143,30 @@ test("keeps a same-origin system-design correction on the existing parent", () =
   assert.equal(scope.currentQuestionIsParentOrigin, true);
 });
 
+test("keeps a same-origin screen correction on the existing parent", () => {
+  const task = makeActiveTask({ questionType: "general-system-design" });
+  task.parent.startObservationId = "obs_origin";
+  const decision = decideManualQuestionTypeCorrection(
+    task,
+    "ai-ml-system-design"
+  );
+  const scope = decideManualCorrectionScope({
+    task,
+    decision,
+    lineage: {
+      ...makeLineage(""),
+      triggerTurnId: undefined,
+    },
+    latestQuestionText: "Design a RAG system for trip planning.",
+    parentQuestionText: "Design a RAG system for trip planning.",
+    classifierConfidence: 0.9,
+    currentQuestionMatchesParentOrigin: true,
+  });
+
+  assert.equal(scope.scope, "same-question-retype");
+  assert.equal(scope.currentQuestionIsParentOrigin, true);
+});
+
 test("splits an independent travel agent from a ride-share parent", () => {
   const task = makeActiveTask({ questionType: "general-system-design" });
   task.parent.topic = "Design a ride-sharing app with location tracking";
@@ -186,6 +212,149 @@ test("creates a linked parent for a recommendation extension of the same app", (
   assert.equal(scope.scope, "linked-parent-extension");
   assert.ok(scope.continuityScore >= 4);
   assert.ok(scope.continuityEvidence.includes("explicit-same-system-marker"));
+});
+
+test("re-roots an independent correction without old answers, QPS, or artifacts", () => {
+  const parent = makeInterviewParent({
+    id: "parent_ride_share",
+    stableKind: "general-system-design",
+    topic: "Design a ride-sharing app",
+    startTurnId: "turn_ride_share",
+    latestUsefulAnswer: "Use GPS fanout at 50K QPS",
+    previousUsefulAnswer: "Protect payment with idempotency",
+    whiteboardArtifact: makeWhiteboard("general_sd"),
+    phaseProgress: { deep_dive: true },
+  });
+  const task = makeActiveTask({ questionType: "general-system-design" });
+  task.parent.id = parent.id;
+  task.parent.topic = parent.topic;
+  task.parent.startTurnId = parent.startTurnId;
+  const decision = decideManualQuestionTypeCorrection(
+    task,
+    "ai-ml-system-design"
+  );
+  const lineage = makeLineage("turn_travel_agent");
+  const scopeDecision = decideManualCorrectionScope({
+    task,
+    decision,
+    lineage,
+    latestQuestionText:
+      "Design a self-evolving travel recommendation agent.",
+    classifierConfidence: 0.9,
+  });
+
+  const transition = buildManualCorrectionParentTransition({
+    parent,
+    decision,
+    scopeDecision,
+    correctedPlaybook: makePlaybook(
+      "ai-ml-system-design",
+      "requirement_clarification"
+    ),
+    latestQuestionText:
+      "Design a self-evolving travel recommendation agent.",
+    lineage,
+    transcriptTurns: [
+      makeTurn("turn_ride_share", "Design a ride-sharing app"),
+      makeTurn("turn_scale", "Assume 10 million DAU"),
+      makeTurn("turn_qps", "Estimate GPS QPS"),
+      makeTurn("turn_payment", "How do we avoid double payment?"),
+      makeTurn(
+        "turn_travel_agent",
+        "Design a self-evolving travel recommendation agent."
+      ),
+    ],
+    newParentId: "parent_travel_agent",
+    now: now + 100,
+  });
+
+  assert.equal(transition.startedNewParent, true);
+  assert.equal(transition.previousParentId, "parent_ride_share");
+  assert.equal(transition.nextParentId, "parent_travel_agent");
+  assert.equal(transition.parent.parentContextHandoff, undefined);
+  assert.equal(transition.parent.latestUsefulAnswer, undefined);
+  assert.equal(transition.parent.previousUsefulAnswer, undefined);
+  assert.equal(transition.parent.whiteboardArtifact, undefined);
+  assert.equal(
+    transition.parent.promptTranscriptStartTurnId,
+    "turn_travel_agent"
+  );
+  assert.deepEqual(transition.parent.phaseProgress, {
+    requirement_clarification: true,
+  });
+});
+
+test("creates a bounded linked handoff without subsystem QPS or generated answers", () => {
+  const parent = makeInterviewParent({
+    id: "parent_food_delivery",
+    stableKind: "general-system-design",
+    topic: "Design a food delivery app",
+    startTurnId: "turn_food_delivery",
+    latestUsefulAnswer: "Generated answer about order dispatch",
+    whiteboardArtifact: makeWhiteboard("general_sd"),
+  });
+  const task = makeActiveTask({ questionType: "general-system-design" });
+  task.parent.id = parent.id;
+  task.parent.topic = parent.topic;
+  task.parent.startTurnId = parent.startTurnId;
+  const decision = decideManualQuestionTypeCorrection(
+    task,
+    "ai-ml-system-design"
+  );
+  const lineage = makeLineage("turn_food_recommendation");
+  const latestQuestion =
+    "For this app, design a self-evolving food recommendation agent.";
+  const scopeDecision = decideManualCorrectionScope({
+    task,
+    decision,
+    lineage,
+    latestQuestionText: latestQuestion,
+    classifierConfidence: 0.9,
+  });
+
+  const transition = buildManualCorrectionParentTransition({
+    parent,
+    decision,
+    scopeDecision,
+    correctedPlaybook: makePlaybook(
+      "ai-ml-system-design",
+      "requirement_clarification"
+    ),
+    latestQuestionText: latestQuestion,
+    lineage,
+    transcriptTurns: [
+      makeTurn("turn_food_delivery", "Design a food delivery app"),
+      makeTurn(
+        "turn_entities",
+        "The users browse restaurants and menus, then create orders."
+      ),
+      makeTurn("turn_scale", "Assume 10 million daily active users."),
+      makeTurn("turn_qps", "Order placement is 5000 QPS."),
+      makeTurn("turn_payment", "Use a payment idempotency key."),
+      makeTurn("turn_food_recommendation", latestQuestion),
+    ],
+    newParentId: "parent_food_recommendation",
+  });
+
+  const handoff = transition.parent.parentContextHandoff;
+  assert.equal(transition.startedNewParent, true);
+  assert.equal(handoff?.sourceParentId, "parent_food_delivery");
+  assert.equal(handoff?.sharedScenarioContext.productIdentity, "food delivery");
+  assert.deepEqual(handoff?.sharedScenarioContext.domainEntities, [
+    "users",
+    "restaurants",
+    "menus",
+    "orders",
+  ]);
+  assert.deepEqual(handoff?.sharedScenarioContext.applicableScaleAssumptions, [
+    {
+      value: "Assume 10 million daily active users.",
+      sourceTurnId: "turn_scale",
+    },
+  ]);
+  assert.doesNotMatch(JSON.stringify(handoff), /5000 QPS|payment|idempotency/i);
+  assert.equal(transition.parent.latestUsefulAnswer, undefined);
+  assert.equal(transition.parent.whiteboardArtifact, undefined);
 });
 
 test("does not split elliptical follow-ups or adjacent constraints", () => {
@@ -364,6 +533,54 @@ test("preserves useful-answer continuity only across compatible system-design re
   assert.equal(next.previousUsefulAnswer, "Requirements summary");
 });
 
+test("keeps a same-question whiteboard draft but removes generated answer context", () => {
+  const parent = makeInterviewParent({
+    stableKind: "general-system-design",
+    startTurnId: "turn_origin",
+    latestUsefulAnswer: "Generated GSD answer",
+    previousUsefulAnswer: "Earlier generated answer",
+    whiteboardArtifact: makeWhiteboard("general_sd"),
+  });
+  const task = makeActiveTask({ questionType: "general-system-design" });
+  task.parent.startTurnId = "turn_origin";
+  const decision = decideManualQuestionTypeCorrection(
+    task,
+    "ai-ml-system-design"
+  );
+  const lineage = makeLineage("turn_origin");
+  const scopeDecision = decideManualCorrectionScope({
+    task,
+    decision,
+    lineage,
+    latestQuestionText: "Design a RAG system for trip planning.",
+  });
+
+  const transition = buildManualCorrectionParentTransition({
+    parent,
+    decision,
+    scopeDecision,
+    correctedPlaybook: makePlaybook(
+      "ai-ml-system-design",
+      "requirement_clarification"
+    ),
+    latestQuestionText: "Design a RAG system for trip planning.",
+    lineage,
+    transcriptTurns: [
+      makeTurn("turn_origin", "Design a RAG system for trip planning."),
+    ],
+    newParentId: "unused_parent_id",
+  });
+
+  assert.equal(transition.startedNewParent, false);
+  assert.equal(transition.parent.id, parent.id);
+  assert.equal(transition.parent.latestUsefulAnswer, undefined);
+  assert.equal(transition.parent.previousUsefulAnswer, undefined);
+  assert.equal(
+    transition.parent.whiteboardArtifact?.questionInstanceId,
+    lineage.questionInstanceId
+  );
+});
+
 function makeActiveTask({
   questionType,
   child,
@@ -481,5 +698,17 @@ function makeLineage(triggerTurnId: string) {
     sessionId: "session_1",
     runtimeEpoch: 1,
     identityState: "canonical" as const,
+  };
+}
+
+function makeTurn(id: string, text: string): TranscriptTurn {
+  return {
+    id,
+    speaker: "them",
+    text,
+    startedAt: now,
+    endedAt: now + 1,
+    isFinal: true,
+    source: "system-audio",
   };
 }

@@ -4,6 +4,7 @@ import type {
   ActiveScreenTask,
   InterviewPlaybookPhase,
   InterviewSubtaskIntent,
+  ParentContextHandoff,
   ProjectBinding,
   ScreenCaptureTarget,
   ScreenObservation,
@@ -44,8 +45,11 @@ export interface ActiveMeetingParent {
   createdAt: number;
   updatedAt: number;
   expiresAt?: number;
+  originQuestionId?: string;
   startTurnId?: string;
   startObservationId?: string;
+  promptTranscriptStartTurnId?: string;
+  parentContextHandoff?: ParentContextHandoff;
   revisions?: number;
 }
 
@@ -222,6 +226,11 @@ export function getActiveMeetingTaskTraceMetadata(
     activeMeetingParentId: task.parent.id,
     activeMeetingParentQuestionType: task.parent.questionType,
     activeMeetingParentPhase: task.parent.playbookPhase,
+    activeMeetingParentOriginQuestionId: task.parent.originQuestionId,
+    activeMeetingPromptTranscriptStartTurnId:
+      task.parent.promptTranscriptStartTurnId,
+    activeMeetingParentHandoffSourceId:
+      task.parent.parentContextHandoff?.sourceParentId,
     activeMeetingProjectBindingId: task.parent.projectBinding?.projectId,
     activeMeetingProjectBindingName: task.parent.projectBinding?.projectName,
     activeMeetingProjectBindingEntryId:
@@ -264,6 +273,9 @@ export function formatActiveMeetingTaskForPrompt(
       : undefined,
     task.parent.supportedFactAnchors.length
       ? `- Supported fact anchors: ${task.parent.supportedFactAnchors.join(", ")}`
+      : undefined,
+    task.parent.parentContextHandoff
+      ? formatParentContextHandoffForPrompt(task.parent.parentContextHandoff)
       : undefined,
     task.child
       ? [
@@ -355,6 +367,9 @@ export function formatActiveMeetingTaskForRecording(
             evidenceEntryIds: [...task.parent.projectBinding.evidenceEntryIds],
           }
         : undefined,
+      parentContextHandoff: cloneParentContextHandoff(
+        task.parent.parentContextHandoff
+      ),
     },
     child: task.child ? { ...task.child } : undefined,
     screen: task.screen ? { ...task.screen } : undefined,
@@ -410,9 +425,64 @@ function buildParentFromInterviewTask(
     createdAt: task.createdAt,
     updatedAt: task.updatedAt,
     expiresAt: task.expiresAt,
+    originQuestionId: task.originQuestionId,
     startTurnId: task.startTurnId,
     startObservationId: task.startObservationId,
+    promptTranscriptStartTurnId: task.promptTranscriptStartTurnId,
+    parentContextHandoff: cloneParentContextHandoff(task.parentContextHandoff),
     revisions: task.revisions,
+  };
+}
+
+function formatParentContextHandoffForPrompt(handoff: ParentContextHandoff) {
+  const scenario = handoff.sharedScenarioContext;
+  return [
+    "Bounded context inherited from the previous parent:",
+    `- Source parent: ${handoff.sourceParentId}`,
+    scenario.productIdentity
+      ? `- Product identity: ${scenario.productIdentity}`
+      : undefined,
+    scenario.domainEntities?.length
+      ? `- Shared domain entities: ${scenario.domainEntities.join(", ")}`
+      : undefined,
+    scenario.applicableScaleAssumptions?.length
+      ? `- Applicable scale assumptions: ${scenario.applicableScaleAssumptions
+          .map((item) =>
+            item.sourceTurnId
+              ? `${item.value} [source=${item.sourceTurnId}]`
+              : item.value
+          )
+          .join("; ")}`
+      : undefined,
+    scenario.sharedRequirements?.length
+      ? `- Shared requirements: ${scenario.sharedRequirements.join("; ")}`
+      : undefined,
+    `- Excluded prior context: ${handoff.excludedContextKinds.join(", ")}`,
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+function cloneParentContextHandoff(
+  handoff: ParentContextHandoff | undefined
+): ParentContextHandoff | undefined {
+  if (!handoff) return undefined;
+  return {
+    ...handoff,
+    sharedScenarioContext: {
+      ...handoff.sharedScenarioContext,
+      domainEntities: handoff.sharedScenarioContext.domainEntities
+        ? [...handoff.sharedScenarioContext.domainEntities]
+        : undefined,
+      applicableScaleAssumptions:
+        handoff.sharedScenarioContext.applicableScaleAssumptions?.map((item) => ({
+          ...item,
+        })),
+      sharedRequirements: handoff.sharedScenarioContext.sharedRequirements
+        ? [...handoff.sharedScenarioContext.sharedRequirements]
+        : undefined,
+    },
+    excludedContextKinds: [...handoff.excludedContextKinds],
   };
 }
 

@@ -359,7 +359,9 @@ export class MeetingContextManager {
     const activeMeetingTask = this.buildActiveMeetingTask();
 
     return {
-      transcript: this.formatTranscript(),
+      transcript: this.formatTranscript(
+        activeMeetingTask?.parent.promptTranscriptStartTurnId
+      ),
       screenContext: this.formatScreenContext(),
       interviewSessionBrief: cloneInterviewSessionBrief(
         this.state.interviewSessionBrief
@@ -400,8 +402,18 @@ export class MeetingContextManager {
     return turns.filter((turn) => turn.endedAt >= cutoff);
   }
 
-  private formatTranscript() {
-    return this.state.transcriptTurns
+  private formatTranscript(promptTranscriptStartTurnId?: string) {
+    const boundaryIndex = promptTranscriptStartTurnId
+      ? this.state.transcriptTurns.findIndex(
+          (turn) => turn.id === promptTranscriptStartTurnId
+        )
+      : -1;
+    const scopedTurns =
+      boundaryIndex >= 0
+        ? this.state.transcriptTurns.slice(boundaryIndex)
+        : this.state.transcriptTurns;
+
+    return scopedTurns
       .filter(shouldIncludeTurnInAdvisorPrompt)
       .map((turn) => {
         const speaker =
@@ -522,6 +534,35 @@ function cloneActiveInterviewTask(
     child: task.child ? { ...task.child } : undefined,
     whiteboardArtifact: task.whiteboardArtifact
       ? { ...task.whiteboardArtifact }
+      : undefined,
+    parentContextHandoff: task.parentContextHandoff
+      ? {
+          ...task.parentContextHandoff,
+          sharedScenarioContext: {
+            ...task.parentContextHandoff.sharedScenarioContext,
+            domainEntities:
+              task.parentContextHandoff.sharedScenarioContext.domainEntities
+                ? [
+                    ...task.parentContextHandoff.sharedScenarioContext
+                      .domainEntities,
+                  ]
+                : undefined,
+            applicableScaleAssumptions:
+              task.parentContextHandoff.sharedScenarioContext.applicableScaleAssumptions?.map(
+                (item) => ({ ...item })
+              ),
+            sharedRequirements:
+              task.parentContextHandoff.sharedScenarioContext.sharedRequirements
+                ? [
+                    ...task.parentContextHandoff.sharedScenarioContext
+                      .sharedRequirements,
+                  ]
+                : undefined,
+          },
+          excludedContextKinds: [
+            ...task.parentContextHandoff.excludedContextKinds,
+          ],
+        }
       : undefined,
   };
 }
