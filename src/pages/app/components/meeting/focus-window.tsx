@@ -209,15 +209,18 @@ function MeetingFocusControlsWindow({
 }) {
   const [correction, setCorrection] = useState("");
   const interviewTypes = snapshot.interviewTypes;
-  const hasActiveTask = Boolean(snapshot.activeTask);
+  const hasCorrectableQuestion = snapshot.hasCorrectableQuestion;
   const activeCorrection =
-    snapshot.manualQuestionTypeCorrection?.taskId === snapshot.activeTask?.id
+    snapshot.manualQuestionTypeCorrection &&
+    (snapshot.manualQuestionTypeCorrection.taskId === snapshot.activeTask?.id ||
+      snapshot.manualQuestionTypeCorrection.questionId ===
+        snapshot.currentQuestionId)
       ? snapshot.manualQuestionTypeCorrection
       : undefined;
 
   const updateInterviewTypes = (type: InterviewBriefType) => {
     const correctionTarget = toCanonicalFocusQuestionType(type);
-    if (hasActiveTask) {
+    if (hasCorrectableQuestion) {
       if (correctionTarget) {
         sendFocusAction({
           type: "correct-question-type",
@@ -233,7 +236,7 @@ function MeetingFocusControlsWindow({
       interviewTypes: toggleInterviewBriefType(
         interviewTypes,
         type,
-        hasActiveTask
+        hasCorrectableQuestion
       ),
     });
   };
@@ -288,9 +291,11 @@ function MeetingFocusControlsWindow({
           </Badge>
           <div className="flex min-w-0 flex-wrap gap-1.5">
             {interviewBriefTypeOptions
-              .filter((option) => !hasActiveTask || option.id !== "mixed")
+              .filter(
+                (option) => !hasCorrectableQuestion || option.id !== "mixed"
+              )
               .map((option) => {
-                const selected = hasActiveTask
+                const selected = hasCorrectableQuestion
                   ? toCanonicalFocusQuestionType(option.id) ===
                     snapshot.effectiveQuestionType
                   : interviewTypes.includes(option.id);

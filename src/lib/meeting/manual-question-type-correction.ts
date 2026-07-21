@@ -1,9 +1,12 @@
 import type { ActiveMeetingTask } from "./active-meeting-task";
 import type {
   ActiveInterviewParent,
+  AdvisorSuggestion,
   ManualQuestionTypeCorrectionTarget,
+  QuestionInstanceLineage,
   SelectedInterviewPlaybook,
 } from "./types";
+import { isCurrentQuestionLineage } from "./question-lineage.js";
 import {
   areCompatibleParentContinuityTypes,
   isParentCanonicalQuestionType,
@@ -56,6 +59,43 @@ export interface ManualQuestionTypeCorrectionDecision {
   correctedType: CanonicalQuestionType;
   parentType: CanonicalQuestionType;
   childType?: CanonicalQuestionType;
+}
+
+export type ManualCorrectionTargetResolution =
+  | { source: "active-task"; task: ActiveMeetingTask }
+  | {
+      source: "provisional-question";
+      lineage: QuestionInstanceLineage;
+    }
+  | { source: "none"; reason: string };
+
+export function resolveManualCorrectionTarget(input: {
+  activeTask?: ActiveMeetingTask;
+  currentQuestionLineage?: QuestionInstanceLineage;
+  latestSuggestion: AdvisorSuggestion | null | undefined;
+  sessionId: string;
+  runtimeEpoch: number;
+}): ManualCorrectionTargetResolution {
+  if (input.activeTask) {
+    return { source: "active-task", task: input.activeTask };
+  }
+
+  if (
+    isCurrentQuestionLineage({
+      lineage: input.currentQuestionLineage,
+      suggestion: input.latestSuggestion,
+      sessionId: input.sessionId,
+      runtimeEpoch: input.runtimeEpoch,
+    }) &&
+    input.currentQuestionLineage
+  ) {
+    return {
+      source: "provisional-question",
+      lineage: input.currentQuestionLineage,
+    };
+  }
+
+  return { source: "none", reason: "no-current-correction-target" };
 }
 
 export function decideManualQuestionTypeCorrection(
@@ -123,6 +163,40 @@ export function decideManualQuestionTypeCorrection(
   };
 }
 
+export function decideProvisionalQuestionTypeCorrection(
+  correctedType: CanonicalQuestionType
+): ManualQuestionTypeCorrectionDecision {
+  const base = {
+    detectedType: "unknown" as const,
+    correctedType,
+    parentType: "unknown" as const,
+    childType: undefined,
+  };
+
+  if (correctedType === "unknown") {
+    return {
+      ...base,
+      noOp: true,
+      reason: "unknown-is-not-a-manual-correction-target",
+    };
+  }
+
+  if (!isParentCanonicalQuestionType(correctedType)) {
+    return {
+      ...base,
+      noOp: true,
+      reason: "provisional-correction-requires-parent-type",
+    };
+  }
+
+  return {
+    ...base,
+    noOp: false,
+    reason: "manual-correction-promotes-provisional-question",
+    target: "provisional-question",
+  };
+}
+
 export function applyManualQuestionTypeCorrectionToParent({
   parent,
   decision,
@@ -162,6 +236,10 @@ export function applyManualQuestionTypeCorrectionToParent({
       expiresAt,
       revisions: parent.revisions + 1,
     };
+  }
+
+  if (decision.target === "provisional-question") {
+    return parent;
   }
 
   if (!isParentCanonicalQuestionType(decision.correctedType)) return parent;

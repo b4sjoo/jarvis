@@ -76,7 +76,9 @@ export function isCurrentQuestionLineage(input: {
   return Boolean(
     lineage.sourceSuggestionId &&
       lineage.sourceSuggestionId === suggestion.id &&
-      suggestion.sourceTraceId === lineage.questionOriginTraceId
+      (!suggestion.questionLineage ||
+        suggestion.questionLineage.questionInstanceId ===
+          lineage.questionInstanceId)
   );
 }
 

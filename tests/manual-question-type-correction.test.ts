@@ -4,6 +4,8 @@ import type { ActiveMeetingTask } from "../src/lib/meeting/active-meeting-task.j
 import {
   applyManualQuestionTypeCorrectionToParent,
   decideManualQuestionTypeCorrection,
+  decideProvisionalQuestionTypeCorrection,
+  resolveManualCorrectionTarget,
   ManualCorrectionOperationCoordinator,
 } from "../src/lib/meeting/manual-question-type-correction.js";
 import type {
@@ -44,6 +46,73 @@ test("treats selecting the effective question type as a no-op", () => {
   assert.equal(decision.noOp, true);
   assert.equal(decision.reason, "already-effective-question-type");
   assert.equal(decision.target, undefined);
+});
+
+test("promotes an unknown provisional question only to a parent type", () => {
+  const coding = decideProvisionalQuestionTypeCorrection("coding");
+  assert.equal(coding.noOp, false);
+  assert.equal(coding.target, "provisional-question");
+  assert.equal(coding.detectedType, "unknown");
+  assert.equal(coding.correctedType, "coding");
+
+  const fieldKnowledge =
+    decideProvisionalQuestionTypeCorrection("field-knowledge");
+  assert.equal(fieldKnowledge.noOp, true);
+  assert.equal(
+    fieldKnowledge.reason,
+    "provisional-correction-requires-parent-type"
+  );
+});
+
+test("uses a visible provisional question only when there is no active task", () => {
+  const lineage = {
+    questionInstanceId: "trace:trace_1",
+    questionOriginTraceId: "trace_1",
+    sourceSuggestionId: "suggestion_1",
+    sessionId: "session_1",
+    runtimeEpoch: 2,
+    identityState: "provisional" as const,
+  };
+  const latestSuggestion = {
+    id: "suggestion_1",
+    sourceTraceId: "trace_1",
+    kind: "answer" as const,
+    content: "Current answer",
+    createdAt: 1,
+    basedOnTurnIds: [],
+    basedOnObservationIds: [],
+    confidence: "medium" as const,
+    questionLineage: lineage,
+  };
+
+  assert.deepEqual(
+    resolveManualCorrectionTarget({
+      currentQuestionLineage: lineage,
+      latestSuggestion,
+      sessionId: "session_1",
+      runtimeEpoch: 2,
+    }),
+    { source: "provisional-question", lineage }
+  );
+  assert.equal(
+    resolveManualCorrectionTarget({
+      activeTask: makeActiveTask({ questionType: "behavioral" }),
+      currentQuestionLineage: lineage,
+      latestSuggestion,
+      sessionId: "session_1",
+      runtimeEpoch: 2,
+    }).source,
+    "active-task"
+  );
+  assert.equal(
+    resolveManualCorrectionTarget({
+      currentQuestionLineage: lineage,
+      latestSuggestion,
+      sessionId: "session_1",
+      runtimeEpoch: 3,
+    }).source,
+    "none"
+  );
 });
 
 test("resumes the existing parent when a child probe is corrected to the parent type", () => {

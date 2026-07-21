@@ -486,7 +486,12 @@ export type ManualQuestionTypeCorrectionSource =
 export type ManualQuestionTypeCorrectionTarget =
   | "parent"
   | "child"
-  | "resume-parent";
+  | "resume-parent"
+  | "provisional-question";
+
+export type ManualQuestionTypeCorrectionTargetSource =
+  | "active-task"
+  | "provisional-question";
 
 export type ManualQuestionTypeCorrectionStatus =
   | "pending"
@@ -508,6 +513,7 @@ export interface ManualQuestionTypeCorrection {
   childTaskId?: string;
   questionId: string;
   source: ManualQuestionTypeCorrectionSource;
+  targetSource: ManualQuestionTypeCorrectionTargetSource;
   target: ManualQuestionTypeCorrectionTarget;
   detectedType: CanonicalQuestionType;
   correctedType: CanonicalQuestionType;

@@ -402,6 +402,14 @@ export const MeetingAssistant = ({
     ]
   );
   const hasActiveMeetingTask = Boolean(meeting.activeMeetingTask);
+  const hasProvisionalQuestion = Boolean(
+    meeting.currentQuestionLineage?.identityState === "provisional" &&
+      meeting.currentQuestionLineage.sourceSuggestionId &&
+      meeting.currentQuestionLineage.sourceSuggestionId ===
+        meeting.latestSuggestion?.id
+  );
+  const hasCorrectableQuestion =
+    hasActiveMeetingTask || hasProvisionalQuestion;
   const hasActiveMeetingScreenContext = Boolean(meeting.activeMeetingTask?.screen);
   const activeParentTaskId =
     getActiveMeetingTaskId(meeting.activeMeetingTask) ?? "";
@@ -608,12 +616,16 @@ export const MeetingAssistant = ({
     () => getEditableInterviewSessionBrief(meeting.interviewSessionBrief),
     [meeting.interviewSessionBrief]
   );
-  const effectiveQuestionType = normalizeCanonicalQuestionType(
-    meeting.activeMeetingTask?.child?.questionType ?? activeTaskKind
-  );
+  const effectiveQuestionType =
+    normalizeCanonicalQuestionType(
+      meeting.activeMeetingTask?.child?.questionType ?? activeTaskKind
+    ) ?? (hasCorrectableQuestion ? "unknown" : undefined);
   const activeManualQuestionTypeCorrection =
-    meeting.manualQuestionTypeCorrection?.taskId ===
-    meeting.activeMeetingTask?.id
+    meeting.manualQuestionTypeCorrection &&
+    (meeting.manualQuestionTypeCorrection.taskId ===
+      meeting.activeMeetingTask?.id ||
+      meeting.manualQuestionTypeCorrection.questionId ===
+        meeting.currentQuestionLineage?.questionInstanceId)
       ? meeting.manualQuestionTypeCorrection
       : undefined;
   const focusSnapshot = useMemo<MeetingFocusSnapshot>(
@@ -643,6 +655,7 @@ export const MeetingAssistant = ({
       isTaskSwitchClarifyingQuestion,
       interviewTypes: editableBriefForFocus.interviewTypes,
       effectiveQuestionType,
+      currentQuestionId: meeting.currentQuestionLineage?.questionInstanceId,
       questionTypeCorrected:
         Boolean(activeManualQuestionTypeCorrection) ||
         meeting.activeScreenTask?.classifier?.overrideSource ===
@@ -650,6 +663,7 @@ export const MeetingAssistant = ({
       manualQuestionTypeCorrection: activeManualQuestionTypeCorrection,
       activeTask: getActiveMeetingTaskFocusSummary(meeting.activeMeetingTask),
       hasActiveMeetingTask,
+      hasCorrectableQuestion,
       hasActiveScreenTask: hasActiveMeetingScreenContext,
       speechCorrections: meeting.speechCorrections.slice(-4).map((item) => ({
         id: item.id,
@@ -670,11 +684,13 @@ export const MeetingAssistant = ({
       latestReliableAnswerPreview,
       latestTurn?.text,
       meeting.activeMeetingTask,
+      meeting.currentQuestionLineage,
       activeTaskKind,
       activeManualQuestionTypeCorrection,
       effectiveQuestionType,
       meeting.activeScreenTask?.classifier?.overrideSource,
       hasActiveMeetingTask,
+      hasCorrectableQuestion,
       hasActiveMeetingScreenContext,
       meeting.error,
       meeting.nativeAudioManualRecovery,
@@ -1283,7 +1299,7 @@ export const MeetingAssistant = ({
               suggestionSections={displaySuggestionSections}
               codingArtifactCached={codingArtifactDisplay.isCached}
               whiteboardArtifactCached={whiteboardArtifactDisplay.isCached}
-              hasActiveMeetingTask={hasActiveMeetingTask}
+              hasCorrectableQuestion={hasCorrectableQuestion}
               effectiveQuestionType={effectiveQuestionType}
               manualQuestionTypeCorrection={
                 activeManualQuestionTypeCorrection
@@ -1626,7 +1642,7 @@ export const MeetingAssistant = ({
                   <SlidersHorizontalIcon className="h-3.5 w-3.5" />
                   Response actions
                 </div>
-                {hasActiveMeetingTask ? (
+                {hasCorrectableQuestion ? (
                   <div className="mb-2 min-w-0 border-b border-border/50 pb-2">
                     <div className="mb-1 text-[10px] font-medium uppercase text-muted-foreground">
                       Current question type
@@ -2164,7 +2180,7 @@ const FocusModePanel = ({
   suggestionSections,
   codingArtifactCached,
   whiteboardArtifactCached,
-  hasActiveMeetingTask,
+  hasCorrectableQuestion,
   effectiveQuestionType,
   manualQuestionTypeCorrection,
   onCorrectQuestionType,
@@ -2191,7 +2207,7 @@ const FocusModePanel = ({
   suggestionSections: MeetingAnswerDisplayModel;
   codingArtifactCached: boolean;
   whiteboardArtifactCached: boolean;
-  hasActiveMeetingTask: boolean;
+  hasCorrectableQuestion: boolean;
   effectiveQuestionType?: CanonicalQuestionType;
   manualQuestionTypeCorrection?: ManualQuestionTypeCorrection;
   onCorrectQuestionType: (type: CanonicalQuestionType) => void;
@@ -2352,7 +2368,7 @@ const FocusModePanel = ({
             <div className="shrink-0 text-[10px] font-medium uppercase text-muted-foreground">
               Type
             </div>
-            {hasActiveMeetingTask ? (
+            {hasCorrectableQuestion ? (
               <CurrentQuestionTypeControl
                 compact
                 effectiveType={effectiveQuestionType}

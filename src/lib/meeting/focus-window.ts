@@ -52,10 +52,12 @@ export type MeetingFocusSnapshot = {
   isTaskSwitchClarifyingQuestion: boolean;
   interviewTypes: InterviewBriefType[];
   effectiveQuestionType?: CanonicalQuestionType;
+  currentQuestionId?: string;
   questionTypeCorrected: boolean;
   manualQuestionTypeCorrection?: ManualQuestionTypeCorrection;
   activeTask?: MeetingFocusActiveTaskSnapshot;
   hasActiveMeetingTask: boolean;
+  hasCorrectableQuestion: boolean;
   hasActiveScreenTask: boolean;
   speechCorrections: MeetingFocusSpeechCorrectionSnapshot[];
 };
@@ -111,6 +113,7 @@ export const EMPTY_MEETING_FOCUS_SNAPSHOT: MeetingFocusSnapshot = {
   manualQuestionTypeCorrection: undefined,
   activeTask: undefined,
   hasActiveMeetingTask: false,
+  hasCorrectableQuestion: false,
   hasActiveScreenTask: false,
   speechCorrections: [],
 };
