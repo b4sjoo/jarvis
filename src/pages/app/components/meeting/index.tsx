@@ -113,6 +113,7 @@ import {
 const statusLabel = {
   idle: "Ready",
   starting: "Starting",
+  reconnecting: "Audio reconnecting",
   listening: "Listening",
   transcribing: "Transcribing",
   thinking: "Thinking",
@@ -562,6 +563,7 @@ export const MeetingAssistant = ({
   }, [clarifyingQuestionKey, clarifyingSelection]);
   const isBusy =
     meeting.status === "starting" ||
+    meeting.status === "reconnecting" ||
     meeting.status === "transcribing" ||
     meeting.status === "thinking";
   const isListening = meeting.status === "listening";
@@ -834,7 +836,11 @@ export const MeetingAssistant = ({
     setOpen(true);
     if (isPaused) {
       await meeting.resume();
-    } else if (isRunning || meeting.status === "starting") {
+    } else if (
+      isRunning ||
+      meeting.status === "starting" ||
+      meeting.status === "reconnecting"
+    ) {
       await meeting.stop();
     } else {
       await meeting.start();
@@ -855,7 +861,12 @@ export const MeetingAssistant = ({
   const handleFocusListeningShortcut = useCallback(async () => {
     setOpen(true);
 
-    if (meeting.status === "starting") return;
+    if (
+      meeting.status === "starting" ||
+      meeting.status === "reconnecting"
+    ) {
+      return;
+    }
 
     if (isPaused) {
       await meeting.resume();
@@ -1155,7 +1166,9 @@ export const MeetingAssistant = ({
                     void meeting.captureScreenContext();
                   }}
                   disabled={
-                    meeting.status === "starting" || !screenContextAllowed
+                    meeting.status === "starting" ||
+                    meeting.status === "reconnecting" ||
+                    !screenContextAllowed
                   }
                 >
                   <CameraIcon className="h-4 w-4" />
@@ -1343,7 +1356,10 @@ export const MeetingAssistant = ({
                     }}
                     placeholder="Correction: RAG not rec / Glean"
                     className="h-7 min-w-0 text-[10px]"
-                    disabled={meeting.status === "starting"}
+                    disabled={
+                      meeting.status === "starting" ||
+                      meeting.status === "reconnecting"
+                    }
                   />
                   <Button
                     size="sm"
@@ -1352,6 +1368,7 @@ export const MeetingAssistant = ({
                     onClick={handleSpeechCorrectionSubmit}
                     disabled={
                       meeting.status === "starting" ||
+                      meeting.status === "reconnecting" ||
                       !speechCorrectionInput.trim()
                     }
                   >
@@ -2300,7 +2317,9 @@ const FocusModePanel = ({
                 value={speechCorrectionInput}
                 onChange={onSpeechCorrectionInputChange}
                 onSubmit={onSpeechCorrectionSubmit}
-                disabled={status === "starting"}
+                disabled={
+                  status === "starting" || status === "reconnecting"
+                }
                 corrections={speechCorrections}
               />
             </div>

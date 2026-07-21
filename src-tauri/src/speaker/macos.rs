@@ -1,5 +1,5 @@
 // Jarvis macos speaker input and stream
-use super::AudioDevice;
+use super::{AudioDevice, SpeakerStreamTermination, SpeakerStreamTerminationReason};
 use anyhow::Result;
 use ca::aggregate_device_keys as agg_keys;
 use cidre::{arc, av, cat, cf, core_audio as ca, ns, os};
@@ -8,10 +8,14 @@ use ringbuf::{
     traits::{Consumer, Producer, Split},
     HeapCons, HeapProd, HeapRb,
 };
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex};
 use std::task::{Poll, Waker};
 use tracing::error;
+
+const CAPTURE_BUFFER_SIZE: usize = 1024 * 128;
+const TERMINATION_NONE: u8 = 0;
+const TERMINATION_BUFFER_OVERFLOW: u8 = 1;
 
 pub fn get_input_devices() -> Result<Vec<AudioDevice>> {
     let mut devices = Vec::new();
@@ -157,6 +161,19 @@ impl SpeakerStream {
     pub fn sample_rate(&self) -> u32 {
         self.current_sample_rate.load(Ordering::Acquire)
     }
+
+    pub fn termination(&self) -> SpeakerStreamTermination {
+        let reason = match self._ctx.termination_code.load(Ordering::Acquire) {
+            TERMINATION_BUFFER_OVERFLOW => SpeakerStreamTerminationReason::BufferOverflow,
+            _ => SpeakerStreamTerminationReason::UnknownStreamEnd,
+        };
+        SpeakerStreamTermination {
+            reason,
+            dropped_samples: self._ctx.dropped_samples.load(Ordering::Acquire),
+            consecutive_drops: self._ctx.consecutive_drops.load(Ordering::Acquire),
+            buffer_capacity: Some(CAPTURE_BUFFER_SIZE),
+        }
+    }
 }
 
 struct Ctx {
@@ -165,6 +182,8 @@ struct Ctx {
     waker_state: Arc<Mutex<WakerState>>,
     current_sample_rate: Arc<AtomicU32>,
     consecutive_drops: Arc<AtomicU32>,
+    dropped_samples: Arc<AtomicU64>,
+    termination_code: Arc<AtomicU8>,
     should_terminate: Arc<AtomicBool>,
 }
 
@@ -279,8 +298,7 @@ impl SpeakerInput {
 
         let format = av::AudioFormat::with_asbd(&asbd).unwrap();
 
-        let buffer_size = 1024 * 128;
-        let rb = HeapRb::<f32>::new(buffer_size);
+        let rb = HeapRb::<f32>::new(CAPTURE_BUFFER_SIZE);
         let (producer, consumer) = rb.split();
 
         let waker_state = Arc::new(Mutex::new(WakerState {
@@ -296,6 +314,8 @@ impl SpeakerInput {
             waker_state: waker_state.clone(),
             current_sample_rate: current_sample_rate.clone(),
             consecutive_drops: Arc::new(AtomicU32::new(0)),
+            dropped_samples: Arc::new(AtomicU64::new(0)),
+            termination_code: Arc::new(AtomicU8::new(TERMINATION_NONE)),
             should_terminate: Arc::new(AtomicBool::new(false)),
         });
 
@@ -318,6 +338,8 @@ fn process_audio_data(ctx: &mut Ctx, data: &[f32]) {
 
     // Consistent buffer overflow handling
     if pushed < buffer_size {
+        ctx.dropped_samples
+            .fetch_add((buffer_size - pushed) as u64, Ordering::AcqRel);
         let consecutive = ctx.consecutive_drops.fetch_add(1, Ordering::AcqRel) + 1;
 
         // Only terminate after many consecutive drops (prevents temporary spikes from killing stream)
@@ -327,6 +349,8 @@ fn process_audio_data(ctx: &mut Ctx, data: &[f32]) {
 
         if consecutive > 50 {
             eprintln!("Critical: Audio buffer overflow - capture stopping");
+            ctx.termination_code
+                .store(TERMINATION_BUFFER_OVERFLOW, Ordering::Release);
             ctx.should_terminate.store(true, Ordering::Release);
             return;
         }

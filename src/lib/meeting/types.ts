@@ -18,6 +18,7 @@ export type TranscriptSpeaker = "them" | "me" | "unknown";
 export type MeetingAssistantStatus =
   | "idle"
   | "starting"
+  | "reconnecting"
   | "listening"
   | "transcribing"
   | "thinking"
@@ -801,6 +802,17 @@ export interface MeetingAudioStatus {
   startedAtMs: number | null;
   captureSessionId: string | null;
   captureGeneration: number | null;
+}
+
+export type NativeAudioStopDisposition =
+  | "stopped"
+  | "already-idle"
+  | "stale-request"
+  | "owner-mismatch";
+
+export interface NativeAudioStopResult {
+  disposition: NativeAudioStopDisposition;
+  status: MeetingAudioStatus;
 }
 
 export type MeetingPrivacyMode =

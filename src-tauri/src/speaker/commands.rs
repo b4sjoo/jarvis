@@ -1,12 +1,16 @@
 // Jarvis AI Speech Detection, and capture system audio (speaker output) as a stream of f32 samples.
-use crate::speaker::{AudioDevice, SpeakerInput};
+use crate::speaker::{
+    AudioDevice, SpeakerInput, SpeakerStream, SpeakerStreamTermination,
+    SpeakerStreamTerminationReason,
+};
 use anyhow::Result;
 use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
-use futures_util::StreamExt;
+use futures_util::{FutureExt, StreamExt};
 use hound::{WavSpec, WavWriter};
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 use std::io::Cursor;
+use std::panic::AssertUnwindSafe;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -62,7 +66,27 @@ pub struct NativeCaptureControl {
 enum NativeStopDecision {
     NotRunning,
     WrongOwner(NativeCaptureOwner),
+    StaleLease(NativeCaptureLease),
     Acquired(NativeCaptureLease),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NativeStopDisposition {
+    Stopped,
+    AlreadyIdle,
+    StaleRequest,
+    OwnerMismatch,
+}
+
+impl NativeStopDisposition {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Stopped => "stopped",
+            Self::AlreadyIdle => "already-idle",
+            Self::StaleRequest => "stale-request",
+            Self::OwnerMismatch => "owner-mismatch",
+        }
+    }
 }
 
 fn claim_capture_lease(
@@ -92,12 +116,19 @@ fn claim_capture_lease(
 fn begin_capture_stop(
     control: &mut NativeCaptureControl,
     requested_owner: NativeCaptureOwner,
+    expected_session_id: Option<&str>,
+    expected_generation: Option<u64>,
 ) -> NativeStopDecision {
     let Some(lease) = control.lease.clone() else {
         return NativeStopDecision::NotRunning;
     };
     if lease.owner != requested_owner {
         return NativeStopDecision::WrongOwner(lease.owner);
+    }
+    if expected_session_id != Some(lease.session_id.as_str())
+        || expected_generation != Some(lease.generation)
+    {
+        return NativeStopDecision::StaleLease(lease);
     }
     control.phase = NativeCapturePhase::Stopping;
     NativeStopDecision::Acquired(lease)
@@ -149,6 +180,13 @@ pub struct MeetingAudioStatus {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct NativeAudioStopResult {
+    pub disposition: &'static str,
+    pub status: MeetingAudioStatus,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct NativeSpeechDetectedEvent {
     pub capture_session_id: String,
     pub capture_generation: u64,
@@ -171,6 +209,120 @@ pub struct NativeAudioLifecycleEvent {
     pub reason: Option<String>,
     pub message: Option<String>,
     pub sample_rate: Option<u32>,
+    pub expected: bool,
+    pub recoverability: &'static str,
+    pub diagnostics: CaptureTerminationDiagnostics,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NativeAudioSegmentDroppedEvent {
+    pub capture_session_id: String,
+    pub capture_generation: u64,
+    pub attempted_segment_sequence: u64,
+    pub owner: &'static str,
+    pub occurred_at_ms: u64,
+    pub reason: &'static str,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CaptureTerminationReason {
+    RequestedStop,
+    CaptureLimitReached,
+    BufferOverflow,
+    InvalidSampleRate,
+    CapturePanic,
+    UnknownStreamEnd,
+}
+
+impl CaptureTerminationReason {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::RequestedStop => "requested-stop",
+            Self::CaptureLimitReached => "capture-limit-reached",
+            Self::BufferOverflow => "buffer-overflow",
+            Self::InvalidSampleRate => "invalid-sample-rate",
+            Self::CapturePanic => "capture-panic",
+            Self::UnknownStreamEnd => "unknown-stream-end",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CaptureRecoverability {
+    NotApplicable,
+    RetryOnce,
+    Manual,
+}
+
+impl CaptureRecoverability {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::NotApplicable => "not-applicable",
+            Self::RetryOnce => "retry-once",
+            Self::Manual => "manual",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CaptureTerminationDiagnostics {
+    pub dropped_samples: u64,
+    pub consecutive_drops: u32,
+    pub buffer_capacity: Option<usize>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CaptureRunOutcome {
+    reason: CaptureTerminationReason,
+    expected: bool,
+    recoverability: CaptureRecoverability,
+    diagnostics: CaptureTerminationDiagnostics,
+}
+
+impl CaptureRunOutcome {
+    fn from_stream(termination: SpeakerStreamTermination) -> Self {
+        let (reason, recoverability) = match termination.reason {
+            SpeakerStreamTerminationReason::BufferOverflow => (
+                CaptureTerminationReason::BufferOverflow,
+                CaptureRecoverability::RetryOnce,
+            ),
+            SpeakerStreamTerminationReason::UnknownStreamEnd => (
+                CaptureTerminationReason::UnknownStreamEnd,
+                CaptureRecoverability::RetryOnce,
+            ),
+        };
+        Self {
+            reason,
+            expected: false,
+            recoverability,
+            diagnostics: CaptureTerminationDiagnostics {
+                dropped_samples: termination.dropped_samples,
+                consecutive_drops: termination.consecutive_drops,
+                buffer_capacity: termination.buffer_capacity,
+            },
+        }
+    }
+
+    fn expected(reason: CaptureTerminationReason) -> Self {
+        Self {
+            reason,
+            expected: true,
+            recoverability: CaptureRecoverability::NotApplicable,
+            diagnostics: CaptureTerminationDiagnostics::default(),
+        }
+    }
+
+    fn panic() -> Self {
+        Self {
+            reason: CaptureTerminationReason::CapturePanic,
+            expected: false,
+            recoverability: CaptureRecoverability::Manual,
+            diagnostics: CaptureTerminationDiagnostics::default(),
+        }
+    }
 }
 
 #[tauri::command]
@@ -232,9 +384,11 @@ async fn start_audio_capture(
     }
 
     let requested_device_id = device_id.clone();
-    let input = match SpeakerInput::new_with_device(device_id) {
-        Ok(input) => input,
-        Err(e) => {
+    let input = match std::panic::catch_unwind(AssertUnwindSafe(|| {
+        SpeakerInput::new_with_device(device_id)
+    })) {
+        Ok(Ok(input)) => input,
+        Ok(Err(e)) => {
             error!("Failed to create speaker input: {}", e);
             emit_capture_lifecycle(
                 &app,
@@ -245,6 +399,9 @@ async fn start_audio_capture(
                 Some("start-failed"),
                 Some(&format!("Failed to access system audio: {}", e)),
                 None,
+                false,
+                CaptureRecoverability::Manual,
+                CaptureTerminationDiagnostics::default(),
             );
             release_starting_capture(
                 &state,
@@ -254,9 +411,55 @@ async fn start_audio_capture(
             );
             return Err(format!("Failed to access system audio: {}", e));
         }
+        Err(_) => {
+            emit_capture_lifecycle(
+                &app,
+                "error",
+                capture_owner,
+                &capture_session_id,
+                capture_generation,
+                Some(CaptureTerminationReason::CapturePanic.as_str()),
+                Some("System audio initialization panicked."),
+                None,
+                false,
+                CaptureRecoverability::Manual,
+                CaptureTerminationDiagnostics::default(),
+            );
+            release_starting_capture(
+                &state,
+                capture_owner,
+                &capture_session_id,
+                capture_generation,
+            );
+            return Err("System audio initialization panicked".to_string());
+        }
     };
 
-    let stream = input.stream();
+    let stream = match std::panic::catch_unwind(AssertUnwindSafe(|| input.stream())) {
+        Ok(stream) => stream,
+        Err(_) => {
+            emit_capture_lifecycle(
+                &app,
+                "error",
+                capture_owner,
+                &capture_session_id,
+                capture_generation,
+                Some(CaptureTerminationReason::CapturePanic.as_str()),
+                Some("System audio stream creation panicked."),
+                None,
+                false,
+                CaptureRecoverability::Manual,
+                CaptureTerminationDiagnostics::default(),
+            );
+            release_starting_capture(
+                &state,
+                capture_owner,
+                &capture_session_id,
+                capture_generation,
+            );
+            return Err("System audio stream creation panicked".to_string());
+        }
+    };
     let sr = stream.sample_rate();
 
     // Validate sample rate
@@ -268,9 +471,12 @@ async fn start_audio_capture(
             capture_owner,
             &capture_session_id,
             capture_generation,
-            Some("invalid-sample-rate"),
+            Some(CaptureTerminationReason::InvalidSampleRate.as_str()),
             Some(&format!("Invalid sample rate: {}", sr)),
             Some(sr),
+            false,
+            CaptureRecoverability::Manual,
+            CaptureTerminationDiagnostics::default(),
         );
         release_starting_capture(
             &state,
@@ -331,34 +537,42 @@ async fn start_audio_capture(
             return Err("Capture task slot is already occupied".to_string());
         }
         let task = tokio::spawn(async move {
-            if vad_config.enabled {
-                run_vad_capture(
-                    app_clone.clone(),
-                    stream,
-                    sr,
-                    vad_config,
-                    task_session_id.clone(),
-                    capture_owner,
-                    capture_generation,
-                )
-                .await;
-            } else {
-                run_continuous_capture(
-                    app_clone.clone(),
-                    stream,
-                    sr,
-                    vad_config,
-                    task_session_id.clone(),
-                    capture_owner,
-                    capture_generation,
-                )
-                .await;
-            }
+            let capture_future = async {
+                if vad_config.enabled {
+                    run_vad_capture(
+                        app_clone.clone(),
+                        stream,
+                        sr,
+                        vad_config,
+                        task_session_id.clone(),
+                        capture_owner,
+                        capture_generation,
+                    )
+                    .await
+                } else {
+                    run_continuous_capture(
+                        app_clone.clone(),
+                        stream,
+                        sr,
+                        vad_config,
+                        task_session_id.clone(),
+                        capture_owner,
+                        capture_generation,
+                    )
+                    .await
+                }
+            };
+            let outcome = AssertUnwindSafe(capture_future)
+                .catch_unwind()
+                .await
+                .unwrap_or_else(|_| CaptureRunOutcome::panic());
             finish_capture_if_owner(
                 &app_clone,
                 capture_owner,
                 &task_session_id,
                 capture_generation,
+                sr,
+                outcome,
             );
         });
         *task_guard = Some(task);
@@ -375,6 +589,9 @@ async fn start_audio_capture(
         Some("start-completed"),
         None,
         Some(sr),
+        true,
+        CaptureRecoverability::NotApplicable,
+        CaptureTerminationDiagnostics::default(),
     );
 
     Ok(())
@@ -383,13 +600,13 @@ async fn start_audio_capture(
 // VAD-enabled capture - OPTIMIZED for real-time speech detection
 async fn run_vad_capture(
     app: AppHandle,
-    stream: impl StreamExt<Item = f32> + Unpin,
+    stream: SpeakerStream,
     sr: u32,
     config: VadConfig,
     capture_session_id: String,
     capture_owner: NativeCaptureOwner,
     capture_generation: u64,
-) {
+) -> CaptureRunOutcome {
     let mut stream = stream;
     let mut buffer: VecDeque<f32> = VecDeque::new();
     let mut pre_speech: VecDeque<f32> =
@@ -438,17 +655,29 @@ async fn run_vad_capture(
                 // Safety cap: force emit if exceeds 30s
                 if speech_buffer.len() > max_samples {
                     let normalized_buffer = normalize_audio_level(&speech_buffer, 0.1);
-                    if let Ok(b64) = samples_to_wav_b64(sr, &normalized_buffer) {
-                        // let duration = speech_buffer.len() as f32 / sr as f32;
-                        emit_speech_detected(
-                            &app,
-                            &capture_session_id,
-                            &mut segment_sequence,
-                            sr,
-                            b64,
-                            capture_owner,
-                            capture_generation,
-                        );
+                    match samples_to_wav_b64(sr, &normalized_buffer) {
+                        Ok(b64) => {
+                            emit_speech_detected(
+                                &app,
+                                &capture_session_id,
+                                &mut segment_sequence,
+                                sr,
+                                b64,
+                                capture_owner,
+                                capture_generation,
+                            );
+                        }
+                        Err(error) => {
+                            emit_segment_dropped(
+                                &app,
+                                capture_owner,
+                                &capture_session_id,
+                                capture_generation,
+                                segment_sequence + 1,
+                                "wav-encoding-failed",
+                                &error,
+                            );
+                        }
                     }
                     speech_buffer.clear();
                     in_speech = false;
@@ -478,20 +707,31 @@ async fn run_vad_capture(
 
                             // Emit complete speech segment
                             let normalized_buffer = normalize_audio_level(&speech_buffer, 0.1);
-                            if let Ok(b64) = samples_to_wav_b64(sr, &normalized_buffer) {
-                                // let duration = speech_buffer.len() as f32 / sr as f32;
-                                emit_speech_detected(
-                                    &app,
-                                    &capture_session_id,
-                                    &mut segment_sequence,
-                                    sr,
-                                    b64,
-                                    capture_owner,
-                                    capture_generation,
-                                );
-                            } else {
-                                error!("Failed to encode speech to WAV");
-                                let _ = app.emit("audio-encoding-error", "Failed to encode speech");
+                            match samples_to_wav_b64(sr, &normalized_buffer) {
+                                Ok(b64) => {
+                                    emit_speech_detected(
+                                        &app,
+                                        &capture_session_id,
+                                        &mut segment_sequence,
+                                        sr,
+                                        b64,
+                                        capture_owner,
+                                        capture_generation,
+                                    );
+                                }
+                                Err(error) => {
+                                    error!("Failed to encode speech to WAV: {}", error);
+                                    emit_segment_dropped(
+                                        &app,
+                                        capture_owner,
+                                        &capture_session_id,
+                                        capture_generation,
+                                        segment_sequence + 1,
+                                        "wav-encoding-failed",
+                                        &error,
+                                    );
+                                    let _ = app.emit("audio-encoding-error", error);
+                                }
                             }
                         } else {
                             let _ = app.emit(
@@ -523,18 +763,20 @@ async fn run_vad_capture(
             }
         }
     }
+
+    CaptureRunOutcome::from_stream(stream.termination())
 }
 
 // Continuous capture (VAD disabled)
 async fn run_continuous_capture(
     app: AppHandle,
-    stream: impl StreamExt<Item = f32> + Unpin,
+    stream: SpeakerStream,
     sr: u32,
     config: VadConfig,
     capture_session_id: String,
     capture_owner: NativeCaptureOwner,
     capture_generation: u64,
-) {
+) -> CaptureRunOutcome {
     let mut stream = stream;
     let max_samples = (sr as u64 * config.max_recording_duration_secs) as usize;
 
@@ -560,6 +802,7 @@ async fn run_continuous_capture(
     );
 
     // Accumulate audio - check stop flag on EVERY sample for immediate response
+    let mut outcome = CaptureRunOutcome::expected(CaptureTerminationReason::RequestedStop);
     loop {
         // Check stop flag FIRST on every iteration for immediate stopping
         if stop_flag.load(Ordering::Acquire) {
@@ -585,16 +828,23 @@ async fn run_continuous_capture(
 
                         // Check size limit (safety)
                         if audio_buffer.len() >= max_samples {
+                            outcome = CaptureRunOutcome::expected(
+                                CaptureTerminationReason::CaptureLimitReached,
+                            );
                             break;
                         }
 
                         // Check time limit
                         if elapsed >= max_duration {
+                            outcome = CaptureRunOutcome::expected(
+                                CaptureTerminationReason::CaptureLimitReached,
+                            );
                             break;
                         }
                     },
                     None => {
                         warn!("Audio stream ended unexpectedly");
+                        outcome = CaptureRunOutcome::from_stream(stream.termination());
                         break;
                     }
                 }
@@ -629,6 +879,15 @@ async fn run_continuous_capture(
             }
             Err(e) => {
                 error!("Failed to encode continuous audio: {}", e);
+                emit_segment_dropped(
+                    &app,
+                    capture_owner,
+                    &capture_session_id,
+                    capture_generation,
+                    segment_sequence + 1,
+                    "wav-encoding-failed",
+                    &e,
+                );
                 let _ = app.emit("audio-encoding-error", e);
             }
         }
@@ -638,6 +897,7 @@ async fn run_continuous_capture(
     }
 
     let _ = app.emit("continuous-recording-stopped", ());
+    outcome
 }
 
 // Apply noise gate
@@ -763,6 +1023,28 @@ fn emit_speech_detected(
 }
 
 #[allow(clippy::too_many_arguments)]
+fn emit_segment_dropped(
+    app: &AppHandle,
+    owner: NativeCaptureOwner,
+    session_id: &str,
+    generation: u64,
+    attempted_segment_sequence: u64,
+    reason: &'static str,
+    message: &str,
+) {
+    let event = NativeAudioSegmentDroppedEvent {
+        capture_session_id: session_id.to_string(),
+        capture_generation: generation,
+        attempted_segment_sequence,
+        owner: owner.as_str(),
+        occurred_at_ms: now_ms(),
+        reason,
+        message: message.to_string(),
+    };
+    let _ = app.emit("native-audio-segment-dropped", event);
+}
+
+#[allow(clippy::too_many_arguments)]
 fn emit_capture_lifecycle(
     app: &AppHandle,
     event_type: &'static str,
@@ -772,6 +1054,9 @@ fn emit_capture_lifecycle(
     reason: Option<&str>,
     message: Option<&str>,
     sample_rate: Option<u32>,
+    expected: bool,
+    recoverability: CaptureRecoverability,
+    diagnostics: CaptureTerminationDiagnostics,
 ) {
     let event = NativeAudioLifecycleEvent {
         event_type,
@@ -782,6 +1067,9 @@ fn emit_capture_lifecycle(
         reason: reason.map(str::to_string),
         message: message.map(str::to_string),
         sample_rate,
+        expected,
+        recoverability: recoverability.as_str(),
+        diagnostics,
     };
     let _ = app.emit("native-audio-lifecycle", event);
 }
@@ -825,6 +1113,8 @@ fn finish_capture_if_owner(
     owner: NativeCaptureOwner,
     session_id: &str,
     generation: u64,
+    sample_rate: u32,
+    outcome: CaptureRunOutcome,
 ) {
     let state = app.state::<crate::AudioState>();
     let finished = if let Ok(mut control) = state.capture_control.lock() {
@@ -853,13 +1143,20 @@ fn finish_capture_if_owner(
         let _ = app.emit("capture-stopped", ());
         emit_capture_lifecycle(
             app,
-            "stopped",
+            if outcome.expected { "stopped" } else { "error" },
             owner,
             session_id,
             generation,
-            Some("stream-ended"),
-            None,
-            None,
+            Some(outcome.reason.as_str()),
+            if outcome.reason == CaptureTerminationReason::CapturePanic {
+                Some("System audio capture task panicked.")
+            } else {
+                None
+            },
+            Some(sample_rate),
+            outcome.expected,
+            outcome.recoverability,
+            outcome.diagnostics,
         );
     }
 }
@@ -867,22 +1164,40 @@ fn finish_capture_if_owner(
 async fn stop_audio_capture_for_owner(
     app: AppHandle,
     requested_owner: NativeCaptureOwner,
-) -> Result<(), String> {
+    expected_session_id: Option<String>,
+    expected_generation: Option<u64>,
+) -> Result<NativeStopDisposition, String> {
     let state = app.state::<crate::AudioState>();
     let (lease, task) = {
         let mut control = state
             .capture_control
             .lock()
             .map_err(|e| format!("Failed to acquire capture control: {}", e))?;
-        let lease = match begin_capture_stop(&mut control, requested_owner) {
-            NativeStopDecision::NotRunning => return Ok(()),
+        let lease = match begin_capture_stop(
+            &mut control,
+            requested_owner,
+            expected_session_id.as_deref(),
+            expected_generation,
+        ) {
+            NativeStopDecision::NotRunning => return Ok(NativeStopDisposition::AlreadyIdle),
             NativeStopDecision::WrongOwner(owner) => {
                 warn!(
                     "Ignoring {} stop request because capture is owned by {}",
                     requested_owner.as_str(),
                     owner.as_str()
                 );
-                return Ok(());
+                return Ok(NativeStopDisposition::OwnerMismatch);
+            }
+            NativeStopDecision::StaleLease(active_lease) => {
+                warn!(
+                    "Ignoring stale {} stop request for session {:?} generation {:?}; active session is {} generation {}",
+                    requested_owner.as_str(),
+                    expected_session_id,
+                    expected_generation,
+                    active_lease.session_id,
+                    active_lease.generation
+                );
+                return Ok(NativeStopDisposition::StaleRequest);
             }
             NativeStopDecision::Acquired(lease) => lease,
         };
@@ -933,21 +1248,54 @@ async fn stop_audio_capture_for_owner(
             Some("requested-stop"),
             None,
             None,
+            true,
+            CaptureRecoverability::NotApplicable,
+            CaptureTerminationDiagnostics::default(),
         );
     }
-    Ok(())
+    Ok(if stopped {
+        NativeStopDisposition::Stopped
+    } else {
+        NativeStopDisposition::StaleRequest
+    })
 }
 
 #[tauri::command]
-pub async fn stop_system_audio_capture(app: AppHandle) -> Result<(), String> {
-    stop_audio_capture_for_owner(app, NativeCaptureOwner::System).await?;
-    Ok(())
+pub async fn stop_system_audio_capture(
+    app: AppHandle,
+    expected_capture_session_id: Option<String>,
+    expected_capture_generation: Option<u64>,
+) -> Result<NativeAudioStopResult, String> {
+    let disposition = stop_audio_capture_for_owner(
+        app.clone(),
+        NativeCaptureOwner::System,
+        expected_capture_session_id,
+        expected_capture_generation,
+    )
+    .await?;
+    Ok(NativeAudioStopResult {
+        disposition: disposition.as_str(),
+        status: get_meeting_audio_status(app).await?,
+    })
 }
 
 #[tauri::command]
-pub async fn stop_meeting_audio_session(app: AppHandle) -> Result<MeetingAudioStatus, String> {
-    stop_audio_capture_for_owner(app.clone(), NativeCaptureOwner::Meeting).await?;
-    get_meeting_audio_status(app).await
+pub async fn stop_meeting_audio_session(
+    app: AppHandle,
+    expected_capture_session_id: Option<String>,
+    expected_capture_generation: Option<u64>,
+) -> Result<NativeAudioStopResult, String> {
+    let disposition = stop_audio_capture_for_owner(
+        app.clone(),
+        NativeCaptureOwner::Meeting,
+        expected_capture_session_id,
+        expected_capture_generation,
+    )
+    .await?;
+    Ok(NativeAudioStopResult {
+        disposition: disposition.as_str(),
+        status: get_meeting_audio_status(app).await?,
+    })
 }
 
 #[tauri::command]
@@ -1162,8 +1510,11 @@ fn now_ms() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::{
-        begin_capture_stop, claim_capture_lease, NativeAudioLifecycleEvent, NativeCaptureControl,
+        begin_capture_stop, claim_capture_lease, control_owns, CaptureRecoverability,
+        CaptureRunOutcome, CaptureTerminationDiagnostics, CaptureTerminationReason,
+        NativeAudioLifecycleEvent, NativeAudioSegmentDroppedEvent, NativeCaptureControl,
         NativeCaptureOwner, NativeCapturePhase, NativeSpeechDetectedEvent, NativeStopDecision,
+        SpeakerStreamTermination, SpeakerStreamTerminationReason,
     };
 
     #[test]
@@ -1201,6 +1552,13 @@ mod tests {
             reason: Some("stream-ended".to_string()),
             message: None,
             sample_rate: None,
+            expected: false,
+            recoverability: "retry-once",
+            diagnostics: CaptureTerminationDiagnostics {
+                dropped_samples: 9_000,
+                consecutive_drops: 51,
+                buffer_capacity: Some(131_072),
+            },
         };
 
         let value = serde_json::to_value(event).expect("event should serialize");
@@ -1209,6 +1567,32 @@ mod tests {
         assert_eq!(value["captureGeneration"], 3);
         assert_eq!(value["owner"], "meeting");
         assert_eq!(value["reason"], "stream-ended");
+        assert_eq!(value["expected"], false);
+        assert_eq!(value["recoverability"], "retry-once");
+        assert_eq!(value["diagnostics"]["droppedSamples"], 9_000);
+        assert_eq!(value["diagnostics"]["consecutiveDrops"], 51);
+        assert_eq!(value["diagnostics"]["bufferCapacity"], 131_072);
+    }
+
+    #[test]
+    fn serializes_lease_qualified_segment_drop_without_audio() {
+        let event = NativeAudioSegmentDroppedEvent {
+            capture_session_id: "capture-test".to_string(),
+            capture_generation: 3,
+            attempted_segment_sequence: 8,
+            owner: "meeting",
+            occurred_at_ms: 1234,
+            reason: "wav-encoding-failed",
+            message: "writer failed".to_string(),
+        };
+
+        let value = serde_json::to_value(event).expect("event should serialize");
+        assert_eq!(value["captureSessionId"], "capture-test");
+        assert_eq!(value["captureGeneration"], 3);
+        assert_eq!(value["attemptedSegmentSequence"], 8);
+        assert_eq!(value["owner"], "meeting");
+        assert_eq!(value["reason"], "wav-encoding-failed");
+        assert!(value.get("audioBase64").is_none());
     }
 
     #[test]
@@ -1234,9 +1618,59 @@ mod tests {
     }
 
     #[test]
+    fn concurrent_owner_claims_have_exactly_one_winner() {
+        let mut control = NativeCaptureControl::default();
+        let meeting = claim_capture_lease(
+            &mut control,
+            NativeCaptureOwner::Meeting,
+            "meeting-1".to_string(),
+        )
+        .expect("meeting should claim the idle controller");
+
+        let legacy = claim_capture_lease(
+            &mut control,
+            NativeCaptureOwner::System,
+            "system-1".to_string(),
+        );
+
+        assert!(legacy.is_err());
+        assert_eq!(control.phase, NativeCapturePhase::Starting);
+        assert_eq!(control.lease, Some(meeting));
+    }
+
+    #[test]
+    fn stop_during_start_invalidates_the_starting_lease() {
+        let mut control = NativeCaptureControl::default();
+        let lease = claim_capture_lease(
+            &mut control,
+            NativeCaptureOwner::Meeting,
+            "meeting-1".to_string(),
+        )
+        .expect("meeting should claim the idle controller");
+
+        assert_eq!(
+            begin_capture_stop(
+                &mut control,
+                NativeCaptureOwner::Meeting,
+                Some(&lease.session_id),
+                Some(lease.generation),
+            ),
+            NativeStopDecision::Acquired(lease.clone())
+        );
+        assert!(!control_owns(
+            &control,
+            NativeCapturePhase::Starting,
+            lease.owner,
+            &lease.session_id,
+            lease.generation,
+        ));
+        assert_eq!(control.phase, NativeCapturePhase::Stopping);
+    }
+
+    #[test]
     fn wrong_owner_cannot_stop_an_active_capture() {
         let mut control = NativeCaptureControl::default();
-        claim_capture_lease(
+        let lease = claim_capture_lease(
             &mut control,
             NativeCaptureOwner::Meeting,
             "meeting-1".to_string(),
@@ -1245,19 +1679,86 @@ mod tests {
         control.phase = NativeCapturePhase::Active;
 
         assert_eq!(
-            begin_capture_stop(&mut control, NativeCaptureOwner::System),
+            begin_capture_stop(
+                &mut control,
+                NativeCaptureOwner::System,
+                Some(&lease.session_id),
+                Some(lease.generation),
+            ),
             NativeStopDecision::WrongOwner(NativeCaptureOwner::Meeting)
         );
         assert_eq!(control.phase, NativeCapturePhase::Active);
         assert_eq!(
-            begin_capture_stop(&mut control, NativeCaptureOwner::Meeting),
-            NativeStopDecision::Acquired(
-                control
-                    .lease
-                    .clone()
-                    .expect("meeting lease should remain active")
-            )
+            begin_capture_stop(
+                &mut control,
+                NativeCaptureOwner::Meeting,
+                Some(&lease.session_id),
+                Some(lease.generation),
+            ),
+            NativeStopDecision::Acquired(lease)
         );
         assert_eq!(control.phase, NativeCapturePhase::Stopping);
+    }
+
+    #[test]
+    fn stale_same_owner_lease_cannot_stop_a_new_generation() {
+        let mut control = NativeCaptureControl::default();
+        let old = claim_capture_lease(
+            &mut control,
+            NativeCaptureOwner::Meeting,
+            "meeting-old".to_string(),
+        )
+        .expect("old capture should claim the controller");
+        control.phase = NativeCapturePhase::Idle;
+        control.lease = None;
+        let current = claim_capture_lease(
+            &mut control,
+            NativeCaptureOwner::Meeting,
+            "meeting-current".to_string(),
+        )
+        .expect("current capture should claim the controller");
+        control.phase = NativeCapturePhase::Active;
+
+        assert_eq!(
+            begin_capture_stop(
+                &mut control,
+                NativeCaptureOwner::Meeting,
+                Some(&old.session_id),
+                Some(old.generation),
+            ),
+            NativeStopDecision::StaleLease(current.clone())
+        );
+        assert_eq!(control.phase, NativeCapturePhase::Active);
+        assert_eq!(control.lease, Some(current));
+    }
+
+    #[test]
+    fn buffer_overflow_maps_to_one_recoverable_capture_outcome() {
+        let outcome = CaptureRunOutcome::from_stream(SpeakerStreamTermination {
+            reason: SpeakerStreamTerminationReason::BufferOverflow,
+            dropped_samples: 24_000,
+            consecutive_drops: 51,
+            buffer_capacity: Some(131_072),
+        });
+
+        assert_eq!(outcome.reason, CaptureTerminationReason::BufferOverflow);
+        assert!(!outcome.expected);
+        assert_eq!(outcome.recoverability, CaptureRecoverability::RetryOnce);
+        assert_eq!(outcome.diagnostics.dropped_samples, 24_000);
+        assert_eq!(outcome.diagnostics.consecutive_drops, 51);
+        assert_eq!(outcome.diagnostics.buffer_capacity, Some(131_072));
+    }
+
+    #[test]
+    fn capture_panic_requires_manual_recovery() {
+        let outcome = CaptureRunOutcome::panic();
+
+        assert_eq!(outcome.reason, CaptureTerminationReason::CapturePanic);
+        assert!(!outcome.expected);
+        assert_eq!(outcome.recoverability, CaptureRecoverability::Manual);
+        assert_eq!(
+            outcome.diagnostics,
+            CaptureTerminationDiagnostics::default()
+        );
     }
 }

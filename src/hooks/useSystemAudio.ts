@@ -23,6 +23,7 @@ import {
   authorizeNativeAudioLifecycleEvent,
   authorizeNativeSpeechDetectedEvent,
   type MeetingAudioStatus,
+  type NativeAudioStopResult,
 } from "@/lib/meeting";
 
 // VAD Configuration interface matching Rust
@@ -118,6 +119,34 @@ export function useSystemAudio() {
   const nativeCaptureSessionIdRef = useRef<string | null>(null);
   const nativeCaptureGenerationRef = useRef<number | null>(null);
   const lastNativeSegmentSequenceRef = useRef(0);
+  const nativeCaptureOperationRef = useRef(0);
+
+  const beginNativeCaptureOperation = useCallback(() => {
+    nativeCaptureOperationRef.current += 1;
+    return nativeCaptureOperationRef.current;
+  }, []);
+
+  const readNativeCaptureLease = useCallback(
+    () => ({
+      captureSessionId: nativeCaptureSessionIdRef.current,
+      captureGeneration: nativeCaptureGenerationRef.current,
+    }),
+    []
+  );
+
+  const stopNativeSystemCapture = useCallback(
+    async (
+      expectedLease: {
+        captureSessionId: string | null;
+        captureGeneration: number | null;
+      } = readNativeCaptureLease()
+    ) =>
+      invoke<NativeAudioStopResult>("stop_system_audio_capture", {
+        expectedCaptureSessionId: expectedLease.captureSessionId,
+        expectedCaptureGeneration: expectedLease.captureGeneration,
+      }),
+    [readNativeCaptureLease]
+  );
 
   // Load context settings and VAD config from localStorage on mount
   useEffect(() => {
@@ -362,6 +391,7 @@ export function useSystemAudio() {
       if (authorization.event.eventType === "started") return;
 
       const terminalEvent = authorization.event;
+      nativeCaptureOperationRef.current += 1;
       nativeCaptureSessionIdRef.current = null;
       nativeCaptureGenerationRef.current = null;
       lastNativeSegmentSequenceRef.current = 0;
@@ -497,6 +527,7 @@ export function useSystemAudio() {
 
   // Start continuous recording manually
   const startContinuousRecording = useCallback(async () => {
+    const operation = beginNativeCaptureOperation();
     try {
       setRecordingProgress(0);
       setError("");
@@ -516,8 +547,18 @@ export function useSystemAudio() {
       );
       const nativeCaptureSessionId = audioStatus.captureSessionId?.trim();
       const nativeCaptureGeneration = audioStatus.captureGeneration;
+      if (operation !== nativeCaptureOperationRef.current) {
+        await stopNativeSystemCapture({
+          captureSessionId: audioStatus.captureSessionId,
+          captureGeneration: audioStatus.captureGeneration,
+        });
+        return;
+      }
       if (!nativeCaptureSessionId || nativeCaptureGeneration == null) {
-        await invoke<void>("stop_system_audio_capture");
+        await stopNativeSystemCapture({
+          captureSessionId: audioStatus.captureSessionId,
+          captureGeneration: audioStatus.captureGeneration,
+        });
         throw new Error(
           "Native audio capture started without a capture session id."
         );
@@ -526,10 +567,16 @@ export function useSystemAudio() {
       nativeCaptureGenerationRef.current = nativeCaptureGeneration;
       lastNativeSegmentSequenceRef.current = 0;
     } catch (err) {
+      if (operation !== nativeCaptureOperationRef.current) return;
       console.error("Failed to start continuous recording:", err);
       setError(`Failed to start recording: ${err}`);
     }
-  }, [vadConfig, selectedAudioDevices.output.id]);
+  }, [
+    beginNativeCaptureOperation,
+    selectedAudioDevices.output.id,
+    stopNativeSystemCapture,
+    vadConfig,
+  ]);
 
   // Ignore current recording (stop without transcription)
   const ignoreContinuousRecording = useCallback(async () => {
@@ -537,10 +584,12 @@ export function useSystemAudio() {
       if (!isContinuousMode || !isRecordingInContinuousMode) return;
 
       // Stop the capture without processing
+      beginNativeCaptureOperation();
+      const previousLease = readNativeCaptureLease();
       nativeCaptureSessionIdRef.current = null;
       nativeCaptureGenerationRef.current = null;
       lastNativeSegmentSequenceRef.current = 0;
-      await invoke<void>("stop_system_audio_capture");
+      await stopNativeSystemCapture(previousLease);
 
       // Reset states
       setRecordingProgress(0);
@@ -550,7 +599,13 @@ export function useSystemAudio() {
       console.error("Failed to ignore recording:", err);
       setError(`Failed to ignore recording: ${err}`);
     }
-  }, [isContinuousMode, isRecordingInContinuousMode]);
+  }, [
+    isContinuousMode,
+    isRecordingInContinuousMode,
+    beginNativeCaptureOperation,
+    readNativeCaptureLease,
+    stopNativeSystemCapture,
+  ]);
 
   // AI Processing function
   const processWithAI = useCallback(
@@ -636,6 +691,7 @@ export function useSystemAudio() {
   );
 
   const startCapture = useCallback(async () => {
+    const operation = beginNativeCaptureOperation();
     try {
       setError("");
 
@@ -671,10 +727,11 @@ export function useSystemAudio() {
 
       // VAD mode: Start recording immediately
       // Stop any existing capture
+      const previousLease = readNativeCaptureLease();
       nativeCaptureSessionIdRef.current = null;
       nativeCaptureGenerationRef.current = null;
       lastNativeSegmentSequenceRef.current = 0;
-      await invoke<void>("stop_system_audio_capture");
+      await stopNativeSystemCapture(previousLease);
 
       const deviceId =
         selectedAudioDevices.output.id !== "default"
@@ -691,8 +748,18 @@ export function useSystemAudio() {
       );
       const nativeCaptureSessionId = audioStatus.captureSessionId?.trim();
       const nativeCaptureGeneration = audioStatus.captureGeneration;
+      if (operation !== nativeCaptureOperationRef.current) {
+        await stopNativeSystemCapture({
+          captureSessionId: audioStatus.captureSessionId,
+          captureGeneration: audioStatus.captureGeneration,
+        });
+        return;
+      }
       if (!nativeCaptureSessionId || nativeCaptureGeneration == null) {
-        await invoke<void>("stop_system_audio_capture");
+        await stopNativeSystemCapture({
+          captureSessionId: audioStatus.captureSessionId,
+          captureGeneration: audioStatus.captureGeneration,
+        });
         throw new Error(
           "Native audio capture started without a capture session id."
         );
@@ -701,14 +768,22 @@ export function useSystemAudio() {
       nativeCaptureGenerationRef.current = nativeCaptureGeneration;
       lastNativeSegmentSequenceRef.current = 0;
     } catch (err) {
+      if (operation !== nativeCaptureOperationRef.current) return;
       const errorMessage = err instanceof Error ? err.message : String(err);
       setError(errorMessage);
       setIsPopoverOpen(true);
     }
-  }, [vadConfig, selectedAudioDevices.output.id]);
+  }, [
+    beginNativeCaptureOperation,
+    readNativeCaptureLease,
+    selectedAudioDevices.output.id,
+    stopNativeSystemCapture,
+    vadConfig,
+  ]);
 
   const stopCapture = useCallback(async () => {
     try {
+      beginNativeCaptureOperation();
       // Abort any ongoing AI requests
       if (abortControllerRef.current) {
         abortControllerRef.current.abort();
@@ -716,10 +791,11 @@ export function useSystemAudio() {
       }
 
       // Stop the audio capture
+      const previousLease = readNativeCaptureLease();
       nativeCaptureSessionIdRef.current = null;
       nativeCaptureGenerationRef.current = null;
       lastNativeSegmentSequenceRef.current = 0;
-      await invoke<void>("stop_system_audio_capture");
+      await stopNativeSystemCapture(previousLease);
 
       // Reset ALL states
       setCapturing(false);
@@ -737,7 +813,11 @@ export function useSystemAudio() {
       setError(`Failed to stop capture: ${errorMessage}`);
       console.error("Stop capture error:", err);
     }
-  }, []);
+  }, [
+    beginNativeCaptureOperation,
+    readNativeCaptureLease,
+    stopNativeSystemCapture,
+  ]);
 
   // Manual stop for continuous recording
   const manualStopAndSend = useCallback(async () => {
@@ -818,12 +898,18 @@ export function useSystemAudio() {
       if (abortControllerRef.current) {
         abortControllerRef.current.abort();
       }
+      beginNativeCaptureOperation();
+      const previousLease = readNativeCaptureLease();
       nativeCaptureSessionIdRef.current = null;
       nativeCaptureGenerationRef.current = null;
       lastNativeSegmentSequenceRef.current = 0;
-      invoke("stop_system_audio_capture").catch(() => {});
+      void stopNativeSystemCapture(previousLease).catch(() => {});
     };
-  }, []);
+  }, [
+    beginNativeCaptureOperation,
+    readNativeCaptureLease,
+    stopNativeSystemCapture,
+  ]);
 
   // Debounced save to prevent race conditions and improve performance
   useEffect(() => {

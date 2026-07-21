@@ -1,5 +1,5 @@
 // Jarvis windows speaker input and stream
-use super::AudioDevice;
+use super::{AudioDevice, SpeakerStreamTermination};
 use anyhow::Result;
 use futures_util::Stream;
 use std::collections::VecDeque;
@@ -180,6 +180,10 @@ pub struct SpeakerStream {
 impl SpeakerStream {
     pub fn sample_rate(&self) -> u32 {
         self.actual_sample_rate
+    }
+
+    pub fn termination(&self) -> SpeakerStreamTermination {
+        SpeakerStreamTermination::unknown()
     }
 
     fn capture_audio_loop(

@@ -3,6 +3,32 @@ use futures_util::Stream;
 use serde::{Deserialize, Serialize};
 use std::pin::Pin;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SpeakerStreamTerminationReason {
+    BufferOverflow,
+    UnknownStreamEnd,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SpeakerStreamTermination {
+    pub reason: SpeakerStreamTerminationReason,
+    pub dropped_samples: u64,
+    pub consecutive_drops: u32,
+    pub buffer_capacity: Option<usize>,
+}
+
+impl SpeakerStreamTermination {
+    #[allow(dead_code)]
+    pub fn unknown() -> Self {
+        Self {
+            reason: SpeakerStreamTerminationReason::UnknownStreamEnd,
+            dropped_samples: 0,
+            consecutive_drops: 0,
+            buffer_capacity: None,
+        }
+    }
+}
+
 #[cfg(target_os = "macos")]
 mod macos;
 #[cfg(target_os = "macos")]
@@ -144,5 +170,13 @@ impl SpeakerStream {
 
         #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
         0
+    }
+
+    pub fn termination(&self) -> SpeakerStreamTermination {
+        #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+        return self.inner.termination();
+
+        #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+        SpeakerStreamTermination::unknown()
     }
 }

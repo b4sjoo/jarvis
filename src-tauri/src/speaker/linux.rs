@@ -1,5 +1,5 @@
 // Jarvis linux speaker input and stream
-use super::AudioDevice;
+use super::{AudioDevice, SpeakerStreamTermination};
 use anyhow::{anyhow, Result};
 use futures_util::Stream;
 use libpulse_binding as pulse;
@@ -312,6 +312,10 @@ pub struct SpeakerStream {
 impl SpeakerStream {
     pub fn sample_rate(&self) -> u32 {
         self.sample_rate
+    }
+
+    pub fn termination(&self) -> SpeakerStreamTermination {
+        SpeakerStreamTermination::unknown()
     }
 
     fn capture_audio_loop(

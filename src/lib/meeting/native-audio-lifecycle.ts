@@ -1,5 +1,15 @@
 export type NativeAudioCaptureOwner = "meeting" | "system";
 export type NativeAudioLifecycleEventType = "started" | "stopped" | "error";
+export type NativeAudioRecoverability =
+  | "not-applicable"
+  | "retry-once"
+  | "manual";
+
+export interface NativeAudioTerminationDiagnostics {
+  droppedSamples: number;
+  consecutiveDrops: number;
+  bufferCapacity: number | null;
+}
 
 export interface NativeAudioLifecycleEvent {
   eventType: NativeAudioLifecycleEventType;
@@ -10,6 +20,19 @@ export interface NativeAudioLifecycleEvent {
   reason: string | null;
   message: string | null;
   sampleRate: number | null;
+  expected: boolean;
+  recoverability: NativeAudioRecoverability;
+  diagnostics: NativeAudioTerminationDiagnostics;
+}
+
+export interface NativeAudioSegmentDroppedEvent {
+  captureSessionId: string;
+  captureGeneration: number;
+  attemptedSegmentSequence: number;
+  owner: NativeAudioCaptureOwner;
+  occurredAtMs: number;
+  reason: string;
+  message: string;
 }
 
 export type NativeAudioLifecycleRejectionReason =
@@ -27,6 +50,40 @@ export type NativeAudioLifecycleAuthorization =
       event?: NativeAudioLifecycleEvent;
     };
 
+export type NativeAudioTerminalDisposition =
+  | "expected-stop"
+  | "recovering"
+  | "fatal";
+
+export function decideNativeAudioTerminalDisposition(
+  event: NativeAudioLifecycleEvent,
+  automaticRecoveryAvailable: boolean
+): NativeAudioTerminalDisposition {
+  if (event.expected || event.recoverability === "not-applicable") {
+    return "expected-stop";
+  }
+  if (
+    event.recoverability === "retry-once" &&
+    automaticRecoveryAvailable
+  ) {
+    return "recovering";
+  }
+  return "fatal";
+}
+
+export function pruneNativeAudioRecoveryAttempts(
+  attempts: number[],
+  now: number,
+  windowMs: number
+) {
+  return attempts.filter(
+    (attemptedAt) =>
+      Number.isFinite(attemptedAt) &&
+      attemptedAt <= now &&
+      now - attemptedAt < windowMs
+  );
+}
+
 export function parseNativeAudioLifecycleEvent(
   payload: unknown
 ): NativeAudioLifecycleEvent | null {
@@ -39,6 +96,9 @@ export function parseNativeAudioLifecycleEvent(
   const sampleRate = payload.sampleRate;
   const reason = payload.reason;
   const message = payload.message;
+  const expected = payload.expected;
+  const recoverability = payload.recoverability;
+  const diagnostics = payload.diagnostics;
 
   if (
     (eventType !== "started" &&
@@ -56,7 +116,19 @@ export function parseNativeAudioLifecycleEvent(
         (sampleRate as number) < 8_000 ||
         (sampleRate as number) > 96_000)) ||
     (reason !== null && typeof reason !== "string") ||
-    (message !== null && typeof message !== "string")
+    (message !== null && typeof message !== "string") ||
+    typeof expected !== "boolean" ||
+    (recoverability !== "not-applicable" &&
+      recoverability !== "retry-once" &&
+      recoverability !== "manual") ||
+    !isRecord(diagnostics) ||
+    !Number.isSafeInteger(diagnostics.droppedSamples) ||
+    (diagnostics.droppedSamples as number) < 0 ||
+    !Number.isSafeInteger(diagnostics.consecutiveDrops) ||
+    (diagnostics.consecutiveDrops as number) < 0 ||
+    (diagnostics.bufferCapacity !== null &&
+      (!Number.isSafeInteger(diagnostics.bufferCapacity) ||
+        (diagnostics.bufferCapacity as number) < 1))
   ) {
     return null;
   }
@@ -70,6 +142,53 @@ export function parseNativeAudioLifecycleEvent(
     reason,
     message,
     sampleRate: sampleRate as number | null,
+    expected,
+    recoverability,
+    diagnostics: {
+      droppedSamples: diagnostics.droppedSamples as number,
+      consecutiveDrops: diagnostics.consecutiveDrops as number,
+      bufferCapacity: diagnostics.bufferCapacity as number | null,
+    },
+  };
+}
+
+export function parseNativeAudioSegmentDroppedEvent(
+  payload: unknown
+): NativeAudioSegmentDroppedEvent | null {
+  if (!isRecord(payload)) return null;
+  const {
+    captureSessionId,
+    captureGeneration,
+    attemptedSegmentSequence,
+    owner,
+    occurredAtMs,
+    reason,
+    message,
+  } = payload;
+  if (
+    typeof captureSessionId !== "string" ||
+    !captureSessionId.trim() ||
+    !Number.isSafeInteger(captureGeneration) ||
+    (captureGeneration as number) < 1 ||
+    !Number.isSafeInteger(attemptedSegmentSequence) ||
+    (attemptedSegmentSequence as number) < 1 ||
+    (owner !== "meeting" && owner !== "system") ||
+    !Number.isSafeInteger(occurredAtMs) ||
+    (occurredAtMs as number) < 0 ||
+    typeof reason !== "string" ||
+    !reason.trim() ||
+    typeof message !== "string"
+  ) {
+    return null;
+  }
+  return {
+    captureSessionId,
+    captureGeneration: captureGeneration as number,
+    attemptedSegmentSequence: attemptedSegmentSequence as number,
+    owner,
+    occurredAtMs: occurredAtMs as number,
+    reason,
+    message,
   };
 }
 
@@ -129,6 +248,11 @@ export function buildNativeAudioLifecycleTraceMetadata(
     nativeAudioReason: event.reason,
     nativeAudioMessage: event.message,
     nativeSampleRate: event.sampleRate,
+    nativeAudioExpected: event.expected,
+    nativeAudioRecoverability: event.recoverability,
+    nativeAudioDroppedSamples: event.diagnostics.droppedSamples,
+    nativeAudioConsecutiveDrops: event.diagnostics.consecutiveDrops,
+    nativeAudioBufferCapacity: event.diagnostics.bufferCapacity,
   };
 }
 
