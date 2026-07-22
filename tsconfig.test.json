@@ -18,6 +18,10 @@
     "tests/**/*.ts",
     "src/lib/meeting/programming-language.ts",
     "src/lib/meeting/task-taxonomy.ts",
-    "src/lib/meeting/taxonomy-evaluation.ts"
+    "src/lib/meeting/taxonomy-evaluation.ts",
+    "src/lib/meeting/semantic-taxonomy-model.ts",
+    "src/lib/meeting/semantic-taxonomy-runtime.protocol.ts",
+    "src/lib/meeting/semantic-taxonomy-runtime.ts",
+    "model-manifests/*.json"
   ]
 }

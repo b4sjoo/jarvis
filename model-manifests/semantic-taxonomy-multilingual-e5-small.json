@@ -1,0 +1,70 @@
+{
+  "version": 1,
+  "modelId": "Xenova/multilingual-e5-small",
+  "baseModelId": "intfloat/multilingual-e5-small",
+  "revision": "761b726dd34fb83930e26aab4e9ac3899aa1fa78",
+  "dtype": "q8",
+  "embeddingDimensions": 384,
+  "localModelRoot": "/models/",
+  "localWasmRoot": "/transformers-wasm/",
+  "files": [
+    {
+      "path": "config.json",
+      "size": 658,
+      "algorithm": "git-sha1",
+      "checksum": "4104f38273cc595fd9500fd243124e9f6cf383dc"
+    },
+    {
+      "path": "tokenizer.json",
+      "size": 17082730,
+      "algorithm": "sha256",
+      "checksum": "0b44a9d7b51c3c62626640cda0e2c2f70fdacdc25bbbd68038369d14ebdf4c39"
+    },
+    {
+      "path": "tokenizer_config.json",
+      "size": 443,
+      "algorithm": "git-sha1",
+      "checksum": "059214673d9d6d2ee319411e2ffec8c024b816d5"
+    },
+    {
+      "path": "special_tokens_map.json",
+      "size": 167,
+      "algorithm": "git-sha1",
+      "checksum": "e0b1d18ecd0ae4ff1d47bd297d910c0cf83e504b"
+    },
+    {
+      "path": "sentencepiece.bpe.model",
+      "size": 5069051,
+      "algorithm": "sha256",
+      "checksum": "cfc8146abe2a0488e9e2a0c56de7952f7c11ab059eca145a0a727afce0db2865"
+    },
+    {
+      "path": "onnx/model_quantized.onnx",
+      "size": 118308185,
+      "algorithm": "sha256",
+      "checksum": "f80102d3f2a1229f387d3c81909990d8945513e347b0eab049f7de3c6f98c193"
+    }
+  ],
+  "wasmFiles": [
+    {
+      "path": "ort-wasm-simd-threaded.mjs",
+      "size": 24180,
+      "sha256": "5f2cd914554830762579c372d0211614c1e3f40ab3f6c0cfcf0900343229071d"
+    },
+    {
+      "path": "ort-wasm-simd-threaded.wasm",
+      "size": 12942611,
+      "sha256": "f4f290847a4df02d0b93cdbf39b4b0e71acefbe80573e7e6b9342a7abd7b290a"
+    },
+    {
+      "path": "ort-wasm-simd-threaded.asyncify.mjs",
+      "size": 47389,
+      "sha256": "5959c6733039619c9af710d8e1bae8d6e84402787990637be987c2b1bd6c5fa9"
+    },
+    {
+      "path": "ort-wasm-simd-threaded.asyncify.wasm",
+      "size": 23567050,
+      "sha256": "e0c0c6d3e73d43b8a249972f8358f845b08cc16fec3c80efafdf8bed40366786"
+    }
+  ]
+}
