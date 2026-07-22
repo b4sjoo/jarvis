@@ -17,6 +17,8 @@ memories/
 docs/
 public/models/
 public/transformers-wasm/
+.tmp-semantic-taxonomy-vectors/
+.tmp-semantic-taxonomy-evaluation/
 
 # Editor directories and files
 .vscode/*

@@ -1,29 +1,28 @@
 {
   "compilerOptions": {
-    "target": "ES2020",
+    "target": "ES2022",
     "module": "ESNext",
     "moduleResolution": "bundler",
     "strict": true,
     "skipLibCheck": true,
-    "outDir": ".tmp-tests",
+    "outDir": ".tmp-semantic-taxonomy-evaluation",
     "rootDir": ".",
     "baseUrl": ".",
     "paths": {
       "@/*": ["./src/*"]
     },
+    "resolveJsonModule": true,
     "types": ["node"]
   },
   "include": [
-    "src/vite-env.d.ts",
-    "tests/**/*.ts",
-    "src/lib/meeting/programming-language.ts",
-    "src/lib/meeting/task-taxonomy.ts",
-    "src/lib/meeting/taxonomy-evaluation.ts",
+    "scripts/evaluate-semantic-taxonomy.ts",
     "src/lib/meeting/semantic-taxonomy-model.ts",
-    "src/lib/meeting/semantic-taxonomy-runtime.protocol.ts",
-    "src/lib/meeting/semantic-taxonomy-runtime.ts",
     "src/lib/meeting/semantic-taxonomy-prototypes.ts",
     "src/lib/meeting/semantic-taxonomy-resolver.ts",
+    "src/lib/meeting/taxonomy-evaluation.ts",
+    "src/lib/meeting/task-taxonomy.ts",
+    "src/lib/memory/types.ts",
+    "tests/fixtures/taxonomy-evaluation-corpus.ts",
     "model-manifests/*.json"
   ]
 }

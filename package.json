@@ -36,6 +36,8 @@
     "test": "tsc -p tsconfig.test.json && node --test .tmp-tests/tests/**/*.test.js",
     "taxonomy:evaluate": "tsc -p tsconfig.taxonomy-evaluation.json && node .tmp-taxonomy-evaluation/scripts/evaluate-taxonomy-corpus.js",
     "taxonomy:model:provision": "node scripts/provision-semantic-taxonomy-model.mjs",
+    "taxonomy:semantic:vectors": "tsc -p tsconfig.semantic-taxonomy-vectors.json && node .tmp-semantic-taxonomy-vectors/scripts/generate-semantic-taxonomy-vectors.js",
+    "taxonomy:semantic:evaluate": "tsc -p tsconfig.semantic-taxonomy-evaluation.json && node .tmp-semantic-taxonomy-evaluation/scripts/evaluate-semantic-taxonomy.js",
     "preview": "vite preview",
     "tauri": "tauri"
   },
