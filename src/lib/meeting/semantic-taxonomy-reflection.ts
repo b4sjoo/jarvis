@@ -25,6 +25,27 @@ export interface SemanticTaxonomyEvaluationLabel {
   updatedAt: number;
 }
 
+export interface SemanticTaxonomyRuntimeTrace {
+  id: string;
+  status: string;
+  error?: string;
+  startedAt?: number;
+  endedAt?: number;
+  metadata: Record<string, unknown>;
+  steps?: Array<{
+    name: string;
+    status: string;
+    error?: string;
+  }>;
+}
+
+export type SemanticTaxonomyTrajectoryFailureKind =
+  | "classification-correct-but-mutation-lost"
+  | "late-parent-missing-question-context"
+  | "stale-parent-continuity-after-switch"
+  | "manual-correction-required"
+  | "unlabeled-insufficient-evidence";
+
 export interface SemanticTaxonomyReflectionRow {
   key: string;
   sessionId?: string;
@@ -36,6 +57,11 @@ export interface SemanticTaxonomyReflectionRow {
   lexicalConfidence?: number;
   lexicalMargin?: number;
   semanticCandidateType?: CanonicalQuestionType;
+  semanticTopCandidateType?: CanonicalQuestionType;
+  semanticTopCandidateScore?: number;
+  semanticRunnerUpType?: CanonicalQuestionType;
+  semanticRunnerUpScore?: number;
+  semanticRejectionReasons: string[];
   semanticConfidence?: number;
   semanticMargin?: number;
   hybridOutcome?: string;
@@ -56,8 +82,33 @@ export interface SemanticTaxonomyReflectionRow {
   correctionAfterRescue: boolean;
 }
 
+export interface SemanticTaxonomyTrajectoryRow {
+  key: string;
+  sessionId?: string;
+  questionId?: string;
+  turnIds: string[];
+  traceIds: string[];
+  detectedType: CanonicalQuestionType;
+  expectedType?: CanonicalQuestionType;
+  classificationCorrect?: boolean;
+  taskRelation?: string;
+  taskMutationRequested: boolean;
+  taskMutationApplied: boolean;
+  runtimeCommitAuthorized: boolean;
+  advisorOutcomes: string[];
+  parentBeforeId?: string;
+  parentAfterId?: string;
+  parentBeforeType?: CanonicalQuestionType;
+  parentAfterType?: CanonicalQuestionType;
+  logicalQuestionSourceTurnIds: string[];
+  canonicalQuestionSourceTurnIds: string[];
+  questionContextCoverage?: number;
+  manualCorrectionApplied: boolean;
+  failureKinds: SemanticTaxonomyTrajectoryFailureKind[];
+}
+
 export interface SemanticTaxonomyReflectionReport {
-  version: 1;
+  version: 2;
   generatedAt: number;
   sessions: string[];
   metrics: {
@@ -69,17 +120,26 @@ export interface SemanticTaxonomyReflectionReport {
     rescueApplied: number;
     labeledRescueApplied: number;
     correctRescueApplied: number;
-    rescuePrecision: number;
-    rescueRecall: number;
+    rescuePrecision: number | null;
+    rescueRecall: number | null;
     correctionAfterRescue: number;
     parentMutationBlocked: number;
     embeddingStatus: Record<string, number>;
-    cacheHitRate: number;
+    cacheHitRate: number | null;
     embeddingLatency: {
       samples: number;
       p50Ms: number;
       p95Ms: number;
       maxMs: number;
+    };
+    trajectory: {
+      questions: number;
+      labeled: number;
+      classificationCorrectButMutationLost: number;
+      lateParentMissingQuestionContext: number;
+      staleParentContinuityAfterSwitch: number;
+      manualCorrectionRequired: number;
+      unlabeledInsufficientEvidence: number;
     };
   };
   confusionMatrix: Record<
@@ -87,6 +147,7 @@ export interface SemanticTaxonomyReflectionReport {
     Record<CanonicalQuestionType, number>
   >;
   rows: SemanticTaxonomyReflectionRow[];
+  trajectoryRows: SemanticTaxonomyTrajectoryRow[];
   unmatchedLabeledQuestions: Array<{
     evaluationId: string;
     questionId: string;
@@ -114,9 +175,11 @@ export interface SemanticTaxonomyReflectionReport {
 export function buildSemanticTaxonomyReflectionReport({
   decisions,
   evaluations,
+  runtimeTraces = [],
 }: {
   decisions: SemanticTaxonomyRecordedDecision[];
   evaluations: SemanticTaxonomyEvaluationLabel[];
+  runtimeTraces?: SemanticTaxonomyRuntimeTrace[];
 }): SemanticTaxonomyReflectionReport {
   const grouped = groupDecisions(decisions);
   const matchedEvaluationIds = new Set<string>();
@@ -156,9 +219,10 @@ export function buildSemanticTaxonomyReflectionReport({
   const embeddingDurations = rows
     .map((row) => row.embeddingDurationMs)
     .filter((value): value is number => typeof value === "number");
+  const trajectoryRows = buildTrajectoryRows(rows, evaluations, runtimeTraces);
 
   return {
-    version: 1,
+    version: 2,
     generatedAt: Date.now(),
     sessions: unique(rows.map((row) => row.sessionId).filter(isString)),
     metrics: {
@@ -170,11 +234,14 @@ export function buildSemanticTaxonomyReflectionReport({
       rescueApplied: appliedRescues.length,
       labeledRescueApplied: labeledAppliedRescues.length,
       correctRescueApplied: correctAppliedRescues.length,
-      rescuePrecision: ratio(
+      rescuePrecision: ratioOrNull(
         correctAppliedRescues.length,
         labeledAppliedRescues.length
       ),
-      rescueRecall: ratio(correctRescues.length, rescueOpportunities.length),
+      rescueRecall: ratioOrNull(
+        correctRescues.length,
+        rescueOpportunities.length
+      ),
       correctionAfterRescue: rows.filter((row) => row.correctionAfterRescue)
         .length,
       parentMutationBlocked: rows.filter((row) => row.parentMutationBlocked)
@@ -182,14 +249,39 @@ export function buildSemanticTaxonomyReflectionReport({
       embeddingStatus: countStrings(
         rows.map((row) => row.embeddingStatus ?? "unknown")
       ),
-      cacheHitRate: ratio(
+      cacheHitRate: ratioOrNull(
         successfulEmbeddings.filter((row) => row.cacheHit).length,
         successfulEmbeddings.length
       ),
       embeddingLatency: summarizeLatency(embeddingDurations),
+      trajectory: {
+        questions: trajectoryRows.length,
+        labeled: trajectoryRows.filter((row) => row.expectedType).length,
+        classificationCorrectButMutationLost: countTrajectoryFailure(
+          trajectoryRows,
+          "classification-correct-but-mutation-lost"
+        ),
+        lateParentMissingQuestionContext: countTrajectoryFailure(
+          trajectoryRows,
+          "late-parent-missing-question-context"
+        ),
+        staleParentContinuityAfterSwitch: countTrajectoryFailure(
+          trajectoryRows,
+          "stale-parent-continuity-after-switch"
+        ),
+        manualCorrectionRequired: countTrajectoryFailure(
+          trajectoryRows,
+          "manual-correction-required"
+        ),
+        unlabeledInsufficientEvidence: countTrajectoryFailure(
+          trajectoryRows,
+          "unlabeled-insufficient-evidence"
+        ),
+      },
     },
     confusionMatrix: buildConfusionMatrix(labeledRows),
     rows,
+    trajectoryRows,
     unmatchedLabeledQuestions,
     reviewProposals: buildReviewProposals(rows),
   };
@@ -198,7 +290,8 @@ export function buildSemanticTaxonomyReflectionReport({
 export function renderSemanticTaxonomyReflectionMarkdown(
   report: SemanticTaxonomyReflectionReport
 ) {
-  const percent = (value: number) => `${(value * 100).toFixed(1)}%`;
+  const percent = (value: number | null) =>
+    value === null ? "N/A" : `${(value * 100).toFixed(1)}%`;
   const lines = [
     "# Semantic Taxonomy Reflection",
     "",
@@ -214,15 +307,28 @@ export function renderSemanticTaxonomyReflectionMarkdown(
     `- Rescue precision / recall: ${percent(report.metrics.rescuePrecision)} / ${percent(report.metrics.rescueRecall)}`,
     `- Correction after rescue: ${report.metrics.correctionAfterRescue}`,
     `- Parent mutation blocked: ${report.metrics.parentMutationBlocked}`,
+    `- Trajectory questions / labeled: ${report.metrics.trajectory.questions} / ${report.metrics.trajectory.labeled}`,
+    `- Classification correct but mutation lost: ${report.metrics.trajectory.classificationCorrectButMutationLost}`,
+    `- Late parent missing question context: ${report.metrics.trajectory.lateParentMissingQuestionContext}`,
+    `- Stale parent continuity after switch: ${report.metrics.trajectory.staleParentContinuityAfterSwitch}`,
     `- Embedding p50 / p95: ${report.metrics.embeddingLatency.p50Ms.toFixed(1)}ms / ${report.metrics.embeddingLatency.p95Ms.toFixed(1)}ms`,
     "",
     "## Decision Evidence",
     "",
-    "| Turn | Lexical | Semantic | Effective | Rescue | Parent block | HITL | Latency |",
-    "|---|---|---|---|---|---|---|---|",
+    "| Turn | Lexical | Semantic accepted | Semantic top | Effective | Rescue | Parent block | HITL | Latency |",
+    "|---|---|---|---|---|---|---|---|---|",
     ...report.rows.map(
       (row) =>
-        `| ${escapeCell(row.turnId ?? row.key)} | ${row.lexicalType} | ${row.semanticCandidateType ?? "-"} | ${row.effectiveType} | ${row.rescueApplied ? "applied" : row.wouldRescue ? "would" : "-"} | ${row.parentMutationBlocked ? "yes" : "no"} | ${row.expectedType ? `${row.labelOutcome}:${row.expectedType}` : "unlabeled"} | ${row.embeddingDurationMs?.toFixed(1) ?? "-"}ms |`
+        `| ${escapeCell(row.turnId ?? row.key)} | ${row.lexicalType} | ${row.semanticCandidateType ?? "-"} | ${formatSemanticTopCandidate(row)} | ${row.effectiveType} | ${row.rescueApplied ? "applied" : row.wouldRescue ? "would" : "-"} | ${row.parentMutationBlocked ? "yes" : "no"} | ${row.expectedType ? `${row.labelOutcome}:${row.expectedType}` : "unlabeled"} | ${row.embeddingDurationMs?.toFixed(1) ?? "-"}ms |`
+    ),
+    "",
+    "## Question Trajectory",
+    "",
+    "| Question | Turns | Detected / expected | Relation | Mutation | Parent before / after | Advisor | Context | Failures |",
+    "|---|---|---|---|---|---|---|---|---|",
+    ...report.trajectoryRows.map(
+      (row) =>
+        `| ${escapeCell(row.questionId ?? row.key)} | ${row.turnIds.length} | ${row.detectedType} / ${row.expectedType ?? "unlabeled"} | ${row.taskRelation ?? "-"} | ${row.taskMutationRequested ? (row.taskMutationApplied ? "applied" : "requested-only") : "-"} | ${row.parentBeforeType ?? "-"}:${shortId(row.parentBeforeId)} / ${row.parentAfterType ?? "-"}:${shortId(row.parentAfterId)} | ${row.advisorOutcomes.join(", ") || "-"} | ${row.questionContextCoverage === undefined ? "N/A" : percent(row.questionContextCoverage)} | ${row.failureKinds.join(", ") || "-"} |`
     ),
     "",
     "## Review Proposals",
@@ -287,6 +393,11 @@ function buildReflectionRow(
   const expectedType = evaluation ? resolveExpectedType(evaluation) : undefined;
   const rescueApplied = readBoolean(metadata, "taxonomySemanticRescueApplied");
   const corrected = Boolean(evaluation?.correctedQuestionType);
+  const semanticScores = readNumberRecord(
+    metadata,
+    "taxonomySemanticPerTypeScores"
+  );
+  const semanticRanking = rankCanonicalScores(semanticScores);
   return {
     key,
     sessionId:
@@ -301,6 +412,14 @@ function buildReflectionRow(
     semanticCandidateType: readCanonical(
       metadata,
       "taxonomySemanticCandidateType"
+    ),
+    semanticTopCandidateType: semanticRanking[0]?.type,
+    semanticTopCandidateScore: semanticRanking[0]?.score,
+    semanticRunnerUpType: semanticRanking[1]?.type,
+    semanticRunnerUpScore: semanticRanking[1]?.score,
+    semanticRejectionReasons: readStringArray(
+      metadata,
+      "taxonomySemanticRejectionReasons"
     ),
     semanticConfidence: readNumber(metadata, "taxonomySemanticConfidence"),
     semanticMargin: readNumber(metadata, "taxonomySemanticMargin"),
@@ -338,6 +457,179 @@ function buildReflectionRow(
     correctionAfterRescue:
       rescueApplied && corrected && expectedType !== effectiveType,
   };
+}
+
+function buildTrajectoryRows(
+  rows: SemanticTaxonomyReflectionRow[],
+  evaluations: SemanticTaxonomyEvaluationLabel[],
+  runtimeTraces: SemanticTaxonomyRuntimeTrace[]
+) {
+  const traceById = new Map(runtimeTraces.map((trace) => [trace.id, trace]));
+  const evaluationById = new Map(
+    evaluations.map((evaluation) => [evaluation.id, evaluation])
+  );
+  const groups = new Map<
+    string,
+    {
+      rows: SemanticTaxonomyReflectionRow[];
+      traceIds: Set<string>;
+      evaluation?: SemanticTaxonomyEvaluationLabel;
+    }
+  >();
+  for (const row of rows) {
+    const evaluation = row.evaluationId
+      ? evaluationById.get(row.evaluationId)
+      : undefined;
+    const runtimeQuestionId = row.traceIds
+      .map((traceId) => traceById.get(traceId))
+      .map((trace) =>
+        trace ? readString(trace.metadata, "questionInstanceId") : undefined
+      )
+      .find(isString);
+    const key = row.questionId ?? runtimeQuestionId ?? row.key;
+    const group = groups.get(key) ?? {
+      rows: [],
+      traceIds: new Set<string>(),
+      evaluation,
+    };
+    group.rows.push(row);
+    for (const traceId of row.traceIds) group.traceIds.add(traceId);
+    for (const traceId of evaluation?.traceIds ?? []) group.traceIds.add(traceId);
+    group.evaluation = newerEvaluation(group.evaluation, evaluation);
+    groups.set(key, group);
+  }
+
+  return Array.from(groups.entries())
+    .map(([key, group]) => {
+      const traces = Array.from(group.traceIds)
+        .map((traceId) => traceById.get(traceId))
+        .filter((trace): trace is SemanticTaxonomyRuntimeTrace => Boolean(trace))
+        .sort(
+          (left, right) =>
+            (left.startedAt ?? 0) - (right.startedAt ?? 0)
+        );
+      const metadata = traces.map((trace) => trace.metadata).reverse();
+      const latestRow = group.rows[group.rows.length - 1];
+      const expectedType = group.evaluation
+        ? resolveExpectedType(group.evaluation)
+        : group.rows.map((row) => row.expectedType).find(isCanonical);
+      const detectedType =
+        readCanonical(metadata, "questionType") ??
+        readCanonical(metadata, "questionTypeInferenceType") ??
+        latestRow?.effectiveType ??
+        "unknown";
+      const taskRelation = readFirst(metadata, "taskRelation");
+      const taskMutationRequested = readBoolean(
+        metadata,
+        "advisorTaskMutationCommitParent"
+      );
+      const taskMutationApplied =
+        readBoolean(metadata, "startedNewInterviewParent") ||
+        readBoolean(metadata, "taskBoundaryMutationApplied");
+      const runtimeCommitAuthorized = readBoolean(
+        metadata,
+        "runtimeCommitAuthorized"
+      );
+      const advisorOutcomes = unique(
+        traces
+          .flatMap((trace) => [
+            readString(trace.metadata, "advisorJobOutcome"),
+            trace.steps?.find((step) => step.name === "Advisor model response")
+              ?.status,
+          ])
+          .filter(isString)
+      );
+      const logicalQuestionSourceTurnIds = unique(
+        metadata.flatMap((source) =>
+          readStringArrayFromSource(source, "logicalQuestionSourceTurnIds")
+        )
+      );
+      const canonicalQuestionSourceTurnIds = unique(
+        metadata.flatMap((source) =>
+          readStringArrayFromSource(
+            source,
+            "canonicalQuestionSourceTurnIds"
+          )
+        )
+      );
+      const questionContextCoverage = calculateContextCoverage(
+        logicalQuestionSourceTurnIds,
+        canonicalQuestionSourceTurnIds
+      );
+      const manualCorrectionApplied = Boolean(
+        group.evaluation?.correctedQuestionType ||
+          readFirst(metadata, "manualQuestionTypeCorrectionId") ||
+          readBoolean(metadata, "manualQuestionTypeCorrectionApplied")
+      );
+      const failureKinds: SemanticTaxonomyTrajectoryFailureKind[] = [];
+      const advisorCancelled = advisorOutcomes.some((outcome) =>
+        /cancel|replaced/i.test(outcome)
+      );
+      if (
+        taskRelation === "new-parent" &&
+        taskMutationRequested &&
+        runtimeCommitAuthorized &&
+        !taskMutationApplied &&
+        advisorCancelled
+      ) {
+        failureKinds.push("classification-correct-but-mutation-lost");
+      }
+      if (
+        logicalQuestionSourceTurnIds.length > 0 &&
+        questionContextCoverage !== undefined &&
+        questionContextCoverage < 1
+      ) {
+        failureKinds.push("late-parent-missing-question-context");
+      }
+      if (
+        expectedType &&
+        expectedType !== detectedType &&
+        taskRelation === "followup-parent"
+      ) {
+        failureKinds.push("stale-parent-continuity-after-switch");
+      }
+      if (manualCorrectionApplied) {
+        failureKinds.push("manual-correction-required");
+      }
+      if (!expectedType) {
+        failureKinds.push("unlabeled-insufficient-evidence");
+      }
+      return {
+        key,
+        sessionId: latestRow?.sessionId,
+        questionId: group.evaluation?.questionId ?? key,
+        turnIds: unique(group.rows.map((row) => row.turnId).filter(isString)),
+        traceIds: Array.from(group.traceIds),
+        detectedType,
+        expectedType,
+        classificationCorrect:
+          expectedType === undefined ? undefined : expectedType === detectedType,
+        taskRelation,
+        taskMutationRequested,
+        taskMutationApplied,
+        runtimeCommitAuthorized,
+        advisorOutcomes,
+        parentBeforeId:
+          readFirst(metadata, "runtimeExpectedParentId") ??
+          readFirst(metadata, "advisorJobExpectedParentId"),
+        parentAfterId:
+          readFirst(metadata, "newParentId") ??
+          readFirst(metadata, "activeMeetingParentId"),
+        parentBeforeType:
+          readCanonical(metadata, "runtimeExpectedParentType") ??
+          readCanonical(metadata, "parentTaskKind"),
+        parentAfterType: readCanonical(
+          metadata,
+          "activeMeetingParentQuestionType"
+        ),
+        logicalQuestionSourceTurnIds,
+        canonicalQuestionSourceTurnIds,
+        questionContextCoverage,
+        manualCorrectionApplied,
+        failureKinds: unique(failureKinds),
+      } satisfies SemanticTaxonomyTrajectoryRow;
+    })
+    .sort((left, right) => left.key.localeCompare(right.key));
 }
 
 function findEvaluationForTraces(
@@ -456,6 +748,103 @@ function countStrings(values: string[]) {
   return counts;
 }
 
+function countTrajectoryFailure(
+  rows: SemanticTaxonomyTrajectoryRow[],
+  failureKind: SemanticTaxonomyTrajectoryFailureKind
+) {
+  return rows.filter((row) => row.failureKinds.includes(failureKind)).length;
+}
+
+function formatSemanticTopCandidate(row: SemanticTaxonomyReflectionRow) {
+  if (!row.semanticTopCandidateType) return "-";
+  const score = row.semanticTopCandidateScore?.toFixed(3) ?? "?";
+  const rejected = row.semanticCandidateType ? "" : " (rejected)";
+  const reasons = row.semanticRejectionReasons.length
+    ? `: ${row.semanticRejectionReasons.join(", ")}`
+    : "";
+  return `${row.semanticTopCandidateType} ${score}${rejected}${reasons}`;
+}
+
+function shortId(value?: string) {
+  if (!value) return "-";
+  return value.length > 18 ? `${value.slice(0, 15)}...` : value;
+}
+
+function readNumberRecord(
+  sources: Record<string, unknown>[],
+  key: string
+) {
+  for (const source of sources) {
+    const value = source[key];
+    if (!value || typeof value !== "object" || Array.isArray(value)) continue;
+    const entries = Object.entries(value).filter(
+      (entry): entry is [string, number] =>
+        typeof entry[1] === "number" && Number.isFinite(entry[1])
+    );
+    if (entries.length) return Object.fromEntries(entries);
+  }
+  return {};
+}
+
+function rankCanonicalScores(scores: Record<string, number>) {
+  return Object.entries(scores)
+    .map(([type, score]) => ({
+      type: normalizeCanonicalQuestionType(type),
+      score,
+    }))
+    .filter(
+      (entry): entry is { type: CanonicalQuestionType; score: number } =>
+        Boolean(entry.type)
+    )
+    .sort((left, right) => right.score - left.score);
+}
+
+function readStringArray(sources: Record<string, unknown>[], key: string) {
+  for (const source of sources) {
+    const values = readStringArrayFromSource(source, key);
+    if (values.length) return values;
+  }
+  return [];
+}
+
+function readStringArrayFromSource(
+  source: Record<string, unknown>,
+  key: string
+) {
+  const value = source[key];
+  if (!Array.isArray(value)) return [];
+  return value.filter(
+    (item): item is string => typeof item === "string" && Boolean(item.trim())
+  );
+}
+
+function calculateContextCoverage(
+  logicalQuestionSourceTurnIds: string[],
+  canonicalQuestionSourceTurnIds: string[]
+) {
+  if (!logicalQuestionSourceTurnIds.length) return undefined;
+  const included = new Set(canonicalQuestionSourceTurnIds);
+  return (
+    logicalQuestionSourceTurnIds.filter((turnId) => included.has(turnId)).length /
+    logicalQuestionSourceTurnIds.length
+  );
+}
+
+function newerEvaluation(
+  current?: SemanticTaxonomyEvaluationLabel,
+  candidate?: SemanticTaxonomyEvaluationLabel
+) {
+  if (!candidate) return current;
+  if (!current || candidate.updatedAt > current.updatedAt) return candidate;
+  return current;
+}
+
+function isCanonical(
+  value: CanonicalQuestionType | undefined
+): value is CanonicalQuestionType {
+  return Boolean(value);
+}
+
 function readCanonical(
   sources: Record<string, unknown>[],
   key: string
@@ -491,8 +880,8 @@ function readNumber(sources: Record<string, unknown>[], key: string) {
   return undefined;
 }
 
-function ratio(numerator: number, denominator: number) {
-  return denominator ? numerator / denominator : 0;
+function ratioOrNull(numerator: number, denominator: number) {
+  return denominator ? numerator / denominator : null;
 }
 
 function unique<T>(values: T[]) {

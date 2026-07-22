@@ -1,4 +1,4 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
 import {
@@ -6,6 +6,7 @@ import {
   renderSemanticTaxonomyReflectionMarkdown,
   type SemanticTaxonomyEvaluationLabel,
   type SemanticTaxonomyRecordedDecision,
+  type SemanticTaxonomyRuntimeTrace,
 } from "../src/lib/meeting/semantic-taxonomy-reflection.js";
 
 interface CliOptions {
@@ -30,9 +31,13 @@ async function main() {
       ),
       { evaluations: [] }
     );
+    const runtimeTraces = await readRuntimeTraces(
+      path.join(sessionDirectory, "traces")
+    );
     const report = buildSemanticTaxonomyReflectionReport({
       decisions,
       evaluations: evaluationsPayload.evaluations ?? [],
+      runtimeTraces,
     });
     const outputDirectory = options.outputDirectory
       ? options.sessionDirectories.length === 1
@@ -102,6 +107,39 @@ async function readOptionalJson<T>(filePath: string, fallback: T) {
     }
     throw error;
   }
+}
+
+async function readRuntimeTraces(directory: string) {
+  let filenames: string[];
+  try {
+    filenames = await readdir(directory);
+  } catch (error) {
+    if (
+      error &&
+      typeof error === "object" &&
+      "code" in error &&
+      error.code === "ENOENT"
+    ) {
+      return [];
+    }
+    throw error;
+  }
+  const traces = await Promise.all(
+    filenames
+      .filter((filename) => filename.endsWith(".json"))
+      .map(async (filename) => {
+        const payload = JSON.parse(
+          await readFile(path.join(directory, filename), "utf8")
+        ) as { trace?: SemanticTaxonomyRuntimeTrace } &
+          Partial<SemanticTaxonomyRuntimeTrace>;
+        const trace = payload.trace ?? payload;
+        if (!trace.id || !trace.metadata || !trace.status) return undefined;
+        return trace as SemanticTaxonomyRuntimeTrace;
+      })
+  );
+  return traces.filter(
+    (trace): trace is SemanticTaxonomyRuntimeTrace => Boolean(trace)
+  );
 }
 
 main().catch((error) => {
