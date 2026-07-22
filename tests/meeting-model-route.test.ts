@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   resolveMeetingModelRouteFromSnapshot,
   resolveManualCorrectionRegenerationRoute,
+  resolveTaxonomyAdjudicationModelRouteFromSnapshot,
   type MeetingModelProviderSnapshot,
 } from "../src/lib/meeting/meeting-model-route.js";
 
@@ -13,6 +14,10 @@ const snapshot: MeetingModelProviderSnapshot = {
   ],
   selectedProvider: { provider: "main", variables: { MODEL: "fast" } },
   codingProvider: { provider: "coding", variables: { MODEL: "smart" } },
+  taxonomyAdjudicationProvider: {
+    provider: "main",
+    variables: { MODEL: "classifier" },
+  },
 };
 
 test("resolves the main provider from the execution snapshot", () => {
@@ -26,6 +31,22 @@ test("resolves the main provider from the execution snapshot", () => {
   assert.equal(route.provider?.id, "main");
   assert.equal(route.selectedProvider.variables.MODEL, "fast");
   assert.equal(route.resolutionSource, "execution-snapshot");
+});
+
+test("routes taxonomy adjudication to its independent provider variables", () => {
+  const route = resolveTaxonomyAdjudicationModelRouteFromSnapshot({ snapshot });
+  assert.equal(route.route, "taxonomy-adjudication-override");
+  assert.equal(route.provider?.id, "main");
+  assert.equal(route.selectedProvider.variables.MODEL, "classifier");
+
+  const fallback = resolveTaxonomyAdjudicationModelRouteFromSnapshot({
+    snapshot: {
+      ...snapshot,
+      taxonomyAdjudicationProvider: { provider: "", variables: {} },
+    },
+  });
+  assert.equal(fallback.route, "main");
+  assert.equal(fallback.fallbackReason, "taxonomy-provider-not-configured");
 });
 
 test("routes coding questions to the configured coding provider", () => {

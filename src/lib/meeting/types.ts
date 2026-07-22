@@ -856,6 +856,11 @@ export interface MeetingAudioSettings {
 
 export interface MeetingCodingModelSettings extends SelectedProviderState {}
 
+export interface MeetingTaxonomyAdjudicationSettings
+  extends SelectedProviderState {
+  enabled: boolean;
+}
+
 export interface MeetingAudioStatus {
   active: boolean;
   systemCaptureActive: boolean;
@@ -912,6 +917,7 @@ export interface MeetingAssistantSettings {
   microphoneContextEnabled: boolean;
   response: MeetingResponseConfig;
   codingModel: MeetingCodingModelSettings;
+  taxonomyAdjudication: MeetingTaxonomyAdjudicationSettings;
   audio: MeetingAudioSettings;
 }
 

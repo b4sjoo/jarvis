@@ -140,6 +140,60 @@ test("only ambiguous substantive interviewer units are eligible", () => {
   );
 });
 
+test("treats substantive CJK questions as long enough for adjudication", () => {
+  const text = "请设计一个支持高并发的推荐系统";
+  const decision = decideTaxonomyAdjudicationEligibility({
+    enabled: true,
+    evaluationActive: true,
+    speaker: "them",
+    turnGateAction: "answer-refresh",
+    projection: projectLogicalQuestionForAdjudication(unit(text)),
+    lexical: {
+      ...inferQuestionTypeDecisionFromText(text),
+      type: undefined,
+      confidence: 0.35,
+      margin: 0.04,
+    },
+    manualCorrectionActive: false,
+  });
+
+  assert.equal(decision.eligible, true);
+  assert.deepEqual(decision.triggerReasons, ["lexical-unknown"]);
+});
+
+test("does not escalate a strong lexical result for an isolated semantic rejection", () => {
+  const text = "Implement a stack using two queues and analyze its complexity.";
+  const lexical = inferQuestionTypeDecisionFromText(text);
+  const decision = decideTaxonomyAdjudicationEligibility({
+    enabled: true,
+    evaluationActive: true,
+    speaker: "them",
+    turnGateAction: "answer-refresh",
+    projection: projectLogicalQuestionForAdjudication(unit(text)),
+    lexical: { ...lexical, type: "coding", confidence: 0.93, margin: 0.42 },
+    semantic: {
+      candidateType: "coding",
+      calibratedConfidence: 0.79,
+      margin: 0.01,
+      accepted: false,
+      rejectionReasons: ["positive-score-below-threshold"],
+      perTypeScores: {},
+      positivePrototypeIds: [],
+      hardNegativePrototypeIds: [],
+      modelVersion: "test-model",
+      prototypeVersion: "test-prototypes",
+      calibrationVersion: "test-calibration",
+    },
+    manualCorrectionActive: false,
+  });
+
+  assert.deepEqual(decision, {
+    eligible: false,
+    reason: "high-confidence-local-classification",
+    triggerReasons: [],
+  });
+});
+
 test("lease authorization drops stale revisions, boundaries, and corrections", () => {
   const logicalUnit = unit("Design an Uber-like service.", 2);
   const lease = createTaxonomyAdjudicationLease({

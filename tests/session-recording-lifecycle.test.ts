@@ -314,6 +314,64 @@ test("late semantic shadow evidence stays joinable after trace export", async ()
   await manager.stop("test-complete");
 });
 
+test("late LLM taxonomy adjudication stays joinable after trace export", async () => {
+  const native = new ControlledRecordingInvoke();
+  const manager = new SessionRecordingManager(undefined, native.invoke);
+  await manager.start(START_OPTIONS);
+  await settle();
+
+  manager.recordTrace(
+    buildCompletedTrace("adjudication_trace", Date.now()),
+    "manual"
+  );
+  await settle();
+  manager.recordTaxonomyAdjudicationDecision({
+    traceId: "adjudication_trace",
+    taskId: "task_1",
+    metadata: {
+      taxonomyAdjudicationMode: "shadow",
+      taxonomyAdjudicationEligible: true,
+      taxonomyAdjudicationDisposition: "completed",
+      taxonomyAdjudicationUnitId: "logical_1",
+      taxonomyAdjudicationUnitRevision: 2,
+      taxonomyAdjudicationProviderId: "fast-classifier",
+      taxonomyAdjudicationCandidateType: "coding",
+      taxonomyAdjudicationRelation: "new-parent",
+      taxonomyAdjudicationParseValid: true,
+      taxonomyAdjudicationWouldRepair: true,
+      taxonomyAdjudicationRepairApplied: false,
+      taxonomyAdjudicationDurationMs: 611,
+    },
+  });
+  await settle();
+
+  const eventWrite = native.calls.find(
+    (call) =>
+      call.command === "write_meeting_session_recording_text" &&
+      stringArg(call, "relativePath") === "taxonomy/llm-adjudications.jsonl"
+  );
+  assert.ok(eventWrite);
+
+  const summaryWrites = native.calls.filter(
+    (call) =>
+      call.command === "write_meeting_session_recording_text" &&
+      stringArg(call, "relativePath") ===
+        "traces/adjudication_trace/summary.json"
+  );
+  const latestSummary = summaryWrites[summaryWrites.length - 1];
+  assert.ok(latestSummary);
+  const summary = parsePayload(latestSummary);
+  const adjudication = summary.taxonomyAdjudication as Record<string, unknown>;
+  assert.equal(adjudication.mode, "shadow");
+  assert.equal(adjudication.candidateType, "coding");
+  assert.equal(adjudication.relation, "new-parent");
+  assert.equal(adjudication.wouldRepair, true);
+  assert.equal(adjudication.repairApplied, false);
+  assert.equal(adjudication.durationMs, 611);
+
+  await manager.stop("test-complete");
+});
+
 test("compact trace summaries preserve task boundary and cross-domain evidence", async () => {
   const native = new ControlledRecordingInvoke();
   const manager = new SessionRecordingManager(undefined, native.invoke);
@@ -386,10 +444,16 @@ const START_OPTIONS = {
       provider: "",
       variables: {},
     },
+    taxonomyAdjudication: {
+      enabled: true,
+      provider: "",
+      variables: {},
+    },
   } as unknown as MeetingAssistantSettings,
   providerSummary: {
     hasMainProvider: false,
     hasCodingProvider: false,
+    hasTaxonomyAdjudicationProvider: false,
     hasSttProvider: false,
     mainSupportsImages: false,
     codingSupportsImages: false,

@@ -32,6 +32,7 @@ import type {
   NativeAudioDebugFaultKind,
   NativeAudioPauseResumeControlPresentation,
   MeetingCodingModelSettings,
+  MeetingTaxonomyAdjudicationSettings,
   MeetingAnswerDisplayModel,
   CodingArtifactCache,
   MeetingResponseActionMode,
@@ -1360,6 +1361,12 @@ export const MeetingAssistant = ({
                 onResponseConfigChange={meeting.setResponseConfig}
                 codingModel={meeting.settings.codingModel}
                 onCodingModelChange={meeting.setCodingModelConfig}
+                taxonomyAdjudication={
+                  meeting.settings.taxonomyAdjudication
+                }
+                onTaxonomyAdjudicationChange={
+                  meeting.setTaxonomyAdjudicationConfig
+                }
                 aiProviders={meeting.aiProviders}
                 privacyMode={meeting.settings.privacyMode}
                 onPrivacyModeChange={meeting.setPrivacyMode}
@@ -2010,6 +2017,34 @@ export const MeetingAssistant = ({
                             ?.advisorExecutionAuthorized === "boolean"
                             ? evaluationTrace.metadata
                                 .advisorExecutionAuthorized
+                            : undefined
+                        }
+                        taxonomyAdjudicationCandidateType={
+                          typeof evaluationTrace.metadata
+                            ?.taxonomyAdjudicationCandidateType === "string"
+                            ? evaluationTrace.metadata
+                                .taxonomyAdjudicationCandidateType
+                            : undefined
+                        }
+                        taxonomyAdjudicationRelation={
+                          typeof evaluationTrace.metadata
+                            ?.taxonomyAdjudicationRelation === "string"
+                            ? evaluationTrace.metadata
+                                .taxonomyAdjudicationRelation
+                            : undefined
+                        }
+                        taxonomyAdjudicationDisposition={
+                          typeof evaluationTrace.metadata
+                            ?.taxonomyAdjudicationDisposition === "string"
+                            ? evaluationTrace.metadata
+                                .taxonomyAdjudicationDisposition
+                            : undefined
+                        }
+                        taxonomyAdjudicationWouldRepair={
+                          typeof evaluationTrace.metadata
+                            ?.taxonomyAdjudicationWouldRepair === "boolean"
+                            ? evaluationTrace.metadata
+                                .taxonomyAdjudicationWouldRepair
                             : undefined
                         }
                         evaluation={answerTraceEvaluation}
@@ -2928,6 +2963,8 @@ const ConfigurationsPanel = ({
   onResponseConfigChange,
   codingModel,
   onCodingModelChange,
+  taxonomyAdjudication,
+  onTaxonomyAdjudicationChange,
   aiProviders,
   privacyMode,
   onPrivacyModeChange,
@@ -2959,6 +2996,10 @@ const ConfigurationsPanel = ({
   onResponseConfigChange: (config: MeetingResponseConfig) => void;
   codingModel: MeetingCodingModelSettings;
   onCodingModelChange: (config: MeetingCodingModelSettings) => void;
+  taxonomyAdjudication: MeetingTaxonomyAdjudicationSettings;
+  onTaxonomyAdjudicationChange: (
+    config: MeetingTaxonomyAdjudicationSettings
+  ) => void;
   aiProviders: TYPE_PROVIDER[];
   privacyMode: (typeof privacyOptions)[number]["id"];
   onPrivacyModeChange: (mode: (typeof privacyOptions)[number]["id"]) => void;
@@ -3040,7 +3081,9 @@ const ConfigurationsPanel = ({
                 });
               }}
             />
-            <CodingModelConfig
+            <MeetingModelOverrideConfig
+              label="Coding model"
+              description="Used only for confirmed coding tasks"
               providers={aiProviders}
               value={codingModel}
               onChange={onCodingModelChange}
@@ -3151,6 +3194,42 @@ const ConfigurationsPanel = ({
                   );
                 }}
               />
+            </div>
+
+            <div className="space-y-2 rounded-sm border border-border/60 p-2">
+              <div className="flex items-center justify-between gap-2">
+                <div>
+                  <div className="text-[10px] font-medium uppercase text-muted-foreground">
+                    LLM Type Adjudication
+                  </div>
+                  <div className="mt-0.5 text-[10px] text-muted-foreground">
+                    Shadow only; runs during Debug or Session Recording
+                  </div>
+                </div>
+                <Switch
+                  checked={taxonomyAdjudication.enabled}
+                  onCheckedChange={(enabled) => {
+                    onTaxonomyAdjudicationChange({
+                      ...taxonomyAdjudication,
+                      enabled,
+                    });
+                  }}
+                />
+              </div>
+              {taxonomyAdjudication.enabled ? (
+                <MeetingModelOverrideConfig
+                  label="Adjudication model"
+                  description="Optional fast model; defaults to the main model"
+                  providers={aiProviders}
+                  value={taxonomyAdjudication}
+                  onChange={(selected) => {
+                    onTaxonomyAdjudicationChange({
+                      enabled: taxonomyAdjudication.enabled,
+                      ...selected,
+                    });
+                  }}
+                />
+              ) : null}
             </div>
           </ConfigurationGroup>
 
@@ -3394,11 +3473,15 @@ const ConfigurationsPanel = ({
   );
 };
 
-const CodingModelConfig = ({
+const MeetingModelOverrideConfig = ({
+  label,
+  description,
   providers,
   value,
   onChange,
 }: {
+  label: string;
+  description: string;
   providers: TYPE_PROVIDER[];
   value: MeetingCodingModelSettings;
   onChange: (config: MeetingCodingModelSettings) => void;
@@ -3412,7 +3495,7 @@ const CodingModelConfig = ({
     <div className="space-y-2 rounded-sm border border-border/60 p-2">
       <div>
         <Label className="mb-1.5 block text-[10px] font-medium uppercase text-muted-foreground">
-          Coding model
+          {label}
         </Label>
         <select
           className="h-8 w-full rounded-sm border border-border bg-background px-2 text-xs outline-none transition-colors focus:border-foreground/40"
@@ -3437,7 +3520,7 @@ const CodingModelConfig = ({
             ))}
         </select>
         <div className="mt-1 text-[10px] text-muted-foreground">
-          Used only for confirmed coding tasks
+          {description}
         </div>
       </div>
 
@@ -3706,6 +3789,10 @@ const TraceHumanEvaluationPanel = ({
   advisorTurnIntent,
   advisorTurnEnforcement,
   advisorExecutionAuthorized,
+  taxonomyAdjudicationCandidateType,
+  taxonomyAdjudicationRelation,
+  taxonomyAdjudicationDisposition,
+  taxonomyAdjudicationWouldRepair,
   evaluation,
   questionEvaluation,
   memorySnapshot,
@@ -3718,6 +3805,10 @@ const TraceHumanEvaluationPanel = ({
   advisorTurnIntent?: string;
   advisorTurnEnforcement?: string;
   advisorExecutionAuthorized?: boolean;
+  taxonomyAdjudicationCandidateType?: string;
+  taxonomyAdjudicationRelation?: string;
+  taxonomyAdjudicationDisposition?: string;
+  taxonomyAdjudicationWouldRepair?: boolean;
   evaluation:
     | {
         taskQuality?: HumanEvalTaskQuality;
@@ -3808,6 +3899,22 @@ const TraceHumanEvaluationPanel = ({
   };
 
   return (
+    <div className="space-y-3">
+      {taxonomyAdjudicationDisposition ? (
+        <div className="rounded-sm border border-border/60 bg-muted/30 p-2 text-[10px]">
+          <div className="font-medium uppercase text-muted-foreground">
+            LLM type adjudication (Shadow)
+          </div>
+          <div className="mt-1 break-words">
+            {taxonomyAdjudicationCandidateType ?? "No valid proposal"}
+            {taxonomyAdjudicationRelation
+              ? ` / ${taxonomyAdjudicationRelation}`
+              : ""}
+            {` / ${taxonomyAdjudicationDisposition}`}
+            {taxonomyAdjudicationWouldRepair === true ? " / would repair" : ""}
+          </div>
+        </div>
+      ) : null}
     <details className="mt-2 border-t border-border/50 pt-2">
       <summary className="cursor-pointer text-[10px] font-medium text-muted-foreground">
         Human evaluation
@@ -4441,6 +4548,7 @@ const TraceHumanEvaluationPanel = ({
         </div>
       </div>
     </details>
+    </div>
   );
 };
 

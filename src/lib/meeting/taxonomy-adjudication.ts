@@ -228,7 +228,7 @@ export function decideTaxonomyAdjudicationEligibility(
     return skip(`turn-gate-${input.turnGateAction || "unknown"}`);
   }
   if (!input.projection.safe) return skip("unsafe-question-projection");
-  if (input.projection.text.split(/\s+/u).filter(Boolean).length < 3) {
+  if (estimateQuestionWordEquivalents(input.projection.text) < 3) {
     return skip("question-unit-too-short");
   }
   if (input.manualCorrectionActive) {
@@ -246,9 +246,18 @@ export function decideTaxonomyAdjudicationEligibility(
   }
   if (
     input.semantic &&
-    (!input.semantic.accepted || input.semantic.rejectionReasons.length > 0)
+    (!input.semantic.accepted || input.semantic.rejectionReasons.length > 0) &&
+    (lexicalType === "unknown" ||
+      input.lexical.confidence < 0.8 ||
+      input.lexical.margin < 0.2)
   ) {
     triggers.push("semantic-ambiguous-or-rejected");
+  }
+  if (
+    lexicalType !== "unknown" &&
+    (input.lexical.confidence < 0.75 || input.lexical.margin < 0.15)
+  ) {
+    triggers.push("low-confidence-lexical");
   }
   if (
     input.activeParentType &&
@@ -272,6 +281,16 @@ export function decideTaxonomyAdjudicationEligibility(
     reason: "residual-taxonomy-ambiguity",
     triggerReasons: Array.from(new Set(triggers)),
   };
+}
+
+function estimateQuestionWordEquivalents(value: string) {
+  const normalized = normalizeSpace(value);
+  const cjkCharacters = normalized.match(/[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/gu)?.length ?? 0;
+  const nonCjkWords = normalized
+    .replace(/[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/gu, " ")
+    .split(/\s+/u)
+    .filter(Boolean).length;
+  return nonCjkWords + Math.ceil(cjkCharacters / 2);
 }
 
 export function buildTaxonomyAdjudicationRequest(input: {

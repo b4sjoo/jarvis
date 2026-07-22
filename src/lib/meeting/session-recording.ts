@@ -42,9 +42,11 @@ interface SessionRecordingStartOptions {
 export interface SessionRecordingProviderSummary {
   mainProviderId?: string;
   codingProviderId?: string;
+  taxonomyAdjudicationProviderId?: string;
   sttProviderId?: string;
   hasMainProvider: boolean;
   hasCodingProvider: boolean;
+  hasTaxonomyAdjudicationProvider: boolean;
   hasSttProvider: boolean;
   mainSupportsImages: boolean;
   codingSupportsImages: boolean;
@@ -74,6 +76,7 @@ interface SessionRecordingEvent {
     | "active-meeting-task-snapshot"
     | "manual-question-type-correction"
     | "semantic-taxonomy-decision"
+    | "taxonomy-adjudication-decision"
     | "capture-lifecycle"
     | "native-speech-event"
     | "runtime-reset"
@@ -230,6 +233,29 @@ export interface SessionCompactTraceSummary {
     modelVersion?: string;
     prototypeVersion?: string;
     calibrationVersion?: string;
+  };
+  taxonomyAdjudication?: {
+    mode?: string;
+    eligible?: boolean;
+    skipReason?: string;
+    operationId?: string;
+    unitId?: string;
+    unitRevision?: number;
+    providerId?: string;
+    disposition?: string;
+    staleReason?: string;
+    candidateType?: string;
+    relation?: string;
+    standalone?: boolean;
+    confidence?: number;
+    parseValid?: boolean;
+    evidenceSpansValid?: boolean;
+    arrivalStage?: string;
+    wouldRepair?: boolean;
+    repairApplied?: boolean;
+    durationMs?: number;
+    inputChars?: number;
+    outputChars?: number;
   };
   personalEvidence?: {
     requirement?: string;
@@ -1189,6 +1215,65 @@ export class SessionRecordingManager {
     });
   }
 
+  recordTaxonomyAdjudicationDecision({
+    traceId,
+    taskId,
+    metadata,
+  }: {
+    traceId: string;
+    taskId?: string;
+    metadata: Record<string, unknown>;
+  }) {
+    const session = this.getWritableSession({ traceId });
+    if (!session) return;
+    const artifactPath = "taxonomy/llm-adjudications.jsonl";
+    const payload = {
+      recordedAt: Date.now(),
+      sessionId: session.sessionId,
+      traceId,
+      taskId,
+      metadata,
+    };
+    this.enqueue(session, () =>
+      this.writeText(
+        session,
+        artifactPath,
+        `${JSON.stringify(payload)}\n`,
+        true
+      )
+    );
+    this.recordEvent(
+      "taxonomy-adjudication-decision",
+      metadata,
+      [artifactPath],
+      traceId,
+      taskId
+    );
+
+    const existing = session.traceSummaries.get(traceId);
+    if (!existing) return;
+    const updated: SessionCompactTraceSummary = {
+      ...existing,
+      taxonomyAdjudication: buildTaxonomyAdjudicationTraceSummary([metadata]),
+    };
+    session.traceSummaries.set(traceId, updated);
+    this.enqueue(session, async () => {
+      await this.writeJson(
+        session,
+        `traces/${sanitizeFilePart(traceId)}/summary.json`,
+        updated
+      );
+      await this.writeJson(session, "metrics/trace-summaries.latest.json", {
+        version: SESSION_TRACE_SUMMARY_SCHEMA_VERSION,
+        savedAt: Date.now(),
+        sessionId: session.sessionId,
+        traces: Array.from(session.traceSummaries.values()).sort(
+          (left, right) => left.startedAt - right.startedAt
+        ),
+      });
+    });
+  }
+
   recordCaptureLifecycle(metadata: Record<string, unknown>) {
     if (!this.getWritableSession()) return;
     this.recordEvent("capture-lifecycle", metadata);
@@ -1543,24 +1628,30 @@ export class SessionRecordingManager {
 export function buildSessionRecordingProviderSummary({
   mainProvider,
   codingProvider,
+  taxonomyAdjudicationProvider,
   sttProvider,
   mainProviderId,
   codingProviderId,
+  taxonomyAdjudicationProviderId,
   sttProviderId,
 }: {
   mainProvider?: TYPE_PROVIDER;
   codingProvider?: TYPE_PROVIDER;
+  taxonomyAdjudicationProvider?: TYPE_PROVIDER;
   sttProvider?: TYPE_PROVIDER;
   mainProviderId?: string;
   codingProviderId?: string;
+  taxonomyAdjudicationProviderId?: string;
   sttProviderId?: string;
 }): SessionRecordingProviderSummary {
   return {
     mainProviderId,
     codingProviderId,
+    taxonomyAdjudicationProviderId,
     sttProviderId,
     hasMainProvider: Boolean(mainProvider),
     hasCodingProvider: Boolean(codingProvider),
+    hasTaxonomyAdjudicationProvider: Boolean(taxonomyAdjudicationProvider),
     hasSttProvider: Boolean(sttProvider),
     mainSupportsImages: Boolean(mainProvider?.curl.includes("{{IMAGE}}")),
     codingSupportsImages: Boolean(codingProvider?.curl.includes("{{IMAGE}}")),
@@ -1629,6 +1720,12 @@ function sanitizeMeetingAssistantSettings(settings: MeetingAssistantSettings) {
     codingModel: {
       provider: settings.codingModel.provider,
       variableKeys: Object.keys(settings.codingModel.variables),
+      variables: "[redacted]",
+    },
+    taxonomyAdjudication: {
+      enabled: settings.taxonomyAdjudication.enabled,
+      provider: settings.taxonomyAdjudication.provider,
+      variableKeys: Object.keys(settings.taxonomyAdjudication.variables),
       variables: "[redacted]",
     },
   };
@@ -1951,6 +2048,8 @@ function buildCompactTraceSummary({
       "sentenceBufferMergedTranscriptChars"
     ),
     semanticTaxonomy: buildSemanticTaxonomyTraceSummary(metadataSources),
+    taxonomyAdjudication:
+      buildTaxonomyAdjudicationTraceSummary(metadataSources),
     personalEvidence: {
       requirement: readFirstString(
         metadataSources,
@@ -2183,6 +2282,99 @@ function buildSemanticTaxonomyTraceSummary(
     calibrationVersion: readFirstString(
       metadataSources,
       "taxonomySemanticCalibrationVersion"
+    ),
+  };
+}
+
+function buildTaxonomyAdjudicationTraceSummary(
+  metadataSources: Array<Record<string, unknown>>
+): SessionCompactTraceSummary["taxonomyAdjudication"] {
+  const mode = readFirstString(
+    metadataSources,
+    "taxonomyAdjudicationMode"
+  );
+  const eligible = readFirstBoolean(
+    metadataSources,
+    "taxonomyAdjudicationEligible"
+  );
+  const disposition = readFirstString(
+    metadataSources,
+    "taxonomyAdjudicationDisposition"
+  );
+  if (!mode && eligible === undefined && !disposition) return undefined;
+
+  return {
+    mode,
+    eligible,
+    skipReason: readFirstString(
+      metadataSources,
+      "taxonomyAdjudicationSkipReason"
+    ),
+    operationId: readFirstString(
+      metadataSources,
+      "taxonomyAdjudicationOperationId"
+    ),
+    unitId: readFirstString(metadataSources, "taxonomyAdjudicationUnitId"),
+    unitRevision: readFirstNumberFromMetadata(
+      metadataSources,
+      "taxonomyAdjudicationUnitRevision"
+    ),
+    providerId: readFirstString(
+      metadataSources,
+      "taxonomyAdjudicationProviderId"
+    ),
+    disposition,
+    staleReason: readFirstString(
+      metadataSources,
+      "taxonomyAdjudicationStaleReason"
+    ),
+    candidateType: readFirstString(
+      metadataSources,
+      "taxonomyAdjudicationCandidateType"
+    ),
+    relation: readFirstString(
+      metadataSources,
+      "taxonomyAdjudicationRelation"
+    ),
+    standalone: readFirstBoolean(
+      metadataSources,
+      "taxonomyAdjudicationStandalone"
+    ),
+    confidence: readFirstNumberFromMetadata(
+      metadataSources,
+      "taxonomyAdjudicationConfidence"
+    ),
+    parseValid: readFirstBoolean(
+      metadataSources,
+      "taxonomyAdjudicationParseValid"
+    ),
+    evidenceSpansValid: readFirstBoolean(
+      metadataSources,
+      "taxonomyAdjudicationEvidenceSpansValid"
+    ),
+    arrivalStage: readFirstString(
+      metadataSources,
+      "taxonomyAdjudicationArrivalStage"
+    ),
+    wouldRepair: readFirstBoolean(
+      metadataSources,
+      "taxonomyAdjudicationWouldRepair"
+    ),
+    repairApplied: readFirstBoolean(
+      metadataSources,
+      "taxonomyAdjudicationRepairApplied"
+    ),
+    durationMs: readFirstNumberFromMetadata(
+      metadataSources,
+      "taxonomyAdjudicationDurationMs"
+    ),
+    inputChars: readFirstNumberFromMetadata(
+      metadataSources,
+      "taxonomyAdjudicationInputChars"
+    ),
+    outputChars: readFirstNumberFromMetadata(
+      metadataSources,
+      "taxonomyAdjudicationOutputChars"
     ),
   };
 }
