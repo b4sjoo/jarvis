@@ -531,6 +531,9 @@ function cloneActiveInterviewTask(
         }
       : undefined,
     supportedFactAnchors: [...task.supportedFactAnchors],
+    canonicalQuestionSourceTurnIds: task.canonicalQuestionSourceTurnIds
+      ? [...task.canonicalQuestionSourceTurnIds]
+      : undefined,
     child: task.child ? { ...task.child } : undefined,
     whiteboardArtifact: task.whiteboardArtifact
       ? { ...task.whiteboardArtifact }

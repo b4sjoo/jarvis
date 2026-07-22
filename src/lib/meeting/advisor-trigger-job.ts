@@ -1,5 +1,9 @@
 import type { AdvisorTurnIntentDecision } from "./advisor-turn-intent.js";
 import { createMeetingId } from "./context-manager.js";
+import {
+  formatLogicalQuestionUnitForTrace,
+  type LogicalQuestionUnit,
+} from "./logical-question-unit.js";
 import type { PlaybookPhaseDecision } from "./playbook-phase.js";
 import {
   authorizeRuntimeCommit,
@@ -52,6 +56,7 @@ export interface AdvisorTriggerJob {
   expectedParentRevision?: number;
   runtimeCommitToken: RuntimeCommitToken;
   questionLineage?: QuestionInstanceLineage;
+  logicalQuestionUnit?: LogicalQuestionUnit;
   taskMutationAuthority: AdvisorTaskMutationAuthority;
   snapshotTurnCount: number;
   scheduledAt: number;
@@ -68,6 +73,7 @@ export interface CreateAdvisorTriggerJobInput {
   runtimeEpoch: number;
   snapshotTurnCount: number;
   questionLineage?: QuestionInstanceLineage;
+  logicalQuestionUnit?: LogicalQuestionUnit;
   taskMutationAuthority: AdvisorTaskMutationAuthority;
   scheduledAt?: number;
 }
@@ -136,6 +142,9 @@ export function createAdvisorTriggerJob(
     }),
     questionLineage: input.questionLineage
       ? { ...input.questionLineage }
+      : undefined,
+    logicalQuestionUnit: input.logicalQuestionUnit
+      ? cloneLogicalQuestionUnit(input.logicalQuestionUnit)
       : undefined,
     taskMutationAuthority: input.taskMutationAuthority,
     snapshotTurnCount: input.snapshotTurnCount,
@@ -306,6 +315,7 @@ export function formatAdvisorTriggerJobForTrace(
           sourceSuggestionId: job.questionLineage.sourceSuggestionId,
         }
       : {}),
+    ...formatLogicalQuestionUnitForTrace(job.logicalQuestionUnit),
     advisorJobMutationAuthority: job.taskMutationAuthority,
     advisorJobSnapshotTurnCount: job.snapshotTurnCount,
     advisorJobSnapshotLatestTurnId: job.promptContextSnapshot.latestTurn?.id,
@@ -313,6 +323,15 @@ export function formatAdvisorTriggerJobForTrace(
     advisorJobCancellationReason: extra.cancellationReason,
     advisorJobCommitAuthorized: extra.commitAuthorized,
     advisorJobCommitAuthorizationReason: extra.commitAuthorizationReason,
+  };
+}
+
+function cloneLogicalQuestionUnit(unit: LogicalQuestionUnit) {
+  return {
+    ...unit,
+    sourceTurnIds: [...unit.sourceTurnIds],
+    sources: unit.sources.map((source) => ({ ...source })),
+    compositionReasons: [...unit.compositionReasons],
   };
 }
 

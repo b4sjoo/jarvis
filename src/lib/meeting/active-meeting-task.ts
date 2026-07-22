@@ -49,6 +49,7 @@ export interface ActiveMeetingParent {
   startTurnId?: string;
   startObservationId?: string;
   promptTranscriptStartTurnId?: string;
+  canonicalQuestionSourceTurnIds?: string[];
   parentContextHandoff?: ParentContextHandoff;
   revisions?: number;
 }
@@ -229,6 +230,8 @@ export function getActiveMeetingTaskTraceMetadata(
     activeMeetingParentOriginQuestionId: task.parent.originQuestionId,
     activeMeetingPromptTranscriptStartTurnId:
       task.parent.promptTranscriptStartTurnId,
+    canonicalQuestionSourceTurnIds:
+      task.parent.canonicalQuestionSourceTurnIds,
     activeMeetingParentHandoffSourceId:
       task.parent.parentContextHandoff?.sourceParentId,
     activeMeetingProjectBindingId: task.parent.projectBinding?.projectId,
@@ -429,6 +432,9 @@ function buildParentFromInterviewTask(
     startTurnId: task.startTurnId,
     startObservationId: task.startObservationId,
     promptTranscriptStartTurnId: task.promptTranscriptStartTurnId,
+    canonicalQuestionSourceTurnIds: task.canonicalQuestionSourceTurnIds
+      ? [...task.canonicalQuestionSourceTurnIds]
+      : undefined,
     parentContextHandoff: cloneParentContextHandoff(task.parentContextHandoff),
     revisions: task.revisions,
   };

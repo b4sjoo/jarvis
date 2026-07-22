@@ -140,6 +140,59 @@ test("emits inherited question lineage for answer-preserving actions", () => {
   assert.equal(metadata.sourceSuggestionId, "suggestion-origin");
 });
 
+test("freezes and traces the bounded logical question owned by a job", () => {
+  const logicalQuestionUnit = {
+    id: "logical-question-a",
+    sessionId: "session-a",
+    runtimeEpoch: 1,
+    currentTurnId: "turn-b",
+    sourceTurnIds: ["turn-a", "turn-b"],
+    sources: [
+      {
+        turnId: "turn-a",
+        text: "Implement a queue",
+        startedAt: 10,
+        endedAt: 20,
+      },
+      {
+        turnId: "turn-b",
+        text: "Use two stacks",
+        startedAt: 30,
+        endedAt: 40,
+      },
+    ],
+    normalizedText: "Implement a queue Use two stacks",
+    startedAt: 10,
+    updatedAt: 40,
+    compositionReasons: ["constraint-or-follow-up"],
+    boundaryReason: "bounded-continuation",
+    truncated: false,
+  };
+  const job = createAdvisorTriggerJob({
+    source: "live-turn",
+    mode: "live",
+    promptContext: buildPromptContext(),
+    sessionId: "session-a",
+    runtimeEpoch: 1,
+    snapshotTurnCount: 2,
+    taskMutationAuthority: "input-evidence",
+    logicalQuestionUnit,
+  });
+
+  logicalQuestionUnit.sources[0].text = "mutated";
+  logicalQuestionUnit.sourceTurnIds.push("turn-c");
+
+  assert.equal(job.logicalQuestionUnit?.sources[0].text, "Implement a queue");
+  assert.deepEqual(job.logicalQuestionUnit?.sourceTurnIds, ["turn-a", "turn-b"]);
+  const metadata = formatAdvisorTriggerJobForTrace(job, "scheduled");
+  assert.equal(metadata.logicalQuestionUnitId, "logical-question-a");
+  assert.deepEqual(metadata.logicalQuestionSourceTurnIds, ["turn-a", "turn-b"]);
+  assert.equal(
+    metadata.logicalQuestionChars,
+    "Implement a queue Use two stacks".length
+  );
+});
+
 test("explicit response actions preserve the active parent", () => {
   assert.deepEqual(
     decideAdvisorTaskMutation({

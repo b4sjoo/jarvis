@@ -497,6 +497,7 @@ export interface ActiveInterviewParent {
   startTurnId?: string;
   startObservationId?: string;
   promptTranscriptStartTurnId?: string;
+  canonicalQuestionSourceTurnIds?: string[];
   parentContextHandoff?: ParentContextHandoff;
   child?: ActiveInterviewChild;
   revisions: number;
