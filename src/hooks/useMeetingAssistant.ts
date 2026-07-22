@@ -155,13 +155,16 @@ import {
   authorizeRuntimeCommit,
   authorizeAdvisorTaskMutation,
   buildRuntimeCommitSnapshot,
+  buildBoundedParentContextHandoff,
   buildCommittedTaskBoundaryParent,
   commitTaskBoundaryCandidate,
   createTaskBoundaryCandidate,
   createRuntimeCommitToken,
   decideAdvisorPhaseMutation,
   decideAdvisorTaskMutation,
+  decideCrossDomainParentTransition,
   formatAdvisorTriggerJobForTrace,
+  formatCrossDomainParentTransitionForTrace,
   formatRuntimeCommitAuthorizationForTrace,
   formatTaskBoundaryCandidateForTrace,
   rebaseRuntimeCommitToken,
@@ -3856,6 +3859,30 @@ export function useMeetingAssistant() {
         const parentBeforeId = contextStateBeforeBoundary.activeMeetingTask?.parent.id;
         const parentBeforeType =
           contextStateBeforeBoundary.activeMeetingTask?.parent.questionType;
+        const previousInterviewParent =
+          contextStateBeforeBoundary.activeInterviewTask;
+        const crossDomainTransitionDecision =
+          decideCrossDomainParentTransition({
+            previousParent: previousInterviewParent,
+            nextQuestionType: taskBoundaryCandidate.proposedQuestionType,
+            nextQuestionText:
+              advisorJob.logicalQuestionUnit.normalizedText,
+          });
+        const parentContextHandoff =
+          previousInterviewParent &&
+          crossDomainTransitionDecision.kind === "linked-parent-extension"
+            ? buildBoundedParentContextHandoff({
+                parent: previousInterviewParent,
+                sourceQuestionId:
+                  questionLineage?.questionInstanceId ??
+                  advisorJob.logicalQuestionUnit.id,
+                latestQuestionText:
+                  advisorJob.logicalQuestionUnit.normalizedText,
+                transcriptTurns: contextStateBeforeBoundary.transcriptTurns,
+                boundaryTurnId:
+                  advisorJob.logicalQuestionUnit.sourceTurnIds[0],
+              })
+            : undefined;
         const boundaryParent = buildCommittedTaskBoundaryParent({
           candidate: taskBoundaryCandidate,
           logicalQuestionUnit: advisorJob.logicalQuestionUnit,
@@ -3867,6 +3894,7 @@ export function useMeetingAssistant() {
           playbook: advisorRuntimePlaybook,
           phaseDecision: playbookPhaseDecision,
           expiresAt: getActiveScreenTaskExpiresAt(state.settings),
+          parentContextHandoff,
         });
 
         if (boundaryParent) {
@@ -3914,6 +3942,13 @@ export function useMeetingAssistant() {
                 parentAfterId: boundaryParent.id,
                 parentAfterType: boundaryParent.stableKind,
               }),
+              ...formatCrossDomainParentTransitionForTrace(
+                crossDomainTransitionDecision
+              ),
+              parentContextHandoffSourceId:
+                parentContextHandoff?.sourceParentId,
+              parentContextHandoffSourceQuestionId:
+                parentContextHandoff?.sourceQuestionId,
               runtimeCommitTokenRebased: true,
               runtimeCommitTokenRebaseReason:
                 "task-boundary-committed-before-advisor",

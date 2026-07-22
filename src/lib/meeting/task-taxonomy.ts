@@ -598,7 +598,7 @@ export function inferQuestionTypeDecisionFromText(
   }
 
   const hasCodingActionObject =
-    /\b(write|implement|complete|code)\s+(a |an |the |this |that )?(function|method|class|algorithm|stack|queue|heap|binary tree|linked list|graph|sort|sorting|search|solution)\b/.test(
+    /\b(write|implement|complete|code)\s+(a |an |the |this |that )?(function|method|class|algorithm|stack|queue|deque|heap|binary tree|linked list|graph|sort|sorting|search|sliding window(?: maximum)?|two pointers?|dynamic programming|solution)\b/.test(
       normalized
     ) ||
     /\b(solve|code)\s+(this|the|a)\s+(problem|question|algorithm)\b/.test(
@@ -676,14 +676,26 @@ export function inferQuestionTypeDecisionFromText(
       normalized
     );
   const hasAimlContext =
-    /\b(ai|ml|machine learning|llm|rag|retrieval augmented|embedding|vector|model serving|agent|evaluation|eval|fine-tuning|feature store|recommender)\b/.test(
+    /\b(ai|ml|machine learning|llm|rag|retrieval|retrieval augmented|embedding|vector|model serving|agent|evaluation|eval|fine-tuning|feature store|recommendation|recommender|ranking|personalization|training pipeline|inference)\b/.test(
+      normalized
+    );
+  const hasExplicitAimlArchitectureObject =
+    /\b(recommendation|recommender|ranking|retrieval|rag|search relevance|personalization|machine learning|ml|ai|llm|model|agent|feature|training|inference)\b.{0,35}\b(system|service|platform|pipeline|architecture|infrastructure|agent|serving)\b/.test(
+      normalized
+    ) ||
+    /\b(system|service|platform|pipeline|architecture|infrastructure)\b.{0,35}\b(recommendation|recommender|ranking|retrieval|rag|personalization|machine learning|ml|ai|llm|model|agent|feature|training|inference)\b/.test(
+      normalized
+    ) ||
+    /\bself[- ]evolving\b.{0,45}\b(recommendation|recommender|ranking|agent|system)\b/.test(
       normalized
     );
   const hasStrongSystemDesignFrame =
     !hasStrongPastProjectFrame &&
     !hasExplicitProjectStackFrame &&
     hasHypotheticalDesignFrame &&
-    (hasSystemDesignObject || hasScaleOrRequirementContext);
+    (hasSystemDesignObject ||
+      hasScaleOrRequirementContext ||
+      hasExplicitAimlArchitectureObject);
 
   if (hasStrongSystemDesignFrame && hasAimlContext) {
     addEvidence("ai-ml-system-design", 0.96, "hypothetical-ai-ml-design");

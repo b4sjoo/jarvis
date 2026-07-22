@@ -531,3 +531,26 @@ test("does not open a task when there is no latest useful interviewer turn", () 
     }
   );
 });
+
+test("classifies explicit AI/ML architecture objects without lowering thresholds", () => {
+  const cases = [
+    "Design a self-evolving travel recommendation agent",
+    "For this app, design a ranking and personalization system",
+    "Architect a RAG retrieval pipeline for trip planning",
+  ];
+
+  for (const question of cases) {
+    const decision = inferQuestionTypeDecisionFromText(question);
+    assert.equal(decision.type, "ai-ml-system-design", question);
+    assert.ok(decision.confidence >= 0.9, question);
+  }
+});
+
+test("keeps algorithm implementation distinct from AI/ML system design", () => {
+  const decision = inferQuestionTypeDecisionFromText(
+    "Design an efficient algorithm for top-k recommendations and implement it in Python"
+  );
+
+  assert.equal(decision.type, "coding");
+  assert.ok(decision.evidence.includes("algorithm-design-request"));
+});

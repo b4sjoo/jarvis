@@ -29,7 +29,7 @@ import {
 import { serializeMeetingTraceExport } from "./trace.js";
 
 const SESSION_RECORDING_SCHEMA_VERSION = 1;
-const SESSION_TRACE_SUMMARY_SCHEMA_VERSION = 4;
+const SESSION_TRACE_SUMMARY_SCHEMA_VERSION = 5;
 const SESSION_TRACE_INDEX_SCHEMA_VERSION = 1;
 
 interface SessionRecordingStartOptions {
@@ -174,6 +174,33 @@ export interface SessionCompactTraceSummary {
   advisorExecutionSuppressedReason?: string;
   taskMutationAuthorized?: boolean;
   taskMutationAuthorizationReason?: string;
+  taskBoundary?: {
+    logicalQuestionUnitId?: string;
+    candidateId?: string;
+    candidateState?: string;
+    commitPolicy?: string;
+    mutationDisposition?: string;
+    authoritySource?: string;
+    sourceTurnIds: string[];
+    committedBeforeAdvisor?: boolean;
+    committedParentId?: string;
+    survivedAdvisorCancellation?: boolean;
+    parentBeforeId?: string;
+    parentBeforeType?: string;
+    parentAfterId?: string;
+    parentAfterType?: string;
+  };
+  crossDomainTransition?: {
+    kind?: string;
+    reason?: string;
+    previousQuestionType?: string;
+    nextQuestionType?: string;
+    sharedDomainTokens: string[];
+    evidence: string[];
+    parentContextHandoffKind?: string;
+    parentContextHandoffSourceId?: string;
+    parentContextHandoffSourceQuestionId?: string;
+  };
   advisorOutputDisposition?: string;
   adjacentConstraintInherited?: boolean;
   adjacentConstraintDecisionReason?: string;
@@ -1782,6 +1809,87 @@ function buildCompactTraceSummary({
       metadataSources,
       "taskMutationAuthorizationReason"
     ),
+    taskBoundary: {
+      logicalQuestionUnitId: readFirstString(
+        metadataSources,
+        "taskBoundaryLogicalQuestionUnitId"
+      ),
+      candidateId: readFirstString(
+        metadataSources,
+        "taskBoundaryCandidateId"
+      ),
+      candidateState: readFirstString(
+        metadataSources,
+        "taskBoundaryCandidateState"
+      ),
+      commitPolicy: readFirstString(
+        metadataSources,
+        "taskBoundaryCommitPolicy"
+      ),
+      mutationDisposition: readFirstString(
+        metadataSources,
+        "taskBoundaryMutationDisposition"
+      ),
+      authoritySource: readFirstString(
+        metadataSources,
+        "taskBoundaryAuthoritySource"
+      ),
+      sourceTurnIds: readFirstStringList(
+        metadataSources,
+        "taskBoundarySourceTurnIds"
+      ),
+      committedBeforeAdvisor: readFirstBoolean(
+        metadataSources,
+        "taskBoundaryCommittedBeforeAdvisor"
+      ),
+      committedParentId: readFirstString(
+        metadataSources,
+        "taskBoundaryCommittedParentId"
+      ),
+      survivedAdvisorCancellation: readFirstBoolean(
+        metadataSources,
+        "taskBoundarySurvivedAdvisorCancellation"
+      ),
+      parentBeforeId: readFirstString(metadataSources, "parentBeforeId"),
+      parentBeforeType: readFirstString(metadataSources, "parentBeforeType"),
+      parentAfterId: readFirstString(metadataSources, "parentAfterId"),
+      parentAfterType: readFirstString(metadataSources, "parentAfterType"),
+    },
+    crossDomainTransition: {
+      kind: readFirstString(metadataSources, "crossDomainTransitionKind"),
+      reason: readFirstString(
+        metadataSources,
+        "crossDomainTransitionReason"
+      ),
+      previousQuestionType: readFirstString(
+        metadataSources,
+        "crossDomainPreviousQuestionType"
+      ),
+      nextQuestionType: readFirstString(
+        metadataSources,
+        "crossDomainNextQuestionType"
+      ),
+      sharedDomainTokens: readFirstStringList(
+        metadataSources,
+        "crossDomainSharedDomainTokens"
+      ),
+      evidence: readFirstStringList(
+        metadataSources,
+        "crossDomainTransitionEvidence"
+      ),
+      parentContextHandoffKind: readFirstString(
+        metadataSources,
+        "parentContextHandoffKind"
+      ),
+      parentContextHandoffSourceId: readFirstString(
+        metadataSources,
+        "parentContextHandoffSourceId"
+      ),
+      parentContextHandoffSourceQuestionId: readFirstString(
+        metadataSources,
+        "parentContextHandoffSourceQuestionId"
+      ),
+    },
     advisorOutputDisposition: readFirstString(
       metadataSources,
       "advisorOutputDisposition"

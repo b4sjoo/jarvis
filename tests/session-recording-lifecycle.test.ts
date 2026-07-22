@@ -314,6 +314,71 @@ test("late semantic shadow evidence stays joinable after trace export", async ()
   await manager.stop("test-complete");
 });
 
+test("compact trace summaries preserve task boundary and cross-domain evidence", async () => {
+  const native = new ControlledRecordingInvoke();
+  const manager = new SessionRecordingManager(undefined, native.invoke);
+  await manager.start(START_OPTIONS);
+  await settle();
+
+  manager.recordTrace(
+    buildCompletedTrace("boundary_trace", Date.now(), {
+      taskBoundaryLogicalQuestionUnitId: "logical_1",
+      taskBoundaryCandidateId: "boundary_1",
+      taskBoundaryCandidateState: "committed",
+      taskBoundaryCommitPolicy: "immediate",
+      taskBoundaryMutationDisposition: "commit-before-advisor",
+      taskBoundaryAuthoritySource: "accepted-transcript",
+      taskBoundarySourceTurnIds: ["turn_1", "turn_2"],
+      taskBoundaryCommittedBeforeAdvisor: true,
+      taskBoundaryCommittedParentId: "parent_new",
+      taskBoundarySurvivedAdvisorCancellation: true,
+      parentBeforeId: "parent_old",
+      parentBeforeType: "general-system-design",
+      parentAfterId: "parent_new",
+      parentAfterType: "ai-ml-system-design",
+      crossDomainTransitionKind: "linked-parent-extension",
+      crossDomainTransitionReason: "explicit-same-product-ai-ml-extension",
+      crossDomainPreviousQuestionType: "general-system-design",
+      crossDomainNextQuestionType: "ai-ml-system-design",
+      crossDomainSharedDomainTokens: ["food"],
+      crossDomainTransitionEvidence: ["explicit-same-product-marker"],
+      parentContextHandoffKind: "bounded-source-backed",
+      parentContextHandoffSourceId: "parent_old",
+      parentContextHandoffSourceQuestionId: "question_new",
+    }),
+    "manual"
+  );
+  await settle();
+
+  const summaryWrite = native.calls.find(
+    (call) =>
+      call.command === "write_meeting_session_recording_text" &&
+      stringArg(call, "relativePath") === "traces/boundary_trace/summary.json"
+  );
+  assert.ok(summaryWrite);
+  const summary = parsePayload(summaryWrite);
+  assert.equal(summary.version, 5);
+  assert.deepEqual(
+    (summary.taskBoundary as Record<string, unknown>).sourceTurnIds,
+    ["turn_1", "turn_2"]
+  );
+  assert.equal(
+    (summary.taskBoundary as Record<string, unknown>).committedBeforeAdvisor,
+    true
+  );
+  assert.equal(
+    (summary.crossDomainTransition as Record<string, unknown>).kind,
+    "linked-parent-extension"
+  );
+  assert.equal(
+    (summary.crossDomainTransition as Record<string, unknown>)
+      .parentContextHandoffKind,
+    "bounded-source-backed"
+  );
+
+  await manager.stop("test-complete");
+});
+
 const START_OPTIONS = {
   settings: {
     codingModel: {
