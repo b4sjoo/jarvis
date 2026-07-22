@@ -15,6 +15,7 @@ export interface LogicalQuestionSource {
 
 export interface LogicalQuestionUnit {
   id: string;
+  revision: number;
   sessionId: string;
   runtimeEpoch: number;
   currentTurnId: string;
@@ -67,6 +68,7 @@ export function composeLogicalQuestionUnit(
 
   return {
     id: shouldExtend ? previous!.id : createMeetingId("logical_question"),
+    revision: shouldExtend ? previous!.revision + 1 : 1,
     sessionId: input.sessionId,
     runtimeEpoch: input.runtimeEpoch,
     currentTurnId: input.currentTurn.id,
@@ -98,6 +100,7 @@ export function formatLogicalQuestionUnitForTrace(
   if (!unit) return {};
   return {
     logicalQuestionUnitId: unit.id,
+    logicalQuestionUnitRevision: unit.revision,
     logicalQuestionCurrentTurnId: unit.currentTurnId,
     logicalQuestionSourceTurnIds: unit.sourceTurnIds,
     logicalQuestionChars: unit.normalizedText.length,

@@ -45,6 +45,7 @@ function logicalQuestion(
 ): LogicalQuestionUnit {
   return {
     id: `logical-${turnId}`,
+    revision: 1,
     sessionId: manager.getState().sessionId,
     runtimeEpoch,
     currentTurnId: turnId,
@@ -154,6 +155,7 @@ test("the linked handoff carries source facts but excludes old QPS and answers",
   transcriptTurns.forEach((turn) => manager.addTranscriptTurn(turn));
   const logicalQuestion: LogicalQuestionUnit = {
     id: "logical-ai",
+    revision: 1,
     sessionId: manager.getState().sessionId,
     runtimeEpoch: 1,
     currentTurnId: "turn-ai",

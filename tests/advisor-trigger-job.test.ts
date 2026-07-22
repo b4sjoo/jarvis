@@ -143,6 +143,7 @@ test("emits inherited question lineage for answer-preserving actions", () => {
 test("freezes and traces the bounded logical question owned by a job", () => {
   const logicalQuestionUnit = {
     id: "logical-question-a",
+    revision: 2,
     sessionId: "session-a",
     runtimeEpoch: 1,
     currentTurnId: "turn-b",

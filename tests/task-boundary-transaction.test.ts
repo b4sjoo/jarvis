@@ -21,6 +21,7 @@ function logicalQuestion(
 ): LogicalQuestionUnit {
   return {
     id: "logical-question-a",
+    revision: 2,
     sessionId: "session-a",
     runtimeEpoch: 3,
     currentTurnId: "turn-b",

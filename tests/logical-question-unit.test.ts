@@ -71,6 +71,9 @@ test("composes a bounded coding question with adjacent constraints", () => {
     "turn_language",
     "turn_complexity",
   ]);
+  assert.equal(initial.revision, 1);
+  assert.equal(withLanguage.revision, 2);
+  assert.equal(withComplexity.revision, 3);
   assert.match(withComplexity.normalizedText, /every text file/);
   assert.match(withComplexity.normalizedText, /without os\.walk/);
   assert.match(withComplexity.normalizedText, /time complexity/);
@@ -95,6 +98,7 @@ test("starts a new unit for an independent question or explicit switch", () => {
   });
 
   assert.notEqual(next.id, previous.id);
+  assert.equal(next.revision, 1);
   assert.deepEqual(next.sourceTurnIds, ["turn_new"]);
   assert.equal(next.boundaryReason, "explicit-task-switch");
 });
