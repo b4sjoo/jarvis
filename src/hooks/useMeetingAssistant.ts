@@ -85,6 +85,7 @@ import {
   SpeechCorrection,
   SpeechCorrectionRule,
   TaskAskFrame,
+  TaskBoundaryCandidate,
   TaskTopicDomain,
   TraceHumanEvaluation,
   TranscriptTurn,
@@ -154,13 +155,18 @@ import {
   authorizeRuntimeCommit,
   authorizeAdvisorTaskMutation,
   buildRuntimeCommitSnapshot,
+  buildCommittedTaskBoundaryParent,
+  commitTaskBoundaryCandidate,
+  createTaskBoundaryCandidate,
   createRuntimeCommitToken,
   decideAdvisorPhaseMutation,
   decideAdvisorTaskMutation,
   formatAdvisorTriggerJobForTrace,
   formatRuntimeCommitAuthorizationForTrace,
+  formatTaskBoundaryCandidateForTrace,
   rebaseRuntimeCommitToken,
   rebaseRuntimeCommitTokenAfterOwnedParentMutation,
+  expireTaskBoundaryCandidate,
   canQuestionTypeDecisionOverrideParent,
   decideAdvisorTurnIntent,
   decideSentenceCompletion,
@@ -177,6 +183,8 @@ import {
   normalizeQuestionTypeAlias,
   readInterviewBriefType,
   resolveTaskTaxonomyAuthority,
+  supersedeTaskBoundaryCandidate,
+  taskBoundarySurvivesAdvisorOutcome,
   toHumanEvalQuestionType,
   toMemoryUseCaseForQuestionType,
   type QuestionTypeInferenceDecision,
@@ -1151,6 +1159,9 @@ export function useMeetingAssistant() {
     undefined
   );
   const cancelledAdvisorTurnIdsRef = useRef(new Set<string>());
+  const taskBoundaryCandidateRef = useRef<TaskBoundaryCandidate | undefined>(
+    undefined
+  );
   const sessionRecordingManagerRef = useRef<SessionRecordingManager | null>(
     null
   );
@@ -1498,6 +1509,7 @@ export function useMeetingAssistant() {
     adjacentQuestionScopeRef.current = null;
     logicalQuestionUnitRef.current = undefined;
     cancelledAdvisorTurnIdsRef.current.clear();
+    taskBoundaryCandidateRef.current = undefined;
     manualCorrectionOperationCoordinatorRef.current.reset();
     return {
       runtimeInvalidationReason: reason,
@@ -1590,14 +1602,29 @@ export function useMeetingAssistant() {
       ) {
         cancelledAdvisorTurnIdsRef.current.add(job.triggerTurnId);
       }
+      const boundaryCandidate = taskBoundaryCandidateRef.current;
+      const boundaryMetadata =
+        boundaryCandidate?.logicalQuestionUnitId ===
+        job.logicalQuestionUnit?.id
+          ? formatTaskBoundaryCandidateForTrace(boundaryCandidate, {
+              survivedAdvisorCancellation:
+                taskBoundarySurvivesAdvisorOutcome(
+                  boundaryCandidate,
+                  "cancelled"
+                ),
+            })
+          : {};
       finishRunningAdvisorJobTrace(
         job,
         "cancelled",
-        formatAdvisorTriggerJobForTrace(job, resolvedOutcome, {
-          cancellationReason: reason,
-          commitAuthorized: false,
-          commitAuthorizationReason: reason,
-        }),
+        {
+          ...formatAdvisorTriggerJobForTrace(job, resolvedOutcome, {
+            cancellationReason: reason,
+            commitAuthorized: false,
+            commitAuthorizationReason: reason,
+          }),
+          ...boundaryMetadata,
+        },
         reason
       );
     },
@@ -3427,7 +3454,7 @@ export function useMeetingAssistant() {
         query: buildFocusedAdvisorTaskQuery(promptContext, latestTurn.text),
       };
     }
-    const activeMeetingTaskId = getAdvisorActiveTaskId(promptContext);
+    let activeMeetingTaskId = getAdvisorActiveTaskId(promptContext);
     const questionLineage = createAuthorizedQuestionLineage({
       traceId,
       triggerTurnId: advisorJob.triggerTurnId ?? latestTurn?.id,
@@ -3439,6 +3466,61 @@ export function useMeetingAssistant() {
       executionAuthorized: executionAuthorization.authorized,
       inherited: advisorJob.questionLineage,
     });
+    const taskBoundaryAuthoritySource = options.manualQuestionTypeCorrection
+      ? "manual-correction"
+      : advisorTaskSignals.openingRoute
+        ? "opening-route"
+        : advisorTaskSignals.source === "semantic-unknown-rescue"
+          ? "semantic-unknown-rescue"
+          : "accepted-transcript";
+    let taskBoundaryCandidate = createTaskBoundaryCandidate({
+      logicalQuestionUnit: advisorJob.logicalQuestionUnit,
+      proposedQuestionType: advisorTaskSignals.questionType,
+      proposedRelation: advisorTaskSignals.taskRelation,
+      authoritySource: taskBoundaryAuthoritySource,
+      confidence: advisorTaskSignals.openingRoute
+        ? 1
+        : advisorTaskSignals.questionTypeDecision?.confidence,
+      questionComplete:
+        Boolean(options.manualQuestionTypeCorrection) ||
+        Boolean(advisorTaskSignals.openingRoute) ||
+        Boolean(
+          inferredTurnIntentDecision?.executionAuthorized &&
+            inferredTurnIntentDecision.intent !== "incomplete" &&
+            inferredTurnIntentDecision.intent !== "unknown"
+        ),
+      mutationAuthorized: taskMutationAuthorization.authorized,
+      commitParent:
+        advisorTaskMutationDecision.commitParent &&
+        advisorTaskSignals.openingRoute?.commitParent !== false,
+    });
+    if (
+      taskBoundaryCandidate &&
+      (taskBoundaryCandidate.mutationDisposition ===
+        "commit-before-advisor" ||
+        taskBoundaryCandidate.mutationDisposition ===
+          "pending-incomplete-question" ||
+        taskBoundaryCandidate.mutationDisposition === "pending-low-authority")
+    ) {
+      const previousCandidate = expireTaskBoundaryCandidate(
+        taskBoundaryCandidateRef.current
+      );
+      if (
+        previousCandidate?.state === "pending" &&
+        previousCandidate.id !== taskBoundaryCandidate.id
+      ) {
+        const supersededCandidate = supersedeTaskBoundaryCandidate(
+          previousCandidate
+        );
+        if (traceId) {
+          traceStoreRef.current.updateMetadata(traceId, {
+            supersededTaskBoundaryCandidateId: supersededCandidate.id,
+            supersededTaskBoundaryCandidateState: supersededCandidate.state,
+          });
+        }
+      }
+      taskBoundaryCandidateRef.current = taskBoundaryCandidate;
+    }
     const questionTypeTraceMetadata =
       formatAdvisorQuestionTypeDecisionForTrace(advisorTaskSignals);
     const semanticEnforcementMetadata = {
@@ -3492,6 +3574,14 @@ export function useMeetingAssistant() {
         advisorExecutionBypassed: executionAuthorization.bypassed,
         ...formatQuestionLineageForTrace(questionLineage),
         ...formatLogicalQuestionUnitForTrace(advisorJob.logicalQuestionUnit),
+        ...formatTaskBoundaryCandidateForTrace(taskBoundaryCandidate, {
+          parentBeforeId:
+            originalPromptContext.activeMeetingTask?.parent.id ??
+            originalPromptContext.activeInterviewTask?.id,
+          parentBeforeType:
+            originalPromptContext.activeMeetingTask?.parent.questionType ??
+            originalPromptContext.activeInterviewTask?.stableKind,
+        }),
         provisionalQuestionEligible:
           questionLineage?.identityState === "provisional",
         provisionalQuestionEligibilityReason: questionLineage
@@ -3585,23 +3675,6 @@ export function useMeetingAssistant() {
       });
     }
 
-    if (!advisorModelRoute.provider) {
-      releaseAdvisorJob(advisorJob, "error", {
-        commitAuthorized: false,
-        commitAuthorizationReason: "missing-ai-provider",
-      });
-      if (traceId) {
-        traceStoreRef.current.finishTrace(traceId, "error", MISSING_AI_MESSAGE);
-      }
-      setState((previous) => ({
-        ...previous,
-        status: activeRef.current ? "listening" : previous.status,
-        partialSuggestion: "",
-        error: MISSING_AI_MESSAGE,
-      }));
-      return;
-    }
-
     const returnStatus = state.status;
     const requestId = `advisor_${mode}_${Date.now()}`;
     const responseConfig = state.settings.response;
@@ -3622,7 +3695,9 @@ export function useMeetingAssistant() {
     const advisorTopicDomain = advisorTaskSignals.topicDomain;
     const advisorProjectAnchor =
       advisorTaskSignals.projectAnchor ??
-      getAdvisorActiveProjectAnchor(promptContext);
+      (advisorTaskSignals.taskRelation === "new-parent"
+        ? undefined
+        : getAdvisorActiveProjectAnchor(promptContext));
     const advisorPlaybook =
       advisorTaskSignals.openingRoute?.commitParent === false
         ? undefined
@@ -3658,21 +3733,28 @@ export function useMeetingAssistant() {
         ? getAdvisorActiveQuestionType(promptContext)
         : advisorQuestionType
     );
-    const preservedPlaybookPhase =
-      promptContext.activeMeetingTask?.parent.playbookPhase ??
-      promptContext.activeInterviewTask?.playbookPhase ??
-      advisorPlaybook?.phase ??
-      "follow_up";
+    const startsNewParentForPhase =
+      advisorTaskSignals.taskRelation === "new-parent" &&
+      advisorTaskMutationDecision.commitParent &&
+      taskMutationAuthorization.authorized;
+    const preservedPlaybookPhase = startsNewParentForPhase
+      ? advisorPlaybook?.phase ?? "follow_up"
+      : promptContext.activeMeetingTask?.parent.playbookPhase ??
+        promptContext.activeInterviewTask?.playbookPhase ??
+        advisorPlaybook?.phase ??
+        "follow_up";
     const automaticPlaybookPhaseDecision = decidePlaybookPhaseProgression({
       questionType: advisorPhaseQuestionType,
       playbookId: advisorPlaybook?.id,
-      currentPhase:
-        promptContext.activeMeetingTask?.parent.playbookPhase ??
-        promptContext.activeInterviewTask?.playbookPhase ??
-        advisorPlaybook?.phase,
-      phaseProgress:
-        promptContext.activeMeetingTask?.parent.phaseProgress ??
-        promptContext.activeInterviewTask?.phaseProgress,
+      currentPhase: startsNewParentForPhase
+        ? advisorPlaybook?.phase
+        : promptContext.activeMeetingTask?.parent.playbookPhase ??
+          promptContext.activeInterviewTask?.playbookPhase ??
+          advisorPlaybook?.phase,
+      phaseProgress: startsNewParentForPhase
+        ? undefined
+        : promptContext.activeMeetingTask?.parent.phaseProgress ??
+          promptContext.activeInterviewTask?.phaseProgress,
       latestTurnText: latestTurn?.text,
       currentQuestion: advisorTaskSignals.query,
       currentAnswer: options.currentSuggestion,
@@ -3763,6 +3845,117 @@ export function useMeetingAssistant() {
       advisorPlaybook ?? promptContext.activeMeetingTask?.parent.playbook,
       playbookPhaseDecision.phase
     );
+    let taskBoundaryCommittedBeforeAdvisor = false;
+    if (
+      taskBoundaryCandidate?.commitPolicy === "immediate" &&
+      advisorJob.logicalQuestionUnit
+    ) {
+      const preBoundaryDecision = readCommitDecision();
+      if (preBoundaryDecision.authorized) {
+        const contextStateBeforeBoundary = contextManagerRef.current.getState();
+        const parentBeforeId = contextStateBeforeBoundary.activeMeetingTask?.parent.id;
+        const parentBeforeType =
+          contextStateBeforeBoundary.activeMeetingTask?.parent.questionType;
+        const boundaryParent = buildCommittedTaskBoundaryParent({
+          candidate: taskBoundaryCandidate,
+          logicalQuestionUnit: advisorJob.logicalQuestionUnit,
+          source: resolveAdvisorTaskEvidenceSource({
+            triggerSource: advisorJob.source,
+            hasActiveScreenTask: Boolean(promptContext.activeScreenTask),
+          }),
+          questionInstanceId: questionLineage?.questionInstanceId,
+          playbook: advisorRuntimePlaybook,
+          phaseDecision: playbookPhaseDecision,
+          expiresAt: getActiveScreenTaskExpiresAt(state.settings),
+        });
+
+        if (boundaryParent) {
+          contextManagerRef.current.setActiveMeetingTaskState({
+            activeScreenTask:
+              advisorScreenScopeDecision.action === "clear"
+                ? null
+                : contextStateBeforeBoundary.activeScreenTask,
+            activeInterviewTask: boundaryParent,
+          });
+          const boundaryContext =
+            contextManagerRef.current.buildAdvisorPromptContext();
+          promptContext = { ...promptContext, ...boundaryContext };
+          advisorTaskSignals = {
+            ...advisorTaskSignals,
+            query: buildFocusedAdvisorTaskQuery(
+              promptContext,
+              advisorJob.logicalQuestionUnit.normalizedText
+            ),
+          };
+          activeMeetingTaskId = getAdvisorActiveTaskId(promptContext);
+          effectiveRuntimeCommitToken = rebaseRuntimeCommitToken({
+            token: effectiveRuntimeCommitToken,
+            snapshot: readRuntimeCommitSnapshot(),
+          });
+          taskBoundaryCandidate = commitTaskBoundaryCandidate(
+            taskBoundaryCandidate,
+            boundaryParent.id
+          );
+          taskBoundaryCandidateRef.current = taskBoundaryCandidate;
+          taskBoundaryCommittedBeforeAdvisor = true;
+          const committedContext = contextManagerRef.current.getState();
+          setState((previous) => ({
+            ...previous,
+            activeScreenTask: committedContext.activeScreenTask,
+            activeInterviewTask: committedContext.activeInterviewTask,
+            activeMeetingTask: committedContext.activeMeetingTask,
+          }));
+          if (traceId) {
+            traceStoreRef.current.updateMetadata(traceId, {
+              ...formatTaskBoundaryCandidateForTrace(taskBoundaryCandidate, {
+                committedBeforeAdvisor: true,
+                parentBeforeId,
+                parentBeforeType,
+                parentAfterId: boundaryParent.id,
+                parentAfterType: boundaryParent.stableKind,
+              }),
+              runtimeCommitTokenRebased: true,
+              runtimeCommitTokenRebaseReason:
+                "task-boundary-committed-before-advisor",
+            });
+            if (committedContext.activeMeetingTask) {
+              sessionRecordingManagerRef.current?.recordActiveMeetingTaskSnapshot(
+                committedContext.activeMeetingTask,
+                traceId
+              );
+            }
+          }
+        }
+      }
+    }
+
+    if (!advisorModelRoute.provider) {
+      const boundaryErrorMetadata = formatTaskBoundaryCandidateForTrace(
+        taskBoundaryCandidate,
+        {
+          committedBeforeAdvisor: taskBoundaryCommittedBeforeAdvisor,
+          survivedAdvisorCancellation: taskBoundarySurvivesAdvisorOutcome(
+            taskBoundaryCandidate,
+            "error"
+          ),
+        }
+      );
+      releaseAdvisorJob(advisorJob, "error", {
+        commitAuthorized: false,
+        commitAuthorizationReason: "missing-ai-provider",
+      });
+      if (traceId) {
+        traceStoreRef.current.updateMetadata(traceId, boundaryErrorMetadata);
+        traceStoreRef.current.finishTrace(traceId, "error", MISSING_AI_MESSAGE);
+      }
+      setState((previous) => ({
+        ...previous,
+        status: activeRef.current ? "listening" : previous.status,
+        partialSuggestion: "",
+        error: MISSING_AI_MESSAGE,
+      }));
+      return;
+    }
     if (traceId) {
       const playbookMetadata =
         formatInterviewPlaybookForTrace(advisorRuntimePlaybook);
@@ -4139,16 +4332,20 @@ export function useMeetingAssistant() {
       const shouldCommitAdvisorParent =
         advisorTaskMutationDecision.commitParent &&
         advisorTaskSignals.openingRoute?.commitParent !== false;
+      const continuityRelation: InterviewTaskRelation =
+        taskBoundaryCommittedBeforeAdvisor
+          ? "followup-parent"
+          : advisorTaskSignals.taskRelation;
       const continuity = shouldCommitAdvisorParent
         ? updateInterviewTaskContinuityForAnswer({
             existingTask: existingInterviewTask,
             source: advisorEvidenceSource,
             questionType:
-              advisorTaskSignals.taskRelation === "followup-parent" &&
+              continuityRelation === "followup-parent" &&
               existingInterviewTask
                 ? existingInterviewTask.stableKind
                 : advisorQuestionType,
-            relation: advisorTaskSignals.taskRelation,
+            relation: continuityRelation,
             subtaskIntent: advisorTaskSignals.subtaskIntent,
             question:
               advisorEvidenceSource === "screen"
@@ -4272,6 +4469,24 @@ export function useMeetingAssistant() {
             }
           ),
           ...formatPlaybookPhaseDecisionForTrace(playbookPhaseDecision),
+          ...formatTaskBoundaryCandidateForTrace(taskBoundaryCandidate, {
+            committedBeforeAdvisor: taskBoundaryCommittedBeforeAdvisor,
+            parentBeforeId:
+              originalPromptContext.activeMeetingTask?.parent.id ??
+              originalPromptContext.activeInterviewTask?.id,
+            parentBeforeType:
+              originalPromptContext.activeMeetingTask?.parent.questionType ??
+              originalPromptContext.activeInterviewTask?.stableKind,
+            parentAfterId: contextState.activeMeetingTask?.parent.id,
+            parentAfterType:
+              contextState.activeMeetingTask?.parent.questionType,
+            survivedAdvisorCancellation:
+              !finalContent.trim() &&
+              taskBoundarySurvivesAdvisorOutcome(
+                taskBoundaryCandidate,
+                "empty-output"
+              ),
+          }),
           ...getActiveMeetingTaskTraceMetadata(contextState.activeMeetingTask),
           activeInterviewParentId: contextState.activeInterviewTask?.id,
           activeInterviewParentKind: contextState.activeInterviewTask?.stableKind,
@@ -4282,7 +4497,8 @@ export function useMeetingAssistant() {
             contextState.activeInterviewTask?.child?.questionType,
           activeInterviewChildIntent:
             contextState.activeInterviewTask?.child?.intent,
-          startedNewInterviewParent: continuity.startedNewParent,
+          startedNewInterviewParent:
+            continuity.startedNewParent || taskBoundaryCommittedBeforeAdvisor,
         });
       }
 
@@ -4343,7 +4559,8 @@ export function useMeetingAssistant() {
       setState((previous) => ({
         ...previous,
         ...withLatestReliableSuggestion(previous, nextSuggestion, {
-          clearPrevious: continuity.startedNewParent,
+          clearPrevious:
+            continuity.startedNewParent || taskBoundaryCommittedBeforeAdvisor,
         }),
         status: activeRef.current
           ? "listening"
@@ -4372,14 +4589,27 @@ export function useMeetingAssistant() {
     } catch (error) {
       if (error instanceof Error && error.name === "AbortError") {
         const commitDecision = readCommitDecision();
+        const boundaryErrorMetadata = formatTaskBoundaryCandidateForTrace(
+          taskBoundaryCandidate,
+          {
+            committedBeforeAdvisor: taskBoundaryCommittedBeforeAdvisor,
+            survivedAdvisorCancellation: taskBoundarySurvivesAdvisorOutcome(
+              taskBoundaryCandidate,
+              "cancelled"
+            ),
+          }
+        );
         finishRunningAdvisorJobTrace(
           advisorJob,
           "cancelled",
-          formatAdvisorTriggerJobForTrace(advisorJob, "error", {
-            cancellationReason: "provider-request-aborted",
-            commitAuthorized: false,
-            commitAuthorizationReason: commitDecision.reason,
-          }),
+          {
+            ...formatAdvisorTriggerJobForTrace(advisorJob, "error", {
+              cancellationReason: "provider-request-aborted",
+              commitAuthorized: false,
+              commitAuthorizationReason: commitDecision.reason,
+            }),
+            ...boundaryErrorMetadata,
+          },
           error
         );
         releaseAdvisorJob(advisorJob, "error", {
@@ -4398,13 +4628,26 @@ export function useMeetingAssistant() {
       }
 
       const commitDecision = readCommitDecision();
+      const boundaryErrorMetadata = formatTaskBoundaryCandidateForTrace(
+        taskBoundaryCandidate,
+        {
+          committedBeforeAdvisor: taskBoundaryCommittedBeforeAdvisor,
+          survivedAdvisorCancellation: taskBoundarySurvivesAdvisorOutcome(
+            taskBoundaryCandidate,
+            "error"
+          ),
+        }
+      );
       finishRunningAdvisorJobTrace(
         advisorJob,
         "error",
-        formatAdvisorTriggerJobForTrace(advisorJob, "error", {
-          commitAuthorized: false,
-          commitAuthorizationReason: commitDecision.reason,
-        }),
+        {
+          ...formatAdvisorTriggerJobForTrace(advisorJob, "error", {
+            commitAuthorized: false,
+            commitAuthorizationReason: commitDecision.reason,
+          }),
+          ...boundaryErrorMetadata,
+        },
         error
       );
       releaseAdvisorJob(advisorJob, "error", {
@@ -5159,6 +5402,10 @@ export function useMeetingAssistant() {
       const cancelledAdvisorTurnIds = new Set(
         cancelledAdvisorTurnIdsRef.current
       );
+      const pendingBoundary = expireTaskBoundaryCandidate(
+        taskBoundaryCandidateRef.current
+      );
+      taskBoundaryCandidateRef.current = pendingBoundary;
       const activeTriggerTurnId = activeAdvisorJobRef.current?.triggerTurnId;
       if (activeTriggerTurnId && activeTriggerTurnId !== turn.id) {
         cancelledAdvisorTurnIds.add(activeTriggerTurnId);
@@ -5170,6 +5417,10 @@ export function useMeetingAssistant() {
         intentDecision,
         previousUnit: previous,
         cancelledAdvisorTurnIds,
+        pendingBoundarySourceTurnIds:
+          pendingBoundary?.state === "pending"
+            ? pendingBoundary.sourceTurnIds
+            : undefined,
         relatedSourceTurnIds: turn.relatedTurnIds,
         interveningTurns,
         explicitTaskSwitch,

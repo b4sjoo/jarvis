@@ -44,6 +44,7 @@ export * from "./session-task-review-index";
 export * from "./speech-bias";
 export * from "./suggestion-task";
 export * from "./task-taxonomy";
+export * from "./task-boundary-transaction";
 export * from "./trace";
 export * from "./transcription.service";
 export * from "./transcript-fusion";

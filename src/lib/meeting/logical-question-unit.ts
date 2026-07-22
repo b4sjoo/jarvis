@@ -35,6 +35,7 @@ export interface ComposeLogicalQuestionUnitInput {
   intentDecision?: AdvisorTurnIntentDecision;
   previousUnit?: LogicalQuestionUnit;
   cancelledAdvisorTurnIds?: ReadonlySet<string>;
+  pendingBoundarySourceTurnIds?: string[];
   relatedSourceTurnIds?: string[];
   interveningTurns?: TranscriptTurn[];
   explicitTaskSwitch?: boolean;
@@ -165,6 +166,13 @@ function resolveCompositionBoundary(
     intent?.intent !== "direct-question"
   ) {
     reasons.push("replaced-advisor-question");
+  }
+  if (
+    input.pendingBoundarySourceTurnIds?.some((turnId) =>
+      previous.sourceTurnIds.includes(turnId)
+    )
+  ) {
+    reasons.push("pending-task-boundary-continuation");
   }
 
   if (!reasons.length) {
