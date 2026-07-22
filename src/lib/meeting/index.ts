@@ -34,6 +34,7 @@ export * from "./screen-task-scope";
 export * from "./screen-task-answer";
 export * from "./sentence-completion-buffer";
 export * from "./semantic-taxonomy-resolver";
+export * from "./semantic-taxonomy-reflection";
 export * from "./semantic-taxonomy-runtime";
 export * from "./semantic-taxonomy-runtime.protocol";
 export * from "./semantic-taxonomy-shadow";

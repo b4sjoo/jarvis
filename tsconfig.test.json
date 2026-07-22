@@ -25,6 +25,7 @@
     "src/lib/meeting/semantic-taxonomy-prototypes.ts",
     "src/lib/meeting/semantic-taxonomy-resolver.ts",
     "src/lib/meeting/semantic-taxonomy-shadow.ts",
+    "src/lib/meeting/semantic-taxonomy-reflection.ts",
     "model-manifests/*.json"
   ]
 }
