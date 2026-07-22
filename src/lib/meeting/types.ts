@@ -1072,6 +1072,20 @@ export interface MemoryRetrievalEvaluationSnapshotResolution {
   snapshot?: MemoryRetrievalEvaluationSnapshot;
 }
 
+export type TaxonomyAdjudicationRepairDisposition =
+  | "automatic-repair"
+  | "suggest-only"
+  | "abstain";
+
+export interface TaxonomyAdjudicationHumanEvaluation {
+  needed?: boolean;
+  typeCorrect?: boolean;
+  relationCorrect?: boolean;
+  repairDisposition?: TaxonomyAdjudicationRepairDisposition;
+  contextPreserved?: boolean;
+  timely?: boolean;
+}
+
 export interface QuestionHumanEvaluation {
   id: string;
   sessionId?: string;
@@ -1116,6 +1130,7 @@ export interface QuestionHumanEvaluation {
   diagramOverlay: HumanEvaluationVerdictBlock;
   guardrail: HumanEvaluationVerdictBlock;
   answer: HumanEvaluationVerdictBlock;
+  taxonomyAdjudication?: TaxonomyAdjudicationHumanEvaluation;
   memoryRetrievalSnapshot?: MemoryRetrievalEvaluationSnapshot;
   memoryEntryLabels: MemoryEntryEvaluationLabel[];
   missingExpectedMemory: MissingExpectedMemoryLabel[];

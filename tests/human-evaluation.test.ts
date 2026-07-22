@@ -187,6 +187,46 @@ test("preserves a legacy parent-scoped record when its trace is relabeled", () =
   assert.equal(updated[0].answer.verdict, "ok");
 });
 
+test("merges question-level LLM taxonomy adjudication labels", () => {
+  const first = upsertQuestionHumanEvaluation(
+    [],
+    {
+      traceId: "trace_adjudication",
+      traceKind: "voice",
+      questionId: "question_adjudication",
+    },
+    {
+      taxonomyAdjudication: {
+        needed: true,
+        typeCorrect: false,
+      },
+    }
+  );
+  const updated = upsertQuestionHumanEvaluation(
+    first,
+    {
+      traceId: "trace_adjudication",
+      traceKind: "voice",
+      questionId: "question_adjudication",
+    },
+    {
+      taxonomyAdjudication: {
+        relationCorrect: true,
+        repairDisposition: "suggest-only",
+        timely: false,
+      },
+    }
+  );
+
+  assert.deepEqual(updated[0].taxonomyAdjudication, {
+    needed: true,
+    typeCorrect: false,
+    relationCorrect: true,
+    repairDisposition: "suggest-only",
+    timely: false,
+  });
+});
+
 test("persists trace-bound memory evidence with a question evaluation", () => {
   const evaluations = upsertQuestionHumanEvaluation(
     [],

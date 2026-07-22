@@ -3898,6 +3898,17 @@ const TraceHumanEvaluationPanel = ({
     setMissingMemoryNote("");
   };
 
+  const updateTaxonomyAdjudicationEvaluation = (
+    patch: NonNullable<QuestionHumanEvaluation["taxonomyAdjudication"]>
+  ) => {
+    onUpdateQuestion({
+      taxonomyAdjudication: {
+        ...questionEvaluation?.taxonomyAdjudication,
+        ...patch,
+      },
+    });
+  };
+
   return (
     <div className="space-y-3">
       {taxonomyAdjudicationDisposition ? (
@@ -3936,6 +3947,96 @@ const TraceHumanEvaluationPanel = ({
                 <span className="font-mono">{detectedPlaybookPhase}</span>
               </>
             ) : null}
+          </div>
+        ) : null}
+        {taxonomyAdjudicationDisposition ? (
+          <div className="rounded-sm border border-border/60 p-2">
+            <div className="mb-2 text-[10px] font-medium uppercase text-muted-foreground">
+              LLM adjudication labels
+            </div>
+            <div className="space-y-2">
+              <TaxonomyAdjudicationBooleanLabel
+                label="Needed"
+                positiveLabel="Needed"
+                negativeLabel="Not needed"
+                value={questionEvaluation?.taxonomyAdjudication?.needed}
+                onChange={(needed) =>
+                  updateTaxonomyAdjudicationEvaluation({ needed })
+                }
+              />
+              <TaxonomyAdjudicationBooleanLabel
+                label="Type"
+                positiveLabel="Correct"
+                negativeLabel="Wrong"
+                value={questionEvaluation?.taxonomyAdjudication?.typeCorrect}
+                onChange={(typeCorrect) =>
+                  updateTaxonomyAdjudicationEvaluation({ typeCorrect })
+                }
+              />
+              <TaxonomyAdjudicationBooleanLabel
+                label="Relation"
+                positiveLabel="Correct"
+                negativeLabel="Wrong"
+                value={questionEvaluation?.taxonomyAdjudication?.relationCorrect}
+                onChange={(relationCorrect) =>
+                  updateTaxonomyAdjudicationEvaluation({ relationCorrect })
+                }
+              />
+              <div>
+                <div className="mb-1 text-[10px] text-muted-foreground">
+                  Repair policy
+                </div>
+                <div className="flex flex-wrap gap-1">
+                  {[
+                    ["automatic-repair", "Auto repair"],
+                    ["suggest-only", "Suggest"],
+                    ["abstain", "Abstain"],
+                  ].map(([value, label]) => (
+                    <Button
+                      key={value}
+                      size="sm"
+                      variant={
+                        questionEvaluation?.taxonomyAdjudication
+                          ?.repairDisposition === value
+                          ? "default"
+                          : "outline"
+                      }
+                      className="h-6 px-2 text-[10px]"
+                      onClick={() =>
+                        updateTaxonomyAdjudicationEvaluation({
+                          repairDisposition:
+                            value as NonNullable<
+                              QuestionHumanEvaluation["taxonomyAdjudication"]
+                            >["repairDisposition"],
+                        })
+                      }
+                    >
+                      {label}
+                    </Button>
+                  ))}
+                </div>
+              </div>
+              <TaxonomyAdjudicationBooleanLabel
+                label="Context"
+                positiveLabel="Preserved"
+                negativeLabel="Lost"
+                value={
+                  questionEvaluation?.taxonomyAdjudication?.contextPreserved
+                }
+                onChange={(contextPreserved) =>
+                  updateTaxonomyAdjudicationEvaluation({ contextPreserved })
+                }
+              />
+              <TaxonomyAdjudicationBooleanLabel
+                label="Timing"
+                positiveLabel="Early enough"
+                negativeLabel="Too late"
+                value={questionEvaluation?.taxonomyAdjudication?.timely}
+                onChange={(timely) =>
+                  updateTaxonomyAdjudicationEvaluation({ timely })
+                }
+              />
+            </div>
           </div>
         ) : null}
         {advisorTurnIntent ? (
@@ -4551,6 +4652,42 @@ const TraceHumanEvaluationPanel = ({
     </div>
   );
 };
+
+const TaxonomyAdjudicationBooleanLabel = ({
+  label,
+  positiveLabel,
+  negativeLabel,
+  value,
+  onChange,
+}: {
+  label: string;
+  positiveLabel: string;
+  negativeLabel: string;
+  value?: boolean;
+  onChange: (value: boolean) => void;
+}) => (
+  <div>
+    <div className="mb-1 text-[10px] text-muted-foreground">{label}</div>
+    <div className="flex flex-wrap gap-1">
+      <Button
+        size="sm"
+        variant={value === true ? "default" : "outline"}
+        className="h-6 px-2 text-[10px]"
+        onClick={() => onChange(true)}
+      >
+        {positiveLabel}
+      </Button>
+      <Button
+        size="sm"
+        variant={value === false ? "default" : "outline"}
+        className="h-6 px-2 text-[10px]"
+        onClick={() => onChange(false)}
+      >
+        {negativeLabel}
+      </Button>
+    </div>
+  </div>
+);
 
 const QuestionVerdictRow = ({
   label,

@@ -19,6 +19,8 @@ public/models/
 public/transformers-wasm/
 .tmp-semantic-taxonomy-vectors/
 .tmp-semantic-taxonomy-evaluation/
+.tmp-semantic-taxonomy-reflection/
+.tmp-taxonomy-adjudication-reflection/
 
 # Editor directories and files
 .vscode/*

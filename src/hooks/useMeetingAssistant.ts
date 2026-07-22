@@ -57,6 +57,7 @@ import {
   MeetingPrivacyMode,
   PersonalEvidenceGuardrailMode,
   SemanticTaxonomyMode,
+  SelectedProviderState,
   MeetingResponseActionMode,
   MeetingResponseConfig,
   ManualQuestionTypeCorrection,
@@ -5384,11 +5385,12 @@ export function useMeetingAssistant() {
       });
       const routeMetadata =
         formatTaxonomyAdjudicationModelRouteForTrace(modelRoute);
+      const taxonomyAdjudicationModelId =
+        readSelectedProviderModelId(modelRoute.selectedProvider);
       if (!modelRoute.provider) {
         const metadata = {
           ...baseMetadata,
           ...routeMetadata,
-          taxonomyAdjudicationEligible: false,
           taxonomyAdjudicationSkipReason: "provider-unavailable",
           taxonomyAdjudicationDisposition: "provider-unavailable",
         };
@@ -5452,6 +5454,7 @@ export function useMeetingAssistant() {
         taxonomyAdjudicationManualCorrectionRevision:
           lease.manualCorrectionRevision,
         taxonomyAdjudicationExpectedParentId: lease.expectedParentId,
+        taxonomyAdjudicationModelId,
         taxonomyAdjudicationDisposition: "scheduled",
       };
       traceStoreRef.current.updateMetadata(traceId, scheduledMetadata);
@@ -10348,6 +10351,14 @@ function readNumberFromTraceMetadata(
   return typeof value === "number" && Number.isFinite(value)
     ? value
     : undefined;
+}
+
+function readSelectedProviderModelId(provider: SelectedProviderState) {
+  for (const key of ["MODEL", "MODEL_NAME", "model", "modelName", "model_name"]) {
+    const value = provider.variables[key];
+    if (typeof value === "string" && value.trim()) return value.trim();
+  }
+  return undefined;
 }
 
 function getAdvisorActiveTaskId(context: AdvisorPromptContext) {

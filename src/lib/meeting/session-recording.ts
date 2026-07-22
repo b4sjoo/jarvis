@@ -242,6 +242,7 @@ export interface SessionCompactTraceSummary {
     unitId?: string;
     unitRevision?: number;
     providerId?: string;
+    modelId?: string;
     disposition?: string;
     staleReason?: string;
     candidateType?: string;
@@ -2322,6 +2323,10 @@ function buildTaxonomyAdjudicationTraceSummary(
     providerId: readFirstString(
       metadataSources,
       "taxonomyAdjudicationProviderId"
+    ),
+    modelId: readFirstString(
+      metadataSources,
+      "taxonomyAdjudicationModelId"
     ),
     disposition,
     staleReason: readFirstString(

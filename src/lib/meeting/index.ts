@@ -49,6 +49,7 @@ export * from "./task-boundary-transaction";
 export * from "./taxonomy-adjudication";
 export * from "./taxonomy-adjudication-request";
 export * from "./taxonomy-adjudication-runtime";
+export * from "./taxonomy-adjudication-reflection";
 export * from "./trace";
 export * from "./transcription.service";
 export * from "./transcript-fusion";

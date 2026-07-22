@@ -397,6 +397,10 @@ export function upsertQuestionHumanEvaluation(
     ),
     guardrail: mergeVerdictBlock(existing?.guardrail, patch.guardrail),
     answer: mergeVerdictBlock(existing?.answer, patch.answer),
+    taxonomyAdjudication: mergeTaxonomyAdjudicationEvaluation(
+      existing?.taxonomyAdjudication,
+      patch.taxonomyAdjudication
+    ),
     memoryRetrievalSnapshot:
       normalizeMemoryRetrievalEvaluationSnapshot(
         patch.memoryRetrievalSnapshot
@@ -627,6 +631,9 @@ function normalizeQuestionHumanEvaluation(
     diagramOverlay: normalizeVerdictBlock(candidate.diagramOverlay),
     guardrail: normalizeVerdictBlock(candidate.guardrail),
     answer: normalizeVerdictBlock(candidate.answer),
+    taxonomyAdjudication: normalizeTaxonomyAdjudicationEvaluation(
+      candidate.taxonomyAdjudication
+    ),
     memoryRetrievalSnapshot: normalizeMemoryRetrievalEvaluationSnapshot(
       candidate.memoryRetrievalSnapshot
     ),
@@ -640,6 +647,54 @@ function normalizeQuestionHumanEvaluation(
     updatedAt:
       typeof candidate.updatedAt === "number" ? candidate.updatedAt : Date.now(),
   };
+}
+
+function mergeTaxonomyAdjudicationEvaluation(
+  existing: QuestionHumanEvaluation["taxonomyAdjudication"],
+  patch: QuestionHumanEvaluation["taxonomyAdjudication"]
+) {
+  if (!existing && !patch) return undefined;
+  return {
+    ...existing,
+    ...patch,
+  };
+}
+
+function normalizeTaxonomyAdjudicationEvaluation(
+  value: unknown
+): QuestionHumanEvaluation["taxonomyAdjudication"] {
+  if (!value || typeof value !== "object") return undefined;
+  const candidate = value as Record<string, unknown>;
+  const repairDisposition: NonNullable<
+    QuestionHumanEvaluation["taxonomyAdjudication"]
+  >["repairDisposition"] =
+    candidate.repairDisposition === "automatic-repair" ||
+    candidate.repairDisposition === "suggest-only" ||
+    candidate.repairDisposition === "abstain"
+      ? candidate.repairDisposition
+      : undefined;
+  const normalized = {
+    needed:
+      typeof candidate.needed === "boolean" ? candidate.needed : undefined,
+    typeCorrect:
+      typeof candidate.typeCorrect === "boolean"
+        ? candidate.typeCorrect
+        : undefined,
+    relationCorrect:
+      typeof candidate.relationCorrect === "boolean"
+        ? candidate.relationCorrect
+        : undefined,
+    repairDisposition,
+    contextPreserved:
+      typeof candidate.contextPreserved === "boolean"
+        ? candidate.contextPreserved
+        : undefined,
+    timely:
+      typeof candidate.timely === "boolean" ? candidate.timely : undefined,
+  };
+  return Object.values(normalized).some((item) => item !== undefined)
+    ? normalized
+    : undefined;
 }
 
 function normalizeHumanEvalQuestionType(
