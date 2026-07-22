@@ -7,6 +7,8 @@ import type {
   SemanticTaxonomyDecision,
 } from "./semantic-taxonomy-resolver.js";
 import type { QuestionTypeInferenceDecision } from "./task-taxonomy.js";
+import type { CanonicalQuestionType } from "./task-taxonomy.js";
+import type { SemanticTaxonomyMode } from "./types.js";
 
 export const SEMANTIC_TAXONOMY_SHADOW_VERSION =
   "semantic-taxonomy-shadow-v1";
@@ -15,6 +17,70 @@ export interface SemanticTaxonomyShadowEligibility {
   eligible: boolean;
   reason: string;
   wordEquivalent: number;
+}
+
+export interface SemanticTaxonomyUnknownRescueDecision {
+  applied: boolean;
+  effectiveType: CanonicalQuestionType;
+  recommendedType?: CanonicalQuestionType;
+  reason: string;
+  parentMutationBlocked: boolean;
+}
+
+export function decideSemanticTaxonomyUnknownRescue({
+  mode,
+  lexicalType,
+  deterministicType,
+  recommendedType,
+  wouldRescue,
+  activeParentType,
+  hasManualCorrection,
+}: {
+  mode: SemanticTaxonomyMode;
+  lexicalType: CanonicalQuestionType;
+  deterministicType: CanonicalQuestionType;
+  recommendedType?: CanonicalQuestionType;
+  wouldRescue: boolean;
+  activeParentType?: CanonicalQuestionType;
+  hasManualCorrection: boolean;
+}): SemanticTaxonomyUnknownRescueDecision {
+  const baseline = {
+    applied: false,
+    effectiveType: lexicalType,
+    recommendedType,
+    parentMutationBlocked: false,
+  };
+  if (mode !== "enforcement") {
+    return { ...baseline, reason: "semantic-taxonomy-shadow-mode" };
+  }
+  if (hasManualCorrection) {
+    return { ...baseline, reason: "manual-correction-authoritative" };
+  }
+  if (lexicalType !== "unknown") {
+    return { ...baseline, reason: "concrete-lexical-type-authoritative" };
+  }
+  if (!activeParentType && deterministicType !== "unknown") {
+    return { ...baseline, reason: "deterministic-route-type-authoritative" };
+  }
+  if (!wouldRescue || !recommendedType || recommendedType === "unknown") {
+    return { ...baseline, reason: "no-calibrated-semantic-rescue" };
+  }
+  if (activeParentType && activeParentType !== recommendedType) {
+    return {
+      ...baseline,
+      reason: "semantic-parent-mutation-blocked",
+      parentMutationBlocked: true,
+    };
+  }
+  return {
+    applied: true,
+    effectiveType: recommendedType,
+    recommendedType,
+    reason: activeParentType
+      ? "semantic-confirms-compatible-active-parent"
+      : "semantic-rescued-lexical-unknown-without-parent",
+    parentMutationBlocked: false,
+  };
 }
 
 export function decideSemanticTaxonomyShadowEligibility({
@@ -52,6 +118,7 @@ export function formatSemanticTaxonomyShadowMetadata({
   embedding,
   semantic,
   hybrid,
+  mode = "shadow",
 }: {
   turnId: string;
   sessionId: string;
@@ -62,10 +129,11 @@ export function formatSemanticTaxonomyShadowMetadata({
   embedding?: SemanticTaxonomyEmbeddingResult;
   semantic?: SemanticTaxonomyDecision;
   hybrid?: HybridQuestionTypeDecision;
+  mode?: SemanticTaxonomyMode;
 }): Record<string, unknown> {
   return {
     semanticTaxonomyShadowVersion: SEMANTIC_TAXONOMY_SHADOW_VERSION,
-    semanticTaxonomyMode: "shadow",
+    semanticTaxonomyMode: mode,
     semanticTaxonomyTurnId: turnId,
     semanticTaxonomySessionId: sessionId,
     semanticTaxonomyRuntimeEpoch: runtimeEpoch,

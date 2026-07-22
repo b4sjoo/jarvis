@@ -55,6 +55,7 @@ import {
   InterviewSessionBrief,
   MeetingPrivacyMode,
   PersonalEvidenceGuardrailMode,
+  SemanticTaxonomyMode,
   MeetingResponseActionMode,
   MeetingResponseConfig,
   ManualQuestionTypeCorrection,
@@ -213,6 +214,7 @@ import {
   decideAdvisorScreenScope,
   decideScreenResultScope,
   decideSemanticTaxonomyShadowEligibility,
+  decideSemanticTaxonomyUnknownRescue,
   formatScreenScopeDecisionForTrace,
   formatSemanticTaxonomyShadowMetadata,
   resolveAdvisorRequestModeForScreenScope,
@@ -338,6 +340,7 @@ const INITIAL_STATE: MeetingAssistantState = {
     activeScreenTaskTimeoutMinutes: DEFAULT_ACTIVE_SCREEN_TASK_TIMEOUT_MINUTES,
     useMemory: true,
     personalEvidenceGuardrailMode: "enforcement",
+    semanticTaxonomyMode: "shadow",
     debugMode: false,
     microphoneContextEnabled: true,
     response: DEFAULT_MEETING_RESPONSE_CONFIG,
@@ -388,6 +391,9 @@ function readMeetingAssistantSettings(): MeetingAssistantSettings {
         isPersonalEvidenceGuardrailMode(parsed.personalEvidenceGuardrailMode)
           ? parsed.personalEvidenceGuardrailMode
           : DEFAULT_MEETING_ASSISTANT_SETTINGS.personalEvidenceGuardrailMode,
+      semanticTaxonomyMode: isSemanticTaxonomyMode(parsed.semanticTaxonomyMode)
+        ? parsed.semanticTaxonomyMode
+        : DEFAULT_MEETING_ASSISTANT_SETTINGS.semanticTaxonomyMode,
       debugMode:
         typeof parsed.debugMode === "boolean"
           ? parsed.debugMode
@@ -874,7 +880,8 @@ interface AdvisorTaskSignals {
   latestTurnTaxonomyBoundaryReason?:
     | LatestTurnTaxonomyBoundaryReason
     | "active-parent-continuity"
-    | "manual-question-type-correction";
+    | "manual-question-type-correction"
+    | "semantic-unknown-rescue";
   taxonomyFallbackSuppressed?: boolean;
   unknownTaskMutationBlocked?: boolean;
 }
@@ -959,6 +966,12 @@ function isMeetingPrivacyMode(
 function isPersonalEvidenceGuardrailMode(
   value: unknown
 ): value is PersonalEvidenceGuardrailMode {
+  return value === "enforcement" || value === "shadow";
+}
+
+function isSemanticTaxonomyMode(
+  value: unknown
+): value is SemanticTaxonomyMode {
   return value === "enforcement" || value === "shadow";
 }
 
@@ -1068,6 +1081,15 @@ interface PendingSentenceCompletion {
   fragmentSequences: number[];
 }
 
+interface SemanticTaxonomyTurnEvidence {
+  turnId: string;
+  sessionId: string;
+  runtimeEpoch: number;
+  lexical: QuestionTypeInferenceDecision;
+  hybrid?: ReturnType<typeof resolveHybridQuestionType>;
+  metadata: Record<string, unknown>;
+}
+
 interface SentenceCompletionMergeContext {
   operationId: string;
   firstHeldAt: number;
@@ -1150,6 +1172,9 @@ export function useMeetingAssistant() {
   const autoExportProcessedTraceIdsRef = useRef(new Set<string>());
   const sessionRecordedTraceIdsRef = useRef(new Set<string>());
   const debugModeRef = useRef(INITIAL_STATE.settings.debugMode);
+  const semanticTaxonomyModeRef = useRef<SemanticTaxonomyMode>(
+    INITIAL_STATE.settings.semanticTaxonomyMode
+  );
   const captureLifecycleCoordinatorRef = useRef<CaptureLifecycleCoordinator | null>(
     null
   );
@@ -1185,6 +1210,9 @@ export function useMeetingAssistant() {
   if (semanticTaxonomyRuntimeRef.current === null) {
     semanticTaxonomyRuntimeRef.current = new SemanticTaxonomyRuntime();
   }
+  const semanticTaxonomyEvidenceByTurnRef = useRef(
+    new Map<string, SemanticTaxonomyTurnEvidence>()
+  );
   const activeScreenOperationIdRef = useRef<string | null>(null);
   const manualCorrectionOperationCoordinatorRef = useRef(
     new ManualCorrectionOperationCoordinator()
@@ -1458,6 +1486,7 @@ export function useMeetingAssistant() {
     const previousEpoch = runtimeEpochRef.current;
     runtimeEpochRef.current += 1;
     activeScreenOperationIdRef.current = null;
+    semanticTaxonomyEvidenceByTurnRef.current.clear();
     adjacentQuestionScopeRef.current = null;
     manualCorrectionOperationCoordinatorRef.current.reset();
     return {
@@ -2607,6 +2636,16 @@ export function useMeetingAssistant() {
     [updateSettings]
   );
 
+  const setSemanticTaxonomyMode = useCallback(
+    (semanticTaxonomyMode: SemanticTaxonomyMode) => {
+      updateSettings((previous) => ({
+        ...previous,
+        semanticTaxonomyMode,
+      }));
+    },
+    [updateSettings]
+  );
+
   const setResponseConfig = useCallback(
     (response: MeetingResponseConfig) => {
       updateSettings((previous) => ({
@@ -3239,6 +3278,52 @@ export function useMeetingAssistant() {
           options.manualQuestionTypeCorrection
         )
       : resolvedAdvisorTaskSignals;
+    const semanticEvidenceTurnId = advisorJob.triggerTurnId ?? latestTurn?.id;
+    const semanticEvidence = semanticEvidenceTurnId
+      ? semanticTaxonomyEvidenceByTurnRef.current.get(semanticEvidenceTurnId)
+      : undefined;
+    const semanticEvidenceIsCurrent = Boolean(
+      semanticEvidence &&
+        advisorJob.source === "live-turn" &&
+        semanticEvidence.sessionId === advisorJob.expectedSessionId &&
+        semanticEvidence.runtimeEpoch ===
+          advisorJob.runtimeCommitToken.runtimeEpoch
+    );
+    const semanticUnknownRescueDecision =
+      decideSemanticTaxonomyUnknownRescue({
+        mode: state.settings.semanticTaxonomyMode,
+        lexicalType:
+          semanticEvidenceIsCurrent && semanticEvidence
+            ? semanticEvidence.lexical.type ?? "unknown"
+            : "unknown",
+        deterministicType:
+          normalizeCanonicalQuestionType(
+            correctedAdvisorTaskSignals.questionType
+          ) ?? "unknown",
+        recommendedType:
+          semanticEvidenceIsCurrent && semanticEvidence
+            ? semanticEvidence.hybrid?.recommendedType
+            : undefined,
+        wouldRescue: Boolean(
+          semanticEvidenceIsCurrent && semanticEvidence?.hybrid?.wouldRescue
+        ),
+        activeParentType:
+          normalizeCanonicalQuestionType(
+            getAdvisorActiveQuestionType(promptContext)
+          ) ?? undefined,
+        hasManualCorrection: Boolean(options.manualQuestionTypeCorrection),
+      });
+    const semanticAdvisorTaskSignals = semanticUnknownRescueDecision.applied
+      ? {
+          ...correctedAdvisorTaskSignals,
+          questionType: semanticUnknownRescueDecision.effectiveType,
+          source: "semantic-unknown-rescue",
+          latestTurnTaxonomyBoundaryReason:
+            "semantic-unknown-rescue" as const,
+          taxonomyFallbackSuppressed: false,
+          unknownTaskMutationBlocked: false,
+        }
+      : correctedAdvisorTaskSignals;
     const inferredTurnIntentDecision =
       advisorJob.turnIntentDecision ??
       (latestTurn?.speaker === "them"
@@ -3265,7 +3350,7 @@ export function useMeetingAssistant() {
     });
     const advisorTaskMutationDecision = decideAdvisorTaskMutation({
       authority: advisorJob.taskMutationAuthority,
-      resolvedRelation: correctedAdvisorTaskSignals.taskRelation,
+      resolvedRelation: semanticAdvisorTaskSignals.taskRelation,
       hasActiveParent: hasAdvisorActiveTask(promptContext),
       hasActiveChild: hasAdvisorActiveChild(promptContext),
       mutationAuthorized: taskMutationAuthorization.authorized,
@@ -3275,18 +3360,18 @@ export function useMeetingAssistant() {
       advisorTaskMutationDecision.preserveParentType &&
       preservedParentQuestionType
         ? {
-            ...correctedAdvisorTaskSignals,
+            ...semanticAdvisorTaskSignals,
             questionType: preservedParentQuestionType,
             questionTypeDecision: undefined,
             askFrame:
               getAdvisorActiveAskFrame(promptContext) ??
-              correctedAdvisorTaskSignals.askFrame,
+              semanticAdvisorTaskSignals.askFrame,
             topicDomain:
               getAdvisorActiveTopicDomain(promptContext) ??
-              correctedAdvisorTaskSignals.topicDomain,
+              semanticAdvisorTaskSignals.topicDomain,
             projectAnchor:
               getAdvisorActiveProjectAnchor(promptContext) ??
-              correctedAdvisorTaskSignals.projectAnchor,
+              semanticAdvisorTaskSignals.projectAnchor,
             query: buildExplicitActionAdvisorTaskQuery(
               promptContext,
               options.currentSuggestion,
@@ -3302,7 +3387,7 @@ export function useMeetingAssistant() {
             taxonomyFallbackSuppressed: true,
             unknownTaskMutationBlocked: true,
           }
-        : correctedAdvisorTaskSignals;
+        : semanticAdvisorTaskSignals;
     const advisorScreenScopeDecision = decideAdvisorScreenScope({
       triggerSource: advisorJob.source,
       relation: advisorTaskSignals.taskRelation,
@@ -3337,6 +3422,17 @@ export function useMeetingAssistant() {
     });
     const questionTypeTraceMetadata =
       formatAdvisorQuestionTypeDecisionForTrace(advisorTaskSignals);
+    const semanticEnforcementMetadata = {
+      semanticTaxonomyMode: state.settings.semanticTaxonomyMode,
+      semanticTaxonomyEvidenceCurrent: semanticEvidenceIsCurrent,
+      taxonomySemanticEnforcementReason:
+        semanticUnknownRescueDecision.reason,
+      taxonomySemanticParentMutationBlocked:
+        semanticUnknownRescueDecision.parentMutationBlocked,
+      taxonomySemanticRescueApplied: semanticUnknownRescueDecision.applied,
+      taxonomyHybridEffectiveType:
+        semanticUnknownRescueDecision.effectiveType,
+    };
     if (traceId) {
       const intentMetadata = inferredTurnIntentDecision
         ? formatAdvisorTurnIntentForTrace(inferredTurnIntentDecision)
@@ -3344,6 +3440,7 @@ export function useMeetingAssistant() {
       const executionMetadata = {
         ...intentMetadata,
         ...questionTypeTraceMetadata,
+        ...semanticEnforcementMetadata,
         ...formatScreenScopeDecisionForTrace(
           advisorScreenScopeDecision,
           {
@@ -3393,6 +3490,16 @@ export function useMeetingAssistant() {
           : executionAuthorization.reason,
       };
       traceStoreRef.current.updateMetadata(traceId, executionMetadata);
+      if (semanticEvidenceIsCurrent && semanticEvidence) {
+        sessionRecordingManagerRef.current?.recordSemanticTaxonomyDecision({
+          traceId,
+          taskId: promptContext.activeMeetingTask?.id,
+          metadata: {
+            ...semanticEvidence.metadata,
+            ...semanticEnforcementMetadata,
+          },
+        });
+      }
       const intentStepId = traceStoreRef.current.startStep(
         traceId,
         "Advisor response-intent gate",
@@ -4830,6 +4937,7 @@ export function useMeetingAssistant() {
       const contextState = contextManagerRef.current.getState();
       const sessionId = contextState.sessionId;
       const runtimeEpoch = runtimeEpochRef.current;
+      const semanticTaxonomyMode = semanticTaxonomyModeRef.current;
       const runtime = semanticTaxonomyRuntimeRef.current!;
       const lexical = inferQuestionTypeDecisionFromText(turn.text, {
         interviewSessionBrief: contextState.interviewSessionBrief,
@@ -4850,8 +4958,16 @@ export function useMeetingAssistant() {
         lexical,
         eligibility,
         runtime: runtime.getSnapshot(),
+        mode: semanticTaxonomyMode,
       });
       traceStoreRef.current.updateMetadata(traceId, initialMetadata);
+      semanticTaxonomyEvidenceByTurnRef.current.set(turn.id, {
+        turnId: turn.id,
+        sessionId,
+        runtimeEpoch,
+        lexical,
+        metadata: initialMetadata,
+      });
 
       if (!eligibility.eligible) {
         sessionRecordingManagerRef.current?.recordSemanticTaxonomyDecision({
@@ -4922,8 +5038,23 @@ export function useMeetingAssistant() {
             embedding,
             semantic,
             hybrid,
+            mode: semanticTaxonomyMode,
           });
           traceStoreRef.current.updateMetadata(traceId, metadata);
+          semanticTaxonomyEvidenceByTurnRef.current.set(turn.id, {
+            turnId: turn.id,
+            sessionId,
+            runtimeEpoch,
+            lexical,
+            hybrid,
+            metadata,
+          });
+          while (semanticTaxonomyEvidenceByTurnRef.current.size > 32) {
+            const oldestTurnId =
+              semanticTaxonomyEvidenceByTurnRef.current.keys().next().value;
+            if (!oldestTurnId) break;
+            semanticTaxonomyEvidenceByTurnRef.current.delete(oldestTurnId);
+          }
           traceStoreRef.current.finishStep(
             traceId,
             stepId,
@@ -8862,6 +8993,10 @@ export function useMeetingAssistant() {
   }, [state.settings.debugMode]);
 
   useEffect(() => {
+    semanticTaxonomyModeRef.current = state.settings.semanticTaxonomyMode;
+  }, [state.settings.semanticTaxonomyMode]);
+
+  useEffect(() => {
     let disposed = false;
     let unlistenSpeech: (() => void) | undefined;
     let unlistenSegmentDrop: (() => void) | undefined;
@@ -9186,6 +9321,7 @@ export function useMeetingAssistant() {
     clearInterviewSessionBrief,
     setUseMemory,
     setPersonalEvidenceGuardrailMode,
+    setSemanticTaxonomyMode,
     setDebugMode,
     setMicrophoneContextEnabled,
     toggleMicrophoneContext,

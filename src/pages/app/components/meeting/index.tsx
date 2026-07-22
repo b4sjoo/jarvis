@@ -50,6 +50,7 @@ import type {
   MemoryEntryEvaluationLabelValue,
   MemoryRetrievalEvaluationSnapshotResolution,
   PersonalEvidenceGuardrailMode,
+  SemanticTaxonomyMode,
   QuestionHumanEvaluation,
   ScreenCaptureTarget,
   SpeechCorrection,
@@ -1376,6 +1377,8 @@ export const MeetingAssistant = ({
                 onPersonalEvidenceGuardrailModeChange={
                   meeting.setPersonalEvidenceGuardrailMode
                 }
+                semanticTaxonomyMode={meeting.settings.semanticTaxonomyMode}
+                onSemanticTaxonomyModeChange={meeting.setSemanticTaxonomyMode}
                 audioProfile={meeting.settings.audio.profile}
                 audioConfig={meeting.settings.audio.config}
                 onAudioProfileChange={meeting.setMeetingAudioProfile}
@@ -2934,6 +2937,8 @@ const ConfigurationsPanel = ({
   onUseMemoryChange,
   personalEvidenceGuardrailMode,
   onPersonalEvidenceGuardrailModeChange,
+  semanticTaxonomyMode,
+  onSemanticTaxonomyModeChange,
   audioProfile,
   audioConfig,
   onAudioProfileChange,
@@ -2965,6 +2970,8 @@ const ConfigurationsPanel = ({
   onPersonalEvidenceGuardrailModeChange: (
     mode: PersonalEvidenceGuardrailMode
   ) => void;
+  semanticTaxonomyMode: SemanticTaxonomyMode;
+  onSemanticTaxonomyModeChange: (mode: SemanticTaxonomyMode) => void;
   audioProfile: MeetingAudioProfile;
   audioConfig: MeetingAudioConfig;
   onAudioProfileChange: (profile: MeetingAudioProfile) => void;
@@ -3119,6 +3126,27 @@ const ConfigurationsPanel = ({
                 checked={personalEvidenceGuardrailMode === "enforcement"}
                 onCheckedChange={(enabled) => {
                   onPersonalEvidenceGuardrailModeChange(
+                    enabled ? "enforcement" : "shadow"
+                  );
+                }}
+              />
+            </div>
+
+            <div className="flex items-center justify-between gap-2 rounded-sm border border-border/60 p-2">
+              <div>
+                <div className="text-[10px] font-medium uppercase text-muted-foreground">
+                  Semantic Type Rescue
+                </div>
+                <div className="mt-0.5 text-[10px] text-muted-foreground">
+                  {semanticTaxonomyMode === "enforcement"
+                    ? "Enforce calibrated unknown-only rescue"
+                    : "Shadow mode (recommended)"}
+                </div>
+              </div>
+              <Switch
+                checked={semanticTaxonomyMode === "enforcement"}
+                onCheckedChange={(enabled) => {
+                  onSemanticTaxonomyModeChange(
                     enabled ? "enforcement" : "shadow"
                   );
                 }}
