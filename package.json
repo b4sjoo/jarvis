@@ -34,6 +34,7 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "test": "tsc -p tsconfig.test.json && node --test .tmp-tests/tests/**/*.test.js",
+    "taxonomy:evaluate": "tsc -p tsconfig.taxonomy-evaluation.json && node .tmp-taxonomy-evaluation/scripts/evaluate-taxonomy-corpus.js",
     "preview": "vite preview",
     "tauri": "tauri"
   },

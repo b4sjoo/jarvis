@@ -1,11 +1,11 @@
 {
   "compilerOptions": {
-    "target": "ES2020",
+    "target": "ES2022",
     "module": "ESNext",
     "moduleResolution": "bundler",
     "strict": true,
     "skipLibCheck": true,
-    "outDir": ".tmp-tests",
+    "outDir": ".tmp-taxonomy-evaluation",
     "rootDir": ".",
     "baseUrl": ".",
     "paths": {
@@ -14,10 +14,9 @@
     "types": ["node"]
   },
   "include": [
-    "src/vite-env.d.ts",
-    "tests/**/*.ts",
-    "src/lib/meeting/programming-language.ts",
+    "scripts/evaluate-taxonomy-corpus.ts",
+    "src/lib/meeting/taxonomy-evaluation.ts",
     "src/lib/meeting/task-taxonomy.ts",
-    "src/lib/meeting/taxonomy-evaluation.ts"
+    "src/lib/memory/types.ts"
   ]
 }
