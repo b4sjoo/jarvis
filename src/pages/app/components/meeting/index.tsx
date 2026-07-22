@@ -4490,6 +4490,13 @@ const TraceClassifierMetadata = ({
     ["Phase", getTraceEffectivePlaybookPhase(metadata)],
     ["Subtype", metadata.playbookSubtype],
     ["Policy", metadata.playbookAllowedFamilies],
+    ["Lexical type", metadata.taxonomyKeywordType],
+    ["Semantic type", metadata.taxonomySemanticCandidateType],
+    ["Hybrid shadow", metadata.taxonomyHybridOutcome],
+    ["Would rescue", metadata.taxonomyHybridWouldRescue],
+    ["Semantic status", metadata.taxonomySemanticEmbeddingStatus],
+    ["Semantic ms", metadata.taxonomySemanticDurationMs],
+    ["Semantic cache", metadata.taxonomySemanticCacheHit],
     ] satisfies Array<[string, unknown]>
   ).filter(
     (row): row is [string, Exclude<unknown, undefined | null | "">] =>

@@ -73,6 +73,7 @@ interface SessionRecordingEvent {
     | "task-snapshot"
     | "active-meeting-task-snapshot"
     | "manual-question-type-correction"
+    | "semantic-taxonomy-decision"
     | "capture-lifecycle"
     | "native-speech-event"
     | "runtime-reset"
@@ -188,6 +189,21 @@ export interface SessionCompactTraceSummary {
   sentenceBufferFragmentCount?: number;
   sentenceBufferAddedLatencyMs?: number;
   sentenceBufferMergedTranscriptChars?: number;
+  semanticTaxonomy?: {
+    mode?: string;
+    turnId?: string;
+    keywordType?: string;
+    semanticCandidateType?: string;
+    hybridOutcome?: string;
+    wouldRescue?: boolean;
+    rescueApplied?: boolean;
+    embeddingStatus?: string;
+    durationMs?: number;
+    cacheHit?: boolean;
+    modelVersion?: string;
+    prototypeVersion?: string;
+    calibrationVersion?: string;
+  };
   personalEvidence?: {
     requirement?: string;
     confidence?: number;
@@ -1087,6 +1103,65 @@ export class SessionRecordingManager {
     this.recordEvent(kind, metadata);
   }
 
+  recordSemanticTaxonomyDecision({
+    traceId,
+    taskId,
+    metadata,
+  }: {
+    traceId: string;
+    taskId?: string;
+    metadata: Record<string, unknown>;
+  }) {
+    const session = this.getWritableSession({ traceId });
+    if (!session) return;
+    const artifactPath = "taxonomy/semantic-decisions.jsonl";
+    const payload = {
+      recordedAt: Date.now(),
+      sessionId: session.sessionId,
+      traceId,
+      taskId,
+      metadata,
+    };
+    this.enqueue(session, () =>
+      this.writeText(
+        session,
+        artifactPath,
+        `${JSON.stringify(payload)}\n`,
+        true
+      )
+    );
+    this.recordEvent(
+      "semantic-taxonomy-decision",
+      metadata,
+      [artifactPath],
+      traceId,
+      taskId
+    );
+
+    const existing = session.traceSummaries.get(traceId);
+    if (!existing) return;
+    const updated: SessionCompactTraceSummary = {
+      ...existing,
+      semanticTaxonomy: buildSemanticTaxonomyTraceSummary([metadata]),
+    };
+    session.traceSummaries.set(traceId, updated);
+    this.enqueue(session, async () => {
+      await this.writeJson(
+        session,
+        `traces/${sanitizeFilePart(traceId)}/summary.json`,
+        updated
+      );
+      await this.writeJson(session, "metrics/trace-summaries.latest.json", {
+        version: SESSION_TRACE_SUMMARY_SCHEMA_VERSION,
+        savedAt: Date.now(),
+        sessionId: session.sessionId,
+        traces: Array.from(session.traceSummaries.values()).sort(
+          (left, right) => left.startedAt - right.startedAt
+        ),
+      });
+    });
+  }
+
   recordCaptureLifecycle(metadata: Record<string, unknown>) {
     if (!this.getWritableSession()) return;
     this.recordEvent("capture-lifecycle", metadata);
@@ -1767,6 +1842,7 @@ function buildCompactTraceSummary({
       metadataSources,
       "sentenceBufferMergedTranscriptChars"
     ),
+    semanticTaxonomy: buildSemanticTaxonomyTraceSummary(metadataSources),
     personalEvidence: {
       requirement: readFirstString(
         metadataSources,
@@ -1945,6 +2021,61 @@ function buildCompactTraceSummary({
       summaryPath,
     },
     recordedAt: Date.now(),
+  };
+}
+
+function buildSemanticTaxonomyTraceSummary(
+  metadataSources: Array<Record<string, unknown>>
+): SessionCompactTraceSummary["semanticTaxonomy"] {
+  const mode = readFirstString(metadataSources, "semanticTaxonomyMode");
+  const embeddingStatus = readFirstString(
+    metadataSources,
+    "taxonomySemanticEmbeddingStatus"
+  );
+  const hybridOutcome = readFirstString(
+    metadataSources,
+    "taxonomyHybridOutcome"
+  );
+  if (!mode && !embeddingStatus && !hybridOutcome) return undefined;
+
+  return {
+    mode,
+    turnId: readFirstString(metadataSources, "semanticTaxonomyTurnId"),
+    keywordType: readFirstString(metadataSources, "taxonomyKeywordType"),
+    semanticCandidateType: readFirstString(
+      metadataSources,
+      "taxonomySemanticCandidateType"
+    ),
+    hybridOutcome,
+    wouldRescue: readFirstBoolean(
+      metadataSources,
+      "taxonomyHybridWouldRescue"
+    ),
+    rescueApplied: readFirstBoolean(
+      metadataSources,
+      "taxonomySemanticRescueApplied"
+    ),
+    embeddingStatus,
+    durationMs: readFirstNumberFromMetadata(
+      metadataSources,
+      "taxonomySemanticDurationMs"
+    ),
+    cacheHit: readFirstBoolean(
+      metadataSources,
+      "taxonomySemanticCacheHit"
+    ),
+    modelVersion: readFirstString(
+      metadataSources,
+      "taxonomySemanticModelVersion"
+    ),
+    prototypeVersion: readFirstString(
+      metadataSources,
+      "taxonomySemanticPrototypeVersion"
+    ),
+    calibrationVersion: readFirstString(
+      metadataSources,
+      "taxonomySemanticCalibrationVersion"
+    ),
   };
 }
 

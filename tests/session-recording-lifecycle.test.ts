@@ -262,6 +262,58 @@ test("session aggregates retain synthetic evidence without counting it as produc
   await manager.stop("test-complete");
 });
 
+test("late semantic shadow evidence stays joinable after trace export", async () => {
+  const native = new ControlledRecordingInvoke();
+  const manager = new SessionRecordingManager(undefined, native.invoke);
+  await manager.start(START_OPTIONS);
+  await settle();
+
+  const startedAt = Date.now();
+  manager.recordTrace(buildCompletedTrace("semantic_trace", startedAt), "manual");
+  await settle();
+  manager.recordSemanticTaxonomyDecision({
+    traceId: "semantic_trace",
+    taskId: "task_1",
+    metadata: {
+      semanticTaxonomyMode: "shadow",
+      semanticTaxonomyTurnId: "turn_1",
+      taxonomyKeywordType: "unknown",
+      taxonomySemanticCandidateType: "field-knowledge",
+      taxonomyHybridOutcome: "semantic-would-rescue",
+      taxonomyHybridWouldRescue: true,
+      taxonomySemanticRescueApplied: false,
+      taxonomySemanticEmbeddingStatus: "success",
+      taxonomySemanticDurationMs: 24,
+      taxonomySemanticCacheHit: false,
+      taxonomySemanticModelVersion: "model-v1",
+    },
+  });
+  await settle();
+
+  const eventWrite = native.calls.find(
+    (call) =>
+      call.command === "write_meeting_session_recording_text" &&
+      stringArg(call, "relativePath") === "taxonomy/semantic-decisions.jsonl"
+  );
+  assert.ok(eventWrite);
+  assert.match(stringArg(eventWrite, "payload"), /semantic-would-rescue/);
+
+  const summaryWrites = native.calls.filter(
+    (call) =>
+      call.command === "write_meeting_session_recording_text" &&
+      stringArg(call, "relativePath") === "traces/semantic_trace/summary.json"
+  );
+  const latestSummary = summaryWrites[summaryWrites.length - 1];
+  assert.ok(latestSummary);
+  const summary = parsePayload(latestSummary);
+  assert.equal(
+    (summary.semanticTaxonomy as Record<string, unknown>).hybridOutcome,
+    "semantic-would-rescue"
+  );
+
+  await manager.stop("test-complete");
+});
+
 const START_OPTIONS = {
   settings: {
     codingModel: {

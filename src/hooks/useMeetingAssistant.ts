@@ -212,9 +212,14 @@ import {
   applyAdvisorScreenScopeToPromptContext,
   decideAdvisorScreenScope,
   decideScreenResultScope,
+  decideSemanticTaxonomyShadowEligibility,
   formatScreenScopeDecisionForTrace,
+  formatSemanticTaxonomyShadowMetadata,
   resolveAdvisorRequestModeForScreenScope,
   resolveAdvisorTaskEvidenceSource,
+  resolveHybridQuestionType,
+  scoreSemanticTaxonomyEmbedding,
+  SemanticTaxonomyRuntime,
   PlaybookPhaseDecision,
   SENTENCE_COMPLETION_BUFFER_MS,
   attachQuestionLineageToSuggestion,
@@ -1174,6 +1179,12 @@ export function useMeetingAssistant() {
   const activeAdvisorJobRef = useRef<AdvisorTriggerJob | null>(null);
   const screenAnalysisAbortRef = useRef<AbortController | null>(null);
   const runtimeEpochRef = useRef(1);
+  const semanticTaxonomyRuntimeRef = useRef<SemanticTaxonomyRuntime | null>(
+    null
+  );
+  if (semanticTaxonomyRuntimeRef.current === null) {
+    semanticTaxonomyRuntimeRef.current = new SemanticTaxonomyRuntime();
+  }
   const activeScreenOperationIdRef = useRef<string | null>(null);
   const manualCorrectionOperationCoordinatorRef = useRef(
     new ManualCorrectionOperationCoordinator()
@@ -1454,6 +1465,29 @@ export function useMeetingAssistant() {
       previousRuntimeEpoch: previousEpoch,
       runtimeEpoch: runtimeEpochRef.current,
     };
+  }, []);
+
+  const prewarmSemanticTaxonomyRuntime = useCallback((reason: string) => {
+    const contextState = contextManagerRef.current.getState();
+    const runtime = semanticTaxonomyRuntimeRef.current!;
+    runtime.pinSession(
+      {
+        sessionId: contextState.sessionId,
+        runtimeEpoch: runtimeEpochRef.current,
+      },
+      reason
+    );
+    void runtime.prewarm().then((snapshot) => {
+      sessionRecordingManagerRef.current?.recordCaptureLifecycle({
+        stage: "semantic-taxonomy-runtime-prewarm",
+        reason,
+        readiness: snapshot.readiness,
+        modelVersion: snapshot.modelVersion,
+        warmupDurationMs: snapshot.warmupDurationMs,
+        reusedAfterAudioRecovery: snapshot.reusedAfterAudioRecovery,
+        error: snapshot.error,
+      });
+    });
   }, []);
 
   const finishRunningAdvisorJobTrace = useCallback(
@@ -2980,6 +3014,10 @@ export function useMeetingAssistant() {
     }
     cancelNativeAudioFaultTraces("meeting-assistant-stopped");
     advanceRuntimeEpoch("meeting-assistant-stopped");
+    semanticTaxonomyRuntimeRef.current?.releaseSession({
+      recoveryTokenActive: false,
+      reason: "meeting-assistant-stopped",
+    });
     activeRef.current = false;
     invalidateAudioProcessingSession();
     cancelActiveAdvisorJob("meeting-assistant-stopped");
@@ -4779,6 +4817,153 @@ export function useMeetingAssistant() {
     [clearPendingConfirmation]
   );
 
+  const scheduleSemanticTaxonomyShadow = useCallback(
+    ({
+      turn,
+      traceId,
+      turnGateAction,
+    }: {
+      turn: TranscriptTurn;
+      traceId: string;
+      turnGateAction: string;
+    }) => {
+      const contextState = contextManagerRef.current.getState();
+      const sessionId = contextState.sessionId;
+      const runtimeEpoch = runtimeEpochRef.current;
+      const runtime = semanticTaxonomyRuntimeRef.current!;
+      const lexical = inferQuestionTypeDecisionFromText(turn.text, {
+        interviewSessionBrief: contextState.interviewSessionBrief,
+      });
+      const eligibility = decideSemanticTaxonomyShadowEligibility({
+        speaker: turn.speaker,
+        turnGateAction,
+        wordEquivalent: calculateWordEquivalent(turn.text),
+      });
+      runtime.pinSession(
+        { sessionId, runtimeEpoch },
+        "accepted-latest-interviewer-turn"
+      );
+      const initialMetadata = formatSemanticTaxonomyShadowMetadata({
+        turnId: turn.id,
+        sessionId,
+        runtimeEpoch,
+        lexical,
+        eligibility,
+        runtime: runtime.getSnapshot(),
+      });
+      traceStoreRef.current.updateMetadata(traceId, initialMetadata);
+
+      if (!eligibility.eligible) {
+        sessionRecordingManagerRef.current?.recordSemanticTaxonomyDecision({
+          traceId,
+          taskId: contextState.activeMeetingTask?.id,
+          metadata: initialMetadata,
+        });
+        return;
+      }
+
+      const stepId = traceStoreRef.current.startStep(
+        traceId,
+        "Semantic taxonomy shadow",
+        {
+          turnId: turn.id,
+          sessionId,
+          runtimeEpoch,
+          lexicalType: lexical.type ?? "unknown",
+          mode: "shadow",
+        }
+      );
+      void runtime
+        .embed(
+          {
+            sessionId,
+            runtimeEpoch,
+            turnId: turn.id,
+            texts: [turn.text],
+            kind: "query",
+          },
+          100
+        )
+        .then((embedding) => {
+          const currentContext = contextManagerRef.current.getState();
+          const stale =
+            currentContext.sessionId !== sessionId ||
+            runtimeEpochRef.current !== runtimeEpoch ||
+            embedding.status === "stale";
+          if (stale) {
+            traceStoreRef.current.finishStep(
+              traceId,
+              stepId,
+              "cancelled",
+              {
+                semanticTaxonomyStaleResultDropped: true,
+                semanticTaxonomyTurnId: turn.id,
+                semanticTaxonomySessionId: sessionId,
+                semanticTaxonomyRuntimeEpoch: runtimeEpoch,
+                semanticTaxonomyCurrentSessionId: currentContext.sessionId,
+                semanticTaxonomyCurrentRuntimeEpoch: runtimeEpochRef.current,
+              }
+            );
+            return;
+          }
+
+          const semantic =
+            embedding.status === "success" && embedding.embeddings[0]
+              ? scoreSemanticTaxonomyEmbedding(embedding.embeddings[0])
+              : undefined;
+          const hybrid = resolveHybridQuestionType({ lexical, semantic });
+          const metadata = formatSemanticTaxonomyShadowMetadata({
+            turnId: turn.id,
+            sessionId,
+            runtimeEpoch,
+            lexical,
+            eligibility,
+            runtime: runtime.getSnapshot(),
+            embedding,
+            semantic,
+            hybrid,
+          });
+          traceStoreRef.current.updateMetadata(traceId, metadata);
+          traceStoreRef.current.finishStep(
+            traceId,
+            stepId,
+            embedding.status === "error" ? "error" : "success",
+            metadata,
+            embedding.status === "error" ? embedding.reason : undefined
+          );
+          sessionRecordingManagerRef.current?.recordSemanticTaxonomyDecision({
+            traceId,
+            taskId: contextState.activeMeetingTask?.id,
+            metadata,
+          });
+        })
+        .catch((error) => {
+          const metadata = {
+            ...initialMetadata,
+            taxonomySemanticEmbeddingStatus: "error",
+            taxonomySemanticEmbeddingReason:
+              error instanceof Error ? error.message : String(error),
+            taxonomyHybridOutcome: "semantic-unavailable",
+            taxonomyHybridReason: "semantic-shadow-orchestration-error",
+          };
+          traceStoreRef.current.updateMetadata(traceId, metadata);
+          traceStoreRef.current.finishStep(
+            traceId,
+            stepId,
+            "error",
+            metadata,
+            error
+          );
+          sessionRecordingManagerRef.current?.recordSemanticTaxonomyDecision({
+            traceId,
+            taskId: contextState.activeMeetingTask?.id,
+            metadata,
+          });
+        });
+    },
+    []
+  );
+
   const processQueuedSpeechSegment = useCallback(
     async (segment: QueuedSpeechSegment) => {
       const traceId = segment.traceId;
@@ -5322,6 +5507,11 @@ export function useMeetingAssistant() {
               turnGateReason: "clarification-pair",
             }
           );
+          scheduleSemanticTaxonomyShadow({
+            turn,
+            traceId,
+            turnGateAction: "answer-refresh",
+          });
           const debounceStepId = traceStoreRef.current.startStep(
             traceId,
             "Advisor debounce scheduled",
@@ -5456,6 +5646,11 @@ export function useMeetingAssistant() {
             turnGateReason: turnGate.reason,
           }
         );
+        scheduleSemanticTaxonomyShadow({
+          turn,
+          traceId,
+          turnGateAction: turnGate.action,
+        });
 
         if (turnGate.action === "state-update") {
           const stateUpdatedTask = buildStateUpdatedInterviewTask(
@@ -5610,6 +5805,7 @@ export function useMeetingAssistant() {
       isCurrentAudioSegment,
       promoteMeTurnForFusion,
       resolvePendingConfirmationForMeTurn,
+      scheduleSemanticTaxonomyShadow,
       scheduleAdvisor,
       selectedSttProvider,
       stopNativeMeetingCapture,
@@ -6073,6 +6269,11 @@ export function useMeetingAssistant() {
           lastNativeSegmentSequenceRef.current = 0;
           activeRef.current = true;
           const contextState = contextManagerRef.current.getState();
+          prewarmSemanticTaxonomyRuntime(
+            mode === "fresh-start"
+              ? "meeting-session-started"
+              : `meeting-session-${mode}`
+          );
           if (manualRecoveryAttempt) {
             const resumedAt = Date.now();
             const requiredToResumedMs = Math.max(
@@ -6254,6 +6455,7 @@ export function useMeetingAssistant() {
       invalidateAudioProcessingSession,
       maybeFinishNativeAudioFaultTrace,
       readNativeCaptureLease,
+      prewarmSemanticTaxonomyRuntime,
       selectedAudioDevices.output.id,
       startAudioProcessingSession,
       resetMeetingRuntimeForNewSession,
@@ -8970,6 +9172,7 @@ export function useMeetingAssistant() {
   useEffect(() => {
     return () => {
       void stopOnUnmountRef.current();
+      void semanticTaxonomyRuntimeRef.current?.dispose("meeting-hook-unmounted");
     };
   }, []);
 
