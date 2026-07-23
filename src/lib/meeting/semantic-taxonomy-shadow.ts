@@ -165,6 +165,17 @@ export function formatSemanticTaxonomyShadowMetadata({
     taxonomySemanticEmbeddingReason:
       embedding && embedding.status !== "success" ? embedding.reason : undefined,
     taxonomySemanticDurationMs: embedding?.durationMs,
+    taxonomySemanticQueueWaitMs: embedding?.telemetry.queueWaitMs,
+    taxonomySemanticComputeMs: embedding?.telemetry.computeMs,
+    taxonomySemanticConsumer: embedding?.telemetry.consumer,
+    taxonomySemanticDeadlineProfile:
+      embedding?.telemetry.deadlineProfile,
+    taxonomySemanticDeadlinePhase: embedding?.telemetry.deadlinePhase,
+    taxonomySemanticDeadlineMs: embedding?.telemetry.deadlineMs,
+    taxonomySemanticRuntimeOutcome: embedding?.telemetry.outcome,
+    taxonomySemanticCoalesced: embedding?.telemetry.coalesced,
+    taxonomySemanticStale: embedding?.telemetry.stale,
+    taxonomySemanticAbandoned: embedding?.telemetry.abandoned,
     taxonomySemanticCacheHit:
       embedding?.status === "success" ? embedding.cacheHit : false,
     taxonomySemanticTimeout: embedding?.status === "timeout",

@@ -30,7 +30,7 @@ import {
 import { serializeMeetingTraceExport } from "./trace.js";
 
 const SESSION_RECORDING_SCHEMA_VERSION = 1;
-const SESSION_TRACE_SUMMARY_SCHEMA_VERSION = 11;
+const SESSION_TRACE_SUMMARY_SCHEMA_VERSION = 12;
 const SESSION_TRACE_INDEX_SCHEMA_VERSION = 1;
 
 interface SessionRecordingStartOptions {
@@ -80,6 +80,7 @@ interface SessionRecordingEvent {
     | "active-meeting-task-snapshot"
     | "manual-question-type-correction"
     | "semantic-taxonomy-decision"
+    | "semantic-embedding-runtime"
     | "interviewer-intent-semantic-decision"
     | "interviewer-intent-llm-decision"
     | "taxonomy-adjudication-decision"
@@ -276,6 +277,27 @@ export interface SessionCompactTraceSummary {
     modelVersion?: string;
     prototypeVersion?: string;
     calibrationVersion?: string;
+  };
+  semanticEmbeddingRuntime?: {
+    requestId?: string;
+    event?: string;
+    consumer?: string;
+    coalescingKey?: string;
+    revision?: number;
+    outcome?: string;
+    queueWaitMs?: number;
+    computeMs?: number;
+    totalMs?: number;
+    deadlineProfile?: string;
+    deadlinePhase?: string;
+    deadlineMs?: number;
+    coalesced?: boolean;
+    stale?: boolean;
+    abandoned?: boolean;
+    cacheHit?: boolean;
+    queueDepth?: number;
+    maxQueueDepth?: number;
+    reason?: string;
   };
   interviewerIntentSemantic?: {
     embeddingStatus?: string;
@@ -1340,6 +1362,66 @@ export class SessionRecordingManager {
     const updated: SessionCompactTraceSummary = {
       ...existing,
       semanticTaxonomy: buildSemanticTaxonomyTraceSummary([metadata]),
+    };
+    session.traceSummaries.set(traceId, updated);
+    this.enqueue(session, async () => {
+      await this.writeJson(
+        session,
+        `traces/${sanitizeFilePart(traceId)}/summary.json`,
+        updated
+      );
+      await this.writeJson(session, "metrics/trace-summaries.latest.json", {
+        version: SESSION_TRACE_SUMMARY_SCHEMA_VERSION,
+        savedAt: Date.now(),
+        sessionId: session.sessionId,
+        traces: Array.from(session.traceSummaries.values()).sort(
+          (left, right) => left.startedAt - right.startedAt
+        ),
+      });
+    });
+  }
+
+  recordSemanticEmbeddingRuntimeEvent({
+    traceId,
+    taskId,
+    metadata,
+  }: {
+    traceId: string;
+    taskId?: string;
+    metadata: Record<string, unknown>;
+  }) {
+    const session = this.getWritableSession({ traceId });
+    if (!session) return;
+    const artifactPath = "semantic/runtime-events.jsonl";
+    const payload = {
+      recordedAt: Date.now(),
+      sessionId: session.sessionId,
+      traceId,
+      taskId,
+      metadata,
+    };
+    this.enqueue(session, () =>
+      this.writeText(
+        session,
+        artifactPath,
+        `${JSON.stringify(payload)}\n`,
+        true
+      )
+    );
+    this.recordEvent(
+      "semantic-embedding-runtime",
+      metadata,
+      [artifactPath],
+      traceId,
+      taskId
+    );
+
+    const existing = session.traceSummaries.get(traceId);
+    if (!existing) return;
+    const updated: SessionCompactTraceSummary = {
+      ...existing,
+      semanticEmbeddingRuntime:
+        buildSemanticEmbeddingRuntimeTraceSummary([metadata]),
     };
     session.traceSummaries.set(traceId, updated);
     this.enqueue(session, async () => {
@@ -2522,6 +2604,8 @@ function buildCompactTraceSummary({
       "sentenceBufferMergedTranscriptChars"
     ),
     semanticTaxonomy: buildSemanticTaxonomyTraceSummary(metadataSources),
+    semanticEmbeddingRuntime:
+      buildSemanticEmbeddingRuntimeTraceSummary(metadataSources),
     interviewerIntentSemantic:
       buildInterviewerIntentSemanticTraceSummary(metadataSources),
     taxonomyAdjudication:
@@ -2828,6 +2912,84 @@ function buildSemanticTaxonomyTraceSummary(
       metadataSources,
       "taxonomySemanticCalibrationVersion"
     ),
+  };
+}
+
+function buildSemanticEmbeddingRuntimeTraceSummary(
+  metadataSources: Array<Record<string, unknown>>
+): SessionCompactTraceSummary["semanticEmbeddingRuntime"] {
+  const consumer = readFirstString(
+    metadataSources,
+    "semanticEmbeddingConsumer"
+  );
+  const outcome = readFirstString(
+    metadataSources,
+    "semanticEmbeddingOutcome"
+  );
+  if (!consumer && !outcome) return undefined;
+
+  return {
+    requestId: readFirstString(
+      metadataSources,
+      "semanticEmbeddingRequestId"
+    ),
+    event: readFirstString(metadataSources, "semanticEmbeddingEvent"),
+    consumer,
+    coalescingKey: readFirstString(
+      metadataSources,
+      "semanticEmbeddingCoalescingKey"
+    ),
+    revision: readFirstNumberFromMetadata(
+      metadataSources,
+      "semanticEmbeddingRevision"
+    ),
+    outcome,
+    queueWaitMs: readFirstNumberFromMetadata(
+      metadataSources,
+      "semanticEmbeddingQueueWaitMs"
+    ),
+    computeMs: readFirstNumberFromMetadata(
+      metadataSources,
+      "semanticEmbeddingComputeMs"
+    ),
+    totalMs: readFirstNumberFromMetadata(
+      metadataSources,
+      "semanticEmbeddingTotalMs"
+    ),
+    deadlineProfile: readFirstString(
+      metadataSources,
+      "semanticEmbeddingDeadlineProfile"
+    ),
+    deadlinePhase: readFirstString(
+      metadataSources,
+      "semanticEmbeddingDeadlinePhase"
+    ),
+    deadlineMs: readFirstNumberFromMetadata(
+      metadataSources,
+      "semanticEmbeddingDeadlineMs"
+    ),
+    coalesced: readFirstBoolean(
+      metadataSources,
+      "semanticEmbeddingCoalesced"
+    ),
+    stale: readFirstBoolean(metadataSources, "semanticEmbeddingStale"),
+    abandoned: readFirstBoolean(
+      metadataSources,
+      "semanticEmbeddingAbandoned"
+    ),
+    cacheHit: readFirstBoolean(
+      metadataSources,
+      "semanticEmbeddingCacheHit"
+    ),
+    queueDepth: readFirstNumberFromMetadata(
+      metadataSources,
+      "semanticEmbeddingQueueDepth"
+    ),
+    maxQueueDepth: readFirstNumberFromMetadata(
+      metadataSources,
+      "semanticEmbeddingMaxQueueDepth"
+    ),
+    reason: readFirstString(metadataSources, "semanticEmbeddingReason"),
   };
 }
 

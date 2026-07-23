@@ -299,6 +299,31 @@ test("late semantic shadow evidence stays joinable after trace export", async ()
       taxonomySemanticModelVersion: "model-v1",
     },
   });
+  manager.recordSemanticEmbeddingRuntimeEvent({
+    traceId: "semantic_trace",
+    taskId: "task_1",
+    metadata: {
+      semanticEmbeddingRequestId: "semantic-request-1",
+      semanticEmbeddingEvent: "late-result",
+      semanticEmbeddingConsumer: "interviewer-intent",
+      semanticEmbeddingCoalescingKey: "session:current-question",
+      semanticEmbeddingRevision: 4,
+      semanticEmbeddingOutcome: "abandoned",
+      semanticEmbeddingQueueWaitMs: 18,
+      semanticEmbeddingComputeMs: 164,
+      semanticEmbeddingTotalMs: 182,
+      semanticEmbeddingDeadlineProfile: "warm",
+      semanticEmbeddingDeadlinePhase: "compute",
+      semanticEmbeddingDeadlineMs: 350,
+      semanticEmbeddingCoalesced: false,
+      semanticEmbeddingStale: false,
+      semanticEmbeddingAbandoned: true,
+      semanticEmbeddingCacheHit: false,
+      semanticEmbeddingQueueDepth: 1,
+      semanticEmbeddingMaxQueueDepth: 2,
+      semanticEmbeddingReason: "timed-out-compute-completed",
+    },
+  });
   await settle();
 
   const eventWrite = native.calls.find(
@@ -320,6 +345,14 @@ test("late semantic shadow evidence stays joinable after trace export", async ()
   assert.equal(
     (summary.semanticTaxonomy as Record<string, unknown>).hybridOutcome,
     "semantic-would-rescue"
+  );
+  assert.equal(
+    (summary.semanticEmbeddingRuntime as Record<string, unknown>).outcome,
+    "abandoned"
+  );
+  assert.equal(
+    (summary.semanticEmbeddingRuntime as Record<string, unknown>).queueWaitMs,
+    18
   );
 
   await manager.stop("test-complete");
@@ -578,7 +611,7 @@ test("compact trace summaries preserve task boundary and cross-domain evidence",
   );
   assert.ok(summaryWrite);
   const summary = parsePayload(summaryWrite);
-  assert.equal(summary.version, 11);
+  assert.equal(summary.version, 12);
   assert.equal(summary.taskRelation, "new-parent");
   assert.equal(summary.logicalQuestionUnitRevision, 3);
   assert.deepEqual(summary.logicalQuestionSourceTurnIds, ["turn_1", "turn_2"]);

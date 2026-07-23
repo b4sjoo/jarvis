@@ -48,6 +48,7 @@ declare global {
 
 const statusElement = document.querySelector<HTMLElement>("#status");
 const resultElement = document.querySelector<HTMLElement>("#result");
+let benchmarkRevision = 0;
 
 void runBenchmark();
 
@@ -109,6 +110,7 @@ async function embed(
   turnId: string,
   failures: BenchmarkReport["failures"]
 ): Promise<SemanticTaxonomyEmbeddingResult> {
+  benchmarkRevision += 1;
   const result = await runtime.embed(
     {
       kind: "query",
@@ -117,7 +119,15 @@ async function embed(
       runtimeEpoch: 1,
       turnId,
     },
-    5_000
+    {
+      consumer: "benchmark",
+      coalescingKey: "semantic-taxonomy-benchmark",
+      revision: benchmarkRevision,
+      deadlines: {
+        coldComputeMs: 5_000,
+        warmComputeMs: 5_000,
+      },
+    }
   );
   if (result.status !== "success") {
     failures.push({ status: result.status, reason: result.reason });

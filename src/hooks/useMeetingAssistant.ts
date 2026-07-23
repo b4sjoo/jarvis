@@ -231,6 +231,7 @@ import {
   toHumanEvalQuestionType,
   toMemoryUseCaseForQuestionType,
   type QuestionTypeInferenceDecision,
+  type SemanticEmbeddingRuntimeTelemetry,
   type SemanticTaxonomyDecision,
   type HybridQuestionTypeDecision,
   type LatestTurnTaxonomyBoundaryReason,
@@ -298,6 +299,7 @@ import {
   decideSemanticTaxonomyShadowEligibility,
   decideSemanticTaxonomyUnknownRescue,
   formatScreenScopeDecisionForTrace,
+  formatSemanticEmbeddingRuntimeTelemetryForTrace,
   formatSemanticTaxonomyShadowMetadata,
   resolveAdvisorRequestModeForScreenScope,
   resolveAdvisorTaskEvidenceSource,
@@ -1533,6 +1535,7 @@ export function useMeetingAssistant() {
   if (semanticTaxonomyRuntimeRef.current === null) {
     semanticTaxonomyRuntimeRef.current = new SemanticTaxonomyRuntime();
   }
+  const semanticEmbeddingRevisionRef = useRef(0);
   const semanticTaxonomyEvidenceByTurnRef = useRef(
     new Map<string, SemanticTaxonomyTurnEvidence>()
   );
@@ -1908,6 +1911,28 @@ export function useMeetingAssistant() {
     []
   );
 
+  const recordSemanticEmbeddingRuntimeEvent = useCallback(
+    ({
+      traceId,
+      taskId,
+      telemetry,
+    }: {
+      traceId: string;
+      taskId?: string;
+      telemetry: SemanticEmbeddingRuntimeTelemetry;
+    }) => {
+      const metadata =
+        formatSemanticEmbeddingRuntimeTelemetryForTrace(telemetry);
+      traceStoreRef.current.updateMetadata(traceId, metadata);
+      sessionRecordingManagerRef.current?.recordSemanticEmbeddingRuntimeEvent({
+        traceId,
+        taskId,
+        metadata,
+      });
+    },
+    []
+  );
+
   const prewarmSemanticTaxonomyRuntime = useCallback((reason: string) => {
     const contextState = contextManagerRef.current.getState();
     const runtime = semanticTaxonomyRuntimeRef.current!;
@@ -1926,6 +1951,13 @@ export function useMeetingAssistant() {
         modelVersion: snapshot.modelVersion,
         warmupDurationMs: snapshot.warmupDurationMs,
         reusedAfterAudioRecovery: snapshot.reusedAfterAudioRecovery,
+        semanticRuntimePinnedReason: snapshot.pinnedReason,
+        semanticRuntimeQueueDepth: snapshot.queueDepth,
+        semanticRuntimeMaxQueueDepth: snapshot.maxQueueDepth,
+        semanticRuntimeCoalescedCount: snapshot.coalescedCount,
+        semanticRuntimeStaleCount: snapshot.staleCount,
+        semanticRuntimeTimeoutCount: snapshot.timeoutCount,
+        semanticRuntimeAbandonedCount: snapshot.abandonedCount,
         error: snapshot.error,
       });
     });
@@ -1980,6 +2012,9 @@ export function useMeetingAssistant() {
           mode: "shadow",
         }
       );
+      semanticEmbeddingRevisionRef.current += 1;
+      const semanticRequestRevision =
+        semanticEmbeddingRevisionRef.current;
       void runtime
         .embed(
           {
@@ -1989,7 +2024,18 @@ export function useMeetingAssistant() {
             texts: [semanticText],
             kind: "query",
           },
-          100
+          {
+            consumer: "answer-sufficiency",
+            coalescingKey: `${sessionId}:latest-answer`,
+            revision: semanticRequestRevision,
+            onTelemetry: (telemetry) => {
+              recordSemanticEmbeddingRuntimeEvent({
+                traceId,
+                taskId,
+                telemetry,
+              });
+            },
+          }
         )
         .then((embedding) => {
           const latestContext = contextManagerRef.current.getState();
@@ -2046,6 +2092,9 @@ export function useMeetingAssistant() {
           };
           const metadata = {
             ...formatAnswerSufficiencyDecisionForTrace(updatedDecision),
+            ...formatSemanticEmbeddingRuntimeTelemetryForTrace(
+              embedding.telemetry
+            ),
             answerSufficiencySemanticEmbeddingStatus: embedding.status,
             answerSufficiencySemanticModelVersion: embedding.modelVersion,
             answerSufficiencySemanticCacheHit: embedding.cacheHit,
@@ -2083,7 +2132,7 @@ export function useMeetingAssistant() {
           );
         });
     },
-    []
+    [recordSemanticEmbeddingRuntimeEvent]
   );
 
   const finishRunningAdvisorJobTrace = useCallback(
@@ -6770,6 +6819,9 @@ export function useMeetingAssistant() {
           mode: "shadow",
         }
       );
+      semanticEmbeddingRevisionRef.current += 1;
+      const semanticRequestRevision =
+        semanticEmbeddingRevisionRef.current;
       void runtime
         .embed(
           {
@@ -6781,7 +6833,18 @@ export function useMeetingAssistant() {
               : [classifierText],
             kind: "query",
           },
-          100
+          {
+            consumer: "interviewer-intent",
+            coalescingKey: `${sessionId}:current-question`,
+            revision: semanticRequestRevision,
+            onTelemetry: (telemetry) => {
+              recordSemanticEmbeddingRuntimeEvent({
+                traceId,
+                taskId: contextState.activeMeetingTask?.id,
+                telemetry,
+              });
+            },
+          }
         )
         .then((embedding) => {
           const currentContext = contextManagerRef.current.getState();
@@ -6850,6 +6913,9 @@ export function useMeetingAssistant() {
               hybrid,
               mode: semanticTaxonomyMode,
             }),
+            ...formatSemanticEmbeddingRuntimeTelemetryForTrace(
+              embedding.telemetry
+            ),
             ...formatSemanticInterviewerIntentForTrace(semanticIntent, {
               embeddingStatus: embedding.status,
               durationMs: embedding.durationMs,
@@ -6951,7 +7017,10 @@ export function useMeetingAssistant() {
           });
         });
     },
-    [scheduleTaxonomyAdjudicationShadow]
+    [
+      recordSemanticEmbeddingRuntimeEvent,
+      scheduleTaxonomyAdjudicationShadow,
+    ]
   );
 
   const buildLogicalQuestionForTurn = useCallback(
