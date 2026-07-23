@@ -1,6 +1,9 @@
 import type { TYPE_PROVIDER } from "@/types";
-import type { SelectedProviderState } from "./types";
-import type { CanonicalQuestionType } from "./task-taxonomy";
+import type { InterviewTaskRelation, SelectedProviderState } from "./types";
+import {
+  normalizeCanonicalQuestionType,
+  type CanonicalQuestionType,
+} from "./task-taxonomy.js";
 
 export interface MeetingModelRouteResolution {
   provider: TYPE_PROVIDER | undefined;
@@ -31,6 +34,87 @@ export interface TaxonomyAdjudicationModelRouteResolution {
   taxonomyAdjudicationProviderId?: string;
   resolvedProviderId?: string;
   resolutionSource: "execution-snapshot";
+}
+
+export type MeetingResponseOwnerSource =
+  | "committed-parent"
+  | "authorized-child"
+  | "canonical-parent"
+  | "current-question";
+
+export interface MeetingResponseOwnerResolution {
+  questionType: CanonicalQuestionType;
+  source: MeetingResponseOwnerSource;
+  preBoundaryType?: CanonicalQuestionType;
+  committedType?: CanonicalQuestionType;
+  relation: InterviewTaskRelation;
+}
+
+export function resolveMeetingResponseOwner(input: {
+  preBoundaryType?: unknown;
+  postBoundaryParentType?: unknown;
+  proposedQuestionType?: unknown;
+  relation: InterviewTaskRelation;
+  taskBoundaryCommitted: boolean;
+  childOwnsResponse: boolean;
+}): MeetingResponseOwnerResolution {
+  const preBoundaryType =
+    normalizeCanonicalQuestionType(input.preBoundaryType) ?? undefined;
+  const postBoundaryParentType =
+    normalizeCanonicalQuestionType(input.postBoundaryParentType) ?? undefined;
+  const proposedQuestionType =
+    normalizeCanonicalQuestionType(input.proposedQuestionType) ?? "unknown";
+
+  if (input.taskBoundaryCommitted && postBoundaryParentType) {
+    return {
+      questionType: postBoundaryParentType,
+      source: "committed-parent",
+      preBoundaryType,
+      committedType: postBoundaryParentType,
+      relation: input.relation,
+    };
+  }
+
+  if (
+    input.relation === "child-probe" &&
+    input.childOwnsResponse &&
+    proposedQuestionType !== "unknown"
+  ) {
+    return {
+      questionType: proposedQuestionType,
+      source: "authorized-child",
+      preBoundaryType,
+      relation: input.relation,
+    };
+  }
+
+  if (postBoundaryParentType) {
+    return {
+      questionType: postBoundaryParentType,
+      source: "canonical-parent",
+      preBoundaryType,
+      relation: input.relation,
+    };
+  }
+
+  return {
+    questionType: proposedQuestionType,
+    source: "current-question",
+    preBoundaryType,
+    relation: input.relation,
+  };
+}
+
+export function formatMeetingResponseOwnerForTrace(
+  resolution: MeetingResponseOwnerResolution
+) {
+  return {
+    responseOwnerQuestionType: resolution.questionType,
+    responseOwnerSource: resolution.source,
+    responseOwnerPreBoundaryType: resolution.preBoundaryType,
+    responseOwnerCommittedType: resolution.committedType,
+    responseOwnerTaskRelation: resolution.relation,
+  };
 }
 
 export function resolveMeetingModelRouteFromSnapshot({

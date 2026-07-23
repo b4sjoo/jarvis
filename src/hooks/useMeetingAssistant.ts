@@ -249,7 +249,9 @@ import {
   areSuggestionsForSameParentTask,
   buildSuggestionTaskMetadata,
   stageSuggestionProjectionForManualCorrection,
+  formatMeetingResponseOwnerForTrace,
   formatMeetingModelRouteForTrace,
+  resolveMeetingResponseOwner,
   resolveMeetingModelRouteFromSnapshot,
   resolveManualCorrectionRegenerationRoute,
   applyAdvisorScreenScopeToPromptContext,
@@ -3794,26 +3796,8 @@ export function useMeetingAssistant() {
       return;
     }
 
-    const advisorUsesCodingModel =
-      getAdvisorActiveQuestionType(promptContext) === "coding" ||
-      getAdvisorActiveChildQuestionType(promptContext) === "coding" ||
-      advisorTaskSignals.questionType === "coding";
-    const advisorModelRoute = resolveMeetingModelRoute({
-      useCodingModel: advisorUsesCodingModel,
-      reason: advisorUsesCodingModel
-        ? "active-coding-task"
-        : "advisor-main",
-    });
-    const advisorModelRouteMetadata =
-      formatMeetingModelRouteForTrace(advisorModelRoute);
-    const advisorModelRequestOptions =
-      getMeetingModelRequestOptions(advisorModelRoute);
-    if (traceId) {
-      traceStoreRef.current.updateMetadata(traceId, {
-        ...advisorModelRouteMetadata,
-        modelRequestOptions: advisorModelRequestOptions,
-      });
-    }
+    const preBoundaryResponseOwnerType =
+      getAdvisorActiveQuestionType(promptContext);
 
     const returnStatus = state.status;
     const requestId = `advisor_${mode}_${Date.now()}`;
@@ -4098,6 +4082,38 @@ export function useMeetingAssistant() {
           }
         }
       }
+    }
+
+    const responseOwner = resolveMeetingResponseOwner({
+      preBoundaryType: preBoundaryResponseOwnerType,
+      postBoundaryParentType: getAdvisorActiveQuestionType(promptContext),
+      proposedQuestionType: advisorQuestionType,
+      relation: advisorTaskSignals.taskRelation,
+      taskBoundaryCommitted: taskBoundaryCommittedBeforeAdvisor,
+      childOwnsResponse:
+        advisorTaskSignals.taskRelation === "child-probe" &&
+        taskMutationAuthorization.authorized,
+    });
+    const advisorUsesCodingModel =
+      responseOwner.questionType === "coding";
+    const advisorModelRoute = resolveMeetingModelRoute({
+      useCodingModel: advisorUsesCodingModel,
+      reason: advisorUsesCodingModel
+        ? `response-owner-${responseOwner.source}-coding`
+        : `response-owner-${responseOwner.source}-main`,
+    });
+    const responseOwnerMetadata =
+      formatMeetingResponseOwnerForTrace(responseOwner);
+    const advisorModelRouteMetadata =
+      formatMeetingModelRouteForTrace(advisorModelRoute);
+    const advisorModelRequestOptions =
+      getMeetingModelRequestOptions(advisorModelRoute);
+    if (traceId) {
+      traceStoreRef.current.updateMetadata(traceId, {
+        ...responseOwnerMetadata,
+        ...advisorModelRouteMetadata,
+        modelRequestOptions: advisorModelRequestOptions,
+      });
     }
 
     if (!advisorModelRoute.provider) {
