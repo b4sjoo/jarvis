@@ -2,6 +2,7 @@ export * from "./advisor-engine";
 export * from "./advisor-prompt";
 export * from "./advisor-turn-intent";
 export * from "./answer-sufficiency";
+export * from "./answer-sufficiency-adjudication";
 export * from "./answer-sufficiency-semantic-prototypes";
 export * from "./answer-sufficiency-semantic-resolver";
 export * from "./answer-sufficiency-reflection";
