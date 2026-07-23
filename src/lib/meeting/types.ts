@@ -1112,6 +1112,56 @@ export interface TaxonomyAdjudicationHumanEvaluation {
   timely?: boolean;
 }
 
+export type ExpectedAdvisorAction =
+  | "advise"
+  | "append-context"
+  | "buffer"
+  | "ignore";
+
+export type ObservedAdvisorAction =
+  | "advised"
+  | "suppressed"
+  | "append-only"
+  | "buffered";
+
+export type AdvisorIntentEvaluationFailureReason =
+  | "advisor-false-positive"
+  | "advisor-false-negative"
+  | "wrong-output-authority"
+  | "wrong-context-composition";
+
+export type AdvisorIntentEvaluationSource =
+  | "explicit-human-label"
+  | "manual-force-advise"
+  | "manual-suppress";
+
+export interface AdvisorIntentEvaluationPreDecision {
+  speechAct?: string;
+  intent?: string;
+  action?: string;
+  enforcement?: string;
+  wouldSuppress?: boolean;
+  executionAuthorized?: boolean;
+  outputCommitAuthorized?: boolean;
+}
+
+export interface AdvisorIntentHumanEvaluation {
+  schemaVersion: 1;
+  verdict: "ok" | "false-positive" | "false-negative";
+  expectedAction: ExpectedAdvisorAction;
+  observedAction: ObservedAdvisorAction;
+  failureReason?: AdvisorIntentEvaluationFailureReason;
+  source: AdvisorIntentEvaluationSource;
+  originalTraceId: string;
+  logicalQuestionUnitId?: string;
+  logicalQuestionUnitRevision?: number;
+  sourceTurnIds: string[];
+  preDecision?: AdvisorIntentEvaluationPreDecision;
+  repairTraceId?: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
 export interface QuestionHumanEvaluation {
   id: string;
   sessionId?: string;
@@ -1157,6 +1207,7 @@ export interface QuestionHumanEvaluation {
   guardrail: HumanEvaluationVerdictBlock;
   answer: HumanEvaluationVerdictBlock;
   taxonomyAdjudication?: TaxonomyAdjudicationHumanEvaluation;
+  advisorIntent?: AdvisorIntentHumanEvaluation;
   memoryRetrievalSnapshot?: MemoryRetrievalEvaluationSnapshot;
   memoryEntryLabels: MemoryEntryEvaluationLabel[];
   missingExpectedMemory: MissingExpectedMemoryLabel[];

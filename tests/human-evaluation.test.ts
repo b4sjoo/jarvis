@@ -284,6 +284,7 @@ test("bridges legacy trace labels into question-level verdict blocks", () => {
     correctedQuestionType: "coding",
     playbookWrong: true,
     memoryMissing: true,
+    advisorGateShouldAdvise: true,
     taskQuality: "partial",
     failureReasons: ["wrong-question-type", "too-short"],
     createdAt: 1,
@@ -310,6 +311,82 @@ test("bridges legacy trace labels into question-level verdict blocks", () => {
     verdict: "partial",
     reasons: ["partially-useful"],
   });
+  assert.deepEqual(patch.advisorIntent, {
+    schemaVersion: 1,
+    verdict: "false-negative",
+    expectedAction: "advise",
+    observedAction: "suppressed",
+    failureReason: "advisor-false-negative",
+    source: "explicit-human-label",
+    originalTraceId: "trace_1",
+    sourceTurnIds: [],
+    createdAt: 1,
+    updatedAt: 2,
+  });
+});
+
+test("merges advisor intent repairs without losing original decision evidence", () => {
+  const first = upsertQuestionHumanEvaluation(
+    [],
+    {
+      traceId: "trace_suppressed",
+      traceKind: "voice",
+      questionId: "question_1",
+    },
+    {
+      advisorIntent: {
+        schemaVersion: 1,
+        verdict: "false-negative",
+        expectedAction: "advise",
+        observedAction: "suppressed",
+        failureReason: "advisor-false-negative",
+        source: "manual-force-advise",
+        originalTraceId: "trace_suppressed",
+        logicalQuestionUnitId: "lqu_1",
+        logicalQuestionUnitRevision: 2,
+        sourceTurnIds: ["turn_1"],
+        preDecision: {
+          intent: "statement",
+          wouldSuppress: true,
+          executionAuthorized: false,
+        },
+        createdAt: 10,
+        updatedAt: 10,
+      },
+    }
+  );
+
+  const repaired = upsertQuestionHumanEvaluation(
+    first,
+    {
+      traceId: "trace_repair",
+      traceKind: "voice",
+      questionId: "question_1",
+    },
+    {
+      advisorIntent: {
+        ...first[0].advisorIntent!,
+        sourceTurnIds: ["turn_1", "turn_2"],
+        preDecision: {
+          outputCommitAuthorized: true,
+        },
+        repairTraceId: "trace_repair",
+        updatedAt: 20,
+      },
+    }
+  );
+
+  assert.deepEqual(repaired[0].advisorIntent?.sourceTurnIds, [
+    "turn_1",
+    "turn_2",
+  ]);
+  assert.deepEqual(repaired[0].advisorIntent?.preDecision, {
+    intent: "statement",
+    wouldSuppress: true,
+    executionAuthorized: false,
+    outputCommitAuthorized: true,
+  });
+  assert.equal(repaired[0].advisorIntent?.repairTraceId, "trace_repair");
 });
 
 test("stores whiteboard, manual next, and diagram overlay evaluation fields", () => {

@@ -401,6 +401,10 @@ export function upsertQuestionHumanEvaluation(
       existing?.taxonomyAdjudication,
       patch.taxonomyAdjudication
     ),
+    advisorIntent: mergeAdvisorIntentEvaluation(
+      existing?.advisorIntent,
+      patch.advisorIntent
+    ),
     memoryRetrievalSnapshot:
       normalizeMemoryRetrievalEvaluationSnapshot(
         patch.memoryRetrievalSnapshot
@@ -447,6 +451,7 @@ export function buildQuestionEvaluationPatchFromTrace(
     playbookPhase: buildPlaybookPhaseVerdict(evaluation),
     memory: buildMemoryVerdict(evaluation),
     answer: buildAnswerVerdict(evaluation),
+    advisorIntent: buildLegacyAdvisorIntentEvaluation(evaluation),
   };
 
   return patch;
@@ -634,6 +639,7 @@ function normalizeQuestionHumanEvaluation(
     taxonomyAdjudication: normalizeTaxonomyAdjudicationEvaluation(
       candidate.taxonomyAdjudication
     ),
+    advisorIntent: normalizeAdvisorIntentEvaluation(candidate.advisorIntent),
     memoryRetrievalSnapshot: normalizeMemoryRetrievalEvaluationSnapshot(
       candidate.memoryRetrievalSnapshot
     ),
@@ -658,6 +664,162 @@ function mergeTaxonomyAdjudicationEvaluation(
     ...existing,
     ...patch,
   };
+}
+
+function mergeAdvisorIntentEvaluation(
+  existing: QuestionHumanEvaluation["advisorIntent"],
+  patch: QuestionHumanEvaluation["advisorIntent"]
+): QuestionHumanEvaluation["advisorIntent"] {
+  if (!existing && !patch) return undefined;
+  if (!existing) return patch;
+  if (!patch) return existing;
+  return {
+    ...existing,
+    ...patch,
+    sourceTurnIds: uniqueStrings([
+      ...existing.sourceTurnIds,
+      ...patch.sourceTurnIds,
+    ]),
+    preDecision:
+      existing.preDecision || patch.preDecision
+        ? {
+            ...existing.preDecision,
+            ...patch.preDecision,
+          }
+        : undefined,
+  };
+}
+
+function buildLegacyAdvisorIntentEvaluation(
+  evaluation: TraceHumanEvaluation
+): QuestionHumanEvaluation["advisorIntent"] {
+  if (
+    !evaluation.advisorGateCorrectlySkipped &&
+    !evaluation.advisorGateShouldAdvise
+  ) {
+    return undefined;
+  }
+  const now = evaluation.updatedAt || evaluation.createdAt || Date.now();
+  const falseNegative = evaluation.advisorGateShouldAdvise === true;
+  return {
+    schemaVersion: 1,
+    verdict: falseNegative ? "false-negative" : "ok",
+    expectedAction: falseNegative ? "advise" : "ignore",
+    observedAction: "suppressed",
+    failureReason: falseNegative ? "advisor-false-negative" : undefined,
+    source: "explicit-human-label",
+    originalTraceId: evaluation.traceId,
+    sourceTurnIds: [],
+    createdAt: evaluation.createdAt || now,
+    updatedAt: now,
+  };
+}
+
+function normalizeAdvisorIntentEvaluation(
+  value: unknown
+): QuestionHumanEvaluation["advisorIntent"] {
+  if (!value || typeof value !== "object") return undefined;
+  const candidate = value as Record<string, unknown>;
+  const verdict =
+    candidate.verdict === "ok" ||
+    candidate.verdict === "false-positive" ||
+    candidate.verdict === "false-negative"
+      ? candidate.verdict
+      : undefined;
+  const expectedAction =
+    candidate.expectedAction === "advise" ||
+    candidate.expectedAction === "append-context" ||
+    candidate.expectedAction === "buffer" ||
+    candidate.expectedAction === "ignore"
+      ? candidate.expectedAction
+      : undefined;
+  const observedAction =
+    candidate.observedAction === "advised" ||
+    candidate.observedAction === "suppressed" ||
+    candidate.observedAction === "append-only" ||
+    candidate.observedAction === "buffered"
+      ? candidate.observedAction
+      : undefined;
+  const source =
+    candidate.source === "explicit-human-label" ||
+    candidate.source === "manual-force-advise" ||
+    candidate.source === "manual-suppress"
+      ? candidate.source
+      : undefined;
+  const originalTraceId = readOptionalString(candidate.originalTraceId);
+  if (
+    !verdict ||
+    !expectedAction ||
+    !observedAction ||
+    !source ||
+    !originalTraceId
+  ) {
+    return undefined;
+  }
+
+  const failureReason =
+    candidate.failureReason === "advisor-false-positive" ||
+    candidate.failureReason === "advisor-false-negative" ||
+    candidate.failureReason === "wrong-output-authority" ||
+    candidate.failureReason === "wrong-context-composition"
+      ? candidate.failureReason
+      : undefined;
+  const preDecision =
+    candidate.preDecision && typeof candidate.preDecision === "object"
+      ? normalizeAdvisorIntentPreDecision(
+          candidate.preDecision as Record<string, unknown>
+        )
+      : undefined;
+
+  return {
+    schemaVersion: 1,
+    verdict,
+    expectedAction,
+    observedAction,
+    failureReason,
+    source,
+    originalTraceId,
+    logicalQuestionUnitId: readOptionalString(candidate.logicalQuestionUnitId),
+    logicalQuestionUnitRevision:
+      typeof candidate.logicalQuestionUnitRevision === "number"
+        ? candidate.logicalQuestionUnitRevision
+        : undefined,
+    sourceTurnIds: Array.isArray(candidate.sourceTurnIds)
+      ? uniqueStrings(candidate.sourceTurnIds.map(readOptionalString))
+      : [],
+    preDecision,
+    repairTraceId: readOptionalString(candidate.repairTraceId),
+    createdAt:
+      typeof candidate.createdAt === "number" ? candidate.createdAt : Date.now(),
+    updatedAt:
+      typeof candidate.updatedAt === "number" ? candidate.updatedAt : Date.now(),
+  };
+}
+
+function normalizeAdvisorIntentPreDecision(
+  candidate: Record<string, unknown>
+): NonNullable<QuestionHumanEvaluation["advisorIntent"]>["preDecision"] {
+  const normalized = {
+    speechAct: readOptionalString(candidate.speechAct),
+    intent: readOptionalString(candidate.intent),
+    action: readOptionalString(candidate.action),
+    enforcement: readOptionalString(candidate.enforcement),
+    wouldSuppress:
+      typeof candidate.wouldSuppress === "boolean"
+        ? candidate.wouldSuppress
+        : undefined,
+    executionAuthorized:
+      typeof candidate.executionAuthorized === "boolean"
+        ? candidate.executionAuthorized
+        : undefined,
+    outputCommitAuthorized:
+      typeof candidate.outputCommitAuthorized === "boolean"
+        ? candidate.outputCommitAuthorized
+        : undefined,
+  };
+  return Object.values(normalized).some((entry) => entry !== undefined)
+    ? normalized
+    : undefined;
 }
 
 function normalizeTaxonomyAdjudicationEvaluation(

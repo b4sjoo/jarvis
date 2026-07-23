@@ -93,7 +93,14 @@ export interface LongitudinalQuestionEvaluation {
   classification?: {
     verdict?: string;
   };
-  expectedIntent?: "advise" | "ignore";
+  advisorIntent?: {
+    verdict?: "ok" | "false-positive" | "false-negative";
+    expectedAction?: "advise" | "append-context" | "buffer" | "ignore";
+    observedAction?: "advised" | "suppressed" | "append-only" | "buffered";
+    source?: "explicit-human-label" | "manual-force-advise" | "manual-suppress";
+    originalTraceId?: string;
+    repairTraceId?: string;
+  };
   expectedRelation?: string;
   expectedParentAction?: string;
   expectedContextTurnIds?: string[];
@@ -306,13 +313,13 @@ export function buildSessionLongitudinalEvaluationReport(
 
   const intentObserved = production.filter(hasIntentEvidence);
   const intentLabeled = intentObserved.filter(
-    ({ evaluation }) => evaluation?.expectedIntent
+    ({ evaluation }) => evaluation?.advisorIntent?.expectedAction
   );
   const expectedIgnore = intentLabeled.filter(
-    ({ evaluation }) => evaluation?.expectedIntent === "ignore"
+    ({ evaluation }) => evaluation?.advisorIntent?.expectedAction !== "advise"
   );
   const expectedAdvise = intentLabeled.filter(
-    ({ evaluation }) => evaluation?.expectedIntent === "advise"
+    ({ evaluation }) => evaluation?.advisorIntent?.expectedAction === "advise"
   );
   const falseActivations = expectedIgnore.filter(
     ({ trace }) =>
