@@ -4014,6 +4014,14 @@ const TraceHumanEvaluationPanel = ({
     typeof trace.metadata?.contextResolvable === "boolean"
       ? trace.metadata.contextResolvable
       : undefined;
+  const primaryAskDisposition =
+    typeof trace.metadata?.primaryAskDisposition === "string"
+      ? trace.metadata.primaryAskDisposition
+      : undefined;
+  const primaryAskNormalizedText =
+    typeof trace.metadata?.primaryAskNormalizedText === "string"
+      ? trace.metadata.primaryAskNormalizedText
+      : undefined;
 
   const toggleFailureReason = (reason: HumanEvalFailureReason) => {
     onUpdate({
@@ -4160,6 +4168,47 @@ const TraceHumanEvaluationPanel = ({
                 <span className="font-mono">{detectedPlaybookPhase}</span>
               </>
             ) : null}
+          </div>
+        ) : null}
+        {primaryAskDisposition ? (
+          <div className="rounded-sm border border-border/60 p-2">
+            <div className="text-[10px] font-medium uppercase text-muted-foreground">
+              Primary ask projection
+            </div>
+            <div className="mt-1 break-words font-mono text-[10px] text-muted-foreground">
+              {primaryAskNormalizedText ?? "No current primary ask"}
+              {` / ${primaryAskDisposition}`}
+            </div>
+            <div className="mt-2 flex flex-wrap gap-1">
+              <Button
+                size="sm"
+                variant={
+                  questionEvaluation?.primaryAskCorrect === true
+                    ? "default"
+                    : "outline"
+                }
+                className="h-6 px-2 text-[10px]"
+                onClick={() =>
+                  onUpdateQuestion({ primaryAskCorrect: true })
+                }
+              >
+                Primary ask correct
+              </Button>
+              <Button
+                size="sm"
+                variant={
+                  questionEvaluation?.primaryAskCorrect === false
+                    ? "default"
+                    : "outline"
+                }
+                className="h-6 px-2 text-[10px]"
+                onClick={() =>
+                  onUpdateQuestion({ primaryAskCorrect: false })
+                }
+              >
+                Primary ask wrong
+              </Button>
+            </div>
           </div>
         ) : null}
         {taxonomyAdjudicationDisposition ? (

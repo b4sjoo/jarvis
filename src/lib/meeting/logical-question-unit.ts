@@ -2,6 +2,12 @@ import type { AdvisorTurnIntentDecision } from "./advisor-turn-intent.js";
 import { createMeetingId } from "./context-manager.js";
 import type { TranscriptTurn } from "./types.js";
 import type { PendingInterviewSectionHint } from "./interview-section-transition.js";
+import {
+  composePrimaryAskProjection,
+  formatPrimaryAskProjectionForTrace,
+  isPrimaryAskCompletion,
+  type PrimaryAskProjection,
+} from "./primary-ask-projection.js";
 
 export const LOGICAL_QUESTION_MAX_PREVIOUS_TURNS = 3;
 export const LOGICAL_QUESTION_MAX_AGE_MS = 30_000;
@@ -32,6 +38,7 @@ export interface LogicalQuestionUnit {
   boundaryReason: string;
   truncated: boolean;
   sectionHint?: PendingInterviewSectionHint;
+  primaryAskProjection?: PrimaryAskProjection;
 }
 
 export interface ComposeLogicalQuestionUnitInput {
@@ -50,6 +57,19 @@ export interface ComposeLogicalQuestionUnitInput {
   committedParentBoundary?: boolean;
   now?: number;
   sectionHint?: PendingInterviewSectionHint;
+  primaryAskProjection?: PrimaryAskProjection;
+}
+
+export interface LogicalQuestionUnitTraceMetadata {
+  [key: string]: unknown;
+  logicalQuestionUnitId?: string;
+  logicalQuestionUnitRevision?: number;
+  logicalQuestionCurrentTurnId?: string;
+  logicalQuestionSourceTurnIds?: string[];
+  logicalQuestionChars?: number;
+  logicalQuestionCompositionReasons?: string[];
+  logicalQuestionBoundaryReason?: string;
+  logicalQuestionTruncated?: boolean;
 }
 
 export function composeLogicalQuestionUnit(
@@ -78,7 +98,14 @@ export function composeLogicalQuestionUnit(
   const sourceTurnIds = Array.from(
     new Set([...sources.map((source) => source.turnId), ...relatedSourceTurnIds])
   );
-  const normalized = joinBoundedSources(sources);
+  const primaryAskProjection = composePrimaryAskProjection({
+    current: input.primaryAskProjection,
+    previous: previous?.primaryAskProjection,
+    extended: shouldExtend,
+  });
+  const normalized = primaryAskProjection?.normalizedPrimaryAsk
+    ? boundPrimaryAsk(primaryAskProjection.normalizedPrimaryAsk)
+    : joinBoundedSources(sources);
 
   return {
     id: shouldExtend ? previous!.id : createMeetingId("logical_question"),
@@ -106,12 +133,13 @@ export function composeLogicalQuestionUnit(
         previous!.sources.length + 1 >
           LOGICAL_QUESTION_MAX_PREVIOUS_TURNS + 1),
     sectionHint: input.sectionHint,
+    primaryAskProjection,
   };
 }
 
 export function formatLogicalQuestionUnitForTrace(
   unit: LogicalQuestionUnit | undefined
-) {
+): LogicalQuestionUnitTraceMetadata {
   if (!unit) return {};
   return {
     logicalQuestionUnitId: unit.id,
@@ -126,6 +154,7 @@ export function formatLogicalQuestionUnitForTrace(
     sectionHintType: unit.sectionHint?.questionType,
     sectionHintDisposition: unit.sectionHint?.disposition,
     sectionHintSourceTurnId: unit.sectionHint?.sourceTurnId,
+    ...formatPrimaryAskProjectionForTrace(unit.primaryAskProjection),
   };
 }
 
@@ -164,6 +193,14 @@ function resolveCompositionBoundary(
 
   const intent = input.intentDecision;
   const reasons: string[] = [];
+  if (
+    isPrimaryAskCompletion({
+      current: input.primaryAskProjection,
+      previous: previous.primaryAskProjection,
+    })
+  ) {
+    reasons.push("primary-ask-completion");
+  }
   if (intent?.intent === "constraint-or-follow-up") {
     reasons.push("constraint-or-follow-up");
   }
@@ -358,6 +395,14 @@ function joinBoundedSources(sources: LogicalQuestionSource[]) {
   return {
     text: [prefix, current].filter(Boolean).join(" "),
     truncated: true,
+  };
+}
+
+function boundPrimaryAsk(text: string) {
+  const normalized = normalizeText(text);
+  return {
+    text: normalized.slice(0, LOGICAL_QUESTION_MAX_CHARS).trim(),
+    truncated: normalized.length > LOGICAL_QUESTION_MAX_CHARS,
   };
 }
 

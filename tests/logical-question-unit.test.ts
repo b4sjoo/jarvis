@@ -10,6 +10,7 @@ import {
   createPendingInterviewSectionHint,
   detectInterviewSectionTransition,
 } from "../src/lib/meeting/interview-section-transition.js";
+import { projectPrimaryAsk } from "../src/lib/meeting/primary-ask-projection.js";
 
 function turn(
   id: string,
@@ -352,4 +353,78 @@ test("referential completion uses its bounded 45 second window", () => {
   assert.ok(composed.compositionReasons.includes("referential-completion"));
   assert.notEqual(separated.id, previous.id);
   assert.equal(separated.boundaryReason, "question-window-expired");
+});
+
+test("keeps dense recruiter setup as source context but classifies the terminal ask", () => {
+  const current = turn(
+    "turn_dense",
+    "You can ask the team what their challenges are. How does this sound relative to what you're looking for?",
+    1_000
+  );
+  const unit = composeLogicalQuestionUnit({
+    currentTurn: current,
+    sessionId: "session-a",
+    runtimeEpoch: 1,
+    primaryAskProjection: projectPrimaryAsk({
+      turnId: current.id,
+      text: current.text,
+    }),
+  });
+
+  assert.equal(
+    unit.normalizedText,
+    "How does this sound relative to what you're looking for?"
+  );
+  assert.equal(unit.sources[0]?.text, current.text);
+  assert.equal(
+    unit.primaryAskProjection?.quotedOrFutureExampleSpans.length,
+    1
+  );
+});
+
+test("revises one logical question when a referential ask follows setup", () => {
+  const setupTurn = turn(
+    "turn_setup",
+    "The role focuses on production AI infrastructure and platform reliability.",
+    1_000
+  );
+  const setup = composeLogicalQuestionUnit({
+    currentTurn: setupTurn,
+    sessionId: "session-a",
+    runtimeEpoch: 1,
+    primaryAskProjection: projectPrimaryAsk({
+      turnId: setupTurn.id,
+      text: setupTurn.text,
+    }),
+  });
+  const askTurn = turn(
+    "turn_ask",
+    "How does this sound relative to what you're looking for?",
+    2_000
+  );
+  const askProjection = projectPrimaryAsk({
+    turnId: askTurn.id,
+    text: askTurn.text,
+  });
+  const revised = composeLogicalQuestionUnit({
+    currentTurn: askTurn,
+    sessionId: "session-a",
+    runtimeEpoch: 1,
+    previousUnit: setup,
+    primaryAskProjection: askProjection,
+    intentDecision: decideAdvisorTurnIntent(
+      askProjection.normalizedPrimaryAsk ?? askTurn.text,
+      { hasActiveTask: false, hasRecentQuestionContext: true }
+    ),
+  });
+
+  assert.equal(revised.id, setup.id);
+  assert.equal(revised.revision, 2);
+  assert.equal(revised.boundaryReason, "bounded-continuation");
+  assert.ok(revised.compositionReasons.includes("primary-ask-completion"));
+  assert.equal(
+    revised.primaryAskProjection?.disposition,
+    "revise-existing-lqu"
+  );
+  assert.deepEqual(revised.sourceTurnIds, ["turn_setup", "turn_ask"]);
 });

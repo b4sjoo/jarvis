@@ -1258,6 +1258,7 @@ export interface QuestionHumanEvaluation {
   correctedCompany?: string;
   relation?: string;
   correctedRelation?: string;
+  primaryAskCorrect?: boolean;
   playbookId?: string;
   detectedPlaybookPhase?: string;
   correctedPlaybookPhase?: string;

@@ -511,6 +511,16 @@ test("compact trace summaries preserve task boundary and cross-domain evidence",
       logicalQuestionTruncated: false,
       canonicalLogicalQuestionMaterialized: true,
       canonicalLogicalQuestionMaterializationReason: "answer-refresh",
+      primaryAskSpeechAct: "question",
+      primaryAskDisposition: "answer-primary-ask",
+      primaryAskReason: "terminal-ask-after-setup",
+      primaryAskConfidence: 0.97,
+      primaryAskNormalizedText: "How does this role sound to you?",
+      primaryAskSourceTurnIds: ["turn_1", "turn_2"],
+      primaryAskSourceChars: 320,
+      primaryAskSpanCount: 1,
+      primaryAskSetupSpanCount: 2,
+      primaryAskQuotedOrFutureSpanCount: 1,
       logicalQuestionLeaseAuthorized: true,
       logicalQuestionLeaseAuthorizationReason: "logical-question-current",
       logicalQuestionLeaseAuthorizationStage: "final-commit",
@@ -568,7 +578,7 @@ test("compact trace summaries preserve task boundary and cross-domain evidence",
   );
   assert.ok(summaryWrite);
   const summary = parsePayload(summaryWrite);
-  assert.equal(summary.version, 10);
+  assert.equal(summary.version, 11);
   assert.equal(summary.taskRelation, "new-parent");
   assert.equal(summary.logicalQuestionUnitRevision, 3);
   assert.deepEqual(summary.logicalQuestionSourceTurnIds, ["turn_1", "turn_2"]);
@@ -580,6 +590,11 @@ test("compact trace summaries preserve task boundary and cross-domain evidence",
   assert.equal(summary.advisorOutputCommittedToUi, true);
   assert.equal(summary.visibleAnswerChanged, true);
   assert.equal(summary.logicalQuestionLeaseAuthorized, true);
+  assert.equal(summary.primaryAskSpeechAct, "question");
+  assert.equal(summary.primaryAskDisposition, "answer-primary-ask");
+  assert.equal(summary.primaryAskNormalizedText, "How does this role sound to you?");
+  assert.deepEqual(summary.primaryAskSourceTurnIds, ["turn_1", "turn_2"]);
+  assert.equal(summary.primaryAskQuotedOrFutureSpanCount, 1);
   assert.equal(
     summary.logicalQuestionLeaseAuthorizationReason,
     "logical-question-current"

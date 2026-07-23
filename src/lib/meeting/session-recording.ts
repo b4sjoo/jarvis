@@ -30,7 +30,7 @@ import {
 import { serializeMeetingTraceExport } from "./trace.js";
 
 const SESSION_RECORDING_SCHEMA_VERSION = 1;
-const SESSION_TRACE_SUMMARY_SCHEMA_VERSION = 10;
+const SESSION_TRACE_SUMMARY_SCHEMA_VERSION = 11;
 const SESSION_TRACE_INDEX_SCHEMA_VERSION = 1;
 
 interface SessionRecordingStartOptions {
@@ -194,6 +194,16 @@ export interface SessionCompactTraceSummary {
   logicalQuestionTruncated?: boolean;
   canonicalLogicalQuestionMaterialized?: boolean;
   canonicalLogicalQuestionMaterializationReason?: string;
+  primaryAskSpeechAct?: string;
+  primaryAskDisposition?: string;
+  primaryAskReason?: string;
+  primaryAskConfidence?: number;
+  primaryAskNormalizedText?: string;
+  primaryAskSourceTurnIds: string[];
+  primaryAskSourceChars?: number;
+  primaryAskSpanCount?: number;
+  primaryAskSetupSpanCount?: number;
+  primaryAskQuotedOrFutureSpanCount?: number;
   logicalQuestionLeaseAuthorized?: boolean;
   logicalQuestionLeaseAuthorizationReason?: string;
   logicalQuestionLeaseAuthorizationStage?: string;
@@ -2275,6 +2285,43 @@ function buildCompactTraceSummary({
     canonicalLogicalQuestionMaterializationReason: readFirstString(
       metadataSources,
       "canonicalLogicalQuestionMaterializationReason"
+    ),
+    primaryAskSpeechAct: readFirstString(
+      metadataSources,
+      "primaryAskSpeechAct"
+    ),
+    primaryAskDisposition: readFirstString(
+      metadataSources,
+      "primaryAskDisposition"
+    ),
+    primaryAskReason: readFirstString(metadataSources, "primaryAskReason"),
+    primaryAskConfidence: readFirstNumberFromMetadata(
+      metadataSources,
+      "primaryAskConfidence"
+    ),
+    primaryAskNormalizedText: readFirstString(
+      metadataSources,
+      "primaryAskNormalizedText"
+    ),
+    primaryAskSourceTurnIds: readFirstStringList(
+      metadataSources,
+      "primaryAskSourceTurnIds"
+    ),
+    primaryAskSourceChars: readFirstNumberFromMetadata(
+      metadataSources,
+      "primaryAskSourceChars"
+    ),
+    primaryAskSpanCount: readFirstNumberFromMetadata(
+      metadataSources,
+      "primaryAskSpanCount"
+    ),
+    primaryAskSetupSpanCount: readFirstNumberFromMetadata(
+      metadataSources,
+      "primaryAskSetupSpanCount"
+    ),
+    primaryAskQuotedOrFutureSpanCount: readFirstNumberFromMetadata(
+      metadataSources,
+      "primaryAskQuotedOrFutureSpanCount"
     ),
     logicalQuestionLeaseAuthorized: readFirstBoolean(
       metadataSources,

@@ -43,6 +43,7 @@ export * from "./opening-route";
 export * from "./memory-evaluation";
 export * from "./personal-evidence-guardrail";
 export * from "./project-binding";
+export * from "./primary-ask-projection";
 export * from "./question-lineage";
 export * from "./runtime-commit-authorization";
 export * from "./screen-observation.service";

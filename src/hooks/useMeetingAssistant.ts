@@ -74,6 +74,7 @@ import {
   ManualQuestionTypeCorrectionSource,
   LogicalQuestionUnit,
   LogicalQuestionUnitLease,
+  PrimaryAskProjection,
   NativeSpeechDetectedEvent,
   WhiteboardUpdateSource,
   MeetingContextManager,
@@ -199,6 +200,10 @@ import {
   createLogicalQuestionUnitLease,
   decideLogicalQuestionMaterialization,
   formatLogicalQuestionLeaseForTrace,
+  formatPrimaryAskProjectionForTrace,
+  primaryAskClassifierText,
+  projectPrimaryAsk,
+  reconcilePrimaryAskTurnDecision,
   composeContextScopeAdvisorPromptContext,
   evaluateAnswerContextResolvabilityShadow,
   scoreAnswerSufficiencySemanticEmbedding,
@@ -6956,12 +6961,14 @@ export function useMeetingAssistant() {
       intentDecision,
       explicitTaskSwitch = false,
       sectionHint,
+      primaryAskProjection,
     }: {
       turn: TranscriptTurn;
       traceId: string;
       intentDecision: AdvisorTurnIntentDecision;
       explicitTaskSwitch?: boolean;
       sectionHint?: PendingInterviewSectionHint;
+      primaryAskProjection?: PrimaryAskProjection;
     }) => {
       const contextState = contextManagerRef.current.getState();
       const previous = logicalQuestionUnitRef.current;
@@ -7008,6 +7015,9 @@ export function useMeetingAssistant() {
         ),
         explicitTaskSwitch,
         sectionHint,
+        primaryAskProjection:
+          primaryAskProjection ??
+          projectPrimaryAsk({ turnId: turn.id, text: turn.text }),
       });
       logicalQuestionUnitRef.current = logicalQuestionUnit;
       traceStoreRef.current.updateMetadata(
@@ -7040,7 +7050,7 @@ export function useMeetingAssistant() {
       const presentation: ForceAdviseTargetPresentation = {
         originalTraceId: traceId,
         turnId: turn.id,
-        text: turn.text,
+        text: logicalQuestionUnit.normalizedText || turn.text,
         observedAction: toObservedAdvisorAction(intentDecision),
         executionAuthorized: intentDecision.executionAuthorized,
         logicalQuestionUnitId: logicalQuestionUnit.id,
@@ -7741,17 +7751,35 @@ export function useMeetingAssistant() {
           );
         }
 
-        const turnGate = evaluateThemTurnForAdvisor(turn, {
-          hasActiveTask: hasActiveInterviewTask,
-          hasRecentQuestionContext: Boolean(
-            currentQuestionLineageRef.current ||
-              adjacentConstraintDecision.inherited
-          ),
+        const primaryAskProjection = projectPrimaryAsk({
+          turnId: turn.id,
+          text: turn.text,
         });
+        const projectedClassifierText = primaryAskClassifierText(
+          primaryAskProjection,
+          turn.text
+        );
+        const turnGate = reconcilePrimaryAskTurnDecision(
+          primaryAskProjection,
+          evaluateThemTurnForAdvisor(
+            { ...turn, text: projectedClassifierText },
+            {
+              hasActiveTask: hasActiveInterviewTask,
+              hasRecentQuestionContext: Boolean(
+                currentQuestionLineageRef.current ||
+                  adjacentConstraintDecision.inherited
+              ),
+            }
+          )
+        );
+        traceStoreRef.current.updateMetadata(
+          traceId,
+          formatPrimaryAskProjectionForTrace(primaryAskProjection)
+        );
         const keywordIntentEvidence =
           formatInterviewerIntentKeywordEvidenceForTrace(
             extractInterviewerIntentKeywordEvidence({
-              text: turn.text,
+              text: projectedClassifierText,
               turnDecision: turnGate,
               currentTurnId: turn.id,
             })
@@ -7802,7 +7830,7 @@ export function useMeetingAssistant() {
 
         const currentQuestionType =
           normalizeCanonicalQuestionType(
-            inferCanonicalQuestionTypeFromText(turn.text)
+            inferCanonicalQuestionTypeFromText(projectedClassifierText)
           ) ?? "unknown";
         const sectionHintConsumption = consumeInterviewSectionHint({
           hint: pendingInterviewSectionHintRef.current,
@@ -7841,6 +7869,7 @@ export function useMeetingAssistant() {
                   sectionHintConsumption.disposition === "applied"
                     ? sectionHintConsumption.hint
                     : undefined,
+                primaryAskProjection,
               })
             : undefined;
         if (logicalQuestionUnit) {
@@ -7987,7 +8016,8 @@ export function useMeetingAssistant() {
               lineage: provisionalQuestionLineage,
               questionTurnId: turn.id,
               questionTraceId: traceId,
-              questionText: turn.text,
+              questionText:
+                logicalQuestionUnit?.normalizedText || projectedClassifierText,
               sessionId: contextState.sessionId,
               runtimeEpoch: runtimeEpochRef.current,
             });

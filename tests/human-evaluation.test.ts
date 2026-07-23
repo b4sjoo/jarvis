@@ -229,6 +229,50 @@ test("merges question-level LLM taxonomy adjudication labels", () => {
   });
 });
 
+test("persists primary-ask correctness independently from advisor admission", () => {
+  const first = upsertQuestionHumanEvaluation(
+    [],
+    {
+      traceId: "trace_primary_ask",
+      traceKind: "voice",
+      questionId: "question_primary_ask",
+    },
+    { primaryAskCorrect: false }
+  );
+  const updated = upsertQuestionHumanEvaluation(
+    first,
+    {
+      traceId: "trace_primary_ask",
+      traceKind: "voice",
+      questionId: "question_primary_ask",
+    },
+    {
+      advisorIntent: buildAdvisorIntentEvaluationFromTrace({
+        trace: {
+          id: "trace_primary_ask",
+          kind: "voice",
+          status: "success",
+          startedAt: 1,
+          steps: [],
+          inputs: [],
+          outputs: [],
+          metadata: {
+            advisorExecutionAuthorized: false,
+            logicalQuestionUnitId: "logical_primary_ask",
+            logicalQuestionUnitRevision: 1,
+            logicalQuestionSourceTurnIds: ["turn_primary_ask"],
+          },
+        },
+        expectedAction: "advise",
+        source: "explicit-human-label",
+      }),
+    }
+  );
+
+  assert.equal(updated[0]?.primaryAskCorrect, false);
+  assert.equal(updated[0]?.advisorIntent?.verdict, "false-negative");
+});
+
 test("merges answer sufficiency labels without dropping context-source evidence", () => {
   const first = upsertQuestionHumanEvaluation(
     [],

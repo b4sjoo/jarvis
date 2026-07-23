@@ -372,6 +372,22 @@ function cloneLogicalQuestionUnit(unit: LogicalQuestionUnit) {
     sourceTurnIds: [...unit.sourceTurnIds],
     sources: unit.sources.map((source) => ({ ...source })),
     compositionReasons: [...unit.compositionReasons],
+    primaryAskProjection: unit.primaryAskProjection
+      ? {
+          ...unit.primaryAskProjection,
+          sourceTurnIds: [...unit.primaryAskProjection.sourceTurnIds],
+          primaryAskSpans: unit.primaryAskProjection.primaryAskSpans.map(
+            (span) => ({ ...span })
+          ),
+          setupSpans: unit.primaryAskProjection.setupSpans.map((span) => ({
+            ...span,
+          })),
+          quotedOrFutureExampleSpans:
+            unit.primaryAskProjection.quotedOrFutureExampleSpans.map(
+              (span) => ({ ...span })
+            ),
+        }
+      : undefined,
   };
 }
 

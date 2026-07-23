@@ -331,6 +331,8 @@ export function upsertQuestionHumanEvaluation(
     relation: patch.relation ?? existing?.relation ?? identity.relation,
     correctedRelation:
       patch.correctedRelation ?? existing?.correctedRelation,
+    primaryAskCorrect:
+      patch.primaryAskCorrect ?? existing?.primaryAskCorrect,
     playbookId:
       patch.playbookId ?? existing?.playbookId ?? identity.playbookId,
     detectedPlaybookPhase:
@@ -698,6 +700,10 @@ function normalizeQuestionHumanEvaluation(
     correctedCompany: readOptionalString(candidate.correctedCompany),
     relation: readOptionalString(candidate.relation),
     correctedRelation: readOptionalString(candidate.correctedRelation),
+    primaryAskCorrect:
+      typeof candidate.primaryAskCorrect === "boolean"
+        ? candidate.primaryAskCorrect
+        : undefined,
     playbookId: readOptionalString(candidate.playbookId),
     detectedPlaybookPhase: readOptionalString(candidate.detectedPlaybookPhase),
     correctedPlaybookPhase: readOptionalString(candidate.correctedPlaybookPhase),
