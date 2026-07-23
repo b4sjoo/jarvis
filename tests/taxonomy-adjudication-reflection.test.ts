@@ -22,6 +22,9 @@ test("compares lexical, semantic, LLM, runtime, and human adjudication evidence"
         taxonomyAdjudicationOutputChars: 160,
         taxonomyAdjudicationProviderId: "fast-provider",
         taxonomyAdjudicationModelId: "fast-model",
+        taxonomyAdjudicationProviderDisposition: "completed-with-content",
+        taxonomyAdjudicationParseDisposition: "valid-json",
+        taxonomyAdjudicationTriggerReasons: ["lexical-unknown"],
       }),
       decision("trace_2", "unit_2", 1, {
         taxonomyAdjudicationEligible: true,
@@ -32,6 +35,9 @@ test("compares lexical, semantic, LLM, runtime, and human adjudication evidence"
         taxonomyAdjudicationWouldRepair: true,
         taxonomyAdjudicationArrivalStage: "post-visible-answer",
         taxonomyAdjudicationDurationMs: 1_800,
+        taxonomyAdjudicationProviderDisposition: "completed-with-content",
+        taxonomyAdjudicationParseDisposition: "valid-json",
+        taxonomyAdjudicationTriggerReasons: ["semantic-conflict"],
       }),
       decision("trace_3", "unit_3", 1, {
         taxonomyAdjudicationEligible: false,
@@ -84,6 +90,16 @@ test("compares lexical, semantic, LLM, runtime, and human adjudication evidence"
   assert.equal(report.metrics.substantiveUnits, 3);
   assert.equal(report.metrics.triggeredCalls, 2);
   assert.equal(report.metrics.triggerRate, 2 / 3);
+  assert.equal(report.metrics.triggerRateWarning, true);
+  assert.equal(report.metrics.triggerRateTarget, 0.15);
+  assert.deepEqual(report.metrics.triggerReasons, {
+    "lexical-unknown": 1,
+    "semantic-conflict": 1,
+  });
+  assert.deepEqual(report.metrics.providerDispositions, {
+    "completed-with-content": 2,
+  });
+  assert.deepEqual(report.metrics.parseDispositions, { "valid-json": 2 });
   assert.equal(report.metrics.typePrecision, 1);
   assert.equal(report.metrics.relationPrecision, 1);
   assert.equal(report.metrics.correctButOperationallyUnusable, 1);
@@ -96,6 +112,10 @@ test("compares lexical, semantic, LLM, runtime, and human adjudication evidence"
   assert.match(
     renderTaxonomyAdjudicationReflectionMarkdown(report),
     /Shadow evidence only/
+  );
+  assert.match(
+    renderTaxonomyAdjudicationReflectionMarkdown(report),
+    /Trigger-rate review: WARNING/
   );
 });
 

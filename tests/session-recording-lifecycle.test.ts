@@ -335,12 +335,17 @@ test("late LLM taxonomy adjudication stays joinable after trace export", async (
       taxonomyAdjudicationUnitId: "logical_1",
       taxonomyAdjudicationUnitRevision: 2,
       taxonomyAdjudicationProviderId: "fast-classifier",
+      taxonomyAdjudicationProviderDisposition: "completed-with-content",
+      taxonomyAdjudicationParseDisposition: "valid-json",
       taxonomyAdjudicationCandidateType: "coding",
       taxonomyAdjudicationRelation: "new-parent",
       taxonomyAdjudicationParseValid: true,
       taxonomyAdjudicationWouldRepair: true,
       taxonomyAdjudicationRepairApplied: false,
       taxonomyAdjudicationDurationMs: 611,
+      taxonomyAdjudicationRawOutputHash: "hash-1",
+      taxonomyAdjudicationRawOutputStored: true,
+      taxonomyAdjudicationRawOutputTruncated: false,
     },
   });
   await settle();
@@ -368,6 +373,11 @@ test("late LLM taxonomy adjudication stays joinable after trace export", async (
   assert.equal(adjudication.wouldRepair, true);
   assert.equal(adjudication.repairApplied, false);
   assert.equal(adjudication.durationMs, 611);
+  assert.equal(adjudication.providerDisposition, "completed-with-content");
+  assert.equal(adjudication.parseDisposition, "valid-json");
+  assert.equal(adjudication.rawOutputHash, "hash-1");
+  assert.equal(adjudication.rawOutputStored, true);
+  assert.equal(adjudication.rawOutputTruncated, false);
 
   await manager.stop("test-complete");
 });

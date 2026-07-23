@@ -200,6 +200,7 @@ import {
   type TaskTaxonomyAuthorityDecision,
   TaxonomyAdjudicationRuntime,
   type TaxonomyAdjudicationRequestResult,
+  TAXONOMY_ADJUDICATION_MAX_OUTPUT_CHARS,
   authorizeTaxonomyAdjudicationLease,
   buildTaxonomyAdjudicationRequest,
   createTaxonomyAdjudicationLease,
@@ -5617,12 +5618,47 @@ export function useMeetingAssistant() {
                 parsedValue.relation === "new-parent" ||
                 parsedValue.relation === "linked-parent-extension")
           );
-          const finalDisposition =
-            settlement.disposition === "completed" && !authorization.authorized
-              ? "stale"
-              : settlement.disposition === "completed" && !parsed?.ok
-                ? "invalid-output"
-                : settlement.disposition;
+          const rawOutput = settlement.result?.rawOutput ?? "";
+          const providerDisposition =
+            settlement.result?.providerDisposition ??
+            (settlement.disposition === "error"
+              ? "request-error"
+              : settlement.disposition);
+          const parseDisposition =
+            settlement.result?.parseDisposition ??
+            (settlement.disposition === "error"
+              ? "not-run-request-error"
+              : "not-run");
+          const recordingActive =
+            sessionRecordingManagerRef.current?.getState().active ?? false;
+          const rawOutputStored = Boolean(
+            rawOutput && (debugModeRef.current || recordingActive)
+          );
+          const boundedRawOutput = rawOutput.slice(
+            0,
+            TAXONOMY_ADJUDICATION_MAX_OUTPUT_CHARS
+          );
+          let finalDisposition:
+            | typeof settlement.disposition
+            | "stale"
+            | "provider-error-output"
+            | "invalid-output" = settlement.disposition;
+          if (
+            settlement.disposition === "completed" &&
+            !authorization.authorized
+          ) {
+            finalDisposition = "stale";
+          } else if (
+            settlement.disposition === "completed" &&
+            providerDisposition === "provider-error-content"
+          ) {
+            finalDisposition = "provider-error-output";
+          } else if (
+            settlement.disposition === "completed" &&
+            !parsed?.ok
+          ) {
+            finalDisposition = "invalid-output";
+          }
           const metadata = {
             ...scheduledMetadata,
             taxonomyAdjudicationDisposition: finalDisposition,
@@ -5631,8 +5667,19 @@ export function useMeetingAssistant() {
               : authorization.reason,
             taxonomyAdjudicationCompletedAt: settlement.completedAt,
             taxonomyAdjudicationDurationMs: settlement.durationMs,
-            taxonomyAdjudicationOutputChars:
-              settlement.result?.rawOutput.length,
+            taxonomyAdjudicationOutputChars: rawOutput.length,
+            taxonomyAdjudicationProviderDisposition: providerDisposition,
+            taxonomyAdjudicationParseDisposition: parseDisposition,
+            taxonomyAdjudicationRawOutputHash: rawOutput
+              ? hashTaxonomySourceTurnIds([rawOutput])
+              : undefined,
+            taxonomyAdjudicationRawOutputStored: rawOutputStored,
+            taxonomyAdjudicationRawOutputTruncated:
+              rawOutput.length > boundedRawOutput.length,
+            taxonomyAdjudicationRawOutputPreview:
+              debugModeRef.current && rawOutput
+                ? boundedRawOutput.slice(0, 320)
+                : undefined,
             taxonomyAdjudicationParseValid: parsed?.ok ?? false,
             taxonomyAdjudicationParseError:
               parsed && !parsed.ok ? parsed.reason : undefined,
@@ -5653,14 +5700,48 @@ export function useMeetingAssistant() {
                   ? String(settlement.error)
                   : undefined,
           };
+          if (rawOutputStored) {
+            if (debugModeRef.current) {
+              traceStoreRef.current.recordOutput(
+                traceId,
+                "taxonomy adjudication raw output",
+                boundedRawOutput,
+                {
+                  providerDisposition,
+                  parseDisposition,
+                  truncated: rawOutput.length > boundedRawOutput.length,
+                }
+              );
+            }
+            if (recordingActive) {
+              sessionRecordingManagerRef.current?.recordModelOutput({
+                traceId,
+                taskId: latestContext.activeMeetingTask?.id,
+                label: "taxonomy adjudication raw output",
+                value: boundedRawOutput,
+                metadata: {
+                  providerDisposition,
+                  parseDisposition,
+                  originalChars: rawOutput.length,
+                  truncated: rawOutput.length > boundedRawOutput.length,
+                },
+              });
+            }
+          }
           traceStoreRef.current.updateMetadata(traceId, metadata);
           if (stepId) {
             traceStoreRef.current.finishStep(
               traceId,
               stepId,
-              finalDisposition === "error" ? "error" : "success",
+              finalDisposition === "error" ||
+                finalDisposition === "provider-error-output"
+                ? "error"
+                : "success",
               metadata,
-              settlement.error
+              settlement.error ??
+                (finalDisposition === "provider-error-output"
+                  ? "Provider returned error content"
+                  : undefined)
             );
           }
           sessionRecordingManagerRef.current?.recordTaxonomyAdjudicationDecision({

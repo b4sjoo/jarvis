@@ -3,6 +3,8 @@ import {
   type CanonicalQuestionType,
 } from "./task-taxonomy.js";
 
+export const TAXONOMY_ADJUDICATION_TRIGGER_RATE_REVIEW_THRESHOLD = 0.15;
+
 export interface TaxonomyAdjudicationRecordedDecision {
   recordedAt: number;
   sessionId?: string;
@@ -51,6 +53,8 @@ export interface TaxonomyAdjudicationCompactTrace {
     providerId?: string;
     modelId?: string;
     disposition?: string;
+    providerDisposition?: string;
+    parseDisposition?: string;
     staleReason?: string;
     candidateType?: string;
     relation?: string;
@@ -77,6 +81,8 @@ export interface TaxonomyAdjudicationReflectionRow {
   providerId?: string;
   modelId?: string;
   disposition?: string;
+  providerDisposition?: string;
+  parseDisposition?: string;
   staleReason?: string;
   lexicalType: CanonicalQuestionType;
   localSemanticType?: CanonicalQuestionType;
@@ -112,7 +118,12 @@ export interface TaxonomyAdjudicationReflectionReport {
     triggeredCalls: number;
     skipped: number;
     triggerRate: number | null;
+    triggerRateTarget: number;
+    triggerRateWarning: boolean;
+    triggerReasons: Record<string, number>;
     dispositions: Record<string, number>;
+    providerDispositions: Record<string, number>;
+    parseDispositions: Record<string, number>;
     validOutputs: number;
     invalidOutputs: number;
     staleOrSuperseded: number;
@@ -226,6 +237,12 @@ export function buildTaxonomyAdjudicationReflectionReport(input: {
       modelId:
         readString(metadata, "taxonomyAdjudicationModelId") ?? summary?.modelId,
       disposition,
+      providerDisposition:
+        readString(metadata, "taxonomyAdjudicationProviderDisposition") ??
+        summary?.providerDisposition,
+      parseDisposition:
+        readString(metadata, "taxonomyAdjudicationParseDisposition") ??
+        summary?.parseDisposition,
       staleReason:
         readString(metadata, "taxonomyAdjudicationStaleReason") ??
         summary?.staleReason,
@@ -294,6 +311,7 @@ export function buildTaxonomyAdjudicationReflectionReport(input: {
   );
   const inputChars = sum(rows.map((row) => row.inputChars));
   const outputChars = sum(rows.map((row) => row.outputChars));
+  const triggerRate = ratio(triggeredRows.length, substantiveRows.length);
 
   return {
     version: 1,
@@ -305,8 +323,22 @@ export function buildTaxonomyAdjudicationReflectionReport(input: {
       eligible: rows.filter((row) => row.eligible).length,
       triggeredCalls: triggeredRows.length,
       skipped: rows.filter((row) => !row.eligible || !row.durationMs).length,
-      triggerRate: ratio(triggeredRows.length, substantiveRows.length),
+      triggerRate,
+      triggerRateTarget:
+        TAXONOMY_ADJUDICATION_TRIGGER_RATE_REVIEW_THRESHOLD,
+      triggerRateWarning:
+        triggerRate !== null &&
+        triggerRate > TAXONOMY_ADJUDICATION_TRIGGER_RATE_REVIEW_THRESHOLD,
+      triggerReasons: countStrings(
+        rows.flatMap((row) => row.triggerReasons)
+      ),
       dispositions: countStrings(rows.map((row) => row.disposition)),
+      providerDispositions: countStrings(
+        triggeredRows.map((row) => row.providerDisposition)
+      ),
+      parseDispositions: countStrings(
+        triggeredRows.map((row) => row.parseDisposition)
+      ),
       validOutputs: rows.filter((row) => row.parseValid === true).length,
       invalidOutputs: rows.filter((row) => row.parseValid === false).length,
       staleOrSuperseded: rows.filter(
@@ -320,6 +352,7 @@ export function buildTaxonomyAdjudicationReflectionReport(input: {
           (row.disposition === "stale" ||
             row.disposition === "superseded" ||
             row.disposition === "invalid-output" ||
+            row.disposition === "provider-error-output" ||
             row.arrivalStage === "post-visible-answer")
       ).length,
       labeledTypeProposals: typeLabeled.length,
@@ -391,6 +424,7 @@ export function renderTaxonomyAdjudicationReflectionMarkdown(
     `- Observed / substantive units: ${report.metrics.observedUnits} / ${report.metrics.substantiveUnits}`,
     `- Eligible / triggered calls: ${report.metrics.eligible} / ${report.metrics.triggeredCalls}`,
     `- Trigger rate: ${percent(report.metrics.triggerRate)}`,
+    `- Trigger-rate review: ${report.metrics.triggerRateWarning ? "WARNING" : "within target"} (target <= ${percent(report.metrics.triggerRateTarget)})`,
     `- Valid / invalid outputs: ${report.metrics.validOutputs} / ${report.metrics.invalidOutputs}`,
     `- Stale or superseded: ${report.metrics.staleOrSuperseded}`,
     `- Would repair / applied: ${report.metrics.wouldRepair} / ${report.metrics.repairApplied}`,
@@ -413,6 +447,20 @@ export function renderTaxonomyAdjudicationReflectionMarkdown(
     "## Dispositions",
     "",
     ...formatCountMap(report.metrics.dispositions),
+    "",
+    "## Trigger Reasons",
+    "",
+    ...formatCountMap(report.metrics.triggerReasons),
+    "",
+    "## Provider / Parser Diagnostics",
+    "",
+    "### Provider Dispositions",
+    "",
+    ...formatCountMap(report.metrics.providerDispositions),
+    "",
+    "### Parse Dispositions",
+    "",
+    ...formatCountMap(report.metrics.parseDispositions),
     "",
     "## Type Confusion",
     "",

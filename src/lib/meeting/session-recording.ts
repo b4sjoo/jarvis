@@ -244,6 +244,8 @@ export interface SessionCompactTraceSummary {
     providerId?: string;
     modelId?: string;
     disposition?: string;
+    providerDisposition?: string;
+    parseDisposition?: string;
     staleReason?: string;
     candidateType?: string;
     relation?: string;
@@ -257,6 +259,9 @@ export interface SessionCompactTraceSummary {
     durationMs?: number;
     inputChars?: number;
     outputChars?: number;
+    rawOutputHash?: string;
+    rawOutputStored?: boolean;
+    rawOutputTruncated?: boolean;
   };
   personalEvidence?: {
     requirement?: string;
@@ -2329,6 +2334,14 @@ function buildTaxonomyAdjudicationTraceSummary(
       "taxonomyAdjudicationModelId"
     ),
     disposition,
+    providerDisposition: readFirstString(
+      metadataSources,
+      "taxonomyAdjudicationProviderDisposition"
+    ),
+    parseDisposition: readFirstString(
+      metadataSources,
+      "taxonomyAdjudicationParseDisposition"
+    ),
     staleReason: readFirstString(
       metadataSources,
       "taxonomyAdjudicationStaleReason"
@@ -2380,6 +2393,18 @@ function buildTaxonomyAdjudicationTraceSummary(
     outputChars: readFirstNumberFromMetadata(
       metadataSources,
       "taxonomyAdjudicationOutputChars"
+    ),
+    rawOutputHash: readFirstString(
+      metadataSources,
+      "taxonomyAdjudicationRawOutputHash"
+    ),
+    rawOutputStored: readFirstBoolean(
+      metadataSources,
+      "taxonomyAdjudicationRawOutputStored"
+    ),
+    rawOutputTruncated: readFirstBoolean(
+      metadataSources,
+      "taxonomyAdjudicationRawOutputTruncated"
     ),
   };
 }

@@ -3,20 +3,15 @@ import type { TYPE_PROVIDER } from "@/types";
 import type { SelectedProviderState } from "./types.js";
 import {
   buildTaxonomyAdjudicationPrompts,
-  parseTaxonomyAdjudicationOutput,
-  type TaxonomyAdjudicationParseResult,
   type TaxonomyAdjudicationRequest,
 } from "./taxonomy-adjudication.js";
+import {
+  consumeTaxonomyAdjudicationResponse,
+  type TaxonomyAdjudicationRequestResult,
+} from "./taxonomy-adjudication-response.js";
 
 export const TAXONOMY_ADJUDICATION_TIMEOUT_MS = 4_000;
 export const TAXONOMY_ADJUDICATION_MAX_OUTPUT_TOKENS = 256;
-
-export interface TaxonomyAdjudicationRequestResult {
-  rawOutput: string;
-  parsed: TaxonomyAdjudicationParseResult;
-  firstTokenAt?: number;
-  completedAt: number;
-}
 
 export async function requestTaxonomyAdjudication(input: {
   request: TaxonomyAdjudicationRequest;
@@ -26,9 +21,7 @@ export async function requestTaxonomyAdjudication(input: {
   onFirstToken?: (at: number) => void;
 }): Promise<TaxonomyAdjudicationRequestResult> {
   const prompts = buildTaxonomyAdjudicationPrompts(input.request);
-  let rawOutput = "";
-  let firstTokenAt: number | undefined;
-  for await (const chunk of fetchAIResponse({
+  const responseStream = fetchAIResponse({
     provider: input.provider,
     selectedProvider: input.selectedProvider,
     systemPrompt: prompts.systemPrompt,
@@ -39,21 +32,11 @@ export async function requestTaxonomyAdjudication(input: {
       timeoutMs: TAXONOMY_ADJUDICATION_TIMEOUT_MS,
       maxOutputTokens: TAXONOMY_ADJUDICATION_MAX_OUTPUT_TOKENS,
     },
-  })) {
-    if (input.signal.aborted) break;
-    if (firstTokenAt === undefined && chunk) {
-      firstTokenAt = Date.now();
-      input.onFirstToken?.(firstTokenAt);
-    }
-    rawOutput += chunk;
-  }
-  if (input.signal.aborted) {
-    throw new DOMException("Taxonomy adjudication aborted", "AbortError");
-  }
-  return {
-    rawOutput,
-    parsed: parseTaxonomyAdjudicationOutput(rawOutput, input.request),
-    firstTokenAt,
-    completedAt: Date.now(),
-  };
+  });
+  return consumeTaxonomyAdjudicationResponse({
+    request: input.request,
+    responseStream,
+    signal: input.signal,
+    onFirstToken: input.onFirstToken,
+  });
 }
