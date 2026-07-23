@@ -745,6 +745,8 @@ export interface AdvisorSuggestion {
   childTaskId?: string;
   taskSource?: "screen" | "voice" | "mixed";
   questionType?: ScreenQuestionType;
+  codeArtifactMutationAuthorized?: boolean;
+  whiteboardArtifactMutationAuthorized?: boolean;
   basedOnTurnIds: string[];
   basedOnObservationIds: string[];
   confidence: "low" | "medium" | "high";

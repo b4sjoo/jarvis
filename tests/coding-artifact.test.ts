@@ -224,6 +224,31 @@ test("preserves a coding child artifact while its system-design parent is stable
   assert.equal(display.isCached, true);
 });
 
+test("does not persist code from an artifact-unauthorized response", () => {
+  const existing = {
+    parentTaskId: "parent_project",
+    parentQuestionType: "project-deep-dive" as const,
+    code: "def trusted(): pass",
+    complexity: "O(1)",
+    updatedAt: 100,
+  };
+  const next = updateCodingArtifactCache({
+    activeParentTaskId: "parent_project",
+    activeParentQuestionType: "project-deep-dive",
+    cache: existing,
+    sections: sections(
+      "Answer: unrelated\nCode:\n```python\ndef polluted(): pass\n```"
+    ),
+    sourceParentTaskId: "parent_project",
+    sourceParentQuestionType: "project-deep-dive",
+    sourceCodeMutationAuthorized: false,
+    sourceSuggestionId: "suggestion_wrong_domain",
+    updatedAt: 200,
+  });
+
+  assert.equal(next, existing);
+});
+
 function sections(content: string) {
   return buildMeetingAnswerDisplayModel({ content });
 }

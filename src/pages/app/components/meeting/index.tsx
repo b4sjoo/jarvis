@@ -446,6 +446,8 @@ export const MeetingAssistant = ({
         sections: suggestionSections,
         sourceParentTaskId: completedSuggestionParentTaskId,
         sourceParentQuestionType: completedSuggestionParentQuestionType,
+        sourceCodeMutationAuthorized:
+          meeting.latestSuggestion?.codeArtifactMutationAuthorized,
         sourceSuggestionId: meeting.latestSuggestion?.id,
         updatedAt: Date.now(),
       });
@@ -455,6 +457,7 @@ export const MeetingAssistant = ({
     activeTaskKind,
     completedSuggestionParentTaskId,
     completedSuggestionParentQuestionType,
+    meeting.latestSuggestion?.codeArtifactMutationAuthorized,
     meeting.latestSuggestion?.id,
     meeting.partialSuggestion,
     suggestionSections.primaryAnswer,

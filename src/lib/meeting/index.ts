@@ -25,6 +25,7 @@ export * from "./logical-question-unit";
 export * from "./meeting-answer";
 export * from "./meeting-answer-display";
 export * from "./meeting-model-route";
+export * from "./response-artifact-authorization";
 export * from "./native-speech-event";
 export * from "./native-audio-lifecycle";
 export * from "./memory-evaluation";

@@ -249,6 +249,8 @@ import {
   areSuggestionsForSameParentTask,
   buildSuggestionTaskMetadata,
   stageSuggestionProjectionForManualCorrection,
+  authorizeResponseArtifactMutation,
+  formatResponseArtifactAuthorizationForTrace,
   formatMeetingResponseOwnerForTrace,
   formatMeetingModelRouteForTrace,
   resolveMeetingResponseOwner,
@@ -4529,6 +4531,21 @@ export function useMeetingAssistant() {
         taskBoundaryCommittedBeforeAdvisor
           ? "followup-parent"
           : advisorTaskSignals.taskRelation;
+      const artifactAuthorization = authorizeResponseArtifactMutation({
+        parentTaskId: existingInterviewTask?.id,
+        parentQuestionType:
+          existingInterviewTask?.stableKind ??
+          (continuityRelation === "new-parent"
+            ? responseOwner.questionType
+            : undefined),
+        responseOwnerQuestionType: responseOwner.questionType,
+        responseOwnerSource: responseOwner.source,
+        relation: continuityRelation,
+        creatingParent:
+          !existingInterviewTask &&
+          shouldCommitAdvisorParent &&
+          continuityRelation === "new-parent",
+      });
       const continuity = shouldCommitAdvisorParent
         ? updateInterviewTaskContinuityForAnswer({
             existingTask: existingInterviewTask,
@@ -4567,6 +4584,7 @@ export function useMeetingAssistant() {
                 ? [projectBindingDecision.binding.projectName]
                 : extractSupportedFactAnchorsFromMemory(memoryContext),
             projectBinding: projectBindingDecision.binding,
+            artifactAuthorization,
           })
         : {
             task: existingInterviewTask,
@@ -4587,8 +4605,11 @@ export function useMeetingAssistant() {
           ? "preserved"
           : "none";
       const answerArtifactMetadata = {
+        ...formatResponseArtifactAuthorizationForTrace(artifactAuthorization),
         answerCodeArtifactDecision: parsedMeetingAnswer.sections.code
-          ? "produced"
+          ? artifactAuthorization.allowCode
+            ? "produced"
+            : "ignored"
           : "none",
         answerWhiteboardArtifactDecision: whiteboardArtifactDecision,
       };
@@ -4725,6 +4746,9 @@ export function useMeetingAssistant() {
           buildSuggestionTaskMetadata(contextState.activeMeetingTask),
           parsedMeetingAnswer
         ),
+        codeArtifactMutationAuthorized: artifactAuthorization.allowCode,
+        whiteboardArtifactMutationAuthorized:
+          artifactAuthorization.allowWhiteboard,
         sourceTraceId: traceId,
       };
       const committedQuestionLineage =
@@ -10726,13 +10750,6 @@ function getAdvisorActiveQuestionType(context: AdvisorPromptContext) {
   return questionType === "unknown" ? undefined : questionType;
 }
 
-function getAdvisorActiveChildQuestionType(context: AdvisorPromptContext) {
-  return readMemoryQuestionType(
-    context.activeMeetingTask?.child?.questionType ??
-      context.activeInterviewTask?.child?.questionType
-  );
-}
-
 function getAdvisorActivePlaybook(context: AdvisorPromptContext) {
   return (
     context.activeMeetingTask?.parent.playbook ??
@@ -11488,6 +11505,7 @@ function updateInterviewTaskContinuityForAnswer({
   expiresAt,
   supportedFactAnchors,
   projectBinding,
+  artifactAuthorization,
 }: {
   existingTask?: ActiveInterviewParent;
   source: "screen" | "voice";
@@ -11509,6 +11527,9 @@ function updateInterviewTaskContinuityForAnswer({
   expiresAt?: number;
   supportedFactAnchors?: string[];
   projectBinding?: ActiveInterviewParent["projectBinding"];
+  artifactAuthorization: ReturnType<
+    typeof authorizeResponseArtifactMutation
+  >;
 }): InterviewTaskContinuityResult {
   const kind = normalizeInterviewParentKind(questionType);
   const childQuestionType =
@@ -11549,31 +11570,37 @@ function updateInterviewTaskContinuityForAnswer({
           observationId,
         })
       : undefined;
-    const whiteboardArtifact = updateWhiteboardArtifactFromAnswer({
-      existing: existingTask.whiteboardArtifact,
-      parentTaskId: existingTask.id,
-      questionInstanceId: existingTask.originQuestionId,
-      parentQuestionType: existingTask.stableKind,
-      parentTopic: existingTask.topic,
-      finalContent: trimmedContent,
-      parsedAnswer: parsed,
-      phase: phaseDecision?.phase ?? existingTask.playbookPhase,
-      traceId,
-      selectedOverlayIds,
-      updateSource: whiteboardUpdateSource ?? "model-output",
-      provisional: phaseDecision?.whiteboardProvisional,
-      openConstraintCategories:
-        phaseDecision?.whiteboardOpenConstraintCategories,
-      revisionReason: phaseDecision?.whiteboardRevisionReason,
-      now,
-    });
+    const whiteboardArtifact = artifactAuthorization.allowWhiteboard
+      ? updateWhiteboardArtifactFromAnswer({
+          existing: existingTask.whiteboardArtifact,
+          parentTaskId: existingTask.id,
+          questionInstanceId: existingTask.originQuestionId,
+          parentQuestionType: existingTask.stableKind,
+          parentTopic: existingTask.topic,
+          finalContent: trimmedContent,
+          parsedAnswer: parsed,
+          phase: phaseDecision?.phase ?? existingTask.playbookPhase,
+          traceId,
+          selectedOverlayIds,
+          updateSource: whiteboardUpdateSource ?? "model-output",
+          provisional: phaseDecision?.whiteboardProvisional,
+          openConstraintCategories:
+            phaseDecision?.whiteboardOpenConstraintCategories,
+          revisionReason: phaseDecision?.whiteboardRevisionReason,
+          now,
+        })
+      : existingTask.whiteboardArtifact;
 
     return {
       task: applyInterviewChildProbeTransition({
         parent: existingTask,
         child,
-        projectBinding,
-        supportedFactAnchors: continuingTaskAnchors,
+        projectBinding: artifactAuthorization.allowParentContextMutation
+          ? projectBinding
+          : existingTask.projectBinding,
+        supportedFactAnchors: artifactAuthorization.allowParentContextMutation
+          ? continuingTaskAnchors
+          : existingTask.supportedFactAnchors,
         whiteboardArtifact,
         now,
         expiresAt,
@@ -11602,22 +11629,24 @@ function updateInterviewTaskContinuityForAnswer({
     const parentId = createMeetingId("interview_parent");
     const nextPhase = phaseDecision?.phase ?? playbook?.phase ?? "follow_up";
     const storedPlaybook = withInterviewPlaybookPhase(playbook, nextPhase);
-    const whiteboardArtifact = updateWhiteboardArtifactFromAnswer({
-      parentTaskId: parentId,
-      parentQuestionType: kind,
-      parentTopic: topic,
-      finalContent: trimmedContent,
-      parsedAnswer: parsed,
-      phase: nextPhase,
-      traceId,
-      selectedOverlayIds,
-      updateSource: whiteboardUpdateSource ?? "new-parent",
-      provisional: phaseDecision?.whiteboardProvisional,
-      openConstraintCategories:
-        phaseDecision?.whiteboardOpenConstraintCategories,
-      revisionReason: phaseDecision?.whiteboardRevisionReason,
-      now,
-    });
+    const whiteboardArtifact = artifactAuthorization.allowWhiteboard
+      ? updateWhiteboardArtifactFromAnswer({
+          parentTaskId: parentId,
+          parentQuestionType: kind,
+          parentTopic: topic,
+          finalContent: trimmedContent,
+          parsedAnswer: parsed,
+          phase: nextPhase,
+          traceId,
+          selectedOverlayIds,
+          updateSource: whiteboardUpdateSource ?? "new-parent",
+          provisional: phaseDecision?.whiteboardProvisional,
+          openConstraintCategories:
+            phaseDecision?.whiteboardOpenConstraintCategories,
+          revisionReason: phaseDecision?.whiteboardRevisionReason,
+          now,
+        })
+      : undefined;
 
     return {
       task: {
@@ -11632,11 +11661,16 @@ function updateInterviewTaskContinuityForAnswer({
           phaseDecision,
           storedPlaybook?.phase
         ),
-        projectBinding,
-        supportedFactAnchors: newParentAnchors,
-        latestUsefulAnswer: isUsefulAnswer
-          ? summaryDecision.text
+        projectBinding: artifactAuthorization.allowParentContextMutation
+          ? projectBinding
           : undefined,
+        supportedFactAnchors: artifactAuthorization.allowParentContextMutation
+          ? newParentAnchors
+          : [],
+        latestUsefulAnswer:
+          artifactAuthorization.allowLatestUsefulAnswer && isUsefulAnswer
+            ? summaryDecision.text
+            : undefined,
         previousUsefulAnswer: undefined,
         whiteboardArtifact,
         createdAt: now,
@@ -11688,33 +11722,42 @@ function updateInterviewTaskContinuityForAnswer({
         phaseDecision,
         storedPlaybook?.phase
       ),
-      projectBinding: projectBinding ?? existingTask.projectBinding,
-      supportedFactAnchors: continuingTaskAnchors,
-      whiteboardArtifact: updateWhiteboardArtifactFromAnswer({
-        existing: existingTask.whiteboardArtifact,
-        parentTaskId: existingTask.id,
-        questionInstanceId: existingTask.originQuestionId,
-        parentQuestionType: existingTask.stableKind,
-        parentTopic: existingTask.topic,
-        finalContent: trimmedContent,
-        parsedAnswer: parsed,
-        phase: nextPhase,
-        traceId,
-        selectedOverlayIds,
-        updateSource: whiteboardUpdateSource ?? "model-output",
-        provisional: phaseDecision?.whiteboardProvisional,
-        openConstraintCategories:
-          phaseDecision?.whiteboardOpenConstraintCategories,
-        revisionReason: phaseDecision?.whiteboardRevisionReason,
-        now,
-      }),
+      projectBinding: artifactAuthorization.allowParentContextMutation
+        ? projectBinding ?? existingTask.projectBinding
+        : existingTask.projectBinding,
+      supportedFactAnchors: artifactAuthorization.allowParentContextMutation
+        ? continuingTaskAnchors
+        : existingTask.supportedFactAnchors,
+      whiteboardArtifact: artifactAuthorization.allowWhiteboard
+        ? updateWhiteboardArtifactFromAnswer({
+            existing: existingTask.whiteboardArtifact,
+            parentTaskId: existingTask.id,
+            questionInstanceId: existingTask.originQuestionId,
+            parentQuestionType: existingTask.stableKind,
+            parentTopic: existingTask.topic,
+            finalContent: trimmedContent,
+            parsedAnswer: parsed,
+            phase: nextPhase,
+            traceId,
+            selectedOverlayIds,
+            updateSource: whiteboardUpdateSource ?? "model-output",
+            provisional: phaseDecision?.whiteboardProvisional,
+            openConstraintCategories:
+              phaseDecision?.whiteboardOpenConstraintCategories,
+            revisionReason: phaseDecision?.whiteboardRevisionReason,
+            now,
+          })
+        : existingTask.whiteboardArtifact,
       previousUsefulAnswer:
-        isUsefulAnswer && existingTask.latestUsefulAnswer
+        artifactAuthorization.allowLatestUsefulAnswer &&
+        isUsefulAnswer &&
+        existingTask.latestUsefulAnswer
           ? existingTask.latestUsefulAnswer
           : existingTask.previousUsefulAnswer,
-      latestUsefulAnswer: isUsefulAnswer
-        ? summaryDecision.text
-        : existingTask.latestUsefulAnswer,
+      latestUsefulAnswer:
+        artifactAuthorization.allowLatestUsefulAnswer && isUsefulAnswer
+          ? summaryDecision.text
+          : existingTask.latestUsefulAnswer,
       child: relation === "resume-parent" ? undefined : existingTask.child,
       revisions: existingTask.revisions + 1,
     },

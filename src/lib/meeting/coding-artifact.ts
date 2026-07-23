@@ -38,11 +38,13 @@ export function updateCodingArtifactCache({
   sections,
   sourceParentTaskId,
   sourceParentQuestionType,
+  sourceCodeMutationAuthorized,
   sourceSuggestionId,
   updatedAt,
 }: CodingArtifactScope & {
   cache: CodingArtifactCache | null;
   sections: MeetingAnswerDisplayModel;
+  sourceCodeMutationAuthorized?: boolean;
   sourceSuggestionId?: string;
   updatedAt: number;
 }): CodingArtifactCache | null {
@@ -56,6 +58,8 @@ export function updateCodingArtifactCache({
     activeParentTaskId,
     canonicalParentQuestionType
   );
+  if (sourceCodeMutationAuthorized === false) return scopedCache;
+
   if (!doesArtifactSourceBelongToParent({
     activeParentTaskId,
     activeParentQuestionType: canonicalParentQuestionType,
