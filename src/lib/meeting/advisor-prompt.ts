@@ -188,6 +188,8 @@ export function buildAdvisorUserMessage(
     const isContextScopeAction =
       responseAction === "narrow-context" ||
       responseAction === "enhance-context";
+    const regeneratesFromSource =
+      isContextScopeAction || responseAction === "previous-phase";
     sections.push(
       "<mode>",
       mode,
@@ -196,11 +198,13 @@ export function buildAdvisorUserMessage(
       responseAction,
       "</response_action>",
       "<output>",
-      isContextScopeAction
-        ? "Answer the current source-owned question using <response_action_context_scope>. Do not treat the control action as a new question."
+      regeneratesFromSource
+        ? isContextScopeAction
+          ? "Answer the current source-owned question using <response_action_context_scope>. Do not treat the control action as a new question."
+          : "Answer the current parent task at its deterministically restored playbook phase. Do not treat the control action as a new question."
         : "Transform <previous_suggestion> for the requested response action. Treat it as source material, not as a new independent question.",
       "Preserve the active task, visible question, and technical constraints. Do not invent new screen content, hidden requirements, speakers, or meeting dialogue.",
-      !isContextScopeAction
+      !regeneratesFromSource
         ? "If <previous_suggestion> is empty or only '-', output a single dash."
         : "Do not use a previous generated answer as factual, taxonomy, or context authority.",
       "Retain the active task's canonical answer profile. If <previous_suggestion> contains Code or Whiteboard, preserve that artifact unless the requested action or latest explicit constraint changes it.",

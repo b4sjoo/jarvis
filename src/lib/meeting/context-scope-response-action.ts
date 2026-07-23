@@ -87,8 +87,11 @@ export function composeCurrentOnlyAdvisorPromptContext(
   input: ContextScopeCompositionInput
 ): ContextScopeResponseActionResult {
   const budgets = resolveBudgets(input.budgets);
-  const current = buildCurrentQuestionCandidate(input.logicalQuestionUnit);
   const task = resolveActiveMeetingTask(input);
+  const current = buildCurrentQuestionCandidate(
+    input.logicalQuestionUnit,
+    task
+  );
   const promptContext = buildSafePromptContext({
     baseContext: input.baseContext,
     logicalQuestionUnit: input.logicalQuestionUnit,
@@ -114,8 +117,11 @@ export function composeExpandedAdvisorPromptContext(
   input: ContextScopeCompositionInput
 ): ContextScopeResponseActionResult {
   const budgets = resolveBudgets(input.budgets);
-  const current = buildCurrentQuestionCandidate(input.logicalQuestionUnit);
   const task = resolveActiveMeetingTask(input);
+  const current = buildCurrentQuestionCandidate(
+    input.logicalQuestionUnit,
+    task
+  );
   const relation = resolveQuestionRelation(input);
   const independentQuestionGuardApplied =
     relation === "independent-new-question";
@@ -187,11 +193,20 @@ function buildExpansionCandidates(
 }
 
 function buildCurrentQuestionCandidate(
-  logicalQuestionUnit: LogicalQuestionUnit
+  logicalQuestionUnit: LogicalQuestionUnit,
+  task: ActiveMeetingTask | undefined
 ): ContextScopeCandidate {
+  const screenOwned = isScreenOwnedLogicalQuestion(
+    logicalQuestionUnit,
+    task
+  );
   const text = [
-    `Current logical question (id=${logicalQuestionUnit.id}, revision=${logicalQuestionUnit.revision}):`,
-    `Them: ${normalizeText(logicalQuestionUnit.normalizedText)}`,
+    screenOwned
+      ? `Current visible screen question (id=${logicalQuestionUnit.id}, revision=${logicalQuestionUnit.revision}):`
+      : `Current logical question (id=${logicalQuestionUnit.id}, revision=${logicalQuestionUnit.revision}):`,
+    screenOwned
+      ? normalizeText(logicalQuestionUnit.normalizedText)
+      : `Them: ${normalizeText(logicalQuestionUnit.normalizedText)}`,
   ].join("\n");
 
   return {
@@ -480,17 +495,33 @@ function buildSafePromptContext(input: {
   selectedCandidates: ContextScopeCandidate[];
   preserveTaskProcedure: boolean;
 }): AdvisorPromptContext {
-  const latestTurn = resolveLatestTurn(
-    input.meetingContext,
-    input.logicalQuestionUnit
+  const screenOwned = isScreenOwnedLogicalQuestion(
+    input.logicalQuestionUnit,
+    input.activeMeetingTask
   );
+  const latestTurn = screenOwned
+    ? undefined
+    : resolveLatestTurn(
+        input.meetingContext,
+        input.logicalQuestionUnit
+      );
+  const currentQuestionCandidate = input.selectedCandidates.find(
+    (candidate) => candidate.kind === "current-lqu"
+  );
+  const transcriptCandidates = screenOwned
+    ? input.selectedCandidates.filter(
+        (candidate) => candidate.kind !== "current-lqu"
+      )
+    : input.selectedCandidates;
 
   return {
     ...input.baseContext,
-    transcript: input.selectedCandidates
+    transcript: transcriptCandidates
       .map((candidate) => candidate.text)
       .join("\n\n"),
-    screenContext: "",
+    screenContext: screenOwned
+      ? currentQuestionCandidate?.text ?? ""
+      : "",
     interviewSessionBrief: undefined,
     interviewSessionContext: undefined,
     activeScreenTask: undefined,
@@ -512,6 +543,17 @@ function buildSafePromptContext(input: {
     confirmedMeFacts: undefined,
     latestTurn,
   };
+}
+
+function isScreenOwnedLogicalQuestion(
+  logicalQuestionUnit: LogicalQuestionUnit,
+  task: ActiveMeetingTask | undefined
+) {
+  return (
+    logicalQuestionUnit.currentTurnId.startsWith("screen:") ||
+    (logicalQuestionUnit.sourceTurnIds.length === 0 &&
+      Boolean(task?.screen))
+  );
 }
 
 function sanitizeActiveMeetingTask(

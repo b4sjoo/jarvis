@@ -112,6 +112,38 @@ export const DEFAULT_SHORTCUT_ACTIONS: ShortcutAction[] = [
     },
   },
   {
+    id: "meeting_enhance_context",
+    name: "Meeting Enhance Context",
+    description:
+      "Regenerate with the smallest useful source context around the current question",
+    defaultKey: {
+      macos: "cmd+shift+up",
+      windows: "ctrl+shift+up",
+      linux: "ctrl+shift+up",
+    },
+  },
+  {
+    id: "meeting_narrow_context",
+    name: "Meeting Narrow Context",
+    description: "Regenerate from only the current source-owned question",
+    defaultKey: {
+      macos: "cmd+shift+down",
+      windows: "ctrl+shift+down",
+      linux: "ctrl+shift+down",
+    },
+  },
+  {
+    id: "meeting_previous_phase",
+    name: "Meeting Previous Phase",
+    description:
+      "Return the current Meeting Assistant task to its previous playbook phase",
+    defaultKey: {
+      macos: "cmd+shift+left",
+      windows: "ctrl+shift+left",
+      linux: "ctrl+shift+left",
+    },
+  },
+  {
     id: "meeting_next_phase",
     name: "Meeting Next Phase",
     description:

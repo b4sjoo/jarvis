@@ -166,9 +166,19 @@ const responseActionOptions: Array<{
   title: string;
 }> = [
   {
-    id: "speakable",
-    label: "Speakable",
-    title: "Rewrite the current answer as something you can say aloud",
+    id: "narrow-context",
+    label: "Narrow",
+    title: "Regenerate from only the current source-owned question",
+  },
+  {
+    id: "enhance-context",
+    label: "Enhance",
+    title: "Add the smallest useful source context around the current question",
+  },
+  {
+    id: "previous-phase",
+    label: "Back",
+    title: "Return this parent task to its previous committed playbook phase",
   },
   {
     id: "next-phase",
@@ -247,6 +257,9 @@ const TASK_TIMEOUT_OPTIONS = [15, 30, 60, 120] as const;
 const FOCUS_MODE_SHORTCUT_LABEL = "Cmd+Shift+J";
 const FOCUS_LISTENING_SHORTCUT_LABEL = "Cmd+Shift+L";
 const FOCUS_REGENERATE_SHORTCUT_LABEL = "Cmd+Shift+U";
+const FOCUS_ENHANCE_CONTEXT_SHORTCUT_LABEL = "Cmd+Shift+Up";
+const FOCUS_NARROW_CONTEXT_SHORTCUT_LABEL = "Cmd+Shift+Down";
+const FOCUS_PREVIOUS_PHASE_SHORTCUT_LABEL = "Cmd+Shift+Left";
 const FOCUS_NEXT_PHASE_SHORTCUT_LABEL = "Cmd+Shift+Right";
 
 const EMPTY_INTERVIEW_SESSION_BRIEF: InterviewSessionBrief = {
@@ -1009,14 +1022,27 @@ export const MeetingAssistant = ({
   ]);
 
   const handleRegenerateShortcut = useCallback(() => {
-    if (isBusy || !hasMeetingContext) return;
+    if (
+      isBusy ||
+      !hasMeetingContext ||
+      isJarvisEditableElementFocused()
+    ) {
+      return;
+    }
 
     setOpen(true);
     void meeting.regenerateSuggestion();
   }, [hasMeetingContext, isBusy, meeting.regenerateSuggestion]);
 
   const handleNextPhaseShortcut = useCallback(() => {
-    if (isBusy || !hasSuggestion || !hasActiveMeetingTask) return;
+    if (
+      isBusy ||
+      !hasSuggestion ||
+      !hasActiveMeetingTask ||
+      isJarvisEditableElementFocused()
+    ) {
+      return;
+    }
 
     setOpen(true);
     void meeting.applyResponseAction("next-phase");
@@ -1026,6 +1052,28 @@ export const MeetingAssistant = ({
     isBusy,
     meeting.applyResponseAction,
   ]);
+
+  const handleScopedResponseActionShortcut = useCallback(
+    (action: "narrow-context" | "enhance-context" | "previous-phase") => {
+      if (
+        isBusy ||
+        !hasSuggestion ||
+        !hasActiveMeetingTask ||
+        isJarvisEditableElementFocused()
+      ) {
+        return;
+      }
+
+      setOpen(true);
+      void meeting.applyResponseAction(action);
+    },
+    [
+      hasActiveMeetingTask,
+      hasSuggestion,
+      isBusy,
+      meeting.applyResponseAction,
+    ]
+  );
 
   const meetingShortcutCallbacks = useMemo(
     () => ({
@@ -1037,6 +1085,15 @@ export const MeetingAssistant = ({
         void handleFocusListeningShortcut();
       },
       meeting_regenerate: handleRegenerateShortcut,
+      meeting_enhance_context: () => {
+        handleScopedResponseActionShortcut("enhance-context");
+      },
+      meeting_narrow_context: () => {
+        handleScopedResponseActionShortcut("narrow-context");
+      },
+      meeting_previous_phase: () => {
+        handleScopedResponseActionShortcut("previous-phase");
+      },
       meeting_next_phase: handleNextPhaseShortcut,
       meeting_toggle_microphone_context: meeting.toggleMicrophoneContext,
     }),
@@ -1045,6 +1102,7 @@ export const MeetingAssistant = ({
       handleFocusListeningShortcut,
       handleNextPhaseShortcut,
       handleRegenerateShortcut,
+      handleScopedResponseActionShortcut,
       meeting.toggleMicrophoneContext,
       toggleFocusMode,
     ]
@@ -1745,7 +1803,7 @@ export const MeetingAssistant = ({
                     />
                   </div>
                 ) : null}
-                <div className="grid grid-cols-3 gap-1.5">
+                <div className="grid grid-cols-5 gap-1.5">
                   <Button
                     size="sm"
                     variant="outline"
@@ -1769,7 +1827,7 @@ export const MeetingAssistant = ({
                       disabled={
                         isBusy ||
                         !hasSuggestion ||
-                        (action.id === "next-phase" && !hasActiveMeetingTask)
+                        !hasActiveMeetingTask
                       }
                     >
                       {action.label}
@@ -2534,6 +2592,9 @@ const FocusModePanel = ({
                 `Focus ${FOCUS_MODE_SHORTCUT_LABEL}`,
                 `Listen ${FOCUS_LISTENING_SHORTCUT_LABEL}`,
                 `Regenerate ${FOCUS_REGENERATE_SHORTCUT_LABEL}`,
+                `Enhance ${FOCUS_ENHANCE_CONTEXT_SHORTCUT_LABEL}`,
+                `Narrow ${FOCUS_NARROW_CONTEXT_SHORTCUT_LABEL}`,
+                `Back ${FOCUS_PREVIOUS_PHASE_SHORTCUT_LABEL}`,
                 `Next ${FOCUS_NEXT_PHASE_SHORTCUT_LABEL}`,
               ].join(" / ")}
             >
@@ -5115,6 +5176,15 @@ function formatCaptureCandidate(
 function formatTaskTimeout(minutes: number) {
   if (minutes >= 60) return `${minutes / 60}h`;
   return `${minutes}m`;
+}
+
+function isJarvisEditableElementFocused() {
+  const activeElement = document.activeElement;
+  return (
+    activeElement instanceof HTMLInputElement ||
+    activeElement instanceof HTMLTextAreaElement ||
+    (activeElement instanceof HTMLElement && activeElement.isContentEditable)
+  );
 }
 
 function getEditableInterviewSessionBrief(

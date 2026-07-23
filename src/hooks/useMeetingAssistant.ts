@@ -54,6 +54,7 @@ import {
   MeetingTaxonomyAdjudicationSettings,
   MeetingContextState,
   InterviewBriefType,
+  InterviewPlaybookPhase,
   InterviewSubtaskIntent,
   InterviewTaskRelation,
   InterviewSessionBrief,
@@ -183,6 +184,14 @@ import {
   decideAdvisorTurnIntent,
   decideSentenceCompletion,
   composeLogicalQuestionUnit,
+  composeContextScopeAdvisorPromptContext,
+  createPlaybookPhaseHistoryState,
+  appendCommittedAutomaticPhaseTransition,
+  appendCommittedManualBackPhaseTransition,
+  appendCommittedManualNextPhaseTransition,
+  decideManualPlaybookPhaseBack,
+  decideManualPlaybookPhaseNextRoundTrip,
+  formatPlaybookPhaseNavigationDecisionForTrace,
   decideLatestTurnTaxonomyBoundary,
   formatAdvisorTurnIntentForTrace,
   formatLogicalQuestionUnitForTrace,
@@ -1040,6 +1049,57 @@ function isMeetingPrivacyMode(
   );
 }
 
+function resolveResponseActionLogicalQuestionUnit(input: {
+  currentLogicalQuestionUnit: LogicalQuestionUnit | undefined;
+  meetingContext: MeetingContextState;
+  runtimeEpoch: number;
+  preferScreen: boolean;
+}): LogicalQuestionUnit | undefined {
+  const current = input.currentLogicalQuestionUnit;
+  const currentIsValid =
+    current?.sessionId === input.meetingContext.sessionId &&
+    current.runtimeEpoch === input.runtimeEpoch;
+  if (!input.preferScreen && currentIsValid) return current;
+
+  const task = input.meetingContext.activeMeetingTask;
+  const screenTask = input.meetingContext.activeScreenTask;
+  const screenQuestion =
+    task?.screen?.question?.trim() ??
+    screenTask?.question?.trim();
+  if (task?.screen && screenQuestion) {
+    const screenTaskId =
+      task.screen.activeScreenTaskId ??
+      screenTask?.id ??
+      task.id;
+    const updatedAt =
+      screenTask?.updatedAt ?? task.parent.updatedAt;
+    return {
+      id: `screen-scope-${screenTaskId}`,
+      revision: Math.max(1, task.parent.revisions ?? 1),
+      sessionId: input.meetingContext.sessionId,
+      runtimeEpoch: input.runtimeEpoch,
+      currentTurnId: `screen:${screenTaskId}`,
+      sourceTurnIds: [],
+      sources: [
+        {
+          turnId: `screen:${screenTaskId}`,
+          text: screenQuestion,
+          startedAt: updatedAt,
+          endedAt: updatedAt,
+        },
+      ],
+      normalizedText: screenQuestion,
+      startedAt: updatedAt,
+      updatedAt,
+      compositionReasons: ["visible-screen-question"],
+      boundaryReason: "visible-screen-question",
+      truncated: false,
+    };
+  }
+
+  return currentIsValid ? current : undefined;
+}
+
 function isPersonalEvidenceGuardrailMode(
   value: unknown
 ): value is PersonalEvidenceGuardrailMode {
@@ -1088,6 +1148,9 @@ interface RunAdvisorOptions {
   questionLineage?: QuestionInstanceLineage;
   logicalQuestionUnit?: LogicalQuestionUnit;
   promptTurnOverride?: TranscriptTurn;
+  promptContextOverride?: AdvisorPromptContext;
+  manualPhaseTargetOverride?: InterviewPlaybookPhase;
+  manualPhaseOperationId?: string;
 }
 
 interface ForceAdviseRuntimeTarget {
@@ -1232,6 +1295,9 @@ export function useMeetingAssistant() {
   const adjacentQuestionScopeRef = useRef<AdjacentQuestionScope | null>(null);
   const logicalQuestionUnitRef = useRef<LogicalQuestionUnit | undefined>(
     undefined
+  );
+  const playbookPhaseHistoryRef = useRef(
+    createPlaybookPhaseHistoryState()
   );
   const latestForceAdviseTargetRef = useRef<
     ForceAdviseRuntimeTarget | undefined
@@ -1605,6 +1671,7 @@ export function useMeetingAssistant() {
     manualCorrectionRevisionRef.current = 0;
     adjacentQuestionScopeRef.current = null;
     logicalQuestionUnitRef.current = undefined;
+    playbookPhaseHistoryRef.current = createPlaybookPhaseHistoryState();
     pendingInterviewSectionHintRef.current = undefined;
     cancelledAdvisorTurnIdsRef.current.clear();
     taskBoundaryCandidateRef.current = undefined;
@@ -1615,6 +1682,73 @@ export function useMeetingAssistant() {
       runtimeEpoch: runtimeEpochRef.current,
     };
   }, []);
+
+  const recordCommittedPlaybookPhaseTransition = useCallback(
+    (input: {
+      operationId: string;
+      source: "automatic" | "manual-next" | "manual-back";
+      before: ActiveInterviewParent | undefined;
+      after: ActiveInterviewParent | undefined;
+      traceId?: string;
+    }) => {
+      if (
+        !input.before ||
+        !input.after ||
+        input.before.id !== input.after.id ||
+        input.before.playbookPhase === input.after.playbookPhase
+      ) {
+        return undefined;
+      }
+
+      const parentHistory =
+        playbookPhaseHistoryRef.current.parents[input.after.id];
+      const appendInput = {
+        operationId: input.operationId,
+        parentTaskId: input.after.id,
+        fromPhase: input.before.playbookPhase,
+        toPhase: input.after.playbookPhase,
+        taskRevision: input.after.revisions,
+        expectedPhaseRevision: parentHistory?.phaseRevision ?? 0,
+        committedAt: Date.now(),
+      };
+      const result =
+        input.source === "manual-next"
+          ? appendCommittedManualNextPhaseTransition(
+              playbookPhaseHistoryRef.current,
+              appendInput
+            )
+          : input.source === "manual-back"
+            ? appendCommittedManualBackPhaseTransition(
+                playbookPhaseHistoryRef.current,
+                appendInput
+              )
+            : appendCommittedAutomaticPhaseTransition(
+                playbookPhaseHistoryRef.current,
+                appendInput
+              );
+
+      if (result.status === "appended") {
+        playbookPhaseHistoryRef.current = result.state;
+      }
+      if (input.traceId) {
+        traceStoreRef.current.updateMetadata(input.traceId, {
+          playbookPhaseHistoryOperationId: input.operationId,
+          playbookPhaseHistorySource: input.source,
+          playbookPhaseHistoryStatus: result.status,
+          playbookPhaseHistoryFrom: input.before.playbookPhase,
+          playbookPhaseHistoryTo: input.after.playbookPhase,
+          playbookPhaseHistoryRevision:
+            result.status === "appended"
+              ? result.entry.phaseRevision
+              : parentHistory?.phaseRevision ?? 0,
+          playbookPhaseHistoryReason:
+            result.status === "appended" ? undefined : result.reason,
+        });
+      }
+      return result;
+    },
+    []
+  );
 
   const prewarmSemanticTaxonomyRuntime = useCallback((reason: string) => {
     const contextState = contextManagerRef.current.getState();
@@ -3317,6 +3451,7 @@ export function useMeetingAssistant() {
   const buildAdvisorJob = useCallback((options: RunAdvisorOptions) => {
     const contextState = contextManagerRef.current.getState();
     const basePromptContext =
+      options.promptContextOverride ??
       contextManagerRef.current.buildAdvisorPromptContext();
     const promptContext = options.promptTurnOverride
       ? {
@@ -3357,6 +3492,30 @@ export function useMeetingAssistant() {
             promptContext.activeMeetingTask?.screen ? "screen" : "voice",
             { source: `advisor-${source}` }
           ).id);
+    const responseActionScope =
+      promptContext.responseActionContextScope;
+    if (traceId && responseActionScope) {
+      traceStoreRef.current.updateMetadata(traceId, {
+        responseActionContextOperationId:
+          responseActionScope.operationId,
+        responseActionContextAction: responseActionScope.action,
+        responseActionContextMode: responseActionScope.mode,
+        responseActionLogicalQuestionUnitId:
+          responseActionScope.logicalQuestionUnitId,
+        responseActionLogicalQuestionUnitRevision:
+          responseActionScope.logicalQuestionUnitRevision,
+        responseActionSelectedContextSourceKinds:
+          responseActionScope.selectedContextSourceKinds,
+        responseActionSelectedContextTurnIds:
+          responseActionScope.selectedContextTurnIds,
+        responseActionSelectedContextChars:
+          responseActionScope.selectedContextChars,
+        responseActionSelectionReason:
+          responseActionScope.selectionReason,
+        responseActionExpansionBudget:
+          responseActionScope.expansionBudget,
+      });
+    }
 
     return createAdvisorTriggerJob({
       source,
@@ -3926,6 +4085,20 @@ export function useMeetingAssistant() {
       subtaskIntent: advisorTaskSignals.subtaskIntent,
       askFrame: advisorAskFrame ?? getAdvisorActiveAskFrame(promptContext),
     });
+    const defaultManualPhaseDecision =
+      decideManualNextPhaseTransition(
+        promptContext.activeMeetingTask
+      );
+    const manualPhaseDecision = options.manualPhaseTargetOverride
+      ? {
+          ...defaultManualPhaseDecision,
+          phase: options.manualPhaseTargetOverride,
+          phaseTo: options.manualPhaseTargetOverride,
+          manualPhaseTo: options.manualPhaseTargetOverride,
+          reason:
+            "restore the forward phase recorded by deterministic playbook history",
+        }
+      : defaultManualPhaseDecision;
     const playbookPhaseDecision = decideAdvisorPhaseMutation({
       authority: advisorJob.taskMutationAuthority,
       taskMutationAuthorized: taskMutationAuthorization.authorized,
@@ -3933,9 +4106,7 @@ export function useMeetingAssistant() {
       currentPhase: preservedPlaybookPhase,
       hasActiveChild: hasAdvisorActiveChild(promptContext),
       automaticDecision: automaticPlaybookPhaseDecision,
-      manualDecision: decideManualNextPhaseTransition(
-        promptContext.activeMeetingTask
-      ),
+      manualDecision: manualPhaseDecision,
     });
     let manualPhaseAdvanceCommitted = false;
 
@@ -3974,6 +4145,22 @@ export function useMeetingAssistant() {
           activeScreenTask: contextState.activeScreenTask,
           activeInterviewTask: updatedInterviewTask,
         });
+        const phaseHistoryCommit =
+          recordCommittedPlaybookPhaseTransition({
+            operationId:
+              options.manualPhaseOperationId ??
+              `phase-next-${advisorJob.id}`,
+            source: "manual-next",
+            before: existingInterviewTask,
+            after: updatedInterviewTask,
+            traceId,
+          });
+        if (traceId) {
+          traceStoreRef.current.updateMetadata(traceId, {
+            manualPhaseCommitApplied:
+              phaseHistoryCommit?.status === "appended",
+          });
+        }
         const phaseUpdatedContext =
           contextManagerRef.current.buildAdvisorPromptContext();
         promptContext = {
@@ -4707,6 +4894,13 @@ export function useMeetingAssistant() {
       }
 
       if (taskMutationAuthorization.authorized) {
+        recordCommittedPlaybookPhaseTransition({
+          operationId: `phase-auto-${advisorJob.id}`,
+          source: "automatic",
+          before: existingInterviewTask,
+          after: continuity.task,
+          traceId,
+        });
         contextManagerRef.current.setActiveMeetingTaskState({
           activeScreenTask: nextActiveScreenTask,
           activeInterviewTask: continuity.task ?? null,
@@ -4964,6 +5158,7 @@ export function useMeetingAssistant() {
     buildAdvisorJob,
     finishRunningAdvisorJobTrace,
     loadMemoryForPrompt,
+    recordCommittedPlaybookPhaseTransition,
     releaseAdvisorJob,
     resolveMeetingModelRoute,
     selectedAIProvider,
@@ -8975,6 +9170,13 @@ export function useMeetingAssistant() {
                   ? "preserved"
                   : "none",
           });
+          recordCommittedPlaybookPhaseTransition({
+            operationId: `phase-screen-${trace.id}`,
+            source: "automatic",
+            before: existingInterviewTask,
+            after: screenContinuity.task,
+            traceId: trace.id,
+          });
           contextManagerRef.current.setActiveMeetingTaskState({
             activeScreenTask,
             activeInterviewTask: screenContinuity.task ?? null,
@@ -9191,6 +9393,7 @@ export function useMeetingAssistant() {
       aiProvider,
       flushPendingSentenceCompletion,
       loadMemoryForPrompt,
+      recordCommittedPlaybookPhaseTransition,
       readRuntimeCommitSnapshot,
       resolveMeetingModelRoute,
       selectedAIProvider,
@@ -10179,6 +10382,260 @@ export function useMeetingAssistant() {
         return;
       }
 
+      if (
+        responseAction === "previous-phase" ||
+        responseAction === "next-phase"
+      ) {
+        const meetingContext = contextManagerRef.current.getState();
+        const existingInterviewTask =
+          meetingContext.activeInterviewTask ??
+          (meetingContext.activeScreenTask
+            ? buildInterviewParentFromScreenTask(
+                meetingContext.activeScreenTask
+              )
+            : undefined);
+        if (!existingInterviewTask) {
+          setState((previous) => ({
+            ...previous,
+            error: NO_ACTIVE_TASK_MESSAGE,
+          }));
+          return;
+        }
+        const parentHistory =
+          playbookPhaseHistoryRef.current.parents[
+            existingInterviewTask.id
+          ];
+        const operationId = createMeetingId(
+          responseAction === "previous-phase"
+            ? "phase_back"
+            : "phase_forward"
+        );
+        const runtimeSnapshot = {
+          parentTaskId: existingInterviewTask.id,
+          currentPhase: existingInterviewTask.playbookPhase,
+          taskRevision: existingInterviewTask.revisions,
+          phaseRevision: parentHistory?.phaseRevision ?? 0,
+          visibleChild: existingInterviewTask.child
+            ? {
+                childTaskId: existingInterviewTask.child.id,
+                parentTaskId: existingInterviewTask.id,
+              }
+            : undefined,
+        };
+
+        if (responseAction === "previous-phase") {
+          const decision = decideManualPlaybookPhaseBack({
+            history: playbookPhaseHistoryRef.current,
+            request: {
+              operationId,
+              parentTaskId: existingInterviewTask.id,
+              expectedTaskRevision:
+                existingInterviewTask.revisions,
+              expectedPhaseRevision:
+                parentHistory?.phaseRevision ?? 0,
+              requestedAt: Date.now(),
+            },
+            current: runtimeSnapshot,
+          });
+          const trace = traceStoreRef.current.startTrace(
+            meetingContext.activeScreenTask ? "screen" : "voice",
+            {
+              source: "advisor-response-action",
+              responseAction,
+              ...formatPlaybookPhaseNavigationDecisionForTrace(
+                decision
+              ),
+            }
+          );
+          if (decision.status !== "ready") {
+            traceStoreRef.current.finishTrace(
+              trace.id,
+              "cancelled",
+              decision.reason
+            );
+            setState((previous) => ({
+              ...previous,
+              error:
+                decision.status === "no-history"
+                  ? "There is no previous committed playbook phase."
+                  : `Back was not applied: ${decision.reason}`,
+            }));
+            return;
+          }
+
+          const updatedInterviewTask: ActiveInterviewParent = {
+            ...existingInterviewTask,
+            playbook: withInterviewPlaybookPhase(
+              existingInterviewTask.playbook,
+              decision.targetPhase
+            ),
+            playbookPhase: decision.targetPhase,
+            child: undefined,
+            updatedAt: Date.now(),
+            revisions: existingInterviewTask.revisions + 1,
+          };
+          const childOwnedScreen =
+            Boolean(existingInterviewTask.child) &&
+            Boolean(
+              meetingContext.activeScreenTask &&
+                existingInterviewTask.child?.basedOnObservationIds.includes(
+                  meetingContext.activeScreenTask.observationId
+                )
+            );
+          contextManagerRef.current.setActiveMeetingTaskState({
+            activeScreenTask: childOwnedScreen
+              ? null
+              : meetingContext.activeScreenTask,
+            activeInterviewTask: updatedInterviewTask,
+          });
+          const phaseCommit =
+            recordCommittedPlaybookPhaseTransition({
+              operationId,
+              source: "manual-back",
+              before: existingInterviewTask,
+              after: updatedInterviewTask,
+              traceId: trace.id,
+            });
+          traceStoreRef.current.updateMetadata(trace.id, {
+            manualPhaseCommitApplied:
+              phaseCommit?.status === "appended",
+          });
+          const updatedContext =
+            contextManagerRef.current.getState();
+          setState((previous) => ({
+            ...previous,
+            activeScreenTask: updatedContext.activeScreenTask,
+            activeInterviewTask:
+              updatedContext.activeInterviewTask,
+            activeMeetingTask: updatedContext.activeMeetingTask,
+            error: null,
+          }));
+
+          await runAdvisor({
+            force: true,
+            mode: "response-action",
+            responseAction,
+            traceId: trace.id,
+            advisorJobSource: "response-action",
+            taskMutationAuthority: "preserve-parent",
+            questionLineage:
+              resolveCurrentSuggestionQuestionLineage(),
+          });
+          return;
+        }
+
+        const forwardDecision =
+          decideManualPlaybookPhaseNextRoundTrip({
+            history: playbookPhaseHistoryRef.current,
+            request: {
+              operationId,
+              parentTaskId: existingInterviewTask.id,
+              expectedTaskRevision:
+                existingInterviewTask.revisions,
+              expectedPhaseRevision:
+                parentHistory?.phaseRevision ?? 0,
+              requestedAt: Date.now(),
+            },
+            current: runtimeSnapshot,
+          });
+        if (forwardDecision.status === "ready") {
+          const trace = traceStoreRef.current.startTrace(
+            meetingContext.activeScreenTask ? "screen" : "voice",
+            {
+              source: "advisor-response-action",
+              responseAction,
+              ...formatPlaybookPhaseNavigationDecisionForTrace(
+                forwardDecision
+              ),
+            }
+          );
+          await runAdvisor({
+            force: true,
+            mode: "response-action",
+            responseAction,
+            currentSuggestion: currentSuggestionText,
+            traceId: trace.id,
+            advisorJobSource: "response-action",
+            taskMutationAuthority: "preserve-parent",
+            questionLineage:
+              resolveCurrentSuggestionQuestionLineage(),
+            manualPhaseTargetOverride:
+              forwardDecision.targetPhase,
+            manualPhaseOperationId: operationId,
+          });
+          return;
+        }
+      }
+
+      if (
+        responseAction === "narrow-context" ||
+        responseAction === "enhance-context"
+      ) {
+        const meetingContext = contextManagerRef.current.getState();
+        const logicalQuestionUnit =
+          resolveResponseActionLogicalQuestionUnit({
+            currentLogicalQuestionUnit:
+              logicalQuestionUnitRef.current,
+            meetingContext,
+            runtimeEpoch: runtimeEpochRef.current,
+            preferScreen: isScreenAnchoredSuggestion(
+              state.latestSuggestion
+            ),
+          });
+        if (!logicalQuestionUnit) {
+          setState((previous) => ({
+            ...previous,
+            error:
+              "There is no source-owned current question to regenerate.",
+          }));
+          return;
+        }
+
+        const baseContext =
+          contextManagerRef.current.buildAdvisorPromptContext();
+        const selection = composeContextScopeAdvisorPromptContext({
+          action: responseAction,
+          baseContext,
+          logicalQuestionUnit,
+          meetingContext,
+          activeMeetingTask: meetingContext.activeMeetingTask,
+        });
+        const operationId = createMeetingId("response_scope");
+        const promptContextOverride: AdvisorPromptContext = {
+          ...selection.promptContext,
+          responseActionContextScope: {
+            operationId,
+            action: responseAction,
+            mode: selection.contextScopeMode,
+            logicalQuestionUnitId:
+              selection.logicalQuestionUnitId,
+            logicalQuestionUnitRevision:
+              selection.logicalQuestionUnitRevision,
+            selectedContextSourceKinds:
+              selection.selectedKinds,
+            selectedContextTurnIds:
+              selection.selectedTurnIds,
+            selectedContextChars: selection.selectedChars,
+            selectionReason: selection.selectionReason,
+            expansionBudget:
+              selection.budgets.maxExpansionChars,
+          },
+        };
+
+        await runAdvisor({
+          force: true,
+          mode: "response-action",
+          responseAction,
+          advisorJobSource: "response-action",
+          taskMutationAuthority: "preserve-parent",
+          questionLineage:
+            resolveCurrentSuggestionQuestionLineage(),
+          logicalQuestionUnit,
+          promptContextOverride,
+        });
+        return;
+      }
+
       await runAdvisor({
         force: true,
         mode: "response-action",
@@ -10195,6 +10652,8 @@ export function useMeetingAssistant() {
       resolveCurrentSuggestionQuestionLineage,
       runAdvisor,
       state.activeMeetingTask,
+      state.latestSuggestion,
+      recordCommittedPlaybookPhaseTransition,
     ]
   );
 

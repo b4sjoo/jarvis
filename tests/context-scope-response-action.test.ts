@@ -67,6 +67,50 @@ test("Narrow keeps the exact current LQU and excludes inherited generated contex
   );
 });
 
+test("Narrow preserves a visible screen question as screen evidence", () => {
+  const task = activeTask({ screenAnswer: "GENERATED_SCREEN_ANSWER" });
+  const unit: LogicalQuestionUnit = {
+    id: "screen-scope-screen-task",
+    revision: 2,
+    sessionId: "session-test",
+    runtimeEpoch: 1,
+    currentTurnId: "screen:screen-task",
+    sourceTurnIds: [],
+    sources: [
+      {
+        turnId: "screen:screen-task",
+        text: "Design a distributed rate limiter.",
+        startedAt: 10,
+        endedAt: 10,
+      },
+    ],
+    normalizedText: "Design a distributed rate limiter.",
+    startedAt: 10,
+    updatedAt: 10,
+    compositionReasons: ["visible-screen-question"],
+    boundaryReason: "visible-screen-question",
+    truncated: false,
+  };
+
+  const result = composeCurrentOnlyAdvisorPromptContext({
+    baseContext: baseContext(task),
+    logicalQuestionUnit: unit,
+    meetingContext: meetingContext([], task),
+    activeMeetingTask: task,
+  });
+
+  assert.equal(result.promptContext.transcript, "");
+  assert.match(
+    result.promptContext.screenContext,
+    /Current visible screen question/
+  );
+  assert.match(
+    result.promptContext.screenContext,
+    /Design a distributed rate limiter/
+  );
+  assert.equal(result.promptContext.latestTurn, undefined);
+});
+
 test("Enhance selects a bounded recent source window for a referential request", () => {
   const priorThem = Array.from({ length: 6 }, (_, index) =>
     turn(
