@@ -51,6 +51,12 @@ export interface AnswerSufficiencyDecision {
   confidence: number;
   lexicalEvidence: string[];
   semanticPrototypeIds: string[];
+  semanticStatus?: "context-insufficient" | "not-context-insufficient";
+  semanticConfidence?: number;
+  semanticMargin?: number;
+  semanticDurationMs?: number;
+  semanticDisposition?: string;
+  semanticRejectionReasons?: string[];
   expectedArtifactKinds: AnswerArtifactKind[];
   missingArtifactKinds: AnswerArtifactKind[];
   resolvableByNearbyContext: boolean;
@@ -292,8 +298,9 @@ export function evaluateAnswerContextResolvabilityShadow(
       candidate.turnIds.filter((turnId) => novelTurnIds.includes(turnId))
     )
   );
-  const contextDeltaChars = plausibleEvidence.reduce(
-    (total, candidate) => total + candidate.chars,
+  const contextDeltaChars = candidateSourceTurnIds.reduce(
+    (total, turnId) =>
+      total + (input.sourceTextByTurnId[turnId]?.trim().length ?? 0),
     0
   );
 
@@ -332,6 +339,14 @@ export function formatAnswerSufficiencyDecisionForTrace(
     answerSufficiencyLexicalEvidence: decision.lexicalEvidence,
     answerSufficiencySemanticPrototypeIds:
       decision.semanticPrototypeIds,
+    answerSufficiencySemanticStatus: decision.semanticStatus,
+    answerSufficiencySemanticConfidence: decision.semanticConfidence,
+    answerSufficiencySemanticMargin: decision.semanticMargin,
+    answerSufficiencySemanticDurationMs: decision.semanticDurationMs,
+    answerSufficiencySemanticDisposition:
+      decision.semanticDisposition,
+    answerSufficiencySemanticRejectionReasons:
+      decision.semanticRejectionReasons,
     answerExpectedArtifacts: decision.expectedArtifactKinds,
     answerMissingArtifacts: decision.missingArtifactKinds,
     answerSufficiencyLogicalQuestionUnitId:
@@ -345,6 +360,30 @@ export function formatAnswerSufficiencyDecisionForTrace(
       decision.candidateSourceTurnIds,
     contextDeltaChars: decision.contextDeltaChars,
   };
+}
+
+export function buildAnswerSufficiencySemanticText(input: {
+  questionText: string;
+  parsedAnswer: ParsedMeetingAnswer;
+  maxChars?: number;
+}) {
+  const maxChars = Math.max(320, input.maxChars ?? 1_600);
+  const question = input.questionText.trim();
+  const answer = [
+    input.parsedAnswer.sections.answer,
+    input.parsedAnswer.sections.approach,
+    input.parsedAnswer.sections.clarifyingQuestion,
+    input.parsedAnswer.sections.code
+      ? "[code artifact present]"
+      : undefined,
+    input.parsedAnswer.sections.whiteboard
+      ? "[whiteboard artifact present]"
+      : undefined,
+  ]
+    .filter(Boolean)
+    .join("\n")
+    .trim();
+  return `Question: ${question}\nAnswer: ${answer}`.slice(0, maxChars);
 }
 
 function candidateCanResolveDefect(

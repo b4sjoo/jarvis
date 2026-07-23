@@ -20,6 +20,7 @@ public/transformers-wasm/
 .tmp-semantic-taxonomy-vectors/
 .tmp-semantic-taxonomy-evaluation/
 .tmp-semantic-taxonomy-reflection/
+.tmp-answer-sufficiency-semantic-vectors/
 .tmp-taxonomy-adjudication-reflection/
 .tmp-session-longitudinal-evaluation/
 

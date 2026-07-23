@@ -31,6 +31,7 @@ import {
   extractInterviewerIntentKeywordEvidence,
   formatInterviewerIntentKeywordEvidenceForTrace,
   ActiveMeetingTask,
+  AnswerSufficiencyDecision,
   ActiveInterviewParent,
   ActiveScreenTask,
   AdjacentQuestionScope,
@@ -98,6 +99,7 @@ import {
   TranscriptTurn,
   base64WavToBlob,
   buildAmazonLeadershipPrincipleMemoryHint,
+  buildAnswerSufficiencySemanticText,
   buildDiagramOverlayEvalTraceMetadata,
   buildCurrentTaskDiagramDomainContext,
   buildInterviewSessionBriefMemoryHint,
@@ -188,6 +190,7 @@ import {
   composeLogicalQuestionUnit,
   composeContextScopeAdvisorPromptContext,
   evaluateAnswerContextResolvabilityShadow,
+  scoreAnswerSufficiencySemanticEmbedding,
   createPlaybookPhaseHistoryState,
   appendCommittedAutomaticPhaseTransition,
   appendCommittedManualBackPhaseTransition,
@@ -1889,6 +1892,161 @@ export function useMeetingAssistant() {
       });
     });
   }, []);
+
+  const scheduleAnswerSufficiencySemanticShadow = useCallback(
+    ({
+      traceId,
+      taskId,
+      questionText,
+      parsedAnswer,
+      decision,
+    }: {
+      traceId: string;
+      taskId?: string;
+      questionText: string;
+      parsedAnswer: ParsedMeetingAnswer;
+      decision: AnswerSufficiencyDecision;
+    }) => {
+      if (
+        decision.answerStatus === "execution-failure" ||
+        decision.answerStatus === "fact-anchor-missing"
+      ) {
+        return;
+      }
+
+      const contextState = contextManagerRef.current.getState();
+      const sessionId = contextState.sessionId;
+      const runtimeEpoch = runtimeEpochRef.current;
+      const runtime = semanticTaxonomyRuntimeRef.current!;
+      const semanticTurnId =
+        `${decision.logicalQuestionUnitId}:answer:${decision.answerRevision}`;
+      const semanticText = buildAnswerSufficiencySemanticText({
+        questionText,
+        parsedAnswer,
+      });
+      runtime.pinSession(
+        { sessionId, runtimeEpoch },
+        "answer-sufficiency-semantic-shadow"
+      );
+      const stepId = traceStoreRef.current.startStep(
+        traceId,
+        "Answer sufficiency semantic shadow",
+        {
+          answerSufficiencyOperationId: decision.operationId,
+          answerSufficiencyLogicalQuestionUnitId:
+            decision.logicalQuestionUnitId,
+          answerSufficiencyLogicalQuestionUnitRevision:
+            decision.logicalQuestionUnitRevision,
+          answerSufficiencyAnswerRevision: decision.answerRevision,
+          inputChars: semanticText.length,
+          mode: "shadow",
+        }
+      );
+      void runtime
+        .embed(
+          {
+            sessionId,
+            runtimeEpoch,
+            turnId: semanticTurnId,
+            texts: [semanticText],
+            kind: "query",
+          },
+          100
+        )
+        .then((embedding) => {
+          const latestContext = contextManagerRef.current.getState();
+          const stale =
+            latestContext.sessionId !== sessionId ||
+            runtimeEpochRef.current !== runtimeEpoch ||
+            answerRevisionByQuestionRef.current.get(decision.questionId) !==
+              decision.answerRevision ||
+            embedding.status === "stale";
+          if (stale) {
+            traceStoreRef.current.finishStep(
+              traceId,
+              stepId,
+              "cancelled",
+              {
+                answerSufficiencySemanticDisposition: "stale",
+                answerSufficiencySemanticStaleResultDropped: true,
+                answerSufficiencyOperationId: decision.operationId,
+              }
+            );
+            return;
+          }
+
+          const semantic =
+            embedding.status === "success" && embedding.embeddings[0]
+              ? scoreAnswerSufficiencySemanticEmbedding(
+                  embedding.embeddings[0]
+                )
+              : undefined;
+          const disposition =
+            embedding.status !== "success"
+              ? embedding.status
+              : !semantic?.accepted
+                ? "rejected"
+                : semantic.candidateStatus === "context-insufficient" &&
+                    decision.answerStatus === "context-insufficient"
+                  ? "agree-insufficient"
+                  : semantic.candidateStatus ===
+                        "not-context-insufficient" &&
+                      decision.answerStatus !== "context-insufficient"
+                    ? "agree-not-insufficient"
+                    : "lexical-semantic-conflict";
+          const updatedDecision: AnswerSufficiencyDecision = {
+            ...decision,
+            semanticPrototypeIds: semantic?.prototypeIds ?? [],
+            semanticStatus: semantic?.candidateStatus,
+            semanticConfidence: semantic?.confidence,
+            semanticMargin: semantic?.margin,
+            semanticDurationMs: embedding.durationMs,
+            semanticDisposition: disposition,
+            semanticRejectionReasons:
+              semantic?.rejectionReasons ??
+              ("reason" in embedding ? [embedding.reason] : []),
+          };
+          const metadata = {
+            ...formatAnswerSufficiencyDecisionForTrace(updatedDecision),
+            answerSufficiencySemanticEmbeddingStatus: embedding.status,
+            answerSufficiencySemanticModelVersion: embedding.modelVersion,
+            answerSufficiencySemanticCacheHit: embedding.cacheHit,
+            answerSufficiencySemanticPrototypeVersion:
+              semantic?.prototypeVersion,
+            answerSufficiencySemanticCalibrationVersion:
+              semantic?.calibrationVersion,
+          };
+          traceStoreRef.current.updateMetadata(traceId, metadata);
+          traceStoreRef.current.finishStep(
+            traceId,
+            stepId,
+            embedding.status === "error" ? "error" : "success",
+            metadata,
+            embedding.status === "error" ? embedding.reason : undefined
+          );
+          sessionRecordingManagerRef.current?.recordAnswerSufficiencyDecision({
+            traceId,
+            taskId,
+            decision: updatedDecision,
+          });
+        })
+        .catch((error) => {
+          const message =
+            error instanceof Error ? error.message : String(error);
+          traceStoreRef.current.finishStep(
+            traceId,
+            stepId,
+            "error",
+            {
+              answerSufficiencySemanticDisposition:
+                "orchestration-error",
+            },
+            message
+          );
+        });
+    },
+    []
+  );
 
   const finishRunningAdvisorJobTrace = useCallback(
     (
@@ -4915,6 +5073,13 @@ export function useMeetingAssistant() {
         sessionRecordingManagerRef.current?.recordAnswerSufficiencyDecision({
           traceId,
           taskId: activeMeetingTaskId,
+          decision: answerSufficiencyDecision,
+        });
+        scheduleAnswerSufficiencySemanticShadow({
+          traceId,
+          taskId: activeMeetingTaskId,
+          questionText: advisorJob.logicalQuestionUnit.normalizedText,
+          parsedAnswer: parsedMeetingAnswer,
           decision: answerSufficiencyDecision,
         });
       }
@@ -9156,6 +9321,13 @@ export function useMeetingAssistant() {
           sessionRecordingManagerRef.current?.recordAnswerSufficiencyDecision({
             traceId: trace.id,
             taskId: sufficiencyMeetingContext.activeMeetingTask?.id,
+            decision: answerSufficiencyDecision,
+          });
+          scheduleAnswerSufficiencySemanticShadow({
+            traceId: trace.id,
+            taskId: sufficiencyMeetingContext.activeMeetingTask?.id,
+            questionText: screenLogicalQuestionUnit.normalizedText,
+            parsedAnswer: parsedScreenMeetingAnswer,
             decision: answerSufficiencyDecision,
           });
         }

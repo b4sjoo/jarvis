@@ -296,6 +296,12 @@ export interface SessionCompactTraceSummary {
     confidence?: number;
     lexicalEvidence: string[];
     semanticPrototypeIds: string[];
+    semanticStatus?: string;
+    semanticConfidence?: number;
+    semanticMargin?: number;
+    semanticDurationMs?: number;
+    semanticDisposition?: string;
+    semanticRejectionReasons: string[];
     expectedArtifacts: string[];
     missingArtifacts: string[];
     logicalQuestionUnitId?: string;
@@ -1348,6 +1354,16 @@ export class SessionRecordingManager {
       answerSufficiencyLexicalEvidence: decision.lexicalEvidence,
       answerSufficiencySemanticPrototypeIds:
         decision.semanticPrototypeIds,
+      answerSufficiencySemanticStatus: decision.semanticStatus,
+      answerSufficiencySemanticConfidence:
+        decision.semanticConfidence,
+      answerSufficiencySemanticMargin: decision.semanticMargin,
+      answerSufficiencySemanticDurationMs:
+        decision.semanticDurationMs,
+      answerSufficiencySemanticDisposition:
+        decision.semanticDisposition,
+      answerSufficiencySemanticRejectionReasons:
+        decision.semanticRejectionReasons,
       answerExpectedArtifacts: decision.expectedArtifactKinds,
       answerMissingArtifacts: decision.missingArtifactKinds,
       answerSufficiencyLogicalQuestionUnitId:
@@ -2561,6 +2577,30 @@ function buildAnswerSufficiencyTraceSummary(
     semanticPrototypeIds: readFirstStringList(
       metadataSources,
       "answerSufficiencySemanticPrototypeIds"
+    ),
+    semanticStatus: readFirstString(
+      metadataSources,
+      "answerSufficiencySemanticStatus"
+    ),
+    semanticConfidence: readFirstNumberFromMetadata(
+      metadataSources,
+      "answerSufficiencySemanticConfidence"
+    ),
+    semanticMargin: readFirstNumberFromMetadata(
+      metadataSources,
+      "answerSufficiencySemanticMargin"
+    ),
+    semanticDurationMs: readFirstNumberFromMetadata(
+      metadataSources,
+      "answerSufficiencySemanticDurationMs"
+    ),
+    semanticDisposition: readFirstString(
+      metadataSources,
+      "answerSufficiencySemanticDisposition"
+    ),
+    semanticRejectionReasons: readFirstStringList(
+      metadataSources,
+      "answerSufficiencySemanticRejectionReasons"
     ),
     expectedArtifacts: readFirstStringList(
       metadataSources,

@@ -1,0 +1,19 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "strict": true,
+    "skipLibCheck": true,
+    "outDir": ".tmp-answer-sufficiency-semantic-vectors",
+    "rootDir": ".",
+    "resolveJsonModule": true,
+    "types": ["node"]
+  },
+  "include": [
+    "scripts/generate-answer-sufficiency-semantic-vectors.ts",
+    "src/lib/meeting/answer-sufficiency-semantic-prototypes.ts",
+    "src/lib/meeting/semantic-taxonomy-model.ts",
+    "model-manifests/*.json"
+  ]
+}
