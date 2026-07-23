@@ -223,6 +223,7 @@ import {
   resolveManualCorrectionTarget,
   ManualCorrectionOperationCoordinator,
   decideInterviewTaskContinuityBranch,
+  classifyInterviewTransitionTurn,
   applyInterviewChildProbeTransition,
   persistTraceHumanEvaluations,
   persistQuestionHumanEvaluations,
@@ -4866,6 +4867,14 @@ export function useMeetingAssistant() {
       traceStoreRef.current.finishStep(traceId, appendStepId, "success", {
         transcriptTurns: contextState.transcriptTurns.length,
       });
+      traceStoreRef.current.updateMetadata(traceId, {
+        acceptedSpeechDisposition: "transcript-appended",
+        transcriptAppendDisposition: "transcript-appended",
+        transcriptAppendReason:
+          typeof metadata.transcriptAppendReason === "string"
+            ? metadata.transcriptAppendReason
+            : "accepted-source-turn",
+      });
 
       if (interviewContextUpdate?.changed) {
         const targetCompany =
@@ -6105,6 +6114,11 @@ export function useMeetingAssistant() {
         }
 
         if (!isCurrentAudioSegment(segment)) {
+          traceStoreRef.current.updateMetadata(traceId, {
+            acceptedSpeechDisposition: "stale-session-dropped",
+            transcriptAppendDisposition: "suppressed",
+            transcriptAppendReason: "stale-after-stt",
+          });
           const droppedStepId = traceStoreRef.current.startStep(
             traceId,
             "Transcript dropped",
@@ -6179,6 +6193,11 @@ export function useMeetingAssistant() {
             turn.relatedTurnIds = duplicateDecision.matchedTurn?.id
               ? [duplicateDecision.matchedTurn.id]
               : [];
+            traceStoreRef.current.updateMetadata(traceId, {
+              acceptedSpeechDisposition: "duplicate-suppressed",
+              transcriptAppendDisposition: "suppressed",
+              transcriptAppendReason: duplicateDecision.reason,
+            });
             const duplicateStepId = traceStoreRef.current.startStep(
               traceId,
               "Duplicate transcript suppressed",
@@ -6222,6 +6241,11 @@ export function useMeetingAssistant() {
         );
         if (duplicateDecision.suppress) {
           turn.contextFusionStatus = "duplicate-suppressed";
+          traceStoreRef.current.updateMetadata(traceId, {
+            acceptedSpeechDisposition: "duplicate-suppressed",
+            transcriptAppendDisposition: "suppressed",
+            transcriptAppendReason: duplicateDecision.reason,
+          });
           const duplicateStepId = traceStoreRef.current.startStep(
             traceId,
             "Duplicate transcript suppressed",
@@ -6261,6 +6285,11 @@ export function useMeetingAssistant() {
         );
         const sentenceCompletionDecision = decideSentenceCompletion(turn.text);
         if (sentenceCompletionDecision.disposition === "buffer") {
+          traceStoreRef.current.updateMetadata(traceId, {
+            acceptedSpeechDisposition: "sentence-fragment-buffered",
+            transcriptAppendDisposition: "deferred",
+            transcriptAppendReason: sentenceCompletionDecision.reason,
+          });
           holdPendingSentenceCompletion(
             turn,
             segment,
@@ -6290,7 +6319,19 @@ export function useMeetingAssistant() {
           sentenceBufferMergedTranscriptChars: turn.text.length,
         });
 
-        if (hasActiveInterviewTask && isTaskSwitchTranscript(turn.text)) {
+        const transitionTurnDecision = classifyInterviewTransitionTurn(
+          turn.text
+        );
+        traceStoreRef.current.updateMetadata(traceId, {
+          taskSwitchEvidenceDetected: transitionTurnDecision.detected,
+          taskSwitchDisposition: transitionTurnDecision.disposition,
+          taskSwitchDispositionReason: transitionTurnDecision.reason,
+        });
+
+        if (
+          hasActiveInterviewTask &&
+          transitionTurnDecision.disposition === "hint-only"
+        ) {
           const switchStepId = traceStoreRef.current.startStep(
             traceId,
             "Task switch confirmation requested",
@@ -6302,8 +6343,15 @@ export function useMeetingAssistant() {
               activeScreenTaskId: activeScreenTask?.id,
               activeInterviewTaskId: activeInterviewTask?.id,
               transcriptChars: turn.text.trim().length,
+              taskSwitchDisposition: transitionTurnDecision.disposition,
+              taskSwitchDispositionReason: transitionTurnDecision.reason,
             }
           );
+          appendTranscriptTurnForTrace(turn, traceId, segment, {
+            turnGateAction: "append-only",
+            turnGateReason: "task-switch-announcement",
+            transcriptAppendReason: "task-switch-announcement",
+          });
           traceStoreRef.current.finishStep(traceId, switchStepId, "success");
           traceStoreRef.current.finishTrace(traceId, "success");
           const taskSwitchContent = [
@@ -6513,6 +6561,11 @@ export function useMeetingAssistant() {
         traceStoreRef.current.finishStep(traceId, gateStepId, "success");
 
         if (turnGate.action === "ignore") {
+          traceStoreRef.current.updateMetadata(traceId, {
+            acceptedSpeechDisposition: "low-value-ignored",
+            transcriptAppendDisposition: "suppressed",
+            transcriptAppendReason: turnGate.reason,
+          });
           const ignoredStepId = traceStoreRef.current.startStep(
             traceId,
             "Transcript ignored",

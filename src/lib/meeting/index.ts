@@ -15,6 +15,7 @@ export * from "./fact-anchor-guardrail";
 export * from "./focus-window";
 export * from "./human-evaluation";
 export * from "./interview-playbook";
+export * from "./interview-section-transition";
 export * from "./playbook-phase";
 export * from "./programming-language";
 export * from "./interview-session-context";
