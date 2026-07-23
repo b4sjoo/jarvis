@@ -4364,6 +4364,16 @@ export function useMeetingAssistant() {
         trace: traceId
           ? {
               onRequest: (input) => {
+                const advisorPromptIncludedLogicalQuestion =
+                  doesAdvisorPromptContainLogicalQuestion(
+                    input.userMessage,
+                    advisorJob.logicalQuestionUnit
+                  );
+                traceStoreRef.current.updateMetadata(traceId, {
+                  advisorPromptIncludedLogicalQuestion,
+                  advisorPromptLogicalQuestionSourceCount:
+                    advisorJob.logicalQuestionUnit?.sources.length,
+                });
                 traceStoreRef.current.recordInput(
                   traceId,
                   "advisor model input",
@@ -12475,6 +12485,26 @@ function inferMemoryTopicDomainFromScreenPreflight(
 
 function inferMemoryQuestionTypeFromQuery(query: string): MemoryQuestionType {
   return inferCanonicalQuestionTypeFromText(query) ?? "unknown";
+}
+
+function doesAdvisorPromptContainLogicalQuestion(
+  prompt: string,
+  unit: LogicalQuestionUnit | undefined
+) {
+  if (!unit) return undefined;
+  const normalizedPrompt = normalizeTranscriptForGate(prompt);
+  const sourceTexts = unit.sources
+    .map((source) => normalizeTranscriptForGate(source.text))
+    .filter(Boolean);
+  if (sourceTexts.length) {
+    return sourceTexts.every((sourceText) =>
+      normalizedPrompt.includes(sourceText)
+    );
+  }
+  const normalizedQuestion = normalizeTranscriptForGate(unit.normalizedText);
+  return normalizedQuestion
+    ? normalizedPrompt.includes(normalizedQuestion)
+    : undefined;
 }
 
 function readMemoryQuestionType(

@@ -125,8 +125,14 @@ test("reports unavailable ratios as N/A and exposes rejected semantic leaders", 
           taxonomyKeywordType: "unknown",
           taxonomyHybridEffectiveType: "unknown",
           taxonomySemanticPerTypeScores: {
-            coding: 0.8296,
-            "ai-ml-system-design": 0.8292,
+            coding: {
+              positiveScore: 0.8296,
+              hardNegativeScore: 0.2,
+            },
+            "ai-ml-system-design": {
+              positiveScore: 0.8292,
+              hardNegativeScore: 0.3,
+            },
           },
           taxonomySemanticRejectionReasons: ["insufficient-margin"],
         },
@@ -145,6 +151,101 @@ test("reports unavailable ratios as N/A and exposes rejected semantic leaders", 
   assert.match(
     renderSemanticTaxonomyReflectionMarkdown(report),
     /coding 0\.830 \(rejected\): insufficient-margin/
+  );
+});
+
+test("separates human labels from runtime corrections and requires prompt evidence for context loss", () => {
+  const report = buildSemanticTaxonomyReflectionReport({
+    decisions: [
+      {
+        recordedAt: 10,
+        sessionId: "session_1",
+        traceId: "trace_followup",
+        metadata: {
+          semanticTaxonomySessionId: "session_1",
+          semanticTaxonomyTurnId: "turn_followup",
+          taxonomyKeywordType: "coding",
+          taxonomyHybridEffectiveType: "coding",
+        },
+      },
+    ],
+    evaluations: [
+      {
+        id: "eval_followup",
+        questionId: "question_followup",
+        traceIds: ["trace_followup"],
+        questionType: "coding",
+        correctedQuestionType: "coding",
+        classification: { verdict: "ok" },
+        updatedAt: 20,
+      },
+    ],
+    runtimeTraces: [
+      {
+        id: "trace_followup",
+        status: "success",
+        metadata: {
+          questionInstanceId: "question_followup",
+          questionTypeInferenceType: "coding",
+          taskRelation: "followup-parent",
+          runtimeExpectedParentId: "parent_coding",
+          activeMeetingParentId: "parent_coding",
+          logicalQuestionSourceTurnIds: ["turn_followup"],
+          canonicalQuestionSourceTurnIds: ["turn_original"],
+          advisorPromptIncludedLogicalQuestion: true,
+        },
+      },
+    ],
+  });
+
+  assert.equal(report.rows[0].labelOutcome, "confirmed");
+  assert.equal(report.trajectoryRows[0].manualCorrectionApplied, false);
+  assert.equal(
+    report.trajectoryRows[0].inheritedParentQuestionAvailable,
+    true
+  );
+  assert.equal(report.trajectoryRows[0].currentLogicalQuestionCoverage, 0);
+  assert.deepEqual(report.trajectoryRows[0].failureKinds, []);
+});
+
+test("reports context loss only when the advisor prompt explicitly omitted the logical question", () => {
+  const report = buildSemanticTaxonomyReflectionReport({
+    decisions: [
+      {
+        recordedAt: 10,
+        sessionId: "session_1",
+        traceId: "trace_missing_prompt",
+        metadata: {
+          semanticTaxonomySessionId: "session_1",
+          semanticTaxonomyTurnId: "turn_missing_prompt",
+          taxonomyKeywordType: "general-system-design",
+          taxonomyHybridEffectiveType: "general-system-design",
+        },
+      },
+    ],
+    evaluations: [],
+    runtimeTraces: [
+      {
+        id: "trace_missing_prompt",
+        status: "success",
+        metadata: {
+          taskRelation: "new-parent",
+          logicalQuestionSourceTurnIds: ["turn_missing_prompt"],
+          canonicalQuestionSourceTurnIds: [],
+          advisorPromptIncludedLogicalQuestion: false,
+        },
+      },
+    ],
+  });
+
+  assert.equal(
+    report.trajectoryRows[0].advisorPromptIncludedLogicalQuestion,
+    false
+  );
+  assert.ok(
+    report.trajectoryRows[0].failureKinds.includes(
+      "late-parent-missing-question-context"
+    )
   );
 });
 

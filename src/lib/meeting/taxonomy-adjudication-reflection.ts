@@ -108,9 +108,19 @@ export interface TaxonomyAdjudicationReflectionRow {
 }
 
 export interface TaxonomyAdjudicationReflectionReport {
-  version: 1;
+  version: 2;
   generatedAt: number;
   sessions: string[];
+  funnel: {
+    transcriptionUnits: EvaluationFunnelStage;
+    substantiveUnits: EvaluationFunnelStage;
+    eligibleUnits: EvaluationFunnelStage;
+    triggeredCalls: EvaluationFunnelStage;
+    providerValidOutputs: EvaluationFunnelStage;
+    joinedHumanLabels: EvaluationFunnelStage;
+    taxonomyAgreements: EvaluationFunnelStage;
+    trajectoryAgreements: EvaluationFunnelStage;
+  };
   metrics: {
     observedUnits: number;
     substantiveUnits: number;
@@ -155,7 +165,16 @@ export interface TaxonomyAdjudicationReflectionReport {
     evaluationId: string;
     questionId: string;
     traceIds: string[];
+    expectedType?: CanonicalQuestionType;
+    expectedRelation?: string;
+    reason: "missing-recorded-decision" | "trace-not-selected";
   }>;
+}
+
+export interface EvaluationFunnelStage {
+  count: number;
+  denominator: number;
+  rate: number | null;
 }
 
 export function buildTaxonomyAdjudicationReflectionReport(input: {
@@ -290,9 +309,16 @@ export function buildTaxonomyAdjudicationReflectionReport(input: {
   });
 
   const substantiveRows = rows.filter(isSubstantiveObservedUnit);
-  const triggeredRows = rows.filter((row) => row.durationMs !== undefined);
-  const typeLabeled = rows.filter((row) => row.typeCorrect !== undefined);
-  const relationLabeled = rows.filter(
+  const eligibleRows = substantiveRows.filter((row) => row.eligible);
+  const triggeredRows = eligibleRows.filter(isTriggeredRow);
+  const providerValidRows = triggeredRows.filter(isProviderValidRow);
+  const joinedHumanRows = providerValidRows.filter((row) =>
+    hasTaxonomyEvaluation(evaluationByTraceId.get(row.traceId))
+  );
+  const typeLabeled = joinedHumanRows.filter(
+    (row) => row.typeCorrect !== undefined
+  );
+  const relationLabeled = joinedHumanRows.filter(
     (row) => row.relationCorrect !== undefined
   );
   const neededLabeled = rows.filter(
@@ -312,15 +338,43 @@ export function buildTaxonomyAdjudicationReflectionReport(input: {
   const inputChars = sum(rows.map((row) => row.inputChars));
   const outputChars = sum(rows.map((row) => row.outputChars));
   const triggerRate = ratio(triggeredRows.length, substantiveRows.length);
+  const traceIdsWithDecisions = new Set(rows.map((row) => row.traceId));
+  const knownTraceIds = new Set(input.traces.map((trace) => trace.traceId));
+  const taxonomyAgreements = typeLabeled.filter((row) => row.typeCorrect).length;
+  const trajectoryAgreements = relationLabeled.filter(
+    (row) => row.relationCorrect
+  ).length;
 
   return {
-    version: 1,
+    version: 2,
     generatedAt: Date.now(),
     sessions,
+    funnel: {
+      transcriptionUnits: funnelStage(rows.length, rows.length),
+      substantiveUnits: funnelStage(substantiveRows.length, rows.length),
+      eligibleUnits: funnelStage(eligibleRows.length, substantiveRows.length),
+      triggeredCalls: funnelStage(triggeredRows.length, eligibleRows.length),
+      providerValidOutputs: funnelStage(
+        providerValidRows.length,
+        triggeredRows.length
+      ),
+      joinedHumanLabels: funnelStage(
+        joinedHumanRows.length,
+        providerValidRows.length
+      ),
+      taxonomyAgreements: funnelStage(
+        taxonomyAgreements,
+        typeLabeled.length
+      ),
+      trajectoryAgreements: funnelStage(
+        trajectoryAgreements,
+        relationLabeled.length
+      ),
+    },
     metrics: {
       observedUnits: rows.length,
       substantiveUnits: substantiveRows.length,
-      eligible: rows.filter((row) => row.eligible).length,
+      eligible: eligibleRows.length,
       triggeredCalls: triggeredRows.length,
       skipped: rows.filter((row) => !row.eligible || !row.durationMs).length,
       triggerRate,
@@ -339,8 +393,9 @@ export function buildTaxonomyAdjudicationReflectionReport(input: {
       parseDispositions: countStrings(
         triggeredRows.map((row) => row.parseDisposition)
       ),
-      validOutputs: rows.filter((row) => row.parseValid === true).length,
-      invalidOutputs: rows.filter((row) => row.parseValid === false).length,
+      validOutputs: providerValidRows.length,
+      invalidOutputs: triggeredRows.filter((row) => row.parseValid === false)
+        .length,
       staleOrSuperseded: rows.filter(
         (row) => row.disposition === "stale" || row.disposition === "superseded"
       ).length,
@@ -397,13 +452,27 @@ export function buildTaxonomyAdjudicationReflectionReport(input: {
     unmatchedEvaluations: input.evaluations
       .filter(
         (evaluation) =>
-          evaluation.taxonomyAdjudication &&
+          hasTaxonomyEvaluation(evaluation) &&
           !matchedEvaluationIds.has(evaluation.id)
       )
       .map((evaluation) => ({
         evaluationId: evaluation.id,
         questionId: evaluation.questionId,
         traceIds: evaluation.traceIds,
+        expectedType: normalizeType(
+          evaluation.correctedQuestionType ?? evaluation.questionType
+        ),
+        expectedRelation:
+          evaluation.correctedRelation ?? evaluation.relation,
+        reason: evaluation.traceIds.some((traceId) =>
+          knownTraceIds.has(traceId)
+        )
+          ? ("trace-not-selected" as const)
+          : evaluation.traceIds.some((traceId) =>
+                traceIdsWithDecisions.has(traceId)
+              )
+            ? ("trace-not-selected" as const)
+            : ("missing-recorded-decision" as const),
       })),
   };
 }
@@ -434,6 +503,10 @@ export function renderTaxonomyAdjudicationReflectionMarkdown(
     `- Latency p50 / p95: ${report.metrics.latency.p50Ms.toFixed(1)}ms / ${report.metrics.latency.p95Ms.toFixed(1)}ms`,
     `- Estimated input / output tokens: ${report.metrics.estimatedInputTokens} / ${report.metrics.estimatedOutputTokens}`,
     "- Exact token usage and cost: unavailable from the current provider stream contract",
+    "",
+    "## Evaluation Funnel",
+    "",
+    ...formatFunnel(report.funnel),
     "",
     "## Decision Comparison",
     "",
@@ -478,7 +551,7 @@ export function renderTaxonomyAdjudicationReflectionMarkdown(
     lines.push("", "## Joinability Gaps", "");
     for (const evaluation of report.unmatchedEvaluations) {
       lines.push(
-        `- ${evaluation.evaluationId}: question=${evaluation.questionId}; traces=${evaluation.traceIds.join(", ") || "-"}.`
+        `- ${evaluation.evaluationId}: ${evaluation.reason}; question=${evaluation.questionId}; expected=${evaluation.expectedType ?? "-"} / ${evaluation.expectedRelation ?? "-"}; traces=${evaluation.traceIds.join(", ") || "-"}.`
       );
     }
   }
@@ -551,6 +624,14 @@ function ratio(numerator: number, denominator: number) {
   return denominator ? numerator / denominator : null;
 }
 
+function funnelStage(count: number, denominator: number): EvaluationFunnelStage {
+  return {
+    count,
+    denominator,
+    rate: ratio(count, denominator),
+  };
+}
+
 function sum(values: Array<number | undefined>) {
   return values.reduce<number>((total, value) => total + (value ?? 0), 0);
 }
@@ -610,6 +691,51 @@ function formatCountMap(values: Record<string, number>) {
   return entries.length
     ? entries.map(([key, value]) => `- ${key}: ${value}`)
     : ["- No data."];
+}
+
+function formatFunnel(
+  funnel: TaxonomyAdjudicationReflectionReport["funnel"]
+) {
+  return Object.entries(funnel).map(([name, stage]) => {
+    const rate =
+      stage.rate === null ? "N/A" : `${(stage.rate * 100).toFixed(1)}%`;
+    return `- ${name}: ${stage.count} / ${stage.denominator} (${rate})`;
+  });
+}
+
+function isTriggeredRow(row: TaxonomyAdjudicationReflectionRow) {
+  return Boolean(
+    row.durationMs !== undefined ||
+      row.providerDisposition ||
+      row.parseDisposition ||
+      row.disposition === "provider-error-output" ||
+      row.disposition === "invalid-output" ||
+      row.disposition === "completed" ||
+      row.disposition === "stale" ||
+      row.disposition === "superseded"
+  );
+}
+
+function isProviderValidRow(row: TaxonomyAdjudicationReflectionRow) {
+  return (
+    row.parseValid === true &&
+    row.providerDisposition !== "provider-auth-error" &&
+    row.providerDisposition !== "provider-configuration-error"
+  );
+}
+
+function hasTaxonomyEvaluation(
+  evaluation: TaxonomyAdjudicationEvaluationLabel | undefined
+) {
+  return Boolean(
+    evaluation &&
+      (evaluation.taxonomyAdjudication ||
+        normalizeType(
+          evaluation.correctedQuestionType ?? evaluation.questionType
+        ) ||
+        evaluation.correctedRelation ||
+        evaluation.relation)
+  );
 }
 
 function formatConfusion(values: Record<string, Record<string, number>>) {

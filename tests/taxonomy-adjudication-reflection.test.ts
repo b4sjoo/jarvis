@@ -108,6 +108,14 @@ test("compares lexical, semantic, LLM, runtime, and human adjudication evidence"
   assert.deepEqual(report.metrics.models, { "fast-model": 1 });
   assert.equal(report.metrics.latency.p50Ms, 600);
   assert.equal(report.metrics.latency.p95Ms, 1_800);
+  assert.equal(report.funnel.transcriptionUnits.count, 3);
+  assert.equal(report.funnel.substantiveUnits.count, 3);
+  assert.equal(report.funnel.eligibleUnits.count, 2);
+  assert.equal(report.funnel.triggeredCalls.count, 2);
+  assert.equal(report.funnel.providerValidOutputs.count, 2);
+  assert.equal(report.funnel.joinedHumanLabels.count, 2);
+  assert.equal(report.funnel.taxonomyAgreements.count, 2);
+  assert.equal(report.funnel.trajectoryAgreements.count, 1);
   assert.equal(report.typeConfusion.coding?.coding, 1);
   assert.match(
     renderTaxonomyAdjudicationReflectionMarkdown(report),
@@ -139,8 +147,69 @@ test("reports adjudication labels that cannot join a recorded trace", () => {
       evaluationId: "eval_missing",
       questionId: "question_missing",
       traceIds: ["trace_missing"],
+      expectedType: undefined,
+      expectedRelation: undefined,
+      reason: "missing-recorded-decision",
     },
   ]);
+});
+
+test("excludes provider authentication failures from taxonomy agreement denominators", () => {
+  const report = buildTaxonomyAdjudicationReflectionReport({
+    decisions: [
+      decision("trace_auth", "unit_auth", 1, {
+        taxonomyAdjudicationEligible: true,
+        taxonomyAdjudicationDisposition: "provider-error-output",
+        taxonomyAdjudicationProviderDisposition: "provider-auth-error",
+        taxonomyAdjudicationParseDisposition: "not-run-provider-auth-error",
+        taxonomyAdjudicationParseValid: false,
+        taxonomyAdjudicationDurationMs: 10,
+      }),
+    ],
+    traces: [trace("trace_auth", "unknown", "coding", "unknown")],
+    evaluations: [
+      {
+        id: "eval_auth",
+        questionId: "question_auth",
+        traceIds: ["trace_auth"],
+        correctedQuestionType: "coding",
+        taxonomyAdjudication: {
+          needed: true,
+          typeCorrect: false,
+        },
+        updatedAt: 10,
+      },
+    ],
+  });
+
+  assert.equal(report.funnel.triggeredCalls.count, 1);
+  assert.equal(report.funnel.providerValidOutputs.count, 0);
+  assert.equal(report.funnel.joinedHumanLabels.count, 0);
+  assert.equal(report.metrics.labeledTypeProposals, 0);
+  assert.equal(report.metrics.typePrecision, null);
+});
+
+test("retains unmatched type labels even without a taxonomy adjudication block", () => {
+  const report = buildTaxonomyAdjudicationReflectionReport({
+    decisions: [],
+    traces: [],
+    evaluations: [
+      {
+        id: "eval_type_only",
+        questionId: "question_type_only",
+        traceIds: ["trace_missing"],
+        correctedQuestionType: "coding",
+        updatedAt: 10,
+      },
+    ],
+  });
+
+  assert.equal(report.unmatchedEvaluations.length, 1);
+  assert.equal(report.unmatchedEvaluations[0].expectedType, "coding");
+  assert.equal(
+    report.unmatchedEvaluations[0].reason,
+    "missing-recorded-decision"
+  );
 });
 
 function decision(

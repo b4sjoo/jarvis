@@ -102,7 +102,11 @@ export interface SemanticTaxonomyTrajectoryRow {
   parentAfterType?: CanonicalQuestionType;
   logicalQuestionSourceTurnIds: string[];
   canonicalQuestionSourceTurnIds: string[];
+  currentLogicalQuestionCoverage?: number;
   questionContextCoverage?: number;
+  inheritedParentQuestionAvailable: boolean;
+  boundedHandoffAvailable: boolean;
+  advisorPromptIncludedLogicalQuestion?: boolean;
   manualCorrectionApplied: boolean;
   failureKinds: SemanticTaxonomyTrajectoryFailureKind[];
 }
@@ -392,7 +396,10 @@ function buildReflectionRow(
     readCanonical(metadata, "taxonomyHybridEffectiveType") ?? lexicalType;
   const expectedType = evaluation ? resolveExpectedType(evaluation) : undefined;
   const rescueApplied = readBoolean(metadata, "taxonomySemanticRescueApplied");
-  const corrected = Boolean(evaluation?.correctedQuestionType);
+  const corrected = Boolean(
+    evaluation?.manualQuestionTypeCorrectionId ||
+      (expectedType && expectedType !== effectiveType)
+  );
   const semanticScores = readNumberRecord(
     metadata,
     "taxonomySemanticPerTypeScores"
@@ -556,10 +563,31 @@ function buildTrajectoryRows(
         logicalQuestionSourceTurnIds,
         canonicalQuestionSourceTurnIds
       );
+      const parentBeforeId =
+        readFirst(metadata, "runtimeExpectedParentId") ??
+        readFirst(metadata, "advisorJobExpectedParentId");
+      const parentAfterId =
+        readFirst(metadata, "newParentId") ??
+        readFirst(metadata, "activeMeetingParentId");
+      const inheritedParentQuestionAvailable = Boolean(
+        taskRelation === "followup-parent" &&
+          parentBeforeId &&
+          parentAfterId &&
+          parentBeforeId === parentAfterId
+      );
+      const boundedHandoffAvailable = Boolean(
+        readFirst(metadata, "parentContextHandoffSourceId") ??
+          readFirst(metadata, "activeMeetingParentHandoffSourceId")
+      );
+      const advisorPromptIncludedLogicalQuestion = readOptionalBoolean(
+        metadata,
+        "advisorPromptIncludedLogicalQuestion"
+      );
       const manualCorrectionApplied = Boolean(
-        group.evaluation?.correctedQuestionType ||
+        group.evaluation?.manualQuestionTypeCorrectionId ||
           readFirst(metadata, "manualQuestionTypeCorrectionId") ||
-          readBoolean(metadata, "manualQuestionTypeCorrectionApplied")
+          readBoolean(metadata, "manualQuestionTypeCorrectionApplied") ||
+          (expectedType && expectedType !== detectedType)
       );
       const failureKinds: SemanticTaxonomyTrajectoryFailureKind[] = [];
       const advisorCancelled = advisorOutcomes.some((outcome) =>
@@ -575,9 +603,7 @@ function buildTrajectoryRows(
         failureKinds.push("classification-correct-but-mutation-lost");
       }
       if (
-        logicalQuestionSourceTurnIds.length > 0 &&
-        questionContextCoverage !== undefined &&
-        questionContextCoverage < 1
+        advisorPromptIncludedLogicalQuestion === false
       ) {
         failureKinds.push("late-parent-missing-question-context");
       }
@@ -609,12 +635,8 @@ function buildTrajectoryRows(
         taskMutationApplied,
         runtimeCommitAuthorized,
         advisorOutcomes,
-        parentBeforeId:
-          readFirst(metadata, "runtimeExpectedParentId") ??
-          readFirst(metadata, "advisorJobExpectedParentId"),
-        parentAfterId:
-          readFirst(metadata, "newParentId") ??
-          readFirst(metadata, "activeMeetingParentId"),
+        parentBeforeId,
+        parentAfterId,
         parentBeforeType:
           readCanonical(metadata, "runtimeExpectedParentType") ??
           readCanonical(metadata, "parentTaskKind"),
@@ -624,7 +646,11 @@ function buildTrajectoryRows(
         ),
         logicalQuestionSourceTurnIds,
         canonicalQuestionSourceTurnIds,
+        currentLogicalQuestionCoverage: questionContextCoverage,
         questionContextCoverage,
+        inheritedParentQuestionAvailable,
+        boundedHandoffAvailable,
+        advisorPromptIncludedLogicalQuestion,
         manualCorrectionApplied,
         failureKinds: unique(failureKinds),
       } satisfies SemanticTaxonomyTrajectoryRow;
@@ -777,13 +803,41 @@ function readNumberRecord(
   for (const source of sources) {
     const value = source[key];
     if (!value || typeof value !== "object" || Array.isArray(value)) continue;
-    const entries = Object.entries(value).filter(
-      (entry): entry is [string, number] =>
-        typeof entry[1] === "number" && Number.isFinite(entry[1])
-    );
+    const entries = Object.entries(value)
+      .map(([entryKey, entryValue]) => [
+        entryKey,
+        readSemanticScoreValue(entryValue),
+      ] as const)
+      .filter(
+        (entry): entry is readonly [string, number] =>
+          entry[1] !== undefined
+      );
     if (entries.length) return Object.fromEntries(entries);
   }
   return {};
+}
+
+function readSemanticScoreValue(value: unknown) {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const candidate = value as Record<string, unknown>;
+  for (const key of ["positiveScore", "score", "calibratedConfidence"]) {
+    const nested = candidate[key];
+    if (typeof nested === "number" && Number.isFinite(nested)) return nested;
+  }
+  return undefined;
+}
+
+function readOptionalBoolean(
+  sources: Record<string, unknown>[],
+  key: string
+) {
+  for (const source of sources) {
+    if (typeof source[key] === "boolean") return source[key] as boolean;
+  }
+  return undefined;
 }
 
 function rankCanonicalScores(scores: Record<string, number>) {
