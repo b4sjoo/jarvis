@@ -28,6 +28,7 @@
     "src/lib/meeting/answer-sufficiency.ts",
     "src/lib/meeting/answer-sufficiency-semantic-prototypes.ts",
     "src/lib/meeting/answer-sufficiency-semantic-resolver.ts",
+    "src/lib/meeting/answer-sufficiency-reflection.ts",
     "src/lib/meeting/semantic-taxonomy-reflection.ts",
     "model-manifests/*.json"
   ]

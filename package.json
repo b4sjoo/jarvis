@@ -38,6 +38,7 @@
     "taxonomy:model:provision": "node scripts/provision-semantic-taxonomy-model.mjs",
     "taxonomy:semantic:vectors": "tsc -p tsconfig.semantic-taxonomy-vectors.json && node .tmp-semantic-taxonomy-vectors/scripts/generate-semantic-taxonomy-vectors.js",
     "answer:sufficiency:semantic:vectors": "tsc -p tsconfig.answer-sufficiency-semantic-vectors.json && node .tmp-answer-sufficiency-semantic-vectors/scripts/generate-answer-sufficiency-semantic-vectors.js",
+    "answer:sufficiency:reflect": "tsc -p tsconfig.answer-sufficiency-reflection.json && node .tmp-answer-sufficiency-reflection/scripts/reflect-answer-sufficiency-session.js",
     "taxonomy:semantic:evaluate": "tsc -p tsconfig.semantic-taxonomy-evaluation.json && node .tmp-semantic-taxonomy-evaluation/scripts/evaluate-semantic-taxonomy.js",
     "taxonomy:semantic:reflect": "tsc -p tsconfig.semantic-taxonomy-reflection.json && node .tmp-semantic-taxonomy-reflection/scripts/reflect-semantic-taxonomy-session.js",
     "taxonomy:adjudication:reflect": "tsc -p tsconfig.taxonomy-adjudication-reflection.json && node .tmp-taxonomy-adjudication-reflection/scripts/reflect-taxonomy-adjudication-session.js",
