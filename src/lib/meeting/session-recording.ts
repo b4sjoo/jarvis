@@ -267,6 +267,9 @@ export interface SessionCompactTraceSummary {
     requirement?: string;
     confidence?: number;
     confidenceTier?: string;
+    statusDomain?: string;
+    allowedSources?: string[];
+    selectedSources?: string[];
     mode?: string;
     enforced?: boolean;
     unsupportedClaimRisk?: string;
@@ -2068,6 +2071,18 @@ function buildCompactTraceSummary({
       confidenceTier: readFirstString(
         metadataSources,
         "personalEvidenceConfidenceTier"
+      ),
+      statusDomain: readFirstString(
+        metadataSources,
+        "personalEvidenceStatusDomain"
+      ),
+      allowedSources: readFirstStringList(
+        metadataSources,
+        "personalEvidenceAllowedSources"
+      ),
+      selectedSources: readFirstStringList(
+        metadataSources,
+        "personalEvidenceSelectedSources"
       ),
       mode: readFirstString(
         metadataSources,

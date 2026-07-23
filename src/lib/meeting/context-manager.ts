@@ -15,7 +15,10 @@ import {
   updateInterviewSessionContextFromScreenText,
   updateInterviewSessionContextFromTurn,
 } from "./interview-session-context.js";
-import { shouldIncludeTurnInAdvisorPrompt } from "./transcript-fusion.js";
+import {
+  collectConfirmedMeFacts,
+  shouldIncludeTurnInAdvisorPrompt,
+} from "./transcript-fusion.js";
 import { buildActiveMeetingTask } from "./active-meeting-task.js";
 
 const DEFAULT_TRANSCRIPT_WINDOW_MS = 2 * 60 * 1000;
@@ -383,6 +386,7 @@ export class MeetingContextManager {
         activeMeetingTask?.parent.playbook ??
         this.state.activeScreenTask?.playbook ??
         this.state.activeInterviewTask?.playbook,
+      confirmedMeFacts: collectConfirmedMeFacts(this.state.transcriptTurns),
       latestTurn,
     };
   }

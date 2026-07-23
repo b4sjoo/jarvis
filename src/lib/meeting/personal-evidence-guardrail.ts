@@ -3,6 +3,7 @@ import type {
   PersonalEvidenceDecision,
   PersonalEvidenceGuardrailMode,
   PersonalEvidenceRequirement,
+  PersonalEvidenceStatusDomain,
 } from "./types";
 
 export interface DetectPersonalEvidenceInput {
@@ -14,24 +15,63 @@ export interface DetectPersonalEvidenceInput {
 interface SignalMatch {
   label: string;
   pattern: RegExp;
+  statusDomain?: PersonalEvidenceStatusDomain;
 }
 
 const LOGISTICS_SIGNALS: SignalMatch[] = [
   {
     label: "work-authorization",
-    pattern: /\b(work authorization|authorized to work|visa status|need sponsorship|require sponsorship)\b/i,
+    pattern:
+      /\b(?:(?:are|will|would|do) you.{0,48}(?:authorized to work|work authorization|visa status|need sponsorship|require sponsorship)|what is your (?:work authorization|visa status)|(?:will|do) you (?:now or in the future )?(?:need|require) sponsorship)\b/i,
+    statusDomain: "work-authorization",
   },
   {
     label: "location-or-relocation",
     pattern: /\b(where are you (?:currently )?located|open to relocat(?:e|ion)|willing to relocat(?:e|ion))\b/i,
+    statusDomain: "location-relocation",
   },
   {
     label: "availability-or-start-date",
     pattern: /\b(when can you start|available to start|notice period|start date)\b/i,
+    statusDomain: "availability-start-date",
   },
   {
     label: "compensation",
-    pattern: /\b(compensation expectations?|salary expectations?|expected compensation)\b/i,
+    pattern:
+      /\b(?:your (?:compensation|salary) expectations?|what (?:compensation|salary) (?:are you|do you) expect|what is your expected compensation)\b/i,
+    statusDomain: "compensation",
+  },
+  {
+    label: "employment-status",
+    pattern: /\b(are you (?:currently )?employed|what is your current employment status|are you still working (?:at|for))\b/i,
+    statusDomain: "employment-status",
+  },
+];
+
+const HEALTH_STATUS_SIGNALS: SignalMatch[] = [
+  {
+    label: "personal-health-check-in",
+    pattern:
+      /\b(?:how (?:are|is) your|how about your) (?:health|condition|recovery|symptoms?|palpitations?|pain|injury|illness|treatment)\b/i,
+    statusDomain: "health-status",
+  },
+  {
+    label: "personal-health-persistence",
+    pattern:
+      /\b(?:are you still|do you still) (?:having|experiencing|dealing with|recovering from|suffering from) (?:[a-z][a-z -]{1,60})\b/i,
+    statusDomain: "health-status",
+  },
+  {
+    label: "personal-health-change",
+    pattern:
+      /\b(?:has|have) your (?:health|condition|recovery|symptoms?|palpitations?|pain|injury|illness) (?:improved|resolved|changed|gotten better|got worse|returned)\b/i,
+    statusDomain: "health-status",
+  },
+  {
+    label: "personal-health-possession",
+    pattern:
+      /\bdo you (?:currently |still )?(?:have|experience) (?:palpitations?|symptoms?|a medical condition|a health condition)\b/i,
+    statusDomain: "health-status",
   },
 ];
 
@@ -134,13 +174,21 @@ export function detectPersonalEvidenceRequirement({
   }
 
   const logisticsSignals = collectSignals(normalized, LOGISTICS_SIGNALS);
-  if (logisticsSignals.length) {
+  const healthStatusSignals = collectSignals(normalized, HEALTH_STATUS_SIGNALS);
+  const personalStatusSignals = [...logisticsSignals, ...healthStatusSignals];
+  if (personalStatusSignals.length) {
+    const statusDomain =
+      findStatusDomain(normalized, [
+        ...LOGISTICS_SIGNALS,
+        ...HEALTH_STATUS_SIGNALS,
+      ]) ?? undefined;
     return createDecision(
       "personal-logistics",
       0.98,
-      logisticsSignals,
+      personalStatusSignals,
       [],
-      mode
+      mode,
+      statusDomain
     );
   }
 
@@ -204,7 +252,8 @@ function createDecision(
   confidence: number,
   signals: string[],
   counterSignals: string[],
-  mode: PersonalEvidenceGuardrailMode
+  mode: PersonalEvidenceGuardrailMode,
+  statusDomain?: PersonalEvidenceStatusDomain
 ): PersonalEvidenceDecision {
   const confidenceTier =
     confidence >= 0.85 ? "high" : confidence >= 0.55 ? "medium" : "low";
@@ -212,7 +261,8 @@ function createDecision(
     mode === "enforcement" &&
     confidenceTier === "high" &&
     (requirement === "autobiographical-project" ||
-      requirement === "autobiographical-behavioral");
+      requirement === "autobiographical-behavioral" ||
+      requirement === "personal-logistics");
 
   return {
     requirement,
@@ -220,6 +270,11 @@ function createDecision(
     confidenceTier,
     signals,
     counterSignals,
+    statusDomain,
+    allowedEvidenceSources:
+      requirement === "personal-logistics"
+        ? ["interview-brief", "profile-memory", "confirmed-me"]
+        : [],
     mode,
     enforced,
   };
@@ -229,6 +284,10 @@ function collectSignals(text: string, signals: SignalMatch[]) {
   return signals
     .filter((signal) => signal.pattern.test(text))
     .map((signal) => signal.label);
+}
+
+function findStatusDomain(text: string, signals: SignalMatch[]) {
+  return signals.find((signal) => signal.pattern.test(text))?.statusDomain;
 }
 
 function normalizeQuestionText(value: string | undefined) {

@@ -80,6 +80,40 @@ test("scopes advisor transcript to a re-rooted parent boundary", () => {
   assert.match(prompt.transcript, /offline and online evaluation/);
 });
 
+test("freezes only later-confirmed Me facts into the advisor snapshot", () => {
+  const manager = new MeetingContextManager();
+  manager.addTranscriptTurn({
+    id: "turn_me_confirmed",
+    speaker: "me",
+    text: "My palpitations have resolved.",
+    startedAt: now,
+    endedAt: now + 1,
+    isFinal: true,
+    source: "microphone",
+    contextFusionStatus: "paired",
+    relatedTurnIds: ["turn_them_confirmation"],
+  });
+  manager.addTranscriptTurn({
+    id: "turn_me_unconfirmed",
+    speaker: "me",
+    text: "My salary expectation is one million dollars.",
+    startedAt: now + 2,
+    endedAt: now + 3,
+    isFinal: true,
+    source: "microphone",
+    contextFusionStatus: "debug-only",
+  });
+
+  const prompt = manager.buildAdvisorPromptContext();
+
+  assert.deepEqual(prompt.confirmedMeFacts, [
+    {
+      id: "turn_me_confirmed",
+      text: "My palpitations have resolved.",
+    },
+  ]);
+});
+
 function makeScreenTask(
   overrides: Partial<ActiveScreenTask> = {}
 ): ActiveScreenTask {

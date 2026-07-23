@@ -55,6 +55,7 @@ import {
   InterviewTaskRelation,
   InterviewSessionBrief,
   MeetingPrivacyMode,
+  PersonalEvidenceDecision,
   PersonalEvidenceGuardrailMode,
   SemanticTaxonomyMode,
   SelectedProviderState,
@@ -104,6 +105,7 @@ import {
   detectInterviewCompany,
   calculateWordEquivalent,
   classifyMeTurn,
+  collectConfirmedMeFacts,
   findDuplicateSystemAudioTurnForMeTurn,
   findRecentMeClarificationForTurn,
   isInterviewSessionBriefEmpty,
@@ -239,6 +241,7 @@ import {
   buildFactAnchorDecision,
   detectPersonalEvidenceRequirement,
   formatFactAnchorDecisionForTrace,
+  restrictMemoryContextForPersonalEvidence,
   formatProjectBindingDecisionForTrace,
   projectBindingMatchesProjectHint,
   resolveProjectBinding,
@@ -2855,6 +2858,7 @@ export function useMeetingAssistant() {
       projectAnchor,
       memoryPolicy,
       forceStrictProjectAnchor,
+      personalEvidenceDecision,
       taskId,
       runtimeToken,
       currentOperationId,
@@ -2872,6 +2876,7 @@ export function useMeetingAssistant() {
       projectAnchor?: string;
       memoryPolicy?: MemoryRetrievalPolicy;
       forceStrictProjectAnchor?: boolean;
+      personalEvidenceDecision?: PersonalEvidenceDecision;
       runtimeToken?: RuntimeCommitToken;
       currentOperationId?: () => string | null | undefined;
     }): Promise<MemoryRetrievalResult | undefined> => {
@@ -2965,7 +2970,7 @@ export function useMeetingAssistant() {
           );
         }
 
-        const memoryContext = await retrieveMemoryContext({
+        const retrievedMemoryContext = await retrieveMemoryContext({
           query,
           diagramDomainQuery: diagramDomainContext?.query,
           diagramTopicDomain,
@@ -3011,6 +3016,19 @@ export function useMeetingAssistant() {
             return undefined;
           }
         }
+        const memoryContext =
+          restrictMemoryContextForPersonalEvidence(
+            retrievedMemoryContext,
+            personalEvidenceDecision ??
+              detectPersonalEvidenceRequirement({
+                questionText: query,
+                questionType: resolvedQuestionType,
+                mode: state.settings.personalEvidenceGuardrailMode,
+              }),
+            query
+          ) ?? retrievedMemoryContext;
+        const personalEvidenceFilteredEntries =
+          retrievedMemoryContext.entries.length - memoryContext.entries.length;
         const diagramOverlayTraceMetadata =
           buildDiagramOverlayEvalTraceMetadata(memoryContext.overlaySelection);
         const memoryRoleTelemetry = buildRuntimeMemoryRoleTelemetry(
@@ -3063,6 +3081,7 @@ export function useMeetingAssistant() {
               ...memoryRoleTraceMetadata,
               memoryPolicySnapshot: memoryContext.policySnapshot,
               totalChars: memoryContext.totalChars,
+              personalEvidenceFilteredEntries,
             }
           );
           sessionRecordingManagerRef.current?.recordMemoryRetrieval({
@@ -3092,6 +3111,7 @@ export function useMeetingAssistant() {
               diagramTopicDomain: diagramTopicDomain ?? "unknown",
               ...diagramOverlayTraceMetadata,
               ...memoryRoleTraceMetadata,
+              personalEvidenceFilteredEntries,
             },
           });
           traceStoreRef.current.finishStep(traceId, memoryStepId, "success", {
@@ -3113,6 +3133,7 @@ export function useMeetingAssistant() {
             diagramDomainParentTopicIncluded:
               diagramDomainContext?.parentTopicIncluded ?? false,
             diagramTopicDomain: diagramTopicDomain ?? "unknown",
+            personalEvidenceFilteredEntries,
             candidateCount: memoryContext.candidateCount,
             eligibleCount: memoryContext.eligibleCount,
             rejectedCount: memoryContext.rejectedCount,
@@ -4183,6 +4204,11 @@ export function useMeetingAssistant() {
         promptContext.activeInterviewTask?.topic,
       relation: advisorTaskSignals.taskRelation,
     });
+    const advisorPersonalEvidenceDecision = detectPersonalEvidenceRequirement({
+      questionText: advisorTaskSignals.query,
+      questionType: advisorQuestionType,
+      mode: state.settings.personalEvidenceGuardrailMode,
+    });
     const memoryContext = await loadMemoryForPrompt({
       traceId,
       taskId: activeMeetingTaskId,
@@ -4196,6 +4222,7 @@ export function useMeetingAssistant() {
       topicDomain: advisorTopicDomain,
       projectAnchor: advisorProjectAnchor,
       memoryPolicy: advisorRuntimePlaybook?.memoryPolicy,
+      personalEvidenceDecision: advisorPersonalEvidenceDecision,
       forceStrictProjectAnchor: Boolean(
         (promptContext.activeMeetingTask?.parent.projectBinding ??
           promptContext.activeInterviewTask?.projectBinding) &&
@@ -4206,11 +4233,6 @@ export function useMeetingAssistant() {
       currentOperationId: () => activeAdvisorJobRef.current?.id,
     });
     if (rejectStaleCommit("post-memory")) return;
-    const advisorPersonalEvidenceDecision = detectPersonalEvidenceRequirement({
-      questionText: advisorTaskSignals.query,
-      questionType: advisorQuestionType,
-      mode: state.settings.personalEvidenceGuardrailMode,
-    });
     const projectBindingDecision = resolveProjectBinding({
       existingBinding:
         promptContext.activeMeetingTask?.parent.projectBinding ??
@@ -4241,6 +4263,8 @@ export function useMeetingAssistant() {
       personalEvidenceGuardrailMode:
         state.settings.personalEvidenceGuardrailMode,
       memoryContext,
+      interviewSessionBrief: promptContext.interviewSessionBrief,
+      confirmedMeFacts: promptContext.confirmedMeFacts,
       activeFactAnchors:
         promptContext.activeMeetingTask?.parent.supportedFactAnchors ??
         promptContext.activeInterviewTask?.supportedFactAnchors,
@@ -8222,6 +8246,12 @@ export function useMeetingAssistant() {
           }
         );
 
+        const screenPersonalEvidenceDecision =
+          detectPersonalEvidenceRequirement({
+            questionText: screenPreflight?.question ?? screenMemoryQuery,
+            questionType: screenMemoryQuestionType,
+            mode: state.settings.personalEvidenceGuardrailMode,
+          });
         const memoryContext = await loadMemoryForPrompt({
           traceId: trace.id,
           source: "screen",
@@ -8236,6 +8266,7 @@ export function useMeetingAssistant() {
           topicDomain: screenMemoryTopicDomain,
           projectAnchor: screenRetrievalProjectAnchor,
           memoryPolicy: screenRuntimePlaybook?.memoryPolicy,
+          personalEvidenceDecision: screenPersonalEvidenceDecision,
           forceStrictProjectAnchor: Boolean(
             existingScreenProjectBinding &&
               provisionalScreenTaskRelation !== "new-parent"
@@ -8244,12 +8275,6 @@ export function useMeetingAssistant() {
           currentOperationId: () => activeScreenOperationIdRef.current,
         });
         if (rejectStaleScreenOperation("post-memory")) return;
-        const screenPersonalEvidenceDecision =
-          detectPersonalEvidenceRequirement({
-            questionText: screenPreflight?.question ?? screenMemoryQuery,
-            questionType: screenMemoryQuestionType,
-            mode: state.settings.personalEvidenceGuardrailMode,
-          });
         const screenProjectBindingDecision = resolveProjectBinding({
           existingBinding:
             existingScreenProjectBinding,
@@ -8269,6 +8294,11 @@ export function useMeetingAssistant() {
           personalEvidenceGuardrailMode:
             state.settings.personalEvidenceGuardrailMode,
           memoryContext,
+          interviewSessionBrief:
+            preflightContextState.interviewSessionBrief,
+          confirmedMeFacts: collectConfirmedMeFacts(
+            preflightContextState.transcriptTurns
+          ),
           activeFactAnchors:
             preflightContextState.activeMeetingTask?.parent
               .supportedFactAnchors ??

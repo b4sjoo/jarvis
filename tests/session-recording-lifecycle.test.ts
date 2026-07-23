@@ -413,6 +413,17 @@ test("compact trace summaries preserve task boundary and cross-domain evidence",
       parentContextHandoffKind: "bounded-source-backed",
       parentContextHandoffSourceId: "parent_old",
       parentContextHandoffSourceQuestionId: "question_new",
+      personalEvidenceRequirement: "personal-logistics",
+      personalEvidenceStatusDomain: "health-status",
+      personalEvidenceAllowedSources: [
+        "interview-brief",
+        "profile-memory",
+        "confirmed-me",
+      ],
+      personalEvidenceSelectedSources: ["profile-memory"],
+      personalEvidenceGuardrailMode: "enforcement",
+      personalEvidenceEnforced: true,
+      unsupportedClaimRisk: "guarded",
     }),
     "manual"
   );
@@ -442,6 +453,18 @@ test("compact trace summaries preserve task boundary and cross-domain evidence",
     (summary.crossDomainTransition as Record<string, unknown>)
       .parentContextHandoffKind,
     "bounded-source-backed"
+  );
+  assert.equal(
+    (summary.personalEvidence as Record<string, unknown>).statusDomain,
+    "health-status"
+  );
+  assert.deepEqual(
+    (summary.personalEvidence as Record<string, unknown>).allowedSources,
+    ["interview-brief", "profile-memory", "confirmed-me"]
+  );
+  assert.deepEqual(
+    (summary.personalEvidence as Record<string, unknown>).selectedSources,
+    ["profile-memory"]
   );
 
   await manager.stop("test-complete");

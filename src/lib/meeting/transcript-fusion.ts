@@ -109,6 +109,22 @@ export function shouldIncludeTurnInAdvisorPrompt(turn: TranscriptTurn) {
   return turn.contextPromptEligible === true;
 }
 
+export function collectConfirmedMeFacts(turns: TranscriptTurn[]) {
+  return turns
+    .filter(
+      (turn) =>
+        turn.speaker === "me" &&
+        turn.contextFusionStatus === "paired" &&
+        Boolean(turn.relatedTurnIds?.length) &&
+        turn.text.trim()
+    )
+    .slice(-8)
+    .map((turn) => ({
+      id: turn.id,
+      text: turn.text.trim(),
+    }));
+}
+
 export function findRecentMeClarificationForTurn(
   themTurn: TranscriptTurn,
   previousTurns: TranscriptTurn[]

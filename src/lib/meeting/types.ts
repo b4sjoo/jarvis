@@ -294,6 +294,7 @@ export type FactAnchorState =
 export type FactAnchorRequiredFor =
   | "behavioral"
   | "project-deep-dive"
+  | "personal-logistics"
   | "none";
 
 export type FactAnchorAction =
@@ -313,12 +314,27 @@ export type PersonalEvidenceConfidenceTier = "low" | "medium" | "high";
 export type PersonalEvidenceGuardrailMode = "enforcement" | "shadow";
 export type SemanticTaxonomyMode = "enforcement" | "shadow";
 
+export type PersonalEvidenceStatusDomain =
+  | "health-status"
+  | "work-authorization"
+  | "location-relocation"
+  | "availability-start-date"
+  | "compensation"
+  | "employment-status";
+
+export type PersonalEvidenceSource =
+  | "interview-brief"
+  | "profile-memory"
+  | "confirmed-me";
+
 export interface PersonalEvidenceDecision {
   requirement: PersonalEvidenceRequirement;
   confidence: number;
   confidenceTier: PersonalEvidenceConfidenceTier;
   signals: string[];
   counterSignals: string[];
+  statusDomain?: PersonalEvidenceStatusDomain;
+  allowedEvidenceSources: PersonalEvidenceSource[];
   mode: PersonalEvidenceGuardrailMode;
   enforced: boolean;
 }
@@ -372,6 +388,7 @@ export interface FactAnchorDecision {
   missingAnchorReason?: string;
   action: FactAnchorAction;
   personalEvidence: PersonalEvidenceDecision;
+  selectedPersonalEvidenceSources: PersonalEvidenceSource[];
   unsupportedClaimRisk: "none" | "guarded" | "high" | "shadow-observed";
 }
 
@@ -773,6 +790,10 @@ export interface AdvisorPromptContext {
   factAnchorDecision?: FactAnchorDecision;
   projectBindingDecision?: ProjectBindingDecision;
   openingRoute?: OpeningRouteContext;
+  confirmedMeFacts?: Array<{
+    id: string;
+    text: string;
+  }>;
   latestTurn?: TranscriptTurn;
 }
 

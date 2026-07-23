@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   buildFactAnchorDecision,
   formatFactAnchorDecisionForTrace,
+  restrictMemoryContextForPersonalEvidence,
 } from "../src/lib/meeting/fact-anchor-guardrail.js";
 import type {
   MemoryEntry,
@@ -181,6 +182,163 @@ test("shadow mode records the personal evidence signal without changing behavior
   assert.equal(decision.requiredFor, "none");
   assert.equal(decision.state, "not-required");
   assert.equal(decision.unsupportedClaimRisk, "shadow-observed");
+});
+
+test("uses only relevant profile memory for a personal health-status answer", () => {
+  const decision = buildFactAnchorDecision({
+    questionType: "unknown",
+    questionText: "How about your palpitations?",
+    personalEvidenceGuardrailMode: "enforcement",
+    memoryContext: makeMemoryResult([
+      makeRetrievedEntry({
+        entry: makeMemoryEntry({
+          id: "mem_profile_health",
+          type: "profile",
+          title: "Current health status",
+          content: "The user's heart palpitations have resolved.",
+        }),
+      }),
+      makeRetrievedEntry({
+        entry: makeMemoryEntry({
+          id: "mem_project_health",
+          type: "project_context",
+          title: "Health monitoring project",
+          content: "A project monitored heart palpitations.",
+        }),
+      }),
+    ]),
+  });
+
+  assert.equal(decision.requiredFor, "personal-logistics");
+  assert.equal(decision.state, "strong-anchor");
+  assert.equal(decision.action, "answer-with-anchor");
+  assert.equal(decision.selectedAnchorId, "mem_profile_health");
+  assert.deepEqual(decision.supportedAnchorIds, ["mem_profile_health"]);
+  assert.deepEqual(decision.selectedPersonalEvidenceSources, [
+    "profile-memory",
+  ]);
+});
+
+test("uses relevant Interview Brief notes for supported personal logistics", () => {
+  const decision = buildFactAnchorDecision({
+    questionType: "unknown",
+    questionText: "Are you authorized to work in the United States?",
+    interviewSessionBrief: {
+      targetCompany: "Example",
+      companyLocked: true,
+      interviewTypes: [],
+      focusAreas: "",
+      notes: "US work authorization is unrestricted and needs no sponsorship.",
+    },
+    memoryContext: makeMemoryResult([]),
+  });
+
+  assert.equal(decision.requiredFor, "personal-logistics");
+  assert.equal(decision.state, "strong-anchor");
+  assert.equal(decision.selectedAnchorId, "interview-brief:notes");
+  assert.deepEqual(decision.selectedPersonalEvidenceSources, [
+    "interview-brief",
+  ]);
+});
+
+test("uses only paired Me context as confirmed personal evidence", () => {
+  const decision = buildFactAnchorDecision({
+    questionType: "unknown",
+    questionText: "How about your palpitations?",
+    confirmedMeFacts: [
+      {
+        id: "turn_me_1",
+        text: "My palpitations have resolved.",
+      },
+    ],
+    memoryContext: makeMemoryResult([]),
+  });
+
+  assert.equal(decision.state, "strong-anchor");
+  assert.equal(decision.selectedAnchorId, "confirmed-me:turn_me_1");
+  assert.deepEqual(decision.selectedPersonalEvidenceSources, ["confirmed-me"]);
+});
+
+test("blocks unsupported personal status even when project memory mentions the topic", () => {
+  const decision = buildFactAnchorDecision({
+    questionType: "unknown",
+    questionText: "How about your palpitations?",
+    memoryContext: makeMemoryResult([
+      makeRetrievedEntry({
+        entry: makeMemoryEntry({
+          id: "mem_project_health",
+          type: "project_context",
+          title: "Health monitoring project",
+          content: "A project monitored heart palpitations.",
+        }),
+      }),
+    ]),
+  });
+
+  assert.equal(decision.requiredFor, "personal-logistics");
+  assert.equal(decision.state, "no-anchor");
+  assert.equal(decision.action, "ask-clarification");
+  assert.deepEqual(decision.supportedAnchorIds, []);
+  assert.deepEqual(decision.selectedPersonalEvidenceSources, []);
+  assert.equal(decision.unsupportedClaimRisk, "high");
+
+  const trace = formatFactAnchorDecisionForTrace(decision);
+  assert.deepEqual(trace.personalEvidenceAllowedSources, [
+    "interview-brief",
+    "profile-memory",
+    "confirmed-me",
+  ]);
+  assert.deepEqual(trace.personalEvidenceSelectedSources, []);
+});
+
+test("filters non-profile KMB entries before a personal-status model prompt", () => {
+  const memoryContext = makeMemoryResult([
+    makeRetrievedEntry({
+      entry: makeMemoryEntry({
+        id: "mem_profile_health",
+        type: "profile",
+        title: "Health status",
+        content: "The user's palpitations have resolved.",
+      }),
+    }),
+    makeRetrievedEntry({
+      entry: makeMemoryEntry({
+        id: "mem_project_health",
+        type: "project_context",
+        title: "Health monitoring project",
+        content: "The project analyzed palpitations.",
+      }),
+    }),
+  ]);
+  const personalEvidence = buildFactAnchorDecision({
+    questionType: "unknown",
+    questionText: "How about your palpitations?",
+    memoryContext,
+  }).personalEvidence;
+  const restricted = restrictMemoryContextForPersonalEvidence(
+    memoryContext,
+    personalEvidence,
+    "How about your palpitations?"
+  );
+
+  assert.deepEqual(
+    restricted?.entries.map((entry) => entry.entry.id),
+    ["mem_profile_health"]
+  );
+  assert.match(restricted?.contextText ?? "", /personal-profile-fact/);
+  assert.doesNotMatch(restricted?.contextText ?? "", /mem_project_health/);
+});
+
+test("keeps generic medical field knowledge outside the personal fact boundary", () => {
+  const decision = buildFactAnchorDecision({
+    questionType: "field-knowledge",
+    questionText: "What causes heart palpitations?",
+    memoryContext: makeMemoryResult([]),
+  });
+
+  assert.equal(decision.personalEvidence.requirement, "not-required");
+  assert.equal(decision.requiredFor, "none");
+  assert.equal(decision.state, "not-required");
 });
 
 test("does not enforce a hypothetical implementation request", () => {
