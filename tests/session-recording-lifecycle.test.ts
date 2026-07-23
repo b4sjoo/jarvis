@@ -430,6 +430,21 @@ test("late LLM taxonomy adjudication stays joinable after trace export", async (
       taxonomyAdjudicationRawOutputHash: "hash-1",
       taxonomyAdjudicationRawOutputStored: true,
       taxonomyAdjudicationRawOutputTruncated: false,
+      interviewerIntentLlmMode: "shadow",
+      interviewerIntentLlmEligible: true,
+      interviewerIntentLlmOperationId: "intent-op-1",
+      interviewerIntentLlmUnitId: "logical_1",
+      interviewerIntentLlmUnitRevision: 2,
+      interviewerIntentLlmDisposition: "completed",
+      interviewerIntentLlmSpeechAct: "directive",
+      interviewerIntentLlmQuestionType: "coding",
+      interviewerIntentLlmRelation: "new-parent",
+      interviewerIntentLlmEvidenceMode: "hypothetical-design",
+      interviewerIntentLlmAction: "answer",
+      interviewerIntentLlmParseValid: true,
+      interviewerIntentLlmWouldRepair: true,
+      interviewerIntentLlmRepairApplied: false,
+      interviewerIntentLlmDurationMs: 611,
     },
   });
   await settle();
@@ -440,6 +455,12 @@ test("late LLM taxonomy adjudication stays joinable after trace export", async (
       stringArg(call, "relativePath") === "taxonomy/llm-adjudications.jsonl"
   );
   assert.ok(eventWrite);
+  const intentWrite = native.calls.find(
+    (call) =>
+      call.command === "write_meeting_session_recording_text" &&
+      stringArg(call, "relativePath") === "intent/llm-adjudications.jsonl"
+  );
+  assert.ok(intentWrite);
 
   const summaryWrites = native.calls.filter(
     (call) =>
@@ -453,6 +474,9 @@ test("late LLM taxonomy adjudication stays joinable after trace export", async (
   const adjudication = summary.taxonomyAdjudication as Record<string, unknown>;
   assert.equal(adjudication.mode, "shadow");
   assert.equal(adjudication.candidateType, "coding");
+  const intent = summary.interviewerIntentLlm as Record<string, unknown>;
+  assert.equal(intent.speechAct, "directive");
+  assert.equal(intent.questionType, "coding");
   assert.equal(adjudication.relation, "new-parent");
   assert.equal(adjudication.wouldRepair, true);
   assert.equal(adjudication.repairApplied, false);
@@ -535,7 +559,7 @@ test("compact trace summaries preserve task boundary and cross-domain evidence",
   );
   assert.ok(summaryWrite);
   const summary = parsePayload(summaryWrite);
-  assert.equal(summary.version, 7);
+  assert.equal(summary.version, 8);
   assert.equal(summary.taskRelation, "new-parent");
   assert.deepEqual(summary.logicalQuestionSourceTurnIds, ["turn_1", "turn_2"]);
   assert.deepEqual(summary.logicalQuestionCompositionReasons, [

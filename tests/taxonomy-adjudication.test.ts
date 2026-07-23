@@ -37,7 +37,6 @@ test("strictly parses a grounded adjudication and rejects invented evidence", ()
   const logicalUnit = unit("Design a RAG system for a trip planning app.");
   const request = buildTaxonomyAdjudicationRequest({
     logicalQuestionUnit: logicalUnit,
-    lexical: inferQuestionTypeDecisionFromText(logicalUnit.normalizedText),
     activeParent: {
       idHash: "parent-hash",
       questionType: "general-system-design",
@@ -45,9 +44,12 @@ test("strictly parses a grounded adjudication and rejects invented evidence", ()
     },
   });
   const output = JSON.stringify({
-    schemaVersion: 1,
+    schemaVersion: 2,
+    speechAct: "directive",
     questionType: "ai-ml-system-design",
     relation: "linked-parent-extension",
+    evidenceMode: "hypothetical-design",
+    action: "answer",
     normalizedQuestion: logicalUnit.normalizedText,
     standalone: true,
     evidenceSpans: ["RAG system", "trip planning app"],
@@ -70,6 +72,10 @@ test("strictly parses a grounded adjudication and rejects invented evidence", ()
   assert.doesNotMatch(
     buildTaxonomyAdjudicationPrompts(request).userMessage,
     /api.?key/i
+  );
+  assert.doesNotMatch(
+    buildTaxonomyAdjudicationPrompts(request).userMessage,
+    /lexical|semanticCandidate|hybridOutcome/i
   );
 });
 
@@ -137,6 +143,25 @@ test("only ambiguous substantive interviewer units are eligible", () => {
       manualCorrectionActive: false,
     }).eligible,
     false
+  );
+});
+
+test("sends substantive suppressed turns to independent shadow adjudication", () => {
+  const text = "Where should the RAG source data be stored for this design";
+  const lexical = inferQuestionTypeDecisionFromText(text);
+  const decision = decideTaxonomyAdjudicationEligibility({
+    enabled: true,
+    evaluationActive: true,
+    speaker: "them",
+    turnGateAction: "ignore",
+    projection: projectLogicalQuestionForAdjudication(unit(text)),
+    lexical,
+    manualCorrectionActive: false,
+  });
+
+  assert.equal(decision.eligible, true);
+  assert.ok(
+    decision.triggerReasons.includes("substantive-ignore-turn")
   );
 });
 
@@ -214,6 +239,7 @@ test("lease authorization drops stale revisions, boundaries, and corrections", (
     taskBoundaryEpoch: 11,
     manualCorrectionRevision: 4,
     activeParentId: "parent-a",
+    activeParentRevision: undefined,
     logicalUnitClosed: false,
     selfHealingBudgetConsumed: false,
   };

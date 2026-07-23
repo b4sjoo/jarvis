@@ -5,15 +5,17 @@ import {
   buildTaxonomyAdjudicationRequest,
   type LlmTaxonomyAdjudication,
 } from "../src/lib/meeting/taxonomy-adjudication.js";
-import { inferQuestionTypeDecisionFromText } from "../src/lib/meeting/task-taxonomy.js";
 import type { LogicalQuestionUnit } from "../src/lib/meeting/logical-question-unit.js";
 
 test("classifies configured-route content separately from JSON parsing", async () => {
   const request = buildRequest();
   const output: LlmTaxonomyAdjudication = {
-    schemaVersion: 1,
+    schemaVersion: 2,
+    speechAct: "directive",
     questionType: "ai-ml-system-design",
     relation: "new-parent",
+    evidenceMode: "hypothetical-design",
+    action: "answer",
     normalizedQuestion: request.question.text,
     standalone: true,
     evidenceSpans: ["RAG system"],
@@ -94,7 +96,6 @@ function buildRequest() {
   };
   return buildTaxonomyAdjudicationRequest({
     logicalQuestionUnit,
-    lexical: inferQuestionTypeDecisionFromText(text),
   });
 }
 

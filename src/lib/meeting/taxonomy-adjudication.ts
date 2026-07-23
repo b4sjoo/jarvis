@@ -4,26 +4,33 @@ import type {
   HybridQuestionTypeDecision,
   SemanticTaxonomyDecision,
 } from "./semantic-taxonomy-resolver.js";
+import type {
+  InterviewerEvidenceMode,
+  InterviewerIntentAction,
+  InterviewerIntentRelation,
+  InterviewerSpeechAct,
+} from "./interviewer-intent.js";
 import {
   isCanonicalQuestionType,
   type CanonicalQuestionType,
   type QuestionTypeInferenceDecision,
-  type TaxonomyInterviewBriefType,
 } from "./task-taxonomy.js";
 
-export const TAXONOMY_ADJUDICATION_SCHEMA_VERSION = 1;
+export const TAXONOMY_ADJUDICATION_SCHEMA_VERSION = 2;
 export const TAXONOMY_ADJUDICATION_PROMPT_VERSION =
-  "taxonomy-adjudication-prompt-v1";
+  "interviewer-intent-adjudication-prompt-v2";
 export const TAXONOMY_ADJUDICATION_MAX_OUTPUT_CHARS = 4_096;
 export const TAXONOMY_ADJUDICATION_MAX_INPUT_CHARS = 1_200;
+export const TAXONOMY_ADJUDICATION_MAX_PARENT_CHARS = 400;
+export const TAXONOMY_ADJUDICATION_MAX_ME_CONTEXT_CHARS = 300;
+export const TAXONOMY_ADJUDICATION_MAX_PREPARATION_CHARS = 200;
 
 export const TAXONOMY_ADJUDICATION_RELATIONS = [
   "new-parent",
   "linked-parent-extension",
   "followup-parent",
   "child-probe",
-  "resume-parent",
-  "unknown",
+  "none",
 ] as const;
 
 export type TaxonomyAdjudicationRelation =
@@ -31,10 +38,17 @@ export type TaxonomyAdjudicationRelation =
 
 export interface TaxonomyAdjudicationParentDescriptor {
   idHash?: string;
+  revision?: number;
   questionType?: CanonicalQuestionType;
   topic?: string;
   playbookPhase?: string;
   sharedScenarioEntities?: string[];
+}
+
+export interface TaxonomyAdjudicationSourceContext {
+  latestMeCorrection?: string;
+  sectionHint?: string;
+  preparationPrior?: string;
 }
 
 export interface TaxonomyAdjudicationProjection {
@@ -67,7 +81,7 @@ export interface TaxonomyAdjudicationEvidence {
 }
 
 export interface TaxonomyAdjudicationRequest {
-  schemaVersion: 1;
+  schemaVersion: 2;
   promptVersion: string;
   logicalQuestionUnitId: string;
   logicalQuestionUnitRevision: number;
@@ -75,15 +89,17 @@ export interface TaxonomyAdjudicationRequest {
   sourceLanguage?: string;
   sttUncertaintyMarkers?: string[];
   activeParent?: TaxonomyAdjudicationParentDescriptor;
-  evidence: TaxonomyAdjudicationEvidence;
-  interviewBriefTypes: TaxonomyInterviewBriefType[];
+  sourceContext?: TaxonomyAdjudicationSourceContext;
   taskSwitchEvidence: string[];
 }
 
 export interface LlmTaxonomyAdjudication {
-  schemaVersion: 1;
+  schemaVersion: 2;
+  speechAct: InterviewerSpeechAct;
   questionType: CanonicalQuestionType;
-  relation: TaxonomyAdjudicationRelation;
+  relation: InterviewerIntentRelation;
+  evidenceMode: InterviewerEvidenceMode;
+  action: InterviewerIntentAction;
   normalizedQuestion: string;
   standalone: boolean;
   evidenceSpans: string[];
@@ -124,6 +140,7 @@ export interface TaxonomyAdjudicationLease {
   taskBoundaryEpoch: number;
   manualCorrectionRevision: number;
   expectedParentId?: string;
+  expectedParentRevision?: number;
   requestedAt: number;
 }
 
@@ -138,6 +155,7 @@ export type TaxonomyAdjudicationLeaseRejectionReason =
   | "task-boundary-epoch-mismatch"
   | "manual-correction-revision-mismatch"
   | "expected-parent-mismatch"
+  | "expected-parent-revision-mismatch"
   | "logical-unit-closed"
   | "self-healing-budget-consumed";
 
@@ -149,6 +167,7 @@ export interface TaxonomyAdjudicationLeaseSnapshot {
   taskBoundaryEpoch: number;
   manualCorrectionRevision: number;
   activeParentId?: string;
+  activeParentRevision?: number;
   logicalUnitClosed: boolean;
   selfHealingBudgetConsumed: boolean;
 }
@@ -224,9 +243,6 @@ export function decideTaxonomyAdjudicationEligibility(
   if (!input.enabled) return skip("taxonomy-adjudication-disabled");
   if (!input.evaluationActive) return skip("evaluation-surface-inactive");
   if (input.speaker !== "them") return skip("speaker-is-not-interviewer");
-  if (input.turnGateAction !== "answer-refresh") {
-    return skip(`turn-gate-${input.turnGateAction || "unknown"}`);
-  }
   if (!input.projection.safe) return skip("unsafe-question-projection");
   if (estimateQuestionWordEquivalents(input.projection.text) < 3) {
     return skip("question-unit-too-short");
@@ -237,6 +253,9 @@ export function decideTaxonomyAdjudicationEligibility(
 
   const lexicalType = input.lexical.type ?? "unknown";
   const triggers: string[] = [];
+  if (input.turnGateAction !== "answer-refresh") {
+    triggers.push(`substantive-${input.turnGateAction || "suppressed"}-turn`);
+  }
   if (lexicalType === "unknown") triggers.push("lexical-unknown");
   if (input.hybrid?.outcome === "lexical-semantic-conflict") {
     triggers.push("lexical-semantic-conflict");
@@ -267,6 +286,7 @@ export function decideTaxonomyAdjudicationEligibility(
     triggers.push("candidate-parent-type-conflict");
   }
   if (
+    input.turnGateAction === "answer-refresh" &&
     lexicalType !== "unknown" &&
     input.lexical.confidence >= 0.85 &&
     input.lexical.margin >= 0.3 &&
@@ -295,15 +315,25 @@ function estimateQuestionWordEquivalents(value: string) {
 
 export function buildTaxonomyAdjudicationRequest(input: {
   logicalQuestionUnit: LogicalQuestionUnit;
-  lexical: QuestionTypeInferenceDecision;
-  semantic?: SemanticTaxonomyDecision;
-  hybrid?: HybridQuestionTypeDecision;
   sourceLanguage?: string;
   sttUncertaintyMarkers?: string[];
   activeParent?: TaxonomyAdjudicationParentDescriptor;
-  interviewBriefTypes?: TaxonomyInterviewBriefType[];
+  latestMeCorrection?: string;
+  sectionHint?: string;
+  preparationPrior?: string;
   taskSwitchEvidence?: string[];
 }): TaxonomyAdjudicationRequest {
+  const sourceContext = {
+    latestMeCorrection: clipOptional(
+      input.latestMeCorrection,
+      TAXONOMY_ADJUDICATION_MAX_ME_CONTEXT_CHARS
+    ),
+    sectionHint: clipOptional(input.sectionHint, 160),
+    preparationPrior: clipOptional(
+      input.preparationPrior,
+      TAXONOMY_ADJUDICATION_MAX_PREPARATION_CHARS
+    ),
+  };
   return {
     schemaVersion: TAXONOMY_ADJUDICATION_SCHEMA_VERSION,
     promptVersion: TAXONOMY_ADJUDICATION_PROMPT_VERSION,
@@ -313,34 +343,9 @@ export function buildTaxonomyAdjudicationRequest(input: {
     sourceLanguage: input.sourceLanguage,
     sttUncertaintyMarkers: input.sttUncertaintyMarkers?.slice(0, 8),
     activeParent: sanitizeParentDescriptor(input.activeParent),
-    evidence: {
-      lexical: {
-        type: input.lexical.type,
-        confidence: input.lexical.confidence,
-        margin: input.lexical.margin,
-        evidence: input.lexical.evidence.slice(0, 12),
-        ambiguousTerms: input.lexical.ambiguousTerms.slice(0, 12),
-        scores: input.lexical.scores,
-      },
-      semantic: input.semantic
-        ? {
-            candidateType: input.semantic.candidateType,
-            calibratedConfidence: input.semantic.calibratedConfidence,
-            margin: input.semantic.margin,
-            accepted: input.semantic.accepted,
-            rejectionReasons: input.semantic.rejectionReasons.slice(0, 8),
-          }
-        : undefined,
-      hybrid: input.hybrid
-        ? {
-            outcome: input.hybrid.outcome,
-            reason: input.hybrid.reason,
-            recommendedType: input.hybrid.recommendedType,
-            wouldRescue: input.hybrid.wouldRescue,
-          }
-        : undefined,
-    },
-    interviewBriefTypes: [...(input.interviewBriefTypes ?? [])],
+    sourceContext: Object.values(sourceContext).some(Boolean)
+      ? sourceContext
+      : undefined,
     taskSwitchEvidence: (input.taskSwitchEvidence ?? []).slice(0, 8),
   };
 }
@@ -350,11 +355,16 @@ export function buildTaxonomyAdjudicationPrompts(
 ) {
   return {
     systemPrompt: [
-      "You classify one bounded interviewer question for Jarvis.",
+      "You independently classify one bounded interviewer utterance for Jarvis.",
       "Return one JSON object only. Do not answer the interview question.",
-      "Use only the supplied question, compact parent descriptor, and local classifier evidence.",
-      "Choose questionType and its relationship to the active parent. Evidence spans must be verbatim substrings of the supplied evidence.",
-      "Schema: {schemaVersion:1,questionType,relation,normalizedQuestion,standalone,evidenceSpans,confidence,ambiguityReason?}.",
+      "Use only source-owned question text, compact parent context, the latest candidate correction, section hint, and preparation prior.",
+      "No keyword or embedding classifier result is supplied; make an independent judgment.",
+      "Choose speechAct, questionType, relation, evidenceMode, and action. Evidence spans must be verbatim substrings of supplied source text.",
+      "Allowed speechAct: question, directive, constraint, correction, acknowledgement, section-transition, logistics, informational.",
+      "Allowed relation: new-parent, followup-parent, child-probe, linked-parent-extension, none.",
+      "Allowed evidenceMode: personal-experience, hypothetical-design, factual-explanation, unknown.",
+      "Allowed action: answer, append-context, buffer, ignore.",
+      "Schema: {schemaVersion:2,speechAct,questionType,relation,evidenceMode,action,normalizedQuestion,standalone,evidenceSpans,confidence,ambiguityReason?}.",
     ].join(" "),
     userMessage: JSON.stringify(request),
   };
@@ -390,8 +400,17 @@ export function parseTaxonomyAdjudicationOutput(
   if (!isCanonicalQuestionType(candidate.questionType)) {
     return { ok: false, reason: "invalid-question-type", evidenceSpansValid: false };
   }
+  if (!isInterviewerSpeechAct(candidate.speechAct)) {
+    return { ok: false, reason: "invalid-speech-act", evidenceSpansValid: false };
+  }
   if (!isTaxonomyAdjudicationRelation(candidate.relation)) {
     return { ok: false, reason: "invalid-relation", evidenceSpansValid: false };
+  }
+  if (!isInterviewerEvidenceMode(candidate.evidenceMode)) {
+    return { ok: false, reason: "invalid-evidence-mode", evidenceSpansValid: false };
+  }
+  if (!isInterviewerIntentAction(candidate.action)) {
+    return { ok: false, reason: "invalid-action", evidenceSpansValid: false };
   }
   if (
     typeof candidate.normalizedQuestion !== "string" ||
@@ -448,8 +467,11 @@ export function parseTaxonomyAdjudicationOutput(
     evidenceSpansValid: true,
     value: {
       schemaVersion: TAXONOMY_ADJUDICATION_SCHEMA_VERSION,
+      speechAct: candidate.speechAct,
       questionType: candidate.questionType,
       relation: candidate.relation,
+      evidenceMode: candidate.evidenceMode,
+      action: candidate.action,
       normalizedQuestion: normalizeSpace(candidate.normalizedQuestion),
       standalone: candidate.standalone,
       evidenceSpans,
@@ -466,6 +488,7 @@ export function createTaxonomyAdjudicationLease(input: {
   taskBoundaryEpoch: number;
   manualCorrectionRevision: number;
   expectedParentId?: string;
+  expectedParentRevision?: number;
   operationId?: string;
   requestedAt?: number;
 }): TaxonomyAdjudicationLease {
@@ -481,6 +504,7 @@ export function createTaxonomyAdjudicationLease(input: {
     taskBoundaryEpoch: input.taskBoundaryEpoch,
     manualCorrectionRevision: input.manualCorrectionRevision,
     expectedParentId: input.expectedParentId,
+    expectedParentRevision: input.expectedParentRevision,
     requestedAt: input.requestedAt ?? Date.now(),
   };
 }
@@ -521,6 +545,9 @@ export function authorizeTaxonomyAdjudicationLease(
   }
   if (lease.expectedParentId !== current.activeParentId) {
     return reject("expected-parent-mismatch");
+  }
+  if (lease.expectedParentRevision !== current.activeParentRevision) {
+    return reject("expected-parent-revision-mismatch");
   }
   if (current.logicalUnitClosed) return reject("logical-unit-closed");
   if (current.selfHealingBudgetConsumed) {
@@ -564,14 +591,71 @@ function isTaxonomyAdjudicationRelation(
   );
 }
 
+const INTERVIEWER_SPEECH_ACTS: InterviewerSpeechAct[] = [
+  "question",
+  "directive",
+  "constraint",
+  "correction",
+  "acknowledgement",
+  "section-transition",
+  "logistics",
+  "informational",
+];
+
+const INTERVIEWER_EVIDENCE_MODES: InterviewerEvidenceMode[] = [
+  "personal-experience",
+  "hypothetical-design",
+  "factual-explanation",
+  "unknown",
+];
+
+const INTERVIEWER_INTENT_ACTIONS: InterviewerIntentAction[] = [
+  "answer",
+  "append-context",
+  "buffer",
+  "ignore",
+];
+
+function isInterviewerSpeechAct(value: unknown): value is InterviewerSpeechAct {
+  return (
+    typeof value === "string" &&
+    INTERVIEWER_SPEECH_ACTS.includes(value as InterviewerSpeechAct)
+  );
+}
+
+function isInterviewerEvidenceMode(
+  value: unknown
+): value is InterviewerEvidenceMode {
+  return (
+    typeof value === "string" &&
+    INTERVIEWER_EVIDENCE_MODES.includes(value as InterviewerEvidenceMode)
+  );
+}
+
+function isInterviewerIntentAction(
+  value: unknown
+): value is InterviewerIntentAction {
+  return (
+    typeof value === "string" &&
+    INTERVIEWER_INTENT_ACTIONS.includes(value as InterviewerIntentAction)
+  );
+}
+
 function sanitizeParentDescriptor(
   parent: TaxonomyAdjudicationParentDescriptor | undefined
 ) {
   if (!parent) return undefined;
   return {
     idHash: parent.idHash,
+    revision: parent.revision,
     questionType: parent.questionType,
-    topic: parent.topic ? clip(normalizeSpace(parent.topic), 360, "start") : undefined,
+    topic: parent.topic
+      ? clip(
+          normalizeSpace(parent.topic),
+          TAXONOMY_ADJUDICATION_MAX_PARENT_CHARS,
+          "start"
+        )
+      : undefined,
     playbookPhase: parent.playbookPhase,
     sharedScenarioEntities: parent.sharedScenarioEntities
       ?.map(normalizeSpace)
@@ -587,8 +671,9 @@ function buildAllowedEvidenceText(request: TaxonomyAdjudicationRequest) {
     request.activeParent?.questionType,
     request.activeParent?.playbookPhase,
     ...(request.activeParent?.sharedScenarioEntities ?? []),
-    ...request.taskSwitchEvidence,
-    ...request.evidence.lexical.evidence,
+    request.sourceContext?.latestMeCorrection,
+    request.sourceContext?.sectionHint,
+    request.sourceContext?.preparationPrior,
   ]
     .filter(Boolean)
     .join("\n");
@@ -628,6 +713,11 @@ function clip(value: string, maxChars: number, side: "start" | "end") {
   return side === "start"
     ? `${value.slice(0, maxChars - 3).trimEnd()}...`
     : `...${value.slice(-(maxChars - 3)).trimStart()}`;
+}
+
+function clipOptional(value: string | undefined, maxChars: number) {
+  const normalized = value ? normalizeSpace(value) : "";
+  return normalized ? clip(normalized, maxChars, "start") : undefined;
 }
 
 function dedupeStrings(values: string[]) {

@@ -6,7 +6,6 @@ import {
   createTaxonomyAdjudicationLease,
 } from "../src/lib/meeting/taxonomy-adjudication.js";
 import { TaxonomyAdjudicationRuntime } from "../src/lib/meeting/taxonomy-adjudication-runtime.js";
-import { inferQuestionTypeDecisionFromText } from "../src/lib/meeting/task-taxonomy.js";
 
 function unit(revision: number): LogicalQuestionUnit {
   const text = `Design a recommendation service revision ${revision}`;
@@ -48,7 +47,6 @@ function job(revision: number) {
     }),
     request: buildTaxonomyAdjudicationRequest({
       logicalQuestionUnit: logicalUnit,
-      lexical: inferQuestionTypeDecisionFromText(logicalUnit.normalizedText),
     }),
     triggerReasons: ["lexical-unknown"],
   };

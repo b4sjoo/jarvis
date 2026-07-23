@@ -30,7 +30,7 @@ import {
 import { serializeMeetingTraceExport } from "./trace.js";
 
 const SESSION_RECORDING_SCHEMA_VERSION = 1;
-const SESSION_TRACE_SUMMARY_SCHEMA_VERSION = 7;
+const SESSION_TRACE_SUMMARY_SCHEMA_VERSION = 8;
 const SESSION_TRACE_INDEX_SCHEMA_VERSION = 1;
 
 interface SessionRecordingStartOptions {
@@ -81,6 +81,7 @@ interface SessionRecordingEvent {
     | "manual-question-type-correction"
     | "semantic-taxonomy-decision"
     | "interviewer-intent-semantic-decision"
+    | "interviewer-intent-llm-decision"
     | "taxonomy-adjudication-decision"
     | "answer-sufficiency-decision"
     | "capture-lifecycle"
@@ -272,6 +273,33 @@ export interface SessionCompactTraceSummary {
     staleResultDropped?: boolean;
     prototypeVersion?: string;
     calibrationVersion?: string;
+  };
+  interviewerIntentLlm?: {
+    mode?: string;
+    eligible?: boolean;
+    skipReason?: string;
+    operationId?: string;
+    unitId?: string;
+    unitRevision?: number;
+    modelId?: string;
+    disposition?: string;
+    providerDisposition?: string;
+    parseDisposition?: string;
+    staleReason?: string;
+    speechAct?: string;
+    questionType?: string;
+    relation?: string;
+    evidenceMode?: string;
+    action?: string;
+    confidence?: number;
+    parseValid?: boolean;
+    evidenceSpansValid?: boolean;
+    arrivalStage?: string;
+    wouldRepair?: boolean;
+    repairApplied?: boolean;
+    durationMs?: number;
+    inputChars?: number;
+    outputChars?: number;
   };
   taxonomyAdjudication?: {
     mode?: string;
@@ -1363,7 +1391,10 @@ export class SessionRecordingManager {
   }) {
     const session = this.getWritableSession({ traceId });
     if (!session) return;
-    const artifactPath = "taxonomy/llm-adjudications.jsonl";
+    const artifactPaths = [
+      "taxonomy/llm-adjudications.jsonl",
+      "intent/llm-adjudications.jsonl",
+    ];
     const payload = {
       recordedAt: Date.now(),
       sessionId: session.sessionId,
@@ -1371,18 +1402,27 @@ export class SessionRecordingManager {
       taskId,
       metadata,
     };
-    this.enqueue(session, () =>
-      this.writeText(
-        session,
-        artifactPath,
-        `${JSON.stringify(payload)}\n`,
-        true
-      )
-    );
+    for (const artifactPath of artifactPaths) {
+      this.enqueue(session, () =>
+        this.writeText(
+          session,
+          artifactPath,
+          `${JSON.stringify(payload)}\n`,
+          true
+        )
+      );
+    }
     this.recordEvent(
       "taxonomy-adjudication-decision",
       metadata,
-      [artifactPath],
+      artifactPaths,
+      traceId,
+      taskId
+    );
+    this.recordEvent(
+      "interviewer-intent-llm-decision",
+      metadata,
+      artifactPaths,
       traceId,
       taskId
     );
@@ -1392,6 +1432,8 @@ export class SessionRecordingManager {
     const updated: SessionCompactTraceSummary = {
       ...existing,
       taxonomyAdjudication: buildTaxonomyAdjudicationTraceSummary([metadata]),
+      interviewerIntentLlm:
+        buildInterviewerIntentLlmTraceSummary([metadata]),
     };
     session.traceSummaries.set(traceId, updated);
     this.enqueue(session, async () => {
@@ -2689,6 +2731,104 @@ function buildInterviewerIntentSemanticTraceSummary(
     calibrationVersion: readFirstString(
       metadataSources,
       "interviewerIntentSemanticCalibrationVersion"
+    ),
+  };
+}
+
+function buildInterviewerIntentLlmTraceSummary(
+  metadataSources: Array<Record<string, unknown>>
+): SessionCompactTraceSummary["interviewerIntentLlm"] {
+  const operationId = readFirstString(
+    metadataSources,
+    "interviewerIntentLlmOperationId"
+  );
+  const disposition = readFirstString(
+    metadataSources,
+    "interviewerIntentLlmDisposition"
+  );
+  if (!operationId && !disposition) return undefined;
+  return {
+    mode: readFirstString(metadataSources, "interviewerIntentLlmMode"),
+    eligible: readFirstBoolean(
+      metadataSources,
+      "interviewerIntentLlmEligible"
+    ),
+    skipReason: readFirstString(
+      metadataSources,
+      "interviewerIntentLlmSkipReason"
+    ),
+    operationId,
+    unitId: readFirstString(metadataSources, "interviewerIntentLlmUnitId"),
+    unitRevision: readFirstNumberFromMetadata(
+      metadataSources,
+      "interviewerIntentLlmUnitRevision"
+    ),
+    modelId: readFirstString(metadataSources, "interviewerIntentLlmModelId"),
+    disposition,
+    providerDisposition: readFirstString(
+      metadataSources,
+      "interviewerIntentLlmProviderDisposition"
+    ),
+    parseDisposition: readFirstString(
+      metadataSources,
+      "interviewerIntentLlmParseDisposition"
+    ),
+    staleReason: readFirstString(
+      metadataSources,
+      "interviewerIntentLlmStaleReason"
+    ),
+    speechAct: readFirstString(
+      metadataSources,
+      "interviewerIntentLlmSpeechAct"
+    ),
+    questionType: readFirstString(
+      metadataSources,
+      "interviewerIntentLlmQuestionType"
+    ),
+    relation: readFirstString(
+      metadataSources,
+      "interviewerIntentLlmRelation"
+    ),
+    evidenceMode: readFirstString(
+      metadataSources,
+      "interviewerIntentLlmEvidenceMode"
+    ),
+    action: readFirstString(metadataSources, "interviewerIntentLlmAction"),
+    confidence: readFirstNumberFromMetadata(
+      metadataSources,
+      "interviewerIntentLlmConfidence"
+    ),
+    parseValid: readFirstBoolean(
+      metadataSources,
+      "interviewerIntentLlmParseValid"
+    ),
+    evidenceSpansValid: readFirstBoolean(
+      metadataSources,
+      "interviewerIntentLlmEvidenceSpansValid"
+    ),
+    arrivalStage: readFirstString(
+      metadataSources,
+      "interviewerIntentLlmArrivalStage"
+    ),
+    wouldRepair: readFirstBoolean(
+      metadataSources,
+      "interviewerIntentLlmWouldRepair"
+    ),
+    repairApplied: readFirstBoolean(
+      metadataSources,
+      "interviewerIntentLlmRepairApplied"
+    ),
+    durationMs: readFirstNumberFromMetadata(
+      metadataSources,
+      "interviewerIntentLlmDurationMs"
+    ),
+    inputChars: readFirstNumberFromMetadata(
+      metadataSources,
+      "interviewerIntentLlmInputChars"
+    ),
+    outputChars: readFirstNumberFromMetadata(
+      metadataSources,
+      "interviewerIntentLlmOutputChars"
     ),
   };
 }

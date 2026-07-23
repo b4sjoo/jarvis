@@ -6090,21 +6090,35 @@ export function useMeetingAssistant() {
         );
       const baseMetadata: Record<string, unknown> = {
         taxonomyAdjudicationMode: "shadow",
+        interviewerIntentLlmMode: "shadow",
         taxonomyAdjudicationEligible: eligibility.eligible,
+        interviewerIntentLlmEligible: eligibility.eligible,
         taxonomyAdjudicationSkipReason: eligibility.eligible
           ? undefined
           : eligibility.reason,
+        interviewerIntentLlmSkipReason: eligibility.eligible
+          ? undefined
+          : eligibility.reason,
         taxonomyAdjudicationTriggerReasons: eligibility.triggerReasons,
+        interviewerIntentLlmTriggerReasons: eligibility.triggerReasons,
+        interviewerIntentLlmDisposition: eligibility.eligible
+          ? "eligible"
+          : "not-eligible",
         taxonomyAdjudicationUnitId: logicalQuestionUnit.id,
+        interviewerIntentLlmUnitId: logicalQuestionUnit.id,
         taxonomyAdjudicationUnitRevision: logicalQuestionUnit.revision,
+        interviewerIntentLlmUnitRevision: logicalQuestionUnit.revision,
         taxonomyAdjudicationInputChars: projection.projectedChars,
+        interviewerIntentLlmInputChars: projection.projectedChars,
         taxonomyAdjudicationOriginalChars: projection.originalChars,
         taxonomyAdjudicationProjectionReason: projection.projectionReason,
         taxonomyAdjudicationProjectionSafe: projection.safe,
         taxonomyAdjudicationOmittedSourceTurnIds:
           projection.omittedSourceTurnIds,
         taxonomyAdjudicationBehaviorMutationBlocked: true,
+        interviewerIntentLlmBehaviorMutationBlocked: true,
         taxonomyAdjudicationRepairApplied: false,
+        interviewerIntentLlmRepairApplied: false,
         ...formatTaxonomyAdjudicationCircuitForTrace(circuitState),
       };
       traceStoreRef.current.updateMetadata(traceId, baseMetadata);
@@ -6121,6 +6135,8 @@ export function useMeetingAssistant() {
           ...baseMetadata,
           taxonomyAdjudicationSkipReason: "provider-circuit-open",
           taxonomyAdjudicationDisposition: "provider-circuit-open",
+          interviewerIntentLlmSkipReason: "provider-circuit-open",
+          interviewerIntentLlmDisposition: "provider-circuit-open",
         };
         traceStoreRef.current.updateMetadata(traceId, metadata);
         sessionRecordingManagerRef.current?.recordTaxonomyAdjudicationDecision({
@@ -6156,6 +6172,8 @@ export function useMeetingAssistant() {
           ),
           taxonomyAdjudicationSkipReason: "provider-configuration-error",
           taxonomyAdjudicationDisposition: "provider-configuration-error",
+          interviewerIntentLlmSkipReason: "provider-configuration-error",
+          interviewerIntentLlmDisposition: "provider-configuration-error",
         };
         traceStoreRef.current.updateMetadata(traceId, metadata);
         sessionRecordingManagerRef.current?.recordTaxonomyAdjudicationDecision({
@@ -6184,15 +6202,14 @@ export function useMeetingAssistant() {
         taskBoundaryEpoch,
         manualCorrectionRevision: manualCorrectionRevisionRef.current,
         expectedParentId: activeParent?.id,
+        expectedParentRevision: activeParent?.revisions,
       });
       const request = buildTaxonomyAdjudicationRequest({
         logicalQuestionUnit,
-        lexical,
-        semantic,
-        hybrid,
         activeParent: activeParent
           ? {
               idHash: hashTaxonomySourceTurnIds([activeParent.id]),
+              revision: activeParent.revisions,
               questionType: activeParentQuestionType,
               topic: activeParent.topic,
               playbookPhase: activeParent.playbookPhase,
@@ -6201,8 +6218,16 @@ export function useMeetingAssistant() {
                   .domainEntities,
             }
           : undefined,
-        interviewBriefTypes:
-          contextState.interviewSessionBrief?.interviewTypes,
+        latestMeCorrection: selectLatestMeAdjudicationContext(
+          contextState.transcriptTurns,
+          turn.startedAt
+        ),
+        sectionHint: logicalQuestionUnit.sectionHint
+          ? `${logicalQuestionUnit.sectionHint.questionType}:${logicalQuestionUnit.sectionHint.source}`
+          : undefined,
+        preparationPrior: buildTaxonomyPreparationPrior(
+          contextState.interviewSessionBrief
+        ),
         taskSwitchEvidence: [
           logicalQuestionUnit.boundaryReason,
           ...logicalQuestionUnit.compositionReasons,
@@ -6223,8 +6248,16 @@ export function useMeetingAssistant() {
         taxonomyAdjudicationManualCorrectionRevision:
           lease.manualCorrectionRevision,
         taxonomyAdjudicationExpectedParentId: lease.expectedParentId,
+        taxonomyAdjudicationExpectedParentRevision:
+          lease.expectedParentRevision,
+        interviewerIntentLlmOperationId: lease.operationId,
+        interviewerIntentLlmExpectedParentId: lease.expectedParentId,
+        interviewerIntentLlmExpectedParentRevision:
+          lease.expectedParentRevision,
         taxonomyAdjudicationModelId,
+        interviewerIntentLlmModelId: taxonomyAdjudicationModelId,
         taxonomyAdjudicationDisposition: "scheduled",
+        interviewerIntentLlmDisposition: "scheduled",
       };
       traceStoreRef.current.updateMetadata(traceId, scheduledMetadata);
 
@@ -6245,16 +6278,18 @@ export function useMeetingAssistant() {
             onFirstToken: (at) => {
               traceStoreRef.current.updateMetadata(traceId, {
                 taxonomyAdjudicationFirstTokenAt: at,
+                interviewerIntentLlmFirstTokenAt: at,
               });
             },
           }),
         onStarted: (_job, startedAt) => {
           stepId = traceStoreRef.current.startStep(
             traceId,
-            "LLM taxonomy adjudication shadow",
+            "LLM interviewer intent adjudication shadow",
             {
               ...scheduledMetadata,
               taxonomyAdjudicationRequestStartedAt: startedAt,
+              interviewerIntentLlmRequestStartedAt: startedAt,
               taxonomyAdjudicationRequestProfile:
                 "json-only-256-tokens-4s",
             }
@@ -6286,6 +6321,7 @@ export function useMeetingAssistant() {
               }),
               manualCorrectionRevision: manualCorrectionRevisionRef.current,
               activeParentId: latestParent?.id,
+              activeParentRevision: latestParent?.revisions,
               logicalUnitClosed: false,
               selfHealingBudgetConsumed: false,
             }
@@ -6375,14 +6411,23 @@ export function useMeetingAssistant() {
           const metadata = {
             ...scheduledMetadata,
             taxonomyAdjudicationDisposition: finalDisposition,
+            interviewerIntentLlmDisposition: finalDisposition,
             taxonomyAdjudicationStaleReason: authorization.authorized
               ? undefined
               : authorization.reason,
+            interviewerIntentLlmStaleReason: authorization.authorized
+              ? undefined
+              : authorization.reason,
             taxonomyAdjudicationCompletedAt: settlement.completedAt,
+            interviewerIntentLlmCompletedAt: settlement.completedAt,
             taxonomyAdjudicationDurationMs: settlement.durationMs,
+            interviewerIntentLlmDurationMs: settlement.durationMs,
             taxonomyAdjudicationOutputChars: rawOutput.length,
+            interviewerIntentLlmOutputChars: rawOutput.length,
             taxonomyAdjudicationProviderDisposition: providerDisposition,
+            interviewerIntentLlmProviderDisposition: providerDisposition,
             taxonomyAdjudicationParseDisposition: parseDisposition,
+            interviewerIntentLlmParseDisposition: parseDisposition,
             taxonomyAdjudicationRawOutputHash: rawOutput
               ? hashTaxonomySourceTurnIds([rawOutput])
               : undefined,
@@ -6394,18 +6439,33 @@ export function useMeetingAssistant() {
                 ? boundedRawOutput.slice(0, 320)
                 : undefined,
             taxonomyAdjudicationParseValid: parsed?.ok ?? false,
+            interviewerIntentLlmParseValid: parsed?.ok ?? false,
             taxonomyAdjudicationParseError:
+              parsed && !parsed.ok ? parsed.reason : undefined,
+            interviewerIntentLlmParseError:
               parsed && !parsed.ok ? parsed.reason : undefined,
             taxonomyAdjudicationEvidenceSpansValid:
               parsed?.evidenceSpansValid ?? false,
+            interviewerIntentLlmEvidenceSpansValid:
+              parsed?.evidenceSpansValid ?? false,
+            interviewerIntentLlmSpeechAct: parsedValue?.speechAct,
             taxonomyAdjudicationCandidateType: parsedValue?.questionType,
+            interviewerIntentLlmQuestionType: parsedValue?.questionType,
             taxonomyAdjudicationRelation: parsedValue?.relation,
+            interviewerIntentLlmRelation: parsedValue?.relation,
+            interviewerIntentLlmEvidenceMode: parsedValue?.evidenceMode,
+            interviewerIntentLlmAction: parsedValue?.action,
             taxonomyAdjudicationStandalone: parsedValue?.standalone,
             taxonomyAdjudicationConfidence: parsedValue?.confidence,
+            interviewerIntentLlmConfidence: parsedValue?.confidence,
             taxonomyAdjudicationArrivalStage: arrivalStage,
+            interviewerIntentLlmArrivalStage: arrivalStage,
             taxonomyAdjudicationWouldRepair: wouldRepair,
+            interviewerIntentLlmWouldRepair: wouldRepair,
             taxonomyAdjudicationRepairApplied: false,
+            interviewerIntentLlmRepairApplied: false,
             taxonomyAdjudicationBehaviorMutationBlocked: true,
+            interviewerIntentLlmBehaviorMutationBlocked: true,
             taxonomyAdjudicationError:
               settlement.error instanceof Error
                 ? settlement.error.message
@@ -6553,6 +6613,13 @@ export function useMeetingAssistant() {
           traceId,
           taskId: contextState.activeMeetingTask?.id,
           metadata: initialMetadata,
+        });
+        scheduleTaxonomyAdjudicationShadow({
+          turn,
+          traceId,
+          turnGateAction,
+          logicalQuestionUnit,
+          lexical,
         });
         return;
       }
@@ -6739,6 +6806,13 @@ export function useMeetingAssistant() {
             traceId,
             taskId: contextState.activeMeetingTask?.id,
             metadata,
+          });
+          scheduleTaxonomyAdjudicationShadow({
+            turn,
+            traceId,
+            turnGateAction,
+            logicalQuestionUnit,
+            lexical,
           });
         });
     },
@@ -13860,6 +13934,41 @@ function shouldUpdateActiveScreenTaskFromAdvisorOutput(content: string) {
     normalized.includes("recapture") ||
     normalized.includes("capture or state")
   );
+}
+
+function selectLatestMeAdjudicationContext(
+  turns: TranscriptTurn[],
+  currentTurnStartedAt: number
+) {
+  const candidate = [...turns].reverse().find((turn) => {
+    if (turn.speaker !== "me" || !turn.text.trim()) return false;
+    const deltaMs = currentTurnStartedAt - turn.endedAt;
+    if (deltaMs < 0 || deltaMs > 90_000) return false;
+    return (
+      turn.contextPromptEligible ||
+      turn.contextTier === "me_clarification_short" ||
+      turn.contextTier === "me_clarification_medium" ||
+      /(?:\?|？|\b(?:not|instead|mean|clarif|correct|you mean|did you say)\b|(?:不是|是指|意思是|确认|更正))/iu.test(
+        turn.text
+      )
+    );
+  });
+  return candidate?.text;
+}
+
+function buildTaxonomyPreparationPrior(
+  brief: InterviewSessionBrief | undefined
+) {
+  if (!brief) return undefined;
+  const fields = [
+    brief.targetCompany
+      ? `target-company:${brief.targetCompany}`
+      : undefined,
+    brief.interviewTypes.length
+      ? `planned-interview-types:${brief.interviewTypes.join(",")}`
+      : undefined,
+  ].filter(Boolean);
+  return fields.length ? fields.join("; ") : undefined;
 }
 
 function evaluateThemTurnForAdvisor(

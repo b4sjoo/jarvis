@@ -99,7 +99,7 @@ export const TAXONOMY_ADJUDICATION_CORPUS: TaxonomyAdjudicationCorpusCase[] = [
     parentTopic: "Design a recommendation system",
     lexicalType: "unknown",
     expectedType: "ai-ml-system-design",
-    expectedRelation: "resume-parent",
+    expectedRelation: "followup-parent",
     shouldAdjudicate: true,
   },
   {
@@ -125,7 +125,7 @@ export const TAXONOMY_ADJUDICATION_CORPUS: TaxonomyAdjudicationCorpusCase[] = [
     text: "Yeah okay sounds good.",
     lexicalType: "unknown",
     expectedType: "unknown",
-    expectedRelation: "unknown",
+    expectedRelation: "none",
     shouldAdjudicate: false,
   },
   {
