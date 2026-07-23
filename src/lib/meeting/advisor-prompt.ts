@@ -492,7 +492,9 @@ function formatOpeningRouteForPrompt(
   const frame =
     openingRoute.kind === "project-intro"
       ? "Project intro frame: problem before the project -> why it mattered -> core design decision -> key tradeoff or technical difficulty -> validation/impact -> likely follow-up hooks."
-      : "Self intro frame: current positioning -> relevant past work -> AI/ML infrastructure throughline -> target role/company relevance.";
+      : openingRoute.kind === "project-portfolio"
+        ? "Project portfolio frame: current role and technical throughline -> two or three supported project areas with one-line impact -> invite the interviewer to choose one for a deeper discussion. Do not bind or invent one project."
+        : "Self intro frame: current positioning -> relevant past work -> AI/ML infrastructure throughline -> target role/company relevance.";
 
   return [
     `kind: ${openingRoute.kind}`,

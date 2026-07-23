@@ -1,0 +1,134 @@
+import type {
+  MemoryAskFrame,
+  MemoryQuestionType,
+  MemoryTopicDomain,
+} from "../memory";
+import type { OpeningRouteContext } from "./types";
+
+export interface DetectedOpeningTaskRoute extends OpeningRouteContext {
+  questionType: MemoryQuestionType;
+  askFrame: MemoryAskFrame;
+  topicDomain: MemoryTopicDomain;
+}
+
+const DIRECT_OPENING_REQUEST =
+  /\b(?:tell me|walk me through|take me through|give me|share|describe|explain|talk about|hear about|i d love to hear|i would love to hear|i d like to hear|i would like to hear)\b/i;
+
+const SELF_INTRO_REQUEST =
+  /\b(?:introduce yourself|tell me about yourself|about yourself|start with your background|briefly introduce yourself)\b/i;
+
+const PERSONAL_BACKGROUND =
+  /\b(?:your (?:resume|background|career|journey)|background (?:about|across|over) your|your (?:time|years?) (?:at|with|in)|what you (?:have|ve) been up to|your (?:last|past) [a-z0-9-]+ years?|over the past [a-z0-9-]+ years?)\b/i;
+
+const PROJECT_PORTFOLIO =
+  /\b(?:your (?:work|projects)|projects? you (?:have|ve|had) worked on|work (?:that )?you (?:have|ve|had)? ?done|work you did|what (?:kind of )?(?:work|projects) (?:have )?you|what (?:have you|did you) (?:work on|build)|what you (?:built|worked on))\b/i;
+
+const PROJECT_INTRO_OBJECT =
+  /\b(?:(?:a|the|this|that|your) (?:technical )?(?:project|system|feature)|system you built|project you (?:are|re) proud of)\b/i;
+
+const PROJECT_DETAIL_REQUEST =
+  /\b(?:technical difficult|technical challenge|hardest part|key tradeoff|why did you choose|how did you build|how did you design|how did you implement)\b/i;
+
+export function detectOpeningTaskRoute(
+  text: string
+): DetectedOpeningTaskRoute | undefined {
+  const normalized = normalizeOpeningRouteText(text);
+  if (!normalized) return undefined;
+
+  const projectAnchor = inferOpeningProjectAnchor(text);
+  const asksSelfIntro = SELF_INTRO_REQUEST.test(normalized);
+  const asksResumeWalkthrough =
+    DIRECT_OPENING_REQUEST.test(normalized) &&
+    PERSONAL_BACKGROUND.test(normalized);
+  const asksProjectIntro =
+    PROJECT_DETAIL_REQUEST.test(normalized) ||
+    (DIRECT_OPENING_REQUEST.test(normalized) &&
+      (Boolean(projectAnchor) || PROJECT_INTRO_OBJECT.test(normalized)));
+  const asksProjectPortfolio =
+    (DIRECT_OPENING_REQUEST.test(normalized) ||
+      /\bwhat (?:kind of )?(?:work|projects)\b/i.test(normalized) ||
+      /\bwhat (?:have you|did you) (?:work on|build)\b/i.test(normalized)) &&
+    PROJECT_PORTFOLIO.test(normalized);
+
+  if (
+    !asksSelfIntro &&
+    !asksResumeWalkthrough &&
+    !asksProjectIntro &&
+    !asksProjectPortfolio
+  ) {
+    return undefined;
+  }
+
+  const kind = asksSelfIntro
+    ? "self-intro"
+    : asksResumeWalkthrough
+      ? "resume-walkthrough"
+      : asksProjectIntro
+        ? "project-intro"
+        : "project-portfolio";
+
+  return {
+    questionType: "project-deep-dive",
+    askFrame: "past-project",
+    topicDomain: inferOpeningTopicDomain(projectAnchor, text),
+    projectAnchor,
+    kind,
+    source:
+      kind === "self-intro" || kind === "resume-walkthrough"
+        ? "opening-route-self-intro"
+        : kind === "project-portfolio"
+          ? "opening-route-project-portfolio"
+          : "opening-route-project-intro",
+    commitParent: kind === "project-intro",
+  };
+}
+
+export function inferOpeningProjectAnchor(text: string) {
+  const normalized = normalizeOpeningRouteText(text);
+  const anchors: Array<[RegExp, string]> = [
+    [/\bagentic memory\b/i, "Agentic Memory"],
+    [/\bmodel interface\b/i, "Model Interface"],
+    [/\bmanaged semantic search\b/i, "Managed Semantic Search"],
+    [/\bsemantic search\b/i, "Managed Semantic Search"],
+    [/\bthrottling\b|\bquota\b|\brate limit/i, "Throttling"],
+    [/\boasis\b/i, "Oasis"],
+    [/\bneural search\b|\bneuralsearch\b/i, "NeuralSearch"],
+    [/\bbeaglestone\b/i, "BeagleStone Migration"],
+    [/\baos release\b|\bopensearch release\b/i, "AOS Release"],
+    [/\bml commons\b/i, "ML Commons"],
+  ];
+
+  for (const [pattern, anchor] of anchors) {
+    if (pattern.test(normalized) || pattern.test(text)) return anchor;
+  }
+
+  return undefined;
+}
+
+export function inferOpeningTopicDomain(
+  projectAnchor: string | undefined,
+  text: string
+): MemoryTopicDomain {
+  const normalized = normalizeOpeningRouteText(
+    `${projectAnchor ?? ""} ${text}`
+  );
+  if (/\b(agentic|memory|llm|model|ml|ai|rag|semantic|neural)\b/i.test(normalized)) {
+    return "ai-ml-infra";
+  }
+  if (/\b(search|opensearch|aos)\b/i.test(normalized)) return "search";
+  if (/\b(throttling|quota|rate limit|backend|service)\b/i.test(normalized)) {
+    return "backend";
+  }
+  if (/\b(distributed|cluster|migration|storage|database)\b/i.test(normalized)) {
+    return "backend";
+  }
+  return "unknown";
+}
+
+function normalizeOpeningRouteText(text: string) {
+  return text
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}+#.()]+/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}

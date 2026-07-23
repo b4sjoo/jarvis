@@ -81,6 +81,7 @@ import {
   MeetingModelRequestOptions,
   MeetingModelProviderSnapshot,
   PENDING_CONFIRMATION_TTL_MS,
+  detectOpeningTaskRoute,
   OpeningRouteContext,
   ParentQuestionType,
   ParsedMeetingAnswer,
@@ -12674,96 +12675,6 @@ function formatManualQuestionTypeCorrectionForTrace(
     correctionTraceId: correction.correctionTraceId,
     regenerationTraceId: correction.regenerationTraceId,
   };
-}
-
-function detectOpeningTaskRoute(text: string):
-  | (OpeningRouteContext & {
-      questionType: MemoryQuestionType;
-      askFrame: MemoryAskFrame;
-      topicDomain: MemoryTopicDomain;
-    })
-  | undefined {
-  const normalized = normalizeTranscriptForGate(text);
-  if (!normalized) return undefined;
-
-  const projectAnchor = inferOpeningProjectAnchor(text);
-  const asksResumeWalkthrough =
-    /\b(walk me through|tell me about|briefly summarize|summarize)\b/i.test(
-      text
-    ) && /\b(your resume|your background|your experience|your career)\b/i.test(text);
-  const asksSelfIntro =
-    /\b(introduce yourself|tell me about yourself|about yourself|start with your background|briefly introduce)\b/i.test(
-      text
-    ) || asksResumeWalkthrough;
-  const asksProjectIntro =
-    /\b(tell me about|walk me through|describe|explain)\b/i.test(text) &&
-    (projectAnchor ||
-      /\b(project|work you did|system you built|technical difficulty|hardest part|tradeoff|proud of)\b/i.test(
-        normalized
-      ));
-  const asksProjectProudOrHard =
-    /\b(project.*proud|proud.*project|hardest part|technical difficult|technical challenge|why did you choose|how did you build|how did you design|how did you implement)\b/i.test(
-      normalized
-    );
-
-  if (!asksSelfIntro && !asksProjectIntro && !asksProjectProudOrHard) {
-    return undefined;
-  }
-
-  const openingKind = asksSelfIntro
-    ? asksResumeWalkthrough
-      ? "resume-walkthrough"
-      : "self-intro"
-    : "project-intro";
-
-  return {
-    questionType: "project-deep-dive",
-    askFrame: "past-project",
-    topicDomain: inferOpeningTopicDomain(projectAnchor, text),
-    projectAnchor,
-    kind: openingKind,
-    source: asksSelfIntro
-      ? "opening-route-self-intro"
-      : "opening-route-project-intro",
-    commitParent: !asksSelfIntro,
-  };
-}
-
-function inferOpeningProjectAnchor(text: string) {
-  const normalized = normalizeTranscriptForGate(text);
-  const anchors: Array<[RegExp, string]> = [
-    [/\bagentic memory\b/i, "Agentic Memory"],
-    [/\bmodel interface\b/i, "Model Interface"],
-    [/\bmanaged semantic search\b/i, "Managed Semantic Search"],
-    [/\bsemantic search\b/i, "Managed Semantic Search"],
-    [/\bthrottling\b|\bquota\b|\brate limit/i, "Throttling"],
-    [/\boasis\b/i, "Oasis"],
-    [/\bneural search\b|\bneuralsearch\b/i, "NeuralSearch"],
-    [/\bbeaglestone\b/i, "BeagleStone Migration"],
-    [/\baos release\b|\bopensearch release\b/i, "AOS Release"],
-    [/\bml commons\b/i, "ML Commons"],
-  ];
-
-  for (const [pattern, anchor] of anchors) {
-    if (pattern.test(normalized) || pattern.test(text)) return anchor;
-  }
-
-  return undefined;
-}
-
-function inferOpeningTopicDomain(
-  projectAnchor: string | undefined,
-  text: string
-): MemoryTopicDomain {
-  const normalized = normalizeTranscriptForGate(`${projectAnchor ?? ""} ${text}`);
-  if (/\b(agentic|memory|llm|model|ml|ai|rag|semantic|neural)\b/i.test(normalized)) {
-    return "ai-ml-infra";
-  }
-  if (/\b(search|opensearch|aos)\b/i.test(normalized)) return "search";
-  if (/\b(throttling|quota|rate limit|backend|service)\b/i.test(normalized)) {
-    return "backend";
-  }
-  return "unknown";
 }
 
 function buildFocusedAdvisorTaskQuery(

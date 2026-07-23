@@ -827,6 +827,7 @@ export interface AdvisorPromptContext {
 export type OpeningRouteKind =
   | "self-intro"
   | "resume-walkthrough"
+  | "project-portfolio"
   | "project-intro";
 
 export interface OpeningRouteContext {

@@ -38,6 +38,7 @@ export * from "./response-artifact-authorization";
 export * from "./response-action-contract";
 export * from "./native-speech-event";
 export * from "./native-audio-lifecycle";
+export * from "./opening-route";
 export * from "./memory-evaluation";
 export * from "./personal-evidence-guardrail";
 export * from "./project-binding";
