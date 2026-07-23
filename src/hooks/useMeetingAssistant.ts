@@ -28,6 +28,8 @@ import {
   AdvisorTaskMutationAuthority,
   RuntimeCommitToken,
   AdvisorTurnIntentDecision,
+  extractInterviewerIntentKeywordEvidence,
+  formatInterviewerIntentKeywordEvidenceForTrace,
   ActiveMeetingTask,
   ActiveInterviewParent,
   ActiveScreenTask,
@@ -6817,8 +6819,17 @@ export function useMeetingAssistant() {
               adjacentConstraintDecision.inherited
           ),
         });
+        const keywordIntentEvidence =
+          formatInterviewerIntentKeywordEvidenceForTrace(
+            extractInterviewerIntentKeywordEvidence({
+              text: turn.text,
+              turnDecision: turnGate,
+              currentTurnId: turn.id,
+            })
+          );
         traceStoreRef.current.updateMetadata(traceId, {
           ...formatAdvisorTurnIntentForTrace(turnGate),
+          ...keywordIntentEvidence,
           turnGateAction: turnGate.action,
           turnGateReason: turnGate.reason,
           memoryRetrievalSuppressedReason: turnGate.executionAuthorized
@@ -6835,6 +6846,7 @@ export function useMeetingAssistant() {
             action: turnGate.action,
             reason: turnGate.reason,
             ...formatAdvisorTurnIntentForTrace(turnGate),
+            ...keywordIntentEvidence,
             turnId: turn.id,
             transcriptChars: turn.text.trim().length,
             wordEquivalent: calculateWordEquivalent(turn.text),
