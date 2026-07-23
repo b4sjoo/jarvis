@@ -1,0 +1,52 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import {
+  buildResponseActionInstructions,
+  formatResponseActionContextScope,
+} from "../src/lib/meeting/response-action-contract.js";
+
+test("formats the bounded response-action context scope", () => {
+  const formatted = formatResponseActionContextScope({
+    operationId: "scope-narrow",
+    action: "narrow-context",
+    mode: "current-only",
+    logicalQuestionUnitId: "lqu-a",
+    logicalQuestionUnitRevision: 3,
+    selectedContextSourceKinds: ["logical-question-unit"],
+    selectedContextTurnIds: ["turn-current"],
+    selectedContextChars: 48,
+    selectionReason: "current-source-owned-question",
+    expansionBudget: 0,
+  });
+
+  assert.match(formatted, /Action: narrow-context/);
+  assert.match(formatted, /Logical question: lqu-a revision 3/);
+  assert.match(formatted, /Selected turn ids: turn-current/);
+});
+
+test("Narrow and Enhance contracts preserve task identity and reject generated authority", () => {
+  const narrow = buildResponseActionInstructions(
+    "narrow-context",
+    "system-design"
+  ).join("\n");
+  const enhance = buildResponseActionInstructions(
+    "enhance-context",
+    "system-design"
+  ).join("\n");
+
+  assert.match(narrow, /current source-owned logical question/i);
+  assert.match(narrow, /Preserve the same parent identity/i);
+  assert.match(enhance, /smallest source-backed context/i);
+  assert.match(enhance, /Never treat generated answers, compact summaries, Code, Whiteboard, or memory payloads as source authority/i);
+});
+
+test("Back response action restores a previous phase without rolling back artifacts", () => {
+  const instructions = buildResponseActionInstructions(
+    "previous-phase",
+    "system-design"
+  ).join("\n");
+
+  assert.match(instructions, /deterministically restored previous playbook phase/i);
+  assert.match(instructions, /Do not roll back Code or Whiteboard artifacts/i);
+  assert.match(instructions, /Do not create, retype, or re-parent a task/i);
+});

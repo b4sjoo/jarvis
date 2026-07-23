@@ -702,7 +702,30 @@ export type AdvisorRequestMode =
   | "clarifying-answer"
   | "response-action";
 
-export type MeetingResponseActionMode = "speakable" | "next-phase";
+export type MeetingResponseActionMode =
+  | "speakable"
+  | "narrow-context"
+  | "enhance-context"
+  | "previous-phase"
+  | "next-phase";
+
+export type AdvisorContextScopeMode =
+  | "default"
+  | "current-only"
+  | "expanded";
+
+export interface AdvisorContextScopeSnapshot {
+  operationId: string;
+  action: "narrow-context" | "enhance-context";
+  mode: AdvisorContextScopeMode;
+  logicalQuestionUnitId: string;
+  logicalQuestionUnitRevision: number;
+  selectedContextSourceKinds: string[];
+  selectedContextTurnIds: string[];
+  selectedContextChars: number;
+  selectionReason: string;
+  expansionBudget: number;
+}
 
 export type MeetingResponseLength = "short" | "normal" | "detailed";
 
@@ -797,6 +820,7 @@ export interface AdvisorPromptContext {
     text: string;
   }>;
   latestTurn?: TranscriptTurn;
+  responseActionContextScope?: AdvisorContextScopeSnapshot;
 }
 
 export type OpeningRouteKind =

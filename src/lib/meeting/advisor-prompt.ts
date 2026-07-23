@@ -19,6 +19,10 @@ import { formatActiveMeetingTaskForPrompt } from "./active-meeting-task";
 import { formatFactAnchorDecisionForPrompt } from "./fact-anchor-guardrail";
 import { formatPlaybookPhaseDecisionForPrompt } from "./playbook-phase";
 import { formatProjectBindingDecisionForPrompt } from "./project-binding";
+import {
+  buildResponseActionInstructions,
+  formatResponseActionContextScope,
+} from "./response-action-contract";
 
 export function buildAdvisorSystemPrompt() {
   return [
@@ -143,6 +147,9 @@ export function buildAdvisorUserMessage(
     "<glossary>",
     context.glossaryText || "No glossary.",
     "</glossary>",
+    "<response_action_context_scope>",
+    formatResponseActionContextScope(context.responseActionContextScope),
+    "</response_action_context_scope>",
     "<memory_context>",
     context.memoryContext || "No memory context was injected.",
     "</memory_context>",
@@ -177,22 +184,30 @@ export function buildAdvisorUserMessage(
   }
 
   if (mode === "response-action") {
+    const responseAction = options.responseAction ?? "speakable";
+    const isContextScopeAction =
+      responseAction === "narrow-context" ||
+      responseAction === "enhance-context";
     sections.push(
       "<mode>",
       mode,
       "</mode>",
       "<response_action>",
-      options.responseAction ?? "speakable",
+      responseAction,
       "</response_action>",
       "<output>",
-      "Transform <previous_suggestion> for the requested response action. Treat it as source material, not as a new independent question.",
+      isContextScopeAction
+        ? "Answer the current source-owned question using <response_action_context_scope>. Do not treat the control action as a new question."
+        : "Transform <previous_suggestion> for the requested response action. Treat it as source material, not as a new independent question.",
       "Preserve the active task, visible question, and technical constraints. Do not invent new screen content, hidden requirements, speakers, or meeting dialogue.",
-      "If <previous_suggestion> is empty or only '-', output a single dash.",
+      !isContextScopeAction
+        ? "If <previous_suggestion> is empty or only '-', output a single dash."
+        : "Do not use a previous generated answer as factual, taxonomy, or context authority.",
       "Retain the active task's canonical answer profile. If <previous_suggestion> contains Code or Whiteboard, preserve that artifact unless the requested action or latest explicit constraint changes it.",
       "For coding tasks, preserve the Code section unless the latest explicit constraint requires changing it. Do not move code into Approach.",
       "For coding tasks, keep 中文思路 in Chinese, but keep Question, Answer, Approach, Complexity, Clarifying question, and Clarifying options in meeting-ready English unless the user explicitly asks to translate the coding answer.",
       ...buildResponseActionInstructions(
-        options.responseAction ?? "speakable",
+        responseAction,
         answerProfile
       ),
       ...buildMeetingAnswerContractInstructions(answerProfile),
@@ -378,37 +393,6 @@ function buildMeetingAnswerContractInstructions(
     chineseThinking,
     "Answer: one to three ready-to-say professional sentences in the requested meeting language, or '-' if no answer is useful.",
     ...clarification,
-  ];
-}
-
-function buildResponseActionInstructions(
-  action: MeetingResponseActionMode,
-  profile: MeetingAnswerProfile
-) {
-  if (action === "speakable") {
-    return [
-      "Action goal: produce a speakable answer the user can say out loud.",
-      profile === "compact-spoken"
-        ? "Keep Answer to one to three short professional English sentences."
-        : "Keep the active technical profile and make Answer easy to say aloud without dropping required artifacts.",
-      "Use '-' for Clarifying question unless a missing constraint truly blocks a reliable answer.",
-      "For coding suggestions, put speakable wording in Answer and Approach while preserving Code and Complexity.",
-      "For coding suggestions, keep Answer, Approach, Complexity, and clarifying text in meeting-ready English while 中文思路 remains Chinese.",
-      "Avoid adding new code blocks outside the Code section. Mention complexity only when it is central to the answer.",
-    ];
-  }
-
-  return [
-    "Action goal: manually advance the current active task to the next useful playbook phase.",
-    "Preserve the same active parent task. Do not create a new task, restart the playbook, or repeat generic requirement clarification unless a blocking requirement is truly missing.",
-    "Use <active_meeting_task>, <interview_playbook>, <playbook_phase_state>, and <previous_suggestion> to infer the next useful phase.",
-    "If previous phase information is incomplete, make reasonable assumptions briefly and continue instead of asking a generic setup question.",
-    "For general-system-design or ai-ml-system-design, prefer moving toward architecture, Whiteboard, scale/QPS, metrics, evaluation, reliability, or the next subsystem rather than re-asking scope.",
-    "For project-deep-dive, prefer moving from overview to hard problem, tradeoff, validation/debugging, impact, or lesson.",
-    "For behavioral answers, prefer deepening the selected STAR story with action, tradeoff, impact, or lesson; do not invent a new story.",
-    "For coding suggestions, keep the required screen-task section labels and move toward implementation details, edge cases, correctness proof, or complexity while preserving Code and Complexity.",
-    "For coding suggestions, keep Answer, Approach, Complexity, and clarifying text in meeting-ready English while 中文思路 remains Chinese.",
-    "Keep the active canonical answer profile. Do not change profile because the task was seeded by voice or screen.",
   ];
 }
 
