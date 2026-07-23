@@ -80,6 +80,7 @@ interface SessionRecordingEvent {
     | "active-meeting-task-snapshot"
     | "manual-question-type-correction"
     | "semantic-taxonomy-decision"
+    | "interviewer-intent-semantic-decision"
     | "taxonomy-adjudication-decision"
     | "answer-sufficiency-decision"
     | "capture-lifecycle"
@@ -251,6 +252,24 @@ export interface SessionCompactTraceSummary {
     durationMs?: number;
     cacheHit?: boolean;
     modelVersion?: string;
+    prototypeVersion?: string;
+    calibrationVersion?: string;
+  };
+  interviewerIntentSemantic?: {
+    embeddingStatus?: string;
+    durationMs?: number;
+    cacheHit?: boolean;
+    logicalQuestionUnitId?: string;
+    logicalQuestionUnitRevision?: number;
+    parentId?: string;
+    parentRevision?: number;
+    speechAct?: string;
+    speechActConfidence?: number;
+    relation?: string;
+    relationConfidence?: number;
+    evidenceMode?: string;
+    evidenceModeConfidence?: number;
+    staleResultDropped?: boolean;
     prototypeVersion?: string;
     calibrationVersion?: string;
   };
@@ -1254,6 +1273,66 @@ export class SessionRecordingManager {
     const updated: SessionCompactTraceSummary = {
       ...existing,
       semanticTaxonomy: buildSemanticTaxonomyTraceSummary([metadata]),
+    };
+    session.traceSummaries.set(traceId, updated);
+    this.enqueue(session, async () => {
+      await this.writeJson(
+        session,
+        `traces/${sanitizeFilePart(traceId)}/summary.json`,
+        updated
+      );
+      await this.writeJson(session, "metrics/trace-summaries.latest.json", {
+        version: SESSION_TRACE_SUMMARY_SCHEMA_VERSION,
+        savedAt: Date.now(),
+        sessionId: session.sessionId,
+        traces: Array.from(session.traceSummaries.values()).sort(
+          (left, right) => left.startedAt - right.startedAt
+        ),
+      });
+    });
+  }
+
+  recordInterviewerIntentSemanticDecision({
+    traceId,
+    taskId,
+    metadata,
+  }: {
+    traceId: string;
+    taskId?: string;
+    metadata: Record<string, unknown>;
+  }) {
+    const session = this.getWritableSession({ traceId });
+    if (!session) return;
+    const artifactPath = "intent/semantic-shadow.jsonl";
+    const payload = {
+      recordedAt: Date.now(),
+      sessionId: session.sessionId,
+      traceId,
+      taskId,
+      metadata,
+    };
+    this.enqueue(session, () =>
+      this.writeText(
+        session,
+        artifactPath,
+        `${JSON.stringify(payload)}\n`,
+        true
+      )
+    );
+    this.recordEvent(
+      "interviewer-intent-semantic-decision",
+      metadata,
+      [artifactPath],
+      traceId,
+      taskId
+    );
+
+    const existing = session.traceSummaries.get(traceId);
+    if (!existing) return;
+    const updated: SessionCompactTraceSummary = {
+      ...existing,
+      interviewerIntentSemantic:
+        buildInterviewerIntentSemanticTraceSummary([metadata]),
     };
     session.traceSummaries.set(traceId, updated);
     this.enqueue(session, async () => {
@@ -2281,6 +2360,8 @@ function buildCompactTraceSummary({
       "sentenceBufferMergedTranscriptChars"
     ),
     semanticTaxonomy: buildSemanticTaxonomyTraceSummary(metadataSources),
+    interviewerIntentSemantic:
+      buildInterviewerIntentSemanticTraceSummary(metadataSources),
     taxonomyAdjudication:
       buildTaxonomyAdjudicationTraceSummary(metadataSources),
     answerSufficiency:
@@ -2534,6 +2615,80 @@ function buildSemanticTaxonomyTraceSummary(
     calibrationVersion: readFirstString(
       metadataSources,
       "taxonomySemanticCalibrationVersion"
+    ),
+  };
+}
+
+function buildInterviewerIntentSemanticTraceSummary(
+  metadataSources: Array<Record<string, unknown>>
+): SessionCompactTraceSummary["interviewerIntentSemantic"] {
+  const embeddingStatus = readFirstString(
+    metadataSources,
+    "interviewerIntentSemanticEmbeddingStatus"
+  );
+  const logicalQuestionUnitId = readFirstString(
+    metadataSources,
+    "interviewerIntentSemanticLogicalQuestionUnitId"
+  );
+  if (!embeddingStatus && !logicalQuestionUnitId) return undefined;
+  return {
+    embeddingStatus,
+    durationMs: readFirstNumberFromMetadata(
+      metadataSources,
+      "interviewerIntentSemanticDurationMs"
+    ),
+    cacheHit: readFirstBoolean(
+      metadataSources,
+      "interviewerIntentSemanticCacheHit"
+    ),
+    logicalQuestionUnitId,
+    logicalQuestionUnitRevision: readFirstNumberFromMetadata(
+      metadataSources,
+      "interviewerIntentSemanticLogicalQuestionUnitRevision"
+    ),
+    parentId: readFirstString(
+      metadataSources,
+      "interviewerIntentSemanticParentId"
+    ),
+    parentRevision: readFirstNumberFromMetadata(
+      metadataSources,
+      "interviewerIntentSemanticParentRevision"
+    ),
+    speechAct: readFirstString(
+      metadataSources,
+      "interviewerIntentSemanticSpeechAct"
+    ),
+    speechActConfidence: readFirstNumberFromMetadata(
+      metadataSources,
+      "interviewerIntentSemanticSpeechActConfidence"
+    ),
+    relation: readFirstString(
+      metadataSources,
+      "interviewerIntentSemanticRelation"
+    ),
+    relationConfidence: readFirstNumberFromMetadata(
+      metadataSources,
+      "interviewerIntentSemanticRelationConfidence"
+    ),
+    evidenceMode: readFirstString(
+      metadataSources,
+      "interviewerIntentSemanticEvidenceMode"
+    ),
+    evidenceModeConfidence: readFirstNumberFromMetadata(
+      metadataSources,
+      "interviewerIntentSemanticEvidenceModeConfidence"
+    ),
+    staleResultDropped: readFirstBoolean(
+      metadataSources,
+      "interviewerIntentSemanticStaleResultDropped"
+    ),
+    prototypeVersion: readFirstString(
+      metadataSources,
+      "interviewerIntentSemanticPrototypeVersion"
+    ),
+    calibrationVersion: readFirstString(
+      metadataSources,
+      "interviewerIntentSemanticCalibrationVersion"
     ),
   };
 }

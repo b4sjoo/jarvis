@@ -1,0 +1,23 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "strict": true,
+    "skipLibCheck": true,
+    "outDir": ".tmp-semantic-interviewer-intent-vectors",
+    "rootDir": ".",
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["./src/*"]
+    },
+    "resolveJsonModule": true,
+    "types": ["node"]
+  },
+  "include": [
+    "scripts/generate-semantic-interviewer-intent-vectors.ts",
+    "src/lib/meeting/semantic-taxonomy-model.ts",
+    "src/lib/meeting/semantic-interviewer-intent-prototypes.ts",
+    "model-manifests/*.json"
+  ]
+}

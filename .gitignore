@@ -18,6 +18,7 @@ docs/
 public/models/
 public/transformers-wasm/
 .tmp-semantic-taxonomy-vectors/
+.tmp-semantic-interviewer-intent-vectors/
 .tmp-semantic-taxonomy-evaluation/
 .tmp-semantic-taxonomy-reflection/
 .tmp-answer-sufficiency-semantic-vectors/
