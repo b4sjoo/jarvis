@@ -16,6 +16,7 @@ import {
   TranscriptTurn,
 } from "./types";
 import type { ActiveMeetingTask } from "./active-meeting-task";
+import type { AnswerSufficiencyDecision } from "./answer-sufficiency.js";
 import {
   collectActiveMeetingTaskIdentityIds,
   formatActiveMeetingTaskForRecording,
@@ -29,7 +30,7 @@ import {
 import { serializeMeetingTraceExport } from "./trace.js";
 
 const SESSION_RECORDING_SCHEMA_VERSION = 1;
-const SESSION_TRACE_SUMMARY_SCHEMA_VERSION = 6;
+const SESSION_TRACE_SUMMARY_SCHEMA_VERSION = 7;
 const SESSION_TRACE_INDEX_SCHEMA_VERSION = 1;
 
 interface SessionRecordingStartOptions {
@@ -80,6 +81,7 @@ interface SessionRecordingEvent {
     | "manual-question-type-correction"
     | "semantic-taxonomy-decision"
     | "taxonomy-adjudication-decision"
+    | "answer-sufficiency-decision"
     | "capture-lifecycle"
     | "native-speech-event"
     | "runtime-reset"
@@ -284,6 +286,25 @@ export interface SessionCompactTraceSummary {
     circuitOpen?: boolean;
     circuitReason?: string;
     circuitNewlyOpened?: boolean;
+  };
+  answerSufficiency?: {
+    operationId?: string;
+    detectorVersion?: string;
+    status?: string;
+    contextDefect?: string;
+    recommendedRepair?: string;
+    confidence?: number;
+    lexicalEvidence: string[];
+    semanticPrototypeIds: string[];
+    expectedArtifacts: string[];
+    missingArtifacts: string[];
+    logicalQuestionUnitId?: string;
+    logicalQuestionUnitRevision?: number;
+    answerRevision?: number;
+    contextResolvable?: boolean;
+    contextCandidateKinds: string[];
+    contextCandidateSourceTurnIds: string[];
+    contextDeltaChars?: number;
   };
   personalEvidence?: {
     requirement?: string;
@@ -1305,6 +1326,90 @@ export class SessionRecordingManager {
     });
   }
 
+  recordAnswerSufficiencyDecision({
+    traceId,
+    taskId,
+    decision,
+  }: {
+    traceId: string;
+    taskId?: string;
+    decision: AnswerSufficiencyDecision;
+  }) {
+    const session = this.getWritableSession({ traceId });
+    if (!session) return;
+    const artifactPath = "answer-sufficiency/decisions.jsonl";
+    const metadata = {
+      answerSufficiencyOperationId: decision.operationId,
+      answerSufficiencyDetectorVersion: decision.detectorVersion,
+      answerSufficiencyStatus: decision.answerStatus,
+      answerContextDefect: decision.contextDefect,
+      answerRepairRecommendation: decision.recommendedRepair,
+      answerSufficiencyConfidence: decision.confidence,
+      answerSufficiencyLexicalEvidence: decision.lexicalEvidence,
+      answerSufficiencySemanticPrototypeIds:
+        decision.semanticPrototypeIds,
+      answerExpectedArtifacts: decision.expectedArtifactKinds,
+      answerMissingArtifacts: decision.missingArtifactKinds,
+      answerSufficiencyLogicalQuestionUnitId:
+        decision.logicalQuestionUnitId,
+      answerSufficiencyLogicalQuestionUnitRevision:
+        decision.logicalQuestionUnitRevision,
+      answerSufficiencyAnswerRevision: decision.answerRevision,
+      contextResolvable: decision.resolvableByNearbyContext,
+      contextCandidateKinds: decision.candidateContextKinds,
+      contextCandidateSourceTurnIds:
+        decision.candidateSourceTurnIds,
+      contextDeltaChars: decision.contextDeltaChars,
+    };
+    const payload = {
+      recordedAt: Date.now(),
+      sessionId: session.sessionId,
+      traceId,
+      taskId,
+      decision,
+    };
+    this.enqueue(session, () =>
+      this.writeText(
+        session,
+        artifactPath,
+        `${JSON.stringify(payload)}\n`,
+        true
+      )
+    );
+    this.recordEvent(
+      "answer-sufficiency-decision",
+      metadata,
+      [artifactPath],
+      traceId,
+      taskId
+    );
+
+    const existing = session.traceSummaries.get(traceId);
+    if (!existing) return;
+    const updated: SessionCompactTraceSummary = {
+      ...existing,
+      answerSufficiency: buildAnswerSufficiencyTraceSummary([
+        metadata,
+      ]),
+    };
+    session.traceSummaries.set(traceId, updated);
+    this.enqueue(session, async () => {
+      await this.writeJson(
+        session,
+        `traces/${sanitizeFilePart(traceId)}/summary.json`,
+        updated
+      );
+      await this.writeJson(session, "metrics/trace-summaries.latest.json", {
+        version: SESSION_TRACE_SUMMARY_SCHEMA_VERSION,
+        savedAt: Date.now(),
+        sessionId: session.sessionId,
+        traces: Array.from(session.traceSummaries.values()).sort(
+          (left, right) => left.startedAt - right.startedAt
+        ),
+      });
+    });
+  }
+
   recordCaptureLifecycle(metadata: Record<string, unknown>) {
     if (!this.getWritableSession()) return;
     this.recordEvent("capture-lifecycle", metadata);
@@ -2162,6 +2267,8 @@ function buildCompactTraceSummary({
     semanticTaxonomy: buildSemanticTaxonomyTraceSummary(metadataSources),
     taxonomyAdjudication:
       buildTaxonomyAdjudicationTraceSummary(metadataSources),
+    answerSufficiency:
+      buildAnswerSufficiencyTraceSummary(metadataSources),
     personalEvidence: {
       requirement: readFirstString(
         metadataSources,
@@ -2411,6 +2518,85 @@ function buildSemanticTaxonomyTraceSummary(
     calibrationVersion: readFirstString(
       metadataSources,
       "taxonomySemanticCalibrationVersion"
+    ),
+  };
+}
+
+function buildAnswerSufficiencyTraceSummary(
+  metadataSources: Array<Record<string, unknown>>
+): SessionCompactTraceSummary["answerSufficiency"] {
+  const status = readFirstString(
+    metadataSources,
+    "answerSufficiencyStatus"
+  );
+  const operationId = readFirstString(
+    metadataSources,
+    "answerSufficiencyOperationId"
+  );
+  if (!status && !operationId) return undefined;
+
+  return {
+    operationId,
+    detectorVersion: readFirstString(
+      metadataSources,
+      "answerSufficiencyDetectorVersion"
+    ),
+    status,
+    contextDefect: readFirstString(
+      metadataSources,
+      "answerContextDefect"
+    ),
+    recommendedRepair: readFirstString(
+      metadataSources,
+      "answerRepairRecommendation"
+    ),
+    confidence: readFirstNumberFromMetadata(
+      metadataSources,
+      "answerSufficiencyConfidence"
+    ),
+    lexicalEvidence: readFirstStringList(
+      metadataSources,
+      "answerSufficiencyLexicalEvidence"
+    ),
+    semanticPrototypeIds: readFirstStringList(
+      metadataSources,
+      "answerSufficiencySemanticPrototypeIds"
+    ),
+    expectedArtifacts: readFirstStringList(
+      metadataSources,
+      "answerExpectedArtifacts"
+    ),
+    missingArtifacts: readFirstStringList(
+      metadataSources,
+      "answerMissingArtifacts"
+    ),
+    logicalQuestionUnitId: readFirstString(
+      metadataSources,
+      "answerSufficiencyLogicalQuestionUnitId"
+    ),
+    logicalQuestionUnitRevision: readFirstNumberFromMetadata(
+      metadataSources,
+      "answerSufficiencyLogicalQuestionUnitRevision"
+    ),
+    answerRevision: readFirstNumberFromMetadata(
+      metadataSources,
+      "answerSufficiencyAnswerRevision"
+    ),
+    contextResolvable: readFirstBoolean(
+      metadataSources,
+      "contextResolvable"
+    ),
+    contextCandidateKinds: readFirstStringList(
+      metadataSources,
+      "contextCandidateKinds"
+    ),
+    contextCandidateSourceTurnIds: readFirstStringList(
+      metadataSources,
+      "contextCandidateSourceTurnIds"
+    ),
+    contextDeltaChars: readFirstNumberFromMetadata(
+      metadataSources,
+      "contextDeltaChars"
     ),
   };
 }

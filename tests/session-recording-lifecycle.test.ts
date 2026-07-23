@@ -325,6 +325,79 @@ test("late semantic shadow evidence stays joinable after trace export", async ()
   await manager.stop("test-complete");
 });
 
+test("answer sufficiency decisions remain joinable after trace export", async () => {
+  const native = new ControlledRecordingInvoke();
+  const manager = new SessionRecordingManager(undefined, native.invoke);
+  await manager.start(START_OPTIONS);
+  await settle();
+
+  manager.recordTrace(
+    buildCompletedTrace("answer_sufficiency_trace", Date.now()),
+    "manual"
+  );
+  await settle();
+  manager.recordAnswerSufficiencyDecision({
+    traceId: "answer_sufficiency_trace",
+    taskId: "task_1",
+    decision: {
+      schemaVersion: 1,
+      detectorVersion: "answer-sufficiency-lexical-v1",
+      operationId: "answer-sufficiency:trace",
+      traceId: "answer_sufficiency_trace",
+      questionId: "question_1",
+      logicalQuestionUnitId: "lqu_1",
+      logicalQuestionUnitRevision: 2,
+      answerRevision: 3,
+      answerStatus: "context-insufficient",
+      contextDefect: "missing-antecedent",
+      recommendedRepair: "enhance",
+      confidence: 0.97,
+      lexicalEvidence: ["missing-original-problem"],
+      semanticPrototypeIds: [],
+      expectedArtifactKinds: ["code"],
+      missingArtifactKinds: ["code"],
+      resolvableByNearbyContext: true,
+      candidateContextKinds: ["recent-dialogue"],
+      candidateSourceTurnIds: ["turn_1"],
+      contextDeltaChars: 180,
+      createdAt: Date.now(),
+    },
+  });
+  await settle();
+
+  const decisionWrite = native.calls.find(
+    (call) =>
+      call.command === "write_meeting_session_recording_text" &&
+      stringArg(call, "relativePath") ===
+        "answer-sufficiency/decisions.jsonl"
+  );
+  assert.ok(decisionWrite);
+  assert.match(
+    stringArg(decisionWrite, "payload"),
+    /context-insufficient/
+  );
+
+  const summaryWrites = native.calls.filter(
+    (call) =>
+      call.command === "write_meeting_session_recording_text" &&
+      stringArg(call, "relativePath") ===
+        "traces/answer_sufficiency_trace/summary.json"
+  );
+  const latestSummary = summaryWrites[summaryWrites.length - 1];
+  assert.ok(latestSummary);
+  const summary = parsePayload(latestSummary);
+  assert.equal(
+    (summary.answerSufficiency as Record<string, unknown>).status,
+    "context-insufficient"
+  );
+  assert.equal(
+    (summary.answerSufficiency as Record<string, unknown>).contextResolvable,
+    true
+  );
+
+  await manager.stop("test-complete");
+});
+
 test("late LLM taxonomy adjudication stays joinable after trace export", async () => {
   const native = new ControlledRecordingInvoke();
   const manager = new SessionRecordingManager(undefined, native.invoke);
@@ -462,7 +535,7 @@ test("compact trace summaries preserve task boundary and cross-domain evidence",
   );
   assert.ok(summaryWrite);
   const summary = parsePayload(summaryWrite);
-  assert.equal(summary.version, 6);
+  assert.equal(summary.version, 7);
   assert.equal(summary.taskRelation, "new-parent");
   assert.deepEqual(summary.logicalQuestionSourceTurnIds, ["turn_1", "turn_2"]);
   assert.deepEqual(summary.logicalQuestionCompositionReasons, [

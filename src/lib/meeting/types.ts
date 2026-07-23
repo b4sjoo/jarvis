@@ -1208,6 +1208,32 @@ export interface ForceAdviseTargetPresentation {
   updatedAt: number;
 }
 
+export type AnswerSufficiencyHumanLabel =
+  | "sufficient"
+  | "insufficient";
+
+export type ExpectedContextRepair =
+  | "none"
+  | "narrow"
+  | "enhance"
+  | "buffer"
+  | "ignore"
+  | "wait"
+  | "manual-clarification";
+
+export interface AnswerSufficiencyHumanEvaluation {
+  observedStatus?: AnswerSufficiencyHumanLabel;
+  defect?: string;
+  nearbyContextExisted?: boolean;
+  expectedRepair?: ExpectedContextRepair;
+  expectedContextKinds: string[];
+  repairHelpful?: boolean;
+  repairTimely?: boolean;
+  staleContextIntroduced?: boolean;
+  operationId?: string;
+  answerRevision?: number;
+}
+
 export interface QuestionHumanEvaluation {
   id: string;
   sessionId?: string;
@@ -1254,6 +1280,7 @@ export interface QuestionHumanEvaluation {
   answer: HumanEvaluationVerdictBlock;
   taxonomyAdjudication?: TaxonomyAdjudicationHumanEvaluation;
   advisorIntent?: AdvisorIntentHumanEvaluation;
+  answerSufficiency?: AnswerSufficiencyHumanEvaluation;
   memoryRetrievalSnapshot?: MemoryRetrievalEvaluationSnapshot;
   memoryEntryLabels: MemoryEntryEvaluationLabel[];
   missingExpectedMemory: MissingExpectedMemoryLabel[];

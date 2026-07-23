@@ -4912,6 +4912,11 @@ export function useMeetingAssistant() {
             answerSufficiencyDecision
           )
         );
+        sessionRecordingManagerRef.current?.recordAnswerSufficiencyDecision({
+          traceId,
+          taskId: activeMeetingTaskId,
+          decision: answerSufficiencyDecision,
+        });
       }
 
       let contextState = contextManagerRef.current.getState();
@@ -9148,6 +9153,11 @@ export function useMeetingAssistant() {
               answerSufficiencyDecision
             )
           );
+          sessionRecordingManagerRef.current?.recordAnswerSufficiencyDecision({
+            traceId: trace.id,
+            taskId: sufficiencyMeetingContext.activeMeetingTask?.id,
+            decision: answerSufficiencyDecision,
+          });
         }
 
         traceStoreRef.current.finishStep(trace.id, modelStepId, "success", {

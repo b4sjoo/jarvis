@@ -405,6 +405,10 @@ export function upsertQuestionHumanEvaluation(
       existing?.advisorIntent,
       patch.advisorIntent
     ),
+    answerSufficiency: mergeAnswerSufficiencyEvaluation(
+      existing?.answerSufficiency,
+      patch.answerSufficiency
+    ),
     memoryRetrievalSnapshot:
       normalizeMemoryRetrievalEvaluationSnapshot(
         patch.memoryRetrievalSnapshot
@@ -737,6 +741,9 @@ function normalizeQuestionHumanEvaluation(
       candidate.taxonomyAdjudication
     ),
     advisorIntent: normalizeAdvisorIntentEvaluation(candidate.advisorIntent),
+    answerSufficiency: normalizeAnswerSufficiencyEvaluation(
+      candidate.answerSufficiency
+    ),
     memoryRetrievalSnapshot: normalizeMemoryRetrievalEvaluationSnapshot(
       candidate.memoryRetrievalSnapshot
     ),
@@ -783,6 +790,75 @@ function mergeAdvisorIntentEvaluation(
             ...existing.preDecision,
             ...patch.preDecision,
           }
+        : undefined,
+  };
+}
+
+function mergeAnswerSufficiencyEvaluation(
+  existing: QuestionHumanEvaluation["answerSufficiency"],
+  patch: QuestionHumanEvaluation["answerSufficiency"]
+): QuestionHumanEvaluation["answerSufficiency"] {
+  if (!existing && !patch) return undefined;
+  if (!existing) return patch;
+  if (!patch) return existing;
+  return {
+    ...existing,
+    ...patch,
+    expectedContextKinds: uniqueStrings([
+      ...existing.expectedContextKinds,
+      ...patch.expectedContextKinds,
+    ]),
+  };
+}
+
+function normalizeAnswerSufficiencyEvaluation(
+  value: unknown
+): QuestionHumanEvaluation["answerSufficiency"] {
+  if (!value || typeof value !== "object") return undefined;
+  const candidate = value as Record<string, unknown>;
+  const observedStatus =
+    candidate.observedStatus === "sufficient" ||
+    candidate.observedStatus === "insufficient"
+      ? candidate.observedStatus
+      : undefined;
+  const expectedRepair =
+    candidate.expectedRepair === "none" ||
+    candidate.expectedRepair === "narrow" ||
+    candidate.expectedRepair === "enhance" ||
+    candidate.expectedRepair === "buffer" ||
+    candidate.expectedRepair === "ignore" ||
+    candidate.expectedRepair === "wait" ||
+    candidate.expectedRepair === "manual-clarification"
+      ? candidate.expectedRepair
+      : undefined;
+
+  return {
+    observedStatus,
+    defect: readOptionalString(candidate.defect),
+    nearbyContextExisted:
+      typeof candidate.nearbyContextExisted === "boolean"
+        ? candidate.nearbyContextExisted
+        : undefined,
+    expectedRepair,
+    expectedContextKinds: Array.isArray(candidate.expectedContextKinds)
+      ? uniqueStrings(candidate.expectedContextKinds.map(readOptionalString))
+      : [],
+    repairHelpful:
+      typeof candidate.repairHelpful === "boolean"
+        ? candidate.repairHelpful
+        : undefined,
+    repairTimely:
+      typeof candidate.repairTimely === "boolean"
+        ? candidate.repairTimely
+        : undefined,
+    staleContextIntroduced:
+      typeof candidate.staleContextIntroduced === "boolean"
+        ? candidate.staleContextIntroduced
+        : undefined,
+    operationId: readOptionalString(candidate.operationId),
+    answerRevision:
+      typeof candidate.answerRevision === "number"
+        ? candidate.answerRevision
         : undefined,
   };
 }

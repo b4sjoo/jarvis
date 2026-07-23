@@ -4002,6 +4002,18 @@ const TraceHumanEvaluationPanel = ({
   const failureReasons = evaluation?.failureReasons ?? [];
   const [missingMemoryNote, setMissingMemoryNote] = useState("");
   const memoryEntries = memorySnapshot.snapshot?.entries ?? [];
+  const answerSufficiencyStatus =
+    typeof trace.metadata?.answerSufficiencyStatus === "string"
+      ? trace.metadata.answerSufficiencyStatus
+      : undefined;
+  const answerSufficiencyRepair =
+    typeof trace.metadata?.answerRepairRecommendation === "string"
+      ? trace.metadata.answerRepairRecommendation
+      : undefined;
+  const answerSufficiencyContextResolvable =
+    typeof trace.metadata?.contextResolvable === "boolean"
+      ? trace.metadata.contextResolvable
+      : undefined;
 
   const toggleFailureReason = (reason: HumanEvalFailureReason) => {
     onUpdate({
@@ -4084,6 +4096,29 @@ const TraceHumanEvaluationPanel = ({
             ? "manual-suppress"
             : "explicit-human-label",
       }),
+    });
+  };
+
+  const updateAnswerSufficiencyEvaluation = (
+    patch: Partial<
+      NonNullable<QuestionHumanEvaluation["answerSufficiency"]>
+    >
+  ) => {
+    onUpdateQuestion({
+      answerSufficiency: {
+        expectedContextKinds:
+          questionEvaluation?.answerSufficiency?.expectedContextKinds ?? [],
+        operationId:
+          typeof trace.metadata?.answerSufficiencyOperationId === "string"
+            ? trace.metadata.answerSufficiencyOperationId
+            : undefined,
+        answerRevision:
+          typeof trace.metadata?.answerSufficiencyAnswerRevision === "number"
+            ? trace.metadata.answerSufficiencyAnswerRevision
+            : undefined,
+        ...questionEvaluation?.answerSufficiency,
+        ...patch,
+      },
     });
   };
 
@@ -4308,6 +4343,122 @@ const TraceHumanEvaluationPanel = ({
                 </Button>
               </div>
             ) : null}
+          </div>
+        ) : null}
+        {answerSufficiencyStatus ? (
+          <div className="rounded-sm border border-border/60 p-2">
+            <div className="text-[10px] font-medium uppercase text-muted-foreground">
+              Answer sufficiency
+            </div>
+            <div className="mt-1 font-mono text-[10px] text-muted-foreground">
+              {answerSufficiencyStatus}
+              {answerSufficiencyRepair
+                ? ` / ${answerSufficiencyRepair}`
+                : ""}
+              {typeof answerSufficiencyContextResolvable === "boolean"
+                ? answerSufficiencyContextResolvable
+                  ? " / nearby context found"
+                  : " / no new nearby context"
+                : ""}
+            </div>
+            <div className="mt-2 flex flex-wrap gap-1">
+              {(["sufficient", "insufficient"] as const).map((status) => (
+                <Button
+                  key={status}
+                  size="sm"
+                  variant={
+                    questionEvaluation?.answerSufficiency
+                      ?.observedStatus === status
+                      ? "default"
+                      : "outline"
+                  }
+                  className="h-6 px-2 text-[10px]"
+                  onClick={() =>
+                    updateAnswerSufficiencyEvaluation({
+                      observedStatus: status,
+                    })
+                  }
+                >
+                  {status === "sufficient"
+                    ? "Answer sufficient"
+                    : "Answer insufficient"}
+                </Button>
+              ))}
+            </div>
+            <div className="mt-2 flex flex-wrap gap-1">
+              <Button
+                size="sm"
+                variant={
+                  questionEvaluation?.answerSufficiency
+                    ?.nearbyContextExisted === true
+                    ? "default"
+                    : "outline"
+                }
+                className="h-6 px-2 text-[10px]"
+                onClick={() =>
+                  updateAnswerSufficiencyEvaluation({
+                    nearbyContextExisted: true,
+                  })
+                }
+              >
+                Context existed
+              </Button>
+              <Button
+                size="sm"
+                variant={
+                  questionEvaluation?.answerSufficiency
+                    ?.nearbyContextExisted === false
+                    ? "default"
+                    : "outline"
+                }
+                className="h-6 px-2 text-[10px]"
+                onClick={() =>
+                  updateAnswerSufficiencyEvaluation({
+                    nearbyContextExisted: false,
+                  })
+                }
+              >
+                No nearby context
+              </Button>
+            </div>
+            <div className="mt-2">
+              <div className="mb-1 text-[10px] text-muted-foreground">
+                Expected repair
+              </div>
+              <div className="flex flex-wrap gap-1">
+                {[
+                  "none",
+                  "narrow",
+                  "enhance",
+                  "buffer",
+                  "ignore",
+                  "wait",
+                  "manual-clarification",
+                ].map((repair) => (
+                  <Button
+                    key={repair}
+                    size="sm"
+                    variant={
+                      questionEvaluation?.answerSufficiency
+                        ?.expectedRepair === repair
+                        ? "default"
+                        : "outline"
+                    }
+                    className="h-6 px-2 text-[10px]"
+                    onClick={() =>
+                      updateAnswerSufficiencyEvaluation({
+                        expectedRepair:
+                          repair as NonNullable<
+                            QuestionHumanEvaluation["answerSufficiency"]
+                          >["expectedRepair"],
+                      })
+                    }
+                  >
+                    {repair}
+                  </Button>
+                ))}
+              </div>
+            </div>
           </div>
         ) : null}
         <div>

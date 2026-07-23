@@ -229,6 +229,50 @@ test("merges question-level LLM taxonomy adjudication labels", () => {
   });
 });
 
+test("merges answer sufficiency labels without dropping context-source evidence", () => {
+  const first = upsertQuestionHumanEvaluation(
+    [],
+    {
+      traceId: "trace_sufficiency",
+      traceKind: "voice",
+      questionId: "question_sufficiency",
+    },
+    {
+      answerSufficiency: {
+        observedStatus: "insufficient",
+        nearbyContextExisted: true,
+        expectedRepair: "enhance",
+        expectedContextKinds: ["recent-dialogue"],
+        operationId: "answer-sufficiency:trace_sufficiency",
+        answerRevision: 1,
+      },
+    }
+  );
+  const updated = upsertQuestionHumanEvaluation(
+    first,
+    {
+      traceId: "trace_sufficiency",
+      traceKind: "voice",
+      questionId: "question_sufficiency",
+    },
+    {
+      answerSufficiency: {
+        expectedRepair: "narrow",
+        expectedContextKinds: ["parent-capsule"],
+        staleContextIntroduced: true,
+      },
+    }
+  );
+
+  assert.equal(updated[0].answerSufficiency?.observedStatus, "insufficient");
+  assert.equal(updated[0].answerSufficiency?.expectedRepair, "narrow");
+  assert.equal(updated[0].answerSufficiency?.staleContextIntroduced, true);
+  assert.deepEqual(updated[0].answerSufficiency?.expectedContextKinds, [
+    "recent-dialogue",
+    "parent-capsule",
+  ]);
+});
+
 test("persists trace-bound memory evidence with a question evaluation", () => {
   const evaluations = upsertQuestionHumanEvaluation(
     [],
