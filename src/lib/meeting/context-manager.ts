@@ -360,10 +360,14 @@ export class MeetingContextManager {
     const latestTurn =
       this.state.transcriptTurns[this.state.transcriptTurns.length - 1];
     const activeMeetingTask = this.buildActiveMeetingTask();
+    const promptTranscriptTurns = this.getPromptTranscriptTurns(
+      activeMeetingTask?.parent.promptTranscriptStartTurnId
+    );
 
     return {
-      transcript: this.formatTranscript(
-        activeMeetingTask?.parent.promptTranscriptStartTurnId
+      transcript: this.formatTranscriptTurns(promptTranscriptTurns),
+      advisorPromptSourceTurnIds: promptTranscriptTurns.map(
+        (turn) => turn.id
       ),
       screenContext: this.formatScreenContext(),
       interviewSessionBrief: cloneInterviewSessionBrief(
@@ -406,7 +410,7 @@ export class MeetingContextManager {
     return turns.filter((turn) => turn.endedAt >= cutoff);
   }
 
-  private formatTranscript(promptTranscriptStartTurnId?: string) {
+  private getPromptTranscriptTurns(promptTranscriptStartTurnId?: string) {
     const boundaryIndex = promptTranscriptStartTurnId
       ? this.state.transcriptTurns.findIndex(
           (turn) => turn.id === promptTranscriptStartTurnId
@@ -417,8 +421,11 @@ export class MeetingContextManager {
         ? this.state.transcriptTurns.slice(boundaryIndex)
         : this.state.transcriptTurns;
 
-    return scopedTurns
-      .filter(shouldIncludeTurnInAdvisorPrompt)
+    return scopedTurns.filter(shouldIncludeTurnInAdvisorPrompt);
+  }
+
+  private formatTranscriptTurns(turns: TranscriptTurn[]) {
+    return turns
       .map((turn) => {
         const speaker =
           turn.speaker === "me" ? "Me (clarification)" : "Them";

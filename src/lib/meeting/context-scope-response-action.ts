@@ -519,6 +519,9 @@ function buildSafePromptContext(input: {
     transcript: transcriptCandidates
       .map((candidate) => candidate.text)
       .join("\n\n"),
+    advisorPromptSourceTurnIds: uniqueStrings(
+      transcriptCandidates.flatMap((candidate) => candidate.turnIds)
+    ),
     screenContext: screenOwned
       ? currentQuestionCandidate?.text ?? ""
       : "",

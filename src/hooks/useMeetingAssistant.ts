@@ -106,6 +106,7 @@ import {
   captureScreenObservation,
   createInterviewSessionContextFromBrief,
   createMeetingId,
+  detectAnswerSufficiencyShadow,
   detectInterviewCompany,
   calculateWordEquivalent,
   classifyMeTurn,
@@ -131,6 +132,7 @@ import {
   parseNativeAudioSegmentDroppedEvent,
   buildMemoryEvaluationTraceMetadata,
   formatMeetingAnswerTraceMetadata,
+  formatAnswerSufficiencyDecisionForTrace,
   parseMeetingAnswer,
   parseMeetingTraceMetrics,
   resolveMeetingAnswerProfile,
@@ -185,6 +187,7 @@ import {
   decideSentenceCompletion,
   composeLogicalQuestionUnit,
   composeContextScopeAdvisorPromptContext,
+  evaluateAnswerContextResolvabilityShadow,
   createPlaybookPhaseHistoryState,
   appendCommittedAutomaticPhaseTransition,
   appendCommittedManualBackPhaseTransition,
@@ -1100,6 +1103,118 @@ function resolveResponseActionLogicalQuestionUnit(input: {
   return currentIsValid ? current : undefined;
 }
 
+function evaluateRuntimeAnswerSufficiencyShadow(input: {
+  traceId: string;
+  questionId: string;
+  logicalQuestionUnit: LogicalQuestionUnit;
+  answerRevision: number;
+  questionType: CanonicalQuestionType;
+  answerProfile?: ReturnType<typeof resolveMeetingAnswerProfile>;
+  parsedAnswer: ParsedMeetingAnswer;
+  factAnchorRequired: boolean;
+  factAnchorAvailable: boolean;
+  currentTurnAction?: "answer" | "append-context" | "buffer" | "ignore";
+  relation?: InterviewTaskRelation;
+  meetingContext: MeetingContextState;
+  basePromptContext: AdvisorPromptContext;
+  originalModelPromptText: string;
+}) {
+  const initialDecision = detectAnswerSufficiencyShadow({
+    operationId: `answer-sufficiency:${input.traceId}`,
+    traceId: input.traceId,
+    questionId: input.questionId,
+    logicalQuestionUnitId: input.logicalQuestionUnit.id,
+    logicalQuestionUnitRevision: input.logicalQuestionUnit.revision,
+    answerRevision: input.answerRevision,
+    questionText: input.logicalQuestionUnit.normalizedText,
+    questionType: input.questionType,
+    answerProfile: input.answerProfile,
+    parsedAnswer: input.parsedAnswer,
+    executionStatus: "success",
+    factAnchorRequired: input.factAnchorRequired,
+    factAnchorAvailable: input.factAnchorAvailable,
+    currentTurnAction: input.currentTurnAction,
+  });
+  if (initialDecision.answerStatus !== "context-insufficient") {
+    return initialDecision;
+  }
+
+  const selection = composeContextScopeAdvisorPromptContext({
+    action: "enhance-context",
+    baseContext: input.basePromptContext,
+    logicalQuestionUnit: input.logicalQuestionUnit,
+    meetingContext: input.meetingContext,
+    activeMeetingTask: input.meetingContext.activeMeetingTask,
+    questionRelation:
+      input.relation === "new-parent"
+        ? "independent-new-question"
+        : input.relation === "child-probe" ||
+            input.relation === "resume-parent"
+          ? "referential-follow-up"
+          : input.relation === "followup-parent"
+            ? "continuation"
+            : "unknown",
+  });
+  const sourceTextByTurnId = Object.fromEntries(
+    input.meetingContext.transcriptTurns.map((turn) => [turn.id, turn.text])
+  );
+  return evaluateAnswerContextResolvabilityShadow({
+    decision: initialDecision,
+    selection,
+    questionType: input.questionType,
+    activeParentQuestionType: normalizeCanonicalQuestionType(
+      input.meetingContext.activeMeetingTask?.parent.questionType
+    ),
+    originalSourceTurnIds:
+      input.basePromptContext.advisorPromptSourceTurnIds,
+    originalContextText: input.originalModelPromptText,
+    sourceTextByTurnId,
+  });
+}
+
+function mapAdvisorTurnActionToSufficiencyAction(
+  action: AdvisorTurnIntentDecision["action"] | undefined
+) {
+  if (action === "answer-refresh") return "answer" as const;
+  if (action === "append-only" || action === "state-update") {
+    return "append-context" as const;
+  }
+  if (action === "ignore") return "ignore" as const;
+  return undefined;
+}
+
+function buildScreenAnswerSufficiencyLogicalQuestionUnit(input: {
+  observationId: string;
+  question: string;
+  sessionId: string;
+  runtimeEpoch: number;
+  createdAt: number;
+}): LogicalQuestionUnit {
+  const sourceId = `screen:${input.observationId}`;
+  return {
+    id: `screen-answer-sufficiency:${input.observationId}`,
+    revision: 1,
+    sessionId: input.sessionId,
+    runtimeEpoch: input.runtimeEpoch,
+    currentTurnId: sourceId,
+    sourceTurnIds: [],
+    sources: [
+      {
+        turnId: sourceId,
+        text: input.question,
+        startedAt: input.createdAt,
+        endedAt: input.createdAt,
+      },
+    ],
+    normalizedText: input.question,
+    startedAt: input.createdAt,
+    updatedAt: input.createdAt,
+    compositionReasons: ["visible-screen-question"],
+    boundaryReason: "visible-screen-question",
+    truncated: false,
+  };
+}
+
 function isPersonalEvidenceGuardrailMode(
   value: unknown
 ): value is PersonalEvidenceGuardrailMode {
@@ -1296,6 +1411,7 @@ export function useMeetingAssistant() {
   const logicalQuestionUnitRef = useRef<LogicalQuestionUnit | undefined>(
     undefined
   );
+  const answerRevisionByQuestionRef = useRef(new Map<string, number>());
   const playbookPhaseHistoryRef = useRef(
     createPlaybookPhaseHistoryState()
   );
@@ -1671,6 +1787,7 @@ export function useMeetingAssistant() {
     manualCorrectionRevisionRef.current = 0;
     adjacentQuestionScopeRef.current = null;
     logicalQuestionUnitRef.current = undefined;
+    answerRevisionByQuestionRef.current.clear();
     playbookPhaseHistoryRef.current = createPlaybookPhaseHistoryState();
     pendingInterviewSectionHintRef.current = undefined;
     cancelledAdvisorTurnIdsRef.current.clear();
@@ -3462,6 +3579,10 @@ export function useMeetingAssistant() {
           ]
             .filter(Boolean)
             .join("\n"),
+          advisorPromptSourceTurnIds: [
+            ...(basePromptContext.advisorPromptSourceTurnIds ?? []),
+            options.promptTurnOverride.id,
+          ],
           latestTurn: options.promptTurnOverride,
         }
       : basePromptContext;
@@ -4567,6 +4688,7 @@ export function useMeetingAssistant() {
     };
 
     let finalContent = "";
+    let advisorModelPromptText = "";
 
     try {
       for await (const event of advisorEngineRef.current.streamSuggestion({
@@ -4584,6 +4706,10 @@ export function useMeetingAssistant() {
         trace: traceId
           ? {
               onRequest: (input) => {
+                advisorModelPromptText = formatTraceModelInput(
+                  input.systemPrompt,
+                  input.userMessage
+                );
                 const advisorPromptIncludedLogicalQuestion =
                   doesAdvisorPromptContainLogicalQuestion(
                     input.userMessage,
@@ -4597,7 +4723,7 @@ export function useMeetingAssistant() {
                 traceStoreRef.current.recordInput(
                   traceId,
                   "advisor model input",
-                  formatTraceModelInput(input.systemPrompt, input.userMessage),
+                  advisorModelPromptText,
                   {
                     providerId: input.providerId,
                     mode: input.mode,
@@ -4614,10 +4740,7 @@ export function useMeetingAssistant() {
                   traceId,
                   taskId: activeMeetingTaskId,
                   label: "advisor model input",
-                  value: formatTraceModelInput(
-                    input.systemPrompt,
-                    input.userMessage
-                  ),
+                  value: advisorModelPromptText,
                   metadata: {
                     providerId: input.providerId,
                     mode: input.mode,
@@ -4748,6 +4871,47 @@ export function useMeetingAssistant() {
           traceStoreRef.current.finishTrace(traceId, "success");
         }
         return;
+      }
+
+      if (traceId && advisorJob.logicalQuestionUnit) {
+        const sufficiencyMeetingContext =
+          contextManagerRef.current.getState();
+        const canonicalAdvisorQuestionType =
+          normalizeCanonicalQuestionType(advisorQuestionType) ?? "unknown";
+        const answerQuestionId =
+          questionLineage?.questionInstanceId ??
+          advisorJob.logicalQuestionUnit.id;
+        const answerRevision =
+          (answerRevisionByQuestionRef.current.get(answerQuestionId) ?? 0) + 1;
+        answerRevisionByQuestionRef.current.set(
+          answerQuestionId,
+          answerRevision
+        );
+        const answerSufficiencyDecision =
+          evaluateRuntimeAnswerSufficiencyShadow({
+            traceId,
+            questionId: answerQuestionId,
+            logicalQuestionUnit: advisorJob.logicalQuestionUnit,
+            answerRevision,
+            questionType: canonicalAdvisorQuestionType,
+            answerProfile: advisorAnswerProfile,
+            parsedAnswer: parsedMeetingAnswer,
+            factAnchorRequired: factAnchorDecision.requiredFor !== "none",
+            factAnchorAvailable: factAnchorDecision.state !== "no-anchor",
+            currentTurnAction: mapAdvisorTurnActionToSufficiencyAction(
+              inferredTurnIntentDecision?.action
+            ),
+            relation: advisorTaskSignals.taskRelation,
+            meetingContext: sufficiencyMeetingContext,
+            basePromptContext: promptContext,
+            originalModelPromptText: advisorModelPromptText,
+          });
+        traceStoreRef.current.updateMetadata(
+          traceId,
+          formatAnswerSufficiencyDecisionForTrace(
+            answerSufficiencyDecision
+          )
+        );
       }
 
       let contextState = contextManagerRef.current.getState();
@@ -8139,6 +8303,7 @@ export function useMeetingAssistant() {
       let captureStepId: string | undefined;
       let preflightStepId: string | undefined;
       let modelStepId: string | undefined;
+      let screenModelPromptText = "";
       const readScreenAuthorization = () =>
         authorizeRuntimeCommit({
           token: screenRuntimeToken,
@@ -8806,10 +8971,14 @@ export function useMeetingAssistant() {
             requestOptions: screenModelRequestOptions,
             trace: {
               onRequest: (input) => {
+                screenModelPromptText = formatTraceModelInput(
+                  input.systemPrompt,
+                  input.userMessage
+                );
                 traceStoreRef.current.recordInput(
                   trace.id,
                   "screen model input",
-                  formatTraceModelInput(input.systemPrompt, input.userMessage),
+                  screenModelPromptText,
                   {
                     providerId: input.providerId,
                     mode: input.mode,
@@ -8824,10 +8993,7 @@ export function useMeetingAssistant() {
                 sessionRecordingManagerRef.current?.recordModelInput({
                   traceId: trace.id,
                   label: "screen model input",
-                  value: formatTraceModelInput(
-                    input.systemPrompt,
-                    input.userMessage
-                  ),
+                  value: screenModelPromptText,
                   metadata: {
                     providerId: input.providerId,
                     mode: input.mode,
@@ -8931,6 +9097,58 @@ export function useMeetingAssistant() {
           trace.id,
           screenMeetingAnswerMetadata
         );
+        const screenQuestionForSufficiency =
+          screenPreflight?.question?.trim() ??
+          observation.captureTarget?.title?.trim() ??
+          "";
+        if (screenQuestionForSufficiency) {
+          const sufficiencyMeetingContext =
+            contextManagerRef.current.getState();
+          const canonicalScreenQuestionType =
+            normalizeCanonicalQuestionType(taskKind) ?? "unknown";
+          const screenLogicalQuestionUnit =
+            buildScreenAnswerSufficiencyLogicalQuestionUnit({
+              observationId: observation.id,
+              question: screenQuestionForSufficiency,
+              sessionId: sufficiencyMeetingContext.sessionId,
+              runtimeEpoch: runtimeEpochRef.current,
+              createdAt: observation.capturedAt,
+            });
+          const answerRevision =
+            (answerRevisionByQuestionRef.current.get(
+              screenLogicalQuestionUnit.id
+            ) ?? 0) + 1;
+          answerRevisionByQuestionRef.current.set(
+            screenLogicalQuestionUnit.id,
+            answerRevision
+          );
+          const answerSufficiencyDecision =
+            evaluateRuntimeAnswerSufficiencyShadow({
+              traceId: trace.id,
+              questionId: screenLogicalQuestionUnit.id,
+              logicalQuestionUnit: screenLogicalQuestionUnit,
+              answerRevision,
+              questionType: canonicalScreenQuestionType,
+              answerProfile: resolveMeetingAnswerProfile(taskKind),
+              parsedAnswer: parsedScreenMeetingAnswer,
+              factAnchorRequired:
+                screenFactAnchorDecision.requiredFor !== "none",
+              factAnchorAvailable:
+                screenFactAnchorDecision.state !== "no-anchor",
+              currentTurnAction: "answer",
+              relation: provisionalScreenTaskRelation,
+              meetingContext: sufficiencyMeetingContext,
+              basePromptContext:
+                contextManagerRef.current.buildAdvisorPromptContext(),
+              originalModelPromptText: screenModelPromptText,
+            });
+          traceStoreRef.current.updateMetadata(
+            trace.id,
+            formatAnswerSufficiencyDecisionForTrace(
+              answerSufficiencyDecision
+            )
+          );
+        }
 
         traceStoreRef.current.finishStep(trace.id, modelStepId, "success", {
           outputChars: screenTaskContent.length,

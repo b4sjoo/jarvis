@@ -1,4 +1,5 @@
 import type { CanonicalQuestionType } from "./task-taxonomy.js";
+import type { ContextScopeResponseActionResult } from "./context-scope-response-action.js";
 import type {
   MeetingAnswerProfile,
   ParsedMeetingAnswer,
@@ -55,6 +56,7 @@ export interface AnswerSufficiencyDecision {
   resolvableByNearbyContext: boolean;
   candidateContextKinds: string[];
   candidateSourceTurnIds: string[];
+  contextDeltaChars: number;
   createdAt: number;
 }
 
@@ -105,6 +107,7 @@ export function detectAnswerSufficiencyShadow(
     resolvableByNearbyContext: false,
     candidateContextKinds: [] as string[],
     candidateSourceTurnIds: [] as string[],
+    contextDeltaChars: 0,
     createdAt: input.createdAt ?? Date.now(),
   };
 
@@ -232,6 +235,89 @@ export function detectAnswerSufficiencyShadow(
   };
 }
 
+export interface EvaluateAnswerContextResolvabilityInput {
+  decision: AnswerSufficiencyDecision;
+  selection: ContextScopeResponseActionResult;
+  questionType: CanonicalQuestionType;
+  activeParentQuestionType?: CanonicalQuestionType;
+  originalSourceTurnIds?: string[];
+  originalContextText: string;
+  sourceTextByTurnId: Readonly<Record<string, string>>;
+}
+
+export function evaluateAnswerContextResolvabilityShadow(
+  input: EvaluateAnswerContextResolvabilityInput
+): AnswerSufficiencyDecision {
+  if (input.decision.answerStatus !== "context-insufficient") {
+    return input.decision;
+  }
+
+  const originalContext = normalize(input.originalContextText);
+  const originalSourceTurnIds = new Set(input.originalSourceTurnIds ?? []);
+  const selectedCandidates = input.selection.candidates.filter(
+    (candidate) => candidate.selected && candidate.kind !== "current-lqu"
+  );
+  const novelTurnIds = uniqueStrings(
+    selectedCandidates.flatMap((candidate) =>
+      candidate.turnIds.filter((turnId) => {
+        if (originalSourceTurnIds.has(turnId)) return false;
+        const sourceText = normalize(input.sourceTextByTurnId[turnId] ?? "");
+        return sourceText.length > 0 && !originalContext.includes(sourceText);
+      })
+    )
+  );
+  const candidatesWithNovelEvidence = selectedCandidates.filter((candidate) =>
+    candidate.turnIds.some((turnId) => novelTurnIds.includes(turnId))
+  );
+  const typeCompatible =
+    !input.activeParentQuestionType ||
+    input.activeParentQuestionType === "unknown" ||
+    input.questionType === "unknown" ||
+    input.activeParentQuestionType === input.questionType ||
+    !candidatesWithNovelEvidence.some(
+      (candidate) => candidate.kind === "parent-capsule"
+    );
+  const plausibleEvidence = candidatesWithNovelEvidence.filter((candidate) =>
+    candidateCanResolveDefect(candidate, input.decision.contextDefect)
+  );
+  const resolvable =
+    !input.selection.independentQuestionGuardApplied &&
+    typeCompatible &&
+    plausibleEvidence.length > 0;
+  const candidateKinds = uniqueStrings(
+    plausibleEvidence.map((candidate) => candidate.kind)
+  );
+  const candidateSourceTurnIds = uniqueStrings(
+    plausibleEvidence.flatMap((candidate) =>
+      candidate.turnIds.filter((turnId) => novelTurnIds.includes(turnId))
+    )
+  );
+  const contextDeltaChars = plausibleEvidence.reduce(
+    (total, candidate) => total + candidate.chars,
+    0
+  );
+
+  return {
+    ...input.decision,
+    recommendedRepair: resolvable ? "enhance" : "manual-clarification",
+    resolvableByNearbyContext: resolvable,
+    candidateContextKinds: candidateKinds,
+    candidateSourceTurnIds,
+    contextDeltaChars,
+    lexicalEvidence: uniqueStrings([
+      ...input.decision.lexicalEvidence,
+      ...(input.selection.independentQuestionGuardApplied
+        ? ["context-independent-question-guard"]
+        : []),
+      ...(!typeCompatible ? ["context-question-type-mismatch"] : []),
+      ...(selectedCandidates.length > 0 && novelTurnIds.length === 0
+        ? ["context-candidates-already-present"]
+        : []),
+      ...(resolvable ? ["source-backed-context-delta"] : []),
+    ]),
+  };
+}
+
 export function formatAnswerSufficiencyDecisionForTrace(
   decision: AnswerSufficiencyDecision
 ) {
@@ -257,7 +343,36 @@ export function formatAnswerSufficiencyDecisionForTrace(
     contextCandidateKinds: decision.candidateContextKinds,
     contextCandidateSourceTurnIds:
       decision.candidateSourceTurnIds,
+    contextDeltaChars: decision.contextDeltaChars,
   };
+}
+
+function candidateCanResolveDefect(
+  candidate: ContextScopeResponseActionResult["candidates"][number],
+  defect: AnswerContextDefect
+) {
+  if (candidate.score < 0.5 || candidate.chars <= 0) return false;
+  if (
+    defect === "missing-antecedent" ||
+    defect === "fragmented-question"
+  ) {
+    return (
+      candidate.kind === "recent-dialogue" ||
+      candidate.kind === "child-capsule" ||
+      candidate.kind === "parent-capsule"
+    );
+  }
+  if (
+    defect === "underspecified-action" ||
+    defect === "artifact-placeholder"
+  ) {
+    return (
+      /\b(?:task|question|input|output|constraint|code|script|implement|diagram|whiteboard|architecture)\b|题目|任务|输入|输出|约束|代码|脚本|实现|架构图|白板/u.test(
+        normalize(candidate.text)
+      ) && candidate.score >= 0.56
+    );
+  }
+  return candidate.score >= 0.62;
 }
 
 function inferExpectedArtifacts(
@@ -448,4 +563,14 @@ function normalize(value: string) {
     .replace(/[’']/g, "'")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+function uniqueStrings(values: Array<string | undefined>) {
+  return [
+    ...new Set(
+      values.filter(
+        (value): value is string => typeof value === "string" && value.length > 0
+      )
+    ),
+  ];
 }

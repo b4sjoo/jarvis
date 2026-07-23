@@ -800,6 +800,7 @@ export interface MeetingSetupWarning {
 
 export interface AdvisorPromptContext {
   transcript: string;
+  advisorPromptSourceTurnIds?: string[];
   screenContext: string;
   interviewSessionBrief?: InterviewSessionBrief;
   interviewSessionContext?: InterviewSessionContext;
