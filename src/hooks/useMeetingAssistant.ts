@@ -8806,6 +8806,30 @@ export function useMeetingAssistant() {
             reconciledProjectBindingMetadata
           );
 
+          const screenResponseOwner = resolveMeetingResponseOwner({
+            preBoundaryType: existingInterviewTask?.stableKind,
+            postBoundaryParentType: existingInterviewTask?.stableKind,
+            proposedQuestionType: screenMemoryQuestionType,
+            relation: screenRelationDecision.relation,
+            taskBoundaryCommitted: false,
+            childOwnsResponse:
+              screenRelationDecision.relation === "child-probe",
+          });
+          const screenArtifactAuthorization =
+            authorizeResponseArtifactMutation({
+              parentTaskId: existingInterviewTask?.id,
+              parentQuestionType:
+                existingInterviewTask?.stableKind ??
+                (screenRelationDecision.relation === "new-parent"
+                  ? screenMemoryQuestionType
+                  : undefined),
+              responseOwnerQuestionType: screenResponseOwner.questionType,
+              responseOwnerSource: screenResponseOwner.source,
+              relation: screenRelationDecision.relation,
+              creatingParent:
+                !existingInterviewTask &&
+                screenRelationDecision.relation === "new-parent",
+            });
           const screenContinuity = updateInterviewTaskContinuityForAnswer({
             existingTask: existingInterviewTask,
             source: "screen",
@@ -8834,13 +8858,20 @@ export function useMeetingAssistant() {
                 : extractSupportedFactAnchorsFromMemory(memoryContext),
             projectBinding:
               reconciledScreenProjectBindingDecision.binding,
+            artifactAuthorization: screenArtifactAuthorization,
           });
           const previousWhiteboard =
             existingInterviewTask?.whiteboardArtifact;
           const nextWhiteboard = screenContinuity.task?.whiteboardArtifact;
           traceStoreRef.current.updateMetadata(trace.id, {
+            ...formatMeetingResponseOwnerForTrace(screenResponseOwner),
+            ...formatResponseArtifactAuthorizationForTrace(
+              screenArtifactAuthorization
+            ),
             answerCodeArtifactDecision: parsedScreenMeetingAnswer.sections.code
-              ? "produced"
+              ? screenArtifactAuthorization.allowCode
+                ? "produced"
+                : "ignored"
               : "none",
             answerWhiteboardArtifactDecision:
               parsedScreenMeetingAnswer.sections.whiteboard && nextWhiteboard
