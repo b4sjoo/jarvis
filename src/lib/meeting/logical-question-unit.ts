@@ -6,6 +6,9 @@ import type { PendingInterviewSectionHint } from "./interview-section-transition
 export const LOGICAL_QUESTION_MAX_PREVIOUS_TURNS = 3;
 export const LOGICAL_QUESTION_MAX_AGE_MS = 30_000;
 export const LOGICAL_QUESTION_MAX_CHARS = 1_200;
+export const REFERENTIAL_COMPLETION_MAX_PREVIOUS_TURNS = 2;
+export const REFERENTIAL_COMPLETION_MAX_AGE_MS = 45_000;
+export const REFERENTIAL_COMPLETION_MAX_WORD_EQUIVALENTS = 16;
 
 export interface LogicalQuestionSource {
   turnId: string;
@@ -41,6 +44,7 @@ export interface ComposeLogicalQuestionUnitInput {
   pendingBoundarySourceTurnIds?: string[];
   relatedSourceTurnIds?: string[];
   interveningTurns?: TranscriptTurn[];
+  recentThemTurns?: TranscriptTurn[];
   explicitTaskSwitch?: boolean;
   authoritativeCorrection?: boolean;
   committedParentBoundary?: boolean;
@@ -56,8 +60,15 @@ export function composeLogicalQuestionUnit(
   const previous = input.previousUnit;
   const boundary = resolveCompositionBoundary(input, previous);
   const shouldExtend = Boolean(previous && boundary.extend);
+  const referentialSources = boundary.reasons.includes("referential-completion")
+    ? collectReferentialSources(input, previous)
+    : [];
   const sources = shouldExtend
-    ? dedupeSources([...previous!.sources, currentSource]).slice(
+    ? dedupeSources([
+        ...previous!.sources,
+        ...referentialSources,
+        currentSource,
+      ]).slice(
         -(LOGICAL_QUESTION_MAX_PREVIOUS_TURNS + 1)
       )
     : [currentSource];
@@ -140,7 +151,11 @@ function resolveCompositionBoundary(
   if (input.committedParentBoundary) {
     return boundary(false, "committed-parent-boundary");
   }
-  if (input.currentTurn.startedAt - previous.startedAt > LOGICAL_QUESTION_MAX_AGE_MS) {
+  const referentialCompletion = isReferentialCompletion(input, previous);
+  const maxQuestionAgeMs = referentialCompletion
+    ? REFERENTIAL_COMPLETION_MAX_AGE_MS
+    : LOGICAL_QUESTION_MAX_AGE_MS;
+  if (input.currentTurn.startedAt - previous.startedAt > maxQuestionAgeMs) {
     return boundary(false, "question-window-expired");
   }
   if (hasSubstantiveMeBoundary(input.interveningTurns ?? [])) {
@@ -162,6 +177,9 @@ function resolveCompositionBoundary(
   }
   if (isBoundedContinuationText(input.currentTurn.text)) {
     reasons.push("bounded-followup-language");
+  }
+  if (referentialCompletion) {
+    reasons.push("referential-completion");
   }
   if (
     input.relatedSourceTurnIds?.some((turnId) =>
@@ -218,6 +236,86 @@ function isBoundedContinuationText(text: string) {
       text
     )
   );
+}
+
+function isReferentialCompletion(
+  input: ComposeLogicalQuestionUnitInput,
+  previous: LogicalQuestionUnit
+) {
+  if (!isShortReferentialActionRequest(input.currentTurn.text)) return false;
+  return collectReferentialSources(input, previous).some((source) =>
+    isSubstantiveTechnicalContext(source.text)
+  );
+}
+
+function collectReferentialSources(
+  input: ComposeLogicalQuestionUnitInput,
+  previous: LogicalQuestionUnit | undefined
+) {
+  const earliestStartedAt =
+    input.currentTurn.startedAt - REFERENTIAL_COMPLETION_MAX_AGE_MS;
+  const recent = (input.recentThemTurns ?? [])
+    .filter(
+      (turn) =>
+        turn.speaker === "them" &&
+        turn.id !== input.currentTurn.id &&
+        turn.startedAt >= earliestStartedAt &&
+        turn.endedAt <= input.currentTurn.startedAt
+    )
+    .sort((left, right) => left.startedAt - right.startedAt)
+    .slice(-REFERENTIAL_COMPLETION_MAX_PREVIOUS_TURNS)
+    .map(toSource);
+  const previousSources = (previous?.sources ?? []).filter(
+    (source) =>
+      source.startedAt >= earliestStartedAt &&
+      source.endedAt <= input.currentTurn.startedAt
+  );
+  return dedupeSources([...previousSources, ...recent])
+    .filter((source) => isSubstantiveTechnicalContext(source.text))
+    .slice(-REFERENTIAL_COMPLETION_MAX_PREVIOUS_TURNS);
+}
+
+function isShortReferentialActionRequest(text: string) {
+  const normalized = normalizeText(text);
+  if (
+    !normalized ||
+    calculateWordEquivalent(normalized) >
+      REFERENTIAL_COMPLETION_MAX_WORD_EQUIVALENTS
+  ) {
+    return false;
+  }
+  const hasReferent =
+    /\b(?:that|this|it|those|these|the above|same one|same approach)\b/i.test(
+      normalized
+    ) || /(?:这个|那个|它|上述|上面|同一个|同样的)/.test(normalized);
+  if (!hasReferent) return false;
+  return (
+    /\b(?:write|implement|code|script|show|give|provide|build|create|solve|explain|compare|optimi[sz]e|analy[sz]e|walk)\b/i.test(
+      normalized
+    ) ||
+    /(?:写|实现|编码|代码|脚本|给出|展示|创建|解决|解释|比较|优化|分析)/.test(
+      normalized
+    )
+  );
+}
+
+function isSubstantiveTechnicalContext(text: string) {
+  const normalized = normalizeText(text);
+  if (calculateWordEquivalent(normalized) < 8) return false;
+  return (
+    /\b(?:algorithm|array|cache|class|code|database|directory|endpoint|file|function|graph|index|latency|list|model|queue|request|service|stack|storage|system|throughput|tree|api|qps|rag)\b/i.test(
+      normalized
+    ) ||
+    /(?:算法|数组|缓存|代码|数据库|目录|文件|函数|图|索引|延迟|模型|队列|请求|服务|栈|存储|系统|吞吐|树|接口|检索)/.test(
+      normalized
+    )
+  );
+}
+
+function calculateWordEquivalent(text: string) {
+  const latinWords = text.match(/[A-Za-z0-9_+#.-]+/g)?.length ?? 0;
+  const cjkChars = text.match(/[\u3400-\u9fff]/g)?.length ?? 0;
+  return latinWords + Math.ceil(cjkChars / 2);
 }
 
 function toSource(turn: TranscriptTurn): LogicalQuestionSource {

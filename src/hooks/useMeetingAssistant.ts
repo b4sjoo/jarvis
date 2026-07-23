@@ -6020,6 +6020,12 @@ export function useMeetingAssistant() {
             : undefined,
         relatedSourceTurnIds: turn.relatedTurnIds,
         interveningTurns,
+        recentThemTurns: contextState.transcriptTurns.filter(
+          (candidate) =>
+            candidate.speaker === "them" &&
+            candidate.id !== turn.id &&
+            candidate.endedAt <= turn.startedAt
+        ),
         explicitTaskSwitch,
         sectionHint,
       });

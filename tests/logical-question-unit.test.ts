@@ -198,3 +198,158 @@ test("caps source turns, age, and normalized characters", () => {
   assert.ok(unit.normalizedText.length <= LOGICAL_QUESTION_MAX_CHARS);
   assert.equal(unit.truncated, true);
 });
+
+test("composes a short referential action with recent technical context", () => {
+  const problem = turn(
+    "turn_problem",
+    "Search a directory recursively and return every text file modified after a given date.",
+    1_000
+  );
+  const constraint = turn(
+    "turn_constraint",
+    "The function should return all matching file paths instead of stopping after the first file.",
+    2_000
+  );
+  const previous = composeLogicalQuestionUnit({
+    currentTurn: constraint,
+    sessionId: "session-a",
+    runtimeEpoch: 1,
+  });
+  const current = turn(
+    "turn_script",
+    "So give me a Python script for that.",
+    3_000
+  );
+
+  const unit = composeLogicalQuestionUnit({
+    currentTurn: current,
+    sessionId: "session-a",
+    runtimeEpoch: 1,
+    intentDecision: decideAdvisorTurnIntent(current.text, {
+      hasActiveTask: false,
+      hasRecentQuestionContext: true,
+    }),
+    previousUnit: previous,
+    recentThemTurns: [problem, constraint],
+  });
+
+  assert.equal(unit.id, previous.id);
+  assert.deepEqual(unit.sourceTurnIds, [
+    "turn_problem",
+    "turn_constraint",
+    "turn_script",
+  ]);
+  assert.match(unit.normalizedText, /recursively/);
+  assert.match(unit.normalizedText, /all matching file paths/);
+  assert.match(unit.normalizedText, /script for that/);
+  assert.ok(unit.compositionReasons.includes("referential-completion"));
+});
+
+test("does not treat a referential acknowledgement as an action request", () => {
+  const previousTurn = turn(
+    "turn_design",
+    "Use a queue and a worker service to process every file in the directory.",
+    1_000
+  );
+  const previous = composeLogicalQuestionUnit({
+    currentTurn: previousTurn,
+    sessionId: "session-a",
+    runtimeEpoch: 1,
+  });
+  const current = turn("turn_ack", "That looks good.", 2_000);
+
+  const unit = composeLogicalQuestionUnit({
+    currentTurn: current,
+    sessionId: "session-a",
+    runtimeEpoch: 1,
+    intentDecision: decideAdvisorTurnIntent(current.text, {
+      hasActiveTask: true,
+      hasRecentQuestionContext: true,
+    }),
+    previousUnit: previous,
+    recentThemTurns: [previousTurn],
+  });
+
+  assert.notEqual(unit.id, previous.id);
+  assert.deepEqual(unit.sourceTurnIds, ["turn_ack"]);
+  assert.equal(unit.boundaryReason, "independent-current-turn");
+});
+
+test("referential completion respects parent and me-answer boundaries", () => {
+  const previousTurn = turn(
+    "turn_problem",
+    "Implement a function that scans every file in a directory recursively.",
+    1_000
+  );
+  const previous = composeLogicalQuestionUnit({
+    currentTurn: previousTurn,
+    sessionId: "session-a",
+    runtimeEpoch: 1,
+  });
+  const current = turn("turn_script", "Write the code for that.", 3_000);
+  const withParentBoundary = composeLogicalQuestionUnit({
+    currentTurn: current,
+    sessionId: "session-a",
+    runtimeEpoch: 1,
+    previousUnit: previous,
+    recentThemTurns: [previousTurn],
+    committedParentBoundary: true,
+  });
+  const withMeBoundary = composeLogicalQuestionUnit({
+    currentTurn: current,
+    sessionId: "session-a",
+    runtimeEpoch: 1,
+    previousUnit: previous,
+    recentThemTurns: [previousTurn],
+    interveningTurns: [
+      {
+        ...turn("turn_me", "x".repeat(180), 2_000, "me"),
+        contextTier: "me_attempted_answer_long",
+      },
+    ],
+  });
+
+  assert.deepEqual(withParentBoundary.sourceTurnIds, ["turn_script"]);
+  assert.equal(withParentBoundary.boundaryReason, "committed-parent-boundary");
+  assert.deepEqual(withMeBoundary.sourceTurnIds, ["turn_script"]);
+  assert.equal(withMeBoundary.boundaryReason, "substantive-me-answer-boundary");
+});
+
+test("referential completion uses its bounded 45 second window", () => {
+  const previousTurn = turn(
+    "turn_problem",
+    "Implement a function that scans every file in a directory recursively.",
+    1_000
+  );
+  const previous = composeLogicalQuestionUnit({
+    currentTurn: previousTurn,
+    sessionId: "session-a",
+    runtimeEpoch: 1,
+  });
+  const withinWindow = turn(
+    "turn_within",
+    "Write the code for that.",
+    40_000
+  );
+  const expired = turn("turn_expired", "Write the code for that.", 50_000);
+
+  const composed = composeLogicalQuestionUnit({
+    currentTurn: withinWindow,
+    sessionId: "session-a",
+    runtimeEpoch: 1,
+    previousUnit: previous,
+    recentThemTurns: [previousTurn],
+  });
+  const separated = composeLogicalQuestionUnit({
+    currentTurn: expired,
+    sessionId: "session-a",
+    runtimeEpoch: 1,
+    previousUnit: previous,
+    recentThemTurns: [previousTurn],
+  });
+
+  assert.equal(composed.id, previous.id);
+  assert.ok(composed.compositionReasons.includes("referential-completion"));
+  assert.notEqual(separated.id, previous.id);
+  assert.equal(separated.boundaryReason, "question-window-expired");
+});
