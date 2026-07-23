@@ -1,6 +1,6 @@
 import {
-  getMemoryEntries,
-  markMemoryEntriesUsed,
+  loadMemoryEntriesForSnapshot,
+  markMemoryEntriesUsedBatch,
 } from "@/lib/database/memory.action";
 import type {
   MemoryEntry,
@@ -13,11 +13,16 @@ import type {
   MemoryRejectSummary,
   MemoryRetrievalRequest,
   MemoryRetrievalPolicy,
+  MemoryRetrievalPerformance,
   MemoryRetrievalResult,
   MemoryTopicDomain,
   MemoryUseCase,
   RetrievedMemoryEntry,
 } from "./types";
+import {
+  getSharedMemoryRetrievalRuntime,
+  type MemoryUsageFlushResult,
+} from "./retrieval-runtime";
 import { isMemoryProjectAnchorCompatible } from "./project-anchor.js";
 import {
   gateDiagramOverlayEntriesByDomain,
@@ -40,7 +45,12 @@ const PRIORITY_BOOST: Record<MemoryEntry["priority"], number> = {
   pinned: 24,
 };
 
+export interface MemoryRetrievalRuntimeCallbacks {
+  onUsageFlush?: (result: MemoryUsageFlushResult) => void;
+}
+
 export async function retrieveMemoryContext({
+  sessionId,
   query,
   diagramDomainQuery,
   diagramTopicDomain,
@@ -55,8 +65,16 @@ export async function retrieveMemoryContext({
   maxEntries = DEFAULT_MAX_ENTRIES,
   maxChars = DEFAULT_MAX_CHARS,
   perEntryMaxChars = DEFAULT_PER_ENTRY_MAX_CHARS,
-}: MemoryRetrievalRequest): Promise<MemoryRetrievalResult> {
-  const entries = await getMemoryEntries();
+}: MemoryRetrievalRequest,
+callbacks: MemoryRetrievalRuntimeCallbacks = {}): Promise<MemoryRetrievalResult> {
+  const totalStartedAt = monotonicNow();
+  const runtime = getSharedMemoryRetrievalRuntime();
+  const snapshot = await runtime.readSnapshot({
+    sessionId,
+    loader: loadMemoryEntriesForSnapshot,
+  });
+  const entries = snapshot.entries;
+  const policyScoringStartedAt = monotonicNow();
   const rejectRecorder = createMemoryRejectRecorder();
   const overlayRejectRecorder = createMemoryRejectRecorder();
   const policySnapshot = buildMemoryPolicySnapshot({
@@ -154,6 +172,8 @@ export async function retrieveMemoryContext({
 
   const selected = dedupeRetrievedEntries([...alwaysEntries, ...retrievalEntries])
     .sort((left, right) => right.score - left.score);
+  const policyScoringMs = elapsedMs(policyScoringStartedAt);
+  const budgetFormattingStartedAt = monotonicNow();
   const budgeted = applyMemoryBudget(
     selected,
     memoryPolicy?.maxChars ?? maxChars,
@@ -166,13 +186,48 @@ export async function retrieveMemoryContext({
     }
   }
 
-  if (budgeted.entries.length) {
-    void markMemoryEntriesUsed(budgeted.entries.map((entry) => entry.entry.id));
-  }
+  const contextText = formatMemoryContext(budgeted.entries);
+  const budgetFormattingMs = elapsedMs(budgetFormattingStartedAt);
+  const usageEnqueue = budgeted.entries.length
+    ? runtime.enqueueUsage({
+        entryIds: budgeted.entries.map((entry) => entry.entry.id),
+        writer: markMemoryEntriesUsedBatch,
+        onFlush: callbacks.onUsageFlush,
+      })
+    : {
+        addedEntryCount: 0,
+        queueDepth: runtime.getUsageQueueDepth(),
+        enqueueMs: 0,
+        lastFlush: runtime.getLastUsageFlush(),
+      };
+
+  const performance: MemoryRetrievalPerformance = {
+    totalMs: elapsedMs(totalStartedAt),
+    cacheState: snapshot.telemetry.cacheState,
+    cacheHit: snapshot.telemetry.cacheHit,
+    cacheLookupMs: snapshot.telemetry.cacheLookupMs,
+    snapshotVersion: snapshot.telemetry.snapshotVersion,
+    snapshotGeneration: snapshot.telemetry.snapshotGeneration,
+    snapshotAgeMs: snapshot.telemetry.snapshotAgeMs,
+    snapshotSessionId: snapshot.telemetry.snapshotSessionId,
+    databaseAcquireMs: snapshot.telemetry.databaseAcquireMs,
+    databaseReadMs: snapshot.telemetry.databaseReadMs,
+    rowMappingMs: snapshot.telemetry.rowMappingMs,
+    policyScoringMs,
+    budgetFormattingMs,
+    usageEnqueueMs: usageEnqueue.enqueueMs,
+    usageBatchId: usageEnqueue.batchId,
+    usageAddedEntryCount: usageEnqueue.addedEntryCount,
+    usageQueueDepth: usageEnqueue.queueDepth,
+    lastUsageFlushMs: usageEnqueue.lastFlush?.durationMs,
+    lastUsageFlushEntryCount: usageEnqueue.lastFlush?.entryCount,
+    lastUsageFlushSuccess: usageEnqueue.lastFlush?.success,
+    degradedReason: snapshot.telemetry.degradedReason,
+  };
 
   return {
     entries: budgeted.entries,
-    contextText: formatMemoryContext(budgeted.entries),
+    contextText,
     totalChars: budgeted.totalChars,
     candidateCount: entries.length,
     eligibleCount: eligibleEntries.length,
@@ -184,6 +239,48 @@ export async function retrieveMemoryContext({
       diagramOverlayGate
     ),
     policySnapshot,
+    performance,
+  };
+}
+
+export async function prewarmMemoryContextSnapshot(sessionId?: string) {
+  return getSharedMemoryRetrievalRuntime().prewarmSnapshot({
+    sessionId,
+    loader: loadMemoryEntriesForSnapshot,
+  });
+}
+
+export async function flushMemoryContextUsage() {
+  return getSharedMemoryRetrievalRuntime().flushUsage();
+}
+
+export function formatMemoryRetrievalPerformanceForTrace(
+  performance: MemoryRetrievalPerformance | undefined
+) {
+  if (!performance) return {};
+  return {
+    memoryTotalMs: performance.totalMs,
+    memoryCacheState: performance.cacheState,
+    memoryCacheHit: performance.cacheHit,
+    memoryCacheLookupMs: performance.cacheLookupMs,
+    memorySnapshotVersion: performance.snapshotVersion,
+    memorySnapshotGeneration: performance.snapshotGeneration,
+    memorySnapshotAgeMs: performance.snapshotAgeMs,
+    memorySnapshotSessionId: performance.snapshotSessionId,
+    memoryDatabaseAcquireMs: performance.databaseAcquireMs,
+    memoryDatabaseReadMs: performance.databaseReadMs,
+    memoryRowMappingMs: performance.rowMappingMs,
+    memoryPolicyScoringMs: performance.policyScoringMs,
+    memoryBudgetFormattingMs: performance.budgetFormattingMs,
+    memoryUsageEnqueueMs: performance.usageEnqueueMs,
+    memoryUsageBatchId: performance.usageBatchId,
+    memoryUsageAddedEntryCount: performance.usageAddedEntryCount,
+    memoryUsageQueueDepth: performance.usageQueueDepth,
+    memoryLastUsageFlushMs: performance.lastUsageFlushMs,
+    memoryLastUsageFlushEntryCount:
+      performance.lastUsageFlushEntryCount,
+    memoryLastUsageFlushSuccess: performance.lastUsageFlushSuccess,
+    memoryRetrievalDegradedReason: performance.degradedReason,
   };
 }
 
@@ -894,4 +991,12 @@ function tokenize(value: string) {
 function truncateText(value: string, maxChars: number) {
   if (value.length <= maxChars) return value;
   return `${value.slice(0, Math.max(0, maxChars - 24)).trimEnd()}\n[truncated]`;
+}
+
+function monotonicNow() {
+  return typeof performance !== "undefined" ? performance.now() : Date.now();
+}
+
+function elapsedMs(startedAt: number) {
+  return Math.max(0, monotonicNow() - startedAt);
 }

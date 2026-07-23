@@ -93,7 +93,7 @@ export function getDiagramOverlayGateRejectReason(
 }
 
 export function gateDiagramOverlayEntriesByDomain(
-  entries: MemoryEntry[],
+  entries: readonly MemoryEntry[],
   {
     query,
     questionType,

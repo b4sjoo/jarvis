@@ -232,6 +232,7 @@ export interface MemoryImportSummary {
 }
 
 export interface MemoryRetrievalRequest {
+  sessionId?: string;
   query: string;
   diagramDomainQuery?: string;
   diagramTopicDomain?: MemoryTopicDomain;
@@ -315,6 +316,36 @@ export interface MemoryRetrievalResult {
   rejectSummary: MemoryRejectSummary[];
   overlaySelection?: MemoryOverlaySelectionSummary;
   policySnapshot: MemoryPolicySnapshot;
+  performance?: MemoryRetrievalPerformance;
+}
+
+export interface MemoryRetrievalPerformance {
+  totalMs: number;
+  cacheState:
+    | "hit"
+    | "miss"
+    | "load-coalesced"
+    | "stale-while-refresh"
+    | "unavailable";
+  cacheHit: boolean;
+  cacheLookupMs: number;
+  snapshotVersion: number;
+  snapshotGeneration: number;
+  snapshotAgeMs: number;
+  snapshotSessionId?: string;
+  databaseAcquireMs: number;
+  databaseReadMs: number;
+  rowMappingMs: number;
+  policyScoringMs: number;
+  budgetFormattingMs: number;
+  usageEnqueueMs: number;
+  usageBatchId?: string;
+  usageAddedEntryCount: number;
+  usageQueueDepth: number;
+  lastUsageFlushMs?: number;
+  lastUsageFlushEntryCount?: number;
+  lastUsageFlushSuccess?: boolean;
+  degradedReason?: string;
 }
 
 export interface MemoryOverlaySelectionSummary {

@@ -9,7 +9,10 @@ import { floatArrayToWav } from "@/lib/utils";
 import {
   buildRuntimeMemoryRoleTelemetry,
   extractRuntimeFactAnchorLabels,
+  flushMemoryContextUsage,
+  formatMemoryRetrievalPerformanceForTrace,
   formatMemorySelectionForTrace,
+  prewarmMemoryContextSnapshot,
   retrieveMemoryContext,
   type MemoryAskFrame,
   type MemoryQuestionType,
@@ -3430,18 +3433,72 @@ export function useMeetingAssistant() {
           );
         }
 
-        const retrievedMemoryContext = await retrieveMemoryContext({
-          query,
-          diagramDomainQuery: diagramDomainContext?.query,
-          diagramTopicDomain,
-          useCase: resolvedUseCase,
-          questionType: resolvedQuestionType,
-          askFrame,
-          topicDomain,
-          projectAnchor,
-          interviewTypes,
-          memoryPolicy: effectiveMemoryPolicy,
-        });
+        const memoryRuntimeSessionId =
+          contextManagerRef.current.getState().sessionId;
+        let memoryUsageFlushStepId: string | undefined;
+        const retrievedMemoryContext = await retrieveMemoryContext(
+          {
+            sessionId: memoryRuntimeSessionId,
+            query,
+            diagramDomainQuery: diagramDomainContext?.query,
+            diagramTopicDomain,
+            useCase: resolvedUseCase,
+            questionType: resolvedQuestionType,
+            askFrame,
+            topicDomain,
+            projectAnchor,
+            interviewTypes,
+            memoryPolicy: effectiveMemoryPolicy,
+          },
+          {
+            onUsageFlush: (flushResult) => {
+              if (!traceId) return;
+              const flushMetadata = {
+                memoryUsageBatchId: flushResult.batchId,
+                memoryUsageFlushMs: flushResult.durationMs,
+                memoryUsageFlushEntryCount: flushResult.entryCount,
+                memoryUsageFlushSuccess: flushResult.success,
+                memoryUsageFlushError: flushResult.error,
+                memoryUsageQueueDepthAfter:
+                  flushResult.queueDepthAfter,
+              };
+              traceStoreRef.current.updateMetadata(traceId, flushMetadata);
+              if (memoryUsageFlushStepId) {
+                traceStoreRef.current.finishStep(
+                  traceId,
+                  memoryUsageFlushStepId,
+                  flushResult.success ? "success" : "error",
+                  flushMetadata,
+                  flushResult.error
+                );
+              }
+              sessionRecordingManagerRef.current?.recordCaptureLifecycle({
+                stage: "memory-usage-flush",
+                traceId,
+                ...flushMetadata,
+              });
+            },
+          }
+        );
+        const memoryPerformanceTraceMetadata =
+          formatMemoryRetrievalPerformanceForTrace(
+            retrievedMemoryContext.performance
+          );
+        if (
+          traceId &&
+          retrievedMemoryContext.performance?.usageBatchId
+        ) {
+          memoryUsageFlushStepId = traceStoreRef.current.startStep(
+            traceId,
+            "Memory usage flush",
+            {
+              memoryUsageBatchId:
+                retrievedMemoryContext.performance.usageBatchId,
+              memoryUsageQueueDepth:
+                retrievedMemoryContext.performance.usageQueueDepth,
+            }
+          );
+        }
         if (runtimeToken) {
           const memoryRuntimeToken: RuntimeCommitToken = {
             ...runtimeToken,
@@ -3515,6 +3572,7 @@ export function useMeetingAssistant() {
             formatMemorySelectionForTrace(memoryContext),
             {
               ...buildMemoryEvaluationTraceMetadata(memoryContext),
+              ...memoryPerformanceTraceMetadata,
               selectedEntries: memoryContext.entries.length,
               useCase: resolvedUseCase,
               questionType: resolvedQuestionType,
@@ -3571,6 +3629,7 @@ export function useMeetingAssistant() {
               diagramTopicDomain: diagramTopicDomain ?? "unknown",
               ...diagramOverlayTraceMetadata,
               ...memoryRoleTraceMetadata,
+              ...memoryPerformanceTraceMetadata,
               personalEvidenceFilteredEntries,
             },
           });
@@ -3600,6 +3659,7 @@ export function useMeetingAssistant() {
             rejectSummary: memoryContext.rejectSummary,
             ...diagramOverlayTraceMetadata,
             ...memoryRoleTraceMetadata,
+            ...memoryPerformanceTraceMetadata,
             memoryPolicySnapshot: memoryContext.policySnapshot,
             totalChars: memoryContext.totalChars,
           });
@@ -3615,6 +3675,7 @@ export function useMeetingAssistant() {
               diagramTopicDomain: diagramTopicDomain ?? "unknown",
               ...diagramOverlayTraceMetadata,
               ...memoryRoleTraceMetadata,
+              ...memoryPerformanceTraceMetadata,
             }
           );
         }
@@ -3710,6 +3771,17 @@ export function useMeetingAssistant() {
         }
       }
 
+      const terminalMemoryUsageFlush = await flushMemoryContextUsage();
+      if (terminalMemoryUsageFlush) {
+        sessionRecordingManagerRef.current?.recordCaptureLifecycle({
+          stage: "memory-usage-terminal-flush",
+          memoryUsageBatchId: terminalMemoryUsageFlush.batchId,
+          memoryUsageFlushMs: terminalMemoryUsageFlush.durationMs,
+          memoryUsageFlushEntryCount: terminalMemoryUsageFlush.entryCount,
+          memoryUsageFlushSuccess: terminalMemoryUsageFlush.success,
+          memoryUsageFlushError: terminalMemoryUsageFlush.error,
+        });
+      }
       await stopSessionRecording("meeting-assistant-stopped");
       if (!coordinator.authorize(lifecycleOperation, "commit-stop-state")) {
         return;
@@ -8350,6 +8422,9 @@ export function useMeetingAssistant() {
           lastNativeSegmentSequenceRef.current = 0;
           activeRef.current = true;
           const contextState = contextManagerRef.current.getState();
+          if (state.settings.useMemory) {
+            void prewarmMemoryContextSnapshot(contextState.sessionId);
+          }
           prewarmSemanticTaxonomyRuntime(
             mode === "fresh-start"
               ? "meeting-session-started"
@@ -8542,6 +8617,7 @@ export function useMeetingAssistant() {
       resetMeetingRuntimeForNewSession,
       state.settings.audio.config,
       state.settings.privacyMode,
+      state.settings.useMemory,
       stopNativeMeetingCapture,
       sttProvider,
     ]);

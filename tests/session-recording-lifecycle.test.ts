@@ -559,7 +559,7 @@ test("compact trace summaries preserve task boundary and cross-domain evidence",
   );
   assert.ok(summaryWrite);
   const summary = parsePayload(summaryWrite);
-  assert.equal(summary.version, 8);
+  assert.equal(summary.version, 9);
   assert.equal(summary.taskRelation, "new-parent");
   assert.deepEqual(summary.logicalQuestionSourceTurnIds, ["turn_1", "turn_2"]);
   assert.deepEqual(summary.logicalQuestionCompositionReasons, [

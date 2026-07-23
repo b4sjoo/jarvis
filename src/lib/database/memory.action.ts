@@ -1,6 +1,10 @@
 import { CURATED_MEMORY_DRAFTS } from "@/lib/memory/curated-drafts";
 import { auditMemoryInterviewFamilyNormalization } from "@/lib/memory/interview-family";
 import { parseCuratedMemoryDrafts } from "@/lib/memory/parser";
+import {
+  invalidateMemoryRetrievalSnapshot,
+  type MemorySnapshotLoadResult,
+} from "@/lib/memory/retrieval-runtime";
 import type {
   MemoryEntry,
   MemoryImportSummary,
@@ -167,6 +171,8 @@ export async function rebuildCuratedMemoryIndex(): Promise<MemoryImportSummary> 
     );
   }
 
+  invalidateMemoryRetrievalSnapshot("curated-index-rebuilt");
+
   return {
     importedAt,
     draftCount: parsedDrafts.length,
@@ -186,11 +192,29 @@ export async function getMemorySources(): Promise<MemorySource[]> {
 }
 
 export async function getMemoryEntries(): Promise<MemoryEntry[]> {
+  return (await loadMemoryEntriesForSnapshot()).entries;
+}
+
+export async function loadMemoryEntriesForSnapshot(): Promise<MemorySnapshotLoadResult> {
+  const acquireStartedAt = monotonicNow();
   const db = await getDatabase();
+  const databaseAcquireMs = elapsedMs(acquireStartedAt);
+  const readStartedAt = monotonicNow();
   const rows = await db.select<MemoryEntryRow[]>(
     "SELECT * FROM memory_entries ORDER BY priority DESC, project_name ASC, title ASC"
   );
-  return rows.map(mapEntryRow);
+  const databaseReadMs = elapsedMs(readStartedAt);
+  const mappingStartedAt = monotonicNow();
+  const entries = rows.map(mapEntryRow);
+  const rowMappingMs = elapsedMs(mappingStartedAt);
+  return {
+    entries,
+    timings: {
+      databaseAcquireMs,
+      databaseReadMs,
+      rowMappingMs,
+    },
+  };
 }
 
 export async function getEnabledMemoryEntries(): Promise<MemoryEntry[]> {
@@ -215,19 +239,32 @@ export async function setMemoryEntryEnabled(id: string, enabled: boolean) {
     "UPDATE memory_entries SET enabled = ?, updated_at = ? WHERE id = ?",
     [enabled ? 1 : 0, Date.now(), id]
   );
+  invalidateMemoryRetrievalSnapshot("memory-entry-enable-state-changed");
 }
 
-export async function markMemoryEntriesUsed(entryIds: string[]) {
-  if (!entryIds.length) return;
+export async function markMemoryEntriesUsedBatch(entryIds: string[]) {
+  const uniqueIds = Array.from(
+    new Set(entryIds.map((id) => id.trim()).filter(Boolean))
+  );
+  if (!uniqueIds.length) return;
 
   const db = await getDatabase();
   const now = Date.now();
-  for (const id of entryIds) {
-    await db.execute("UPDATE memory_entries SET last_used_at = ? WHERE id = ?", [
-      now,
-      id,
-    ]);
+  const chunkSize = 400;
+  for (let index = 0; index < uniqueIds.length; index += chunkSize) {
+    const chunk = uniqueIds.slice(index, index + chunkSize);
+    const placeholders = chunk.map(() => "?").join(", ");
+    await db.execute(
+      `UPDATE memory_entries
+       SET last_used_at = ?
+       WHERE id IN (${placeholders})`,
+      [now, ...chunk]
+    );
   }
+}
+
+export async function markMemoryEntriesUsed(entryIds: string[]) {
+  await markMemoryEntriesUsedBatch(entryIds);
 }
 
 function buildProjects(
@@ -325,6 +362,14 @@ function mapProjectRow(row: MemoryProjectRow): MemoryProject {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
+}
+
+function monotonicNow() {
+  return typeof performance !== "undefined" ? performance.now() : Date.now();
+}
+
+function elapsedMs(startedAt: number) {
+  return Math.max(0, monotonicNow() - startedAt);
 }
 
 function parseJsonArray(value: string | null | undefined) {

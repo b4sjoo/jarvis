@@ -30,7 +30,7 @@ import {
 import { serializeMeetingTraceExport } from "./trace.js";
 
 const SESSION_RECORDING_SCHEMA_VERSION = 1;
-const SESSION_TRACE_SUMMARY_SCHEMA_VERSION = 8;
+const SESSION_TRACE_SUMMARY_SCHEMA_VERSION = 9;
 const SESSION_TRACE_INDEX_SCHEMA_VERSION = 1;
 
 interface SessionRecordingStartOptions {
@@ -457,6 +457,23 @@ export interface SessionCompactTraceSummary {
     rejectSummary?: MemoryRejectSummary[];
     totalChars?: number;
     useCase?: string;
+    cacheState?: string;
+    cacheHit?: boolean;
+    cacheLookupMs?: number;
+    snapshotVersion?: number;
+    snapshotGeneration?: number;
+    snapshotAgeMs?: number;
+    databaseAcquireMs?: number;
+    databaseReadMs?: number;
+    rowMappingMs?: number;
+    policyScoringMs?: number;
+    budgetFormattingMs?: number;
+    usageEnqueueMs?: number;
+    usageQueueDepth?: number;
+    usageFlushMs?: number;
+    usageFlushEntryCount?: number;
+    usageFlushSuccess?: boolean;
+    degradedReason?: string;
   };
   whiteboard?: {
     artifactId?: string;
@@ -920,6 +937,7 @@ export class SessionRecordingManager {
         rejectedCount: memoryContext.rejectedCount,
         rejectSummary: memoryContext.rejectSummary,
         totalChars: memoryContext.totalChars,
+        performance: memoryContext.performance,
         metadata,
       },
       [jsonPath, contextPath],
@@ -2588,6 +2606,56 @@ function buildCompactTraceSummary({
           ),
           totalChars: readNumber(memoryStep.metadata?.totalChars),
           useCase: readString(memoryStep.metadata?.useCase),
+          cacheState: readString(memoryStep.metadata?.memoryCacheState),
+          cacheHit: readFirstBoolean(metadataSources, "memoryCacheHit"),
+          cacheLookupMs: readNumber(
+            memoryStep.metadata?.memoryCacheLookupMs
+          ),
+          snapshotVersion: readNumber(
+            memoryStep.metadata?.memorySnapshotVersion
+          ),
+          snapshotGeneration: readNumber(
+            memoryStep.metadata?.memorySnapshotGeneration
+          ),
+          snapshotAgeMs: readNumber(
+            memoryStep.metadata?.memorySnapshotAgeMs
+          ),
+          databaseAcquireMs: readNumber(
+            memoryStep.metadata?.memoryDatabaseAcquireMs
+          ),
+          databaseReadMs: readNumber(
+            memoryStep.metadata?.memoryDatabaseReadMs
+          ),
+          rowMappingMs: readNumber(
+            memoryStep.metadata?.memoryRowMappingMs
+          ),
+          policyScoringMs: readNumber(
+            memoryStep.metadata?.memoryPolicyScoringMs
+          ),
+          budgetFormattingMs: readNumber(
+            memoryStep.metadata?.memoryBudgetFormattingMs
+          ),
+          usageEnqueueMs: readNumber(
+            memoryStep.metadata?.memoryUsageEnqueueMs
+          ),
+          usageQueueDepth: readNumber(
+            memoryStep.metadata?.memoryUsageQueueDepth
+          ),
+          usageFlushMs: readFirstNumberFromMetadata(
+            metadataSources,
+            "memoryUsageFlushMs"
+          ),
+          usageFlushEntryCount: readFirstNumberFromMetadata(
+            metadataSources,
+            "memoryUsageFlushEntryCount"
+          ),
+          usageFlushSuccess: readFirstBoolean(
+            metadataSources,
+            "memoryUsageFlushSuccess"
+          ),
+          degradedReason: readString(
+            memoryStep.metadata?.memoryRetrievalDegradedReason
+          ),
         }
       : undefined,
     whiteboard: buildWhiteboardTraceSummary(metadataSources),
