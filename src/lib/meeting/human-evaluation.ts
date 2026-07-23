@@ -457,6 +457,103 @@ export function buildQuestionEvaluationPatchFromTrace(
   return patch;
 }
 
+export function buildAdvisorIntentEvaluationFromTrace({
+  trace,
+  expectedAction,
+  source = "explicit-human-label",
+  now = Date.now(),
+}: {
+  trace: MeetingTrace;
+  expectedAction: NonNullable<
+    QuestionHumanEvaluation["advisorIntent"]
+  >["expectedAction"];
+  source?: NonNullable<
+    QuestionHumanEvaluation["advisorIntent"]
+  >["source"];
+  now?: number;
+}): NonNullable<QuestionHumanEvaluation["advisorIntent"]> {
+  const metadata = trace.metadata ?? {};
+  const executionAuthorized =
+    typeof metadata.advisorExecutionAuthorized === "boolean"
+      ? metadata.advisorExecutionAuthorized
+      : undefined;
+  const outputCommitAuthorized =
+    typeof metadata.advisorOutputCommitAuthorized === "boolean"
+      ? metadata.advisorOutputCommitAuthorized
+      : undefined;
+  const turnAction = readOptionalString(
+    metadata.turnGateAction ?? metadata.advisorTurnAction
+  );
+  const intent = readOptionalString(metadata.advisorTurnIntent);
+  const observedAction =
+    executionAuthorized === true || outputCommitAuthorized === true
+      ? "advised"
+      : intent === "incomplete"
+        ? "buffered"
+        : turnAction === "append-only" || turnAction === "state-update"
+          ? "append-only"
+          : "suppressed";
+  const expectedAdvice = expectedAction === "advise";
+  const observedAdvice = observedAction === "advised";
+  const verdict =
+    expectedAdvice === observedAdvice
+      ? "ok"
+      : expectedAdvice
+        ? "false-negative"
+        : "false-positive";
+  const logicalQuestionSourceTurnIds = Array.isArray(
+    metadata.logicalQuestionSourceTurnIds
+  )
+    ? metadata.logicalQuestionSourceTurnIds.map(readOptionalString)
+    : [];
+  const triggerTurnId = readOptionalString(
+    metadata.triggerTurnId ?? metadata.questionTriggerTurnId
+  );
+
+  return {
+    schemaVersion: 1,
+    verdict,
+    expectedAction,
+    observedAction,
+    failureReason:
+      verdict === "false-negative"
+        ? "advisor-false-negative"
+        : verdict === "false-positive"
+          ? "advisor-false-positive"
+          : undefined,
+    source,
+    originalTraceId: trace.id,
+    logicalQuestionUnitId: readOptionalString(
+      metadata.logicalQuestionUnitId
+    ),
+    logicalQuestionUnitRevision:
+      typeof metadata.logicalQuestionRevision === "number"
+        ? metadata.logicalQuestionRevision
+        : typeof metadata.logicalQuestionUnitRevision === "number"
+          ? metadata.logicalQuestionUnitRevision
+          : undefined,
+    sourceTurnIds: uniqueStrings([
+      ...logicalQuestionSourceTurnIds,
+      triggerTurnId,
+    ]),
+    preDecision: {
+      intent,
+      action: turnAction,
+      enforcement: readOptionalString(
+        metadata.advisorTurnEnforcement
+      ),
+      wouldSuppress:
+        typeof metadata.advisorWouldSuppress === "boolean"
+          ? metadata.advisorWouldSuppress
+          : undefined,
+      executionAuthorized,
+      outputCommitAuthorized,
+    },
+    createdAt: now,
+    updatedAt: now,
+  };
+}
+
 function normalizeHumanEvaluationPatch(
   patch: Partial<TraceHumanEvaluation>
 ): Partial<TraceHumanEvaluation> {

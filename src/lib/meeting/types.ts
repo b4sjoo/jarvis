@@ -1162,6 +1162,27 @@ export interface AdvisorIntentHumanEvaluation {
   updatedAt: number;
 }
 
+export type ForceAdviseTargetStatus =
+  | "ready"
+  | "already-advised"
+  | "repairing"
+  | "repaired"
+  | "failed";
+
+export interface ForceAdviseTargetPresentation {
+  originalTraceId: string;
+  turnId: string;
+  text: string;
+  observedAction: ObservedAdvisorAction;
+  executionAuthorized: boolean;
+  logicalQuestionUnitId: string;
+  logicalQuestionUnitRevision: number;
+  sourceTurnIds: string[];
+  status: ForceAdviseTargetStatus;
+  repairTraceId?: string;
+  updatedAt: number;
+}
+
 export interface QuestionHumanEvaluation {
   id: string;
   sessionId?: string;
@@ -1227,6 +1248,7 @@ export interface MeetingAssistantState {
   activeMeetingTask?: ActiveMeetingTask;
   manualQuestionTypeCorrection?: ManualQuestionTypeCorrection;
   currentQuestionLineage?: QuestionInstanceLineage;
+  latestInterviewerTurnCandidate?: ForceAdviseTargetPresentation;
   traces: MeetingTrace[];
   latestSuggestion: AdvisorSuggestion | null;
   latestReliableSuggestion: AdvisorSuggestion | null;

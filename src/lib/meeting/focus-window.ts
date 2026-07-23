@@ -44,6 +44,9 @@ export type MeetingFocusSnapshot = {
   sections: MeetingFocusSectionsSnapshot;
   latestReliableAnswer: string;
   latestTurnText: string;
+  forceAdviseAvailable: boolean;
+  forceAdvisePending: boolean;
+  forceAdviseCompleted: boolean;
   statusLabel: string;
   error: string | null;
   isBusy: boolean;
@@ -68,6 +71,7 @@ export type MeetingFocusAction =
   | { type: "request-snapshot" }
   | { type: "toggle-listening" }
   | { type: "regenerate" }
+  | { type: "force-advise" }
   | { type: "capture-screen" }
   | { type: "submit-correction"; correction: string }
   | {
@@ -102,6 +106,9 @@ export const EMPTY_MEETING_FOCUS_SNAPSHOT: MeetingFocusSnapshot = {
   },
   latestReliableAnswer: "",
   latestTurnText: "Waiting for meeting audio.",
+  forceAdviseAvailable: false,
+  forceAdvisePending: false,
+  forceAdviseCompleted: false,
   statusLabel: "Ready",
   error: null,
   isBusy: false,

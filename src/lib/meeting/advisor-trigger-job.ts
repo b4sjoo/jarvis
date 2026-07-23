@@ -25,7 +25,8 @@ export type AdvisorJobSource =
   | "regenerate"
   | "response-action"
   | "clarifying-answer"
-  | "manual-correction";
+  | "manual-correction"
+  | "force-advise";
 
 export type AdvisorTaskMutationAuthority =
   | "input-evidence"

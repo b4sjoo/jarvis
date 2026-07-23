@@ -64,6 +64,7 @@ import {
   getActiveMeetingTaskFocusSummary,
   getActiveMeetingTaskId,
   buildMeetingAnswerDisplayModel,
+  buildAdvisorIntentEvaluationFromTrace,
   normalizeCanonicalQuestionType,
   overlayMeetingAnswerArtifacts,
   resolveMeetingAnswerProfile,
@@ -362,6 +363,16 @@ export const MeetingAssistant = ({
         turn.speaker !== "me" &&
         turn.contextFusionStatus !== "duplicate-suppressed"
     );
+  const latestInterviewerTurnText =
+    meeting.latestInterviewerTurnCandidate?.text ??
+    latestTurn?.text ??
+    "Waiting for meeting audio.";
+  const forceAdviseStatus = meeting.latestInterviewerTurnCandidate?.status;
+  const forceAdviseAvailable = forceAdviseStatus === "ready";
+  const forceAdvisePending = forceAdviseStatus === "repairing";
+  const forceAdviseCompleted =
+    forceAdviseStatus === "repaired" ||
+    forceAdviseStatus === "already-advised";
   const recentMeTurns = meeting.transcriptTurns
     .filter(
       (turn) =>
@@ -663,7 +674,10 @@ export const MeetingAssistant = ({
         hasTechnicalDetails: displaySuggestionSections.hasTechnicalDetails,
       },
       latestReliableAnswer: latestReliableAnswerPreview,
-      latestTurnText: latestTurn?.text || "Waiting for meeting audio.",
+      latestTurnText: latestInterviewerTurnText,
+      forceAdviseAvailable,
+      forceAdvisePending,
+      forceAdviseCompleted,
       statusLabel: meetingStatusLabel,
       error: meeting.error,
       isBusy,
@@ -701,7 +715,10 @@ export const MeetingAssistant = ({
       isBusy,
       isTaskSwitchClarifyingQuestion,
       latestReliableAnswerPreview,
-      latestTurn?.text,
+      latestInterviewerTurnText,
+      forceAdviseAvailable,
+      forceAdvisePending,
+      forceAdviseCompleted,
       meeting.activeMeetingTask,
       meeting.currentQuestionLineage,
       activeTaskKind,
@@ -1129,6 +1146,9 @@ export const MeetingAssistant = ({
             case "regenerate":
               handleRegenerateShortcut();
               break;
+            case "force-advise":
+              void meeting.forceAdviseLatestTurn();
+              break;
             case "capture-screen":
               void meeting.captureScreenContext();
               break;
@@ -1175,6 +1195,7 @@ export const MeetingAssistant = ({
     handleSameTaskConfirmation,
     meeting.captureScreenContext,
     meeting.correctActiveQuestionType,
+    meeting.forceAdviseLatestTurn,
     meeting.submitSpeechCorrection,
     updateFocusInterviewTypes,
   ]);
@@ -1327,7 +1348,13 @@ export const MeetingAssistant = ({
                   "focus-mode"
                 );
               }}
-              latestTurnText={latestTurn?.text || "Waiting for meeting audio."}
+              latestTurnText={latestInterviewerTurnText}
+              forceAdviseAvailable={forceAdviseAvailable}
+              forceAdvisePending={forceAdvisePending}
+              forceAdviseCompleted={forceAdviseCompleted}
+              onForceAdvise={() => {
+                void meeting.forceAdviseLatestTurn();
+              }}
               speechCorrectionInput={speechCorrectionInput}
               onSpeechCorrectionInputChange={setSpeechCorrectionInput}
               onSpeechCorrectionSubmit={handleSpeechCorrectionSubmit}
@@ -1460,6 +1487,35 @@ export const MeetingAssistant = ({
                 <div className="mb-2 flex items-center gap-2 text-xs font-semibold">
                   <MessageSquareTextIcon className="h-3.5 w-3.5" />
                   Latest transcript
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="ml-auto h-6 gap-1 px-2 text-[10px]"
+                    onClick={() => {
+                      void meeting.forceAdviseLatestTurn();
+                    }}
+                    disabled={!forceAdviseAvailable || isBusy}
+                    title={
+                      forceAdviseAvailable
+                        ? "Force one advisor response for this transcript"
+                        : forceAdvisePending
+                          ? "Advisor repair is running"
+                          : forceAdviseCompleted
+                            ? "This transcript has already been advised"
+                            : "No suppressed interviewer turn is available"
+                    }
+                  >
+                    {forceAdvisePending ? (
+                      <Loader2Icon className="h-3 w-3 animate-spin" />
+                    ) : (
+                      <BrainIcon className="h-3 w-3" />
+                    )}
+                    {forceAdvisePending
+                      ? "Advising"
+                      : forceAdviseCompleted
+                        ? "Advised"
+                        : "Advise"}
+                  </Button>
                 </div>
                 <p
                   className={cn(
@@ -1467,7 +1523,7 @@ export const MeetingAssistant = ({
                     "min-h-10 text-xs leading-5 text-muted-foreground"
                   )}
                 >
-                  {latestTurn?.text || "Waiting for meeting audio."}
+                  {latestInterviewerTurnText}
                 </p>
                 <div className="mt-2 flex min-w-0 gap-1.5">
                   <Input
@@ -1992,6 +2048,7 @@ export const MeetingAssistant = ({
                         Evaluating: {formatTraceTitle(evaluationTrace)}
                       </div>
                       <TraceHumanEvaluationPanel
+                        trace={evaluationTrace}
                         detectedQuestionType={formatDetectedQuestionType(
                           evaluationTrace.metadata?.questionType
                         )}
@@ -2241,6 +2298,10 @@ const FocusModePanel = ({
   manualQuestionTypeCorrection,
   onCorrectQuestionType,
   latestTurnText,
+  forceAdviseAvailable,
+  forceAdvisePending,
+  forceAdviseCompleted,
+  onForceAdvise,
   speechCorrectionInput,
   onSpeechCorrectionInputChange,
   onSpeechCorrectionSubmit,
@@ -2270,6 +2331,10 @@ const FocusModePanel = ({
   manualQuestionTypeCorrection?: ManualQuestionTypeCorrection;
   onCorrectQuestionType: (type: CanonicalQuestionType) => void;
   latestTurnText: string;
+  forceAdviseAvailable: boolean;
+  forceAdvisePending: boolean;
+  forceAdviseCompleted: boolean;
+  onForceAdvise: () => void;
   speechCorrectionInput: string;
   onSpeechCorrectionInputChange: (value: string) => void;
   onSpeechCorrectionSubmit: () => void;
@@ -2480,6 +2545,33 @@ const FocusModePanel = ({
               <div className="mb-0.5 flex min-w-0 items-center gap-1.5 text-[10px] font-medium text-muted-foreground">
                 <MessageSquareTextIcon className="h-3 w-3 shrink-0" />
                 <span className="truncate">Latest transcript</span>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="ml-auto h-6 shrink-0 gap-1 px-2 text-[10px]"
+                  onClick={onForceAdvise}
+                  disabled={!forceAdviseAvailable || isBusy}
+                  title={
+                    forceAdviseAvailable
+                      ? "Force one advisor response for this transcript"
+                      : forceAdvisePending
+                        ? "Advisor repair is running"
+                        : forceAdviseCompleted
+                          ? "This transcript has already been advised"
+                          : "No suppressed interviewer turn is available"
+                  }
+                >
+                  {forceAdvisePending ? (
+                    <Loader2Icon className="h-3 w-3 animate-spin" />
+                  ) : (
+                    <BrainIcon className="h-3 w-3" />
+                  )}
+                  {forceAdvisePending
+                    ? "Advising"
+                    : forceAdviseCompleted
+                      ? "Advised"
+                      : "Advise"}
+                </Button>
               </div>
               <p
                 className={cn(
@@ -3786,6 +3878,7 @@ const TraceKindSummaryCard = ({
 };
 
 const TraceHumanEvaluationPanel = ({
+  trace,
   detectedQuestionType,
   detectedPlaybook,
   detectedPlaybookPhase,
@@ -3802,6 +3895,7 @@ const TraceHumanEvaluationPanel = ({
   onUpdate,
   onUpdateQuestion,
 }: {
+  trace: MeetingTrace;
   detectedQuestionType?: string;
   detectedPlaybook?: string;
   detectedPlaybookPhase?: string;
@@ -3909,6 +4003,26 @@ const TraceHumanEvaluationPanel = ({
         ...questionEvaluation?.taxonomyAdjudication,
         ...patch,
       },
+    });
+  };
+
+  const updateAdvisorIntentEvaluation = (
+    expectedAction: "advise" | "ignore",
+    legacyPatch: {
+      advisorGateCorrectlySkipped: boolean;
+      advisorGateShouldAdvise: boolean;
+    }
+  ) => {
+    onUpdate(legacyPatch);
+    onUpdateQuestion({
+      advisorIntent: buildAdvisorIntentEvaluationFromTrace({
+        trace,
+        expectedAction,
+        source:
+          expectedAction === "ignore" && advisorExecutionAuthorized === true
+            ? "manual-suppress"
+            : "explicit-human-label",
+      }),
     });
   };
 
@@ -4067,7 +4181,7 @@ const TraceHumanEvaluationPanel = ({
                   }
                   className="h-6 px-2 text-[10px]"
                   onClick={() => {
-                    onUpdate({
+                    updateAdvisorIntentEvaluation("ignore", {
                       advisorGateCorrectlySkipped: true,
                       advisorGateShouldAdvise: false,
                     });
@@ -4082,13 +4196,54 @@ const TraceHumanEvaluationPanel = ({
                   }
                   className="h-6 px-2 text-[10px]"
                   onClick={() => {
-                    onUpdate({
+                    updateAdvisorIntentEvaluation("advise", {
                       advisorGateCorrectlySkipped: false,
                       advisorGateShouldAdvise: true,
                     });
                   }}
                 >
                   Should advise
+                </Button>
+              </div>
+            ) : null}
+            {advisorExecutionAuthorized === true ? (
+              <div className="mt-2 flex flex-wrap gap-1">
+                <Button
+                  size="sm"
+                  variant={
+                    questionEvaluation?.advisorIntent?.expectedAction ===
+                      "advise" &&
+                    questionEvaluation.advisorIntent.verdict === "ok"
+                      ? "default"
+                      : "outline"
+                  }
+                  className="h-6 px-2 text-[10px]"
+                  onClick={() => {
+                    updateAdvisorIntentEvaluation("advise", {
+                      advisorGateCorrectlySkipped: false,
+                      advisorGateShouldAdvise: true,
+                    });
+                  }}
+                >
+                  Correctly advised
+                </Button>
+                <Button
+                  size="sm"
+                  variant={
+                    questionEvaluation?.advisorIntent?.verdict ===
+                    "false-positive"
+                      ? "default"
+                      : "outline"
+                  }
+                  className="h-6 px-2 text-[10px]"
+                  onClick={() => {
+                    updateAdvisorIntentEvaluation("ignore", {
+                      advisorGateCorrectlySkipped: true,
+                      advisorGateShouldAdvise: false,
+                    });
+                  }}
+                >
+                  Should not advise
                 </Button>
               </div>
             ) : null}

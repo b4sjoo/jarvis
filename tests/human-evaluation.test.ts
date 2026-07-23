@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  buildAdvisorIntentEvaluationFromTrace,
   buildQuestionEvaluationPatchFromTrace,
   resolveSuggestionQuestionLineage,
   resolveVisibleAnswerEvaluationTarget,
@@ -8,6 +9,7 @@ import {
 } from "../src/lib/meeting/human-evaluation.js";
 import type {
   AdvisorSuggestion,
+  MeetingTrace,
   TraceHumanEvaluation,
 } from "../src/lib/meeting/types.js";
 
@@ -508,4 +510,65 @@ test("stores manual runtime type correction as HITL classification feedback", ()
   assert.deepEqual(evaluations[0].classification.reasons, [
     "manual-runtime-correction",
   ]);
+});
+
+test("labels an authorized advisor turn as a false positive when advice was not expected", () => {
+  const evaluation = buildAdvisorIntentEvaluationFromTrace({
+    trace: {
+      id: "trace_advised",
+      kind: "voice",
+      status: "success",
+      startedAt: 1,
+      steps: [],
+      inputs: [],
+      outputs: [],
+      metadata: {
+        advisorTurnIntent: "direct-question",
+        advisorTurnAction: "answer-refresh",
+        advisorTurnEnforcement: "allow",
+        advisorExecutionAuthorized: true,
+        advisorOutputCommitAuthorized: true,
+        logicalQuestionUnitId: "lqu_1",
+        logicalQuestionRevision: 2,
+        logicalQuestionSourceTurnIds: ["turn_1", "turn_2"],
+      },
+    } as MeetingTrace,
+    expectedAction: "ignore",
+    source: "manual-suppress",
+    now: 100,
+  });
+
+  assert.equal(evaluation.verdict, "false-positive");
+  assert.equal(evaluation.observedAction, "advised");
+  assert.equal(evaluation.failureReason, "advisor-false-positive");
+  assert.deepEqual(evaluation.sourceTurnIds, ["turn_1", "turn_2"]);
+});
+
+test("labels a suppressed advisor turn as a false negative when advice was expected", () => {
+  const evaluation = buildAdvisorIntentEvaluationFromTrace({
+    trace: {
+      id: "trace_skipped",
+      kind: "voice",
+      status: "success",
+      startedAt: 1,
+      steps: [],
+      inputs: [],
+      outputs: [],
+      metadata: {
+        advisorTurnIntent: "informational",
+        turnGateAction: "ignore",
+        advisorTurnEnforcement: "enforce",
+        advisorWouldSuppress: true,
+        advisorExecutionAuthorized: false,
+        triggerTurnId: "turn_3",
+      },
+    } as MeetingTrace,
+    expectedAction: "advise",
+    now: 200,
+  });
+
+  assert.equal(evaluation.verdict, "false-negative");
+  assert.equal(evaluation.observedAction, "suppressed");
+  assert.equal(evaluation.failureReason, "advisor-false-negative");
+  assert.deepEqual(evaluation.sourceTurnIds, ["turn_3"]);
 });

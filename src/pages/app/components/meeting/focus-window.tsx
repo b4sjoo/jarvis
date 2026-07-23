@@ -349,6 +349,33 @@ function MeetingFocusControlsWindow({
             <div className="mb-1 flex min-w-0 items-center gap-1.5 text-[11px] font-medium text-muted-foreground">
               <MessageSquareTextIcon className="h-3.5 w-3.5 shrink-0" />
               <span className="truncate">Latest transcript</span>
+              <Button
+                size="sm"
+                variant="outline"
+                className="ml-auto h-7 shrink-0 gap-1 px-2 text-[10px]"
+                onClick={() => sendFocusAction({ type: "force-advise" })}
+                disabled={!snapshot.forceAdviseAvailable || snapshot.isBusy}
+                title={
+                  snapshot.forceAdviseAvailable
+                    ? "Force one advisor response for this transcript"
+                    : snapshot.forceAdvisePending
+                      ? "Advisor repair is running"
+                      : snapshot.forceAdviseCompleted
+                        ? "This transcript has already been advised"
+                        : "No suppressed interviewer turn is available"
+                }
+              >
+                {snapshot.forceAdvisePending ? (
+                  <Loader2Icon className="h-3 w-3 animate-spin" />
+                ) : (
+                  <BrainIcon className="h-3 w-3" />
+                )}
+                {snapshot.forceAdvisePending
+                  ? "Advising"
+                  : snapshot.forceAdviseCompleted
+                    ? "Advised"
+                    : "Advise"}
+              </Button>
             </div>
             <p
               className={cn(
