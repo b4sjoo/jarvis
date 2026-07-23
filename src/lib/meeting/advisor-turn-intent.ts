@@ -463,10 +463,52 @@ function collectDirectAskEvidence(text: string, normalized: string) {
   ) {
     evidence.push("explicit-task-frame");
   }
-  if (/请|怎么|如何|为什么|解释|描述|设计|实现|写一个|比较|估算/.test(text)) {
+  if (
+    /请|怎么|如何|为什么|解释|描述|设计|实现|写一个|比较|估算/.test(text) &&
+    !isCjkIndirectQuestionClause(text)
+  ) {
     evidence.push("cjk-question-or-task-frame");
   }
+  evidence.push(...collectEmbeddedInterrogativeEvidence(text, normalized));
   return evidence;
+}
+
+function collectEmbeddedInterrogativeEvidence(
+  text: string,
+  normalized: string
+) {
+  const evidence: string[] = [];
+  const invertedFrame =
+    /\b(?:how|what|why|when|where|which|who)\s+(?:do|does|did|is|are|was|were|would|will|should|can|could|have|has|had)\b/iu;
+  const match = invertedFrame.exec(normalized);
+  if (match && match.index > 0) {
+    evidence.push("embedded-interrogative-frame");
+    const prefix = normalized.slice(0, match.index);
+    if (
+      /\b(?:yeah|okay|ok|right|so|then|and|but|if|assuming|suppose|given)\b/iu.test(
+        prefix
+      )
+    ) {
+      evidence.push("discourse-prefixed-question");
+    }
+  }
+
+  const cjkEmbeddedQuestion =
+    /(?:那么|那|所以|如果|假设|请问).*(?:哪里|哪儿|如何|怎么|为什么|是否|什么)(?:[呢吗]?[？?。]?)$/u.test(
+      text.trim()
+    );
+  if (cjkEmbeddedQuestion && !isCjkIndirectQuestionClause(text)) {
+    evidence.push("cjk-embedded-interrogative-frame");
+    evidence.push("discourse-prefixed-question");
+  }
+
+  return evidence;
+}
+
+function isCjkIndirectQuestionClause(text: string) {
+  return /(?:我们|文档|文章|材料|刚才).*(?:讨论|说明|解释|提到).*(?:哪里|哪儿|如何|怎么|为什么|是否)/u.test(
+    text
+  );
 }
 
 function collectConstraintEvidence(normalized: string) {
@@ -530,6 +572,8 @@ function collectFollowUpEvidence(normalized: string) {
 
 function collectDeclarativeEvidence(normalized: string) {
   return /\b(is|are|was|were|has|have|had|sends|stores|uses|contains|provides|means|works|runs|handles|supports|allows|includes|consists|connects|writes|reads)\b/i.test(
+    normalized
+  ) || /(?:讨论了?|说明了?|解释了?|提到了?|存储|使用|包含|支持)/u.test(
     normalized
   )
     ? ["declarative-clause"]

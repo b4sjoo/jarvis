@@ -35,6 +35,41 @@ test("preserves explicit coding and system-design requests", () => {
   }
 });
 
+test("recognizes discourse-prefixed and sentence-merged direct questions", () => {
+  for (const text of [
+    "Yeah, if you're using a RAG system for that, then where does your data storage live",
+    "Okay, assuming the cache is distributed, how would you invalidate stale entries",
+    "那么如果使用 RAG，数据应该存在哪里？",
+  ]) {
+    const decision = decideAdvisorTurnIntent(text, {
+      hasActiveTask: true,
+    });
+    assert.equal(decision.intent, "direct-question", text);
+    assert.equal(decision.action, "answer-refresh", text);
+    assert.equal(decision.executionAuthorized, true, text);
+    assert.ok(
+      decision.evidence.some((item) =>
+        /embedded-interrogative|cjk-question/.test(item)
+      ),
+      text
+    );
+  }
+});
+
+test("keeps indirect wh clauses as declarative context", () => {
+  for (const text of [
+    "We discussed where the data is stored.",
+    "The document explains how retrieval works.",
+    "我们刚才讨论了数据应该存在哪里。",
+  ]) {
+    const decision = decideAdvisorTurnIntent(text, {
+      hasActiveTask: true,
+    });
+    assert.equal(decision.action, "append-only", text);
+    assert.equal(decision.executionAuthorized, false, text);
+  }
+});
+
 test("keeps unbuffered incomplete speech in shadow mode as a fail-open fallback", () => {
   const decision = decideAdvisorTurnIntent("Can you describe...", {
     hasActiveTask: false,
