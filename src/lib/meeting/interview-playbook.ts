@@ -126,11 +126,11 @@ export function selectInterviewPlaybook({
       reason,
       allowedFamilies: ["system-design"],
       firstMove:
-        "Frame the core requirement, ask for scale/consistency/latency constraints, and estimate QPS before committing to a detailed architecture.",
+        "Frame the core requirement, ask 2-3 material questions covering enough traffic information to estimate QPS plus the highest-value correctness/availability constraint, and create a provisional high-level Whiteboard before committing to details.",
       clarifyingStrategy:
         "Prefer concrete requirement questions: DAU/actions/peak factor, consistency vs latency, single-region vs global, and out-of-scope boundaries.",
       outputContract:
-        "Answer can be a short opening plus 2-3 high-value clarifying questions. Approach should outline requirements, APIs/data model, architecture, scaling, correctness, reliability, and observability. Whiteboard should provide a concise pasteable architecture artifact when scope is clear enough or the interviewer asks to write/draw/explain layers.",
+        "During requirement clarification, Answer is a short framing plus 2-3 high-value questions and Whiteboard is a PROVISIONAL request/data-path skeleton with open constraints. After readiness, Approach and Whiteboard evolve through APIs/data model, architecture, scaling, correctness, reliability, and observability.",
       followUpPolicy:
         "Follow-ups should update the affected phase: capacity, data model, write path, consistency, failure mode, or deep dive subsystem.",
       maxEntries: 6,
@@ -150,11 +150,11 @@ export function selectInterviewPlaybook({
       reason,
       allowedFamilies: ["ai-ml-system-design", "system-design"],
       firstMove:
-        "Clarify objective, metric, data/label source, serving path, evaluation loop, latency/cost, and safety before giving a full design.",
+        "Clarify the decision/use case and ask 2-3 architecture-changing questions about success evaluation plus the highest-value data, serving, feedback, or safety boundary. Create a provisional high-level Whiteboard before giving a full design.",
       clarifyingStrategy:
         "Ask for target metric, traffic/latency, data freshness, evaluation standard, feedback loop, safety/privacy boundary, or rollout constraint.",
       outputContract:
-        "Answer should open with the design framing and include requirement clarifications when missing. Approach should cover data, model/retrieval, serving, eval, monitoring, rollout, and tradeoffs. Whiteboard should provide a concise pasteable architecture artifact when scope is clear enough or the interviewer asks to write/draw/explain layers.",
+        "During requirement clarification, Answer gives the design framing plus 2-3 material questions and Whiteboard is a PROVISIONAL data/context-to-decision-to-feedback skeleton with open constraints. After readiness, evolve data, model/retrieval, serving, eval, monitoring, rollout, and tradeoffs.",
       followUpPolicy:
         "Follow-ups should update the relevant AI/ML layer: data, retrieval, model, orchestration, eval, observability, safety, or rollout.",
       maxEntries: 6,

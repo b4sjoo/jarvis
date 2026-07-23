@@ -255,6 +255,11 @@ export function getActiveMeetingTaskTraceMetadata(
     whiteboardArtifactRevision: task.parent.whiteboardArtifact?.revision,
     whiteboardArtifactDomainTrack:
       task.parent.whiteboardArtifact?.domainTrack,
+    whiteboardProvisional: task.parent.whiteboardArtifact?.provisional,
+    whiteboardOpenConstraintCategories:
+      task.parent.whiteboardArtifact?.openConstraintCategories,
+    whiteboardRevisionReason:
+      task.parent.whiteboardArtifact?.revisionReason,
   };
 }
 
@@ -335,6 +340,10 @@ export function formatActiveMeetingTaskForPrompt(
           `- Artifact id: ${task.parent.whiteboardArtifact.id}`,
           `- Revision: ${task.parent.whiteboardArtifact.revision}`,
           `- Domain track: ${task.parent.whiteboardArtifact.domainTrack}`,
+          `- Provisional: ${Boolean(task.parent.whiteboardArtifact.provisional)}`,
+          task.parent.whiteboardArtifact.openConstraintCategories?.length
+            ? `- Open constraints: ${task.parent.whiteboardArtifact.openConstraintCategories.join(", ")}`
+            : undefined,
           task.parent.whiteboardArtifact.selectedOverlayIds.length
             ? `- Selected overlays: ${task.parent.whiteboardArtifact.selectedOverlayIds.join(", ")}`
             : undefined,

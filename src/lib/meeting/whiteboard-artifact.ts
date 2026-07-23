@@ -25,6 +25,9 @@ export interface WhiteboardArtifactUpdateInput {
   traceId?: string;
   selectedOverlayIds?: string[];
   updateSource: WhiteboardUpdateSource;
+  provisional?: boolean;
+  openConstraintCategories?: string[];
+  revisionReason?: string;
   now?: number;
 }
 
@@ -45,15 +48,23 @@ export function updateWhiteboardArtifactFromAnswer({
   traceId,
   selectedOverlayIds = [],
   updateSource,
+  provisional = phase === "requirement_clarification",
+  openConstraintCategories = [],
+  revisionReason,
   now = Date.now(),
 }: WhiteboardArtifactUpdateInput): WhiteboardArtifact | undefined {
   if (!isWhiteboardParentType(parentQuestionType)) return undefined;
 
   const parsed = parsedAnswer ?? parseMeetingAnswer(finalContent);
-  if (parsed.parseStatus === "partial") return existing;
+  if (parsed.parseStatus === "partial" && (existing || !provisional)) {
+    return existing;
+  }
 
-  const whiteboard = normalizeWhiteboardText(parsed.sections.whiteboard);
-
+  const whiteboard =
+    normalizeWhiteboardText(parsed.sections.whiteboard) ||
+    (!existing && provisional
+      ? buildProvisionalWhiteboard(parentTopic, parentQuestionType)
+      : "");
   if (!whiteboard) {
     return existing;
   }
@@ -63,6 +74,14 @@ export function updateWhiteboardArtifactFromAnswer({
     ...selectedOverlayIds,
   ]);
   const summary = buildWhiteboardSummary(whiteboard);
+  const nextOpenConstraintCategories = uniqueIds(openConstraintCategories);
+  const nextRevisionReason =
+    revisionReason ??
+    (provisional
+      ? "provisional-requirement-framing"
+      : updateSource === "manual-next"
+        ? "manual-next"
+        : "model-output");
 
   if (!existing) {
     return {
@@ -77,6 +96,9 @@ export function updateWhiteboardArtifactFromAnswer({
       content: whiteboard,
       summary,
       revision: 1,
+      provisional,
+      openConstraintCategories: nextOpenConstraintCategories,
+      revisionReason: nextRevisionReason,
       createdTraceId: traceId,
       lastUpdatedTraceId: traceId,
       updateSource,
@@ -88,7 +110,12 @@ export function updateWhiteboardArtifactFromAnswer({
   if (
     existing.content === whiteboard &&
     existing.currentPhase === phase &&
-    arraysEqual(existing.selectedOverlayIds, nextOverlayIds)
+    existing.provisional === provisional &&
+    arraysEqual(existing.selectedOverlayIds, nextOverlayIds) &&
+    arraysEqual(
+      existing.openConstraintCategories ?? [],
+      nextOpenConstraintCategories
+    )
   ) {
     return existing;
   }
@@ -103,10 +130,40 @@ export function updateWhiteboardArtifactFromAnswer({
     content: whiteboard,
     summary,
     revision: existing.revision + 1,
+    provisional,
+    openConstraintCategories: nextOpenConstraintCategories,
+    revisionReason: nextRevisionReason,
     lastUpdatedTraceId: traceId,
     updateSource,
     updatedAt: now,
   };
+}
+
+function buildProvisionalWhiteboard(
+  parentTopic: string,
+  parentQuestionType: ParentQuestionType
+) {
+  const topic = parentTopic.trim() || "current design problem";
+  if (parentQuestionType === "general-system-design") {
+    return [
+      "PROVISIONAL r1",
+      `Known scope: ${topic}`,
+      "Open: traffic/QPS, correctness/consistency, latency/availability, and non-goals.",
+      "Client -> Interface/API boundary -> Core domain capability",
+      "       -> State/source-of-truth boundary (TBD) -> Response",
+      "Optional async/derived path: TBD if required by scale or workflow.",
+    ].join("\n");
+  }
+
+  return [
+    "PROVISIONAL r1",
+    `Known use case/decision: ${topic}`,
+    "Open: objective/success metric, data/ground truth, serving latency/cost, safety, and feedback.",
+    "Input/data/context -> Preparation or retrieval/features (TBD)",
+    "                   -> Model/agent/decision boundary (TBD)",
+    "                   -> Serving/action -> Outcome",
+    "Outcome/logs ------> Evaluation/feedback boundary (TBD)",
+  ].join("\n");
 }
 
 export function resolveWhiteboardArtifactDisplay({

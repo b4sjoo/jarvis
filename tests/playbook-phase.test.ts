@@ -26,7 +26,7 @@ test("routes general system design whiteboard requests to design framing", () =>
   assert.match(formatPlaybookPhaseDecisionForPrompt(decision, undefined), /Whiteboard/);
 });
 
-test("keeps previous phase progress when automatic phase advances", () => {
+test("does not treat a design request as completed requirement clarification", () => {
   const decision = decidePlaybookPhaseProgression({
     questionType: "general-system-design",
     playbookId: "general_system_design",
@@ -41,14 +41,87 @@ test("keeps previous phase progress when automatic phase advances", () => {
     decision.phase
   );
 
-  assert.equal(decision.phase, "design_framing");
+  assert.equal(decision.phase, "requirement_clarification");
   assert.equal(decision.phaseFrom, "requirement_clarification");
-  assert.equal(progress.requirement_clarification, true);
-  assert.equal(progress.design_framing, true);
+  assert.equal(decision.requirementsReady, false);
+  assert.equal(decision.whiteboardProvisional, true);
+  assert.equal(progress.requirement_clarification, undefined);
+  assert.equal(progress.design_framing, undefined);
+  assert.equal(progress.architecture, undefined);
   assert.equal(
     formatPlaybookPhaseDecisionForTrace(decision).playbookPhaseDecisionFrom,
     "requirement_clarification"
   );
+});
+
+test("advances general system design only with source-backed readiness", () => {
+  const decision = decidePlaybookPhaseProgression({
+    questionType: "general-system-design",
+    playbookId: "general_system_design",
+    currentPhase: "requirement_clarification",
+    phaseProgress: {},
+    latestTurnText:
+      "Design a ticket booking app for 10 million daily users. Seats must never be double booked and p95 latency should stay under 300 ms.",
+    relation: "new-parent",
+    askFrame: "hypothetical-design",
+  });
+  const progress = applyPlaybookPhaseDecisionToProgress(
+    {},
+    decision,
+    decision.phase
+  );
+
+  assert.equal(decision.phase, "design_framing");
+  assert.equal(decision.requirementsReady, true);
+  assert.equal(decision.phaseCompletionSource, "observed-evidence");
+  assert.ok(
+    decision.observedRequirementCategories?.includes("functional_scope")
+  );
+  assert.ok(decision.observedRequirementCategories?.includes("scale_qps"));
+  assert.ok(
+    decision.observedRequirementCategories?.includes("consistency_invariant")
+  );
+  assert.equal(progress.requirements, true);
+  assert.equal(progress.requirement_clarification, true);
+  assert.equal(progress.architecture, undefined);
+});
+
+test("advances AI/ML design when the interviewer authorizes assumptions", () => {
+  const decision = decidePlaybookPhaseProgression({
+    questionType: "ai-ml-system-design",
+    playbookId: "aiml_system_design",
+    currentPhase: "requirement_clarification",
+    phaseProgress: {},
+    latestTurnText:
+      "Design a RAG assistant. Make reasonable assumptions and proceed.",
+    relation: "new-parent",
+    askFrame: "hypothetical-design",
+  });
+
+  assert.equal(decision.phase, "design_framing");
+  assert.equal(decision.requirementsReady, true);
+  assert.equal(decision.phaseCompletionSource, "explicit-assumptions");
+  assert.equal(decision.whiteboardProvisional, false);
+});
+
+test("generated answer text cannot satisfy requirement readiness", () => {
+  const decision = decidePlaybookPhaseProgression({
+    questionType: "general-system-design",
+    playbookId: "general_system_design",
+    currentPhase: "requirement_clarification",
+    phaseProgress: {},
+    latestTurnText: "Design a food delivery app.",
+    currentAnswer:
+      "Assume 10 million users, strong consistency, and p95 under 200 ms.",
+    relation: "new-parent",
+    askFrame: "hypothetical-design",
+  });
+
+  assert.equal(decision.phase, "requirement_clarification");
+  assert.equal(decision.requirementsReady, false);
+  assert.deepEqual(decision.observedRequirementCategories, [
+    "functional_scope",
+  ]);
 });
 
 test("marks AI/ML metrics follow-up as evaluation metrics", () => {

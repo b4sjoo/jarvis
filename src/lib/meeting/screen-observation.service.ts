@@ -33,6 +33,7 @@ import {
   formatPlaybookPhaseDecisionForPrompt,
   type PlaybookPhaseDecision,
 } from "./playbook-phase";
+import type { ActiveMeetingTask } from "./active-meeting-task";
 import { parseMeetingAnswer } from "./meeting-answer";
 import {
   normalizeCanonicalQuestionType,
@@ -83,6 +84,7 @@ export interface SolveScreenAnchoredTaskOptions {
   screenPreflight?: ScreenPreflightResult;
   interviewPlaybook?: SelectedInterviewPlaybook;
   playbookPhaseDecision?: PlaybookPhaseDecision;
+  activeMeetingTask?: ActiveMeetingTask;
   factAnchorDecision?: FactAnchorDecision;
   projectBindingDecision?: ProjectBindingDecision;
   signal?: AbortSignal;
@@ -320,6 +322,7 @@ export async function solveScreenAnchoredTask({
   screenPreflight,
   interviewPlaybook,
   playbookPhaseDecision,
+  activeMeetingTask,
   factAnchorDecision,
   projectBindingDecision,
   signal,
@@ -352,6 +355,7 @@ export async function solveScreenAnchoredTask({
     screenPreflight,
     interviewPlaybook,
     playbookPhaseDecision,
+    activeMeetingTask,
     factAnchorDecision,
     projectBindingDecision,
   });
@@ -515,6 +519,7 @@ function buildScreenTaskUserMessage({
   screenPreflight,
   interviewPlaybook,
   playbookPhaseDecision,
+  activeMeetingTask,
   factAnchorDecision,
   projectBindingDecision,
 }: {
@@ -528,6 +533,7 @@ function buildScreenTaskUserMessage({
   screenPreflight?: ScreenPreflightResult;
   interviewPlaybook?: SelectedInterviewPlaybook;
   playbookPhaseDecision?: PlaybookPhaseDecision;
+  activeMeetingTask?: ActiveMeetingTask;
   factAnchorDecision?: FactAnchorDecision;
   projectBindingDecision?: ProjectBindingDecision;
 }) {
@@ -564,7 +570,10 @@ function buildScreenTaskUserMessage({
     formatInterviewPlaybookForPrompt(runtimePlaybook),
     "</interview_playbook>",
     "<playbook_phase_state>",
-    formatPlaybookPhaseDecisionForPrompt(playbookPhaseDecision, undefined),
+    formatPlaybookPhaseDecisionForPrompt(
+      playbookPhaseDecision,
+      activeMeetingTask
+    ),
     "</playbook_phase_state>",
     "<response_preferences>",
     formatScreenTaskResponsePreferences(responseConfig),
@@ -611,7 +620,7 @@ function buildScreenTaskUserMessage({
     "Use <interview_playbook> as the runtime strategy for the selected question type: follow its first move, clarifying strategy, output contract, and follow-up policy unless the screenshot or transcript contradicts it.",
     "Use <playbook_phase_state> to avoid repeating completed phases and to decide whether this turn is asking for requirements, scale, architecture, metrics, or a whiteboard artifact.",
     "If askFrame is ambiguous between an existing project deep dive and a future system design improvement, do not guess. Ask a clarifying question such as whether to discuss the existing implementation first or propose a future design improvement.",
-    "For general-system-design and AI/ML system-design tasks, include a Whiteboard section when the design is scoped enough or the visible/transcript prompt asks to write, draw, explain layers, explain architecture, or whiteboard it. Use plain text directly; do not ask whether to use plain text or ASCII. Whiteboard should cover scope/assumptions, scale or QPS when applicable, core APIs, data model, components, critical read/write or retrieval/serving flow, consistency/bottleneck, reliability, and observability.",
+    "For general-system-design and AI/ML system-design tasks, always include a Whiteboard section. During requirement_clarification it must be a shallow PROVISIONAL skeleton based only on known facts with open constraints visible. After readiness, evolve the same artifact with supported APIs/data model/components/flows/reliability/observability. Use plain text directly; do not ask whether to use plain text or ASCII.",
     "For behavioral interview questions, prefer a concrete first-person story from eligible fact-evidence memory. Do not invent facts, employers, project names, teammates, metrics, timelines, or outcomes from guidance, templates, overlays, or unsupported visible text.",
     "Obey <fact_anchor_guardrail> whenever it requires personal evidence, even if the screen preflight classified the question as coding, field knowledge, system design, or unknown. If Action is ask-clarification or offer-supported-choices, do not invent a first-person story or project. Use 中文思路 to say the missing supported anchor, keep Answer safe, and ask the user to choose or clarify the project/story.",
     "Obey <project_binding>. A bound project is the exclusive source identity for first-person project facts in this parent task. If Action is needs-selection, list the eligible project names in Clarifying options and do not choose or blend projects silently.",
@@ -642,7 +651,7 @@ function buildScreenTaskUserMessage({
     "中文思路: 用中文先给 AI/ML infra 设计抓手：目标/指标、数据来源、retrieval/model layer、serving path、evaluation/feedback loop、latency/cost/safety，以及建议先问的问题。",
     "Answer: give a short opening answer or framing statement, then include 2-3 requirement clarification questions that would materially change the design, such as target metric, traffic scale, latency budget, data freshness, evaluation standard, or safety constraint. If important requirements are missing, do not fake a full design; propose the first AI/ML design direction and ask for the highest-value clarification.",
     "Approach: outline objective and success metrics, data and indexing/retrieval path, model/serving architecture, evaluation and feedback loop, scaling, latency/cost, reliability, and safety tradeoffs. If the visible question asks about metrics, logs, evaluation, quality, observability, or whether the agent/system improved, include concrete north-star, online, offline eval, agent trajectory, latency/cost, and guardrail metrics plus a log schema with trace/correlation id and event fields.",
-    "Whiteboard: when scope is clear enough or the interviewer asks to write/draw/explain architecture, provide a compact plain-text artifact covering objective/assumptions, data/retrieval/model path, serving flow, evaluation/feedback, monitoring, and key tradeoffs; otherwise '-'.",
+    "Whiteboard: always provide a compact plain-text artifact. During requirement_clarification, mark it PROVISIONAL and show only known objective/use case, a broad data/context -> preparation/retrieval/features -> model/agent/decision -> serving/action -> outcome -> evaluation/feedback path, and open constraints. After readiness, refine supported details.",
     "Code: -",
     "Complexity: include throughput, storage, latency budget, model/retrieval cost, or algorithmic complexity only when applicable; otherwise '-'.",
     "Question: restate the visible AI/ML system design question.",
@@ -652,7 +661,7 @@ function buildScreenTaskUserMessage({
     "中文思路: 用中文先给通用系统设计抓手：核心需求、规模、API/data model、consistency、latency、可靠性、成本取舍，以及建议先问的问题。",
     "Answer: give a short opening answer or framing statement, include a rough QPS/capacity estimate if traffic numbers are visible, and include 2-3 requirement clarification questions that would materially change the design. If scale is not visible, explicitly say you would first ask for DAU/actions-per-user/peak factor before estimating QPS; use QPS = users * actions_per_user_per_day / 86400 * peak_factor as the default estimation frame. If important requirements are missing, do not fake a full design; propose the first backend design direction and ask for the highest-value clarification.",
     "Approach: outline requirements, APIs/data model, architecture, scaling, consistency, reliability, observability, and tradeoffs.",
-    "Whiteboard: when scope is clear enough or the interviewer asks to write/draw/explain architecture, provide a compact plain-text artifact covering scope, scale/QPS, APIs, data model, components, critical flows, consistency/bottleneck, reliability, and observability; otherwise '-'.",
+    "Whiteboard: always provide a compact plain-text artifact. During requirement_clarification, mark it PROVISIONAL and show only known scope, a Client -> Interface/API -> Core capability -> State boundary -> Response path, and open scale/correctness/latency constraints. After readiness, refine supported details.",
     "Code: -",
     "Complexity: include throughput, storage, latency, or algorithmic complexity only when applicable; otherwise '-'.",
     "Question: restate the visible general system design question.",

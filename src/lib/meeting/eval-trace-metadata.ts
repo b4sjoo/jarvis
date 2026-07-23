@@ -9,6 +9,9 @@ export const MEETING_EVAL_TRACE_KEYS = {
   whiteboardArtifactId: "whiteboardArtifactId",
   whiteboardArtifactRevision: "whiteboardArtifactRevision",
   whiteboardArtifactDomainTrack: "whiteboardArtifactDomainTrack",
+  whiteboardProvisional: "whiteboardProvisional",
+  whiteboardOpenConstraintCategories: "whiteboardOpenConstraintCategories",
+  whiteboardRevisionReason: "whiteboardRevisionReason",
   manualPhaseFrom: "manualPhaseFrom",
   manualPhaseTo: "manualPhaseTo",
   manualPhaseTargetArtifact: "manualPhaseTargetArtifact",
@@ -26,6 +29,9 @@ export interface MeetingEvalTraceMetadata {
   whiteboardArtifactId?: string;
   whiteboardArtifactRevision?: number;
   whiteboardArtifactDomainTrack?: string;
+  whiteboardProvisional?: boolean;
+  whiteboardOpenConstraintCategories?: string[];
+  whiteboardRevisionReason?: string;
   manualPhaseFrom?: string;
   manualPhaseTo?: string;
   manualPhaseTargetArtifact?: string;
@@ -49,6 +55,9 @@ export function buildWhiteboardEvalTraceMetadata(
     whiteboardArtifactId: artifact.id,
     whiteboardArtifactRevision: artifact.revision,
     whiteboardArtifactDomainTrack: artifact.domainTrack,
+    whiteboardProvisional: artifact.provisional,
+    whiteboardOpenConstraintCategories: artifact.openConstraintCategories,
+    whiteboardRevisionReason: artifact.revisionReason,
   };
 }
 
@@ -88,6 +97,18 @@ export function readMeetingEvalTraceMetadata(
     whiteboardArtifactDomainTrack: readFirstString(
       sources,
       MEETING_EVAL_TRACE_KEYS.whiteboardArtifactDomainTrack
+    ),
+    whiteboardProvisional: readFirstBoolean(
+      sources,
+      MEETING_EVAL_TRACE_KEYS.whiteboardProvisional
+    ),
+    whiteboardOpenConstraintCategories: readFirstStringList(
+      sources,
+      MEETING_EVAL_TRACE_KEYS.whiteboardOpenConstraintCategories
+    ),
+    whiteboardRevisionReason: readFirstString(
+      sources,
+      MEETING_EVAL_TRACE_KEYS.whiteboardRevisionReason
     ),
     manualPhaseFrom: readFirstString(
       sources,

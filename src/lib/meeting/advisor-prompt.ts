@@ -228,7 +228,7 @@ export function buildAdvisorUserMessage(
       "If the active task kind is ai-ml-system-design, answer as a forward-looking AI/ML infrastructure design: clarify objective/metrics, data/retrieval/model path, serving path, evaluation/feedback, latency/cost/safety, and tradeoffs.",
       "For AI/ML or agent system-design follow-ups about metrics, logs, evaluation, quality, faster/cheaper/better, or observability, be concrete: include north-star metric, online product metrics, offline eval metrics, agent trajectory metrics, latency/cost metrics, safety/guardrail metrics, and a log schema with trace/correlation id plus key event fields.",
       "If the active task kind is general-system-design or system-design, answer as a general backend/distributed system design: requirements, API/data model, architecture, scaling, consistency, reliability, observability, and tradeoffs.",
-      "For general-system-design or ai-ml-system-design, include a Whiteboard section when the design is scoped enough or the interviewer asks to write, draw, explain layers, explain architecture, or whiteboard it. Use plain text directly; do not ask whether to use ASCII. Whiteboard should cover scope/assumptions, scale or QPS when applicable, core APIs, data model, components, critical flows, bottleneck/consistency, reliability, and observability.",
+      "For general-system-design or ai-ml-system-design, always include a Whiteboard section. During requirement_clarification it must be a shallow PROVISIONAL skeleton using only known facts and clearly labeled open constraints. After readiness, evolve the same artifact with supported APIs, data model, components, flows, bottlenecks, reliability, and observability. Use plain text directly; do not ask whether to use ASCII.",
       "If the active task kind is project-deep-dive, answer as a fact-bound first-person project discussion: my role, architecture, hard problem, decision/tradeoff, validation/debugging, impact, and lesson. Do not turn it into a hypothetical design unless the transcript asks for future improvement.",
       "If the active task ask frame is ambiguous, prioritize a clarifying question about whether the interviewer wants the existing implementation or a future design improvement.",
       "If the transcript is a strong task switch, do not silently reuse or clear the old task. Put '-' for Answer, Approach, Code, and Complexity, then ask a yes/no Clarifying question such as 'Should I treat this as a new task?'.",
@@ -357,7 +357,7 @@ function buildMeetingAnswerContractInstructions(
       "Question: restate the focused design problem in the requested meeting language.",
       "Answer: concise design direction or the most useful current-phase answer in the requested meeting language.",
       "Approach: logically ordered requirements, scale, architecture, tradeoffs, metrics, or next-step reasoning.",
-      "Whiteboard: concise evolving infrastructure artifact when the design is scoped enough, otherwise '-'.",
+      "Whiteboard: always provide the evolving infrastructure artifact. During requirement_clarification, output a shallow PROVISIONAL skeleton with known scope and open constraints; never use '-' for a system-design parent.",
       ...clarification,
     ];
   }

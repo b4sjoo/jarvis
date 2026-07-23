@@ -131,6 +131,7 @@ import {
   preflightScreenObservation,
   selectInterviewPlaybook,
   applyPlaybookPhaseDecisionToProgress,
+  createInitialPlaybookPhaseProgress,
   decideManualNextPhaseTransition,
   decidePlaybookPhaseProgression,
   formatPlaybookPhaseDecisionForTrace,
@@ -3875,7 +3876,6 @@ export function useMeetingAssistant() {
           promptContext.activeInterviewTask?.phaseProgress,
       latestTurnText: latestTurn?.text,
       currentQuestion: advisorTaskSignals.query,
-      currentAnswer: options.currentSuggestion,
       relation: advisorTaskSignals.taskRelation,
       subtaskIntent: advisorTaskSignals.subtaskIntent,
       askFrame: advisorAskFrame ?? getAdvisorActiveAskFrame(promptContext),
@@ -8115,22 +8115,37 @@ export function useMeetingAssistant() {
             screenMemoryQuery,
             screenPreflight
           );
+        const screenTaskRelationDecision = decideScreenTaskRelation({
+          existingTask:
+            preflightContextState.activeInterviewTask ??
+            (preflightContextState.activeMeetingTask?.screen &&
+            preflightContextState.activeScreenTask
+              ? buildInterviewParentFromScreenTask(
+                  preflightContextState.activeScreenTask
+                )
+              : undefined),
+          taskKind,
+          question: screenPreflight?.question ?? screenMemoryQuery,
+          screenEvidenceText,
+          screenPreflight,
+          corrections: speechCorrectionsRef.current,
+        });
         const provisionalScreenTaskRelation =
           screenSectionHintConsumption.disposition === "applied"
             ? "new-parent"
-            : resolveProvisionalScreenTaskRelation({
-            existingTask:
-              preflightContextState.activeInterviewTask ??
-              (preflightContextState.activeMeetingTask?.screen &&
-              preflightContextState.activeScreenTask
-                ? buildInterviewParentFromScreenTask(
-                    preflightContextState.activeScreenTask
-                  )
-                : undefined),
-            questionType: screenMemoryQuestionType,
-            projectAnchor: screenPreflight?.projectAnchor,
-            questionText: screenPreflight?.question ?? screenMemoryQuery,
-          });
+            : screenTaskRelationDecision.relation;
+        traceStoreRef.current.updateMetadata(trace.id, {
+          screenTaskRelation: provisionalScreenTaskRelation,
+          screenTaskRelationReason:
+            screenSectionHintConsumption.disposition === "applied"
+              ? "explicit-section-hint"
+              : screenTaskRelationDecision.reason,
+          screenTaskRelationConfidence:
+            screenSectionHintConsumption.disposition === "applied"
+              ? 1
+              : screenTaskRelationDecision.confidence,
+          screenTaskRelationCommittedBeforeModel: true,
+        });
         const existingScreenProjectBinding =
           preflightContextState.activeMeetingTask?.parent.projectBinding ??
           preflightContextState.activeInterviewTask?.projectBinding;
@@ -8163,12 +8178,16 @@ export function useMeetingAssistant() {
           questionType: normalizeQuestionTypeAlias(screenMemoryQuestionType),
           playbookId: screenPlaybook?.id,
           currentPhase:
-            preflightContextState.activeMeetingTask?.parent.playbookPhase ??
-            preflightContextState.activeInterviewTask?.playbookPhase ??
-            screenPlaybook?.phase,
+            provisionalScreenTaskRelation === "new-parent"
+              ? screenPlaybook?.phase
+              : preflightContextState.activeMeetingTask?.parent.playbookPhase ??
+                preflightContextState.activeInterviewTask?.playbookPhase ??
+                screenPlaybook?.phase,
           phaseProgress:
-            preflightContextState.activeMeetingTask?.parent.phaseProgress ??
-            preflightContextState.activeInterviewTask?.phaseProgress,
+            provisionalScreenTaskRelation === "new-parent"
+              ? undefined
+              : preflightContextState.activeMeetingTask?.parent.phaseProgress ??
+                preflightContextState.activeInterviewTask?.phaseProgress,
           latestTurnText: recentTranscript,
           currentQuestion: screenPreflight?.question ?? screenMemoryQuery,
           relation: provisionalScreenTaskRelation,
@@ -8341,6 +8360,10 @@ export function useMeetingAssistant() {
             screenPreflight,
             interviewPlaybook: screenRuntimePlaybook,
             playbookPhaseDecision: screenPhaseDecision,
+            activeMeetingTask:
+              provisionalScreenTaskRelation === "new-parent"
+                ? undefined
+                : preflightContextState.activeMeetingTask,
             factAnchorDecision: screenFactAnchorDecision,
             projectBindingDecision: screenProjectBindingDecision,
             signal: analysisController.signal,
@@ -8564,14 +8587,17 @@ export function useMeetingAssistant() {
             basedOnObservationId: observation.id,
           };
 
-          const screenRelationDecision = decideScreenTaskRelation({
-            existingTask: existingInterviewTask,
-            taskKind,
-            question: screenTaskTopic,
-            screenEvidenceText,
-            screenPreflight,
-            corrections: speechCorrectionsRef.current,
-          });
+          const screenRelationDecision = {
+            relation: provisionalScreenTaskRelation,
+            reason:
+              screenSectionHintConsumption.disposition === "applied"
+                ? "explicit-section-hint"
+                : screenTaskRelationDecision.reason,
+            confidence:
+              screenSectionHintConsumption.disposition === "applied"
+                ? 1
+                : screenTaskRelationDecision.confidence,
+          };
           traceStoreRef.current.updateMetadata(trace.id, {
             screenTaskRelation: screenRelationDecision.relation,
             screenTaskRelationReason: screenRelationDecision.reason,
@@ -11483,6 +11509,10 @@ function updateInterviewTaskContinuityForAnswer({
       traceId,
       selectedOverlayIds,
       updateSource: whiteboardUpdateSource ?? "model-output",
+      provisional: phaseDecision?.whiteboardProvisional,
+      openConstraintCategories:
+        phaseDecision?.whiteboardOpenConstraintCategories,
+      revisionReason: phaseDecision?.whiteboardRevisionReason,
       now,
     });
 
@@ -11530,6 +11560,10 @@ function updateInterviewTaskContinuityForAnswer({
       traceId,
       selectedOverlayIds,
       updateSource: whiteboardUpdateSource ?? "new-parent",
+      provisional: phaseDecision?.whiteboardProvisional,
+      openConstraintCategories:
+        phaseDecision?.whiteboardOpenConstraintCategories,
+      revisionReason: phaseDecision?.whiteboardRevisionReason,
       now,
     });
 
@@ -11542,7 +11576,7 @@ function updateInterviewTaskContinuityForAnswer({
         playbook: storedPlaybook,
         playbookPhase: nextPhase,
         phaseProgress: applyPlaybookPhaseDecisionToProgress(
-          storedPlaybook?.phase ? { [storedPlaybook.phase]: true } : {},
+          createInitialPlaybookPhaseProgress(kind, storedPlaybook?.phase),
           phaseDecision,
           storedPlaybook?.phase
         ),
@@ -11616,6 +11650,10 @@ function updateInterviewTaskContinuityForAnswer({
         traceId,
         selectedOverlayIds,
         updateSource: whiteboardUpdateSource ?? "model-output",
+        provisional: phaseDecision?.whiteboardProvisional,
+        openConstraintCategories:
+          phaseDecision?.whiteboardOpenConstraintCategories,
+        revisionReason: phaseDecision?.whiteboardRevisionReason,
         now,
       }),
       previousUsefulAnswer:
@@ -11657,7 +11695,10 @@ function buildInterviewParentFromScreenTask(
     topic: task.question || extractScreenTaskQuestion(task.content) || "Screen task",
     playbook: task.playbook,
     playbookPhase: task.playbook?.phase ?? "follow_up",
-    phaseProgress: task.playbook?.phase ? { [task.playbook.phase]: true } : {},
+    phaseProgress: createInitialPlaybookPhaseProgress(
+      kind,
+      task.playbook?.phase
+    ),
     supportedFactAnchors: [],
     latestUsefulAnswer: buildCompactAnswerSummary(task.content),
     previousUsefulAnswer: undefined,
@@ -11762,47 +11803,6 @@ function buildCorrectionParentFromProvisionalQuestion({
     ],
     revisions: 0,
   };
-}
-
-function resolveProvisionalScreenTaskRelation({
-  existingTask,
-  questionType,
-  projectAnchor,
-  questionText,
-}: {
-  existingTask?: ActiveInterviewParent;
-  questionType: MemoryQuestionType | ScreenTaskKind;
-  projectAnchor?: string;
-  questionText?: string;
-}): InterviewTaskRelation {
-  if (!existingTask) return "new-parent";
-
-  if (
-    existingTask.projectBinding &&
-    projectAnchor?.trim() &&
-    !projectBindingMatchesProjectHint(
-      existingTask.projectBinding,
-      projectAnchor
-    )
-  ) {
-    return "new-parent";
-  }
-
-  const nextKind = normalizeInterviewParentKind(questionType);
-  if (!nextKind) return "child-probe";
-  if (isCompatibleParentKind(existingTask.stableKind, nextKind)) {
-    return "resume-parent";
-  }
-  if (
-    shouldUseLatestTurnAsChildProbe({
-      activeQuestionType: existingTask.stableKind,
-      latestQuestionType: readMemoryQuestionType(questionType) ?? "unknown",
-      latestText: questionText ?? "",
-    })
-  ) {
-    return "child-probe";
-  }
-  return "new-parent";
 }
 
 function decideScreenTaskRelation({

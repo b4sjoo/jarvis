@@ -452,6 +452,9 @@ export interface WhiteboardArtifact {
   content: string;
   summary: string;
   revision: number;
+  provisional?: boolean;
+  openConstraintCategories?: string[];
+  revisionReason?: string;
   createdTraceId?: string;
   lastUpdatedTraceId?: string;
   updateSource: WhiteboardUpdateSource;

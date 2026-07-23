@@ -42,6 +42,77 @@ test("creates a first-class whiteboard artifact for system design answers", () =
   assert.match(artifact.summary, /Reservation Service/);
 });
 
+test("creates a provisional revision-one skeleton during requirement clarification", () => {
+  const artifact = updateWhiteboardArtifactFromAnswer({
+    parentTaskId: "parent_provisional",
+    parentQuestionType: "general-system-design",
+    parentTopic: "Design an Uber-like app",
+    finalContent:
+      "Answer:\nI would first clarify traffic, consistency, and latency.",
+    phase: "requirement_clarification",
+    provisional: true,
+    openConstraintCategories: [
+      "scale_qps",
+      "consistency_invariant",
+      "latency_sla",
+    ],
+    revisionReason: "provisional-requirement-framing",
+    updateSource: "new-parent",
+    now: 1,
+  });
+
+  assert.ok(artifact);
+  assert.equal(artifact.revision, 1);
+  assert.equal(artifact.provisional, true);
+  assert.deepEqual(artifact.openConstraintCategories, [
+    "scale_qps",
+    "consistency_invariant",
+    "latency_sla",
+  ]);
+  assert.equal(
+    artifact.revisionReason,
+    "provisional-requirement-framing"
+  );
+  assert.match(artifact.content, /PROVISIONAL r1/);
+  assert.match(artifact.content, /Client -> Interface\/API/);
+});
+
+test("refines the same provisional artifact after requirement readiness", () => {
+  const provisional = updateWhiteboardArtifactFromAnswer({
+    parentTaskId: "parent_aiml",
+    parentQuestionType: "ai-ml-system-design",
+    parentTopic: "Design a RAG trip planner",
+    finalContent: "Answer:\nI would clarify objective, data, and latency.",
+    phase: "requirement_clarification",
+    provisional: true,
+    openConstraintCategories: ["success_evaluation", "data_grounding"],
+    updateSource: "new-parent",
+    now: 1,
+  });
+
+  const refined = updateWhiteboardArtifactFromAnswer({
+    existing: provisional,
+    parentTaskId: "parent_aiml",
+    parentQuestionType: "ai-ml-system-design",
+    parentTopic: "Design a RAG trip planner",
+    finalContent:
+      "Whiteboard:\nTravel data -> index -> retrieve -> rerank -> generate -> citation checks.",
+    phase: "design_framing",
+    provisional: false,
+    openConstraintCategories: [],
+    revisionReason: "requirement-readiness-satisfied",
+    updateSource: "model-output",
+    now: 2,
+  });
+
+  assert.ok(refined);
+  assert.equal(refined.id, provisional?.id);
+  assert.equal(refined.revision, 2);
+  assert.equal(refined.provisional, false);
+  assert.deepEqual(refined.openConstraintCategories, []);
+  assert.match(refined.content, /rerank/);
+});
+
 test("preserves existing artifact when a follow-up has no whiteboard section", () => {
   const artifact = updateWhiteboardArtifactFromAnswer({
     parentTaskId: "parent_1",
