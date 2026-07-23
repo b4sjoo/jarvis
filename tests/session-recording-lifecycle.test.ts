@@ -26,6 +26,17 @@ test("serializes concurrent starts into one recording generation", async () => {
   assert.equal(native.startCalls().length, 1);
   assert.equal(first.sessionId, second.sessionId);
   assert.equal(manager.getState().lifecycle, "active");
+  const initialManifest = JSON.parse(
+    stringArg(native.startCalls()[0]!, "manifestPayload")
+  ) as Record<string, unknown>;
+  assert.equal(
+    (initialManifest.build as Record<string, unknown>).appVersion,
+    "unknown"
+  );
+  assert.equal(
+    (initialManifest.build as Record<string, unknown>).gitCommit,
+    "unknown"
+  );
 
   await manager.stop("test-complete");
   assert.equal(manager.getState().lifecycle, "idle");
@@ -391,6 +402,21 @@ test("compact trace summaries preserve task boundary and cross-domain evidence",
   manager.recordTrace(
     buildCompletedTrace("boundary_trace", Date.now(), {
       taskBoundaryLogicalQuestionUnitId: "logical_1",
+      logicalQuestionUnitId: "logical_1",
+      logicalQuestionCurrentTurnId: "turn_2",
+      logicalQuestionSourceTurnIds: ["turn_1", "turn_2"],
+      logicalQuestionCompositionReasons: [
+        "new-question",
+        "referential-completion",
+      ],
+      logicalQuestionBoundaryReason: "bounded-followup",
+      logicalQuestionTruncated: false,
+      taskRelation: "new-parent",
+      advisorPromptIncludedLogicalQuestion: true,
+      advisorPromptLogicalQuestionSourceCount: 2,
+      advisorOutputCommittedToUi: true,
+      advisorOutputCommitAuthorized: true,
+      visibleAnswerChanged: true,
       taskBoundaryCandidateId: "boundary_1",
       taskBoundaryCandidateState: "committed",
       taskBoundaryCommitPolicy: "immediate",
@@ -436,7 +462,16 @@ test("compact trace summaries preserve task boundary and cross-domain evidence",
   );
   assert.ok(summaryWrite);
   const summary = parsePayload(summaryWrite);
-  assert.equal(summary.version, 5);
+  assert.equal(summary.version, 6);
+  assert.equal(summary.taskRelation, "new-parent");
+  assert.deepEqual(summary.logicalQuestionSourceTurnIds, ["turn_1", "turn_2"]);
+  assert.deepEqual(summary.logicalQuestionCompositionReasons, [
+    "new-question",
+    "referential-completion",
+  ]);
+  assert.equal(summary.advisorPromptIncludedLogicalQuestion, true);
+  assert.equal(summary.advisorOutputCommittedToUi, true);
+  assert.equal(summary.visibleAnswerChanged, true);
   assert.deepEqual(
     (summary.taskBoundary as Record<string, unknown>).sourceTurnIds,
     ["turn_1", "turn_2"]

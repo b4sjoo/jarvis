@@ -29,7 +29,7 @@ import {
 import { serializeMeetingTraceExport } from "./trace.js";
 
 const SESSION_RECORDING_SCHEMA_VERSION = 1;
-const SESSION_TRACE_SUMMARY_SCHEMA_VERSION = 5;
+const SESSION_TRACE_SUMMARY_SCHEMA_VERSION = 6;
 const SESSION_TRACE_INDEX_SCHEMA_VERSION = 1;
 
 interface SessionRecordingStartOptions {
@@ -180,6 +180,19 @@ export interface SessionCompactTraceSummary {
   advisorExecutionSuppressedReason?: string;
   taskMutationAuthorized?: boolean;
   taskMutationAuthorizationReason?: string;
+  taskRelation?: string;
+  logicalQuestionUnitId?: string;
+  logicalQuestionCurrentTurnId?: string;
+  logicalQuestionSourceTurnIds: string[];
+  logicalQuestionCompositionReasons: string[];
+  logicalQuestionBoundaryReason?: string;
+  logicalQuestionTruncated?: boolean;
+  advisorPromptIncludedLogicalQuestion?: boolean;
+  advisorPromptLogicalQuestionSourceCount?: number;
+  advisorOutputCommittedToUi?: boolean;
+  advisorOutputCommitAuthorized?: boolean;
+  visibleAnswerChanged?: boolean;
+  manualQuestionTypeCorrectionId?: string;
   taskBoundary?: {
     logicalQuestionUnitId?: string;
     candidateId?: string;
@@ -1715,11 +1728,33 @@ function buildSessionRecordingManifest({
     folderName,
     folderPath,
     startedAt,
+    build: readBuildProvenance(),
     recordingRoot: "app-data/meeting-session-recordings",
     settings: sanitizeMeetingAssistantSettings(settings),
     interviewSessionBrief,
     interviewSessionContext,
     providerSummary,
+  };
+}
+
+function readBuildProvenance() {
+  return {
+    appVersion:
+      typeof __JARVIS_APP_VERSION__ === "string"
+        ? __JARVIS_APP_VERSION__
+        : "unknown",
+    gitCommit:
+      typeof __JARVIS_GIT_COMMIT__ === "string"
+        ? __JARVIS_GIT_COMMIT__
+        : "unknown",
+    gitDirty:
+      typeof __JARVIS_GIT_DIRTY__ === "boolean"
+        ? __JARVIS_GIT_DIRTY__
+        : undefined,
+    buildTimestamp:
+      typeof __JARVIS_BUILD_TIMESTAMP__ === "string"
+        ? __JARVIS_BUILD_TIMESTAMP__
+        : undefined,
   };
 }
 
@@ -1930,6 +1965,56 @@ function buildCompactTraceSummary({
     taskMutationAuthorizationReason: readFirstString(
       metadataSources,
       "taskMutationAuthorizationReason"
+    ),
+    taskRelation: readFirstString(metadataSources, "taskRelation"),
+    logicalQuestionUnitId: readFirstString(
+      metadataSources,
+      "logicalQuestionUnitId"
+    ),
+    logicalQuestionCurrentTurnId: readFirstString(
+      metadataSources,
+      "logicalQuestionCurrentTurnId"
+    ),
+    logicalQuestionSourceTurnIds: readFirstStringList(
+      metadataSources,
+      "logicalQuestionSourceTurnIds"
+    ),
+    logicalQuestionCompositionReasons: readFirstStringList(
+      metadataSources,
+      "logicalQuestionCompositionReasons"
+    ),
+    logicalQuestionBoundaryReason: readFirstString(
+      metadataSources,
+      "logicalQuestionBoundaryReason"
+    ),
+    logicalQuestionTruncated: readFirstBoolean(
+      metadataSources,
+      "logicalQuestionTruncated"
+    ),
+    advisorPromptIncludedLogicalQuestion: readFirstBoolean(
+      metadataSources,
+      "advisorPromptIncludedLogicalQuestion"
+    ),
+    advisorPromptLogicalQuestionSourceCount:
+      readFirstNumberFromMetadata(
+        metadataSources,
+        "advisorPromptLogicalQuestionSourceCount"
+      ),
+    advisorOutputCommittedToUi: readFirstBoolean(
+      metadataSources,
+      "advisorOutputCommittedToUi"
+    ),
+    advisorOutputCommitAuthorized: readFirstBoolean(
+      metadataSources,
+      "advisorOutputCommitAuthorized"
+    ),
+    visibleAnswerChanged: readFirstBoolean(
+      metadataSources,
+      "visibleAnswerChanged"
+    ),
+    manualQuestionTypeCorrectionId: readFirstString(
+      metadataSources,
+      "manualQuestionTypeCorrectionId"
     ),
     taskBoundary: {
       logicalQuestionUnitId: readFirstString(

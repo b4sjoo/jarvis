@@ -4815,6 +4815,10 @@ export function useMeetingAssistant() {
             ? "shadow-visible"
             : "committed",
         advisorOutputCommittedToUi: true,
+        visibleAnswerChanged:
+          nextSuggestion.kind !== "silent" &&
+          nextSuggestion.content.trim() !==
+            (state.latestSuggestion?.content.trim() ?? ""),
         advisorOutputCommitAuthorized: true,
         advisorOutputCommitReason: outputCommitAuthorization.reason,
         taskMutationAuthorized: taskMutationAuthorization.authorized,

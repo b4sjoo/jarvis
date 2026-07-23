@@ -2,12 +2,39 @@ import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import path from "path";
 import tailwindcss from "@tailwindcss/vite";
+import { execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 
 const host = process.env.TAURI_DEV_HOST;
+const packageJson = JSON.parse(
+  readFileSync(new URL("./package.json", import.meta.url), "utf8")
+) as { version?: string };
+
+function readGitValue(args: string[], fallback = "unknown") {
+  try {
+    return execFileSync("git", args, {
+      cwd: path.resolve(__dirname),
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+  } catch {
+    return fallback;
+  }
+}
+
+const gitCommit = readGitValue(["rev-parse", "HEAD"]);
+const gitDirty = Boolean(readGitValue(["status", "--porcelain"], ""));
+const buildTimestamp = new Date().toISOString();
 
 // https://vite.dev/config/
 export default defineConfig(async () => ({
   plugins: [react(), tailwindcss()],
+  define: {
+    __JARVIS_APP_VERSION__: JSON.stringify(packageJson.version ?? "unknown"),
+    __JARVIS_GIT_COMMIT__: JSON.stringify(gitCommit),
+    __JARVIS_GIT_DIRTY__: JSON.stringify(gitDirty),
+    __JARVIS_BUILD_TIMESTAMP__: JSON.stringify(buildTimestamp),
+  },
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "./src"),
