@@ -29,6 +29,9 @@ export interface TaxonomyAdjudicationEvaluationLabel {
     contextPreserved?: boolean;
     timely?: boolean;
   };
+  advisorIntent?: {
+    expectedAction?: "advise" | "append-context" | "buffer" | "ignore";
+  };
   updatedAt: number;
 }
 
@@ -43,6 +46,18 @@ export interface TaxonomyAdjudicationCompactTrace {
     hybridOutcome?: string;
     wouldRescue?: boolean;
     rescueApplied?: boolean;
+  };
+  interviewerIntentSemantic?: {
+    speechAct?: string;
+    relation?: string;
+    evidenceMode?: string;
+  };
+  interviewerIntentLlm?: {
+    speechAct?: string;
+    questionType?: string;
+    relation?: string;
+    evidenceMode?: string;
+    action?: string;
   };
   taxonomyAdjudication?: {
     eligible?: boolean;
@@ -87,13 +102,21 @@ export interface TaxonomyAdjudicationReflectionRow {
   lexicalType: CanonicalQuestionType;
   localSemanticType?: CanonicalQuestionType;
   localHybridOutcome?: string;
+  localSemanticSpeechAct?: string;
+  localSemanticRelation?: string;
+  localSemanticEvidenceMode?: string;
+  llmSpeechAct?: string;
   llmCandidateType?: CanonicalQuestionType;
   llmRelation?: string;
+  llmEvidenceMode?: string;
+  llmAction?: string;
   runtimeType?: CanonicalQuestionType;
   expectedType?: CanonicalQuestionType;
   expectedRelation?: string;
+  expectedAction?: string;
   typeCorrect?: boolean;
   relationCorrect?: boolean;
+  actionCorrect?: boolean;
   adjudicationNeeded?: boolean;
   repairDisposition?: "automatic-repair" | "suggest-only" | "abstain";
   contextPreserved?: boolean;
@@ -108,7 +131,7 @@ export interface TaxonomyAdjudicationReflectionRow {
 }
 
 export interface TaxonomyAdjudicationReflectionReport {
-  version: 2;
+  version: 3;
   generatedAt: number;
   sessions: string[];
   funnel: {
@@ -120,6 +143,7 @@ export interface TaxonomyAdjudicationReflectionReport {
     joinedHumanLabels: EvaluationFunnelStage;
     taxonomyAgreements: EvaluationFunnelStage;
     trajectoryAgreements: EvaluationFunnelStage;
+    actionAgreements: EvaluationFunnelStage;
   };
   metrics: {
     observedUnits: number;
@@ -144,6 +168,11 @@ export interface TaxonomyAdjudicationReflectionReport {
     typePrecision: number | null;
     labeledRelationProposals: number;
     relationPrecision: number | null;
+    labeledActionProposals: number;
+    actionPrecision: number | null;
+    speechActProposals: Record<string, number>;
+    evidenceModeProposals: Record<string, number>;
+    actionProposals: Record<string, number>;
     labeledNeeded: number;
     neededRate: number | null;
     repairRecommendations: Record<string, number>;
@@ -196,17 +225,31 @@ export function buildTaxonomyAdjudicationReflectionReport(input: {
     const metadata = decision.metadata;
     const trace = traceById.get(decision.traceId);
     const summary = trace?.taxonomyAdjudication;
+    const intentSummary = trace?.interviewerIntentLlm;
     const evaluation = evaluationByTraceId.get(decision.traceId);
     const human = evaluation?.taxonomyAdjudication;
     const llmCandidateType = normalizeType(
-      readString(metadata, "taxonomyAdjudicationCandidateType") ??
+      readString(metadata, "interviewerIntentLlmQuestionType") ??
+        intentSummary?.questionType ??
+        readString(metadata, "taxonomyAdjudicationCandidateType") ??
         summary?.candidateType
     );
     const expectedType = normalizeType(
       evaluation?.correctedQuestionType ?? evaluation?.questionType
     );
     const llmRelation =
-      readString(metadata, "taxonomyAdjudicationRelation") ?? summary?.relation;
+      readString(metadata, "interviewerIntentLlmRelation") ??
+      intentSummary?.relation ??
+      readString(metadata, "taxonomyAdjudicationRelation") ??
+      summary?.relation;
+    const llmAction =
+      readString(metadata, "interviewerIntentLlmAction") ??
+      intentSummary?.action;
+    const expectedAction = evaluation?.advisorIntent?.expectedAction;
+    const actionCorrect =
+      expectedAction && llmAction
+        ? normalizeExpectedAction(expectedAction) === llmAction
+        : undefined;
     const expectedRelation =
       evaluation?.correctedRelation ?? evaluation?.relation;
     const disposition =
@@ -271,15 +314,30 @@ export function buildTaxonomyAdjudicationReflectionReport(input: {
         trace?.semanticTaxonomy?.semanticCandidateType
       ),
       localHybridOutcome: trace?.semanticTaxonomy?.hybridOutcome,
+      localSemanticSpeechAct:
+        trace?.interviewerIntentSemantic?.speechAct,
+      localSemanticRelation:
+        trace?.interviewerIntentSemantic?.relation,
+      localSemanticEvidenceMode:
+        trace?.interviewerIntentSemantic?.evidenceMode,
+      llmSpeechAct:
+        readString(metadata, "interviewerIntentLlmSpeechAct") ??
+        intentSummary?.speechAct,
       llmCandidateType,
       llmRelation,
+      llmEvidenceMode:
+        readString(metadata, "interviewerIntentLlmEvidenceMode") ??
+        intentSummary?.evidenceMode,
+      llmAction,
       runtimeType: normalizeType(
         trace?.canonicalQuestionType ?? trace?.questionType
       ),
       expectedType,
       expectedRelation,
+      expectedAction,
       typeCorrect,
       relationCorrect,
+      actionCorrect,
       adjudicationNeeded: human?.needed,
       repairDisposition: human?.repairDisposition,
       contextPreserved: human?.contextPreserved,
@@ -321,6 +379,9 @@ export function buildTaxonomyAdjudicationReflectionReport(input: {
   const relationLabeled = joinedHumanRows.filter(
     (row) => row.relationCorrect !== undefined
   );
+  const actionLabeled = providerValidRows.filter(
+    (row) => row.actionCorrect !== undefined
+  );
   const neededLabeled = rows.filter(
     (row) => row.adjudicationNeeded !== undefined
   );
@@ -344,9 +405,12 @@ export function buildTaxonomyAdjudicationReflectionReport(input: {
   const trajectoryAgreements = relationLabeled.filter(
     (row) => row.relationCorrect
   ).length;
+  const actionAgreements = actionLabeled.filter(
+    (row) => row.actionCorrect
+  ).length;
 
   return {
-    version: 2,
+    version: 3,
     generatedAt: Date.now(),
     sessions,
     funnel: {
@@ -369,6 +433,10 @@ export function buildTaxonomyAdjudicationReflectionReport(input: {
       trajectoryAgreements: funnelStage(
         trajectoryAgreements,
         relationLabeled.length
+      ),
+      actionAgreements: funnelStage(
+        actionAgreements,
+        actionLabeled.length
       ),
     },
     metrics: {
@@ -420,6 +488,13 @@ export function buildTaxonomyAdjudicationReflectionReport(input: {
         relationLabeled.filter((row) => row.relationCorrect).length,
         relationLabeled.length
       ),
+      labeledActionProposals: actionLabeled.length,
+      actionPrecision: ratio(actionAgreements, actionLabeled.length),
+      speechActProposals: countStrings(rows.map((row) => row.llmSpeechAct)),
+      evidenceModeProposals: countStrings(
+        rows.map((row) => row.llmEvidenceMode)
+      ),
+      actionProposals: countStrings(rows.map((row) => row.llmAction)),
       labeledNeeded: neededLabeled.length,
       neededRate: ratio(
         neededLabeled.filter((row) => row.adjudicationNeeded).length,
@@ -499,6 +574,7 @@ export function renderTaxonomyAdjudicationReflectionMarkdown(
     `- Would repair / applied: ${report.metrics.wouldRepair} / ${report.metrics.repairApplied}`,
     `- Type precision: ${percent(report.metrics.typePrecision)} (${report.metrics.labeledTypeProposals} labeled)`,
     `- Relation precision: ${percent(report.metrics.relationPrecision)} (${report.metrics.labeledRelationProposals} labeled)`,
+    `- Advisor-action precision: ${percent(report.metrics.actionPrecision)} (${report.metrics.labeledActionProposals} labeled)`,
     `- Correct but operationally unusable: ${report.metrics.correctButOperationallyUnusable}`,
     `- Latency p50 / p95: ${report.metrics.latency.p50Ms.toFixed(1)}ms / ${report.metrics.latency.p95Ms.toFixed(1)}ms`,
     `- Estimated input / output tokens: ${report.metrics.estimatedInputTokens} / ${report.metrics.estimatedOutputTokens}`,
@@ -510,11 +586,11 @@ export function renderTaxonomyAdjudicationReflectionMarkdown(
     "",
     "## Decision Comparison",
     "",
-    "| Unit | Lexical | Local semantic | LLM | Runtime | Relation | Disposition | Repair | Human | Timing |",
-    "|---|---|---|---|---|---|---|---|---|---|",
+    "| Unit | Lexical | Local semantic | LLM | Speech act | Relation | Evidence mode | Action | Runtime | Disposition | Repair | Human | Timing |",
+    "|---|---|---|---|---|---|---|---|---|---|---|---|---|",
     ...report.rows.map(
       (row) =>
-        `| ${escapeCell(`${row.unitId ?? row.traceId}@${row.unitRevision ?? 0}`)} | ${row.lexicalType} | ${row.localSemanticType ?? "-"} | ${row.llmCandidateType ?? "-"} | ${row.runtimeType ?? "-"} | ${row.llmRelation ?? "-"} | ${row.disposition ?? row.skipReason ?? "-"} | ${row.repairApplied ? "applied" : row.wouldRepair ? "would" : "-"} | ${formatHumanVerdict(row)} | ${row.arrivalStage ?? "-"} |`
+        `| ${escapeCell(`${row.unitId ?? row.traceId}@${row.unitRevision ?? 0}`)} | ${row.lexicalType} | ${row.localSemanticType ?? "-"} | ${row.llmCandidateType ?? "-"} | ${row.llmSpeechAct ?? "-"} | ${row.llmRelation ?? "-"} | ${row.llmEvidenceMode ?? "-"} | ${row.llmAction ?? "-"} | ${row.runtimeType ?? "-"} | ${row.disposition ?? row.skipReason ?? "-"} | ${row.repairApplied ? "applied" : row.wouldRepair ? "would" : "-"} | ${formatHumanVerdict(row)} | ${row.arrivalStage ?? "-"} |`
     ),
     "",
     "## Dispositions",
@@ -542,6 +618,20 @@ export function renderTaxonomyAdjudicationReflectionMarkdown(
     "## Relation Confusion",
     "",
     ...formatConfusion(report.relationConfusion),
+    "",
+    "## Intent Head Distributions",
+    "",
+    "### Speech Act",
+    "",
+    ...formatCountMap(report.metrics.speechActProposals),
+    "",
+    "### Evidence Mode",
+    "",
+    ...formatCountMap(report.metrics.evidenceModeProposals),
+    "",
+    "### Advisor Action",
+    "",
+    ...formatCountMap(report.metrics.actionProposals),
     "",
     "## Rollout Interpretation",
     "",
@@ -592,6 +682,10 @@ function isSubstantiveObservedUnit(row: TaxonomyAdjudicationReflectionRow) {
 
 function normalizeType(value: unknown): CanonicalQuestionType | undefined {
   return normalizeCanonicalQuestionType(value);
+}
+
+function normalizeExpectedAction(value: string) {
+  return value === "advise" ? "answer" : value;
 }
 
 function readString(metadata: Record<string, unknown>, key: string) {

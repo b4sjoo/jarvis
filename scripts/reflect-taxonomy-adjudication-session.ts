@@ -18,9 +18,15 @@ async function main() {
   const options = parseOptions(process.argv.slice(2));
   const summaries = [];
   for (const sessionDirectory of options.sessionDirectories) {
-    const decisions = await readOptionalJsonLines<TaxonomyAdjudicationRecordedDecision>(
-      path.join(sessionDirectory, "taxonomy", "llm-adjudications.jsonl")
-    );
+    const intentDecisions =
+      await readOptionalJsonLines<TaxonomyAdjudicationRecordedDecision>(
+        path.join(sessionDirectory, "intent", "llm-adjudications.jsonl")
+      );
+    const decisions = intentDecisions.length
+      ? intentDecisions
+      : await readOptionalJsonLines<TaxonomyAdjudicationRecordedDecision>(
+          path.join(sessionDirectory, "taxonomy", "llm-adjudications.jsonl")
+        );
     const tracePayload = await readOptionalJson<{
       traces?: TaxonomyAdjudicationCompactTrace[];
     }>(path.join(sessionDirectory, "metrics", "trace-summaries.latest.json"), {

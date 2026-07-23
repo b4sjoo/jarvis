@@ -25,6 +25,9 @@ test("compares lexical, semantic, LLM, runtime, and human adjudication evidence"
         taxonomyAdjudicationProviderDisposition: "completed-with-content",
         taxonomyAdjudicationParseDisposition: "valid-json",
         taxonomyAdjudicationTriggerReasons: ["lexical-unknown"],
+        interviewerIntentLlmSpeechAct: "directive",
+        interviewerIntentLlmEvidenceMode: "hypothetical-design",
+        interviewerIntentLlmAction: "answer",
       }),
       decision("trace_2", "unit_2", 1, {
         taxonomyAdjudicationEligible: true,
@@ -69,6 +72,9 @@ test("compares lexical, semantic, LLM, runtime, and human adjudication evidence"
           contextPreserved: true,
           timely: true,
         },
+        advisorIntent: {
+          expectedAction: "advise",
+        },
         updatedAt: 10,
       },
       {
@@ -102,6 +108,8 @@ test("compares lexical, semantic, LLM, runtime, and human adjudication evidence"
   assert.deepEqual(report.metrics.parseDispositions, { "valid-json": 2 });
   assert.equal(report.metrics.typePrecision, 1);
   assert.equal(report.metrics.relationPrecision, 1);
+  assert.equal(report.metrics.actionPrecision, 1);
+  assert.deepEqual(report.metrics.actionProposals, { answer: 1 });
   assert.equal(report.metrics.correctButOperationallyUnusable, 1);
   assert.equal(report.metrics.repairApplied, 0);
   assert.deepEqual(report.metrics.providers, { "fast-provider": 1 });
@@ -116,6 +124,7 @@ test("compares lexical, semantic, LLM, runtime, and human adjudication evidence"
   assert.equal(report.funnel.joinedHumanLabels.count, 2);
   assert.equal(report.funnel.taxonomyAgreements.count, 2);
   assert.equal(report.funnel.trajectoryAgreements.count, 1);
+  assert.equal(report.funnel.actionAgreements.count, 1);
   assert.equal(report.typeConfusion.coding?.coding, 1);
   assert.match(
     renderTaxonomyAdjudicationReflectionMarkdown(report),
