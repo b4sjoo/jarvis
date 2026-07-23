@@ -64,6 +64,7 @@ export * from "./suggestion-task";
 export * from "./task-taxonomy";
 export * from "./task-boundary-transaction";
 export * from "./taxonomy-adjudication";
+export * from "./taxonomy-adjudication-comparison";
 export * from "./taxonomy-adjudication-health";
 export * from "./taxonomy-adjudication-response";
 export * from "./taxonomy-adjudication-request";

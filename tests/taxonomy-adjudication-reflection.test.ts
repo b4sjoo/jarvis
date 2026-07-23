@@ -24,6 +24,7 @@ test("compares lexical, semantic, LLM, runtime, and human adjudication evidence"
         taxonomyAdjudicationModelId: "fast-model",
         taxonomyAdjudicationProviderDisposition: "completed-with-content",
         taxonomyAdjudicationParseDisposition: "valid-json",
+        taxonomyAdjudicationOutputEnvelope: "direct",
         taxonomyAdjudicationTriggerReasons: ["lexical-unknown"],
         interviewerIntentLlmSpeechAct: "directive",
         interviewerIntentLlmEvidenceMode: "hypothetical-design",
@@ -40,6 +41,7 @@ test("compares lexical, semantic, LLM, runtime, and human adjudication evidence"
         taxonomyAdjudicationDurationMs: 1_800,
         taxonomyAdjudicationProviderDisposition: "completed-with-content",
         taxonomyAdjudicationParseDisposition: "valid-json",
+        taxonomyAdjudicationOutputEnvelope: "result-wrapper",
         taxonomyAdjudicationTriggerReasons: ["semantic-conflict"],
       }),
       decision("trace_3", "unit_3", 1, {
@@ -93,11 +95,16 @@ test("compares lexical, semantic, LLM, runtime, and human adjudication evidence"
   });
 
   assert.equal(report.metrics.observedUnits, 3);
+  assert.equal(report.metrics.observedOperations, 3);
+  assert.equal(report.metrics.operationsWithId, 0);
+  assert.equal(report.metrics.legacyFallbackOperations, 3);
+  assert.equal(report.metrics.retriedUnits, 0);
+  assert.equal(report.metrics.retryOperations, 0);
+  assert.equal(report.metrics.maxOperationsPerUnit, 1);
   assert.equal(report.metrics.substantiveUnits, 3);
   assert.equal(report.metrics.triggeredCalls, 2);
   assert.equal(report.metrics.triggerRate, 2 / 3);
-  assert.equal(report.metrics.triggerRateWarning, true);
-  assert.equal(report.metrics.triggerRateTarget, 0.15);
+  assert.equal(report.metrics.callRateSemantics, "reason-coded-observational");
   assert.deepEqual(report.metrics.triggerReasons, {
     "lexical-unknown": 1,
     "semantic-conflict": 1,
@@ -106,6 +113,11 @@ test("compares lexical, semantic, LLM, runtime, and human adjudication evidence"
     "completed-with-content": 2,
   });
   assert.deepEqual(report.metrics.parseDispositions, { "valid-json": 2 });
+  assert.deepEqual(report.metrics.parseErrorKinds, {});
+  assert.deepEqual(report.metrics.outputEnvelopes, {
+    direct: 1,
+    "result-wrapper": 1,
+  });
   assert.equal(report.metrics.typePrecision, 1);
   assert.equal(report.metrics.relationPrecision, 1);
   assert.equal(report.metrics.actionPrecision, 1);
@@ -132,8 +144,99 @@ test("compares lexical, semantic, LLM, runtime, and human adjudication evidence"
   );
   assert.match(
     renderTaxonomyAdjudicationReflectionMarkdown(report),
-    /Trigger-rate review: WARNING/
+    /Observational call rate: 66\.7% \(reason-coded; not a pass\/fail target\)/
   );
+});
+
+test("retains separate operations for one LQU revision and dedupes each operation to its latest record", () => {
+  const report = buildTaxonomyAdjudicationReflectionReport({
+    decisions: [
+      decisionAt("trace_retry_a", "unit_retry", 4, 100, {
+        taxonomyAdjudicationOperationId: "operation_a",
+        taxonomyAdjudicationEligible: true,
+        taxonomyAdjudicationDisposition: "scheduled",
+        taxonomyAdjudicationTriggerReasons: ["lexical-unknown"],
+      }),
+      decisionAt("trace_retry_b", "unit_retry", 4, 200, {
+        taxonomyAdjudicationOperationId: "operation_b",
+        taxonomyAdjudicationEligible: true,
+        taxonomyAdjudicationDisposition: "stale",
+        taxonomyAdjudicationProviderDisposition: "completed-with-content",
+        taxonomyAdjudicationParseDisposition: "valid-json",
+        taxonomyAdjudicationParseValid: true,
+        taxonomyAdjudicationOutputEnvelope: "direct",
+        taxonomyAdjudicationDurationMs: 500,
+        taxonomyAdjudicationTriggerReasons: ["semantic-conflict"],
+      }),
+      decisionAt("trace_retry_a", "unit_retry", 4, 300, {
+        taxonomyAdjudicationOperationId: "operation_a",
+        taxonomyAdjudicationEligible: true,
+        taxonomyAdjudicationDisposition: "provider-error-output",
+        taxonomyAdjudicationProviderDisposition: "provider-auth-error",
+        taxonomyAdjudicationParseDisposition: "not-run-provider-auth-error",
+        taxonomyAdjudicationParseErrorKind: "provider",
+        taxonomyAdjudicationParseValid: false,
+        taxonomyAdjudicationDurationMs: 900,
+        taxonomyAdjudicationTriggerReasons: ["provider-retry"],
+      }),
+    ],
+    traces: [],
+    evaluations: [],
+  });
+
+  assert.equal(report.version, 4);
+  assert.equal(report.rows.length, 2);
+  assert.deepEqual(
+    report.rows.map((row) => row.operationId),
+    ["operation_b", "operation_a"]
+  );
+  assert.equal(
+    report.rows.find((row) => row.operationId === "operation_a")?.disposition,
+    "provider-error-output"
+  );
+  assert.equal(report.metrics.observedOperations, 2);
+  assert.equal(report.metrics.observedUnits, 1);
+  assert.equal(report.metrics.operationsWithId, 2);
+  assert.equal(report.metrics.legacyFallbackOperations, 0);
+  assert.equal(report.metrics.retriedUnits, 1);
+  assert.equal(report.metrics.retryOperations, 1);
+  assert.equal(report.metrics.maxOperationsPerUnit, 2);
+  assert.deepEqual(report.metrics.triggerReasons, {
+    "provider-retry": 1,
+    "semantic-conflict": 1,
+  });
+  assert.deepEqual(report.metrics.parseErrorKinds, { provider: 1 });
+  assert.deepEqual(report.metrics.outputEnvelopes, { direct: 1 });
+});
+
+test("renders call rate as reason-coded observation without a fixed threshold", () => {
+  const report = buildTaxonomyAdjudicationReflectionReport({
+    decisions: [
+      decision("trace_all_called", "unit_all_called", 1, {
+        taxonomyAdjudicationOperationId: "operation_all_called",
+        taxonomyAdjudicationEligible: true,
+        taxonomyAdjudicationDisposition: "completed",
+        taxonomyAdjudicationProviderDisposition: "completed-with-content",
+        taxonomyAdjudicationParseDisposition: "valid-json",
+        taxonomyAdjudicationParseValid: true,
+        taxonomyAdjudicationDurationMs: 100,
+        taxonomyAdjudicationTriggerReasons: ["dense-terminal-ask"],
+      }),
+    ],
+    traces: [],
+    evaluations: [],
+  });
+
+  assert.equal(report.metrics.triggerRate, 1);
+  assert.deepEqual(report.metrics.triggerReasons, {
+    "dense-terminal-ask": 1,
+  });
+  const markdown = renderTaxonomyAdjudicationReflectionMarkdown(report);
+  assert.match(
+    markdown,
+    /Observational call rate: 100\.0% \(reason-coded; not a pass\/fail target\)/
+  );
+  assert.doesNotMatch(markdown, /WARNING|within target|target <=/);
 });
 
 test("reports adjudication labels that cannot join a recorded trace", () => {
@@ -227,8 +330,18 @@ function decision(
   revision: number,
   metadata: Record<string, unknown>
 ) {
+  return decisionAt(traceId, unitId, revision, revision * 100, metadata);
+}
+
+function decisionAt(
+  traceId: string,
+  unitId: string,
+  revision: number,
+  recordedAt: number,
+  metadata: Record<string, unknown>
+) {
   return {
-    recordedAt: revision * 100,
+    recordedAt,
     sessionId: "session_1",
     traceId,
     metadata: {

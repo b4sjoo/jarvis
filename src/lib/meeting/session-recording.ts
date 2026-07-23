@@ -30,7 +30,7 @@ import {
 import { serializeMeetingTraceExport } from "./trace.js";
 
 const SESSION_RECORDING_SCHEMA_VERSION = 1;
-const SESSION_TRACE_SUMMARY_SCHEMA_VERSION = 12;
+const SESSION_TRACE_SUMMARY_SCHEMA_VERSION = 13;
 const SESSION_TRACE_INDEX_SCHEMA_VERSION = 1;
 
 interface SessionRecordingStartOptions {
@@ -321,19 +321,38 @@ export interface SessionCompactTraceSummary {
     mode?: string;
     eligible?: boolean;
     skipReason?: string;
+    promptVersion?: string;
+    schemaVersion?: number;
+    requestHash?: string;
     operationId?: string;
     unitId?: string;
     unitRevision?: number;
+    scheduledTaskId?: string;
+    settlementTaskId?: string;
+    providerId?: string;
     modelId?: string;
     disposition?: string;
     providerDisposition?: string;
     parseDisposition?: string;
+    parseErrorKind?: string;
+    outputEnvelope?: string;
     staleReason?: string;
+    leaseAuthorized?: boolean;
     speechAct?: string;
     questionType?: string;
     relation?: string;
     evidenceMode?: string;
     action?: string;
+    normalizedQuestion?: string;
+    primaryAskSpanTexts: string[];
+    primaryAskSourceTurnIds: string[];
+    localSpeechAct?: string;
+    localQuestionType?: string;
+    localRelation?: string;
+    localEvidenceMode?: string;
+    localAction?: string;
+    localPrimaryAsk?: string;
+    repairFactors: string[];
     confidence?: number;
     parseValid?: boolean;
     evidenceSpansValid?: boolean;
@@ -348,15 +367,23 @@ export interface SessionCompactTraceSummary {
     mode?: string;
     eligible?: boolean;
     skipReason?: string;
+    promptVersion?: string;
+    schemaVersion?: number;
+    requestHash?: string;
     operationId?: string;
     unitId?: string;
     unitRevision?: number;
+    scheduledTaskId?: string;
+    settlementTaskId?: string;
     providerId?: string;
     modelId?: string;
     disposition?: string;
     providerDisposition?: string;
     parseDisposition?: string;
+    parseErrorKind?: string;
+    outputEnvelope?: string;
     staleReason?: string;
+    leaseAuthorized?: boolean;
     candidateType?: string;
     relation?: string;
     standalone?: boolean;
@@ -365,6 +392,7 @@ export interface SessionCompactTraceSummary {
     evidenceSpansValid?: boolean;
     arrivalStage?: string;
     wouldRepair?: boolean;
+    repairFactors: string[];
     repairApplied?: boolean;
     durationMs?: number;
     inputChars?: number;
@@ -3089,11 +3117,35 @@ function buildInterviewerIntentLlmTraceSummary(
       metadataSources,
       "interviewerIntentLlmSkipReason"
     ),
+    promptVersion: readFirstString(
+      metadataSources,
+      "interviewerIntentLlmPromptVersion"
+    ),
+    schemaVersion: readFirstNumberFromMetadata(
+      metadataSources,
+      "interviewerIntentLlmSchemaVersion"
+    ),
+    requestHash: readFirstString(
+      metadataSources,
+      "interviewerIntentLlmRequestHash"
+    ),
     operationId,
     unitId: readFirstString(metadataSources, "interviewerIntentLlmUnitId"),
     unitRevision: readFirstNumberFromMetadata(
       metadataSources,
       "interviewerIntentLlmUnitRevision"
+    ),
+    scheduledTaskId: readFirstString(
+      metadataSources,
+      "interviewerIntentLlmScheduledTaskId"
+    ),
+    settlementTaskId: readFirstString(
+      metadataSources,
+      "interviewerIntentLlmSettlementTaskId"
+    ),
+    providerId: readFirstString(
+      metadataSources,
+      "interviewerIntentLlmProviderId"
     ),
     modelId: readFirstString(metadataSources, "interviewerIntentLlmModelId"),
     disposition,
@@ -3105,9 +3157,21 @@ function buildInterviewerIntentLlmTraceSummary(
       metadataSources,
       "interviewerIntentLlmParseDisposition"
     ),
+    parseErrorKind: readFirstString(
+      metadataSources,
+      "interviewerIntentLlmParseErrorKind"
+    ),
+    outputEnvelope: readFirstString(
+      metadataSources,
+      "interviewerIntentLlmOutputEnvelope"
+    ),
     staleReason: readFirstString(
       metadataSources,
       "interviewerIntentLlmStaleReason"
+    ),
+    leaseAuthorized: readFirstBoolean(
+      metadataSources,
+      "interviewerIntentLlmLeaseAuthorized"
     ),
     speechAct: readFirstString(
       metadataSources,
@@ -3126,6 +3190,46 @@ function buildInterviewerIntentLlmTraceSummary(
       "interviewerIntentLlmEvidenceMode"
     ),
     action: readFirstString(metadataSources, "interviewerIntentLlmAction"),
+    normalizedQuestion: readFirstString(
+      metadataSources,
+      "interviewerIntentLlmNormalizedQuestion"
+    ),
+    primaryAskSpanTexts: readFirstStringList(
+      metadataSources,
+      "interviewerIntentLlmPrimaryAskSpanTexts"
+    ),
+    primaryAskSourceTurnIds: readFirstStringList(
+      metadataSources,
+      "interviewerIntentLlmPrimaryAskSourceTurnIds"
+    ),
+    localSpeechAct: readFirstString(
+      metadataSources,
+      "interviewerIntentLlmLocalSpeechAct"
+    ),
+    localQuestionType: readFirstString(
+      metadataSources,
+      "interviewerIntentLlmLocalQuestionType"
+    ),
+    localRelation: readFirstString(
+      metadataSources,
+      "interviewerIntentLlmLocalRelation"
+    ),
+    localEvidenceMode: readFirstString(
+      metadataSources,
+      "interviewerIntentLlmLocalEvidenceMode"
+    ),
+    localAction: readFirstString(
+      metadataSources,
+      "interviewerIntentLlmLocalAction"
+    ),
+    localPrimaryAsk: readFirstString(
+      metadataSources,
+      "interviewerIntentLlmLocalPrimaryAsk"
+    ),
+    repairFactors: readFirstStringList(
+      metadataSources,
+      "interviewerIntentLlmRepairFactors"
+    ),
     confidence: readFirstNumberFromMetadata(
       metadataSources,
       "interviewerIntentLlmConfidence"
@@ -3317,6 +3421,18 @@ function buildTaxonomyAdjudicationTraceSummary(
       metadataSources,
       "taxonomyAdjudicationSkipReason"
     ),
+    promptVersion: readFirstString(
+      metadataSources,
+      "taxonomyAdjudicationPromptVersion"
+    ),
+    schemaVersion: readFirstNumberFromMetadata(
+      metadataSources,
+      "taxonomyAdjudicationSchemaVersion"
+    ),
+    requestHash: readFirstString(
+      metadataSources,
+      "taxonomyAdjudicationRequestHash"
+    ),
     operationId: readFirstString(
       metadataSources,
       "taxonomyAdjudicationOperationId"
@@ -3325,6 +3441,14 @@ function buildTaxonomyAdjudicationTraceSummary(
     unitRevision: readFirstNumberFromMetadata(
       metadataSources,
       "taxonomyAdjudicationUnitRevision"
+    ),
+    scheduledTaskId: readFirstString(
+      metadataSources,
+      "taxonomyAdjudicationScheduledTaskId"
+    ),
+    settlementTaskId: readFirstString(
+      metadataSources,
+      "taxonomyAdjudicationSettlementTaskId"
     ),
     providerId: readFirstString(
       metadataSources,
@@ -3343,9 +3467,21 @@ function buildTaxonomyAdjudicationTraceSummary(
       metadataSources,
       "taxonomyAdjudicationParseDisposition"
     ),
+    parseErrorKind: readFirstString(
+      metadataSources,
+      "taxonomyAdjudicationParseErrorKind"
+    ),
+    outputEnvelope: readFirstString(
+      metadataSources,
+      "taxonomyAdjudicationOutputEnvelope"
+    ),
     staleReason: readFirstString(
       metadataSources,
       "taxonomyAdjudicationStaleReason"
+    ),
+    leaseAuthorized: readFirstBoolean(
+      metadataSources,
+      "taxonomyAdjudicationLeaseAuthorized"
     ),
     candidateType: readFirstString(
       metadataSources,
@@ -3378,6 +3514,10 @@ function buildTaxonomyAdjudicationTraceSummary(
     wouldRepair: readFirstBoolean(
       metadataSources,
       "taxonomyAdjudicationWouldRepair"
+    ),
+    repairFactors: readFirstStringList(
+      metadataSources,
+      "taxonomyAdjudicationRepairFactors"
     ),
     repairApplied: readFirstBoolean(
       metadataSources,

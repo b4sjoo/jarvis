@@ -241,7 +241,10 @@ import {
   TAXONOMY_ADJUDICATION_MAX_OUTPUT_CHARS,
   TaxonomyAdjudicationSessionCircuitBreaker,
   authorizeTaxonomyAdjudicationLease,
+  buildLocalInterviewerIntentBaseline,
+  buildTaxonomyAdjudicationPrompts,
   buildTaxonomyAdjudicationRequest,
+  compareTaxonomyAdjudicationToLocalBaseline,
   createTaxonomyAdjudicationLease,
   decideTaxonomyAdjudicationEligibility,
   formatTaxonomyAdjudicationModelRouteForTrace,
@@ -251,6 +254,7 @@ import {
   projectLogicalQuestionForAdjudication,
   requestTaxonomyAdjudication,
   resolveTaxonomyAdjudicationModelRouteFromSnapshot,
+  shouldOpenTaxonomyAdjudicationCircuit,
   solveScreenAnchoredTask,
   shouldIncludeTurnInAdvisorPrompt,
   shouldSuppressDuplicateSystemAudioTurn,
@@ -6254,6 +6258,7 @@ export function useMeetingAssistant() {
       const activeParentQuestionType = normalizeCanonicalQuestionType(
         contextState.activeMeetingTask?.parent.questionType
       );
+      const scheduledTaskId = contextState.activeMeetingTask?.id;
       const eligibility = decideTaxonomyAdjudicationEligibility({
         enabled: settings.enabled,
         evaluationActive,
@@ -6374,6 +6379,21 @@ export function useMeetingAssistant() {
         : activeParent
           ? "followup-parent"
           : "unknown";
+      const localRelation = contextState.activeMeetingTask?.child
+        ? ("child-probe" as const)
+        : activeParent
+          ? ("followup-parent" as const)
+          : turnGateAction === "answer-refresh"
+            ? ("new-parent" as const)
+            : ("none" as const);
+      const baselineType =
+        hybrid?.effectiveType ?? lexical.type ?? "unknown";
+      const localIntentBaseline = buildLocalInterviewerIntentBaseline({
+        questionType: baselineType,
+        relation: localRelation,
+        turnGateAction,
+        primaryAskProjection: logicalQuestionUnit.primaryAskProjection,
+      });
       const taskBoundaryEpoch = hashTaxonomyTaskBoundary({
         parentId: activeParent?.id,
         questionType: activeParentQuestionType,
@@ -6423,9 +6443,38 @@ export function useMeetingAssistant() {
             : []),
         ],
       });
+      const adjudicationPrompts = buildTaxonomyAdjudicationPrompts(request);
+      const adjudicationPromptText = [
+        adjudicationPrompts.systemPrompt,
+        adjudicationPrompts.userMessage,
+      ].join("\n\n");
+      const adjudicationRequestHash = hashTaxonomySourceTurnIds([
+        adjudicationPrompts.systemPrompt,
+        adjudicationPrompts.userMessage,
+      ]);
       const scheduledMetadata = {
         ...baseMetadata,
         ...routeMetadata,
+        taxonomyAdjudicationPromptVersion: request.promptVersion,
+        interviewerIntentLlmPromptVersion: request.promptVersion,
+        taxonomyAdjudicationSchemaVersion: request.schemaVersion,
+        interviewerIntentLlmSchemaVersion: request.schemaVersion,
+        taxonomyAdjudicationRequestHash: adjudicationRequestHash,
+        interviewerIntentLlmRequestHash: adjudicationRequestHash,
+        taxonomyAdjudicationInputChars: adjudicationPromptText.length,
+        interviewerIntentLlmInputChars: adjudicationPromptText.length,
+        taxonomyAdjudicationScheduledTaskId: scheduledTaskId,
+        interviewerIntentLlmScheduledTaskId: scheduledTaskId,
+        interviewerIntentLlmProviderId: modelRoute.resolvedProviderId,
+        interviewerIntentLlmLocalSpeechAct: localIntentBaseline.speechAct,
+        interviewerIntentLlmLocalQuestionType:
+          localIntentBaseline.questionType,
+        interviewerIntentLlmLocalRelation: localIntentBaseline.relation,
+        interviewerIntentLlmLocalEvidenceMode:
+          localIntentBaseline.evidenceMode,
+        interviewerIntentLlmLocalAction: localIntentBaseline.action,
+        interviewerIntentLlmLocalPrimaryAsk:
+          localIntentBaseline.normalizedPrimaryAsk,
         taxonomyAdjudicationOperationId: lease.operationId,
         taxonomyAdjudicationSourceTurnIdsHash: lease.sourceTurnIdsHash,
         taxonomyAdjudicationTaskBoundaryEpoch: lease.taskBoundaryEpoch,
@@ -6444,6 +6493,31 @@ export function useMeetingAssistant() {
         interviewerIntentLlmDisposition: "scheduled",
       };
       traceStoreRef.current.updateMetadata(traceId, scheduledMetadata);
+      traceStoreRef.current.recordInput(
+        traceId,
+        "taxonomy adjudication model input",
+        adjudicationPromptText,
+        {
+          promptVersion: request.promptVersion,
+          schemaVersion: request.schemaVersion,
+          requestHash: adjudicationRequestHash,
+          inputChars: adjudicationPromptText.length,
+          candidateEvidenceExcluded: true,
+        }
+      );
+      sessionRecordingManagerRef.current?.recordModelInput({
+        traceId,
+        taskId: scheduledTaskId,
+        label: "taxonomy adjudication model input",
+        value: adjudicationPromptText,
+        metadata: {
+          promptVersion: request.promptVersion,
+          schemaVersion: request.schemaVersion,
+          requestHash: adjudicationRequestHash,
+          inputChars: adjudicationPromptText.length,
+          candidateEvidenceExcluded: true,
+        },
+      });
 
       let stepId: string | undefined;
       taxonomyAdjudicationRuntimeRef.current!.schedule({
@@ -6529,14 +6603,11 @@ export function useMeetingAssistant() {
             : activeAdvisorJobRef.current
               ? "advisor-in-flight-before-visible"
               : "before-advisor-execution";
-          const baselineType =
-            hybrid?.effectiveType ?? lexical.type ?? "unknown";
-          const wouldRepair = Boolean(
-            parsedValue &&
-              (parsedValue.questionType !== baselineType ||
-                parsedValue.relation === "new-parent" ||
-                parsedValue.relation === "linked-parent-extension")
-          );
+          const repairComparison =
+            compareTaxonomyAdjudicationToLocalBaseline({
+              adjudication: parsedValue,
+              baseline: localIntentBaseline,
+            });
           const rawOutput = settlement.result?.rawOutput ?? "";
           const providerDisposition =
             settlement.result?.providerDisposition ??
@@ -6544,9 +6615,12 @@ export function useMeetingAssistant() {
               ? "request-error"
               : settlement.disposition);
           const providerCircuit =
-            providerDisposition === "provider-auth-error"
+            shouldOpenTaxonomyAdjudicationCircuit({
+              leaseAuthorized: authorization.authorized,
+              providerDisposition,
+            })
               ? taxonomyAdjudicationCircuitBreakerRef.current.open({
-                  sessionId: latestContext.sessionId,
+                  sessionId: settlement.job.lease.sessionId,
                   reason: "provider-auth-error",
                   detail: rawOutput.slice(0, 240),
                 })
@@ -6612,6 +6686,14 @@ export function useMeetingAssistant() {
             interviewerIntentLlmProviderDisposition: providerDisposition,
             taxonomyAdjudicationParseDisposition: parseDisposition,
             interviewerIntentLlmParseDisposition: parseDisposition,
+            taxonomyAdjudicationParseErrorKind:
+              parsed && !parsed.ok ? parsed.errorKind : undefined,
+            interviewerIntentLlmParseErrorKind:
+              parsed && !parsed.ok ? parsed.errorKind : undefined,
+            taxonomyAdjudicationOutputEnvelope:
+              parsed?.ok ? parsed.envelope : undefined,
+            interviewerIntentLlmOutputEnvelope:
+              parsed?.ok ? parsed.envelope : undefined,
             taxonomyAdjudicationRawOutputHash: rawOutput
               ? hashTaxonomySourceTurnIds([rawOutput])
               : undefined,
@@ -6639,17 +6721,41 @@ export function useMeetingAssistant() {
             interviewerIntentLlmRelation: parsedValue?.relation,
             interviewerIntentLlmEvidenceMode: parsedValue?.evidenceMode,
             interviewerIntentLlmAction: parsedValue?.action,
+            interviewerIntentLlmNormalizedQuestion:
+              parsedValue?.normalizedQuestion,
+            interviewerIntentLlmPrimaryAskSpans:
+              parsedValue?.primaryAskSpans,
+            interviewerIntentLlmPrimaryAskSpanCount:
+              parsedValue?.primaryAskSpans.length,
+            interviewerIntentLlmPrimaryAskSpanTexts:
+              parsedValue?.primaryAskSpans.map((span) => span.text),
+            interviewerIntentLlmPrimaryAskSourceTurnIds:
+              parsedValue?.primaryAskSpans.map((span) => span.turnId),
             taxonomyAdjudicationStandalone: parsedValue?.standalone,
             taxonomyAdjudicationConfidence: parsedValue?.confidence,
             interviewerIntentLlmConfidence: parsedValue?.confidence,
             taxonomyAdjudicationArrivalStage: arrivalStage,
             interviewerIntentLlmArrivalStage: arrivalStage,
-            taxonomyAdjudicationWouldRepair: wouldRepair,
-            interviewerIntentLlmWouldRepair: wouldRepair,
+            taxonomyAdjudicationWouldRepair:
+              repairComparison.wouldRepair,
+            interviewerIntentLlmWouldRepair:
+              repairComparison.wouldRepair,
+            taxonomyAdjudicationRepairFactors:
+              repairComparison.factors,
+            interviewerIntentLlmRepairFactors:
+              repairComparison.factors,
             taxonomyAdjudicationRepairApplied: false,
             interviewerIntentLlmRepairApplied: false,
             taxonomyAdjudicationBehaviorMutationBlocked: true,
             interviewerIntentLlmBehaviorMutationBlocked: true,
+            taxonomyAdjudicationLeaseAuthorized:
+              authorization.authorized,
+            interviewerIntentLlmLeaseAuthorized:
+              authorization.authorized,
+            taxonomyAdjudicationSettlementTaskId:
+              latestContext.activeMeetingTask?.id,
+            interviewerIntentLlmSettlementTaskId:
+              latestContext.activeMeetingTask?.id,
             taxonomyAdjudicationError:
               settlement.error instanceof Error
                 ? settlement.error.message
@@ -6679,7 +6785,7 @@ export function useMeetingAssistant() {
             if (recordingActive) {
               sessionRecordingManagerRef.current?.recordModelOutput({
                 traceId,
-                taskId: latestContext.activeMeetingTask?.id,
+                taskId: scheduledTaskId,
                 label: "taxonomy adjudication raw output",
                 value: boundedRawOutput,
                 metadata: {
@@ -6698,7 +6804,8 @@ export function useMeetingAssistant() {
               stepId,
               finalDisposition === "error" ||
                 finalDisposition === "provider-auth-error" ||
-                finalDisposition === "provider-error-output"
+                finalDisposition === "provider-error-output" ||
+                finalDisposition === "invalid-output"
                 ? "error"
                 : "success",
               metadata,
@@ -6707,12 +6814,14 @@ export function useMeetingAssistant() {
                   ? "Taxonomy adjudication provider authentication failed"
                   : finalDisposition === "provider-error-output"
                   ? "Provider returned error content"
+                  : finalDisposition === "invalid-output"
+                    ? `Invalid taxonomy adjudication output: ${parseDisposition}`
                   : undefined)
             );
           }
           sessionRecordingManagerRef.current?.recordTaxonomyAdjudicationDecision({
             traceId,
-            taskId: latestContext.activeMeetingTask?.id,
+            taskId: scheduledTaskId,
             metadata,
           });
         },

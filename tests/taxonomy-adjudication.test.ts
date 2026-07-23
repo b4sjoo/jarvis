@@ -7,6 +7,7 @@ import {
   buildTaxonomyAdjudicationRequest,
   createTaxonomyAdjudicationLease,
   decideTaxonomyAdjudicationEligibility,
+  type LlmTaxonomyAdjudication,
   parseTaxonomyAdjudicationOutput,
   projectLogicalQuestionForAdjudication,
 } from "../src/lib/meeting/taxonomy-adjudication.js";
@@ -33,6 +34,28 @@ function unit(text: string, revision = 1): LogicalQuestionUnit {
   };
 }
 
+function answerOutput(
+  request: ReturnType<typeof buildTaxonomyAdjudicationRequest>,
+  overrides: Partial<LlmTaxonomyAdjudication> = {}
+): LlmTaxonomyAdjudication {
+  const primarySource =
+    request.question.sourceTurns[request.question.sourceTurns.length - 1]!;
+  return {
+    schemaVersion: 2,
+    speechAct: "question",
+    questionType: "field-knowledge",
+    relation: "new-parent",
+    evidenceMode: "factual-explanation",
+    action: "answer",
+    normalizedQuestion: primarySource.text,
+    primaryAskSpans: [primarySource],
+    standalone: true,
+    evidenceSpans: [request.question.text],
+    confidence: 0.9,
+    ...overrides,
+  };
+}
+
 test("strictly parses a grounded adjudication and rejects invented evidence", () => {
   const logicalUnit = unit("Design a RAG system for a trip planning app.");
   const request = buildTaxonomyAdjudicationRequest({
@@ -51,6 +74,12 @@ test("strictly parses a grounded adjudication and rejects invented evidence", ()
     evidenceMode: "hypothetical-design",
     action: "answer",
     normalizedQuestion: logicalUnit.normalizedText,
+    primaryAskSpans: [
+      {
+        turnId: "turn-a",
+        text: logicalUnit.normalizedText,
+      },
+    ],
     standalone: true,
     evidenceSpans: ["RAG system", "trip planning app"],
     confidence: 0.92,
@@ -67,6 +96,7 @@ test("strictly parses a grounded adjudication and rejects invented evidence", ()
   assert.deepEqual(invalid, {
     ok: false,
     reason: "invalid-evidence-span",
+    errorKind: "evidence",
     evidenceSpansValid: false,
   });
   assert.doesNotMatch(
@@ -77,6 +107,334 @@ test("strictly parses a grounded adjudication and rejects invented evidence", ()
     buildTaxonomyAdjudicationPrompts(request).userMessage,
     /lexical|semanticCandidate|hybridOutcome/i
   );
+  const systemPrompt = buildTaxonomyAdjudicationPrompts(request).systemPrompt;
+  for (const questionType of [
+    "behavioral",
+    "coding",
+    "general-system-design",
+    "ai-ml-system-design",
+    "project-deep-dive",
+    "field-knowledge",
+    "unknown",
+  ]) {
+    assert.match(systemPrompt, new RegExp(questionType));
+  }
+  assert.match(systemPrompt, /logistics.*unknown/i);
+});
+
+test("sends the bounded source turn instead of a local primary-ask candidate", () => {
+  const text =
+    "You can ask team members what challenges they face. How does this role sound relative to what you are looking for?";
+  const logicalUnit = unit("How does this role sound relative to what you are looking for?");
+  logicalUnit.sources[0]!.text = text;
+  logicalUnit.primaryAskProjection = {
+    schemaVersion: 1,
+    sourceTurnIds: ["turn-a"],
+    sourceChars: text.length,
+    speechAct: "question",
+    normalizedPrimaryAsk:
+      "How does this role sound relative to what you are looking for?",
+    primaryAskSpans: [],
+    setupSpans: [],
+    quotedOrFutureExampleSpans: [],
+    disposition: "answer-primary-ask",
+    reason: "test-local-candidate",
+    confidence: 0.97,
+  };
+
+  const request = buildTaxonomyAdjudicationRequest({
+    logicalQuestionUnit: logicalUnit,
+  });
+  assert.equal(request.question.text, text);
+  assert.deepEqual(request.question.sourceTurns, [
+    { turnId: "turn-a", text },
+  ]);
+  const promptPacket = JSON.parse(
+    buildTaxonomyAdjudicationPrompts(request).userMessage
+  );
+  assert.equal("text" in promptPacket.question, false);
+  assert.deepEqual(promptPacket.question.sourceTurns, [
+    { turnId: "turn-a", text },
+  ]);
+  assert.doesNotMatch(
+    buildTaxonomyAdjudicationPrompts(request).userMessage,
+    /test-local-candidate|answer-primary-ask/
+  );
+});
+
+test("parses recruiter openings, logistics, and dense terminal asks with canonical types", () => {
+  const recruiterText =
+    "Could you walk me through your background and the work most relevant to this role?";
+  const recruiterRequest = buildTaxonomyAdjudicationRequest({
+    logicalQuestionUnit: unit(recruiterText),
+  });
+  const recruiter = parseTaxonomyAdjudicationOutput(
+    JSON.stringify(
+      answerOutput(recruiterRequest, {
+        speechAct: "question",
+        questionType: "project-deep-dive",
+        evidenceMode: "personal-experience",
+        normalizedQuestion: recruiterText,
+        primaryAskSpans: [{ turnId: "turn-a", text: recruiterText }],
+        evidenceSpans: ["walk me through your background"],
+      })
+    ),
+    recruiterRequest
+  );
+  assert.equal(recruiter.ok, true);
+  if (recruiter.ok) {
+    assert.equal(recruiter.value.questionType, "project-deep-dive");
+  }
+
+  const logisticsText =
+    "The call will take thirty minutes and we will leave time for questions.";
+  const logisticsRequest = buildTaxonomyAdjudicationRequest({
+    logicalQuestionUnit: unit(logisticsText),
+  });
+  const logistics = parseTaxonomyAdjudicationOutput(
+    JSON.stringify({
+      schemaVersion: 2,
+      speechAct: "logistics",
+      questionType: "unknown",
+      relation: "none",
+      evidenceMode: "unknown",
+      action: "append-context",
+      normalizedQuestion: "",
+      primaryAskSpans: [],
+      standalone: false,
+      evidenceSpans: ["The call will take thirty minutes"],
+      confidence: 0.97,
+    }),
+    logisticsRequest
+  );
+  assert.equal(logistics.ok, true);
+
+  const fillerText = "Sounds good, thank you.";
+  const fillerRequest = buildTaxonomyAdjudicationRequest({
+    logicalQuestionUnit: unit(fillerText),
+  });
+  const filler = parseTaxonomyAdjudicationOutput(
+    JSON.stringify({
+      schemaVersion: 2,
+      speechAct: "acknowledgement",
+      questionType: "unknown",
+      relation: "none",
+      evidenceMode: "unknown",
+      action: "ignore",
+      normalizedQuestion: "",
+      primaryAskSpans: [],
+      standalone: false,
+      evidenceSpans: ["Sounds good"],
+      confidence: 0.99,
+    }),
+    fillerRequest
+  );
+  assert.equal(filler.ok, true);
+
+  const denseText =
+    "You can ask the team what are your challenges and what does the scope look like. How does this sound relative to what you are looking for?";
+  const denseRequest = buildTaxonomyAdjudicationRequest({
+    logicalQuestionUnit: unit(denseText),
+  });
+  const terminalAsk =
+    "How does this sound relative to what you are looking for?";
+  const dense = parseTaxonomyAdjudicationOutput(
+    JSON.stringify(
+      answerOutput(denseRequest, {
+        questionType: "unknown",
+        relation: "none",
+        evidenceMode: "unknown",
+        normalizedQuestion: terminalAsk,
+        primaryAskSpans: [{ turnId: "turn-a", text: terminalAsk }],
+        evidenceSpans: [terminalAsk],
+      })
+    ),
+    denseRequest
+  );
+  assert.equal(dense.ok, true);
+  if (dense.ok) {
+    assert.equal(dense.value.normalizedQuestion, terminalAsk);
+    assert.deepEqual(dense.value.primaryAskSpans, [
+      { turnId: "turn-a", text: terminalAsk },
+    ]);
+  }
+});
+
+test("keeps duplicate quoted and terminal asks addressable by source turn", () => {
+  const repeatedAsk = "How does this role sound relative to what you are looking for?";
+  const terminalSpan = `Now for you: ${repeatedAsk}`;
+  const logicalUnit = unit(repeatedAsk, 2);
+  logicalUnit.currentTurnId = "turn-terminal";
+  logicalUnit.sourceTurnIds = ["turn-example", "turn-terminal"];
+  logicalUnit.sources = [
+    {
+      turnId: "turn-example",
+      text: `Later you may ask candidates: ${repeatedAsk}`,
+      startedAt: 10,
+      endedAt: 20,
+    },
+    {
+      turnId: "turn-terminal",
+      text: terminalSpan,
+      startedAt: 30,
+      endedAt: 40,
+    },
+  ];
+  const request = buildTaxonomyAdjudicationRequest({
+    logicalQuestionUnit: logicalUnit,
+  });
+
+  assert.deepEqual(
+    request.question.sourceTurns.map((source) => source.turnId),
+    ["turn-example", "turn-terminal"]
+  );
+  const parsed = parseTaxonomyAdjudicationOutput(
+    JSON.stringify(
+      answerOutput(request, {
+        questionType: "unknown",
+        relation: "none",
+        evidenceMode: "unknown",
+        normalizedQuestion: repeatedAsk,
+        primaryAskSpans: [
+          { turnId: "turn-terminal", text: terminalSpan },
+        ],
+        evidenceSpans: [repeatedAsk],
+      })
+    ),
+    request
+  );
+  assert.equal(parsed.ok, true);
+  if (parsed.ok) {
+    assert.deepEqual(parsed.value.primaryAskSpans, [
+      { turnId: "turn-terminal", text: terminalSpan },
+    ]);
+  }
+
+  const wrongSourceTurn = parseTaxonomyAdjudicationOutput(
+    JSON.stringify(
+      answerOutput(request, {
+        questionType: "unknown",
+        relation: "none",
+        evidenceMode: "unknown",
+        normalizedQuestion: repeatedAsk,
+        primaryAskSpans: [
+          { turnId: "turn-example", text: terminalSpan },
+        ],
+        evidenceSpans: [repeatedAsk],
+      })
+    ),
+    request
+  );
+  assert.deepEqual(wrongSourceTurn, {
+    ok: false,
+    reason: "invalid-primary-ask-span",
+    errorKind: "evidence",
+    evidenceSpansValid: false,
+  });
+});
+
+test("accepts direct, fenced, and bounded one-level JSON wrappers", () => {
+  const request = buildTaxonomyAdjudicationRequest({
+    logicalQuestionUnit: unit("What is reciprocal rank fusion?"),
+  });
+  const output = answerOutput(request);
+  const fixtures = [
+    {
+      raw: JSON.stringify(output),
+      envelope: "direct",
+    },
+    {
+      raw: `\`\`\`json\n${JSON.stringify(output)}\n\`\`\``,
+      envelope: "json-code-fence",
+    },
+    {
+      raw: JSON.stringify({ result: output }),
+      envelope: "result-wrapper",
+    },
+    {
+      raw: JSON.stringify({
+        output: `\`\`\`json\n${JSON.stringify(output)}\n\`\`\``,
+      }),
+      envelope: "output-wrapper",
+    },
+    {
+      raw: JSON.stringify({ response: output }),
+      envelope: "response-wrapper",
+    },
+  ] as const;
+
+  for (const fixture of fixtures) {
+    const parsed = parseTaxonomyAdjudicationOutput(fixture.raw, request);
+    assert.equal(parsed.ok, true, fixture.envelope);
+    if (parsed.ok) assert.equal(parsed.envelope, fixture.envelope);
+  }
+});
+
+test("rejects invalid canonical enums and incomplete answer schemas", () => {
+  const request = buildTaxonomyAdjudicationRequest({
+    logicalQuestionUnit: unit("What is reciprocal rank fusion?"),
+  });
+  const valid = answerOutput(request);
+  const invalidEnum = parseTaxonomyAdjudicationOutput(
+    JSON.stringify({ ...valid, questionType: "logistical" }),
+    request
+  );
+  assert.deepEqual(invalidEnum, {
+    ok: false,
+    reason: "invalid-question-type",
+    errorKind: "schema",
+    evidenceSpansValid: false,
+  });
+
+  const { primaryAskSpans: _omitted, ...missingPrimaryAskSpans } = valid;
+  const invalidSchema = parseTaxonomyAdjudicationOutput(
+    JSON.stringify(missingPrimaryAskSpans),
+    request
+  );
+  assert.deepEqual(invalidSchema, {
+    ok: false,
+    reason: "invalid-primary-ask-spans",
+    errorKind: "schema",
+    evidenceSpansValid: false,
+  });
+
+  const invalidWrapper = parseTaxonomyAdjudicationOutput(
+    JSON.stringify({ payload: valid }),
+    request
+  );
+  assert.deepEqual(invalidWrapper, {
+    ok: false,
+    reason: "invalid-output-wrapper",
+    errorKind: "parse",
+    evidenceSpansValid: false,
+  });
+
+  const malformed = parseTaxonomyAdjudicationOutput("{not-json", request);
+  assert.deepEqual(malformed, {
+    ok: false,
+    reason: "malformed-json",
+    errorKind: "parse",
+    evidenceSpansValid: false,
+  });
+
+  const invalidPrimaryAsk = parseTaxonomyAdjudicationOutput(
+    JSON.stringify({
+      ...valid,
+      primaryAskSpans: [
+        {
+          turnId: "turn-missing",
+          text: "invented terminal ask",
+        },
+      ],
+    }),
+    request
+  );
+  assert.deepEqual(invalidPrimaryAsk, {
+    ok: false,
+    reason: "invalid-primary-ask-span",
+    errorKind: "evidence",
+    evidenceSpansValid: false,
+  });
 });
 
 test("preserves first anchor and latest constraint when projecting overflow", () => {
@@ -109,6 +467,17 @@ test("preserves first anchor and latest constraint when projecting overflow", ()
   const projection = projectLogicalQuestionForAdjudication(logicalUnit, 420);
   assert.equal(projection.safe, true);
   assert.ok(projection.text.length <= 420);
+  assert.ok(
+    projection.sourceTurns.reduce(
+      (total, source, index) =>
+        total + source.text.length + (index > 0 ? 1 : 0),
+      0
+    ) <= 420
+  );
+  assert.deepEqual(
+    projection.sourceTurnIds,
+    projection.sourceTurns.map((source) => source.turnId)
+  );
   assert.match(projection.text, /Design an enterprise retrieval service/);
   assert.match(projection.text, /hybrid search/);
   assert.equal(projection.projectionReason, "anchor-switch-latest-constraint");

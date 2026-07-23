@@ -11,6 +11,7 @@ import type {
   InterviewerSpeechAct,
 } from "./interviewer-intent.js";
 import {
+  CANONICAL_QUESTION_TYPES,
   isCanonicalQuestionType,
   type CanonicalQuestionType,
   type QuestionTypeInferenceDecision,
@@ -18,7 +19,7 @@ import {
 
 export const TAXONOMY_ADJUDICATION_SCHEMA_VERSION = 2;
 export const TAXONOMY_ADJUDICATION_PROMPT_VERSION =
-  "interviewer-intent-adjudication-prompt-v2";
+  "interviewer-intent-adjudication-prompt-v3";
 export const TAXONOMY_ADJUDICATION_MAX_OUTPUT_CHARS = 4_096;
 export const TAXONOMY_ADJUDICATION_MAX_INPUT_CHARS = 1_200;
 export const TAXONOMY_ADJUDICATION_MAX_PARENT_CHARS = 400;
@@ -51,14 +52,25 @@ export interface TaxonomyAdjudicationSourceContext {
   preparationPrior?: string;
 }
 
+export interface TaxonomyAdjudicationSourceTurn {
+  turnId: string;
+  text: string;
+}
+
 export interface TaxonomyAdjudicationProjection {
   text: string;
+  sourceTurns: TaxonomyAdjudicationSourceTurn[];
   sourceTurnIds: string[];
   omittedSourceTurnIds: string[];
   originalChars: number;
   projectedChars: number;
   projectionReason: "within-limit" | "anchor-switch-latest-constraint";
   safe: boolean;
+}
+
+export interface TaxonomyAdjudicationSourceSpan {
+  turnId: string;
+  text: string;
 }
 
 export interface TaxonomyAdjudicationEvidence {
@@ -101,15 +113,39 @@ export interface LlmTaxonomyAdjudication {
   evidenceMode: InterviewerEvidenceMode;
   action: InterviewerIntentAction;
   normalizedQuestion: string;
+  primaryAskSpans: TaxonomyAdjudicationSourceSpan[];
   standalone: boolean;
   evidenceSpans: string[];
   confidence: number;
   ambiguityReason?: string;
 }
 
+export type TaxonomyAdjudicationParseErrorKind =
+  | "parse"
+  | "schema"
+  | "evidence"
+  | "provider";
+
+export type TaxonomyAdjudicationOutputEnvelope =
+  | "direct"
+  | "json-code-fence"
+  | "result-wrapper"
+  | "output-wrapper"
+  | "response-wrapper";
+
 export type TaxonomyAdjudicationParseResult =
-  | { ok: true; value: LlmTaxonomyAdjudication; evidenceSpansValid: true }
-  | { ok: false; reason: string; evidenceSpansValid: boolean };
+  | {
+      ok: true;
+      value: LlmTaxonomyAdjudication;
+      evidenceSpansValid: true;
+      envelope: TaxonomyAdjudicationOutputEnvelope;
+    }
+  | {
+      ok: false;
+      reason: string;
+      errorKind: TaxonomyAdjudicationParseErrorKind;
+      evidenceSpansValid: boolean;
+    };
 
 export interface TaxonomyAdjudicationEligibilityInput {
   enabled: boolean;
@@ -176,51 +212,70 @@ export function projectLogicalQuestionForAdjudication(
   unit: LogicalQuestionUnit,
   maxChars = TAXONOMY_ADJUDICATION_MAX_INPUT_CHARS
 ): TaxonomyAdjudicationProjection {
-  const original = normalizeSpace(unit.normalizedText);
+  const sources = normalizeAdjudicationSourceTurns(unit);
+  const original = joinAdjudicationSourceTurns(sources);
   if (original.length <= maxChars) {
+    const sourceTurnIds = sources.map((source) => source.turnId);
     return {
       text: original,
-      sourceTurnIds: [...unit.sourceTurnIds],
-      omittedSourceTurnIds: [],
+      sourceTurns: sources,
+      sourceTurnIds,
+      omittedSourceTurnIds: unit.sourceTurnIds.filter(
+        (turnId) => !sourceTurnIds.includes(turnId)
+      ),
       originalChars: original.length,
       projectedChars: original.length,
       projectionReason: "within-limit",
-      safe: Boolean(original),
+      safe: Boolean(original && sourceTurnIds.length),
     };
   }
 
-  const sources = unit.sources
-    .map((source) => ({ ...source, text: normalizeSpace(source.text) }))
-    .filter((source) => source.text);
   const first = sources[0];
   const latest = sources[sources.length - 1];
   const switchSpans = sources.flatMap((source) =>
-    splitSentences(source.text).filter((sentence) =>
-      TASK_SWITCH_PATTERN.test(sentence)
-    )
+    splitSentences(source.text)
+      .filter((sentence) => TASK_SWITCH_PATTERN.test(sentence))
+      .map((text) => ({ turnId: source.turnId, text }))
   );
   const constraintSpans = sources.flatMap((source) =>
-    splitSentences(source.text).filter((sentence) =>
-      CURRENT_CONSTRAINT_PATTERN.test(sentence)
-    )
+    splitSentences(source.text)
+      .filter((sentence) => CURRENT_CONSTRAINT_PATTERN.test(sentence))
+      .map((text) => ({ turnId: source.turnId, text }))
   );
-  const selected = dedupeStrings([
-    clip(first?.text ?? "", Math.floor(maxChars * 0.42), "start"),
+  const selected = dedupeSourceSegments([
+    {
+      turnId: first?.turnId ?? "",
+      text: clipSourceText(
+        first?.text ?? "",
+        Math.floor(maxChars * 0.42),
+        "start"
+      ),
+    },
     ...switchSpans,
     ...constraintSpans.slice(-2),
-    clip(latest?.text ?? "", Math.floor(maxChars * 0.42), "end"),
-  ]).filter(Boolean);
-  const text = fitSegments(selected, maxChars);
-  const retainedIds = sources
-    .filter((source) => selected.some((segment) => source.text.includes(segment)))
-    .map((source) => source.turnId);
-  const sourceTurnIds = Array.from(
-    new Set([first?.turnId, ...retainedIds, latest?.turnId].filter(Boolean))
-  ) as string[];
-  const safe = Boolean(first?.text && latest?.text && text);
+    {
+      turnId: latest?.turnId ?? "",
+      text: clipSourceText(
+        latest?.text ?? "",
+        Math.floor(maxChars * 0.42),
+        "end"
+      ),
+    },
+  ]);
+  const sourceTurns = fitSourceSegments(selected, maxChars);
+  const text = joinAdjudicationSourceTurns(sourceTurns);
+  const sourceTurnIds = sourceTurns.map((source) => source.turnId);
+  const safe = Boolean(
+    first?.text &&
+      latest?.text &&
+      text &&
+      sourceTurnIds.includes(first.turnId) &&
+      sourceTurnIds.includes(latest.turnId)
+  );
 
   return {
     text,
+    sourceTurns,
     sourceTurnIds,
     omittedSourceTurnIds: unit.sourceTurnIds.filter(
       (turnId) => !sourceTurnIds.includes(turnId)
@@ -353,20 +408,38 @@ export function buildTaxonomyAdjudicationRequest(input: {
 export function buildTaxonomyAdjudicationPrompts(
   request: TaxonomyAdjudicationRequest
 ) {
+  const canonicalQuestionTypes = CANONICAL_QUESTION_TYPES.join(", ");
+  const {
+    text: _mergedQuestionText,
+    ...sourceAddressableQuestion
+  } = request.question;
+  const packet = {
+    ...request,
+    question: sourceAddressableQuestion,
+  };
   return {
     systemPrompt: [
       "You independently classify one bounded interviewer utterance for Jarvis.",
       "Return one JSON object only. Do not answer the interview question.",
       "Use only source-owned question text, compact parent context, the latest candidate correction, section hint, and preparation prior.",
       "No keyword or embedding classifier result is supplied; make an independent judgment.",
-      "Choose speechAct, questionType, relation, evidenceMode, and action. Evidence spans must be verbatim substrings of supplied source text.",
+      "question.sourceTurns is an ordered array of source-owned {turnId,text} records. The source may contain setup, quoted or future example questions, and one current terminal ask. Classify the current primary ask, not quoted examples.",
+      "Choose speechAct, questionType, relation, evidenceMode, and action.",
       "Allowed speechAct: question, directive, constraint, correction, acknowledgement, section-transition, logistics, informational.",
+      `Allowed questionType: ${canonicalQuestionTypes}. Use unknown for recruiter logistics, scheduling, compensation, sponsorship, procedural guidance, acknowledgements, filler, and any speech outside these interview-task families.`,
       "Allowed relation: new-parent, followup-parent, child-probe, linked-parent-extension, none.",
       "Allowed evidenceMode: personal-experience, hypothetical-design, factual-explanation, unknown.",
       "Allowed action: answer, append-context, buffer, ignore.",
-      "Schema: {schemaVersion:2,speechAct,questionType,relation,evidenceMode,action,normalizedQuestion,standalone,evidenceSpans,confidence,ambiguityReason?}.",
+      "For a recruiter self-introduction, resume walkthrough, or project-opening request, use project-deep-dive. For recruiter logistics or filler, use unknown.",
+      "normalizedQuestion is the normalized current primary or terminal ask. It must be non-empty when action is answer; otherwise it may be an empty string.",
+      "primaryAskSpans is an array of {turnId,text}. Each text must be an exact verbatim substring of the source turn named by turnId. Use the occurrence that is the current primary ask, even when identical text appears in an earlier quoted or future example. It must be non-empty when action is answer and may be empty otherwise.",
+      "evidenceSpans must contain exact verbatim substrings from supplied source text or compact parent context.",
+      "Example logistics result: {\"schemaVersion\":2,\"speechAct\":\"logistics\",\"questionType\":\"unknown\",\"relation\":\"none\",\"evidenceMode\":\"unknown\",\"action\":\"append-context\",\"normalizedQuestion\":\"\",\"primaryAskSpans\":[],\"standalone\":false,\"evidenceSpans\":[\"The call will take thirty minutes\"],\"confidence\":0.95}.",
+      "Example filler result: {\"schemaVersion\":2,\"speechAct\":\"acknowledgement\",\"questionType\":\"unknown\",\"relation\":\"none\",\"evidenceMode\":\"unknown\",\"action\":\"ignore\",\"normalizedQuestion\":\"\",\"primaryAskSpans\":[],\"standalone\":false,\"evidenceSpans\":[\"Sounds good\"],\"confidence\":0.98}.",
+      "Example answer primaryAskSpans: [{\"turnId\":\"turn-2\",\"text\":\"How does this role sound relative to what you are looking for?\"}].",
+      "Schema: {schemaVersion:2,speechAct,questionType,relation,evidenceMode,action,normalizedQuestion,primaryAskSpans:[{turnId,text}],standalone,evidenceSpans,confidence,ambiguityReason?}.",
     ].join(" "),
-    userMessage: JSON.stringify(request),
+    userMessage: JSON.stringify(packet),
   };
 }
 
@@ -375,56 +448,77 @@ export function parseTaxonomyAdjudicationOutput(
   request: TaxonomyAdjudicationRequest
 ): TaxonomyAdjudicationParseResult {
   if (!rawOutput.trim()) {
-    return { ok: false, reason: "empty-output", evidenceSpansValid: false };
+    return parseFailure("empty-output", "parse");
   }
   if (rawOutput.length > TAXONOMY_ADJUDICATION_MAX_OUTPUT_CHARS) {
-    return { ok: false, reason: "output-too-large", evidenceSpansValid: false };
+    return parseFailure("output-too-large", "parse");
   }
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(stripJsonFence(rawOutput));
-  } catch {
-    return { ok: false, reason: "malformed-json", evidenceSpansValid: false };
+  const decoded = decodeTaxonomyAdjudicationEnvelope(rawOutput);
+  if (!decoded.ok) {
+    return parseFailure(decoded.reason, "parse");
   }
+  const parsed = decoded.value;
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    return { ok: false, reason: "output-is-not-object", evidenceSpansValid: false };
+    return parseFailure("output-is-not-object", "schema");
   }
   const candidate = parsed as Record<string, unknown>;
   if (candidate.schemaVersion !== TAXONOMY_ADJUDICATION_SCHEMA_VERSION) {
-    return {
-      ok: false,
-      reason: "unsupported-schema-version",
-      evidenceSpansValid: false,
-    };
+    return parseFailure("unsupported-schema-version", "schema");
   }
   if (!isCanonicalQuestionType(candidate.questionType)) {
-    return { ok: false, reason: "invalid-question-type", evidenceSpansValid: false };
+    return parseFailure("invalid-question-type", "schema");
   }
   if (!isInterviewerSpeechAct(candidate.speechAct)) {
-    return { ok: false, reason: "invalid-speech-act", evidenceSpansValid: false };
+    return parseFailure("invalid-speech-act", "schema");
   }
   if (!isTaxonomyAdjudicationRelation(candidate.relation)) {
-    return { ok: false, reason: "invalid-relation", evidenceSpansValid: false };
+    return parseFailure("invalid-relation", "schema");
   }
   if (!isInterviewerEvidenceMode(candidate.evidenceMode)) {
-    return { ok: false, reason: "invalid-evidence-mode", evidenceSpansValid: false };
+    return parseFailure("invalid-evidence-mode", "schema");
   }
   if (!isInterviewerIntentAction(candidate.action)) {
-    return { ok: false, reason: "invalid-action", evidenceSpansValid: false };
+    return parseFailure("invalid-action", "schema");
   }
   if (
     typeof candidate.normalizedQuestion !== "string" ||
-    !candidate.normalizedQuestion.trim() ||
     candidate.normalizedQuestion.length > TAXONOMY_ADJUDICATION_MAX_INPUT_CHARS
   ) {
-    return {
-      ok: false,
-      reason: "invalid-normalized-question",
-      evidenceSpansValid: false,
-    };
+    return parseFailure("invalid-normalized-question", "schema");
+  }
+  if (
+    candidate.action === "answer" &&
+    !candidate.normalizedQuestion.trim()
+  ) {
+    return parseFailure("missing-normalized-question", "schema");
+  }
+  if (
+    !Array.isArray(candidate.primaryAskSpans) ||
+    candidate.primaryAskSpans.length > 8 ||
+    candidate.primaryAskSpans.some(
+      (span) => !isTaxonomyAdjudicationSourceSpan(span)
+    )
+  ) {
+    return parseFailure("invalid-primary-ask-spans", "schema");
+  }
+  const primaryAskSpans = (
+    candidate.primaryAskSpans as TaxonomyAdjudicationSourceSpan[]
+  ).map((span) => ({ turnId: span.turnId, text: span.text }));
+  if (candidate.action === "answer" && primaryAskSpans.length === 0) {
+    return parseFailure("missing-primary-ask", "schema");
+  }
+  const sourceTurnsById = new Map(
+    request.question.sourceTurns.map((source) => [source.turnId, source.text])
+  );
+  const primaryAskSpansValid = primaryAskSpans.every((span) => {
+    const sourceText = sourceTurnsById.get(span.turnId);
+    return Boolean(sourceText?.includes(span.text));
+  });
+  if (!primaryAskSpansValid) {
+    return parseFailure("invalid-primary-ask-span", "evidence");
   }
   if (typeof candidate.standalone !== "boolean") {
-    return { ok: false, reason: "invalid-standalone", evidenceSpansValid: false };
+    return parseFailure("invalid-standalone", "schema");
   }
   if (
     typeof candidate.confidence !== "number" ||
@@ -432,7 +526,7 @@ export function parseTaxonomyAdjudicationOutput(
     candidate.confidence < 0 ||
     candidate.confidence > 1
   ) {
-    return { ok: false, reason: "invalid-confidence", evidenceSpansValid: false };
+    return parseFailure("invalid-confidence", "schema");
   }
   if (
     !Array.isArray(candidate.evidenceSpans) ||
@@ -441,7 +535,7 @@ export function parseTaxonomyAdjudicationOutput(
       (span) => typeof span !== "string" || !span.trim()
     )
   ) {
-    return { ok: false, reason: "missing-evidence", evidenceSpansValid: false };
+    return parseFailure("missing-evidence", "schema");
   }
   const allowedEvidence = buildAllowedEvidenceText(request).toLocaleLowerCase();
   const evidenceSpans = candidate.evidenceSpans as string[];
@@ -449,22 +543,19 @@ export function parseTaxonomyAdjudicationOutput(
     allowedEvidence.includes(normalizeSpace(span).toLocaleLowerCase())
   );
   if (!evidenceSpansValid) {
-    return { ok: false, reason: "invalid-evidence-span", evidenceSpansValid };
+    return parseFailure("invalid-evidence-span", "evidence", evidenceSpansValid);
   }
   if (
     candidate.ambiguityReason !== undefined &&
     typeof candidate.ambiguityReason !== "string"
   ) {
-    return {
-      ok: false,
-      reason: "invalid-ambiguity-reason",
-      evidenceSpansValid: true,
-    };
+    return parseFailure("invalid-ambiguity-reason", "schema", true);
   }
 
   return {
     ok: true,
     evidenceSpansValid: true,
+    envelope: decoded.envelope,
     value: {
       schemaVersion: TAXONOMY_ADJUDICATION_SCHEMA_VERSION,
       speechAct: candidate.speechAct,
@@ -473,6 +564,7 @@ export function parseTaxonomyAdjudicationOutput(
       evidenceMode: candidate.evidenceMode,
       action: candidate.action,
       normalizedQuestion: normalizeSpace(candidate.normalizedQuestion),
+      primaryAskSpans,
       standalone: candidate.standalone,
       evidenceSpans,
       confidence: candidate.confidence,
@@ -641,6 +733,19 @@ function isInterviewerIntentAction(
   );
 }
 
+function isTaxonomyAdjudicationSourceSpan(
+  value: unknown
+): value is TaxonomyAdjudicationSourceSpan {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const candidate = value as Record<string, unknown>;
+  return (
+    typeof candidate.turnId === "string" &&
+    Boolean(candidate.turnId.trim()) &&
+    typeof candidate.text === "string" &&
+    Boolean(candidate.text.trim())
+  );
+}
+
 function sanitizeParentDescriptor(
   parent: TaxonomyAdjudicationParentDescriptor | undefined
 ) {
@@ -666,7 +771,7 @@ function sanitizeParentDescriptor(
 
 function buildAllowedEvidenceText(request: TaxonomyAdjudicationRequest) {
   return [
-    request.question.text,
+    ...request.question.sourceTurns.map((source) => source.text),
     request.activeParent?.topic,
     request.activeParent?.questionType,
     request.activeParent?.playbookPhase,
@@ -679,10 +784,90 @@ function buildAllowedEvidenceText(request: TaxonomyAdjudicationRequest) {
     .join("\n");
 }
 
+function decodeTaxonomyAdjudicationEnvelope(
+  rawOutput: string
+):
+  | {
+      ok: true;
+      value: unknown;
+      envelope: TaxonomyAdjudicationOutputEnvelope;
+    }
+  | { ok: false; reason: "malformed-json" | "invalid-output-wrapper" } {
+  const fenced = stripJsonFence(rawOutput);
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(fenced.value);
+  } catch {
+    return { ok: false, reason: "malformed-json" };
+  }
+  if (
+    parsed &&
+    typeof parsed === "object" &&
+    !Array.isArray(parsed) &&
+    "schemaVersion" in parsed
+  ) {
+    return {
+      ok: true,
+      value: parsed,
+      envelope: fenced.wasFenced ? "json-code-fence" : "direct",
+    };
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return {
+      ok: true,
+      value: parsed,
+      envelope: fenced.wasFenced ? "json-code-fence" : "direct",
+    };
+  }
+  const wrapper = parsed as Record<string, unknown>;
+  for (const key of ["result", "output", "response"] as const) {
+    if (!(key in wrapper)) continue;
+    const nested = decodeNestedTaxonomyAdjudicationValue(wrapper[key]);
+    if (!nested.ok) return nested;
+    return {
+      ok: true,
+      value: nested.value,
+      envelope: `${key}-wrapper`,
+    };
+  }
+  return { ok: false, reason: "invalid-output-wrapper" };
+}
+
+function decodeNestedTaxonomyAdjudicationValue(
+  value: unknown
+): { ok: true; value: unknown } | { ok: false; reason: "invalid-output-wrapper" } {
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    return { ok: true, value };
+  }
+  if (typeof value !== "string") {
+    return { ok: false, reason: "invalid-output-wrapper" };
+  }
+  try {
+    const fenced = stripJsonFence(value);
+    const parsed = JSON.parse(fenced.value);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? { ok: true, value: parsed }
+      : { ok: false, reason: "invalid-output-wrapper" };
+  } catch {
+    return { ok: false, reason: "invalid-output-wrapper" };
+  }
+}
+
+function parseFailure(
+  reason: string,
+  errorKind: TaxonomyAdjudicationParseErrorKind,
+  evidenceSpansValid = false
+): TaxonomyAdjudicationParseResult {
+  return { ok: false, reason, errorKind, evidenceSpansValid };
+}
+
 function stripJsonFence(value: string) {
   const trimmed = value.trim();
   const match = /^```(?:json)?\s*([\s\S]*?)\s*```$/iu.exec(trimmed);
-  return match?.[1]?.trim() ?? trimmed;
+  return {
+    value: match?.[1]?.trim() ?? trimmed,
+    wasFenced: Boolean(match),
+  };
 }
 
 function splitSentences(value: string) {
@@ -692,18 +877,58 @@ function splitSentences(value: string) {
     .filter(Boolean);
 }
 
-function fitSegments(segments: string[], maxChars: number) {
-  const output: string[] = [];
+function normalizeAdjudicationSourceTurns(
+  unit: LogicalQuestionUnit
+): TaxonomyAdjudicationSourceTurn[] {
+  const sources = unit.sources
+    .map((source) => ({
+      turnId: source.turnId,
+      text: normalizeSpace(source.text),
+    }))
+    .filter((source) => source.turnId && source.text);
+  if (sources.length) return sources;
+  const fallbackText = normalizeSpace(unit.normalizedText);
+  const fallbackTurnId = unit.currentTurnId || unit.sourceTurnIds[0];
+  return fallbackText && fallbackTurnId
+    ? [{ turnId: fallbackTurnId, text: fallbackText }]
+    : [];
+}
+
+function joinAdjudicationSourceTurns(
+  sources: TaxonomyAdjudicationSourceTurn[]
+) {
+  return sources.map((source) => source.text).join("\n");
+}
+
+function fitSourceSegments(
+  segments: TaxonomyAdjudicationSourceTurn[],
+  maxChars: number
+) {
+  const fitted: TaxonomyAdjudicationSourceTurn[] = [];
   let remaining = maxChars;
   for (const segment of segments) {
-    const separatorChars = output.length ? 1 : 0;
+    const separatorChars = fitted.length ? 1 : 0;
     if (remaining <= separatorChars) break;
-    const fitted = clip(segment, remaining - separatorChars, "start");
-    if (!fitted) continue;
-    output.push(fitted);
-    remaining -= fitted.length + separatorChars;
+    const text = clipSourceText(
+      segment.text,
+      remaining - separatorChars,
+      "start"
+    );
+    if (!segment.turnId || !text) continue;
+    fitted.push({ turnId: segment.turnId, text });
+    remaining -= text.length + separatorChars;
   }
-  return output.join("\n");
+
+  const grouped = new Map<string, string[]>();
+  for (const segment of fitted) {
+    const values = grouped.get(segment.turnId) ?? [];
+    values.push(segment.text);
+    grouped.set(segment.turnId, values);
+  }
+  return [...grouped].map(([turnId, values]) => ({
+    turnId,
+    text: values.join("\n"),
+  }));
 }
 
 function clip(value: string, maxChars: number, side: "start" | "end") {
@@ -715,19 +940,34 @@ function clip(value: string, maxChars: number, side: "start" | "end") {
     : `...${value.slice(-(maxChars - 3)).trimStart()}`;
 }
 
+function clipSourceText(
+  value: string,
+  maxChars: number,
+  side: "start" | "end"
+) {
+  if (maxChars <= 0) return "";
+  if (value.length <= maxChars) return value;
+  return side === "start"
+    ? value.slice(0, maxChars).trimEnd()
+    : value.slice(-maxChars).trimStart();
+}
+
 function clipOptional(value: string | undefined, maxChars: number) {
   const normalized = value ? normalizeSpace(value) : "";
   return normalized ? clip(normalized, maxChars, "start") : undefined;
 }
 
-function dedupeStrings(values: string[]) {
+function dedupeSourceSegments(values: TaxonomyAdjudicationSourceTurn[]) {
   const seen = new Set<string>();
-  return values.filter((value) => {
-    const key = normalizeSpace(value).toLocaleLowerCase();
-    if (!key || seen.has(key)) return false;
+  const result: TaxonomyAdjudicationSourceTurn[] = [];
+  for (const value of values) {
+    const text = normalizeSpace(value.text);
+    const key = `${value.turnId}\u001f${text.toLocaleLowerCase()}`;
+    if (!value.turnId || !text || seen.has(key)) continue;
     seen.add(key);
-    return true;
-  });
+    result.push({ turnId: value.turnId, text });
+  }
+  return result;
 }
 
 function normalizeSpace(value: string) {

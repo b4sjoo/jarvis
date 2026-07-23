@@ -17,6 +17,12 @@ test("classifies configured-route content separately from JSON parsing", async (
     evidenceMode: "hypothetical-design",
     action: "answer",
     normalizedQuestion: request.question.text,
+    primaryAskSpans: [
+      {
+        turnId: "turn-a",
+        text: request.question.text,
+      },
+    ],
     standalone: true,
     evidenceSpans: ["RAG system"],
     confidence: 0.92,
@@ -33,7 +39,7 @@ test("classifies configured-route content separately from JSON parsing", async (
   assert.equal(result.parsed.ok, true);
 });
 
-test("identifies provider error text before reporting malformed JSON", async () => {
+test("identifies provider error text without misreporting a JSON parse failure", async () => {
   const result = await consumeTaxonomyAdjudicationResponse({
     request: buildRequest(),
     signal: new AbortController().signal,
@@ -43,8 +49,13 @@ test("identifies provider error text before reporting malformed JSON", async () 
   });
 
   assert.equal(result.providerDisposition, "provider-error-content");
-  assert.equal(result.parseDisposition, "malformed-json");
-  assert.equal(result.parsed.ok, false);
+  assert.equal(result.parseDisposition, "not-run-provider-error-content");
+  assert.deepEqual(result.parsed, {
+    ok: false,
+    reason: "provider-error-content",
+    errorKind: "provider",
+    evidenceSpansValid: false,
+  });
 });
 
 test("classifies deterministic credential failures without invoking JSON parsing", async () => {
@@ -61,6 +72,7 @@ test("classifies deterministic credential failures without invoking JSON parsing
   assert.deepEqual(result.parsed, {
     ok: false,
     reason: "provider-auth-error",
+    errorKind: "provider",
     evidenceSpansValid: false,
   });
 });
@@ -73,8 +85,13 @@ test("keeps an empty provider completion distinct from parser failure", async ()
   });
 
   assert.equal(result.providerDisposition, "completed-empty");
-  assert.equal(result.parseDisposition, "empty-output");
-  assert.equal(result.parsed.ok, false);
+  assert.equal(result.parseDisposition, "not-run-completed-empty");
+  assert.deepEqual(result.parsed, {
+    ok: false,
+    reason: "completed-empty",
+    errorKind: "provider",
+    evidenceSpansValid: false,
+  });
 });
 
 function buildRequest() {

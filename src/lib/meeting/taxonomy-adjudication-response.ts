@@ -38,26 +38,39 @@ export async function consumeTaxonomyAdjudicationResponse(input: {
   }
   const providerDisposition =
     classifyTaxonomyAdjudicationProviderOutput(rawOutput);
-  const parsed =
-    providerDisposition === "provider-auth-error"
-      ? {
-          ok: false as const,
-          reason: "provider-auth-error",
-          evidenceSpansValid: false,
-        }
-      : parseTaxonomyAdjudicationOutput(rawOutput, input.request);
+  const parsed = parseTaxonomyAdjudicationProviderResult({
+    providerDisposition,
+    rawOutput,
+    request: input.request,
+  });
   return {
     rawOutput,
     parsed,
     providerDisposition,
     parseDisposition:
-      providerDisposition === "provider-auth-error"
-        ? "not-run-provider-auth-error"
-        : parsed.ok
+      providerDisposition === "completed-with-content"
+        ? parsed.ok
           ? "valid-json"
-          : parsed.reason,
+          : parsed.reason
+        : `not-run-${providerDisposition}`,
     firstTokenAt,
     completedAt: Date.now(),
+  };
+}
+
+function parseTaxonomyAdjudicationProviderResult(input: {
+  providerDisposition: TaxonomyAdjudicationRequestResult["providerDisposition"];
+  rawOutput: string;
+  request: TaxonomyAdjudicationRequest;
+}): TaxonomyAdjudicationParseResult {
+  if (input.providerDisposition === "completed-with-content") {
+    return parseTaxonomyAdjudicationOutput(input.rawOutput, input.request);
+  }
+  return {
+    ok: false,
+    reason: input.providerDisposition,
+    errorKind: "provider",
+    evidenceSpansValid: false,
   };
 }
 

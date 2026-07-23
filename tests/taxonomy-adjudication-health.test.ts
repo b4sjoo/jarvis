@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   formatTaxonomyAdjudicationCircuitForTrace,
+  shouldOpenTaxonomyAdjudicationCircuit,
   TaxonomyAdjudicationSessionCircuitBreaker,
 } from "../src/lib/meeting/taxonomy-adjudication-health.js";
 
@@ -23,6 +24,23 @@ test("opens once for a deterministic provider failure within one session", () =>
   assert.equal(repeated.newlyOpened, false);
   assert.equal(repeated.state.openedAt, 100);
   assert.equal(repeated.state.detail, "invalid key");
+});
+
+test("stale provider failures cannot open the current session circuit", () => {
+  assert.equal(
+    shouldOpenTaxonomyAdjudicationCircuit({
+      leaseAuthorized: false,
+      providerDisposition: "provider-auth-error",
+    }),
+    false
+  );
+  assert.equal(
+    shouldOpenTaxonomyAdjudicationCircuit({
+      leaseAuthorized: true,
+      providerDisposition: "provider-auth-error",
+    }),
+    true
+  );
 });
 
 test("a new meeting session receives a closed circuit", () => {

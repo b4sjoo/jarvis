@@ -448,16 +448,26 @@ test("late LLM taxonomy adjudication stays joinable after trace export", async (
     metadata: {
       taxonomyAdjudicationMode: "shadow",
       taxonomyAdjudicationEligible: true,
+      taxonomyAdjudicationPromptVersion:
+        "interviewer-intent-adjudication-prompt-v3",
+      taxonomyAdjudicationSchemaVersion: 2,
+      taxonomyAdjudicationRequestHash: "request-hash-1",
       taxonomyAdjudicationDisposition: "completed",
+      taxonomyAdjudicationOperationId: "intent-op-1",
       taxonomyAdjudicationUnitId: "logical_1",
       taxonomyAdjudicationUnitRevision: 2,
+      taxonomyAdjudicationScheduledTaskId: "task_1",
+      taxonomyAdjudicationSettlementTaskId: "task_2",
       taxonomyAdjudicationProviderId: "fast-classifier",
       taxonomyAdjudicationProviderDisposition: "completed-with-content",
       taxonomyAdjudicationParseDisposition: "valid-json",
+      taxonomyAdjudicationOutputEnvelope: "direct",
+      taxonomyAdjudicationLeaseAuthorized: true,
       taxonomyAdjudicationCandidateType: "coding",
       taxonomyAdjudicationRelation: "new-parent",
       taxonomyAdjudicationParseValid: true,
       taxonomyAdjudicationWouldRepair: true,
+      taxonomyAdjudicationRepairFactors: ["question-type", "relation"],
       taxonomyAdjudicationRepairApplied: false,
       taxonomyAdjudicationDurationMs: 611,
       taxonomyAdjudicationRawOutputHash: "hash-1",
@@ -465,15 +475,41 @@ test("late LLM taxonomy adjudication stays joinable after trace export", async (
       taxonomyAdjudicationRawOutputTruncated: false,
       interviewerIntentLlmMode: "shadow",
       interviewerIntentLlmEligible: true,
+      interviewerIntentLlmPromptVersion:
+        "interviewer-intent-adjudication-prompt-v3",
+      interviewerIntentLlmSchemaVersion: 2,
+      interviewerIntentLlmRequestHash: "request-hash-1",
       interviewerIntentLlmOperationId: "intent-op-1",
       interviewerIntentLlmUnitId: "logical_1",
       interviewerIntentLlmUnitRevision: 2,
+      interviewerIntentLlmScheduledTaskId: "task_1",
+      interviewerIntentLlmSettlementTaskId: "task_2",
+      interviewerIntentLlmProviderId: "fast-classifier",
       interviewerIntentLlmDisposition: "completed",
+      interviewerIntentLlmOutputEnvelope: "direct",
+      interviewerIntentLlmLeaseAuthorized: true,
       interviewerIntentLlmSpeechAct: "directive",
       interviewerIntentLlmQuestionType: "coding",
       interviewerIntentLlmRelation: "new-parent",
       interviewerIntentLlmEvidenceMode: "hypothetical-design",
       interviewerIntentLlmAction: "answer",
+      interviewerIntentLlmNormalizedQuestion: "Implement a queue.",
+      interviewerIntentLlmPrimaryAskSpanTexts: ["Implement a queue."],
+      interviewerIntentLlmPrimaryAskSourceTurnIds: ["turn_1"],
+      interviewerIntentLlmLocalSpeechAct: "question",
+      interviewerIntentLlmLocalQuestionType: "unknown",
+      interviewerIntentLlmLocalRelation: "none",
+      interviewerIntentLlmLocalEvidenceMode: "unknown",
+      interviewerIntentLlmLocalAction: "ignore",
+      interviewerIntentLlmLocalPrimaryAsk: "Can you implement that?",
+      interviewerIntentLlmRepairFactors: [
+        "speech-act",
+        "question-type",
+        "relation",
+        "evidence-mode",
+        "action",
+        "primary-ask",
+      ],
       interviewerIntentLlmParseValid: true,
       interviewerIntentLlmWouldRepair: true,
       interviewerIntentLlmRepairApplied: false,
@@ -510,7 +546,36 @@ test("late LLM taxonomy adjudication stays joinable after trace export", async (
   const intent = summary.interviewerIntentLlm as Record<string, unknown>;
   assert.equal(intent.speechAct, "directive");
   assert.equal(intent.questionType, "coding");
+  assert.equal(
+    intent.promptVersion,
+    "interviewer-intent-adjudication-prompt-v3"
+  );
+  assert.equal(intent.schemaVersion, 2);
+  assert.equal(intent.requestHash, "request-hash-1");
+  assert.equal(intent.scheduledTaskId, "task_1");
+  assert.equal(intent.settlementTaskId, "task_2");
+  assert.equal(intent.providerId, "fast-classifier");
+  assert.equal(intent.outputEnvelope, "direct");
+  assert.equal(intent.leaseAuthorized, true);
+  assert.equal(intent.normalizedQuestion, "Implement a queue.");
+  assert.deepEqual(intent.primaryAskSpanTexts, ["Implement a queue."]);
+  assert.deepEqual(intent.primaryAskSourceTurnIds, ["turn_1"]);
+  assert.deepEqual(intent.repairFactors, [
+    "speech-act",
+    "question-type",
+    "relation",
+    "evidence-mode",
+    "action",
+    "primary-ask",
+  ]);
   assert.equal(adjudication.relation, "new-parent");
+  assert.equal(adjudication.scheduledTaskId, "task_1");
+  assert.equal(adjudication.settlementTaskId, "task_2");
+  assert.equal(adjudication.leaseAuthorized, true);
+  assert.deepEqual(adjudication.repairFactors, [
+    "question-type",
+    "relation",
+  ]);
   assert.equal(adjudication.wouldRepair, true);
   assert.equal(adjudication.repairApplied, false);
   assert.equal(adjudication.durationMs, 611);
@@ -611,7 +676,7 @@ test("compact trace summaries preserve task boundary and cross-domain evidence",
   );
   assert.ok(summaryWrite);
   const summary = parsePayload(summaryWrite);
-  assert.equal(summary.version, 12);
+  assert.equal(summary.version, 13);
   assert.equal(summary.taskRelation, "new-parent");
   assert.equal(summary.logicalQuestionUnitRevision, 3);
   assert.deepEqual(summary.logicalQuestionSourceTurnIds, ["turn_1", "turn_2"]);

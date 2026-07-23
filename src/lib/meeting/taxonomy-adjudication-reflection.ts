@@ -3,8 +3,6 @@ import {
   type CanonicalQuestionType,
 } from "./task-taxonomy.js";
 
-export const TAXONOMY_ADJUDICATION_TRIGGER_RATE_REVIEW_THRESHOLD = 0.15;
-
 export interface TaxonomyAdjudicationRecordedDecision {
   recordedAt: number;
   sessionId?: string;
@@ -58,6 +56,8 @@ export interface TaxonomyAdjudicationCompactTrace {
     relation?: string;
     evidenceMode?: string;
     action?: string;
+    parseErrorKind?: string;
+    outputEnvelope?: string;
   };
   taxonomyAdjudication?: {
     eligible?: boolean;
@@ -70,6 +70,8 @@ export interface TaxonomyAdjudicationCompactTrace {
     disposition?: string;
     providerDisposition?: string;
     parseDisposition?: string;
+    parseErrorKind?: string;
+    outputEnvelope?: string;
     staleReason?: string;
     candidateType?: string;
     relation?: string;
@@ -85,6 +87,7 @@ export interface TaxonomyAdjudicationCompactTrace {
 
 export interface TaxonomyAdjudicationReflectionRow {
   key: string;
+  operationId?: string;
   sessionId?: string;
   traceId: string;
   taskId?: string;
@@ -98,6 +101,8 @@ export interface TaxonomyAdjudicationReflectionRow {
   disposition?: string;
   providerDisposition?: string;
   parseDisposition?: string;
+  parseErrorKind?: string;
+  outputEnvelope?: string;
   staleReason?: string;
   lexicalType: CanonicalQuestionType;
   localSemanticType?: CanonicalQuestionType;
@@ -131,7 +136,7 @@ export interface TaxonomyAdjudicationReflectionRow {
 }
 
 export interface TaxonomyAdjudicationReflectionReport {
-  version: 3;
+  version: 4;
   generatedAt: number;
   sessions: string[];
   funnel: {
@@ -146,18 +151,25 @@ export interface TaxonomyAdjudicationReflectionReport {
     actionAgreements: EvaluationFunnelStage;
   };
   metrics: {
+    observedOperations: number;
     observedUnits: number;
+    operationsWithId: number;
+    legacyFallbackOperations: number;
+    retriedUnits: number;
+    retryOperations: number;
+    maxOperationsPerUnit: number;
     substantiveUnits: number;
     eligible: number;
     triggeredCalls: number;
     skipped: number;
     triggerRate: number | null;
-    triggerRateTarget: number;
-    triggerRateWarning: boolean;
+    callRateSemantics: "reason-coded-observational";
     triggerReasons: Record<string, number>;
     dispositions: Record<string, number>;
     providerDispositions: Record<string, number>;
     parseDispositions: Record<string, number>;
+    parseErrorKinds: Record<string, number>;
+    outputEnvelopes: Record<string, number>;
     validOutputs: number;
     invalidOutputs: number;
     staleOrSuperseded: number;
@@ -221,7 +233,7 @@ export function buildTaxonomyAdjudicationReflectionReport(input: {
     }
   }
 
-  const rows = selectLatestUnitDecisions(input.decisions).map((decision) => {
+  const rows = selectLatestOperationDecisions(input.decisions).map((decision) => {
     const metadata = decision.metadata;
     const trace = traceById.get(decision.traceId);
     const summary = trace?.taxonomyAdjudication;
@@ -260,6 +272,10 @@ export function buildTaxonomyAdjudicationReflectionReport(input: {
     const unitRevision =
       readNumber(metadata, "taxonomyAdjudicationUnitRevision") ??
       summary?.unitRevision;
+    const operationId =
+      readString(metadata, "taxonomyAdjudicationOperationId") ??
+      readString(metadata, "interviewerIntentLlmOperationId") ??
+      summary?.operationId;
     const parseValid =
       readBoolean(metadata, "taxonomyAdjudicationParseValid") ??
       summary?.parseValid;
@@ -279,7 +295,8 @@ export function buildTaxonomyAdjudicationReflectionReport(input: {
         : undefined);
 
     return {
-      key: `${decision.sessionId ?? trace?.sessionId ?? "unknown"}:${unitId ?? decision.traceId}:${unitRevision ?? 0}`,
+      key: buildDecisionSelectionKey(decision),
+      operationId,
       sessionId: decision.sessionId ?? trace?.sessionId,
       traceId: decision.traceId,
       taskId: decision.taskId,
@@ -305,6 +322,16 @@ export function buildTaxonomyAdjudicationReflectionReport(input: {
       parseDisposition:
         readString(metadata, "taxonomyAdjudicationParseDisposition") ??
         summary?.parseDisposition,
+      parseErrorKind:
+        readString(metadata, "taxonomyAdjudicationParseErrorKind") ??
+        readString(metadata, "interviewerIntentLlmParseErrorKind") ??
+        summary?.parseErrorKind ??
+        intentSummary?.parseErrorKind,
+      outputEnvelope:
+        readString(metadata, "taxonomyAdjudicationOutputEnvelope") ??
+        readString(metadata, "interviewerIntentLlmOutputEnvelope") ??
+        summary?.outputEnvelope ??
+        intentSummary?.outputEnvelope,
       staleReason:
         readString(metadata, "taxonomyAdjudicationStaleReason") ??
         summary?.staleReason,
@@ -399,6 +426,14 @@ export function buildTaxonomyAdjudicationReflectionReport(input: {
   const inputChars = sum(rows.map((row) => row.inputChars));
   const outputChars = sum(rows.map((row) => row.outputChars));
   const triggerRate = ratio(triggeredRows.length, substantiveRows.length);
+  const operationCountsByUnit = countOperationsByUnit(rows);
+  const operationCounts = Array.from(operationCountsByUnit.values());
+  const observedUnits = operationCountsByUnit.size;
+  const retriedUnits = operationCounts.filter((count) => count > 1).length;
+  const retryOperations = operationCounts.reduce(
+    (total, count) => total + Math.max(0, count - 1),
+    0
+  );
   const traceIdsWithDecisions = new Set(rows.map((row) => row.traceId));
   const knownTraceIds = new Set(input.traces.map((trace) => trace.traceId));
   const taxonomyAgreements = typeLabeled.filter((row) => row.typeCorrect).length;
@@ -410,7 +445,7 @@ export function buildTaxonomyAdjudicationReflectionReport(input: {
   ).length;
 
   return {
-    version: 3,
+    version: 4,
     generatedAt: Date.now(),
     sessions,
     funnel: {
@@ -440,17 +475,21 @@ export function buildTaxonomyAdjudicationReflectionReport(input: {
       ),
     },
     metrics: {
-      observedUnits: rows.length,
+      observedOperations: rows.length,
+      observedUnits,
+      operationsWithId: rows.filter((row) => Boolean(row.operationId)).length,
+      legacyFallbackOperations: rows.filter((row) => !row.operationId).length,
+      retriedUnits,
+      retryOperations,
+      maxOperationsPerUnit: operationCounts.length
+        ? Math.max(...operationCounts)
+        : 0,
       substantiveUnits: substantiveRows.length,
       eligible: eligibleRows.length,
       triggeredCalls: triggeredRows.length,
       skipped: rows.filter((row) => !row.eligible || !row.durationMs).length,
       triggerRate,
-      triggerRateTarget:
-        TAXONOMY_ADJUDICATION_TRIGGER_RATE_REVIEW_THRESHOLD,
-      triggerRateWarning:
-        triggerRate !== null &&
-        triggerRate > TAXONOMY_ADJUDICATION_TRIGGER_RATE_REVIEW_THRESHOLD,
+      callRateSemantics: "reason-coded-observational",
       triggerReasons: countStrings(
         rows.flatMap((row) => row.triggerReasons)
       ),
@@ -460,6 +499,12 @@ export function buildTaxonomyAdjudicationReflectionReport(input: {
       ),
       parseDispositions: countStrings(
         triggeredRows.map((row) => row.parseDisposition)
+      ),
+      parseErrorKinds: countStrings(
+        triggeredRows.map((row) => row.parseErrorKind)
+      ),
+      outputEnvelopes: countStrings(
+        triggeredRows.map((row) => row.outputEnvelope)
       ),
       validOutputs: providerValidRows.length,
       invalidOutputs: triggeredRows.filter((row) => row.parseValid === false)
@@ -565,10 +610,12 @@ export function renderTaxonomyAdjudicationReflectionMarkdown(
     "",
     "## Summary",
     "",
-    `- Observed / substantive units: ${report.metrics.observedUnits} / ${report.metrics.substantiveUnits}`,
+    `- Observed operations / unique units: ${report.metrics.observedOperations} / ${report.metrics.observedUnits}`,
+    `- Operation IDs / legacy fallbacks: ${report.metrics.operationsWithId} / ${report.metrics.legacyFallbackOperations}`,
+    `- Retried units / retry operations / max operations per unit: ${report.metrics.retriedUnits} / ${report.metrics.retryOperations} / ${report.metrics.maxOperationsPerUnit}`,
+    `- Substantive operation rows: ${report.metrics.substantiveUnits}`,
     `- Eligible / triggered calls: ${report.metrics.eligible} / ${report.metrics.triggeredCalls}`,
-    `- Trigger rate: ${percent(report.metrics.triggerRate)}`,
-    `- Trigger-rate review: ${report.metrics.triggerRateWarning ? "WARNING" : "within target"} (target <= ${percent(report.metrics.triggerRateTarget)})`,
+    `- Observational call rate: ${percent(report.metrics.triggerRate)} (reason-coded; not a pass/fail target)`,
     `- Valid / invalid outputs: ${report.metrics.validOutputs} / ${report.metrics.invalidOutputs}`,
     `- Stale or superseded: ${report.metrics.staleOrSuperseded}`,
     `- Would repair / applied: ${report.metrics.wouldRepair} / ${report.metrics.repairApplied}`,
@@ -586,11 +633,11 @@ export function renderTaxonomyAdjudicationReflectionMarkdown(
     "",
     "## Decision Comparison",
     "",
-    "| Unit | Lexical | Local semantic | LLM | Speech act | Relation | Evidence mode | Action | Runtime | Disposition | Repair | Human | Timing |",
-    "|---|---|---|---|---|---|---|---|---|---|---|---|---|",
+    "| Unit | Operation | Lexical | Local semantic | LLM | Speech act | Relation | Evidence mode | Action | Runtime | Disposition | Repair | Human | Timing |",
+    "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|",
     ...report.rows.map(
       (row) =>
-        `| ${escapeCell(`${row.unitId ?? row.traceId}@${row.unitRevision ?? 0}`)} | ${row.lexicalType} | ${row.localSemanticType ?? "-"} | ${row.llmCandidateType ?? "-"} | ${row.llmSpeechAct ?? "-"} | ${row.llmRelation ?? "-"} | ${row.llmEvidenceMode ?? "-"} | ${row.llmAction ?? "-"} | ${row.runtimeType ?? "-"} | ${row.disposition ?? row.skipReason ?? "-"} | ${row.repairApplied ? "applied" : row.wouldRepair ? "would" : "-"} | ${formatHumanVerdict(row)} | ${row.arrivalStage ?? "-"} |`
+        `| ${escapeCell(`${row.unitId ?? row.traceId}@${row.unitRevision ?? 0}`)} | ${escapeCell(row.operationId ?? "legacy")} | ${row.lexicalType} | ${row.localSemanticType ?? "-"} | ${row.llmCandidateType ?? "-"} | ${row.llmSpeechAct ?? "-"} | ${row.llmRelation ?? "-"} | ${row.llmEvidenceMode ?? "-"} | ${row.llmAction ?? "-"} | ${row.runtimeType ?? "-"} | ${row.disposition ?? row.skipReason ?? "-"} | ${row.repairApplied ? "applied" : row.wouldRepair ? "would" : "-"} | ${formatHumanVerdict(row)} | ${row.arrivalStage ?? "-"} |`
     ),
     "",
     "## Dispositions",
@@ -610,6 +657,14 @@ export function renderTaxonomyAdjudicationReflectionMarkdown(
     "### Parse Dispositions",
     "",
     ...formatCountMap(report.metrics.parseDispositions),
+    "",
+    "### Parse Error Kinds",
+    "",
+    ...formatCountMap(report.metrics.parseErrorKinds),
+    "",
+    "### Output Envelopes",
+    "",
+    ...formatCountMap(report.metrics.outputEnvelopes),
     "",
     "## Type Confusion",
     "",
@@ -635,7 +690,7 @@ export function renderTaxonomyAdjudicationReflectionMarkdown(
     "",
     "## Rollout Interpretation",
     "",
-    "This report is Shadow evidence only. A correct LLM proposal is not counted as product success when it is stale, superseded, invalid, or arrives after a visible answer. No threshold, prototype, task boundary, model route, answer, Code artifact, or Whiteboard artifact is mutated by this reflection command.",
+    "This report is Shadow evidence only. Call rate is observational and must be interpreted through reason-coded trigger distributions; a high rate alone is not a failure. A correct LLM proposal is not counted as product success when it is stale, superseded, invalid, or arrives after a visible answer. No threshold, prototype, task boundary, model route, answer, Code artifact, or Whiteboard artifact is mutated by this reflection command.",
   ];
   if (report.unmatchedEvaluations.length) {
     lines.push("", "## Joinability Gaps", "");
@@ -648,24 +703,46 @@ export function renderTaxonomyAdjudicationReflectionMarkdown(
   return `${lines.join("\n")}\n`;
 }
 
-function selectLatestUnitDecisions(
+function selectLatestOperationDecisions(
   decisions: TaxonomyAdjudicationRecordedDecision[]
 ) {
   const latest = new Map<string, TaxonomyAdjudicationRecordedDecision>();
   for (const decision of [...decisions].sort(
     (left, right) => left.recordedAt - right.recordedAt
   )) {
-    const unitId = readString(decision.metadata, "taxonomyAdjudicationUnitId");
-    const revision = readNumber(
-      decision.metadata,
-      "taxonomyAdjudicationUnitRevision"
-    );
-    const key = `${decision.sessionId ?? "unknown"}:${unitId ?? decision.traceId}:${revision ?? 0}`;
-    latest.set(key, decision);
+    latest.set(buildDecisionSelectionKey(decision), decision);
   }
   return Array.from(latest.values()).sort(
     (left, right) => left.recordedAt - right.recordedAt
   );
+}
+
+function buildDecisionSelectionKey(
+  decision: TaxonomyAdjudicationRecordedDecision
+) {
+  const sessionId = decision.sessionId ?? "unknown";
+  const operationId =
+    readString(decision.metadata, "taxonomyAdjudicationOperationId") ??
+    readString(decision.metadata, "interviewerIntentLlmOperationId");
+  if (operationId) return `${sessionId}:operation:${operationId}`;
+  const unitId = readString(
+    decision.metadata,
+    "taxonomyAdjudicationUnitId"
+  );
+  const revision = readNumber(
+    decision.metadata,
+    "taxonomyAdjudicationUnitRevision"
+  );
+  return `${sessionId}:legacy:${unitId ?? decision.traceId}:${revision ?? 0}`;
+}
+
+function countOperationsByUnit(rows: TaxonomyAdjudicationReflectionRow[]) {
+  const counts = new Map<string, number>();
+  for (const row of rows) {
+    const key = `${row.sessionId ?? "unknown"}:${row.unitId ?? row.traceId}:${row.unitRevision ?? 0}`;
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+  return counts;
 }
 
 function isSubstantiveObservedUnit(row: TaxonomyAdjudicationReflectionRow) {

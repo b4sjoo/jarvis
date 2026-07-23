@@ -44,6 +44,16 @@ export class TaxonomyAdjudicationSessionCircuitBreaker {
   }
 }
 
+export function shouldOpenTaxonomyAdjudicationCircuit(input: {
+  leaseAuthorized: boolean;
+  providerDisposition: string;
+}) {
+  return (
+    input.leaseAuthorized &&
+    input.providerDisposition === "provider-auth-error"
+  );
+}
+
 export function formatTaxonomyAdjudicationCircuitForTrace(
   state: TaxonomyAdjudicationCircuitState,
   newlyOpened = false
