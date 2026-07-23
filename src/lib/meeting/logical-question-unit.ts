@@ -1,6 +1,7 @@
 import type { AdvisorTurnIntentDecision } from "./advisor-turn-intent.js";
 import { createMeetingId } from "./context-manager.js";
 import type { TranscriptTurn } from "./types.js";
+import type { PendingInterviewSectionHint } from "./interview-section-transition.js";
 
 export const LOGICAL_QUESTION_MAX_PREVIOUS_TURNS = 3;
 export const LOGICAL_QUESTION_MAX_AGE_MS = 30_000;
@@ -27,6 +28,7 @@ export interface LogicalQuestionUnit {
   compositionReasons: string[];
   boundaryReason: string;
   truncated: boolean;
+  sectionHint?: PendingInterviewSectionHint;
 }
 
 export interface ComposeLogicalQuestionUnitInput {
@@ -43,6 +45,7 @@ export interface ComposeLogicalQuestionUnitInput {
   authoritativeCorrection?: boolean;
   committedParentBoundary?: boolean;
   now?: number;
+  sectionHint?: PendingInterviewSectionHint;
 }
 
 export function composeLogicalQuestionUnit(
@@ -91,6 +94,7 @@ export function composeLogicalQuestionUnit(
       (shouldExtend &&
         previous!.sources.length + 1 >
           LOGICAL_QUESTION_MAX_PREVIOUS_TURNS + 1),
+    sectionHint: input.sectionHint,
   };
 }
 
@@ -107,6 +111,10 @@ export function formatLogicalQuestionUnitForTrace(
     logicalQuestionCompositionReasons: unit.compositionReasons,
     logicalQuestionBoundaryReason: unit.boundaryReason,
     logicalQuestionTruncated: unit.truncated,
+    sectionHintId: unit.sectionHint?.id,
+    sectionHintType: unit.sectionHint?.questionType,
+    sectionHintDisposition: unit.sectionHint?.disposition,
+    sectionHintSourceTurnId: unit.sectionHint?.sourceTurnId,
   };
 }
 

@@ -6,6 +6,10 @@ import {
 } from "../src/lib/meeting/logical-question-unit.js";
 import { decideAdvisorTurnIntent } from "../src/lib/meeting/advisor-turn-intent.js";
 import type { TranscriptTurn } from "../src/lib/meeting/types.js";
+import {
+  createPendingInterviewSectionHint,
+  detectInterviewSectionTransition,
+} from "../src/lib/meeting/interview-section-transition.js";
 
 function turn(
   id: string,
@@ -101,6 +105,35 @@ test("starts a new unit for an independent question or explicit switch", () => {
   assert.equal(next.revision, 1);
   assert.deepEqual(next.sourceTurnIds, ["turn_new"]);
   assert.equal(next.boundaryReason, "explicit-task-switch");
+});
+
+test("freezes an applied section hint into the owned logical question", () => {
+  const hint = createPendingInterviewSectionHint({
+    detection: detectInterviewSectionTransition(
+      "Now let's move on to general system design."
+    ),
+    sourceTurnId: "turn_section",
+    sourceText: "Now let's move on to general system design.",
+    sessionId: "session-a",
+    runtimeEpoch: 1,
+    observedAt: 1_000,
+    id: "hint-general-design",
+  });
+  const unit = composeLogicalQuestionUnit({
+    currentTurn: turn(
+      "turn_question",
+      "Design a food delivery app like DoorDash.",
+      2_000
+    ),
+    sessionId: "session-a",
+    runtimeEpoch: 1,
+    explicitTaskSwitch: true,
+    sectionHint: hint ? { ...hint, disposition: "applied" } : undefined,
+  });
+
+  assert.equal(unit.sectionHint?.id, "hint-general-design");
+  assert.equal(unit.sectionHint?.questionType, "general-system-design");
+  assert.equal(unit.boundaryReason, "no-previous-logical-question");
 });
 
 test("does not cross a substantive me answer or runtime boundary", () => {

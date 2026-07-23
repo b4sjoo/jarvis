@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { classifyInterviewTransitionTurn } from "../src/lib/meeting/interview-section-transition.js";
+import {
+  classifyInterviewTransitionTurn,
+  consumeInterviewSectionHint,
+  createPendingInterviewSectionHint,
+  detectInterviewSectionTransition,
+} from "../src/lib/meeting/interview-section-transition.js";
 
 test("keeps a pure interview section announcement answerless", () => {
   for (const text of [
@@ -33,4 +38,103 @@ test("does not treat ordinary interview questions as section transitions", () =>
     disposition: "none",
     reason: "no-transition-frame",
   });
+});
+
+test("detects immediate canonical sections but rejects future and retrospective mentions", () => {
+  assert.equal(
+    detectInterviewSectionTransition(
+      "Now let's move on to AI/ML system design."
+    ).questionType,
+    "ai-ml-system-design"
+  );
+  assert.equal(
+    detectInterviewSectionTransition("接下来进入算法题环节。").questionType,
+    "coding"
+  );
+  assert.equal(
+    detectInterviewSectionTransition(
+      "Later we will discuss coding questions."
+    ).detected,
+    false
+  );
+  assert.equal(
+    detectInterviewSectionTransition(
+      "The coding questions were difficult."
+    ).detected,
+    false
+  );
+});
+
+test("applies one pending hint to an unknown question exactly once", () => {
+  const hint = createPendingInterviewSectionHint({
+    detection: detectInterviewSectionTransition(
+      "Now let's move on to general system design."
+    ),
+    sourceTurnId: "turn_section",
+    sourceText: "Now let's move on to general system design.",
+    sessionId: "session-a",
+    runtimeEpoch: 2,
+    observedAt: 1_000,
+    id: "hint-a",
+  });
+  const filler = consumeInterviewSectionHint({
+    hint,
+    questionId: "turn_filler",
+    currentQuestionType: "unknown",
+    substantive: false,
+    sessionId: "session-a",
+    runtimeEpoch: 2,
+    now: 2_000,
+  });
+  const applied = consumeInterviewSectionHint({
+    hint: filler.nextHint,
+    questionId: "question-a",
+    currentQuestionType: "unknown",
+    substantive: true,
+    sessionId: "session-a",
+    runtimeEpoch: 2,
+    now: 3_000,
+  });
+
+  assert.equal(filler.disposition, "retained");
+  assert.equal(applied.disposition, "applied");
+  assert.equal(applied.effectiveQuestionType, "general-system-design");
+  assert.equal(applied.hint?.consumedByQuestionId, "question-a");
+  assert.equal(applied.nextHint, undefined);
+});
+
+test("lets a concrete conflicting question win and expires stale hints", () => {
+  const hint = createPendingInterviewSectionHint({
+    detection: detectInterviewSectionTransition(
+      "Let's start with coding questions."
+    ),
+    sourceTurnId: "turn_section",
+    sourceText: "Let's start with coding questions.",
+    sessionId: "session-a",
+    runtimeEpoch: 1,
+    observedAt: 1_000,
+    id: "hint-coding",
+  });
+  const conflict = consumeInterviewSectionHint({
+    hint,
+    questionId: "question-behavioral",
+    currentQuestionType: "behavioral",
+    substantive: true,
+    sessionId: "session-a",
+    runtimeEpoch: 1,
+    now: 2_000,
+  });
+  const expired = consumeInterviewSectionHint({
+    hint,
+    questionId: "question-late",
+    currentQuestionType: "unknown",
+    substantive: true,
+    sessionId: "session-a",
+    runtimeEpoch: 1,
+    now: 100_000,
+  });
+
+  assert.equal(conflict.disposition, "conflicted");
+  assert.equal(conflict.effectiveQuestionType, "behavioral");
+  assert.equal(expired.disposition, "expired");
 });

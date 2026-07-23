@@ -224,6 +224,11 @@ import {
   ManualCorrectionOperationCoordinator,
   decideInterviewTaskContinuityBranch,
   classifyInterviewTransitionTurn,
+  consumeInterviewSectionHint,
+  createPendingInterviewSectionHint,
+  detectInterviewSectionTransition,
+  formatInterviewSectionHintForTrace,
+  type PendingInterviewSectionHint,
   applyInterviewChildProbeTransition,
   persistTraceHumanEvaluations,
   persistQuestionHumanEvaluations,
@@ -936,7 +941,8 @@ interface AdvisorTaskSignals {
     | LatestTurnTaxonomyBoundaryReason
     | "active-parent-continuity"
     | "manual-question-type-correction"
-    | "semantic-unknown-rescue";
+    | "semantic-unknown-rescue"
+    | "section-hint";
   taxonomyFallbackSuppressed?: boolean;
   unknownTaskMutationBlocked?: boolean;
 }
@@ -1202,6 +1208,9 @@ export function useMeetingAssistant() {
   const logicalQuestionUnitRef = useRef<LogicalQuestionUnit | undefined>(
     undefined
   );
+  const pendingInterviewSectionHintRef = useRef<
+    PendingInterviewSectionHint | undefined
+  >(undefined);
   const cancelledAdvisorTurnIdsRef = useRef(new Set<string>());
   const taskBoundaryCandidateRef = useRef<TaskBoundaryCandidate | undefined>(
     undefined
@@ -1565,6 +1574,7 @@ export function useMeetingAssistant() {
     manualCorrectionRevisionRef.current = 0;
     adjacentQuestionScopeRef.current = null;
     logicalQuestionUnitRef.current = undefined;
+    pendingInterviewSectionHintRef.current = undefined;
     cancelledAdvisorTurnIdsRef.current.clear();
     taskBoundaryCandidateRef.current = undefined;
     manualCorrectionOperationCoordinatorRef.current.reset();
@@ -3402,12 +3412,27 @@ export function useMeetingAssistant() {
       advisorMemoryQuery,
       advisorJob.logicalQuestionUnit
     );
+    const logicalQuestionSectionHint = advisorJob.logicalQuestionUnit?.sectionHint;
+    const sectionHintAdvisorTaskSignals = logicalQuestionSectionHint
+      ? {
+          ...resolvedAdvisorTaskSignals,
+          questionType: logicalQuestionSectionHint.questionType,
+          questionTypeDecision: undefined,
+          taskRelation: "new-parent" as InterviewTaskRelation,
+          source: "interview-section-hint",
+          reuseActivePlaybook: false,
+          openingRoute: undefined,
+          latestTurnTaxonomyBoundaryReason: "section-hint" as const,
+          taxonomyFallbackSuppressed: false,
+          unknownTaskMutationBlocked: false,
+        }
+      : resolvedAdvisorTaskSignals;
     const correctedAdvisorTaskSignals = options.manualQuestionTypeCorrection
       ? applyManualQuestionTypeCorrectionToAdvisorSignals(
-          resolvedAdvisorTaskSignals,
+          sectionHintAdvisorTaskSignals,
           options.manualQuestionTypeCorrection
         )
-      : resolvedAdvisorTaskSignals;
+      : sectionHintAdvisorTaskSignals;
     const semanticEvidenceTurnId = advisorJob.triggerTurnId ?? latestTurn?.id;
     const semanticEvidence = semanticEvidenceTurnId
       ? semanticTaxonomyEvidenceByTurnRef.current.get(semanticEvidenceTurnId)
@@ -5452,6 +5477,12 @@ export function useMeetingAssistant() {
         taskSwitchEvidence: [
           logicalQuestionUnit.boundaryReason,
           ...logicalQuestionUnit.compositionReasons,
+          ...(logicalQuestionUnit.sectionHint
+            ? [
+                `section-hint:${logicalQuestionUnit.sectionHint.questionType}`,
+                `section-hint-source:${logicalQuestionUnit.sectionHint.source}`,
+              ]
+            : []),
         ],
       });
       const scheduledMetadata = {
@@ -5810,11 +5841,13 @@ export function useMeetingAssistant() {
       traceId,
       intentDecision,
       explicitTaskSwitch = false,
+      sectionHint,
     }: {
       turn: TranscriptTurn;
       traceId: string;
       intentDecision: AdvisorTurnIntentDecision;
       explicitTaskSwitch?: boolean;
+      sectionHint?: PendingInterviewSectionHint;
     }) => {
       const contextState = contextManagerRef.current.getState();
       const previous = logicalQuestionUnitRef.current;
@@ -5854,6 +5887,7 @@ export function useMeetingAssistant() {
         relatedSourceTurnIds: turn.relatedTurnIds,
         interveningTurns,
         explicitTaskSwitch,
+        sectionHint,
       });
       logicalQuestionUnitRef.current = logicalQuestionUnit;
       traceStoreRef.current.updateMetadata(
@@ -6322,19 +6356,43 @@ export function useMeetingAssistant() {
         const transitionTurnDecision = classifyInterviewTransitionTurn(
           turn.text
         );
+        const sectionTransitionDetection = detectInterviewSectionTransition(
+          turn.text
+        );
+        if (sectionTransitionDetection.detected) {
+          pendingInterviewSectionHintRef.current =
+            createPendingInterviewSectionHint({
+              detection: sectionTransitionDetection,
+              sourceTurnId: turn.id,
+              sourceText: turn.text,
+              sessionId: activeContextState.sessionId,
+              runtimeEpoch: runtimeEpochRef.current,
+              observedAt: turn.endedAt,
+            });
+        } else if (transitionTurnDecision.detected) {
+          pendingInterviewSectionHintRef.current = undefined;
+        }
         traceStoreRef.current.updateMetadata(traceId, {
           taskSwitchEvidenceDetected: transitionTurnDecision.detected,
           taskSwitchDisposition: transitionTurnDecision.disposition,
           taskSwitchDispositionReason: transitionTurnDecision.reason,
+          sectionHintDetected: sectionTransitionDetection.detected,
+          sectionHintId: pendingInterviewSectionHintRef.current?.id,
+          sectionHintType: pendingInterviewSectionHintRef.current?.questionType,
+          sectionHintSourceTurnId:
+            pendingInterviewSectionHintRef.current?.sourceTurnId,
+          sectionHintObservedAt:
+            pendingInterviewSectionHintRef.current?.observedAt,
+          sectionHintExpiresAt:
+            pendingInterviewSectionHintRef.current?.expiresAt,
+          sectionHintDisposition:
+            pendingInterviewSectionHintRef.current?.disposition,
         });
 
-        if (
-          hasActiveInterviewTask &&
-          transitionTurnDecision.disposition === "hint-only"
-        ) {
+        if (transitionTurnDecision.disposition === "hint-only") {
           const switchStepId = traceStoreRef.current.startStep(
             traceId,
-            "Task switch confirmation requested",
+            "Interview section transition recorded",
             {
               turnId: turn.id,
               ...getActiveMeetingTaskTraceMetadata(
@@ -6354,33 +6412,8 @@ export function useMeetingAssistant() {
           });
           traceStoreRef.current.finishStep(traceId, switchStepId, "success");
           traceStoreRef.current.finishTrace(traceId, "success");
-          const taskSwitchContent = [
-            "中文思路: 这听起来像是在切换到新题或新任务。",
-            "Answer: -",
-            "Clarifying question: Should I treat this as a new task?",
-            "Clarifying options: -",
-          ].join("\n");
-          const taskSwitchAnswer = parseMeetingAnswer(taskSwitchContent, {
-            expectedProfile: "compact-spoken",
-          });
-          const taskSwitchSuggestion: AdvisorSuggestion = {
-            id: createMeetingId("task_switch"),
-            sourceTraceId: traceId,
-            kind: "clarifying-question",
-            content: taskSwitchContent,
-            meetingAnswer: taskSwitchAnswer,
-            answerProfile: taskSwitchAnswer.profile,
-            createdAt: Date.now(),
-            ...buildSuggestionTaskMetadata(activeContextState.activeMeetingTask),
-            basedOnTurnIds: [turn.id],
-            basedOnObservationIds: activeScreenTask
-              ? [activeScreenTask.observationId]
-              : [],
-            confidence: "medium",
-          };
           setState((previous) => ({
             ...previous,
-            ...withLatestReliableSuggestion(previous, taskSwitchSuggestion),
             status: activeRef.current ? "listening" : "idle",
             partialSuggestion: "",
           }));
@@ -6590,6 +6623,34 @@ export function useMeetingAssistant() {
           ? "none"
           : "debug-only";
 
+        const currentQuestionType =
+          normalizeCanonicalQuestionType(
+            inferCanonicalQuestionTypeFromText(turn.text)
+          ) ?? "unknown";
+        const sectionHintConsumption = consumeInterviewSectionHint({
+          hint: pendingInterviewSectionHintRef.current,
+          questionId: turn.id,
+          currentQuestionType,
+          substantive: turnGate.action === "answer-refresh",
+          sessionId: activeContextState.sessionId,
+          runtimeEpoch: runtimeEpochRef.current,
+          now: turn.endedAt,
+        });
+        pendingInterviewSectionHintRef.current =
+          sectionHintConsumption.nextHint;
+        if (sectionHintConsumption.disposition !== "no-hint") {
+          const sectionHintMetadata = {
+            ...formatInterviewSectionHintForTrace(sectionHintConsumption),
+            sectionHintClassificationBefore: currentQuestionType,
+          };
+          traceStoreRef.current.updateMetadata(traceId, sectionHintMetadata);
+          sessionRecordingManagerRef.current?.recordCaptureLifecycle({
+            stage: "interview-section-hint-consumed",
+            traceId,
+            ...sectionHintMetadata,
+          });
+        }
+
         const { contextState } = appendTranscriptTurnForTrace(
           turn,
           traceId,
@@ -6605,7 +6666,13 @@ export function useMeetingAssistant() {
                 turn,
                 traceId,
                 intentDecision: turnGate,
-                explicitTaskSwitch: isTaskSwitchTranscript(turn.text),
+                explicitTaskSwitch:
+                  transitionTurnDecision.detected ||
+                  sectionHintConsumption.disposition === "applied",
+                sectionHint:
+                  sectionHintConsumption.disposition === "applied"
+                    ? sectionHintConsumption.hint
+                    : undefined,
               })
             : undefined;
         scheduleSemanticTaxonomyShadow({
@@ -7890,8 +7957,39 @@ export function useMeetingAssistant() {
             { source: "generated-answer" },
           ],
         });
+        const screenQuestionText = screenPreflight?.question?.trim() ?? "";
+        const screenSectionHintConsumption = consumeInterviewSectionHint({
+          hint: pendingInterviewSectionHintRef.current,
+          questionId: observation.id,
+          currentQuestionType: screenTaxonomyDecision.effectiveQuestionType,
+          substantive:
+            Boolean(screenQuestionText) &&
+            calculateWordEquivalent(screenQuestionText) >= 3,
+          sessionId: preflightContextState.sessionId,
+          runtimeEpoch: runtimeEpochRef.current,
+        });
+        pendingInterviewSectionHintRef.current =
+          screenSectionHintConsumption.nextHint;
+        if (screenSectionHintConsumption.disposition !== "no-hint") {
+          const sectionHintMetadata = {
+            ...formatInterviewSectionHintForTrace(
+              screenSectionHintConsumption
+            ),
+            sectionHintClassificationBefore:
+              screenTaxonomyDecision.effectiveQuestionType,
+            sectionHintQuestionSource: "screen",
+          };
+          traceStoreRef.current.updateMetadata(trace.id, sectionHintMetadata);
+          sessionRecordingManagerRef.current?.recordCaptureLifecycle({
+            stage: "interview-section-hint-consumed",
+            traceId: trace.id,
+            ...sectionHintMetadata,
+          });
+        }
         const screenMemoryQuestionType =
-          screenTaxonomyDecision.effectiveQuestionType;
+          screenSectionHintConsumption.disposition === "applied"
+            ? screenSectionHintConsumption.effectiveQuestionType
+            : screenTaxonomyDecision.effectiveQuestionType;
         const taskKind =
           normalizeScreenQuestionType(screenMemoryQuestionType) ?? "unknown";
         traceStoreRef.current.updateMetadata(trace.id, {
@@ -7908,7 +8006,9 @@ export function useMeetingAssistant() {
             screenPreflight
           );
         const provisionalScreenTaskRelation =
-          resolveProvisionalScreenTaskRelation({
+          screenSectionHintConsumption.disposition === "applied"
+            ? "new-parent"
+            : resolveProvisionalScreenTaskRelation({
             existingTask:
               preflightContextState.activeInterviewTask ??
               (preflightContextState.activeMeetingTask?.screen &&
@@ -8818,6 +8918,7 @@ export function useMeetingAssistant() {
       const operationClaim =
         manualCorrectionOperationCoordinatorRef.current.claim(eventId);
       manualCorrectionRevisionRef.current += 1;
+      pendingInterviewSectionHintRef.current = undefined;
       const correctionRuntimeToken = createRuntimeCommitToken({
         operationId: eventId,
         pipeline: "correction",
@@ -10866,6 +10967,22 @@ function formatAdvisorQuestionTypeDecisionForTrace(
         signals.questionType === "project-deep-dive"
           ? [`opening-route:${signals.openingRoute.kind}`]
           : [],
+    };
+  }
+
+  if (signals.source === "interview-section-hint") {
+    return {
+      ...boundaryMetadata,
+      questionTypeInferenceType: signals.questionType,
+      questionTypeConfidence: 0.98,
+      questionTypeMargin: 1,
+      questionTypeEvidence: ["interviewer-explicit-section-hint"],
+      ambiguousCodingTerms: [],
+      questionTypeScores: { [signals.questionType]: 0.98 },
+      briefPriorType: undefined,
+      briefCompatibilityDecision: "not-applicable",
+      questionTypeDecisionSource: signals.source,
+      pastProjectSignals: [],
     };
   }
 
