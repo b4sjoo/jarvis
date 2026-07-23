@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  authorizeAdvisorOutputCommit,
   authorizeAdvisorTaskMutation,
   createAdvisorTriggerJob,
   decideAdvisorPhaseMutation,
@@ -301,6 +302,48 @@ test("shadow execution cannot authorize canonical task or phase mutation", () =>
   assert.equal(taskMutation.reason, "turn-intent-mutation-suppressed");
   assert.equal(phaseMutation.phase, "requirement_clarification");
   assert.equal(phaseMutation.action, "stay");
+  assert.deepEqual(
+    authorizeAdvisorOutputCommit({
+      authority: "input-evidence",
+      executionAuthorized: true,
+      turnIntentDecision,
+    }),
+    {
+      authorized: true,
+      reason: "shadow-fail-open-output-authority",
+    }
+  );
+});
+
+test("output authority follows execution without granting task mutation", () => {
+  const allowed = decideAdvisorTurnIntent(
+    "How would you design a distributed cache?",
+    { hasActiveTask: false }
+  );
+
+  assert.deepEqual(
+    authorizeAdvisorOutputCommit({
+      authority: "input-evidence",
+      executionAuthorized: true,
+      turnIntentDecision: allowed,
+    }),
+    { authorized: true, reason: "substantive-output-authority" }
+  );
+  assert.deepEqual(
+    authorizeAdvisorOutputCommit({
+      authority: "preserve-parent",
+      executionAuthorized: true,
+    }),
+    { authorized: true, reason: "manual-action-output-authority" }
+  );
+  assert.deepEqual(
+    authorizeAdvisorOutputCommit({
+      authority: "input-evidence",
+      executionAuthorized: false,
+      turnIntentDecision: allowed,
+    }),
+    { authorized: false, reason: "execution-not-authorized" }
+  );
 });
 
 test("substantive input and explicit actions retain canonical mutation authority", () => {

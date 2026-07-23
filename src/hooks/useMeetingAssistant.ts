@@ -153,6 +153,7 @@ import {
   SessionRecordingManager,
   areCompatibleQuestionTypes,
   authorizeAdvisorExecution,
+  authorizeAdvisorOutputCommit,
   createAdvisorTriggerJob,
   authorizeRuntimeCommit,
   authorizeAdvisorTaskMutation,
@@ -3503,6 +3504,11 @@ export function useMeetingAssistant() {
       authority: advisorJob.taskMutationAuthority,
       turnIntentDecision: inferredTurnIntentDecision,
     });
+    const outputCommitAuthorization = authorizeAdvisorOutputCommit({
+      authority: advisorJob.taskMutationAuthority,
+      executionAuthorized: executionAuthorization.authorized,
+      turnIntentDecision: inferredTurnIntentDecision,
+    });
     const advisorTaskMutationDecision = decideAdvisorTaskMutation({
       authority: advisorJob.taskMutationAuthority,
       resolvedRelation: semanticAdvisorTaskSignals.taskRelation,
@@ -3678,6 +3684,8 @@ export function useMeetingAssistant() {
           advisorTaskMutationDecision.allowExplicitRetype,
         taskMutationAuthorized: taskMutationAuthorization.authorized,
         taskMutationAuthorizationReason: taskMutationAuthorization.reason,
+        advisorOutputCommitAuthorized: outputCommitAuthorization.authorized,
+        advisorOutputCommitReason: outputCommitAuthorization.reason,
         advisorExecutionAuthorized: executionAuthorization.authorized,
         advisorExecutionAuthorizationReason: executionAuthorization.reason,
         advisorExecutionBypassed: executionAuthorization.bypassed,
@@ -4390,7 +4398,7 @@ export function useMeetingAssistant() {
       })) {
         if (rejectStaleCommit("partial-output")) return;
         finalContent = event.accumulated;
-        if (taskMutationAuthorization.authorized) {
+        if (outputCommitAuthorization.authorized) {
           setState((previous) => ({
             ...previous,
             partialSuggestion: event.accumulated,
@@ -4422,17 +4430,20 @@ export function useMeetingAssistant() {
         traceStoreRef.current.updateMetadata(traceId, meetingAnswerMetadata);
       }
 
-      if (!taskMutationAuthorization.authorized) {
-        const shadowDispositionMetadata = {
-          advisorOutputDisposition: "shadow-observation-only",
+      if (!outputCommitAuthorization.authorized) {
+        const outputSuppressedMetadata = {
+          advisorOutputDisposition: "output-commit-not-authorized",
           advisorOutputCommittedToUi: false,
-          taskMutationAuthorized: false,
-          taskMutationAuthorizationReason: taskMutationAuthorization.reason,
+          advisorOutputCommitAuthorized: false,
+          advisorOutputCommitReason: outputCommitAuthorization.reason,
+          taskMutationAuthorized: taskMutationAuthorization.authorized,
+          taskMutationAuthorizationReason:
+            taskMutationAuthorization.reason,
         };
         if (traceId) {
           traceStoreRef.current.updateMetadata(
             traceId,
-            shadowDispositionMetadata
+            outputSuppressedMetadata
           );
         }
         setState((previous) => ({
@@ -4446,14 +4457,14 @@ export function useMeetingAssistant() {
         }));
         releaseAdvisorJob(advisorJob, "suppressed", {
           commitAuthorized: false,
-          commitAuthorizationReason: taskMutationAuthorization.reason,
+          commitAuthorizationReason: outputCommitAuthorization.reason,
         });
         if (traceId) {
           traceStoreRef.current.finishStep(traceId, advisorStepId, "success", {
             outputChars: finalContent.length,
             ...advisorModelRouteMetadata,
             ...meetingAnswerMetadata,
-            ...shadowDispositionMetadata,
+            ...outputSuppressedMetadata,
           });
           traceStoreRef.current.finishTrace(traceId, "success");
         }
@@ -4546,6 +4557,7 @@ export function useMeetingAssistant() {
       let nextActiveScreenTask = promptContext.activeScreenTask;
 
       if (
+        taskMutationAuthorization.authorized &&
         mode === "screen-anchored" &&
         nextActiveScreenTask &&
         shouldUpdateActiveScreenTaskFromAdvisorOutput(finalContent)
@@ -4583,10 +4595,12 @@ export function useMeetingAssistant() {
         }
       }
 
-      contextManagerRef.current.setActiveMeetingTaskState({
-        activeScreenTask: nextActiveScreenTask,
-        activeInterviewTask: continuity.task ?? null,
-      });
+      if (taskMutationAuthorization.authorized) {
+        contextManagerRef.current.setActiveMeetingTaskState({
+          activeScreenTask: nextActiveScreenTask,
+          activeInterviewTask: continuity.task ?? null,
+        });
+      }
       contextState = contextManagerRef.current.getState();
 
       if (traceId) {
@@ -4714,6 +4728,20 @@ export function useMeetingAssistant() {
         activeMeetingTask: contextState.activeMeetingTask,
         currentQuestionLineage: committedQuestionLineage,
       }));
+      const outputCommitMetadata = {
+        advisorOutputDisposition:
+          inferredTurnIntentDecision?.enforcement === "shadow"
+            ? "shadow-visible"
+            : "committed",
+        advisorOutputCommittedToUi: true,
+        advisorOutputCommitAuthorized: true,
+        advisorOutputCommitReason: outputCommitAuthorization.reason,
+        taskMutationAuthorized: taskMutationAuthorization.authorized,
+        taskMutationAuthorizationReason: taskMutationAuthorization.reason,
+      };
+      if (traceId) {
+        traceStoreRef.current.updateMetadata(traceId, outputCommitMetadata);
+      }
       releaseAdvisorJob(advisorJob, "committed", {
         commitAuthorized: finalCommitDecision.authorized,
         commitAuthorizationReason: finalCommitDecision.reason,
@@ -4724,6 +4752,7 @@ export function useMeetingAssistant() {
           ...advisorModelRouteMetadata,
           ...meetingAnswerMetadata,
           ...answerArtifactMetadata,
+          ...outputCommitMetadata,
         });
         traceStoreRef.current.finishTrace(traceId, "success");
       }

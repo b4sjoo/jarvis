@@ -107,6 +107,16 @@ export interface AdvisorTaskMutationAuthorization {
     | "turn-intent-not-answer-refresh";
 }
 
+export interface AdvisorOutputCommitAuthorization {
+  authorized: boolean;
+  reason:
+    | "substantive-output-authority"
+    | "shadow-fail-open-output-authority"
+    | "manual-action-output-authority"
+    | "execution-not-authorized"
+    | "turn-intent-not-answer-refresh";
+}
+
 export function createAdvisorTriggerJob(
   input: CreateAdvisorTriggerJobInput
 ): AdvisorTriggerJob {
@@ -251,6 +261,35 @@ export function authorizeAdvisorTaskMutation(input: {
   }
 
   return { authorized: true, reason: "substantive-input-authority" };
+}
+
+export function authorizeAdvisorOutputCommit(input: {
+  authority: AdvisorTaskMutationAuthority;
+  executionAuthorized: boolean;
+  turnIntentDecision?: AdvisorTurnIntentDecision;
+}): AdvisorOutputCommitAuthorization {
+  if (!input.executionAuthorized) {
+    return { authorized: false, reason: "execution-not-authorized" };
+  }
+  if (
+    input.authority === "manual-correction" ||
+    input.authority === "preserve-parent"
+  ) {
+    return { authorized: true, reason: "manual-action-output-authority" };
+  }
+
+  const decision = input.turnIntentDecision;
+  if (decision?.action !== "answer-refresh") {
+    return { authorized: false, reason: "turn-intent-not-answer-refresh" };
+  }
+  if (decision.enforcement === "shadow") {
+    return {
+      authorized: true,
+      reason: "shadow-fail-open-output-authority",
+    };
+  }
+
+  return { authorized: true, reason: "substantive-output-authority" };
 }
 
 export function decideAdvisorPhaseMutation(input: {

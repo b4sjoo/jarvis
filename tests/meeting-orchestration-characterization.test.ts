@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  authorizeAdvisorOutputCommit,
   authorizeAdvisorTaskMutation,
   createAdvisorTriggerJob,
   decideAdvisorJobCommit,
@@ -463,10 +464,16 @@ test("shadow low-value execution preserves parent, phase, answer, and whiteboard
     authority: "input-evidence",
     turnIntentDecision: intent,
   });
+  const outputAuthorization = authorizeAdvisorOutputCommit({
+    authority: "input-evidence",
+    executionAuthorized: intent.executionAuthorized,
+    turnIntentDecision: intent,
+  });
+  let visibleOutput = "";
   const operation = harness.startOperation<string>({
     id: "shadow-low-value",
     kind: "advisor",
-    commit: ({ contextManager }) => {
+    commit: ({ value, contextManager }) => {
       const state = contextManager.getState();
       const taskMutation = decideAdvisorTaskMutation({
         authority: "input-evidence",
@@ -491,6 +498,9 @@ test("shadow low-value execution preserves parent, phase, answer, and whiteboard
           }),
         });
       }
+      if (outputAuthorization.authorized) {
+        visibleOutput = value;
+      }
       return committed(taskMutation.reason);
     },
   });
@@ -501,6 +511,8 @@ test("shadow low-value execution preserves parent, phase, answer, and whiteboard
   const state = manager.getState();
 
   assert.equal(authorization.authorized, false);
+  assert.equal(outputAuthorization.authorized, true);
+  assert.equal(visibleOutput, "shadow model output");
   assert.deepEqual(after, before);
   assert.equal(
     state.activeInterviewTask?.latestUsefulAnswer,
