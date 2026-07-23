@@ -45,6 +45,24 @@ test("identifies provider error text before reporting malformed JSON", async () 
   assert.equal(result.parsed.ok, false);
 });
 
+test("classifies deterministic credential failures without invoking JSON parsing", async () => {
+  const result = await consumeTaxonomyAdjudicationResponse({
+    request: buildRequest(),
+    signal: new AbortController().signal,
+    responseStream: chunks(
+      "API request failed: 400 Bad Request - Please pass a valid API key"
+    ),
+  });
+
+  assert.equal(result.providerDisposition, "provider-auth-error");
+  assert.equal(result.parseDisposition, "not-run-provider-auth-error");
+  assert.deepEqual(result.parsed, {
+    ok: false,
+    reason: "provider-auth-error",
+    evidenceSpansValid: false,
+  });
+});
+
 test("keeps an empty provider completion distinct from parser failure", async () => {
   const result = await consumeTaxonomyAdjudicationResponse({
     request: buildRequest(),

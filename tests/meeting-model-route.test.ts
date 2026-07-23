@@ -51,6 +51,63 @@ test("routes taxonomy adjudication to its independent provider variables", () =>
   assert.equal(fallback.fallbackReason, "taxonomy-provider-not-configured");
 });
 
+test("taxonomy adjudication inherits credentials from the same main provider", () => {
+  const provider = {
+    id: "shared",
+    curl:
+      'curl https://example.test -H "Authorization: Bearer {{API_KEY}}" -d \'{ "model": "{{MODEL}}" }\'',
+  };
+  const route = resolveTaxonomyAdjudicationModelRouteFromSnapshot({
+    snapshot: {
+      providers: [provider],
+      selectedProvider: {
+        provider: "shared",
+        variables: { API_KEY: "secret", MODEL: "fast" },
+      },
+      codingProvider: { provider: "", variables: {} },
+      taxonomyAdjudicationProvider: {
+        provider: "shared",
+        variables: { MODEL: "classifier" },
+      },
+    },
+  });
+
+  assert.equal(route.provider?.id, "shared");
+  assert.equal(route.configurationStatus, "inherited-main-variables");
+  assert.equal(route.selectedProvider.variables.API_KEY, "secret");
+  assert.equal(route.selectedProvider.variables.MODEL, "classifier");
+  assert.deepEqual(route.inheritedVariableKeys, ["API_KEY"]);
+});
+
+test("taxonomy adjudication rejects a distinct provider with missing variables", () => {
+  const route = resolveTaxonomyAdjudicationModelRouteFromSnapshot({
+    snapshot: {
+      providers: [
+        { id: "main", curl: "curl https://main.test" },
+        {
+          id: "classifier",
+          curl:
+            'curl https://classifier.test -H "x-api-key: {{API_KEY}}" -d \'{ "model": "{{MODEL}}" }\'',
+        },
+      ],
+      selectedProvider: { provider: "main", variables: {} },
+      codingProvider: { provider: "", variables: {} },
+      taxonomyAdjudicationProvider: {
+        provider: "classifier",
+        variables: { MODEL: "classifier" },
+      },
+    },
+  });
+
+  assert.equal(route.provider, undefined);
+  assert.equal(route.configurationStatus, "missing-required-variables");
+  assert.deepEqual(route.missingRequiredVariables, ["API_KEY"]);
+  assert.equal(
+    route.fallbackReason,
+    "taxonomy-provider-missing-required-variables"
+  );
+});
+
 test("routes coding questions to the configured coding provider", () => {
   const route = resolveMeetingModelRouteFromSnapshot({
     snapshot,

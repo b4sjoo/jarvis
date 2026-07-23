@@ -204,11 +204,13 @@ import {
   TaxonomyAdjudicationRuntime,
   type TaxonomyAdjudicationRequestResult,
   TAXONOMY_ADJUDICATION_MAX_OUTPUT_CHARS,
+  TaxonomyAdjudicationSessionCircuitBreaker,
   authorizeTaxonomyAdjudicationLease,
   buildTaxonomyAdjudicationRequest,
   createTaxonomyAdjudicationLease,
   decideTaxonomyAdjudicationEligibility,
   formatTaxonomyAdjudicationModelRouteForTrace,
+  formatTaxonomyAdjudicationCircuitForTrace,
   hashTaxonomySourceTurnIds,
   hashTaxonomyTaskBoundary,
   projectLogicalQuestionForAdjudication,
@@ -1305,6 +1307,9 @@ export function useMeetingAssistant() {
   const taxonomyAdjudicationSettingsRef = useRef(
     INITIAL_STATE.settings.taxonomyAdjudication
   );
+  const taxonomyAdjudicationCircuitBreakerRef = useRef(
+    new TaxonomyAdjudicationSessionCircuitBreaker()
+  );
   const manualCorrectionRevisionRef = useRef(0);
   const activeScreenOperationIdRef = useRef<string | null>(null);
   const manualCorrectionOperationCoordinatorRef = useRef(
@@ -1957,15 +1962,6 @@ export function useMeetingAssistant() {
     [allAiProviders, state.settings.codingModel.provider]
   );
 
-  const taxonomyAdjudicationAiProvider = useMemo(
-    () =>
-      allAiProviders.find(
-        (candidate) =>
-          candidate.id === state.settings.taxonomyAdjudication.provider
-      ),
-    [allAiProviders, state.settings.taxonomyAdjudication.provider]
-  );
-
   const meetingModelProviderSnapshotRef = useRef<MeetingModelProviderSnapshot>({
     providers: allAiProviders,
     selectedProvider: selectedAIProvider,
@@ -2042,6 +2038,11 @@ export function useMeetingAssistant() {
       );
       const contextState = contextManagerRef.current.getState();
       sessionRecordedTraceIdsRef.current.clear();
+      const taxonomyAdjudicationRoute =
+        resolveTaxonomyAdjudicationModelRouteFromSnapshot({
+          snapshot: meetingModelProviderSnapshotRef.current,
+          reason: "session-recording-provider-summary",
+        });
       const sessionRecording = await sessionRecordingManagerRef.current?.start({
         settings: state.settings,
         interviewSessionBrief: contextState.interviewSessionBrief,
@@ -2049,13 +2050,19 @@ export function useMeetingAssistant() {
         providerSummary: buildSessionRecordingProviderSummary({
           mainProvider: aiProvider,
           codingProvider: codingAiProvider,
-          taxonomyAdjudicationProvider: taxonomyAdjudicationAiProvider,
+          taxonomyAdjudicationProvider: taxonomyAdjudicationRoute.provider,
           sttProvider,
           mainProviderId: selectedAIProvider.provider,
           codingProviderId: state.settings.codingModel.provider,
           taxonomyAdjudicationProviderId:
-            state.settings.taxonomyAdjudication.provider,
+            taxonomyAdjudicationRoute.resolvedProviderId,
           sttProviderId: selectedSttProvider.provider,
+          taxonomyAdjudicationConfigurationStatus:
+            taxonomyAdjudicationRoute.configurationStatus,
+          taxonomyAdjudicationInheritedVariableKeys:
+            taxonomyAdjudicationRoute.inheritedVariableKeys,
+          taxonomyAdjudicationMissingRequiredVariables:
+            taxonomyAdjudicationRoute.missingRequiredVariables,
         }),
       });
       sessionRecordingManagerRef.current?.recordRuntimeBoundary(
@@ -2096,7 +2103,6 @@ export function useMeetingAssistant() {
   }, [
     aiProvider,
     codingAiProvider,
-    taxonomyAdjudicationAiProvider,
     selectedAIProvider.provider,
     selectedSttProvider.provider,
     state.settings,
@@ -5480,6 +5486,10 @@ export function useMeetingAssistant() {
           manualCorrectionOperationCoordinatorRef.current.getActiveOperationId()
         ),
       });
+      const circuitState =
+        taxonomyAdjudicationCircuitBreakerRef.current.read(
+          contextState.sessionId
+        );
       const baseMetadata: Record<string, unknown> = {
         taxonomyAdjudicationMode: "shadow",
         taxonomyAdjudicationEligible: eligibility.eligible,
@@ -5497,6 +5507,7 @@ export function useMeetingAssistant() {
           projection.omittedSourceTurnIds,
         taxonomyAdjudicationBehaviorMutationBlocked: true,
         taxonomyAdjudicationRepairApplied: false,
+        ...formatTaxonomyAdjudicationCircuitForTrace(circuitState),
       };
       traceStoreRef.current.updateMetadata(traceId, baseMetadata);
       if (!eligibility.eligible) {
@@ -5504,6 +5515,20 @@ export function useMeetingAssistant() {
           traceId,
           taskId: contextState.activeMeetingTask?.id,
           metadata: baseMetadata,
+        });
+        return;
+      }
+      if (circuitState.open) {
+        const metadata = {
+          ...baseMetadata,
+          taxonomyAdjudicationSkipReason: "provider-circuit-open",
+          taxonomyAdjudicationDisposition: "provider-circuit-open",
+        };
+        traceStoreRef.current.updateMetadata(traceId, metadata);
+        sessionRecordingManagerRef.current?.recordTaxonomyAdjudicationDecision({
+          traceId,
+          taskId: contextState.activeMeetingTask?.id,
+          metadata,
         });
         return;
       }
@@ -5516,11 +5541,23 @@ export function useMeetingAssistant() {
       const taxonomyAdjudicationModelId =
         readSelectedProviderModelId(modelRoute.selectedProvider);
       if (!modelRoute.provider) {
+        const circuit = taxonomyAdjudicationCircuitBreakerRef.current.open({
+          sessionId: contextState.sessionId,
+          reason: "provider-configuration-error",
+          detail:
+            modelRoute.missingRequiredVariables.length > 0
+              ? `missing:${modelRoute.missingRequiredVariables.join(",")}`
+              : modelRoute.fallbackReason,
+        });
         const metadata = {
           ...baseMetadata,
           ...routeMetadata,
-          taxonomyAdjudicationSkipReason: "provider-unavailable",
-          taxonomyAdjudicationDisposition: "provider-unavailable",
+          ...formatTaxonomyAdjudicationCircuitForTrace(
+            circuit.state,
+            circuit.newlyOpened
+          ),
+          taxonomyAdjudicationSkipReason: "provider-configuration-error",
+          taxonomyAdjudicationDisposition: "provider-configuration-error",
         };
         traceStoreRef.current.updateMetadata(traceId, metadata);
         sessionRecordingManagerRef.current?.recordTaxonomyAdjudicationDecision({
@@ -5688,6 +5725,14 @@ export function useMeetingAssistant() {
             (settlement.disposition === "error"
               ? "request-error"
               : settlement.disposition);
+          const providerCircuit =
+            providerDisposition === "provider-auth-error"
+              ? taxonomyAdjudicationCircuitBreakerRef.current.open({
+                  sessionId: latestContext.sessionId,
+                  reason: "provider-auth-error",
+                  detail: rawOutput.slice(0, 240),
+                })
+              : undefined;
           const parseDisposition =
             settlement.result?.parseDisposition ??
             (settlement.disposition === "error"
@@ -5705,6 +5750,7 @@ export function useMeetingAssistant() {
           let finalDisposition:
             | typeof settlement.disposition
             | "stale"
+            | "provider-auth-error"
             | "provider-error-output"
             | "invalid-output" = settlement.disposition;
           if (
@@ -5712,6 +5758,11 @@ export function useMeetingAssistant() {
             !authorization.authorized
           ) {
             finalDisposition = "stale";
+          } else if (
+            settlement.disposition === "completed" &&
+            providerDisposition === "provider-auth-error"
+          ) {
+            finalDisposition = "provider-auth-error";
           } else if (
             settlement.disposition === "completed" &&
             providerDisposition === "provider-error-content"
@@ -5763,6 +5814,12 @@ export function useMeetingAssistant() {
                 : settlement.error
                   ? String(settlement.error)
                   : undefined,
+            ...(providerCircuit
+              ? formatTaxonomyAdjudicationCircuitForTrace(
+                  providerCircuit.state,
+                  providerCircuit.newlyOpened
+                )
+              : {}),
           };
           if (rawOutputStored) {
             if (debugModeRef.current) {
@@ -5798,12 +5855,15 @@ export function useMeetingAssistant() {
               traceId,
               stepId,
               finalDisposition === "error" ||
+                finalDisposition === "provider-auth-error" ||
                 finalDisposition === "provider-error-output"
                 ? "error"
                 : "success",
               metadata,
               settlement.error ??
-                (finalDisposition === "provider-error-output"
+                (finalDisposition === "provider-auth-error"
+                  ? "Taxonomy adjudication provider authentication failed"
+                  : finalDisposition === "provider-error-output"
                   ? "Provider returned error content"
                   : undefined)
             );

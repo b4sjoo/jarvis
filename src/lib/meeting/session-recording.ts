@@ -50,6 +50,9 @@ export interface SessionRecordingProviderSummary {
   hasSttProvider: boolean;
   mainSupportsImages: boolean;
   codingSupportsImages: boolean;
+  taxonomyAdjudicationConfigurationStatus?: string;
+  taxonomyAdjudicationInheritedVariableKeys?: string[];
+  taxonomyAdjudicationMissingRequiredVariables?: string[];
 }
 
 interface SessionRecordingEvent {
@@ -262,6 +265,10 @@ export interface SessionCompactTraceSummary {
     rawOutputHash?: string;
     rawOutputStored?: boolean;
     rawOutputTruncated?: boolean;
+    providerConfigurationStatus?: string;
+    circuitOpen?: boolean;
+    circuitReason?: string;
+    circuitNewlyOpened?: boolean;
   };
   personalEvidence?: {
     requirement?: string;
@@ -1643,6 +1650,9 @@ export function buildSessionRecordingProviderSummary({
   codingProviderId,
   taxonomyAdjudicationProviderId,
   sttProviderId,
+  taxonomyAdjudicationConfigurationStatus,
+  taxonomyAdjudicationInheritedVariableKeys,
+  taxonomyAdjudicationMissingRequiredVariables,
 }: {
   mainProvider?: TYPE_PROVIDER;
   codingProvider?: TYPE_PROVIDER;
@@ -1652,6 +1662,9 @@ export function buildSessionRecordingProviderSummary({
   codingProviderId?: string;
   taxonomyAdjudicationProviderId?: string;
   sttProviderId?: string;
+  taxonomyAdjudicationConfigurationStatus?: string;
+  taxonomyAdjudicationInheritedVariableKeys?: string[];
+  taxonomyAdjudicationMissingRequiredVariables?: string[];
 }): SessionRecordingProviderSummary {
   return {
     mainProviderId,
@@ -1664,6 +1677,9 @@ export function buildSessionRecordingProviderSummary({
     hasSttProvider: Boolean(sttProvider),
     mainSupportsImages: Boolean(mainProvider?.curl.includes("{{IMAGE}}")),
     codingSupportsImages: Boolean(codingProvider?.curl.includes("{{IMAGE}}")),
+    taxonomyAdjudicationConfigurationStatus,
+    taxonomyAdjudicationInheritedVariableKeys,
+    taxonomyAdjudicationMissingRequiredVariables,
   };
 }
 
@@ -2420,6 +2436,22 @@ function buildTaxonomyAdjudicationTraceSummary(
     rawOutputTruncated: readFirstBoolean(
       metadataSources,
       "taxonomyAdjudicationRawOutputTruncated"
+    ),
+    providerConfigurationStatus: readFirstString(
+      metadataSources,
+      "taxonomyAdjudicationProviderConfigurationStatus"
+    ),
+    circuitOpen: readFirstBoolean(
+      metadataSources,
+      "taxonomyAdjudicationCircuitOpen"
+    ),
+    circuitReason: readFirstString(
+      metadataSources,
+      "taxonomyAdjudicationCircuitReason"
+    ),
+    circuitNewlyOpened: readFirstBoolean(
+      metadataSources,
+      "taxonomyAdjudicationCircuitNewlyOpened"
     ),
   };
 }

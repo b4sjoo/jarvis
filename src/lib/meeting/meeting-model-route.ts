@@ -34,6 +34,14 @@ export interface TaxonomyAdjudicationModelRouteResolution {
   taxonomyAdjudicationProviderId?: string;
   resolvedProviderId?: string;
   resolutionSource: "execution-snapshot";
+  configurationStatus:
+    | "ready"
+    | "inherited-main-variables"
+    | "provider-not-configured"
+    | "provider-not-found"
+    | "missing-required-variables";
+  inheritedVariableKeys: string[];
+  missingRequiredVariables: string[];
 }
 
 export type MeetingResponseOwnerSource =
@@ -223,34 +231,81 @@ export function resolveTaxonomyAdjudicationModelRouteFromSnapshot({
     (candidate) => candidate.id === snapshot.selectedProvider.provider
   );
   const override = snapshot.taxonomyAdjudicationProvider;
+  const mainReadiness = resolveProviderVariableReadiness(
+    mainProvider,
+    snapshot.selectedProvider
+  );
   const mainRoute: TaxonomyAdjudicationModelRouteResolution = {
-    provider: mainProvider,
+    provider: mainReadiness.ready ? mainProvider : undefined,
     selectedProvider: snapshot.selectedProvider,
     route: "main",
     reason,
     mainProviderId: mainProvider?.id,
     taxonomyAdjudicationProviderId: override?.provider || undefined,
-    resolvedProviderId: mainProvider?.id,
+    resolvedProviderId: mainReadiness.ready ? mainProvider?.id : undefined,
     resolutionSource: "execution-snapshot",
+    configurationStatus: mainReadiness.ready
+      ? "ready"
+      : "missing-required-variables",
+    inheritedVariableKeys: [],
+    missingRequiredVariables: mainReadiness.missingRequiredVariables,
   };
   if (!override?.provider) {
-    return { ...mainRoute, fallbackReason: "taxonomy-provider-not-configured" };
+    return {
+      ...mainRoute,
+      configurationStatus: mainReadiness.ready
+        ? "provider-not-configured"
+        : "missing-required-variables",
+      fallbackReason: "taxonomy-provider-not-configured",
+    };
   }
   const provider = snapshot.providers.find(
     (candidate) => candidate.id === override.provider
   );
   if (!provider) {
-    return { ...mainRoute, fallbackReason: "taxonomy-provider-not-found" };
+    return {
+      ...mainRoute,
+      configurationStatus: "provider-not-found",
+      fallbackReason: "taxonomy-provider-not-found",
+    };
+  }
+  const inherited = inheritMainProviderVariables({
+    mainProviderId: snapshot.selectedProvider.provider,
+    override,
+    mainSelectedProvider: snapshot.selectedProvider,
+  });
+  const readiness = resolveProviderVariableReadiness(
+    provider,
+    inherited.selectedProvider
+  );
+  if (!readiness.ready) {
+    return {
+      ...mainRoute,
+      provider: undefined,
+      selectedProvider: inherited.selectedProvider,
+      route: "taxonomy-adjudication-override",
+      taxonomyAdjudicationProviderId: provider.id,
+      resolvedProviderId: undefined,
+      configurationStatus: "missing-required-variables",
+      inheritedVariableKeys: inherited.inheritedVariableKeys,
+      missingRequiredVariables: readiness.missingRequiredVariables,
+      fallbackReason: "taxonomy-provider-missing-required-variables",
+    };
   }
   return {
     provider,
-    selectedProvider: override,
+    selectedProvider: inherited.selectedProvider,
     route: "taxonomy-adjudication-override",
     reason,
     mainProviderId: mainProvider?.id,
     taxonomyAdjudicationProviderId: provider.id,
     resolvedProviderId: provider.id,
     resolutionSource: "execution-snapshot",
+    configurationStatus: inherited.inheritedVariableKeys.length
+      ? "inherited-main-variables"
+      : "ready",
+    inheritedVariableKeys: inherited.inheritedVariableKeys,
+    missingRequiredVariables: [],
   };
 }
 
@@ -263,5 +318,80 @@ export function formatTaxonomyAdjudicationModelRouteForTrace(
     taxonomyAdjudicationModelRouteFallbackReason: route.fallbackReason,
     taxonomyAdjudicationProviderId: route.resolvedProviderId,
     taxonomyAdjudicationMainProviderId: route.mainProviderId,
+    taxonomyAdjudicationProviderConfigurationStatus:
+      route.configurationStatus,
+    taxonomyAdjudicationInheritedVariableKeys:
+      route.inheritedVariableKeys,
+    taxonomyAdjudicationMissingRequiredVariables:
+      route.missingRequiredVariables,
   };
+}
+
+function inheritMainProviderVariables(input: {
+  mainProviderId: string;
+  override: SelectedProviderState;
+  mainSelectedProvider: SelectedProviderState;
+}) {
+  if (input.override.provider !== input.mainProviderId) {
+    return {
+      selectedProvider: input.override,
+      inheritedVariableKeys: [] as string[],
+    };
+  }
+
+  const variables = { ...input.mainSelectedProvider.variables };
+  const inheritedVariableKeys: string[] = [];
+  for (const [key, value] of Object.entries(input.override.variables)) {
+    if (value.trim()) variables[key] = value;
+  }
+  for (const [key, value] of Object.entries(input.mainSelectedProvider.variables)) {
+    if (
+      value.trim() &&
+      !readProviderVariable(input.override.variables, key)
+    ) {
+      inheritedVariableKeys.push(key);
+    }
+  }
+  return {
+    selectedProvider: {
+      provider: input.override.provider,
+      variables,
+    },
+    inheritedVariableKeys,
+  };
+}
+
+function resolveProviderVariableReadiness(
+  provider: TYPE_PROVIDER | undefined,
+  selectedProvider: SelectedProviderState
+) {
+  if (!provider) {
+    return { ready: false, missingRequiredVariables: [] as string[] };
+  }
+  const requiredVariables = Array.from(
+    provider.curl.matchAll(/\{\{([A-Z_]+)\}\}/g),
+    (match) => match[1]
+  ).filter(
+    (key, index, values) =>
+      !["SYSTEM_PROMPT", "TEXT", "IMAGE", "IMAGE_MEDIA_TYPE", "AUDIO"].includes(
+        key
+      ) && values.indexOf(key) === index
+  );
+  const missingRequiredVariables = requiredVariables.filter(
+    (key) => !readProviderVariable(selectedProvider.variables, key)
+  );
+  return {
+    ready: missingRequiredVariables.length === 0,
+    missingRequiredVariables,
+  };
+}
+
+function readProviderVariable(
+  variables: Record<string, string>,
+  key: string
+) {
+  const match = Object.entries(variables).find(
+    ([candidate]) => candidate.toUpperCase() === key.toUpperCase()
+  );
+  return match?.[1]?.trim() ?? "";
 }
