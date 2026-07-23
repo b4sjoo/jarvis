@@ -240,7 +240,9 @@ export interface SessionCompactTraceSummary {
     turnId?: string;
     keywordType?: string;
     semanticCandidateType?: string;
+    semanticTopCandidateType?: string;
     hybridOutcome?: string;
+    hybridEffectiveType?: string;
     wouldRescue?: boolean;
     rescueApplied?: boolean;
     embeddingStatus?: string;
@@ -2375,7 +2377,12 @@ function buildSemanticTaxonomyTraceSummary(
       metadataSources,
       "taxonomySemanticCandidateType"
     ),
+    semanticTopCandidateType: readSemanticTopCandidateType(metadataSources),
     hybridOutcome,
+    hybridEffectiveType: readFirstString(
+      metadataSources,
+      "taxonomyHybridEffectiveType"
+    ),
     wouldRescue: readFirstBoolean(
       metadataSources,
       "taxonomyHybridWouldRescue"
@@ -2406,6 +2413,31 @@ function buildSemanticTaxonomyTraceSummary(
       "taxonomySemanticCalibrationVersion"
     ),
   };
+}
+
+function readSemanticTopCandidateType(
+  metadataSources: Array<Record<string, unknown>>
+) {
+  for (const source of metadataSources) {
+    const scores = source.taxonomySemanticPerTypeScores;
+    if (!scores || typeof scores !== "object" || Array.isArray(scores)) {
+      continue;
+    }
+    let bestType: string | undefined;
+    let bestScore = Number.NEGATIVE_INFINITY;
+    for (const [type, rawScore] of Object.entries(scores)) {
+      if (!rawScore || typeof rawScore !== "object" || Array.isArray(rawScore)) {
+        continue;
+      }
+      const candidate = rawScore as Record<string, unknown>;
+      const score = readNumber(candidate.positiveScore);
+      if (score === undefined || score <= bestScore) continue;
+      bestScore = score;
+      bestType = readString(candidate.questionType) ?? type;
+    }
+    if (bestType) return bestType;
+  }
+  return undefined;
 }
 
 function buildTaxonomyAdjudicationTraceSummary(

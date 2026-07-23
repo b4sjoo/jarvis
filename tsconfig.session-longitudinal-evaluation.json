@@ -1,0 +1,21 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "strict": true,
+    "skipLibCheck": true,
+    "outDir": ".tmp-session-longitudinal-evaluation",
+    "rootDir": ".",
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["./src/*"]
+    },
+    "types": ["node"]
+  },
+  "include": [
+    "scripts/reflect-session-longitudinal-evaluation.ts",
+    "src/lib/meeting/session-longitudinal-evaluation.ts",
+    "src/lib/meeting/task-taxonomy.ts"
+  ]
+}
