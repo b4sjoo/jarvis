@@ -73,6 +73,7 @@ import {
   ManualQuestionTypeCorrection,
   ManualQuestionTypeCorrectionSource,
   LogicalQuestionUnit,
+  LogicalQuestionUnitLease,
   NativeSpeechDetectedEvent,
   WhiteboardUpdateSource,
   MeetingContextManager,
@@ -193,6 +194,11 @@ import {
   decideAdvisorTurnIntent,
   decideSentenceCompletion,
   composeLogicalQuestionUnit,
+  authorizeLogicalQuestionUnitLease,
+  createCanonicalLogicalQuestionLineage,
+  createLogicalQuestionUnitLease,
+  decideLogicalQuestionMaterialization,
+  formatLogicalQuestionLeaseForTrace,
   composeContextScopeAdvisorPromptContext,
   evaluateAnswerContextResolvabilityShadow,
   scoreAnswerSufficiencySemanticEmbedding,
@@ -1302,6 +1308,7 @@ interface ForceAdviseRuntimeTarget {
   turn: TranscriptTurn;
   intentDecision: AdvisorTurnIntentDecision;
   logicalQuestionUnit: LogicalQuestionUnit;
+  logicalQuestionLease: LogicalQuestionUnitLease;
   questionLineage: QuestionInstanceLineage;
 }
 
@@ -3919,6 +3926,9 @@ export function useMeetingAssistant() {
     const traceId = advisorJob.traceId;
     let advisorStepId: string | undefined;
     let effectiveRuntimeCommitToken = advisorJob.runtimeCommitToken;
+    const logicalQuestionLease = advisorJob.logicalQuestionUnit
+      ? createLogicalQuestionUnitLease(advisorJob.logicalQuestionUnit)
+      : undefined;
     const readCommitDecision = () =>
       authorizeRuntimeCommit({
         token: effectiveRuntimeCommitToken,
@@ -3935,22 +3945,69 @@ export function useMeetingAssistant() {
           formatRuntimeCommitAuthorizationForTrace(decision, stage)
         );
       }
-      if (decision.authorized) return false;
+      if (!decision.authorized) {
+        finishRunningAdvisorJobTrace(
+          advisorJob,
+          "cancelled",
+          formatAdvisorTriggerJobForTrace(
+            advisorJob,
+            "stale-commit-rejected",
+            {
+              cancellationReason: decision.reason,
+              commitAuthorized: false,
+              commitAuthorizationReason: decision.reason,
+            }
+          ),
+          decision.reason
+        );
+        return true;
+      }
+
+      if (!logicalQuestionLease) return false;
+      const logicalQuestionAuthorization =
+        authorizeLogicalQuestionUnitLease(
+          logicalQuestionLease,
+          logicalQuestionUnitRef.current
+        );
+      if (traceId) {
+        traceStoreRef.current.updateMetadata(
+          traceId,
+          formatLogicalQuestionLeaseForTrace(
+            logicalQuestionLease,
+            logicalQuestionAuthorization,
+            stage
+          )
+        );
+      }
+      if (logicalQuestionAuthorization.authorized) return false;
 
       finishRunningAdvisorJobTrace(
         advisorJob,
         "cancelled",
-        formatAdvisorTriggerJobForTrace(
-          advisorJob,
-          "stale-commit-rejected",
-          {
-            cancellationReason: decision.reason,
-            commitAuthorized: false,
-            commitAuthorizationReason: decision.reason,
-          }
-        ),
-        decision.reason
+        {
+          ...formatAdvisorTriggerJobForTrace(
+            advisorJob,
+            "stale-commit-rejected",
+            {
+              cancellationReason: logicalQuestionAuthorization.reason,
+              commitAuthorized: false,
+              commitAuthorizationReason:
+                logicalQuestionAuthorization.reason,
+            }
+          ),
+          ...formatLogicalQuestionLeaseForTrace(
+            logicalQuestionLease,
+            logicalQuestionAuthorization,
+            stage
+          ),
+        },
+        logicalQuestionAuthorization.reason
       );
+      releaseAdvisorJob(advisorJob, "suppressed", {
+        commitAuthorized: false,
+        commitAuthorizationReason:
+          logicalQuestionAuthorization.reason,
+      });
       return true;
     };
 
@@ -6962,6 +7019,64 @@ export function useMeetingAssistant() {
     []
   );
 
+  const publishCanonicalLogicalQuestionTarget = useCallback(
+    ({
+      logicalQuestionUnit,
+      traceId,
+      turn,
+      intentDecision,
+    }: {
+      logicalQuestionUnit: LogicalQuestionUnit;
+      traceId: string;
+      turn: TranscriptTurn;
+      intentDecision: AdvisorTurnIntentDecision;
+    }) => {
+      const logicalQuestionLease =
+        createLogicalQuestionUnitLease(logicalQuestionUnit);
+      const questionLineage = createCanonicalLogicalQuestionLineage({
+        unit: logicalQuestionUnit,
+        traceId,
+      });
+      const presentation: ForceAdviseTargetPresentation = {
+        originalTraceId: traceId,
+        turnId: turn.id,
+        text: turn.text,
+        observedAction: toObservedAdvisorAction(intentDecision),
+        executionAuthorized: intentDecision.executionAuthorized,
+        logicalQuestionUnitId: logicalQuestionUnit.id,
+        logicalQuestionUnitRevision: logicalQuestionUnit.revision,
+        sourceTurnIds: [...logicalQuestionUnit.sourceTurnIds],
+        status: intentDecision.executionAuthorized
+          ? "already-advised"
+          : "ready",
+        updatedAt: Date.now(),
+      };
+      const target: ForceAdviseRuntimeTarget = {
+        presentation,
+        turn: { ...turn },
+        intentDecision,
+        logicalQuestionUnit,
+        logicalQuestionLease,
+        questionLineage,
+      };
+      latestForceAdviseTargetRef.current = target;
+      setState((previous) => ({
+        ...previous,
+        latestInterviewerTurnCandidate: presentation,
+      }));
+      traceStoreRef.current.updateMetadata(traceId, {
+        ...formatLogicalQuestionUnitForTrace(logicalQuestionUnit),
+        ...formatLogicalQuestionLeaseForTrace(logicalQuestionLease),
+        ...formatQuestionLineageForTrace(questionLineage),
+        canonicalLogicalQuestionTargetPublished: true,
+        forceAdviseTargetStatus: presentation.status,
+        forceAdviseEligible: !intentDecision.executionAuthorized,
+      });
+      return target;
+    },
+    []
+  );
+
   const processQueuedSpeechSegment = useCallback(
     async (segment: QueuedSpeechSegment) => {
       const traceId = segment.traceId;
@@ -7415,12 +7530,6 @@ export function useMeetingAssistant() {
             : 0,
           sentenceBufferMergedTranscriptChars: turn.text.length,
         });
-        latestForceAdviseTargetRef.current = undefined;
-        setState((previous) => ({
-          ...previous,
-          latestInterviewerTurnCandidate: undefined,
-        }));
-
         const transitionTurnDecision = classifyInterviewTransitionTurn(
           turn.text
         );
@@ -7458,6 +7567,7 @@ export function useMeetingAssistant() {
         });
 
         if (transitionTurnDecision.disposition === "hint-only") {
+          latestForceAdviseTargetRef.current = undefined;
           const switchStepId = traceStoreRef.current.startStep(
             traceId,
             "Interview section transition recorded",
@@ -7484,6 +7594,7 @@ export function useMeetingAssistant() {
             ...previous,
             status: activeRef.current ? "listening" : "idle",
             partialSuggestion: "",
+            latestInterviewerTurnCandidate: undefined,
           }));
           return;
         }
@@ -7551,6 +7662,12 @@ export function useMeetingAssistant() {
           const logicalQuestionUnit = buildLogicalQuestionForTurn({
             turn,
             traceId,
+            intentDecision: turnIntentDecision,
+          });
+          publishCanonicalLogicalQuestionTarget({
+            logicalQuestionUnit,
+            traceId,
+            turn,
             intentDecision: turnIntentDecision,
           });
           scheduleSemanticTaxonomyShadow({
@@ -7651,48 +7768,17 @@ export function useMeetingAssistant() {
             ? undefined
             : `turn-intent:${turnGate.reason}`,
         });
-        const forceAdviseLogicalQuestionUnit = composeLogicalQuestionUnit({
-          currentTurn: turn,
-          sessionId: activeContextState.sessionId,
-          runtimeEpoch: runtimeEpochRef.current,
-          intentDecision: turnGate,
-        });
-        const forceAdvisePresentation: ForceAdviseTargetPresentation = {
-          originalTraceId: traceId,
-          turnId: turn.id,
-          text: turn.text,
-          observedAction: toObservedAdvisorAction(turnGate),
-          executionAuthorized: turnGate.executionAuthorized,
-          logicalQuestionUnitId: forceAdviseLogicalQuestionUnit.id,
-          logicalQuestionUnitRevision: forceAdviseLogicalQuestionUnit.revision,
-          sourceTurnIds: [...forceAdviseLogicalQuestionUnit.sourceTurnIds],
-          status: turnGate.executionAuthorized
-            ? "already-advised"
-            : "ready",
-          updatedAt: Date.now(),
-        };
-        latestForceAdviseTargetRef.current = {
-          presentation: forceAdvisePresentation,
-          turn: { ...turn },
-          intentDecision: turnGate,
-          logicalQuestionUnit: forceAdviseLogicalQuestionUnit,
-          questionLineage: {
-            questionInstanceId: `trace:${traceId}`,
-            questionOriginTraceId: traceId,
-            triggerTurnId: turn.id,
-            sessionId: activeContextState.sessionId,
-            runtimeEpoch: runtimeEpochRef.current,
-            identityState: "provisional",
-          },
-        };
-        setState((previous) => ({
-          ...previous,
-          latestInterviewerTurnCandidate: forceAdvisePresentation,
-        }));
+        const wordEquivalent = calculateWordEquivalent(turn.text);
+        const logicalQuestionMaterialization =
+          decideLogicalQuestionMaterialization({
+            action: turnGate.action,
+            wordEquivalent,
+          });
         traceStoreRef.current.updateMetadata(traceId, {
-          ...formatLogicalQuestionUnitForTrace(forceAdviseLogicalQuestionUnit),
-          forceAdviseTargetStatus: forceAdvisePresentation.status,
-          forceAdviseEligible: !turnGate.executionAuthorized,
+          canonicalLogicalQuestionMaterialized:
+            logicalQuestionMaterialization.materialize,
+          canonicalLogicalQuestionMaterializationReason:
+            logicalQuestionMaterialization.reason,
         });
         const gateStepId = traceStoreRef.current.startStep(
           traceId,
@@ -7704,7 +7790,7 @@ export function useMeetingAssistant() {
             ...keywordIntentEvidence,
             turnId: turn.id,
             transcriptChars: turn.text.trim().length,
-            wordEquivalent: calculateWordEquivalent(turn.text),
+            wordEquivalent,
             activeScreenTask: Boolean(activeScreenTask),
             activeInterviewTask: Boolean(activeInterviewTask),
             contextPromptEligible: turnGate.contextPromptEligible,
@@ -7713,36 +7799,6 @@ export function useMeetingAssistant() {
           }
         );
         traceStoreRef.current.finishStep(traceId, gateStepId, "success");
-
-        if (turnGate.action === "ignore") {
-          traceStoreRef.current.updateMetadata(traceId, {
-            acceptedSpeechDisposition: "low-value-ignored",
-            transcriptAppendDisposition: "suppressed",
-            transcriptAppendReason: turnGate.reason,
-          });
-          const ignoredStepId = traceStoreRef.current.startStep(
-            traceId,
-            "Transcript ignored",
-            {
-              reason: turnGate.reason,
-              transcriptChars: turn.text.trim().length,
-              activeScreenTask: Boolean(activeScreenTask),
-              activeInterviewTask: Boolean(activeInterviewTask),
-            }
-          );
-          traceStoreRef.current.finishStep(traceId, ignoredStepId, "success");
-          traceStoreRef.current.finishTrace(traceId, "success");
-          setState((previous) => ({
-            ...previous,
-            status: activeRef.current ? "listening" : "idle",
-          }));
-          return;
-        }
-
-        turn.contextPromptEligible = turnGate.contextPromptEligible;
-        turn.contextFusionStatus = turnGate.contextPromptEligible
-          ? "none"
-          : "debug-only";
 
         const currentQuestionType =
           normalizeCanonicalQuestionType(
@@ -7772,17 +7828,8 @@ export function useMeetingAssistant() {
           });
         }
 
-        const { contextState } = appendTranscriptTurnForTrace(
-          turn,
-          traceId,
-          segment,
-          {
-            turnGateAction: turnGate.action,
-            turnGateReason: turnGate.reason,
-          }
-        );
         const logicalQuestionUnit =
-          turnGate.action === "answer-refresh"
+          logicalQuestionMaterialization.materialize
             ? buildLogicalQuestionForTurn({
                 turn,
                 traceId,
@@ -7796,12 +7843,70 @@ export function useMeetingAssistant() {
                     : undefined,
               })
             : undefined;
-        scheduleSemanticTaxonomyShadow({
+        if (logicalQuestionUnit) {
+          publishCanonicalLogicalQuestionTarget({
+            logicalQuestionUnit,
+            traceId,
+            turn,
+            intentDecision: turnGate,
+          });
+        }
+
+        if (turnGate.action === "ignore") {
+          if (logicalQuestionUnit) {
+            scheduleSemanticTaxonomyShadow({
+              turn,
+              traceId,
+              turnGateAction: turnGate.action,
+              logicalQuestionUnit,
+            });
+          }
+          traceStoreRef.current.updateMetadata(traceId, {
+            acceptedSpeechDisposition: "low-value-ignored",
+            transcriptAppendDisposition: "suppressed",
+            transcriptAppendReason: turnGate.reason,
+          });
+          const ignoredStepId = traceStoreRef.current.startStep(
+            traceId,
+            "Transcript ignored",
+            {
+              reason: turnGate.reason,
+              transcriptChars: turn.text.trim().length,
+              activeScreenTask: Boolean(activeScreenTask),
+              activeInterviewTask: Boolean(activeInterviewTask),
+            }
+          );
+          traceStoreRef.current.finishStep(traceId, ignoredStepId, "success");
+          traceStoreRef.current.finishTrace(traceId, "success");
+          setState((previous) => ({
+            ...previous,
+            status: activeRef.current ? "listening" : "idle",
+          }));
+          return;
+        }
+
+        turn.contextPromptEligible = turnGate.contextPromptEligible;
+        turn.contextFusionStatus = turnGate.contextPromptEligible
+          ? "none"
+          : "debug-only";
+
+        const { contextState } = appendTranscriptTurnForTrace(
           turn,
           traceId,
-          turnGateAction: turnGate.action,
-          logicalQuestionUnit,
-        });
+          segment,
+          {
+            turnGateAction: turnGate.action,
+            turnGateReason: turnGate.reason,
+          }
+        );
+        if (logicalQuestionUnit) {
+          scheduleSemanticTaxonomyShadow({
+            turn,
+            traceId,
+            turnGateAction: turnGate.action,
+            logicalQuestionUnit,
+          });
+        }
 
         if (turnGate.action === "state-update") {
           const stateUpdatedTask = buildStateUpdatedInterviewTask(
@@ -7956,6 +8061,7 @@ export function useMeetingAssistant() {
       incrementAppliedSpeechCorrections,
       invalidateAudioProcessingSession,
       isCurrentAudioSegment,
+      publishCanonicalLogicalQuestionTarget,
       promoteMeTurnForFusion,
       resolvePendingConfirmationForMeTurn,
       scheduleSemanticTaxonomyShadow,
@@ -10066,9 +10172,63 @@ export function useMeetingAssistant() {
 
       const contextState = contextManagerRef.current.getState();
       const activeTask = contextState.activeMeetingTask;
+      const latestCanonicalTarget = latestForceAdviseTargetRef.current;
+      const canonicalTargetIsLatest = Boolean(
+        latestCanonicalTarget &&
+          (latestCanonicalTarget.presentation.originalTraceId ===
+            state.latestSuggestion?.sourceTraceId ||
+            latestCanonicalTarget.presentation.updatedAt >=
+              (state.latestSuggestion?.createdAt ?? 0))
+      );
+      const canonicalTargetAuthorization =
+        latestCanonicalTarget && canonicalTargetIsLatest
+          ? authorizeLogicalQuestionUnitLease(
+              latestCanonicalTarget.logicalQuestionLease,
+              logicalQuestionUnitRef.current
+            )
+          : undefined;
+      if (
+        latestCanonicalTarget &&
+        canonicalTargetIsLatest &&
+        canonicalTargetAuthorization &&
+        !canonicalTargetAuthorization.authorized
+      ) {
+        traceStoreRef.current.updateMetadata(
+          latestCanonicalTarget.presentation.originalTraceId,
+          {
+            ...formatLogicalQuestionLeaseForTrace(
+              latestCanonicalTarget.logicalQuestionLease,
+              canonicalTargetAuthorization,
+              "manual-correction-click"
+            ),
+            manualCorrectionOwnershipAuthorized: false,
+            manualCorrectionOwnershipReason:
+              canonicalTargetAuthorization.reason,
+          }
+        );
+        setState((previous) => ({
+          ...previous,
+          error:
+            "The interviewer moved to a newer question. Correct the latest question instead.",
+        }));
+        return;
+      }
+      const canonicalCorrectionTarget =
+        latestCanonicalTarget &&
+        canonicalTargetIsLatest &&
+        canonicalTargetAuthorization?.authorized
+          ? latestCanonicalTarget
+          : undefined;
       const targetResolution = resolveManualCorrectionTarget({
         activeTask,
         currentQuestionLineage: state.currentQuestionLineage,
+        canonicalLogicalQuestion: canonicalCorrectionTarget
+          ? {
+              logicalQuestionUnit:
+                canonicalCorrectionTarget.logicalQuestionUnit,
+              lineage: canonicalCorrectionTarget.questionLineage,
+            }
+          : undefined,
         latestSuggestion: state.latestSuggestion,
         sessionId: contextState.sessionId,
         runtimeEpoch: runtimeEpochRef.current,
@@ -10081,11 +10241,23 @@ export function useMeetingAssistant() {
         return;
       }
 
-      const provisionalLineage =
+      const questionOnlyLineage =
         targetResolution.source === "provisional-question"
           ? targetResolution.lineage
           : undefined;
+      const provisionalLineage =
+        questionOnlyLineage?.identityState === "provisional"
+          ? questionOnlyLineage
+          : undefined;
       const correctionLineage = targetResolution.lineage;
+      const correctionLogicalQuestionUnit =
+        targetResolution.logicalQuestionUnit;
+      const correctionLogicalQuestionLease =
+        correctionLogicalQuestionUnit
+          ? createLogicalQuestionUnitLease(
+              correctionLogicalQuestionUnit
+            )
+          : undefined;
       const initialDecision = activeTask
         ? decideManualQuestionTypeCorrection(activeTask, correctedType)
         : decideProvisionalQuestionTypeCorrection(correctedType);
@@ -10116,6 +10288,7 @@ export function useMeetingAssistant() {
           )
         : undefined;
       const correctionQuestionText =
+        correctionLogicalQuestionUnit?.normalizedText ??
         correctionOriginTurn?.text ??
         state.latestSuggestion?.meetingAnswer?.sections.question ??
         activeTask?.child?.question ??
@@ -10158,10 +10331,12 @@ export function useMeetingAssistant() {
               correctedType
             )
           : buildCorrectionParentFromProvisionalQuestion({
-              lineage: provisionalLineage,
+              lineage: questionOnlyLineage,
               correctedType,
               contextState,
               suggestion: state.latestSuggestion,
+              questionText: correctionQuestionText,
+              logicalQuestionUnit: correctionLogicalQuestionUnit,
               expiresAt: getActiveScreenTaskExpiresAt(state.settings),
             }));
       if (!existingParent) {
@@ -10257,6 +10432,18 @@ export function useMeetingAssistant() {
           ...formatQuestionLineageForTrace(
             correctionLineage ?? state.currentQuestionLineage
           ),
+          ...formatLogicalQuestionUnitForTrace(
+            correctionLogicalQuestionUnit
+          ),
+          ...formatLogicalQuestionLeaseForTrace(
+            correctionLogicalQuestionLease,
+            canonicalTargetAuthorization,
+            "manual-correction-created"
+          ),
+          manualCorrectionOwnership:
+            correctionLogicalQuestionUnit
+              ? "canonical-logical-question"
+              : "legacy-question-lineage",
           ...(activeTask ? getActiveMeetingTaskTraceMetadata(activeTask) : {}),
         }
       );
@@ -10351,6 +10538,44 @@ export function useMeetingAssistant() {
       let correctionLifecycleToken: RuntimeCommitToken | undefined;
 
       try {
+        if (correctionLogicalQuestionLease) {
+          const correctionOwnershipAuthorization =
+            authorizeLogicalQuestionUnitLease(
+              correctionLogicalQuestionLease,
+              logicalQuestionUnitRef.current
+            );
+          traceStoreRef.current.updateMetadata(
+            correctionTrace.id,
+            formatLogicalQuestionLeaseForTrace(
+              correctionLogicalQuestionLease,
+              correctionOwnershipAuthorization,
+              "pre-correction-mutation"
+            )
+          );
+          if (!correctionOwnershipAuthorization.authorized) {
+            traceStoreRef.current.finishStep(
+              correctionTrace.id,
+              mutationStepId,
+              "cancelled",
+              {
+                manualCorrectionOwnershipAuthorized: false,
+                manualCorrectionOwnershipReason:
+                  correctionOwnershipAuthorization.reason,
+              }
+            );
+            traceStoreRef.current.finishTrace(
+              correctionTrace.id,
+              "cancelled",
+              correctionOwnershipAuthorization.reason
+            );
+            setState((previous) => ({
+              ...previous,
+              error:
+                "The interviewer moved to a newer question before the correction could be applied.",
+            }));
+            return;
+          }
+        }
         const activeScreenTask = contextState.activeScreenTask;
         const askFrame = getManualOverrideAskFrame(correctedType);
         const startsNewParentBoundary =
@@ -10370,7 +10595,7 @@ export function useMeetingAssistant() {
               activeTask?.screen?.question,
               activeTask?.parent.topic,
               provisionalOriginTurn?.text,
-              provisionalLineage
+              questionOnlyLineage
                 ? state.latestSuggestion?.meetingAnswer?.sections.question
                 : contextState.transcriptTurns
                     .slice(-4)
@@ -10405,7 +10630,7 @@ export function useMeetingAssistant() {
           state.settings,
           requestedAt
         );
-        const parentTransition = provisionalLineage
+        const parentTransition = questionOnlyLineage
           ? {
               parent: {
                 ...existingParent,
@@ -10414,11 +10639,12 @@ export function useMeetingAssistant() {
                 phaseProgress: {
                   [correctedPlaybook?.phase ?? "follow_up"]: true,
                 },
-                originQuestionId: provisionalLineage.questionInstanceId,
+                originQuestionId: questionOnlyLineage.questionInstanceId,
                 startTurnId:
-                  provisionalLineage.triggerTurnId ?? existingParent.startTurnId,
+                  questionOnlyLineage.triggerTurnId ??
+                  existingParent.startTurnId,
                 promptTranscriptStartTurnId:
-                  provisionalLineage.triggerTurnId ??
+                  questionOnlyLineage.triggerTurnId ??
                   existingParent.promptTranscriptStartTurnId,
                 updatedAt: requestedAt,
                 expiresAt,
@@ -10426,9 +10652,13 @@ export function useMeetingAssistant() {
               },
               previousParentId: existingParent.id,
               nextParentId: existingParent.id,
-              preservedContextFields: ["provisional-question-origin"],
+              preservedContextFields: [
+                questionOnlyLineage.identityState === "canonical"
+                  ? "canonical-logical-question-origin"
+                  : "provisional-question-origin",
+              ],
               clearedContextFields: [],
-              promptTranscriptStartTurnId: provisionalLineage.triggerTurnId,
+              promptTranscriptStartTurnId: questionOnlyLineage.triggerTurnId,
               startedNewParent: false,
             }
           : buildManualCorrectionParentTransition({
@@ -10561,6 +10791,9 @@ export function useMeetingAssistant() {
             "previous-reliable-answer-preserved-until-regeneration",
           manualCorrectionTargetSource: correctionTargetSource,
           provisionalQuestionPromoted: Boolean(provisionalLineage),
+          canonicalLogicalQuestionPromoted: Boolean(
+            questionOnlyLineage?.identityState === "canonical"
+          ),
           previousParentId: parentTransition.previousParentId,
           nextParentId: parentTransition.nextParentId,
           parentBoundaryReRooted: parentTransition.startedNewParent,
@@ -10716,6 +10949,14 @@ export function useMeetingAssistant() {
           questionLineage: promoteQuestionLineage(
             correctionLineage ?? state.currentQuestionLineage
           ),
+          logicalQuestionUnit: correctionLogicalQuestionUnit,
+          promptTurnOverride:
+            canonicalCorrectionTarget &&
+            !contextState.transcriptTurns.some(
+              (turn) => turn.id === canonicalCorrectionTarget.turn.id
+            )
+              ? canonicalCorrectionTarget.turn
+              : undefined,
         });
         const regenerationStatus = traceStoreRef.current
           .getTraces()
@@ -10873,6 +11114,41 @@ export function useMeetingAssistant() {
       }));
       return;
     }
+    const ownershipAuthorization = authorizeLogicalQuestionUnitLease(
+      target.logicalQuestionLease,
+      logicalQuestionUnitRef.current
+    );
+    traceStoreRef.current.updateMetadata(
+      target.presentation.originalTraceId,
+      {
+        ...formatLogicalQuestionLeaseForTrace(
+          target.logicalQuestionLease,
+          ownershipAuthorization,
+          "force-advise-click"
+        ),
+        forceAdviseOwnershipAuthorized:
+          ownershipAuthorization.authorized,
+        forceAdviseOwnershipReason: ownershipAuthorization.reason,
+      }
+    );
+    if (!ownershipAuthorization.authorized) {
+      const failedPresentation: ForceAdviseTargetPresentation = {
+        ...target.presentation,
+        status: "failed",
+        updatedAt: Date.now(),
+      };
+      latestForceAdviseTargetRef.current = {
+        ...target,
+        presentation: failedPresentation,
+      };
+      setState((previous) => ({
+        ...previous,
+        latestInterviewerTurnCandidate: failedPresentation,
+        error:
+          "The interviewer moved to a newer question. Use Advise on the latest turn.",
+      }));
+      return;
+    }
     if (
       target.presentation.executionAuthorized ||
       target.presentation.status === "already-advised" ||
@@ -10890,6 +11166,11 @@ export function useMeetingAssistant() {
       logicalQuestionUnitRevision: target.logicalQuestionUnit.revision,
       logicalQuestionSourceTurnIds: target.logicalQuestionUnit.sourceTurnIds,
       manualAuthority: "force-advise",
+      ...formatLogicalQuestionLeaseForTrace(
+        target.logicalQuestionLease,
+        ownershipAuthorization,
+        "force-advise-accepted"
+      ),
     });
     const requestedAt = Date.now();
     const repairingPresentation: ForceAdviseTargetPresentation = {
@@ -13235,12 +13516,16 @@ function buildCorrectionParentFromProvisionalQuestion({
   correctedType,
   contextState,
   suggestion,
+  questionText,
+  logicalQuestionUnit,
   expiresAt,
 }: {
   lineage: QuestionInstanceLineage | undefined;
   correctedType: CanonicalQuestionType;
   contextState: MeetingContextState;
   suggestion: AdvisorSuggestion | null;
+  questionText?: string;
+  logicalQuestionUnit?: LogicalQuestionUnit;
   expiresAt?: number;
 }): ActiveInterviewParent | undefined {
   if (!lineage || !isParentCanonicalQuestionType(correctedType)) {
@@ -13253,6 +13538,7 @@ function buildCorrectionParentFromProvisionalQuestion({
       )
     : undefined;
   const topic =
+    questionText?.trim() ||
     originTurn?.text.trim() ||
     suggestion?.meetingAnswer?.sections.question?.trim() ||
     "Current interview question";
@@ -13272,7 +13558,18 @@ function buildCorrectionParentFromProvisionalQuestion({
     createdAt: now,
     updatedAt: now,
     expiresAt,
-    startTurnId: originTurn?.id,
+    startTurnId:
+      logicalQuestionUnit?.sourceTurnIds[0] ??
+      originTurn?.id ??
+      lineage.triggerTurnId,
+    promptTranscriptStartTurnId:
+      logicalQuestionUnit?.sourceTurnIds[0] ??
+      originTurn?.id ??
+      lineage.triggerTurnId,
+    canonicalQuestionSourceTurnIds:
+      logicalQuestionUnit?.sourceTurnIds.length
+        ? [...logicalQuestionUnit.sourceTurnIds]
+        : undefined,
     startObservationId: suggestion?.basedOnObservationIds[
       suggestion.basedOnObservationIds.length - 1
     ],

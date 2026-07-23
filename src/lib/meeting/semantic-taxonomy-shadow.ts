@@ -95,7 +95,12 @@ export function decideSemanticTaxonomyShadowEligibility({
   if (speaker !== "them") {
     return { eligible: false, reason: "speaker-is-not-interviewer", wordEquivalent };
   }
-  if (turnGateAction !== "answer-refresh") {
+  if (
+    turnGateAction !== "answer-refresh" &&
+    turnGateAction !== "ignore" &&
+    turnGateAction !== "append-only" &&
+    turnGateAction !== "state-update"
+  ) {
     return {
       eligible: false,
       reason: `turn-gate-${turnGateAction || "unknown"}`,
@@ -105,7 +110,14 @@ export function decideSemanticTaxonomyShadowEligibility({
   if (wordEquivalent < 3) {
     return { eligible: false, reason: "turn-too-short", wordEquivalent };
   }
-  return { eligible: true, reason: "accepted-latest-interviewer-turn", wordEquivalent };
+  return {
+    eligible: true,
+    reason:
+      turnGateAction === "answer-refresh"
+        ? "accepted-latest-interviewer-turn"
+        : "substantive-suppressed-or-context-turn",
+    wordEquivalent,
+  };
 }
 
 export function formatSemanticTaxonomyShadowMetadata({

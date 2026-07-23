@@ -7,7 +7,7 @@ import {
 } from "../src/lib/meeting/semantic-taxonomy-shadow.js";
 import { inferQuestionTypeDecisionFromText } from "../src/lib/meeting/task-taxonomy.js";
 
-test("semantic shadow only accepts answer-refresh interviewer turns", () => {
+test("semantic shadow accepts substantive interviewer turns without authorizing advice", () => {
   assert.deepEqual(
     decideSemanticTaxonomyShadowEligibility({
       speaker: "them",
@@ -25,6 +25,14 @@ test("semantic shadow only accepts answer-refresh interviewer turns", () => {
       speaker: "them",
       turnGateAction: "state-update",
       wordEquivalent: 8,
+    }).reason,
+    "substantive-suppressed-or-context-turn"
+  );
+  assert.equal(
+    decideSemanticTaxonomyShadowEligibility({
+      speaker: "them",
+      turnGateAction: "ignore",
+      wordEquivalent: 2,
     }).eligible,
     false
   );

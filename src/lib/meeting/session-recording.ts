@@ -30,7 +30,7 @@ import {
 import { serializeMeetingTraceExport } from "./trace.js";
 
 const SESSION_RECORDING_SCHEMA_VERSION = 1;
-const SESSION_TRACE_SUMMARY_SCHEMA_VERSION = 9;
+const SESSION_TRACE_SUMMARY_SCHEMA_VERSION = 10;
 const SESSION_TRACE_INDEX_SCHEMA_VERSION = 1;
 
 interface SessionRecordingStartOptions {
@@ -186,11 +186,22 @@ export interface SessionCompactTraceSummary {
   taskMutationAuthorizationReason?: string;
   taskRelation?: string;
   logicalQuestionUnitId?: string;
+  logicalQuestionUnitRevision?: number;
   logicalQuestionCurrentTurnId?: string;
   logicalQuestionSourceTurnIds: string[];
   logicalQuestionCompositionReasons: string[];
   logicalQuestionBoundaryReason?: string;
   logicalQuestionTruncated?: boolean;
+  canonicalLogicalQuestionMaterialized?: boolean;
+  canonicalLogicalQuestionMaterializationReason?: string;
+  logicalQuestionLeaseAuthorized?: boolean;
+  logicalQuestionLeaseAuthorizationReason?: string;
+  logicalQuestionLeaseAuthorizationStage?: string;
+  forceAdviseTargetStatus?: string;
+  forceAdviseEligible?: boolean;
+  forceAdviseOwnershipAuthorized?: boolean;
+  forceAdviseOwnershipReason?: string;
+  manualCorrectionOwnership?: string;
   advisorPromptIncludedLogicalQuestion?: boolean;
   advisorPromptLogicalQuestionSourceCount?: number;
   advisorOutputCommittedToUi?: boolean;
@@ -2233,6 +2244,10 @@ function buildCompactTraceSummary({
       metadataSources,
       "logicalQuestionUnitId"
     ),
+    logicalQuestionUnitRevision: readFirstNumberFromMetadata(
+      metadataSources,
+      "logicalQuestionUnitRevision"
+    ),
     logicalQuestionCurrentTurnId: readFirstString(
       metadataSources,
       "logicalQuestionCurrentTurnId"
@@ -2252,6 +2267,46 @@ function buildCompactTraceSummary({
     logicalQuestionTruncated: readFirstBoolean(
       metadataSources,
       "logicalQuestionTruncated"
+    ),
+    canonicalLogicalQuestionMaterialized: readFirstBoolean(
+      metadataSources,
+      "canonicalLogicalQuestionMaterialized"
+    ),
+    canonicalLogicalQuestionMaterializationReason: readFirstString(
+      metadataSources,
+      "canonicalLogicalQuestionMaterializationReason"
+    ),
+    logicalQuestionLeaseAuthorized: readFirstBoolean(
+      metadataSources,
+      "logicalQuestionLeaseAuthorized"
+    ),
+    logicalQuestionLeaseAuthorizationReason: readFirstString(
+      metadataSources,
+      "logicalQuestionLeaseAuthorizationReason"
+    ),
+    logicalQuestionLeaseAuthorizationStage: readFirstString(
+      metadataSources,
+      "logicalQuestionLeaseAuthorizationStage"
+    ),
+    forceAdviseTargetStatus: readFirstString(
+      metadataSources,
+      "forceAdviseTargetStatus"
+    ),
+    forceAdviseEligible: readFirstBoolean(
+      metadataSources,
+      "forceAdviseEligible"
+    ),
+    forceAdviseOwnershipAuthorized: readFirstBoolean(
+      metadataSources,
+      "forceAdviseOwnershipAuthorized"
+    ),
+    forceAdviseOwnershipReason: readFirstString(
+      metadataSources,
+      "forceAdviseOwnershipReason"
+    ),
+    manualCorrectionOwnership: readFirstString(
+      metadataSources,
+      "manualCorrectionOwnership"
     ),
     advisorPromptIncludedLogicalQuestion: readFirstBoolean(
       metadataSources,

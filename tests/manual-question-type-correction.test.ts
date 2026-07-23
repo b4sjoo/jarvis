@@ -18,6 +18,7 @@ import type {
   TranscriptTurn,
 } from "../src/lib/meeting/types.js";
 import type { CanonicalQuestionType } from "../src/lib/meeting/task-taxonomy.js";
+import type { LogicalQuestionUnit } from "../src/lib/meeting/logical-question-unit.js";
 
 const now = 1_000;
 
@@ -120,6 +121,87 @@ test("keeps current question lineage authoritative even when a parent is active"
       runtimeEpoch: 3,
     }).source,
     "none"
+  );
+});
+
+test("prefers a canonical logical question over stale suggestion lineage", () => {
+  const logicalQuestionUnit: LogicalQuestionUnit = {
+    id: "logical-question-current",
+    revision: 2,
+    sessionId: "session_1",
+    runtimeEpoch: 2,
+    currentTurnId: "turn_current",
+    sourceTurnIds: ["turn_setup", "turn_current"],
+    sources: [
+      {
+        turnId: "turn_setup",
+        text: "Let us discuss the recommendation system.",
+        startedAt: 1,
+        endedAt: 2,
+      },
+      {
+        turnId: "turn_current",
+        text: "How would you evaluate it?",
+        startedAt: 3,
+        endedAt: 4,
+      },
+    ],
+    normalizedText:
+      "Let us discuss the recommendation system.\nHow would you evaluate it?",
+    startedAt: 1,
+    updatedAt: 4,
+    compositionReasons: ["bounded-continuation"],
+    boundaryReason: "bounded-continuation",
+    truncated: false,
+  };
+  const canonicalLineage = {
+    questionInstanceId: "lqu:logical-question-current",
+    questionOriginTraceId: "trace_current",
+    triggerTurnId: "turn_current",
+    sessionId: "session_1",
+    runtimeEpoch: 2,
+    identityState: "canonical" as const,
+  };
+  const staleLineage = {
+    questionInstanceId: "trace:trace_old",
+    questionOriginTraceId: "trace_old",
+    sourceSuggestionId: "suggestion_old",
+    sessionId: "session_1",
+    runtimeEpoch: 2,
+    identityState: "provisional" as const,
+  };
+  const latestSuggestion = {
+    id: "suggestion_old",
+    sourceTraceId: "trace_old",
+    kind: "answer" as const,
+    content: "Old answer",
+    createdAt: 1,
+    basedOnTurnIds: [],
+    basedOnObservationIds: [],
+    confidence: "medium" as const,
+    questionLineage: staleLineage,
+  };
+  const task = makeActiveTask({ questionType: "general-system-design" });
+
+  assert.deepEqual(
+    resolveManualCorrectionTarget({
+      activeTask: task,
+      currentQuestionLineage: staleLineage,
+      canonicalLogicalQuestion: {
+        logicalQuestionUnit,
+        lineage: canonicalLineage,
+      },
+      latestSuggestion,
+      sessionId: "session_1",
+      runtimeEpoch: 2,
+    }),
+    {
+      source: "active-task",
+      task,
+      lineage: canonicalLineage,
+      targetSource: "current-question",
+      logicalQuestionUnit,
+    }
   );
 });
 

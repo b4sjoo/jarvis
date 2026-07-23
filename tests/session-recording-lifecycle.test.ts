@@ -500,6 +500,7 @@ test("compact trace summaries preserve task boundary and cross-domain evidence",
     buildCompletedTrace("boundary_trace", Date.now(), {
       taskBoundaryLogicalQuestionUnitId: "logical_1",
       logicalQuestionUnitId: "logical_1",
+      logicalQuestionUnitRevision: 3,
       logicalQuestionCurrentTurnId: "turn_2",
       logicalQuestionSourceTurnIds: ["turn_1", "turn_2"],
       logicalQuestionCompositionReasons: [
@@ -508,6 +509,14 @@ test("compact trace summaries preserve task boundary and cross-domain evidence",
       ],
       logicalQuestionBoundaryReason: "bounded-followup",
       logicalQuestionTruncated: false,
+      canonicalLogicalQuestionMaterialized: true,
+      canonicalLogicalQuestionMaterializationReason: "answer-refresh",
+      logicalQuestionLeaseAuthorized: true,
+      logicalQuestionLeaseAuthorizationReason: "logical-question-current",
+      logicalQuestionLeaseAuthorizationStage: "final-commit",
+      forceAdviseTargetStatus: "already-advised",
+      forceAdviseEligible: false,
+      manualCorrectionOwnership: "canonical-logical-question",
       taskRelation: "new-parent",
       advisorPromptIncludedLogicalQuestion: true,
       advisorPromptLogicalQuestionSourceCount: 2,
@@ -559,8 +568,9 @@ test("compact trace summaries preserve task boundary and cross-domain evidence",
   );
   assert.ok(summaryWrite);
   const summary = parsePayload(summaryWrite);
-  assert.equal(summary.version, 9);
+  assert.equal(summary.version, 10);
   assert.equal(summary.taskRelation, "new-parent");
+  assert.equal(summary.logicalQuestionUnitRevision, 3);
   assert.deepEqual(summary.logicalQuestionSourceTurnIds, ["turn_1", "turn_2"]);
   assert.deepEqual(summary.logicalQuestionCompositionReasons, [
     "new-question",
@@ -569,6 +579,15 @@ test("compact trace summaries preserve task boundary and cross-domain evidence",
   assert.equal(summary.advisorPromptIncludedLogicalQuestion, true);
   assert.equal(summary.advisorOutputCommittedToUi, true);
   assert.equal(summary.visibleAnswerChanged, true);
+  assert.equal(summary.logicalQuestionLeaseAuthorized, true);
+  assert.equal(
+    summary.logicalQuestionLeaseAuthorizationReason,
+    "logical-question-current"
+  );
+  assert.equal(
+    summary.manualCorrectionOwnership,
+    "canonical-logical-question"
+  );
   assert.deepEqual(
     (summary.taskBoundary as Record<string, unknown>).sourceTurnIds,
     ["turn_1", "turn_2"]

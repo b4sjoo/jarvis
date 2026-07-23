@@ -1,4 +1,5 @@
 import type { ActiveMeetingTask } from "./active-meeting-task";
+import type { LogicalQuestionUnit } from "./logical-question-unit.js";
 import type {
   ActiveInterviewParent,
   AdvisorSuggestion,
@@ -70,28 +71,47 @@ export type ManualCorrectionTargetResolution =
       task: ActiveMeetingTask;
       lineage?: QuestionInstanceLineage;
       targetSource: "active-task" | "current-question";
+      logicalQuestionUnit?: LogicalQuestionUnit;
     }
   | {
       source: "provisional-question";
       lineage: QuestionInstanceLineage;
+      logicalQuestionUnit?: LogicalQuestionUnit;
     }
   | { source: "none"; reason: string };
 
 export function resolveManualCorrectionTarget(input: {
   activeTask?: ActiveMeetingTask;
   currentQuestionLineage?: QuestionInstanceLineage;
+  canonicalLogicalQuestion?: {
+    logicalQuestionUnit: LogicalQuestionUnit;
+    lineage: QuestionInstanceLineage;
+  };
   latestSuggestion: AdvisorSuggestion | null | undefined;
   sessionId: string;
   runtimeEpoch: number;
 }): ManualCorrectionTargetResolution {
-  const currentLineage = isCurrentQuestionLineage({
-    lineage: input.currentQuestionLineage,
-    suggestion: input.latestSuggestion,
-    sessionId: input.sessionId,
-    runtimeEpoch: input.runtimeEpoch,
-  })
-    ? input.currentQuestionLineage
-    : undefined;
+  const canonicalLogicalQuestion =
+    input.canonicalLogicalQuestion?.logicalQuestionUnit.sessionId ===
+      input.sessionId &&
+    input.canonicalLogicalQuestion.logicalQuestionUnit.runtimeEpoch ===
+      input.runtimeEpoch &&
+    input.canonicalLogicalQuestion.lineage.questionInstanceId ===
+      `lqu:${input.canonicalLogicalQuestion.logicalQuestionUnit.id}` &&
+    input.canonicalLogicalQuestion.lineage.triggerTurnId ===
+      input.canonicalLogicalQuestion.logicalQuestionUnit.currentTurnId
+      ? input.canonicalLogicalQuestion
+      : undefined;
+  const currentLineage =
+    canonicalLogicalQuestion?.lineage ??
+    (isCurrentQuestionLineage({
+      lineage: input.currentQuestionLineage,
+      suggestion: input.latestSuggestion,
+      sessionId: input.sessionId,
+      runtimeEpoch: input.runtimeEpoch,
+    })
+      ? input.currentQuestionLineage
+      : undefined);
 
   if (input.activeTask) {
     return {
@@ -99,6 +119,12 @@ export function resolveManualCorrectionTarget(input: {
       task: input.activeTask,
       lineage: currentLineage,
       targetSource: currentLineage ? "current-question" : "active-task",
+      ...(canonicalLogicalQuestion
+        ? {
+            logicalQuestionUnit:
+              canonicalLogicalQuestion.logicalQuestionUnit,
+          }
+        : {}),
     };
   }
 
@@ -106,6 +132,12 @@ export function resolveManualCorrectionTarget(input: {
     return {
       source: "provisional-question",
       lineage: currentLineage,
+      ...(canonicalLogicalQuestion
+        ? {
+            logicalQuestionUnit:
+              canonicalLogicalQuestion.logicalQuestionUnit,
+          }
+        : {}),
     };
   }
 
