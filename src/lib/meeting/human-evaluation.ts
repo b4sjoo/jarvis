@@ -325,6 +325,20 @@ export function upsertQuestionHumanEvaluation(
     manualQuestionTypeCorrectionNextParentId:
       patch.manualQuestionTypeCorrectionNextParentId ??
       existing?.manualQuestionTypeCorrectionNextParentId,
+    manualTermCorrectionId:
+      patch.manualTermCorrectionId ?? existing?.manualTermCorrectionId,
+    manualTermCorrectionTraceId:
+      patch.manualTermCorrectionTraceId ??
+      existing?.manualTermCorrectionTraceId,
+    manualTermCorrectionRegenerationTraceId:
+      patch.manualTermCorrectionRegenerationTraceId ??
+      existing?.manualTermCorrectionRegenerationTraceId,
+    manualTermCorrectionDisposition:
+      patch.manualTermCorrectionDisposition ??
+      existing?.manualTermCorrectionDisposition,
+    manualTermCorrectionReason:
+      patch.manualTermCorrectionReason ??
+      existing?.manualTermCorrectionReason,
     company: patch.company ?? existing?.company ?? identity.company,
     correctedCompany:
       patch.correctedCompany ?? existing?.correctedCompany,
@@ -700,6 +714,26 @@ function normalizeQuestionHumanEvaluation(
     manualQuestionTypeCorrectionNextParentId: readOptionalString(
       candidate.manualQuestionTypeCorrectionNextParentId
     ),
+    manualTermCorrectionId: readOptionalString(
+      candidate.manualTermCorrectionId
+    ),
+    manualTermCorrectionTraceId: readOptionalString(
+      candidate.manualTermCorrectionTraceId
+    ),
+    manualTermCorrectionRegenerationTraceId: readOptionalString(
+      candidate.manualTermCorrectionRegenerationTraceId
+    ),
+    manualTermCorrectionDisposition:
+      candidate.manualTermCorrectionDisposition ===
+        "current-question-overlay" ||
+      candidate.manualTermCorrectionDisposition === "future-speech-bias" ||
+      candidate.manualTermCorrectionDisposition === "stale-rejected"
+        ? candidate.manualTermCorrectionDisposition
+        : undefined,
+    manualTermCorrectionReason:
+      candidate.manualTermCorrectionReason === "manual-term-correction"
+        ? candidate.manualTermCorrectionReason
+        : undefined,
     company: readOptionalString(candidate.company),
     correctedCompany: readOptionalString(candidate.correctedCompany),
     relation: readOptionalString(candidate.relation),

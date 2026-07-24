@@ -423,14 +423,27 @@ function MeetingFocusControlsWindow({
                   <Badge
                     key={item.id}
                     variant="outline"
-                    className="max-w-full rounded-sm px-1.5 py-0 text-[10px]"
-                    title={item.input}
+                    className="flex max-w-full items-center gap-1 rounded-sm px-1.5 py-0 text-[10px]"
+                    title={
+                      item.activeQuestion?.error
+                        ? `${item.input}: ${item.activeQuestion.error}`
+                        : item.input
+                    }
                   >
+                    {item.activeQuestion?.regenerationStatus === "running" ? (
+                      <Loader2Icon className="h-2.5 w-2.5 shrink-0 animate-spin" />
+                    ) : null}
                     <span className="truncate">
                       {item.from && item.to
                         ? `${item.from} -> ${item.to}`
                         : item.term || item.to}
                       {item.appliedCount ? ` x${item.appliedCount}` : ""}
+                      {item.activeQuestion
+                        ? ` · ${formatFocusTermCorrectionStatus(
+                            item.activeQuestion.disposition,
+                            item.activeQuestion.regenerationStatus
+                          )}`
+                        : ""}
                     </span>
                   </Badge>
                 ))}
@@ -441,6 +454,23 @@ function MeetingFocusControlsWindow({
       </div>
     </div>
   );
+}
+
+function formatFocusTermCorrectionStatus(
+  disposition: NonNullable<
+    MeetingFocusSnapshot["speechCorrections"][number]["activeQuestion"]
+  >["disposition"],
+  regenerationStatus: NonNullable<
+    MeetingFocusSnapshot["speechCorrections"][number]["activeQuestion"]
+  >["regenerationStatus"]
+) {
+  if (disposition === "future-speech-bias") return "bias";
+  if (disposition === "stale-rejected") return "stale";
+  if (regenerationStatus === "running") return "updating";
+  if (regenerationStatus === "succeeded") return "updated";
+  if (regenerationStatus === "failed") return "failed";
+  if (regenerationStatus === "cancelled") return "cancelled";
+  return "accepted";
 }
 
 function FocusClarifyingActionButtons({

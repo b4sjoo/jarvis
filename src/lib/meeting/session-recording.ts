@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { TYPE_PROVIDER } from "@/types";
 import type { MemoryRejectSummary, MemoryRetrievalResult } from "@/lib/memory";
 import {
+  ActiveQuestionTermCorrection,
   ActiveScreenTask,
   InterviewSessionBrief,
   InterviewSessionContext,
@@ -45,7 +46,7 @@ import {
 import { serializeMeetingTraceExport } from "./trace.js";
 
 const SESSION_RECORDING_SCHEMA_VERSION = 1;
-const SESSION_TRACE_SUMMARY_SCHEMA_VERSION = 15;
+const SESSION_TRACE_SUMMARY_SCHEMA_VERSION = 16;
 const SESSION_TRACE_INDEX_SCHEMA_VERSION = 1;
 
 interface SessionRecordingStartOptions {
@@ -96,6 +97,7 @@ interface SessionRecordingEvent {
     | "task-snapshot"
     | "active-meeting-task-snapshot"
     | "manual-question-type-correction"
+    | "active-question-term-correction"
     | "semantic-taxonomy-decision"
     | "semantic-embedding-runtime"
     | "interviewer-intent-semantic-decision"
@@ -240,6 +242,16 @@ export interface SessionCompactTraceSummary {
   advisorOutputCommitAuthorized?: boolean;
   visibleAnswerChanged?: boolean;
   manualQuestionTypeCorrectionId?: string;
+  manualTermCorrectionId?: string;
+  manualTermCorrectionDisposition?: string;
+  manualTermCorrectionRegenerationStatus?: string;
+  manualTermCorrectionLogicalQuestionUnitId?: string;
+  manualTermCorrectionLogicalQuestionUnitRevision?: number;
+  manualTermCorrectionCorrectedLogicalQuestionUnitRevision?: number;
+  manualTermCorrectionRevision?: number;
+  manualTermCorrectionRegenerationTraceId?: string;
+  manualTermCorrectionSettlementId?: string;
+  manualTermCorrectionLatencyMs?: number;
   taskBoundary?: {
     logicalQuestionUnitId?: string;
     candidateId?: string;
@@ -1267,6 +1279,64 @@ export class SessionRecordingManager {
       [path],
       correction.correctionTraceId,
       correction.taskId
+    );
+  }
+
+  recordActiveQuestionTermCorrection(input: {
+    correction: ActiveQuestionTermCorrection;
+    taskId?: string;
+  }) {
+    const session = this.getWritableSession({
+      traceId: input.correction.correctionTraceId,
+    });
+    if (!session) return;
+
+    const path = input.taskId
+      ? `tasks/${sanitizeFilePart(
+          input.taskId
+        )}/active-question-term-corrections.jsonl`
+      : "runtime/active-question-term-corrections.jsonl";
+    if (input.taskId) {
+      session.recordedTaskIds.add(input.taskId);
+    }
+    session.recordedTraceIds.add(input.correction.correctionTraceId);
+    if (input.correction.regenerationTraceId) {
+      session.recordedTraceIds.add(input.correction.regenerationTraceId);
+    }
+    this.enqueue(session, () =>
+      this.appendJsonl(session, path, input.correction)
+    );
+    this.recordEvent(
+      "active-question-term-correction",
+      {
+        manualTermCorrectionId: input.correction.correctionId,
+        manualTermCorrectionDisposition: input.correction.disposition,
+        manualTermCorrectionNormalizedTerm:
+          input.correction.normalizedTerm,
+        manualTermCorrectionReplacedText:
+          input.correction.replacedText,
+        logicalQuestionUnitId:
+          input.correction.logicalQuestionUnitId,
+        logicalQuestionUnitRevision:
+          input.correction.logicalQuestionUnitRevision,
+        correctedLogicalQuestionUnitRevision:
+          input.correction.correctedLogicalQuestionUnitRevision,
+        sourceTurnIds: input.correction.sourceTurnIds,
+        manualCorrectionRevision:
+          input.correction.manualCorrectionRevision,
+        correctionTraceId: input.correction.correctionTraceId,
+        regenerationTraceId:
+          input.correction.regenerationTraceId,
+        settlementId: input.correction.settlementId,
+        regenerationStatus:
+          input.correction.regenerationStatus,
+        correctionToAnswerLatencyMs:
+          input.correction.correctionToAnswerLatencyMs,
+        error: input.correction.error,
+      },
+      [path],
+      input.correction.correctionTraceId,
+      input.taskId
     );
   }
 
@@ -2836,6 +2906,48 @@ function buildCompactTraceSummary({
     manualQuestionTypeCorrectionId: readFirstString(
       metadataSources,
       "manualQuestionTypeCorrectionId"
+    ),
+    manualTermCorrectionId: readFirstString(
+      metadataSources,
+      "manualTermCorrectionId"
+    ),
+    manualTermCorrectionDisposition: readFirstString(
+      metadataSources,
+      "manualTermCorrectionDisposition"
+    ),
+    manualTermCorrectionRegenerationStatus: readFirstString(
+      metadataSources,
+      "manualTermCorrectionRegenerationStatus"
+    ),
+    manualTermCorrectionLogicalQuestionUnitId: readFirstString(
+      metadataSources,
+      "manualTermCorrectionLogicalQuestionUnitId"
+    ),
+    manualTermCorrectionLogicalQuestionUnitRevision:
+      readFirstNumberFromMetadata(
+        metadataSources,
+        "manualTermCorrectionLogicalQuestionUnitRevision"
+      ),
+    manualTermCorrectionCorrectedLogicalQuestionUnitRevision:
+      readFirstNumberFromMetadata(
+        metadataSources,
+        "manualTermCorrectionCorrectedLogicalQuestionUnitRevision"
+      ),
+    manualTermCorrectionRevision: readFirstNumberFromMetadata(
+      metadataSources,
+      "manualTermCorrectionRevision"
+    ),
+    manualTermCorrectionRegenerationTraceId: readFirstString(
+      metadataSources,
+      "manualTermCorrectionRegenerationTraceId"
+    ),
+    manualTermCorrectionSettlementId: readFirstString(
+      metadataSources,
+      "manualTermCorrectionSettlementId"
+    ),
+    manualTermCorrectionLatencyMs: readFirstNumberFromMetadata(
+      metadataSources,
+      "manualTermCorrectionLatencyMs"
     ),
     taskBoundary: {
       logicalQuestionUnitId: readFirstString(

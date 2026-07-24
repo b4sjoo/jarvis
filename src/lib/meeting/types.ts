@@ -86,6 +86,39 @@ export interface SpeechBiasContext {
   prompt: string;
 }
 
+export type ActiveQuestionTermCorrectionDisposition =
+  | "current-question-overlay"
+  | "future-speech-bias"
+  | "stale-rejected";
+
+export type ActiveQuestionTermCorrectionRegenerationStatus =
+  | "idle"
+  | "running"
+  | "succeeded"
+  | "failed"
+  | "cancelled";
+
+export interface ActiveQuestionTermCorrection {
+  correctionId: string;
+  rawText: string;
+  normalizedTerm: string;
+  replacedText?: string;
+  logicalQuestionUnitId?: string;
+  logicalQuestionUnitRevision?: number;
+  correctedLogicalQuestionUnitRevision?: number;
+  sourceTurnIds: string[];
+  manualCorrectionRevision: number;
+  disposition: ActiveQuestionTermCorrectionDisposition;
+  correctionTraceId: string;
+  regenerationTraceId?: string;
+  settlementId?: string;
+  regenerationStatus: ActiveQuestionTermCorrectionRegenerationStatus;
+  requestedAt: number;
+  completedAt?: number;
+  correctionToAnswerLatencyMs?: number;
+  error?: string;
+}
+
 export interface SpeechCorrection {
   id: string;
   input: string;
@@ -94,6 +127,7 @@ export interface SpeechCorrection {
   to?: string;
   createdAt: number;
   appliedCount: number;
+  activeQuestion?: ActiveQuestionTermCorrection;
 }
 
 export interface SpeechNormalizationResult {
@@ -1336,6 +1370,11 @@ export interface QuestionHumanEvaluation {
   manualQuestionTypeCorrectionBoundaryReason?: string;
   manualQuestionTypeCorrectionPreviousParentId?: string;
   manualQuestionTypeCorrectionNextParentId?: string;
+  manualTermCorrectionId?: string;
+  manualTermCorrectionTraceId?: string;
+  manualTermCorrectionRegenerationTraceId?: string;
+  manualTermCorrectionDisposition?: ActiveQuestionTermCorrectionDisposition;
+  manualTermCorrectionReason?: "manual-term-correction";
   company?: string;
   correctedCompany?: string;
   relation?: string;

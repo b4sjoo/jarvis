@@ -32,7 +32,13 @@ export type MeetingFocusSectionsSnapshot = {
 
 export type MeetingFocusSpeechCorrectionSnapshot = Pick<
   SpeechCorrection,
-  "id" | "input" | "from" | "to" | "term" | "appliedCount"
+  | "id"
+  | "input"
+  | "from"
+  | "to"
+  | "term"
+  | "appliedCount"
+  | "activeQuestion"
 >;
 
 export type MeetingFocusActiveTaskSnapshot = ReturnType<

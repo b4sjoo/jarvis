@@ -12,6 +12,7 @@ export * from "./interviewer-intent-keyword-evidence";
 export * from "./advisor-trigger-job";
 export * from "./adjacent-question-constraint";
 export * from "./active-meeting-task";
+export * from "./active-question-term-correction";
 export * from "./clarifying-options";
 export * from "./coding-artifact";
 export * from "./capture-lifecycle";

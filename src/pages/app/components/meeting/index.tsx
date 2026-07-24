@@ -773,6 +773,7 @@ export const MeetingAssistant = ({
         to: item.to,
         term: item.term,
         appliedCount: item.appliedCount,
+        activeQuestion: item.activeQuestion,
       })),
     }),
     [
@@ -1677,15 +1678,29 @@ export const MeetingAssistant = ({
                       <Badge
                         key={correction.id}
                         variant="outline"
-                        className="max-w-full rounded-sm px-1.5 py-0 text-[10px]"
-                        title={correction.input}
+                        className="flex max-w-full items-center gap-1 rounded-sm px-1.5 py-0 text-[10px]"
+                        title={
+                          correction.activeQuestion?.error
+                            ? `${correction.input}: ${correction.activeQuestion.error}`
+                            : correction.input
+                        }
                       >
+                        {correction.activeQuestion?.regenerationStatus ===
+                        "running" ? (
+                          <Loader2Icon className="h-2.5 w-2.5 shrink-0 animate-spin" />
+                        ) : null}
                         <span className="truncate">
                           {correction.from && correction.to
                             ? `${correction.from} -> ${correction.to}`
                             : correction.term || correction.to}
                           {correction.appliedCount
                             ? ` x${correction.appliedCount}`
+                            : ""}
+                          {correction.activeQuestion
+                            ? ` · ${formatTermCorrectionStatus(
+                                correction.activeQuestion.disposition,
+                                correction.activeQuestion.regenerationStatus
+                              )}`
                             : ""}
                         </span>
                       </Badge>
@@ -2898,15 +2913,28 @@ const SpeechCorrectionControl = ({
             <Badge
               key={correction.id}
               variant="outline"
-              className="max-w-full rounded-sm px-1.5 py-0 text-[10px]"
-              title={correction.input}
+              className="flex max-w-full items-center gap-1 rounded-sm px-1.5 py-0 text-[10px]"
+              title={
+                correction.activeQuestion?.error
+                  ? `${correction.input}: ${correction.activeQuestion.error}`
+                  : correction.input
+              }
             >
+              {correction.activeQuestion?.regenerationStatus === "running" ? (
+                <Loader2Icon className="h-2.5 w-2.5 shrink-0 animate-spin" />
+              ) : null}
               <span className="truncate">
                 {correction.from && correction.to
                   ? `${correction.from} -> ${correction.to}`
                   : correction.term || correction.to}
                 {correction.appliedCount
                   ? ` x${correction.appliedCount}`
+                  : ""}
+                {correction.activeQuestion
+                  ? ` · ${formatTermCorrectionStatus(
+                      correction.activeQuestion.disposition,
+                      correction.activeQuestion.regenerationStatus
+                    )}`
                   : ""}
               </span>
             </Badge>
@@ -2916,6 +2944,21 @@ const SpeechCorrectionControl = ({
     </>
   );
 };
+
+function formatTermCorrectionStatus(
+  disposition: NonNullable<SpeechCorrection["activeQuestion"]>["disposition"],
+  regenerationStatus: NonNullable<
+    SpeechCorrection["activeQuestion"]
+  >["regenerationStatus"]
+) {
+  if (disposition === "future-speech-bias") return "bias";
+  if (disposition === "stale-rejected") return "stale";
+  if (regenerationStatus === "running") return "updating";
+  if (regenerationStatus === "succeeded") return "updated";
+  if (regenerationStatus === "failed") return "failed";
+  if (regenerationStatus === "cancelled") return "cancelled";
+  return "accepted";
+}
 
 const ClarifyingActionButtons = ({
   isBusy,

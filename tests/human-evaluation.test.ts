@@ -638,6 +638,49 @@ test("stores manual runtime type correction as HITL classification feedback", ()
   ]);
 });
 
+test("joins a manual term correction to the corrected question", () => {
+  const evaluations = upsertQuestionHumanEvaluation(
+    [],
+    {
+      sessionId: "session_1",
+      questionId: "lqu:logical_question_1",
+      traceId: "term_correction_trace",
+      traceKind: "voice",
+      taskId: "task_1",
+      parentTaskId: "parent_1",
+      taskSource: "voice",
+      questionType: "ai-ml-system-design",
+    },
+    {
+      traceIds: ["term_regeneration_trace"],
+      manualTermCorrectionId: "term_correction_1",
+      manualTermCorrectionTraceId: "term_correction_trace",
+      manualTermCorrectionRegenerationTraceId:
+        "term_regeneration_trace",
+      manualTermCorrectionDisposition: "current-question-overlay",
+      manualTermCorrectionReason: "manual-term-correction",
+    }
+  );
+
+  assert.equal(evaluations.length, 1);
+  assert.deepEqual(evaluations[0].traceIds, [
+    "term_correction_trace",
+    "term_regeneration_trace",
+  ]);
+  assert.equal(
+    evaluations[0].manualTermCorrectionId,
+    "term_correction_1"
+  );
+  assert.equal(
+    evaluations[0].manualTermCorrectionDisposition,
+    "current-question-overlay"
+  );
+  assert.equal(
+    evaluations[0].manualTermCorrectionReason,
+    "manual-term-correction"
+  );
+});
+
 test("labels an authorized advisor turn as a false positive when advice was not expected", () => {
   const evaluation = buildAdvisorIntentEvaluationFromTrace({
     trace: {

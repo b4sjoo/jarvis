@@ -5,6 +5,7 @@ import {
   type SessionRecordingInvoke,
 } from "../src/lib/meeting/session-recording.js";
 import type {
+  ActiveQuestionTermCorrection,
   MeetingAssistantSettings,
   MeetingTrace,
 } from "../src/lib/meeting/types.js";
@@ -757,7 +758,7 @@ test("compact trace summaries preserve task boundary and cross-domain evidence",
   );
   assert.ok(summaryWrite);
   const summary = parsePayload(summaryWrite);
-  assert.equal(summary.version, 15);
+  assert.equal(summary.version, 16);
   assert.equal(summary.taskRelation, "new-parent");
   assert.equal(summary.logicalQuestionUnitRevision, 3);
   assert.deepEqual(summary.logicalQuestionSourceTurnIds, ["turn_1", "turn_2"]);
@@ -863,7 +864,7 @@ test("compact trace summaries preserve hard memory invalidation evidence", async
   );
   assert.ok(summaryWrite);
   const summary = parsePayload(summaryWrite);
-  assert.equal(summary.version, 15);
+  assert.equal(summary.version, 16);
   const memory = summary.memory as Record<string, unknown>;
   assert.equal(memory.authorityRevision, 2);
   assert.equal(memory.invalidationKind, "hard");
@@ -1088,7 +1089,7 @@ test("records compact current-question settlement and execution-plan evidence", 
   assert.equal(serializedPlan.includes("taskSnapshot"), false);
   assert.equal(serializedPlan.includes("variables"), false);
   const summary = parsePayload(summaryWrite);
-  assert.equal(summary.version, 15);
+  assert.equal(summary.version, 16);
   assert.equal(
     (
       summary.currentQuestionSettlement as Record<string, unknown>
@@ -1099,6 +1100,100 @@ test("records compact current-question settlement and execution-plan evidence", 
     (summary.settledExecutionPlan as Record<string, unknown>).modelRoute,
     "main"
   );
+
+  await manager.stop("test-complete");
+});
+
+test("records a current-question term correction without copying provider state", async () => {
+  const native = new ControlledRecordingInvoke();
+  const manager = new SessionRecordingManager(undefined, native.invoke);
+  await manager.start(START_OPTIONS);
+  await settle();
+
+  const correction: ActiveQuestionTermCorrection = {
+    correctionId: "term_correction_hnsw",
+    rawText: "HNSW",
+    normalizedTerm: "HNSW",
+    replacedText: "H and SW",
+    logicalQuestionUnitId: "logical_question_hnsw",
+    logicalQuestionUnitRevision: 2,
+    correctedLogicalQuestionUnitRevision: 3,
+    sourceTurnIds: ["turn_hnsw"],
+    manualCorrectionRevision: 4,
+    disposition: "current-question-overlay",
+    correctionTraceId: "trace_term_correction",
+    regenerationTraceId: "trace_term_regeneration",
+    settlementId: "settlement_term_correction",
+    regenerationStatus: "succeeded",
+    requestedAt: 100,
+    completedAt: 350,
+    correctionToAnswerLatencyMs: 250,
+  };
+  manager.recordActiveQuestionTermCorrection({
+    correction,
+    taskId: "task_hnsw",
+  });
+  manager.recordTrace(
+    buildCompletedTrace("trace_term_correction", Date.now(), {
+      manualTermCorrectionId: correction.correctionId,
+      manualTermCorrectionDisposition: correction.disposition,
+      manualTermCorrectionLogicalQuestionUnitId:
+        correction.logicalQuestionUnitId,
+      manualTermCorrectionLogicalQuestionUnitRevision:
+        correction.logicalQuestionUnitRevision,
+      manualTermCorrectionCorrectedLogicalQuestionUnitRevision:
+        correction.correctedLogicalQuestionUnitRevision,
+      manualTermCorrectionRevision:
+        correction.manualCorrectionRevision,
+      manualTermCorrectionRegenerationTraceId:
+        correction.regenerationTraceId,
+      manualTermCorrectionSettlementId: correction.settlementId,
+      manualTermCorrectionRegenerationStatus:
+        correction.regenerationStatus,
+      manualTermCorrectionLatencyMs:
+        correction.correctionToAnswerLatencyMs,
+    }),
+    "manual"
+  );
+  await settle();
+
+  const correctionWrite = native.calls.find(
+    (call) =>
+      call.command === "write_meeting_session_recording_text" &&
+      stringArg(call, "relativePath") ===
+        "tasks/task_hnsw/active-question-term-corrections.jsonl"
+  );
+  const summaryWrite = native.calls.find(
+    (call) =>
+      call.command === "write_meeting_session_recording_text" &&
+      stringArg(call, "relativePath") ===
+        "traces/trace_term_correction/summary.json"
+  );
+  assert.ok(correctionWrite);
+  assert.ok(summaryWrite);
+  assert.equal(
+    stringArg(correctionWrite, "payload").includes("H and SW"),
+    true
+  );
+  assert.equal(
+    stringArg(correctionWrite, "payload").includes("provider"),
+    false
+  );
+  const summary = parsePayload(summaryWrite);
+  assert.equal(summary.version, 16);
+  assert.equal(
+    summary.manualTermCorrectionId,
+    "term_correction_hnsw"
+  );
+  assert.equal(
+    summary.manualTermCorrectionDisposition,
+    "current-question-overlay"
+  );
+  assert.equal(
+    summary.manualTermCorrectionRegenerationStatus,
+    "succeeded"
+  );
+  assert.equal(summary.manualTermCorrectionLatencyMs, 250);
 
   await manager.stop("test-complete");
 });

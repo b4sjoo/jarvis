@@ -1,6 +1,9 @@
 import type { AdvisorTurnIntentDecision } from "./advisor-turn-intent.js";
 import { createMeetingId } from "./context-manager.js";
-import type { TranscriptTurn } from "./types.js";
+import type {
+  ActiveQuestionTermCorrection,
+  TranscriptTurn,
+} from "./types.js";
 import type { PendingInterviewSectionHint } from "./interview-section-transition.js";
 import {
   composePrimaryAskProjection,
@@ -39,6 +42,7 @@ export interface LogicalQuestionUnit {
   truncated: boolean;
   sectionHint?: PendingInterviewSectionHint;
   primaryAskProjection?: PrimaryAskProjection;
+  termCorrectionOverlays?: ActiveQuestionTermCorrection[];
 }
 
 export interface ComposeLogicalQuestionUnitInput {

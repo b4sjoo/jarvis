@@ -37,6 +37,7 @@ import {
   formatInterviewerIntentKeywordEvidenceForTrace,
   formatSemanticInterviewerIntentForTrace,
   ActiveMeetingTask,
+  ActiveQuestionTermCorrection,
   clearActiveMeetingTaskProjection,
   AnswerSufficiencyDecision,
   ActiveInterviewParent,
@@ -114,6 +115,8 @@ import {
   buildAnswerSufficiencySemanticText,
   buildDiagramOverlayEvalTraceMetadata,
   buildCurrentTaskDiagramDomainContext,
+  applyActiveQuestionTermCorrection,
+  authorizeActiveQuestionTermCorrection,
   buildInterviewSessionBriefMemoryHint,
   buildInterviewSessionMemoryHint,
   buildWhiteboardEvalTraceMetadata,
@@ -146,6 +149,7 @@ import {
   parseNativeAudioSegmentDroppedEvent,
   buildMemoryEvaluationTraceMetadata,
   formatMeetingAnswerTraceMetadata,
+  formatActiveQuestionTermCorrectionForTrace,
   formatAnswerSufficiencyDecisionForTrace,
   parseMeetingAnswer,
   parseMeetingTraceMetrics,
@@ -171,6 +175,7 @@ import {
   formatSpeechBiasPromptForTrace,
   normalizeTranscriptWithSpeechBias,
   parseEmergencySpeechCorrection,
+  hasAppliedTermCorrection,
   serializeMeetingTraceExport,
   serializeMeetingTraceMetrics,
   inferTrustedProgrammingLanguage,
@@ -13169,8 +13174,8 @@ export function useMeetingAssistant() {
   const submitSpeechCorrection = useCallback(
     async (input: string) => {
       flushPendingSentenceCompletion("emergency-correction");
-      const correction = parseEmergencySpeechCorrection(input);
-      if (!correction) {
+      const parsedCorrection = parseEmergencySpeechCorrection(input);
+      if (!parsedCorrection) {
         setState((previous) => ({
           ...previous,
           error: "Enter a short correction, for example: RAG not rec.",
@@ -13178,31 +13183,290 @@ export function useMeetingAssistant() {
         return;
       }
 
-      const trace = traceStoreRef.current.startTrace("voice", {
-        source: "emergency-correction",
-        correctionInputChars: input.trim().length,
-      });
+      const contextState = contextManagerRef.current.getState();
+      const latestSuggestionUsesScreen = Boolean(
+        state.latestSuggestion?.basedOnObservationIds.length
+      );
+      const targetLogicalQuestionUnit =
+        resolveResponseActionLogicalQuestionUnit({
+          currentLogicalQuestionUnit: logicalQuestionUnitRef.current,
+          meetingContext: contextState,
+          runtimeEpoch: runtimeEpochRef.current,
+          preferScreen: latestSuggestionUsesScreen,
+        });
+      const trace = traceStoreRef.current.startTrace(
+        latestSuggestionUsesScreen ? "screen" : "voice",
+        {
+          source: "emergency-correction",
+          correctionInputChars: input.trim().length,
+          correctionTargetDisposition: targetLogicalQuestionUnit
+            ? "current-question-overlay"
+            : "future-speech-bias",
+          correctionTargetLogicalQuestionUnitId:
+            targetLogicalQuestionUnit?.id,
+          correctionTargetLogicalQuestionUnitRevision:
+            targetLogicalQuestionUnit?.revision,
+          ...getActiveMeetingTaskTraceMetadata(
+            contextState.activeMeetingTask
+          ),
+        }
+      );
       traceStoreRef.current.recordInput(
         trace.id,
         "emergency speech correction",
-        correction.input,
+        parsedCorrection.input,
         {
-          from: correction.from,
-          to: correction.to,
-          term: correction.term,
+          from: parsedCorrection.from,
+          to: parsedCorrection.to,
+          term: parsedCorrection.term,
         }
       );
 
-      const nextCorrections = [
-        ...speechCorrectionsRef.current.filter(
-          (candidate) => candidate.input !== correction.input
-        ),
-        correction,
-      ].slice(-12);
+      if (
+        targetLogicalQuestionUnit &&
+        hasAppliedTermCorrection(
+          targetLogicalQuestionUnit,
+          parsedCorrection
+        )
+      ) {
+        traceStoreRef.current.updateMetadata(trace.id, {
+          manualTermCorrectionId: parsedCorrection.id,
+          manualTermCorrectionDisposition: "current-question-overlay",
+          manualTermCorrectionDuplicateSuppressed: true,
+          manualTermCorrectionLogicalQuestionUnitId:
+            targetLogicalQuestionUnit.id,
+          manualTermCorrectionLogicalQuestionUnitRevision:
+            targetLogicalQuestionUnit.revision,
+        });
+        traceStoreRef.current.recordOutput(
+          trace.id,
+          "duplicate correction suppressed",
+          "The current question already contains this manual term correction.",
+          {
+            logicalQuestionUnitId: targetLogicalQuestionUnit.id,
+            logicalQuestionUnitRevision:
+              targetLogicalQuestionUnit.revision,
+          }
+        );
+        traceStoreRef.current.finishTrace(trace.id, "success");
+        setState((previous) => ({ ...previous, error: null }));
+        return;
+      }
 
-      const contextState = contextManagerRef.current.getState();
-      const latestTurn =
-        contextState.transcriptTurns[contextState.transcriptTurns.length - 1];
+      const installCorrection = (correction: SpeechCorrection) => {
+        const nextCorrections = [
+          ...speechCorrectionsRef.current.filter(
+            (candidate) =>
+              candidate.id !== correction.id &&
+              candidate.input !== correction.input
+          ),
+          correction,
+        ].slice(-12);
+        speechCorrectionsRef.current = nextCorrections;
+        setState((previous) => ({
+          ...previous,
+          error: null,
+          speechCorrections: nextCorrections,
+          currentQuestionLineage: currentQuestionLineageRef.current,
+        }));
+        return nextCorrections;
+      };
+      const replaceInstalledCorrection = (
+        correction: SpeechCorrection
+      ) => {
+        const nextCorrections = speechCorrectionsRef.current.map(
+          (candidate) =>
+            candidate.id === correction.id ? correction : candidate
+        );
+        speechCorrectionsRef.current = nextCorrections;
+        setState((previous) => ({
+          ...previous,
+          error: correction.activeQuestion?.error ?? null,
+          speechCorrections: nextCorrections,
+          currentQuestionLineage: currentQuestionLineageRef.current,
+        }));
+      };
+      const recordQuestionEvaluation = (
+        correction: ActiveQuestionTermCorrection,
+        regenerationTraceId?: string
+      ) => {
+        const activeTask =
+          contextManagerRef.current.getState().activeMeetingTask;
+        const canonicalType = normalizeCanonicalQuestionType(
+          activeTask?.parent.questionType
+        );
+        setState((previous) => {
+          const questionEvaluations = upsertQuestionHumanEvaluation(
+            previous.questionEvaluations,
+            {
+              sessionId:
+                previous.sessionRecording.sessionId ??
+                contextState.sessionId,
+              questionId: `lqu:${correction.logicalQuestionUnitId}`,
+              traceId: trace.id,
+              traceKind: trace.kind,
+              taskId: activeTask?.id,
+              parentTaskId: activeTask?.parent.id,
+              childTaskId: activeTask?.child?.id,
+              taskSource: activeTask?.source,
+              questionType: canonicalType
+                ? toHumanEvalQuestionType(canonicalType)
+                : undefined,
+              relation: "manual-term-correction",
+            },
+            {
+              questionId: `lqu:${correction.logicalQuestionUnitId}`,
+              traceIds: [
+                trace.id,
+                ...(regenerationTraceId
+                  ? [regenerationTraceId]
+                  : []),
+              ],
+              manualTermCorrectionId: correction.correctionId,
+              manualTermCorrectionTraceId: trace.id,
+              manualTermCorrectionRegenerationTraceId:
+                regenerationTraceId,
+              manualTermCorrectionDisposition:
+                correction.disposition,
+              manualTermCorrectionReason:
+                "manual-term-correction",
+            }
+          );
+          persistQuestionHumanEvaluations(questionEvaluations);
+          sessionRecordingManagerRef.current?.recordQuestionHumanEvaluations(
+            questionEvaluations
+          );
+          return {
+            ...previous,
+            questionEvaluations,
+          };
+        });
+      };
+
+      let correction = parsedCorrection;
+      const requestedAt = Date.now();
+      if (!targetLogicalQuestionUnit) {
+        const futureBias: ActiveQuestionTermCorrection = {
+          correctionId: correction.id,
+          rawText: correction.input,
+          normalizedTerm:
+            correction.to ?? correction.term ?? correction.input,
+          sourceTurnIds: [],
+          manualCorrectionRevision:
+            manualCorrectionRevisionRef.current,
+          disposition: "future-speech-bias",
+          correctionTraceId: trace.id,
+          regenerationStatus: "idle",
+          requestedAt,
+          completedAt: requestedAt,
+        };
+        correction = {
+          ...correction,
+          activeQuestion: futureBias,
+        };
+        const nextCorrections = installCorrection(correction);
+        const speechBias = buildSpeechBiasContext(
+          contextState,
+          nextCorrections
+        );
+        traceStoreRef.current.recordInput(
+          trace.id,
+          "speech bias context",
+          formatSpeechBiasPromptForTrace(speechBias),
+          {
+            termCount: speechBias.terms.length,
+            ruleCount: speechBias.correctionRules.length,
+            promptChars: speechBias.prompt.length,
+            terms: speechBias.terms.map((term) => term.term),
+          }
+        );
+        traceStoreRef.current.updateMetadata(
+          trace.id,
+          formatActiveQuestionTermCorrectionForTrace(futureBias)
+        );
+        traceStoreRef.current.recordOutput(
+          trace.id,
+          "correction stored",
+          "Stored as speech bias because there is no active question.",
+          {
+            manualTermCorrectionDisposition: "future-speech-bias",
+          }
+        );
+        sessionRecordingManagerRef.current?.recordActiveQuestionTermCorrection(
+          { correction: futureBias }
+        );
+        traceStoreRef.current.finishTrace(trace.id, "success");
+        return;
+      }
+
+      manualCorrectionRevisionRef.current += 1;
+      const application = applyActiveQuestionTermCorrection({
+        correction,
+        logicalQuestionUnit: targetLogicalQuestionUnit,
+        correctionTraceId: trace.id,
+        manualCorrectionRevision:
+          manualCorrectionRevisionRef.current,
+        now: requestedAt,
+      });
+      logicalQuestionUnitRef.current = application.logicalQuestionUnit;
+      const previousLineage = currentQuestionLineageRef.current;
+      const correctedLineage =
+        previousLineage?.questionInstanceId ===
+          `lqu:${targetLogicalQuestionUnit.id}` &&
+        previousLineage.sessionId === contextState.sessionId &&
+        previousLineage.runtimeEpoch === runtimeEpochRef.current
+          ? previousLineage
+          : createCanonicalLogicalQuestionLineage({
+              unit: application.logicalQuestionUnit,
+              traceId: trace.id,
+            });
+      currentQuestionLineageRef.current = correctedLineage;
+      const forceAdviseTarget = latestForceAdviseTargetRef.current;
+      if (
+        forceAdviseTarget?.logicalQuestionUnit.id ===
+        application.logicalQuestionUnit.id
+      ) {
+        latestForceAdviseTargetRef.current = {
+          ...forceAdviseTarget,
+          logicalQuestionUnit: application.logicalQuestionUnit,
+          logicalQuestionLease: createLogicalQuestionUnitLease(
+            application.logicalQuestionUnit
+          ),
+          questionLineage: correctedLineage,
+          presentation: {
+            ...forceAdviseTarget.presentation,
+            text: application.logicalQuestionUnit.normalizedText,
+            logicalQuestionUnitRevision:
+              application.logicalQuestionUnit.revision,
+          },
+        };
+      }
+
+      const repairTrace = traceStoreRef.current.startTrace(trace.kind, {
+        source: "emergency-correction-repair",
+        parentCorrectionTraceId: trace.id,
+        correctionRegenerationTriggered: true,
+        ...formatLogicalQuestionUnitForTrace(
+          application.logicalQuestionUnit
+        ),
+        ...formatActiveQuestionTermCorrectionForTrace({
+          ...application.transaction,
+          regenerationStatus: "running",
+        }),
+        ...getActiveMeetingTaskTraceMetadata(
+          contextState.activeMeetingTask
+        ),
+      });
+      let activeCorrection: ActiveQuestionTermCorrection = {
+        ...application.transaction,
+        regenerationTraceId: repairTrace.id,
+        regenerationStatus: "running",
+      };
+      correction = {
+        ...correction,
+        activeQuestion: activeCorrection,
+      };
+      const nextCorrections = installCorrection(correction);
       const speechBias = buildSpeechBiasContext(contextState, nextCorrections);
       traceStoreRef.current.recordInput(
         trace.id,
@@ -13215,144 +13479,165 @@ export function useMeetingAssistant() {
           terms: speechBias.terms.map((term) => term.term),
         }
       );
-
-      let updatedCorrections = nextCorrections;
-      let didUpdateTranscript = false;
-      let nextContextState = contextState;
-
-      if (latestTurn) {
-        const normalized = normalizeTranscriptWithSpeechBias(
-          latestTurn.text,
-          speechBias
-        );
-        if (normalized.changed) {
-          contextManagerRef.current.updateTranscriptTurnText(
-            latestTurn.id,
-            normalized.text
-          );
-          didUpdateTranscript = true;
-          updatedCorrections = applySpeechCorrectionRuleCounts(
-            nextCorrections,
-            normalized.appliedRules
-          );
-          speechCorrectionsRef.current = updatedCorrections;
-          nextContextState = contextManagerRef.current.getState();
-          traceStoreRef.current.recordOutput(
-            trace.id,
-            "corrected latest transcript",
-            normalized.text,
-            {
-              turnId: latestTurn.id,
-              previousText: latestTurn.text,
-              appliedRules: normalized.appliedRules.map(
-                (rule) => `${rule.from}->${rule.to}`
-              ),
-            }
-          );
-        }
-      }
-
-      if (!didUpdateTranscript) {
-        speechCorrectionsRef.current = updatedCorrections;
-        traceStoreRef.current.recordOutput(
-          trace.id,
-          "correction stored",
-          "Stored as speech bias for future audio segments.",
-          {
-            latestTurnId: latestTurn?.id,
-          }
-        );
-      }
-
-      const semanticRepairDecision = decideEmergencyCorrectionRepair({
-        correction,
-        contextState: nextContextState,
-        latestTurnText: latestTurn?.text,
-        currentSuggestion: currentSuggestionText,
-      });
       traceStoreRef.current.updateMetadata(trace.id, {
-        correctionRegenerationReason: semanticRepairDecision.reason,
-        semanticCorrectionApplied: semanticRepairDecision.shouldRegenerate,
+        ...formatActiveQuestionTermCorrectionForTrace(
+          activeCorrection
+        ),
+        repairTraceId: repairTrace.id,
+        correctionRegenerationTriggered: true,
+        correctionRegenerationReason:
+          "manual-current-question-term-correction",
       });
       traceStoreRef.current.recordOutput(
         trace.id,
-        "semantic correction decision",
-        semanticRepairDecision.reason,
+        "corrected current logical question",
+        application.logicalQuestionUnit.normalizedText,
         {
-          shouldRegenerate: semanticRepairDecision.shouldRegenerate,
-          correctionTarget: correction.to ?? correction.term,
-          activeMeetingTaskId: nextContextState.activeMeetingTask?.id,
-          activeMeetingParentQuestionType:
-            nextContextState.activeMeetingTask?.parent.questionType,
+          originalTranscriptPreserved: true,
+          correctionOverlayApplied: true,
+          logicalQuestionUnitId: application.logicalQuestionUnit.id,
+          logicalQuestionUnitRevision:
+            application.logicalQuestionUnit.revision,
         }
       );
-
-      let repairTraceId: string | undefined;
-      if (didUpdateTranscript || semanticRepairDecision.shouldRegenerate) {
-        const repairTrace = traceStoreRef.current.startTrace("voice", {
-          source: "emergency-correction-repair",
+      traceStoreRef.current.recordInput(
+        repairTrace.id,
+        "emergency correction repair context",
+        [
+          `Correction: ${correction.input}`,
+          `Target: ${correction.to ?? correction.term ?? "-"}`,
+          `From: ${correction.from ?? "-"}`,
+          `Logical question: ${application.logicalQuestionUnit.normalizedText}`,
+        ].join("\n"),
+        {
           parentCorrectionTraceId: trace.id,
-          correctionRegenerationReason: semanticRepairDecision.reason,
-          semanticCorrectionApplied: semanticRepairDecision.shouldRegenerate,
-          correctedLatestTranscript: didUpdateTranscript,
-          activeMeetingTaskId: nextContextState.activeMeetingTask?.id,
-          activeMeetingParentQuestionType:
-            nextContextState.activeMeetingTask?.parent.questionType,
-        });
-        repairTraceId = repairTrace.id;
-        traceStoreRef.current.recordInput(
-          repairTrace.id,
-          "emergency correction repair context",
-          [
-            `Correction: ${correction.input}`,
-            `Target: ${correction.to ?? correction.term ?? "-"}`,
-            `From: ${correction.from ?? "-"}`,
-            `Reason: ${semanticRepairDecision.reason}`,
-          ].join("\n"),
-          {
-            parentCorrectionTraceId: trace.id,
-            correctionTarget: correction.to ?? correction.term,
-            correctionSource: correction.from,
-            correctedLatestTranscript: didUpdateTranscript,
-          }
-        );
-        traceStoreRef.current.updateMetadata(trace.id, {
-          repairTraceId,
-        });
-      }
+          correctionTarget: correction.to ?? correction.term,
+          correctionSource: correction.from,
+          originalTranscriptPreserved: true,
+        }
+      );
+      sessionRecordingManagerRef.current?.recordActiveQuestionTermCorrection({
+        correction: activeCorrection,
+        taskId: contextState.activeMeetingTask?.id,
+      });
+      recordQuestionEvaluation(activeCorrection, repairTrace.id);
 
-      setState((previous) => ({
-        ...previous,
-        error: null,
-        speechCorrections: updatedCorrections,
-        transcriptTurns: nextContextState.transcriptTurns,
-        interviewSessionContext: nextContextState.interviewSessionContext,
-        activeScreenTask: nextContextState.activeScreenTask,
-        activeInterviewTask: nextContextState.activeInterviewTask,
-        activeMeetingTask: nextContextState.activeMeetingTask,
-      }));
-
-      traceStoreRef.current.finishTrace(trace.id, "success");
-
-      if (didUpdateTranscript || semanticRepairDecision.shouldRegenerate) {
+      try {
         await runAdvisor({
           force: true,
-          mode: nextContextState.activeMeetingTask?.screen
+          mode: contextState.activeMeetingTask?.screen
             ? "screen-anchored"
             : "live",
-          currentSuggestion: currentSuggestionText,
-          traceId: repairTraceId,
+          traceId: repairTrace.id,
           advisorJobSource: "response-action",
           taskMutationAuthority: "preserve-parent",
-          questionLineage: resolveCurrentSuggestionQuestionLineage(),
+          questionLineage: correctedLineage,
+          logicalQuestionUnit: application.logicalQuestionUnit,
         });
+      } catch (error) {
+        const message =
+          error instanceof Error ? error.message : String(error);
+        if (
+          traceStoreRef.current
+            .getTraces()
+            .find((candidate) => candidate.id === repairTrace.id)
+            ?.status === "running"
+        ) {
+          traceStoreRef.current.finishTrace(
+            repairTrace.id,
+            "error",
+            error
+          );
+        }
+        activeCorrection = {
+          ...activeCorrection,
+          regenerationStatus: "failed",
+          completedAt: Date.now(),
+          error: message,
+        };
       }
+
+      const completedAt = Date.now();
+      const repairResult = traceStoreRef.current
+        .getTraces()
+        .find((candidate) => candidate.id === repairTrace.id);
+      const authorization = authorizeActiveQuestionTermCorrection({
+        transaction: activeCorrection,
+        currentLogicalQuestionUnit: logicalQuestionUnitRef.current,
+        currentSessionId:
+          contextManagerRef.current.getState().sessionId,
+        currentRuntimeEpoch: runtimeEpochRef.current,
+        currentManualCorrectionRevision:
+          manualCorrectionRevisionRef.current,
+      });
+      const settlementId =
+        typeof repairResult?.metadata?.currentQuestionSettlementId ===
+        "string"
+          ? repairResult.metadata.currentQuestionSettlementId
+          : undefined;
+      const regenerationStatus =
+        activeCorrection.regenerationStatus === "failed"
+          ? "failed"
+          : !authorization.authorized
+            ? "cancelled"
+            : repairResult?.status === "success"
+              ? "succeeded"
+              : repairResult?.status === "error"
+                ? "failed"
+                : "cancelled";
+      activeCorrection = {
+        ...activeCorrection,
+        disposition: authorization.authorized
+          ? "current-question-overlay"
+          : "stale-rejected",
+        settlementId,
+        regenerationStatus,
+        completedAt,
+        correctionToAnswerLatencyMs: completedAt - requestedAt,
+        error:
+          activeCorrection.error ??
+          (repairResult?.status === "error"
+            ? repairResult.error
+            : undefined),
+      };
+      correction = {
+        ...correction,
+        activeQuestion: activeCorrection,
+      };
+      replaceInstalledCorrection(correction);
+      traceStoreRef.current.updateMetadata(trace.id, {
+        ...formatActiveQuestionTermCorrectionForTrace(
+          activeCorrection,
+          authorization
+        ),
+      });
+      traceStoreRef.current.updateMetadata(repairTrace.id, {
+        ...formatActiveQuestionTermCorrectionForTrace(
+          activeCorrection,
+          authorization
+        ),
+      });
+      traceStoreRef.current.finishTrace(
+        trace.id,
+        regenerationStatus === "failed"
+          ? "error"
+          : regenerationStatus === "cancelled"
+            ? "cancelled"
+            : "success",
+        activeCorrection.error
+      );
+      sessionRecordingManagerRef.current?.recordActiveQuestionTermCorrection({
+        correction: activeCorrection,
+        taskId:
+          contextManagerRef.current.getState().activeMeetingTask?.id ??
+          contextState.activeMeetingTask?.id,
+      });
+      recordQuestionEvaluation(activeCorrection, repairTrace.id);
     },
     [
-      currentSuggestionText,
       flushPendingSentenceCompletion,
-      resolveCurrentSuggestionQuestionLineage,
       runAdvisor,
+      state.latestSuggestion,
     ]
   );
 
@@ -13864,101 +14149,6 @@ function applyStrictProjectAnchorPolicy({
 function isCrossProjectComparisonQuery(query: string) {
   return /\b(compare|comparison|another|other project|different project|similar project|transfer|analogy|alternative|else)\b/i.test(
     query
-  );
-}
-
-function decideEmergencyCorrectionRepair({
-  correction,
-  contextState,
-  latestTurnText,
-  currentSuggestion,
-}: {
-  correction: SpeechCorrection;
-  contextState: MeetingContextState;
-  latestTurnText?: string;
-  currentSuggestion?: string;
-}) {
-  const correctionTarget = (correction.to ?? correction.term ?? "").trim();
-  const correctionSource = correction.from?.trim();
-  const activeTask = contextState.activeMeetingTask;
-  const hasActiveSurface = Boolean(
-    activeTask || currentSuggestion?.trim() || latestTurnText?.trim()
-  );
-
-  if (!hasActiveSurface || !correctionTarget) {
-    return {
-      shouldRegenerate: false,
-      reason: "no-active-task-or-correction-target",
-    };
-  }
-
-  const activeText = [
-    activeTask?.parent.questionType,
-    activeTask?.parent.topic,
-    activeTask?.parent.supportedFactAnchors.join(" "),
-    activeTask?.child?.question,
-    activeTask?.screen?.question,
-    activeTask?.screen?.content,
-    latestTurnText,
-    currentSuggestion,
-  ]
-    .filter(Boolean)
-    .join("\n");
-  const normalizedActiveText = normalizeTranscriptForGate(activeText);
-  const normalizedTarget = normalizeTranscriptForGate(correctionTarget);
-  const normalizedSource = correctionSource
-    ? normalizeTranscriptForGate(correctionSource)
-    : "";
-
-  if (
-    normalizedSource &&
-    normalizedActiveText.includes(normalizedSource) &&
-    normalizedTarget
-  ) {
-    return {
-      shouldRegenerate: true,
-      reason: "source-term-present-in-active-context",
-    };
-  }
-
-  if (isHighImpactCorrectionTerm(correctionTarget)) {
-    return {
-      shouldRegenerate: true,
-      reason: "high-impact-correction-term",
-    };
-  }
-
-  if (
-    activeTask &&
-    hasTechnicalSignal(correctionTarget) &&
-    (activeTask.parent.questionType === "ai-ml-system-design" ||
-      activeTask.parent.questionType === "general-system-design" ||
-      activeTask.parent.questionType === "project-deep-dive" ||
-      activeTask.parent.questionType === "coding" ||
-      activeTask.child?.questionType === "field-knowledge")
-  ) {
-    return {
-      shouldRegenerate: true,
-      reason: "technical-correction-with-active-task",
-    };
-  }
-
-  if (normalizedTarget && normalizedActiveText.includes(normalizedTarget)) {
-    return {
-      shouldRegenerate: true,
-      reason: "target-term-present-in-active-context",
-    };
-  }
-
-  return {
-    shouldRegenerate: false,
-    reason: "stored-for-future-speech-bias",
-  };
-}
-
-function isHighImpactCorrectionTerm(term: string) {
-  return /\b(rag|retrieval augmented generation|glean|mcp|agentic memory|vector search|embedding|llm|openai|anthropic|aws|amazon|google|microsoft|redis|kafka|postgres|java|python|typescript|javascript|go|golang|rust|c\+\+)\b/i.test(
-    term
   );
 }
 
@@ -15803,17 +15993,6 @@ function isMeetingLogisticsTranscript(normalized: string) {
     ) ||
     /等一下|稍等|我看一下|我想一下|我分享屏幕|开始面试|开始吧/.test(
       normalized
-    )
-  );
-}
-
-function hasTechnicalSignal(text: string) {
-  return (
-    /\b(o\s*\(?\s*1|o\s*\(?\s*n|api|async|binary|cache|client|complexity|database|design|dp|embedding|graph|grpc|hash|heap|http|java|javascript|latency|leetcode|memory|python|queue|rag|rate limiter|recursion|rust|scale|search|server|space|sql|stack|thread|tree|typescript|vector)\b/i.test(
-      text
-    ) ||
-    /算法|复杂度|缓存|数据库|队列|栈|堆|树|图|递归|并发|异步|接口|系统设计|限流|负载均衡|向量|嵌入/.test(
-      text
     )
   );
 }
