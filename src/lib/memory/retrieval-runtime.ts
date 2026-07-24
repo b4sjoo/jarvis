@@ -18,6 +18,19 @@ export type MemorySnapshotCacheState =
   | "stale-while-refresh"
   | "unavailable";
 
+export type MemorySnapshotInvalidationKind = "soft" | "hard";
+
+export type MemoryHardInvalidationDisposition =
+  | "fail-closed-until-refresh"
+  | "fresh-snapshot-loaded-after-fail-closed"
+  | "fail-closed-load-failed";
+
+export interface MemorySnapshotInvalidationRequest {
+  kind: MemorySnapshotInvalidationKind;
+  reason: string;
+  affectedEntryIds?: string[];
+}
+
 export interface MemorySnapshotReadTelemetry
   extends MemorySnapshotLoadTimings {
   cacheState: MemorySnapshotCacheState;
@@ -27,6 +40,17 @@ export interface MemorySnapshotReadTelemetry
   snapshotGeneration: number;
   snapshotAgeMs: number;
   snapshotSessionId?: string;
+  authorityRevision: number;
+  invalidationKind?: MemorySnapshotInvalidationKind;
+  invalidationReason?: string;
+  invalidationPreviousSnapshotVersion?: number;
+  invalidationNewSnapshotVersion?: number;
+  invalidationToFirstReadMs?: number;
+  invalidationFirstRead?: boolean;
+  hardInvalidationDisposition?: MemoryHardInvalidationDisposition;
+  hardInvalidationAffectedEntryIds?: string[];
+  hardInvalidationTargetsExcluded?: boolean;
+  hardInvalidationStaleSnapshotServed?: boolean;
   degradedReason?: string;
 }
 
@@ -60,6 +84,7 @@ interface MemorySnapshot {
   entries: readonly MemoryEntry[];
   version: number;
   generation: number;
+  authorityRevision: number;
   loadedAt: number;
   sessionId?: string;
 }
@@ -73,6 +98,17 @@ interface PendingUsageBatch {
   id: string;
   entryIds: Set<string>;
   listeners: Set<MemoryUsageFlushListener>;
+}
+
+interface MemorySnapshotInvalidationState
+  extends MemorySnapshotInvalidationRequest {
+  generation: number;
+  authorityRevision: number;
+  previousSnapshotVersion: number;
+  newSnapshotVersion?: number;
+  invalidatedAt: number;
+  firstReadObserved: boolean;
+  hardDisposition?: MemoryHardInvalidationDisposition;
 }
 
 export interface MemoryRetrievalRuntimeOptions {
@@ -100,7 +136,8 @@ export class MemoryRetrievalRuntime {
   private snapshotLoader?: MemorySnapshotLoader;
   private snapshotGeneration = 0;
   private snapshotVersion = 0;
-  private lastInvalidationReason?: string;
+  private authorityRevision = 0;
+  private latestInvalidation?: MemorySnapshotInvalidationState;
   private pinnedSessionId?: string;
   private usageWriter?: MemoryUsageWriter;
   private pendingUsageBatch?: PendingUsageBatch;
@@ -157,8 +194,8 @@ export class MemoryRetrievalRuntime {
         "stale-while-refresh",
         lookupStartedAt,
         EMPTY_LOAD_TIMINGS,
-        this.lastInvalidationReason
-          ? `refresh-pending:${this.lastInvalidationReason}`
+        this.latestInvalidation?.reason
+          ? `refresh-pending:${this.latestInvalidation.reason}`
           : "refresh-pending"
       );
     }
@@ -186,6 +223,9 @@ export class MemoryRetrievalRuntime {
         loadedSnapshotLoadTimings.get(loadedSnapshot) ?? EMPTY_LOAD_TIMINGS
       );
     } catch (error) {
+      const invalidationTelemetry = this.consumeInvalidationTelemetry([], {
+        loadFailed: true,
+      });
       return {
         entries: [],
         telemetry: {
@@ -197,6 +237,8 @@ export class MemoryRetrievalRuntime {
           snapshotGeneration: this.snapshotGeneration,
           snapshotAgeMs: 0,
           snapshotSessionId: this.pinnedSessionId,
+          authorityRevision: this.authorityRevision,
+          ...invalidationTelemetry,
           degradedReason: `snapshot-load-failed:${formatError(error)}`,
         },
       };
@@ -213,10 +255,49 @@ export class MemoryRetrievalRuntime {
     return this.readSnapshot({ sessionId, loader });
   }
 
-  invalidateSnapshot(reason: string) {
+  invalidateSnapshot(request: MemorySnapshotInvalidationRequest) {
+    const previousInvalidation = this.latestInvalidation;
+    const inheritsHardBarrier =
+      !this.snapshot && previousInvalidation?.kind === "hard";
+    const invalidationKind =
+      request.kind === "hard" || inheritsHardBarrier ? "hard" : "soft";
     this.snapshotGeneration += 1;
-    this.lastInvalidationReason = reason;
-    if (this.snapshot && this.snapshotLoader) {
+    if (request.kind === "hard") {
+      this.authorityRevision += 1;
+    }
+    this.latestInvalidation = {
+      ...request,
+      kind: invalidationKind,
+      reason: inheritsHardBarrier
+        ? mergeInvalidationReasons(
+            previousInvalidation.reason,
+            request.reason
+          )
+        : request.reason,
+      affectedEntryIds: normalizeEntryIds([
+        ...(inheritsHardBarrier
+          ? previousInvalidation.affectedEntryIds ?? []
+          : []),
+        ...(request.affectedEntryIds ?? []),
+      ]),
+      generation: this.snapshotGeneration,
+      authorityRevision: this.authorityRevision,
+      previousSnapshotVersion: inheritsHardBarrier
+        ? previousInvalidation.previousSnapshotVersion
+        : this.snapshot?.version ?? this.snapshotVersion,
+      invalidatedAt: this.wallNow(),
+      firstReadObserved: false,
+      hardDisposition:
+        invalidationKind === "hard"
+          ? "fail-closed-until-refresh"
+          : undefined,
+    };
+
+    if (invalidationKind === "hard") {
+      this.snapshot = undefined;
+    }
+
+    if (this.snapshotLoader) {
       void this.ensureSnapshotRefresh(
         this.snapshotLoader,
         this.pinnedSessionId
@@ -318,7 +399,8 @@ export class MemoryRetrievalRuntime {
     this.snapshotLoader = undefined;
     this.snapshotGeneration = 0;
     this.snapshotVersion = 0;
-    this.lastInvalidationReason = undefined;
+    this.authorityRevision = 0;
+    this.latestInvalidation = undefined;
     this.pinnedSessionId = undefined;
     this.usageWriter = undefined;
     this.pendingUsageBatch = undefined;
@@ -347,6 +429,8 @@ export class MemoryRetrievalRuntime {
         snapshotGeneration: snapshot.generation,
         snapshotAgeMs: Math.max(0, this.wallNow() - snapshot.loadedAt),
         snapshotSessionId: this.pinnedSessionId ?? snapshot.sessionId,
+        authorityRevision: snapshot.authorityRevision,
+        ...this.consumeInvalidationTelemetry(snapshot.entries),
         degradedReason,
       },
     };
@@ -378,12 +462,19 @@ export class MemoryRetrievalRuntime {
         entries: Object.freeze([...loaded.entries]),
         version: ++this.snapshotVersion,
         generation,
+        authorityRevision: this.authorityRevision,
         loadedAt: this.wallNow(),
         sessionId,
       };
+      if (this.latestInvalidation?.generation === generation) {
+        this.latestInvalidation.newSnapshotVersion = snapshot.version;
+        if (this.latestInvalidation.kind === "hard") {
+          this.latestInvalidation.hardDisposition =
+            "fresh-snapshot-loaded-after-fail-closed";
+        }
+      }
       loadedSnapshotLoadTimings.set(snapshot, loaded.timings);
       this.snapshot = snapshot;
-      this.lastInvalidationReason = undefined;
       return snapshot;
     });
     pendingLoad = { generation, promise };
@@ -401,6 +492,57 @@ export class MemoryRetrievalRuntime {
       }
     );
     return pendingLoad;
+  }
+
+  private consumeInvalidationTelemetry(
+    entries: readonly MemoryEntry[],
+    options: { loadFailed?: boolean } = {}
+  ): Partial<MemorySnapshotReadTelemetry> {
+    const invalidation = this.latestInvalidation;
+    if (
+      !invalidation ||
+      invalidation.firstReadObserved ||
+      invalidation.generation !== this.snapshotGeneration
+    ) {
+      return {};
+    }
+
+    invalidation.firstReadObserved = true;
+    if (invalidation.kind === "hard" && options.loadFailed) {
+      invalidation.hardDisposition = "fail-closed-load-failed";
+    }
+
+    const affectedEntryIds = invalidation.affectedEntryIds ?? [];
+    const activeAuthorityIds = new Set(
+      entries
+        .filter(isEntryAuthorityEligible)
+        .map((entry) => entry.id)
+    );
+
+    return {
+      authorityRevision: invalidation.authorityRevision,
+      invalidationKind: invalidation.kind,
+      invalidationReason: invalidation.reason,
+      invalidationPreviousSnapshotVersion:
+        invalidation.previousSnapshotVersion,
+      invalidationNewSnapshotVersion: invalidation.newSnapshotVersion,
+      invalidationToFirstReadMs: Math.max(
+        0,
+        this.wallNow() - invalidation.invalidatedAt
+      ),
+      invalidationFirstRead: true,
+      hardInvalidationDisposition: invalidation.hardDisposition,
+      hardInvalidationAffectedEntryIds:
+        invalidation.kind === "hard" && affectedEntryIds.length
+          ? affectedEntryIds
+          : undefined,
+      hardInvalidationTargetsExcluded:
+        invalidation.kind === "hard" && affectedEntryIds.length
+          ? affectedEntryIds.every((id) => !activeAuthorityIds.has(id))
+          : undefined,
+      hardInvalidationStaleSnapshotServed:
+        invalidation.kind === "hard" ? false : undefined,
+    };
   }
 
   private scheduleUsageFlush() {
@@ -459,12 +601,35 @@ export function getSharedMemoryRetrievalRuntime() {
   return sharedMemoryRetrievalRuntime;
 }
 
-export function invalidateMemoryRetrievalSnapshot(reason: string) {
-  sharedMemoryRetrievalRuntime.invalidateSnapshot(reason);
+export function invalidateMemoryRetrievalSnapshot(
+  request: MemorySnapshotInvalidationRequest
+) {
+  sharedMemoryRetrievalRuntime.invalidateSnapshot(request);
 }
 
 function elapsedMs(startedAt: number, endedAt: number) {
   return Math.max(0, endedAt - startedAt);
+}
+
+function normalizeEntryIds(entryIds: string[] | undefined) {
+  if (!entryIds?.length) return undefined;
+  const normalized = Array.from(
+    new Set(entryIds.map((id) => id.trim()).filter(Boolean))
+  );
+  return normalized.length ? normalized : undefined;
+}
+
+function mergeInvalidationReasons(left: string, right: string) {
+  if (left === right) return left;
+  return `${left}+${right}`;
+}
+
+function isEntryAuthorityEligible(entry: MemoryEntry) {
+  return (
+    entry.enabled &&
+    (entry.curationStatus === "curated" ||
+      entry.curationStatus === "verified")
+  );
 }
 
 function formatError(error: unknown) {

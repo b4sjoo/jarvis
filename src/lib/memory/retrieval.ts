@@ -210,6 +210,24 @@ callbacks: MemoryRetrievalRuntimeCallbacks = {}): Promise<MemoryRetrievalResult>
     snapshotGeneration: snapshot.telemetry.snapshotGeneration,
     snapshotAgeMs: snapshot.telemetry.snapshotAgeMs,
     snapshotSessionId: snapshot.telemetry.snapshotSessionId,
+    authorityRevision: snapshot.telemetry.authorityRevision,
+    invalidationKind: snapshot.telemetry.invalidationKind,
+    invalidationReason: snapshot.telemetry.invalidationReason,
+    invalidationPreviousSnapshotVersion:
+      snapshot.telemetry.invalidationPreviousSnapshotVersion,
+    invalidationNewSnapshotVersion:
+      snapshot.telemetry.invalidationNewSnapshotVersion,
+    invalidationToFirstReadMs:
+      snapshot.telemetry.invalidationToFirstReadMs,
+    invalidationFirstRead: snapshot.telemetry.invalidationFirstRead,
+    hardInvalidationDisposition:
+      snapshot.telemetry.hardInvalidationDisposition,
+    hardInvalidationAffectedEntryIds:
+      snapshot.telemetry.hardInvalidationAffectedEntryIds,
+    hardInvalidationTargetsExcluded:
+      snapshot.telemetry.hardInvalidationTargetsExcluded,
+    hardInvalidationStaleSnapshotServed:
+      snapshot.telemetry.hardInvalidationStaleSnapshotServed,
     databaseAcquireMs: snapshot.telemetry.databaseAcquireMs,
     databaseReadMs: snapshot.telemetry.databaseReadMs,
     rowMappingMs: snapshot.telemetry.rowMappingMs,
@@ -267,6 +285,24 @@ export function formatMemoryRetrievalPerformanceForTrace(
     memorySnapshotGeneration: performance.snapshotGeneration,
     memorySnapshotAgeMs: performance.snapshotAgeMs,
     memorySnapshotSessionId: performance.snapshotSessionId,
+    memoryAuthorityRevision: performance.authorityRevision,
+    memoryInvalidationKind: performance.invalidationKind,
+    memoryInvalidationReason: performance.invalidationReason,
+    memoryInvalidationPreviousSnapshotVersion:
+      performance.invalidationPreviousSnapshotVersion,
+    memoryInvalidationNewSnapshotVersion:
+      performance.invalidationNewSnapshotVersion,
+    memoryInvalidationToFirstReadMs:
+      performance.invalidationToFirstReadMs,
+    memoryInvalidationFirstRead: performance.invalidationFirstRead,
+    memoryHardInvalidationDisposition:
+      performance.hardInvalidationDisposition,
+    memoryHardInvalidationAffectedEntryIds:
+      performance.hardInvalidationAffectedEntryIds,
+    memoryHardInvalidationTargetsExcluded:
+      performance.hardInvalidationTargetsExcluded,
+    memoryHardInvalidationStaleSnapshotServed:
+      performance.hardInvalidationStaleSnapshotServed,
     memoryDatabaseAcquireMs: performance.databaseAcquireMs,
     memoryDatabaseReadMs: performance.databaseReadMs,
     memoryRowMappingMs: performance.rowMappingMs,

@@ -333,6 +333,20 @@ export interface MemoryRetrievalPerformance {
   snapshotGeneration: number;
   snapshotAgeMs: number;
   snapshotSessionId?: string;
+  authorityRevision: number;
+  invalidationKind?: "soft" | "hard";
+  invalidationReason?: string;
+  invalidationPreviousSnapshotVersion?: number;
+  invalidationNewSnapshotVersion?: number;
+  invalidationToFirstReadMs?: number;
+  invalidationFirstRead?: boolean;
+  hardInvalidationDisposition?:
+    | "fail-closed-until-refresh"
+    | "fresh-snapshot-loaded-after-fail-closed"
+    | "fail-closed-load-failed";
+  hardInvalidationAffectedEntryIds?: string[];
+  hardInvalidationTargetsExcluded?: boolean;
+  hardInvalidationStaleSnapshotServed?: boolean;
   databaseAcquireMs: number;
   databaseReadMs: number;
   rowMappingMs: number;

@@ -34,7 +34,7 @@ import {
 import { serializeMeetingTraceExport } from "./trace.js";
 
 const SESSION_RECORDING_SCHEMA_VERSION = 1;
-const SESSION_TRACE_SUMMARY_SCHEMA_VERSION = 13;
+const SESSION_TRACE_SUMMARY_SCHEMA_VERSION = 14;
 const SESSION_TRACE_INDEX_SCHEMA_VERSION = 1;
 
 interface SessionRecordingStartOptions {
@@ -542,6 +542,17 @@ export interface SessionCompactTraceSummary {
     snapshotVersion?: number;
     snapshotGeneration?: number;
     snapshotAgeMs?: number;
+    authorityRevision?: number;
+    invalidationKind?: string;
+    invalidationReason?: string;
+    invalidationPreviousSnapshotVersion?: number;
+    invalidationNewSnapshotVersion?: number;
+    invalidationToFirstReadMs?: number;
+    invalidationFirstRead?: boolean;
+    hardInvalidationDisposition?: string;
+    hardInvalidationAffectedEntryIds?: string[];
+    hardInvalidationTargetsExcluded?: boolean;
+    hardInvalidationStaleSnapshotServed?: boolean;
     databaseAcquireMs?: number;
     databaseReadMs?: number;
     rowMappingMs?: number;
@@ -2963,6 +2974,42 @@ function buildCompactTraceSummary({
           ),
           snapshotAgeMs: readNumber(
             memoryStep.metadata?.memorySnapshotAgeMs
+          ),
+          authorityRevision: readNumber(
+            memoryStep.metadata?.memoryAuthorityRevision
+          ),
+          invalidationKind: readString(
+            memoryStep.metadata?.memoryInvalidationKind
+          ),
+          invalidationReason: readString(
+            memoryStep.metadata?.memoryInvalidationReason
+          ),
+          invalidationPreviousSnapshotVersion: readNumber(
+            memoryStep.metadata?.memoryInvalidationPreviousSnapshotVersion
+          ),
+          invalidationNewSnapshotVersion: readNumber(
+            memoryStep.metadata?.memoryInvalidationNewSnapshotVersion
+          ),
+          invalidationToFirstReadMs: readNumber(
+            memoryStep.metadata?.memoryInvalidationToFirstReadMs
+          ),
+          invalidationFirstRead: readFirstBoolean(
+            metadataSources,
+            "memoryInvalidationFirstRead"
+          ),
+          hardInvalidationDisposition: readString(
+            memoryStep.metadata?.memoryHardInvalidationDisposition
+          ),
+          hardInvalidationAffectedEntryIds: readStringList(
+            memoryStep.metadata?.memoryHardInvalidationAffectedEntryIds
+          ),
+          hardInvalidationTargetsExcluded: readFirstBoolean(
+            metadataSources,
+            "memoryHardInvalidationTargetsExcluded"
+          ),
+          hardInvalidationStaleSnapshotServed: readFirstBoolean(
+            metadataSources,
+            "memoryHardInvalidationStaleSnapshotServed"
           ),
           databaseAcquireMs: readNumber(
             memoryStep.metadata?.memoryDatabaseAcquireMs

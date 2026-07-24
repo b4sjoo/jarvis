@@ -752,7 +752,7 @@ test("compact trace summaries preserve task boundary and cross-domain evidence",
   );
   assert.ok(summaryWrite);
   const summary = parsePayload(summaryWrite);
-  assert.equal(summary.version, 13);
+  assert.equal(summary.version, 14);
   assert.equal(summary.taskRelation, "new-parent");
   assert.equal(summary.logicalQuestionUnitRevision, 3);
   assert.deepEqual(summary.logicalQuestionSourceTurnIds, ["turn_1", "turn_2"]);
@@ -806,6 +806,74 @@ test("compact trace summaries preserve task boundary and cross-domain evidence",
     (summary.personalEvidence as Record<string, unknown>).selectedSources,
     ["profile-memory"]
   );
+
+  await manager.stop("test-complete");
+});
+
+test("compact trace summaries preserve hard memory invalidation evidence", async () => {
+  const native = new ControlledRecordingInvoke();
+  const manager = new SessionRecordingManager(undefined, native.invoke);
+  await manager.start(START_OPTIONS);
+  await settle();
+
+  const startedAt = Date.now();
+  const trace = buildCompletedTrace("memory_authority_trace", startedAt);
+  trace.steps = [
+    {
+      id: "memory_step",
+      name: "Memory retrieval",
+      status: "success",
+      startedAt: startedAt + 10,
+      endedAt: startedAt + 30,
+      durationMs: 20,
+      metadata: {
+        selectedEntries: 0,
+        memoryCacheState: "load-coalesced",
+        memoryCacheHit: false,
+        memorySnapshotVersion: 8,
+        memorySnapshotGeneration: 4,
+        memoryAuthorityRevision: 2,
+        memoryInvalidationKind: "hard",
+        memoryInvalidationReason: "memory-entry-disabled",
+        memoryInvalidationPreviousSnapshotVersion: 7,
+        memoryInvalidationNewSnapshotVersion: 8,
+        memoryInvalidationToFirstReadMs: 18,
+        memoryInvalidationFirstRead: true,
+        memoryHardInvalidationDisposition:
+          "fresh-snapshot-loaded-after-fail-closed",
+        memoryHardInvalidationAffectedEntryIds: ["entry-a"],
+        memoryHardInvalidationTargetsExcluded: true,
+        memoryHardInvalidationStaleSnapshotServed: false,
+      },
+    },
+  ];
+  manager.recordTrace(trace, "manual");
+  await settle();
+
+  const summaryWrite = native.calls.find(
+    (call) =>
+      call.command === "write_meeting_session_recording_text" &&
+      stringArg(call, "relativePath") ===
+        "traces/memory_authority_trace/summary.json"
+  );
+  assert.ok(summaryWrite);
+  const summary = parsePayload(summaryWrite);
+  assert.equal(summary.version, 14);
+  const memory = summary.memory as Record<string, unknown>;
+  assert.equal(memory.authorityRevision, 2);
+  assert.equal(memory.invalidationKind, "hard");
+  assert.equal(memory.invalidationReason, "memory-entry-disabled");
+  assert.equal(memory.invalidationPreviousSnapshotVersion, 7);
+  assert.equal(memory.invalidationNewSnapshotVersion, 8);
+  assert.equal(memory.invalidationToFirstReadMs, 18);
+  assert.equal(memory.invalidationFirstRead, true);
+  assert.equal(
+    memory.hardInvalidationDisposition,
+    "fresh-snapshot-loaded-after-fail-closed"
+  );
+  assert.deepEqual(memory.hardInvalidationAffectedEntryIds, ["entry-a"]);
+  assert.equal(memory.hardInvalidationTargetsExcluded, true);
+  assert.equal(memory.hardInvalidationStaleSnapshotServed, false);
 
   await manager.stop("test-complete");
 });

@@ -171,7 +171,10 @@ export async function rebuildCuratedMemoryIndex(): Promise<MemoryImportSummary> 
     );
   }
 
-  invalidateMemoryRetrievalSnapshot("curated-index-rebuilt");
+  invalidateMemoryRetrievalSnapshot({
+    kind: "hard",
+    reason: "curated-index-rebuilt",
+  });
 
   return {
     importedAt,
@@ -239,7 +242,11 @@ export async function setMemoryEntryEnabled(id: string, enabled: boolean) {
     "UPDATE memory_entries SET enabled = ?, updated_at = ? WHERE id = ?",
     [enabled ? 1 : 0, Date.now(), id]
   );
-  invalidateMemoryRetrievalSnapshot("memory-entry-enable-state-changed");
+  invalidateMemoryRetrievalSnapshot({
+    kind: enabled ? "soft" : "hard",
+    reason: enabled ? "memory-entry-enabled" : "memory-entry-disabled",
+    affectedEntryIds: enabled ? undefined : [id],
+  });
 }
 
 export async function markMemoryEntriesUsedBatch(entryIds: string[]) {
