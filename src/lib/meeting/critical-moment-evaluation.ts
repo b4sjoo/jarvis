@@ -358,10 +358,11 @@ export function upsertCriticalMomentEvaluation(
     readFromJarvis: patch.readFromJarvis ?? existing?.readFromJarvis,
     interactionRequired:
       patch.interactionRequired ?? existing?.interactionRequired,
-    failureReasons: uniqueStrings([
-      ...(existing?.failureReasons ?? []),
-      ...(patch.failureReasons ?? []),
-    ]) as CriticalMomentFailureReason[],
+    failureReasons: (
+      patch.failureReasons === undefined
+        ? existing?.failureReasons ?? []
+        : uniqueStrings(patch.failureReasons)
+    ) as CriticalMomentFailureReason[],
     notes: patch.notes ?? existing?.notes,
     createdAt: existing?.createdAt ?? now,
     updatedAt: now,

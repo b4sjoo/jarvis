@@ -35,6 +35,9 @@ import type {
   MeetingTaxonomyAdjudicationSettings,
   MeetingAnswerDisplayModel,
   CodingArtifactCache,
+  CriticalMomentCandidate,
+  CriticalMomentEvaluation,
+  CriticalMomentFailureReason,
   MeetingResponseActionMode,
   MeetingResponseConfig,
   MeetingResponseLanguage,
@@ -224,6 +227,26 @@ const humanEvalFailureReasonOptions: Array<{
   { id: "too-slow", label: "Too slow" },
   { id: "stt-error", label: "STT" },
   { id: "capture-error", label: "Capture" },
+  { id: "other", label: "Other" },
+];
+
+const criticalMomentFailureReasonOptions: Array<{
+  id: CriticalMomentFailureReason;
+  label: string;
+}> = [
+  { id: "no-advice", label: "No advice" },
+  { id: "late-advice", label: "Late" },
+  { id: "wrong-question", label: "Question" },
+  { id: "wrong-type", label: "Type" },
+  { id: "wrong-relation", label: "Relation" },
+  { id: "wrong-context", label: "Context" },
+  { id: "unsupported-fact", label: "Fact" },
+  { id: "irrelevant-memory", label: "Memory" },
+  { id: "insufficient-answer", label: "Insufficient" },
+  { id: "provider-or-parser-failure", label: "Provider" },
+  { id: "stale-or-cancelled", label: "Stale" },
+  { id: "ui-or-interaction-friction", label: "UI friction" },
+  { id: "user-did-not-need-help", label: "Not needed" },
   { id: "other", label: "Other" },
 ];
 
@@ -582,6 +605,38 @@ export const MeetingAssistant = ({
     : undefined;
   const answerMemoryEvaluationSnapshot =
     resolveTraceMemoryEvaluationSnapshot(evaluationTrace);
+  const currentTranscriptTurnIds = useMemo(
+    () => new Set(meeting.transcriptTurns.map((turn) => turn.id)),
+    [meeting.transcriptTurns]
+  );
+  const latestCriticalMomentCandidate = useMemo(
+    () =>
+      [...meeting.criticalMomentCandidates]
+        .filter((candidate) =>
+          candidate.sourceTurnIds.some((turnId) =>
+            currentTranscriptTurnIds.has(turnId)
+          )
+        )
+        .sort(
+          (left, right) =>
+            (right.opportunityEndAt ?? right.updatedAt) -
+            (left.opportunityEndAt ?? left.updatedAt)
+        )[0],
+    [currentTranscriptTurnIds, meeting.criticalMomentCandidates]
+  );
+  const latestCriticalMomentEvaluation = latestCriticalMomentCandidate
+    ? meeting.criticalMomentEvaluations.find(
+        (evaluation) =>
+          evaluation.momentId === latestCriticalMomentCandidate.momentId
+      )
+    : undefined;
+  const latestCriticalMomentTraces = latestCriticalMomentCandidate
+    ? latestCriticalMomentCandidate.proposedTraceIds
+        .map((traceId) =>
+          meeting.traces.find((trace) => trace.id === traceId)
+        )
+        .filter((trace): trace is MeetingTrace => Boolean(trace))
+    : [];
   const clarifyingQuestion = suggestionSections.clarifyingQuestion.trim();
   const rawClarifyingOptions = suggestionSections.clarifyingOptions ?? [];
   const hasTechnicalDetails = suggestionSections.hasTechnicalDetails;
@@ -2183,6 +2238,23 @@ export const MeetingAssistant = ({
                       />
                     </>
                   ) : null}
+                </section>
+              ) : null}
+
+              {meeting.settings.debugMode &&
+              latestCriticalMomentCandidate ? (
+                <section className="min-w-0 overflow-hidden rounded-md border border-border/70 p-3">
+                  <CriticalMomentEvaluationPanel
+                    candidate={latestCriticalMomentCandidate}
+                    evaluation={latestCriticalMomentEvaluation}
+                    traces={latestCriticalMomentTraces}
+                    onUpdate={(patch) =>
+                      meeting.updateCriticalMomentEvaluation(
+                        latestCriticalMomentCandidate.momentId,
+                        patch
+                      )
+                    }
+                  />
                 </section>
               ) : null}
 
@@ -3937,6 +4009,268 @@ const TraceKindSummaryCard = ({
     </div>
   );
 };
+
+const CriticalMomentEvaluationPanel = ({
+  candidate,
+  evaluation,
+  traces,
+  onUpdate,
+}: {
+  candidate: CriticalMomentCandidate;
+  evaluation: CriticalMomentEvaluation | undefined;
+  traces: MeetingTrace[];
+  onUpdate: (patch: Partial<CriticalMomentEvaluation>) => void;
+}) => {
+  const failureReasons = evaluation?.failureReasons ?? [];
+  const toggleFailureReason = (reason: CriticalMomentFailureReason) => {
+    onUpdate({
+      failureReasons: failureReasons.includes(reason)
+        ? failureReasons.filter((candidateReason) => candidateReason !== reason)
+        : [...failureReasons, reason],
+    });
+  };
+
+  return (
+    <details>
+      <summary className="cursor-pointer text-xs font-semibold">
+        Critical moment review
+      </summary>
+      <div className="mt-2 space-y-3">
+        <div className="rounded-sm bg-muted/40 p-2">
+          <div className={cn(WRAP_TEXT_CLASS, "text-[11px] leading-4")}>
+            {candidate.sourceText}
+          </div>
+          <div className="mt-1 font-mono text-[10px] text-muted-foreground">
+            {candidate.traceJoinStatus === "none"
+              ? "No trace produced"
+              : `${candidate.traceJoinStatus} / ${candidate.proposedTraceIds.length} trace proposal(s)`}
+            {candidate.proposedQuestionType
+              ? ` / runtime proposal: ${candidate.proposedQuestionType}`
+              : ""}
+          </div>
+        </div>
+
+        <CriticalMomentButtonGroup
+          label="Eligibility"
+          options={[
+            ["critical", "Critical"],
+            ["not-critical", "Not critical"],
+            ["uncertain", "Uncertain"],
+          ]}
+          value={evaluation?.eligibility}
+          onSelect={(eligibility) =>
+            onUpdate({
+              eligibility:
+                eligibility as CriticalMomentEvaluation["eligibility"],
+            })
+          }
+        />
+
+        <CriticalMomentButtonGroup
+          label="Expected question type"
+          options={humanEvalQuestionTypeOptions.map((option) => [
+            option.id,
+            option.label,
+          ])}
+          value={evaluation?.expectedQuestionType}
+          onSelect={(expectedQuestionType) =>
+            onUpdate({
+              expectedQuestionType:
+                expectedQuestionType as CriticalMomentEvaluation["expectedQuestionType"],
+            })
+          }
+        />
+
+        <CriticalMomentButtonGroup
+          label="Expected advisor action"
+          options={[
+            ["advise", "Advise"],
+            ["clarify", "Clarify"],
+            ["append-context", "Append context"],
+            ["ignore", "Ignore"],
+          ]}
+          value={evaluation?.expectedAdvisorAction}
+          onSelect={(expectedAdvisorAction) =>
+            onUpdate({
+              expectedAdvisorAction:
+                expectedAdvisorAction as CriticalMomentEvaluation["expectedAdvisorAction"],
+            })
+          }
+        />
+
+        <CriticalMomentButtonGroup
+          label="Expected relation"
+          options={[
+            ["new-parent", "New parent"],
+            ["followup-parent", "Follow-up"],
+            ["child-probe", "Child"],
+            ["resume-parent", "Resume"],
+            ["logistics", "Logistics"],
+            ["correction", "Correction"],
+            ["unknown", "Unknown"],
+          ]}
+          value={evaluation?.expectedRelation}
+          onSelect={(expectedRelation) =>
+            onUpdate({
+              expectedRelation:
+                expectedRelation as CriticalMomentEvaluation["expectedRelation"],
+            })
+          }
+        />
+
+        <div>
+          <div className="mb-1 text-[10px] font-medium uppercase text-muted-foreground">
+            First useful answer
+          </div>
+          {traces.length ? (
+            <div className="flex flex-wrap gap-1">
+              {traces.map((trace) => (
+                <Button
+                  key={trace.id}
+                  size="sm"
+                  variant={
+                    evaluation?.selectedUsefulTraceId === trace.id
+                      ? "default"
+                      : "outline"
+                  }
+                  className="h-6 max-w-full px-2 font-mono text-[10px]"
+                  onClick={() =>
+                    onUpdate({
+                      traceIds: [trace.id],
+                      selectedUsefulTraceId: trace.id,
+                      firstUsefulAt: trace.endedAt,
+                    })
+                  }
+                >
+                  {trace.id.slice(-12)}
+                </Button>
+              ))}
+            </div>
+          ) : (
+            <div className="text-[10px] text-muted-foreground">
+              No trace is available for selection.
+            </div>
+          )}
+        </div>
+
+        <CriticalMomentBooleanGroup
+          label="Answer outcome"
+          values={[
+            ["useful", "Useful", evaluation?.useful],
+            ["trustworthy", "Trustworthy", evaluation?.trustworthy],
+            ["naturalStart", "Natural start", evaluation?.naturalStart],
+          ]}
+          onUpdate={onUpdate}
+        />
+        <CriticalMomentBooleanGroup
+          label="User behavior"
+          values={[
+            ["waitedForJarvis", "Waited", evaluation?.waitedForJarvis],
+            ["readFromJarvis", "Read", evaluation?.readFromJarvis],
+            [
+              "interactionRequired",
+              "Interaction",
+              evaluation?.interactionRequired,
+            ],
+          ]}
+          onUpdate={onUpdate}
+        />
+
+        <div>
+          <div className="mb-1 text-[10px] font-medium uppercase text-muted-foreground">
+            Failure reasons
+          </div>
+          <div className="flex flex-wrap gap-1">
+            {criticalMomentFailureReasonOptions.map((option) => (
+              <Button
+                key={option.id}
+                size="sm"
+                variant={
+                  failureReasons.includes(option.id) ? "default" : "outline"
+                }
+                className="h-6 px-2 text-[10px]"
+                onClick={() => toggleFailureReason(option.id)}
+              >
+                {option.label}
+              </Button>
+            ))}
+          </div>
+        </div>
+      </div>
+    </details>
+  );
+};
+
+const CriticalMomentButtonGroup = ({
+  label,
+  options,
+  value,
+  onSelect,
+}: {
+  label: string;
+  options: Array<[string, string]>;
+  value: string | undefined;
+  onSelect: (value: string) => void;
+}) => (
+  <div>
+    <div className="mb-1 text-[10px] font-medium uppercase text-muted-foreground">
+      {label}
+    </div>
+    <div className="flex flex-wrap gap-1">
+      {options.map(([optionValue, optionLabel]) => (
+        <Button
+          key={optionValue}
+          size="sm"
+          variant={value === optionValue ? "default" : "outline"}
+          className="h-6 px-2 text-[10px]"
+          onClick={() => onSelect(optionValue)}
+        >
+          {optionLabel}
+        </Button>
+      ))}
+    </div>
+  </div>
+);
+
+const CriticalMomentBooleanGroup = ({
+  label,
+  values,
+  onUpdate,
+}: {
+  label: string;
+  values: Array<
+    [keyof CriticalMomentEvaluation, string, boolean | undefined]
+  >;
+  onUpdate: (patch: Partial<CriticalMomentEvaluation>) => void;
+}) => (
+  <div>
+    <div className="mb-1 text-[10px] font-medium uppercase text-muted-foreground">
+      {label}
+    </div>
+    <div className="flex flex-wrap gap-1">
+      {values.flatMap(([field, fieldLabel, fieldValue]) => [
+        <Button
+          key={`${String(field)}-yes`}
+          size="sm"
+          variant={fieldValue === true ? "default" : "outline"}
+          className="h-6 px-2 text-[10px]"
+          onClick={() => onUpdate({ [field]: true })}
+        >
+          {fieldLabel}: yes
+        </Button>,
+        <Button
+          key={`${String(field)}-no`}
+          size="sm"
+          variant={fieldValue === false ? "default" : "outline"}
+          className="h-6 px-2 text-[10px]"
+          onClick={() => onUpdate({ [field]: false })}
+        >
+          {fieldLabel}: no
+        </Button>,
+      ])}
+    </div>
+  </div>
+);
 
 const TraceHumanEvaluationPanel = ({
   trace,

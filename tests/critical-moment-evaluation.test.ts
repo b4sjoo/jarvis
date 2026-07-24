@@ -85,6 +85,25 @@ test("uses source-turn identity instead of runtime type as human truth", () => {
   assert.equal(evaluations[0].eligibility, "critical");
 });
 
+test("replaces reviewer failure reasons instead of accumulating stale labels", () => {
+  const candidate = buildCriticalMomentCandidates({
+    sessionId: "session-a",
+    transcriptTurns: [
+      turn("turn-1", "them", "Explain the tradeoff.", 100, 200),
+    ],
+    traces: [],
+    now: 500,
+  })[0];
+  const first = upsertCriticalMomentEvaluation([], candidate, {
+    failureReasons: ["wrong-context", "late-advice"],
+  });
+  const updated = upsertCriticalMomentEvaluation(first, candidate, {
+    failureReasons: ["late-advice"],
+  });
+
+  assert.deepEqual(updated[0].failureReasons, ["late-advice"]);
+});
+
 test("retains old-window candidates while replacing recomposed current turns", () => {
   const oldCandidate = buildCriticalMomentCandidates({
     sessionId: "session-a",
