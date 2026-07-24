@@ -42,6 +42,83 @@ test("serializes concurrent starts into one recording generation", async () => {
   assert.equal(manager.getState().lifecycle, "idle");
 });
 
+test("records zero-trace critical moment candidates and reviewed outcomes", async () => {
+  const native = new ControlledRecordingInvoke();
+  const manager = new SessionRecordingManager(undefined, native.invoke);
+  const recording = await manager.start(START_OPTIONS);
+  const sessionId = required(recording.sessionId);
+  const startedAt = Date.now();
+  manager.recordTranscriptTurn({
+    id: "turn_zero_trace",
+    speaker: "them",
+    text: "How would you design a ticket system?",
+    startedAt,
+    endedAt: startedAt + 100,
+    isFinal: true,
+    source: "system-audio",
+  });
+  manager.recordCriticalMomentCandidates([
+    {
+      momentId: "critical_moment_zero_trace",
+      sessionId,
+      sourceTurnIds: ["turn_zero_trace"],
+      sourceText: "How would you design a ticket system?",
+      opportunityStartAt: startedAt,
+      opportunityEndAt: startedAt + 100,
+      candidateSource: "transcript-rule",
+      candidateReasons: ["zero-trace-opportunity"],
+      proposedTraceIds: [],
+      traceJoinStatus: "none",
+      createdAt: startedAt,
+      updatedAt: startedAt,
+    },
+  ]);
+  manager.recordCriticalMomentEvaluations([
+    {
+      momentId: "critical_moment_zero_trace",
+      sessionId,
+      sourceTurnIds: ["turn_zero_trace"],
+      traceIds: [],
+      eligibility: "critical",
+      expectedAdvisorAction: "advise",
+      useful: false,
+      trustworthy: false,
+      failureReasons: ["no-advice"],
+      createdAt: startedAt,
+      updatedAt: startedAt,
+    },
+  ]);
+
+  await manager.stop("test-complete");
+
+  const candidateWrite = native.calls.find(
+    (call) =>
+      call.command === "write_meeting_session_recording_text" &&
+      stringArg(call, "relativePath") ===
+        "human-evaluation/critical-moment-candidates.json"
+  );
+  const evaluationWrite = native.calls.find(
+    (call) =>
+      call.command === "write_meeting_session_recording_text" &&
+      stringArg(call, "relativePath") ===
+        "human-evaluation/critical-moment-evaluations.json"
+  );
+  assert.ok(candidateWrite);
+  assert.ok(evaluationWrite);
+  assert.equal(
+    (parsePayload(candidateWrite).candidates as unknown[]).length,
+    1
+  );
+  assert.equal(
+    (
+      (parsePayload(evaluationWrite).evaluations as Array<{
+        eligibility?: string;
+      }>)[0]
+    ).eligibility,
+    "critical"
+  );
+});
+
 test("drains late writes into their original folder before allowing stop-start", async () => {
   const native = new ControlledRecordingInvoke();
   const manager = new SessionRecordingManager(undefined, native.invoke);

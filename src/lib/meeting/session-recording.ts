@@ -17,6 +17,10 @@ import {
 } from "./types";
 import type { ActiveMeetingTask } from "./active-meeting-task";
 import type { AnswerSufficiencyDecision } from "./answer-sufficiency.js";
+import type {
+  CriticalMomentCandidate,
+  CriticalMomentEvaluation,
+} from "./critical-moment-evaluation.js";
 import {
   collectActiveMeetingTaskIdentityIds,
   formatActiveMeetingTaskForRecording,
@@ -76,6 +80,8 @@ interface SessionRecordingEvent {
     | "trace-metrics"
     | "human-evaluation"
     | "question-human-evaluation"
+    | "critical-moment-candidates"
+    | "critical-moment-evaluation"
     | "task-snapshot"
     | "active-meeting-task-snapshot"
     | "manual-question-type-correction"
@@ -114,6 +120,8 @@ interface ActiveSessionRecording {
   traceSessionIndex: Map<string, SessionTraceIndexEntry>;
   traceSummaries: Map<string, SessionCompactTraceSummary>;
   questionHumanEvaluations: Map<string, QuestionHumanEvaluation>;
+  criticalMomentCandidates: Map<string, CriticalMomentCandidate>;
+  criticalMomentEvaluations: Map<string, CriticalMomentEvaluation>;
   writeQueue: Promise<void>;
   enqueueVersion: number;
   pendingWrites: number;
@@ -709,6 +717,8 @@ export class SessionRecordingManager {
           traceSessionIndex: new Map(),
           traceSummaries: new Map(),
           questionHumanEvaluations: new Map(),
+          criticalMomentCandidates: new Map(),
+          criticalMomentEvaluations: new Map(),
           writeQueue: Promise.resolve(),
           enqueueVersion: 0,
           pendingWrites: 0,
@@ -1339,6 +1349,126 @@ export class SessionRecordingManager {
         evaluationCount: sessionEvaluations.length,
       },
       ["human-evaluation/question-evaluations.json"]
+    );
+  }
+
+  recordCriticalMomentCandidates(candidates: CriticalMomentCandidate[]) {
+    const session = this.getWritableSession();
+    if (!session) return;
+    const sessionCandidates = candidates.filter(
+      (candidate) =>
+        candidate.sessionId === session.sessionId ||
+        candidate.sourceTurnIds.some((turnId) =>
+          session.recordedTurnIds.has(turnId)
+        )
+    );
+    if (!sessionCandidates.length) return;
+
+    for (const candidate of sessionCandidates) {
+      session.criticalMomentCandidates.set(candidate.momentId, candidate);
+    }
+    const completeCandidates = Array.from(
+      session.criticalMomentCandidates.values()
+    );
+    const payload = JSON.stringify(
+      {
+        savedAt: Date.now(),
+        sessionId: session.sessionId,
+        candidates: completeCandidates,
+      },
+      null,
+      2
+    );
+    const compactPayload = JSON.stringify({
+      savedAt: Date.now(),
+      sessionId: session.sessionId,
+      candidates: sessionCandidates,
+    });
+    this.enqueue(session, async () => {
+      await this.writeText(
+        session,
+        "human-evaluation/critical-moment-candidates.json",
+        payload
+      );
+      await this.writeText(
+        session,
+        "human-evaluation/critical-moment-candidates.jsonl",
+        `${compactPayload}\n`,
+        true
+      );
+    });
+    this.recordEvent(
+      "critical-moment-candidates",
+      {
+        candidateCount: completeCandidates.length,
+        zeroTraceCandidateCount: completeCandidates.filter(
+          (candidate) => candidate.proposedTraceIds.length === 0
+        ).length,
+      },
+      ["human-evaluation/critical-moment-candidates.json"]
+    );
+  }
+
+  recordCriticalMomentEvaluations(evaluations: CriticalMomentEvaluation[]) {
+    const session = this.getWritableSession();
+    if (!session) return;
+    const sessionEvaluations = evaluations.filter(
+      (evaluation) =>
+        evaluation.sessionId === session.sessionId ||
+        evaluation.sourceTurnIds.some((turnId) =>
+          session.recordedTurnIds.has(turnId)
+        ) ||
+        evaluation.traceIds.some((traceId) =>
+          session.recordedTraceIds.has(traceId)
+        )
+    );
+    if (!sessionEvaluations.length) return;
+
+    for (const evaluation of sessionEvaluations) {
+      session.criticalMomentEvaluations.set(
+        evaluation.momentId,
+        evaluation
+      );
+    }
+    const completeEvaluations = Array.from(
+      session.criticalMomentEvaluations.values()
+    );
+    const payload = JSON.stringify(
+      {
+        savedAt: Date.now(),
+        sessionId: session.sessionId,
+        evaluations: completeEvaluations,
+      },
+      null,
+      2
+    );
+    const compactPayload = JSON.stringify({
+      savedAt: Date.now(),
+      sessionId: session.sessionId,
+      evaluations: sessionEvaluations,
+    });
+    this.enqueue(session, async () => {
+      await this.writeText(
+        session,
+        "human-evaluation/critical-moment-evaluations.json",
+        payload
+      );
+      await this.writeText(
+        session,
+        "human-evaluation/critical-moment-evaluations.jsonl",
+        `${compactPayload}\n`,
+        true
+      );
+    });
+    this.recordEvent(
+      "critical-moment-evaluation",
+      {
+        evaluationCount: completeEvaluations.length,
+        criticalCount: completeEvaluations.filter(
+          (evaluation) => evaluation.eligibility === "critical"
+        ).length,
+      },
+      ["human-evaluation/critical-moment-evaluations.json"]
     );
   }
 
