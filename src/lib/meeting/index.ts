@@ -1,4 +1,5 @@
 export * from "./advisor-engine";
+export * from "./advisor-evidence-packet";
 export * from "./advisor-prompt";
 export * from "./advisor-turn-intent";
 export * from "./answer-sufficiency";

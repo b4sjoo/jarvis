@@ -822,6 +822,61 @@ export interface AdvisorPromptContext {
   }>;
   latestTurn?: TranscriptTurn;
   responseActionContextScope?: AdvisorContextScopeSnapshot;
+  advisorEvidencePacket?: AdvisorEvidencePacket;
+}
+
+export type AdvisorCurrentQuestionEvidenceSource =
+  | "voice-lqu"
+  | "screen-preflight";
+
+export type AdvisorRetrievalHintRole =
+  | "company-prior"
+  | "interview-type-prior"
+  | "preparation-guidance"
+  | "continuity"
+  | "source-metadata";
+
+export interface AdvisorCurrentQuestionEvidence {
+  text: string;
+  source: AdvisorCurrentQuestionEvidenceSource;
+  sourceTurnIds: string[];
+  logicalQuestionUnitId?: string;
+  revision?: number;
+  screenObservationId?: string;
+}
+
+export interface AdvisorContinuityEvidence {
+  parentTaskId?: string;
+  childTaskId?: string;
+  capsule?: string;
+  sourceTurnIds: string[];
+}
+
+export interface AdvisorPreparationEvidence {
+  targetCompany?: string;
+  interviewTypes: InterviewBriefType[];
+  guidanceHints: string[];
+  activatedFactIds: string[];
+  rawGuidanceRejectedAsFactCount: number;
+}
+
+export interface AdvisorGeneratedGuidanceEvidence {
+  text: string;
+  sourceTraceId: string;
+}
+
+export interface AdvisorRetrievalHint {
+  role: AdvisorRetrievalHintRole;
+  text: string;
+}
+
+export interface AdvisorEvidencePacket {
+  version: "advisor-evidence-v1";
+  currentQuestion?: AdvisorCurrentQuestionEvidence;
+  continuity?: AdvisorContinuityEvidence;
+  preparation: AdvisorPreparationEvidence;
+  generatedGuidance?: AdvisorGeneratedGuidanceEvidence;
+  retrievalHints: AdvisorRetrievalHint[];
 }
 
 export type OpeningRouteKind =
