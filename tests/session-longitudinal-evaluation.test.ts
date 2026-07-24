@@ -38,6 +38,182 @@ test("renders N/A for a missing human-label denominator", () => {
   assert.match(markdown, /False activation: N\/A/);
 });
 
+test("builds product outcomes only from human-reviewed critical moments", () => {
+  const report = buildSessionLongitudinalEvaluationReport([
+    {
+      directory: "/recordings/session-product",
+      manifest: { sessionId: "session-product" },
+      transcriptTurns: [
+        {
+          id: "turn_success",
+          speaker: "them",
+          text: "Design a queue.",
+          startedAt: 100,
+          endedAt: 200,
+        },
+        {
+          id: "turn_missed",
+          speaker: "them",
+          text: "Explain RAG.",
+          startedAt: 700,
+          endedAt: 800,
+        },
+        {
+          id: "turn_filler",
+          speaker: "them",
+          text: "Looks good.",
+          startedAt: 900,
+          endedAt: 950,
+        },
+        {
+          id: "turn_unreviewed",
+          speaker: "them",
+          text: "One more thing.",
+          startedAt: 1_000,
+          endedAt: 1_050,
+        },
+      ],
+      traceSummaries: [
+        {
+          traceId: "trace_success",
+          startedAt: 210,
+          endedAt: 500,
+          logicalQuestionSourceTurnIds: ["turn_success"],
+          advisorExecutionAuthorized: true,
+          advisorOutputCommittedToUi: true,
+        },
+        {
+          traceId: "trace_regeneration",
+          startedAt: 510,
+          endedAt: 550,
+          logicalQuestionSourceTurnIds: ["turn_success"],
+          advisorExecutionAuthorized: true,
+          advisorOutputCommittedToUi: true,
+        },
+        {
+          traceId: "trace_filler",
+          startedAt: 960,
+          endedAt: 980,
+          logicalQuestionSourceTurnIds: ["turn_filler"],
+          advisorExecutionAuthorized: true,
+          advisorOutputCommittedToUi: true,
+        },
+      ],
+      questionEvaluations: [],
+      criticalMomentCandidates: [
+        {
+          momentId: "moment_success",
+          sessionId: "session-product",
+          sourceTurnIds: ["turn_success"],
+          sourceText: "Design a queue.",
+          opportunityEndAt: 200,
+          proposedTraceIds: ["trace_success", "trace_regeneration"],
+          traceJoinStatus: "ambiguous",
+        },
+        {
+          momentId: "moment_missed",
+          sessionId: "session-product",
+          sourceTurnIds: ["turn_missed"],
+          sourceText: "Explain RAG.",
+          opportunityEndAt: 800,
+          proposedTraceIds: [],
+          traceJoinStatus: "none",
+        },
+        {
+          momentId: "moment_filler",
+          sessionId: "session-product",
+          sourceTurnIds: ["turn_filler"],
+          sourceText: "Looks good.",
+          opportunityEndAt: 950,
+          proposedTraceIds: ["trace_filler"],
+          traceJoinStatus: "exact",
+        },
+        {
+          momentId: "moment_unreviewed",
+          sessionId: "session-product",
+          sourceTurnIds: ["turn_unreviewed"],
+          sourceText: "One more thing.",
+          opportunityEndAt: 1_050,
+          proposedTraceIds: [],
+          traceJoinStatus: "none",
+        },
+      ],
+      criticalMomentEvaluations: [
+        {
+          momentId: "moment_success",
+          sessionId: "session-product",
+          sourceTurnIds: ["turn_success"],
+          traceIds: ["trace_success", "trace_regeneration"],
+          eligibility: "critical",
+          expectedQuestionType: "coding",
+          firstUsefulAt: 500,
+          opportunityEndAt: 200,
+          userSpeechStartAt: 600,
+          useful: true,
+          trustworthy: true,
+          naturalStart: true,
+          waitedForJarvis: false,
+          readFromJarvis: false,
+          interactionRequired: false,
+          failureReasons: [],
+        },
+        {
+          momentId: "moment_missed",
+          sessionId: "session-product",
+          sourceTurnIds: ["turn_missed"],
+          traceIds: [],
+          eligibility: "critical",
+          expectedQuestionType: "field-knowledge",
+          expectedAdvisorAction: "advise",
+          useful: false,
+          trustworthy: false,
+          naturalStart: false,
+          failureReasons: ["no-advice"],
+        },
+        {
+          momentId: "moment_filler",
+          sessionId: "session-product",
+          sourceTurnIds: ["turn_filler"],
+          traceIds: ["trace_filler"],
+          eligibility: "not-critical",
+          expectedAdvisorAction: "ignore",
+          failureReasons: [],
+        },
+      ],
+    },
+  ]);
+
+  assert.equal(report.version, 2);
+  assert.equal(report.productOutcomes.candidateCount, 4);
+  assert.equal(report.productOutcomes.criticalMomentCount, 2);
+  assert.equal(report.productOutcomes.cmsr.numerator, 1);
+  assert.equal(report.productOutcomes.cmsr.denominator, 2);
+  assert.equal(
+    report.productOutcomes.zeroTraceOpportunityMissRate.numerator,
+    1
+  );
+  assert.equal(report.productOutcomes.falseActivationRate.numerator, 1);
+  assert.equal(report.productOutcomes.ttugMs.p50Ms, 300);
+  assert.equal(
+    report.productOutcomes.guidanceBeforeSpeechCoverage.denominator,
+    2
+  );
+  assert.equal(
+    report.productOutcomes.guidanceBeforeSpeechCoverage.numerator,
+    1
+  );
+  assert.equal(report.productOutcomes.manyTraceMomentCount, 1);
+  assert.equal(report.productOutcomes.ambiguousJoinCount, 1);
+  assert.equal(report.productOutcomes.unresolvedCandidateCount, 1);
+  assert.equal(report.productOutcomes.failureReasons["no-advice"], 1);
+
+  const markdown = renderSessionLongitudinalEvaluationMarkdown(report);
+  assert.ok(
+    markdown.indexOf("## Product Outcomes") <
+      markdown.indexOf("## Type Funnel")
+  );
+});
+
 const SESSION: LongitudinalSessionInput = {
   directory: "/recordings/session-a",
   manifest: {

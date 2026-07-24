@@ -4,6 +4,8 @@ import process from "node:process";
 import {
   buildSessionLongitudinalEvaluationReport,
   renderSessionLongitudinalEvaluationMarkdown,
+  type LongitudinalCriticalMomentCandidate,
+  type LongitudinalCriticalMomentEvaluation,
   type LongitudinalQuestionEvaluation,
   type LongitudinalSessionInput,
   type LongitudinalSessionManifest,
@@ -47,6 +49,8 @@ async function main() {
       {
         sessions: report.cohort.sessionCount,
         productionTraces: report.cohort.productionTraceCount,
+        criticalMoments: report.productOutcomes.criticalMomentCount,
+        criticalMomentSuccessRate: report.productOutcomes.cmsr,
         labeledCoverage: report.cohort.labeledTraceCoverage,
         jsonPath,
         markdownPath,
@@ -63,6 +67,8 @@ async function readSession(directory: string): Promise<LongitudinalSessionInput>
     transcriptTurns,
     tracePayload,
     evaluationsPayload,
+    criticalMomentCandidatesPayload,
+    criticalMomentEvaluationsPayload,
     runtimeTraces,
   ] =
     await Promise.all([
@@ -82,6 +88,26 @@ async function readSession(directory: string): Promise<LongitudinalSessionInput>
           directory,
           "human-evaluation",
           "question-evaluations.json"
+        ),
+        { evaluations: [] }
+      ),
+      readOptionalJson<{
+        candidates?: LongitudinalCriticalMomentCandidate[];
+      }>(
+        path.join(
+          directory,
+          "human-evaluation",
+          "critical-moment-candidates.json"
+        ),
+        { candidates: [] }
+      ),
+      readOptionalJson<{
+        evaluations?: LongitudinalCriticalMomentEvaluation[];
+      }>(
+        path.join(
+          directory,
+          "human-evaluation",
+          "critical-moment-evaluations.json"
         ),
         { evaluations: [] }
       ),
@@ -105,6 +131,10 @@ async function readSession(directory: string): Promise<LongitudinalSessionInput>
     transcriptTurns,
     traceSummaries: Array.from(compactByTrace.values()),
     questionEvaluations: evaluationsPayload.evaluations ?? [],
+    criticalMomentCandidates:
+      criticalMomentCandidatesPayload.candidates ?? [],
+    criticalMomentEvaluations:
+      criticalMomentEvaluationsPayload.evaluations ?? [],
   };
 }
 
@@ -176,6 +206,11 @@ function mergeRuntimeTraceEvidence(
     traceKind: compact?.traceKind ?? runtime.traceKind,
     status: compact?.status ?? runtime.status,
     startedAt: compact?.startedAt ?? runtime.startedAt,
+    endedAt:
+      compact?.endedAt ??
+      (runtime.startedAt !== undefined && runtime.durationMs !== undefined
+        ? runtime.startedAt + runtime.durationMs
+        : undefined),
     durationMs: compact?.durationMs ?? runtime.durationMs,
     questionType:
       readString(metadata.canonicalQuestionType) ??

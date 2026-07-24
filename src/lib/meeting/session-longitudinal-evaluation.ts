@@ -30,6 +30,7 @@ export interface LongitudinalTraceSummary {
   traceKind?: string;
   status?: string;
   startedAt?: number;
+  endedAt?: number;
   durationMs?: number;
   syntheticValidation?: boolean;
   questionType?: string;
@@ -81,6 +82,48 @@ export interface LongitudinalTraceSummary {
   };
 }
 
+export interface LongitudinalCriticalMomentCandidate {
+  momentId: string;
+  sessionId: string;
+  sourceTurnIds: string[];
+  sourceText?: string;
+  opportunityStartAt?: number;
+  opportunityEndAt?: number;
+  candidateSource?: string;
+  candidateReasons?: string[];
+  proposedTraceIds: string[];
+  proposedQuestionType?: string;
+  traceJoinStatus?: "none" | "exact" | "proposed" | "ambiguous";
+  createdAt?: number;
+  updatedAt?: number;
+}
+
+export interface LongitudinalCriticalMomentEvaluation {
+  momentId: string;
+  sessionId: string;
+  sourceTurnIds: string[];
+  traceIds: string[];
+  eligibility?: "critical" | "not-critical" | "uncertain";
+  expectedQuestionType?: string;
+  expectedAdvisorAction?: "advise" | "clarify" | "append-context" | "ignore";
+  expectedRelation?: string;
+  expectedContextTurnIds?: string[];
+  opportunityEndAt?: number;
+  selectedUsefulTraceId?: string;
+  firstUsefulAt?: number;
+  userSpeechStartAt?: number;
+  useful?: boolean;
+  trustworthy?: boolean;
+  naturalStart?: boolean;
+  waitedForJarvis?: boolean;
+  readFromJarvis?: boolean;
+  interactionRequired?: boolean;
+  failureReasons?: string[];
+  notes?: string;
+  createdAt?: number;
+  updatedAt?: number;
+}
+
 export interface LongitudinalQuestionEvaluation {
   id: string;
   questionId: string;
@@ -115,6 +158,8 @@ export interface LongitudinalSessionInput {
   transcriptTurns: LongitudinalTranscriptTurn[];
   traceSummaries: LongitudinalTraceSummary[];
   questionEvaluations: LongitudinalQuestionEvaluation[];
+  criticalMomentCandidates?: LongitudinalCriticalMomentCandidate[];
+  criticalMomentEvaluations?: LongitudinalCriticalMomentEvaluation[];
 }
 
 export interface RateMetric {
@@ -131,7 +176,7 @@ type TypeStage =
   | "runtime";
 
 export interface SessionLongitudinalEvaluationReport {
-  version: 1;
+  version: 2;
   generatedAt: number;
   sessions: Array<{
     sessionId: string;
@@ -149,6 +194,33 @@ export interface SessionLongitudinalEvaluationReport {
     interviewerTurnCount: number;
     buildProvenanceCoverage: RateMetric;
     labeledTraceCoverage: RateMetric;
+  };
+  productOutcomes: {
+    candidateCount: number;
+    reviewedCandidateCount: number;
+    criticalMomentCount: number;
+    notCriticalMomentCount: number;
+    uncertainMomentCount: number;
+    unresolvedCandidateCount: number;
+    cmsr: RateMetric;
+    strictSuccessCount: number;
+    timingNotEvaluableCount: number;
+    zeroTraceOpportunityMissRate: RateMetric;
+    falseActivationRate: RateMetric;
+    ttugMs: DistributionMetric;
+    guidanceBeforeSpeechCoverage: RateMetric;
+    guidanceBeforeSpeechSuccess: RateMetric;
+    naturalStartRate: RateMetric;
+    waitedForJarvisRate: RateMetric;
+    readFromJarvisRate: RateMetric;
+    interactionRequiredRate: RateMetric;
+    usefulButUntrustworthyCount: number;
+    trustworthyButLateCount: number;
+    manyTraceMomentCount: number;
+    ambiguousJoinCount: number;
+    evaluationsWithoutCandidate: number;
+    failureReasons: Record<string, number>;
+    denominatorAuthority: "explicit-human-eligibility";
   };
   typeFunnel: {
     stageCoverage: Record<TypeStage, RateMetric>;
@@ -218,13 +290,22 @@ interface JoinedTrace {
   evaluation?: LongitudinalQuestionEvaluation;
 }
 
+interface JoinedCriticalMoment {
+  session: LongitudinalSessionInput;
+  candidate: LongitudinalCriticalMomentCandidate;
+  evaluation?: LongitudinalCriticalMomentEvaluation;
+  traces: LongitudinalTraceSummary[];
+}
+
 export function buildSessionLongitudinalEvaluationReport(
   inputs: LongitudinalSessionInput[]
 ): SessionLongitudinalEvaluationReport {
   const production: JoinedTrace[] = [];
+  const criticalMomentRows: JoinedCriticalMoment[] = [];
   let syntheticTraceCount = 0;
   let interviewerTurnCount = 0;
   let labelsWithoutMatchingTrace = 0;
+  let evaluationsWithoutCandidate = 0;
   const sessionRows = inputs.map((session) => {
     const evaluationsByTrace = indexLatestEvaluations(session.questionEvaluations);
     const traceIds = new Set(session.traceSummaries.map((trace) => trace.traceId));
@@ -236,6 +317,36 @@ export function buildSessionLongitudinalEvaluationReport(
     interviewerTurnCount += session.transcriptTurns.filter(
       (turn) => turn.speaker === "them"
     ).length;
+    const candidates = buildLongitudinalCriticalMomentCandidates(session);
+    const evaluationsByMoment = indexLatestMomentEvaluations(
+      session.criticalMomentEvaluations ?? []
+    );
+    const candidatesById = new Map(
+      candidates.map((candidate) => [candidate.momentId, candidate])
+    );
+    evaluationsWithoutCandidate += (
+      session.criticalMomentEvaluations ?? []
+    ).filter((evaluation) => !candidatesById.has(evaluation.momentId)).length;
+    const tracesById = new Map(
+      session.traceSummaries.map((trace) => [trace.traceId, trace])
+    );
+    for (const candidate of candidates) {
+      const evaluation = evaluationsByMoment.get(candidate.momentId);
+      const traceIds = uniqueStrings([
+        ...candidate.proposedTraceIds,
+        ...(evaluation?.traceIds ?? []),
+      ]);
+      criticalMomentRows.push({
+        session,
+        candidate,
+        evaluation,
+        traces: traceIds
+          .map((traceId) => tracesById.get(traceId))
+          .filter(
+            (trace): trace is LongitudinalTraceSummary => Boolean(trace)
+          ),
+      });
+    }
     let productionTraceCount = 0;
     let labeledTraceCount = 0;
     for (const trace of session.traceSummaries) {
@@ -364,9 +475,13 @@ export function buildSessionLongitudinalEvaluationReport(
         : session.productionTraceCount),
     0
   );
+  const productOutcomes = buildProductOutcomes(
+    criticalMomentRows,
+    evaluationsWithoutCandidate
+  );
 
   return {
-    version: 1,
+    version: 2,
     generatedAt: Date.now(),
     sessions: sessionRows,
     cohort: {
@@ -383,6 +498,7 @@ export function buildSessionLongitudinalEvaluationReport(
         production.length
       ),
     },
+    productOutcomes,
     typeFunnel: {
       stageCoverage,
       unknownRate,
@@ -511,6 +627,371 @@ export function buildSessionLongitudinalEvaluationReport(
   };
 }
 
+function buildProductOutcomes(
+  rows: JoinedCriticalMoment[],
+  evaluationsWithoutCandidate: number
+): SessionLongitudinalEvaluationReport["productOutcomes"] {
+  const reviewed = rows.filter(({ evaluation }) =>
+    Boolean(evaluation?.eligibility)
+  );
+  const critical = reviewed.filter(
+    ({ evaluation }) => evaluation?.eligibility === "critical"
+  );
+  const notCritical = reviewed.filter(
+    ({ evaluation }) => evaluation?.eligibility === "not-critical"
+  );
+  const uncertain = reviewed.filter(
+    ({ evaluation }) => evaluation?.eligibility === "uncertain"
+  );
+  const strictSuccesses = critical.filter(({ evaluation }) => {
+    if (!evaluation?.useful || !evaluation.trustworthy) return false;
+    if (evaluation.naturalStart === false) return false;
+    return !isGuidanceLate(evaluation);
+  });
+  const timingComparable = critical.filter(({ evaluation }) =>
+    hasGuidanceBeforeSpeechEvidence(evaluation)
+  );
+  const ttugValues = critical.map(({ candidate, evaluation }) => {
+    const firstUsefulAt = finiteNumber(evaluation?.firstUsefulAt);
+    const opportunityEndAt = finiteNumber(
+      evaluation?.opportunityEndAt ?? candidate.opportunityEndAt
+    );
+    return firstUsefulAt !== undefined && opportunityEndAt !== undefined
+      ? firstUsefulAt - opportunityEndAt
+      : undefined;
+  });
+  const zeroTraceMoments = critical.filter(
+    ({ candidate, evaluation }) =>
+      uniqueStrings([
+        ...candidate.proposedTraceIds,
+        ...(evaluation?.traceIds ?? []),
+      ]).length === 0
+  );
+  const falseActivations = notCritical.filter(momentActivated);
+  const failureReasons: Record<string, number> = {};
+  for (const { evaluation } of reviewed) {
+    for (const reason of evaluation?.failureReasons ?? []) {
+      failureReasons[reason] = (failureReasons[reason] ?? 0) + 1;
+    }
+  }
+
+  return {
+    candidateCount: rows.length,
+    reviewedCandidateCount: reviewed.length,
+    criticalMomentCount: critical.length,
+    notCriticalMomentCount: notCritical.length,
+    uncertainMomentCount: uncertain.length,
+    unresolvedCandidateCount:
+      rows.length - critical.length - notCritical.length,
+    cmsr: rate(strictSuccesses.length, critical.length),
+    strictSuccessCount: strictSuccesses.length,
+    timingNotEvaluableCount: critical.filter(({ evaluation }) => {
+      if (!evaluation?.useful || !evaluation.trustworthy) return false;
+      return !hasGuidanceBeforeSpeechEvidence(evaluation);
+    }).length,
+    zeroTraceOpportunityMissRate: rate(
+      zeroTraceMoments.length,
+      critical.length
+    ),
+    falseActivationRate: rate(falseActivations.length, notCritical.length),
+    ttugMs: distribution(ttugValues),
+    guidanceBeforeSpeechCoverage: rate(
+      timingComparable.length,
+      critical.length
+    ),
+    guidanceBeforeSpeechSuccess: rate(
+      timingComparable.filter(
+        ({ evaluation }) => !isGuidanceLate(evaluation)
+      ).length,
+      timingComparable.length
+    ),
+    naturalStartRate: explicitBooleanRate(
+      critical.map(({ evaluation }) => evaluation?.naturalStart)
+    ),
+    waitedForJarvisRate: explicitBooleanRate(
+      critical.map(({ evaluation }) => evaluation?.waitedForJarvis)
+    ),
+    readFromJarvisRate: explicitBooleanRate(
+      critical.map(({ evaluation }) => evaluation?.readFromJarvis)
+    ),
+    interactionRequiredRate: explicitBooleanRate(
+      critical.map(({ evaluation }) => evaluation?.interactionRequired)
+    ),
+    usefulButUntrustworthyCount: critical.filter(
+      ({ evaluation }) =>
+        evaluation?.useful === true && evaluation.trustworthy === false
+    ).length,
+    trustworthyButLateCount: critical.filter(
+      ({ evaluation }) =>
+        evaluation?.trustworthy === true && isGuidanceLate(evaluation)
+    ).length,
+    manyTraceMomentCount: rows.filter(
+      ({ candidate, evaluation }) =>
+        uniqueStrings([
+          ...candidate.proposedTraceIds,
+          ...(evaluation?.traceIds ?? []),
+        ]).length > 1
+    ).length,
+    ambiguousJoinCount: rows.filter(
+      ({ candidate }) => candidate.traceJoinStatus === "ambiguous"
+    ).length,
+    evaluationsWithoutCandidate,
+    failureReasons,
+    denominatorAuthority: "explicit-human-eligibility",
+  };
+}
+
+function buildLongitudinalCriticalMomentCandidates(
+  session: LongitudinalSessionInput
+) {
+  const persisted = (session.criticalMomentCandidates ?? []).filter(
+    (candidate) =>
+      Boolean(candidate.momentId) && candidate.sourceTurnIds.length > 0
+  );
+  const coveredTurnIds = new Set(
+    persisted.flatMap((candidate) => candidate.sourceTurnIds)
+  );
+  const fallback = buildFallbackCriticalMomentCandidates(
+    session,
+    coveredTurnIds
+  );
+  return [...persisted, ...fallback];
+}
+
+function buildFallbackCriticalMomentCandidates(
+  session: LongitudinalSessionInput,
+  excludedTurnIds: Set<string>
+): LongitudinalCriticalMomentCandidate[] {
+  const sessionId =
+    session.manifest.sessionId ??
+    session.manifest.folderName ??
+    session.directory;
+  const turns = session.transcriptTurns
+    .filter(
+      (turn) =>
+        turn.speaker === "them" &&
+        Boolean(turn.id && turn.text?.trim()) &&
+        !excludedTurnIds.has(turn.id)
+    )
+    .sort(
+      (left, right) =>
+        (left.startedAt ?? 0) - (right.startedAt ?? 0) ||
+        left.id.localeCompare(right.id)
+    );
+  if (!turns.length) return [];
+
+  const turnById = new Map(turns.map((turn) => [turn.id, turn]));
+  const parentByTurnId = new Map(turns.map((turn) => [turn.id, turn.id]));
+  const find = (turnId: string): string => {
+    const parent = parentByTurnId.get(turnId) ?? turnId;
+    if (parent === turnId) return parent;
+    const root = find(parent);
+    parentByTurnId.set(turnId, root);
+    return root;
+  };
+  const union = (leftId: string, rightId: string) => {
+    const leftRoot = find(leftId);
+    const rightRoot = find(rightId);
+    if (leftRoot !== rightRoot) parentByTurnId.set(rightRoot, leftRoot);
+  };
+
+  for (const trace of session.traceSummaries) {
+    const sourceTurnIds = uniqueStrings(
+      trace.logicalQuestionSourceTurnIds ?? []
+    ).filter((turnId) => turnById.has(turnId));
+    const [firstTurnId, ...remainingTurnIds] = sourceTurnIds;
+    if (!firstTurnId) continue;
+    for (const turnId of remainingTurnIds) union(firstTurnId, turnId);
+  }
+  for (let index = 1; index < turns.length; index += 1) {
+    const previous = turns[index - 1];
+    const current = turns[index];
+    if (shouldComposeLongitudinalTurns(previous, current)) {
+      union(previous.id, current.id);
+    }
+  }
+
+  const groups = new Map<string, LongitudinalTranscriptTurn[]>();
+  for (const turn of turns) {
+    const root = find(turn.id);
+    groups.set(root, [...(groups.get(root) ?? []), turn]);
+  }
+  return Array.from(groups.values()).map((group) => {
+    const ordered = [...group].sort(
+      (left, right) =>
+        (left.startedAt ?? 0) - (right.startedAt ?? 0) ||
+        left.id.localeCompare(right.id)
+    );
+    const sourceTurnIds = ordered.map((turn) => turn.id);
+    const sourceTurnIdSet = new Set(sourceTurnIds);
+    const traces = session.traceSummaries.filter((trace) =>
+      (trace.logicalQuestionSourceTurnIds ?? []).some((turnId) =>
+        sourceTurnIdSet.has(turnId)
+      )
+    );
+    const exactTraceCount = traces.filter((trace) =>
+      (trace.logicalQuestionSourceTurnIds ?? []).every((turnId) =>
+        sourceTurnIdSet.has(turnId)
+      )
+    ).length;
+    const questionTypes = uniqueStrings(
+      traces
+        .map((trace) =>
+          normalizeCanonicalQuestionType(
+            trace.canonicalQuestionType ?? trace.questionType
+          )
+        )
+        .filter(Boolean)
+    );
+    return {
+      momentId: createLongitudinalMomentId(sessionId, sourceTurnIds),
+      sessionId,
+      sourceTurnIds,
+      sourceText: ordered.map((turn) => turn.text?.trim()).filter(Boolean).join(" "),
+      opportunityStartAt: ordered[0]?.startedAt,
+      opportunityEndAt: ordered[ordered.length - 1]?.endedAt,
+      candidateSource: traces.some((trace) => trace.logicalQuestionUnitId)
+        ? "runtime-lqu"
+        : "transcript-rule",
+      candidateReasons: traces.length
+        ? ["legacy-transcript-reconstruction"]
+        : ["legacy-transcript-reconstruction", "zero-trace-opportunity"],
+      proposedTraceIds: uniqueStrings(traces.map((trace) => trace.traceId)),
+      proposedQuestionType:
+        questionTypes.length === 1 ? questionTypes[0] : undefined,
+      traceJoinStatus:
+        traces.length === 0
+          ? "none"
+          : traces.length === 1 && exactTraceCount === 1
+            ? "exact"
+            : traces.length > 1 || exactTraceCount > 1
+              ? "ambiguous"
+              : "proposed",
+      createdAt: ordered[0]?.startedAt,
+      updatedAt: ordered[ordered.length - 1]?.endedAt,
+    };
+  });
+}
+
+function indexLatestMomentEvaluations(
+  evaluations: LongitudinalCriticalMomentEvaluation[]
+) {
+  const byMoment = new Map<string, LongitudinalCriticalMomentEvaluation>();
+  for (const evaluation of evaluations) {
+    const current = byMoment.get(evaluation.momentId);
+    if (
+      !current ||
+      (evaluation.updatedAt ?? 0) >= (current.updatedAt ?? 0)
+    ) {
+      byMoment.set(evaluation.momentId, evaluation);
+    }
+  }
+  return byMoment;
+}
+
+function momentActivated({ traces }: JoinedCriticalMoment) {
+  return traces.some(
+    (trace) =>
+      trace.advisorExecutionAuthorized === true ||
+      trace.advisorOutputCommittedToUi === true ||
+      trace.visibleAnswerChanged === true ||
+      isCommittedDisposition(trace.advisorOutputDisposition)
+  );
+}
+
+function hasGuidanceBeforeSpeechEvidence(
+  evaluation: LongitudinalCriticalMomentEvaluation | undefined
+) {
+  return (
+    finiteNumber(evaluation?.firstUsefulAt) !== undefined &&
+    finiteNumber(evaluation?.userSpeechStartAt) !== undefined
+  );
+}
+
+function isGuidanceLate(
+  evaluation: LongitudinalCriticalMomentEvaluation | undefined
+) {
+  const firstUsefulAt = finiteNumber(evaluation?.firstUsefulAt);
+  const userSpeechStartAt = finiteNumber(evaluation?.userSpeechStartAt);
+  return (
+    firstUsefulAt !== undefined &&
+    userSpeechStartAt !== undefined &&
+    firstUsefulAt > userSpeechStartAt
+  );
+}
+
+function explicitBooleanRate(values: Array<boolean | undefined>) {
+  const labeled = values.filter(
+    (value): value is boolean => typeof value === "boolean"
+  );
+  return rate(
+    labeled.filter((value) => value).length,
+    labeled.length
+  );
+}
+
+function createLongitudinalMomentId(
+  sessionId: string,
+  sourceTurnIds: string[]
+) {
+  return `critical_moment_${stableHash(
+    `${sessionId}\u0000${uniqueStrings(sourceTurnIds)
+      .sort()
+      .join("\u0000")}`
+  )}`;
+}
+
+function shouldComposeLongitudinalTurns(
+  previous: LongitudinalTranscriptTurn,
+  current: LongitudinalTranscriptTurn
+) {
+  const previousEndedAt = finiteNumber(previous.endedAt);
+  const currentStartedAt = finiteNumber(current.startedAt);
+  if (previousEndedAt === undefined || currentStartedAt === undefined) {
+    return false;
+  }
+  const gapMs = currentStartedAt - previousEndedAt;
+  if (gapMs < 0 || gapMs > 5_000) return false;
+  const previousText = previous.text?.trim() ?? "";
+  const currentText = current.text?.trim() ?? "";
+  if (!previousText || !currentText || /[?？.!。！]$/.test(previousText)) {
+    return false;
+  }
+  return (
+    /[,，:：;；\-—]$/.test(previousText) ||
+    /^(?:and|or|but|because|so|then|also|which|that|where|when|how|what|why|who|can|could|would|should|do|does|did|is|are|was|were)\b/i.test(
+      currentText
+    ) ||
+    /^[a-z]/.test(currentText)
+  );
+}
+
+function stableHash(value: string) {
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return (hash >>> 0).toString(36);
+}
+
+function finiteNumber(value: unknown) {
+  return typeof value === "number" && Number.isFinite(value)
+    ? value
+    : undefined;
+}
+
+function uniqueStrings(values: Array<string | undefined>) {
+  return Array.from(
+    new Set(
+      values.filter(
+        (value): value is string =>
+          typeof value === "string" && Boolean(value.trim())
+      )
+    )
+  );
+}
+
 export function renderSessionLongitudinalEvaluationMarkdown(
   report: SessionLongitudinalEvaluationReport
 ) {
@@ -521,6 +1002,27 @@ export function renderSessionLongitudinalEvaluationMarkdown(
     `Sessions: ${report.cohort.sessionCount}`,
     `Production traces: ${report.cohort.productionTraceCount}`,
     `Human-labeled trace coverage: ${formatRate(report.cohort.labeledTraceCoverage)}`,
+    "",
+    "## Product Outcomes",
+    "",
+    `Critical moment candidates: ${report.productOutcomes.candidateCount}`,
+    `Reviewed candidates: ${report.productOutcomes.reviewedCandidateCount}`,
+    `Critical / not critical / uncertain / unresolved: ${report.productOutcomes.criticalMomentCount} / ${report.productOutcomes.notCriticalMomentCount} / ${report.productOutcomes.uncertainMomentCount} / ${report.productOutcomes.unresolvedCandidateCount}`,
+    `Critical Moment Success Rate: ${formatRate(report.productOutcomes.cmsr)}`,
+    `Zero-trace opportunity miss rate: ${formatRate(report.productOutcomes.zeroTraceOpportunityMissRate)}`,
+    `False activation on reviewed non-critical moments: ${formatRate(report.productOutcomes.falseActivationRate)}`,
+    `Time to useful guidance: ${formatDistribution(report.productOutcomes.ttugMs)}`,
+    `Guidance-before-speech coverage: ${formatRate(report.productOutcomes.guidanceBeforeSpeechCoverage)}`,
+    `Guidance-before-speech success: ${formatRate(report.productOutcomes.guidanceBeforeSpeechSuccess)}`,
+    `Natural start: ${formatRate(report.productOutcomes.naturalStartRate)}`,
+    `Waited for Jarvis: ${formatRate(report.productOutcomes.waitedForJarvisRate)}`,
+    `Read from Jarvis: ${formatRate(report.productOutcomes.readFromJarvisRate)}`,
+    `Interaction required: ${formatRate(report.productOutcomes.interactionRequiredRate)}`,
+    `Timing not evaluable: ${report.productOutcomes.timingNotEvaluableCount}`,
+    `Useful but untrustworthy / trustworthy but late: ${report.productOutcomes.usefulButUntrustworthyCount} / ${report.productOutcomes.trustworthyButLateCount}`,
+    `Many-trace moments / ambiguous joins: ${report.productOutcomes.manyTraceMomentCount} / ${report.productOutcomes.ambiguousJoinCount}`,
+    `Evaluations without candidate evidence: ${report.productOutcomes.evaluationsWithoutCandidate}`,
+    `Denominator authority: ${report.productOutcomes.denominatorAuthority}`,
     "",
     "## Type Funnel",
     "",
