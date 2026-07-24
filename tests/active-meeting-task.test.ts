@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   buildActiveMeetingTask,
+  clearActiveMeetingTaskProjection,
   collectActiveMeetingTaskIdentityIds,
   formatActiveMeetingTaskForRecording,
   formatActiveMeetingTaskForPrompt,
@@ -15,6 +16,25 @@ import type {
 } from "../src/lib/meeting/types.js";
 
 const now = 1_779_000_000_000;
+
+test("clears every active task projection while preserving unrelated state", () => {
+  const state = {
+    status: "listening",
+    activeScreenTask: makeScreenTask(),
+    activeInterviewTask: makeInterviewTask(),
+    activeMeetingTask: buildActiveMeetingTask({
+      activeScreenTask: makeScreenTask(),
+      activeInterviewTask: makeInterviewTask(),
+    }),
+  };
+
+  const cleared = clearActiveMeetingTaskProjection(state);
+
+  assert.equal(cleared.status, "listening");
+  assert.equal(cleared.activeScreenTask, undefined);
+  assert.equal(cleared.activeInterviewTask, undefined);
+  assert.equal(cleared.activeMeetingTask, undefined);
+});
 
 test("builds a screen-only active meeting task from legacy screen state", () => {
   const screenTask = makeScreenTask();

@@ -35,6 +35,7 @@ import {
   formatInterviewerIntentKeywordEvidenceForTrace,
   formatSemanticInterviewerIntentForTrace,
   ActiveMeetingTask,
+  clearActiveMeetingTaskProjection,
   AnswerSufficiencyDecision,
   ActiveInterviewParent,
   ActiveScreenTask,
@@ -870,10 +871,10 @@ function getActiveScreenTaskExpiresAt(
 function clearActiveScreenTaskState(
   previous: MeetingAssistantState
 ): MeetingAssistantState {
+  const clearedTaskState =
+    clearActiveMeetingTaskProjection(previous);
   return {
-    ...previous,
-    activeScreenTask: undefined,
-    activeInterviewTask: undefined,
+    ...clearedTaskState,
     partialSuggestion: "",
     latestSuggestion:
       isScreenAnchoredSuggestion(previous.latestSuggestion)
@@ -887,7 +888,6 @@ function clearActiveScreenTaskState(
           : "idle"
         : previous.status,
     error: null,
-    activeMeetingTask: undefined,
     manualQuestionTypeCorrection: undefined,
     currentQuestionLineage: undefined,
     latestInterviewerTurnCandidate: undefined,
@@ -3947,10 +3947,8 @@ export function useMeetingAssistant() {
       }
 
       setState((previous) => ({
-        ...previous,
+        ...clearActiveMeetingTaskProjection(previous),
         status: "idle",
-        activeScreenTask: undefined,
-        activeInterviewTask: undefined,
         interviewSessionBrief: contextState.interviewSessionBrief,
         interviewSessionContext: contextState.interviewSessionContext,
         latestSuggestion:

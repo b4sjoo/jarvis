@@ -98,6 +98,21 @@ export interface ActiveMeetingTaskIdentityResolution {
   taskSource?: ActiveMeetingTaskSource;
 }
 
+export function clearActiveMeetingTaskProjection<
+  T extends {
+    activeScreenTask?: unknown;
+    activeInterviewTask?: unknown;
+    activeMeetingTask?: unknown;
+  },
+>(state: T): T {
+  return {
+    ...state,
+    activeScreenTask: undefined,
+    activeInterviewTask: undefined,
+    activeMeetingTask: undefined,
+  };
+}
+
 export function buildActiveMeetingTask(input: {
   activeScreenTask?: ActiveScreenTask;
   activeInterviewTask?: ActiveInterviewParent;
