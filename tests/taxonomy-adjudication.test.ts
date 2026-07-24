@@ -333,6 +333,39 @@ test("keeps duplicate quoted and terminal asks addressable by source turn", () =
   });
 });
 
+test("repairs a normalized primary ask that drops the source action-object pair", () => {
+  const sourceText = "Maybe let's do ride-sharing backend.";
+  const request = buildTaxonomyAdjudicationRequest({
+    logicalQuestionUnit: unit(sourceText),
+  });
+  const parsed = parseTaxonomyAdjudicationOutput(
+    JSON.stringify(
+      answerOutput(request, {
+        questionType: "general-system-design",
+        relation: "new-parent",
+        evidenceMode: "hypothetical-design",
+        normalizedQuestion: "design question.",
+        primaryAskSpans: [{ turnId: "turn-a", text: sourceText }],
+        evidenceSpans: [sourceText],
+      })
+    ),
+    request
+  );
+
+  assert.equal(parsed.ok, true);
+  if (parsed.ok) {
+    assert.equal(parsed.value.normalizedQuestion, sourceText);
+    assert.equal(
+      parsed.value.normalizedQuestionSource,
+      "source-primary-ask-repair"
+    );
+    assert.equal(
+      parsed.value.normalizedQuestionRepairReason,
+      "action-object-not-preserved"
+    );
+  }
+});
+
 test("accepts direct, fenced, and bounded one-level JSON wrappers", () => {
   const request = buildTaxonomyAdjudicationRequest({
     logicalQuestionUnit: unit("What is reciprocal rank fusion?"),

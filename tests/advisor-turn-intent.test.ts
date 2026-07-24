@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   authorizeAdvisorExecution,
   decideAdvisorTurnIntent,
+  formatAdvisorTurnIntentForTrace,
 } from "../src/lib/meeting/advisor-turn-intent.js";
 
 test("enforces abstention for a technical declarative statement", () => {
@@ -227,6 +228,45 @@ test("requires context before a short confirmation can refresh an answer", () =>
   });
   assert.equal(contextual.intent, "confirmation");
   assert.equal(contextual.executionAuthorized, true);
+});
+
+test("suppresses exact acknowledgement variants without suppressing a real add-on ask", () => {
+  for (const text of [
+    "Looks good.",
+    "Looks good to me.",
+    "That looks good to me.",
+    "This sounds good to me.",
+  ]) {
+    const decision = decideAdvisorTurnIntent(text, {
+      hasActiveTask: true,
+    });
+    assert.equal(decision.intent, "confirmation", text);
+    assert.equal(decision.action, "ignore", text);
+    assert.equal(decision.reason, "exact-acknowledgement", text);
+    assert.equal(decision.executionAuthorized, false, text);
+    assert.ok(decision.evidence.includes("exact-acknowledgement"), text);
+    assert.deepEqual(
+      {
+        operation:
+          formatAdvisorTurnIntentForTrace(decision).advisorSuppressionOperation,
+        avoided:
+          formatAdvisorTurnIntentForTrace(decision).advisorProviderCallAvoided,
+      },
+      {
+        operation: "exact-acknowledgement",
+        avoided: true,
+      },
+      text
+    );
+  }
+
+  const addOn = decideAdvisorTurnIntent(
+    "That looks good to me, now write merge sort.",
+    { hasActiveTask: true }
+  );
+  assert.equal(addOn.intent, "direct-question");
+  assert.equal(addOn.action, "answer-refresh");
+  assert.equal(addOn.executionAuthorized, true);
 });
 
 test("execution authorization fails closed unless intent or an explicit action permits work", () => {

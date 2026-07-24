@@ -88,6 +88,50 @@ test("keeps a long direct technical ask on the immediate answer path", () => {
   assert.equal(result.quotedOrFutureExampleSpans.length, 0);
 });
 
+test("preserves the action-object pair in section-style directives", () => {
+  for (const [index, [text, expected]] of [
+    ["Maybe let's do ride-sharing backend.", "Maybe let's do ride-sharing backend."],
+    ["Let's design a ticket-selling system.", "Let's design a ticket-selling system."],
+    ["Now let's implement sliding-window maximum.", "implement sliding-window maximum."],
+  ].entries()) {
+    const result = projectPrimaryAsk({
+      turnId: `turn_action_object_${index}`,
+      text,
+    });
+
+    assert.equal(result.disposition, "answer-primary-ask", text);
+    assert.equal(result.speechAct, "directive", text);
+    assert.equal(result.normalizedPrimaryAsk, expected, text);
+    assert.equal(result.primaryAskSpans[0]?.text, expected, text);
+  }
+});
+
+test("does not treat a referential action without a concrete object as standalone", () => {
+  const result = projectPrimaryAsk({
+    turnId: "turn_referential_action",
+    text: "Let's do that.",
+  });
+
+  assert.equal(result.normalizedPrimaryAsk, undefined);
+  assert.equal(result.disposition, "append-setup");
+});
+
+test("treats exact acknowledgement variants as ignorable but keeps an add-on ask", () => {
+  const acknowledgement = projectPrimaryAsk({
+    turnId: "turn_acknowledgement",
+    text: "That looks good to me.",
+  });
+  assert.equal(acknowledgement.speechAct, "acknowledgement");
+  assert.equal(acknowledgement.disposition, "ignore");
+
+  const addOn = projectPrimaryAsk({
+    turnId: "turn_acknowledgement_ask",
+    text: "That looks good to me, now write merge sort.",
+  });
+  assert.equal(addOn.disposition, "answer-primary-ask");
+  assert.match(addOn.normalizedPrimaryAsk ?? "", /write merge sort/i);
+});
+
 test("keeps quoted technical questions append-only when there is no present ask", () => {
   const text =
     "During the next system design round, they may ask how would you shard a ride sharing database?";

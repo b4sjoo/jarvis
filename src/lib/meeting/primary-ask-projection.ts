@@ -2,6 +2,7 @@ import type {
   AdvisorTurnIntent,
   AdvisorTurnIntentDecision,
 } from "./advisor-turn-intent.js";
+import { isExactLowValueAcknowledgement } from "./advisor-turn-intent.js";
 
 export const PRIMARY_ASK_PROJECTION_SCHEMA_VERSION = 1;
 
@@ -81,8 +82,9 @@ export function projectPrimaryAsk({
         )
       : undefined;
     const candidate = explicitCurrentTransition
-      ? extractDirectAskAfterTransition(span, explicitCurrentTransition.end)
-      : extractDirectAskSpan(span);
+      ? extractDirectAskAfterTransition(span, explicitCurrentTransition.end) ??
+        extractActionObjectDirectiveSpan(span)
+      : extractDirectAskSpan(span) ?? extractActionObjectDirectiveSpan(span);
     const negativeFrame = hasQuotedOrFutureFrame(
       transitionSpan?.text ?? span.text
     );
@@ -407,11 +409,35 @@ function extractDirectAskAfterTransition(
   };
 }
 
+function extractActionObjectDirectiveSpan(
+  span: PrimaryAskEvidenceSpan
+): PrimaryAskEvidenceSpan | undefined {
+  const match = ACTION_OBJECT_DIRECTIVE_PATTERN.exec(span.text);
+  const candidateText = match?.groups?.ask;
+  if (!match || !candidateText || !hasConcreteDirectiveObject(candidateText)) {
+    return undefined;
+  }
+
+  const localStart = match.index + match[0].lastIndexOf(candidateText);
+  const rawCandidate = span.text.slice(localStart);
+  const leading = rawCandidate.match(/^\s*/u)?.[0].length ?? 0;
+  const start = span.start + localStart + leading;
+  return {
+    turnId: span.turnId,
+    text: span.text.slice(localStart + leading),
+    start,
+    end: span.end,
+  };
+}
+
 const DIRECT_ASK_HEAD_PATTERN =
   /(?:(?:can|could|would|will|do|does|did|is|are|was|were|have|has|had|should)\s+(?:you|your|this|that|it|there)\b|(?:how|what|why|when|where|which|who|whether)\b|(?:tell|walk|talk|give|show|explain|describe|outline|propose|design|create|sketch|implement|write|code|solve|compare|estimate|evaluate|discuss|share)\b|(?:请|怎么|如何|为什么|什么|是否|哪里|哪个|解释|描述|设计|实现|编写|估算|比较))/giu;
 
 const DIRECT_ASK_PATTERN =
   /(?:^|(?:\b(?:but|so|now|then|okay|with that|given that|my question is|for you|before we finish)\b[\s,:-]*))(?<ask>(?:(?:can|could|would|will|do|does|did|is|are|was|were|have|has|had|should)\s+(?:you|your|this|that|it|there)\b|(?:how|what|why|when|where|which|who|whether)\b|(?:tell|walk|talk|give|show|explain|describe|outline|propose|design|create|sketch|implement|write|code|solve|compare|estimate|evaluate|discuss|share)\b|(?:请|怎么|如何|为什么|什么|是否|哪里|哪个|解释|描述|设计|实现|编写|估算|比较)))/giu;
+
+const ACTION_OBJECT_DIRECTIVE_PATTERN =
+  /(?:^|(?:\b(?:but|so|now|then|okay|alright|right)\b[\s,:-]*))(?<ask>(?:maybe\s+)?(?:let(?:'s| us)\s+)?(?:do|design|build|implement|write|code|solve|create|sketch)\s+.+)$/iu;
 
 function isDirectAskText(candidate: string, wholeSpan: string) {
   const normalized = normalizeSpace(candidate);
@@ -483,6 +509,7 @@ function hasReferentialCurrentAsk(text: string) {
 function classifyNonAskSpeechAct(text: string): PrimaryAskSpeechAct {
   const normalized = normalizeSpace(text).toLowerCase();
   if (
+    isExactLowValueAcknowledgement(normalized) ||
     /^(?:ah|eh|er|hmm|mm|mhm|uh|um|yeah|yep|yes|no|ok|okay|right|sure|cool|great|nice|perfect|thanks|thank you)[.!]?$/i.test(
       normalized
     )
@@ -502,9 +529,27 @@ function classifyNonAskSpeechAct(text: string): PrimaryAskSpeechAct {
   return "informational";
 }
 
+function hasConcreteDirectiveObject(text: string) {
+  const normalized = normalizeSpace(text)
+    .toLocaleLowerCase()
+    .replace(/[.!?。！？]+$/u, "");
+  const match =
+    /^(?:maybe\s+)?(?:let(?:'s| us)\s+)?(?:do|design|build|implement|write|code|solve|create|sketch)\s+(?<object>.+)$/iu.exec(
+      normalized
+    );
+  const object = match?.groups?.object?.trim();
+  if (!object) return false;
+  return !/^(?:this|that|it|one|something|the same(?: thing| one)?)$/iu.test(
+    object
+  );
+}
+
 function isDirective(text: string) {
-  return /^(?:tell|walk|talk|give|show|explain|describe|outline|propose|design|create|sketch|implement|write|code|solve|compare|estimate|evaluate|discuss|share|请|解释|描述|设计|实现|编写|估算|比较)\b/iu.test(
-    normalizeSpace(text)
+  const normalized = normalizeSpace(text);
+  return (
+    /^(?:tell|walk|talk|give|show|explain|describe|outline|propose|design|create|sketch|implement|write|code|solve|compare|estimate|evaluate|discuss|share|请|解释|描述|设计|实现|编写|估算|比较)\b/iu.test(
+      normalized
+    ) || hasConcreteDirectiveObject(normalized)
   );
 }
 

@@ -79,12 +79,16 @@ export function decideAdvisorTurnIntent(
       : "none";
   const hasQuestionScope = followupScopeSource !== "none";
 
-  if (isLowValueAcknowledgement(normalized)) {
+  if (isExactLowValueAcknowledgement(normalized)) {
     if (options.hasPendingConfirmation) {
       return allowedDecision({
         intent: "confirmation",
         confidence: 0.98,
-        evidence: ["pending-confirmation", "short-confirmation"],
+        evidence: [
+          "pending-confirmation",
+          "short-confirmation",
+          "exact-acknowledgement",
+        ],
         action: "answer-refresh",
         reason: "contextual-confirmation",
         contextPromptEligible: true,
@@ -94,9 +98,13 @@ export function decideAdvisorTurnIntent(
     return enforcedDecision({
       intent: "confirmation",
       confidence: 0.98,
-      evidence: ["short-confirmation", "no-pending-confirmation"],
+      evidence: [
+        "short-confirmation",
+        "exact-acknowledgement",
+        "no-pending-confirmation",
+      ],
       action: "ignore",
-      reason: "unscoped-confirmation",
+      reason: "exact-acknowledgement",
     });
   }
 
@@ -329,6 +337,9 @@ export function authorizeAdvisorExecution({
 export function formatAdvisorTurnIntentForTrace(
   decision: AdvisorTurnIntentDecision
 ) {
+  const exactAcknowledgementSuppressed =
+    decision.reason === "exact-acknowledgement" &&
+    !decision.executionAuthorized;
   return {
     advisorTurnIntent: decision.intent,
     advisorTurnAction: decision.action,
@@ -340,6 +351,11 @@ export function formatAdvisorTurnIntentForTrace(
     advisorWouldSuppress: decision.wouldSuppress,
     advisorExecutionAuthorized: decision.executionAuthorized,
     followupScopeSource: decision.followupScopeSource ?? "none",
+    advisorSuppressionOperation: exactAcknowledgementSuppressed
+      ? "exact-acknowledgement"
+      : undefined,
+    advisorProviderCallAvoided: exactAcknowledgementSuppressed,
+    advisorAvoidedCallOpportunity: exactAcknowledgementSuppressed,
   };
 }
 
@@ -580,9 +596,17 @@ function collectDeclarativeEvidence(normalized: string) {
     : [];
 }
 
-function isLowValueAcknowledgement(normalized: string) {
-  return /^(ah|eh|er|hmm|mm|mhm|uh|um|yeah|yep|yes|no|ok|okay|right|sure|cool|great|nice|perfect|all good|sounds good|that sounds good|that is nice|that s nice|i see|got it|make sense|makes sense|thank you|thanks)$/i.test(
-    normalized
+export function isExactLowValueAcknowledgement(text: string) {
+  const normalized = normalizeAdvisorTurnText(text);
+  if (
+    /^(ah|eh|er|hmm|mm|mhm|uh|um|yeah|yep|yes|no|ok|okay|right|sure|cool|great|nice|perfect|all good|sounds good|that sounds good|that is nice|that s nice|i see|got it|make sense|makes sense|thank you|thanks)$/i.test(
+      normalized
+    )
+  ) {
+    return true;
+  }
+  return /^(looks good|looks good to me|that looks good|that looks good to me|this looks good|this looks good to me|sounds good|sounds good to me|that sounds good|that sounds good to me|this sounds good|this sounds good to me)$/i.test(
+    normalized.replace(/[.]+$/u, "")
   );
 }
 

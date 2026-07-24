@@ -7233,6 +7233,10 @@ export function useMeetingAssistant() {
             interviewerIntentLlmAction: parsedValue?.action,
             interviewerIntentLlmNormalizedQuestion:
               parsedValue?.normalizedQuestion,
+            interviewerIntentLlmNormalizedQuestionSource:
+              parsedValue?.normalizedQuestionSource,
+            interviewerIntentLlmNormalizedQuestionRepairReason:
+              parsedValue?.normalizedQuestionRepairReason,
             interviewerIntentLlmPrimaryAskSpans:
               parsedValue?.primaryAskSpans,
             interviewerIntentLlmPrimaryAskSpanCount:

@@ -19,7 +19,7 @@ import {
 
 export const TAXONOMY_ADJUDICATION_SCHEMA_VERSION = 2;
 export const TAXONOMY_ADJUDICATION_PROMPT_VERSION =
-  "interviewer-intent-adjudication-prompt-v3";
+  "interviewer-intent-adjudication-prompt-v4";
 export const TAXONOMY_ADJUDICATION_MAX_OUTPUT_CHARS = 4_096;
 export const TAXONOMY_ADJUDICATION_MAX_INPUT_CHARS = 1_200;
 export const TAXONOMY_ADJUDICATION_MAX_PARENT_CHARS = 400;
@@ -113,6 +113,8 @@ export interface LlmTaxonomyAdjudication {
   evidenceMode: InterviewerEvidenceMode;
   action: InterviewerIntentAction;
   normalizedQuestion: string;
+  normalizedQuestionSource?: "model" | "source-primary-ask-repair";
+  normalizedQuestionRepairReason?: "action-object-not-preserved";
   primaryAskSpans: TaxonomyAdjudicationSourceSpan[];
   standalone: boolean;
   evidenceSpans: string[];
@@ -432,6 +434,7 @@ export function buildTaxonomyAdjudicationPrompts(
       "Allowed action: answer, append-context, buffer, ignore.",
       "For a recruiter self-introduction, resume walkthrough, or project-opening request, use project-deep-dive. For recruiter logistics or filler, use unknown.",
       "normalizedQuestion is the normalized current primary or terminal ask. It must be non-empty when action is answer; otherwise it may be an empty string.",
+      "For an action request, normalizedQuestion must preserve both the requested operation and its concrete target object from primaryAskSpans. Never replace a concrete request such as 'Let's do a ride-sharing backend' with a generic label such as 'design question'.",
       "primaryAskSpans is an array of {turnId,text}. Each text must be an exact verbatim substring of the source turn named by turnId. Use the occurrence that is the current primary ask, even when identical text appears in an earlier quoted or future example. It must be non-empty when action is answer and may be empty otherwise.",
       "evidenceSpans must contain exact verbatim substrings from supplied source text or compact parent context.",
       "Example logistics result: {\"schemaVersion\":2,\"speechAct\":\"logistics\",\"questionType\":\"unknown\",\"relation\":\"none\",\"evidenceMode\":\"unknown\",\"action\":\"append-context\",\"normalizedQuestion\":\"\",\"primaryAskSpans\":[],\"standalone\":false,\"evidenceSpans\":[\"The call will take thirty minutes\"],\"confidence\":0.95}.",
@@ -552,6 +555,19 @@ export function parseTaxonomyAdjudicationOutput(
     return parseFailure("invalid-ambiguity-reason", "schema", true);
   }
 
+  const normalizedQuestion = normalizeSpace(candidate.normalizedQuestion);
+  const sourceBackedQuestion = normalizeSpace(
+    primaryAskSpans.map((span) => span.text).join(" ")
+  );
+  const actionObjectPreserved = preservesActionObject(
+    sourceBackedQuestion,
+    normalizedQuestion
+  );
+  const repairedNormalizedQuestion =
+    candidate.action === "answer" && !actionObjectPreserved
+      ? sourceBackedQuestion
+      : normalizedQuestion;
+
   return {
     ok: true,
     evidenceSpansValid: true,
@@ -563,7 +579,15 @@ export function parseTaxonomyAdjudicationOutput(
       relation: candidate.relation,
       evidenceMode: candidate.evidenceMode,
       action: candidate.action,
-      normalizedQuestion: normalizeSpace(candidate.normalizedQuestion),
+      normalizedQuestion: repairedNormalizedQuestion,
+      normalizedQuestionSource:
+        repairedNormalizedQuestion !== normalizedQuestion
+          ? "source-primary-ask-repair"
+          : "model",
+      normalizedQuestionRepairReason:
+        repairedNormalizedQuestion !== normalizedQuestion
+          ? "action-object-not-preserved"
+          : undefined,
       primaryAskSpans,
       standalone: candidate.standalone,
       evidenceSpans,
@@ -572,6 +596,51 @@ export function parseTaxonomyAdjudicationOutput(
     },
   };
 }
+
+function preservesActionObject(source: string, normalizedQuestion: string) {
+  const sourceTokens = extractDistinctActionObjectTokens(source);
+  if (sourceTokens.length === 0) return true;
+  const normalizedTokens = new Set(tokenizeForActionObject(normalizedQuestion));
+  return sourceTokens.some((token) => normalizedTokens.has(token));
+}
+
+function extractDistinctActionObjectTokens(text: string) {
+  const normalized = normalizeSpace(text).toLocaleLowerCase();
+  const action =
+    /(?:^|\b)(?:(?:maybe\s+)?let(?:'s| us)\s+)?(?:do|design|build|implement|write|code|solve|create|sketch)\s+(?<object>.+)$/iu.exec(
+      normalized
+    );
+  if (!action?.groups?.object) return [];
+  return tokenizeForActionObject(action.groups.object).filter(
+    (token) => !ACTION_OBJECT_GENERIC_TOKENS.has(token)
+  );
+}
+
+function tokenizeForActionObject(text: string) {
+  return text
+    .toLocaleLowerCase()
+    .match(/[\p{L}\p{N}+#]+/gu)
+    ?.filter(Boolean) ?? [];
+}
+
+const ACTION_OBJECT_GENERIC_TOKENS = new Set([
+  "a",
+  "an",
+  "and",
+  "backend",
+  "design",
+  "for",
+  "of",
+  "problem",
+  "question",
+  "some",
+  "system",
+  "task",
+  "the",
+  "this",
+  "that",
+  "to",
+]);
 
 export function createTaxonomyAdjudicationLease(input: {
   sessionId: string;
