@@ -181,7 +181,9 @@ import {
   buildBoundedParentContextHandoff,
   buildCommittedTaskBoundaryParent,
   commitTaskBoundaryCandidate,
+  commitSourceOwnedTransition,
   createTaskBoundaryCandidate,
+  createSourceOwnedTransitionCandidate,
   createRuntimeCommitToken,
   decideAdvisorPhaseMutation,
   decideAdvisorTaskMutation,
@@ -189,6 +191,7 @@ import {
   formatAdvisorTriggerJobForTrace,
   formatCrossDomainParentTransitionForTrace,
   formatRuntimeCommitAuthorizationForTrace,
+  formatSourceOwnedTransitionForTrace,
   formatTaskBoundaryCandidateForTrace,
   rebaseRuntimeCommitToken,
   rebaseRuntimeCommitTokenAfterOwnedParentMutation,
@@ -229,6 +232,7 @@ import {
   readInterviewBriefType,
   resolveTaskTaxonomyAuthority,
   supersedeTaskBoundaryCandidate,
+  sourceOwnedTransitionSurvivesModelOutcome,
   taskBoundarySurvivesAdvisorOutcome,
   toHumanEvalQuestionType,
   toMemoryUseCaseForQuestionType,
@@ -238,6 +242,7 @@ import {
   type HybridQuestionTypeDecision,
   type LatestTurnTaxonomyBoundaryReason,
   type TaskTaxonomyAuthorityDecision,
+  type SourceOwnedTransitionCommitResult,
   TaxonomyAdjudicationRuntime,
   type TaxonomyAdjudicationRequestResult,
   TAXONOMY_ADJUDICATION_MAX_OUTPUT_CHARS,
@@ -4890,6 +4895,174 @@ export function useMeetingAssistant() {
       }
     }
 
+    let sourceOwnedTransitionResult:
+      | SourceOwnedTransitionCommitResult
+      | undefined;
+    if (
+      !manualPhaseAdvance &&
+      advisorTaskSignals.taskRelation !== "new-parent" &&
+      advisorJob.logicalQuestionUnit
+    ) {
+      const transitionContextBefore =
+        contextManagerRef.current.getState();
+      const transitionParentBefore =
+        transitionContextBefore.activeInterviewTask ??
+        (transitionContextBefore.activeScreenTask
+          ? buildInterviewParentFromScreenTask(
+              transitionContextBefore.activeScreenTask
+            )
+          : undefined);
+      const sourceOwnedTransitionCandidate =
+        createSourceOwnedTransitionCandidate({
+          sessionId: transitionContextBefore.sessionId,
+          runtimeEpoch: runtimeEpochRef.current,
+          source: resolveAdvisorTaskEvidenceSource({
+            triggerSource: advisorJob.source,
+            hasActiveScreenTask: Boolean(
+              transitionContextBefore.activeScreenTask
+            ),
+          }),
+          sourceTurnIds:
+            advisorJob.logicalQuestionUnit.sourceTurnIds,
+          logicalQuestionUnitId:
+            advisorJob.logicalQuestionUnit.id,
+          logicalQuestionRevision:
+            advisorJob.logicalQuestionUnit.revision,
+          existingTask: transitionParentBefore,
+          relation: advisorTaskSignals.taskRelation,
+          authoritySource: taskBoundaryAuthoritySource,
+          mutationAuthorized:
+            taskMutationAuthorization.authorized,
+          questionType: advisorQuestionType,
+          question:
+            advisorJob.logicalQuestionUnit.normalizedText,
+          subtaskIntent: advisorTaskSignals.subtaskIntent,
+          questionInstanceId:
+            questionLineage?.questionInstanceId,
+          playbook: advisorRuntimePlaybook,
+          phaseDecision: playbookPhaseDecision,
+          expiresAt: getActiveScreenTaskExpiresAt(
+            state.settings
+          ),
+        });
+
+      if (sourceOwnedTransitionCandidate) {
+        sourceOwnedTransitionResult =
+          commitSourceOwnedTransition({
+            candidate: sourceOwnedTransitionCandidate,
+            currentTask: transitionParentBefore,
+            currentSessionId:
+              transitionContextBefore.sessionId,
+            currentRuntimeEpoch: runtimeEpochRef.current,
+          });
+        if (traceId) {
+          traceStoreRef.current.updateMetadata(
+            traceId,
+            formatSourceOwnedTransitionForTrace(
+              sourceOwnedTransitionResult,
+              {
+                committedBeforeModel:
+                  sourceOwnedTransitionResult.candidate
+                    .state === "committed",
+              }
+            )
+          );
+          const transitionStepId =
+            traceStoreRef.current.startStep(
+              traceId,
+              "Source-owned task transition",
+              formatSourceOwnedTransitionForTrace(
+                sourceOwnedTransitionResult,
+                {
+                  committedBeforeModel:
+                    sourceOwnedTransitionResult.candidate
+                      .state === "committed",
+                }
+              )
+            );
+          traceStoreRef.current.finishStep(
+            traceId,
+            transitionStepId,
+            sourceOwnedTransitionResult.candidate.state ===
+              "committed"
+              ? "success"
+              : "error",
+            undefined,
+            sourceOwnedTransitionResult.candidate
+              .rejectionReason
+          );
+        }
+
+        if (
+          sourceOwnedTransitionResult.candidate.state ===
+          "committed"
+        ) {
+          contextManagerRef.current.setActiveMeetingTaskState({
+            activeScreenTask:
+              transitionContextBefore.activeScreenTask,
+            activeInterviewTask:
+              sourceOwnedTransitionResult.task ?? null,
+          });
+          recordCommittedPlaybookPhaseTransition({
+            operationId:
+              sourceOwnedTransitionResult.candidate.id,
+            source: "automatic",
+            before: transitionParentBefore,
+            after: sourceOwnedTransitionResult.task,
+            traceId,
+          });
+          const transitionContextAfter =
+            contextManagerRef.current.buildAdvisorPromptContext();
+          promptContext = {
+            ...promptContext,
+            activeScreenTask:
+              transitionContextAfter.activeScreenTask,
+            activeInterviewTask:
+              transitionContextAfter.activeInterviewTask,
+            activeMeetingTask:
+              transitionContextAfter.activeMeetingTask,
+            interviewPlaybook:
+              transitionContextAfter.interviewPlaybook,
+          };
+          activeMeetingTaskId =
+            getAdvisorActiveTaskId(promptContext);
+          effectiveRuntimeCommitToken =
+            rebaseRuntimeCommitToken({
+              token: effectiveRuntimeCommitToken,
+              snapshot: readRuntimeCommitSnapshot(),
+            });
+          const committedContext =
+            contextManagerRef.current.getState();
+          setState((previous) => ({
+            ...previous,
+            activeScreenTask:
+              committedContext.activeScreenTask,
+            activeInterviewTask:
+              committedContext.activeInterviewTask,
+            activeMeetingTask:
+              committedContext.activeMeetingTask,
+          }));
+          if (traceId && committedContext.activeMeetingTask) {
+            traceStoreRef.current.updateMetadata(traceId, {
+              runtimeCommitTokenRebased: true,
+              runtimeCommitTokenRebaseReason:
+                "source-owned-transition-committed-before-advisor",
+              ...getActiveMeetingTaskTraceMetadata(
+                committedContext.activeMeetingTask
+              ),
+            });
+            sessionRecordingManagerRef.current?.recordActiveMeetingTaskSnapshot(
+              committedContext.activeMeetingTask,
+              traceId
+            );
+          }
+        }
+      }
+    }
+    const sourceOwnedTransitionCommittedBeforeAdvisor =
+      sourceOwnedTransitionResult?.candidate.state ===
+      "committed";
+
     const responseOwner = resolveMeetingResponseOwner({
       preBoundaryType: preBoundaryResponseOwnerType,
       postBoundaryParentType: getAdvisorActiveQuestionType(promptContext),
@@ -4898,7 +5071,8 @@ export function useMeetingAssistant() {
       taskBoundaryCommitted: taskBoundaryCommittedBeforeAdvisor,
       childOwnsResponse:
         advisorTaskSignals.taskRelation === "child-probe" &&
-        taskMutationAuthorization.authorized,
+        taskMutationAuthorization.authorized &&
+        sourceOwnedTransitionCommittedBeforeAdvisor,
     });
     const advisorUsesCodingModel =
       responseOwner.questionType === "coding";
@@ -4938,7 +5112,22 @@ export function useMeetingAssistant() {
         commitAuthorizationReason: "missing-ai-provider",
       });
       if (traceId) {
-        traceStoreRef.current.updateMetadata(traceId, boundaryErrorMetadata);
+        traceStoreRef.current.updateMetadata(traceId, {
+          ...boundaryErrorMetadata,
+          ...formatSourceOwnedTransitionForTrace(
+            sourceOwnedTransitionResult,
+            {
+              committedBeforeModel:
+                sourceOwnedTransitionCommittedBeforeAdvisor,
+              modelOutcome: "error",
+              survivedModelOutcome:
+                sourceOwnedTransitionSurvivesModelOutcome(
+                  sourceOwnedTransitionResult,
+                  "error"
+                ),
+            }
+          ),
+        });
         traceStoreRef.current.finishTrace(traceId, "error", MISSING_AI_MESSAGE);
       }
       setState((previous) => ({
@@ -5163,6 +5352,7 @@ export function useMeetingAssistant() {
         trace: traceId
           ? {
               onRequest: (input) => {
+                const modelRequestStartedAt = Date.now();
                 advisorModelPromptText = formatTraceModelInput(
                   input.systemPrompt,
                   input.userMessage
@@ -5176,6 +5366,14 @@ export function useMeetingAssistant() {
                   advisorPromptIncludedLogicalQuestion,
                   advisorPromptLogicalQuestionSourceCount:
                     advisorJob.logicalQuestionUnit?.sources.length,
+                  ...formatSourceOwnedTransitionForTrace(
+                    sourceOwnedTransitionResult,
+                    {
+                      committedBeforeModel:
+                        sourceOwnedTransitionCommittedBeforeAdvisor,
+                      modelRequestStartedAt,
+                    }
+                  ),
                 });
                 traceStoreRef.current.recordInput(
                   traceId,
@@ -5395,11 +5593,21 @@ export function useMeetingAssistant() {
       });
       const shouldCommitAdvisorParent =
         advisorTaskMutationDecision.commitParent &&
-        advisorTaskSignals.openingRoute?.commitParent !== false;
+        advisorTaskSignals.openingRoute?.commitParent !== false &&
+        (advisorTaskSignals.taskRelation !== "new-parent" ||
+          taskBoundaryCommittedBeforeAdvisor) &&
+        (!sourceOwnedTransitionResult ||
+          sourceOwnedTransitionCommittedBeforeAdvisor);
       const continuityRelation: InterviewTaskRelation =
         taskBoundaryCommittedBeforeAdvisor
           ? "followup-parent"
           : advisorTaskSignals.taskRelation;
+      const outputPhaseDecision =
+        taskBoundaryCommittedBeforeAdvisor ||
+        sourceOwnedTransitionCommittedBeforeAdvisor ||
+        manualPhaseAdvanceCommitted
+          ? undefined
+          : playbookPhaseDecision;
       const artifactAuthorization = authorizeResponseArtifactMutation({
         parentTaskId: existingInterviewTask?.id,
         parentQuestionType:
@@ -5436,7 +5644,9 @@ export function useMeetingAssistant() {
             finalContent,
             parsedAnswer: parsedMeetingAnswer,
             playbook: advisorRuntimePlaybook,
-            phaseDecision: playbookPhaseDecision,
+            phaseDecision: outputPhaseDecision,
+            sourceTransitionPrecommitted:
+              sourceOwnedTransitionCommittedBeforeAdvisor,
             latestTurn,
             observationId:
               advisorEvidenceSource === "screen"
@@ -5527,13 +5737,19 @@ export function useMeetingAssistant() {
       }
 
       if (taskMutationAuthorization.authorized) {
-        recordCommittedPlaybookPhaseTransition({
-          operationId: `phase-auto-${advisorJob.id}`,
-          source: "automatic",
-          before: existingInterviewTask,
-          after: continuity.task,
-          traceId,
-        });
+        if (
+          !taskBoundaryCommittedBeforeAdvisor &&
+          !sourceOwnedTransitionCommittedBeforeAdvisor &&
+          !manualPhaseAdvanceCommitted
+        ) {
+          recordCommittedPlaybookPhaseTransition({
+            operationId: `phase-auto-${advisorJob.id}`,
+            source: "automatic",
+            before: existingInterviewTask,
+            after: continuity.task,
+            traceId,
+          });
+        }
         contextManagerRef.current.setActiveMeetingTaskState({
           activeScreenTask: nextActiveScreenTask,
           activeInterviewTask: continuity.task ?? null,
@@ -5580,6 +5796,22 @@ export function useMeetingAssistant() {
                 "empty-output"
               ),
           }),
+          ...formatSourceOwnedTransitionForTrace(
+            sourceOwnedTransitionResult,
+            {
+              committedBeforeModel:
+                sourceOwnedTransitionCommittedBeforeAdvisor,
+              modelOutcome: finalContent.trim()
+                ? "success"
+                : "empty-output",
+              survivedModelOutcome:
+                !finalContent.trim() &&
+                sourceOwnedTransitionSurvivesModelOutcome(
+                  sourceOwnedTransitionResult,
+                  "empty-output"
+                ),
+            }
+          ),
           ...getActiveMeetingTaskTraceMetadata(contextState.activeMeetingTask),
           activeInterviewParentId: contextState.activeInterviewTask?.id,
           activeInterviewParentKind: contextState.activeInterviewTask?.stableKind,
@@ -5724,6 +5956,19 @@ export function useMeetingAssistant() {
               commitAuthorizationReason: commitDecision.reason,
             }),
             ...boundaryErrorMetadata,
+            ...formatSourceOwnedTransitionForTrace(
+              sourceOwnedTransitionResult,
+              {
+                committedBeforeModel:
+                  sourceOwnedTransitionCommittedBeforeAdvisor,
+                modelOutcome: "cancelled",
+                survivedModelOutcome:
+                  sourceOwnedTransitionSurvivesModelOutcome(
+                    sourceOwnedTransitionResult,
+                    "cancelled"
+                  ),
+              }
+            ),
           },
           error
         );
@@ -5762,6 +6007,19 @@ export function useMeetingAssistant() {
             commitAuthorizationReason: commitDecision.reason,
           }),
           ...boundaryErrorMetadata,
+          ...formatSourceOwnedTransitionForTrace(
+            sourceOwnedTransitionResult,
+            {
+              committedBeforeModel:
+                sourceOwnedTransitionCommittedBeforeAdvisor,
+              modelOutcome: "error",
+              survivedModelOutcome:
+                sourceOwnedTransitionSurvivesModelOutcome(
+                  sourceOwnedTransitionResult,
+                  "error"
+                ),
+            }
+          ),
         },
         error
       );
@@ -13472,6 +13730,7 @@ function updateInterviewTaskContinuityForAnswer({
   supportedFactAnchors,
   projectBinding,
   artifactAuthorization,
+  sourceTransitionPrecommitted = false,
 }: {
   existingTask?: ActiveInterviewParent;
   source: "screen" | "voice";
@@ -13496,6 +13755,7 @@ function updateInterviewTaskContinuityForAnswer({
   artifactAuthorization: ReturnType<
     typeof authorizeResponseArtifactMutation
   >;
+  sourceTransitionPrecommitted?: boolean;
 }): InterviewTaskContinuityResult {
   const kind = normalizeInterviewParentKind(questionType);
   const childQuestionType =
@@ -13526,7 +13786,7 @@ function updateInterviewTaskContinuityForAnswer({
   });
 
   if (continuityDecision.branch === "child-probe" && existingTask) {
-    const child = isUsefulAnswer
+    const generatedChild = isUsefulAnswer
       ? buildActiveInterviewChild({
           questionType: childQuestionType,
           subtaskIntent,
@@ -13536,6 +13796,28 @@ function updateInterviewTaskContinuityForAnswer({
           observationId,
         })
       : undefined;
+    const child =
+      sourceTransitionPrecommitted &&
+      existingTask.child &&
+      generatedChild
+        ? {
+            ...generatedChild,
+            id: existingTask.child.id,
+            createdAt: existingTask.child.createdAt,
+            basedOnTurnIds: Array.from(
+              new Set([
+                ...existingTask.child.basedOnTurnIds,
+                ...generatedChild.basedOnTurnIds,
+              ])
+            ),
+            basedOnObservationIds: Array.from(
+              new Set([
+                ...existingTask.child.basedOnObservationIds,
+                ...generatedChild.basedOnObservationIds,
+              ])
+            ),
+          }
+        : generatedChild;
     const whiteboardArtifact = artifactAuthorization.allowWhiteboard
       ? updateWhiteboardArtifactFromAnswer({
           existing: existingTask.whiteboardArtifact,
