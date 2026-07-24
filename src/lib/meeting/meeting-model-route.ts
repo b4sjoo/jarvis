@@ -48,7 +48,8 @@ export type MeetingResponseOwnerSource =
   | "committed-parent"
   | "authorized-child"
   | "canonical-parent"
-  | "current-question";
+  | "current-question"
+  | "transient-personal-status";
 
 export interface MeetingResponseOwnerResolution {
   questionType: CanonicalQuestionType;

@@ -149,6 +149,7 @@ export interface CurrentQuestionSettlementDecision {
 
 export type CurrentQuestionSettlementDisposition =
   | "domain-resolved-provisional"
+  | "domain-resolved-unknown"
   | "unresolved-provisional"
   | "response-only"
   | "committed-parent"
@@ -159,12 +160,19 @@ export function resolveCurrentQuestionSettlementDisposition(input: {
   settlement: CurrentQuestionSettlementDecision;
   parentCommitted?: boolean;
   staleDropped?: boolean;
+  transientDomainResolved?: boolean;
 }): CurrentQuestionSettlementDisposition {
   if (input.staleDropped) return "stale-dropped";
   if (input.settlement.authority === "explicit-manual") {
     return "manual-authority";
   }
   if (input.parentCommitted) return "committed-parent";
+  if (
+    input.transientDomainResolved &&
+    input.settlement.questionType === "unknown"
+  ) {
+    return "domain-resolved-unknown";
+  }
   if (input.settlement.questionType === "unknown") {
     return "unresolved-provisional";
   }

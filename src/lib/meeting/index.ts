@@ -78,6 +78,7 @@ export * from "./taxonomy-adjudication-request";
 export * from "./taxonomy-adjudication-runtime";
 export * from "./taxonomy-adjudication-reflection";
 export * from "./trace";
+export * from "./transient-personal-status";
 export * from "./transcription.service";
 export * from "./transcript-fusion";
 export * from "./types";

@@ -758,7 +758,7 @@ test("compact trace summaries preserve task boundary and cross-domain evidence",
   );
   assert.ok(summaryWrite);
   const summary = parsePayload(summaryWrite);
-  assert.equal(summary.version, 16);
+  assert.equal(summary.version, 17);
   assert.equal(summary.taskRelation, "new-parent");
   assert.equal(summary.logicalQuestionUnitRevision, 3);
   assert.deepEqual(summary.logicalQuestionSourceTurnIds, ["turn_1", "turn_2"]);
@@ -864,7 +864,7 @@ test("compact trace summaries preserve hard memory invalidation evidence", async
   );
   assert.ok(summaryWrite);
   const summary = parsePayload(summaryWrite);
-  assert.equal(summary.version, 16);
+  assert.equal(summary.version, 17);
   const memory = summary.memory as Record<string, unknown>;
   assert.equal(memory.authorityRevision, 2);
   assert.equal(memory.invalidationKind, "hard");
@@ -1048,6 +1048,13 @@ test("records compact current-question settlement and execution-plan evidence", 
       settledExecutionPlanFactAnchorPolicy: "not-required",
       settledExecutionPlanPromptContract: "meeting-answer:system-design",
       settledExecutionPlanArtifactDisposition: "whiteboard-authorized",
+      settledExecutionPlanTransientPersonalStatusDecisionId:
+        "personal_status_a",
+      settledExecutionPlanTransientPersonalStatusDomain: "relocation",
+      settledExecutionPlanTransientPersonalStatusDisposition:
+        "domain-resolved-unknown",
+      settledExecutionPlanTransientPersonalStatusEvidencePolicy:
+        "profile-only",
       settledExecutionPlanAuthorized: true,
       settledExecutionPlanAuthorizationReason: "authorized",
       settledExecutionPlanAuthorizationStage: "plan-created",
@@ -1089,7 +1096,7 @@ test("records compact current-question settlement and execution-plan evidence", 
   assert.equal(serializedPlan.includes("taskSnapshot"), false);
   assert.equal(serializedPlan.includes("variables"), false);
   const summary = parsePayload(summaryWrite);
-  assert.equal(summary.version, 16);
+  assert.equal(summary.version, 17);
   assert.equal(
     (
       summary.currentQuestionSettlement as Record<string, unknown>
@@ -1099,6 +1106,11 @@ test("records compact current-question settlement and execution-plan evidence", 
   assert.equal(
     (summary.settledExecutionPlan as Record<string, unknown>).modelRoute,
     "main"
+  );
+  assert.equal(
+    (summary.settledExecutionPlan as Record<string, unknown>)
+      .transientPersonalStatusDomain,
+    "relocation"
   );
 
   await manager.stop("test-complete");
@@ -1180,7 +1192,7 @@ test("records a current-question term correction without copying provider state"
     false
   );
   const summary = parsePayload(summaryWrite);
-  assert.equal(summary.version, 16);
+  assert.equal(summary.version, 17);
   assert.equal(
     summary.manualTermCorrectionId,
     "term_correction_hnsw"

@@ -163,6 +163,11 @@ export function buildAdvisorUserMessage(
     "<fact_anchor_guardrail>",
     formatFactAnchorDecisionForPrompt(context.factAnchorDecision),
     "</fact_anchor_guardrail>",
+    "<transient_personal_status>",
+    formatTransientPersonalStatusForPrompt(
+      context.transientPersonalStatusDecision
+    ),
+    "</transient_personal_status>",
     "<response_preferences>",
     formatResponsePreferences(options.responseConfig),
     "</response_preferences>",
@@ -296,6 +301,24 @@ export function buildAdvisorUserMessage(
   );
 
   return sections.join("\n");
+}
+
+function formatTransientPersonalStatusForPrompt(
+  decision: AdvisorPromptContext["transientPersonalStatusDecision"]
+) {
+  if (!decision) {
+    return "No transient personal-status policy is active.";
+  }
+
+  return [
+    `Domain: ${decision.domain}`,
+    `Disposition: ${decision.disposition}`,
+    `Evidence policy: ${decision.evidencePolicy}`,
+    "Response contract: answer the current personal-status question directly and briefly in a natural, speakable sentence.",
+    "Evidence boundary: use only the Profile memory and confirmed-Me facts selected by the fact-anchor guardrail.",
+    "If no supporting fact exists, ask one concise clarification or state that the detail needs confirmation.",
+    "Isolation rule: do not answer as the active technical task, do not continue its playbook, and do not emit Code, Complexity, Approach, or Whiteboard sections.",
+  ].join("\n");
 }
 
 function formatResponsePreferences(config: MeetingResponseConfig | undefined) {

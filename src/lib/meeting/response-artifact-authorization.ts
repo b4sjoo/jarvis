@@ -45,6 +45,18 @@ export function authorizeResponseArtifactMutation(input: {
     responseOwnerSource: input.responseOwnerSource,
   };
 
+  if (input.relation === "logistics") {
+    return {
+      ...base,
+      disposition: "display-only-transient",
+      reason: "transient-response-cannot-mutate-parent-artifacts",
+      allowLatestUsefulAnswer: false,
+      allowWhiteboard: false,
+      allowCode: false,
+      allowParentContextMutation: false,
+    };
+  }
+
   if ((!input.parentTaskId && !input.creatingParent) || !parentQuestionType) {
     return {
       ...base,
@@ -58,9 +70,8 @@ export function authorizeResponseArtifactMutation(input: {
   }
 
   if (
-    input.relation === "logistics" ||
-    (responseOwnerQuestionType === "field-knowledge" &&
-      input.relation !== "child-probe")
+    responseOwnerQuestionType === "field-knowledge" &&
+    input.relation !== "child-probe"
   ) {
     return {
       ...base,

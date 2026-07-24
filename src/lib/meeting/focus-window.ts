@@ -63,6 +63,7 @@ export type MeetingFocusSnapshot = {
   isTaskSwitchClarifyingQuestion: boolean;
   interviewTypes: InterviewBriefType[];
   effectiveQuestionType?: CanonicalQuestionType;
+  transientPersonalStatusLabel?: string;
   currentQuestionId?: string;
   questionTypeCorrected: boolean;
   manualQuestionTypeCorrection?: ManualQuestionTypeCorrection;
@@ -132,6 +133,7 @@ export const EMPTY_MEETING_FOCUS_SNAPSHOT: MeetingFocusSnapshot = {
   isTaskSwitchClarifyingQuestion: false,
   interviewTypes: [],
   effectiveQuestionType: undefined,
+  transientPersonalStatusLabel: undefined,
   questionTypeCorrected: false,
   manualQuestionTypeCorrection: undefined,
   activeTask: undefined,

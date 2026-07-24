@@ -18,6 +18,7 @@ import {
   authorizeResponseArtifactMutation,
   type ResponseArtifactMutationAuthorization,
 } from "./response-artifact-authorization.js";
+import { normalizeCanonicalQuestionType } from "./task-taxonomy.js";
 import type {
   InterviewPlaybookPhase,
   InterviewTaskRelation,
@@ -26,6 +27,7 @@ import type {
   SelectedInterviewPlaybook,
   TaskAskFrame,
   TaskTopicDomain,
+  TransientPersonalStatusDecision,
 } from "./types.js";
 
 export interface SettledAdvisorMemoryPolicy {
@@ -42,6 +44,7 @@ export interface SettledAdvisorFactAnchorPolicy {
   policyId:
     | "autobiographical-behavioral"
     | "autobiographical-project"
+    | "personal-logistics"
     | "not-required";
 }
 
@@ -74,6 +77,7 @@ export interface SettledAdvisorExecutionPlan {
   factAnchorPolicy: SettledAdvisorFactAnchorPolicy;
   promptContract: SettledAdvisorPromptContract;
   artifactPolicy: ResponseArtifactMutationAuthorization;
+  transientPersonalStatusDecision?: TransientPersonalStatusDecision;
   createdAt: number;
 }
 
@@ -105,20 +109,39 @@ export function buildSettledAdvisorExecutionPlan(input: {
   askFrame: TaskAskFrame;
   topicDomain: TaskTopicDomain;
   projectAnchor?: string;
+  transientPersonalStatusDecision?: TransientPersonalStatusDecision;
   createdAt?: number;
 }): SettledAdvisorExecutionPlan {
   const relation = toInterviewTaskRelation(input.settlement.relation);
   const taskSnapshot = input.activeMeetingTask
     ? cloneActiveMeetingTask(input.activeMeetingTask)
     : undefined;
-  const responseOwner = resolveMeetingResponseOwner({
-    preBoundaryType: input.preBoundaryQuestionType,
-    postBoundaryParentType: taskSnapshot?.parent.questionType,
-    proposedQuestionType: input.settlement.questionType,
-    relation,
-    taskBoundaryCommitted: input.taskBoundaryCommitted,
-    childOwnsResponse: input.childOwnsResponse,
-  });
+  const transientPersonalStatusDecision =
+    input.transientPersonalStatusDecision
+      ? cloneTransientPersonalStatusDecision(
+          input.transientPersonalStatusDecision
+        )
+      : undefined;
+  const responseOwner: MeetingResponseOwnerResolution =
+    transientPersonalStatusDecision
+      ? {
+          questionType: "unknown",
+          source: "transient-personal-status",
+          preBoundaryType:
+            normalizeResponseOwnerType(input.preBoundaryQuestionType),
+          committedType: normalizeResponseOwnerType(
+            taskSnapshot?.parent.questionType
+          ),
+          relation: "logistics",
+        }
+      : resolveMeetingResponseOwner({
+          preBoundaryType: input.preBoundaryQuestionType,
+          postBoundaryParentType: taskSnapshot?.parent.questionType,
+          proposedQuestionType: input.settlement.questionType,
+          relation,
+          taskBoundaryCommitted: input.taskBoundaryCommitted,
+          childOwnsResponse: input.childOwnsResponse,
+        });
   const useCodingModel = responseOwner.questionType === "coding";
   const modelRoute = resolveMeetingModelRouteFromSnapshot({
     snapshot: input.providerSnapshot,
@@ -127,9 +150,9 @@ export function buildSettledAdvisorExecutionPlan(input: {
       ? `settlement-${input.settlement.settlementId}-coding`
       : `settlement-${input.settlement.settlementId}-main`,
   });
-  const promptProfile = resolveMeetingAnswerProfile(
-    responseOwner.questionType
-  );
+  const promptProfile = transientPersonalStatusDecision
+    ? "compact-spoken"
+    : resolveMeetingAnswerProfile(responseOwner.questionType);
   const artifactPolicy = authorizeResponseArtifactMutation({
     parentTaskId: taskSnapshot?.parent.id,
     parentQuestionType: taskSnapshot?.parent.questionType,
@@ -140,9 +163,12 @@ export function buildSettledAdvisorExecutionPlan(input: {
       input.taskBoundaryCommitted &&
       input.settlement.parentMutationAuthorized,
   });
-  const factAnchorPolicy = resolveFactAnchorPolicy(
-    responseOwner.questionType
-  );
+  const factAnchorPolicy = transientPersonalStatusDecision
+    ? {
+        requirement: "personal-logistics" as const,
+        policyId: "personal-logistics" as const,
+      }
+    : resolveFactAnchorPolicy(responseOwner.questionType);
   const expectedParentId = taskSnapshot?.parent.id;
   const expectedParentRevision = taskSnapshot?.parent.revisions;
   const playbook = input.playbook
@@ -160,6 +186,8 @@ export function buildSettledAdvisorExecutionPlan(input: {
     topicDomain: input.topicDomain,
     projectAnchor: input.projectAnchor,
     artifactDisposition: artifactPolicy.disposition,
+    transientPersonalStatusDecisionId:
+      transientPersonalStatusDecision?.id,
   });
 
   return {
@@ -180,17 +208,32 @@ export function buildSettledAdvisorExecutionPlan(input: {
     expectedParentRevision,
     responseOwner,
     modelRoute,
-    playbook,
-    playbookId: playbook?.id,
-    playbookPhase:
-      playbook?.phase ?? taskSnapshot?.parent.playbookPhase,
+    playbook: transientPersonalStatusDecision
+      ? undefined
+      : playbook,
+    playbookId: transientPersonalStatusDecision
+      ? undefined
+      : playbook?.id,
+    playbookPhase: transientPersonalStatusDecision
+      ? taskSnapshot?.parent.playbookPhase
+      : playbook?.phase ?? taskSnapshot?.parent.playbookPhase,
     memoryPolicy: {
       questionType: responseOwner.questionType,
-      useCase: input.memoryUseCase,
-      askFrame: input.askFrame,
-      topicDomain: input.topicDomain,
-      projectAnchor: input.projectAnchor,
-      retrievalPolicyId: playbook?.memoryPolicy.id,
+      useCase: transientPersonalStatusDecision
+        ? "meeting_assistant"
+        : input.memoryUseCase,
+      askFrame: transientPersonalStatusDecision
+        ? "unknown"
+        : input.askFrame,
+      topicDomain: transientPersonalStatusDecision
+        ? "unknown"
+        : input.topicDomain,
+      projectAnchor: transientPersonalStatusDecision
+        ? undefined
+        : input.projectAnchor,
+      retrievalPolicyId: transientPersonalStatusDecision
+        ? "personal-status-profile-only"
+        : playbook?.memoryPolicy.id,
     },
     factAnchorPolicy,
     promptContract: {
@@ -198,6 +241,7 @@ export function buildSettledAdvisorExecutionPlan(input: {
       contractId: `meeting-answer:${promptProfile}`,
     },
     artifactPolicy,
+    transientPersonalStatusDecision,
     createdAt: input.createdAt ?? Date.now(),
   };
 }
@@ -306,6 +350,14 @@ export function formatSettledAdvisorExecutionPlanForTrace(
       plan.promptContract.contractId,
     settledExecutionPlanArtifactDisposition:
       plan.artifactPolicy.disposition,
+    settledExecutionPlanTransientPersonalStatusDecisionId:
+      plan.transientPersonalStatusDecision?.id,
+    settledExecutionPlanTransientPersonalStatusDomain:
+      plan.transientPersonalStatusDecision?.domain,
+    settledExecutionPlanTransientPersonalStatusDisposition:
+      plan.transientPersonalStatusDecision?.disposition,
+    settledExecutionPlanTransientPersonalStatusEvidencePolicy:
+      plan.transientPersonalStatusDecision?.evidencePolicy,
     settledExecutionPlanAuthorized: authorization?.authorized,
     settledExecutionPlanAuthorizationReason:
       authorization?.reason,
@@ -355,6 +407,20 @@ function cloneSelectedPlaybook(playbook: SelectedInterviewPlaybook) {
   );
 }
 
+function cloneTransientPersonalStatusDecision(
+  decision: TransientPersonalStatusDecision
+) {
+  return deepFreeze(
+    JSON.parse(
+      JSON.stringify(decision)
+    ) as TransientPersonalStatusDecision
+  );
+}
+
+function normalizeResponseOwnerType(value: unknown) {
+  return normalizeCanonicalQuestionType(value) ?? undefined;
+}
+
 function deepFreeze<T>(value: T): T {
   if (!value || typeof value !== "object" || Object.isFrozen(value)) {
     return value;
@@ -378,6 +444,7 @@ function createExecutionPlanId(input: {
   topicDomain: TaskTopicDomain;
   projectAnchor?: string;
   artifactDisposition: string;
+  transientPersonalStatusDecisionId?: string;
 }) {
   return `advisor_plan_${hashStableText(
     [
@@ -395,6 +462,7 @@ function createExecutionPlanId(input: {
       input.topicDomain,
       input.projectAnchor ?? "",
       input.artifactDisposition,
+      input.transientPersonalStatusDecisionId ?? "",
     ].join("|")
   )}`;
 }

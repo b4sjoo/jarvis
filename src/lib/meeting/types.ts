@@ -356,6 +356,12 @@ export type PersonalEvidenceStatusDomain =
   | "compensation"
   | "employment-status";
 
+export type PersonalStatusDomain =
+  | "relocation"
+  | "compensation"
+  | "work-authorization"
+  | "start-date";
+
 export type PersonalEvidenceSource =
   | "profile-memory"
   | "confirmed-me";
@@ -370,6 +376,24 @@ export interface PersonalEvidenceDecision {
   allowedEvidenceSources: PersonalEvidenceSource[];
   mode: PersonalEvidenceGuardrailMode;
   enforced: boolean;
+}
+
+export interface TransientPersonalStatusDecision {
+  id: string;
+  domain: PersonalStatusDomain;
+  sourceQuestionUnitId: string;
+  sourceQuestionRevision: number;
+  responseOwner: "personal-status";
+  evidencePolicy: "profile-only";
+  disposition: "domain-resolved-unknown";
+  confidence: number;
+  preserveParentTask: true;
+  preserveArtifacts: true;
+  preservedParentTaskId?: string;
+  preservedParentQuestionType?: ScreenQuestionType;
+  preservedPlaybookPhase?: InterviewPlaybookPhase;
+  preservedWhiteboardArtifactId?: string;
+  createdAt: number;
 }
 
 export type ProjectBindingSource =
@@ -820,6 +844,11 @@ export interface AdvisorSuggestion {
   basedOnObservationIds: string[];
   confidence: "low" | "medium" | "high";
   questionLineage?: QuestionInstanceLineage;
+  transientPersonalStatus?: {
+    domain: PersonalStatusDomain;
+    label: string;
+    decisionId: string;
+  };
 }
 
 export interface QuestionInstanceLineage {
@@ -860,6 +889,7 @@ export interface AdvisorPromptContext {
   interviewPlaybook?: SelectedInterviewPlaybook;
   playbookPhaseDecision?: PlaybookPhaseDecision;
   factAnchorDecision?: FactAnchorDecision;
+  transientPersonalStatusDecision?: TransientPersonalStatusDecision;
   projectBindingDecision?: ProjectBindingDecision;
   openingRoute?: OpeningRouteContext;
   confirmedMeFacts?: Array<{
@@ -1343,6 +1373,7 @@ export interface CurrentQuestionSettlementHumanEvaluation {
   responseAuthorizationCorrect?: boolean;
   expectedDisposition?:
     | "domain-resolved-provisional"
+    | "domain-resolved-unknown"
     | "unresolved-provisional"
     | "response-only"
     | "committed-parent"
@@ -1375,6 +1406,14 @@ export interface QuestionHumanEvaluation {
   manualTermCorrectionRegenerationTraceId?: string;
   manualTermCorrectionDisposition?: ActiveQuestionTermCorrectionDisposition;
   manualTermCorrectionReason?: "manual-term-correction";
+  transientPersonalStatus?: {
+    detectedDomain?: PersonalStatusDomain;
+    expectedDomain?: PersonalStatusDomain;
+    policyApplicable?: boolean;
+    profileOnlyEvidenceCorrect?: boolean;
+    parentPreserved?: boolean;
+    artifactsPreserved?: boolean;
+  };
   company?: string;
   correctedCompany?: string;
   relation?: string;

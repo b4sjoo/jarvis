@@ -268,6 +268,13 @@ test("distinguishes provisional, response-only, committed, and stale disposition
   );
   assert.equal(
     resolveCurrentQuestionSettlementDisposition({
+      settlement: unresolved,
+      transientDomainResolved: true,
+    }),
+    "domain-resolved-unknown"
+  );
+  assert.equal(
+    resolveCurrentQuestionSettlementDisposition({
       settlement: responseOnly,
     }),
     "response-only"

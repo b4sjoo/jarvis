@@ -46,7 +46,7 @@ import {
 import { serializeMeetingTraceExport } from "./trace.js";
 
 const SESSION_RECORDING_SCHEMA_VERSION = 1;
-const SESSION_TRACE_SUMMARY_SCHEMA_VERSION = 16;
+const SESSION_TRACE_SUMMARY_SCHEMA_VERSION = 17;
 const SESSION_TRACE_INDEX_SCHEMA_VERSION = 1;
 
 interface SessionRecordingStartOptions {
@@ -317,6 +317,10 @@ export interface SessionCompactTraceSummary {
     factAnchorPolicy?: string;
     promptContract?: string;
     artifactDisposition?: string;
+    transientPersonalStatusDecisionId?: string;
+    transientPersonalStatusDomain?: string;
+    transientPersonalStatusDisposition?: string;
+    transientPersonalStatusEvidencePolicy?: string;
     authorized?: boolean;
     authorizationReason?: string;
     authorizationStage?: string;
@@ -3184,6 +3188,22 @@ function buildCompactTraceSummary({
       artifactDisposition: readFirstString(
         metadataSources,
         "settledExecutionPlanArtifactDisposition"
+      ),
+      transientPersonalStatusDecisionId: readFirstString(
+        metadataSources,
+        "settledExecutionPlanTransientPersonalStatusDecisionId"
+      ),
+      transientPersonalStatusDomain: readFirstString(
+        metadataSources,
+        "settledExecutionPlanTransientPersonalStatusDomain"
+      ),
+      transientPersonalStatusDisposition: readFirstString(
+        metadataSources,
+        "settledExecutionPlanTransientPersonalStatusDisposition"
+      ),
+      transientPersonalStatusEvidencePolicy: readFirstString(
+        metadataSources,
+        "settledExecutionPlanTransientPersonalStatusEvidencePolicy"
       ),
       authorized: readFirstBoolean(
         metadataSources,

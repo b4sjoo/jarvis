@@ -315,6 +315,9 @@ import {
   enforceFactAnchorOutput,
   formatFactAnchorOutputDecisionForTrace,
   formatFactAnchorDecisionForTrace,
+  formatTransientPersonalStatusForTrace,
+  formatTransientPersonalStatusLabel,
+  resolveTransientPersonalStatusDecision,
   restrictMemoryContextForPersonalEvidence,
   formatProjectBindingDecisionForTrace,
   projectBindingMatchesProjectHint,
@@ -995,6 +998,7 @@ function withLatestReliableSuggestion(
 function isCacheableReliableSuggestion(suggestion: AdvisorSuggestion) {
   const content = suggestion.content.trim();
   if (!content || content === "-") return false;
+  if (suggestion.transientPersonalStatus) return false;
   if (suggestion.kind === "silent" || suggestion.kind === "clarifying-question") {
     return false;
   }
@@ -4380,6 +4384,40 @@ export function useMeetingAssistant() {
           unknownTaskMutationBlocked: false,
         }
       : correctedAdvisorTaskSignals;
+    const advisorCurrentQuestionEvidenceText =
+      advisorJob.logicalQuestionUnit?.normalizedText.trim() ?? "";
+    const advisorPersonalEvidenceDecision = detectPersonalEvidenceRequirement({
+      questionText: advisorCurrentQuestionEvidenceText,
+      questionType: semanticAdvisorTaskSignals.questionType,
+      mode: state.settings.personalEvidenceGuardrailMode,
+    });
+    const transientPersonalStatusDecision =
+      options.manualQuestionTypeCorrection
+        ? undefined
+        : resolveTransientPersonalStatusDecision({
+            personalEvidenceDecision: advisorPersonalEvidenceDecision,
+            sourceQuestionUnitId: advisorJob.logicalQuestionUnit?.id,
+            sourceQuestionRevision:
+              advisorJob.logicalQuestionUnit?.revision,
+            activeMeetingTask: promptContext.activeMeetingTask,
+          });
+    const routedAdvisorTaskSignals = transientPersonalStatusDecision
+      ? {
+          ...semanticAdvisorTaskSignals,
+          questionType: "unknown" as const,
+          questionTypeDecision: undefined,
+          askFrame: "unknown" as const,
+          topicDomain: "unknown" as const,
+          projectAnchor: undefined,
+          taskRelation: "logistics" as const,
+          subtaskIntent: "unknown" as const,
+          source: "transient-personal-status",
+          reuseActivePlaybook: false,
+          openingRoute: undefined,
+          taxonomyFallbackSuppressed: true,
+          unknownTaskMutationBlocked: true,
+        }
+      : semanticAdvisorTaskSignals;
     const inferredTurnIntentDecision =
       advisorJob.turnIntentDecision ??
       (latestTurn?.speaker === "them"
@@ -4411,7 +4449,7 @@ export function useMeetingAssistant() {
     });
     const advisorTaskMutationDecision = decideAdvisorTaskMutation({
       authority: advisorJob.taskMutationAuthority,
-      resolvedRelation: semanticAdvisorTaskSignals.taskRelation,
+      resolvedRelation: routedAdvisorTaskSignals.taskRelation,
       hasActiveParent: hasAdvisorActiveTask(promptContext),
       hasActiveChild: hasAdvisorActiveChild(promptContext),
       mutationAuthorized: taskMutationAuthorization.authorized,
@@ -4421,7 +4459,7 @@ export function useMeetingAssistant() {
       advisorTaskMutationDecision.preserveParentType &&
       preservedParentQuestionType
         ? {
-            ...semanticAdvisorTaskSignals,
+            ...routedAdvisorTaskSignals,
             questionType: preservedParentQuestionType,
             questionTypeDecision: undefined,
             askFrame:
@@ -4448,7 +4486,10 @@ export function useMeetingAssistant() {
             taxonomyFallbackSuppressed: true,
             unknownTaskMutationBlocked: true,
           }
-        : semanticAdvisorTaskSignals;
+        : routedAdvisorTaskSignals;
+    if (transientPersonalStatusDecision) {
+      advisorTaskSignals = routedAdvisorTaskSignals;
+    }
     const advisorScreenScopeDecision = decideAdvisorScreenScope({
       triggerSource: advisorJob.source,
       relation: advisorTaskSignals.taskRelation,
@@ -4485,15 +4526,19 @@ export function useMeetingAssistant() {
               revision: advisorJob.logicalQuestionUnit.revision,
             }
           : undefined,
-        activeMeetingTask: promptContext.activeMeetingTask,
+        activeMeetingTask: transientPersonalStatusDecision
+          ? undefined
+          : promptContext.activeMeetingTask,
         interviewSessionBrief:
           promptContext.interviewSessionBrief,
         interviewSessionContext:
           promptContext.interviewSessionContext,
-        activatedFactIds:
-          promptContext.activeMeetingTask?.parent.supportedFactAnchors ??
-          promptContext.activeInterviewTask?.supportedFactAnchors,
+        activatedFactIds: transientPersonalStatusDecision
+          ? undefined
+          : promptContext.activeMeetingTask?.parent.supportedFactAnchors ??
+            promptContext.activeInterviewTask?.supportedFactAnchors,
         generatedGuidance:
+          !transientPersonalStatusDecision &&
           options.currentSuggestion?.trim() &&
           state.latestSuggestion?.sourceTraceId
             ? {
@@ -4683,6 +4728,9 @@ export function useMeetingAssistant() {
             currentQuestionSettlementDisposition:
               resolveCurrentQuestionSettlementDisposition({
                 settlement: currentQuestionSettlement,
+                transientDomainResolved: Boolean(
+                  transientPersonalStatusDecision
+                ),
               }),
             currentQuestionSettlementDurationMs,
             currentQuestionSettlementLlmWaitMs: 0,
@@ -4714,6 +4762,9 @@ export function useMeetingAssistant() {
         resolveCurrentQuestionSettlementDisposition({
           settlement: currentQuestionSettlement,
           parentCommitted,
+          transientDomainResolved: Boolean(
+            transientPersonalStatusDecision
+          ),
         });
       const metadata = {
         currentQuestionSettlementDisposition: disposition,
@@ -4849,6 +4900,9 @@ export function useMeetingAssistant() {
         advisorExecutionAuthorizationReason: executionAuthorization.reason,
         advisorExecutionBypassed: executionAuthorization.bypassed,
         ...formatQuestionLineageForTrace(questionLineage),
+        ...formatTransientPersonalStatusForTrace(
+          transientPersonalStatusDecision
+        ),
         ...formatLogicalQuestionUnitForTrace(advisorJob.logicalQuestionUnit),
         ...formatTaskBoundaryCandidateForTrace(taskBoundaryCandidate, {
           parentBeforeId:
@@ -4876,6 +4930,16 @@ export function useMeetingAssistant() {
           : executionAuthorization.reason,
       };
       traceStoreRef.current.updateMetadata(traceId, executionMetadata);
+      if (transientPersonalStatusDecision) {
+        sessionRecordingManagerRef.current?.recordCaptureLifecycle({
+          stage: "transient-personal-status-decision",
+          traceId,
+          taskId: promptContext.activeMeetingTask?.id,
+          ...formatTransientPersonalStatusForTrace(
+            transientPersonalStatusDecision
+          ),
+        });
+      }
       if (semanticEvidenceIsCurrent && semanticEvidence) {
         sessionRecordingManagerRef.current?.recordSemanticTaxonomyDecision({
           traceId,
@@ -4956,11 +5020,14 @@ export function useMeetingAssistant() {
     const advisorAskFrame = advisorTaskSignals.askFrame;
     const advisorTopicDomain = advisorTaskSignals.topicDomain;
     const advisorProjectAnchor =
-      advisorTaskSignals.projectAnchor ??
-      (advisorTaskSignals.taskRelation === "new-parent"
+      transientPersonalStatusDecision
         ? undefined
-        : getAdvisorActiveProjectAnchor(promptContext));
+        : advisorTaskSignals.projectAnchor ??
+          (advisorTaskSignals.taskRelation === "new-parent"
+            ? undefined
+            : getAdvisorActiveProjectAnchor(promptContext));
     const advisorPlaybook =
+      transientPersonalStatusDecision ||
       advisorTaskSignals.openingRoute?.commitParent === false
         ? undefined
         : advisorTaskSignals.reuseActivePlaybook
@@ -5051,6 +5118,7 @@ export function useMeetingAssistant() {
 
     if (
       manualPhaseAdvance &&
+      !transientPersonalStatusDecision &&
       playbookPhaseDecision.guardStatus === "advanced"
     ) {
       const contextState = contextManagerRef.current.getState();
@@ -5131,10 +5199,13 @@ export function useMeetingAssistant() {
       }
     }
 
-    const advisorRuntimePlaybook = withInterviewPlaybookPhase(
-      advisorPlaybook ?? promptContext.activeMeetingTask?.parent.playbook,
-      playbookPhaseDecision.phase
-    );
+    const advisorRuntimePlaybook = transientPersonalStatusDecision
+      ? undefined
+      : withInterviewPlaybookPhase(
+          advisorPlaybook ??
+            promptContext.activeMeetingTask?.parent.playbook,
+          playbookPhaseDecision.phase
+        );
     let taskBoundaryCommittedBeforeAdvisor = false;
     if (
       taskBoundaryCandidate?.commitPolicy === "immediate" &&
@@ -5249,6 +5320,7 @@ export function useMeetingAssistant() {
       | undefined;
     if (
       !manualPhaseAdvance &&
+      !transientPersonalStatusDecision &&
       advisorTaskSignals.taskRelation !== "new-parent" &&
       advisorJob.logicalQuestionUnit
     ) {
@@ -5454,6 +5526,7 @@ export function useMeetingAssistant() {
         askFrame: advisorAskFrame,
         topicDomain: advisorTopicDomain,
         projectAnchor: advisorProjectAnchor,
+        transientPersonalStatusDecision,
       });
       settledAdvisorExecutionPlanRef.current =
         settledExecutionPlan;
@@ -5667,23 +5740,16 @@ export function useMeetingAssistant() {
       );
     }
 
-    const advisorCurrentQuestionEvidenceText =
-      advisorEvidencePacket.currentQuestion?.text ?? "";
     const advisorDiagramDomainContext = buildCurrentTaskDiagramDomainContext({
       currentQuestion: advisorCurrentQuestionEvidenceText || undefined,
       parentTopic:
-        promptContext.activeMeetingTask?.parent.topic ??
-        promptContext.activeInterviewTask?.topic,
+        transientPersonalStatusDecision
+          ? undefined
+          : promptContext.activeMeetingTask?.parent.topic ??
+            promptContext.activeInterviewTask?.topic,
       relation:
         settledExecutionPlan?.taskRelation ??
         advisorTaskSignals.taskRelation,
-    });
-    const advisorPersonalEvidenceDecision = detectPersonalEvidenceRequirement({
-      questionText: advisorCurrentQuestionEvidenceText,
-      questionType:
-        settledExecutionPlan?.memoryPolicy.questionType ??
-        advisorQuestionType,
-      mode: state.settings.personalEvidenceGuardrailMode,
     });
     const memoryContext = await loadMemoryForPrompt({
       traceId,
@@ -5718,6 +5784,7 @@ export function useMeetingAssistant() {
         advisorRuntimePlaybook?.memoryPolicy,
       personalEvidenceDecision: advisorPersonalEvidenceDecision,
       forceStrictProjectAnchor: Boolean(
+        !transientPersonalStatusDecision &&
         (promptContext.activeMeetingTask?.parent.projectBinding ??
           promptContext.activeInterviewTask?.projectBinding) &&
           (settledExecutionPlan?.taskRelation ??
@@ -5731,8 +5798,10 @@ export function useMeetingAssistant() {
     if (rejectStaleCommit("post-memory")) return;
     const projectBindingDecision = resolveProjectBinding({
       existingBinding:
-        promptContext.activeMeetingTask?.parent.projectBinding ??
-        promptContext.activeInterviewTask?.projectBinding,
+        transientPersonalStatusDecision
+          ? undefined
+          : promptContext.activeMeetingTask?.parent.projectBinding ??
+            promptContext.activeInterviewTask?.projectBinding,
       questionType:
         settledExecutionPlan?.questionType ??
         advisorQuestionType,
@@ -5827,13 +5896,34 @@ export function useMeetingAssistant() {
         promptContext.activeMeetingTask,
       memoryContext: memoryContext?.contextText,
       interviewPlaybook:
-        settledExecutionPlan?.playbook ??
-        advisorRuntimePlaybook,
-      playbookPhaseDecision,
+        transientPersonalStatusDecision
+          ? undefined
+          : settledExecutionPlan?.playbook ??
+            advisorRuntimePlaybook,
+      playbookPhaseDecision: transientPersonalStatusDecision
+        ? undefined
+        : playbookPhaseDecision,
       factAnchorDecision,
+      transientPersonalStatusDecision,
       projectBindingDecision,
       openingRoute: advisorTaskSignals.openingRoute,
     };
+    const advisorModelPromptContext = transientPersonalStatusDecision
+      ? {
+          ...promptContext,
+          transcript: advisorCurrentQuestionEvidenceText
+            ? `them: ${advisorCurrentQuestionEvidenceText}`
+            : "",
+          screenContext: "",
+          activeScreenTask: undefined,
+          activeInterviewTask: undefined,
+          activeMeetingTask: undefined,
+          rollingSummary: "",
+          interviewPlaybook: undefined,
+          playbookPhaseDecision: undefined,
+          projectBindingDecision: undefined,
+        }
+      : promptContext;
 
     let finalContent = "";
     let advisorModelPromptText = "";
@@ -5842,7 +5932,7 @@ export function useMeetingAssistant() {
       for await (const event of advisorEngineRef.current.streamSuggestion({
         requestId,
         mode: advisorPromptMode,
-        promptContext,
+        promptContext: advisorModelPromptContext,
         provider: advisorModelRoute.provider,
         selectedProvider: advisorModelRoute.selectedProvider,
         requestOptions: advisorModelRequestOptions,
@@ -6133,6 +6223,7 @@ export function useMeetingAssistant() {
         hasActiveScreenTask: Boolean(promptContext.activeScreenTask),
       });
       const shouldCommitAdvisorParent =
+        !transientPersonalStatusDecision &&
         (settledExecutionPlan?.responseAuthorized ?? true) &&
         advisorTaskMutationDecision.commitParent &&
         advisorTaskSignals.openingRoute?.commitParent !== false &&
@@ -6247,6 +6338,7 @@ export function useMeetingAssistant() {
       let nextActiveScreenTask = promptContext.activeScreenTask;
 
       if (
+        !transientPersonalStatusDecision &&
         taskMutationAuthorization.authorized &&
         mode === "screen-anchored" &&
         nextActiveScreenTask &&
@@ -6305,9 +6397,37 @@ export function useMeetingAssistant() {
         });
       }
       contextState = contextManagerRef.current.getState();
+      const transientPersonalStatusCommitMetadata =
+        transientPersonalStatusDecision
+          ? {
+              transientPersonalStatusCommitDisposition:
+                "visible-transient-response",
+              transientPersonalStatusParentRestored:
+                contextState.activeMeetingTask?.parent.id ===
+                  transientPersonalStatusDecision.preservedParentTaskId &&
+                contextState.activeMeetingTask?.parent.questionType ===
+                  transientPersonalStatusDecision
+                    .preservedParentQuestionType,
+              transientPersonalStatusPhasePreserved:
+                contextState.activeMeetingTask?.parent.playbookPhase ===
+                transientPersonalStatusDecision.preservedPlaybookPhase,
+              transientPersonalStatusWhiteboardPreserved:
+                contextState.activeMeetingTask?.parent.whiteboardArtifact
+                  ?.id ===
+                transientPersonalStatusDecision
+                  .preservedWhiteboardArtifactId,
+              transientPersonalStatusCodeMutationAuthorized:
+                settledArtifactAuthorization.allowCode,
+              transientPersonalStatusWhiteboardMutationAuthorized:
+                settledArtifactAuthorization.allowWhiteboard,
+              transientPersonalStatusLatestAnswerMutationAuthorized:
+                settledArtifactAuthorization.allowLatestUsefulAnswer,
+            }
+          : {};
 
       if (traceId) {
         traceStoreRef.current.updateMetadata(traceId, {
+          ...transientPersonalStatusCommitMetadata,
           ...formatScreenScopeDecisionForTrace(
             advisorScreenScopeDecision,
             {
@@ -6374,6 +6494,17 @@ export function useMeetingAssistant() {
           startedNewInterviewParent:
             continuity.startedNewParent || taskBoundaryCommittedBeforeAdvisor,
         });
+        if (transientPersonalStatusDecision) {
+          sessionRecordingManagerRef.current?.recordCaptureLifecycle({
+            stage: "transient-personal-status-commit",
+            traceId,
+            taskId: contextState.activeMeetingTask?.id,
+            ...formatTransientPersonalStatusForTrace(
+              transientPersonalStatusDecision
+            ),
+            ...transientPersonalStatusCommitMetadata,
+          });
+        }
       }
 
       if (traceId && contextState.activeScreenTask) {
@@ -6407,6 +6538,15 @@ export function useMeetingAssistant() {
           settledArtifactAuthorization.allowCode,
         whiteboardArtifactMutationAuthorized:
           settledArtifactAuthorization.allowWhiteboard,
+        transientPersonalStatus: transientPersonalStatusDecision
+          ? {
+              domain: transientPersonalStatusDecision.domain,
+              label: formatTransientPersonalStatusLabel(
+                transientPersonalStatusDecision.domain
+              ),
+              decisionId: transientPersonalStatusDecision.id,
+            }
+          : undefined,
         sourceTraceId: traceId,
       };
       const committedQuestionLineage =

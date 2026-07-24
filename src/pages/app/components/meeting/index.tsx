@@ -54,6 +54,7 @@ import type {
   MemoryEntryEvaluationLabelValue,
   MemoryRetrievalEvaluationSnapshotResolution,
   PersonalEvidenceGuardrailMode,
+  PersonalStatusDomain,
   SemanticTaxonomyMode,
   QuestionHumanEvaluation,
   ScreenCaptureTarget,
@@ -717,6 +718,8 @@ export const MeetingAssistant = ({
     normalizeCanonicalQuestionType(
       meeting.activeMeetingTask?.child?.questionType ?? activeTaskKind
     ) ?? (hasCorrectableQuestion ? "unknown" : undefined);
+  const transientPersonalStatusLabel =
+    meeting.latestSuggestion?.transientPersonalStatus?.label;
   const activeManualQuestionTypeCorrection =
     meeting.manualQuestionTypeCorrection &&
     (meeting.manualQuestionTypeCorrection.taskId ===
@@ -756,6 +759,7 @@ export const MeetingAssistant = ({
       isTaskSwitchClarifyingQuestion,
       interviewTypes: editableBriefForFocus.interviewTypes,
       effectiveQuestionType,
+      transientPersonalStatusLabel,
       currentQuestionId: meeting.currentQuestionLineage?.questionInstanceId,
       questionTypeCorrected:
         Boolean(activeManualQuestionTypeCorrection) ||
@@ -793,6 +797,7 @@ export const MeetingAssistant = ({
       activeTaskKind,
       activeManualQuestionTypeCorrection,
       effectiveQuestionType,
+      transientPersonalStatusLabel,
       meeting.activeScreenTask?.classifier?.overrideSource,
       hasActiveMeetingTask,
       hasCorrectableQuestion,
@@ -1453,6 +1458,9 @@ export const MeetingAssistant = ({
               whiteboardArtifactCached={whiteboardArtifactDisplay.isCached}
               hasCorrectableQuestion={hasCorrectableQuestion}
               effectiveQuestionType={effectiveQuestionType}
+              transientPersonalStatusLabel={
+                transientPersonalStatusLabel
+              }
               manualQuestionTypeCorrection={
                 activeManualQuestionTypeCorrection
               }
@@ -1731,6 +1739,14 @@ export const MeetingAssistant = ({
                     <div className="mb-2 flex items-center gap-2 text-xs font-semibold">
                       <BrainIcon className="h-3.5 w-3.5" />
                       Answer
+                      {transientPersonalStatusLabel ? (
+                        <Badge
+                          variant="outline"
+                          className="ml-auto rounded-sm px-1.5 py-0 text-[10px] font-normal"
+                        >
+                          {transientPersonalStatusLabel}
+                        </Badge>
+                      ) : null}
                     </div>
                     <MeetingMarkdownText
                       className={cn(
@@ -1813,6 +1829,14 @@ export const MeetingAssistant = ({
                     <div className="mb-2 flex items-center gap-2 text-xs font-semibold">
                       <MessageSquareTextIcon className="h-3.5 w-3.5" />
                       Answer
+                      {transientPersonalStatusLabel ? (
+                        <Badge
+                          variant="outline"
+                          className="ml-auto rounded-sm px-1.5 py-0 text-[10px] font-normal"
+                        >
+                          {transientPersonalStatusLabel}
+                        </Badge>
+                      ) : null}
                     </div>
                     <MeetingMarkdownText
                       className={cn(
@@ -2440,6 +2464,7 @@ const FocusModePanel = ({
   whiteboardArtifactCached,
   hasCorrectableQuestion,
   effectiveQuestionType,
+  transientPersonalStatusLabel,
   manualQuestionTypeCorrection,
   onCorrectQuestionType,
   latestTurnText,
@@ -2473,6 +2498,7 @@ const FocusModePanel = ({
   whiteboardArtifactCached: boolean;
   hasCorrectableQuestion: boolean;
   effectiveQuestionType?: CanonicalQuestionType;
+  transientPersonalStatusLabel?: string;
   manualQuestionTypeCorrection?: ManualQuestionTypeCorrection;
   onCorrectQuestionType: (type: CanonicalQuestionType) => void;
   latestTurnText: string;
@@ -2540,6 +2566,14 @@ const FocusModePanel = ({
               <div className="mb-2 flex items-center gap-2 text-xs font-semibold">
                 <MessageSquareTextIcon className="h-3.5 w-3.5" />
                 Answer
+                {transientPersonalStatusLabel ? (
+                  <Badge
+                    variant="outline"
+                    className="ml-auto rounded-sm px-1.5 py-0 text-[10px] font-normal"
+                  >
+                    {transientPersonalStatusLabel}
+                  </Badge>
+                ) : null}
               </div>
               <MeetingMarkdownText
                 className={cn(
@@ -4420,6 +4454,13 @@ const TraceHumanEvaluationPanel = ({
     "boolean"
       ? trace.metadata.currentQuestionSettlementParentMutationAuthorized
       : undefined;
+  const transientPersonalStatusDomain =
+    typeof trace.metadata?.transientPersonalStatusDomain === "string"
+      ? (trace.metadata
+          .transientPersonalStatusDomain as PersonalStatusDomain)
+      : undefined;
+  const transientPersonalStatusApplied =
+    trace.metadata?.transientPersonalStatusApplied === true;
 
   const toggleFailureReason = (reason: HumanEvalFailureReason) => {
     onUpdate({
@@ -4554,6 +4595,98 @@ const TraceHumanEvaluationPanel = ({
           <div className="rounded-sm bg-muted/40 p-2 text-[10px]">
             <span className="text-muted-foreground">Detected type: </span>
             <span className="font-mono">{detectedQuestionType}</span>
+          </div>
+        ) : null}
+        {transientPersonalStatusApplied &&
+        transientPersonalStatusDomain ? (
+          <div className="rounded-sm border border-border/60 p-2">
+            <div className="text-[10px] font-medium uppercase text-muted-foreground">
+              Personal status policy
+            </div>
+            <div className="mt-1 text-[10px]">
+              <span className="text-muted-foreground">Detected: </span>
+              <span className="font-mono">
+                {transientPersonalStatusDomain}
+              </span>
+            </div>
+            <div className="mt-2 flex flex-wrap gap-1">
+              {(
+                [
+                  "relocation",
+                  "compensation",
+                  "work-authorization",
+                  "start-date",
+                ] as PersonalStatusDomain[]
+              ).map((domain) => (
+                <Button
+                  key={domain}
+                  size="sm"
+                  variant={
+                    questionEvaluation?.transientPersonalStatus
+                      ?.expectedDomain === domain
+                      ? "default"
+                      : "outline"
+                  }
+                  className="h-6 px-2 text-[9px]"
+                  onClick={() =>
+                    onUpdateQuestion({
+                      transientPersonalStatus: {
+                        ...questionEvaluation?.transientPersonalStatus,
+                        detectedDomain: transientPersonalStatusDomain,
+                        expectedDomain: domain,
+                      },
+                    })
+                  }
+                >
+                  {domain}
+                </Button>
+              ))}
+            </div>
+            <div className="mt-2 grid grid-cols-2 gap-1">
+              {(
+                [
+                  ["policyApplicable", "Policy"],
+                  ["profileOnlyEvidenceCorrect", "Profile evidence"],
+                  ["parentPreserved", "Parent preserved"],
+                  ["artifactsPreserved", "Artifacts preserved"],
+                ] as const
+              ).map(([field, label]) => (
+                <div
+                  key={field}
+                  className="flex items-center justify-between gap-1 rounded-sm bg-muted/40 px-1.5 py-1 text-[9px]"
+                >
+                  <span>{label}</span>
+                  <div className="flex gap-1">
+                    {[true, false].map((value) => (
+                      <Button
+                        key={String(value)}
+                        size="sm"
+                        variant={
+                          questionEvaluation?.transientPersonalStatus?.[
+                            field
+                          ] === value
+                            ? "default"
+                            : "ghost"
+                        }
+                        className="h-5 px-1.5 text-[8px]"
+                        onClick={() =>
+                          onUpdateQuestion({
+                            transientPersonalStatus: {
+                              ...questionEvaluation?.transientPersonalStatus,
+                              detectedDomain:
+                                transientPersonalStatusDomain,
+                              [field]: value,
+                            },
+                          })
+                        }
+                      >
+                        {value ? "Yes" : "No"}
+                      </Button>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
           </div>
         ) : null}
         {detectedPlaybook ? (

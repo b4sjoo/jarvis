@@ -9,6 +9,7 @@ import {
   formatSettledAdvisorExecutionPlanForTrace,
 } from "../src/lib/meeting/settled-advisor-execution-plan.js";
 import type { SelectedInterviewPlaybook } from "../src/lib/meeting/types.js";
+import type { TransientPersonalStatusDecision } from "../src/lib/meeting/types.js";
 
 const providers: MeetingModelProviderSnapshot = {
   providers: [
@@ -162,6 +163,72 @@ test("a committed general-system-design settlement atomically leaves the coding 
   assert.equal(plan.playbookId, "general_system_design");
   assert.equal(plan.artifactPolicy.allowWhiteboard, true);
   assert.equal(plan.artifactPolicy.allowCode, false);
+});
+
+test("a personal-status response owns the current answer without mutating its coding parent", () => {
+  const task = activeTask();
+  const transientDecision: TransientPersonalStatusDecision = {
+    id: "personal_status_a",
+    domain: "relocation",
+    sourceQuestionUnitId: "question-a",
+    sourceQuestionRevision: 2,
+    responseOwner: "personal-status",
+    evidencePolicy: "profile-only",
+    disposition: "domain-resolved-unknown",
+    confidence: 0.98,
+    preserveParentTask: true,
+    preserveArtifacts: true,
+    preservedParentTaskId: task.parent.id,
+    preservedParentQuestionType: task.parent.questionType,
+    preservedPlaybookPhase: task.parent.playbookPhase,
+    createdAt: 100,
+  };
+  const plan = buildSettledAdvisorExecutionPlan({
+    settlement: settlement({
+      questionType: "unknown",
+      relation: "logistics",
+      typeMutationAuthorized: false,
+      relationMutationAuthorized: true,
+      parentMutationAuthorized: false,
+    }),
+    activeMeetingTask: task,
+    preBoundaryQuestionType: "coding",
+    taskBoundaryCommitted: false,
+    childOwnsResponse: false,
+    providerSnapshot: providers,
+    playbook: playbook(),
+    memoryUseCase: "coding_interview",
+    askFrame: "direct-answer",
+    topicDomain: "backend",
+    projectAnchor: "Technical project",
+    transientPersonalStatusDecision: transientDecision,
+    createdAt: 100,
+  });
+
+  assert.equal(plan.responseOwner.questionType, "unknown");
+  assert.equal(plan.responseOwner.source, "transient-personal-status");
+  assert.equal(plan.modelRoute.route, "main");
+  assert.equal(plan.modelRoute.resolvedProviderId, "main");
+  assert.equal(plan.promptContract.profile, "compact-spoken");
+  assert.equal(plan.playbook, undefined);
+  assert.equal(plan.playbookId, undefined);
+  assert.equal(plan.playbookPhase, "solution_planning");
+  assert.equal(plan.memoryPolicy.useCase, "meeting_assistant");
+  assert.equal(plan.memoryPolicy.questionType, "unknown");
+  assert.equal(
+    plan.memoryPolicy.retrievalPolicyId,
+    "personal-status-profile-only"
+  );
+  assert.equal(plan.memoryPolicy.projectAnchor, undefined);
+  assert.equal(plan.factAnchorPolicy.policyId, "personal-logistics");
+  assert.equal(plan.artifactPolicy.disposition, "display-only-transient");
+  assert.equal(plan.artifactPolicy.allowLatestUsefulAnswer, false);
+  assert.equal(plan.artifactPolicy.allowCode, false);
+  assert.equal(plan.artifactPolicy.allowWhiteboard, false);
+  assert.equal(
+    plan.transientPersonalStatusDecision?.domain,
+    "relocation"
+  );
 });
 
 test("plan authorization rejects stale question, settlement, and parent revisions", () => {

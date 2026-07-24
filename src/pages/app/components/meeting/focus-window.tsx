@@ -249,17 +249,19 @@ function MeetingFocusControlsWindow({
   const correctionRunning =
     activeCorrection?.status === "pending" ||
     activeCorrection?.regenerationStatus === "running";
-  const typeStatusLabel = correctionRunning
-    ? `Correcting to ${formatFocusQuestionType(
-        activeCorrection.correctedType
-      )}...`
-    : activeCorrection?.regenerationStatus === "failed"
-      ? `Corrected: ${formatFocusQuestionType(
+  const typeStatusLabel = snapshot.transientPersonalStatusLabel
+    ? snapshot.transientPersonalStatusLabel
+    : correctionRunning
+      ? `Correcting to ${formatFocusQuestionType(
           activeCorrection.correctedType
-        )} · retry failed`
-      : `Current: ${effectiveTypeLabel}${
-          snapshot.questionTypeCorrected ? " · corrected" : ""
-        }`;
+        )}...`
+      : activeCorrection?.regenerationStatus === "failed"
+        ? `Corrected: ${formatFocusQuestionType(
+            activeCorrection.correctedType
+          )} · retry failed`
+        : `Current: ${effectiveTypeLabel}${
+            snapshot.questionTypeCorrected ? " · corrected" : ""
+          }`;
   const typeStatusTitle = snapshot.activeTask?.child
     ? `${typeStatusLabel}; parent: ${formatFocusQuestionType(
         snapshot.activeTask.questionType
