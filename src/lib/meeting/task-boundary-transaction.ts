@@ -1,4 +1,13 @@
 import { createMeetingId } from "./context-manager.js";
+import {
+  createProvisionalCurrentQuestion,
+  decideCurrentQuestionMutationAuthority,
+  formatCurrentQuestionMutationAuthorityForTrace,
+  formatProvisionalCurrentQuestionForTrace,
+  type CurrentQuestionMutationAuthorityDecision,
+  type CurrentQuestionSourceKind,
+  type ProvisionalCurrentQuestion,
+} from "./current-question-settlement.js";
 import type { LogicalQuestionUnit } from "./logical-question-unit.js";
 import {
   applyPlaybookPhaseDecisionToProgress,
@@ -47,6 +56,9 @@ export interface TaskBoundaryCandidate {
   sessionId: string;
   runtimeEpoch: number;
   logicalQuestionUnitId: string;
+  logicalQuestionUnitRevision: number;
+  currentQuestion: ProvisionalCurrentQuestion;
+  mutationAuthority: CurrentQuestionMutationAuthorityDecision;
   proposedQuestionType: CanonicalQuestionType;
   proposedRelation: InterviewTaskRelation;
   authoritySource: TaskBoundaryAuthoritySource;
@@ -67,6 +79,10 @@ export interface CreateTaskBoundaryCandidateInput {
   proposedQuestionType?: unknown;
   proposedRelation: InterviewTaskRelation;
   authoritySource: TaskBoundaryAuthoritySource;
+  sourceKind?: CurrentQuestionSourceKind;
+  sourceObservationIds?: string[];
+  typeEvidenceAuthorized?: boolean;
+  relationEvidenceAuthorized?: boolean;
   confidence?: number;
   questionComplete: boolean;
   mutationAuthorized: boolean;
@@ -83,14 +99,37 @@ export function createTaskBoundaryCandidate(
   const now = input.now ?? Date.now();
   const proposedQuestionType =
     normalizeCanonicalQuestionType(input.proposedQuestionType) ?? "unknown";
+  const currentQuestion = createProvisionalCurrentQuestion({
+    logicalQuestionUnit,
+    sourceKind: input.sourceKind ?? "voice",
+    sourceObservationIds: input.sourceObservationIds,
+    now,
+    expiresAt:
+      input.questionComplete
+        ? undefined
+        : now + TASK_BOUNDARY_PENDING_TTL_MS,
+  });
+  const mutationAuthority = decideCurrentQuestionMutationAuthority({
+    currentQuestion,
+    proposedQuestionType,
+    proposedRelation: input.proposedRelation,
+    authoritySource: input.authoritySource,
+    typeEvidenceAuthorized:
+      input.typeEvidenceAuthorized ?? proposedQuestionType !== "unknown",
+    relationEvidenceAuthorized:
+      input.relationEvidenceAuthorized ??
+      input.proposedRelation !== "unknown",
+    runtimeMutationAuthorized: input.mutationAuthorized,
+    questionComplete: input.questionComplete,
+    commitParent: input.commitParent,
+  });
   const parentEligible = isParentCanonicalQuestionType(proposedQuestionType);
   const isBoundaryRelation = input.proposedRelation === "new-parent";
   const immediate =
     parentEligible &&
     isBoundaryRelation &&
     input.questionComplete &&
-    input.mutationAuthorized &&
-    input.commitParent;
+    mutationAuthority.parentMutationAuthorized;
 
   let mutationDisposition: TaskBoundaryMutationDisposition;
   if (
@@ -107,7 +146,7 @@ export function createTaskBoundaryCandidate(
     mutationDisposition = "pending-incomplete-question";
   } else if (!isBoundaryRelation) {
     mutationDisposition = "abstained-non-boundary-relation";
-  } else if (!input.mutationAuthorized || !input.commitParent) {
+  } else if (!mutationAuthority.parentMutationAuthorized) {
     mutationDisposition = "abstained-mutation-unauthorized";
   } else if (!input.questionComplete) {
     mutationDisposition = "pending-incomplete-question";
@@ -126,6 +165,9 @@ export function createTaskBoundaryCandidate(
     sessionId: logicalQuestionUnit.sessionId,
     runtimeEpoch: logicalQuestionUnit.runtimeEpoch,
     logicalQuestionUnitId: logicalQuestionUnit.id,
+    logicalQuestionUnitRevision: logicalQuestionUnit.revision,
+    currentQuestion,
+    mutationAuthority,
     proposedQuestionType,
     proposedRelation: input.proposedRelation,
     authoritySource: input.authoritySource,
@@ -217,6 +259,8 @@ export function formatTaskBoundaryCandidateForTrace(
   return {
     taskBoundaryCandidateId: candidate.id,
     taskBoundaryLogicalQuestionUnitId: candidate.logicalQuestionUnitId,
+    taskBoundaryLogicalQuestionUnitRevision:
+      candidate.logicalQuestionUnitRevision,
     taskBoundaryCandidateState: candidate.state,
     taskBoundaryCommitPolicy: candidate.commitPolicy,
     taskBoundaryMutationDisposition: candidate.mutationDisposition,
@@ -232,6 +276,10 @@ export function formatTaskBoundaryCandidateForTrace(
     parentBeforeType: extra.parentBeforeType,
     parentAfterId: extra.parentAfterId ?? candidate.committedParentId,
     parentAfterType: extra.parentAfterType,
+    ...formatProvisionalCurrentQuestionForTrace(candidate.currentQuestion),
+    ...formatCurrentQuestionMutationAuthorityForTrace(
+      candidate.mutationAuthority
+    ),
   };
 }
 
@@ -285,6 +333,8 @@ export function buildCommittedTaskBoundaryParent(input: {
     canonicalQuestionSourceTurnIds: [
       ...input.logicalQuestionUnit.sourceTurnIds,
     ],
+    sourceQuestionUnitId: input.logicalQuestionUnit.id,
+    sourceQuestionRevision: input.logicalQuestionUnit.revision,
     parentContextHandoff: input.parentContextHandoff,
     revisions: 1,
   };

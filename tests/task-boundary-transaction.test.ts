@@ -54,6 +54,8 @@ test("commits a complete high-authority new parent before advisor execution", ()
   });
   assert.ok(candidate);
   assert.equal(candidate.commitPolicy, "immediate");
+  assert.equal(candidate.currentQuestion.revision, 2);
+  assert.equal(candidate.mutationAuthority.parentMutationAuthorized, true);
 
   const parent = buildCommittedTaskBoundaryParent({
     candidate,
@@ -87,6 +89,9 @@ test("keeps an incomplete boundary pending until its bounded completion", () => 
   assert.ok(candidate);
   assert.equal(candidate.commitPolicy, "await-adjacent-completion");
   assert.equal(candidate.mutationDisposition, "pending-incomplete-question");
+  assert.equal(candidate.currentQuestion.normalizedText, "Design a system that");
+  assert.equal(candidate.mutationAuthority.responseAuthorized, true);
+  assert.equal(candidate.mutationAuthority.parentMutationAuthorized, false);
   assert.equal(expireTaskBoundaryCandidate(candidate, 1_000)?.state, "pending");
   assert.equal(expireTaskBoundaryCandidate(candidate, 16_000)?.state, "expired");
 });
@@ -224,4 +229,25 @@ test("abstains from precommitting follow-ups and non-parent task types", () => {
 
   assert.equal(followup?.mutationDisposition, "abstained-non-boundary-relation");
   assert.equal(fieldKnowledge?.mutationDisposition, "abstained-non-parent-type");
+});
+
+test("keeps a complete unknown question provisional and blocks parent mutation", () => {
+  const candidate = createTaskBoundaryCandidate({
+    logicalQuestionUnit: logicalQuestion("Could you explain the tradeoff?"),
+    proposedQuestionType: "unknown",
+    proposedRelation: "new-parent",
+    authoritySource: "accepted-transcript",
+    confidence: 0.4,
+    questionComplete: true,
+    mutationAuthorized: true,
+    commitParent: true,
+  });
+
+  assert.ok(candidate);
+  assert.equal(candidate.currentQuestion.revision, 2);
+  assert.equal(candidate.mutationAuthority.responseAuthorized, true);
+  assert.equal(candidate.mutationAuthority.typeMutationAuthorized, false);
+  assert.equal(candidate.mutationAuthority.parentMutationAuthorized, false);
+  assert.equal(candidate.commitPolicy, "await-adjacent-completion");
+  assert.equal(candidate.mutationDisposition, "abstained-non-parent-type");
 });

@@ -4498,6 +4498,15 @@ export function useMeetingAssistant() {
       proposedQuestionType: advisorTaskSignals.questionType,
       proposedRelation: advisorTaskSignals.taskRelation,
       authoritySource: taskBoundaryAuthoritySource,
+      sourceKind:
+        advisorJob.source === "live-turn"
+          ? promptContext.activeScreenTask
+            ? "mixed"
+            : "voice"
+          : "screen",
+      sourceObservationIds: promptContext.activeScreenTask
+        ? [promptContext.activeScreenTask.observationId]
+        : [],
       confidence: advisorTaskSignals.openingRoute
         ? 1
         : advisorTaskSignals.questionTypeDecision?.confidence,
