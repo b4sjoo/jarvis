@@ -4,7 +4,10 @@ import {
   createProvisionalCurrentQuestion,
   decideCurrentQuestionMutationAuthority,
   formatCurrentQuestionMutationAuthorityForTrace,
+  formatCurrentQuestionSettlementForTrace,
   formatProvisionalCurrentQuestionForTrace,
+  settleCurrentQuestion,
+  type CurrentQuestionSettlementProposal,
 } from "../src/lib/meeting/current-question-settlement.js";
 import type { LogicalQuestionUnit } from "../src/lib/meeting/logical-question-unit.js";
 
@@ -40,6 +43,47 @@ function logicalQuestion(
     boundaryReason: "bounded-continuation",
     truncated: false,
   };
+}
+
+function proposal(
+  source: CurrentQuestionSettlementProposal["source"],
+  overrides: Partial<CurrentQuestionSettlementProposal> = {}
+): CurrentQuestionSettlementProposal {
+  return {
+    source,
+    sessionId: "session-a",
+    runtimeEpoch: 3,
+    logicalQuestionUnitId: "logical-question-a",
+    revision: 2,
+    questionType: "general-system-design",
+    relation: "new-parent",
+    action: "answer",
+    evidenceMode: "hypothetical-design",
+    confidence: 0.95,
+    typeEvidenceAuthorized: true,
+    relationEvidenceAuthorized: true,
+    actionEvidenceAuthorized: true,
+    ...overrides,
+  };
+}
+
+function settle(
+  overrides: Partial<Parameters<typeof settleCurrentQuestion>[0]> = {}
+) {
+  const currentQuestion = createProvisionalCurrentQuestion({
+    logicalQuestionUnit: logicalQuestion(),
+    sourceKind: "voice",
+  });
+  return settleCurrentQuestion({
+    currentQuestion,
+    manualCorrectionRevision: 0,
+    policy: {
+      runtimeMutationAuthorized: true,
+      questionComplete: true,
+      commitParent: true,
+    },
+    ...overrides,
+  });
 }
 
 test("creates a stable versioned provisional question snapshot", () => {
@@ -166,4 +210,216 @@ test("formats provisional identity and authority for trace joins", () => {
   assert.equal(metadata.currentQuestionSourceKind, "screen");
   assert.equal(metadata.currentQuestionAuthority, "deterministic-fast-path");
   assert.equal(metadata.currentQuestionParentMutationAuthorized, true);
+});
+
+test("manual evidence outranks deterministic and LLM proposals on the same revision", () => {
+  const decision = settle({
+    manualCorrectionRevision: 4,
+    manualProposal: proposal("manual-correction", {
+      questionType: "behavioral",
+      relation: "followup-parent",
+      evidenceMode: "personal-experience",
+      manualCorrectionRevision: 4,
+    }),
+    deterministicProposal: proposal("deterministic-fast-path"),
+    llmProposal: proposal("llm-type-repair", {
+      questionType: "coding",
+    }),
+    policy: {
+      allowLlmTypeRepair: true,
+      runtimeMutationAuthorized: true,
+      questionComplete: true,
+      commitParent: true,
+    },
+  });
+
+  assert.equal(decision.questionType, "behavioral");
+  assert.equal(decision.relation, "followup-parent");
+  assert.equal(decision.authority, "explicit-manual");
+  assert.equal(decision.typeAuthoritySource, "manual-correction");
+  assert.equal(decision.parentMutationAuthorized, false);
+});
+
+test("deterministic evidence outranks an enabled LLM type repair", () => {
+  const decision = settle({
+    deterministicProposal: proposal("deterministic-fast-path", {
+      questionType: "general-system-design",
+    }),
+    llmProposal: proposal("llm-type-repair", {
+      questionType: "coding",
+    }),
+    policy: {
+      allowLlmTypeRepair: true,
+      runtimeMutationAuthorized: true,
+      questionComplete: true,
+      commitParent: true,
+    },
+  });
+
+  assert.equal(decision.questionType, "general-system-design");
+  assert.equal(
+    decision.typeAuthoritySource,
+    "deterministic-fast-path"
+  );
+  assert.equal(decision.parentMutationAuthorized, true);
+});
+
+test("LLM can repair type without receiving relation or parent authority", () => {
+  const decision = settle({
+    llmProposal: proposal("llm-type-repair", {
+      questionType: "coding",
+      relation: "new-parent",
+    }),
+    policy: {
+      allowLlmTypeRepair: true,
+      runtimeMutationAuthorized: true,
+      questionComplete: true,
+      commitParent: true,
+    },
+  });
+
+  assert.equal(decision.questionType, "coding");
+  assert.equal(decision.relation, "unknown");
+  assert.equal(decision.typeMutationAuthorized, true);
+  assert.equal(decision.relationMutationAuthorized, false);
+  assert.equal(decision.parentMutationAuthorized, false);
+  assert.ok(
+    decision.rejectedProposals.some((rejection) =>
+      rejection.reasons.includes("llm-relation-shadow-only")
+    )
+  );
+});
+
+test("LLM type repair can combine with separately authorized deterministic relation evidence", () => {
+  const decision = settle({
+    deterministicProposal: proposal("deterministic-fast-path", {
+      questionType: "unknown",
+      relation: "new-parent",
+    }),
+    llmProposal: proposal("llm-type-repair", {
+      questionType: "ai-ml-system-design",
+      relation: "followup-parent",
+    }),
+    policy: {
+      allowLlmTypeRepair: true,
+      runtimeMutationAuthorized: true,
+      questionComplete: true,
+      commitParent: true,
+    },
+  });
+
+  assert.equal(decision.questionType, "ai-ml-system-design");
+  assert.equal(decision.relation, "new-parent");
+  assert.equal(decision.typeAuthoritySource, "llm-type-repair");
+  assert.equal(
+    decision.relationAuthoritySource,
+    "deterministic-fast-path"
+  );
+  assert.equal(decision.parentMutationAuthorized, true);
+});
+
+test("LLM type repair stays shadowed unless the operation enables it", () => {
+  const decision = settle({
+    llmProposal: proposal("llm-type-repair", {
+      questionType: "coding",
+    }),
+  });
+
+  assert.equal(decision.questionType, "unknown");
+  assert.equal(decision.typeMutationAuthorized, false);
+  assert.equal(decision.responseAuthorized, true);
+  assert.ok(
+    decision.rejectedProposals.some((rejection) =>
+      rejection.reasons.includes("llm-type-repair-disabled")
+    )
+  );
+});
+
+test("stale manual and LLM proposals are rejected without invalidating current deterministic evidence", () => {
+  const decision = settle({
+    activeParentId: "parent-current",
+    activeParentRevision: 7,
+    manualCorrectionRevision: 5,
+    manualProposal: proposal("manual-correction", {
+      questionType: "behavioral",
+      manualCorrectionRevision: 4,
+    }),
+    deterministicProposal: proposal("deterministic-fast-path", {
+      questionType: "general-system-design",
+      expectedParentId: "parent-current",
+      expectedParentRevision: 7,
+    }),
+    llmProposal: proposal("llm-type-repair", {
+      questionType: "coding",
+      revision: 1,
+    }),
+    policy: {
+      allowLlmTypeRepair: true,
+      runtimeMutationAuthorized: true,
+      questionComplete: true,
+      commitParent: true,
+    },
+  });
+
+  assert.equal(decision.questionType, "general-system-design");
+  assert.ok(
+    decision.rejectedProposals.some(
+      (rejection) =>
+        rejection.source === "manual-correction" &&
+        rejection.reasons.includes(
+          "manual-correction-revision-mismatch"
+        )
+    )
+  );
+  assert.ok(
+    decision.rejectedProposals.some(
+      (rejection) =>
+        rejection.source === "llm-type-repair" &&
+        rejection.reasons.includes(
+          "logical-question-revision-mismatch"
+        )
+    )
+  );
+});
+
+test("deterministic ignore action suppresses a response without discarding the question", () => {
+  const decision = settle({
+    deterministicProposal: proposal("deterministic-fast-path", {
+      questionType: "unknown",
+      relation: "unknown",
+      action: "ignore",
+    }),
+  });
+
+  assert.equal(decision.questionType, "unknown");
+  assert.equal(decision.responseAuthorized, false);
+  assert.equal(decision.action, "ignore");
+  assert.ok(
+    decision.reasons.includes("response-not-authorized:ignore")
+  );
+});
+
+test("settlement IDs are deterministic and trace metadata carries proposal rejections", () => {
+  const first = settle({
+    llmProposal: proposal("llm-type-repair", {
+      questionType: "coding",
+    }),
+  });
+  const duplicate = settle({
+    llmProposal: proposal("llm-type-repair", {
+      questionType: "coding",
+    }),
+  });
+  const trace = formatCurrentQuestionSettlementForTrace(first);
+
+  assert.equal(first.settlementId, duplicate.settlementId);
+  assert.equal(
+    trace.currentQuestionSettlementId,
+    first.settlementId
+  );
+  assert.equal(trace.currentQuestionSettlementType, "unknown");
+  assert.deepEqual(
+    trace.currentQuestionSettlementRejectedProposals,
+    first.rejectedProposals
+  );
 });
