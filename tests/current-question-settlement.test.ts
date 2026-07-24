@@ -6,6 +6,7 @@ import {
   formatCurrentQuestionMutationAuthorityForTrace,
   formatCurrentQuestionSettlementForTrace,
   formatProvisionalCurrentQuestionForTrace,
+  resolveCurrentQuestionSettlementDisposition,
   settleCurrentQuestion,
   type CurrentQuestionSettlementProposal,
 } from "../src/lib/meeting/current-question-settlement.js";
@@ -238,6 +239,53 @@ test("manual evidence outranks deterministic and LLM proposals on the same revis
   assert.equal(decision.authority, "explicit-manual");
   assert.equal(decision.typeAuthoritySource, "manual-correction");
   assert.equal(decision.parentMutationAuthorized, false);
+  assert.equal(
+    resolveCurrentQuestionSettlementDisposition({
+      settlement: decision,
+      parentCommitted: true,
+    }),
+    "manual-authority"
+  );
+});
+
+test("distinguishes provisional, response-only, committed, and stale dispositions", () => {
+  const unresolved = settle();
+  const responseOnly = settle({
+    deterministicProposal: proposal("deterministic-fast-path", {
+      questionType: "field-knowledge",
+      relation: "followup-parent",
+    }),
+  });
+  const committed = settle({
+    deterministicProposal: proposal("deterministic-fast-path"),
+  });
+
+  assert.equal(
+    resolveCurrentQuestionSettlementDisposition({
+      settlement: unresolved,
+    }),
+    "unresolved-provisional"
+  );
+  assert.equal(
+    resolveCurrentQuestionSettlementDisposition({
+      settlement: responseOnly,
+    }),
+    "response-only"
+  );
+  assert.equal(
+    resolveCurrentQuestionSettlementDisposition({
+      settlement: committed,
+      parentCommitted: true,
+    }),
+    "committed-parent"
+  );
+  assert.equal(
+    resolveCurrentQuestionSettlementDisposition({
+      settlement: committed,
+      staleDropped: true,
+    }),
+    "stale-dropped"
+  );
 });
 
 test("deterministic evidence outranks an enabled LLM type repair", () => {

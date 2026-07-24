@@ -17,6 +17,12 @@ import {
 } from "./types";
 import type { ActiveMeetingTask } from "./active-meeting-task";
 import type { AnswerSufficiencyDecision } from "./answer-sufficiency.js";
+import {
+  formatCurrentQuestionSettlementForTrace,
+  type CurrentQuestionSettlementDecision,
+  type CurrentQuestionSettlementDisposition,
+  type ProvisionalCurrentQuestion,
+} from "./current-question-settlement.js";
 import type {
   CriticalMomentCandidate,
   CriticalMomentEvaluation,
@@ -31,10 +37,15 @@ import {
   buildSessionTaskReviewIndex,
   type SessionTaskReviewIndex,
 } from "./session-task-review-index.js";
+import {
+  formatSettledAdvisorExecutionPlanForTrace,
+  type SettledAdvisorExecutionPlan,
+  type SettledAdvisorExecutionPlanAuthorization,
+} from "./settled-advisor-execution-plan.js";
 import { serializeMeetingTraceExport } from "./trace.js";
 
 const SESSION_RECORDING_SCHEMA_VERSION = 1;
-const SESSION_TRACE_SUMMARY_SCHEMA_VERSION = 14;
+const SESSION_TRACE_SUMMARY_SCHEMA_VERSION = 15;
 const SESSION_TRACE_INDEX_SCHEMA_VERSION = 1;
 
 interface SessionRecordingStartOptions {
@@ -91,6 +102,8 @@ interface SessionRecordingEvent {
     | "interviewer-intent-llm-decision"
     | "taxonomy-adjudication-decision"
     | "answer-sufficiency-decision"
+    | "current-question-settlement"
+    | "settled-advisor-execution-plan"
     | "capture-lifecycle"
     | "native-speech-event"
     | "runtime-reset"
@@ -242,6 +255,60 @@ export interface SessionCompactTraceSummary {
     parentBeforeType?: string;
     parentAfterId?: string;
     parentAfterType?: string;
+  };
+  currentQuestionSettlement?: {
+    settlementId?: string;
+    logicalQuestionUnitId?: string;
+    logicalQuestionUnitRevision?: number;
+    sourceTurnIds: string[];
+    sourceObservationIds: string[];
+    sourceHash?: string;
+    questionType?: string;
+    relation?: string;
+    action?: string;
+    evidenceMode?: string;
+    authority?: string;
+    authoritySource?: string;
+    typeAuthoritySource?: string;
+    relationAuthoritySource?: string;
+    actionAuthoritySource?: string;
+    typeMutationAuthorized?: boolean;
+    relationMutationAuthorized?: boolean;
+    parentMutationAuthorized?: boolean;
+    responseAuthorized?: boolean;
+    disposition?: string;
+    parentBeforeId?: string;
+    parentBeforeType?: string;
+    parentAfterId?: string;
+    parentAfterType?: string;
+    manualCorrectionRevision?: number;
+    rejectedProposalCount?: number;
+    reasons: string[];
+    durationMs?: number;
+    llmWaitMs?: number;
+    llmWaitDisposition?: string;
+  };
+  settledExecutionPlan?: {
+    planId?: string;
+    settlementId?: string;
+    questionType?: string;
+    relation?: string;
+    responseAuthorized?: boolean;
+    responseOwnerSource?: string;
+    modelRoute?: string;
+    providerId?: string;
+    playbookId?: string;
+    playbookPhase?: string;
+    memoryUseCase?: string;
+    memoryQuestionType?: string;
+    memoryPolicyId?: string;
+    factAnchorPolicy?: string;
+    promptContract?: string;
+    artifactDisposition?: string;
+    authorized?: boolean;
+    authorizationReason?: string;
+    authorizationStage?: string;
+    rejectionReasons: string[];
   };
   crossDomainTransition?: {
     kind?: string;
@@ -1837,6 +1904,145 @@ export class SessionRecordingManager {
     });
   }
 
+  recordCurrentQuestionSettlement({
+    traceId,
+    taskId,
+    currentQuestion,
+    settlement,
+    disposition,
+    durationMs,
+    llmWaitMs = 0,
+    llmWaitDisposition = "not-awaited",
+    parentBeforeId,
+    parentBeforeType,
+    parentAfterId,
+    parentAfterType,
+  }: {
+    traceId: string;
+    taskId?: string;
+    currentQuestion: ProvisionalCurrentQuestion;
+    settlement: CurrentQuestionSettlementDecision;
+    disposition: CurrentQuestionSettlementDisposition;
+    durationMs?: number;
+    llmWaitMs?: number;
+    llmWaitDisposition?: string;
+    parentBeforeId?: string;
+    parentBeforeType?: string;
+    parentAfterId?: string;
+    parentAfterType?: string;
+  }) {
+    const session = this.getWritableSession({ traceId });
+    if (!session) return;
+    const artifactPath = `traces/${sanitizeFilePart(
+      traceId
+    )}/current-question-settlement.json`;
+    const metadata = {
+      ...formatCurrentQuestionSettlementForTrace(settlement),
+      currentQuestionSettlementDisposition: disposition,
+      currentQuestionSettlementSourceTurnIds:
+        currentQuestion.sourceTurnIds,
+      currentQuestionSettlementSourceObservationIds:
+        currentQuestion.sourceObservationIds,
+      currentQuestionSettlementDurationMs: durationMs,
+      currentQuestionSettlementLlmWaitMs: llmWaitMs,
+      currentQuestionSettlementLlmWaitDisposition:
+        llmWaitDisposition,
+      currentQuestionSettlementParentBeforeId: parentBeforeId,
+      currentQuestionSettlementParentBeforeType: parentBeforeType,
+      currentQuestionSettlementParentAfterId: parentAfterId,
+      currentQuestionSettlementParentAfterType: parentAfterType,
+    };
+    const payload = {
+      version: 1,
+      recordedAt: Date.now(),
+      sessionId: session.sessionId,
+      traceId,
+      taskId,
+      currentQuestion: {
+        logicalQuestionUnitId:
+          currentQuestion.logicalQuestionUnitId,
+        revision: currentQuestion.revision,
+        sessionId: currentQuestion.sessionId,
+        runtimeEpoch: currentQuestion.runtimeEpoch,
+        normalizedText: currentQuestion.normalizedText,
+        sourceTurnIds: currentQuestion.sourceTurnIds,
+        sourceObservationIds:
+          currentQuestion.sourceObservationIds,
+        sourceKind: currentQuestion.sourceKind,
+        sourceHash: currentQuestion.sourceHash,
+      },
+      settlement,
+      disposition,
+      durationMs,
+      llmWaitMs,
+      llmWaitDisposition,
+      parentBefore: {
+        id: parentBeforeId,
+        questionType: parentBeforeType,
+      },
+      parentAfter: {
+        id: parentAfterId,
+        questionType: parentAfterType,
+      },
+    };
+    this.enqueue(session, () =>
+      this.writeJson(session, artifactPath, payload)
+    );
+    this.recordEvent(
+      "current-question-settlement",
+      metadata,
+      [artifactPath],
+      traceId,
+      taskId
+    );
+  }
+
+  recordSettledAdvisorExecutionPlan({
+    traceId,
+    taskId,
+    plan,
+    authorization,
+    authorizationStage = "plan-created",
+  }: {
+    traceId: string;
+    taskId?: string;
+    plan: SettledAdvisorExecutionPlan;
+    authorization?: SettledAdvisorExecutionPlanAuthorization;
+    authorizationStage?: string;
+  }) {
+    const session = this.getWritableSession({ traceId });
+    if (!session) return;
+    const artifactPath = `traces/${sanitizeFilePart(
+      traceId
+    )}/settled-advisor-execution-plan.json`;
+    const metadata = {
+      ...formatSettledAdvisorExecutionPlanForTrace(
+        plan,
+        authorization
+      ),
+      settledExecutionPlanAuthorizationStage:
+        authorizationStage,
+    };
+    const payload = {
+      version: 1,
+      recordedAt: Date.now(),
+      sessionId: session.sessionId,
+      traceId,
+      taskId,
+      plan: metadata,
+    };
+    this.enqueue(session, () =>
+      this.writeJson(session, artifactPath, payload)
+    );
+    this.recordEvent(
+      "settled-advisor-execution-plan",
+      metadata,
+      [artifactPath],
+      traceId,
+      taskId
+    );
+  }
+
   recordCaptureLifecycle(metadata: Record<string, unknown>) {
     if (!this.getWritableSession()) return;
     this.recordEvent("capture-lifecycle", metadata);
@@ -2676,6 +2882,213 @@ function buildCompactTraceSummary({
       parentBeforeType: readFirstString(metadataSources, "parentBeforeType"),
       parentAfterId: readFirstString(metadataSources, "parentAfterId"),
       parentAfterType: readFirstString(metadataSources, "parentAfterType"),
+    },
+    currentQuestionSettlement: {
+      settlementId: readFirstString(
+        metadataSources,
+        "currentQuestionSettlementId"
+      ),
+      logicalQuestionUnitId: readFirstString(
+        metadataSources,
+        "currentQuestionSettlementUnitId"
+      ),
+      logicalQuestionUnitRevision:
+        readFirstNumberFromMetadata(
+          metadataSources,
+          "currentQuestionSettlementRevision"
+        ),
+      sourceTurnIds: readFirstStringList(
+        metadataSources,
+        "currentQuestionSettlementSourceTurnIds"
+      ),
+      sourceObservationIds: readFirstStringList(
+        metadataSources,
+        "currentQuestionSettlementSourceObservationIds"
+      ),
+      sourceHash: readFirstString(
+        metadataSources,
+        "currentQuestionSettlementSourceHash"
+      ),
+      questionType: readFirstString(
+        metadataSources,
+        "currentQuestionSettlementType"
+      ),
+      relation: readFirstString(
+        metadataSources,
+        "currentQuestionSettlementRelation"
+      ),
+      action: readFirstString(
+        metadataSources,
+        "currentQuestionSettlementAction"
+      ),
+      evidenceMode: readFirstString(
+        metadataSources,
+        "currentQuestionSettlementEvidenceMode"
+      ),
+      authority: readFirstString(
+        metadataSources,
+        "currentQuestionSettlementAuthority"
+      ),
+      authoritySource: readFirstString(
+        metadataSources,
+        "currentQuestionSettlementAuthoritySource"
+      ),
+      typeAuthoritySource: readFirstString(
+        metadataSources,
+        "currentQuestionSettlementTypeAuthoritySource"
+      ),
+      relationAuthoritySource: readFirstString(
+        metadataSources,
+        "currentQuestionSettlementRelationAuthoritySource"
+      ),
+      actionAuthoritySource: readFirstString(
+        metadataSources,
+        "currentQuestionSettlementActionAuthoritySource"
+      ),
+      typeMutationAuthorized: readFirstBoolean(
+        metadataSources,
+        "currentQuestionSettlementTypeMutationAuthorized"
+      ),
+      relationMutationAuthorized: readFirstBoolean(
+        metadataSources,
+        "currentQuestionSettlementRelationMutationAuthorized"
+      ),
+      parentMutationAuthorized: readFirstBoolean(
+        metadataSources,
+        "currentQuestionSettlementParentMutationAuthorized"
+      ),
+      responseAuthorized: readFirstBoolean(
+        metadataSources,
+        "currentQuestionSettlementResponseAuthorized"
+      ),
+      disposition: readFirstString(
+        metadataSources,
+        "currentQuestionSettlementDisposition"
+      ),
+      parentBeforeId: readFirstString(
+        metadataSources,
+        "currentQuestionSettlementParentBeforeId"
+      ),
+      parentBeforeType: readFirstString(
+        metadataSources,
+        "currentQuestionSettlementParentBeforeType"
+      ),
+      parentAfterId: readFirstString(
+        metadataSources,
+        "currentQuestionSettlementParentAfterId"
+      ),
+      parentAfterType: readFirstString(
+        metadataSources,
+        "currentQuestionSettlementParentAfterType"
+      ),
+      manualCorrectionRevision:
+        readFirstNumberFromMetadata(
+          metadataSources,
+          "currentQuestionSettlementManualCorrectionRevision"
+        ),
+      rejectedProposalCount:
+        readFirstObjectListLength(
+          metadataSources,
+          "currentQuestionSettlementRejectedProposals"
+        ),
+      reasons: readFirstStringList(
+        metadataSources,
+        "currentQuestionSettlementReasons"
+      ),
+      durationMs: readFirstNumberFromMetadata(
+        metadataSources,
+        "currentQuestionSettlementDurationMs"
+      ),
+      llmWaitMs: readFirstNumberFromMetadata(
+        metadataSources,
+        "currentQuestionSettlementLlmWaitMs"
+      ),
+      llmWaitDisposition: readFirstString(
+        metadataSources,
+        "currentQuestionSettlementLlmWaitDisposition"
+      ),
+    },
+    settledExecutionPlan: {
+      planId: readFirstString(
+        metadataSources,
+        "settledExecutionPlanId"
+      ),
+      settlementId: readFirstString(
+        metadataSources,
+        "settledExecutionPlanSettlementId"
+      ),
+      questionType: readFirstString(
+        metadataSources,
+        "settledExecutionPlanQuestionType"
+      ),
+      relation: readFirstString(
+        metadataSources,
+        "settledExecutionPlanRelation"
+      ),
+      responseAuthorized: readFirstBoolean(
+        metadataSources,
+        "settledExecutionPlanResponseAuthorized"
+      ),
+      responseOwnerSource: readFirstString(
+        metadataSources,
+        "settledExecutionPlanResponseOwnerSource"
+      ),
+      modelRoute: readFirstString(
+        metadataSources,
+        "settledExecutionPlanModelRoute"
+      ),
+      providerId: readFirstString(
+        metadataSources,
+        "settledExecutionPlanProviderId"
+      ),
+      playbookId: readFirstString(
+        metadataSources,
+        "settledExecutionPlanPlaybookId"
+      ),
+      playbookPhase: readFirstString(
+        metadataSources,
+        "settledExecutionPlanPlaybookPhase"
+      ),
+      memoryUseCase: readFirstString(
+        metadataSources,
+        "settledExecutionPlanMemoryUseCase"
+      ),
+      memoryQuestionType: readFirstString(
+        metadataSources,
+        "settledExecutionPlanMemoryQuestionType"
+      ),
+      memoryPolicyId: readFirstString(
+        metadataSources,
+        "settledExecutionPlanMemoryPolicyId"
+      ),
+      factAnchorPolicy: readFirstString(
+        metadataSources,
+        "settledExecutionPlanFactAnchorPolicy"
+      ),
+      promptContract: readFirstString(
+        metadataSources,
+        "settledExecutionPlanPromptContract"
+      ),
+      artifactDisposition: readFirstString(
+        metadataSources,
+        "settledExecutionPlanArtifactDisposition"
+      ),
+      authorized: readFirstBoolean(
+        metadataSources,
+        "settledExecutionPlanAuthorized"
+      ),
+      authorizationReason: readFirstString(
+        metadataSources,
+        "settledExecutionPlanAuthorizationReason"
+      ),
+      authorizationStage: readFirstString(
+        metadataSources,
+        "settledExecutionPlanAuthorizationStage"
+      ),
+      rejectionReasons: readFirstStringList(
+        metadataSources,
+        "settledExecutionPlanRejectionReasons"
+      ),
     },
     crossDomainTransition: {
       kind: readFirstString(metadataSources, "crossDomainTransitionKind"),
@@ -3942,6 +4355,18 @@ function readFirstStringList(
   }
 
   return [];
+}
+
+function readFirstObjectListLength(
+  metadataSources: Record<string, unknown>[],
+  key: string
+) {
+  for (const metadata of metadataSources) {
+    const value = metadata[key];
+    if (Array.isArray(value)) return value.length;
+  }
+
+  return undefined;
 }
 
 function readFirstNumberFromMetadata(

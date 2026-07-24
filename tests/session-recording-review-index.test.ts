@@ -30,6 +30,25 @@ test("builds a task-level review index from trace summaries and evaluations", ()
     turnGateReason: "meaningful-follow-up",
     taskMutationAuthorized: false,
     taskMutationAuthorizationReason: "turn-intent-would-suppress",
+    currentQuestionSettlement: {
+      settlementId: "settlement_1",
+      questionType: "general-system-design",
+      relation: "new-parent",
+      authority: "deterministic-fast-path",
+      disposition: "committed-parent",
+      parentMutationAuthorized: true,
+      responseAuthorized: true,
+    },
+    settledExecutionPlan: {
+      planId: "plan_1",
+      settlementId: "settlement_1",
+      questionType: "general-system-design",
+      modelRoute: "main",
+      playbookId: "general_system_design",
+      memoryUseCase: "system_design_interview",
+      authorized: true,
+      authorizationStage: "plan-created",
+    },
     advisorOutputDisposition: "shadow-observation-only",
     adjacentConstraintInherited: true,
     adjacentConstraintDecisionReason: "inherited-explicit-constraint",
@@ -91,6 +110,12 @@ test("builds a task-level review index from trace summaries and evaluations", ()
   assert.equal(task.sentenceBufferTimeoutCount, 0);
   assert.equal(task.sentenceBufferAddedLatencyMsTotal, 850);
   assert.equal(task.taskMutationSuppressedCount, 1);
+  assert.deepEqual(task.settlementDispositions, ["committed-parent"]);
+  assert.deepEqual(task.settlementQuestionTypes, [
+    "general-system-design",
+  ]);
+  assert.equal(task.settlementStaleDropCount, 0);
+  assert.deepEqual(task.settledExecutionPlanIds, ["plan_1"]);
   assert.equal(task.adjacentConstraintInheritanceCount, 1);
   assert.deepEqual(task.whiteboardArtifactIds, ["whiteboard_1"]);
   assert.deepEqual(task.manualPhaseTransitions, [
@@ -107,6 +132,18 @@ test("builds a task-level review index from trace summaries and evaluations", ()
   assert.equal(task.diagramOverlayRejectedCountTotal, 1);
   assert.deepEqual(task.humanEvaluation?.classificationVerdicts, ["ok"]);
   assert.deepEqual(task.humanEvaluation?.memoryVerdicts, ["partial"]);
+  assert.deepEqual(
+    task.humanEvaluation?.settlementQuestionTypeLabels,
+    ["correct"]
+  );
+  assert.deepEqual(
+    task.humanEvaluation?.settlementRelationLabels,
+    ["correct"]
+  );
+  assert.deepEqual(
+    task.humanEvaluation?.settlementParentMutationLabels,
+    ["wrong"]
+  );
   assert.deepEqual(task.humanEvaluation?.memoryEntryLabelCounts, {
     relevant: 1,
     irrelevant: 1,
@@ -144,6 +181,12 @@ function buildQuestionEvaluation(): QuestionHumanEvaluation {
     diagramOverlay: okBlock,
     guardrail: okBlock,
     answer: okBlock,
+    currentQuestionSettlement: {
+      questionTypeCorrect: true,
+      relationCorrect: true,
+      parentMutationCorrect: false,
+      expectedDisposition: "committed-parent",
+    },
     memoryEntryLabels: [
       {
         memoryId: "mem_overlay_geo",

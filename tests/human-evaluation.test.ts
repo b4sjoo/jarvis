@@ -229,6 +229,44 @@ test("merges question-level LLM taxonomy adjudication labels", () => {
   });
 });
 
+test("merges current-question settlement labels without replacing prior judgments", () => {
+  const first = upsertQuestionHumanEvaluation(
+    [],
+    {
+      traceId: "trace_settlement",
+      traceKind: "voice",
+      questionId: "question_settlement",
+    },
+    {
+      currentQuestionSettlement: {
+        questionTypeCorrect: true,
+        relationCorrect: false,
+      },
+    }
+  );
+  const updated = upsertQuestionHumanEvaluation(
+    first,
+    {
+      traceId: "trace_settlement",
+      traceKind: "voice",
+      questionId: "question_settlement",
+    },
+    {
+      currentQuestionSettlement: {
+        parentMutationCorrect: true,
+        expectedDisposition: "committed-parent",
+      },
+    }
+  );
+
+  assert.deepEqual(updated[0]?.currentQuestionSettlement, {
+    questionTypeCorrect: true,
+    relationCorrect: false,
+    parentMutationCorrect: true,
+    expectedDisposition: "committed-parent",
+  });
+});
+
 test("persists primary-ask correctness independently from advisor admission", () => {
   const first = upsertQuestionHumanEvaluation(
     [],

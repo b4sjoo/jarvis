@@ -8,6 +8,11 @@ import type {
   MeetingAssistantSettings,
   MeetingTrace,
 } from "../src/lib/meeting/types.js";
+import type {
+  CurrentQuestionSettlementDecision,
+  ProvisionalCurrentQuestion,
+} from "../src/lib/meeting/current-question-settlement.js";
+import type { SettledAdvisorExecutionPlan } from "../src/lib/meeting/settled-advisor-execution-plan.js";
 
 interface InvokeCall {
   command: string;
@@ -752,7 +757,7 @@ test("compact trace summaries preserve task boundary and cross-domain evidence",
   );
   assert.ok(summaryWrite);
   const summary = parsePayload(summaryWrite);
-  assert.equal(summary.version, 14);
+  assert.equal(summary.version, 15);
   assert.equal(summary.taskRelation, "new-parent");
   assert.equal(summary.logicalQuestionUnitRevision, 3);
   assert.deepEqual(summary.logicalQuestionSourceTurnIds, ["turn_1", "turn_2"]);
@@ -858,7 +863,7 @@ test("compact trace summaries preserve hard memory invalidation evidence", async
   );
   assert.ok(summaryWrite);
   const summary = parsePayload(summaryWrite);
-  assert.equal(summary.version, 14);
+  assert.equal(summary.version, 15);
   const memory = summary.memory as Record<string, unknown>;
   assert.equal(memory.authorityRevision, 2);
   assert.equal(memory.invalidationKind, "hard");
@@ -874,6 +879,226 @@ test("compact trace summaries preserve hard memory invalidation evidence", async
   assert.deepEqual(memory.hardInvalidationAffectedEntryIds, ["entry-a"]);
   assert.equal(memory.hardInvalidationTargetsExcluded, true);
   assert.equal(memory.hardInvalidationStaleSnapshotServed, false);
+
+  await manager.stop("test-complete");
+});
+
+test("records compact current-question settlement and execution-plan evidence", async () => {
+  const native = new ControlledRecordingInvoke();
+  const manager = new SessionRecordingManager(undefined, native.invoke);
+  await manager.start(START_OPTIONS);
+  await settle();
+
+  const currentQuestion: ProvisionalCurrentQuestion = {
+    logicalQuestionUnitId: "question_settlement_unit",
+    revision: 3,
+    sessionId: "session-runtime",
+    runtimeEpoch: 7,
+    normalizedText: "Design a ride-sharing backend",
+    sourceTurnIds: ["turn_a", "turn_b"],
+    sourceObservationIds: ["screen_a"],
+    sourceKind: "mixed",
+    sourceHash: "source_hash_a",
+    createdAt: 10,
+    updatedAt: 20,
+  };
+  const settlementDecision: CurrentQuestionSettlementDecision = {
+    settlementId: "settlement_a",
+    logicalQuestionUnitId: currentQuestion.logicalQuestionUnitId,
+    revision: currentQuestion.revision,
+    sessionId: currentQuestion.sessionId,
+    runtimeEpoch: currentQuestion.runtimeEpoch,
+    sourceHash: currentQuestion.sourceHash,
+    questionType: "general-system-design",
+    relation: "new-parent",
+    action: "answer",
+    evidenceMode: "hypothetical-design",
+    authority: "deterministic-fast-path",
+    authoritySource: "accepted-transcript",
+    typeAuthoritySource: "deterministic-fast-path",
+    relationAuthoritySource: "deterministic-fast-path",
+    actionAuthoritySource: "deterministic-fast-path",
+    typeMutationAuthorized: true,
+    relationMutationAuthorized: true,
+    parentMutationAuthorized: true,
+    responseAuthorized: true,
+    confidence: 0.94,
+    activeParentId: "parent_before",
+    activeParentRevision: 2,
+    manualCorrectionRevision: 0,
+    rejectedProposals: [],
+    reasons: ["parent-mutation-authorized", "response-authorized"],
+  };
+  const plan = {
+    id: "plan_a",
+    settlementId: settlementDecision.settlementId,
+    sessionId: settlementDecision.sessionId,
+    runtimeEpoch: settlementDecision.runtimeEpoch,
+    logicalQuestionUnitId: settlementDecision.logicalQuestionUnitId,
+    logicalQuestionRevision: settlementDecision.revision,
+    sourceHash: settlementDecision.sourceHash,
+    questionType: "general-system-design",
+    relation: "new-parent",
+    taskRelation: "new-parent",
+    responseAuthorized: true,
+    expectedParentId: "parent_after",
+    expectedParentRevision: 1,
+    responseOwner: {
+      questionType: "general-system-design",
+      source: "committed-parent",
+    },
+    modelRoute: {
+      route: "main",
+      reason: "settled-main",
+      resolvedProviderId: "main-provider",
+      provider: { provider: "main-provider", variables: {} },
+    },
+    playbookId: "general_system_design",
+    playbookPhase: "requirement_clarification",
+    memoryPolicy: {
+      questionType: "general-system-design",
+      useCase: "system_design_interview",
+      askFrame: "hypothetical-design",
+      topicDomain: "backend",
+      retrievalPolicyId: "system-design",
+    },
+    factAnchorPolicy: {
+      requirement: "not-required",
+      policyId: "not-required",
+    },
+    promptContract: {
+      profile: "system-design",
+      contractId: "meeting-answer:system-design",
+    },
+    artifactPolicy: {
+      disposition: "whiteboard-authorized",
+      allowCode: false,
+      allowComplexity: false,
+      allowWhiteboard: true,
+      reasons: ["system-design-owner"],
+    },
+    createdAt: 30,
+  } as unknown as SettledAdvisorExecutionPlan;
+
+  manager.recordCurrentQuestionSettlement({
+    traceId: "trace_settlement",
+    taskId: "parent_after",
+    currentQuestion,
+    settlement: settlementDecision,
+    disposition: "committed-parent",
+    durationMs: 1.25,
+    llmWaitMs: 0,
+    parentBeforeId: "parent_before",
+    parentBeforeType: "coding",
+    parentAfterId: "parent_after",
+    parentAfterType: "general-system-design",
+  });
+  manager.recordSettledAdvisorExecutionPlan({
+    traceId: "trace_settlement",
+    taskId: "parent_after",
+    plan,
+    authorization: {
+      authorized: true,
+      reason: "authorized",
+      rejectionReasons: [],
+    },
+  });
+  manager.recordTrace(
+    buildCompletedTrace("trace_settlement", Date.now(), {
+      currentQuestionSettlementId: "settlement_a",
+      currentQuestionSettlementUnitId: "question_settlement_unit",
+      currentQuestionSettlementRevision: 3,
+      currentQuestionSettlementSourceTurnIds: ["turn_a", "turn_b"],
+      currentQuestionSettlementSourceObservationIds: ["screen_a"],
+      currentQuestionSettlementSourceHash: "source_hash_a",
+      currentQuestionSettlementType: "general-system-design",
+      currentQuestionSettlementRelation: "new-parent",
+      currentQuestionSettlementAction: "answer",
+      currentQuestionSettlementEvidenceMode: "hypothetical-design",
+      currentQuestionSettlementAuthority: "deterministic-fast-path",
+      currentQuestionSettlementAuthoritySource: "accepted-transcript",
+      currentQuestionSettlementTypeMutationAuthorized: true,
+      currentQuestionSettlementRelationMutationAuthorized: true,
+      currentQuestionSettlementParentMutationAuthorized: true,
+      currentQuestionSettlementResponseAuthorized: true,
+      currentQuestionSettlementDisposition: "committed-parent",
+      currentQuestionSettlementParentBeforeId: "parent_before",
+      currentQuestionSettlementParentBeforeType: "coding",
+      currentQuestionSettlementParentAfterId: "parent_after",
+      currentQuestionSettlementParentAfterType: "general-system-design",
+      currentQuestionSettlementRejectedProposals: [],
+      currentQuestionSettlementReasons: ["parent-mutation-authorized"],
+      currentQuestionSettlementDurationMs: 1.25,
+      currentQuestionSettlementLlmWaitMs: 0,
+      currentQuestionSettlementLlmWaitDisposition: "not-awaited",
+      settledExecutionPlanId: "plan_a",
+      settledExecutionPlanSettlementId: "settlement_a",
+      settledExecutionPlanQuestionType: "general-system-design",
+      settledExecutionPlanRelation: "new-parent",
+      settledExecutionPlanResponseAuthorized: true,
+      settledExecutionPlanResponseOwnerSource: "committed-parent",
+      settledExecutionPlanModelRoute: "main",
+      settledExecutionPlanProviderId: "main-provider",
+      settledExecutionPlanPlaybookId: "general_system_design",
+      settledExecutionPlanPlaybookPhase: "requirement_clarification",
+      settledExecutionPlanMemoryUseCase: "system_design_interview",
+      settledExecutionPlanMemoryQuestionType: "general-system-design",
+      settledExecutionPlanMemoryPolicyId: "system-design",
+      settledExecutionPlanFactAnchorPolicy: "not-required",
+      settledExecutionPlanPromptContract: "meeting-answer:system-design",
+      settledExecutionPlanArtifactDisposition: "whiteboard-authorized",
+      settledExecutionPlanAuthorized: true,
+      settledExecutionPlanAuthorizationReason: "authorized",
+      settledExecutionPlanAuthorizationStage: "plan-created",
+      settledExecutionPlanRejectionReasons: [],
+    }),
+    "manual"
+  );
+  await settle();
+
+  const settlementWrite = native.calls.find(
+    (call) =>
+      call.command === "write_meeting_session_recording_text" &&
+      stringArg(call, "relativePath") ===
+        "traces/trace_settlement/current-question-settlement.json"
+  );
+  const planWrite = native.calls.find(
+    (call) =>
+      call.command === "write_meeting_session_recording_text" &&
+      stringArg(call, "relativePath") ===
+        "traces/trace_settlement/settled-advisor-execution-plan.json"
+  );
+  const summaryWrite = native.calls.find(
+    (call) =>
+      call.command === "write_meeting_session_recording_text" &&
+      stringArg(call, "relativePath") ===
+        "traces/trace_settlement/summary.json"
+  );
+  assert.ok(settlementWrite);
+  assert.ok(planWrite);
+  assert.ok(summaryWrite);
+  const settlementPayload = parsePayload(settlementWrite);
+  assert.equal(
+    (
+      settlementPayload.currentQuestion as Record<string, unknown>
+    ).normalizedText,
+    "Design a ride-sharing backend"
+  );
+  const serializedPlan = stringArg(planWrite, "payload");
+  assert.equal(serializedPlan.includes("taskSnapshot"), false);
+  assert.equal(serializedPlan.includes("variables"), false);
+  const summary = parsePayload(summaryWrite);
+  assert.equal(summary.version, 15);
+  assert.equal(
+    (
+      summary.currentQuestionSettlement as Record<string, unknown>
+    ).disposition,
+    "committed-parent"
+  );
+  assert.equal(
+    (summary.settledExecutionPlan as Record<string, unknown>).modelRoute,
+    "main"
+  );
 
   await manager.stop("test-complete");
 });

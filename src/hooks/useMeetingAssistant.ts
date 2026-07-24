@@ -205,6 +205,7 @@ import {
   formatTaskBoundaryCandidateForTrace,
   rebaseRuntimeCommitToken,
   rebaseRuntimeCommitTokenAfterOwnedParentMutation,
+  resolveCurrentQuestionSettlementDisposition,
   settleCurrentQuestion,
   expireTaskBoundaryCandidate,
   canQuestionTypeDecisionOverrideParent,
@@ -4102,6 +4103,7 @@ export function useMeetingAssistant() {
     let currentQuestionSettlement:
       | CurrentQuestionSettlementDecision
       | undefined;
+    let currentQuestionSettlementDurationMs: number | undefined;
     let settledExecutionPlan: SettledAdvisorExecutionPlan | undefined;
     const logicalQuestionLease = advisorJob.logicalQuestionUnit
       ? createLogicalQuestionUnitLease(advisorJob.logicalQuestionUnit)
@@ -4207,10 +4209,13 @@ export function useMeetingAssistant() {
       if (traceId) {
         traceStoreRef.current.updateMetadata(
           traceId,
-          formatSettledAdvisorExecutionPlanForTrace(
-            settledExecutionPlan,
-            planAuthorization
-          )
+          {
+            ...formatSettledAdvisorExecutionPlanForTrace(
+              settledExecutionPlan,
+              planAuthorization
+            ),
+            settledExecutionPlanAuthorizationStage: stage,
+          }
         );
       }
       if (planAuthorization.authorized) return false;
@@ -4232,6 +4237,8 @@ export function useMeetingAssistant() {
             settledExecutionPlan,
             planAuthorization
           ),
+          settledExecutionPlanAuthorizationStage: stage,
+          currentQuestionSettlementDisposition: "stale-dropped",
         },
         planAuthorization.reason
       );
@@ -4633,6 +4640,7 @@ export function useMeetingAssistant() {
           `boundary-authority-source:${taskBoundaryAuthoritySource}`,
         ],
       };
+      const settlementStartedAt = performance.now();
       currentQuestionSettlement = settleCurrentQuestion({
         currentQuestion: provisionalCurrentQuestion,
         deterministicProposal: options.manualQuestionTypeCorrection
@@ -4654,17 +4662,91 @@ export function useMeetingAssistant() {
           commitParent,
         },
       });
+      currentQuestionSettlementDurationMs = Math.max(
+        0,
+        performance.now() - settlementStartedAt
+      );
       currentQuestionSettlementRef.current =
         currentQuestionSettlement;
       if (traceId) {
         traceStoreRef.current.updateMetadata(
           traceId,
-          formatCurrentQuestionSettlementForTrace(
-            currentQuestionSettlement
-          )
+          {
+            ...formatCurrentQuestionSettlementForTrace(
+              currentQuestionSettlement
+            ),
+            currentQuestionSettlementDisposition:
+              resolveCurrentQuestionSettlementDisposition({
+                settlement: currentQuestionSettlement,
+              }),
+            currentQuestionSettlementDurationMs,
+            currentQuestionSettlementLlmWaitMs: 0,
+            currentQuestionSettlementLlmWaitDisposition:
+              "not-awaited",
+          }
         );
       }
     }
+    let currentQuestionSettlementRecorded = false;
+    const recordCurrentQuestionSettlement = (
+      parentCommitted = false
+    ) => {
+      if (
+        currentQuestionSettlementRecorded ||
+        !traceId ||
+        !provisionalCurrentQuestion ||
+        !currentQuestionSettlement
+      ) {
+        return;
+      }
+      const currentContext =
+        contextManagerRef.current.getState();
+      const parentBefore =
+        originalPromptContext.activeMeetingTask?.parent;
+      const parentAfter =
+        currentContext.activeMeetingTask?.parent;
+      const disposition =
+        resolveCurrentQuestionSettlementDisposition({
+          settlement: currentQuestionSettlement,
+          parentCommitted,
+        });
+      const metadata = {
+        currentQuestionSettlementDisposition: disposition,
+        currentQuestionSettlementSourceTurnIds:
+          provisionalCurrentQuestion.sourceTurnIds,
+        currentQuestionSettlementSourceObservationIds:
+          provisionalCurrentQuestion.sourceObservationIds,
+        currentQuestionSettlementDurationMs,
+        currentQuestionSettlementLlmWaitMs: 0,
+        currentQuestionSettlementLlmWaitDisposition:
+          "not-awaited",
+        currentQuestionSettlementParentBeforeId:
+          parentBefore?.id,
+        currentQuestionSettlementParentBeforeType:
+          parentBefore?.questionType,
+        currentQuestionSettlementParentAfterId: parentAfter?.id,
+        currentQuestionSettlementParentAfterType:
+          parentAfter?.questionType,
+      };
+      traceStoreRef.current.updateMetadata(traceId, metadata);
+      sessionRecordingManagerRef.current?.recordCurrentQuestionSettlement({
+        traceId,
+        taskId:
+          currentContext.activeMeetingTask?.id ??
+          promptContext.activeMeetingTask?.id,
+        currentQuestion: provisionalCurrentQuestion,
+        settlement: currentQuestionSettlement,
+        disposition,
+        durationMs: currentQuestionSettlementDurationMs,
+        llmWaitMs: 0,
+        llmWaitDisposition: "not-awaited",
+        parentBeforeId: parentBefore?.id,
+        parentBeforeType: parentBefore?.questionType,
+        parentAfterId: parentAfter?.id,
+        parentAfterType: parentAfter?.questionType,
+      });
+      currentQuestionSettlementRecorded = true;
+    };
     let taskBoundaryCandidate = createTaskBoundaryCandidate({
       logicalQuestionUnit: advisorJob.logicalQuestionUnit,
       currentQuestion: provisionalCurrentQuestion,
@@ -4808,6 +4890,7 @@ export function useMeetingAssistant() {
     }
 
     if (!executionAuthorization.authorized) {
+      recordCurrentQuestionSettlement();
       releaseAdvisorJob(advisorJob, "suppressed", {
         commitAuthorized: false,
         commitAuthorizationReason: executionAuthorization.reason,
@@ -4827,6 +4910,7 @@ export function useMeetingAssistant() {
       !force &&
       !advisorEngineRef.current.shouldRequestSuggestion(latestTurn)
     ) {
+      recordCurrentQuestionSettlement();
       releaseAdvisorJob(advisorJob, "suppressed", {
         commitAuthorized: false,
         commitAuthorizationReason: "turn-did-not-require-suggestion",
@@ -5322,6 +5406,9 @@ export function useMeetingAssistant() {
     const sourceOwnedTransitionCommittedBeforeAdvisor =
       sourceOwnedTransitionResult?.candidate.state ===
       "committed";
+    recordCurrentQuestionSettlement(
+      taskBoundaryCommittedBeforeAdvisor
+    );
     refreshAdvisorEvidencePacket();
     if (traceId) {
       const evidencePacketMetadata =
@@ -5369,11 +5456,34 @@ export function useMeetingAssistant() {
         settledExecutionPlan.questionType;
       advisorAnswerProfile =
         settledExecutionPlan.promptContract.profile;
+      const planCreationContext =
+        contextManagerRef.current.getState();
+      const planCreationAuthorization =
+        authorizeSettledAdvisorExecutionPlan({
+          plan: settledExecutionPlan,
+          currentSettlement:
+            currentQuestionSettlementRef.current,
+          currentSessionId: planCreationContext.sessionId,
+          currentRuntimeEpoch: runtimeEpochRef.current,
+          currentLogicalQuestionUnitId:
+            logicalQuestionUnitRef.current?.id,
+          currentLogicalQuestionRevision:
+            logicalQuestionUnitRef.current?.revision,
+          currentSourceHash:
+            currentQuestionSettlementRef.current?.sourceHash,
+          currentActiveMeetingTask:
+            planCreationContext.activeMeetingTask,
+        });
       if (traceId) {
         const planMetadata =
-          formatSettledAdvisorExecutionPlanForTrace(
-            settledExecutionPlan
-          );
+          {
+            ...formatSettledAdvisorExecutionPlanForTrace(
+              settledExecutionPlan,
+              planCreationAuthorization
+            ),
+            settledExecutionPlanAuthorizationStage:
+              "plan-created",
+          };
         traceStoreRef.current.updateMetadata(
           traceId,
           planMetadata
@@ -5386,9 +5496,23 @@ export function useMeetingAssistant() {
         traceStoreRef.current.finishStep(
           traceId,
           planStepId,
-          "success"
+          planCreationAuthorization.authorized
+            ? "success"
+            : "error",
+          undefined,
+          planCreationAuthorization.authorized
+            ? undefined
+            : planCreationAuthorization.reason
         );
+        sessionRecordingManagerRef.current?.recordSettledAdvisorExecutionPlan({
+          traceId,
+          taskId: activeMeetingTaskId,
+          plan: settledExecutionPlan,
+          authorization: planCreationAuthorization,
+          authorizationStage: "plan-created",
+        });
       }
+      if (rejectStaleCommit("post-plan")) return;
     }
     const responseOwner =
       settledExecutionPlan?.responseOwner ??

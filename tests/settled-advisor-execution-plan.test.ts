@@ -289,3 +289,106 @@ test("equivalent settlement inputs produce a stable plan id and compact trace", 
     "meeting-answer:coding"
   );
 });
+
+test("replays the July 24 coding to general and AI/ML design route sequence without parent leakage", () => {
+  const codingSettlement = settlement();
+  const codingTask = activeTask();
+  const codingPlan = buildSettledAdvisorExecutionPlan({
+    settlement: codingSettlement,
+    activeMeetingTask: codingTask,
+    taskBoundaryCommitted: true,
+    childOwnsResponse: false,
+    providerSnapshot: providers,
+    playbook: playbook(),
+    memoryUseCase: "coding_interview",
+    askFrame: "direct-answer",
+    topicDomain: "backend",
+  });
+
+  const generalSettlement = settlement({
+    settlementId: "question_settlement_general",
+    logicalQuestionUnitId: "question-general",
+    revision: 1,
+    sourceHash: "source-general",
+    questionType: "general-system-design",
+  });
+  const generalTask = activeTask("general-system-design", {
+    id: "parent-general",
+    sourceQuestionUnitId: "question-general",
+    sourceQuestionRevision: 1,
+    settlementId: generalSettlement.settlementId,
+    revisions: 1,
+  });
+  const generalPlan = buildSettledAdvisorExecutionPlan({
+    settlement: generalSettlement,
+    activeMeetingTask: generalTask,
+    preBoundaryQuestionType: "coding",
+    taskBoundaryCommitted: true,
+    childOwnsResponse: false,
+    providerSnapshot: providers,
+    playbook: playbook("general-system-design"),
+    memoryUseCase: "system_design_interview",
+    askFrame: "hypothetical-design",
+    topicDomain: "backend",
+  });
+
+  const aiMlSettlement = settlement({
+    settlementId: "question_settlement_aiml",
+    logicalQuestionUnitId: "question-aiml",
+    revision: 1,
+    sourceHash: "source-aiml",
+    questionType: "ai-ml-system-design",
+  });
+  const aiMlTask = activeTask("ai-ml-system-design", {
+    id: "parent-aiml",
+    sourceQuestionUnitId: "question-aiml",
+    sourceQuestionRevision: 1,
+    settlementId: aiMlSettlement.settlementId,
+    revisions: 1,
+  });
+  const aiMlPlan = buildSettledAdvisorExecutionPlan({
+    settlement: aiMlSettlement,
+    activeMeetingTask: aiMlTask,
+    preBoundaryQuestionType: "general-system-design",
+    taskBoundaryCommitted: true,
+    childOwnsResponse: false,
+    providerSnapshot: providers,
+    memoryUseCase: "aiml_system_design_interview",
+    askFrame: "hypothetical-design",
+    topicDomain: "ai-ml-infra",
+  });
+
+  assert.equal(codingPlan.modelRoute.route, "coding-override");
+  assert.equal(generalPlan.modelRoute.route, "main");
+  assert.equal(generalPlan.responseOwner.questionType, "general-system-design");
+  assert.equal(generalPlan.memoryPolicy.useCase, "system_design_interview");
+  assert.equal(aiMlPlan.modelRoute.route, "main");
+  assert.equal(aiMlPlan.responseOwner.questionType, "ai-ml-system-design");
+  assert.equal(
+    aiMlPlan.memoryPolicy.useCase,
+    "aiml_system_design_interview"
+  );
+
+  const staleCodingAuthorization =
+    authorizeSettledAdvisorExecutionPlan({
+      plan: codingPlan,
+      currentSettlement: generalSettlement,
+      currentSessionId: "session-a",
+      currentRuntimeEpoch: 4,
+      currentLogicalQuestionUnitId: "question-general",
+      currentLogicalQuestionRevision: 1,
+      currentSourceHash: "source-general",
+      currentActiveMeetingTask: generalTask,
+    });
+  assert.equal(staleCodingAuthorization.authorized, false);
+  assert.ok(
+    staleCodingAuthorization.rejectionReasons.includes(
+      "settlement-mismatch"
+    )
+  );
+  assert.ok(
+    staleCodingAuthorization.rejectionReasons.includes(
+      "logical-question-unit-mismatch"
+    )
+  );
+});

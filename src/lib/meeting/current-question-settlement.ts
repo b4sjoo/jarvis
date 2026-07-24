@@ -147,6 +147,31 @@ export interface CurrentQuestionSettlementDecision {
   reasons: string[];
 }
 
+export type CurrentQuestionSettlementDisposition =
+  | "domain-resolved-provisional"
+  | "unresolved-provisional"
+  | "response-only"
+  | "committed-parent"
+  | "stale-dropped"
+  | "manual-authority";
+
+export function resolveCurrentQuestionSettlementDisposition(input: {
+  settlement: CurrentQuestionSettlementDecision;
+  parentCommitted?: boolean;
+  staleDropped?: boolean;
+}): CurrentQuestionSettlementDisposition {
+  if (input.staleDropped) return "stale-dropped";
+  if (input.settlement.authority === "explicit-manual") {
+    return "manual-authority";
+  }
+  if (input.parentCommitted) return "committed-parent";
+  if (input.settlement.questionType === "unknown") {
+    return "unresolved-provisional";
+  }
+  if (input.settlement.responseAuthorized) return "response-only";
+  return "domain-resolved-provisional";
+}
+
 export function createProvisionalCurrentQuestion(input: {
   logicalQuestionUnit: LogicalQuestionUnit;
   sourceKind: CurrentQuestionSourceKind;

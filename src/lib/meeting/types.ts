@@ -1302,6 +1302,21 @@ export interface AnswerSufficiencyHumanEvaluation {
   answerRevision?: number;
 }
 
+export interface CurrentQuestionSettlementHumanEvaluation {
+  questionTypeCorrect?: boolean;
+  relationCorrect?: boolean;
+  parentMutationCorrect?: boolean;
+  responseAuthorizationCorrect?: boolean;
+  expectedDisposition?:
+    | "domain-resolved-provisional"
+    | "unresolved-provisional"
+    | "response-only"
+    | "committed-parent"
+    | "stale-dropped"
+    | "manual-authority";
+  notes?: string;
+}
+
 export interface QuestionHumanEvaluation {
   id: string;
   sessionId?: string;
@@ -1350,6 +1365,7 @@ export interface QuestionHumanEvaluation {
   taxonomyAdjudication?: TaxonomyAdjudicationHumanEvaluation;
   advisorIntent?: AdvisorIntentHumanEvaluation;
   answerSufficiency?: AnswerSufficiencyHumanEvaluation;
+  currentQuestionSettlement?: CurrentQuestionSettlementHumanEvaluation;
   memoryRetrievalSnapshot?: MemoryRetrievalEvaluationSnapshot;
   memoryEntryLabels: MemoryEntryEvaluationLabel[];
   missingExpectedMemory: MissingExpectedMemoryLabel[];

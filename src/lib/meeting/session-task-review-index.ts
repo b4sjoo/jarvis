@@ -1,7 +1,7 @@
 import type { MemoryRejectSummary } from "@/lib/memory";
 import type { MeetingTrace, QuestionHumanEvaluation } from "./types";
 
-export const SESSION_TASK_REVIEW_INDEX_SCHEMA_VERSION = 4;
+export const SESSION_TASK_REVIEW_INDEX_SCHEMA_VERSION = 5;
 
 export interface TaskReviewTraceSummary {
   version: number;
@@ -34,6 +34,25 @@ export interface TaskReviewTraceSummary {
   advisorExecutionAuthorized?: boolean;
   taskMutationAuthorized?: boolean;
   taskMutationAuthorizationReason?: string;
+  currentQuestionSettlement?: {
+    settlementId?: string;
+    questionType?: string;
+    relation?: string;
+    authority?: string;
+    disposition?: string;
+    parentMutationAuthorized?: boolean;
+    responseAuthorized?: boolean;
+  };
+  settledExecutionPlan?: {
+    planId?: string;
+    settlementId?: string;
+    questionType?: string;
+    modelRoute?: string;
+    playbookId?: string;
+    memoryUseCase?: string;
+    authorized?: boolean;
+    authorizationStage?: string;
+  };
   advisorOutputDisposition?: string;
   adjacentConstraintInherited?: boolean;
   adjacentConstraintDecisionReason?: string;
@@ -110,6 +129,10 @@ export interface SessionTaskReviewSummary {
   advisorExecutionSuppressedCount: number;
   advisorShadowDecisionCount: number;
   taskMutationSuppressedCount: number;
+  settlementDispositions: string[];
+  settlementQuestionTypes: string[];
+  settlementStaleDropCount: number;
+  settledExecutionPlanIds: string[];
   adjacentConstraintInheritanceCount: number;
   sentenceBufferOperationCount: number;
   sentenceBufferMergedCount: number;
@@ -151,6 +174,9 @@ export interface SessionTaskReviewHumanEvaluation {
   manualPhaseTransitionVerdicts: string[];
   diagramOverlayVerdicts: string[];
   answerVerdicts: string[];
+  settlementQuestionTypeLabels: string[];
+  settlementRelationLabels: string[];
+  settlementParentMutationLabels: string[];
   memoryEntryLabelCounts: Record<string, number>;
   missingExpectedMemoryCount: number;
   notesCount: number;
@@ -284,6 +310,24 @@ function buildSessionTaskReviewSummary({
     taskMutationSuppressedCount: traces.filter(
       (trace) => trace.taskMutationAuthorized === false
     ).length,
+    settlementDispositions: uniqueStrings(
+      traces.map(
+        (trace) => trace.currentQuestionSettlement?.disposition
+      )
+    ),
+    settlementQuestionTypes: uniqueStrings(
+      traces.map(
+        (trace) => trace.currentQuestionSettlement?.questionType
+      )
+    ),
+    settlementStaleDropCount: traces.filter(
+      (trace) =>
+        trace.currentQuestionSettlement?.disposition ===
+        "stale-dropped"
+    ).length,
+    settledExecutionPlanIds: uniqueStrings(
+      traces.map((trace) => trace.settledExecutionPlan?.planId)
+    ),
     adjacentConstraintInheritanceCount: traces.filter(
       (trace) => trace.adjacentConstraintInherited === true
     ).length,
@@ -370,6 +414,24 @@ function buildSessionTaskReviewHumanEvaluation(
     answerVerdicts: uniqueStrings(
       evaluations.map((evaluation) => evaluation.answer.verdict)
     ),
+    settlementQuestionTypeLabels: booleanLabels(
+      evaluations.map(
+        (evaluation) =>
+          evaluation.currentQuestionSettlement?.questionTypeCorrect
+      )
+    ),
+    settlementRelationLabels: booleanLabels(
+      evaluations.map(
+        (evaluation) =>
+          evaluation.currentQuestionSettlement?.relationCorrect
+      )
+    ),
+    settlementParentMutationLabels: booleanLabels(
+      evaluations.map(
+        (evaluation) =>
+          evaluation.currentQuestionSettlement?.parentMutationCorrect
+      )
+    ),
     memoryEntryLabelCounts: countMemoryEntryLabels(evaluations),
     missingExpectedMemoryCount: evaluations.reduce(
       (total, evaluation) => total + evaluation.missingExpectedMemory.length,
@@ -449,6 +511,14 @@ function countMemoryEntryLabels(evaluations: QuestionHumanEvaluation[]) {
   }
 
   return counts;
+}
+
+function booleanLabels(values: Array<boolean | undefined>) {
+  return uniqueStrings(
+    values.map((value) =>
+      value === true ? "correct" : value === false ? "wrong" : undefined
+    )
+  );
 }
 
 function sumDefined(values: Array<number | undefined>) {

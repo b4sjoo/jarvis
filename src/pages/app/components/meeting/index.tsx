@@ -4356,6 +4356,27 @@ const TraceHumanEvaluationPanel = ({
     typeof trace.metadata?.primaryAskNormalizedText === "string"
       ? trace.metadata.primaryAskNormalizedText
       : undefined;
+  const currentQuestionSettlementId =
+    typeof trace.metadata?.currentQuestionSettlementId === "string"
+      ? trace.metadata.currentQuestionSettlementId
+      : undefined;
+  const currentQuestionSettlementType =
+    typeof trace.metadata?.currentQuestionSettlementType === "string"
+      ? trace.metadata.currentQuestionSettlementType
+      : undefined;
+  const currentQuestionSettlementRelation =
+    typeof trace.metadata?.currentQuestionSettlementRelation === "string"
+      ? trace.metadata.currentQuestionSettlementRelation
+      : undefined;
+  const currentQuestionSettlementDisposition =
+    typeof trace.metadata?.currentQuestionSettlementDisposition === "string"
+      ? trace.metadata.currentQuestionSettlementDisposition
+      : undefined;
+  const currentQuestionParentMutationAuthorized =
+    typeof trace.metadata?.currentQuestionSettlementParentMutationAuthorized ===
+    "boolean"
+      ? trace.metadata.currentQuestionSettlementParentMutationAuthorized
+      : undefined;
 
   const toggleFailureReason = (reason: HumanEvalFailureReason) => {
     onUpdate({
@@ -4542,6 +4563,80 @@ const TraceHumanEvaluationPanel = ({
               >
                 Primary ask wrong
               </Button>
+            </div>
+          </div>
+        ) : null}
+        {currentQuestionSettlementId ? (
+          <div className="rounded-sm border border-border/60 p-2">
+            <div className="text-[10px] font-medium uppercase text-muted-foreground">
+              Current-question settlement
+            </div>
+            <div className="mt-1 break-words font-mono text-[10px] text-muted-foreground">
+              {currentQuestionSettlementType ?? "unknown"}
+              {currentQuestionSettlementRelation
+                ? ` / ${currentQuestionSettlementRelation}`
+                : ""}
+              {currentQuestionSettlementDisposition
+                ? ` / ${currentQuestionSettlementDisposition}`
+                : ""}
+              {typeof currentQuestionParentMutationAuthorized === "boolean"
+                ? currentQuestionParentMutationAuthorized
+                  ? " / parent mutation authorized"
+                  : " / parent preserved"
+                : ""}
+            </div>
+            <div className="mt-2 space-y-2">
+              <TaxonomyAdjudicationBooleanLabel
+                label="Settled type"
+                positiveLabel="Correct"
+                negativeLabel="Wrong"
+                value={
+                  questionEvaluation?.currentQuestionSettlement
+                    ?.questionTypeCorrect
+                }
+                onChange={(questionTypeCorrect) =>
+                  onUpdateQuestion({
+                    currentQuestionSettlement: {
+                      ...questionEvaluation?.currentQuestionSettlement,
+                      questionTypeCorrect,
+                    },
+                  })
+                }
+              />
+              <TaxonomyAdjudicationBooleanLabel
+                label="Relation"
+                positiveLabel="Correct"
+                negativeLabel="Wrong"
+                value={
+                  questionEvaluation?.currentQuestionSettlement
+                    ?.relationCorrect
+                }
+                onChange={(relationCorrect) =>
+                  onUpdateQuestion({
+                    currentQuestionSettlement: {
+                      ...questionEvaluation?.currentQuestionSettlement,
+                      relationCorrect,
+                    },
+                  })
+                }
+              />
+              <TaxonomyAdjudicationBooleanLabel
+                label="Parent decision"
+                positiveLabel="Correct"
+                negativeLabel="Wrong"
+                value={
+                  questionEvaluation?.currentQuestionSettlement
+                    ?.parentMutationCorrect
+                }
+                onChange={(parentMutationCorrect) =>
+                  onUpdateQuestion({
+                    currentQuestionSettlement: {
+                      ...questionEvaluation?.currentQuestionSettlement,
+                      parentMutationCorrect,
+                    },
+                  })
+                }
+              />
             </div>
           </div>
         ) : null}

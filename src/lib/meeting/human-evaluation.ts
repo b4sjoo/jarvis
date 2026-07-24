@@ -411,6 +411,10 @@ export function upsertQuestionHumanEvaluation(
       existing?.answerSufficiency,
       patch.answerSufficiency
     ),
+    currentQuestionSettlement: mergeCurrentQuestionSettlementEvaluation(
+      existing?.currentQuestionSettlement,
+      patch.currentQuestionSettlement
+    ),
     memoryRetrievalSnapshot:
       normalizeMemoryRetrievalEvaluationSnapshot(
         patch.memoryRetrievalSnapshot
@@ -750,6 +754,10 @@ function normalizeQuestionHumanEvaluation(
     answerSufficiency: normalizeAnswerSufficiencyEvaluation(
       candidate.answerSufficiency
     ),
+    currentQuestionSettlement:
+      normalizeCurrentQuestionSettlementEvaluation(
+        candidate.currentQuestionSettlement
+      ),
     memoryRetrievalSnapshot: normalizeMemoryRetrievalEvaluationSnapshot(
       candidate.memoryRetrievalSnapshot
     ),
@@ -814,6 +822,54 @@ function mergeAnswerSufficiencyEvaluation(
       ...existing.expectedContextKinds,
       ...patch.expectedContextKinds,
     ]),
+  };
+}
+
+function mergeCurrentQuestionSettlementEvaluation(
+  existing: QuestionHumanEvaluation["currentQuestionSettlement"],
+  patch: QuestionHumanEvaluation["currentQuestionSettlement"]
+): QuestionHumanEvaluation["currentQuestionSettlement"] {
+  if (!existing && !patch) return undefined;
+  return {
+    ...existing,
+    ...patch,
+  };
+}
+
+function normalizeCurrentQuestionSettlementEvaluation(
+  value: unknown
+): QuestionHumanEvaluation["currentQuestionSettlement"] {
+  if (!value || typeof value !== "object") return undefined;
+  const candidate = value as Record<string, unknown>;
+  const expectedDisposition =
+    candidate.expectedDisposition === "domain-resolved-provisional" ||
+    candidate.expectedDisposition === "unresolved-provisional" ||
+    candidate.expectedDisposition === "response-only" ||
+    candidate.expectedDisposition === "committed-parent" ||
+    candidate.expectedDisposition === "stale-dropped" ||
+    candidate.expectedDisposition === "manual-authority"
+      ? candidate.expectedDisposition
+      : undefined;
+
+  return {
+    questionTypeCorrect:
+      typeof candidate.questionTypeCorrect === "boolean"
+        ? candidate.questionTypeCorrect
+        : undefined,
+    relationCorrect:
+      typeof candidate.relationCorrect === "boolean"
+        ? candidate.relationCorrect
+        : undefined,
+    parentMutationCorrect:
+      typeof candidate.parentMutationCorrect === "boolean"
+        ? candidate.parentMutationCorrect
+        : undefined,
+    responseAuthorizationCorrect:
+      typeof candidate.responseAuthorizationCorrect === "boolean"
+        ? candidate.responseAuthorizationCorrect
+        : undefined,
+    expectedDisposition,
+    notes: readOptionalString(candidate.notes),
   };
 }
 
