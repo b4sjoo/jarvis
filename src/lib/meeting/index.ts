@@ -62,6 +62,7 @@ export * from "./session-recording";
 export * from "./session-task-review-index";
 export * from "./speech-bias";
 export * from "./suggestion-task";
+export * from "./source-owned-transition-transaction";
 export * from "./task-taxonomy";
 export * from "./task-boundary-transaction";
 export * from "./taxonomy-adjudication";
