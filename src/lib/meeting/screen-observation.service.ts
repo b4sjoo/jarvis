@@ -638,6 +638,8 @@ function buildScreenTaskUserMessage({
     "If <fact_anchor_guardrail> Action is answer-with-caveats, use only supported facts and avoid unsupported employers, project names, teammates, dates, metrics, ownership, or impact claims.",
     "Use <interview_session_context> to personalize behavioral interview answers across screen tasks. If the target company is Amazon and injected memory includes Leadership Principle guidance, internally classify the visible question to the closest principle, demonstrate Strength signals, and avoid Concern signals. Do not explicitly name the principle unless asked or useful.",
     "If memory supports only a qualitative outcome, state the outcome qualitatively instead of adding unsupported numbers, dates, durations, or speed claims.",
+    "Every non-dash answer must end with two authority metadata sections. Answer disposition: output exactly one of factual-with-anchor, bounded-with-caveat, clarification, supported-choices, or not-fact-dependent. Match <fact_anchor_guardrail>: answer-with-anchor -> factual-with-anchor; answer-with-caveats -> bounded-with-caveat; ask-clarification -> clarification; offer-supported-choices -> supported-choices. Use not-fact-dependent only when Required for is none.",
+    "Supporting anchor IDs: for factual-with-anchor, list only the exact supported anchor IDs from <fact_anchor_guardrail> that the answer actually uses, separated by '|'. For every other disposition, output '-'. Never invent, shorten, or translate an anchor ID.",
     "If it is a coding/algorithm question, output:",
     "中文思路: 用中文简洁说明解题步骤、关键不变量、以及为什么是最优。",
     "Answer: directly state the optimal approach in meeting-ready English, not Chinese, regardless of the natural-language preference.",

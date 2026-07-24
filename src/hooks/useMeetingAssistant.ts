@@ -299,6 +299,8 @@ import {
   buildSessionRecordingProviderSummary,
   buildFactAnchorDecision,
   detectPersonalEvidenceRequirement,
+  enforceFactAnchorOutput,
+  formatFactAnchorOutputDecisionForTrace,
   formatFactAnchorDecisionForTrace,
   restrictMemoryContextForPersonalEvidence,
   formatProjectBindingDecisionForTrace,
@@ -5393,6 +5395,8 @@ export function useMeetingAssistant() {
       personalEvidenceDecision: advisorPersonalEvidenceDecision,
       projectBindingDecision,
     });
+    const holdAdvisorPartialForFactAnchor =
+      factAnchorDecision.requiredFor !== "none";
     if (traceId) {
       const projectBindingMetadata = {
         source: "advisor",
@@ -5418,6 +5422,7 @@ export function useMeetingAssistant() {
       const factAnchorMetadata = {
         source: "advisor",
         questionType: advisorQuestionType,
+        factAnchorPartialOutputHeld: holdAdvisorPartialForFactAnchor,
         ...formatFactAnchorDecisionForTrace(factAnchorDecision),
       };
       traceStoreRef.current.updateMetadata(traceId, factAnchorMetadata);
@@ -5565,7 +5570,10 @@ export function useMeetingAssistant() {
       })) {
         if (rejectStaleCommit("partial-output")) return;
         finalContent = event.accumulated;
-        if (outputCommitAuthorization.authorized) {
+        if (
+          outputCommitAuthorization.authorized &&
+          !holdAdvisorPartialForFactAnchor
+        ) {
           setState((previous) => ({
             ...previous,
             partialSuggestion: event.accumulated,
@@ -5583,9 +5591,45 @@ export function useMeetingAssistant() {
       const finalCommitDecision = readCommitDecision();
       if (rejectStaleCommit("final-commit", finalCommitDecision)) return;
 
-      const parsedMeetingAnswer = parseMeetingAnswer(finalContent, {
+      let parsedMeetingAnswer = parseMeetingAnswer(finalContent, {
         expectedProfile: advisorAnswerProfile,
       });
+      const factAnchorOutputDecision = enforceFactAnchorOutput({
+        decision: factAnchorDecision,
+        parsedAnswer: parsedMeetingAnswer,
+        expectedProfile: advisorAnswerProfile,
+      });
+      finalContent = factAnchorOutputDecision.effectiveContent;
+      parsedMeetingAnswer = factAnchorOutputDecision.effectiveAnswer;
+      const factAnchorOutputMetadata =
+        formatFactAnchorOutputDecisionForTrace(factAnchorOutputDecision, {
+          partialOutputHeld: holdAdvisorPartialForFactAnchor,
+        });
+      if (traceId) {
+        traceStoreRef.current.updateMetadata(
+          traceId,
+          factAnchorOutputMetadata
+        );
+        const factAnchorOutputStepId = traceStoreRef.current.startStep(
+          traceId,
+          "Fact anchor output authorization",
+          factAnchorOutputMetadata
+        );
+        traceStoreRef.current.finishStep(
+          traceId,
+          factAnchorOutputStepId,
+          "success"
+        );
+        sessionRecordingManagerRef.current?.recordFactAnchorDecision(
+          traceId,
+          {
+            source: "advisor-output",
+            questionType: advisorQuestionType,
+            ...factAnchorOutputMetadata,
+          },
+          activeMeetingTaskId
+        );
+      }
       const meetingAnswerSummary = buildMeetingAnswerSummary(
         parsedMeetingAnswer
       );
@@ -10345,6 +10389,8 @@ export function useMeetingAssistant() {
           personalEvidenceDecision: screenPersonalEvidenceDecision,
           projectBindingDecision: screenProjectBindingDecision,
         });
+        const holdScreenPartialForFactAnchor =
+          screenFactAnchorDecision.requiredFor !== "none";
         const projectBindingMetadata = {
           source: "screen",
           stage: "pre-model",
@@ -10376,6 +10422,7 @@ export function useMeetingAssistant() {
         const factAnchorMetadata = {
           source: "screen",
           questionType: screenMemoryQuestionType,
+          factAnchorPartialOutputHeld: holdScreenPartialForFactAnchor,
           ...formatFactAnchorDecisionForTrace(screenFactAnchorDecision),
         };
         traceStoreRef.current.updateMetadata(trace.id, factAnchorMetadata);
@@ -10536,11 +10583,13 @@ export function useMeetingAssistant() {
                 return;
               }
 
-              setState((previous) => ({
-                ...previous,
-                status: "thinking",
-                partialSuggestion: partialContent,
-              }));
+              if (!holdScreenPartialForFactAnchor) {
+                setState((previous) => ({
+                  ...previous,
+                  status: "thinking",
+                  partialSuggestion: partialContent,
+                }));
+              }
             },
           }),
           screenModelRequestOptions?.timeoutMs ?? SCREEN_ANALYSIS_TIMEOUT_MS,
@@ -10574,9 +10623,49 @@ export function useMeetingAssistant() {
         }
         if (rejectStaleScreenOperation("post-model")) return;
 
-        const parsedScreenMeetingAnswer = parseMeetingAnswer(screenTaskContent, {
-          expectedProfile: resolveMeetingAnswerProfile(taskKind),
+        const screenAnswerProfile = resolveMeetingAnswerProfile(taskKind);
+        let parsedScreenMeetingAnswer = parseMeetingAnswer(screenTaskContent, {
+          expectedProfile: screenAnswerProfile,
         });
+        const screenFactAnchorOutputDecision = enforceFactAnchorOutput({
+          decision: screenFactAnchorDecision,
+          parsedAnswer: parsedScreenMeetingAnswer,
+          expectedProfile: screenAnswerProfile,
+        });
+        const committedScreenTaskContent =
+          screenFactAnchorOutputDecision.effectiveContent;
+        parsedScreenMeetingAnswer =
+          screenFactAnchorOutputDecision.effectiveAnswer;
+        const screenFactAnchorOutputMetadata =
+          formatFactAnchorOutputDecisionForTrace(
+            screenFactAnchorOutputDecision,
+            {
+              partialOutputHeld: holdScreenPartialForFactAnchor,
+            }
+          );
+        traceStoreRef.current.updateMetadata(
+          trace.id,
+          screenFactAnchorOutputMetadata
+        );
+        const screenFactAnchorOutputStepId =
+          traceStoreRef.current.startStep(
+            trace.id,
+            "Fact anchor output authorization",
+            screenFactAnchorOutputMetadata
+          );
+        traceStoreRef.current.finishStep(
+          trace.id,
+          screenFactAnchorOutputStepId,
+          "success"
+        );
+        sessionRecordingManagerRef.current?.recordFactAnchorDecision(
+          trace.id,
+          {
+            source: "screen-output",
+            questionType: screenMemoryQuestionType,
+            ...screenFactAnchorOutputMetadata,
+          }
+        );
         const screenMeetingAnswerSummary = buildMeetingAnswerSummary(
           parsedScreenMeetingAnswer
         );
@@ -10585,7 +10674,8 @@ export function useMeetingAssistant() {
           screenMeetingAnswerSummary
         );
         const screenModelOutcome =
-          screenTaskContent.trim() && screenTaskContent.trim() !== "-"
+          committedScreenTaskContent.trim() &&
+          committedScreenTaskContent.trim() !== "-"
             ? "success"
             : "empty-output";
         traceStoreRef.current.updateMetadata(
@@ -10674,14 +10764,14 @@ export function useMeetingAssistant() {
         }
 
         traceStoreRef.current.finishStep(trace.id, modelStepId, "success", {
-          outputChars: screenTaskContent.length,
+          outputChars: committedScreenTaskContent.length,
           ...screenModelRouteMetadata,
           ...screenMeetingAnswerMetadata,
         });
         screenAnalysisAbortRef.current = null;
 
         contextManagerRef.current.updateScreenObservation(observation.id, {
-          visualSummary: screenTaskContent,
+          visualSummary: committedScreenTaskContent,
           analysisPromptSource: autoPrompt
             ? "screenshot-auto-prompt"
             : "meeting-default",
@@ -10717,7 +10807,8 @@ export function useMeetingAssistant() {
         const screenResultScopeDecision = decideScreenResultScope({
           questionType: taskKind,
           hasAnswer: Boolean(
-            screenTaskContent.trim() && screenTaskContent.trim() !== "-"
+            committedScreenTaskContent.trim() &&
+              committedScreenTaskContent.trim() !== "-"
           ),
         });
         traceStoreRef.current.updateMetadata(
@@ -10745,7 +10836,7 @@ export function useMeetingAssistant() {
           const screenLanguage = inferTrustedProgrammingLanguage({
             screenPreflightLanguage: screenPreflight?.programmingLanguage,
             textHints: [screenPreflight?.question, recentTranscript],
-            codeFenceContent: screenTaskContent,
+            codeFenceContent: committedScreenTaskContent,
           });
           traceStoreRef.current.updateMetadata(trace.id, {
             programmingLanguage: screenLanguage.language,
@@ -10768,7 +10859,7 @@ export function useMeetingAssistant() {
               confidence: screenPreflight?.confidence,
             },
             playbook: screenRuntimePlaybook,
-            content: screenTaskContent,
+            content: committedScreenTaskContent,
             basedOnTurnIds,
             basedOnObservationId: observation.id,
           };
@@ -10887,7 +10978,7 @@ export function useMeetingAssistant() {
               readMemoryQuestionType(taskKind) ?? "unknown"
             ),
             question: screenTaskTopic,
-            finalContent: screenTaskContent,
+            finalContent: committedScreenTaskContent,
             parsedAnswer: parsedScreenMeetingAnswer,
             playbook: screenRuntimePlaybook,
             phaseDecision: screenSourceTransitionCommittedBeforeModel
@@ -11026,16 +11117,19 @@ export function useMeetingAssistant() {
               : {}),
             screenScopeAction: screenResultScopeDecision.action,
             screenScopeDurability: screenResultScopeDecision.durability,
-            suggestionKind: screenTaskContent.trim() ? "answer" : "silent",
+            suggestionKind: committedScreenTaskContent.trim()
+              ? "answer"
+              : "silent",
           }
         );
 
-        const nextSuggestion: AdvisorSuggestion = screenTaskContent.trim()
+        const nextSuggestion: AdvisorSuggestion =
+          committedScreenTaskContent.trim()
           ? {
               id: requestId,
               sourceTraceId: trace.id,
               kind: "answer",
-              content: screenTaskContent.trim(),
+              content: committedScreenTaskContent.trim(),
               meetingAnswer: parsedScreenMeetingAnswer,
               answerProfile: parsedScreenMeetingAnswer.profile,
               createdAt: Date.now(),

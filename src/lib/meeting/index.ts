@@ -22,6 +22,7 @@ export * from "./cross-domain-task-transition";
 export * from "./diagram-domain-query";
 export * from "./eval-trace-metadata";
 export * from "./fact-anchor-guardrail";
+export * from "./fact-anchor-output-guardrail";
 export * from "./focus-window";
 export * from "./human-evaluation";
 export * from "./interview-playbook";

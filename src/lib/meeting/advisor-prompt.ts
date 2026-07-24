@@ -359,6 +359,10 @@ function buildMeetingAnswerContractInstructions(
     "Clarifying question: one click-answerable meeting-ready question only when a missing constraint materially affects the answer, otherwise '-'.",
     "Clarifying options: 2-4 short option labels when the clarification has concrete choices; put each option on its own line or separate with '|'. Use '-' for yes/no or when no concrete choices exist.",
   ];
+  const authorityEvidence = [
+    "Answer disposition: output exactly one of factual-with-anchor, bounded-with-caveat, clarification, supported-choices, or not-fact-dependent. Match <fact_anchor_guardrail>: answer-with-anchor -> factual-with-anchor; answer-with-caveats -> bounded-with-caveat; ask-clarification -> clarification; offer-supported-choices -> supported-choices. Use not-fact-dependent only when Required for is none.",
+    "Supporting anchor IDs: for factual-with-anchor, list only the exact supported anchor IDs from <fact_anchor_guardrail> that the answer actually uses, separated by '|'. For every other disposition, output '-'. Never invent, shorten, or translate an anchor ID.",
+  ];
 
   if (profile === "coding") {
     return [
@@ -370,6 +374,7 @@ function buildMeetingAnswerContractInstructions(
       "Code: complete runnable implementation in the trusted selected programming language.",
       "Complexity: exact time and space complexity in English.",
       ...clarification,
+      ...authorityEvidence,
     ];
   }
 
@@ -382,6 +387,7 @@ function buildMeetingAnswerContractInstructions(
       "Approach: logically ordered requirements, scale, architecture, tradeoffs, metrics, or next-step reasoning.",
       "Whiteboard: always provide the evolving infrastructure artifact. During requirement_clarification, output a shallow PROVISIONAL skeleton with known scope and open constraints; never use '-' for a system-design parent.",
       ...clarification,
+      ...authorityEvidence,
     ];
   }
 
@@ -393,6 +399,7 @@ function buildMeetingAnswerContractInstructions(
       "Answer: concise professional answer in the requested meeting language.",
       "Approach: brief reasoning, comparison, or key points.",
       ...clarification,
+      ...authorityEvidence,
     ];
   }
 
@@ -401,6 +408,7 @@ function buildMeetingAnswerContractInstructions(
     chineseThinking,
     "Answer: one to three ready-to-say professional sentences in the requested meeting language, or '-' if no answer is useful.",
     ...clarification,
+    ...authorityEvidence,
   ];
 }
 

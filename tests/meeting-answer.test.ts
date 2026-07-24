@@ -188,6 +188,35 @@ test("records bounded answer-contract trace metadata", () => {
   assert.deepEqual(metadata.continuitySummaryIncludedSections, ["Answer"]);
 });
 
+test("parses answer authority evidence as meeting-answer-v3 metadata", () => {
+  const parsed = parseMeetingAnswer(`Answer: I reduced recurring test costs.
+Answer disposition: factual-with-anchor
+Supporting anchor IDs: mem_story_aos_cleanup | mem_aos_evidence`);
+  const metadata = formatMeetingAnswerTraceMetadata(parsed);
+
+  assert.equal(parsed.contractVersion, "meeting-answer-v3");
+  assert.equal(parsed.answerDisposition, "factual-with-anchor");
+  assert.deepEqual(parsed.supportingAnchorIds, [
+    "mem_story_aos_cleanup",
+    "mem_aos_evidence",
+  ]);
+  assert.equal(metadata.answerDisposition, "factual-with-anchor");
+  assert.deepEqual(metadata.answerSupportingAnchorIds, [
+    "mem_story_aos_cleanup",
+    "mem_aos_evidence",
+  ]);
+});
+
+test("does not leak answer authority metadata into the answer section", () => {
+  const parsed = parseMeetingAnswer(`Answer: Use a monotonic deque.
+Answer disposition: not-fact-dependent
+Supporting anchor IDs: -`);
+
+  assert.equal(parsed.sections.answer, "Use a monotonic deque.");
+  assert.equal(parsed.answerDisposition, "not-fact-dependent");
+  assert.deepEqual(parsed.supportingAnchorIds, []);
+});
+
 test("maps effective question types to stable answer profiles", () => {
   assert.equal(resolveMeetingAnswerProfile("behavioral"), "compact-spoken");
   assert.equal(resolveMeetingAnswerProfile("field-knowledge"), "technical");

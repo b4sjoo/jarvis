@@ -639,6 +639,7 @@ export interface ScreenTaskAnswer {
 }
 
 export type MeetingAnswerContractVersion =
+  | "meeting-answer-v3"
   | "meeting-answer-v2"
   | "legacy-live-v1"
   | "legacy-screen-v1"
@@ -662,6 +663,13 @@ export type MeetingAnswerPrimarySource =
   | "fallback"
   | "none";
 
+export type AnswerDisposition =
+  | "factual-with-anchor"
+  | "bounded-with-caveat"
+  | "clarification"
+  | "supported-choices"
+  | "not-fact-dependent";
+
 export interface MeetingAnswerSections {
   chineseThinking?: string;
   question?: string;
@@ -676,6 +684,8 @@ export interface MeetingAnswerSections {
 
 export interface ParsedMeetingAnswer {
   sections: MeetingAnswerSections;
+  answerDisposition?: AnswerDisposition;
+  supportingAnchorIds: string[];
   rawContent: string;
   contractVersion: MeetingAnswerContractVersion;
   profile?: MeetingAnswerProfile;

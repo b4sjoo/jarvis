@@ -5944,6 +5944,8 @@ function formatParsedMeetingAnswer(answer: ParsedMeetingAnswer) {
       primaryAnswerSource: answer.primaryAnswerSource,
       recognizedLabels: answer.recognizedLabels,
       missingExpectedSections: answer.missingExpectedSections,
+      answerDisposition: answer.answerDisposition ?? "",
+      supportingAnchorIds: answer.supportingAnchorIds,
       chineseThinking: answer.sections.chineseThinking ?? "",
       question: answer.sections.question ?? "",
       answer: answer.sections.answer ?? "",

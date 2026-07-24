@@ -1,4 +1,5 @@
 import type {
+  AnswerDisposition,
   MeetingAnswerContractVersion,
   MeetingAnswerParseStatus,
   MeetingAnswerPrimarySource,
@@ -8,10 +9,10 @@ import type {
 } from "./types";
 import { parseClarifyingOptionsText } from "./clarifying-options.js";
 
-type MeetingAnswerSectionKey = Exclude<
-  keyof MeetingAnswerSections,
-  "clarifyingOptions"
->;
+type MeetingAnswerSectionKey =
+  | Exclude<keyof MeetingAnswerSections, "clarifyingOptions">
+  | "answerDisposition"
+  | "supportingAnchorIds";
 
 type MeetingAnswerSectionDefinition = {
   key: MeetingAnswerSectionKey | "clarifyingOptions";
@@ -69,6 +70,16 @@ const MEETING_ANSWER_SECTION_DEFINITIONS: MeetingAnswerSectionDefinition[] = [
     key: "clarifyingOptions",
     canonicalLabel: "Clarifying options",
     labels: ["Clarifying options"],
+  },
+  {
+    key: "answerDisposition",
+    canonicalLabel: "Answer disposition",
+    labels: ["Answer disposition"],
+  },
+  {
+    key: "supportingAnchorIds",
+    canonicalLabel: "Supporting anchor IDs",
+    labels: ["Supporting anchor IDs", "Supporting anchor ids"],
   },
 ];
 
@@ -130,6 +141,7 @@ export function parseMeetingAnswer(
   if (!rawContent || rawContent === "-") {
     return {
       sections: { clarifyingOptions: [] },
+      supportingAnchorIds: [],
       rawContent,
       contractVersion: "unstructured",
       profile: options.expectedProfile,
@@ -171,6 +183,16 @@ export function parseMeetingAnswer(
   const clarifyingOptions = parseClarifyingOptionsText(
     readMeetingAnswerSection(rawContent, ["Clarifying options"])
   ) ?? [];
+  const rawAnswerDisposition = readMeetingAnswerSection(rawContent, [
+    "Answer disposition",
+  ]);
+  const answerDisposition = parseAnswerDisposition(rawAnswerDisposition);
+  const supportingAnchorIds = parseSupportingAnchorIds(
+    readMeetingAnswerSection(rawContent, [
+      "Supporting anchor IDs",
+      "Supporting anchor ids",
+    ])
+  );
   const extractedCode = extractFirstCodeFence(rawApproach);
   const approach = extractedCode
     ? sanitizeMeetingAnswerSection(rawApproach.replace(extractedCode.fence, ""))
@@ -201,11 +223,16 @@ export function parseMeetingAnswer(
 
   return {
     sections,
+    answerDisposition,
+    supportingAnchorIds,
     rawContent,
     contractVersion: inferContractVersion({
       canonicalAnswer,
       legacyReply,
       recognizedLabels,
+      hasAuthorityEvidence:
+        Boolean(rawAnswerDisposition) ||
+        recognizedLabels.includes("Supporting anchor IDs"),
     }),
     profile,
     parseStatus,
@@ -344,6 +371,8 @@ export function formatMeetingAnswerTraceMetadata(
     continuitySummaryExcludedCode: summary.excludedCode,
     answerCodeSectionPresent: Boolean(parsed.sections.code),
     answerWhiteboardSectionPresent: Boolean(parsed.sections.whiteboard),
+    answerDisposition: parsed.answerDisposition,
+    answerSupportingAnchorIds: parsed.supportingAnchorIds,
   };
 }
 
@@ -351,15 +380,53 @@ function inferContractVersion({
   canonicalAnswer,
   legacyReply,
   recognizedLabels,
+  hasAuthorityEvidence,
 }: {
   canonicalAnswer: string;
   legacyReply: string;
   recognizedLabels: string[];
+  hasAuthorityEvidence: boolean;
 }): MeetingAnswerContractVersion {
+  if (hasAuthorityEvidence) return "meeting-answer-v3";
   if (legacyReply && !canonicalAnswer) return "legacy-live-v1";
   if (canonicalAnswer) return "meeting-answer-v2";
   if (recognizedLabels.length > 0) return "legacy-screen-v1";
   return "unstructured";
+}
+
+function parseAnswerDisposition(
+  value: string
+): AnswerDisposition | undefined {
+  const normalized = value.trim().toLowerCase();
+  if (
+    normalized === "factual-with-anchor" ||
+    normalized === "bounded-with-caveat" ||
+    normalized === "clarification" ||
+    normalized === "supported-choices" ||
+    normalized === "not-fact-dependent"
+  ) {
+    return normalized;
+  }
+  return undefined;
+}
+
+function parseSupportingAnchorIds(value: string) {
+  if (!value.trim() || value.trim() === "-") return [];
+
+  return Array.from(
+    new Set(
+      value
+        .split(/[|,\n]/)
+        .map((item) =>
+          item
+            .trim()
+            .replace(/^[-*]\s*/, "")
+            .replace(/^[\s"'`\[\]]+|[\s"'`\[\]]+$/g, "")
+            .trim()
+        )
+        .filter(Boolean)
+    )
+  );
 }
 
 function normalizeMeetingAnswerSummaryText(value: string | undefined) {
