@@ -1,0 +1,291 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import type { ActiveMeetingTask } from "../src/lib/meeting/active-meeting-task.js";
+import type { CurrentQuestionSettlementDecision } from "../src/lib/meeting/current-question-settlement.js";
+import type { MeetingModelProviderSnapshot } from "../src/lib/meeting/meeting-model-route.js";
+import {
+  authorizeSettledAdvisorExecutionPlan,
+  buildSettledAdvisorExecutionPlan,
+  formatSettledAdvisorExecutionPlanForTrace,
+} from "../src/lib/meeting/settled-advisor-execution-plan.js";
+import type { SelectedInterviewPlaybook } from "../src/lib/meeting/types.js";
+
+const providers: MeetingModelProviderSnapshot = {
+  providers: [
+    { id: "main", curl: "https://main.test" },
+    { id: "coding", curl: "https://coding.test" },
+  ],
+  selectedProvider: { provider: "main", variables: {} },
+  codingProvider: { provider: "coding", variables: {} },
+};
+
+function settlement(
+  overrides: Partial<CurrentQuestionSettlementDecision> = {}
+): CurrentQuestionSettlementDecision {
+  return {
+    settlementId: "question_settlement_a",
+    logicalQuestionUnitId: "question-a",
+    revision: 2,
+    sessionId: "session-a",
+    runtimeEpoch: 4,
+    sourceHash: "source-a",
+    questionType: "coding",
+    relation: "new-parent",
+    action: "answer",
+    evidenceMode: "hypothetical-design",
+    authority: "deterministic-fast-path",
+    authoritySource: "accepted-transcript",
+    typeAuthoritySource: "deterministic-fast-path",
+    relationAuthoritySource: "deterministic-fast-path",
+    actionAuthoritySource: "deterministic-fast-path",
+    typeMutationAuthorized: true,
+    relationMutationAuthorized: true,
+    parentMutationAuthorized: true,
+    responseAuthorized: true,
+    confidence: 0.95,
+    manualCorrectionRevision: 0,
+    rejectedProposals: [],
+    reasons: ["parent-mutation-authorized", "response-authorized"],
+    ...overrides,
+  };
+}
+
+function activeTask(
+  questionType: ActiveMeetingTask["parent"]["questionType"] = "coding",
+  overrides: Partial<ActiveMeetingTask["parent"]> = {}
+): ActiveMeetingTask {
+  return {
+    id: "parent-a",
+    source: "voice",
+    parent: {
+      id: "parent-a",
+      questionType,
+      topic: "Implement a queue",
+      playbookPhase:
+        questionType === "coding"
+          ? "solution_planning"
+          : "requirement_clarification",
+      phaseProgress: {},
+      supportedFactAnchors: [],
+      createdAt: 10,
+      updatedAt: 20,
+      revisions: 3,
+      sourceQuestionUnitId: "question-a",
+      sourceQuestionRevision: 2,
+      settlementId: "question_settlement_a",
+      ...overrides,
+    },
+  };
+}
+
+function playbook(
+  questionType: "coding" | "general-system-design" = "coding"
+): SelectedInterviewPlaybook {
+  return {
+    id:
+      questionType === "coding"
+        ? "coding_algorithm"
+        : "general_system_design",
+    label: questionType,
+    phase:
+      questionType === "coding"
+        ? "solution_planning"
+        : "requirement_clarification",
+    questionType,
+    confidence: 0.95,
+    reason: "test",
+    memoryPolicy: {
+      id: questionType,
+    },
+    firstMove: "start",
+    clarifyingStrategy: "clarify",
+    outputContract: "answer",
+    followUpPolicy: "continue",
+  };
+}
+
+test("builds one immutable coding plan for route, prompt, memory, and artifacts", () => {
+  const task = activeTask();
+  const plan = buildSettledAdvisorExecutionPlan({
+    settlement: settlement(),
+    activeMeetingTask: task,
+    preBoundaryQuestionType: "general-system-design",
+    taskBoundaryCommitted: true,
+    childOwnsResponse: false,
+    providerSnapshot: providers,
+    playbook: playbook(),
+    memoryUseCase: "coding_interview",
+    askFrame: "direct-answer",
+    topicDomain: "backend",
+    createdAt: 100,
+  });
+
+  assert.equal(plan.responseOwner.questionType, "coding");
+  assert.equal(plan.responseOwner.source, "committed-parent");
+  assert.equal(plan.modelRoute.route, "coding-override");
+  assert.equal(plan.promptContract.profile, "coding");
+  assert.equal(plan.memoryPolicy.questionType, "coding");
+  assert.equal(plan.memoryPolicy.retrievalPolicyId, "coding");
+  assert.equal(plan.artifactPolicy.allowCode, true);
+  assert.equal(plan.artifactPolicy.allowWhiteboard, false);
+  assert.equal(plan.factAnchorPolicy.policyId, "not-required");
+
+  task.parent.questionType = "behavioral";
+  assert.equal(plan.taskSnapshot?.parent.questionType, "coding");
+  assert.equal(Object.isFrozen(plan.taskSnapshot?.parent), true);
+});
+
+test("a committed general-system-design settlement atomically leaves the coding route", () => {
+  const designSettlement = settlement({
+    questionType: "general-system-design",
+  });
+  const task = activeTask("general-system-design", {
+    settlementId: designSettlement.settlementId,
+  });
+  const plan = buildSettledAdvisorExecutionPlan({
+    settlement: designSettlement,
+    activeMeetingTask: task,
+    preBoundaryQuestionType: "coding",
+    taskBoundaryCommitted: true,
+    childOwnsResponse: false,
+    providerSnapshot: providers,
+    playbook: playbook("general-system-design"),
+    memoryUseCase: "meeting_assistant",
+    askFrame: "hypothetical-design",
+    topicDomain: "backend",
+    createdAt: 100,
+  });
+
+  assert.equal(plan.responseOwner.questionType, "general-system-design");
+  assert.equal(plan.modelRoute.route, "main");
+  assert.equal(plan.promptContract.profile, "system-design");
+  assert.equal(plan.playbookId, "general_system_design");
+  assert.equal(plan.artifactPolicy.allowWhiteboard, true);
+  assert.equal(plan.artifactPolicy.allowCode, false);
+});
+
+test("plan authorization rejects stale question, settlement, and parent revisions", () => {
+  const currentSettlement = settlement({
+    settlementId: "question_settlement_new",
+    revision: 3,
+  });
+  const task = activeTask();
+  const plan = buildSettledAdvisorExecutionPlan({
+    settlement: settlement(),
+    activeMeetingTask: task,
+    taskBoundaryCommitted: true,
+    childOwnsResponse: false,
+    providerSnapshot: providers,
+    playbook: playbook(),
+    memoryUseCase: "coding_interview",
+    askFrame: "direct-answer",
+    topicDomain: "backend",
+  });
+  const authorization = authorizeSettledAdvisorExecutionPlan({
+    plan,
+    currentSettlement,
+    currentSessionId: "session-a",
+    currentRuntimeEpoch: 4,
+    currentLogicalQuestionUnitId: "question-a",
+    currentLogicalQuestionRevision: 3,
+    currentSourceHash: "source-new",
+    currentActiveMeetingTask: activeTask("coding", {
+      revisions: 4,
+    }),
+  });
+
+  assert.equal(authorization.authorized, false);
+  assert.ok(
+    authorization.rejectionReasons.includes(
+      "logical-question-revision-mismatch"
+    )
+  );
+  assert.ok(
+    authorization.rejectionReasons.includes("source-hash-mismatch")
+  );
+  assert.ok(
+    authorization.rejectionReasons.includes("settlement-mismatch")
+  );
+  assert.ok(
+    authorization.rejectionReasons.includes(
+      "expected-parent-revision-mismatch"
+    )
+  );
+});
+
+test("plan authorization fails closed when the current settlement lease is missing", () => {
+  const plan = buildSettledAdvisorExecutionPlan({
+    settlement: settlement(),
+    activeMeetingTask: activeTask(),
+    taskBoundaryCommitted: true,
+    childOwnsResponse: false,
+    providerSnapshot: providers,
+    playbook: playbook(),
+    memoryUseCase: "coding_interview",
+    askFrame: "direct-answer",
+    topicDomain: "backend",
+  });
+  const authorization = authorizeSettledAdvisorExecutionPlan({
+    plan,
+    currentSessionId: "session-a",
+    currentRuntimeEpoch: 4,
+    currentActiveMeetingTask: activeTask(),
+  });
+
+  assert.equal(authorization.authorized, false);
+  assert.ok(
+    authorization.rejectionReasons.includes(
+      "logical-question-unit-mismatch"
+    )
+  );
+  assert.ok(
+    authorization.rejectionReasons.includes(
+      "logical-question-revision-mismatch"
+    )
+  );
+  assert.ok(
+    authorization.rejectionReasons.includes("source-hash-mismatch")
+  );
+  assert.ok(
+    authorization.rejectionReasons.includes("settlement-mismatch")
+  );
+});
+
+test("equivalent settlement inputs produce a stable plan id and compact trace", () => {
+  const input = {
+    settlement: settlement(),
+    activeMeetingTask: activeTask(),
+    taskBoundaryCommitted: true,
+    childOwnsResponse: false,
+    providerSnapshot: providers,
+    playbook: playbook(),
+    memoryUseCase: "coding_interview" as const,
+    askFrame: "direct-answer" as const,
+    topicDomain: "backend" as const,
+  };
+  const first = buildSettledAdvisorExecutionPlan(input);
+  const duplicate = buildSettledAdvisorExecutionPlan(input);
+  const authorization = authorizeSettledAdvisorExecutionPlan({
+    plan: first,
+    currentSettlement: settlement(),
+    currentSessionId: "session-a",
+    currentRuntimeEpoch: 4,
+    currentLogicalQuestionUnitId: "question-a",
+    currentLogicalQuestionRevision: 2,
+    currentSourceHash: "source-a",
+    currentActiveMeetingTask: activeTask(),
+  });
+  const trace = formatSettledAdvisorExecutionPlanForTrace(
+    first,
+    authorization
+  );
+
+  assert.equal(first.id, duplicate.id);
+  assert.equal(authorization.authorized, true);
+  assert.equal(trace.settledExecutionPlanId, first.id);
+  assert.equal(trace.settledExecutionPlanAuthorized, true);
+  assert.equal(
+    trace.settledExecutionPlanPromptContract,
+    "meeting-answer:coding"
+  );
+});

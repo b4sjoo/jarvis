@@ -15,6 +15,10 @@ import {
   createRuntimeCommitToken,
   rebaseRuntimeCommitToken,
 } from "../src/lib/meeting/runtime-commit-authorization.js";
+import {
+  createProvisionalCurrentQuestion,
+  settleCurrentQuestion,
+} from "../src/lib/meeting/current-question-settlement.js";
 
 function logicalQuestion(
   text = "Design a food delivery service"
@@ -72,6 +76,64 @@ test("commits a complete high-authority new parent before advisor execution", ()
   assert.equal(committed.state, "committed");
   assert.equal(taskBoundarySurvivesAdvisorOutcome(committed, "cancelled"), true);
   assert.equal(taskBoundarySurvivesAdvisorOutcome(committed, "error"), true);
+});
+
+test("binds a committed parent to the authoritative current-question settlement", () => {
+  const unit = logicalQuestion();
+  const currentQuestion = createProvisionalCurrentQuestion({
+    logicalQuestionUnit: unit,
+    sourceKind: "voice",
+    now: 90,
+  });
+  const settlement = settleCurrentQuestion({
+    currentQuestion,
+    deterministicProposal: {
+      source: "deterministic-fast-path",
+      sessionId: unit.sessionId,
+      runtimeEpoch: unit.runtimeEpoch,
+      logicalQuestionUnitId: unit.id,
+      revision: unit.revision,
+      sourceHash: currentQuestion.sourceHash,
+      questionType: "general-system-design",
+      relation: "new-parent",
+      action: "answer",
+      confidence: 0.94,
+      typeEvidenceAuthorized: true,
+      relationEvidenceAuthorized: true,
+      actionEvidenceAuthorized: true,
+    },
+    manualCorrectionRevision: 0,
+    policy: {
+      runtimeMutationAuthorized: true,
+      questionComplete: true,
+      commitParent: true,
+    },
+  });
+  const candidate = createTaskBoundaryCandidate({
+    logicalQuestionUnit: unit,
+    currentQuestion,
+    settlement,
+    proposedQuestionType: "coding",
+    proposedRelation: "followup-parent",
+    authoritySource: "accepted-transcript",
+    questionComplete: true,
+    mutationAuthorized: true,
+    commitParent: true,
+    now: 100,
+  });
+  assert.ok(candidate);
+  assert.equal(candidate.proposedQuestionType, "general-system-design");
+  assert.equal(candidate.proposedRelation, "new-parent");
+  assert.equal(candidate.commitPolicy, "immediate");
+
+  const parent = buildCommittedTaskBoundaryParent({
+    candidate,
+    logicalQuestionUnit: unit,
+    source: "voice",
+    now: 110,
+  });
+  assert.ok(parent);
+  assert.equal(parent.settlementId, settlement.settlementId);
 });
 
 test("keeps an incomplete boundary pending until its bounded completion", () => {

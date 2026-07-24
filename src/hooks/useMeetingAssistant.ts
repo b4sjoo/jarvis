@@ -75,6 +75,7 @@ import {
   MeetingResponseConfig,
   ManualQuestionTypeCorrection,
   ManualQuestionTypeCorrectionSource,
+  CurrentQuestionSettlementDecision,
   LogicalQuestionUnit,
   LogicalQuestionUnitLease,
   PrimaryAskProjection,
@@ -104,6 +105,7 @@ import {
   SpeechCorrectionRule,
   TaskAskFrame,
   TaskBoundaryCandidate,
+  SettledAdvisorExecutionPlan,
   TaskTopicDomain,
   TraceHumanEvaluation,
   TranscriptTurn,
@@ -183,9 +185,11 @@ import {
   buildRuntimeCommitSnapshot,
   buildBoundedParentContextHandoff,
   buildCommittedTaskBoundaryParent,
+  buildSettledAdvisorExecutionPlan,
   commitTaskBoundaryCandidate,
   commitSourceOwnedTransition,
   createTaskBoundaryCandidate,
+  createProvisionalCurrentQuestion,
   createSourceOwnedTransitionCandidate,
   createRuntimeCommitToken,
   decideAdvisorPhaseMutation,
@@ -195,10 +199,13 @@ import {
   formatAdvisorTriggerJobForTrace,
   formatCrossDomainParentTransitionForTrace,
   formatRuntimeCommitAuthorizationForTrace,
+  formatCurrentQuestionSettlementForTrace,
+  formatSettledAdvisorExecutionPlanForTrace,
   formatSourceOwnedTransitionForTrace,
   formatTaskBoundaryCandidateForTrace,
   rebaseRuntimeCommitToken,
   rebaseRuntimeCommitTokenAfterOwnedParentMutation,
+  settleCurrentQuestion,
   expireTaskBoundaryCandidate,
   canQuestionTypeDecisionOverrideParent,
   decideAdvisorTurnIntent,
@@ -311,6 +318,7 @@ import {
   buildSuggestionTaskMetadata,
   stageSuggestionProjectionForManualCorrection,
   authorizeResponseArtifactMutation,
+  authorizeSettledAdvisorExecutionPlan,
   formatResponseArtifactAuthorizationForTrace,
   formatMeetingResponseOwnerForTrace,
   formatMeetingModelRouteForTrace,
@@ -1504,6 +1512,12 @@ export function useMeetingAssistant() {
   const taskBoundaryCandidateRef = useRef<TaskBoundaryCandidate | undefined>(
     undefined
   );
+  const currentQuestionSettlementRef = useRef<
+    CurrentQuestionSettlementDecision | undefined
+  >(undefined);
+  const settledAdvisorExecutionPlanRef = useRef<
+    SettledAdvisorExecutionPlan | undefined
+  >(undefined);
   const sessionRecordingManagerRef = useRef<SessionRecordingManager | null>(
     null
   );
@@ -1917,6 +1931,8 @@ export function useMeetingAssistant() {
     pendingInterviewSectionHintRef.current = undefined;
     cancelledAdvisorTurnIdsRef.current.clear();
     taskBoundaryCandidateRef.current = undefined;
+    currentQuestionSettlementRef.current = undefined;
+    settledAdvisorExecutionPlanRef.current = undefined;
     manualCorrectionOperationCoordinatorRef.current.reset();
     return {
       runtimeInvalidationReason: reason,
@@ -4083,6 +4099,10 @@ export function useMeetingAssistant() {
     const traceId = advisorJob.traceId;
     let advisorStepId: string | undefined;
     let effectiveRuntimeCommitToken = advisorJob.runtimeCommitToken;
+    let currentQuestionSettlement:
+      | CurrentQuestionSettlementDecision
+      | undefined;
+    let settledExecutionPlan: SettledAdvisorExecutionPlan | undefined;
     const logicalQuestionLease = advisorJob.logicalQuestionUnit
       ? createLogicalQuestionUnitLease(advisorJob.logicalQuestionUnit)
       : undefined;
@@ -4120,23 +4140,80 @@ export function useMeetingAssistant() {
         return true;
       }
 
-      if (!logicalQuestionLease) return false;
-      const logicalQuestionAuthorization =
-        authorizeLogicalQuestionUnitLease(
-          logicalQuestionLease,
-          logicalQuestionUnitRef.current
-        );
+      if (logicalQuestionLease) {
+        const logicalQuestionAuthorization =
+          authorizeLogicalQuestionUnitLease(
+            logicalQuestionLease,
+            logicalQuestionUnitRef.current
+          );
+        if (traceId) {
+          traceStoreRef.current.updateMetadata(
+            traceId,
+            formatLogicalQuestionLeaseForTrace(
+              logicalQuestionLease,
+              logicalQuestionAuthorization,
+              stage
+            )
+          );
+        }
+        if (!logicalQuestionAuthorization.authorized) {
+          finishRunningAdvisorJobTrace(
+            advisorJob,
+            "cancelled",
+            {
+              ...formatAdvisorTriggerJobForTrace(
+                advisorJob,
+                "stale-commit-rejected",
+                {
+                  cancellationReason: logicalQuestionAuthorization.reason,
+                  commitAuthorized: false,
+                  commitAuthorizationReason:
+                    logicalQuestionAuthorization.reason,
+                }
+              ),
+              ...formatLogicalQuestionLeaseForTrace(
+                logicalQuestionLease,
+                logicalQuestionAuthorization,
+                stage
+              ),
+            },
+            logicalQuestionAuthorization.reason
+          );
+          releaseAdvisorJob(advisorJob, "suppressed", {
+            commitAuthorized: false,
+            commitAuthorizationReason:
+              logicalQuestionAuthorization.reason,
+          });
+          return true;
+        }
+      }
+
+      if (!settledExecutionPlan) return false;
+      const currentContextState = contextManagerRef.current.getState();
+      const planAuthorization = authorizeSettledAdvisorExecutionPlan({
+        plan: settledExecutionPlan,
+        currentSettlement: currentQuestionSettlementRef.current,
+        currentSessionId: currentContextState.sessionId,
+        currentRuntimeEpoch: runtimeEpochRef.current,
+        currentLogicalQuestionUnitId:
+          logicalQuestionUnitRef.current?.id,
+        currentLogicalQuestionRevision:
+          logicalQuestionUnitRef.current?.revision,
+        currentSourceHash:
+          currentQuestionSettlementRef.current?.sourceHash,
+        currentActiveMeetingTask:
+          currentContextState.activeMeetingTask,
+      });
       if (traceId) {
         traceStoreRef.current.updateMetadata(
           traceId,
-          formatLogicalQuestionLeaseForTrace(
-            logicalQuestionLease,
-            logicalQuestionAuthorization,
-            stage
+          formatSettledAdvisorExecutionPlanForTrace(
+            settledExecutionPlan,
+            planAuthorization
           )
         );
       }
-      if (logicalQuestionAuthorization.authorized) return false;
+      if (planAuthorization.authorized) return false;
 
       finishRunningAdvisorJobTrace(
         advisorJob,
@@ -4146,24 +4223,21 @@ export function useMeetingAssistant() {
             advisorJob,
             "stale-commit-rejected",
             {
-              cancellationReason: logicalQuestionAuthorization.reason,
+              cancellationReason: planAuthorization.reason,
               commitAuthorized: false,
-              commitAuthorizationReason:
-                logicalQuestionAuthorization.reason,
+              commitAuthorizationReason: planAuthorization.reason,
             }
           ),
-          ...formatLogicalQuestionLeaseForTrace(
-            logicalQuestionLease,
-            logicalQuestionAuthorization,
-            stage
+          ...formatSettledAdvisorExecutionPlanForTrace(
+            settledExecutionPlan,
+            planAuthorization
           ),
         },
-        logicalQuestionAuthorization.reason
+        planAuthorization.reason
       );
       releaseAdvisorJob(advisorJob, "suppressed", {
         commitAuthorized: false,
-        commitAuthorizationReason:
-          logicalQuestionAuthorization.reason,
+        commitAuthorizationReason: planAuthorization.reason,
       });
       return true;
     };
@@ -4493,35 +4567,119 @@ export function useMeetingAssistant() {
         : advisorTaskSignals.source === "semantic-unknown-rescue"
           ? "semantic-unknown-rescue"
           : "accepted-transcript";
+    const questionComplete =
+      Boolean(options.manualQuestionTypeCorrection) ||
+      Boolean(advisorTaskSignals.openingRoute) ||
+      Boolean(
+        inferredTurnIntentDecision?.executionAuthorized &&
+          inferredTurnIntentDecision.intent !== "incomplete" &&
+          inferredTurnIntentDecision.intent !== "unknown"
+      );
+    const commitParent =
+      advisorTaskMutationDecision.commitParent &&
+      advisorTaskSignals.openingRoute?.commitParent !== false;
+    const currentQuestionSourceKind =
+      advisorJob.source === "live-turn"
+        ? promptContext.activeScreenTask
+          ? "mixed"
+          : "voice"
+        : "screen";
+    const currentQuestionSourceObservationIds =
+      promptContext.activeScreenTask
+        ? [promptContext.activeScreenTask.observationId]
+        : [];
+    let provisionalCurrentQuestion:
+      | ReturnType<typeof createProvisionalCurrentQuestion>
+      | undefined;
+    if (advisorJob.logicalQuestionUnit) {
+      provisionalCurrentQuestion = createProvisionalCurrentQuestion({
+        logicalQuestionUnit: advisorJob.logicalQuestionUnit,
+        sourceKind: currentQuestionSourceKind,
+        sourceObservationIds:
+          currentQuestionSourceObservationIds,
+      });
+      const currentParent = promptContext.activeMeetingTask?.parent;
+      const proposal = {
+        source: options.manualQuestionTypeCorrection
+          ? ("manual-correction" as const)
+          : ("deterministic-fast-path" as const),
+        sessionId: provisionalCurrentQuestion.sessionId,
+        runtimeEpoch: provisionalCurrentQuestion.runtimeEpoch,
+        logicalQuestionUnitId:
+          provisionalCurrentQuestion.logicalQuestionUnitId,
+        revision: provisionalCurrentQuestion.revision,
+        sourceHash: provisionalCurrentQuestion.sourceHash,
+        questionType: advisorTaskSignals.questionType,
+        relation: advisorTaskSignals.taskRelation,
+        action: executionAuthorization.authorized
+          ? ("answer" as const)
+          : ("ignore" as const),
+        confidence: advisorTaskSignals.openingRoute
+          ? 1
+          : advisorTaskSignals.questionTypeDecision?.confidence,
+        typeEvidenceAuthorized:
+          advisorTaskSignals.questionType !== "unknown",
+        relationEvidenceAuthorized:
+          advisorTaskSignals.taskRelation !== "unknown",
+        actionEvidenceAuthorized: true,
+        manualCorrectionRevision:
+          options.manualQuestionTypeCorrection
+            ? manualCorrectionRevisionRef.current
+            : undefined,
+        expectedParentId: currentParent?.id,
+        expectedParentRevision: currentParent?.revisions,
+        reasons: [
+          `advisor-signal-source:${advisorTaskSignals.source}`,
+          `boundary-authority-source:${taskBoundaryAuthoritySource}`,
+        ],
+      };
+      currentQuestionSettlement = settleCurrentQuestion({
+        currentQuestion: provisionalCurrentQuestion,
+        deterministicProposal: options.manualQuestionTypeCorrection
+          ? undefined
+          : proposal,
+        manualProposal: options.manualQuestionTypeCorrection
+          ? proposal
+          : undefined,
+        activeParentId: currentParent?.id,
+        activeParentRevision: currentParent?.revisions,
+        manualCorrectionRevision:
+          manualCorrectionRevisionRef.current,
+        policy: {
+          allowLlmTypeRepair: false,
+          allowLlmActionRepair: false,
+          runtimeMutationAuthorized:
+            taskMutationAuthorization.authorized,
+          questionComplete,
+          commitParent,
+        },
+      });
+      currentQuestionSettlementRef.current =
+        currentQuestionSettlement;
+      if (traceId) {
+        traceStoreRef.current.updateMetadata(
+          traceId,
+          formatCurrentQuestionSettlementForTrace(
+            currentQuestionSettlement
+          )
+        );
+      }
+    }
     let taskBoundaryCandidate = createTaskBoundaryCandidate({
       logicalQuestionUnit: advisorJob.logicalQuestionUnit,
+      currentQuestion: provisionalCurrentQuestion,
+      settlement: currentQuestionSettlement,
       proposedQuestionType: advisorTaskSignals.questionType,
       proposedRelation: advisorTaskSignals.taskRelation,
       authoritySource: taskBoundaryAuthoritySource,
-      sourceKind:
-        advisorJob.source === "live-turn"
-          ? promptContext.activeScreenTask
-            ? "mixed"
-            : "voice"
-          : "screen",
-      sourceObservationIds: promptContext.activeScreenTask
-        ? [promptContext.activeScreenTask.observationId]
-        : [],
+      sourceKind: currentQuestionSourceKind,
+      sourceObservationIds: currentQuestionSourceObservationIds,
       confidence: advisorTaskSignals.openingRoute
         ? 1
         : advisorTaskSignals.questionTypeDecision?.confidence,
-      questionComplete:
-        Boolean(options.manualQuestionTypeCorrection) ||
-        Boolean(advisorTaskSignals.openingRoute) ||
-        Boolean(
-          inferredTurnIntentDecision?.executionAuthorized &&
-            inferredTurnIntentDecision.intent !== "incomplete" &&
-            inferredTurnIntentDecision.intent !== "unknown"
-        ),
+      questionComplete,
       mutationAuthorized: taskMutationAuthorization.authorized,
-      commitParent:
-        advisorTaskMutationDecision.commitParent &&
-        advisorTaskSignals.openingRoute?.commitParent !== false,
+      commitParent,
     });
     if (
       taskBoundaryCandidate &&
@@ -4700,8 +4858,10 @@ export function useMeetingAssistant() {
       error: null,
     }));
 
-    const advisorQuestionType = advisorTaskSignals.questionType;
-    const advisorAnswerProfile = resolveMeetingAnswerProfile(
+    let advisorQuestionType =
+      currentQuestionSettlement?.questionType ??
+      advisorTaskSignals.questionType;
+    let advisorAnswerProfile = resolveMeetingAnswerProfile(
       advisorQuestionType
     );
     const advisorAskFrame = advisorTaskSignals.askFrame;
@@ -5182,25 +5342,79 @@ export function useMeetingAssistant() {
       );
     }
 
-    const responseOwner = resolveMeetingResponseOwner({
-      preBoundaryType: preBoundaryResponseOwnerType,
-      postBoundaryParentType: getAdvisorActiveQuestionType(promptContext),
-      proposedQuestionType: advisorQuestionType,
-      relation: advisorTaskSignals.taskRelation,
-      taskBoundaryCommitted: taskBoundaryCommittedBeforeAdvisor,
-      childOwnsResponse:
-        advisorTaskSignals.taskRelation === "child-probe" &&
-        taskMutationAuthorization.authorized &&
-        sourceOwnedTransitionCommittedBeforeAdvisor,
-    });
+    if (currentQuestionSettlement) {
+      settledExecutionPlan = buildSettledAdvisorExecutionPlan({
+        settlement: currentQuestionSettlement,
+        activeMeetingTask: promptContext.activeMeetingTask,
+        preBoundaryQuestionType: preBoundaryResponseOwnerType,
+        taskBoundaryCommitted:
+          taskBoundaryCommittedBeforeAdvisor,
+        childOwnsResponse:
+          advisorTaskSignals.taskRelation === "child-probe" &&
+          taskMutationAuthorization.authorized &&
+          sourceOwnedTransitionCommittedBeforeAdvisor,
+        providerSnapshot: meetingModelProviderSnapshotRef.current,
+        playbook: advisorRuntimePlaybook,
+        memoryUseCase: inferMemoryUseCaseFromQuery(
+          advisorEvidencePacket.currentQuestion?.text ??
+            advisorRetrievalQuery
+        ),
+        askFrame: advisorAskFrame,
+        topicDomain: advisorTopicDomain,
+        projectAnchor: advisorProjectAnchor,
+      });
+      settledAdvisorExecutionPlanRef.current =
+        settledExecutionPlan;
+      advisorQuestionType =
+        settledExecutionPlan.questionType;
+      advisorAnswerProfile =
+        settledExecutionPlan.promptContract.profile;
+      if (traceId) {
+        const planMetadata =
+          formatSettledAdvisorExecutionPlanForTrace(
+            settledExecutionPlan
+          );
+        traceStoreRef.current.updateMetadata(
+          traceId,
+          planMetadata
+        );
+        const planStepId = traceStoreRef.current.startStep(
+          traceId,
+          "Settled advisor execution plan",
+          planMetadata
+        );
+        traceStoreRef.current.finishStep(
+          traceId,
+          planStepId,
+          "success"
+        );
+      }
+    }
+    const responseOwner =
+      settledExecutionPlan?.responseOwner ??
+      resolveMeetingResponseOwner({
+        preBoundaryType: preBoundaryResponseOwnerType,
+        postBoundaryParentType:
+          getAdvisorActiveQuestionType(promptContext),
+        proposedQuestionType: advisorQuestionType,
+        relation: advisorTaskSignals.taskRelation,
+        taskBoundaryCommitted:
+          taskBoundaryCommittedBeforeAdvisor,
+        childOwnsResponse:
+          advisorTaskSignals.taskRelation === "child-probe" &&
+          taskMutationAuthorization.authorized &&
+          sourceOwnedTransitionCommittedBeforeAdvisor,
+      });
     const advisorUsesCodingModel =
       responseOwner.questionType === "coding";
-    const advisorModelRoute = resolveMeetingModelRoute({
-      useCodingModel: advisorUsesCodingModel,
-      reason: advisorUsesCodingModel
-        ? `response-owner-${responseOwner.source}-coding`
-        : `response-owner-${responseOwner.source}-main`,
-    });
+    const advisorModelRoute =
+      settledExecutionPlan?.modelRoute ??
+      resolveMeetingModelRoute({
+        useCodingModel: advisorUsesCodingModel,
+        reason: advisorUsesCodingModel
+          ? `response-owner-${responseOwner.source}-coding`
+          : `response-owner-${responseOwner.source}-main`,
+      });
     const responseOwnerMetadata =
       formatMeetingResponseOwnerForTrace(responseOwner);
     const advisorModelRouteMetadata =
@@ -5331,11 +5545,15 @@ export function useMeetingAssistant() {
       parentTopic:
         promptContext.activeMeetingTask?.parent.topic ??
         promptContext.activeInterviewTask?.topic,
-      relation: advisorTaskSignals.taskRelation,
+      relation:
+        settledExecutionPlan?.taskRelation ??
+        advisorTaskSignals.taskRelation,
     });
     const advisorPersonalEvidenceDecision = detectPersonalEvidenceRequirement({
       questionText: advisorCurrentQuestionEvidenceText,
-      questionType: advisorQuestionType,
+      questionType:
+        settledExecutionPlan?.memoryPolicy.questionType ??
+        advisorQuestionType,
       mode: state.settings.personalEvidenceGuardrailMode,
     });
     const memoryContext = await loadMemoryForPrompt({
@@ -5346,21 +5564,37 @@ export function useMeetingAssistant() {
       currentQuestionEvidenceText:
         advisorCurrentQuestionEvidenceText,
       diagramDomainContext: advisorDiagramDomainContext,
-      diagramTopicDomain: advisorTopicDomain,
-      useCase: inferMemoryUseCaseFromQuery(
-        advisorCurrentQuestionEvidenceText
-      ),
-      questionType: advisorQuestionType,
-      askFrame: advisorAskFrame,
-      topicDomain: advisorTopicDomain,
-      projectAnchor: advisorProjectAnchor,
-      memoryPolicy: advisorRuntimePlaybook?.memoryPolicy,
+      diagramTopicDomain:
+        settledExecutionPlan?.memoryPolicy.topicDomain ??
+        advisorTopicDomain,
+      useCase:
+        settledExecutionPlan?.memoryPolicy.useCase ??
+        inferMemoryUseCaseFromQuery(
+          advisorCurrentQuestionEvidenceText
+        ),
+      questionType:
+        settledExecutionPlan?.memoryPolicy.questionType ??
+        advisorQuestionType,
+      askFrame:
+        settledExecutionPlan?.memoryPolicy.askFrame ??
+        advisorAskFrame,
+      topicDomain:
+        settledExecutionPlan?.memoryPolicy.topicDomain ??
+        advisorTopicDomain,
+      projectAnchor:
+        settledExecutionPlan?.memoryPolicy.projectAnchor ??
+        advisorProjectAnchor,
+      memoryPolicy:
+        settledExecutionPlan?.playbook?.memoryPolicy ??
+        advisorRuntimePlaybook?.memoryPolicy,
       personalEvidenceDecision: advisorPersonalEvidenceDecision,
       forceStrictProjectAnchor: Boolean(
         (promptContext.activeMeetingTask?.parent.projectBinding ??
           promptContext.activeInterviewTask?.projectBinding) &&
-          advisorTaskSignals.taskRelation !== "new-parent" &&
-          advisorTaskSignals.taskRelation !== "unknown"
+          (settledExecutionPlan?.taskRelation ??
+            advisorTaskSignals.taskRelation) !== "new-parent" &&
+          (settledExecutionPlan?.taskRelation ??
+            advisorTaskSignals.taskRelation) !== "unknown"
       ),
       runtimeToken: effectiveRuntimeCommitToken,
       currentOperationId: () => activeAdvisorJobRef.current?.id,
@@ -5370,15 +5604,22 @@ export function useMeetingAssistant() {
       existingBinding:
         promptContext.activeMeetingTask?.parent.projectBinding ??
         promptContext.activeInterviewTask?.projectBinding,
-      questionType: advisorQuestionType,
-      relation: advisorTaskSignals.taskRelation,
+      questionType:
+        settledExecutionPlan?.questionType ??
+        advisorQuestionType,
+      relation:
+        settledExecutionPlan?.taskRelation ??
+        advisorTaskSignals.taskRelation,
       requiresProjectBinding:
         advisorTaskSignals.openingRoute?.commitParent !== false &&
-        (advisorQuestionType === "project-deep-dive" ||
+        ((settledExecutionPlan?.questionType ??
+          advisorQuestionType) === "project-deep-dive" ||
           (advisorPersonalEvidenceDecision.enforced &&
             advisorPersonalEvidenceDecision.requirement ===
               "autobiographical-project")),
-      projectAnchor: advisorProjectAnchor,
+      projectAnchor:
+        settledExecutionPlan?.memoryPolicy.projectAnchor ??
+        advisorProjectAnchor,
       explicitProjectSelection:
         options.clarifyingFeedback?.answer === "option"
           ? options.clarifyingFeedback.answerValue ??
@@ -5391,7 +5632,8 @@ export function useMeetingAssistant() {
       questionType:
         advisorTaskSignals.openingRoute?.commitParent === false
           ? undefined
-          : advisorQuestionType,
+          : settledExecutionPlan?.questionType ??
+            advisorQuestionType,
       questionText: advisorCurrentQuestionEvidenceText,
       personalEvidenceGuardrailMode:
         state.settings.personalEvidenceGuardrailMode,
@@ -5400,7 +5642,9 @@ export function useMeetingAssistant() {
       activeFactAnchors:
         promptContext.activeMeetingTask?.parent.supportedFactAnchors ??
         promptContext.activeInterviewTask?.supportedFactAnchors,
-      projectAnchor: advisorProjectAnchor,
+      projectAnchor:
+        settledExecutionPlan?.memoryPolicy.projectAnchor ??
+        advisorProjectAnchor,
       personalEvidenceDecision: advisorPersonalEvidenceDecision,
       projectBindingDecision,
     });
@@ -5449,8 +5693,13 @@ export function useMeetingAssistant() {
     }
     promptContext = {
       ...promptContext,
+      activeMeetingTask:
+        settledExecutionPlan?.taskSnapshot ??
+        promptContext.activeMeetingTask,
       memoryContext: memoryContext?.contextText,
-      interviewPlaybook: advisorRuntimePlaybook,
+      interviewPlaybook:
+        settledExecutionPlan?.playbook ??
+        advisorRuntimePlaybook,
       playbookPhaseDecision,
       factAnchorDecision,
       projectBindingDecision,
@@ -5755,6 +6004,7 @@ export function useMeetingAssistant() {
         hasActiveScreenTask: Boolean(promptContext.activeScreenTask),
       });
       const shouldCommitAdvisorParent =
+        (settledExecutionPlan?.responseAuthorized ?? true) &&
         advisorTaskMutationDecision.commitParent &&
         advisorTaskSignals.openingRoute?.commitParent !== false &&
         (advisorTaskSignals.taskRelation !== "new-parent" ||
@@ -5771,21 +6021,23 @@ export function useMeetingAssistant() {
         manualPhaseAdvanceCommitted
           ? undefined
           : playbookPhaseDecision;
-      const artifactAuthorization = authorizeResponseArtifactMutation({
-        parentTaskId: existingInterviewTask?.id,
-        parentQuestionType:
-          existingInterviewTask?.stableKind ??
-          (continuityRelation === "new-parent"
-            ? responseOwner.questionType
-            : undefined),
-        responseOwnerQuestionType: responseOwner.questionType,
-        responseOwnerSource: responseOwner.source,
-        relation: continuityRelation,
-        creatingParent:
-          !existingInterviewTask &&
-          shouldCommitAdvisorParent &&
-          continuityRelation === "new-parent",
-      });
+      const settledArtifactAuthorization =
+        settledExecutionPlan?.artifactPolicy ??
+        authorizeResponseArtifactMutation({
+          parentTaskId: existingInterviewTask?.id,
+          parentQuestionType:
+            existingInterviewTask?.stableKind ??
+            (continuityRelation === "new-parent"
+              ? responseOwner.questionType
+              : undefined),
+          responseOwnerQuestionType: responseOwner.questionType,
+          responseOwnerSource: responseOwner.source,
+          relation: continuityRelation,
+          creatingParent:
+            !existingInterviewTask &&
+            shouldCommitAdvisorParent &&
+            continuityRelation === "new-parent",
+        });
       const continuity = shouldCommitAdvisorParent
         ? updateInterviewTaskContinuityForAnswer({
             existingTask: existingInterviewTask,
@@ -5806,7 +6058,9 @@ export function useMeetingAssistant() {
               advisorJob.logicalQuestionUnit?.sourceTurnIds,
             finalContent,
             parsedAnswer: parsedMeetingAnswer,
-            playbook: advisorRuntimePlaybook,
+            playbook:
+              settledExecutionPlan?.playbook ??
+              advisorRuntimePlaybook,
             phaseDecision: outputPhaseDecision,
             sourceTransitionPrecommitted:
               sourceOwnedTransitionCommittedBeforeAdvisor,
@@ -5826,7 +6080,8 @@ export function useMeetingAssistant() {
                 ? [projectBindingDecision.binding.projectName]
                 : extractSupportedFactAnchorsFromMemory(memoryContext),
             projectBinding: projectBindingDecision.binding,
-            artifactAuthorization,
+            artifactAuthorization:
+              settledArtifactAuthorization,
           })
         : {
             task: existingInterviewTask,
@@ -5847,9 +6102,11 @@ export function useMeetingAssistant() {
           ? "preserved"
           : "none";
       const answerArtifactMetadata = {
-        ...formatResponseArtifactAuthorizationForTrace(artifactAuthorization),
+        ...formatResponseArtifactAuthorizationForTrace(
+          settledArtifactAuthorization
+        ),
         answerCodeArtifactDecision: parsedMeetingAnswer.sections.code
-          ? artifactAuthorization.allowCode
+          ? settledArtifactAuthorization.allowCode
             ? "produced"
             : "ignored"
           : "none",
@@ -6017,9 +6274,10 @@ export function useMeetingAssistant() {
           buildSuggestionTaskMetadata(contextState.activeMeetingTask),
           parsedMeetingAnswer
         ),
-        codeArtifactMutationAuthorized: artifactAuthorization.allowCode,
+        codeArtifactMutationAuthorized:
+          settledArtifactAuthorization.allowCode,
         whiteboardArtifactMutationAuthorized:
-          artifactAuthorization.allowWhiteboard,
+          settledArtifactAuthorization.allowWhiteboard,
         sourceTraceId: traceId,
       };
       const committedQuestionLineage =

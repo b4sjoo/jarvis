@@ -3,8 +3,10 @@ import {
   createProvisionalCurrentQuestion,
   decideCurrentQuestionMutationAuthority,
   formatCurrentQuestionMutationAuthorityForTrace,
+  formatCurrentQuestionSettlementForTrace,
   formatProvisionalCurrentQuestionForTrace,
   type CurrentQuestionMutationAuthorityDecision,
+  type CurrentQuestionSettlementDecision,
   type CurrentQuestionSourceKind,
   type ProvisionalCurrentQuestion,
 } from "./current-question-settlement.js";
@@ -58,6 +60,7 @@ export interface TaskBoundaryCandidate {
   logicalQuestionUnitId: string;
   logicalQuestionUnitRevision: number;
   currentQuestion: ProvisionalCurrentQuestion;
+  settlement?: CurrentQuestionSettlementDecision;
   mutationAuthority: CurrentQuestionMutationAuthorityDecision;
   proposedQuestionType: CanonicalQuestionType;
   proposedRelation: InterviewTaskRelation;
@@ -76,6 +79,8 @@ export interface TaskBoundaryCandidate {
 
 export interface CreateTaskBoundaryCandidateInput {
   logicalQuestionUnit?: LogicalQuestionUnit;
+  currentQuestion?: ProvisionalCurrentQuestion;
+  settlement?: CurrentQuestionSettlementDecision;
   proposedQuestionType?: unknown;
   proposedRelation: InterviewTaskRelation;
   authoritySource: TaskBoundaryAuthoritySource;
@@ -95,36 +100,57 @@ export function createTaskBoundaryCandidate(
 ): TaskBoundaryCandidate | undefined {
   const logicalQuestionUnit = input.logicalQuestionUnit;
   if (!logicalQuestionUnit) return undefined;
+  if (
+    input.settlement &&
+    (!input.currentQuestion ||
+      input.settlement.logicalQuestionUnitId !==
+        input.currentQuestion.logicalQuestionUnitId ||
+      input.settlement.revision !== input.currentQuestion.revision ||
+      input.settlement.sessionId !== input.currentQuestion.sessionId ||
+      input.settlement.runtimeEpoch !==
+        input.currentQuestion.runtimeEpoch ||
+      input.settlement.sourceHash !== input.currentQuestion.sourceHash)
+  ) {
+    return undefined;
+  }
 
   const now = input.now ?? Date.now();
   const proposedQuestionType =
-    normalizeCanonicalQuestionType(input.proposedQuestionType) ?? "unknown";
-  const currentQuestion = createProvisionalCurrentQuestion({
-    logicalQuestionUnit,
-    sourceKind: input.sourceKind ?? "voice",
-    sourceObservationIds: input.sourceObservationIds,
-    now,
-    expiresAt:
-      input.questionComplete
-        ? undefined
-        : now + TASK_BOUNDARY_PENDING_TTL_MS,
-  });
-  const mutationAuthority = decideCurrentQuestionMutationAuthority({
-    currentQuestion,
-    proposedQuestionType,
-    proposedRelation: input.proposedRelation,
-    authoritySource: input.authoritySource,
-    typeEvidenceAuthorized:
-      input.typeEvidenceAuthorized ?? proposedQuestionType !== "unknown",
-    relationEvidenceAuthorized:
-      input.relationEvidenceAuthorized ??
-      input.proposedRelation !== "unknown",
-    runtimeMutationAuthorized: input.mutationAuthorized,
-    questionComplete: input.questionComplete,
-    commitParent: input.commitParent,
-  });
+    normalizeCanonicalQuestionType(
+      input.settlement?.questionType ?? input.proposedQuestionType
+    ) ?? "unknown";
+  const proposedRelation = normalizeBoundaryRelation(
+    input.settlement?.relation ?? input.proposedRelation
+  );
+  const currentQuestion =
+    input.currentQuestion ??
+    createProvisionalCurrentQuestion({
+      logicalQuestionUnit,
+      sourceKind: input.sourceKind ?? "voice",
+      sourceObservationIds: input.sourceObservationIds,
+      now,
+      expiresAt:
+        input.questionComplete
+          ? undefined
+          : now + TASK_BOUNDARY_PENDING_TTL_MS,
+    });
+  const mutationAuthority = input.settlement
+    ? mutationAuthorityFromSettlement(input.settlement)
+    : decideCurrentQuestionMutationAuthority({
+        currentQuestion,
+        proposedQuestionType,
+        proposedRelation,
+        authoritySource: input.authoritySource,
+        typeEvidenceAuthorized:
+          input.typeEvidenceAuthorized ?? proposedQuestionType !== "unknown",
+        relationEvidenceAuthorized:
+          input.relationEvidenceAuthorized ?? proposedRelation !== "unknown",
+        runtimeMutationAuthorized: input.mutationAuthorized,
+        questionComplete: input.questionComplete,
+        commitParent: input.commitParent,
+      });
   const parentEligible = isParentCanonicalQuestionType(proposedQuestionType);
-  const isBoundaryRelation = input.proposedRelation === "new-parent";
+  const isBoundaryRelation = proposedRelation === "new-parent";
   const immediate =
     parentEligible &&
     isBoundaryRelation &&
@@ -140,7 +166,7 @@ export function createTaskBoundaryCandidate(
   } else if (!parentEligible) {
     mutationDisposition = "abstained-non-parent-type";
   } else if (
-    input.proposedRelation === "unknown" &&
+    proposedRelation === "unknown" &&
     !input.questionComplete
   ) {
     mutationDisposition = "pending-incomplete-question";
@@ -167,11 +193,14 @@ export function createTaskBoundaryCandidate(
     logicalQuestionUnitId: logicalQuestionUnit.id,
     logicalQuestionUnitRevision: logicalQuestionUnit.revision,
     currentQuestion,
+    settlement: input.settlement,
     mutationAuthority,
     proposedQuestionType,
-    proposedRelation: input.proposedRelation,
+    proposedRelation,
     authoritySource: input.authoritySource,
-    confidence: clampConfidence(input.confidence),
+    confidence: clampConfidence(
+      input.settlement?.confidence ?? input.confidence
+    ),
     sourceTurnIds: [...logicalQuestionUnit.sourceTurnIds],
     state: "pending",
     commitPolicy,
@@ -280,6 +309,7 @@ export function formatTaskBoundaryCandidateForTrace(
     ...formatCurrentQuestionMutationAuthorityForTrace(
       candidate.mutationAuthority
     ),
+    ...formatCurrentQuestionSettlementForTrace(candidate.settlement),
   };
 }
 
@@ -335,8 +365,33 @@ export function buildCommittedTaskBoundaryParent(input: {
     ],
     sourceQuestionUnitId: input.logicalQuestionUnit.id,
     sourceQuestionRevision: input.logicalQuestionUnit.revision,
+    settlementId: input.candidate.settlement?.settlementId,
     parentContextHandoff: input.parentContextHandoff,
     revisions: 1,
+  };
+}
+
+function normalizeBoundaryRelation(
+  relation: CurrentQuestionSettlementDecision["relation"]
+): InterviewTaskRelation {
+  if (relation === "linked-parent-extension") return "new-parent";
+  if (relation === "none") return "unknown";
+  return relation;
+}
+
+function mutationAuthorityFromSettlement(
+  settlement: CurrentQuestionSettlementDecision
+): CurrentQuestionMutationAuthorityDecision {
+  return {
+    authority: settlement.authority,
+    authoritySource: settlement.authoritySource,
+    questionType: settlement.questionType,
+    relation: settlement.relation,
+    typeMutationAuthorized: settlement.typeMutationAuthorized,
+    relationMutationAuthorized: settlement.relationMutationAuthorized,
+    parentMutationAuthorized: settlement.parentMutationAuthorized,
+    responseAuthorized: settlement.responseAuthorized,
+    reasons: [...settlement.reasons],
   };
 }
 
