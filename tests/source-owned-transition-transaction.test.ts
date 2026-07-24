@@ -197,6 +197,120 @@ test("creates a screen parent before its model produces an answer", () => {
   );
 });
 
+test("keeps a screen child committed when the model is cancelled", () => {
+  const parent = makeParent();
+  const candidate = createSourceOwnedTransitionCandidate({
+    sessionId: "session-a",
+    runtimeEpoch: 3,
+    source: "screen",
+    sourceObservationIds: ["screen-child"],
+    existingTask: parent,
+    relation: "child-probe",
+    authoritySource: "screen-preflight",
+    mutationAuthorized: true,
+    questionType: "field-knowledge",
+    question: "How does HNSW search work?",
+    subtaskIntent: "concept-probe",
+    now: 100,
+  });
+  assert.ok(candidate);
+
+  const result = commitSourceOwnedTransition({
+    candidate,
+    currentTask: parent,
+    currentSessionId: "session-a",
+    currentRuntimeEpoch: 3,
+    now: 110,
+  });
+
+  assert.equal(result.task?.id, parent.id);
+  assert.equal(result.task?.child?.questionType, "field-knowledge");
+  assert.deepEqual(
+    result.task?.child?.basedOnObservationIds,
+    ["screen-child"]
+  );
+  assert.equal(
+    sourceOwnedTransitionSurvivesModelOutcome(result, "cancelled"),
+    true
+  );
+});
+
+test("does not recreate a screen parent for the same observation", () => {
+  const firstCandidate = createSourceOwnedTransitionCandidate({
+    sessionId: "session-a",
+    runtimeEpoch: 3,
+    source: "screen",
+    sourceObservationIds: ["screen-a"],
+    relation: "new-parent",
+    authoritySource: "screen-preflight",
+    mutationAuthorized: true,
+    questionType: "general-system-design",
+    question: "Design a ticket selling system.",
+    now: 100,
+  });
+  assert.ok(firstCandidate);
+  const first = commitSourceOwnedTransition({
+    candidate: firstCandidate,
+    currentSessionId: "session-a",
+    currentRuntimeEpoch: 3,
+    now: 110,
+  });
+  assert.ok(first.task);
+
+  const repeatedCandidate = createSourceOwnedTransitionCandidate({
+    sessionId: "session-a",
+    runtimeEpoch: 3,
+    source: "screen",
+    sourceObservationIds: ["screen-a"],
+    existingTask: first.task,
+    relation: "new-parent",
+    authoritySource: "screen-preflight",
+    mutationAuthorized: true,
+    questionType: "general-system-design",
+    question: "Design a ticket selling system.",
+    now: 120,
+  });
+  assert.ok(repeatedCandidate);
+  const repeated = commitSourceOwnedTransition({
+    candidate: repeatedCandidate,
+    currentTask: first.task,
+    currentSessionId: "session-a",
+    currentRuntimeEpoch: 3,
+    now: 130,
+  });
+
+  assert.equal(repeated.mutationApplied, false);
+  assert.equal(repeated.reason, "already-applied");
+  assert.equal(repeated.task?.id, first.task.id);
+});
+
+test("rejects an unknown screen new parent", () => {
+  const candidate = createSourceOwnedTransitionCandidate({
+    sessionId: "session-a",
+    runtimeEpoch: 3,
+    source: "screen",
+    sourceObservationIds: ["screen-unknown"],
+    relation: "new-parent",
+    authoritySource: "screen-preflight",
+    mutationAuthorized: true,
+    questionType: "unknown",
+    question: "Untyped content",
+    now: 100,
+  });
+  assert.ok(candidate);
+
+  const result = commitSourceOwnedTransition({
+    candidate,
+    currentSessionId: "session-a",
+    currentRuntimeEpoch: 3,
+    now: 110,
+  });
+
+  assert.equal(result.candidate.state, "rejected");
+  assert.equal(result.reason, "new-parent-type-not-eligible");
+  assert.equal(result.task, undefined);
+});
+
 test("rejects stale parent revisions and keeps current state", () => {
   const parent = makeParent();
   const candidate = createSourceOwnedTransitionCandidate({
