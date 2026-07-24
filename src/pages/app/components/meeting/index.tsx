@@ -2638,10 +2638,11 @@ const FocusModePanel = ({
               />
             )}
             <Button
-              size="sm"
+              size="icon"
               variant={audioControl.urgent ? "destructive" : "outline"}
-              className="ml-auto h-8 min-w-[92px] shrink-0 gap-1.5 px-3 text-[10px]"
+              className="ml-auto h-8 w-8 shrink-0"
               title={audioControl.title}
+              aria-label={audioControl.label}
               onClick={onToggleAudio}
               disabled={audioControl.disabled}
             >
@@ -2652,7 +2653,6 @@ const FocusModePanel = ({
               ) : (
                 <PlayIcon className="h-3 w-3 shrink-0" />
               )}
-              {audioControl.label}
             </Button>
             <span
               className={cn(

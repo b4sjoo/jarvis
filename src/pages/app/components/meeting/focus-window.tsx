@@ -316,10 +316,11 @@ function MeetingFocusControlsWindow({
               })}
           </div>
           <Button
-            size="sm"
+            size="icon"
             variant={snapshot.audioControl.urgent ? "destructive" : "outline"}
-            className="ml-auto h-8 min-w-[92px] shrink-0 gap-1.5 px-3 text-[10px]"
+            className="ml-auto h-8 w-8 shrink-0"
             title={snapshot.audioControl.title}
+            aria-label={snapshot.audioControl.label}
             onClick={() => sendFocusAction({ type: "toggle-listening" })}
             disabled={!snapshot.active || snapshot.audioControl.disabled}
           >
@@ -330,7 +331,6 @@ function MeetingFocusControlsWindow({
             ) : (
               <PlayIcon className="h-3 w-3 shrink-0" />
             )}
-            {snapshot.audioControl.label}
           </Button>
           <Badge
             variant="outline"
