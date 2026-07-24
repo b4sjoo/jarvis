@@ -156,6 +156,8 @@ import {
   withInterviewPlaybookPhase,
   readTraceHumanEvaluations,
   readQuestionHumanEvaluations,
+  readCriticalMomentCandidates,
+  readCriticalMomentEvaluations,
   readMeetingEvalTraceMetadata,
   resolveTraceMemoryEvaluationSnapshot,
   resolveSuggestionQuestionLineage,
@@ -261,6 +263,13 @@ import {
   transcribeMeetingAudio,
   upsertTraceHumanEvaluation,
   upsertQuestionHumanEvaluation,
+  upsertCriticalMomentEvaluation,
+  buildCriticalMomentCandidates,
+  mergeCriticalMomentCandidates,
+  persistCriticalMomentCandidates,
+  persistCriticalMomentEvaluations,
+  projectCriticalMomentTraceEvidence,
+  type CriticalMomentEvaluation,
   buildQuestionEvaluationPatchFromTrace,
   decideManualQuestionTypeCorrection,
   decideManualCorrectionScope,
@@ -1450,6 +1459,19 @@ export function useMeetingAssistant() {
     humanEvaluations: readTraceHumanEvaluations(),
     questionEvaluations: readQuestionHumanEvaluations(),
   }));
+  const [criticalMomentCandidates, setCriticalMomentCandidates] = useState(
+    () => readCriticalMomentCandidates()
+  );
+  const [criticalMomentEvaluations, setCriticalMomentEvaluations] = useState(
+    () => readCriticalMomentEvaluations()
+  );
+  const criticalMomentCandidatesRef = useRef(criticalMomentCandidates);
+  criticalMomentCandidatesRef.current = criticalMomentCandidates;
+  const criticalMomentCandidateFingerprintBySessionRef = useRef(
+    new Map<string, string>()
+  );
+  const criticalMomentEvaluationsRef = useRef(criticalMomentEvaluations);
+  criticalMomentEvaluationsRef.current = criticalMomentEvaluations;
   const currentQuestionLineageRef = useRef<QuestionInstanceLineage | undefined>(
     state.currentQuestionLineage
   );
@@ -1485,6 +1507,51 @@ export function useMeetingAssistant() {
       }
     );
   }
+  const refreshCriticalMomentCandidates = useCallback(
+    (contextState: MeetingContextState, traces: MeetingTrace[]) => {
+      const sessionId =
+        sessionRecordingManagerRef.current?.getState().sessionId ??
+        contextState.sessionId;
+      const currentWindow = buildCriticalMomentCandidates({
+        sessionId,
+        transcriptTurns: contextState.transcriptTurns,
+        traces: traces.map(projectCriticalMomentTraceEvidence),
+      });
+      const currentWindowFingerprint = JSON.stringify(
+        currentWindow.map((candidate) => ({
+          momentId: candidate.momentId,
+          sourceText: candidate.sourceText,
+          proposedTraceIds: candidate.proposedTraceIds,
+          proposedQuestionType: candidate.proposedQuestionType,
+          traceJoinStatus: candidate.traceJoinStatus,
+          candidateReasons: candidate.candidateReasons,
+        }))
+      );
+      if (
+        criticalMomentCandidateFingerprintBySessionRef.current.get(
+          sessionId
+        ) === currentWindowFingerprint
+      ) {
+        return;
+      }
+      criticalMomentCandidateFingerprintBySessionRef.current.set(
+        sessionId,
+        currentWindowFingerprint
+      );
+      const merged = mergeCriticalMomentCandidates(
+        criticalMomentCandidatesRef.current,
+        currentWindow,
+        sessionId
+      );
+      criticalMomentCandidatesRef.current = merged;
+      persistCriticalMomentCandidates(merged);
+      setCriticalMomentCandidates(merged);
+      sessionRecordingManagerRef.current?.recordCriticalMomentCandidates(
+        merged
+      );
+    },
+    []
+  );
   const contextManagerRef = useRef(
     new MeetingContextManager({
       interviewSessionBrief: initialInterviewSessionBrief,
@@ -2926,6 +2993,28 @@ export function useMeetingAssistant() {
       });
     },
     [buildQuestionEvaluationIdentity]
+  );
+
+  const updateCriticalMomentEvaluation = useCallback(
+    (momentId: string, patch: Partial<CriticalMomentEvaluation>) => {
+      const candidate = criticalMomentCandidatesRef.current.find(
+        (item) => item.momentId === momentId
+      );
+      if (!candidate) return;
+
+      const evaluations = upsertCriticalMomentEvaluation(
+        criticalMomentEvaluationsRef.current,
+        candidate,
+        patch
+      );
+      criticalMomentEvaluationsRef.current = evaluations;
+      persistCriticalMomentEvaluations(evaluations);
+      setCriticalMomentEvaluations(evaluations);
+      sessionRecordingManagerRef.current?.recordCriticalMomentEvaluations(
+        evaluations
+      );
+    },
+    []
   );
 
   const incrementAppliedSpeechCorrections = useCallback(
@@ -12065,6 +12154,10 @@ export function useMeetingAssistant() {
 
   useEffect(() => {
     traceStoreRef.current.subscribe((traces) => {
+      refreshCriticalMomentCandidates(
+        contextManagerRef.current.getState(),
+        traces
+      );
       setState((previous) => ({
         ...previous,
         traces,
@@ -12076,6 +12169,7 @@ export function useMeetingAssistant() {
   }, [
     maybeAutoExportTraces,
     recordCompletedTracesForSession,
+    refreshCriticalMomentCandidates,
     scheduleTraceMetricsPersistence,
   ]);
 
@@ -12441,6 +12535,7 @@ export function useMeetingAssistant() {
     exportTrace,
     updateTraceHumanEvaluation,
     updateQuestionHumanEvaluation,
+    updateCriticalMomentEvaluation,
     correctActiveQuestionType,
     regenerateSuggestion,
     forceAdviseLatestTurn,
@@ -12448,6 +12543,8 @@ export function useMeetingAssistant() {
     answerClarifyingQuestion,
     submitSpeechCorrection,
     aiProviders: allAiProviders,
+    criticalMomentCandidates,
+    criticalMomentEvaluations,
     isActive: activeRef.current,
   };
 }
