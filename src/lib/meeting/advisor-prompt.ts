@@ -5,24 +5,25 @@ import {
   MeetingAnswerProfile,
   MeetingResponseActionMode,
   MeetingResponseConfig,
-} from "./types";
+} from "./types.js";
 import { resolveMeetingAnswerProfile } from "./meeting-answer.js";
 import {
   formatInterviewSessionBriefForPrompt,
   formatInterviewSessionContextForPrompt,
-} from "./interview-session-context";
+} from "./interview-session-context.js";
+import { formatAdvisorEvidencePacketForPrompt } from "./advisor-evidence-packet.js";
 import {
   formatInterviewPlaybookForPrompt,
   withInterviewPlaybookPhase,
-} from "./interview-playbook";
-import { formatActiveMeetingTaskForPrompt } from "./active-meeting-task";
-import { formatFactAnchorDecisionForPrompt } from "./fact-anchor-guardrail";
-import { formatPlaybookPhaseDecisionForPrompt } from "./playbook-phase";
-import { formatProjectBindingDecisionForPrompt } from "./project-binding";
+} from "./interview-playbook.js";
+import { formatActiveMeetingTaskForPrompt } from "./active-meeting-task.js";
+import { formatFactAnchorDecisionForPrompt } from "./fact-anchor-guardrail.js";
+import { formatPlaybookPhaseDecisionForPrompt } from "./playbook-phase.js";
+import { formatProjectBindingDecisionForPrompt } from "./project-binding.js";
 import {
   buildResponseActionInstructions,
   formatResponseActionContextScope,
-} from "./response-action-contract";
+} from "./response-action-contract.js";
 
 export function buildAdvisorSystemPrompt() {
   return [
@@ -46,7 +47,7 @@ export function buildAdvisorSystemPrompt() {
     "When a project binding is present, it is the exclusive project identity for first-person facts in the current parent task. Do not silently replace it with a different retrieved project.",
     "If memory conflicts with the current task, follow the current task and mention the conflict only if it is useful.",
     "When using memory for behavioral or interview answers, do not add unsupported metrics, timelines, dates, or impact claims. If memory only supports a qualitative outcome, keep the outcome qualitative.",
-    "For behavioral and project-deep-dive answers, supported facts can come from eligible fact-evidence memory, visible screen text, Them transcript, Interview Brief, or explicit user correction. A previous assistant answer, a Me attempted answer, memory guidance, or an answer template is not a fact source by itself.",
+    "For behavioral and project-deep-dive answers, supported facts can come from eligible fact-evidence memory, authoritative visible screen text, authoritative Them transcript, explicitly activated preparation facts, or explicit user correction. Raw Interview Brief focus areas and notes, a previous assistant answer, a Me attempted answer, memory guidance, or an answer template are not fact sources by themselves.",
     "If a project-deep-dive prompt lacks a supported project anchor, ask a clarifying question or choose the closest supported project from memory instead of inventing a first-person project.",
     "If there is screen context but no transcript, treat it as visible screen content only, not as something a colleague said.",
     "If an active screen task is present, use it as the anchor and treat new transcript as clarification, follow-up, correction, or a possible strong task switch.",
@@ -105,6 +106,9 @@ export function buildAdvisorUserMessage(
     "<context_mode>",
     contextMode,
     "</context_mode>",
+    "<advisor_evidence_packet>",
+    formatAdvisorEvidencePacketForPrompt(context.advisorEvidencePacket),
+    "</advisor_evidence_packet>",
     "<latest_turn>",
     latestTurn,
     "</latest_turn>",
@@ -504,7 +508,7 @@ function formatOpeningRouteForPrompt(
       ? `projectAnchor: ${openingRoute.projectAnchor}`
       : undefined,
     frame,
-    "Use only supported facts from transcript, Interview Brief, session context, memory, or explicit user correction.",
+    "Use only supported facts from the authoritative current question, eligible fact memory, confirmed user evidence, explicitly activated preparation facts, or explicit user correction. Raw Interview Brief focus areas and notes are guidance only.",
   ]
     .filter(Boolean)
     .join("\n");

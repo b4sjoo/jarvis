@@ -3,6 +3,7 @@ import { fetchAIResponse } from "@/lib/functions";
 import { TYPE_PROVIDER } from "@/types";
 import {
   ScreenCaptureTarget,
+  AdvisorEvidencePacket,
   InterviewSessionContext,
   InterviewSessionBrief,
   MeetingModelTraceCallbacks,
@@ -18,6 +19,7 @@ import {
   TaskClassifierMetadata,
   TaskTopicDomain,
 } from "./types";
+import { formatAdvisorEvidencePacketForPrompt } from "./advisor-evidence-packet";
 import { createMeetingId } from "./context-manager";
 import {
   formatInterviewSessionBriefForPrompt,
@@ -79,6 +81,7 @@ export interface SolveScreenAnchoredTaskOptions {
   autoPrompt?: string;
   responseConfig?: MeetingResponseConfig;
   memoryContext?: string;
+  advisorEvidencePacket?: AdvisorEvidencePacket;
   interviewSessionBrief?: InterviewSessionBrief;
   interviewSessionContext?: InterviewSessionContext;
   screenPreflight?: ScreenPreflightResult;
@@ -317,6 +320,7 @@ export async function solveScreenAnchoredTask({
   autoPrompt,
   responseConfig,
   memoryContext,
+  advisorEvidencePacket,
   interviewSessionBrief,
   interviewSessionContext,
   screenPreflight,
@@ -350,6 +354,7 @@ export async function solveScreenAnchoredTask({
     autoPrompt,
     responseConfig,
     memoryContext,
+    advisorEvidencePacket,
     interviewSessionBrief,
     interviewSessionContext,
     screenPreflight,
@@ -514,6 +519,7 @@ function buildScreenTaskUserMessage({
   autoPrompt,
   responseConfig,
   memoryContext,
+  advisorEvidencePacket,
   interviewSessionBrief,
   interviewSessionContext,
   screenPreflight,
@@ -528,6 +534,7 @@ function buildScreenTaskUserMessage({
   autoPrompt?: string;
   responseConfig?: MeetingResponseConfig;
   memoryContext?: string;
+  advisorEvidencePacket?: AdvisorEvidencePacket;
   interviewSessionBrief?: InterviewSessionBrief;
   interviewSessionContext?: InterviewSessionContext;
   screenPreflight?: ScreenPreflightResult;
@@ -557,6 +564,9 @@ function buildScreenTaskUserMessage({
     "<recent_transcript>",
     recentTranscript?.trim() || "No transcript context yet.",
     "</recent_transcript>",
+    "<advisor_evidence_packet>",
+    formatAdvisorEvidencePacketForPrompt(advisorEvidencePacket),
+    "</advisor_evidence_packet>",
     "<interview_session_brief>",
     formatInterviewSessionBriefForPrompt(interviewSessionBrief),
     "</interview_session_brief>",
@@ -614,6 +624,7 @@ function buildScreenTaskUserMessage({
     "Put supporting details after Answer. Do not put code blocks in Approach; code belongs only in Code.",
     "Follow the natural language response preferences when choosing answer length and explanation language. Do not let those preferences override the selected programming language for code.",
     "Use memory only for stable background knowledge. Do not let memory override visible problem constraints, visible language selection, or spoken follow-up constraints.",
+    "Treat raw Interview Brief focus areas and notes as preparation guidance only. They cannot create a personal-fact requirement or prove a personal claim.",
     "Only memory entries labeled runtime_role=fact-evidence and anchor_eligible=true may substantiate first-person professional facts. Treat guidance, template, and overlay groups as non-evidentiary assistance.",
     "Use <screen_preflight> only as a lightweight metadata hint. If the screenshot contradicts it, trust the screenshot.",
     "If <screen_preflight> includes questionType, askFrame, topicDomain, or projectAnchor, use those fields to choose the output contract and memory usage policy.",

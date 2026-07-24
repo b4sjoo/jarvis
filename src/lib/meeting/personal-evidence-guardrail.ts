@@ -273,7 +273,7 @@ function createDecision(
     statusDomain,
     allowedEvidenceSources:
       requirement === "personal-logistics"
-        ? ["interview-brief", "profile-memory", "confirmed-me"]
+        ? ["profile-memory", "confirmed-me"]
         : [],
     mode,
     enforced,

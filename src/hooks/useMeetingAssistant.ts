@@ -23,6 +23,8 @@ import {
 } from "@/lib/memory";
 import {
   AdvisorEngine,
+  buildAdvisorEvidencePacket,
+  buildAdvisorEvidenceRetrievalQuery,
   AdvisorPromptContext,
   AdvisorSuggestion,
   AdvisorRequestMode,
@@ -189,6 +191,7 @@ import {
   decideAdvisorPhaseMutation,
   decideAdvisorTaskMutation,
   decideCrossDomainParentTransition,
+  formatAdvisorEvidencePacketForTrace,
   formatAdvisorTriggerJobForTrace,
   formatCrossDomainParentTransitionForTrace,
   formatRuntimeCommitAuthorizationForTrace,
@@ -3470,6 +3473,7 @@ export function useMeetingAssistant() {
     async ({
       traceId,
       query,
+      currentQuestionEvidenceText,
       diagramDomainContext,
       diagramTopicDomain,
       source,
@@ -3488,6 +3492,7 @@ export function useMeetingAssistant() {
       traceId?: string;
       taskId?: string;
       query: string;
+      currentQuestionEvidenceText?: string;
       diagramDomainContext?: DiagramDomainQueryContext;
       diagramTopicDomain?: MemoryTopicDomain;
       source: "advisor" | "screen";
@@ -3697,11 +3702,11 @@ export function useMeetingAssistant() {
             retrievedMemoryContext,
             personalEvidenceDecision ??
               detectPersonalEvidenceRequirement({
-                questionText: query,
+                questionText: currentQuestionEvidenceText ?? query,
                 questionType: resolvedQuestionType,
                 mode: state.settings.personalEvidenceGuardrailMode,
               }),
-            query
+            currentQuestionEvidenceText ?? query
           ) ?? retrievedMemoryContext;
         const personalEvidenceFilteredEntries =
           retrievedMemoryContext.entries.length - memoryContext.entries.length;
@@ -4209,14 +4214,15 @@ export function useMeetingAssistant() {
     const manualPhaseAdvanceFromPhase =
       promptContext.activeMeetingTask?.parent.playbookPhase ??
       promptContext.activeInterviewTask?.playbookPhase;
-    const advisorMemoryQuery = buildAdvisorMemoryQuery(
-      promptContext,
-      mode,
-      options.currentSuggestion
-    );
+    const advisorTaskFallbackQuery =
+      advisorJob.logicalQuestionUnit?.normalizedText.trim() ||
+      (promptContext.latestTurn?.speaker === "them"
+        ? promptContext.latestTurn.text.trim()
+        : "") ||
+      formatAdvisorActiveTaskForQuery(promptContext);
     const resolvedAdvisorTaskSignals = resolveAdvisorTaskSignals(
       promptContext,
-      advisorMemoryQuery,
+      advisorTaskFallbackQuery,
       advisorJob.logicalQuestionUnit
     );
     const logicalQuestionSectionHint = advisorJob.logicalQuestionUnit?.sectionHint;
@@ -4369,12 +4375,103 @@ export function useMeetingAssistant() {
       mode,
       advisorScreenScopeDecision
     );
-    if (advisorScreenScopeDecision.action === "clear" && latestTurn?.text) {
+    let advisorEvidencePacket = buildAdvisorEvidencePacket({});
+    let advisorRetrievalQuery = "";
+    const refreshAdvisorEvidencePacket = () => {
+      const currentQuestionText =
+        advisorJob.logicalQuestionUnit?.normalizedText.trim() ?? "";
+      const amazonLeadershipPrincipleHint =
+        buildAmazonLeadershipPrincipleMemoryHint(
+          promptContext.interviewSessionContext,
+          currentQuestionText
+        );
+      advisorEvidencePacket = buildAdvisorEvidencePacket({
+        currentQuestion: advisorJob.logicalQuestionUnit
+          ? {
+              text: advisorJob.logicalQuestionUnit.normalizedText,
+              source: "voice-lqu",
+              sourceTurnIds:
+                advisorJob.logicalQuestionUnit.sourceTurnIds,
+              logicalQuestionUnitId:
+                advisorJob.logicalQuestionUnit.id,
+              revision: advisorJob.logicalQuestionUnit.revision,
+            }
+          : undefined,
+        activeMeetingTask: promptContext.activeMeetingTask,
+        interviewSessionBrief:
+          promptContext.interviewSessionBrief,
+        interviewSessionContext:
+          promptContext.interviewSessionContext,
+        activatedFactIds:
+          promptContext.activeMeetingTask?.parent.supportedFactAnchors ??
+          promptContext.activeInterviewTask?.supportedFactAnchors,
+        generatedGuidance:
+          options.currentSuggestion?.trim() &&
+          state.latestSuggestion?.sourceTraceId
+            ? {
+                text: options.currentSuggestion,
+                sourceTraceId:
+                  state.latestSuggestion.sourceTraceId,
+              }
+            : undefined,
+        additionalRetrievalHints: [
+          advisorTaskSignals.askFrame !== "unknown"
+            ? {
+                role: "source-metadata" as const,
+                text: `ask frame: ${advisorTaskSignals.askFrame}`,
+              }
+            : undefined,
+          advisorTaskSignals.topicDomain !== "unknown"
+            ? {
+                role: "source-metadata" as const,
+                text: `topic domain: ${advisorTaskSignals.topicDomain}`,
+              }
+            : undefined,
+          advisorTaskSignals.projectAnchor
+            ? {
+                role: "source-metadata" as const,
+                text: `project anchor: ${advisorTaskSignals.projectAnchor}`,
+              }
+            : undefined,
+          amazonLeadershipPrincipleHint
+            ? {
+                role: "source-metadata" as const,
+                text: amazonLeadershipPrincipleHint,
+              }
+            : undefined,
+        ].filter(
+          (
+            hint
+          ): hint is {
+            role: "source-metadata";
+            text: string;
+          } => Boolean(hint)
+        ),
+      });
+      advisorRetrievalQuery =
+        buildAdvisorEvidenceRetrievalQuery(
+          advisorEvidencePacket,
+          mode
+        );
       advisorTaskSignals = {
         ...advisorTaskSignals,
-        query: buildFocusedAdvisorTaskQuery(promptContext, latestTurn.text),
+        query: advisorRetrievalQuery,
       };
-    }
+      promptContext = {
+        ...promptContext,
+        advisorEvidencePacket,
+      };
+      if (traceId) {
+        traceStoreRef.current.updateMetadata(
+          traceId,
+          formatAdvisorEvidencePacketForTrace(
+            advisorEvidencePacket,
+            advisorRetrievalQuery
+          )
+        );
+      }
+    };
+    refreshAdvisorEvidencePacket();
     let activeMeetingTaskId = getAdvisorActiveTaskId(promptContext);
     const questionLineage = createAuthorizedQuestionLineage({
       traceId,
@@ -4661,7 +4758,8 @@ export function useMeetingAssistant() {
         : promptContext.activeMeetingTask?.parent.phaseProgress ??
           promptContext.activeInterviewTask?.phaseProgress,
       latestTurnText: latestTurn?.text,
-      currentQuestion: advisorTaskSignals.query,
+      currentQuestion:
+        advisorEvidencePacket.currentQuestion?.text ?? "",
       relation: advisorTaskSignals.taskRelation,
       subtaskIntent: advisorTaskSignals.subtaskIntent,
       askFrame: advisorAskFrame ?? getAdvisorActiveAskFrame(promptContext),
@@ -4837,13 +4935,6 @@ export function useMeetingAssistant() {
           const boundaryContext =
             contextManagerRef.current.buildAdvisorPromptContext();
           promptContext = { ...promptContext, ...boundaryContext };
-          advisorTaskSignals = {
-            ...advisorTaskSignals,
-            query: buildFocusedAdvisorTaskQuery(
-              promptContext,
-              advisorJob.logicalQuestionUnit.normalizedText
-            ),
-          };
           activeMeetingTaskId = getAdvisorActiveTaskId(promptContext);
           effectiveRuntimeCommitToken = rebaseRuntimeCommitToken({
             token: effectiveRuntimeCommitToken,
@@ -5060,6 +5151,25 @@ export function useMeetingAssistant() {
     const sourceOwnedTransitionCommittedBeforeAdvisor =
       sourceOwnedTransitionResult?.candidate.state ===
       "committed";
+    refreshAdvisorEvidencePacket();
+    if (traceId) {
+      const evidencePacketMetadata =
+        formatAdvisorEvidencePacketForTrace(
+          advisorEvidencePacket,
+          advisorRetrievalQuery
+        );
+      const evidencePacketStepId =
+        traceStoreRef.current.startStep(
+          traceId,
+          "Advisor evidence packet built",
+          evidencePacketMetadata
+        );
+      traceStoreRef.current.finishStep(
+        traceId,
+        evidencePacketStepId,
+        "success"
+      );
+    }
 
     const responseOwner = resolveMeetingResponseOwner({
       preBoundaryType: preBoundaryResponseOwnerType,
@@ -5203,18 +5313,17 @@ export function useMeetingAssistant() {
       );
     }
 
+    const advisorCurrentQuestionEvidenceText =
+      advisorEvidencePacket.currentQuestion?.text ?? "";
     const advisorDiagramDomainContext = buildCurrentTaskDiagramDomainContext({
-      currentQuestion:
-        promptContext.latestTurn?.speaker === "them"
-          ? promptContext.latestTurn.text
-          : undefined,
+      currentQuestion: advisorCurrentQuestionEvidenceText || undefined,
       parentTopic:
         promptContext.activeMeetingTask?.parent.topic ??
         promptContext.activeInterviewTask?.topic,
       relation: advisorTaskSignals.taskRelation,
     });
     const advisorPersonalEvidenceDecision = detectPersonalEvidenceRequirement({
-      questionText: advisorTaskSignals.query,
+      questionText: advisorCurrentQuestionEvidenceText,
       questionType: advisorQuestionType,
       mode: state.settings.personalEvidenceGuardrailMode,
     });
@@ -5222,10 +5331,14 @@ export function useMeetingAssistant() {
       traceId,
       taskId: activeMeetingTaskId,
       source: "advisor",
-      query: advisorTaskSignals.query,
+      query: advisorRetrievalQuery,
+      currentQuestionEvidenceText:
+        advisorCurrentQuestionEvidenceText,
       diagramDomainContext: advisorDiagramDomainContext,
       diagramTopicDomain: advisorTopicDomain,
-      useCase: inferMemoryUseCaseFromQuery(advisorTaskSignals.query),
+      useCase: inferMemoryUseCaseFromQuery(
+        advisorCurrentQuestionEvidenceText
+      ),
       questionType: advisorQuestionType,
       askFrame: advisorAskFrame,
       topicDomain: advisorTopicDomain,
@@ -5268,11 +5381,10 @@ export function useMeetingAssistant() {
         advisorTaskSignals.openingRoute?.commitParent === false
           ? undefined
           : advisorQuestionType,
-      questionText: advisorTaskSignals.query,
+      questionText: advisorCurrentQuestionEvidenceText,
       personalEvidenceGuardrailMode:
         state.settings.personalEvidenceGuardrailMode,
       memoryContext,
-      interviewSessionBrief: promptContext.interviewSessionBrief,
       confirmedMeFacts: promptContext.confirmedMeFacts,
       activeFactAnchors:
         promptContext.activeMeetingTask?.parent.supportedFactAnchors ??
@@ -9736,15 +9848,10 @@ export function useMeetingAssistant() {
         }
 
         const preflightContextState = contextManagerRef.current.getState();
-        const screenMemoryQuery = buildScreenMemoryQuery({
-          observation,
-          autoPrompt,
-          interviewSessionBrief: preflightContextState.interviewSessionBrief,
-          interviewSessionContext: preflightContextState.interviewSessionContext,
-          screenPreflight,
-        });
+        const screenCurrentQuestionEvidenceText =
+          screenPreflight?.question?.trim() ?? "";
         const screenEvidenceText = [
-          screenPreflight?.question,
+          screenCurrentQuestionEvidenceText,
           observation.captureTarget?.title,
         ]
           .filter(Boolean)
@@ -9804,13 +9911,108 @@ export function useMeetingAssistant() {
           screenSourceEvidenceChars: screenEvidenceText.length,
         });
         const screenMemoryAskFrame = inferMemoryAskFrameFromScreenPreflight(
-          screenMemoryQuery,
+          screenCurrentQuestionEvidenceText,
           screenPreflight
         );
         const screenMemoryTopicDomain =
           inferMemoryTopicDomainFromScreenPreflight(
-            screenMemoryQuery,
+            screenCurrentQuestionEvidenceText,
             screenPreflight
+          );
+        const buildScreenEvidencePacket = (
+          contextState: MeetingContextState
+        ) => {
+          const amazonLeadershipPrincipleHint =
+            buildAmazonLeadershipPrincipleMemoryHint(
+              contextState.interviewSessionContext,
+              screenCurrentQuestionEvidenceText
+            );
+          return buildAdvisorEvidencePacket({
+            currentQuestion: screenCurrentQuestionEvidenceText
+              ? {
+                  text: screenCurrentQuestionEvidenceText,
+                  source: "screen-preflight",
+                  sourceTurnIds: [],
+                  screenObservationId: observation.id,
+                }
+              : undefined,
+            activeMeetingTask: contextState.activeMeetingTask,
+            interviewSessionBrief:
+              contextState.interviewSessionBrief,
+            interviewSessionContext:
+              contextState.interviewSessionContext,
+            activatedFactIds:
+              contextState.activeMeetingTask?.parent
+                .supportedFactAnchors ??
+              contextState.activeInterviewTask
+                ?.supportedFactAnchors,
+            additionalRetrievalHints: [
+              screenMemoryAskFrame !== "unknown"
+                ? {
+                    role: "source-metadata" as const,
+                    text: `ask frame: ${screenMemoryAskFrame}`,
+                  }
+                : undefined,
+              screenMemoryTopicDomain !== "unknown"
+                ? {
+                    role: "source-metadata" as const,
+                    text: `topic domain: ${screenMemoryTopicDomain}`,
+                  }
+                : undefined,
+              screenPreflight?.projectAnchor
+                ? {
+                    role: "source-metadata" as const,
+                    text: `project anchor: ${screenPreflight.projectAnchor}`,
+                  }
+                : undefined,
+              screenPreflight?.isBehavioralInterview
+                ? {
+                    role: "source-metadata" as const,
+                    text: "use case: behavioral interview",
+                  }
+                : undefined,
+              observation.captureTarget?.appName
+                ? {
+                    role: "source-metadata" as const,
+                    text: `app: ${observation.captureTarget.appName}`,
+                  }
+                : undefined,
+              observation.captureTarget?.title
+                ? {
+                    role: "source-metadata" as const,
+                    text: `title: ${observation.captureTarget.title}`,
+                  }
+                : undefined,
+              autoPrompt?.trim()
+                ? {
+                    role: "preparation-guidance" as const,
+                    text: autoPrompt,
+                  }
+                : undefined,
+              amazonLeadershipPrincipleHint
+                ? {
+                    role: "source-metadata" as const,
+                    text: amazonLeadershipPrincipleHint,
+                  }
+                : undefined,
+            ].filter(
+              (
+                hint
+              ): hint is {
+                role:
+                  | "source-metadata"
+                  | "preparation-guidance";
+                text: string;
+              } => Boolean(hint)
+            ),
+          });
+        };
+        let screenEvidencePacket =
+          buildScreenEvidencePacket(preflightContextState);
+        let screenMemoryQuery =
+          buildAdvisorEvidenceRetrievalQuery(
+            screenEvidencePacket,
+            "screen-task"
           );
         const screenTaskRelationDecision = decideScreenTaskRelation({
           existingTask:
@@ -9822,7 +10024,10 @@ export function useMeetingAssistant() {
                 )
               : undefined),
           taskKind,
-          question: screenPreflight?.question ?? screenMemoryQuery,
+          question:
+            screenCurrentQuestionEvidenceText ||
+            observation.captureTarget?.title ||
+            "",
           screenEvidenceText,
           screenPreflight,
           corrections: speechCorrectionsRef.current,
@@ -9868,7 +10073,7 @@ export function useMeetingAssistant() {
               : preflightContextState.activeMeetingTask?.parent.phaseProgress ??
                 preflightContextState.activeInterviewTask?.phaseProgress,
           latestTurnText: recentTranscript,
-          currentQuestion: screenPreflight?.question ?? screenMemoryQuery,
+          currentQuestion: screenCurrentQuestionEvidenceText,
           relation: provisionalScreenTaskRelation,
           askFrame: screenPreflight?.askFrame ?? screenMemoryAskFrame,
         });
@@ -9924,9 +10129,9 @@ export function useMeetingAssistant() {
             mutationAuthorized: readScreenAuthorization().authorized,
             questionType: screenMemoryQuestionType,
             question:
-              screenPreflight?.question?.trim() ||
+              screenCurrentQuestionEvidenceText ||
               observation.captureTarget?.title?.trim() ||
-              screenMemoryQuery,
+              "",
             subtaskIntent: inferAdvisorSubtaskIntent(
               screenEvidenceText,
               readMemoryQuestionType(taskKind) ?? "unknown"
@@ -10028,6 +10233,34 @@ export function useMeetingAssistant() {
           screenSourceTransitionCommittedBeforeModel;
         const screenExecutionContextState =
           contextManagerRef.current.getState();
+        screenEvidencePacket = buildScreenEvidencePacket(
+          screenExecutionContextState
+        );
+        screenMemoryQuery =
+          buildAdvisorEvidenceRetrievalQuery(
+            screenEvidencePacket,
+            "screen-task"
+          );
+        const screenEvidencePacketMetadata =
+          formatAdvisorEvidencePacketForTrace(
+            screenEvidencePacket,
+            screenMemoryQuery
+          );
+        traceStoreRef.current.updateMetadata(
+          trace.id,
+          screenEvidencePacketMetadata
+        );
+        const screenEvidencePacketStepId =
+          traceStoreRef.current.startStep(
+            trace.id,
+            "Advisor evidence packet built",
+            screenEvidencePacketMetadata
+          );
+        traceStoreRef.current.finishStep(
+          trace.id,
+          screenEvidencePacketStepId,
+          "success"
+        );
         const existingScreenProjectBinding =
           screenExecutionContextState.activeMeetingTask?.parent
             .projectBinding ??
@@ -10049,7 +10282,7 @@ export function useMeetingAssistant() {
           });
         const screenPersonalEvidenceDecision =
           detectPersonalEvidenceRequirement({
-            questionText: screenPreflight?.question ?? screenMemoryQuery,
+            questionText: screenCurrentQuestionEvidenceText,
             questionType: screenMemoryQuestionType,
             mode: state.settings.personalEvidenceGuardrailMode,
           });
@@ -10057,11 +10290,15 @@ export function useMeetingAssistant() {
           traceId: trace.id,
           source: "screen",
           query: screenMemoryQuery,
+          currentQuestionEvidenceText:
+            screenCurrentQuestionEvidenceText,
           diagramDomainContext: screenDiagramDomainContext,
           diagramTopicDomain:
             screenPreflight?.topicDomain ??
             inferMemoryTopicDomainFromQuery(screenDiagramDomainContext.query),
-          useCase: inferMemoryUseCaseFromQuery(screenMemoryQuery),
+          useCase: inferMemoryUseCaseFromQuery(
+            screenCurrentQuestionEvidenceText
+          ),
           questionType: screenMemoryQuestionType,
           askFrame: screenMemoryAskFrame,
           topicDomain: screenMemoryTopicDomain,
@@ -10091,12 +10328,10 @@ export function useMeetingAssistant() {
         });
         const screenFactAnchorDecision = buildFactAnchorDecision({
           questionType: screenMemoryQuestionType,
-          questionText: screenPreflight?.question ?? screenMemoryQuery,
+          questionText: screenCurrentQuestionEvidenceText,
           personalEvidenceGuardrailMode:
             state.settings.personalEvidenceGuardrailMode,
           memoryContext,
-          interviewSessionBrief:
-            screenExecutionContextState.interviewSessionBrief,
           confirmedMeFacts: collectConfirmedMeFacts(
             screenExecutionContextState.transcriptTurns
           ),
@@ -10186,6 +10421,7 @@ export function useMeetingAssistant() {
             autoPrompt,
             responseConfig: state.settings.response,
             memoryContext: memoryContext?.contextText,
+            advisorEvidencePacket: screenEvidencePacket,
             interviewSessionBrief:
               screenExecutionContextState.interviewSessionBrief,
             interviewSessionContext:
@@ -13448,46 +13684,6 @@ function formatAdvisorActiveTaskForQuery(
   return "";
 }
 
-function buildAdvisorMemoryQuery(
-  context: AdvisorPromptContext,
-  mode: AdvisorRequestMode,
-  currentSuggestion?: string
-) {
-  const interviewBriefHint = buildInterviewSessionBriefMemoryHint(
-    context.interviewSessionBrief
-  );
-  const interviewHint = buildInterviewSessionMemoryHint(
-    context.interviewSessionContext
-  );
-  const amazonLpHint = buildAmazonLeadershipPrincipleMemoryHint(
-    context.interviewSessionContext,
-    [
-      interviewBriefHint,
-      context.latestTurn?.text,
-      formatAdvisorActiveTaskForQuery(context),
-      context.transcript,
-      currentSuggestion,
-    ]
-      .filter(Boolean)
-      .join("\n")
-  );
-
-  return [
-    `mode: ${mode}`,
-    interviewBriefHint || undefined,
-    interviewHint || undefined,
-    amazonLpHint || undefined,
-    context.latestTurn ? `latest: ${context.latestTurn.text}` : undefined,
-    formatAdvisorActiveTaskForQuery(context) || undefined,
-    context.transcript ? `transcript:\n${context.transcript}` : undefined,
-    context.screenContext ? `screen:\n${context.screenContext}` : undefined,
-    currentSuggestion ? `current suggestion:\n${currentSuggestion}` : undefined,
-  ]
-    .filter(Boolean)
-    .join("\n\n")
-    .slice(-8000);
-}
-
 function buildExplicitActionAdvisorTaskQuery(
   context: AdvisorPromptContext,
   currentSuggestion?: string,
@@ -14808,66 +15004,6 @@ function extractSelectedOverlayIdsFromMemory(
   memoryContext: MemoryRetrievalResult | null | undefined
 ) {
   return memoryContext?.overlaySelection?.selectedEntryIds ?? [];
-}
-
-function buildScreenMemoryQuery({
-  observation,
-  autoPrompt,
-  interviewSessionBrief,
-  interviewSessionContext,
-  screenPreflight,
-}: {
-  observation: ScreenObservation;
-  autoPrompt?: string;
-  interviewSessionBrief?: AdvisorPromptContext["interviewSessionBrief"];
-  interviewSessionContext?: AdvisorPromptContext["interviewSessionContext"];
-  screenPreflight?: ScreenPreflightResult;
-}) {
-  const captureTarget = observation.captureTarget;
-  const interviewBriefHint =
-    buildInterviewSessionBriefMemoryHint(interviewSessionBrief);
-  const interviewHint = buildInterviewSessionMemoryHint(interviewSessionContext);
-  const amazonLpHint = buildAmazonLeadershipPrincipleMemoryHint(
-    interviewSessionContext,
-    [
-      interviewBriefHint,
-      screenPreflight?.question,
-      screenPreflight?.amazonLeadershipPrinciple,
-    ]
-      .filter(Boolean)
-      .join("\n")
-  );
-
-  return [
-    "mode: screen-task",
-    interviewBriefHint || undefined,
-    interviewHint || undefined,
-    amazonLpHint || undefined,
-    screenPreflight?.question
-      ? `screen preflight question:\n${screenPreflight.question}`
-      : undefined,
-    screenPreflight?.questionType
-      ? `question type: ${screenPreflight.questionType}`
-      : undefined,
-    screenPreflight?.askFrame
-      ? `ask frame: ${screenPreflight.askFrame}`
-      : undefined,
-    screenPreflight?.topicDomain
-      ? `topic domain: ${screenPreflight.topicDomain}`
-      : undefined,
-    screenPreflight?.projectAnchor
-      ? `project anchor: ${screenPreflight.projectAnchor}`
-      : undefined,
-    screenPreflight?.isBehavioralInterview
-      ? "screen preflight use case: behavioral interview"
-      : undefined,
-    captureTarget?.appName ? `app: ${captureTarget.appName}` : undefined,
-    captureTarget?.title ? `title: ${captureTarget.title}` : undefined,
-    autoPrompt ? `screen prompt preference:\n${autoPrompt}` : undefined,
-  ]
-    .filter(Boolean)
-    .join("\n\n")
-    .slice(-8000);
 }
 
 function inferMemoryUseCaseFromQuery(query: string): MemoryUseCase {

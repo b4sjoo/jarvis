@@ -78,7 +78,6 @@ test("detects personal logistics without requiring project evidence", () => {
   assert.equal(decision.confidenceTier, "high");
   assert.equal(decision.statusDomain, "work-authorization");
   assert.deepEqual(decision.allowedEvidenceSources, [
-    "interview-brief",
     "profile-memory",
     "confirmed-me",
   ]);

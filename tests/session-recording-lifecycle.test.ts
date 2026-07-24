@@ -733,7 +733,6 @@ test("compact trace summaries preserve task boundary and cross-domain evidence",
       personalEvidenceRequirement: "personal-logistics",
       personalEvidenceStatusDomain: "health-status",
       personalEvidenceAllowedSources: [
-        "interview-brief",
         "profile-memory",
         "confirmed-me",
       ],
@@ -801,7 +800,7 @@ test("compact trace summaries preserve task boundary and cross-domain evidence",
   );
   assert.deepEqual(
     (summary.personalEvidence as Record<string, unknown>).allowedSources,
-    ["interview-brief", "profile-memory", "confirmed-me"]
+    ["profile-memory", "confirmed-me"]
   );
   assert.deepEqual(
     (summary.personalEvidence as Record<string, unknown>).selectedSources,

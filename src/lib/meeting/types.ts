@@ -323,7 +323,6 @@ export type PersonalEvidenceStatusDomain =
   | "employment-status";
 
 export type PersonalEvidenceSource =
-  | "interview-brief"
   | "profile-memory"
   | "confirmed-me";
 

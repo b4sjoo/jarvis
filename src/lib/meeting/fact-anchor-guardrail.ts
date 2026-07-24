@@ -10,7 +10,6 @@ import {
 import type {
   FactAnchorDecision,
   FactAnchorRequiredFor,
-  InterviewSessionBrief,
   PersonalEvidenceDecision,
   PersonalEvidenceGuardrailMode,
   PersonalEvidenceSource,
@@ -104,7 +103,6 @@ export interface BuildFactAnchorDecisionInput {
   questionText?: string;
   personalEvidenceGuardrailMode?: PersonalEvidenceGuardrailMode;
   memoryContext?: MemoryRetrievalResult | null;
-  interviewSessionBrief?: InterviewSessionBrief;
   confirmedMeFacts?: ConfirmedMeFact[];
   activeFactAnchors?: string[];
   projectAnchor?: string;
@@ -157,7 +155,6 @@ export function buildFactAnchorDecision({
   questionText,
   personalEvidenceGuardrailMode = "enforcement",
   memoryContext,
-  interviewSessionBrief,
   confirmedMeFacts = [],
   activeFactAnchors = [],
   projectAnchor,
@@ -195,7 +192,6 @@ export function buildFactAnchorDecision({
       questionText,
       personalEvidence,
       memoryContext,
-      interviewSessionBrief,
       confirmedMeFacts,
     });
   }
@@ -327,7 +323,7 @@ export function formatFactAnchorDecisionForPrompt(
       ? `Reason: ${decision.missingAnchorReason}`
       : undefined,
     decision.personalEvidence.requirement === "personal-logistics"
-      ? "Personal status/logistics rule: use only the listed Interview Brief, profile-memory, or confirmed-Me anchors. Never borrow project/story facts or infer recovery/status. If the needed fact is absent, ask for it or stay explicitly fact-neutral."
+      ? "Personal status/logistics rule: use only the listed profile-memory or confirmed-Me anchors. Raw Interview Brief focus areas and notes are guidance only. Never borrow project/story facts or infer recovery/status. If the needed fact is absent, ask for it or stay explicitly fact-neutral."
       : undefined,
     decision.personalEvidence.enforced
       ? "Classifier-independent rule: enforce Action even if the question type is coding, field knowledge, system design, or unknown. Question wording and suggested alternatives are not evidence."
@@ -386,21 +382,14 @@ function buildPersonalStatusFactDecision({
   questionText,
   personalEvidence,
   memoryContext,
-  interviewSessionBrief,
   confirmedMeFacts,
 }: {
   questionText?: string;
   personalEvidence: PersonalEvidenceDecision;
   memoryContext?: MemoryRetrievalResult | null;
-  interviewSessionBrief?: InterviewSessionBrief;
   confirmedMeFacts: ConfirmedMeFact[];
 }): FactAnchorDecision {
   const anchors = [
-    ...collectInterviewBriefPersonalAnchors(
-      interviewSessionBrief,
-      questionText,
-      personalEvidence.statusDomain
-    ),
     ...collectProfileMemoryAnchors(
       memoryContext?.entries ?? [],
       questionText,
@@ -441,7 +430,7 @@ function buildPersonalStatusFactDecision({
     supportedAnchorTitles: [],
     action: "ask-clarification",
     missingAnchorReason:
-      "No relevant Interview Brief, profile-memory, or confirmed-Me fact supports this personal status/logistics answer.",
+      "No relevant profile-memory or confirmed-Me fact supports this personal status/logistics answer. Raw Interview Brief focus areas and notes are guidance only.",
     personalEvidence,
     selectedPersonalEvidenceSources: [],
     unsupportedClaimRisk: "high",
@@ -452,37 +441,6 @@ interface PersonalFactAnchor {
   id: string;
   title: string;
   source: PersonalEvidenceSource;
-}
-
-function collectInterviewBriefPersonalAnchors(
-  brief: InterviewSessionBrief | undefined,
-  questionText: string | undefined,
-  statusDomain: PersonalEvidenceStatusDomain | undefined
-): PersonalFactAnchor[] {
-  if (!brief) return [];
-
-  return [
-    {
-      id: "interview-brief:focus-areas",
-      title: "Interview Brief focus areas",
-      source: "interview-brief" as const,
-      text: brief.focusAreas,
-    },
-    {
-      id: "interview-brief:notes",
-      title: "Interview Brief notes",
-      source: "interview-brief" as const,
-      text: brief.notes,
-    },
-  ]
-    .filter((candidate) =>
-      isRelevantPersonalEvidence(
-        candidate.text,
-        questionText,
-        statusDomain
-      )
-    )
-    .map(({ text: _text, ...anchor }) => anchor);
 }
 
 function collectProfileMemoryAnchors(

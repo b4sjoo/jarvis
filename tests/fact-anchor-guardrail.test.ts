@@ -219,26 +219,19 @@ test("uses only relevant profile memory for a personal health-status answer", ()
   ]);
 });
 
-test("uses relevant Interview Brief notes for supported personal logistics", () => {
+test("requires an eligible fact source for personal logistics", () => {
   const decision = buildFactAnchorDecision({
     questionType: "unknown",
     questionText: "Are you authorized to work in the United States?",
-    interviewSessionBrief: {
-      targetCompany: "Example",
-      companyLocked: true,
-      interviewTypes: [],
-      focusAreas: "",
-      notes: "US work authorization is unrestricted and needs no sponsorship.",
-    },
     memoryContext: makeMemoryResult([]),
   });
 
   assert.equal(decision.requiredFor, "personal-logistics");
-  assert.equal(decision.state, "strong-anchor");
-  assert.equal(decision.selectedAnchorId, "interview-brief:notes");
-  assert.deepEqual(decision.selectedPersonalEvidenceSources, [
-    "interview-brief",
-  ]);
+  assert.equal(decision.state, "no-anchor");
+  assert.equal(decision.action, "ask-clarification");
+  assert.equal(decision.selectedAnchorId, undefined);
+  assert.deepEqual(decision.selectedPersonalEvidenceSources, []);
+  assert.match(decision.missingAnchorReason ?? "", /guidance only/i);
 });
 
 test("uses only paired Me context as confirmed personal evidence", () => {
@@ -284,7 +277,6 @@ test("blocks unsupported personal status even when project memory mentions the t
 
   const trace = formatFactAnchorDecisionForTrace(decision);
   assert.deepEqual(trace.personalEvidenceAllowedSources, [
-    "interview-brief",
     "profile-memory",
     "confirmed-me",
   ]);
