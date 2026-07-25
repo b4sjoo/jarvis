@@ -306,6 +306,53 @@ test("native speech telemetry never persists audio payloads", async () => {
   await manager.stop("test-complete");
 });
 
+test("audio segment dispositions use a dedicated payload-free stream", async () => {
+  const native = new ControlledRecordingInvoke();
+  const manager = new SessionRecordingManager(undefined, native.invoke);
+  await manager.start(START_OPTIONS);
+  await settle();
+
+  manager.recordAudioSegmentDisposition({
+    traceId: "voice-trace",
+    metadata: {
+      stage: "native-segment-settled",
+      audioSegmentDispositionKey: "capture-1:2:3",
+      audioSegmentCanonicalDisposition: "accepted",
+      audioSegmentCanonicalDispositionCommitted: true,
+      audioSegmentSettlementCommitted: true,
+      audioSegmentObservationCount: 2,
+      audioSegmentDuplicateObservationCount: 1,
+      audioBase64: "must-not-persist",
+    },
+  });
+  await settle();
+
+  const dispositionWrite = native.calls.find(
+    (call) =>
+      call.command === "write_meeting_session_recording_text" &&
+      stringArg(call, "relativePath") ===
+        "audio/segment-dispositions.jsonl"
+  );
+  assert.ok(dispositionWrite);
+  const payload = stringArg(dispositionWrite, "payload");
+  assert.match(payload, /capture-1:2:3/);
+  assert.match(payload, /\"accepted\"/);
+  assert.equal(payload.includes("must-not-persist"), false);
+
+  const timelinePayload = native.calls
+    .filter(
+      (call) =>
+        call.command === "write_meeting_session_recording_text" &&
+        stringArg(call, "relativePath") === "timeline.jsonl"
+    )
+    .map((call) => stringArg(call, "payload"))
+    .join("");
+  assert.match(timelinePayload, /audio-segment-disposition/);
+  assert.equal(timelinePayload.includes("must-not-persist"), false);
+
+  await manager.stop("test-complete");
+});
+
 test("audio input liveness is copied to a dedicated compact session stream", async () => {
   const native = new ControlledRecordingInvoke();
   const manager = new SessionRecordingManager(undefined, native.invoke);
@@ -856,7 +903,7 @@ test("compact trace summaries preserve task boundary and cross-domain evidence",
   );
   assert.ok(summaryWrite);
   const summary = parsePayload(summaryWrite);
-  assert.equal(summary.version, 22);
+  assert.equal(summary.version, 23);
   assert.equal(summary.taskRelation, "new-parent");
   assert.equal(summary.logicalQuestionUnitRevision, 3);
   assert.deepEqual(summary.logicalQuestionSourceTurnIds, ["turn_1", "turn_2"]);
@@ -965,6 +1012,13 @@ test("compact trace summaries preserve bounded STT request evidence", async () =
       sttTotalRequestDurationMs: 1_580,
       sttValidationDisposition: "accepted",
       sttValidationReason: "accepted",
+      audioSegmentCanonicalDisposition: "prompt-echo-retry-accepted",
+      audioSegmentDispositionReason:
+        "unbiased-retry-produced-accepted-transcript",
+      audioSegmentObservationCount: 2,
+      audioSegmentDuplicateObservationCount: 1,
+      audioSegmentCanonicalDispositionCommitted: true,
+      audioSegmentSettlementCommitted: true,
       sttFinalTranscriptChars: 72,
       sentenceBufferContinuationAuthorized: true,
       sentenceBufferContinuationReason: "matching-native-speech-start",
@@ -988,7 +1042,7 @@ test("compact trace summaries preserve bounded STT request evidence", async () =
   );
   assert.ok(summaryWrite);
   const summary = parsePayload(summaryWrite);
-  assert.equal(summary.version, 22);
+  assert.equal(summary.version, 23);
   assert.equal(
     (summary.timingsMs as Record<string, unknown>).stt,
     1_580
@@ -1039,6 +1093,13 @@ test("compact trace summaries preserve bounded STT request evidence", async () =
     initialRequestDurationMs: 820,
     retryRequestDurationMs: 760,
     totalRequestDurationMs: 1_580,
+  });
+  assert.deepEqual(summary.audioSegment, {
+    disposition: "prompt-echo-retry-accepted",
+    reason: "unbiased-retry-produced-accepted-transcript",
+    observationCount: 2,
+    duplicateObservationCount: 1,
+    canonicalCommitted: true,
   });
   assert.equal(summary.sentenceBufferContinuationAuthorized, true);
   assert.equal(
@@ -1104,7 +1165,7 @@ test("compact trace summaries preserve hard memory invalidation evidence", async
   );
   assert.ok(summaryWrite);
   const summary = parsePayload(summaryWrite);
-  assert.equal(summary.version, 22);
+  assert.equal(summary.version, 23);
   const memory = summary.memory as Record<string, unknown>;
   assert.equal(memory.authorityRevision, 2);
   assert.equal(memory.invalidationKind, "hard");
@@ -1336,7 +1397,7 @@ test("records compact current-question settlement and execution-plan evidence", 
   assert.equal(serializedPlan.includes("taskSnapshot"), false);
   assert.equal(serializedPlan.includes("variables"), false);
   const summary = parsePayload(summaryWrite);
-  assert.equal(summary.version, 22);
+  assert.equal(summary.version, 23);
   assert.equal(
     (
       summary.currentQuestionSettlement as Record<string, unknown>
@@ -1432,7 +1493,7 @@ test("records a current-question term correction without copying provider state"
     false
   );
   const summary = parsePayload(summaryWrite);
-  assert.equal(summary.version, 22);
+  assert.equal(summary.version, 23);
   assert.equal(
     summary.manualTermCorrectionId,
     "term_correction_hnsw"

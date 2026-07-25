@@ -45,6 +45,7 @@ export type NativeSpeechEventRejectionReason =
   | "capture-session-mismatch"
   | "capture-owner-mismatch"
   | "capture-generation-mismatch"
+  | "duplicate-sequence"
   | "non-monotonic-sequence";
 
 export type NativeSpeechEventAuthorization =
@@ -257,7 +258,14 @@ export function authorizeNativeSpeechDetectedEvent({
       event,
     };
   }
-  if (event.segmentSequence <= lastAcceptedSequence) {
+  if (event.segmentSequence === lastAcceptedSequence) {
+    return {
+      authorized: false,
+      reason: "duplicate-sequence",
+      event,
+    };
+  }
+  if (event.segmentSequence < lastAcceptedSequence) {
     return {
       authorized: false,
       reason: "non-monotonic-sequence",

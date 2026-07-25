@@ -46,7 +46,7 @@ import {
 import { serializeMeetingTraceExport } from "./trace.js";
 
 const SESSION_RECORDING_SCHEMA_VERSION = 1;
-const SESSION_TRACE_SUMMARY_SCHEMA_VERSION = 22;
+const SESSION_TRACE_SUMMARY_SCHEMA_VERSION = 23;
 const SESSION_TRACE_INDEX_SCHEMA_VERSION = 1;
 
 interface SessionRecordingStartOptions {
@@ -109,6 +109,7 @@ interface SessionRecordingEvent {
     | "capture-lifecycle"
     | "native-speech-event"
     | "native-audio-liveness"
+    | "audio-segment-disposition"
     | "runtime-reset"
     | "runtime-continued"
     | "error";
@@ -599,6 +600,13 @@ export interface SessionCompactTraceSummary {
     transcriptCharsPerSecond?: number;
     densitySuspicious?: boolean;
   };
+  audioSegment?: {
+    disposition?: string;
+    reason?: string;
+    observationCount?: number;
+    duplicateObservationCount?: number;
+    canonicalCommitted?: boolean;
+  };
   sttRequest?: {
     providerId?: string;
     configuredProviderId?: string;
@@ -790,6 +798,15 @@ interface SessionTraceKindAggregate {
     accepted: number;
     empty: number;
     rejected: number;
+  };
+  audioSegmentDisposition: {
+    accepted: number;
+    promptEchoRetryAccepted: number;
+    promptEchoRetryRejected: number;
+    sttError: number;
+    stale: number;
+    duplicate: number;
+    invalidSequence: number;
   };
 }
 
@@ -2222,6 +2239,41 @@ export class SessionRecordingManager {
     this.recordEvent("native-speech-event", safe);
   }
 
+  recordAudioSegmentDisposition({
+    traceId,
+    metadata,
+  }: {
+    traceId?: string;
+    metadata: Record<string, unknown>;
+  }) {
+    const session = this.getWritableSession({ traceId });
+    if (!session) return;
+    const { audioBase64: _audioBase64, base64Audio: _base64Audio, ...safe } =
+      metadata;
+    const artifactPath = "audio/segment-dispositions.jsonl";
+    const payload = {
+      version: 1,
+      recordedAt: Date.now(),
+      sessionId: session.sessionId,
+      traceId,
+      ...safe,
+    };
+    this.enqueue(session, () =>
+      this.writeText(
+        session,
+        artifactPath,
+        `${JSON.stringify(payload)}\n`,
+        true
+      )
+    );
+    this.recordEvent(
+      "audio-segment-disposition",
+      safe,
+      [artifactPath],
+      traceId
+    );
+  }
+
   recordAudioInputLiveness(metadata: Record<string, unknown>) {
     const session = this.getWritableSession();
     if (!session) return;
@@ -3555,6 +3607,7 @@ function buildCompactTraceSummary({
       ),
     },
     sttValidation: buildSttValidationTraceSummary(metadataSources),
+    audioSegment: buildAudioSegmentDispositionTraceSummary(metadataSources),
     sttRequest: buildSttRequestTraceSummary(metadataSources),
     providerId: readString(modelStep?.metadata?.providerId),
     mode: readString(modelStep?.metadata?.mode),
@@ -4674,6 +4727,67 @@ function aggregateTraceKind(
         (summary) => summary.sttValidation?.disposition === "rejected"
       ).length,
     },
+    audioSegmentDisposition: {
+      accepted: summaries.filter(
+        (summary) =>
+          summary.audioSegment?.disposition === "accepted"
+      ).length,
+      promptEchoRetryAccepted: summaries.filter(
+        (summary) =>
+          summary.audioSegment?.disposition ===
+          "prompt-echo-retry-accepted"
+      ).length,
+      promptEchoRetryRejected: summaries.filter(
+        (summary) =>
+          summary.audioSegment?.disposition ===
+          "prompt-echo-retry-rejected"
+      ).length,
+      sttError: summaries.filter(
+        (summary) =>
+          summary.audioSegment?.disposition === "stt-error"
+      ).length,
+      stale: summaries.filter(
+        (summary) => summary.audioSegment?.disposition === "stale"
+      ).length,
+      duplicate: summaries.filter(
+        (summary) =>
+          summary.audioSegment?.disposition === "duplicate"
+      ).length,
+      invalidSequence: summaries.filter(
+        (summary) =>
+          summary.audioSegment?.disposition === "invalid-sequence"
+      ).length,
+    },
+  };
+}
+
+function buildAudioSegmentDispositionTraceSummary(
+  metadataSources: Record<string, unknown>[]
+): SessionCompactTraceSummary["audioSegment"] {
+  const disposition = readFirstString(
+    metadataSources,
+    "audioSegmentCanonicalDisposition"
+  );
+  if (!disposition) return undefined;
+
+  return {
+    disposition,
+    reason: readFirstString(
+      metadataSources,
+      "audioSegmentDispositionReason"
+    ),
+    observationCount: readFirstNumberFromMetadata(
+      metadataSources,
+      "audioSegmentObservationCount"
+    ),
+    duplicateObservationCount: readFirstNumberFromMetadata(
+      metadataSources,
+      "audioSegmentDuplicateObservationCount"
+    ),
+    canonicalCommitted: readFirstBoolean(
+      metadataSources,
+      "audioSegmentCanonicalDispositionCommitted"
+    ),
   };
 }
 

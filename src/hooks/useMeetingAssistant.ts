@@ -53,6 +53,8 @@ import {
   MeetingAudioConfig,
   MeetingAudioStatus,
   AudioInputLivenessPresentation,
+  AudioSegmentDisposition,
+  AudioSegmentDispositionLedger,
   NativeAudioLivenessEvent,
   NativeAudioDebugFaultKind,
   NativeAudioDebugFaultResult,
@@ -152,6 +154,8 @@ import {
   authorizeNativeSpeechStartEvent,
   authorizeNativeAudioLivenessEvent,
   buildAudioInputLivenessTraceMetadata,
+  formatAudioSegmentObservationForTrace,
+  formatAudioSegmentSettlementForTrace,
   buildNativeAudioLifecycleTraceMetadata,
   buildNativeSpeechEventTraceMetadata,
   buildNativeSpeechStartTraceMetadata,
@@ -1771,6 +1775,9 @@ export function useMeetingAssistant() {
   const nativeCaptureSessionIdRef = useRef<string | null>(null);
   const nativeCaptureGenerationRef = useRef<number | null>(null);
   const lastNativeSegmentSequenceRef = useRef(0);
+  const audioSegmentDispositionLedgerRef = useRef(
+    new AudioSegmentDispositionLedger()
+  );
   const lastNativeSpeechStartCandidateSequenceRef = useRef(0);
   const latestNativeSpeechStartRef = useRef<{
     event: NativeSpeechStartEvent;
@@ -2987,6 +2994,80 @@ export function useMeetingAssistant() {
       ownsNativeCapture
     );
   }, []);
+
+  const observeNativeAudioSegment = useCallback(
+    (event: NativeSpeechDetectedEvent, traceId?: string) => {
+      const observation = audioSegmentDispositionLedgerRef.current.observe({
+        identity: {
+          captureSessionId: event.captureSessionId,
+          captureGeneration: event.captureGeneration,
+          segmentSequence: event.segmentSequence,
+        },
+        traceId,
+      });
+      const metadata = {
+        stage: "native-segment-observed",
+        ...buildNativeSpeechEventTraceMetadata(event),
+        nativeCaptureOwner: event.owner,
+        ...formatAudioSegmentObservationForTrace(observation),
+      };
+      if (observation.traceId) {
+        traceStoreRef.current.updateMetadata(
+          observation.traceId,
+          metadata
+        );
+      }
+      sessionRecordingManagerRef.current?.recordAudioSegmentDisposition({
+        traceId: observation.traceId,
+        metadata,
+      });
+      return observation;
+    },
+    []
+  );
+
+  const settleNativeAudioSegment = useCallback(
+    (
+      segment: QueuedSpeechSegment,
+      disposition: AudioSegmentDisposition,
+      reason: string
+    ) => {
+      if (
+        !segment.nativeCaptureSessionId ||
+        segment.nativeCaptureGeneration == null ||
+        segment.nativeSegmentSequence == null
+      ) {
+        return undefined;
+      }
+      const settlement =
+        audioSegmentDispositionLedgerRef.current.settle({
+          identity: {
+            captureSessionId: segment.nativeCaptureSessionId,
+            captureGeneration: segment.nativeCaptureGeneration,
+            segmentSequence: segment.nativeSegmentSequence,
+          },
+          traceId: segment.traceId,
+          disposition,
+          reason,
+        });
+      const metadata = {
+        stage: "native-segment-settled",
+        nativeCaptureSessionId: segment.nativeCaptureSessionId,
+        nativeCaptureGeneration: segment.nativeCaptureGeneration,
+        nativeSegmentSequence: segment.nativeSegmentSequence,
+        nativeCapturedAtMs: segment.nativeCapturedAtMs,
+        nativeSampleRate: segment.nativeSampleRate,
+        ...formatAudioSegmentSettlementForTrace(settlement),
+      };
+      traceStoreRef.current.updateMetadata(segment.traceId, metadata);
+      sessionRecordingManagerRef.current?.recordAudioSegmentDisposition({
+        traceId: segment.traceId,
+        metadata,
+      });
+      return settlement;
+    },
+    []
+  );
 
   const clearTraces = useCallback(() => {
     traceStoreRef.current.clear();
@@ -8869,6 +8950,11 @@ export function useMeetingAssistant() {
       const staleReason = "Audio segment belongs to a stale meeting session.";
 
       if (!isCurrentAudioSegment(segment)) {
+        settleNativeAudioSegment(
+          segment,
+          "stale",
+          "stale-before-processing"
+        );
         traceStoreRef.current.finishStep(
           traceId,
           segment.queueStepId,
@@ -8901,6 +8987,11 @@ export function useMeetingAssistant() {
       );
 
       if (!sttProvider) {
+        settleNativeAudioSegment(
+          segment,
+          "stt-error",
+          "stt-provider-missing"
+        );
         const coordinator = captureLifecycleCoordinatorRef.current!;
         const lifecycleOperation = coordinator.claim("stop");
         activeRef.current = false;
@@ -9374,6 +9465,11 @@ export function useMeetingAssistant() {
         }
 
         if (!isCurrentAudioSegment(segment)) {
+          settleNativeAudioSegment(
+            segment,
+            "stale",
+            "stale-after-stt"
+          );
           traceStoreRef.current.updateMetadata(traceId, {
             acceptedSpeechDisposition: "stale-session-dropped",
             transcriptAppendDisposition: "suppressed",
@@ -9395,6 +9491,22 @@ export function useMeetingAssistant() {
           traceStoreRef.current.finishTrace(traceId, "cancelled", staleReason);
           return;
         }
+
+        settleNativeAudioSegment(
+          segment,
+          recovery.retryTriggered
+            ? recovery.retryDisposition === "recovered"
+              ? "prompt-echo-retry-accepted"
+              : "prompt-echo-retry-rejected"
+            : "accepted",
+          recovery.retryTriggered
+            ? recovery.retryDisposition === "recovered"
+              ? "unbiased-retry-produced-accepted-transcript"
+              : "unbiased-retry-did-not-produce-accepted-transcript"
+            : validation.disposition === "accepted"
+              ? "initial-stt-attempt-accepted"
+              : `initial-stt-attempt-${validation.disposition}`
+        );
 
         if (!turn) {
           traceStoreRef.current.finishTrace(traceId, "success");
@@ -10085,6 +10197,11 @@ export function useMeetingAssistant() {
       } catch (error) {
         const stillCurrent = isCurrentAudioSegment(segment);
         const traceStatus = stillCurrent ? "error" : "cancelled";
+        settleNativeAudioSegment(
+          segment,
+          stillCurrent ? "stt-error" : "stale",
+          stillCurrent ? "stt-processing-error" : "stale-after-stt-error"
+        );
         traceStoreRef.current.finishStep(
           traceId,
           audioBlobStepId,
@@ -10135,6 +10252,7 @@ export function useMeetingAssistant() {
       scheduleSemanticTaxonomyShadow,
       scheduleAdvisor,
       selectedSttProvider,
+      settleNativeAudioSegment,
       stopNativeMeetingCapture,
       sttProvider,
     ]
@@ -10182,6 +10300,7 @@ export function useMeetingAssistant() {
         source: "system-audio",
         ...captureLifecycleCoordinatorRef.current?.getTraceMetadata(),
       });
+      observeNativeAudioSegment(nativeEvent, trace.id);
       const queueStepId = traceStoreRef.current.startStep(
         trace.id,
         "System audio speech queued",
@@ -10238,7 +10357,7 @@ export function useMeetingAssistant() {
           });
         });
     },
-    [processQueuedSpeechSegment]
+    [observeNativeAudioSegment, processQueuedSpeechSegment]
   );
 
   const enqueueMicrophoneSpeech = useCallback(
@@ -14894,6 +15013,61 @@ export function useMeetingAssistant() {
           activeCaptureGeneration: nativeCaptureGenerationRef.current,
         });
         if (!authorization.authorized) {
+          if (
+            authorization.event &&
+            (authorization.reason === "duplicate-sequence" ||
+              authorization.reason === "non-monotonic-sequence")
+          ) {
+            const observation = observeNativeAudioSegment(
+              authorization.event
+            );
+            if (
+              observation.observationDisposition === "first-observation"
+            ) {
+              const canonicalDisposition =
+                authorization.reason === "duplicate-sequence"
+                  ? "duplicate"
+                  : "invalid-sequence";
+              const settlement =
+                audioSegmentDispositionLedgerRef.current.settle({
+                  identity: observation.identity,
+                  traceId: observation.traceId,
+                  disposition: canonicalDisposition,
+                  reason:
+                    authorization.reason === "duplicate-sequence"
+                      ? "duplicate-sequence-without-retained-original"
+                      : "previously-unseen-out-of-order-sequence",
+                });
+              const settlementMetadata = {
+                stage: "native-segment-settled",
+                ...buildNativeSpeechEventTraceMetadata(
+                  authorization.event
+                ),
+                nativeCaptureOwner: authorization.event.owner,
+                ...formatAudioSegmentSettlementForTrace(settlement),
+              };
+              if (settlement.traceId) {
+                traceStoreRef.current.updateMetadata(
+                  settlement.traceId,
+                  settlementMetadata
+                );
+              }
+              sessionRecordingManagerRef.current?.recordAudioSegmentDisposition(
+                {
+                  traceId: settlement.traceId,
+                  metadata: settlementMetadata,
+                }
+              );
+            }
+            console.info(
+              `[${new Date().toISOString()}] [native-speech-event] observed`,
+              JSON.stringify({
+                reason: authorization.reason,
+                ...formatAudioSegmentObservationForTrace(observation),
+              })
+            );
+            return;
+          }
           const metadata = {
             authorized: false,
             reason: authorization.reason,
@@ -15161,6 +15335,7 @@ export function useMeetingAssistant() {
     cancelActiveAdvisorJob,
     invalidateAudioProcessingSession,
     maybeFinishNativeAudioFaultTrace,
+    observeNativeAudioSegment,
     startCapture,
   ]);
 

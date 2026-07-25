@@ -65,7 +65,17 @@ test("accepts current native segments once and in increasing order", () => {
   });
   assert.equal(duplicate.authorized, false);
   if (!duplicate.authorized) {
-    assert.equal(duplicate.reason, "non-monotonic-sequence");
+    assert.equal(duplicate.reason, "duplicate-sequence");
+  }
+
+  const outOfOrder = authorizeNativeSpeechDetectedEvent({
+    payload: { ...FIXTURE, segmentSequence: 6 },
+    activeCaptureSessionId: "capture-test",
+    lastAcceptedSequence: 7,
+  });
+  assert.equal(outOfOrder.authorized, false);
+  if (!outOfOrder.authorized) {
+    assert.equal(outOfOrder.reason, "non-monotonic-sequence");
   }
 });
 
