@@ -12,7 +12,12 @@ export type SttRequestLanguageMode =
   | "automatic"
   | "unknown";
 
-export type SttRequestPromptKind = "none" | "speech-bias" | "custom";
+export type SttRequestPromptKind =
+  | "none"
+  | "speech-bias"
+  | "continuation"
+  | "speech-bias+continuation"
+  | "custom";
 
 export interface SttRequestEvidence {
   providerId?: string;
@@ -56,11 +61,13 @@ export function buildSttRequestEvidence({
   provider,
   selectedProvider,
   prompt,
+  promptKind,
   terms = [],
 }: {
   provider: TYPE_PROVIDER | undefined;
   selectedProvider: SelectedProviderState;
   prompt?: string;
+  promptKind?: SttRequestPromptKind;
   terms?: string[];
 }): SttRequestEvidence {
   const selectedVariables = normalizeSelectedVariables(
@@ -94,7 +101,7 @@ export function buildSttRequestEvidence({
         ? "automatic"
         : "unknown",
     languageSource: language?.source ?? "not-observed",
-    promptKind: resolvePromptKind(prompt, terms),
+    promptKind: promptKind ?? resolvePromptKind(prompt, terms),
     promptChars: prompt?.length ?? 0,
     termCount: terms.length,
     confidenceCapability: "not-exposed-by-text-adapter",

@@ -83,6 +83,7 @@ import {
   PrimaryAskProjection,
   NativeSpeechDetectedEvent,
   NativeSpeechStartEvent,
+  SttContinuationPromptLease,
   WhiteboardUpdateSource,
   MeetingContextManager,
   MeetingSetupWarning,
@@ -224,6 +225,10 @@ import {
   decideAdvisorTurnIntent,
   decideSentenceCompletion,
   decideSentenceCompletionContinuation,
+  authorizeSttContinuationPromptLease,
+  composeSttPrompt,
+  consumeSttContinuationPromptLease,
+  createSttContinuationPromptLease,
   composeLogicalQuestionUnit,
   authorizeLogicalQuestionUnitLease,
   createCanonicalLogicalQuestionLineage,
@@ -1458,6 +1463,7 @@ interface PendingSentenceCompletion {
   continuationNativeCaptureGeneration?: number;
   continuationNativeCandidateSequence?: number;
   continuationSpeechStartedAtMs?: number;
+  continuationPromptLease?: SttContinuationPromptLease;
   fragmentTurnIds: string[];
   fragmentTraceIds: string[];
   fragmentSequences: number[];
@@ -7166,6 +7172,22 @@ export function useMeetingAssistant() {
       pending.continuationNativeCandidateSequence =
         event.candidateSegmentSequence;
       pending.continuationSpeechStartedAtMs = event.occurredAtMs;
+      pending.continuationPromptLease =
+        createSttContinuationPromptLease({
+          operationId: pending.operationId,
+          audioSessionId: pending.segment.sessionId,
+          speaker: pending.turn.speaker,
+          source: pending.segment.source,
+          sourceTurnId: pending.turn.id,
+          sourceTraceId: pending.segment.traceId,
+          sourceSegmentSequence: pending.segment.sequence,
+          sourceText: pending.turn.text,
+          nativeCaptureSessionId: event.captureSessionId,
+          nativeCaptureGeneration: event.captureGeneration,
+          candidateSegmentSequence: event.candidateSegmentSequence,
+          createdAt: evaluatedAtMs,
+          expiresAt: decision.deadlineAt,
+        }) ?? undefined;
       pending.timeoutId = window.setTimeout(() => {
         const current = pendingSentenceCompletionRef.current;
         if (!current || current.operationId !== pending.operationId) return;
@@ -7178,6 +7200,15 @@ export function useMeetingAssistant() {
         sentenceBufferContinuationDeadlineAt: decision.deadlineAt,
         sentenceBufferContinuationExtensionBudgetMs:
           decision.extensionBudgetMs,
+        sttContinuationLeaseId: pending.continuationPromptLease?.id,
+        sttContinuationSourceTurnId:
+          pending.continuationPromptLease?.sourceTurnId,
+        sttContinuationSourceTraceId:
+          pending.continuationPromptLease?.sourceTraceId,
+        sttContinuationSourceChars:
+          pending.continuationPromptLease?.sourceTail.length,
+        sttContinuationLeaseExpiresAt:
+          pending.continuationPromptLease?.expiresAt,
       });
       return true;
     },
@@ -8959,11 +8990,83 @@ export function useMeetingAssistant() {
           contextManagerRef.current.getState(),
           speechCorrectionsRef.current
         );
+        const pendingContinuation = pendingSentenceCompletionRef.current;
+        const continuationLease =
+          pendingContinuation?.continuationPromptLease;
+        const continuationAuthorization = continuationLease
+          ? authorizeSttContinuationPromptLease({
+              lease: continuationLease,
+              segment,
+              now: Date.now(),
+            })
+          : undefined;
+        const continuationLeaseForPrompt =
+          continuationAuthorization?.authorized
+            ? consumeSttContinuationPromptLease(
+                continuationAuthorization.lease,
+                Date.now()
+              )
+            : undefined;
+        if (
+          pendingContinuation &&
+          continuationLeaseForPrompt &&
+          pendingContinuation.operationId ===
+            continuationLeaseForPrompt.operationId
+        ) {
+          pendingContinuation.continuationPromptLease =
+            continuationLeaseForPrompt;
+        }
+        const composedSttPrompt = composeSttPrompt({
+          speechBiasPrompt: speechBias.prompt,
+          continuationLease: continuationLeaseForPrompt,
+        });
+        const continuationTraceMetadata = {
+          sttContinuationDisposition: continuationAuthorization
+            ? continuationAuthorization.authorized
+              ? "consumed"
+              : "rejected"
+            : "none",
+          sttContinuationReason:
+            continuationAuthorization?.reason ?? "no-lease",
+          sttContinuationLeaseId: continuationLease?.id,
+          sttContinuationOperationId: continuationLease?.operationId,
+          sttContinuationSourceTurnId: continuationLease?.sourceTurnId,
+          sttContinuationSourceTraceId: continuationLease?.sourceTraceId,
+          sttContinuationSourceChars:
+            continuationLease?.sourceTail.length ?? 0,
+          sttContinuationCandidateSequence:
+            continuationLease?.candidateSegmentSequence,
+          sttContinuationLeaseExpiresAt: continuationLease?.expiresAt,
+          sttContinuationLeaseConsumedAt:
+            continuationLeaseForPrompt?.consumedAt,
+          sttRequestPromptKind: composedSttPrompt.kind,
+          sttRequestPromptHash: composedSttPrompt.promptHash,
+          sttRequestPromptChars: composedSttPrompt.promptChars,
+          sttRequestSpeechBiasChars: composedSttPrompt.speechBiasChars,
+          sttRequestContinuationChars:
+            composedSttPrompt.continuationChars,
+          sttRequestPromptTruncated: composedSttPrompt.truncated,
+        };
+        if (continuationLease) {
+          traceStoreRef.current.recordInput(
+            traceId,
+            "stt continuity context",
+            continuationAuthorization?.authorized
+              ? "A bounded source-transcript continuation lease was consumed."
+              : "A bounded source-transcript continuation lease was rejected.",
+            continuationTraceMetadata
+          );
+          traceStoreRef.current.updateMetadata(
+            continuationLease.sourceTraceId,
+            continuationTraceMetadata
+          );
+        }
         const sttRequestEvidenceStartedAt = performance.now();
         const sttRequestEvidence = buildSttRequestEvidence({
           provider: sttProvider,
           selectedProvider: selectedSttProvider,
-          prompt: speechBias.prompt,
+          prompt: composedSttPrompt.prompt,
+          promptKind: composedSttPrompt.kind,
           terms: speechBias.terms.map((term) => term.term),
         });
         const sttRequestTraceMetadata = {
@@ -8971,6 +9074,7 @@ export function useMeetingAssistant() {
           sttRequestEvidenceDurationMs: Number(
             (performance.now() - sttRequestEvidenceStartedAt).toFixed(3)
           ),
+          ...continuationTraceMetadata,
         };
         traceStoreRef.current.recordInput(
           traceId,
@@ -9026,7 +9130,7 @@ export function useMeetingAssistant() {
             audio,
             provider: sttProvider,
             selectedProvider: selectedSttProvider,
-            prompt: speechBias.prompt,
+            prompt: composedSttPrompt.prompt,
             terms: speechBias.terms.map((term) => term.term),
             speaker: segment.speaker,
             source: segment.source,

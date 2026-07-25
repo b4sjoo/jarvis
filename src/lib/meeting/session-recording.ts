@@ -46,7 +46,7 @@ import {
 import { serializeMeetingTraceExport } from "./trace.js";
 
 const SESSION_RECORDING_SCHEMA_VERSION = 1;
-const SESSION_TRACE_SUMMARY_SCHEMA_VERSION = 20;
+const SESSION_TRACE_SUMMARY_SCHEMA_VERSION = 21;
 const SESSION_TRACE_INDEX_SCHEMA_VERSION = 1;
 
 interface SessionRecordingStartOptions {
@@ -609,9 +609,22 @@ export interface SessionCompactTraceSummary {
     languageSource?: string;
     promptKind?: string;
     promptChars?: number;
+    promptHash?: string;
+    speechBiasChars?: number;
+    continuationChars?: number;
+    promptTruncated?: boolean;
     termCount?: number;
     confidenceCapability?: string;
     evidenceDurationMs?: number;
+    continuationDisposition?: string;
+    continuationReason?: string;
+    continuationLeaseId?: string;
+    continuationOperationId?: string;
+    continuationSourceTurnId?: string;
+    continuationSourceTraceId?: string;
+    continuationCandidateSequence?: number;
+    continuationLeaseExpiresAt?: number;
+    continuationLeaseConsumedAt?: number;
   };
   providerId?: string;
   mode?: string;
@@ -4700,6 +4713,22 @@ function buildSttRequestTraceSummary(
       metadataSources,
       "sttRequestPromptChars"
     ),
+    promptHash: readFirstString(
+      metadataSources,
+      "sttRequestPromptHash"
+    ),
+    speechBiasChars: readFirstNumberFromMetadata(
+      metadataSources,
+      "sttRequestSpeechBiasChars"
+    ),
+    continuationChars: readFirstNumberFromMetadata(
+      metadataSources,
+      "sttRequestContinuationChars"
+    ),
+    promptTruncated: readFirstBoolean(
+      metadataSources,
+      "sttRequestPromptTruncated"
+    ),
     termCount: readFirstNumberFromMetadata(
       metadataSources,
       "sttRequestTermCount"
@@ -4711,6 +4740,42 @@ function buildSttRequestTraceSummary(
     evidenceDurationMs: readFirstNumberFromMetadata(
       metadataSources,
       "sttRequestEvidenceDurationMs"
+    ),
+    continuationDisposition: readFirstString(
+      metadataSources,
+      "sttContinuationDisposition"
+    ),
+    continuationReason: readFirstString(
+      metadataSources,
+      "sttContinuationReason"
+    ),
+    continuationLeaseId: readFirstString(
+      metadataSources,
+      "sttContinuationLeaseId"
+    ),
+    continuationOperationId: readFirstString(
+      metadataSources,
+      "sttContinuationOperationId"
+    ),
+    continuationSourceTurnId: readFirstString(
+      metadataSources,
+      "sttContinuationSourceTurnId"
+    ),
+    continuationSourceTraceId: readFirstString(
+      metadataSources,
+      "sttContinuationSourceTraceId"
+    ),
+    continuationCandidateSequence: readFirstNumberFromMetadata(
+      metadataSources,
+      "sttContinuationCandidateSequence"
+    ),
+    continuationLeaseExpiresAt: readFirstNumberFromMetadata(
+      metadataSources,
+      "sttContinuationLeaseExpiresAt"
+    ),
+    continuationLeaseConsumedAt: readFirstNumberFromMetadata(
+      metadataSources,
+      "sttContinuationLeaseConsumedAt"
     ),
   };
 }

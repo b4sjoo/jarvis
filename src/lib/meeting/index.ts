@@ -82,6 +82,7 @@ export * from "./trace";
 export * from "./transient-personal-status";
 export * from "./transcription.service";
 export * from "./stt-request-evidence";
+export * from "./stt-continuation-prompt";
 export * from "./transcript-fusion";
 export * from "./types";
 export * from "./whiteboard-artifact";
