@@ -18,6 +18,7 @@ export interface TranscribeMeetingAudioParams {
   source?: TranscriptTurn["source"];
   startedAt?: number;
   endedAt?: number;
+  signal?: AbortSignal;
 }
 
 export interface MeetingTranscriptionResult {
@@ -37,6 +38,7 @@ export async function transcribeMeetingAudio({
   source = "system-audio",
   startedAt,
   endedAt,
+  signal,
 }: TranscribeMeetingAudioParams): Promise<MeetingTranscriptionResult> {
   const timestamp = Date.now();
   const text = await fetchSTT({
@@ -45,6 +47,7 @@ export async function transcribeMeetingAudio({
     audio,
     prompt,
     terms,
+    signal,
   });
   const trimmedText = text.trim();
   const validation = validateTranscriptCandidate({

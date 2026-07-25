@@ -46,7 +46,7 @@ import {
 import { serializeMeetingTraceExport } from "./trace.js";
 
 const SESSION_RECORDING_SCHEMA_VERSION = 1;
-const SESSION_TRACE_SUMMARY_SCHEMA_VERSION = 24;
+const SESSION_TRACE_SUMMARY_SCHEMA_VERSION = 25;
 const SESSION_TRACE_INDEX_SCHEMA_VERSION = 1;
 
 interface SessionRecordingStartOptions {
@@ -664,6 +664,29 @@ export interface SessionCompactTraceSummary {
     initialRequestDurationMs?: number;
     retryRequestDurationMs?: number;
     totalRequestDurationMs?: number;
+    queueEnqueuedAt?: number;
+    queueDequeuedAt?: number;
+    queueAgeMs?: number;
+    queueDepthAtEnqueue?: number;
+    queueDepthAtDequeue?: number;
+    queueDequeueAuthorized?: boolean;
+    lifecycleEvent?: string;
+    lifecycleAttemptId?: string;
+    startedAt?: number;
+    endedAt?: number;
+    durationMs?: number;
+    timeoutMs?: number;
+    failureName?: string;
+    abortRequested?: boolean;
+    abortRequestedAt?: number;
+    abortObserved?: boolean;
+    abortObservedAt?: number;
+    abortReason?: string;
+    providerTimeout?: boolean;
+    providerSettledAfterAbortMs?: number;
+    orphanCompletion?: boolean;
+    orphanCompletedAt?: number;
+    orphanProviderOutcome?: string;
   };
   providerId?: string;
   mode?: string;
@@ -807,6 +830,7 @@ interface SessionTraceKindAggregate {
   modelDurationMs: SessionNumberAggregate;
   captureDurationMs: SessionNumberAggregate;
   sttDurationMs: SessionNumberAggregate;
+  sttQueueAgeMs: SessionNumberAggregate;
   advisorDurationMs: SessionNumberAggregate;
   sttValidation: {
     accepted: number;
@@ -829,6 +853,12 @@ interface SessionTraceKindAggregate {
     terminationDrain: number;
     continuousStop: number;
     overlap: number;
+  };
+  sttRequestLifecycle: {
+    abortRequested: number;
+    abortObserved: number;
+    providerTimeout: number;
+    orphanCompletion: number;
   };
 }
 
@@ -1504,6 +1534,34 @@ export class SessionRecordingManager {
       [path],
       trace.id
     );
+  }
+
+  refreshRecordedTrace(
+    trace: MeetingTrace,
+    trigger: MeetingTraceExportTrigger
+  ) {
+    const session = this.getWritableSession({
+      traceId: trace.id,
+      startedAt: trace.startedAt,
+    });
+    if (
+      !session ||
+      trace.status === "running" ||
+      !session.recordedTraceIds.has(trace.id) ||
+      !this.canRecordTrace(trace)
+    ) {
+      return;
+    }
+
+    const path = `traces/${sanitizeFilePart(trace.id)}.json`;
+    const payload = serializeMeetingTraceExport(trace, { trigger });
+    this.recordTraceSessionIndex({
+      traceId: trace.id,
+      source: "trace-lifecycle-refresh",
+      trace,
+    });
+    this.recordCompactTraceSummary(trace, trigger, path);
+    this.enqueue(session, () => this.writeText(session, path, payload));
   }
 
   recordTraceMetrics(payload: string) {
@@ -4737,6 +4795,9 @@ function aggregateTraceKind(
     sttDurationMs: aggregateNumbers(
       summaries.map((summary) => summary.timingsMs.stt)
     ),
+    sttQueueAgeMs: aggregateNumbers(
+      summaries.map((summary) => summary.sttRequest?.queueAgeMs)
+    ),
     advisorDurationMs: aggregateNumbers(
       summaries.map((summary) => summary.timingsMs.advisor)
     ),
@@ -4806,6 +4867,20 @@ function aggregateTraceKind(
       overlap: summaries.filter(
         (summary) =>
           (summary.nativeAudioBoundary?.overlapSampleCount ?? 0) > 0
+      ).length,
+    },
+    sttRequestLifecycle: {
+      abortRequested: summaries.filter(
+        (summary) => summary.sttRequest?.abortRequested === true
+      ).length,
+      abortObserved: summaries.filter(
+        (summary) => summary.sttRequest?.abortObserved === true
+      ).length,
+      providerTimeout: summaries.filter(
+        (summary) => summary.sttRequest?.providerTimeout === true
+      ).length,
+      orphanCompletion: summaries.filter(
+        (summary) => summary.sttRequest?.orphanCompletion === true
       ).length,
     },
   };
@@ -4948,13 +5023,23 @@ function buildSttRequestTraceSummary(
     metadataSources,
     "sttRequestPromptKind"
   );
+  const queueAgeMs = readFirstNumberFromMetadata(
+    metadataSources,
+    "sttQueueAgeMs"
+  );
+  const lifecycleEvent = readFirstString(
+    metadataSources,
+    "sttRequestLifecycleEvent"
+  );
 
   if (
     !providerId &&
     !configuredProviderId &&
     !modelId &&
     !language &&
-    !promptKind
+    !promptKind &&
+    queueAgeMs === undefined &&
+    !lifecycleEvent
   ) {
     return undefined;
   }
@@ -5109,6 +5194,92 @@ function buildSttRequestTraceSummary(
     totalRequestDurationMs: readFirstNumberFromMetadata(
       metadataSources,
       "sttTotalRequestDurationMs"
+    ),
+    queueEnqueuedAt: readFirstNumberFromMetadata(
+      metadataSources,
+      "sttQueueEnqueuedAt"
+    ),
+    queueDequeuedAt: readFirstNumberFromMetadata(
+      metadataSources,
+      "sttQueueDequeuedAt"
+    ),
+    queueAgeMs,
+    queueDepthAtEnqueue: readFirstNumberFromMetadata(
+      metadataSources,
+      "sttQueueDepthAtEnqueue"
+    ),
+    queueDepthAtDequeue: readFirstNumberFromMetadata(
+      metadataSources,
+      "sttQueueDepthAtDequeue"
+    ),
+    queueDequeueAuthorized: readFirstBoolean(
+      metadataSources,
+      "sttQueueDequeueAuthorized"
+    ),
+    lifecycleEvent,
+    lifecycleAttemptId: readFirstString(
+      metadataSources,
+      "sttRequestLifecycleAttemptId"
+    ),
+    startedAt: readFirstNumberFromMetadata(
+      metadataSources,
+      "sttRequestStartedAt"
+    ),
+    endedAt: readFirstNumberFromMetadata(
+      metadataSources,
+      "sttRequestEndedAt"
+    ),
+    durationMs: readFirstNumberFromMetadata(
+      metadataSources,
+      "sttRequestDurationMs"
+    ),
+    timeoutMs: readFirstNumberFromMetadata(
+      metadataSources,
+      "sttRequestTimeoutMs"
+    ),
+    failureName: readFirstString(
+      metadataSources,
+      "sttRequestFailureName"
+    ),
+    abortRequested: readFirstBoolean(
+      metadataSources,
+      "sttRequestAbortRequested"
+    ),
+    abortRequestedAt: readFirstNumberFromMetadata(
+      metadataSources,
+      "sttRequestAbortRequestedAt"
+    ),
+    abortObserved: readFirstBoolean(
+      metadataSources,
+      "sttRequestAbortObserved"
+    ),
+    abortObservedAt: readFirstNumberFromMetadata(
+      metadataSources,
+      "sttRequestAbortObservedAt"
+    ),
+    abortReason: readFirstString(
+      metadataSources,
+      "sttRequestAbortReason"
+    ),
+    providerTimeout: readFirstBoolean(
+      metadataSources,
+      "sttProviderTimeout"
+    ),
+    providerSettledAfterAbortMs: readFirstNumberFromMetadata(
+      metadataSources,
+      "sttProviderSettledAfterAbortMs"
+    ),
+    orphanCompletion: readFirstBoolean(
+      metadataSources,
+      "sttRequestOrphanCompletion"
+    ),
+    orphanCompletedAt: readFirstNumberFromMetadata(
+      metadataSources,
+      "sttRequestOrphanCompletedAt"
+    ),
+    orphanProviderOutcome: readFirstString(
+      metadataSources,
+      "sttRequestOrphanProviderOutcome"
     ),
   };
 }

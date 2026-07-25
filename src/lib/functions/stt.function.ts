@@ -17,6 +17,7 @@ export interface STTParams {
   audio: File | Blob;
   prompt?: string;
   terms?: string[];
+  signal?: AbortSignal;
 }
 
 /**
@@ -26,11 +27,19 @@ export async function fetchSTT(params: STTParams): Promise<string> {
   let warnings: string[] = [];
 
   try {
-    const { provider, selectedProvider, audio, prompt, terms = [] } = params;
+    const {
+      provider,
+      selectedProvider,
+      audio,
+      prompt,
+      terms = [],
+      signal,
+    } = params;
 
     if (!provider) throw new Error("Provider not provided");
     if (!selectedProvider) throw new Error("Selected provider not provided");
     if (!audio) throw new Error("Audio file is required");
+    throwIfAborted(signal);
 
     let curlJson: any;
     try {
@@ -99,6 +108,7 @@ export async function fetchSTT(params: STTParams): Promise<string> {
       const freshBlob = new Blob([await audio.arrayBuffer()], {
         type: audio.type,
       });
+      throwIfAborted(signal);
       form.append("file", freshBlob, "audio.wav");
       const headerKeys = Object.keys(headers).map((k) =>
         k.toUpperCase().replace(/[-_]/g, "")
@@ -148,9 +158,11 @@ export async function fetchSTT(params: STTParams): Promise<string> {
       body = new Blob([await audio.arrayBuffer()], {
         type: audio.type,
       });
+      throwIfAborted(signal);
     } else {
       // Google-style: JSON payload with base64
       allVariables.AUDIO = await blobToBase64(audio);
+      throwIfAborted(signal);
       const dataObj = curlJson.data ? { ...curlJson.data } : {};
       body = JSON.stringify(deepVariableReplacer(dataObj, allVariables));
     }
@@ -164,8 +176,12 @@ export async function fetchSTT(params: STTParams): Promise<string> {
         method: curlJson.method || "POST",
         headers: finalHeaders,
         body: curlJson.method === "GET" ? undefined : body,
+        signal,
       });
     } catch (e) {
+      if (signal?.aborted || isAbortLikeError(e)) {
+        throw createAbortError(signal, e);
+      }
       throw new Error(`Network error: ${e instanceof Error ? e.message : e}`);
     }
 
@@ -204,7 +220,37 @@ export async function fetchSTT(params: STTParams): Promise<string> {
     // Return transcription with any warnings
     return [...warnings, transcription].filter(Boolean).join("; ");
   } catch (err) {
+    if (isAbortLikeError(err)) {
+      throw err;
+    }
     const msg = err instanceof Error ? err.message : String(err);
     throw new Error(msg);
   }
+}
+
+function throwIfAborted(signal?: AbortSignal) {
+  if (signal?.aborted) {
+    throw createAbortError(signal);
+  }
+}
+
+function createAbortError(signal?: AbortSignal, cause?: unknown) {
+  if (isAbortLikeError(cause)) {
+    return cause;
+  }
+  const reason =
+    typeof signal?.reason === "string" && signal.reason.trim()
+      ? signal.reason
+      : "Speech-to-text request aborted.";
+  const error = new Error(reason);
+  error.name = "AbortError";
+  return error;
+}
+
+function isAbortLikeError(error: unknown) {
+  return Boolean(
+    error &&
+      typeof error === "object" &&
+      (error as { name?: unknown }).name === "AbortError"
+  );
 }

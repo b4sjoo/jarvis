@@ -903,7 +903,7 @@ test("compact trace summaries preserve task boundary and cross-domain evidence",
   );
   assert.ok(summaryWrite);
   const summary = parsePayload(summaryWrite);
-  assert.equal(summary.version, 24);
+  assert.equal(summary.version, 25);
   assert.equal(summary.taskRelation, "new-parent");
   assert.equal(summary.logicalQuestionUnitRevision, 3);
   assert.deepEqual(summary.logicalQuestionSourceTurnIds, ["turn_1", "turn_2"]);
@@ -985,6 +985,24 @@ test("compact trace summaries preserve bounded STT request evidence", async () =
       sttRequestTermCount: 7,
       sttRequestConfidenceCapability: "not-exposed-by-text-adapter",
       sttRequestEvidenceDurationMs: 0.37,
+      sttQueueEnqueuedAt: 1_000,
+      sttQueueDequeuedAt: 1_180,
+      sttQueueAgeMs: 180,
+      sttQueueDepthAtEnqueue: 3,
+      sttQueueDepthAtDequeue: 2,
+      sttQueueDequeueAuthorized: true,
+      sttRequestLifecycleEvent: "abort-observed",
+      sttRequestLifecycleAttemptId: "stt_attempt_2",
+      sttRequestStartedAt: 1_200,
+      sttRequestTimeoutMs: 30_000,
+      sttRequestDurationMs: 30_025,
+      sttRequestAbortRequested: true,
+      sttRequestAbortRequestedAt: 31_200,
+      sttRequestAbortObserved: true,
+      sttRequestAbortObservedAt: 31_225,
+      sttRequestAbortReason: "timeout",
+      sttProviderTimeout: true,
+      sttProviderSettledAfterAbortMs: 30_025,
       nativeSampleRate: 48_000,
       nativeSampleStart: 48_000,
       nativeSampleEnd: 1_488_000,
@@ -1054,7 +1072,7 @@ test("compact trace summaries preserve bounded STT request evidence", async () =
   );
   assert.ok(summaryWrite);
   const summary = parsePayload(summaryWrite);
-  assert.equal(summary.version, 24);
+  assert.equal(summary.version, 25);
   assert.equal(
     (summary.timingsMs as Record<string, unknown>).stt,
     1_580
@@ -1094,6 +1112,24 @@ test("compact trace summaries preserve bounded STT request evidence", async () =
     termCount: 7,
     confidenceCapability: "not-exposed-by-text-adapter",
     evidenceDurationMs: 0.37,
+    queueEnqueuedAt: 1_000,
+    queueDequeuedAt: 1_180,
+    queueAgeMs: 180,
+    queueDepthAtEnqueue: 3,
+    queueDepthAtDequeue: 2,
+    queueDequeueAuthorized: true,
+    lifecycleEvent: "abort-observed",
+    lifecycleAttemptId: "stt_attempt_2",
+    startedAt: 1_200,
+    durationMs: 30_025,
+    timeoutMs: 30_000,
+    abortRequested: true,
+    abortRequestedAt: 31_200,
+    abortObserved: true,
+    abortObservedAt: 31_225,
+    abortReason: "timeout",
+    providerTimeout: true,
+    providerSettledAfterAbortMs: 30_025,
     continuationDisposition: "consumed",
     continuationReason: "matching-continuation-lease",
     continuationLeaseId: "stt_continuation_1",
@@ -1139,6 +1175,58 @@ test("compact trace summaries preserve bounded STT request evidence", async () =
   assert.equal(summary.sentenceBufferContinuationWaitMs, 910);
   assert.equal(summary.sentenceBufferContinuationDeadlineAt, 4_000);
   assert.equal(summary.sentenceBufferAbsoluteDeadlineAt, 6_000);
+
+  await manager.stop("test-complete");
+});
+
+test("refreshes compact STT lifecycle evidence after a late provider abort", async () => {
+  const native = new ControlledRecordingInvoke();
+  const manager = new SessionRecordingManager(undefined, native.invoke);
+  await manager.start(START_OPTIONS);
+  await settle();
+
+  const trace = buildCompletedTrace("late_stt_abort_trace", Date.now(), {
+    sttQueueAgeMs: 90,
+    sttRequestLifecycleEvent: "abort-requested",
+    sttRequestLifecycleAttemptId: "stt_attempt_late",
+    sttRequestAbortRequested: true,
+    sttRequestAbortReason: "timeout",
+    sttProviderTimeout: true,
+  });
+  manager.recordTrace(trace, "manual");
+  await settle();
+
+  trace.metadata = {
+    ...trace.metadata,
+    sttRequestLifecycleEvent: "abort-observed",
+    sttRequestAbortObserved: true,
+    sttRequestAbortObservedAt: Date.now(),
+    sttProviderSettledAfterAbortMs: 30_040,
+  };
+  manager.refreshRecordedTrace(trace, "manual");
+  await settle();
+
+  const summaryWrites = native.calls.filter(
+    (call) =>
+      call.command === "write_meeting_session_recording_text" &&
+      stringArg(call, "relativePath") ===
+        "traces/late_stt_abort_trace/summary.json"
+  );
+  assert.ok(summaryWrites.length >= 2);
+  const summary = parsePayload(summaryWrites[summaryWrites.length - 1]!);
+  assert.equal(summary.version, 25);
+  assert.equal(
+    (summary.sttRequest as Record<string, unknown>).abortRequested,
+    true
+  );
+  assert.equal(
+    (summary.sttRequest as Record<string, unknown>).abortObserved,
+    true
+  );
+  assert.equal(
+    (summary.sttRequest as Record<string, unknown>).providerTimeout,
+    true
+  );
 
   await manager.stop("test-complete");
 });
@@ -1191,7 +1279,7 @@ test("compact trace summaries preserve hard memory invalidation evidence", async
   );
   assert.ok(summaryWrite);
   const summary = parsePayload(summaryWrite);
-  assert.equal(summary.version, 24);
+  assert.equal(summary.version, 25);
   const memory = summary.memory as Record<string, unknown>;
   assert.equal(memory.authorityRevision, 2);
   assert.equal(memory.invalidationKind, "hard");
@@ -1423,7 +1511,7 @@ test("records compact current-question settlement and execution-plan evidence", 
   assert.equal(serializedPlan.includes("taskSnapshot"), false);
   assert.equal(serializedPlan.includes("variables"), false);
   const summary = parsePayload(summaryWrite);
-  assert.equal(summary.version, 24);
+  assert.equal(summary.version, 25);
   assert.equal(
     (
       summary.currentQuestionSettlement as Record<string, unknown>
@@ -1519,7 +1607,7 @@ test("records a current-question term correction without copying provider state"
     false
   );
   const summary = parsePayload(summaryWrite);
-  assert.equal(summary.version, 24);
+  assert.equal(summary.version, 25);
   assert.equal(
     summary.manualTermCorrectionId,
     "term_correction_hnsw"

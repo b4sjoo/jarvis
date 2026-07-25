@@ -117,6 +117,7 @@ import {
   TaskTopicDomain,
   TraceHumanEvaluation,
   TranscriptTurn,
+  type MeetingTranscriptionResult,
   base64WavToBlob,
   buildAmazonLeadershipPrincipleMemoryHint,
   buildAnswerSufficiencySemanticText,
@@ -308,6 +309,11 @@ import {
   shouldIncludeTurnInAdvisorPrompt,
   shouldSuppressDuplicateSystemAudioTurn,
   transcribeMeetingAudio,
+  AudioSegmentQueueTracker,
+  createCancellableSttRequest,
+  formatSttRequestLifecycleEventForTrace,
+  type CancellableSttRequest,
+  type SttRequestAbortReason,
   buildSttRequestEvidence,
   formatSttRequestEvidenceForTrace,
   formatSttPromptEchoRecoveryForTrace,
@@ -1474,6 +1480,10 @@ interface QueuedSpeechSegment {
   sessionId: string;
   sequence: number;
   queuedAt: number;
+  queueDepthAtEnqueue: number;
+  dequeuedAt?: number;
+  queueDepthAtDequeue?: number;
+  queueDequeueAuthorized?: boolean;
   startedAt?: number;
   endedAt?: number;
   speaker: TranscriptTurn["speaker"];
@@ -1845,6 +1855,21 @@ export function useMeetingAssistant() {
   );
   const systemAudioQueueTailRef = useRef<Promise<void>>(Promise.resolve());
   const microphoneAudioQueueTailRef = useRef<Promise<void>>(Promise.resolve());
+  const systemAudioQueueTrackerRef = useRef(new AudioSegmentQueueTracker());
+  const microphoneAudioQueueTrackerRef = useRef(
+    new AudioSegmentQueueTracker()
+  );
+  const activeSttRequestsRef = useRef(
+    new Map<
+      string,
+      {
+        request: CancellableSttRequest<MeetingTranscriptionResult>;
+        traceId: string;
+        audioSessionId: string;
+        audioSegmentSeq: number;
+      }
+    >()
+  );
   const pendingConfirmationRef = useRef<PendingConfirmation | null>(null);
   const pendingSentenceCompletionRef =
     useRef<PendingSentenceCompletion | null>(null);
@@ -1855,6 +1880,27 @@ export function useMeetingAssistant() {
   const speechDetectedHandlerRef = useRef<
     ((event: NativeSpeechDetectedEvent) => void) | undefined
   >(undefined);
+
+  const abortActiveSttRequests = useCallback(
+    (reason: SttRequestAbortReason) => {
+      let requested = 0;
+      for (const activeRequest of activeSttRequestsRef.current.values()) {
+        if (activeRequest.request.cancel(reason)) {
+          requested += 1;
+        }
+      }
+      if (requested > 0) {
+        sessionRecordingManagerRef.current?.recordCaptureLifecycle({
+          stage: "stt-active-requests-abort-requested",
+          reason,
+          requestCount: requested,
+          occurredAt: Date.now(),
+        });
+      }
+      return requested;
+    },
+    []
+  );
 
   const maybeFinishNativeAudioFaultTrace = useCallback(
     (faultInjectionId: string) => {
@@ -1948,6 +1994,10 @@ export function useMeetingAssistant() {
         window.setTimeout(resolve, 0);
       });
       const startedAt = Date.now();
+      const queueDepthAtDrainStart =
+        systemAudioQueueTrackerRef.current.getDepth();
+      const activeRequestCountAtDrainStart =
+        activeSttRequestsRef.current.size;
       let timeoutId: number | undefined;
       let timedOut = false;
       try {
@@ -1971,6 +2021,12 @@ export function useMeetingAssistant() {
         durationMs: Date.now() - startedAt,
         timeoutMs: NATIVE_AUDIO_TAIL_DRAIN_QUEUE_TIMEOUT_MS,
         timedOut,
+        queueDepthAtDrainStart,
+        queueDepthAtDrainEnd:
+          systemAudioQueueTrackerRef.current.getDepth(),
+        activeRequestCountAtDrainStart,
+        activeRequestCountAtDrainEnd:
+          activeSttRequestsRef.current.size,
       };
       sessionRecordingManagerRef.current?.recordCaptureLifecycle(metadata);
       return metadata;
@@ -2686,8 +2742,11 @@ export function useMeetingAssistant() {
         activeRef.current ? "audio_session" : "audio_session_inactive"
       );
       audioSegmentSeqRef.current = 0;
+      abortActiveSttRequests("runtime-boundary");
       systemAudioQueueTailRef.current = Promise.resolve();
       microphoneAudioQueueTailRef.current = Promise.resolve();
+      systemAudioQueueTrackerRef.current.reset(audioSessionIdRef.current);
+      microphoneAudioQueueTrackerRef.current.reset(audioSessionIdRef.current);
       clearPendingConfirmationForRuntimeReset(reason);
       clearPendingSentenceCompletionForRuntimeReset(reason);
 
@@ -2758,6 +2817,7 @@ export function useMeetingAssistant() {
       };
     },
     [
+      abortActiveSttRequests,
       advanceRuntimeEpoch,
       cancelActiveAdvisorJob,
       clearPendingConfirmationForRuntimeReset,
@@ -3035,21 +3095,26 @@ export function useMeetingAssistant() {
   }, []);
 
   const startAudioProcessingSession = useCallback(() => {
+    abortActiveSttRequests("audio-session-replaced");
     const sessionId = createMeetingId("audio_session");
     audioSessionIdRef.current = sessionId;
     audioSegmentSeqRef.current = 0;
     rolloverTranscriptByFamilyRef.current.clear();
     systemAudioQueueTailRef.current = Promise.resolve();
     microphoneAudioQueueTailRef.current = Promise.resolve();
+    systemAudioQueueTrackerRef.current.reset(sessionId);
+    microphoneAudioQueueTrackerRef.current.reset(sessionId);
     clearPendingConfirmation("session-restarted");
     clearPendingSentenceCompletionForRuntimeReset("session-restarted");
     return sessionId;
   }, [
+    abortActiveSttRequests,
     clearPendingConfirmation,
     clearPendingSentenceCompletionForRuntimeReset,
   ]);
 
   const invalidateAudioProcessingSession = useCallback(() => {
+    abortActiveSttRequests("audio-session-invalidated");
     audioSessionIdRef.current = createMeetingId("audio_session_inactive");
     audioSegmentSeqRef.current = 0;
     nativeCaptureSessionIdRef.current = null;
@@ -3062,9 +3127,12 @@ export function useMeetingAssistant() {
     lastNativeAudioLivenessSequenceRef.current = 0;
     systemAudioQueueTailRef.current = Promise.resolve();
     microphoneAudioQueueTailRef.current = Promise.resolve();
+    systemAudioQueueTrackerRef.current.reset(audioSessionIdRef.current);
+    microphoneAudioQueueTrackerRef.current.reset(audioSessionIdRef.current);
     clearPendingConfirmation("session-invalidated");
     clearPendingSentenceCompletionForRuntimeReset("session-invalidated");
   }, [
+    abortActiveSttRequests,
     clearPendingConfirmation,
     clearPendingSentenceCompletionForRuntimeReset,
   ]);
@@ -9041,6 +9109,17 @@ export function useMeetingAssistant() {
       let audioBlobStepId: string | undefined;
       let sttStepId: string | undefined;
       const staleReason = "Audio segment belongs to a stale meeting session.";
+      const dequeuedAt = segment.dequeuedAt ?? Date.now();
+      const queueAgeMs = Math.max(0, dequeuedAt - segment.queuedAt);
+      const queueMetadata = {
+        sttQueueEnqueuedAt: segment.queuedAt,
+        sttQueueDequeuedAt: dequeuedAt,
+        sttQueueAgeMs: queueAgeMs,
+        sttQueueDepthAtEnqueue: segment.queueDepthAtEnqueue,
+        sttQueueDepthAtDequeue: segment.queueDepthAtDequeue,
+        sttQueueDequeueAuthorized: segment.queueDequeueAuthorized,
+      };
+      traceStoreRef.current.updateMetadata(traceId, queueMetadata);
 
       if (!isCurrentAudioSegment(segment)) {
         settleNativeAudioSegment(
@@ -9059,7 +9138,8 @@ export function useMeetingAssistant() {
             speaker: segment.speaker,
             source: segment.source,
             currentAudioSessionId: audioSessionIdRef.current,
-            queueWaitMs: Date.now() - segment.queuedAt,
+            queueWaitMs: queueAgeMs,
+            ...queueMetadata,
           }
         );
         traceStoreRef.current.finishTrace(traceId, "cancelled", staleReason);
@@ -9075,7 +9155,8 @@ export function useMeetingAssistant() {
           audioSessionId: segment.sessionId,
           speaker: segment.speaker,
           source: segment.source,
-          queueWaitMs: Date.now() - segment.queuedAt,
+          queueWaitMs: queueAgeMs,
+          ...queueMetadata,
         }
       );
 
@@ -9365,22 +9446,78 @@ export function useMeetingAssistant() {
               }
             );
             const attemptStartedAt = performance.now();
-            const result = await withTimeout(
-              transcribeMeetingAudio({
-                audio,
-                provider: sttProvider,
-                selectedProvider: selectedSttProvider,
-                prompt: attemptPrompt,
-                validationPrompt: composedSttPrompt.prompt,
-                terms: attemptTerms,
-                speaker: segment.speaker,
-                source: segment.source,
-                startedAt: segment.startedAt,
-                endedAt: segment.endedAt,
-              }),
-              STT_TIMEOUT_MS,
-              "Speech-to-text timed out. Jarvis is still listening."
-            );
+            const request = createCancellableSttRequest({
+              requestId: attempt.id,
+              timeoutMs: STT_TIMEOUT_MS,
+              execute: (signal) =>
+                transcribeMeetingAudio({
+                  audio,
+                  provider: sttProvider,
+                  selectedProvider: selectedSttProvider,
+                  prompt: attemptPrompt,
+                  validationPrompt: composedSttPrompt.prompt,
+                  terms: attemptTerms,
+                  speaker: segment.speaker,
+                  source: segment.source,
+                  startedAt: segment.startedAt,
+                  endedAt: segment.endedAt,
+                  signal,
+                }),
+              onEvent: (event) => {
+                const lifecycleMetadata = {
+                  ...formatSttRequestLifecycleEventForTrace(event),
+                  ...attemptMetadata,
+                  ...queueMetadata,
+                  audioSessionId: segment.sessionId,
+                  audioSegmentSeq: segment.sequence,
+                  speaker: segment.speaker,
+                  source: segment.source,
+                };
+                traceStoreRef.current.updateMetadata(
+                  traceId,
+                  lifecycleMetadata
+                );
+                sessionRecordingManagerRef.current?.recordCaptureLifecycle({
+                  stage: "stt-request-lifecycle",
+                  traceId,
+                  ...lifecycleMetadata,
+                });
+                if (
+                  event.type === "abort-observed" ||
+                  event.type === "orphan-completion"
+                ) {
+                  const completedTrace = traceStoreRef.current
+                    .getTraces()
+                    .find(
+                      (candidate) =>
+                        candidate.id === traceId &&
+                        candidate.status !== "running"
+                    );
+                  if (completedTrace) {
+                    sessionRecordingManagerRef.current?.refreshRecordedTrace(
+                      completedTrace,
+                      getAutoExportTrigger(completedTrace)
+                    );
+                  }
+                }
+              },
+            });
+            activeSttRequestsRef.current.set(attempt.id, {
+              request,
+              traceId,
+              audioSessionId: segment.sessionId,
+              audioSegmentSeq: segment.sequence,
+            });
+            let result: MeetingTranscriptionResult;
+            try {
+              result = await request.promise;
+            } finally {
+              const activeRequest =
+                activeSttRequestsRef.current.get(attempt.id);
+              if (activeRequest?.request === request) {
+                activeSttRequestsRef.current.delete(attempt.id);
+              }
+            }
             const attemptDurationMs = Number(
               (performance.now() - attemptStartedAt).toFixed(3)
             );
@@ -10466,6 +10603,8 @@ export function useMeetingAssistant() {
         });
       }
       const queuedAt = Date.now();
+      const queueDepthAtEnqueue =
+        systemAudioQueueTrackerRef.current.enqueue(sessionId);
       const nativeMetadata = buildNativeSpeechEventTraceMetadata(nativeEvent);
       const sttEvaluationCapture =
         sttEvaluationCaptureManagerRef.current?.getState();
@@ -10474,6 +10613,8 @@ export function useMeetingAssistant() {
         ...nativeMetadata,
         audioSegmentSeq: sequence,
         audioSessionId: sessionId,
+        sttQueueEnqueuedAt: queuedAt,
+        sttQueueDepthAtEnqueue: queueDepthAtEnqueue,
         speaker: "them",
         source: "system-audio",
         ...captureLifecycleCoordinatorRef.current?.getTraceMetadata(),
@@ -10485,6 +10626,8 @@ export function useMeetingAssistant() {
         {
           audioSegmentSeq: sequence,
           audioSessionId: sessionId,
+          sttQueueEnqueuedAt: queuedAt,
+          sttQueueDepthAtEnqueue: queueDepthAtEnqueue,
           speaker: "them",
           source: "system-audio",
           nativeCaptureSessionId: nativeEvent.captureSessionId,
@@ -10498,6 +10641,7 @@ export function useMeetingAssistant() {
         sessionId,
         sequence,
         queuedAt,
+        queueDepthAtEnqueue,
         speaker: "them",
         source: "system-audio",
         nativeCaptureSessionId: nativeEvent.captureSessionId,
@@ -10524,7 +10668,23 @@ export function useMeetingAssistant() {
 
       systemAudioQueueTailRef.current = systemAudioQueueTailRef.current
         .catch(() => undefined)
-        .then(() => processQueuedSpeechSegment(segment))
+        .then(() => {
+          const dequeuedAt = Date.now();
+          const queueSnapshot =
+            systemAudioQueueTrackerRef.current.dequeue(sessionId);
+          segment.dequeuedAt = dequeuedAt;
+          segment.queueDepthAtDequeue =
+            queueSnapshot.queueDepthAtDequeue;
+          segment.queueDequeueAuthorized = queueSnapshot.authorized;
+          traceStoreRef.current.updateMetadata(trace.id, {
+            sttQueueDequeuedAt: dequeuedAt,
+            sttQueueAgeMs: Math.max(0, dequeuedAt - queuedAt),
+            sttQueueDepthAtDequeue:
+              queueSnapshot.queueDepthAtDequeue,
+            sttQueueDequeueAuthorized: queueSnapshot.authorized,
+          });
+          return processQueuedSpeechSegment(segment);
+        })
         .catch((error) => {
           console.warn("Failed to process queued system audio segment", error);
         })
@@ -10556,12 +10716,16 @@ export function useMeetingAssistant() {
       const sequence = audioSegmentSeqRef.current + 1;
       audioSegmentSeqRef.current = sequence;
       const queuedAt = Date.now();
+      const queueDepthAtEnqueue =
+        microphoneAudioQueueTrackerRef.current.enqueue(sessionId);
 
       const trace = traceStoreRef.current.startTrace("voice", {
         audioBytes: audioBlob.size,
         audioType: audioBlob.type,
         audioSegmentSeq: sequence,
         audioSessionId: sessionId,
+        sttQueueEnqueuedAt: queuedAt,
+        sttQueueDepthAtEnqueue: queueDepthAtEnqueue,
         speaker: "me",
         source: "microphone",
         ...captureLifecycleCoordinatorRef.current?.getTraceMetadata(),
@@ -10572,6 +10736,8 @@ export function useMeetingAssistant() {
         {
           audioSegmentSeq: sequence,
           audioSessionId: sessionId,
+          sttQueueEnqueuedAt: queuedAt,
+          sttQueueDepthAtEnqueue: queueDepthAtEnqueue,
           speaker: "me",
           source: "microphone",
           startedAt,
@@ -10586,6 +10752,7 @@ export function useMeetingAssistant() {
         sessionId,
         sequence,
         queuedAt,
+        queueDepthAtEnqueue,
         startedAt,
         endedAt,
         speaker: "me",
@@ -10596,7 +10763,23 @@ export function useMeetingAssistant() {
 
       microphoneAudioQueueTailRef.current = microphoneAudioQueueTailRef.current
         .catch(() => undefined)
-        .then(() => processQueuedSpeechSegment(segment))
+        .then(() => {
+          const dequeuedAt = Date.now();
+          const queueSnapshot =
+            microphoneAudioQueueTrackerRef.current.dequeue(sessionId);
+          segment.dequeuedAt = dequeuedAt;
+          segment.queueDepthAtDequeue =
+            queueSnapshot.queueDepthAtDequeue;
+          segment.queueDequeueAuthorized = queueSnapshot.authorized;
+          traceStoreRef.current.updateMetadata(trace.id, {
+            sttQueueDequeuedAt: dequeuedAt,
+            sttQueueAgeMs: Math.max(0, dequeuedAt - queuedAt),
+            sttQueueDepthAtDequeue:
+              queueSnapshot.queueDepthAtDequeue,
+            sttQueueDequeueAuthorized: queueSnapshot.authorized,
+          });
+          return processQueuedSpeechSegment(segment);
+        })
         .catch((error) => {
           console.warn("Failed to process queued microphone segment", error);
         });
