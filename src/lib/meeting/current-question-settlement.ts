@@ -3,6 +3,7 @@ import type {
   InterviewerEvidenceMode,
   InterviewerIntentAction,
   InterviewerIntentRelation,
+  InterviewerSpeechAct,
 } from "./interviewer-intent.js";
 import {
   isParentCanonicalQuestionType,
@@ -145,6 +146,41 @@ export interface CurrentQuestionSettlementDecision {
   manualCorrectionRevision: number;
   rejectedProposals: CurrentQuestionSettlementProposalRejection[];
   reasons: string[];
+}
+
+export type CurrentQuestionTerminalNoAnswerDisposition =
+  | "terminal-no-answer"
+  | "operation-not-authorized"
+  | "proposal-stale-or-invalid"
+  | "substantive-source-protected"
+  | "semantic-contract-mismatch"
+  | "confidence-below-threshold";
+
+export interface CurrentQuestionTerminalNoAnswerDecision {
+  logicalQuestionUnitId: string;
+  revision: number;
+  sessionId: string;
+  runtimeEpoch: number;
+  sourceHash: string;
+  sourceTurnIds: string[];
+  operationId?: string;
+  disposition: CurrentQuestionTerminalNoAnswerDisposition;
+  terminalNoAnswerAuthorized: boolean;
+  speechAct?: InterviewerSpeechAct;
+  action?: InterviewerIntentAction;
+  confidence: number;
+  settledAt: number;
+  reasons: string[];
+}
+
+export interface CurrentQuestionTerminalNoAnswerCandidate {
+  proposal: CurrentQuestionSettlementProposal;
+  speechAct: InterviewerSpeechAct;
+  normalizedQuestion: string;
+  primaryAskSpanCount: number;
+  budgetSlot: "ambient" | "substantive";
+  sourceOwnedSubstantive: boolean;
+  operationId?: string;
 }
 
 export type CurrentQuestionSettlementDisposition =
@@ -449,6 +485,143 @@ export function settleCurrentQuestion(input: {
   };
 }
 
+export function settleCurrentQuestionTerminalNoAnswer(input: {
+  currentQuestion: ProvisionalCurrentQuestion;
+  candidate?: CurrentQuestionTerminalNoAnswerCandidate;
+  operationAuthorized: boolean;
+  operationAuthorizationReason?: string;
+  activeParentId?: string;
+  activeParentRevision?: number;
+  manualCorrectionRevision: number;
+  minConfidence?: number;
+  now?: number;
+}): CurrentQuestionTerminalNoAnswerDecision {
+  const confidence = clampConfidence(
+    input.candidate?.proposal.confidence
+  );
+  const base = {
+    logicalQuestionUnitId:
+      input.currentQuestion.logicalQuestionUnitId,
+    revision: input.currentQuestion.revision,
+    sessionId: input.currentQuestion.sessionId,
+    runtimeEpoch: input.currentQuestion.runtimeEpoch,
+    sourceHash: input.currentQuestion.sourceHash,
+    sourceTurnIds: [...input.currentQuestion.sourceTurnIds],
+    operationId: input.candidate?.operationId,
+    speechAct: input.candidate?.speechAct,
+    action: input.candidate?.proposal.action,
+    confidence,
+    settledAt: input.now ?? Date.now(),
+  };
+  const reject = (
+    disposition: Exclude<
+      CurrentQuestionTerminalNoAnswerDisposition,
+      "terminal-no-answer"
+    >,
+    reasons: string[]
+  ): CurrentQuestionTerminalNoAnswerDecision => ({
+    ...base,
+    disposition,
+    terminalNoAnswerAuthorized: false,
+    reasons,
+  });
+
+  if (!input.operationAuthorized) {
+    return reject("operation-not-authorized", [
+      input.operationAuthorizationReason ??
+        "operation-lease-not-authorized",
+    ]);
+  }
+  if (!input.candidate) {
+    return reject("semantic-contract-mismatch", [
+      "terminal-no-answer-candidate-missing",
+    ]);
+  }
+
+  const validation = validateSettlementProposal({
+    proposal: input.candidate.proposal,
+    expectedSource: "llm-type-repair",
+    currentQuestion: input.currentQuestion,
+    activeParentId: input.activeParentId,
+    activeParentRevision: input.activeParentRevision,
+    manualCorrectionRevision: input.manualCorrectionRevision,
+    policy: {
+      runtimeMutationAuthorized: false,
+      questionComplete: false,
+      commitParent: false,
+    },
+  });
+  if (!validation.proposal) {
+    return reject("proposal-stale-or-invalid", [
+      ...(validation.rejection?.reasons ?? [
+        "terminal-no-answer-proposal-invalid",
+      ]),
+    ]);
+  }
+  if (
+    input.candidate.budgetSlot !== "ambient" ||
+    input.candidate.sourceOwnedSubstantive
+  ) {
+    return reject("substantive-source-protected", [
+      `budget-slot:${input.candidate.budgetSlot}`,
+      input.candidate.sourceOwnedSubstantive
+        ? "source-owned-substantive"
+        : "source-owned-substantive:false",
+    ]);
+  }
+
+  const proposal = validation.proposal;
+  const semanticContractMatches =
+    proposal.action === "ignore" &&
+    proposal.actionEvidenceAuthorized === true &&
+    (input.candidate.speechAct === "acknowledgement" ||
+      input.candidate.speechAct === "logistics") &&
+    (normalizeCanonicalQuestionType(proposal.questionType) ??
+      "unknown") === "unknown" &&
+    (proposal.relation ?? "none") === "none" &&
+    (proposal.evidenceMode ?? "unknown") === "unknown" &&
+    input.candidate.normalizedQuestion.trim().length === 0 &&
+    input.candidate.primaryAskSpanCount === 0;
+  if (!semanticContractMatches) {
+    return reject("semantic-contract-mismatch", [
+      `speech-act:${input.candidate.speechAct}`,
+      `question-type:${
+        normalizeCanonicalQuestionType(proposal.questionType) ??
+        "unknown"
+      }`,
+      `relation:${proposal.relation ?? "none"}`,
+      `evidence-mode:${proposal.evidenceMode ?? "unknown"}`,
+      `action:${proposal.action ?? "missing"}`,
+      `normalized-question-chars:${input.candidate.normalizedQuestion.trim().length}`,
+      `primary-ask-spans:${input.candidate.primaryAskSpanCount}`,
+    ]);
+  }
+
+  const minConfidence = clampConfidence(
+    input.minConfidence ?? 0.98
+  );
+  if (confidence < minConfidence) {
+    return reject("confidence-below-threshold", [
+      `confidence:${confidence}`,
+      `minimum:${minConfidence}`,
+    ]);
+  }
+
+  return {
+    ...base,
+    disposition: "terminal-no-answer",
+    terminalNoAnswerAuthorized: true,
+    reasons: [
+      "operation-lease-authorized",
+      "ambient-budget-slot",
+      "source-owned-substantive:false",
+      `speech-act:${input.candidate.speechAct}`,
+      "action:ignore",
+      `confidence:${confidence}`,
+    ],
+  };
+}
+
 export function formatProvisionalCurrentQuestionForTrace(
   question: ProvisionalCurrentQuestion | undefined
 ): Record<string, unknown> {
@@ -527,6 +700,38 @@ export function formatCurrentQuestionSettlementForTrace(
     currentQuestionSettlementRejectedProposals:
       decision.rejectedProposals,
     currentQuestionSettlementReasons: decision.reasons,
+  };
+}
+
+export function formatCurrentQuestionTerminalNoAnswerForTrace(
+  decision: CurrentQuestionTerminalNoAnswerDecision | undefined
+): Record<string, unknown> {
+  if (!decision) return {};
+  return {
+    currentQuestionTerminalNoAnswerDisposition:
+      decision.disposition,
+    currentQuestionTerminalNoAnswerAuthorized:
+      decision.terminalNoAnswerAuthorized,
+    currentQuestionTerminalNoAnswerUnitId:
+      decision.logicalQuestionUnitId,
+    currentQuestionTerminalNoAnswerRevision: decision.revision,
+    currentQuestionTerminalNoAnswerSessionId: decision.sessionId,
+    currentQuestionTerminalNoAnswerRuntimeEpoch:
+      decision.runtimeEpoch,
+    currentQuestionTerminalNoAnswerSourceHash:
+      decision.sourceHash,
+    currentQuestionTerminalNoAnswerSourceTurnIds:
+      decision.sourceTurnIds,
+    currentQuestionTerminalNoAnswerOperationId:
+      decision.operationId,
+    currentQuestionTerminalNoAnswerSpeechAct:
+      decision.speechAct,
+    currentQuestionTerminalNoAnswerAction: decision.action,
+    currentQuestionTerminalNoAnswerConfidence:
+      decision.confidence,
+    currentQuestionTerminalNoAnswerSettledAt:
+      decision.settledAt,
+    currentQuestionTerminalNoAnswerReasons: decision.reasons,
   };
 }
 

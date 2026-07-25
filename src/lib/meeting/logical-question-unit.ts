@@ -9,6 +9,7 @@ import {
   composePrimaryAskProjection,
   formatPrimaryAskProjectionForTrace,
   isPrimaryAskCompletion,
+  projectPrimaryAsk,
   type PrimaryAskProjection,
 } from "./primary-ask-projection.js";
 
@@ -62,6 +63,12 @@ export interface ComposeLogicalQuestionUnitInput {
   now?: number;
   sectionHint?: PendingInterviewSectionHint;
   primaryAskProjection?: PrimaryAskProjection;
+  terminalNoAnswerBoundary?: {
+    logicalQuestionUnitId: string;
+    settledRevision: number;
+    settledSourceTurnIds: string[];
+    currentSourceOwnedSubstantive: boolean;
+  };
 }
 
 export interface LogicalQuestionUnitTraceMetadata {
@@ -74,6 +81,14 @@ export interface LogicalQuestionUnitTraceMetadata {
   logicalQuestionCompositionReasons?: string[];
   logicalQuestionBoundaryReason?: string;
   logicalQuestionTruncated?: boolean;
+  logicalQuestionTerminalNoAnswerBoundaryApplied?: boolean;
+}
+
+interface LogicalQuestionCompositionBoundary {
+  extend: boolean;
+  reason: string;
+  reasons: string[];
+  carryPostTerminalSetup?: boolean;
 }
 
 export function composeLogicalQuestionUnit(
@@ -87,6 +102,13 @@ export function composeLogicalQuestionUnit(
   const referentialSources = boundary.reasons.includes("referential-completion")
     ? collectReferentialSources(input, previous)
     : [];
+  const postTerminalSetupSources =
+    boundary.carryPostTerminalSetup && previous
+      ? collectPostTerminalSetupSources(
+          previous,
+          input.terminalNoAnswerBoundary?.settledSourceTurnIds ?? []
+        )
+      : [];
   const sources = shouldExtend
     ? dedupeSources([
         ...previous!.sources,
@@ -95,7 +117,10 @@ export function composeLogicalQuestionUnit(
       ]).slice(
         -(LOGICAL_QUESTION_MAX_PREVIOUS_TURNS + 1)
       )
-    : [currentSource];
+    : dedupeSources([
+        ...postTerminalSetupSources,
+        currentSource,
+      ]).slice(-(LOGICAL_QUESTION_MAX_PREVIOUS_TURNS + 1));
   const relatedSourceTurnIds = (input.relatedSourceTurnIds ?? []).filter(
     (turnId) => !sources.some((source) => source.turnId === turnId)
   );
@@ -154,6 +179,11 @@ export function formatLogicalQuestionUnitForTrace(
     logicalQuestionCompositionReasons: unit.compositionReasons,
     logicalQuestionBoundaryReason: unit.boundaryReason,
     logicalQuestionTruncated: unit.truncated,
+    logicalQuestionTerminalNoAnswerBoundaryApplied:
+      unit.boundaryReason ===
+        "terminal-no-answer-substantive-boundary" ||
+      unit.boundaryReason ===
+        "terminal-no-answer-ambient-continuation",
     sectionHintId: unit.sectionHint?.id,
     sectionHintType: unit.sectionHint?.questionType,
     sectionHintDisposition: unit.sectionHint?.disposition,
@@ -165,7 +195,7 @@ export function formatLogicalQuestionUnitForTrace(
 function resolveCompositionBoundary(
   input: ComposeLogicalQuestionUnitInput,
   previous: LogicalQuestionUnit | undefined
-) {
+): LogicalQuestionCompositionBoundary {
   if (!previous) {
     return boundary(false, "no-previous-logical-question");
   }
@@ -193,6 +223,29 @@ function resolveCompositionBoundary(
   }
   if (hasSubstantiveMeBoundary(input.interveningTurns ?? [])) {
     return boundary(false, "substantive-me-answer-boundary");
+  }
+  if (
+    input.terminalNoAnswerBoundary?.logicalQuestionUnitId ===
+      previous.id &&
+    input.terminalNoAnswerBoundary.settledRevision <=
+      previous.revision
+  ) {
+    if (
+      input.terminalNoAnswerBoundary.currentSourceOwnedSubstantive &&
+      hasSourceOwnedSubstantivePrimaryAsk(input.primaryAskProjection)
+    ) {
+      return {
+        ...boundary(
+          false,
+          "terminal-no-answer-substantive-boundary"
+        ),
+        carryPostTerminalSetup: true,
+      };
+    }
+    return boundary(
+      true,
+      "terminal-no-answer-ambient-continuation"
+    );
   }
 
   const intent = input.intentDecision;
@@ -255,7 +308,10 @@ function resolveCompositionBoundary(
   };
 }
 
-function boundary(extend: boolean, reason: string) {
+function boundary(
+  extend: boolean,
+  reason: string
+): LogicalQuestionCompositionBoundary {
   return { extend, reason, reasons: [reason] };
 }
 
@@ -277,6 +333,35 @@ function isBoundedContinuationText(text: string) {
       text
     )
   );
+}
+
+function hasSourceOwnedSubstantivePrimaryAsk(
+  projection: PrimaryAskProjection | undefined
+) {
+  return Boolean(
+    projection?.normalizedPrimaryAsk?.trim() &&
+      (projection.disposition === "answer-primary-ask" ||
+        projection.disposition === "revise-existing-lqu")
+  );
+}
+
+function collectPostTerminalSetupSources(
+  previous: LogicalQuestionUnit,
+  settledSourceTurnIds: string[]
+) {
+  const settled = new Set(settledSourceTurnIds);
+  return previous.sources.filter((source) => {
+    if (settled.has(source.turnId)) return false;
+    const projection = projectPrimaryAsk({
+      turnId: source.turnId,
+      text: source.text,
+    });
+    return (
+      projection.disposition === "append-setup" &&
+      projection.speechAct !== "logistics" &&
+      projection.speechAct !== "acknowledgement"
+    );
+  });
 }
 
 function isReferentialCompletion(

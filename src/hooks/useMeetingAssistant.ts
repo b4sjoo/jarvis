@@ -77,6 +77,7 @@ import {
   ManualQuestionTypeCorrection,
   ManualQuestionTypeCorrectionSource,
   CurrentQuestionSettlementDecision,
+  CurrentQuestionTerminalNoAnswerDecision,
   LogicalQuestionUnit,
   LogicalQuestionUnitLease,
   PrimaryAskProjection,
@@ -206,6 +207,7 @@ import {
   formatCrossDomainParentTransitionForTrace,
   formatRuntimeCommitAuthorizationForTrace,
   formatCurrentQuestionSettlementForTrace,
+  formatCurrentQuestionTerminalNoAnswerForTrace,
   formatSettledAdvisorExecutionPlanForTrace,
   formatSourceOwnedTransitionForTrace,
   formatTaskBoundaryCandidateForTrace,
@@ -213,6 +215,7 @@ import {
   rebaseRuntimeCommitTokenAfterOwnedParentMutation,
   resolveCurrentQuestionSettlementDisposition,
   settleCurrentQuestion,
+  settleCurrentQuestionTerminalNoAnswer,
   expireTaskBoundaryCandidate,
   canQuestionTypeDecisionOverrideParent,
   decideAdvisorTurnIntent,
@@ -272,6 +275,7 @@ import {
   compareTaxonomyAdjudicationToLocalBaseline,
   createTaxonomyAdjudicationLease,
   decideTaxonomyAdjudicationBudget,
+  decideTaxonomyAdjudicationBudgetForSource,
   decideTaxonomyAdjudicationEligibility,
   formatTaxonomyAdjudicationModelRouteForTrace,
   formatTaxonomyAdjudicationCircuitForTrace,
@@ -1541,6 +1545,9 @@ export function useMeetingAssistant() {
   const currentQuestionSettlementRef = useRef<
     CurrentQuestionSettlementDecision | undefined
   >(undefined);
+  const currentQuestionTerminalNoAnswerRef = useRef<
+    CurrentQuestionTerminalNoAnswerDecision | undefined
+  >(undefined);
   const settledAdvisorExecutionPlanRef = useRef<
     SettledAdvisorExecutionPlan | undefined
   >(undefined);
@@ -2012,6 +2019,7 @@ export function useMeetingAssistant() {
     cancelledAdvisorTurnIdsRef.current.clear();
     taskBoundaryCandidateRef.current = undefined;
     currentQuestionSettlementRef.current = undefined;
+    currentQuestionTerminalNoAnswerRef.current = undefined;
     settledAdvisorExecutionPlanRef.current = undefined;
     manualCorrectionOperationCoordinatorRef.current.reset();
     return {
@@ -7857,8 +7865,141 @@ export function useMeetingAssistant() {
           ) {
             finalDisposition = "invalid-output";
           }
+          const terminalNoAnswerCurrentQuestion =
+            createProvisionalCurrentQuestion({
+              logicalQuestionUnit,
+              sourceKind: "voice",
+            });
+          const terminalNoAnswerDecision = parsedValue
+            ? settleCurrentQuestionTerminalNoAnswer({
+                currentQuestion: terminalNoAnswerCurrentQuestion,
+                candidate: {
+                  operationId: settlement.job.lease.operationId,
+                  proposal: {
+                    source: "llm-type-repair",
+                    sessionId: settlement.job.lease.sessionId,
+                    runtimeEpoch: settlement.job.lease.runtimeEpoch,
+                    logicalQuestionUnitId:
+                      settlement.job.lease.logicalQuestionUnitId,
+                    revision:
+                      settlement.job.lease.logicalQuestionUnitRevision,
+                    sourceHash:
+                      terminalNoAnswerCurrentQuestion.sourceHash,
+                    questionType: parsedValue.questionType,
+                    relation: parsedValue.relation,
+                    action: parsedValue.action,
+                    evidenceMode: parsedValue.evidenceMode,
+                    confidence: parsedValue.confidence,
+                    typeEvidenceAuthorized: false,
+                    relationEvidenceAuthorized: false,
+                    actionEvidenceAuthorized: true,
+                    expectedParentId:
+                      settlement.job.lease.expectedParentId,
+                    expectedParentRevision:
+                      settlement.job.lease.expectedParentRevision,
+                    reasons: [
+                      `speech-act:${parsedValue.speechAct}`,
+                      `budget-slot:${settlement.budget.slot}`,
+                    ],
+                  },
+                  speechAct: parsedValue.speechAct,
+                  normalizedQuestion:
+                    parsedValue.normalizedQuestion,
+                  primaryAskSpanCount:
+                    parsedValue.primaryAskSpans.length,
+                  budgetSlot: settlement.budget.slot,
+                  sourceOwnedSubstantive:
+                    adjudicationBudget.sourceOwnedSubstantive,
+                },
+                operationAuthorized:
+                  finalDisposition === "completed" &&
+                  authorization.authorized,
+                operationAuthorizationReason:
+                  finalDisposition === "completed"
+                    ? authorization.authorized
+                      ? "operation-lease-authorized"
+                      : authorization.reason
+                    : finalDisposition,
+                activeParentId: latestParent?.id,
+                activeParentRevision: latestParent?.revisions,
+                manualCorrectionRevision:
+                  manualCorrectionRevisionRef.current,
+              })
+            : undefined;
+          const terminalNoAnswerRuntimeApplied = Boolean(
+            terminalNoAnswerDecision?.terminalNoAnswerAuthorized &&
+              arrivalStage !== "post-visible-answer"
+          );
+          const activeAdvisorJob = activeAdvisorJobRef.current;
+          const terminalNoAnswerAdvisorMatched = Boolean(
+            activeAdvisorJob?.logicalQuestionUnit?.id ===
+              logicalQuestionUnit.id &&
+              activeAdvisorJob.logicalQuestionUnit.revision ===
+                logicalQuestionUnit.revision
+          );
+          const terminalNoAnswerAdvisorCancelled = Boolean(
+            terminalNoAnswerRuntimeApplied &&
+              terminalNoAnswerAdvisorMatched
+          );
+          const memoryRetrievalStarted =
+            trace?.steps.some(
+              (step) => step.name === "Memory retrieval"
+            ) ?? false;
+          const advisorModelStarted =
+            trace?.steps.some(
+              (step) => step.name === "Advisor model response"
+            ) ?? false;
+          if (
+            terminalNoAnswerRuntimeApplied &&
+            terminalNoAnswerDecision
+          ) {
+            currentQuestionTerminalNoAnswerRef.current =
+              terminalNoAnswerDecision;
+          }
+          const terminalNoAnswerMetadata = {
+            ...formatCurrentQuestionTerminalNoAnswerForTrace(
+              terminalNoAnswerDecision
+            ),
+            taxonomyAdjudicationTerminalNoAnswerApplied:
+              terminalNoAnswerRuntimeApplied,
+            interviewerIntentLlmTerminalNoAnswerApplied:
+              terminalNoAnswerRuntimeApplied,
+            taxonomyAdjudicationTerminalNoAnswerApplyReason:
+              terminalNoAnswerRuntimeApplied
+                ? "authorized-before-visible-answer"
+                : terminalNoAnswerDecision
+                    ?.terminalNoAnswerAuthorized
+                  ? "visible-answer-already-started"
+                  : terminalNoAnswerDecision?.disposition ??
+                    "candidate-unavailable",
+            interviewerIntentLlmTerminalNoAnswerApplyReason:
+              terminalNoAnswerRuntimeApplied
+                ? "authorized-before-visible-answer"
+                : terminalNoAnswerDecision
+                    ?.terminalNoAnswerAuthorized
+                  ? "visible-answer-already-started"
+                  : terminalNoAnswerDecision?.disposition ??
+                    "candidate-unavailable",
+            taxonomyAdjudicationTerminalNoAnswerAdvisorMatched:
+              terminalNoAnswerAdvisorMatched,
+            taxonomyAdjudicationTerminalNoAnswerAdvisorCancelled:
+              terminalNoAnswerAdvisorCancelled,
+            interviewerIntentLlmTerminalNoAnswerAdvisorCancelled:
+              terminalNoAnswerAdvisorCancelled,
+            taxonomyAdjudicationTerminalNoAnswerMemoryStarted:
+              memoryRetrievalStarted,
+            taxonomyAdjudicationTerminalNoAnswerModelStarted:
+              advisorModelStarted,
+            taxonomyAdjudicationTerminalNoAnswerAvoidedMemoryOpportunity:
+              terminalNoAnswerRuntimeApplied &&
+              !memoryRetrievalStarted,
+            taxonomyAdjudicationTerminalNoAnswerAvoidedModelOpportunity:
+              terminalNoAnswerRuntimeApplied &&
+              !advisorModelStarted,
+          };
           const metadata = {
             ...scheduledMetadata,
+            ...terminalNoAnswerMetadata,
             taxonomyAdjudicationBudgetStartsBefore:
               settlement.budget.startsBefore,
             taxonomyAdjudicationBudgetStartsAfter:
@@ -8041,10 +8182,23 @@ export function useMeetingAssistant() {
             taskId: scheduledTaskId,
             metadata,
           });
+          if (terminalNoAnswerAdvisorCancelled) {
+            cancelActiveAdvisorJob(
+              "terminal-no-answer-settlement",
+              "cancelled-by-runtime-boundary"
+            );
+            setState((previous) => ({
+              ...previous,
+              status: activeRef.current
+                ? "listening"
+                : previous.status,
+              partialSuggestion: "",
+            }));
+          }
         },
       });
     },
-    []
+    [cancelActiveAdvisorJob]
   );
 
   const scheduleSemanticTaxonomyShadow = useCallback(
@@ -8389,6 +8543,31 @@ export function useMeetingAssistant() {
       if (activeTriggerTurnId && activeTriggerTurnId !== turn.id) {
         cancelledAdvisorTurnIds.add(activeTriggerTurnId);
       }
+      const terminalNoAnswer =
+        currentQuestionTerminalNoAnswerRef.current;
+      const effectivePrimaryAskProjection =
+        primaryAskProjection ??
+        projectPrimaryAsk({ turnId: turn.id, text: turn.text });
+      const currentAdjudicationBudget =
+        decideTaxonomyAdjudicationBudgetForSource({
+          primaryAskProjection: effectivePrimaryAskProjection,
+          latestSourceText: turn.text,
+          turnGateAction: intentDecision.action,
+        });
+      const terminalNoAnswerBoundary =
+        terminalNoAnswer &&
+        terminalNoAnswer.sessionId === contextState.sessionId &&
+        terminalNoAnswer.runtimeEpoch === runtimeEpochRef.current
+          ? {
+              logicalQuestionUnitId:
+                terminalNoAnswer.logicalQuestionUnitId,
+              settledRevision: terminalNoAnswer.revision,
+              settledSourceTurnIds:
+                terminalNoAnswer.sourceTurnIds,
+              currentSourceOwnedSubstantive:
+                currentAdjudicationBudget.sourceOwnedSubstantive,
+            }
+          : undefined;
       const logicalQuestionUnit = composeLogicalQuestionUnit({
         currentTurn: turn,
         sessionId: contextState.sessionId,
@@ -8410,10 +8589,16 @@ export function useMeetingAssistant() {
         ),
         explicitTaskSwitch,
         sectionHint,
-        primaryAskProjection:
-          primaryAskProjection ??
-          projectPrimaryAsk({ turnId: turn.id, text: turn.text }),
+        primaryAskProjection: effectivePrimaryAskProjection,
+        terminalNoAnswerBoundary,
       });
+      if (
+        terminalNoAnswer &&
+        logicalQuestionUnit.id !==
+          terminalNoAnswer.logicalQuestionUnitId
+      ) {
+        currentQuestionTerminalNoAnswerRef.current = undefined;
+      }
       logicalQuestionUnitRef.current = logicalQuestionUnit;
       traceStoreRef.current.updateMetadata(
         traceId,

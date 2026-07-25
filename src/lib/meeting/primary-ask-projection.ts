@@ -512,6 +512,9 @@ function classifyNonAskSpeechAct(text: string): PrimaryAskSpeechAct {
     isExactLowValueAcknowledgement(normalized) ||
     /^(?:ah|eh|er|hmm|mm|mhm|uh|um|yeah|yep|yes|no|ok|okay|right|sure|cool|great|nice|perfect|thanks|thank you)[.!]?$/i.test(
       normalized
+    ) ||
+    /^(?:ok(?:ay)?|right|sure|cool|great|nice|perfect)(?:,\s*|\s+)(?:ok(?:ay)?|right|sure|cool|great|nice|perfect|looks good(?: to me)?|that looks good(?: to me)?|this looks good(?: to me)?)[.!]?$/i.test(
+      normalized
     )
   ) {
     return "acknowledgement";

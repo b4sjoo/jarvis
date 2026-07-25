@@ -5,9 +5,11 @@ import {
   decideCurrentQuestionMutationAuthority,
   formatCurrentQuestionMutationAuthorityForTrace,
   formatCurrentQuestionSettlementForTrace,
+  formatCurrentQuestionTerminalNoAnswerForTrace,
   formatProvisionalCurrentQuestionForTrace,
   resolveCurrentQuestionSettlementDisposition,
   settleCurrentQuestion,
+  settleCurrentQuestionTerminalNoAnswer,
   type CurrentQuestionSettlementProposal,
 } from "../src/lib/meeting/current-question-settlement.js";
 import type { LogicalQuestionUnit } from "../src/lib/meeting/logical-question-unit.js";
@@ -451,6 +453,164 @@ test("deterministic ignore action suppresses a response without discarding the q
   assert.equal(decision.action, "ignore");
   assert.ok(
     decision.reasons.includes("response-not-authorized:ignore")
+  );
+});
+
+test("authorizes only an exact high-confidence ambient no-answer result", () => {
+  const currentQuestion = createProvisionalCurrentQuestion({
+    logicalQuestionUnit: logicalQuestion(
+      2,
+      "That looks good to me."
+    ),
+    sourceKind: "voice",
+  });
+  const decision = settleCurrentQuestionTerminalNoAnswer({
+    currentQuestion,
+    operationAuthorized: true,
+    manualCorrectionRevision: 0,
+    candidate: {
+      operationId: "operation-a",
+      proposal: proposal("llm-type-repair", {
+        sourceHash: currentQuestion.sourceHash,
+        questionType: "unknown",
+        relation: "none",
+        action: "ignore",
+        evidenceMode: "unknown",
+        confidence: 0.99,
+      }),
+      speechAct: "acknowledgement",
+      normalizedQuestion: "",
+      primaryAskSpanCount: 0,
+      budgetSlot: "ambient",
+      sourceOwnedSubstantive: false,
+    },
+    now: 100,
+  });
+  const trace = formatCurrentQuestionTerminalNoAnswerForTrace(
+    decision
+  );
+
+  assert.equal(decision.terminalNoAnswerAuthorized, true);
+  assert.equal(decision.disposition, "terminal-no-answer");
+  assert.equal(decision.settledAt, 100);
+  assert.equal(
+    trace.currentQuestionTerminalNoAnswerAuthorized,
+    true
+  );
+  assert.equal(
+    trace.currentQuestionTerminalNoAnswerUnitId,
+    "logical-question-a"
+  );
+});
+
+test("fails open for stale, low-confidence, or substantive no-answer proposals", () => {
+  const currentQuestion = createProvisionalCurrentQuestion({
+    logicalQuestionUnit: logicalQuestion(
+      2,
+      "Can you explain reciprocal rank fusion?"
+    ),
+    sourceKind: "voice",
+  });
+  const candidate = {
+    operationId: "operation-a",
+    proposal: proposal("llm-type-repair", {
+      sourceHash: currentQuestion.sourceHash,
+      questionType: "unknown",
+      relation: "none" as const,
+      action: "ignore" as const,
+      evidenceMode: "unknown" as const,
+      confidence: 0.99,
+    }),
+    speechAct: "logistics" as const,
+    normalizedQuestion: "",
+    primaryAskSpanCount: 0,
+    budgetSlot: "ambient" as const,
+    sourceOwnedSubstantive: false,
+  };
+
+  const stale = settleCurrentQuestionTerminalNoAnswer({
+    currentQuestion,
+    operationAuthorized: true,
+    manualCorrectionRevision: 0,
+    candidate: {
+      ...candidate,
+      proposal: {
+        ...candidate.proposal,
+        revision: 1,
+      },
+    },
+  });
+  assert.equal(stale.terminalNoAnswerAuthorized, false);
+  assert.equal(stale.disposition, "proposal-stale-or-invalid");
+
+  const lowConfidence = settleCurrentQuestionTerminalNoAnswer({
+    currentQuestion,
+    operationAuthorized: true,
+    manualCorrectionRevision: 0,
+    candidate: {
+      ...candidate,
+      proposal: {
+        ...candidate.proposal,
+        confidence: 0.8,
+      },
+    },
+  });
+  assert.equal(lowConfidence.terminalNoAnswerAuthorized, false);
+  assert.equal(
+    lowConfidence.disposition,
+    "confidence-below-threshold"
+  );
+
+  const substantive = settleCurrentQuestionTerminalNoAnswer({
+    currentQuestion,
+    operationAuthorized: true,
+    manualCorrectionRevision: 0,
+    candidate: {
+      ...candidate,
+      budgetSlot: "substantive",
+      sourceOwnedSubstantive: true,
+    },
+  });
+  assert.equal(substantive.terminalNoAnswerAuthorized, false);
+  assert.equal(
+    substantive.disposition,
+    "substantive-source-protected"
+  );
+});
+
+test("keeps a source-owned add-on ask out of terminal no-answer settlement", () => {
+  const currentQuestion = createProvisionalCurrentQuestion({
+    logicalQuestionUnit: logicalQuestion(
+      2,
+      "Thanks, and can you explain RAG?"
+    ),
+    sourceKind: "voice",
+  });
+  const decision = settleCurrentQuestionTerminalNoAnswer({
+    currentQuestion,
+    operationAuthorized: true,
+    manualCorrectionRevision: 0,
+    candidate: {
+      proposal: proposal("llm-type-repair", {
+        sourceHash: currentQuestion.sourceHash,
+        questionType: "unknown",
+        relation: "none",
+        action: "ignore",
+        evidenceMode: "unknown",
+        confidence: 0.99,
+      }),
+      speechAct: "acknowledgement",
+      normalizedQuestion: "",
+      primaryAskSpanCount: 0,
+      budgetSlot: "substantive",
+      sourceOwnedSubstantive: true,
+    },
+  });
+
+  assert.equal(decision.terminalNoAnswerAuthorized, false);
+  assert.equal(
+    decision.disposition,
+    "substantive-source-protected"
   );
 });
 

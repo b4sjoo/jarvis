@@ -378,12 +378,24 @@ export function decideTaxonomyAdjudicationBudget(
     turnGateAction: string;
   }
 ): TaxonomyAdjudicationBudgetDecision {
-  const projection = input.logicalQuestionUnit.primaryAskProjection;
-  const latestSourceText =
-    input.logicalQuestionUnit.sources[
-      input.logicalQuestionUnit.sources.length - 1
-    ]?.text.trim() ?? "";
+  return decideTaxonomyAdjudicationBudgetForSource({
+    primaryAskProjection:
+      input.logicalQuestionUnit.primaryAskProjection,
+    latestSourceText:
+      input.logicalQuestionUnit.sources[
+        input.logicalQuestionUnit.sources.length - 1
+      ]?.text.trim() ?? "",
+    turnGateAction: input.turnGateAction,
+  });
+}
 
+export function decideTaxonomyAdjudicationBudgetForSource(input: {
+  primaryAskProjection?: LogicalQuestionUnit["primaryAskProjection"];
+  latestSourceText: string;
+  turnGateAction: string;
+}): TaxonomyAdjudicationBudgetDecision {
+  const projection = input.primaryAskProjection;
+  const latestSourceText = input.latestSourceText.trim();
   if (
     projection?.speechAct === "acknowledgement" &&
     projection.disposition === "ignore" &&

@@ -428,3 +428,161 @@ test("revises one logical question when a referential ask follows setup", () => 
   );
   assert.deepEqual(revised.sourceTurnIds, ["turn_setup", "turn_ask"]);
 });
+
+test("keeps ambient chatter in a terminal generation and starts the next real ask fresh", () => {
+  const greetingTurn = turn(
+    "turn_greeting",
+    "Hello, welcome.",
+    1_000
+  );
+  const greeting = composeLogicalQuestionUnit({
+    currentTurn: greetingTurn,
+    sessionId: "session-a",
+    runtimeEpoch: 1,
+    primaryAskProjection: projectPrimaryAsk({
+      turnId: greetingTurn.id,
+      text: greetingTurn.text,
+    }),
+  });
+  const terminalBoundary = {
+    logicalQuestionUnitId: greeting.id,
+    settledRevision: greeting.revision,
+    settledSourceTurnIds: [...greeting.sourceTurnIds],
+  };
+  const connectivityTurn = turn(
+    "turn_connectivity",
+    "Can you hear me?",
+    2_000
+  );
+  const connectivity = composeLogicalQuestionUnit({
+    currentTurn: connectivityTurn,
+    sessionId: "session-a",
+    runtimeEpoch: 1,
+    previousUnit: greeting,
+    primaryAskProjection: projectPrimaryAsk({
+      turnId: connectivityTurn.id,
+      text: connectivityTurn.text,
+    }),
+    terminalNoAnswerBoundary: {
+      ...terminalBoundary,
+      currentSourceOwnedSubstantive: false,
+    },
+  });
+  const acknowledgementTurn = turn(
+    "turn_acknowledgement",
+    "Okay, that looks good.",
+    3_000
+  );
+  const acknowledgement = composeLogicalQuestionUnit({
+    currentTurn: acknowledgementTurn,
+    sessionId: "session-a",
+    runtimeEpoch: 1,
+    previousUnit: connectivity,
+    primaryAskProjection: projectPrimaryAsk({
+      turnId: acknowledgementTurn.id,
+      text: acknowledgementTurn.text,
+    }),
+    terminalNoAnswerBoundary: {
+      ...terminalBoundary,
+      currentSourceOwnedSubstantive: false,
+    },
+  });
+  const questionTurn = turn(
+    "turn_question",
+    "Can you explain reciprocal rank fusion?",
+    4_000
+  );
+  const question = composeLogicalQuestionUnit({
+    currentTurn: questionTurn,
+    sessionId: "session-a",
+    runtimeEpoch: 1,
+    previousUnit: acknowledgement,
+    primaryAskProjection: projectPrimaryAsk({
+      turnId: questionTurn.id,
+      text: questionTurn.text,
+    }),
+    terminalNoAnswerBoundary: {
+      ...terminalBoundary,
+      currentSourceOwnedSubstantive: true,
+    },
+  });
+
+  assert.equal(connectivity.id, greeting.id);
+  assert.equal(acknowledgement.id, greeting.id);
+  assert.equal(
+    connectivity.boundaryReason,
+    "terminal-no-answer-ambient-continuation"
+  );
+  assert.notEqual(question.id, greeting.id);
+  assert.equal(
+    question.boundaryReason,
+    "terminal-no-answer-substantive-boundary"
+  );
+  assert.deepEqual(question.sourceTurnIds, ["turn_question"]);
+});
+
+test("carries post-terminal setup into the next source-owned primary ask", () => {
+  const greetingTurn = turn(
+    "turn_greeting",
+    "Hello, welcome.",
+    1_000
+  );
+  const greeting = composeLogicalQuestionUnit({
+    currentTurn: greetingTurn,
+    sessionId: "session-a",
+    runtimeEpoch: 1,
+    primaryAskProjection: projectPrimaryAsk({
+      turnId: greetingTurn.id,
+      text: greetingTurn.text,
+    }),
+  });
+  const terminalBoundary = {
+    logicalQuestionUnitId: greeting.id,
+    settledRevision: greeting.revision,
+    settledSourceTurnIds: [...greeting.sourceTurnIds],
+  };
+  const setupTurn = turn(
+    "turn_setup",
+    "The ranking service combines lexical and vector retrieval.",
+    2_000
+  );
+  const setup = composeLogicalQuestionUnit({
+    currentTurn: setupTurn,
+    sessionId: "session-a",
+    runtimeEpoch: 1,
+    previousUnit: greeting,
+    primaryAskProjection: projectPrimaryAsk({
+      turnId: setupTurn.id,
+      text: setupTurn.text,
+    }),
+    terminalNoAnswerBoundary: {
+      ...terminalBoundary,
+      currentSourceOwnedSubstantive: false,
+    },
+  });
+  const askTurn = turn(
+    "turn_ask",
+    "How would you evaluate this retrieval system?",
+    3_000
+  );
+  const ask = composeLogicalQuestionUnit({
+    currentTurn: askTurn,
+    sessionId: "session-a",
+    runtimeEpoch: 1,
+    previousUnit: setup,
+    primaryAskProjection: projectPrimaryAsk({
+      turnId: askTurn.id,
+      text: askTurn.text,
+    }),
+    terminalNoAnswerBoundary: {
+      ...terminalBoundary,
+      currentSourceOwnedSubstantive: true,
+    },
+  });
+
+  assert.equal(setup.id, greeting.id);
+  assert.notEqual(ask.id, greeting.id);
+  assert.deepEqual(ask.sourceTurnIds, ["turn_setup", "turn_ask"]);
+  assert.match(ask.sources[0]?.text ?? "", /lexical and vector/);
+  assert.doesNotMatch(ask.normalizedText, /Hello, welcome/);
+});
