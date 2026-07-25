@@ -213,14 +213,14 @@ Human Evaluation v2 又补上了最关键的一环：人类标签。它不只评
 
 一次 session review 可以把问题归到不同层：
 
-- perception: 截错窗口或 STT 误听。
-- classification: question type 或 company 判断错。
-- task continuity: 旧任务污染、parent-child 丢失、低价值语音触发重刷。
-- memory policy: over-injection、missing memory、forbidden memory hit。
-- fact grounding: unsupported story 或 no-anchor fallback 失败。
-- playbook: phase 错、没有澄清需求、过早给最终答案。
-- model route: coding 题没有走高智模型，或非 coding 题误走慢模型。
-- response rendering: markdown、code、math、section parser 出错。
+- 感知层：截错窗口或 STT 误听。
+- 分类层：问题类型或公司判断错误。
+- 任务连续性：旧任务污染、父子任务丢失、低价值语音触发重刷。
+- 记忆策略：过度注入、记忆缺失或命中禁用记忆。
+- 事实支撑：使用无支持故事或无锚点回退失败。
+- 流程手册：阶段错误、没有澄清需求或过早给出最终答案。
+- 模型路由：编码题没有使用高智能模型，或非编码题误用较慢模型。
+- 回答渲染：Markdown、代码、数学表达式或章节解析器出错。
 
 这套证据链改变了产品开发方式。很多 P0 不再来自想象中的功能，而来自 mock interview 的 failure pattern：context pollution、voice task boundary、unsupported story reuse、AI/ML metrics answer too shallow、session recording backfill、human evaluation 粒度太粗。产品学习闭环因此变成：record session，label question/artifact/memory，归因 failure layer，修 runtime contract，再用下一轮 session 验证。
 
@@ -240,17 +240,17 @@ Jarvis 最核心的系统设计经验可以总结成一句话：把语义不确�
 
 必须由代码、schema 或 runtime 管的部分：
 
-- 当前 active task 是谁。
-- 最新输入和 active task 的关系。
-- 哪些 memory family 允许被注入。
-- generated answer 能不能成为事实来源。
-- provider/model route 和 timeout policy。
-- coding artifact 和 latest reliable answer 的生命周期。
-- session recording 的边界和 join keys。
-- trace metrics、human evaluation、hard reject telemetry。
-- Whiteboard、Manual Next、diagram overlay 这类中间 artifact 的 metadata contract。
+- 当前活跃任务是谁。
+- 最新输入和活跃任务的关系。
+- 允许注入哪些记忆族。
+- 生成回答能否成为事实来源。
+- 提供商与模型路由以及超时策略。
+- 编码产物和最新可靠回答的生命周期。
+- 会话录制的边界和关联键。
+- trace 指标、人工评估和硬拒绝遥测。
+- Whiteboard、Manual Next、图示叠加等中间产物的元数据合同。
 - Debug Mode 与 Focus Mode 的显示策略。
-- 隐藏、快捷键、窗口、capture target、音频 segment 顺序。
+- 隐藏、快捷键、窗口、截图目标与音频片段顺序。
 
 这个边界不是为了减少 AI 使用，而是为了让 AI 在合适的位置发挥作用。模型越强，越需要清楚地告诉它哪些事实可信、当前任务是什么、它应该按哪个过程推进，以及哪些内容绝不能推断。
 
