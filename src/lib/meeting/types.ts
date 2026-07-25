@@ -1024,9 +1024,9 @@ export interface MeetingAudioConfig {
   hop_size: number;
   sensitivity_rms: number;
   peak_threshold: number;
-  silence_chunks: number;
-  min_speech_chunks: number;
-  pre_speech_chunks: number;
+  silence_duration_ms: number;
+  minimum_speech_duration_ms: number;
+  pre_speech_duration_ms: number;
   noise_gate_threshold: number;
   max_recording_duration_secs: number;
 }

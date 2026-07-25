@@ -132,6 +132,7 @@ import {
   createMeetingId,
   detectAnswerSufficiencyShadow,
   detectInterviewCompany,
+  deduplicateRolloverTranscript,
   calculateWordEquivalent,
   classifyMeTurn,
   collectConfirmedMeFacts,
@@ -401,6 +402,7 @@ const MAX_ACTIVE_SCREEN_TASK_TIMEOUT_MINUTES = 240;
 const TRACE_METRICS_PERSIST_DEBOUNCE_MS = 750;
 const NATIVE_AUDIO_RECOVERY_WINDOW_MS = 60_000;
 const NATIVE_AUDIO_MAX_RECOVERY_ATTEMPTS_PER_WINDOW = 2;
+const NATIVE_AUDIO_TAIL_DRAIN_QUEUE_TIMEOUT_MS = 4_000;
 const TRACE_AUTO_EXPORT_SLOW_THRESHOLDS_MS: Record<
   MeetingTrace["kind"],
   number
@@ -429,31 +431,34 @@ const DEFAULT_MEETING_AUDIO_CONFIG: MeetingAudioConfig = {
   hop_size: 1024,
   sensitivity_rms: 0.012,
   peak_threshold: 0.035,
-  silence_chunks: 45,
-  min_speech_chunks: 7,
-  pre_speech_chunks: 12,
+  silence_duration_ms: 1_045,
+  minimum_speech_duration_ms: 163,
+  pre_speech_duration_ms: 279,
   noise_gate_threshold: 0.003,
   max_recording_duration_secs: 180,
 };
 
 const MEETING_AUDIO_PROFILE_CONFIGS: Record<
   Exclude<MeetingAudioProfile, "custom">,
-  Pick<MeetingAudioConfig, "sensitivity_rms" | "noise_gate_threshold" | "silence_chunks">
+  Pick<
+    MeetingAudioConfig,
+    "sensitivity_rms" | "noise_gate_threshold" | "silence_duration_ms"
+  >
 > = {
   quiet: {
     sensitivity_rms: 0.015,
     noise_gate_threshold: 0.005,
-    silence_chunks: 55,
+    silence_duration_ms: 1_277,
   },
   balanced: {
     sensitivity_rms: 0.012,
     noise_gate_threshold: 0.003,
-    silence_chunks: 45,
+    silence_duration_ms: 1_045,
   },
   sensitive: {
     sensitivity_rms: 0.008,
     noise_gate_threshold: 0.002,
-    silence_chunks: 35,
+    silence_duration_ms: 813,
   },
 };
 
@@ -866,13 +871,14 @@ function normalizeMeetingAudioConfig(
           ...DEFAULT_MEETING_AUDIO_CONFIG,
           ...MEETING_AUDIO_PROFILE_CONFIGS[profile],
         };
+  const hopSize = normalizeNumber(parsed.hop_size, profileDefaults.hop_size);
 
   return {
     enabled:
       typeof parsed.enabled === "boolean"
         ? parsed.enabled
         : profileDefaults.enabled,
-    hop_size: normalizeNumber(parsed.hop_size, profileDefaults.hop_size),
+    hop_size: hopSize,
     sensitivity_rms: normalizeNumber(
       parsed.sensitivity_rms,
       profileDefaults.sensitivity_rms
@@ -881,17 +887,23 @@ function normalizeMeetingAudioConfig(
       parsed.peak_threshold,
       profileDefaults.peak_threshold
     ),
-    silence_chunks: normalizeNumber(
+    silence_duration_ms: normalizeVadDurationMs(
+      parsed.silence_duration_ms,
       parsed.silence_chunks,
-      profileDefaults.silence_chunks
+      profileDefaults.silence_duration_ms,
+      hopSize
     ),
-    min_speech_chunks: normalizeNumber(
+    minimum_speech_duration_ms: normalizeVadDurationMs(
+      parsed.minimum_speech_duration_ms,
       parsed.min_speech_chunks,
-      profileDefaults.min_speech_chunks
+      profileDefaults.minimum_speech_duration_ms,
+      hopSize
     ),
-    pre_speech_chunks: normalizeNumber(
+    pre_speech_duration_ms: normalizeVadDurationMs(
+      parsed.pre_speech_duration_ms,
       parsed.pre_speech_chunks,
-      profileDefaults.pre_speech_chunks
+      profileDefaults.pre_speech_duration_ms,
+      hopSize
     ),
     noise_gate_threshold: normalizeNumber(
       parsed.noise_gate_threshold,
@@ -906,6 +918,29 @@ function normalizeMeetingAudioConfig(
 
 function normalizeNumber(value: unknown, fallback: number) {
   return typeof value === "number" && Number.isFinite(value) ? value : fallback;
+}
+
+function normalizeVadDurationMs(
+  durationMs: unknown,
+  legacyChunkCount: unknown,
+  fallback: number,
+  hopSize: number
+) {
+  if (
+    typeof durationMs === "number" &&
+    Number.isFinite(durationMs) &&
+    durationMs >= 0
+  ) {
+    return Math.round(durationMs);
+  }
+  if (
+    typeof legacyChunkCount === "number" &&
+    Number.isFinite(legacyChunkCount) &&
+    legacyChunkCount >= 0
+  ) {
+    return Math.round((legacyChunkCount * hopSize * 1_000) / 44_100);
+  }
+  return fallback;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -1448,6 +1483,16 @@ interface QueuedSpeechSegment {
   nativeSegmentSequence?: number;
   nativeCapturedAtMs?: number;
   nativeSampleRate?: number;
+  nativeSpeechStartedAtMs?: number;
+  nativeSpeechEndedAtMs?: number;
+  nativeSegmentEmittedAtMs?: number;
+  nativeSampleStart?: number;
+  nativeSampleEnd?: number;
+  nativeDurationMs?: number;
+  nativeSegmentEndReason?: NativeSpeechDetectedEvent["endReason"];
+  nativeRolloverFamilyId?: string;
+  nativeOverlapSampleCount?: number;
+  nativeOverlapDurationMs?: number;
   sttEvaluationCaptureSessionId?: string;
   traceId: string;
   queueStepId: string;
@@ -1778,6 +1823,9 @@ export function useMeetingAssistant() {
   const audioSegmentDispositionLedgerRef = useRef(
     new AudioSegmentDispositionLedger()
   );
+  const rolloverTranscriptByFamilyRef = useRef(
+    new Map<string, { segmentSequence: number; text: string }>()
+  );
   const lastNativeSpeechStartCandidateSequenceRef = useRef(0);
   const latestNativeSpeechStartRef = useRef<{
     event: NativeSpeechStartEvent;
@@ -1892,6 +1940,42 @@ export function useMeetingAssistant() {
       return result;
     },
     [readNativeCaptureLease]
+  );
+
+  const drainSystemAudioQueueForNativeStop = useCallback(
+    async (reason: "pause" | "stop") => {
+      await new Promise<void>((resolve) => {
+        window.setTimeout(resolve, 0);
+      });
+      const startedAt = Date.now();
+      let timeoutId: number | undefined;
+      let timedOut = false;
+      try {
+        await Promise.race([
+          systemAudioQueueTailRef.current,
+          new Promise<void>((resolve) => {
+            timeoutId = window.setTimeout(() => {
+              timedOut = true;
+              resolve();
+            }, NATIVE_AUDIO_TAIL_DRAIN_QUEUE_TIMEOUT_MS);
+          }),
+        ]);
+      } finally {
+        if (timeoutId !== undefined) {
+          window.clearTimeout(timeoutId);
+        }
+      }
+      const metadata = {
+        stage: "native-tail-stt-queue-drained",
+        reason,
+        durationMs: Date.now() - startedAt,
+        timeoutMs: NATIVE_AUDIO_TAIL_DRAIN_QUEUE_TIMEOUT_MS,
+        timedOut,
+      };
+      sessionRecordingManagerRef.current?.recordCaptureLifecycle(metadata);
+      return metadata;
+    },
+    []
   );
 
   const injectNativeAudioFault = useCallback(
@@ -2954,6 +3038,7 @@ export function useMeetingAssistant() {
     const sessionId = createMeetingId("audio_session");
     audioSessionIdRef.current = sessionId;
     audioSegmentSeqRef.current = 0;
+    rolloverTranscriptByFamilyRef.current.clear();
     systemAudioQueueTailRef.current = Promise.resolve();
     microphoneAudioQueueTailRef.current = Promise.resolve();
     clearPendingConfirmation("session-restarted");
@@ -2970,6 +3055,7 @@ export function useMeetingAssistant() {
     nativeCaptureSessionIdRef.current = null;
     nativeCaptureGenerationRef.current = null;
     lastNativeSegmentSequenceRef.current = 0;
+    rolloverTranscriptByFamilyRef.current.clear();
     lastNativeSpeechStartCandidateSequenceRef.current = 0;
     latestNativeSpeechStartRef.current = null;
     latestNativeAudioLivenessRef.current = null;
@@ -4162,20 +4248,9 @@ export function useMeetingAssistant() {
       });
     }
     cancelNativeAudioFaultTraces("meeting-assistant-stopped");
-    advanceRuntimeEpoch("meeting-assistant-stopped");
-    semanticTaxonomyRuntimeRef.current?.releaseSession({
-      recoveryTokenActive: false,
-      reason: "meeting-assistant-stopped",
-    });
-    activeRef.current = false;
-    invalidateAudioProcessingSession();
     cancelActiveAdvisorJob("meeting-assistant-stopped");
-    nativeAudioManualRecoveryRef.current = null;
     screenAnalysisAbortRef.current?.abort();
     screenAnalysisAbortRef.current = null;
-    contextManagerRef.current.clearActiveMeetingTask();
-    contextManagerRef.current.clearInterviewSessionContext();
-    const contextState = contextManagerRef.current.getState();
 
     await coordinator.run(lifecycleOperation, async () => {
       let audioStatus: MeetingAudioStatus | null = null;
@@ -4196,6 +4271,23 @@ export function useMeetingAssistant() {
           return;
         }
       }
+
+      await drainSystemAudioQueueForNativeStop("stop");
+      if (!coordinator.authorize(lifecycleOperation, "prepare-stop-reset")) {
+        return;
+      }
+      advanceRuntimeEpoch("meeting-assistant-stopped");
+      semanticTaxonomyRuntimeRef.current?.releaseSession({
+        recoveryTokenActive: false,
+        reason: "meeting-assistant-stopped",
+      });
+      activeRef.current = false;
+      invalidateAudioProcessingSession();
+      cancelActiveAdvisorJob("meeting-assistant-stopped");
+      nativeAudioManualRecoveryRef.current = null;
+      contextManagerRef.current.clearActiveMeetingTask();
+      contextManagerRef.current.clearInterviewSessionContext();
+      const contextState = contextManagerRef.current.getState();
 
       const terminalMemoryUsageFlush = await flushMemoryContextUsage();
       if (terminalMemoryUsageFlush) {
@@ -4244,6 +4336,7 @@ export function useMeetingAssistant() {
     advanceRuntimeEpoch,
     cancelNativeAudioFaultTraces,
     cancelActiveAdvisorJob,
+    drainSystemAudioQueueForNativeStop,
     invalidateAudioProcessingSession,
     readNativeCaptureLease,
     stopNativeMeetingCapture,
@@ -9077,6 +9170,16 @@ export function useMeetingAssistant() {
             nativeSegmentSequence: segment.nativeSegmentSequence,
             nativeCapturedAtMs: segment.nativeCapturedAtMs,
             nativeSampleRate: segment.nativeSampleRate,
+            nativeSpeechStartedAtMs: segment.nativeSpeechStartedAtMs,
+            nativeSpeechEndedAtMs: segment.nativeSpeechEndedAtMs,
+            nativeSegmentEmittedAtMs: segment.nativeSegmentEmittedAtMs,
+            nativeSampleStart: segment.nativeSampleStart,
+            nativeSampleEnd: segment.nativeSampleEnd,
+            nativeDurationMs: segment.nativeDurationMs,
+            nativeSegmentEndReason: segment.nativeSegmentEndReason,
+            nativeRolloverFamilyId: segment.nativeRolloverFamilyId,
+            nativeOverlapSampleCount: segment.nativeOverlapSampleCount,
+            nativeOverlapDurationMs: segment.nativeOverlapDurationMs,
             queuedAt: segment.queuedAt,
             submittedAt: Date.now(),
             mediaType: audio.type || "audio/wav",
@@ -9366,7 +9469,8 @@ export function useMeetingAssistant() {
             return result;
           },
         });
-        const { rawText, turn, validation } = recovery.finalResult;
+        const { rawText, validation } = recovery.finalResult;
+        let turn = recovery.finalResult.turn;
         const sttRecoveryMetadata = {
           ...formatSttPromptEchoRecoveryForTrace(recovery),
           sttInitialRequestDurationMs:
@@ -9436,6 +9540,80 @@ export function useMeetingAssistant() {
               }
             );
           }
+          if (segment.nativeRolloverFamilyId) {
+            const familyId = segment.nativeRolloverFamilyId;
+            const previous =
+              rolloverTranscriptByFamilyRef.current.get(familyId);
+            const deduplication =
+              (segment.nativeOverlapSampleCount ?? 0) > 0 && previous
+                ? deduplicateRolloverTranscript(previous.text, turn.text)
+                : undefined;
+            if (deduplication?.changed) {
+              turn.text = deduplication.text;
+            }
+            const rolloverMetadata = {
+              sttRolloverFamilyId: familyId,
+              sttRolloverSegmentSequence:
+                segment.nativeSegmentSequence,
+              sttRolloverEndReason: segment.nativeSegmentEndReason,
+              sttRolloverOverlapSampleCount:
+                segment.nativeOverlapSampleCount ?? 0,
+              sttRolloverOverlapDurationMs:
+                segment.nativeOverlapDurationMs ?? 0,
+              sttRolloverPreviousSegmentSequence:
+                previous?.segmentSequence,
+              sttRolloverDeduplicationChanged:
+                deduplication?.changed ?? false,
+              sttRolloverDeduplicationReason:
+                deduplication?.reason ??
+                ((segment.nativeOverlapSampleCount ?? 0) > 0
+                  ? "no-previous-transcript"
+                  : "no-overlap"),
+              sttRolloverDeduplicatedTokenCount:
+                deduplication?.overlapTokenCount ?? 0,
+            };
+            traceStoreRef.current.updateMetadata(
+              traceId,
+              rolloverMetadata
+            );
+            if (deduplication?.changed) {
+              traceStoreRef.current.recordOutput(
+                traceId,
+                "stt rollover deduplicated output",
+                turn.text,
+                {
+                  turnId: turn.id,
+                  ...rolloverMetadata,
+                }
+              );
+            }
+            if (
+              segment.nativeSegmentEndReason === "forced-rollover" &&
+              turn.text.trim()
+            ) {
+              rolloverTranscriptByFamilyRef.current.set(familyId, {
+                segmentSequence:
+                  segment.nativeSegmentSequence ?? segment.sequence,
+                text: turn.text,
+              });
+            } else if (
+              segment.nativeSegmentEndReason !== "forced-rollover"
+            ) {
+              rolloverTranscriptByFamilyRef.current.delete(familyId);
+            }
+            if (!turn.text.trim()) {
+              traceStoreRef.current.updateMetadata(traceId, {
+                acceptedSpeechDisposition:
+                  "rollover-overlap-suppressed",
+                transcriptAppendDisposition: "suppressed",
+                transcriptAppendReason:
+                  "entire-transcript-overlap",
+              });
+              turn = null;
+            }
+          }
+        }
+        if (turn) {
           const canonicalTranscriptQueued =
             segment.source === "system-audio" &&
             sttEvaluationCaptureManagerRef.current?.recordCanonicalTranscript({
@@ -10327,6 +10505,16 @@ export function useMeetingAssistant() {
         nativeSegmentSequence: nativeEvent.segmentSequence,
         nativeCapturedAtMs: nativeEvent.capturedAtMs,
         nativeSampleRate: nativeEvent.sampleRate,
+        nativeSpeechStartedAtMs: nativeEvent.speechStartedAtMs,
+        nativeSpeechEndedAtMs: nativeEvent.speechEndedAtMs,
+        nativeSegmentEmittedAtMs: nativeEvent.segmentEmittedAtMs,
+        nativeSampleStart: nativeEvent.sampleStart,
+        nativeSampleEnd: nativeEvent.sampleEnd,
+        nativeDurationMs: nativeEvent.durationMs,
+        nativeSegmentEndReason: nativeEvent.endReason,
+        nativeRolloverFamilyId: nativeEvent.rolloverFamilyId,
+        nativeOverlapSampleCount: nativeEvent.overlapSampleCount,
+        nativeOverlapDurationMs: nativeEvent.overlapDurationMs,
         sttEvaluationCaptureSessionId: sttEvaluationCapture?.active
           ? sttEvaluationCapture.sessionId
           : undefined,
@@ -10951,9 +11139,6 @@ export function useMeetingAssistant() {
     const lifecycleOperation = coordinator.claim("pause");
     const nativeLeaseToStop = readNativeCaptureLease();
     cancelNativeAudioFaultTraces("meeting-assistant-paused");
-    advanceRuntimeEpoch("meeting-assistant-paused");
-    activeRef.current = false;
-    invalidateAudioProcessingSession();
     cancelActiveAdvisorJob("meeting-assistant-paused");
     screenAnalysisAbortRef.current?.abort();
     screenAnalysisAbortRef.current = null;
@@ -10978,9 +11163,14 @@ export function useMeetingAssistant() {
         }
       }
 
+      await drainSystemAudioQueueForNativeStop("pause");
       if (!coordinator.authorize(lifecycleOperation, "commit-pause-state")) {
         return;
       }
+      advanceRuntimeEpoch("meeting-assistant-paused");
+      activeRef.current = false;
+      invalidateAudioProcessingSession();
+      cancelActiveAdvisorJob("meeting-assistant-paused");
       setState((previous) => ({
         ...previous,
         status: "paused",
@@ -10999,6 +11189,7 @@ export function useMeetingAssistant() {
     advanceRuntimeEpoch,
     cancelNativeAudioFaultTraces,
     cancelActiveAdvisorJob,
+    drainSystemAudioQueueForNativeStop,
     invalidateAudioProcessingSession,
     readNativeCaptureLease,
     stopNativeMeetingCapture,

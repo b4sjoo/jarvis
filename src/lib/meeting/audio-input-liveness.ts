@@ -13,10 +13,13 @@ export type NativeAudioLivenessTrigger =
   | "speech-start"
   | "silence-boundary"
   | "forced-rollover"
-  | "candidate-discarded";
+  | "candidate-discarded"
+  | "stop-drain"
+  | "termination-drain"
+  | "tail-discarded";
 
 export interface NativeAudioLivenessEvent {
-  schemaVersion: 1;
+  schemaVersion: 1 | 2;
   snapshotSequence: number;
   captureSessionId: string;
   captureGeneration: number;
@@ -113,6 +116,9 @@ export function parseNativeAudioLivenessEvent(
     "silence-boundary",
     "forced-rollover",
     "candidate-discarded",
+    "stop-drain",
+    "termination-drain",
+    "tail-discarded",
   ] as const);
   const owner = readStringUnion(payload.owner, ["meeting", "system"] as const);
   const captureSessionId = readNonEmptyString(payload.captureSessionId);
@@ -120,7 +126,7 @@ export function parseNativeAudioLivenessEvent(
     payload.source === "system-audio" ? "system-audio" : undefined;
 
   if (
-    payload.schemaVersion !== 1 ||
+    (payload.schemaVersion !== 1 && payload.schemaVersion !== 2) ||
     !state ||
     !trigger ||
     !owner ||

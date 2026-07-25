@@ -14,7 +14,26 @@ export interface NativeSpeechDetectedEvent {
   segmentSequence: number;
   owner: "meeting" | "system";
   capturedAtMs: number;
+  speechStartedAtMs: number;
+  speechEndedAtMs: number;
+  segmentEmittedAtMs: number;
+  sampleStart: number;
+  sampleEnd: number;
   sampleRate: number;
+  durationMs: number;
+  endReason:
+    | "silence"
+    | "forced-rollover"
+    | "stop-drain"
+    | "termination-drain"
+    | "continuous-stop";
+  rolloverFamilyId?: string;
+  overlapSampleCount: number;
+  overlapDurationMs: number;
+  vadSilenceTargetSamples: number;
+  vadMinimumSpeechSamples: number;
+  vadPreSpeechSamples: number;
+  vadMaximumSegmentSamples: number;
   mediaType: "audio/wav";
   audioBase64: string;
 }
@@ -68,7 +87,19 @@ export function parseNativeSpeechDetectedEvent(
   const segmentSequence = payload.segmentSequence;
   const captureGeneration = payload.captureGeneration;
   const capturedAtMs = payload.capturedAtMs;
+  const speechStartedAtMs = payload.speechStartedAtMs;
+  const speechEndedAtMs = payload.speechEndedAtMs;
+  const segmentEmittedAtMs = payload.segmentEmittedAtMs;
+  const sampleStart = payload.sampleStart;
+  const sampleEnd = payload.sampleEnd;
   const sampleRate = payload.sampleRate;
+  const durationMs = payload.durationMs;
+  const overlapSampleCount = payload.overlapSampleCount;
+  const overlapDurationMs = payload.overlapDurationMs;
+  const vadSilenceTargetSamples = payload.vadSilenceTargetSamples;
+  const vadMinimumSpeechSamples = payload.vadMinimumSpeechSamples;
+  const vadPreSpeechSamples = payload.vadPreSpeechSamples;
+  const vadMaximumSegmentSamples = payload.vadMaximumSegmentSamples;
   const audioBase64 = payload.audioBase64;
 
   if (
@@ -81,9 +112,37 @@ export function parseNativeSpeechDetectedEvent(
     (payload.owner !== "meeting" && payload.owner !== "system") ||
     !Number.isSafeInteger(capturedAtMs) ||
     (capturedAtMs as number) < 0 ||
+    !Number.isSafeInteger(speechStartedAtMs) ||
+    (speechStartedAtMs as number) < 0 ||
+    !Number.isSafeInteger(speechEndedAtMs) ||
+    (speechEndedAtMs as number) < (speechStartedAtMs as number) ||
+    !Number.isSafeInteger(segmentEmittedAtMs) ||
+    (segmentEmittedAtMs as number) < 0 ||
+    !Number.isSafeInteger(sampleStart) ||
+    (sampleStart as number) < 0 ||
+    !Number.isSafeInteger(sampleEnd) ||
+    (sampleEnd as number) <= (sampleStart as number) ||
     !Number.isSafeInteger(sampleRate) ||
     (sampleRate as number) < 8_000 ||
     (sampleRate as number) > 96_000 ||
+    !Number.isSafeInteger(durationMs) ||
+    (durationMs as number) < 1 ||
+    !isNativeSegmentEndReason(payload.endReason) ||
+    (payload.rolloverFamilyId !== undefined &&
+      (typeof payload.rolloverFamilyId !== "string" ||
+        !payload.rolloverFamilyId.trim())) ||
+    !Number.isSafeInteger(overlapSampleCount) ||
+    (overlapSampleCount as number) < 0 ||
+    !Number.isSafeInteger(overlapDurationMs) ||
+    (overlapDurationMs as number) < 0 ||
+    !Number.isSafeInteger(vadSilenceTargetSamples) ||
+    (vadSilenceTargetSamples as number) < 0 ||
+    !Number.isSafeInteger(vadMinimumSpeechSamples) ||
+    (vadMinimumSpeechSamples as number) < 0 ||
+    !Number.isSafeInteger(vadPreSpeechSamples) ||
+    (vadPreSpeechSamples as number) < 0 ||
+    !Number.isSafeInteger(vadMaximumSegmentSamples) ||
+    (vadMaximumSegmentSamples as number) < 1 ||
     payload.mediaType !== "audio/wav" ||
     typeof audioBase64 !== "string" ||
     !audioBase64
@@ -97,7 +156,21 @@ export function parseNativeSpeechDetectedEvent(
     segmentSequence: segmentSequence as number,
     owner: payload.owner,
     capturedAtMs: capturedAtMs as number,
+    speechStartedAtMs: speechStartedAtMs as number,
+    speechEndedAtMs: speechEndedAtMs as number,
+    segmentEmittedAtMs: segmentEmittedAtMs as number,
+    sampleStart: sampleStart as number,
+    sampleEnd: sampleEnd as number,
     sampleRate: sampleRate as number,
+    durationMs: durationMs as number,
+    endReason: payload.endReason,
+    rolloverFamilyId: payload.rolloverFamilyId as string | undefined,
+    overlapSampleCount: overlapSampleCount as number,
+    overlapDurationMs: overlapDurationMs as number,
+    vadSilenceTargetSamples: vadSilenceTargetSamples as number,
+    vadMinimumSpeechSamples: vadMinimumSpeechSamples as number,
+    vadPreSpeechSamples: vadPreSpeechSamples as number,
+    vadMaximumSegmentSamples: vadMaximumSegmentSamples as number,
     mediaType: "audio/wav",
     audioBase64,
   };
@@ -283,7 +356,21 @@ export function buildNativeSpeechEventTraceMetadata(
     nativeCaptureGeneration: event.captureGeneration,
     nativeSegmentSequence: event.segmentSequence,
     nativeCapturedAtMs: event.capturedAtMs,
+    nativeSpeechStartedAtMs: event.speechStartedAtMs,
+    nativeSpeechEndedAtMs: event.speechEndedAtMs,
+    nativeSegmentEmittedAtMs: event.segmentEmittedAtMs,
+    nativeSampleStart: event.sampleStart,
+    nativeSampleEnd: event.sampleEnd,
     nativeSampleRate: event.sampleRate,
+    nativeDurationMs: event.durationMs,
+    nativeSegmentEndReason: event.endReason,
+    nativeRolloverFamilyId: event.rolloverFamilyId,
+    nativeOverlapSampleCount: event.overlapSampleCount,
+    nativeOverlapDurationMs: event.overlapDurationMs,
+    nativeVadSilenceTargetSamples: event.vadSilenceTargetSamples,
+    nativeVadMinimumSpeechSamples: event.vadMinimumSpeechSamples,
+    nativeVadPreSpeechSamples: event.vadPreSpeechSamples,
+    nativeVadMaximumSegmentSamples: event.vadMaximumSegmentSamples,
     nativeMediaType: event.mediaType,
     audioBase64Chars: event.audioBase64.length,
   };
@@ -304,6 +391,18 @@ export function buildNativeSpeechStartTraceMetadata(
     nativeSpeechStartObservedAtMs: observedAtMs,
     nativeSampleRate: event.sampleRate,
   };
+}
+
+function isNativeSegmentEndReason(
+  value: unknown
+): value is NativeSpeechDetectedEvent["endReason"] {
+  return (
+    value === "silence" ||
+    value === "forced-rollover" ||
+    value === "stop-drain" ||
+    value === "termination-drain" ||
+    value === "continuous-stop"
+  );
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

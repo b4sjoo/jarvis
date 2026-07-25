@@ -46,7 +46,7 @@ import {
 import { serializeMeetingTraceExport } from "./trace.js";
 
 const SESSION_RECORDING_SCHEMA_VERSION = 1;
-const SESSION_TRACE_SUMMARY_SCHEMA_VERSION = 23;
+const SESSION_TRACE_SUMMARY_SCHEMA_VERSION = 24;
 const SESSION_TRACE_INDEX_SCHEMA_VERSION = 1;
 
 interface SessionRecordingStartOptions {
@@ -607,6 +607,20 @@ export interface SessionCompactTraceSummary {
     duplicateObservationCount?: number;
     canonicalCommitted?: boolean;
   };
+  nativeAudioBoundary?: {
+    sampleRate?: number;
+    sampleStart?: number;
+    sampleEnd?: number;
+    durationMs?: number;
+    endReason?: string;
+    rolloverFamilyId?: string;
+    overlapSampleCount?: number;
+    overlapDurationMs?: number;
+    silenceTargetSamples?: number;
+    minimumSpeechSamples?: number;
+    preSpeechSamples?: number;
+    maximumSegmentSamples?: number;
+  };
   sttRequest?: {
     providerId?: string;
     configuredProviderId?: string;
@@ -807,6 +821,14 @@ interface SessionTraceKindAggregate {
     stale: number;
     duplicate: number;
     invalidSequence: number;
+  };
+  nativeAudioBoundary: {
+    silence: number;
+    forcedRollover: number;
+    stopDrain: number;
+    terminationDrain: number;
+    continuousStop: number;
+    overlap: number;
   };
 }
 
@@ -3608,6 +3630,8 @@ function buildCompactTraceSummary({
     },
     sttValidation: buildSttValidationTraceSummary(metadataSources),
     audioSegment: buildAudioSegmentDispositionTraceSummary(metadataSources),
+    nativeAudioBoundary:
+      buildNativeAudioBoundaryTraceSummary(metadataSources),
     sttRequest: buildSttRequestTraceSummary(metadataSources),
     providerId: readString(modelStep?.metadata?.providerId),
     mode: readString(modelStep?.metadata?.mode),
@@ -4758,6 +4782,91 @@ function aggregateTraceKind(
           summary.audioSegment?.disposition === "invalid-sequence"
       ).length,
     },
+    nativeAudioBoundary: {
+      silence: summaries.filter(
+        (summary) =>
+          summary.nativeAudioBoundary?.endReason === "silence"
+      ).length,
+      forcedRollover: summaries.filter(
+        (summary) =>
+          summary.nativeAudioBoundary?.endReason === "forced-rollover"
+      ).length,
+      stopDrain: summaries.filter(
+        (summary) =>
+          summary.nativeAudioBoundary?.endReason === "stop-drain"
+      ).length,
+      terminationDrain: summaries.filter(
+        (summary) =>
+          summary.nativeAudioBoundary?.endReason === "termination-drain"
+      ).length,
+      continuousStop: summaries.filter(
+        (summary) =>
+          summary.nativeAudioBoundary?.endReason === "continuous-stop"
+      ).length,
+      overlap: summaries.filter(
+        (summary) =>
+          (summary.nativeAudioBoundary?.overlapSampleCount ?? 0) > 0
+      ).length,
+    },
+  };
+}
+
+function buildNativeAudioBoundaryTraceSummary(
+  metadataSources: Record<string, unknown>[]
+): SessionCompactTraceSummary["nativeAudioBoundary"] {
+  const sampleRate = readFirstNumberFromMetadata(
+    metadataSources,
+    "nativeSampleRate"
+  );
+  const endReason = readFirstString(
+    metadataSources,
+    "nativeSegmentEndReason"
+  );
+  if (sampleRate === undefined && !endReason) return undefined;
+
+  return {
+    sampleRate,
+    sampleStart: readFirstNumberFromMetadata(
+      metadataSources,
+      "nativeSampleStart"
+    ),
+    sampleEnd: readFirstNumberFromMetadata(
+      metadataSources,
+      "nativeSampleEnd"
+    ),
+    durationMs: readFirstNumberFromMetadata(
+      metadataSources,
+      "nativeDurationMs"
+    ),
+    endReason,
+    rolloverFamilyId: readFirstString(
+      metadataSources,
+      "nativeRolloverFamilyId"
+    ),
+    overlapSampleCount: readFirstNumberFromMetadata(
+      metadataSources,
+      "nativeOverlapSampleCount"
+    ),
+    overlapDurationMs: readFirstNumberFromMetadata(
+      metadataSources,
+      "nativeOverlapDurationMs"
+    ),
+    silenceTargetSamples: readFirstNumberFromMetadata(
+      metadataSources,
+      "nativeVadSilenceTargetSamples"
+    ),
+    minimumSpeechSamples: readFirstNumberFromMetadata(
+      metadataSources,
+      "nativeVadMinimumSpeechSamples"
+    ),
+    preSpeechSamples: readFirstNumberFromMetadata(
+      metadataSources,
+      "nativeVadPreSpeechSamples"
+    ),
+    maximumSegmentSamples: readFirstNumberFromMetadata(
+      metadataSources,
+      "nativeVadMaximumSegmentSamples"
+    ),
   };
 }
 

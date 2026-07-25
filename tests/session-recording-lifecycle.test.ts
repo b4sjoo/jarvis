@@ -903,7 +903,7 @@ test("compact trace summaries preserve task boundary and cross-domain evidence",
   );
   assert.ok(summaryWrite);
   const summary = parsePayload(summaryWrite);
-  assert.equal(summary.version, 23);
+  assert.equal(summary.version, 24);
   assert.equal(summary.taskRelation, "new-parent");
   assert.equal(summary.logicalQuestionUnitRevision, 3);
   assert.deepEqual(summary.logicalQuestionSourceTurnIds, ["turn_1", "turn_2"]);
@@ -985,6 +985,18 @@ test("compact trace summaries preserve bounded STT request evidence", async () =
       sttRequestTermCount: 7,
       sttRequestConfidenceCapability: "not-exposed-by-text-adapter",
       sttRequestEvidenceDurationMs: 0.37,
+      nativeSampleRate: 48_000,
+      nativeSampleStart: 48_000,
+      nativeSampleEnd: 1_488_000,
+      nativeDurationMs: 30_000,
+      nativeSegmentEndReason: "forced-rollover",
+      nativeRolloverFamilyId: "rollover-family-1",
+      nativeOverlapSampleCount: 19_200,
+      nativeOverlapDurationMs: 400,
+      nativeVadSilenceTargetSamples: 50_160,
+      nativeVadMinimumSpeechSamples: 7_824,
+      nativeVadPreSpeechSamples: 13_392,
+      nativeVadMaximumSegmentSamples: 1_440_000,
       sttContinuationDisposition: "consumed",
       sttContinuationReason: "matching-continuation-lease",
       sttContinuationLeaseId: "stt_continuation_1",
@@ -1042,7 +1054,7 @@ test("compact trace summaries preserve bounded STT request evidence", async () =
   );
   assert.ok(summaryWrite);
   const summary = parsePayload(summaryWrite);
-  assert.equal(summary.version, 23);
+  assert.equal(summary.version, 24);
   assert.equal(
     (summary.timingsMs as Record<string, unknown>).stt,
     1_580
@@ -1051,6 +1063,20 @@ test("compact trace summaries preserve bounded STT request evidence", async () =
     (summary.payload as Record<string, unknown>).transcriptChars,
     72
   );
+  assert.deepEqual(summary.nativeAudioBoundary, {
+    sampleRate: 48_000,
+    sampleStart: 48_000,
+    sampleEnd: 1_488_000,
+    durationMs: 30_000,
+    endReason: "forced-rollover",
+    rolloverFamilyId: "rollover-family-1",
+    overlapSampleCount: 19_200,
+    overlapDurationMs: 400,
+    silenceTargetSamples: 50_160,
+    minimumSpeechSamples: 7_824,
+    preSpeechSamples: 13_392,
+    maximumSegmentSamples: 1_440_000,
+  });
   assert.deepEqual(summary.sttRequest, {
     providerId: "openai-whisper",
     configuredProviderId: "openai-whisper",
@@ -1165,7 +1191,7 @@ test("compact trace summaries preserve hard memory invalidation evidence", async
   );
   assert.ok(summaryWrite);
   const summary = parsePayload(summaryWrite);
-  assert.equal(summary.version, 23);
+  assert.equal(summary.version, 24);
   const memory = summary.memory as Record<string, unknown>;
   assert.equal(memory.authorityRevision, 2);
   assert.equal(memory.invalidationKind, "hard");
@@ -1397,7 +1423,7 @@ test("records compact current-question settlement and execution-plan evidence", 
   assert.equal(serializedPlan.includes("taskSnapshot"), false);
   assert.equal(serializedPlan.includes("variables"), false);
   const summary = parsePayload(summaryWrite);
-  assert.equal(summary.version, 23);
+  assert.equal(summary.version, 24);
   assert.equal(
     (
       summary.currentQuestionSettlement as Record<string, unknown>
@@ -1493,7 +1519,7 @@ test("records a current-question term correction without copying provider state"
     false
   );
   const summary = parsePayload(summaryWrite);
-  assert.equal(summary.version, 23);
+  assert.equal(summary.version, 24);
   assert.equal(
     summary.manualTermCorrectionId,
     "term_correction_hnsw"

@@ -17,6 +17,16 @@ export interface SttEvaluationSubmittedAudio {
   nativeSegmentSequence?: number;
   nativeCapturedAtMs?: number;
   nativeSampleRate?: number;
+  nativeSpeechStartedAtMs?: number;
+  nativeSpeechEndedAtMs?: number;
+  nativeSegmentEmittedAtMs?: number;
+  nativeSampleStart?: number;
+  nativeSampleEnd?: number;
+  nativeDurationMs?: number;
+  nativeSegmentEndReason?: string;
+  nativeRolloverFamilyId?: string;
+  nativeOverlapSampleCount?: number;
+  nativeOverlapDurationMs?: number;
   queuedAt: number;
   submittedAt: number;
   mediaType: string;
@@ -205,6 +215,16 @@ export class SttEvaluationCaptureManager {
           nativeSegmentSequence: input.nativeSegmentSequence,
           nativeCapturedAtMs: input.nativeCapturedAtMs,
           nativeSampleRate: input.nativeSampleRate,
+          nativeSpeechStartedAtMs: input.nativeSpeechStartedAtMs,
+          nativeSpeechEndedAtMs: input.nativeSpeechEndedAtMs,
+          nativeSegmentEmittedAtMs: input.nativeSegmentEmittedAtMs,
+          nativeSampleStart: input.nativeSampleStart,
+          nativeSampleEnd: input.nativeSampleEnd,
+          nativeDurationMs: input.nativeDurationMs,
+          nativeSegmentEndReason: input.nativeSegmentEndReason,
+          nativeRolloverFamilyId: input.nativeRolloverFamilyId,
+          nativeOverlapSampleCount: input.nativeOverlapSampleCount,
+          nativeOverlapDurationMs: input.nativeOverlapDurationMs,
           queuedAt: input.queuedAt,
           submittedAt: input.submittedAt,
           mediaType: input.mediaType,

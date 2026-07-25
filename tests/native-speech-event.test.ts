@@ -14,8 +14,22 @@ const FIXTURE = {
   captureGeneration: 3,
   segmentSequence: 7,
   owner: "system",
-  capturedAtMs: 1234,
+  capturedAtMs: 2_300,
+  speechStartedAtMs: 1_000,
+  speechEndedAtMs: 2_250,
+  segmentEmittedAtMs: 2_300,
+  sampleStart: 48_000,
+  sampleEnd: 108_000,
   sampleRate: 48_000,
+  durationMs: 1_250,
+  endReason: "forced-rollover",
+  rolloverFamilyId: "rollover-test",
+  overlapSampleCount: 19_200,
+  overlapDurationMs: 400,
+  vadSilenceTargetSamples: 50_160,
+  vadMinimumSpeechSamples: 7_824,
+  vadPreSpeechSamples: 13_392,
+  vadMaximumSegmentSamples: 1_440_000,
   mediaType: "audio/wav",
   audioBase64: "UklGRg==",
 };
@@ -33,6 +47,16 @@ const START_FIXTURE = {
 test("parses the Rust native speech serialization fixture", () => {
   assert.deepEqual(parseNativeSpeechDetectedEvent(FIXTURE), FIXTURE);
   assert.equal(parseNativeSpeechDetectedEvent(FIXTURE.audioBase64), null);
+});
+
+test("does not compare sample-derived speech time against the emit wall clock", () => {
+  const event = {
+    ...FIXTURE,
+    speechEndedAtMs: 2_350,
+    segmentEmittedAtMs: 2_300,
+  };
+
+  assert.deepEqual(parseNativeSpeechDetectedEvent(event), event);
 });
 
 test("rejects an old native capture session before audio processing", () => {
@@ -100,6 +124,9 @@ test("trace metadata excludes native audio payloads", () => {
 
   assert.equal(metadata.nativeCaptureSessionId, "capture-test");
   assert.equal(metadata.nativeSegmentSequence, 7);
+  assert.equal(metadata.nativeSegmentEndReason, "forced-rollover");
+  assert.equal(metadata.nativeRolloverFamilyId, "rollover-test");
+  assert.equal(metadata.nativeOverlapDurationMs, 400);
   assert.equal(metadata.audioBase64Chars, 8);
   assert.equal("audioBase64" in metadata, false);
   assert.equal(JSON.stringify(metadata).includes("UklGRg=="), false);

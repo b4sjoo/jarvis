@@ -7,6 +7,7 @@ use base64::{engine::general_purpose, Engine as _};
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::{Component, Path};
+use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 use std::{fs, path::PathBuf};
 use tauri::{AppHandle, Manager, WebviewWindow};
@@ -27,6 +28,7 @@ pub struct AudioState {
     capture_device_id: Arc<Mutex<Option<String>>>,
     sample_rate: Arc<Mutex<Option<u32>>>,
     started_at_ms: Arc<Mutex<Option<u64>>>,
+    capture_stop_requested: Arc<AtomicBool>,
 }
 
 #[tauri::command]

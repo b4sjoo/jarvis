@@ -3719,15 +3719,15 @@ const ConfigurationsPanel = ({
             />
             <MeetingAudioSlider
               label="Silence duration"
-              value={audioConfig.silence_chunks}
+              value={audioConfig.silence_duration_ms}
               displayValue={formatSilenceDuration(audioConfig)}
-              min={20}
-              max={180}
-              step={5}
+              min={400}
+              max={4_200}
+              step={50}
               onChange={(value) => {
                 onAudioConfigChange({
                   ...audioConfig,
-                  silence_chunks: Math.round(value),
+                  silence_duration_ms: Math.round(value),
                 });
               }}
             />
@@ -6257,7 +6257,7 @@ function formatQuestionTypeLabel(type: CanonicalQuestionType) {
 }
 
 function formatSilenceDuration(config: MeetingAudioConfig) {
-  const seconds = (config.silence_chunks * config.hop_size) / 44100;
+  const seconds = config.silence_duration_ms / 1_000;
   return `${seconds.toFixed(1)}s`;
 }
 

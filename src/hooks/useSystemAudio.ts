@@ -32,9 +32,9 @@ export interface VadConfig {
   hop_size: number;
   sensitivity_rms: number;
   peak_threshold: number;
-  silence_chunks: number;
-  min_speech_chunks: number;
-  pre_speech_chunks: number;
+  silence_duration_ms: number;
+  minimum_speech_duration_ms: number;
+  pre_speech_duration_ms: number;
   noise_gate_threshold: number;
   max_recording_duration_secs: number;
 }
@@ -45,12 +45,78 @@ const DEFAULT_VAD_CONFIG: VadConfig = {
   hop_size: 1024,
   sensitivity_rms: 0.012, // Much less sensitive - only real speech
   peak_threshold: 0.035, // Higher threshold - filters clicks/noise
-  silence_chunks: 45, // ~1.0s of required silence
-  min_speech_chunks: 7, // ~0.16s - captures short answers
-  pre_speech_chunks: 12, // ~0.27s - enough to catch word start
+  silence_duration_ms: 1_045,
+  minimum_speech_duration_ms: 163,
+  pre_speech_duration_ms: 279,
   noise_gate_threshold: 0.003, // Stronger noise filtering
   max_recording_duration_secs: 180, // 3 minutes default
 };
+
+function normalizeVadConfig(value: unknown): VadConfig {
+  const parsed =
+    typeof value === "object" && value !== null
+      ? (value as Record<string, unknown>)
+      : {};
+  const finite = (candidate: unknown, fallback: number) =>
+    typeof candidate === "number" && Number.isFinite(candidate)
+      ? candidate
+      : fallback;
+  const hopSize = finite(parsed.hop_size, DEFAULT_VAD_CONFIG.hop_size);
+  const duration = (
+    current: unknown,
+    legacyChunks: unknown,
+    fallback: number
+  ) => {
+    if (typeof current === "number" && Number.isFinite(current)) {
+      return Math.round(current);
+    }
+    if (
+      typeof legacyChunks === "number" &&
+      Number.isFinite(legacyChunks)
+    ) {
+      return Math.round((legacyChunks * hopSize * 1_000) / 44_100);
+    }
+    return fallback;
+  };
+  return {
+    enabled:
+      typeof parsed.enabled === "boolean"
+        ? parsed.enabled
+        : DEFAULT_VAD_CONFIG.enabled,
+    hop_size: hopSize,
+    sensitivity_rms: finite(
+      parsed.sensitivity_rms,
+      DEFAULT_VAD_CONFIG.sensitivity_rms
+    ),
+    peak_threshold: finite(
+      parsed.peak_threshold,
+      DEFAULT_VAD_CONFIG.peak_threshold
+    ),
+    silence_duration_ms: duration(
+      parsed.silence_duration_ms,
+      parsed.silence_chunks,
+      DEFAULT_VAD_CONFIG.silence_duration_ms
+    ),
+    minimum_speech_duration_ms: duration(
+      parsed.minimum_speech_duration_ms,
+      parsed.min_speech_chunks,
+      DEFAULT_VAD_CONFIG.minimum_speech_duration_ms
+    ),
+    pre_speech_duration_ms: duration(
+      parsed.pre_speech_duration_ms,
+      parsed.pre_speech_chunks,
+      DEFAULT_VAD_CONFIG.pre_speech_duration_ms
+    ),
+    noise_gate_threshold: finite(
+      parsed.noise_gate_threshold,
+      DEFAULT_VAD_CONFIG.noise_gate_threshold
+    ),
+    max_recording_duration_secs: finite(
+      parsed.max_recording_duration_secs,
+      DEFAULT_VAD_CONFIG.max_recording_duration_secs
+    ),
+  };
+}
 
 // Chat message interface (reusing from useCompletion)
 interface ChatMessage {
@@ -168,7 +234,7 @@ export function useSystemAudio() {
     if (savedVadConfig) {
       try {
         const parsed = JSON.parse(savedVadConfig);
-        setVadConfig(parsed);
+        setVadConfig(normalizeVadConfig(parsed));
       } catch (error) {
         console.error("Failed to load VAD config:", error);
       }

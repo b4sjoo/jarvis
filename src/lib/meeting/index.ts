@@ -45,6 +45,7 @@ export * from "./meeting-model-route";
 export * from "./response-artifact-authorization";
 export * from "./response-action-contract";
 export * from "./native-speech-event";
+export * from "./rollover-transcript";
 export * from "./native-audio-lifecycle";
 export * from "./opening-route";
 export * from "./memory-evaluation";

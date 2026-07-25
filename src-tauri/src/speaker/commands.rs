@@ -146,14 +146,15 @@ fn begin_capture_stop(
 
 // VAD Configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct VadConfig {
     pub enabled: bool,
     pub hop_size: usize,
     pub sensitivity_rms: f32,
     pub peak_threshold: f32,
-    pub silence_chunks: usize,
-    pub min_speech_chunks: usize,
-    pub pre_speech_chunks: usize,
+    pub silence_duration_ms: u64,
+    pub minimum_speech_duration_ms: u64,
+    pub pre_speech_duration_ms: u64,
     pub noise_gate_threshold: f32,
     pub max_recording_duration_secs: u64,
 }
@@ -165,13 +166,84 @@ impl Default for VadConfig {
             hop_size: 1024,
             sensitivity_rms: 0.012, // Much less sensitive - only real speech
             peak_threshold: 0.035,  // Higher threshold - filters clicks/noise
-            silence_chunks: 45,     // ~1.0s of silence before stopping
-            min_speech_chunks: 7,   // ~0.16s - captures short answers
-            pre_speech_chunks: 12,  // ~0.27s - enough to catch word start
-            noise_gate_threshold: 0.003, // Stronger noise filtering
+            silence_duration_ms: 1_045,
+            minimum_speech_duration_ms: 163,
+            pre_speech_duration_ms: 279,
+            noise_gate_threshold: 0.003,      // Stronger noise filtering
             max_recording_duration_secs: 180, // 3 minutes default
         }
     }
+}
+
+const MAX_VAD_SEGMENT_MS: u64 = 30_000;
+const FORCED_ROLLOVER_OVERLAP_MS: u64 = 400;
+const TRAILING_SILENCE_KEEP_MS: u64 = 150;
+const GRACEFUL_CAPTURE_STOP_TIMEOUT_MS: u64 = 750;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ResolvedVadTiming {
+    silence_samples: usize,
+    minimum_speech_samples: usize,
+    pre_speech_samples: usize,
+    maximum_segment_samples: usize,
+    rollover_overlap_samples: usize,
+    trailing_silence_keep_samples: usize,
+}
+
+impl ResolvedVadTiming {
+    fn resolve(config: &VadConfig, sample_rate: u32) -> Self {
+        Self {
+            silence_samples: ms_to_samples_ceil(config.silence_duration_ms, sample_rate),
+            minimum_speech_samples: ms_to_samples_ceil(
+                config.minimum_speech_duration_ms,
+                sample_rate,
+            ),
+            pre_speech_samples: ms_to_samples_ceil(config.pre_speech_duration_ms, sample_rate),
+            maximum_segment_samples: ms_to_samples_ceil(MAX_VAD_SEGMENT_MS, sample_rate),
+            rollover_overlap_samples: ms_to_samples_ceil(FORCED_ROLLOVER_OVERLAP_MS, sample_rate),
+            trailing_silence_keep_samples: ms_to_samples_ceil(
+                TRAILING_SILENCE_KEEP_MS,
+                sample_rate,
+            ),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NativeSegmentEndReason {
+    Silence,
+    ForcedRollover,
+    StopDrain,
+    TerminationDrain,
+    ContinuousStop,
+}
+
+impl NativeSegmentEndReason {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Silence => "silence",
+            Self::ForcedRollover => "forced-rollover",
+            Self::StopDrain => "stop-drain",
+            Self::TerminationDrain => "termination-drain",
+            Self::ContinuousStop => "continuous-stop",
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct NativeSegmentBoundary {
+    sample_start: u64,
+    sample_end: u64,
+    speech_started_at_ms: u64,
+    speech_ended_at_ms: u64,
+    segment_emitted_at_ms: u64,
+    end_reason: NativeSegmentEndReason,
+    rollover_family_id: Option<String>,
+    overlap_sample_count: u64,
+    silence_target_samples: u64,
+    minimum_speech_samples: u64,
+    pre_speech_samples: u64,
+    maximum_segment_samples: u64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -203,7 +275,22 @@ pub struct NativeSpeechDetectedEvent {
     pub segment_sequence: u64,
     pub owner: &'static str,
     pub captured_at_ms: u64,
+    pub speech_started_at_ms: u64,
+    pub speech_ended_at_ms: u64,
+    pub segment_emitted_at_ms: u64,
+    pub sample_start: u64,
+    pub sample_end: u64,
     pub sample_rate: u32,
+    pub duration_ms: u64,
+    pub end_reason: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rollover_family_id: Option<String>,
+    pub overlap_sample_count: u64,
+    pub overlap_duration_ms: u64,
+    pub vad_silence_target_samples: u64,
+    pub vad_minimum_speech_samples: u64,
+    pub vad_pre_speech_samples: u64,
+    pub vad_maximum_segment_samples: u64,
     pub media_type: &'static str,
     pub audio_base64: String,
 }
@@ -220,7 +307,7 @@ pub struct NativeSpeechStartEvent {
     pub sample_rate: u32,
 }
 
-const VAD_LIVENESS_SCHEMA_VERSION: u16 = 1;
+const VAD_LIVENESS_SCHEMA_VERSION: u16 = 2;
 const VAD_LIVENESS_INTERVAL_MS: u64 = 2_000;
 
 #[derive(Debug, Clone, Serialize)]
@@ -350,7 +437,7 @@ impl VadLivenessAccumulator {
         state: &'static str,
         trigger: &'static str,
         candidate_segment_sequence: Option<u64>,
-        silence_chunks: usize,
+        silence_samples: usize,
         discard_reason: Option<&'static str>,
         config: &VadConfig,
         occurred_at_ms: u64,
@@ -373,10 +460,7 @@ impl VadLivenessAccumulator {
                 .candidate_started_at_ms
                 .map(|started_at| occurred_at_ms.saturating_sub(started_at))
                 .unwrap_or(0),
-            silence_duration_ms: samples_to_ms(
-                silence_chunks.saturating_mul(config.hop_size) as u64,
-                sample_rate,
-            ),
+            silence_duration_ms: samples_to_ms(silence_samples as u64, sample_rate),
             interval_duration_ms: samples_to_ms(self.interval_sample_count, sample_rate),
             interval_chunk_count: self.interval_chunk_count,
             interval_signal_chunk_count: self.interval_signal_chunk_count,
@@ -398,15 +482,9 @@ impl VadLivenessAccumulator {
             sensitivity_rms: config.sensitivity_rms,
             peak_threshold: config.peak_threshold,
             noise_gate_threshold: config.noise_gate_threshold,
-            silence_target_ms: samples_to_ms(
-                config.silence_chunks.saturating_mul(config.hop_size) as u64,
-                sample_rate,
-            ),
-            minimum_speech_ms: samples_to_ms(
-                config.min_speech_chunks.saturating_mul(config.hop_size) as u64,
-                sample_rate,
-            ),
-            maximum_segment_ms: 30_000,
+            silence_target_ms: config.silence_duration_ms,
+            minimum_speech_ms: config.minimum_speech_duration_ms,
+            maximum_segment_ms: MAX_VAD_SEGMENT_MS,
         };
         self.interval_sample_count = 0;
         self.interval_chunk_count = 0;
@@ -698,9 +776,11 @@ async fn start_audio_capture(
         let lease = claim_capture_lease(&mut control, capture_owner, capture_session_id.clone())?;
         lease.generation
     };
+    state.capture_stop_requested.store(false, Ordering::Release);
 
     // Update VAD config if provided
     if let Some(config) = vad_config {
+        validate_vad_config(&config)?;
         let mut vad_cfg = state
             .vad_config
             .lock()
@@ -835,6 +915,7 @@ async fn start_audio_capture(
         .lock()
         .map_err(|e| format!("Failed to set capture start time: {}", e))? = Some(now_ms());
     let state_clone = app.state::<crate::AudioState>();
+    let capture_stop_requested = state.capture_stop_requested.clone();
     let task_session_id = capture_session_id.clone();
     {
         let mut control = state_clone
@@ -872,6 +953,7 @@ async fn start_audio_capture(
                         task_session_id.clone(),
                         capture_owner,
                         capture_generation,
+                        capture_stop_requested.clone(),
                     )
                     .await
                 } else {
@@ -883,6 +965,7 @@ async fn start_audio_capture(
                         task_session_id.clone(),
                         capture_owner,
                         capture_generation,
+                        capture_stop_requested.clone(),
                     )
                     .await
                 }
@@ -931,16 +1014,21 @@ async fn run_vad_capture(
     capture_session_id: String,
     capture_owner: NativeCaptureOwner,
     capture_generation: u64,
+    stop_requested: Arc<AtomicBool>,
 ) -> CaptureRunOutcome {
     let mut stream = stream;
+    let timing = ResolvedVadTiming::resolve(&config, sr);
+    let capture_started_at_ms = now_ms();
     let mut buffer: VecDeque<f32> = VecDeque::new();
-    let mut pre_speech: VecDeque<f32> =
-        VecDeque::with_capacity(config.pre_speech_chunks * config.hop_size);
+    let mut pre_speech: VecDeque<f32> = VecDeque::with_capacity(timing.pre_speech_samples);
     let mut speech_buffer = Vec::new();
     let mut in_speech = false;
-    let mut silence_chunks = 0;
-    let mut speech_chunks = 0;
-    let max_samples = sr as usize * 30; // 30s safety cap per utterance
+    let mut silence_samples = 0_usize;
+    let mut speech_evidence_samples = 0_usize;
+    let mut processed_samples = 0_u64;
+    let mut segment_start_sample = 0_u64;
+    let mut segment_overlap_sample_count = 0_usize;
+    let mut rollover_family_id: Option<String> = None;
     let mut segment_sequence = 0_u64;
     let mut liveness = VadLivenessAccumulator::default();
     let mut evaluation_tap = if capture_owner == NativeCaptureOwner::Meeting {
@@ -948,14 +1036,25 @@ async fn run_vad_capture(
     } else {
         None
     };
+    let (tail_end_reason, outcome) = loop {
+        if stop_requested.load(Ordering::Acquire) {
+            break (
+                NativeSegmentEndReason::StopDrain,
+                CaptureRunOutcome::expected(CaptureTerminationReason::RequestedStop),
+            );
+        }
 
-    while let Some(sample) = stream.next().await {
+        let Some(sample) = stream.next().await else {
+            break (
+                NativeSegmentEndReason::TerminationDrain,
+                CaptureRunOutcome::from_stream(stream.termination()),
+            );
+        };
         if let Some(tap) = evaluation_tap.as_mut() {
             tap.push_sample(sample);
         }
         buffer.push_back(sample);
 
-        // Process in fixed chunks for VAD analysis
         while buffer.len() >= config.hop_size {
             let mut mono = Vec::with_capacity(config.hop_size);
             for _ in 0..config.hop_size {
@@ -964,22 +1063,24 @@ async fn run_vad_capture(
                 }
             }
 
-            // Apply noise gate BEFORE VAD (critical for accuracy)
             let mono = apply_noise_gate(&mono, config.noise_gate_threshold);
-
             let (rms, peak) = calculate_audio_metrics(&mono);
             let is_speech = rms > config.sensitivity_rms || peak > config.peak_threshold;
             let observed_at_ms = now_ms();
             liveness.observe_chunk(mono.len(), peak > 0.0, is_speech, rms, peak, observed_at_ms);
+            let chunk_start_sample = processed_samples;
+            processed_samples = processed_samples.saturating_add(mono.len() as u64);
 
             if is_speech {
                 if !in_speech {
-                    // Speech START detected
                     in_speech = true;
-                    speech_chunks = 0;
+                    speech_evidence_samples = 0;
                     liveness.begin_candidate(observed_at_ms);
 
-                    // Include pre-speech buffer for natural sound
+                    segment_start_sample =
+                        chunk_start_sample.saturating_sub(pre_speech.len() as u64);
+                    segment_overlap_sample_count = 0;
+                    rollover_family_id = None;
                     speech_buffer.extend(pre_speech.drain(..));
 
                     emit_speech_start(
@@ -1000,31 +1101,64 @@ async fn run_vad_capture(
                         "speech-candidate",
                         "speech-start",
                         Some(segment_sequence + 1),
-                        silence_chunks,
+                        silence_samples,
                         None,
                         &config,
                         observed_at_ms,
                     );
                 }
 
-                speech_chunks += 1;
+                speech_evidence_samples = speech_evidence_samples.saturating_add(mono.len());
                 speech_buffer.extend_from_slice(&mono);
-                silence_chunks = 0; // Reset silence counter on any speech
+                silence_samples = 0;
 
-                // Safety cap: force emit if exceeds 30s
-                if speech_buffer.len() > max_samples {
-                    let normalized_buffer = normalize_audio_level(&speech_buffer, 0.1);
-                    match samples_to_wav_b64(sr, &normalized_buffer) {
-                        Ok(b64) => {
-                            emit_speech_detected(
-                                &app,
-                                &capture_session_id,
-                                &mut segment_sequence,
-                                sr,
-                                b64,
-                                capture_owner,
+                if speech_buffer.len() >= timing.maximum_segment_samples {
+                    let emitted_at_ms = now_ms();
+                    let sample_end =
+                        segment_start_sample.saturating_add(speech_buffer.len() as u64);
+                    let family_id = rollover_family_id
+                        .get_or_insert_with(|| {
+                            format!(
+                                "{}-{}-{}",
+                                capture_session_id,
                                 capture_generation,
-                            );
+                                segment_sequence + 1
+                            )
+                        })
+                        .clone();
+                    let boundary = NativeSegmentBoundary {
+                        sample_start: segment_start_sample,
+                        sample_end,
+                        speech_started_at_ms: sample_offset_to_wall_ms(
+                            capture_started_at_ms,
+                            segment_start_sample,
+                            sr,
+                        ),
+                        speech_ended_at_ms: sample_offset_to_wall_ms(
+                            capture_started_at_ms,
+                            sample_end,
+                            sr,
+                        ),
+                        segment_emitted_at_ms: emitted_at_ms,
+                        end_reason: NativeSegmentEndReason::ForcedRollover,
+                        rollover_family_id: Some(family_id.clone()),
+                        overlap_sample_count: segment_overlap_sample_count as u64,
+                        silence_target_samples: timing.silence_samples as u64,
+                        minimum_speech_samples: timing.minimum_speech_samples as u64,
+                        pre_speech_samples: timing.pre_speech_samples as u64,
+                        maximum_segment_samples: timing.maximum_segment_samples as u64,
+                    };
+                    match encode_and_emit_speech_segment(
+                        &app,
+                        &capture_session_id,
+                        &mut segment_sequence,
+                        sr,
+                        &speech_buffer,
+                        capture_owner,
+                        capture_generation,
+                        boundary,
+                    ) {
+                        Ok(emitted_sequence) => {
                             let emitted_at_ms = now_ms();
                             liveness.mark_segment_emitted(emitted_at_ms);
                             emit_vad_liveness(
@@ -1036,11 +1170,29 @@ async fn run_vad_capture(
                                 sr,
                                 "segment-emitted",
                                 "forced-rollover",
-                                Some(segment_sequence),
-                                silence_chunks,
+                                Some(emitted_sequence),
+                                silence_samples,
                                 None,
                                 &config,
                                 emitted_at_ms,
+                            );
+                            let overlap_count =
+                                timing.rollover_overlap_samples.min(speech_buffer.len());
+                            let retained_from = speech_buffer.len().saturating_sub(overlap_count);
+                            speech_buffer = speech_buffer[retained_from..].to_vec();
+                            segment_start_sample = sample_end.saturating_sub(overlap_count as u64);
+                            segment_overlap_sample_count = overlap_count;
+                            speech_evidence_samples = 0;
+                            silence_samples = 0;
+                            liveness.clear_candidate();
+                            liveness.begin_candidate(emitted_at_ms);
+                            emit_speech_start(
+                                &app,
+                                &capture_session_id,
+                                segment_sequence + 1,
+                                sr,
+                                capture_owner,
+                                capture_generation,
                             );
                         }
                         Err(error) => {
@@ -1065,53 +1217,71 @@ async fn run_vad_capture(
                                 "stalled",
                                 "candidate-discarded",
                                 Some(segment_sequence + 1),
-                                silence_chunks,
+                                silence_samples,
                                 Some("wav-encoding-failed"),
                                 &config,
                                 dropped_at_ms,
                             );
+                            speech_buffer.clear();
+                            in_speech = false;
+                            speech_evidence_samples = 0;
+                            silence_samples = 0;
+                            segment_overlap_sample_count = 0;
+                            rollover_family_id = None;
+                            liveness.clear_candidate();
                         }
                     }
-                    speech_buffer.clear();
-                    in_speech = false;
-                    speech_chunks = 0;
-                    liveness.clear_candidate();
                 }
             } else {
-                // Silence detected
                 if in_speech {
-                    silence_chunks += 1;
-
-                    // Continue collecting during silence (important for natural speech)
+                    silence_samples = silence_samples.saturating_add(mono.len());
                     speech_buffer.extend_from_slice(&mono);
 
-                    // Check if silence duration exceeds threshold
-                    if silence_chunks >= config.silence_chunks {
-                        // Verify minimum speech duration
-                        if speech_chunks >= config.min_speech_chunks && !speech_buffer.is_empty() {
-                            // Trim trailing silence (keep ~0.15s for natural ending)
-                            let silence_duration_samples = silence_chunks * config.hop_size;
-                            let keep_silence_samples = (sr as usize) * 15 / 100; // 0.15s
-                            let trim_amount =
-                                silence_duration_samples.saturating_sub(keep_silence_samples);
-
-                            if speech_buffer.len() > trim_amount {
-                                speech_buffer.truncate(speech_buffer.len() - trim_amount);
-                            }
-
-                            // Emit complete speech segment
-                            let normalized_buffer = normalize_audio_level(&speech_buffer, 0.1);
-                            match samples_to_wav_b64(sr, &normalized_buffer) {
-                                Ok(b64) => {
-                                    emit_speech_detected(
-                                        &app,
-                                        &capture_session_id,
-                                        &mut segment_sequence,
-                                        sr,
-                                        b64,
-                                        capture_owner,
-                                        capture_generation,
-                                    );
+                    if silence_samples >= timing.silence_samples {
+                        if speech_evidence_samples >= timing.minimum_speech_samples
+                            && !speech_buffer.is_empty()
+                        {
+                            trim_trailing_silence(
+                                &mut speech_buffer,
+                                silence_samples,
+                                timing.trailing_silence_keep_samples,
+                            );
+                            let emitted_at_ms = now_ms();
+                            let sample_end =
+                                segment_start_sample.saturating_add(speech_buffer.len() as u64);
+                            let boundary = NativeSegmentBoundary {
+                                sample_start: segment_start_sample,
+                                sample_end,
+                                speech_started_at_ms: sample_offset_to_wall_ms(
+                                    capture_started_at_ms,
+                                    segment_start_sample,
+                                    sr,
+                                ),
+                                speech_ended_at_ms: sample_offset_to_wall_ms(
+                                    capture_started_at_ms,
+                                    sample_end,
+                                    sr,
+                                ),
+                                segment_emitted_at_ms: emitted_at_ms,
+                                end_reason: NativeSegmentEndReason::Silence,
+                                rollover_family_id: rollover_family_id.clone(),
+                                overlap_sample_count: segment_overlap_sample_count as u64,
+                                silence_target_samples: timing.silence_samples as u64,
+                                minimum_speech_samples: timing.minimum_speech_samples as u64,
+                                pre_speech_samples: timing.pre_speech_samples as u64,
+                                maximum_segment_samples: timing.maximum_segment_samples as u64,
+                            };
+                            match encode_and_emit_speech_segment(
+                                &app,
+                                &capture_session_id,
+                                &mut segment_sequence,
+                                sr,
+                                &speech_buffer,
+                                capture_owner,
+                                capture_generation,
+                                boundary,
+                            ) {
+                                Ok(emitted_sequence) => {
                                     let emitted_at_ms = now_ms();
                                     liveness.mark_segment_emitted(emitted_at_ms);
                                     emit_vad_liveness(
@@ -1123,8 +1293,8 @@ async fn run_vad_capture(
                                         sr,
                                         "segment-emitted",
                                         "silence-boundary",
-                                        Some(segment_sequence),
-                                        silence_chunks,
+                                        Some(emitted_sequence),
+                                        silence_samples,
                                         None,
                                         &config,
                                         emitted_at_ms,
@@ -1153,7 +1323,7 @@ async fn run_vad_capture(
                                         "stalled",
                                         "candidate-discarded",
                                         Some(segment_sequence + 1),
-                                        silence_chunks,
+                                        silence_samples,
                                         Some("wav-encoding-failed"),
                                         &config,
                                         dropped_at_ms,
@@ -1173,7 +1343,7 @@ async fn run_vad_capture(
                                 "idle",
                                 "candidate-discarded",
                                 Some(segment_sequence + 1),
-                                silence_chunks,
+                                silence_samples,
                                 Some("below-minimum-speech"),
                                 &config,
                                 now_ms(),
@@ -1184,31 +1354,24 @@ async fn run_vad_capture(
                             );
                         }
 
-                        // Reset for next speech detection
                         speech_buffer.clear();
                         in_speech = false;
-                        silence_chunks = 0;
-                        speech_chunks = 0;
+                        silence_samples = 0;
+                        speech_evidence_samples = 0;
+                        segment_overlap_sample_count = 0;
+                        rollover_family_id = None;
                         liveness.clear_candidate();
                     }
                 } else {
-                    // Not in speech yet - maintain rolling pre-speech buffer
                     pre_speech.extend(mono.into_iter());
-
-                    // Trim excess (maintain fixed size)
-                    while pre_speech.len() > config.pre_speech_chunks * config.hop_size {
+                    while pre_speech.len() > timing.pre_speech_samples {
                         pre_speech.pop_front();
-                    }
-
-                    // Periodically shrink capacity to prevent memory bloat
-                    if pre_speech.len() == config.pre_speech_chunks * config.hop_size {
-                        pre_speech.shrink_to_fit();
                     }
                 }
             }
 
             if liveness.should_emit_periodic(sr) {
-                let state = if in_speech && silence_chunks > 0 {
+                let state = if in_speech && silence_samples > 0 {
                     "awaiting-silence"
                 } else if in_speech {
                     "segment-open"
@@ -1227,16 +1390,120 @@ async fn run_vad_capture(
                     state,
                     "periodic",
                     in_speech.then_some(segment_sequence + 1),
-                    silence_chunks,
+                    silence_samples,
                     None,
                     &config,
                     now_ms(),
                 );
             }
         }
+    };
+
+    if in_speech && !buffer.is_empty() {
+        let remaining: Vec<f32> = buffer.drain(..).collect();
+        let remaining = apply_noise_gate(&remaining, config.noise_gate_threshold);
+        let (rms, peak) = calculate_audio_metrics(&remaining);
+        let is_speech = rms > config.sensitivity_rms || peak > config.peak_threshold;
+        if is_speech {
+            speech_evidence_samples = speech_evidence_samples.saturating_add(remaining.len());
+            silence_samples = 0;
+        } else {
+            silence_samples = silence_samples.saturating_add(remaining.len());
+        }
+        speech_buffer.extend_from_slice(&remaining);
     }
 
-    CaptureRunOutcome::from_stream(stream.termination())
+    if should_emit_tail_segment(
+        in_speech,
+        speech_evidence_samples,
+        speech_buffer.len(),
+        &timing,
+    ) {
+        trim_trailing_silence(
+            &mut speech_buffer,
+            silence_samples,
+            timing.trailing_silence_keep_samples,
+        );
+        let emitted_at_ms = now_ms();
+        let sample_end = segment_start_sample.saturating_add(speech_buffer.len() as u64);
+        let boundary = NativeSegmentBoundary {
+            sample_start: segment_start_sample,
+            sample_end,
+            speech_started_at_ms: sample_offset_to_wall_ms(
+                capture_started_at_ms,
+                segment_start_sample,
+                sr,
+            ),
+            speech_ended_at_ms: sample_offset_to_wall_ms(capture_started_at_ms, sample_end, sr),
+            segment_emitted_at_ms: emitted_at_ms,
+            end_reason: tail_end_reason,
+            rollover_family_id,
+            overlap_sample_count: segment_overlap_sample_count as u64,
+            silence_target_samples: timing.silence_samples as u64,
+            minimum_speech_samples: timing.minimum_speech_samples as u64,
+            pre_speech_samples: timing.pre_speech_samples as u64,
+            maximum_segment_samples: timing.maximum_segment_samples as u64,
+        };
+        match encode_and_emit_speech_segment(
+            &app,
+            &capture_session_id,
+            &mut segment_sequence,
+            sr,
+            &speech_buffer,
+            capture_owner,
+            capture_generation,
+            boundary,
+        ) {
+            Ok(emitted_sequence) => {
+                liveness.mark_segment_emitted(emitted_at_ms);
+                emit_vad_liveness(
+                    &app,
+                    &mut liveness,
+                    &capture_session_id,
+                    capture_generation,
+                    capture_owner,
+                    sr,
+                    "segment-emitted",
+                    tail_end_reason.as_str(),
+                    Some(emitted_sequence),
+                    silence_samples,
+                    None,
+                    &config,
+                    emitted_at_ms,
+                );
+            }
+            Err(error) => {
+                emit_segment_dropped(
+                    &app,
+                    capture_owner,
+                    &capture_session_id,
+                    capture_generation,
+                    segment_sequence + 1,
+                    "tail-drain-wav-encoding-failed",
+                    &error,
+                );
+            }
+        }
+    } else if in_speech {
+        liveness.mark_candidate_discarded();
+        emit_vad_liveness(
+            &app,
+            &mut liveness,
+            &capture_session_id,
+            capture_generation,
+            capture_owner,
+            sr,
+            "idle",
+            "tail-discarded",
+            Some(segment_sequence + 1),
+            silence_samples,
+            Some("below-minimum-speech-tail"),
+            &config,
+            now_ms(),
+        );
+    }
+
+    outcome
 }
 
 // Continuous capture (VAD disabled)
@@ -1248,8 +1515,10 @@ async fn run_continuous_capture(
     capture_session_id: String,
     capture_owner: NativeCaptureOwner,
     capture_generation: u64,
+    capture_stop_requested: Arc<AtomicBool>,
 ) -> CaptureRunOutcome {
     let mut stream = stream;
+    let capture_started_at_ms = now_ms();
     let max_samples = (sr as u64 * config.max_recording_duration_secs) as usize;
 
     // Pre-allocate buffer to prevent reallocations
@@ -1282,7 +1551,7 @@ async fn run_continuous_capture(
     let mut outcome = CaptureRunOutcome::expected(CaptureTerminationReason::RequestedStop);
     loop {
         // Check stop flag FIRST on every iteration for immediate stopping
-        if stop_flag.load(Ordering::Acquire) {
+        if stop_flag.load(Ordering::Acquire) || capture_stop_requested.load(Ordering::Acquire) {
             break;
         }
 
@@ -1290,7 +1559,9 @@ async fn run_continuous_capture(
             sample_opt = stream.next() => {
                 match sample_opt {
                     Some(sample) => {
-                        if stop_flag.load(Ordering::Acquire) {
+                        if stop_flag.load(Ordering::Acquire)
+                            || capture_stop_requested.load(Ordering::Acquire)
+                        {
                             break;
                         }
 
@@ -1347,6 +1618,8 @@ async fn run_continuous_capture(
 
         match samples_to_wav_b64(sr, &cleaned_audio) {
             Ok(b64) => {
+                let emitted_at_ms = now_ms();
+                let sample_end = cleaned_audio.len() as u64;
                 emit_speech_detected(
                     &app,
                     &capture_session_id,
@@ -1355,6 +1628,24 @@ async fn run_continuous_capture(
                     b64,
                     capture_owner,
                     capture_generation,
+                    NativeSegmentBoundary {
+                        sample_start: 0,
+                        sample_end,
+                        speech_started_at_ms: capture_started_at_ms,
+                        speech_ended_at_ms: sample_offset_to_wall_ms(
+                            capture_started_at_ms,
+                            sample_end,
+                            sr,
+                        ),
+                        segment_emitted_at_ms: emitted_at_ms,
+                        end_reason: NativeSegmentEndReason::ContinuousStop,
+                        rollover_family_id: None,
+                        overlap_sample_count: 0,
+                        silence_target_samples: 0,
+                        minimum_speech_samples: 0,
+                        pre_speech_samples: 0,
+                        maximum_segment_samples: max_samples as u64,
+                    },
                 );
             }
             Err(e) => {
@@ -1487,19 +1778,61 @@ fn emit_speech_detected(
     audio_base64: String,
     capture_owner: NativeCaptureOwner,
     capture_generation: u64,
-) {
+    boundary: NativeSegmentBoundary,
+) -> u64 {
     *segment_sequence += 1;
+    let duration_samples = boundary.sample_end.saturating_sub(boundary.sample_start);
     let event = NativeSpeechDetectedEvent {
         capture_session_id: capture_session_id.to_string(),
         capture_generation,
         segment_sequence: *segment_sequence,
         owner: capture_owner.as_str(),
-        captured_at_ms: now_ms(),
+        captured_at_ms: boundary.segment_emitted_at_ms,
+        speech_started_at_ms: boundary.speech_started_at_ms,
+        speech_ended_at_ms: boundary.speech_ended_at_ms,
+        segment_emitted_at_ms: boundary.segment_emitted_at_ms,
+        sample_start: boundary.sample_start,
+        sample_end: boundary.sample_end,
         sample_rate,
+        duration_ms: samples_to_ms(duration_samples, sample_rate),
+        end_reason: boundary.end_reason.as_str(),
+        rollover_family_id: boundary.rollover_family_id,
+        overlap_sample_count: boundary.overlap_sample_count,
+        overlap_duration_ms: samples_to_ms(boundary.overlap_sample_count, sample_rate),
+        vad_silence_target_samples: boundary.silence_target_samples,
+        vad_minimum_speech_samples: boundary.minimum_speech_samples,
+        vad_pre_speech_samples: boundary.pre_speech_samples,
+        vad_maximum_segment_samples: boundary.maximum_segment_samples,
         media_type: "audio/wav",
         audio_base64,
     };
     let _ = app.emit("speech-detected", event);
+    *segment_sequence
+}
+
+#[allow(clippy::too_many_arguments)]
+fn encode_and_emit_speech_segment(
+    app: &AppHandle,
+    capture_session_id: &str,
+    segment_sequence: &mut u64,
+    sample_rate: u32,
+    samples: &[f32],
+    capture_owner: NativeCaptureOwner,
+    capture_generation: u64,
+    boundary: NativeSegmentBoundary,
+) -> Result<u64, String> {
+    let normalized = normalize_audio_level(samples, 0.1);
+    let audio_base64 = samples_to_wav_b64(sample_rate, &normalized)?;
+    Ok(emit_speech_detected(
+        app,
+        capture_session_id,
+        segment_sequence,
+        sample_rate,
+        audio_base64,
+        capture_owner,
+        capture_generation,
+        boundary,
+    ))
 }
 
 fn emit_speech_start(
@@ -1533,7 +1866,7 @@ fn emit_vad_liveness(
     state: &'static str,
     trigger: &'static str,
     candidate_segment_sequence: Option<u64>,
-    silence_chunks: usize,
+    silence_samples: usize,
     discard_reason: Option<&'static str>,
     config: &VadConfig,
     occurred_at_ms: u64,
@@ -1546,7 +1879,7 @@ fn emit_vad_liveness(
         state,
         trigger,
         candidate_segment_sequence,
-        silence_chunks,
+        silence_samples,
         discard_reason,
         config,
         occurred_at_ms,
@@ -1760,11 +2093,23 @@ async fn stop_audio_capture_for_owner(
         (lease, task)
     };
 
-    if let Some(task) = task {
-        task.abort();
+    state.capture_stop_requested.store(true, Ordering::Release);
+    if let Some(mut task) = task {
+        if tokio::time::timeout(
+            tokio::time::Duration::from_millis(GRACEFUL_CAPTURE_STOP_TIMEOUT_MS),
+            &mut task,
+        )
+        .await
+        .is_err()
+        {
+            warn!(
+                "Capture {} generation {} did not drain within {}ms; aborting",
+                lease.session_id, lease.generation, GRACEFUL_CAPTURE_STOP_TIMEOUT_MS
+            );
+            task.abort();
+            let _ = task.await;
+        }
     }
-
-    tokio::time::sleep(tokio::time::Duration::from_millis(300)).await;
 
     let stopped = {
         let mut control = state
@@ -1781,13 +2126,13 @@ async fn stop_audio_capture_for_owner(
             control.phase = NativeCapturePhase::Idle;
             control.lease = None;
             clear_capture_metadata(&state);
+            state.capture_stop_requested.store(false, Ordering::Release);
             true
         } else {
             false
         }
     };
 
-    tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
     if stopped {
         let _ = app.emit("capture-stopped", ());
         emit_capture_lifecycle(
@@ -2070,13 +2415,7 @@ pub async fn get_vad_config(app: AppHandle) -> Result<VadConfig, String> {
 
 #[tauri::command]
 pub async fn update_vad_config(app: AppHandle, config: VadConfig) -> Result<(), String> {
-    // Validate config
-    if config.sensitivity_rms < 0.0 || config.sensitivity_rms > 1.0 {
-        return Err("Invalid sensitivity_rms: must be 0.0-1.0".to_string());
-    }
-    if config.max_recording_duration_secs > 3600 {
-        return Err("Invalid max_recording_duration_secs: must be <= 3600 (1 hour)".to_string());
-    }
+    validate_vad_config(&config)?;
 
     let state = app.state::<crate::AudioState>();
     *state
@@ -2084,6 +2423,28 @@ pub async fn update_vad_config(app: AppHandle, config: VadConfig) -> Result<(), 
         .lock()
         .map_err(|e| format!("Failed to update VAD config: {}", e))? = config;
 
+    Ok(())
+}
+
+fn validate_vad_config(config: &VadConfig) -> Result<(), String> {
+    if config.sensitivity_rms < 0.0 || config.sensitivity_rms > 1.0 {
+        return Err("Invalid sensitivity_rms: must be 0.0-1.0".to_string());
+    }
+    if config.max_recording_duration_secs > 3600 {
+        return Err("Invalid max_recording_duration_secs: must be <= 3600 (1 hour)".to_string());
+    }
+    if config.hop_size == 0 || config.hop_size > 16_384 {
+        return Err("Invalid hop_size: must be 1-16384".to_string());
+    }
+    if !(100..=10_000).contains(&config.silence_duration_ms) {
+        return Err("Invalid silence_duration_ms: must be 100-10000".to_string());
+    }
+    if !(50..=5_000).contains(&config.minimum_speech_duration_ms) {
+        return Err("Invalid minimum_speech_duration_ms: must be 50-5000".to_string());
+    }
+    if config.pre_speech_duration_ms > 5_000 {
+        return Err("Invalid pre_speech_duration_ms: must be <= 5000".to_string());
+    }
     Ok(())
 }
 
@@ -2127,6 +2488,7 @@ pub fn get_output_devices() -> Result<Vec<AudioDevice>, String> {
 }
 
 fn clear_capture_metadata(state: &crate::AudioState) {
+    state.capture_stop_requested.store(false, Ordering::Release);
     if let Ok(mut device_id) = state.capture_device_id.lock() {
         *device_id = None;
     }
@@ -2155,15 +2517,56 @@ fn samples_to_ms(sample_count: u64, sample_rate: u32) -> u64 {
         / sample_rate as u64
 }
 
+fn ms_to_samples_ceil(duration_ms: u64, sample_rate: u32) -> usize {
+    if duration_ms == 0 || sample_rate == 0 {
+        return 0;
+    }
+    let samples = duration_ms
+        .saturating_mul(sample_rate as u64)
+        .saturating_add(999)
+        / 1_000;
+    usize::try_from(samples).unwrap_or(usize::MAX)
+}
+
+fn sample_offset_to_wall_ms(
+    capture_started_at_ms: u64,
+    sample_offset: u64,
+    sample_rate: u32,
+) -> u64 {
+    capture_started_at_ms.saturating_add(samples_to_ms(sample_offset, sample_rate))
+}
+
+fn should_emit_tail_segment(
+    in_speech: bool,
+    speech_evidence_samples: usize,
+    buffered_samples: usize,
+    timing: &ResolvedVadTiming,
+) -> bool {
+    in_speech && speech_evidence_samples >= timing.minimum_speech_samples && buffered_samples > 0
+}
+
+fn trim_trailing_silence(
+    samples: &mut Vec<f32>,
+    trailing_silence_samples: usize,
+    keep_silence_samples: usize,
+) {
+    let trim_amount = trailing_silence_samples.saturating_sub(keep_silence_samples);
+    if trim_amount == 0 {
+        return;
+    }
+    samples.truncate(samples.len().saturating_sub(trim_amount));
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         begin_capture_stop, claim_capture_lease, control_owns, decide_debug_audio_fault,
-        release_active_capture_if_owner, CaptureRecoverability, CaptureRunOutcome,
-        CaptureTerminationDiagnostics, CaptureTerminationReason, DebugAudioFaultDisposition,
-        DebugAudioFaultKind, NativeAudioLifecycleEvent, NativeAudioSegmentDroppedEvent,
-        NativeCaptureControl, NativeCaptureOwner, NativeCapturePhase, NativeSpeechDetectedEvent,
-        NativeSpeechStartEvent, NativeStopDecision, SpeakerStreamTermination,
+        release_active_capture_if_owner, should_emit_tail_segment, CaptureRecoverability,
+        CaptureRunOutcome, CaptureTerminationDiagnostics, CaptureTerminationReason,
+        DebugAudioFaultDisposition, DebugAudioFaultKind, NativeAudioLifecycleEvent,
+        NativeAudioSegmentDroppedEvent, NativeCaptureControl, NativeCaptureOwner,
+        NativeCapturePhase, NativeSegmentEndReason, NativeSpeechDetectedEvent,
+        NativeSpeechStartEvent, NativeStopDecision, ResolvedVadTiming, SpeakerStreamTermination,
         SpeakerStreamTerminationReason, VadConfig, VadLivenessAccumulator,
     };
 
@@ -2175,7 +2578,21 @@ mod tests {
             segment_sequence: 7,
             owner: "system",
             captured_at_ms: 1234,
+            speech_started_at_ms: 1_000,
+            speech_ended_at_ms: 1_200,
+            segment_emitted_at_ms: 1_234,
+            sample_start: 48_000,
+            sample_end: 57_600,
             sample_rate: 48_000,
+            duration_ms: 200,
+            end_reason: NativeSegmentEndReason::ForcedRollover.as_str(),
+            rollover_family_id: Some("rollover-test".to_string()),
+            overlap_sample_count: 19_200,
+            overlap_duration_ms: 400,
+            vad_silence_target_samples: 50_160,
+            vad_minimum_speech_samples: 7_824,
+            vad_pre_speech_samples: 13_392,
+            vad_maximum_segment_samples: 1_440_000,
             media_type: "audio/wav",
             audio_base64: "UklGRg==".to_string(),
         };
@@ -2186,7 +2603,15 @@ mod tests {
         assert_eq!(value["segmentSequence"], 7);
         assert_eq!(value["owner"], "system");
         assert_eq!(value["capturedAtMs"], 1234);
+        assert_eq!(value["speechStartedAtMs"], 1_000);
+        assert_eq!(value["speechEndedAtMs"], 1_200);
+        assert_eq!(value["sampleStart"], 48_000);
+        assert_eq!(value["sampleEnd"], 57_600);
         assert_eq!(value["sampleRate"], 48_000);
+        assert_eq!(value["durationMs"], 200);
+        assert_eq!(value["endReason"], "forced-rollover");
+        assert_eq!(value["rolloverFamilyId"], "rollover-test");
+        assert_eq!(value["overlapDurationMs"], 400);
         assert_eq!(value["mediaType"], "audio/wav");
         assert_eq!(value["audioBase64"], "UklGRg==");
     }
@@ -2233,7 +2658,7 @@ mod tests {
         );
 
         let value = serde_json::to_value(event).expect("event should serialize");
-        assert_eq!(value["schemaVersion"], 1);
+        assert_eq!(value["schemaVersion"], 2);
         assert_eq!(value["snapshotSequence"], 1);
         assert_eq!(value["captureSessionId"], "capture-test");
         assert_eq!(value["captureGeneration"], 3);
@@ -2263,6 +2688,50 @@ mod tests {
         assert!(!at_44k.should_emit_periodic(44_100));
         at_44k.observe_chunk(1_024, false, false, 0.0, 0.0, 1_001);
         assert!(at_44k.should_emit_periodic(44_100));
+    }
+
+    #[test]
+    fn vad_timing_preserves_millisecond_semantics_across_sample_rates() {
+        let config = VadConfig::default();
+        let at_48k = ResolvedVadTiming::resolve(&config, 48_000);
+        let at_44k = ResolvedVadTiming::resolve(&config, 44_100);
+
+        assert_eq!(at_48k.silence_samples, 50_160);
+        assert_eq!(at_44k.silence_samples, 46_085);
+        assert_eq!(at_48k.minimum_speech_samples, 7_824);
+        assert_eq!(at_44k.minimum_speech_samples, 7_189);
+        assert_eq!(at_48k.rollover_overlap_samples, 19_200);
+        assert_eq!(at_44k.rollover_overlap_samples, 17_640);
+    }
+
+    #[test]
+    fn tail_drain_requires_a_real_speech_candidate() {
+        let timing = ResolvedVadTiming::resolve(&VadConfig::default(), 48_000);
+
+        assert!(!should_emit_tail_segment(
+            false,
+            timing.minimum_speech_samples,
+            timing.minimum_speech_samples,
+            &timing,
+        ));
+        assert!(!should_emit_tail_segment(
+            true,
+            timing.minimum_speech_samples - 1,
+            timing.minimum_speech_samples,
+            &timing,
+        ));
+        assert!(!should_emit_tail_segment(
+            true,
+            timing.minimum_speech_samples,
+            0,
+            &timing,
+        ));
+        assert!(should_emit_tail_segment(
+            true,
+            timing.minimum_speech_samples,
+            timing.minimum_speech_samples,
+            &timing,
+        ));
     }
 
     #[test]
