@@ -12,6 +12,7 @@ import type {
 } from "./task-taxonomy";
 import type { ActiveMeetingTask } from "./active-meeting-task";
 import type { PlaybookPhaseDecision } from "./playbook-phase";
+import type { AudioInputLivenessPresentation } from "./audio-input-liveness";
 
 export type TranscriptSpeaker = "them" | "me" | "unknown";
 
@@ -1497,6 +1498,7 @@ export interface MeetingAssistantState {
   partialSuggestion: string;
   error: string | null;
   audioStatus: MeetingAudioStatus | null;
+  audioInputLiveness: AudioInputLivenessPresentation | null;
   nativeAudioManualRecovery?: NativeAudioManualRecoveryState;
   settings: MeetingAssistantSettings;
   lastMemoryContext?: MemoryRetrievalResult;

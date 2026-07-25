@@ -52,6 +52,8 @@ import {
   MeetingAssistantStatus,
   MeetingAudioConfig,
   MeetingAudioStatus,
+  AudioInputLivenessPresentation,
+  NativeAudioLivenessEvent,
   NativeAudioDebugFaultKind,
   NativeAudioDebugFaultResult,
   NativeAudioCaptureStartMode,
@@ -148,9 +150,12 @@ import {
   pruneNativeAudioRecoveryAttempts,
   authorizeNativeSpeechDetectedEvent,
   authorizeNativeSpeechStartEvent,
+  authorizeNativeAudioLivenessEvent,
+  buildAudioInputLivenessTraceMetadata,
   buildNativeAudioLifecycleTraceMetadata,
   buildNativeSpeechEventTraceMetadata,
   buildNativeSpeechStartTraceMetadata,
+  resolveAudioInputLivenessPresentation,
   parseNativeAudioSegmentDroppedEvent,
   buildMemoryEvaluationTraceMetadata,
   formatMeetingAnswerTraceMetadata,
@@ -485,6 +490,7 @@ const INITIAL_STATE: MeetingAssistantState = {
   traces: [],
   error: null,
   audioStatus: null,
+  audioInputLiveness: null,
   settings: {
     screenContextEnabled: true,
     privacyMode: "text-and-screen-to-cloud",
@@ -1770,6 +1776,11 @@ export function useMeetingAssistant() {
     event: NativeSpeechStartEvent;
     observedAtMs: number;
   } | null>(null);
+  const latestNativeAudioLivenessRef = useRef<{
+    event: NativeAudioLivenessEvent;
+    observedAtMs: number;
+  } | null>(null);
+  const lastNativeAudioLivenessSequenceRef = useRef(0);
   const nativeRecoveryAttemptTimestampsRef = useRef<number[]>([]);
   const nativeAudioManualRecoveryRef =
     useRef<NativeAudioManualRecoveryState | null>(null);
@@ -2954,6 +2965,8 @@ export function useMeetingAssistant() {
     lastNativeSegmentSequenceRef.current = 0;
     lastNativeSpeechStartCandidateSequenceRef.current = 0;
     latestNativeSpeechStartRef.current = null;
+    latestNativeAudioLivenessRef.current = null;
+    lastNativeAudioLivenessSequenceRef.current = 0;
     systemAudioQueueTailRef.current = Promise.resolve();
     microphoneAudioQueueTailRef.current = Promise.resolve();
     clearPendingConfirmation("session-invalidated");
@@ -10431,6 +10444,8 @@ export function useMeetingAssistant() {
       lastNativeSegmentSequenceRef.current = 0;
       lastNativeSpeechStartCandidateSequenceRef.current = 0;
       latestNativeSpeechStartRef.current = null;
+      latestNativeAudioLivenessRef.current = null;
+      lastNativeAudioLivenessSequenceRef.current = 0;
       if (policy.resetRecoveryBudget) {
         nativeRecoveryAttemptTimestampsRef.current = [];
       }
@@ -10596,6 +10611,8 @@ export function useMeetingAssistant() {
           lastNativeSegmentSequenceRef.current = 0;
           lastNativeSpeechStartCandidateSequenceRef.current = 0;
           latestNativeSpeechStartRef.current = null;
+          latestNativeAudioLivenessRef.current = null;
+          lastNativeAudioLivenessSequenceRef.current = 0;
           activeRef.current = true;
           const contextState = contextManagerRef.current.getState();
           if (state.settings.useMemory) {
@@ -14676,13 +14693,140 @@ export function useMeetingAssistant() {
   }, [state.settings.taxonomyAdjudication]);
 
   useEffect(() => {
+    const captureActive = Boolean(
+      state.audioStatus?.active &&
+        state.audioStatus.captureSessionId &&
+        state.audioStatus.captureGeneration != null
+    );
+    const vadEnabled = Boolean(state.audioStatus?.vadEnabled);
+    const captureSessionId = state.audioStatus?.captureSessionId ?? undefined;
+    if (
+      latestNativeAudioLivenessRef.current &&
+      latestNativeAudioLivenessRef.current.event.captureSessionId !==
+        captureSessionId
+    ) {
+      latestNativeAudioLivenessRef.current = null;
+      lastNativeAudioLivenessSequenceRef.current = 0;
+    }
+
+    const refresh = () => {
+      const latest = latestNativeAudioLivenessRef.current;
+      const presentation = resolveAudioInputLivenessPresentation({
+        captureActive,
+        vadEnabled,
+        captureStartedAtMs: state.audioStatus?.startedAtMs ?? undefined,
+        latestEvent: latest?.event,
+        latestObservedAtMs: latest?.observedAtMs,
+        nowMs: Date.now(),
+      });
+      setState((previous) =>
+        sameAudioInputLiveness(
+          previous.audioInputLiveness,
+          presentation
+        )
+          ? previous
+          : {
+              ...previous,
+              audioInputLiveness: presentation,
+            }
+      );
+    };
+
+    refresh();
+    if (!captureActive || !vadEnabled) return;
+    const intervalId = window.setInterval(refresh, 1_000);
+    return () => {
+      window.clearInterval(intervalId);
+    };
+  }, [
+    state.audioStatus?.active,
+    state.audioStatus?.captureGeneration,
+    state.audioStatus?.captureSessionId,
+    state.audioStatus?.startedAtMs,
+    state.audioStatus?.vadEnabled,
+  ]);
+
+  useEffect(() => {
     let disposed = false;
+    let unlistenAudioLiveness: (() => void) | undefined;
     let unlistenSpeechStart: (() => void) | undefined;
     let unlistenSpeech: (() => void) | undefined;
     let unlistenSegmentDrop: (() => void) | undefined;
     let unlistenLifecycle: (() => void) | undefined;
 
     const setupListeners = async () => {
+      const audioLivenessUnlisten = await listen<unknown>(
+        "native-audio-liveness",
+        (event) => {
+          const observedAtMs = Date.now();
+          const authorization = authorizeNativeAudioLivenessEvent({
+            payload: event.payload,
+            activeCaptureSessionId: nativeCaptureSessionIdRef.current,
+            activeCaptureGeneration: nativeCaptureGenerationRef.current,
+            expectedOwner: "meeting",
+            expectedSource: "system-audio",
+            lastSnapshotSequence:
+              lastNativeAudioLivenessSequenceRef.current,
+          });
+          const metadata = {
+            stage: "native-audio-liveness",
+            authorized: authorization.authorized,
+            ...(!authorization.authorized
+              ? { rejectionReason: authorization.reason }
+              : {}),
+            activeNativeCaptureSessionId:
+              nativeCaptureSessionIdRef.current,
+            ...(authorization.event
+              ? buildAudioInputLivenessTraceMetadata(
+                  authorization.event,
+                  observedAtMs
+                )
+              : {}),
+          };
+          sessionRecordingManagerRef.current?.recordAudioInputLiveness(
+            metadata
+          );
+          if (!authorization.authorized) {
+            console.info(
+              `[${new Date().toISOString()}] [native-audio-liveness] rejected`,
+              JSON.stringify(metadata)
+            );
+            return;
+          }
+
+          lastNativeAudioLivenessSequenceRef.current =
+            authorization.event.snapshotSequence;
+          latestNativeAudioLivenessRef.current = {
+            event: authorization.event,
+            observedAtMs,
+          };
+          const presentation = resolveAudioInputLivenessPresentation({
+            captureActive: true,
+            vadEnabled: true,
+            latestEvent: authorization.event,
+            latestObservedAtMs: observedAtMs,
+            nowMs: observedAtMs,
+          });
+          setState((previous) =>
+            sameAudioInputLiveness(
+              previous.audioInputLiveness,
+              presentation
+            )
+              ? previous
+              : {
+                  ...previous,
+                  audioInputLiveness: presentation,
+                }
+          );
+        }
+      );
+
+      if (disposed) {
+        audioLivenessUnlisten();
+        return;
+      }
+      unlistenAudioLiveness = audioLivenessUnlisten;
+
       const speechStartUnlisten = await listen<unknown>(
         "speech-start",
         (event) => {
@@ -14904,6 +15048,8 @@ export function useMeetingAssistant() {
           lastNativeSegmentSequenceRef.current = 0;
           lastNativeSpeechStartCandidateSequenceRef.current = 0;
           latestNativeSpeechStartRef.current = null;
+          latestNativeAudioLivenessRef.current = null;
+          lastNativeAudioLivenessSequenceRef.current = 0;
 
           if (disposition === "expected-stop") {
             return;
@@ -15004,6 +15150,7 @@ export function useMeetingAssistant() {
 
     return () => {
       disposed = true;
+      unlistenAudioLiveness?.();
       unlistenSpeechStart?.();
       unlistenSpeech?.();
       unlistenSegmentDrop?.();
@@ -15213,6 +15360,20 @@ function formatTraceModelInput(systemPrompt: string, userMessage: string) {
 
 function formatTraceMetadata(metadata: Record<string, unknown>) {
   return JSON.stringify(metadata, null, 2);
+}
+
+function sameAudioInputLiveness(
+  left: AudioInputLivenessPresentation | null,
+  right: AudioInputLivenessPresentation | null
+) {
+  if (left === right) return true;
+  if (!left || !right) return false;
+  return (
+    left.state === right.state &&
+    left.severity === right.severity &&
+    left.captureSessionId === right.captureSessionId &&
+    left.snapshotSequence === right.snapshotSequence
+  );
 }
 
 function readStringFromTraceMetadata(

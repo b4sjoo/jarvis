@@ -7,6 +7,7 @@ export * from "./answer-sufficiency-adjudication";
 export * from "./answer-sufficiency-semantic-prototypes";
 export * from "./answer-sufficiency-semantic-resolver";
 export * from "./answer-sufficiency-reflection";
+export * from "./audio-input-liveness";
 export * from "./interviewer-intent";
 export * from "./interviewer-intent-keyword-evidence";
 export * from "./advisor-trigger-job";

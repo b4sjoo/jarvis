@@ -220,6 +220,204 @@ pub struct NativeSpeechStartEvent {
     pub sample_rate: u32,
 }
 
+const VAD_LIVENESS_SCHEMA_VERSION: u16 = 1;
+const VAD_LIVENESS_INTERVAL_MS: u64 = 2_000;
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NativeAudioLivenessEvent {
+    pub schema_version: u16,
+    pub snapshot_sequence: u64,
+    pub capture_session_id: String,
+    pub capture_generation: u64,
+    pub owner: &'static str,
+    pub source: &'static str,
+    pub occurred_at_ms: u64,
+    pub sample_rate: u32,
+    pub state: &'static str,
+    pub trigger: &'static str,
+    pub candidate_segment_sequence: Option<u64>,
+    pub candidate_started_at_ms: Option<u64>,
+    pub candidate_duration_ms: u64,
+    pub silence_duration_ms: u64,
+    pub interval_duration_ms: u64,
+    pub interval_chunk_count: u64,
+    pub interval_signal_chunk_count: u64,
+    pub interval_speech_chunk_count: u64,
+    pub interval_max_rms: f32,
+    pub interval_max_peak: f32,
+    pub processed_chunk_count: u64,
+    pub signal_chunk_count: u64,
+    pub speech_chunk_count: u64,
+    pub speech_candidate_count: u64,
+    pub segment_emitted_count: u64,
+    pub candidate_discarded_count: u64,
+    pub last_signal_observed_at_ms: Option<u64>,
+    pub last_speech_candidate_at_ms: Option<u64>,
+    pub last_segment_emitted_at_ms: Option<u64>,
+    pub discard_reason: Option<&'static str>,
+    pub vad_config_revision: u16,
+    pub hop_size: usize,
+    pub sensitivity_rms: f32,
+    pub peak_threshold: f32,
+    pub noise_gate_threshold: f32,
+    pub silence_target_ms: u64,
+    pub minimum_speech_ms: u64,
+    pub maximum_segment_ms: u64,
+}
+
+#[derive(Debug, Default)]
+struct VadLivenessAccumulator {
+    snapshot_sequence: u64,
+    interval_sample_count: u64,
+    interval_chunk_count: u64,
+    interval_signal_chunk_count: u64,
+    interval_speech_chunk_count: u64,
+    interval_max_rms: f32,
+    interval_max_peak: f32,
+    processed_chunk_count: u64,
+    signal_chunk_count: u64,
+    speech_chunk_count: u64,
+    speech_candidate_count: u64,
+    segment_emitted_count: u64,
+    candidate_discarded_count: u64,
+    candidate_started_at_ms: Option<u64>,
+    last_signal_observed_at_ms: Option<u64>,
+    last_speech_candidate_at_ms: Option<u64>,
+    last_segment_emitted_at_ms: Option<u64>,
+}
+
+impl VadLivenessAccumulator {
+    fn observe_chunk(
+        &mut self,
+        sample_count: usize,
+        signal_observed: bool,
+        speech_observed: bool,
+        rms: f32,
+        peak: f32,
+        observed_at_ms: u64,
+    ) {
+        self.interval_sample_count = self
+            .interval_sample_count
+            .saturating_add(sample_count as u64);
+        self.interval_chunk_count = self.interval_chunk_count.saturating_add(1);
+        self.processed_chunk_count = self.processed_chunk_count.saturating_add(1);
+        self.interval_max_rms = self.interval_max_rms.max(rms);
+        self.interval_max_peak = self.interval_max_peak.max(peak);
+
+        if signal_observed {
+            self.interval_signal_chunk_count = self.interval_signal_chunk_count.saturating_add(1);
+            self.signal_chunk_count = self.signal_chunk_count.saturating_add(1);
+            self.last_signal_observed_at_ms = Some(observed_at_ms);
+        }
+        if speech_observed {
+            self.interval_speech_chunk_count = self.interval_speech_chunk_count.saturating_add(1);
+            self.speech_chunk_count = self.speech_chunk_count.saturating_add(1);
+        }
+    }
+
+    fn begin_candidate(&mut self, occurred_at_ms: u64) {
+        self.speech_candidate_count = self.speech_candidate_count.saturating_add(1);
+        self.candidate_started_at_ms = Some(occurred_at_ms);
+        self.last_speech_candidate_at_ms = Some(occurred_at_ms);
+    }
+
+    fn mark_segment_emitted(&mut self, occurred_at_ms: u64) {
+        self.segment_emitted_count = self.segment_emitted_count.saturating_add(1);
+        self.last_segment_emitted_at_ms = Some(occurred_at_ms);
+    }
+
+    fn mark_candidate_discarded(&mut self) {
+        self.candidate_discarded_count = self.candidate_discarded_count.saturating_add(1);
+    }
+
+    fn clear_candidate(&mut self) {
+        self.candidate_started_at_ms = None;
+    }
+
+    fn should_emit_periodic(&self, sample_rate: u32) -> bool {
+        self.interval_sample_count.saturating_mul(1_000)
+            >= (sample_rate as u64).saturating_mul(VAD_LIVENESS_INTERVAL_MS)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn take_snapshot(
+        &mut self,
+        capture_session_id: &str,
+        capture_generation: u64,
+        owner: NativeCaptureOwner,
+        sample_rate: u32,
+        state: &'static str,
+        trigger: &'static str,
+        candidate_segment_sequence: Option<u64>,
+        silence_chunks: usize,
+        discard_reason: Option<&'static str>,
+        config: &VadConfig,
+        occurred_at_ms: u64,
+    ) -> NativeAudioLivenessEvent {
+        self.snapshot_sequence = self.snapshot_sequence.saturating_add(1);
+        let event = NativeAudioLivenessEvent {
+            schema_version: VAD_LIVENESS_SCHEMA_VERSION,
+            snapshot_sequence: self.snapshot_sequence,
+            capture_session_id: capture_session_id.to_string(),
+            capture_generation,
+            owner: owner.as_str(),
+            source: "system-audio",
+            occurred_at_ms,
+            sample_rate,
+            state,
+            trigger,
+            candidate_segment_sequence,
+            candidate_started_at_ms: self.candidate_started_at_ms,
+            candidate_duration_ms: self
+                .candidate_started_at_ms
+                .map(|started_at| occurred_at_ms.saturating_sub(started_at))
+                .unwrap_or(0),
+            silence_duration_ms: samples_to_ms(
+                silence_chunks.saturating_mul(config.hop_size) as u64,
+                sample_rate,
+            ),
+            interval_duration_ms: samples_to_ms(self.interval_sample_count, sample_rate),
+            interval_chunk_count: self.interval_chunk_count,
+            interval_signal_chunk_count: self.interval_signal_chunk_count,
+            interval_speech_chunk_count: self.interval_speech_chunk_count,
+            interval_max_rms: self.interval_max_rms,
+            interval_max_peak: self.interval_max_peak,
+            processed_chunk_count: self.processed_chunk_count,
+            signal_chunk_count: self.signal_chunk_count,
+            speech_chunk_count: self.speech_chunk_count,
+            speech_candidate_count: self.speech_candidate_count,
+            segment_emitted_count: self.segment_emitted_count,
+            candidate_discarded_count: self.candidate_discarded_count,
+            last_signal_observed_at_ms: self.last_signal_observed_at_ms,
+            last_speech_candidate_at_ms: self.last_speech_candidate_at_ms,
+            last_segment_emitted_at_ms: self.last_segment_emitted_at_ms,
+            discard_reason,
+            vad_config_revision: VAD_LIVENESS_SCHEMA_VERSION,
+            hop_size: config.hop_size,
+            sensitivity_rms: config.sensitivity_rms,
+            peak_threshold: config.peak_threshold,
+            noise_gate_threshold: config.noise_gate_threshold,
+            silence_target_ms: samples_to_ms(
+                config.silence_chunks.saturating_mul(config.hop_size) as u64,
+                sample_rate,
+            ),
+            minimum_speech_ms: samples_to_ms(
+                config.min_speech_chunks.saturating_mul(config.hop_size) as u64,
+                sample_rate,
+            ),
+            maximum_segment_ms: 30_000,
+        };
+        self.interval_sample_count = 0;
+        self.interval_chunk_count = 0;
+        self.interval_signal_chunk_count = 0;
+        self.interval_speech_chunk_count = 0;
+        self.interval_max_rms = 0.0;
+        self.interval_max_peak = 0.0;
+        event
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NativeAudioLifecycleEvent {
@@ -744,6 +942,7 @@ async fn run_vad_capture(
     let mut speech_chunks = 0;
     let max_samples = sr as usize * 30; // 30s safety cap per utterance
     let mut segment_sequence = 0_u64;
+    let mut liveness = VadLivenessAccumulator::default();
     let mut evaluation_tap = if capture_owner == NativeCaptureOwner::Meeting {
         create_raw_evaluation_capture_tap(&app, &capture_session_id, capture_generation, sr)
     } else {
@@ -770,12 +969,15 @@ async fn run_vad_capture(
 
             let (rms, peak) = calculate_audio_metrics(&mono);
             let is_speech = rms > config.sensitivity_rms || peak > config.peak_threshold;
+            let observed_at_ms = now_ms();
+            liveness.observe_chunk(mono.len(), peak > 0.0, is_speech, rms, peak, observed_at_ms);
 
             if is_speech {
                 if !in_speech {
                     // Speech START detected
                     in_speech = true;
                     speech_chunks = 0;
+                    liveness.begin_candidate(observed_at_ms);
 
                     // Include pre-speech buffer for natural sound
                     speech_buffer.extend(pre_speech.drain(..));
@@ -787,6 +989,21 @@ async fn run_vad_capture(
                         sr,
                         capture_owner,
                         capture_generation,
+                    );
+                    emit_vad_liveness(
+                        &app,
+                        &mut liveness,
+                        &capture_session_id,
+                        capture_generation,
+                        capture_owner,
+                        sr,
+                        "speech-candidate",
+                        "speech-start",
+                        Some(segment_sequence + 1),
+                        silence_chunks,
+                        None,
+                        &config,
+                        observed_at_ms,
                     );
                 }
 
@@ -808,6 +1025,23 @@ async fn run_vad_capture(
                                 capture_owner,
                                 capture_generation,
                             );
+                            let emitted_at_ms = now_ms();
+                            liveness.mark_segment_emitted(emitted_at_ms);
+                            emit_vad_liveness(
+                                &app,
+                                &mut liveness,
+                                &capture_session_id,
+                                capture_generation,
+                                capture_owner,
+                                sr,
+                                "segment-emitted",
+                                "forced-rollover",
+                                Some(segment_sequence),
+                                silence_chunks,
+                                None,
+                                &config,
+                                emitted_at_ms,
+                            );
                         }
                         Err(error) => {
                             emit_segment_dropped(
@@ -819,11 +1053,29 @@ async fn run_vad_capture(
                                 "wav-encoding-failed",
                                 &error,
                             );
+                            let dropped_at_ms = now_ms();
+                            liveness.mark_candidate_discarded();
+                            emit_vad_liveness(
+                                &app,
+                                &mut liveness,
+                                &capture_session_id,
+                                capture_generation,
+                                capture_owner,
+                                sr,
+                                "stalled",
+                                "candidate-discarded",
+                                Some(segment_sequence + 1),
+                                silence_chunks,
+                                Some("wav-encoding-failed"),
+                                &config,
+                                dropped_at_ms,
+                            );
                         }
                     }
                     speech_buffer.clear();
                     in_speech = false;
                     speech_chunks = 0;
+                    liveness.clear_candidate();
                 }
             } else {
                 // Silence detected
@@ -860,6 +1112,23 @@ async fn run_vad_capture(
                                         capture_owner,
                                         capture_generation,
                                     );
+                                    let emitted_at_ms = now_ms();
+                                    liveness.mark_segment_emitted(emitted_at_ms);
+                                    emit_vad_liveness(
+                                        &app,
+                                        &mut liveness,
+                                        &capture_session_id,
+                                        capture_generation,
+                                        capture_owner,
+                                        sr,
+                                        "segment-emitted",
+                                        "silence-boundary",
+                                        Some(segment_sequence),
+                                        silence_chunks,
+                                        None,
+                                        &config,
+                                        emitted_at_ms,
+                                    );
                                 }
                                 Err(error) => {
                                     error!("Failed to encode speech to WAV: {}", error);
@@ -872,10 +1141,43 @@ async fn run_vad_capture(
                                         "wav-encoding-failed",
                                         &error,
                                     );
+                                    let dropped_at_ms = now_ms();
+                                    liveness.mark_candidate_discarded();
+                                    emit_vad_liveness(
+                                        &app,
+                                        &mut liveness,
+                                        &capture_session_id,
+                                        capture_generation,
+                                        capture_owner,
+                                        sr,
+                                        "stalled",
+                                        "candidate-discarded",
+                                        Some(segment_sequence + 1),
+                                        silence_chunks,
+                                        Some("wav-encoding-failed"),
+                                        &config,
+                                        dropped_at_ms,
+                                    );
                                     let _ = app.emit("audio-encoding-error", error);
                                 }
                             }
                         } else {
+                            liveness.mark_candidate_discarded();
+                            emit_vad_liveness(
+                                &app,
+                                &mut liveness,
+                                &capture_session_id,
+                                capture_generation,
+                                capture_owner,
+                                sr,
+                                "idle",
+                                "candidate-discarded",
+                                Some(segment_sequence + 1),
+                                silence_chunks,
+                                Some("below-minimum-speech"),
+                                &config,
+                                now_ms(),
+                            );
                             let _ = app.emit(
                                 "speech-discarded",
                                 "Audio too short (likely background noise)",
@@ -887,6 +1189,7 @@ async fn run_vad_capture(
                         in_speech = false;
                         silence_chunks = 0;
                         speech_chunks = 0;
+                        liveness.clear_candidate();
                     }
                 } else {
                     // Not in speech yet - maintain rolling pre-speech buffer
@@ -902,6 +1205,33 @@ async fn run_vad_capture(
                         pre_speech.shrink_to_fit();
                     }
                 }
+            }
+
+            if liveness.should_emit_periodic(sr) {
+                let state = if in_speech && silence_chunks > 0 {
+                    "awaiting-silence"
+                } else if in_speech {
+                    "segment-open"
+                } else if liveness.interval_signal_chunk_count > 0 {
+                    "signal-observed"
+                } else {
+                    "idle"
+                };
+                emit_vad_liveness(
+                    &app,
+                    &mut liveness,
+                    &capture_session_id,
+                    capture_generation,
+                    capture_owner,
+                    sr,
+                    state,
+                    "periodic",
+                    in_speech.then_some(segment_sequence + 1),
+                    silence_chunks,
+                    None,
+                    &config,
+                    now_ms(),
+                );
             }
         }
     }
@@ -1190,6 +1520,38 @@ fn emit_speech_start(
         sample_rate,
     };
     let _ = app.emit("speech-start", event);
+}
+
+#[allow(clippy::too_many_arguments)]
+fn emit_vad_liveness(
+    app: &AppHandle,
+    liveness: &mut VadLivenessAccumulator,
+    capture_session_id: &str,
+    capture_generation: u64,
+    capture_owner: NativeCaptureOwner,
+    sample_rate: u32,
+    state: &'static str,
+    trigger: &'static str,
+    candidate_segment_sequence: Option<u64>,
+    silence_chunks: usize,
+    discard_reason: Option<&'static str>,
+    config: &VadConfig,
+    occurred_at_ms: u64,
+) {
+    let event = liveness.take_snapshot(
+        capture_session_id,
+        capture_generation,
+        capture_owner,
+        sample_rate,
+        state,
+        trigger,
+        candidate_segment_sequence,
+        silence_chunks,
+        discard_reason,
+        config,
+        occurred_at_ms,
+    );
+    let _ = app.emit("native-audio-liveness", event);
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1783,6 +2145,16 @@ fn now_ms() -> u64 {
         .unwrap_or(0)
 }
 
+fn samples_to_ms(sample_count: u64, sample_rate: u32) -> u64 {
+    if sample_rate == 0 {
+        return 0;
+    }
+    sample_count
+        .saturating_mul(1_000)
+        .saturating_add((sample_rate as u64) / 2)
+        / sample_rate as u64
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -1792,7 +2164,7 @@ mod tests {
         DebugAudioFaultKind, NativeAudioLifecycleEvent, NativeAudioSegmentDroppedEvent,
         NativeCaptureControl, NativeCaptureOwner, NativeCapturePhase, NativeSpeechDetectedEvent,
         NativeSpeechStartEvent, NativeStopDecision, SpeakerStreamTermination,
-        SpeakerStreamTerminationReason,
+        SpeakerStreamTerminationReason, VadConfig, VadLivenessAccumulator,
     };
 
     #[test]
@@ -1839,6 +2211,58 @@ mod tests {
         assert_eq!(value["source"], "system-audio");
         assert_eq!(value["occurredAtMs"], 1234);
         assert_eq!(value["sampleRate"], 48_000);
+    }
+
+    #[test]
+    fn serializes_compact_vad_liveness_without_audio() {
+        let mut liveness = VadLivenessAccumulator::default();
+        liveness.observe_chunk(1_024, true, true, 0.02, 0.04, 1_200);
+        liveness.begin_candidate(1_200);
+        let event = liveness.take_snapshot(
+            "capture-test",
+            3,
+            NativeCaptureOwner::Meeting,
+            48_000,
+            "speech-candidate",
+            "speech-start",
+            Some(8),
+            0,
+            None,
+            &VadConfig::default(),
+            1_200,
+        );
+
+        let value = serde_json::to_value(event).expect("event should serialize");
+        assert_eq!(value["schemaVersion"], 1);
+        assert_eq!(value["snapshotSequence"], 1);
+        assert_eq!(value["captureSessionId"], "capture-test");
+        assert_eq!(value["captureGeneration"], 3);
+        assert_eq!(value["state"], "speech-candidate");
+        assert_eq!(value["trigger"], "speech-start");
+        assert_eq!(value["candidateSegmentSequence"], 8);
+        assert_eq!(value["intervalChunkCount"], 1);
+        assert_eq!(value["intervalSignalChunkCount"], 1);
+        assert_eq!(value["intervalSpeechChunkCount"], 1);
+        assert!(value.get("audioBase64").is_none());
+    }
+
+    #[test]
+    fn vad_liveness_uses_sample_rate_for_periodic_interval() {
+        let mut at_48k = VadLivenessAccumulator::default();
+        for _ in 0..93 {
+            at_48k.observe_chunk(1_024, false, false, 0.0, 0.0, 1_000);
+        }
+        assert!(!at_48k.should_emit_periodic(48_000));
+        at_48k.observe_chunk(1_024, false, false, 0.0, 0.0, 1_001);
+        assert!(at_48k.should_emit_periodic(48_000));
+
+        let mut at_44k = VadLivenessAccumulator::default();
+        for _ in 0..86 {
+            at_44k.observe_chunk(1_024, false, false, 0.0, 0.0, 1_000);
+        }
+        assert!(!at_44k.should_emit_periodic(44_100));
+        at_44k.observe_chunk(1_024, false, false, 0.0, 0.0, 1_001);
+        assert!(at_44k.should_emit_periodic(44_100));
     }
 
     #[test]

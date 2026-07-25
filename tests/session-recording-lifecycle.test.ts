@@ -306,6 +306,49 @@ test("native speech telemetry never persists audio payloads", async () => {
   await manager.stop("test-complete");
 });
 
+test("audio input liveness is copied to a dedicated compact session stream", async () => {
+  const native = new ControlledRecordingInvoke();
+  const manager = new SessionRecordingManager(undefined, native.invoke);
+  await manager.start(START_OPTIONS);
+  await settle();
+
+  manager.recordAudioInputLiveness({
+    authorized: true,
+    audioInputLivenessState: "signal-observed",
+    audioInputLivenessSnapshotSequence: 4,
+    nativeCaptureSessionId: "capture-1",
+    vadIntervalChunkCount: 94,
+    vadIntervalSignalChunkCount: 12,
+    audioBase64: "must-not-persist",
+  });
+  await settle();
+
+  const livenessWrite = native.calls.find(
+    (call) =>
+      call.command === "write_meeting_session_recording_text" &&
+      stringArg(call, "relativePath") === "audio/input-liveness.jsonl"
+  );
+  assert.ok(livenessWrite);
+  const livenessPayload = stringArg(livenessWrite, "payload");
+  assert.match(livenessPayload, /signal-observed/);
+  assert.match(livenessPayload, /capture-1/);
+  assert.equal(livenessPayload.includes("must-not-persist"), false);
+
+  const timelinePayload = native.calls
+    .filter(
+      (call) =>
+        call.command === "write_meeting_session_recording_text" &&
+        stringArg(call, "relativePath") === "timeline.jsonl"
+    )
+    .map((call) => stringArg(call, "payload"))
+    .join("");
+  assert.match(timelinePayload, /native-audio-liveness/);
+  assert.match(timelinePayload, /audio\/input-liveness\.jsonl/);
+  assert.equal(timelinePayload.includes("must-not-persist"), false);
+
+  await manager.stop("test-complete");
+});
+
 test("session aggregates retain synthetic evidence without counting it as production", async () => {
   const native = new ControlledRecordingInvoke();
   const manager = new SessionRecordingManager(undefined, native.invoke);

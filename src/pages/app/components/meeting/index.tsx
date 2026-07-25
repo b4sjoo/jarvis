@@ -29,6 +29,7 @@ import type {
   InterviewTargetCompany,
   MeetingAudioConfig,
   MeetingAudioProfile,
+  AudioInputLivenessPresentation,
   NativeAudioDebugFaultKind,
   NativeAudioPauseResumeControlPresentation,
   MeetingCodingModelSettings,
@@ -1477,6 +1478,7 @@ export const MeetingAssistant = ({
               speechCorrections={meeting.speechCorrections}
               status={meeting.status}
               error={meeting.error}
+              audioInputLiveness={meeting.audioInputLiveness}
               isBusy={isBusy}
               audioControl={audioPauseResumeControl}
               onToggleAudio={() => {
@@ -1607,6 +1609,23 @@ export const MeetingAssistant = ({
                   <div className="text-xs font-medium text-red-800">Error</div>
                   <div className={cn(WRAP_TEXT_CLASS, "mt-1 text-xs text-red-700")}>
                     {meeting.error}
+                  </div>
+                </section>
+              ) : null}
+
+              {meeting.audioInputLiveness?.severity === "warning" ? (
+                <section className="min-w-0 overflow-hidden rounded-md border border-amber-200 bg-amber-50 p-3">
+                  <div className="flex items-center gap-2 text-xs font-medium text-amber-900">
+                    <ActivityIcon className="h-3.5 w-3.5" />
+                    {meeting.audioInputLiveness.label}
+                  </div>
+                  <div
+                    className={cn(
+                      WRAP_TEXT_CLASS,
+                      "mt-1 text-[10px] text-amber-800"
+                    )}
+                  >
+                    {meeting.audioInputLiveness.detail}
                   </div>
                 </section>
               ) : null}
@@ -1992,6 +2011,80 @@ export const MeetingAssistant = ({
 
               {meeting.settings.debugMode && traceSummary.traceCount ? (
                 <TraceBaselinePanel summary={traceSummary} />
+              ) : null}
+
+              {meeting.settings.debugMode &&
+              meeting.audioInputLiveness ? (
+                <section className="min-w-0 overflow-hidden rounded-md border border-border/70 p-3">
+                  <div className="mb-2 flex items-center gap-2 text-xs font-semibold">
+                    <ActivityIcon className="h-3.5 w-3.5" />
+                    Audio input liveness
+                    <Badge
+                      variant="outline"
+                      className="ml-auto rounded-sm px-1.5 py-0 text-[10px] font-normal"
+                    >
+                      {meeting.audioInputLiveness.state}
+                    </Badge>
+                  </div>
+                  <div className="grid grid-cols-3 gap-2">
+                    <Metric
+                      label="Heartbeat"
+                      value={
+                        meeting.audioInputLiveness.heartbeatAgeMs == null
+                          ? "-"
+                          : `${meeting.audioInputLiveness.heartbeatAgeMs}ms`
+                      }
+                    />
+                    <Metric
+                      label="Candidates"
+                      value={
+                        meeting.audioInputLiveness.latestEvent
+                          ?.speechCandidateCount ?? 0
+                      }
+                    />
+                    <Metric
+                      label="Segments"
+                      value={
+                        meeting.audioInputLiveness.latestEvent
+                          ?.segmentEmittedCount ?? 0
+                      }
+                    />
+                  </div>
+                  <div
+                    className={cn(
+                      WRAP_TEXT_CLASS,
+                      "mt-2 text-[10px] text-muted-foreground"
+                    )}
+                  >
+                    {meeting.audioInputLiveness.detail}
+                  </div>
+                  {meeting.audioInputLiveness.latestEvent ? (
+                    <div className="mt-1 font-mono text-[10px] text-muted-foreground">
+                      rms{" "}
+                      {meeting.audioInputLiveness.latestEvent.intervalMaxRms.toFixed(
+                        4
+                      )}{" "}
+                      / peak{" "}
+                      {meeting.audioInputLiveness.latestEvent.intervalMaxPeak.toFixed(
+                        4
+                      )}{" "}
+                      / signal{" "}
+                      {
+                        meeting.audioInputLiveness.latestEvent
+                          .intervalSignalChunkCount
+                      }
+                      /{
+                        meeting.audioInputLiveness.latestEvent
+                          .intervalChunkCount
+                      }{" "}
+                      / discarded{" "}
+                      {
+                        meeting.audioInputLiveness.latestEvent
+                          .candidateDiscardedCount
+                      }
+                    </div>
+                  ) : null}
+                </section>
               ) : null}
 
               {meeting.settings.debugMode &&
@@ -2484,6 +2577,7 @@ const FocusModePanel = ({
   speechCorrections,
   status,
   error,
+  audioInputLiveness,
   isBusy,
   audioControl,
   onToggleAudio,
@@ -2518,6 +2612,7 @@ const FocusModePanel = ({
   speechCorrections: SpeechCorrection[];
   status: keyof typeof statusLabel;
   error: string | null;
+  audioInputLiveness: AudioInputLivenessPresentation | null;
   isBusy: boolean;
   audioControl: NativeAudioPauseResumeControlPresentation;
   onToggleAudio: () => void;
@@ -2709,6 +2804,15 @@ const FocusModePanel = ({
                 <PlayIcon className="h-3 w-3 shrink-0" />
               )}
             </Button>
+            {audioInputLiveness?.severity === "warning" ? (
+              <span
+                className="flex shrink-0 items-center gap-1 text-[10px] text-amber-700"
+                title={audioInputLiveness.detail}
+              >
+                <ActivityIcon className="h-3 w-3" />
+                Audio
+              </span>
+            ) : null}
             <span
               className={cn(
                 "shrink-0 text-[10px]",

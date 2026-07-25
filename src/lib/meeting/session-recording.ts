@@ -108,6 +108,7 @@ interface SessionRecordingEvent {
     | "settled-advisor-execution-plan"
     | "capture-lifecycle"
     | "native-speech-event"
+    | "native-audio-liveness"
     | "runtime-reset"
     | "runtime-continued"
     | "error";
@@ -2219,6 +2220,30 @@ export class SessionRecordingManager {
     const { audioBase64: _audioBase64, base64Audio: _base64Audio, ...safe } =
       metadata;
     this.recordEvent("native-speech-event", safe);
+  }
+
+  recordAudioInputLiveness(metadata: Record<string, unknown>) {
+    const session = this.getWritableSession();
+    if (!session) return;
+    const { audioBase64: _audioBase64, base64Audio: _base64Audio, ...safe } =
+      metadata;
+    this.recordEvent("native-audio-liveness", {
+      ...safe,
+      artifactPath: "audio/input-liveness.jsonl",
+    });
+    this.enqueue(session, () =>
+      this.writeText(
+        session,
+        "audio/input-liveness.jsonl",
+        `${JSON.stringify({
+          version: 1,
+          recordedAt: Date.now(),
+          sessionId: session.sessionId,
+          ...safe,
+        })}\n`,
+        true
+      )
+    );
   }
 
   recordError(error: unknown, metadata?: Record<string, unknown>) {
