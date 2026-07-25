@@ -14,6 +14,32 @@ import type { NativeAudioPauseResumeControlPresentation } from "./native-audio-l
 export const MEETING_FOCUS_SNAPSHOT_EVENT = "meeting-focus-snapshot";
 export const MEETING_FOCUS_ACTION_EVENT = "meeting-focus-action";
 
+export function guardAsyncUnlisten(
+  registration: Promise<() => void>,
+  onError?: (error: unknown) => void
+) {
+  let disposed = false;
+  let unlisten: (() => void) | undefined;
+
+  void registration
+    .then((registeredUnlisten) => {
+      if (disposed) {
+        registeredUnlisten();
+        return;
+      }
+      unlisten = registeredUnlisten;
+    })
+    .catch((error) => {
+      onError?.(error);
+    });
+
+  return () => {
+    disposed = true;
+    unlisten?.();
+    unlisten = undefined;
+  };
+}
+
 export type MeetingFocusWindowKind = "answer" | "controls";
 
 export type MeetingFocusSectionsSnapshot = {

@@ -70,6 +70,7 @@ import {
   getActiveMeetingTaskId,
   buildMeetingAnswerDisplayModel,
   buildAdvisorIntentEvaluationFromTrace,
+  guardAsyncUnlisten,
   normalizeCanonicalQuestionType,
   overlayMeetingAnswerArtifacts,
   resolveMeetingAnswerProfile,
@@ -1247,78 +1248,70 @@ export const MeetingAssistant = ({
     [editableBriefForFocus, meeting.setInterviewSessionBrief]
   );
 
-  useEffect(() => {
-    let unlisten: (() => void) | undefined;
+  const focusActionHandlerRef = useRef<(action: MeetingFocusAction) => void>(
+    () => undefined
+  );
+  focusActionHandlerRef.current = (action) => {
+    switch (action.type) {
+      case "request-snapshot":
+        void emit(MEETING_FOCUS_SNAPSHOT_EVENT, focusSnapshotRef.current);
+        break;
+      case "toggle-listening":
+        void handlePauseResume();
+        break;
+      case "regenerate":
+        handleRegenerateShortcut();
+        break;
+      case "force-advise":
+        void meeting.forceAdviseLatestTurn();
+        break;
+      case "capture-screen":
+        void meeting.captureScreenContext();
+        break;
+      case "submit-correction":
+        void meeting.submitSpeechCorrection(action.correction);
+        break;
+      case "correct-question-type":
+        void meeting.correctActiveQuestionType(
+          action.correctedType,
+          action.source
+        );
+        break;
+      case "update-interview-types":
+        updateFocusInterviewTypes(action.interviewTypes);
+        break;
+      case "clarifying-answer":
+        handleClarifyingAnswer(action.answer, action.option);
+        break;
+      case "new-task":
+        handleNewTaskConfirmation();
+        break;
+      case "same-task":
+        handleSameTaskConfirmation();
+        break;
+      case "dismiss-clarifying-question":
+        setDismissedQuestionKey(clarifyingQuestionKey);
+        break;
+    }
+  };
 
-    const setupFocusActionListener = async () => {
-      unlisten = await listen<MeetingFocusAction>(
+  useEffect(() => {
+    const dispose = guardAsyncUnlisten(
+      listen<MeetingFocusAction>(
         MEETING_FOCUS_ACTION_EVENT,
         (event) => {
-          const action = event.payload;
-
-          switch (action.type) {
-            case "request-snapshot":
-              void emit(MEETING_FOCUS_SNAPSHOT_EVENT, focusSnapshotRef.current);
-              break;
-            case "toggle-listening":
-              void handleFocusListeningShortcut();
-              break;
-            case "regenerate":
-              handleRegenerateShortcut();
-              break;
-            case "force-advise":
-              void meeting.forceAdviseLatestTurn();
-              break;
-            case "capture-screen":
-              void meeting.captureScreenContext();
-              break;
-            case "submit-correction":
-              void meeting.submitSpeechCorrection(action.correction);
-              break;
-            case "correct-question-type":
-              void meeting.correctActiveQuestionType(
-                action.correctedType,
-                action.source
-              );
-              break;
-            case "update-interview-types":
-              updateFocusInterviewTypes(action.interviewTypes);
-              break;
-            case "clarifying-answer":
-              handleClarifyingAnswer(action.answer, action.option);
-              break;
-            case "new-task":
-              handleNewTaskConfirmation();
-              break;
-            case "same-task":
-              handleSameTaskConfirmation();
-              break;
-            case "dismiss-clarifying-question":
-              setDismissedQuestionKey(clarifyingQuestionKey);
-              break;
-          }
+          focusActionHandlerRef.current(event.payload);
         }
-      );
-    };
-
-    void setupFocusActionListener();
+      ),
+      (error) => {
+        console.error("Failed to listen for meeting focus actions", error);
+      }
+    );
 
     return () => {
-      unlisten?.();
+      dispose();
     };
-  }, [
-    clarifyingQuestionKey,
-    handleClarifyingAnswer,
-    handleFocusListeningShortcut,
-    handleNewTaskConfirmation,
-    handleRegenerateShortcut,
-    handleSameTaskConfirmation,
-    meeting.captureScreenContext,
-    meeting.correctActiveQuestionType,
-    meeting.forceAdviseLatestTurn,
-    meeting.submitSpeechCorrection,
-    updateFocusInterviewTypes,
-  ]);
+  }, []);
 
   return (
     <Popover open={open} onOpenChange={setOpen}>

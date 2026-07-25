@@ -17,6 +17,7 @@ import {
   EMPTY_MEETING_FOCUS_SNAPSHOT,
   MEETING_FOCUS_ACTION_EVENT,
   MEETING_FOCUS_SNAPSHOT_EVENT,
+  guardAsyncUnlisten,
   stripOuterCodeFence,
 } from "@/lib/meeting";
 import { cn } from "@/lib/utils";
@@ -67,22 +68,21 @@ export function MeetingFocusWindow({ kind }: { kind: MeetingFocusWindowKind }) {
   );
 
   useEffect(() => {
-    let unlisten: (() => void) | undefined;
-
-    const setup = async () => {
-      unlisten = await listen<MeetingFocusSnapshot>(
+    const dispose = guardAsyncUnlisten(
+      listen<MeetingFocusSnapshot>(
         MEETING_FOCUS_SNAPSHOT_EVENT,
         (event) => {
           setSnapshot(event.payload);
         }
-      );
-      sendFocusAction({ type: "request-snapshot" });
-    };
-
-    void setup();
+      ),
+      (error) => {
+        console.error("Failed to listen for meeting focus snapshots", error);
+      }
+    );
+    sendFocusAction({ type: "request-snapshot" });
 
     return () => {
-      unlisten?.();
+      dispose();
     };
   }, []);
 
@@ -318,6 +318,7 @@ function MeetingFocusControlsWindow({
               })}
           </div>
           <Button
+            key={snapshot.audioControl.action}
             size="icon"
             variant={snapshot.audioControl.urgent ? "destructive" : "outline"}
             className="ml-auto h-8 w-8 shrink-0"
