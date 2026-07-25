@@ -635,7 +635,7 @@ function summarizeTraceKind(
       stepMetadataValues(traces, "Screen model response", "outputChars")
     );
   } else {
-    summary.sttDurationMs = summarizeValues(stepDurations(traces, "STT request"));
+    summary.sttDurationMs = summarizeValues(sttRequestDurations(traces));
     summary.advisorFirstTokenLatencyMs = summarizeValues(
       traceMetadataLatencies(traces, "advisorFirstTokenAt", "startedAt")
     );
@@ -724,6 +724,31 @@ function percentile(sortedValues: number[], percentileValue: number) {
 function stepDurations(traces: MeetingTrace[], stepName: string) {
   return traces
     .map((trace) => findStep(trace, stepName)?.durationMs)
+    .filter(isNumber);
+}
+
+function sttRequestDurations(traces: MeetingTrace[]) {
+  return traces
+    .map((trace) => {
+      const recordedTotal = readNumber(
+        trace.metadata?.sttTotalRequestDurationMs
+      );
+      if (recordedTotal !== undefined) return recordedTotal;
+
+      const attemptDurations = trace.steps
+        .filter(
+          (step) =>
+            step.name === "STT request" ||
+            step.name === "STT retry request"
+        )
+        .map((step) => step.durationMs)
+        .filter(isNumber);
+      if (attemptDurations.length === 0) return undefined;
+      return attemptDurations.reduce(
+        (total, duration) => total + duration,
+        0
+      );
+    })
     .filter(isNumber);
 }
 

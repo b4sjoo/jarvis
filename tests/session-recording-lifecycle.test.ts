@@ -813,7 +813,7 @@ test("compact trace summaries preserve task boundary and cross-domain evidence",
   );
   assert.ok(summaryWrite);
   const summary = parsePayload(summaryWrite);
-  assert.equal(summary.version, 21);
+  assert.equal(summary.version, 22);
   assert.equal(summary.taskRelation, "new-parent");
   assert.equal(summary.logicalQuestionUnitRevision, 3);
   assert.deepEqual(summary.logicalQuestionSourceTurnIds, ["turn_1", "turn_2"]);
@@ -904,8 +904,25 @@ test("compact trace summaries preserve bounded STT request evidence", async () =
       sttContinuationCandidateSequence: 8,
       sttContinuationLeaseExpiresAt: 4_000,
       sttContinuationLeaseConsumedAt: 2_400,
+      sttAttemptCount: 2,
+      sttInitialAttemptId: "stt_attempt_1",
+      sttInitialValidationDisposition: "rejected",
+      sttInitialValidationReason: "prompt-echo-exact",
+      sttRetryTriggered: true,
+      sttRetryDisposition: "recovered",
+      sttRetryReason: "prompt-echo-exact",
+      sttRetryAttemptId: "stt_attempt_2",
+      sttRetryValidationDisposition: "accepted",
+      sttRetryValidationReason: "valid",
+      sttFinalAttemptId: "stt_attempt_2",
+      sttFinalAttemptNumber: 2,
+      sttFinalPromptMode: "unbiased",
+      sttInitialRequestDurationMs: 820,
+      sttRetryRequestDurationMs: 760,
+      sttTotalRequestDurationMs: 1_580,
       sttValidationDisposition: "accepted",
       sttValidationReason: "accepted",
+      sttFinalTranscriptChars: 72,
       sentenceBufferContinuationAuthorized: true,
       sentenceBufferContinuationReason: "matching-native-speech-start",
       sentenceBufferContinuationHandoffSource: "cached-event",
@@ -928,7 +945,15 @@ test("compact trace summaries preserve bounded STT request evidence", async () =
   );
   assert.ok(summaryWrite);
   const summary = parsePayload(summaryWrite);
-  assert.equal(summary.version, 21);
+  assert.equal(summary.version, 22);
+  assert.equal(
+    (summary.timingsMs as Record<string, unknown>).stt,
+    1_580
+  );
+  assert.equal(
+    (summary.payload as Record<string, unknown>).transcriptChars,
+    72
+  );
   assert.deepEqual(summary.sttRequest, {
     providerId: "openai-whisper",
     configuredProviderId: "openai-whisper",
@@ -955,6 +980,22 @@ test("compact trace summaries preserve bounded STT request evidence", async () =
     continuationCandidateSequence: 8,
     continuationLeaseExpiresAt: 4_000,
     continuationLeaseConsumedAt: 2_400,
+    attemptCount: 2,
+    initialAttemptId: "stt_attempt_1",
+    initialValidationDisposition: "rejected",
+    initialValidationReason: "prompt-echo-exact",
+    retryTriggered: true,
+    retryDisposition: "recovered",
+    retryReason: "prompt-echo-exact",
+    retryAttemptId: "stt_attempt_2",
+    retryValidationDisposition: "accepted",
+    retryValidationReason: "valid",
+    finalAttemptId: "stt_attempt_2",
+    finalAttemptNumber: 2,
+    finalPromptMode: "unbiased",
+    initialRequestDurationMs: 820,
+    retryRequestDurationMs: 760,
+    totalRequestDurationMs: 1_580,
   });
   assert.equal(summary.sentenceBufferContinuationAuthorized, true);
   assert.equal(
@@ -1020,7 +1061,7 @@ test("compact trace summaries preserve hard memory invalidation evidence", async
   );
   assert.ok(summaryWrite);
   const summary = parsePayload(summaryWrite);
-  assert.equal(summary.version, 21);
+  assert.equal(summary.version, 22);
   const memory = summary.memory as Record<string, unknown>;
   assert.equal(memory.authorityRevision, 2);
   assert.equal(memory.invalidationKind, "hard");
@@ -1252,7 +1293,7 @@ test("records compact current-question settlement and execution-plan evidence", 
   assert.equal(serializedPlan.includes("taskSnapshot"), false);
   assert.equal(serializedPlan.includes("variables"), false);
   const summary = parsePayload(summaryWrite);
-  assert.equal(summary.version, 21);
+  assert.equal(summary.version, 22);
   assert.equal(
     (
       summary.currentQuestionSettlement as Record<string, unknown>
@@ -1348,7 +1389,7 @@ test("records a current-question term correction without copying provider state"
     false
   );
   const summary = parsePayload(summaryWrite);
-  assert.equal(summary.version, 21);
+  assert.equal(summary.version, 22);
   assert.equal(
     summary.manualTermCorrectionId,
     "term_correction_hnsw"

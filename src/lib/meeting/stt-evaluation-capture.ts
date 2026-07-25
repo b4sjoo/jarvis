@@ -37,6 +37,10 @@ export interface SttEvaluationProviderTranscript {
   nativeCapturedAtMs?: number;
   nativeSampleRate?: number;
   providerId?: string;
+  attemptId?: string;
+  attemptNumber?: number;
+  promptMode?: "configured" | "unbiased";
+  promptKind?: string;
   rawText: string;
   validation: TranscriptValidationDecision;
   turnId?: string;

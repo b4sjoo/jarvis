@@ -41,6 +41,10 @@ test("captures system submitted audio and transcript stages in one session", asy
     audioSessionId: "audio_session",
     audioSegmentSequence: 1,
     providerId: "whisper",
+    attemptId: "stt_attempt_1",
+    attemptNumber: 1,
+    promptMode: "configured",
+    promptKind: "speech-bias",
     rawText: "raw transcript",
     validation: {
       disposition: "accepted",
@@ -92,6 +96,18 @@ test("captures system submitted audio and transcript stages in one session", asy
       .map((call) => call.args.stream),
     ["provider", "canonical"]
   );
+  const providerCall = native.calls.find(
+    (call) =>
+      call.command === "record_stt_evaluation_transcript_event" &&
+      call.args.stream === "provider"
+  );
+  assert.ok(providerCall);
+  const providerPayload = JSON.parse(
+    providerCall.args.payload as string
+  ) as Record<string, unknown>;
+  assert.equal(providerPayload.attemptId, "stt_attempt_1");
+  assert.equal(providerPayload.attemptNumber, 1);
+  assert.equal(providerPayload.promptMode, "configured");
 
   const stopped = await manager.stop("test-complete");
   assert.equal(stopped.active, false);

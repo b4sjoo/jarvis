@@ -147,6 +147,39 @@ test("excludes synthetic validation traces from production reliability summaries
   assert.equal(summary.screen.total, 0);
 });
 
+test("counts prompt-echo retry latency in the STT duration summary", () => {
+  const trace = buildTrace(3, "stt-retry");
+  trace.kind = "voice";
+  trace.metadata = {
+    ...trace.metadata,
+    sttTotalRequestDurationMs: 1_580,
+  };
+  trace.steps = [
+    {
+      id: "stt_initial",
+      name: "STT request",
+      status: "success",
+      startedAt: 1_310,
+      endedAt: 2_130,
+      durationMs: 820,
+    },
+    {
+      id: "stt_retry",
+      name: "STT retry request",
+      status: "success",
+      startedAt: 2_130,
+      endedAt: 2_890,
+      durationMs: 760,
+    },
+  ];
+
+  const summary = summarizeMeetingTraces([trace]);
+
+  assert.equal(summary.voice.sttDurationMs?.count, 1);
+  assert.equal(summary.voice.sttDurationMs?.p50, 1_580);
+  assert.equal(summary.voice.sttDurationMs?.p90, 1_580);
+});
+
 function buildTrace(index: number, note: string): MeetingTrace {
   const startedAt = 1_000 + index * 100;
   return {

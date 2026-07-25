@@ -46,7 +46,7 @@ import {
 import { serializeMeetingTraceExport } from "./trace.js";
 
 const SESSION_RECORDING_SCHEMA_VERSION = 1;
-const SESSION_TRACE_SUMMARY_SCHEMA_VERSION = 21;
+const SESSION_TRACE_SUMMARY_SCHEMA_VERSION = 22;
 const SESSION_TRACE_INDEX_SCHEMA_VERSION = 1;
 
 interface SessionRecordingStartOptions {
@@ -625,6 +625,22 @@ export interface SessionCompactTraceSummary {
     continuationCandidateSequence?: number;
     continuationLeaseExpiresAt?: number;
     continuationLeaseConsumedAt?: number;
+    attemptCount?: number;
+    initialAttemptId?: string;
+    initialValidationDisposition?: string;
+    initialValidationReason?: string;
+    retryTriggered?: boolean;
+    retryDisposition?: string;
+    retryReason?: string;
+    retryAttemptId?: string;
+    retryValidationDisposition?: string;
+    retryValidationReason?: string;
+    finalAttemptId?: string;
+    finalAttemptNumber?: number;
+    finalPromptMode?: string;
+    initialRequestDurationMs?: number;
+    retryRequestDurationMs?: number;
+    totalRequestDurationMs?: number;
   };
   providerId?: string;
   mode?: string;
@@ -3571,7 +3587,11 @@ function buildCompactTraceSummary({
       capture: captureStep?.durationMs,
       preflight: preflightStep?.durationMs,
       memoryRetrieval: memoryStep?.durationMs,
-      stt: sttStep?.durationMs,
+      stt:
+        readFirstNumberFromMetadata(
+          metadataSources,
+          "sttTotalRequestDurationMs"
+        ) ?? sttStep?.durationMs,
       advisor: advisorStep?.durationMs,
       model: modelStep?.durationMs,
       stateUpdate: stateUpdateStep?.durationMs,
@@ -3588,7 +3608,11 @@ function buildCompactTraceSummary({
       focusImageChars: readNumber(captureStep?.metadata?.focusImageChars),
       promptChars: readNumber(modelStep?.metadata?.promptChars),
       outputChars: readNumber(modelStep?.metadata?.outputChars),
-      transcriptChars: readNumber(sttStep?.metadata?.transcriptChars),
+      transcriptChars:
+        readFirstNumberFromMetadata(
+          metadataSources,
+          "sttFinalTranscriptChars"
+        ) ?? readNumber(sttStep?.metadata?.transcriptChars),
       memoryChars: readNumber(memoryStep?.metadata?.totalChars),
     },
     memory: memoryStep
@@ -4776,6 +4800,67 @@ function buildSttRequestTraceSummary(
     continuationLeaseConsumedAt: readFirstNumberFromMetadata(
       metadataSources,
       "sttContinuationLeaseConsumedAt"
+    ),
+    attemptCount: readFirstNumberFromMetadata(
+      metadataSources,
+      "sttAttemptCount"
+    ),
+    initialAttemptId: readFirstString(
+      metadataSources,
+      "sttInitialAttemptId"
+    ),
+    initialValidationDisposition: readFirstString(
+      metadataSources,
+      "sttInitialValidationDisposition"
+    ),
+    initialValidationReason: readFirstString(
+      metadataSources,
+      "sttInitialValidationReason"
+    ),
+    retryTriggered: readFirstBoolean(
+      metadataSources,
+      "sttRetryTriggered"
+    ),
+    retryDisposition: readFirstString(
+      metadataSources,
+      "sttRetryDisposition"
+    ),
+    retryReason: readFirstString(metadataSources, "sttRetryReason"),
+    retryAttemptId: readFirstString(
+      metadataSources,
+      "sttRetryAttemptId"
+    ),
+    retryValidationDisposition: readFirstString(
+      metadataSources,
+      "sttRetryValidationDisposition"
+    ),
+    retryValidationReason: readFirstString(
+      metadataSources,
+      "sttRetryValidationReason"
+    ),
+    finalAttemptId: readFirstString(
+      metadataSources,
+      "sttFinalAttemptId"
+    ),
+    finalAttemptNumber: readFirstNumberFromMetadata(
+      metadataSources,
+      "sttFinalAttemptNumber"
+    ),
+    finalPromptMode: readFirstString(
+      metadataSources,
+      "sttFinalPromptMode"
+    ),
+    initialRequestDurationMs: readFirstNumberFromMetadata(
+      metadataSources,
+      "sttInitialRequestDurationMs"
+    ),
+    retryRequestDurationMs: readFirstNumberFromMetadata(
+      metadataSources,
+      "sttRetryRequestDurationMs"
+    ),
+    totalRequestDurationMs: readFirstNumberFromMetadata(
+      metadataSources,
+      "sttTotalRequestDurationMs"
     ),
   };
 }

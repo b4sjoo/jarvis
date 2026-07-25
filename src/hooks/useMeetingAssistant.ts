@@ -300,6 +300,8 @@ import {
   transcribeMeetingAudio,
   buildSttRequestEvidence,
   formatSttRequestEvidenceForTrace,
+  formatSttPromptEchoRecoveryForTrace,
+  runSttPromptEchoRecovery,
   upsertTraceHumanEvaluation,
   upsertQuestionHumanEvaluation,
   upsertCriticalMomentEvaluation,
@@ -9106,60 +9108,173 @@ export function useMeetingAssistant() {
             ...sttRequestTraceMetadata,
           }
         );
-        sttStepId = traceStoreRef.current.startStep(
-          traceId,
-          "STT request",
-          {
-            providerId: sttProvider.id,
-            audioBytes: audio.size,
-            audioSegmentSeq: segment.sequence,
-            audioSessionId: segment.sessionId,
-            speaker: segment.speaker,
-            source: segment.source,
-            speechBiasTermCount: speechBias.terms.length,
-            speechBiasRuleCount: speechBias.correctionRules.length,
-            ...sttRequestTraceMetadata,
-          }
-        );
         traceStoreRef.current.updateMetadata(
           traceId,
           sttRequestTraceMetadata
         );
-        const transcription = await withTimeout(
-          transcribeMeetingAudio({
-            audio,
-            provider: sttProvider,
-            selectedProvider: selectedSttProvider,
-            prompt: composedSttPrompt.prompt,
-            terms: speechBias.terms.map((term) => term.term),
-            speaker: segment.speaker,
-            source: segment.source,
-            startedAt: segment.startedAt,
-            endedAt: segment.endedAt,
-          }),
-          STT_TIMEOUT_MS,
-          "Speech-to-text timed out. Jarvis is still listening."
-        );
-        const { rawText, turn, validation } = transcription;
-        const providerTranscriptQueued =
-          segment.source === "system-audio" &&
-          sttEvaluationCaptureManagerRef.current?.recordProviderTranscript({
-            evaluationSessionId: segment.sttEvaluationCaptureSessionId,
-            utteranceId: evaluationUtteranceId,
-            traceId,
-            audioSessionId: segment.sessionId,
-            audioSegmentSequence: segment.sequence,
-            nativeCaptureSessionId: segment.nativeCaptureSessionId,
-            nativeCaptureGeneration: segment.nativeCaptureGeneration,
-            nativeSegmentSequence: segment.nativeSegmentSequence,
-            nativeCapturedAtMs: segment.nativeCapturedAtMs,
-            nativeSampleRate: segment.nativeSampleRate,
-            providerId: sttProvider.id,
-            rawText,
-            validation,
-            turnId: turn?.id,
-            receivedAt: Date.now(),
-          });
+        let providerTranscriptQueued = false;
+        const sttAttemptDurationsMs = new Map<number, number>();
+        const recovery = await runSttPromptEchoRecovery({
+          traceId,
+          audioSessionId: segment.sessionId,
+          segmentSequence: segment.sequence,
+          initialPromptKind: composedSttPrompt.kind,
+          authorizeRetry: () => isCurrentAudioSegment(segment),
+          runAttempt: async (attempt) => {
+            const useConfiguredPrompt =
+              attempt.promptMode === "configured";
+            const attemptPrompt = useConfiguredPrompt
+              ? composedSttPrompt.prompt
+              : "";
+            const attemptTerms = useConfiguredPrompt
+              ? speechBias.terms.map((term) => term.term)
+              : [];
+            const attemptMetadata = {
+              sttAttemptId: attempt.id,
+              sttAttemptNumber: attempt.attemptNumber,
+              sttAttemptPromptMode: attempt.promptMode,
+              sttAttemptPromptKind: attempt.promptKind,
+              sttAttemptPromptChars: attemptPrompt.length,
+              sttAttemptTermCount: attemptTerms.length,
+            };
+            sttStepId = traceStoreRef.current.startStep(
+              traceId,
+              attempt.attemptNumber === 1
+                ? "STT request"
+                : "STT retry request",
+              {
+                providerId: sttProvider.id,
+                audioBytes: audio.size,
+                audioSegmentSeq: segment.sequence,
+                audioSessionId: segment.sessionId,
+                speaker: segment.speaker,
+                source: segment.source,
+                speechBiasTermCount: attemptTerms.length,
+                speechBiasRuleCount: useConfiguredPrompt
+                  ? speechBias.correctionRules.length
+                  : 0,
+                ...sttRequestTraceMetadata,
+                ...attemptMetadata,
+              }
+            );
+            const attemptStartedAt = performance.now();
+            const result = await withTimeout(
+              transcribeMeetingAudio({
+                audio,
+                provider: sttProvider,
+                selectedProvider: selectedSttProvider,
+                prompt: attemptPrompt,
+                validationPrompt: composedSttPrompt.prompt,
+                terms: attemptTerms,
+                speaker: segment.speaker,
+                source: segment.source,
+                startedAt: segment.startedAt,
+                endedAt: segment.endedAt,
+              }),
+              STT_TIMEOUT_MS,
+              "Speech-to-text timed out. Jarvis is still listening."
+            );
+            const attemptDurationMs = Number(
+              (performance.now() - attemptStartedAt).toFixed(3)
+            );
+            sttAttemptDurationsMs.set(
+              attempt.attemptNumber,
+              attemptDurationMs
+            );
+            const attemptValidationMetadata = {
+              sttAttemptValidationDisposition:
+                result.validation.disposition,
+              sttAttemptValidationReason: result.validation.reason,
+              sttAttemptPromptSimilarity:
+                result.validation.promptSimilarity,
+              sttAttemptTranscriptChars: result.rawText.length,
+              sttAttemptDurationMs: attemptDurationMs,
+              transcriptChars: result.rawText.length,
+            };
+            traceStoreRef.current.finishStep(
+              traceId,
+              sttStepId,
+              "success",
+              {
+                ...sttRequestTraceMetadata,
+                ...attemptMetadata,
+                ...attemptValidationMetadata,
+              }
+            );
+            sttStepId = undefined;
+
+            const attemptProviderTranscriptQueued =
+              segment.source === "system-audio" &&
+              sttEvaluationCaptureManagerRef.current?.recordProviderTranscript({
+                evaluationSessionId:
+                  segment.sttEvaluationCaptureSessionId,
+                utteranceId: evaluationUtteranceId,
+                traceId,
+                audioSessionId: segment.sessionId,
+                audioSegmentSequence: segment.sequence,
+                nativeCaptureSessionId:
+                  segment.nativeCaptureSessionId,
+                nativeCaptureGeneration:
+                  segment.nativeCaptureGeneration,
+                nativeSegmentSequence:
+                  segment.nativeSegmentSequence,
+                nativeCapturedAtMs: segment.nativeCapturedAtMs,
+                nativeSampleRate: segment.nativeSampleRate,
+                providerId: sttProvider.id,
+                attemptId: attempt.id,
+                attemptNumber: attempt.attemptNumber,
+                promptMode: attempt.promptMode,
+                promptKind: attempt.promptKind,
+                rawText: result.rawText,
+                validation: result.validation,
+                turnId: result.turn?.id,
+                receivedAt: Date.now(),
+              });
+            providerTranscriptQueued =
+              providerTranscriptQueued ||
+              Boolean(attemptProviderTranscriptQueued);
+
+            if (result.rawText) {
+              const rejected =
+                result.validation.disposition === "rejected";
+              const recordedText = rejected
+                ? result.rawText.slice(0, 2_000)
+                : result.rawText;
+              traceStoreRef.current.recordOutput(
+                traceId,
+                rejected
+                  ? "stt rejected output"
+                  : "stt raw output",
+                recordedText,
+                {
+                  turnId: result.turn?.id,
+                  audioSegmentSeq: segment.sequence,
+                  audioSessionId: segment.sessionId,
+                  speaker: segment.speaker,
+                  source: segment.source,
+                  ...attemptMetadata,
+                  ...attemptValidationMetadata,
+                  rawOutputTruncated:
+                    recordedText.length < result.rawText.length,
+                }
+              );
+            }
+            return result;
+          },
+        });
+        const { rawText, turn, validation } = recovery.finalResult;
+        const sttRecoveryMetadata = {
+          ...formatSttPromptEchoRecoveryForTrace(recovery),
+          sttInitialRequestDurationMs:
+            sttAttemptDurationsMs.get(1),
+          sttRetryRequestDurationMs:
+            sttAttemptDurationsMs.get(2),
+          sttTotalRequestDurationMs: Number(
+            [...sttAttemptDurationsMs.values()]
+              .reduce((sum, duration) => sum + duration, 0)
+              .toFixed(3)
+          ),
+        };
         const canonicalTextBeforeNormalization = turn?.text ?? "";
         const sttValidationMetadata = {
           sttValidationDisposition: validation.disposition,
@@ -9172,45 +9287,28 @@ export function useMeetingAssistant() {
           sttTranscriptCharsPerSecond:
             validation.transcriptCharsPerSecond,
           sttDensitySuspicious: validation.densitySuspicious,
+          sttFinalTranscriptChars: rawText.length,
         };
-        traceStoreRef.current.finishStep(traceId, sttStepId, "success", {
-          transcriptChars: rawText.length,
-          ...sttRequestTraceMetadata,
-          ...sttValidationMetadata,
-        });
         traceStoreRef.current.updateMetadata(
           traceId,
-          sttValidationMetadata
+          {
+            ...sttRecoveryMetadata,
+            ...sttValidationMetadata,
+          }
         );
         const validationStepId = traceStoreRef.current.startStep(
           traceId,
           "STT output validation",
-          sttValidationMetadata
+          {
+            ...sttRecoveryMetadata,
+            ...sttValidationMetadata,
+          }
         );
         traceStoreRef.current.finishStep(
           traceId,
           validationStepId,
           "success"
         );
-
-        if (rawText) {
-          const rejected = validation.disposition === "rejected";
-          const recordedText = rejected ? rawText.slice(0, 2_000) : rawText;
-          traceStoreRef.current.recordOutput(
-            traceId,
-            rejected ? "stt rejected output" : "stt raw output",
-            recordedText,
-            {
-              turnId: turn?.id,
-              audioSegmentSeq: segment.sequence,
-              audioSessionId: segment.sessionId,
-              speaker: segment.speaker,
-              source: segment.source,
-              ...sttValidationMetadata,
-              rawOutputTruncated: recordedText.length < rawText.length,
-            }
-          );
-        }
 
         if (turn) {
           const normalized = normalizeTranscriptWithSpeechBias(

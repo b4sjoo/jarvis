@@ -12,6 +12,7 @@ export interface TranscribeMeetingAudioParams {
   provider: TYPE_PROVIDER | undefined;
   selectedProvider: SelectedProviderState;
   prompt?: string;
+  validationPrompt?: string;
   terms?: string[];
   speaker?: TranscriptTurn["speaker"];
   source?: TranscriptTurn["source"];
@@ -30,6 +31,7 @@ export async function transcribeMeetingAudio({
   provider,
   selectedProvider,
   prompt,
+  validationPrompt,
   terms,
   speaker = "them",
   source = "system-audio",
@@ -47,7 +49,7 @@ export async function transcribeMeetingAudio({
   const trimmedText = text.trim();
   const validation = validateTranscriptCandidate({
     text: trimmedText,
-    speechBiasPrompt: prompt,
+    speechBiasPrompt: validationPrompt ?? prompt,
     startedAt,
     endedAt,
   });
