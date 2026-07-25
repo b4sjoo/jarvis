@@ -130,6 +130,16 @@ test("treats exact acknowledgement variants as ignorable but keeps an add-on ask
   });
   assert.equal(addOn.disposition, "answer-primary-ask");
   assert.match(addOn.normalizedPrimaryAsk ?? "", /write merge sort/i);
+
+  const conjunctionAddOn = projectPrimaryAsk({
+    turnId: "turn_acknowledgement_conjunction_ask",
+    text: "Thanks, and can you explain RAG?",
+  });
+  assert.equal(conjunctionAddOn.disposition, "answer-primary-ask");
+  assert.equal(
+    conjunctionAddOn.normalizedPrimaryAsk,
+    "can you explain RAG?"
+  );
 });
 
 test("keeps quoted technical questions append-only when there is no present ask", () => {

@@ -33,7 +33,10 @@ function unit(revision: number): LogicalQuestionUnit {
   };
 }
 
-function job(revision: number) {
+function job(
+  revision: number,
+  budgetSlot: "ambient" | "substantive" = "substantive"
+) {
   const logicalUnit = unit(revision);
   return {
     traceId: `trace-${revision}`,
@@ -49,6 +52,11 @@ function job(revision: number) {
       logicalQuestionUnit: logicalUnit,
     }),
     triggerReasons: ["lexical-unknown"],
+    budgetSlot,
+    budgetReason:
+      budgetSlot === "ambient"
+        ? "ambiguous-ambient"
+        : "source-owned-primary-ask",
   };
 }
 
@@ -83,20 +91,75 @@ test("coalesces pending revisions and executes only the latest", async () => {
   assert.ok(settled.includes("trace-2:completed"));
 });
 
-test("starts no more than two requests for one logical unit", async () => {
+test("reserves one substantive start after ambient budget is exhausted", async () => {
   const runtime = new TaxonomyAdjudicationRuntime<number>();
-  const dispositions: string[] = [];
-  for (const revision of [1, 2, 3]) {
+  const settlements: Array<{
+    disposition: string;
+    slot: string;
+    reservedSubstantiveAvailable: boolean;
+  }> = [];
+  for (const [revision, slot] of [
+    [1, "ambient"],
+    [2, "ambient"],
+    [3, "substantive"],
+    [4, "substantive"],
+  ] as const) {
     runtime.schedule(
       {
-        job: job(revision),
+        job: job(revision, slot),
         execute: async () => revision,
-        onSettled: (result) => dispositions.push(result.disposition),
+        onSettled: (result) =>
+          settlements.push({
+            disposition: result.disposition,
+            slot: result.budget.slot,
+            reservedSubstantiveAvailable:
+              result.budget.reservedSubstantiveAvailable,
+          }),
       },
       0
     );
     await new Promise((resolve) => setTimeout(resolve, 5));
   }
-  assert.equal(dispositions.filter((item) => item === "completed").length, 2);
-  assert.ok(dispositions.includes("budget-exhausted"));
+  assert.deepEqual(
+    settlements.map((item) => `${item.slot}:${item.disposition}`),
+    [
+      "ambient:completed",
+      "ambient:budget-exhausted",
+      "substantive:completed",
+      "substantive:budget-exhausted",
+    ]
+  );
+  assert.equal(settlements[0]?.reservedSubstantiveAvailable, true);
+  assert.equal(settlements[2]?.reservedSubstantiveAvailable, false);
+});
+
+test("a superseded pending revision does not consume its requested slot", async () => {
+  const runtime = new TaxonomyAdjudicationRuntime<number>();
+  const settlements: string[] = [];
+  runtime.schedule(
+    {
+      job: job(1, "ambient"),
+      execute: async () => 1,
+      onSettled: (result) =>
+        settlements.push(
+          `${result.job.traceId}:${result.disposition}:${result.budget.startsAfter}`
+        ),
+    },
+    20
+  );
+  runtime.schedule(
+    {
+      job: job(2, "ambient"),
+      execute: async () => 2,
+      onSettled: (result) =>
+        settlements.push(
+          `${result.job.traceId}:${result.disposition}:${result.budget.startsAfter}`
+        ),
+    },
+    0
+  );
+  await new Promise((resolve) => setTimeout(resolve, 20));
+
+  assert.ok(settlements.includes("trace-1:superseded:0"));
+  assert.ok(settlements.includes("trace-2:completed:1"));
 });

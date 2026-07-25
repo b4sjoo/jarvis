@@ -168,6 +168,18 @@ export interface TaxonomyAdjudicationEligibilityDecision {
   triggerReasons: string[];
 }
 
+export interface TaxonomyAdjudicationBudgetDecision {
+  slot: "ambient" | "substantive";
+  reason:
+    | "high-confidence-acknowledgement"
+    | "connectivity-logistics"
+    | "closing-logistics"
+    | "source-owned-primary-ask"
+    | "source-owned-lqu-revision"
+    | "ambiguous-ambient";
+  sourceOwnedSubstantive: boolean;
+}
+
 export interface TaxonomyAdjudicationLease {
   operationId: string;
   sessionId: string;
@@ -360,6 +372,73 @@ export function decideTaxonomyAdjudicationEligibility(
   };
 }
 
+export function decideTaxonomyAdjudicationBudget(
+  input: {
+    logicalQuestionUnit: LogicalQuestionUnit;
+    turnGateAction: string;
+  }
+): TaxonomyAdjudicationBudgetDecision {
+  const projection = input.logicalQuestionUnit.primaryAskProjection;
+  const latestSourceText =
+    input.logicalQuestionUnit.sources[
+      input.logicalQuestionUnit.sources.length - 1
+    ]?.text.trim() ?? "";
+
+  if (
+    projection?.speechAct === "acknowledgement" &&
+    projection.disposition === "ignore" &&
+    projection.confidence >= 0.9
+  ) {
+    return {
+      slot: "ambient",
+      reason: "high-confidence-acknowledgement",
+      sourceOwnedSubstantive: false,
+    };
+  }
+  if (isConnectivityLogistics(latestSourceText)) {
+    return {
+      slot: "ambient",
+      reason: "connectivity-logistics",
+      sourceOwnedSubstantive: false,
+    };
+  }
+  if (
+    projection?.normalizedPrimaryAsk === undefined &&
+    isClosingLogistics(latestSourceText)
+  ) {
+    return {
+      slot: "ambient",
+      reason: "closing-logistics",
+      sourceOwnedSubstantive: false,
+    };
+  }
+  if (
+    projection?.disposition === "answer-primary-ask" ||
+    projection?.disposition === "revise-existing-lqu"
+  ) {
+    return {
+      slot: "substantive",
+      reason: "source-owned-primary-ask",
+      sourceOwnedSubstantive: true,
+    };
+  }
+  if (
+    input.turnGateAction === "answer-refresh" &&
+    Boolean(projection?.normalizedPrimaryAsk)
+  ) {
+    return {
+      slot: "substantive",
+      reason: "source-owned-lqu-revision",
+      sourceOwnedSubstantive: true,
+    };
+  }
+  return {
+    slot: "ambient",
+    reason: "ambiguous-ambient",
+    sourceOwnedSubstantive: false,
+  };
+}
+
 function estimateQuestionWordEquivalents(value: string) {
   const normalized = normalizeSpace(value);
   const cjkCharacters = normalized.match(/[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/gu)?.length ?? 0;
@@ -368,6 +447,24 @@ function estimateQuestionWordEquivalents(value: string) {
     .split(/\s+/u)
     .filter(Boolean).length;
   return nonCjkWords + Math.ceil(cjkCharacters / 2);
+}
+
+function isConnectivityLogistics(text: string) {
+  const normalized = normalizeSpace(text)
+    .replace(/[.!?？。]+$/u, "")
+    .toLocaleLowerCase();
+  return /^(?:can|could|do) you (?:still )?(?:hear|see) me(?: (?:okay|ok|clearly))?$|^(?:can|could) you (?:still )?see (?:my|the) screen$|^(?:is|does) (?:my|the) (?:audio|sound|screen|connection) (?:okay|ok|work|working)$|^(?:you(?:'re| are) on mute)$/u.test(
+    normalized
+  );
+}
+
+function isClosingLogistics(text: string) {
+  const normalized = normalizeSpace(text)
+    .replace(/[.!?？。]+$/u, "")
+    .toLocaleLowerCase();
+  return /^(?:thanks|thank you)(?: for (?:joining|coming|your time|speaking with me))?$|^(?:see you|talk to you|speak to you)(?: again| soon| later)?$|^(?:have a (?:good|great|nice) (?:day|evening|weekend))$/u.test(
+    normalized
+  );
 }
 
 export function buildTaxonomyAdjudicationRequest(input: {

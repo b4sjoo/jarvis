@@ -271,6 +271,7 @@ import {
   buildTaxonomyAdjudicationRequest,
   compareTaxonomyAdjudicationToLocalBaseline,
   createTaxonomyAdjudicationLease,
+  decideTaxonomyAdjudicationBudget,
   decideTaxonomyAdjudicationEligibility,
   formatTaxonomyAdjudicationModelRouteForTrace,
   formatTaxonomyAdjudicationCircuitForTrace,
@@ -7403,6 +7404,10 @@ export function useMeetingAssistant() {
       const projection = projectLogicalQuestionForAdjudication(
         logicalQuestionUnit
       );
+      const adjudicationBudget = decideTaxonomyAdjudicationBudget({
+        logicalQuestionUnit,
+        turnGateAction,
+      });
       const activeParentQuestionType = normalizeCanonicalQuestionType(
         contextState.activeMeetingTask?.parent.questionType
       );
@@ -7438,6 +7443,14 @@ export function useMeetingAssistant() {
           : eligibility.reason,
         taxonomyAdjudicationTriggerReasons: eligibility.triggerReasons,
         interviewerIntentLlmTriggerReasons: eligibility.triggerReasons,
+        taxonomyAdjudicationBudgetSlot: adjudicationBudget.slot,
+        interviewerIntentLlmBudgetSlot: adjudicationBudget.slot,
+        taxonomyAdjudicationBudgetReason: adjudicationBudget.reason,
+        interviewerIntentLlmBudgetReason: adjudicationBudget.reason,
+        taxonomyAdjudicationSourceOwnedSubstantive:
+          adjudicationBudget.sourceOwnedSubstantive,
+        interviewerIntentLlmSourceOwnedSubstantive:
+          adjudicationBudget.sourceOwnedSubstantive,
         interviewerIntentLlmDisposition: eligibility.eligible
           ? "eligible"
           : "not-eligible",
@@ -7674,6 +7687,8 @@ export function useMeetingAssistant() {
           lease,
           request,
           triggerReasons: eligibility.triggerReasons,
+          budgetSlot: adjudicationBudget.slot,
+          budgetReason: adjudicationBudget.reason,
         },
         execute: async (job, signal) =>
           requestTaxonomyAdjudication({
@@ -7688,12 +7703,40 @@ export function useMeetingAssistant() {
               });
             },
           }),
-        onStarted: (_job, startedAt) => {
+        onStarted: (_job, startedAt, budget) => {
+          const budgetMetadata = {
+            taxonomyAdjudicationBudgetStartsBefore:
+              budget.startsBefore,
+            taxonomyAdjudicationBudgetStartsAfter:
+              budget.startsAfter,
+            taxonomyAdjudicationBudgetLimit: budget.limit,
+            taxonomyAdjudicationBudgetRemaining:
+              budget.remaining,
+            taxonomyAdjudicationAmbientStarts:
+              budget.ambientStarts,
+            taxonomyAdjudicationSubstantiveStarts:
+              budget.substantiveStarts,
+            taxonomyAdjudicationReservedSubstantiveAvailable:
+              budget.reservedSubstantiveAvailable,
+            interviewerIntentLlmBudgetStartsBefore:
+              budget.startsBefore,
+            interviewerIntentLlmBudgetStartsAfter:
+              budget.startsAfter,
+            interviewerIntentLlmBudgetRemaining:
+              budget.remaining,
+            interviewerIntentLlmReservedSubstantiveAvailable:
+              budget.reservedSubstantiveAvailable,
+          };
+          traceStoreRef.current.updateMetadata(
+            traceId,
+            budgetMetadata
+          );
           stepId = traceStoreRef.current.startStep(
             traceId,
             "LLM interviewer intent adjudication shadow",
             {
               ...scheduledMetadata,
+              ...budgetMetadata,
               taxonomyAdjudicationRequestStartedAt: startedAt,
               interviewerIntentLlmRequestStartedAt: startedAt,
               taxonomyAdjudicationRequestProfile:
@@ -7816,6 +7859,28 @@ export function useMeetingAssistant() {
           }
           const metadata = {
             ...scheduledMetadata,
+            taxonomyAdjudicationBudgetStartsBefore:
+              settlement.budget.startsBefore,
+            taxonomyAdjudicationBudgetStartsAfter:
+              settlement.budget.startsAfter,
+            taxonomyAdjudicationBudgetLimit:
+              settlement.budget.limit,
+            taxonomyAdjudicationBudgetRemaining:
+              settlement.budget.remaining,
+            taxonomyAdjudicationAmbientStarts:
+              settlement.budget.ambientStarts,
+            taxonomyAdjudicationSubstantiveStarts:
+              settlement.budget.substantiveStarts,
+            taxonomyAdjudicationReservedSubstantiveAvailable:
+              settlement.budget.reservedSubstantiveAvailable,
+            interviewerIntentLlmBudgetStartsBefore:
+              settlement.budget.startsBefore,
+            interviewerIntentLlmBudgetStartsAfter:
+              settlement.budget.startsAfter,
+            interviewerIntentLlmBudgetRemaining:
+              settlement.budget.remaining,
+            interviewerIntentLlmReservedSubstantiveAvailable:
+              settlement.budget.reservedSubstantiveAvailable,
             taxonomyAdjudicationDisposition: finalDisposition,
             interviewerIntentLlmDisposition: finalDisposition,
             taxonomyAdjudicationStaleReason: authorization.authorized

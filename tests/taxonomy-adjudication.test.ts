@@ -6,11 +6,13 @@ import {
   buildTaxonomyAdjudicationPrompts,
   buildTaxonomyAdjudicationRequest,
   createTaxonomyAdjudicationLease,
+  decideTaxonomyAdjudicationBudget,
   decideTaxonomyAdjudicationEligibility,
   type LlmTaxonomyAdjudication,
   parseTaxonomyAdjudicationOutput,
   projectLogicalQuestionForAdjudication,
 } from "../src/lib/meeting/taxonomy-adjudication.js";
+import { projectPrimaryAsk } from "../src/lib/meeting/primary-ask-projection.js";
 import { inferQuestionTypeDecisionFromText } from "../src/lib/meeting/task-taxonomy.js";
 import { TAXONOMY_ADJUDICATION_CORPUS } from "./fixtures/taxonomy-adjudication-corpus.js";
 
@@ -55,6 +57,60 @@ function answerOutput(
     ...overrides,
   };
 }
+
+test("isolates ambient adjudication from the reserved substantive slot", () => {
+  const acknowledgement = unit("That looks good to me.");
+  acknowledgement.primaryAskProjection = projectPrimaryAsk({
+    turnId: acknowledgement.currentTurnId,
+    text: acknowledgement.normalizedText,
+  });
+  assert.deepEqual(
+    decideTaxonomyAdjudicationBudget({
+      logicalQuestionUnit: acknowledgement,
+      turnGateAction: "ignore",
+    }),
+    {
+      slot: "ambient",
+      reason: "high-confidence-acknowledgement",
+      sourceOwnedSubstantive: false,
+    }
+  );
+
+  const connectivity = unit("Can you hear me?");
+  connectivity.primaryAskProjection = projectPrimaryAsk({
+    turnId: connectivity.currentTurnId,
+    text: connectivity.normalizedText,
+  });
+  assert.equal(
+    decideTaxonomyAdjudicationBudget({
+      logicalQuestionUnit: connectivity,
+      turnGateAction: "answer-refresh",
+    }).slot,
+    "ambient"
+  );
+
+  for (const text of [
+    "Can you explain reciprocal rank fusion?",
+    "Thanks, and can you explain RAG?",
+  ]) {
+    const substantive = unit(text);
+    substantive.primaryAskProjection = projectPrimaryAsk({
+      turnId: substantive.currentTurnId,
+      text,
+    });
+    assert.deepEqual(
+      decideTaxonomyAdjudicationBudget({
+        logicalQuestionUnit: substantive,
+        turnGateAction: "answer-refresh",
+      }),
+      {
+        slot: "substantive",
+        reason: "source-owned-primary-ask",
+        sourceOwnedSubstantive: true,
+      }
+    );
+  }
+});
 
 test("strictly parses a grounded adjudication and rejects invented evidence", () => {
   const logicalUnit = unit("Design a RAG system for a trip planning app.");
