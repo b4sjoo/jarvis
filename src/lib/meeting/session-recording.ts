@@ -46,7 +46,7 @@ import {
 import { serializeMeetingTraceExport } from "./trace.js";
 
 const SESSION_RECORDING_SCHEMA_VERSION = 1;
-const SESSION_TRACE_SUMMARY_SCHEMA_VERSION = 19;
+const SESSION_TRACE_SUMMARY_SCHEMA_VERSION = 20;
 const SESSION_TRACE_INDEX_SCHEMA_VERSION = 1;
 
 interface SessionRecordingStartOptions {
@@ -371,6 +371,15 @@ export interface SessionCompactTraceSummary {
   sentenceBufferFragmentCount?: number;
   sentenceBufferAddedLatencyMs?: number;
   sentenceBufferMergedTranscriptChars?: number;
+  sentenceBufferContinuationAuthorized?: boolean;
+  sentenceBufferContinuationReason?: string;
+  sentenceBufferContinuationHandoffSource?: string;
+  sentenceBufferContinuationCandidateSequence?: number;
+  sentenceBufferContinuationExtensionUsed?: boolean;
+  sentenceBufferInitialWaitMs?: number;
+  sentenceBufferContinuationWaitMs?: number;
+  sentenceBufferContinuationDeadlineAt?: number;
+  sentenceBufferAbsoluteDeadlineAt?: number;
   semanticTaxonomy?: {
     mode?: string;
     turnId?: string;
@@ -3368,6 +3377,43 @@ function buildCompactTraceSummary({
     sentenceBufferMergedTranscriptChars: readFirstNumberFromMetadata(
       metadataSources,
       "sentenceBufferMergedTranscriptChars"
+    ),
+    sentenceBufferContinuationAuthorized: readFirstBoolean(
+      metadataSources,
+      "sentenceBufferContinuationAuthorized"
+    ),
+    sentenceBufferContinuationReason: readFirstString(
+      metadataSources,
+      "sentenceBufferContinuationReason"
+    ),
+    sentenceBufferContinuationHandoffSource: readFirstString(
+      metadataSources,
+      "sentenceBufferContinuationHandoffSource"
+    ),
+    sentenceBufferContinuationCandidateSequence:
+      readFirstNumberFromMetadata(
+        metadataSources,
+        "sentenceBufferContinuationCandidateSequence"
+      ),
+    sentenceBufferContinuationExtensionUsed: readFirstBoolean(
+      metadataSources,
+      "sentenceBufferContinuationExtensionUsed"
+    ),
+    sentenceBufferInitialWaitMs: readFirstNumberFromMetadata(
+      metadataSources,
+      "sentenceBufferInitialWaitMs"
+    ),
+    sentenceBufferContinuationWaitMs: readFirstNumberFromMetadata(
+      metadataSources,
+      "sentenceBufferContinuationWaitMs"
+    ),
+    sentenceBufferContinuationDeadlineAt: readFirstNumberFromMetadata(
+      metadataSources,
+      "sentenceBufferContinuationDeadlineAt"
+    ),
+    sentenceBufferAbsoluteDeadlineAt: readFirstNumberFromMetadata(
+      metadataSources,
+      "sentenceBufferAbsoluteDeadlineAt"
     ),
     semanticTaxonomy: buildSemanticTaxonomyTraceSummary(metadataSources),
     semanticEmbeddingRuntime:

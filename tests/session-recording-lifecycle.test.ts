@@ -813,7 +813,7 @@ test("compact trace summaries preserve task boundary and cross-domain evidence",
   );
   assert.ok(summaryWrite);
   const summary = parsePayload(summaryWrite);
-  assert.equal(summary.version, 19);
+  assert.equal(summary.version, 20);
   assert.equal(summary.taskRelation, "new-parent");
   assert.equal(summary.logicalQuestionUnitRevision, 3);
   assert.deepEqual(summary.logicalQuestionSourceTurnIds, ["turn_1", "turn_2"]);
@@ -893,6 +893,15 @@ test("compact trace summaries preserve bounded STT request evidence", async () =
       sttRequestEvidenceDurationMs: 0.37,
       sttValidationDisposition: "accepted",
       sttValidationReason: "accepted",
+      sentenceBufferContinuationAuthorized: true,
+      sentenceBufferContinuationReason: "matching-native-speech-start",
+      sentenceBufferContinuationHandoffSource: "cached-event",
+      sentenceBufferContinuationCandidateSequence: 8,
+      sentenceBufferContinuationExtensionUsed: true,
+      sentenceBufferInitialWaitMs: 220,
+      sentenceBufferContinuationWaitMs: 910,
+      sentenceBufferContinuationDeadlineAt: 4_000,
+      sentenceBufferAbsoluteDeadlineAt: 6_000,
     }),
     "manual"
   );
@@ -906,7 +915,7 @@ test("compact trace summaries preserve bounded STT request evidence", async () =
   );
   assert.ok(summaryWrite);
   const summary = parsePayload(summaryWrite);
-  assert.equal(summary.version, 19);
+  assert.equal(summary.version, 20);
   assert.deepEqual(summary.sttRequest, {
     providerId: "openai-whisper",
     configuredProviderId: "openai-whisper",
@@ -921,6 +930,18 @@ test("compact trace summaries preserve bounded STT request evidence", async () =
     confidenceCapability: "not-exposed-by-text-adapter",
     evidenceDurationMs: 0.37,
   });
+  assert.equal(summary.sentenceBufferContinuationAuthorized, true);
+  assert.equal(
+    summary.sentenceBufferContinuationReason,
+    "matching-native-speech-start"
+  );
+  assert.equal(summary.sentenceBufferContinuationHandoffSource, "cached-event");
+  assert.equal(summary.sentenceBufferContinuationCandidateSequence, 8);
+  assert.equal(summary.sentenceBufferContinuationExtensionUsed, true);
+  assert.equal(summary.sentenceBufferInitialWaitMs, 220);
+  assert.equal(summary.sentenceBufferContinuationWaitMs, 910);
+  assert.equal(summary.sentenceBufferContinuationDeadlineAt, 4_000);
+  assert.equal(summary.sentenceBufferAbsoluteDeadlineAt, 6_000);
 
   await manager.stop("test-complete");
 });
@@ -973,7 +994,7 @@ test("compact trace summaries preserve hard memory invalidation evidence", async
   );
   assert.ok(summaryWrite);
   const summary = parsePayload(summaryWrite);
-  assert.equal(summary.version, 19);
+  assert.equal(summary.version, 20);
   const memory = summary.memory as Record<string, unknown>;
   assert.equal(memory.authorityRevision, 2);
   assert.equal(memory.invalidationKind, "hard");
@@ -1205,7 +1226,7 @@ test("records compact current-question settlement and execution-plan evidence", 
   assert.equal(serializedPlan.includes("taskSnapshot"), false);
   assert.equal(serializedPlan.includes("variables"), false);
   const summary = parsePayload(summaryWrite);
-  assert.equal(summary.version, 19);
+  assert.equal(summary.version, 20);
   assert.equal(
     (
       summary.currentQuestionSettlement as Record<string, unknown>
@@ -1301,7 +1322,7 @@ test("records a current-question term correction without copying provider state"
     false
   );
   const summary = parsePayload(summaryWrite);
-  assert.equal(summary.version, 19);
+  assert.equal(summary.version, 20);
   assert.equal(
     summary.manualTermCorrectionId,
     "term_correction_hnsw"

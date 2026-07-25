@@ -82,6 +82,7 @@ import {
   LogicalQuestionUnitLease,
   PrimaryAskProjection,
   NativeSpeechDetectedEvent,
+  NativeSpeechStartEvent,
   WhiteboardUpdateSource,
   MeetingContextManager,
   MeetingSetupWarning,
@@ -145,8 +146,10 @@ import {
   resolveNativeAudioCaptureStartFailure,
   pruneNativeAudioRecoveryAttempts,
   authorizeNativeSpeechDetectedEvent,
+  authorizeNativeSpeechStartEvent,
   buildNativeAudioLifecycleTraceMetadata,
   buildNativeSpeechEventTraceMetadata,
+  buildNativeSpeechStartTraceMetadata,
   parseNativeAudioSegmentDroppedEvent,
   buildMemoryEvaluationTraceMetadata,
   formatMeetingAnswerTraceMetadata,
@@ -220,6 +223,7 @@ import {
   canQuestionTypeDecisionOverrideParent,
   decideAdvisorTurnIntent,
   decideSentenceCompletion,
+  decideSentenceCompletionContinuation,
   composeLogicalQuestionUnit,
   authorizeLogicalQuestionUnitLease,
   createCanonicalLogicalQuestionLineage,
@@ -1447,6 +1451,13 @@ interface PendingSentenceCompletion {
   firstHeldAt: number;
   timeoutId: number;
   continuationSequence?: number;
+  continuationExtensionUsed: boolean;
+  continuationActivatedAt?: number;
+  continuationDeadlineAt?: number;
+  continuationNativeCaptureSessionId?: string;
+  continuationNativeCaptureGeneration?: number;
+  continuationNativeCandidateSequence?: number;
+  continuationSpeechStartedAtMs?: number;
   fragmentTurnIds: string[];
   fragmentTraceIds: string[];
   fragmentSequences: number[];
@@ -1746,6 +1757,11 @@ export function useMeetingAssistant() {
   const nativeCaptureSessionIdRef = useRef<string | null>(null);
   const nativeCaptureGenerationRef = useRef<number | null>(null);
   const lastNativeSegmentSequenceRef = useRef(0);
+  const lastNativeSpeechStartCandidateSequenceRef = useRef(0);
+  const latestNativeSpeechStartRef = useRef<{
+    event: NativeSpeechStartEvent;
+    observedAtMs: number;
+  } | null>(null);
   const nativeRecoveryAttemptTimestampsRef = useRef<number[]>([]);
   const nativeAudioManualRecoveryRef =
     useRef<NativeAudioManualRecoveryState | null>(null);
@@ -2928,6 +2944,8 @@ export function useMeetingAssistant() {
     nativeCaptureSessionIdRef.current = null;
     nativeCaptureGenerationRef.current = null;
     lastNativeSegmentSequenceRef.current = 0;
+    lastNativeSpeechStartCandidateSequenceRef.current = 0;
+    latestNativeSpeechStartRef.current = null;
     systemAudioQueueTailRef.current = Promise.resolve();
     microphoneAudioQueueTailRef.current = Promise.resolve();
     clearPendingConfirmation("session-invalidated");
@@ -7037,6 +7055,17 @@ export function useMeetingAssistant() {
         sentenceBufferFlushReason: reason,
         sentenceBufferFragmentCount: pending.fragmentTurnIds.length,
         sentenceBufferAddedLatencyMs: addedLatencyMs,
+        sentenceBufferInitialWaitMs: pending.continuationActivatedAt
+          ? Math.max(
+              0,
+              pending.continuationActivatedAt - pending.firstHeldAt
+            )
+          : addedLatencyMs,
+        sentenceBufferContinuationExtensionUsed:
+          pending.continuationExtensionUsed,
+        sentenceBufferContinuationWaitMs: pending.continuationActivatedAt
+          ? Math.max(0, Date.now() - pending.continuationActivatedAt)
+          : 0,
         sentenceBufferTurnIds: pending.fragmentTurnIds,
         sentenceBufferTraceIds: pending.fragmentTraceIds,
         sentenceBufferSegmentSequences: pending.fragmentSequences,
@@ -7079,6 +7108,80 @@ export function useMeetingAssistant() {
       return true;
     },
     [appendTranscriptTurnForTrace, isCurrentAudioSegment]
+  );
+
+  const activateSentenceContinuationFromSpeechStart = useCallback(
+    (
+      event: NativeSpeechStartEvent,
+      observedAtMs: number,
+      handoffSource: "live-event" | "cached-event"
+    ) => {
+      const pending = pendingSentenceCompletionRef.current;
+      if (!pending) return false;
+      const evaluatedAtMs = Date.now();
+
+      const decision = decideSentenceCompletionContinuation({
+        pending: {
+          source: pending.segment.source,
+          heldAt: pending.heldAt,
+          firstHeldAt: pending.firstHeldAt,
+          extensionUsed: pending.continuationExtensionUsed,
+          nativeCaptureSessionId: pending.segment.nativeCaptureSessionId,
+          nativeCaptureGeneration:
+            pending.segment.nativeCaptureGeneration,
+          nativeSegmentSequence: pending.segment.nativeSegmentSequence,
+          nativeCapturedAtMs: pending.segment.nativeCapturedAtMs,
+        },
+        speechStart: event,
+        now: evaluatedAtMs,
+      });
+      const metadata = {
+        sentenceBufferOperationId: pending.operationId,
+        sentenceBufferContinuationAuthorized: decision.authorized,
+        sentenceBufferContinuationReason: decision.reason,
+        sentenceBufferContinuationHandoffSource: handoffSource,
+        sentenceBufferContinuationCandidateSequence:
+          event.candidateSegmentSequence,
+        sentenceBufferContinuationSpeechStartedAtMs: event.occurredAtMs,
+        sentenceBufferContinuationObservedAtMs: observedAtMs,
+        sentenceBufferContinuationEvaluatedAtMs: evaluatedAtMs,
+        sentenceBufferAbsoluteDeadlineAt: decision.absoluteDeadlineAt,
+      };
+
+      if (!decision.authorized) {
+        traceStoreRef.current.updateMetadata(
+          pending.segment.traceId,
+          metadata
+        );
+        return false;
+      }
+
+      window.clearTimeout(pending.timeoutId);
+      pending.continuationExtensionUsed = true;
+      pending.continuationActivatedAt = evaluatedAtMs;
+      pending.continuationDeadlineAt = decision.deadlineAt;
+      pending.continuationNativeCaptureSessionId = event.captureSessionId;
+      pending.continuationNativeCaptureGeneration =
+        event.captureGeneration;
+      pending.continuationNativeCandidateSequence =
+        event.candidateSegmentSequence;
+      pending.continuationSpeechStartedAtMs = event.occurredAtMs;
+      pending.timeoutId = window.setTimeout(() => {
+        const current = pendingSentenceCompletionRef.current;
+        if (!current || current.operationId !== pending.operationId) return;
+        flushPendingSentenceCompletion("continuation-absolute-timeout");
+      }, Math.max(0, decision.deadlineAt - Date.now()));
+
+      traceStoreRef.current.updateMetadata(pending.segment.traceId, {
+        ...metadata,
+        sentenceBufferDisposition: "continuation-active",
+        sentenceBufferContinuationDeadlineAt: decision.deadlineAt,
+        sentenceBufferContinuationExtensionBudgetMs:
+          decision.extensionBudgetMs,
+      });
+      return true;
+    },
+    [flushPendingSentenceCompletion]
   );
 
   const holdPendingSentenceCompletion = useCallback(
@@ -7144,16 +7247,28 @@ export function useMeetingAssistant() {
         heldAt,
         firstHeldAt,
         timeoutId,
+        continuationExtensionUsed: false,
         fragmentTurnIds,
         fragmentTraceIds,
         fragmentSequences,
       };
+      const latestSpeechStart = latestNativeSpeechStartRef.current;
+      if (latestSpeechStart) {
+        activateSentenceContinuationFromSpeechStart(
+          latestSpeechStart.event,
+          latestSpeechStart.observedAtMs,
+          "cached-event"
+        );
+      }
       setState((previous) => ({
         ...previous,
         status: activeRef.current ? "listening" : "idle",
       }));
     },
-    [flushPendingSentenceCompletion]
+    [
+      activateSentenceContinuationFromSpeechStart,
+      flushPendingSentenceCompletion,
+    ]
   );
 
   const consumePendingSentenceCompletion = useCallback(
@@ -7166,9 +7281,31 @@ export function useMeetingAssistant() {
         return undefined;
       }
 
+      if (
+        pending.continuationNativeCandidateSequence != null &&
+        (segment.nativeCaptureSessionId !==
+          pending.continuationNativeCaptureSessionId ||
+          segment.nativeCaptureGeneration !==
+            pending.continuationNativeCaptureGeneration ||
+          segment.nativeSegmentSequence !==
+            pending.continuationNativeCandidateSequence)
+      ) {
+        flushPendingSentenceCompletion("continuation-segment-mismatch");
+        return undefined;
+      }
+
       window.clearTimeout(pending.timeoutId);
       pendingSentenceCompletionRef.current = null;
       const addedLatencyMs = Date.now() - pending.firstHeldAt;
+      const initialWaitMs = pending.continuationActivatedAt
+        ? Math.max(
+            0,
+            pending.continuationActivatedAt - pending.firstHeldAt
+          )
+        : addedLatencyMs;
+      const continuationWaitMs = pending.continuationActivatedAt
+        ? Math.max(0, Date.now() - pending.continuationActivatedAt)
+        : 0;
       const mergeContext: SentenceCompletionMergeContext = {
         operationId: pending.operationId,
         firstHeldAt: pending.firstHeldAt,
@@ -7191,6 +7328,10 @@ export function useMeetingAssistant() {
         sentenceBufferFlushReason: "next-them-fragment",
         sentenceBufferFragmentCount: pending.fragmentTurnIds.length + 1,
         sentenceBufferAddedLatencyMs: addedLatencyMs,
+        sentenceBufferInitialWaitMs: initialWaitMs,
+        sentenceBufferContinuationExtensionUsed:
+          pending.continuationExtensionUsed,
+        sentenceBufferContinuationWaitMs: continuationWaitMs,
         sentenceBufferMergedIntoTraceId: segment.traceId,
         sentenceBufferMergedIntoTurnId: turn.id,
       });
@@ -7219,6 +7360,10 @@ export function useMeetingAssistant() {
         sentenceBufferFlushReason: "next-them-fragment",
         sentenceBufferFragmentCount: pending.fragmentTurnIds.length + 1,
         sentenceBufferAddedLatencyMs: addedLatencyMs,
+        sentenceBufferInitialWaitMs: initialWaitMs,
+        sentenceBufferContinuationExtensionUsed:
+          pending.continuationExtensionUsed,
+        sentenceBufferContinuationWaitMs: continuationWaitMs,
         sentenceBufferTurnIds: [...pending.fragmentTurnIds, turn.id],
         sentenceBufferTraceIds: [...pending.fragmentTraceIds, segment.traceId],
         sentenceBufferSegmentSequences: [
@@ -7231,6 +7376,7 @@ export function useMeetingAssistant() {
     },
     [
       clearPendingSentenceCompletionForRuntimeReset,
+      flushPendingSentenceCompletion,
       isCurrentAudioSegment,
     ]
   );
@@ -9792,8 +9938,15 @@ export function useMeetingAssistant() {
       const sequence = audioSegmentSeqRef.current + 1;
       audioSegmentSeqRef.current = sequence;
       const pendingSentence = pendingSentenceCompletionRef.current;
-      if (pendingSentence?.segment.sessionId === sessionId) {
-        window.clearTimeout(pendingSentence.timeoutId);
+      if (
+        pendingSentence?.segment.sessionId === sessionId &&
+        pendingSentence.continuationNativeCaptureSessionId ===
+          nativeEvent.captureSessionId &&
+        pendingSentence.continuationNativeCaptureGeneration ===
+          nativeEvent.captureGeneration &&
+        pendingSentence.continuationNativeCandidateSequence ===
+          nativeEvent.segmentSequence
+      ) {
         pendingSentence.continuationSequence = sequence;
         traceStoreRef.current.updateMetadata(pendingSentence.segment.traceId, {
           sentenceBufferDisposition: "continuation-audio-queued",
@@ -9863,9 +10016,6 @@ export function useMeetingAssistant() {
             return;
           }
 
-          pending.timeoutId = window.setTimeout(() => {
-            flushPendingSentenceCompletion("continuation-stt-settled-timeout");
-          }, SENTENCE_COMPLETION_BUFFER_MS);
           traceStoreRef.current.updateMetadata(pending.segment.traceId, {
             sentenceBufferDisposition: "continuation-stt-settled",
             sentenceBufferContinuationSettledAt: Date.now(),
@@ -9873,7 +10023,7 @@ export function useMeetingAssistant() {
           });
         });
     },
-    [flushPendingSentenceCompletion, processQueuedSpeechSegment]
+    [processQueuedSpeechSegment]
   );
 
   const enqueueMicrophoneSpeech = useCallback(
@@ -10077,6 +10227,8 @@ export function useMeetingAssistant() {
       nativeCaptureSessionIdRef.current = null;
       nativeCaptureGenerationRef.current = null;
       lastNativeSegmentSequenceRef.current = 0;
+      lastNativeSpeechStartCandidateSequenceRef.current = 0;
+      latestNativeSpeechStartRef.current = null;
       if (policy.resetRecoveryBudget) {
         nativeRecoveryAttemptTimestampsRef.current = [];
       }
@@ -10240,6 +10392,8 @@ export function useMeetingAssistant() {
           nativeCaptureSessionIdRef.current = nativeCaptureSessionId;
           nativeCaptureGenerationRef.current = nativeCaptureGeneration;
           lastNativeSegmentSequenceRef.current = 0;
+          lastNativeSpeechStartCandidateSequenceRef.current = 0;
+          latestNativeSpeechStartRef.current = null;
           activeRef.current = true;
           const contextState = contextManagerRef.current.getState();
           if (state.settings.useMemory) {
@@ -14321,11 +14475,70 @@ export function useMeetingAssistant() {
 
   useEffect(() => {
     let disposed = false;
+    let unlistenSpeechStart: (() => void) | undefined;
     let unlistenSpeech: (() => void) | undefined;
     let unlistenSegmentDrop: (() => void) | undefined;
     let unlistenLifecycle: (() => void) | undefined;
 
     const setupListeners = async () => {
+      const speechStartUnlisten = await listen<unknown>(
+        "speech-start",
+        (event) => {
+          const observedAtMs = Date.now();
+          const authorization = authorizeNativeSpeechStartEvent({
+            payload: event.payload,
+            activeCaptureSessionId: nativeCaptureSessionIdRef.current,
+            activeCaptureGeneration: nativeCaptureGenerationRef.current,
+            lastObservedCandidateSequence:
+              lastNativeSpeechStartCandidateSequenceRef.current,
+            expectedOwner: "meeting",
+            expectedSource: "system-audio",
+          });
+          const metadata = {
+            authorized: authorization.authorized,
+            ...(!authorization.authorized
+              ? { reason: authorization.reason }
+              : {}),
+            activeNativeCaptureSessionId:
+              nativeCaptureSessionIdRef.current,
+            ...(authorization.event
+              ? buildNativeSpeechStartTraceMetadata(
+                  authorization.event,
+                  observedAtMs
+                )
+              : {}),
+          };
+          sessionRecordingManagerRef.current?.recordNativeSpeechEvent(
+            metadata
+          );
+          if (!authorization.authorized) {
+            console.info(
+              `[${new Date().toISOString()}] [native-speech-start] rejected`,
+              JSON.stringify(metadata)
+            );
+            return;
+          }
+
+          lastNativeSpeechStartCandidateSequenceRef.current =
+            authorization.event.candidateSegmentSequence;
+          latestNativeSpeechStartRef.current = {
+            event: authorization.event,
+            observedAtMs,
+          };
+          activateSentenceContinuationFromSpeechStart(
+            authorization.event,
+            observedAtMs,
+            "live-event"
+          );
+        }
+      );
+
+      if (disposed) {
+        speechStartUnlisten();
+        return;
+      }
+      unlistenSpeechStart = speechStartUnlisten;
+
       const unlisten = await listen<unknown>("speech-detected", (event) => {
         const authorization = authorizeNativeSpeechDetectedEvent({
           payload: event.payload,
@@ -14487,6 +14700,8 @@ export function useMeetingAssistant() {
           nativeCaptureSessionIdRef.current = null;
           nativeCaptureGenerationRef.current = null;
           lastNativeSegmentSequenceRef.current = 0;
+          lastNativeSpeechStartCandidateSequenceRef.current = 0;
+          latestNativeSpeechStartRef.current = null;
 
           if (disposition === "expected-stop") {
             return;
@@ -14587,11 +14802,13 @@ export function useMeetingAssistant() {
 
     return () => {
       disposed = true;
+      unlistenSpeechStart?.();
       unlistenSpeech?.();
       unlistenSegmentDrop?.();
       unlistenLifecycle?.();
     };
   }, [
+    activateSentenceContinuationFromSpeechStart,
     cancelActiveAdvisorJob,
     invalidateAudioProcessingSession,
     maybeFinishNativeAudioFaultTrace,

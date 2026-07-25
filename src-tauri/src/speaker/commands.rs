@@ -210,6 +210,18 @@ pub struct NativeSpeechDetectedEvent {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct NativeSpeechStartEvent {
+    pub capture_session_id: String,
+    pub capture_generation: u64,
+    pub candidate_segment_sequence: u64,
+    pub owner: &'static str,
+    pub source: &'static str,
+    pub occurred_at_ms: u64,
+    pub sample_rate: u32,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct NativeAudioLifecycleEvent {
     pub event_type: &'static str,
     pub capture_session_id: String,
@@ -768,7 +780,14 @@ async fn run_vad_capture(
                     // Include pre-speech buffer for natural sound
                     speech_buffer.extend(pre_speech.drain(..));
 
-                    let _ = app.emit("speech-start", ());
+                    emit_speech_start(
+                        &app,
+                        &capture_session_id,
+                        segment_sequence + 1,
+                        sr,
+                        capture_owner,
+                        capture_generation,
+                    );
                 }
 
                 speech_chunks += 1;
@@ -1151,6 +1170,26 @@ fn emit_speech_detected(
         audio_base64,
     };
     let _ = app.emit("speech-detected", event);
+}
+
+fn emit_speech_start(
+    app: &AppHandle,
+    capture_session_id: &str,
+    candidate_segment_sequence: u64,
+    sample_rate: u32,
+    capture_owner: NativeCaptureOwner,
+    capture_generation: u64,
+) {
+    let event = NativeSpeechStartEvent {
+        capture_session_id: capture_session_id.to_string(),
+        capture_generation,
+        candidate_segment_sequence,
+        owner: capture_owner.as_str(),
+        source: "system-audio",
+        occurred_at_ms: now_ms(),
+        sample_rate,
+    };
+    let _ = app.emit("speech-start", event);
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1752,7 +1791,8 @@ mod tests {
         CaptureTerminationDiagnostics, CaptureTerminationReason, DebugAudioFaultDisposition,
         DebugAudioFaultKind, NativeAudioLifecycleEvent, NativeAudioSegmentDroppedEvent,
         NativeCaptureControl, NativeCaptureOwner, NativeCapturePhase, NativeSpeechDetectedEvent,
-        NativeStopDecision, SpeakerStreamTermination, SpeakerStreamTerminationReason,
+        NativeSpeechStartEvent, NativeStopDecision, SpeakerStreamTermination,
+        SpeakerStreamTerminationReason,
     };
 
     #[test]
@@ -1777,6 +1817,28 @@ mod tests {
         assert_eq!(value["sampleRate"], 48_000);
         assert_eq!(value["mediaType"], "audio/wav");
         assert_eq!(value["audioBase64"], "UklGRg==");
+    }
+
+    #[test]
+    fn serializes_native_speech_start_identity_for_typescript_consumers() {
+        let event = NativeSpeechStartEvent {
+            capture_session_id: "capture-test".to_string(),
+            capture_generation: 3,
+            candidate_segment_sequence: 8,
+            owner: "meeting",
+            source: "system-audio",
+            occurred_at_ms: 1234,
+            sample_rate: 48_000,
+        };
+
+        let value = serde_json::to_value(event).expect("event should serialize");
+        assert_eq!(value["captureSessionId"], "capture-test");
+        assert_eq!(value["captureGeneration"], 3);
+        assert_eq!(value["candidateSegmentSequence"], 8);
+        assert_eq!(value["owner"], "meeting");
+        assert_eq!(value["source"], "system-audio");
+        assert_eq!(value["occurredAtMs"], 1234);
+        assert_eq!(value["sampleRate"], 48_000);
     }
 
     #[test]

@@ -1,4 +1,6 @@
 export const SENTENCE_COMPLETION_BUFFER_MS = 2_000;
+export const SENTENCE_COMPLETION_EXTENSION_MS = 1_500;
+export const SENTENCE_COMPLETION_ABSOLUTE_MAX_MS = 4_000;
 
 export type SentenceCompletionDisposition = "bypass" | "buffer";
 
@@ -7,6 +9,150 @@ export interface SentenceCompletionDecision {
   confidence: number;
   reason: string;
   evidence: string[];
+}
+
+export type SentenceCompletionContinuationRejectionReason =
+  | "extension-already-used"
+  | "unsupported-source"
+  | "missing-native-identity"
+  | "capture-session-mismatch"
+  | "capture-generation-mismatch"
+  | "candidate-sequence-mismatch"
+  | "speech-start-before-source-segment"
+  | "speech-start-after-initial-deadline"
+  | "absolute-deadline-expired";
+
+export type SentenceCompletionContinuationDecision =
+  | {
+      authorized: true;
+      reason: "matching-native-speech-start";
+      deadlineAt: number;
+      extensionBudgetMs: number;
+      absoluteDeadlineAt: number;
+    }
+  | {
+      authorized: false;
+      reason: SentenceCompletionContinuationRejectionReason;
+      absoluteDeadlineAt: number;
+    };
+
+export function decideSentenceCompletionContinuation({
+  pending,
+  speechStart,
+  now,
+}: {
+  pending: {
+    source: string;
+    heldAt: number;
+    firstHeldAt: number;
+    extensionUsed: boolean;
+    nativeCaptureSessionId?: string;
+    nativeCaptureGeneration?: number;
+    nativeSegmentSequence?: number;
+    nativeCapturedAtMs?: number;
+  };
+  speechStart: {
+    source: string;
+    captureSessionId: string;
+    captureGeneration: number;
+    candidateSegmentSequence: number;
+    occurredAtMs: number;
+  };
+  now: number;
+}): SentenceCompletionContinuationDecision {
+  const absoluteDeadlineAt =
+    pending.firstHeldAt + SENTENCE_COMPLETION_ABSOLUTE_MAX_MS;
+  if (pending.extensionUsed) {
+    return {
+      authorized: false,
+      reason: "extension-already-used",
+      absoluteDeadlineAt,
+    };
+  }
+  if (
+    pending.source !== "system-audio" ||
+    speechStart.source !== pending.source
+  ) {
+    return {
+      authorized: false,
+      reason: "unsupported-source",
+      absoluteDeadlineAt,
+    };
+  }
+  if (
+    !pending.nativeCaptureSessionId ||
+    pending.nativeCaptureGeneration == null ||
+    pending.nativeSegmentSequence == null
+  ) {
+    return {
+      authorized: false,
+      reason: "missing-native-identity",
+      absoluteDeadlineAt,
+    };
+  }
+  if (speechStart.captureSessionId !== pending.nativeCaptureSessionId) {
+    return {
+      authorized: false,
+      reason: "capture-session-mismatch",
+      absoluteDeadlineAt,
+    };
+  }
+  if (speechStart.captureGeneration !== pending.nativeCaptureGeneration) {
+    return {
+      authorized: false,
+      reason: "capture-generation-mismatch",
+      absoluteDeadlineAt,
+    };
+  }
+  if (
+    speechStart.candidateSegmentSequence !==
+    pending.nativeSegmentSequence + 1
+  ) {
+    return {
+      authorized: false,
+      reason: "candidate-sequence-mismatch",
+      absoluteDeadlineAt,
+    };
+  }
+  if (
+    pending.nativeCapturedAtMs != null &&
+    speechStart.occurredAtMs < pending.nativeCapturedAtMs
+  ) {
+    return {
+      authorized: false,
+      reason: "speech-start-before-source-segment",
+      absoluteDeadlineAt,
+    };
+  }
+  if (
+    speechStart.occurredAtMs >
+    pending.heldAt + SENTENCE_COMPLETION_BUFFER_MS
+  ) {
+    return {
+      authorized: false,
+      reason: "speech-start-after-initial-deadline",
+      absoluteDeadlineAt,
+    };
+  }
+  if (now >= absoluteDeadlineAt) {
+    return {
+      authorized: false,
+      reason: "absolute-deadline-expired",
+      absoluteDeadlineAt,
+    };
+  }
+
+  const deadlineAt = Math.min(
+    now + SENTENCE_COMPLETION_EXTENSION_MS,
+    absoluteDeadlineAt
+  );
+  return {
+    authorized: true,
+    reason: "matching-native-speech-start",
+    deadlineAt,
+    extensionBudgetMs: Math.max(0, deadlineAt - now),
+    absoluteDeadlineAt,
+  };
 }
 
 export function decideSentenceCompletion(
