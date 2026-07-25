@@ -46,7 +46,7 @@ import {
 import { serializeMeetingTraceExport } from "./trace.js";
 
 const SESSION_RECORDING_SCHEMA_VERSION = 1;
-const SESSION_TRACE_SUMMARY_SCHEMA_VERSION = 18;
+const SESSION_TRACE_SUMMARY_SCHEMA_VERSION = 19;
 const SESSION_TRACE_INDEX_SCHEMA_VERSION = 1;
 
 interface SessionRecordingStartOptions {
@@ -588,6 +588,21 @@ export interface SessionCompactTraceSummary {
     audioDurationMs?: number;
     transcriptCharsPerSecond?: number;
     densitySuspicious?: boolean;
+  };
+  sttRequest?: {
+    providerId?: string;
+    configuredProviderId?: string;
+    providerIdentityStatus?: string;
+    modelId?: string;
+    modelSource?: string;
+    language?: string;
+    languageMode?: string;
+    languageSource?: string;
+    promptKind?: string;
+    promptChars?: number;
+    termCount?: number;
+    confidenceCapability?: string;
+    evidenceDurationMs?: number;
   };
   providerId?: string;
   mode?: string;
@@ -3440,6 +3455,7 @@ function buildCompactTraceSummary({
       ),
     },
     sttValidation: buildSttValidationTraceSummary(metadataSources),
+    sttRequest: buildSttRequestTraceSummary(metadataSources),
     providerId: readString(modelStep?.metadata?.providerId),
     mode: readString(modelStep?.metadata?.mode),
     responseLength: readString(modelStep?.metadata?.responseLength),
@@ -4580,6 +4596,75 @@ function buildSttValidationTraceSummary(
     densitySuspicious: readFirstBoolean(
       metadataSources,
       "sttDensitySuspicious"
+    ),
+  };
+}
+
+function buildSttRequestTraceSummary(
+  metadataSources: Record<string, unknown>[]
+): SessionCompactTraceSummary["sttRequest"] {
+  const providerId = readFirstString(
+    metadataSources,
+    "sttRequestProviderId"
+  );
+  const configuredProviderId = readFirstString(
+    metadataSources,
+    "sttRequestConfiguredProviderId"
+  );
+  const modelId = readFirstString(metadataSources, "sttRequestModelId");
+  const language = readFirstString(metadataSources, "sttRequestLanguage");
+  const promptKind = readFirstString(
+    metadataSources,
+    "sttRequestPromptKind"
+  );
+
+  if (
+    !providerId &&
+    !configuredProviderId &&
+    !modelId &&
+    !language &&
+    !promptKind
+  ) {
+    return undefined;
+  }
+
+  return {
+    providerId,
+    configuredProviderId,
+    providerIdentityStatus: readFirstString(
+      metadataSources,
+      "sttRequestProviderIdentityStatus"
+    ),
+    modelId,
+    modelSource: readFirstString(
+      metadataSources,
+      "sttRequestModelSource"
+    ),
+    language,
+    languageMode: readFirstString(
+      metadataSources,
+      "sttRequestLanguageMode"
+    ),
+    languageSource: readFirstString(
+      metadataSources,
+      "sttRequestLanguageSource"
+    ),
+    promptKind,
+    promptChars: readFirstNumberFromMetadata(
+      metadataSources,
+      "sttRequestPromptChars"
+    ),
+    termCount: readFirstNumberFromMetadata(
+      metadataSources,
+      "sttRequestTermCount"
+    ),
+    confidenceCapability: readFirstString(
+      metadataSources,
+      "sttRequestConfidenceCapability"
+    ),
+    evidenceDurationMs: readFirstNumberFromMetadata(
+      metadataSources,
+      "sttRequestEvidenceDurationMs"
     ),
   };
 }

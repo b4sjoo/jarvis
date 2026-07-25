@@ -289,6 +289,8 @@ import {
   shouldIncludeTurnInAdvisorPrompt,
   shouldSuppressDuplicateSystemAudioTurn,
   transcribeMeetingAudio,
+  buildSttRequestEvidence,
+  formatSttRequestEvidenceForTrace,
   upsertTraceHumanEvaluation,
   upsertQuestionHumanEvaluation,
   upsertCriticalMomentEvaluation,
@@ -8811,6 +8813,19 @@ export function useMeetingAssistant() {
           contextManagerRef.current.getState(),
           speechCorrectionsRef.current
         );
+        const sttRequestEvidenceStartedAt = performance.now();
+        const sttRequestEvidence = buildSttRequestEvidence({
+          provider: sttProvider,
+          selectedProvider: selectedSttProvider,
+          prompt: speechBias.prompt,
+          terms: speechBias.terms.map((term) => term.term),
+        });
+        const sttRequestTraceMetadata = {
+          ...formatSttRequestEvidenceForTrace(sttRequestEvidence),
+          sttRequestEvidenceDurationMs: Number(
+            (performance.now() - sttRequestEvidenceStartedAt).toFixed(3)
+          ),
+        };
         traceStoreRef.current.recordInput(
           traceId,
           "speech bias context",
@@ -8838,6 +8853,7 @@ export function useMeetingAssistant() {
             speechBiasTermCount: speechBias.terms.length,
             speechBiasRuleCount: speechBias.correctionRules.length,
             speechBiasPromptChars: speechBias.prompt.length,
+            ...sttRequestTraceMetadata,
           }
         );
         sttStepId = traceStoreRef.current.startStep(
@@ -8852,7 +8868,12 @@ export function useMeetingAssistant() {
             source: segment.source,
             speechBiasTermCount: speechBias.terms.length,
             speechBiasRuleCount: speechBias.correctionRules.length,
+            ...sttRequestTraceMetadata,
           }
+        );
+        traceStoreRef.current.updateMetadata(
+          traceId,
+          sttRequestTraceMetadata
         );
         const transcription = await withTimeout(
           transcribeMeetingAudio({
@@ -8904,6 +8925,7 @@ export function useMeetingAssistant() {
         };
         traceStoreRef.current.finishStep(traceId, sttStepId, "success", {
           transcriptChars: rawText.length,
+          ...sttRequestTraceMetadata,
           ...sttValidationMetadata,
         });
         traceStoreRef.current.updateMetadata(

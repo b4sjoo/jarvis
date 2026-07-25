@@ -813,7 +813,7 @@ test("compact trace summaries preserve task boundary and cross-domain evidence",
   );
   assert.ok(summaryWrite);
   const summary = parsePayload(summaryWrite);
-  assert.equal(summary.version, 18);
+  assert.equal(summary.version, 19);
   assert.equal(summary.taskRelation, "new-parent");
   assert.equal(summary.logicalQuestionUnitRevision, 3);
   assert.deepEqual(summary.logicalQuestionSourceTurnIds, ["turn_1", "turn_2"]);
@@ -871,6 +871,60 @@ test("compact trace summaries preserve task boundary and cross-domain evidence",
   await manager.stop("test-complete");
 });
 
+test("compact trace summaries preserve bounded STT request evidence", async () => {
+  const native = new ControlledRecordingInvoke();
+  const manager = new SessionRecordingManager(undefined, native.invoke);
+  await manager.start(START_OPTIONS);
+  await settle();
+
+  manager.recordTrace(
+    buildCompletedTrace("stt_request_trace", Date.now(), {
+      sttRequestProviderId: "openai-whisper",
+      sttRequestConfiguredProviderId: "openai-whisper",
+      sttRequestProviderIdentityStatus: "matched",
+      sttRequestModelId: "gpt-4o-mini-transcribe",
+      sttRequestModelSource: "selected-provider-variable",
+      sttRequestLanguageMode: "automatic",
+      sttRequestLanguageSource: "not-observed",
+      sttRequestPromptKind: "speech-bias",
+      sttRequestPromptChars: 142,
+      sttRequestTermCount: 7,
+      sttRequestConfidenceCapability: "not-exposed-by-text-adapter",
+      sttRequestEvidenceDurationMs: 0.37,
+      sttValidationDisposition: "accepted",
+      sttValidationReason: "accepted",
+    }),
+    "manual"
+  );
+  await settle();
+
+  const summaryWrite = native.calls.find(
+    (call) =>
+      call.command === "write_meeting_session_recording_text" &&
+      stringArg(call, "relativePath") ===
+        "traces/stt_request_trace/summary.json"
+  );
+  assert.ok(summaryWrite);
+  const summary = parsePayload(summaryWrite);
+  assert.equal(summary.version, 19);
+  assert.deepEqual(summary.sttRequest, {
+    providerId: "openai-whisper",
+    configuredProviderId: "openai-whisper",
+    providerIdentityStatus: "matched",
+    modelId: "gpt-4o-mini-transcribe",
+    modelSource: "selected-provider-variable",
+    languageMode: "automatic",
+    languageSource: "not-observed",
+    promptKind: "speech-bias",
+    promptChars: 142,
+    termCount: 7,
+    confidenceCapability: "not-exposed-by-text-adapter",
+    evidenceDurationMs: 0.37,
+  });
+
+  await manager.stop("test-complete");
+});
+
 test("compact trace summaries preserve hard memory invalidation evidence", async () => {
   const native = new ControlledRecordingInvoke();
   const manager = new SessionRecordingManager(undefined, native.invoke);
@@ -919,7 +973,7 @@ test("compact trace summaries preserve hard memory invalidation evidence", async
   );
   assert.ok(summaryWrite);
   const summary = parsePayload(summaryWrite);
-  assert.equal(summary.version, 18);
+  assert.equal(summary.version, 19);
   const memory = summary.memory as Record<string, unknown>;
   assert.equal(memory.authorityRevision, 2);
   assert.equal(memory.invalidationKind, "hard");
@@ -1151,7 +1205,7 @@ test("records compact current-question settlement and execution-plan evidence", 
   assert.equal(serializedPlan.includes("taskSnapshot"), false);
   assert.equal(serializedPlan.includes("variables"), false);
   const summary = parsePayload(summaryWrite);
-  assert.equal(summary.version, 18);
+  assert.equal(summary.version, 19);
   assert.equal(
     (
       summary.currentQuestionSettlement as Record<string, unknown>
@@ -1247,7 +1301,7 @@ test("records a current-question term correction without copying provider state"
     false
   );
   const summary = parsePayload(summaryWrite);
-  assert.equal(summary.version, 18);
+  assert.equal(summary.version, 19);
   assert.equal(
     summary.manualTermCorrectionId,
     "term_correction_hnsw"

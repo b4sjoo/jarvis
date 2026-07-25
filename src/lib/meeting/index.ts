@@ -81,6 +81,7 @@ export * from "./taxonomy-adjudication-reflection";
 export * from "./trace";
 export * from "./transient-personal-status";
 export * from "./transcription.service";
+export * from "./stt-request-evidence";
 export * from "./transcript-fusion";
 export * from "./types";
 export * from "./whiteboard-artifact";
