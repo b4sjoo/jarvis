@@ -1,6 +1,7 @@
 mod capture;
 mod db;
 mod shortcuts;
+mod stt_evaluation;
 mod window;
 use base64::{engine::general_purpose, Engine as _};
 use std::fs::OpenOptions;
@@ -386,6 +387,7 @@ pub fn run() {
                 .build(),
         )
         .manage(AudioState::default())
+        .manage(stt_evaluation::SttEvaluationCaptureState::default())
         .manage(CaptureState::default())
         .manage(shortcuts::WindowVisibility {
             is_hidden: Mutex::new(false),
@@ -411,6 +413,13 @@ pub fn run() {
             start_meeting_session_recording,
             write_meeting_session_recording_text,
             write_meeting_session_recording_base64,
+            stt_evaluation::start_stt_evaluation_capture,
+            stt_evaluation::stop_stt_evaluation_capture,
+            stt_evaluation::get_stt_evaluation_capture_status,
+            stt_evaluation::delete_stt_evaluation_capture,
+            stt_evaluation::cleanup_stt_evaluation_captures,
+            stt_evaluation::record_stt_evaluation_submitted_audio,
+            stt_evaluation::record_stt_evaluation_transcript_event,
             window::set_window_height,
             window::open_dashboard,
             window::toggle_dashboard,
@@ -447,6 +456,11 @@ pub fn run() {
             speaker::get_output_devices,
         ])
         .setup(|app| {
+            if let Err(error) =
+                stt_evaluation::cleanup_expired_stt_evaluation_captures(app.handle())
+            {
+                eprintln!("Failed to clean expired STT evaluation captures: {}", error);
+            }
             #[cfg(target_os = "macos")]
             {
                 if let Err(e) = app

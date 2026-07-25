@@ -181,6 +181,7 @@ import {
   inferTrustedProgrammingLanguage,
   updateWhiteboardArtifactFromAnswer,
   SessionRecordingManager,
+  SttEvaluationCaptureManager,
   areCompatibleQuestionTypes,
   authorizeAdvisorExecution,
   authorizeAdvisorOutputCommit,
@@ -488,6 +489,17 @@ const INITIAL_STATE: MeetingAssistantState = {
     lifecycle: "idle",
     eventCount: 0,
     artifactCount: 0,
+  },
+  sttEvaluationCapture: {
+    active: false,
+    lifecycle: "idle",
+    rawChunkCount: 0,
+    submittedAudioCount: 0,
+    providerEventCount: 0,
+    canonicalEventCount: 0,
+    humanReferenceCount: 0,
+    bytesWritten: 0,
+    droppedRawChunkCount: 0,
   },
   humanEvaluations: [],
   questionEvaluations: [],
@@ -1404,8 +1416,11 @@ interface QueuedSpeechSegment {
   speaker: TranscriptTurn["speaker"];
   source: TranscriptTurn["source"];
   nativeCaptureSessionId?: string;
+  nativeCaptureGeneration?: number;
   nativeSegmentSequence?: number;
   nativeCapturedAtMs?: number;
+  nativeSampleRate?: number;
+  sttEvaluationCaptureSessionId?: string;
   traceId: string;
   queueStepId: string;
 }
@@ -1541,6 +1556,60 @@ export function useMeetingAssistant() {
       }
     );
   }
+  const sttEvaluationCaptureManagerRef =
+    useRef<SttEvaluationCaptureManager | null>(null);
+  if (sttEvaluationCaptureManagerRef.current === null) {
+    sttEvaluationCaptureManagerRef.current = new SttEvaluationCaptureManager(
+      (sttEvaluationCapture) => {
+        setState((previous) => ({
+          ...previous,
+          sttEvaluationCapture,
+        }));
+      }
+    );
+  }
+  useEffect(() => {
+    let disposed = false;
+    void sttEvaluationCaptureManagerRef.current
+      ?.cleanupExpired()
+      .then(() => sttEvaluationCaptureManagerRef.current?.refresh())
+      .catch((error) => {
+        if (!disposed) {
+          console.warn("Failed to initialize STT evaluation capture", error);
+        }
+      });
+    return () => {
+      disposed = true;
+    };
+  }, []);
+  useEffect(() => {
+    if (!state.sttEvaluationCapture.active) return;
+    const intervalId = window.setInterval(() => {
+      void sttEvaluationCaptureManagerRef.current?.refresh().catch((error) => {
+        console.warn("Failed to refresh STT evaluation capture", error);
+      });
+    }, 2_000);
+    return () => {
+      window.clearInterval(intervalId);
+    };
+  }, [state.sttEvaluationCapture.active]);
+  useEffect(() => {
+    if (
+      state.sttEvaluationCapture.active &&
+      !state.settings.debugMode &&
+      !state.sessionRecording.active
+    ) {
+      void sttEvaluationCaptureManagerRef.current
+        ?.stop("authorization-source-disabled")
+        .catch((error) => {
+          console.warn("Failed to stop STT evaluation capture", error);
+        });
+    }
+  }, [
+    state.sessionRecording.active,
+    state.settings.debugMode,
+    state.sttEvaluationCapture.active,
+  ]);
   const refreshCriticalMomentCandidates = useCallback(
     (contextState: MeetingContextState, traces: MeetingTrace[]) => {
       const sessionId =
@@ -2768,6 +2837,40 @@ export function useMeetingAssistant() {
     [startSessionRecording, stopSessionRecording]
   );
 
+  const setSttEvaluationCaptureEnabled = useCallback((enabled: boolean) => {
+    if (
+      enabled &&
+      !state.settings.debugMode &&
+      !state.sessionRecording.active
+    ) {
+      setState((previous) => ({
+        ...previous,
+        error:
+          "Turn on Debug Mode or Session Recording before enabling STT Evaluation Capture.",
+      }));
+      return;
+    }
+    if (enabled && activeRef.current) {
+      setState((previous) => ({
+        ...previous,
+        error:
+          "Enable STT Evaluation Capture before starting meeting audio or while paused.",
+      }));
+      return;
+    }
+    const manager = sttEvaluationCaptureManagerRef.current;
+    if (!manager) return;
+    void (enabled ? manager.start(72) : manager.stop("manual")).catch((error) => {
+      console.warn("Failed to update STT evaluation capture", error);
+    });
+  }, [state.sessionRecording.active, state.settings.debugMode]);
+
+  const deleteSttEvaluationCapture = useCallback(() => {
+    void sttEvaluationCaptureManagerRef.current?.deleteCurrent().catch((error) => {
+      console.warn("Failed to delete STT evaluation capture", error);
+    });
+  }, []);
+
   const clearPendingConfirmation = useCallback((reason: string) => {
     const pending = pendingConfirmationRef.current;
     if (!pending) return;
@@ -3975,6 +4078,14 @@ export function useMeetingAssistant() {
         });
       }
       await stopSessionRecording("meeting-assistant-stopped");
+      try {
+        await sttEvaluationCaptureManagerRef.current?.drain();
+        await sttEvaluationCaptureManagerRef.current?.stop(
+          "meeting-assistant-stopped"
+        );
+      } catch (error) {
+        console.warn("Failed to stop STT evaluation capture", error);
+      }
       if (!coordinator.authorize(lifecycleOperation, "commit-stop-state")) {
         return;
       }
@@ -8416,6 +8527,35 @@ export function useMeetingAssistant() {
           speaker: segment.speaker,
           source: segment.source,
         });
+        const evaluationUtteranceId = `utterance_${segment.sessionId}_${segment.sequence}`;
+        const evaluationSubmittedAudioQueued =
+          segment.source === "system-audio" &&
+          Boolean(segment.base64Audio) &&
+          sttEvaluationCaptureManagerRef.current?.recordSubmittedAudio({
+            evaluationSessionId: segment.sttEvaluationCaptureSessionId,
+            utteranceId: evaluationUtteranceId,
+            traceId,
+            audioSessionId: segment.sessionId,
+            audioSegmentSequence: segment.sequence,
+            nativeCaptureSessionId: segment.nativeCaptureSessionId,
+            nativeCaptureGeneration: segment.nativeCaptureGeneration,
+            nativeSegmentSequence: segment.nativeSegmentSequence,
+            nativeCapturedAtMs: segment.nativeCapturedAtMs,
+            nativeSampleRate: segment.nativeSampleRate,
+            queuedAt: segment.queuedAt,
+            submittedAt: Date.now(),
+            mediaType: audio.type || "audio/wav",
+            audioBytes: audio.size,
+            base64Payload: segment.base64Audio ?? "",
+            source: segment.source,
+          });
+        if (evaluationSubmittedAudioQueued) {
+          traceStoreRef.current.updateMetadata(traceId, {
+            sttEvaluationCaptureSessionId:
+              sttEvaluationCaptureManagerRef.current?.getState().sessionId,
+            sttEvaluationSubmittedAudioQueued: true,
+          });
+        }
 
         const speechBias = buildSpeechBiasContext(
           contextManagerRef.current.getState(),
@@ -8480,6 +8620,26 @@ export function useMeetingAssistant() {
           "Speech-to-text timed out. Jarvis is still listening."
         );
         const { rawText, turn, validation } = transcription;
+        const providerTranscriptQueued =
+          segment.source === "system-audio" &&
+          sttEvaluationCaptureManagerRef.current?.recordProviderTranscript({
+            evaluationSessionId: segment.sttEvaluationCaptureSessionId,
+            utteranceId: evaluationUtteranceId,
+            traceId,
+            audioSessionId: segment.sessionId,
+            audioSegmentSequence: segment.sequence,
+            nativeCaptureSessionId: segment.nativeCaptureSessionId,
+            nativeCaptureGeneration: segment.nativeCaptureGeneration,
+            nativeSegmentSequence: segment.nativeSegmentSequence,
+            nativeCapturedAtMs: segment.nativeCapturedAtMs,
+            nativeSampleRate: segment.nativeSampleRate,
+            providerId: sttProvider.id,
+            rawText,
+            validation,
+            turnId: turn?.id,
+            receivedAt: Date.now(),
+          });
+        const canonicalTextBeforeNormalization = turn?.text ?? "";
         const sttValidationMetadata = {
           sttValidationDisposition: validation.disposition,
           sttValidationReason: validation.reason,
@@ -8552,6 +8712,32 @@ export function useMeetingAssistant() {
               }
             );
           }
+          const canonicalTranscriptQueued =
+            segment.source === "system-audio" &&
+            sttEvaluationCaptureManagerRef.current?.recordCanonicalTranscript({
+              evaluationSessionId: segment.sttEvaluationCaptureSessionId,
+              utteranceId: evaluationUtteranceId,
+              traceId,
+              audioSessionId: segment.sessionId,
+              audioSegmentSequence: segment.sequence,
+              rawText,
+              canonicalText: turn.text,
+              turn: { ...turn },
+              normalizationApplied:
+                turn.text !== canonicalTextBeforeNormalization,
+              recordedAt: Date.now(),
+            });
+          traceStoreRef.current.updateMetadata(traceId, {
+            sttEvaluationProviderTranscriptQueued:
+              Boolean(providerTranscriptQueued),
+            sttEvaluationCanonicalTranscriptQueued:
+              Boolean(canonicalTranscriptQueued),
+          });
+        } else if (providerTranscriptQueued) {
+          traceStoreRef.current.updateMetadata(traceId, {
+            sttEvaluationProviderTranscriptQueued: true,
+            sttEvaluationCanonicalTranscriptQueued: false,
+          });
         }
 
         if (!isCurrentAudioSegment(segment)) {
@@ -9345,6 +9531,8 @@ export function useMeetingAssistant() {
       }
       const queuedAt = Date.now();
       const nativeMetadata = buildNativeSpeechEventTraceMetadata(nativeEvent);
+      const sttEvaluationCapture =
+        sttEvaluationCaptureManagerRef.current?.getState();
 
       const trace = traceStoreRef.current.startTrace("voice", {
         ...nativeMetadata,
@@ -9376,8 +9564,13 @@ export function useMeetingAssistant() {
         speaker: "them",
         source: "system-audio",
         nativeCaptureSessionId: nativeEvent.captureSessionId,
+        nativeCaptureGeneration: nativeEvent.captureGeneration,
         nativeSegmentSequence: nativeEvent.segmentSequence,
         nativeCapturedAtMs: nativeEvent.capturedAtMs,
+        nativeSampleRate: nativeEvent.sampleRate,
+        sttEvaluationCaptureSessionId: sttEvaluationCapture?.active
+          ? sttEvaluationCapture.sessionId
+          : undefined,
         traceId: trace.id,
         queueStepId,
       };
@@ -14185,6 +14378,8 @@ export function useMeetingAssistant() {
     setMicrophoneContextEnabled,
     toggleMicrophoneContext,
     setSessionRecordingEnabled,
+    setSttEvaluationCaptureEnabled,
+    deleteSttEvaluationCapture,
     setResponseConfig,
     setCodingModelConfig,
     setTaxonomyAdjudicationConfig,

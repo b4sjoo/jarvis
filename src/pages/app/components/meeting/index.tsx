@@ -43,6 +43,7 @@ import type {
   MeetingResponseLanguage,
   MeetingResponseLength,
   MeetingSessionRecordingState,
+  SttEvaluationCaptureState,
   ManualQuestionTypeCorrection,
   MeetingFocusAction,
   MeetingFocusSnapshot,
@@ -1562,6 +1563,18 @@ export const MeetingAssistant = ({
                 onNativeAudioFaultInject={handleNativeAudioFaultInjection}
                 sessionRecording={meeting.sessionRecording}
                 onSessionRecordingChange={meeting.setSessionRecordingEnabled}
+                sttEvaluationCapture={meeting.sttEvaluationCapture}
+                sttEvaluationCaptureCanEnable={
+                  !meeting.isActive &&
+                  (meeting.settings.debugMode ||
+                    meeting.sessionRecording.active)
+                }
+                onSttEvaluationCaptureChange={
+                  meeting.setSttEvaluationCaptureEnabled
+                }
+                onDeleteSttEvaluationCapture={
+                  meeting.deleteSttEvaluationCapture
+                }
               />
 
               <InterviewSessionBriefPanel
@@ -3294,6 +3307,10 @@ const ConfigurationsPanel = ({
   onNativeAudioFaultInject,
   sessionRecording,
   onSessionRecordingChange,
+  sttEvaluationCapture,
+  sttEvaluationCaptureCanEnable,
+  onSttEvaluationCaptureChange,
+  onDeleteSttEvaluationCapture,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -3333,6 +3350,10 @@ const ConfigurationsPanel = ({
   ) => Promise<void>;
   sessionRecording: MeetingSessionRecordingState;
   onSessionRecordingChange: (enabled: boolean) => void;
+  sttEvaluationCapture: SttEvaluationCaptureState;
+  sttEvaluationCaptureCanEnable: boolean;
+  onSttEvaluationCaptureChange: (enabled: boolean) => void;
+  onDeleteSttEvaluationCapture: () => void;
 }) => {
   return (
     <section className="min-w-0 overflow-hidden rounded-md border border-border/70">
@@ -3768,6 +3789,98 @@ const ConfigurationsPanel = ({
               {sessionRecording.lastError ? (
                 <div className="text-[10px] text-red-600">
                   {sessionRecording.lastError}
+                </div>
+              ) : null}
+            </div>
+            <div className="space-y-1.5 rounded-sm border border-border/60 p-2">
+              <div className="flex items-center justify-between gap-2">
+                <div className="min-w-0">
+                  <div className="text-[10px] font-medium uppercase text-muted-foreground">
+                    STT Evaluation Capture
+                  </div>
+                  <div className="mt-0.5 text-[10px] text-muted-foreground">
+                    Local system audio, automatic deletion after 72 hours
+                  </div>
+                </div>
+                <Switch
+                  checked={sttEvaluationCapture.active}
+                  disabled={
+                    sttEvaluationCapture.lifecycle === "starting" ||
+                    sttEvaluationCapture.lifecycle === "stopping" ||
+                    sttEvaluationCapture.lifecycle === "deleting" ||
+                    (!sttEvaluationCapture.active &&
+                      !sttEvaluationCaptureCanEnable)
+                  }
+                  onCheckedChange={onSttEvaluationCaptureChange}
+                />
+              </div>
+              {!sttEvaluationCapture.active &&
+              !sttEvaluationCaptureCanEnable &&
+              !sttEvaluationCapture.sessionId ? (
+                <div className="text-[10px] text-muted-foreground">
+                  Turn on Debug Mode or Session Recording, then enable before
+                  meeting audio.
+                </div>
+              ) : null}
+              {sttEvaluationCapture.sessionId ? (
+                <div className="space-y-1 text-[10px] text-muted-foreground">
+                  <div className="flex min-w-0 items-center gap-1">
+                    <span className="shrink-0">
+                      {sttEvaluationCapture.active ? "Recording:" : "Saved:"}
+                    </span>
+                    <span className="min-w-0 truncate font-mono">
+                      {sttEvaluationCapture.folderName}
+                    </span>
+                  </div>
+                  <div
+                    className="min-w-0 truncate font-mono"
+                    title={sttEvaluationCapture.folderPath}
+                  >
+                    {sttEvaluationCapture.folderPath}
+                  </div>
+                  <div>
+                    {sttEvaluationCapture.rawChunkCount} raw chunks /{" "}
+                    {sttEvaluationCapture.submittedAudioCount} submitted /{" "}
+                    {sttEvaluationCapture.providerEventCount} provider /{" "}
+                    {sttEvaluationCapture.canonicalEventCount} canonical
+                  </div>
+                  <div>
+                    {formatPayloadSize(sttEvaluationCapture.bytesWritten)}
+                    {sttEvaluationCapture.droppedRawChunkCount > 0
+                      ? ` / ${sttEvaluationCapture.droppedRawChunkCount} dropped`
+                      : ""}
+                  </div>
+                </div>
+              ) : null}
+              {sttEvaluationCapture.lifecycle === "starting" ||
+              sttEvaluationCapture.lifecycle === "stopping" ||
+              sttEvaluationCapture.lifecycle === "deleting" ? (
+                <div className="text-[10px] text-muted-foreground">
+                  {sttEvaluationCapture.lifecycle === "starting"
+                    ? "Starting capture..."
+                    : sttEvaluationCapture.lifecycle === "stopping"
+                      ? "Finalizing capture..."
+                      : "Deleting capture..."}
+                </div>
+              ) : null}
+              {!sttEvaluationCapture.active &&
+              sttEvaluationCapture.sessionId ? (
+                <div className="flex justify-end">
+                  <Button
+                    size="icon"
+                    variant="ghost"
+                    className="h-7 w-7"
+                    title="Delete STT evaluation capture"
+                    aria-label="Delete STT evaluation capture"
+                    onClick={onDeleteSttEvaluationCapture}
+                  >
+                    <Trash2Icon className="h-3.5 w-3.5" />
+                  </Button>
+                </div>
+              ) : null}
+              {sttEvaluationCapture.lastError ? (
+                <div className={cn(WRAP_TEXT_CLASS, "text-[10px] text-red-600")}>
+                  {sttEvaluationCapture.lastError}
                 </div>
               ) : null}
             </div>

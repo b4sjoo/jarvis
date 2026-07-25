@@ -66,6 +66,7 @@ export * from "./settled-advisor-execution-plan";
 export * from "./session-recording";
 export * from "./session-task-review-index";
 export * from "./speech-bias";
+export * from "./stt-evaluation-capture";
 export * from "./suggestion-task";
 export * from "./source-owned-transition-transaction";
 export * from "./task-taxonomy";

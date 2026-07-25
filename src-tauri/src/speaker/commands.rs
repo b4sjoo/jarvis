@@ -3,6 +3,7 @@ use crate::speaker::{
     AudioDevice, SpeakerInput, SpeakerStream, SpeakerStreamTermination,
     SpeakerStreamTerminationReason,
 };
+use crate::stt_evaluation::create_raw_evaluation_capture_tap;
 use anyhow::Result;
 use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
 use futures_util::{FutureExt, StreamExt};
@@ -731,8 +732,16 @@ async fn run_vad_capture(
     let mut speech_chunks = 0;
     let max_samples = sr as usize * 30; // 30s safety cap per utterance
     let mut segment_sequence = 0_u64;
+    let mut evaluation_tap = if capture_owner == NativeCaptureOwner::Meeting {
+        create_raw_evaluation_capture_tap(&app, &capture_session_id, capture_generation, sr)
+    } else {
+        None
+    };
 
     while let Some(sample) = stream.next().await {
+        if let Some(tap) = evaluation_tap.as_mut() {
+            tap.push_sample(sample);
+        }
         buffer.push_back(sample);
 
         // Process in fixed chunks for VAD analysis
@@ -899,6 +908,11 @@ async fn run_continuous_capture(
     let start_time = Instant::now();
     let max_duration = Duration::from_secs(config.max_recording_duration_secs);
     let mut segment_sequence = 0_u64;
+    let mut evaluation_tap = if capture_owner == NativeCaptureOwner::Meeting {
+        create_raw_evaluation_capture_tap(&app, &capture_session_id, capture_generation, sr)
+    } else {
+        None
+    };
 
     // Atomic flag for manual stop
     let stop_flag = Arc::new(AtomicBool::new(false));
@@ -931,6 +945,9 @@ async fn run_continuous_capture(
                             break;
                         }
 
+                        if let Some(tap) = evaluation_tap.as_mut() {
+                            tap.push_sample(sample);
+                        }
                         audio_buffer.push(sample);
 
                         let elapsed = start_time.elapsed();

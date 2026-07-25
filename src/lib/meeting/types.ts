@@ -1162,6 +1162,33 @@ export interface MeetingSessionRecordingState {
   lastError?: string;
 }
 
+export type SttEvaluationCaptureLifecycle =
+  | "idle"
+  | "starting"
+  | "active"
+  | "stopping"
+  | "stopped"
+  | "deleting"
+  | "error";
+
+export interface SttEvaluationCaptureState {
+  active: boolean;
+  lifecycle: SttEvaluationCaptureLifecycle;
+  sessionId?: string;
+  folderName?: string;
+  folderPath?: string;
+  startedAt?: number;
+  expiresAt?: number;
+  rawChunkCount: number;
+  submittedAudioCount: number;
+  providerEventCount: number;
+  canonicalEventCount: number;
+  humanReferenceCount: number;
+  bytesWritten: number;
+  droppedRawChunkCount: number;
+  lastError?: string;
+}
+
 export type HumanEvalQuestionType = TaxonomyHumanEvalQuestionType;
 
 export type HumanEvalTaskQuality = "success" | "partial" | "fail";
@@ -1475,6 +1502,7 @@ export interface MeetingAssistantState {
   lastMemoryContext?: MemoryRetrievalResult;
   lastTraceExport?: MeetingTraceExportRecord;
   sessionRecording: MeetingSessionRecordingState;
+  sttEvaluationCapture: SttEvaluationCaptureState;
   humanEvaluations: TraceHumanEvaluation[];
   questionEvaluations: QuestionHumanEvaluation[];
   speechCorrections: SpeechCorrection[];
