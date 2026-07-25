@@ -553,6 +553,16 @@ test("late LLM taxonomy adjudication stays joinable after trace export", async (
       taxonomyAdjudicationRepairFactors: ["question-type", "relation"],
       taxonomyAdjudicationRepairApplied: false,
       taxonomyAdjudicationDurationMs: 611,
+      taxonomyAdjudicationBudgetSlot: "ambient",
+      taxonomyAdjudicationBudgetReason: "ambient-discourse",
+      taxonomyAdjudicationSourceOwnedSubstantive: false,
+      taxonomyAdjudicationBudgetStartsBefore: 0,
+      taxonomyAdjudicationBudgetStartsAfter: 1,
+      taxonomyAdjudicationBudgetLimit: 1,
+      taxonomyAdjudicationBudgetRemaining: 0,
+      taxonomyAdjudicationAmbientStarts: 1,
+      taxonomyAdjudicationSubstantiveStarts: 0,
+      taxonomyAdjudicationReservedSubstantiveAvailable: true,
       taxonomyAdjudicationRawOutputHash: "hash-1",
       taxonomyAdjudicationRawOutputStored: true,
       taxonomyAdjudicationRawOutputTruncated: false,
@@ -577,6 +587,7 @@ test("late LLM taxonomy adjudication stays joinable after trace export", async (
       interviewerIntentLlmEvidenceMode: "hypothetical-design",
       interviewerIntentLlmAction: "answer",
       interviewerIntentLlmNormalizedQuestion: "Implement a queue.",
+      interviewerIntentLlmPrimaryAskSpanCount: 1,
       interviewerIntentLlmPrimaryAskSpanTexts: ["Implement a queue."],
       interviewerIntentLlmPrimaryAskSourceTurnIds: ["turn_1"],
       interviewerIntentLlmLocalSpeechAct: "question",
@@ -597,6 +608,34 @@ test("late LLM taxonomy adjudication stays joinable after trace export", async (
       interviewerIntentLlmWouldRepair: true,
       interviewerIntentLlmRepairApplied: false,
       interviewerIntentLlmDurationMs: 611,
+      interviewerIntentLlmBudgetSlot: "ambient",
+      interviewerIntentLlmBudgetReason: "ambient-discourse",
+      interviewerIntentLlmSourceOwnedSubstantive: false,
+      interviewerIntentLlmBudgetStartsBefore: 0,
+      interviewerIntentLlmBudgetStartsAfter: 1,
+      interviewerIntentLlmBudgetRemaining: 0,
+      interviewerIntentLlmReservedSubstantiveAvailable: true,
+      currentQuestionTerminalNoAnswerDisposition: "terminal-no-answer",
+      currentQuestionTerminalNoAnswerAuthorized: true,
+      currentQuestionTerminalNoAnswerUnitId: "logical_1",
+      currentQuestionTerminalNoAnswerRevision: 2,
+      currentQuestionTerminalNoAnswerSourceTurnIds: ["turn_1"],
+      currentQuestionTerminalNoAnswerOperationId: "intent-op-1",
+      currentQuestionTerminalNoAnswerSpeechAct: "acknowledgment",
+      currentQuestionTerminalNoAnswerAction: "ignore",
+      currentQuestionTerminalNoAnswerConfidence: 0.99,
+      currentQuestionTerminalNoAnswerReasons: [
+        "terminal-no-answer-contract-satisfied",
+      ],
+      interviewerIntentLlmTerminalNoAnswerApplied: true,
+      interviewerIntentLlmTerminalNoAnswerApplyReason:
+        "authorized-before-visible-answer",
+      interviewerIntentLlmTerminalNoAnswerAdvisorCancelled: true,
+      taxonomyAdjudicationTerminalNoAnswerAdvisorMatched: true,
+      taxonomyAdjudicationTerminalNoAnswerMemoryStarted: false,
+      taxonomyAdjudicationTerminalNoAnswerModelStarted: false,
+      taxonomyAdjudicationTerminalNoAnswerAvoidedMemoryOpportunity: true,
+      taxonomyAdjudicationTerminalNoAnswerAvoidedModelOpportunity: true,
     },
   });
   await settle();
@@ -640,8 +679,10 @@ test("late LLM taxonomy adjudication stays joinable after trace export", async (
   assert.equal(intent.providerId, "fast-classifier");
   assert.equal(intent.outputEnvelope, "direct");
   assert.equal(intent.leaseAuthorized, true);
-  assert.equal(intent.normalizedQuestion, "Implement a queue.");
-  assert.deepEqual(intent.primaryAskSpanTexts, ["Implement a queue."]);
+  assert.equal(intent.normalizedQuestion, undefined);
+  assert.equal(intent.primaryAskSpanTexts, undefined);
+  assert.equal(intent.localPrimaryAsk, undefined);
+  assert.equal(intent.primaryAskSpanCount, 1);
   assert.deepEqual(intent.primaryAskSourceTurnIds, ["turn_1"]);
   assert.deepEqual(intent.repairFactors, [
     "speech-act",
@@ -667,6 +708,20 @@ test("late LLM taxonomy adjudication stays joinable after trace export", async (
   assert.equal(adjudication.rawOutputHash, "hash-1");
   assert.equal(adjudication.rawOutputStored, true);
   assert.equal(adjudication.rawOutputTruncated, false);
+  assert.equal(adjudication.budgetSlot, "ambient");
+  assert.equal(adjudication.ambientStarts, 1);
+  assert.equal(adjudication.substantiveStarts, 0);
+  assert.equal(adjudication.reservedSubstantiveAvailable, true);
+  const terminal = summary.currentQuestionTerminalNoAnswer as Record<
+    string,
+    unknown
+  >;
+  assert.equal(terminal.disposition, "terminal-no-answer");
+  assert.equal(terminal.authorized, true);
+  assert.equal(terminal.applied, true);
+  assert.equal(terminal.advisorCancelled, true);
+  assert.equal(terminal.avoidedMemoryOpportunity, true);
+  assert.equal(terminal.avoidedModelOpportunity, true);
 
   await manager.stop("test-complete");
 });
@@ -758,7 +813,7 @@ test("compact trace summaries preserve task boundary and cross-domain evidence",
   );
   assert.ok(summaryWrite);
   const summary = parsePayload(summaryWrite);
-  assert.equal(summary.version, 17);
+  assert.equal(summary.version, 18);
   assert.equal(summary.taskRelation, "new-parent");
   assert.equal(summary.logicalQuestionUnitRevision, 3);
   assert.deepEqual(summary.logicalQuestionSourceTurnIds, ["turn_1", "turn_2"]);
@@ -772,7 +827,7 @@ test("compact trace summaries preserve task boundary and cross-domain evidence",
   assert.equal(summary.logicalQuestionLeaseAuthorized, true);
   assert.equal(summary.primaryAskSpeechAct, "question");
   assert.equal(summary.primaryAskDisposition, "answer-primary-ask");
-  assert.equal(summary.primaryAskNormalizedText, "How does this role sound to you?");
+  assert.equal(summary.primaryAskNormalizedText, undefined);
   assert.deepEqual(summary.primaryAskSourceTurnIds, ["turn_1", "turn_2"]);
   assert.equal(summary.primaryAskQuotedOrFutureSpanCount, 1);
   assert.equal(
@@ -864,7 +919,7 @@ test("compact trace summaries preserve hard memory invalidation evidence", async
   );
   assert.ok(summaryWrite);
   const summary = parsePayload(summaryWrite);
-  assert.equal(summary.version, 17);
+  assert.equal(summary.version, 18);
   const memory = summary.memory as Record<string, unknown>;
   assert.equal(memory.authorityRevision, 2);
   assert.equal(memory.invalidationKind, "hard");
@@ -1096,7 +1151,7 @@ test("records compact current-question settlement and execution-plan evidence", 
   assert.equal(serializedPlan.includes("taskSnapshot"), false);
   assert.equal(serializedPlan.includes("variables"), false);
   const summary = parsePayload(summaryWrite);
-  assert.equal(summary.version, 17);
+  assert.equal(summary.version, 18);
   assert.equal(
     (
       summary.currentQuestionSettlement as Record<string, unknown>
@@ -1192,7 +1247,7 @@ test("records a current-question term correction without copying provider state"
     false
   );
   const summary = parsePayload(summaryWrite);
-  assert.equal(summary.version, 17);
+  assert.equal(summary.version, 18);
   assert.equal(
     summary.manualTermCorrectionId,
     "term_correction_hnsw"

@@ -184,7 +184,7 @@ test("retains separate operations for one LQU revision and dedupes each operatio
     evaluations: [],
   });
 
-  assert.equal(report.version, 4);
+  assert.equal(report.version, 5);
   assert.equal(report.rows.length, 2);
   assert.deepEqual(
     report.rows.map((row) => row.operationId),
@@ -207,6 +207,142 @@ test("retains separate operations for one LQU revision and dedupes each operatio
   });
   assert.deepEqual(report.metrics.parseErrorKinds, { provider: 1 });
   assert.deepEqual(report.metrics.outputEnvelopes, { direct: 1 });
+});
+
+test("measures isolated budgets and terminal no-answer boundaries without counting semantic repair", () => {
+  const report = buildTaxonomyAdjudicationReflectionReport({
+    decisions: [
+      decisionAt("trace_ack", "unit_shared", 1, 100, {
+        taxonomyAdjudicationOperationId: "operation_ack",
+        taxonomyAdjudicationEligible: true,
+        taxonomyAdjudicationDisposition: "completed",
+        taxonomyAdjudicationProviderDisposition: "completed-with-content",
+        taxonomyAdjudicationParseDisposition: "valid-json",
+        taxonomyAdjudicationParseValid: true,
+        taxonomyAdjudicationDurationMs: 300,
+        taxonomyAdjudicationBudgetSlot: "ambient",
+        taxonomyAdjudicationBudgetReason: "ambient-discourse",
+        taxonomyAdjudicationSourceOwnedSubstantive: false,
+        taxonomyAdjudicationBudgetStartsBefore: 0,
+        taxonomyAdjudicationBudgetStartsAfter: 1,
+        taxonomyAdjudicationBudgetLimit: 1,
+        taxonomyAdjudicationBudgetRemaining: 0,
+        taxonomyAdjudicationAmbientStarts: 1,
+        taxonomyAdjudicationSubstantiveStarts: 0,
+        taxonomyAdjudicationReservedSubstantiveAvailable: true,
+        currentQuestionTerminalNoAnswerDisposition: "terminal-no-answer",
+        currentQuestionTerminalNoAnswerAuthorized: true,
+        interviewerIntentLlmTerminalNoAnswerApplied: true,
+        interviewerIntentLlmTerminalNoAnswerApplyReason:
+          "authorized-before-visible-answer",
+        interviewerIntentLlmTerminalNoAnswerAdvisorCancelled: true,
+        taxonomyAdjudicationTerminalNoAnswerMemoryStarted: false,
+        taxonomyAdjudicationTerminalNoAnswerModelStarted: false,
+        taxonomyAdjudicationTerminalNoAnswerAvoidedMemoryOpportunity: true,
+        taxonomyAdjudicationTerminalNoAnswerAvoidedModelOpportunity: true,
+        taxonomyAdjudicationRepairApplied: false,
+      }),
+      decisionAt("trace_ack_repeat", "unit_shared", 2, 200, {
+        taxonomyAdjudicationOperationId: "operation_ack_repeat",
+        taxonomyAdjudicationEligible: true,
+        taxonomyAdjudicationDisposition: "budget-exhausted",
+        taxonomyAdjudicationBudgetSlot: "ambient",
+        taxonomyAdjudicationBudgetReason: "ambient-discourse",
+        taxonomyAdjudicationSourceOwnedSubstantive: false,
+        taxonomyAdjudicationBudgetStartsBefore: 1,
+        taxonomyAdjudicationBudgetStartsAfter: 1,
+        taxonomyAdjudicationBudgetLimit: 1,
+        taxonomyAdjudicationBudgetRemaining: 0,
+        taxonomyAdjudicationAmbientStarts: 1,
+        taxonomyAdjudicationSubstantiveStarts: 0,
+        taxonomyAdjudicationReservedSubstantiveAvailable: true,
+      }),
+      decisionAt("trace_real_ask", "unit_new", 1, 300, {
+        taxonomyAdjudicationOperationId: "operation_real_ask",
+        taxonomyAdjudicationEligible: true,
+        taxonomyAdjudicationDisposition: "completed",
+        taxonomyAdjudicationProviderDisposition: "completed-with-content",
+        taxonomyAdjudicationParseDisposition: "valid-json",
+        taxonomyAdjudicationParseValid: true,
+        taxonomyAdjudicationDurationMs: 450,
+        taxonomyAdjudicationBudgetSlot: "substantive",
+        taxonomyAdjudicationBudgetReason: "source-owned-primary-ask",
+        taxonomyAdjudicationSourceOwnedSubstantive: true,
+        taxonomyAdjudicationBudgetStartsBefore: 0,
+        taxonomyAdjudicationBudgetStartsAfter: 1,
+        taxonomyAdjudicationBudgetLimit: 1,
+        taxonomyAdjudicationBudgetRemaining: 0,
+        taxonomyAdjudicationAmbientStarts: 1,
+        taxonomyAdjudicationSubstantiveStarts: 1,
+        taxonomyAdjudicationReservedSubstantiveAvailable: false,
+        taxonomyAdjudicationRepairApplied: false,
+      }),
+    ],
+    traces: [
+      {
+        ...trace("trace_ack", "unknown", "unknown", "unknown"),
+        startedAt: 100,
+        logicalQuestionUnitId: "unit_shared",
+        logicalQuestionUnitRevision: 1,
+        logicalQuestionBoundaryReason:
+          "terminal-no-answer-ambient-continuation",
+      },
+      {
+        ...trace("trace_ack_repeat", "unknown", "unknown", "unknown"),
+        startedAt: 200,
+        logicalQuestionUnitId: "unit_shared",
+        logicalQuestionUnitRevision: 2,
+        logicalQuestionBoundaryReason:
+          "terminal-no-answer-ambient-continuation",
+      },
+      {
+        ...trace("trace_real_ask", "unknown", "coding", "coding"),
+        startedAt: 300,
+        logicalQuestionUnitId: "unit_new",
+        logicalQuestionUnitRevision: 1,
+        logicalQuestionBoundaryReason:
+          "terminal-no-answer-substantive-boundary",
+      },
+    ],
+    evaluations: [],
+  });
+
+  assert.equal(report.metrics.ambientTriggeredCalls, 1);
+  assert.equal(report.metrics.substantiveTriggeredCalls, 1);
+  assert.equal(report.metrics.ambientBudgetExhausted, 1);
+  assert.equal(report.metrics.substantiveBudgetExhausted, 0);
+  assert.equal(
+    report.metrics.ambientCallsPreservingSubstantiveReservation,
+    1
+  );
+  assert.equal(report.metrics.substantiveCallsAfterAmbientStart, 1);
+  assert.equal(report.metrics.terminalNoAnswerCandidates, 1);
+  assert.equal(report.metrics.terminalNoAnswerAuthorized, 1);
+  assert.equal(report.metrics.terminalNoAnswerApplied, 1);
+  assert.equal(report.metrics.terminalNoAnswerAdvisorCancelled, 1);
+  assert.equal(
+    report.metrics.terminalNoAnswerAvoidedMemoryOpportunity,
+    1
+  );
+  assert.equal(
+    report.metrics.terminalNoAnswerAvoidedModelOpportunity,
+    1
+  );
+  assert.equal(report.metrics.terminalNoAnswerAmbientContinuations, 2);
+  assert.equal(report.metrics.terminalNoAnswerSubstantiveBoundaries, 1);
+  assert.equal(report.metrics.repairApplied, 0);
+  assert.deepEqual(report.metrics.budgetSlots, {
+    ambient: 2,
+    substantive: 1,
+  });
+  assert.match(
+    renderTaxonomyAdjudicationReflectionMarkdown(report),
+    /Terminal no-answer candidates \/ authorized \/ applied: 1 \/ 1 \/ 1/
+  );
+  assert.match(
+    renderTaxonomyAdjudicationReflectionMarkdown(report),
+    /never increment repairApplied/
+  );
 });
 
 test("renders call rate as reason-coded observation without a fixed threshold", () => {

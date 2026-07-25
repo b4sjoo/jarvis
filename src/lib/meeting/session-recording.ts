@@ -46,7 +46,7 @@ import {
 import { serializeMeetingTraceExport } from "./trace.js";
 
 const SESSION_RECORDING_SCHEMA_VERSION = 1;
-const SESSION_TRACE_SUMMARY_SCHEMA_VERSION = 17;
+const SESSION_TRACE_SUMMARY_SCHEMA_VERSION = 18;
 const SESSION_TRACE_INDEX_SCHEMA_VERSION = 1;
 
 interface SessionRecordingStartOptions {
@@ -222,7 +222,6 @@ export interface SessionCompactTraceSummary {
   primaryAskDisposition?: string;
   primaryAskReason?: string;
   primaryAskConfidence?: number;
-  primaryAskNormalizedText?: string;
   primaryAskSourceTurnIds: string[];
   primaryAskSourceChars?: number;
   primaryAskSpanCount?: number;
@@ -299,6 +298,26 @@ export interface SessionCompactTraceSummary {
     durationMs?: number;
     llmWaitMs?: number;
     llmWaitDisposition?: string;
+  };
+  currentQuestionTerminalNoAnswer?: {
+    disposition?: string;
+    authorized?: boolean;
+    applied?: boolean;
+    applyReason?: string;
+    logicalQuestionUnitId?: string;
+    logicalQuestionUnitRevision?: number;
+    sourceTurnCount?: number;
+    operationId?: string;
+    speechAct?: string;
+    action?: string;
+    confidence?: number;
+    reasons: string[];
+    advisorMatched?: boolean;
+    advisorCancelled?: boolean;
+    memoryStarted?: boolean;
+    modelStarted?: boolean;
+    avoidedMemoryOpportunity?: boolean;
+    avoidedModelOpportunity?: boolean;
   };
   settledExecutionPlan?: {
     planId?: string;
@@ -434,15 +453,13 @@ export interface SessionCompactTraceSummary {
     relation?: string;
     evidenceMode?: string;
     action?: string;
-    normalizedQuestion?: string;
-    primaryAskSpanTexts: string[];
+    primaryAskSpanCount?: number;
     primaryAskSourceTurnIds: string[];
     localSpeechAct?: string;
     localQuestionType?: string;
     localRelation?: string;
     localEvidenceMode?: string;
     localAction?: string;
-    localPrimaryAsk?: string;
     repairFactors: string[];
     confidence?: number;
     parseValid?: boolean;
@@ -453,6 +470,16 @@ export interface SessionCompactTraceSummary {
     durationMs?: number;
     inputChars?: number;
     outputChars?: number;
+    budgetSlot?: string;
+    budgetReason?: string;
+    sourceOwnedSubstantive?: boolean;
+    budgetStartsBefore?: number;
+    budgetStartsAfter?: number;
+    budgetLimit?: number;
+    budgetRemaining?: number;
+    ambientStarts?: number;
+    substantiveStarts?: number;
+    reservedSubstantiveAvailable?: boolean;
   };
   taxonomyAdjudication?: {
     mode?: string;
@@ -495,6 +522,16 @@ export interface SessionCompactTraceSummary {
     circuitOpen?: boolean;
     circuitReason?: string;
     circuitNewlyOpened?: boolean;
+    budgetSlot?: string;
+    budgetReason?: string;
+    sourceOwnedSubstantive?: boolean;
+    budgetStartsBefore?: number;
+    budgetStartsAfter?: number;
+    budgetLimit?: number;
+    budgetRemaining?: number;
+    ambientStarts?: number;
+    substantiveStarts?: number;
+    reservedSubstantiveAvailable?: boolean;
   };
   answerSufficiency?: {
     operationId?: string;
@@ -1865,6 +1902,8 @@ export class SessionRecordingManager {
       taxonomyAdjudication: buildTaxonomyAdjudicationTraceSummary([metadata]),
       interviewerIntentLlm:
         buildInterviewerIntentLlmTraceSummary([metadata]),
+      currentQuestionTerminalNoAnswer:
+        buildCurrentQuestionTerminalNoAnswerTraceSummary([metadata]),
     };
     session.traceSummaries.set(traceId, updated);
     this.enqueue(session, async () => {
@@ -2830,10 +2869,6 @@ function buildCompactTraceSummary({
       metadataSources,
       "primaryAskConfidence"
     ),
-    primaryAskNormalizedText: readFirstString(
-      metadataSources,
-      "primaryAskNormalizedText"
-    ),
     primaryAskSourceTurnIds: readFirstStringList(
       metadataSources,
       "primaryAskSourceTurnIds"
@@ -3124,6 +3159,8 @@ function buildCompactTraceSummary({
         "currentQuestionSettlementLlmWaitDisposition"
       ),
     },
+    currentQuestionTerminalNoAnswer:
+      buildCurrentQuestionTerminalNoAnswerTraceSummary(metadataSources),
     settledExecutionPlan: {
       planId: readFirstString(
         metadataSources,
@@ -3322,6 +3359,8 @@ function buildCompactTraceSummary({
       buildSemanticEmbeddingRuntimeTraceSummary(metadataSources),
     interviewerIntentSemantic:
       buildInterviewerIntentSemanticTraceSummary(metadataSources),
+    interviewerIntentLlm:
+      buildInterviewerIntentLlmTraceSummary(metadataSources),
     taxonomyAdjudication:
       buildTaxonomyAdjudicationTraceSummary(metadataSources),
     answerSufficiency:
@@ -3912,13 +3951,9 @@ function buildInterviewerIntentLlmTraceSummary(
       "interviewerIntentLlmEvidenceMode"
     ),
     action: readFirstString(metadataSources, "interviewerIntentLlmAction"),
-    normalizedQuestion: readFirstString(
+    primaryAskSpanCount: readFirstNumberFromMetadata(
       metadataSources,
-      "interviewerIntentLlmNormalizedQuestion"
-    ),
-    primaryAskSpanTexts: readFirstStringList(
-      metadataSources,
-      "interviewerIntentLlmPrimaryAskSpanTexts"
+      "interviewerIntentLlmPrimaryAskSpanCount"
     ),
     primaryAskSourceTurnIds: readFirstStringList(
       metadataSources,
@@ -3943,10 +3978,6 @@ function buildInterviewerIntentLlmTraceSummary(
     localAction: readFirstString(
       metadataSources,
       "interviewerIntentLlmLocalAction"
-    ),
-    localPrimaryAsk: readFirstString(
-      metadataSources,
-      "interviewerIntentLlmLocalPrimaryAsk"
     ),
     repairFactors: readFirstStringList(
       metadataSources,
@@ -3987,6 +4018,132 @@ function buildInterviewerIntentLlmTraceSummary(
     outputChars: readFirstNumberFromMetadata(
       metadataSources,
       "interviewerIntentLlmOutputChars"
+    ),
+    budgetSlot: readFirstString(
+      metadataSources,
+      "interviewerIntentLlmBudgetSlot"
+    ),
+    budgetReason: readFirstString(
+      metadataSources,
+      "interviewerIntentLlmBudgetReason"
+    ),
+    sourceOwnedSubstantive: readFirstBoolean(
+      metadataSources,
+      "interviewerIntentLlmSourceOwnedSubstantive"
+    ),
+    budgetStartsBefore: readFirstNumberFromMetadata(
+      metadataSources,
+      "interviewerIntentLlmBudgetStartsBefore"
+    ),
+    budgetStartsAfter: readFirstNumberFromMetadata(
+      metadataSources,
+      "interviewerIntentLlmBudgetStartsAfter"
+    ),
+    budgetLimit: readFirstNumberFromMetadata(
+      metadataSources,
+      "taxonomyAdjudicationBudgetLimit"
+    ),
+    budgetRemaining: readFirstNumberFromMetadata(
+      metadataSources,
+      "interviewerIntentLlmBudgetRemaining"
+    ),
+    ambientStarts: readFirstNumberFromMetadata(
+      metadataSources,
+      "taxonomyAdjudicationAmbientStarts"
+    ),
+    substantiveStarts: readFirstNumberFromMetadata(
+      metadataSources,
+      "taxonomyAdjudicationSubstantiveStarts"
+    ),
+    reservedSubstantiveAvailable: readFirstBoolean(
+      metadataSources,
+      "interviewerIntentLlmReservedSubstantiveAvailable"
+    ),
+  };
+}
+
+function buildCurrentQuestionTerminalNoAnswerTraceSummary(
+  metadataSources: Array<Record<string, unknown>>
+): SessionCompactTraceSummary["currentQuestionTerminalNoAnswer"] {
+  const disposition = readFirstString(
+    metadataSources,
+    "currentQuestionTerminalNoAnswerDisposition"
+  );
+  const authorized = readFirstBoolean(
+    metadataSources,
+    "currentQuestionTerminalNoAnswerAuthorized"
+  );
+  const applied = readFirstBoolean(
+    metadataSources,
+    "interviewerIntentLlmTerminalNoAnswerApplied"
+  );
+  if (!disposition && authorized === undefined && applied === undefined) {
+    return undefined;
+  }
+
+  return {
+    disposition,
+    authorized,
+    applied,
+    applyReason: readFirstString(
+      metadataSources,
+      "interviewerIntentLlmTerminalNoAnswerApplyReason"
+    ),
+    logicalQuestionUnitId: readFirstString(
+      metadataSources,
+      "currentQuestionTerminalNoAnswerUnitId"
+    ),
+    logicalQuestionUnitRevision: readFirstNumberFromMetadata(
+      metadataSources,
+      "currentQuestionTerminalNoAnswerRevision"
+    ),
+    sourceTurnCount: readFirstStringList(
+      metadataSources,
+      "currentQuestionTerminalNoAnswerSourceTurnIds"
+    ).length,
+    operationId: readFirstString(
+      metadataSources,
+      "currentQuestionTerminalNoAnswerOperationId"
+    ),
+    speechAct: readFirstString(
+      metadataSources,
+      "currentQuestionTerminalNoAnswerSpeechAct"
+    ),
+    action: readFirstString(
+      metadataSources,
+      "currentQuestionTerminalNoAnswerAction"
+    ),
+    confidence: readFirstNumberFromMetadata(
+      metadataSources,
+      "currentQuestionTerminalNoAnswerConfidence"
+    ),
+    reasons: readFirstStringList(
+      metadataSources,
+      "currentQuestionTerminalNoAnswerReasons"
+    ),
+    advisorMatched: readFirstBoolean(
+      metadataSources,
+      "taxonomyAdjudicationTerminalNoAnswerAdvisorMatched"
+    ),
+    advisorCancelled: readFirstBoolean(
+      metadataSources,
+      "interviewerIntentLlmTerminalNoAnswerAdvisorCancelled"
+    ),
+    memoryStarted: readFirstBoolean(
+      metadataSources,
+      "taxonomyAdjudicationTerminalNoAnswerMemoryStarted"
+    ),
+    modelStarted: readFirstBoolean(
+      metadataSources,
+      "taxonomyAdjudicationTerminalNoAnswerModelStarted"
+    ),
+    avoidedMemoryOpportunity: readFirstBoolean(
+      metadataSources,
+      "taxonomyAdjudicationTerminalNoAnswerAvoidedMemoryOpportunity"
+    ),
+    avoidedModelOpportunity: readFirstBoolean(
+      metadataSources,
+      "taxonomyAdjudicationTerminalNoAnswerAvoidedModelOpportunity"
     ),
   };
 }
@@ -4284,6 +4441,46 @@ function buildTaxonomyAdjudicationTraceSummary(
     circuitNewlyOpened: readFirstBoolean(
       metadataSources,
       "taxonomyAdjudicationCircuitNewlyOpened"
+    ),
+    budgetSlot: readFirstString(
+      metadataSources,
+      "taxonomyAdjudicationBudgetSlot"
+    ),
+    budgetReason: readFirstString(
+      metadataSources,
+      "taxonomyAdjudicationBudgetReason"
+    ),
+    sourceOwnedSubstantive: readFirstBoolean(
+      metadataSources,
+      "taxonomyAdjudicationSourceOwnedSubstantive"
+    ),
+    budgetStartsBefore: readFirstNumberFromMetadata(
+      metadataSources,
+      "taxonomyAdjudicationBudgetStartsBefore"
+    ),
+    budgetStartsAfter: readFirstNumberFromMetadata(
+      metadataSources,
+      "taxonomyAdjudicationBudgetStartsAfter"
+    ),
+    budgetLimit: readFirstNumberFromMetadata(
+      metadataSources,
+      "taxonomyAdjudicationBudgetLimit"
+    ),
+    budgetRemaining: readFirstNumberFromMetadata(
+      metadataSources,
+      "taxonomyAdjudicationBudgetRemaining"
+    ),
+    ambientStarts: readFirstNumberFromMetadata(
+      metadataSources,
+      "taxonomyAdjudicationAmbientStarts"
+    ),
+    substantiveStarts: readFirstNumberFromMetadata(
+      metadataSources,
+      "taxonomyAdjudicationSubstantiveStarts"
+    ),
+    reservedSubstantiveAvailable: readFirstBoolean(
+      metadataSources,
+      "taxonomyAdjudicationReservedSubstantiveAvailable"
     ),
   };
 }

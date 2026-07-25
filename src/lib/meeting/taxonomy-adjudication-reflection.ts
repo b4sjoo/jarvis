@@ -36,8 +36,25 @@ export interface TaxonomyAdjudicationEvaluationLabel {
 export interface TaxonomyAdjudicationCompactTrace {
   sessionId: string;
   traceId: string;
+  startedAt?: number;
   canonicalQuestionType?: string;
   questionType?: string;
+  logicalQuestionUnitId?: string;
+  logicalQuestionUnitRevision?: number;
+  logicalQuestionBoundaryReason?: string;
+  currentQuestionTerminalNoAnswer?: {
+    disposition?: string;
+    authorized?: boolean;
+    applied?: boolean;
+    applyReason?: string;
+    logicalQuestionUnitId?: string;
+    logicalQuestionUnitRevision?: number;
+    advisorCancelled?: boolean;
+    memoryStarted?: boolean;
+    modelStarted?: boolean;
+    avoidedMemoryOpportunity?: boolean;
+    avoidedModelOpportunity?: boolean;
+  };
   semanticTaxonomy?: {
     keywordType?: string;
     semanticCandidateType?: string;
@@ -58,6 +75,16 @@ export interface TaxonomyAdjudicationCompactTrace {
     action?: string;
     parseErrorKind?: string;
     outputEnvelope?: string;
+    budgetSlot?: string;
+    budgetReason?: string;
+    sourceOwnedSubstantive?: boolean;
+    budgetStartsBefore?: number;
+    budgetStartsAfter?: number;
+    budgetLimit?: number;
+    budgetRemaining?: number;
+    ambientStarts?: number;
+    substantiveStarts?: number;
+    reservedSubstantiveAvailable?: boolean;
   };
   taxonomyAdjudication?: {
     eligible?: boolean;
@@ -82,6 +109,16 @@ export interface TaxonomyAdjudicationCompactTrace {
     durationMs?: number;
     inputChars?: number;
     outputChars?: number;
+    budgetSlot?: string;
+    budgetReason?: string;
+    sourceOwnedSubstantive?: boolean;
+    budgetStartsBefore?: number;
+    budgetStartsAfter?: number;
+    budgetLimit?: number;
+    budgetRemaining?: number;
+    ambientStarts?: number;
+    substantiveStarts?: number;
+    reservedSubstantiveAvailable?: boolean;
   };
 }
 
@@ -133,10 +170,29 @@ export interface TaxonomyAdjudicationReflectionRow {
   durationMs?: number;
   inputChars?: number;
   outputChars?: number;
+  budgetSlot?: string;
+  budgetReason?: string;
+  sourceOwnedSubstantive?: boolean;
+  budgetStartsBefore?: number;
+  budgetStartsAfter?: number;
+  budgetLimit?: number;
+  budgetRemaining?: number;
+  ambientStarts?: number;
+  substantiveStarts?: number;
+  reservedSubstantiveAvailable?: boolean;
+  terminalNoAnswerDisposition?: string;
+  terminalNoAnswerAuthorized?: boolean;
+  terminalNoAnswerApplied?: boolean;
+  terminalNoAnswerApplyReason?: string;
+  terminalNoAnswerAdvisorCancelled?: boolean;
+  terminalNoAnswerMemoryStarted?: boolean;
+  terminalNoAnswerModelStarted?: boolean;
+  terminalNoAnswerAvoidedMemoryOpportunity?: boolean;
+  terminalNoAnswerAvoidedModelOpportunity?: boolean;
 }
 
 export interface TaxonomyAdjudicationReflectionReport {
-  version: 4;
+  version: 5;
   generatedAt: number;
   sessions: string[];
   funnel: {
@@ -185,6 +241,27 @@ export interface TaxonomyAdjudicationReflectionReport {
     speechActProposals: Record<string, number>;
     evidenceModeProposals: Record<string, number>;
     actionProposals: Record<string, number>;
+    budgetSlots: Record<string, number>;
+    budgetReasons: Record<string, number>;
+    ambientTriggeredCalls: number;
+    substantiveTriggeredCalls: number;
+    ambientBudgetExhausted: number;
+    substantiveBudgetExhausted: number;
+    ambientCallsPreservingSubstantiveReservation: number;
+    substantiveCallsAfterAmbientStart: number;
+    terminalNoAnswerCandidates: number;
+    terminalNoAnswerAuthorized: number;
+    terminalNoAnswerApplied: number;
+    terminalNoAnswerFailOpen: number;
+    terminalNoAnswerPostVisible: number;
+    terminalNoAnswerAdvisorCancelled: number;
+    terminalNoAnswerAvoidedMemoryOpportunity: number;
+    terminalNoAnswerAvoidedModelOpportunity: number;
+    terminalNoAnswerDispositions: Record<string, number>;
+    terminalNoAnswerApplyReasons: Record<string, number>;
+    logicalQuestionBoundaryReasons: Record<string, number>;
+    terminalNoAnswerAmbientContinuations: number;
+    terminalNoAnswerSubstantiveBoundaries: number;
     labeledNeeded: number;
     neededRate: number | null;
     repairRecommendations: Record<string, number>;
@@ -238,6 +315,7 @@ export function buildTaxonomyAdjudicationReflectionReport(input: {
     const trace = traceById.get(decision.traceId);
     const summary = trace?.taxonomyAdjudication;
     const intentSummary = trace?.interviewerIntentLlm;
+    const terminalSummary = trace?.currentQuestionTerminalNoAnswer;
     const evaluation = evaluationByTraceId.get(decision.traceId);
     const human = evaluation?.taxonomyAdjudication;
     const llmCandidateType = normalizeType(
@@ -390,12 +468,116 @@ export function buildTaxonomyAdjudicationReflectionReport(input: {
       outputChars:
         readNumber(metadata, "taxonomyAdjudicationOutputChars") ??
         summary?.outputChars,
+      budgetSlot:
+        readString(metadata, "taxonomyAdjudicationBudgetSlot") ??
+        readString(metadata, "interviewerIntentLlmBudgetSlot") ??
+        summary?.budgetSlot ??
+        intentSummary?.budgetSlot,
+      budgetReason:
+        readString(metadata, "taxonomyAdjudicationBudgetReason") ??
+        readString(metadata, "interviewerIntentLlmBudgetReason") ??
+        summary?.budgetReason ??
+        intentSummary?.budgetReason,
+      sourceOwnedSubstantive:
+        readBoolean(metadata, "taxonomyAdjudicationSourceOwnedSubstantive") ??
+        readBoolean(metadata, "interviewerIntentLlmSourceOwnedSubstantive") ??
+        summary?.sourceOwnedSubstantive ??
+        intentSummary?.sourceOwnedSubstantive,
+      budgetStartsBefore:
+        readNumber(metadata, "taxonomyAdjudicationBudgetStartsBefore") ??
+        summary?.budgetStartsBefore ??
+        intentSummary?.budgetStartsBefore,
+      budgetStartsAfter:
+        readNumber(metadata, "taxonomyAdjudicationBudgetStartsAfter") ??
+        summary?.budgetStartsAfter ??
+        intentSummary?.budgetStartsAfter,
+      budgetLimit:
+        readNumber(metadata, "taxonomyAdjudicationBudgetLimit") ??
+        summary?.budgetLimit ??
+        intentSummary?.budgetLimit,
+      budgetRemaining:
+        readNumber(metadata, "taxonomyAdjudicationBudgetRemaining") ??
+        summary?.budgetRemaining ??
+        intentSummary?.budgetRemaining,
+      ambientStarts:
+        readNumber(metadata, "taxonomyAdjudicationAmbientStarts") ??
+        summary?.ambientStarts ??
+        intentSummary?.ambientStarts,
+      substantiveStarts:
+        readNumber(metadata, "taxonomyAdjudicationSubstantiveStarts") ??
+        summary?.substantiveStarts ??
+        intentSummary?.substantiveStarts,
+      reservedSubstantiveAvailable:
+        readBoolean(
+          metadata,
+          "taxonomyAdjudicationReservedSubstantiveAvailable"
+        ) ??
+        readBoolean(
+          metadata,
+          "interviewerIntentLlmReservedSubstantiveAvailable"
+        ) ??
+        summary?.reservedSubstantiveAvailable ??
+        intentSummary?.reservedSubstantiveAvailable,
+      terminalNoAnswerDisposition:
+        readString(
+          metadata,
+          "currentQuestionTerminalNoAnswerDisposition"
+        ) ?? terminalSummary?.disposition,
+      terminalNoAnswerAuthorized:
+        readBoolean(
+          metadata,
+          "currentQuestionTerminalNoAnswerAuthorized"
+        ) ?? terminalSummary?.authorized,
+      terminalNoAnswerApplied:
+        readBoolean(
+          metadata,
+          "interviewerIntentLlmTerminalNoAnswerApplied"
+        ) ?? terminalSummary?.applied,
+      terminalNoAnswerApplyReason:
+        readString(
+          metadata,
+          "interviewerIntentLlmTerminalNoAnswerApplyReason"
+        ) ?? terminalSummary?.applyReason,
+      terminalNoAnswerAdvisorCancelled:
+        readBoolean(
+          metadata,
+          "interviewerIntentLlmTerminalNoAnswerAdvisorCancelled"
+        ) ?? terminalSummary?.advisorCancelled,
+      terminalNoAnswerMemoryStarted:
+        readBoolean(
+          metadata,
+          "taxonomyAdjudicationTerminalNoAnswerMemoryStarted"
+        ) ?? terminalSummary?.memoryStarted,
+      terminalNoAnswerModelStarted:
+        readBoolean(
+          metadata,
+          "taxonomyAdjudicationTerminalNoAnswerModelStarted"
+        ) ?? terminalSummary?.modelStarted,
+      terminalNoAnswerAvoidedMemoryOpportunity:
+        readBoolean(
+          metadata,
+          "taxonomyAdjudicationTerminalNoAnswerAvoidedMemoryOpportunity"
+        ) ?? terminalSummary?.avoidedMemoryOpportunity,
+      terminalNoAnswerAvoidedModelOpportunity:
+        readBoolean(
+          metadata,
+          "taxonomyAdjudicationTerminalNoAnswerAvoidedModelOpportunity"
+        ) ?? terminalSummary?.avoidedModelOpportunity,
     } satisfies TaxonomyAdjudicationReflectionRow;
   });
 
   const substantiveRows = rows.filter(isSubstantiveObservedUnit);
   const eligibleRows = substantiveRows.filter((row) => row.eligible);
   const triggeredRows = eligibleRows.filter(isTriggeredRow);
+  const ambientTriggeredRows = rows.filter(
+    (row) => row.budgetSlot === "ambient" && isTriggeredRow(row)
+  );
+  const substantiveTriggeredRows = rows.filter(
+    (row) => row.budgetSlot === "substantive" && isTriggeredRow(row)
+  );
+  const terminalNoAnswerRows = rows.filter(
+    (row) => row.terminalNoAnswerDisposition !== undefined
+  );
   const providerValidRows = triggeredRows.filter(isProviderValidRow);
   const joinedHumanRows = providerValidRows.filter((row) =>
     hasTaxonomyEvaluation(evaluationByTraceId.get(row.traceId))
@@ -443,9 +625,12 @@ export function buildTaxonomyAdjudicationReflectionReport(input: {
   const actionAgreements = actionLabeled.filter(
     (row) => row.actionCorrect
   ).length;
+  const logicalQuestionBoundaryReasons = countStrings(
+    input.traces.map((trace) => trace.logicalQuestionBoundaryReason)
+  );
 
   return {
-    version: 4,
+    version: 5,
     generatedAt: Date.now(),
     sessions,
     funnel: {
@@ -540,6 +725,73 @@ export function buildTaxonomyAdjudicationReflectionReport(input: {
         rows.map((row) => row.llmEvidenceMode)
       ),
       actionProposals: countStrings(rows.map((row) => row.llmAction)),
+      budgetSlots: countStrings(rows.map((row) => row.budgetSlot)),
+      budgetReasons: countStrings(rows.map((row) => row.budgetReason)),
+      ambientTriggeredCalls: ambientTriggeredRows.length,
+      substantiveTriggeredCalls: substantiveTriggeredRows.length,
+      ambientBudgetExhausted: rows.filter(
+        (row) =>
+          row.budgetSlot === "ambient" &&
+          row.disposition === "budget-exhausted"
+      ).length,
+      substantiveBudgetExhausted: rows.filter(
+        (row) =>
+          row.budgetSlot === "substantive" &&
+          row.disposition === "budget-exhausted"
+      ).length,
+      ambientCallsPreservingSubstantiveReservation:
+        ambientTriggeredRows.filter(
+          (row) => row.reservedSubstantiveAvailable === true
+        ).length,
+      substantiveCallsAfterAmbientStart:
+        substantiveTriggeredRows.filter(
+          (row) => (row.ambientStarts ?? 0) > 0
+        ).length,
+      terminalNoAnswerCandidates: terminalNoAnswerRows.length,
+      terminalNoAnswerAuthorized: terminalNoAnswerRows.filter(
+        (row) => row.terminalNoAnswerAuthorized
+      ).length,
+      terminalNoAnswerApplied: terminalNoAnswerRows.filter(
+        (row) => row.terminalNoAnswerApplied
+      ).length,
+      terminalNoAnswerFailOpen: terminalNoAnswerRows.filter(
+        (row) => !row.terminalNoAnswerAuthorized
+      ).length,
+      terminalNoAnswerPostVisible: terminalNoAnswerRows.filter(
+        (row) =>
+          row.terminalNoAnswerApplyReason ===
+          "visible-answer-already-started"
+      ).length,
+      terminalNoAnswerAdvisorCancelled: terminalNoAnswerRows.filter(
+        (row) => row.terminalNoAnswerAdvisorCancelled
+      ).length,
+      terminalNoAnswerAvoidedMemoryOpportunity:
+        terminalNoAnswerRows.filter(
+          (row) => row.terminalNoAnswerAvoidedMemoryOpportunity
+        ).length,
+      terminalNoAnswerAvoidedModelOpportunity:
+        terminalNoAnswerRows.filter(
+          (row) => row.terminalNoAnswerAvoidedModelOpportunity
+        ).length,
+      terminalNoAnswerDispositions: countStrings(
+        terminalNoAnswerRows.map(
+          (row) => row.terminalNoAnswerDisposition
+        )
+      ),
+      terminalNoAnswerApplyReasons: countStrings(
+        terminalNoAnswerRows.map(
+          (row) => row.terminalNoAnswerApplyReason
+        )
+      ),
+      logicalQuestionBoundaryReasons,
+      terminalNoAnswerAmbientContinuations:
+        logicalQuestionBoundaryReasons[
+          "terminal-no-answer-ambient-continuation"
+        ] ?? 0,
+      terminalNoAnswerSubstantiveBoundaries:
+        logicalQuestionBoundaryReasons[
+          "terminal-no-answer-substantive-boundary"
+        ] ?? 0,
       labeledNeeded: neededLabeled.length,
       neededRate: ratio(
         neededLabeled.filter((row) => row.adjudicationNeeded).length,
@@ -619,6 +871,13 @@ export function renderTaxonomyAdjudicationReflectionMarkdown(
     `- Valid / invalid outputs: ${report.metrics.validOutputs} / ${report.metrics.invalidOutputs}`,
     `- Stale or superseded: ${report.metrics.staleOrSuperseded}`,
     `- Would repair / applied: ${report.metrics.wouldRepair} / ${report.metrics.repairApplied}`,
+    `- Ambient / substantive calls: ${report.metrics.ambientTriggeredCalls} / ${report.metrics.substantiveTriggeredCalls}`,
+    `- Ambient calls preserving the substantive reservation: ${report.metrics.ambientCallsPreservingSubstantiveReservation}`,
+    `- Substantive calls after an ambient start: ${report.metrics.substantiveCallsAfterAmbientStart}`,
+    `- Terminal no-answer candidates / authorized / applied: ${report.metrics.terminalNoAnswerCandidates} / ${report.metrics.terminalNoAnswerAuthorized} / ${report.metrics.terminalNoAnswerApplied}`,
+    `- Terminal no-answer fail-open / post-visible: ${report.metrics.terminalNoAnswerFailOpen} / ${report.metrics.terminalNoAnswerPostVisible}`,
+    `- Advisor cancellations / avoided memory / avoided model opportunities: ${report.metrics.terminalNoAnswerAdvisorCancelled} / ${report.metrics.terminalNoAnswerAvoidedMemoryOpportunity} / ${report.metrics.terminalNoAnswerAvoidedModelOpportunity}`,
+    `- Terminal ambient continuations / fresh substantive boundaries: ${report.metrics.terminalNoAnswerAmbientContinuations} / ${report.metrics.terminalNoAnswerSubstantiveBoundaries}`,
     `- Type precision: ${percent(report.metrics.typePrecision)} (${report.metrics.labeledTypeProposals} labeled)`,
     `- Relation precision: ${percent(report.metrics.relationPrecision)} (${report.metrics.labeledRelationProposals} labeled)`,
     `- Advisor-action precision: ${percent(report.metrics.actionPrecision)} (${report.metrics.labeledActionProposals} labeled)`,
@@ -688,9 +947,31 @@ export function renderTaxonomyAdjudicationReflectionMarkdown(
     "",
     ...formatCountMap(report.metrics.actionProposals),
     "",
+    "## Runtime Budget And Terminal Boundaries",
+    "",
+    "### Budget Slots",
+    "",
+    ...formatCountMap(report.metrics.budgetSlots),
+    "",
+    "### Budget Reasons",
+    "",
+    ...formatCountMap(report.metrics.budgetReasons),
+    "",
+    "### Terminal No-answer Dispositions",
+    "",
+    ...formatCountMap(report.metrics.terminalNoAnswerDispositions),
+    "",
+    "### Terminal No-answer Apply Reasons",
+    "",
+    ...formatCountMap(report.metrics.terminalNoAnswerApplyReasons),
+    "",
+    "### Logical-question Boundaries",
+    "",
+    ...formatCountMap(report.metrics.logicalQuestionBoundaryReasons),
+    "",
     "## Rollout Interpretation",
     "",
-    "This report is Shadow evidence only. Call rate is observational and must be interpreted through reason-coded trigger distributions; a high rate alone is not a failure. A correct LLM proposal is not counted as product success when it is stale, superseded, invalid, or arrives after a visible answer. No threshold, prototype, task boundary, model route, answer, Code artifact, or Whiteboard artifact is mutated by this reflection command.",
+    "This report is Shadow evidence only for broad semantic repair and preserves its distinction from the narrow terminal no-answer runtime boundary. Terminal application, Advisor cancellation, and LQU boundary counts never increment repairApplied. Call rate is observational and must be interpreted through reason-coded trigger distributions; a high rate alone is not a failure. A correct LLM proposal is not counted as product success when it is stale, superseded, invalid, or arrives after a visible answer. No threshold, prototype, task boundary, model route, answer, Code artifact, or Whiteboard artifact is mutated by this reflection command.",
   ];
   if (report.unmatchedEvaluations.length) {
     lines.push("", "## Joinability Gaps", "");
@@ -746,6 +1027,12 @@ function countOperationsByUnit(rows: TaxonomyAdjudicationReflectionRow[]) {
 }
 
 function isSubstantiveObservedUnit(row: TaxonomyAdjudicationReflectionRow) {
+  if (row.sourceOwnedSubstantive !== undefined) {
+    return row.sourceOwnedSubstantive;
+  }
+  if (row.budgetSlot) {
+    return row.budgetSlot === "substantive";
+  }
   const reason = row.skipReason ?? "";
   return !(
     reason.startsWith("turn-gate-") ||
