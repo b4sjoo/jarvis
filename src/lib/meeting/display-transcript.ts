@@ -2,8 +2,13 @@ import { deduplicateRolloverTranscript } from "./rollover-transcript.js";
 import type {
   DisplayTranscriptArtifact,
   DisplayTranscriptFinalization,
+  DisplayTranscriptHistoryEntry,
+  DisplayTranscriptWindow,
   TranscriptTurn,
 } from "./types";
+
+export const DISPLAY_TRANSCRIPT_HISTORY_MAX_ENTRIES = 3;
+export const DISPLAY_TRANSCRIPT_HISTORY_CHAR_BUDGET = 1_800;
 
 export type BatchTranscriptEndReason =
   | "silence"
@@ -237,6 +242,83 @@ export function formatDisplayTranscriptForTrace(
     displayTranscriptAppendedChars: decision.appendedTextChars,
     displayTranscriptSemanticCommitAuthorized:
       decision.semanticCommitAuthorized,
+  };
+}
+
+export function projectDisplayTranscriptWindow(input: {
+  current?: DisplayTranscriptArtifact;
+  transcriptTurns: TranscriptTurn[];
+  maxHistoryEntries?: number;
+  historyCharBudget?: number;
+}): DisplayTranscriptWindow {
+  const maxHistoryEntries = Math.max(
+    0,
+    input.maxHistoryEntries ?? DISPLAY_TRANSCRIPT_HISTORY_MAX_ENTRIES
+  );
+  const historyCharBudget = Math.max(
+    0,
+    input.historyCharBudget ?? DISPLAY_TRANSCRIPT_HISTORY_CHAR_BUDGET
+  );
+  const excludedTurnIds = new Set([
+    input.current?.utteranceId,
+    ...(input.current?.sourceTurnIds ?? []),
+  ]);
+  const selected: DisplayTranscriptHistoryEntry[] = [];
+  const selectedIds = new Set<string>();
+  let historyChars = 0;
+
+  for (
+    let index = input.transcriptTurns.length - 1;
+    index >= 0 && selected.length < maxHistoryEntries;
+    index -= 1
+  ) {
+    const turn = input.transcriptTurns[index];
+    const text = turn.text.trim();
+    if (
+      turn.speaker === "me" ||
+      turn.contextFusionStatus === "duplicate-suppressed" ||
+      !text ||
+      excludedTurnIds.has(turn.id) ||
+      selectedIds.has(turn.id)
+    ) {
+      continue;
+    }
+
+    const nextChars = historyChars + text.length;
+    if (selected.length > 0 && nextChars > historyCharBudget) {
+      break;
+    }
+
+    selected.push({
+      utteranceId: turn.id,
+      sourceTurnIds: [turn.id],
+      text,
+      startedAt: turn.startedAt,
+      endedAt: turn.endedAt,
+    });
+    selectedIds.add(turn.id);
+    historyChars = nextChars;
+  }
+
+  return {
+    current: input.current,
+    history: selected.reverse(),
+    historyChars,
+  };
+}
+
+export function formatDisplayTranscriptWindowForTrace(
+  window: DisplayTranscriptWindow
+) {
+  return {
+    displayTranscriptWindowCurrentUtteranceId:
+      window.current?.utteranceId,
+    displayTranscriptWindowCurrentRevision: window.current?.revision,
+    displayTranscriptWindowHistoryCount: window.history.length,
+    displayTranscriptWindowHistoryChars: window.historyChars,
+    displayTranscriptWindowHistoryUtteranceIds: window.history.map(
+      (entry) => entry.utteranceId
+    ),
   };
 }
 

@@ -39,6 +39,7 @@ import type {
   CriticalMomentCandidate,
   CriticalMomentEvaluation,
   CriticalMomentFailureReason,
+  DisplayTranscriptHistoryEntry,
   MeetingResponseActionMode,
   MeetingResponseConfig,
   MeetingResponseLanguage,
@@ -404,9 +405,12 @@ export const MeetingAssistant = ({
         turn.contextFusionStatus !== "duplicate-suppressed"
     );
   const latestInterviewerTurnText =
+    meeting.displayTranscriptWindow?.current?.text ??
     meeting.latestDisplayTranscript?.text ??
     latestTurn?.text ??
     "Waiting for meeting audio.";
+  const transcriptHistory =
+    meeting.displayTranscriptWindow?.history ?? [];
   const forceAdviseStatus = meeting.latestInterviewerTurnCandidate?.status;
   const forceAdviseAvailable = forceAdviseStatus === "ready";
   const forceAdvisePending = forceAdviseStatus === "repairing";
@@ -749,6 +753,7 @@ export const MeetingAssistant = ({
       },
       latestReliableAnswer: latestReliableAnswerPreview,
       latestTurnText: latestInterviewerTurnText,
+      transcriptHistory,
       forceAdviseAvailable,
       forceAdvisePending,
       forceAdviseCompleted,
@@ -792,6 +797,7 @@ export const MeetingAssistant = ({
       isTaskSwitchClarifyingQuestion,
       latestReliableAnswerPreview,
       latestInterviewerTurnText,
+      transcriptHistory,
       forceAdviseAvailable,
       forceAdvisePending,
       forceAdviseCompleted,
@@ -1447,7 +1453,7 @@ export const MeetingAssistant = ({
           ) : null}
 
           {isFocusMode ? (
-            <FocusModePanel
+              <FocusModePanel
               suggestionSections={displaySuggestionSections}
               codingArtifactCached={codingArtifactDisplay.isCached}
               whiteboardArtifactCached={whiteboardArtifactDisplay.isCached}
@@ -1465,7 +1471,8 @@ export const MeetingAssistant = ({
                   "focus-mode"
                 );
               }}
-              latestTurnText={latestInterviewerTurnText}
+                latestTurnText={latestInterviewerTurnText}
+                transcriptHistory={transcriptHistory}
               forceAdviseAvailable={forceAdviseAvailable}
               forceAdvisePending={forceAdvisePending}
               forceAdviseCompleted={forceAdviseCompleted}
@@ -1665,13 +1672,16 @@ export const MeetingAssistant = ({
                   </Button>
                 </div>
                 <p
-                  className={cn(
-                    WRAP_TEXT_CLASS,
-                    "min-h-10 text-xs leading-5 text-muted-foreground"
-                  )}
+                  className="sr-only"
                 >
-                  {latestInterviewerTurnText}
+                  Interviewer transcript history and latest utterance
                 </p>
+                <TranscriptLineageWindow
+                  currentText={latestInterviewerTurnText}
+                  history={transcriptHistory}
+                  currentClassName="min-h-10 text-xs leading-5 text-muted-foreground"
+                  historyClassName="text-[11px] leading-4 text-muted-foreground/65"
+                />
                 <div className="mt-2 flex min-w-0 gap-1.5">
                   <Input
                     value={speechCorrectionInput}
@@ -2567,6 +2577,7 @@ const FocusModePanel = ({
   manualQuestionTypeCorrection,
   onCorrectQuestionType,
   latestTurnText,
+  transcriptHistory,
   forceAdviseAvailable,
   forceAdvisePending,
   forceAdviseCompleted,
@@ -2602,6 +2613,7 @@ const FocusModePanel = ({
   manualQuestionTypeCorrection?: ManualQuestionTypeCorrection;
   onCorrectQuestionType: (type: CanonicalQuestionType) => void;
   latestTurnText: string;
+  transcriptHistory: DisplayTranscriptHistoryEntry[];
   forceAdviseAvailable: boolean;
   forceAdvisePending: boolean;
   forceAdviseCompleted: boolean;
@@ -2865,14 +2877,13 @@ const FocusModePanel = ({
                       : "Advise"}
                 </Button>
               </div>
-              <p
-                className={cn(
-                  WRAP_TEXT_CLASS,
-                  "max-h-24 overflow-y-auto pr-1 text-[11px] leading-4 text-muted-foreground"
-                )}
-              >
-                {latestTurnText}
-              </p>
+              <TranscriptLineageWindow
+                currentText={latestTurnText}
+                history={transcriptHistory}
+                className="max-h-24 overflow-y-auto pr-1"
+                currentClassName="text-[11px] leading-4 text-muted-foreground"
+                historyClassName="text-[10px] leading-4 text-muted-foreground/60"
+              />
             </div>
             <div className="min-w-0 flex-[1.1]">
               <SpeechCorrectionControl
@@ -2892,6 +2903,36 @@ const FocusModePanel = ({
     </div>
   );
 };
+
+const TranscriptLineageWindow = ({
+  currentText,
+  history,
+  className,
+  currentClassName,
+  historyClassName,
+}: {
+  currentText: string;
+  history: DisplayTranscriptHistoryEntry[];
+  className?: string;
+  currentClassName?: string;
+  historyClassName?: string;
+}) => (
+  <div className={cn("min-w-0", className)}>
+    {history.length ? (
+      <div className="mb-1.5 space-y-1.5 border-b border-border/50 pb-1.5">
+        {history.map((entry) => (
+          <p
+            key={entry.utteranceId}
+            className={cn(WRAP_TEXT_CLASS, historyClassName)}
+          >
+            {entry.text}
+          </p>
+        ))}
+      </div>
+    ) : null}
+    <p className={cn(WRAP_TEXT_CLASS, currentClassName)}>{currentText}</p>
+  </div>
+);
 
 const InterviewTypeButtonGrid = ({
   value,

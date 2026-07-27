@@ -59,6 +59,8 @@ import {
   AudioSegmentDispositionLedger,
   BatchDisplayTranscriptAssembler,
   BatchDisplayTranscriptDecision,
+  formatDisplayTranscriptWindowForTrace,
+  projectDisplayTranscriptWindow,
   CorrectionOwnedResettlementDecision,
   NativeAudioLivenessEvent,
   NativeAudioDebugFaultKind,
@@ -2928,6 +2930,7 @@ export function useMeetingAssistant() {
         currentQuestionLineage: undefined,
         latestInterviewerTurnCandidate: undefined,
         latestDisplayTranscript: undefined,
+        displayTranscriptWindow: undefined,
       }));
 
       return {
@@ -7491,7 +7494,15 @@ export function useMeetingAssistant() {
 
   const publishDisplayTranscriptRevision = useCallback(
     (decision: BatchDisplayTranscriptDecision, traceId: string) => {
-      const metadata = formatDisplayTranscriptForTrace(decision);
+      const displayWindow = projectDisplayTranscriptWindow({
+        current: decision.artifact,
+        transcriptTurns:
+          contextManagerRef.current.getState().transcriptTurns,
+      });
+      const metadata = {
+        ...formatDisplayTranscriptForTrace(decision),
+        ...formatDisplayTranscriptWindowForTrace(displayWindow),
+      };
       traceStoreRef.current.updateMetadata(traceId, metadata);
       const revisionStepId = traceStoreRef.current.startStep(
         traceId,
@@ -7520,6 +7531,7 @@ export function useMeetingAssistant() {
       setState((previous) => ({
         ...previous,
         latestDisplayTranscript: decision.artifact,
+        displayTranscriptWindow: displayWindow,
       }));
     },
     []

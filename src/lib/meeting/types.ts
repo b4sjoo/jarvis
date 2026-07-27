@@ -85,6 +85,20 @@ export interface DisplayTranscriptArtifact {
   endedAt: number;
 }
 
+export interface DisplayTranscriptHistoryEntry {
+  utteranceId: string;
+  sourceTurnIds: string[];
+  text: string;
+  startedAt: number;
+  endedAt: number;
+}
+
+export interface DisplayTranscriptWindow {
+  current?: DisplayTranscriptArtifact;
+  history: DisplayTranscriptHistoryEntry[];
+  historyChars: number;
+}
+
 export type SpeechBiasTermSource =
   | "brief"
   | "active-task"
@@ -1525,6 +1539,7 @@ export interface MeetingAssistantState {
   status: MeetingAssistantStatus;
   transcriptTurns: TranscriptTurn[];
   latestDisplayTranscript?: DisplayTranscriptArtifact;
+  displayTranscriptWindow?: DisplayTranscriptWindow;
   screenObservations: ScreenObservation[];
   interviewSessionBrief?: InterviewSessionBrief;
   interviewSessionContext?: InterviewSessionContext;

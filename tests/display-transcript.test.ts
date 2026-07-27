@@ -1,6 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { BatchDisplayTranscriptAssembler } from "../src/lib/meeting/display-transcript.js";
+import {
+  BatchDisplayTranscriptAssembler,
+  projectDisplayTranscriptWindow,
+} from "../src/lib/meeting/display-transcript.js";
+import type {
+  DisplayTranscriptArtifact,
+  TranscriptTurn,
+} from "../src/lib/meeting/types.js";
 
 function fragment(
   overrides: Partial<
@@ -141,4 +148,132 @@ test("finalizes accepted rollover text when the terminal fragment has no text", 
   assert.equal(finalized.artifact.text, provisional.artifact.text);
   assert.equal(finalized.artifact.finalization, "termination");
   assert.equal(finalized.artifact.revision, 2);
+});
+
+function transcriptTurn(
+  id: string,
+  text: string,
+  startedAt: number
+): TranscriptTurn {
+  return {
+    id,
+    speaker: "them",
+    source: "system-audio",
+    text,
+    startedAt,
+    endedAt: startedAt + 100,
+    isFinal: true,
+  };
+}
+
+function displayArtifact(
+  utteranceId: string,
+  text: string,
+  revision = 1
+): DisplayTranscriptArtifact {
+  return {
+    utteranceId,
+    revision,
+    speaker: "them",
+    source: "system-audio",
+    segmentIds: [`segment:${utteranceId}`],
+    sourceTurnIds: [utteranceId],
+    providerChars: text.length,
+    displayChars: text.length,
+    overlapCharsRemoved: 0,
+    omittedChars: 0,
+    text,
+    finalization: "silence",
+    startedAt: 1_000,
+    endedAt: 1_100,
+  };
+}
+
+test("keeps a prior long utterance as lower-emphasis display history", () => {
+  const previousText = "Architecture context ".repeat(45).trim();
+  const current = displayArtifact(
+    "utterance-current",
+    "That is all the background content."
+  );
+  const window = projectDisplayTranscriptWindow({
+    current,
+    transcriptTurns: [
+      transcriptTurn("utterance-previous", previousText, 100),
+      transcriptTurn("utterance-current", current.text, 1_000),
+    ],
+  });
+
+  assert.equal(window.current?.utteranceId, "utterance-current");
+  assert.deepEqual(
+    window.history.map((entry) => entry.utteranceId),
+    ["utterance-previous"]
+  );
+  assert.equal(window.history[0].text, previousText);
+});
+
+test("same-utterance revisions never duplicate the current artifact into history", () => {
+  const current = displayArtifact(
+    "utterance-family",
+    "A complete long interviewer utterance.",
+    3
+  );
+  const window = projectDisplayTranscriptWindow({
+    current,
+    transcriptTurns: [
+      transcriptTurn("utterance-before", "Earlier context.", 100),
+      transcriptTurn("utterance-family", current.text, 1_000),
+    ],
+  });
+
+  assert.deepEqual(
+    window.history.map((entry) => entry.utteranceId),
+    ["utterance-before"]
+  );
+});
+
+test("bounds display history by recency, entry count, and a soft character budget", () => {
+  const current = displayArtifact("utterance-current", "Current question.");
+  const window = projectDisplayTranscriptWindow({
+    current,
+    transcriptTurns: [
+      transcriptTurn("oldest", "a".repeat(500), 100),
+      transcriptTurn("older", "b".repeat(500), 200),
+      transcriptTurn("recent", "c".repeat(500), 300),
+      transcriptTurn("newest", "d".repeat(500), 400),
+    ],
+    maxHistoryEntries: 3,
+    historyCharBudget: 1_100,
+  });
+
+  assert.deepEqual(
+    window.history.map((entry) => entry.utteranceId),
+    ["recent", "newest"]
+  );
+  assert.equal(window.historyChars, 1_000);
+});
+
+test("excludes me and duplicate-suppressed turns from display history", () => {
+  const current = displayArtifact("utterance-current", "Current question.");
+  const meTurn = {
+    ...transcriptTurn("me-turn", "My private response.", 100),
+    speaker: "me" as const,
+    source: "microphone" as const,
+  };
+  const duplicateTurn = {
+    ...transcriptTurn("duplicate", "Duplicated output.", 200),
+    contextFusionStatus: "duplicate-suppressed" as const,
+  };
+  const window = projectDisplayTranscriptWindow({
+    current,
+    transcriptTurns: [
+      transcriptTurn("valid", "Earlier interviewer context.", 50),
+      meTurn,
+      duplicateTurn,
+    ],
+  });
+
+  assert.deepEqual(
+    window.history.map((entry) => entry.utteranceId),
+    ["valid"]
+  );
 });

@@ -224,6 +224,12 @@ function MeetingFocusControlsWindow({
   const lastGeometryRequestRef = useRef("");
   const geometryRevisionRef = useRef(0);
   const interviewTypes = snapshot.interviewTypes;
+  const transcriptWindowText = [
+    ...snapshot.transcriptHistory.map((entry) => entry.text),
+    snapshot.latestTurnText,
+  ]
+    .filter(Boolean)
+    .join("\n\n");
   const hasCorrectableQuestion = snapshot.hasCorrectableQuestion;
   const activeCorrection =
     snapshot.manualQuestionTypeCorrection &&
@@ -327,7 +333,7 @@ function MeetingFocusControlsWindow({
     return () => {
       window.cancelAnimationFrame(frameId);
     };
-  }, [snapshot.latestTurnText, snapshot.speechCorrections.length]);
+  }, [transcriptWindowText, snapshot.speechCorrections.length]);
 
   return (
     <div className="h-screen w-screen overflow-hidden bg-transparent p-2">
@@ -340,7 +346,7 @@ function MeetingFocusControlsWindow({
         )}
         style={{ width: FOCUS_CONTROLS_TRANSCRIPT_MEASURE_WIDTH }}
       >
-        {snapshot.latestTurnText}
+        {transcriptWindowText}
       </p>
       <div className="flex h-full min-w-0 flex-col overflow-hidden rounded-lg border border-border/70 bg-background/95 p-3 shadow-lg backdrop-blur">
         <div className="flex min-w-0 items-center gap-2">
@@ -444,14 +450,31 @@ function MeetingFocusControlsWindow({
                     : "Advise"}
               </Button>
             </div>
-            <p
-              className={cn(
-                WRAP_TEXT_CLASS,
-                "min-h-0 flex-1 overflow-y-auto pr-1 text-[13px] leading-5 text-muted-foreground"
-              )}
-            >
-              {snapshot.latestTurnText}
-            </p>
+            <div className="min-h-0 flex-1 overflow-y-auto pr-1">
+              {snapshot.transcriptHistory.length ? (
+                <div className="mb-2 space-y-2 border-b border-border/50 pb-2">
+                  {snapshot.transcriptHistory.map((entry) => (
+                    <p
+                      key={entry.utteranceId}
+                      className={cn(
+                        WRAP_TEXT_CLASS,
+                        "text-[12px] leading-5 text-muted-foreground/60"
+                      )}
+                    >
+                      {entry.text}
+                    </p>
+                  ))}
+                </div>
+              ) : null}
+              <p
+                className={cn(
+                  WRAP_TEXT_CLASS,
+                  "text-[13px] leading-5 text-muted-foreground"
+                )}
+              >
+                {snapshot.latestTurnText}
+              </p>
+            </div>
           </div>
 
           <div className="mt-auto min-w-0 shrink-0">
