@@ -51,6 +51,7 @@ test("registers each atomic runtime operation with an isolated policy", () => {
   assert.equal(taxonomy.quiescenceMs, 450);
   assert.equal(metadata.lane, "background");
   assert.equal(whiteboard.timeoutMs, 3_000);
+  assert.equal(whiteboard.maxOutputTokens, 768);
   assert.equal(relation.lane, "critical");
   assert.equal(relation.timeoutMs, 3_000);
 });

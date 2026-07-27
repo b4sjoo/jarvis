@@ -97,6 +97,8 @@ import {
   NativeSpeechStartEvent,
   SttContinuationPromptLease,
   WhiteboardRenderValidationDecision,
+  WhiteboardSyntaxRepairJob,
+  WhiteboardSyntaxRepairRequestResult,
   WhiteboardUpdateSource,
   MeetingContextManager,
   MeetingSetupWarning,
@@ -217,6 +219,17 @@ import {
   serializeMeetingTraceMetrics,
   inferTrustedProgrammingLanguage,
   formatWhiteboardRenderValidationForTrace,
+  authorizeWhiteboardSyntaxRepairLease,
+  buildWhiteboardSyntaxRepairPrompts,
+  createWhiteboardSyntaxRepairLease,
+  createWhiteboardSyntaxRepairRequest,
+  formatRuntimeInferenceCircuitForTrace,
+  formatRuntimeInferenceModelRouteForTrace,
+  formatWhiteboardSyntaxRepairForTrace,
+  requestWhiteboardSyntaxRepair,
+  resolveRuntimeInferenceModelRouteFromSnapshot,
+  RuntimeInferenceOperationRuntime,
+  RuntimeInferenceSessionCircuitBreaker,
   updateWhiteboardArtifactFromAnswer,
   validateWhiteboardRenderCandidate,
   SessionRecordingManager,
@@ -1860,6 +1873,23 @@ export function useMeetingAssistant() {
   const taxonomyAdjudicationCircuitBreakerRef = useRef(
     new TaxonomyAdjudicationSessionCircuitBreaker()
   );
+  const whiteboardSyntaxRepairRuntimeRef = useRef<
+    RuntimeInferenceOperationRuntime<
+      WhiteboardSyntaxRepairJob,
+      WhiteboardSyntaxRepairRequestResult
+    > | null
+  >(null);
+  if (whiteboardSyntaxRepairRuntimeRef.current === null) {
+    whiteboardSyntaxRepairRuntimeRef.current =
+      new RuntimeInferenceOperationRuntime<
+        WhiteboardSyntaxRepairJob,
+        WhiteboardSyntaxRepairRequestResult
+      >("whiteboard-syntax-repair");
+  }
+  const whiteboardSyntaxRepairCircuitRef = useRef(
+    new RuntimeInferenceSessionCircuitBreaker()
+  );
+  const whiteboardSyntaxRepairAttemptKeysRef = useRef(new Set<string>());
   const manualCorrectionRevisionRef = useRef(0);
   const activeScreenOperationIdRef = useRef<string | null>(null);
   const manualCorrectionOperationCoordinatorRef = useRef(
@@ -2357,6 +2387,8 @@ export function useMeetingAssistant() {
     activeScreenOperationIdRef.current = null;
     semanticTaxonomyEvidenceByTurnRef.current.clear();
     taxonomyAdjudicationRuntimeRef.current?.cancelAll("superseded");
+    whiteboardSyntaxRepairRuntimeRef.current?.cancelAll("superseded");
+    whiteboardSyntaxRepairAttemptKeysRef.current.clear();
     manualCorrectionRevisionRef.current = 0;
     adjacentQuestionScopeRef.current = null;
     logicalQuestionUnitRef.current = undefined;
@@ -3050,6 +3082,378 @@ export function useMeetingAssistant() {
     []
   );
 
+  const scheduleWhiteboardSyntaxRepairShadow = useCallback(
+    ({
+      traceId,
+      source,
+      candidateWhiteboard,
+      validation,
+      parent,
+    }: {
+      traceId: string;
+      source: "voice" | "screen";
+      candidateWhiteboard: string;
+      validation: WhiteboardRenderValidationDecision;
+      parent: ActiveInterviewParent | undefined;
+    }) => {
+      if (validation.valid || validation.candidateKind !== "mermaid") {
+        return;
+      }
+      const evaluationActive =
+        debugModeRef.current ||
+        Boolean(sessionRecordingManagerRef.current?.getState().active);
+      const artifact = parent?.whiteboardArtifact;
+      const renderState = artifact?.renderState;
+      if (
+        !evaluationActive ||
+        !parent ||
+        !artifact ||
+        !renderState ||
+        renderState.validationOperationId !== validation.operationId ||
+        renderState.candidateFingerprint !==
+          validation.candidateFingerprint
+      ) {
+        return;
+      }
+
+      const request = createWhiteboardSyntaxRepairRequest({
+        whiteboard: candidateWhiteboard,
+        parserError:
+          validation.parserErrorClass ?? "mermaid-syntax-error",
+      });
+      if (!request) {
+        traceStoreRef.current.updateMetadata(traceId, {
+          ...formatRuntimeInferenceOperationForTrace(
+            "whiteboard-syntax-repair"
+          ),
+          whiteboardRepairMode: "shadow",
+          whiteboardRepairDisposition: "unsupported-candidate",
+          whiteboardRepairBehaviorMutationBlocked: true,
+        });
+        return;
+      }
+
+      const contextState = contextManagerRef.current.getState();
+      const attemptKey = [
+        contextState.sessionId,
+        parent.id,
+        renderState.candidateRevision,
+        validation.candidateFingerprint,
+      ].join(":");
+      if (whiteboardSyntaxRepairAttemptKeysRef.current.has(attemptKey)) {
+        traceStoreRef.current.updateMetadata(traceId, {
+          whiteboardRepairMode: "shadow",
+          whiteboardRepairDisposition: "already-attempted",
+          whiteboardRepairBehaviorMutationBlocked: true,
+        });
+        return;
+      }
+
+      const circuit = whiteboardSyntaxRepairCircuitRef.current.read(
+        "whiteboard-syntax-repair",
+        contextState.sessionId
+      );
+      if (circuit.open) {
+        traceStoreRef.current.updateMetadata(traceId, {
+          ...formatRuntimeInferenceOperationForTrace(
+            "whiteboard-syntax-repair"
+          ),
+          ...formatRuntimeInferenceCircuitForTrace(circuit),
+          whiteboardRepairMode: "shadow",
+          whiteboardRepairDisposition: "provider-circuit-open",
+          whiteboardRepairBehaviorMutationBlocked: true,
+        });
+        return;
+      }
+
+      const modelRoute = resolveRuntimeInferenceModelRouteFromSnapshot({
+        snapshot: meetingModelProviderSnapshotRef.current,
+        operationKind: "whiteboard-syntax-repair",
+        reason: "invalid-mermaid-shadow-repair",
+      });
+      const routeMetadata =
+        formatRuntimeInferenceModelRouteForTrace(modelRoute);
+      if (!modelRoute.provider) {
+        const opened = whiteboardSyntaxRepairCircuitRef.current.open({
+          operationKind: "whiteboard-syntax-repair",
+          sessionId: contextState.sessionId,
+          reason: "provider-configuration-error",
+          detail:
+            modelRoute.missingRequiredVariables.length > 0
+              ? `missing:${modelRoute.missingRequiredVariables.join(",")}`
+              : modelRoute.fallbackReason,
+        });
+        traceStoreRef.current.updateMetadata(traceId, {
+          ...formatRuntimeInferenceOperationForTrace(
+            "whiteboard-syntax-repair"
+          ),
+          ...routeMetadata,
+          ...formatRuntimeInferenceCircuitForTrace(
+            opened.state,
+            opened.newlyOpened
+          ),
+          whiteboardRepairMode: "shadow",
+          whiteboardRepairDisposition: "provider-configuration-error",
+          whiteboardRepairBehaviorMutationBlocked: true,
+        });
+        return;
+      }
+
+      const lease = createWhiteboardSyntaxRepairLease({
+        sessionId: contextState.sessionId,
+        runtimeEpoch: runtimeEpochRef.current,
+        parentTaskId: parent.id,
+        parentRevision: parent.revisions,
+        artifactId: artifact.id,
+        candidateRevision: renderState.candidateRevision,
+        visibleRevision: renderState.visibleRevision,
+        candidateWhiteboard,
+        validationOperationId: validation.operationId,
+      });
+      const prompts = buildWhiteboardSyntaxRepairPrompts(request);
+      const promptText = [
+        prompts.systemPrompt,
+        prompts.userMessage,
+      ].join("\n\n");
+      const scheduledMetadata = {
+        ...formatRuntimeInferenceOperationForTrace(
+          "whiteboard-syntax-repair"
+        ),
+        ...routeMetadata,
+        ...formatWhiteboardSyntaxRepairForTrace({
+          lease,
+          disposition: "scheduled",
+        }),
+        whiteboardRepairSource: source,
+        whiteboardRepairPromptVersion: request.promptVersion,
+        whiteboardRepairSchemaVersion: request.schemaVersion,
+        whiteboardRepairInputChars: promptText.length,
+      };
+      whiteboardSyntaxRepairAttemptKeysRef.current.add(attemptKey);
+      while (whiteboardSyntaxRepairAttemptKeysRef.current.size > 256) {
+        const oldest =
+          whiteboardSyntaxRepairAttemptKeysRef.current.values().next().value;
+        if (!oldest) break;
+        whiteboardSyntaxRepairAttemptKeysRef.current.delete(oldest);
+      }
+      traceStoreRef.current.updateMetadata(traceId, scheduledMetadata);
+      traceStoreRef.current.recordInput(
+        traceId,
+        "whiteboard syntax repair model input",
+        promptText,
+        {
+          promptVersion: request.promptVersion,
+          schemaVersion: request.schemaVersion,
+          operationId: lease.operationId,
+          inputChars: promptText.length,
+          behaviorMutationBlocked: true,
+        }
+      );
+      sessionRecordingManagerRef.current?.recordModelInput({
+        traceId,
+        taskId: parent.id,
+        label: "whiteboard syntax repair model input",
+        value: promptText,
+        metadata: {
+          promptVersion: request.promptVersion,
+          schemaVersion: request.schemaVersion,
+          operationId: lease.operationId,
+          behaviorMutationBlocked: true,
+        },
+      });
+
+      let stepId: string | undefined;
+      whiteboardSyntaxRepairRuntimeRef.current!.schedule({
+        job: {
+          operationId: lease.operationId,
+          operationKind: "whiteboard-syntax-repair",
+          sessionId: contextState.sessionId,
+          budgetKey: parent.id,
+          budgetSlot: `${renderState.candidateRevision}:${validation.candidateFingerprint}`,
+          budgetReason: "invalid-mermaid-revision",
+          traceId,
+          lease,
+          request,
+        },
+        execute: (job, signal) =>
+          requestWhiteboardSyntaxRepair({
+            request: job.request,
+            provider: modelRoute.provider,
+            selectedProvider: modelRoute.selectedProvider,
+            signal,
+            onFirstToken: (at) => {
+              traceStoreRef.current.updateMetadata(traceId, {
+                whiteboardRepairFirstTokenAt: at,
+              });
+            },
+          }),
+        onStarted: (_job, startedAt, budget) => {
+          const metadata = {
+            ...scheduledMetadata,
+            whiteboardRepairStartedAt: startedAt,
+            whiteboardRepairBudgetStartsBefore: budget.startsBefore,
+            whiteboardRepairBudgetStartsAfter: budget.startsAfter,
+            whiteboardRepairBudgetLimit: budget.limit,
+            whiteboardRepairBudgetRemaining: budget.remaining,
+          };
+          traceStoreRef.current.updateMetadata(traceId, metadata);
+          stepId = traceStoreRef.current.startStep(
+            traceId,
+            "Whiteboard syntax repair shadow",
+            metadata
+          );
+        },
+        onSettled: (settlement) => {
+          void (async () => {
+            const latestContext = contextManagerRef.current.getState();
+            const latestParent = latestContext.activeInterviewTask;
+            const latestArtifact = latestParent?.whiteboardArtifact;
+            const latestRenderState = latestArtifact?.renderState;
+            const authorization = authorizeWhiteboardSyntaxRepairLease(
+              settlement.job.lease,
+              {
+                currentOperationId:
+                  whiteboardSyntaxRepairRuntimeRef.current?.getCurrentOperationId(),
+                sessionId: latestContext.sessionId,
+                runtimeEpoch: runtimeEpochRef.current,
+                parentTaskId: latestParent?.id,
+                parentRevision: latestParent?.revisions,
+                artifactId: latestArtifact?.id,
+                candidateRevision: latestRenderState?.candidateRevision,
+                visibleRevision: latestRenderState?.visibleRevision,
+                candidateFingerprint:
+                  latestRenderState?.candidateFingerprint,
+                validationOperationId:
+                  latestRenderState?.validationOperationId,
+              }
+            );
+            const result = settlement.result;
+            let repairedValidation:
+              | WhiteboardRenderValidationDecision
+              | undefined;
+            if (
+              settlement.disposition === "completed" &&
+              authorization.authorized &&
+              result?.parsed.ok
+            ) {
+              repairedValidation =
+                await validateWhiteboardRenderCandidate({
+                  whiteboard: [
+                    "```mermaid",
+                    result.parsed.value.mermaid,
+                    "```",
+                  ].join("\n"),
+                });
+            }
+            const providerDisposition =
+              result?.providerDisposition ??
+              (settlement.disposition === "error"
+                ? "request-error"
+                : settlement.disposition);
+            if (
+              authorization.authorized &&
+              providerDisposition === "provider-auth-error"
+            ) {
+              whiteboardSyntaxRepairCircuitRef.current.open({
+                operationKind: "whiteboard-syntax-repair",
+                sessionId: settlement.job.lease.sessionId,
+                reason: "provider-auth-error",
+                detail: result?.rawOutput.slice(0, 240),
+              });
+            }
+            const finalDisposition =
+              settlement.disposition !== "completed"
+                ? settlement.disposition
+                : !authorization.authorized
+                  ? "stale"
+                  : providerDisposition !== "completed-with-content"
+                    ? providerDisposition
+                    : !result?.parsed.ok
+                      ? "invalid-output"
+                      : !repairedValidation?.valid
+                        ? "revalidation-failed"
+                        : "shadow-valid";
+            const metadata =
+              formatWhiteboardSyntaxRepairForTrace({
+                lease: settlement.job.lease,
+                disposition: finalDisposition,
+                authorization,
+                providerDisposition,
+                parseDisposition: result?.parseDisposition,
+                queueWaitMs: settlement.queueWaitMs,
+                durationMs: settlement.durationMs,
+                repairedValidationDisposition:
+                  repairedValidation?.disposition,
+                repairedParserErrorClass:
+                  repairedValidation?.parserErrorClass,
+                firstTokenAt: result?.firstTokenAt,
+              });
+            traceStoreRef.current.updateMetadata(traceId, metadata);
+            sessionRecordingManagerRef.current?.recordWhiteboardRenderRecovery({
+              traceId,
+              taskId: settlement.job.lease.parentTaskId,
+              metadata,
+              candidateContent: candidateWhiteboard,
+              repairedMermaid: result?.parsed.ok
+                ? result.parsed.value.mermaid
+                : undefined,
+              asciiFallback: result?.parsed.ok
+                ? result.parsed.value.asciiFallback
+                : undefined,
+            });
+            if (result?.rawOutput) {
+              traceStoreRef.current.recordOutput(
+                traceId,
+                "whiteboard syntax repair raw output",
+                result.rawOutput,
+                metadata
+              );
+              sessionRecordingManagerRef.current?.recordModelOutput({
+                traceId,
+                taskId: settlement.job.lease.parentTaskId,
+                label: "whiteboard syntax repair raw output",
+                value: result.rawOutput,
+                metadata,
+              });
+            }
+            traceStoreRef.current.finishStep(
+              traceId,
+              stepId,
+              settlement.disposition === "error" ? "error" : "success",
+              metadata,
+              settlement.error
+            );
+            const completedTrace = traceStoreRef.current
+              .getTraces()
+              .find(
+                (candidate) =>
+                  candidate.id === traceId &&
+                  candidate.status !== "running"
+              );
+            if (completedTrace) {
+              sessionRecordingManagerRef.current?.refreshRecordedTrace(
+                completedTrace,
+                getAutoExportTrigger(completedTrace)
+              );
+            }
+          })().catch((error) => {
+            traceStoreRef.current.finishStep(
+              traceId,
+              stepId,
+              "error",
+              {
+                whiteboardRepairDisposition:
+                  "settlement-processing-error",
+              },
+              error
+            );
+          });
+        },
+      });
+    },
+    []
+  );
+
   const setupWarnings = useMemo<MeetingSetupWarning[]>(() => {
     const warnings: MeetingSetupWarning[] = [];
 
@@ -3487,6 +3891,27 @@ export function useMeetingAssistant() {
         whiteboardArtifactDomainTrack:
           traceEvalMetadata.whiteboardArtifactDomainTrack ??
           activeWhiteboardEvalMetadata.whiteboardArtifactDomainTrack,
+        whiteboardRender: {
+          artifactId:
+            traceEvalMetadata.whiteboardArtifactId ??
+            activeWhiteboardEvalMetadata.whiteboardArtifactId,
+          validationOperationId: readStringFromTraceMetadata(
+            trace.metadata,
+            "whiteboardRenderValidationOperationId"
+          ),
+          repairOperationId: readStringFromTraceMetadata(
+            trace.metadata,
+            "whiteboardRepairOperationId"
+          ),
+          candidateRevision: readNumberFromTraceMetadata(
+            trace.metadata,
+            "whiteboardRenderCandidateRevision"
+          ),
+          visibleRevision: readNumberFromTraceMetadata(
+            trace.metadata,
+            "whiteboardRenderVisibleRevisionAfter"
+          ),
+        },
         manualPhaseFrom: traceEvalMetadata.manualPhaseFrom,
         manualPhaseTo: traceEvalMetadata.manualPhaseTo,
         manualPhaseTargetArtifact: traceEvalMetadata.manualPhaseTargetArtifact,
@@ -4709,6 +5134,7 @@ export function useMeetingAssistant() {
   }, []);
 
   const runAdvisor = useCallback(async (options: RunAdvisorOptions = {}) => {
+    whiteboardSyntaxRepairRuntimeRef.current?.cancelAll("superseded");
     const advisorJob = options.advisorJob ?? buildAdvisorJob(options);
     if (!options.advisorJob) {
       activateAdvisorJob(advisorJob);
@@ -7067,6 +7493,17 @@ export function useMeetingAssistant() {
       };
       if (traceId) {
         traceStoreRef.current.updateMetadata(traceId, answerArtifactMetadata);
+        if (
+          whiteboardRenderValidation &&
+          parsedMeetingAnswer.sections.whiteboard
+        ) {
+          sessionRecordingManagerRef.current?.recordWhiteboardRenderValidation({
+            traceId,
+            taskId: continuity.task?.id,
+            metadata: answerArtifactMetadata,
+            candidateContent: parsedMeetingAnswer.sections.whiteboard,
+          });
+        }
       }
       let nextActiveScreenTask = promptContext.activeScreenTask;
 
@@ -7327,6 +7764,20 @@ export function useMeetingAssistant() {
         activeMeetingTask: contextState.activeMeetingTask,
         currentQuestionLineage: committedQuestionLineage,
       }));
+      if (
+        traceId &&
+        whiteboardRenderValidation &&
+        parsedMeetingAnswer.sections.whiteboard
+      ) {
+        scheduleWhiteboardSyntaxRepairShadow({
+          traceId,
+          source: "voice",
+          candidateWhiteboard:
+            parsedMeetingAnswer.sections.whiteboard,
+          validation: whiteboardRenderValidation,
+          parent: contextState.activeInterviewTask,
+        });
+      }
       const outputCommitMetadata = {
         advisorOutputDisposition:
           inferredTurnIntentDecision?.enforcement === "shadow"
@@ -7478,6 +7929,7 @@ export function useMeetingAssistant() {
     recordCommittedPlaybookPhaseTransition,
     releaseAdvisorJob,
     resolveMeetingModelRoute,
+    scheduleWhiteboardSyntaxRepairShadow,
     selectedAIProvider,
     state.settings,
     state.status,
@@ -11924,6 +12376,7 @@ export function useMeetingAssistant() {
         return;
       }
 
+      whiteboardSyntaxRepairRuntimeRef.current?.cancelAll("superseded");
       flushPendingSentenceCompletion("screen-capture");
       const screenOperationId = createMeetingId("screen_operation");
       let screenRuntimeToken = createRuntimeCommitToken({
@@ -13593,7 +14046,7 @@ export function useMeetingAssistant() {
           const previousWhiteboard =
             existingInterviewTask?.whiteboardArtifact;
           const nextWhiteboard = screenContinuity.task?.whiteboardArtifact;
-          traceStoreRef.current.updateMetadata(trace.id, {
+          const screenWhiteboardArtifactMetadata = {
             ...formatMeetingResponseOwnerForTrace(screenResponseOwner),
             ...formatResponseArtifactAuthorizationForTrace(
               screenArtifactAuthorization
@@ -13618,7 +14071,25 @@ export function useMeetingAssistant() {
               before: previousWhiteboard,
               after: nextWhiteboard,
             }),
-          });
+          };
+          traceStoreRef.current.updateMetadata(
+            trace.id,
+            screenWhiteboardArtifactMetadata
+          );
+          if (
+            screenWhiteboardRenderValidation &&
+            parsedScreenMeetingAnswer.sections.whiteboard
+          ) {
+            sessionRecordingManagerRef.current?.recordWhiteboardRenderValidation(
+              {
+                traceId: trace.id,
+                taskId: screenContinuity.task?.id,
+                metadata: screenWhiteboardArtifactMetadata,
+                candidateContent:
+                  parsedScreenMeetingAnswer.sections.whiteboard,
+              }
+            );
+          }
           if (
             !screenResponseOnlyTaskScope &&
             !screenSourceTransitionCommittedBeforeModel
@@ -13798,6 +14269,19 @@ export function useMeetingAssistant() {
           interviewSessionContext: updatedContextState.interviewSessionContext,
           error: null,
         }));
+        if (
+          screenWhiteboardRenderValidation &&
+          parsedScreenMeetingAnswer.sections.whiteboard
+        ) {
+          scheduleWhiteboardSyntaxRepairShadow({
+            traceId: trace.id,
+            source: "screen",
+            candidateWhiteboard:
+              parsedScreenMeetingAnswer.sections.whiteboard,
+            validation: screenWhiteboardRenderValidation,
+            parent: updatedContextState.activeInterviewTask,
+          });
+        }
         traceStoreRef.current.finishStep(trace.id, uiStepId, "success");
         traceStoreRef.current.finishTrace(trace.id, "success");
       } catch (error) {
@@ -13895,6 +14379,7 @@ export function useMeetingAssistant() {
       recordCommittedPlaybookPhaseTransition,
       readRuntimeCommitSnapshot,
       resolveMeetingModelRoute,
+      scheduleWhiteboardSyntaxRepairShadow,
       selectedAIProvider,
       screenshotConfiguration,
       state.settings,
@@ -17202,6 +17687,7 @@ export function useMeetingAssistant() {
     return () => {
       void stopOnUnmountRef.current();
       taxonomyAdjudicationRuntimeRef.current?.cancelAll("disposed");
+      whiteboardSyntaxRepairRuntimeRef.current?.cancelAll("disposed");
       void semanticTaxonomyRuntimeRef.current?.dispose("meeting-hook-unmounted");
     };
   }, []);

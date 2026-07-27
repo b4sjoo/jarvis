@@ -46,6 +46,7 @@ export interface QuestionEvaluationIdentity {
   whiteboardArtifactId?: string;
   whiteboardArtifactRevision?: number;
   whiteboardArtifactDomainTrack?: string;
+  whiteboardRender?: QuestionHumanEvaluation["whiteboardRender"];
   manualPhaseFrom?: string;
   manualPhaseTo?: string;
   manualPhaseTargetArtifact?: string;
@@ -429,6 +430,15 @@ export function upsertQuestionHumanEvaluation(
       existing?.currentQuestionSettlement,
       patch.currentQuestionSettlement
     ),
+    whiteboardRender: mergeWhiteboardRenderEvaluation(
+      existing?.whiteboardRender,
+      identity.whiteboardRender || patch.whiteboardRender
+        ? {
+            ...identity.whiteboardRender,
+            ...patch.whiteboardRender,
+          }
+        : undefined
+    ),
     memoryRetrievalSnapshot:
       normalizeMemoryRetrievalEvaluationSnapshot(
         patch.memoryRetrievalSnapshot
@@ -792,6 +802,9 @@ function normalizeQuestionHumanEvaluation(
       normalizeCurrentQuestionSettlementEvaluation(
         candidate.currentQuestionSettlement
       ),
+    whiteboardRender: normalizeWhiteboardRenderEvaluation(
+      candidate.whiteboardRender
+    ),
     memoryRetrievalSnapshot: normalizeMemoryRetrievalEvaluationSnapshot(
       candidate.memoryRetrievalSnapshot
     ),
@@ -868,6 +881,76 @@ function mergeCurrentQuestionSettlementEvaluation(
     ...existing,
     ...patch,
   };
+}
+
+function mergeWhiteboardRenderEvaluation(
+  existing: QuestionHumanEvaluation["whiteboardRender"],
+  patch: QuestionHumanEvaluation["whiteboardRender"]
+): QuestionHumanEvaluation["whiteboardRender"] {
+  if (!existing && !patch) return undefined;
+  return {
+    ...existing,
+    ...patch,
+  };
+}
+
+function normalizeWhiteboardRenderEvaluation(
+  value: unknown
+): QuestionHumanEvaluation["whiteboardRender"] {
+  if (!value || typeof value !== "object") return undefined;
+  const candidate = value as Record<string, unknown>;
+  const observedOutcome =
+    candidate.observedOutcome === "rendered" ||
+    candidate.observedOutcome === "repaired" ||
+    candidate.observedOutcome === "preserved-last-valid" ||
+    candidate.observedOutcome === "ascii-fallback" ||
+    candidate.observedOutcome === "error-visible" ||
+    candidate.observedOutcome === "missing"
+      ? candidate.observedOutcome
+      : undefined;
+  const repairVerdict =
+    candidate.repairVerdict === "correct" ||
+    candidate.repairVerdict === "semantic-drift" ||
+    candidate.repairVerdict === "failed" ||
+    candidate.repairVerdict === "not-observed"
+      ? candidate.repairVerdict
+      : undefined;
+  const fallbackVerdict =
+    candidate.fallbackVerdict === "useful" ||
+    candidate.fallbackVerdict === "not-useful" ||
+    candidate.fallbackVerdict === "not-observed"
+      ? candidate.fallbackVerdict
+      : undefined;
+  const preservationVerdict =
+    candidate.preservationVerdict === "correct" ||
+    candidate.preservationVerdict === "overwritten" ||
+    candidate.preservationVerdict === "not-applicable"
+      ? candidate.preservationVerdict
+      : undefined;
+  const normalized: NonNullable<
+    QuestionHumanEvaluation["whiteboardRender"]
+  > = {
+    artifactId: readOptionalString(candidate.artifactId),
+    validationOperationId: readOptionalString(
+      candidate.validationOperationId
+    ),
+    repairOperationId: readOptionalString(candidate.repairOperationId),
+    candidateRevision:
+      typeof candidate.candidateRevision === "number"
+        ? candidate.candidateRevision
+        : undefined,
+    visibleRevision:
+      typeof candidate.visibleRevision === "number"
+        ? candidate.visibleRevision
+        : undefined,
+    observedOutcome,
+    repairVerdict,
+    fallbackVerdict,
+    preservationVerdict,
+  };
+  return Object.values(normalized).some((entry) => entry !== undefined)
+    ? normalized
+    : undefined;
 }
 
 function normalizeCurrentQuestionSettlementEvaluation(

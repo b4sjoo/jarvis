@@ -306,6 +306,118 @@ test("native speech telemetry never persists audio payloads", async () => {
   await manager.stop("test-complete");
 });
 
+test("records whiteboard validation and recovery artifacts", async () => {
+  const native = new ControlledRecordingInvoke();
+  const manager = new SessionRecordingManager(undefined, native.invoke);
+  await manager.start(START_OPTIONS);
+  await settle();
+
+  manager.recordWhiteboardRenderValidation({
+    traceId: "screen_trace_whiteboard",
+    taskId: "parent_1",
+    metadata: {
+      whiteboardRenderValidationOperationId: "validation_1",
+      whiteboardRenderValidationDisposition: "invalid-mermaid",
+      whiteboardRenderCandidateRevision: 2,
+      whiteboardRenderVisibleRevisionAfter: 1,
+      whiteboardRenderPreservedLastValid: true,
+    },
+    candidateContent: "```mermaid\nflowchart TD\n  broken[\n```",
+  });
+  manager.recordWhiteboardRenderRecovery({
+    traceId: "screen_trace_whiteboard",
+    taskId: "parent_1",
+    metadata: {
+      whiteboardRepairOperationId: "repair_1",
+      whiteboardRepairDisposition: "shadow-valid",
+      whiteboardRepairDurationMs: 420,
+      whiteboardRepairBehaviorMutationBlocked: true,
+    },
+    repairedMermaid: "flowchart TD\n  A[Client] --> B[API]",
+    asciiFallback: "Client -> API",
+  });
+  manager.recordTrace(
+    buildCompletedTrace("screen_trace_whiteboard", Date.now(), {
+      whiteboardArtifactId: "whiteboard_1",
+      whiteboardArtifactRevision: 1,
+      whiteboardArtifactDomainTrack: "general_sd",
+      whiteboardRenderValidationOperationId: "validation_1",
+      whiteboardRenderValidationDisposition: "invalid-mermaid",
+      whiteboardRenderCandidateRevision: 2,
+      whiteboardRenderVisibleRevisionBefore: 1,
+      whiteboardRenderVisibleRevisionAfter: 1,
+      whiteboardRenderPreservedLastValid: true,
+      whiteboardRenderStatus: "preserved-last-valid",
+      whiteboardRenderFallbackKind: "last-valid",
+      whiteboardRepairOperationId: "repair_1",
+      whiteboardRepairDisposition: "shadow-valid",
+      whiteboardRepairDurationMs: 420,
+      whiteboardRepairBehaviorMutationBlocked: true,
+    }),
+    "manual"
+  );
+  await settle();
+
+  const validationWrite = native.calls.find(
+    (call) =>
+      call.command === "write_meeting_session_recording_text" &&
+      stringArg(call, "relativePath") ===
+        "whiteboard/render-validations.jsonl"
+  );
+  const recoveryWrite = native.calls.find(
+    (call) =>
+      call.command === "write_meeting_session_recording_text" &&
+      stringArg(call, "relativePath") ===
+        "whiteboard/render-recoveries.jsonl"
+  );
+  assert.ok(validationWrite);
+  assert.ok(recoveryWrite);
+  assert.match(stringArg(validationWrite, "payload"), /invalid-mermaid/);
+  assert.match(stringArg(validationWrite, "payload"), /broken/);
+  assert.match(stringArg(recoveryWrite, "payload"), /shadow-valid/);
+  assert.match(stringArg(recoveryWrite, "payload"), /Client -> API/);
+
+  const timelinePayload = native.calls
+    .filter(
+      (call) =>
+        call.command === "write_meeting_session_recording_text" &&
+        stringArg(call, "relativePath") === "timeline.jsonl"
+    )
+    .map((call) => stringArg(call, "payload"))
+    .join("");
+  assert.match(timelinePayload, /whiteboard-render-validation/);
+  assert.match(timelinePayload, /whiteboard-render-recovery/);
+
+  const summaryWrite = native.calls.find(
+    (call) =>
+      call.command === "write_meeting_session_recording_text" &&
+      stringArg(call, "relativePath") ===
+        "traces/screen_trace_whiteboard/summary.json"
+  );
+  assert.ok(summaryWrite);
+  const summary = parsePayload(summaryWrite);
+  assert.equal(summary.version, 26);
+  assert.deepEqual(summary.whiteboard, {
+    artifactId: "whiteboard_1",
+    revision: 1,
+    domainTrack: "general_sd",
+    validationOperationId: "validation_1",
+    candidateRevision: 2,
+    validationDisposition: "invalid-mermaid",
+    visibleRevisionBefore: 1,
+    visibleRevisionAfter: 1,
+    preservedLastValid: true,
+    renderStatus: "preserved-last-valid",
+    fallbackKind: "last-valid",
+    repairOperationId: "repair_1",
+    repairDisposition: "shadow-valid",
+    repairDurationMs: 420,
+    repairBehaviorMutationBlocked: true,
+  });
+
+  await manager.stop("test-complete");
+});
+
 test("audio segment dispositions use a dedicated payload-free stream", async () => {
   const native = new ControlledRecordingInvoke();
   const manager = new SessionRecordingManager(undefined, native.invoke);
@@ -917,7 +1029,7 @@ test("compact trace summaries preserve task boundary and cross-domain evidence",
   );
   assert.ok(summaryWrite);
   const summary = parsePayload(summaryWrite);
-  assert.equal(summary.version, 25);
+  assert.equal(summary.version, 26);
   assert.equal(summary.taskRelation, "new-parent");
   assert.equal(summary.logicalQuestionUnitRevision, 3);
   assert.deepEqual(summary.logicalQuestionSourceTurnIds, ["turn_1", "turn_2"]);
@@ -1086,7 +1198,7 @@ test("compact trace summaries preserve bounded STT request evidence", async () =
   );
   assert.ok(summaryWrite);
   const summary = parsePayload(summaryWrite);
-  assert.equal(summary.version, 25);
+  assert.equal(summary.version, 26);
   assert.equal(
     (summary.timingsMs as Record<string, unknown>).stt,
     1_580
@@ -1228,7 +1340,7 @@ test("refreshes compact STT lifecycle evidence after a late provider abort", asy
   );
   assert.ok(summaryWrites.length >= 2);
   const summary = parsePayload(summaryWrites[summaryWrites.length - 1]!);
-  assert.equal(summary.version, 25);
+  assert.equal(summary.version, 26);
   assert.equal(
     (summary.sttRequest as Record<string, unknown>).abortRequested,
     true
@@ -1293,7 +1405,7 @@ test("compact trace summaries preserve hard memory invalidation evidence", async
   );
   assert.ok(summaryWrite);
   const summary = parsePayload(summaryWrite);
-  assert.equal(summary.version, 25);
+  assert.equal(summary.version, 26);
   const memory = summary.memory as Record<string, unknown>;
   assert.equal(memory.authorityRevision, 2);
   assert.equal(memory.invalidationKind, "hard");
@@ -1525,7 +1637,7 @@ test("records compact current-question settlement and execution-plan evidence", 
   assert.equal(serializedPlan.includes("taskSnapshot"), false);
   assert.equal(serializedPlan.includes("variables"), false);
   const summary = parsePayload(summaryWrite);
-  assert.equal(summary.version, 25);
+  assert.equal(summary.version, 26);
   assert.equal(
     (
       summary.currentQuestionSettlement as Record<string, unknown>
@@ -1621,7 +1733,7 @@ test("records a current-question term correction without copying provider state"
     false
   );
   const summary = parsePayload(summaryWrite);
-  assert.equal(summary.version, 25);
+  assert.equal(summary.version, 26);
   assert.equal(
     summary.manualTermCorrectionId,
     "term_correction_hnsw"

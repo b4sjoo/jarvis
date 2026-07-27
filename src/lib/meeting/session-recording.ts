@@ -50,7 +50,7 @@ import {
 import { serializeMeetingTraceExport } from "./trace.js";
 
 const SESSION_RECORDING_SCHEMA_VERSION = 1;
-const SESSION_TRACE_SUMMARY_SCHEMA_VERSION = 25;
+const SESSION_TRACE_SUMMARY_SCHEMA_VERSION = 26;
 const SESSION_TRACE_INDEX_SCHEMA_VERSION = 1;
 
 interface SessionRecordingStartOptions {
@@ -111,6 +111,8 @@ interface SessionRecordingEvent {
     | "current-question-settlement"
     | "settled-advisor-execution-plan"
     | "response-only-task-scope"
+    | "whiteboard-render-validation"
+    | "whiteboard-render-recovery"
     | "capture-lifecycle"
     | "native-speech-event"
     | "native-audio-liveness"
@@ -796,6 +798,26 @@ export interface SessionCompactTraceSummary {
     artifactId?: string;
     revision?: number;
     domainTrack?: string;
+    validationOperationId?: string;
+    candidateKind?: string;
+    candidateRevision?: number;
+    validationDisposition?: string;
+    validationDurationMs?: number;
+    parserErrorClass?: string;
+    visibleRevisionBefore?: number;
+    visibleRevisionAfter?: number;
+    preservedLastValid?: boolean;
+    renderStatus?: string;
+    fallbackKind?: string;
+    fallbackReason?: string;
+    repairOperationId?: string;
+    repairDisposition?: string;
+    repairProviderDisposition?: string;
+    repairParseDisposition?: string;
+    repairQueueWaitMs?: number;
+    repairDurationMs?: number;
+    repairRevalidationDisposition?: string;
+    repairBehaviorMutationBlocked?: boolean;
   };
   manualPhase?: {
     from?: string;
@@ -2361,6 +2383,82 @@ export class SessionRecordingManager {
       [artifactPath],
       traceId,
       scope.preservedParentId
+    );
+  }
+
+  recordWhiteboardRenderValidation({
+    traceId,
+    taskId,
+    metadata,
+    candidateContent,
+  }: {
+    traceId: string;
+    taskId?: string;
+    metadata: Record<string, unknown>;
+    candidateContent?: string;
+  }) {
+    const session = this.getWritableSession({ traceId });
+    if (!session) return;
+    const artifactPath = "whiteboard/render-validations.jsonl";
+    const payload = {
+      version: 1,
+      recordedAt: Date.now(),
+      sessionId: session.sessionId,
+      traceId,
+      taskId,
+      metadata,
+      candidateContent,
+    };
+    this.enqueue(session, () =>
+      this.appendJsonl(session, artifactPath, payload)
+    );
+    this.recordEvent(
+      "whiteboard-render-validation",
+      metadata,
+      [artifactPath],
+      traceId,
+      taskId
+    );
+  }
+
+  recordWhiteboardRenderRecovery({
+    traceId,
+    taskId,
+    metadata,
+    candidateContent,
+    repairedMermaid,
+    asciiFallback,
+  }: {
+    traceId: string;
+    taskId?: string;
+    metadata: Record<string, unknown>;
+    candidateContent?: string;
+    repairedMermaid?: string;
+    asciiFallback?: string;
+  }) {
+    const session = this.getWritableSession({ traceId });
+    if (!session) return;
+    const artifactPath = "whiteboard/render-recoveries.jsonl";
+    const payload = {
+      version: 1,
+      recordedAt: Date.now(),
+      sessionId: session.sessionId,
+      traceId,
+      taskId,
+      metadata,
+      candidateContent,
+      repairedMermaid,
+      asciiFallback,
+    };
+    this.enqueue(session, () =>
+      this.appendJsonl(session, artifactPath, payload)
+    );
+    this.recordEvent(
+      "whiteboard-render-recovery",
+      metadata,
+      [artifactPath],
+      traceId,
+      taskId
     );
   }
 
@@ -5498,11 +5596,101 @@ function buildWhiteboardTraceSummary(
   const artifactId = metadata.whiteboardArtifactId;
   const revision = metadata.whiteboardArtifactRevision;
   const domainTrack = metadata.whiteboardArtifactDomainTrack;
-  if (!artifactId && revision === undefined && !domainTrack) return undefined;
+  const validationOperationId = readFirstString(
+    metadataSources,
+    "whiteboardRenderValidationOperationId"
+  );
+  const repairOperationId = readFirstString(
+    metadataSources,
+    "whiteboardRepairOperationId"
+  );
+  if (
+    !artifactId &&
+    revision === undefined &&
+    !domainTrack &&
+    !validationOperationId &&
+    !repairOperationId
+  ) {
+    return undefined;
+  }
   return {
     artifactId,
     revision,
     domainTrack,
+    validationOperationId,
+    candidateKind: readFirstString(
+      metadataSources,
+      "whiteboardRenderCandidateKind"
+    ),
+    candidateRevision: readFirstNumberFromMetadata(
+      metadataSources,
+      "whiteboardRenderCandidateRevision"
+    ),
+    validationDisposition: readFirstString(
+      metadataSources,
+      "whiteboardRenderValidationDisposition"
+    ),
+    validationDurationMs: readFirstNumberFromMetadata(
+      metadataSources,
+      "whiteboardRenderValidationDurationMs"
+    ),
+    parserErrorClass: readFirstString(
+      metadataSources,
+      "whiteboardRenderParserErrorClass"
+    ),
+    visibleRevisionBefore: readFirstNumberFromMetadata(
+      metadataSources,
+      "whiteboardRenderVisibleRevisionBefore"
+    ),
+    visibleRevisionAfter: readFirstNumberFromMetadata(
+      metadataSources,
+      "whiteboardRenderVisibleRevisionAfter"
+    ),
+    preservedLastValid: readFirstBoolean(
+      metadataSources,
+      "whiteboardRenderPreservedLastValid"
+    ),
+    renderStatus: readFirstString(
+      metadataSources,
+      "whiteboardRenderStatus"
+    ),
+    fallbackKind: readFirstString(
+      metadataSources,
+      "whiteboardRenderFallbackKind"
+    ),
+    fallbackReason: readFirstString(
+      metadataSources,
+      "whiteboardRenderFallbackReason"
+    ),
+    repairOperationId,
+    repairDisposition: readFirstString(
+      metadataSources,
+      "whiteboardRepairDisposition"
+    ),
+    repairProviderDisposition: readFirstString(
+      metadataSources,
+      "whiteboardRepairProviderDisposition"
+    ),
+    repairParseDisposition: readFirstString(
+      metadataSources,
+      "whiteboardRepairParseDisposition"
+    ),
+    repairQueueWaitMs: readFirstNumberFromMetadata(
+      metadataSources,
+      "whiteboardRepairQueueWaitMs"
+    ),
+    repairDurationMs: readFirstNumberFromMetadata(
+      metadataSources,
+      "whiteboardRepairDurationMs"
+    ),
+    repairRevalidationDisposition: readFirstString(
+      metadataSources,
+      "whiteboardRepairRevalidationDisposition"
+    ),
+    repairBehaviorMutationBlocked: readFirstBoolean(
+      metadataSources,
+      "whiteboardRepairBehaviorMutationBlocked"
+    ),
   };
 }
 

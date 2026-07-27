@@ -588,8 +588,17 @@ export interface WhiteboardRenderState {
   lastValidRevision?: number;
   status: WhiteboardRenderStatus;
   validationOperationId: string;
+  candidateFingerprint?: string;
   validationDurationMs?: number;
+  repairOperationId?: string;
+  repairDurationMs?: number;
+  repairDisposition?: string;
   parserErrorClass?: string;
+  fallbackKind?:
+    | "deterministic-ascii"
+    | "model-ascii"
+    | "last-valid"
+    | "renderer-boundary";
   fallbackReason?: string;
   validatedAt?: number;
 }
@@ -1520,6 +1529,24 @@ export interface CurrentQuestionSettlementHumanEvaluation {
   notes?: string;
 }
 
+export interface WhiteboardRenderHumanEvaluation {
+  artifactId?: string;
+  validationOperationId?: string;
+  repairOperationId?: string;
+  candidateRevision?: number;
+  visibleRevision?: number;
+  observedOutcome?:
+    | "rendered"
+    | "repaired"
+    | "preserved-last-valid"
+    | "ascii-fallback"
+    | "error-visible"
+    | "missing";
+  repairVerdict?: "correct" | "semantic-drift" | "failed" | "not-observed";
+  fallbackVerdict?: "useful" | "not-useful" | "not-observed";
+  preservationVerdict?: "correct" | "overwritten" | "not-applicable";
+}
+
 export interface QuestionHumanEvaluation {
   id: string;
   sessionId?: string;
@@ -1582,6 +1609,7 @@ export interface QuestionHumanEvaluation {
   advisorIntent?: AdvisorIntentHumanEvaluation;
   answerSufficiency?: AnswerSufficiencyHumanEvaluation;
   currentQuestionSettlement?: CurrentQuestionSettlementHumanEvaluation;
+  whiteboardRender?: WhiteboardRenderHumanEvaluation;
   memoryRetrievalSnapshot?: MemoryRetrievalEvaluationSnapshot;
   memoryEntryLabels: MemoryEntryEvaluationLabel[];
   missingExpectedMemory: MissingExpectedMemoryLabel[];

@@ -580,6 +580,64 @@ test("stores whiteboard, manual next, and diagram overlay evaluation fields", ()
   ]);
 });
 
+test("stores whiteboard render outcomes separately from content quality", () => {
+  const initial = upsertQuestionHumanEvaluation(
+    [],
+    {
+      sessionId: "session_1",
+      traceId: "trace_1",
+      traceKind: "screen",
+      questionId: "question_1",
+      whiteboardArtifactId: "whiteboard_1",
+      whiteboardRender: {
+        artifactId: "whiteboard_1",
+        validationOperationId: "validation_1",
+        candidateRevision: 3,
+        visibleRevision: 2,
+      },
+    },
+    {
+      whiteboard: {
+        verdict: "ok",
+        reasons: ["whiteboard-useful"],
+      },
+      whiteboardRender: {
+        observedOutcome: "preserved-last-valid",
+        preservationVerdict: "correct",
+      },
+    }
+  );
+  const updated = upsertQuestionHumanEvaluation(
+    initial,
+    {
+      sessionId: "session_1",
+      traceId: "trace_1",
+      traceKind: "screen",
+      questionId: "question_1",
+    },
+    {
+      whiteboardRender: {
+        repairOperationId: "repair_1",
+        repairVerdict: "semantic-drift",
+        fallbackVerdict: "useful",
+      },
+    }
+  );
+
+  assert.equal(updated[0].whiteboard.verdict, "ok");
+  assert.deepEqual(updated[0].whiteboardRender, {
+    artifactId: "whiteboard_1",
+    validationOperationId: "validation_1",
+    repairOperationId: "repair_1",
+    candidateRevision: 3,
+    visibleRevision: 2,
+    observedOutcome: "preserved-last-valid",
+    repairVerdict: "semantic-drift",
+    fallbackVerdict: "useful",
+    preservationVerdict: "correct",
+  });
+});
+
 test("stores manual runtime type correction as HITL classification feedback", () => {
   const evaluations = upsertQuestionHumanEvaluation(
     [],

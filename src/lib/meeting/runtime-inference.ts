@@ -73,7 +73,7 @@ const DEFINITIONS: Record<
     operationKind: "whiteboard-syntax-repair",
     lane: "background",
     timeoutMs: 3_000,
-    maxOutputTokens: 256,
+    maxOutputTokens: 768,
     quiescenceMs: 0,
     maxStartsPerBudgetSlot: 1,
   },
