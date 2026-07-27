@@ -146,6 +146,7 @@ import {
   createMeetingId,
   detectAnswerSufficiencyShadow,
   detectInterviewCompany,
+  formatInterviewCompanyDecisionForTrace,
   formatDisplayTranscriptForTrace,
   calculateWordEquivalent,
   classifyMeTurn,
@@ -7506,7 +7507,29 @@ export function useMeetingAssistant() {
           typeof metadata.transcriptAppendReason === "string"
             ? metadata.transcriptAppendReason
             : "accepted-source-turn",
+        ...formatInterviewCompanyDecisionForTrace(
+          interviewContextUpdate?.companyDecision
+        ),
       });
+
+      if (
+        interviewContextUpdate?.companyDecision &&
+        interviewContextUpdate.companyDecision.disposition !==
+          "no-candidate"
+      ) {
+        const companyStepId = traceStoreRef.current.startStep(
+          traceId,
+          "Interview company candidate evaluated",
+          formatInterviewCompanyDecisionForTrace(
+            interviewContextUpdate.companyDecision
+          )
+        );
+        traceStoreRef.current.finishStep(
+          traceId,
+          companyStepId,
+          "success"
+        );
+      }
 
       if (interviewContextUpdate?.changed) {
         const targetCompany =
@@ -12128,6 +12151,9 @@ export function useMeetingAssistant() {
                 amazonLeadershipPrinciple:
                   screenPreflight.amazonLeadershipPrinciple,
                 contextUpdated: Boolean(preflightContextUpdate?.changed),
+                ...formatInterviewCompanyDecisionForTrace(
+                  preflightContextUpdate?.companyDecision
+                ),
               }
             );
             traceStoreRef.current.updateMetadata(trace.id, {
@@ -12139,7 +12165,30 @@ export function useMeetingAssistant() {
               topicDomain: screenPreflight.topicDomain,
               projectAnchor: screenPreflight.projectAnchor,
               classifierConfidence: screenPreflight.confidence,
+              ...formatInterviewCompanyDecisionForTrace(
+                preflightContextUpdate?.companyDecision
+              ),
             });
+
+            if (
+              preflightContextUpdate?.companyDecision &&
+              preflightContextUpdate.companyDecision.disposition !==
+                "no-candidate"
+            ) {
+              const companyStepId =
+                traceStoreRef.current.startStep(
+                  trace.id,
+                  "Interview company candidate evaluated",
+                  formatInterviewCompanyDecisionForTrace(
+                    preflightContextUpdate.companyDecision
+                  )
+                );
+              traceStoreRef.current.finishStep(
+                trace.id,
+                companyStepId,
+                "success"
+              );
+            }
 
             if (preflightContextUpdate?.changed) {
               const interviewStepId = traceStoreRef.current.startStep(

@@ -1,8 +1,12 @@
 import type {
+  InterviewCompanyCandidateDisposition,
+  InterviewCompanyHistoryEntry,
+  InterviewCompanyMentionRole,
   InterviewSessionBrief,
   InterviewSessionContext,
   InterviewSessionContextSource,
   InterviewTargetCompany,
+  TranscriptSpeaker,
   TranscriptTurn,
 } from "./types";
 
@@ -97,34 +101,24 @@ export const INTERVIEW_COMPANY_OPTIONS = COMPANY_DEFINITIONS.map(
   })
 );
 
-const INTERVIEW_CONTEXT_MARKERS = [
-  "interview",
-  "interviewer",
-  "candidate",
-  "hiring",
-  "recruiter",
-  "onsite",
-  "phone screen",
-  "loop",
-  "round",
-  "behavioral",
-  "behavioural",
-  "coding round",
-  "system design",
-  "role",
-  "position",
-  "today's discussion",
-  "thanks for joining",
-  "thank you for joining",
-  "welcome",
-];
-
 const TARGET_COMPANY_LOCK_CONFIDENCE = 0.9;
+const MAX_COMPANY_HISTORY_ENTRIES = 24;
+
+export interface InterviewCompanyDetectionDecision {
+  candidate?: InterviewTargetCompany;
+  mentionRole: InterviewCompanyMentionRole;
+  disposition: InterviewCompanyCandidateDisposition;
+  source: InterviewSessionContextSource;
+  speaker?: TranscriptSpeaker;
+  mentionedCompanies: string[];
+  reason: string;
+}
 
 export interface InterviewSessionUpdate {
   context: InterviewSessionContext;
   changed: boolean;
   targetCompany?: InterviewTargetCompany;
+  companyDecision?: InterviewCompanyDetectionDecision;
 }
 
 export interface AmazonLeadershipPrincipleHint {
@@ -511,10 +505,15 @@ export function updateInterviewSessionContextFromTurn(
   turn: TranscriptTurn,
   now = Date.now()
 ): InterviewSessionUpdate {
-  const detectedCompany = detectInterviewCompany(turn.text, now, "transcript");
-  return updateInterviewSessionContextWithDetectedCompany(
+  const companyDecision = detectInterviewCompanyDecision({
+    text: turn.text,
+    now,
+    source: "transcript",
+    speaker: turn.speaker,
+  });
+  return updateInterviewSessionContextWithCompanyDecision(
     currentContext,
-    detectedCompany
+    companyDecision
   );
 }
 
@@ -524,10 +523,15 @@ export function updateInterviewSessionContextFromScreenText(
   evidence = text,
   now = Date.now()
 ): InterviewSessionUpdate {
-  const detectedCompany = detectInterviewCompany(text, now, "screen", evidence);
-  return updateInterviewSessionContextWithDetectedCompany(
+  const companyDecision = detectInterviewCompanyDecision({
+    text,
+    now,
+    source: "screen",
+    evidence,
+  });
+  return updateInterviewSessionContextWithCompanyDecision(
     currentContext,
-    detectedCompany
+    companyDecision
   );
 }
 
@@ -617,39 +621,138 @@ function createInterviewTargetCompanyFromBrief(
   };
 }
 
-function updateInterviewSessionContextWithDetectedCompany(
+function updateInterviewSessionContextWithCompanyDecision(
   currentContext: InterviewSessionContext | undefined,
-  detectedCompany: InterviewTargetCompany | undefined
+  companyDecision: InterviewCompanyDetectionDecision
 ): InterviewSessionUpdate {
   const context = currentContext ? { ...currentContext } : {};
 
-  if (!detectedCompany) {
-    return { context, changed: false };
+  if (
+    companyDecision.disposition !== "candidate-proposed" ||
+    !companyDecision.candidate
+  ) {
+    return {
+      context: appendCompanyHistory(context, companyDecision),
+      changed: false,
+      companyDecision,
+    };
   }
 
   const previous = context.targetCompany;
-  const shouldReplace = shouldReplaceTargetCompany(previous, detectedCompany);
+  const replacement = decideTargetCompanyReplacement(
+    previous,
+    companyDecision.candidate
+  );
 
-  if (!shouldReplace) {
-    return { context, changed: false };
+  if (!replacement.replace) {
+    const rejectedDecision: InterviewCompanyDetectionDecision = {
+      ...companyDecision,
+      disposition: replacement.disposition,
+      reason: replacement.reason,
+    };
+    return {
+      context: appendCompanyHistory(context, rejectedDecision),
+      changed: false,
+      companyDecision: rejectedDecision,
+    };
   }
 
-  context.targetCompany = detectedCompany;
-  return { context, changed: true, targetCompany: detectedCompany };
+  const committedDecision: InterviewCompanyDetectionDecision = {
+    ...companyDecision,
+    disposition: "candidate-committed",
+    reason: replacement.reason,
+  };
+  context.targetCompany = companyDecision.candidate;
+  return {
+    context: appendCompanyHistory(context, committedDecision),
+    changed: true,
+    targetCompany: companyDecision.candidate,
+    companyDecision: committedDecision,
+  };
 }
 
-function shouldReplaceTargetCompany(
+function decideTargetCompanyReplacement(
   previous: InterviewTargetCompany | undefined,
   detectedCompany: InterviewTargetCompany
-) {
-  if (!previous) return true;
-  if (detectedCompany.normalized === previous.normalized) return true;
-  if (previous.confidence >= TARGET_COMPANY_LOCK_CONFIDENCE) return false;
+): {
+  replace: boolean;
+  disposition:
+    | "candidate-committed"
+    | "candidate-rejected-lock"
+    | "candidate-rejected-confidence";
+  reason: string;
+} {
+  if (!previous) {
+    return {
+      replace: true,
+      disposition: "candidate-committed",
+      reason: "no-confirmed-target-company",
+    };
+  }
 
-  return (
+  const previousAuthority = companySourceAuthority(previous.source);
+  const detectedAuthority = companySourceAuthority(detectedCompany.source);
+  const sameCompany =
+    detectedCompany.normalized === previous.normalized;
+  const lockedByUser =
+    (previous.source === "brief" || previous.source === "manual") &&
+    previous.confidence >= TARGET_COMPANY_LOCK_CONFIDENCE;
+
+  if (lockedByUser && detectedAuthority < previousAuthority) {
+    return {
+      replace: false,
+      disposition: "candidate-rejected-lock",
+      reason: sameCompany
+        ? "same-company-lower-authority-cannot-downgrade-lock"
+        : "different-company-cannot-overwrite-user-lock",
+    };
+  }
+
+  if (sameCompany) {
+    if (
+      detectedAuthority < previousAuthority ||
+      detectedCompany.confidence <= previous.confidence
+    ) {
+      return {
+        replace: false,
+        disposition: "candidate-rejected-confidence",
+        reason: "same-company-update-would-lower-authority-or-confidence",
+      };
+    }
+    return {
+      replace: true,
+      disposition: "candidate-committed",
+      reason: "same-company-higher-authority-or-confidence",
+    };
+  }
+
+  if (
+    previous.confidence >= TARGET_COMPANY_LOCK_CONFIDENCE &&
+    detectedAuthority <= previousAuthority
+  ) {
+    return {
+      replace: false,
+      disposition: "candidate-rejected-lock",
+      reason: "confirmed-company-requires-higher-authority-replacement",
+    };
+  }
+
+  if (
     detectedCompany.confidence >= 0.95 &&
     detectedCompany.confidence > previous.confidence + 0.05
-  );
+  ) {
+    return {
+      replace: true,
+      disposition: "candidate-committed",
+      reason: "higher-confidence-explicit-target-replacement",
+    };
+  }
+
+  return {
+    replace: false,
+    disposition: "candidate-rejected-confidence",
+    reason: "replacement-threshold-not-met",
+  };
 }
 
 export function detectInterviewCompany(
@@ -658,88 +761,489 @@ export function detectInterviewCompany(
   source: InterviewSessionContextSource = "transcript",
   evidence = text
 ): InterviewTargetCompany | undefined {
+  return detectInterviewCompanyDecision({
+    text,
+    now,
+    source,
+    evidence,
+    speaker: source === "transcript" ? "them" : undefined,
+  }).candidate;
+}
+
+export function detectInterviewCompanyDecision({
+  text,
+  now = Date.now(),
+  source = "transcript",
+  evidence = text,
+  speaker,
+}: {
+  text: string;
+  now?: number;
+  source?: InterviewSessionContextSource;
+  evidence?: string;
+  speaker?: TranscriptSpeaker;
+}): InterviewCompanyDetectionDecision {
   const normalizedText = normalizeForMatching(text);
-  if (!normalizedText) return undefined;
+  if (!normalizedText) {
+    return noCompanyCandidateDecision(source, speaker);
+  }
 
-  const hasInterviewMarker = INTERVIEW_CONTEXT_MARKERS.some((marker) =>
-    normalizedText.includes(marker)
+  const mentionedCompanies = findKnownCompanyMentions(normalizedText);
+  const explicitTargets = findExplicitTargetCompanies(text, normalizedText);
+  const uniqueTargets = uniqueCompanies(explicitTargets);
+
+  if (uniqueTargets.length > 1) {
+    return {
+      mentionRole: "unknown",
+      disposition: "candidate-conflict",
+      source,
+      speaker,
+      mentionedCompanies: uniqueTargets.map(
+        (company) => company.displayName
+      ),
+      reason: "multiple-explicit-target-companies",
+    };
+  }
+
+  if (uniqueTargets.length === 1) {
+    return authorizeCompanyMentionForSpeaker({
+      company: uniqueTargets[0],
+      confidence: 0.97,
+      mentionRole: "interview-target",
+      source,
+      speaker,
+      evidence,
+      now,
+      mentionedCompanies,
+      reason: "explicit-interview-target-phrase",
+    });
+  }
+
+  if (isCompanyComparison(normalizedText, mentionedCompanies)) {
+    return rejectedCompanyRoleDecision({
+      company: mentionedCompanies[0],
+      mentionRole: "comparison-only",
+      source,
+      speaker,
+      mentionedCompanies,
+      reason: "company-mentioned-only-as-comparison",
+    });
+  }
+
+  const historyCompany = findCandidateHistoryCompany(
+    normalizedText,
+    mentionedCompanies
   );
+  if (historyCompany) {
+    return rejectedCompanyRoleDecision({
+      company: historyCompany,
+      mentionRole: "candidate-history",
+      source,
+      speaker,
+      mentionedCompanies,
+      reason: "company-mentioned-as-candidate-history",
+    });
+  }
 
-  const candidates = COMPANY_DEFINITIONS.flatMap((company) =>
-    company.aliases.map((alias) => {
-      const normalizedAlias = normalizeForMatching(alias);
-      if (!containsNormalizedPhrase(normalizedText, normalizedAlias)) {
-        return undefined;
-      }
+  const affiliationCompany = findInterviewerAffiliationCompany(
+    text,
+    normalizedText,
+    mentionedCompanies
+  );
+  if (affiliationCompany) {
+    return authorizeCompanyMentionForSpeaker({
+      company: affiliationCompany,
+      confidence: 0.92,
+      mentionRole: "interviewer-employer",
+      source,
+      speaker,
+      evidence,
+      now,
+      mentionedCompanies,
+      reason: "bounded-interviewer-affiliation",
+    });
+  }
 
-      const hasCompanyInterviewPhrase =
-        normalizedText.includes(`${normalizedAlias} interview`) ||
-        normalizedText.includes(`${normalizedAlias} round`) ||
-        normalizedText.includes(`${normalizedAlias} loop`) ||
-        normalizedText.includes(`${normalizedAlias} onsite`) ||
-        normalizedText.includes(`${normalizedAlias} phone screen`) ||
-        normalizedText.includes(`${normalizedAlias} role`) ||
-        normalizedText.includes(`${normalizedAlias} position`);
-      const hasInterviewerIntro = new RegExp(
-        `\\b(i am|i m|im|this is|my name is|we are|we re)\\b.{0,80}\\b(from|at|with)\\s+${escapeRegExp(
-          normalizedAlias
-        )}\\b`
-      ).test(normalizedText) ||
-        new RegExp(
-          `\\b(i|we)\\b.{0,30}\\b(work|working|worked|come|coming)\\b.{0,40}\\b(at|from|with)\\s+${escapeRegExp(
-            normalizedAlias
-          )}\\b`
-        ).test(normalizedText);
-      const hasTargetPhrase = new RegExp(
-        `\\b(interviewing|interview|onsite|loop|round|phone screen)\\b.{0,40}\\b(with|at|for)\\s+${escapeRegExp(
-          normalizedAlias
-        )}\\b`
-      ).test(normalizedText);
-      const hasScreenCompanyPhrase =
-        source === "screen" &&
-        new RegExp(
-          `\\b(from|for|at)\\s+${escapeRegExp(normalizedAlias)}\\b`
-        ).test(normalizedText);
+  if (mentionedCompanies.length) {
+    return rejectedCompanyRoleDecision({
+      company: mentionedCompanies[0],
+      mentionRole: "unknown",
+      source,
+      speaker,
+      mentionedCompanies,
+      reason: "company-mention-has-no-target-authority",
+    });
+  }
 
-      let confidence = 0;
-      if (hasCompanyInterviewPhrase || hasTargetPhrase) {
-        confidence = 0.95;
-      } else if (hasInterviewerIntro) {
-        confidence = 0.92;
-      } else if (hasScreenCompanyPhrase) {
-        confidence = 0.9;
-      } else if (hasInterviewMarker) {
-        confidence = 0.72;
-      }
+  return noCompanyCandidateDecision(source, speaker);
+}
 
-      if (!confidence) return undefined;
-
-      return {
-        company,
-        confidence,
-        aliasLength: normalizedAlias.length,
-      };
-    })
-  ).filter(Boolean) as Array<{
-    company: CompanyDefinition;
-    confidence: number;
-    aliasLength: number;
-  }>;
-
-  const bestCandidate = candidates.sort(
-    (left, right) =>
-      right.confidence - left.confidence || right.aliasLength - left.aliasLength
-  )[0];
-  if (!bestCandidate) return undefined;
-
+export function formatInterviewCompanyDecisionForTrace(
+  decision: InterviewCompanyDetectionDecision | undefined
+) {
+  const companyValue =
+    decision?.candidate?.value ?? decision?.mentionedCompanies[0];
   return {
-    value: bestCandidate.company.displayName,
-    normalized: bestCandidate.company.normalized,
-    confidence: bestCandidate.confidence,
+    companyCandidateDisposition: decision?.disposition ?? "no-candidate",
+    companyCandidateMentionRole: decision?.mentionRole ?? "unknown",
+    companyCandidateValue: companyValue,
+    companyCandidateNormalized:
+      decision?.candidate?.normalized ??
+      normalizeCompanyHistoryValue(companyValue),
+    companyCandidateConfidence: decision?.candidate?.confidence,
+    companyCandidateSource: decision?.source,
+    companyCandidateSpeaker: decision?.speaker,
+    companyCandidateMentionCount:
+      decision?.mentionedCompanies.length ?? 0,
+    companyCandidateReason: decision?.reason,
+  };
+}
+
+function companySourceAuthority(source: InterviewSessionContextSource) {
+  if (source === "brief") return 4;
+  if (source === "manual") return 3;
+  if (source === "screen") return 2;
+  return 1;
+}
+
+function appendCompanyHistory(
+  context: InterviewSessionContext,
+  decision: InterviewCompanyDetectionDecision
+) {
+  if (decision.disposition === "no-candidate") return context;
+  const occurredAt = decision.candidate?.updatedAt ?? Date.now();
+  const company =
+    decision.candidate?.value ?? decision.mentionedCompanies[0];
+  const historyEntry: InterviewCompanyHistoryEntry = {
+    id: `company_history_${occurredAt}_${Math.random()
+      .toString(36)
+      .slice(2, 8)}`,
+    company,
+    normalized:
+      decision.candidate?.normalized ??
+      normalizeCompanyHistoryValue(company),
+    mentionRole: decision.mentionRole,
+    disposition: decision.disposition,
+    source: decision.source,
+    speaker: decision.speaker,
+    reason: decision.reason,
+    occurredAt,
+  };
+  return {
+    ...context,
+    companyHistory: [
+      ...(context.companyHistory ?? []),
+      historyEntry,
+    ].slice(-MAX_COMPANY_HISTORY_ENTRIES),
+  };
+}
+
+function normalizeCompanyHistoryValue(value: string | undefined) {
+  const normalized = normalizeForMatching(value ?? "");
+  return normalized ? normalized.replace(/\s+/g, "-") : undefined;
+}
+
+function noCompanyCandidateDecision(
+  source: InterviewSessionContextSource,
+  speaker?: TranscriptSpeaker
+): InterviewCompanyDetectionDecision {
+  return {
+    mentionRole: "unknown",
+    disposition: "no-candidate",
+    source,
+    speaker,
+    mentionedCompanies: [],
+    reason: "no-company-candidate",
+  };
+}
+
+function authorizeCompanyMentionForSpeaker({
+  company,
+  confidence,
+  mentionRole,
+  source,
+  speaker,
+  evidence,
+  now,
+  mentionedCompanies,
+  reason,
+}: {
+  company: CompanyDefinition;
+  confidence: number;
+  mentionRole: "interview-target" | "interviewer-employer";
+  source: InterviewSessionContextSource;
+  speaker?: TranscriptSpeaker;
+  evidence: string;
+  now: number;
+  mentionedCompanies: CompanyDefinition[];
+  reason: string;
+}): InterviewCompanyDetectionDecision {
+  const candidate: InterviewTargetCompany = {
+    value: company.displayName,
+    normalized: company.normalized,
+    confidence,
     source,
     evidence: evidence.trim().slice(0, 220),
     updatedAt: now,
   };
+  const speakerAuthorized =
+    source !== "transcript" || speaker === "them";
+  return {
+    candidate,
+    mentionRole,
+    disposition: speakerAuthorized
+      ? "candidate-proposed"
+      : "candidate-rejected-speaker",
+    source,
+    speaker,
+    mentionedCompanies: uniqueCompanies([
+      company,
+      ...mentionedCompanies,
+    ]).map((mentioned) => mentioned.displayName),
+    reason: speakerAuthorized
+      ? reason
+      : "transcript-company-candidate-requires-interviewer-speaker",
+  };
+}
+
+function rejectedCompanyRoleDecision({
+  company,
+  mentionRole,
+  source,
+  speaker,
+  mentionedCompanies,
+  reason,
+}: {
+  company?: CompanyDefinition;
+  mentionRole: "candidate-history" | "comparison-only" | "unknown";
+  source: InterviewSessionContextSource;
+  speaker?: TranscriptSpeaker;
+  mentionedCompanies: CompanyDefinition[];
+  reason: string;
+}): InterviewCompanyDetectionDecision {
+  return {
+    mentionRole,
+    disposition: "candidate-rejected-role",
+    source,
+    speaker,
+    mentionedCompanies: uniqueCompanies([
+      ...(company ? [company] : []),
+      ...mentionedCompanies,
+    ]).map((mentioned) => mentioned.displayName),
+    reason,
+  };
+}
+
+function findKnownCompanyMentions(normalizedText: string) {
+  return uniqueCompanies(
+    COMPANY_DEFINITIONS.filter((company) =>
+      company.aliases.some((alias) =>
+        containsNormalizedPhrase(
+          normalizedText,
+          normalizeForMatching(alias)
+        )
+      )
+    )
+  );
+}
+
+function findExplicitTargetCompanies(
+  originalText: string,
+  normalizedText: string
+) {
+  const targets: CompanyDefinition[] = [];
+
+  for (const company of COMPANY_DEFINITIONS) {
+    const matched = company.aliases.some((alias) => {
+      const normalizedAlias = normalizeForMatching(alias);
+      const aliasPattern = escapeRegExp(normalizedAlias);
+      return (
+        new RegExp(
+          `\\b${aliasPattern}\\s+(?:interview|onsite|loop|round|phone screen|role|position)\\b`
+        ).test(normalizedText) ||
+        new RegExp(
+          `\\b(?:interviewing|interview|onsite|loop|round|phone screen)\\b.{0,40}\\b(?:with|at|for)\\s+${aliasPattern}\\b`
+        ).test(normalizedText) ||
+        new RegExp(
+          `\\b(?:role|position|opportunity)\\s+(?:with|at|for)\\s+${aliasPattern}\\b`
+        ).test(normalizedText) ||
+        new RegExp(
+          `\\b(?:strong|great|good|excellent|ideal)\\s+fit\\s+(?:for|with)\\s+${aliasPattern}\\b`
+        ).test(normalizedText)
+      );
+    });
+    if (matched) targets.push(company);
+  }
+
+  const properName =
+    "([A-Z][A-Za-z0-9&.+-]*(?:\\s+[A-Z][A-Za-z0-9&.+-]*){0,2})";
+  const originalPatterns = [
+    new RegExp(
+      `\\b(?:interviewing|interview|onsite|loop|round|phone screen)\\s+(?:with|at|for)\\s+${properName}`,
+      "g"
+    ),
+    new RegExp(
+      `\\b(?:role|position|opportunity)\\s+(?:with|at|for)\\s+${properName}`,
+      "g"
+    ),
+    new RegExp(
+      `\\b(?:strong|great|good|excellent|ideal)\\s+fit\\s+(?:for|with)\\s+${properName}(?:['’]s)?`,
+      "g"
+    ),
+    new RegExp(
+      `\\b${properName}(?:['’]s)?\\s+(?:interview|onsite|loop|round|phone screen)\\b`,
+      "g"
+    ),
+  ];
+  for (const pattern of originalPatterns) {
+    for (const match of originalText.matchAll(pattern)) {
+      const company = canonicalizeCompanyName(match[1]);
+      if (company) targets.push(company);
+    }
+  }
+
+  const lowercasePatterns = [
+    /\b(?:interviewing|interview|onsite|loop|round|phone screen)\s+(?:with|at|for)\s+([a-z0-9&.+-]+)\b/g,
+    /\b(?:role|position|opportunity)\s+(?:with|at|for)\s+([a-z0-9&.+-]+)\b/g,
+    /\b(?:strong|great|good|excellent|ideal)\s+fit\s+(?:for|with)\s+([a-z0-9&.+-]+)\b/g,
+    /\b([a-z0-9&.+-]+)\s+(?:interview|onsite|loop|round)\b/g,
+  ];
+  for (const pattern of lowercasePatterns) {
+    for (const match of normalizedText.matchAll(pattern)) {
+      const company = canonicalizeCompanyName(match[1]);
+      if (company) targets.push(company);
+    }
+  }
+
+  return uniqueCompanies(targets);
+}
+
+function findCandidateHistoryCompany(
+  normalizedText: string,
+  mentionedCompanies: CompanyDefinition[]
+) {
+  return mentionedCompanies.find((company) =>
+    company.aliases.some((alias) => {
+      const aliasPattern = escapeRegExp(normalizeForMatching(alias));
+      return (
+        new RegExp(
+          `\\b(?:previously|formerly|used to)\\b.{0,30}\\b(?:at|with|for)\\s+${aliasPattern}\\b`
+        ).test(normalizedText) ||
+        new RegExp(
+          `\\b(?:i|we)\\b.{0,40}\\b(?:worked|built|led|developed|implemented|owned|launched)\\b.{0,40}\\b(?:at|for|with)\\s+${aliasPattern}\\b`
+        ).test(normalizedText) ||
+        new RegExp(
+          `\\b(?:at|with)\\s+${aliasPattern}\\b.{0,50}\\b(?:i|we)\\b.{0,20}\\b(?:worked|built|led|developed|implemented|owned|launched)\\b`
+        ).test(normalizedText) ||
+        new RegExp(
+          `\\b(?:my|your)\\s+(?:time|experience|work)\\b.{0,30}\\b(?:at|with)\\s+${aliasPattern}\\b`
+        ).test(normalizedText) ||
+        new RegExp(
+          `\\b(?:what did you do|work have you done|tell me about your work|your experience)\\b.{0,40}\\b(?:at|with)\\s+${aliasPattern}\\b`
+        ).test(normalizedText)
+      );
+    })
+  );
+}
+
+function isCompanyComparison(
+  normalizedText: string,
+  mentionedCompanies: CompanyDefinition[]
+) {
+  if (!mentionedCompanies.length) return false;
+  const hasComparisonMarker =
+    /\b(?:compare|compared|comparison|difference|different|differ|versus|vs|unlike|similar|between|as opposed to)\b/.test(
+      normalizedText
+    );
+  return hasComparisonMarker && mentionedCompanies.length >= 1;
+}
+
+function findInterviewerAffiliationCompany(
+  originalText: string,
+  normalizedText: string,
+  mentionedCompanies: CompanyDefinition[]
+) {
+  const knownCompany = mentionedCompanies.find((company) =>
+    company.aliases.some((alias) => {
+      const aliasPattern = escapeRegExp(normalizeForMatching(alias));
+      return (
+        new RegExp(
+          `\\b(?:i am|i m|im|this is|my name is|we are|we re)\\b.{0,80}\\b(?:from|with)\\s+${aliasPattern}\\b`
+        ).test(normalizedText) ||
+        new RegExp(
+          `\\b(?:i|we)\\s+(?:work|working|come|coming)\\b.{0,30}\\b(?:at|from|with)\\s+${aliasPattern}\\b`
+        ).test(normalizedText) ||
+        new RegExp(
+          `\\b(?:i am|i m|im|this is|we are|we re)\\b.{0,80}\\b(?:recruiter|hiring manager|manager|engineer)\\b.{0,30}\\b(?:at|from|with)\\s+${aliasPattern}\\b`
+        ).test(normalizedText)
+      );
+    })
+  );
+  if (knownCompany) return knownCompany;
+
+  const properAffiliation = originalText.match(
+    /\b(?:I am|I'm|This is|We are|We're)\b.{0,60}\b(?:from|with)\s+([A-Z][A-Za-z0-9&.+-]*(?:\s+[A-Z][A-Za-z0-9&.+-]*){0,2})/
+  )?.[1];
+  if (properAffiliation) {
+    return canonicalizeCompanyName(properAffiliation);
+  }
+
+  const lowercaseAffiliation = normalizedText.match(
+    /\b(?:i am|i m|im|this is|we are|we re)\b.{0,60}\b(?:from|with)\s+([a-z0-9&.+-]+)\b/
+  )?.[1];
+  return canonicalizeCompanyName(lowercaseAffiliation);
+}
+
+function canonicalizeCompanyName(
+  companyName: string | undefined
+): CompanyDefinition | undefined {
+  const trimmed = companyName
+    ?.trim()
+    .replace(/['’]s$/i, "")
+    .replace(/[.,:;!?]+$/g, "");
+  const normalized = normalizeForMatching(trimmed ?? "");
+  if (
+    !normalized ||
+    /^(?:a|ai|an|and|behavioral|coding|design|diversity|for|ml|our|s|system|technical|the|their|this|today|tomorrow|with|your)$/.test(
+      normalized
+    )
+  ) {
+    return undefined;
+  }
+
+  const known = COMPANY_DEFINITIONS.find((company) =>
+    company.aliases.some(
+      (alias) => normalizeForMatching(alias) === normalized
+    )
+  );
+  if (known) return known;
+
+  return {
+    displayName: toCompanyDisplayName(trimmed ?? normalized),
+    normalized: normalized.replace(/\s+/g, "-"),
+    aliases: [normalized],
+  };
+}
+
+function toCompanyDisplayName(value: string) {
+  if (/[A-Z]/.test(value)) return value.trim();
+  return value
+    .split(/\s+/)
+    .map((part) =>
+      part.length <= 2
+        ? part.toUpperCase()
+        : `${part[0]?.toUpperCase() ?? ""}${part.slice(1)}`
+    )
+    .join(" ");
+}
+
+function uniqueCompanies(companies: CompanyDefinition[]) {
+  const seen = new Set<string>();
+  return companies.filter((company) => {
+    if (seen.has(company.normalized)) return false;
+    seen.add(company.normalized);
+    return true;
+  });
 }
 
 export function formatInterviewSessionContextForPrompt(

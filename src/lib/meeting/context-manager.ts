@@ -512,6 +512,9 @@ function cloneInterviewSessionContext(
     targetCompany: context.targetCompany
       ? { ...context.targetCompany }
       : undefined,
+    companyHistory: context.companyHistory?.map((entry) => ({
+      ...entry,
+    })),
   };
 }
 
