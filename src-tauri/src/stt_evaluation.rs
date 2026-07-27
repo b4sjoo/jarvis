@@ -370,7 +370,8 @@ pub fn record_stt_evaluation_submitted_audio(
         return Err("Submitted STT evaluation audio is too large.".to_string());
     }
     let safe_utterance_id = sanitize_identifier(&metadata.utterance_id);
-    let relative_path = format!("submitted-audio/{}.wav", safe_utterance_id);
+    let relative_path =
+        submitted_audio_relative_path(&safe_utterance_id, metadata.audio_segment_sequence);
     let sha256 = sha256_hex(&bytes);
     write_private_bytes(&session.folder_path.join(&relative_path), &bytes)?;
     append_capture_event(
@@ -896,6 +897,13 @@ fn sanitize_identifier(value: &str) -> String {
     }
 }
 
+fn submitted_audio_relative_path(safe_utterance_id: &str, audio_segment_sequence: u64) -> String {
+    format!(
+        "submitted-audio/{}-segment-{}.wav",
+        safe_utterance_id, audio_segment_sequence
+    )
+}
+
 fn create_private_dir(path: &Path) -> Result<(), String> {
     fs::create_dir_all(path)
         .map_err(|error| format!("Failed to create STT evaluation directory: {}", error))?;
@@ -980,6 +988,18 @@ mod tests {
     fn sanitizes_artifact_identity() {
         assert_eq!(sanitize_identifier("turn/a:b c"), "turn-a-b-c");
         assert_eq!(sanitize_identifier("..."), "artifact");
+    }
+
+    #[test]
+    fn keeps_rollover_audio_segments_distinct_within_one_utterance() {
+        assert_eq!(
+            submitted_audio_relative_path("utterance-family-1", 7),
+            "submitted-audio/utterance-family-1-segment-7.wav"
+        );
+        assert_eq!(
+            submitted_audio_relative_path("utterance-family-1", 8),
+            "submitted-audio/utterance-family-1-segment-8.wav"
+        );
     }
 
     #[test]

@@ -57,6 +57,8 @@ import {
   AudioDrainAuthorizationKind,
   AudioSegmentDisposition,
   AudioSegmentDispositionLedger,
+  BatchDisplayTranscriptAssembler,
+  BatchDisplayTranscriptDecision,
   NativeAudioLivenessEvent,
   NativeAudioDebugFaultKind,
   NativeAudioDebugFaultResult,
@@ -135,7 +137,7 @@ import {
   createMeetingId,
   detectAnswerSufficiencyShadow,
   detectInterviewCompany,
-  deduplicateRolloverTranscript,
+  formatDisplayTranscriptForTrace,
   calculateWordEquivalent,
   classifyMeTurn,
   collectConfirmedMeFacts,
@@ -1848,9 +1850,12 @@ export function useMeetingAssistant() {
   const audioSegmentDispositionLedgerRef = useRef(
     new AudioSegmentDispositionLedger()
   );
-  const rolloverTranscriptByFamilyRef = useRef(
-    new Map<string, { segmentSequence: number; text: string }>()
-  );
+  const displayTranscriptAssemblerRef =
+    useRef<BatchDisplayTranscriptAssembler | null>(null);
+  if (displayTranscriptAssemblerRef.current === null) {
+    displayTranscriptAssemblerRef.current =
+      new BatchDisplayTranscriptAssembler();
+  }
   const lastNativeSpeechStartCandidateSequenceRef = useRef(0);
   const latestNativeSpeechStartRef = useRef<{
     event: NativeSpeechStartEvent;
@@ -2876,6 +2881,7 @@ export function useMeetingAssistant() {
         activeRef.current ? "audio_session" : "audio_session_inactive"
       );
       audioSegmentSeqRef.current = 0;
+      displayTranscriptAssemblerRef.current?.reset();
       abortActiveSttRequests("runtime-boundary");
       systemAudioQueueTailRef.current = Promise.resolve();
       microphoneAudioQueueTailRef.current = Promise.resolve();
@@ -2915,6 +2921,7 @@ export function useMeetingAssistant() {
         manualQuestionTypeCorrection: undefined,
         currentQuestionLineage: undefined,
         latestInterviewerTurnCandidate: undefined,
+        latestDisplayTranscript: undefined,
       }));
 
       return {
@@ -3235,7 +3242,7 @@ export function useMeetingAssistant() {
     const sessionId = createMeetingId("audio_session");
     audioSessionIdRef.current = sessionId;
     audioSegmentSeqRef.current = 0;
-    rolloverTranscriptByFamilyRef.current.clear();
+    displayTranscriptAssemblerRef.current?.reset();
     systemAudioQueueTailRef.current = Promise.resolve();
     microphoneAudioQueueTailRef.current = Promise.resolve();
     systemAudioQueueTrackerRef.current.reset(sessionId);
@@ -3258,7 +3265,7 @@ export function useMeetingAssistant() {
     nativeCaptureSessionIdRef.current = null;
     nativeCaptureGenerationRef.current = null;
     lastNativeSegmentSequenceRef.current = 0;
-    rolloverTranscriptByFamilyRef.current.clear();
+    displayTranscriptAssemblerRef.current?.reset();
     lastNativeSpeechStartCandidateSequenceRef.current = 0;
     latestNativeSpeechStartRef.current = null;
     latestNativeAudioLivenessRef.current = null;
@@ -7476,6 +7483,42 @@ export function useMeetingAssistant() {
     []
   );
 
+  const publishDisplayTranscriptRevision = useCallback(
+    (decision: BatchDisplayTranscriptDecision, traceId: string) => {
+      const metadata = formatDisplayTranscriptForTrace(decision);
+      traceStoreRef.current.updateMetadata(traceId, metadata);
+      const revisionStepId = traceStoreRef.current.startStep(
+        traceId,
+        "Display transcript revised",
+        metadata
+      );
+      traceStoreRef.current.finishStep(
+        traceId,
+        revisionStepId,
+        "success"
+      );
+      traceStoreRef.current.recordOutput(
+        traceId,
+        decision.semanticCommitAuthorized
+          ? "display transcript final"
+          : "display transcript provisional",
+        decision.artifact.text,
+        metadata
+      );
+      sessionRecordingManagerRef.current?.recordCaptureLifecycle({
+        stage: "display-transcript-revised",
+        traceId,
+        ...metadata,
+        displayTranscriptText: decision.artifact.text,
+      });
+      setState((previous) => ({
+        ...previous,
+        latestDisplayTranscript: decision.artifact,
+      }));
+    },
+    []
+  );
+
   const flushPendingSentenceCompletion = useCallback(
     (reason: string) => {
       const pending = pendingSentenceCompletionRef.current;
@@ -9451,7 +9494,9 @@ export function useMeetingAssistant() {
           speaker: segment.speaker,
           source: segment.source,
         });
-        const evaluationUtteranceId = `utterance_${segment.sessionId}_${segment.sequence}`;
+        const evaluationUtteranceId = segment.nativeRolloverFamilyId
+          ? `utterance_${segment.sessionId}_${segment.nativeRolloverFamilyId}`
+          : `utterance_${segment.sessionId}_${segment.sequence}`;
         const evaluationSubmittedAudioQueued =
           segment.source === "system-audio" &&
           Boolean(segment.base64Audio) &&
@@ -9892,78 +9937,6 @@ export function useMeetingAssistant() {
               }
             );
           }
-          if (segment.nativeRolloverFamilyId) {
-            const familyId = segment.nativeRolloverFamilyId;
-            const previous =
-              rolloverTranscriptByFamilyRef.current.get(familyId);
-            const deduplication =
-              (segment.nativeOverlapSampleCount ?? 0) > 0 && previous
-                ? deduplicateRolloverTranscript(previous.text, turn.text)
-                : undefined;
-            if (deduplication?.changed) {
-              turn.text = deduplication.text;
-            }
-            const rolloverMetadata = {
-              sttRolloverFamilyId: familyId,
-              sttRolloverSegmentSequence:
-                segment.nativeSegmentSequence,
-              sttRolloverEndReason: segment.nativeSegmentEndReason,
-              sttRolloverOverlapSampleCount:
-                segment.nativeOverlapSampleCount ?? 0,
-              sttRolloverOverlapDurationMs:
-                segment.nativeOverlapDurationMs ?? 0,
-              sttRolloverPreviousSegmentSequence:
-                previous?.segmentSequence,
-              sttRolloverDeduplicationChanged:
-                deduplication?.changed ?? false,
-              sttRolloverDeduplicationReason:
-                deduplication?.reason ??
-                ((segment.nativeOverlapSampleCount ?? 0) > 0
-                  ? "no-previous-transcript"
-                  : "no-overlap"),
-              sttRolloverDeduplicatedTokenCount:
-                deduplication?.overlapTokenCount ?? 0,
-            };
-            traceStoreRef.current.updateMetadata(
-              traceId,
-              rolloverMetadata
-            );
-            if (deduplication?.changed) {
-              traceStoreRef.current.recordOutput(
-                traceId,
-                "stt rollover deduplicated output",
-                turn.text,
-                {
-                  turnId: turn.id,
-                  ...rolloverMetadata,
-                }
-              );
-            }
-            if (
-              segment.nativeSegmentEndReason === "forced-rollover" &&
-              turn.text.trim()
-            ) {
-              rolloverTranscriptByFamilyRef.current.set(familyId, {
-                segmentSequence:
-                  segment.nativeSegmentSequence ?? segment.sequence,
-                text: turn.text,
-              });
-            } else if (
-              segment.nativeSegmentEndReason !== "forced-rollover"
-            ) {
-              rolloverTranscriptByFamilyRef.current.delete(familyId);
-            }
-            if (!turn.text.trim()) {
-              traceStoreRef.current.updateMetadata(traceId, {
-                acceptedSpeechDisposition:
-                  "rollover-overlap-suppressed",
-                transcriptAppendDisposition: "suppressed",
-                transcriptAppendReason:
-                  "entire-transcript-overlap",
-              });
-              turn = null;
-            }
-          }
         }
         if (turn) {
           segment.sttEvaluationCanonicalCandidate = {
@@ -10036,6 +10009,125 @@ export function useMeetingAssistant() {
               ? "initial-stt-attempt-accepted"
               : `initial-stt-attempt-${validation.disposition}`
         );
+
+        let displayTranscriptDecision:
+          | BatchDisplayTranscriptDecision
+          | undefined;
+        if (
+          segment.source === "system-audio" &&
+          segment.nativeRolloverFamilyId &&
+          !turn &&
+          segment.nativeSegmentEndReason &&
+          segment.nativeSegmentEndReason !== "forced-rollover"
+        ) {
+          displayTranscriptDecision =
+            displayTranscriptAssemblerRef.current?.finalizePending({
+              sessionId: segment.sessionId,
+              rolloverFamilyId: segment.nativeRolloverFamilyId,
+              segmentSequence: segment.sequence,
+              nativeSegmentSequence: segment.nativeSegmentSequence,
+              endedAt:
+                segment.nativeSpeechEndedAtMs ??
+                segment.endedAt ??
+                Date.now(),
+              endReason: segment.nativeSegmentEndReason,
+            });
+          if (displayTranscriptDecision) {
+            turn = {
+              id: displayTranscriptDecision.artifact.utteranceId,
+              speaker: displayTranscriptDecision.artifact.speaker,
+              source: displayTranscriptDecision.artifact.source,
+              text: displayTranscriptDecision.artifact.text,
+              startedAt: displayTranscriptDecision.artifact.startedAt,
+              endedAt: displayTranscriptDecision.artifact.endedAt,
+              isFinal: true,
+            };
+            segment.sttEvaluationCanonicalCandidate = {
+              utteranceId:
+                displayTranscriptDecision.artifact.utteranceId,
+              rawText: displayTranscriptDecision.providerText,
+              preNormalizationText:
+                displayTranscriptDecision.providerText,
+              runtimeCommitRecorded: false,
+            };
+          }
+        } else if (turn && segment.source === "system-audio") {
+          displayTranscriptDecision =
+            displayTranscriptAssemblerRef.current?.accept({
+              sessionId: segment.sessionId,
+              segmentSequence: segment.sequence,
+              nativeSegmentSequence: segment.nativeSegmentSequence,
+              rolloverFamilyId: segment.nativeRolloverFamilyId,
+              overlapSampleCount: segment.nativeOverlapSampleCount,
+              endReason: segment.nativeSegmentEndReason,
+              turnId: turn.id,
+              speaker: turn.speaker,
+              source: turn.source,
+              text: turn.text,
+              providerText: rawText,
+              startedAt: turn.startedAt,
+              endedAt: turn.endedAt,
+            });
+          if (displayTranscriptDecision) {
+            turn = {
+              ...turn,
+              id: displayTranscriptDecision.artifact.utteranceId,
+              text: displayTranscriptDecision.artifact.text,
+              startedAt: displayTranscriptDecision.artifact.startedAt,
+              endedAt: displayTranscriptDecision.artifact.endedAt,
+            };
+            segment.sttEvaluationCanonicalCandidate = {
+              utteranceId:
+                displayTranscriptDecision.artifact.utteranceId,
+              rawText: displayTranscriptDecision.providerText,
+              preNormalizationText:
+                displayTranscriptDecision.providerText,
+              runtimeCommitRecorded: false,
+            };
+          }
+        }
+
+        if (displayTranscriptDecision) {
+          publishDisplayTranscriptRevision(
+            displayTranscriptDecision,
+            traceId
+          );
+          if (!displayTranscriptDecision.semanticCommitAuthorized) {
+            traceStoreRef.current.updateMetadata(traceId, {
+              acceptedSpeechDisposition:
+                "display-transcript-provisional",
+              transcriptAppendDisposition: "deferred",
+              transcriptAppendReason:
+                "forced-rollover-awaiting-utterance-finalization",
+              modelExecutionSuppressedReason:
+                "display-transcript-provisional",
+              memoryRetrievalSuppressedReason:
+                "display-transcript-provisional",
+            });
+            const deferredStepId = traceStoreRef.current.startStep(
+              traceId,
+              "Semantic transcript commit deferred",
+              {
+                ...formatDisplayTranscriptForTrace(
+                  displayTranscriptDecision
+                ),
+                reason:
+                  "forced-rollover-awaiting-utterance-finalization",
+              }
+            );
+            traceStoreRef.current.finishStep(
+              traceId,
+              deferredStepId,
+              "success"
+            );
+            traceStoreRef.current.finishTrace(traceId, "success");
+            setState((previous) => ({
+              ...previous,
+              status: activeRef.current ? "listening" : "idle",
+            }));
+            return;
+          }
+        }
 
         if (!turn) {
           traceStoreRef.current.finishTrace(traceId, "success");
@@ -10775,6 +10867,7 @@ export function useMeetingAssistant() {
       incrementAppliedSpeechCorrections,
       invalidateAudioProcessingSession,
       isCurrentAudioSegment,
+      publishDisplayTranscriptRevision,
       publishCanonicalLogicalQuestionTarget,
       promoteMeTurnForFusion,
       readAudioSegmentCommitAuthorization,

@@ -25,6 +25,7 @@ export * from "./critical-moment-evaluation";
 export * from "./cross-domain-task-transition";
 export * from "./current-question-settlement";
 export * from "./diagram-domain-query";
+export * from "./display-transcript";
 export * from "./eval-trace-metadata";
 export * from "./fact-anchor-guardrail";
 export * from "./fact-anchor-output-guardrail";

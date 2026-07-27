@@ -60,6 +60,31 @@ export interface TranscriptTurn {
   relatedTurnIds?: string[];
 }
 
+export type DisplayTranscriptFinalization =
+  | "provisional"
+  | "silence"
+  | "provider-final"
+  | "stop"
+  | "termination"
+  | "timeout";
+
+export interface DisplayTranscriptArtifact {
+  utteranceId: string;
+  revision: number;
+  speaker: TranscriptSpeaker;
+  source: TranscriptTurn["source"];
+  segmentIds: string[];
+  sourceTurnIds: string[];
+  providerChars: number;
+  displayChars: number;
+  overlapCharsRemoved: number;
+  omittedChars: number;
+  text: string;
+  finalization: DisplayTranscriptFinalization;
+  startedAt: number;
+  endedAt: number;
+}
+
 export type SpeechBiasTermSource =
   | "brief"
   | "active-task"
@@ -1483,6 +1508,7 @@ export interface QuestionHumanEvaluation {
 export interface MeetingAssistantState {
   status: MeetingAssistantStatus;
   transcriptTurns: TranscriptTurn[];
+  latestDisplayTranscript?: DisplayTranscriptArtifact;
   screenObservations: ScreenObservation[];
   interviewSessionBrief?: InterviewSessionBrief;
   interviewSessionContext?: InterviewSessionContext;

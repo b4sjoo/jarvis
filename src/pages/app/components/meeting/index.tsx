@@ -404,7 +404,7 @@ export const MeetingAssistant = ({
         turn.contextFusionStatus !== "duplicate-suppressed"
     );
   const latestInterviewerTurnText =
-    meeting.latestInterviewerTurnCandidate?.text ??
+    meeting.latestDisplayTranscript?.text ??
     latestTurn?.text ??
     "Waiting for meeting audio.";
   const forceAdviseStatus = meeting.latestInterviewerTurnCandidate?.status;
