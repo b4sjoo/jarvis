@@ -47,6 +47,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { WhiteboardMermaidError } from "./whiteboard-mermaid-error";
 
 const WRAP_TEXT_CLASS =
   "min-w-0 whitespace-pre-wrap break-words [overflow-wrap:anywhere]";
@@ -146,10 +147,11 @@ function MeetingFocusAnswerWindow({
                   <FileTextIcon className="h-3.5 w-3.5" />
                   Whiteboard
                 </div>
-                <MeetingMarkdownText
-                  className={cn(WRAP_TEXT_CLASS, "text-xs leading-5")}
-                  value={sections.whiteboard}
-                />
+              <MeetingMarkdownText
+                className={cn(WRAP_TEXT_CLASS, "text-xs leading-5")}
+                value={sections.whiteboard}
+                whiteboard
+              />
               </section>
             ) : null}
 
@@ -684,13 +686,21 @@ function FocusClarifyingButton({
 function MeetingMarkdownText({
   value,
   className,
+  whiteboard = false,
 }: {
   value: string;
   className?: string;
+  whiteboard?: boolean;
 }) {
   return (
     <div className={cn(MEETING_MARKDOWN_CLASS, className)}>
-      <Markdown>{normalizeMeetingMarkdown(value)}</Markdown>
+      <Markdown
+        mermaidErrorComponent={
+          whiteboard ? WhiteboardMermaidError : undefined
+        }
+      >
+        {normalizeMeetingMarkdown(value)}
+      </Markdown>
     </div>
   );
 }

@@ -13,6 +13,7 @@ import {
   areCompatibleParentContinuityTypes,
   normalizeCanonicalQuestionType,
 } from "./task-taxonomy.js";
+import { buildWhiteboardAsciiFallback } from "./whiteboard-ascii-fallback.js";
 
 export interface WhiteboardArtifactUpdateInput {
   existing?: WhiteboardArtifact;
@@ -187,6 +188,8 @@ export function formatWhiteboardRenderValidationForTrace({
       Boolean(before?.revision && visibleRevisionAfter === before.revision),
     whiteboardRenderAnswerStreamingIndependent: true,
     whiteboardRenderStatus: after?.renderState?.status,
+    whiteboardRenderFallbackKind: after?.renderState?.fallbackKind,
+    whiteboardRenderFallbackReason: after?.renderState?.fallbackReason,
   };
 }
 
@@ -229,8 +232,25 @@ export function updateWhiteboardArtifactFromAnswer({
     renderValidation,
   });
   if (!candidateValidation.valid) {
-    return preserveLastValidWhiteboard({
+    const preserved = preserveLastValidWhiteboard({
       existing,
+      decision: candidateValidation,
+      now,
+    });
+    if (preserved) return preserved;
+    return createAsciiFallbackWhiteboard({
+      parentTaskId,
+      questionInstanceId,
+      parentQuestionType,
+      parentTopic,
+      candidateWhiteboard: whiteboard,
+      phase,
+      traceId,
+      selectedOverlayIds,
+      updateSource,
+      provisional,
+      openConstraintCategories,
+      revisionReason,
       decision: candidateValidation,
       now,
     });
@@ -437,6 +457,12 @@ function normalizeWhiteboardText(value: string | undefined) {
   return normalized;
 }
 
+export function normalizeWhiteboardRenderCandidate(
+  value: string | undefined
+) {
+  return normalizeWhiteboardText(value);
+}
+
 function loadMermaidModule() {
   mermaidModulePromise ??= (
     import("mermaid") as Promise<MermaidModule>
@@ -452,6 +478,10 @@ function extractMermaidBlocks(value: string) {
     value.matchAll(/```[ \t]*mermaid[^\S\r\n]*\r?\n([\s\S]*?)```/gi),
     (match) => match[1]?.trim() ?? ""
   );
+}
+
+export function extractWhiteboardMermaidBlocks(value: string) {
+  return extractMermaidBlocks(normalizeWhiteboardText(value));
 }
 
 function authorizeWhiteboardCandidate({
@@ -529,6 +559,7 @@ function buildValidRenderState({
         ? "valid-mermaid"
         : "valid-text",
     validationOperationId: decision.operationId,
+    candidateFingerprint: decision.candidateFingerprint,
     validationDurationMs: decision.durationMs,
     validatedAt: now,
   };
@@ -554,11 +585,92 @@ function preserveLastValidWhiteboard({
       lastValidRevision: existing.revision,
       status: "preserved-last-valid",
       validationOperationId: decision.operationId,
+      candidateFingerprint: decision.candidateFingerprint,
       validationDurationMs: decision.durationMs,
       parserErrorClass: decision.parserErrorClass,
+      fallbackKind: "last-valid",
       fallbackReason: "candidate-render-validation-failed",
       validatedAt: now,
     },
+  };
+}
+
+function createAsciiFallbackWhiteboard({
+  parentTaskId,
+  questionInstanceId,
+  parentQuestionType,
+  parentTopic,
+  candidateWhiteboard,
+  phase,
+  traceId,
+  selectedOverlayIds,
+  updateSource,
+  provisional,
+  openConstraintCategories,
+  revisionReason,
+  decision,
+  now,
+}: {
+  parentTaskId: string;
+  questionInstanceId?: string;
+  parentQuestionType: ParentQuestionType;
+  parentTopic: string;
+  candidateWhiteboard: string;
+  phase: InterviewPlaybookPhase;
+  traceId?: string;
+  selectedOverlayIds: string[];
+  updateSource: WhiteboardUpdateSource;
+  provisional: boolean;
+  openConstraintCategories: string[];
+  revisionReason?: string;
+  decision: WhiteboardRenderValidationDecision;
+  now: number;
+}): WhiteboardArtifact {
+  const fallback = buildWhiteboardAsciiFallback(candidateWhiteboard);
+  const id = createWhiteboardArtifactId();
+  const overlayIds = uniqueIds(selectedOverlayIds);
+  return {
+    id,
+    parentTaskId,
+    questionInstanceId,
+    domainTrack: inferWhiteboardDomainTrack(
+      parentQuestionType,
+      candidateWhiteboard
+    ),
+    archetypeIds: overlayIds,
+    selectedOverlayIds: overlayIds,
+    currentPhase: phase,
+    title: buildWhiteboardTitle(parentTopic, parentQuestionType),
+    content: fallback.content,
+    summary: buildWhiteboardSummary(fallback.content),
+    revision: 1,
+    provisional,
+    openConstraintCategories: uniqueIds(openConstraintCategories),
+    revisionReason:
+      revisionReason ??
+      (provisional
+        ? "provisional-requirement-framing"
+        : "invalid-mermaid-ascii-fallback"),
+    createdTraceId: traceId,
+    lastUpdatedTraceId: traceId,
+    renderState: {
+      artifactId: id,
+      parentTaskId,
+      candidateRevision: 1,
+      visibleRevision: 1,
+      lastValidRevision: 1,
+      status: "ascii-fallback",
+      validationOperationId: decision.operationId,
+      candidateFingerprint: decision.candidateFingerprint,
+      validationDurationMs: decision.durationMs,
+      parserErrorClass: decision.parserErrorClass,
+      fallbackKind: "deterministic-ascii",
+      fallbackReason: `invalid-mermaid:${fallback.source}`,
+      validatedAt: now,
+    },
+    updateSource,
+    createdAt: now,
+    updatedAt: now,
   };
 }
 
@@ -600,6 +712,12 @@ function fingerprintWhiteboard(value: string) {
     hash = Math.imul(hash, 16777619);
   }
   return `${value.length}:${(hash >>> 0).toString(16)}`;
+}
+
+export function fingerprintWhiteboardRenderCandidate(
+  value: string | undefined
+) {
+  return fingerprintWhiteboard(normalizeWhiteboardText(value));
 }
 
 function elapsedMs(startedAt: number) {

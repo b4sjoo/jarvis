@@ -1,22 +1,32 @@
 import React from "react";
-import { Streamdown } from "streamdown";
+import {
+  Streamdown,
+  type MermaidErrorComponentProps,
+} from "streamdown";
 import "katex/dist/katex.min.css";
 import { openUrl } from "@tauri-apps/plugin-opener";
 
 interface MarkdownRendererProps {
   children: string;
   isStreaming?: boolean;
+  mermaidErrorComponent?: React.ComponentType<MermaidErrorComponentProps>;
 }
 
 export function Markdown({
   children,
   isStreaming = false,
+  mermaidErrorComponent,
 }: MarkdownRendererProps) {
   return (
     <Streamdown
       isAnimating={isStreaming}
       shikiTheme={["github-light", "github-dark"]}
       components={COMPONENTS as any}
+      mermaid={
+        mermaidErrorComponent
+          ? { errorComponent: mermaidErrorComponent }
+          : undefined
+      }
       controls={{
         table: true,
         code: true,

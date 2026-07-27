@@ -124,6 +124,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { WhiteboardMermaidError } from "./whiteboard-mermaid-error";
 
 const statusLabel = {
   idle: "Ready",
@@ -1809,6 +1810,7 @@ export const MeetingAssistant = ({
                       <MeetingMarkdownText
                         className={cn(WRAP_TEXT_CLASS, "text-xs leading-5")}
                         value={displaySuggestionSections.whiteboard}
+                        whiteboard
                       />
                     </section>
                   ) : null}
@@ -2712,6 +2714,7 @@ const FocusModePanel = ({
                 <MeetingMarkdownText
                   className={cn(WRAP_TEXT_CLASS, "text-xs leading-5")}
                   value={suggestionSections.whiteboard}
+                  whiteboard
                 />
               </section>
             ) : null}
@@ -4710,6 +4713,22 @@ const TraceHumanEvaluationPanel = ({
       : undefined;
   const transientPersonalStatusApplied =
     trace.metadata?.transientPersonalStatusApplied === true;
+  const whiteboardRenderStatus =
+    typeof trace.metadata?.whiteboardRenderStatus === "string"
+      ? trace.metadata.whiteboardRenderStatus
+      : undefined;
+  const whiteboardRenderValidationDisposition =
+    typeof trace.metadata?.whiteboardRenderValidationDisposition === "string"
+      ? trace.metadata.whiteboardRenderValidationDisposition
+      : undefined;
+  const whiteboardRepairDisposition =
+    typeof trace.metadata?.whiteboardRepairDisposition === "string"
+      ? trace.metadata.whiteboardRepairDisposition
+      : undefined;
+  const whiteboardRenderFallbackKind =
+    typeof trace.metadata?.whiteboardRenderFallbackKind === "string"
+      ? trace.metadata.whiteboardRenderFallbackKind
+      : undefined;
 
   const toggleFailureReason = (reason: HumanEvalFailureReason) => {
     onUpdate({
@@ -4813,6 +4832,40 @@ const TraceHumanEvaluationPanel = ({
             ? trace.metadata.answerSufficiencyAnswerRevision
             : undefined,
         ...questionEvaluation?.answerSufficiency,
+        ...patch,
+      },
+    });
+  };
+
+  const updateWhiteboardRenderEvaluation = (
+    patch: NonNullable<QuestionHumanEvaluation["whiteboardRender"]>
+  ) => {
+    onUpdateQuestion({
+      whiteboardRender: {
+        artifactId:
+          questionEvaluation?.detectedWhiteboardArtifactId ??
+          (typeof trace.metadata?.whiteboardArtifactId === "string"
+            ? trace.metadata.whiteboardArtifactId
+            : undefined),
+        validationOperationId:
+          typeof trace.metadata?.whiteboardRenderValidationOperationId ===
+          "string"
+            ? trace.metadata.whiteboardRenderValidationOperationId
+            : undefined,
+        repairOperationId:
+          typeof trace.metadata?.whiteboardRepairOperationId === "string"
+            ? trace.metadata.whiteboardRepairOperationId
+            : undefined,
+        candidateRevision:
+          typeof trace.metadata?.whiteboardRenderCandidateRevision === "number"
+            ? trace.metadata.whiteboardRenderCandidateRevision
+            : undefined,
+        visibleRevision:
+          typeof trace.metadata?.whiteboardRenderVisibleRevisionAfter ===
+          "number"
+            ? trace.metadata.whiteboardRenderVisibleRevisionAfter
+            : undefined,
+        ...questionEvaluation?.whiteboardRender,
         ...patch,
       },
     });
@@ -5640,6 +5693,115 @@ const TraceHumanEvaluationPanel = ({
           </div>
           <div className="mt-2">
             <div className="mb-1 text-[10px] font-medium uppercase text-muted-foreground">
+              Whiteboard render
+            </div>
+            {whiteboardRenderStatus ||
+            whiteboardRenderValidationDisposition ||
+            whiteboardRepairDisposition ||
+            whiteboardRenderFallbackKind ? (
+              <div className="mb-1 truncate font-mono text-[9px] text-muted-foreground">
+                {whiteboardRenderStatus ?? "unknown"}
+                {whiteboardRenderValidationDisposition
+                  ? ` / ${whiteboardRenderValidationDisposition}`
+                  : ""}
+                {whiteboardRepairDisposition
+                  ? ` / repair:${whiteboardRepairDisposition}`
+                  : ""}
+                {whiteboardRenderFallbackKind
+                  ? ` / fallback:${whiteboardRenderFallbackKind}`
+                  : ""}
+              </div>
+            ) : null}
+            <div className="flex flex-wrap gap-1">
+              {[
+                { label: "Rendered", value: "rendered" },
+                { label: "Repaired", value: "repaired" },
+                { label: "Preserved", value: "preserved-last-valid" },
+                { label: "ASCII", value: "ascii-fallback" },
+                { label: "Error shown", value: "error-visible" },
+                { label: "Missing", value: "missing" },
+              ].map((option) => (
+                <Button
+                  key={option.value}
+                  size="sm"
+                  variant={
+                    questionEvaluation?.whiteboardRender?.observedOutcome ===
+                    option.value
+                      ? "default"
+                      : "outline"
+                  }
+                  className="h-6 px-2 text-[10px]"
+                  onClick={() => {
+                    updateWhiteboardRenderEvaluation({
+                      observedOutcome:
+                        option.value as NonNullable<
+                          QuestionHumanEvaluation["whiteboardRender"]
+                        >["observedOutcome"],
+                    });
+                  }}
+                >
+                  {option.label}
+                </Button>
+              ))}
+            </div>
+            <div className="mt-1 flex flex-wrap gap-1">
+              {[
+                { label: "Repair correct", value: "correct" },
+                { label: "Semantic drift", value: "semantic-drift" },
+                { label: "Repair failed", value: "failed" },
+              ].map((option) => (
+                <Button
+                  key={option.value}
+                  size="sm"
+                  variant={
+                    questionEvaluation?.whiteboardRender?.repairVerdict ===
+                    option.value
+                      ? "default"
+                      : "outline"
+                  }
+                  className="h-6 px-2 text-[10px]"
+                  onClick={() => {
+                    updateWhiteboardRenderEvaluation({
+                      repairVerdict:
+                        option.value as NonNullable<
+                          QuestionHumanEvaluation["whiteboardRender"]
+                        >["repairVerdict"],
+                    });
+                  }}
+                >
+                  {option.label}
+                </Button>
+              ))}
+              {[
+                { label: "Fallback useful", value: "useful" },
+                { label: "Fallback poor", value: "not-useful" },
+              ].map((option) => (
+                <Button
+                  key={option.value}
+                  size="sm"
+                  variant={
+                    questionEvaluation?.whiteboardRender?.fallbackVerdict ===
+                    option.value
+                      ? "default"
+                      : "outline"
+                  }
+                  className="h-6 px-2 text-[10px]"
+                  onClick={() => {
+                    updateWhiteboardRenderEvaluation({
+                      fallbackVerdict:
+                        option.value as NonNullable<
+                          QuestionHumanEvaluation["whiteboardRender"]
+                        >["fallbackVerdict"],
+                    });
+                  }}
+                >
+                  {option.label}
+                </Button>
+              ))}
+            </div>
+          </div>
+          <div className="mt-2">
+            <div className="mb-1 text-[10px] font-medium uppercase text-muted-foreground">
               Manual Next / phase
             </div>
             {questionEvaluation?.detectedManualPhaseFrom ||
@@ -6071,13 +6233,21 @@ const MEETING_MARKDOWN_CLASS =
 const MeetingMarkdownText = ({
   value,
   className,
+  whiteboard = false,
 }: {
   value: string;
   className?: string;
+  whiteboard?: boolean;
 }) => {
   return (
     <div className={cn(MEETING_MARKDOWN_CLASS, className)}>
-      <Markdown>{normalizeMeetingMarkdown(value)}</Markdown>
+      <Markdown
+        mermaidErrorComponent={
+          whiteboard ? WhiteboardMermaidError : undefined
+        }
+      >
+        {normalizeMeetingMarkdown(value)}
+      </Markdown>
     </div>
   );
 };

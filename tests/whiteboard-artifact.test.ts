@@ -327,7 +327,7 @@ test("preserves the last valid revision when Mermaid validation fails", async ()
   assert.equal(trace.whiteboardRenderVisibleRevisionAfter, 1);
 });
 
-test("rejects a first invalid Mermaid revision without a visible artifact", async () => {
+test("projects a first invalid Mermaid revision to an authorized ASCII artifact", async () => {
   const invalidWhiteboard = [
     "```mermaid",
     "flowchart TD",
@@ -350,10 +350,18 @@ test("rejects a first invalid Mermaid revision without a visible artifact", asyn
     now: 1,
   });
 
-  assert.equal(artifact, undefined);
+  assert.ok(artifact);
+  assert.equal(artifact.revision, 1);
+  assert.equal(artifact.renderState?.status, "ascii-fallback");
+  assert.equal(
+    artifact.renderState?.fallbackKind,
+    "deterministic-ascii"
+  );
+  assert.doesNotMatch(artifact.content, /```mermaid/);
+  assert.match(artifact.content, /Open Constraints/);
 });
 
-test("rejects Mermaid when validation belongs to different content", async () => {
+test("uses ASCII fallback when Mermaid validation belongs to different content", async () => {
   const validatedWhiteboard = [
     "```mermaid",
     "flowchart TD",
@@ -382,7 +390,12 @@ test("rejects Mermaid when validation belongs to different content", async () =>
     now: 1,
   });
 
-  assert.equal(artifact, undefined);
+  assert.ok(artifact);
+  assert.equal(artifact.renderState?.status, "ascii-fallback");
+  assert.equal(
+    artifact.renderState?.parserErrorClass,
+    "candidate-validation-mismatch"
+  );
 });
 
 test("preserves a cached whiteboard across compatible system-design correction", () => {
