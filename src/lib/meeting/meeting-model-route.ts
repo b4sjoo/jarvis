@@ -4,6 +4,7 @@ import {
   normalizeCanonicalQuestionType,
   type CanonicalQuestionType,
 } from "./task-taxonomy.js";
+import type { RuntimeInferenceOperationKind } from "./runtime-inference.js";
 
 export interface MeetingModelRouteResolution {
   provider: TYPE_PROVIDER | undefined;
@@ -32,6 +33,27 @@ export interface TaxonomyAdjudicationModelRouteResolution {
   fallbackReason?: string;
   mainProviderId?: string;
   taxonomyAdjudicationProviderId?: string;
+  resolvedProviderId?: string;
+  resolutionSource: "execution-snapshot";
+  configurationStatus:
+    | "ready"
+    | "inherited-main-variables"
+    | "provider-not-configured"
+    | "provider-not-found"
+    | "missing-required-variables";
+  inheritedVariableKeys: string[];
+  missingRequiredVariables: string[];
+}
+
+export interface RuntimeInferenceModelRouteResolution {
+  operationKind: RuntimeInferenceOperationKind;
+  provider: TYPE_PROVIDER | undefined;
+  selectedProvider: SelectedProviderState;
+  route: "main" | "runtime-inference-override";
+  reason: string;
+  fallbackReason?: string;
+  mainProviderId?: string;
+  runtimeInferenceProviderId?: string;
   resolvedProviderId?: string;
   resolutionSource: "execution-snapshot";
   configurationStatus:
@@ -310,10 +332,81 @@ export function resolveTaxonomyAdjudicationModelRouteFromSnapshot({
   };
 }
 
+export function resolveRuntimeInferenceModelRouteFromSnapshot({
+  snapshot,
+  operationKind,
+  reason = `runtime-inference-${operationKind}`,
+}: {
+  snapshot: MeetingModelProviderSnapshot;
+  operationKind: RuntimeInferenceOperationKind;
+  reason?: string;
+}): RuntimeInferenceModelRouteResolution {
+  const taxonomyRoute =
+    resolveTaxonomyAdjudicationModelRouteFromSnapshot({
+      snapshot,
+      reason,
+    });
+  return {
+    operationKind,
+    provider: taxonomyRoute.provider,
+    selectedProvider: taxonomyRoute.selectedProvider,
+    route:
+      taxonomyRoute.route === "taxonomy-adjudication-override"
+        ? "runtime-inference-override"
+        : "main",
+    reason: taxonomyRoute.reason,
+    fallbackReason: normalizeRuntimeInferenceFallbackReason(
+      taxonomyRoute.fallbackReason
+    ),
+    mainProviderId: taxonomyRoute.mainProviderId,
+    runtimeInferenceProviderId:
+      taxonomyRoute.taxonomyAdjudicationProviderId,
+    resolvedProviderId: taxonomyRoute.resolvedProviderId,
+    resolutionSource: taxonomyRoute.resolutionSource,
+    configurationStatus: taxonomyRoute.configurationStatus,
+    inheritedVariableKeys: taxonomyRoute.inheritedVariableKeys,
+    missingRequiredVariables: taxonomyRoute.missingRequiredVariables,
+  };
+}
+
+export function formatRuntimeInferenceModelRouteForTrace(
+  route: RuntimeInferenceModelRouteResolution
+) {
+  return {
+    runtimeInferenceModelRoute: route.route,
+    runtimeInferenceModelRouteReason: route.reason,
+    runtimeInferenceModelRouteFallbackReason: route.fallbackReason,
+    runtimeInferenceOperationKind: route.operationKind,
+    runtimeInferenceProviderId: route.resolvedProviderId,
+    runtimeInferenceMainProviderId: route.mainProviderId,
+    runtimeInferenceProviderConfigurationStatus:
+      route.configurationStatus,
+    runtimeInferenceInheritedVariableKeys: route.inheritedVariableKeys,
+    runtimeInferenceMissingRequiredVariables:
+      route.missingRequiredVariables,
+  };
+}
+
 export function formatTaxonomyAdjudicationModelRouteForTrace(
   route: TaxonomyAdjudicationModelRouteResolution
 ) {
   return {
+    runtimeInferenceModelRoute:
+      route.route === "taxonomy-adjudication-override"
+        ? "runtime-inference-override"
+        : "main",
+    runtimeInferenceModelRouteReason: route.reason,
+    runtimeInferenceModelRouteFallbackReason:
+      normalizeRuntimeInferenceFallbackReason(route.fallbackReason),
+    runtimeInferenceOperationKind: "taxonomy-adjudication",
+    runtimeInferenceProviderId: route.resolvedProviderId,
+    runtimeInferenceMainProviderId: route.mainProviderId,
+    runtimeInferenceProviderConfigurationStatus:
+      route.configurationStatus,
+    runtimeInferenceInheritedVariableKeys:
+      route.inheritedVariableKeys,
+    runtimeInferenceMissingRequiredVariables:
+      route.missingRequiredVariables,
     taxonomyAdjudicationModelRoute: route.route,
     taxonomyAdjudicationModelRouteReason: route.reason,
     taxonomyAdjudicationModelRouteFallbackReason: route.fallbackReason,
@@ -326,6 +419,12 @@ export function formatTaxonomyAdjudicationModelRouteForTrace(
     taxonomyAdjudicationMissingRequiredVariables:
       route.missingRequiredVariables,
   };
+}
+
+function normalizeRuntimeInferenceFallbackReason(
+  reason: string | undefined
+) {
+  return reason?.replace(/^taxonomy-provider-/, "runtime-provider-");
 }
 
 function inheritMainProviderVariables(input: {

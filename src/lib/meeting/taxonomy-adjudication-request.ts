@@ -9,9 +9,15 @@ import {
   consumeTaxonomyAdjudicationResponse,
   type TaxonomyAdjudicationRequestResult,
 } from "./taxonomy-adjudication-response.js";
+import { getRuntimeInferenceOperationDefinition } from "./runtime-inference.js";
 
-export const TAXONOMY_ADJUDICATION_TIMEOUT_MS = 4_000;
-export const TAXONOMY_ADJUDICATION_MAX_OUTPUT_TOKENS = 256;
+const TAXONOMY_OPERATION =
+  getRuntimeInferenceOperationDefinition("taxonomy-adjudication");
+
+export const TAXONOMY_ADJUDICATION_TIMEOUT_MS =
+  TAXONOMY_OPERATION.timeoutMs;
+export const TAXONOMY_ADJUDICATION_MAX_OUTPUT_TOKENS =
+  TAXONOMY_OPERATION.maxOutputTokens;
 
 export async function requestTaxonomyAdjudication(input: {
   request: TaxonomyAdjudicationRequest;

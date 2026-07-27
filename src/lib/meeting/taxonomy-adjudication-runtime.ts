@@ -2,9 +2,15 @@ import type {
   TaxonomyAdjudicationLease,
   TaxonomyAdjudicationRequest,
 } from "./taxonomy-adjudication.js";
+import { getRuntimeInferenceOperationDefinition } from "./runtime-inference.js";
 
-export const TAXONOMY_ADJUDICATION_QUIESCENCE_MS = 450;
-export const TAXONOMY_ADJUDICATION_MAX_STARTS_PER_SLOT = 1;
+const TAXONOMY_OPERATION =
+  getRuntimeInferenceOperationDefinition("taxonomy-adjudication");
+
+export const TAXONOMY_ADJUDICATION_QUIESCENCE_MS =
+  TAXONOMY_OPERATION.quiescenceMs;
+export const TAXONOMY_ADJUDICATION_MAX_STARTS_PER_SLOT =
+  TAXONOMY_OPERATION.maxStartsPerBudgetSlot;
 
 export type TaxonomyAdjudicationBudgetSlot = "ambient" | "substantive";
 

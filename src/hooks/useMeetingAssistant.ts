@@ -243,6 +243,7 @@ import {
   formatAdvisorTriggerJobForTrace,
   formatCrossDomainParentTransitionForTrace,
   formatRuntimeCommitAuthorizationForTrace,
+  formatRuntimeInferenceOperationForTrace,
   formatCurrentQuestionSettlementForTrace,
   formatCurrentQuestionTerminalNoAnswerForTrace,
   formatSettledAdvisorExecutionPlanForTrace,
@@ -8224,6 +8225,9 @@ export function useMeetingAssistant() {
           contextState.sessionId
         );
       const baseMetadata: Record<string, unknown> = {
+        ...formatRuntimeInferenceOperationForTrace(
+          "taxonomy-adjudication"
+        ),
         taxonomyAdjudicationMode: "shadow",
         interviewerIntentLlmMode: "shadow",
         taxonomyAdjudicationEligible: eligibility.eligible,
