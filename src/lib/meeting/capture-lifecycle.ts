@@ -2,6 +2,7 @@ export type CaptureLifecycleAction = "start" | "resume" | "pause" | "stop";
 
 export type CaptureLifecycleEventStage =
   | "claimed"
+  | "coalesced"
   | "dequeued"
   | "skipped-before-run"
   | "authorization-checked"
@@ -39,6 +40,13 @@ export class CaptureLifecycleCoordinator {
   private sequence = 0;
   private currentOperation: CaptureLifecycleOperation | null = null;
   private queueTail: Promise<void> = Promise.resolve();
+  private coalescedRuns = new Map<
+    CaptureLifecycleAction,
+    {
+      operation: CaptureLifecycleOperation;
+      promise: Promise<CaptureLifecycleRunResult<unknown>>;
+    }
+  >();
 
   constructor(private readonly report?: CaptureLifecycleEventReporter) {}
 
@@ -122,6 +130,34 @@ export class CaptureLifecycleCoordinator {
       () => undefined
     );
     return task;
+  }
+
+  runCoalesced<T>(
+    action: CaptureLifecycleAction,
+    execute: (operation: CaptureLifecycleOperation) => Promise<T>
+  ): Promise<CaptureLifecycleRunResult<T>> {
+    const existing = this.coalescedRuns.get(action);
+    if (existing && this.isCurrent(existing.operation)) {
+      this.emit(existing.operation, "coalesced", true);
+      return existing.promise as Promise<CaptureLifecycleRunResult<T>>;
+    }
+
+    const operation = this.claim(action);
+    const promise = this.run(operation, () => execute(operation));
+    const entry = {
+      operation,
+      promise: promise as Promise<CaptureLifecycleRunResult<unknown>>,
+    };
+    this.coalescedRuns.set(action, entry);
+
+    const clear = () => {
+      if (this.coalescedRuns.get(action) === entry) {
+        this.coalescedRuns.delete(action);
+      }
+    };
+    void promise.then(clear, clear);
+
+    return promise;
   }
 
   getTraceMetadata() {

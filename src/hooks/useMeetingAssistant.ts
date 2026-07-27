@@ -53,6 +53,8 @@ import {
   MeetingAudioConfig,
   MeetingAudioStatus,
   AudioInputLivenessPresentation,
+  AudioDrainAuthorization,
+  AudioDrainAuthorizationKind,
   AudioSegmentDisposition,
   AudioSegmentDispositionLedger,
   NativeAudioLivenessEvent,
@@ -156,6 +158,11 @@ import {
   authorizeNativeSpeechStartEvent,
   authorizeNativeAudioLivenessEvent,
   buildAudioInputLivenessTraceMetadata,
+  authorizeAudioSegmentCommit,
+  createAudioDrainAuthorization,
+  formatAudioSegmentCommitAuthorizationForTrace,
+  isOpenAudioDrainAuthorizationForNativeEvent,
+  sealAudioDrainAuthorization,
   formatAudioSegmentObservationForTrace,
   formatAudioSegmentSettlementForTrace,
   buildNativeAudioLifecycleTraceMetadata,
@@ -1504,6 +1511,12 @@ interface QueuedSpeechSegment {
   nativeOverlapSampleCount?: number;
   nativeOverlapDurationMs?: number;
   sttEvaluationCaptureSessionId?: string;
+  sttEvaluationCanonicalCandidate?: {
+    utteranceId: string;
+    rawText: string;
+    preNormalizationText: string;
+    runtimeCommitRecorded: boolean;
+  };
   traceId: string;
   queueStepId: string;
 }
@@ -1829,6 +1842,8 @@ export function useMeetingAssistant() {
   const audioSegmentSeqRef = useRef(0);
   const nativeCaptureSessionIdRef = useRef<string | null>(null);
   const nativeCaptureGenerationRef = useRef<number | null>(null);
+  const audioDrainAuthorizationRef =
+    useRef<AudioDrainAuthorization | null>(null);
   const lastNativeSegmentSequenceRef = useRef(0);
   const audioSegmentDispositionLedgerRef = useRef(
     new AudioSegmentDispositionLedger()
@@ -1960,6 +1975,114 @@ export function useMeetingAssistant() {
     []
   );
 
+  const revokeAudioDrainAuthorization = useCallback(
+    (reason: string, expectedOperationId?: string) => {
+      const current = audioDrainAuthorizationRef.current;
+      if (!current) return false;
+      if (
+        expectedOperationId &&
+        current.operationId !== expectedOperationId
+      ) {
+        return false;
+      }
+
+      audioDrainAuthorizationRef.current = null;
+      sessionRecordingManagerRef.current?.recordCaptureLifecycle({
+        stage: "audio-drain-authorization-revoked",
+        reason,
+        operationId: current.operationId,
+        drainKind: current.kind,
+        audioSessionId: current.audioSessionId,
+        captureSessionId: current.captureSessionId,
+        captureGeneration: current.captureGeneration,
+        maximumSegmentSequence: current.maximumSegmentSequence,
+        issuedAt: current.issuedAt,
+        expiresAt: current.expiresAt,
+        revokedAt: Date.now(),
+      });
+      return true;
+    },
+    []
+  );
+
+  const openAudioDrainAuthorization = useCallback(
+    (
+      kind: AudioDrainAuthorizationKind,
+      operationId: string,
+      nativeLease: {
+        captureSessionId: string | null;
+        captureGeneration: number | null;
+      }
+    ) => {
+      revokeAudioDrainAuthorization("replaced-by-new-drain");
+      if (
+        !nativeLease.captureSessionId ||
+        nativeLease.captureGeneration == null
+      ) {
+        sessionRecordingManagerRef.current?.recordCaptureLifecycle({
+          stage: "audio-drain-authorization-skipped",
+          reason: "missing-native-capture-lease",
+          operationId,
+          drainKind: kind,
+        });
+        return null;
+      }
+
+      const issuedAt = Date.now();
+      const authorization = createAudioDrainAuthorization({
+        operationId,
+        kind,
+        audioSessionId: audioSessionIdRef.current,
+        captureSessionId: nativeLease.captureSessionId,
+        captureGeneration: nativeLease.captureGeneration,
+        issuedAt,
+        expiresAt:
+          issuedAt + NATIVE_AUDIO_TAIL_DRAIN_QUEUE_TIMEOUT_MS * 2,
+      });
+      audioDrainAuthorizationRef.current = authorization;
+      sessionRecordingManagerRef.current?.recordCaptureLifecycle({
+        stage: "audio-drain-authorization-opened",
+        operationId,
+        drainKind: kind,
+        audioSessionId: authorization.audioSessionId,
+        captureSessionId: authorization.captureSessionId,
+        captureGeneration: authorization.captureGeneration,
+        issuedAt: authorization.issuedAt,
+        expiresAt: authorization.expiresAt,
+      });
+      return authorization;
+    },
+    [revokeAudioDrainAuthorization]
+  );
+
+  const sealAudioDrainAuthorizationForQueue = useCallback(
+    (operationId: string) => {
+      const current = audioDrainAuthorizationRef.current;
+      if (!current || current.operationId !== operationId) return null;
+
+      const sealedAt = Date.now();
+      const sealed = sealAudioDrainAuthorization(current, {
+        maximumSegmentSequence: audioSegmentSeqRef.current,
+        expiresAt:
+          sealedAt + NATIVE_AUDIO_TAIL_DRAIN_QUEUE_TIMEOUT_MS,
+      });
+      audioDrainAuthorizationRef.current = sealed;
+      sessionRecordingManagerRef.current?.recordCaptureLifecycle({
+        stage: "audio-drain-authorization-sealed",
+        operationId,
+        drainKind: sealed.kind,
+        audioSessionId: sealed.audioSessionId,
+        captureSessionId: sealed.captureSessionId,
+        captureGeneration: sealed.captureGeneration,
+        maximumSegmentSequence: sealed.maximumSegmentSequence,
+        sealedAt,
+        expiresAt: sealed.expiresAt,
+      });
+      return sealed;
+    },
+    []
+  );
+
   const stopNativeMeetingCapture = useCallback(
     async (
       expectedLease: {
@@ -1989,10 +2112,15 @@ export function useMeetingAssistant() {
   );
 
   const drainSystemAudioQueueForNativeStop = useCallback(
-    async (reason: "pause" | "stop") => {
+    async (
+      reason: "pause" | "stop" | "termination",
+      drainOperationId: string
+    ) => {
       await new Promise<void>((resolve) => {
         window.setTimeout(resolve, 0);
       });
+      const drainAuthorization =
+        sealAudioDrainAuthorizationForQueue(drainOperationId);
       const startedAt = Date.now();
       const queueDepthAtDrainStart =
         systemAudioQueueTrackerRef.current.getDepth();
@@ -2027,11 +2155,16 @@ export function useMeetingAssistant() {
         activeRequestCountAtDrainStart,
         activeRequestCountAtDrainEnd:
           activeSttRequestsRef.current.size,
+        audioDrainOperationId: drainAuthorization?.operationId,
+        audioDrainKind: drainAuthorization?.kind,
+        audioDrainMaximumSegmentSequence:
+          drainAuthorization?.maximumSegmentSequence,
+        audioDrainExpiresAt: drainAuthorization?.expiresAt,
       };
       sessionRecordingManagerRef.current?.recordCaptureLifecycle(metadata);
       return metadata;
     },
-    []
+    [sealAudioDrainAuthorizationForQueue]
   );
 
   const injectNativeAudioFault = useCallback(
@@ -2737,6 +2870,7 @@ export function useMeetingAssistant() {
       speechCorrectionsRef.current = [];
       latestScreenHashRef.current = undefined;
       latestForceAdviseTargetRef.current = undefined;
+      revokeAudioDrainAuthorization(reason);
 
       audioSessionIdRef.current = createMeetingId(
         activeRef.current ? "audio_session" : "audio_session_inactive"
@@ -2822,6 +2956,7 @@ export function useMeetingAssistant() {
       cancelActiveAdvisorJob,
       clearPendingConfirmationForRuntimeReset,
       clearPendingSentenceCompletionForRuntimeReset,
+      revokeAudioDrainAuthorization,
     ]
   );
 
@@ -3095,6 +3230,7 @@ export function useMeetingAssistant() {
   }, []);
 
   const startAudioProcessingSession = useCallback(() => {
+    revokeAudioDrainAuthorization("audio-session-replaced");
     abortActiveSttRequests("audio-session-replaced");
     const sessionId = createMeetingId("audio_session");
     audioSessionIdRef.current = sessionId;
@@ -3111,9 +3247,11 @@ export function useMeetingAssistant() {
     abortActiveSttRequests,
     clearPendingConfirmation,
     clearPendingSentenceCompletionForRuntimeReset,
+    revokeAudioDrainAuthorization,
   ]);
 
   const invalidateAudioProcessingSession = useCallback(() => {
+    revokeAudioDrainAuthorization("audio-session-invalidated");
     abortActiveSttRequests("audio-session-invalidated");
     audioSessionIdRef.current = createMeetingId("audio_session_inactive");
     audioSegmentSeqRef.current = 0;
@@ -3135,19 +3273,34 @@ export function useMeetingAssistant() {
     abortActiveSttRequests,
     clearPendingConfirmation,
     clearPendingSentenceCompletionForRuntimeReset,
+    revokeAudioDrainAuthorization,
   ]);
 
-  const isCurrentAudioSegment = useCallback((segment: QueuedSpeechSegment) => {
-    const ownsNativeCapture =
-      segment.source !== "system-audio" ||
-      (Boolean(segment.nativeCaptureSessionId) &&
-        nativeCaptureSessionIdRef.current === segment.nativeCaptureSessionId);
-    return (
-      activeRef.current &&
-      audioSessionIdRef.current === segment.sessionId &&
-      ownsNativeCapture
-    );
-  }, []);
+  const readAudioSegmentCommitAuthorization = useCallback(
+    (segment: QueuedSpeechSegment) =>
+      authorizeAudioSegmentCommit({
+        candidate: {
+          source: segment.source,
+          audioSessionId: segment.sessionId,
+          segmentSequence: segment.sequence,
+          nativeCaptureSessionId: segment.nativeCaptureSessionId,
+          nativeCaptureGeneration: segment.nativeCaptureGeneration,
+        },
+        runtimeActive: activeRef.current,
+        currentAudioSessionId: audioSessionIdRef.current,
+        activeCaptureSessionId: nativeCaptureSessionIdRef.current,
+        activeCaptureGeneration: nativeCaptureGenerationRef.current,
+        drainAuthorization: audioDrainAuthorizationRef.current,
+        now: Date.now(),
+      }),
+    []
+  );
+
+  const isCurrentAudioSegment = useCallback(
+    (segment: QueuedSpeechSegment) =>
+      readAudioSegmentCommitAuthorization(segment).authorized,
+    [readAudioSegmentCommitAuthorization]
+  );
 
   const observeNativeAudioSegment = useCallback(
     (event: NativeSpeechDetectedEvent, traceId?: string) => {
@@ -4301,7 +4454,13 @@ export function useMeetingAssistant() {
   const stop = useCallback(async () => {
     const coordinator = captureLifecycleCoordinatorRef.current!;
     const lifecycleOperation = coordinator.claim("stop");
+    const drainOperationId = `capture-stop:${lifecycleOperation.id}`;
     const nativeLeaseToStop = readNativeCaptureLease();
+    openAudioDrainAuthorization(
+      "stop",
+      drainOperationId,
+      nativeLeaseToStop
+    );
     const unresolvedManualRecovery = nativeAudioManualRecoveryRef.current;
     if (unresolvedManualRecovery) {
       const stoppedAt = Date.now();
@@ -4331,6 +4490,10 @@ export function useMeetingAssistant() {
             "stop_meeting_audio_session"
           )
         ) {
+          revokeAudioDrainAuthorization(
+            "stale-stop-operation",
+            drainOperationId
+          );
           return;
         }
       } catch (error) {
@@ -4340,7 +4503,17 @@ export function useMeetingAssistant() {
         }
       }
 
-      await drainSystemAudioQueueForNativeStop("stop");
+      try {
+        await drainSystemAudioQueueForNativeStop(
+          "stop",
+          drainOperationId
+        );
+      } finally {
+        revokeAudioDrainAuthorization(
+          "native-tail-queue-drained",
+          drainOperationId
+        );
+      }
       if (!coordinator.authorize(lifecycleOperation, "prepare-stop-reset")) {
         return;
       }
@@ -4406,7 +4579,9 @@ export function useMeetingAssistant() {
     cancelActiveAdvisorJob,
     drainSystemAudioQueueForNativeStop,
     invalidateAudioProcessingSession,
+    openAudioDrainAuthorization,
     readNativeCaptureLease,
+    revokeAudioDrainAuthorization,
     stopNativeMeetingCapture,
     stopSessionRecording,
   ]);
@@ -7199,6 +7374,38 @@ export function useMeetingAssistant() {
       const interviewContextUpdate =
         contextManagerRef.current.addTranscriptTurn(turn);
       sessionRecordingManagerRef.current?.recordTranscriptTurn(turn);
+      const canonicalCandidate =
+        segment.sttEvaluationCanonicalCandidate;
+      let canonicalTranscriptQueued = false;
+      if (
+        segment.source === "system-audio" &&
+        canonicalCandidate &&
+        !canonicalCandidate.runtimeCommitRecorded
+      ) {
+        canonicalCandidate.runtimeCommitRecorded = true;
+        canonicalTranscriptQueued = Boolean(
+          sttEvaluationCaptureManagerRef.current?.recordCanonicalTranscript({
+            evaluationSessionId:
+              segment.sttEvaluationCaptureSessionId,
+            utteranceId: canonicalCandidate.utteranceId,
+            traceId,
+            audioSessionId: segment.sessionId,
+            audioSegmentSequence: segment.sequence,
+            rawText: canonicalCandidate.rawText,
+            canonicalText: turn.text,
+            turn: { ...turn },
+            normalizationApplied:
+              turn.text !== canonicalCandidate.preNormalizationText,
+            recordedAt: Date.now(),
+          })
+        );
+        traceStoreRef.current.updateMetadata(traceId, {
+          sttEvaluationCanonicalTranscriptQueued:
+            canonicalTranscriptQueued,
+          sttEvaluationCanonicalRuntimeCommitted: true,
+          sttEvaluationCanonicalTurnId: turn.id,
+        });
+      }
       const contextState = contextManagerRef.current.getState();
       const appendStepId = traceStoreRef.current.startStep(
         traceId,
@@ -9119,9 +9326,17 @@ export function useMeetingAssistant() {
         sttQueueDepthAtDequeue: segment.queueDepthAtDequeue,
         sttQueueDequeueAuthorized: segment.queueDequeueAuthorized,
       };
-      traceStoreRef.current.updateMetadata(traceId, queueMetadata);
+      const initialCommitAuthorization =
+        readAudioSegmentCommitAuthorization(segment);
+      traceStoreRef.current.updateMetadata(traceId, {
+        ...queueMetadata,
+        ...formatAudioSegmentCommitAuthorizationForTrace(
+          initialCommitAuthorization
+        ),
+        audioSegmentCommitCheckpoint: "before-processing",
+      });
 
-      if (!isCurrentAudioSegment(segment)) {
+      if (!initialCommitAuthorization.authorized) {
         settleNativeAudioSegment(
           segment,
           "stale",
@@ -9751,26 +9966,17 @@ export function useMeetingAssistant() {
           }
         }
         if (turn) {
-          const canonicalTranscriptQueued =
-            segment.source === "system-audio" &&
-            sttEvaluationCaptureManagerRef.current?.recordCanonicalTranscript({
-              evaluationSessionId: segment.sttEvaluationCaptureSessionId,
-              utteranceId: evaluationUtteranceId,
-              traceId,
-              audioSessionId: segment.sessionId,
-              audioSegmentSequence: segment.sequence,
-              rawText,
-              canonicalText: turn.text,
-              turn: { ...turn },
-              normalizationApplied:
-                turn.text !== canonicalTextBeforeNormalization,
-              recordedAt: Date.now(),
-            });
+          segment.sttEvaluationCanonicalCandidate = {
+            utteranceId: evaluationUtteranceId,
+            rawText,
+            preNormalizationText: canonicalTextBeforeNormalization,
+            runtimeCommitRecorded: false,
+          };
           traceStoreRef.current.updateMetadata(traceId, {
             sttEvaluationProviderTranscriptQueued:
               Boolean(providerTranscriptQueued),
-            sttEvaluationCanonicalTranscriptQueued:
-              Boolean(canonicalTranscriptQueued),
+            sttEvaluationCanonicalTranscriptQueued: false,
+            sttEvaluationCanonicalRuntimeCommitted: false,
           });
         } else if (providerTranscriptQueued) {
           traceStoreRef.current.updateMetadata(traceId, {
@@ -9779,7 +9985,15 @@ export function useMeetingAssistant() {
           });
         }
 
-        if (!isCurrentAudioSegment(segment)) {
+        const finalCommitAuthorization =
+          readAudioSegmentCommitAuthorization(segment);
+        traceStoreRef.current.updateMetadata(traceId, {
+          ...formatAudioSegmentCommitAuthorizationForTrace(
+            finalCommitAuthorization
+          ),
+          audioSegmentCommitCheckpoint: "after-stt",
+        });
+        if (!finalCommitAuthorization.authorized) {
           settleNativeAudioSegment(
             segment,
             "stale",
@@ -10563,6 +10777,7 @@ export function useMeetingAssistant() {
       isCurrentAudioSegment,
       publishCanonicalLogicalQuestionTarget,
       promoteMeTurnForFusion,
+      readAudioSegmentCommitAuthorization,
       resolvePendingConfirmationForMeTurn,
       scheduleSemanticTaxonomyShadow,
       scheduleAdvisor,
@@ -10575,14 +10790,26 @@ export function useMeetingAssistant() {
 
   const enqueueSpeechDetected = useCallback(
     (nativeEvent: NativeSpeechDetectedEvent) => {
-      if (
-        !activeRef.current ||
-        nativeCaptureSessionIdRef.current !== nativeEvent.captureSessionId
-      ) {
+      const authorizedByActiveCapture =
+        activeRef.current &&
+        nativeCaptureSessionIdRef.current ===
+          nativeEvent.captureSessionId &&
+        nativeCaptureGenerationRef.current ===
+          nativeEvent.captureGeneration;
+      const authorizedByOpenDrain =
+        isOpenAudioDrainAuthorizationForNativeEvent({
+          authorization: audioDrainAuthorizationRef.current,
+          captureSessionId: nativeEvent.captureSessionId,
+          captureGeneration: nativeEvent.captureGeneration,
+          now: Date.now(),
+        });
+      if (!authorizedByActiveCapture && !authorizedByOpenDrain) {
         return;
       }
 
-      const sessionId = audioSessionIdRef.current;
+      const sessionId = authorizedByOpenDrain
+        ? audioDrainAuthorizationRef.current!.audioSessionId
+        : audioSessionIdRef.current;
       const sequence = audioSegmentSeqRef.current + 1;
       audioSegmentSeqRef.current = sequence;
       const pendingSentence = pendingSentenceCompletionRef.current;
@@ -10863,6 +11090,7 @@ export function useMeetingAssistant() {
         }));
         return;
       }
+      revokeAudioDrainAuthorization(`capture-start:${mode}`);
       const manualRecoveryAttempt:
         | NativeAudioManualRecoveryAttemptContext
         | undefined = pendingManualRecovery
@@ -11295,6 +11523,7 @@ export function useMeetingAssistant() {
       maybeFinishNativeAudioFaultTrace,
       readNativeCaptureLease,
       prewarmSemanticTaxonomyRuntime,
+      revokeAudioDrainAuthorization,
       selectedAudioDevices.output.id,
       startAudioProcessingSession,
       resetMeetingRuntimeForNewSession,
@@ -11319,14 +11548,19 @@ export function useMeetingAssistant() {
 
   const pause = useCallback(async () => {
     const coordinator = captureLifecycleCoordinatorRef.current!;
-    const lifecycleOperation = coordinator.claim("pause");
-    const nativeLeaseToStop = readNativeCaptureLease();
-    cancelNativeAudioFaultTraces("meeting-assistant-paused");
-    cancelActiveAdvisorJob("meeting-assistant-paused");
-    screenAnalysisAbortRef.current?.abort();
-    screenAnalysisAbortRef.current = null;
+    await coordinator.runCoalesced("pause", async (lifecycleOperation) => {
+      const drainOperationId = `capture-pause:${lifecycleOperation.id}`;
+      const nativeLeaseToStop = readNativeCaptureLease();
+      openAudioDrainAuthorization(
+        "pause",
+        drainOperationId,
+        nativeLeaseToStop
+      );
+      cancelNativeAudioFaultTraces("meeting-assistant-paused");
+      cancelActiveAdvisorJob("meeting-assistant-paused");
+      screenAnalysisAbortRef.current?.abort();
+      screenAnalysisAbortRef.current = null;
 
-    await coordinator.run(lifecycleOperation, async () => {
       let audioStatus: MeetingAudioStatus | null = null;
 
       try {
@@ -11337,6 +11571,10 @@ export function useMeetingAssistant() {
             "stop_meeting_audio_session"
           )
         ) {
+          revokeAudioDrainAuthorization(
+            "stale-pause-operation",
+            drainOperationId
+          );
           return;
         }
       } catch (error) {
@@ -11346,7 +11584,17 @@ export function useMeetingAssistant() {
         }
       }
 
-      await drainSystemAudioQueueForNativeStop("pause");
+      try {
+        await drainSystemAudioQueueForNativeStop(
+          "pause",
+          drainOperationId
+        );
+      } finally {
+        revokeAudioDrainAuthorization(
+          "native-tail-queue-drained",
+          drainOperationId
+        );
+      }
       if (!coordinator.authorize(lifecycleOperation, "commit-pause-state")) {
         return;
       }
@@ -11374,7 +11622,9 @@ export function useMeetingAssistant() {
     cancelActiveAdvisorJob,
     drainSystemAudioQueueForNativeStop,
     invalidateAudioProcessingSession,
+    openAudioDrainAuthorization,
     readNativeCaptureLease,
+    revokeAudioDrainAuthorization,
     stopNativeMeetingCapture,
   ]);
 
@@ -15379,12 +15629,27 @@ export function useMeetingAssistant() {
       unlistenSpeechStart = speechStartUnlisten;
 
       const unlisten = await listen<unknown>("speech-detected", (event) => {
+        const observedAtMs = Date.now();
+        const openDrainAuthorization =
+          audioDrainAuthorizationRef.current &&
+          audioDrainAuthorizationRef.current.maximumSegmentSequence == null &&
+          observedAtMs <= audioDrainAuthorizationRef.current.expiresAt
+            ? audioDrainAuthorizationRef.current
+            : null;
+        const eventCaptureSessionId =
+          nativeCaptureSessionIdRef.current ??
+          openDrainAuthorization?.captureSessionId ??
+          null;
+        const eventCaptureGeneration =
+          nativeCaptureGenerationRef.current ??
+          openDrainAuthorization?.captureGeneration ??
+          null;
         const authorization = authorizeNativeSpeechDetectedEvent({
           payload: event.payload,
-          activeCaptureSessionId: nativeCaptureSessionIdRef.current,
+          activeCaptureSessionId: eventCaptureSessionId,
           lastAcceptedSequence: lastNativeSegmentSequenceRef.current,
           expectedOwner: "meeting",
-          activeCaptureGeneration: nativeCaptureGenerationRef.current,
+          activeCaptureGeneration: eventCaptureGeneration,
         });
         if (!authorization.authorized) {
           if (
@@ -15446,6 +15711,11 @@ export function useMeetingAssistant() {
             authorized: false,
             reason: authorization.reason,
             activeNativeCaptureSessionId: nativeCaptureSessionIdRef.current,
+            nativeSpeechAuthorizationAuthority: openDrainAuthorization
+              ? "open-drain"
+              : "active-capture",
+            audioDrainOperationId:
+              openDrainAuthorization?.operationId,
             ...(authorization.event
               ? buildNativeSpeechEventTraceMetadata(authorization.event)
               : {}),
@@ -15460,6 +15730,19 @@ export function useMeetingAssistant() {
 
         lastNativeSegmentSequenceRef.current =
           authorization.event.segmentSequence;
+        sessionRecordingManagerRef.current?.recordNativeSpeechEvent({
+          authorized: true,
+          nativeSpeechAuthorizationAuthority:
+            nativeCaptureSessionIdRef.current ===
+              authorization.event.captureSessionId &&
+            nativeCaptureGenerationRef.current ===
+              authorization.event.captureGeneration
+              ? "active-capture"
+              : "open-drain",
+          audioDrainOperationId:
+            openDrainAuthorization?.operationId,
+          ...buildNativeSpeechEventTraceMetadata(authorization.event),
+        });
         speechDetectedHandlerRef.current?.(authorization.event);
       });
 
@@ -15503,7 +15786,7 @@ export function useMeetingAssistant() {
 
       const lifecycleUnlisten = await listen<unknown>(
         "native-audio-lifecycle",
-        (event) => {
+        async (event) => {
           const authorization = authorizeNativeAudioLifecycleEvent({
             payload: event.payload,
             expectedOwner: "meeting",
@@ -15591,6 +15874,20 @@ export function useMeetingAssistant() {
             ...buildNativeAudioLifecycleTraceMetadata(terminalEvent),
           });
 
+          const terminationDrainOperationId =
+            disposition === "expected-stop"
+              ? null
+              : createMeetingId("audio_termination_drain");
+          if (terminationDrainOperationId) {
+            openAudioDrainAuthorization(
+              "termination",
+              terminationDrainOperationId,
+              {
+                captureSessionId: terminalEvent.captureSessionId,
+                captureGeneration: terminalEvent.captureGeneration,
+              }
+            );
+          }
           nativeCaptureSessionIdRef.current = null;
           nativeCaptureGenerationRef.current = null;
           lastNativeSegmentSequenceRef.current = 0;
@@ -15604,7 +15901,6 @@ export function useMeetingAssistant() {
           }
 
           activeRef.current = false;
-          invalidateAudioProcessingSession();
           cancelActiveAdvisorJob(`native-audio-${terminalEvent.eventType}`);
 
           if (disposition === "recovering") {
@@ -15633,6 +15929,30 @@ export function useMeetingAssistant() {
               reason: recoveryAttempt.reason,
               faultInjectionId,
             });
+            setState((previous) => ({
+              ...previous,
+              status: "reconnecting",
+              partialSuggestion: "",
+              audioStatus: null,
+              error: null,
+              nativeAudioManualRecovery: undefined,
+            }));
+
+            await drainSystemAudioQueueForNativeStop(
+              "termination",
+              terminationDrainOperationId!
+            );
+            if (
+              audioDrainAuthorizationRef.current?.operationId !==
+              terminationDrainOperationId
+            ) {
+              return;
+            }
+            revokeAudioDrainAuthorization(
+              "native-termination-tail-queue-drained",
+              terminationDrainOperationId
+            );
+            invalidateAudioProcessingSession();
             setState((previous) => ({
               ...previous,
               status: "reconnecting",
@@ -15679,6 +15999,36 @@ export function useMeetingAssistant() {
                   : "System audio capture stopped unexpectedly. Resume Jarvis manually."),
             nativeAudioManualRecovery: manualRecovery,
           }));
+
+          await drainSystemAudioQueueForNativeStop(
+            "termination",
+            terminationDrainOperationId!
+          );
+          if (
+            audioDrainAuthorizationRef.current?.operationId !==
+            terminationDrainOperationId
+          ) {
+            return;
+          }
+          revokeAudioDrainAuthorization(
+            "native-termination-tail-queue-drained",
+            terminationDrainOperationId
+          );
+          invalidateAudioProcessingSession();
+          setState((previous) => ({
+            ...previous,
+            status: "error",
+            partialSuggestion: "",
+            audioStatus: null,
+            error:
+              terminalEvent.message ||
+              (circuitBreakerOpen
+                ? "System audio stopped repeatedly. Resume Jarvis manually."
+                : terminalEvent.eventType === "error"
+                  ? "System audio capture failed. Resume Jarvis after checking audio access."
+                  : "System audio capture stopped unexpectedly. Resume Jarvis manually."),
+            nativeAudioManualRecovery: manualRecovery,
+          }));
           if (faultInjectionId) {
             maybeFinishNativeAudioFaultTrace(faultInjectionId);
           }
@@ -15707,9 +16057,12 @@ export function useMeetingAssistant() {
   }, [
     activateSentenceContinuationFromSpeechStart,
     cancelActiveAdvisorJob,
+    drainSystemAudioQueueForNativeStop,
     invalidateAudioProcessingSession,
     maybeFinishNativeAudioFaultTrace,
     observeNativeAudioSegment,
+    openAudioDrainAuthorization,
+    revokeAudioDrainAuthorization,
     startCapture,
   ]);
 

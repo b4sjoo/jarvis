@@ -120,6 +120,40 @@ test("pause and resume overlap preserves the newest transition", async () => {
   assert.equal(status, "listening");
 });
 
+test("duplicate pause requests share one lifecycle operation", async () => {
+  const events: CaptureLifecycleEvent[] = [];
+  const coordinator = new CaptureLifecycleCoordinator((event) =>
+    events.push(event)
+  );
+  const nativePause = deferred<void>();
+  let executions = 0;
+
+  const firstPause = coordinator.runCoalesced("pause", async () => {
+    executions += 1;
+    await nativePause.promise;
+  });
+  await allowQueuedOperationToStart();
+
+  const secondPause = coordinator.runCoalesced("pause", async () => {
+    executions += 1;
+  });
+
+  nativePause.resolve();
+  const [firstResult, secondResult] = await Promise.all([
+    firstPause,
+    secondPause,
+  ]);
+
+  assert.equal(executions, 1);
+  assert.equal(firstResult.executed, true);
+  assert.equal(secondResult.executed, true);
+  assert.ok(events.some((event) => event.stage === "coalesced"));
+  assert.equal(
+    events.filter((event) => event.stage === "claimed").length,
+    1
+  );
+});
+
 test("stale initialization failure cannot clear a newer successful transition", async () => {
   const coordinator = new CaptureLifecycleCoordinator();
   const initialization = deferred<void>();

@@ -8,6 +8,7 @@ export * from "./answer-sufficiency-semantic-prototypes";
 export * from "./answer-sufficiency-semantic-resolver";
 export * from "./answer-sufficiency-reflection";
 export * from "./audio-input-liveness";
+export * from "./audio-drain-authorization";
 export * from "./audio-segment-disposition";
 export * from "./interviewer-intent";
 export * from "./interviewer-intent-keyword-evidence";
