@@ -138,6 +138,22 @@ export interface ActiveQuestionTermCorrection {
   correctionTraceId: string;
   regenerationTraceId?: string;
   settlementId?: string;
+  semanticAdjudicationOperationId?: string;
+  semanticAdjudicationStatus?:
+    | "skipped"
+    | "running"
+    | "succeeded"
+    | "timed-out"
+    | "failed"
+    | "stale";
+  semanticAdjudicationTriggerReason?: string;
+  semanticAdjudicationCandidateType?: CanonicalQuestionType;
+  semanticAdjudicationRelation?: string;
+  semanticAdjudicationConfidence?: number;
+  semanticAdjudicationDurationMs?: number;
+  semanticResettlementDisposition?: string;
+  previousParentType?: CanonicalQuestionType;
+  resettledParentType?: CanonicalQuestionType;
   regenerationStatus: ActiveQuestionTermCorrectionRegenerationStatus;
   requestedAt: number;
   completedAt?: number;

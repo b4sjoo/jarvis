@@ -21,6 +21,7 @@ export * from "./coding-artifact";
 export * from "./capture-lifecycle";
 export * from "./context-manager";
 export * from "./context-scope-response-action";
+export * from "./correction-owned-resettlement";
 export * from "./critical-moment-evaluation";
 export * from "./cross-domain-task-transition";
 export * from "./current-question-settlement";

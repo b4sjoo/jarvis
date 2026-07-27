@@ -1492,6 +1492,25 @@ export class SessionRecordingManager {
         regenerationTraceId:
           input.correction.regenerationTraceId,
         settlementId: input.correction.settlementId,
+        semanticAdjudicationOperationId:
+          input.correction.semanticAdjudicationOperationId,
+        semanticAdjudicationStatus:
+          input.correction.semanticAdjudicationStatus,
+        semanticAdjudicationTriggerReason:
+          input.correction.semanticAdjudicationTriggerReason,
+        semanticAdjudicationCandidateType:
+          input.correction.semanticAdjudicationCandidateType,
+        semanticAdjudicationRelation:
+          input.correction.semanticAdjudicationRelation,
+        semanticAdjudicationConfidence:
+          input.correction.semanticAdjudicationConfidence,
+        semanticAdjudicationDurationMs:
+          input.correction.semanticAdjudicationDurationMs,
+        semanticResettlementDisposition:
+          input.correction.semanticResettlementDisposition,
+        previousParentType: input.correction.previousParentType,
+        resettledParentType:
+          input.correction.resettledParentType,
         regenerationStatus:
           input.correction.regenerationStatus,
         correctionToAnswerLatencyMs:

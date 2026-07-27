@@ -347,6 +347,31 @@ test("LLM can repair type without receiving relation or parent authority", () =>
   );
 });
 
+test("an operation-specific policy can authorize a high-confidence LLM relation", () => {
+  const decision = settle({
+    llmProposal: proposal("llm-type-repair", {
+      questionType: "ai-ml-system-design",
+      relation: "followup-parent",
+      confidence: 0.96,
+    }),
+    policy: {
+      allowLlmTypeRepair: true,
+      allowLlmRelationRepair: true,
+      llmTypeRepairMinConfidence: 0.88,
+      llmRelationRepairMinConfidence: 0.88,
+      runtimeMutationAuthorized: true,
+      questionComplete: true,
+      commitParent: false,
+    },
+  });
+
+  assert.equal(decision.questionType, "ai-ml-system-design");
+  assert.equal(decision.relation, "followup-parent");
+  assert.equal(decision.relationMutationAuthorized, true);
+  assert.equal(decision.relationAuthoritySource, "llm-type-repair");
+  assert.equal(decision.parentMutationAuthorized, false);
+});
+
 test("LLM type repair can combine with separately authorized deterministic relation evidence", () => {
   const decision = settle({
     deterministicProposal: proposal("deterministic-fast-path", {

@@ -79,6 +79,7 @@ export type CurrentQuestionSettlementProposalRejectionReason =
   | "type-evidence-not-authorized"
   | "relation-evidence-not-authorized"
   | "llm-relation-shadow-only"
+  | "llm-relation-repair-low-confidence"
   | "llm-action-repair-disabled";
 
 export interface CurrentQuestionSettlementProposal {
@@ -109,8 +110,10 @@ export interface CurrentQuestionSettlementProposalRejection {
 
 export interface CurrentQuestionSettlementPolicy {
   allowLlmTypeRepair?: boolean;
+  allowLlmRelationRepair?: boolean;
   allowLlmActionRepair?: boolean;
   llmTypeRepairMinConfidence?: number;
+  llmRelationRepairMinConfidence?: number;
   runtimeMutationAuthorized: boolean;
   questionComplete: boolean;
   commitParent: boolean;
@@ -385,6 +388,7 @@ export function settleCurrentQuestion(input: {
     manual: validManual.proposal,
     deterministic: validDeterministic.proposal,
     llm: validLlm.proposal,
+    policy: input.policy,
     rejectedProposals,
   });
   const actionSelection = selectQuestionAction({
@@ -913,6 +917,7 @@ function selectQuestionRelation(input: {
   manual?: CurrentQuestionSettlementProposal;
   deterministic?: CurrentQuestionSettlementProposal;
   llm?: CurrentQuestionSettlementProposal;
+  policy: CurrentQuestionSettlementPolicy;
   rejectedProposals: CurrentQuestionSettlementProposalRejection[];
 }) {
   for (const proposal of [input.manual, input.deterministic]) {
@@ -935,12 +940,34 @@ function selectQuestionRelation(input: {
     );
   }
 
-  if (input.llm?.relation && !isUnresolvedRelation(input.llm.relation)) {
-    addProposalRejection(
-      input.rejectedProposals,
-      input.llm.source,
-      "llm-relation-shadow-only"
+  const llm = input.llm;
+  if (llm?.relation && !isUnresolvedRelation(llm.relation)) {
+    const minConfidence = clampConfidence(
+      input.policy.llmRelationRepairMinConfidence ??
+        input.policy.llmTypeRepairMinConfidence ??
+        0.85
     );
+    if (!input.policy.allowLlmRelationRepair) {
+      addProposalRejection(
+        input.rejectedProposals,
+        llm.source,
+        "llm-relation-shadow-only"
+      );
+    } else if (llm.relationEvidenceAuthorized === false) {
+      addProposalRejection(
+        input.rejectedProposals,
+        llm.source,
+        "relation-evidence-not-authorized"
+      );
+    } else if (clampConfidence(llm.confidence) < minConfidence) {
+      addProposalRejection(
+        input.rejectedProposals,
+        llm.source,
+        "llm-relation-repair-low-confidence"
+      );
+    } else {
+      return selection(llm.relation, llm.source, true, llm);
+    }
   }
   return selection<CurrentQuestionRelation>(
     "unknown",

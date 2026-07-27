@@ -164,6 +164,26 @@ export function formatActiveQuestionTermCorrectionForTrace(
     manualTermCorrectionRegenerationTraceId:
       transaction.regenerationTraceId,
     manualTermCorrectionSettlementId: transaction.settlementId,
+    correctionOwnedAdjudicationOperationId:
+      transaction.semanticAdjudicationOperationId,
+    correctionOwnedAdjudicationStatus:
+      transaction.semanticAdjudicationStatus,
+    correctionOwnedAdjudicationTriggerReason:
+      transaction.semanticAdjudicationTriggerReason,
+    correctionOwnedAdjudicationCandidateType:
+      transaction.semanticAdjudicationCandidateType,
+    correctionOwnedAdjudicationRelation:
+      transaction.semanticAdjudicationRelation,
+    correctionOwnedAdjudicationConfidence:
+      transaction.semanticAdjudicationConfidence,
+    correctionOwnedAdjudicationDurationMs:
+      transaction.semanticAdjudicationDurationMs,
+    correctionOwnedResettlementDisposition:
+      transaction.semanticResettlementDisposition,
+    correctionOwnedPreviousParentType:
+      transaction.previousParentType,
+    correctionOwnedResettledParentType:
+      transaction.resettledParentType,
     manualTermCorrectionRegenerationStatus:
       transaction.regenerationStatus,
     manualTermCorrectionLatencyMs:
