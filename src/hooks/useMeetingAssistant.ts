@@ -89,6 +89,7 @@ import {
   ManualQuestionTypeCorrectionSource,
   CurrentQuestionSettlementDecision,
   CurrentQuestionTerminalNoAnswerDecision,
+  ResponseOnlyTaskScope,
   LogicalQuestionUnit,
   LogicalQuestionUnitLease,
   PrimaryAskProjection,
@@ -255,7 +256,6 @@ import {
   settleCurrentQuestion,
   settleCurrentQuestionTerminalNoAnswer,
   expireTaskBoundaryCandidate,
-  canQuestionTypeDecisionOverrideParent,
   decideAdvisorTurnIntent,
   decideSentenceCompletion,
   decideSentenceCompletionContinuation,
@@ -358,6 +358,12 @@ import {
   resolveManualCorrectionTarget,
   ManualCorrectionOperationCoordinator,
   decideInterviewTaskContinuityBranch,
+  decideCrossTypeTaskRelationAuthority,
+  formatTaskRelationAuthorityForTrace,
+  applyResponseOnlyTaskScopeToPromptContext,
+  createResponseOnlyTaskScope,
+  formatResponseOnlyTaskScopeForTrace,
+  sanitizeInterviewBriefForResponseOnly,
   classifyInterviewTransitionTurn,
   consumeInterviewSectionHint,
   createPendingInterviewSectionHint,
@@ -1127,6 +1133,11 @@ interface AdvisorTaskSignals {
   projectAnchor?: string;
   query: string;
   taskRelation: InterviewTaskRelation;
+  taskRelationAuthorityDecision?: ReturnType<
+    typeof decideCrossTypeTaskRelationAuthority
+  >;
+  relationEvidenceAuthorized?: boolean;
+  responseOnlyRelation?: boolean;
   subtaskIntent: InterviewSubtaskIntent;
   source: string;
   reuseActivePlaybook: boolean;
@@ -4924,6 +4935,9 @@ export function useMeetingAssistant() {
           questionType: logicalQuestionSectionHint.questionType,
           questionTypeDecision: undefined,
           taskRelation: "new-parent" as InterviewTaskRelation,
+          taskRelationAuthorityDecision: undefined,
+          relationEvidenceAuthorized: true,
+          responseOnlyRelation: false,
           source: "interview-section-hint",
           reuseActivePlaybook: false,
           openingRoute: undefined,
@@ -5010,6 +5024,9 @@ export function useMeetingAssistant() {
           topicDomain: "unknown" as const,
           projectAnchor: undefined,
           taskRelation: "logistics" as const,
+          taskRelationAuthorityDecision: undefined,
+          relationEvidenceAuthorized: true,
+          responseOnlyRelation: false,
           subtaskIntent: "unknown" as const,
           source: "transient-personal-status",
           reuseActivePlaybook: false,
@@ -5077,6 +5094,9 @@ export function useMeetingAssistant() {
               options.clarifyingFeedback
             ),
             taskRelation: advisorTaskMutationDecision.relation,
+            taskRelationAuthorityDecision: undefined,
+            relationEvidenceAuthorized: true,
+            responseOnlyRelation: false,
             subtaskIntent: "unknown" as InterviewSubtaskIntent,
             source: "explicit-action-preserve-parent",
             reuseActivePlaybook: true,
@@ -5090,6 +5110,26 @@ export function useMeetingAssistant() {
     if (transientPersonalStatusDecision) {
       advisorTaskSignals = routedAdvisorTaskSignals;
     }
+    const responseOnlyPreservedTask =
+      advisorTaskSignals.responseOnlyRelation
+        ? originalPromptContext.activeMeetingTask
+        : undefined;
+    const responseOnlyTaskScope: ResponseOnlyTaskScope | undefined =
+      advisorTaskSignals.responseOnlyRelation &&
+      advisorJob.logicalQuestionUnit
+        ? createResponseOnlyTaskScope({
+            logicalQuestionUnitId:
+              advisorJob.logicalQuestionUnit.id,
+            revision: advisorJob.logicalQuestionUnit.revision,
+            sourceQuestion:
+              advisorJob.logicalQuestionUnit.normalizedText,
+            sourceTurnIds:
+              advisorJob.logicalQuestionUnit.sourceTurnIds,
+            inferredType: advisorTaskSignals.questionType,
+            relationDisposition: "ambiguous",
+            preservedParent: responseOnlyPreservedTask,
+          })
+        : undefined;
     const advisorScreenScopeDecision = decideAdvisorScreenScope({
       triggerSource: advisorJob.source,
       relation: advisorTaskSignals.taskRelation,
@@ -5100,6 +5140,37 @@ export function useMeetingAssistant() {
       promptContext,
       advisorScreenScopeDecision
     );
+    if (responseOnlyTaskScope) {
+      promptContext = applyResponseOnlyTaskScopeToPromptContext(
+        promptContext,
+        responseOnlyTaskScope
+      );
+      if (traceId) {
+        const responseOnlyMetadata =
+          formatResponseOnlyTaskScopeForTrace(
+            responseOnlyTaskScope
+          );
+        traceStoreRef.current.updateMetadata(
+          traceId,
+          responseOnlyMetadata
+        );
+        const responseOnlyStepId =
+          traceStoreRef.current.startStep(
+            traceId,
+            "Response-only task scope",
+            responseOnlyMetadata
+          );
+        traceStoreRef.current.finishStep(
+          traceId,
+          responseOnlyStepId,
+          "success"
+        );
+        sessionRecordingManagerRef.current?.recordResponseOnlyTaskScope({
+          traceId,
+          scope: responseOnlyTaskScope,
+        });
+      }
+    }
     const advisorPromptMode = resolveAdvisorRequestModeForScreenScope(
       mode,
       advisorScreenScopeDecision
@@ -5255,7 +5326,9 @@ export function useMeetingAssistant() {
         sourceObservationIds:
           currentQuestionSourceObservationIds,
       });
-      const currentParent = promptContext.activeMeetingTask?.parent;
+      const currentParent =
+        responseOnlyPreservedTask?.parent ??
+        promptContext.activeMeetingTask?.parent;
       const proposal = {
         source: options.manualQuestionTypeCorrection
           ? ("manual-correction" as const)
@@ -5277,7 +5350,8 @@ export function useMeetingAssistant() {
         typeEvidenceAuthorized:
           advisorTaskSignals.questionType !== "unknown",
         relationEvidenceAuthorized:
-          advisorTaskSignals.taskRelation !== "unknown",
+          advisorTaskSignals.relationEvidenceAuthorized ??
+          (advisorTaskSignals.taskRelation !== "unknown"),
         actionEvidenceAuthorized: true,
         manualCorrectionRevision:
           options.manualQuestionTypeCorrection
@@ -5921,6 +5995,7 @@ export function useMeetingAssistant() {
     if (
       !manualPhaseAdvance &&
       !transientPersonalStatusDecision &&
+      !responseOnlyTaskScope &&
       advisorTaskSignals.taskRelation !== "new-parent" &&
       advisorJob.logicalQuestionUnit
     ) {
@@ -6109,7 +6184,9 @@ export function useMeetingAssistant() {
     if (currentQuestionSettlement) {
       settledExecutionPlan = buildSettledAdvisorExecutionPlan({
         settlement: currentQuestionSettlement,
-        activeMeetingTask: promptContext.activeMeetingTask,
+        activeMeetingTask:
+          responseOnlyPreservedTask ??
+          promptContext.activeMeetingTask,
         preBoundaryQuestionType: preBoundaryResponseOwnerType,
         taskBoundaryCommitted:
           taskBoundaryCommittedBeforeAdvisor,
@@ -6126,6 +6203,7 @@ export function useMeetingAssistant() {
         askFrame: advisorAskFrame,
         topicDomain: advisorTopicDomain,
         projectAnchor: advisorProjectAnchor,
+        responseOnlyTaskScope,
         transientPersonalStatusDecision,
       });
       settledAdvisorExecutionPlanRef.current =
@@ -6872,6 +6950,7 @@ export function useMeetingAssistant() {
       });
       const shouldCommitAdvisorParent =
         !transientPersonalStatusDecision &&
+        !responseOnlyTaskScope &&
         (settledExecutionPlan?.responseAuthorized ?? true) &&
         advisorTaskMutationDecision.commitParent &&
         advisorTaskSignals.openingRoute?.commitParent !== false &&
@@ -7031,7 +7110,10 @@ export function useMeetingAssistant() {
         }
       }
 
-      if (taskMutationAuthorization.authorized) {
+      if (
+        taskMutationAuthorization.authorized &&
+        !responseOnlyTaskScope
+      ) {
         if (
           !taskBoundaryCommittedBeforeAdvisor &&
           !sourceOwnedTransitionCommittedBeforeAdvisor &&
@@ -12322,7 +12404,8 @@ export function useMeetingAssistant() {
             screenPreflight
           );
         const buildScreenEvidencePacket = (
-          contextState: MeetingContextState
+          contextState: MeetingContextState,
+          includeParentContinuity = true
         ) => {
           const amazonLeadershipPrincipleHint =
             buildAmazonLeadershipPrincipleMemoryHint(
@@ -12338,16 +12421,18 @@ export function useMeetingAssistant() {
                   screenObservationId: observation.id,
                 }
               : undefined,
-            activeMeetingTask: contextState.activeMeetingTask,
+            activeMeetingTask: includeParentContinuity
+              ? contextState.activeMeetingTask
+              : undefined,
             interviewSessionBrief:
               contextState.interviewSessionBrief,
             interviewSessionContext:
               contextState.interviewSessionContext,
-            activatedFactIds:
-              contextState.activeMeetingTask?.parent
-                .supportedFactAnchors ??
-              contextState.activeInterviewTask
-                ?.supportedFactAnchors,
+            activatedFactIds: includeParentContinuity
+              ? contextState.activeMeetingTask?.parent
+                  .supportedFactAnchors ??
+                contextState.activeInterviewTask?.supportedFactAnchors
+              : undefined,
             additionalRetrievalHints: [
               screenMemoryAskFrame !== "unknown"
                 ? {
@@ -12434,6 +12519,22 @@ export function useMeetingAssistant() {
           screenPreflight,
           corrections: speechCorrectionsRef.current,
         });
+        const screenResponseOnlyTaskScope =
+          screenTaskRelationDecision.responseOnly &&
+          screenSectionHintConsumption.disposition !== "applied"
+            ? createResponseOnlyTaskScope({
+                logicalQuestionUnitId: `screen_${observation.id}`,
+                revision: 1,
+                sourceQuestion:
+                  screenCurrentQuestionEvidenceText ||
+                  observation.captureTarget?.title ||
+                  "",
+                inferredType: screenMemoryQuestionType,
+                relationDisposition: "ambiguous",
+                preservedParent:
+                  preflightContextState.activeMeetingTask,
+              })
+            : undefined;
         const provisionalScreenTaskRelation =
           screenSectionHintConsumption.disposition === "applied"
             ? "new-parent"
@@ -12448,8 +12549,48 @@ export function useMeetingAssistant() {
             screenSectionHintConsumption.disposition === "applied"
               ? 1
               : screenTaskRelationDecision.confidence,
+          screenTaskRelationEvidenceAuthorized:
+            screenSectionHintConsumption.disposition === "applied"
+              ? true
+              : screenTaskRelationDecision.relationEvidenceAuthorized ??
+                provisionalScreenTaskRelation !== "unknown",
+          screenTaskRelationNonAuthoritativeProposal:
+            screenTaskRelationDecision.proposedRelation,
+          screenTaskRelationEvidenceSpans:
+            screenTaskRelationDecision.evidenceSpans,
+          ...formatResponseOnlyTaskScopeForTrace(
+            screenResponseOnlyTaskScope
+          ),
           screenTaskRelationCommittedBeforeModel: false,
         });
+        if (screenResponseOnlyTaskScope) {
+          const responseOnlyStepId =
+            traceStoreRef.current.startStep(
+              trace.id,
+              "Response-only task scope",
+              formatResponseOnlyTaskScopeForTrace(
+                screenResponseOnlyTaskScope
+              )
+            );
+          traceStoreRef.current.finishStep(
+            trace.id,
+            responseOnlyStepId,
+            "success"
+          );
+          sessionRecordingManagerRef.current?.recordResponseOnlyTaskScope({
+            traceId: trace.id,
+            scope: screenResponseOnlyTaskScope,
+          });
+          screenEvidencePacket = buildScreenEvidencePacket(
+            preflightContextState,
+            false
+          );
+          screenMemoryQuery =
+            buildAdvisorEvidenceRetrievalQuery(
+              screenEvidencePacket,
+              "screen-task"
+            );
+        }
         const screenPlaybook = selectInterviewPlaybook({
           query: screenMemoryQuery,
           questionType: screenMemoryQuestionType,
@@ -12464,13 +12605,15 @@ export function useMeetingAssistant() {
           questionType: normalizeQuestionTypeAlias(screenMemoryQuestionType),
           playbookId: screenPlaybook?.id,
           currentPhase:
-            provisionalScreenTaskRelation === "new-parent"
+            provisionalScreenTaskRelation === "new-parent" ||
+            Boolean(screenResponseOnlyTaskScope)
               ? screenPlaybook?.phase
               : preflightContextState.activeMeetingTask?.parent.playbookPhase ??
                 preflightContextState.activeInterviewTask?.playbookPhase ??
                 screenPlaybook?.phase,
           phaseProgress:
-            provisionalScreenTaskRelation === "new-parent"
+            provisionalScreenTaskRelation === "new-parent" ||
+            Boolean(screenResponseOnlyTaskScope)
               ? undefined
               : preflightContextState.activeMeetingTask?.parent.phaseProgress ??
                 preflightContextState.activeInterviewTask?.phaseProgress,
@@ -12516,8 +12659,9 @@ export function useMeetingAssistant() {
                 preflightContextState.activeScreenTask
               )
             : undefined);
-        const screenTransitionCandidate =
-          createSourceOwnedTransitionCandidate({
+        const screenTransitionCandidate = screenResponseOnlyTaskScope
+          ? undefined
+          : createSourceOwnedTransitionCandidate({
             sessionId: preflightContextState.sessionId,
             runtimeEpoch: runtimeEpochRef.current,
             source: "screen",
@@ -12636,7 +12780,8 @@ export function useMeetingAssistant() {
         const screenExecutionContextState =
           contextManagerRef.current.getState();
         screenEvidencePacket = buildScreenEvidencePacket(
-          screenExecutionContextState
+          screenExecutionContextState,
+          !screenResponseOnlyTaskScope
         );
         screenMemoryQuery =
           buildAdvisorEvidenceRetrievalQuery(
@@ -12664,9 +12809,12 @@ export function useMeetingAssistant() {
           "success"
         );
         const existingScreenProjectBinding =
-          screenExecutionContextState.activeMeetingTask?.parent
-            .projectBinding ??
-          screenExecutionContextState.activeInterviewTask?.projectBinding;
+          screenResponseOnlyTaskScope
+            ? undefined
+            : screenExecutionContextState.activeMeetingTask?.parent
+                .projectBinding ??
+              screenExecutionContextState.activeInterviewTask
+                ?.projectBinding;
         const screenRetrievalProjectAnchor =
           provisionalScreenTaskRelation === "new-parent"
             ? screenPreflight?.projectAnchor
@@ -12677,8 +12825,11 @@ export function useMeetingAssistant() {
           buildCurrentTaskDiagramDomainContext({
             currentQuestion: screenPreflight?.question,
             parentTopic:
-              screenExecutionContextState.activeMeetingTask?.parent.topic ??
-              screenExecutionContextState.activeInterviewTask?.topic,
+              screenResponseOnlyTaskScope
+                ? undefined
+                : screenExecutionContextState.activeMeetingTask?.parent
+                    .topic ??
+                  screenExecutionContextState.activeInterviewTask?.topic,
             relation: provisionalScreenTaskRelation,
             captureTitleFallback: observation.captureTarget?.title,
           });
@@ -12738,11 +12889,13 @@ export function useMeetingAssistant() {
             screenExecutionContextState.transcriptTurns
           ),
           activeFactAnchors:
-            screenExecutionContextState.activeMeetingTask?.parent
-              .supportedFactAnchors ??
-            screenExecutionContextState.activeInterviewTask
-              ?.supportedFactAnchors ??
-            [],
+            screenResponseOnlyTaskScope
+              ? []
+              : screenExecutionContextState.activeMeetingTask?.parent
+                  .supportedFactAnchors ??
+                screenExecutionContextState.activeInterviewTask
+                  ?.supportedFactAnchors ??
+                [],
           projectAnchor: screenPreflight?.projectAnchor,
           personalEvidenceDecision: screenPersonalEvidenceDecision,
           projectBindingDecision: screenProjectBindingDecision,
@@ -12822,20 +12975,28 @@ export function useMeetingAssistant() {
             observation,
             provider: screenModelRoute.provider,
             selectedProvider: screenModelRoute.selectedProvider,
-            recentTranscript,
+            recentTranscript: screenResponseOnlyTaskScope
+              ? ""
+              : recentTranscript,
             autoPrompt,
             responseConfig: state.settings.response,
             memoryContext: memoryContext?.contextText,
             advisorEvidencePacket: screenEvidencePacket,
             interviewSessionBrief:
-              screenExecutionContextState.interviewSessionBrief,
+              screenResponseOnlyTaskScope
+                ? sanitizeInterviewBriefForResponseOnly(
+                    screenExecutionContextState.interviewSessionBrief
+                  )
+                : screenExecutionContextState.interviewSessionBrief,
             interviewSessionContext:
               screenExecutionContextState.interviewSessionContext,
             screenPreflight,
             interviewPlaybook: screenRuntimePlaybook,
             playbookPhaseDecision: screenPhaseDecision,
             activeMeetingTask:
-              screenExecutionContextState.activeMeetingTask,
+              screenResponseOnlyTaskScope
+                ? undefined
+                : screenExecutionContextState.activeMeetingTask,
             factAnchorDecision: screenFactAnchorDecision,
             projectBindingDecision: screenProjectBindingDecision,
             signal: analysisController.signal,
@@ -13229,7 +13390,9 @@ export function useMeetingAssistant() {
           screenResultScopeDecision.action === "replace" &&
           screenSourceTransitionAllowsTaskMutation
         ) {
-          const existingInterviewTask = updatedContextState.activeInterviewTask;
+          const existingInterviewTask = screenResponseOnlyTaskScope
+            ? undefined
+            : updatedContextState.activeInterviewTask;
           const screenLanguage = inferTrustedProgrammingLanguage({
             screenPreflightLanguage: screenPreflight?.programmingLanguage,
             textHints: [screenPreflight?.question, recentTranscript],
@@ -13271,11 +13434,31 @@ export function useMeetingAssistant() {
               screenSectionHintConsumption.disposition === "applied"
                 ? 1
                 : screenTaskRelationDecision.confidence,
+            relationEvidenceAuthorized:
+              screenSectionHintConsumption.disposition === "applied"
+                ? true
+                : screenTaskRelationDecision
+                    .relationEvidenceAuthorized ??
+                  provisionalScreenTaskRelation !== "unknown",
+            responseOnly: Boolean(screenResponseOnlyTaskScope),
+            proposedRelation:
+              screenTaskRelationDecision.proposedRelation,
+            evidenceSpans:
+              screenTaskRelationDecision.evidenceSpans,
           };
           traceStoreRef.current.updateMetadata(trace.id, {
             screenTaskRelation: screenRelationDecision.relation,
             screenTaskRelationReason: screenRelationDecision.reason,
             screenTaskRelationConfidence: screenRelationDecision.confidence,
+            screenTaskRelationEvidenceAuthorized:
+              screenRelationDecision.relationEvidenceAuthorized,
+            screenTaskRelationNonAuthoritativeProposal:
+              screenRelationDecision.proposedRelation,
+            screenTaskRelationEvidenceSpans:
+              screenRelationDecision.evidenceSpans,
+            ...formatResponseOnlyTaskScopeForTrace(
+              screenResponseOnlyTaskScope
+            ),
           });
           const screenRelationStepId = traceStoreRef.current.startStep(
             trace.id,
@@ -13365,7 +13548,13 @@ export function useMeetingAssistant() {
               "new-parent"
               ? "followup-parent"
               : screenRelationDecision.relation;
-          const screenContinuity = updateInterviewTaskContinuityForAnswer({
+          const screenContinuity = screenResponseOnlyTaskScope
+            ? {
+                task: undefined,
+                startedNewParent: false,
+                clearedParent: false,
+              }
+            : updateInterviewTaskContinuityForAnswer({
             existingTask: existingInterviewTask,
             source: "screen",
             questionType: taskKind,
@@ -13430,7 +13619,10 @@ export function useMeetingAssistant() {
               after: nextWhiteboard,
             }),
           });
-          if (!screenSourceTransitionCommittedBeforeModel) {
+          if (
+            !screenResponseOnlyTaskScope &&
+            !screenSourceTransitionCommittedBeforeModel
+          ) {
             recordCommittedPlaybookPhaseTransition({
               operationId: `phase-screen-${trace.id}`,
               source: "automatic",
@@ -13439,14 +13631,16 @@ export function useMeetingAssistant() {
               traceId: trace.id,
             });
           }
-          contextManagerRef.current.setActiveMeetingTaskState({
-            activeScreenTask,
-            activeInterviewTask: screenContinuity.task ?? null,
-          });
+          if (!screenResponseOnlyTaskScope) {
+            contextManagerRef.current.setActiveMeetingTaskState({
+              activeScreenTask,
+              activeInterviewTask: screenContinuity.task ?? null,
+            });
+          }
           screenStartedNewInterviewParent =
             screenStartedNewInterviewParent ||
             screenContinuity.startedNewParent;
-          screenTaskResultCommitted = true;
+          screenTaskResultCommitted = !screenResponseOnlyTaskScope;
           traceStoreRef.current.updateMetadata(trace.id, {
             activeInterviewParentId: screenContinuity.task?.id,
             activeInterviewParentKind: screenContinuity.task?.stableKind,
@@ -17423,7 +17617,6 @@ function resolveAdvisorTaskSignals(
   const activeQuestionType = getAdvisorActiveQuestionType(context);
 
   if (hasAdvisorActiveTask(context) && activeQuestionType) {
-    const activeParentKind = normalizeInterviewParentKind(activeQuestionType);
     const latestParentKind = normalizeInterviewParentKind(latestQuestionType);
     const latestIsParentKind = Boolean(
       latestParentKind && isParentInterviewKind(latestParentKind)
@@ -17432,23 +17625,24 @@ function resolveAdvisorTaskSignals(
       latestUsefulText &&
       (hasQuestionOrTaskSignal(latestUsefulText) ||
         isTaskSwitchTranscript(latestUsefulText));
-    const latestHasParentOverrideAuthority = Boolean(
-      openingRoute ||
-        canQuestionTypeDecisionOverrideParent(latestQuestionTypeDecision)
-    );
-    const useLatestAsChild = shouldUseLatestTurnAsChildProbe({
-      activeQuestionType,
-      latestQuestionType,
-      latestText: latestUsefulText,
-    });
+    const taskRelationAuthorityDecision =
+      decideCrossTypeTaskRelationAuthority({
+        activeQuestionType,
+        candidateQuestionType: latestQuestionType,
+        currentText: latestUsefulText,
+        explicitTaskSwitch: isTaskSwitchTranscript(latestUsefulText),
+      });
+    const authorizedNewParent =
+      taskRelationAuthorityDecision?.relation === "new-parent" &&
+      taskRelationAuthorityDecision.relationEvidenceAuthorized;
+    const useLatestAsChild =
+      taskRelationAuthorityDecision?.relation === "child-probe" &&
+      taskRelationAuthorityDecision.relationEvidenceAuthorized;
     const shouldStartNewParent =
       Boolean(latestLooksLikeTask) &&
-      latestHasParentOverrideAuthority &&
-      activeParentKind !== undefined &&
       latestIsParentKind &&
       latestParentKind !== undefined &&
-      !isCompatibleParentKind(activeParentKind, latestParentKind) &&
-      (!useLatestAsChild || isTaskSwitchTranscript(latestUsefulText));
+      authorizedNewParent;
 
     if (shouldStartNewParent) {
       return {
@@ -17483,6 +17677,9 @@ function resolveAdvisorTaskSignals(
         topicDomain: latestTopicDomain,
         query: buildFocusedAdvisorTaskQuery(context, latestUsefulText),
         taskRelation: "child-probe",
+        taskRelationAuthorityDecision,
+        relationEvidenceAuthorized: true,
+        responseOnlyRelation: false,
         subtaskIntent: inferAdvisorSubtaskIntent(
           latestUsefulText,
           latestQuestionType
@@ -17495,6 +17692,35 @@ function resolveAdvisorTaskSignals(
         latestTurnTaxonomyBoundaryReason: "active-parent-continuity",
         taxonomyFallbackSuppressed: false,
         unknownTaskMutationBlocked: false,
+      };
+    }
+
+    if (
+      taskRelationAuthorityDecision?.disposition === "response-only"
+    ) {
+      return {
+        questionType: latestQuestionType,
+        questionTypeDecision: latestQuestionTypeDecision,
+        askFrame: latestAskFrame,
+        topicDomain: latestTopicDomain,
+        query: latestUsefulText,
+        taskRelation: "unknown",
+        taskRelationAuthorityDecision,
+        relationEvidenceAuthorized: false,
+        responseOnlyRelation: true,
+        subtaskIntent: inferAdvisorSubtaskIntent(
+          latestUsefulText,
+          latestQuestionType
+        ),
+        projectAnchor: latestProjectAnchor,
+        source: "response-only-ambiguous-relation",
+        reuseActivePlaybook: false,
+        openingRoute,
+        latestTurnAskFrame: latestAskFrame,
+        latestTurnTaxonomyBoundaryReason:
+          "active-parent-continuity",
+        taxonomyFallbackSuppressed: false,
+        unknownTaskMutationBlocked: true,
       };
     }
 
@@ -17595,6 +17821,13 @@ function formatAdvisorQuestionTypeDecisionForTrace(
       signals.taxonomyFallbackSuppressed ?? false,
     unknownTaskMutationBlocked:
       signals.unknownTaskMutationBlocked ?? false,
+    relationEvidenceAuthorized:
+      signals.relationEvidenceAuthorized ??
+      signals.taskRelation !== "unknown",
+    responseOnlyRelation: signals.responseOnlyRelation ?? false,
+    ...formatTaskRelationAuthorityForTrace(
+      signals.taskRelationAuthorityDecision
+    ),
   };
 
   if (signals.openingRoute) {
@@ -17695,6 +17928,9 @@ function applyManualQuestionTypeCorrectionToAdvisorSignals(
       .filter(Boolean)
       .join("\n"),
     taskRelation,
+    taskRelationAuthorityDecision: undefined,
+    relationEvidenceAuthorized: true,
+    responseOnlyRelation: false,
     source: "manual-question-type-correction",
     reuseActivePlaybook: correction.target !== "child",
     latestTurnTaxonomyBoundaryReason: "manual-question-type-correction",
@@ -17749,30 +17985,6 @@ function buildFocusedAdvisorTaskQuery(
     .filter(Boolean)
     .join("\n\n")
     .slice(-4000);
-}
-
-function shouldUseLatestTurnAsChildProbe({
-  activeQuestionType,
-  latestQuestionType,
-  latestText,
-}: {
-  activeQuestionType: MemoryQuestionType;
-  latestQuestionType: MemoryQuestionType;
-  latestText: string;
-}) {
-  if (!latestText || latestQuestionType === "unknown") return false;
-  if (latestQuestionType === activeQuestionType) return false;
-
-  const parentAllowsChild =
-    activeQuestionType === "ai-ml-system-design" ||
-    activeQuestionType === "general-system-design" ||
-    activeQuestionType === "project-deep-dive";
-  if (!parentAllowsChild) return false;
-
-  if (latestQuestionType === "field-knowledge") return true;
-  if (latestQuestionType === "coding") return true;
-
-  return false;
 }
 
 function isResumeParentTranscript(text: string) {
@@ -18319,59 +18531,90 @@ function decideScreenTaskRelation({
   relation: InterviewTaskRelation;
   reason: string;
   confidence: number;
+  relationEvidenceAuthorized?: boolean;
+  responseOnly?: boolean;
+  proposedRelation?: InterviewTaskRelation;
+  evidenceSpans?: string[];
 } {
   const nextKind = normalizeInterviewParentKind(taskKind);
   const nextQuestionType = readMemoryQuestionType(taskKind) ?? "unknown";
+  const currentText = question || screenEvidenceText;
+  const crossTypeAuthority = decideCrossTypeTaskRelationAuthority({
+    activeQuestionType: existingTask?.stableKind,
+    candidateQuestionType: nextQuestionType,
+    currentText,
+    explicitTaskSwitch: isTaskSwitchTranscript(currentText),
+  });
 
   if (!existingTask) {
     return {
       relation: "new-parent",
       reason: "no-existing-parent",
       confidence: 0.95,
+      relationEvidenceAuthorized: true,
+    };
+  }
+
+  if (
+    crossTypeAuthority?.relation === "new-parent" &&
+    crossTypeAuthority.relationEvidenceAuthorized
+  ) {
+    return {
+      relation: "new-parent",
+      reason: crossTypeAuthority.reason,
+      confidence: 1,
+      relationEvidenceAuthorized: true,
+      evidenceSpans: crossTypeAuthority.evidenceSpans,
     };
   }
 
   if (!nextKind || !isParentInterviewKind(nextKind)) {
-    if (
-      shouldUseLatestTurnAsChildProbe({
-        activeQuestionType: existingTask.stableKind,
-        latestQuestionType: nextQuestionType,
-        latestText: question || screenEvidenceText,
-      })
-    ) {
+    if (crossTypeAuthority?.relation === "child-probe") {
       return {
         relation: "child-probe",
-        reason: "screen-nonparent-child-probe",
-        confidence: 0.82,
+        reason: crossTypeAuthority.reason,
+        confidence: 0.9,
+        relationEvidenceAuthorized: true,
+        evidenceSpans: crossTypeAuthority.evidenceSpans,
       };
     }
 
     return {
-      relation: "followup-parent",
-      reason: "screen-nonparent-followup",
-      confidence: 0.58,
+      relation: "unknown",
+      proposedRelation:
+        crossTypeAuthority?.proposedRelation ?? "followup-parent",
+      reason:
+        crossTypeAuthority?.reason ??
+        "screen-nonparent-relation-unresolved",
+      confidence: 0,
+      relationEvidenceAuthorized: false,
+      responseOnly: true,
+      evidenceSpans: crossTypeAuthority?.evidenceSpans,
     };
   }
 
   if (!isCompatibleParentKind(existingTask.stableKind, nextKind)) {
-    if (
-      shouldUseLatestTurnAsChildProbe({
-        activeQuestionType: existingTask.stableKind,
-        latestQuestionType: nextQuestionType,
-        latestText: question || screenEvidenceText,
-      })
-    ) {
+    if (crossTypeAuthority?.relation === "child-probe") {
       return {
         relation: "child-probe",
-        reason: "screen-compatible-child-probe",
-        confidence: 0.78,
+        reason: crossTypeAuthority.reason,
+        confidence: 0.9,
+        relationEvidenceAuthorized: true,
+        evidenceSpans: crossTypeAuthority.evidenceSpans,
       };
     }
 
     return {
-      relation: "new-parent",
-      reason: "screen-parent-kind-mismatch",
-      confidence: 0.9,
+      relation: "unknown",
+      proposedRelation:
+        crossTypeAuthority?.proposedRelation ?? "new-parent",
+      reason:
+        crossTypeAuthority?.reason ??
+        "screen-parent-kind-mismatch-nonauthoritative",
+      confidence: 0,
+      relationEvidenceAuthorized: false,
+      responseOnly: true,
+      evidenceSpans: crossTypeAuthority?.evidenceSpans,
     };
   }
 
@@ -18393,9 +18636,12 @@ function decideScreenTaskRelation({
     .join("\n");
   if (!screenText.trim()) {
     return {
-      relation: "followup-parent",
+      relation: "unknown",
+      proposedRelation: "followup-parent",
       reason: "screen-source-evidence-missing",
-      confidence: 0.5,
+      confidence: 0,
+      relationEvidenceAuthorized: false,
+      responseOnly: true,
     };
   }
   const overlap = countSignificantTokenOverlap(screenText, parentText);
@@ -18419,6 +18665,7 @@ function decideScreenTaskRelation({
       relation: "resume-parent",
       reason: "screen-project-anchor-matches-parent",
       confidence: 0.9,
+      relationEvidenceAuthorized: true,
     };
   }
 
@@ -18427,30 +18674,40 @@ function decideScreenTaskRelation({
       relation: "resume-parent",
       reason: "screen-contains-recent-correction-term",
       confidence: 0.86,
+      relationEvidenceAuthorized: true,
     };
   }
 
   if (semanticSimilarity >= 0.34) {
     return {
-      relation: "resume-parent",
-      reason: `screen-parent-semantic-similarity:${semanticSimilarity.toFixed(2)}`,
-      confidence: Math.min(0.88, 0.58 + semanticSimilarity),
+      relation: "unknown",
+      proposedRelation: "resume-parent",
+      reason: `screen-parent-semantic-proposal-nonauthoritative:${semanticSimilarity.toFixed(2)}`,
+      confidence: semanticSimilarity,
+      relationEvidenceAuthorized: false,
+      responseOnly: true,
     };
   }
 
   if (overlap >= 2) {
     return {
-      relation: "resume-parent",
-      reason: `screen-parent-token-overlap:${overlap}`,
-      confidence: Math.min(0.84, 0.55 + overlap * 0.08),
+      relation: "unknown",
+      proposedRelation: "resume-parent",
+      reason: `screen-parent-token-overlap-proposal-nonauthoritative:${overlap}`,
+      confidence: Math.min(0.8, overlap * 0.1),
+      relationEvidenceAuthorized: false,
+      responseOnly: true,
     };
   }
 
   if (semanticSimilarity >= 0.22 && hasSharedDomainSignal(screenText, parentText)) {
     return {
-      relation: "followup-parent",
-      reason: `screen-parent-domain-similarity:${semanticSimilarity.toFixed(2)}`,
-      confidence: Math.min(0.78, 0.52 + semanticSimilarity),
+      relation: "unknown",
+      proposedRelation: "followup-parent",
+      reason: `screen-parent-domain-proposal-nonauthoritative:${semanticSimilarity.toFixed(2)}`,
+      confidence: semanticSimilarity,
+      relationEvidenceAuthorized: false,
+      responseOnly: true,
     };
   }
 
@@ -18460,24 +18717,33 @@ function decideScreenTaskRelation({
     hasAimlDesignOverlap(screenText, parentText)
   ) {
     return {
-      relation: "followup-parent",
-      reason: "screen-aiml-design-overlap",
-      confidence: 0.76,
+      relation: "unknown",
+      proposedRelation: "followup-parent",
+      reason: "screen-aiml-design-overlap-proposal-nonauthoritative",
+      confidence: 0.5,
+      relationEvidenceAuthorized: false,
+      responseOnly: true,
     };
   }
 
   if (nextKind === "coding") {
     return {
-      relation: "new-parent",
-      reason: "screen-coding-without-parent-overlap",
-      confidence: 0.8,
+      relation: "unknown",
+      proposedRelation: "new-parent",
+      reason: "screen-coding-new-parent-proposal-nonauthoritative",
+      confidence: 0,
+      relationEvidenceAuthorized: false,
+      responseOnly: true,
     };
   }
 
   return {
-    relation: "new-parent",
-    reason: "screen-compatible-kind-low-overlap",
-    confidence: 0.62,
+    relation: "unknown",
+    proposedRelation: "new-parent",
+    reason: "screen-compatible-kind-low-overlap-nonauthoritative",
+    confidence: 0,
+    relationEvidenceAuthorized: false,
+    responseOnly: true,
   };
 }
 

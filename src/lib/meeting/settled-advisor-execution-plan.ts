@@ -18,6 +18,7 @@ import {
   authorizeResponseArtifactMutation,
   type ResponseArtifactMutationAuthorization,
 } from "./response-artifact-authorization.js";
+import type { ResponseOnlyTaskScope } from "./response-only-task-scope.js";
 import { normalizeCanonicalQuestionType } from "./task-taxonomy.js";
 import type {
   InterviewPlaybookPhase,
@@ -77,6 +78,7 @@ export interface SettledAdvisorExecutionPlan {
   factAnchorPolicy: SettledAdvisorFactAnchorPolicy;
   promptContract: SettledAdvisorPromptContract;
   artifactPolicy: ResponseArtifactMutationAuthorization;
+  responseOnlyTaskScope?: ResponseOnlyTaskScope;
   transientPersonalStatusDecision?: TransientPersonalStatusDecision;
   createdAt: number;
 }
@@ -109,11 +111,16 @@ export function buildSettledAdvisorExecutionPlan(input: {
   askFrame: TaskAskFrame;
   topicDomain: TaskTopicDomain;
   projectAnchor?: string;
+  responseOnlyTaskScope?: ResponseOnlyTaskScope;
   transientPersonalStatusDecision?: TransientPersonalStatusDecision;
   createdAt?: number;
 }): SettledAdvisorExecutionPlan {
   const relation = toInterviewTaskRelation(input.settlement.relation);
-  const taskSnapshot = input.activeMeetingTask
+  const responseOnlyTaskScope = input.responseOnlyTaskScope
+    ? cloneResponseOnlyTaskScope(input.responseOnlyTaskScope)
+    : undefined;
+  const taskSnapshot =
+    !responseOnlyTaskScope && input.activeMeetingTask
     ? cloneActiveMeetingTask(input.activeMeetingTask)
     : undefined;
   const transientPersonalStatusDecision =
@@ -136,7 +143,9 @@ export function buildSettledAdvisorExecutionPlan(input: {
         }
       : resolveMeetingResponseOwner({
           preBoundaryType: input.preBoundaryQuestionType,
-          postBoundaryParentType: taskSnapshot?.parent.questionType,
+          postBoundaryParentType: responseOnlyTaskScope
+            ? undefined
+            : taskSnapshot?.parent.questionType,
           proposedQuestionType: input.settlement.questionType,
           relation,
           taskBoundaryCommitted: input.taskBoundaryCommitted,
@@ -154,8 +163,12 @@ export function buildSettledAdvisorExecutionPlan(input: {
     ? "compact-spoken"
     : resolveMeetingAnswerProfile(responseOwner.questionType);
   const artifactPolicy = authorizeResponseArtifactMutation({
-    parentTaskId: taskSnapshot?.parent.id,
-    parentQuestionType: taskSnapshot?.parent.questionType,
+    parentTaskId: responseOnlyTaskScope
+      ? undefined
+      : taskSnapshot?.parent.id,
+    parentQuestionType: responseOnlyTaskScope
+      ? undefined
+      : taskSnapshot?.parent.questionType,
     responseOwnerQuestionType: responseOwner.questionType,
     responseOwnerSource: responseOwner.source,
     relation,
@@ -169,8 +182,12 @@ export function buildSettledAdvisorExecutionPlan(input: {
         policyId: "personal-logistics" as const,
       }
     : resolveFactAnchorPolicy(responseOwner.questionType);
-  const expectedParentId = taskSnapshot?.parent.id;
-  const expectedParentRevision = taskSnapshot?.parent.revisions;
+  const expectedParentId =
+    input.activeMeetingTask?.parent.id ??
+    responseOnlyTaskScope?.preservedParentId;
+  const expectedParentRevision =
+    input.activeMeetingTask?.parent.revisions ??
+    responseOnlyTaskScope?.preservedParentRevision;
   const playbook = input.playbook
     ? cloneSelectedPlaybook(input.playbook)
     : undefined;
@@ -186,6 +203,7 @@ export function buildSettledAdvisorExecutionPlan(input: {
     topicDomain: input.topicDomain,
     projectAnchor: input.projectAnchor,
     artifactDisposition: artifactPolicy.disposition,
+    responseOnlyTaskScopeId: responseOnlyTaskScope?.scopeId,
     transientPersonalStatusDecisionId:
       transientPersonalStatusDecision?.id,
   });
@@ -241,6 +259,7 @@ export function buildSettledAdvisorExecutionPlan(input: {
       contractId: `meeting-answer:${promptProfile}`,
     },
     artifactPolicy,
+    responseOnlyTaskScope,
     transientPersonalStatusDecision,
     createdAt: input.createdAt ?? Date.now(),
   };
@@ -350,6 +369,14 @@ export function formatSettledAdvisorExecutionPlanForTrace(
       plan.promptContract.contractId,
     settledExecutionPlanArtifactDisposition:
       plan.artifactPolicy.disposition,
+    settledExecutionPlanResponseOnlyScopeId:
+      plan.responseOnlyTaskScope?.scopeId,
+    settledExecutionPlanResponseOnlyDisposition:
+      plan.responseOnlyTaskScope?.relationDisposition,
+    settledExecutionPlanResponseOnlyPreservedParentId:
+      plan.responseOnlyTaskScope?.preservedParentId,
+    settledExecutionPlanResponseOnlyParentContextInjected:
+      plan.responseOnlyTaskScope ? false : undefined,
     settledExecutionPlanTransientPersonalStatusDecisionId:
       plan.transientPersonalStatusDecision?.id,
     settledExecutionPlanTransientPersonalStatusDomain:
@@ -417,6 +444,12 @@ function cloneTransientPersonalStatusDecision(
   );
 }
 
+function cloneResponseOnlyTaskScope(scope: ResponseOnlyTaskScope) {
+  return deepFreeze(
+    JSON.parse(JSON.stringify(scope)) as ResponseOnlyTaskScope
+  );
+}
+
 function normalizeResponseOwnerType(value: unknown) {
   return normalizeCanonicalQuestionType(value) ?? undefined;
 }
@@ -444,6 +477,7 @@ function createExecutionPlanId(input: {
   topicDomain: TaskTopicDomain;
   projectAnchor?: string;
   artifactDisposition: string;
+  responseOnlyTaskScopeId?: string;
   transientPersonalStatusDecisionId?: string;
 }) {
   return `advisor_plan_${hashStableText(
@@ -462,6 +496,7 @@ function createExecutionPlanId(input: {
       input.topicDomain,
       input.projectAnchor ?? "",
       input.artifactDisposition,
+      input.responseOnlyTaskScopeId ?? "",
       input.transientPersonalStatusDecisionId ?? "",
     ].join("|")
   )}`;

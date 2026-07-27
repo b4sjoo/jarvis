@@ -8,6 +8,7 @@ import {
   buildSettledAdvisorExecutionPlan,
   formatSettledAdvisorExecutionPlanForTrace,
 } from "../src/lib/meeting/settled-advisor-execution-plan.js";
+import { createResponseOnlyTaskScope } from "../src/lib/meeting/response-only-task-scope.js";
 import type { SelectedInterviewPlaybook } from "../src/lib/meeting/types.js";
 import type { TransientPersonalStatusDecision } from "../src/lib/meeting/types.js";
 
@@ -134,6 +135,59 @@ test("builds one immutable coding plan for route, prompt, memory, and artifacts"
   task.parent.questionType = "behavioral";
   assert.equal(plan.taskSnapshot?.parent.questionType, "coding");
   assert.equal(Object.isFrozen(plan.taskSnapshot?.parent), true);
+});
+
+test("response-only plan routes from the current question without exposing parent state", () => {
+  const preservedTask = activeTask("ai-ml-system-design");
+  const responseOnlySettlement = settlement({
+    questionType: "coding",
+    relation: "unknown",
+    relationAuthoritySource: "provisional",
+    relationMutationAuthorized: false,
+    parentMutationAuthorized: false,
+  });
+  const responseOnlyTaskScope = createResponseOnlyTaskScope({
+    logicalQuestionUnitId:
+      responseOnlySettlement.logicalQuestionUnitId,
+    revision: responseOnlySettlement.revision,
+    sourceQuestion: "Implement a standalone stack.",
+    sourceTurnIds: ["turn-a"],
+    inferredType: "coding",
+    relationDisposition: "ambiguous",
+    preservedParent: preservedTask,
+    now: 100,
+  });
+  const plan = buildSettledAdvisorExecutionPlan({
+    settlement: responseOnlySettlement,
+    activeMeetingTask: preservedTask,
+    preBoundaryQuestionType: "ai-ml-system-design",
+    taskBoundaryCommitted: false,
+    childOwnsResponse: false,
+    providerSnapshot: providers,
+    playbook: playbook(),
+    memoryUseCase: "coding_interview",
+    askFrame: "direct-answer",
+    topicDomain: "backend",
+    responseOnlyTaskScope,
+    createdAt: 100,
+  });
+
+  assert.equal(plan.questionType, "coding");
+  assert.equal(plan.responseOwner.source, "current-question");
+  assert.equal(plan.modelRoute.route, "coding-override");
+  assert.equal(plan.taskSnapshot, undefined);
+  assert.equal(plan.expectedParentId, preservedTask.parent.id);
+  assert.equal(
+    plan.expectedParentRevision,
+    preservedTask.parent.revisions
+  );
+  assert.equal(
+    plan.responseOnlyTaskScope?.scopeId,
+    responseOnlyTaskScope.scopeId
+  );
+  assert.equal(plan.artifactPolicy.allowCode, false);
+  assert.equal(plan.artifactPolicy.allowWhiteboard, false);
+  assert.equal(plan.artifactPolicy.allowParentContextMutation, false);
 });
 
 test("a committed general-system-design settlement atomically leaves the coding route", () => {
