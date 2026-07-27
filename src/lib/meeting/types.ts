@@ -570,6 +570,30 @@ export type WhiteboardUpdateSource =
   | "task-reset"
   | "new-parent";
 
+export type WhiteboardRenderStatus =
+  | "pending-validation"
+  | "valid-text"
+  | "valid-mermaid"
+  | "repairing"
+  | "repaired-mermaid"
+  | "ascii-fallback"
+  | "preserved-last-valid"
+  | "invalid";
+
+export interface WhiteboardRenderState {
+  artifactId: string;
+  parentTaskId: string;
+  candidateRevision: number;
+  visibleRevision?: number;
+  lastValidRevision?: number;
+  status: WhiteboardRenderStatus;
+  validationOperationId: string;
+  validationDurationMs?: number;
+  parserErrorClass?: string;
+  fallbackReason?: string;
+  validatedAt?: number;
+}
+
 export interface WhiteboardArtifact {
   id: string;
   parentTaskId: string;
@@ -587,6 +611,7 @@ export interface WhiteboardArtifact {
   revisionReason?: string;
   createdTraceId?: string;
   lastUpdatedTraceId?: string;
+  renderState?: WhiteboardRenderState;
   updateSource: WhiteboardUpdateSource;
   updatedAt: number;
   createdAt: number;

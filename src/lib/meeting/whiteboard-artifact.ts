@@ -4,6 +4,7 @@ import type {
   ParsedMeetingAnswer,
   WhiteboardArtifact,
   WhiteboardDomainTrack,
+  WhiteboardRenderState,
   WhiteboardUpdateSource,
 } from "./types";
 import type { ArtifactProjectionDecision } from "./meeting-answer-display.js";
@@ -28,12 +29,165 @@ export interface WhiteboardArtifactUpdateInput {
   provisional?: boolean;
   openConstraintCategories?: string[];
   revisionReason?: string;
+  renderValidation?: WhiteboardRenderValidationDecision;
   now?: number;
 }
 
 export interface WhiteboardArtifactDisplay {
   whiteboard: ArtifactProjectionDecision;
   isCached: boolean;
+}
+
+export type WhiteboardRenderCandidateKind =
+  | "none"
+  | "plain-text"
+  | "mermaid";
+
+export type WhiteboardRenderValidationDisposition =
+  | "no-candidate"
+  | "valid-text"
+  | "valid-mermaid"
+  | "invalid-mermaid";
+
+export interface WhiteboardRenderValidationDecision {
+  operationId: string;
+  candidateKind: WhiteboardRenderCandidateKind;
+  candidateFingerprint: string;
+  disposition: WhiteboardRenderValidationDisposition;
+  valid: boolean;
+  durationMs: number;
+  parserErrorClass?: string;
+}
+
+export interface WhiteboardRenderValidationInput {
+  whiteboard?: string;
+  operationId?: string;
+}
+
+interface MermaidModule {
+  default: {
+    parse: (
+      text: string,
+      options?: { suppressErrors?: boolean }
+    ) => Promise<unknown>;
+  };
+}
+
+let mermaidModulePromise: Promise<MermaidModule> | undefined;
+
+export function prewarmWhiteboardRenderValidator() {
+  void loadMermaidModule().catch(() => undefined);
+}
+
+export async function validateWhiteboardRenderCandidate({
+  whiteboard,
+  operationId = createWhiteboardValidationOperationId(),
+}: WhiteboardRenderValidationInput): Promise<WhiteboardRenderValidationDecision> {
+  const startedAt = performance.now();
+  const normalized = normalizeWhiteboardText(whiteboard);
+  const candidateFingerprint = fingerprintWhiteboard(normalized);
+  if (!normalized) {
+    return {
+      operationId,
+      candidateKind: "none",
+      candidateFingerprint,
+      disposition: "no-candidate",
+      valid: true,
+      durationMs: elapsedMs(startedAt),
+    };
+  }
+
+  const mermaidBlocks = extractMermaidBlocks(normalized);
+  const containsMermaidFence = /```[ \t]*mermaid\b/i.test(normalized);
+  if (!containsMermaidFence) {
+    return {
+      operationId,
+      candidateKind: "plain-text",
+      candidateFingerprint,
+      disposition: "valid-text",
+      valid: true,
+      durationMs: elapsedMs(startedAt),
+    };
+  }
+
+  if (!mermaidBlocks.length) {
+    return invalidMermaidDecision({
+      operationId,
+      candidateFingerprint,
+      parserErrorClass: "unclosed-mermaid-fence",
+      startedAt,
+    });
+  }
+
+  try {
+    const mermaid = (await loadMermaidModule()).default;
+    for (const block of mermaidBlocks) {
+      if (!block) {
+        return invalidMermaidDecision({
+          operationId,
+          candidateFingerprint,
+          parserErrorClass: "empty-mermaid-diagram",
+          startedAt,
+        });
+      }
+      const parsed = await mermaid.parse(block, { suppressErrors: true });
+      if (!parsed) {
+        return invalidMermaidDecision({
+          operationId,
+          candidateFingerprint,
+          parserErrorClass: "mermaid-syntax-error",
+          startedAt,
+        });
+      }
+    }
+  } catch (error) {
+    return invalidMermaidDecision({
+      operationId,
+      candidateFingerprint,
+      parserErrorClass: classifyMermaidParserError(error),
+      startedAt,
+    });
+  }
+
+  return {
+    operationId,
+    candidateKind: "mermaid",
+    candidateFingerprint,
+    disposition: "valid-mermaid",
+    valid: true,
+    durationMs: elapsedMs(startedAt),
+  };
+}
+
+export function formatWhiteboardRenderValidationForTrace({
+  decision,
+  before,
+  after,
+}: {
+  decision?: WhiteboardRenderValidationDecision;
+  before?: Pick<WhiteboardArtifact, "revision">;
+  after?: Pick<WhiteboardArtifact, "revision" | "renderState">;
+}) {
+  const candidateRevision = (before?.revision ?? 0) + 1;
+  const visibleRevisionAfter = after?.revision;
+  return {
+    whiteboardRenderValidationOperationId: decision?.operationId,
+    whiteboardRenderCandidateKind: decision?.candidateKind ?? "none",
+    whiteboardRenderCandidateRevision: decision
+      ? candidateRevision
+      : undefined,
+    whiteboardRenderValidationDisposition:
+      decision?.disposition ?? "no-candidate",
+    whiteboardRenderValidationDurationMs: decision?.durationMs ?? 0,
+    whiteboardRenderParserErrorClass: decision?.parserErrorClass,
+    whiteboardRenderVisibleRevisionBefore: before?.revision,
+    whiteboardRenderVisibleRevisionAfter: visibleRevisionAfter,
+    whiteboardRenderPreservedLastValid:
+      decision?.valid === false &&
+      Boolean(before?.revision && visibleRevisionAfter === before.revision),
+    whiteboardRenderAnswerStreamingIndependent: true,
+    whiteboardRenderStatus: after?.renderState?.status,
+  };
 }
 
 export function updateWhiteboardArtifactFromAnswer({
@@ -51,6 +205,7 @@ export function updateWhiteboardArtifactFromAnswer({
   provisional = phase === "requirement_clarification",
   openConstraintCategories = [],
   revisionReason,
+  renderValidation,
   now = Date.now(),
 }: WhiteboardArtifactUpdateInput): WhiteboardArtifact | undefined {
   if (!isWhiteboardParentType(parentQuestionType)) return undefined;
@@ -69,6 +224,18 @@ export function updateWhiteboardArtifactFromAnswer({
     return existing;
   }
 
+  const candidateValidation = authorizeWhiteboardCandidate({
+    whiteboard,
+    renderValidation,
+  });
+  if (!candidateValidation.valid) {
+    return preserveLastValidWhiteboard({
+      existing,
+      decision: candidateValidation,
+      now,
+    });
+  }
+
   const nextOverlayIds = uniqueIds([
     ...(existing?.selectedOverlayIds ?? []),
     ...selectedOverlayIds,
@@ -84,8 +251,10 @@ export function updateWhiteboardArtifactFromAnswer({
         : "model-output");
 
   if (!existing) {
+    const id = createWhiteboardArtifactId();
+    const revision = 1;
     return {
-      id: createWhiteboardArtifactId(),
+      id,
       parentTaskId,
       questionInstanceId,
       domainTrack: inferWhiteboardDomainTrack(parentQuestionType, whiteboard),
@@ -95,12 +264,19 @@ export function updateWhiteboardArtifactFromAnswer({
       title: buildWhiteboardTitle(parentTopic, parentQuestionType),
       content: whiteboard,
       summary,
-      revision: 1,
+      revision,
       provisional,
       openConstraintCategories: nextOpenConstraintCategories,
       revisionReason: nextRevisionReason,
       createdTraceId: traceId,
       lastUpdatedTraceId: traceId,
+      renderState: buildValidRenderState({
+        artifactId: id,
+        parentTaskId,
+        revision,
+        decision: candidateValidation,
+        now,
+      }),
       updateSource,
       createdAt: now,
       updatedAt: now,
@@ -117,6 +293,20 @@ export function updateWhiteboardArtifactFromAnswer({
       nextOpenConstraintCategories
     )
   ) {
+    if (existing.renderState?.status === "preserved-last-valid") {
+      return {
+        ...existing,
+        renderState: buildValidRenderState({
+          artifactId: existing.id,
+          parentTaskId,
+          revision: existing.revision,
+          decision: candidateValidation,
+          now,
+        }),
+        lastUpdatedTraceId: traceId,
+        updatedAt: now,
+      };
+    }
     return existing;
   }
 
@@ -134,6 +324,13 @@ export function updateWhiteboardArtifactFromAnswer({
     openConstraintCategories: nextOpenConstraintCategories,
     revisionReason: nextRevisionReason,
     lastUpdatedTraceId: traceId,
+    renderState: buildValidRenderState({
+      artifactId: existing.id,
+      parentTaskId,
+      revision: existing.revision + 1,
+      decision: candidateValidation,
+      now,
+    }),
     updateSource,
     updatedAt: now,
   };
@@ -170,14 +367,15 @@ export function resolveWhiteboardArtifactDisplay({
   activeParentTaskId,
   activeParentQuestionType,
   artifact,
-  inlineWhiteboard,
   sourceParentTaskId,
   sourceParentQuestionType,
 }: {
   activeParentTaskId: string;
   activeParentQuestionType?: string;
-  artifact?: Pick<WhiteboardArtifact, "parentTaskId" | "content">;
-  inlineWhiteboard?: string;
+  artifact?: Pick<
+    WhiteboardArtifact,
+    "parentTaskId" | "content" | "renderState"
+  >;
   sourceParentTaskId?: string;
   sourceParentQuestionType?: string;
 }): WhiteboardArtifactDisplay {
@@ -195,28 +393,28 @@ export function resolveWhiteboardArtifactDisplay({
     sourceParentTaskId === activeParentTaskId &&
     Boolean(sourceType) &&
     areCompatibleParentContinuityTypes(sourceType, activeType);
-  const normalizedInline = normalizeWhiteboardText(inlineWhiteboard);
-  if (sourceMatchesParent && normalizedInline) {
-    return {
-      whiteboard: { kind: "replace", value: normalizedInline },
-      isCached: false,
-    };
-  }
 
   if (artifact?.parentTaskId === activeParentTaskId) {
     return {
       whiteboard: { kind: "replace", value: artifact.content },
-      isCached: true,
+      isCached:
+        !sourceMatchesParent ||
+        !artifact.renderState ||
+        artifact.renderState?.status === "preserved-last-valid",
     };
   }
 
-  return sourceMatchesParent
-    ? { whiteboard: { kind: "preserve" }, isCached: false }
-    : clearWhiteboardArtifactDisplay();
+  return clearWhiteboardArtifactDisplay();
 }
 
 function createWhiteboardArtifactId() {
   return `whiteboard_artifact_${Date.now()}_${Math.random()
+    .toString(36)
+    .slice(2, 8)}`;
+}
+
+function createWhiteboardValidationOperationId() {
+  return `whiteboard_validation_${Date.now()}_${Math.random()
     .toString(36)
     .slice(2, 8)}`;
 }
@@ -237,6 +435,175 @@ function normalizeWhiteboardText(value: string | undefined) {
     .replace(/\n{3,}/g, "\n\n");
   if (!normalized || normalized === "-") return "";
   return normalized;
+}
+
+function loadMermaidModule() {
+  mermaidModulePromise ??= (
+    import("mermaid") as Promise<MermaidModule>
+  ).catch((error) => {
+    mermaidModulePromise = undefined;
+    throw error;
+  });
+  return mermaidModulePromise;
+}
+
+function extractMermaidBlocks(value: string) {
+  return Array.from(
+    value.matchAll(/```[ \t]*mermaid[^\S\r\n]*\r?\n([\s\S]*?)```/gi),
+    (match) => match[1]?.trim() ?? ""
+  );
+}
+
+function authorizeWhiteboardCandidate({
+  whiteboard,
+  renderValidation,
+}: {
+  whiteboard: string;
+  renderValidation?: WhiteboardRenderValidationDecision;
+}): WhiteboardRenderValidationDecision {
+  const normalized = normalizeWhiteboardText(whiteboard);
+  const fingerprint = fingerprintWhiteboard(normalized);
+  const containsMermaidFence = /```[ \t]*mermaid\b/i.test(normalized);
+  if (!containsMermaidFence) {
+    if (
+      renderValidation?.candidateFingerprint === fingerprint &&
+      renderValidation.disposition === "valid-text"
+    ) {
+      return renderValidation;
+    }
+    return {
+      operationId: createWhiteboardValidationOperationId(),
+      candidateKind: "plain-text",
+      candidateFingerprint: fingerprint,
+      disposition: "valid-text",
+      valid: true,
+      durationMs: 0,
+    };
+  }
+
+  if (
+    renderValidation?.candidateFingerprint === fingerprint &&
+    renderValidation.disposition === "valid-mermaid" &&
+    renderValidation.valid
+  ) {
+    return renderValidation;
+  }
+
+  return {
+    operationId:
+      renderValidation?.operationId ??
+      createWhiteboardValidationOperationId(),
+    candidateKind: "mermaid",
+    candidateFingerprint: fingerprint,
+    disposition: "invalid-mermaid",
+    valid: false,
+    durationMs: renderValidation?.durationMs ?? 0,
+    parserErrorClass:
+      renderValidation?.candidateFingerprint !== fingerprint
+        ? "candidate-validation-mismatch"
+        : renderValidation?.parserErrorClass ?? "validation-missing",
+  };
+}
+
+function buildValidRenderState({
+  artifactId,
+  parentTaskId,
+  revision,
+  decision,
+  now,
+}: {
+  artifactId: string;
+  parentTaskId: string;
+  revision: number;
+  decision: WhiteboardRenderValidationDecision;
+  now: number;
+}): WhiteboardRenderState {
+  return {
+    artifactId,
+    parentTaskId,
+    candidateRevision: revision,
+    visibleRevision: revision,
+    lastValidRevision: revision,
+    status:
+      decision.disposition === "valid-mermaid"
+        ? "valid-mermaid"
+        : "valid-text",
+    validationOperationId: decision.operationId,
+    validationDurationMs: decision.durationMs,
+    validatedAt: now,
+  };
+}
+
+function preserveLastValidWhiteboard({
+  existing,
+  decision,
+  now,
+}: {
+  existing?: WhiteboardArtifact;
+  decision: WhiteboardRenderValidationDecision;
+  now: number;
+}): WhiteboardArtifact | undefined {
+  if (!existing) return undefined;
+  return {
+    ...existing,
+    renderState: {
+      artifactId: existing.id,
+      parentTaskId: existing.parentTaskId,
+      candidateRevision: existing.revision + 1,
+      visibleRevision: existing.revision,
+      lastValidRevision: existing.revision,
+      status: "preserved-last-valid",
+      validationOperationId: decision.operationId,
+      validationDurationMs: decision.durationMs,
+      parserErrorClass: decision.parserErrorClass,
+      fallbackReason: "candidate-render-validation-failed",
+      validatedAt: now,
+    },
+  };
+}
+
+function invalidMermaidDecision({
+  operationId,
+  candidateFingerprint,
+  parserErrorClass,
+  startedAt,
+}: {
+  operationId: string;
+  candidateFingerprint: string;
+  parserErrorClass: string;
+  startedAt: number;
+}): WhiteboardRenderValidationDecision {
+  return {
+    operationId,
+    candidateKind: "mermaid",
+    candidateFingerprint,
+    disposition: "invalid-mermaid",
+    valid: false,
+    durationMs: elapsedMs(startedAt),
+    parserErrorClass,
+  };
+}
+
+function classifyMermaidParserError(error: unknown) {
+  if (!(error instanceof Error)) return "mermaid-parser-error";
+  const normalizedName = error.name.trim().toLowerCase();
+  if (normalizedName && normalizedName !== "error") {
+    return `mermaid-${normalizedName.replace(/[^a-z0-9]+/g, "-")}`;
+  }
+  return "mermaid-parser-error";
+}
+
+function fingerprintWhiteboard(value: string) {
+  let hash = 2166136261;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return `${value.length}:${(hash >>> 0).toString(16)}`;
+}
+
+function elapsedMs(startedAt: number) {
+  return Math.max(0, Math.round(performance.now() - startedAt));
 }
 
 function inferWhiteboardDomainTrack(

@@ -547,7 +547,6 @@ export const MeetingAssistant = ({
       activeParentTaskId,
       activeParentQuestionType: activeTaskKind,
       artifact: meeting.activeMeetingTask?.parent.whiteboardArtifact,
-      inlineWhiteboard: suggestionSections.whiteboard,
       sourceParentTaskId: displayedSuggestionParentTaskId,
       sourceParentQuestionType: displayedSuggestionParentQuestionType,
     });
@@ -557,7 +556,6 @@ export const MeetingAssistant = ({
     displayedSuggestionParentTaskId,
     displayedSuggestionParentQuestionType,
     meeting.activeMeetingTask?.parent.whiteboardArtifact,
-    suggestionSections.whiteboard,
   ]);
   const displaySuggestionSections = useMemo(
     () => overlayMeetingAnswerArtifacts(suggestionSections, {

@@ -95,6 +95,7 @@ import {
   NativeSpeechDetectedEvent,
   NativeSpeechStartEvent,
   SttContinuationPromptLease,
+  WhiteboardRenderValidationDecision,
   WhiteboardUpdateSource,
   MeetingContextManager,
   MeetingSetupWarning,
@@ -186,6 +187,7 @@ import {
   formatAnswerSufficiencyDecisionForTrace,
   parseMeetingAnswer,
   parseMeetingTraceMetrics,
+  prewarmWhiteboardRenderValidator,
   resolveMeetingAnswerProfile,
   preflightScreenObservation,
   selectInterviewPlaybook,
@@ -212,7 +214,9 @@ import {
   serializeMeetingTraceExport,
   serializeMeetingTraceMetrics,
   inferTrustedProgrammingLanguage,
+  formatWhiteboardRenderValidationForTrace,
   updateWhiteboardArtifactFromAnswer,
+  validateWhiteboardRenderCandidate,
   SessionRecordingManager,
   SttEvaluationCaptureManager,
   areCompatibleQuestionTypes,
@@ -6203,6 +6207,12 @@ export function useMeetingAssistant() {
       });
     const advisorUsesCodingModel =
       responseOwner.questionType === "coding";
+    if (
+      responseOwner.questionType === "general-system-design" ||
+      responseOwner.questionType === "ai-ml-system-design"
+    ) {
+      prewarmWhiteboardRenderValidator();
+    }
     const advisorModelRoute =
       settledExecutionPlan?.modelRoute ??
       resolveMeetingModelRoute({
@@ -6806,6 +6816,48 @@ export function useMeetingAssistant() {
         });
       }
 
+      let whiteboardRenderValidation:
+        | WhiteboardRenderValidationDecision
+        | undefined;
+      if (parsedMeetingAnswer.sections.whiteboard) {
+        const whiteboardValidationStepId = traceId
+          ? traceStoreRef.current.startStep(
+              traceId,
+              "Whiteboard render validation",
+              {
+                candidateChars:
+                  parsedMeetingAnswer.sections.whiteboard.length,
+                answerStreamingIndependent: true,
+              }
+            )
+          : undefined;
+        whiteboardRenderValidation =
+          await validateWhiteboardRenderCandidate({
+            whiteboard: parsedMeetingAnswer.sections.whiteboard,
+          });
+        const whiteboardValidationMetadata =
+          formatWhiteboardRenderValidationForTrace({
+            decision: whiteboardRenderValidation,
+            before:
+              promptContext.activeMeetingTask?.parent.whiteboardArtifact,
+          });
+        if (traceId) {
+          traceStoreRef.current.updateMetadata(
+            traceId,
+            whiteboardValidationMetadata
+          );
+          if (whiteboardValidationStepId) {
+            traceStoreRef.current.finishStep(
+              traceId,
+              whiteboardValidationStepId,
+              "success",
+              whiteboardValidationMetadata
+            );
+          }
+        }
+        if (rejectStaleCommit("whiteboard-render-validation")) return;
+      }
+
       let contextState = contextManagerRef.current.getState();
       const existingInterviewTask =
         promptContext.activeInterviewTask ??
@@ -6872,6 +6924,7 @@ export function useMeetingAssistant() {
               advisorJob.logicalQuestionUnit?.sourceTurnIds,
             finalContent,
             parsedAnswer: parsedMeetingAnswer,
+            whiteboardRenderValidation,
             playbook:
               settledExecutionPlan?.playbook ??
               advisorRuntimePlaybook,
@@ -6925,6 +6978,11 @@ export function useMeetingAssistant() {
             : "ignored"
           : "none",
         answerWhiteboardArtifactDecision: whiteboardArtifactDecision,
+        ...formatWhiteboardRenderValidationForTrace({
+          decision: whiteboardRenderValidation,
+          before: previousWhiteboard,
+          after: nextWhiteboard,
+        }),
       };
       if (traceId) {
         traceStoreRef.current.updateMetadata(traceId, answerArtifactMetadata);
@@ -12191,6 +12249,12 @@ export function useMeetingAssistant() {
             : screenTaxonomyDecision.effectiveQuestionType;
         const taskKind =
           normalizeScreenQuestionType(screenMemoryQuestionType) ?? "unknown";
+        if (
+          taskKind === "general-system-design" ||
+          taskKind === "ai-ml-system-design"
+        ) {
+          prewarmWhiteboardRenderValidator();
+        }
         traceStoreRef.current.updateMetadata(trace.id, {
           ...formatTaskTaxonomyAuthorityForTrace(screenTaxonomyDecision),
           screenSourceEvidenceChars: screenEvidenceText.length,
@@ -12907,6 +12971,45 @@ export function useMeetingAssistant() {
             ...screenFactAnchorOutputMetadata,
           }
         );
+        let screenWhiteboardRenderValidation:
+          | WhiteboardRenderValidationDecision
+          | undefined;
+        if (parsedScreenMeetingAnswer.sections.whiteboard) {
+          const whiteboardValidationStepId =
+            traceStoreRef.current.startStep(
+              trace.id,
+              "Whiteboard render validation",
+              {
+                candidateChars:
+                  parsedScreenMeetingAnswer.sections.whiteboard.length,
+                answerStreamingIndependent: true,
+              }
+            );
+          screenWhiteboardRenderValidation =
+            await validateWhiteboardRenderCandidate({
+              whiteboard: parsedScreenMeetingAnswer.sections.whiteboard,
+            });
+          const whiteboardValidationMetadata =
+            formatWhiteboardRenderValidationForTrace({
+              decision: screenWhiteboardRenderValidation,
+              before:
+                contextManagerRef.current.getState().activeMeetingTask
+                  ?.parent.whiteboardArtifact,
+            });
+          traceStoreRef.current.updateMetadata(
+            trace.id,
+            whiteboardValidationMetadata
+          );
+          traceStoreRef.current.finishStep(
+            trace.id,
+            whiteboardValidationStepId,
+            "success",
+            whiteboardValidationMetadata
+          );
+          if (rejectStaleScreenOperation("whiteboard-render-validation")) {
+            return;
+          }
+        }
         const screenMeetingAnswerSummary = buildMeetingAnswerSummary(
           parsedScreenMeetingAnswer
         );
@@ -13221,6 +13324,8 @@ export function useMeetingAssistant() {
             question: screenTaskTopic,
             finalContent: committedScreenTaskContent,
             parsedAnswer: parsedScreenMeetingAnswer,
+            whiteboardRenderValidation:
+              screenWhiteboardRenderValidation,
             playbook: screenRuntimePlaybook,
             phaseDecision: screenSourceTransitionCommittedBeforeModel
               ? undefined
@@ -13266,6 +13371,11 @@ export function useMeetingAssistant() {
                 : previousWhiteboard
                   ? "preserved"
                   : "none",
+            ...formatWhiteboardRenderValidationForTrace({
+              decision: screenWhiteboardRenderValidation,
+              before: previousWhiteboard,
+              after: nextWhiteboard,
+            }),
           });
           if (!screenSourceTransitionCommittedBeforeModel) {
             recordCommittedPlaybookPhaseTransition({
@@ -17688,6 +17798,7 @@ function updateInterviewTaskContinuityForAnswer({
   canonicalQuestionSourceTurnIds,
   finalContent,
   parsedAnswer,
+  whiteboardRenderValidation,
   playbook,
   phaseDecision,
   latestTurn,
@@ -17711,6 +17822,7 @@ function updateInterviewTaskContinuityForAnswer({
   canonicalQuestionSourceTurnIds?: string[];
   finalContent: string;
   parsedAnswer?: ParsedMeetingAnswer;
+  whiteboardRenderValidation?: WhiteboardRenderValidationDecision;
   playbook?: ActiveInterviewParent["playbook"];
   phaseDecision?: PlaybookPhaseDecision;
   latestTurn?: TranscriptTurn;
@@ -17804,6 +17916,7 @@ function updateInterviewTaskContinuityForAnswer({
           openConstraintCategories:
             phaseDecision?.whiteboardOpenConstraintCategories,
           revisionReason: phaseDecision?.whiteboardRevisionReason,
+          renderValidation: whiteboardRenderValidation,
           now,
         })
       : existingTask.whiteboardArtifact;
@@ -17861,6 +17974,7 @@ function updateInterviewTaskContinuityForAnswer({
           openConstraintCategories:
             phaseDecision?.whiteboardOpenConstraintCategories,
           revisionReason: phaseDecision?.whiteboardRevisionReason,
+          renderValidation: whiteboardRenderValidation,
           now,
         })
       : undefined;
@@ -17962,6 +18076,7 @@ function updateInterviewTaskContinuityForAnswer({
             openConstraintCategories:
               phaseDecision?.whiteboardOpenConstraintCategories,
             revisionReason: phaseDecision?.whiteboardRevisionReason,
+            renderValidation: whiteboardRenderValidation,
             now,
           })
         : existingTask.whiteboardArtifact,

@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  formatWhiteboardRenderValidationForTrace,
   resolveWhiteboardArtifactDisplay,
   updateWhiteboardArtifactFromAnswer,
+  validateWhiteboardRenderCandidate,
 } from "../src/lib/meeting/whiteboard-artifact.js";
 
 const WHITEBOARD_ANSWER = `
@@ -40,6 +42,8 @@ test("creates a first-class whiteboard artifact for system design answers", () =
     "mem_overlay_scarce_inventory_booking",
   ]);
   assert.match(artifact.summary, /Reservation Service/);
+  assert.equal(artifact.renderState?.status, "valid-text");
+  assert.equal(artifact.renderState?.visibleRevision, 1);
 });
 
 test("creates a provisional revision-one skeleton during requirement clarification", () => {
@@ -195,23 +199,21 @@ test("preserves the current whiteboard when model output is partial", () => {
   assert.equal(preserved, artifact);
 });
 
-test("accepts inline whiteboard only from the active compatible parent", () => {
-  const accepted = resolveWhiteboardArtifactDisplay({
+test("does not let an inline whiteboard bypass artifact validation", () => {
+  const cleared = resolveWhiteboardArtifactDisplay({
     activeParentTaskId: "parent_1",
     activeParentQuestionType: "ai-ml-system-design",
-    inlineWhiteboard: "Client -> Retrieval -> LLM",
     sourceParentTaskId: "parent_1",
     sourceParentQuestionType: "general-system-design",
   });
-  assert.deepEqual(accepted, {
-    whiteboard: { kind: "replace", value: "Client -> Retrieval -> LLM" },
+  assert.deepEqual(cleared, {
+    whiteboard: { kind: "clear" },
     isCached: false,
   });
 
   const rejected = resolveWhiteboardArtifactDisplay({
     activeParentTaskId: "parent_1",
     activeParentQuestionType: "behavioral",
-    inlineWhiteboard: "stale diagram",
     sourceParentTaskId: "parent_1",
     sourceParentQuestionType: "general-system-design",
   });
@@ -219,6 +221,168 @@ test("accepts inline whiteboard only from the active compatible parent", () => {
     whiteboard: { kind: "clear" },
     isCached: false,
   });
+});
+
+test("promotes valid Mermaid only after local parser validation", async () => {
+  const answer = [
+    "Answer:",
+    "Use a reservation service.",
+    "",
+    "Whiteboard:",
+    "```mermaid",
+    "flowchart TD",
+    "  Client --> ReservationService",
+    "  ReservationService --> InventoryDB",
+    "```",
+  ].join("\n");
+  const validation = await validateWhiteboardRenderCandidate({
+    whiteboard: [
+      "```mermaid",
+      "flowchart TD",
+      "  Client --> ReservationService",
+      "  ReservationService --> InventoryDB",
+      "```",
+    ].join("\n"),
+    operationId: "validation_valid",
+  });
+
+  assert.equal(validation.disposition, "valid-mermaid");
+  assert.equal(validation.valid, true);
+
+  const artifact = updateWhiteboardArtifactFromAnswer({
+    parentTaskId: "parent_mermaid",
+    parentQuestionType: "general-system-design",
+    parentTopic: "Design ticket booking",
+    finalContent: answer,
+    phase: "design_framing",
+    renderValidation: validation,
+    updateSource: "model-output",
+    now: 10,
+  });
+
+  assert.ok(artifact);
+  assert.equal(artifact.revision, 1);
+  assert.equal(artifact.renderState?.status, "valid-mermaid");
+  assert.equal(
+    artifact.renderState?.validationOperationId,
+    "validation_valid"
+  );
+});
+
+test("preserves the last valid revision when Mermaid validation fails", async () => {
+  const existing = updateWhiteboardArtifactFromAnswer({
+    parentTaskId: "parent_invalid_update",
+    parentQuestionType: "general-system-design",
+    parentTopic: "Design ticket booking",
+    finalContent: "Whiteboard:\nClient -> API -> Reservation Service",
+    phase: "design_framing",
+    updateSource: "model-output",
+    now: 1,
+  });
+  assert.ok(existing);
+
+  const invalidWhiteboard = [
+    "```mermaid",
+    "flowchart TD",
+    "  subgraph Open Constraints & Unclear Scale",
+    "  A --> B",
+    "```",
+  ].join("\n");
+  const validation = await validateWhiteboardRenderCandidate({
+    whiteboard: invalidWhiteboard,
+    operationId: "validation_invalid",
+  });
+  assert.equal(validation.disposition, "invalid-mermaid");
+  assert.equal(validation.valid, false);
+
+  const preserved = updateWhiteboardArtifactFromAnswer({
+    existing,
+    parentTaskId: "parent_invalid_update",
+    parentQuestionType: "general-system-design",
+    parentTopic: "Design ticket booking",
+    finalContent: `Whiteboard:\n${invalidWhiteboard}`,
+    phase: "design_framing",
+    renderValidation: validation,
+    updateSource: "model-output",
+    now: 2,
+  });
+
+  assert.ok(preserved);
+  assert.equal(preserved.content, existing.content);
+  assert.equal(preserved.revision, existing.revision);
+  assert.equal(preserved.renderState?.status, "preserved-last-valid");
+  assert.equal(preserved.renderState?.candidateRevision, 2);
+  assert.equal(preserved.renderState?.visibleRevision, 1);
+  assert.equal(
+    preserved.renderState?.parserErrorClass,
+    "mermaid-syntax-error"
+  );
+
+  const trace = formatWhiteboardRenderValidationForTrace({
+    decision: validation,
+    before: existing,
+    after: preserved,
+  });
+  assert.equal(trace.whiteboardRenderPreservedLastValid, true);
+  assert.equal(trace.whiteboardRenderVisibleRevisionAfter, 1);
+});
+
+test("rejects a first invalid Mermaid revision without a visible artifact", async () => {
+  const invalidWhiteboard = [
+    "```mermaid",
+    "flowchart TD",
+    "  subgraph Open Constraints & Unclear Scale",
+    "```",
+  ].join("\n");
+  const validation = await validateWhiteboardRenderCandidate({
+    whiteboard: invalidWhiteboard,
+    operationId: "validation_first_invalid",
+  });
+
+  const artifact = updateWhiteboardArtifactFromAnswer({
+    parentTaskId: "parent_first_invalid",
+    parentQuestionType: "ai-ml-system-design",
+    parentTopic: "Design a RAG system",
+    finalContent: `Whiteboard:\n${invalidWhiteboard}`,
+    phase: "design_framing",
+    renderValidation: validation,
+    updateSource: "model-output",
+    now: 1,
+  });
+
+  assert.equal(artifact, undefined);
+});
+
+test("rejects Mermaid when validation belongs to different content", async () => {
+  const validatedWhiteboard = [
+    "```mermaid",
+    "flowchart TD",
+    "  A --> B",
+    "```",
+  ].join("\n");
+  const validation = await validateWhiteboardRenderCandidate({
+    whiteboard: validatedWhiteboard,
+    operationId: "validation_mismatch",
+  });
+  const differentWhiteboard = [
+    "```mermaid",
+    "flowchart TD",
+    "  A --> C",
+    "```",
+  ].join("\n");
+
+  const artifact = updateWhiteboardArtifactFromAnswer({
+    parentTaskId: "parent_mismatch",
+    parentQuestionType: "general-system-design",
+    parentTopic: "Design a service",
+    finalContent: `Whiteboard:\n${differentWhiteboard}`,
+    phase: "design_framing",
+    renderValidation: validation,
+    updateSource: "model-output",
+    now: 1,
+  });
+
+  assert.equal(artifact, undefined);
 });
 
 test("preserves a cached whiteboard across compatible system-design correction", () => {
