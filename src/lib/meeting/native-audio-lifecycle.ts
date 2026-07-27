@@ -18,6 +18,20 @@ export interface NativeAudioTerminationDiagnostics {
   faultInjected: boolean;
   faultInjectionId: string | null;
   faultKind: NativeAudioDebugFaultKind | null;
+  nativeTailFlushOperationId: string | null;
+  nativeTailFlushRequestedAtMs: number | null;
+  nativeTailFlushAcknowledgedAtMs: number | null;
+  nativeTailFlushDurationMs: number | null;
+  nativeTailFlushDisposition:
+    | "segment-emitted"
+    | "no-qualifying-candidate"
+    | "encoding-failed"
+    | "timeout"
+    | null;
+  nativeTailFlushCandidateSegmentSequence: number | null;
+  nativeTailFlushCandidateDurationMs: number | null;
+  nativeTailFlushEmittedSegmentSequence: number | null;
+  nativeTailFlushNoQualifyingCandidateReason: string | null;
 }
 
 export interface NativeAudioLifecycleEvent {
@@ -374,6 +388,34 @@ export function parseNativeAudioLifecycleEvent(
   const faultKind = isRecord(diagnostics)
     ? diagnostics.faultKind ?? null
     : null;
+  const nativeTailFlushOperationId = isRecord(diagnostics)
+    ? diagnostics.nativeTailFlushOperationId ?? null
+    : null;
+  const nativeTailFlushRequestedAtMs = isRecord(diagnostics)
+    ? diagnostics.nativeTailFlushRequestedAtMs ?? null
+    : null;
+  const nativeTailFlushAcknowledgedAtMs = isRecord(diagnostics)
+    ? diagnostics.nativeTailFlushAcknowledgedAtMs ?? null
+    : null;
+  const nativeTailFlushDurationMs = isRecord(diagnostics)
+    ? diagnostics.nativeTailFlushDurationMs ?? null
+    : null;
+  const nativeTailFlushDisposition = isRecord(diagnostics)
+    ? diagnostics.nativeTailFlushDisposition ?? null
+    : null;
+  const nativeTailFlushCandidateSegmentSequence = isRecord(diagnostics)
+    ? diagnostics.nativeTailFlushCandidateSegmentSequence ?? null
+    : null;
+  const nativeTailFlushCandidateDurationMs = isRecord(diagnostics)
+    ? diagnostics.nativeTailFlushCandidateDurationMs ?? null
+    : null;
+  const nativeTailFlushEmittedSegmentSequence = isRecord(diagnostics)
+    ? diagnostics.nativeTailFlushEmittedSegmentSequence ?? null
+    : null;
+  const nativeTailFlushNoQualifyingCandidateReason = isRecord(diagnostics)
+    ? diagnostics.nativeTailFlushNoQualifyingCandidateReason ?? null
+    : null;
+  const hasNativeTailFlush = nativeTailFlushDisposition !== null;
 
   if (
     (eventType !== "started" &&
@@ -411,7 +453,55 @@ export function parseNativeAudioLifecycleEvent(
       faultKind !== "recoverable-stream-end" &&
       faultKind !== "fatal-capture-failure") ||
     (!faultInjected && (faultInjectionId !== null || faultKind !== null)) ||
-    (faultInjected && (faultInjectionId === null || faultKind === null))
+    (faultInjected && (faultInjectionId === null || faultKind === null)) ||
+    (nativeTailFlushOperationId !== null &&
+      (typeof nativeTailFlushOperationId !== "string" ||
+        !nativeTailFlushOperationId.trim())) ||
+    (nativeTailFlushRequestedAtMs !== null &&
+      (!Number.isSafeInteger(nativeTailFlushRequestedAtMs) ||
+        (nativeTailFlushRequestedAtMs as number) < 0)) ||
+    (nativeTailFlushAcknowledgedAtMs !== null &&
+      (!Number.isSafeInteger(nativeTailFlushAcknowledgedAtMs) ||
+        (nativeTailFlushAcknowledgedAtMs as number) < 0)) ||
+    (nativeTailFlushDurationMs !== null &&
+      (!Number.isSafeInteger(nativeTailFlushDurationMs) ||
+        (nativeTailFlushDurationMs as number) < 0)) ||
+    (nativeTailFlushDisposition !== null &&
+      nativeTailFlushDisposition !== "segment-emitted" &&
+      nativeTailFlushDisposition !== "no-qualifying-candidate" &&
+      nativeTailFlushDisposition !== "encoding-failed" &&
+      nativeTailFlushDisposition !== "timeout") ||
+    (nativeTailFlushCandidateSegmentSequence !== null &&
+      (!Number.isSafeInteger(nativeTailFlushCandidateSegmentSequence) ||
+        (nativeTailFlushCandidateSegmentSequence as number) < 1)) ||
+    (nativeTailFlushCandidateDurationMs !== null &&
+      (!Number.isSafeInteger(nativeTailFlushCandidateDurationMs) ||
+        (nativeTailFlushCandidateDurationMs as number) < 0)) ||
+    (nativeTailFlushEmittedSegmentSequence !== null &&
+      (!Number.isSafeInteger(nativeTailFlushEmittedSegmentSequence) ||
+        (nativeTailFlushEmittedSegmentSequence as number) < 1)) ||
+    (nativeTailFlushNoQualifyingCandidateReason !== null &&
+      (typeof nativeTailFlushNoQualifyingCandidateReason !== "string" ||
+        !nativeTailFlushNoQualifyingCandidateReason.trim())) ||
+    (hasNativeTailFlush &&
+      (nativeTailFlushOperationId === null ||
+        nativeTailFlushRequestedAtMs === null ||
+        nativeTailFlushAcknowledgedAtMs === null ||
+        nativeTailFlushDurationMs === null ||
+        nativeTailFlushCandidateDurationMs === null)) ||
+    (!hasNativeTailFlush &&
+      (nativeTailFlushOperationId !== null ||
+        nativeTailFlushRequestedAtMs !== null ||
+        nativeTailFlushAcknowledgedAtMs !== null ||
+        nativeTailFlushDurationMs !== null ||
+        nativeTailFlushCandidateSegmentSequence !== null ||
+        nativeTailFlushCandidateDurationMs !== null ||
+        nativeTailFlushEmittedSegmentSequence !== null ||
+        nativeTailFlushNoQualifyingCandidateReason !== null)) ||
+    (nativeTailFlushDisposition === "segment-emitted" &&
+      nativeTailFlushEmittedSegmentSequence === null) ||
+    (nativeTailFlushDisposition === "no-qualifying-candidate" &&
+      nativeTailFlushNoQualifyingCandidateReason === null)
   ) {
     return null;
   }
@@ -434,6 +524,24 @@ export function parseNativeAudioLifecycleEvent(
       faultInjected,
       faultInjectionId: faultInjectionId as string | null,
       faultKind: faultKind as NativeAudioDebugFaultKind | null,
+      nativeTailFlushOperationId:
+        nativeTailFlushOperationId as string | null,
+      nativeTailFlushRequestedAtMs:
+        nativeTailFlushRequestedAtMs as number | null,
+      nativeTailFlushAcknowledgedAtMs:
+        nativeTailFlushAcknowledgedAtMs as number | null,
+      nativeTailFlushDurationMs:
+        nativeTailFlushDurationMs as number | null,
+      nativeTailFlushDisposition:
+        nativeTailFlushDisposition as NativeAudioTerminationDiagnostics["nativeTailFlushDisposition"],
+      nativeTailFlushCandidateSegmentSequence:
+        nativeTailFlushCandidateSegmentSequence as number | null,
+      nativeTailFlushCandidateDurationMs:
+        nativeTailFlushCandidateDurationMs as number | null,
+      nativeTailFlushEmittedSegmentSequence:
+        nativeTailFlushEmittedSegmentSequence as number | null,
+      nativeTailFlushNoQualifyingCandidateReason:
+        nativeTailFlushNoQualifyingCandidateReason as string | null,
     },
   };
 }
@@ -542,6 +650,24 @@ export function buildNativeAudioLifecycleTraceMetadata(
     nativeAudioFaultInjected: event.diagnostics.faultInjected,
     nativeAudioFaultInjectionId: event.diagnostics.faultInjectionId,
     nativeAudioFaultKind: event.diagnostics.faultKind,
+    nativeTailFlushOperationId:
+      event.diagnostics.nativeTailFlushOperationId,
+    nativeTailFlushRequestedAtMs:
+      event.diagnostics.nativeTailFlushRequestedAtMs,
+    nativeTailFlushAcknowledgedAtMs:
+      event.diagnostics.nativeTailFlushAcknowledgedAtMs,
+    nativeTailFlushDurationMs:
+      event.diagnostics.nativeTailFlushDurationMs,
+    nativeTailFlushDisposition:
+      event.diagnostics.nativeTailFlushDisposition,
+    nativeTailFlushCandidateSegmentSequence:
+      event.diagnostics.nativeTailFlushCandidateSegmentSequence,
+    nativeTailFlushCandidateDurationMs:
+      event.diagnostics.nativeTailFlushCandidateDurationMs,
+    nativeTailFlushEmittedSegmentSequence:
+      event.diagnostics.nativeTailFlushEmittedSegmentSequence,
+    nativeTailFlushNoQualifyingCandidateReason:
+      event.diagnostics.nativeTailFlushNoQualifyingCandidateReason,
     productionReliabilityEligible: !event.diagnostics.faultInjected,
   };
 }

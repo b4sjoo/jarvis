@@ -13,7 +13,7 @@ use std::collections::VecDeque;
 use std::io::Cursor;
 use std::panic::AssertUnwindSafe;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter, Listener, Manager};
 use tauri_plugin_shell::ShellExt;
@@ -576,6 +576,24 @@ pub struct CaptureTerminationDiagnostics {
     pub fault_injection_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fault_kind: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub native_tail_flush_operation_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub native_tail_flush_requested_at_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub native_tail_flush_acknowledged_at_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub native_tail_flush_duration_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub native_tail_flush_disposition: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub native_tail_flush_candidate_segment_sequence: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub native_tail_flush_candidate_duration_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub native_tail_flush_emitted_segment_sequence: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub native_tail_flush_no_qualifying_candidate_reason: Option<String>,
 }
 
 #[cfg(debug_assertions)]
@@ -726,6 +744,95 @@ impl CaptureRunOutcome {
             diagnostics: CaptureTerminationDiagnostics::default(),
         }
     }
+
+    fn with_native_tail_flush_request(
+        mut self,
+        operation_id: String,
+        requested_at_ms: u64,
+    ) -> Self {
+        self.diagnostics.native_tail_flush_operation_id = Some(operation_id);
+        self.diagnostics.native_tail_flush_requested_at_ms = Some(requested_at_ms);
+        self
+    }
+
+    fn acknowledge_native_tail_flush(
+        &mut self,
+        disposition: NativeTailFlushDisposition,
+        candidate_segment_sequence: Option<u64>,
+        candidate_duration_ms: u64,
+        emitted_segment_sequence: Option<u64>,
+        no_qualifying_candidate_reason: Option<&'static str>,
+        acknowledged_at_ms: u64,
+    ) {
+        let requested_at_ms = self
+            .diagnostics
+            .native_tail_flush_requested_at_ms
+            .unwrap_or(acknowledged_at_ms);
+        self.diagnostics.native_tail_flush_acknowledged_at_ms = Some(acknowledged_at_ms);
+        self.diagnostics.native_tail_flush_duration_ms =
+            Some(acknowledged_at_ms.saturating_sub(requested_at_ms));
+        self.diagnostics.native_tail_flush_disposition = Some(disposition.as_str().to_string());
+        self.diagnostics
+            .native_tail_flush_candidate_segment_sequence = candidate_segment_sequence;
+        self.diagnostics.native_tail_flush_candidate_duration_ms = Some(candidate_duration_ms);
+        self.diagnostics.native_tail_flush_emitted_segment_sequence = emitted_segment_sequence;
+        self.diagnostics
+            .native_tail_flush_no_qualifying_candidate_reason =
+            no_qualifying_candidate_reason.map(str::to_string);
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NativeTailFlushDisposition {
+    SegmentEmitted,
+    NoQualifyingCandidate,
+    EncodingFailed,
+    TimedOut,
+}
+
+impl NativeTailFlushDisposition {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::SegmentEmitted => "segment-emitted",
+            Self::NoQualifyingCandidate => "no-qualifying-candidate",
+            Self::EncodingFailed => "encoding-failed",
+            Self::TimedOut => "timeout",
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct NativeCaptureTerminationRequest {
+    owner: NativeCaptureOwner,
+    capture_session_id: String,
+    capture_generation: u64,
+    outcome: CaptureRunOutcome,
+}
+
+fn take_capture_termination_request(
+    requested: &AtomicBool,
+    request: &Mutex<Option<NativeCaptureTerminationRequest>>,
+    owner: NativeCaptureOwner,
+    capture_session_id: &str,
+    capture_generation: u64,
+) -> Option<CaptureRunOutcome> {
+    if !requested.load(Ordering::Acquire) {
+        return None;
+    }
+
+    let mut guard = request.lock().ok()?;
+    let matches_active_capture = guard.as_ref().is_some_and(|pending| {
+        pending.owner == owner
+            && pending.capture_session_id == capture_session_id
+            && pending.capture_generation == capture_generation
+    });
+    if !matches_active_capture {
+        return None;
+    }
+
+    let outcome = guard.take().map(|pending| pending.outcome);
+    requested.store(false, Ordering::Release);
+    outcome
 }
 
 #[tauri::command]
@@ -777,6 +884,13 @@ async fn start_audio_capture(
         lease.generation
     };
     state.capture_stop_requested.store(false, Ordering::Release);
+    state
+        .capture_termination_requested
+        .store(false, Ordering::Release);
+    *state
+        .capture_termination_request
+        .lock()
+        .map_err(|e| format!("Failed to reset capture termination request: {}", e))? = None;
 
     // Update VAD config if provided
     if let Some(config) = vad_config {
@@ -916,6 +1030,8 @@ async fn start_audio_capture(
         .map_err(|e| format!("Failed to set capture start time: {}", e))? = Some(now_ms());
     let state_clone = app.state::<crate::AudioState>();
     let capture_stop_requested = state.capture_stop_requested.clone();
+    let capture_termination_requested = state.capture_termination_requested.clone();
+    let capture_termination_request = state.capture_termination_request.clone();
     let task_session_id = capture_session_id.clone();
     {
         let mut control = state_clone
@@ -954,6 +1070,8 @@ async fn start_audio_capture(
                         capture_owner,
                         capture_generation,
                         capture_stop_requested.clone(),
+                        capture_termination_requested.clone(),
+                        capture_termination_request.clone(),
                     )
                     .await
                 } else {
@@ -966,6 +1084,8 @@ async fn start_audio_capture(
                         capture_owner,
                         capture_generation,
                         capture_stop_requested.clone(),
+                        capture_termination_requested.clone(),
+                        capture_termination_request.clone(),
                     )
                     .await
                 }
@@ -1015,6 +1135,8 @@ async fn run_vad_capture(
     capture_owner: NativeCaptureOwner,
     capture_generation: u64,
     stop_requested: Arc<AtomicBool>,
+    termination_requested: Arc<AtomicBool>,
+    termination_request: Arc<Mutex<Option<NativeCaptureTerminationRequest>>>,
 ) -> CaptureRunOutcome {
     let mut stream = stream;
     let timing = ResolvedVadTiming::resolve(&config, sr);
@@ -1036,7 +1158,16 @@ async fn run_vad_capture(
     } else {
         None
     };
-    let (tail_end_reason, outcome) = loop {
+    let (tail_end_reason, mut outcome) = loop {
+        if let Some(outcome) = take_capture_termination_request(
+            &termination_requested,
+            &termination_request,
+            capture_owner,
+            &capture_session_id,
+            capture_generation,
+        ) {
+            break (NativeSegmentEndReason::TerminationDrain, outcome);
+        }
         if stop_requested.load(Ordering::Acquire) {
             break (
                 NativeSegmentEndReason::StopDrain,
@@ -1045,9 +1176,14 @@ async fn run_vad_capture(
         }
 
         let Some(sample) = stream.next().await else {
+            let requested_at_ms = now_ms();
             break (
                 NativeSegmentEndReason::TerminationDrain,
-                CaptureRunOutcome::from_stream(stream.termination()),
+                CaptureRunOutcome::from_stream(stream.termination())
+                    .with_native_tail_flush_request(
+                        format!("native_tail_flush_{}", Uuid::new_v4()),
+                        requested_at_ms,
+                    ),
             );
         };
         if let Some(tap) = evaluation_tap.as_mut() {
@@ -1413,6 +1549,20 @@ async fn run_vad_capture(
         speech_buffer.extend_from_slice(&remaining);
     }
 
+    let tail_candidate_segment_sequence = in_speech.then_some(segment_sequence + 1);
+    let tail_candidate_duration_ms = samples_to_ms(speech_evidence_samples as u64, sr);
+    let mut tail_flush_disposition = NativeTailFlushDisposition::NoQualifyingCandidate;
+    let mut tail_flush_emitted_segment_sequence = None;
+    let mut no_qualifying_candidate_reason = if !in_speech {
+        Some("no-active-candidate")
+    } else if speech_evidence_samples < timing.minimum_speech_samples {
+        Some("below-minimum-speech")
+    } else if speech_buffer.is_empty() {
+        Some("empty-candidate")
+    } else {
+        None
+    };
+
     if should_emit_tail_segment(
         in_speech,
         speech_evidence_samples,
@@ -1455,6 +1605,9 @@ async fn run_vad_capture(
             boundary,
         ) {
             Ok(emitted_sequence) => {
+                tail_flush_disposition = NativeTailFlushDisposition::SegmentEmitted;
+                tail_flush_emitted_segment_sequence = Some(emitted_sequence);
+                no_qualifying_candidate_reason = None;
                 liveness.mark_segment_emitted(emitted_at_ms);
                 emit_vad_liveness(
                     &app,
@@ -1473,6 +1626,8 @@ async fn run_vad_capture(
                 );
             }
             Err(error) => {
+                tail_flush_disposition = NativeTailFlushDisposition::EncodingFailed;
+                no_qualifying_candidate_reason = None;
                 emit_segment_dropped(
                     &app,
                     capture_owner,
@@ -1503,6 +1658,17 @@ async fn run_vad_capture(
         );
     }
 
+    if tail_end_reason == NativeSegmentEndReason::TerminationDrain {
+        outcome.acknowledge_native_tail_flush(
+            tail_flush_disposition,
+            tail_candidate_segment_sequence,
+            tail_candidate_duration_ms,
+            tail_flush_emitted_segment_sequence,
+            no_qualifying_candidate_reason,
+            now_ms(),
+        );
+    }
+
     outcome
 }
 
@@ -1516,6 +1682,8 @@ async fn run_continuous_capture(
     capture_owner: NativeCaptureOwner,
     capture_generation: u64,
     capture_stop_requested: Arc<AtomicBool>,
+    capture_termination_requested: Arc<AtomicBool>,
+    capture_termination_request: Arc<Mutex<Option<NativeCaptureTerminationRequest>>>,
 ) -> CaptureRunOutcome {
     let mut stream = stream;
     let capture_started_at_ms = now_ms();
@@ -1549,7 +1717,19 @@ async fn run_continuous_capture(
 
     // Accumulate audio - check stop flag on EVERY sample for immediate response
     let mut outcome = CaptureRunOutcome::expected(CaptureTerminationReason::RequestedStop);
+    let mut termination_requested_for_capture = false;
     loop {
+        if let Some(requested_outcome) = take_capture_termination_request(
+            &capture_termination_requested,
+            &capture_termination_request,
+            capture_owner,
+            &capture_session_id,
+            capture_generation,
+        ) {
+            outcome = requested_outcome;
+            termination_requested_for_capture = true;
+            break;
+        }
         // Check stop flag FIRST on every iteration for immediate stopping
         if stop_flag.load(Ordering::Acquire) || capture_stop_requested.load(Ordering::Acquire) {
             break;
@@ -1609,6 +1789,9 @@ async fn run_continuous_capture(
     app.unlisten(stop_listener);
 
     // Process and emit audio
+    let mut termination_emitted_segment_sequence = None;
+    let mut termination_flush_disposition = NativeTailFlushDisposition::NoQualifyingCandidate;
+    let mut termination_no_candidate_reason = Some("empty-continuous-buffer");
     if !audio_buffer.is_empty() {
         // let duration = start_time.elapsed().as_secs_f32();
 
@@ -1647,8 +1830,13 @@ async fn run_continuous_capture(
                         maximum_segment_samples: max_samples as u64,
                     },
                 );
+                termination_emitted_segment_sequence = Some(segment_sequence);
+                termination_flush_disposition = NativeTailFlushDisposition::SegmentEmitted;
+                termination_no_candidate_reason = None;
             }
             Err(e) => {
+                termination_flush_disposition = NativeTailFlushDisposition::EncodingFailed;
+                termination_no_candidate_reason = None;
                 error!("Failed to encode continuous audio: {}", e);
                 emit_segment_dropped(
                     &app,
@@ -1665,6 +1853,17 @@ async fn run_continuous_capture(
     } else {
         warn!("No audio captured in continuous mode");
         let _ = app.emit("audio-encoding-error", "No audio recorded");
+    }
+
+    if termination_requested_for_capture {
+        outcome.acknowledge_native_tail_flush(
+            termination_flush_disposition,
+            (!audio_buffer.is_empty()).then_some(1),
+            samples_to_ms(audio_buffer.len() as u64, sr),
+            termination_emitted_segment_sequence,
+            termination_no_candidate_reason,
+            now_ms(),
+        );
     }
 
     let _ = app.emit("continuous-recording-stopped", ());
@@ -2217,59 +2416,104 @@ pub async fn debug_inject_native_audio_fault(
 
     let previous_status = get_meeting_audio_status(app.clone()).await?;
     let state = app.state::<crate::AudioState>();
+    let requested_at_ms = now_ms();
     let disposition = {
         let control = state
             .capture_control
             .lock()
             .map_err(|error| format!("Failed to acquire capture control: {}", error))?;
-        decide_debug_audio_fault(
+        let disposition = decide_debug_audio_fault(
             &control,
             owner,
             expected_session_id,
             expected_capture_generation,
-        )
+        );
+        if disposition == DebugAudioFaultDisposition::Injected {
+            let outcome = fault_kind
+                .outcome(injection_id)
+                .with_native_tail_flush_request(injection_id.to_string(), requested_at_ms);
+            *state.capture_termination_request.lock().map_err(|error| {
+                format!("Failed to acquire capture termination request: {}", error)
+            })? = Some(NativeCaptureTerminationRequest {
+                owner,
+                capture_session_id: expected_session_id.to_string(),
+                capture_generation: expected_capture_generation,
+                outcome,
+            });
+            state
+                .capture_termination_requested
+                .store(true, Ordering::Release);
+        }
+        disposition
     };
 
     if disposition == DebugAudioFaultDisposition::Injected {
-        let released = release_active_capture_if_owner(
-            &state,
-            owner,
-            expected_session_id,
-            expected_capture_generation,
-        )?;
-        if let Some(released) = released {
-            if let Some(task) = released.task {
-                task.abort();
+        let deadline = Instant::now() + Duration::from_millis(GRACEFUL_CAPTURE_STOP_TIMEOUT_MS);
+        let mut completed = false;
+        while Instant::now() < deadline {
+            let still_active = {
+                let control = state
+                    .capture_control
+                    .lock()
+                    .map_err(|error| format!("Failed to acquire capture control: {}", error))?;
+                control_owns(
+                    &control,
+                    NativeCapturePhase::Active,
+                    owner,
+                    expected_session_id,
+                    expected_capture_generation,
+                )
+            };
+            if !still_active {
+                completed = true;
+                break;
             }
-            let outcome = fault_kind.outcome(injection_id);
-            let _ = app.emit("capture-stopped", ());
-            emit_capture_lifecycle(
-                &app,
-                "error",
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+
+        if !completed {
+            state
+                .capture_termination_requested
+                .store(false, Ordering::Release);
+            if let Ok(mut request) = state.capture_termination_request.lock() {
+                *request = None;
+            }
+            let released = release_active_capture_if_owner(
+                &state,
                 owner,
                 expected_session_id,
                 expected_capture_generation,
-                Some(outcome.reason.as_str()),
-                Some(match fault_kind {
-                    DebugAudioFaultKind::RecoverableStreamEnd => {
-                        "Debug fault injection: recoverable stream termination."
-                    }
-                    DebugAudioFaultKind::FatalCaptureFailure => {
-                        "Debug fault injection: fatal capture failure."
-                    }
-                }),
-                previous_status.sample_rate,
-                outcome.expected,
-                outcome.recoverability,
-                outcome.diagnostics,
-            );
-        } else {
-            return Ok(DebugAudioFaultResult {
-                disposition: DebugAudioFaultDisposition::StaleRequest.as_str(),
-                fault_injection_id: injection_id.to_string(),
-                previous_status,
-                current_status: get_meeting_audio_status(app).await?,
-            });
+            )?;
+            if let Some(released) = released {
+                if let Some(task) = released.task {
+                    task.abort();
+                }
+                let mut outcome = fault_kind
+                    .outcome(injection_id)
+                    .with_native_tail_flush_request(injection_id.to_string(), requested_at_ms);
+                outcome.acknowledge_native_tail_flush(
+                    NativeTailFlushDisposition::TimedOut,
+                    None,
+                    0,
+                    None,
+                    Some("native-tail-flush-timeout"),
+                    now_ms(),
+                );
+                let _ = app.emit("capture-stopped", ());
+                emit_capture_lifecycle(
+                    &app,
+                    "error",
+                    owner,
+                    expected_session_id,
+                    expected_capture_generation,
+                    Some(outcome.reason.as_str()),
+                    Some("Debug fault injection timed out while flushing native audio."),
+                    previous_status.sample_rate,
+                    outcome.expected,
+                    outcome.recoverability,
+                    outcome.diagnostics,
+                );
+            }
         }
     }
 
@@ -2489,6 +2733,12 @@ pub fn get_output_devices() -> Result<Vec<AudioDevice>, String> {
 
 fn clear_capture_metadata(state: &crate::AudioState) {
     state.capture_stop_requested.store(false, Ordering::Release);
+    state
+        .capture_termination_requested
+        .store(false, Ordering::Release);
+    if let Ok(mut request) = state.capture_termination_request.lock() {
+        *request = None;
+    }
     if let Ok(mut device_id) = state.capture_device_id.lock() {
         *device_id = None;
     }
@@ -2561,14 +2811,18 @@ fn trim_trailing_silence(
 mod tests {
     use super::{
         begin_capture_stop, claim_capture_lease, control_owns, decide_debug_audio_fault,
-        release_active_capture_if_owner, should_emit_tail_segment, CaptureRecoverability,
-        CaptureRunOutcome, CaptureTerminationDiagnostics, CaptureTerminationReason,
-        DebugAudioFaultDisposition, DebugAudioFaultKind, NativeAudioLifecycleEvent,
-        NativeAudioSegmentDroppedEvent, NativeCaptureControl, NativeCaptureOwner,
-        NativeCapturePhase, NativeSegmentEndReason, NativeSpeechDetectedEvent,
-        NativeSpeechStartEvent, NativeStopDecision, ResolvedVadTiming, SpeakerStreamTermination,
-        SpeakerStreamTerminationReason, VadConfig, VadLivenessAccumulator,
+        release_active_capture_if_owner, should_emit_tail_segment,
+        take_capture_termination_request, CaptureRecoverability, CaptureRunOutcome,
+        CaptureTerminationDiagnostics, CaptureTerminationReason, DebugAudioFaultDisposition,
+        DebugAudioFaultKind, NativeAudioLifecycleEvent, NativeAudioSegmentDroppedEvent,
+        NativeCaptureControl, NativeCaptureOwner, NativeCapturePhase,
+        NativeCaptureTerminationRequest, NativeSegmentEndReason, NativeSpeechDetectedEvent,
+        NativeSpeechStartEvent, NativeStopDecision, NativeTailFlushDisposition, ResolvedVadTiming,
+        SpeakerStreamTermination, SpeakerStreamTerminationReason, VadConfig,
+        VadLivenessAccumulator,
     };
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Mutex;
 
     #[test]
     fn serializes_native_speech_event_for_typescript_consumers() {
@@ -2732,6 +2986,72 @@ mod tests {
             timing.minimum_speech_samples,
             &timing,
         ));
+    }
+
+    #[test]
+    fn native_termination_request_is_consumed_only_by_its_capture_lease() {
+        let requested = AtomicBool::new(true);
+        let request = Mutex::new(Some(NativeCaptureTerminationRequest {
+            owner: NativeCaptureOwner::Meeting,
+            capture_session_id: "capture-test".to_string(),
+            capture_generation: 3,
+            outcome: CaptureRunOutcome::panic()
+                .with_native_tail_flush_request("fault-1".to_string(), 1_000),
+        }));
+
+        assert!(take_capture_termination_request(
+            &requested,
+            &request,
+            NativeCaptureOwner::Meeting,
+            "capture-other",
+            3,
+        )
+        .is_none());
+        assert!(requested.load(Ordering::Acquire));
+
+        let outcome = take_capture_termination_request(
+            &requested,
+            &request,
+            NativeCaptureOwner::Meeting,
+            "capture-test",
+            3,
+        )
+        .expect("matching capture should consume the request");
+        assert_eq!(
+            outcome
+                .diagnostics
+                .native_tail_flush_operation_id
+                .as_deref(),
+            Some("fault-1")
+        );
+        assert!(!requested.load(Ordering::Acquire));
+        assert!(request.lock().expect("request lock").is_none());
+    }
+
+    #[test]
+    fn native_tail_flush_acknowledgement_serializes_without_audio() {
+        let mut outcome =
+            CaptureRunOutcome::panic().with_native_tail_flush_request("fault-1".to_string(), 1_000);
+        outcome.acknowledge_native_tail_flush(
+            NativeTailFlushDisposition::SegmentEmitted,
+            Some(8),
+            420,
+            Some(8),
+            None,
+            1_025,
+        );
+
+        let value =
+            serde_json::to_value(outcome.diagnostics).expect("diagnostics should serialize");
+        assert_eq!(value["nativeTailFlushOperationId"], "fault-1");
+        assert_eq!(value["nativeTailFlushRequestedAtMs"], 1_000);
+        assert_eq!(value["nativeTailFlushAcknowledgedAtMs"], 1_025);
+        assert_eq!(value["nativeTailFlushDurationMs"], 25);
+        assert_eq!(value["nativeTailFlushDisposition"], "segment-emitted");
+        assert_eq!(value["nativeTailFlushCandidateSegmentSequence"], 8);
+        assert_eq!(value["nativeTailFlushCandidateDurationMs"], 420);
+        assert_eq!(value["nativeTailFlushEmittedSegmentSequence"], 8);
+        assert!(value.get("audioBase64").is_none());
     }
 
     #[test]

@@ -33,6 +33,15 @@ const STOPPED_EVENT = {
     faultInjected: false,
     faultInjectionId: null,
     faultKind: null,
+    nativeTailFlushOperationId: null,
+    nativeTailFlushRequestedAtMs: null,
+    nativeTailFlushAcknowledgedAtMs: null,
+    nativeTailFlushDurationMs: null,
+    nativeTailFlushDisposition: null,
+    nativeTailFlushCandidateSegmentSequence: null,
+    nativeTailFlushCandidateDurationMs: null,
+    nativeTailFlushEmittedSegmentSequence: null,
+    nativeTailFlushNoQualifyingCandidateReason: null,
   },
 } as const;
 
@@ -123,8 +132,48 @@ test("trace metadata keeps lifecycle identity and excludes no hidden payload", (
     nativeAudioFaultInjected: false,
     nativeAudioFaultInjectionId: null,
     nativeAudioFaultKind: null,
+    nativeTailFlushOperationId: null,
+    nativeTailFlushRequestedAtMs: null,
+    nativeTailFlushAcknowledgedAtMs: null,
+    nativeTailFlushDurationMs: null,
+    nativeTailFlushDisposition: null,
+    nativeTailFlushCandidateSegmentSequence: null,
+    nativeTailFlushCandidateDurationMs: null,
+    nativeTailFlushEmittedSegmentSequence: null,
+    nativeTailFlushNoQualifyingCandidateReason: null,
     productionReliabilityEligible: true,
   });
+});
+
+test("parses and traces an acknowledged native termination tail flush", () => {
+  const event = {
+    ...STOPPED_EVENT,
+    eventType: "error",
+    reason: "capture-panic",
+    recoverability: "manual",
+    diagnostics: {
+      ...STOPPED_EVENT.diagnostics,
+      faultInjected: true,
+      faultInjectionId: "fault-1",
+      faultKind: "fatal-capture-failure",
+      nativeTailFlushOperationId: "fault-1",
+      nativeTailFlushRequestedAtMs: 1_000,
+      nativeTailFlushAcknowledgedAtMs: 1_025,
+      nativeTailFlushDurationMs: 25,
+      nativeTailFlushDisposition: "segment-emitted",
+      nativeTailFlushCandidateSegmentSequence: 8,
+      nativeTailFlushCandidateDurationMs: 420,
+      nativeTailFlushEmittedSegmentSequence: 8,
+      nativeTailFlushNoQualifyingCandidateReason: null,
+    },
+  } as const;
+
+  assert.deepEqual(parseNativeAudioLifecycleEvent(event), event);
+  const metadata = buildNativeAudioLifecycleTraceMetadata(event);
+  assert.equal(metadata.nativeTailFlushOperationId, "fault-1");
+  assert.equal(metadata.nativeTailFlushDisposition, "segment-emitted");
+  assert.equal(metadata.nativeTailFlushEmittedSegmentSequence, 8);
+  assert.equal(metadata.productionReliabilityEligible, false);
 });
 
 test("reconciles expected, recoverable, and exhausted terminal outcomes", () => {

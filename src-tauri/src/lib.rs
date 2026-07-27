@@ -14,7 +14,7 @@ use tauri::{AppHandle, Manager, WebviewWindow};
 use tokio::task::JoinHandle;
 mod speaker;
 use capture::CaptureState;
-use speaker::{NativeCaptureControl, VadConfig};
+use speaker::{NativeCaptureControl, NativeCaptureTerminationRequest, VadConfig};
 
 #[cfg(target_os = "macos")]
 #[allow(deprecated)]
@@ -29,6 +29,8 @@ pub struct AudioState {
     sample_rate: Arc<Mutex<Option<u32>>>,
     started_at_ms: Arc<Mutex<Option<u64>>>,
     capture_stop_requested: Arc<AtomicBool>,
+    capture_termination_requested: Arc<AtomicBool>,
+    capture_termination_request: Arc<Mutex<Option<NativeCaptureTerminationRequest>>>,
 }
 
 #[tauri::command]
