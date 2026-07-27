@@ -44,6 +44,7 @@ export interface TaxonomyAdjudicationCompactTrace {
   logicalQuestionBoundaryReason?: string;
   currentQuestionTerminalNoAnswer?: {
     disposition?: string;
+    operationKind?: string;
     authorized?: boolean;
     applied?: boolean;
     applyReason?: string;
@@ -181,6 +182,7 @@ export interface TaxonomyAdjudicationReflectionRow {
   substantiveStarts?: number;
   reservedSubstantiveAvailable?: boolean;
   terminalNoAnswerDisposition?: string;
+  terminalNoAnswerOperationKind?: string;
   terminalNoAnswerAuthorized?: boolean;
   terminalNoAnswerApplied?: boolean;
   terminalNoAnswerApplyReason?: string;
@@ -258,6 +260,7 @@ export interface TaxonomyAdjudicationReflectionReport {
     terminalNoAnswerAvoidedMemoryOpportunity: number;
     terminalNoAnswerAvoidedModelOpportunity: number;
     terminalNoAnswerDispositions: Record<string, number>;
+    terminalNoAnswerOperationKinds: Record<string, number>;
     terminalNoAnswerApplyReasons: Record<string, number>;
     logicalQuestionBoundaryReasons: Record<string, number>;
     terminalNoAnswerAmbientContinuations: number;
@@ -523,6 +526,11 @@ export function buildTaxonomyAdjudicationReflectionReport(input: {
           metadata,
           "currentQuestionTerminalNoAnswerDisposition"
         ) ?? terminalSummary?.disposition,
+      terminalNoAnswerOperationKind:
+        readString(
+          metadata,
+          "currentQuestionTerminalNoAnswerOperationKind"
+        ) ?? terminalSummary?.operationKind,
       terminalNoAnswerAuthorized:
         readBoolean(
           metadata,
@@ -778,6 +786,11 @@ export function buildTaxonomyAdjudicationReflectionReport(input: {
           (row) => row.terminalNoAnswerDisposition
         )
       ),
+      terminalNoAnswerOperationKinds: countStrings(
+        terminalNoAnswerRows.map(
+          (row) => row.terminalNoAnswerOperationKind
+        )
+      ),
       terminalNoAnswerApplyReasons: countStrings(
         terminalNoAnswerRows.map(
           (row) => row.terminalNoAnswerApplyReason
@@ -960,6 +973,10 @@ export function renderTaxonomyAdjudicationReflectionMarkdown(
     "### Terminal No-answer Dispositions",
     "",
     ...formatCountMap(report.metrics.terminalNoAnswerDispositions),
+    "",
+    "### Terminal No-answer Operation Kinds",
+    "",
+    ...formatCountMap(report.metrics.terminalNoAnswerOperationKinds),
     "",
     "### Terminal No-answer Apply Reasons",
     "",

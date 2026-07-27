@@ -711,6 +711,11 @@ test("late LLM taxonomy adjudication stays joinable after trace export", async (
       currentQuestionTerminalNoAnswerRevision: 2,
       currentQuestionTerminalNoAnswerSourceTurnIds: ["turn_1"],
       currentQuestionTerminalNoAnswerOperationId: "intent-op-1",
+      currentQuestionTerminalNoAnswerOperationKind:
+        "informational-no-primary-ask",
+      currentQuestionTerminalNoAnswerDisplayDisposition: "visible",
+      currentQuestionTerminalNoAnswerContextDisposition:
+        "append-bounded-context",
       currentQuestionTerminalNoAnswerSpeechAct: "acknowledgment",
       currentQuestionTerminalNoAnswerAction: "ignore",
       currentQuestionTerminalNoAnswerConfidence: 0.99,
@@ -807,6 +812,15 @@ test("late LLM taxonomy adjudication stays joinable after trace export", async (
     unknown
   >;
   assert.equal(terminal.disposition, "terminal-no-answer");
+  assert.equal(
+    terminal.operationKind,
+    "informational-no-primary-ask"
+  );
+  assert.equal(terminal.displayDisposition, "visible");
+  assert.equal(
+    terminal.contextDisposition,
+    "append-bounded-context"
+  );
   assert.equal(terminal.authorized, true);
   assert.equal(terminal.applied, true);
   assert.equal(terminal.advisorCancelled, true);

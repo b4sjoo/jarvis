@@ -231,6 +231,8 @@ test("measures isolated budgets and terminal no-answer boundaries without counti
         taxonomyAdjudicationSubstantiveStarts: 0,
         taxonomyAdjudicationReservedSubstantiveAvailable: true,
         currentQuestionTerminalNoAnswerDisposition: "terminal-no-answer",
+        currentQuestionTerminalNoAnswerOperationKind:
+          "informational-no-primary-ask",
         currentQuestionTerminalNoAnswerAuthorized: true,
         interviewerIntentLlmTerminalNoAnswerApplied: true,
         interviewerIntentLlmTerminalNoAnswerApplyReason:
@@ -319,6 +321,9 @@ test("measures isolated budgets and terminal no-answer boundaries without counti
   assert.equal(report.metrics.terminalNoAnswerCandidates, 1);
   assert.equal(report.metrics.terminalNoAnswerAuthorized, 1);
   assert.equal(report.metrics.terminalNoAnswerApplied, 1);
+  assert.deepEqual(report.metrics.terminalNoAnswerOperationKinds, {
+    "informational-no-primary-ask": 1,
+  });
   assert.equal(report.metrics.terminalNoAnswerAdvisorCancelled, 1);
   assert.equal(
     report.metrics.terminalNoAnswerAvoidedMemoryOpportunity,

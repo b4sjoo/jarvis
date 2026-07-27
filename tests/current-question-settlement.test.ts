@@ -517,6 +517,9 @@ test("authorizes only an exact high-confidence ambient no-answer result", () => 
 
   assert.equal(decision.terminalNoAnswerAuthorized, true);
   assert.equal(decision.disposition, "terminal-no-answer");
+  assert.equal(decision.operationKind, "filler-ignore");
+  assert.equal(decision.displayDisposition, "hidden-eligible");
+  assert.equal(decision.contextDisposition, "discard");
   assert.equal(decision.settledAt, 100);
   assert.equal(
     trace.currentQuestionTerminalNoAnswerAuthorized,
@@ -526,6 +529,155 @@ test("authorizes only an exact high-confidence ambient no-answer result", () => 
     trace.currentQuestionTerminalNoAnswerUnitId,
     "logical-question-a"
   );
+});
+
+test("keeps informational context visible while suppressing an answer opportunity", () => {
+  const currentQuestion = createProvisionalCurrentQuestion({
+    logicalQuestionUnit: logicalQuestion(
+      2,
+      "The role works closely with the platform and search teams."
+    ),
+    sourceKind: "voice",
+  });
+  const decision = settleCurrentQuestionTerminalNoAnswer({
+    currentQuestion,
+    operationAuthorized: true,
+    manualCorrectionRevision: 0,
+    candidate: {
+      operationId: "operation-info",
+      proposal: proposal("llm-type-repair", {
+        sourceHash: currentQuestion.sourceHash,
+        questionType: "unknown",
+        relation: "none",
+        action: "append-context",
+        evidenceMode: "unknown",
+        confidence: 0.96,
+      }),
+      speechAct: "informational",
+      normalizedQuestion: "",
+      primaryAskSpanCount: 0,
+      budgetSlot: "ambient",
+      sourceOwnedSubstantive: false,
+    },
+  });
+  const trace = formatCurrentQuestionTerminalNoAnswerForTrace(
+    decision
+  );
+
+  assert.equal(decision.terminalNoAnswerAuthorized, true);
+  assert.equal(
+    decision.operationKind,
+    "informational-no-primary-ask"
+  );
+  assert.equal(decision.displayDisposition, "visible");
+  assert.equal(
+    decision.contextDisposition,
+    "append-bounded-context"
+  );
+  assert.equal(
+    trace.currentQuestionTerminalNoAnswerOperationKind,
+    "informational-no-primary-ask"
+  );
+});
+
+test("fails open when informational speech contains a primary ask", () => {
+  const currentQuestion = createProvisionalCurrentQuestion({
+    logicalQuestionUnit: logicalQuestion(
+      2,
+      "The role works with search. How would you design retrieval?"
+    ),
+    sourceKind: "voice",
+  });
+  const baseCandidate = {
+    proposal: proposal("llm-type-repair", {
+      sourceHash: currentQuestion.sourceHash,
+      questionType: "unknown",
+      relation: "none" as const,
+      action: "append-context" as const,
+      evidenceMode: "unknown" as const,
+      confidence: 0.99,
+    }),
+    speechAct: "informational" as const,
+    normalizedQuestion: "",
+    primaryAskSpanCount: 0,
+    budgetSlot: "ambient" as const,
+    sourceOwnedSubstantive: false,
+  };
+
+  for (const candidate of [
+    {
+      ...baseCandidate,
+      normalizedQuestion: "How would you design retrieval?",
+    },
+    {
+      ...baseCandidate,
+      primaryAskSpanCount: 1,
+    },
+    {
+      ...baseCandidate,
+      budgetSlot: "substantive" as const,
+      sourceOwnedSubstantive: true,
+    },
+  ]) {
+    const decision = settleCurrentQuestionTerminalNoAnswer({
+      currentQuestion,
+      operationAuthorized: true,
+      manualCorrectionRevision: 0,
+      candidate,
+    });
+    assert.equal(decision.terminalNoAnswerAuthorized, false);
+  }
+});
+
+test("uses a stricter threshold for filler than informational context", () => {
+  const currentQuestion = createProvisionalCurrentQuestion({
+    logicalQuestionUnit: logicalQuestion(2, "Background context."),
+    sourceKind: "voice",
+  });
+  const informational = settleCurrentQuestionTerminalNoAnswer({
+    currentQuestion,
+    operationAuthorized: true,
+    manualCorrectionRevision: 0,
+    candidate: {
+      proposal: proposal("llm-type-repair", {
+        sourceHash: currentQuestion.sourceHash,
+        questionType: "unknown",
+        relation: "none",
+        action: "append-context",
+        evidenceMode: "unknown",
+        confidence: 0.96,
+      }),
+      speechAct: "informational",
+      normalizedQuestion: "",
+      primaryAskSpanCount: 0,
+      budgetSlot: "ambient",
+      sourceOwnedSubstantive: false,
+    },
+  });
+  const filler = settleCurrentQuestionTerminalNoAnswer({
+    currentQuestion,
+    operationAuthorized: true,
+    manualCorrectionRevision: 0,
+    candidate: {
+      proposal: proposal("llm-type-repair", {
+        sourceHash: currentQuestion.sourceHash,
+        questionType: "unknown",
+        relation: "none",
+        action: "ignore",
+        evidenceMode: "unknown",
+        confidence: 0.96,
+      }),
+      speechAct: "acknowledgement",
+      normalizedQuestion: "",
+      primaryAskSpanCount: 0,
+      budgetSlot: "ambient",
+      sourceOwnedSubstantive: false,
+    },
+  });
+
+  assert.equal(informational.terminalNoAnswerAuthorized, true);
+  assert.equal(filler.terminalNoAnswerAuthorized, false);
+  assert.equal(filler.disposition, "confidence-below-threshold");
 });
 
 test("fails open for stale, low-confidence, or substantive no-answer proposals", () => {

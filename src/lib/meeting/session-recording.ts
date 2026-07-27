@@ -310,6 +310,9 @@ export interface SessionCompactTraceSummary {
     logicalQuestionUnitRevision?: number;
     sourceTurnCount?: number;
     operationId?: string;
+    operationKind?: string;
+    displayDisposition?: string;
+    contextDisposition?: string;
     speechAct?: string;
     action?: string;
     confidence?: number;
@@ -4382,6 +4385,18 @@ function buildCurrentQuestionTerminalNoAnswerTraceSummary(
     operationId: readFirstString(
       metadataSources,
       "currentQuestionTerminalNoAnswerOperationId"
+    ),
+    operationKind: readFirstString(
+      metadataSources,
+      "currentQuestionTerminalNoAnswerOperationKind"
+    ),
+    displayDisposition: readFirstString(
+      metadataSources,
+      "currentQuestionTerminalNoAnswerDisplayDisposition"
+    ),
+    contextDisposition: readFirstString(
+      metadataSources,
+      "currentQuestionTerminalNoAnswerContextDisposition"
     ),
     speechAct: readFirstString(
       metadataSources,

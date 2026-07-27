@@ -8652,6 +8652,12 @@ export function useMeetingAssistant() {
             ...formatCurrentQuestionTerminalNoAnswerForTrace(
               terminalNoAnswerDecision
             ),
+            interviewerIntentLlmNoAnswerOperationKind:
+              terminalNoAnswerDecision?.operationKind,
+            interviewerIntentLlmNoAnswerDisplayDisposition:
+              terminalNoAnswerDecision?.displayDisposition,
+            interviewerIntentLlmNoAnswerContextDisposition:
+              terminalNoAnswerDecision?.contextDisposition,
             taxonomyAdjudicationTerminalNoAnswerApplied:
               terminalNoAnswerRuntimeApplied,
             interviewerIntentLlmTerminalNoAnswerApplied:
@@ -8876,7 +8882,10 @@ export function useMeetingAssistant() {
           });
           if (terminalNoAnswerAdvisorCancelled) {
             cancelActiveAdvisorJob(
-              "terminal-no-answer-settlement",
+              terminalNoAnswerDecision?.operationKind ===
+                "informational-no-primary-ask"
+                ? "informational-no-primary-ask-settlement"
+                : "terminal-no-answer-settlement",
               "cancelled-by-runtime-boundary"
             );
             setState((previous) => ({
