@@ -214,6 +214,76 @@ test("builds product outcomes only from human-reviewed critical moments", () => 
   );
 });
 
+test("reports whiteboard validation, repair, fallback, and latency denominators", () => {
+  const report = buildSessionLongitudinalEvaluationReport([
+    {
+      directory: "/recordings/session-whiteboard",
+      manifest: { sessionId: "session-whiteboard" },
+      transcriptTurns: [],
+      questionEvaluations: [],
+      traceSummaries: [
+        {
+          traceId: "trace_valid",
+          whiteboard: {
+            validationOperationId: "validation_valid",
+            validationDisposition: "valid-mermaid",
+            validationDurationMs: 12,
+            renderStatus: "valid-mermaid",
+          },
+        },
+        {
+          traceId: "trace_repaired",
+          whiteboard: {
+            validationOperationId: "validation_repaired",
+            validationDisposition: "invalid-mermaid",
+            validationDurationMs: 20,
+            preservedLastValid: true,
+            renderStatus: "preserved-last-valid",
+            fallbackKind: "last-valid",
+            repairOperationId: "repair_1",
+            repairDisposition: "shadow-valid",
+            repairQueueWaitMs: 15,
+            repairDurationMs: 420,
+            repairRevalidationDisposition: "valid-mermaid",
+          },
+        },
+        {
+          traceId: "trace_ascii",
+          whiteboard: {
+            validationOperationId: "validation_ascii",
+            validationDisposition: "invalid-mermaid",
+            validationDurationMs: 30,
+            renderStatus: "ascii-fallback",
+            fallbackKind: "deterministic-ascii",
+            repairOperationId: "repair_2",
+            repairDisposition: "revalidation-failed",
+            repairQueueWaitMs: 25,
+            repairDurationMs: 700,
+            repairRevalidationDisposition: "invalid-mermaid",
+          },
+        },
+      ],
+    },
+  ]);
+
+  assert.equal(report.whiteboardRenderFunnel.observedCandidates, 3);
+  assert.equal(report.whiteboardRenderFunnel.invalidCandidates, 2);
+  assert.equal(report.whiteboardRenderFunnel.repairAttempts, 2);
+  assert.equal(report.whiteboardRenderFunnel.settledRepairAttempts, 2);
+  assert.equal(report.whiteboardRenderFunnel.successfulShadowRepairs, 1);
+  assert.equal(report.whiteboardRenderFunnel.validationFailureRate.rate, 2 / 3);
+  assert.equal(report.whiteboardRenderFunnel.repairSuccessRate.rate, 0.5);
+  assert.equal(report.whiteboardRenderFunnel.preservedLastValidRate.rate, 0.5);
+  assert.equal(report.whiteboardRenderFunnel.asciiFallbackRate.rate, 0.5);
+  assert.equal(report.whiteboardRenderFunnel.validationLatencyMs.p50Ms, 20);
+  assert.equal(report.whiteboardRenderFunnel.repairQueueWaitMs.p95Ms, 25);
+  assert.equal(report.whiteboardRenderFunnel.repairDurationMs.maxMs, 700);
+
+  const markdown = renderSessionLongitudinalEvaluationMarkdown(report);
+  assert.match(markdown, /## Whiteboard Render Integrity/);
+  assert.match(markdown, /Repair success rate: 50.0% \(1\/2\)/);
+});
+
 const SESSION: LongitudinalSessionInput = {
   directory: "/recordings/session-a",
   manifest: {

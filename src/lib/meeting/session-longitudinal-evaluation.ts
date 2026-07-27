@@ -76,6 +76,31 @@ export interface LongitudinalTraceSummary {
     parseValid?: boolean;
     durationMs?: number;
   };
+  whiteboard?: {
+    artifactId?: string;
+    revision?: number;
+    domainTrack?: string;
+    validationOperationId?: string;
+    candidateKind?: string;
+    candidateRevision?: number;
+    validationDisposition?: string;
+    validationDurationMs?: number;
+    parserErrorClass?: string;
+    visibleRevisionBefore?: number;
+    visibleRevisionAfter?: number;
+    preservedLastValid?: boolean;
+    renderStatus?: string;
+    fallbackKind?: string;
+    fallbackReason?: string;
+    repairOperationId?: string;
+    repairDisposition?: string;
+    repairProviderDisposition?: string;
+    repairParseDisposition?: string;
+    repairQueueWaitMs?: number;
+    repairDurationMs?: number;
+    repairRevalidationDisposition?: string;
+    repairBehaviorMutationBlocked?: boolean;
+  };
   timingsMs?: {
     model?: number;
     advisor?: number;
@@ -267,6 +292,23 @@ export interface SessionLongitudinalEvaluationReport {
     relationAgreement: RateMetric;
     parentActionAgreement: RateMetric;
     expectedContextCoverage: RateMetric;
+  };
+  whiteboardRenderFunnel: {
+    observedCandidates: number;
+    invalidCandidates: number;
+    repairAttempts: number;
+    settledRepairAttempts: number;
+    successfulShadowRepairs: number;
+    preservedLastValidCount: number;
+    asciiFallbackCount: number;
+    validationFailureRate: RateMetric;
+    repairAttemptRate: RateMetric;
+    repairSuccessRate: RateMetric;
+    preservedLastValidRate: RateMetric;
+    asciiFallbackRate: RateMetric;
+    validationLatencyMs: DistributionMetric;
+    repairQueueWaitMs: DistributionMetric;
+    repairDurationMs: DistributionMetric;
   };
   evidenceGaps: {
     unlabeledProductionTraces: number;
@@ -479,6 +521,37 @@ export function buildSessionLongitudinalEvaluationReport(
     criticalMomentRows,
     evaluationsWithoutCandidate
   );
+  const whiteboardCandidates = production.filter(({ trace }) =>
+    Boolean(trace.whiteboard?.validationOperationId)
+  );
+  const invalidWhiteboardCandidates = whiteboardCandidates.filter(
+    ({ trace }) =>
+      trace.whiteboard?.validationDisposition === "invalid-mermaid"
+  );
+  const whiteboardRepairAttempts = invalidWhiteboardCandidates.filter(
+    ({ trace }) => Boolean(trace.whiteboard?.repairOperationId)
+  );
+  const settledWhiteboardRepairAttempts = whiteboardRepairAttempts.filter(
+    ({ trace }) =>
+      Boolean(trace.whiteboard?.repairDisposition) &&
+      trace.whiteboard?.repairDisposition !== "scheduled"
+  );
+  const successfulShadowRepairs =
+    settledWhiteboardRepairAttempts.filter(
+      ({ trace }) =>
+        trace.whiteboard?.repairDisposition === "shadow-valid" &&
+        trace.whiteboard?.repairRevalidationDisposition === "valid-mermaid"
+    );
+  const preservedLastValid = invalidWhiteboardCandidates.filter(
+    ({ trace }) =>
+      trace.whiteboard?.preservedLastValid === true ||
+      trace.whiteboard?.renderStatus === "preserved-last-valid"
+  );
+  const asciiFallbacks = invalidWhiteboardCandidates.filter(
+    ({ trace }) =>
+      trace.whiteboard?.fallbackKind === "deterministic-ascii" ||
+      trace.whiteboard?.renderStatus === "ascii-fallback"
+  );
 
   return {
     version: 2,
@@ -608,6 +681,50 @@ export function buildSessionLongitudinalEvaluationReport(
         ])
       ),
       expectedContextCoverage: averageRate(expectedContextMetrics),
+    },
+    whiteboardRenderFunnel: {
+      observedCandidates: whiteboardCandidates.length,
+      invalidCandidates: invalidWhiteboardCandidates.length,
+      repairAttempts: whiteboardRepairAttempts.length,
+      settledRepairAttempts: settledWhiteboardRepairAttempts.length,
+      successfulShadowRepairs: successfulShadowRepairs.length,
+      preservedLastValidCount: preservedLastValid.length,
+      asciiFallbackCount: asciiFallbacks.length,
+      validationFailureRate: rate(
+        invalidWhiteboardCandidates.length,
+        whiteboardCandidates.length
+      ),
+      repairAttemptRate: rate(
+        whiteboardRepairAttempts.length,
+        invalidWhiteboardCandidates.length
+      ),
+      repairSuccessRate: rate(
+        successfulShadowRepairs.length,
+        settledWhiteboardRepairAttempts.length
+      ),
+      preservedLastValidRate: rate(
+        preservedLastValid.length,
+        invalidWhiteboardCandidates.length
+      ),
+      asciiFallbackRate: rate(
+        asciiFallbacks.length,
+        invalidWhiteboardCandidates.length
+      ),
+      validationLatencyMs: distribution(
+        whiteboardCandidates.map(
+          ({ trace }) => trace.whiteboard?.validationDurationMs
+        )
+      ),
+      repairQueueWaitMs: distribution(
+        settledWhiteboardRepairAttempts.map(
+          ({ trace }) => trace.whiteboard?.repairQueueWaitMs
+        )
+      ),
+      repairDurationMs: distribution(
+        settledWhiteboardRepairAttempts.map(
+          ({ trace }) => trace.whiteboard?.repairDurationMs
+        )
+      ),
     },
     evidenceGaps: {
       unlabeledProductionTraces: production.filter(
@@ -1054,6 +1171,18 @@ export function renderSessionLongitudinalEvaluationMarkdown(
     `Parent-action agreement: ${formatRate(report.continuityFunnel.parentActionAgreement)}`,
     `Expected context-turn coverage: ${formatRate(report.continuityFunnel.expectedContextCoverage)}`,
     `Referential completions / truncated units: ${report.continuityFunnel.referentialCompletionCount} / ${report.continuityFunnel.truncatedLogicalQuestionCount}`,
+    "",
+    "## Whiteboard Render Integrity",
+    "",
+    `Candidates -> invalid -> repair attempts -> settled -> successful shadow repairs: ${report.whiteboardRenderFunnel.observedCandidates} -> ${report.whiteboardRenderFunnel.invalidCandidates} -> ${report.whiteboardRenderFunnel.repairAttempts} -> ${report.whiteboardRenderFunnel.settledRepairAttempts} -> ${report.whiteboardRenderFunnel.successfulShadowRepairs}`,
+    `Validation failure rate: ${formatRate(report.whiteboardRenderFunnel.validationFailureRate)}`,
+    `Repair attempt rate: ${formatRate(report.whiteboardRenderFunnel.repairAttemptRate)}`,
+    `Repair success rate: ${formatRate(report.whiteboardRenderFunnel.repairSuccessRate)}`,
+    `Preserved last valid: ${formatRate(report.whiteboardRenderFunnel.preservedLastValidRate)}`,
+    `ASCII fallback: ${formatRate(report.whiteboardRenderFunnel.asciiFallbackRate)}`,
+    `Validation latency: ${formatDistribution(report.whiteboardRenderFunnel.validationLatencyMs)}`,
+    `Repair queue wait: ${formatDistribution(report.whiteboardRenderFunnel.repairQueueWaitMs)}`,
+    `Repair duration: ${formatDistribution(report.whiteboardRenderFunnel.repairDurationMs)}`,
     "",
     "## Evidence Gaps",
     "",
