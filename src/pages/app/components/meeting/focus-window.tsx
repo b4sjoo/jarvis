@@ -15,12 +15,16 @@ import type {
 } from "@/lib/meeting";
 import {
   EMPTY_MEETING_FOCUS_SNAPSHOT,
+  FOCUS_CONTROLS_CORRECTION_HISTORY_HEIGHT,
+  FOCUS_CONTROLS_TRANSCRIPT_MEASURE_WIDTH,
   MEETING_FOCUS_ACTION_EVENT,
   MEETING_FOCUS_SNAPSHOT_EVENT,
   guardAsyncUnlisten,
+  resolveFocusControlsGeometry,
   stripOuterCodeFence,
 } from "@/lib/meeting";
 import { cn } from "@/lib/utils";
+import { invoke } from "@tauri-apps/api/core";
 import { emit, listen } from "@tauri-apps/api/event";
 import {
   BrainIcon,
@@ -36,7 +40,13 @@ import {
   SendIcon,
   XIcon,
 } from "lucide-react";
-import { type ReactNode, useEffect, useState } from "react";
+import {
+  type ReactNode,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
 
 const WRAP_TEXT_CLASS =
   "min-w-0 whitespace-pre-wrap break-words [overflow-wrap:anywhere]";
@@ -210,6 +220,9 @@ function MeetingFocusControlsWindow({
   snapshot: MeetingFocusSnapshot;
 }) {
   const [correction, setCorrection] = useState("");
+  const transcriptMeasureRef = useRef<HTMLParagraphElement>(null);
+  const lastGeometryRequestRef = useRef("");
+  const geometryRevisionRef = useRef(0);
   const interviewTypes = snapshot.interviewTypes;
   const hasCorrectableQuestion = snapshot.hasCorrectableQuestion;
   const activeCorrection =
@@ -276,8 +289,59 @@ function MeetingFocusControlsWindow({
     sendFocusAction({ type: "submit-correction", correction: trimmed });
   };
 
+  useLayoutEffect(() => {
+    const frameId = window.requestAnimationFrame(() => {
+      const measurement = transcriptMeasureRef.current;
+      if (!measurement) return;
+
+      const geometry = resolveFocusControlsGeometry({
+        measuredTranscriptHeight: measurement.scrollHeight,
+        reservedAuxiliaryHeight: snapshot.speechCorrections.length
+          ? FOCUS_CONTROLS_CORRECTION_HISTORY_HEIGHT
+          : 0,
+      });
+      const requestKey = [
+        geometry.preferredWidth,
+        geometry.preferredHeight,
+        geometry.measuredTranscriptHeight,
+        geometry.reservedAuxiliaryHeight,
+      ].join(":");
+      if (lastGeometryRequestRef.current === requestKey) return;
+
+      lastGeometryRequestRef.current = requestKey;
+      geometryRevisionRef.current += 1;
+      void invoke("set_meeting_focus_controls_geometry", {
+        snapshotRevision: geometryRevisionRef.current,
+        preferredWidth: geometry.preferredWidth,
+        preferredHeight: geometry.preferredHeight,
+        measuredTranscriptHeight: geometry.measuredTranscriptHeight,
+        transcriptScrollRequired: geometry.transcriptScrollRequired,
+      }).catch((error) => {
+        console.error(
+          "Failed to resize Focus Mode controls for transcript",
+          error
+        );
+      });
+    });
+
+    return () => {
+      window.cancelAnimationFrame(frameId);
+    };
+  }, [snapshot.latestTurnText, snapshot.speechCorrections.length]);
+
   return (
     <div className="h-screen w-screen overflow-hidden bg-transparent p-2">
+      <p
+        ref={transcriptMeasureRef}
+        aria-hidden="true"
+        className={cn(
+          WRAP_TEXT_CLASS,
+          "pointer-events-none fixed -left-[10000px] top-0 text-[13px] leading-5 opacity-0"
+        )}
+        style={{ width: FOCUS_CONTROLS_TRANSCRIPT_MEASURE_WIDTH }}
+      >
+        {snapshot.latestTurnText}
+      </p>
       <div className="flex h-full min-w-0 flex-col overflow-hidden rounded-lg border border-border/70 bg-background/95 p-3 shadow-lg backdrop-blur">
         <div className="flex min-w-0 items-center gap-2">
           <div className="shrink-0 text-[10px] font-medium uppercase text-muted-foreground">
@@ -383,7 +447,7 @@ function MeetingFocusControlsWindow({
             <p
               className={cn(
                 WRAP_TEXT_CLASS,
-                "line-clamp-3 text-[13px] leading-5 text-muted-foreground"
+                "min-h-0 flex-1 overflow-y-auto pr-1 text-[13px] leading-5 text-muted-foreground"
               )}
             >
               {snapshot.latestTurnText}
@@ -421,12 +485,12 @@ function MeetingFocusControlsWindow({
             </div>
 
             {snapshot.speechCorrections.length ? (
-              <div className="mt-2 flex min-w-0 flex-wrap gap-1">
-                {snapshot.speechCorrections.slice(-4).map((item) => (
+              <div className="mt-1.5 grid h-6 min-w-0 grid-cols-2 gap-1 overflow-hidden">
+                {snapshot.speechCorrections.slice(-2).map((item) => (
                   <Badge
                     key={item.id}
                     variant="outline"
-                    className="flex max-w-full items-center gap-1 rounded-sm px-1.5 py-0 text-[10px]"
+                    className="flex min-w-0 items-center gap-1 overflow-hidden rounded-sm px-1.5 py-0 text-[10px]"
                     title={
                       item.activeQuestion?.error
                         ? `${item.input}: ${item.activeQuestion.error}`

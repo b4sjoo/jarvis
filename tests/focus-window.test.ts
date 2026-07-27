@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { guardAsyncUnlisten } from "../src/lib/meeting/focus-window.js";
+import {
+  guardAsyncUnlisten,
+  resolveFocusControlsGeometry,
+} from "../src/lib/meeting/focus-window.js";
 
 function createDeferred<T>() {
   let resolve!: (value: T) => void;
@@ -52,4 +55,52 @@ test("focus listener registration errors are reported without leaking cleanup", 
   dispose();
 
   assert.equal(reported, expected);
+});
+
+test("focus controls keep short transcripts at the compact base geometry", () => {
+  assert.deepEqual(
+    resolveFocusControlsGeometry({
+      measuredTranscriptHeight: 60,
+    }),
+    {
+      preferredWidth: 920,
+      preferredHeight: 230,
+      measuredTranscriptHeight: 60,
+      estimatedTranscriptHeight: 60,
+      reservedAuxiliaryHeight: 0,
+      transcriptScrollRequired: false,
+    }
+  );
+});
+
+test("focus controls expand width before consuming vertical space", () => {
+  const decision = resolveFocusControlsGeometry({
+    measuredTranscriptHeight: 120,
+  });
+
+  assert.equal(decision.preferredWidth, 1_080);
+  assert.ok(decision.preferredHeight > 230);
+  assert.equal(decision.transcriptScrollRequired, false);
+});
+
+test("focus controls cap very long transcripts and require local scrolling", () => {
+  const decision = resolveFocusControlsGeometry({
+    measuredTranscriptHeight: 500,
+  });
+
+  assert.equal(decision.preferredWidth, 1_280);
+  assert.equal(decision.preferredHeight, 410);
+  assert.equal(decision.transcriptScrollRequired, true);
+});
+
+test("focus controls reserve correction history without shrinking transcript", () => {
+  const decision = resolveFocusControlsGeometry({
+    measuredTranscriptHeight: 500,
+    reservedAuxiliaryHeight: 24,
+  });
+
+  assert.equal(decision.preferredWidth, 1_280);
+  assert.equal(decision.preferredHeight, 434);
+  assert.equal(decision.reservedAuxiliaryHeight, 24);
+  assert.equal(decision.transcriptScrollRequired, true);
 });

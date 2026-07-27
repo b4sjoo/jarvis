@@ -16,11 +16,28 @@ const INTERVIEW_WINDOW_LABELS: [&str; 3] = [
     MAIN_WINDOW_LABEL,
 ];
 const FOCUS_ANSWER_WIDTH: f64 = 920.0;
-const FOCUS_ANSWER_HEIGHT: f64 = 620.0;
+const FOCUS_ANSWER_HEIGHT: f64 = 540.0;
 const FOCUS_CONTROLS_WIDTH: f64 = 920.0;
 const FOCUS_CONTROLS_HEIGHT: f64 = 230.0;
+const FOCUS_CONTROLS_MAX_WIDTH: f64 = 1280.0;
+const FOCUS_CONTROLS_MAX_HEIGHT: f64 = 440.0;
 const FOCUS_TOP_MARGIN: i32 = 12;
 const FOCUS_BOTTOM_MARGIN: i32 = 56;
+const FOCUS_WINDOW_GAP: i32 = 12;
+
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FocusControlsGeometryResult {
+    snapshot_revision: u64,
+    requested_width: f64,
+    requested_height: f64,
+    applied_width: f64,
+    applied_height: f64,
+    measured_transcript_height: f64,
+    constrained_by_monitor_width: bool,
+    constrained_by_answer_window: bool,
+    transcript_scroll_required: bool,
+}
 
 /// Sets up the main window with custom positioning
 pub fn setup_main_window(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
@@ -284,6 +301,91 @@ pub fn hide_meeting_focus_windows(app: tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+#[tauri::command]
+pub fn set_meeting_focus_controls_geometry(
+    app: tauri::AppHandle,
+    snapshot_revision: u64,
+    preferred_width: f64,
+    preferred_height: f64,
+    measured_transcript_height: f64,
+    transcript_scroll_required: bool,
+) -> Result<FocusControlsGeometryResult, String> {
+    use tauri::{LogicalSize, Size};
+
+    let controls = app
+        .get_webview_window(FOCUS_CONTROLS_WINDOW_LABEL)
+        .ok_or_else(|| "Focus controls window is not available".to_string())?;
+    let reference_window = app
+        .get_webview_window(MAIN_WINDOW_LABEL)
+        .or_else(|| app.webview_windows().values().next().cloned())
+        .ok_or_else(|| "No reference window found for Focus Mode".to_string())?;
+    let monitor = match reference_window
+        .current_monitor()
+        .map_err(|error| format!("Failed to get current monitor: {}", error))?
+    {
+        Some(monitor) => Some(monitor),
+        None => reference_window
+            .primary_monitor()
+            .map_err(|error| format!("Failed to get primary monitor: {}", error))?,
+    }
+    .ok_or_else(|| "No monitor found for Focus Mode".to_string())?;
+    let scale_factor = controls
+        .scale_factor()
+        .map_err(|error| format!("Failed to get Focus Mode scale factor: {}", error))?
+        .max(1.0);
+    let monitor_size = monitor.size();
+    let monitor_position = monitor.position();
+    let logical_monitor_width = monitor_size.width as f64 / scale_factor;
+    let maximum_width = FOCUS_CONTROLS_MAX_WIDTH
+        .min((logical_monitor_width - WINDOW_SIDE_MARGIN).max(MIN_WINDOW_WIDTH));
+
+    let monitor_bottom = monitor_position.y + monitor_size.height as i32;
+    let controls_bottom = monitor_bottom - FOCUS_BOTTOM_MARGIN;
+    let answer_bottom = app
+        .get_webview_window(FOCUS_ANSWER_WINDOW_LABEL)
+        .and_then(|answer| {
+            let position = answer.outer_position().ok()?;
+            let size = answer.outer_size().ok()?;
+            Some(position.y + size.height as i32)
+        })
+        .unwrap_or_else(|| {
+            monitor_position.y
+                + FOCUS_TOP_MARGIN
+                + (FOCUS_ANSWER_HEIGHT * scale_factor).round() as i32
+        });
+    let available_height = ((controls_bottom - answer_bottom - FOCUS_WINDOW_GAP).max(0) as f64
+        / scale_factor)
+        .max(FOCUS_CONTROLS_HEIGHT);
+    let maximum_height = FOCUS_CONTROLS_MAX_HEIGHT.min(available_height);
+    let (applied_width, applied_height) = clamp_focus_controls_geometry(
+        preferred_width,
+        preferred_height,
+        maximum_width,
+        maximum_height,
+    );
+
+    controls
+        .set_size(Size::Logical(LogicalSize::new(
+            applied_width,
+            applied_height,
+        )))
+        .map_err(|error| format!("Failed to resize Focus controls window: {}", error))?;
+    position_focus_window(&app, &controls, FocusWindowPlacement::Bottom)?;
+
+    Ok(FocusControlsGeometryResult {
+        snapshot_revision,
+        requested_width: preferred_width,
+        requested_height: preferred_height,
+        applied_width,
+        applied_height,
+        measured_transcript_height,
+        constrained_by_monitor_width: applied_width + 0.5 < preferred_width,
+        constrained_by_answer_window: applied_height + 0.5 < preferred_height,
+        transcript_scroll_required: transcript_scroll_required
+            || applied_height + 0.5 < preferred_height,
+    })
+}
+
 pub fn hide_interview_windows_best_effort<R: Runtime>(app: &AppHandle<R>) {
     for label in INTERVIEW_WINDOW_LABELS {
         if let Some(window) = app.get_webview_window(label) {
@@ -297,6 +399,30 @@ pub fn hide_interview_windows_best_effort<R: Runtime>(app: &AppHandle<R>) {
 enum FocusWindowPlacement {
     Top,
     Bottom,
+}
+
+fn clamp_focus_controls_geometry(
+    preferred_width: f64,
+    preferred_height: f64,
+    maximum_width: f64,
+    maximum_height: f64,
+) -> (f64, f64) {
+    let maximum_width = maximum_width
+        .max(MIN_WINDOW_WIDTH)
+        .min(FOCUS_CONTROLS_MAX_WIDTH);
+    let minimum_width = FOCUS_CONTROLS_WIDTH.min(maximum_width);
+    let maximum_height = maximum_height
+        .max(FOCUS_CONTROLS_HEIGHT)
+        .min(FOCUS_CONTROLS_MAX_HEIGHT);
+
+    (
+        preferred_width
+            .max(FOCUS_CONTROLS_WIDTH)
+            .clamp(minimum_width, maximum_width),
+        preferred_height
+            .max(FOCUS_CONTROLS_HEIGHT)
+            .clamp(FOCUS_CONTROLS_HEIGHT, maximum_height),
+    )
 }
 
 fn ensure_focus_window<R: Runtime>(
@@ -447,8 +573,9 @@ pub fn show_dashboard_window<R: Runtime>(app: &AppHandle<R>) -> Result<(), Strin
 #[cfg(test)]
 mod tests {
     use super::{
-        FOCUS_ANSWER_WINDOW_LABEL, FOCUS_CONTROLS_WINDOW_LABEL, INTERVIEW_WINDOW_LABELS,
-        MAIN_WINDOW_LABEL,
+        clamp_focus_controls_geometry, FOCUS_ANSWER_WINDOW_LABEL, FOCUS_CONTROLS_HEIGHT,
+        FOCUS_CONTROLS_MAX_HEIGHT, FOCUS_CONTROLS_MAX_WIDTH, FOCUS_CONTROLS_WIDTH,
+        FOCUS_CONTROLS_WINDOW_LABEL, INTERVIEW_WINDOW_LABELS, MAIN_WINDOW_LABEL,
     };
 
     #[test]
@@ -460,6 +587,27 @@ mod tests {
                 FOCUS_CONTROLS_WINDOW_LABEL,
                 MAIN_WINDOW_LABEL,
             ]
+        );
+    }
+
+    #[test]
+    fn focus_controls_geometry_keeps_short_transcripts_compact() {
+        assert_eq!(
+            clamp_focus_controls_geometry(
+                FOCUS_CONTROLS_WIDTH,
+                FOCUS_CONTROLS_HEIGHT,
+                FOCUS_CONTROLS_MAX_WIDTH,
+                FOCUS_CONTROLS_MAX_HEIGHT,
+            ),
+            (FOCUS_CONTROLS_WIDTH, FOCUS_CONTROLS_HEIGHT)
+        );
+    }
+
+    #[test]
+    fn focus_controls_geometry_respects_monitor_and_answer_window_limits() {
+        assert_eq!(
+            clamp_focus_controls_geometry(1280.0, 350.0, 1100.0, 250.0),
+            (1100.0, 250.0)
         );
     }
 }

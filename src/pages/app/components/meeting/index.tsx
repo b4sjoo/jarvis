@@ -2868,7 +2868,7 @@ const FocusModePanel = ({
               <p
                 className={cn(
                   WRAP_TEXT_CLASS,
-                  "line-clamp-2 text-[11px] leading-4 text-muted-foreground"
+                  "max-h-24 overflow-y-auto pr-1 text-[11px] leading-4 text-muted-foreground"
                 )}
               >
                 {latestTurnText}

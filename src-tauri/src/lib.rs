@@ -428,6 +428,7 @@ pub fn run() {
             window::move_window,
             window::show_meeting_focus_windows,
             window::hide_meeting_focus_windows,
+            window::set_meeting_focus_controls_geometry,
             capture::capture_to_base64,
             capture::capture_screen_context_to_base64,
             capture::start_screen_capture,

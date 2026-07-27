@@ -13,6 +13,76 @@ import type { NativeAudioPauseResumeControlPresentation } from "./native-audio-l
 
 export const MEETING_FOCUS_SNAPSHOT_EVENT = "meeting-focus-snapshot";
 export const MEETING_FOCUS_ACTION_EVENT = "meeting-focus-action";
+export const FOCUS_CONTROLS_TRANSCRIPT_MEASURE_WIDTH = 840;
+export const FOCUS_CONTROLS_CORRECTION_HISTORY_HEIGHT = 24;
+
+export interface FocusControlsGeometryDecision {
+  preferredWidth: number;
+  preferredHeight: number;
+  measuredTranscriptHeight: number;
+  estimatedTranscriptHeight: number;
+  reservedAuxiliaryHeight: number;
+  transcriptScrollRequired: boolean;
+}
+
+export function resolveFocusControlsGeometry(input: {
+  measuredTranscriptHeight: number;
+  reservedAuxiliaryHeight?: number;
+  lineHeight?: number;
+}): FocusControlsGeometryDecision {
+  const lineHeight = Math.max(1, input.lineHeight ?? 20);
+  const measuredTranscriptHeight = Math.max(
+    lineHeight,
+    Math.ceil(input.measuredTranscriptHeight)
+  );
+  const measuredLines = Math.max(
+    1,
+    Math.ceil(measuredTranscriptHeight / lineHeight)
+  );
+  const preferredWidth =
+    measuredLines <= 3
+      ? 920
+      : measuredLines <= 6
+        ? 1_080
+        : measuredLines <= 10
+          ? 1_200
+          : 1_280;
+  const targetTranscriptWidth = Math.max(1, preferredWidth - 80);
+  const estimatedLines = Math.max(
+    1,
+    Math.ceil(
+      (measuredLines * FOCUS_CONTROLS_TRANSCRIPT_MEASURE_WIDTH) /
+        targetTranscriptWidth
+    )
+  );
+  const estimatedTranscriptHeight = estimatedLines * lineHeight;
+  const maximumVisibleTranscriptHeight = 220;
+  const visibleTranscriptHeight = Math.min(
+    maximumVisibleTranscriptHeight,
+    Math.max(60, estimatedTranscriptHeight)
+  );
+  const reservedAuxiliaryHeight = Math.max(
+    0,
+    Math.ceil(input.reservedAuxiliaryHeight ?? 0)
+  );
+  const preferredHeight = Math.min(
+    440,
+    230 +
+      Math.max(0, visibleTranscriptHeight - 60) +
+      reservedAuxiliaryHeight +
+      (measuredLines > 10 ? 20 : 0)
+  );
+
+  return {
+    preferredWidth,
+    preferredHeight,
+    measuredTranscriptHeight,
+    estimatedTranscriptHeight,
+    reservedAuxiliaryHeight,
+    transcriptScrollRequired:
+      estimatedTranscriptHeight > maximumVisibleTranscriptHeight,
+  };
+}
 
 export function guardAsyncUnlisten(
   registration: Promise<() => void>,
