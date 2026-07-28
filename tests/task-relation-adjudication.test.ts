@@ -11,6 +11,7 @@ import {
   buildTaskRelationAdjudicationRequest,
   createTaskRelationSettlementProposal,
   decideTaskRelationAdjudicationEligibility,
+  deriveRuntimeTaskRelationFromAtomicDecision,
   parseTaskRelationAdjudicationOutput,
 } from "../src/lib/meeting/task-relation-adjudication.js";
 
@@ -110,6 +111,23 @@ function activeTask(withChild = false): ActiveMeetingTask {
   };
 }
 
+function atomicOutput(
+  overrides: Record<string, unknown> = {}
+): Record<string, unknown> {
+  return {
+    schemaVersion: 2,
+    dependency: "parent-dependent",
+    continuationShape: "mainline",
+    returnIntent: "no-resume",
+    switchIntent: "no-explicit-switch",
+    standaloneSufficiency: "insufficient",
+    confidence: 0.93,
+    currentQuestionEvidenceSpans: ["fresh documents"],
+    parentEvidenceSpans: ["RAG system for trip planning"],
+    ...overrides,
+  };
+}
+
 test("builds a bounded relation-only request without generated or factual context", () => {
   const request = buildTaskRelationAdjudicationRequest({
     logicalQuestionUnit: unit(
@@ -159,7 +177,7 @@ test("builds a bounded relation-only request without generated or factual contex
   assert.deepEqual(request.activeParent.acceptedConstraints, [
     request.recentSourceEvidence[1],
   ]);
-  assert.match(prompts.systemPrompt, /Classify only the relationship/i);
+  assert.match(prompts.systemPrompt, /five independent relationship facts/i);
   assert.doesNotMatch(
     prompts.userMessage,
     /questionType|advisor action|memory|whiteboard/i
@@ -205,23 +223,14 @@ test("strictly parses grounded follow-up and rejects broader authority", () => {
     ),
     activeMeetingTask: activeTask(),
   });
-  const valid = {
-    schemaVersion: 1,
-    relation: "followup-parent",
-    confidence: 0.93,
-    currentQuestionEvidenceSpans: ["fresh documents"],
-    parentEvidenceSpans: ["RAG system for trip planning"],
-    explicitBinding: true,
-    standalone: false,
-  };
+  const valid = atomicOutput();
 
-  assert.equal(
-    parseTaskRelationAdjudicationOutput(
-      JSON.stringify(valid),
-      request
-    ).ok,
-    true
+  const parsed = parseTaskRelationAdjudicationOutput(
+    JSON.stringify(valid),
+    request
   );
+  assert.equal(parsed.ok, true);
+  assert.equal(parsed.ok ? parsed.value.relation : undefined, "followup-parent");
   assert.deepEqual(
     parseTaskRelationAdjudicationOutput(
       JSON.stringify({
@@ -254,53 +263,66 @@ test("strictly parses grounded follow-up and rejects broader authority", () => {
   );
 });
 
-test("requires standalone new parents and grounded parent evidence for continuations", () => {
+test("derives new parents only from independent standalone questions", () => {
   const request = buildTaskRelationAdjudicationRequest({
     logicalQuestionUnit: unit(
       "Now design an unrelated notification service."
     ),
     activeMeetingTask: activeTask(),
   });
-  const base = {
-    schemaVersion: 1,
-    confidence: 0.9,
-    currentQuestionEvidenceSpans: ["notification service"],
-    parentEvidenceSpans: [] as string[],
-    explicitBinding: false,
-    standalone: false,
-  };
+  const insufficient = parseTaskRelationAdjudicationOutput(
+    JSON.stringify(
+      atomicOutput({
+        dependency: "parent-independent",
+        continuationShape: "unclear",
+        switchIntent: "explicit-switch",
+        standaloneSufficiency: "insufficient",
+        currentQuestionEvidenceSpans: ["notification service"],
+        parentEvidenceSpans: [],
+      })
+    ),
+    request
+  );
+  const sufficient = parseTaskRelationAdjudicationOutput(
+    JSON.stringify(
+      atomicOutput({
+        dependency: "parent-independent",
+        continuationShape: "unclear",
+        switchIntent: "explicit-switch",
+        standaloneSufficiency: "sufficient",
+        currentQuestionEvidenceSpans: ["notification service"],
+        parentEvidenceSpans: [],
+      })
+    ),
+    request
+  );
+  const ungroundedContinuation = parseTaskRelationAdjudicationOutput(
+    JSON.stringify(
+      atomicOutput({
+        currentQuestionEvidenceSpans: ["notification service"],
+        parentEvidenceSpans: [],
+      })
+    ),
+    request
+  );
 
   assert.equal(
-    parseTaskRelationAdjudicationOutput(
-      JSON.stringify({ ...base, relation: "new-parent" }),
-      request
-    ).ok,
-    false
+    insufficient.ok ? insufficient.value.relation : undefined,
+    "unknown"
   );
   assert.equal(
-    parseTaskRelationAdjudicationOutput(
-      JSON.stringify({
-        ...base,
-        relation: "new-parent",
-        standalone: true,
-      }),
-      request
-    ).ok,
-    true
+    sufficient.ok ? sufficient.value.relation : undefined,
+    "new-parent"
   );
-  assert.equal(
-    parseTaskRelationAdjudicationOutput(
-      JSON.stringify({
-        ...base,
-        relation: "child-probe",
-      }),
-      request
-    ).ok,
-    false
-  );
+  assert.deepEqual(ungroundedContinuation, {
+    ok: false,
+    reason: "parent-evidence-required",
+    errorKind: "evidence",
+    evidenceSpansValid: false,
+  });
 });
 
-test("resume requires an active child and explicit binding", () => {
+test("resume intent requires an active child and parent evidence", () => {
   const withoutChild = buildTaskRelationAdjudicationRequest({
     logicalQuestionUnit: unit(
       "Let's return to the original architecture."
@@ -313,15 +335,13 @@ test("resume requires an active child and explicit binding", () => {
     ),
     activeMeetingTask: activeTask(true),
   });
-  const output = {
-    schemaVersion: 1,
-    relation: "resume-parent",
+  const output = atomicOutput({
+    dependency: "parent-dependent",
+    continuationShape: "unclear",
+    returnIntent: "resume-suspended-parent",
     confidence: 0.97,
     currentQuestionEvidenceSpans: ["return to the original architecture"],
-    parentEvidenceSpans: ["RAG system for trip planning"],
-    explicitBinding: true,
-    standalone: false,
-  };
+  });
 
   assert.equal(
     parseTaskRelationAdjudicationOutput(
@@ -330,12 +350,60 @@ test("resume requires an active child and explicit binding", () => {
     ).ok,
     false
   );
+  const parsed = parseTaskRelationAdjudicationOutput(
+    JSON.stringify(output),
+    withChild
+  );
+  assert.equal(parsed.ok, true);
+  assert.equal(parsed.ok ? parsed.value.relation : undefined, "resume-parent");
+});
+
+test("keeps referential standalone counterfactuals unresolved", () => {
+  const request = buildTaskRelationAdjudicationRequest({
+    logicalQuestionUnit: unit("How would that change?"),
+    activeMeetingTask: activeTask(),
+  });
+  const parsed = parseTaskRelationAdjudicationOutput(
+    JSON.stringify(
+      atomicOutput({
+        dependency: "parent-independent",
+        continuationShape: "unclear",
+        standaloneSufficiency: "insufficient",
+        currentQuestionEvidenceSpans: ["How would that change?"],
+        parentEvidenceSpans: [],
+      })
+    ),
+    request
+  );
+
+  assert.equal(parsed.ok, true);
+  assert.equal(parsed.ok ? parsed.value.relation : undefined, "unknown");
+});
+
+test("runtime derives relations from atomic decisions without switch authority", () => {
   assert.equal(
-    parseTaskRelationAdjudicationOutput(
-      JSON.stringify(output),
-      withChild
-    ).ok,
-    true
+    deriveRuntimeTaskRelationFromAtomicDecision({
+      dependency: "parent-dependent",
+      continuationShape: "bounded-detour",
+      returnIntent: "no-resume",
+      switchIntent: "no-explicit-switch",
+      standaloneSufficiency: "insufficient",
+      hasActiveChild: false,
+      hasParentEvidence: true,
+    }),
+    "child-probe"
+  );
+  assert.equal(
+    deriveRuntimeTaskRelationFromAtomicDecision({
+      dependency: "unclear",
+      continuationShape: "unclear",
+      returnIntent: "no-resume",
+      switchIntent: "explicit-switch",
+      standaloneSufficiency: "sufficient",
+      hasActiveChild: false,
+      hasParentEvidence: false,
+    }),
+    "unknown"
   );
 });
 
@@ -398,12 +466,17 @@ test("Task 144 accepts relation evidence for preview while parent mutation remai
   const llmProposal = createTaskRelationSettlementProposal({
     currentQuestion,
     adjudication: {
-      schemaVersion: 1,
+      schemaVersion: 2,
       relation: "followup-parent",
+      dependency: "parent-dependent",
+      continuationShape: "mainline",
+      returnIntent: "no-resume",
+      switchIntent: "no-explicit-switch",
+      standaloneSufficiency: "insufficient",
       confidence: 0.95,
       currentQuestionEvidenceSpans: ["fresh documents"],
       parentEvidenceSpans: ["RAG system"],
-      explicitBinding: true,
+      explicitBinding: false,
       standalone: false,
     },
     expectedParentId: "parent-a",

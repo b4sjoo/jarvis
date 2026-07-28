@@ -17,9 +17,9 @@ import type {
   TranscriptTurn,
 } from "./types.js";
 
-export const TASK_RELATION_ADJUDICATION_SCHEMA_VERSION = 1;
+export const TASK_RELATION_ADJUDICATION_SCHEMA_VERSION = 2;
 export const TASK_RELATION_ADJUDICATION_PROMPT_VERSION =
-  "task-relation-adjudication-v1";
+  "task-relation-adjudication-v2";
 export const TASK_RELATION_ADJUDICATION_MAX_OUTPUT_CHARS = 4_096;
 export const TASK_RELATION_ADJUDICATION_MAX_PARENT_CHARS = 480;
 export const TASK_RELATION_ADJUDICATION_MAX_TRANSITION_CHARS = 600;
@@ -36,13 +36,56 @@ export const RUNTIME_TASK_RELATIONS = [
 export type RuntimeTaskRelation =
   (typeof RUNTIME_TASK_RELATIONS)[number];
 
+export const TASK_RELATION_DEPENDENCIES = [
+  "parent-dependent",
+  "parent-independent",
+  "unclear",
+] as const;
+
+export type TaskRelationDependency =
+  (typeof TASK_RELATION_DEPENDENCIES)[number];
+
+export const TASK_RELATION_CONTINUATION_SHAPES = [
+  "mainline",
+  "bounded-detour",
+  "unclear",
+] as const;
+
+export type TaskRelationContinuationShape =
+  (typeof TASK_RELATION_CONTINUATION_SHAPES)[number];
+
+export const TASK_RELATION_RETURN_INTENTS = [
+  "resume-suspended-parent",
+  "no-resume",
+  "unclear",
+] as const;
+
+export type TaskRelationReturnIntent =
+  (typeof TASK_RELATION_RETURN_INTENTS)[number];
+
+export const TASK_RELATION_SWITCH_INTENTS = [
+  "explicit-switch",
+  "no-explicit-switch",
+  "unclear",
+] as const;
+
+export type TaskRelationSwitchIntent =
+  (typeof TASK_RELATION_SWITCH_INTENTS)[number];
+
+export const TASK_RELATION_STANDALONE_SUFFICIENCIES = [
+  "sufficient",
+  "insufficient",
+  "unclear",
+] as const;
+
+export type TaskRelationStandaloneSufficiency =
+  (typeof TASK_RELATION_STANDALONE_SUFFICIENCIES)[number];
+
 export interface TaskRelationParentCapsule {
   parentId: string;
   revision: number;
-  canonicalType: string;
   topic: string;
   compactObjective: string;
-  currentPhase?: string;
   sourceTurnIds: string[];
   acceptedConstraints: TaskRelationSourceEvidence[];
   sharedScenarioEntities: string[];
@@ -50,7 +93,6 @@ export interface TaskRelationParentCapsule {
 
 export interface TaskRelationChildCapsule {
   childId: string;
-  canonicalType: string;
   question: string;
   sourceTurnIds: string[];
 }
@@ -72,7 +114,7 @@ export interface TaskRelationTransitionEvidence {
 }
 
 export interface TaskRelationAdjudicationRequest {
-  schemaVersion: 1;
+  schemaVersion: 2;
   promptVersion: string;
   logicalQuestionUnitId: string;
   logicalQuestionUnitRevision: number;
@@ -93,8 +135,13 @@ export interface TaskRelationAdjudicationJob
 }
 
 export interface LlmTaskRelationAdjudication {
-  schemaVersion: 1;
+  schemaVersion: 2;
   relation: RuntimeTaskRelation;
+  dependency: TaskRelationDependency;
+  continuationShape: TaskRelationContinuationShape;
+  returnIntent: TaskRelationReturnIntent;
+  switchIntent: TaskRelationSwitchIntent;
+  standaloneSufficiency: TaskRelationStandaloneSufficiency;
   confidence: number;
   currentQuestionEvidenceSpans: string[];
   parentEvidenceSpans: string[];
@@ -173,9 +220,8 @@ export function buildTaskRelationAdjudicationRequest(input: {
     ),
     activeParent,
     activeChild: child
-      ? {
+        ? {
           childId: child.id,
-          canonicalType: child.questionType,
           question: boundText(child.question, 240),
           sourceTurnIds: [...child.basedOnTurnIds].slice(0, 8),
         }
@@ -243,21 +289,22 @@ export function buildTaskRelationAdjudicationPrompts(
 ) {
   return {
     systemPrompt: [
-      "Classify only the relationship between one bounded interviewer question and the supplied active interview parent.",
+      "Evaluate only five independent relationship facts about one bounded interviewer question and the supplied active interview parent.",
       "Return one JSON object only. Do not answer the interview question.",
       "Do not classify question type, choose an advisor action, mutate a parent, advance a playbook phase, select memory, or generate an artifact.",
-      "Allowed relation values: new-parent, followup-parent, child-probe, resume-parent, unknown.",
-      "new-parent means a standalone new primary interview task, including a new task in the same domain or of the same type.",
-      "followup-parent means the question directly continues or constrains the active parent's main task.",
-      "child-probe means a bounded detour subordinate to the parent, such as a local concept or implementation probe, after which the parent should remain resumable.",
-      "resume-parent is valid only when activeChild is present and the question explicitly returns from that child to the suspended parent.",
-      "Use unknown when the relationship cannot be grounded. Time proximity, topic overlap, or compatible question types alone are not relation evidence.",
+      "Do not output a final relation. Runtime code derives it from your five atomic decisions.",
+      "dependency: parent-dependent only when the current question needs or directly modifies the supplied parent; parent-independent only when it can be handled without that parent; otherwise unclear.",
+      "continuationShape: mainline for a direct continuation of the parent; bounded-detour for a local concept or implementation probe after which the parent remains resumable; otherwise unclear.",
+      "returnIntent: resume-suspended-parent only when activeChild exists and the wording explicitly returns to the suspended parent; no-resume when it clearly does not; otherwise unclear.",
+      "switchIntent: explicit-switch only when the wording explicitly changes to a different task; no-explicit-switch when it clearly does not; otherwise unclear. This signal alone never authorizes a new parent.",
+      "standaloneSufficiency is a counterfactual: imagine all prior conversation is unavailable and only currentQuestion is sent to Advisor.",
+      "Use sufficient only when the current question itself identifies a concrete system, object, or subject and the requested goal or operation without guessing the parent.",
+      "Pronouns and deictic references such as this, that, it, the design, how would it change, or continue are insufficient unless the same current question resolves them.",
+      "Time proximity, topic overlap, compatible question types, playbook phase, and generated answers are not relationship evidence.",
       "currentQuestionEvidenceSpans must contain one or more exact verbatim substrings from currentQuestion.sourceTurns.",
       "parentEvidenceSpans must contain exact verbatim substrings from source-owned activeParent, activeChild, recentSourceEvidence, recentTransitions, or suspendedParent text fields.",
-      "Never use currentPhase as an evidence span. It is runtime state, not interviewer-owned evidence.",
-      "followup-parent, child-probe, and resume-parent require at least one grounded parentEvidenceSpan.",
-      "new-parent requires standalone=true. resume-parent requires explicitBinding=true.",
-      "Schema: {schemaVersion:1,relation,confidence,currentQuestionEvidenceSpans,parentEvidenceSpans,explicitBinding,standalone,ambiguityReason?}.",
+      "parent-dependent and resume-suspended-parent require at least one grounded parentEvidenceSpan.",
+      "Schema: {schemaVersion:2,dependency,continuationShape,returnIntent,switchIntent,standaloneSufficiency,confidence,currentQuestionEvidenceSpans,parentEvidenceSpans,ambiguityReason?}.",
     ].join(" "),
     userMessage: JSON.stringify({
       schemaVersion: request.schemaVersion,
@@ -303,12 +350,14 @@ export function parseTaskRelationAdjudicationOutput(
   const candidate = decoded as Record<string, unknown>;
   const allowedKeys = new Set([
     "schemaVersion",
-    "relation",
+    "dependency",
+    "continuationShape",
+    "returnIntent",
+    "switchIntent",
+    "standaloneSufficiency",
     "confidence",
     "currentQuestionEvidenceSpans",
     "parentEvidenceSpans",
-    "explicitBinding",
-    "standalone",
     "ambiguityReason",
   ]);
   if (Object.keys(candidate).some((key) => !allowedKeys.has(key))) {
@@ -320,8 +369,26 @@ export function parseTaskRelationAdjudicationOutput(
   ) {
     return parseFailure("unsupported-schema-version", "schema");
   }
-  if (!isRuntimeTaskRelation(candidate.relation)) {
-    return parseFailure("invalid-relation", "schema");
+  if (!isTaskRelationDependency(candidate.dependency)) {
+    return parseFailure("invalid-dependency", "schema");
+  }
+  if (
+    !isTaskRelationContinuationShape(candidate.continuationShape)
+  ) {
+    return parseFailure("invalid-continuation-shape", "schema");
+  }
+  if (!isTaskRelationReturnIntent(candidate.returnIntent)) {
+    return parseFailure("invalid-return-intent", "schema");
+  }
+  if (!isTaskRelationSwitchIntent(candidate.switchIntent)) {
+    return parseFailure("invalid-switch-intent", "schema");
+  }
+  if (
+    !isTaskRelationStandaloneSufficiency(
+      candidate.standaloneSufficiency
+    )
+  ) {
+    return parseFailure("invalid-standalone-sufficiency", "schema");
   }
   if (
     typeof candidate.confidence !== "number" ||
@@ -330,12 +397,6 @@ export function parseTaskRelationAdjudicationOutput(
     candidate.confidence > 1
   ) {
     return parseFailure("invalid-confidence", "schema");
-  }
-  if (
-    typeof candidate.explicitBinding !== "boolean" ||
-    typeof candidate.standalone !== "boolean"
-  ) {
-    return parseFailure("invalid-relation-flags", "schema");
   }
   if (
     candidate.ambiguityReason !== undefined &&
@@ -353,7 +414,12 @@ export function parseTaskRelationAdjudicationOutput(
     return parseFailure("invalid-parent-evidence-spans", "schema");
   }
 
-  const relation = candidate.relation;
+  const dependency = candidate.dependency;
+  const continuationShape = candidate.continuationShape;
+  const returnIntent = candidate.returnIntent;
+  const switchIntent = candidate.switchIntent;
+  const standaloneSufficiency =
+    candidate.standaloneSufficiency;
   const currentQuestionEvidenceSpans = (
     candidate.currentQuestionEvidenceSpans as string[]
   ).map((span) => span.trim());
@@ -376,22 +442,27 @@ export function parseTaskRelationAdjudicationOutput(
     return parseFailure("invalid-parent-evidence", "evidence");
   }
   if (
-    (relation === "followup-parent" ||
-      relation === "child-probe" ||
-      relation === "resume-parent") &&
+    (dependency === "parent-dependent" ||
+      returnIntent === "resume-suspended-parent") &&
     parentEvidenceSpans.length === 0
   ) {
     return parseFailure("parent-evidence-required", "evidence");
   }
-  if (relation === "new-parent" && candidate.standalone !== true) {
-    return parseFailure("new-parent-must-be-standalone", "schema");
-  }
   if (
-    relation === "resume-parent" &&
-    (!request.activeChild || candidate.explicitBinding !== true)
+    returnIntent === "resume-suspended-parent" &&
+    !request.activeChild
   ) {
     return parseFailure("resume-requires-active-child-binding", "schema");
   }
+  const relation = deriveRuntimeTaskRelationFromAtomicDecision({
+    dependency,
+    continuationShape,
+    returnIntent,
+    switchIntent,
+    standaloneSufficiency,
+    hasActiveChild: Boolean(request.activeChild),
+    hasParentEvidence: parentEvidenceSpans.length > 0,
+  });
 
   return {
     ok: true,
@@ -399,16 +470,55 @@ export function parseTaskRelationAdjudicationOutput(
     value: {
       schemaVersion: TASK_RELATION_ADJUDICATION_SCHEMA_VERSION,
       relation,
+      dependency,
+      continuationShape,
+      returnIntent,
+      switchIntent,
+      standaloneSufficiency,
       confidence: candidate.confidence,
       currentQuestionEvidenceSpans,
       parentEvidenceSpans,
-      explicitBinding: candidate.explicitBinding,
-      standalone: candidate.standalone,
+      explicitBinding:
+        returnIntent === "resume-suspended-parent",
+      standalone: standaloneSufficiency === "sufficient",
       ambiguityReason: candidate.ambiguityReason as
         | string
         | undefined,
     },
   };
+}
+
+export function deriveRuntimeTaskRelationFromAtomicDecision(input: {
+  dependency: TaskRelationDependency;
+  continuationShape: TaskRelationContinuationShape;
+  returnIntent: TaskRelationReturnIntent;
+  switchIntent: TaskRelationSwitchIntent;
+  standaloneSufficiency: TaskRelationStandaloneSufficiency;
+  hasActiveChild: boolean;
+  hasParentEvidence: boolean;
+}): RuntimeTaskRelation {
+  if (input.returnIntent === "resume-suspended-parent") {
+    return input.hasActiveChild && input.hasParentEvidence
+      ? "resume-parent"
+      : "unknown";
+  }
+  if (input.dependency === "parent-dependent") {
+    if (!input.hasParentEvidence) return "unknown";
+    if (input.continuationShape === "bounded-detour") {
+      return "child-probe";
+    }
+    if (input.continuationShape === "mainline") {
+      return "followup-parent";
+    }
+    return "unknown";
+  }
+  if (
+    input.dependency === "parent-independent" &&
+    input.standaloneSufficiency === "sufficient"
+  ) {
+    return "new-parent";
+  }
+  return "unknown";
 }
 
 export function createTaskRelationSettlementProposal(input: {
@@ -488,6 +598,16 @@ export function formatTaskRelationAdjudicationForTrace(input: {
     taskRelationAdjudicationDisposition: input.disposition,
     taskRelationAdjudicationCandidateRelation:
       input.candidate?.relation,
+    taskRelationAdjudicationDependency:
+      input.candidate?.dependency,
+    taskRelationAdjudicationContinuationShape:
+      input.candidate?.continuationShape,
+    taskRelationAdjudicationReturnIntent:
+      input.candidate?.returnIntent,
+    taskRelationAdjudicationSwitchIntent:
+      input.candidate?.switchIntent,
+    taskRelationAdjudicationStandaloneSufficiency:
+      input.candidate?.standaloneSufficiency,
     taskRelationAdjudicationConfidence:
       input.candidate?.confidence,
     taskRelationAdjudicationCurrentEvidenceSpans:
@@ -525,10 +645,8 @@ function buildParentCapsule(
   return {
     parentId: parent.id,
     revision: parent.revisions ?? 0,
-    canonicalType: parent.questionType,
     topic: boundText(parent.topic, 280),
     compactObjective,
-    currentPhase: parent.playbookPhase,
     sourceTurnIds: uniqueStrings([
       ...(parent.canonicalQuestionSourceTurnIds ?? []),
       parent.startTurnId,
@@ -675,11 +793,43 @@ function buildParentEvidenceCorpus(
     .join("\n");
 }
 
-function isRuntimeTaskRelation(
+function isTaskRelationDependency(
   value: unknown
-): value is RuntimeTaskRelation {
-  return RUNTIME_TASK_RELATIONS.includes(
-    value as RuntimeTaskRelation
+): value is TaskRelationDependency {
+  return TASK_RELATION_DEPENDENCIES.includes(
+    value as TaskRelationDependency
+  );
+}
+
+function isTaskRelationContinuationShape(
+  value: unknown
+): value is TaskRelationContinuationShape {
+  return TASK_RELATION_CONTINUATION_SHAPES.includes(
+    value as TaskRelationContinuationShape
+  );
+}
+
+function isTaskRelationReturnIntent(
+  value: unknown
+): value is TaskRelationReturnIntent {
+  return TASK_RELATION_RETURN_INTENTS.includes(
+    value as TaskRelationReturnIntent
+  );
+}
+
+function isTaskRelationSwitchIntent(
+  value: unknown
+): value is TaskRelationSwitchIntent {
+  return TASK_RELATION_SWITCH_INTENTS.includes(
+    value as TaskRelationSwitchIntent
+  );
+}
+
+function isTaskRelationStandaloneSufficiency(
+  value: unknown
+): value is TaskRelationStandaloneSufficiency {
+  return TASK_RELATION_STANDALONE_SUFFICIENCIES.includes(
+    value as TaskRelationStandaloneSufficiency
   );
 }
 
