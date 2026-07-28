@@ -8,6 +8,7 @@ import type {
   WhiteboardUpdateSource,
 } from "./types";
 import type { ArtifactProjectionDecision } from "./meeting-answer-display.js";
+import type { SettledAdvisorArtifactIntent } from "./settled-advisor-execution-plan.js";
 import { parseMeetingAnswer } from "./meeting-answer.js";
 import {
   areCompatibleParentContinuityTypes,
@@ -58,11 +59,25 @@ export interface WhiteboardRenderValidationDecision {
   valid: boolean;
   durationMs: number;
   parserErrorClass?: string;
+  parserErrorDetail?: string;
 }
 
 export interface WhiteboardRenderValidationInput {
   whiteboard?: string;
   operationId?: string;
+}
+
+export function isWhiteboardRevisionAuthorized({
+  artifactIntent,
+  policyAllowsWhiteboard,
+}: {
+  artifactIntent?: SettledAdvisorArtifactIntent;
+  policyAllowsWhiteboard: boolean;
+}) {
+  return (
+    policyAllowsWhiteboard &&
+    (!artifactIntent || artifactIntent === "revise-whiteboard")
+  );
 }
 
 interface MermaidModule {
@@ -116,6 +131,8 @@ export async function validateWhiteboardRenderCandidate({
       operationId,
       candidateFingerprint,
       parserErrorClass: "unclosed-mermaid-fence",
+      parserErrorDetail:
+        "The Mermaid Markdown fence is not closed, so the diagram cannot be parsed.",
       startedAt,
     });
   }
@@ -128,6 +145,7 @@ export async function validateWhiteboardRenderCandidate({
           operationId,
           candidateFingerprint,
           parserErrorClass: "empty-mermaid-diagram",
+          parserErrorDetail: "The Mermaid block is empty.",
           startedAt,
         });
       }
@@ -137,6 +155,8 @@ export async function validateWhiteboardRenderCandidate({
           operationId,
           candidateFingerprint,
           parserErrorClass: "mermaid-syntax-error",
+          parserErrorDetail:
+            "The Mermaid parser rejected the diagram without a diagnostic message.",
           startedAt,
         });
       }
@@ -146,6 +166,7 @@ export async function validateWhiteboardRenderCandidate({
       operationId,
       candidateFingerprint,
       parserErrorClass: classifyMermaidParserError(error),
+      parserErrorDetail: normalizeMermaidParserErrorDetail(error),
       startedAt,
     });
   }
@@ -181,6 +202,7 @@ export function formatWhiteboardRenderValidationForTrace({
       decision?.disposition ?? "no-candidate",
     whiteboardRenderValidationDurationMs: decision?.durationMs ?? 0,
     whiteboardRenderParserErrorClass: decision?.parserErrorClass,
+    whiteboardRenderParserErrorDetail: decision?.parserErrorDetail,
     whiteboardRenderVisibleRevisionBefore: before?.revision,
     whiteboardRenderVisibleRevisionAfter: visibleRevisionAfter,
     whiteboardRenderPreservedLastValid:
@@ -532,6 +554,11 @@ function authorizeWhiteboardCandidate({
       renderValidation?.candidateFingerprint !== fingerprint
         ? "candidate-validation-mismatch"
         : renderValidation?.parserErrorClass ?? "validation-missing",
+    parserErrorDetail:
+      renderValidation?.candidateFingerprint !== fingerprint
+        ? "The validated Mermaid content does not match the artifact candidate."
+        : renderValidation?.parserErrorDetail ??
+          "The Mermaid candidate did not have an authorized successful validation.",
   };
 }
 
@@ -678,11 +705,13 @@ function invalidMermaidDecision({
   operationId,
   candidateFingerprint,
   parserErrorClass,
+  parserErrorDetail,
   startedAt,
 }: {
   operationId: string;
   candidateFingerprint: string;
   parserErrorClass: string;
+  parserErrorDetail?: string;
   startedAt: number;
 }): WhiteboardRenderValidationDecision {
   return {
@@ -693,6 +722,7 @@ function invalidMermaidDecision({
     valid: false,
     durationMs: elapsedMs(startedAt),
     parserErrorClass,
+    parserErrorDetail,
   };
 }
 
@@ -703,6 +733,16 @@ function classifyMermaidParserError(error: unknown) {
     return `mermaid-${normalizedName.replace(/[^a-z0-9]+/g, "-")}`;
   }
   return "mermaid-parser-error";
+}
+
+function normalizeMermaidParserErrorDetail(error: unknown) {
+  const raw =
+    error instanceof Error
+      ? error.message
+      : typeof error === "string"
+        ? error
+        : "The Mermaid parser rejected the diagram.";
+  return raw.replace(/\s+/g, " ").trim().slice(0, 600);
 }
 
 function fingerprintWhiteboard(value: string) {

@@ -253,6 +253,7 @@ import {
   isRuntimeTaskRelation,
   normalizeTaskRelationAdjudicationMode,
   requestTaskRelationAdjudication,
+  isWhiteboardRevisionAuthorized,
   updateWhiteboardArtifactFromAnswer,
   validateWhiteboardRenderCandidate,
   SessionRecordingManager,
@@ -3285,7 +3286,9 @@ export function useMeetingAssistant() {
       const request = createWhiteboardSyntaxRepairRequest({
         whiteboard: candidateWhiteboard,
         parserError:
-          validation.parserErrorClass ?? "mermaid-syntax-error",
+          validation.parserErrorDetail ??
+          validation.parserErrorClass ??
+          "mermaid-syntax-error",
       });
       if (!request) {
         traceStoreRef.current.updateMetadata(traceId, {
@@ -7568,7 +7571,16 @@ export function useMeetingAssistant() {
       let whiteboardRenderValidation:
         | WhiteboardRenderValidationDecision
         | undefined;
-      if (parsedMeetingAnswer.sections.whiteboard) {
+      const whiteboardArtifactIntentAuthorized =
+        isWhiteboardRevisionAuthorized({
+          artifactIntent: settledExecutionPlan?.artifactIntent,
+          policyAllowsWhiteboard:
+            settledExecutionPlan?.artifactPolicy.allowWhiteboard ?? true,
+        });
+      if (
+        parsedMeetingAnswer.sections.whiteboard &&
+        whiteboardArtifactIntentAuthorized
+      ) {
         const whiteboardValidationStepId = traceId
           ? traceStoreRef.current.startStep(
               traceId,
@@ -7700,6 +7712,7 @@ export function useMeetingAssistant() {
             projectBinding: projectBindingDecision.binding,
             artifactAuthorization:
               settledArtifactAuthorization,
+            artifactIntent: settledExecutionPlan?.artifactIntent,
           })
         : {
             task: existingInterviewTask,
@@ -7723,6 +7736,10 @@ export function useMeetingAssistant() {
         ...formatResponseArtifactAuthorizationForTrace(
           settledArtifactAuthorization
         ),
+        answerWhiteboardArtifactIntent:
+          settledExecutionPlan?.artifactIntent,
+        answerWhiteboardArtifactIntentAuthorized:
+          whiteboardArtifactIntentAuthorized,
         answerCodeArtifactDecision: parsedMeetingAnswer.sections.code
           ? settledArtifactAuthorization.allowCode
             ? "produced"
@@ -8010,6 +8027,7 @@ export function useMeetingAssistant() {
       }));
       if (
         traceId &&
+        whiteboardArtifactIntentAuthorized &&
         whiteboardRenderValidation &&
         parsedMeetingAnswer.sections.whiteboard
       ) {
@@ -15553,6 +15571,9 @@ export function useMeetingAssistant() {
             projectBinding:
               reconciledScreenProjectBindingDecision.binding,
             artifactAuthorization: screenArtifactAuthorization,
+            artifactIntent: screenArtifactAuthorization.allowWhiteboard
+              ? "revise-whiteboard"
+              : "preserve",
           });
           const previousWhiteboard =
             existingInterviewTask?.whiteboardArtifact;
@@ -20132,6 +20153,7 @@ function updateInterviewTaskContinuityForAnswer({
   supportedFactAnchors,
   projectBinding,
   artifactAuthorization,
+  artifactIntent,
   sourceTransitionPrecommitted = false,
 }: {
   existingTask?: ActiveInterviewParent;
@@ -20158,6 +20180,7 @@ function updateInterviewTaskContinuityForAnswer({
   artifactAuthorization: ReturnType<
     typeof authorizeResponseArtifactMutation
   >;
+  artifactIntent?: SettledAdvisorExecutionPlan["artifactIntent"];
   sourceTransitionPrecommitted?: boolean;
 }): InterviewTaskContinuityResult {
   const kind = normalizeInterviewParentKind(questionType);
@@ -20187,6 +20210,11 @@ function updateInterviewTaskContinuityForAnswer({
     candidateQuestionType: questionType,
     relation,
   });
+  const whiteboardMutationAuthorized =
+    isWhiteboardRevisionAuthorized({
+      artifactIntent,
+      policyAllowsWhiteboard: artifactAuthorization.allowWhiteboard,
+    });
 
   if (continuityDecision.branch === "child-probe" && existingTask) {
     const generatedChild = isUsefulAnswer
@@ -20221,7 +20249,7 @@ function updateInterviewTaskContinuityForAnswer({
             ),
           }
         : generatedChild;
-    const whiteboardArtifact = artifactAuthorization.allowWhiteboard
+    const whiteboardArtifact = whiteboardMutationAuthorized
       ? updateWhiteboardArtifactFromAnswer({
           existing: existingTask.whiteboardArtifact,
           parentTaskId: existingTask.id,
@@ -20281,7 +20309,7 @@ function updateInterviewTaskContinuityForAnswer({
     const parentId = createMeetingId("interview_parent");
     const nextPhase = phaseDecision?.phase ?? playbook?.phase ?? "follow_up";
     const storedPlaybook = withInterviewPlaybookPhase(playbook, nextPhase);
-    const whiteboardArtifact = artifactAuthorization.allowWhiteboard
+    const whiteboardArtifact = whiteboardMutationAuthorized
       ? updateWhiteboardArtifactFromAnswer({
           parentTaskId: parentId,
           parentQuestionType: kind,
@@ -20381,7 +20409,7 @@ function updateInterviewTaskContinuityForAnswer({
       supportedFactAnchors: artifactAuthorization.allowParentContextMutation
         ? continuingTaskAnchors
         : existingTask.supportedFactAnchors,
-      whiteboardArtifact: artifactAuthorization.allowWhiteboard
+      whiteboardArtifact: whiteboardMutationAuthorized
         ? updateWhiteboardArtifactFromAnswer({
             existing: existingTask.whiteboardArtifact,
             parentTaskId: existingTask.id,

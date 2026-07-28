@@ -2,10 +2,35 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   formatWhiteboardRenderValidationForTrace,
+  isWhiteboardRevisionAuthorized,
   resolveWhiteboardArtifactDisplay,
   updateWhiteboardArtifactFromAnswer,
   validateWhiteboardRenderCandidate,
 } from "../src/lib/meeting/whiteboard-artifact.js";
+
+test("requires explicit whiteboard intent when a settled plan exists", () => {
+  assert.equal(
+    isWhiteboardRevisionAuthorized({
+      artifactIntent: "revise-whiteboard",
+      policyAllowsWhiteboard: true,
+    }),
+    true
+  );
+  assert.equal(
+    isWhiteboardRevisionAuthorized({
+      artifactIntent: "preserve",
+      policyAllowsWhiteboard: true,
+    }),
+    false
+  );
+  assert.equal(
+    isWhiteboardRevisionAuthorized({
+      artifactIntent: "revise-whiteboard",
+      policyAllowsWhiteboard: false,
+    }),
+    false
+  );
+});
 
 const WHITEBOARD_ANSWER = `
 中文思路:
@@ -414,4 +439,28 @@ test("preserves a cached whiteboard across compatible system-design correction",
     whiteboard: { kind: "replace", value: "Client -> API -> Service" },
     isCached: true,
   });
+});
+
+test("keeps Mermaid parser diagnostics bounded for one-shot repair", async () => {
+  const validation = await validateWhiteboardRenderCandidate({
+    whiteboard: [
+      "```mermaid",
+      "flowchart TD",
+      "  subgraph Open Constraints & Unclear Scale",
+      "  A --> B",
+      "```",
+    ].join("\n"),
+    operationId: "validation_diagnostic",
+  });
+
+  assert.equal(validation.valid, false);
+  assert.ok(validation.parserErrorDetail);
+  assert.ok(validation.parserErrorDetail.length <= 600);
+  const trace = formatWhiteboardRenderValidationForTrace({
+    decision: validation,
+  });
+  assert.equal(
+    trace.whiteboardRenderParserErrorDetail,
+    validation.parserErrorDetail
+  );
 });

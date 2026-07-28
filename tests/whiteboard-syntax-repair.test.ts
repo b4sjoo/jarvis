@@ -6,6 +6,7 @@ import {
   createWhiteboardSyntaxRepairLease,
   createWhiteboardSyntaxRepairRequest,
   parseWhiteboardSyntaxRepairOutput,
+  WHITEBOARD_SYNTAX_REPAIR_MAX_PARSER_ERROR_CHARS,
 } from "../src/lib/meeting/whiteboard-syntax-repair.js";
 
 const INVALID_WHITEBOARD = [
@@ -31,6 +32,20 @@ test("builds a bounded atomic request from invalid Mermaid", () => {
   const prompts = buildWhiteboardSyntaxRepairPrompts(request);
   assert.match(prompts.systemPrompt, /Change syntax only/);
   assert.match(prompts.userMessage, /Open Constraints/);
+});
+
+test("bounds parser diagnostics before sending the repair request", () => {
+  const request = createWhiteboardSyntaxRepairRequest({
+    whiteboard: INVALID_WHITEBOARD,
+    parserError: `  ${"parser detail ".repeat(100)}  `,
+  });
+
+  assert.ok(request);
+  assert.equal(
+    request.input.parserError.length,
+    WHITEBOARD_SYNTAX_REPAIR_MAX_PARSER_ERROR_CHARS
+  );
+  assert.doesNotMatch(request.input.parserError, /\s{2,}/);
 });
 
 test("accepts strict syntax-only output that preserves graph semantics", () => {

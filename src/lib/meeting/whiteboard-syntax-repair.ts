@@ -10,6 +10,7 @@ export const WHITEBOARD_SYNTAX_REPAIR_SCHEMA_VERSION = 1;
 export const WHITEBOARD_SYNTAX_REPAIR_MAX_MERMAID_CHARS = 12_000;
 export const WHITEBOARD_SYNTAX_REPAIR_MAX_ASCII_CHARS = 4_000;
 export const WHITEBOARD_SYNTAX_REPAIR_MAX_RAW_OUTPUT_CHARS = 24_000;
+export const WHITEBOARD_SYNTAX_REPAIR_MAX_PARSER_ERROR_CHARS = 600;
 
 export type WhiteboardDiagramKind =
   | "flowchart"
@@ -128,7 +129,11 @@ export function createWhiteboardSyntaxRepairRequest(input: {
     schemaVersion: WHITEBOARD_SYNTAX_REPAIR_SCHEMA_VERSION,
     input: {
       mermaid,
-      parserError: input.parserError.trim() || "mermaid-syntax-error",
+      parserError:
+        input.parserError.replace(/\s+/g, " ").trim().slice(
+          0,
+          WHITEBOARD_SYNTAX_REPAIR_MAX_PARSER_ERROR_CHARS
+        ) || "mermaid-syntax-error",
       diagramKind: inferWhiteboardDiagramKind(mermaid),
     },
   };
