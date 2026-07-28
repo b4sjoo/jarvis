@@ -320,6 +320,10 @@ export class SttEvaluationCaptureManager {
       humanReferenceCount: native.humanReferenceCount,
       bytesWritten: native.bytesWritten,
       droppedRawChunkCount: native.droppedRawChunkCount,
+      openRawWriterCount: native.openRawWriterCount,
+      manifestRevision: native.manifestRevision,
+      manifestFinalized: native.manifestFinalized,
+      endedAt: native.endedAt,
       lastError: native.lastError,
     });
   }
@@ -347,6 +351,10 @@ interface NativeSttEvaluationCaptureStatus {
   humanReferenceCount: number;
   bytesWritten: number;
   droppedRawChunkCount: number;
+  openRawWriterCount?: number;
+  manifestRevision?: number;
+  manifestFinalized?: boolean;
+  endedAt?: number;
   lastError?: string;
 }
 
@@ -355,6 +363,7 @@ function readLifecycle(
   active: boolean
 ): SttEvaluationCaptureLifecycle {
   if (active) return "active";
+  if (lifecycle === "stopping") return "stopping";
   if (lifecycle === "stopped") return "stopped";
   return "idle";
 }

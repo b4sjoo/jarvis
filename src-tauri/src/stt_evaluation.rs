@@ -6,7 +6,7 @@ use sha2::{Digest, Sha256};
 use std::fs::{self, OpenOptions};
 use std::io::{Cursor, Write};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Manager};
@@ -35,6 +35,9 @@ struct SttEvaluationCaptureSession {
     started_at_ms: u64,
     expires_at_ms: u64,
     active: Arc<AtomicBool>,
+    ended_at_ms: Arc<Mutex<Option<u64>>>,
+    open_raw_writer_count: Arc<AtomicU64>,
+    manifest_revision: Arc<AtomicU64>,
     counters: Arc<Mutex<SttEvaluationCaptureCounters>>,
 }
 
@@ -68,6 +71,10 @@ pub struct SttEvaluationCaptureStatus {
     human_reference_count: u64,
     bytes_written: u64,
     dropped_raw_chunk_count: u64,
+    open_raw_writer_count: u64,
+    manifest_revision: u64,
+    manifest_finalized: bool,
+    ended_at: Option<u64>,
     last_error: Option<String>,
 }
 
@@ -88,6 +95,10 @@ impl Default for SttEvaluationCaptureStatus {
             human_reference_count: 0,
             bytes_written: 0,
             dropped_raw_chunk_count: 0,
+            open_raw_writer_count: 0,
+            manifest_revision: 0,
+            manifest_finalized: false,
+            ended_at: None,
             last_error: None,
         }
     }
@@ -244,6 +255,9 @@ pub fn start_stt_evaluation_capture(
         started_at_ms,
         expires_at_ms,
         active: Arc::new(AtomicBool::new(true)),
+        ended_at_ms: Arc::new(Mutex::new(None)),
+        open_raw_writer_count: Arc::new(AtomicU64::new(0)),
+        manifest_revision: Arc::new(AtomicU64::new(0)),
         counters: Arc::new(Mutex::new(SttEvaluationCaptureCounters::default())),
     };
     write_manifest(&session, None, None)?;
@@ -277,22 +291,27 @@ pub fn start_stt_evaluation_capture(
 }
 
 #[tauri::command]
-pub fn stop_stt_evaluation_capture(
+pub async fn stop_stt_evaluation_capture(
     app: AppHandle,
     reason: Option<String>,
 ) -> Result<SttEvaluationCaptureStatus, String> {
     let state = app.state::<SttEvaluationCaptureState>();
-    let current = state
+    let session = state
         .current
         .lock()
-        .map_err(|error| format!("Failed to acquire STT evaluation state: {}", error))?;
-    let Some(session) = current.as_ref() else {
+        .map_err(|error| format!("Failed to acquire STT evaluation state: {}", error))?
+        .as_ref()
+        .cloned();
+    let Some(session) = session else {
         return Ok(SttEvaluationCaptureStatus::default());
     };
     let ended_at = now_ms();
     session.active.store(false, Ordering::Release);
+    if let Ok(mut stored_ended_at) = session.ended_at_ms.lock() {
+        *stored_ended_at = Some(ended_at);
+    }
     append_lifecycle_event(
-        session,
+        &session,
         json!({
             "kind": "evaluation-capture-stopped",
             "sessionId": session.session_id,
@@ -300,8 +319,15 @@ pub fn stop_stt_evaluation_capture(
             "reason": reason.unwrap_or_else(|| "manual".to_string()),
         }),
     )?;
-    write_manifest(session, Some(ended_at), None)?;
-    Ok(status_for_session(session))
+    write_manifest(&session, Some(ended_at), None)?;
+    for _ in 0..20 {
+        if session.open_raw_writer_count.load(Ordering::Acquire) == 0 {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    write_manifest(&session, Some(ended_at), None)?;
+    Ok(status_for_session(&session))
 }
 
 #[tauri::command]
@@ -456,13 +482,12 @@ pub fn create_raw_evaluation_capture_tap(
 
     let chunk_samples = ((sample_rate as usize * RAW_AUDIO_CHUNK_MS) / 1_000).max(1);
     let (sender, receiver) = mpsc::channel(RAW_AUDIO_QUEUE_CAPACITY);
-    let app_for_writer = app.clone();
-    let session_id = session.session_id.clone();
+    session.open_raw_writer_count.fetch_add(1, Ordering::AcqRel);
+    let session_for_writer = session.clone();
     let capture_id = capture_session_id.to_string();
     tokio::spawn(async move {
         run_raw_audio_writer(
-            app_for_writer,
-            session_id,
+            session_for_writer,
             capture_id,
             capture_generation,
             sample_rate,
@@ -565,8 +590,7 @@ pub fn cleanup_expired_stt_evaluation_captures(app: &AppHandle) -> Result<u64, S
 }
 
 async fn run_raw_audio_writer(
-    app: AppHandle,
-    session_id: String,
+    session: SttEvaluationCaptureSession,
     capture_session_id: String,
     capture_generation: u64,
     sample_rate: u32,
@@ -588,8 +612,7 @@ async fn run_raw_audio_writer(
             let samples = std::mem::replace(&mut pending_samples, remaining);
             file_sequence = file_sequence.saturating_add(1);
             write_raw_audio_file_chunk(
-                &app,
-                &session_id,
+                &session,
                 &capture_session_id,
                 capture_generation,
                 sample_rate,
@@ -611,8 +634,7 @@ async fn run_raw_audio_writer(
     if !pending_samples.is_empty() {
         file_sequence = file_sequence.saturating_add(1);
         write_raw_audio_file_chunk(
-            &app,
-            &session_id,
+            &session,
             &capture_session_id,
             capture_generation,
             sample_rate,
@@ -623,32 +645,34 @@ async fn run_raw_audio_writer(
             &pending_samples,
         );
     }
-    let _ = append_capture_event(
-        &app,
-        &session_id,
+    let _ = append_capture_event_for_session(
+        &session,
         json!({
             "kind": "raw-capture-writer-closed",
-            "sessionId": session_id,
+            "sessionId": session.session_id,
             "captureSessionId": capture_session_id,
             "captureGeneration": capture_generation,
             "fileCount": file_sequence,
             "closedAt": now_ms(),
         }),
     );
-    if let Ok(session) = resolve_session(&app, &session_id) {
-        let ended_at = if session.active.load(Ordering::Acquire) {
-            None
-        } else {
-            Some(now_ms())
-        };
-        let _ = write_manifest(&session, ended_at, None);
-    }
+    let _ =
+        session
+            .open_raw_writer_count
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |count| {
+                Some(count.saturating_sub(1))
+            });
+    let ended_at = session
+        .ended_at_ms
+        .lock()
+        .ok()
+        .and_then(|ended_at| *ended_at);
+    let _ = write_manifest(&session, ended_at, None);
 }
 
 #[allow(clippy::too_many_arguments)]
 fn write_raw_audio_file_chunk(
-    app: &AppHandle,
-    session_id: &str,
+    session: &SttEvaluationCaptureSession,
     capture_session_id: &str,
     capture_generation: u64,
     sample_rate: u32,
@@ -658,10 +682,6 @@ fn write_raw_audio_file_chunk(
     last_captured_at_ms: Option<u64>,
     samples: &[f32],
 ) {
-    let session = match resolve_session(app, session_id) {
-        Ok(session) => session,
-        Err(_) => return,
-    };
     let relative_path = format!(
         "source-audio/system-{}-{}-{:05}.wav",
         sanitize_identifier(capture_session_id),
@@ -671,7 +691,7 @@ fn write_raw_audio_file_chunk(
     let bytes = match samples_to_wav_bytes(sample_rate, samples) {
         Ok(bytes) => bytes,
         Err(error) => {
-            update_session_counters(app, session_id, |counters| {
+            update_session_counters_for_session(session, |counters| {
                 counters.dropped_raw_chunk_count =
                     counters.dropped_raw_chunk_count.saturating_add(1);
                 counters.last_error = Some(error);
@@ -680,7 +700,7 @@ fn write_raw_audio_file_chunk(
         }
     };
     if let Err(error) = write_private_bytes(&session.folder_path.join(&relative_path), &bytes) {
-        update_session_counters(app, session_id, |counters| {
+        update_session_counters_for_session(session, |counters| {
             counters.dropped_raw_chunk_count = counters.dropped_raw_chunk_count.saturating_add(1);
             counters.last_error = Some(error);
         });
@@ -692,12 +712,11 @@ fn write_raw_audio_file_chunk(
     let sha256 = sha256_hex(&bytes);
     let captured_start_at_ms =
         first_captured_at_ms.map(|time| time.saturating_sub(RAW_AUDIO_CHUNK_MS as u64));
-    let _ = append_capture_event(
-        app,
-        session_id,
+    let _ = append_capture_event_for_session(
+        session,
         json!({
             "kind": "raw-audio-chunk",
-            "sessionId": session_id,
+            "sessionId": session.session_id,
             "relativePath": relative_path,
             "captureSessionId": capture_session_id,
             "captureGeneration": capture_generation,
@@ -716,7 +735,7 @@ fn write_raw_audio_file_chunk(
             "bytes": bytes.len(),
         }),
     );
-    update_session_counters(app, session_id, |counters| {
+    update_session_counters_for_session(session, |counters| {
         counters.raw_chunk_count = counters.raw_chunk_count.saturating_add(1);
         counters.bytes_written = counters.bytes_written.saturating_add(bytes.len() as u64);
     });
@@ -741,6 +760,14 @@ fn resolve_session(
 
 fn status_for_session(session: &SttEvaluationCaptureSession) -> SttEvaluationCaptureStatus {
     let active = session.active.load(Ordering::Acquire);
+    let open_raw_writer_count = session.open_raw_writer_count.load(Ordering::Acquire);
+    let ended_at = session
+        .ended_at_ms
+        .lock()
+        .ok()
+        .and_then(|ended_at| *ended_at);
+    let manifest_revision = session.manifest_revision.load(Ordering::Acquire);
+    let manifest_finalized = !active && open_raw_writer_count == 0 && ended_at.is_some();
     let counters = session
         .counters
         .lock()
@@ -748,7 +775,13 @@ fn status_for_session(session: &SttEvaluationCaptureSession) -> SttEvaluationCap
         .unwrap_or_default();
     SttEvaluationCaptureStatus {
         active,
-        lifecycle: if active { "active" } else { "stopped" },
+        lifecycle: if active {
+            "active"
+        } else if open_raw_writer_count > 0 {
+            "stopping"
+        } else {
+            "stopped"
+        },
         session_id: Some(session.session_id.clone()),
         folder_name: Some(session.folder_name.clone()),
         folder_path: Some(session.folder_path.to_string_lossy().to_string()),
@@ -761,6 +794,10 @@ fn status_for_session(session: &SttEvaluationCaptureSession) -> SttEvaluationCap
         human_reference_count: counters.human_reference_count,
         bytes_written: counters.bytes_written,
         dropped_raw_chunk_count: counters.dropped_raw_chunk_count,
+        open_raw_writer_count,
+        manifest_revision,
+        manifest_finalized,
+        ended_at,
         last_error: counters.last_error,
     }
 }
@@ -788,21 +825,53 @@ fn update_session_counters(
     };
 }
 
+fn update_session_counters_for_session(
+    session: &SttEvaluationCaptureSession,
+    update: impl FnOnce(&mut SttEvaluationCaptureCounters),
+) {
+    if let Ok(mut counters) = session.counters.lock() {
+        update(&mut counters);
+    };
+}
+
 fn write_manifest(
     session: &SttEvaluationCaptureSession,
     ended_at: Option<u64>,
     deletion: Option<Value>,
 ) -> Result<(), String> {
+    if let Some(ended_at) = ended_at {
+        if let Ok(mut stored_ended_at) = session.ended_at_ms.lock() {
+            *stored_ended_at = Some(ended_at);
+        }
+    }
     let counters = session
         .counters
         .lock()
         .map(|counters| counters.clone())
         .unwrap_or_default();
+    let active = session.active.load(Ordering::Acquire);
+    let open_raw_writer_count = session.open_raw_writer_count.load(Ordering::Acquire);
+    let ended_at = session
+        .ended_at_ms
+        .lock()
+        .ok()
+        .and_then(|ended_at| *ended_at);
+    let manifest_revision = session
+        .manifest_revision
+        .fetch_add(1, Ordering::AcqRel)
+        .saturating_add(1);
+    let manifest_finalized = !active && open_raw_writer_count == 0 && ended_at.is_some();
     let manifest = json!({
         "schemaVersion": 1,
         "sessionId": session.session_id,
         "folderName": session.folder_name,
-        "status": if session.active.load(Ordering::Acquire) { "running" } else { "stopped" },
+        "status": if active {
+            "running"
+        } else if open_raw_writer_count > 0 {
+            "stopped-pending-writer-drain"
+        } else {
+            "stopped"
+        },
         "localOnly": true,
         "sourceLane": "system-audio",
         "startedAt": session.started_at_ms,
@@ -812,6 +881,14 @@ fn write_manifest(
         "runtimeContextPolicy": "excluded",
         "formalReferencePolicy": "human-confirmed-only",
         "counters": counters,
+        "finalization": {
+            "manifestRevision": manifest_revision,
+            "manifestFinalized": manifest_finalized,
+            "openRawWriterCount": open_raw_writer_count,
+            "counterSnapshotAt": now_ms(),
+            "rawWriterDrained": open_raw_writer_count == 0,
+            "endedAtPresent": ended_at.is_some(),
+        },
         "deletion": deletion,
     });
     write_private_text(
@@ -831,6 +908,13 @@ fn append_lifecycle_event(
 
 fn append_capture_event(app: &AppHandle, session_id: &str, event: Value) -> Result<(), String> {
     let session = resolve_session(app, session_id)?;
+    append_capture_event_for_session(&session, event)
+}
+
+fn append_capture_event_for_session(
+    session: &SttEvaluationCaptureSession,
+    event: Value,
+) -> Result<(), String> {
     append_private_jsonl(
         &session.folder_path.join("events/audio-artifacts.jsonl"),
         &event,

@@ -1335,6 +1335,10 @@ export interface SttEvaluationCaptureState {
   humanReferenceCount: number;
   bytesWritten: number;
   droppedRawChunkCount: number;
+  openRawWriterCount?: number;
+  manifestRevision?: number;
+  manifestFinalized?: boolean;
+  endedAt?: number;
   lastError?: string;
 }
 
