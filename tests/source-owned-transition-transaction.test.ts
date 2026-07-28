@@ -149,6 +149,43 @@ test("commits source-supported phase progress before model output", () => {
   );
 });
 
+test("does not synthesize phase progress from an unresolved relation", () => {
+  const parent = makeParent();
+  const candidate = createSourceOwnedTransitionCandidate({
+    sessionId: "session-a",
+    runtimeEpoch: 3,
+    source: "voice",
+    sourceTurnIds: ["turn-unresolved"],
+    existingTask: parent,
+    relation: "unknown",
+    authoritySource: "accepted-transcript",
+    mutationAuthorized: true,
+    questionType: "ai-ml-system-design",
+    question: "Use p95 latency under 300ms.",
+    playbook: makePlaybook(
+      "aiml_system_design",
+      "ai-ml-system-design",
+      "design_framing"
+    ),
+    phaseDecision: {
+      phase: "design_framing",
+      phaseFrom: "requirement_clarification",
+      flags: ["requirements"],
+      completedFlags: ["requirements"],
+      action: "advance",
+      reason: "requirements supplied",
+      source: "automatic",
+      requirementTrack: "ai-ml-system-design",
+      observedRequirementCategories: ["latency_sla"],
+      missingRequirementCategories: [],
+      requirementsReady: true,
+    },
+    now: 100,
+  });
+
+  assert.equal(candidate, undefined);
+});
+
 test("creates a screen parent before its model produces an answer", () => {
   const candidate = createSourceOwnedTransitionCandidate({
     sessionId: "session-a",

@@ -104,6 +104,21 @@ test("preserves an existing binding through a child probe", () => {
   assert.equal(decision.changed, false);
 });
 
+test("an unresolved relation cannot clear or replace an existing binding", () => {
+  const decision = resolveProjectBinding({
+    existingBinding: makeBinding(),
+    questionType: "project-deep-dive",
+    relation: "unknown",
+    memoryContext: makeMemoryResult([
+      makeEvidence("mem_other", "model-interface", "Model Interface"),
+    ]),
+  });
+
+  assert.equal(decision.action, "preserve");
+  assert.equal(decision.binding?.projectId, "agentic-memory");
+  assert.equal(decision.changed, false);
+});
+
 test("explicit selection can revise the project binding", () => {
   const decision = resolveProjectBinding({
     existingBinding: makeBinding(),

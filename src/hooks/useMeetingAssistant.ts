@@ -376,6 +376,7 @@ import {
   resolveManualCorrectionTarget,
   ManualCorrectionOperationCoordinator,
   decideInterviewTaskContinuityBranch,
+  decideActiveParentTaskRelationAuthority,
   decideCrossTypeTaskRelationAuthority,
   formatTaskRelationAuthorityForTrace,
   applyResponseOnlyTaskScopeToPromptContext,
@@ -18422,26 +18423,38 @@ function resolveAdvisorTaskSignals(
     }
 
     const hasActiveChild = hasAdvisorActiveChild(context);
-    const shouldResumeParent =
-      hasActiveChild &&
-      latestUsefulText &&
-      (latestQuestionType === activeQuestionType ||
-        isResumeParentTranscript(latestUsefulText) ||
-        inferAdvisorSubtaskIntent(latestUsefulText, activeQuestionType) ===
-          "metric-probe" ||
-        inferAdvisorSubtaskIntent(latestUsefulText, activeQuestionType) ===
-          "qps-estimation");
-    const taskRelation: InterviewTaskRelation = shouldResumeParent
-      ? "resume-parent"
-      : latestUsefulText && hasConstraintOrCorrectionSignal(latestUsefulText)
-        ? "correction"
-        : latestUsefulText && isMeetingLogisticsTranscript(
-            normalizeTranscriptForGate(latestUsefulText)
-          )
-          ? "logistics"
-          : latestUsefulText
-            ? "followup-parent"
-            : "unknown";
+    const latestSubtaskIntent = inferAdvisorSubtaskIntent(
+      latestUsefulText,
+      activeQuestionType
+    );
+    const relationDecision =
+      decideActiveParentTaskRelationAuthority({
+        hasLatestUsefulText: Boolean(latestUsefulText),
+        hasActiveChild,
+        explicitResume: Boolean(
+          latestUsefulText &&
+            isResumeParentTranscript(latestUsefulText)
+        ),
+        correction: Boolean(
+          latestUsefulText &&
+            hasConstraintOrCorrectionSignal(latestUsefulText)
+        ),
+        logistics: Boolean(
+          latestUsefulText &&
+            isMeetingLogisticsTranscript(
+              normalizeTranscriptForGate(latestUsefulText)
+            )
+        ),
+        broadResumeProposal: Boolean(
+          latestUsefulText &&
+            (latestQuestionType === activeQuestionType ||
+              latestSubtaskIntent === "metric-probe" ||
+              latestSubtaskIntent === "qps-estimation")
+        ),
+      });
+    const taskRelation = relationDecision?.relation ?? "unknown";
+    const responseOnlyRelation =
+      relationDecision?.disposition === "response-only";
 
     return {
       questionType: activeQuestionType,
@@ -18457,17 +18470,20 @@ function resolveAdvisorTaskSignals(
       projectAnchor: latestProjectAnchor,
       query: buildFocusedAdvisorTaskQuery(context, latestUsefulText),
       taskRelation,
-      subtaskIntent: inferAdvisorSubtaskIntent(
-        latestUsefulText,
-        activeQuestionType
-      ),
-      source: "active-parent",
+      taskRelationAuthorityDecision: relationDecision,
+      relationEvidenceAuthorized:
+        relationDecision?.relationEvidenceAuthorized ?? false,
+      responseOnlyRelation,
+      subtaskIntent: latestSubtaskIntent,
+      source: responseOnlyRelation
+        ? "active-parent-response-only"
+        : "active-parent",
       reuseActivePlaybook: true,
       openingRoute,
       latestTurnAskFrame: latestAskFrame,
       latestTurnTaxonomyBoundaryReason: "active-parent-continuity",
       taxonomyFallbackSuppressed: false,
-      unknownTaskMutationBlocked: false,
+      unknownTaskMutationBlocked: responseOnlyRelation,
     };
   }
 

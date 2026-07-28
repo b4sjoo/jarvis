@@ -60,6 +60,36 @@ test("allows an explicit new coding problem to replace the parent", () => {
   );
 });
 
+test("preserves the parent when relation evidence is unresolved", () => {
+  assert.deepEqual(
+    decideInterviewTaskContinuityBranch({
+      hasExistingParent: true,
+      existingParentQuestionType: "general-system-design",
+      candidateQuestionType: "coding",
+      relation: "unknown",
+    }),
+    {
+      branch: "preserve",
+      reason: "unresolved-relation-unknown",
+    }
+  );
+});
+
+test("does not continue an incompatible parent from a follow-up label alone", () => {
+  assert.deepEqual(
+    decideInterviewTaskContinuityBranch({
+      hasExistingParent: true,
+      existingParentQuestionType: "general-system-design",
+      candidateQuestionType: "coding",
+      relation: "followup-parent",
+    }),
+    {
+      branch: "preserve",
+      reason: "incompatible-type-without-new-parent-authority",
+    }
+  );
+});
+
 test("does not create a parent from an unscoped field-knowledge child", () => {
   assert.equal(
     decideInterviewTaskContinuityBranch({

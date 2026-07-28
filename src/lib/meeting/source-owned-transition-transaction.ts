@@ -312,6 +312,7 @@ function chooseTransitionKind(input: {
   if (input.relation === "new-parent") return "new-parent";
   if (input.relation === "child-probe") return "child-probe";
   if (input.relation === "resume-parent") return "resume-parent";
+  if (input.relation !== "followup-parent") return undefined;
   if (!input.existingTask || !input.phaseDecision) return undefined;
 
   const nextPhase =

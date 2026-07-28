@@ -41,7 +41,7 @@ export function resolveProjectBinding({
   const candidates = collectProjectBindingCandidates(
     memoryContext?.entries ?? []
   );
-  const startsNewParent = relation === "new-parent" || relation === "unknown";
+  const startsNewParent = relation === "new-parent";
   const continuingBinding = startsNewParent ? undefined : existingBinding;
 
   const selectedCandidate = explicitProjectSelection

@@ -113,6 +113,62 @@ export function decideCrossTypeTaskRelationAuthority(input: {
   };
 }
 
+export function decideActiveParentTaskRelationAuthority(input: {
+  hasLatestUsefulText: boolean;
+  hasActiveChild: boolean;
+  explicitResume: boolean;
+  correction: boolean;
+  logistics: boolean;
+  broadResumeProposal: boolean;
+}): TaskRelationAuthorityDecision | undefined {
+  if (!input.hasLatestUsefulText) return undefined;
+
+  if (input.hasActiveChild && input.explicitResume) {
+    return {
+      relation: "resume-parent",
+      disposition: "authorized",
+      relationEvidenceAuthorized: true,
+      reason: "explicit-resume-parent",
+      evidenceSpans: [],
+    };
+  }
+
+  if (input.correction) {
+    return {
+      relation: "correction",
+      disposition: "authorized",
+      relationEvidenceAuthorized: true,
+      reason: "explicit-constraint-or-correction",
+      evidenceSpans: [],
+    };
+  }
+
+  if (input.logistics) {
+    return {
+      relation: "logistics",
+      disposition: "authorized",
+      relationEvidenceAuthorized: true,
+      reason: "explicit-meeting-logistics",
+      evidenceSpans: [],
+    };
+  }
+
+  return {
+    relation: "unknown",
+    proposedRelation:
+      input.hasActiveChild && input.broadResumeProposal
+        ? "resume-parent"
+        : "followup-parent",
+    disposition: "response-only",
+    relationEvidenceAuthorized: false,
+    reason:
+      input.hasActiveChild && input.broadResumeProposal
+        ? "broad-resume-proposal-nonauthoritative"
+        : "ordinary-active-parent-text-relation-unresolved",
+    evidenceSpans: [],
+  };
+}
+
 export function formatTaskRelationAuthorityForTrace(
   decision: TaskRelationAuthorityDecision | undefined
 ): Record<string, unknown> {

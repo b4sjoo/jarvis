@@ -4,7 +4,10 @@ import {
   applyResponseOnlyTaskScopeToPromptContext,
   createResponseOnlyTaskScope,
 } from "../src/lib/meeting/response-only-task-scope.js";
-import { decideCrossTypeTaskRelationAuthority } from "../src/lib/meeting/task-relation-authority.js";
+import {
+  decideActiveParentTaskRelationAuthority,
+  decideCrossTypeTaskRelationAuthority,
+} from "../src/lib/meeting/task-relation-authority.js";
 import type { ActiveMeetingTask } from "../src/lib/meeting/active-meeting-task.js";
 import type { AdvisorPromptContext } from "../src/lib/meeting/types.js";
 
@@ -90,6 +93,62 @@ test("cross-type parent classification alone cannot create a new parent", () => 
   assert.equal(decision?.proposedRelation, "new-parent");
   assert.equal(decision?.disposition, "response-only");
   assert.equal(decision?.relationEvidenceAuthorized, false);
+});
+
+test("ordinary active-parent text remains response-only", () => {
+  const decision = decideActiveParentTaskRelationAuthority({
+    hasLatestUsefulText: true,
+    hasActiveChild: false,
+    explicitResume: false,
+    correction: false,
+    logistics: false,
+    broadResumeProposal: true,
+  });
+
+  assert.equal(decision?.relation, "unknown");
+  assert.equal(decision?.proposedRelation, "followup-parent");
+  assert.equal(decision?.disposition, "response-only");
+  assert.equal(decision?.relationEvidenceAuthorized, false);
+});
+
+test("broad similarity cannot resume an active parent from a child", () => {
+  const decision = decideActiveParentTaskRelationAuthority({
+    hasLatestUsefulText: true,
+    hasActiveChild: true,
+    explicitResume: false,
+    correction: false,
+    logistics: false,
+    broadResumeProposal: true,
+  });
+
+  assert.equal(decision?.relation, "unknown");
+  assert.equal(decision?.proposedRelation, "resume-parent");
+  assert.equal(decision?.disposition, "response-only");
+  assert.equal(decision?.reason, "broad-resume-proposal-nonauthoritative");
+});
+
+test("explicit resume and correction retain relation authority", () => {
+  const resume = decideActiveParentTaskRelationAuthority({
+    hasLatestUsefulText: true,
+    hasActiveChild: true,
+    explicitResume: true,
+    correction: false,
+    logistics: false,
+    broadResumeProposal: false,
+  });
+  const correction = decideActiveParentTaskRelationAuthority({
+    hasLatestUsefulText: true,
+    hasActiveChild: false,
+    explicitResume: false,
+    correction: true,
+    logistics: false,
+    broadResumeProposal: false,
+  });
+
+  assert.equal(resume?.relation, "resume-parent");
+  assert.equal(resume?.relationEvidenceAuthorized, true);
+  assert.equal(correction?.relation, "correction");
+  assert.equal(correction?.relationEvidenceAuthorized, true);
 });
 
 test("response-only prompt scope excludes durable parent continuity", () => {

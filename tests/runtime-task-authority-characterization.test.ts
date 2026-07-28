@@ -105,7 +105,7 @@ test("exact-only multilingual and high-level decisions carry runtime authority",
   }
 });
 
-test("records current lifecycle defaults and the no-unknown-mutation target", () => {
+test("enforces lifecycle authority targets while retaining the legacy baseline", () => {
   for (const fixture of LIFECYCLE_AUTHORITY_CORPUS) {
     const decision = decideInterviewTaskContinuityBranch({
       hasExistingParent: fixture.hasExistingParent,
@@ -113,7 +113,7 @@ test("records current lifecycle defaults and the no-unknown-mutation target", ()
       candidateQuestionType: fixture.candidateQuestionType,
       relation: fixture.relation,
     });
-    assert.equal(decision.branch, fixture.currentBranch, fixture.id);
+    assert.equal(decision.branch, fixture.targetBranch, fixture.id);
   }
 
   const unsafeUnknownRelation = LIFECYCLE_AUTHORITY_CORPUS.find(

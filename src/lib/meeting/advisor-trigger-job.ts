@@ -185,11 +185,7 @@ export function decideAdvisorTaskMutation(input: {
 }): AdvisorTaskMutationDecision {
   if (input.mutationAuthorized === false) {
     return {
-      relation: input.hasActiveParent
-        ? input.hasActiveChild
-          ? "resume-parent"
-          : "followup-parent"
-        : input.resolvedRelation,
+      relation: "unknown",
       commitParent: false,
       preserveParentType: true,
       allowExplicitRetype: false,
