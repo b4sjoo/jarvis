@@ -758,7 +758,6 @@ export const MeetingAssistant = ({
       },
       latestReliableAnswer: latestReliableAnswerPreview,
       latestTurnText: latestInterviewerTurnText,
-      transcriptHistory,
       forceAdviseAvailable,
       forceAdvisePending,
       forceAdviseCompleted,
@@ -802,7 +801,6 @@ export const MeetingAssistant = ({
       isTaskSwitchClarifyingQuestion,
       latestReliableAnswerPreview,
       latestInterviewerTurnText,
-      transcriptHistory,
       forceAdviseAvailable,
       forceAdvisePending,
       forceAdviseCompleted,
@@ -1477,7 +1475,6 @@ export const MeetingAssistant = ({
                 );
               }}
                 latestTurnText={latestInterviewerTurnText}
-                transcriptHistory={transcriptHistory}
               forceAdviseAvailable={forceAdviseAvailable}
               forceAdvisePending={forceAdvisePending}
               forceAdviseCompleted={forceAdviseCompleted}
@@ -2622,7 +2619,6 @@ const FocusModePanel = ({
   manualQuestionTypeCorrection,
   onCorrectQuestionType,
   latestTurnText,
-  transcriptHistory,
   forceAdviseAvailable,
   forceAdvisePending,
   forceAdviseCompleted,
@@ -2658,7 +2654,6 @@ const FocusModePanel = ({
   manualQuestionTypeCorrection?: ManualQuestionTypeCorrection;
   onCorrectQuestionType: (type: CanonicalQuestionType) => void;
   latestTurnText: string;
-  transcriptHistory: DisplayTranscriptHistoryEntry[];
   forceAdviseAvailable: boolean;
   forceAdvisePending: boolean;
   forceAdviseCompleted: boolean;
@@ -2925,7 +2920,7 @@ const FocusModePanel = ({
               </div>
               <TranscriptLineageWindow
                 currentText={latestTurnText}
-                history={transcriptHistory}
+                history={[]}
                 className="max-h-24 overflow-y-auto pr-1"
                 currentClassName="text-[11px] leading-4 text-muted-foreground"
                 historyClassName="text-[10px] leading-4 text-muted-foreground/60"

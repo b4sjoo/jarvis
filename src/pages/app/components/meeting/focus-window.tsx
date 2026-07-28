@@ -226,12 +226,7 @@ function MeetingFocusControlsWindow({
   const lastGeometryRequestRef = useRef("");
   const geometryRevisionRef = useRef(0);
   const interviewTypes = snapshot.interviewTypes;
-  const transcriptWindowText = [
-    ...snapshot.transcriptHistory.map((entry) => entry.text),
-    snapshot.latestTurnText,
-  ]
-    .filter(Boolean)
-    .join("\n\n");
+  const transcriptWindowText = snapshot.latestTurnText;
   const hasCorrectableQuestion = snapshot.hasCorrectableQuestion;
   const activeCorrection =
     snapshot.manualQuestionTypeCorrection &&
@@ -453,21 +448,6 @@ function MeetingFocusControlsWindow({
               </Button>
             </div>
             <div className="min-h-0 flex-1 overflow-y-auto pr-1">
-              {snapshot.transcriptHistory.length ? (
-                <div className="mb-2 space-y-2 border-b border-border/50 pb-2">
-                  {snapshot.transcriptHistory.map((entry) => (
-                    <p
-                      key={entry.utteranceId}
-                      className={cn(
-                        WRAP_TEXT_CLASS,
-                        "text-[12px] leading-5 text-muted-foreground/60"
-                      )}
-                    >
-                      {entry.text}
-                    </p>
-                  ))}
-                </div>
-              ) : null}
               <p
                 className={cn(
                   WRAP_TEXT_CLASS,

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  EMPTY_MEETING_FOCUS_SNAPSHOT,
   guardAsyncUnlisten,
   resolveFocusControlsGeometry,
 } from "../src/lib/meeting/focus-window.js";
@@ -55,6 +56,16 @@ test("focus listener registration errors are reported without leaking cleanup", 
   dispose();
 
   assert.equal(reported, expected);
+});
+
+test("focus snapshot excludes historical transcripts", () => {
+  assert.equal(
+    Object.prototype.hasOwnProperty.call(
+      EMPTY_MEETING_FOCUS_SNAPSHOT,
+      "transcriptHistory"
+    ),
+    false
+  );
 });
 
 test("focus controls keep short transcripts at the compact base geometry", () => {

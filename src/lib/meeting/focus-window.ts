@@ -1,7 +1,6 @@
 import type {
   ClarifyingQuestionAnswer,
   ClarifyingQuestionOption,
-  DisplayTranscriptHistoryEntry,
   InterviewBriefType,
   ManualQuestionTypeCorrection,
   ManualQuestionTypeCorrectionSource,
@@ -147,7 +146,6 @@ export type MeetingFocusSnapshot = {
   sections: MeetingFocusSectionsSnapshot;
   latestReliableAnswer: string;
   latestTurnText: string;
-  transcriptHistory: DisplayTranscriptHistoryEntry[];
   forceAdviseAvailable: boolean;
   forceAdvisePending: boolean;
   forceAdviseCompleted: boolean;
@@ -211,7 +209,6 @@ export const EMPTY_MEETING_FOCUS_SNAPSHOT: MeetingFocusSnapshot = {
   },
   latestReliableAnswer: "",
   latestTurnText: "Waiting for meeting audio.",
-  transcriptHistory: [],
   forceAdviseAvailable: false,
   forceAdvisePending: false,
   forceAdviseCompleted: false,
