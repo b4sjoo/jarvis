@@ -65,7 +65,7 @@ test("compares lexical, semantic, LLM, runtime, and human adjudication evidence"
         questionId: "question_1",
         traceIds: ["trace_1"],
         correctedQuestionType: "coding",
-        correctedRelation: "new-parent",
+        expectedRelation: "new-parent",
         taxonomyAdjudication: {
           needed: true,
           typeCorrect: true,

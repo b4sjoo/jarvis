@@ -19,10 +19,12 @@ export interface TaxonomyAdjudicationEvaluationLabel {
   correctedQuestionType?: string;
   relation?: string;
   correctedRelation?: string;
+  expectedRelation?: string;
   taxonomyAdjudication?: {
     needed?: boolean;
     typeCorrect?: boolean;
     relationCorrect?: boolean;
+    expectedRelation?: string;
     repairDisposition?: "automatic-repair" | "suggest-only" | "abstain";
     contextPreserved?: boolean;
     timely?: boolean;
@@ -344,7 +346,10 @@ export function buildTaxonomyAdjudicationReflectionReport(input: {
         ? normalizeExpectedAction(expectedAction) === llmAction
         : undefined;
     const expectedRelation =
-      evaluation?.correctedRelation ?? evaluation?.relation;
+      evaluation?.expectedRelation ??
+      evaluation?.taxonomyAdjudication?.expectedRelation ??
+      normalizeRelation(evaluation?.correctedRelation) ??
+      normalizeRelation(evaluation?.relation);
     const disposition =
       readString(metadata, "taxonomyAdjudicationDisposition") ??
       summary?.disposition;
@@ -848,7 +853,10 @@ export function buildTaxonomyAdjudicationReflectionReport(input: {
           evaluation.correctedQuestionType ?? evaluation.questionType
         ),
         expectedRelation:
-          evaluation.correctedRelation ?? evaluation.relation,
+          evaluation.expectedRelation ??
+          evaluation.taxonomyAdjudication?.expectedRelation ??
+          normalizeRelation(evaluation.correctedRelation) ??
+          normalizeRelation(evaluation.relation),
         reason: evaluation.traceIds.some((traceId) =>
           knownTraceIds.has(traceId)
         )
@@ -1208,9 +1216,22 @@ function hasTaxonomyEvaluation(
         normalizeType(
           evaluation.correctedQuestionType ?? evaluation.questionType
         ) ||
-        evaluation.correctedRelation ||
-        evaluation.relation)
+        evaluation.expectedRelation ||
+        normalizeRelation(evaluation.correctedRelation) ||
+        normalizeRelation(evaluation.relation))
   );
+}
+
+function normalizeRelation(value: string | undefined) {
+  return value === "new-parent" ||
+    value === "followup-parent" ||
+    value === "child-probe" ||
+    value === "resume-parent" ||
+    value === "logistics" ||
+    value === "correction" ||
+    value === "unknown"
+    ? value
+    : undefined;
 }
 
 function formatConfusion(values: Record<string, Record<string, number>>) {

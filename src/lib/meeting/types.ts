@@ -530,6 +530,13 @@ export type InterviewTaskRelation =
   | "correction"
   | "unknown";
 
+export type HumanExpectedParentAction =
+  | "create"
+  | "preserve"
+  | "resume"
+  | "attach-child"
+  | "none";
+
 export type InterviewSubtaskIntent =
   | "concept-probe"
   | "implementation-probe"
@@ -1421,12 +1428,7 @@ export interface TaxonomyAdjudicationHumanEvaluation {
   needed?: boolean;
   typeCorrect?: boolean;
   relationCorrect?: boolean;
-  expectedRelation?:
-    | "new-parent"
-    | "followup-parent"
-    | "child-probe"
-    | "resume-parent"
-    | "unknown";
+  expectedRelation?: InterviewTaskRelation;
   parentDecisionCorrect?: boolean;
   responseOnlyCorrect?: boolean;
   contextOutcome?: "correct" | "contaminated" | "missing";
@@ -1604,6 +1606,9 @@ export interface QuestionHumanEvaluation {
   company?: string;
   correctedCompany?: string;
   relation?: string;
+  expectedRelation?: InterviewTaskRelation;
+  expectedParentAction?: HumanExpectedParentAction;
+  expectedContextTurnIds?: string[];
   correctedRelation?: string;
   primaryAskCorrect?: boolean;
   playbookId?: string;

@@ -12,6 +12,8 @@ import type {
   QuestionHumanEvaluation,
   TraceHumanEvaluation,
   QuestionInstanceLineage,
+  InterviewTaskRelation,
+  PersonalStatusDomain,
 } from "./types";
 import { normalizeMemoryRetrievalEvaluationSnapshot } from "./memory-evaluation.js";
 import {
@@ -340,12 +342,27 @@ export function upsertQuestionHumanEvaluation(
     manualTermCorrectionReason:
       patch.manualTermCorrectionReason ??
       existing?.manualTermCorrectionReason,
+    transientPersonalStatus: mergeTransientPersonalStatusEvaluation(
+      existing?.transientPersonalStatus,
+      patch.transientPersonalStatus
+    ),
     company: patch.company ?? existing?.company ?? identity.company,
     correctedCompany:
       patch.correctedCompany ?? existing?.correctedCompany,
     relation: patch.relation ?? existing?.relation ?? identity.relation,
+    expectedRelation:
+      normalizeInterviewTaskRelation(patch.expectedRelation) ??
+      existing?.expectedRelation,
+    expectedParentAction:
+      normalizeExpectedParentAction(patch.expectedParentAction) ??
+      existing?.expectedParentAction,
+    expectedContextTurnIds:
+      patch.expectedContextTurnIds !== undefined
+        ? uniqueStrings(patch.expectedContextTurnIds)
+        : existing?.expectedContextTurnIds ?? [],
     correctedRelation:
-      patch.correctedRelation ?? existing?.correctedRelation,
+      normalizeInterviewTaskRelation(patch.correctedRelation) ??
+      normalizeInterviewTaskRelation(existing?.correctedRelation),
     primaryAskCorrect:
       patch.primaryAskCorrect ?? existing?.primaryAskCorrect,
     playbookId:
@@ -744,10 +761,24 @@ function normalizeQuestionHumanEvaluation(
       candidate.manualTermCorrectionReason === "manual-term-correction"
         ? candidate.manualTermCorrectionReason
         : undefined,
+    transientPersonalStatus: normalizeTransientPersonalStatusEvaluation(
+      candidate.transientPersonalStatus
+    ),
     company: readOptionalString(candidate.company),
     correctedCompany: readOptionalString(candidate.correctedCompany),
     relation: readOptionalString(candidate.relation),
-    correctedRelation: readOptionalString(candidate.correctedRelation),
+    expectedRelation: normalizeInterviewTaskRelation(
+      candidate.expectedRelation
+    ),
+    expectedParentAction: normalizeExpectedParentAction(
+      candidate.expectedParentAction
+    ),
+    expectedContextTurnIds: Array.isArray(candidate.expectedContextTurnIds)
+      ? uniqueStrings(candidate.expectedContextTurnIds.map(readOptionalString))
+      : [],
+    correctedRelation: normalizeInterviewTaskRelation(
+      candidate.correctedRelation
+    ),
     primaryAskCorrect:
       typeof candidate.primaryAskCorrect === "boolean"
         ? candidate.primaryAskCorrect
@@ -829,6 +860,17 @@ function mergeTaxonomyAdjudicationEvaluation(
     ...existing,
     ...patch,
   };
+}
+
+function mergeTransientPersonalStatusEvaluation(
+  existing: QuestionHumanEvaluation["transientPersonalStatus"],
+  patch: QuestionHumanEvaluation["transientPersonalStatus"]
+): QuestionHumanEvaluation["transientPersonalStatus"] {
+  if (!existing && !patch) return undefined;
+  return normalizeTransientPersonalStatusEvaluation({
+    ...existing,
+    ...patch,
+  });
 }
 
 function mergeAdvisorIntentEvaluation(
@@ -960,6 +1002,7 @@ function normalizeCurrentQuestionSettlementEvaluation(
   const candidate = value as Record<string, unknown>;
   const expectedDisposition =
     candidate.expectedDisposition === "domain-resolved-provisional" ||
+    candidate.expectedDisposition === "domain-resolved-unknown" ||
     candidate.expectedDisposition === "unresolved-provisional" ||
     candidate.expectedDisposition === "response-only" ||
     candidate.expectedDisposition === "committed-parent" ||
@@ -988,6 +1031,36 @@ function normalizeCurrentQuestionSettlementEvaluation(
     expectedDisposition,
     notes: readOptionalString(candidate.notes),
   };
+}
+
+function normalizeTransientPersonalStatusEvaluation(
+  value: unknown
+): QuestionHumanEvaluation["transientPersonalStatus"] {
+  if (!value || typeof value !== "object") return undefined;
+  const candidate = value as Record<string, unknown>;
+  const normalized = {
+    detectedDomain: normalizePersonalStatusDomain(candidate.detectedDomain),
+    expectedDomain: normalizePersonalStatusDomain(candidate.expectedDomain),
+    policyApplicable:
+      typeof candidate.policyApplicable === "boolean"
+        ? candidate.policyApplicable
+        : undefined,
+    profileOnlyEvidenceCorrect:
+      typeof candidate.profileOnlyEvidenceCorrect === "boolean"
+        ? candidate.profileOnlyEvidenceCorrect
+        : undefined,
+    parentPreserved:
+      typeof candidate.parentPreserved === "boolean"
+        ? candidate.parentPreserved
+        : undefined,
+    artifactsPreserved:
+      typeof candidate.artifactsPreserved === "boolean"
+        ? candidate.artifactsPreserved
+        : undefined,
+  };
+  return Object.values(normalized).some((entry) => entry !== undefined)
+    ? normalized
+    : undefined;
 }
 
 function normalizeAnswerSufficiencyEvaluation(
@@ -1181,14 +1254,9 @@ function normalizeTaxonomyAdjudicationEvaluation(
   const candidate = value as Record<string, unknown>;
   const expectedRelation: NonNullable<
     QuestionHumanEvaluation["taxonomyAdjudication"]
-  >["expectedRelation"] =
-    candidate.expectedRelation === "new-parent" ||
-    candidate.expectedRelation === "followup-parent" ||
-    candidate.expectedRelation === "child-probe" ||
-    candidate.expectedRelation === "resume-parent" ||
-    candidate.expectedRelation === "unknown"
-      ? candidate.expectedRelation
-      : undefined;
+  >["expectedRelation"] = normalizeInterviewTaskRelation(
+    candidate.expectedRelation
+  );
   const contextOutcome: NonNullable<
     QuestionHumanEvaluation["taxonomyAdjudication"]
   >["contextOutcome"] =
@@ -1236,6 +1304,43 @@ function normalizeTaxonomyAdjudicationEvaluation(
   };
   return Object.values(normalized).some((item) => item !== undefined)
     ? normalized
+    : undefined;
+}
+
+function normalizeInterviewTaskRelation(
+  value: unknown
+): InterviewTaskRelation | undefined {
+  return value === "new-parent" ||
+    value === "followup-parent" ||
+    value === "child-probe" ||
+    value === "resume-parent" ||
+    value === "logistics" ||
+    value === "correction" ||
+    value === "unknown"
+    ? value
+    : undefined;
+}
+
+function normalizeExpectedParentAction(
+  value: unknown
+): QuestionHumanEvaluation["expectedParentAction"] {
+  return value === "create" ||
+    value === "preserve" ||
+    value === "resume" ||
+    value === "attach-child" ||
+    value === "none"
+    ? value
+    : undefined;
+}
+
+function normalizePersonalStatusDomain(
+  value: unknown
+): PersonalStatusDomain | undefined {
+  return value === "relocation" ||
+    value === "compensation" ||
+    value === "work-authorization" ||
+    value === "start-date"
+    ? value
     : undefined;
 }
 

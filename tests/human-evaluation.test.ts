@@ -3,6 +3,8 @@ import test from "node:test";
 import {
   buildAdvisorIntentEvaluationFromTrace,
   buildQuestionEvaluationPatchFromTrace,
+  persistQuestionHumanEvaluations,
+  readQuestionHumanEvaluations,
   resolveSuggestionQuestionLineage,
   resolveVisibleAnswerEvaluationTarget,
   upsertQuestionHumanEvaluation,
@@ -265,6 +267,120 @@ test("merges current-question settlement labels without replacing prior judgment
     parentMutationCorrect: true,
     expectedDisposition: "committed-parent",
   });
+});
+
+test("persists transient personal-status labels and canonical expected settlement facts", () => {
+  const first = upsertQuestionHumanEvaluation(
+    [],
+    {
+      traceId: "trace_personal_status",
+      traceKind: "voice",
+      questionId: "question_personal_status",
+    },
+    {
+      transientPersonalStatus: {
+        detectedDomain: "relocation",
+        expectedDomain: "work-authorization",
+        policyApplicable: true,
+      },
+      expectedRelation: "followup-parent",
+      expectedParentAction: "preserve",
+      expectedContextTurnIds: ["turn_1", "turn_2"],
+    }
+  );
+  const updated = upsertQuestionHumanEvaluation(
+    first,
+    {
+      traceId: "trace_personal_status",
+      traceKind: "voice",
+      questionId: "question_personal_status",
+    },
+    {
+      transientPersonalStatus: {
+        parentPreserved: true,
+        artifactsPreserved: false,
+      },
+      expectedContextTurnIds: ["turn_2"],
+    }
+  );
+
+  assert.deepEqual(updated[0].transientPersonalStatus, {
+    detectedDomain: "relocation",
+    expectedDomain: "work-authorization",
+    policyApplicable: true,
+    profileOnlyEvidenceCorrect: undefined,
+    parentPreserved: true,
+    artifactsPreserved: false,
+  });
+  assert.equal(updated[0].expectedRelation, "followup-parent");
+  assert.equal(updated[0].expectedParentAction, "preserve");
+  assert.deepEqual(updated[0].expectedContextTurnIds, ["turn_2"]);
+});
+
+test("drops correction-scope strings instead of treating them as task relations", () => {
+  const evaluations = upsertQuestionHumanEvaluation(
+    [],
+    {
+      traceId: "trace_relation_scope",
+      traceKind: "voice",
+      questionId: "question_relation_scope",
+    },
+    {
+      correctedRelation: "same-question-retype",
+      taxonomyAdjudication: {
+        expectedRelation: "child-probe",
+      },
+    }
+  );
+
+  assert.equal(evaluations[0].correctedRelation, undefined);
+  assert.equal(
+    evaluations[0].taxonomyAdjudication?.expectedRelation,
+    "child-probe"
+  );
+});
+
+test("preserves domain-resolved unknown settlement labels during normalization", () => {
+  const storage = new Map<string, string>();
+  Object.defineProperty(globalThis, "window", {
+    configurable: true,
+    value: {},
+  });
+  Object.defineProperty(globalThis, "localStorage", {
+    configurable: true,
+    value: {
+      getItem: (key: string) => storage.get(key) ?? null,
+      setItem: (key: string, value: string) => storage.set(key, value),
+      removeItem: (key: string) => storage.delete(key),
+    },
+  });
+
+  try {
+    const evaluations = upsertQuestionHumanEvaluation(
+      [],
+      {
+        traceId: "trace_domain_unknown",
+        traceKind: "voice",
+        questionId: "question_domain_unknown",
+      },
+      {
+        currentQuestionSettlement: {
+          expectedDisposition: "domain-resolved-unknown",
+        },
+      }
+    );
+    persistQuestionHumanEvaluations(evaluations);
+
+    assert.equal(
+      readQuestionHumanEvaluations().find(
+        (evaluation) => evaluation.questionId === "question_domain_unknown"
+      )?.currentQuestionSettlement?.expectedDisposition,
+      "domain-resolved-unknown"
+    );
+  } finally {
+    delete (globalThis as { window?: unknown }).window;
+    delete (globalThis as { localStorage?: unknown }).localStorage;
+  }
 });
 
 test("persists primary-ask correctness independently from advisor admission", () => {

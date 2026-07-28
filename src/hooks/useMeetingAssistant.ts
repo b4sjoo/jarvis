@@ -16618,7 +16618,6 @@ export function useMeetingAssistant() {
                   : "manual-runtime-correction",
               ],
             },
-            correctedRelation: correctionScopeDecision.scope,
           }
         );
         const evaluation = questionEvaluations.find(

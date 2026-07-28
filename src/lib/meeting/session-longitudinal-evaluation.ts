@@ -1341,12 +1341,20 @@ function hasIntentEvidence({ trace }: JoinedTrace) {
 }
 
 function actualParentAction(trace: LongitudinalTraceSummary) {
-  if (trace.taskBoundary?.mutationDisposition) {
-    return trace.taskBoundary.mutationDisposition;
+  if (trace.taskRelation === "new-parent") return "create";
+  if (trace.taskRelation === "followup-parent") return "preserve";
+  if (trace.taskRelation === "resume-parent") return "resume";
+  if (trace.taskRelation === "child-probe") return "attach-child";
+  if (
+    trace.taskRelation === "logistics" ||
+    trace.taskRelation === "correction" ||
+    trace.taskRelation === "unknown"
+  ) {
+    return "none";
   }
-  if (trace.taskRelation === "new-parent") return "new-parent";
-  if (isInheritedRelation(trace.taskRelation)) return "preserve-parent";
-  return undefined;
+  return trace.taskBoundary?.mutationDisposition === "commit-before-advisor"
+    ? "create"
+    : undefined;
 }
 
 function isInheritedRelation(relation: string | undefined) {

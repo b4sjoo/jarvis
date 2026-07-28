@@ -379,7 +379,7 @@ const SESSION: LongitudinalSessionInput = {
         originalTraceId: "trace_coding",
       },
       expectedRelation: "new-parent",
-      expectedParentAction: "commit-before-advisor",
+      expectedParentAction: "create",
       expectedContextTurnIds: ["turn_1"],
       updatedAt: 1,
     },
