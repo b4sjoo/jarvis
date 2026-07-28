@@ -20,7 +20,7 @@ export interface SemanticTaxonomyEvaluationLabel {
   correctedQuestionType?: string;
   manualQuestionTypeCorrectionId?: string;
   classification?: {
-    verdict?: "ok" | "partial" | "wrong" | "not_applicable";
+    verdict?: string;
   };
   updatedAt: number;
 }

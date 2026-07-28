@@ -252,6 +252,16 @@ test("drains late writes into their original folder before allowing stop-start",
   assert.ok(stoppedManifest);
   assert.ok(stoppedManifest.recordingLifecycle.drainPasses >= 2);
   assert.ok(stoppedManifest.recordingLifecycle.acceptedWrites >= 4);
+  assert.equal(stoppedManifest.recordingLifecycle.pendingWritesAtSeal, 0);
+  assert.equal(stoppedManifest.recordingLifecycle.queueDrained, true);
+  assert.equal(
+    stoppedManifest.recordingLifecycle.enqueueCounterConsistent,
+    true
+  );
+  assert.equal(
+    stoppedManifest.evaluationIntegrity.compatibilityReportPath,
+    "human-evaluation/compatibility-v2.json"
+  );
 
   const stoppedManifestIndex = native.calls.findIndex(
     (call) => call === stoppedManifest.call
@@ -1950,6 +1960,12 @@ class ControlledRecordingInvoke {
           recordingLifecycle: payload.recordingLifecycle as {
             drainPasses: number;
             acceptedWrites: number;
+            pendingWritesAtSeal: number;
+            queueDrained: boolean;
+            enqueueCounterConsistent: boolean;
+          },
+          evaluationIntegrity: payload.evaluationIntegrity as {
+            compatibilityReportPath: string;
           },
         };
       }

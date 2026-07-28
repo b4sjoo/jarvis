@@ -4,9 +4,12 @@ import process from "node:process";
 import {
   buildAnswerSufficiencyReflectionReport,
   renderAnswerSufficiencyReflectionMarkdown,
-  type AnswerSufficiencyEvaluationLabel,
   type RecordedAnswerSufficiencyDecision,
 } from "../src/lib/meeting/answer-sufficiency-reflection.js";
+import {
+  loadSessionHumanEvaluationConsumerView,
+  writeHumanEvaluationCompatibilityReport,
+} from "./session-human-evaluation-v2.js";
 
 interface CliOptions {
   sessionDirectories: string[];
@@ -20,19 +23,11 @@ async function main() {
     const decisions = await readOptionalJsonLines<RecordedAnswerSufficiencyDecision>(
       path.join(sessionDirectory, "answer-sufficiency", "decisions.jsonl")
     );
-    const evaluationPayload = await readOptionalJson<{
-      evaluations?: AnswerSufficiencyEvaluationLabel[];
-    }>(
-      path.join(
-        sessionDirectory,
-        "human-evaluation",
-        "question-evaluations.json"
-      ),
-      { evaluations: [] }
-    );
+    const evaluationView =
+      await loadSessionHumanEvaluationConsumerView(sessionDirectory);
     const report = buildAnswerSufficiencyReflectionReport({
       decisions,
-      evaluations: evaluationPayload.evaluations ?? [],
+      evaluations: evaluationView.evaluations,
     });
     const outputDirectory = options.outputDirectory
       ? options.sessionDirectories.length === 1
@@ -49,6 +44,10 @@ async function main() {
       path.join(outputDirectory, "reflection.md"),
       renderAnswerSufficiencyReflectionMarkdown(report),
       "utf8"
+    );
+    await writeHumanEvaluationCompatibilityReport(
+      sessionDirectory,
+      evaluationView.report
     );
     summaries.push({
       sessionDirectory,

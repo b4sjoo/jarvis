@@ -14,6 +14,7 @@
     "types": ["node"]
   },
   "include": [
+    "src/vite-env.d.ts",
     "scripts/reflect-session-longitudinal-evaluation.ts",
     "src/lib/meeting/session-longitudinal-evaluation.ts",
     "src/lib/meeting/task-taxonomy.ts"

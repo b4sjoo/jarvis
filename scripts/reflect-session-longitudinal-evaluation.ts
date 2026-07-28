@@ -12,6 +12,14 @@ import {
   type LongitudinalTraceSummary,
   type LongitudinalTranscriptTurn,
 } from "../src/lib/meeting/session-longitudinal-evaluation.js";
+import {
+  buildTaskRelationAdjudicationReflectionReport,
+  type TaskRelationAdjudicationRecordedDecision,
+} from "../src/lib/meeting/task-relation-adjudication-reflection.js";
+import {
+  loadSessionHumanEvaluationConsumerView,
+  writeHumanEvaluationCompatibilityReport,
+} from "./session-human-evaluation-v2.js";
 
 interface CliOptions {
   sessionDirectories: string[];
@@ -66,7 +74,6 @@ async function readSession(directory: string): Promise<LongitudinalSessionInput>
     manifest,
     transcriptTurns,
     tracePayload,
-    evaluationsPayload,
     criticalMomentCandidatesPayload,
     criticalMomentEvaluationsPayload,
     runtimeTraces,
@@ -82,14 +89,6 @@ async function readSession(directory: string): Promise<LongitudinalSessionInput>
       readOptionalJson<{ traces?: LongitudinalTraceSummary[] }>(
         path.join(directory, "metrics", "trace-summaries.latest.json"),
         { traces: [] }
-      ),
-      readOptionalJson<{ evaluations?: LongitudinalQuestionEvaluation[] }>(
-        path.join(
-          directory,
-          "human-evaluation",
-          "question-evaluations.json"
-        ),
-        { evaluations: [] }
       ),
       readOptionalJson<{
         candidates?: LongitudinalCriticalMomentCandidate[];
@@ -113,6 +112,25 @@ async function readSession(directory: string): Promise<LongitudinalSessionInput>
       ),
       readRuntimeTraceEvidence(path.join(directory, "traces")),
     ]);
+  const evaluationView =
+    await loadSessionHumanEvaluationConsumerView(directory);
+  const relationDecisions =
+    await readJsonLines<TaskRelationAdjudicationRecordedDecision>(
+      path.join(
+        directory,
+        "runtime-inference",
+        "task-relation-decisions.jsonl"
+      )
+    );
+  const taskRelationAdjudicationReport =
+    buildTaskRelationAdjudicationReflectionReport({
+      decisions: relationDecisions,
+      evaluations: evaluationView.evaluations,
+    });
+  await writeHumanEvaluationCompatibilityReport(
+    directory,
+    evaluationView.report
+  );
   const compactByTrace = new Map(
     (tracePayload.traces ?? []).map((trace) => [trace.traceId, trace])
   );
@@ -130,11 +148,13 @@ async function readSession(directory: string): Promise<LongitudinalSessionInput>
     manifest,
     transcriptTurns,
     traceSummaries: Array.from(compactByTrace.values()),
-    questionEvaluations: evaluationsPayload.evaluations ?? [],
+    questionEvaluations:
+      evaluationView.evaluations as LongitudinalQuestionEvaluation[],
     criticalMomentCandidates:
       criticalMomentCandidatesPayload.candidates ?? [],
     criticalMomentEvaluations:
       criticalMomentEvaluationsPayload.evaluations ?? [],
+    taskRelationAdjudicationReport,
   };
 }
 

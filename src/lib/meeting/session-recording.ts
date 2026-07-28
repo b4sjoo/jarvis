@@ -32,6 +32,7 @@ import type {
   HumanEvaluationProjectionV2,
   HumanGroundTruthEventV2,
 } from "./human-ground-truth-v2.js";
+import { projectHumanEvaluationsForLegacyConsumers } from "./human-evaluation-v2-consumers.js";
 import {
   collectActiveMeetingTaskIdentityIds,
   formatActiveMeetingTaskForRecording,
@@ -1077,8 +1078,58 @@ export class SessionRecordingManager {
 
       try {
         await this.drainStable(session);
+        const evaluationView =
+          projectHumanEvaluationsForLegacyConsumers({
+            evaluations: Array.from(
+              session.questionHumanEvaluations.values()
+            ),
+            projections: Array.from(
+              session.humanEvaluationProjectionsV2.values()
+            ),
+          });
+        const finalReviewIndex = buildSessionTaskReviewIndex(
+          session.sessionId,
+          Array.from(session.traceSummaries.values()),
+          evaluationView.evaluations
+        );
+        await this.writeJson(
+          session,
+          "human-evaluation/compatibility-v2.json",
+          evaluationView.report
+        );
+        await this.writeTaskReviewIndex(session, finalReviewIndex);
         session.phase = "sealed";
         await Promise.resolve();
+        const evaluationIntegrity = {
+          v1EvaluationCount: session.questionHumanEvaluations.size,
+          v2GroundTruthEventCount:
+            session.humanGroundTruthEventsV2.size,
+          v2ProjectionCount:
+            session.humanEvaluationProjectionsV2.size,
+          v2ConflictProjectionCount: Array.from(
+            session.humanEvaluationProjectionsV2.values()
+          ).filter((projection) => projection.conflicts.length > 0)
+            .length,
+          v2ProjectionTraceHashCount: Array.from(
+            session.humanEvaluationProjectionsV2.values()
+          ).filter(
+            (projection) => projection.inputTraceHashes.length > 0
+          ).length,
+          consumerEvaluationCount: evaluationView.evaluations.length,
+          matchedProjectionCount:
+            evaluationView.report.matchedProjectionCount,
+          v1OnlyEvaluationCount:
+            evaluationView.report.v1OnlyEvaluationCount,
+          v2OnlyProjectionCount:
+            evaluationView.report.v2OnlyProjectionCount,
+          compatibilityWarningCount:
+            evaluationView.report.warnings.length,
+          compatibilityReportPath:
+            "human-evaluation/compatibility-v2.json",
+          taskReviewIndexPath: "tasks/review-index.latest.json",
+          derivationVersions:
+            evaluationView.report.derivationVersions,
+        };
         await this.writeJson(session, "manifest.json", {
           ...session.manifestBase,
           status: "stopped",
@@ -1095,7 +1146,12 @@ export class SessionRecordingManager {
             acceptedWrites: session.acceptedWrites,
             rejectedLateWrites: session.rejectedLateWrites,
             drainPasses: session.drainPasses,
+            pendingWritesAtSeal: session.pendingWrites,
+            enqueueCounterConsistent:
+              session.enqueueVersion === session.acceptedWrites,
+            queueDrained: session.pendingWrites === 0,
           },
+          evaluationIntegrity,
         });
       } catch (error) {
         this.lastError = error instanceof Error ? error.message : String(error);
@@ -1729,10 +1785,16 @@ export class SessionRecordingManager {
     for (const evaluation of sessionEvaluations) {
       session.questionHumanEvaluations.set(evaluation.questionId, evaluation);
     }
+    const evaluationView = projectHumanEvaluationsForLegacyConsumers({
+      evaluations: Array.from(session.questionHumanEvaluations.values()),
+      projections: Array.from(
+        session.humanEvaluationProjectionsV2.values()
+      ),
+    });
     const reviewIndex = buildSessionTaskReviewIndex(
       session.sessionId,
       Array.from(session.traceSummaries.values()),
-      Array.from(session.questionHumanEvaluations.values())
+      evaluationView.evaluations
     );
     this.enqueue(session, async () => {
       await this.writeText(
@@ -1745,6 +1807,11 @@ export class SessionRecordingManager {
         "human-evaluation/question-evaluations.jsonl",
         `${compactPayload}\n`,
         true
+      );
+      await this.writeJson(
+        session,
+        "human-evaluation/compatibility-v2.json",
+        evaluationView.report
       );
       await this.writeTaskReviewIndex(session, reviewIndex);
     });
@@ -1807,6 +1874,17 @@ export class SessionRecordingManager {
       null,
       2
     );
+    const evaluationView = projectHumanEvaluationsForLegacyConsumers({
+      evaluations: Array.from(session.questionHumanEvaluations.values()),
+      projections: Array.from(
+        session.humanEvaluationProjectionsV2.values()
+      ),
+    });
+    const reviewIndex = buildSessionTaskReviewIndex(
+      session.sessionId,
+      Array.from(session.traceSummaries.values()),
+      evaluationView.evaluations
+    );
     this.enqueue(session, async () => {
       await this.writeText(session, snapshotPath, snapshot);
       await this.writeText(
@@ -1815,6 +1893,12 @@ export class SessionRecordingManager {
         `${JSON.stringify(projection)}\n`,
         true
       );
+      await this.writeJson(
+        session,
+        "human-evaluation/compatibility-v2.json",
+        evaluationView.report
+      );
+      await this.writeTaskReviewIndex(session, reviewIndex);
     });
     this.recordEvent(
       "human-evaluation-projection-v2",
@@ -2564,13 +2648,23 @@ export class SessionRecordingManager {
     const session = this.getWritableSession({ traceId });
     if (!session) return;
     const artifactPath = "whiteboard/render-validations.jsonl";
+    const sourceQuestionId = readString(
+      metadata.questionInstanceId ??
+        metadata.logicalQuestionUnitId ??
+        metadata.currentQuestionSettlementId
+    );
+    const recordedMetadata = {
+      ...metadata,
+      whiteboardSourceQuestionId: sourceQuestionId,
+    };
     const payload = {
       version: 1,
       recordedAt: Date.now(),
       sessionId: session.sessionId,
       traceId,
       taskId,
-      metadata,
+      sourceQuestionId,
+      metadata: recordedMetadata,
       candidateContent,
     };
     this.enqueue(session, () =>
@@ -2578,7 +2672,7 @@ export class SessionRecordingManager {
     );
     this.recordEvent(
       "whiteboard-render-validation",
-      metadata,
+      recordedMetadata,
       [artifactPath],
       traceId,
       taskId
@@ -2603,13 +2697,23 @@ export class SessionRecordingManager {
     const session = this.getWritableSession({ traceId });
     if (!session) return;
     const artifactPath = "whiteboard/render-recoveries.jsonl";
+    const sourceQuestionId = readString(
+      metadata.questionInstanceId ??
+        metadata.logicalQuestionUnitId ??
+        metadata.currentQuestionSettlementId
+    );
+    const recordedMetadata = {
+      ...metadata,
+      whiteboardSourceQuestionId: sourceQuestionId,
+    };
     const payload = {
       version: 1,
       recordedAt: Date.now(),
       sessionId: session.sessionId,
       traceId,
       taskId,
-      metadata,
+      sourceQuestionId,
+      metadata: recordedMetadata,
       candidateContent,
       repairedMermaid,
       asciiFallback,
@@ -2619,7 +2723,7 @@ export class SessionRecordingManager {
     );
     this.recordEvent(
       "whiteboard-render-recovery",
-      metadata,
+      recordedMetadata,
       [artifactPath],
       traceId,
       taskId
@@ -2847,10 +2951,16 @@ export class SessionRecordingManager {
       session.sessionId,
       summaries
     );
+    const evaluationView = projectHumanEvaluationsForLegacyConsumers({
+      evaluations: Array.from(session.questionHumanEvaluations.values()),
+      projections: Array.from(
+        session.humanEvaluationProjectionsV2.values()
+      ),
+    });
     const reviewIndex = buildSessionTaskReviewIndex(
       session.sessionId,
       summaries,
-      Array.from(session.questionHumanEvaluations.values())
+      evaluationView.evaluations
     );
 
     this.enqueue(session, async () => {
@@ -2873,6 +2983,11 @@ export class SessionRecordingManager {
         session,
         "metrics/session-summary.json",
         sessionSummary
+      );
+      await this.writeJson(
+        session,
+        "human-evaluation/compatibility-v2.json",
+        evaluationView.report
       );
       await this.writeTaskReviewIndex(session, reviewIndex);
     });

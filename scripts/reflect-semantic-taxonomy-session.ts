@@ -4,10 +4,13 @@ import process from "node:process";
 import {
   buildSemanticTaxonomyReflectionReport,
   renderSemanticTaxonomyReflectionMarkdown,
-  type SemanticTaxonomyEvaluationLabel,
   type SemanticTaxonomyRecordedDecision,
   type SemanticTaxonomyRuntimeTrace,
 } from "../src/lib/meeting/semantic-taxonomy-reflection.js";
+import {
+  loadSessionHumanEvaluationConsumerView,
+  writeHumanEvaluationCompatibilityReport,
+} from "./session-human-evaluation-v2.js";
 
 interface CliOptions {
   sessionDirectories: string[];
@@ -21,22 +24,14 @@ async function main() {
     const decisions = await readJsonLines<SemanticTaxonomyRecordedDecision>(
       path.join(sessionDirectory, "taxonomy", "semantic-decisions.jsonl")
     );
-    const evaluationsPayload = await readOptionalJson<{
-      evaluations?: SemanticTaxonomyEvaluationLabel[];
-    }>(
-      path.join(
-        sessionDirectory,
-        "human-evaluation",
-        "question-evaluations.json"
-      ),
-      { evaluations: [] }
-    );
+    const evaluationView =
+      await loadSessionHumanEvaluationConsumerView(sessionDirectory);
     const runtimeTraces = await readRuntimeTraces(
       path.join(sessionDirectory, "traces")
     );
     const report = buildSemanticTaxonomyReflectionReport({
       decisions,
-      evaluations: evaluationsPayload.evaluations ?? [],
+      evaluations: evaluationView.evaluations,
       runtimeTraces,
     });
     const outputDirectory = options.outputDirectory
@@ -54,6 +49,10 @@ async function main() {
       path.join(outputDirectory, "reflection.md"),
       renderSemanticTaxonomyReflectionMarkdown(report),
       "utf8"
+    );
+    await writeHumanEvaluationCompatibilityReport(
+      sessionDirectory,
+      evaluationView.report
     );
     summaries.push({
       sessionDirectory,

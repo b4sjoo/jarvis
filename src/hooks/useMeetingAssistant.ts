@@ -398,6 +398,7 @@ import {
   persistHumanGroundTruthEventsV2,
   upsertHumanEvaluationProjectionV2,
   type HumanGroundTruthFactV2,
+  type HumanGroundTruthInteractionV2,
   type HumanGroundTruthSource,
   upsertCriticalMomentEvaluation,
   buildCriticalMomentCandidates,
@@ -1673,6 +1674,7 @@ interface RecordHumanGroundTruthOptionsV2 {
   actionId?: string;
   repairTraceId?: string;
   uiSurface?: string;
+  interaction?: HumanGroundTruthInteractionV2;
   evaluation?: QuestionHumanEvaluation;
 }
 
@@ -2694,6 +2696,7 @@ export function useMeetingAssistant() {
           mode: "shadow",
         }
       );
+      const semanticStartedAt = Date.now();
       semanticEmbeddingRevisionRef.current += 1;
       const semanticRequestRevision =
         semanticEmbeddingRevisionRef.current;
@@ -2728,6 +2731,12 @@ export function useMeetingAssistant() {
               decision.answerRevision ||
             embedding.status === "stale";
           if (stale) {
+            const staleDecision: AnswerSufficiencyDecision = {
+              ...decision,
+              semanticDurationMs: embedding.durationMs,
+              semanticDisposition: "stale",
+              semanticRejectionReasons: ["stale-result-dropped"],
+            };
             traceStoreRef.current.finishStep(
               traceId,
               stepId,
@@ -2738,6 +2747,11 @@ export function useMeetingAssistant() {
                 answerSufficiencyOperationId: decision.operationId,
               }
             );
+            sessionRecordingManagerRef.current?.recordAnswerSufficiencyDecision({
+              traceId,
+              taskId,
+              decision: staleDecision,
+            });
             return;
           }
 
@@ -2802,16 +2816,32 @@ export function useMeetingAssistant() {
         .catch((error) => {
           const message =
             error instanceof Error ? error.message : String(error);
+          const disposition = /timeout|timed out/i.test(message)
+            ? "timeout"
+            : "orchestration-error";
+          const failedDecision: AnswerSufficiencyDecision = {
+            ...decision,
+            semanticDurationMs: Date.now() - semanticStartedAt,
+            semanticDisposition: disposition,
+            semanticRejectionReasons: [message.slice(0, 500)],
+          };
+          const metadata = {
+            ...formatAnswerSufficiencyDecisionForTrace(failedDecision),
+            answerSufficiencySemanticTerminal: true,
+          };
+          traceStoreRef.current.updateMetadata(traceId, metadata);
           traceStoreRef.current.finishStep(
             traceId,
             stepId,
             "error",
-            {
-              answerSufficiencySemanticDisposition:
-                "orchestration-error",
-            },
+            metadata,
             message
           );
+          sessionRecordingManagerRef.current?.recordAnswerSufficiencyDecision({
+            traceId,
+            taskId,
+            decision: failedDecision,
+          });
         });
     },
     [recordSemanticEmbeddingRuntimeEvent]
@@ -4287,6 +4317,7 @@ export function useMeetingAssistant() {
         repairTraceId: options.repairTraceId,
         actionId: options.actionId,
         uiSurface: options.uiSurface,
+        interaction: options.interaction,
         supersedesEventId: previous?.eventId,
       });
       const events = appendHumanGroundTruthEventV2(

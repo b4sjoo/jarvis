@@ -42,13 +42,41 @@ test("derives action and task verdicts from minimal expected facts", () => {
       expectedRelation: "new-parent",
       expectedParentAction: "create",
     },
+    interaction: {
+      startedAt: 1,
+      durationMs: 1,
+      clickCount: 3,
+      expandedRegions: ["human-evaluation", "expert-audit"],
+    },
+    now: 2,
+  });
+  const contextScope = createHumanGroundTruthEventV2({
+    eventId: "event_context_scope",
+    sessionId: "session_1",
+    subject: SUBJECT,
+    source: "explicit-ui",
+    fact: {
+      kind: "expected-context-read-scope",
+      expectedScope: "active-parent-read",
+    },
+    now: 2,
+  });
+  const artifactIntent = createHumanGroundTruthEventV2({
+    eventId: "event_artifact_intent",
+    sessionId: "session_1",
+    subject: SUBJECT,
+    source: "explicit-ui",
+    fact: {
+      kind: "expected-artifact-intent",
+      expectedIntent: "revise-whiteboard",
+    },
     now: 2,
   });
 
   const projection = deriveHumanEvaluationProjectionV2({
     sessionId: "session_1",
     subject: SUBJECT,
-    events: [action, settlement],
+    events: [action, settlement, contextScope, artifactIntent],
     observed: {
       traceId: "trace_1",
       traceHash: "hash_1",
@@ -56,6 +84,8 @@ test("derives action and task verdicts from minimal expected facts", () => {
       questionType: "general-system-design",
       relation: "new-parent",
       parentAction: "create",
+      contextReadScope: "active-parent-read",
+      artifactIntent: "revise-whiteboard",
     },
     now: 3,
   });
@@ -64,11 +94,25 @@ test("derives action and task verdicts from minimal expected facts", () => {
   assert.equal(projection.verdicts.questionTypeCorrect, true);
   assert.equal(projection.verdicts.relationCorrect, true);
   assert.equal(projection.verdicts.parentActionCorrect, true);
+  assert.equal(projection.verdicts.contextReadScopeCorrect, true);
+  assert.equal(projection.verdicts.artifactIntentCorrect, true);
+  assert.equal(
+    projection.observed?.contextReadScope,
+    "active-parent-read"
+  );
   assert.deepEqual(projection.inputEventIds, [
     "event_action",
     "event_settlement",
+    "event_context_scope",
+    "event_artifact_intent",
   ]);
   assert.deepEqual(projection.inputTraceHashes, ["hash_1"]);
+  assert.deepEqual(projection.interaction, {
+    startedAt: 1,
+    durationMs: 1,
+    clickCount: 3,
+    expandedRegions: ["human-evaluation", "expert-audit"],
+  });
 });
 
 test("does not turn missing expected facts into successful verdicts", () => {
@@ -224,6 +268,8 @@ test("projects the observed runtime tuple from trace metadata", () => {
       advisorExecutionAuthorized: false,
       turnGateAction: "append-only",
       primaryAskNormalizedText: "How would retrieval work?",
+      settledExecutionPlanContextReadScope: "active-parent-read",
+      settledExecutionPlanArtifactIntent: "revise-whiteboard",
     },
   } as MeetingTrace;
   const observed = buildHumanEvaluationObservedSnapshotV2(trace);
@@ -231,6 +277,8 @@ test("projects the observed runtime tuple from trace metadata", () => {
   assert.equal(observed.relation, "child-probe");
   assert.equal(observed.parentAction, "attach-child");
   assert.equal(observed.runtimeAction, "append-context");
+  assert.equal(observed.contextReadScope, "active-parent-read");
+  assert.equal(observed.artifactIntent, "revise-whiteboard");
   assert.match(observed.traceHash, /^\d+:[0-9a-f]+$/);
 });
 

@@ -5,9 +5,17 @@ import {
   buildTaxonomyAdjudicationReflectionReport,
   renderTaxonomyAdjudicationReflectionMarkdown,
   type TaxonomyAdjudicationCompactTrace,
-  type TaxonomyAdjudicationEvaluationLabel,
   type TaxonomyAdjudicationRecordedDecision,
 } from "../src/lib/meeting/taxonomy-adjudication-reflection.js";
+import {
+  buildTaskRelationAdjudicationReflectionReport,
+  renderTaskRelationAdjudicationReflectionMarkdown,
+  type TaskRelationAdjudicationRecordedDecision,
+} from "../src/lib/meeting/task-relation-adjudication-reflection.js";
+import {
+  loadSessionHumanEvaluationConsumerView,
+  writeHumanEvaluationCompatibilityReport,
+} from "./session-human-evaluation-v2.js";
 
 interface CliOptions {
   sessionDirectories: string[];
@@ -32,21 +40,26 @@ async function main() {
     }>(path.join(sessionDirectory, "metrics", "trace-summaries.latest.json"), {
       traces: [],
     });
-    const evaluationPayload = await readOptionalJson<{
-      evaluations?: TaxonomyAdjudicationEvaluationLabel[];
-    }>(
-      path.join(
-        sessionDirectory,
-        "human-evaluation",
-        "question-evaluations.json"
-      ),
-      { evaluations: [] }
-    );
+    const evaluationView =
+      await loadSessionHumanEvaluationConsumerView(sessionDirectory);
+    const relationDecisions =
+      await readOptionalJsonLines<TaskRelationAdjudicationRecordedDecision>(
+        path.join(
+          sessionDirectory,
+          "runtime-inference",
+          "task-relation-decisions.jsonl"
+        )
+      );
     const report = buildTaxonomyAdjudicationReflectionReport({
       decisions,
       traces: tracePayload.traces ?? [],
-      evaluations: evaluationPayload.evaluations ?? [],
+      evaluations: evaluationView.evaluations,
     });
+    const relationReport =
+      buildTaskRelationAdjudicationReflectionReport({
+        decisions: relationDecisions,
+        evaluations: evaluationView.evaluations,
+      });
     const outputDirectory = options.outputDirectory
       ? options.sessionDirectories.length === 1
         ? options.outputDirectory
@@ -63,10 +76,25 @@ async function main() {
       renderTaxonomyAdjudicationReflectionMarkdown(report),
       "utf8"
     );
+    await writeFile(
+      path.join(outputDirectory, "relation-reflection.json"),
+      `${JSON.stringify(relationReport, null, 2)}\n`,
+      "utf8"
+    );
+    await writeFile(
+      path.join(outputDirectory, "relation-reflection.md"),
+      renderTaskRelationAdjudicationReflectionMarkdown(relationReport),
+      "utf8"
+    );
+    await writeHumanEvaluationCompatibilityReport(
+      sessionDirectory,
+      evaluationView.report
+    );
     summaries.push({
       sessionDirectory,
       outputDirectory,
       ...report.metrics,
+      relation: relationReport.metrics,
     });
   }
   process.stdout.write(`${JSON.stringify({ sessions: summaries }, null, 2)}\n`);

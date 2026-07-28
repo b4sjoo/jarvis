@@ -13,10 +13,12 @@ import type {
   MeetingTrace,
   QuestionHumanEvaluation,
 } from "./types.js";
+import type { AdvisorContextReadScope } from "./response-only-task-scope.js";
+import type { SettledAdvisorArtifactIntent } from "./settled-advisor-execution-plan.js";
 
 export const HUMAN_GROUND_TRUTH_SCHEMA_VERSION = 2 as const;
 export const HUMAN_EVALUATION_DERIVATION_VERSION =
-  "human-evaluation-v2.1";
+  "human-evaluation-v2.2";
 
 export type HumanGroundTruthConfirmation = "confirmed" | "suggested";
 
@@ -36,6 +38,13 @@ export interface HumanGroundTruthSubjectV2 {
   sourceTurnIds: string[];
 }
 
+export interface HumanGroundTruthInteractionV2 {
+  startedAt: number;
+  durationMs: number;
+  clickCount: number;
+  expandedRegions: string[];
+}
+
 export interface ExpectedTaskSettlementFactV2 {
   kind: "expected-task-settlement";
   expectedQuestionType: CanonicalQuestionType;
@@ -52,6 +61,16 @@ export interface ExpectedQuestionTypeFactV2 {
 export interface ExpectedRuntimeActionFactV2 {
   kind: "expected-runtime-action";
   expectedAction: ExpectedAdvisorAction;
+}
+
+export interface ExpectedContextReadScopeFactV2 {
+  kind: "expected-context-read-scope";
+  expectedScope: AdvisorContextReadScope;
+}
+
+export interface ExpectedArtifactIntentFactV2 {
+  kind: "expected-artifact-intent";
+  expectedIntent: SettledAdvisorArtifactIntent;
 }
 
 export interface PrimaryAskCorrectionFactV2 {
@@ -82,6 +101,8 @@ export type HumanGroundTruthFactV2 =
   | ExpectedTaskSettlementFactV2
   | ExpectedQuestionTypeFactV2
   | ExpectedRuntimeActionFactV2
+  | ExpectedContextReadScopeFactV2
+  | ExpectedArtifactIntentFactV2
   | PrimaryAskCorrectionFactV2
   | AnswerQualityFactV2
   | MemoryLabelFactV2
@@ -101,6 +122,7 @@ export interface HumanGroundTruthEventV2 {
     actionId?: string;
     uiSurface?: string;
     recordedAt: number;
+    interaction?: HumanGroundTruthInteractionV2;
   };
   confirmation: HumanGroundTruthConfirmation;
   supersedesEventId?: string;
@@ -113,6 +135,8 @@ export interface HumanEvaluationObservedSnapshotV2 {
   relation?: InterviewTaskRelation;
   parentAction?: HumanExpectedParentAction;
   runtimeAction?: ExpectedAdvisorAction;
+  contextReadScope?: AdvisorContextReadScope;
+  artifactIntent?: SettledAdvisorArtifactIntent;
   primaryAsk?: string;
   answerCommitted?: boolean;
 }
@@ -131,6 +155,8 @@ export interface HumanEvaluationProjectionV2 {
   derivationVersion: typeof HUMAN_EVALUATION_DERIVATION_VERSION;
   inputEventIds: string[];
   inputTraceHashes: string[];
+  observed?: HumanEvaluationObservedSnapshotV2;
+  interaction?: HumanGroundTruthInteractionV2;
   activeFacts: Partial<
     Record<HumanGroundTruthFactV2["kind"], HumanGroundTruthEventV2>
   >;
@@ -140,6 +166,8 @@ export interface HumanEvaluationProjectionV2 {
     relationCorrect?: boolean;
     parentActionCorrect?: boolean;
     answerOutcome?: AnswerQualityFactV2["outcome"];
+    contextReadScopeCorrect?: boolean;
+    artifactIntentCorrect?: boolean;
   };
   conflicts: HumanEvaluationConflictV2[];
   computedAt: number;
@@ -155,6 +183,7 @@ export function createHumanGroundTruthEventV2(input: {
   repairTraceId?: string;
   actionId?: string;
   uiSurface?: string;
+  interaction?: HumanGroundTruthInteractionV2;
   supersedesEventId?: string;
   eventId?: string;
   now?: number;
@@ -176,6 +205,7 @@ export function createHumanGroundTruthEventV2(input: {
       actionId: cleanOptional(input.actionId),
       uiSurface: cleanOptional(input.uiSurface),
       recordedAt: now,
+      interaction: normalizeInteraction(input.interaction, now),
     },
     confirmation: input.confirmation ?? "confirmed",
     supersedesEventId: cleanOptional(input.supersedesEventId),
@@ -277,6 +307,10 @@ export function deriveHumanEvaluationProjectionV2(input: {
   const typeOnly = activeFacts["expected-question-type"]?.fact;
   const runtime = activeFacts["expected-runtime-action"]?.fact;
   const answer = activeFacts["answer-quality"]?.fact;
+  const contextReadScope =
+    activeFacts["expected-context-read-scope"]?.fact;
+  const artifactIntent =
+    activeFacts["expected-artifact-intent"]?.fact;
   const expectedQuestionType =
     settlement?.kind === "expected-task-settlement"
       ? settlement.expectedQuestionType
@@ -291,6 +325,8 @@ export function deriveHumanEvaluationProjectionV2(input: {
     )}`,
     sessionId: input.sessionId,
     subject: normalizeSubject(input.subject),
+    observed: input.observed,
+    interaction: summarizeInteraction(activeCandidates),
     derivationVersion: HUMAN_EVALUATION_DERIVATION_VERSION,
     inputEventIds: activeCandidates.map((event) => event.eventId),
     inputTraceHashes: input.observed ? [input.observed.traceHash] : [],
@@ -317,6 +353,18 @@ export function deriveHumanEvaluationProjectionV2(input: {
           : undefined,
       answerOutcome:
         answer?.kind === "answer-quality" ? answer.outcome : undefined,
+      contextReadScopeCorrect:
+        contextReadScope?.kind === "expected-context-read-scope" &&
+        input.observed?.contextReadScope
+          ? contextReadScope.expectedScope ===
+            input.observed.contextReadScope
+          : undefined,
+      artifactIntentCorrect:
+        artifactIntent?.kind === "expected-artifact-intent" &&
+        input.observed?.artifactIntent
+          ? artifactIntent.expectedIntent ===
+            input.observed.artifactIntent
+          : undefined,
     },
     conflicts,
     computedAt: input.now ?? Date.now(),
@@ -352,6 +400,12 @@ export function buildHumanEvaluationObservedSnapshotV2(
   const answerCommitted =
     readBoolean(metadata.advisorOutputCommittedToUi) ??
     readBoolean(metadata.screenOutputCommittedToUi);
+  const contextReadScope = normalizeContextReadScope(
+    metadata.settledExecutionPlanContextReadScope
+  );
+  const artifactIntent = normalizeArtifactIntent(
+    metadata.settledExecutionPlanArtifactIntent
+  );
   const traceEvidence = {
     traceId: trace.id,
     questionType,
@@ -360,6 +414,8 @@ export function buildHumanEvaluationObservedSnapshotV2(
     runtimeAction,
     primaryAsk,
     answerCommitted,
+    contextReadScope,
+    artifactIntent,
   };
   return {
     ...traceEvidence,
@@ -703,12 +759,81 @@ function normalizeEvent(value: unknown) {
     repairTraceId: readString(value.provenance.repairTraceId),
     actionId: readString(value.provenance.actionId),
     uiSurface: readString(value.provenance.uiSurface),
+    interaction: normalizeStoredInteraction(
+      value.provenance.interaction,
+      typeof value.provenance.recordedAt === "number"
+        ? value.provenance.recordedAt
+        : Date.now()
+    ),
     supersedesEventId: readString(value.supersedesEventId),
     now:
       typeof value.provenance.recordedAt === "number"
         ? value.provenance.recordedAt
         : Date.now(),
   });
+}
+
+function summarizeInteraction(
+  events: HumanGroundTruthEventV2[]
+): HumanGroundTruthInteractionV2 | undefined {
+  const interactions = events
+    .map((event) => event.provenance.interaction)
+    .filter(
+      (value): value is HumanGroundTruthInteractionV2 => value !== undefined
+    );
+  if (!interactions.length) return undefined;
+  const startedAt = Math.min(...interactions.map((value) => value.startedAt));
+  return {
+    startedAt,
+    durationMs: Math.max(
+      ...interactions.map((value) => value.startedAt + value.durationMs)
+    ) - startedAt,
+    clickCount: Math.max(...interactions.map((value) => value.clickCount)),
+    expandedRegions: uniqueStrings(
+      interactions.flatMap((value) => value.expandedRegions)
+    ),
+  };
+}
+
+function normalizeStoredInteraction(
+  value: unknown,
+  recordedAt: number
+): HumanGroundTruthInteractionV2 | undefined {
+  if (!isRecord(value)) return undefined;
+  return normalizeInteraction(
+    {
+      startedAt:
+        typeof value.startedAt === "number" ? value.startedAt : recordedAt,
+      durationMs:
+        typeof value.durationMs === "number" ? value.durationMs : 0,
+      clickCount:
+        typeof value.clickCount === "number" ? value.clickCount : 0,
+      expandedRegions: readStringArray(value.expandedRegions),
+    },
+    recordedAt
+  );
+}
+
+function normalizeInteraction(
+  value: HumanGroundTruthInteractionV2 | undefined,
+  recordedAt: number
+): HumanGroundTruthInteractionV2 | undefined {
+  if (!value) return undefined;
+  const startedAt = Number.isFinite(value.startedAt)
+    ? Math.min(Math.max(0, value.startedAt), recordedAt)
+    : recordedAt;
+  const durationMs = Number.isFinite(value.durationMs)
+    ? Math.max(0, Math.min(value.durationMs, recordedAt - startedAt))
+    : recordedAt - startedAt;
+  const clickCount = Number.isFinite(value.clickCount)
+    ? Math.max(0, Math.floor(value.clickCount))
+    : 0;
+  return {
+    startedAt,
+    durationMs,
+    clickCount,
+    expandedRegions: uniqueStrings(value.expandedRegions),
+  };
 }
 
 function normalizeProjection(value: unknown) {
@@ -747,6 +872,18 @@ function normalizeStoredFact(
         expectedQuestionType,
         correctionScope: readString(fact.correctionScope),
       };
+    }
+  }
+  if (fact.kind === "expected-context-read-scope") {
+    const expectedScope = normalizeContextReadScope(fact.expectedScope);
+    if (expectedScope) {
+      return { kind: fact.kind, expectedScope };
+    }
+  }
+  if (fact.kind === "expected-artifact-intent") {
+    const expectedIntent = normalizeArtifactIntent(fact.expectedIntent);
+    if (expectedIntent) {
+      return { kind: fact.kind, expectedIntent };
     }
   }
   if (fact.kind === "expected-task-settlement") {
@@ -831,6 +968,29 @@ function normalizeParentAction(
     value === "resume" ||
     value === "attach-child" ||
     value === "none"
+    ? value
+    : undefined;
+}
+
+function normalizeContextReadScope(
+  value: unknown
+): AdvisorContextReadScope | undefined {
+  return value === "current-only" ||
+    value === "active-parent-read" ||
+    value === "active-child-read" ||
+    value === "bounded-recent-history"
+    ? value
+    : undefined;
+}
+
+function normalizeArtifactIntent(
+  value: unknown
+): SettledAdvisorArtifactIntent | undefined {
+  return value === "none" ||
+    value === "preserve" ||
+    value === "revise-code" ||
+    value === "revise-complexity" ||
+    value === "revise-whiteboard"
     ? value
     : undefined;
 }

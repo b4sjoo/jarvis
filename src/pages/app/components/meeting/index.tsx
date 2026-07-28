@@ -25,6 +25,7 @@ import type {
   HumanEvaluationProjectionV2,
   HumanExpectedParentAction,
   HumanGroundTruthFactV2,
+  HumanGroundTruthInteractionV2,
   HumanEvaluationVerdict,
   HumanEvaluationVerdictBlock,
   InterviewBriefType,
@@ -4821,6 +4822,7 @@ const TraceHumanEvaluationPanel = ({
     options?: {
       actionId?: string;
       confirmation?: "confirmed" | "suggested";
+      interaction?: HumanGroundTruthInteractionV2;
     }
   ) => void;
 }) => {
@@ -4835,6 +4837,9 @@ const TraceHumanEvaluationPanel = ({
     useState<InterviewTaskRelation>();
   const [expectedParentAction, setExpectedParentAction] =
     useState<HumanExpectedParentAction>();
+  const evaluationOpenedAtRef = useRef<number | undefined>(undefined);
+  const evaluationClickCountRef = useRef(0);
+  const expandedEvaluationRegionsRef = useRef(new Set<string>());
   const memoryEntries = memorySnapshot.snapshot?.entries ?? [];
   const answerSufficiencyStatus =
     typeof trace.metadata?.answerSufficiencyStatus === "string"
@@ -4893,6 +4898,18 @@ const TraceHumanEvaluationPanel = ({
     projectionV2?.activeFacts["expected-task-settlement"]?.fact;
   const activeAnswerFact =
     projectionV2?.activeFacts["answer-quality"]?.fact;
+  const activeContextReadScopeFact =
+    projectionV2?.activeFacts["expected-context-read-scope"]?.fact;
+  const activeArtifactIntentFact =
+    projectionV2?.activeFacts["expected-artifact-intent"]?.fact;
+  const observedContextReadScope =
+    typeof trace.metadata?.settledExecutionPlanContextReadScope === "string"
+      ? trace.metadata.settledExecutionPlanContextReadScope
+      : undefined;
+  const observedArtifactIntent =
+    typeof trace.metadata?.settledExecutionPlanArtifactIntent === "string"
+      ? trace.metadata.settledExecutionPlanArtifactIntent
+      : undefined;
   const transientPersonalStatusDomain =
     typeof trace.metadata?.transientPersonalStatusDomain === "string"
       ? (trace.metadata
@@ -5075,13 +5092,63 @@ const TraceHumanEvaluationPanel = ({
     });
   };
 
+  const recordGroundTruth = (
+    fact: HumanGroundTruthFactV2,
+    options?: {
+      actionId?: string;
+      confirmation?: "confirmed" | "suggested";
+    }
+  ) => {
+    const now = Date.now();
+    const startedAt = evaluationOpenedAtRef.current ?? now;
+    evaluationOpenedAtRef.current = startedAt;
+    onRecordGroundTruth(fact, {
+      ...options,
+      interaction: {
+        startedAt,
+        durationMs: now - startedAt,
+        clickCount: evaluationClickCountRef.current,
+        expandedRegions: Array.from(
+          expandedEvaluationRegionsRef.current
+        ).sort(),
+      },
+    });
+  };
+
   const recordExpectedRuntimeAction = (
     expectedAction: "advise" | "append-context" | "buffer" | "ignore"
   ) => {
     updateAdvisorIntentEvaluation(expectedAction);
-    onRecordGroundTruth({
+    recordGroundTruth({
       kind: "expected-runtime-action",
       expectedAction,
+    });
+  };
+
+  const recordExpectedContextReadScope = (
+    expectedScope:
+      | "current-only"
+      | "active-parent-read"
+      | "active-child-read"
+      | "bounded-recent-history"
+  ) => {
+    recordGroundTruth({
+      kind: "expected-context-read-scope",
+      expectedScope,
+    });
+  };
+
+  const recordExpectedArtifactIntent = (
+    expectedIntent:
+      | "none"
+      | "preserve"
+      | "revise-code"
+      | "revise-complexity"
+      | "revise-whiteboard"
+  ) => {
+    recordGroundTruth({
+      kind: "expected-artifact-intent",
+      expectedIntent,
     });
   };
 
@@ -5100,7 +5167,7 @@ const TraceHumanEvaluationPanel = ({
         parentMutationCorrect: true,
       },
     });
-    onRecordGroundTruth({
+    recordGroundTruth({
       kind: "expected-task-settlement",
       expectedQuestionType: observedQuestionType,
       expectedRelation: observedRelation,
@@ -5125,7 +5192,7 @@ const TraceHumanEvaluationPanel = ({
           observedParentAction === expectedParentAction,
       },
     });
-    onRecordGroundTruth({
+    recordGroundTruth({
       kind: "expected-task-settlement",
       expectedQuestionType,
       expectedRelation,
@@ -5161,7 +5228,7 @@ const TraceHumanEvaluationPanel = ({
     }[outcome];
     updateQuestionVerdict("answer", legacy.verdict, [legacy.reason]);
     onUpdate({ taskQuality: legacy.quality });
-    onRecordGroundTruth({
+    recordGroundTruth({
       kind: "answer-quality",
       outcome,
       failureReasons: outcome === "useful" ? [] : [legacy.reason],
@@ -5174,7 +5241,7 @@ const TraceHumanEvaluationPanel = ({
     const correctedPrimaryAsk = primaryAskCorrection.trim();
     if (!correctedPrimaryAsk) return;
     onUpdateQuestion({ primaryAskCorrect: false });
-    onRecordGroundTruth({
+    recordGroundTruth({
       kind: "primary-ask-correction",
       correctedPrimaryAsk,
     });
@@ -5226,7 +5293,21 @@ const TraceHumanEvaluationPanel = ({
           </div>
         </div>
       ) : null}
-    <details className="mt-2 border-t border-border/50 pt-2">
+    <details
+      className="mt-2 border-t border-border/50 pt-2"
+      onClickCapture={() => {
+        evaluationOpenedAtRef.current ??= Date.now();
+        evaluationClickCountRef.current += 1;
+      }}
+      onToggle={(event) => {
+        if (event.currentTarget.open) {
+          evaluationOpenedAtRef.current ??= Date.now();
+          expandedEvaluationRegionsRef.current.add("human-evaluation");
+        } else {
+          expandedEvaluationRegionsRef.current.delete("human-evaluation");
+        }
+      }}
+    >
       <summary className="cursor-pointer text-[10px] font-medium text-muted-foreground">
         Human evaluation
       </summary>
@@ -5450,11 +5531,89 @@ const TraceHumanEvaluationPanel = ({
           </div>
         ) : null}
 
-        <details className="border-t border-border/50 pt-2">
+        <details
+          className="border-t border-border/50 pt-2"
+          onToggle={(event) => {
+            if (event.currentTarget.open) {
+              expandedEvaluationRegionsRef.current.add("expert-audit");
+            } else {
+              expandedEvaluationRegionsRef.current.delete("expert-audit");
+            }
+          }}
+        >
           <summary className="cursor-pointer text-[10px] font-medium text-muted-foreground">
             Expert audit
           </summary>
           <div className="mt-2 space-y-2">
+        <div className="rounded-sm border border-border/60 p-2">
+          <div className="text-[10px] font-medium uppercase text-muted-foreground">
+            Context read scope
+          </div>
+          <div className="mt-1 font-mono text-[9px] text-muted-foreground">
+            observed: {observedContextReadScope ?? "unknown"}
+          </div>
+          <div className="mt-2 flex flex-wrap gap-1">
+            {(
+              [
+                ["current-only", "Current"],
+                ["active-parent-read", "Parent"],
+                ["active-child-read", "Child"],
+                ["bounded-recent-history", "Recent"],
+              ] as const
+            ).map(([scope, label]) => (
+              <Button
+                key={scope}
+                size="sm"
+                variant={
+                  activeContextReadScopeFact?.kind ===
+                    "expected-context-read-scope" &&
+                  activeContextReadScopeFact.expectedScope === scope
+                    ? "default"
+                    : "outline"
+                }
+                className="h-6 px-2 text-[9px]"
+                onClick={() => recordExpectedContextReadScope(scope)}
+              >
+                {label}
+              </Button>
+            ))}
+          </div>
+        </div>
+        <div className="rounded-sm border border-border/60 p-2">
+          <div className="text-[10px] font-medium uppercase text-muted-foreground">
+            Artifact intent
+          </div>
+          <div className="mt-1 font-mono text-[9px] text-muted-foreground">
+            observed: {observedArtifactIntent ?? "unknown"}
+          </div>
+          <div className="mt-2 flex flex-wrap gap-1">
+            {(
+              [
+                ["none", "None"],
+                ["preserve", "Preserve"],
+                ["revise-code", "Code"],
+                ["revise-complexity", "Complexity"],
+                ["revise-whiteboard", "Whiteboard"],
+              ] as const
+            ).map(([intent, label]) => (
+              <Button
+                key={intent}
+                size="sm"
+                variant={
+                  activeArtifactIntentFact?.kind ===
+                    "expected-artifact-intent" &&
+                  activeArtifactIntentFact.expectedIntent === intent
+                    ? "default"
+                    : "outline"
+                }
+                className="h-6 px-2 text-[9px]"
+                onClick={() => recordExpectedArtifactIntent(intent)}
+              >
+                {label}
+              </Button>
+            ))}
+          </div>
+        </div>
         {detectedQuestionType ? (
           <div className="rounded-sm bg-muted/40 p-2 text-[10px]">
             <span className="text-muted-foreground">Detected type: </span>

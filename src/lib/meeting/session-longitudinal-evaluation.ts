@@ -3,6 +3,7 @@ import {
   normalizeCanonicalQuestionType,
   type CanonicalQuestionType,
 } from "./task-taxonomy.js";
+import type { TaskRelationAdjudicationReflectionReport } from "./task-relation-adjudication-reflection.js";
 
 export interface LongitudinalSessionManifest {
   sessionId?: string;
@@ -185,6 +186,7 @@ export interface LongitudinalSessionInput {
   questionEvaluations: LongitudinalQuestionEvaluation[];
   criticalMomentCandidates?: LongitudinalCriticalMomentCandidate[];
   criticalMomentEvaluations?: LongitudinalCriticalMomentEvaluation[];
+  taskRelationAdjudicationReport?: TaskRelationAdjudicationReflectionReport;
 }
 
 export interface RateMetric {
@@ -292,6 +294,25 @@ export interface SessionLongitudinalEvaluationReport {
     relationAgreement: RateMetric;
     parentActionAgreement: RateMetric;
     expectedContextCoverage: RateMetric;
+  };
+  relationAdjudicationFunnel: {
+    sessionsObserved: number;
+    operations: number;
+    candidateAvailable: number;
+    humanLabeled: number;
+    deterministicAgreement: RateMetric;
+    llmAccuracy: RateMetric;
+    deterministicAccuracy: RateMetric;
+    newParentPrecision: RateMetric;
+    falseParent: number;
+    falseChild: number;
+    falseResume: number;
+    contextLoss: number;
+    contextContamination: number;
+    stale: number;
+    mutationApplied: number;
+    unmatchedEvaluationCount: number;
+    latencyMs: DistributionMetric;
   };
   whiteboardRenderFunnel: {
     observedCandidates: number;
@@ -552,6 +573,14 @@ export function buildSessionLongitudinalEvaluationReport(
       trace.whiteboard?.fallbackKind === "deterministic-ascii" ||
       trace.whiteboard?.renderStatus === "ascii-fallback"
   );
+  const relationReports = inputs
+    .map((input) => input.taskRelationAdjudicationReport)
+    .filter(
+      (
+        report
+      ): report is TaskRelationAdjudicationReflectionReport =>
+        Boolean(report)
+    );
 
   return {
     version: 2,
@@ -681,6 +710,71 @@ export function buildSessionLongitudinalEvaluationReport(
         ])
       ),
       expectedContextCoverage: averageRate(expectedContextMetrics),
+    },
+    relationAdjudicationFunnel: {
+      sessionsObserved: relationReports.length,
+      operations: sum(
+        relationReports.map((report) => report.metrics.operations)
+      ),
+      candidateAvailable: sum(
+        relationReports.map(
+          (report) => report.metrics.candidateAvailable
+        )
+      ),
+      humanLabeled: sum(
+        relationReports.map((report) => report.metrics.labeled)
+      ),
+      deterministicAgreement: aggregateRates(
+        relationReports.map(
+          (report) => report.metrics.deterministicAgreement
+        )
+      ),
+      llmAccuracy: aggregateRates(
+        relationReports.map((report) => report.metrics.llmAccuracy)
+      ),
+      deterministicAccuracy: aggregateRates(
+        relationReports.map(
+          (report) => report.metrics.deterministicAccuracy
+        )
+      ),
+      newParentPrecision: aggregateRates(
+        relationReports.map(
+          (report) => report.metrics.newParentPrecision
+        )
+      ),
+      falseParent: sum(
+        relationReports.map((report) => report.metrics.falseParent)
+      ),
+      falseChild: sum(
+        relationReports.map((report) => report.metrics.falseChild)
+      ),
+      falseResume: sum(
+        relationReports.map((report) => report.metrics.falseResume)
+      ),
+      contextLoss: sum(
+        relationReports.map((report) => report.metrics.contextLoss)
+      ),
+      contextContamination: sum(
+        relationReports.map(
+          (report) => report.metrics.contextContamination
+        )
+      ),
+      stale: sum(
+        relationReports.map((report) => report.metrics.stale)
+      ),
+      mutationApplied: sum(
+        relationReports.map((report) => report.metrics.mutationApplied)
+      ),
+      unmatchedEvaluationCount: sum(
+        relationReports.map(
+          (report) => report.metrics.unmatchedEvaluationCount
+        )
+      ),
+      latencyMs: distribution(
+        relationReports.flatMap((report) =>
+          report.rows.map((row) => row.durationMs)
+        )
+      ),
     },
     whiteboardRenderFunnel: {
       observedCandidates: whiteboardCandidates.length,
@@ -1172,6 +1266,17 @@ export function renderSessionLongitudinalEvaluationMarkdown(
     `Expected context-turn coverage: ${formatRate(report.continuityFunnel.expectedContextCoverage)}`,
     `Referential completions / truncated units: ${report.continuityFunnel.referentialCompletionCount} / ${report.continuityFunnel.truncatedLogicalQuestionCount}`,
     "",
+    "## Relation Adjudication Shadow",
+    "",
+    `Sessions / operations / candidates / labeled: ${report.relationAdjudicationFunnel.sessionsObserved} / ${report.relationAdjudicationFunnel.operations} / ${report.relationAdjudicationFunnel.candidateAvailable} / ${report.relationAdjudicationFunnel.humanLabeled}`,
+    `Deterministic/LLM agreement: ${formatRate(report.relationAdjudicationFunnel.deterministicAgreement)}`,
+    `LLM / deterministic accuracy: ${formatRate(report.relationAdjudicationFunnel.llmAccuracy)} / ${formatRate(report.relationAdjudicationFunnel.deterministicAccuracy)}`,
+    `New-parent precision: ${formatRate(report.relationAdjudicationFunnel.newParentPrecision)}`,
+    `False parent / child / resume: ${report.relationAdjudicationFunnel.falseParent} / ${report.relationAdjudicationFunnel.falseChild} / ${report.relationAdjudicationFunnel.falseResume}`,
+    `Context loss / contamination / stale: ${report.relationAdjudicationFunnel.contextLoss} / ${report.relationAdjudicationFunnel.contextContamination} / ${report.relationAdjudicationFunnel.stale}`,
+    `Runtime mutation applied: ${report.relationAdjudicationFunnel.mutationApplied}`,
+    `Latency: ${formatDistribution(report.relationAdjudicationFunnel.latencyMs)}`,
+    "",
     "## Whiteboard Render Integrity",
     "",
     `Candidates -> invalid -> repair attempts -> settled -> successful shadow repairs: ${report.whiteboardRenderFunnel.observedCandidates} -> ${report.whiteboardRenderFunnel.invalidCandidates} -> ${report.whiteboardRenderFunnel.repairAttempts} -> ${report.whiteboardRenderFunnel.settledRepairAttempts} -> ${report.whiteboardRenderFunnel.successfulShadowRepairs}`,
@@ -1394,6 +1499,13 @@ function averageRate(values: number[]): RateMetric {
     denominator: values.length,
     rate: values.reduce((total, value) => total + value, 0) / values.length,
   };
+}
+
+function aggregateRates(metrics: RateMetric[]): RateMetric {
+  return rate(
+    sum(metrics.map((metric) => metric.numerator)),
+    sum(metrics.map((metric) => metric.denominator))
+  );
 }
 
 function rate(numerator: number, denominator: number): RateMetric {
