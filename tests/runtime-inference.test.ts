@@ -37,6 +37,9 @@ test("registers each atomic runtime operation with an isolated policy", () => {
   const taxonomy = getRuntimeInferenceOperationDefinition(
     "taxonomy-adjudication"
   );
+  const questionType = getRuntimeInferenceOperationDefinition(
+    "question-type-adjudication"
+  );
   const metadata = getRuntimeInferenceOperationDefinition(
     "meeting-metadata-inference"
   );
@@ -49,6 +52,10 @@ test("registers each atomic runtime operation with an isolated policy", () => {
 
   assert.equal(taxonomy.lane, "critical");
   assert.equal(taxonomy.quiescenceMs, 450);
+  assert.equal(questionType.lane, "critical");
+  assert.equal(questionType.timeoutMs, 3_000);
+  assert.equal(questionType.maxOutputTokens, 128);
+  assert.equal(questionType.quiescenceMs, 350);
   assert.equal(metadata.lane, "background");
   assert.equal(whiteboard.timeoutMs, 3_000);
   assert.equal(whiteboard.maxOutputTokens, 768);
@@ -98,6 +105,10 @@ test("isolates quota consumption by operation", async () => {
     RuntimeInferenceRuntimeJob,
     string
   >("meeting-metadata-inference");
+  const questionType = new RuntimeInferenceOperationRuntime<
+    RuntimeInferenceRuntimeJob,
+    string
+  >("question-type-adjudication");
   const settlements: string[] = [];
 
   const schedule = (
@@ -133,12 +144,17 @@ test("isolates quota consumption by operation", async () => {
     metadata,
     runtimeJob("meeting-metadata-inference", "metadata-1")
   );
+  schedule(
+    questionType,
+    runtimeJob("question-type-adjudication", "question-type-1")
+  );
   await new Promise((resolve) => setTimeout(resolve, 15));
 
   assert.deepEqual(settlements, [
     "taxonomy-adjudication:completed",
     "taxonomy-adjudication:budget-exhausted",
     "meeting-metadata-inference:completed",
+    "question-type-adjudication:completed",
   ]);
 });
 

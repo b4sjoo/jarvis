@@ -1159,9 +1159,15 @@ export interface MeetingAudioSettings {
 
 export interface MeetingCodingModelSettings extends SelectedProviderState {}
 
+export type MeetingQuestionTypeAdjudicationMode =
+  | "off"
+  | "shadow"
+  | "enforcement";
+
 export interface MeetingTaxonomyAdjudicationSettings
   extends SelectedProviderState {
   enabled: boolean;
+  questionTypeMode: MeetingQuestionTypeAdjudicationMode;
 }
 
 export interface MeetingAudioStatus {

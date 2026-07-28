@@ -2,6 +2,7 @@ export type ModelWorkloadClass = "runtime" | "advisor" | "complex";
 
 export type RuntimeInferenceOperationKind =
   | "taxonomy-adjudication"
+  | "question-type-adjudication"
   | "meeting-metadata-inference"
   | "whiteboard-syntax-repair"
   | "task-relation-adjudication";
@@ -57,6 +58,15 @@ const DEFINITIONS: Record<
     timeoutMs: 4_000,
     maxOutputTokens: 256,
     quiescenceMs: 450,
+    maxStartsPerBudgetSlot: 1,
+  },
+  "question-type-adjudication": {
+    workloadClass: "runtime",
+    operationKind: "question-type-adjudication",
+    lane: "critical",
+    timeoutMs: 3_000,
+    maxOutputTokens: 128,
+    quiescenceMs: 350,
     maxStartsPerBudgetSlot: 1,
   },
   "meeting-metadata-inference": {

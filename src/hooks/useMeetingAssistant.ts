@@ -230,6 +230,16 @@ import {
   resolveRuntimeInferenceModelRouteFromSnapshot,
   RuntimeInferenceOperationRuntime,
   RuntimeInferenceSessionCircuitBreaker,
+  QuestionTypeAdjudicationJob,
+  QuestionTypeAdjudicationRequestResult,
+  QUESTION_TYPE_ADJUDICATION_MAX_OUTPUT_CHARS,
+  buildQuestionTypeAdjudicationPrompts,
+  buildQuestionTypeAdjudicationRequest,
+  createQuestionTypeSettlementProposal,
+  decideQuestionTypeAdjudicationEligibility,
+  formatQuestionTypeAdjudicationForTrace,
+  normalizeQuestionTypeAdjudicationMode,
+  requestQuestionTypeAdjudication,
   updateWhiteboardArtifactFromAnswer,
   validateWhiteboardRenderCandidate,
   SessionRecordingManager,
@@ -529,6 +539,7 @@ const DEFAULT_MEETING_CODING_MODEL_SETTINGS: MeetingCodingModelSettings = {
 
 const DEFAULT_TAXONOMY_ADJUDICATION_SETTINGS: MeetingTaxonomyAdjudicationSettings = {
   enabled: true,
+  questionTypeMode: "shadow",
   provider: "",
   variables: {},
 };
@@ -887,11 +898,17 @@ function normalizeTaxonomyAdjudicationSettings(
 ): MeetingTaxonomyAdjudicationSettings {
   const selectedProvider = normalizeMeetingCodingModelSettings(value);
   const parsed = isRecord(value) ? value : {};
+  const legacyEnabled =
+    typeof parsed.enabled === "boolean"
+      ? parsed.enabled
+      : DEFAULT_TAXONOMY_ADJUDICATION_SETTINGS.enabled;
+  const questionTypeMode = normalizeQuestionTypeAdjudicationMode(
+    parsed.questionTypeMode,
+    legacyEnabled
+  );
   return {
-    enabled:
-      typeof parsed.enabled === "boolean"
-        ? parsed.enabled
-        : DEFAULT_TAXONOMY_ADJUDICATION_SETTINGS.enabled,
+    enabled: questionTypeMode !== "off",
+    questionTypeMode,
     ...selectedProvider,
   };
 }
@@ -1880,6 +1897,22 @@ export function useMeetingAssistant() {
   const taxonomyAdjudicationCircuitBreakerRef = useRef(
     new TaxonomyAdjudicationSessionCircuitBreaker()
   );
+  const questionTypeAdjudicationRuntimeRef = useRef<
+    RuntimeInferenceOperationRuntime<
+      QuestionTypeAdjudicationJob,
+      QuestionTypeAdjudicationRequestResult
+    > | null
+  >(null);
+  if (questionTypeAdjudicationRuntimeRef.current === null) {
+    questionTypeAdjudicationRuntimeRef.current =
+      new RuntimeInferenceOperationRuntime<
+        QuestionTypeAdjudicationJob,
+        QuestionTypeAdjudicationRequestResult
+      >("question-type-adjudication");
+  }
+  const questionTypeAdjudicationCircuitRef = useRef(
+    new RuntimeInferenceSessionCircuitBreaker()
+  );
   const whiteboardSyntaxRepairRuntimeRef = useRef<
     RuntimeInferenceOperationRuntime<
       WhiteboardSyntaxRepairJob,
@@ -2394,6 +2427,7 @@ export function useMeetingAssistant() {
     activeScreenOperationIdRef.current = null;
     semanticTaxonomyEvidenceByTurnRef.current.clear();
     taxonomyAdjudicationRuntimeRef.current?.cancelAll("superseded");
+    questionTypeAdjudicationRuntimeRef.current?.cancelAll("superseded");
     whiteboardSyntaxRepairRuntimeRef.current?.cancelAll("superseded");
     whiteboardSyntaxRepairAttemptKeysRef.current.clear();
     manualCorrectionRevisionRef.current = 0;
@@ -8885,6 +8919,523 @@ export function useMeetingAssistant() {
     [clearPendingConfirmation]
   );
 
+  const scheduleQuestionTypeAdjudication = useCallback(
+    ({
+      turn,
+      traceId,
+      turnGateAction,
+      logicalQuestionUnit,
+      lexical,
+    }: {
+      turn: TranscriptTurn;
+      traceId: string;
+      turnGateAction: string;
+      logicalQuestionUnit?: LogicalQuestionUnit;
+      lexical: QuestionTypeInferenceDecision;
+    }) => {
+      if (!logicalQuestionUnit) return;
+      const contextState = contextManagerRef.current.getState();
+      const settings = taxonomyAdjudicationSettingsRef.current;
+      const mode = settings.questionTypeMode;
+      const request = buildQuestionTypeAdjudicationRequest({
+        logicalQuestionUnit,
+      });
+      const eligibility = decideQuestionTypeAdjudicationEligibility({
+        mode,
+        speaker: turn.speaker,
+        projection: request.question,
+        lexical,
+        manualCorrectionActive: Boolean(
+          manualCorrectionOperationCoordinatorRef.current.getActiveOperationId()
+        ),
+        turnGateAction,
+      });
+      const circuit = questionTypeAdjudicationCircuitRef.current.read(
+        "question-type-adjudication",
+        contextState.sessionId
+      );
+      const scheduledTaskId = contextState.activeMeetingTask?.id;
+      const baseMetadata: Record<string, unknown> = {
+        ...formatRuntimeInferenceOperationForTrace(
+          "question-type-adjudication"
+        ),
+        ...formatQuestionTypeAdjudicationForTrace({
+          mode,
+          eligibility,
+          request,
+          disposition: eligibility.eligible
+            ? "eligible"
+            : "not-eligible",
+        }),
+        ...formatRuntimeInferenceCircuitForTrace(circuit),
+        questionTypeAdjudicationLocalType:
+          lexical.type ?? "unknown",
+        questionTypeAdjudicationLocalCertainty:
+          lexical.certainty,
+        questionTypeAdjudicationBehaviorMutationBlocked: true,
+        questionTypeAdjudicationAppliedToRuntime: false,
+      };
+      traceStoreRef.current.updateMetadata(traceId, baseMetadata);
+      if (!eligibility.eligible) {
+        sessionRecordingManagerRef.current?.recordQuestionTypeAdjudicationDecision(
+          {
+            traceId,
+            taskId: scheduledTaskId,
+            metadata: baseMetadata,
+          }
+        );
+        return;
+      }
+      if (circuit.open) {
+        const metadata = {
+          ...baseMetadata,
+          questionTypeAdjudicationDisposition:
+            "provider-circuit-open",
+          questionTypeAdjudicationSkipReason:
+            "provider-circuit-open",
+        };
+        traceStoreRef.current.updateMetadata(traceId, metadata);
+        sessionRecordingManagerRef.current?.recordQuestionTypeAdjudicationDecision(
+          {
+            traceId,
+            taskId: scheduledTaskId,
+            metadata,
+          }
+        );
+        return;
+      }
+
+      const modelRoute = resolveRuntimeInferenceModelRouteFromSnapshot({
+        snapshot: meetingModelProviderSnapshotRef.current,
+        operationKind: "question-type-adjudication",
+        reason: "local-question-type-abstained",
+      });
+      const routeMetadata =
+        formatRuntimeInferenceModelRouteForTrace(modelRoute);
+      if (!modelRoute.provider) {
+        const opened =
+          questionTypeAdjudicationCircuitRef.current.open({
+            operationKind: "question-type-adjudication",
+            sessionId: contextState.sessionId,
+            reason: "provider-configuration-error",
+            detail:
+              modelRoute.missingRequiredVariables.length > 0
+                ? `missing:${modelRoute.missingRequiredVariables.join(",")}`
+                : modelRoute.fallbackReason,
+          });
+        const metadata = {
+          ...baseMetadata,
+          ...routeMetadata,
+          ...formatRuntimeInferenceCircuitForTrace(
+            opened.state,
+            opened.newlyOpened
+          ),
+          questionTypeAdjudicationDisposition:
+            "provider-configuration-error",
+          questionTypeAdjudicationSkipReason:
+            "provider-configuration-error",
+        };
+        traceStoreRef.current.updateMetadata(traceId, metadata);
+        sessionRecordingManagerRef.current?.recordQuestionTypeAdjudicationDecision(
+          {
+            traceId,
+            taskId: scheduledTaskId,
+            metadata,
+          }
+        );
+        return;
+      }
+
+      const activeParent = contextState.activeMeetingTask?.parent;
+      const activeParentQuestionType = normalizeCanonicalQuestionType(
+        activeParent?.questionType
+      );
+      const activeRelation = contextState.activeMeetingTask?.child
+        ? "child-probe"
+        : activeParent
+          ? "followup-parent"
+          : "unknown";
+      const taskBoundaryEpoch = hashTaxonomyTaskBoundary({
+        parentId: activeParent?.id,
+        questionType: activeParentQuestionType,
+        relation: activeRelation,
+      });
+      const lease = createTaxonomyAdjudicationLease({
+        sessionId: contextState.sessionId,
+        runtimeEpoch: runtimeEpochRef.current,
+        logicalQuestionUnit,
+        taskBoundaryEpoch,
+        manualCorrectionRevision: manualCorrectionRevisionRef.current,
+        expectedParentId: activeParent?.id,
+        expectedParentRevision: activeParent?.revisions,
+      });
+      const prompts = buildQuestionTypeAdjudicationPrompts(request);
+      const promptText = [
+        prompts.systemPrompt,
+        prompts.userMessage,
+      ].join("\n\n");
+      const requestHash = hashTaxonomySourceTurnIds([
+        prompts.systemPrompt,
+        prompts.userMessage,
+      ]);
+      const scheduledMetadata = {
+        ...baseMetadata,
+        ...routeMetadata,
+        questionTypeAdjudicationDisposition: "scheduled",
+        questionTypeAdjudicationPromptVersion:
+          request.promptVersion,
+        questionTypeAdjudicationSchemaVersion:
+          request.schemaVersion,
+        questionTypeAdjudicationRequestHash: requestHash,
+        questionTypeAdjudicationPromptChars: promptText.length,
+        questionTypeAdjudicationOperationId:
+          lease.operationId,
+        questionTypeAdjudicationSourceTurnIdsHash:
+          lease.sourceTurnIdsHash,
+        questionTypeAdjudicationTaskBoundaryEpoch:
+          lease.taskBoundaryEpoch,
+        questionTypeAdjudicationManualCorrectionRevision:
+          lease.manualCorrectionRevision,
+        questionTypeAdjudicationExpectedParentId:
+          lease.expectedParentId,
+        questionTypeAdjudicationExpectedParentRevision:
+          lease.expectedParentRevision,
+        questionTypeAdjudicationModelId:
+          readSelectedProviderModelId(modelRoute.selectedProvider),
+      };
+      traceStoreRef.current.updateMetadata(
+        traceId,
+        scheduledMetadata
+      );
+      traceStoreRef.current.recordInput(
+        traceId,
+        "question type adjudication model input",
+        promptText,
+        {
+          promptVersion: request.promptVersion,
+          schemaVersion: request.schemaVersion,
+          requestHash,
+          operationId: lease.operationId,
+          typeOnly: true,
+          behaviorMutationBlocked: true,
+        }
+      );
+      sessionRecordingManagerRef.current?.recordModelInput({
+        traceId,
+        taskId: scheduledTaskId,
+        label: "question type adjudication model input",
+        value: promptText,
+        metadata: {
+          promptVersion: request.promptVersion,
+          schemaVersion: request.schemaVersion,
+          requestHash,
+          operationId: lease.operationId,
+          typeOnly: true,
+          behaviorMutationBlocked: true,
+        },
+      });
+
+      let stepId: string | undefined;
+      questionTypeAdjudicationRuntimeRef.current!.schedule({
+        job: {
+          operationId: lease.operationId,
+          operationKind: "question-type-adjudication",
+          sessionId: contextState.sessionId,
+          budgetKey: `${logicalQuestionUnit.id}:${logicalQuestionUnit.revision}`,
+          budgetSlot: "type",
+          budgetReason: "local-question-type-abstained",
+          traceId,
+          lease,
+          request,
+          triggerReasons: eligibility.triggerReasons,
+        },
+        execute: (job, signal) =>
+          requestQuestionTypeAdjudication({
+            request: job.request,
+            provider: modelRoute.provider,
+            selectedProvider: modelRoute.selectedProvider,
+            signal,
+            onFirstToken: (at) => {
+              traceStoreRef.current.updateMetadata(traceId, {
+                questionTypeAdjudicationFirstTokenAt: at,
+              });
+            },
+          }),
+        onStarted: (_job, startedAt, budget) => {
+          const metadata = {
+            ...scheduledMetadata,
+            questionTypeAdjudicationStartedAt: startedAt,
+            questionTypeAdjudicationBudgetStartsBefore:
+              budget.startsBefore,
+            questionTypeAdjudicationBudgetStartsAfter:
+              budget.startsAfter,
+            questionTypeAdjudicationBudgetLimit: budget.limit,
+            questionTypeAdjudicationBudgetRemaining:
+              budget.remaining,
+          };
+          traceStoreRef.current.updateMetadata(traceId, metadata);
+          stepId = traceStoreRef.current.startStep(
+            traceId,
+            "Question type adjudication shadow",
+            metadata
+          );
+        },
+        onSettled: (settlement) => {
+          const latestContext = contextManagerRef.current.getState();
+          const latestParent = latestContext.activeMeetingTask?.parent;
+          const latestParentQuestionType =
+            normalizeCanonicalQuestionType(
+              latestParent?.questionType
+            );
+          const latestRelation = latestContext.activeMeetingTask?.child
+            ? "child-probe"
+            : latestParent
+              ? "followup-parent"
+              : "unknown";
+          const authorization = authorizeTaxonomyAdjudicationLease(
+            settlement.job.lease,
+            {
+              currentOperationId:
+                questionTypeAdjudicationRuntimeRef.current?.getCurrentOperationId(),
+              sessionId: latestContext.sessionId,
+              runtimeEpoch: runtimeEpochRef.current,
+              logicalQuestionUnit: logicalQuestionUnitRef.current,
+              taskBoundaryEpoch: hashTaxonomyTaskBoundary({
+                parentId: latestParent?.id,
+                questionType: latestParentQuestionType,
+                relation: latestRelation,
+              }),
+              manualCorrectionRevision:
+                manualCorrectionRevisionRef.current,
+              activeParentId: latestParent?.id,
+              activeParentRevision: latestParent?.revisions,
+              logicalUnitClosed: false,
+              selfHealingBudgetConsumed: false,
+            }
+          );
+          const result = settlement.result;
+          const parsed = result?.parsed;
+          const parsedValue = parsed?.ok
+            ? parsed.value
+            : undefined;
+          const providerDisposition =
+            result?.providerDisposition ??
+            (settlement.disposition === "error"
+              ? "request-error"
+              : settlement.disposition);
+          if (
+            authorization.authorized &&
+            providerDisposition === "provider-auth-error"
+          ) {
+            questionTypeAdjudicationCircuitRef.current.open({
+              operationKind: "question-type-adjudication",
+              sessionId: settlement.job.lease.sessionId,
+              reason: "provider-auth-error",
+              detail: result?.rawOutput.slice(0, 240),
+            });
+          }
+          const finalDisposition =
+            settlement.disposition !== "completed"
+              ? settlement.disposition
+              : !authorization.authorized
+                ? "stale"
+                : providerDisposition !==
+                    "completed-with-content"
+                  ? providerDisposition
+                  : !parsed?.ok
+                    ? "invalid-output"
+                    : "shadow-observed";
+          const currentQuestion = createProvisionalCurrentQuestion({
+            logicalQuestionUnit,
+            sourceKind: "voice",
+          });
+          const llmProposal = parsedValue
+            ? createQuestionTypeSettlementProposal({
+                currentQuestion,
+                adjudication: parsedValue,
+                expectedParentId: latestParent?.id,
+                expectedParentRevision:
+                  latestParent?.revisions,
+              })
+            : undefined;
+          const settlementPreview = llmProposal
+            ? settleCurrentQuestion({
+                currentQuestion,
+                llmProposal,
+                activeParentId: latestParent?.id,
+                activeParentRevision: latestParent?.revisions,
+                manualCorrectionRevision:
+                  manualCorrectionRevisionRef.current,
+                policy: {
+                  allowLlmTypeRepair: mode === "enforcement",
+                  allowLlmRelationRepair: false,
+                  allowLlmActionRepair: false,
+                  runtimeMutationAuthorized: false,
+                  questionComplete: true,
+                  commitParent: false,
+                },
+              })
+            : undefined;
+          const rawOutput = result?.rawOutput ?? "";
+          const recordingActive =
+            sessionRecordingManagerRef.current?.getState().active ??
+            false;
+          const rawOutputStored = Boolean(
+            rawOutput &&
+              (debugModeRef.current || recordingActive)
+          );
+          const boundedRawOutput = rawOutput.slice(
+            0,
+            QUESTION_TYPE_ADJUDICATION_MAX_OUTPUT_CHARS
+          );
+          const metadata = {
+            ...scheduledMetadata,
+            ...formatQuestionTypeAdjudicationForTrace({
+              mode,
+              eligibility,
+              request,
+              disposition: finalDisposition,
+              candidate: parsedValue,
+            }),
+            ...formatCurrentQuestionSettlementForTrace(
+              settlementPreview
+            ),
+            questionTypeAdjudicationCompletedAt:
+              settlement.completedAt,
+            questionTypeAdjudicationQueueWaitMs:
+              settlement.queueWaitMs,
+            questionTypeAdjudicationDurationMs:
+              settlement.durationMs,
+            questionTypeAdjudicationBudgetStartsBefore:
+              settlement.budget.startsBefore,
+            questionTypeAdjudicationBudgetStartsAfter:
+              settlement.budget.startsAfter,
+            questionTypeAdjudicationBudgetLimit:
+              settlement.budget.limit,
+            questionTypeAdjudicationBudgetRemaining:
+              settlement.budget.remaining,
+            questionTypeAdjudicationProviderDisposition:
+              providerDisposition,
+            questionTypeAdjudicationParseDisposition:
+              result?.parseDisposition ??
+              (settlement.disposition === "error"
+                ? "not-run-request-error"
+                : "not-run"),
+            questionTypeAdjudicationParseValid:
+              parsed?.ok ?? false,
+            questionTypeAdjudicationParseError:
+              parsed && !parsed.ok ? parsed.reason : undefined,
+            questionTypeAdjudicationParseErrorKind:
+              parsed && !parsed.ok
+                ? parsed.errorKind
+                : undefined,
+            questionTypeAdjudicationEvidenceSpansValid:
+              parsed?.evidenceSpansValid ?? false,
+            questionTypeAdjudicationLeaseAuthorized:
+              authorization.authorized,
+            questionTypeAdjudicationStaleReason:
+              authorization.authorized
+                ? undefined
+                : authorization.reason,
+            questionTypeAdjudicationWouldRepair:
+              Boolean(
+                parsedValue &&
+                  parsedValue.questionType !==
+                    (lexical.type ?? "unknown")
+              ),
+            questionTypeAdjudicationPreviewType:
+              settlementPreview?.questionType,
+            questionTypeAdjudicationPreviewTypeAuthority:
+              settlementPreview?.typeAuthoritySource,
+            questionTypeAdjudicationTypeMutationAuthorized:
+              settlementPreview?.typeMutationAuthorized ?? false,
+            questionTypeAdjudicationRelationMutationBlocked: true,
+            questionTypeAdjudicationParentMutationBlocked: true,
+            questionTypeAdjudicationBehaviorMutationBlocked: true,
+            questionTypeAdjudicationAppliedToRuntime: false,
+            questionTypeAdjudicationRawOutputStored:
+              rawOutputStored,
+            questionTypeAdjudicationRawOutputHash: rawOutput
+              ? hashTaxonomySourceTurnIds([rawOutput])
+              : undefined,
+            questionTypeAdjudicationRawOutputTruncated:
+              rawOutput.length > boundedRawOutput.length,
+            questionTypeAdjudicationError:
+              settlement.error instanceof Error
+                ? settlement.error.message
+                : settlement.error
+                  ? String(settlement.error)
+                  : undefined,
+          };
+          if (rawOutputStored) {
+            if (debugModeRef.current) {
+              traceStoreRef.current.recordOutput(
+                traceId,
+                "question type adjudication raw output",
+                boundedRawOutput,
+                {
+                  providerDisposition,
+                  parseDisposition:
+                    result?.parseDisposition,
+                  truncated:
+                    rawOutput.length > boundedRawOutput.length,
+                }
+              );
+            }
+            if (recordingActive) {
+              sessionRecordingManagerRef.current?.recordModelOutput({
+                traceId,
+                taskId: scheduledTaskId,
+                label:
+                  "question type adjudication raw output",
+                value: boundedRawOutput,
+                metadata: {
+                  providerDisposition,
+                  parseDisposition:
+                    result?.parseDisposition,
+                  originalChars: rawOutput.length,
+                  truncated:
+                    rawOutput.length > boundedRawOutput.length,
+                },
+              });
+            }
+          }
+          traceStoreRef.current.updateMetadata(traceId, metadata);
+          if (stepId) {
+            traceStoreRef.current.finishStep(
+              traceId,
+              stepId,
+              finalDisposition === "error" ||
+                finalDisposition === "provider-auth-error" ||
+                finalDisposition === "provider-error-content" ||
+                finalDisposition === "invalid-output"
+                ? "error"
+                : finalDisposition === "stale" ||
+                    finalDisposition === "superseded"
+                  ? "cancelled"
+                  : "success",
+              metadata,
+              settlement.error ??
+                (finalDisposition === "invalid-output"
+                  ? `Invalid question type adjudication output: ${
+                      result?.parseDisposition ?? "unknown"
+                    }`
+                  : undefined)
+            );
+          }
+          sessionRecordingManagerRef.current?.recordQuestionTypeAdjudicationDecision(
+            {
+              traceId,
+              taskId: scheduledTaskId,
+              metadata,
+            }
+          );
+        },
+      });
+    },
+    []
+  );
+
   const scheduleTaxonomyAdjudicationShadow = useCallback(
     ({
       turn,
@@ -9778,6 +10329,13 @@ export function useMeetingAssistant() {
         lexical,
         metadata: initialMetadata,
       });
+      scheduleQuestionTypeAdjudication({
+        turn,
+        traceId,
+        turnGateAction,
+        logicalQuestionUnit,
+        lexical,
+      });
 
       if (!eligibility.eligible) {
         sessionRecordingManagerRef.current?.recordSemanticTaxonomyDecision({
@@ -10012,6 +10570,7 @@ export function useMeetingAssistant() {
     },
     [
       recordSemanticEmbeddingRuntimeEvent,
+      scheduleQuestionTypeAdjudication,
       scheduleTaxonomyAdjudicationShadow,
     ]
   );
@@ -17899,6 +18458,7 @@ export function useMeetingAssistant() {
     return () => {
       void stopOnUnmountRef.current();
       taxonomyAdjudicationRuntimeRef.current?.cancelAll("disposed");
+      questionTypeAdjudicationRuntimeRef.current?.cancelAll("disposed");
       whiteboardSyntaxRepairRuntimeRef.current?.cancelAll("disposed");
       void semanticTaxonomyRuntimeRef.current?.dispose("meeting-hook-unmounted");
     };

@@ -2348,10 +2348,15 @@ export const MeetingAssistant = ({
                         }
                         taxonomyAdjudicationCandidateType={
                           typeof evaluationTrace.metadata
-                            ?.taxonomyAdjudicationCandidateType === "string"
+                            ?.questionTypeAdjudicationCandidateType ===
+                          "string"
                             ? evaluationTrace.metadata
-                                .taxonomyAdjudicationCandidateType
-                            : undefined
+                                .questionTypeAdjudicationCandidateType
+                            : typeof evaluationTrace.metadata
+                            ?.taxonomyAdjudicationCandidateType === "string"
+                              ? evaluationTrace.metadata
+                                  .taxonomyAdjudicationCandidateType
+                              : undefined
                         }
                         taxonomyAdjudicationRelation={
                           typeof evaluationTrace.metadata
@@ -2362,17 +2367,27 @@ export const MeetingAssistant = ({
                         }
                         taxonomyAdjudicationDisposition={
                           typeof evaluationTrace.metadata
-                            ?.taxonomyAdjudicationDisposition === "string"
+                            ?.questionTypeAdjudicationDisposition ===
+                          "string"
                             ? evaluationTrace.metadata
-                                .taxonomyAdjudicationDisposition
-                            : undefined
+                                .questionTypeAdjudicationDisposition
+                            : typeof evaluationTrace.metadata
+                            ?.taxonomyAdjudicationDisposition === "string"
+                              ? evaluationTrace.metadata
+                                  .taxonomyAdjudicationDisposition
+                              : undefined
                         }
                         taxonomyAdjudicationWouldRepair={
                           typeof evaluationTrace.metadata
-                            ?.taxonomyAdjudicationWouldRepair === "boolean"
+                            ?.questionTypeAdjudicationWouldRepair ===
+                          "boolean"
                             ? evaluationTrace.metadata
-                                .taxonomyAdjudicationWouldRepair
-                            : undefined
+                                .questionTypeAdjudicationWouldRepair
+                            : typeof evaluationTrace.metadata
+                            ?.taxonomyAdjudicationWouldRepair === "boolean"
+                              ? evaluationTrace.metadata
+                                  .taxonomyAdjudicationWouldRepair
+                              : undefined
                         }
                         evaluation={answerTraceEvaluation}
                         questionEvaluation={answerQuestionEvaluation}
@@ -3674,20 +3689,23 @@ const ConfigurationsPanel = ({
                     LLM Type Adjudication
                   </div>
                   <div className="mt-0.5 text-[10px] text-muted-foreground">
-                    Shadow only; runs during Debug or Session Recording
+                    Type-only Shadow; cannot mutate task state
                   </div>
                 </div>
                 <Switch
-                  checked={taxonomyAdjudication.enabled}
+                  checked={
+                    taxonomyAdjudication.questionTypeMode !== "off"
+                  }
                   onCheckedChange={(enabled) => {
                     onTaxonomyAdjudicationChange({
                       ...taxonomyAdjudication,
                       enabled,
+                      questionTypeMode: enabled ? "shadow" : "off",
                     });
                   }}
                 />
               </div>
-              {taxonomyAdjudication.enabled ? (
+              {taxonomyAdjudication.questionTypeMode !== "off" ? (
                 <MeetingModelOverrideConfig
                   label="Adjudication model"
                   description="Optional fast model; defaults to the main model"
@@ -3696,6 +3714,8 @@ const ConfigurationsPanel = ({
                   onChange={(selected) => {
                     onTaxonomyAdjudicationChange({
                       enabled: taxonomyAdjudication.enabled,
+                      questionTypeMode:
+                        taxonomyAdjudication.questionTypeMode,
                       ...selected,
                     });
                   }}
