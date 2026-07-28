@@ -22,10 +22,14 @@ import type {
   HumanEvalFailureReason,
   HumanEvalQuestionType,
   HumanEvalTaskQuality,
+  HumanEvaluationProjectionV2,
+  HumanExpectedParentAction,
+  HumanGroundTruthFactV2,
   HumanEvaluationVerdict,
   HumanEvaluationVerdictBlock,
   InterviewBriefType,
   InterviewSessionBrief,
+  InterviewTaskRelation,
   InterviewTargetCompany,
   MeetingAudioConfig,
   MeetingAudioProfile,
@@ -614,6 +618,15 @@ export const MeetingAssistant = ({
   const answerQuestionEvaluation = evaluationTrace
     ? meeting.questionEvaluations.find((evaluation) =>
         evaluation.traceIds.includes(evaluationTrace.id)
+      )
+    : undefined;
+  const answerEvaluationProjectionV2 = evaluationTrace
+    ? meeting.humanEvaluationProjectionsV2.find(
+        (projection) =>
+          projection.subject.traceIds.includes(evaluationTrace.id) ||
+          (answerQuestionEvaluation?.questionId &&
+            projection.subject.questionId ===
+              answerQuestionEvaluation.questionId)
       )
     : undefined;
   const answerMemoryEvaluationSnapshot =
@@ -2412,6 +2425,7 @@ export const MeetingAssistant = ({
                         }
                         evaluation={answerTraceEvaluation}
                         questionEvaluation={answerQuestionEvaluation}
+                        projectionV2={answerEvaluationProjectionV2}
                         memorySnapshot={answerMemoryEvaluationSnapshot}
                         onUpdate={(patch) => {
                           meeting.updateTraceHumanEvaluation(
@@ -2423,6 +2437,16 @@ export const MeetingAssistant = ({
                           meeting.updateQuestionHumanEvaluation(
                             evaluationTrace.id,
                             patch
+                          );
+                        }}
+                        onRecordGroundTruth={(fact, options) => {
+                          meeting.recordHumanGroundTruthV2(
+                            evaluationTrace.id,
+                            fact,
+                            {
+                              ...options,
+                              uiSurface: "normal-debug-evaluation",
+                            }
                           );
                         }}
                       />
@@ -4675,6 +4699,54 @@ const CriticalMomentBooleanGroup = ({
   </div>
 );
 
+const evaluationTaskRelations: InterviewTaskRelation[] = [
+  "new-parent",
+  "followup-parent",
+  "child-probe",
+  "resume-parent",
+  "logistics",
+  "correction",
+  "unknown",
+];
+
+const evaluationParentActions: HumanExpectedParentAction[] = [
+  "create",
+  "preserve",
+  "resume",
+  "attach-child",
+  "none",
+];
+
+function normalizeEvaluationTaskRelation(
+  value: string | undefined
+): InterviewTaskRelation | undefined {
+  return evaluationTaskRelations.find((candidate) => candidate === value);
+}
+
+function resolveEvaluationParentAction(
+  relation: InterviewTaskRelation | undefined,
+  mutationAuthorized: boolean | undefined
+): HumanExpectedParentAction | undefined {
+  if (!relation) return undefined;
+  if (relation === "new-parent") {
+    return mutationAuthorized === false ? "none" : "create";
+  }
+  if (relation === "child-probe") {
+    return mutationAuthorized === false ? "preserve" : "attach-child";
+  }
+  if (relation === "resume-parent") {
+    return mutationAuthorized === false ? "preserve" : "resume";
+  }
+  if (
+    relation === "followup-parent" ||
+    relation === "logistics" ||
+    relation === "correction"
+  ) {
+    return "preserve";
+  }
+  return mutationAuthorized === false ? "none" : undefined;
+}
+
 const TraceHumanEvaluationPanel = ({
   trace,
   detectedQuestionType,
@@ -4692,9 +4764,11 @@ const TraceHumanEvaluationPanel = ({
   taskRelationAdjudicationWouldRepair,
   evaluation,
   questionEvaluation,
+  projectionV2,
   memorySnapshot,
   onUpdate,
   onUpdateQuestion,
+  onRecordGroundTruth,
 }: {
   trace: MeetingTrace;
   detectedQuestionType?: string;
@@ -4726,6 +4800,7 @@ const TraceHumanEvaluationPanel = ({
       }
     | undefined;
   questionEvaluation: QuestionHumanEvaluation | undefined;
+  projectionV2: HumanEvaluationProjectionV2 | undefined;
   memorySnapshot: MemoryRetrievalEvaluationSnapshotResolution;
   onUpdate: (patch: {
     taskQuality?: HumanEvalTaskQuality;
@@ -4741,9 +4816,25 @@ const TraceHumanEvaluationPanel = ({
     failureReasons?: HumanEvalFailureReason[];
   }) => void;
   onUpdateQuestion: (patch: Partial<QuestionHumanEvaluation>) => void;
+  onRecordGroundTruth: (
+    fact: HumanGroundTruthFactV2,
+    options?: {
+      actionId?: string;
+      confirmation?: "confirmed" | "suggested";
+    }
+  ) => void;
 }) => {
   const failureReasons = evaluation?.failureReasons ?? [];
   const [missingMemoryNote, setMissingMemoryNote] = useState("");
+  const [taskFixOpen, setTaskFixOpen] = useState(false);
+  const [primaryAskFixOpen, setPrimaryAskFixOpen] = useState(false);
+  const [primaryAskCorrection, setPrimaryAskCorrection] = useState("");
+  const [expectedQuestionType, setExpectedQuestionType] =
+    useState<CanonicalQuestionType>();
+  const [expectedRelation, setExpectedRelation] =
+    useState<InterviewTaskRelation>();
+  const [expectedParentAction, setExpectedParentAction] =
+    useState<HumanExpectedParentAction>();
   const memoryEntries = memorySnapshot.snapshot?.entries ?? [];
   const answerSufficiencyStatus =
     typeof trace.metadata?.answerSufficiencyStatus === "string"
@@ -4786,6 +4877,22 @@ const TraceHumanEvaluationPanel = ({
     "boolean"
       ? trace.metadata.currentQuestionSettlementParentMutationAuthorized
       : undefined;
+  const observedQuestionType = normalizeCanonicalQuestionType(
+    currentQuestionSettlementType ?? detectedQuestionType
+  );
+  const observedRelation = normalizeEvaluationTaskRelation(
+    currentQuestionSettlementRelation
+  );
+  const observedParentAction = resolveEvaluationParentAction(
+    observedRelation,
+    currentQuestionParentMutationAuthorized
+  );
+  const activeRuntimeFact =
+    projectionV2?.activeFacts["expected-runtime-action"]?.fact;
+  const activeSettlementFact =
+    projectionV2?.activeFacts["expected-task-settlement"]?.fact;
+  const activeAnswerFact =
+    projectionV2?.activeFacts["answer-quality"]?.fact;
   const transientPersonalStatusDomain =
     typeof trace.metadata?.transientPersonalStatusDomain === "string"
       ? (trace.metadata
@@ -4885,13 +4992,20 @@ const TraceHumanEvaluationPanel = ({
   };
 
   const updateAdvisorIntentEvaluation = (
-    expectedAction: "advise" | "ignore",
-    legacyPatch: {
+    expectedAction: NonNullable<
+      QuestionHumanEvaluation["advisorIntent"]
+    >["expectedAction"],
+    legacyPatch?: {
       advisorGateCorrectlySkipped: boolean;
       advisorGateShouldAdvise: boolean;
     }
   ) => {
-    onUpdate(legacyPatch);
+    onUpdate(
+      legacyPatch ?? {
+        advisorGateCorrectlySkipped: expectedAction !== "advise",
+        advisorGateShouldAdvise: expectedAction === "advise",
+      }
+    );
     onUpdateQuestion({
       advisorIntent: buildAdvisorIntentEvaluationFromTrace({
         trace,
@@ -4961,6 +5075,112 @@ const TraceHumanEvaluationPanel = ({
     });
   };
 
+  const recordExpectedRuntimeAction = (
+    expectedAction: "advise" | "append-context" | "buffer" | "ignore"
+  ) => {
+    updateAdvisorIntentEvaluation(expectedAction);
+    onRecordGroundTruth({
+      kind: "expected-runtime-action",
+      expectedAction,
+    });
+  };
+
+  const recordObservedTaskSettlement = () => {
+    if (!observedQuestionType || !observedRelation || !observedParentAction) {
+      setTaskFixOpen(true);
+      return;
+    }
+    onUpdateQuestion({
+      correctedQuestionType: observedQuestionType,
+      expectedRelation: observedRelation,
+      expectedParentAction: observedParentAction,
+      currentQuestionSettlement: {
+        questionTypeCorrect: true,
+        relationCorrect: true,
+        parentMutationCorrect: true,
+      },
+    });
+    onRecordGroundTruth({
+      kind: "expected-task-settlement",
+      expectedQuestionType: observedQuestionType,
+      expectedRelation: observedRelation,
+      expectedParentAction: observedParentAction,
+    });
+    setTaskFixOpen(false);
+  };
+
+  const recordCorrectedTaskSettlement = () => {
+    if (!expectedQuestionType || !expectedRelation || !expectedParentAction) {
+      return;
+    }
+    onUpdateQuestion({
+      correctedQuestionType: expectedQuestionType,
+      expectedRelation,
+      expectedParentAction,
+      currentQuestionSettlement: {
+        questionTypeCorrect:
+          observedQuestionType === expectedQuestionType,
+        relationCorrect: observedRelation === expectedRelation,
+        parentMutationCorrect:
+          observedParentAction === expectedParentAction,
+      },
+    });
+    onRecordGroundTruth({
+      kind: "expected-task-settlement",
+      expectedQuestionType,
+      expectedRelation,
+      expectedParentAction,
+    });
+    setTaskFixOpen(false);
+  };
+
+  const recordAnswerOutcome = (
+    outcome: "useful" | "partial" | "wrong" | "no-answer"
+  ) => {
+    const legacy = {
+      useful: {
+        verdict: "ok" as const,
+        quality: "success" as const,
+        reason: "useful",
+      },
+      partial: {
+        verdict: "partial" as const,
+        quality: "partial" as const,
+        reason: "partially-useful",
+      },
+      wrong: {
+        verdict: "wrong" as const,
+        quality: "fail" as const,
+        reason: "wrong-answer",
+      },
+      "no-answer": {
+        verdict: "missing" as const,
+        quality: "fail" as const,
+        reason: "missing-answer",
+      },
+    }[outcome];
+    updateQuestionVerdict("answer", legacy.verdict, [legacy.reason]);
+    onUpdate({ taskQuality: legacy.quality });
+    onRecordGroundTruth({
+      kind: "answer-quality",
+      outcome,
+      failureReasons: outcome === "useful" ? [] : [legacy.reason],
+      expectedContextTurnIds:
+        questionEvaluation?.expectedContextTurnIds ?? [],
+    });
+  };
+
+  const savePrimaryAskCorrection = () => {
+    const correctedPrimaryAsk = primaryAskCorrection.trim();
+    if (!correctedPrimaryAsk) return;
+    onUpdateQuestion({ primaryAskCorrect: false });
+    onRecordGroundTruth({
+      kind: "primary-ask-correction",
+      correctedPrimaryAsk,
+    });
+    setPrimaryAskFixOpen(false);
+  };
+
   return (
     <div className="space-y-3">
       {taxonomyAdjudicationDisposition ? (
@@ -5010,7 +5230,231 @@ const TraceHumanEvaluationPanel = ({
       <summary className="cursor-pointer text-[10px] font-medium text-muted-foreground">
         Human evaluation
       </summary>
-      <div className="mt-2 space-y-2">
+      <div className="mt-2 space-y-3">
+        <div className="rounded-sm border border-border/60 p-2">
+          <div className="mb-1 text-[10px] font-medium uppercase text-muted-foreground">
+            Runtime action
+          </div>
+          <div className="mb-2 font-mono text-[9px] text-muted-foreground">
+            observed:{" "}
+            {advisorExecutionAuthorized === true
+              ? "advise"
+              : advisorTurnIntent === "incomplete"
+                ? "buffer"
+                : advisorTurnIntent
+                  ? "ignore / append"
+                  : "unknown"}
+          </div>
+          <div className="flex flex-wrap gap-1">
+            {(
+              [
+                ["advise", "Advise"],
+                ["append-context", "Append"],
+                ["buffer", "Buffer"],
+                ["ignore", "Ignore"],
+              ] as const
+            ).map(([action, label]) => (
+              <Button
+                key={action}
+                size="sm"
+                variant={
+                  activeRuntimeFact?.kind === "expected-runtime-action" &&
+                  activeRuntimeFact.expectedAction === action
+                    ? "default"
+                    : "outline"
+                }
+                className="h-7 px-2 text-[10px]"
+                onClick={() => recordExpectedRuntimeAction(action)}
+              >
+                {label}
+              </Button>
+            ))}
+            <Button
+              size="sm"
+              variant={primaryAskFixOpen ? "default" : "outline"}
+              className="h-7 px-2 text-[10px]"
+              onClick={() => {
+                setPrimaryAskCorrection(primaryAskNormalizedText ?? "");
+                setPrimaryAskFixOpen((open) => !open);
+              }}
+            >
+              Wrong ask
+            </Button>
+          </div>
+          {primaryAskFixOpen ? (
+            <div className="mt-2 flex gap-1">
+              <Textarea
+                value={primaryAskCorrection}
+                onChange={(event) =>
+                  setPrimaryAskCorrection(event.target.value)
+                }
+                placeholder="Correct primary ask"
+                className="min-h-12 text-[10px]"
+              />
+              <Button
+                size="sm"
+                className="h-8 shrink-0 px-2 text-[10px]"
+                disabled={!primaryAskCorrection.trim()}
+                onClick={savePrimaryAskCorrection}
+              >
+                Save
+              </Button>
+            </div>
+          ) : null}
+        </div>
+
+        <div className="rounded-sm border border-border/60 p-2">
+          <div className="mb-1 text-[10px] font-medium uppercase text-muted-foreground">
+            Task settlement
+          </div>
+          <div className="break-words font-mono text-[9px] text-muted-foreground">
+            observed: {observedQuestionType ?? "unknown"} /{" "}
+            {observedRelation ?? "unknown"} /{" "}
+            {observedParentAction ?? "unresolved"}
+          </div>
+          {activeSettlementFact?.kind ===
+          "expected-task-settlement" ? (
+            <div className="mt-1 break-words font-mono text-[9px]">
+              expected: {activeSettlementFact.expectedQuestionType} /{" "}
+              {activeSettlementFact.expectedRelation} /{" "}
+              {activeSettlementFact.expectedParentAction}
+            </div>
+          ) : null}
+          <div className="mt-2 flex gap-1">
+            <Button
+              size="sm"
+              variant={
+                projectionV2?.verdicts.questionTypeCorrect === true &&
+                projectionV2.verdicts.relationCorrect === true &&
+                projectionV2.verdicts.parentActionCorrect === true
+                  ? "default"
+                  : "outline"
+              }
+              className="h-7 px-2 text-[10px]"
+              onClick={recordObservedTaskSettlement}
+            >
+              Correct
+            </Button>
+            <Button
+              size="sm"
+              variant={taskFixOpen ? "default" : "outline"}
+              className="h-7 px-2 text-[10px]"
+              onClick={() => {
+                setExpectedQuestionType(
+                  observedQuestionType ?? "unknown"
+                );
+                setExpectedRelation(observedRelation ?? "unknown");
+                setExpectedParentAction(
+                  observedParentAction ?? "none"
+                );
+                setTaskFixOpen((open) => !open);
+              }}
+            >
+              Fix
+            </Button>
+          </div>
+          {taskFixOpen ? (
+            <div className="mt-2 space-y-2 rounded-sm bg-muted/30 p-2">
+              <CriticalMomentButtonGroup
+                label="Expected type"
+                options={humanEvalQuestionTypeOptions.map((option) => [
+                  option.id,
+                  option.label,
+                ])}
+                value={expectedQuestionType}
+                onSelect={(value) =>
+                  setExpectedQuestionType(
+                    normalizeCanonicalQuestionType(value)
+                  )
+                }
+              />
+              <CriticalMomentButtonGroup
+                label="Expected relation"
+                options={evaluationTaskRelations.map((value) => [
+                  value,
+                  value,
+                ])}
+                value={expectedRelation}
+                onSelect={(value) =>
+                  setExpectedRelation(
+                    normalizeEvaluationTaskRelation(value)
+                  )
+                }
+              />
+              <CriticalMomentButtonGroup
+                label="Expected parent action"
+                options={evaluationParentActions.map((value) => [
+                  value,
+                  value,
+                ])}
+                value={expectedParentAction}
+                onSelect={(value) =>
+                  setExpectedParentAction(
+                    evaluationParentActions.find(
+                      (candidate) => candidate === value
+                    )
+                  )
+                }
+              />
+              <Button
+                size="sm"
+                className="h-7 px-2 text-[10px]"
+                disabled={
+                  !expectedQuestionType ||
+                  !expectedRelation ||
+                  !expectedParentAction
+                }
+                onClick={recordCorrectedTaskSettlement}
+              >
+                Save settlement
+              </Button>
+            </div>
+          ) : null}
+        </div>
+
+        <div className="rounded-sm border border-border/60 p-2">
+          <div className="mb-2 text-[10px] font-medium uppercase text-muted-foreground">
+            Answer outcome
+          </div>
+          <div className="flex flex-wrap gap-1">
+            {(
+              [
+                ["useful", "Useful"],
+                ["partial", "Partial"],
+                ["wrong", "Wrong"],
+                ["no-answer", "No answer"],
+              ] as const
+            ).map(([outcome, label]) => (
+              <Button
+                key={outcome}
+                size="sm"
+                variant={
+                  activeAnswerFact?.kind === "answer-quality" &&
+                  activeAnswerFact.outcome === outcome
+                    ? "default"
+                    : "outline"
+                }
+                className="h-7 px-2 text-[10px]"
+                onClick={() => recordAnswerOutcome(outcome)}
+              >
+                {label}
+              </Button>
+            ))}
+          </div>
+        </div>
+
+        {projectionV2?.conflicts.length ? (
+          <div className="rounded-sm border border-amber-500/60 bg-amber-500/10 p-2 text-[10px]">
+            Conflicting human labels need review (
+            {projectionV2.conflicts.length}).
+          </div>
+        ) : null}
+
+        <details className="border-t border-border/50 pt-2">
+          <summary className="cursor-pointer text-[10px] font-medium text-muted-foreground">
+            Expert audit
+          </summary>
+          <div className="mt-2 space-y-2">
         {detectedQuestionType ? (
           <div className="rounded-sm bg-muted/40 p-2 text-[10px]">
             <span className="text-muted-foreground">Detected type: </span>
@@ -6280,6 +6724,8 @@ const TraceHumanEvaluationPanel = ({
           </div>
         </div>
       </div>
+    </details>
+    </div>
     </details>
     </div>
   );
