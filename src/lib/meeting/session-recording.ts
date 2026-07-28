@@ -50,7 +50,7 @@ import {
 import { serializeMeetingTraceExport } from "./trace.js";
 
 const SESSION_RECORDING_SCHEMA_VERSION = 1;
-const SESSION_TRACE_SUMMARY_SCHEMA_VERSION = 26;
+const SESSION_TRACE_SUMMARY_SCHEMA_VERSION = 27;
 const SESSION_TRACE_INDEX_SCHEMA_VERSION = 1;
 
 interface SessionRecordingStartOptions {
@@ -241,6 +241,10 @@ export interface SessionCompactTraceSummary {
   logicalQuestionLeaseAuthorizationStage?: string;
   forceAdviseTargetStatus?: string;
   forceAdviseEligible?: boolean;
+  forceAdviseRetryable?: boolean;
+  forceAdviseEligibilityReason?: string;
+  forceAdviseRepairCause?: string;
+  forceAdviseAdvisorOutcome?: string;
   forceAdviseOwnershipAuthorized?: boolean;
   forceAdviseOwnershipReason?: string;
   manualCorrectionOwnership?: string;
@@ -3273,6 +3277,22 @@ function buildCompactTraceSummary({
     forceAdviseEligible: readFirstBoolean(
       metadataSources,
       "forceAdviseEligible"
+    ),
+    forceAdviseRetryable: readFirstBoolean(
+      metadataSources,
+      "forceAdviseRetryable"
+    ),
+    forceAdviseEligibilityReason: readFirstString(
+      metadataSources,
+      "forceAdviseEligibilityReason"
+    ),
+    forceAdviseRepairCause: readFirstString(
+      metadataSources,
+      "forceAdviseRepairCause"
+    ),
+    forceAdviseAdvisorOutcome: readFirstString(
+      metadataSources,
+      "forceAdviseAdvisorOutcome"
     ),
     forceAdviseOwnershipAuthorized: readFirstBoolean(
       metadataSources,

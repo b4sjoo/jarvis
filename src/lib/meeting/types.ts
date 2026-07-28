@@ -1431,6 +1431,7 @@ export type ObservedAdvisorAction =
 export type AdvisorIntentEvaluationFailureReason =
   | "advisor-false-positive"
   | "advisor-false-negative"
+  | "advisor-execution-failure"
   | "wrong-output-authority"
   | "wrong-context-composition";
 
@@ -1468,10 +1469,12 @@ export interface AdvisorIntentHumanEvaluation {
 
 export type ForceAdviseTargetStatus =
   | "ready"
+  | "advising"
   | "already-advised"
   | "repairing"
   | "repaired"
-  | "failed";
+  | "failed"
+  | "stale";
 
 export interface ForceAdviseTargetPresentation {
   originalTraceId: string;

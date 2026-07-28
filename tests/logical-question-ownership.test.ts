@@ -51,7 +51,7 @@ test("source ownership is immutable even when id and revision match", () => {
   assert.deepEqual(lease.sourceTurnIds, ["turn_1", "turn_2"]);
 });
 
-test("materializes suppressed substantive turns without advising short filler", () => {
+test("materializes every non-filler turn as a recoverable logical question", () => {
   assert.deepEqual(
     decideLogicalQuestionMaterialization({
       action: "answer-refresh",
@@ -66,7 +66,7 @@ test("materializes suppressed substantive turns without advising short filler", 
     }),
     {
       materialize: true,
-      reason: "substantive-suppressed-or-context-turn",
+      reason: "substantive-non-filler-turn",
     }
   );
   assert.deepEqual(
@@ -74,7 +74,15 @@ test("materializes suppressed substantive turns without advising short filler", 
       action: "ignore",
       wordEquivalent: 2,
     }),
-    { materialize: false, reason: "non-substantive-turn" }
+    { materialize: true, reason: "substantive-non-filler-turn" }
+  );
+  assert.deepEqual(
+    decideLogicalQuestionMaterialization({
+      action: "ignore",
+      wordEquivalent: 4,
+      exactHighFiller: true,
+    }),
+    { materialize: false, reason: "exact-high-filler" }
   );
 });
 

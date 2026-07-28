@@ -281,6 +281,9 @@ import {
   createCanonicalLogicalQuestionLineage,
   createLogicalQuestionUnitLease,
   decideLogicalQuestionMaterialization,
+  decideForceAdviseEligibility,
+  classifyForceAdviseRepairCause,
+  forceAdviseStatusAfterAdvisorOutcome,
   formatLogicalQuestionLeaseForTrace,
   formatPrimaryAskProjectionForTrace,
   primaryAskClassifierText,
@@ -301,6 +304,7 @@ import {
   formatLogicalQuestionUnitForTrace,
   inferCanonicalQuestionTypeFromText,
   inferQuestionTypeDecisionFromText,
+  isExactLowValueAcknowledgement,
   isParentCanonicalQuestionType,
   normalizeCanonicalQuestionType,
   mergeSentenceFragments,
@@ -2731,6 +2735,75 @@ export function useMeetingAssistant() {
     []
   );
 
+  const updateForceAdviseTargetForAdvisorOutcome = useCallback(
+    ({
+      advisorJob,
+      status,
+      outcome,
+    }: {
+      advisorJob: AdvisorTriggerJob;
+      status: ForceAdviseTargetPresentation["status"];
+      outcome: string;
+    }) => {
+      if (advisorJob.source === "force-advise") return;
+      const jobLogicalQuestion = advisorJob.logicalQuestionUnit;
+      const currentTarget = latestForceAdviseTargetRef.current;
+      if (
+        !jobLogicalQuestion ||
+        !currentTarget ||
+        currentTarget.logicalQuestionUnit.id !== jobLogicalQuestion.id ||
+        currentTarget.logicalQuestionUnit.revision !==
+          jobLogicalQuestion.revision
+      ) {
+        return;
+      }
+
+      const presentation: ForceAdviseTargetPresentation = {
+        ...currentTarget.presentation,
+        status,
+        updatedAt: Date.now(),
+      };
+      const eligibility = decideForceAdviseEligibility(presentation);
+      latestForceAdviseTargetRef.current = {
+        ...currentTarget,
+        presentation,
+      };
+      setState((previous) => {
+        const visibleTarget = previous.latestInterviewerTurnCandidate;
+        if (
+          visibleTarget?.logicalQuestionUnitId !==
+            presentation.logicalQuestionUnitId ||
+          visibleTarget.logicalQuestionUnitRevision !==
+            presentation.logicalQuestionUnitRevision
+        ) {
+          return previous;
+        }
+        return {
+          ...previous,
+          latestInterviewerTurnCandidate: presentation,
+        };
+      });
+      const metadata = {
+        forceAdviseTargetStatus: presentation.status,
+        forceAdviseEligible: eligibility.eligible,
+        forceAdviseRetryable: eligibility.retryable,
+        forceAdviseEligibilityReason: eligibility.reason,
+        forceAdviseAdvisorOutcome: outcome,
+      };
+      traceStoreRef.current.updateMetadata(
+        currentTarget.presentation.originalTraceId,
+        metadata
+      );
+      if (
+        advisorJob.traceId &&
+        advisorJob.traceId !== currentTarget.presentation.originalTraceId
+      ) {
+        traceStoreRef.current.updateMetadata(advisorJob.traceId, metadata);
+      }
+    },
+    []
+  );
+
   const cancelActiveAdvisorJob = useCallback(
     (
       reason: string,
@@ -2754,6 +2827,11 @@ export function useMeetingAssistant() {
       const resolvedOutcome = hadPendingTimer
         ? "replaced-before-execution"
         : outcome;
+      updateForceAdviseTargetForAdvisorOutcome({
+        advisorJob: job,
+        status: "failed",
+        outcome: `${resolvedOutcome}:${reason}`,
+      });
       if (
         job.triggerTurnId &&
         (resolvedOutcome === "replaced-before-execution" ||
@@ -2787,7 +2865,10 @@ export function useMeetingAssistant() {
         reason
       );
     },
-    [finishRunningAdvisorJobTrace]
+    [
+      finishRunningAdvisorJobTrace,
+      updateForceAdviseTargetForAdvisorOutcome,
+    ]
   );
 
   const activateAdvisorJob = useCallback(
@@ -2799,6 +2880,11 @@ export function useMeetingAssistant() {
         );
       }
       activeAdvisorJobRef.current = job;
+      updateForceAdviseTargetForAdvisorOutcome({
+        advisorJob: job,
+        status: "advising",
+        outcome: "advisor-scheduled",
+      });
       if (job.traceId) {
         traceStoreRef.current.updateMetadata(
           job.traceId,
@@ -2806,7 +2892,10 @@ export function useMeetingAssistant() {
         );
       }
     },
-    [cancelActiveAdvisorJob]
+    [
+      cancelActiveAdvisorJob,
+      updateForceAdviseTargetForAdvisorOutcome,
+    ]
   );
 
   const releaseAdvisorJob = useCallback(
@@ -5172,6 +5261,13 @@ export function useMeetingAssistant() {
         );
       }
       if (!decision.authorized) {
+        if (activeAdvisorJobRef.current?.id === advisorJob.id) {
+          updateForceAdviseTargetForAdvisorOutcome({
+            advisorJob,
+            status: "failed",
+            outcome: `stale-commit:${decision.reason}`,
+          });
+        }
         finishRunningAdvisorJobTrace(
           advisorJob,
           "cancelled",
@@ -5206,6 +5302,13 @@ export function useMeetingAssistant() {
           );
         }
         if (!logicalQuestionAuthorization.authorized) {
+          if (activeAdvisorJobRef.current?.id === advisorJob.id) {
+            updateForceAdviseTargetForAdvisorOutcome({
+              advisorJob,
+              status: "failed",
+              outcome: `stale-logical-question:${logicalQuestionAuthorization.reason}`,
+            });
+          }
           finishRunningAdvisorJobTrace(
             advisorJob,
             "cancelled",
@@ -5267,6 +5370,13 @@ export function useMeetingAssistant() {
       }
       if (planAuthorization.authorized) return false;
 
+      if (activeAdvisorJobRef.current?.id === advisorJob.id) {
+        updateForceAdviseTargetForAdvisorOutcome({
+          advisorJob,
+          status: "failed",
+          outcome: `stale-settled-plan:${planAuthorization.reason}`,
+        });
+      }
       finishRunningAdvisorJobTrace(
         advisorJob,
         "cancelled",
@@ -5306,6 +5416,11 @@ export function useMeetingAssistant() {
     if (rejectStaleCommit("pre-execution")) return;
 
     if (!activeRef.current && !force) {
+      updateForceAdviseTargetForAdvisorOutcome({
+        advisorJob,
+        status: "failed",
+        outcome: "meeting-assistant-inactive",
+      });
       releaseAdvisorJob(advisorJob, "suppressed", {
         commitAuthorized: false,
         commitAuthorizationReason: "meeting-assistant-inactive",
@@ -5326,6 +5441,11 @@ export function useMeetingAssistant() {
     );
 
     if (force && !hasContext && !options.currentSuggestion?.trim()) {
+      updateForceAdviseTargetForAdvisorOutcome({
+        advisorJob,
+        status: "failed",
+        outcome: "missing-meeting-context",
+      });
       releaseAdvisorJob(advisorJob, "error", {
         commitAuthorized: false,
         commitAuthorizationReason: "missing-meeting-context",
@@ -6061,6 +6181,11 @@ export function useMeetingAssistant() {
 
     if (!executionAuthorization.authorized) {
       recordCurrentQuestionSettlement();
+      updateForceAdviseTargetForAdvisorOutcome({
+        advisorJob,
+        status: "failed",
+        outcome: `execution-suppressed:${executionAuthorization.reason}`,
+      });
       releaseAdvisorJob(advisorJob, "suppressed", {
         commitAuthorized: false,
         commitAuthorizationReason: executionAuthorization.reason,
@@ -6081,6 +6206,11 @@ export function useMeetingAssistant() {
       !advisorEngineRef.current.shouldRequestSuggestion(latestTurn)
     ) {
       recordCurrentQuestionSettlement();
+      updateForceAdviseTargetForAdvisorOutcome({
+        advisorJob,
+        status: "failed",
+        outcome: "turn-did-not-require-suggestion",
+      });
       releaseAdvisorJob(advisorJob, "suppressed", {
         commitAuthorized: false,
         commitAuthorizationReason: "turn-did-not-require-suggestion",
@@ -6743,6 +6873,11 @@ export function useMeetingAssistant() {
     }
 
     if (!advisorModelRoute.provider) {
+      updateForceAdviseTargetForAdvisorOutcome({
+        advisorJob,
+        status: "failed",
+        outcome: "missing-ai-provider",
+      });
       const boundaryErrorMetadata = formatTaskBoundaryCandidateForTrace(
         taskBoundaryCandidate,
         {
@@ -6784,6 +6919,11 @@ export function useMeetingAssistant() {
       }));
       return;
     }
+    updateForceAdviseTargetForAdvisorOutcome({
+      advisorJob,
+      status: "advising",
+      outcome: "advisor-execution-started",
+    });
     if (traceId) {
       const playbookMetadata =
         formatInterviewPlaybookForTrace(advisorRuntimePlaybook);
@@ -7230,6 +7370,11 @@ export function useMeetingAssistant() {
       }
 
       if (!outputCommitAuthorization.authorized) {
+        updateForceAdviseTargetForAdvisorOutcome({
+          advisorJob,
+          status: "failed",
+          outcome: `output-suppressed:${outputCommitAuthorization.reason}`,
+        });
         const outputSuppressedMetadata = {
           advisorOutputDisposition: "output-commit-not-authorized",
           advisorOutputCommittedToUi: false,
@@ -7779,12 +7924,25 @@ export function useMeetingAssistant() {
           parent: contextState.activeInterviewTask,
         });
       }
+      const committedVisibleAnswer =
+        nextSuggestion.kind !== "silent" &&
+        nextSuggestion.content.trim().length > 0;
+      updateForceAdviseTargetForAdvisorOutcome({
+        advisorJob,
+        status: forceAdviseStatusAfterAdvisorOutcome({
+          committedVisibleAnswer,
+        }),
+        outcome: committedVisibleAnswer
+          ? "visible-answer-committed"
+          : "empty-or-silent-answer",
+      });
       const outputCommitMetadata = {
-        advisorOutputDisposition:
-          inferredTurnIntentDecision?.enforcement === "shadow"
+        advisorOutputDisposition: committedVisibleAnswer
+          ? inferredTurnIntentDecision?.enforcement === "shadow"
             ? "shadow-visible"
-            : "committed",
-        advisorOutputCommittedToUi: true,
+            : "committed"
+          : "empty-or-silent",
+        advisorOutputCommittedToUi: committedVisibleAnswer,
         visibleAnswerChanged:
           nextSuggestion.kind !== "silent" &&
           nextSuggestion.content.trim() !==
@@ -7814,6 +7972,13 @@ export function useMeetingAssistant() {
     } catch (error) {
       if (error instanceof Error && error.name === "AbortError") {
         const commitDecision = readCommitDecision();
+        if (activeAdvisorJobRef.current?.id === advisorJob.id) {
+          updateForceAdviseTargetForAdvisorOutcome({
+            advisorJob,
+            status: "failed",
+            outcome: "provider-request-aborted",
+          });
+        }
         const boundaryErrorMetadata = formatTaskBoundaryCandidateForTrace(
           taskBoundaryCandidate,
           {
@@ -7866,6 +8031,13 @@ export function useMeetingAssistant() {
       }
 
       const commitDecision = readCommitDecision();
+      if (activeAdvisorJobRef.current?.id === advisorJob.id) {
+        updateForceAdviseTargetForAdvisorOutcome({
+          advisorJob,
+          status: "failed",
+          outcome: "advisor-execution-error",
+        });
+      }
       const boundaryErrorMetadata = formatTaskBoundaryCandidateForTrace(
         taskBoundaryCandidate,
         {
@@ -7934,6 +8106,7 @@ export function useMeetingAssistant() {
     selectedAIProvider,
     state.settings,
     state.status,
+    updateForceAdviseTargetForAdvisorOutcome,
   ]);
 
   const scheduleAdvisor = useCallback((
@@ -9970,10 +10143,11 @@ export function useMeetingAssistant() {
         logicalQuestionUnitRevision: logicalQuestionUnit.revision,
         sourceTurnIds: [...logicalQuestionUnit.sourceTurnIds],
         status: intentDecision.executionAuthorized
-          ? "already-advised"
+          ? "advising"
           : "ready",
         updatedAt: Date.now(),
       };
+      const eligibility = decideForceAdviseEligibility(presentation);
       const target: ForceAdviseRuntimeTarget = {
         presentation,
         turn: { ...turn },
@@ -9993,7 +10167,9 @@ export function useMeetingAssistant() {
         ...formatQuestionLineageForTrace(questionLineage),
         canonicalLogicalQuestionTargetPublished: true,
         forceAdviseTargetStatus: presentation.status,
-        forceAdviseEligible: !intentDecision.executionAuthorized,
+        forceAdviseEligible: eligibility.eligible,
+        forceAdviseRetryable: eligibility.retryable,
+        forceAdviseEligibilityReason: eligibility.reason,
       });
       return target;
     },
@@ -11221,6 +11397,7 @@ export function useMeetingAssistant() {
           decideLogicalQuestionMaterialization({
             action: turnGate.action,
             wordEquivalent,
+            exactHighFiller: isExactLowValueAcknowledgement(turn.text),
           });
         traceStoreRef.current.updateMetadata(traceId, {
           canonicalLogicalQuestionMaterialized:
@@ -15344,6 +15521,19 @@ export function useMeetingAssistant() {
       }));
       return;
     }
+    const eligibility = decideForceAdviseEligibility(target.presentation);
+    traceStoreRef.current.updateMetadata(
+      target.presentation.originalTraceId,
+      {
+        forceAdviseEligible: eligibility.eligible,
+        forceAdviseRetryable: eligibility.retryable,
+        forceAdviseEligibilityReason: eligibility.reason,
+        forceAdviseClickObservedAt: Date.now(),
+      }
+    );
+    if (!eligibility.eligible) {
+      return;
+    }
     const ownershipAuthorization = authorizeLogicalQuestionUnitLease(
       target.logicalQuestionLease,
       logicalQuestionUnitRef.current
@@ -15364,7 +15554,7 @@ export function useMeetingAssistant() {
     if (!ownershipAuthorization.authorized) {
       const failedPresentation: ForceAdviseTargetPresentation = {
         ...target.presentation,
-        status: "failed",
+        status: "stale",
         updatedAt: Date.now(),
       };
       latestForceAdviseTargetRef.current = {
@@ -15379,14 +15569,6 @@ export function useMeetingAssistant() {
       }));
       return;
     }
-    if (
-      target.presentation.executionAuthorized ||
-      target.presentation.status === "already-advised" ||
-      target.presentation.status === "repairing" ||
-      target.presentation.status === "repaired"
-    ) {
-      return;
-    }
 
     const repairTrace = traceStoreRef.current.startTrace("voice", {
       source: "manual-force-advise",
@@ -15396,6 +15578,9 @@ export function useMeetingAssistant() {
       logicalQuestionUnitRevision: target.logicalQuestionUnit.revision,
       logicalQuestionSourceTurnIds: target.logicalQuestionUnit.sourceTurnIds,
       manualAuthority: "force-advise",
+      forceAdviseRepairCause: classifyForceAdviseRepairCause(
+        target.presentation
+      ),
       ...formatLogicalQuestionLeaseForTrace(
         target.logicalQuestionLease,
         ownershipAuthorization,
@@ -15424,6 +15609,9 @@ export function useMeetingAssistant() {
         forceAdviseAccepted: true,
         forceAdviseRepairTraceId: repairTrace.id,
         forceAdviseAcceptedAt: requestedAt,
+        forceAdviseRepairCause: classifyForceAdviseRepairCause(
+          target.presentation
+        ),
       }
     );
     traceStoreRef.current.updateMetadata(repairTrace.id, {
@@ -15433,11 +15621,19 @@ export function useMeetingAssistant() {
       forceAdviseOriginalObservedAction: target.presentation.observedAction,
       forceAdviseOriginalExecutionAuthorized:
         target.presentation.executionAuthorized,
+      forceAdviseRepairCause: classifyForceAdviseRepairCause(
+        target.presentation
+      ),
     });
-    updateTraceHumanEvaluation(target.presentation.originalTraceId, {
-      advisorGateCorrectlySkipped: false,
-      advisorGateShouldAdvise: true,
-    });
+    const repairCause = classifyForceAdviseRepairCause(
+      target.presentation
+    );
+    if (repairCause === "intent-false-negative") {
+      updateTraceHumanEvaluation(target.presentation.originalTraceId, {
+        advisorGateCorrectlySkipped: false,
+        advisorGateShouldAdvise: true,
+      });
+    }
     updateQuestionHumanEvaluation(target.presentation.originalTraceId, {
       questionId: target.questionLineage.questionInstanceId,
       traceIds: [
@@ -15448,8 +15644,14 @@ export function useMeetingAssistant() {
         schemaVersion: 1,
         verdict: "false-negative",
         expectedAction: "advise",
-        observedAction: target.presentation.observedAction,
-        failureReason: "advisor-false-negative",
+        observedAction:
+          repairCause === "advisor-execution-failure"
+            ? "suppressed"
+            : target.presentation.observedAction,
+        failureReason:
+          repairCause === "advisor-execution-failure"
+            ? "advisor-execution-failure"
+            : "advisor-false-negative",
         source: "manual-force-advise",
         originalTraceId: target.presentation.originalTraceId,
         logicalQuestionUnitId: target.logicalQuestionUnit.id,

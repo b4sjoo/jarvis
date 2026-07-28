@@ -30,6 +30,7 @@ export * from "./display-transcript";
 export * from "./eval-trace-metadata";
 export * from "./fact-anchor-guardrail";
 export * from "./fact-anchor-output-guardrail";
+export * from "./force-advise";
 export * from "./focus-window";
 export * from "./human-evaluation";
 export * from "./interview-playbook";

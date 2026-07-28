@@ -396,7 +396,7 @@ test("records whiteboard validation and recovery artifacts", async () => {
   );
   assert.ok(summaryWrite);
   const summary = parsePayload(summaryWrite);
-  assert.equal(summary.version, 26);
+  assert.equal(summary.version, 27);
   assert.deepEqual(summary.whiteboard, {
     artifactId: "whiteboard_1",
     revision: 1,
@@ -978,6 +978,10 @@ test("compact trace summaries preserve task boundary and cross-domain evidence",
       logicalQuestionLeaseAuthorizationStage: "final-commit",
       forceAdviseTargetStatus: "already-advised",
       forceAdviseEligible: false,
+      forceAdviseRetryable: false,
+      forceAdviseEligibilityReason: "advisor-committed",
+      forceAdviseRepairCause: "intent-false-negative",
+      forceAdviseAdvisorOutcome: "visible-answer-committed",
       manualCorrectionOwnership: "canonical-logical-question",
       taskRelation: "new-parent",
       advisorPromptIncludedLogicalQuestion: true,
@@ -1029,7 +1033,7 @@ test("compact trace summaries preserve task boundary and cross-domain evidence",
   );
   assert.ok(summaryWrite);
   const summary = parsePayload(summaryWrite);
-  assert.equal(summary.version, 26);
+  assert.equal(summary.version, 27);
   assert.equal(summary.taskRelation, "new-parent");
   assert.equal(summary.logicalQuestionUnitRevision, 3);
   assert.deepEqual(summary.logicalQuestionSourceTurnIds, ["turn_1", "turn_2"]);
@@ -1040,6 +1044,13 @@ test("compact trace summaries preserve task boundary and cross-domain evidence",
   assert.equal(summary.advisorPromptIncludedLogicalQuestion, true);
   assert.equal(summary.advisorOutputCommittedToUi, true);
   assert.equal(summary.visibleAnswerChanged, true);
+  assert.equal(summary.forceAdviseRetryable, false);
+  assert.equal(summary.forceAdviseEligibilityReason, "advisor-committed");
+  assert.equal(summary.forceAdviseRepairCause, "intent-false-negative");
+  assert.equal(
+    summary.forceAdviseAdvisorOutcome,
+    "visible-answer-committed"
+  );
   assert.equal(summary.logicalQuestionLeaseAuthorized, true);
   assert.equal(summary.primaryAskSpeechAct, "question");
   assert.equal(summary.primaryAskDisposition, "answer-primary-ask");
@@ -1198,7 +1209,7 @@ test("compact trace summaries preserve bounded STT request evidence", async () =
   );
   assert.ok(summaryWrite);
   const summary = parsePayload(summaryWrite);
-  assert.equal(summary.version, 26);
+  assert.equal(summary.version, 27);
   assert.equal(
     (summary.timingsMs as Record<string, unknown>).stt,
     1_580
@@ -1340,7 +1351,7 @@ test("refreshes compact STT lifecycle evidence after a late provider abort", asy
   );
   assert.ok(summaryWrites.length >= 2);
   const summary = parsePayload(summaryWrites[summaryWrites.length - 1]!);
-  assert.equal(summary.version, 26);
+  assert.equal(summary.version, 27);
   assert.equal(
     (summary.sttRequest as Record<string, unknown>).abortRequested,
     true
@@ -1405,7 +1416,7 @@ test("compact trace summaries preserve hard memory invalidation evidence", async
   );
   assert.ok(summaryWrite);
   const summary = parsePayload(summaryWrite);
-  assert.equal(summary.version, 26);
+  assert.equal(summary.version, 27);
   const memory = summary.memory as Record<string, unknown>;
   assert.equal(memory.authorityRevision, 2);
   assert.equal(memory.invalidationKind, "hard");
@@ -1637,7 +1648,7 @@ test("records compact current-question settlement and execution-plan evidence", 
   assert.equal(serializedPlan.includes("taskSnapshot"), false);
   assert.equal(serializedPlan.includes("variables"), false);
   const summary = parsePayload(summaryWrite);
-  assert.equal(summary.version, 26);
+  assert.equal(summary.version, 27);
   assert.equal(
     (
       summary.currentQuestionSettlement as Record<string, unknown>
@@ -1733,7 +1744,7 @@ test("records a current-question term correction without copying provider state"
     false
   );
   const summary = parsePayload(summaryWrite);
-  assert.equal(summary.version, 26);
+  assert.equal(summary.version, 27);
   assert.equal(
     summary.manualTermCorrectionId,
     "term_correction_hnsw"

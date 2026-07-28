@@ -72,6 +72,7 @@ import {
   getActiveMeetingTaskId,
   buildMeetingAnswerDisplayModel,
   buildAdvisorIntentEvaluationFromTrace,
+  decideForceAdviseEligibility,
   guardAsyncUnlisten,
   normalizeCanonicalQuestionType,
   overlayMeetingAnswerArtifacts,
@@ -413,8 +414,13 @@ export const MeetingAssistant = ({
   const transcriptHistory =
     meeting.displayTranscriptWindow?.history ?? [];
   const forceAdviseStatus = meeting.latestInterviewerTurnCandidate?.status;
-  const forceAdviseAvailable = forceAdviseStatus === "ready";
-  const forceAdvisePending = forceAdviseStatus === "repairing";
+  const forceAdviseEligibility = decideForceAdviseEligibility(
+    meeting.latestInterviewerTurnCandidate
+  );
+  const forceAdviseAvailable = forceAdviseEligibility.eligible;
+  const forceAdvisePending =
+    forceAdviseStatus === "advising" ||
+    forceAdviseStatus === "repairing";
   const forceAdviseCompleted =
     forceAdviseStatus === "repaired" ||
     forceAdviseStatus === "already-advised";

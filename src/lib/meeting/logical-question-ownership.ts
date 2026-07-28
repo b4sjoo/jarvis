@@ -30,8 +30,9 @@ export interface LogicalQuestionMaterializationDecision {
   materialize: boolean;
   reason:
     | "answer-refresh"
-    | "substantive-suppressed-or-context-turn"
-    | "non-substantive-turn";
+    | "substantive-non-filler-turn"
+    | "exact-high-filler"
+    | "empty-or-punctuation-only-turn";
 }
 
 export function createLogicalQuestionUnitLease(
@@ -93,20 +94,28 @@ export function authorizeLogicalQuestionUnitLease(
 export function decideLogicalQuestionMaterialization({
   action,
   wordEquivalent,
+  exactHighFiller = false,
 }: {
   action: AdvisorTurnGateAction;
   wordEquivalent: number;
+  exactHighFiller?: boolean;
 }): LogicalQuestionMaterializationDecision {
+  if (exactHighFiller) {
+    return { materialize: false, reason: "exact-high-filler" };
+  }
   if (action === "answer-refresh") {
     return { materialize: true, reason: "answer-refresh" };
   }
-  if (wordEquivalent >= 3) {
+  if (wordEquivalent >= 1) {
     return {
       materialize: true,
-      reason: "substantive-suppressed-or-context-turn",
+      reason: "substantive-non-filler-turn",
     };
   }
-  return { materialize: false, reason: "non-substantive-turn" };
+  return {
+    materialize: false,
+    reason: "empty-or-punctuation-only-turn",
+  };
 }
 
 export function createCanonicalLogicalQuestionLineage({
