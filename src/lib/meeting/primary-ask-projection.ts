@@ -46,6 +46,20 @@ export interface ProjectPrimaryAskInput {
   text: string;
 }
 
+export interface ShortConfirmationAdmissionDecision {
+  disposition:
+    | "not-short-confirmation"
+    | "hold-confirmation"
+    | "admit-primary-ask"
+    | "admit-constraint-or-correction";
+  reason:
+    | "not-short-confirmation"
+    | "short-confirmation-without-authoritative-ask"
+    | "authoritative-primary-ask"
+    | "constraint-or-correction-signal";
+  primaryAskOverride: boolean;
+}
+
 export function projectPrimaryAsk({
   turnId,
   text,
@@ -247,6 +261,56 @@ export function primaryAskClassifierText(
   fallback: string
 ) {
   return projection.normalizedPrimaryAsk ?? fallback;
+}
+
+export function decideShortConfirmationAdmission(input: {
+  shortConfirmationDetected: boolean;
+  hasConstraintOrCorrectionSignal: boolean;
+  primaryAskProjection: PrimaryAskProjection;
+}): ShortConfirmationAdmissionDecision {
+  if (!input.shortConfirmationDetected) {
+    return {
+      disposition: "not-short-confirmation",
+      reason: "not-short-confirmation",
+      primaryAskOverride: false,
+    };
+  }
+
+  if (input.hasConstraintOrCorrectionSignal) {
+    return {
+      disposition: "admit-constraint-or-correction",
+      reason: "constraint-or-correction-signal",
+      primaryAskOverride: false,
+    };
+  }
+
+  const projection = input.primaryAskProjection;
+  const projectedAskWordCount =
+    projection.normalizedPrimaryAsk
+      ?.match(/[\p{L}\p{N}_+#.-]+/gu)
+      ?.filter(Boolean).length ?? 0;
+  const hasAuthoritativePrimaryAsk =
+    projection.disposition === "answer-primary-ask" &&
+    Boolean(projection.normalizedPrimaryAsk) &&
+    projectedAskWordCount >= 2 &&
+    projection.primaryAskSpans.length > 0 &&
+    (projection.speechAct === "question" ||
+      projection.speechAct === "directive") &&
+    projection.confidence >= 0.9;
+
+  if (hasAuthoritativePrimaryAsk) {
+    return {
+      disposition: "admit-primary-ask",
+      reason: "authoritative-primary-ask",
+      primaryAskOverride: true,
+    };
+  }
+
+  return {
+    disposition: "hold-confirmation",
+    reason: "short-confirmation-without-authoritative-ask",
+    primaryAskOverride: false,
+  };
 }
 
 export function reconcilePrimaryAskTurnDecision(

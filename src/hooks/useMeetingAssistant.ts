@@ -308,6 +308,7 @@ import {
   formatPrimaryAskProjectionForTrace,
   primaryAskClassifierText,
   projectPrimaryAsk,
+  decideShortConfirmationAdmission,
   reconcilePrimaryAskTurnDecision,
   composeContextScopeAdvisorPromptContext,
   evaluateAnswerContextResolvabilityShadow,
@@ -12355,6 +12356,16 @@ export function useMeetingAssistant() {
           primaryAskProjection,
           turn.text
         );
+        const shortConfirmationDetected = isShortConfirmationLike(turn.text);
+        const hasExplicitConstraintOrCorrection =
+          hasConstraintOrCorrectionSignal(turn.text);
+        const shortConfirmationAdmission =
+          decideShortConfirmationAdmission({
+            shortConfirmationDetected,
+            hasConstraintOrCorrectionSignal:
+              hasExplicitConstraintOrCorrection,
+            primaryAskProjection,
+          });
         const classifiedTransitionTurn = classifyInterviewTransitionTurn(
           turn.text
         );
@@ -12395,6 +12406,13 @@ export function useMeetingAssistant() {
             pendingInterviewSectionHintRef.current?.expiresAt,
           sectionHintDisposition:
             pendingInterviewSectionHintRef.current?.disposition,
+          shortConfirmationDetected,
+          shortConfirmationDisposition:
+            shortConfirmationAdmission.disposition,
+          shortConfirmationDispositionReason:
+            shortConfirmationAdmission.reason,
+          shortConfirmationPrimaryAskOverride:
+            shortConfirmationAdmission.primaryAskOverride,
         });
 
         if (transitionTurnDecision.disposition === "hint-only") {
@@ -12432,10 +12450,10 @@ export function useMeetingAssistant() {
 
         const previousTurns = contextManagerRef.current.getState()
           .transcriptTurns;
-        const clarificationMatch = findRecentMeClarificationForTurn(
-          turn,
-          previousTurns
-        );
+        const clarificationMatch =
+          shortConfirmationAdmission.disposition === "admit-primary-ask"
+            ? null
+            : findRecentMeClarificationForTurn(turn, previousTurns);
         if (clarificationMatch) {
           const turnIntentDecision = decideAdvisorTurnIntent(turn.text, {
             hasActiveTask: hasActiveInterviewTask,
@@ -12525,8 +12543,7 @@ export function useMeetingAssistant() {
         }
 
         if (
-          isShortConfirmationLike(turn.text) &&
-          !hasConstraintOrCorrectionSignal(turn.text)
+          shortConfirmationAdmission.disposition === "hold-confirmation"
         ) {
           traceStoreRef.current.updateMetadata(traceId, {
             turnGateAction: "ignore",

@@ -2,10 +2,12 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   composePrimaryAskProjection,
+  decideShortConfirmationAdmission,
   isPrimaryAskCompletion,
   projectPrimaryAsk,
   reconcilePrimaryAskTurnDecision,
 } from "../src/lib/meeting/primary-ask-projection.js";
+import { isShortConfirmationLike } from "../src/lib/meeting/transcript-fusion.js";
 import { decideAdvisorTurnIntent } from "../src/lib/meeting/advisor-turn-intent.js";
 
 test("selects the terminal current ask after recruiter setup and quoted examples", () => {
@@ -102,6 +104,49 @@ test("keeps a long direct technical ask on the immediate answer path", () => {
   assert.equal(result.speechAct, "directive");
   assert.match(result.normalizedPrimaryAsk ?? "", /ticket selling system/);
   assert.equal(result.quotedOrFutureExampleSpans.length, 0);
+});
+
+test("authoritative short directives override the confirmation heuristic", () => {
+  for (const [index, text] of [
+    "Design a URL shortener.",
+    "Design an LRU cache.",
+    "Design a stack.",
+  ].entries()) {
+    const projection = projectPrimaryAsk({
+      turnId: `turn_short_directive_${index}`,
+      text,
+    });
+    const decision = decideShortConfirmationAdmission({
+      shortConfirmationDetected: isShortConfirmationLike(text),
+      hasConstraintOrCorrectionSignal: false,
+      primaryAskProjection: projection,
+    });
+
+    assert.equal(projection.disposition, "answer-primary-ask", text);
+    assert.equal(decision.disposition, "admit-primary-ask", text);
+    assert.equal(decision.primaryAskOverride, true, text);
+  }
+});
+
+test("keeps genuine short confirmations on the pending path", () => {
+  for (const [index, text] of [
+    "Design.",
+    "The first option.",
+    "Yes.",
+  ].entries()) {
+    const projection = projectPrimaryAsk({
+      turnId: `turn_short_confirmation_${index}`,
+      text,
+    });
+    const decision = decideShortConfirmationAdmission({
+      shortConfirmationDetected: isShortConfirmationLike(text),
+      hasConstraintOrCorrectionSignal: false,
+      primaryAskProjection: projection,
+    });
+
+    assert.equal(decision.disposition, "hold-confirmation", text);
+    assert.equal(decision.primaryAskOverride, false, text);
+  }
 });
 
 test("preserves the action-object pair in section-style directives", () => {
