@@ -246,9 +246,11 @@ import {
   TASK_RELATION_ADJUDICATION_MAX_OUTPUT_CHARS,
   buildTaskRelationAdjudicationPrompts,
   buildTaskRelationAdjudicationRequest,
+  compareTaskRelationAdjudication,
   createTaskRelationSettlementProposal,
   decideTaskRelationAdjudicationEligibility,
   formatTaskRelationAdjudicationForTrace,
+  isRuntimeTaskRelation,
   normalizeTaskRelationAdjudicationMode,
   requestTaskRelationAdjudication,
   updateWhiteboardArtifactFromAnswer,
@@ -9546,6 +9548,14 @@ export function useMeetingAssistant() {
         activeParentAuthority?.disposition === "authorized" &&
           activeParentAuthority.relationEvidenceAuthorized
       );
+      const localRelation =
+        activeParentAuthority?.relation ?? "unknown";
+      const deterministicRelation =
+        deterministicRelationAuthorized &&
+        isRuntimeTaskRelation(localRelation) &&
+        localRelation !== "unknown"
+          ? localRelation
+          : undefined;
       const evaluationActive =
         debugModeRef.current ||
         Boolean(
@@ -9561,15 +9571,18 @@ export function useMeetingAssistant() {
             manualCorrectionOperationCoordinatorRef.current.getActiveOperationId()
           ),
           deterministicRelationAuthorized,
+          deterministicRelation,
           turnGateAction,
         });
+      const adjudicationReason =
+        eligibility.auditKind === "deterministic-comparison"
+          ? "deterministic-relation-shadow-audit"
+          : "unresolved-task-relation";
       const circuit = taskRelationAdjudicationCircuitRef.current.read(
         "task-relation-adjudication",
         contextState.sessionId
       );
       const scheduledTaskId = activeMeetingTask.id;
-      const localRelation =
-        activeParentAuthority?.relation ?? "unknown";
       const baseMetadata: Record<string, unknown> = {
         ...formatRuntimeInferenceOperationForTrace(
           "task-relation-adjudication"
@@ -9584,16 +9597,27 @@ export function useMeetingAssistant() {
         }),
         ...formatRuntimeInferenceCircuitForTrace(circuit),
         taskRelationAdjudicationLocalRelation: localRelation,
+        taskRelationAdjudicationDeterministicRelation:
+          deterministicRelation,
         taskRelationAdjudicationLocalProposal:
           activeParentAuthority?.proposedRelation,
         taskRelationAdjudicationLocalAuthorityReason:
           activeParentAuthority?.reason,
+        taskRelationAdjudicationLocalEvidenceSpans:
+          activeParentAuthority?.evidenceSpans,
         taskRelationAdjudicationDeterministicAuthority:
           deterministicRelationAuthorized,
+        taskRelationAdjudicationComparisonExpected:
+          eligibility.auditKind === "deterministic-comparison",
+        taskRelationAdjudicationShadowAuditRequested:
+          eligibility.auditKind === "deterministic-comparison",
+        taskRelationAdjudicationShadowAuditSettled: false,
         taskRelationAdjudicationEvaluationActive:
           evaluationActive,
         taskRelationAdjudicationConfiguredMode:
           configuredMode,
+        taskRelationAdjudicationScheduleReason:
+          adjudicationReason,
         taskRelationAdjudicationBehaviorMutationBlocked: true,
         taskRelationAdjudicationAppliedToRuntime: false,
       };
@@ -9631,7 +9655,7 @@ export function useMeetingAssistant() {
         resolveRuntimeInferenceModelRouteFromSnapshot({
           snapshot: meetingModelProviderSnapshotRef.current,
           operationKind: "task-relation-adjudication",
-          reason: "unresolved-task-relation",
+          reason: adjudicationReason,
         });
       const routeMetadata =
         formatRuntimeInferenceModelRouteForTrace(modelRoute);
@@ -9766,7 +9790,7 @@ export function useMeetingAssistant() {
           sessionId: contextState.sessionId,
           budgetKey: `${logicalQuestionUnit.id}:${logicalQuestionUnit.revision}`,
           budgetSlot: "relation",
-          budgetReason: "unresolved-task-relation",
+          budgetReason: adjudicationReason,
           traceId,
           lease,
           request,
@@ -9846,6 +9870,10 @@ export function useMeetingAssistant() {
           const parsedValue = parsed?.ok
             ? parsed.value
             : undefined;
+          const comparison = compareTaskRelationAdjudication({
+            deterministicRelation,
+            candidateRelation: parsedValue?.relation,
+          });
           const providerDisposition =
             result?.providerDisposition ??
             (runtimeSettlement.disposition === "error"
@@ -9970,10 +9998,30 @@ export function useMeetingAssistant() {
                 ? undefined
                 : authorization.reason,
             taskRelationAdjudicationWouldRepair:
-              Boolean(
-                parsedValue &&
-                  parsedValue.relation !== localRelation
-              ),
+              eligibility.auditKind === "deterministic-comparison"
+                ? comparison.disagreement === true
+                : Boolean(
+                    parsedValue &&
+                      parsedValue.relation !== localRelation
+                  ),
+            taskRelationAdjudicationComparisonEligible:
+              comparison.eligible,
+            taskRelationAdjudicationComparisonOutcome:
+              comparison.outcome,
+            taskRelationAdjudicationAgreement:
+              comparison.agreement,
+            taskRelationAdjudicationDisagreement:
+              comparison.disagreement,
+            taskRelationAdjudicationHumanEvaluationTarget:
+              comparison.disagreement === true
+                ? "relation-disagreement"
+                : undefined,
+            taskRelationAdjudicationShadowAuditRequested:
+              eligibility.auditKind ===
+              "deterministic-comparison",
+            taskRelationAdjudicationShadowAuditSettled:
+              eligibility.auditKind ===
+              "deterministic-comparison",
             taskRelationAdjudicationPreviewRelation:
               settlementPreview?.relation,
             taskRelationAdjudicationPreviewRelationAuthority:

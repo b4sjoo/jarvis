@@ -9,6 +9,7 @@ import type { LogicalQuestionUnit } from "../src/lib/meeting/logical-question-un
 import {
   buildTaskRelationAdjudicationPrompts,
   buildTaskRelationAdjudicationRequest,
+  compareTaskRelationAdjudication,
   createTaskRelationSettlementProposal,
   decideTaskRelationAdjudicationEligibility,
   deriveRuntimeTaskRelationFromAtomicDecision,
@@ -442,8 +443,26 @@ test("runs only for evaluation-active unresolved source-owned questions", () => 
       ...common,
       evaluationActive: true,
       deterministicRelationAuthorized: true,
+      deterministicRelation: "new-parent",
+    }).auditKind,
+    "deterministic-comparison"
+  );
+  assert.equal(
+    decideTaskRelationAdjudicationEligibility({
+      ...common,
+      evaluationActive: true,
+      deterministicRelationAuthorized: true,
+      deterministicRelation: "new-parent",
     }).reason,
-    "deterministic-relation-authoritative"
+    "deterministic-relation-shadow-audit"
+  );
+  assert.equal(
+    decideTaskRelationAdjudicationEligibility({
+      ...common,
+      evaluationActive: true,
+      deterministicRelationAuthorized: true,
+    }).reason,
+    "deterministic-relation-not-auditable"
   );
   assert.equal(
     decideTaskRelationAdjudicationEligibility({
@@ -452,6 +471,51 @@ test("runs only for evaluation-active unresolved source-owned questions", () => 
       turnGateAction: "append-only",
     }).reason,
     "turn-gate-not-answer:append-only"
+  );
+});
+
+test("compares deterministic and Shadow relations without granting authority", () => {
+  assert.deepEqual(
+    compareTaskRelationAdjudication({
+      deterministicRelation: "child-probe",
+      candidateRelation: "child-probe",
+    }),
+    {
+      eligible: true,
+      outcome: "agreement",
+      agreement: true,
+      disagreement: false,
+    }
+  );
+  assert.deepEqual(
+    compareTaskRelationAdjudication({
+      deterministicRelation: "new-parent",
+      candidateRelation: "followup-parent",
+    }),
+    {
+      eligible: true,
+      outcome: "disagreement",
+      agreement: false,
+      disagreement: true,
+    }
+  );
+  assert.deepEqual(
+    compareTaskRelationAdjudication({
+      deterministicRelation: "resume-parent",
+    }),
+    {
+      eligible: true,
+      outcome: "candidate-unavailable",
+    }
+  );
+  assert.deepEqual(
+    compareTaskRelationAdjudication({
+      candidateRelation: "new-parent",
+    }),
+    {
+      eligible: false,
+      outcome: "not-applicable",
+    }
   );
 });
 

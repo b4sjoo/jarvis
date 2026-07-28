@@ -167,6 +167,20 @@ export interface TaskRelationAdjudicationEligibilityDecision {
   eligible: boolean;
   reason: string;
   triggerReasons: string[];
+  auditKind?: "unresolved-proposal" | "deterministic-comparison";
+}
+
+export type TaskRelationAdjudicationComparisonOutcome =
+  | "agreement"
+  | "disagreement"
+  | "candidate-unavailable"
+  | "not-applicable";
+
+export interface TaskRelationAdjudicationComparison {
+  eligible: boolean;
+  outcome: TaskRelationAdjudicationComparisonOutcome;
+  agreement?: boolean;
+  disagreement?: boolean;
 }
 
 export function normalizeTaskRelationAdjudicationMode(
@@ -244,6 +258,7 @@ export function decideTaskRelationAdjudicationEligibility(input: {
   request: TaskRelationAdjudicationRequest;
   manualCorrectionActive: boolean;
   deterministicRelationAuthorized: boolean;
+  deterministicRelation?: RuntimeTaskRelation;
   turnGateAction: string;
 }): TaskRelationAdjudicationEligibilityDecision {
   const skip = (reason: string) => ({
@@ -260,9 +275,6 @@ export function decideTaskRelationAdjudicationEligibility(input: {
   if (input.manualCorrectionActive) {
     return skip("manual-correction-authoritative");
   }
-  if (input.deterministicRelationAuthorized) {
-    return skip("deterministic-relation-authoritative");
-  }
   if (input.turnGateAction !== "answer-refresh") {
     return skip(`turn-gate-not-answer:${input.turnGateAction || "unknown"}`);
   }
@@ -270,6 +282,23 @@ export function decideTaskRelationAdjudicationEligibility(input: {
     estimateWordEquivalents(input.request.currentQuestion.text) < 3
   ) {
     return skip("question-unit-too-short");
+  }
+  if (input.deterministicRelationAuthorized) {
+    if (
+      !input.deterministicRelation ||
+      input.deterministicRelation === "unknown"
+    ) {
+      return skip("deterministic-relation-not-auditable");
+    }
+    return {
+      eligible: true,
+      reason: "deterministic-relation-shadow-audit",
+      triggerReasons: [
+        "deterministic-relation-shadow-audit",
+        `local-relation:${input.deterministicRelation}`,
+      ],
+      auditKind: "deterministic-comparison",
+    };
   }
 
   return {
@@ -281,6 +310,36 @@ export function decideTaskRelationAdjudicationEligibility(input: {
         ? "active-child-present"
         : "active-parent-present",
     ],
+    auditKind: "unresolved-proposal",
+  };
+}
+
+export function compareTaskRelationAdjudication(input: {
+  deterministicRelation?: RuntimeTaskRelation;
+  candidateRelation?: RuntimeTaskRelation;
+}): TaskRelationAdjudicationComparison {
+  if (
+    !input.deterministicRelation ||
+    input.deterministicRelation === "unknown"
+  ) {
+    return {
+      eligible: false,
+      outcome: "not-applicable",
+    };
+  }
+  if (!input.candidateRelation) {
+    return {
+      eligible: true,
+      outcome: "candidate-unavailable",
+    };
+  }
+  const agreement =
+    input.candidateRelation === input.deterministicRelation;
+  return {
+    eligible: true,
+    outcome: agreement ? "agreement" : "disagreement",
+    agreement,
+    disagreement: !agreement,
   };
 }
 
@@ -567,6 +626,8 @@ export function formatTaskRelationAdjudicationForTrace(input: {
       input.eligibility?.reason,
     taskRelationAdjudicationTriggerReasons:
       input.eligibility?.triggerReasons,
+    taskRelationAdjudicationAuditKind:
+      input.eligibility?.auditKind,
     taskRelationAdjudicationUnitId:
       input.request?.logicalQuestionUnitId,
     taskRelationAdjudicationUnitRevision:
@@ -798,6 +859,14 @@ function isTaskRelationDependency(
 ): value is TaskRelationDependency {
   return TASK_RELATION_DEPENDENCIES.includes(
     value as TaskRelationDependency
+  );
+}
+
+export function isRuntimeTaskRelation(
+  value: unknown
+): value is RuntimeTaskRelation {
+  return RUNTIME_TASK_RELATIONS.includes(
+    value as RuntimeTaskRelation
   );
 }
 

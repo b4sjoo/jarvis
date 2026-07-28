@@ -4809,6 +4809,16 @@ const TraceHumanEvaluationPanel = ({
     typeof trace.metadata?.whiteboardRenderFallbackKind === "string"
       ? trace.metadata.whiteboardRenderFallbackKind
       : undefined;
+  const taskRelationDeterministicRelation =
+    typeof trace.metadata?.taskRelationAdjudicationDeterministicRelation ===
+    "string"
+      ? trace.metadata.taskRelationAdjudicationDeterministicRelation
+      : undefined;
+  const taskRelationComparisonOutcome =
+    typeof trace.metadata?.taskRelationAdjudicationComparisonOutcome ===
+    "string"
+      ? trace.metadata.taskRelationAdjudicationComparisonOutcome
+      : undefined;
 
   const toggleFailureReason = (reason: HumanEvalFailureReason) => {
     onUpdate({
@@ -4969,13 +4979,26 @@ const TraceHumanEvaluationPanel = ({
         </div>
       ) : null}
       {taskRelationAdjudicationDisposition ? (
-        <div className="rounded-sm border border-border/60 bg-muted/30 p-2 text-[10px]">
+        <div
+          className={cn(
+            "rounded-sm border bg-muted/30 p-2 text-[10px]",
+            taskRelationComparisonOutcome === "disagreement"
+              ? "border-amber-500/70"
+              : "border-border/60"
+          )}
+        >
           <div className="font-medium uppercase text-muted-foreground">
             LLM relation adjudication (Shadow)
           </div>
           <div className="mt-1 break-words">
             {taskRelationAdjudicationCandidateRelation ??
               "No valid proposal"}
+            {taskRelationDeterministicRelation
+              ? ` / local ${taskRelationDeterministicRelation}`
+              : ""}
+            {taskRelationComparisonOutcome
+              ? ` / ${taskRelationComparisonOutcome}`
+              : ""}
             {` / ${taskRelationAdjudicationDisposition}`}
             {taskRelationAdjudicationWouldRepair === true
               ? " / would repair"
