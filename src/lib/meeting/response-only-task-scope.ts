@@ -10,6 +10,12 @@ export type ResponseOnlyRelationDisposition =
   | "timeout"
   | "invalid";
 
+export type AdvisorContextReadScope =
+  | "current-only"
+  | "active-parent-read"
+  | "active-child-read"
+  | "bounded-recent-history";
+
 export interface ResponseOnlyTaskScope {
   scopeId: string;
   logicalQuestionUnitId: string;
@@ -20,6 +26,9 @@ export interface ResponseOnlyTaskScope {
   relationDisposition: ResponseOnlyRelationDisposition;
   preservedParentId?: string;
   preservedParentRevision?: number;
+  contextReadScope: AdvisorContextReadScope;
+  artifactMutation: "none";
+  taskMutation: "none";
   createdAt: number;
   expiresAt: number;
 }
@@ -32,6 +41,7 @@ export function createResponseOnlyTaskScope(input: {
   inferredType: string;
   relationDisposition: ResponseOnlyRelationDisposition;
   preservedParent?: ActiveMeetingTask;
+  contextReadScope?: AdvisorContextReadScope;
   now?: number;
   ttlMs?: number;
 }): ResponseOnlyTaskScope {
@@ -52,6 +62,9 @@ export function createResponseOnlyTaskScope(input: {
     preservedParentId: input.preservedParent?.parent.id,
     preservedParentRevision:
       input.preservedParent?.parent.revisions,
+    contextReadScope: input.contextReadScope ?? "current-only",
+    artifactMutation: "none",
+    taskMutation: "none",
     createdAt: now,
     expiresAt: now + (input.ttlMs ?? 15_000),
   };
@@ -104,8 +117,13 @@ export function formatResponseOnlyTaskScopeForTrace(
     responseOnlyPreservedParentId: scope.preservedParentId,
     responseOnlyPreservedParentRevision:
       scope.preservedParentRevision,
+    responseOnlyContextReadScope: scope.contextReadScope,
+    responseOnlyArtifactMutation: scope.artifactMutation,
+    responseOnlyTaskMutation: scope.taskMutation,
     responseOnlyExpiresAt: scope.expiresAt,
-    responseOnlyParentContextInjected: false,
+    responseOnlyParentContextInjected:
+      scope.contextReadScope === "active-parent-read" ||
+      scope.contextReadScope === "active-child-read",
     responseOnlyParentMutationAllowed: false,
     responseOnlyPlaybookMutationAllowed: false,
     responseOnlyArtifactMutationAllowed: false,

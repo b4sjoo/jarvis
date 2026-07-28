@@ -119,6 +119,7 @@ test("builds one immutable coding plan for route, prompt, memory, and artifacts"
     memoryUseCase: "coding_interview",
     askFrame: "direct-answer",
     topicDomain: "backend",
+    sourceQuestion: "Implement a queue.",
     createdAt: 100,
   });
 
@@ -131,6 +132,14 @@ test("builds one immutable coding plan for route, prompt, memory, and artifacts"
   assert.equal(plan.artifactPolicy.allowCode, true);
   assert.equal(plan.artifactPolicy.allowWhiteboard, false);
   assert.equal(plan.factAnchorPolicy.policyId, "not-required");
+  assert.equal(plan.responseIntent, "advise");
+  assert.equal(plan.contextReadScope, "active-parent-read");
+  assert.equal(plan.artifactIntent, "revise-code");
+  assert.deepEqual(plan.taskMutationPolicy, {
+    kind: "create-parent",
+    type: "coding",
+    topic: "Implement a queue.",
+  });
 
   task.parent.questionType = "behavioral";
   assert.equal(plan.taskSnapshot?.parent.questionType, "coding");
@@ -188,6 +197,10 @@ test("response-only plan routes from the current question without exposing paren
   assert.equal(plan.artifactPolicy.allowCode, false);
   assert.equal(plan.artifactPolicy.allowWhiteboard, false);
   assert.equal(plan.artifactPolicy.allowParentContextMutation, false);
+  assert.equal(plan.responseIntent, "advise");
+  assert.equal(plan.contextReadScope, "current-only");
+  assert.equal(plan.artifactIntent, "preserve");
+  assert.deepEqual(plan.taskMutationPolicy, { kind: "preserve" });
 });
 
 test("a committed general-system-design settlement atomically leaves the coding route", () => {
@@ -217,6 +230,7 @@ test("a committed general-system-design settlement atomically leaves the coding 
   assert.equal(plan.playbookId, "general_system_design");
   assert.equal(plan.artifactPolicy.allowWhiteboard, true);
   assert.equal(plan.artifactPolicy.allowCode, false);
+  assert.equal(plan.artifactIntent, "revise-whiteboard");
 });
 
 test("a personal-status response owns the current answer without mutating its coding parent", () => {
@@ -279,6 +293,10 @@ test("a personal-status response owns the current answer without mutating its co
   assert.equal(plan.artifactPolicy.allowLatestUsefulAnswer, false);
   assert.equal(plan.artifactPolicy.allowCode, false);
   assert.equal(plan.artifactPolicy.allowWhiteboard, false);
+  assert.equal(plan.responseIntent, "advise");
+  assert.equal(plan.contextReadScope, "current-only");
+  assert.equal(plan.artifactIntent, "none");
+  assert.deepEqual(plan.taskMutationPolicy, { kind: "preserve" });
   assert.equal(
     plan.transientPersonalStatusDecision?.domain,
     "relocation"
@@ -409,6 +427,69 @@ test("equivalent settlement inputs produce a stable plan id and compact trace", 
     trace.settledExecutionPlanPromptContract,
     "meeting-answer:coding"
   );
+  assert.equal(trace.settledExecutionPlanResponseIntent, "advise");
+  assert.equal(
+    trace.settledExecutionPlanContextReadScope,
+    "active-parent-read"
+  );
+  assert.equal(trace.settledExecutionPlanArtifactIntent, "revise-code");
+  assert.equal(
+    trace.settledExecutionPlanTaskMutationCommand,
+    "create-parent"
+  );
+});
+
+test("freezes an explicit phase advance independently from response and artifact intent", () => {
+  const plan = buildSettledAdvisorExecutionPlan({
+    settlement: settlement({
+      questionType: "general-system-design",
+      relation: "followup-parent",
+      parentMutationAuthorized: false,
+    }),
+    activeMeetingTask: activeTask("general-system-design"),
+    taskBoundaryCommitted: false,
+    childOwnsResponse: false,
+    providerSnapshot: providers,
+    playbook: playbook("general-system-design"),
+    memoryUseCase: "system_design_interview",
+    askFrame: "hypothetical-design",
+    topicDomain: "backend",
+    explicitTaskMutationCommand: {
+      kind: "advance-phase",
+      phase: "design_framing",
+    },
+  });
+
+  assert.equal(plan.responseIntent, "advise");
+  assert.equal(plan.contextReadScope, "active-parent-read");
+  assert.equal(plan.artifactIntent, "revise-whiteboard");
+  assert.deepEqual(plan.taskMutationPolicy, {
+    kind: "advance-phase",
+    phase: "design_framing",
+  });
+});
+
+test("settles non-answer actions without borrowing task or artifact authority", () => {
+  const plan = buildSettledAdvisorExecutionPlan({
+    settlement: settlement({
+      action: "ignore",
+      responseAuthorized: false,
+      typeMutationAuthorized: false,
+      relationMutationAuthorized: false,
+      parentMutationAuthorized: false,
+    }),
+    activeMeetingTask: activeTask(),
+    taskBoundaryCommitted: false,
+    childOwnsResponse: false,
+    providerSnapshot: providers,
+    memoryUseCase: "coding_interview",
+    askFrame: "direct-answer",
+    topicDomain: "backend",
+  });
+
+  assert.equal(plan.responseIntent, "suppress");
+  assert.equal(plan.artifactIntent, "none");
+  assert.deepEqual(plan.taskMutationPolicy, { kind: "preserve" });
 });
 
 test("replays the July 24 coding to general and AI/ML design route sequence without parent leakage", () => {

@@ -6841,6 +6841,16 @@ export function useMeetingAssistant() {
         projectAnchor: advisorProjectAnchor,
         responseOnlyTaskScope,
         transientPersonalStatusDecision,
+        sourceQuestion:
+          advisorJob.logicalQuestionUnit?.normalizedText,
+        explicitTaskMutationCommand:
+          manualPhaseAdvanceCommitted &&
+          playbookPhaseDecision?.phase
+            ? {
+                kind: "advance-phase",
+                phase: playbookPhaseDecision.phase,
+              }
+            : undefined,
       });
       settledAdvisorExecutionPlanRef.current =
         settledExecutionPlan;
@@ -7602,7 +7612,8 @@ export function useMeetingAssistant() {
       const shouldCommitAdvisorParent =
         !transientPersonalStatusDecision &&
         !responseOnlyTaskScope &&
-        (settledExecutionPlan?.responseAuthorized ?? true) &&
+        (settledExecutionPlan?.responseIntent === "advise" ||
+          !settledExecutionPlan) &&
         advisorTaskMutationDecision.commitParent &&
         advisorTaskSignals.openingRoute?.commitParent !== false &&
         (advisorTaskSignals.taskRelation !== "new-parent" ||

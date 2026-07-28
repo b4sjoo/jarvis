@@ -18,8 +18,14 @@ import {
   authorizeResponseArtifactMutation,
   type ResponseArtifactMutationAuthorization,
 } from "./response-artifact-authorization.js";
-import type { ResponseOnlyTaskScope } from "./response-only-task-scope.js";
-import { normalizeCanonicalQuestionType } from "./task-taxonomy.js";
+import type {
+  AdvisorContextReadScope,
+  ResponseOnlyTaskScope,
+} from "./response-only-task-scope.js";
+import {
+  normalizeCanonicalQuestionType,
+  type CanonicalQuestionType,
+} from "./task-taxonomy.js";
 import type {
   InterviewPlaybookPhase,
   InterviewTaskRelation,
@@ -54,6 +60,40 @@ export interface SettledAdvisorPromptContract {
   contractId: `meeting-answer:${MeetingAnswerProfile}`;
 }
 
+export type SettledAdvisorResponseIntent =
+  | "advise"
+  | "suppress"
+  | "hold"
+  | "clarify";
+
+export type SettledAdvisorArtifactIntent =
+  | "none"
+  | "preserve"
+  | "revise-code"
+  | "revise-complexity"
+  | "revise-whiteboard";
+
+export type TaskLifecycleCommand =
+  | { kind: "preserve" }
+  | {
+      kind: "create-parent";
+      type: CanonicalQuestionType;
+      topic: string;
+    }
+  | {
+      kind: "replace-parent";
+      type: CanonicalQuestionType;
+      topic: string;
+    }
+  | {
+      kind: "attach-child";
+      type: CanonicalQuestionType;
+      question: string;
+    }
+  | { kind: "resume-parent" }
+  | { kind: "advance-phase"; phase: InterviewPlaybookPhase }
+  | { kind: "update-parent-context" };
+
 export interface SettledAdvisorExecutionPlan {
   id: string;
   settlementId: string;
@@ -66,6 +106,10 @@ export interface SettledAdvisorExecutionPlan {
   relation: CurrentQuestionRelation;
   taskRelation: InterviewTaskRelation;
   responseAuthorized: boolean;
+  responseIntent: SettledAdvisorResponseIntent;
+  contextReadScope: AdvisorContextReadScope;
+  artifactIntent: SettledAdvisorArtifactIntent;
+  taskMutationPolicy: TaskLifecycleCommand;
   taskSnapshot?: ActiveMeetingTask;
   expectedParentId?: string;
   expectedParentRevision?: number;
@@ -113,6 +157,8 @@ export function buildSettledAdvisorExecutionPlan(input: {
   projectAnchor?: string;
   responseOnlyTaskScope?: ResponseOnlyTaskScope;
   transientPersonalStatusDecision?: TransientPersonalStatusDecision;
+  sourceQuestion?: string;
+  explicitTaskMutationCommand?: TaskLifecycleCommand;
   createdAt?: number;
 }): SettledAdvisorExecutionPlan {
   const relation = toInterviewTaskRelation(input.settlement.relation);
@@ -182,6 +228,28 @@ export function buildSettledAdvisorExecutionPlan(input: {
         policyId: "personal-logistics" as const,
       }
     : resolveFactAnchorPolicy(responseOwner.questionType);
+  const responseIntent = resolveResponseIntent(input.settlement);
+  const contextReadScope = resolveContextReadScope({
+    responseOnlyTaskScope,
+    transientPersonalStatusDecision,
+    taskSnapshot,
+    relation,
+  });
+  const artifactIntent = resolveArtifactIntent({
+    responseAuthorized: input.settlement.responseAuthorized,
+    responseOnlyTaskScope,
+    transientPersonalStatusDecision,
+    artifactPolicy,
+  });
+  const taskMutationPolicy = resolveTaskMutationPolicy({
+    settlement: input.settlement,
+    relation,
+    taskBoundaryCommitted: input.taskBoundaryCommitted,
+    responseOnlyTaskScope,
+    transientPersonalStatusDecision,
+    sourceQuestion: input.sourceQuestion,
+    explicitCommand: input.explicitTaskMutationCommand,
+  });
   const expectedParentId =
     input.activeMeetingTask?.parent.id ??
     responseOnlyTaskScope?.preservedParentId;
@@ -203,6 +271,10 @@ export function buildSettledAdvisorExecutionPlan(input: {
     topicDomain: input.topicDomain,
     projectAnchor: input.projectAnchor,
     artifactDisposition: artifactPolicy.disposition,
+    responseIntent,
+    contextReadScope,
+    artifactIntent,
+    taskMutationKind: taskMutationPolicy.kind,
     responseOnlyTaskScopeId: responseOnlyTaskScope?.scopeId,
     transientPersonalStatusDecisionId:
       transientPersonalStatusDecision?.id,
@@ -221,6 +293,10 @@ export function buildSettledAdvisorExecutionPlan(input: {
     relation: input.settlement.relation,
     taskRelation: relation,
     responseAuthorized: input.settlement.responseAuthorized,
+    responseIntent,
+    contextReadScope,
+    artifactIntent,
+    taskMutationPolicy,
     taskSnapshot,
     expectedParentId,
     expectedParentRevision,
@@ -348,6 +424,14 @@ export function formatSettledAdvisorExecutionPlanForTrace(
     settledExecutionPlanTaskRelation: plan.taskRelation,
     settledExecutionPlanResponseAuthorized:
       plan.responseAuthorized,
+    settledExecutionPlanResponseIntent:
+      plan.responseIntent,
+    settledExecutionPlanContextReadScope:
+      plan.contextReadScope,
+    settledExecutionPlanArtifactIntent:
+      plan.artifactIntent,
+    settledExecutionPlanTaskMutationCommand:
+      plan.taskMutationPolicy.kind,
     settledExecutionPlanExpectedParentId: plan.expectedParentId,
     settledExecutionPlanExpectedParentRevision:
       plan.expectedParentRevision,
@@ -376,7 +460,10 @@ export function formatSettledAdvisorExecutionPlanForTrace(
     settledExecutionPlanResponseOnlyPreservedParentId:
       plan.responseOnlyTaskScope?.preservedParentId,
     settledExecutionPlanResponseOnlyParentContextInjected:
-      plan.responseOnlyTaskScope ? false : undefined,
+      plan.responseOnlyTaskScope
+        ? plan.contextReadScope === "active-parent-read" ||
+          plan.contextReadScope === "active-child-read"
+        : undefined,
     settledExecutionPlanTransientPersonalStatusDecisionId:
       plan.transientPersonalStatusDecision?.id,
     settledExecutionPlanTransientPersonalStatusDomain:
@@ -412,6 +499,107 @@ function resolveFactAnchorPolicy(
     requirement: "not-required",
     policyId: "not-required",
   };
+}
+
+function resolveResponseIntent(
+  settlement: CurrentQuestionSettlementDecision
+): SettledAdvisorResponseIntent {
+  if (settlement.responseAuthorized && settlement.action === "answer") {
+    return "advise";
+  }
+  if (settlement.action === "buffer") return "hold";
+  return "suppress";
+}
+
+function resolveContextReadScope(input: {
+  responseOnlyTaskScope?: ResponseOnlyTaskScope;
+  transientPersonalStatusDecision?: TransientPersonalStatusDecision;
+  taskSnapshot?: ActiveMeetingTask;
+  relation: InterviewTaskRelation;
+}): AdvisorContextReadScope {
+  if (input.transientPersonalStatusDecision) return "current-only";
+  if (input.responseOnlyTaskScope) {
+    return input.responseOnlyTaskScope.contextReadScope;
+  }
+  if (input.relation === "child-probe" && input.taskSnapshot?.child) {
+    return "active-child-read";
+  }
+  if (input.taskSnapshot) return "active-parent-read";
+  return "current-only";
+}
+
+function resolveArtifactIntent(input: {
+  responseAuthorized: boolean;
+  responseOnlyTaskScope?: ResponseOnlyTaskScope;
+  transientPersonalStatusDecision?: TransientPersonalStatusDecision;
+  artifactPolicy: ResponseArtifactMutationAuthorization;
+}): SettledAdvisorArtifactIntent {
+  if (!input.responseAuthorized) return "none";
+  if (
+    input.responseOnlyTaskScope ||
+    input.transientPersonalStatusDecision
+  ) {
+    return input.responseOnlyTaskScope?.preservedParentId
+      ? "preserve"
+      : "none";
+  }
+  if (input.artifactPolicy.allowCode) return "revise-code";
+  if (input.artifactPolicy.allowWhiteboard) return "revise-whiteboard";
+  return input.artifactPolicy.allowLatestUsefulAnswer
+    ? "preserve"
+    : "none";
+}
+
+function resolveTaskMutationPolicy(input: {
+  settlement: CurrentQuestionSettlementDecision;
+  relation: InterviewTaskRelation;
+  taskBoundaryCommitted: boolean;
+  responseOnlyTaskScope?: ResponseOnlyTaskScope;
+  transientPersonalStatusDecision?: TransientPersonalStatusDecision;
+  sourceQuestion?: string;
+  explicitCommand?: TaskLifecycleCommand;
+}): TaskLifecycleCommand {
+  if (
+    input.responseOnlyTaskScope ||
+    input.transientPersonalStatusDecision
+  ) {
+    return { kind: "preserve" };
+  }
+  if (input.explicitCommand) return input.explicitCommand;
+  if (
+    input.taskBoundaryCommitted &&
+    input.settlement.parentMutationAuthorized
+  ) {
+    return {
+      kind: "create-parent",
+      type: input.settlement.questionType,
+      topic: input.sourceQuestion?.trim() || "Unknown interview task",
+    };
+  }
+  if (
+    input.relation === "child-probe" &&
+    input.settlement.relationMutationAuthorized
+  ) {
+    return {
+      kind: "attach-child",
+      type: input.settlement.questionType,
+      question: input.sourceQuestion?.trim() || "Unknown child question",
+    };
+  }
+  if (
+    input.relation === "resume-parent" &&
+    input.settlement.relationMutationAuthorized
+  ) {
+    return { kind: "resume-parent" };
+  }
+  if (
+    (input.relation === "followup-parent" ||
+      input.relation === "correction") &&
+    input.settlement.relationMutationAuthorized
+  ) {
+    return { kind: "update-parent-context" };
+  }
+  return { kind: "preserve" };
 }
 
 function toInterviewTaskRelation(
@@ -477,6 +665,10 @@ function createExecutionPlanId(input: {
   topicDomain: TaskTopicDomain;
   projectAnchor?: string;
   artifactDisposition: string;
+  responseIntent: SettledAdvisorResponseIntent;
+  contextReadScope: AdvisorContextReadScope;
+  artifactIntent: SettledAdvisorArtifactIntent;
+  taskMutationKind: TaskLifecycleCommand["kind"];
   responseOnlyTaskScopeId?: string;
   transientPersonalStatusDecisionId?: string;
 }) {
@@ -496,6 +688,10 @@ function createExecutionPlanId(input: {
       input.topicDomain,
       input.projectAnchor ?? "",
       input.artifactDisposition,
+      input.responseIntent,
+      input.contextReadScope,
+      input.artifactIntent,
+      input.taskMutationKind,
       input.responseOnlyTaskScopeId ?? "",
       input.transientPersonalStatusDecisionId ?? "",
     ].join("|")

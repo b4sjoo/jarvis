@@ -210,6 +210,9 @@ test("response-only prompt scope excludes durable parent continuity", () => {
   assert.equal(scoped.interviewSessionBrief?.notes, "");
   assert.equal(scoped.confirmedMeFacts, undefined);
   assert.equal(scope.preservedParentId, activeMeetingTask.parent.id);
+  assert.equal(scope.contextReadScope, "current-only");
+  assert.equal(scope.artifactMutation, "none");
+  assert.equal(scope.taskMutation, "none");
 });
 
 function task(): ActiveMeetingTask {
