@@ -304,6 +304,7 @@ import {
   formatLogicalQuestionUnitForTrace,
   inferCanonicalQuestionTypeFromText,
   inferQuestionTypeDecisionFromText,
+  questionTypeDecisionAuthorityConfidence,
   isExactLowValueAcknowledgement,
   isParentCanonicalQuestionType,
   normalizeCanonicalQuestionType,
@@ -5893,7 +5894,9 @@ export function useMeetingAssistant() {
           : ("ignore" as const),
         confidence: advisorTaskSignals.openingRoute
           ? 1
-          : advisorTaskSignals.questionTypeDecision?.confidence,
+          : questionTypeDecisionAuthorityConfidence(
+              advisorTaskSignals.questionTypeDecision
+            ),
         typeEvidenceAuthorized:
           advisorTaskSignals.questionType !== "unknown",
         relationEvidenceAuthorized:
@@ -6035,7 +6038,9 @@ export function useMeetingAssistant() {
       sourceObservationIds: currentQuestionSourceObservationIds,
       confidence: advisorTaskSignals.openingRoute
         ? 1
-        : advisorTaskSignals.questionTypeDecision?.confidence,
+        : questionTypeDecisionAuthorityConfidence(
+            advisorTaskSignals.questionTypeDecision
+          ),
       questionComplete,
       mutationAuthorized: taskMutationAuthorization.authorized,
       commitParent,
@@ -9966,6 +9971,7 @@ export function useMeetingAssistant() {
             taxonomySemanticEmbeddingReason:
               error instanceof Error ? error.message : String(error),
             taxonomyHybridOutcome: "semantic-unavailable",
+            taxonomyHybridSemanticDisposition: "abstain",
             taxonomyHybridReason: "semantic-shadow-orchestration-error",
             ...formatSemanticInterviewerIntentForTrace(undefined, {
               embeddingStatus: "error",
@@ -18525,6 +18531,12 @@ function formatAdvisorQuestionTypeDecisionForTrace(
     return {
       ...boundaryMetadata,
       questionTypeInferenceType: signals.questionType,
+      questionTypeLocalCertainty: "exact-high",
+      questionTypeAuthorityReason: "opening-route",
+      questionTypeLegacyType:
+        signals.questionTypeDecision?.legacyType,
+      questionTypeConflictingTypes:
+        signals.questionTypeDecision?.conflictingTypes ?? [],
       questionTypeConfidence: 1,
       questionTypeMargin: 1,
       questionTypeEvidence: [
@@ -18549,6 +18561,10 @@ function formatAdvisorQuestionTypeDecisionForTrace(
     return {
       ...boundaryMetadata,
       questionTypeInferenceType: signals.questionType,
+      questionTypeLocalCertainty: "exact-high",
+      questionTypeAuthorityReason: "interviewer-section-hint",
+      questionTypeLegacyType: undefined,
+      questionTypeConflictingTypes: [],
       questionTypeConfidence: 0.98,
       questionTypeMargin: 1,
       questionTypeEvidence: ["interviewer-explicit-section-hint"],
@@ -18566,6 +18582,10 @@ function formatAdvisorQuestionTypeDecisionForTrace(
     return {
       ...boundaryMetadata,
       questionTypeInferenceType: "unknown",
+      questionTypeLocalCertainty: "abstain",
+      questionTypeAuthorityReason: "missing-local-decision",
+      questionTypeLegacyType: undefined,
+      questionTypeConflictingTypes: [],
       questionTypeConfidence: 0,
       questionTypeMargin: 0,
       questionTypeEvidence: [],
@@ -18581,6 +18601,10 @@ function formatAdvisorQuestionTypeDecisionForTrace(
   return {
     ...boundaryMetadata,
     questionTypeInferenceType: decision.type ?? "unknown",
+    questionTypeLocalCertainty: decision.certainty,
+    questionTypeAuthorityReason: decision.authorityReason,
+    questionTypeLegacyType: decision.legacyType,
+    questionTypeConflictingTypes: decision.conflictingTypes,
     questionTypeConfidence: decision.confidence,
     questionTypeMargin: decision.margin,
     questionTypeEvidence: decision.evidence,

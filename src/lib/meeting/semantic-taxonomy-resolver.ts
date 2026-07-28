@@ -95,11 +95,17 @@ export type HybridTaxonomyOutcome =
   | "semantic-rejected"
   | "semantic-unavailable";
 
+export type SemanticTaxonomyDisposition =
+  | "support"
+  | "conflict"
+  | "abstain";
+
 export interface HybridQuestionTypeDecision {
   lexicalType: CanonicalQuestionType;
   effectiveType: CanonicalQuestionType;
   recommendedType?: ConcreteSemanticQuestionType;
   outcome: HybridTaxonomyOutcome;
+  semanticDisposition: SemanticTaxonomyDisposition;
   reason: string;
   wouldRescue: boolean;
   lexicalAuthoritative: boolean;
@@ -214,6 +220,7 @@ export function resolveHybridQuestionType({
       lexicalType,
       effectiveType: lexicalType,
       outcome: "semantic-unavailable",
+      semanticDisposition: "abstain",
       reason: "semantic-decision-unavailable",
       wouldRescue: false,
       lexicalAuthoritative: lexicalType !== "unknown",
@@ -232,6 +239,11 @@ export function resolveHybridQuestionType({
         : semantic.candidateType
           ? "lexical-semantic-conflict"
           : "keep-lexical",
+      semanticDisposition: agrees
+        ? "support"
+        : semantic.candidateType
+          ? "conflict"
+          : "abstain",
       reason: agrees
         ? "semantic-confirms-authoritative-lexical-result"
         : semantic.candidateType
@@ -244,28 +256,12 @@ export function resolveHybridQuestionType({
   }
 
   if (semantic.candidateType) {
-    const lexicalTop = strongestLexicalScore(lexical);
-    if (
-      lexicalTop &&
-      lexicalTop.score >= 0.8 &&
-      lexicalTop.type !== semantic.candidateType
-    ) {
-      return {
-        lexicalType,
-        effectiveType: "unknown",
-        recommendedType: semantic.candidateType,
-        outcome: "semantic-rejected",
-        reason: "semantic-conflicts-with-strong-lexical-evidence",
-        wouldRescue: false,
-        lexicalAuthoritative: false,
-        semantic,
-      };
-    }
     return {
       lexicalType,
       effectiveType: "unknown",
       recommendedType: semantic.candidateType,
       outcome: "semantic-would-rescue",
+      semanticDisposition: "abstain",
       reason: "calibrated-semantic-candidate-for-lexical-unknown",
       wouldRescue: true,
       lexicalAuthoritative: false,
@@ -277,6 +273,7 @@ export function resolveHybridQuestionType({
     lexicalType,
     effectiveType: "unknown",
     outcome: "semantic-rejected",
+    semanticDisposition: "abstain",
     reason: semantic.rejectionReasons.join(",") || "semantic-candidate-rejected",
     wouldRescue: false,
     lexicalAuthoritative: false,
@@ -359,15 +356,6 @@ function mean(values: number[]) {
   return values.length
     ? values.reduce((total, value) => total + value, 0) / values.length
     : 0;
-}
-
-function strongestLexicalScore(decision: QuestionTypeInferenceDecision) {
-  return Object.entries(decision.scores)
-    .map(([type, score]) => ({
-      type: type as CanonicalQuestionType,
-      score,
-    }))
-    .sort((left, right) => right.score - left.score)[0];
 }
 
 function roundScore(value: number) {

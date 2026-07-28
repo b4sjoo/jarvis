@@ -64,6 +64,7 @@ test("semantic evidence cannot override a concrete lexical decision", () => {
 
   assert.equal(hybrid.effectiveType, "behavioral");
   assert.equal(hybrid.outcome, "lexical-semantic-conflict");
+  assert.equal(hybrid.semanticDisposition, "conflict");
   assert.equal(hybrid.lexicalAuthoritative, true);
   assert.equal(hybrid.wouldRescue, false);
 });
@@ -81,10 +82,11 @@ test("accepted semantic evidence is only a rescue recommendation for lexical unk
   assert.equal(hybrid.effectiveType, "unknown");
   assert.equal(hybrid.recommendedType, "coding");
   assert.equal(hybrid.outcome, "semantic-would-rescue");
+  assert.equal(hybrid.semanticDisposition, "abstain");
   assert.equal(hybrid.wouldRescue, true);
 });
 
-test("strong conflicting lexical evidence blocks semantic unknown rescue", () => {
+test("legacy weighted evidence cannot veto semantic evidence after local abstention", () => {
   const lexical = inferQuestionTypeDecisionFromText(
     "Implement a stack and explain what a stack is."
   );
@@ -95,8 +97,10 @@ test("strong conflicting lexical evidence blocks semantic unknown rescue", () =>
   });
 
   assert.equal(hybrid.effectiveType, "unknown");
-  assert.equal(hybrid.outcome, "semantic-rejected");
-  assert.equal(hybrid.reason, "semantic-conflicts-with-strong-lexical-evidence");
+  assert.equal(hybrid.outcome, "semantic-would-rescue");
+  assert.equal(hybrid.semanticDisposition, "abstain");
+  assert.equal(hybrid.recommendedType, "field-knowledge");
+  assert.equal(hybrid.lexicalAuthoritative, false);
 });
 
 function record(

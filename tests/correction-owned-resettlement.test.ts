@@ -149,6 +149,10 @@ function localDecision(
 ): QuestionTypeInferenceDecision {
   return {
     type,
+    legacyType: type,
+    certainty: type ? "exact-high" : "abstain",
+    authorityReason: type ? `exact-${type}` : "no-exact-local-evidence",
+    conflictingTypes: [],
     confidence,
     margin: 0.4,
     evidence: [],

@@ -46,8 +46,8 @@ test("semantic shadow accepts substantive interviewer turns without authorizing 
   );
 });
 
-test("restricted enforcement only rescues an unparented lexical unknown", () => {
-  const rescued = decideSemanticTaxonomyUnknownRescue({
+test("semantic evidence remains non-authoritative in compatibility enforcement mode", () => {
+  const enforcement = decideSemanticTaxonomyUnknownRescue({
     mode: "enforcement",
     lexicalType: "unknown",
     deterministicType: "unknown",
@@ -55,8 +55,10 @@ test("restricted enforcement only rescues an unparented lexical unknown", () => 
     wouldRescue: true,
     hasManualCorrection: false,
   });
-  assert.equal(rescued.applied, true);
-  assert.equal(rescued.effectiveType, "field-knowledge");
+  assert.equal(enforcement.applied, false);
+  assert.equal(enforcement.effectiveType, "unknown");
+  assert.equal(enforcement.parentMutationBlocked, true);
+  assert.equal(enforcement.reason, "semantic-evidence-non-authoritative");
 
   const shadow = decideSemanticTaxonomyUnknownRescue({
     mode: "shadow",
@@ -70,7 +72,7 @@ test("restricted enforcement only rescues an unparented lexical unknown", () => 
   assert.equal(shadow.effectiveType, "unknown");
 });
 
-test("restricted enforcement preserves manual, lexical, route, and parent authority", () => {
+test("semantic compatibility mode preserves manual, lexical, route, and parent authority", () => {
   const base = {
     mode: "enforcement" as const,
     lexicalType: "unknown" as const,
@@ -107,7 +109,10 @@ test("restricted enforcement preserves manual, lexical, route, and parent author
   });
   assert.equal(parentConflict.applied, false);
   assert.equal(parentConflict.parentMutationBlocked, true);
-  assert.equal(parentConflict.reason, "semantic-parent-mutation-blocked");
+  assert.equal(
+    parentConflict.reason,
+    "semantic-evidence-non-authoritative-with-active-parent"
+  );
 });
 
 test("shadow metadata preserves lexical behavior and records would-rescue only", () => {
@@ -190,6 +195,7 @@ test("shadow metadata preserves lexical behavior and records would-rescue only",
       recommendedType: "ai-ml-system-design",
       outcome: "semantic-would-rescue",
       reason: "calibrated-semantic-candidate-for-lexical-unknown",
+      semanticDisposition: "abstain",
       wouldRescue: true,
       lexicalAuthoritative: false,
       semantic: undefined,

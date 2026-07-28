@@ -417,7 +417,10 @@ test("uses a single Coding brief only as a compatible prior", () => {
     "Would the code be different if I need every matching file?",
     { interviewSessionBrief: { interviewTypes: ["coding"] } }
   );
-  assert.equal(compatible.type, "coding");
+  assert.equal(compatible.type, undefined);
+  assert.equal(compatible.legacyType, "coding");
+  assert.equal(compatible.certainty, "abstain");
+  assert.equal(compatible.authorityReason, "legacy-score-only");
   assert.equal(compatible.briefPriorType, "coding");
   assert.equal(compatible.briefCompatibilityDecision, "applied-coding-prior");
   assert.ok(compatible.evidence.includes("coding-brief-compatible-prior"));

@@ -93,6 +93,14 @@ export function formatInterviewerIntentKeywordEvidenceForTrace(
     interviewerIntentKeywordHardNegativeMarkers: evidence.hardNegativeMarkers,
     interviewerIntentKeywordQuestionType:
       evidence.questionTypeDecision.type ?? "unknown",
+    interviewerIntentKeywordQuestionTypeLegacy:
+      evidence.questionTypeDecision.legacyType ?? "unknown",
+    interviewerIntentKeywordQuestionTypeCertainty:
+      evidence.questionTypeDecision.certainty,
+    interviewerIntentKeywordQuestionTypeAuthorityReason:
+      evidence.questionTypeDecision.authorityReason,
+    interviewerIntentKeywordQuestionTypeConflictingTypes:
+      evidence.questionTypeDecision.conflictingTypes,
     interviewerIntentKeywordQuestionTypeConfidence:
       evidence.questionTypeDecision.confidence,
     interviewerIntentKeywordQuestionTypeMargin:

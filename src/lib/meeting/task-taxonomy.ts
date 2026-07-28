@@ -39,8 +39,14 @@ export type TaxonomyInterviewBriefType =
 
 export type QuestionTypeInferenceSource = "lightweight-text";
 
+export type LocalQuestionTypeCertainty = "exact-high" | "abstain";
+
 export interface QuestionTypeInferenceDecision {
   type?: CanonicalQuestionType;
+  legacyType?: CanonicalQuestionType;
+  certainty: LocalQuestionTypeCertainty;
+  authorityReason: string;
+  conflictingTypes: CanonicalQuestionType[];
   confidence: number;
   margin: number;
   source: QuestionTypeInferenceSource;
@@ -101,8 +107,6 @@ export interface TaskTaxonomyAuthorityDecision {
 
 export const QUESTION_TYPE_INFERENCE_MIN_CONFIDENCE = 0.65;
 export const QUESTION_TYPE_INFERENCE_MIN_MARGIN = 0.2;
-export const QUESTION_TYPE_PARENT_OVERRIDE_CONFIDENCE = 0.8;
-export const QUESTION_TYPE_PARENT_OVERRIDE_MARGIN = 0.25;
 
 export function resolveTaskTaxonomyAuthority({
   candidates,
@@ -174,11 +178,13 @@ export function resolveTaskTaxonomyAuthority({
 export function canQuestionTypeDecisionOverrideParent(
   decision: QuestionTypeInferenceDecision | undefined
 ) {
-  return Boolean(
-    decision?.type &&
-      decision.confidence >= QUESTION_TYPE_PARENT_OVERRIDE_CONFIDENCE &&
-      decision.margin >= QUESTION_TYPE_PARENT_OVERRIDE_MARGIN
-  );
+  return questionTypeDecisionAuthorityConfidence(decision) === 1;
+}
+
+export function questionTypeDecisionAuthorityConfidence(
+  decision: QuestionTypeInferenceDecision | undefined
+) {
+  return decision?.type && decision.certainty === "exact-high" ? 1 : 0;
 }
 
 export type LatestTurnTaxonomyBoundaryReason =
@@ -523,6 +529,9 @@ export function inferQuestionTypeDecisionFromText(
 
   if (!normalized.trim()) {
     return {
+      certainty: "abstain",
+      authorityReason: "empty-text",
+      conflictingTypes: [],
       confidence: 0,
       margin: 0,
       source: "lightweight-text",
@@ -667,6 +676,10 @@ export function inferQuestionTypeDecisionFromText(
     /\b(implement|build)\s+(a|an|the)\s+(scalable|distributed|highly available|fault tolerant)\b/.test(
       normalized
     );
+  const hasHighLevelDesignRequest =
+    /\b(?:give|provide|show)\s+(?:me\s+)?(?:a\s+|the\s+)?high[- ]level (?:system )?(?:design|architecture) (?:for|of)\b/.test(
+      normalized
+    );
   const hasSystemDesignObject =
     /\b(system|service|platform|application|app|api|backend|pipeline|architecture|infrastructure|distributed system|ticketing|booking|chat|feed|rate limiter)\b/.test(
       normalized
@@ -785,15 +798,177 @@ export function inferQuestionTypeDecisionFromText(
   const margin = roundTaxonomyScore(
     Math.max(0, (top?.score ?? 0) - (runnerUp?.score ?? 0))
   );
-  const type =
+  const legacyType =
     top &&
     confidence >= QUESTION_TYPE_INFERENCE_MIN_CONFIDENCE &&
     margin >= QUESTION_TYPE_INFERENCE_MIN_MARGIN
       ? top.type
       : undefined;
+  const ambiguousHypotheticalProjectFrame =
+    /\bwalk me through designing\b/.test(normalized);
+  const ambiguousArchitectureConceptFrame =
+    /\b(?:explain|describe|walk me through)\s+(?:the\s+)?(?:model|system|project)\s+architecture\b/.test(
+      normalized
+    );
+  const hasExactCodingArtifact =
+    /\b(leetcode|hackerrank|coding problem|class solution|function signature|method signature|starter code)\b/.test(
+      normalized
+    ) ||
+    /\b(def|function|public static|class)\s+[a-z_$][\w$]*\s*\(/.test(
+      normalized
+    );
+  const hasExactComplexityFrame =
+    hasComplexityRequest &&
+    (hasDataStructureOrAlgorithmObject ||
+      /\b(algorithm|solution|code|implementation)\b/.test(normalized) ||
+      /(?:算法|解法|代码|实现)/.test(normalized));
+  const hasExactChineseBehavioralFrame =
+    /(?:请|能否)?(?:讲|描述|分享|举)(?:一个|一次)?.{0,20}(?:经历|例子|时候)|行为面试|领导力准则/.test(
+      normalized
+    );
+  const hasExactChineseProjectFrame =
+    /(?:你|您).{0,20}(?:项目|功能|系统).{0,30}(?:如何|怎么|做了什么|贡献|负责|实现|上线|部署)/.test(
+      normalized
+    );
+  const hasExactChineseCodingFrame =
+    /(?:编写|写出|实现|完成).{0,12}(?:函数|方法|类|算法|栈|队列|堆|二叉树|链表|排序|搜索|代码)/.test(
+      normalized
+    );
+  const hasExactChineseAlgorithmFrame =
+    /(?:设计|提出).{0,12}(?:高效|最优)?(?:算法|数据结构|解法)/.test(
+      normalized
+    );
+  const hasExactChineseCodeOutputFrame =
+    /(?:写出|给出|提供).{0,10}(?:完整|可运行)?(?:代码|实现)/.test(
+      normalized
+    );
+  const hasExactChineseComplexityFrame =
+    /(?:时间|空间)复杂度/.test(normalized) &&
+    /(?:算法|数据结构|解法|代码|实现|数组|链表|栈|队列|堆|树|图)/.test(
+      normalized
+    );
+  const hasExactChineseDesignRequest =
+    /(?:请|能否|如何|怎么)?(?:设计|架构|搭建|构建)/.test(normalized);
+  const hasExactChineseHighLevelDesignRequest =
+    /(?:给出|提供|画出|展示).{0,8}(?:高层|高阶|整体)(?:系统)?(?:设计|架构)/.test(
+      normalized
+    );
+  const hasExactChineseSystemObject =
+    /(?:系统|服务|平台|应用|后端|流水线|架构|基础设施|票务|预订|聊天|信息流|限流器)/.test(
+      normalized
+    );
+  const hasExactChineseAimlContext =
+    /(?:人工智能|机器学习|大模型|检索增强|向量|嵌入|模型服务|智能体|评估|微调|特征库|推荐|排序|个性化|训练|推理)/.test(
+      normalized
+    );
+  const hasExactChineseConceptFrame =
+    /(?:什么是|解释|比较|为什么|如何工作|怎么工作|优缺点|权衡)/.test(
+      normalized
+    );
+  const ambiguousChineseArchitectureConceptFrame =
+    /(?:解释|描述|介绍).{0,10}(?:模型|系统|项目).{0,6}架构/.test(
+      normalized
+    );
+  const hasExactBehavioralFrame =
+    hasBehavioralFrame || hasExactChineseBehavioralFrame;
+  const hasExactProjectFrame =
+    hasStrongPastProjectFrame ||
+    hasExplicitProjectStackFrame ||
+    hasProductionProjectContext ||
+    hasExactChineseProjectFrame;
+  const hasExactSystemDesignFrame =
+    hasStrongSystemDesignFrame ||
+    (!hasStrongPastProjectFrame &&
+      !hasExplicitProjectStackFrame &&
+      !hasExactChineseProjectFrame &&
+      ((hasHighLevelDesignRequest &&
+        (hasSystemDesignObject ||
+          hasScaleOrRequirementContext ||
+          hasExplicitAimlArchitectureObject)) ||
+        ((hasExactChineseDesignRequest ||
+          hasExactChineseHighLevelDesignRequest) &&
+          hasExactChineseSystemObject)));
+  const hasExactLanguageBoundCodingFrame =
+    hasLanguageBoundImplementationDemonstration &&
+    !hasExactBehavioralFrame &&
+    !hasExactProjectFrame &&
+    !hasExactSystemDesignFrame;
+  const hasExactCodingFrame =
+    hasCodingActionObject ||
+    hasAlgorithmDesignRequest ||
+    hasExplicitCodeOutputRequest ||
+    hasExactCodingArtifact ||
+    hasFunctionImplementationFrame ||
+    hasExactLanguageBoundCodingFrame ||
+    hasExactComplexityFrame ||
+    hasExactChineseCodingFrame ||
+    hasExactChineseAlgorithmFrame ||
+    hasExactChineseCodeOutputFrame ||
+    hasExactChineseComplexityFrame;
+  const hasExactAimlContext = hasAimlContext || hasExactChineseAimlContext;
+  const hasExactConceptFrame =
+    hasConceptQuestion || hasExactChineseConceptFrame;
+  const exactCandidates = new Set<CanonicalQuestionType>();
+
+  if (hasExactBehavioralFrame) {
+    exactCandidates.add("behavioral");
+  }
+  if (
+    !hasExactBehavioralFrame &&
+    !ambiguousHypotheticalProjectFrame &&
+    hasExactProjectFrame
+  ) {
+    exactCandidates.add("project-deep-dive");
+  }
+  if (hasExactCodingFrame) {
+    exactCandidates.add("coding");
+  }
+  if (hasExactSystemDesignFrame) {
+    exactCandidates.add(
+      hasExactAimlContext
+        ? "ai-ml-system-design"
+        : "general-system-design"
+    );
+  }
+  if (
+    hasExactConceptFrame &&
+    !ambiguousArchitectureConceptFrame &&
+    !ambiguousChineseArchitectureConceptFrame &&
+    !hasExactBehavioralFrame &&
+    !hasExactProjectFrame &&
+    !hasExplicitProjectStackFrame &&
+    !hasExactSystemDesignFrame &&
+    !hasExactComplexityFrame &&
+    !hasExactChineseComplexityFrame
+  ) {
+    exactCandidates.add("field-knowledge");
+  }
+
+  const conflictingTypes = [...exactCandidates];
+  const type =
+    exactCandidates.size === 1 ? conflictingTypes[0] : undefined;
+  const certainty: LocalQuestionTypeCertainty = type
+    ? "exact-high"
+    : "abstain";
+  const authorityReason = type
+    ? `exact-${type}`
+    : exactCandidates.size > 1
+      ? "conflicting-exact-signals"
+      : ambiguousHypotheticalProjectFrame
+        ? "ambiguous-hypothetical-project-frame"
+        : ambiguousArchitectureConceptFrame
+          ? "ambiguous-architecture-concept-frame"
+          : legacyType
+            ? "legacy-score-only"
+            : "no-exact-local-evidence";
 
   return {
     type,
+    legacyType,
+    certainty,
+    authorityReason,
+    conflictingTypes:
+      exactCandidates.size > 1 ? conflictingTypes : [],
     confidence,
     margin,
     source: "lightweight-text",

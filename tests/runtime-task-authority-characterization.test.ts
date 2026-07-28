@@ -6,7 +6,10 @@ import {
 } from "../src/lib/meeting/interview-section-transition.js";
 import { decideInterviewTaskContinuityBranch } from "../src/lib/meeting/interview-task-continuity.js";
 import { projectPrimaryAsk } from "../src/lib/meeting/primary-ask-projection.js";
-import { inferQuestionTypeDecisionFromText } from "../src/lib/meeting/task-taxonomy.js";
+import {
+  canQuestionTypeDecisionOverrideParent,
+  inferQuestionTypeDecisionFromText,
+} from "../src/lib/meeting/task-taxonomy.js";
 import {
   AMBIGUOUS_TYPE_AUTHORITY_CORPUS,
   EXPLICIT_ASK_AUTHORITY_CORPUS,
@@ -55,6 +58,15 @@ test("characterizes explicit source-owned asks before semantic authority changes
         fixture.id
       );
     }
+    const expectedLegacyLocalType =
+      "expectedLegacyLocalType" in fixture
+        ? fixture.expectedLegacyLocalType
+        : fixture.expectedLocalType;
+    assert.equal(
+      outcome.localType.legacyType,
+      expectedLegacyLocalType,
+      `${fixture.id}: legacy`
+    );
     assert.equal(outcome.localType.type, fixture.expectedLocalType, fixture.id);
   }
 
@@ -73,15 +85,23 @@ test("characterizes explicit source-owned asks before semantic authority changes
   );
 });
 
-test("records ambiguous local type outcomes separately from target authority", () => {
+test("local type authority emits only exact-high or abstain", () => {
   for (const fixture of AMBIGUOUS_TYPE_AUTHORITY_CORPUS) {
     const decision = inferQuestionTypeDecisionFromText(fixture.text);
-    assert.equal(decision.type, fixture.currentLocalType, fixture.id);
-    assert.equal(
-      fixture.targetDisposition === "exact-high",
-      Boolean(fixture.targetType),
-      fixture.id
-    );
+    assert.equal(decision.legacyType, fixture.currentLocalType, fixture.id);
+    assert.equal(decision.certainty, fixture.targetDisposition, fixture.id);
+    assert.equal(decision.type, fixture.targetType, fixture.id);
+  }
+});
+
+test("exact-only multilingual and high-level decisions carry runtime authority", () => {
+  for (const text of [
+    "Give me a high-level design for a ticket selling system.",
+    "请设计一个高并发的票务系统，并先澄清需求。",
+  ]) {
+    const decision = inferQuestionTypeDecisionFromText(text);
+    assert.equal(decision.certainty, "exact-high", text);
+    assert.equal(canQuestionTypeDecisionOverrideParent(decision), true, text);
   }
 });
 

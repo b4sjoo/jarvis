@@ -44,13 +44,17 @@ export function decideSemanticTaxonomyUnknownRescue({
   activeParentType?: CanonicalQuestionType;
   hasManualCorrection: boolean;
 }): SemanticTaxonomyUnknownRescueDecision {
+  const effectiveType =
+    deterministicType !== "unknown" ? deterministicType : lexicalType;
   const baseline = {
     applied: false,
-    effectiveType: lexicalType,
+    effectiveType,
     recommendedType,
-    parentMutationBlocked: false,
+    parentMutationBlocked: Boolean(
+      wouldRescue && recommendedType && recommendedType !== "unknown"
+    ),
   };
-  if (mode !== "enforcement") {
+  if (mode === "shadow") {
     return { ...baseline, reason: "semantic-taxonomy-shadow-mode" };
   }
   if (hasManualCorrection) {
@@ -65,21 +69,11 @@ export function decideSemanticTaxonomyUnknownRescue({
   if (!wouldRescue || !recommendedType || recommendedType === "unknown") {
     return { ...baseline, reason: "no-calibrated-semantic-rescue" };
   }
-  if (activeParentType && activeParentType !== recommendedType) {
-    return {
-      ...baseline,
-      reason: "semantic-parent-mutation-blocked",
-      parentMutationBlocked: true,
-    };
-  }
   return {
-    applied: true,
-    effectiveType: recommendedType,
-    recommendedType,
+    ...baseline,
     reason: activeParentType
-      ? "semantic-confirms-compatible-active-parent"
-      : "semantic-rescued-lexical-unknown-without-parent",
-    parentMutationBlocked: false,
+      ? "semantic-evidence-non-authoritative-with-active-parent"
+      : "semantic-evidence-non-authoritative",
   };
 }
 
@@ -150,6 +144,10 @@ export function formatSemanticTaxonomyShadowMetadata({
     semanticTaxonomySessionId: sessionId,
     semanticTaxonomyRuntimeEpoch: runtimeEpoch,
     taxonomyKeywordType: lexical.type ?? "unknown",
+    taxonomyKeywordLegacyType: lexical.legacyType ?? "unknown",
+    taxonomyKeywordCertainty: lexical.certainty,
+    taxonomyKeywordAuthorityReason: lexical.authorityReason,
+    taxonomyKeywordConflictingTypes: lexical.conflictingTypes,
     taxonomyKeywordConfidence: lexical.confidence,
     taxonomyKeywordMargin: lexical.margin,
     taxonomyKeywordEvidence: lexical.evidence,
@@ -194,6 +192,8 @@ export function formatSemanticTaxonomyShadowMetadata({
     taxonomySemanticPrototypeVersion: semantic?.prototypeVersion,
     taxonomySemanticCalibrationVersion: semantic?.calibrationVersion,
     taxonomyHybridOutcome: hybrid?.outcome ?? "semantic-unavailable",
+    taxonomyHybridSemanticDisposition:
+      hybrid?.semanticDisposition ?? "abstain",
     taxonomyHybridReason:
       hybrid?.reason ??
       (eligibility.eligible

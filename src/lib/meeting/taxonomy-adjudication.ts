@@ -76,7 +76,16 @@ export interface TaxonomyAdjudicationSourceSpan {
 export interface TaxonomyAdjudicationEvidence {
   lexical: Pick<
     QuestionTypeInferenceDecision,
-    "type" | "confidence" | "margin" | "evidence" | "ambiguousTerms" | "scores"
+    | "type"
+    | "legacyType"
+    | "certainty"
+    | "authorityReason"
+    | "conflictingTypes"
+    | "confidence"
+    | "margin"
+    | "evidence"
+    | "ambiguousTerms"
+    | "scores"
   >;
   semantic?: Pick<
     SemanticTaxonomyDecision,
@@ -88,7 +97,11 @@ export interface TaxonomyAdjudicationEvidence {
   >;
   hybrid?: Pick<
     HybridQuestionTypeDecision,
-    "outcome" | "reason" | "recommendedType" | "wouldRescue"
+    | "outcome"
+    | "semanticDisposition"
+    | "reason"
+    | "recommendedType"
+    | "wouldRescue"
   >;
 }
 

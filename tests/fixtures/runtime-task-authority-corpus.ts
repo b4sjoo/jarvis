@@ -11,6 +11,7 @@ export interface ExplicitAskAuthorityFixture {
   expectedPrimaryAsk?: string;
   targetAdmission: true;
   expectedLocalType?: CanonicalQuestionType;
+  expectedLegacyLocalType?: CanonicalQuestionType;
 }
 
 export interface AmbiguousTypeAuthorityFixture {
@@ -71,7 +72,7 @@ export const EXPLICIT_ASK_AUTHORITY_CORPUS: ExplicitAskAuthorityFixture[] = [
     currentDisposition: "answer-primary-ask",
     expectedPrimaryAsk: "Walk me through designing a ride-sharing system.",
     targetAdmission: true,
-    expectedLocalType: "project-deep-dive",
+    expectedLegacyLocalType: "project-deep-dive",
   },
   {
     id: "general-sd-high-level-design",
@@ -80,6 +81,8 @@ export const EXPLICIT_ASK_AUTHORITY_CORPUS: ExplicitAskAuthorityFixture[] = [
     expectedPrimaryAsk:
       "Give me a high-level design for a ticket selling system.",
     targetAdmission: true,
+    expectedLegacyLocalType: undefined,
+    expectedLocalType: "general-system-design",
   },
   {
     id: "ai-ml-system-design",
@@ -120,6 +123,8 @@ export const EXPLICIT_ASK_AUTHORITY_CORPUS: ExplicitAskAuthorityFixture[] = [
     text: "请设计一个高并发的票务系统，并先澄清需求。",
     currentDisposition: "append-setup",
     targetAdmission: true,
+    expectedLegacyLocalType: undefined,
+    expectedLocalType: "general-system-design",
   },
 ];
 
@@ -212,6 +217,10 @@ export function summarizeLocalTypeDecision(
 ) {
   return {
     type: decision.type,
+    legacyType: decision.legacyType,
+    certainty: decision.certainty,
+    authorityReason: decision.authorityReason,
+    conflictingTypes: [...decision.conflictingTypes],
     confidence: decision.confidence,
     margin: decision.margin,
     evidence: [...decision.evidence],
