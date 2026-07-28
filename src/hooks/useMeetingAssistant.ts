@@ -205,6 +205,8 @@ import {
   withInterviewPlaybookPhase,
   readTraceHumanEvaluations,
   readQuestionHumanEvaluations,
+  readHumanGroundTruthEventsV2,
+  readHumanEvaluationProjectionsV2,
   readCriticalMomentCandidates,
   readCriticalMomentEvaluations,
   readMeetingEvalTraceMetadata,
@@ -386,6 +388,17 @@ import {
   runSttPromptEchoRecovery,
   upsertTraceHumanEvaluation,
   upsertQuestionHumanEvaluation,
+  appendHumanGroundTruthEventV2,
+  buildHumanEvaluationObservedSnapshotV2,
+  buildHumanGroundTruthSubjectV2,
+  createHumanGroundTruthEventV2,
+  deriveHumanEvaluationProjectionV2,
+  findActiveHumanGroundTruthEventV2,
+  persistHumanEvaluationProjectionsV2,
+  persistHumanGroundTruthEventsV2,
+  upsertHumanEvaluationProjectionV2,
+  type HumanGroundTruthFactV2,
+  type HumanGroundTruthSource,
   upsertCriticalMomentEvaluation,
   buildCriticalMomentCandidates,
   mergeCriticalMomentCandidates,
@@ -1654,6 +1667,15 @@ interface SentenceCompletionMergeContext {
   fragmentSequences: number[];
 }
 
+interface RecordHumanGroundTruthOptionsV2 {
+  source?: HumanGroundTruthSource;
+  confirmation?: "confirmed" | "suggested";
+  actionId?: string;
+  repairTraceId?: string;
+  uiSurface?: string;
+  evaluation?: QuestionHumanEvaluation;
+}
+
 function getMeetingModelRequestOptions(
   route: ReturnType<typeof resolveMeetingModelRouteFromSnapshot>
 ): MeetingModelRequestOptions | undefined {
@@ -1694,6 +1716,20 @@ export function useMeetingAssistant() {
     humanEvaluations: readTraceHumanEvaluations(),
     questionEvaluations: readQuestionHumanEvaluations(),
   }));
+  const [humanGroundTruthEventsV2, setHumanGroundTruthEventsV2] = useState(
+    () => readHumanGroundTruthEventsV2()
+  );
+  const [humanEvaluationProjectionsV2, setHumanEvaluationProjectionsV2] =
+    useState(() => readHumanEvaluationProjectionsV2());
+  const humanGroundTruthEventsV2Ref = useRef(humanGroundTruthEventsV2);
+  humanGroundTruthEventsV2Ref.current = humanGroundTruthEventsV2;
+  const humanEvaluationProjectionsV2Ref = useRef(
+    humanEvaluationProjectionsV2
+  );
+  humanEvaluationProjectionsV2Ref.current =
+    humanEvaluationProjectionsV2;
+  const questionEvaluationsRef = useRef(state.questionEvaluations);
+  questionEvaluationsRef.current = state.questionEvaluations;
   const [criticalMomentCandidates, setCriticalMomentCandidates] = useState(
     () => readCriticalMomentCandidates()
   );
@@ -4197,6 +4233,94 @@ export function useMeetingAssistant() {
       });
     },
     [buildQuestionEvaluationIdentity]
+  );
+
+  const recordHumanGroundTruthV2 = useCallback(
+    (
+      traceId: string,
+      fact: HumanGroundTruthFactV2,
+      options: RecordHumanGroundTruthOptionsV2 = {}
+    ) => {
+      const trace = traceStoreRef.current
+        .getTraces()
+        .find((candidate) => candidate.id === traceId);
+      if (!trace) return;
+
+      const recordingState = sessionRecordingManagerRef.current?.getState();
+      const sessionId =
+        recordingState?.sessionId ??
+        contextManagerRef.current.getState().sessionId;
+      const questionId = readStringFromTraceMetadata(
+        trace.metadata,
+        "questionInstanceId"
+      );
+      const evaluation =
+        options.evaluation ??
+        questionEvaluationsRef.current.find(
+          (candidate) =>
+            candidate.traceIds.includes(traceId) ||
+            (questionId && candidate.questionId === questionId)
+        );
+      const subject = buildHumanGroundTruthSubjectV2({
+        trace,
+        evaluation,
+      });
+      const source = options.source ?? "explicit-ui";
+      const sessionEvents = humanGroundTruthEventsV2Ref.current.filter(
+        (candidate) => candidate.sessionId === sessionId
+      );
+      const previous =
+        source === "explicit-ui" || source === "manual-type-correction"
+          ? findActiveHumanGroundTruthEventV2(
+              sessionEvents,
+              subject,
+              fact.kind
+            )
+          : undefined;
+      const event = createHumanGroundTruthEventV2({
+        sessionId,
+        subject,
+        fact,
+        source,
+        confirmation: options.confirmation,
+        sourceTraceId: traceId,
+        repairTraceId: options.repairTraceId,
+        actionId: options.actionId,
+        uiSurface: options.uiSurface,
+        supersedesEventId: previous?.eventId,
+      });
+      const events = appendHumanGroundTruthEventV2(
+        humanGroundTruthEventsV2Ref.current,
+        event
+      );
+      if (events === humanGroundTruthEventsV2Ref.current) return;
+
+      humanGroundTruthEventsV2Ref.current = events;
+      persistHumanGroundTruthEventsV2(events);
+      setHumanGroundTruthEventsV2(events);
+
+      const projection = deriveHumanEvaluationProjectionV2({
+        sessionId,
+        subject,
+        events,
+        observed: buildHumanEvaluationObservedSnapshotV2(trace),
+        legacyEvaluation: evaluation,
+      });
+      const projections = upsertHumanEvaluationProjectionV2(
+        humanEvaluationProjectionsV2Ref.current,
+        projection
+      );
+      humanEvaluationProjectionsV2Ref.current = projections;
+      persistHumanEvaluationProjectionsV2(projections);
+      setHumanEvaluationProjectionsV2(projections);
+      sessionRecordingManagerRef.current?.recordHumanGroundTruthEventV2(
+        event
+      );
+      sessionRecordingManagerRef.current?.recordHumanEvaluationProjectionV2(
+        projection
+      );
+    },
+    []
   );
 
   const updateCriticalMomentEvaluation = useCallback(
@@ -16683,6 +16807,21 @@ export function useMeetingAssistant() {
         sessionRecordingManagerRef.current?.recordManualQuestionTypeCorrection(
           correction
         );
+        recordHumanGroundTruthV2(
+          correctionQuestion.sourceTraceId ?? correctionTrace.id,
+          {
+            kind: "expected-question-type",
+            expectedQuestionType: decision.correctedType,
+            correctionScope: correctionScopeDecision.scope,
+          },
+          {
+            source: "manual-type-correction",
+            actionId: eventId,
+            repairTraceId: regenerationTrace.id,
+            uiSurface: source,
+            evaluation,
+          }
+        );
         setState((previous) => ({
           ...previous,
           ...stageSuggestionProjectionForManualCorrection(previous),
@@ -16826,6 +16965,7 @@ export function useMeetingAssistant() {
       cancelActiveAdvisorJob,
       flushPendingSentenceCompletion,
       readRuntimeCommitSnapshot,
+      recordHumanGroundTruthV2,
       resolveMeetingModelRoute,
       runAdvisor,
       state.currentQuestionLineage,
@@ -17021,6 +17161,19 @@ export function useMeetingAssistant() {
         updatedAt: requestedAt,
       },
     });
+    recordHumanGroundTruthV2(
+      target.presentation.originalTraceId,
+      {
+        kind: "expected-runtime-action",
+        expectedAction: "advise",
+      },
+      {
+        source: "manual-force-advise",
+        actionId: `force-advise:${target.logicalQuestionUnit.id}:${target.logicalQuestionUnit.revision}`,
+        repairTraceId: repairTrace.id,
+        uiSurface: "meeting-response-actions",
+      }
+    );
 
     await runAdvisor({
       force: true,
@@ -17072,6 +17225,7 @@ export function useMeetingAssistant() {
     );
   }, [
     flushPendingSentenceCompletion,
+    recordHumanGroundTruthV2,
     runAdvisor,
     updateQuestionHumanEvaluation,
     updateTraceHumanEvaluation,
@@ -19285,6 +19439,7 @@ export function useMeetingAssistant() {
     exportTrace,
     updateTraceHumanEvaluation,
     updateQuestionHumanEvaluation,
+    recordHumanGroundTruthV2,
     updateCriticalMomentEvaluation,
     correctActiveQuestionType,
     regenerateSuggestion,
@@ -19295,6 +19450,8 @@ export function useMeetingAssistant() {
     aiProviders: allAiProviders,
     criticalMomentCandidates,
     criticalMomentEvaluations,
+    humanGroundTruthEventsV2,
+    humanEvaluationProjectionsV2,
     isActive: activeRef.current,
   };
 }

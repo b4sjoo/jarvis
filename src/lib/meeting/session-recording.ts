@@ -28,6 +28,10 @@ import type {
   CriticalMomentCandidate,
   CriticalMomentEvaluation,
 } from "./critical-moment-evaluation.js";
+import type {
+  HumanEvaluationProjectionV2,
+  HumanGroundTruthEventV2,
+} from "./human-ground-truth-v2.js";
 import {
   collectActiveMeetingTaskIdentityIds,
   formatActiveMeetingTaskForRecording,
@@ -96,6 +100,8 @@ interface SessionRecordingEvent {
     | "trace-metrics"
     | "human-evaluation"
     | "question-human-evaluation"
+    | "human-ground-truth-v2"
+    | "human-evaluation-projection-v2"
     | "critical-moment-candidates"
     | "critical-moment-evaluation"
     | "task-snapshot"
@@ -146,6 +152,8 @@ interface ActiveSessionRecording {
   traceSessionIndex: Map<string, SessionTraceIndexEntry>;
   traceSummaries: Map<string, SessionCompactTraceSummary>;
   questionHumanEvaluations: Map<string, QuestionHumanEvaluation>;
+  humanGroundTruthEventsV2: Map<string, HumanGroundTruthEventV2>;
+  humanEvaluationProjectionsV2: Map<string, HumanEvaluationProjectionV2>;
   criticalMomentCandidates: Map<string, CriticalMomentCandidate>;
   criticalMomentEvaluations: Map<string, CriticalMomentEvaluation>;
   writeQueue: Promise<void>;
@@ -1007,6 +1015,8 @@ export class SessionRecordingManager {
           traceSessionIndex: new Map(),
           traceSummaries: new Map(),
           questionHumanEvaluations: new Map(),
+          humanGroundTruthEventsV2: new Map(),
+          humanEvaluationProjectionsV2: new Map(),
           criticalMomentCandidates: new Map(),
           criticalMomentEvaluations: new Map(),
           writeQueue: Promise.resolve(),
@@ -1744,6 +1754,80 @@ export class SessionRecordingManager {
         evaluationCount: sessionEvaluations.length,
       },
       ["human-evaluation/question-evaluations.json"]
+    );
+  }
+
+  recordHumanGroundTruthEventV2(event: HumanGroundTruthEventV2) {
+    const session = this.getWritableSession();
+    if (!session || event.sessionId !== session.sessionId) return;
+    if (session.humanGroundTruthEventsV2.has(event.eventId)) return;
+
+    session.humanGroundTruthEventsV2.set(event.eventId, event);
+    const eventPath = "human-evaluation/ground-truth-v2.jsonl";
+    this.enqueue(session, () =>
+      this.writeText(session, eventPath, `${JSON.stringify(event)}\n`, true)
+    );
+    this.recordEvent(
+      "human-ground-truth-v2",
+      {
+        eventId: event.eventId,
+        factKind: event.fact.kind,
+        source: event.provenance.source,
+        confirmation: event.confirmation,
+        questionId: event.subject.questionId,
+        actionId: event.provenance.actionId,
+        supersedesEventId: event.supersedesEventId,
+      },
+      [eventPath],
+      event.provenance.sourceTraceId
+    );
+  }
+
+  recordHumanEvaluationProjectionV2(
+    projection: HumanEvaluationProjectionV2
+  ) {
+    const session = this.getWritableSession();
+    if (!session || projection.sessionId !== session.sessionId) return;
+
+    session.humanEvaluationProjectionsV2.set(
+      projection.projectionId,
+      projection
+    );
+    const snapshotPath = "human-evaluation/projections-v2.json";
+    const historyPath = "human-evaluation/projections-v2.jsonl";
+    const snapshot = JSON.stringify(
+      {
+        savedAt: Date.now(),
+        sessionId: session.sessionId,
+        derivationVersion: projection.derivationVersion,
+        projections: Array.from(
+          session.humanEvaluationProjectionsV2.values()
+        ),
+      },
+      null,
+      2
+    );
+    this.enqueue(session, async () => {
+      await this.writeText(session, snapshotPath, snapshot);
+      await this.writeText(
+        session,
+        historyPath,
+        `${JSON.stringify(projection)}\n`,
+        true
+      );
+    });
+    this.recordEvent(
+      "human-evaluation-projection-v2",
+      {
+        projectionId: projection.projectionId,
+        questionId: projection.subject.questionId,
+        derivationVersion: projection.derivationVersion,
+        inputEventCount: projection.inputEventIds.length,
+        inputTraceHashCount: projection.inputTraceHashes.length,
+        conflictCount: projection.conflicts.length,
+      },
+      [snapshotPath, historyPath],
+      projection.subject.traceIds[0]
     );
   }
 

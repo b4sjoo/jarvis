@@ -14,6 +14,10 @@ import type {
   ProvisionalCurrentQuestion,
 } from "../src/lib/meeting/current-question-settlement.js";
 import type { SettledAdvisorExecutionPlan } from "../src/lib/meeting/settled-advisor-execution-plan.js";
+import {
+  createHumanGroundTruthEventV2,
+  deriveHumanEvaluationProjectionV2,
+} from "../src/lib/meeting/human-ground-truth-v2.js";
 
 interface InvokeCall {
   command: string;
@@ -122,6 +126,74 @@ test("records zero-trace critical moment candidates and reviewed outcomes", asyn
       }>)[0]
     ).eligibility,
     "critical"
+  );
+});
+
+test("records append-only V2 ground truth and derived projection artifacts", async () => {
+  const native = new ControlledRecordingInvoke();
+  const manager = new SessionRecordingManager(undefined, native.invoke);
+  const recording = await manager.start(START_OPTIONS);
+  const sessionId = required(recording.sessionId);
+  const subject = {
+    questionId: "question_v2",
+    traceIds: ["trace_v2"],
+    sourceTurnIds: ["turn_v2"],
+  };
+  const event = createHumanGroundTruthEventV2({
+    eventId: "ground_truth_v2",
+    sessionId,
+    subject,
+    source: "explicit-ui",
+    sourceTraceId: "trace_v2",
+    fact: {
+      kind: "expected-runtime-action",
+      expectedAction: "advise",
+    },
+  });
+  const projection = deriveHumanEvaluationProjectionV2({
+    sessionId,
+    subject,
+    events: [event],
+    observed: {
+      traceId: "trace_v2",
+      traceHash: "trace-hash-v2",
+      runtimeAction: "ignore",
+    },
+  });
+
+  manager.recordHumanGroundTruthEventV2(event);
+  manager.recordHumanGroundTruthEventV2(event);
+  manager.recordHumanEvaluationProjectionV2(projection);
+  await manager.stop("test-complete");
+
+  const truthWrites = native.calls.filter(
+    (call) =>
+      call.command === "write_meeting_session_recording_text" &&
+      stringArg(call, "relativePath") ===
+        "human-evaluation/ground-truth-v2.jsonl"
+  );
+  const projectionSnapshot = native.calls.find(
+    (call) =>
+      call.command === "write_meeting_session_recording_text" &&
+      stringArg(call, "relativePath") ===
+        "human-evaluation/projections-v2.json"
+  );
+  const projectionHistory = native.calls.find(
+    (call) =>
+      call.command === "write_meeting_session_recording_text" &&
+      stringArg(call, "relativePath") ===
+        "human-evaluation/projections-v2.jsonl"
+  );
+  assert.equal(truthWrites.length, 1);
+  assert.ok(projectionSnapshot);
+  assert.ok(projectionHistory);
+  assert.equal(
+    (
+      parsePayload(projectionSnapshot).projections as Array<{
+        inputTraceHashes: string[];
+      }>
+    )[0]?.inputTraceHashes[0],
+    "trace-hash-v2"
   );
 });
 

@@ -17,6 +17,10 @@ export const STORAGE_KEYS = {
   MEETING_FOCUS_MODE: "meeting_focus_mode",
   MEETING_TRACE_HUMAN_EVALUATIONS: "meeting_trace_human_evaluations",
   MEETING_QUESTION_HUMAN_EVALUATIONS: "meeting_question_human_evaluations",
+  MEETING_HUMAN_GROUND_TRUTH_EVENTS_V2:
+    "meeting_human_ground_truth_events_v2",
+  MEETING_HUMAN_EVALUATION_PROJECTIONS_V2:
+    "meeting_human_evaluation_projections_v2",
   MEETING_CRITICAL_MOMENT_CANDIDATES:
     "meeting_critical_moment_candidates",
   MEETING_CRITICAL_MOMENT_EVALUATIONS:
