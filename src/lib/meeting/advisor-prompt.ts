@@ -24,6 +24,7 @@ import {
   buildResponseActionInstructions,
   formatResponseActionContextScope,
 } from "./response-action-contract.js";
+import { formatBoundedParentReadContextForPrompt } from "./response-only-task-scope.js";
 
 export function buildAdvisorSystemPrompt() {
   return [
@@ -127,6 +128,11 @@ export function buildAdvisorUserMessage(
     "<active_meeting_task>",
     formatActiveMeetingTaskForPrompt(context.activeMeetingTask),
     "</active_meeting_task>",
+    "<response_only_parent_read_context>",
+    formatBoundedParentReadContextForPrompt(
+      context.responseOnlyParentReadContext
+    ),
+    "</response_only_parent_read_context>",
     "<source_specific_task_context>",
     formatSourceSpecificTaskContext(context),
     "</source_specific_task_context>",

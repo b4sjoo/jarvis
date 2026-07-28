@@ -3,6 +3,8 @@ import test from "node:test";
 import {
   applyResponseOnlyTaskScopeToPromptContext,
   createResponseOnlyTaskScope,
+  formatBoundedParentReadContextForPrompt,
+  resolveResponseOnlyContextReadScope,
 } from "../src/lib/meeting/response-only-task-scope.js";
 import {
   decideActiveParentTaskRelationAuthority,
@@ -213,6 +215,114 @@ test("response-only prompt scope excludes durable parent continuity", () => {
   assert.equal(scope.contextReadScope, "current-only");
   assert.equal(scope.artifactMutation, "none");
   assert.equal(scope.taskMutation, "none");
+});
+
+test("response-only follow-up reads a bounded source-owned parent capsule", () => {
+  const activeMeetingTask = task();
+  activeMeetingTask.parent.canonicalQuestionSourceTurnIds = [
+    "turn-parent",
+  ];
+  activeMeetingTask.parent.latestUsefulAnswer =
+    "Generated architecture answer that must stay excluded.";
+  activeMeetingTask.parent.whiteboardArtifact = {
+    id: "whiteboard-a",
+    parentTaskId: activeMeetingTask.parent.id,
+    domainTrack: "ml_sd",
+    currentPhase: "design_framing",
+    title: "Private generated diagram",
+    content: "graph TD; Secret --> Generated",
+    summary: "Generated summary",
+    revision: 1,
+    archetypeIds: [],
+    selectedOverlayIds: [],
+    updateSource: "model-output",
+    updatedAt: 1,
+    createdAt: 1,
+  };
+  activeMeetingTask.parent.parentContextHandoff = {
+    sourceParentId: "task-earlier",
+    transitionKind: "domain-extension",
+    sourceQuestionId: "question-parent",
+    sharedScenarioContext: {
+      domainEntities: ["documents", "embeddings"],
+      sharedRequirements: [
+        "The system must support data residency. [source=turn-constraint]",
+      ],
+      applicableScaleAssumptions: [
+        {
+          value: "Ten million daily active users.",
+          sourceTurnId: "turn-scale",
+        },
+      ],
+    },
+    excludedContextKinds: [],
+  };
+  const contextReadScope = resolveResponseOnlyContextReadScope({
+    preservedParent: activeMeetingTask,
+    proposedRelation: "followup-parent",
+  });
+  const scope = createResponseOnlyTaskScope({
+    logicalQuestionUnitId: "question-followup",
+    revision: 1,
+    sourceQuestion: "How would you shard the vector index?",
+    sourceTurnIds: ["turn-followup"],
+    inferredType: "ai-ml-system-design",
+    relationDisposition: "ambiguous",
+    preservedParent: activeMeetingTask,
+    contextReadScope,
+    now: 200,
+  });
+  const scoped = applyResponseOnlyTaskScopeToPromptContext(
+    {
+      transcript: "full transcript",
+      screenContext: "generated screen context",
+      activeMeetingTask,
+      rollingSummary: "generated summary",
+      userProfileContext: "profile",
+      glossaryText: "HNSW",
+    },
+    scope
+  );
+  const formatted = formatBoundedParentReadContextForPrompt(
+    scoped.responseOnlyParentReadContext
+  );
+
+  assert.equal(contextReadScope, "active-parent-read");
+  assert.equal(
+    scoped.responseOnlyParentReadContext?.objective,
+    "Design a vector database"
+  );
+  assert.deepEqual(scoped.advisorPromptSourceTurnIds, [
+    "turn-parent",
+    "turn-scale",
+    "turn-followup",
+  ]);
+  assert.match(formatted, /data residency/);
+  assert.match(formatted, /documents, embeddings/);
+  assert.doesNotMatch(formatted, /Generated architecture answer/);
+  assert.doesNotMatch(formatted, /Secret/);
+  assert.equal(scoped.activeMeetingTask, undefined);
+  assert.equal(scoped.memoryContext, undefined);
+});
+
+test("response-only independent task proposals cannot read the parent", () => {
+  const contextReadScope = resolveResponseOnlyContextReadScope({
+    preservedParent: task(),
+    proposedRelation: "new-parent",
+  });
+  const scope = createResponseOnlyTaskScope({
+    logicalQuestionUnitId: "question-independent",
+    revision: 1,
+    sourceQuestion: "Implement a standalone stack.",
+    inferredType: "coding",
+    relationDisposition: "ambiguous",
+    preservedParent: task(),
+    contextReadScope,
+    now: 300,
+  });
+
+  assert.equal(contextReadScope, "current-only");
+  assert.equal(scope.parentReadContext, undefined);
 });
 
 function task(): ActiveMeetingTask {

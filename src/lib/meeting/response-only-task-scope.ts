@@ -1,7 +1,9 @@
 import type { ActiveMeetingTask } from "./active-meeting-task.js";
 import type {
+  AdvisorBoundedParentReadContext,
   AdvisorPromptContext,
   InterviewSessionBrief,
+  InterviewTaskRelation,
 } from "./types.js";
 
 export type ResponseOnlyRelationDisposition =
@@ -27,6 +29,7 @@ export interface ResponseOnlyTaskScope {
   preservedParentId?: string;
   preservedParentRevision?: number;
   contextReadScope: AdvisorContextReadScope;
+  parentReadContext?: AdvisorBoundedParentReadContext;
   artifactMutation: "none";
   taskMutation: "none";
   createdAt: number;
@@ -46,6 +49,8 @@ export function createResponseOnlyTaskScope(input: {
   ttlMs?: number;
 }): ResponseOnlyTaskScope {
   const now = input.now ?? Date.now();
+  const contextReadScope =
+    input.contextReadScope ?? "current-only";
   return {
     scopeId: [
       "response_only",
@@ -62,12 +67,31 @@ export function createResponseOnlyTaskScope(input: {
     preservedParentId: input.preservedParent?.parent.id,
     preservedParentRevision:
       input.preservedParent?.parent.revisions,
-    contextReadScope: input.contextReadScope ?? "current-only",
+    contextReadScope,
+    parentReadContext: buildBoundedParentReadContext(
+      input.preservedParent,
+      contextReadScope
+    ),
     artifactMutation: "none",
     taskMutation: "none",
     createdAt: now,
     expiresAt: now + (input.ttlMs ?? 15_000),
   };
+}
+
+export function resolveResponseOnlyContextReadScope(input: {
+  preservedParent?: ActiveMeetingTask;
+  proposedRelation?: InterviewTaskRelation;
+}): AdvisorContextReadScope {
+  if (!input.preservedParent) return "current-only";
+  if (
+    input.proposedRelation === "followup-parent" ||
+    input.proposedRelation === "child-probe" ||
+    input.proposedRelation === "resume-parent"
+  ) {
+    return "active-parent-read";
+  }
+  return "current-only";
 }
 
 export function applyResponseOnlyTaskScopeToPromptContext(
@@ -79,8 +103,14 @@ export function applyResponseOnlyTaskScopeToPromptContext(
     transcript: scope.sourceQuestion
       ? `Them: ${scope.sourceQuestion}`
       : "",
-    advisorPromptSourceTurnIds: [...scope.sourceTurnIds],
+    advisorPromptSourceTurnIds: uniqueStrings([
+      ...(scope.parentReadContext?.sourceTurnIds ?? []),
+      ...scope.sourceTurnIds,
+    ]),
     screenContext: "",
+    responseOnlyParentReadContext: scope.parentReadContext
+      ? cloneParentReadContext(scope.parentReadContext)
+      : undefined,
     interviewSessionBrief: sanitizeInterviewBriefForResponseOnly(
       context.interviewSessionBrief
     ),
@@ -118,6 +148,15 @@ export function formatResponseOnlyTaskScopeForTrace(
     responseOnlyPreservedParentRevision:
       scope.preservedParentRevision,
     responseOnlyContextReadScope: scope.contextReadScope,
+    responseOnlyParentReadContextPresent:
+      Boolean(scope.parentReadContext),
+    responseOnlyParentReadSourceTurnIds:
+      scope.parentReadContext?.sourceTurnIds,
+    responseOnlyParentReadConstraintCount:
+      scope.parentReadContext?.acceptedConstraints.length,
+    responseOnlyParentReadEntityCount:
+      scope.parentReadContext?.sharedScenarioEntities.length,
+    responseOnlyGeneratedContextExcluded: true,
     responseOnlyArtifactMutation: scope.artifactMutation,
     responseOnlyTaskMutation: scope.taskMutation,
     responseOnlyExpiresAt: scope.expiresAt,
@@ -130,6 +169,28 @@ export function formatResponseOnlyTaskScopeForTrace(
   };
 }
 
+export function formatBoundedParentReadContextForPrompt(
+  context: AdvisorBoundedParentReadContext | undefined
+) {
+  if (!context) return "No parent context is authorized for this response.";
+  return [
+    `Parent id: ${context.parentId}`,
+    `Parent revision: ${context.parentRevision}`,
+    `Parent question type: ${context.questionType}`,
+    `Source-owned objective: ${context.objective}`,
+    context.acceptedConstraints.length
+      ? `Accepted constraints: ${context.acceptedConstraints.join("; ")}`
+      : undefined,
+    context.sharedScenarioEntities.length
+      ? `Shared scenario entities: ${context.sharedScenarioEntities.join(", ")}`
+      : undefined,
+    `Excluded context: ${context.excludedContextKinds.join(", ")}`,
+    "Use this capsule only to interpret the current question. It does not establish a settled task relation and grants no task, phase, memory, or artifact mutation authority.",
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
 export function sanitizeInterviewBriefForResponseOnly(
   brief: InterviewSessionBrief | undefined
 ): InterviewSessionBrief | undefined {
@@ -139,4 +200,87 @@ export function sanitizeInterviewBriefForResponseOnly(
     focusAreas: "",
     notes: "",
   };
+}
+
+function buildBoundedParentReadContext(
+  task: ActiveMeetingTask | undefined,
+  contextReadScope: AdvisorContextReadScope
+): AdvisorBoundedParentReadContext | undefined {
+  if (
+    !task ||
+    (contextReadScope !== "active-parent-read" &&
+      contextReadScope !== "active-child-read")
+  ) {
+    return undefined;
+  }
+  const handoff = task.parent.parentContextHandoff?.sharedScenarioContext;
+  const acceptedConstraints = uniqueStrings([
+    ...(handoff?.sharedRequirements ?? []),
+    ...(handoff?.applicableScaleAssumptions?.map(
+      (item) => item.value
+    ) ?? []),
+  ])
+    .map((value) => boundText(value, 220))
+    .filter(Boolean)
+    .slice(0, 6);
+  const sourceTurnIds = uniqueStrings([
+    ...(task.parent.canonicalQuestionSourceTurnIds ?? []),
+    task.parent.startTurnId,
+    task.parent.promptTranscriptStartTurnId,
+    ...(handoff?.applicableScaleAssumptions?.map(
+      (item) => item.sourceTurnId
+    ) ?? []),
+  ]).slice(0, 12);
+
+  return {
+    parentId: task.parent.id,
+    parentRevision: task.parent.revisions ?? 0,
+    questionType: task.parent.questionType,
+    objective: boundText(task.parent.topic, 320),
+    sourceTurnIds,
+    acceptedConstraints,
+    sharedScenarioEntities: uniqueStrings(
+      handoff?.domainEntities ?? []
+    )
+      .map((value) => boundText(value, 80))
+      .filter(Boolean)
+      .slice(0, 8),
+    excludedContextKinds: [
+      "generated-answers",
+      "playbook-phase",
+      "memory-retrieval",
+      "fact-anchors",
+      "project-binding",
+      "code-artifact",
+      "whiteboard-artifact",
+    ],
+  };
+}
+
+function cloneParentReadContext(
+  context: AdvisorBoundedParentReadContext
+): AdvisorBoundedParentReadContext {
+  return {
+    ...context,
+    sourceTurnIds: [...context.sourceTurnIds],
+    acceptedConstraints: [...context.acceptedConstraints],
+    sharedScenarioEntities: [...context.sharedScenarioEntities],
+    excludedContextKinds: [...context.excludedContextKinds],
+  };
+}
+
+function uniqueStrings(values: Array<string | undefined>) {
+  return Array.from(
+    new Set(
+      values
+        .map((value) => value?.trim())
+        .filter((value): value is string => Boolean(value))
+    )
+  );
+}
+
+function boundText(value: string, maxChars: number) {
+  const normalized = value.replace(/\s+/g, " ").trim();
+  if (normalized.length <= maxChars) return normalized;
+  return `${normalized.slice(0, Math.max(0, maxChars - 3)).trimEnd()}...`;
 }

@@ -406,6 +406,7 @@ import {
   applyResponseOnlyTaskScopeToPromptContext,
   createResponseOnlyTaskScope,
   formatResponseOnlyTaskScopeForTrace,
+  resolveResponseOnlyContextReadScope,
   sanitizeInterviewBriefForResponseOnly,
   classifyInterviewTransitionTurn,
   reconcileInterviewTransitionTurnWithPrimaryAsk,
@@ -5750,6 +5751,13 @@ export function useMeetingAssistant() {
             inferredType: advisorTaskSignals.questionType,
             relationDisposition: "ambiguous",
             preservedParent: responseOnlyPreservedTask,
+            contextReadScope:
+              resolveResponseOnlyContextReadScope({
+                preservedParent: responseOnlyPreservedTask,
+                proposedRelation:
+                  advisorTaskSignals.taskRelationAuthorityDecision
+                    ?.proposedRelation,
+              }),
           })
         : undefined;
     const advisorScreenScopeDecision = decideAdvisorScreenScope({
@@ -14480,6 +14488,13 @@ export function useMeetingAssistant() {
                 relationDisposition: "ambiguous",
                 preservedParent:
                   preflightContextState.activeMeetingTask,
+                contextReadScope:
+                  resolveResponseOnlyContextReadScope({
+                    preservedParent:
+                      preflightContextState.activeMeetingTask,
+                    proposedRelation:
+                      screenTaskRelationDecision.proposedRelation,
+                  }),
               })
             : undefined;
         const provisionalScreenTaskRelation =
@@ -14944,6 +14959,8 @@ export function useMeetingAssistant() {
               screenResponseOnlyTaskScope
                 ? undefined
                 : screenExecutionContextState.activeMeetingTask,
+            responseOnlyParentReadContext:
+              screenResponseOnlyTaskScope?.parentReadContext,
             factAnchorDecision: screenFactAnchorDecision,
             projectBindingDecision: screenProjectBindingDecision,
             signal: analysisController.signal,

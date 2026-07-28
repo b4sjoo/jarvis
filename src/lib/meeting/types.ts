@@ -1000,10 +1000,22 @@ export interface MeetingSetupWarning {
   message: string;
 }
 
+export interface AdvisorBoundedParentReadContext {
+  parentId: string;
+  parentRevision: number;
+  questionType: ScreenQuestionType;
+  objective: string;
+  sourceTurnIds: string[];
+  acceptedConstraints: string[];
+  sharedScenarioEntities: string[];
+  excludedContextKinds: string[];
+}
+
 export interface AdvisorPromptContext {
   transcript: string;
   advisorPromptSourceTurnIds?: string[];
   screenContext: string;
+  responseOnlyParentReadContext?: AdvisorBoundedParentReadContext;
   interviewSessionBrief?: InterviewSessionBrief;
   interviewSessionContext?: InterviewSessionContext;
   activeScreenTask?: ActiveScreenTask;
