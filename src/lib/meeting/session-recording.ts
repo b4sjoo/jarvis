@@ -108,6 +108,7 @@ interface SessionRecordingEvent {
     | "interviewer-intent-llm-decision"
     | "taxonomy-adjudication-decision"
     | "question-type-adjudication-decision"
+    | "task-relation-adjudication-decision"
     | "answer-sufficiency-decision"
     | "current-question-settlement"
     | "settled-advisor-execution-plan"
@@ -2165,6 +2166,43 @@ export class SessionRecordingManager {
     );
   }
 
+  recordTaskRelationAdjudicationDecision({
+    traceId,
+    taskId,
+    metadata,
+  }: {
+    traceId: string;
+    taskId?: string;
+    metadata: Record<string, unknown>;
+  }) {
+    const session = this.getWritableSession({ traceId });
+    if (!session) return;
+    const artifactPath =
+      "runtime-inference/task-relation-decisions.jsonl";
+    const payload = {
+      recordedAt: Date.now(),
+      sessionId: session.sessionId,
+      traceId,
+      taskId,
+      metadata,
+    };
+    this.enqueue(session, () =>
+      this.writeText(
+        session,
+        artifactPath,
+        `${JSON.stringify(payload)}\n`,
+        true
+      )
+    );
+    this.recordEvent(
+      "task-relation-adjudication-decision",
+      metadata,
+      [artifactPath],
+      traceId,
+      taskId
+    );
+  }
+
   recordAnswerSufficiencyDecision({
     traceId,
     taskId,
@@ -3046,6 +3084,8 @@ function sanitizeMeetingAssistantSettings(settings: MeetingAssistantSettings) {
       enabled: settings.taxonomyAdjudication.enabled,
       questionTypeMode:
         settings.taxonomyAdjudication.questionTypeMode,
+      taskRelationMode:
+        settings.taxonomyAdjudication.taskRelationMode,
       provider: settings.taxonomyAdjudication.provider,
       variableKeys: Object.keys(settings.taxonomyAdjudication.variables),
       variables: "[redacted]",

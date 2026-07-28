@@ -61,6 +61,8 @@ test("registers each atomic runtime operation with an isolated policy", () => {
   assert.equal(whiteboard.maxOutputTokens, 768);
   assert.equal(relation.lane, "critical");
   assert.equal(relation.timeoutMs, 3_000);
+  assert.equal(relation.maxOutputTokens, 256);
+  assert.equal(relation.quiescenceMs, 350);
 });
 
 test("builds immutable shared snapshots and operation-specific requests", () => {
@@ -109,6 +111,10 @@ test("isolates quota consumption by operation", async () => {
     RuntimeInferenceRuntimeJob,
     string
   >("question-type-adjudication");
+  const taskRelation = new RuntimeInferenceOperationRuntime<
+    RuntimeInferenceRuntimeJob,
+    string
+  >("task-relation-adjudication");
   const settlements: string[] = [];
 
   const schedule = (
@@ -148,6 +154,10 @@ test("isolates quota consumption by operation", async () => {
     questionType,
     runtimeJob("question-type-adjudication", "question-type-1")
   );
+  schedule(
+    taskRelation,
+    runtimeJob("task-relation-adjudication", "task-relation-1")
+  );
   await new Promise((resolve) => setTimeout(resolve, 15));
 
   assert.deepEqual(settlements, [
@@ -155,6 +165,7 @@ test("isolates quota consumption by operation", async () => {
     "taxonomy-adjudication:budget-exhausted",
     "meeting-metadata-inference:completed",
     "question-type-adjudication:completed",
+    "task-relation-adjudication:completed",
   ]);
 });
 

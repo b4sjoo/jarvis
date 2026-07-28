@@ -56,6 +56,8 @@ export * from "./runtime-inference-health";
 export * from "./runtime-inference-runtime";
 export * from "./question-type-adjudication";
 export * from "./question-type-adjudication-request";
+export * from "./task-relation-adjudication";
+export * from "./task-relation-adjudication-request";
 export * from "./native-audio-lifecycle";
 export * from "./opening-route";
 export * from "./memory-evaluation";

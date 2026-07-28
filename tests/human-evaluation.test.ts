@@ -799,3 +799,45 @@ test("labels a suppressed advisor turn as a false negative when advice was expec
   assert.equal(evaluation.failureReason, "advisor-false-negative");
   assert.deepEqual(evaluation.sourceTurnIds, ["turn_3"]);
 });
+
+test("keeps independent task-relation adjudication labels on the question denominator", () => {
+  const evaluations = upsertQuestionHumanEvaluation(
+    [],
+    {
+      sessionId: "session_relation",
+      traceId: "trace_relation",
+      traceKind: "voice",
+      taskId: "parent_relation",
+      parentTaskId: "parent_relation",
+      taskSource: "voice",
+      questionType: "coding",
+    },
+    {
+      taxonomyAdjudication: {
+        needed: true,
+        relationCorrect: false,
+        expectedRelation: "new-parent",
+        parentDecisionCorrect: false,
+        responseOnlyCorrect: true,
+        contextOutcome: "contaminated",
+      },
+    }
+  );
+
+  assert.equal(
+    evaluations[0]?.taxonomyAdjudication?.expectedRelation,
+    "new-parent"
+  );
+  assert.equal(
+    evaluations[0]?.taxonomyAdjudication?.parentDecisionCorrect,
+    false
+  );
+  assert.equal(
+    evaluations[0]?.taxonomyAdjudication?.responseOnlyCorrect,
+    true
+  );
+  assert.equal(
+    evaluations[0]?.taxonomyAdjudication?.contextOutcome,
+    "contaminated"
+  );
+});

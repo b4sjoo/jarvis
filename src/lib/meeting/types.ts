@@ -1164,10 +1164,14 @@ export type MeetingQuestionTypeAdjudicationMode =
   | "shadow"
   | "enforcement";
 
+export type MeetingTaskRelationAdjudicationMode =
+  MeetingQuestionTypeAdjudicationMode;
+
 export interface MeetingTaxonomyAdjudicationSettings
   extends SelectedProviderState {
   enabled: boolean;
   questionTypeMode: MeetingQuestionTypeAdjudicationMode;
+  taskRelationMode: MeetingTaskRelationAdjudicationMode;
 }
 
 export interface MeetingAudioStatus {
@@ -1417,6 +1421,15 @@ export interface TaxonomyAdjudicationHumanEvaluation {
   needed?: boolean;
   typeCorrect?: boolean;
   relationCorrect?: boolean;
+  expectedRelation?:
+    | "new-parent"
+    | "followup-parent"
+    | "child-probe"
+    | "resume-parent"
+    | "unknown";
+  parentDecisionCorrect?: boolean;
+  responseOnlyCorrect?: boolean;
+  contextOutcome?: "correct" | "contaminated" | "missing";
   repairDisposition?: TaxonomyAdjudicationRepairDisposition;
   contextPreserved?: boolean;
   timely?: boolean;

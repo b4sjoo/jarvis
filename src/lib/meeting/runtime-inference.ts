@@ -93,7 +93,7 @@ const DEFINITIONS: Record<
     lane: "critical",
     timeoutMs: 3_000,
     maxOutputTokens: 256,
-    quiescenceMs: 0,
+    quiescenceMs: 350,
     maxStartsPerBudgetSlot: 1,
   },
 };

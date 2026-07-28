@@ -2389,6 +2389,30 @@ export const MeetingAssistant = ({
                                   .taxonomyAdjudicationWouldRepair
                               : undefined
                         }
+                        taskRelationAdjudicationCandidateRelation={
+                          typeof evaluationTrace.metadata
+                            ?.taskRelationAdjudicationCandidateRelation ===
+                          "string"
+                            ? evaluationTrace.metadata
+                                .taskRelationAdjudicationCandidateRelation
+                            : undefined
+                        }
+                        taskRelationAdjudicationDisposition={
+                          typeof evaluationTrace.metadata
+                            ?.taskRelationAdjudicationDisposition ===
+                          "string"
+                            ? evaluationTrace.metadata
+                                .taskRelationAdjudicationDisposition
+                            : undefined
+                        }
+                        taskRelationAdjudicationWouldRepair={
+                          typeof evaluationTrace.metadata
+                            ?.taskRelationAdjudicationWouldRepair ===
+                          "boolean"
+                            ? evaluationTrace.metadata
+                                .taskRelationAdjudicationWouldRepair
+                            : undefined
+                        }
                         evaluation={answerTraceEvaluation}
                         questionEvaluation={answerQuestionEvaluation}
                         memorySnapshot={answerMemoryEvaluationSnapshot}
@@ -3699,13 +3723,40 @@ const ConfigurationsPanel = ({
                   onCheckedChange={(enabled) => {
                     onTaxonomyAdjudicationChange({
                       ...taxonomyAdjudication,
-                      enabled,
+                      enabled:
+                        enabled ||
+                        taxonomyAdjudication.taskRelationMode !== "off",
                       questionTypeMode: enabled ? "shadow" : "off",
                     });
                   }}
                 />
               </div>
-              {taxonomyAdjudication.questionTypeMode !== "off" ? (
+              <div className="flex items-center justify-between gap-2 border-t border-border/50 pt-2">
+                <div>
+                  <div className="text-[10px] font-medium uppercase text-muted-foreground">
+                    LLM Relation Adjudication
+                  </div>
+                  <div className="mt-0.5 text-[10px] text-muted-foreground">
+                    Evaluation-only Shadow; parent mutation blocked
+                  </div>
+                </div>
+                <Switch
+                  checked={
+                    taxonomyAdjudication.taskRelationMode !== "off"
+                  }
+                  onCheckedChange={(enabled) => {
+                    onTaxonomyAdjudicationChange({
+                      ...taxonomyAdjudication,
+                      enabled:
+                        enabled ||
+                        taxonomyAdjudication.questionTypeMode !== "off",
+                      taskRelationMode: enabled ? "shadow" : "off",
+                    });
+                  }}
+                />
+              </div>
+              {taxonomyAdjudication.questionTypeMode !== "off" ||
+              taxonomyAdjudication.taskRelationMode !== "off" ? (
                 <MeetingModelOverrideConfig
                   label="Adjudication model"
                   description="Optional fast model; defaults to the main model"
@@ -3716,6 +3767,8 @@ const ConfigurationsPanel = ({
                       enabled: taxonomyAdjudication.enabled,
                       questionTypeMode:
                         taxonomyAdjudication.questionTypeMode,
+                      taskRelationMode:
+                        taxonomyAdjudication.taskRelationMode,
                       ...selected,
                     });
                   }}
@@ -4639,6 +4692,9 @@ const TraceHumanEvaluationPanel = ({
   taxonomyAdjudicationRelation,
   taxonomyAdjudicationDisposition,
   taxonomyAdjudicationWouldRepair,
+  taskRelationAdjudicationCandidateRelation,
+  taskRelationAdjudicationDisposition,
+  taskRelationAdjudicationWouldRepair,
   evaluation,
   questionEvaluation,
   memorySnapshot,
@@ -4656,6 +4712,9 @@ const TraceHumanEvaluationPanel = ({
   taxonomyAdjudicationRelation?: string;
   taxonomyAdjudicationDisposition?: string;
   taxonomyAdjudicationWouldRepair?: boolean;
+  taskRelationAdjudicationCandidateRelation?: string;
+  taskRelationAdjudicationDisposition?: string;
+  taskRelationAdjudicationWouldRepair?: boolean;
   evaluation:
     | {
         taskQuality?: HumanEvalTaskQuality;
@@ -4914,6 +4973,21 @@ const TraceHumanEvaluationPanel = ({
           </div>
         </div>
       ) : null}
+      {taskRelationAdjudicationDisposition ? (
+        <div className="rounded-sm border border-border/60 bg-muted/30 p-2 text-[10px]">
+          <div className="font-medium uppercase text-muted-foreground">
+            LLM relation adjudication (Shadow)
+          </div>
+          <div className="mt-1 break-words">
+            {taskRelationAdjudicationCandidateRelation ??
+              "No valid proposal"}
+            {` / ${taskRelationAdjudicationDisposition}`}
+            {taskRelationAdjudicationWouldRepair === true
+              ? " / would repair"
+              : ""}
+          </div>
+        </div>
+      ) : null}
     <details className="mt-2 border-t border-border/50 pt-2">
       <summary className="cursor-pointer text-[10px] font-medium text-muted-foreground">
         Human evaluation
@@ -5144,7 +5218,8 @@ const TraceHumanEvaluationPanel = ({
             </div>
           </div>
         ) : null}
-        {taxonomyAdjudicationDisposition ? (
+        {taxonomyAdjudicationDisposition ||
+        taskRelationAdjudicationDisposition ? (
           <div className="rounded-sm border border-border/60 p-2">
             <div className="mb-2 text-[10px] font-medium uppercase text-muted-foreground">
               LLM adjudication labels
@@ -5177,6 +5252,84 @@ const TraceHumanEvaluationPanel = ({
                   updateTaxonomyAdjudicationEvaluation({ relationCorrect })
                 }
               />
+              {taskRelationAdjudicationDisposition ? (
+                <CriticalMomentButtonGroup
+                  label="Expected relation"
+                  options={[
+                    ["new-parent", "New parent"],
+                    ["followup-parent", "Follow-up"],
+                    ["child-probe", "Child"],
+                    ["resume-parent", "Resume"],
+                    ["unknown", "Unknown"],
+                  ]}
+                  value={
+                    questionEvaluation?.taxonomyAdjudication
+                      ?.expectedRelation
+                  }
+                  onSelect={(expectedRelation) =>
+                    updateTaxonomyAdjudicationEvaluation({
+                      expectedRelation:
+                        expectedRelation as NonNullable<
+                          QuestionHumanEvaluation["taxonomyAdjudication"]
+                        >["expectedRelation"],
+                    })
+                  }
+                />
+              ) : null}
+              {taskRelationAdjudicationDisposition ? (
+                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                  <TaxonomyAdjudicationBooleanLabel
+                    label="Parent decision"
+                    positiveLabel="Correct"
+                    negativeLabel="Wrong"
+                    value={
+                      questionEvaluation?.taxonomyAdjudication
+                        ?.parentDecisionCorrect
+                    }
+                    onChange={(parentDecisionCorrect) =>
+                      updateTaxonomyAdjudicationEvaluation({
+                        parentDecisionCorrect,
+                      })
+                    }
+                  />
+                  <TaxonomyAdjudicationBooleanLabel
+                    label="Response-only"
+                    positiveLabel="Correct"
+                    negativeLabel="Wrong"
+                    value={
+                      questionEvaluation?.taxonomyAdjudication
+                        ?.responseOnlyCorrect
+                    }
+                    onChange={(responseOnlyCorrect) =>
+                      updateTaxonomyAdjudicationEvaluation({
+                        responseOnlyCorrect,
+                      })
+                    }
+                  />
+                </div>
+              ) : null}
+              {taskRelationAdjudicationDisposition ? (
+                <CriticalMomentButtonGroup
+                  label="Context outcome"
+                  options={[
+                    ["correct", "Correct"],
+                    ["contaminated", "Contaminated"],
+                    ["missing", "Missing"],
+                  ]}
+                  value={
+                    questionEvaluation?.taxonomyAdjudication
+                      ?.contextOutcome
+                  }
+                  onSelect={(contextOutcome) =>
+                    updateTaxonomyAdjudicationEvaluation({
+                      contextOutcome:
+                        contextOutcome as NonNullable<
+                          QuestionHumanEvaluation["taxonomyAdjudication"]
+                        >["contextOutcome"],
+                    })
+                  }
+                />
+              ) : null}
               <div>
                 <div className="mb-1 text-[10px] text-muted-foreground">
                   Repair policy

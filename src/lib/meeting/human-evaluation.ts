@@ -1179,6 +1179,24 @@ function normalizeTaxonomyAdjudicationEvaluation(
 ): QuestionHumanEvaluation["taxonomyAdjudication"] {
   if (!value || typeof value !== "object") return undefined;
   const candidate = value as Record<string, unknown>;
+  const expectedRelation: NonNullable<
+    QuestionHumanEvaluation["taxonomyAdjudication"]
+  >["expectedRelation"] =
+    candidate.expectedRelation === "new-parent" ||
+    candidate.expectedRelation === "followup-parent" ||
+    candidate.expectedRelation === "child-probe" ||
+    candidate.expectedRelation === "resume-parent" ||
+    candidate.expectedRelation === "unknown"
+      ? candidate.expectedRelation
+      : undefined;
+  const contextOutcome: NonNullable<
+    QuestionHumanEvaluation["taxonomyAdjudication"]
+  >["contextOutcome"] =
+    candidate.contextOutcome === "correct" ||
+    candidate.contextOutcome === "contaminated" ||
+    candidate.contextOutcome === "missing"
+      ? candidate.contextOutcome
+      : undefined;
   const repairDisposition: NonNullable<
     QuestionHumanEvaluation["taxonomyAdjudication"]
   >["repairDisposition"] =
@@ -1198,6 +1216,16 @@ function normalizeTaxonomyAdjudicationEvaluation(
       typeof candidate.relationCorrect === "boolean"
         ? candidate.relationCorrect
         : undefined,
+    expectedRelation,
+    parentDecisionCorrect:
+      typeof candidate.parentDecisionCorrect === "boolean"
+        ? candidate.parentDecisionCorrect
+        : undefined,
+    responseOnlyCorrect:
+      typeof candidate.responseOnlyCorrect === "boolean"
+        ? candidate.responseOnlyCorrect
+        : undefined,
+    contextOutcome,
     repairDisposition,
     contextPreserved:
       typeof candidate.contextPreserved === "boolean"
