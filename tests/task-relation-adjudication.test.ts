@@ -118,6 +118,24 @@ test("builds a bounded relation-only request without generated or factual contex
     activeMeetingTask: activeTask(),
     recentTurns: [
       {
+        id: "turn-parent",
+        speaker: "them",
+        text: "Design a RAG system for trip planning.",
+        startedAt: 10,
+        endedAt: 20,
+        isFinal: true,
+        source: "system-audio",
+      },
+      {
+        id: "constraint-a",
+        speaker: "them",
+        text: "Assume 10 million users and p99 latency under 200 ms.",
+        startedAt: 30,
+        endedAt: 40,
+        isFinal: true,
+        source: "system-audio",
+      },
+      {
         id: "transition-a",
         speaker: "them",
         text: "Now let's return to the original architecture.",
@@ -133,6 +151,14 @@ test("builds a bounded relation-only request without generated or factual contex
 
   assert.equal(request.activeParent.revision, 3);
   assert.equal(request.recentTransitions.length, 1);
+  assert.deepEqual(
+    request.recentSourceEvidence.map((item) => item.role),
+    ["question", "constraint", "transition"]
+  );
+  assert.equal(request.activeChild, undefined);
+  assert.deepEqual(request.activeParent.acceptedConstraints, [
+    request.recentSourceEvidence[1],
+  ]);
   assert.match(prompts.systemPrompt, /Classify only the relationship/i);
   assert.doesNotMatch(
     prompts.userMessage,
@@ -140,9 +166,36 @@ test("builds a bounded relation-only request without generated or factual contex
   );
   assert.doesNotMatch(
     serialized,
-    /private generated answer|private-fact-anchor|secret-project|graph TD/i
+    /private generated answer|older private generated answer|private-fact-anchor|secret-project|graph TD/i
   );
   assert.match(serialized, /support fresh travel content/i);
+  assert.match(serialized, /10 million users/i);
+});
+
+test("active child relation evidence includes only source-owned question text", () => {
+  const request = buildTaskRelationAdjudicationRequest({
+    logicalQuestionUnit: unit("How would that change the parent design?"),
+    activeMeetingTask: activeTask(true),
+    recentTurns: [
+      {
+        id: "turn-child",
+        speaker: "them",
+        text: "Explain HNSW in the retrieval component.",
+        startedAt: 20,
+        endedAt: 30,
+        isFinal: true,
+        source: "system-audio",
+      },
+    ],
+  });
+  const serialized = JSON.stringify(request);
+
+  assert.equal(
+    request.activeChild?.question,
+    "Explain HNSW in the retrieval component"
+  );
+  assert.deepEqual(request.activeChild?.sourceTurnIds, ["turn-child"]);
+  assert.doesNotMatch(serialized, /Bounded HNSW concept probe/i);
 });
 
 test("strictly parses grounded follow-up and rejects broader authority", () => {

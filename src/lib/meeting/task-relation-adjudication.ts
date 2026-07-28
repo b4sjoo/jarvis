@@ -5,11 +5,13 @@ import type {
 } from "./current-question-settlement.js";
 import type { LogicalQuestionUnit } from "./logical-question-unit.js";
 import type { RuntimeInferenceRuntimeJob } from "./runtime-inference-runtime.js";
+import { projectPrimaryAsk } from "./primary-ask-projection.js";
 import {
   projectLogicalQuestionForAdjudication,
   type TaxonomyAdjudicationLease,
   type TaxonomyAdjudicationProjection,
 } from "./taxonomy-adjudication.js";
+import { hasConstraintOrCorrectionSignal } from "./transcript-fusion.js";
 import type {
   MeetingTaskRelationAdjudicationMode,
   TranscriptTurn,
@@ -21,6 +23,7 @@ export const TASK_RELATION_ADJUDICATION_PROMPT_VERSION =
 export const TASK_RELATION_ADJUDICATION_MAX_OUTPUT_CHARS = 4_096;
 export const TASK_RELATION_ADJUDICATION_MAX_PARENT_CHARS = 480;
 export const TASK_RELATION_ADJUDICATION_MAX_TRANSITION_CHARS = 600;
+export const TASK_RELATION_ADJUDICATION_MAX_SOURCE_EVIDENCE_CHARS = 720;
 
 export const RUNTIME_TASK_RELATIONS = [
   "new-parent",
@@ -40,6 +43,8 @@ export interface TaskRelationParentCapsule {
   topic: string;
   compactObjective: string;
   currentPhase?: string;
+  sourceTurnIds: string[];
+  acceptedConstraints: TaskRelationSourceEvidence[];
   sharedScenarioEntities: string[];
 }
 
@@ -47,7 +52,18 @@ export interface TaskRelationChildCapsule {
   childId: string;
   canonicalType: string;
   question: string;
-  compactSummary?: string;
+  sourceTurnIds: string[];
+}
+
+export type TaskRelationSourceEvidenceRole =
+  | "question"
+  | "constraint"
+  | "transition";
+
+export interface TaskRelationSourceEvidence {
+  turnId: string;
+  text: string;
+  role: TaskRelationSourceEvidenceRole;
 }
 
 export interface TaskRelationTransitionEvidence {
@@ -63,6 +79,7 @@ export interface TaskRelationAdjudicationRequest {
   currentQuestion: TaxonomyAdjudicationProjection;
   activeParent: TaskRelationParentCapsule;
   activeChild?: TaskRelationChildCapsule;
+  recentSourceEvidence: TaskRelationSourceEvidence[];
   recentTransitions: TaskRelationTransitionEvidence[];
   suspendedParent?: TaskRelationParentCapsule;
 }
@@ -125,8 +142,26 @@ export function buildTaskRelationAdjudicationRequest(input: {
   recentTurns?: TranscriptTurn[];
 }): TaskRelationAdjudicationRequest {
   const parent = input.activeMeetingTask.parent;
-  const activeParent = buildParentCapsule(input.activeMeetingTask);
   const child = input.activeMeetingTask.child;
+  const scopedTurns = selectActiveParentSourceTurns({
+    turns: input.recentTurns ?? [],
+    activeMeetingTask: input.activeMeetingTask,
+  });
+  const excludedTurnIds = new Set(
+    input.logicalQuestionUnit.sourceTurnIds
+  );
+  const recentSourceEvidence = selectRecentSourceEvidence({
+    turns: scopedTurns,
+    excludedTurnIds,
+  });
+  const recentTransitions = selectRecentTransitionEvidence({
+    turns: scopedTurns,
+    excludedTurnIds,
+  });
+  const activeParent = buildParentCapsule(
+    input.activeMeetingTask,
+    recentSourceEvidence
+  );
 
   return {
     schemaVersion: TASK_RELATION_ADJUDICATION_SCHEMA_VERSION,
@@ -142,15 +177,11 @@ export function buildTaskRelationAdjudicationRequest(input: {
           childId: child.id,
           canonicalType: child.questionType,
           question: boundText(child.question, 240),
-          compactSummary: child.compactSummary
-            ? boundText(child.compactSummary, 200)
-            : undefined,
+          sourceTurnIds: [...child.basedOnTurnIds].slice(0, 8),
         }
       : undefined,
-    recentTransitions: selectRecentTransitionEvidence({
-      turns: input.recentTurns ?? [],
-      excludedTurnIds: new Set(input.logicalQuestionUnit.sourceTurnIds),
-    }),
+    recentSourceEvidence,
+    recentTransitions,
     suspendedParent: child
       ? {
           ...activeParent,
@@ -222,7 +253,8 @@ export function buildTaskRelationAdjudicationPrompts(
       "resume-parent is valid only when activeChild is present and the question explicitly returns from that child to the suspended parent.",
       "Use unknown when the relationship cannot be grounded. Time proximity, topic overlap, or compatible question types alone are not relation evidence.",
       "currentQuestionEvidenceSpans must contain one or more exact verbatim substrings from currentQuestion.sourceTurns.",
-      "parentEvidenceSpans must contain exact verbatim substrings from activeParent, activeChild, or suspendedParent text fields.",
+      "parentEvidenceSpans must contain exact verbatim substrings from source-owned activeParent, activeChild, recentSourceEvidence, recentTransitions, or suspendedParent text fields.",
+      "Never use currentPhase as an evidence span. It is runtime state, not interviewer-owned evidence.",
       "followup-parent, child-probe, and resume-parent require at least one grounded parentEvidenceSpan.",
       "new-parent requires standalone=true. resume-parent requires explicitBinding=true.",
       "Schema: {schemaVersion:1,relation,confidence,currentQuestionEvidenceSpans,parentEvidenceSpans,explicitBinding,standalone,ambiguityReason?}.",
@@ -242,6 +274,7 @@ export function buildTaskRelationAdjudicationPrompts(
       },
       activeParent: request.activeParent,
       activeChild: request.activeChild,
+      recentSourceEvidence: request.recentSourceEvidence,
       recentTransitions: request.recentTransitions,
       suspendedParent: request.suspendedParent,
     }),
@@ -438,8 +471,20 @@ export function formatTaskRelationAdjudicationForTrace(input: {
       input.request?.activeParent.revision,
     taskRelationAdjudicationActiveChildId:
       input.request?.activeChild?.childId,
+    taskRelationAdjudicationRecentSourceEvidenceCount:
+      input.request?.recentSourceEvidence.length,
+    taskRelationAdjudicationRecentSourceEvidenceChars:
+      input.request?.recentSourceEvidence.reduce(
+        (total, item) => total + item.text.length,
+        0
+      ),
+    taskRelationAdjudicationRecentSourceEvidenceTurnIds:
+      input.request?.recentSourceEvidence.map((item) => item.turnId),
+    taskRelationAdjudicationRecentSourceEvidenceRoles:
+      input.request?.recentSourceEvidence.map((item) => item.role),
     taskRelationAdjudicationTransitionCount:
       input.request?.recentTransitions.length,
+    taskRelationAdjudicationGeneratedAnswerExcluded: true,
     taskRelationAdjudicationDisposition: input.disposition,
     taskRelationAdjudicationCandidateRelation:
       input.candidate?.relation,
@@ -464,7 +509,8 @@ export function formatTaskRelationAdjudicationForTrace(input: {
 }
 
 function buildParentCapsule(
-  activeMeetingTask: ActiveMeetingTask
+  activeMeetingTask: ActiveMeetingTask,
+  recentSourceEvidence: TaskRelationSourceEvidence[]
 ): TaskRelationParentCapsule {
   const parent = activeMeetingTask.parent;
   const sharedContext =
@@ -483,11 +529,96 @@ function buildParentCapsule(
     topic: boundText(parent.topic, 280),
     compactObjective,
     currentPhase: parent.playbookPhase,
+    sourceTurnIds: uniqueStrings([
+      ...(parent.canonicalQuestionSourceTurnIds ?? []),
+      parent.startTurnId,
+      parent.promptTranscriptStartTurnId,
+    ]).slice(0, 12),
+    acceptedConstraints: recentSourceEvidence.filter(
+      (item) => item.role === "constraint"
+    ),
     sharedScenarioEntities:
       sharedContext?.domainEntities
         ?.slice(0, 8)
         .map((entity) => boundText(entity, 80)) ?? [],
   };
+}
+
+function selectActiveParentSourceTurns(input: {
+  turns: TranscriptTurn[];
+  activeMeetingTask: ActiveMeetingTask;
+}) {
+  const parent = input.activeMeetingTask.parent;
+  const boundaryIds = new Set(
+    uniqueStrings([
+      parent.promptTranscriptStartTurnId,
+      parent.startTurnId,
+      ...(parent.canonicalQuestionSourceTurnIds ?? []),
+    ])
+  );
+  const boundaryIndexes = input.turns
+    .map((turn, index) => (boundaryIds.has(turn.id) ? index : -1))
+    .filter((index) => index >= 0);
+  const boundaryIndex =
+    boundaryIndexes.length > 0 ? Math.min(...boundaryIndexes) : 0;
+  return input.turns.slice(boundaryIndex);
+}
+
+function selectRecentSourceEvidence(input: {
+  turns: TranscriptTurn[];
+  excludedTurnIds: Set<string>;
+}) {
+  const selected: TaskRelationSourceEvidence[] = [];
+  let selectedChars = 0;
+  for (const turn of [...input.turns].reverse()) {
+    if (
+      selected.length >= 3 ||
+      selectedChars >=
+        TASK_RELATION_ADJUDICATION_MAX_SOURCE_EVIDENCE_CHARS
+    ) {
+      break;
+    }
+    if (
+      turn.speaker !== "them" ||
+      input.excludedTurnIds.has(turn.id) ||
+      turn.contextFusionStatus === "duplicate-suppressed" ||
+      turn.contextPromptEligible === false
+    ) {
+      continue;
+    }
+    const role = classifySourceEvidenceRole(turn);
+    if (!role) continue;
+    const remaining =
+      TASK_RELATION_ADJUDICATION_MAX_SOURCE_EVIDENCE_CHARS -
+      selectedChars;
+    const text = boundText(turn.text, Math.min(280, remaining));
+    if (!text) continue;
+    selected.unshift({ turnId: turn.id, text, role });
+    selectedChars += text.length;
+  }
+  return selected;
+}
+
+function classifySourceEvidenceRole(
+  turn: TranscriptTurn
+): TaskRelationSourceEvidenceRole | undefined {
+  if (hasTransitionEvidence(turn.text)) {
+    return "transition";
+  }
+  if (hasConstraintOrCorrectionSignal(turn.text)) {
+    return "constraint";
+  }
+  const primaryAsk = projectPrimaryAsk({
+    turnId: turn.id,
+    text: turn.text,
+  });
+  if (
+    primaryAsk.disposition === "answer-primary-ask" &&
+    primaryAsk.normalizedPrimaryAsk
+  ) {
+    return "question";
+  }
+  return undefined;
 }
 
 function selectRecentTransitionEvidence(input: {
@@ -532,10 +663,11 @@ function buildParentEvidenceCorpus(
   return [
     request.activeParent.topic,
     request.activeParent.compactObjective,
-    request.activeParent.currentPhase,
+    ...request.activeParent.acceptedConstraints.map((item) => item.text),
     ...request.activeParent.sharedScenarioEntities,
     request.activeChild?.question,
-    request.activeChild?.compactSummary,
+    ...request.recentSourceEvidence.map((item) => item.text),
+    ...request.recentTransitions.map((item) => item.text),
     request.suspendedParent?.topic,
     request.suspendedParent?.compactObjective,
   ]
@@ -588,6 +720,12 @@ function stripJsonFence(value: string) {
 
 function boundText(value: string, maxChars: number) {
   return value.replace(/\s+/gu, " ").trim().slice(0, maxChars);
+}
+
+function uniqueStrings(values: Array<string | undefined>) {
+  return Array.from(
+    new Set(values.filter((value): value is string => Boolean(value)))
+  );
 }
 
 function estimateWordEquivalents(value: string) {

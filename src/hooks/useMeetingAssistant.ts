@@ -156,6 +156,7 @@ import {
   collectConfirmedMeFacts,
   findDuplicateSystemAudioTurnForMeTurn,
   findRecentMeClarificationForTurn,
+  hasConstraintOrCorrectionSignal,
   isInterviewSessionBriefEmpty,
   normalizeInterviewBriefCompany,
   extractScreenTaskQuestion,
@@ -21205,32 +21206,6 @@ function hasQuestionOrTaskSignal(text: string) {
     /\b(system design|design a|design an|leetcode|algorithm|coding question|behavioral question)\b/i.test(
       normalized
     )
-  );
-}
-
-function hasConstraintOrCorrectionSignal(text: string) {
-  const normalized = normalizeTranscriptForGate(text);
-  const hasCorrectionVerb =
-    /\b(not|instead|rather than|use|using|assume|constraint|requirement|actually|i mean|correction|clarify|with|without)\b/i.test(
-      normalized
-    );
-  const hasTechnicalObject =
-    /\b(rag|retrieval augmented generation|rec|recommendation|python|java|javascript|typescript|go|golang|rust|c\+\+|sql|redis|postgres|mysql|qps|tps|latency|throughput|p99|memory|space|time|complexity|scale|users|requests|million|billion|k|m)\b/i.test(
-      normalized
-    );
-  const hasNumericConstraint =
-    /\b\d+\s*(qps|tps|rps|users|requests|ms|s|seconds|minutes|kb|mb|gb|tb|k|m|million|billion)\b/i.test(
-      normalized
-    );
-  const hasDirectCorrection =
-    /\b(rag\s+(not|instead of)|not\s+rec|not\s+recommendation|use\s+(go|golang|python|java|javascript|typescript|rust|c\+\+)|in\s+(go|golang|python|java|javascript|typescript|rust|c\+\+))\b/i.test(
-      normalized
-    );
-
-  return (
-    (hasCorrectionVerb && hasTechnicalObject) ||
-    hasNumericConstraint ||
-    hasDirectCorrection
   );
 }
 
