@@ -106,6 +106,9 @@ const TRANSITION_ONLY_TOKENS = new Set([
 const DEFERRED_OR_RETROSPECTIVE_FRAME =
   /\b(?:later|after(?:ward|wards)?|eventually|at the end|in a later round|we will (?:later )?(?:cover|discuss|ask)|we (?:covered|discussed|asked)|were difficult|was difficult)\b|稍后|之后再|最后会|刚才(?:讨论|问)|之前(?:讨论|问)/iu;
 
+const SOURCE_OWNED_TASK_FRAME =
+  /(?:^|[.!?。！？]\s*)(?:now\s+)?(?:please\s+)?(?:design|build|implement|write|code|solve|explain|describe|outline|propose|create|sketch|estimate|compare|evaluate|provide)\b|(?:\b(?:you (?:need|have|will|should) to|we (?:need|want) you to|can you|could you|would you)\s+)(?:design|build|implement|write|code|solve|explain|describe|outline|propose|create|sketch|estimate|compare|evaluate|provide)\b|(?:请|设计|实现|编写|解释|描述|概述|提出|创建|估算|比较|评估|提供)/iu;
+
 const SECTION_PATTERNS: Array<{
   questionType: InterviewSectionQuestionType;
   pattern: RegExp;
@@ -166,6 +169,7 @@ export function classifyInterviewTransitionTurn(
     .replace(/\b(?:to|with|some|the|a|our|maybe)\b/giu, " ")
     .replace(/[^\p{L}\p{N}+#]+/gu, " ")
     .trim();
+  const prefix = normalized.slice(0, transitionMatch.index).trim();
   const suffixTokens = suffix.split(/\s+/u).filter(Boolean);
   const substantiveTokens = suffixTokens.filter(
     (token) => !TRANSITION_ONLY_TOKENS.has(token)
@@ -176,11 +180,17 @@ export function classifyInterviewTransitionTurn(
       normalized
     ) || /(?:怎么|如何|为什么|哪里|什么|哪种|是否)/u.test(text);
   const hasTaskPayload =
-    /\b(?:design|implement|write|code|solve|explain|describe|outline|propose|create|sketch|estimate|compare|evaluate)\b/iu.test(
+    /\b(?:design|build|implement|write|code|solve|explain|describe|outline|propose|create|sketch|estimate|compare|evaluate|provide)\b/iu.test(
       suffix
     ) && substantiveTokens.length >= 2;
+  const hasLeadingTaskPayload = SOURCE_OWNED_TASK_FRAME.test(prefix);
 
-  if (hasQuestionMarker || hasInterrogativeClause || hasTaskPayload) {
+  if (
+    hasQuestionMarker ||
+    hasInterrogativeClause ||
+    hasTaskPayload ||
+    hasLeadingTaskPayload
+  ) {
     return {
       detected: true,
       disposition: "complete-question",
@@ -188,7 +198,9 @@ export function classifyInterviewTransitionTurn(
         ? "transition-with-question-marker"
         : hasInterrogativeClause
           ? "transition-with-interrogative-clause"
-          : "transition-with-task-payload",
+          : hasLeadingTaskPayload
+            ? "transition-with-leading-task-payload"
+            : "transition-with-task-payload",
     };
   }
 
@@ -196,6 +208,24 @@ export function classifyInterviewTransitionTurn(
     detected: true,
     disposition: "hint-only",
     reason: "transition-announcement-only",
+  };
+}
+
+export function reconcileInterviewTransitionTurnWithPrimaryAsk(
+  decision: InterviewTransitionTurnDecision,
+  normalizedPrimaryAsk: string | undefined
+): InterviewTransitionTurnDecision {
+  if (
+    decision.disposition !== "hint-only" ||
+    !normalizedPrimaryAsk?.trim()
+  ) {
+    return decision;
+  }
+
+  return {
+    detected: true,
+    disposition: "complete-question",
+    reason: "transition-with-primary-ask-projection",
   };
 }
 

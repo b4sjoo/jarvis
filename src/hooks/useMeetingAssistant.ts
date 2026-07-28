@@ -378,6 +378,7 @@ import {
   formatResponseOnlyTaskScopeForTrace,
   sanitizeInterviewBriefForResponseOnly,
   classifyInterviewTransitionTurn,
+  reconcileInterviewTransitionTurnWithPrimaryAsk,
   consumeInterviewSectionHint,
   createPendingInterviewSectionHint,
   detectInterviewSectionTransition,
@@ -10957,9 +10958,22 @@ export function useMeetingAssistant() {
             : 0,
           sentenceBufferMergedTranscriptChars: turn.text.length,
         });
-        const transitionTurnDecision = classifyInterviewTransitionTurn(
+        const primaryAskProjection = projectPrimaryAsk({
+          turnId: turn.id,
+          text: turn.text,
+        });
+        const projectedClassifierText = primaryAskClassifierText(
+          primaryAskProjection,
           turn.text
         );
+        const classifiedTransitionTurn = classifyInterviewTransitionTurn(
+          turn.text
+        );
+        const transitionTurnDecision =
+          reconcileInterviewTransitionTurnWithPrimaryAsk(
+            classifiedTransitionTurn,
+            primaryAskProjection.normalizedPrimaryAsk
+          );
         const sectionTransitionDetection = detectInterviewSectionTransition(
           turn.text
         );
@@ -10977,6 +10991,7 @@ export function useMeetingAssistant() {
           pendingInterviewSectionHintRef.current = undefined;
         }
         traceStoreRef.current.updateMetadata(traceId, {
+          ...formatPrimaryAskProjectionForTrace(primaryAskProjection),
           taskSwitchEvidenceDetected: transitionTurnDecision.detected,
           taskSwitchDisposition: transitionTurnDecision.disposition,
           taskSwitchDispositionReason: transitionTurnDecision.reason,
@@ -11168,14 +11183,6 @@ export function useMeetingAssistant() {
           );
         }
 
-        const primaryAskProjection = projectPrimaryAsk({
-          turnId: turn.id,
-          text: turn.text,
-        });
-        const projectedClassifierText = primaryAskClassifierText(
-          primaryAskProjection,
-          turn.text
-        );
         const turnGate = reconcilePrimaryAskTurnDecision(
           primaryAskProjection,
           evaluateThemTurnForAdvisor(
@@ -11188,10 +11195,6 @@ export function useMeetingAssistant() {
               ),
             }
           )
-        );
-        traceStoreRef.current.updateMetadata(
-          traceId,
-          formatPrimaryAskProjectionForTrace(primaryAskProjection)
         );
         const keywordIntentEvidence =
           formatInterviewerIntentKeywordEvidenceForTrace(

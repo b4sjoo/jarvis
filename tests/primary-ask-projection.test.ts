@@ -45,6 +45,22 @@ test("does not admit future behavioral examples as a current question", () => {
   assert.equal(reconciled.action, "append-only");
 });
 
+test("preserves a source-owned design ask before a start-with instruction", () => {
+  const text =
+    "Now please design a ride-sharing system. Start with requirements and provide a high-level infrastructure whiteboard.";
+  const result = projectPrimaryAsk({
+    turnId: "turn_ride_sharing",
+    text,
+  });
+
+  assert.equal(result.disposition, "answer-primary-ask");
+  assert.equal(
+    result.normalizedPrimaryAsk,
+    "design a ride-sharing system."
+  );
+  assert.equal(result.speechAct, "directive");
+});
+
 test("composes setup and a later referential direct ask into one projection", () => {
   const setup = projectPrimaryAsk({
     turnId: "turn_setup",

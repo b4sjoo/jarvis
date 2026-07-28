@@ -5,6 +5,7 @@ import {
   consumeInterviewSectionHint,
   createPendingInterviewSectionHint,
   detectInterviewSectionTransition,
+  reconcileInterviewTransitionTurnWithPrimaryAsk,
 } from "../src/lib/meeting/interview-section-transition.js";
 
 test("keeps a pure interview section announcement answerless", () => {
@@ -20,12 +21,15 @@ test("keeps a pure interview section announcement answerless", () => {
 });
 
 test("routes a transition that already contains a complete question", () => {
-  const decision = classifyInterviewTransitionTurn(
-    "Okay, looks good. So let's move on to the next question. This question is maybe some system design questions, but in this task, we will need you to design a food delivery app like Uber Eats or DoorDash. How will you begin with that?"
-  );
-
-  assert.equal(decision.detected, true);
-  assert.equal(decision.disposition, "complete-question");
+  for (const text of [
+    "Okay, looks good. So let's move on to the next question. This question is maybe some system design questions, but in this task, we will need you to design a food delivery app like Uber Eats or DoorDash. How will you begin with that?",
+    "Now please design a ride-sharing system. Start with requirements and provide a high-level infrastructure whiteboard.",
+    "Design a distributed cache. Start with requirements.",
+  ]) {
+    const decision = classifyInterviewTransitionTurn(text);
+    assert.equal(decision.detected, true, text);
+    assert.equal(decision.disposition, "complete-question", text);
+  }
 });
 
 test("does not treat ordinary interview questions as section transitions", () => {
@@ -38,6 +42,27 @@ test("does not treat ordinary interview questions as section transitions", () =>
     disposition: "none",
     reason: "no-transition-frame",
   });
+});
+
+test("lets canonical primary-ask evidence override an inconsistent hint-only proposal", () => {
+  const reconciled = reconcileInterviewTransitionTurnWithPrimaryAsk(
+    {
+      detected: true,
+      disposition: "hint-only",
+      reason: "transition-announcement-only",
+    },
+    "design a ride-sharing system"
+  );
+
+  assert.deepEqual(reconciled, {
+    detected: true,
+    disposition: "complete-question",
+    reason: "transition-with-primary-ask-projection",
+  });
+  assert.equal(
+    reconcileInterviewTransitionTurnWithPrimaryAsk(reconciled, undefined),
+    reconciled
+  );
 });
 
 test("detects immediate canonical sections but rejects future and retrospective mentions", () => {
