@@ -67,6 +67,7 @@ import type {
   QuestionHumanEvaluation,
   ScreenCaptureTarget,
   SpeechCorrection,
+  AnswerDeliveryPresentation,
 } from "@/lib/meeting";
 import {
   MEETING_FOCUS_ACTION_EVENT,
@@ -237,6 +238,8 @@ const humanEvalFailureReasonOptions: Array<{
   { id: "wrong-answer", label: "Answer" },
   { id: "too-short", label: "Too short" },
   { id: "too-slow", label: "Too slow" },
+  { id: "incorrect-visible-refresh", label: "Wrong refresh" },
+  { id: "mid-read-interruption", label: "Mid-read" },
   { id: "stt-error", label: "STT" },
   { id: "capture-error", label: "Capture" },
   { id: "other", label: "Other" },
@@ -515,6 +518,8 @@ export const MeetingAssistant = ({
         sourceParentQuestionType: completedSuggestionParentQuestionType,
         sourceCodeMutationAuthorized:
           meeting.latestSuggestion?.codeArtifactMutationAuthorized,
+        sourceComplexityMutationAuthorized:
+          meeting.latestSuggestion?.complexityArtifactMutationAuthorized,
         sourceSuggestionId: meeting.latestSuggestion?.id,
         updatedAt: Date.now(),
       });
@@ -525,6 +530,7 @@ export const MeetingAssistant = ({
     completedSuggestionParentTaskId,
     completedSuggestionParentQuestionType,
     meeting.latestSuggestion?.codeArtifactMutationAuthorized,
+    meeting.latestSuggestion?.complexityArtifactMutationAuthorized,
     meeting.latestSuggestion?.id,
     meeting.partialSuggestion,
     suggestionSections.primaryAnswer,
@@ -775,6 +781,7 @@ export const MeetingAssistant = ({
       forceAdviseAvailable,
       forceAdvisePending,
       forceAdviseCompleted,
+      answerDelivery: meeting.answerDelivery,
       statusLabel: meetingStatusLabel,
       error: meeting.error,
       isBusy,
@@ -818,6 +825,7 @@ export const MeetingAssistant = ({
       forceAdviseAvailable,
       forceAdvisePending,
       forceAdviseCompleted,
+      meeting.answerDelivery,
       meeting.activeMeetingTask,
       meeting.currentQuestionLineage,
       activeTaskKind,
@@ -1479,6 +1487,7 @@ export const MeetingAssistant = ({
               transientPersonalStatusLabel={
                 transientPersonalStatusLabel
               }
+              answerDeliveryState={meeting.answerDelivery.state}
               manualQuestionTypeCorrection={
                 activeManualQuestionTypeCorrection
               }
@@ -1798,6 +1807,9 @@ export const MeetingAssistant = ({
                           {transientPersonalStatusLabel}
                         </Badge>
                       ) : null}
+                      <AnswerDeliveryBadge
+                        state={meeting.answerDelivery.state}
+                      />
                     </div>
                     <MeetingMarkdownText
                       className={cn(
@@ -1889,6 +1901,9 @@ export const MeetingAssistant = ({
                           {transientPersonalStatusLabel}
                         </Badge>
                       ) : null}
+                      <AnswerDeliveryBadge
+                        state={meeting.answerDelivery.state}
+                      />
                     </div>
                     <MeetingMarkdownText
                       className={cn(
@@ -2641,6 +2656,7 @@ const FocusModePanel = ({
   hasCorrectableQuestion,
   effectiveQuestionType,
   transientPersonalStatusLabel,
+  answerDeliveryState,
   manualQuestionTypeCorrection,
   onCorrectQuestionType,
   latestTurnText,
@@ -2676,6 +2692,7 @@ const FocusModePanel = ({
   hasCorrectableQuestion: boolean;
   effectiveQuestionType?: CanonicalQuestionType;
   transientPersonalStatusLabel?: string;
+  answerDeliveryState: AnswerDeliveryPresentation["state"];
   manualQuestionTypeCorrection?: ManualQuestionTypeCorrection;
   onCorrectQuestionType: (type: CanonicalQuestionType) => void;
   latestTurnText: string;
@@ -2752,6 +2769,7 @@ const FocusModePanel = ({
                     {transientPersonalStatusLabel}
                   </Badge>
                 ) : null}
+                <AnswerDeliveryBadge state={answerDeliveryState} />
               </div>
               <MeetingMarkdownText
                 className={cn(
@@ -7051,6 +7069,23 @@ const MeetingMarkdownText = ({
         {normalizeMeetingMarkdown(value)}
       </Markdown>
     </div>
+  );
+};
+
+const AnswerDeliveryBadge = ({
+  state,
+}: {
+  state: AnswerDeliveryPresentation["state"];
+}) => {
+  if (state !== "update-ready") return null;
+
+  return (
+    <Badge
+      variant="outline"
+      className="ml-auto rounded-sm px-1.5 py-0 text-[10px] font-normal"
+    >
+      Update ready
+    </Badge>
   );
 };
 

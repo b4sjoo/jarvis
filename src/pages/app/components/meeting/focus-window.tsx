@@ -134,6 +134,14 @@ function MeetingFocusAnswerWindow({
               <div className="mb-2 flex items-center gap-2 text-xs font-semibold">
                 <MessageSquareTextIcon className="h-3.5 w-3.5" />
                 Answer
+                {snapshot.answerDelivery.state === "update-ready" ? (
+                  <Badge
+                    variant="outline"
+                    className="ml-auto rounded-sm px-1.5 py-0 text-[10px] font-normal"
+                  >
+                    Update ready
+                  </Badge>
+                ) : null}
               </div>
               <MeetingMarkdownText
                 className={cn(WRAP_TEXT_CLASS, "min-h-20 text-sm leading-6")}

@@ -56,7 +56,7 @@ import { serializeMeetingTraceExport } from "./trace.js";
 
 const SESSION_RECORDING_SCHEMA_VERSION = 1;
 const SESSION_RECORDING_INTEGRITY_SCHEMA_VERSION = 1;
-const SESSION_TRACE_SUMMARY_SCHEMA_VERSION = 27;
+const SESSION_TRACE_SUMMARY_SCHEMA_VERSION = 28;
 const SESSION_TRACE_INDEX_SCHEMA_VERSION = 1;
 const MAX_RECORDED_WRITE_FAILURES = 20;
 
@@ -154,6 +154,7 @@ interface ActiveSessionRecording {
   recordedObservationIds: Set<string>;
   traceSessionIndex: Map<string, SessionTraceIndexEntry>;
   traceSummaries: Map<string, SessionCompactTraceSummary>;
+  traceHumanEvaluations: Map<string, TraceHumanEvaluation>;
   questionHumanEvaluations: Map<string, QuestionHumanEvaluation>;
   humanGroundTruthEventsV2: Map<string, HumanGroundTruthEventV2>;
   humanEvaluationProjectionsV2: Map<string, HumanEvaluationProjectionV2>;
@@ -289,6 +290,34 @@ export interface SessionCompactTraceSummary {
   advisorOutputCommittedToUi?: boolean;
   advisorOutputCommitAuthorized?: boolean;
   visibleAnswerChanged?: boolean;
+  refreshAuthority?: string;
+  refreshAuthorityAuthorized?: boolean;
+  refreshAuthorityReason?: string;
+  refreshAuthorityHardOverride?: boolean;
+  answerGenerationLeaseId?: string;
+  leaseAuthorizedAtStart?: boolean;
+  leaseAuthorizedAtCommit?: boolean;
+  staleCommitRejected?: boolean;
+  staleReason?: string;
+  visibleAnswerRevisionBefore?: number;
+  visibleAnswerRevisionAfter?: number;
+  baseVisibleAnswerRevision?: number;
+  stableAnswerCommitDisposition?: string;
+  stableAnswerCommitReason?: string;
+  answerDeliveryLockState?: string;
+  meSpokenWordEquivalent?: number;
+  meAnswerTokenOverlap?: number;
+  pendingAnswerDisposition?: string;
+  pendingAnswerOperationId?: string;
+  requestedArtifacts: string[];
+  authorizedArtifacts: string[];
+  artifactMutationRejectedReasons: string[];
+  answerSectionRevision?: number;
+  codeSectionRevision?: number;
+  complexitySectionRevision?: number;
+  whiteboardSectionRevision?: number;
+  codeMutationWithoutCodeIntent?: boolean;
+  answerDwellMs?: number;
   manualQuestionTypeCorrectionId?: string;
   manualTermCorrectionId?: string;
   manualTermCorrectionDisposition?: string;
@@ -886,8 +915,24 @@ interface SessionMetricsSummary {
   syntheticValidationTraceCount: number;
   screen: SessionTraceKindAggregate;
   voice: SessionTraceKindAggregate;
+  answerStability: SessionAnswerStabilityAggregate;
   errors: number;
   cancelled: number;
+}
+
+interface SessionAnswerStabilityAggregate {
+  unauthorizedVisibleRefreshCount: number;
+  visibleRefreshWithoutPrimaryAskCount: number;
+  staleGenerationCommitAttemptCount: number;
+  staleGenerationCommitRejectedCount: number;
+  codeMutationWithoutCodeIntentCount: number;
+  deliveryLockCount: number;
+  pendingCommitCount: number;
+  pendingDropCount: number;
+  manualOverrideCount: number;
+  incorrectVisibleRefreshLabelCount: number;
+  midReadInterruptionLabelCount: number;
+  answerDwellMs: SessionNumberAggregate;
 }
 
 interface SessionTraceKindAggregate {
@@ -1040,6 +1085,7 @@ export class SessionRecordingManager {
           recordedObservationIds: new Set(),
           traceSessionIndex: new Map(),
           traceSummaries: new Map(),
+          traceHumanEvaluations: new Map(),
           questionHumanEvaluations: new Map(),
           humanGroundTruthEventsV2: new Map(),
           humanEvaluationProjectionsV2: new Map(),
@@ -1770,6 +1816,9 @@ export class SessionRecordingManager {
       session.recordedTraceIds.has(evaluation.traceId)
     );
     if (!sessionEvaluations.length) return;
+    for (const evaluation of sessionEvaluations) {
+      session.traceHumanEvaluations.set(evaluation.traceId, evaluation);
+    }
 
     const payload = JSON.stringify(
       {
@@ -1785,6 +1834,11 @@ export class SessionRecordingManager {
       sessionId: session.sessionId,
       evaluations: sessionEvaluations,
     });
+    const sessionSummary = buildSessionMetricsSummary(
+      session.sessionId,
+      Array.from(session.traceSummaries.values()),
+      Array.from(session.traceHumanEvaluations.values())
+    );
     this.enqueue(session, async () => {
       await this.writeText(
         session,
@@ -1796,6 +1850,11 @@ export class SessionRecordingManager {
         "human-evaluation/evaluations.jsonl",
         `${compactPayload}\n`,
         true
+      );
+      await this.writeJson(
+        session,
+        "metrics/session-summary.json",
+        sessionSummary
       );
     });
     this.recordEvent("human-evaluation", {
@@ -3001,7 +3060,8 @@ export class SessionRecordingManager {
     );
     const sessionSummary = buildSessionMetricsSummary(
       session.sessionId,
-      summaries
+      summaries,
+      Array.from(session.traceHumanEvaluations.values())
     );
     const evaluationView = projectHumanEvaluationsForLegacyConsumers({
       evaluations: Array.from(session.questionHumanEvaluations.values()),
@@ -3700,6 +3760,115 @@ function buildCompactTraceSummary({
     visibleAnswerChanged: readFirstBoolean(
       metadataSources,
       "visibleAnswerChanged"
+    ),
+    refreshAuthority: readFirstString(
+      metadataSources,
+      "refreshAuthority"
+    ),
+    refreshAuthorityAuthorized: readFirstBoolean(
+      metadataSources,
+      "refreshAuthorityAuthorized"
+    ),
+    refreshAuthorityReason: readFirstString(
+      metadataSources,
+      "refreshAuthorityReason"
+    ),
+    refreshAuthorityHardOverride: readFirstBoolean(
+      metadataSources,
+      "refreshAuthorityHardOverride"
+    ),
+    answerGenerationLeaseId: readFirstString(
+      metadataSources,
+      "answerGenerationLeaseId"
+    ),
+    leaseAuthorizedAtStart: readFirstBoolean(
+      metadataSources,
+      "leaseAuthorizedAtStart"
+    ),
+    leaseAuthorizedAtCommit: readFirstBoolean(
+      metadataSources,
+      "leaseAuthorizedAtCommit"
+    ),
+    staleCommitRejected: readFirstBoolean(
+      metadataSources,
+      "staleCommitRejected"
+    ),
+    staleReason: readFirstString(metadataSources, "staleReason"),
+    visibleAnswerRevisionBefore: readFirstNumberFromMetadata(
+      metadataSources,
+      "visibleAnswerRevisionBefore"
+    ),
+    visibleAnswerRevisionAfter: readFirstNumberFromMetadata(
+      metadataSources,
+      "visibleAnswerRevisionAfter"
+    ),
+    baseVisibleAnswerRevision: readFirstNumberFromMetadata(
+      metadataSources,
+      "baseVisibleAnswerRevision"
+    ),
+    stableAnswerCommitDisposition: readFirstString(
+      metadataSources,
+      "stableAnswerCommitDisposition"
+    ),
+    stableAnswerCommitReason: readFirstString(
+      metadataSources,
+      "stableAnswerCommitReason"
+    ),
+    answerDeliveryLockState: readFirstString(
+      metadataSources,
+      "answerDeliveryLockState"
+    ),
+    meSpokenWordEquivalent: readFirstNumberFromMetadata(
+      metadataSources,
+      "meSpokenWordEquivalent"
+    ),
+    meAnswerTokenOverlap: readFirstNumberFromMetadata(
+      metadataSources,
+      "meAnswerTokenOverlap"
+    ),
+    pendingAnswerDisposition: readFirstString(
+      metadataSources,
+      "pendingAnswerDisposition"
+    ),
+    pendingAnswerOperationId: readFirstString(
+      metadataSources,
+      "pendingAnswerOperationId"
+    ),
+    requestedArtifacts: readFirstStringList(
+      metadataSources,
+      "requestedArtifacts"
+    ),
+    authorizedArtifacts: readFirstStringList(
+      metadataSources,
+      "authorizedArtifacts"
+    ),
+    artifactMutationRejectedReasons: readFirstStringList(
+      metadataSources,
+      "artifactMutationRejectedReasons"
+    ),
+    answerSectionRevision: readFirstNumberFromMetadata(
+      metadataSources,
+      "answerSectionRevision"
+    ),
+    codeSectionRevision: readFirstNumberFromMetadata(
+      metadataSources,
+      "codeSectionRevision"
+    ),
+    complexitySectionRevision: readFirstNumberFromMetadata(
+      metadataSources,
+      "complexitySectionRevision"
+    ),
+    whiteboardSectionRevision: readFirstNumberFromMetadata(
+      metadataSources,
+      "whiteboardSectionRevision"
+    ),
+    codeMutationWithoutCodeIntent: readFirstBoolean(
+      metadataSources,
+      "codeMutationWithoutCodeIntent"
+    ),
+    answerDwellMs: readFirstNumberFromMetadata(
+      metadataSources,
+      "answerDwellMs"
     ),
     manualQuestionTypeCorrectionId: readFirstString(
       metadataSources,
@@ -5307,7 +5476,8 @@ function buildTaxonomyAdjudicationTraceSummary(
 
 function buildSessionMetricsSummary(
   sessionId: string,
-  summaries: SessionCompactTraceSummary[]
+  summaries: SessionCompactTraceSummary[],
+  humanEvaluations: TraceHumanEvaluation[] = []
 ): SessionMetricsSummary {
   const productionSummaries = summaries.filter(
     (summary) => !summary.syntheticValidation
@@ -5325,11 +5495,70 @@ function buildSessionMetricsSummary(
     voice: aggregateTraceKind(
       productionSummaries.filter((summary) => summary.traceKind === "voice")
     ),
+    answerStability: aggregateAnswerStability(
+      productionSummaries,
+      humanEvaluations
+    ),
     errors: productionSummaries.filter((summary) => summary.status === "error")
       .length,
     cancelled: productionSummaries.filter(
       (summary) => summary.status === "cancelled"
     ).length,
+  };
+}
+
+function aggregateAnswerStability(
+  summaries: SessionCompactTraceSummary[],
+  humanEvaluations: TraceHumanEvaluation[]
+): SessionAnswerStabilityAggregate {
+  return {
+    unauthorizedVisibleRefreshCount: summaries.filter(
+      (summary) =>
+        summary.advisorOutputCommittedToUi === true &&
+        summary.refreshAuthorityAuthorized === false
+    ).length,
+    visibleRefreshWithoutPrimaryAskCount: summaries.filter(
+      (summary) =>
+        summary.visibleAnswerChanged === true &&
+        summary.primaryAskSpanCount === 0 &&
+        summary.refreshAuthorityHardOverride !== true
+    ).length,
+    staleGenerationCommitAttemptCount: summaries.filter(
+      (summary) => summary.leaseAuthorizedAtCommit === false
+    ).length,
+    staleGenerationCommitRejectedCount: summaries.filter(
+      (summary) => summary.staleCommitRejected === true
+    ).length,
+    codeMutationWithoutCodeIntentCount: summaries.filter(
+      (summary) => summary.codeMutationWithoutCodeIntent === true
+    ).length,
+    deliveryLockCount: summaries.filter(
+      (summary) =>
+        summary.stableAnswerCommitDisposition === "pending" ||
+        summary.answerDeliveryLockState === "update-ready"
+    ).length,
+    pendingCommitCount: summaries.filter(
+      (summary) => summary.pendingAnswerDisposition === "committed"
+    ).length,
+    pendingDropCount: summaries.filter(
+      (summary) =>
+        summary.pendingAnswerDisposition === "stale" ||
+        summary.pendingAnswerDisposition === "dropped"
+    ).length,
+    manualOverrideCount: summaries.filter(
+      (summary) =>
+        summary.refreshAuthorityHardOverride === true &&
+        summary.visibleAnswerChanged === true
+    ).length,
+    incorrectVisibleRefreshLabelCount: humanEvaluations.filter((evaluation) =>
+      evaluation.failureReasons.includes("incorrect-visible-refresh")
+    ).length,
+    midReadInterruptionLabelCount: humanEvaluations.filter((evaluation) =>
+      evaluation.failureReasons.includes("mid-read-interruption")
+    ).length,
+    answerDwellMs: aggregateNumbers(
+      summaries.map((summary) => summary.answerDwellMs)
+    ),
   };
 }
 

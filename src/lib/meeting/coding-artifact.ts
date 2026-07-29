@@ -39,12 +39,14 @@ export function updateCodingArtifactCache({
   sourceParentTaskId,
   sourceParentQuestionType,
   sourceCodeMutationAuthorized,
+  sourceComplexityMutationAuthorized,
   sourceSuggestionId,
   updatedAt,
 }: CodingArtifactScope & {
   cache: CodingArtifactCache | null;
   sections: MeetingAnswerDisplayModel;
   sourceCodeMutationAuthorized?: boolean;
+  sourceComplexityMutationAuthorized?: boolean;
   sourceSuggestionId?: string;
   updatedAt: number;
 }): CodingArtifactCache | null {
@@ -58,7 +60,12 @@ export function updateCodingArtifactCache({
     activeParentTaskId,
     canonicalParentQuestionType
   );
-  if (sourceCodeMutationAuthorized === false) return scopedCache;
+  if (
+    sourceCodeMutationAuthorized === false &&
+    sourceComplexityMutationAuthorized !== true
+  ) {
+    return scopedCache;
+  }
 
   if (!doesArtifactSourceBelongToParent({
     activeParentTaskId,
@@ -76,9 +83,18 @@ export function updateCodingArtifactCache({
   });
   if (!artifactPatch) return scopedCache;
 
-  const nextCode = artifactPatch.code || scopedCache?.code || "";
+  const codeMutationAuthorized =
+    sourceCodeMutationAuthorized !== false;
+  const complexityMutationAuthorized =
+    sourceComplexityMutationAuthorized ??
+    (sourceCodeMutationAuthorized !== false);
+  const nextCode = codeMutationAuthorized
+    ? artifactPatch.code || scopedCache?.code || ""
+    : scopedCache?.code || "";
   const nextComplexity =
-    artifactPatch.complexity || scopedCache?.complexity || "";
+    complexityMutationAuthorized
+      ? artifactPatch.complexity || scopedCache?.complexity || ""
+      : scopedCache?.complexity || "";
   if (!nextCode && !nextComplexity) return null;
 
   if (

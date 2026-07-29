@@ -523,7 +523,7 @@ test("records whiteboard validation and recovery artifacts", async () => {
   );
   assert.ok(summaryWrite);
   const summary = parsePayload(summaryWrite);
-  assert.equal(summary.version, 27);
+  assert.equal(summary.version, 28);
   assert.deepEqual(summary.whiteboard, {
     artifactId: "whiteboard_1",
     revision: 1,
@@ -681,6 +681,113 @@ test("session aggregates retain synthetic evidence without counting it as produc
   );
   assert.ok(compactSynthetic);
   assert.equal(parsePayload(compactSynthetic).syntheticValidation, true);
+
+  await manager.stop("test-complete");
+});
+
+test("session summaries retain answer delivery and artifact stability evidence", async () => {
+  const native = new ControlledRecordingInvoke();
+  const manager = new SessionRecordingManager(undefined, native.invoke);
+  await manager.start(START_OPTIONS);
+  await settle();
+
+  const startedAt = Date.now();
+  manager.recordTrace(
+    buildCompletedTrace("answer_stability", startedAt, {
+      primaryAskSpanCount: 1,
+      advisorOutputCommittedToUi: false,
+      refreshAuthority: "automatic-soft",
+      refreshAuthorityAuthorized: true,
+      answerGenerationLeaseId: "lease_1",
+      leaseAuthorizedAtStart: true,
+      leaseAuthorizedAtCommit: true,
+      stableAnswerCommitDisposition: "pending",
+      answerDeliveryLockState: "update-ready",
+      meSpokenWordEquivalent: 24,
+      meAnswerTokenOverlap: 10,
+      pendingAnswerDisposition: "committed",
+      pendingAnswerOperationId: "pending_1",
+      requestedArtifacts: ["answer", "code"],
+      authorizedArtifacts: ["answer"],
+      artifactMutationRejectedReasons: ["code:not-authorized"],
+      answerSectionRevision: 2,
+      codeSectionRevision: 1,
+      answerDwellMs: 5_400,
+    }),
+    "manual"
+  );
+
+  await waitFor(() =>
+    native.calls.some(
+      (call) =>
+        call.command === "write_meeting_session_recording_text" &&
+        stringArg(call, "relativePath") ===
+          "traces/answer_stability/summary.json"
+    )
+  );
+  const compactCall = native.calls.find(
+    (call) =>
+      call.command === "write_meeting_session_recording_text" &&
+      stringArg(call, "relativePath") ===
+        "traces/answer_stability/summary.json"
+  );
+  assert.ok(compactCall);
+  const compact = parsePayload(compactCall);
+  assert.equal(compact.answerDeliveryLockState, "update-ready");
+  assert.deepEqual(compact.authorizedArtifacts, ["answer"]);
+  assert.equal(compact.answerSectionRevision, 2);
+
+  const sessionSummaryCalls = native.calls.filter(
+    (call) =>
+      call.command === "write_meeting_session_recording_text" &&
+      stringArg(call, "relativePath") === "metrics/session-summary.json"
+  );
+  const sessionSummary = parsePayload(
+    sessionSummaryCalls[sessionSummaryCalls.length - 1]
+  );
+  const stability = sessionSummary.answerStability as {
+    deliveryLockCount: number;
+    pendingCommitCount: number;
+    answerDwellMs: { p50?: number };
+  };
+  assert.equal(stability.deliveryLockCount, 1);
+  assert.equal(stability.pendingCommitCount, 1);
+  assert.equal(stability.answerDwellMs.p50, 5_400);
+
+  manager.recordHumanEvaluations([
+    {
+      id: "answer_stability_eval",
+      traceId: "answer_stability",
+      traceKind: "voice",
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      failureReasons: [
+        "incorrect-visible-refresh",
+        "mid-read-interruption",
+      ],
+    },
+  ]);
+  await waitFor(
+    () =>
+      native.calls.filter(
+        (call) =>
+          call.command === "write_meeting_session_recording_text" &&
+          stringArg(call, "relativePath") === "metrics/session-summary.json"
+      ).length > sessionSummaryCalls.length
+  );
+  const refreshedSummaryCalls = native.calls.filter(
+    (call) =>
+      call.command === "write_meeting_session_recording_text" &&
+      stringArg(call, "relativePath") === "metrics/session-summary.json"
+  );
+  const refreshedStability = parsePayload(
+    refreshedSummaryCalls[refreshedSummaryCalls.length - 1]
+  ).answerStability as {
+    incorrectVisibleRefreshLabelCount: number;
+    midReadInterruptionLabelCount: number;
+  };
+  assert.equal(refreshedStability.incorrectVisibleRefreshLabelCount, 1);
+  assert.equal(refreshedStability.midReadInterruptionLabelCount, 1);
 
   await manager.stop("test-complete");
 });
@@ -1160,7 +1267,7 @@ test("compact trace summaries preserve task boundary and cross-domain evidence",
   );
   assert.ok(summaryWrite);
   const summary = parsePayload(summaryWrite);
-  assert.equal(summary.version, 27);
+  assert.equal(summary.version, 28);
   assert.equal(summary.taskRelation, "new-parent");
   assert.equal(summary.logicalQuestionUnitRevision, 3);
   assert.deepEqual(summary.logicalQuestionSourceTurnIds, ["turn_1", "turn_2"]);
@@ -1336,7 +1443,7 @@ test("compact trace summaries preserve bounded STT request evidence", async () =
   );
   assert.ok(summaryWrite);
   const summary = parsePayload(summaryWrite);
-  assert.equal(summary.version, 27);
+  assert.equal(summary.version, 28);
   assert.equal(
     (summary.timingsMs as Record<string, unknown>).stt,
     1_580
@@ -1478,7 +1585,7 @@ test("refreshes compact STT lifecycle evidence after a late provider abort", asy
   );
   assert.ok(summaryWrites.length >= 2);
   const summary = parsePayload(summaryWrites[summaryWrites.length - 1]!);
-  assert.equal(summary.version, 27);
+  assert.equal(summary.version, 28);
   assert.equal(
     (summary.sttRequest as Record<string, unknown>).abortRequested,
     true
@@ -1543,7 +1650,7 @@ test("compact trace summaries preserve hard memory invalidation evidence", async
   );
   assert.ok(summaryWrite);
   const summary = parsePayload(summaryWrite);
-  assert.equal(summary.version, 27);
+  assert.equal(summary.version, 28);
   const memory = summary.memory as Record<string, unknown>;
   assert.equal(memory.authorityRevision, 2);
   assert.equal(memory.invalidationKind, "hard");
@@ -1787,7 +1894,7 @@ test("records compact current-question settlement and execution-plan evidence", 
   assert.equal(serializedPlan.includes("taskSnapshot"), false);
   assert.equal(serializedPlan.includes("variables"), false);
   const summary = parsePayload(summaryWrite);
-  assert.equal(summary.version, 27);
+  assert.equal(summary.version, 28);
   assert.equal(
     (
       summary.currentQuestionSettlement as Record<string, unknown>
@@ -1883,7 +1990,7 @@ test("records a current-question term correction without copying provider state"
     false
   );
   const summary = parsePayload(summaryWrite);
-  assert.equal(summary.version, 27);
+  assert.equal(summary.version, 28);
   assert.equal(
     summary.manualTermCorrectionId,
     "term_correction_hnsw"

@@ -966,6 +966,7 @@ export interface AdvisorSuggestion {
   taskSource?: "screen" | "voice" | "mixed";
   questionType?: ScreenQuestionType;
   codeArtifactMutationAuthorized?: boolean;
+  complexityArtifactMutationAuthorized?: boolean;
   whiteboardArtifactMutationAuthorized?: boolean;
   basedOnTurnIds: string[];
   basedOnObservationIds: string[];
@@ -1356,6 +1357,8 @@ export type HumanEvalFailureReason =
   | "wrong-answer"
   | "too-short"
   | "too-slow"
+  | "incorrect-visible-refresh"
+  | "mid-read-interruption"
   | "stt-error"
   | "capture-error"
   | "other";
@@ -1679,6 +1682,7 @@ export interface MeetingAssistantState {
   latestSuggestion: AdvisorSuggestion | null;
   latestReliableSuggestion: AdvisorSuggestion | null;
   partialSuggestion: string;
+  answerDelivery: import("./stable-answer").AnswerDeliveryPresentation;
   error: string | null;
   audioStatus: MeetingAudioStatus | null;
   audioInputLiveness: AudioInputLivenessPresentation | null;

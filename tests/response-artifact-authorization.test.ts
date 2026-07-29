@@ -32,6 +32,7 @@ test("authorizes artifacts while an eligible new parent is being created", () =>
   assert.equal(decision.disposition, "parent-owner-authorized");
   assert.equal(decision.allowLatestUsefulAnswer, true);
   assert.equal(decision.allowCode, true);
+  assert.equal(decision.allowComplexity, true);
 });
 
 test("keeps a field-knowledge child display-only under an AI/ML design parent", () => {
@@ -60,8 +61,24 @@ test("allows a coding child to update only the code cache", () => {
 
   assert.equal(decision.disposition, "coding-child-authorized");
   assert.equal(decision.allowCode, true);
+  assert.equal(decision.allowComplexity, true);
   assert.equal(decision.allowLatestUsefulAnswer, false);
   assert.equal(decision.allowWhiteboard, false);
+});
+
+test("allows a coding child complexity probe to preserve code", () => {
+  const decision = authorizeResponseArtifactMutation({
+    parentTaskId: "parent-project",
+    parentQuestionType: "project-deep-dive",
+    responseOwnerQuestionType: "coding",
+    responseOwnerSource: "authorized-child",
+    relation: "child-probe",
+    subtaskIntent: "complexity-probe",
+  });
+
+  assert.equal(decision.disposition, "coding-child-authorized");
+  assert.equal(decision.allowCode, false);
+  assert.equal(decision.allowComplexity, true);
 });
 
 test("rejects a wrong-domain response from mutating the current parent", () => {
@@ -77,6 +94,7 @@ test("rejects a wrong-domain response from mutating the current parent", () => {
   assert.equal(decision.allowLatestUsefulAnswer, false);
   assert.equal(decision.allowWhiteboard, false);
   assert.equal(decision.allowCode, false);
+  assert.equal(decision.allowComplexity, false);
 });
 
 test("treats logistics and independent field knowledge as transient responses", () => {
@@ -114,5 +132,32 @@ test("trace metadata exposes every artifact authorization surface", () => {
 
   assert.equal(metadata.responseArtifactMutationDisposition, "display-only-child");
   assert.equal(metadata.responseArtifactWhiteboardAuthorized, false);
+  assert.equal(metadata.responseArtifactComplexityAuthorized, false);
   assert.equal(metadata.responseArtifactParentContextAuthorized, false);
+});
+
+test("separates ordinary coding follow-ups from implementation and complexity mutations", () => {
+  const base = {
+    parentTaskId: "parent-coding",
+    parentQuestionType: "coding",
+    responseOwnerQuestionType: "coding",
+    responseOwnerSource: "committed-parent" as const,
+    relation: "followup-parent" as const,
+  };
+  const ordinary = authorizeResponseArtifactMutation(base);
+  const implementation = authorizeResponseArtifactMutation({
+    ...base,
+    subtaskIntent: "implementation-probe",
+  });
+  const complexity = authorizeResponseArtifactMutation({
+    ...base,
+    subtaskIntent: "complexity-probe",
+  });
+
+  assert.equal(ordinary.allowCode, false);
+  assert.equal(ordinary.allowComplexity, false);
+  assert.equal(implementation.allowCode, true);
+  assert.equal(implementation.allowComplexity, true);
+  assert.equal(complexity.allowCode, false);
+  assert.equal(complexity.allowComplexity, true);
 });

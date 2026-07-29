@@ -28,6 +28,7 @@ import {
 } from "./task-taxonomy.js";
 import type {
   InterviewPlaybookPhase,
+  InterviewSubtaskIntent,
   InterviewTaskRelation,
   MeetingAnswerProfile,
   PersonalEvidenceRequirement,
@@ -166,6 +167,7 @@ export function buildSettledAdvisorExecutionPlan(input: {
   responseOnlyTaskScope?: ResponseOnlyTaskScope;
   transientPersonalStatusDecision?: TransientPersonalStatusDecision;
   sourceQuestion?: string;
+  subtaskIntent?: InterviewSubtaskIntent;
   explicitTaskMutationCommand?: TaskLifecycleCommand;
   expectedActiveMeetingTask?: ActiveMeetingTask;
   createdAt?: number;
@@ -227,6 +229,7 @@ export function buildSettledAdvisorExecutionPlan(input: {
     responseOwnerQuestionType: responseOwner.questionType,
     responseOwnerSource: responseOwner.source,
     relation,
+    subtaskIntent: input.subtaskIntent,
     creatingParent:
       input.taskBoundaryCommitted &&
       input.settlement.parentMutationAuthorized,
@@ -593,6 +596,7 @@ function resolveArtifactIntent(input: {
       : "none";
   }
   if (input.artifactPolicy.allowCode) return "revise-code";
+  if (input.artifactPolicy.allowComplexity) return "revise-complexity";
   if (input.artifactPolicy.allowWhiteboard) return "revise-whiteboard";
   return input.artifactPolicy.allowLatestUsefulAnswer
     ? "preserve"

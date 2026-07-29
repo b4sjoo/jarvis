@@ -139,6 +139,8 @@ test("updates complexity without replacing code for an explicit child improvemen
     sections: improvementSections,
     sourceParentTaskId: "parent_coding",
     sourceParentQuestionType: "coding",
+    sourceCodeMutationAuthorized: false,
+    sourceComplexityMutationAuthorized: true,
     sourceSuggestionId: "suggestion_2",
     updatedAt: 200,
   });
@@ -146,6 +148,36 @@ test("updates complexity without replacing code for an explicit child improvemen
   assert.ok(nextCache);
   assert.equal(nextCache.code, "def solve(): pass");
   assert.equal(nextCache.complexity, "O(n) time and O(n) space");
+});
+
+test("updates code without replacing complexity when only code is authorized", () => {
+  const cache = {
+    parentTaskId: "parent_coding",
+    parentQuestionType: "coding" as const,
+    code: "def solve(): pass",
+    complexity: "O(n)",
+    updatedAt: 100,
+  };
+  const implementationSections = sections(
+    "Question: Fix the implementation.\nAnswer: Handle the empty input first.\nCode:\n```python\ndef solve(items):\n    return items or []\n```\nComplexity: O(1)"
+  );
+
+  const nextCache = updateCodingArtifactCache({
+    activeParentTaskId: "parent_coding",
+    activeParentQuestionType: "coding",
+    cache,
+    sections: implementationSections,
+    sourceParentTaskId: "parent_coding",
+    sourceParentQuestionType: "coding",
+    sourceCodeMutationAuthorized: true,
+    sourceComplexityMutationAuthorized: false,
+    sourceSuggestionId: "suggestion_3",
+    updatedAt: 200,
+  });
+
+  assert.ok(nextCache);
+  assert.equal(nextCache.code, "def solve(items):\n    return items or []");
+  assert.equal(nextCache.complexity, "O(n)");
 });
 
 test("drops coding artifacts when a parent is retyped in place", () => {

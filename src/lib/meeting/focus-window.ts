@@ -10,6 +10,7 @@ import type {
 import type { getActiveMeetingTaskFocusSummary } from "./active-meeting-task";
 import type { CanonicalQuestionType } from "./task-taxonomy";
 import type { NativeAudioPauseResumeControlPresentation } from "./native-audio-lifecycle";
+import type { AnswerDeliveryPresentation } from "./stable-answer";
 
 export const MEETING_FOCUS_SNAPSHOT_EVENT = "meeting-focus-snapshot";
 export const MEETING_FOCUS_ACTION_EVENT = "meeting-focus-action";
@@ -149,6 +150,7 @@ export type MeetingFocusSnapshot = {
   forceAdviseAvailable: boolean;
   forceAdvisePending: boolean;
   forceAdviseCompleted: boolean;
+  answerDelivery: AnswerDeliveryPresentation;
   statusLabel: string;
   error: string | null;
   isBusy: boolean;
@@ -212,6 +214,12 @@ export const EMPTY_MEETING_FOCUS_SNAPSHOT: MeetingFocusSnapshot = {
   forceAdviseAvailable: false,
   forceAdvisePending: false,
   forceAdviseCompleted: false,
+  answerDelivery: {
+    state: "idle",
+    visibleAnswerRevision: 0,
+    meSpokenWordEquivalent: 0,
+    meAnswerTokenOverlap: 0,
+  },
   statusLabel: "Ready",
   error: null,
   isBusy: false,

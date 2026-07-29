@@ -280,6 +280,40 @@ export function sanitizeMeetingAnswerCode(value: string) {
   );
 }
 
+export function serializeMeetingAnswer(parsed: ParsedMeetingAnswer) {
+  const parts: string[] = [];
+  const append = (label: string, value: string | undefined) => {
+    const normalized = value?.trim();
+    if (normalized) parts.push(`${label}:\n${normalized}`);
+  };
+
+  append("中文思路", parsed.sections.chineseThinking);
+  append("Question", parsed.sections.question);
+  append("Answer", parsed.sections.answer);
+  append("Approach", parsed.sections.approach);
+  append("Whiteboard", parsed.sections.whiteboard);
+  if (parsed.sections.code?.trim()) {
+    parts.push(`Code:\n\`\`\`\n${parsed.sections.code.trimEnd()}\n\`\`\``);
+  }
+  append("Complexity", parsed.sections.complexity);
+  append("Clarifying question", parsed.sections.clarifyingQuestion);
+  if (parsed.sections.clarifyingOptions.length > 0) {
+    parts.push(
+      `Clarifying options:\n${parsed.sections.clarifyingOptions
+        .map((option) => `- ${option.label}`)
+        .join("\n")}`
+    );
+  }
+  append("Answer disposition", parsed.answerDisposition);
+  if (parsed.supportingAnchorIds.length > 0) {
+    parts.push(
+      `Supporting anchor IDs:\n${parsed.supportingAnchorIds.join(" | ")}`
+    );
+  }
+
+  return parts.join("\n\n").trim();
+}
+
 export function stripOuterMeetingAnswerCodeFence(value: string) {
   const trimmed = value.trim();
   const match = /^```[^\n]*\n([\s\S]*?)\n?```$/.exec(trimmed);

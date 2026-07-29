@@ -300,12 +300,26 @@ export interface MeetingTraceKindSummary {
   outputChars?: MeetingTraceValueSummary;
 }
 
+export interface MeetingAnswerStabilitySummary {
+  unauthorizedVisibleRefreshCount: number;
+  visibleRefreshWithoutPrimaryAskCount: number;
+  staleGenerationCommitAttemptCount: number;
+  staleGenerationCommitRejectedCount: number;
+  codeMutationWithoutCodeIntentCount: number;
+  deliveryLockCount: number;
+  pendingCommitCount: number;
+  pendingDropCount: number;
+  manualOverrideCount: number;
+  answerDwellMs: MeetingTraceValueSummary;
+}
+
 export interface MeetingTraceSummary {
   windowSize: number;
   traceCount: number;
   syntheticValidationTraceCount: number;
   screen: MeetingTraceKindSummary;
   voice: MeetingTraceKindSummary;
+  answerStability: MeetingAnswerStabilitySummary;
 }
 
 export interface PersistedMeetingTraceMetrics {
@@ -563,6 +577,7 @@ export function summarizeMeetingTraces(
       recentTraces.filter((trace) => trace.kind === "voice"),
       "voice"
     ),
+    answerStability: summarizeAnswerStability(recentTraces),
   };
 }
 
@@ -651,6 +666,60 @@ function summarizeTraceKind(
   }
 
   return summary;
+}
+
+function summarizeAnswerStability(
+  traces: MeetingTrace[]
+): MeetingAnswerStabilitySummary {
+  const metadata = traces.map((trace) => trace.metadata ?? {});
+  const count = (predicate: (value: Record<string, unknown>) => boolean) =>
+    metadata.filter(predicate).length;
+
+  return {
+    unauthorizedVisibleRefreshCount: count(
+      (value) =>
+        value.advisorOutputCommittedToUi === true &&
+        value.refreshAuthorityAuthorized === false
+    ),
+    visibleRefreshWithoutPrimaryAskCount: count(
+      (value) =>
+        value.visibleAnswerChanged === true &&
+        value.primaryAskSpanCount === 0 &&
+        value.refreshAuthorityHardOverride !== true
+    ),
+    staleGenerationCommitAttemptCount: count(
+      (value) => value.leaseAuthorizedAtCommit === false
+    ),
+    staleGenerationCommitRejectedCount: count(
+      (value) => value.staleCommitRejected === true
+    ),
+    codeMutationWithoutCodeIntentCount: count(
+      (value) => value.codeMutationWithoutCodeIntent === true
+    ),
+    deliveryLockCount: count(
+      (value) =>
+        value.stableAnswerCommitDisposition === "pending" ||
+        value.answerDeliveryLockState === "update-ready"
+    ),
+    pendingCommitCount: count(
+      (value) => value.pendingAnswerDisposition === "committed"
+    ),
+    pendingDropCount: count(
+      (value) =>
+        value.pendingAnswerDisposition === "stale" ||
+        value.pendingAnswerDisposition === "dropped"
+    ),
+    manualOverrideCount: count(
+      (value) =>
+        value.refreshAuthorityHardOverride === true &&
+        value.visibleAnswerChanged === true
+    ),
+    answerDwellMs: summarizeValues(
+      metadata
+        .map((value) => readNumber(value.answerDwellMs))
+        .filter(isNumber)
+    ),
+  };
 }
 
 function sanitizeExportMetadata(metadata: Record<string, unknown> | undefined) {

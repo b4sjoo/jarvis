@@ -180,6 +180,46 @@ test("counts prompt-echo retry latency in the STT duration summary", () => {
   assert.equal(summary.voice.sttDurationMs?.p90, 1_580);
 });
 
+test("aggregates answer stability and delivery protection metrics", () => {
+  const pending = buildTrace(4, "delivery-lock");
+  pending.metadata = {
+    ...pending.metadata,
+    stableAnswerCommitDisposition: "pending",
+    answerDeliveryLockState: "update-ready",
+    pendingAnswerDisposition: "committed",
+    answerDwellMs: 4_200,
+  };
+  const stale = buildTrace(5, "stale-generation");
+  stale.metadata = {
+    ...stale.metadata,
+    leaseAuthorizedAtCommit: false,
+    staleCommitRejected: true,
+    pendingAnswerDisposition: "stale",
+    codeMutationWithoutCodeIntent: true,
+    visibleAnswerChanged: true,
+    primaryAskSpanCount: 0,
+  };
+
+  const summary = summarizeMeetingTraces([pending, stale]);
+
+  assert.equal(summary.answerStability.deliveryLockCount, 1);
+  assert.equal(summary.answerStability.pendingCommitCount, 1);
+  assert.equal(summary.answerStability.pendingDropCount, 1);
+  assert.equal(
+    summary.answerStability.staleGenerationCommitRejectedCount,
+    1
+  );
+  assert.equal(
+    summary.answerStability.codeMutationWithoutCodeIntentCount,
+    1
+  );
+  assert.equal(
+    summary.answerStability.visibleRefreshWithoutPrimaryAskCount,
+    1
+  );
+  assert.equal(summary.answerStability.answerDwellMs.p50, 4_200);
+});
+
 function buildTrace(index: number, note: string): MeetingTrace {
   const startedAt = 1_000 + index * 100;
   return {

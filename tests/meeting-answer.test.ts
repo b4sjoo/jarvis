@@ -6,6 +6,7 @@ import {
   parseMeetingAnswer,
   readMeetingAnswerSection,
   resolveMeetingAnswerProfile,
+  serializeMeetingAnswer,
 } from "../src/lib/meeting/meeting-answer.js";
 import { parseScreenTaskAnswer } from "../src/lib/meeting/screen-task-answer.js";
 
@@ -205,6 +206,28 @@ Supporting anchor IDs: mem_story_aos_cleanup | mem_aos_evidence`);
     "mem_story_aos_cleanup",
     "mem_aos_evidence",
   ]);
+});
+
+test("serializes canonical parsed sections without leaking code into approach", () => {
+  const parsed = parseMeetingAnswer(`中文思路: 使用双指针。
+Answer: Move the smaller boundary.
+Code:
+\`\`\`python
+def solve():
+    return 1
+\`\`\`
+Complexity: O(n).
+Clarifying options: Left | Right`);
+  const serialized = serializeMeetingAnswer(parsed);
+  const reparsed = parseMeetingAnswer(serialized);
+
+  assert.equal(reparsed.sections.answer, "Move the smaller boundary.");
+  assert.equal(reparsed.sections.code, "def solve():\n    return 1");
+  assert.equal(reparsed.sections.complexity, "O(n).");
+  assert.deepEqual(
+    reparsed.sections.clarifyingOptions.map((option) => option.label),
+    ["Left", "Right"]
+  );
 });
 
 test("does not leak answer authority metadata into the answer section", () => {

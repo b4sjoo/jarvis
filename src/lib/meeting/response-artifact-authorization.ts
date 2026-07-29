@@ -4,7 +4,10 @@ import {
   normalizeCanonicalQuestionType,
   type CanonicalQuestionType,
 } from "./task-taxonomy.js";
-import type { InterviewTaskRelation } from "./types.js";
+import type {
+  InterviewSubtaskIntent,
+  InterviewTaskRelation,
+} from "./types.js";
 
 export type ResponseArtifactMutationDisposition =
   | "parent-owner-authorized"
@@ -24,6 +27,7 @@ export interface ResponseArtifactMutationAuthorization {
   allowLatestUsefulAnswer: boolean;
   allowWhiteboard: boolean;
   allowCode: boolean;
+  allowComplexity: boolean;
   allowParentContextMutation: boolean;
 }
 
@@ -33,6 +37,7 @@ export function authorizeResponseArtifactMutation(input: {
   responseOwnerQuestionType?: unknown;
   responseOwnerSource: MeetingResponseOwnerSource;
   relation: InterviewTaskRelation;
+  subtaskIntent?: InterviewSubtaskIntent;
   creatingParent?: boolean;
 }): ResponseArtifactMutationAuthorization {
   const parentQuestionType =
@@ -53,6 +58,7 @@ export function authorizeResponseArtifactMutation(input: {
       allowLatestUsefulAnswer: false,
       allowWhiteboard: false,
       allowCode: false,
+      allowComplexity: false,
       allowParentContextMutation: false,
     };
   }
@@ -65,6 +71,7 @@ export function authorizeResponseArtifactMutation(input: {
       allowLatestUsefulAnswer: false,
       allowWhiteboard: false,
       allowCode: false,
+      allowComplexity: false,
       allowParentContextMutation: false,
     };
   }
@@ -80,19 +87,27 @@ export function authorizeResponseArtifactMutation(input: {
       allowLatestUsefulAnswer: false,
       allowWhiteboard: false,
       allowCode: false,
+      allowComplexity: false,
       allowParentContextMutation: false,
     };
   }
 
   if (input.relation === "child-probe") {
     if (responseOwnerQuestionType === "coding") {
+      const codingArtifactAuthority =
+        input.subtaskIntent === "complexity-probe"
+          ? { allowCode: false, allowComplexity: true }
+          : input.subtaskIntent === undefined ||
+              input.subtaskIntent === "implementation-probe"
+            ? { allowCode: true, allowComplexity: true }
+            : { allowCode: false, allowComplexity: false };
       return {
         ...base,
         disposition: "coding-child-authorized",
-        reason: "coding-child-may-update-code-cache-only",
+        reason: "coding-child-may-update-authorized-coding-artifacts",
         allowLatestUsefulAnswer: false,
         allowWhiteboard: false,
-        allowCode: true,
+        ...codingArtifactAuthority,
         allowParentContextMutation: false,
       };
     }
@@ -112,6 +127,7 @@ export function authorizeResponseArtifactMutation(input: {
         allowLatestUsefulAnswer: false,
         allowWhiteboard: true,
         allowCode: false,
+        allowComplexity: false,
         allowParentContextMutation: false,
       };
     }
@@ -123,6 +139,7 @@ export function authorizeResponseArtifactMutation(input: {
       allowLatestUsefulAnswer: false,
       allowWhiteboard: false,
       allowCode: false,
+      allowComplexity: false,
       allowParentContextMutation: false,
     };
   }
@@ -134,13 +151,20 @@ export function authorizeResponseArtifactMutation(input: {
       responseOwnerQuestionType
     )
   ) {
+    const codingArtifactAuthority =
+      parentQuestionType === "coding"
+        ? resolveCodingArtifactAuthority({
+            creatingParent: input.creatingParent,
+            subtaskIntent: input.subtaskIntent,
+          })
+        : { allowCode: false, allowComplexity: false };
     return {
       ...base,
       disposition: "parent-owner-authorized",
       reason: "compatible-response-owner-matches-canonical-parent",
       allowLatestUsefulAnswer: true,
       allowWhiteboard: isDesignQuestionType(parentQuestionType),
-      allowCode: parentQuestionType === "coding",
+      ...codingArtifactAuthority,
       allowParentContextMutation: true,
     };
   }
@@ -152,6 +176,7 @@ export function authorizeResponseArtifactMutation(input: {
     allowLatestUsefulAnswer: false,
     allowWhiteboard: false,
     allowCode: false,
+    allowComplexity: false,
     allowParentContextMutation: false,
   };
 }
@@ -170,9 +195,27 @@ export function formatResponseArtifactAuthorizationForTrace(
       authorization.allowLatestUsefulAnswer,
     responseArtifactWhiteboardAuthorized: authorization.allowWhiteboard,
     responseArtifactCodeAuthorized: authorization.allowCode,
+    responseArtifactComplexityAuthorized: authorization.allowComplexity,
     responseArtifactParentContextAuthorized:
       authorization.allowParentContextMutation,
   };
+}
+
+function resolveCodingArtifactAuthority(input: {
+  creatingParent?: boolean;
+  subtaskIntent?: InterviewSubtaskIntent;
+}) {
+  if (input.creatingParent) {
+    return { allowCode: true, allowComplexity: true };
+  }
+  if (input.subtaskIntent === "implementation-probe") {
+    return { allowCode: true, allowComplexity: true };
+  }
+  if (input.subtaskIntent === "complexity-probe") {
+    return { allowCode: false, allowComplexity: true };
+  }
+
+  return { allowCode: false, allowComplexity: false };
 }
 
 function isDesignQuestionType(questionType: CanonicalQuestionType) {
