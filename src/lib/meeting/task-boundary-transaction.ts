@@ -10,7 +10,10 @@ import {
   type CurrentQuestionSourceKind,
   type ProvisionalCurrentQuestion,
 } from "./current-question-settlement.js";
-import type { LogicalQuestionUnit } from "./logical-question-unit.js";
+import {
+  getLogicalQuestionSemanticEvidenceText,
+  type LogicalQuestionUnit,
+} from "./logical-question-unit.js";
 import {
   applyPlaybookPhaseDecisionToProgress,
   type PlaybookPhaseDecision,
@@ -344,7 +347,9 @@ export function buildCommittedTaskBoundaryParent(input: {
     source: input.source,
     stableKind,
     topic:
-      input.logicalQuestionUnit.normalizedText.trim() ||
+      getLogicalQuestionSemanticEvidenceText(
+        input.logicalQuestionUnit
+      ) ||
       "Unknown interview task",
     playbook,
     playbookPhase: phase,

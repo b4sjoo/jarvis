@@ -4,6 +4,34 @@ import {
   buildResponseActionInstructions,
   formatResponseActionContextScope,
 } from "../src/lib/meeting/response-action-contract.js";
+import { buildAdvisorUserMessage } from "../src/lib/meeting/advisor-prompt.js";
+
+test("gives the advisor a focused ask plus bounded semantic context", () => {
+  const message = buildAdvisorUserMessage({
+    transcript:
+      "them: Now add surge pricing and explain which components need to change.",
+    screenContext: "",
+    rollingSummary: "",
+    userProfileContext: "",
+    glossaryText: "",
+    currentQuestionProjection: {
+      answerFocusText: "explain which components need to change.",
+      semanticEvidenceText:
+        "add surge pricing explain which components need to change.",
+      sourceTurnIds: ["turn-surge"],
+    },
+  });
+
+  assert.match(
+    message,
+    /<current_question_projection>[\s\S]*Answer focus: explain which components need to change\./
+  );
+  assert.match(
+    message,
+    /Semantic context: add surge pricing explain which components need to change\./
+  );
+  assert.match(message, /Use Answer focus as the only ask to answer/);
+});
 
 test("formats the bounded response-action context scope", () => {
   const formatted = formatResponseActionContextScope({

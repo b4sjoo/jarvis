@@ -321,6 +321,8 @@ import {
   consumeSttContinuationPromptLease,
   createSttContinuationPromptLease,
   composeLogicalQuestionUnit,
+  getLogicalQuestionAnswerFocusText,
+  getLogicalQuestionSemanticEvidenceText,
   authorizeLogicalQuestionUnitLease,
   createCanonicalLogicalQuestionLineage,
   createLogicalQuestionUnitLease,
@@ -330,6 +332,7 @@ import {
   forceAdviseStatusAfterAdvisorOutcome,
   formatLogicalQuestionLeaseForTrace,
   formatPrimaryAskProjectionForTrace,
+  primaryAskAnswerFocusText,
   primaryAskClassifierText,
   projectPrimaryAsk,
   decideShortConfirmationAdmission,
@@ -1409,7 +1412,9 @@ function evaluateRuntimeAnswerSufficiencyShadow(input: {
     logicalQuestionUnitId: input.logicalQuestionUnit.id,
     logicalQuestionUnitRevision: input.logicalQuestionUnit.revision,
     answerRevision: input.answerRevision,
-    questionText: input.logicalQuestionUnit.normalizedText,
+    questionText: getLogicalQuestionAnswerFocusText(
+      input.logicalQuestionUnit
+    ),
     questionType: input.questionType,
     answerProfile: input.answerProfile,
     parsedAnswer: input.parsedAnswer,
@@ -6187,8 +6192,16 @@ export function useMeetingAssistant() {
     const manualPhaseAdvanceFromPhase =
       promptContext.activeMeetingTask?.parent.playbookPhase ??
       promptContext.activeInterviewTask?.playbookPhase;
+    const advisorQuestionAnswerFocusText =
+      getLogicalQuestionAnswerFocusText(
+        advisorJob.logicalQuestionUnit
+      );
+    const advisorQuestionSemanticEvidenceText =
+      getLogicalQuestionSemanticEvidenceText(
+        advisorJob.logicalQuestionUnit
+      );
     const advisorTaskFallbackQuery =
-      advisorJob.logicalQuestionUnit?.normalizedText.trim() ||
+      advisorQuestionSemanticEvidenceText ||
       (promptContext.latestTurn?.speaker === "them"
         ? promptContext.latestTurn.text.trim()
         : "") ||
@@ -6269,7 +6282,7 @@ export function useMeetingAssistant() {
         }
       : correctedAdvisorTaskSignals;
     const advisorCurrentQuestionEvidenceText =
-      advisorJob.logicalQuestionUnit?.normalizedText.trim() ?? "";
+      advisorQuestionSemanticEvidenceText;
     const advisorPersonalEvidenceDecision = detectPersonalEvidenceRequirement({
       questionText: advisorCurrentQuestionEvidenceText,
       questionType: semanticAdvisorTaskSignals.questionType,
@@ -6395,7 +6408,7 @@ export function useMeetingAssistant() {
               advisorJob.logicalQuestionUnit.id,
             revision: advisorJob.logicalQuestionUnit.revision,
             sourceQuestion:
-              advisorJob.logicalQuestionUnit.normalizedText,
+              advisorQuestionAnswerFocusText,
             sourceTurnIds:
               advisorJob.logicalQuestionUnit.sourceTurnIds,
             inferredType: advisorTaskSignals.questionType,
@@ -6459,7 +6472,7 @@ export function useMeetingAssistant() {
     let advisorRetrievalQuery = "";
     const refreshAdvisorEvidencePacket = () => {
       const currentQuestionText =
-        advisorJob.logicalQuestionUnit?.normalizedText.trim() ?? "";
+        advisorQuestionSemanticEvidenceText;
       const amazonLeadershipPrincipleHint =
         buildAmazonLeadershipPrincipleMemoryHint(
           promptContext.interviewSessionContext,
@@ -6468,7 +6481,7 @@ export function useMeetingAssistant() {
       advisorEvidencePacket = buildAdvisorEvidencePacket({
         currentQuestion: advisorJob.logicalQuestionUnit
           ? {
-              text: advisorJob.logicalQuestionUnit.normalizedText,
+              text: advisorQuestionSemanticEvidenceText,
               source: "voice-lqu",
               sourceTurnIds:
                 advisorJob.logicalQuestionUnit.sourceTurnIds,
@@ -7201,7 +7214,7 @@ export function useMeetingAssistant() {
             previousParent: previousInterviewParent,
             nextQuestionType: taskBoundaryCandidate.proposedQuestionType,
             nextQuestionText:
-              advisorJob.logicalQuestionUnit.normalizedText,
+              advisorQuestionSemanticEvidenceText,
           });
         const parentContextHandoff =
           previousInterviewParent &&
@@ -7212,7 +7225,7 @@ export function useMeetingAssistant() {
                   questionLineage?.questionInstanceId ??
                   advisorJob.logicalQuestionUnit.id,
                 latestQuestionText:
-                  advisorJob.logicalQuestionUnit.normalizedText,
+                  advisorQuestionSemanticEvidenceText,
                 transcriptTurns: contextStateBeforeBoundary.transcriptTurns,
                 boundaryTurnId:
                   advisorJob.logicalQuestionUnit.sourceTurnIds[0],
@@ -7334,7 +7347,7 @@ export function useMeetingAssistant() {
             taskMutationAuthorization.authorized,
           questionType: advisorQuestionType,
           question:
-            advisorJob.logicalQuestionUnit.normalizedText,
+            advisorQuestionSemanticEvidenceText,
           subtaskIntent: advisorTaskSignals.subtaskIntent,
           questionInstanceId:
             questionLineage?.questionInstanceId,
@@ -7511,7 +7524,7 @@ export function useMeetingAssistant() {
           responseOnlyTaskScope,
           transientPersonalStatusDecision,
           sourceQuestion:
-            advisorJob.logicalQuestionUnit?.normalizedText,
+            advisorQuestionSemanticEvidenceText,
           subtaskIntent: advisorTaskSignals.subtaskIntent,
           explicitTaskMutationCommand:
             manualPhaseAdvanceCommitted &&
@@ -7987,6 +8000,16 @@ export function useMeetingAssistant() {
       transientPersonalStatusDecision,
       projectBindingDecision,
       openingRoute: advisorTaskSignals.openingRoute,
+      currentQuestionProjection: advisorJob.logicalQuestionUnit
+        ? {
+            answerFocusText: advisorQuestionAnswerFocusText,
+            semanticEvidenceText:
+              advisorQuestionSemanticEvidenceText,
+            sourceTurnIds: [
+              ...advisorJob.logicalQuestionUnit.sourceTurnIds,
+            ],
+          }
+        : undefined,
     };
     const advisorModelPromptContext = transientPersonalStatusDecision
       ? {
@@ -8292,7 +8315,7 @@ export function useMeetingAssistant() {
         scheduleAnswerSufficiencySemanticShadow({
           traceId,
           taskId: activeMeetingTaskId,
-          questionText: advisorJob.logicalQuestionUnit.normalizedText,
+          questionText: advisorQuestionAnswerFocusText,
           parsedAnswer: parsedMeetingAnswer,
           decision: answerSufficiencyDecision,
         });
@@ -8421,7 +8444,7 @@ export function useMeetingAssistant() {
             question:
               advisorEvidenceSource === "screen"
                 ? promptContext.activeScreenTask?.question ?? latestTurn?.text
-                : advisorJob.logicalQuestionUnit?.normalizedText ?? latestTurn?.text,
+                : advisorQuestionSemanticEvidenceText || latestTurn?.text,
             questionInstanceId: questionLineage?.questionInstanceId,
             canonicalQuestionSourceTurnIds:
               advisorJob.logicalQuestionUnit?.sourceTurnIds,
@@ -11836,7 +11859,8 @@ export function useMeetingAssistant() {
       const semanticTaxonomyMode = semanticTaxonomyModeRef.current;
       const runtime = semanticTaxonomyRuntimeRef.current!;
       const classifierText =
-        logicalQuestionUnit?.normalizedText || turn.text;
+        getLogicalQuestionSemanticEvidenceText(logicalQuestionUnit) ||
+        turn.text;
       const activeParent = contextState.activeMeetingTask?.parent;
       const activeParentId = activeParent?.id;
       const activeParentRevision = activeParent?.revisions;
@@ -13321,7 +13345,11 @@ export function useMeetingAssistant() {
           turnId: turn.id,
           text: turn.text,
         });
-        const projectedClassifierText = primaryAskClassifierText(
+        const projectedAnswerFocusText = primaryAskAnswerFocusText(
+          primaryAskProjection,
+          turn.text
+        );
+        const projectedSemanticEvidenceText = primaryAskClassifierText(
           primaryAskProjection,
           turn.text
         );
@@ -13561,7 +13589,7 @@ export function useMeetingAssistant() {
         const turnGate = reconcilePrimaryAskTurnDecision(
           primaryAskProjection,
           evaluateThemTurnForAdvisor(
-            { ...turn, text: projectedClassifierText },
+            { ...turn, text: projectedAnswerFocusText },
             {
               hasActiveTask: hasActiveInterviewTask,
               hasRecentQuestionContext: Boolean(
@@ -13574,7 +13602,7 @@ export function useMeetingAssistant() {
         const keywordIntentEvidence =
           formatInterviewerIntentKeywordEvidenceForTrace(
             extractInterviewerIntentKeywordEvidence({
-              text: projectedClassifierText,
+              text: projectedAnswerFocusText,
               turnDecision: turnGate,
               currentTurnId: turn.id,
             })
@@ -13626,8 +13654,24 @@ export function useMeetingAssistant() {
 
         const currentQuestionType =
           normalizeCanonicalQuestionType(
-            inferCanonicalQuestionTypeFromText(projectedClassifierText)
+            inferCanonicalQuestionTypeFromText(
+              projectedSemanticEvidenceText
+            )
           ) ?? "unknown";
+        const answerFocusQuestionType =
+          normalizeCanonicalQuestionType(
+            inferCanonicalQuestionTypeFromText(
+              projectedAnswerFocusText
+            )
+          ) ?? "unknown";
+        traceStoreRef.current.updateMetadata(traceId, {
+          primaryAskAnswerFocusQuestionTypeProposal:
+            answerFocusQuestionType,
+          primaryAskSemanticEvidenceQuestionTypeProposal:
+            currentQuestionType,
+          primaryAskQuestionTypeProposalChanged:
+            answerFocusQuestionType !== currentQuestionType,
+        });
         const sectionHintConsumption = consumeInterviewSectionHint({
           hint: pendingInterviewSectionHintRef.current,
           questionId: turn.id,
@@ -13813,7 +13857,8 @@ export function useMeetingAssistant() {
               questionTurnId: turn.id,
               questionTraceId: traceId,
               questionText:
-                logicalQuestionUnit?.normalizedText || projectedClassifierText,
+                getLogicalQuestionAnswerFocusText(logicalQuestionUnit) ||
+                projectedAnswerFocusText,
               sessionId: contextState.sessionId,
               runtimeEpoch: runtimeEpochRef.current,
             });
@@ -18792,16 +18837,28 @@ export function useMeetingAssistant() {
           manualCorrectionRevisionRef.current,
         now: requestedAt,
       });
+      const originalSemanticEvidenceText =
+        getLogicalQuestionSemanticEvidenceText(
+          targetLogicalQuestionUnit
+        );
+      const correctedAnswerFocusText =
+        getLogicalQuestionAnswerFocusText(
+          application.logicalQuestionUnit
+        );
+      const correctedSemanticEvidenceText =
+        getLogicalQuestionSemanticEvidenceText(
+          application.logicalQuestionUnit
+        );
       const originalCorrectionQuestionTypeDecision =
         inferQuestionTypeDecisionFromText(
-          targetLogicalQuestionUnit.normalizedText,
+          originalSemanticEvidenceText,
           {
             interviewSessionBrief: contextState.interviewSessionBrief,
           }
         );
       const correctedQuestionTypeDecision =
         inferQuestionTypeDecisionFromText(
-          application.logicalQuestionUnit.normalizedText,
+          correctedSemanticEvidenceText,
           {
             interviewSessionBrief: contextState.interviewSessionBrief,
           }
@@ -18848,7 +18905,7 @@ export function useMeetingAssistant() {
           questionLineage: correctedLineage,
           presentation: {
             ...forceAdviseTarget.presentation,
-            text: application.logicalQuestionUnit.normalizedText,
+            text: correctedAnswerFocusText,
             logicalQuestionUnitRevision:
               application.logicalQuestionUnit.revision,
           },
@@ -18928,7 +18985,7 @@ export function useMeetingAssistant() {
       traceStoreRef.current.recordOutput(
         trace.id,
         "corrected current logical question",
-        application.logicalQuestionUnit.normalizedText,
+        correctedAnswerFocusText,
         {
           originalTranscriptPreserved: true,
           correctionOverlayApplied: true,
@@ -18944,7 +19001,7 @@ export function useMeetingAssistant() {
           `Correction: ${correction.input}`,
           `Target: ${correction.to ?? correction.term ?? "-"}`,
           `From: ${correction.from ?? "-"}`,
-          `Logical question: ${application.logicalQuestionUnit.normalizedText}`,
+          `Logical question: ${correctedSemanticEvidenceText}`,
         ].join("\n"),
         {
           parentCorrectionTraceId: trace.id,
@@ -19330,8 +19387,7 @@ export function useMeetingAssistant() {
                   ?.topicDomain
               );
             const selectedPlaybook = selectInterviewPlaybook({
-              query:
-                application.logicalQuestionUnit.normalizedText,
+              query: correctedSemanticEvidenceText,
               questionType: correctedType,
               askFrame,
               topicDomain,
@@ -19356,8 +19412,7 @@ export function useMeetingAssistant() {
               task: latestTask,
               decision: typeCorrectionDecision,
               lineage: correctedLineage,
-              latestQuestionText:
-                application.logicalQuestionUnit.normalizedText,
+              latestQuestionText: correctedSemanticEvidenceText,
               parentQuestionText: latestParent.topic,
               classifierConfidence: 1,
               currentQuestionMatchesParentOrigin: true,
@@ -19376,8 +19431,7 @@ export function useMeetingAssistant() {
                 decision: typeCorrectionDecision,
                 scopeDecision,
                 correctedPlaybook,
-                latestQuestionText:
-                  application.logicalQuestionUnit.normalizedText,
+                latestQuestionText: correctedSemanticEvidenceText,
                 lineage: correctedLineage,
                 transcriptTurns:
                   latestContext.transcriptTurns,
@@ -19392,8 +19446,7 @@ export function useMeetingAssistant() {
               });
             const resettledParent = {
               ...parentTransition.parent,
-              topic:
-                application.logicalQuestionUnit.normalizedText,
+              topic: correctedSemanticEvidenceText,
               canonicalQuestionSourceTurnIds: [
                 ...application.logicalQuestionUnit
                   .sourceTurnIds,
@@ -19479,8 +19532,7 @@ export function useMeetingAssistant() {
                   memoryUseCase:
                     toMemoryUseCaseForQuestionType(
                       inferMemoryUseCaseFromQuery(
-                        application.logicalQuestionUnit
-                          .normalizedText
+                        correctedSemanticEvidenceText
                       ),
                       correctedType
                     ),
@@ -19489,14 +19541,11 @@ export function useMeetingAssistant() {
                   projectAnchor:
                     resettledScreenTask?.classifier
                       ?.projectAnchor,
-                  sourceQuestion:
-                    application.logicalQuestionUnit.normalizedText,
+                  sourceQuestion: correctedSemanticEvidenceText,
                   explicitTaskMutationCommand: {
                     kind: "replace-parent",
                     type: correctedType,
-                    topic:
-                      application.logicalQuestionUnit
-                        .normalizedText,
+                    topic: correctedSemanticEvidenceText,
                   },
                 });
               const preMutationPlanAuthorization =
@@ -19794,8 +19843,7 @@ export function useMeetingAssistant() {
                   application.logicalQuestionUnit.id,
                 revision:
                   application.logicalQuestionUnit.revision,
-                sourceQuestion:
-                  application.logicalQuestionUnit.normalizedText,
+                sourceQuestion: correctedAnswerFocusText,
                 sourceTurnIds:
                   application.logicalQuestionUnit.sourceTurnIds,
                 inferredType:
@@ -21089,7 +21137,9 @@ function resolveAdvisorTaskSignals(
 ): AdvisorTaskSignals {
   const latestThemText =
     context.latestTurn?.speaker === "them" ? context.latestTurn.text.trim() : "";
-  const classifierText = logicalQuestionUnit?.normalizedText ?? latestThemText;
+  const classifierText =
+    getLogicalQuestionSemanticEvidenceText(logicalQuestionUnit) ||
+    latestThemText;
   const latestUsefulText =
     classifierText && calculateWordEquivalent(classifierText) >= 3
       ? classifierText
@@ -21138,6 +21188,9 @@ function resolveAdvisorTaskSignals(
     const useLatestAsChild =
       taskRelationAuthorityDecision?.relation === "child-probe" &&
       taskRelationAuthorityDecision.relationEvidenceAuthorized;
+    const useLatestAsParentFollowup =
+      taskRelationAuthorityDecision?.relation === "followup-parent" &&
+      taskRelationAuthorityDecision.relationEvidenceAuthorized;
     const shouldStartNewParent =
       Boolean(latestLooksLikeTask) &&
       latestIsParentKind &&
@@ -21164,6 +21217,40 @@ function resolveAdvisorTaskSignals(
         latestTurnTaxonomyBoundaryReason: openingRoute
           ? "opening-route"
           : "latest-turn-classified",
+        taxonomyFallbackSuppressed: false,
+        unknownTaskMutationBlocked: false,
+      };
+    }
+
+    if (useLatestAsParentFollowup) {
+      return {
+        questionType: activeQuestionType,
+        questionTypeDecision: latestQuestionTypeDecision,
+        askFrame:
+          getAdvisorActiveAskFrame(context) ?? latestAskFrame,
+        topicDomain:
+          getAdvisorActiveTopicDomain(context) ?? latestTopicDomain,
+        query: buildFocusedAdvisorTaskQuery(
+          context,
+          latestUsefulText
+        ),
+        taskRelation: "followup-parent",
+        taskRelationAuthorityDecision,
+        relationEvidenceAuthorized: true,
+        responseOnlyRelation: false,
+        subtaskIntent: inferAdvisorSubtaskIntent(
+          latestUsefulText,
+          activeQuestionType
+        ),
+        projectAnchor:
+          getAdvisorActiveProjectAnchor(context) ??
+          latestProjectAnchor,
+        source: "explicit-design-parent-revision",
+        reuseActivePlaybook: true,
+        openingRoute,
+        latestTurnAskFrame: latestAskFrame,
+        latestTurnTaxonomyBoundaryReason:
+          "active-parent-continuity",
         taxonomyFallbackSuppressed: false,
         unknownTaskMutationBlocked: false,
       };

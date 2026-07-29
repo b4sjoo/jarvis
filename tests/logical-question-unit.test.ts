@@ -3,6 +3,8 @@ import test from "node:test";
 import {
   LOGICAL_QUESTION_MAX_CHARS,
   composeLogicalQuestionUnit,
+  getLogicalQuestionAnswerFocusText,
+  getLogicalQuestionSemanticEvidenceText,
 } from "../src/lib/meeting/logical-question-unit.js";
 import { decideAdvisorTurnIntent } from "../src/lib/meeting/advisor-turn-intent.js";
 import type { TranscriptTurn } from "../src/lib/meeting/types.js";
@@ -379,6 +381,36 @@ test("keeps dense recruiter setup as source context but classifies the terminal 
   assert.equal(
     unit.primaryAskProjection?.quotedOrFutureExampleSpans.length,
     1
+  );
+});
+
+test("exposes separate answer-focus and semantic-evidence views", () => {
+  const current = turn(
+    "turn_surge_pricing",
+    "Now try to add a surge pricing and explain which components need to change.",
+    1_000
+  );
+  const unit = composeLogicalQuestionUnit({
+    currentTurn: current,
+    sessionId: "session-a",
+    runtimeEpoch: 1,
+    primaryAskProjection: projectPrimaryAsk({
+      turnId: current.id,
+      text: current.text,
+    }),
+  });
+
+  assert.equal(
+    getLogicalQuestionAnswerFocusText(unit),
+    "explain which components need to change."
+  );
+  assert.equal(
+    getLogicalQuestionSemanticEvidenceText(unit),
+    "try to add a surge pricing explain which components need to change."
+  );
+  assert.equal(
+    unit.normalizedText,
+    getLogicalQuestionAnswerFocusText(unit)
   );
 });
 

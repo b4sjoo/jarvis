@@ -1017,10 +1017,17 @@ export interface AdvisorBoundedParentReadContext {
   excludedContextKinds: string[];
 }
 
+export interface AdvisorCurrentQuestionProjection {
+  answerFocusText: string;
+  semanticEvidenceText: string;
+  sourceTurnIds: string[];
+}
+
 export interface AdvisorPromptContext {
   transcript: string;
   advisorPromptSourceTurnIds?: string[];
   screenContext: string;
+  currentQuestionProjection?: AdvisorCurrentQuestionProjection;
   responseOnlyParentReadContext?: AdvisorBoundedParentReadContext;
   interviewSessionBrief?: InterviewSessionBrief;
   interviewSessionContext?: InterviewSessionContext;

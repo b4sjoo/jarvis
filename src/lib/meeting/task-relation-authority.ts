@@ -65,6 +65,30 @@ export function decideCrossTypeTaskRelationAuthority(input: {
     };
   }
 
+  const designRevisionEvidence = findEvidenceSpans(
+    input.currentText,
+    DESIGN_PARENT_REVISION_PATTERNS
+  );
+  if (
+    isDesignParentType(activeQuestionType) &&
+    designRevisionEvidence.length > 0 &&
+    !(
+      activeQuestionType === "general-system-design" &&
+      candidateQuestionType === "ai-ml-system-design"
+    ) &&
+    candidateQuestionType !== "coding" &&
+    candidateQuestionType !== "behavioral" &&
+    candidateQuestionType !== "project-deep-dive"
+  ) {
+    return {
+      relation: "followup-parent",
+      disposition: "authorized",
+      relationEvidenceAuthorized: true,
+      reason: "explicit-design-parent-revision",
+      evidenceSpans: designRevisionEvidence,
+    };
+  }
+
   if (activeQuestionType === candidateQuestionType) {
     return undefined;
   }
@@ -192,6 +216,13 @@ function parentCanOwnBoundedChild(type: CanonicalQuestionType) {
   );
 }
 
+function isDesignParentType(type: CanonicalQuestionType) {
+  return (
+    type === "general-system-design" ||
+    type === "ai-ml-system-design"
+  );
+}
+
 function isBoundedChildType(type: CanonicalQuestionType) {
   return type === "field-knowledge" || type === "coding";
 }
@@ -215,4 +246,10 @@ const EXPLICIT_PARENT_BINDING_PATTERNS = [
   /\b(?:used by|part of|inside)\s+(?:the|this|that|our|your)(?:\s+[\w-]+){0,3}\s+(?:system|design|architecture|pipeline|component|service|project|application|app|feature|model|solution)\b/i,
   /\b(?:the|this|that)\s+(?:system|design|architecture|pipeline|component|service|project|application|app|feature|model|solution)\s+(?:we|you)\s+(?:just|previously)?\s*(?:discussed|designed|proposed|mentioned|described)\b/i,
   /\b(?:we|you)\s+(?:just|previously)\s+(?:discussed|designed|proposed|mentioned|described)\b/i,
+];
+
+const DESIGN_PARENT_REVISION_PATTERNS = [
+  /\b(?:add|change|update|modify|replace|remove|keep|preserve|revise|redraw|scale)\b.{0,100}\b(?:components?|services?|architecture|design|write path|read path|data flow|pipeline)\b/i,
+  /\b(?:which|what)\s+(?:components?|services?|parts?|paths?)\s+(?:need|would|should|have)\s+(?:to\s+)?(?:change|update|move|scale|be modified)\b/i,
+  /(?:增加|修改|更新|替换|删除|保留|重画|扩展).{0,60}(?:组件|服务|架构|设计|写路径|读路径|数据流|流水线)/u,
 ];

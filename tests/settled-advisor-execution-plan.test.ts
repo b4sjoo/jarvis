@@ -8,7 +8,13 @@ import {
   buildSettledAdvisorExecutionPlan,
   formatSettledAdvisorExecutionPlanForTrace,
 } from "../src/lib/meeting/settled-advisor-execution-plan.js";
+import {
+  primaryAskAnswerFocusText,
+  primaryAskClassifierText,
+  projectPrimaryAsk,
+} from "../src/lib/meeting/primary-ask-projection.js";
 import { createResponseOnlyTaskScope } from "../src/lib/meeting/response-only-task-scope.js";
+import { decideCrossTypeTaskRelationAuthority } from "../src/lib/meeting/task-relation-authority.js";
 import type { SelectedInterviewPlaybook } from "../src/lib/meeting/types.js";
 import type { TransientPersonalStatusDecision } from "../src/lib/meeting/types.js";
 
@@ -236,6 +242,52 @@ test("a committed general-system-design settlement atomically leaves the coding 
   assert.equal(plan.playbookId, "general_system_design");
   assert.equal(plan.artifactPolicy.allowWhiteboard, true);
   assert.equal(plan.artifactPolicy.allowCode, false);
+  assert.equal(plan.artifactIntent, "revise-whiteboard");
+});
+
+test("semantic setup preserves a design parent and revises its whiteboard", () => {
+  const text =
+    "Now try to add a surge pricing and explain which components need to change.";
+  const projection = projectPrimaryAsk({
+    turnId: "turn-surge",
+    text,
+  });
+  const answerFocusText = primaryAskAnswerFocusText(projection, text);
+  const semanticEvidenceText = primaryAskClassifierText(projection, text);
+  const relation = decideCrossTypeTaskRelationAuthority({
+    activeQuestionType: "general-system-design",
+    candidateQuestionType: "field-knowledge",
+    currentText: semanticEvidenceText,
+  });
+
+  assert.equal(
+    answerFocusText,
+    "explain which components need to change."
+  );
+  assert.match(semanticEvidenceText, /add a surge pricing/i);
+  assert.equal(relation?.relation, "followup-parent");
+  assert.equal(relation?.relationEvidenceAuthorized, true);
+
+  const plan = buildSettledAdvisorExecutionPlan({
+    settlement: settlement({
+      questionType: "general-system-design",
+      relation: relation?.relation ?? "unknown",
+      typeMutationAuthorized: false,
+      relationMutationAuthorized: false,
+      parentMutationAuthorized: false,
+    }),
+    activeMeetingTask: activeTask("general-system-design"),
+    taskBoundaryCommitted: false,
+    childOwnsResponse: false,
+    providerSnapshot: providers,
+    playbook: playbook("general-system-design"),
+    memoryUseCase: "system_design_interview",
+    askFrame: "hypothetical-design",
+    topicDomain: "backend",
+  });
+
+  assert.equal(plan.responseIntent, "advise");
+  assert.equal(plan.contextReadScope, "active-parent-read");
   assert.equal(plan.artifactIntent, "revise-whiteboard");
 });
 

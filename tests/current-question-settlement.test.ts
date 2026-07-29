@@ -13,6 +13,7 @@ import {
   type CurrentQuestionSettlementProposal,
 } from "../src/lib/meeting/current-question-settlement.js";
 import type { LogicalQuestionUnit } from "../src/lib/meeting/logical-question-unit.js";
+import { projectPrimaryAsk } from "../src/lib/meeting/primary-ask-projection.js";
 
 function logicalQuestion(
   revision = 2,
@@ -115,6 +116,41 @@ test("creates a stable versioned provisional question snapshot", () => {
   assert.equal(first.sourceKind, "mixed");
   assert.equal(first.sourceHash, duplicate.sourceHash);
   assert.notEqual(first.sourceHash, revised.sourceHash);
+});
+
+test("settles current-question identity from semantic evidence, not only the terminal ask", () => {
+  const text =
+    "Now try to add a surge pricing and explain which components need to change.";
+  const projection = projectPrimaryAsk({
+    turnId: "turn-b",
+    text,
+  });
+  const unit: LogicalQuestionUnit = {
+    ...logicalQuestion(
+      2,
+      projection.normalizedPrimaryAsk ?? text
+    ),
+    currentTurnId: "turn-b",
+    sourceTurnIds: ["turn-b"],
+    sources: [
+      {
+        turnId: "turn-b",
+        text,
+        startedAt: 30,
+        endedAt: 40,
+      },
+    ],
+    primaryAskProjection: projection,
+  };
+  const currentQuestion = createProvisionalCurrentQuestion({
+    logicalQuestionUnit: unit,
+    sourceKind: "voice",
+  });
+
+  assert.equal(
+    currentQuestion.normalizedText,
+    "try to add a surge pricing explain which components need to change."
+  );
 });
 
 test("keeps an unknown question response-capable but parent-ineligible", () => {

@@ -4,7 +4,8 @@ import type {
 } from "./advisor-turn-intent.js";
 import { isExactLowValueAcknowledgement } from "./advisor-turn-intent.js";
 
-export const PRIMARY_ASK_PROJECTION_SCHEMA_VERSION = 1;
+export const PRIMARY_ASK_PROJECTION_SCHEMA_VERSION = 2;
+export const PRIMARY_ASK_SEMANTIC_EVIDENCE_MAX_CHARS = 1_200;
 
 export type PrimaryAskSpeechAct =
   | "question"
@@ -36,6 +37,13 @@ export interface PrimaryAskProjection {
   primaryAskSpans: PrimaryAskEvidenceSpan[];
   setupSpans: PrimaryAskEvidenceSpan[];
   quotedOrFutureExampleSpans: PrimaryAskEvidenceSpan[];
+  answerFocusText: string;
+  semanticEvidenceText: string;
+  answerFocusSpans: PrimaryAskEvidenceSpan[];
+  objectSpans: PrimaryAskEvidenceSpan[];
+  scenarioSpans: PrimaryAskEvidenceSpan[];
+  semanticEvidenceRetentionReasons: string[];
+  semanticEvidenceDroppedReasons: string[];
   disposition: PrimaryAskDisposition;
   reason: string;
   confidence: number;
@@ -214,13 +222,15 @@ export function composePrimaryAskProjection(input: {
 
   const completedSetup =
     !previous.normalizedPrimaryAsk && Boolean(current.normalizedPrimaryAsk);
-  return {
-    ...current,
+  return projection({
     sourceTurnIds: unique([
       ...previous.sourceTurnIds,
       ...current.sourceTurnIds,
     ]),
     sourceChars: previous.sourceChars + current.sourceChars,
+    speechAct: current.speechAct,
+    normalizedPrimaryAsk: current.normalizedPrimaryAsk,
+    primaryAskSpans: current.primaryAskSpans,
     setupSpans: dedupeSpans([
       ...previous.setupSpans,
       ...current.setupSpans,
@@ -235,7 +245,8 @@ export function composePrimaryAskProjection(input: {
     reason: completedSetup
       ? "primary-ask-completed-prior-setup"
       : current.reason,
-  };
+    confidence: current.confidence,
+  });
 }
 
 export function isPrimaryAskCompletion(input: {
@@ -260,7 +271,23 @@ export function primaryAskClassifierText(
   projection: PrimaryAskProjection,
   fallback: string
 ) {
-  return projection.normalizedPrimaryAsk ?? fallback;
+  return (
+    projection.semanticEvidenceText ||
+    projection.answerFocusText ||
+    projection.normalizedPrimaryAsk ||
+    fallback
+  );
+}
+
+export function primaryAskAnswerFocusText(
+  projection: PrimaryAskProjection,
+  fallback = ""
+) {
+  return (
+    projection.answerFocusText ||
+    projection.normalizedPrimaryAsk ||
+    fallback
+  );
 }
 
 export function decideShortConfirmationAdmission(input: {
@@ -379,15 +406,33 @@ export function formatPrimaryAskProjectionForTrace(
     primaryAskReason: value.reason,
     primaryAskConfidence: value.confidence,
     primaryAskNormalizedText: value.normalizedPrimaryAsk,
+    primaryAskAnswerFocusText: value.answerFocusText,
+    primaryAskSemanticEvidenceText: value.semanticEvidenceText,
+    primaryAskAnswerFocusChars: value.answerFocusText.length,
+    primaryAskSemanticEvidenceChars: value.semanticEvidenceText.length,
     primaryAskSourceTurnIds: value.sourceTurnIds,
     primaryAskSourceChars: value.sourceChars,
     primaryAskSpanCount: value.primaryAskSpans.length,
     primaryAskSetupSpanCount: value.setupSpans.length,
     primaryAskQuotedOrFutureSpanCount:
       value.quotedOrFutureExampleSpans.length,
+    primaryAskAnswerFocusSpanCount: value.answerFocusSpans.length,
+    primaryAskObjectSpanCount: value.objectSpans.length,
+    primaryAskScenarioSpanCount: value.scenarioSpans.length,
+    primaryAskSemanticEvidenceRetentionReasons:
+      value.semanticEvidenceRetentionReasons,
+    primaryAskSemanticEvidenceDroppedReasons:
+      value.semanticEvidenceDroppedReasons,
+    primaryAskTurnGateView: "answer-focus",
+    primaryAskTaxonomyView: "semantic-evidence",
+    primaryAskTaskSettlementView: "semantic-evidence",
+    primaryAskAdvisorView: "answer-focus-plus-semantic-context",
     primaryAskSpans: value.primaryAskSpans,
     primaryAskSetupSpans: value.setupSpans,
     primaryAskQuotedOrFutureSpans: value.quotedOrFutureExampleSpans,
+    primaryAskAnswerFocusSpans: value.answerFocusSpans,
+    primaryAskObjectSpans: value.objectSpans,
+    primaryAskScenarioSpans: value.scenarioSpans,
   };
 }
 
@@ -495,13 +540,13 @@ function extractActionObjectDirectiveSpan(
 }
 
 const DIRECT_ASK_HEAD_PATTERN =
-  /(?:(?:can|could|would|will|do|does|did|is|are|was|were|have|has|had|should)\s+(?:you|your|this|that|it|there)\b|(?:how|what|why|when|where|which|who|whether)\b|(?:tell|walk|talk|give|show|explain|describe|outline|propose|design|create|sketch|implement|write|code|solve|compare|estimate|evaluate|discuss|share)\b|(?:请|怎么|如何|为什么|什么|是否|哪里|哪个|解释|描述|设计|实现|编写|估算|比较))/giu;
+  /(?:(?:can|could|would|will|do|does|did|is|are|was|were|have|has|had|should)\s+(?:you|your|this|that|it|there)\b|(?:how|what|why|when|where|which|who|whether)\b|(?:tell|walk|talk|give|show|explain|describe|outline|propose|design|create|sketch|implement|write|code|solve|compare|estimate|evaluate|discuss|share|redraw)\b|(?:请|怎么|如何|为什么|什么|是否|哪里|哪个|解释|描述|设计|实现|编写|估算|比较|重画))/giu;
 
 const DIRECT_ASK_PATTERN =
-  /(?:^|(?:(?:\b(?:but|so|now|then|okay|with that|given that|my question is|for you|before we finish)\b[\s,:-]*)|(?:\b(?:thanks|thank you)\b[\s,:-]*and\b[\s,:-]*)))(?<ask>(?:(?:can|could|would|will|do|does|did|is|are|was|were|have|has|had|should)\s+(?:you|your|this|that|it|there)\b|(?:how|what|why|when|where|which|who|whether)\b|(?:tell|walk|talk|give|show|explain|describe|outline|propose|design|create|sketch|implement|write|code|solve|compare|estimate|evaluate|discuss|share)\b|(?:请|怎么|如何|为什么|什么|是否|哪里|哪个|解释|描述|设计|实现|编写|估算|比较)))/giu;
+  /(?:^|(?:(?:\b(?:but|and|so|now|then|okay|with that|given that|my question is|for you|before we finish)\b[\s,:-]*)|(?:\b(?:thanks|thank you)\b[\s,:-]*and\b[\s,:-]*)))(?<ask>(?:(?:can|could|would|will|do|does|did|is|are|was|were|have|has|had|should)\s+(?:you|your|this|that|it|there)\b|(?:how|what|why|when|where|which|who|whether)\b|(?:tell|walk|talk|give|show|explain|describe|outline|propose|design|create|sketch|implement|write|code|solve|compare|estimate|evaluate|discuss|share|redraw)\b|(?:请|怎么|如何|为什么|什么|是否|哪里|哪个|解释|描述|设计|实现|编写|估算|比较|重画)))/giu;
 
 const ACTION_OBJECT_DIRECTIVE_PATTERN =
-  /(?:^|(?:\b(?:but|so|now|then|okay|alright|right)\b[\s,:-]*))(?<ask>(?:maybe\s+)?(?:let(?:'s| us)\s+)?(?:do|design|build|implement|write|code|solve|create|sketch)\s+.+)$/iu;
+  /(?:^|(?:\b(?:but|and|so|now|then|okay|alright|right)\b[\s,:-]*))(?<ask>(?:maybe\s+)?(?:let(?:'s| us)\s+)?(?:do|design|build|implement|write|code|solve|create|sketch|add|change|update|modify|revise|redraw|keep)\s+.+)$/iu;
 
 function isDirectAskText(candidate: string, wholeSpan: string) {
   const normalized = normalizeSpace(candidate);
@@ -510,7 +555,7 @@ function isDirectAskText(candidate: string, wholeSpan: string) {
     return false;
   }
   if (/[?？]\s*$/.test(wholeSpan)) return true;
-  return /^(?:tell|walk|talk|give|show|explain|describe|outline|propose|design|create|sketch|implement|write|code|solve|compare|estimate|evaluate|discuss|share|请|解释|描述|设计|实现|编写|估算|比较)\b/iu.test(
+  return /^(?:tell|walk|talk|give|show|explain|describe|outline|propose|design|create|sketch|implement|write|code|solve|compare|estimate|evaluate|discuss|share|redraw|请|解释|描述|设计|实现|编写|估算|比较|重画)\b/iu.test(
     normalized
   );
 }
@@ -601,7 +646,7 @@ function hasConcreteDirectiveObject(text: string) {
     .toLocaleLowerCase()
     .replace(/[.!?。！？]+$/u, "");
   const match =
-    /^(?:maybe\s+)?(?:let(?:'s| us)\s+)?(?:do|design|build|implement|write|code|solve|create|sketch)\s+(?<object>.+)$/iu.exec(
+    /^(?:maybe\s+)?(?:let(?:'s| us)\s+)?(?:do|design|build|implement|write|code|solve|create|sketch|add|change|update|modify|revise|redraw|keep)\s+(?<object>.+)$/iu.exec(
       normalized
     );
   const object = match?.groups?.object?.trim();
@@ -614,7 +659,7 @@ function hasConcreteDirectiveObject(text: string) {
 function isDirective(text: string) {
   const normalized = normalizeSpace(text);
   return (
-    /^(?:tell|walk|talk|give|show|explain|describe|outline|propose|design|create|sketch|implement|write|code|solve|compare|estimate|evaluate|discuss|share|请|解释|描述|设计|实现|编写|估算|比较)\b/iu.test(
+    /^(?:tell|walk|talk|give|show|explain|describe|outline|propose|design|create|sketch|implement|write|code|solve|compare|estimate|evaluate|discuss|share|add|change|update|modify|revise|redraw|keep|请|解释|描述|设计|实现|编写|估算|比较|增加|修改|更新|重画|保留)\b/iu.test(
       normalized
     ) || hasConcreteDirectiveObject(normalized)
   );
@@ -623,16 +668,196 @@ function isDirective(text: string) {
 function projection(
   value: Omit<
     PrimaryAskProjection,
-    "schemaVersion" | "primaryAskSpans"
+    | "schemaVersion"
+    | "primaryAskSpans"
+    | "answerFocusText"
+    | "semanticEvidenceText"
+    | "answerFocusSpans"
+    | "objectSpans"
+    | "scenarioSpans"
+    | "semanticEvidenceRetentionReasons"
+    | "semanticEvidenceDroppedReasons"
   > & {
     primaryAskSpans?: PrimaryAskEvidenceSpan[];
   }
 ): PrimaryAskProjection {
+  const primaryAskSpans = dedupeSpans(value.primaryAskSpans ?? []);
+  const setupSpans = dedupeSpans(value.setupSpans);
+  const quotedOrFutureExampleSpans = dedupeSpans(
+    value.quotedOrFutureExampleSpans
+  );
+  const answerFocusText =
+    value.normalizedPrimaryAsk?.trim() ??
+    joinSpans(primaryAskSpans, value.sourceTurnIds);
+  const semanticProjection = deriveSemanticEvidence({
+    sourceTurnIds: value.sourceTurnIds,
+    answerFocusText,
+    answerFocusSpans: primaryAskSpans,
+    setupSpans,
+    quotedOrFutureExampleSpans,
+  });
+
   return {
     schemaVersion: PRIMARY_ASK_PROJECTION_SCHEMA_VERSION,
-    primaryAskSpans: value.primaryAskSpans ?? [],
     ...value,
+    primaryAskSpans,
+    setupSpans,
+    quotedOrFutureExampleSpans,
+    answerFocusText,
+    ...semanticProjection,
   };
+}
+
+function deriveSemanticEvidence(input: {
+  sourceTurnIds: string[];
+  answerFocusText: string;
+  answerFocusSpans: PrimaryAskEvidenceSpan[];
+  setupSpans: PrimaryAskEvidenceSpan[];
+  quotedOrFutureExampleSpans: PrimaryAskEvidenceSpan[];
+}) {
+  const objectSpans: PrimaryAskEvidenceSpan[] = [];
+  const droppedReasons: string[] = [];
+
+  for (const setupSpan of input.setupSpans) {
+    const semanticSpan = trimSemanticSetupSpan(setupSpan);
+    if (!semanticSpan) {
+      droppedReasons.push(
+        classifyNonAskSpeechAct(setupSpan.text) === "logistics"
+          ? "logistics-setup"
+          : "discourse-only-setup"
+      );
+      continue;
+    }
+    objectSpans.push(semanticSpan);
+  }
+
+  const answerFocusSpans = dedupeSpans(input.answerFocusSpans);
+  const retainedObjectSpans = dedupeSpans(objectSpans);
+  const scenarioSpans = retainedObjectSpans.filter((span) =>
+    hasScenarioEvidenceSignal(span.text)
+  );
+  const semanticSpans = sortSpansBySourceOrder(
+    dedupeSpans([...retainedObjectSpans, ...answerFocusSpans]),
+    input.sourceTurnIds
+  );
+  const fullSemanticEvidence = joinSpans(
+    semanticSpans,
+    input.sourceTurnIds
+  );
+  const semanticEvidenceText = boundSemanticEvidence({
+    fullText: fullSemanticEvidence,
+    answerFocusText: input.answerFocusText,
+  });
+  const retentionReasons = unique([
+    ...(answerFocusSpans.length ? ["answer-focus"] : []),
+    ...(retainedObjectSpans.length ? ["setup-object"] : []),
+    ...(scenarioSpans.length ? ["setup-scenario"] : []),
+    ...(semanticEvidenceText.length < fullSemanticEvidence.length
+      ? ["bounded-semantic-evidence"]
+      : []),
+  ]);
+
+  if (input.quotedOrFutureExampleSpans.length) {
+    droppedReasons.push("quoted-or-future-example");
+  }
+
+  return {
+    semanticEvidenceText,
+    answerFocusSpans,
+    objectSpans: retainedObjectSpans,
+    scenarioSpans,
+    semanticEvidenceRetentionReasons: retentionReasons,
+    semanticEvidenceDroppedReasons: unique(droppedReasons),
+  };
+}
+
+function trimSemanticSetupSpan(span: PrimaryAskEvidenceSpan) {
+  const raw = span.text;
+  const leadingMatch = raw.match(
+    /^(?:(?:now|so|then|okay|ok|alright|right|with that|given that|my question is|before we finish)\b[\s,:;—–-]*)+/iu
+  );
+  const trailingMatch = raw.match(
+    /(?:[\s,:;—–-]+\b(?:and|but|so|then)\b[\s,:;—–-]*)$/iu
+  );
+  const start = span.start + (leadingMatch?.[0].length ?? 0);
+  const end =
+    span.end -
+    (trailingMatch && start < span.end - trailingMatch[0].length
+      ? trailingMatch[0].length
+      : 0);
+  const trimmed = trimSpanRange(span, start, end);
+  if (!trimmed || isDiscourseOnlySetup(trimmed.text)) return undefined;
+  if (classifyNonAskSpeechAct(trimmed.text) === "logistics") return undefined;
+  return trimmed;
+}
+
+function isDiscourseOnlySetup(text: string) {
+  const normalized = normalizeSpace(text)
+    .toLowerCase()
+    .replace(/[,:;.!?。！？—–-]+$/gu, "");
+  return /^(?:now|so|then|okay|ok|alright|right|with that|given that|my question is|before we finish|please|and|but)$/u.test(
+    normalized
+  );
+}
+
+function hasScenarioEvidenceSignal(text: string) {
+  return /\b(?:add|change|update|modify|replace|remove|keep|preserve|extend|scale|support|given|when|if|under|with|without|current|existing|instead|rather|constraint|requirement|latency|throughput|qps|traffic|data|user|system|service|component|database|cache|queue|retrieval|rag|model|pricing)\b/iu.test(
+    text
+  ) || /(?:增加|修改|替换|删除|保留|扩展|支持|给定|如果|约束|需求|延迟|吞吐|流量|数据|系统|服务|组件|数据库|缓存|队列|检索|模型|定价)/u.test(
+    text
+  );
+}
+
+function boundSemanticEvidence(input: {
+  fullText: string;
+  answerFocusText: string;
+}) {
+  if (input.fullText.length <= PRIMARY_ASK_SEMANTIC_EVIDENCE_MAX_CHARS) {
+    return input.fullText;
+  }
+
+  const answerFocusText = input.answerFocusText.slice(
+    -PRIMARY_ASK_SEMANTIC_EVIDENCE_MAX_CHARS
+  );
+  if (answerFocusText.length >= PRIMARY_ASK_SEMANTIC_EVIDENCE_MAX_CHARS) {
+    return answerFocusText;
+  }
+  const separator = answerFocusText ? " " : "";
+  const setupBudget =
+    PRIMARY_ASK_SEMANTIC_EVIDENCE_MAX_CHARS -
+    answerFocusText.length -
+    separator.length;
+  const setupText = input.fullText
+    .slice(0, Math.max(0, input.fullText.length - input.answerFocusText.length))
+    .trim()
+    .slice(-setupBudget);
+  return normalizeSpace(
+    `${setupText}${separator}${answerFocusText}`
+  ).slice(-PRIMARY_ASK_SEMANTIC_EVIDENCE_MAX_CHARS);
+}
+
+function joinSpans(
+  spans: PrimaryAskEvidenceSpan[],
+  sourceTurnIds: string[]
+) {
+  return sortSpansBySourceOrder(spans, sourceTurnIds)
+    .map((span) => normalizeSpace(span.text))
+    .filter(Boolean)
+    .join(" ");
+}
+
+function sortSpansBySourceOrder(
+  spans: PrimaryAskEvidenceSpan[],
+  sourceTurnIds: string[]
+) {
+  const turnOrder = new Map(
+    sourceTurnIds.map((turnId, index) => [turnId, index])
+  );
+  return [...spans].sort((left, right) => {
+    const leftTurn = turnOrder.get(left.turnId) ?? Number.MAX_SAFE_INTEGER;
+    const rightTurn = turnOrder.get(right.turnId) ?? Number.MAX_SAFE_INTEGER;
+    return leftTurn - rightTurn || left.start - right.start;
+  });
 }
 
 function normalizeSpace(text: string) {

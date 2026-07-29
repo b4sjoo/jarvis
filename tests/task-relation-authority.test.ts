@@ -43,6 +43,26 @@ test("a locally bound coding request remains an authorized child", () => {
   ]);
 });
 
+test("an explicit architecture revision remains an authorized design-parent follow-up", () => {
+  const decision = decideCrossTypeTaskRelationAuthority({
+    activeQuestionType: "general-system-design",
+    candidateQuestionType: "field-knowledge",
+    currentText:
+      "try to add surge pricing explain which components need to change",
+  });
+
+  assert.equal(decision?.relation, "followup-parent");
+  assert.equal(decision?.disposition, "authorized");
+  assert.equal(decision?.relationEvidenceAuthorized, true);
+  assert.equal(decision?.reason, "explicit-design-parent-revision");
+  assert.equal(decision?.evidenceSpans.length, 2);
+  assert.match(decision?.evidenceSpans[0] ?? "", /surge pricing/);
+  assert.equal(
+    decision?.evidenceSpans[1],
+    "which components need to change"
+  );
+});
+
 test("an explicit task switch authorizes a new parent relation", () => {
   const decision = decideCrossTypeTaskRelationAuthority({
     activeQuestionType: "general-system-design",

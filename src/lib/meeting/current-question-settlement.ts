@@ -1,4 +1,7 @@
-import type { LogicalQuestionUnit } from "./logical-question-unit.js";
+import {
+  getLogicalQuestionSemanticEvidenceText,
+  type LogicalQuestionUnit,
+} from "./logical-question-unit.js";
 import type {
   InterviewerEvidenceMode,
   InterviewerIntentAction,
@@ -234,6 +237,8 @@ export function createProvisionalCurrentQuestion(input: {
   now?: number;
 }): ProvisionalCurrentQuestion {
   const { logicalQuestionUnit } = input;
+  const semanticEvidenceText =
+    getLogicalQuestionSemanticEvidenceText(logicalQuestionUnit);
   const sourceTurnIds = uniqueStrings(logicalQuestionUnit.sourceTurnIds);
   const sourceObservationIds = uniqueStrings(
     input.sourceObservationIds ?? []
@@ -243,7 +248,7 @@ export function createProvisionalCurrentQuestion(input: {
     runtimeEpoch: logicalQuestionUnit.runtimeEpoch,
     logicalQuestionUnitId: logicalQuestionUnit.id,
     revision: logicalQuestionUnit.revision,
-    normalizedText: logicalQuestionUnit.normalizedText,
+    normalizedText: semanticEvidenceText,
     sourceTurnIds,
     sourceObservationIds,
   });
@@ -253,7 +258,7 @@ export function createProvisionalCurrentQuestion(input: {
     revision: logicalQuestionUnit.revision,
     sessionId: logicalQuestionUnit.sessionId,
     runtimeEpoch: logicalQuestionUnit.runtimeEpoch,
-    normalizedText: logicalQuestionUnit.normalizedText,
+    normalizedText: semanticEvidenceText,
     sourceTurnIds,
     sourceObservationIds,
     sourceKind: input.sourceKind,

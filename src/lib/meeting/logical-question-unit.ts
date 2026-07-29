@@ -170,6 +170,9 @@ export function formatLogicalQuestionUnitForTrace(
   unit: LogicalQuestionUnit | undefined
 ): LogicalQuestionUnitTraceMetadata {
   if (!unit) return {};
+  const answerFocusText = getLogicalQuestionAnswerFocusText(unit);
+  const semanticEvidenceText =
+    getLogicalQuestionSemanticEvidenceText(unit);
   return {
     logicalQuestionUnitId: unit.id,
     logicalQuestionUnitRevision: unit.revision,
@@ -189,7 +192,74 @@ export function formatLogicalQuestionUnitForTrace(
     sectionHintDisposition: unit.sectionHint?.disposition,
     sectionHintSourceTurnId: unit.sectionHint?.sourceTurnId,
     ...formatPrimaryAskProjectionForTrace(unit.primaryAskProjection),
+    primaryAskAnswerFocusText: answerFocusText,
+    primaryAskSemanticEvidenceText: semanticEvidenceText,
+    primaryAskAnswerFocusChars: answerFocusText.length,
+    primaryAskSemanticEvidenceChars: semanticEvidenceText.length,
   };
+}
+
+export function getLogicalQuestionAnswerFocusText(
+  unit: LogicalQuestionUnit | undefined
+) {
+  if (!unit) return "";
+  if (unit.termCorrectionOverlays?.length) {
+    return unit.normalizedText.trim();
+  }
+  return (
+    unit.primaryAskProjection?.answerFocusText.trim() ||
+    unit.primaryAskProjection?.normalizedPrimaryAsk?.trim() ||
+    unit.normalizedText.trim()
+  );
+}
+
+export function getLogicalQuestionSemanticEvidenceText(
+  unit: LogicalQuestionUnit | undefined
+) {
+  if (!unit) return "";
+  const projectedSemanticEvidence =
+    unit.primaryAskProjection?.semanticEvidenceText.trim() ||
+    unit.normalizedText.trim() ||
+    joinBoundedSources(unit.sources).text.trim();
+  if (!unit.termCorrectionOverlays?.length) {
+    return projectedSemanticEvidence;
+  }
+  if (
+    unit.primaryAskProjection?.semanticEvidenceRetentionReasons.includes(
+      "manual-correction-overlay"
+    )
+  ) {
+    return projectedSemanticEvidence;
+  }
+
+  const projectedAnswerFocus =
+    unit.primaryAskProjection?.answerFocusText.trim() ||
+    unit.primaryAskProjection?.normalizedPrimaryAsk?.trim() ||
+    "";
+  const correctedAnswerFocus = unit.normalizedText.trim();
+  if (!projectedAnswerFocus) {
+    return joinBoundedText(
+      projectedSemanticEvidence,
+      correctedAnswerFocus
+    );
+  }
+  if (projectedSemanticEvidence.includes(projectedAnswerFocus)) {
+    return projectedSemanticEvidence.replace(
+      projectedAnswerFocus,
+      correctedAnswerFocus
+    );
+  }
+  return joinBoundedText(
+    projectedSemanticEvidence,
+    correctedAnswerFocus
+  );
+}
+
+function joinBoundedText(left: string, right: string) {
+  return [left.trim(), right.trim()]
+    .filter(Boolean)
+    .join(" ")
+    .slice(-LOGICAL_QUESTION_MAX_CHARS);
 }
 
 function resolveCompositionBoundary(

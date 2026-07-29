@@ -184,7 +184,7 @@ test("sends the bounded source turn instead of a local primary-ask candidate", (
   const logicalUnit = unit("How does this role sound relative to what you are looking for?");
   logicalUnit.sources[0]!.text = text;
   logicalUnit.primaryAskProjection = {
-    schemaVersion: 1,
+    schemaVersion: 2,
     sourceTurnIds: ["turn-a"],
     sourceChars: text.length,
     speechAct: "question",
@@ -193,6 +193,15 @@ test("sends the bounded source turn instead of a local primary-ask candidate", (
     primaryAskSpans: [],
     setupSpans: [],
     quotedOrFutureExampleSpans: [],
+    answerFocusText:
+      "How does this role sound relative to what you are looking for?",
+    semanticEvidenceText:
+      "How does this role sound relative to what you are looking for?",
+    answerFocusSpans: [],
+    objectSpans: [],
+    scenarioSpans: [],
+    semanticEvidenceRetentionReasons: ["answer-focus"],
+    semanticEvidenceDroppedReasons: [],
     disposition: "answer-primary-ask",
     reason: "test-local-candidate",
     confidence: 0.97,

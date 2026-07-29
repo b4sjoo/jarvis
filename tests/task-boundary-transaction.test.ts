@@ -19,6 +19,7 @@ import {
   createProvisionalCurrentQuestion,
   settleCurrentQuestion,
 } from "../src/lib/meeting/current-question-settlement.js";
+import { projectPrimaryAsk } from "../src/lib/meeting/primary-ask-projection.js";
 
 function logicalQuestion(
   text = "Design a food delivery service"
@@ -76,6 +77,52 @@ test("commits a complete high-authority new parent before advisor execution", ()
   assert.equal(committed.state, "committed");
   assert.equal(taskBoundarySurvivesAdvisorOutcome(committed, "cancelled"), true);
   assert.equal(taskBoundarySurvivesAdvisorOutcome(committed, "error"), true);
+});
+
+test("keeps setup objects in the committed parent topic", () => {
+  const text =
+    "Now add surge pricing and explain which components need to change.";
+  const primaryAskProjection = projectPrimaryAsk({
+    turnId: "turn-b",
+    text,
+  });
+  const unit: LogicalQuestionUnit = {
+    ...logicalQuestion(
+      primaryAskProjection.normalizedPrimaryAsk ?? text
+    ),
+    sourceTurnIds: ["turn-b"],
+    sources: [
+      {
+        turnId: "turn-b",
+        text,
+        startedAt: 30,
+        endedAt: 40,
+      },
+    ],
+    primaryAskProjection,
+  };
+  const candidate = createTaskBoundaryCandidate({
+    logicalQuestionUnit: unit,
+    proposedQuestionType: "general-system-design",
+    proposedRelation: "new-parent",
+    authoritySource: "accepted-transcript",
+    confidence: 0.95,
+    questionComplete: true,
+    mutationAuthorized: true,
+    commitParent: true,
+  });
+  assert.ok(candidate);
+
+  const parent = buildCommittedTaskBoundaryParent({
+    candidate,
+    logicalQuestionUnit: unit,
+    source: "voice",
+  });
+
+  assert.equal(
+    parent?.topic,
+    "add surge pricing explain which components need to change."
+  );
 });
 
 test("binds a committed parent to the authoritative current-question settlement", () => {

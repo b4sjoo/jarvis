@@ -3,6 +3,7 @@ import type {
   SpeechCorrection,
 } from "./types.js";
 import {
+  getLogicalQuestionSemanticEvidenceText,
   LOGICAL_QUESTION_MAX_CHARS,
   type LogicalQuestionUnit,
 } from "./logical-question-unit.js";
@@ -50,12 +51,20 @@ export function applyActiveQuestionTermCorrection(
     from: input.correction.from,
     to: normalizedTerm,
   });
+  const semanticReplacement = resolveTermReplacement({
+    text: getLogicalQuestionSemanticEvidenceText(
+      input.logicalQuestionUnit
+    ),
+    from: input.correction.from,
+    to: normalizedTerm,
+  });
   const correctedRevision = input.logicalQuestionUnit.revision + 1;
   const transaction: ActiveQuestionTermCorrection = {
     correctionId: input.correction.id,
     rawText: input.correction.input,
     normalizedTerm,
-    replacedText: replacement.replacedText,
+    replacedText:
+      replacement.replacedText ?? semanticReplacement.replacedText,
     logicalQuestionUnitId: input.logicalQuestionUnit.id,
     logicalQuestionUnitRevision: input.logicalQuestionUnit.revision,
     correctedLogicalQuestionUnitRevision: correctedRevision,
@@ -71,6 +80,27 @@ export function applyActiveQuestionTermCorrection(
     normalizedTerm,
     replacement.replacedText
   );
+  const correctedSemanticEvidenceText = appendCorrectionOverlay(
+    semanticReplacement.text,
+    normalizedTerm,
+    semanticReplacement.replacedText
+  );
+  const primaryAskProjection =
+    input.logicalQuestionUnit.primaryAskProjection
+      ? {
+          ...input.logicalQuestionUnit.primaryAskProjection,
+          normalizedPrimaryAsk: normalizedText,
+          answerFocusText: normalizedText,
+          semanticEvidenceText: correctedSemanticEvidenceText,
+          semanticEvidenceRetentionReasons: Array.from(
+            new Set([
+              ...input.logicalQuestionUnit.primaryAskProjection
+                .semanticEvidenceRetentionReasons,
+              "manual-correction-overlay",
+            ])
+          ),
+        }
+      : undefined;
 
   return {
     transaction,
@@ -78,6 +108,7 @@ export function applyActiveQuestionTermCorrection(
       ...input.logicalQuestionUnit,
       revision: correctedRevision,
       normalizedText,
+      primaryAskProjection,
       updatedAt: now,
       compositionReasons: Array.from(
         new Set([

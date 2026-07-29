@@ -56,7 +56,7 @@ import { serializeMeetingTraceExport } from "./trace.js";
 
 const SESSION_RECORDING_SCHEMA_VERSION = 1;
 const SESSION_RECORDING_INTEGRITY_SCHEMA_VERSION = 1;
-const SESSION_TRACE_SUMMARY_SCHEMA_VERSION = 28;
+const SESSION_TRACE_SUMMARY_SCHEMA_VERSION = 29;
 const SESSION_TRACE_INDEX_SCHEMA_VERSION = 1;
 const MAX_RECORDED_WRITE_FAILURES = 20;
 
@@ -273,6 +273,20 @@ export interface SessionCompactTraceSummary {
   primaryAskSpanCount?: number;
   primaryAskSetupSpanCount?: number;
   primaryAskQuotedOrFutureSpanCount?: number;
+  primaryAskAnswerFocusChars?: number;
+  primaryAskSemanticEvidenceChars?: number;
+  primaryAskAnswerFocusSpanCount?: number;
+  primaryAskObjectSpanCount?: number;
+  primaryAskScenarioSpanCount?: number;
+  primaryAskSemanticEvidenceRetentionReasons: string[];
+  primaryAskSemanticEvidenceDroppedReasons: string[];
+  primaryAskTurnGateView?: string;
+  primaryAskTaxonomyView?: string;
+  primaryAskTaskSettlementView?: string;
+  primaryAskAdvisorView?: string;
+  primaryAskAnswerFocusQuestionTypeProposal?: string;
+  primaryAskSemanticEvidenceQuestionTypeProposal?: string;
+  primaryAskQuestionTypeProposalChanged?: boolean;
   logicalQuestionLeaseAuthorized?: boolean;
   logicalQuestionLeaseAuthorizationReason?: string;
   logicalQuestionLeaseAuthorizationStage?: string;
@@ -3692,6 +3706,62 @@ function buildCompactTraceSummary({
     primaryAskQuotedOrFutureSpanCount: readFirstNumberFromMetadata(
       metadataSources,
       "primaryAskQuotedOrFutureSpanCount"
+    ),
+    primaryAskAnswerFocusChars: readFirstNumberFromMetadata(
+      metadataSources,
+      "primaryAskAnswerFocusChars"
+    ),
+    primaryAskSemanticEvidenceChars: readFirstNumberFromMetadata(
+      metadataSources,
+      "primaryAskSemanticEvidenceChars"
+    ),
+    primaryAskAnswerFocusSpanCount: readFirstNumberFromMetadata(
+      metadataSources,
+      "primaryAskAnswerFocusSpanCount"
+    ),
+    primaryAskObjectSpanCount: readFirstNumberFromMetadata(
+      metadataSources,
+      "primaryAskObjectSpanCount"
+    ),
+    primaryAskScenarioSpanCount: readFirstNumberFromMetadata(
+      metadataSources,
+      "primaryAskScenarioSpanCount"
+    ),
+    primaryAskSemanticEvidenceRetentionReasons: readFirstStringList(
+      metadataSources,
+      "primaryAskSemanticEvidenceRetentionReasons"
+    ),
+    primaryAskSemanticEvidenceDroppedReasons: readFirstStringList(
+      metadataSources,
+      "primaryAskSemanticEvidenceDroppedReasons"
+    ),
+    primaryAskTurnGateView: readFirstString(
+      metadataSources,
+      "primaryAskTurnGateView"
+    ),
+    primaryAskTaxonomyView: readFirstString(
+      metadataSources,
+      "primaryAskTaxonomyView"
+    ),
+    primaryAskTaskSettlementView: readFirstString(
+      metadataSources,
+      "primaryAskTaskSettlementView"
+    ),
+    primaryAskAdvisorView: readFirstString(
+      metadataSources,
+      "primaryAskAdvisorView"
+    ),
+    primaryAskAnswerFocusQuestionTypeProposal: readFirstString(
+      metadataSources,
+      "primaryAskAnswerFocusQuestionTypeProposal"
+    ),
+    primaryAskSemanticEvidenceQuestionTypeProposal: readFirstString(
+      metadataSources,
+      "primaryAskSemanticEvidenceQuestionTypeProposal"
+    ),
+    primaryAskQuestionTypeProposalChanged: readFirstBoolean(
+      metadataSources,
+      "primaryAskQuestionTypeProposalChanged"
     ),
     logicalQuestionLeaseAuthorized: readFirstBoolean(
       metadataSources,

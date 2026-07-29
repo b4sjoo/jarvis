@@ -5,7 +5,12 @@ import {
   authorizeActiveQuestionTermCorrection,
   hasAppliedTermCorrection,
 } from "../src/lib/meeting/active-question-term-correction.js";
-import type { LogicalQuestionUnit } from "../src/lib/meeting/logical-question-unit.js";
+import {
+  getLogicalQuestionAnswerFocusText,
+  getLogicalQuestionSemanticEvidenceText,
+  type LogicalQuestionUnit,
+} from "../src/lib/meeting/logical-question-unit.js";
+import { projectPrimaryAsk } from "../src/lib/meeting/primary-ask-projection.js";
 import type { SpeechCorrection } from "../src/lib/meeting/types.js";
 
 test("binds a bare HNSW correction to the current logical question", () => {
@@ -78,6 +83,59 @@ test("uses an explicit replacement without mutating raw logical-question sources
   assert.match(result.logicalQuestionUnit.normalizedText, /Explain RAG/);
   assert.equal(result.logicalQuestionUnit.sources[0].text, unit.sources[0].text);
   assert.equal(result.transaction.replacedText, "rec");
+});
+
+test("recomputes both question projections when the corrected term is in setup", () => {
+  const text =
+    "Now add an H and SW retrieval index and explain which components need to change.";
+  const primaryAskProjection = projectPrimaryAsk({
+    turnId: "turn_1",
+    text,
+  });
+  const unit: LogicalQuestionUnit = {
+    ...makeLogicalQuestion(
+      primaryAskProjection.normalizedPrimaryAsk ?? text
+    ),
+    sources: [
+      {
+        turnId: "turn_1",
+        text,
+        startedAt: 1_000,
+        endedAt: 1_500,
+      },
+    ],
+    primaryAskProjection,
+  };
+  const result = applyActiveQuestionTermCorrection({
+    correction: {
+      ...makeCorrection("HNSW"),
+      from: "H and SW",
+      to: "HNSW",
+    },
+    logicalQuestionUnit: unit,
+    correctionTraceId: "trace_correction",
+    manualCorrectionRevision: 4,
+  });
+
+  assert.match(
+    getLogicalQuestionSemanticEvidenceText(
+      result.logicalQuestionUnit
+    ),
+    /\bHNSW\b/
+  );
+  assert.doesNotMatch(
+    getLogicalQuestionSemanticEvidenceText(
+      result.logicalQuestionUnit
+    ).split("\n")[0] ?? "",
+    /H and SW/i
+  );
+  assert.match(
+    getLogicalQuestionAnswerFocusText(
+      result.logicalQuestionUnit
+    ),
+    /intended term is "HNSW"/
+  );
+  assert.equal(result.transaction.replacedText, "H and SW");
 });
 
 test("rejects a term-correction lease after a newer question revision", () => {

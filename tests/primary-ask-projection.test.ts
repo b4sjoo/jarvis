@@ -4,6 +4,8 @@ import {
   composePrimaryAskProjection,
   decideShortConfirmationAdmission,
   isPrimaryAskCompletion,
+  primaryAskAnswerFocusText,
+  primaryAskClassifierText,
   projectPrimaryAsk,
   reconcilePrimaryAskTurnDecision,
 } from "../src/lib/meeting/primary-ask-projection.js";
@@ -63,6 +65,96 @@ test("preserves a source-owned design ask before a start-with instruction", () =
   assert.equal(result.speechAct, "directive");
 });
 
+test("separates the terminal answer focus from bounded semantic evidence", () => {
+  const text =
+    "Now try to add a surge pricing and explain which components need to change.";
+  const result = projectPrimaryAsk({
+    turnId: "turn_surge_pricing",
+    text,
+  });
+
+  assert.equal(
+    primaryAskAnswerFocusText(result),
+    "explain which components need to change."
+  );
+  assert.equal(
+    primaryAskClassifierText(result, text),
+    "try to add a surge pricing explain which components need to change."
+  );
+  assert.match(result.semanticEvidenceText, /surge pricing/i);
+  assert.match(result.semanticEvidenceText, /components need to change/i);
+  assert.deepEqual(
+    result.objectSpans.map((span) => span.text),
+    ["try to add a surge pricing"]
+  );
+  assert.deepEqual(
+    result.scenarioSpans.map((span) => span.text),
+    ["try to add a surge pricing"]
+  );
+  assert.deepEqual(result.semanticEvidenceRetentionReasons, [
+    "answer-focus",
+    "setup-object",
+    "setup-scenario",
+  ]);
+  for (const span of [
+    ...result.answerFocusSpans,
+    ...result.objectSpans,
+    ...result.scenarioSpans,
+  ]) {
+    assert.equal(text.slice(span.start, span.end), span.text);
+  }
+});
+
+test("retains the operation object across technical multi-clause asks", () => {
+  const cases = [
+    {
+      text:
+        "Add RAG to the travel planner and explain where embeddings are stored.",
+      focus: "explain where embeddings are stored.",
+      object: "Add RAG to the travel planner",
+    },
+    {
+      text: "Implement an LRU cache and discuss its complexity.",
+      focus: "discuss its complexity.",
+      object: "Implement an LRU cache",
+    },
+    {
+      text:
+        "Keep the current architecture, but redraw only the write path.",
+      focus: "redraw only the write path.",
+      object: "Keep the current architecture",
+    },
+  ];
+
+  for (const [index, fixture] of cases.entries()) {
+    const result = projectPrimaryAsk({
+      turnId: `turn_operation_object_${index}`,
+      text: fixture.text,
+    });
+
+    assert.equal(result.answerFocusText, fixture.focus);
+    assert.deepEqual(
+      result.objectSpans.map((span) => span.text),
+      [fixture.object]
+    );
+    assert.match(result.semanticEvidenceText, new RegExp(fixture.object, "i"));
+    assert.equal(result.answerFocusSpans.length, 1);
+  }
+});
+
+test("retains informational setup without turning it into an answer opportunity", () => {
+  const result = projectPrimaryAsk({
+    turnId: "turn_setup_only",
+    text:
+      "The ride-sharing system currently stores driver locations in a write-heavy location service.",
+  });
+
+  assert.equal(result.disposition, "append-setup");
+  assert.equal(result.answerFocusText, "");
+  assert.match(result.semanticEvidenceText, /driver locations/i);
+  assert.equal(result.answerFocusSpans.length, 0);
+});
+
 test("composes setup and a later referential direct ask into one projection", () => {
   const setup = projectPrimaryAsk({
     turnId: "turn_setup",
@@ -91,6 +183,14 @@ test("composes setup and a later referential direct ask into one projection", ()
     "How does this sound relative to what you're looking for?"
   );
   assert.equal(composed?.setupSpans.length, 1);
+  assert.match(
+    composed?.semanticEvidenceText ?? "",
+    /production AI infrastructure/
+  );
+  assert.match(
+    composed?.semanticEvidenceText ?? "",
+    /How does this sound/
+  );
 });
 
 test("keeps a long direct technical ask on the immediate answer path", () => {
@@ -102,7 +202,12 @@ test("keeps a long direct technical ask on the immediate answer path", () => {
 
   assert.equal(result.disposition, "answer-primary-ask");
   assert.equal(result.speechAct, "directive");
-  assert.match(result.normalizedPrimaryAsk ?? "", /ticket selling system/);
+  assert.equal(
+    result.normalizedPrimaryAsk,
+    "explain the consistency tradeoffs."
+  );
+  assert.match(result.semanticEvidenceText, /ticket selling system/);
+  assert.match(result.semanticEvidenceText, /consistency tradeoffs/);
   assert.equal(result.quotedOrFutureExampleSpans.length, 0);
 });
 
@@ -211,6 +316,10 @@ test("keeps quoted technical questions append-only when there is no present ask"
   assert.equal(result.disposition, "append-setup");
   assert.equal(result.normalizedPrimaryAsk, undefined);
   assert.equal(result.quotedOrFutureExampleSpans.length, 1);
+  assert.equal(result.semanticEvidenceText, "");
+  assert.deepEqual(result.semanticEvidenceDroppedReasons, [
+    "quoted-or-future-example",
+  ]);
 });
 
 test("separates recruiter logistics from a genuine candidate-facing question", () => {
@@ -226,6 +335,10 @@ test("separates recruiter logistics from a genuine candidate-facing question", (
   assert.deepEqual(
     result.setupSpans.map((span) => span.text),
     ["I will send the interview schedule later.", "Before we finish,"]
+  );
+  assert.equal(
+    result.semanticEvidenceText,
+    "do you have any questions for me?"
   );
 });
 

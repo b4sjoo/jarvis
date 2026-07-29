@@ -523,7 +523,7 @@ test("records whiteboard validation and recovery artifacts", async () => {
   );
   assert.ok(summaryWrite);
   const summary = parsePayload(summaryWrite);
-  assert.equal(summary.version, 28);
+  assert.equal(summary.version, 29);
   assert.deepEqual(summary.whiteboard, {
     artifactId: "whiteboard_1",
     revision: 1,
@@ -1207,6 +1207,26 @@ test("compact trace summaries preserve task boundary and cross-domain evidence",
       primaryAskSpanCount: 1,
       primaryAskSetupSpanCount: 2,
       primaryAskQuotedOrFutureSpanCount: 1,
+      primaryAskAnswerFocusChars: 36,
+      primaryAskSemanticEvidenceChars: 114,
+      primaryAskAnswerFocusSpanCount: 1,
+      primaryAskObjectSpanCount: 2,
+      primaryAskScenarioSpanCount: 1,
+      primaryAskSemanticEvidenceRetentionReasons: [
+        "answer-focus",
+        "setup-object",
+      ],
+      primaryAskSemanticEvidenceDroppedReasons: [
+        "quoted-or-future-example",
+      ],
+      primaryAskTurnGateView: "answer-focus",
+      primaryAskTaxonomyView: "semantic-evidence",
+      primaryAskTaskSettlementView: "semantic-evidence",
+      primaryAskAdvisorView: "answer-focus-plus-semantic-context",
+      primaryAskAnswerFocusQuestionTypeProposal: "field-knowledge",
+      primaryAskSemanticEvidenceQuestionTypeProposal:
+        "general-system-design",
+      primaryAskQuestionTypeProposalChanged: true,
       logicalQuestionLeaseAuthorized: true,
       logicalQuestionLeaseAuthorizationReason: "logical-question-current",
       logicalQuestionLeaseAuthorizationStage: "final-commit",
@@ -1267,7 +1287,7 @@ test("compact trace summaries preserve task boundary and cross-domain evidence",
   );
   assert.ok(summaryWrite);
   const summary = parsePayload(summaryWrite);
-  assert.equal(summary.version, 28);
+  assert.equal(summary.version, 29);
   assert.equal(summary.taskRelation, "new-parent");
   assert.equal(summary.logicalQuestionUnitRevision, 3);
   assert.deepEqual(summary.logicalQuestionSourceTurnIds, ["turn_1", "turn_2"]);
@@ -1291,6 +1311,37 @@ test("compact trace summaries preserve task boundary and cross-domain evidence",
   assert.equal(summary.primaryAskNormalizedText, undefined);
   assert.deepEqual(summary.primaryAskSourceTurnIds, ["turn_1", "turn_2"]);
   assert.equal(summary.primaryAskQuotedOrFutureSpanCount, 1);
+  assert.equal(summary.primaryAskAnswerFocusChars, 36);
+  assert.equal(summary.primaryAskSemanticEvidenceChars, 114);
+  assert.equal(summary.primaryAskAnswerFocusSpanCount, 1);
+  assert.equal(summary.primaryAskObjectSpanCount, 2);
+  assert.equal(summary.primaryAskScenarioSpanCount, 1);
+  assert.deepEqual(summary.primaryAskSemanticEvidenceRetentionReasons, [
+    "answer-focus",
+    "setup-object",
+  ]);
+  assert.deepEqual(summary.primaryAskSemanticEvidenceDroppedReasons, [
+    "quoted-or-future-example",
+  ]);
+  assert.equal(summary.primaryAskTurnGateView, "answer-focus");
+  assert.equal(summary.primaryAskTaxonomyView, "semantic-evidence");
+  assert.equal(
+    summary.primaryAskTaskSettlementView,
+    "semantic-evidence"
+  );
+  assert.equal(
+    summary.primaryAskAdvisorView,
+    "answer-focus-plus-semantic-context"
+  );
+  assert.equal(
+    summary.primaryAskAnswerFocusQuestionTypeProposal,
+    "field-knowledge"
+  );
+  assert.equal(
+    summary.primaryAskSemanticEvidenceQuestionTypeProposal,
+    "general-system-design"
+  );
+  assert.equal(summary.primaryAskQuestionTypeProposalChanged, true);
   assert.equal(
     summary.logicalQuestionLeaseAuthorizationReason,
     "logical-question-current"
@@ -1443,7 +1494,7 @@ test("compact trace summaries preserve bounded STT request evidence", async () =
   );
   assert.ok(summaryWrite);
   const summary = parsePayload(summaryWrite);
-  assert.equal(summary.version, 28);
+  assert.equal(summary.version, 29);
   assert.equal(
     (summary.timingsMs as Record<string, unknown>).stt,
     1_580
@@ -1585,7 +1636,7 @@ test("refreshes compact STT lifecycle evidence after a late provider abort", asy
   );
   assert.ok(summaryWrites.length >= 2);
   const summary = parsePayload(summaryWrites[summaryWrites.length - 1]!);
-  assert.equal(summary.version, 28);
+  assert.equal(summary.version, 29);
   assert.equal(
     (summary.sttRequest as Record<string, unknown>).abortRequested,
     true
@@ -1650,7 +1701,7 @@ test("compact trace summaries preserve hard memory invalidation evidence", async
   );
   assert.ok(summaryWrite);
   const summary = parsePayload(summaryWrite);
-  assert.equal(summary.version, 28);
+  assert.equal(summary.version, 29);
   const memory = summary.memory as Record<string, unknown>;
   assert.equal(memory.authorityRevision, 2);
   assert.equal(memory.invalidationKind, "hard");
@@ -1895,7 +1946,7 @@ test("records compact current-question settlement and execution-plan evidence", 
   assert.equal(serializedPlan.includes("taskSnapshot"), false);
   assert.equal(serializedPlan.includes("variables"), false);
   const summary = parsePayload(summaryWrite);
-  assert.equal(summary.version, 28);
+  assert.equal(summary.version, 29);
   assert.equal(
     (
       summary.currentQuestionSettlement as Record<string, unknown>
@@ -1996,7 +2047,7 @@ test("records a current-question term correction without copying provider state"
     false
   );
   const summary = parsePayload(summaryWrite);
-  assert.equal(summary.version, 28);
+  assert.equal(summary.version, 29);
   assert.equal(
     summary.manualTermCorrectionId,
     "term_correction_hnsw"

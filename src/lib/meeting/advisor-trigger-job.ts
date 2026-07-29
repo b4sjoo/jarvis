@@ -411,6 +411,25 @@ function cloneLogicalQuestionUnit(unit: LogicalQuestionUnit) {
           primaryAskSpans: unit.primaryAskProjection.primaryAskSpans.map(
             (span) => ({ ...span })
           ),
+          answerFocusSpans:
+            unit.primaryAskProjection.answerFocusSpans.map((span) => ({
+              ...span,
+            })),
+          objectSpans: unit.primaryAskProjection.objectSpans.map((span) => ({
+            ...span,
+          })),
+          scenarioSpans:
+            unit.primaryAskProjection.scenarioSpans.map((span) => ({
+              ...span,
+            })),
+          semanticEvidenceRetentionReasons: [
+            ...unit.primaryAskProjection
+              .semanticEvidenceRetentionReasons,
+          ],
+          semanticEvidenceDroppedReasons: [
+            ...unit.primaryAskProjection
+              .semanticEvidenceDroppedReasons,
+          ],
           setupSpans: unit.primaryAskProjection.setupSpans.map((span) => ({
             ...span,
           })),
