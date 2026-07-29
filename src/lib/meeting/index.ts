@@ -93,6 +93,7 @@ export * from "./source-owned-transition-transaction";
 export * from "./task-taxonomy";
 export * from "./task-boundary-transaction";
 export * from "./task-lifecycle-reducer";
+export * from "./task-graph";
 export * from "./taxonomy-adjudication";
 export * from "./taxonomy-adjudication-comparison";
 export * from "./taxonomy-adjudication-health";
