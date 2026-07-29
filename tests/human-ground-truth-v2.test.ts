@@ -5,6 +5,7 @@ import {
   buildHumanEvaluationObservedSnapshotV2,
   createHumanGroundTruthEventV2,
   deriveHumanEvaluationProjectionV2,
+  evaluateTaskSettlementTupleCompatibilityV2,
   importLegacyQuestionEvaluationV2,
 } from "../src/lib/meeting/human-ground-truth-v2.js";
 import type {
@@ -18,6 +19,49 @@ const SUBJECT = {
   traceIds: ["trace_1"],
   sourceTurnIds: ["turn_1"],
 };
+
+test("validates relation and parent-action tuples before ground truth is saved", () => {
+  const canonicalTuples = [
+    ["new-parent", "create"],
+    ["followup-parent", "preserve"],
+    ["child-probe", "attach-child"],
+    ["resume-parent", "resume"],
+    ["logistics", "preserve"],
+    ["correction", "preserve"],
+    ["unknown", "none"],
+  ] as const;
+
+  for (const [relation, parentAction] of canonicalTuples) {
+    assert.deepEqual(
+      evaluateTaskSettlementTupleCompatibilityV2({
+        relation,
+        parentAction,
+      }),
+      {
+        compatible: true,
+        relation,
+        parentAction,
+        recommendedParentAction: parentAction,
+        reason: undefined,
+      }
+    );
+  }
+
+  assert.deepEqual(
+    evaluateTaskSettlementTupleCompatibilityV2({
+      relation: "child-probe",
+      parentAction: "preserve",
+    }),
+    {
+      compatible: false,
+      relation: "child-probe",
+      parentAction: "preserve",
+      recommendedParentAction: "attach-child",
+      reason:
+        "child-probe normally requires attach-child, not preserve.",
+    }
+  );
+});
 
 test("derives action and task verdicts from minimal expected facts", () => {
   const action = createHumanGroundTruthEventV2({

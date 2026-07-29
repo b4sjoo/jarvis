@@ -52,6 +52,14 @@ export interface ExpectedTaskSettlementFactV2 {
   expectedParentAction: HumanExpectedParentAction;
 }
 
+export interface TaskSettlementTupleCompatibilityV2 {
+  compatible: boolean;
+  relation: InterviewTaskRelation;
+  parentAction: HumanExpectedParentAction;
+  recommendedParentAction: HumanExpectedParentAction;
+  reason?: string;
+}
+
 export interface ExpectedQuestionTypeFactV2 {
   kind: "expected-question-type";
   expectedQuestionType: CanonicalQuestionType;
@@ -209,6 +217,24 @@ export function createHumanGroundTruthEventV2(input: {
     },
     confirmation: input.confirmation ?? "confirmed",
     supersedesEventId: cleanOptional(input.supersedesEventId),
+  };
+}
+
+export function evaluateTaskSettlementTupleCompatibilityV2(input: {
+  relation: InterviewTaskRelation;
+  parentAction: HumanExpectedParentAction;
+}): TaskSettlementTupleCompatibilityV2 {
+  const recommendedParentAction =
+    recommendedParentActionForRelation(input.relation);
+  const compatible = input.parentAction === recommendedParentAction;
+  return {
+    compatible,
+    relation: input.relation,
+    parentAction: input.parentAction,
+    recommendedParentAction,
+    reason: compatible
+      ? undefined
+      : `${input.relation} normally requires ${recommendedParentAction}, not ${input.parentAction}.`,
   };
 }
 
@@ -970,6 +996,25 @@ function normalizeParentAction(
     value === "none"
     ? value
     : undefined;
+}
+
+function recommendedParentActionForRelation(
+  relation: InterviewTaskRelation
+): HumanExpectedParentAction {
+  switch (relation) {
+    case "new-parent":
+      return "create";
+    case "child-probe":
+      return "attach-child";
+    case "resume-parent":
+      return "resume";
+    case "followup-parent":
+    case "logistics":
+    case "correction":
+      return "preserve";
+    case "unknown":
+      return "none";
+  }
 }
 
 function normalizeContextReadScope(

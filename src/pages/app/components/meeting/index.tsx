@@ -79,6 +79,7 @@ import {
   buildMeetingAnswerDisplayModel,
   buildAdvisorIntentEvaluationFromTrace,
   decideForceAdviseEligibility,
+  evaluateTaskSettlementTupleCompatibilityV2,
   guardAsyncUnlisten,
   normalizeCanonicalQuestionType,
   overlayMeetingAnswerArtifacts,
@@ -4910,6 +4911,20 @@ const TraceHumanEvaluationPanel = ({
     observedRelation,
     currentQuestionParentMutationAuthorized
   );
+  const expectedSettlementCompatibility =
+    expectedRelation && expectedParentAction
+      ? evaluateTaskSettlementTupleCompatibilityV2({
+          relation: expectedRelation,
+          parentAction: expectedParentAction,
+        })
+      : undefined;
+  const observedSettlementCompatibility =
+    observedRelation && observedParentAction
+      ? evaluateTaskSettlementTupleCompatibilityV2({
+          relation: observedRelation,
+          parentAction: observedParentAction,
+        })
+      : undefined;
   const activeRuntimeFact =
     projectionV2?.activeFacts["expected-runtime-action"]?.fact;
   const activeSettlementFact =
@@ -5175,6 +5190,13 @@ const TraceHumanEvaluationPanel = ({
       setTaskFixOpen(true);
       return;
     }
+    if (observedSettlementCompatibility?.compatible === false) {
+      setExpectedQuestionType(observedQuestionType);
+      setExpectedRelation(observedRelation);
+      setExpectedParentAction(observedParentAction);
+      setTaskFixOpen(true);
+      return;
+    }
     onUpdateQuestion({
       correctedQuestionType: observedQuestionType,
       expectedRelation: observedRelation,
@@ -5194,8 +5216,16 @@ const TraceHumanEvaluationPanel = ({
     setTaskFixOpen(false);
   };
 
-  const recordCorrectedTaskSettlement = () => {
+  const recordCorrectedTaskSettlement = (
+    allowIncompatibleTuple = false
+  ) => {
     if (!expectedQuestionType || !expectedRelation || !expectedParentAction) {
+      return;
+    }
+    if (
+      expectedSettlementCompatibility?.compatible === false &&
+      !allowIncompatibleTuple
+    ) {
       return;
     }
     onUpdateQuestion({
@@ -5215,6 +5245,11 @@ const TraceHumanEvaluationPanel = ({
       expectedQuestionType,
       expectedRelation,
       expectedParentAction,
+    }, {
+      actionId: allowIncompatibleTuple
+        ? `task-settlement-tuple-override:${trace.id}:${Date.now()}`
+        : undefined,
+      confirmation: "confirmed",
     });
     setTaskFixOpen(false);
   };
@@ -5474,11 +5509,19 @@ const TraceHumanEvaluationPanel = ({
                   value,
                 ])}
                 value={expectedRelation}
-                onSelect={(value) =>
-                  setExpectedRelation(
-                    normalizeEvaluationTaskRelation(value)
-                  )
-                }
+                onSelect={(value) => {
+                  const relation =
+                    normalizeEvaluationTaskRelation(value);
+                  setExpectedRelation(relation);
+                  if (relation) {
+                    setExpectedParentAction(
+                      evaluateTaskSettlementTupleCompatibilityV2({
+                        relation,
+                        parentAction: "none",
+                      }).recommendedParentAction
+                    );
+                  }
+                }}
               />
               <CriticalMomentButtonGroup
                 label="Expected parent action"
@@ -5495,15 +5538,39 @@ const TraceHumanEvaluationPanel = ({
                   )
                 }
               />
+              {expectedSettlementCompatibility?.compatible === false ? (
+                <div className="rounded-sm border border-amber-500/60 bg-amber-500/10 p-2 text-[10px]">
+                  <div>
+                    {expectedSettlementCompatibility.reason} Choose{" "}
+                    <span className="font-mono">
+                      {
+                        expectedSettlementCompatibility.recommendedParentAction
+                      }
+                    </span>{" "}
+                    or explicitly override this tuple.
+                  </div>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="mt-2 h-7 px-2 text-[10px]"
+                    onClick={() =>
+                      recordCorrectedTaskSettlement(true)
+                    }
+                  >
+                    Expert override
+                  </Button>
+                </div>
+              ) : null}
               <Button
                 size="sm"
                 className="h-7 px-2 text-[10px]"
                 disabled={
                   !expectedQuestionType ||
                   !expectedRelation ||
-                  !expectedParentAction
+                  !expectedParentAction ||
+                  expectedSettlementCompatibility?.compatible === false
                 }
-                onClick={recordCorrectedTaskSettlement}
+                onClick={() => recordCorrectedTaskSettlement()}
               >
                 Save settlement
               </Button>
