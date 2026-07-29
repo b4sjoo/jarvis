@@ -42,7 +42,9 @@ import type {
   MeetingAnswerDisplayModel,
   CodingArtifactCache,
   CriticalMomentCandidate,
+  CriticalMomentExpectedFacts,
   CriticalMomentEvaluation,
+  CriticalMomentOutcomeEvaluationPatch,
   CriticalMomentFailureReason,
   DisplayTranscriptHistoryEntry,
   MeetingResponseActionMode,
@@ -84,6 +86,7 @@ import {
   normalizeCanonicalQuestionType,
   overlayMeetingAnswerArtifacts,
   resolveMeetingAnswerProfile,
+  resolveCriticalMomentExpectedFacts,
   resolveNativeAudioPauseResumeControl,
   resolveNativeAudioPrimaryControlAction,
   resolveCodingArtifactDisplay,
@@ -664,6 +667,21 @@ export const MeetingAssistant = ({
           evaluation.momentId === latestCriticalMomentCandidate.momentId
       )
     : undefined;
+  const latestCriticalMomentGroundTruth = useMemo(
+    () =>
+      latestCriticalMomentCandidate
+        ? resolveCriticalMomentExpectedFacts({
+            candidate: latestCriticalMomentCandidate,
+            projections: meeting.humanEvaluationProjectionsV2,
+            legacyEvaluation: latestCriticalMomentEvaluation,
+          })
+        : undefined,
+    [
+      latestCriticalMomentCandidate,
+      latestCriticalMomentEvaluation,
+      meeting.humanEvaluationProjectionsV2,
+    ]
+  );
   const latestCriticalMomentTraces = latestCriticalMomentCandidate
     ? latestCriticalMomentCandidate.proposedTraceIds
         .map((traceId) =>
@@ -2478,11 +2496,22 @@ export const MeetingAssistant = ({
                   <CriticalMomentEvaluationPanel
                     candidate={latestCriticalMomentCandidate}
                     evaluation={latestCriticalMomentEvaluation}
+                    groundTruth={latestCriticalMomentGroundTruth}
                     traces={latestCriticalMomentTraces}
                     onUpdate={(patch) =>
                       meeting.updateCriticalMomentEvaluation(
                         latestCriticalMomentCandidate.momentId,
                         patch
+                      )
+                    }
+                    onRecordGroundTruth={(fact, options) =>
+                      meeting.recordCriticalMomentGroundTruthV2(
+                        latestCriticalMomentCandidate.momentId,
+                        fact,
+                        {
+                          ...options,
+                          uiSurface: "critical-moment-review",
+                        }
                       )
                     }
                   />
@@ -4460,15 +4489,69 @@ const TraceKindSummaryCard = ({
 const CriticalMomentEvaluationPanel = ({
   candidate,
   evaluation,
+  groundTruth,
   traces,
   onUpdate,
+  onRecordGroundTruth,
 }: {
   candidate: CriticalMomentCandidate;
   evaluation: CriticalMomentEvaluation | undefined;
+  groundTruth: CriticalMomentExpectedFacts | undefined;
   traces: MeetingTrace[];
-  onUpdate: (patch: Partial<CriticalMomentEvaluation>) => void;
+  onUpdate: (patch: CriticalMomentOutcomeEvaluationPatch) => void;
+  onRecordGroundTruth: (
+    fact: HumanGroundTruthFactV2,
+    options?: {
+      actionId?: string;
+      confirmation?: "confirmed" | "suggested";
+      interaction?: HumanGroundTruthInteractionV2;
+    }
+  ) => void;
 }) => {
   const failureReasons = evaluation?.failureReasons ?? [];
+  const [expectedQuestionType, setExpectedQuestionType] =
+    useState<CanonicalQuestionType>();
+  const [expectedRelation, setExpectedRelation] =
+    useState<InterviewTaskRelation>();
+  const [expectedParentAction, setExpectedParentAction] =
+    useState<HumanExpectedParentAction>();
+  const evaluationOpenedAtRef = useRef<number | undefined>(undefined);
+  const evaluationClickCountRef = useRef(0);
+  const expandedEvaluationRegionsRef = useRef(new Set<string>());
+  const settlementCompatibility =
+    expectedRelation && expectedParentAction
+      ? evaluateTaskSettlementTupleCompatibilityV2({
+          relation: expectedRelation,
+          parentAction: expectedParentAction,
+        })
+      : undefined;
+
+  useEffect(() => {
+    setExpectedQuestionType(
+      groundTruth?.expectedQuestionType ??
+        candidate.proposedQuestionType ??
+        "unknown"
+    );
+    setExpectedRelation(groundTruth?.expectedRelation ?? "unknown");
+    setExpectedParentAction(
+      groundTruth?.expectedParentAction ??
+        evaluateTaskSettlementTupleCompatibilityV2({
+          relation: groundTruth?.expectedRelation ?? "unknown",
+          parentAction: "none",
+        }).recommendedParentAction
+    );
+    evaluationOpenedAtRef.current = undefined;
+    evaluationClickCountRef.current = 0;
+    expandedEvaluationRegionsRef.current.clear();
+  }, [
+    candidate.momentId,
+    candidate.proposedQuestionType,
+    groundTruth?.expectedParentAction,
+    groundTruth?.expectedQuestionType,
+    groundTruth?.expectedRelation,
+    groundTruth?.projectionId,
+  ]);
+
   const toggleFailureReason = (reason: CriticalMomentFailureReason) => {
     onUpdate({
       failureReasons: failureReasons.includes(reason)
@@ -4476,9 +4559,73 @@ const CriticalMomentEvaluationPanel = ({
         : [...failureReasons, reason],
     });
   };
+  const recordGroundTruth = (
+    fact: HumanGroundTruthFactV2,
+    options?: {
+      actionId?: string;
+      confirmation?: "confirmed" | "suggested";
+    }
+  ) => {
+    const now = Date.now();
+    const startedAt = evaluationOpenedAtRef.current ?? now;
+    evaluationOpenedAtRef.current = startedAt;
+    onRecordGroundTruth(fact, {
+      ...options,
+      interaction: {
+        startedAt,
+        durationMs: now - startedAt,
+        clickCount: evaluationClickCountRef.current,
+        expandedRegions: Array.from(
+          expandedEvaluationRegionsRef.current
+        ).sort(),
+      },
+    });
+  };
+  const recordTaskSettlement = (allowIncompatibleTuple = false) => {
+    if (!expectedQuestionType || !expectedRelation || !expectedParentAction) {
+      return;
+    }
+    if (
+      settlementCompatibility?.compatible === false &&
+      !allowIncompatibleTuple
+    ) {
+      return;
+    }
+    recordGroundTruth(
+      {
+        kind: "expected-task-settlement",
+        expectedQuestionType,
+        expectedRelation,
+        expectedParentAction,
+      },
+      {
+        actionId: allowIncompatibleTuple
+          ? `critical-moment-settlement-override:${candidate.momentId}:${Date.now()}`
+          : undefined,
+        confirmation: "confirmed",
+      }
+    );
+  };
 
   return (
-    <details>
+    <details
+      onClickCapture={() => {
+        evaluationOpenedAtRef.current ??= Date.now();
+        evaluationClickCountRef.current += 1;
+      }}
+      onToggle={(event) => {
+        if (event.currentTarget.open) {
+          evaluationOpenedAtRef.current ??= Date.now();
+          expandedEvaluationRegionsRef.current.add(
+            "critical-moment-review"
+          );
+        } else {
+          expandedEvaluationRegionsRef.current.delete(
+            "critical-moment-review"
+          );
+        }
+      }}
+    >
       <summary className="cursor-pointer text-xs font-semibold">
         Critical moment review
       </summary>
@@ -4513,57 +4660,142 @@ const CriticalMomentEvaluationPanel = ({
           }
         />
 
-        <CriticalMomentButtonGroup
-          label="Expected question type"
-          options={humanEvalQuestionTypeOptions.map((option) => [
-            option.id,
-            option.label,
-          ])}
-          value={evaluation?.expectedQuestionType}
-          onSelect={(expectedQuestionType) =>
-            onUpdate({
-              expectedQuestionType:
-                expectedQuestionType as CriticalMomentEvaluation["expectedQuestionType"],
-            })
-          }
-        />
+        <div className="rounded-sm border border-border/60 p-2">
+          <div className="mb-1 text-[10px] font-medium uppercase text-muted-foreground">
+            Expected facts
+          </div>
+          <div className="mb-2 break-words font-mono text-[9px] text-muted-foreground">
+            {groundTruth?.authority ?? "none"} /{" "}
+            {groundTruth?.joinStatus ?? "missing"}
+            {groundTruth?.conflictFactKinds.length
+              ? ` / conflicts: ${groundTruth.conflictFactKinds.join(", ")}`
+              : ""}
+          </div>
 
-        <CriticalMomentButtonGroup
-          label="Expected advisor action"
-          options={[
-            ["advise", "Advise"],
-            ["clarify", "Clarify"],
-            ["append-context", "Append context"],
-            ["ignore", "Ignore"],
-          ]}
-          value={evaluation?.expectedAdvisorAction}
-          onSelect={(expectedAdvisorAction) =>
-            onUpdate({
-              expectedAdvisorAction:
-                expectedAdvisorAction as CriticalMomentEvaluation["expectedAdvisorAction"],
-            })
-          }
-        />
+          <CriticalMomentButtonGroup
+            label="Runtime action"
+            options={[
+              ["advise", "Advise"],
+              ["append-context", "Append"],
+              ["buffer", "Buffer"],
+              ["ignore", "Ignore"],
+            ]}
+            value={groundTruth?.expectedRuntimeAction}
+            onSelect={(value) =>
+              recordGroundTruth({
+                kind: "expected-runtime-action",
+                expectedAction: value as
+                  | "advise"
+                  | "append-context"
+                  | "buffer"
+                  | "ignore",
+              })
+            }
+          />
 
-        <CriticalMomentButtonGroup
-          label="Expected relation"
-          options={[
-            ["new-parent", "New parent"],
-            ["followup-parent", "Follow-up"],
-            ["child-probe", "Child"],
-            ["resume-parent", "Resume"],
-            ["logistics", "Logistics"],
-            ["correction", "Correction"],
-            ["unknown", "Unknown"],
-          ]}
-          value={evaluation?.expectedRelation}
-          onSelect={(expectedRelation) =>
-            onUpdate({
-              expectedRelation:
-                expectedRelation as CriticalMomentEvaluation["expectedRelation"],
-            })
-          }
-        />
+          <div className="mt-3 space-y-2">
+            <CriticalMomentButtonGroup
+              label="Expected type"
+              options={humanEvalQuestionTypeOptions.map((option) => [
+                option.id,
+                option.label,
+              ])}
+              value={expectedQuestionType}
+              onSelect={(value) =>
+                setExpectedQuestionType(
+                  normalizeCanonicalQuestionType(value)
+                )
+              }
+            />
+            <CriticalMomentButtonGroup
+              label="Expected relation"
+              options={evaluationTaskRelations.map((value) => [
+                value,
+                value,
+              ])}
+              value={expectedRelation}
+              onSelect={(value) => {
+                const relation = normalizeEvaluationTaskRelation(value);
+                setExpectedRelation(relation);
+                if (relation) {
+                  setExpectedParentAction(
+                    evaluateTaskSettlementTupleCompatibilityV2({
+                      relation,
+                      parentAction: "none",
+                    }).recommendedParentAction
+                  );
+                }
+              }}
+            />
+            <CriticalMomentButtonGroup
+              label="Expected parent action"
+              options={evaluationParentActions.map((value) => [
+                value,
+                value,
+              ])}
+              value={expectedParentAction}
+              onSelect={(value) =>
+                setExpectedParentAction(
+                  evaluationParentActions.find(
+                    (candidate) => candidate === value
+                  )
+                )
+              }
+            />
+            {settlementCompatibility?.compatible === false ? (
+              <div className="rounded-sm border border-amber-500/60 bg-amber-500/10 p-2 text-[10px]">
+                <div>
+                  {settlementCompatibility.reason} Choose{" "}
+                  <span className="font-mono">
+                    {settlementCompatibility.recommendedParentAction}
+                  </span>{" "}
+                  or explicitly override this tuple.
+                </div>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="mt-2 h-7 px-2 text-[10px]"
+                  onClick={() => recordTaskSettlement(true)}
+                >
+                  Expert override
+                </Button>
+              </div>
+            ) : null}
+            <Button
+              size="sm"
+              className="h-7 px-2 text-[10px]"
+              disabled={
+                !expectedQuestionType ||
+                !expectedRelation ||
+                !expectedParentAction ||
+                settlementCompatibility?.compatible === false
+              }
+              onClick={() => recordTaskSettlement()}
+            >
+              Save settlement
+            </Button>
+          </div>
+
+          {groundTruth?.expectedContextTurnIds.length ? (
+            <div className="mt-2 break-words font-mono text-[9px] text-muted-foreground">
+              Expected context:{" "}
+              {groundTruth.expectedContextTurnIds.join(", ")}
+            </div>
+          ) : null}
+          {groundTruth?.legacyExpectedAdvisorAction === "clarify" ? (
+            <div className="mt-2 text-[10px] text-amber-600">
+              Legacy expected action: clarify. This remains read-only because
+              clarify is an advice mode, not a runtime action.
+            </div>
+          ) : null}
+          {groundTruth?.warnings.length ? (
+            <div className="mt-2 space-y-1 text-[10px] text-amber-600">
+              {groundTruth.warnings.map((warning) => (
+                <div key={warning}>{warning}</div>
+              ))}
+            </div>
+          ) : null}
+        </div>
 
         <div>
           <div className="mb-1 text-[10px] font-medium uppercase text-muted-foreground">
@@ -4688,7 +4920,7 @@ const CriticalMomentBooleanGroup = ({
   values: Array<
     [keyof CriticalMomentEvaluation, string, boolean | undefined]
   >;
-  onUpdate: (patch: Partial<CriticalMomentEvaluation>) => void;
+  onUpdate: (patch: CriticalMomentOutcomeEvaluationPatch) => void;
 }) => (
   <div>
     <div className="mb-1 text-[10px] font-medium uppercase text-muted-foreground">

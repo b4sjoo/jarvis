@@ -1987,6 +1987,7 @@ export class SessionRecordingManager {
         source: event.provenance.source,
         confirmation: event.confirmation,
         questionId: event.subject.questionId,
+        momentId: event.subject.momentId,
         actionId: event.provenance.actionId,
         supersedesEventId: event.supersedesEventId,
       },

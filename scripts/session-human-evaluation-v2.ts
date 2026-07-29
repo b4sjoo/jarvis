@@ -28,10 +28,13 @@ export async function loadSessionHumanEvaluationConsumerView(
       { projections: [] }
     ),
   ]);
-  return projectHumanEvaluationsForLegacyConsumers({
-    evaluations: v1Payload.evaluations ?? [],
+  return {
+    ...projectHumanEvaluationsForLegacyConsumers({
+      evaluations: v1Payload.evaluations ?? [],
+      projections: v2Payload.projections ?? [],
+    }),
     projections: v2Payload.projections ?? [],
-  });
+  };
 }
 
 export async function writeHumanEvaluationCompatibilityReport(

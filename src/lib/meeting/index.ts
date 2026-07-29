@@ -25,6 +25,7 @@ export * from "./context-manager";
 export * from "./context-scope-response-action";
 export * from "./correction-owned-resettlement";
 export * from "./critical-moment-evaluation";
+export * from "./critical-moment-ground-truth";
 export * from "./cross-domain-task-transition";
 export * from "./current-question-settlement";
 export * from "./diagram-domain-query";

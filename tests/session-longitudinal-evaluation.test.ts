@@ -5,6 +5,10 @@ import {
   renderSessionLongitudinalEvaluationMarkdown,
   type LongitudinalSessionInput,
 } from "../src/lib/meeting/session-longitudinal-evaluation.js";
+import {
+  createHumanGroundTruthEventV2,
+  deriveHumanEvaluationProjectionV2,
+} from "../src/lib/meeting/human-ground-truth-v2.js";
 
 test("builds type, intent, and continuity funnels without inventing denominators", () => {
   const report = buildSessionLongitudinalEvaluationReport([SESSION]);
@@ -39,6 +43,30 @@ test("renders N/A for a missing human-label denominator", () => {
 });
 
 test("builds product outcomes only from human-reviewed critical moments", () => {
+  const momentSubject = {
+    momentId: "moment_success",
+    traceIds: ["trace_success", "trace_regeneration"],
+    sourceTurnIds: ["turn_success"],
+  };
+  const momentSettlement = createHumanGroundTruthEventV2({
+    eventId: "moment-success-settlement",
+    sessionId: "session-product",
+    subject: momentSubject,
+    source: "explicit-ui",
+    fact: {
+      kind: "expected-task-settlement",
+      expectedQuestionType: "coding",
+      expectedRelation: "new-parent",
+      expectedParentAction: "create",
+    },
+    now: 1,
+  });
+  const momentProjection = deriveHumanEvaluationProjectionV2({
+    sessionId: "session-product",
+    subject: momentSubject,
+    events: [momentSettlement],
+    now: 2,
+  });
   const report = buildSessionLongitudinalEvaluationReport([
     {
       directory: "/recordings/session-product",
@@ -100,6 +128,7 @@ test("builds product outcomes only from human-reviewed critical moments", () => 
         },
       ],
       questionEvaluations: [],
+      humanEvaluationProjectionsV2: [momentProjection],
       criticalMomentCandidates: [
         {
           momentId: "moment_success",
@@ -206,6 +235,14 @@ test("builds product outcomes only from human-reviewed critical moments", () => 
   assert.equal(report.productOutcomes.ambiguousJoinCount, 1);
   assert.equal(report.productOutcomes.unresolvedCandidateCount, 1);
   assert.equal(report.productOutcomes.failureReasons["no-advice"], 1);
+  assert.deepEqual(report.productOutcomes.expectedFactJoins, {
+    exactMoment: 1,
+    exactSourceTurns: 0,
+    legacyFallback: 2,
+    missing: 1,
+    ambiguous: 0,
+    conflicting: 0,
+  });
 
   const markdown = renderSessionLongitudinalEvaluationMarkdown(report);
   assert.ok(

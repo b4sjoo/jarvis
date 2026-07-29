@@ -224,6 +224,7 @@ import {
   readHumanEvaluationProjectionsV2,
   readCriticalMomentCandidates,
   readCriticalMomentEvaluations,
+  buildCriticalMomentGroundTruthSubject,
   readMeetingEvalTraceMetadata,
   resolveTraceMemoryEvaluationSnapshot,
   resolveSuggestionQuestionLineage,
@@ -425,14 +426,16 @@ import {
   upsertHumanEvaluationProjectionV2,
   type HumanGroundTruthFactV2,
   type HumanGroundTruthInteractionV2,
+  type HumanGroundTruthSubjectV2,
   type HumanGroundTruthSource,
+  type HumanEvaluationObservedSnapshotV2,
   upsertCriticalMomentEvaluation,
   buildCriticalMomentCandidates,
   mergeCriticalMomentCandidates,
   persistCriticalMomentCandidates,
   persistCriticalMomentEvaluations,
   projectCriticalMomentTraceEvidence,
-  type CriticalMomentEvaluation,
+  type CriticalMomentOutcomeEvaluationPatch,
   buildQuestionEvaluationPatchFromTrace,
   decideManualQuestionTypeCorrection,
   decideManualCorrectionScope,
@@ -1720,6 +1723,16 @@ interface RecordHumanGroundTruthOptionsV2 {
   uiSurface?: string;
   interaction?: HumanGroundTruthInteractionV2;
   evaluation?: QuestionHumanEvaluation;
+}
+
+interface CommitHumanGroundTruthInputV2 {
+  sessionId: string;
+  subject: HumanGroundTruthSubjectV2;
+  fact: HumanGroundTruthFactV2;
+  options?: RecordHumanGroundTruthOptionsV2;
+  sourceTraceId?: string;
+  observed?: HumanEvaluationObservedSnapshotV2;
+  legacyEvaluation?: QuestionHumanEvaluation;
 }
 
 function getMeetingModelRequestOptions(
@@ -4702,6 +4715,75 @@ export function useMeetingAssistant() {
     [buildQuestionEvaluationIdentity]
   );
 
+  const commitHumanGroundTruthV2 = useCallback(
+    ({
+      sessionId,
+      subject,
+      fact,
+      options = {},
+      sourceTraceId,
+      observed,
+      legacyEvaluation,
+    }: CommitHumanGroundTruthInputV2) => {
+      const source = options.source ?? "explicit-ui";
+      const sessionEvents = humanGroundTruthEventsV2Ref.current.filter(
+        (candidate) => candidate.sessionId === sessionId
+      );
+      const previous =
+        source === "explicit-ui" || source === "manual-type-correction"
+          ? findActiveHumanGroundTruthEventV2(
+              sessionEvents,
+              subject,
+              fact.kind
+            )
+          : undefined;
+      const event = createHumanGroundTruthEventV2({
+        sessionId,
+        subject,
+        fact,
+        source,
+        confirmation: options.confirmation,
+        sourceTraceId,
+        repairTraceId: options.repairTraceId,
+        actionId: options.actionId,
+        uiSurface: options.uiSurface,
+        interaction: options.interaction,
+        supersedesEventId: previous?.eventId,
+      });
+      const events = appendHumanGroundTruthEventV2(
+        humanGroundTruthEventsV2Ref.current,
+        event
+      );
+      if (events === humanGroundTruthEventsV2Ref.current) return;
+
+      humanGroundTruthEventsV2Ref.current = events;
+      persistHumanGroundTruthEventsV2(events);
+      setHumanGroundTruthEventsV2(events);
+
+      const projection = deriveHumanEvaluationProjectionV2({
+        sessionId,
+        subject,
+        events,
+        observed,
+        legacyEvaluation,
+      });
+      const projections = upsertHumanEvaluationProjectionV2(
+        humanEvaluationProjectionsV2Ref.current,
+        projection
+      );
+      humanEvaluationProjectionsV2Ref.current = projections;
+      persistHumanEvaluationProjectionsV2(projections);
+      setHumanEvaluationProjectionsV2(projections);
+      sessionRecordingManagerRef.current?.recordHumanGroundTruthEventV2(
+        event
+      );
+      sessionRecordingManagerRef.current?.recordHumanEvaluationProjectionV2(
+        projection
+      );
+    },
+    []
+  );
+
   const recordHumanGroundTruthV2 = useCallback(
     (
       traceId: string,
@@ -4728,71 +4810,45 @@ export function useMeetingAssistant() {
             candidate.traceIds.includes(traceId) ||
             (questionId && candidate.questionId === questionId)
         );
-      const subject = buildHumanGroundTruthSubjectV2({
-        trace,
-        evaluation,
-      });
-      const source = options.source ?? "explicit-ui";
-      const sessionEvents = humanGroundTruthEventsV2Ref.current.filter(
-        (candidate) => candidate.sessionId === sessionId
-      );
-      const previous =
-        source === "explicit-ui" || source === "manual-type-correction"
-          ? findActiveHumanGroundTruthEventV2(
-              sessionEvents,
-              subject,
-              fact.kind
-            )
-          : undefined;
-      const event = createHumanGroundTruthEventV2({
+      commitHumanGroundTruthV2({
         sessionId,
-        subject,
+        subject: buildHumanGroundTruthSubjectV2({
+          trace,
+          evaluation,
+        }),
         fact,
-        source,
-        confirmation: options.confirmation,
+        options,
         sourceTraceId: traceId,
-        repairTraceId: options.repairTraceId,
-        actionId: options.actionId,
-        uiSurface: options.uiSurface,
-        interaction: options.interaction,
-        supersedesEventId: previous?.eventId,
-      });
-      const events = appendHumanGroundTruthEventV2(
-        humanGroundTruthEventsV2Ref.current,
-        event
-      );
-      if (events === humanGroundTruthEventsV2Ref.current) return;
-
-      humanGroundTruthEventsV2Ref.current = events;
-      persistHumanGroundTruthEventsV2(events);
-      setHumanGroundTruthEventsV2(events);
-
-      const projection = deriveHumanEvaluationProjectionV2({
-        sessionId,
-        subject,
-        events,
         observed: buildHumanEvaluationObservedSnapshotV2(trace),
         legacyEvaluation: evaluation,
       });
-      const projections = upsertHumanEvaluationProjectionV2(
-        humanEvaluationProjectionsV2Ref.current,
-        projection
-      );
-      humanEvaluationProjectionsV2Ref.current = projections;
-      persistHumanEvaluationProjectionsV2(projections);
-      setHumanEvaluationProjectionsV2(projections);
-      sessionRecordingManagerRef.current?.recordHumanGroundTruthEventV2(
-        event
-      );
-      sessionRecordingManagerRef.current?.recordHumanEvaluationProjectionV2(
-        projection
-      );
     },
-    []
+    [commitHumanGroundTruthV2]
+  );
+
+  const recordCriticalMomentGroundTruthV2 = useCallback(
+    (
+      momentId: string,
+      fact: HumanGroundTruthFactV2,
+      options: RecordHumanGroundTruthOptionsV2 = {}
+    ) => {
+      const candidate = criticalMomentCandidatesRef.current.find(
+        (item) => item.momentId === momentId
+      );
+      if (!candidate) return;
+
+      commitHumanGroundTruthV2({
+        sessionId: candidate.sessionId,
+        subject: buildCriticalMomentGroundTruthSubject(candidate),
+        fact,
+        options,
+      });
+    },
+    [commitHumanGroundTruthV2]
   );
 
   const updateCriticalMomentEvaluation = useCallback(
-    (momentId: string, patch: Partial<CriticalMomentEvaluation>) => {
+    (momentId: string, patch: CriticalMomentOutcomeEvaluationPatch) => {
       const candidate = criticalMomentCandidatesRef.current.find(
         (item) => item.momentId === momentId
       );
@@ -20905,6 +20961,7 @@ export function useMeetingAssistant() {
     updateTraceHumanEvaluation,
     updateQuestionHumanEvaluation,
     recordHumanGroundTruthV2,
+    recordCriticalMomentGroundTruthV2,
     updateCriticalMomentEvaluation,
     correctActiveQuestionType,
     regenerateSuggestion,

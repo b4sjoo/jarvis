@@ -159,6 +159,7 @@ async function readSession(directory: string): Promise<LongitudinalSessionInput>
       criticalMomentCandidatesPayload.candidates ?? [],
     criticalMomentEvaluations:
       criticalMomentEvaluationsPayload.evaluations ?? [],
+    humanEvaluationProjectionsV2: evaluationView.projections,
     taskRelationAdjudicationReport,
     taskRelationConvergenceReport,
   };

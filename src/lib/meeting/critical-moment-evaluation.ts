@@ -76,9 +76,13 @@ export interface CriticalMomentEvaluation {
   sourceTurnIds: string[];
   traceIds: string[];
   eligibility?: CriticalMomentEligibility;
+  /** @deprecated Read-only compatibility. New truth is stored in V2 projections. */
   expectedQuestionType?: CanonicalQuestionType;
+  /** @deprecated Read-only compatibility. New truth is stored in V2 projections. */
   expectedAdvisorAction?: CriticalMomentAdvisorAction;
+  /** @deprecated Read-only compatibility. New truth is stored in V2 projections. */
   expectedRelation?: InterviewTaskRelation;
+  /** @deprecated Read-only compatibility. New truth is stored in V2 projections. */
   expectedContextTurnIds?: string[];
   opportunityEndAt?: number;
   selectedUsefulTraceId?: string;
@@ -95,6 +99,14 @@ export interface CriticalMomentEvaluation {
   createdAt: number;
   updatedAt: number;
 }
+
+export type CriticalMomentOutcomeEvaluationPatch = Omit<
+  Partial<CriticalMomentEvaluation>,
+  | "expectedQuestionType"
+  | "expectedAdvisorAction"
+  | "expectedRelation"
+  | "expectedContextTurnIds"
+>;
 
 export interface CriticalMomentTraceEvidence {
   traceId: string;
@@ -309,7 +321,7 @@ export function mergeCriticalMomentCandidates(
 export function upsertCriticalMomentEvaluation(
   evaluations: CriticalMomentEvaluation[],
   candidate: CriticalMomentCandidate,
-  patch: Partial<CriticalMomentEvaluation>
+  patch: CriticalMomentOutcomeEvaluationPatch
 ) {
   const now = Date.now();
   const existingIndex = evaluations.findIndex(
@@ -317,9 +329,6 @@ export function upsertCriticalMomentEvaluation(
   );
   const existing =
     existingIndex >= 0 ? evaluations[existingIndex] : undefined;
-  const expectedQuestionType = normalizeCanonicalQuestionType(
-    patch.expectedQuestionType
-  );
   const next: CriticalMomentEvaluation = {
     momentId: candidate.momentId,
     sessionId: candidate.sessionId,
@@ -333,15 +342,10 @@ export function upsertCriticalMomentEvaluation(
       ...(patch.traceIds ?? []),
     ]),
     eligibility: patch.eligibility ?? existing?.eligibility,
-    expectedQuestionType:
-      expectedQuestionType ?? existing?.expectedQuestionType,
-    expectedAdvisorAction:
-      patch.expectedAdvisorAction ?? existing?.expectedAdvisorAction,
-    expectedRelation: patch.expectedRelation ?? existing?.expectedRelation,
-    expectedContextTurnIds: uniqueStrings([
-      ...(existing?.expectedContextTurnIds ?? []),
-      ...(patch.expectedContextTurnIds ?? []),
-    ]),
+    expectedQuestionType: existing?.expectedQuestionType,
+    expectedAdvisorAction: existing?.expectedAdvisorAction,
+    expectedRelation: existing?.expectedRelation,
+    expectedContextTurnIds: existing?.expectedContextTurnIds,
     opportunityEndAt:
       patch.opportunityEndAt ??
       existing?.opportunityEndAt ??

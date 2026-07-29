@@ -3,6 +3,11 @@ import {
   normalizeCanonicalQuestionType,
   type CanonicalQuestionType,
 } from "./task-taxonomy.js";
+import {
+  resolveCriticalMomentExpectedFacts,
+  type CriticalMomentExpectedFacts,
+} from "./critical-moment-ground-truth.js";
+import type { HumanEvaluationProjectionV2 } from "./human-ground-truth-v2.js";
 import type { TaskRelationAdjudicationReflectionReport } from "./task-relation-adjudication-reflection.js";
 import type { TaskRelationAuthorityConvergenceReportV1 } from "./task-relation-authority-convergence.js";
 
@@ -187,6 +192,7 @@ export interface LongitudinalSessionInput {
   questionEvaluations: LongitudinalQuestionEvaluation[];
   criticalMomentCandidates?: LongitudinalCriticalMomentCandidate[];
   criticalMomentEvaluations?: LongitudinalCriticalMomentEvaluation[];
+  humanEvaluationProjectionsV2?: HumanEvaluationProjectionV2[];
   taskRelationAdjudicationReport?: TaskRelationAdjudicationReflectionReport;
   taskRelationConvergenceReport?: TaskRelationAuthorityConvergenceReportV1;
 }
@@ -248,6 +254,14 @@ export interface SessionLongitudinalEvaluationReport {
     manyTraceMomentCount: number;
     ambiguousJoinCount: number;
     evaluationsWithoutCandidate: number;
+    expectedFactJoins: {
+      exactMoment: number;
+      exactSourceTurns: number;
+      legacyFallback: number;
+      missing: number;
+      ambiguous: number;
+      conflicting: number;
+    };
     failureReasons: Record<string, number>;
     denominatorAuthority: "explicit-human-eligibility";
   };
@@ -372,6 +386,7 @@ interface JoinedCriticalMoment {
   session: LongitudinalSessionInput;
   candidate: LongitudinalCriticalMomentCandidate;
   evaluation?: LongitudinalCriticalMomentEvaluation;
+  expectedFacts: CriticalMomentExpectedFacts;
   traces: LongitudinalTraceSummary[];
 }
 
@@ -418,6 +433,11 @@ export function buildSessionLongitudinalEvaluationReport(
         session,
         candidate,
         evaluation,
+        expectedFacts: resolveCriticalMomentExpectedFacts({
+          candidate,
+          projections: session.humanEvaluationProjectionsV2 ?? [],
+          legacyEvaluation: evaluation,
+        }),
         traces: traceIds
           .map((traceId) => tracesById.get(traceId))
           .filter(
@@ -969,6 +989,29 @@ function buildProductOutcomes(
       failureReasons[reason] = (failureReasons[reason] ?? 0) + 1;
     }
   }
+  const expectedFactJoins = {
+    exactMoment: rows.filter(
+      ({ expectedFacts }) =>
+        expectedFacts.joinStatus === "exact-moment"
+    ).length,
+    exactSourceTurns: rows.filter(
+      ({ expectedFacts }) =>
+        expectedFacts.joinStatus === "exact-source-turns"
+    ).length,
+    legacyFallback: rows.filter(
+      ({ expectedFacts }) =>
+        expectedFacts.joinStatus === "legacy-fallback"
+    ).length,
+    missing: rows.filter(
+      ({ expectedFacts }) => expectedFacts.joinStatus === "missing"
+    ).length,
+    ambiguous: rows.filter(
+      ({ expectedFacts }) => expectedFacts.joinStatus === "ambiguous"
+    ).length,
+    conflicting: rows.filter(
+      ({ expectedFacts }) => expectedFacts.conflictFactKinds.length > 0
+    ).length,
+  };
 
   return {
     candidateCount: rows.length,
@@ -1031,6 +1074,7 @@ function buildProductOutcomes(
       ({ candidate }) => candidate.traceJoinStatus === "ambiguous"
     ).length,
     evaluationsWithoutCandidate,
+    expectedFactJoins,
     failureReasons,
     denominatorAuthority: "explicit-human-eligibility",
   };
@@ -1317,6 +1361,7 @@ export function renderSessionLongitudinalEvaluationMarkdown(
     `Useful but untrustworthy / trustworthy but late: ${report.productOutcomes.usefulButUntrustworthyCount} / ${report.productOutcomes.trustworthyButLateCount}`,
     `Many-trace moments / ambiguous joins: ${report.productOutcomes.manyTraceMomentCount} / ${report.productOutcomes.ambiguousJoinCount}`,
     `Evaluations without candidate evidence: ${report.productOutcomes.evaluationsWithoutCandidate}`,
+    `Expected-fact joins (moment / source turns / legacy / missing / ambiguous / conflicts): ${report.productOutcomes.expectedFactJoins.exactMoment} / ${report.productOutcomes.expectedFactJoins.exactSourceTurns} / ${report.productOutcomes.expectedFactJoins.legacyFallback} / ${report.productOutcomes.expectedFactJoins.missing} / ${report.productOutcomes.expectedFactJoins.ambiguous} / ${report.productOutcomes.expectedFactJoins.conflicting}`,
     `Denominator authority: ${report.productOutcomes.denominatorAuthority}`,
     "",
     "## Type Funnel",
