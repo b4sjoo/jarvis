@@ -168,6 +168,7 @@ export function buildSettledAdvisorExecutionPlan(input: {
   topicDomain: TaskTopicDomain;
   projectAnchor?: string;
   responseOnlyTaskScope?: ResponseOnlyTaskScope;
+  contextReadScopeOverride?: AdvisorContextReadScope;
   transientPersonalStatusDecision?: TransientPersonalStatusDecision;
   sourceQuestion?: string;
   subtaskIntent?: InterviewSubtaskIntent;
@@ -257,12 +258,14 @@ export function buildSettledAdvisorExecutionPlan(input: {
       }
     : resolveFactAnchorPolicy(responseOwner.questionType);
   const responseIntent = resolveResponseIntent(input.settlement);
-  const contextReadScope = resolveContextReadScope({
-    responseOnlyTaskScope,
-    transientPersonalStatusDecision,
-    taskSnapshot,
-    relation,
-  });
+  const contextReadScope =
+    input.contextReadScopeOverride ??
+    resolveContextReadScope({
+      responseOnlyTaskScope,
+      transientPersonalStatusDecision,
+      taskSnapshot,
+      relation,
+    });
   const artifactIntent = resolveArtifactIntent({
     responseAuthorized: input.settlement.responseAuthorized,
     responseOnlyTaskScope,
@@ -528,7 +531,8 @@ export function formatSettledAdvisorExecutionPlanForTrace(
     settledExecutionPlanResponseOnlyParentContextInjected:
       plan.responseOnlyTaskScope
         ? plan.contextReadScope === "active-parent-read" ||
-          plan.contextReadScope === "active-child-read"
+          plan.contextReadScope === "active-child-read" ||
+          plan.contextReadScope === "bounded-recent-history"
         : undefined,
     settledExecutionPlanTransientPersonalStatusDecisionId:
       plan.transientPersonalStatusDecision?.id,

@@ -33,10 +33,23 @@ function buildPromptContext(): AdvisorPromptContext {
 
 test("freezes the prompt inputs owned by an advisor job", () => {
   const promptContext = buildPromptContext();
+  const generatedContinuity = [
+    {
+      id: "capsule-a",
+      parentTaskId: "parent-a",
+      parentRevision: 1,
+      answerRevision: 1,
+      sourceSuggestionId: "suggestion-a",
+      text: "Choose option A because it reduces latency.",
+      source: "generated-continuity" as const,
+      createdAt: 1,
+    },
+  ];
   const job = createAdvisorTriggerJob({
     source: "live-turn",
     mode: "live",
     promptContext,
+    generatedContinuity,
     sessionId: "session-a",
     runtimeEpoch: 1,
     snapshotTurnCount: 1,
@@ -47,9 +60,14 @@ test("freezes the prompt inputs owned by an advisor job", () => {
   if (promptContext.latestTurn) {
     promptContext.latestTurn.text = "A newer question";
   }
+  generatedContinuity[0].text = "Mutated continuity";
 
   assert.equal(job.promptContextSnapshot.transcript, "Them: Design a cache");
   assert.equal(job.promptContextSnapshot.latestTurn?.text, "Design a cache");
+  assert.equal(
+    job.generatedContinuitySnapshot[0].text,
+    "Choose option A because it reduces latency."
+  );
 });
 
 test("rejects a replaced job and a job from an old meeting session", () => {
@@ -116,6 +134,8 @@ test("emits the job identity needed to reconstruct ownership", () => {
       advisorJobResponseActionRevision: 0,
       advisorJobSnapshotTurnCount: 3,
       advisorJobSnapshotLatestTurnId: "turn-a",
+      advisorJobGeneratedContinuityCandidateCount: 0,
+      advisorJobGeneratedContinuityCandidateChars: 0,
       advisorJobOutcome: "stale-commit-rejected",
       advisorJobCancellationReason: undefined,
       advisorJobCommitAuthorized: false,

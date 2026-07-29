@@ -27,6 +27,7 @@ import {
   buildAdvisorEvidenceRetrievalQuery,
   AdvisorPromptContext,
   AdvisorSuggestion,
+  AdvisorGeneratedContinuityCapsule,
   AdvisorRequestMode,
   AdvisorTriggerJob,
   AdvisorJobSource,
@@ -275,6 +276,7 @@ import {
   SessionRecordingManager,
   SttEvaluationCaptureManager,
   areCompatibleQuestionTypes,
+  appendAdvisorGeneratedContinuityCapsule,
   authorizeAdvisorExecution,
   authorizeAdvisorOutputCommit,
   createAdvisorTriggerJob,
@@ -282,6 +284,7 @@ import {
   authorizeAdvisorTaskMutation,
   buildRuntimeCommitSnapshot,
   buildActiveMeetingTask,
+  createAdvisorGeneratedContinuityCapsule,
   buildBoundedParentContextHandoff,
   buildCommittedTaskBoundaryParent,
   buildSettledAdvisorExecutionPlan,
@@ -294,9 +297,11 @@ import {
   createRuntimeCommitToken,
   decideAdvisorPhaseMutation,
   decideAdvisorTaskMutation,
+  decideBoundedRecentHistoryRead,
   decideCrossDomainParentTransition,
   formatAdvisorEvidencePacketForTrace,
   formatAdvisorTriggerJobForTrace,
+  formatBoundedRecentHistoryForTrace,
   formatCrossDomainParentTransitionForTrace,
   formatRuntimeCommitAuthorizationForTrace,
   formatRuntimeInferenceOperationForTrace,
@@ -444,6 +449,7 @@ import {
   formatResponseOnlyTaskScopeForTrace,
   resolveResponseOnlyContextReadScope,
   sanitizeInterviewBriefForResponseOnly,
+  toAdvisorGeneratedContinuityEvidence,
   classifyInterviewTransitionTurn,
   reconcileInterviewTransitionTurnWithPrimaryAsk,
   consumeInterviewSectionHint,
@@ -2050,6 +2056,9 @@ export function useMeetingAssistant() {
   const responseActionRevisionRef = useRef(0);
   const visibleAnswerRevisionRef = useRef(0);
   const stableAnswerRevisionRef = useRef<StableAnswerRevision | null>(null);
+  const recentAdvisorContinuityRef = useRef<
+    AdvisorGeneratedContinuityCapsule[]
+  >([]);
   const answerDeliveryProgressRef =
     useRef<AnswerDeliveryProgress | null>(null);
   const pendingAnswerRevisionRef =
@@ -2156,6 +2165,25 @@ export function useMeetingAssistant() {
       visibleAnswerRevisionRef.current = stable.revision;
       pendingAnswerRevisionRef.current = null;
       answerDeliveryProgressRef.current = null;
+      const activeMeetingTask =
+        contextManagerRef.current.getState().activeMeetingTask;
+      const activeParent =
+        activeMeetingTask?.parent.id === stable.taskId
+          ? activeMeetingTask.parent
+          : undefined;
+      const generatedContinuityCapsule = activeParent
+        ? createAdvisorGeneratedContinuityCapsule({
+            stable,
+            parentRevision: activeParent.revisions ?? 0,
+            childTaskId: activeMeetingTask?.child?.id,
+          })
+        : undefined;
+      recentAdvisorContinuityRef.current =
+        appendAdvisorGeneratedContinuityCapsule({
+          history: recentAdvisorContinuityRef.current,
+          capsule: generatedContinuityCapsule,
+          reset: options.clearPrevious,
+        });
       setState((previous) => ({
         ...previous,
         ...withLatestReliableSuggestion(previous, stable.suggestion, {
@@ -2180,6 +2208,17 @@ export function useMeetingAssistant() {
         pendingAnswerDisposition:
           options.pendingDisposition ??
           (pending ? "superseded-by-visible-commit" : undefined),
+        generatedContinuityCapsuleCreated: Boolean(
+          generatedContinuityCapsule
+        ),
+        generatedContinuityHistoryCount:
+          recentAdvisorContinuityRef.current.length,
+        generatedContinuityCapsuleChars:
+          generatedContinuityCapsule?.text.length ?? 0,
+        generatedContinuityParentTaskId:
+          generatedContinuityCapsule?.parentTaskId,
+        generatedContinuitySourceTraceId:
+          generatedContinuityCapsule?.sourceTraceId,
       });
     },
     [clearPendingAnswerCommitTimer]
@@ -3554,6 +3593,7 @@ export function useMeetingAssistant() {
       latestForceAdviseTargetRef.current = undefined;
       clearPendingAnswerCommitTimer();
       stableAnswerRevisionRef.current = null;
+      recentAdvisorContinuityRef.current = [];
       answerDeliveryProgressRef.current = null;
       pendingAnswerRevisionRef.current = null;
       visibleAnswerRevisionRef.current = 0;
@@ -5812,6 +5852,12 @@ export function useMeetingAssistant() {
         : source === "live-turn"
           ? "input-evidence"
           : "preserve-parent");
+    if (
+      source === "manual-correction" ||
+      options.responseAction === "narrow-context"
+    ) {
+      recentAdvisorContinuityRef.current = [];
+    }
     const refreshAuthority = decideRefreshAuthority({
       source,
       turnIntentDecision: options.turnIntentDecision,
@@ -5863,6 +5909,7 @@ export function useMeetingAssistant() {
       traceId,
       triggerTurnId: options.triggerTurnId,
       promptContext,
+      generatedContinuity: recentAdvisorContinuityRef.current,
       turnIntentDecision: options.turnIntentDecision,
       sessionId: contextState.sessionId,
       runtimeEpoch: runtimeEpochRef.current,
@@ -6399,6 +6446,76 @@ export function useMeetingAssistant() {
         : advisorTaskSignals.responseOnlyRelation
         ? originalPromptContext.activeMeetingTask
         : undefined;
+    const responseOnlyBaseContextReadScope =
+      resolveResponseOnlyContextReadScope({
+        preservedParent: responseOnlyPreservedTask,
+        proposedRelation:
+          advisorTaskSignals.taskRelationAuthorityDecision
+            ?.proposedRelation,
+      });
+    const boundedRecentHistoryDecision =
+      decideBoundedRecentHistoryRead({
+        questionText:
+          advisorQuestionAnswerFocusText ||
+          advisorQuestionSemanticEvidenceText,
+        activeParentId:
+          originalPromptContext.activeMeetingTask?.parent.id,
+        relation: advisorTaskSignals.taskRelation,
+        responseOnlyRelation:
+          advisorTaskSignals.responseOnlyRelation,
+        responseAction: options.responseAction,
+        hasManualCorrection: Boolean(
+          options.manualQuestionTypeCorrection
+        ),
+        transientPersonalStatus: Boolean(
+          transientPersonalStatusDecision
+        ),
+        sourceConflict: Boolean(
+          originalPromptContext.activeScreenTask &&
+          advisorJob.source === "live-turn" &&
+          advisorTaskSignals.taskRelation === "new-parent"
+        ),
+        capsules: advisorJob.generatedContinuitySnapshot,
+      });
+    const generatedContinuityEvidence =
+      toAdvisorGeneratedContinuityEvidence(
+        boundedRecentHistoryDecision
+      );
+    if (
+      boundedRecentHistoryDecision.reason ===
+        "new-parent-boundary" ||
+      boundedRecentHistoryDecision.reason === "source-conflict"
+    ) {
+      recentAdvisorContinuityRef.current = [];
+    }
+    if (traceId) {
+      const boundedRecentHistoryMetadata =
+        formatBoundedRecentHistoryForTrace(
+          boundedRecentHistoryDecision
+        );
+      traceStoreRef.current.updateMetadata(
+        traceId,
+        boundedRecentHistoryMetadata
+      );
+      const boundedRecentHistoryStepId =
+        traceStoreRef.current.startStep(
+          traceId,
+          "Bounded recent history decision",
+          boundedRecentHistoryMetadata
+        );
+      traceStoreRef.current.finishStep(
+        traceId,
+        boundedRecentHistoryStepId,
+        "success"
+      );
+      sessionRecordingManagerRef.current?.recordCaptureLifecycle({
+        stage: "bounded-recent-history-decision",
+        traceId,
+        taskId:
+          originalPromptContext.activeMeetingTask?.parent.id,
+        ...boundedRecentHistoryMetadata,
+      });
+    }
     const responseOnlyTaskScope: ResponseOnlyTaskScope | undefined =
       options.responseOnlyTaskScopeOverride ??
       (advisorTaskSignals.responseOnlyRelation &&
@@ -6415,12 +6532,9 @@ export function useMeetingAssistant() {
             relationDisposition: "ambiguous",
             preservedParent: responseOnlyPreservedTask,
             contextReadScope:
-              resolveResponseOnlyContextReadScope({
-                preservedParent: responseOnlyPreservedTask,
-                proposedRelation:
-                  advisorTaskSignals.taskRelationAuthorityDecision
-                    ?.proposedRelation,
-              }),
+              boundedRecentHistoryDecision.authorized
+                ? "bounded-recent-history"
+                : responseOnlyBaseContextReadScope,
           })
         : undefined);
     const advisorScreenScopeDecision = decideAdvisorScreenScope({
@@ -6511,6 +6625,7 @@ export function useMeetingAssistant() {
                   state.latestSuggestion.sourceTraceId,
               }
             : undefined,
+        generatedContinuity: generatedContinuityEvidence,
         additionalRetrievalHints: [
           advisorTaskSignals.askFrame !== "unknown"
             ? {
@@ -7522,6 +7637,10 @@ export function useMeetingAssistant() {
           topicDomain: advisorTopicDomain,
           projectAnchor: advisorProjectAnchor,
           responseOnlyTaskScope,
+          contextReadScopeOverride:
+            boundedRecentHistoryDecision.authorized
+              ? "bounded-recent-history"
+              : undefined,
           transientPersonalStatusDecision,
           sourceQuestion:
             advisorQuestionSemanticEvidenceText,

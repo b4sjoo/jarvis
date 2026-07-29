@@ -162,7 +162,8 @@ export function formatResponseOnlyTaskScopeForTrace(
     responseOnlyExpiresAt: scope.expiresAt,
     responseOnlyParentContextInjected:
       scope.contextReadScope === "active-parent-read" ||
-      scope.contextReadScope === "active-child-read",
+      scope.contextReadScope === "active-child-read" ||
+      scope.contextReadScope === "bounded-recent-history",
     responseOnlyParentMutationAllowed: false,
     responseOnlyPlaybookMutationAllowed: false,
     responseOnlyArtifactMutationAllowed: false,
@@ -209,7 +210,8 @@ function buildBoundedParentReadContext(
   if (
     !task ||
     (contextReadScope !== "active-parent-read" &&
-      contextReadScope !== "active-child-read")
+      contextReadScope !== "active-child-read" &&
+      contextReadScope !== "bounded-recent-history")
   ) {
     return undefined;
   }

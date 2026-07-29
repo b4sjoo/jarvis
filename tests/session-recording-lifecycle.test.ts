@@ -523,7 +523,7 @@ test("records whiteboard validation and recovery artifacts", async () => {
   );
   assert.ok(summaryWrite);
   const summary = parsePayload(summaryWrite);
-  assert.equal(summary.version, 29);
+  assert.equal(summary.version, 30);
   assert.deepEqual(summary.whiteboard, {
     artifactId: "whiteboard_1",
     revision: 1,
@@ -1287,7 +1287,7 @@ test("compact trace summaries preserve task boundary and cross-domain evidence",
   );
   assert.ok(summaryWrite);
   const summary = parsePayload(summaryWrite);
-  assert.equal(summary.version, 29);
+  assert.equal(summary.version, 30);
   assert.equal(summary.taskRelation, "new-parent");
   assert.equal(summary.logicalQuestionUnitRevision, 3);
   assert.deepEqual(summary.logicalQuestionSourceTurnIds, ["turn_1", "turn_2"]);
@@ -1494,7 +1494,7 @@ test("compact trace summaries preserve bounded STT request evidence", async () =
   );
   assert.ok(summaryWrite);
   const summary = parsePayload(summaryWrite);
-  assert.equal(summary.version, 29);
+  assert.equal(summary.version, 30);
   assert.equal(
     (summary.timingsMs as Record<string, unknown>).stt,
     1_580
@@ -1636,7 +1636,7 @@ test("refreshes compact STT lifecycle evidence after a late provider abort", asy
   );
   assert.ok(summaryWrites.length >= 2);
   const summary = parsePayload(summaryWrites[summaryWrites.length - 1]!);
-  assert.equal(summary.version, 29);
+  assert.equal(summary.version, 30);
   assert.equal(
     (summary.sttRequest as Record<string, unknown>).abortRequested,
     true
@@ -1701,7 +1701,7 @@ test("compact trace summaries preserve hard memory invalidation evidence", async
   );
   assert.ok(summaryWrite);
   const summary = parsePayload(summaryWrite);
-  assert.equal(summary.version, 29);
+  assert.equal(summary.version, 30);
   const memory = summary.memory as Record<string, unknown>;
   assert.equal(memory.authorityRevision, 2);
   assert.equal(memory.invalidationKind, "hard");
@@ -1909,6 +1909,22 @@ test("records compact current-question settlement and execution-plan evidence", 
       settledExecutionPlanAuthorizationReason: "authorized",
       settledExecutionPlanAuthorizationStage: "plan-created",
       settledExecutionPlanRejectionReasons: [],
+      boundedRecentHistoryDecision: "authorized",
+      boundedRecentHistoryReason: "authorized-deictic-followup",
+      boundedRecentHistoryContextReadScope: "bounded-recent-history",
+      boundedRecentHistoryParentTaskId: "parent_after",
+      boundedRecentHistoryDeicticEvidence: [
+        "named-deictic-reference",
+      ],
+      boundedRecentHistoryCandidateCount: 3,
+      boundedRecentHistorySelectedCount: 2,
+      boundedRecentHistorySelectedChars: 420,
+      boundedRecentHistorySourceTraceCount: 2,
+      boundedRecentHistoryExplicitEnhance: false,
+      boundedRecentHistoryAuthority: "generated-continuity-only",
+      boundedRecentHistoryFactAuthority: false,
+      boundedRecentHistoryTaskMutationAuthority: false,
+      boundedRecentHistoryArtifactMutationAuthority: false,
     }),
     "manual"
   );
@@ -1946,7 +1962,7 @@ test("records compact current-question settlement and execution-plan evidence", 
   assert.equal(serializedPlan.includes("taskSnapshot"), false);
   assert.equal(serializedPlan.includes("variables"), false);
   const summary = parsePayload(summaryWrite);
-  assert.equal(summary.version, 29);
+  assert.equal(summary.version, 30);
   assert.equal(
     (
       summary.currentQuestionSettlement as Record<string, unknown>
@@ -1966,6 +1982,21 @@ test("records compact current-question settlement and execution-plan evidence", 
     (summary.settledExecutionPlan as Record<string, unknown>)
       .transientPersonalStatusDomain,
     "relocation"
+  );
+  assert.equal(
+    (summary.settledExecutionPlan as Record<string, unknown>)
+      .contextReadScope,
+    "active-parent-read"
+  );
+  assert.equal(
+    (summary.boundedRecentHistory as Record<string, unknown>)
+      .contextReadScope,
+    "bounded-recent-history"
+  );
+  assert.equal(
+    (summary.boundedRecentHistory as Record<string, unknown>)
+      .factAuthority,
+    false
   );
 
   await manager.stop("test-complete");
@@ -2047,7 +2078,7 @@ test("records a current-question term correction without copying provider state"
     false
   );
   const summary = parsePayload(summaryWrite);
-  assert.equal(summary.version, 29);
+  assert.equal(summary.version, 30);
   assert.equal(
     summary.manualTermCorrectionId,
     "term_correction_hnsw"

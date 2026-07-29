@@ -14,6 +14,7 @@ import {
   type RuntimeCommitToken,
 } from "./runtime-commit-authorization.js";
 import type {
+  AdvisorGeneratedContinuityCapsule,
   AdvisorPromptContext,
   AdvisorRequestMode,
   InterviewPlaybookPhase,
@@ -52,6 +53,7 @@ export interface AdvisorTriggerJob {
   traceId?: string;
   triggerTurnId?: string;
   promptContextSnapshot: AdvisorPromptContext;
+  generatedContinuitySnapshot: AdvisorGeneratedContinuityCapsule[];
   turnIntentDecision?: AdvisorTurnIntentDecision;
   expectedSessionId: string;
   expectedParentId?: string;
@@ -73,6 +75,7 @@ export interface CreateAdvisorTriggerJobInput {
   traceId?: string;
   triggerTurnId?: string;
   promptContext: AdvisorPromptContext;
+  generatedContinuity?: AdvisorGeneratedContinuityCapsule[];
   turnIntentDecision?: AdvisorTurnIntentDecision;
   sessionId: string;
   runtimeEpoch: number;
@@ -142,6 +145,9 @@ export function createAdvisorTriggerJob(
     traceId: input.traceId,
     triggerTurnId: input.triggerTurnId,
     promptContextSnapshot: snapshot,
+    generatedContinuitySnapshot: (input.generatedContinuity ?? []).map(
+      (capsule) => ({ ...capsule })
+    ),
     turnIntentDecision: input.turnIntentDecision
       ? { ...input.turnIntentDecision }
       : undefined,
@@ -391,6 +397,13 @@ export function formatAdvisorTriggerJobForTrace(
     advisorJobResponseActionRevision: job.responseActionRevision,
     advisorJobSnapshotTurnCount: job.snapshotTurnCount,
     advisorJobSnapshotLatestTurnId: job.promptContextSnapshot.latestTurn?.id,
+    advisorJobGeneratedContinuityCandidateCount:
+      job.generatedContinuitySnapshot.length,
+    advisorJobGeneratedContinuityCandidateChars:
+      job.generatedContinuitySnapshot.reduce(
+        (total, capsule) => total + capsule.text.length,
+        0
+      ),
     advisorJobOutcome: outcome,
     advisorJobCancellationReason: extra.cancellationReason,
     advisorJobCommitAuthorized: extra.commitAuthorized,

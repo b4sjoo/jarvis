@@ -1093,17 +1093,41 @@ export interface AdvisorGeneratedGuidanceEvidence {
   sourceTraceId: string;
 }
 
+export interface AdvisorGeneratedContinuityCapsule {
+  id: string;
+  parentTaskId: string;
+  parentRevision: number;
+  childTaskId?: string;
+  logicalQuestionUnitId?: string;
+  logicalQuestionRevision?: number;
+  answerRevision: number;
+  sourceSuggestionId: string;
+  sourceTraceId?: string;
+  text: string;
+  source: "generated-continuity";
+  createdAt: number;
+}
+
+export interface AdvisorGeneratedContinuityEvidence {
+  contextReadScope: "bounded-recent-history";
+  decisionReason: string;
+  parentTaskId: string;
+  deicticEvidence: string[];
+  capsules: AdvisorGeneratedContinuityCapsule[];
+}
+
 export interface AdvisorRetrievalHint {
   role: AdvisorRetrievalHintRole;
   text: string;
 }
 
 export interface AdvisorEvidencePacket {
-  version: "advisor-evidence-v1";
+  version: "advisor-evidence-v2";
   currentQuestion?: AdvisorCurrentQuestionEvidence;
   continuity?: AdvisorContinuityEvidence;
   preparation: AdvisorPreparationEvidence;
   generatedGuidance?: AdvisorGeneratedGuidanceEvidence;
+  generatedContinuity?: AdvisorGeneratedContinuityEvidence;
   retrievalHints: AdvisorRetrievalHint[];
 }
 

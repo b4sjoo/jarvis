@@ -4,6 +4,7 @@ import {
   buildAdvisorEvidencePacket,
   buildAdvisorEvidenceRetrievalQuery,
   formatAdvisorEvidencePacketForTrace,
+  formatAdvisorEvidencePacketForPrompt,
   getCurrentQuestionEvidenceText,
 } from "../src/lib/meeting/advisor-evidence-packet.js";
 import { detectPersonalEvidenceRequirement } from "../src/lib/meeting/personal-evidence-guardrail.js";
@@ -59,6 +60,49 @@ test("excludes generated guidance from the retrieval query", () => {
 
   assert.match(query, /How would you design the cache/);
   assert.doesNotMatch(query, /Invented Microsoft MCP/);
+});
+
+test("keeps bounded generated continuity out of retrieval and marks it as non-authoritative", () => {
+  const generatedText =
+    "The prior option trades write latency for stronger consistency.";
+  const packet = buildAdvisorEvidencePacket({
+    currentQuestion: {
+      text: "Can you explain that trade-off?",
+      source: "voice-lqu",
+      sourceTurnIds: ["turn-question"],
+    },
+    generatedContinuity: {
+      contextReadScope: "bounded-recent-history",
+      decisionReason: "authorized-deictic-followup",
+      parentTaskId: "parent-a",
+      deicticEvidence: ["named-deictic-reference"],
+      capsules: [
+        {
+          id: "capsule-a",
+          parentTaskId: "parent-a",
+          parentRevision: 2,
+          answerRevision: 3,
+          sourceSuggestionId: "suggestion-a",
+          sourceTraceId: "trace-a",
+          text: generatedText,
+          source: "generated-continuity",
+          createdAt: 100,
+        },
+      ],
+    },
+  });
+
+  const query = buildAdvisorEvidenceRetrievalQuery(packet, "live");
+  const prompt = formatAdvisorEvidencePacketForPrompt(packet);
+  const trace = formatAdvisorEvidencePacketForTrace(packet, query);
+
+  assert.equal(packet.version, "advisor-evidence-v2");
+  assert.doesNotMatch(query, /prior option trades/);
+  assert.match(prompt, /generated[_ -]continuity/i);
+  assert.match(prompt, /cannot establish facts/i);
+  assert.match(prompt, /prior option trades/);
+  assert.equal(trace.generatedContinuityExcludedFromRetrieval, true);
+  assert.equal(trace.generatedContinuityCapsuleCount, 1);
 });
 
 test("builds a bounded continuity capsule without prior generated answers", () => {

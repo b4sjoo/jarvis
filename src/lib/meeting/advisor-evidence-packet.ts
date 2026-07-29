@@ -1,6 +1,7 @@
 import type {
   AdvisorCurrentQuestionEvidence,
   AdvisorEvidencePacket,
+  AdvisorGeneratedContinuityEvidence,
   AdvisorGeneratedGuidanceEvidence,
   AdvisorRetrievalHint,
   AdvisorRetrievalHintRole,
@@ -13,6 +14,7 @@ const MAX_CURRENT_QUESTION_CHARS = 4_000;
 const MAX_GUIDANCE_HINT_CHARS = 800;
 const MAX_CONTINUITY_CAPSULE_CHARS = 1_200;
 const MAX_GENERATED_GUIDANCE_CHARS = 2_000;
+const MAX_GENERATED_CONTINUITY_CAPSULE_CHARS = 520;
 const MAX_RETRIEVAL_QUERY_CHARS = 8_000;
 
 export interface BuildAdvisorEvidencePacketInput {
@@ -22,6 +24,7 @@ export interface BuildAdvisorEvidencePacketInput {
   interviewSessionContext?: InterviewSessionContext;
   activatedFactIds?: string[];
   generatedGuidance?: AdvisorGeneratedGuidanceEvidence;
+  generatedContinuity?: AdvisorGeneratedContinuityEvidence;
   additionalRetrievalHints?: AdvisorRetrievalHint[];
 }
 
@@ -49,6 +52,9 @@ export function buildAdvisorEvidencePacket(
   const activatedFactIds = uniqueStrings(input.activatedFactIds ?? []);
   const generatedGuidance = normalizeGeneratedGuidance(
     input.generatedGuidance
+  );
+  const generatedContinuity = normalizeGeneratedContinuity(
+    input.generatedContinuity
   );
 
   const retrievalHints = uniqueRetrievalHints([
@@ -78,7 +84,7 @@ export function buildAdvisorEvidencePacket(
   ]);
 
   return {
-    version: "advisor-evidence-v1",
+    version: "advisor-evidence-v2",
     currentQuestion,
     continuity,
     preparation: {
@@ -89,6 +95,7 @@ export function buildAdvisorEvidencePacket(
       rawGuidanceRejectedAsFactCount: guidanceHints.length,
     },
     generatedGuidance,
+    generatedContinuity,
     retrievalHints,
   };
 }
@@ -126,6 +133,7 @@ export function formatAdvisorEvidencePacketForPrompt(
     "Authority rule: only current_question can create a personal-evidence requirement or establish what is being asked.",
     "Preparation and continuity can guide retrieval or answer framing, but are not current-question evidence.",
     "Generated guidance is continuity-only and is never factual evidence.",
+    "Generated continuity is a bounded model-output reference. It can resolve a deictic follow-up, but cannot establish facts, personal history, task relation, parent, playbook phase, memory truth, or artifact mutation authority.",
     "<current_question>",
     packet.currentQuestion
       ? [
@@ -171,6 +179,23 @@ export function formatAdvisorEvidencePacketForPrompt(
       ? `source trace: ${packet.generatedGuidance.sourceTraceId}\ncontinuity only: ${packet.generatedGuidance.text}`
       : "No generated guidance.",
     "</generated_guidance>",
+    "<generated_continuity>",
+    packet.generatedContinuity
+      ? [
+          `context read scope: ${packet.generatedContinuity.contextReadScope}`,
+          `decision reason: ${packet.generatedContinuity.decisionReason}`,
+          `parent task id: ${packet.generatedContinuity.parentTaskId}`,
+          packet.generatedContinuity.deicticEvidence.length
+            ? `deictic evidence: ${packet.generatedContinuity.deicticEvidence.join(", ")}`
+            : "deictic evidence: explicit context expansion",
+          "Authority: generated continuity only. Do not treat any capsule as source-owned fact or use it to mutate task state, relation, phase, memory, code, complexity, or whiteboard.",
+          ...packet.generatedContinuity.capsules.map(
+            (capsule, index) =>
+              `capsule ${index + 1} [answer revision ${capsule.answerRevision}, source suggestion ${capsule.sourceSuggestionId}]:\n${capsule.text}`
+          ),
+        ].join("\n")
+      : "No generated continuity.",
+    "</generated_continuity>",
   ].join("\n");
 }
 
@@ -223,6 +248,27 @@ export function formatAdvisorEvidencePacketForTrace(
       packet.generatedGuidance?.text.length ?? 0,
     generatedGuidanceSourceTraceId:
       packet.generatedGuidance?.sourceTraceId,
+    generatedContinuityPresent: Boolean(packet.generatedContinuity),
+    generatedContinuityContextReadScope:
+      packet.generatedContinuity?.contextReadScope,
+    generatedContinuityDecisionReason:
+      packet.generatedContinuity?.decisionReason,
+    generatedContinuityParentTaskId:
+      packet.generatedContinuity?.parentTaskId,
+    generatedContinuityCapsuleCount:
+      packet.generatedContinuity?.capsules.length ?? 0,
+    generatedContinuityChars:
+      packet.generatedContinuity?.capsules.reduce(
+        (total, capsule) => total + capsule.text.length,
+        0
+      ) ?? 0,
+    generatedContinuitySourceTraceCount: new Set(
+      packet.generatedContinuity?.capsules
+        .map((capsule) => capsule.sourceTraceId)
+        .filter(Boolean) ?? []
+    ).size,
+    generatedContinuityExcludedFromRetrieval: true,
+    generatedContinuityAuthority: "continuity-only",
     retrievalHintRoleCounts: roleCounts,
     retrievalHintCount: packet.retrievalHints.length,
     retrievalQueryChars: retrievalQuery?.length ?? 0,
@@ -280,6 +326,50 @@ function normalizeGeneratedGuidance(
   const sourceTraceId = cleanText(guidance.sourceTraceId);
   if (!text || !sourceTraceId) return undefined;
   return { text, sourceTraceId };
+}
+
+function normalizeGeneratedContinuity(
+  evidence: AdvisorGeneratedContinuityEvidence | undefined
+): AdvisorGeneratedContinuityEvidence | undefined {
+  if (
+    !evidence ||
+    evidence.contextReadScope !== "bounded-recent-history"
+  ) {
+    return undefined;
+  }
+  const parentTaskId = cleanText(evidence.parentTaskId);
+  const decisionReason = cleanText(evidence.decisionReason);
+  if (!parentTaskId || !decisionReason) return undefined;
+
+  const capsules = evidence.capsules
+    .map((capsule) => ({
+      ...capsule,
+      parentTaskId: cleanText(capsule.parentTaskId) ?? "",
+      sourceSuggestionId:
+        cleanText(capsule.sourceSuggestionId) ?? "",
+      sourceTraceId: cleanText(capsule.sourceTraceId),
+      text:
+        boundText(
+          capsule.text,
+          MAX_GENERATED_CONTINUITY_CAPSULE_CHARS
+        ) ?? "",
+    }))
+    .filter(
+      (capsule) =>
+        capsule.parentTaskId === parentTaskId &&
+        Boolean(capsule.sourceSuggestionId) &&
+        Boolean(capsule.text)
+    )
+    .slice(-2);
+  if (!capsules.length) return undefined;
+
+  return {
+    contextReadScope: "bounded-recent-history",
+    decisionReason,
+    parentTaskId,
+    deicticEvidence: uniqueStrings(evidence.deicticEvidence),
+    capsules,
+  };
 }
 
 function uniqueRetrievalHints(

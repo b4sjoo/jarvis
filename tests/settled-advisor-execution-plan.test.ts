@@ -533,6 +533,30 @@ test("freezes an explicit phase advance independently from response and artifact
   });
 });
 
+test("freezes an authorized bounded recent history read without changing mutation policy", () => {
+  const plan = buildSettledAdvisorExecutionPlan({
+    settlement: settlement({
+      questionType: "general-system-design",
+      relation: "followup-parent",
+      parentMutationAuthorized: false,
+    }),
+    activeMeetingTask: activeTask("general-system-design"),
+    taskBoundaryCommitted: false,
+    childOwnsResponse: false,
+    providerSnapshot: providers,
+    playbook: playbook("general-system-design"),
+    memoryUseCase: "system_design_interview",
+    askFrame: "hypothetical-design",
+    topicDomain: "backend",
+    contextReadScopeOverride: "bounded-recent-history",
+  });
+
+  assert.equal(plan.contextReadScope, "bounded-recent-history");
+  assert.equal(plan.responseIntent, "advise");
+  assert.equal(plan.artifactIntent, "revise-whiteboard");
+  assert.equal(plan.taskMutationPolicy.kind, "update-parent-context");
+});
+
 test("settles non-answer actions without borrowing task or artifact authority", () => {
   const plan = buildSettledAdvisorExecutionPlan({
     settlement: settlement({

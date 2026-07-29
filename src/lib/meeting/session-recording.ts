@@ -56,7 +56,7 @@ import { serializeMeetingTraceExport } from "./trace.js";
 
 const SESSION_RECORDING_SCHEMA_VERSION = 1;
 const SESSION_RECORDING_INTEGRITY_SCHEMA_VERSION = 1;
-const SESSION_TRACE_SUMMARY_SCHEMA_VERSION = 29;
+const SESSION_TRACE_SUMMARY_SCHEMA_VERSION = 30;
 const SESSION_TRACE_INDEX_SCHEMA_VERSION = 1;
 const MAX_RECORDED_WRITE_FAILURES = 20;
 
@@ -420,6 +420,9 @@ export interface SessionCompactTraceSummary {
     questionType?: string;
     relation?: string;
     responseAuthorized?: boolean;
+    responseIntent?: string;
+    contextReadScope?: string;
+    artifactIntent?: string;
     responseOwnerSource?: string;
     modelRoute?: string;
     providerId?: string;
@@ -440,6 +443,22 @@ export interface SessionCompactTraceSummary {
     authorizationReason?: string;
     authorizationStage?: string;
     rejectionReasons: string[];
+  };
+  boundedRecentHistory?: {
+    decision?: string;
+    reason?: string;
+    contextReadScope?: string;
+    parentTaskId?: string;
+    deicticEvidence: string[];
+    candidateCount?: number;
+    selectedCount?: number;
+    selectedChars?: number;
+    sourceTraceCount?: number;
+    explicitEnhance?: boolean;
+    authority?: string;
+    factAuthority?: boolean;
+    taskMutationAuthority?: boolean;
+    artifactMutationAuthority?: boolean;
   };
   crossDomainTransition?: {
     kind?: string;
@@ -4181,6 +4200,18 @@ function buildCompactTraceSummary({
         metadataSources,
         "settledExecutionPlanResponseAuthorized"
       ),
+      responseIntent: readFirstString(
+        metadataSources,
+        "settledExecutionPlanResponseIntent"
+      ),
+      contextReadScope: readFirstString(
+        metadataSources,
+        "settledExecutionPlanContextReadScope"
+      ),
+      artifactIntent: readFirstString(
+        metadataSources,
+        "settledExecutionPlanArtifactIntent"
+      ),
       responseOwnerSource: readFirstString(
         metadataSources,
         "settledExecutionPlanResponseOwnerSource"
@@ -4260,6 +4291,64 @@ function buildCompactTraceSummary({
       rejectionReasons: readFirstStringList(
         metadataSources,
         "settledExecutionPlanRejectionReasons"
+      ),
+    },
+    boundedRecentHistory: {
+      decision: readFirstString(
+        metadataSources,
+        "boundedRecentHistoryDecision"
+      ),
+      reason: readFirstString(
+        metadataSources,
+        "boundedRecentHistoryReason"
+      ),
+      contextReadScope: readFirstString(
+        metadataSources,
+        "boundedRecentHistoryContextReadScope"
+      ),
+      parentTaskId: readFirstString(
+        metadataSources,
+        "boundedRecentHistoryParentTaskId"
+      ),
+      deicticEvidence: readFirstStringList(
+        metadataSources,
+        "boundedRecentHistoryDeicticEvidence"
+      ),
+      candidateCount: readFirstNumberFromMetadata(
+        metadataSources,
+        "boundedRecentHistoryCandidateCount"
+      ),
+      selectedCount: readFirstNumberFromMetadata(
+        metadataSources,
+        "boundedRecentHistorySelectedCount"
+      ),
+      selectedChars: readFirstNumberFromMetadata(
+        metadataSources,
+        "boundedRecentHistorySelectedChars"
+      ),
+      sourceTraceCount: readFirstNumberFromMetadata(
+        metadataSources,
+        "boundedRecentHistorySourceTraceCount"
+      ),
+      explicitEnhance: readFirstBoolean(
+        metadataSources,
+        "boundedRecentHistoryExplicitEnhance"
+      ),
+      authority: readFirstString(
+        metadataSources,
+        "boundedRecentHistoryAuthority"
+      ),
+      factAuthority: readFirstBoolean(
+        metadataSources,
+        "boundedRecentHistoryFactAuthority"
+      ),
+      taskMutationAuthority: readFirstBoolean(
+        metadataSources,
+        "boundedRecentHistoryTaskMutationAuthority"
+      ),
+      artifactMutationAuthority: readFirstBoolean(
+        metadataSources,
+        "boundedRecentHistoryArtifactMutationAuthority"
       ),
     },
     crossDomainTransition: {

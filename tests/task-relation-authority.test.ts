@@ -345,6 +345,41 @@ test("response-only independent task proposals cannot read the parent", () => {
   assert.equal(scope.parentReadContext, undefined);
 });
 
+test("bounded recent history keeps only the source-owned parent read capsule", () => {
+  const activeMeetingTask = task();
+  const scope = createResponseOnlyTaskScope({
+    logicalQuestionUnitId: "question-deictic",
+    revision: 2,
+    sourceQuestion: "Can you explain that trade-off?",
+    sourceTurnIds: ["turn-deictic"],
+    inferredType: "ai-ml-system-design",
+    relationDisposition: "ambiguous",
+    preservedParent: activeMeetingTask,
+    contextReadScope: "bounded-recent-history",
+    now: 400,
+  });
+  const scoped = applyResponseOnlyTaskScopeToPromptContext(
+    {
+      transcript: "full transcript",
+      screenContext: "",
+      activeMeetingTask,
+      rollingSummary: "generated summary",
+      userProfileContext: "profile",
+      glossaryText: "",
+    },
+    scope
+  );
+
+  assert.equal(scope.contextReadScope, "bounded-recent-history");
+  assert.equal(scope.parentReadContext?.parentId, "task-parent");
+  assert.equal(
+    scoped.responseOnlyParentReadContext?.objective,
+    "Design a vector database"
+  );
+  assert.equal(scoped.activeMeetingTask, undefined);
+  assert.equal(scoped.rollingSummary, "");
+});
+
 function task(): ActiveMeetingTask {
   return {
     id: "task-parent",
