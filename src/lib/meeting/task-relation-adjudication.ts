@@ -507,19 +507,12 @@ export function parseTaskRelationAdjudicationOutput(
   ) {
     return parseFailure("parent-evidence-required", "evidence");
   }
-  if (
-    returnIntent === "resume-suspended-parent" &&
-    !request.activeChild
-  ) {
-    return parseFailure("resume-requires-active-child-binding", "schema");
-  }
-  const relation = deriveRuntimeTaskRelationFromAtomicDecision({
+  const relation = deriveSemanticTaskRelationFromAtomicDecision({
     dependency,
     continuationShape,
     returnIntent,
     switchIntent,
     standaloneSufficiency,
-    hasActiveChild: Boolean(request.activeChild),
     hasParentEvidence: parentEvidenceSpans.length > 0,
   });
 
@@ -578,6 +571,23 @@ export function deriveRuntimeTaskRelationFromAtomicDecision(input: {
     return "new-parent";
   }
   return "unknown";
+}
+
+export function deriveSemanticTaskRelationFromAtomicDecision(input: {
+  dependency: TaskRelationDependency;
+  continuationShape: TaskRelationContinuationShape;
+  returnIntent: TaskRelationReturnIntent;
+  switchIntent: TaskRelationSwitchIntent;
+  standaloneSufficiency: TaskRelationStandaloneSufficiency;
+  hasParentEvidence: boolean;
+}): RuntimeTaskRelation {
+  if (input.returnIntent === "resume-suspended-parent") {
+    return input.hasParentEvidence ? "resume-parent" : "unknown";
+  }
+  return deriveRuntimeTaskRelationFromAtomicDecision({
+    ...input,
+    hasActiveChild: true,
+  });
 }
 
 export function createTaskRelationSettlementProposal(input: {

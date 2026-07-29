@@ -323,7 +323,7 @@ test("derives new parents only from independent standalone questions", () => {
   });
 });
 
-test("resume intent requires an active child and parent evidence", () => {
+test("resume intent is semantically valid without a production child", () => {
   const withoutChild = buildTaskRelationAdjudicationRequest({
     logicalQuestionUnit: unit(
       "Let's return to the original architecture."
@@ -344,12 +344,16 @@ test("resume intent requires an active child and parent evidence", () => {
     currentQuestionEvidenceSpans: ["return to the original architecture"],
   });
 
+  const parsedWithoutChild = parseTaskRelationAdjudicationOutput(
+    JSON.stringify(output),
+    withoutChild
+  );
+  assert.equal(parsedWithoutChild.ok, true);
   assert.equal(
-    parseTaskRelationAdjudicationOutput(
-      JSON.stringify(output),
-      withoutChild
-    ).ok,
-    false
+    parsedWithoutChild.ok
+      ? parsedWithoutChild.value.relation
+      : undefined,
+    "resume-parent"
   );
   const parsed = parseTaskRelationAdjudicationOutput(
     JSON.stringify(output),
