@@ -195,6 +195,27 @@ test("creates deterministic human-expected parent transitions without mutating i
   assert.deepEqual(branchInput, original);
 });
 
+test("replays historical parent transitions without fabricating optional labels", () => {
+  const newParent = operation({
+    operationId: "historical-new-parent",
+    occurredAt: 10,
+    candidateRelation: "new-parent",
+    questionType: undefined,
+    topic: undefined,
+  });
+
+  const branch = buildTaskRelationCounterfactualBranchV1(
+    input([newParent])
+  );
+
+  assert.equal(
+    branch.operationResults[0]?.counterfactualShadowApplicability,
+    "applicable"
+  );
+  assert.equal(branch.finalState.parent?.questionType, undefined);
+  assert.equal(branch.finalState.parent?.topic, undefined);
+});
+
 test("records followup-parent as applicable without inventing a graph transition", () => {
   const followup = operation({
     operationId: "followup",

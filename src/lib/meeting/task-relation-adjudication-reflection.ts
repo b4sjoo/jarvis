@@ -3,6 +3,10 @@ import type {
   InterviewTaskRelation,
   QuestionHumanEvaluation,
 } from "./types.js";
+import type {
+  TaskRelationProductionApplicability,
+  TaskRelationSemanticValidity,
+} from "./task-relation-counterfactual-branch.js";
 
 export interface TaskRelationAdjudicationRecordedDecision {
   recordedAt: number;
@@ -14,15 +18,30 @@ export interface TaskRelationAdjudicationRecordedDecision {
 
 export interface TaskRelationAdjudicationReflectionRow {
   key: string;
+  recordedAt: number;
   sessionId?: string;
   traceId: string;
   taskId?: string;
   operationId?: string;
+  logicalQuestionUnitId?: string;
+  logicalQuestionUnitRevision?: number;
+  parentId?: string;
+  parentRevision?: number;
+  activeChildId?: string;
+  sourceTurnIds: string[];
   disposition?: string;
   deterministicRelation?: InterviewTaskRelation;
   candidateRelation?: InterviewTaskRelation;
+  candidateConfidence?: number;
+  parseAttempted: boolean;
+  parseValid?: boolean;
+  evidenceSpansValid?: boolean;
+  semanticValidity: TaskRelationSemanticValidity;
+  productionApplicability: TaskRelationProductionApplicability;
+  productionApplicabilityReason?: string;
   comparisonOutcome?: string;
   comparisonEligible: boolean;
+  expectedQuestionType?: string;
   expectedRelation?: InterviewTaskRelation;
   expectedParentAction?: HumanExpectedParentAction;
   deterministicCorrect?: boolean;
@@ -100,26 +119,90 @@ export function buildTaskRelationAdjudicationReflectionReport(input: {
     );
     const expectedRelation = evaluation?.expectedRelation;
     const expectedParentAction = evaluation?.expectedParentAction;
+    const candidateConfidence = readNumber(
+      metadata.taskRelationAdjudicationConfidence
+    );
+    const parseDisposition = readString(
+      metadata.taskRelationAdjudicationParseDisposition
+    );
+    const parseAttempted =
+      Boolean(candidateRelation) ||
+      Boolean(
+        parseDisposition &&
+          !parseDisposition.startsWith("not-run")
+      );
+    const parseValid = readBoolean(
+      metadata.taskRelationAdjudicationParseValid
+    );
+    const evidenceSpansValid = readBoolean(
+      metadata.taskRelationAdjudicationEvidenceSpansValid
+    );
+    const semanticValidity = deriveSemanticValidity({
+      candidateRelation,
+      parseAttempted,
+      parseValid,
+      evidenceSpansValid,
+    });
+    const stale =
+      readString(metadata.taskRelationAdjudicationDisposition) === "stale" ||
+      Boolean(readString(metadata.taskRelationAdjudicationStaleReason));
+    const activeChildId = readString(
+      metadata.taskRelationAdjudicationActiveChildId
+    );
+    const productionApplicability = deriveProductionApplicability({
+      candidateRelation,
+      semanticValidity,
+      stale,
+      activeChildId,
+    });
     const contextOutcome =
       evaluation?.taxonomyAdjudication?.contextOutcome;
     return {
       key: decisionKey(decision),
+      recordedAt: decision.recordedAt,
       sessionId: decision.sessionId,
       traceId: decision.traceId,
       taskId: decision.taskId,
       operationId: readString(
         metadata.taskRelationAdjudicationOperationId
       ),
+      logicalQuestionUnitId: readString(
+        metadata.taskRelationAdjudicationUnitId
+      ),
+      logicalQuestionUnitRevision: readNumber(
+        metadata.taskRelationAdjudicationUnitRevision
+      ),
+      parentId: readString(
+        metadata.taskRelationAdjudicationParentId
+      ),
+      parentRevision: readNumber(
+        metadata.taskRelationAdjudicationParentRevision
+      ),
+      activeChildId,
+      sourceTurnIds: readStringArray(
+        metadata.taskRelationAdjudicationRecentSourceEvidenceTurnIds
+      ),
       disposition: readString(
         metadata.taskRelationAdjudicationDisposition
       ),
       deterministicRelation,
       candidateRelation,
+      candidateConfidence,
+      parseAttempted,
+      parseValid,
+      evidenceSpansValid,
+      semanticValidity,
+      productionApplicability:
+        productionApplicability.applicability,
+      productionApplicabilityReason: productionApplicability.reason,
       comparisonOutcome: readString(
         metadata.taskRelationAdjudicationComparisonOutcome
       ),
       comparisonEligible:
         metadata.taskRelationAdjudicationComparisonEligible === true,
+      expectedQuestionType:
+        evaluation?.correctedQuestionType ??
+        evaluation?.questionType,
       expectedRelation,
       expectedParentAction,
       deterministicCorrect:
@@ -131,9 +214,7 @@ export function buildTaskRelationAdjudicationReflectionReport(input: {
           ? candidateRelation === expectedRelation
           : undefined,
       contextOutcome,
-      stale:
-        readString(metadata.taskRelationAdjudicationDisposition) === "stale" ||
-        Boolean(readString(metadata.taskRelationAdjudicationStaleReason)),
+      stale,
       mutationApplied:
         metadata.taskRelationAdjudicationAppliedToRuntime === true ||
         metadata.taskRelationAdjudicationBehaviorMutationBlocked === false,
@@ -278,10 +359,12 @@ function dedupeLatestDecisions(
 }
 
 function decisionKey(decision: TaskRelationAdjudicationRecordedDecision) {
-  return (
-    readString(decision.metadata.taskRelationAdjudicationOperationId) ??
-    `${decision.sessionId ?? "session"}:${decision.traceId}`
-  );
+  return JSON.stringify([
+    decision.sessionId ?? "session",
+    readString(
+      decision.metadata.taskRelationAdjudicationOperationId
+    ) ?? `trace:${decision.traceId}`,
+  ]);
 }
 
 function indexLatestEvaluations(evaluations: QuestionHumanEvaluation[]) {
@@ -358,10 +441,84 @@ function normalizeRelation(
     : undefined;
 }
 
+function deriveSemanticValidity(input: {
+  candidateRelation?: InterviewTaskRelation;
+  parseAttempted: boolean;
+  parseValid?: boolean;
+  evidenceSpansValid?: boolean;
+}): TaskRelationSemanticValidity {
+  if (
+    input.candidateRelation &&
+    input.parseValid !== false &&
+    input.evidenceSpansValid !== false
+  ) {
+    return "valid";
+  }
+  return input.parseAttempted ? "invalid" : "unavailable";
+}
+
+function deriveProductionApplicability(input: {
+  candidateRelation?: InterviewTaskRelation;
+  semanticValidity: TaskRelationSemanticValidity;
+  stale: boolean;
+  activeChildId?: string;
+}): {
+  applicability: TaskRelationProductionApplicability;
+  reason?: string;
+} {
+  if (input.stale) {
+    return {
+      applicability: "not-evaluated",
+      reason: "stale-operation",
+    };
+  }
+  if (
+    input.semanticValidity !== "valid" ||
+    !input.candidateRelation ||
+    input.candidateRelation === "unknown"
+  ) {
+    return {
+      applicability: "not-evaluated",
+      reason: "semantic-candidate-unavailable",
+    };
+  }
+  if (
+    input.candidateRelation === "resume-parent" &&
+    !input.activeChildId
+  ) {
+    return {
+      applicability: "inapplicable",
+      reason: "resume-requires-active-child-binding",
+    };
+  }
+  if (
+    input.candidateRelation === "child-probe" &&
+    input.activeChildId
+  ) {
+    return {
+      applicability: "inapplicable",
+      reason: "child-cannot-replace-active-child",
+    };
+  }
+  return { applicability: "applicable" };
+}
+
 function readString(value: unknown) {
   return typeof value === "string" && value.trim()
     ? value.trim()
     : undefined;
+}
+
+function readBoolean(value: unknown) {
+  return typeof value === "boolean" ? value : undefined;
+}
+
+function readStringArray(value: unknown) {
+  return Array.isArray(value)
+    ? value
+        .map(readString)
+        .filter((item): item is string => Boolean(item))
+    : [];
 }
 
 function readNumber(value: unknown) {

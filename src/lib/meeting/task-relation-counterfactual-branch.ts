@@ -332,19 +332,13 @@ function createCounterfactualTransition(
   if (operation.candidateRelation === "new-parent") {
     const questionType = cleanOptional(operation.questionType);
     const topic = cleanOptional(operation.topic);
-    if (!questionType || !topic) {
-      return {
-        ok: false,
-        reason: "new-parent-requires-question-type-and-topic",
-      };
-    }
     const parent: TaskGraphTaskRef = {
       id: `counterfactual-parent:${stableToken(operation.operationId)}`,
       revision: 1,
-      questionType,
-      topic,
       sourceRefs: sourceRefsFor(operation),
     };
+    if (questionType) parent.questionType = questionType;
+    if (topic) parent.topic = topic;
     return {
       ok: true,
       event: {
@@ -367,20 +361,14 @@ function createCounterfactualTransition(
     }
     const questionType = cleanOptional(operation.questionType);
     const topic = cleanOptional(operation.topic);
-    if (!questionType || !topic) {
-      return {
-        ok: false,
-        reason: "child-requires-question-type-and-topic",
-      };
-    }
     const parent = incrementRevision(state.parent);
     const child: TaskGraphTaskRef = {
       id: `counterfactual-child:${stableToken(operation.operationId)}`,
       revision: 1,
-      questionType,
-      topic,
       sourceRefs: sourceRefsFor(operation),
     };
+    if (questionType) child.questionType = questionType;
+    if (topic) child.topic = topic;
     return {
       ok: true,
       event: {

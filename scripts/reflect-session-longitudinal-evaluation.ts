@@ -16,6 +16,7 @@ import {
   buildTaskRelationAdjudicationReflectionReport,
   type TaskRelationAdjudicationRecordedDecision,
 } from "../src/lib/meeting/task-relation-adjudication-reflection.js";
+import { buildTaskRelationAuthorityConvergenceReportV1 } from "../src/lib/meeting/task-relation-authority-convergence.js";
 import {
   loadSessionHumanEvaluationConsumerView,
   writeHumanEvaluationCompatibilityReport,
@@ -127,6 +128,10 @@ async function readSession(directory: string): Promise<LongitudinalSessionInput>
       decisions: relationDecisions,
       evaluations: evaluationView.evaluations,
     });
+  const taskRelationConvergenceReport =
+    buildTaskRelationAuthorityConvergenceReportV1({
+      relationReport: taskRelationAdjudicationReport,
+    });
   await writeHumanEvaluationCompatibilityReport(
     directory,
     evaluationView.report
@@ -155,6 +160,7 @@ async function readSession(directory: string): Promise<LongitudinalSessionInput>
     criticalMomentEvaluations:
       criticalMomentEvaluationsPayload.evaluations ?? [],
     taskRelationAdjudicationReport,
+    taskRelationConvergenceReport,
   };
 }
 

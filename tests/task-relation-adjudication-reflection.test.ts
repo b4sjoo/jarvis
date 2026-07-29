@@ -76,6 +76,71 @@ test("uses latest operation record and excludes unavailable candidates", () => {
   assert.equal(report.metrics.llmAccuracy.denominator, 0);
 });
 
+test("preserves lineage, parse validity, and production applicability for branch replay", () => {
+  const report = buildTaskRelationAdjudicationReflectionReport({
+    decisions: [
+      decision("trace_resume", "operation_resume", {
+        taskRelationAdjudicationUnitId: "lqu_resume",
+        taskRelationAdjudicationUnitRevision: 4,
+        taskRelationAdjudicationParentId: "parent_design",
+        taskRelationAdjudicationParentRevision: 7,
+        taskRelationAdjudicationRecentSourceEvidenceTurnIds: [
+          "turn_question",
+          "turn_followup",
+        ],
+        taskRelationAdjudicationDeterministicRelation:
+          "followup-parent",
+        taskRelationAdjudicationCandidateRelation: "resume-parent",
+        taskRelationAdjudicationConfidence: 0.94,
+        taskRelationAdjudicationParseDisposition: "valid-json",
+        taskRelationAdjudicationParseValid: true,
+        taskRelationAdjudicationEvidenceSpansValid: true,
+        taskRelationAdjudicationDisposition: "shadow-observed",
+      }),
+    ],
+    evaluations: [
+      evaluation(
+        "evaluation_resume",
+        "trace_resume",
+        "resume-parent",
+        "resume"
+      ),
+    ],
+  });
+
+  assert.deepEqual(
+    {
+      recordedAt: report.rows[0]?.recordedAt,
+      logicalQuestionUnitId:
+        report.rows[0]?.logicalQuestionUnitId,
+      logicalQuestionUnitRevision:
+        report.rows[0]?.logicalQuestionUnitRevision,
+      parentId: report.rows[0]?.parentId,
+      parentRevision: report.rows[0]?.parentRevision,
+      sourceTurnIds: report.rows[0]?.sourceTurnIds,
+      candidateConfidence: report.rows[0]?.candidateConfidence,
+      semanticValidity: report.rows[0]?.semanticValidity,
+      productionApplicability:
+        report.rows[0]?.productionApplicability,
+      productionApplicabilityReason:
+        report.rows[0]?.productionApplicabilityReason,
+    },
+    {
+      recordedAt: 100,
+      logicalQuestionUnitId: "lqu_resume",
+      logicalQuestionUnitRevision: 4,
+      parentId: "parent_design",
+      parentRevision: 7,
+      sourceTurnIds: ["turn_question", "turn_followup"],
+      candidateConfidence: 0.94,
+      semanticValidity: "valid",
+      productionApplicability: "inapplicable",
+      productionApplicabilityReason:
+        "resume-requires-active-child-binding",
+    }
+  );
+});
+
 function decision(
   traceId: string,
   operationId: string,

@@ -13,6 +13,10 @@ import {
   type TaskRelationAdjudicationRecordedDecision,
 } from "../src/lib/meeting/task-relation-adjudication-reflection.js";
 import {
+  buildTaskRelationAuthorityConvergenceReportV1,
+  renderTaskRelationAuthorityConvergenceMarkdown,
+} from "../src/lib/meeting/task-relation-authority-convergence.js";
+import {
   loadSessionHumanEvaluationConsumerView,
   writeHumanEvaluationCompatibilityReport,
 } from "./session-human-evaluation-v2.js";
@@ -60,6 +64,10 @@ async function main() {
         decisions: relationDecisions,
         evaluations: evaluationView.evaluations,
       });
+    const relationConvergence =
+      buildTaskRelationAuthorityConvergenceReportV1({
+        relationReport,
+      });
     const outputDirectory = options.outputDirectory
       ? options.sessionDirectories.length === 1
         ? options.outputDirectory
@@ -86,6 +94,18 @@ async function main() {
       renderTaskRelationAdjudicationReflectionMarkdown(relationReport),
       "utf8"
     );
+    await writeFile(
+      path.join(outputDirectory, "relation-convergence.json"),
+      `${JSON.stringify(relationConvergence, null, 2)}\n`,
+      "utf8"
+    );
+    await writeFile(
+      path.join(outputDirectory, "relation-convergence.md"),
+      renderTaskRelationAuthorityConvergenceMarkdown(
+        relationConvergence
+      ),
+      "utf8"
+    );
     await writeHumanEvaluationCompatibilityReport(
       sessionDirectory,
       evaluationView.report
@@ -95,6 +115,10 @@ async function main() {
       outputDirectory,
       ...report.metrics,
       relation: relationReport.metrics,
+      relationConvergence: {
+        metrics: relationConvergence.metrics,
+        graduation: relationConvergence.graduation,
+      },
     });
   }
   process.stdout.write(`${JSON.stringify({ sessions: summaries }, null, 2)}\n`);

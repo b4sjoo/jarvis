@@ -4,6 +4,7 @@ import {
   type CanonicalQuestionType,
 } from "./task-taxonomy.js";
 import type { TaskRelationAdjudicationReflectionReport } from "./task-relation-adjudication-reflection.js";
+import type { TaskRelationAuthorityConvergenceReportV1 } from "./task-relation-authority-convergence.js";
 
 export interface LongitudinalSessionManifest {
   sessionId?: string;
@@ -187,6 +188,7 @@ export interface LongitudinalSessionInput {
   criticalMomentCandidates?: LongitudinalCriticalMomentCandidate[];
   criticalMomentEvaluations?: LongitudinalCriticalMomentEvaluation[];
   taskRelationAdjudicationReport?: TaskRelationAdjudicationReflectionReport;
+  taskRelationConvergenceReport?: TaskRelationAuthorityConvergenceReportV1;
 }
 
 export interface RateMetric {
@@ -312,6 +314,19 @@ export interface SessionLongitudinalEvaluationReport {
     stale: number;
     mutationApplied: number;
     unmatchedEvaluationCount: number;
+    structuredOutputValidity: RateMetric;
+    counterfactualAccuracy: RateMetric;
+    counterfactualNewParentPrecision: RateMetric;
+    counterfactualRescues: number;
+    counterfactualRegressions: number;
+    semanticCorrectProductionInapplicable: number;
+    humanPathInapplicable: number;
+    relationContextLossRisk: number;
+    relationContaminationRisk: number;
+    graduation: Record<
+      "insufficient-evidence" | "blocked" | "eligible-for-manual-review",
+      number
+    >;
     latencyMs: DistributionMetric;
   };
   whiteboardRenderFunnel: {
@@ -581,6 +596,14 @@ export function buildSessionLongitudinalEvaluationReport(
       ): report is TaskRelationAdjudicationReflectionReport =>
         Boolean(report)
     );
+  const relationConvergenceReports = inputs
+    .map((input) => input.taskRelationConvergenceReport)
+    .filter(
+      (
+        report
+      ): report is TaskRelationAuthorityConvergenceReportV1 =>
+        Boolean(report)
+    );
 
   return {
     version: 2,
@@ -770,6 +793,67 @@ export function buildSessionLongitudinalEvaluationReport(
           (report) => report.metrics.unmatchedEvaluationCount
         )
       ),
+      structuredOutputValidity: aggregateRates(
+        relationConvergenceReports.map(
+          (report) => report.metrics.structuredOutputValidity
+        )
+      ),
+      counterfactualAccuracy: aggregateRates(
+        relationConvergenceReports.map(
+          (report) => report.metrics.counterfactual.accuracy
+        )
+      ),
+      counterfactualNewParentPrecision: aggregateRates(
+        relationConvergenceReports.map(
+          (report) =>
+            report.metrics.counterfactual.newParentPrecision
+        )
+      ),
+      counterfactualRescues: sum(
+        relationConvergenceReports.map(
+          (report) => report.metrics.counterfactualRescues
+        )
+      ),
+      counterfactualRegressions: sum(
+        relationConvergenceReports.map(
+          (report) => report.metrics.counterfactualRegressions
+        )
+      ),
+      semanticCorrectProductionInapplicable: sum(
+        relationConvergenceReports.map(
+          (report) =>
+            report.metrics.semanticCorrectProductionInapplicable
+        )
+      ),
+      humanPathInapplicable: sum(
+        relationConvergenceReports.map(
+          (report) => report.metrics.humanPathInapplicable
+        )
+      ),
+      relationContextLossRisk: sum(
+        relationConvergenceReports.map(
+          (report) => report.metrics.relationContextLossRisk
+        )
+      ),
+      relationContaminationRisk: sum(
+        relationConvergenceReports.map(
+          (report) => report.metrics.relationContaminationRisk
+        )
+      ),
+      graduation: {
+        "insufficient-evidence": relationConvergenceReports.filter(
+          (report) =>
+            report.graduation.status === "insufficient-evidence"
+        ).length,
+        blocked: relationConvergenceReports.filter(
+          (report) => report.graduation.status === "blocked"
+        ).length,
+        "eligible-for-manual-review": relationConvergenceReports.filter(
+          (report) =>
+            report.graduation.status ===
+            "eligible-for-manual-review"
+        ).length,
+      },
       latencyMs: distribution(
         relationReports.flatMap((report) =>
           report.rows.map((row) => row.durationMs)
@@ -1272,6 +1356,11 @@ export function renderSessionLongitudinalEvaluationMarkdown(
     `Deterministic/LLM agreement: ${formatRate(report.relationAdjudicationFunnel.deterministicAgreement)}`,
     `LLM / deterministic accuracy: ${formatRate(report.relationAdjudicationFunnel.llmAccuracy)} / ${formatRate(report.relationAdjudicationFunnel.deterministicAccuracy)}`,
     `New-parent precision: ${formatRate(report.relationAdjudicationFunnel.newParentPrecision)}`,
+    `Structured output validity: ${formatRate(report.relationAdjudicationFunnel.structuredOutputValidity)}`,
+    `Counterfactual accuracy / new-parent precision: ${formatRate(report.relationAdjudicationFunnel.counterfactualAccuracy)} / ${formatRate(report.relationAdjudicationFunnel.counterfactualNewParentPrecision)}`,
+    `Counterfactual rescues / regressions: ${report.relationAdjudicationFunnel.counterfactualRescues} / ${report.relationAdjudicationFunnel.counterfactualRegressions}`,
+    `Semantic-correct but production-inapplicable / human-path-inapplicable: ${report.relationAdjudicationFunnel.semanticCorrectProductionInapplicable} / ${report.relationAdjudicationFunnel.humanPathInapplicable}`,
+    `Relation context-loss / contamination risk: ${report.relationAdjudicationFunnel.relationContextLossRisk} / ${report.relationAdjudicationFunnel.relationContaminationRisk}`,
     `False parent / child / resume: ${report.relationAdjudicationFunnel.falseParent} / ${report.relationAdjudicationFunnel.falseChild} / ${report.relationAdjudicationFunnel.falseResume}`,
     `Context loss / contamination / stale: ${report.relationAdjudicationFunnel.contextLoss} / ${report.relationAdjudicationFunnel.contextContamination} / ${report.relationAdjudicationFunnel.stale}`,
     `Runtime mutation applied: ${report.relationAdjudicationFunnel.mutationApplied}`,
