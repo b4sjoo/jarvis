@@ -115,6 +115,7 @@ test("commits source-supported phase progress before model output", () => {
       phase: "design_framing",
       phaseFrom: "requirement_clarification",
       flags: ["requirements"],
+      requiredArtifacts: ["answer", "whiteboard"],
       completedFlags: ["requirements"],
       action: "advance",
       reason: "requirements supplied",
@@ -171,6 +172,7 @@ test("does not synthesize phase progress from an unresolved relation", () => {
       phase: "design_framing",
       phaseFrom: "requirement_clarification",
       flags: ["requirements"],
+      requiredArtifacts: ["answer", "whiteboard"],
       completedFlags: ["requirements"],
       action: "advance",
       reason: "requirements supplied",
@@ -205,6 +207,7 @@ test("creates a screen parent before its model produces an answer", () => {
     phaseDecision: {
       phase: "requirement_clarification",
       flags: [],
+      requiredArtifacts: ["answer", "whiteboard"],
       action: "stay",
       reason: "requirements missing",
       source: "automatic",

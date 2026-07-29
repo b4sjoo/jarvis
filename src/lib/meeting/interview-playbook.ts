@@ -12,14 +12,18 @@ import type {
   SelectedInterviewPlaybook,
   TaskAskFrame,
   TaskTopicDomain,
-} from "./types";
+} from "./types.js";
+import {
+  formatCodingPlaybookPhaseContract,
+  resolvePlaybookRequiredArtifacts,
+} from "./playbook-phase.js";
 import {
   allMemoryInterviewFamilies,
   inferCanonicalQuestionTypeFromText,
   normalizeCanonicalQuestionType,
   readSingleConcreteInterviewTypeOverride,
   type CanonicalQuestionType,
-} from "./task-taxonomy";
+} from "./task-taxonomy.js";
 
 export interface SelectInterviewPlaybookInput {
   query?: string;
@@ -98,17 +102,17 @@ export function selectInterviewPlaybook({
     return createPlaybook({
       id: "coding_algorithm",
       label: "Coding Algorithm",
-      phase: "solution_planning",
+      phase: "baseline_reasoning",
       questionType: normalizedQuestionType,
       confidence,
       reason,
       allowedFamilies: ["coding"],
       firstMove:
-        "Identify the focused problem and language, give the optimal algorithm, then preserve Code and Complexity.",
+        "Restate the focused problem and language, explain the simplest correct baseline with a small dry run, then optimize and implement only when the interviewer or user advances the phase.",
       clarifyingStrategy:
         "Ask only when a constraint changes the optimal algorithm, input format, or requested language.",
       outputContract:
-        "中文思路 first in Chinese. Question, Answer, Approach, Complexity, Clarifying question, and Clarifying options should default to meeting-ready English. Code belongs only in Code and must use the selected/requested programming language.",
+        "中文思路 first in Chinese. Question, Answer, Approach, Complexity, Clarifying question, and Clarifying options should default to meeting-ready English. Follow the current Coding phase contract; Code belongs only in Code and must use the selected/requested programming language.",
       followUpPolicy:
         "If a follow-up is non-coding, keep existing coding artifacts unless the task is reset or the follow-up explicitly changes implementation or complexity.",
       maxEntries: 4,
@@ -216,6 +220,11 @@ export function formatInterviewPlaybookForPrompt(
     return "No interview playbook was selected. Use the default Jarvis task contract.";
   }
 
+  const requiredArtifacts = resolvePlaybookRequiredArtifacts({
+    questionType: playbook.questionType,
+    playbookId: playbook.id,
+    phase: playbook.phase,
+  });
   return [
     `id: ${playbook.id}`,
     `label: ${playbook.label}`,
@@ -229,6 +238,10 @@ export function formatInterviewPlaybookForPrompt(
     `clarifyingStrategy: ${playbook.clarifyingStrategy}`,
     `outputContract: ${playbook.outputContract}`,
     `followUpPolicy: ${playbook.followUpPolicy}`,
+    `requiredArtifacts: ${requiredArtifacts.join(", ")}`,
+    playbook.id === "coding_algorithm"
+      ? formatCodingPlaybookPhaseContract(playbook.phase)
+      : undefined,
   ]
     .filter(Boolean)
     .join("\n");
@@ -267,6 +280,11 @@ export function formatInterviewPlaybookForTrace(
     playbookReason: playbook.reason,
     playbookAllowedFamilies: playbook.memoryPolicy.allowedFamilies,
     playbookBlockedFamilies: playbook.memoryPolicy.blockedFamilies,
+    playbookRequiredArtifacts: resolvePlaybookRequiredArtifacts({
+      questionType: playbook.questionType,
+      playbookId: playbook.id,
+      phase: playbook.phase,
+    }),
   };
 }
 

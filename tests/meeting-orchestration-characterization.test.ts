@@ -308,12 +308,14 @@ test("manual next advances phase without replacing the active parent", async () 
         automaticDecision: {
           phase: "requirement_clarification",
           flags: [],
+          requiredArtifacts: ["answer", "whiteboard"],
           action: "stay",
           reason: "automatic-stay",
         },
         manualDecision: {
           phase: "design_framing",
           flags: ["architecture"],
+          requiredArtifacts: ["answer", "whiteboard"],
           action: "advance",
           reason: "manual-next",
           source: "manual-next",

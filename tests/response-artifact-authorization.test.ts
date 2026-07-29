@@ -57,6 +57,7 @@ test("allows a coding child to update only the code cache", () => {
     responseOwnerQuestionType: "coding",
     responseOwnerSource: "authorized-child",
     relation: "child-probe",
+    subtaskIntent: "implementation-probe",
   });
 
   assert.equal(decision.disposition, "coding-child-authorized");
@@ -64,6 +65,30 @@ test("allows a coding child to update only the code cache", () => {
   assert.equal(decision.allowComplexity, true);
   assert.equal(decision.allowLatestUsefulAnswer, false);
   assert.equal(decision.allowWhiteboard, false);
+});
+
+test("phase requirements prevent a new coding parent from publishing code early", () => {
+  const baseline = authorizeResponseArtifactMutation({
+    parentQuestionType: "coding",
+    responseOwnerQuestionType: "coding",
+    responseOwnerSource: "current-question",
+    relation: "new-parent",
+    creatingParent: true,
+    requiredArtifacts: ["answer", "complexity"],
+  });
+  const implementation = authorizeResponseArtifactMutation({
+    parentQuestionType: "coding",
+    responseOwnerQuestionType: "coding",
+    responseOwnerSource: "current-question",
+    relation: "new-parent",
+    creatingParent: true,
+    requiredArtifacts: ["answer", "code", "complexity"],
+  });
+
+  assert.equal(baseline.allowCode, false);
+  assert.equal(baseline.allowComplexity, true);
+  assert.equal(implementation.allowCode, true);
+  assert.equal(implementation.allowComplexity, true);
 });
 
 test("allows a coding child complexity probe to preserve code", () => {

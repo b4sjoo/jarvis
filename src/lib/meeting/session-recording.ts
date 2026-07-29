@@ -411,6 +411,7 @@ export interface SessionCompactTraceSummary {
     providerId?: string;
     playbookId?: string;
     playbookPhase?: string;
+    requiredArtifacts: string[];
     memoryUseCase?: string;
     memoryQuestionType?: string;
     memoryPolicyId?: string;
@@ -4129,6 +4130,10 @@ function buildCompactTraceSummary({
       playbookPhase: readFirstString(
         metadataSources,
         "settledExecutionPlanPlaybookPhase"
+      ),
+      requiredArtifacts: readFirstStringList(
+        metadataSources,
+        "settledExecutionPlanRequiredArtifacts"
       ),
       memoryUseCase: readFirstString(
         metadataSources,

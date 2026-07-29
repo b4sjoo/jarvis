@@ -1,4 +1,5 @@
 import type { MeetingResponseOwnerSource } from "./meeting-model-route.js";
+import type { AnswerArtifactSection } from "./answer-generation-lease.js";
 import {
   areCompatibleParentContinuityTypes,
   normalizeCanonicalQuestionType,
@@ -38,6 +39,7 @@ export function authorizeResponseArtifactMutation(input: {
   responseOwnerSource: MeetingResponseOwnerSource;
   relation: InterviewTaskRelation;
   subtaskIntent?: InterviewSubtaskIntent;
+  requiredArtifacts?: AnswerArtifactSection[];
   creatingParent?: boolean;
 }): ResponseArtifactMutationAuthorization {
   const parentQuestionType =
@@ -49,6 +51,7 @@ export function authorizeResponseArtifactMutation(input: {
     responseOwnerQuestionType,
     responseOwnerSource: input.responseOwnerSource,
   };
+  const artifactGate = resolveRequiredArtifactGate(input.requiredArtifacts);
 
   if (input.relation === "logistics") {
     return {
@@ -97,8 +100,7 @@ export function authorizeResponseArtifactMutation(input: {
       const codingArtifactAuthority =
         input.subtaskIntent === "complexity-probe"
           ? { allowCode: false, allowComplexity: true }
-          : input.subtaskIntent === undefined ||
-              input.subtaskIntent === "implementation-probe"
+          : input.subtaskIntent === "implementation-probe"
             ? { allowCode: true, allowComplexity: true }
             : { allowCode: false, allowComplexity: false };
       return {
@@ -107,7 +109,11 @@ export function authorizeResponseArtifactMutation(input: {
         reason: "coding-child-may-update-authorized-coding-artifacts",
         allowLatestUsefulAnswer: false,
         allowWhiteboard: false,
-        ...codingArtifactAuthority,
+        allowCode:
+          codingArtifactAuthority.allowCode && artifactGate.allowCode,
+        allowComplexity:
+          codingArtifactAuthority.allowComplexity &&
+          artifactGate.allowComplexity,
         allowParentContextMutation: false,
       };
     }
@@ -125,7 +131,7 @@ export function authorizeResponseArtifactMutation(input: {
         disposition: "design-child-authorized",
         reason: "compatible-design-child-may-revise-whiteboard",
         allowLatestUsefulAnswer: false,
-        allowWhiteboard: true,
+        allowWhiteboard: artifactGate.allowWhiteboard,
         allowCode: false,
         allowComplexity: false,
         allowParentContextMutation: false,
@@ -163,8 +169,14 @@ export function authorizeResponseArtifactMutation(input: {
       disposition: "parent-owner-authorized",
       reason: "compatible-response-owner-matches-canonical-parent",
       allowLatestUsefulAnswer: true,
-      allowWhiteboard: isDesignQuestionType(parentQuestionType),
-      ...codingArtifactAuthority,
+      allowWhiteboard:
+        isDesignQuestionType(parentQuestionType) &&
+        artifactGate.allowWhiteboard,
+      allowCode:
+        codingArtifactAuthority.allowCode && artifactGate.allowCode,
+      allowComplexity:
+        codingArtifactAuthority.allowComplexity &&
+        artifactGate.allowComplexity,
       allowParentContextMutation: true,
     };
   }
@@ -216,6 +228,24 @@ function resolveCodingArtifactAuthority(input: {
   }
 
   return { allowCode: false, allowComplexity: false };
+}
+
+function resolveRequiredArtifactGate(
+  requiredArtifacts: AnswerArtifactSection[] | undefined
+) {
+  if (!requiredArtifacts) {
+    return {
+      allowCode: true,
+      allowComplexity: true,
+      allowWhiteboard: true,
+    };
+  }
+  const required = new Set(requiredArtifacts);
+  return {
+    allowCode: required.has("code"),
+    allowComplexity: required.has("complexity"),
+    allowWhiteboard: required.has("whiteboard"),
+  };
 }
 
 function isDesignQuestionType(questionType: CanonicalQuestionType) {

@@ -1,4 +1,5 @@
 import type { MemoryUseCase } from "@/lib/memory/types";
+import type { AnswerArtifactSection } from "./answer-generation-lease.js";
 import type { ActiveMeetingTask } from "./active-meeting-task.js";
 import type {
   CurrentQuestionRelation,
@@ -26,6 +27,7 @@ import {
   normalizeCanonicalQuestionType,
   type CanonicalQuestionType,
 } from "./task-taxonomy.js";
+import { resolvePlaybookRequiredArtifacts } from "./playbook-phase.js";
 import type {
   InterviewPlaybookPhase,
   InterviewSubtaskIntent,
@@ -121,6 +123,7 @@ export interface SettledAdvisorExecutionPlan {
   playbook?: SelectedInterviewPlaybook;
   playbookId?: SelectedInterviewPlaybook["id"];
   playbookPhase?: InterviewPlaybookPhase;
+  requiredArtifacts: AnswerArtifactSection[];
   memoryPolicy: SettledAdvisorMemoryPolicy;
   factAnchorPolicy: SettledAdvisorFactAnchorPolicy;
   promptContract: SettledAdvisorPromptContract;
@@ -180,12 +183,18 @@ export function buildSettledAdvisorExecutionPlan(input: {
     !responseOnlyTaskScope && input.activeMeetingTask
     ? cloneActiveMeetingTask(input.activeMeetingTask)
     : undefined;
+  const playbook = input.playbook
+    ? cloneSelectedPlaybook(input.playbook)
+    : undefined;
   const transientPersonalStatusDecision =
     input.transientPersonalStatusDecision
       ? cloneTransientPersonalStatusDecision(
           input.transientPersonalStatusDecision
         )
       : undefined;
+  const playbookPhase = transientPersonalStatusDecision
+    ? taskSnapshot?.parent.playbookPhase
+    : playbook?.phase ?? taskSnapshot?.parent.playbookPhase;
   const responseOwner: MeetingResponseOwnerResolution =
     transientPersonalStatusDecision
       ? {
@@ -219,6 +228,12 @@ export function buildSettledAdvisorExecutionPlan(input: {
   const promptProfile = transientPersonalStatusDecision
     ? "compact-spoken"
     : resolveMeetingAnswerProfile(responseOwner.questionType);
+  const requiredArtifacts = resolvePlaybookRequiredArtifacts({
+    questionType: responseOwner.questionType,
+    playbookId: playbook?.id,
+    phase: playbookPhase,
+    subtaskIntent: input.subtaskIntent,
+  });
   const artifactPolicy = authorizeResponseArtifactMutation({
     parentTaskId: responseOnlyTaskScope
       ? undefined
@@ -230,6 +245,7 @@ export function buildSettledAdvisorExecutionPlan(input: {
     responseOwnerSource: responseOwner.source,
     relation,
     subtaskIntent: input.subtaskIntent,
+    requiredArtifacts,
     creatingParent:
       input.taskBoundaryCommitted &&
       input.settlement.parentMutationAuthorized,
@@ -272,9 +288,6 @@ export function buildSettledAdvisorExecutionPlan(input: {
     responseOnlyTaskScope?.preservedParentRevision;
   const postMutationParentId = taskSnapshot?.parent.id;
   const postMutationParentRevision = taskSnapshot?.parent.revisions;
-  const playbook = input.playbook
-    ? cloneSelectedPlaybook(input.playbook)
-    : undefined;
   const planId = createExecutionPlanId({
     settlementId: input.settlement.settlementId,
     responseOwner,
@@ -289,6 +302,7 @@ export function buildSettledAdvisorExecutionPlan(input: {
     topicDomain: input.topicDomain,
     projectAnchor: input.projectAnchor,
     artifactDisposition: artifactPolicy.disposition,
+    requiredArtifacts,
     responseIntent,
     contextReadScope,
     artifactIntent,
@@ -328,9 +342,8 @@ export function buildSettledAdvisorExecutionPlan(input: {
     playbookId: transientPersonalStatusDecision
       ? undefined
       : playbook?.id,
-    playbookPhase: transientPersonalStatusDecision
-      ? taskSnapshot?.parent.playbookPhase
-      : playbook?.phase ?? taskSnapshot?.parent.playbookPhase,
+    playbookPhase,
+    requiredArtifacts,
     memoryPolicy: {
       questionType: responseOwner.questionType,
       useCase: transientPersonalStatusDecision
@@ -494,6 +507,7 @@ export function formatSettledAdvisorExecutionPlanForTrace(
       plan.modelRoute.resolvedProviderId,
     settledExecutionPlanPlaybookId: plan.playbookId,
     settledExecutionPlanPlaybookPhase: plan.playbookPhase,
+    settledExecutionPlanRequiredArtifacts: plan.requiredArtifacts,
     settledExecutionPlanMemoryUseCase: plan.memoryPolicy.useCase,
     settledExecutionPlanMemoryQuestionType:
       plan.memoryPolicy.questionType,
@@ -720,6 +734,7 @@ function createExecutionPlanId(input: {
   topicDomain: TaskTopicDomain;
   projectAnchor?: string;
   artifactDisposition: string;
+  requiredArtifacts: AnswerArtifactSection[];
   responseIntent: SettledAdvisorResponseIntent;
   contextReadScope: AdvisorContextReadScope;
   artifactIntent: SettledAdvisorArtifactIntent;
@@ -745,6 +760,7 @@ function createExecutionPlanId(input: {
       input.topicDomain,
       input.projectAnchor ?? "",
       input.artifactDisposition,
+      input.requiredArtifacts.join(","),
       input.responseIntent,
       input.contextReadScope,
       input.artifactIntent,

@@ -6,6 +6,7 @@ import type {
   ScreenQuestionType,
   TaskAskFrame,
 } from "./types.js";
+import type { AnswerArtifactSection } from "./answer-generation-lease.js";
 import {
   normalizeCanonicalQuestionType,
   type CanonicalQuestionType,
@@ -30,7 +31,12 @@ export type PlaybookPhaseFlag =
   | "validation_debugging"
   | "impact_lesson"
   | "whiteboard"
-  | "tradeoffs_wrapup";
+  | "tradeoffs_wrapup"
+  | "baseline_solution"
+  | "optimized_algorithm"
+  | "pseudocode_dry_run"
+  | "implementation"
+  | "edge_case_validation";
 
 export type PlaybookPhaseDecisionAction =
   | "stay"
@@ -75,6 +81,7 @@ export type PlaybookPhaseCompletionSource =
 export interface PlaybookPhaseDecision {
   phase: InterviewPlaybookPhase;
   flags: PlaybookPhaseFlag[];
+  requiredArtifacts: AnswerArtifactSection[];
   completedFlags?: PlaybookPhaseFlag[];
   action: PlaybookPhaseDecisionAction;
   reason: string;
@@ -319,6 +326,105 @@ const IMPACT_PATTERNS = [
   "improve",
 ];
 
+const CODING_OPTIMIZATION_PATTERNS = [
+  "optimize",
+  "optimise",
+  "optimal",
+  "more efficient",
+  "faster",
+  "improve the complexity",
+  "better complexity",
+  "time complexity",
+  "space complexity",
+  "big o",
+];
+
+const CODING_IMPLEMENTATION_PATTERNS = [
+  "write code",
+  "write the code",
+  "implement",
+  "implementation",
+  "code it",
+  "code this",
+  "complete the function",
+  "fill in the function",
+  "class solution",
+  "def ",
+  "function ",
+];
+
+const CODING_VALIDATION_PATTERNS = [
+  "debug",
+  "failing",
+  "failed",
+  "bug",
+  "error",
+  "edge case",
+  "test case",
+  "dry run",
+  "trace through",
+];
+
+export function resolvePlaybookRequiredArtifacts(input: {
+  questionType?: CanonicalQuestionType | ScreenQuestionType;
+  playbookId?: InterviewPlaybookId;
+  phase?: InterviewPlaybookPhase;
+  subtaskIntent?: InterviewSubtaskIntent;
+}): AnswerArtifactSection[] {
+  const questionType = normalizeCanonicalQuestionType(input.questionType);
+  if (
+    questionType === "general-system-design" ||
+    questionType === "ai-ml-system-design" ||
+    input.playbookId === "general_system_design" ||
+    input.playbookId === "aiml_system_design"
+  ) {
+    return ["answer", "whiteboard"];
+  }
+
+  if (questionType === "coding" || input.playbookId === "coding_algorithm") {
+    if (input.subtaskIntent === "complexity-probe") {
+      return ["answer", "complexity"];
+    }
+    if (input.subtaskIntent === "implementation-probe") {
+      return ["answer", "code", "complexity"];
+    }
+    const phase = normalizeCodingPhase(input.phase);
+    return phase === "implementation_validation"
+      ? ["answer", "code", "complexity"]
+      : ["answer", "complexity"];
+  }
+
+  return ["answer"];
+}
+
+export function formatCodingPlaybookPhaseContract(
+  phase: InterviewPlaybookPhase
+) {
+  const normalizedPhase = normalizeCodingPhase(phase);
+  if (normalizedPhase === "optimized_pseudocode") {
+    return [
+      "codingPhaseContract:",
+      "- Explain the baseline bottleneck, then the optimized data structure, state, or invariant.",
+      "- Give clear pseudocode, boundary conditions, one spoken dry run, and exact target complexity.",
+      "- Do not emit a full Code section in this phase.",
+    ].join("\n");
+  }
+  if (normalizedPhase === "implementation_validation") {
+    return [
+      "codingPhaseContract:",
+      "- Emit a complete runnable implementation in the selected programming language.",
+      "- Keep Answer concise and spoken; put implementation only in Code.",
+      "- Include exact Complexity, key edge cases, and validation or debugging guidance.",
+    ].join("\n");
+  }
+  return [
+    "codingPhaseContract:",
+    "- Restate the input/output and explain the simplest correct baseline, including brute force when useful.",
+    "- Walk through one small example and state the baseline complexity.",
+    "- Do not optimize prematurely and do not emit a full Code section in this phase.",
+  ].join("\n");
+}
+
 export function decidePlaybookPhaseProgression(
   input: PlaybookPhaseDecisionInput
 ): PlaybookPhaseDecision {
@@ -336,6 +442,12 @@ export function decidePlaybookPhaseProgression(
     return {
       phase: currentPhase,
       flags: detectChildProbeFlags(input.subtaskIntent, text),
+      requiredArtifacts: resolvePlaybookRequiredArtifacts({
+        questionType,
+        playbookId: input.playbookId,
+        phase: currentPhase,
+        subtaskIntent: input.subtaskIntent,
+      }),
       action: "child-probe",
       reason: "latest turn is classified as a child probe; preserve parent phase",
     };
@@ -343,7 +455,12 @@ export function decidePlaybookPhaseProgression(
 
   const flags = uniqueFlags([
     ...detectCommonFlags(text),
-    ...detectQuestionTypeFlags(questionType, text, input.askFrame),
+    ...detectQuestionTypeFlags(
+      questionType,
+      text,
+      input.askFrame,
+      input.subtaskIntent
+    ),
   ]);
   const requirementState = isSystemDesignQuestionType(questionType)
     ? resolveRequirementState({
@@ -358,6 +475,8 @@ export function decidePlaybookPhaseProgression(
     currentPhase,
     phaseProgress: input.phaseProgress,
     requirementsReady: requirementState?.requirementsReady,
+    flags,
+    subtaskIntent: input.subtaskIntent,
   });
   const action = decideAction({
     questionType,
@@ -371,6 +490,12 @@ export function decidePlaybookPhaseProgression(
   return {
     phase,
     flags,
+    requiredArtifacts: resolvePlaybookRequiredArtifacts({
+      questionType,
+      playbookId: input.playbookId,
+      phase,
+      subtaskIntent: input.subtaskIntent,
+    }),
     completedFlags: requirementState
       ? requirementState.requirementsReady
         ? ["requirements"]
@@ -421,6 +546,7 @@ export function decideManualNextPhaseTransition(
     return {
       phase: "follow_up",
       flags: [],
+      requiredArtifacts: ["answer"],
       action: "stay",
       reason: "manual-next blocked because no active parent task exists",
       source: "manual-next",
@@ -434,7 +560,11 @@ export function decideManualNextPhaseTransition(
   const phaseProgress = task.parent.phaseProgress;
   const flags = chooseManualNextFlags(questionType, currentPhase, phaseProgress);
   const phase = chooseManualNextPhase(questionType, currentPhase);
-  const targetArtifact = chooseManualNextTargetArtifact(questionType, flags);
+  const targetArtifact = chooseManualNextTargetArtifact(
+    questionType,
+    phase,
+    flags
+  );
   const requirementTrack = isSystemDesignQuestionType(questionType)
     ? questionType
     : undefined;
@@ -450,6 +580,11 @@ export function decideManualNextPhaseTransition(
   return {
     phase,
     flags,
+    requiredArtifacts: resolvePlaybookRequiredArtifacts({
+      questionType,
+      playbookId: task.parent.playbook?.id,
+      phase,
+    }),
     completedFlags: requirementTrack
       ? uniqueFlags([
           currentPhase === "requirement_clarification"
@@ -550,6 +685,9 @@ export function formatPlaybookPhaseDecisionForPrompt(
     decision?.targetArtifact
       ? `Target artifact this turn: ${decision.targetArtifact}`
       : undefined,
+    decision?.requiredArtifacts.length
+      ? `Required artifacts this phase: ${decision.requiredArtifacts.join(", ")}`
+      : "Required artifacts this phase: answer",
     decision?.flags.length
       ? `Requested phase flags this turn: ${decision.flags.join(", ")}`
       : decision
@@ -589,6 +727,10 @@ export function formatPlaybookPhaseDecisionForPrompt(
     "- If requested flags include evaluation_metrics, be concrete about metrics, logs, evaluation, and feedback-loop signals.",
     "- Requested flags describe what is being discussed; they are not proof that a phase or milestone is complete.",
     "- During requirement_clarification for General or AI/ML System Design, produce a shallow provisional Whiteboard immediately. Do not choose detailed technologies or silently fill open constraints.",
+    "- For Coding baseline_reasoning, explain the simplest correct solution and a small dry run. Do not emit a full Code section.",
+    "- For Coding optimized_pseudocode, explain the bottleneck, optimized structure, pseudocode, edge cases, dry run, and target complexity. Do not emit a full Code section.",
+    "- For Coding implementation_validation, emit complete runnable Code in the selected language plus exact Complexity and validation cases.",
+    "- Required artifacts are authoritative. Do not add a forbidden Code or Whiteboard section merely because the answer profile supports it.",
   ];
 
   return lines.filter((line): line is string => Boolean(line)).join("\n");
@@ -604,6 +746,7 @@ export function formatPlaybookPhaseDecisionForTrace(
     playbookPhaseDecisionPhase: decision.phase,
     playbookPhaseDecisionFlags: decision.flags,
     playbookRequestedFlags: decision.flags,
+    playbookRequiredArtifacts: decision.requiredArtifacts,
     playbookCompletedFlags: decision.completedFlags,
     playbookPhaseDecisionReason: decision.reason,
     playbookPhaseDecisionFrom: decision.phaseFrom,
@@ -639,7 +782,13 @@ function chooseManualNextPhase(
   if (questionType === "behavioral") return "follow_up";
   if (questionType === "project-deep-dive") return "follow_up";
   if (questionType === "field-knowledge") return "follow_up";
-  if (questionType === "coding") return "solution_planning";
+  if (questionType === "coding") {
+    const codingPhase = normalizeCodingPhase(currentPhase);
+    if (codingPhase === "baseline_reasoning") {
+      return "optimized_pseudocode";
+    }
+    return "implementation_validation";
+  }
   return currentPhase === "follow_up" ? "follow_up" : currentPhase;
 }
 
@@ -688,7 +837,11 @@ function chooseManualNextFlags(
   }
 
   if (questionType === "coding") {
-    return ["architecture", "latency_cost_safety"];
+    const codingPhase = normalizeCodingPhase(currentPhase);
+    if (codingPhase === "baseline_reasoning") {
+      return ["optimized_algorithm", "pseudocode_dry_run"];
+    }
+    return ["implementation", "edge_case_validation"];
   }
 
   if (questionType === "field-knowledge") {
@@ -700,10 +853,13 @@ function chooseManualNextFlags(
 
 function chooseManualNextTargetArtifact(
   questionType: CanonicalQuestionType | undefined,
+  phase: InterviewPlaybookPhase,
   flags: PlaybookPhaseFlag[]
 ): PlaybookPhaseTargetArtifact {
   if (flags.includes("whiteboard")) return "whiteboard";
-  if (questionType === "coding") return "code";
+  if (questionType === "coding") {
+    return phase === "implementation_validation" ? "code" : "answer";
+  }
   if (!questionType) return "none";
   return "answer";
 }
@@ -733,7 +889,8 @@ function buildManualNextReason({
 function detectQuestionTypeFlags(
   questionType: CanonicalQuestionType | undefined,
   text: string,
-  askFrame: TaskAskFrame | undefined
+  askFrame: TaskAskFrame | undefined,
+  subtaskIntent: InterviewSubtaskIntent | undefined
 ): PlaybookPhaseFlag[] {
   if (questionType === "general-system-design") {
     return detectGeneralSystemDesignFlags(text, askFrame);
@@ -748,7 +905,7 @@ function detectQuestionTypeFlags(
     return ["project_context"];
   }
   if (questionType === "coding") {
-    return ["architecture"];
+    return detectCodingFlags(text, subtaskIntent);
   }
   if (questionType === "field-knowledge") {
     return ["project_context"];
@@ -809,6 +966,31 @@ function detectProjectDeepDiveFlags(
   ]);
 }
 
+function detectCodingFlags(
+  text: string,
+  subtaskIntent: InterviewSubtaskIntent | undefined
+): PlaybookPhaseFlag[] {
+  const implementationRequested =
+    subtaskIntent === "implementation-probe" ||
+    matchesAny(text, CODING_IMPLEMENTATION_PATTERNS);
+  const optimizationRequested =
+    subtaskIntent === "complexity-probe" ||
+    matchesAny(text, CODING_OPTIMIZATION_PATTERNS);
+  const validationRequested =
+    implementationRequested &&
+    matchesAny(text, CODING_VALIDATION_PATTERNS);
+
+  return uniqueFlags([
+    implementationRequested ? "implementation" : undefined,
+    optimizationRequested ? "optimized_algorithm" : undefined,
+    optimizationRequested ? "pseudocode_dry_run" : undefined,
+    validationRequested ? "edge_case_validation" : undefined,
+    !implementationRequested && !optimizationRequested
+      ? "baseline_solution"
+      : undefined,
+  ]);
+}
+
 function detectCommonFlags(text: string): PlaybookPhaseFlag[] {
   return uniqueFlags([
     matchesAny(text, WHITEBOARD_PATTERNS) ? "whiteboard" : undefined,
@@ -829,19 +1011,69 @@ function detectChildProbeFlags(
   ]);
 }
 
+function chooseCodingPhase({
+  currentPhase,
+  flags,
+  subtaskIntent,
+}: {
+  currentPhase: InterviewPlaybookPhase;
+  flags: PlaybookPhaseFlag[];
+  subtaskIntent?: InterviewSubtaskIntent;
+}): InterviewPlaybookPhase {
+  const normalizedCurrent = normalizeCodingPhase(currentPhase);
+  if (normalizedCurrent === "implementation_validation") {
+    return normalizedCurrent;
+  }
+  if (
+    subtaskIntent === "implementation-probe" ||
+    flags.includes("implementation")
+  ) {
+    return "implementation_validation";
+  }
+  if (
+    normalizedCurrent === "optimized_pseudocode" ||
+    subtaskIntent === "complexity-probe" ||
+    flags.includes("optimized_algorithm")
+  ) {
+    return "optimized_pseudocode";
+  }
+  return "baseline_reasoning";
+}
+
+function normalizeCodingPhase(
+  phase: InterviewPlaybookPhase | undefined
+):
+  | "baseline_reasoning"
+  | "optimized_pseudocode"
+  | "implementation_validation" {
+  if (phase === "optimized_pseudocode") return phase;
+  if (phase === "implementation_validation") return phase;
+  return "baseline_reasoning";
+}
+
 function choosePhase({
   questionType,
   currentPhase,
   phaseProgress,
   requirementsReady,
+  flags,
+  subtaskIntent,
 }: {
   questionType: CanonicalQuestionType | undefined;
   currentPhase: InterviewPlaybookPhase;
   phaseProgress?: Record<string, boolean>;
   requirementsReady?: boolean;
+  flags: PlaybookPhaseFlag[];
+  subtaskIntent?: InterviewSubtaskIntent;
 }): InterviewPlaybookPhase {
   if (questionType === "behavioral") return "story_selection";
-  if (questionType === "coding") return "solution_planning";
+  if (questionType === "coding") {
+    return chooseCodingPhase({
+      currentPhase,
+      flags,
+      subtaskIntent,
+    });
+  }
   if (questionType === "field-knowledge") return "concept_explanation";
   if (questionType === "project-deep-dive") return "project_narrative";
 
@@ -900,7 +1132,7 @@ function initialPhaseFor(
     return "story_selection";
   }
   if (playbookId === "coding_algorithm" || questionType === "coding") {
-    return "solution_planning";
+    return "baseline_reasoning";
   }
   if (playbookId === "general_system_design") {
     return "requirement_clarification";

@@ -331,6 +331,7 @@ export function decideAdvisorPhaseMutation(input: {
     return {
       phase: input.currentPhase,
       flags: [],
+      requiredArtifacts: [...input.automaticDecision.requiredArtifacts],
       action: input.hasActiveChild ? "resume-parent" : "stay",
       reason: "turn-intent-mutation-suppressed",
       source: "automatic",
@@ -346,6 +347,7 @@ export function decideAdvisorPhaseMutation(input: {
   return {
     phase: input.currentPhase,
     flags: [],
+    requiredArtifacts: [...input.automaticDecision.requiredArtifacts],
     action: input.hasActiveChild ? "resume-parent" : "stay",
     reason: "explicit-action-preserve-parent-phase",
     source: "automatic",

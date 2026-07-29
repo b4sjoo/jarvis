@@ -353,6 +353,11 @@ export type InterviewPlaybookId =
 
 export type InterviewPlaybookPhase =
   | "story_selection"
+  | "baseline_reasoning"
+  | "optimized_pseudocode"
+  | "implementation_validation"
+  // Legacy persisted Coding phase. New runtime decisions normalize this to
+  // baseline_reasoning and never create it.
   | "solution_planning"
   | "requirement_clarification"
   | "design_framing"

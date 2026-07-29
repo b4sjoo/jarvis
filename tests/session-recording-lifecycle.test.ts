@@ -1840,6 +1840,7 @@ test("records compact current-question settlement and execution-plan evidence", 
       settledExecutionPlanProviderId: "main-provider",
       settledExecutionPlanPlaybookId: "general_system_design",
       settledExecutionPlanPlaybookPhase: "requirement_clarification",
+      settledExecutionPlanRequiredArtifacts: ["answer", "whiteboard"],
       settledExecutionPlanMemoryUseCase: "system_design_interview",
       settledExecutionPlanMemoryQuestionType: "general-system-design",
       settledExecutionPlanMemoryPolicyId: "system-design",
@@ -1904,6 +1905,11 @@ test("records compact current-question settlement and execution-plan evidence", 
   assert.equal(
     (summary.settledExecutionPlan as Record<string, unknown>).modelRoute,
     "main"
+  );
+  assert.deepEqual(
+    (summary.settledExecutionPlan as Record<string, unknown>)
+      .requiredArtifacts,
+    ["answer", "whiteboard"]
   );
   assert.equal(
     (summary.settledExecutionPlan as Record<string, unknown>)

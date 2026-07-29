@@ -541,6 +541,7 @@ function clonePhaseDecision(
   return {
     ...decision,
     flags: [...decision.flags],
+    requiredArtifacts: [...decision.requiredArtifacts],
     completedFlags: decision.completedFlags
       ? [...decision.completedFlags]
       : undefined,

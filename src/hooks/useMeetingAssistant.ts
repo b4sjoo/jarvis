@@ -214,6 +214,7 @@ import {
   decideManualNextPhaseTransition,
   decidePlaybookPhaseProgression,
   formatPlaybookPhaseDecisionForTrace,
+  resolvePlaybookRequiredArtifacts,
   formatInterviewPlaybookForTrace,
   withInterviewPlaybookPhase,
   readTraceHumanEvaluations,
@@ -8392,6 +8393,15 @@ export function useMeetingAssistant() {
           responseOwnerSource: responseOwner.source,
           relation: continuityRelation,
           subtaskIntent: advisorTaskSignals.subtaskIntent,
+          requiredArtifacts:
+            settledExecutionPlan?.requiredArtifacts ??
+            playbookPhaseDecision.requiredArtifacts ??
+            resolvePlaybookRequiredArtifacts({
+              questionType: responseOwner.questionType,
+              playbookId: advisorRuntimePlaybook?.id,
+              phase: advisorRuntimePlaybook?.phase,
+              subtaskIntent: advisorTaskSignals.subtaskIntent,
+            }),
           creatingParent:
             !existingInterviewTask &&
             shouldCommitAdvisorParent &&
@@ -15538,6 +15548,10 @@ export function useMeetingAssistant() {
           latestTurnText: recentTranscript,
           currentQuestion: screenCurrentQuestionEvidenceText,
           relation: provisionalScreenTaskRelation,
+          subtaskIntent: inferAdvisorSubtaskIntent(
+            screenEvidenceText,
+            readMemoryQuestionType(taskKind) ?? "unknown"
+          ),
           askFrame: screenPreflight?.askFrame ?? screenMemoryAskFrame,
         });
         const screenRuntimePlaybook = withInterviewPlaybookPhase(
@@ -16529,6 +16543,7 @@ export function useMeetingAssistant() {
               responseOwnerQuestionType: screenResponseOwner.questionType,
               responseOwnerSource: screenResponseOwner.source,
               relation: screenRelationDecision.relation,
+              requiredArtifacts: screenPhaseDecision.requiredArtifacts,
               creatingParent:
                 !existingInterviewTask &&
                 screenRelationDecision.relation === "new-parent",

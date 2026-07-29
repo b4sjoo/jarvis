@@ -40,7 +40,7 @@ function parent(
     topic: "Design a ride-sharing system",
     playbookPhase:
       stableKind === "coding"
-        ? "solution_planning"
+        ? "baseline_reasoning"
         : "requirement_clarification",
     phaseProgress: {},
     supportedFactAnchors: [],
@@ -102,7 +102,7 @@ function playbook(): SelectedInterviewPlaybook {
   return {
     id: "coding_algorithm",
     label: "Coding",
-    phase: "solution_planning",
+    phase: "implementation_validation",
     questionType: "coding",
     confidence: 1,
     reason: "manual correction",
@@ -140,6 +140,7 @@ function correctionPlan(input: {
     memoryUseCase: "coding_interview",
     askFrame: "direct-answer",
     topicDomain: "backend",
+    subtaskIntent: "implementation-probe",
     sourceQuestion: "Implement Merge Sort",
     explicitTaskMutationCommand: {
       kind: "replace-parent",
@@ -156,8 +157,8 @@ test("atomically replaces a corrected parent under one settled plan", () => {
   const afterParent = parent("coding", {
     topic: "Implement Merge Sort",
     playbook: playbook(),
-    playbookPhase: "solution_planning",
-    phaseProgress: { solution_planning: true },
+    playbookPhase: "implementation_validation",
+    phaseProgress: { implementation_validation: true },
     whiteboardArtifact: undefined,
     sourceQuestionUnitId: "question-a",
     sourceQuestionRevision: 2,

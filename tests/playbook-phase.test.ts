@@ -264,3 +264,143 @@ test("manual next is blocked without an active task", () => {
   assert.equal(decision.guardStatus, "blocked-no-parent");
   assert.equal(decision.targetArtifact, "none");
 });
+
+test("starts a coding parent with a spoken baseline and no code artifact", () => {
+  const decision = decidePlaybookPhaseProgression({
+    questionType: "coding",
+    playbookId: "coding_algorithm",
+    latestTurnText:
+      "Given an array of integers, return the maximum sum of a contiguous subarray.",
+    relation: "new-parent",
+  });
+
+  assert.equal(decision.phase, "baseline_reasoning");
+  assert.equal(decision.action, "advance");
+  assert.ok(decision.flags.includes("baseline_solution"));
+  assert.deepEqual(decision.requiredArtifacts, ["answer", "complexity"]);
+  assert.match(
+    formatPlaybookPhaseDecisionForPrompt(decision, undefined),
+    /Do not emit a full Code section/
+  );
+});
+
+test("advances coding from baseline to optimized pseudocode on an optimization ask", () => {
+  const decision = decidePlaybookPhaseProgression({
+    questionType: "coding",
+    playbookId: "coding_algorithm",
+    currentPhase: "baseline_reasoning",
+    phaseProgress: { baseline_reasoning: true },
+    latestTurnText:
+      "Can you optimize this to improve the time complexity and dry run it?",
+    relation: "followup-parent",
+    subtaskIntent: "complexity-probe",
+  });
+
+  assert.equal(decision.phase, "optimized_pseudocode");
+  assert.equal(decision.action, "advance");
+  assert.ok(decision.flags.includes("optimized_algorithm"));
+  assert.ok(decision.flags.includes("pseudocode_dry_run"));
+  assert.deepEqual(decision.requiredArtifacts, ["answer", "complexity"]);
+});
+
+test("advances coding to implementation only on an explicit implementation ask", () => {
+  const decision = decidePlaybookPhaseProgression({
+    questionType: "coding",
+    playbookId: "coding_algorithm",
+    currentPhase: "optimized_pseudocode",
+    phaseProgress: {
+      baseline_reasoning: true,
+      optimized_pseudocode: true,
+    },
+    latestTurnText: "Now implement the complete solution in Java.",
+    relation: "followup-parent",
+    subtaskIntent: "implementation-probe",
+  });
+
+  assert.equal(decision.phase, "implementation_validation");
+  assert.equal(decision.action, "advance");
+  assert.ok(decision.flags.includes("implementation"));
+  assert.deepEqual(decision.requiredArtifacts, [
+    "answer",
+    "code",
+    "complexity",
+  ]);
+});
+
+test("manual next walks coding through three coarse stages without a fourth phase", () => {
+  const baseline = decideManualNextPhaseTransition({
+    id: "task-coding",
+    source: "voice",
+    parent: {
+      id: "parent-coding",
+      questionType: "coding",
+      topic: "Sliding window maximum",
+      playbookPhase: "baseline_reasoning",
+      phaseProgress: { baseline_reasoning: true },
+      supportedFactAnchors: [],
+      createdAt: 1,
+      updatedAt: 1,
+    },
+  });
+  const optimized = decideManualNextPhaseTransition({
+    id: "task-coding",
+    source: "voice",
+    parent: {
+      id: "parent-coding",
+      questionType: "coding",
+      topic: "Sliding window maximum",
+      playbookPhase: "optimized_pseudocode",
+      phaseProgress: {
+        baseline_reasoning: true,
+        optimized_pseudocode: true,
+      },
+      supportedFactAnchors: [],
+      createdAt: 1,
+      updatedAt: 2,
+    },
+  });
+  const implementation = decideManualNextPhaseTransition({
+    id: "task-coding",
+    source: "voice",
+    parent: {
+      id: "parent-coding",
+      questionType: "coding",
+      topic: "Sliding window maximum",
+      playbookPhase: "implementation_validation",
+      phaseProgress: {
+        baseline_reasoning: true,
+        optimized_pseudocode: true,
+        implementation_validation: true,
+      },
+      supportedFactAnchors: [],
+      createdAt: 1,
+      updatedAt: 3,
+    },
+  });
+
+  assert.equal(baseline.phase, "optimized_pseudocode");
+  assert.equal(baseline.targetArtifact, "answer");
+  assert.equal(optimized.phase, "implementation_validation");
+  assert.equal(optimized.targetArtifact, "code");
+  assert.equal(implementation.phase, "implementation_validation");
+  assert.equal(implementation.targetArtifact, "code");
+});
+
+test("coding child probes preserve the parent coding phase", () => {
+  const decision = decidePlaybookPhaseProgression({
+    questionType: "coding",
+    playbookId: "coding_algorithm",
+    currentPhase: "optimized_pseudocode",
+    phaseProgress: {
+      baseline_reasoning: true,
+      optimized_pseudocode: true,
+    },
+    latestTurnText: "What is the space complexity of the deque?",
+    relation: "child-probe",
+    subtaskIntent: "complexity-probe",
+  });
+
+  assert.equal(decision.phase, "optimized_pseudocode");
+  assert.equal(decision.action, "child-probe");
+  assert.deepEqual(decision.requiredArtifacts, ["answer", "complexity"]);
+});

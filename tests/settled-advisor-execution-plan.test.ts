@@ -65,7 +65,7 @@ function activeTask(
       topic: "Implement a queue",
       playbookPhase:
         questionType === "coding"
-          ? "solution_planning"
+          ? "baseline_reasoning"
           : "requirement_clarification",
       phaseProgress: {},
       supportedFactAnchors: [],
@@ -91,7 +91,7 @@ function playbook(
     label: questionType,
     phase:
       questionType === "coding"
-        ? "solution_planning"
+        ? "baseline_reasoning"
         : "requirement_clarification",
     questionType,
     confidence: 0.95,
@@ -120,6 +120,7 @@ test("builds one immutable coding plan for route, prompt, memory, and artifacts"
     askFrame: "direct-answer",
     topicDomain: "backend",
     sourceQuestion: "Implement a queue.",
+    subtaskIntent: "implementation-probe",
     createdAt: 100,
   });
 
@@ -130,6 +131,11 @@ test("builds one immutable coding plan for route, prompt, memory, and artifacts"
   assert.equal(plan.memoryPolicy.questionType, "coding");
   assert.equal(plan.memoryPolicy.retrievalPolicyId, "coding");
   assert.equal(plan.artifactPolicy.allowCode, true);
+  assert.deepEqual(plan.requiredArtifacts, [
+    "answer",
+    "code",
+    "complexity",
+  ]);
   assert.equal(plan.artifactPolicy.allowWhiteboard, false);
   assert.equal(plan.factAnchorPolicy.policyId, "not-required");
   assert.equal(plan.responseIntent, "advise");
@@ -280,7 +286,7 @@ test("a personal-status response owns the current answer without mutating its co
   assert.equal(plan.promptContract.profile, "compact-spoken");
   assert.equal(plan.playbook, undefined);
   assert.equal(plan.playbookId, undefined);
-  assert.equal(plan.playbookPhase, "solution_planning");
+  assert.equal(plan.playbookPhase, "baseline_reasoning");
   assert.equal(plan.memoryPolicy.useCase, "meeting_assistant");
   assert.equal(plan.memoryPolicy.questionType, "unknown");
   assert.equal(
@@ -401,6 +407,7 @@ test("equivalent settlement inputs produce a stable plan id and compact trace", 
     memoryUseCase: "coding_interview" as const,
     askFrame: "direct-answer" as const,
     topicDomain: "backend" as const,
+    subtaskIntent: "implementation-probe" as const,
   };
   const first = buildSettledAdvisorExecutionPlan(input);
   const duplicate = buildSettledAdvisorExecutionPlan(input);
@@ -433,6 +440,11 @@ test("equivalent settlement inputs produce a stable plan id and compact trace", 
     "active-parent-read"
   );
   assert.equal(trace.settledExecutionPlanArtifactIntent, "revise-code");
+  assert.deepEqual(trace.settledExecutionPlanRequiredArtifacts, [
+    "answer",
+    "code",
+    "complexity",
+  ]);
   assert.equal(
     trace.settledExecutionPlanTaskMutationCommand,
     "create-parent"

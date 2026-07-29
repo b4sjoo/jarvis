@@ -286,12 +286,14 @@ test("shadow execution cannot authorize canonical task or phase mutation", () =>
     automaticDecision: {
       phase: "design_framing",
       flags: ["architecture"],
+      requiredArtifacts: ["answer", "whiteboard"],
       action: "advance",
       reason: "automatic-advance",
     },
     manualDecision: {
       phase: "design_framing",
       flags: [],
+      requiredArtifacts: ["answer", "whiteboard"],
       action: "advance",
       reason: "manual-next",
     },
@@ -379,12 +381,14 @@ test("regenerate and speakable preserve phase while manual next can advance", ()
   const automaticDecision = {
     phase: "design_framing" as const,
     flags: ["architecture" as const],
+    requiredArtifacts: ["answer" as const, "whiteboard" as const],
     action: "advance" as const,
     reason: "automatic-advance",
   };
   const manualDecision = {
     phase: "design_framing" as const,
     flags: ["whiteboard" as const],
+    requiredArtifacts: ["answer" as const, "whiteboard" as const],
     action: "advance" as const,
     reason: "manual-next",
     source: "manual-next" as const,
