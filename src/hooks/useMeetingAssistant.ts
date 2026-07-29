@@ -274,6 +274,7 @@ import {
   authorizeRuntimeCommit,
   authorizeAdvisorTaskMutation,
   buildRuntimeCommitSnapshot,
+  buildActiveMeetingTask,
   buildBoundedParentContextHandoff,
   buildCommittedTaskBoundaryParent,
   buildSettledAdvisorExecutionPlan,
@@ -282,6 +283,7 @@ import {
   createTaskBoundaryCandidate,
   createProvisionalCurrentQuestion,
   createSourceOwnedTransitionCandidate,
+  createTaskLifecycleTransaction,
   createRuntimeCommitToken,
   decideAdvisorPhaseMutation,
   decideAdvisorTaskMutation,
@@ -296,9 +298,11 @@ import {
   formatSettledAdvisorExecutionPlanForTrace,
   formatSourceOwnedTransitionForTrace,
   formatTaskBoundaryCandidateForTrace,
+  formatTaskLifecycleReductionForTrace,
   rebaseRuntimeCommitToken,
   rebaseRuntimeCommitTokenAfterOwnedParentMutation,
   resolveCurrentQuestionSettlementDisposition,
+  reduceTaskLifecycleTransaction,
   settleCurrentQuestion,
   settleCurrentQuestionTerminalNoAnswer,
   expireTaskBoundaryCandidate,
@@ -1546,6 +1550,9 @@ interface RunAdvisorOptions {
   promptContextOverride?: AdvisorPromptContext;
   manualPhaseTargetOverride?: InterviewPlaybookPhase;
   manualPhaseOperationId?: string;
+  currentQuestionSettlementOverride?: CurrentQuestionSettlementDecision;
+  settledExecutionPlanOverride?: SettledAdvisorExecutionPlan;
+  responseOnlyTaskScopeOverride?: ResponseOnlyTaskScope;
 }
 
 interface ForceAdviseRuntimeTarget {
@@ -5513,11 +5520,11 @@ export function useMeetingAssistant() {
     const traceId = advisorJob.traceId;
     let advisorStepId: string | undefined;
     let effectiveRuntimeCommitToken = advisorJob.runtimeCommitToken;
-    let currentQuestionSettlement:
-      | CurrentQuestionSettlementDecision
-      | undefined;
+    let currentQuestionSettlement =
+      options.currentQuestionSettlementOverride;
     let currentQuestionSettlementDurationMs: number | undefined;
-    let settledExecutionPlan: SettledAdvisorExecutionPlan | undefined;
+    let settledExecutionPlan =
+      options.settledExecutionPlanOverride;
     let answerGenerationLease: AnswerGenerationLease | undefined;
     let generationAuthorizedArtifacts: AnswerArtifactSection[] = [];
     const logicalQuestionLease = advisorJob.logicalQuestionUnit
@@ -6010,11 +6017,14 @@ export function useMeetingAssistant() {
       advisorTaskSignals = routedAdvisorTaskSignals;
     }
     const responseOnlyPreservedTask =
-      advisorTaskSignals.responseOnlyRelation
+      options.responseOnlyTaskScopeOverride
+        ? originalPromptContext.activeMeetingTask
+        : advisorTaskSignals.responseOnlyRelation
         ? originalPromptContext.activeMeetingTask
         : undefined;
     const responseOnlyTaskScope: ResponseOnlyTaskScope | undefined =
-      advisorTaskSignals.responseOnlyRelation &&
+      options.responseOnlyTaskScopeOverride ??
+      (advisorTaskSignals.responseOnlyRelation &&
       advisorJob.logicalQuestionUnit
         ? createResponseOnlyTaskScope({
             logicalQuestionUnitId:
@@ -6035,7 +6045,7 @@ export function useMeetingAssistant() {
                     ?.proposedRelation,
               }),
           })
-        : undefined;
+        : undefined);
     const advisorScreenScopeDecision = decideAdvisorScreenScope({
       triggerSource: advisorJob.source,
       relation: advisorTaskSignals.taskRelation,
@@ -6235,69 +6245,73 @@ export function useMeetingAssistant() {
       const currentParent =
         responseOnlyPreservedTask?.parent ??
         promptContext.activeMeetingTask?.parent;
-      const proposal = {
-        source: options.manualQuestionTypeCorrection
-          ? ("manual-correction" as const)
-          : ("deterministic-fast-path" as const),
-        sessionId: provisionalCurrentQuestion.sessionId,
-        runtimeEpoch: provisionalCurrentQuestion.runtimeEpoch,
-        logicalQuestionUnitId:
-          provisionalCurrentQuestion.logicalQuestionUnitId,
-        revision: provisionalCurrentQuestion.revision,
-        sourceHash: provisionalCurrentQuestion.sourceHash,
-        questionType: advisorTaskSignals.questionType,
-        relation: advisorTaskSignals.taskRelation,
-        action: executionAuthorization.authorized
-          ? ("answer" as const)
-          : ("ignore" as const),
-        confidence: advisorTaskSignals.openingRoute
-          ? 1
-          : questionTypeDecisionAuthorityConfidence(
-              advisorTaskSignals.questionTypeDecision
-            ),
-        typeEvidenceAuthorized:
-          advisorTaskSignals.questionType !== "unknown",
-        relationEvidenceAuthorized:
-          advisorTaskSignals.relationEvidenceAuthorized ??
-          (advisorTaskSignals.taskRelation !== "unknown"),
-        actionEvidenceAuthorized: true,
-        manualCorrectionRevision:
-          options.manualQuestionTypeCorrection
-            ? manualCorrectionRevisionRef.current
+      if (!currentQuestionSettlement) {
+        const proposal = {
+          source: options.manualQuestionTypeCorrection
+            ? ("manual-correction" as const)
+            : ("deterministic-fast-path" as const),
+          sessionId: provisionalCurrentQuestion.sessionId,
+          runtimeEpoch: provisionalCurrentQuestion.runtimeEpoch,
+          logicalQuestionUnitId:
+            provisionalCurrentQuestion.logicalQuestionUnitId,
+          revision: provisionalCurrentQuestion.revision,
+          sourceHash: provisionalCurrentQuestion.sourceHash,
+          questionType: advisorTaskSignals.questionType,
+          relation: advisorTaskSignals.taskRelation,
+          action: executionAuthorization.authorized
+            ? ("answer" as const)
+            : ("ignore" as const),
+          confidence: advisorTaskSignals.openingRoute
+            ? 1
+            : questionTypeDecisionAuthorityConfidence(
+                advisorTaskSignals.questionTypeDecision
+              ),
+          typeEvidenceAuthorized:
+            advisorTaskSignals.questionType !== "unknown",
+          relationEvidenceAuthorized:
+            advisorTaskSignals.relationEvidenceAuthorized ??
+            (advisorTaskSignals.taskRelation !== "unknown"),
+          actionEvidenceAuthorized: true,
+          manualCorrectionRevision:
+            options.manualQuestionTypeCorrection
+              ? manualCorrectionRevisionRef.current
+              : undefined,
+          expectedParentId: currentParent?.id,
+          expectedParentRevision: currentParent?.revisions,
+          reasons: [
+            `advisor-signal-source:${advisorTaskSignals.source}`,
+            `boundary-authority-source:${taskBoundaryAuthoritySource}`,
+          ],
+        };
+        const settlementStartedAt = performance.now();
+        currentQuestionSettlement = settleCurrentQuestion({
+          currentQuestion: provisionalCurrentQuestion,
+          deterministicProposal: options.manualQuestionTypeCorrection
+            ? undefined
+            : proposal,
+          manualProposal: options.manualQuestionTypeCorrection
+            ? proposal
             : undefined,
-        expectedParentId: currentParent?.id,
-        expectedParentRevision: currentParent?.revisions,
-        reasons: [
-          `advisor-signal-source:${advisorTaskSignals.source}`,
-          `boundary-authority-source:${taskBoundaryAuthoritySource}`,
-        ],
-      };
-      const settlementStartedAt = performance.now();
-      currentQuestionSettlement = settleCurrentQuestion({
-        currentQuestion: provisionalCurrentQuestion,
-        deterministicProposal: options.manualQuestionTypeCorrection
-          ? undefined
-          : proposal,
-        manualProposal: options.manualQuestionTypeCorrection
-          ? proposal
-          : undefined,
-        activeParentId: currentParent?.id,
-        activeParentRevision: currentParent?.revisions,
-        manualCorrectionRevision:
-          manualCorrectionRevisionRef.current,
-        policy: {
-          allowLlmTypeRepair: false,
-          allowLlmActionRepair: false,
-          runtimeMutationAuthorized:
-            taskMutationAuthorization.authorized,
-          questionComplete,
-          commitParent,
-        },
-      });
-      currentQuestionSettlementDurationMs = Math.max(
-        0,
-        performance.now() - settlementStartedAt
-      );
+          activeParentId: currentParent?.id,
+          activeParentRevision: currentParent?.revisions,
+          manualCorrectionRevision:
+            manualCorrectionRevisionRef.current,
+          policy: {
+            allowLlmTypeRepair: false,
+            allowLlmActionRepair: false,
+            runtimeMutationAuthorized:
+              taskMutationAuthorization.authorized,
+            questionComplete,
+            commitParent,
+          },
+        });
+        currentQuestionSettlementDurationMs = Math.max(
+          0,
+          performance.now() - settlementStartedAt
+        );
+      } else {
+        currentQuestionSettlementDurationMs = 0;
+      }
       currentQuestionSettlementRef.current =
         currentQuestionSettlement;
       if (traceId) {
@@ -6317,7 +6331,12 @@ export function useMeetingAssistant() {
             currentQuestionSettlementDurationMs,
             currentQuestionSettlementLlmWaitMs: 0,
             currentQuestionSettlementLlmWaitDisposition:
-              "not-awaited",
+              options.currentQuestionSettlementOverride
+                ? "correction-owned"
+                : "not-awaited",
+            currentQuestionSettlementOverrideApplied: Boolean(
+              options.currentQuestionSettlementOverride
+            ),
           }
         );
       }
@@ -7079,7 +7098,8 @@ export function useMeetingAssistant() {
       sourceOwnedTransitionResult?.candidate.state ===
       "committed";
     recordCurrentQuestionSettlement(
-      taskBoundaryCommittedBeforeAdvisor
+      taskBoundaryCommittedBeforeAdvisor ||
+        Boolean(options.settledExecutionPlanOverride)
     );
     refreshAdvisorEvidencePacket();
     if (traceId) {
@@ -7102,40 +7122,42 @@ export function useMeetingAssistant() {
     }
 
     if (currentQuestionSettlement) {
-      settledExecutionPlan = buildSettledAdvisorExecutionPlan({
-        settlement: currentQuestionSettlement,
-        activeMeetingTask:
-          responseOnlyPreservedTask ??
-          promptContext.activeMeetingTask,
-        preBoundaryQuestionType: preBoundaryResponseOwnerType,
-        taskBoundaryCommitted:
-          taskBoundaryCommittedBeforeAdvisor,
-        childOwnsResponse:
-          advisorTaskSignals.taskRelation === "child-probe" &&
-          taskMutationAuthorization.authorized &&
-          sourceOwnedTransitionCommittedBeforeAdvisor,
-        providerSnapshot: meetingModelProviderSnapshotRef.current,
-        playbook: advisorRuntimePlaybook,
-        memoryUseCase: inferMemoryUseCaseFromQuery(
-          advisorEvidencePacket.currentQuestion?.text ??
-            advisorRetrievalQuery
-        ),
-        askFrame: advisorAskFrame,
-        topicDomain: advisorTopicDomain,
-        projectAnchor: advisorProjectAnchor,
-        responseOnlyTaskScope,
-        transientPersonalStatusDecision,
-        sourceQuestion:
-          advisorJob.logicalQuestionUnit?.normalizedText,
-        explicitTaskMutationCommand:
-          manualPhaseAdvanceCommitted &&
-          playbookPhaseDecision?.phase
-            ? {
-                kind: "advance-phase",
-                phase: playbookPhaseDecision.phase,
-              }
-            : undefined,
-      });
+      if (!settledExecutionPlan) {
+        settledExecutionPlan = buildSettledAdvisorExecutionPlan({
+          settlement: currentQuestionSettlement,
+          activeMeetingTask:
+            responseOnlyPreservedTask ??
+            promptContext.activeMeetingTask,
+          preBoundaryQuestionType: preBoundaryResponseOwnerType,
+          taskBoundaryCommitted:
+            taskBoundaryCommittedBeforeAdvisor,
+          childOwnsResponse:
+            advisorTaskSignals.taskRelation === "child-probe" &&
+            taskMutationAuthorization.authorized &&
+            sourceOwnedTransitionCommittedBeforeAdvisor,
+          providerSnapshot: meetingModelProviderSnapshotRef.current,
+          playbook: advisorRuntimePlaybook,
+          memoryUseCase: inferMemoryUseCaseFromQuery(
+            advisorEvidencePacket.currentQuestion?.text ??
+              advisorRetrievalQuery
+          ),
+          askFrame: advisorAskFrame,
+          topicDomain: advisorTopicDomain,
+          projectAnchor: advisorProjectAnchor,
+          responseOnlyTaskScope,
+          transientPersonalStatusDecision,
+          sourceQuestion:
+            advisorJob.logicalQuestionUnit?.normalizedText,
+          explicitTaskMutationCommand:
+            manualPhaseAdvanceCommitted &&
+            playbookPhaseDecision?.phase
+              ? {
+                  kind: "advance-phase",
+                  phase: playbookPhaseDecision.phase,
+                }
+              : undefined,
+        });
+      }
       settledAdvisorExecutionPlanRef.current =
         settledExecutionPlan;
       advisorQuestionType =
@@ -7169,6 +7191,9 @@ export function useMeetingAssistant() {
             ),
             settledExecutionPlanAuthorizationStage:
               "plan-created",
+            settledExecutionPlanOverrideApplied: Boolean(
+              options.settledExecutionPlanOverride
+            ),
           };
         traceStoreRef.current.updateMetadata(
           traceId,
@@ -18181,6 +18206,27 @@ export function useMeetingAssistant() {
       }
 
       manualCorrectionRevisionRef.current += 1;
+      const invalidatedSettlementId =
+        currentQuestionSettlementRef.current?.settlementId;
+      const invalidatedExecutionPlanId =
+        settledAdvisorExecutionPlanRef.current?.id;
+      const invalidatedTaskBoundaryCandidateId =
+        taskBoundaryCandidateRef.current?.id;
+      cancelActiveAdvisorJob("emergency-term-correction");
+      currentQuestionSettlementRef.current = undefined;
+      settledAdvisorExecutionPlanRef.current = undefined;
+      taskBoundaryCandidateRef.current = undefined;
+      traceStoreRef.current.updateMetadata(trace.id, {
+        correctionAtomicSettlementRequired: true,
+        correctionInvalidatedSettlementId: invalidatedSettlementId,
+        correctionInvalidatedExecutionPlanId:
+          invalidatedExecutionPlanId,
+        correctionInvalidatedTaskBoundaryCandidateId:
+          invalidatedTaskBoundaryCandidateId,
+        correctionInvalidatedAdvisorJob: true,
+        correctionManualRevision:
+          manualCorrectionRevisionRef.current,
+      });
       const application = applyActiveQuestionTermCorrection({
         correction,
         logicalQuestionUnit: targetLogicalQuestionUnit,
@@ -18359,6 +18405,13 @@ export function useMeetingAssistant() {
       let correctionOwnedResettlement:
         | CorrectionOwnedResettlementDecision
         | undefined;
+      let correctionExecutionPlan:
+        | SettledAdvisorExecutionPlan
+        | undefined;
+      let correctionSettlementOverride:
+        | CurrentQuestionSettlementDecision
+        | undefined;
+      let correctionAtomicCommitRejectionReason: string | undefined;
       if (
         correctionOwnedTrigger.shouldAdjudicate &&
         correctionOwnedOperationId
@@ -18752,14 +18805,17 @@ export function useMeetingAssistant() {
               classifierConfidence: 1,
               currentQuestionMatchesParentOrigin: true,
             });
+            const lifecycleParentBefore =
+              latestContext.activeInterviewTask ??
+              buildCorrectionParentFromActiveMeetingTask(
+                latestTask,
+                normalizeCanonicalQuestionType(
+                  latestParent.questionType
+                ) ?? correctedType
+              )!;
             const parentTransition =
               buildManualCorrectionParentTransition({
-                parent:
-                  latestContext.activeInterviewTask ??
-                  buildCorrectionParentFromActiveMeetingTask(
-                    latestTask,
-                    correctedType
-                  )!,
+                parent: lifecycleParentBefore,
                 decision: typeCorrectionDecision,
                 scopeDecision,
                 correctedPlaybook,
@@ -18808,110 +18864,349 @@ export function useMeetingAssistant() {
                       ),
                   })
                 : undefined;
-            contextManagerRef.current.setActiveMeetingTaskState({
-              activeScreenTask: resettledScreenTask ?? null,
-              activeInterviewTask: resettledParent,
-            });
-            const resettledContext =
-              contextManagerRef.current.getState();
-            activeCorrection = {
-              ...activeCorrection,
-              resettledParentType: correctedType,
-              semanticResettlementDisposition:
-                "same-question-retype",
-            };
-            const resettlementMetadata = {
-              ...formatCorrectionOwnedResettlementForTrace({
-                trigger: correctionOwnedTrigger,
-                decision: correctionOwnedResettlement,
-                operationId: correctionOwnedOperationId,
-                durationMs:
-                  activeCorrection.semanticAdjudicationDurationMs,
-              }),
-              correctionOwnedParentBeforeId: latestParent.id,
-              correctionOwnedParentAfterId:
-                resettledParent.id,
-              correctionOwnedParentBeforeType:
-                normalizeCanonicalQuestionType(
-                  latestParent.questionType
-                ) ?? "unknown",
-              correctionOwnedParentAfterType: correctedType,
-              correctionOwnedPhaseBefore:
-                latestParent.playbookPhase,
-              correctionOwnedPhaseAfter:
-                resettledParent.playbookPhase,
-              correctionOwnedPreservedContextFields:
-                parentTransition.preservedContextFields,
-              correctionOwnedClearedContextFields:
-                parentTransition.clearedContextFields,
-            };
-            traceStoreRef.current.updateMetadata(
-              repairTrace.id,
-              {
-                ...resettlementMetadata,
-                ...formatCurrentQuestionSettlementForTrace(
-                  correctionOwnedResettlement.settlement
-                ),
-                ...getActiveMeetingTaskTraceMetadata(
-                  resettledContext.activeMeetingTask
-                ),
-              }
-            );
-            traceStoreRef.current.updateMetadata(
-              trace.id,
-              resettlementMetadata
-            );
-            setState((previous) => ({
-              ...previous,
-              activeScreenTask:
-                resettledContext.activeScreenTask,
-              activeInterviewTask:
-                resettledContext.activeInterviewTask,
-              activeMeetingTask:
-                resettledContext.activeMeetingTask,
-            }));
-            if (resettledContext.activeMeetingTask) {
-              sessionRecordingManagerRef.current?.recordActiveMeetingTaskSnapshot(
-                resettledContext.activeMeetingTask,
-                repairTrace.id
-              );
-            }
-            if (
-              correctionOwnedResettlement.settlement
-            ) {
-              sessionRecordingManagerRef.current?.recordCurrentQuestionSettlement({
-                traceId: repairTrace.id,
-                taskId:
-                  resettledContext.activeMeetingTask?.id,
-                currentQuestion:
-                  createProvisionalCurrentQuestion({
-                    logicalQuestionUnit:
-                      application.logicalQuestionUnit,
-                    sourceKind: latestTask.screen
-                      ? "screen"
-                      : "voice",
-                  }),
-                settlement:
-                  correctionOwnedResettlement.settlement,
-                disposition:
-                  resolveCurrentQuestionSettlementDisposition({
-                    settlement:
-                      correctionOwnedResettlement.settlement,
-                    parentCommitted: true,
-                  }),
-                durationMs:
-                  activeCorrection.semanticAdjudicationDurationMs,
-                llmWaitMs:
-                  activeCorrection.semanticAdjudicationDurationMs,
-                llmWaitDisposition: "correction-owned",
-                parentBeforeId: latestParent.id,
-                parentBeforeType:
-                  normalizeCanonicalQuestionType(
-                    latestParent.questionType
-                  ),
-                parentAfterId: resettledParent.id,
-                parentAfterType: correctedType,
+            const projectedActiveMeetingTask =
+              buildActiveMeetingTask({
+                activeScreenTask: resettledScreenTask,
+                activeInterviewTask: resettledParent,
               });
+            const settledCorrection =
+              correctionOwnedResettlement.settlement;
+            if (!projectedActiveMeetingTask || !settledCorrection) {
+              activeCorrection = {
+                ...activeCorrection,
+                semanticAdjudicationStatus: "stale",
+                semanticResettlementDisposition:
+                  "semantic-result-stale",
+              };
+              correctionAtomicCommitRejectionReason =
+                "incomplete-task-projection";
+              const projectionRejectionMetadata = {
+                correctionAtomicCommitAuthorized: false,
+                correctionAtomicCommitReason:
+                  "incomplete-task-projection",
+                correctionProjectedTaskAvailable: Boolean(
+                  projectedActiveMeetingTask
+                ),
+                correctionSettlementAvailable: Boolean(
+                  settledCorrection
+                ),
+              };
+              traceStoreRef.current.updateMetadata(
+                repairTrace.id,
+                projectionRejectionMetadata
+              );
+              traceStoreRef.current.updateMetadata(
+                trace.id,
+                projectionRejectionMetadata
+              );
+              sessionRecordingManagerRef.current?.recordCaptureLifecycle({
+                stage: "task-lifecycle-command-rejected",
+                traceId: repairTrace.id,
+                taskId: latestTask.id,
+                ...projectionRejectionMetadata,
+              });
+            }
+            if (projectedActiveMeetingTask && settledCorrection) {
+              const proposedExecutionPlan =
+                buildSettledAdvisorExecutionPlan({
+                  settlement: settledCorrection,
+                  activeMeetingTask: projectedActiveMeetingTask,
+                  expectedActiveMeetingTask: latestTask,
+                  preBoundaryQuestionType:
+                    latestParent.questionType,
+                  taskBoundaryCommitted: true,
+                  childOwnsResponse: false,
+                  providerSnapshot:
+                    meetingModelProviderSnapshotRef.current,
+                  playbook: correctedPlaybook,
+                  memoryUseCase:
+                    toMemoryUseCaseForQuestionType(
+                      inferMemoryUseCaseFromQuery(
+                        application.logicalQuestionUnit
+                          .normalizedText
+                      ),
+                      correctedType
+                    ),
+                  askFrame,
+                  topicDomain: topicDomain ?? "unknown",
+                  projectAnchor:
+                    resettledScreenTask?.classifier
+                      ?.projectAnchor,
+                  sourceQuestion:
+                    application.logicalQuestionUnit.normalizedText,
+                  explicitTaskMutationCommand: {
+                    kind: "replace-parent",
+                    type: correctedType,
+                    topic:
+                      application.logicalQuestionUnit
+                        .normalizedText,
+                  },
+                });
+              const preMutationPlanAuthorization =
+                authorizeSettledAdvisorExecutionPlan({
+                  plan: proposedExecutionPlan,
+                  currentSettlement: settledCorrection,
+                  currentSessionId: latestContext.sessionId,
+                  currentRuntimeEpoch: runtimeEpochRef.current,
+                  currentLogicalQuestionUnitId:
+                    logicalQuestionUnitRef.current?.id,
+                  currentLogicalQuestionRevision:
+                    logicalQuestionUnitRef.current?.revision,
+                  currentSourceHash:
+                    settledCorrection.sourceHash,
+                  currentActiveMeetingTask: latestTask,
+                  stage: "pre-task-mutation",
+                });
+              const lifecycleTransaction =
+                createTaskLifecycleTransaction({
+                  plan: proposedExecutionPlan,
+                  manualCorrectionRevision:
+                    manualCorrectionRevisionRef.current,
+                  proposedActiveInterviewTask:
+                    resettledParent,
+                  proposedActiveScreenTask:
+                    resettledScreenTask ?? null,
+                });
+              const lifecycleReduction =
+                reduceTaskLifecycleTransaction({
+                  transaction: lifecycleTransaction,
+                  currentSessionId: latestContext.sessionId,
+                  currentRuntimeEpoch: runtimeEpochRef.current,
+                  currentLogicalQuestionUnitId:
+                    logicalQuestionUnitRef.current?.id,
+                  currentLogicalQuestionRevision:
+                    logicalQuestionUnitRef.current?.revision,
+                  currentManualCorrectionRevision:
+                    manualCorrectionRevisionRef.current,
+                  currentActiveInterviewTask:
+                    lifecycleParentBefore,
+                  currentActiveScreenTask:
+                    latestContext.activeScreenTask,
+                });
+              const postMutationPlanAuthorization =
+                lifecycleReduction.activeMeetingTask
+                  ? authorizeSettledAdvisorExecutionPlan({
+                      plan: proposedExecutionPlan,
+                      currentSettlement: settledCorrection,
+                      currentSessionId:
+                        latestContext.sessionId,
+                      currentRuntimeEpoch:
+                        runtimeEpochRef.current,
+                      currentLogicalQuestionUnitId:
+                        logicalQuestionUnitRef.current?.id,
+                      currentLogicalQuestionRevision:
+                        logicalQuestionUnitRef.current?.revision,
+                      currentSourceHash:
+                        settledCorrection.sourceHash,
+                      currentActiveMeetingTask:
+                        lifecycleReduction.activeMeetingTask,
+                    })
+                  : undefined;
+              const lifecycleMetadata: Record<string, unknown> = {
+                ...formatTaskLifecycleReductionForTrace(
+                  lifecycleReduction
+                ),
+                ...formatSettledAdvisorExecutionPlanForTrace(
+                  proposedExecutionPlan,
+                  postMutationPlanAuthorization ??
+                    preMutationPlanAuthorization
+                ),
+                correctionPlanPreMutationAuthorized:
+                  preMutationPlanAuthorization.authorized,
+                correctionPlanPreMutationReason:
+                  preMutationPlanAuthorization.reason,
+                correctionPlanPostMutationAuthorized:
+                  postMutationPlanAuthorization?.authorized,
+                correctionPlanPostMutationReason:
+                  postMutationPlanAuthorization?.reason,
+              };
+              const lifecycleStepId =
+                traceStoreRef.current.startStep(
+                  repairTrace.id,
+                  "Task lifecycle command reduced",
+                  lifecycleMetadata
+                );
+              const lifecycleAuthorized =
+                preMutationPlanAuthorization.authorized &&
+                lifecycleReduction.authorized &&
+                lifecycleReduction.mutationApplied &&
+                postMutationPlanAuthorization?.authorized ===
+                  true;
+              const lifecycleAuthorizationReason =
+                !preMutationPlanAuthorization.authorized
+                  ? `pre-mutation:${preMutationPlanAuthorization.reason}`
+                  : !lifecycleReduction.authorized ||
+                      !lifecycleReduction.mutationApplied
+                    ? `reducer:${lifecycleReduction.reason}`
+                    : !postMutationPlanAuthorization
+                      ? "post-mutation:authorization-missing"
+                      : !postMutationPlanAuthorization.authorized
+                        ? `post-mutation:${postMutationPlanAuthorization.reason}`
+                        : "authorized";
+              lifecycleMetadata.correctionAtomicCommitAuthorized =
+                lifecycleAuthorized;
+              lifecycleMetadata.correctionAtomicCommitReason =
+                lifecycleAuthorizationReason;
+              traceStoreRef.current.finishStep(
+                repairTrace.id,
+                lifecycleStepId,
+                lifecycleAuthorized ? "success" : "error",
+                lifecycleMetadata,
+                lifecycleAuthorized
+                  ? undefined
+                  : lifecycleAuthorizationReason
+              );
+              traceStoreRef.current.updateMetadata(
+                repairTrace.id,
+                lifecycleMetadata
+              );
+              traceStoreRef.current.updateMetadata(
+                trace.id,
+                lifecycleMetadata
+              );
+              sessionRecordingManagerRef.current?.recordCaptureLifecycle({
+                stage: "task-lifecycle-command-reduced",
+                traceId: repairTrace.id,
+                taskId: latestTask.id,
+                ...lifecycleMetadata,
+              });
+
+              if (
+                !lifecycleAuthorized ||
+                !postMutationPlanAuthorization
+              ) {
+                activeCorrection = {
+                  ...activeCorrection,
+                  semanticAdjudicationStatus: "stale",
+                  semanticResettlementDisposition:
+                    "semantic-result-stale",
+                };
+                correctionAtomicCommitRejectionReason =
+                  lifecycleAuthorizationReason;
+              } else {
+                contextManagerRef.current.setActiveMeetingTaskState({
+                  activeScreenTask:
+                    lifecycleReduction.activeScreenTask ?? null,
+                  activeInterviewTask:
+                    lifecycleReduction.activeInterviewTask ??
+                    null,
+                });
+                currentQuestionSettlementRef.current =
+                  settledCorrection;
+                settledAdvisorExecutionPlanRef.current =
+                  proposedExecutionPlan;
+                correctionSettlementOverride =
+                  settledCorrection;
+                correctionExecutionPlan =
+                  proposedExecutionPlan;
+                const resettledContext =
+                  contextManagerRef.current.getState();
+                activeCorrection = {
+                  ...activeCorrection,
+                  resettledParentType: correctedType,
+                  semanticResettlementDisposition:
+                    "same-question-retype",
+                };
+                const resettlementMetadata = {
+                  ...formatCorrectionOwnedResettlementForTrace({
+                    trigger: correctionOwnedTrigger,
+                    decision: correctionOwnedResettlement,
+                    operationId: correctionOwnedOperationId,
+                    durationMs:
+                      activeCorrection.semanticAdjudicationDurationMs,
+                  }),
+                  correctionOwnedParentBeforeId:
+                    latestParent.id,
+                  correctionOwnedParentAfterId:
+                    resettledParent.id,
+                  correctionOwnedParentBeforeType:
+                    normalizeCanonicalQuestionType(
+                      latestParent.questionType
+                    ) ?? "unknown",
+                  correctionOwnedParentAfterType:
+                    correctedType,
+                  correctionOwnedPhaseBefore:
+                    latestParent.playbookPhase,
+                  correctionOwnedPhaseAfter:
+                    resettledParent.playbookPhase,
+                  correctionOwnedPreservedContextFields:
+                    parentTransition.preservedContextFields,
+                  correctionOwnedClearedContextFields:
+                    parentTransition.clearedContextFields,
+                };
+                traceStoreRef.current.updateMetadata(
+                  repairTrace.id,
+                  {
+                    ...resettlementMetadata,
+                    ...formatCurrentQuestionSettlementForTrace(
+                      settledCorrection
+                    ),
+                    ...getActiveMeetingTaskTraceMetadata(
+                      resettledContext.activeMeetingTask
+                    ),
+                  }
+                );
+                traceStoreRef.current.updateMetadata(
+                  trace.id,
+                  resettlementMetadata
+                );
+                setState((previous) => ({
+                  ...previous,
+                  activeScreenTask:
+                    resettledContext.activeScreenTask,
+                  activeInterviewTask:
+                    resettledContext.activeInterviewTask,
+                  activeMeetingTask:
+                    resettledContext.activeMeetingTask,
+                }));
+                if (resettledContext.activeMeetingTask) {
+                  sessionRecordingManagerRef.current?.recordActiveMeetingTaskSnapshot(
+                    resettledContext.activeMeetingTask,
+                    repairTrace.id
+                  );
+                }
+                sessionRecordingManagerRef.current?.recordCurrentQuestionSettlement({
+                  traceId: repairTrace.id,
+                  taskId:
+                    resettledContext.activeMeetingTask?.id,
+                  currentQuestion:
+                    createProvisionalCurrentQuestion({
+                      logicalQuestionUnit:
+                        application.logicalQuestionUnit,
+                      sourceKind: latestTask.screen
+                        ? "screen"
+                        : "voice",
+                    }),
+                  settlement: settledCorrection,
+                  disposition:
+                    resolveCurrentQuestionSettlementDisposition({
+                      settlement: settledCorrection,
+                      parentCommitted: true,
+                    }),
+                  durationMs:
+                    activeCorrection.semanticAdjudicationDurationMs,
+                  llmWaitMs:
+                    activeCorrection.semanticAdjudicationDurationMs,
+                  llmWaitDisposition: "correction-owned",
+                  parentBeforeId: latestParent.id,
+                  parentBeforeType:
+                    normalizeCanonicalQuestionType(
+                      latestParent.questionType
+                    ),
+                  parentAfterId: resettledParent.id,
+                  parentAfterType: correctedType,
+                });
+                sessionRecordingManagerRef.current?.recordSettledAdvisorExecutionPlan({
+                  traceId: repairTrace.id,
+                  taskId:
+                    resettledContext.activeMeetingTask?.id,
+                  plan: proposedExecutionPlan,
+                  authorization:
+                    postMutationPlanAuthorization,
+                  authorizationStage:
+                    "correction-atomic-commit",
+                });
+              }
             }
           }
         }
@@ -18930,6 +19225,56 @@ export function useMeetingAssistant() {
 
       try {
         const advisorContext = contextManagerRef.current.getState();
+        const correctionNeedsCurrentOnlyFallback =
+          correctionOwnedTrigger.shouldAdjudicate &&
+          !correctionExecutionPlan &&
+          correctionOwnedResettlement?.disposition !==
+            "same-domain-fast-path";
+        const correctionFallbackScope =
+          correctionNeedsCurrentOnlyFallback
+            ? createResponseOnlyTaskScope({
+                logicalQuestionUnitId:
+                  application.logicalQuestionUnit.id,
+                revision:
+                  application.logicalQuestionUnit.revision,
+                sourceQuestion:
+                  application.logicalQuestionUnit.normalizedText,
+                sourceTurnIds:
+                  application.logicalQuestionUnit.sourceTurnIds,
+                inferredType:
+                  correctedQuestionTypeDecision.type ??
+                  "unknown",
+                relationDisposition:
+                  correctionOwnedResettlement?.disposition ===
+                  "semantic-result-timeout"
+                    ? "timeout"
+                    : "invalid",
+                preservedParent:
+                  advisorContext.activeMeetingTask,
+                contextReadScope: "current-only",
+              })
+            : undefined;
+        const correctionPromptContextOverride =
+          correctionFallbackScope
+            ? applyResponseOnlyTaskScopeToPromptContext(
+                contextManagerRef.current.buildAdvisorPromptContext(),
+                correctionFallbackScope
+              )
+            : undefined;
+        traceStoreRef.current.updateMetadata(repairTrace.id, {
+          correctionCurrentOnlyFallback:
+            correctionNeedsCurrentOnlyFallback,
+          correctionCurrentOnlyFallbackReason:
+            correctionNeedsCurrentOnlyFallback
+              ? correctionAtomicCommitRejectionReason ??
+                correctionOwnedResettlement?.disposition ??
+                "atomic-lifecycle-commit-rejected"
+              : undefined,
+          correctionExecutionPlanId:
+            correctionExecutionPlan?.id,
+          correctionSettlementOverrideId:
+            correctionSettlementOverride?.settlementId,
+        });
         await runAdvisor({
           force: true,
           mode: advisorContext.activeMeetingTask?.screen
@@ -18940,6 +19285,14 @@ export function useMeetingAssistant() {
           taskMutationAuthority: "preserve-parent",
           questionLineage: correctedLineage,
           logicalQuestionUnit: application.logicalQuestionUnit,
+          promptContextOverride:
+            correctionPromptContextOverride,
+          responseOnlyTaskScopeOverride:
+            correctionFallbackScope,
+          currentQuestionSettlementOverride:
+            correctionSettlementOverride,
+          settledExecutionPlanOverride:
+            correctionExecutionPlan,
         });
       } catch (error) {
         const message =
@@ -19042,6 +19395,7 @@ export function useMeetingAssistant() {
       recordQuestionEvaluation(activeCorrection, repairTrace.id);
     },
     [
+      cancelActiveAdvisorJob,
       flushPendingSentenceCompletion,
       runAdvisor,
       state.latestSuggestion,

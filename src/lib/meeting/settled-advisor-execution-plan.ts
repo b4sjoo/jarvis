@@ -113,6 +113,8 @@ export interface SettledAdvisorExecutionPlan {
   taskSnapshot?: ActiveMeetingTask;
   expectedParentId?: string;
   expectedParentRevision?: number;
+  postMutationParentId?: string;
+  postMutationParentRevision?: number;
   responseOwner: MeetingResponseOwnerResolution;
   modelRoute: MeetingModelRouteResolution;
   playbook?: SelectedInterviewPlaybook;
@@ -135,7 +137,13 @@ export type SettledAdvisorExecutionPlanRejectionReason =
   | "source-hash-mismatch"
   | "settlement-mismatch"
   | "expected-parent-mismatch"
-  | "expected-parent-revision-mismatch";
+  | "expected-parent-revision-mismatch"
+  | "post-mutation-parent-mismatch"
+  | "post-mutation-parent-revision-mismatch";
+
+export type SettledAdvisorExecutionPlanAuthorizationStage =
+  | "pre-task-mutation"
+  | "model-commit";
 
 export interface SettledAdvisorExecutionPlanAuthorization {
   authorized: boolean;
@@ -159,6 +167,7 @@ export function buildSettledAdvisorExecutionPlan(input: {
   transientPersonalStatusDecision?: TransientPersonalStatusDecision;
   sourceQuestion?: string;
   explicitTaskMutationCommand?: TaskLifecycleCommand;
+  expectedActiveMeetingTask?: ActiveMeetingTask;
   createdAt?: number;
 }): SettledAdvisorExecutionPlan {
   const relation = toInterviewTaskRelation(input.settlement.relation);
@@ -251,11 +260,15 @@ export function buildSettledAdvisorExecutionPlan(input: {
     explicitCommand: input.explicitTaskMutationCommand,
   });
   const expectedParentId =
+    input.expectedActiveMeetingTask?.parent.id ??
     input.activeMeetingTask?.parent.id ??
     responseOnlyTaskScope?.preservedParentId;
   const expectedParentRevision =
+    input.expectedActiveMeetingTask?.parent.revisions ??
     input.activeMeetingTask?.parent.revisions ??
     responseOnlyTaskScope?.preservedParentRevision;
+  const postMutationParentId = taskSnapshot?.parent.id;
+  const postMutationParentRevision = taskSnapshot?.parent.revisions;
   const playbook = input.playbook
     ? cloneSelectedPlaybook(input.playbook)
     : undefined;
@@ -266,6 +279,8 @@ export function buildSettledAdvisorExecutionPlan(input: {
     playbook,
     expectedParentId,
     expectedParentRevision,
+    postMutationParentId,
+    postMutationParentRevision,
     memoryUseCase: input.memoryUseCase,
     askFrame: input.askFrame,
     topicDomain: input.topicDomain,
@@ -300,6 +315,8 @@ export function buildSettledAdvisorExecutionPlan(input: {
     taskSnapshot,
     expectedParentId,
     expectedParentRevision,
+    postMutationParentId,
+    postMutationParentRevision,
     responseOwner,
     modelRoute,
     playbook: transientPersonalStatusDecision
@@ -350,8 +367,10 @@ export function authorizeSettledAdvisorExecutionPlan(input: {
   currentLogicalQuestionRevision?: number;
   currentSourceHash?: string;
   currentActiveMeetingTask?: ActiveMeetingTask;
+  stage?: SettledAdvisorExecutionPlanAuthorizationStage;
 }): SettledAdvisorExecutionPlanAuthorization {
   const rejectionReasons: SettledAdvisorExecutionPlanRejectionReason[] = [];
+  const stage = input.stage ?? "model-commit";
   if (input.plan.sessionId !== input.currentSessionId) {
     rejectionReasons.push("session-mismatch");
   }
@@ -382,19 +401,45 @@ export function authorizeSettledAdvisorExecutionPlan(input: {
   ) {
     rejectionReasons.push("settlement-mismatch");
   }
-  if (
-    input.plan.expectedParentId !== undefined &&
-    input.plan.expectedParentId !==
+  const postMutationLeaseApplies =
+    stage === "model-commit" &&
+    input.plan.taskMutationPolicy.kind !== "preserve" &&
+    input.plan.postMutationParentId !== undefined &&
+    (input.plan.postMutationParentId !==
+      input.plan.expectedParentId ||
+      input.plan.postMutationParentRevision !==
+        input.plan.expectedParentRevision);
+  if (postMutationLeaseApplies) {
+    if (
+      input.plan.postMutationParentId !==
       input.currentActiveMeetingTask?.parent.id
-  ) {
-    rejectionReasons.push("expected-parent-mismatch");
-  }
-  if (
-    input.plan.expectedParentRevision !== undefined &&
-    input.plan.expectedParentRevision !==
-      input.currentActiveMeetingTask?.parent.revisions
-  ) {
-    rejectionReasons.push("expected-parent-revision-mismatch");
+    ) {
+      rejectionReasons.push("post-mutation-parent-mismatch");
+    }
+    if (
+      input.plan.postMutationParentRevision !== undefined &&
+      input.plan.postMutationParentRevision !==
+        input.currentActiveMeetingTask?.parent.revisions
+    ) {
+      rejectionReasons.push(
+        "post-mutation-parent-revision-mismatch"
+      );
+    }
+  } else {
+    if (
+      input.plan.expectedParentId !== undefined &&
+      input.plan.expectedParentId !==
+        input.currentActiveMeetingTask?.parent.id
+    ) {
+      rejectionReasons.push("expected-parent-mismatch");
+    }
+    if (
+      input.plan.expectedParentRevision !== undefined &&
+      input.plan.expectedParentRevision !==
+        input.currentActiveMeetingTask?.parent.revisions
+    ) {
+      rejectionReasons.push("expected-parent-revision-mismatch");
+    }
   }
 
   return {
@@ -435,6 +480,10 @@ export function formatSettledAdvisorExecutionPlanForTrace(
     settledExecutionPlanExpectedParentId: plan.expectedParentId,
     settledExecutionPlanExpectedParentRevision:
       plan.expectedParentRevision,
+    settledExecutionPlanPostMutationParentId:
+      plan.postMutationParentId,
+    settledExecutionPlanPostMutationParentRevision:
+      plan.postMutationParentRevision,
     settledExecutionPlanResponseOwnerSource:
       plan.responseOwner.source,
     settledExecutionPlanModelRoute: plan.modelRoute.route,
@@ -660,6 +709,8 @@ function createExecutionPlanId(input: {
   playbook?: SelectedInterviewPlaybook;
   expectedParentId?: string;
   expectedParentRevision?: number;
+  postMutationParentId?: string;
+  postMutationParentRevision?: number;
   memoryUseCase: MemoryUseCase;
   askFrame: TaskAskFrame;
   topicDomain: TaskTopicDomain;
@@ -683,6 +734,8 @@ function createExecutionPlanId(input: {
       input.playbook?.phase ?? "",
       input.expectedParentId ?? "",
       input.expectedParentRevision ?? "",
+      input.postMutationParentId ?? "",
+      input.postMutationParentRevision ?? "",
       input.memoryUseCase,
       input.askFrame,
       input.topicDomain,
