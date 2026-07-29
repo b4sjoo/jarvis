@@ -598,6 +598,20 @@ function collectDeclarativeEvidence(normalized: string) {
 
 export function isExactLowValueAcknowledgement(text: string) {
   const normalized = normalizeAdvisorTurnText(text);
+  const normalizedAcknowledgement = normalized.replace(/[.]+$/u, "");
+  const repeatedTokens = normalizedAcknowledgement
+    .split(" ")
+    .filter(Boolean);
+  if (
+    repeatedTokens.length >= 2 &&
+    repeatedTokens.length <= 4 &&
+    repeatedTokens.every((token) => token === repeatedTokens[0]) &&
+    /^(ah|hmm|mm|mhm|uh|um|yeah|yep|yes|no|ok|okay|right|sure)$/i.test(
+      repeatedTokens[0]
+    )
+  ) {
+    return true;
+  }
   if (
     /^(ah|eh|er|hmm|mm|mhm|uh|um|yeah|yep|yes|no|ok|okay|right|sure|cool|great|nice|perfect|all good|sounds good|that sounds good|that is nice|that s nice|i see|got it|make sense|makes sense|thank you|thanks)$/i.test(
       normalized
@@ -606,7 +620,7 @@ export function isExactLowValueAcknowledgement(text: string) {
     return true;
   }
   return /^(looks good|looks good to me|that looks good|that looks good to me|this looks good|this looks good to me|sounds good|sounds good to me|that sounds good|that sounds good to me|this sounds good|this sounds good to me)$/i.test(
-    normalized.replace(/[.]+$/u, "")
+    normalizedAcknowledgement
   );
 }
 

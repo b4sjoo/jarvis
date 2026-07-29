@@ -13,6 +13,7 @@ export * from "./audio-segment-disposition";
 export * from "./interviewer-intent";
 export * from "./interviewer-intent-keyword-evidence";
 export * from "./advisor-trigger-job";
+export * from "./answer-generation-lease";
 export * from "./adjacent-question-constraint";
 export * from "./active-meeting-task";
 export * from "./active-question-term-correction";

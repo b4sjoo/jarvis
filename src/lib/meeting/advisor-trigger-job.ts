@@ -1,4 +1,5 @@
 import type { AdvisorTurnIntentDecision } from "./advisor-turn-intent.js";
+import type { RefreshAuthorityDecision } from "./answer-generation-lease.js";
 import { createMeetingId } from "./context-manager.js";
 import {
   formatLogicalQuestionUnitForTrace,
@@ -59,6 +60,9 @@ export interface AdvisorTriggerJob {
   questionLineage?: QuestionInstanceLineage;
   logicalQuestionUnit?: LogicalQuestionUnit;
   taskMutationAuthority: AdvisorTaskMutationAuthority;
+  refreshAuthority: RefreshAuthorityDecision;
+  manualCorrectionRevision: number;
+  responseActionRevision: number;
   snapshotTurnCount: number;
   scheduledAt: number;
 }
@@ -76,6 +80,9 @@ export interface CreateAdvisorTriggerJobInput {
   questionLineage?: QuestionInstanceLineage;
   logicalQuestionUnit?: LogicalQuestionUnit;
   taskMutationAuthority: AdvisorTaskMutationAuthority;
+  refreshAuthority?: RefreshAuthorityDecision;
+  manualCorrectionRevision?: number;
+  responseActionRevision?: number;
   scheduledAt?: number;
 }
 
@@ -158,6 +165,27 @@ export function createAdvisorTriggerJob(
       ? cloneLogicalQuestionUnit(input.logicalQuestionUnit)
       : undefined,
     taskMutationAuthority: input.taskMutationAuthority,
+    refreshAuthority: input.refreshAuthority
+      ? { ...input.refreshAuthority }
+      : {
+          authorized: true,
+          kind:
+            input.source === "live-turn"
+              ? "automatic-substantive"
+              : "manual-hard-override",
+          reason:
+            input.source === "live-turn"
+              ? "substantive-turn"
+              : input.source === "manual-correction"
+                ? "manual-correction"
+                : input.source === "force-advise"
+                  ? "force-advise"
+                  : "explicit-response-action",
+          hardOverride: input.source !== "live-turn",
+          maySupersedeGeneration: true,
+        },
+    manualCorrectionRevision: input.manualCorrectionRevision ?? 0,
+    responseActionRevision: input.responseActionRevision ?? 0,
     snapshotTurnCount: input.snapshotTurnCount,
     scheduledAt: input.scheduledAt ?? Date.now(),
   };
@@ -353,6 +381,12 @@ export function formatAdvisorTriggerJobForTrace(
       : {}),
     ...formatLogicalQuestionUnitForTrace(job.logicalQuestionUnit),
     advisorJobMutationAuthority: job.taskMutationAuthority,
+    refreshAuthority: job.refreshAuthority.kind,
+    refreshAuthorityAuthorized: job.refreshAuthority.authorized,
+    refreshAuthorityReason: job.refreshAuthority.reason,
+    refreshAuthorityHardOverride: job.refreshAuthority.hardOverride,
+    advisorJobManualCorrectionRevision: job.manualCorrectionRevision,
+    advisorJobResponseActionRevision: job.responseActionRevision,
     advisorJobSnapshotTurnCount: job.snapshotTurnCount,
     advisorJobSnapshotLatestTurnId: job.promptContextSnapshot.latestTurn?.id,
     advisorJobOutcome: outcome,
