@@ -55,8 +55,10 @@ import {
 import { serializeMeetingTraceExport } from "./trace.js";
 
 const SESSION_RECORDING_SCHEMA_VERSION = 1;
+const SESSION_RECORDING_INTEGRITY_SCHEMA_VERSION = 1;
 const SESSION_TRACE_SUMMARY_SCHEMA_VERSION = 27;
 const SESSION_TRACE_INDEX_SCHEMA_VERSION = 1;
+const MAX_RECORDED_WRITE_FAILURES = 20;
 
 interface SessionRecordingStartOptions {
   settings: MeetingAssistantSettings;
@@ -163,7 +165,30 @@ interface ActiveSessionRecording {
   acceptedWrites: number;
   rejectedLateWrites: number;
   drainPasses: number;
+  failedWriteCount: number;
+  failedWrites: SessionRecordingWriteFailure[];
   closingAt?: number;
+}
+
+interface SessionRecordingWriteFailure {
+  sequence: number;
+  occurredAt: number;
+  phase: ActiveSessionRecording["phase"];
+  operation: "text" | "base64" | "unknown";
+  relativePath?: string;
+  message: string;
+}
+
+class SessionRecordingWriteError extends Error {
+  constructor(
+    readonly operation: SessionRecordingWriteFailure["operation"],
+    readonly relativePath: string,
+    cause: unknown
+  ) {
+    const causeMessage = cause instanceof Error ? cause.message : String(cause);
+    super(`Failed to write ${relativePath}: ${causeMessage}`);
+    this.name = "SessionRecordingWriteError";
+  }
 }
 
 export type SessionRecordingInvoke = <T>(
@@ -1026,6 +1051,8 @@ export class SessionRecordingManager {
           acceptedWrites: 0,
           rejectedLateWrites: 0,
           drainPasses: 0,
+          failedWriteCount: 0,
+          failedWrites: [],
         };
 
         await this.writeJson(session, "manifest.json", manifestBase);
@@ -1092,14 +1119,39 @@ export class SessionRecordingManager {
           Array.from(session.traceSummaries.values()),
           evaluationView.evaluations
         );
-        await this.writeJson(
+        await this.tryFinalizationWrite(
           session,
-          "human-evaluation/compatibility-v2.json",
-          evaluationView.report
+          () =>
+            this.writeJson(
+              session,
+              "human-evaluation/compatibility-v2.json",
+              evaluationView.report
+            )
         );
-        await this.writeTaskReviewIndex(session, finalReviewIndex);
+        await this.tryFinalizationWrite(session, () =>
+          this.writeTaskReviewIndex(session, finalReviewIndex)
+        );
+        await this.drainStable(session);
         session.phase = "sealed";
         await Promise.resolve();
+        const queueDrained = session.pendingWrites === 0;
+        const enqueueCounterConsistent =
+          session.enqueueVersion === session.acceptedWrites;
+        const recordingIntegrity = {
+          version: SESSION_RECORDING_INTEGRITY_SCHEMA_VERSION,
+          status:
+            queueDrained &&
+            enqueueCounterConsistent &&
+            session.failedWriteCount === 0
+              ? "complete"
+              : "incomplete",
+          queueDrained,
+          enqueueCounterConsistent,
+          failedWriteCount: session.failedWriteCount,
+          failedWriteDetailsTruncated:
+            session.failedWriteCount > session.failedWrites.length,
+          failedWrites: session.failedWrites,
+        };
         const evaluationIntegrity = {
           v1EvaluationCount: session.questionHumanEvaluations.size,
           v2GroundTruthEventCount:
@@ -1147,10 +1199,10 @@ export class SessionRecordingManager {
             rejectedLateWrites: session.rejectedLateWrites,
             drainPasses: session.drainPasses,
             pendingWritesAtSeal: session.pendingWrites,
-            enqueueCounterConsistent:
-              session.enqueueVersion === session.acceptedWrites,
-            queueDrained: session.pendingWrites === 0,
+            enqueueCounterConsistent,
+            queueDrained,
           },
+          recordingIntegrity,
           evaluationIntegrity,
         });
       } catch (error) {
@@ -3034,12 +3086,16 @@ export class SessionRecordingManager {
     payload: string,
     append = false
   ) {
-    await this.invokeCommand<string>("write_meeting_session_recording_text", {
-      folderName: session.folderName,
-      relativePath,
-      payload,
-      append,
-    });
+    try {
+      await this.invokeCommand<string>("write_meeting_session_recording_text", {
+        folderName: session.folderName,
+        relativePath,
+        payload,
+        append,
+      });
+    } catch (error) {
+      throw new SessionRecordingWriteError("text", relativePath, error);
+    }
   }
 
   private async writeBase64(
@@ -3047,11 +3103,15 @@ export class SessionRecordingManager {
     relativePath: string,
     base64Payload: string
   ) {
-    await this.invokeCommand<string>("write_meeting_session_recording_base64", {
-      folderName: session.folderName,
-      relativePath,
-      base64Payload,
-    });
+    try {
+      await this.invokeCommand<string>("write_meeting_session_recording_base64", {
+        folderName: session.folderName,
+        relativePath,
+        base64Payload,
+      });
+    } catch (error) {
+      throw new SessionRecordingWriteError("base64", relativePath, error);
+    }
   }
 
   private enqueue(
@@ -3069,15 +3129,50 @@ export class SessionRecordingManager {
     session.writeQueue = session.writeQueue
       .then(write)
       .catch((error) => {
-        this.setSessionError(
-          session,
-          error instanceof Error ? error.message : String(error)
-        );
+        this.recordWriteFailure(session, error);
       })
       .finally(() => {
         session.pendingWrites -= 1;
       });
     return true;
+  }
+
+  private async tryFinalizationWrite(
+    session: ActiveSessionRecording,
+    write: () => Promise<void>
+  ) {
+    try {
+      await write();
+      return true;
+    } catch (error) {
+      this.recordWriteFailure(session, error);
+      return false;
+    }
+  }
+
+  private recordWriteFailure(
+    session: ActiveSessionRecording,
+    error: unknown
+  ) {
+    const message = error instanceof Error ? error.message : String(error);
+    session.failedWriteCount += 1;
+    if (session.failedWrites.length < MAX_RECORDED_WRITE_FAILURES) {
+      session.failedWrites.push({
+        sequence: session.failedWriteCount,
+        occurredAt: Date.now(),
+        phase: session.phase,
+        operation:
+          error instanceof SessionRecordingWriteError
+            ? error.operation
+            : "unknown",
+        relativePath:
+          error instanceof SessionRecordingWriteError
+            ? error.relativePath
+            : undefined,
+        message,
+      });
+    }
+    this.setSessionError(session, message);
   }
 
   private setError(message: string) {

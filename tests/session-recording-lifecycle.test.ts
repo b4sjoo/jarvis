@@ -258,6 +258,8 @@ test("drains late writes into their original folder before allowing stop-start",
     stoppedManifest.recordingLifecycle.enqueueCounterConsistent,
     true
   );
+  assert.equal(stoppedManifest.recordingIntegrity.status, "complete");
+  assert.equal(stoppedManifest.recordingIntegrity.failedWriteCount, 0);
   assert.equal(
     stoppedManifest.evaluationIntegrity.compatibilityReportPath,
     "human-evaluation/compatibility-v2.json"
@@ -319,6 +321,49 @@ test("drains late writes into their original folder before allowing stop-start",
   );
 
   await manager.stop("test-complete");
+});
+
+test("marks a drained recording incomplete when an artifact write fails", async () => {
+  const native = new ControlledRecordingInvoke();
+  const manager = new SessionRecordingManager(undefined, native.invoke);
+  const state = await manager.start(START_OPTIONS);
+  const folderName = required(state.folderName);
+  await settle();
+
+  native.failNext(
+    (call) =>
+      call.command === "write_meeting_session_recording_text" &&
+      stringArg(call, "relativePath").includes("/outputs/"),
+    new Error("simulated disk failure")
+  );
+  manager.recordModelOutput({
+    traceId: "trace_failed_artifact",
+    label: "advisor output",
+    value: "answer",
+  });
+
+  await manager.stop("test-write-integrity");
+
+  const stoppedManifest = native.stoppedManifest(folderName);
+  assert.ok(stoppedManifest);
+  assert.equal(stoppedManifest.recordingLifecycle.queueDrained, true);
+  assert.equal(stoppedManifest.recordingLifecycle.pendingWritesAtSeal, 0);
+  assert.equal(stoppedManifest.recordingIntegrity.status, "incomplete");
+  assert.equal(stoppedManifest.recordingIntegrity.failedWriteCount, 1);
+  assert.equal(
+    stoppedManifest.recordingIntegrity.failedWriteDetailsTruncated,
+    false
+  );
+  assert.equal(stoppedManifest.recordingIntegrity.failedWrites.length, 1);
+  assert.match(
+    stoppedManifest.recordingIntegrity.failedWrites[0]?.relativePath ?? "",
+    /trace_failed_artifact\/outputs/
+  );
+  assert.match(
+    stoppedManifest.recordingIntegrity.failedWrites[0]?.message ?? "",
+    /simulated disk failure/
+  );
+  assert.match(manager.getState().lastError ?? "", /simulated disk failure/);
 });
 
 test("rejects writes that arrive after a generation is sealed", async () => {
@@ -1904,6 +1949,10 @@ class ControlledRecordingInvoke {
     predicate: (call: InvokeCall) => boolean;
     gate: ReturnType<typeof createGate>;
   }> = [];
+  private failures: Array<{
+    predicate: (call: InvokeCall) => boolean;
+    error: Error;
+  }> = [];
 
   readonly invoke: SessionRecordingInvoke = async <T>(
     command: string,
@@ -1918,6 +1967,13 @@ class ControlledRecordingInvoke {
       const [blocker] = this.blockers.splice(blockerIndex, 1);
       blocker?.gate.markStarted();
       await blocker?.gate.promise;
+    }
+    const failureIndex = this.failures.findIndex(({ predicate }) =>
+      predicate(call)
+    );
+    if (failureIndex >= 0) {
+      const [failure] = this.failures.splice(failureIndex, 1);
+      throw failure?.error ?? new Error("Simulated recording write failure");
     }
 
     if (command === "start_meeting_session_recording") {
@@ -1936,6 +1992,10 @@ class ControlledRecordingInvoke {
       started: gate.started,
       release: gate.release,
     };
+  }
+
+  failNext(predicate: (call: InvokeCall) => boolean, error: Error) {
+    this.failures.push({ predicate, error });
   }
 
   startCalls() {
@@ -1963,6 +2023,15 @@ class ControlledRecordingInvoke {
             pendingWritesAtSeal: number;
             queueDrained: boolean;
             enqueueCounterConsistent: boolean;
+          },
+          recordingIntegrity: payload.recordingIntegrity as {
+            status: "complete" | "incomplete";
+            failedWriteCount: number;
+            failedWriteDetailsTruncated: boolean;
+            failedWrites: Array<{
+              relativePath?: string;
+              message: string;
+            }>;
           },
           evaluationIntegrity: payload.evaluationIntegrity as {
             compatibilityReportPath: string;
