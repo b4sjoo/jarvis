@@ -1,5 +1,6 @@
 import {
   CANONICAL_QUESTION_TYPES,
+  normalizeCanonicalQuestionType,
   type CanonicalQuestionType,
   type QuestionTypeInferenceDecision,
 } from "./task-taxonomy.js";
@@ -85,6 +86,7 @@ export interface PrivateQuestionEvaluationRecord {
   id: string;
   questionId: string;
   taskId?: string;
+  traceIds?: string[];
   questionType?: CanonicalQuestionType;
   correctedQuestionType?: CanonicalQuestionType;
   manualQuestionTypeCorrectionSource?: string;
@@ -110,6 +112,79 @@ export interface PrivateCorpusImportResult {
     evaluationId: string;
     reason: "missing-reviewed-label" | "missing-nearby-interviewer-turn";
   }>;
+}
+
+export interface PrivateHumanGroundTruthEventRecord {
+  confirmation?: "confirmed" | "suggested";
+  fact?: {
+    kind?: string;
+    expectedQuestionType?: string;
+  };
+  provenance?: {
+    source?: string;
+    recordedAt?: number;
+  };
+}
+
+export interface PrivateHumanEvaluationProjectionRecord {
+  projectionId: string;
+  sessionId?: string;
+  subject?: {
+    questionId?: string;
+    traceIds?: string[];
+    sourceTurnIds?: string[];
+  };
+  activeFacts?: {
+    "expected-task-settlement"?: PrivateHumanGroundTruthEventRecord;
+    "expected-question-type"?: PrivateHumanGroundTruthEventRecord;
+  };
+  conflicts?: Array<{
+    factKind?: string;
+  }>;
+  computedAt?: number;
+}
+
+export type PrivateTaxonomyImportWarningCode =
+  | "v1-only-evaluation"
+  | "v2-only-projection"
+  | "v1-v2-type-disagreement"
+  | "v2-conflicting-facts"
+  | "v2-suggested-type-skipped"
+  | "v2-imported-legacy-fallback"
+  | "ambiguous-subject-match"
+  | "missing-source-turn"
+  | "projection-history-fallback"
+  | "duplicate-sample-suppressed";
+
+export interface PrivateTaxonomyImportWarning {
+  code: PrivateTaxonomyImportWarningCode;
+  subjectKey?: string;
+  detail?: string;
+}
+
+export interface PrivateTaxonomySessionImportStats {
+  v1EvaluationCount: number;
+  v2ProjectionCount: number;
+  matchedSubjectCount: number;
+  v1OnlyCount: number;
+  v2OnlyCount: number;
+  agreementCount: number;
+  disagreementCount: number;
+  nativeV2ConfirmedCount: number;
+  importedLegacyProjectionCount: number;
+  conflictSkippedCount: number;
+  suggestedSkippedCount: number;
+  directTurnBindingCount: number;
+  timestampFallbackCount: number;
+  missingTurnCount: number;
+  deduplicatedCount: number;
+  importedCount: number;
+}
+
+export interface PrivateTaxonomySessionImportResult
+  extends PrivateCorpusImportResult {
+  warnings: PrivateTaxonomyImportWarning[];
+  stats: PrivateTaxonomySessionImportStats;
 }
 
 const TECHNICAL_TYPES = new Set<CanonicalQuestionType>([
@@ -309,6 +384,253 @@ export function importPrivateTaxonomyCorpus({
   return { examples, skipped };
 }
 
+export function importPrivateTaxonomySessionCorpus({
+  sessionId,
+  evaluations,
+  projections,
+  turns,
+  projectionHistoryFallback = false,
+  maximumTurnDistanceMs = 120_000,
+}: {
+  sessionId: string;
+  evaluations: PrivateQuestionEvaluationRecord[];
+  projections: PrivateHumanEvaluationProjectionRecord[];
+  turns: PrivateTranscriptTurnRecord[];
+  projectionHistoryFallback?: boolean;
+  maximumTurnDistanceMs?: number;
+}): PrivateTaxonomySessionImportResult {
+  const examples: TaxonomyEvaluationExample[] = [];
+  const skipped: PrivateCorpusImportResult["skipped"] = [];
+  const warnings: PrivateTaxonomyImportWarning[] = [];
+  const stats: PrivateTaxonomySessionImportStats = {
+    v1EvaluationCount: evaluations.length,
+    v2ProjectionCount: projections.length,
+    matchedSubjectCount: 0,
+    v1OnlyCount: 0,
+    v2OnlyCount: 0,
+    agreementCount: 0,
+    disagreementCount: 0,
+    nativeV2ConfirmedCount: 0,
+    importedLegacyProjectionCount: 0,
+    conflictSkippedCount: 0,
+    suggestedSkippedCount: 0,
+    directTurnBindingCount: 0,
+    timestampFallbackCount: 0,
+    missingTurnCount: 0,
+    deduplicatedCount: 0,
+    importedCount: 0,
+  };
+  if (projectionHistoryFallback) {
+    warnings.push({ code: "projection-history-fallback" });
+  }
+
+  const interviewerTurns = turns
+    .filter(
+      (turn) =>
+        turn.speaker === "them" &&
+        turn.isFinal !== false &&
+        Boolean(turn.text.trim())
+    )
+    .sort(
+      (left, right) =>
+        left.startedAt - right.startedAt || left.id.localeCompare(right.id)
+    );
+  const interviewerTurnById = new Map(
+    interviewerTurns.map((turn) => [turn.id, turn])
+  );
+  const v1ByKey = new Map<string, PrivateQuestionEvaluationRecord>();
+  for (const evaluation of evaluations) {
+    const key = `question:${evaluation.questionId}`;
+    const previous = v1ByKey.get(key);
+    if (previous) {
+      stats.deduplicatedCount += 1;
+      warnings.push({
+        code: "duplicate-sample-suppressed",
+        subjectKey: key,
+        detail: "duplicate-v1-evaluation",
+      });
+    }
+    if (!previous || evaluation.createdAt >= previous.createdAt) {
+      v1ByKey.set(key, evaluation);
+    }
+  }
+
+  const v2ByKey = new Map<
+    string,
+    PrivateHumanEvaluationProjectionRecord
+  >();
+  for (const projection of projections) {
+    const key = resolvePrivateProjectionSubjectKey(
+      projection,
+      evaluations
+    );
+    if (!key) {
+      warnings.push({
+        code: "ambiguous-subject-match",
+        detail: projection.projectionId,
+      });
+      continue;
+    }
+    const previous = v2ByKey.get(key);
+    if (previous) {
+      stats.deduplicatedCount += 1;
+      warnings.push({
+        code: "duplicate-sample-suppressed",
+        subjectKey: key,
+        detail: "duplicate-v2-projection",
+      });
+    }
+    if (
+      !previous ||
+      (projection.computedAt ?? 0) >= (previous.computedAt ?? 0)
+    ) {
+      v2ByKey.set(key, projection);
+    }
+  }
+
+  const subjectKeys = Array.from(
+    new Set([...v1ByKey.keys(), ...v2ByKey.keys()])
+  ).sort();
+  for (const subjectKey of subjectKeys) {
+    const evaluation = v1ByKey.get(subjectKey);
+    const projection = v2ByKey.get(subjectKey);
+    if (evaluation && projection) stats.matchedSubjectCount += 1;
+
+    const v1Type = evaluation
+      ? resolveReviewedQuestionType(evaluation)
+      : undefined;
+    const v2Resolution = projection
+      ? resolveProjectionQuestionType(projection, subjectKey, warnings, stats)
+      : undefined;
+    const v2Label = v2Resolution?.label;
+    if (v1Type && !v2Label) {
+      stats.v1OnlyCount += 1;
+      warnings.push({ code: "v1-only-evaluation", subjectKey });
+    }
+    if (v2Label && !v1Type) {
+      stats.v2OnlyCount += 1;
+      warnings.push({ code: "v2-only-projection", subjectKey });
+    }
+    if (projection && v2Resolution?.blocked && !v2Label) {
+      continue;
+    }
+    if (v1Type && v2Label) {
+      if (v1Type === v2Label.expectedType) {
+        stats.agreementCount += 1;
+      } else {
+        stats.disagreementCount += 1;
+        warnings.push({
+          code: "v1-v2-type-disagreement",
+          subjectKey,
+          detail: `${v1Type}->${v2Label.expectedType}`,
+        });
+      }
+    }
+
+    const useV2 =
+      Boolean(v2Label) &&
+      (!v2Label?.importedLegacy || !evaluation);
+    const expectedType = useV2 ? v2Label?.expectedType : v1Type;
+    if (!expectedType) {
+      skipped.push({
+        evaluationId:
+          evaluation?.id ?? projection?.projectionId ?? subjectKey,
+        reason: "missing-reviewed-label",
+      });
+      continue;
+    }
+
+    let sourceTurns: PrivateTranscriptTurnRecord[] = [];
+    let usedTimestampFallback = false;
+    if (useV2 && projection) {
+      sourceTurns = uniqueStrings(projection.subject?.sourceTurnIds ?? [])
+        .map((turnId) => interviewerTurnById.get(turnId))
+        .filter(
+          (turn): turn is PrivateTranscriptTurnRecord => Boolean(turn)
+        )
+        .sort(
+          (left, right) =>
+            left.startedAt - right.startedAt ||
+            left.id.localeCompare(right.id)
+        );
+      if (sourceTurns.length) {
+        stats.directTurnBindingCount += 1;
+      } else if (v2Label?.recordedAt !== undefined) {
+        const fallback = findNearestPriorTurn(
+          interviewerTurns,
+          v2Label.recordedAt,
+          maximumTurnDistanceMs
+        );
+        if (fallback) {
+          sourceTurns = [fallback];
+          usedTimestampFallback = true;
+          stats.timestampFallbackCount += 1;
+        }
+      }
+    } else if (evaluation) {
+      const fallback = findNearestPriorTurn(
+        interviewerTurns,
+        evaluation.createdAt,
+        maximumTurnDistanceMs
+      );
+      if (fallback) {
+        sourceTurns = [fallback];
+        usedTimestampFallback = true;
+        stats.timestampFallbackCount += 1;
+      }
+    }
+    if (!sourceTurns.length) {
+      stats.missingTurnCount += 1;
+      warnings.push({ code: "missing-source-turn", subjectKey });
+      skipped.push({
+        evaluationId:
+          evaluation?.id ?? projection?.projectionId ?? subjectKey,
+        reason: "missing-nearby-interviewer-turn",
+      });
+      continue;
+    }
+
+    const text = sourceTurns
+      .map((turn) => turn.text.trim())
+      .filter(Boolean)
+      .join(" ");
+    const corrected = Boolean(evaluation?.correctedQuestionType);
+    examples.push({
+      id: `private-${stableHash(
+        `${sessionId}:${subjectKey}:${sourceTurns
+          .map((turn) => turn.id)
+          .join(",")}`
+      ).toString(16)}`,
+      groupId: `private:${sessionId}:${subjectKey.replace(
+        /^(?:question|projection|source):/,
+        ""
+      )}`,
+      text,
+      expectedType,
+      language: detectTaxonomyEvaluationLanguage(text),
+      answerableTechnical: TECHNICAL_TYPES.has(expectedType),
+      tags: [
+        "human-reviewed",
+        useV2 ? "v2-active-projection" : "v1-compatible-label",
+        ...(usedTimestampFallback ? ["timestamp-fallback"] : []),
+        ...(corrected ? ["manual-correction"] : []),
+        ...(evaluation?.classification?.reasons ?? []).map(
+          (reason) => `reason:${reason}`
+        ),
+        ...(evaluation?.manualQuestionTypeCorrectionSource
+          ? [
+              `correction-source:${evaluation.manualQuestionTypeCorrectionSource}`,
+            ]
+          : []),
+      ],
+      source: "private-session",
+    });
+  }
+
+  stats.importedCount = examples.length;
+  return { examples, skipped, warnings, stats };
+}
+
 export function detectTaxonomyEvaluationLanguage(
   text: string
 ): TaxonomyEvaluationLanguage {
@@ -327,6 +649,105 @@ function resolveReviewedQuestionType(
   return undefined;
 }
 
+function resolveProjectionQuestionType(
+  projection: PrivateHumanEvaluationProjectionRecord,
+  subjectKey: string,
+  warnings: PrivateTaxonomyImportWarning[],
+  stats: PrivateTaxonomySessionImportStats
+) {
+  const conflictKinds = new Set(
+    (projection.conflicts ?? [])
+      .map((conflict) => conflict.factKind)
+      .filter((value): value is string => Boolean(value))
+  );
+  const candidates = [
+    projection.activeFacts?.["expected-task-settlement"],
+    projection.activeFacts?.["expected-question-type"],
+  ];
+  let blocked = false;
+  for (const candidate of candidates) {
+    if (!candidate?.fact?.kind) continue;
+    if (conflictKinds.has(candidate.fact.kind)) {
+      blocked = true;
+      stats.conflictSkippedCount += 1;
+      warnings.push({
+        code: "v2-conflicting-facts",
+        subjectKey,
+        detail: candidate.fact.kind,
+      });
+      continue;
+    }
+    if (candidate.confirmation !== "confirmed") {
+      blocked = true;
+      stats.suggestedSkippedCount += 1;
+      warnings.push({
+        code: "v2-suggested-type-skipped",
+        subjectKey,
+        detail: candidate.fact.kind,
+      });
+      continue;
+    }
+    const expectedType = normalizeCanonicalQuestionType(
+      candidate.fact.expectedQuestionType
+    );
+    if (!expectedType) continue;
+    const importedLegacy =
+      candidate.provenance?.source === "imported-legacy";
+    if (importedLegacy) {
+      stats.importedLegacyProjectionCount += 1;
+      warnings.push({
+        code: "v2-imported-legacy-fallback",
+        subjectKey,
+      });
+    } else {
+      stats.nativeV2ConfirmedCount += 1;
+    }
+    return {
+      blocked: false,
+      label: {
+        expectedType,
+        importedLegacy,
+        recordedAt:
+          typeof candidate.provenance?.recordedAt === "number"
+            ? candidate.provenance.recordedAt
+            : undefined,
+      },
+    };
+  }
+  return { blocked, label: undefined };
+}
+
+function resolvePrivateProjectionSubjectKey(
+  projection: PrivateHumanEvaluationProjectionRecord,
+  evaluations: PrivateQuestionEvaluationRecord[]
+) {
+  const questionId = projection.subject?.questionId?.trim();
+  if (questionId) return `question:${questionId}`;
+
+  const traceIds = new Set(
+    uniqueStrings(projection.subject?.traceIds ?? [])
+  );
+  if (traceIds.size) {
+    const matchingEvaluations = evaluations.filter((evaluation) =>
+      (evaluation.traceIds ?? []).some((traceId) => traceIds.has(traceId))
+    );
+    if (matchingEvaluations.length === 1) {
+      return `question:${matchingEvaluations[0].questionId}`;
+    }
+    if (matchingEvaluations.length > 1) return undefined;
+  }
+
+  const sourceTurnIds = uniqueStrings(
+    projection.subject?.sourceTurnIds ?? []
+  ).sort();
+  if (sourceTurnIds.length) {
+    return `source:${sourceTurnIds.join(",")}`;
+  }
+  return projection.projectionId
+    ? `projection:${projection.projectionId}`
+    : undefined;
+}
+
 function findNearestPriorTurn(
   turns: PrivateTranscriptTurnRecord[],
   timestamp: number,
@@ -339,6 +760,17 @@ function findNearestPriorTurn(
     return turn;
   }
   return undefined;
+}
+
+function uniqueStrings(values: string[]) {
+  return Array.from(
+    new Set(
+      values.filter(
+        (value): value is string =>
+          typeof value === "string" && Boolean(value.trim())
+      )
+    )
+  );
 }
 
 function createConfusionMatrix() {

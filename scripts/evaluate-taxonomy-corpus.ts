@@ -3,8 +3,9 @@ import path from "node:path";
 import process from "node:process";
 import {
   evaluateTaxonomyCorpus,
-  importPrivateTaxonomyCorpus,
+  importPrivateTaxonomySessionCorpus,
   splitTaxonomyEvaluationCorpus,
+  type PrivateHumanEvaluationProjectionRecord,
   type PrivateQuestionEvaluationRecord,
   type PrivateTranscriptTurnRecord,
   type TaxonomyEvaluationExample,
@@ -22,36 +23,50 @@ async function main() {
   const imports: Array<{
     sessionDirectory: string;
     imported: number;
-    skipped: ReturnType<typeof importPrivateTaxonomyCorpus>["skipped"];
+    skipped: ReturnType<
+      typeof importPrivateTaxonomySessionCorpus
+    >["skipped"];
+    warnings: ReturnType<
+      typeof importPrivateTaxonomySessionCorpus
+    >["warnings"];
+    stats: ReturnType<typeof importPrivateTaxonomySessionCorpus>["stats"];
+    sources: {
+      v1: "snapshot" | "history" | "missing";
+      v2: "snapshot" | "history" | "missing";
+    };
   }> = [];
 
   for (const sessionDirectory of options.sessionDirectories) {
-    const evaluationsPayload = JSON.parse(
-      await readFile(
-        path.join(
-          sessionDirectory,
-          "human-evaluation",
-          "question-evaluations.json"
-        ),
-        "utf8"
-      )
-    ) as {
-      sessionId?: string;
-      evaluations?: PrivateQuestionEvaluationRecord[];
-    };
+    const evaluationsPayload =
+      await readEvaluationSnapshot(sessionDirectory);
+    const projectionsPayload =
+      await readProjectionSnapshot(sessionDirectory);
     const turns = await readJsonLines<PrivateTranscriptTurnRecord>(
       path.join(sessionDirectory, "transcripts", "turns.jsonl")
     );
-    const imported = importPrivateTaxonomyCorpus({
-      sessionId: evaluationsPayload.sessionId ?? path.basename(sessionDirectory),
+    const sessionId =
+      projectionsPayload.payload?.sessionId ??
+      projectionsPayload.projections[0]?.sessionId ??
+      evaluationsPayload.payload?.sessionId ??
+      path.basename(sessionDirectory);
+    const imported = importPrivateTaxonomySessionCorpus({
+      sessionId,
       evaluations: evaluationsPayload.evaluations ?? [],
+      projections: projectionsPayload.projections,
       turns,
+      projectionHistoryFallback: projectionsPayload.source === "history",
     });
     examples.push(...imported.examples);
     imports.push({
       sessionDirectory,
       imported: imported.examples.length,
       skipped: imported.skipped,
+      warnings: imported.warnings,
+      stats: imported.stats,
+      sources: {
+        v1: evaluationsPayload.source,
+        v2: projectionsPayload.source,
+      },
     });
   }
 
@@ -62,7 +77,7 @@ async function main() {
   await mkdir(options.outputDirectory, { recursive: true });
   await writeJson(
     path.join(options.outputDirectory, "private-taxonomy-corpus.json"),
-    { version: 1, generatedAt: Date.now(), imports, examples, splits }
+    { version: 2, generatedAt: Date.now(), imports, examples, splits }
   );
   await writeJson(
     path.join(options.outputDirectory, "lexical-baseline.json"),
@@ -77,6 +92,22 @@ async function main() {
         importedSessions: imports.length,
         skippedEvaluations: imports.reduce(
           (total, item) => total + item.skipped.length,
+          0
+        ),
+        importWarnings: imports.reduce(
+          (total, item) => total + item.warnings.length,
+          0
+        ),
+        v1OnlySamples: imports.reduce(
+          (total, item) => total + item.stats.v1OnlyCount,
+          0
+        ),
+        v2OnlySamples: imports.reduce(
+          (total, item) => total + item.stats.v2OnlyCount,
+          0
+        ),
+        v1V2Disagreements: imports.reduce(
+          (total, item) => total + item.stats.disagreementCount,
           0
         ),
         accuracy: report.metrics.accuracy,
@@ -119,6 +150,121 @@ async function readJsonLines<T>(filePath: string) {
     .split(/\r?\n/)
     .filter(Boolean)
     .map((line) => JSON.parse(line) as T);
+}
+
+async function readOptionalJson<T>(filePath: string): Promise<T | undefined> {
+  try {
+    return JSON.parse(await readFile(filePath, "utf8")) as T;
+  } catch (error) {
+    if (isMissingFileError(error)) return undefined;
+    throw error;
+  }
+}
+
+async function readOptionalJsonLines<T>(filePath: string): Promise<T[]> {
+  try {
+    return await readJsonLines<T>(filePath);
+  } catch (error) {
+    if (isMissingFileError(error)) return [];
+    throw error;
+  }
+}
+
+async function readEvaluationSnapshot(sessionDirectory: string) {
+  const snapshot = await readOptionalJson<{
+    sessionId?: string;
+    evaluations?: PrivateQuestionEvaluationRecord[];
+  }>(
+    path.join(
+      sessionDirectory,
+      "human-evaluation",
+      "question-evaluations.json"
+    )
+  );
+  if (snapshot) {
+    return {
+      payload: snapshot,
+      evaluations: snapshot.evaluations ?? [],
+      source: "snapshot" as const,
+    };
+  }
+
+  const history = await readOptionalJsonLines<{
+    sessionId?: string;
+    evaluations?: PrivateQuestionEvaluationRecord[];
+  }>(
+    path.join(
+      sessionDirectory,
+      "human-evaluation",
+      "question-evaluations.jsonl"
+    )
+  );
+  const latest = [...history]
+    .reverse()
+    .find((entry) => Array.isArray(entry.evaluations));
+  return {
+    payload: latest,
+    evaluations: latest?.evaluations ?? [],
+    source: latest ? ("history" as const) : ("missing" as const),
+  };
+}
+
+async function readProjectionSnapshot(sessionDirectory: string) {
+  const snapshot = await readOptionalJson<{
+    sessionId?: string;
+    projections?: PrivateHumanEvaluationProjectionRecord[];
+  }>(
+    path.join(
+      sessionDirectory,
+      "human-evaluation",
+      "projections-v2.json"
+    )
+  );
+  if (snapshot) {
+    return {
+      payload: snapshot,
+      projections: snapshot.projections ?? [],
+      source: "snapshot" as const,
+    };
+  }
+
+  const history =
+    await readOptionalJsonLines<PrivateHumanEvaluationProjectionRecord>(
+      path.join(
+        sessionDirectory,
+        "human-evaluation",
+        "projections-v2.jsonl"
+      )
+    );
+  const latestByProjectionId = new Map<
+    string,
+    PrivateHumanEvaluationProjectionRecord
+  >();
+  for (const projection of history) {
+    if (!projection?.projectionId) continue;
+    const previous = latestByProjectionId.get(projection.projectionId);
+    if (
+      !previous ||
+      (projection.computedAt ?? 0) >= (previous.computedAt ?? 0)
+    ) {
+      latestByProjectionId.set(projection.projectionId, projection);
+    }
+  }
+  const projections = Array.from(latestByProjectionId.values());
+  return {
+    payload: undefined,
+    projections,
+    source: projections.length ? ("history" as const) : ("missing" as const),
+  };
+}
+
+function isMissingFileError(error: unknown) {
+  return (
+    error !== null &&
+    typeof error === "object" &&
+    "code" in error &&
+    error.code === "ENOENT"
+  );
 }
 
 async function writeJson(filePath: string, value: unknown) {

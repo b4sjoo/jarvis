@@ -5,6 +5,7 @@ import {
   detectTaxonomyEvaluationLanguage,
   evaluateTaxonomyCorpus,
   importPrivateTaxonomyCorpus,
+  importPrivateTaxonomySessionCorpus,
   splitTaxonomyEvaluationCorpus,
 } from "../src/lib/meeting/taxonomy-evaluation.js";
 import { inferQuestionTypeDecisionFromText } from "../src/lib/meeting/task-taxonomy.js";
@@ -153,6 +154,198 @@ test("does not attach an evaluation to a stale transcript turn", () => {
       reason: "missing-nearby-interviewer-turn",
     },
   ]);
+});
+
+test("prefers confirmed native V2 labels and binds their exact source turns", () => {
+  const result = importPrivateTaxonomySessionCorpus({
+    sessionId: "session-v2",
+    evaluations: [
+      {
+        id: "eval-1",
+        questionId: "question-1",
+        questionType: "general-system-design",
+        classification: { verdict: "ok" },
+        createdAt: 700,
+      },
+    ],
+    projections: [
+      {
+        projectionId: "projection-1",
+        subject: {
+          questionId: "question-1",
+          sourceTurnIds: ["turn-1", "turn-2"],
+        },
+        activeFacts: {
+          "expected-task-settlement": {
+            confirmation: "confirmed",
+            fact: {
+              kind: "expected-task-settlement",
+              expectedQuestionType: "ai-ml-system-design",
+            },
+            provenance: {
+              source: "explicit-ui",
+              recordedAt: 800,
+            },
+          },
+        },
+        conflicts: [],
+        computedAt: 900,
+      },
+    ],
+    turns: [
+      {
+        id: "turn-1",
+        speaker: "them",
+        text: "Design a recommendation agent",
+        startedAt: 100,
+        endedAt: 200,
+      },
+      {
+        id: "turn-2",
+        speaker: "them",
+        text: "that learns from user feedback.",
+        startedAt: 210,
+        endedAt: 300,
+      },
+    ],
+  });
+
+  assert.equal(result.examples.length, 1);
+  assert.equal(result.examples[0].expectedType, "ai-ml-system-design");
+  assert.equal(
+    result.examples[0].text,
+    "Design a recommendation agent that learns from user feedback."
+  );
+  assert.equal(result.examples[0].groupId, "private:session-v2:question-1");
+  assert.ok(result.examples[0].tags.includes("v2-active-projection"));
+  assert.equal(result.stats.matchedSubjectCount, 1);
+  assert.equal(result.stats.disagreementCount, 1);
+  assert.equal(result.stats.nativeV2ConfirmedCount, 1);
+  assert.equal(result.stats.directTurnBindingCount, 1);
+  assert.ok(
+    result.warnings.some(
+      (warning) => warning.code === "v1-v2-type-disagreement"
+    )
+  );
+});
+
+test("deduplicates imported legacy V2 mirrors and skips unresolved V2 labels", () => {
+  const result = importPrivateTaxonomySessionCorpus({
+    sessionId: "session-mixed",
+    evaluations: [
+      {
+        id: "eval-legacy",
+        questionId: "question-legacy",
+        questionType: "coding",
+        classification: { verdict: "ok" },
+        createdAt: 300,
+      },
+    ],
+    projections: [
+      {
+        projectionId: "projection-legacy",
+        subject: {
+          questionId: "question-legacy",
+          sourceTurnIds: ["turn-coding"],
+        },
+        activeFacts: {
+          "expected-question-type": {
+            confirmation: "confirmed",
+            fact: {
+              kind: "expected-question-type",
+              expectedQuestionType: "coding",
+            },
+            provenance: {
+              source: "imported-legacy",
+              recordedAt: 300,
+            },
+          },
+        },
+        conflicts: [],
+        computedAt: 400,
+      },
+      {
+        projectionId: "projection-suggested",
+        subject: {
+          questionId: "question-suggested",
+          sourceTurnIds: ["turn-suggested"],
+        },
+        activeFacts: {
+          "expected-task-settlement": {
+            confirmation: "suggested",
+            fact: {
+              kind: "expected-task-settlement",
+              expectedQuestionType: "field-knowledge",
+            },
+            provenance: {
+              source: "explicit-ui",
+              recordedAt: 500,
+            },
+          },
+        },
+        conflicts: [],
+        computedAt: 500,
+      },
+      {
+        projectionId: "projection-conflict",
+        subject: {
+          questionId: "question-conflict",
+          sourceTurnIds: ["turn-conflict"],
+        },
+        activeFacts: {
+          "expected-task-settlement": {
+            confirmation: "confirmed",
+            fact: {
+              kind: "expected-task-settlement",
+              expectedQuestionType: "behavioral",
+            },
+            provenance: {
+              source: "explicit-ui",
+              recordedAt: 600,
+            },
+          },
+        },
+        conflicts: [{ factKind: "expected-task-settlement" }],
+        computedAt: 600,
+      },
+    ],
+    turns: [
+      {
+        id: "turn-coding",
+        speaker: "them",
+        text: "Implement a stack.",
+        startedAt: 100,
+        endedAt: 200,
+      },
+      {
+        id: "turn-suggested",
+        speaker: "them",
+        text: "Explain HNSW.",
+        startedAt: 400,
+        endedAt: 450,
+      },
+      {
+        id: "turn-conflict",
+        speaker: "them",
+        text: "Tell me about a conflict.",
+        startedAt: 500,
+        endedAt: 550,
+      },
+    ],
+  });
+
+  assert.equal(result.examples.length, 1);
+  assert.equal(result.examples[0].expectedType, "coding");
+  assert.ok(result.examples[0].tags.includes("v1-compatible-label"));
+  assert.equal(result.stats.importedLegacyProjectionCount, 1);
+  assert.equal(result.stats.suggestedSkippedCount, 1);
+  assert.equal(result.stats.conflictSkippedCount, 1);
+  assert.equal(result.stats.importedCount, 1);
+  assert.ok(
+    result.warnings.some(
+      (warning) => warning.code === "v2-imported-legacy-fallback"
+    )
+  );
 });
 
 test("detects English, Chinese, and code-mixed corpus slices", () => {
