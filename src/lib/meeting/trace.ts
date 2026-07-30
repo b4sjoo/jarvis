@@ -303,6 +303,11 @@ export interface MeetingTraceKindSummary {
 export interface MeetingAnswerStabilitySummary {
   unauthorizedVisibleRefreshCount: number;
   visibleRefreshWithoutPrimaryAskCount: number;
+  visibleRefreshWithoutPrimaryAskByAuthority: Record<string, number>;
+  suppressionRecommendedVisibleRefreshCount: number;
+  primaryAskProjectionDisagreementCount: number;
+  runtimeIntentContradictedVisibleRefreshCount: number;
+  manualHardOverrideRefreshCount: number;
   staleGenerationCommitAttemptCount: number;
   staleGenerationCommitRejectedCount: number;
   codeMutationWithoutCodeIntentCount: number;
@@ -313,12 +318,25 @@ export interface MeetingAnswerStabilitySummary {
   answerDwellMs: MeetingTraceValueSummary;
 }
 
+export interface MeetingShortIntentSummary {
+  canonicalFillerSuppressedCount: number;
+  shortHighInformationAllowedCount: number;
+  residualShortIntentAdjudicationCount: number;
+  residualShortIntentIgnoreCount: number;
+  residualShortIntentAnswerCount: number;
+  intentGateBudgetExhaustedCount: number;
+  intentGateTimeoutCount: number;
+  intentGateDecisionAppliedCount: number;
+  intentGateDurationMs: MeetingTraceValueSummary;
+}
+
 export interface MeetingTraceSummary {
   windowSize: number;
   traceCount: number;
   syntheticValidationTraceCount: number;
   screen: MeetingTraceKindSummary;
   voice: MeetingTraceKindSummary;
+  shortIntent: MeetingShortIntentSummary;
   answerStability: MeetingAnswerStabilitySummary;
 }
 
@@ -577,6 +595,7 @@ export function summarizeMeetingTraces(
       recentTraces.filter((trace) => trace.kind === "voice"),
       "voice"
     ),
+    shortIntent: summarizeShortIntent(recentTraces),
     answerStability: summarizeAnswerStability(recentTraces),
   };
 }
@@ -674,6 +693,12 @@ function summarizeAnswerStability(
   const metadata = traces.map((trace) => trace.metadata ?? {});
   const count = (predicate: (value: Record<string, unknown>) => boolean) =>
     metadata.filter(predicate).length;
+  const visibleRefreshWithoutPrimaryAsk = (
+    value: Record<string, unknown>
+  ) =>
+    value.visibleAnswerChanged === true &&
+    value.primaryAskSpanCount === 0 &&
+    value.refreshAuthorityHardOverride !== true;
 
   return {
     unauthorizedVisibleRefreshCount: count(
@@ -682,10 +707,39 @@ function summarizeAnswerStability(
         value.refreshAuthorityAuthorized === false
     ),
     visibleRefreshWithoutPrimaryAskCount: count(
+      visibleRefreshWithoutPrimaryAsk
+    ),
+    visibleRefreshWithoutPrimaryAskByAuthority:
+      countVisibleRefreshesByAuthority(
+        metadata.filter(visibleRefreshWithoutPrimaryAsk)
+      ),
+    suppressionRecommendedVisibleRefreshCount: count(
+      (value) =>
+        value.visibleAnswerChanged === true &&
+        value.advisorWouldSuppress === true &&
+        value.refreshAuthorityHardOverride !== true
+    ),
+    primaryAskProjectionDisagreementCount: count(
       (value) =>
         value.visibleAnswerChanged === true &&
         value.primaryAskSpanCount === 0 &&
-        value.refreshAuthorityHardOverride !== true
+        value.refreshAuthorityHardOverride !== true &&
+        (value.turnGateAction === "answer-refresh" ||
+          value.advisorTurnIntent === "direct-question" ||
+          value.advisorTurnIntent === "correction" ||
+          value.advisorTurnIntent === "constraint-or-follow-up" ||
+          value.runtimeIntentReleasedAction === "answer")
+    ),
+    runtimeIntentContradictedVisibleRefreshCount: count(
+      (value) =>
+        value.visibleAnswerChanged === true &&
+        (value.runtimeIntentReleasedAction === "ignore" ||
+          value.runtimeIntentReleasedAction === "append-context")
+    ),
+    manualHardOverrideRefreshCount: count(
+      (value) =>
+        value.refreshAuthorityHardOverride === true &&
+        value.visibleAnswerChanged === true
     ),
     staleGenerationCommitAttemptCount: count(
       (value) => value.leaseAuthorizedAtCommit === false
@@ -720,6 +774,62 @@ function summarizeAnswerStability(
         .filter(isNumber)
     ),
   };
+}
+
+function summarizeShortIntent(
+  traces: MeetingTrace[]
+): MeetingShortIntentSummary {
+  const metadata = traces.map((trace) => trace.metadata ?? {});
+  const count = (predicate: (value: Record<string, unknown>) => boolean) =>
+    metadata.filter(predicate).length;
+  return {
+    canonicalFillerSuppressedCount: count(
+      (value) => value.canonicalFillerSuppressed === true
+    ),
+    shortHighInformationAllowedCount: count(
+      (value) => value.shortHighInformationAllowed === true
+    ),
+    residualShortIntentAdjudicationCount: count(
+      (value) => value.residualShortIntentAdjudicationRequired === true
+    ),
+    residualShortIntentIgnoreCount: count(
+      (value) =>
+        value.shortIntentGateDecisionApplied === true &&
+        value.shortIntentGateAppliedAction === "ignore"
+    ),
+    residualShortIntentAnswerCount: count(
+      (value) =>
+        value.shortIntentGateDecisionApplied === true &&
+        value.shortIntentGateAppliedAction === "answer"
+    ),
+    intentGateBudgetExhaustedCount: count(
+      (value) => value.shortIntentGateBudgetExhausted === true
+    ),
+    intentGateTimeoutCount: count(
+      (value) => value.shortIntentGateTimedOut === true
+    ),
+    intentGateDecisionAppliedCount: count(
+      (value) => value.shortIntentGateDecisionApplied === true
+    ),
+    intentGateDurationMs: summarizeValues(
+      metadata
+        .map((value) => readNumber(value.shortIntentGateDurationMs))
+        .filter(isNumber)
+    ),
+  };
+}
+
+function countVisibleRefreshesByAuthority(
+  metadata: Record<string, unknown>[]
+) {
+  return metadata.reduce<Record<string, number>>((counts, value) => {
+    const authority =
+      typeof value.refreshAuthority === "string"
+        ? value.refreshAuthority
+        : "unknown";
+    counts[authority] = (counts[authority] ?? 0) + 1;
+    return counts;
+  }, {});
 }
 
 function sanitizeExportMetadata(metadata: Record<string, unknown> | undefined) {

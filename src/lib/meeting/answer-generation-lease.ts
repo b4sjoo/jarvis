@@ -15,6 +15,7 @@ export type AnswerArtifactSection =
 export type RefreshAuthorityKind =
   | "automatic-substantive"
   | "shadow-fail-open"
+  | "runtime-intent-answer"
   | "manual-hard-override"
   | "screen-hard-override"
   | "denied";
@@ -29,9 +30,11 @@ export interface RefreshAuthorityDecision {
     | "explicit-response-action"
     | "force-advise"
     | "screen-capture"
+    | "runtime-intent-answer"
     | "missing-turn-intent"
     | "turn-intent-not-authorized"
-    | "turn-intent-not-answer-refresh";
+    | "turn-intent-not-answer-refresh"
+    | "shadow-fail-open-disallowed";
   hardOverride: boolean;
   maySupersedeGeneration: boolean;
 }
@@ -166,13 +169,22 @@ export function decideRefreshAuthority(input: {
       maySupersedeGeneration: false,
     };
   }
-  if (decision.enforcement === "shadow") {
+  if (decision.authoritySource === "runtime-intent-gate") {
     return {
       authorized: true,
-      kind: "shadow-fail-open",
-      reason: "shadow-fail-open",
+      kind: "runtime-intent-answer",
+      reason: "runtime-intent-answer",
       hardOverride: false,
       maySupersedeGeneration: true,
+    };
+  }
+  if (decision.enforcement === "shadow") {
+    return {
+      authorized: false,
+      kind: "denied",
+      reason: "shadow-fail-open-disallowed",
+      hardOverride: false,
+      maySupersedeGeneration: false,
     };
   }
 

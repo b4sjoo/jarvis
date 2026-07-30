@@ -438,7 +438,7 @@ test("clears the old screen when a voice completion commits a new parent", async
   assert.equal(state.activeMeetingTask?.screen, undefined);
 });
 
-test("shadow low-value execution preserves parent, phase, answer, and whiteboard", async () => {
+test("shadow low-value execution preserves output, parent, phase, answer, and whiteboard", async () => {
   const manager = new MeetingContextManager();
   const whiteboard = {
     id: "whiteboard-1",
@@ -461,7 +461,9 @@ test("shadow low-value execution preserves parent, phase, answer, and whiteboard
   });
   const harness = new MeetingOrchestrationHarness(manager);
   const before = harness.getStateDigest();
-  const intent = decideAdvisorTurnIntent("Hmm.", { hasActiveTask: true });
+  const intent = decideAdvisorTurnIntent("Kubernetes.", {
+    hasActiveTask: true,
+  });
   const authorization = authorizeAdvisorTaskMutation({
     authority: "input-evidence",
     turnIntentDecision: intent,
@@ -513,8 +515,8 @@ test("shadow low-value execution preserves parent, phase, answer, and whiteboard
   const state = manager.getState();
 
   assert.equal(authorization.authorized, false);
-  assert.equal(outputAuthorization.authorized, true);
-  assert.equal(visibleOutput, "shadow model output");
+  assert.equal(outputAuthorization.authorized, false);
+  assert.equal(visibleOutput, "");
   assert.deepEqual(after, before);
   assert.equal(
     state.activeInterviewTask?.latestUsefulAnswer,

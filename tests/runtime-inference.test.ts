@@ -40,6 +40,9 @@ test("registers each atomic runtime operation with an isolated policy", () => {
   const questionType = getRuntimeInferenceOperationDefinition(
     "question-type-adjudication"
   );
+  const shortIntent = getRuntimeInferenceOperationDefinition(
+    "short-intent-gate"
+  );
   const metadata = getRuntimeInferenceOperationDefinition(
     "meeting-metadata-inference"
   );
@@ -56,6 +59,10 @@ test("registers each atomic runtime operation with an isolated policy", () => {
   assert.equal(questionType.timeoutMs, 3_000);
   assert.equal(questionType.maxOutputTokens, 128);
   assert.equal(questionType.quiescenceMs, 350);
+  assert.equal(shortIntent.lane, "critical");
+  assert.equal(shortIntent.timeoutMs, 1_500);
+  assert.equal(shortIntent.maxOutputTokens, 96);
+  assert.equal(shortIntent.quiescenceMs, 0);
   assert.equal(metadata.lane, "background");
   assert.equal(whiteboard.timeoutMs, 3_000);
   assert.equal(whiteboard.maxOutputTokens, 768);
@@ -115,6 +122,10 @@ test("isolates quota consumption by operation", async () => {
     RuntimeInferenceRuntimeJob,
     string
   >("task-relation-adjudication");
+  const shortIntent = new RuntimeInferenceOperationRuntime<
+    RuntimeInferenceRuntimeJob,
+    string
+  >("short-intent-gate");
   const settlements: string[] = [];
 
   const schedule = (
@@ -158,6 +169,10 @@ test("isolates quota consumption by operation", async () => {
     taskRelation,
     runtimeJob("task-relation-adjudication", "task-relation-1")
   );
+  schedule(
+    shortIntent,
+    runtimeJob("short-intent-gate", "short-intent-1")
+  );
   await new Promise((resolve) => setTimeout(resolve, 15));
 
   assert.deepEqual(settlements, [
@@ -166,6 +181,7 @@ test("isolates quota consumption by operation", async () => {
     "meeting-metadata-inference:completed",
     "question-type-adjudication:completed",
     "task-relation-adjudication:completed",
+    "short-intent-gate:completed",
   ]);
 });
 

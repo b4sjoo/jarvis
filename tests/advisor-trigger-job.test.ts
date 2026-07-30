@@ -282,8 +282,8 @@ test("manual correction remains the only explicit retype authority", () => {
   assert.equal(inputEvidence.relation, "new-parent");
 });
 
-test("shadow execution cannot authorize canonical task or phase mutation", () => {
-  const turnIntentDecision = decideAdvisorTurnIntent("Hmm.", {
+test("shadow execution cannot authorize output, task, or phase mutation", () => {
+  const turnIntentDecision = decideAdvisorTurnIntent("Kubernetes.", {
     hasActiveTask: true,
   });
   const authorization = authorizeAdvisorTaskMutation({
@@ -337,8 +337,42 @@ test("shadow execution cannot authorize canonical task or phase mutation", () =>
       turnIntentDecision,
     }),
     {
+      authorized: false,
+      reason: "execution-not-authorized",
+    }
+  );
+});
+
+test("runtime intent answer can commit output without mutating task state", () => {
+  const local = decideAdvisorTurnIntent("Kubernetes.", {
+    hasActiveTask: true,
+  });
+  const released = {
+    ...local,
+    action: "answer-refresh" as const,
+    recommendedAction: "answer-refresh" as const,
+    enforcement: "allow" as const,
+    wouldSuppress: false,
+    executionAuthorized: true,
+    authoritySource: "runtime-intent-gate" as const,
+  };
+
+  assert.deepEqual(
+    authorizeAdvisorTaskMutation({
+      authority: "runtime-intent-answer",
+      turnIntentDecision: released,
+    }),
+    { authorized: false, reason: "runtime-intent-action-only" }
+  );
+  assert.deepEqual(
+    authorizeAdvisorOutputCommit({
+      authority: "runtime-intent-answer",
+      executionAuthorized: true,
+      turnIntentDecision: released,
+    }),
+    {
       authorized: true,
-      reason: "shadow-fail-open-output-authority",
+      reason: "runtime-intent-answer-output-authority",
     }
   );
 });

@@ -33,6 +33,7 @@ export interface AdvisorTurnIntentDecision {
   wouldSuppress: boolean;
   executionAuthorized: boolean;
   followupScopeSource?: "active-task" | "provisional-question" | "none";
+  authoritySource?: "local" | "runtime-intent-gate";
 }
 
 export interface AdvisorTurnIntentOptions {
@@ -350,6 +351,7 @@ export function formatAdvisorTurnIntentForTrace(
     advisorTurnRecommendedAction: decision.recommendedAction,
     advisorWouldSuppress: decision.wouldSuppress,
     advisorExecutionAuthorized: decision.executionAuthorized,
+    advisorIntentAuthoritySource: decision.authoritySource ?? "local",
     followupScopeSource: decision.followupScopeSource ?? "none",
     advisorSuppressionOperation: exactAcknowledgementSuppressed
       ? "exact-acknowledgement"
@@ -392,6 +394,7 @@ function allowedDecision({
     enforcement: "allow",
     wouldSuppress: false,
     executionAuthorized: action === "answer-refresh",
+    authoritySource: "local",
   };
 }
 
@@ -421,6 +424,7 @@ function enforcedDecision({
     enforcement: "enforce",
     wouldSuppress: true,
     executionAuthorized: false,
+    authoritySource: "local",
   };
 }
 
@@ -450,6 +454,7 @@ function shadowDecision({
     enforcement: "shadow",
     wouldSuppress: true,
     executionAuthorized: true,
+    authoritySource: "local",
   };
 }
 
@@ -598,7 +603,9 @@ function collectDeclarativeEvidence(normalized: string) {
 
 export function isExactLowValueAcknowledgement(text: string) {
   const normalized = normalizeAdvisorTurnText(text);
-  const normalizedAcknowledgement = normalized.replace(/[.]+$/u, "");
+  const normalizedAcknowledgement = canonicalizeAcknowledgement(
+    normalized.replace(/[.]+$/u, "")
+  );
   const repeatedTokens = normalizedAcknowledgement
     .split(" ")
     .filter(Boolean);
@@ -613,8 +620,8 @@ export function isExactLowValueAcknowledgement(text: string) {
     return true;
   }
   if (
-    /^(ah|eh|er|hmm|mm|mhm|uh|um|yeah|yep|yes|no|ok|okay|right|sure|cool|great|nice|perfect|all good|sounds good|that sounds good|that is nice|that s nice|i see|got it|make sense|makes sense|thank you|thanks)$/i.test(
-      normalized
+    /^(ah|eh|er|hmm|mm|mhm|uh|um|yeah|yep|yes|no|ok|okay|right|sure|cool|great|nice|perfect|all good|of course|sounds good|that sounds good|that is nice|that s nice|i see|got it|make sense|makes sense|thank you|thanks|hello|hi|good morning|good afternoon|good evening|good monday)$/i.test(
+      normalizedAcknowledgement
     )
   ) {
     return true;
@@ -622,6 +629,26 @@ export function isExactLowValueAcknowledgement(text: string) {
   return /^(looks good|looks good to me|that looks good|that looks good to me|this looks good|this looks good to me|sounds good|sounds good to me|that sounds good|that sounds good to me|this sounds good|this sounds good to me)$/i.test(
     normalizedAcknowledgement
   );
+}
+
+function canonicalizeAcknowledgement(text: string) {
+  const acousticFamily = text
+    .replace(/\bmm\s*hmm\b/giu, "mhm")
+    .replace(/\bmmhmm\b/giu, "mhm")
+    .replace(/\bm\s*hm\b/giu, "mhm")
+    .replace(/\buh\s*huh\b/giu, "uh")
+    .replace(/\buhhuh\b/giu, "uh")
+    .trim();
+  const words = acousticFamily.split(" ").filter(Boolean);
+  if (
+    words.length >= 4 &&
+    words.length % 2 === 0 &&
+    words.slice(0, words.length / 2).join(" ") ===
+      words.slice(words.length / 2).join(" ")
+  ) {
+    return words.slice(0, words.length / 2).join(" ");
+  }
+  return acousticFamily;
 }
 
 function isMeetingLogistics(normalized: string) {

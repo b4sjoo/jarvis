@@ -523,7 +523,7 @@ test("records whiteboard validation and recovery artifacts", async () => {
   );
   assert.ok(summaryWrite);
   const summary = parsePayload(summaryWrite);
-  assert.equal(summary.version, 30);
+  assert.equal(summary.version, 31);
   assert.deepEqual(summary.whiteboard, {
     artifactId: "whiteboard_1",
     revision: 1,
@@ -713,6 +713,16 @@ test("session summaries retain answer delivery and artifact stability evidence",
       answerSectionRevision: 2,
       codeSectionRevision: 1,
       answerDwellMs: 5_400,
+      advisorIntentAuthoritySource: "runtime-intent-gate",
+      shortIntentLocalDisposition: "runtime-required",
+      residualShortIntentAdjudicationRequired: true,
+      shortIntentGateDisposition: "completed",
+      shortIntentGateAction: "answer",
+      shortIntentGateConfidence: 0.96,
+      shortIntentGateDecisionApplied: true,
+      shortIntentGateAppliedAction: "answer",
+      shortIntentGateDurationMs: 810,
+      runtimeIntentReleasedAction: "answer",
     }),
     "manual"
   );
@@ -736,6 +746,8 @@ test("session summaries retain answer delivery and artifact stability evidence",
   assert.equal(compact.answerDeliveryLockState, "update-ready");
   assert.deepEqual(compact.authorizedArtifacts, ["answer"]);
   assert.equal(compact.answerSectionRevision, 2);
+  assert.equal(compact.advisorIntentAuthoritySource, "runtime-intent-gate");
+  assert.equal(compact.shortIntentGateAppliedAction, "answer");
 
   const sessionSummaryCalls = native.calls.filter(
     (call) =>
@@ -753,6 +765,16 @@ test("session summaries retain answer delivery and artifact stability evidence",
   assert.equal(stability.deliveryLockCount, 1);
   assert.equal(stability.pendingCommitCount, 1);
   assert.equal(stability.answerDwellMs.p50, 5_400);
+  const shortIntent = sessionSummary.shortIntent as {
+    residualShortIntentAdjudicationCount: number;
+    residualShortIntentAnswerCount: number;
+    intentGateDecisionAppliedCount: number;
+    intentGateDurationMs: { p50?: number };
+  };
+  assert.equal(shortIntent.residualShortIntentAdjudicationCount, 1);
+  assert.equal(shortIntent.residualShortIntentAnswerCount, 1);
+  assert.equal(shortIntent.intentGateDecisionAppliedCount, 1);
+  assert.equal(shortIntent.intentGateDurationMs.p50, 810);
 
   manager.recordHumanEvaluations([
     {
@@ -1287,7 +1309,7 @@ test("compact trace summaries preserve task boundary and cross-domain evidence",
   );
   assert.ok(summaryWrite);
   const summary = parsePayload(summaryWrite);
-  assert.equal(summary.version, 30);
+  assert.equal(summary.version, 31);
   assert.equal(summary.taskRelation, "new-parent");
   assert.equal(summary.logicalQuestionUnitRevision, 3);
   assert.deepEqual(summary.logicalQuestionSourceTurnIds, ["turn_1", "turn_2"]);
@@ -1494,7 +1516,7 @@ test("compact trace summaries preserve bounded STT request evidence", async () =
   );
   assert.ok(summaryWrite);
   const summary = parsePayload(summaryWrite);
-  assert.equal(summary.version, 30);
+  assert.equal(summary.version, 31);
   assert.equal(
     (summary.timingsMs as Record<string, unknown>).stt,
     1_580
@@ -1636,7 +1658,7 @@ test("refreshes compact STT lifecycle evidence after a late provider abort", asy
   );
   assert.ok(summaryWrites.length >= 2);
   const summary = parsePayload(summaryWrites[summaryWrites.length - 1]!);
-  assert.equal(summary.version, 30);
+  assert.equal(summary.version, 31);
   assert.equal(
     (summary.sttRequest as Record<string, unknown>).abortRequested,
     true
@@ -1701,7 +1723,7 @@ test("compact trace summaries preserve hard memory invalidation evidence", async
   );
   assert.ok(summaryWrite);
   const summary = parsePayload(summaryWrite);
-  assert.equal(summary.version, 30);
+  assert.equal(summary.version, 31);
   const memory = summary.memory as Record<string, unknown>;
   assert.equal(memory.authorityRevision, 2);
   assert.equal(memory.invalidationKind, "hard");
@@ -1962,7 +1984,7 @@ test("records compact current-question settlement and execution-plan evidence", 
   assert.equal(serializedPlan.includes("taskSnapshot"), false);
   assert.equal(serializedPlan.includes("variables"), false);
   const summary = parsePayload(summaryWrite);
-  assert.equal(summary.version, 30);
+  assert.equal(summary.version, 31);
   assert.equal(
     (
       summary.currentQuestionSettlement as Record<string, unknown>
@@ -2078,7 +2100,7 @@ test("records a current-question term correction without copying provider state"
     false
   );
   const summary = parsePayload(summaryWrite);
-  assert.equal(summary.version, 30);
+  assert.equal(summary.version, 31);
   assert.equal(
     summary.manualTermCorrectionId,
     "term_correction_hnsw"

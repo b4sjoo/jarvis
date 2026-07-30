@@ -41,16 +41,40 @@ test("does not let an acknowledgement supersede a valid generation", () => {
   assert.equal(authority.maySupersedeGeneration, false);
 });
 
-test("records the existing shadow fail-open policy without granting task mutation", () => {
+test("does not let shadow fail-open become visible refresh authority", () => {
   const authority = decideRefreshAuthority({
     source: "live-turn",
-    turnIntentDecision: decideAdvisorTurnIntent("Hmm.", {
+    turnIntentDecision: decideAdvisorTurnIntent("Kubernetes.", {
       hasActiveTask: true,
     }),
   });
 
+  assert.equal(authority.authorized, false);
+  assert.equal(authority.kind, "denied");
+  assert.equal(authority.reason, "shadow-fail-open-disallowed");
+  assert.equal(authority.hardOverride, false);
+  assert.equal(authority.maySupersedeGeneration, false);
+});
+
+test("grants action-only refresh authority to a released runtime intent answer", () => {
+  const base = decideAdvisorTurnIntent("Kubernetes.", {
+    hasActiveTask: true,
+  });
+  const authority = decideRefreshAuthority({
+    source: "live-turn",
+    turnIntentDecision: {
+      ...base,
+      action: "answer-refresh",
+      recommendedAction: "answer-refresh",
+      enforcement: "allow",
+      wouldSuppress: false,
+      executionAuthorized: true,
+      authoritySource: "runtime-intent-gate",
+    },
+  });
+
   assert.equal(authority.authorized, true);
-  assert.equal(authority.kind, "shadow-fail-open");
+  assert.equal(authority.kind, "runtime-intent-answer");
   assert.equal(authority.hardOverride, false);
 });
 

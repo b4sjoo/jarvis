@@ -56,7 +56,7 @@ import { serializeMeetingTraceExport } from "./trace.js";
 
 const SESSION_RECORDING_SCHEMA_VERSION = 1;
 const SESSION_RECORDING_INTEGRITY_SCHEMA_VERSION = 1;
-const SESSION_TRACE_SUMMARY_SCHEMA_VERSION = 30;
+const SESSION_TRACE_SUMMARY_SCHEMA_VERSION = 31;
 const SESSION_TRACE_INDEX_SCHEMA_VERSION = 1;
 const MAX_RECORDED_WRITE_FAILURES = 20;
 
@@ -249,8 +249,25 @@ export interface SessionCompactTraceSummary {
   advisorTurnIntent?: string;
   advisorTurnConfidence?: number;
   advisorTurnEnforcement?: string;
+  advisorIntentAuthoritySource?: string;
   advisorWouldSuppress?: boolean;
   advisorExecutionAuthorized?: boolean;
+  shortIntentLocalDisposition?: string;
+  shortIntentLocalReason?: string;
+  shortIntentWordEquivalent?: number;
+  canonicalFillerSuppressed?: boolean;
+  shortHighInformationAllowed?: boolean;
+  residualShortIntentAdjudicationRequired?: boolean;
+  shortIntentGateDisposition?: string;
+  shortIntentGateAction?: string;
+  shortIntentGateConfidence?: number;
+  shortIntentGateDecisionApplied?: boolean;
+  shortIntentGateAppliedAction?: string;
+  shortIntentGateBudgetExhausted?: boolean;
+  shortIntentGateTimedOut?: boolean;
+  shortIntentGateDurationMs?: number;
+  shortIntentGateQueueWaitMs?: number;
+  runtimeIntentReleasedAction?: string;
   advisorExecutionSuppressedReason?: string;
   taskMutationAuthorized?: boolean;
   taskMutationAuthorizationReason?: string;
@@ -949,6 +966,7 @@ interface SessionMetricsSummary {
   syntheticValidationTraceCount: number;
   screen: SessionTraceKindAggregate;
   voice: SessionTraceKindAggregate;
+  shortIntent: SessionShortIntentAggregate;
   answerStability: SessionAnswerStabilityAggregate;
   errors: number;
   cancelled: number;
@@ -957,6 +975,11 @@ interface SessionMetricsSummary {
 interface SessionAnswerStabilityAggregate {
   unauthorizedVisibleRefreshCount: number;
   visibleRefreshWithoutPrimaryAskCount: number;
+  visibleRefreshWithoutPrimaryAskByAuthority: Record<string, number>;
+  suppressionRecommendedVisibleRefreshCount: number;
+  primaryAskProjectionDisagreementCount: number;
+  runtimeIntentContradictedVisibleRefreshCount: number;
+  manualHardOverrideRefreshCount: number;
   staleGenerationCommitAttemptCount: number;
   staleGenerationCommitRejectedCount: number;
   codeMutationWithoutCodeIntentCount: number;
@@ -967,6 +990,18 @@ interface SessionAnswerStabilityAggregate {
   incorrectVisibleRefreshLabelCount: number;
   midReadInterruptionLabelCount: number;
   answerDwellMs: SessionNumberAggregate;
+}
+
+interface SessionShortIntentAggregate {
+  canonicalFillerSuppressedCount: number;
+  shortHighInformationAllowedCount: number;
+  residualShortIntentAdjudicationCount: number;
+  residualShortIntentIgnoreCount: number;
+  residualShortIntentAnswerCount: number;
+  intentGateBudgetExhaustedCount: number;
+  intentGateTimeoutCount: number;
+  intentGateDecisionAppliedCount: number;
+  intentGateDurationMs: SessionNumberAggregate;
 }
 
 interface SessionTraceKindAggregate {
@@ -3638,6 +3673,10 @@ function buildCompactTraceSummary({
       metadataSources,
       "advisorTurnEnforcement"
     ),
+    advisorIntentAuthoritySource: readFirstString(
+      metadataSources,
+      "advisorIntentAuthoritySource"
+    ),
     advisorWouldSuppress: readFirstBoolean(
       metadataSources,
       "advisorWouldSuppress"
@@ -3645,6 +3684,70 @@ function buildCompactTraceSummary({
     advisorExecutionAuthorized: readFirstBoolean(
       metadataSources,
       "advisorExecutionAuthorized"
+    ),
+    shortIntentLocalDisposition: readFirstString(
+      metadataSources,
+      "shortIntentLocalDisposition"
+    ),
+    shortIntentLocalReason: readFirstString(
+      metadataSources,
+      "shortIntentLocalReason"
+    ),
+    shortIntentWordEquivalent: readFirstNumberFromMetadata(
+      metadataSources,
+      "shortIntentWordEquivalent"
+    ),
+    canonicalFillerSuppressed: readFirstBoolean(
+      metadataSources,
+      "canonicalFillerSuppressed"
+    ),
+    shortHighInformationAllowed: readFirstBoolean(
+      metadataSources,
+      "shortHighInformationAllowed"
+    ),
+    residualShortIntentAdjudicationRequired: readFirstBoolean(
+      metadataSources,
+      "residualShortIntentAdjudicationRequired"
+    ),
+    shortIntentGateDisposition: readFirstString(
+      metadataSources,
+      "shortIntentGateDisposition"
+    ),
+    shortIntentGateAction: readFirstString(
+      metadataSources,
+      "shortIntentGateAction"
+    ),
+    shortIntentGateConfidence: readFirstNumberFromMetadata(
+      metadataSources,
+      "shortIntentGateConfidence"
+    ),
+    shortIntentGateDecisionApplied: readFirstBoolean(
+      metadataSources,
+      "shortIntentGateDecisionApplied"
+    ),
+    shortIntentGateAppliedAction: readFirstString(
+      metadataSources,
+      "shortIntentGateAppliedAction"
+    ),
+    shortIntentGateBudgetExhausted: readFirstBoolean(
+      metadataSources,
+      "shortIntentGateBudgetExhausted"
+    ),
+    shortIntentGateTimedOut: readFirstBoolean(
+      metadataSources,
+      "shortIntentGateTimedOut"
+    ),
+    shortIntentGateDurationMs: readFirstNumberFromMetadata(
+      metadataSources,
+      "shortIntentGateDurationMs"
+    ),
+    shortIntentGateQueueWaitMs: readFirstNumberFromMetadata(
+      metadataSources,
+      "shortIntentGateQueueWaitMs"
+    ),
+    runtimeIntentReleasedAction: readFirstString(
+      metadataSources,
+      "runtimeIntentReleasedAction"
     ),
     advisorExecutionSuppressedReason:
       readFirstString(metadataSources, "memoryRetrievalSuppressedReason") ??
@@ -5660,6 +5763,7 @@ function buildSessionMetricsSummary(
     voice: aggregateTraceKind(
       productionSummaries.filter((summary) => summary.traceKind === "voice")
     ),
+    shortIntent: aggregateShortIntent(productionSummaries),
     answerStability: aggregateAnswerStability(
       productionSummaries,
       humanEvaluations
@@ -5676,6 +5780,12 @@ function aggregateAnswerStability(
   summaries: SessionCompactTraceSummary[],
   humanEvaluations: TraceHumanEvaluation[]
 ): SessionAnswerStabilityAggregate {
+  const visibleRefreshWithoutPrimaryAsk = (
+    summary: SessionCompactTraceSummary
+  ) =>
+    summary.visibleAnswerChanged === true &&
+    summary.primaryAskSpanCount === 0 &&
+    summary.refreshAuthorityHardOverride !== true;
   return {
     unauthorizedVisibleRefreshCount: summaries.filter(
       (summary) =>
@@ -5683,10 +5793,39 @@ function aggregateAnswerStability(
         summary.refreshAuthorityAuthorized === false
     ).length,
     visibleRefreshWithoutPrimaryAskCount: summaries.filter(
+      visibleRefreshWithoutPrimaryAsk
+    ).length,
+    visibleRefreshWithoutPrimaryAskByAuthority:
+      countSessionVisibleRefreshesByAuthority(
+        summaries.filter(visibleRefreshWithoutPrimaryAsk)
+      ),
+    suppressionRecommendedVisibleRefreshCount: summaries.filter(
+      (summary) =>
+        summary.visibleAnswerChanged === true &&
+        summary.advisorWouldSuppress === true &&
+        summary.refreshAuthorityHardOverride !== true
+    ).length,
+    primaryAskProjectionDisagreementCount: summaries.filter(
       (summary) =>
         summary.visibleAnswerChanged === true &&
         summary.primaryAskSpanCount === 0 &&
-        summary.refreshAuthorityHardOverride !== true
+        summary.refreshAuthorityHardOverride !== true &&
+        (summary.turnGateAction === "answer-refresh" ||
+          summary.advisorTurnIntent === "direct-question" ||
+          summary.advisorTurnIntent === "correction" ||
+          summary.advisorTurnIntent === "constraint-or-follow-up" ||
+          summary.runtimeIntentReleasedAction === "answer")
+    ).length,
+    runtimeIntentContradictedVisibleRefreshCount: summaries.filter(
+      (summary) =>
+        summary.visibleAnswerChanged === true &&
+        (summary.runtimeIntentReleasedAction === "ignore" ||
+          summary.runtimeIntentReleasedAction === "append-context")
+    ).length,
+    manualHardOverrideRefreshCount: summaries.filter(
+      (summary) =>
+        summary.refreshAuthorityHardOverride === true &&
+        summary.visibleAnswerChanged === true
     ).length,
     staleGenerationCommitAttemptCount: summaries.filter(
       (summary) => summary.leaseAuthorizedAtCommit === false
@@ -5725,6 +5864,55 @@ function aggregateAnswerStability(
       summaries.map((summary) => summary.answerDwellMs)
     ),
   };
+}
+
+function aggregateShortIntent(
+  summaries: SessionCompactTraceSummary[]
+): SessionShortIntentAggregate {
+  return {
+    canonicalFillerSuppressedCount: summaries.filter(
+      (summary) => summary.canonicalFillerSuppressed === true
+    ).length,
+    shortHighInformationAllowedCount: summaries.filter(
+      (summary) => summary.shortHighInformationAllowed === true
+    ).length,
+    residualShortIntentAdjudicationCount: summaries.filter(
+      (summary) =>
+        summary.residualShortIntentAdjudicationRequired === true
+    ).length,
+    residualShortIntentIgnoreCount: summaries.filter(
+      (summary) =>
+        summary.shortIntentGateDecisionApplied === true &&
+        summary.shortIntentGateAppliedAction === "ignore"
+    ).length,
+    residualShortIntentAnswerCount: summaries.filter(
+      (summary) =>
+        summary.shortIntentGateDecisionApplied === true &&
+        summary.shortIntentGateAppliedAction === "answer"
+    ).length,
+    intentGateBudgetExhaustedCount: summaries.filter(
+      (summary) => summary.shortIntentGateBudgetExhausted === true
+    ).length,
+    intentGateTimeoutCount: summaries.filter(
+      (summary) => summary.shortIntentGateTimedOut === true
+    ).length,
+    intentGateDecisionAppliedCount: summaries.filter(
+      (summary) => summary.shortIntentGateDecisionApplied === true
+    ).length,
+    intentGateDurationMs: aggregateNumbers(
+      summaries.map((summary) => summary.shortIntentGateDurationMs)
+    ),
+  };
+}
+
+function countSessionVisibleRefreshesByAuthority(
+  summaries: SessionCompactTraceSummary[]
+) {
+  return summaries.reduce<Record<string, number>>((counts, summary) => {
+    const authority = summary.refreshAuthority ?? "unknown";
+    counts[authority] = (counts[authority] ?? 0) + 1;
+    return counts;
+  }, {});
 }
 
 function aggregateTraceKind(

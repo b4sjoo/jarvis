@@ -198,9 +198,39 @@ test("aggregates answer stability and delivery protection metrics", () => {
     codeMutationWithoutCodeIntent: true,
     visibleAnswerChanged: true,
     primaryAskSpanCount: 0,
+    turnGateAction: "answer-refresh",
+    refreshAuthority: "automatic-substantive",
+  };
+  const suppressed = buildTrace(6, "suppressed-visible-refresh");
+  suppressed.metadata = {
+    ...suppressed.metadata,
+    visibleAnswerChanged: true,
+    primaryAskSpanCount: 0,
+    advisorWouldSuppress: true,
+    refreshAuthority: "shadow-fail-open",
+    runtimeIntentReleasedAction: "ignore",
+    canonicalFillerSuppressed: true,
+    residualShortIntentAdjudicationRequired: true,
+    shortIntentGateDecisionApplied: true,
+    shortIntentGateAppliedAction: "ignore",
+    shortIntentGateDurationMs: 940,
+  };
+  const manual = buildTrace(7, "manual-visible-refresh");
+  manual.metadata = {
+    ...manual.metadata,
+    visibleAnswerChanged: true,
+    primaryAskSpanCount: 0,
+    refreshAuthority: "manual-hard-override",
+    refreshAuthorityHardOverride: true,
+    shortHighInformationAllowed: true,
   };
 
-  const summary = summarizeMeetingTraces([pending, stale]);
+  const summary = summarizeMeetingTraces([
+    pending,
+    stale,
+    suppressed,
+    manual,
+  ]);
 
   assert.equal(summary.answerStability.deliveryLockCount, 1);
   assert.equal(summary.answerStability.pendingCommitCount, 1);
@@ -215,8 +245,37 @@ test("aggregates answer stability and delivery protection metrics", () => {
   );
   assert.equal(
     summary.answerStability.visibleRefreshWithoutPrimaryAskCount,
+    2
+  );
+  assert.deepEqual(
+    summary.answerStability.visibleRefreshWithoutPrimaryAskByAuthority,
+    {
+      "automatic-substantive": 1,
+      "shadow-fail-open": 1,
+    }
+  );
+  assert.equal(
+    summary.answerStability.suppressionRecommendedVisibleRefreshCount,
     1
   );
+  assert.equal(
+    summary.answerStability.primaryAskProjectionDisagreementCount,
+    1
+  );
+  assert.equal(
+    summary.answerStability.runtimeIntentContradictedVisibleRefreshCount,
+    1
+  );
+  assert.equal(
+    summary.answerStability.manualHardOverrideRefreshCount,
+    1
+  );
+  assert.equal(summary.shortIntent.canonicalFillerSuppressedCount, 1);
+  assert.equal(summary.shortIntent.shortHighInformationAllowedCount, 1);
+  assert.equal(summary.shortIntent.residualShortIntentAdjudicationCount, 1);
+  assert.equal(summary.shortIntent.residualShortIntentIgnoreCount, 1);
+  assert.equal(summary.shortIntent.intentGateDecisionAppliedCount, 1);
+  assert.equal(summary.shortIntent.intentGateDurationMs.p50, 940);
   assert.equal(summary.answerStability.answerDwellMs.p50, 4_200);
 });
 

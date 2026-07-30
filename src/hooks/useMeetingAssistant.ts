@@ -249,6 +249,17 @@ import {
   resolveRuntimeInferenceModelRouteFromSnapshot,
   RuntimeInferenceOperationRuntime,
   RuntimeInferenceSessionCircuitBreaker,
+  ShortIntentGateJob,
+  ShortIntentGateRequestResult,
+  ShortIntentGateSessionBudget,
+  SHORT_INTENT_GATE_MAX_OUTPUT_CHARS,
+  buildShortIntentGatePrompts,
+  buildShortIntentGateRequest,
+  createShortIntentGateAdvisorDecision,
+  decideShortIntentLocalRoute,
+  formatShortIntentLocalDecisionForTrace,
+  hashShortIntentSourceText,
+  requestShortIntentGate,
   QuestionTypeAdjudicationJob,
   QuestionTypeAdjudicationRequestResult,
   QUESTION_TYPE_ADJUDICATION_MAX_OUTPUT_CHARS,
@@ -2016,6 +2027,25 @@ export function useMeetingAssistant() {
   const taxonomyAdjudicationCircuitBreakerRef = useRef(
     new TaxonomyAdjudicationSessionCircuitBreaker()
   );
+  const shortIntentGateRuntimeRef = useRef<
+    RuntimeInferenceOperationRuntime<
+      ShortIntentGateJob,
+      ShortIntentGateRequestResult
+    > | null
+  >(null);
+  if (shortIntentGateRuntimeRef.current === null) {
+    shortIntentGateRuntimeRef.current =
+      new RuntimeInferenceOperationRuntime<
+        ShortIntentGateJob,
+        ShortIntentGateRequestResult
+      >("short-intent-gate");
+  }
+  const shortIntentGateCircuitRef = useRef(
+    new RuntimeInferenceSessionCircuitBreaker()
+  );
+  const shortIntentGateSessionBudgetRef = useRef(
+    new ShortIntentGateSessionBudget()
+  );
   const questionTypeAdjudicationRuntimeRef = useRef<
     RuntimeInferenceOperationRuntime<
       QuestionTypeAdjudicationJob,
@@ -2925,6 +2955,7 @@ export function useMeetingAssistant() {
     activeScreenOperationIdRef.current = null;
     semanticTaxonomyEvidenceByTurnRef.current.clear();
     taxonomyAdjudicationRuntimeRef.current?.cancelAll("superseded");
+    shortIntentGateRuntimeRef.current?.cancelAll("superseded");
     questionTypeAdjudicationRuntimeRef.current?.cancelAll("superseded");
     taskRelationAdjudicationRuntimeRef.current?.cancelAll("superseded");
     whiteboardSyntaxRepairRuntimeRef.current?.cancelAll("superseded");
@@ -9257,7 +9288,8 @@ export function useMeetingAssistant() {
     turnIntentDecision?: AdvisorTurnIntentDecision,
     triggerTurnId?: string,
     questionLineage?: QuestionInstanceLineage,
-    logicalQuestionUnit?: LogicalQuestionUnit
+    logicalQuestionUnit?: LogicalQuestionUnit,
+    taskMutationAuthority: AdvisorTaskMutationAuthority = "input-evidence"
   ) => {
     if (!activeRef.current) return;
 
@@ -9267,7 +9299,7 @@ export function useMeetingAssistant() {
       turnIntentDecision,
       triggerTurnId,
       advisorJobSource: "live-turn",
-      taskMutationAuthority: "input-evidence",
+      taskMutationAuthority,
       questionLineage:
         questionLineage ??
         resolveInheritedQuestionLineageForTurnIntent(
@@ -9289,6 +9321,479 @@ export function useMeetingAssistant() {
       });
     }, ADVISOR_DEBOUNCE_MS);
   }, [activateAdvisorJob, buildAdvisorJob, runAdvisor]);
+
+  const scheduleShortIntentGate = useCallback(
+    ({
+      turn,
+      traceId,
+      logicalQuestionUnit,
+      originalDecision,
+    }: {
+      turn: TranscriptTurn;
+      traceId: string;
+      logicalQuestionUnit: LogicalQuestionUnit;
+      originalDecision: AdvisorTurnIntentDecision;
+    }) => {
+      const contextState = contextManagerRef.current.getState();
+      const scheduledTaskId = contextState.activeMeetingTask?.id;
+      const sourceTextHash = hashShortIntentSourceText(turn.text);
+      const budgetKey = [
+        turn.id,
+        sourceTextHash,
+        logicalQuestionUnit.revision,
+      ].join(":");
+      const baseMetadata: Record<string, unknown> = {
+        ...formatRuntimeInferenceOperationForTrace("short-intent-gate"),
+        shortIntentGateEligible: true,
+        shortIntentGateDisposition: "eligible",
+        shortIntentGateSourceTurnId: turn.id,
+        shortIntentGateSourceTextHash: sourceTextHash,
+        shortIntentGateLogicalQuestionUnitId:
+          logicalQuestionUnit.id,
+        shortIntentGateLogicalQuestionUnitRevision:
+          logicalQuestionUnit.revision,
+        shortIntentGateDecisionApplied: false,
+        advisorExecutionAuthorized: false,
+        memoryRetrievalSuppressedReason: "short-intent-gate-pending",
+        modelExecutionSuppressedReason: "short-intent-gate-pending",
+      };
+      traceStoreRef.current.updateMetadata(traceId, baseMetadata);
+
+      const settings = taxonomyAdjudicationSettingsRef.current;
+      if (!settings.enabled) {
+        traceStoreRef.current.updateMetadata(traceId, {
+          shortIntentGateDisposition: "operation-disabled",
+          shortIntentGateSkipReason: "runtime-inference-disabled",
+        });
+        traceStoreRef.current.finishTrace(traceId, "success");
+        return;
+      }
+
+      const circuit = shortIntentGateCircuitRef.current.read(
+        "short-intent-gate",
+        contextState.sessionId
+      );
+      if (circuit.open) {
+        traceStoreRef.current.updateMetadata(traceId, {
+          ...formatRuntimeInferenceCircuitForTrace(circuit),
+          shortIntentGateDisposition: "provider-circuit-open",
+          shortIntentGateSkipReason: "provider-circuit-open",
+        });
+        traceStoreRef.current.finishTrace(traceId, "success");
+        return;
+      }
+
+      const modelRoute = resolveRuntimeInferenceModelRouteFromSnapshot({
+        snapshot: meetingModelProviderSnapshotRef.current,
+        operationKind: "short-intent-gate",
+        reason: "residual-short-intent-ambiguity",
+      });
+      const routeMetadata =
+        formatRuntimeInferenceModelRouteForTrace(modelRoute);
+      if (!modelRoute.provider) {
+        const opened = shortIntentGateCircuitRef.current.open({
+          operationKind: "short-intent-gate",
+          sessionId: contextState.sessionId,
+          reason: "provider-configuration-error",
+          detail:
+            modelRoute.missingRequiredVariables.length > 0
+              ? `missing:${modelRoute.missingRequiredVariables.join(",")}`
+              : modelRoute.fallbackReason,
+        });
+        traceStoreRef.current.updateMetadata(traceId, {
+          ...routeMetadata,
+          ...formatRuntimeInferenceCircuitForTrace(
+            opened.state,
+            opened.newlyOpened
+          ),
+          shortIntentGateDisposition:
+            "provider-configuration-error",
+          shortIntentGateSkipReason:
+            "provider-configuration-error",
+        });
+        traceStoreRef.current.finishTrace(traceId, "success");
+        return;
+      }
+
+      const sessionBudget =
+        shortIntentGateSessionBudgetRef.current.authorize(
+          contextState.sessionId,
+          budgetKey
+        );
+      const sessionBudgetMetadata = {
+        shortIntentGateSessionStartsBefore:
+          sessionBudget.startsBefore,
+        shortIntentGateSessionStartsAfter:
+          sessionBudget.startsAfter,
+        shortIntentGateSessionStartLimit: sessionBudget.limit,
+      };
+      traceStoreRef.current.updateMetadata(traceId, {
+        ...sessionBudgetMetadata,
+        shortIntentGateDisposition: sessionBudget.authorized
+          ? "capacity-authorized"
+          : sessionBudget.reason,
+      });
+      if (!sessionBudget.authorized) {
+        traceStoreRef.current.finishTrace(traceId, "success");
+        return;
+      }
+
+      const activeParent = contextState.activeMeetingTask?.parent;
+      const activeParentQuestionType = normalizeCanonicalQuestionType(
+        activeParent?.questionType
+      );
+      const activeRelation = contextState.activeMeetingTask?.child
+        ? "child-probe"
+        : activeParent
+          ? "followup-parent"
+          : "unknown";
+      const lease = createTaxonomyAdjudicationLease({
+        sessionId: contextState.sessionId,
+        runtimeEpoch: runtimeEpochRef.current,
+        logicalQuestionUnit,
+        taskBoundaryEpoch: hashTaxonomyTaskBoundary({
+          parentId: activeParent?.id,
+          questionType: activeParentQuestionType,
+          relation: activeRelation,
+        }),
+        manualCorrectionRevision: manualCorrectionRevisionRef.current,
+        expectedParentId: activeParent?.id,
+        expectedParentRevision: activeParent?.revisions,
+      });
+      const request = buildShortIntentGateRequest({
+        logicalQuestionUnit,
+        currentTurn: turn,
+        previousTurns: contextState.transcriptTurns,
+        pendingConfirmation: Boolean(pendingConfirmationRef.current),
+        activeMeetingTask: contextState.activeMeetingTask,
+      });
+      const prompts = buildShortIntentGatePrompts(request);
+      const promptText = [
+        prompts.systemPrompt,
+        prompts.userMessage,
+      ].join("\n\n");
+      const requestHash = hashTaxonomySourceTurnIds([
+        prompts.systemPrompt,
+        prompts.userMessage,
+      ]);
+      const scheduledMetadata = {
+        ...baseMetadata,
+        ...routeMetadata,
+        ...sessionBudgetMetadata,
+        shortIntentGateDisposition: "scheduled",
+        shortIntentGateOperationId: lease.operationId,
+        shortIntentGateRequestHash: requestHash,
+        shortIntentGatePromptVersion: request.promptVersion,
+        shortIntentGateSchemaVersion: request.schemaVersion,
+        shortIntentGateInputChars: promptText.length,
+        shortIntentGateModelId: readSelectedProviderModelId(
+          modelRoute.selectedProvider
+        ),
+      };
+      traceStoreRef.current.updateMetadata(traceId, scheduledMetadata);
+      traceStoreRef.current.recordInput(
+        traceId,
+        "short intent gate model input",
+        promptText,
+        {
+          operationId: lease.operationId,
+          requestHash,
+          actionOnly: true,
+          typeRelationParentMutationBlocked: true,
+        }
+      );
+      sessionRecordingManagerRef.current?.recordModelInput({
+        traceId,
+        taskId: scheduledTaskId,
+        label: "short intent gate model input",
+        value: promptText,
+        metadata: {
+          operationId: lease.operationId,
+          requestHash,
+          actionOnly: true,
+          typeRelationParentMutationBlocked: true,
+        },
+      });
+
+      let stepId: string | undefined;
+      shortIntentGateRuntimeRef.current!.schedule({
+        job: {
+          operationId: lease.operationId,
+          operationKind: "short-intent-gate",
+          sessionId: contextState.sessionId,
+          budgetKey,
+          budgetSlot: "intent",
+          budgetReason: "residual-short-intent-ambiguity",
+          traceId,
+          lease,
+          request,
+          sourceTurnId: turn.id,
+          sourceTextHash,
+        },
+        execute: (job, signal) =>
+          requestShortIntentGate({
+            request: job.request,
+            provider: modelRoute.provider,
+            selectedProvider: modelRoute.selectedProvider,
+            signal,
+            onFirstToken: (at) => {
+              traceStoreRef.current.updateMetadata(traceId, {
+                shortIntentGateFirstTokenAt: at,
+              });
+            },
+          }),
+        onStarted: (_job, startedAt, budget) => {
+          const metadata = {
+            ...scheduledMetadata,
+            shortIntentGateStartedAt: startedAt,
+            shortIntentGateBudgetKey: budget.budgetKey,
+            shortIntentGateBudgetSlot: budget.slot,
+            shortIntentGateBudgetStartsBefore:
+              budget.startsBefore,
+            shortIntentGateBudgetStartsAfter:
+              budget.startsAfter,
+            shortIntentGateBudgetRemaining: budget.remaining,
+          };
+          traceStoreRef.current.updateMetadata(traceId, metadata);
+          stepId = traceStoreRef.current.startStep(
+            traceId,
+            "Short intent gate",
+            metadata
+          );
+        },
+        onSettled: (settlement) => {
+          const latestContext = contextManagerRef.current.getState();
+          const latestParent = latestContext.activeMeetingTask?.parent;
+          const latestParentQuestionType =
+            normalizeCanonicalQuestionType(
+              latestParent?.questionType
+            );
+          const latestRelation = latestContext.activeMeetingTask?.child
+            ? "child-probe"
+            : latestParent
+              ? "followup-parent"
+              : "unknown";
+          const authorization = authorizeTaxonomyAdjudicationLease(
+            settlement.job.lease,
+            {
+              currentOperationId:
+                shortIntentGateRuntimeRef.current?.getCurrentOperationId(),
+              sessionId: latestContext.sessionId,
+              runtimeEpoch: runtimeEpochRef.current,
+              logicalQuestionUnit: logicalQuestionUnitRef.current,
+              taskBoundaryEpoch: hashTaxonomyTaskBoundary({
+                parentId: latestParent?.id,
+                questionType: latestParentQuestionType,
+                relation: latestRelation,
+              }),
+              manualCorrectionRevision:
+                manualCorrectionRevisionRef.current,
+              activeParentId: latestParent?.id,
+              activeParentRevision: latestParent?.revisions,
+              logicalUnitClosed: false,
+              selfHealingBudgetConsumed: false,
+            }
+          );
+          const result = settlement.result;
+          const parsed = result?.parsed;
+          const parsedValue = parsed?.ok ? parsed.value : undefined;
+          const providerDisposition =
+            result?.providerDisposition ??
+            (settlement.disposition === "error"
+              ? "request-error"
+              : settlement.disposition);
+          if (
+            authorization.authorized &&
+            providerDisposition === "provider-auth-error"
+          ) {
+            shortIntentGateCircuitRef.current.open({
+              operationKind: "short-intent-gate",
+              sessionId: latestContext.sessionId,
+              reason: "provider-auth-error",
+              detail: result?.rawOutput.slice(0, 240),
+            });
+          }
+          const validAppliedDecision =
+            settlement.disposition === "completed" &&
+            authorization.authorized &&
+            parsedValue &&
+            (parsedValue.action === "answer" ||
+              parsedValue.confidence >=
+                (parsedValue.action === "ignore" ? 0.95 : 0.85))
+              ? createShortIntentGateAdvisorDecision({
+                  result: parsedValue,
+                  original: originalDecision,
+                })
+              : undefined;
+          const decisionApplied = Boolean(validAppliedDecision);
+          const rawOutput = result?.rawOutput ?? "";
+          const recordingActive =
+            sessionRecordingManagerRef.current?.getState().active ?? false;
+          const rawOutputStored = Boolean(
+            rawOutput && (debugModeRef.current || recordingActive)
+          );
+          const boundedRawOutput = rawOutput.slice(
+            0,
+            SHORT_INTENT_GATE_MAX_OUTPUT_CHARS
+          );
+          const metadata = {
+            ...scheduledMetadata,
+            shortIntentGateDisposition:
+              settlement.disposition === "completed" &&
+              !authorization.authorized
+                ? "stale"
+                : settlement.disposition,
+            shortIntentGateLeaseAuthorized: authorization.authorized,
+            shortIntentGateStaleReason: authorization.authorized
+              ? undefined
+              : authorization.reason,
+            shortIntentGateProviderDisposition:
+              providerDisposition,
+            shortIntentGateParseDisposition:
+              result?.parseDisposition,
+            shortIntentGateParseValid: parsed?.ok ?? false,
+            shortIntentGateAction: parsedValue?.action,
+            shortIntentGateConfidence: parsedValue?.confidence,
+            shortIntentGateEvidenceSpans:
+              parsedValue?.evidenceSpans,
+            shortIntentGateDecisionApplied: decisionApplied,
+            shortIntentGateAppliedAction:
+              validAppliedDecision?.action === "answer-refresh"
+                ? "answer"
+                : validAppliedDecision?.action === "append-only"
+                  ? "append-context"
+                  : validAppliedDecision?.action,
+            shortIntentGateDecisionApplyReason: decisionApplied
+              ? validAppliedDecision?.reason
+              : parsedValue
+                ? "confidence-or-lease-not-authorized"
+                : result?.parseDisposition ??
+                  settlement.disposition,
+            shortIntentGateDurationMs: settlement.durationMs,
+            shortIntentGateQueueWaitMs: settlement.queueWaitMs,
+            shortIntentGateBudgetExhausted:
+              settlement.disposition === "budget-exhausted",
+            shortIntentGateTimedOut:
+              settlement.error instanceof Error &&
+              /timeout/i.test(settlement.error.message),
+            shortIntentGateRawOutputStored: rawOutputStored,
+            runtimeIntentReleasedAction:
+              validAppliedDecision?.action === "answer-refresh"
+                ? "answer"
+                : validAppliedDecision?.action === "append-only"
+                  ? "append-context"
+                  : validAppliedDecision?.action,
+          };
+          traceStoreRef.current.updateMetadata(traceId, metadata);
+          if (rawOutputStored) {
+            traceStoreRef.current.recordOutput(
+              traceId,
+              "short intent gate raw output",
+              boundedRawOutput,
+              {
+                truncated:
+                  rawOutput.length > boundedRawOutput.length,
+                parseDisposition: result?.parseDisposition,
+              }
+            );
+            if (recordingActive) {
+              sessionRecordingManagerRef.current?.recordModelOutput({
+                traceId,
+                taskId: scheduledTaskId,
+                label: "short intent gate raw output",
+                value: boundedRawOutput,
+                metadata: {
+                  originalChars: rawOutput.length,
+                  truncated:
+                    rawOutput.length > boundedRawOutput.length,
+                  parseDisposition: result?.parseDisposition,
+                },
+              });
+            }
+          }
+          if (stepId) {
+            traceStoreRef.current.finishStep(
+              traceId,
+              stepId,
+              settlement.disposition === "error"
+                ? "error"
+                : "success",
+              metadata,
+              settlement.error
+            );
+          }
+
+          if (
+            validAppliedDecision?.action === "answer-refresh"
+          ) {
+            if (!activeRef.current) {
+              traceStoreRef.current.updateMetadata(traceId, {
+                shortIntentGateDecisionApplied: false,
+                shortIntentGateDecisionApplyReason:
+                  "meeting-not-active-at-release",
+                runtimeIntentReleasedAction: undefined,
+              });
+              traceStoreRef.current.finishTrace(
+                traceId,
+                "cancelled",
+                "Meeting stopped before the short intent answer was released."
+              );
+              return;
+            }
+            const debounceStepId = traceStoreRef.current.startStep(
+              traceId,
+              "Advisor debounce scheduled",
+              {
+                debounceMs: ADVISOR_DEBOUNCE_MS,
+                reason: validAppliedDecision.reason,
+                runtimeIntentReleasedAction: "answer",
+              }
+            );
+            traceStoreRef.current.finishStep(
+              traceId,
+              debounceStepId,
+              "success"
+            );
+            scheduleAdvisor(
+              latestContext.activeMeetingTask?.screen
+                ? "screen-anchored"
+                : "live",
+              traceId,
+              validAppliedDecision,
+              turn.id,
+              undefined,
+              logicalQuestionUnit,
+              "runtime-intent-answer"
+            );
+            return;
+          }
+
+          if (validAppliedDecision) {
+            contextManagerRef.current.updateTranscriptTurnContext(
+              turn.id,
+              {
+                contextPromptEligible:
+                  validAppliedDecision.contextPromptEligible,
+                contextFusionStatus:
+                  validAppliedDecision.contextPromptEligible
+                    ? "none"
+                    : "debug-only",
+                relatedTurnIds: turn.relatedTurnIds,
+              }
+            );
+            const updatedContext =
+              contextManagerRef.current.getState();
+            setState((previous) => ({
+              ...previous,
+              transcriptTurns: updatedContext.transcriptTurns,
+            }));
+          }
+          traceStoreRef.current.finishTrace(traceId, "success");
+        },
+      });
+    },
+    [scheduleAdvisor]
+  );
 
   const appendTranscriptTurnForTrace = useCallback(
     (
@@ -13782,9 +14287,26 @@ export function useMeetingAssistant() {
               currentTurnId: turn.id,
             })
           );
+        const shortIntentLocalDecision =
+          decideShortIntentLocalRoute({
+            text: turn.text,
+            decision: turnGate,
+            pendingConfirmation: Boolean(
+              pendingConfirmationRef.current
+            ),
+          });
+        if (
+          shortIntentLocalDecision.disposition !==
+          "deterministic-ignore"
+        ) {
+          shortIntentGateRuntimeRef.current?.cancelAll("superseded");
+        }
         traceStoreRef.current.updateMetadata(traceId, {
           ...formatAdvisorTurnIntentForTrace(turnGate),
           ...keywordIntentEvidence,
+          ...formatShortIntentLocalDecisionForTrace(
+            shortIntentLocalDecision
+          ),
           turnGateAction: turnGate.action,
           turnGateReason: turnGate.reason,
           memoryRetrievalSuppressedReason: turnGate.executionAuthorized
@@ -13944,6 +14466,18 @@ export function useMeetingAssistant() {
           }
         );
         if (logicalQuestionUnit) {
+          if (
+            shortIntentLocalDecision.disposition ===
+            "runtime-required"
+          ) {
+            scheduleShortIntentGate({
+              turn,
+              traceId,
+              logicalQuestionUnit,
+              originalDecision: turnGate,
+            });
+            return;
+          }
           scheduleSemanticTaxonomyShadow({
             turn,
             traceId,
@@ -14118,6 +14652,7 @@ export function useMeetingAssistant() {
       readAudioSegmentCommitAuthorization,
       resolvePendingConfirmationForMeTurn,
       schedulePendingAnswerCommit,
+      scheduleShortIntentGate,
       scheduleSemanticTaxonomyShadow,
       scheduleAdvisor,
       selectedSttProvider,
@@ -20919,6 +21454,7 @@ export function useMeetingAssistant() {
     return () => {
       void stopOnUnmountRef.current();
       taxonomyAdjudicationRuntimeRef.current?.cancelAll("disposed");
+      shortIntentGateRuntimeRef.current?.cancelAll("disposed");
       questionTypeAdjudicationRuntimeRef.current?.cancelAll("disposed");
       taskRelationAdjudicationRuntimeRef.current?.cancelAll("disposed");
       whiteboardSyntaxRepairRuntimeRef.current?.cancelAll("disposed");

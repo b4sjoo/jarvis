@@ -33,6 +33,7 @@ export type AdvisorJobSource =
 export type AdvisorTaskMutationAuthority =
   | "input-evidence"
   | "preserve-parent"
+  | "runtime-intent-answer"
   | "manual-correction";
 
 export type AdvisorJobOutcome =
@@ -113,6 +114,7 @@ export interface AdvisorTaskMutationAuthorization {
     | "substantive-input-authority"
     | "manual-correction-authority"
     | "explicit-action-authority"
+    | "runtime-intent-action-only"
     | "missing-turn-intent-decision"
     | "turn-intent-would-suppress"
     | "turn-intent-not-answer-refresh";
@@ -122,7 +124,7 @@ export interface AdvisorOutputCommitAuthorization {
   authorized: boolean;
   reason:
     | "substantive-output-authority"
-    | "shadow-fail-open-output-authority"
+    | "runtime-intent-answer-output-authority"
     | "manual-action-output-authority"
     | "execution-not-authorized"
     | "turn-intent-not-answer-refresh";
@@ -276,6 +278,9 @@ export function authorizeAdvisorTaskMutation(input: {
   if (input.authority === "preserve-parent") {
     return { authorized: true, reason: "explicit-action-authority" };
   }
+  if (input.authority === "runtime-intent-answer") {
+    return { authorized: false, reason: "runtime-intent-action-only" };
+  }
 
   const decision = input.turnIntentDecision;
   if (!decision) {
@@ -308,6 +313,19 @@ export function authorizeAdvisorOutputCommit(input: {
   ) {
     return { authorized: true, reason: "manual-action-output-authority" };
   }
+  if (input.authority === "runtime-intent-answer") {
+    return input.turnIntentDecision?.authoritySource ===
+        "runtime-intent-gate" &&
+      input.turnIntentDecision.action === "answer-refresh"
+      ? {
+          authorized: true,
+          reason: "runtime-intent-answer-output-authority",
+        }
+      : {
+          authorized: false,
+          reason: "turn-intent-not-answer-refresh",
+        };
+  }
 
   const decision = input.turnIntentDecision;
   if (decision?.action !== "answer-refresh") {
@@ -315,8 +333,8 @@ export function authorizeAdvisorOutputCommit(input: {
   }
   if (decision.enforcement === "shadow") {
     return {
-      authorized: true,
-      reason: "shadow-fail-open-output-authority",
+      authorized: false,
+      reason: "execution-not-authorized",
     };
   }
 
