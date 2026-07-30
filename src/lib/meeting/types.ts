@@ -461,7 +461,43 @@ export type ProjectBindingSource =
   | "interview-brief"
   | "memory"
   | "user-selection"
-  | "correction";
+  | "correction"
+  | "interviewer-explicit"
+  | "user-explicit"
+  | "manual-correction";
+
+export type ProjectBindingAuthority =
+  | "interviewer-explicit"
+  | "user-explicit"
+  | "manual-correction"
+  | "interview-brief"
+  | "compatible-existing"
+  | "memory-candidate";
+
+export interface ExplicitProjectSelection {
+  sessionId: string;
+  runtimeEpoch: number;
+  sourceTurnId: string;
+  sourceObservationId?: string;
+  projectId?: string;
+  projectName: string;
+  authority:
+    | "interviewer-explicit"
+    | "user-explicit"
+    | "manual-correction";
+  actionRevision: number;
+  createdAt: number;
+}
+
+export interface ProjectTopicEvidence {
+  sourceText: string;
+  explicitProjectIds: string[];
+  explicitProjectNames: string[];
+  featureTerms: string[];
+  actionTerms: string[];
+  resultTerms: string[];
+  conflictingProjectNames: string[];
+}
 
 export interface ProjectBinding {
   projectId?: string;
@@ -473,6 +509,9 @@ export interface ProjectBinding {
   lockedAt: number;
   revision: number;
   reason: string;
+  authority?: ProjectBindingAuthority;
+  sourceTurnIds?: string[];
+  sourceObservationIds?: string[];
 }
 
 export interface ProjectBindingCandidate {
@@ -487,13 +526,22 @@ export type ProjectBindingAction =
   | "not-applicable"
   | "preserve"
   | "bind"
+  | "rebind"
+  | "invalidate"
   | "needs-selection";
 
 export interface ProjectBindingDecision {
   action: ProjectBindingAction;
   binding?: ProjectBinding;
+  previousBinding?: ProjectBinding;
   candidates: ProjectBindingCandidate[];
   changed: boolean;
+  sourceAuthority: ProjectBindingAuthority;
+  sourceTurnIds: string[];
+  sourceObservationIds: string[];
+  topicCompatible: boolean;
+  topicEvidence?: ProjectTopicEvidence;
+  bindingRevision: number;
   reason: string;
 }
 

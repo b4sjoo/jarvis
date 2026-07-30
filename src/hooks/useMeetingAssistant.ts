@@ -8086,6 +8086,8 @@ export function useMeetingAssistant() {
         !transientPersonalStatusDecision &&
         (promptContext.activeMeetingTask?.parent.projectBinding ??
           promptContext.activeInterviewTask?.projectBinding) &&
+          (settledExecutionPlan?.questionType ??
+            advisorQuestionType) !== "project-deep-dive" &&
           (settledExecutionPlan?.taskRelation ??
             advisorTaskSignals.taskRelation) !== "new-parent" &&
           (settledExecutionPlan?.taskRelation ??
@@ -8123,6 +8125,9 @@ export function useMeetingAssistant() {
             options.clarifyingFeedback.answerLabel
           : undefined,
       explicitSelectionSource: "user-selection",
+      currentSourceText: advisorCurrentQuestionEvidenceText,
+      sourceTurnIds:
+        advisorJob.logicalQuestionUnit?.sourceTurnIds ?? [],
       memoryContext,
     });
     const factAnchorDecision = buildFactAnchorDecision({
@@ -16415,7 +16420,8 @@ export function useMeetingAssistant() {
           if (screenTransitionCommitted) {
             contextManagerRef.current.setActiveMeetingTaskState({
               activeScreenTask:
-                screenTransitionCandidate.kind === "new-parent"
+                screenTransitionCandidate.kind === "new-parent" ||
+                screenTransitionCandidate.kind === "reseed-parent"
                   ? null
                   : preflightContextState.activeScreenTask,
               activeInterviewTask:
@@ -16547,6 +16553,7 @@ export function useMeetingAssistant() {
           personalEvidenceDecision: screenPersonalEvidenceDecision,
           forceStrictProjectAnchor: Boolean(
             existingScreenProjectBinding &&
+              screenMemoryQuestionType !== "project-deep-dive" &&
               provisionalScreenTaskRelation !== "new-parent"
           ),
           runtimeToken: screenRuntimeToken,
@@ -16564,6 +16571,8 @@ export function useMeetingAssistant() {
               screenPersonalEvidenceDecision.requirement ===
                 "autobiographical-project"),
           projectAnchor: screenPreflight?.projectAnchor,
+          currentSourceText: screenCurrentQuestionEvidenceText,
+          sourceObservationIds: [observation.id],
           memoryContext,
         });
         const screenFactAnchorDecision = buildFactAnchorDecision({
@@ -17242,6 +17251,8 @@ export function useMeetingAssistant() {
                   screenPersonalEvidenceDecision.requirement ===
                     "autobiographical-project"),
               projectAnchor: screenPreflight?.projectAnchor,
+              currentSourceText: screenCurrentQuestionEvidenceText,
+              sourceObservationIds: [observation.id],
               memoryContext,
             });
           const reconciledProjectBindingMetadata = {

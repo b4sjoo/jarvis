@@ -384,6 +384,11 @@ test("offers project choices instead of blending multiple eligible projects", ()
         },
       ],
       changed: false,
+      sourceAuthority: "memory-candidate",
+      sourceTurnIds: [],
+      sourceObservationIds: [],
+      topicCompatible: true,
+      bindingRevision: 0,
       reason: "multiple-eligible-evidence-projects",
     },
   });
@@ -430,6 +435,11 @@ test("a project binding filters unrelated retrieved fact evidence", () => {
       },
       candidates: [],
       changed: false,
+      sourceAuthority: "compatible-existing",
+      sourceTurnIds: [],
+      sourceObservationIds: [],
+      topicCompatible: true,
+      bindingRevision: 1,
       reason: "existing-parent-binding-is-authoritative",
     },
   });

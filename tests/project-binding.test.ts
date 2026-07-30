@@ -133,9 +133,10 @@ test("explicit selection can revise the project binding", () => {
     now: 200,
   });
 
-  assert.equal(decision.action, "bind");
+  assert.equal(decision.action, "rebind");
   assert.equal(decision.binding?.projectId, "model-interface");
-  assert.equal(decision.binding?.source, "correction");
+  assert.equal(decision.binding?.source, "manual-correction");
+  assert.equal(decision.sourceAuthority, "manual-correction");
   assert.equal(decision.binding?.revision, 3);
   assert.equal(decision.changed, true);
 });
@@ -152,12 +153,89 @@ test("an unsupported explicit selection cannot silently replace the binding", ()
     ]),
   });
 
-  assert.equal(decision.action, "needs-selection");
+  assert.equal(decision.action, "invalidate");
   assert.equal(decision.binding, undefined);
   assert.equal(
     decision.reason,
-    "explicit-selection-has-no-eligible-evidence-match"
+    "manual-correction-has-no-eligible-evidence-match"
   );
+});
+
+test("current interviewer project evidence outranks a stale parent binding", () => {
+  const decision = resolveProjectBinding({
+    existingBinding: makeBinding(),
+    questionType: "project-deep-dive",
+    relation: "followup-parent",
+    currentSourceText:
+      "Now tell me about the Model Interface project and your contribution.",
+    sourceTurnIds: ["turn_interviewer_2"],
+    memoryContext: makeMemoryResult([
+      makeEvidence("mem_agentic", "agentic-memory", "Agentic Memory"),
+      makeEvidence("mem_model_interface", "model-interface", "Model Interface"),
+    ]),
+    now: 240,
+  });
+
+  assert.equal(decision.action, "rebind");
+  assert.equal(decision.binding?.projectId, "model-interface");
+  assert.equal(decision.binding?.source, "interviewer-explicit");
+  assert.equal(decision.sourceAuthority, "interviewer-explicit");
+  assert.deepEqual(decision.sourceTurnIds, ["turn_interviewer_2"]);
+  assert.equal(decision.bindingRevision, 3);
+});
+
+test("structured user selection remains authoritative without raw microphone context", () => {
+  const decision = resolveProjectBinding({
+    existingBinding: makeBinding(),
+    questionType: "project-deep-dive",
+    relation: "followup-parent",
+    explicitProjectSelection: {
+      sessionId: "session_1",
+      runtimeEpoch: 2,
+      sourceTurnId: "turn_me_4",
+      projectId: "model-interface",
+      projectName: "Model Interface",
+      authority: "user-explicit",
+      actionRevision: 3,
+      createdAt: 250,
+    },
+    currentSourceText: undefined,
+    memoryContext: makeMemoryResult([
+      makeEvidence("mem_agentic", "agentic-memory", "Agentic Memory"),
+      makeEvidence("mem_model_interface", "model-interface", "Model Interface"),
+    ]),
+  });
+
+  assert.equal(decision.action, "rebind");
+  assert.equal(decision.binding?.projectId, "model-interface");
+  assert.equal(decision.sourceAuthority, "user-explicit");
+  assert.deepEqual(decision.sourceTurnIds, ["turn_me_4"]);
+});
+
+test("conflicting source-owned topic evidence invalidates a stale binding", () => {
+  const decision = resolveProjectBinding({
+    existingBinding: makeBinding(),
+    questionType: "project-deep-dive",
+    relation: "followup-parent",
+    projectTopicEvidence: {
+      sourceText: "Tell me about a different project.",
+      explicitProjectIds: ["model-interface"],
+      explicitProjectNames: ["Model Interface"],
+      featureTerms: ["interface"],
+      actionTerms: [],
+      resultTerms: [],
+      conflictingProjectNames: ["Agentic Memory"],
+    },
+    memoryContext: makeMemoryResult([
+      makeEvidence("mem_agentic", "agentic-memory", "Agentic Memory"),
+      makeEvidence("mem_model_interface", "model-interface", "Model Interface"),
+    ]),
+  });
+
+  assert.equal(decision.action, "invalidate");
+  assert.equal(decision.binding, undefined);
+  assert.equal(decision.previousBinding?.projectId, "agentic-memory");
+  assert.equal(decision.topicCompatible, false);
 });
 
 test("a new parent does not inherit the old project binding", () => {
