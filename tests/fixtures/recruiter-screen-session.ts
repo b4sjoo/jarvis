@@ -17,6 +17,7 @@ export interface RecruiterRegressionTurnFixture {
   expectedRelation?: InterviewTaskRelation;
   expectedModelRoute?: "main" | "coding-override";
   legacyObservedQuestionType?: CanonicalQuestionType;
+  expectedFactAnchorState?: "strong-anchor" | "weak-anchor";
   answerOutput?: string;
 }
 
@@ -69,6 +70,7 @@ export const RECRUITER_SCREEN_REGRESSION_FIXTURE = {
       expectedQuestionType: "project-deep-dive",
       expectedRelation: "new-parent",
       expectedModelRoute: "main",
+      expectedFactAnchorState: "strong-anchor",
       answerOutput: [
         "中文思路: 先说明真实项目、生产范围和个人职责。",
         "Reply: I shipped a backend API for a production AI product and owned the backend integration boundary.",
@@ -84,6 +86,7 @@ export const RECRUITER_SCREEN_REGRESSION_FIXTURE = {
       expectedRelation: "followup-parent",
       expectedModelRoute: "main",
       legacyObservedQuestionType: "coding",
+      expectedFactAnchorState: "strong-anchor",
       answerOutput: [
         "中文思路: 聚焦个人负责的后端边界，避免扩大到没有证据的工作。",
         "Reply: My contribution centered on the backend API and its integration contract.",
@@ -99,6 +102,7 @@ export const RECRUITER_SCREEN_REGRESSION_FIXTURE = {
       expectedRelation: "followup-parent",
       expectedModelRoute: "main",
       legacyObservedQuestionType: "coding",
+      expectedFactAnchorState: "weak-anchor",
       answerOutput: [
         "中文思路: 只解释有项目证据支持的 API 职责和系统边界。",
         "Reply: The API exposed the production integration boundary; I would separate verified implementation details from architecture options I did not personally use.",
@@ -114,6 +118,7 @@ export const RECRUITER_SCREEN_REGRESSION_FIXTURE = {
       expectedRelation: "followup-parent",
       expectedModelRoute: "main",
       legacyObservedQuestionType: "coding",
+      expectedFactAnchorState: "weak-anchor",
       answerOutput: [
         "中文思路: 问题里的测试选项不等于做过这些测试，只回答已有事实。",
         "Reply: I would describe only the validation work supported by the project record and clarify any missing rollout detail.",
@@ -129,6 +134,7 @@ export const RECRUITER_SCREEN_REGRESSION_FIXTURE = {
       expectedRelation: "followup-parent",
       expectedModelRoute: "main",
       legacyObservedQuestionType: "coding",
+      expectedFactAnchorState: "weak-anchor",
       answerOutput: [
         "中文思路: 保持同一项目，只使用可验证的合作关系。",
         "Reply: I would name only stakeholders supported by the project evidence and explain the working boundary concretely.",

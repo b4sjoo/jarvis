@@ -449,6 +449,122 @@ test("a project binding filters unrelated retrieved fact evidence", () => {
   assert.deepEqual(decision.supportedAnchorTitles, ["Agentic Memory"]);
 });
 
+test("rejects a valid project anchor whose predicate does not support the ask", () => {
+  const decision = buildFactAnchorDecision({
+    questionType: "project-deep-dive",
+    questionText:
+      "What failed in production, and how did you debug and recover?",
+    memoryContext: makeMemoryResult([
+      makeRetrievedEntry({
+        entry: makeMemoryEntry({
+          id: "mem_agentic_overview",
+          type: "project_context",
+          projectId: "agentic-memory",
+          projectName: "Agentic Memory",
+          content:
+            "Agentic Memory stores durable user facts for long-running agents.",
+        }),
+      }),
+    ]),
+    projectBindingDecision: {
+      action: "preserve",
+      binding: {
+        projectId: "agentic-memory",
+        projectName: "Agentic Memory",
+        primaryEntryId: "mem_agentic_overview",
+        evidenceEntryIds: ["mem_agentic_overview"],
+        source: "memory",
+        confidence: 0.96,
+        lockedAt: 1,
+        revision: 1,
+        reason: "test-binding",
+      },
+      candidates: [],
+      changed: false,
+      sourceAuthority: "compatible-existing",
+      sourceTurnIds: ["turn_1"],
+      sourceObservationIds: [],
+      topicCompatible: true,
+      bindingRevision: 1,
+      reason: "existing-parent-binding-is-authoritative",
+    },
+  });
+
+  assert.equal(decision.state, "weak-anchor");
+  assert.deepEqual(decision.supportedAnchorIds, []);
+  assert.equal(
+    decision.claimSupportDecisions[0]?.reason,
+    "anchor-predicate-does-not-support-current-claim-family"
+  );
+});
+
+test("allows a project anchor with a bounded predicate support span", () => {
+  const decision = buildFactAnchorDecision({
+    questionType: "project-deep-dive",
+    questionText:
+      "What failed, and how did you debug and recover the feature?",
+    memoryContext: makeMemoryResult([
+      makeRetrievedEntry({
+        entry: makeMemoryEntry({
+          id: "mem_agentic_failure",
+          type: "investigation_note",
+          projectId: "agentic-memory",
+          projectName: "Agentic Memory",
+          content:
+            "The LLM returned fenced or invalid JSON. I debugged the parser boundary, stripped code fences, moved the XML contract to the prompt tail, and recovered reliable consolidation.",
+        }),
+      }),
+    ]),
+    projectBindingDecision: {
+      action: "preserve",
+      binding: {
+        projectId: "agentic-memory",
+        projectName: "Agentic Memory",
+        primaryEntryId: "mem_agentic_failure",
+        evidenceEntryIds: ["mem_agentic_failure"],
+        source: "memory",
+        confidence: 0.96,
+        lockedAt: 1,
+        revision: 1,
+        reason: "test-binding",
+      },
+      candidates: [],
+      changed: false,
+      sourceAuthority: "compatible-existing",
+      sourceTurnIds: ["turn_1"],
+      sourceObservationIds: [],
+      topicCompatible: true,
+      bindingRevision: 1,
+      reason: "existing-parent-binding-is-authoritative",
+    },
+  });
+
+  assert.equal(decision.state, "strong-anchor");
+  assert.deepEqual(decision.supportedAnchorIds, [
+    "mem_agentic_failure",
+  ]);
+  assert.match(
+    decision.claimSupportDecisions[0]?.supportSpan ?? "",
+    /invalid JSON/
+  );
+});
+
+test("does not promote a historical project label without settled evidence", () => {
+  const decision = buildFactAnchorDecision({
+    questionType: "project-deep-dive",
+    questionText: "Tell me about the project.",
+    memoryContext: makeMemoryResult([]),
+    activeFactAnchors: ["Agentic Memory"],
+  });
+
+  assert.equal(decision.state, "no-anchor");
+  assert.deepEqual(decision.supportedAnchorIds, []);
+  assert.equal(
+    decision.claimSupportDecisions[0]?.reason,
+    "active-anchor-is-not-present-in-settled-fact-evidence"
+  );
+});
+
 function makeMemoryResult(
   entries: RetrievedMemoryEntry[]
 ): MemoryRetrievalResult {

@@ -231,5 +231,7 @@ function makeDecision(
     unsupportedClaimRisk:
       state === "not-required" ? "none" : "high",
     ...remainingOverrides,
+    claimSupportDecisions:
+      remainingOverrides.claimSupportDecisions ?? [],
   };
 }

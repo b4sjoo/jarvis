@@ -545,6 +545,29 @@ export interface ProjectBindingDecision {
   reason: string;
 }
 
+export type ClaimPredicateFamily =
+  | "project-overview"
+  | "architecture-decision"
+  | "validation-reliability"
+  | "impact-lessons"
+  | "role-contribution"
+  | "collaboration-stakeholders"
+  | "behavioral-story"
+  | "personal-status";
+
+export interface ClaimSupportDecision {
+  claimId: string;
+  predicateFamily: ClaimPredicateFamily;
+  anchorId?: string;
+  projectCompatible: boolean;
+  predicateCompatible: boolean;
+  supportSpanPresent: boolean;
+  supportSpan?: string;
+  conflictFree: boolean;
+  decision: "allow" | "reject" | "needs-clarification";
+  reason: string;
+}
+
 export interface FactAnchorDecision {
   state: FactAnchorState;
   requiredFor: FactAnchorRequiredFor;
@@ -556,6 +579,8 @@ export interface FactAnchorDecision {
   personalEvidence: PersonalEvidenceDecision;
   selectedPersonalEvidenceSources: PersonalEvidenceSource[];
   unsupportedClaimRisk: "none" | "guarded" | "high" | "shadow-observed";
+  claimPredicateFamily?: ClaimPredicateFamily;
+  claimSupportDecisions: ClaimSupportDecision[];
 }
 
 export interface ActiveScreenTask {

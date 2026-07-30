@@ -10,6 +10,8 @@ import {
 import type {
   FactAnchorDecision,
   FactAnchorRequiredFor,
+  ClaimPredicateFamily,
+  ClaimSupportDecision,
   PersonalEvidenceDecision,
   PersonalEvidenceGuardrailMode,
   PersonalEvidenceSource,
@@ -178,6 +180,7 @@ export function buildFactAnchorDecision({
       action: "answer-with-anchor",
       personalEvidence,
       selectedPersonalEvidenceSources: [],
+      claimSupportDecisions: [],
       unsupportedClaimRisk:
         personalEvidence.mode === "shadow" &&
         personalEvidence.confidenceTier === "high" &&
@@ -216,38 +219,51 @@ export function buildFactAnchorDecision({
         : "No eligible project evidence was retrieved for the requested first-person project answer.",
       personalEvidence,
       selectedPersonalEvidenceSources: [],
+      claimPredicateFamily: "project-overview",
+      claimSupportDecisions: [],
       unsupportedClaimRisk: "high",
     };
   }
 
+  const predicateFamily = inferClaimPredicateFamily(
+    questionText,
+    requiredFor
+  );
+  const claimSupportDecisions = evaluateClaimSupport({
+    entries: memoryContext?.entries ?? [],
+    activeFactAnchors,
+    projectBindingDecision,
+    predicateFamily,
+  });
+  const allowedAnchorIds = new Set(
+    claimSupportDecisions
+      .filter((decision) => decision.decision === "allow")
+      .map((decision) => decision.anchorId)
+      .filter((value): value is string => Boolean(value))
+  );
   const memoryAnchors = collectFactAnchorEntries(
     memoryContext?.entries ?? [],
     projectBindingDecision
-  );
-  const activeAnchors = projectBindingDecision?.binding
-    ? normalizeActiveFactAnchors(activeFactAnchors).filter((anchor) =>
-        activeAnchorMatchesBinding(anchor, projectBindingDecision.binding!)
-      )
-    : normalizeActiveFactAnchors(activeFactAnchors);
+  ).filter((item) => allowedAnchorIds.has(item.entry.id));
   const supportedAnchorIds = uniqueStrings([
     ...memoryAnchors.map((item) => item.entry.id),
-    ...activeAnchors,
   ]);
   const supportedAnchorTitles = uniqueStrings([
     ...memoryAnchors.map(formatMemoryAnchorTitle),
-    ...activeAnchors,
   ]);
 
-  if (memoryAnchors.length || activeAnchors.length) {
+  if (memoryAnchors.length) {
     return {
       state: "strong-anchor",
       requiredFor,
       supportedAnchorIds,
       supportedAnchorTitles,
-      selectedAnchorId: memoryAnchors[0]?.entry.id ?? activeAnchors[0],
+      selectedAnchorId: memoryAnchors[0]?.entry.id,
       action: "answer-with-anchor",
       personalEvidence,
       selectedPersonalEvidenceSources: [],
+      claimPredicateFamily: predicateFamily,
+      claimSupportDecisions,
       unsupportedClaimRisk: "guarded",
     };
   }
@@ -264,6 +280,8 @@ export function buildFactAnchorDecision({
         "Memory retrieval found guidance or rubrics, but no concrete project/story fact anchor.",
       personalEvidence,
       selectedPersonalEvidenceSources: [],
+      claimPredicateFamily: predicateFamily,
+      claimSupportDecisions,
       unsupportedClaimRisk: "high",
     };
   }
@@ -280,6 +298,8 @@ export function buildFactAnchorDecision({
       : "No curated memory fact anchor was retrieved for this behavioral or project deep-dive answer.",
     personalEvidence,
     selectedPersonalEvidenceSources: [],
+    claimPredicateFamily: predicateFamily,
+    claimSupportDecisions,
     unsupportedClaimRisk: "high",
   };
 }
@@ -313,6 +333,16 @@ export function formatFactAnchorDecisionForPrompt(
       ? `Hypothetical counter-signals: ${decision.personalEvidence.counterSignals.join(", ")}`
       : undefined,
     `Unsupported claim risk: ${decision.unsupportedClaimRisk}`,
+    decision.claimPredicateFamily
+      ? `Claim predicate family: ${decision.claimPredicateFamily}`
+      : undefined,
+    decision.claimSupportDecisions.length
+      ? `Allowed claim anchors: ${decision.claimSupportDecisions
+          .filter((item) => item.decision === "allow")
+          .map((item) => item.anchorId)
+          .filter(Boolean)
+          .join(", ") || "none"}`
+      : undefined,
     decision.supportedAnchorTitles.length
       ? `Supported anchors: ${decision.supportedAnchorTitles.join(", ")}`
       : "Supported anchors: none",
@@ -358,6 +388,8 @@ export function formatFactAnchorDecisionForTrace(
     personalEvidenceGuardrailMode: decision.personalEvidence.mode,
     personalEvidenceEnforced: decision.personalEvidence.enforced,
     unsupportedClaimRisk: decision.unsupportedClaimRisk,
+    factAnchorClaimPredicateFamily: decision.claimPredicateFamily,
+    factAnchorClaimSupportDecisions: decision.claimSupportDecisions,
   };
 }
 
@@ -419,6 +451,8 @@ function buildPersonalStatusFactDecision({
       action: "answer-with-anchor",
       personalEvidence,
       selectedPersonalEvidenceSources,
+      claimPredicateFamily: "personal-status",
+      claimSupportDecisions: [],
       unsupportedClaimRisk: "guarded",
     };
   }
@@ -433,6 +467,8 @@ function buildPersonalStatusFactDecision({
       "No relevant profile-memory or confirmed-Me fact supports this personal status/logistics answer. Raw Interview Brief focus areas and notes are guidance only.",
     personalEvidence,
     selectedPersonalEvidenceSources: [],
+    claimPredicateFamily: "personal-status",
+    claimSupportDecisions: [],
     unsupportedClaimRisk: "high",
   };
 }
@@ -558,6 +594,306 @@ function formatPersonalProfileMemoryContext(entries: RetrievedMemoryEntry[]) {
   ].join("\n\n");
 }
 
+function inferClaimPredicateFamily(
+  questionText: string | undefined,
+  requiredFor: FactAnchorRequiredFor
+): ClaimPredicateFamily {
+  if (requiredFor === "behavioral") return "behavioral-story";
+  if (requiredFor === "personal-logistics") return "personal-status";
+
+  const normalized = normalizeEvidenceText(questionText);
+  if (
+    hasAnyEvidenceTerm(normalized, [
+      "stakeholder",
+      "partner",
+      "who did you work with",
+      "collaborate",
+      "cross functional",
+    ])
+  ) {
+    return "collaboration-stakeholders";
+  }
+  if (
+    hasAnyEvidenceTerm(normalized, [
+      "your role",
+      "your contribution",
+      "personally",
+      "what did you do",
+      "what were you responsible",
+      "ownership",
+    ])
+  ) {
+    return "role-contribution";
+  }
+  if (
+    hasAnyEvidenceTerm(normalized, [
+      "failure",
+      "failed",
+      "challenge",
+      "difficult",
+      "debug",
+      "test",
+      "validate",
+      "reliability",
+      "recover",
+      "incident",
+      "wrong",
+    ])
+  ) {
+    return "validation-reliability";
+  }
+  if (
+    hasAnyEvidenceTerm(normalized, [
+      "impact",
+      "result",
+      "metric",
+      "outcome",
+      "lesson",
+      "learn",
+      "improve",
+      "next time",
+      "limitation",
+    ])
+  ) {
+    return "impact-lessons";
+  }
+  if (
+    hasAnyEvidenceTerm(normalized, [
+      "architecture",
+      "design",
+      "decision",
+      "tradeoff",
+      "trade off",
+      "alternative",
+      "why did you choose",
+      "approach",
+      "option",
+      "backend system",
+      "database",
+      "data store",
+      "cache",
+    ])
+  ) {
+    return "architecture-decision";
+  }
+  return "project-overview";
+}
+
+function evaluateClaimSupport({
+  entries,
+  activeFactAnchors,
+  projectBindingDecision,
+  predicateFamily,
+}: {
+  entries: RetrievedMemoryEntry[];
+  activeFactAnchors: string[];
+  projectBindingDecision?: ProjectBindingDecision;
+  predicateFamily: ClaimPredicateFamily;
+}): ClaimSupportDecision[] {
+  const eligibleEntries = collectFactAnchorEntries(
+    entries,
+    projectBindingDecision
+  );
+  const decisions = eligibleEntries.map((item) =>
+    evaluateMemoryClaimSupport({
+      item,
+      binding: projectBindingDecision?.binding,
+      predicateFamily,
+    })
+  );
+  const evaluatedIds = new Set(
+    decisions
+      .map((decision) => decision.anchorId)
+      .filter((value): value is string => Boolean(value))
+  );
+
+  for (const activeAnchor of normalizeActiveFactAnchors(
+    activeFactAnchors
+  )) {
+    if (evaluatedIds.has(activeAnchor)) continue;
+    decisions.push({
+      claimId: `claim:${predicateFamily}:${activeAnchor}`,
+      predicateFamily,
+      anchorId: activeAnchor,
+      projectCompatible: false,
+      predicateCompatible: false,
+      supportSpanPresent: false,
+      conflictFree: false,
+      decision: "reject",
+      reason:
+        "active-anchor-is-not-present-in-settled-fact-evidence",
+    });
+  }
+
+  return decisions;
+}
+
+function evaluateMemoryClaimSupport({
+  item,
+  binding,
+  predicateFamily,
+}: {
+  item: RetrievedMemoryEntry;
+  binding?: NonNullable<ProjectBindingDecision["binding"]>;
+  predicateFamily: ClaimPredicateFamily;
+}): ClaimSupportDecision {
+  const entry = item.entry;
+  const projectCompatible = binding
+    ? projectIdentityMatchesBinding(
+        entry.projectId,
+        entry.projectName,
+        binding.projectId,
+        binding.projectName
+      )
+    : true;
+  const evidenceText = [
+    entry.title,
+    entry.summary,
+    item.injectedContent,
+    ...entry.tags,
+    ...entry.keywords,
+  ]
+    .filter(Boolean)
+    .join(" ");
+  const normalizedEvidence = normalizeEvidenceText(evidenceText);
+  const predicateTerms = CLAIM_PREDICATE_TERMS[predicateFamily];
+  const predicateCompatible =
+    predicateFamily === "project-overview"
+      ? normalizedEvidence.length >= 16
+      : predicateFamily === "behavioral-story"
+        ? [
+            "personal_story",
+            "answer_evidence",
+            "achievement_metric",
+            "project_context",
+          ].includes(entry.type)
+        : hasAnyEvidenceTerm(normalizedEvidence, predicateTerms);
+  const supportSpan = extractSupportSpan(
+    item.injectedContent || entry.summary || entry.content,
+    predicateFamily === "project-overview" ||
+      predicateFamily === "behavioral-story"
+      ? []
+      : predicateTerms
+  );
+  const supportSpanPresent = Boolean(supportSpan);
+  const conflictFree = projectCompatible;
+  const allowed =
+    projectCompatible &&
+    predicateCompatible &&
+    supportSpanPresent &&
+    conflictFree;
+
+  return {
+    claimId: `claim:${predicateFamily}:${entry.id}`,
+    predicateFamily,
+    anchorId: entry.id,
+    projectCompatible,
+    predicateCompatible,
+    supportSpanPresent,
+    supportSpan,
+    conflictFree,
+    decision: allowed ? "allow" : "reject",
+    reason: allowed
+      ? "anchor-supports-current-project-predicate"
+      : !projectCompatible
+        ? "anchor-project-does-not-match-settled-binding"
+        : !predicateCompatible
+          ? "anchor-predicate-does-not-support-current-claim-family"
+          : "anchor-has-no-bounded-support-span",
+  };
+}
+
+function extractSupportSpan(text: string | undefined, terms: string[]) {
+  const compact = (text ?? "").replace(/\s+/g, " ").trim();
+  if (compact.length < 12) return undefined;
+  if (!terms.length) return compact.slice(0, 260);
+
+  const sentences = compact
+    .split(/(?<=[.!?])\s+|\n+/)
+    .map((sentence) => sentence.trim())
+    .filter(Boolean);
+  const supportingSentence = sentences.find((sentence) =>
+    hasAnyEvidenceTerm(normalizeEvidenceText(sentence), terms)
+  );
+  return supportingSentence?.slice(0, 260);
+}
+
+function hasAnyEvidenceTerm(text: string, terms: string[]) {
+  return terms.some((term) =>
+    text.includes(normalizeEvidenceText(term))
+  );
+}
+
+const CLAIM_PREDICATE_TERMS: Record<ClaimPredicateFamily, string[]> = {
+  "project-overview": [],
+  "architecture-decision": [
+    "architecture",
+    "design",
+    "component",
+    "pipeline",
+    "strategy",
+    "decision",
+    "tradeoff",
+    "trade off",
+    "alternative",
+    "option",
+    "chose",
+    "choice",
+  ],
+  "validation-reliability": [
+    "failure",
+    "failed",
+    "error",
+    "debug",
+    "test",
+    "validation",
+    "reliability",
+    "recover",
+    "recovery",
+    "incident",
+    "root cause",
+    "json",
+    "parser",
+  ],
+  "impact-lessons": [
+    "impact",
+    "result",
+    "metric",
+    "latency",
+    "throughput",
+    "cost",
+    "saved",
+    "reduced",
+    "improved",
+    "lesson",
+    "learned",
+    "limitation",
+    "next",
+  ],
+  "role-contribution": [
+    "implemented",
+    "designed",
+    "built",
+    "led",
+    "drove",
+    "owned",
+    "investigated",
+    "contributed",
+    "my role",
+    "responsible",
+  ],
+  "collaboration-stakeholders": [
+    "partner",
+    "stakeholder",
+    "collaborated",
+    "collaboration",
+    "cross functional",
+    "team",
+  ],
+  "behavioral-story": [],
+  "personal-status": [],
+};
+
 function collectFactAnchorEntries(
   entries: RetrievedMemoryEntry[],
   projectBindingDecision?: ProjectBindingDecision
@@ -592,18 +928,6 @@ function normalizeActiveFactAnchors(anchors: string[]) {
       .filter(Boolean)
       .filter((anchor) => !GENERIC_ANCHOR_TITLES.has(anchor.toLowerCase()))
   ).slice(0, 8);
-}
-
-function activeAnchorMatchesBinding(
-  anchor: string,
-  binding: NonNullable<ProjectBindingDecision["binding"]>
-) {
-  return projectIdentityMatchesBinding(
-    anchor,
-    anchor,
-    binding.projectId,
-    binding.projectName
-  );
 }
 
 function projectIdentityMatchesBinding(

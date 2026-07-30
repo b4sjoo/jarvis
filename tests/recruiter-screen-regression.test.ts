@@ -120,12 +120,24 @@ test("replays the sanitized recruiter failure chain through runtime decisions", 
       memoryContext,
       projectBindingDecision: bindingDecision,
     });
-    assert.equal(factAnchorDecision.state, "strong-anchor", `${turn.id}: anchor`);
     assert.equal(
-      factAnchorDecision.selectedAnchorId,
-      fixture.project.evidenceEntryId,
-      `${turn.id}: selected evidence`
+      factAnchorDecision.state,
+      turn.expectedFactAnchorState,
+      `${turn.id}: anchor`
     );
+    if (turn.expectedFactAnchorState === "strong-anchor") {
+      assert.equal(
+        factAnchorDecision.selectedAnchorId,
+        fixture.project.evidenceEntryId,
+        `${turn.id}: selected evidence`
+      );
+    } else {
+      assert.equal(
+        factAnchorDecision.selectedAnchorId,
+        undefined,
+        `${turn.id}: unsupported predicate must not borrow overview evidence`
+      );
+    }
 
     const parsed = parseMeetingAnswer(turn.answerOutput ?? "", {
       expectedProfile: "compact-spoken",
@@ -243,9 +255,16 @@ test("keeps recruiter guidance and interviewer options out of fact evidence", ()
     projectBindingDecision: bindingDecision,
   });
 
-  assert.deepEqual(factAnchor.supportedAnchorIds, [
-    RECRUITER_SCREEN_REGRESSION_FIXTURE.project.evidenceEntryId,
-  ]);
+  assert.deepEqual(factAnchor.supportedAnchorIds, []);
+  assert.equal(factAnchor.state, "weak-anchor");
+  assert.equal(
+    factAnchor.claimSupportDecisions.find(
+      (decision) =>
+        decision.anchorId ===
+        RECRUITER_SCREEN_REGRESSION_FIXTURE.project.evidenceEntryId
+    )?.reason,
+    "anchor-predicate-does-not-support-current-claim-family"
+  );
   assert.ok(
     !factAnchor.supportedAnchorIds.map(String).includes("mem_testing_guidance")
   );
