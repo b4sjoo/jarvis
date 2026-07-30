@@ -42,6 +42,7 @@ export * from "./interview-playbook";
 export * from "./interview-section-transition";
 export * from "./playbook-phase";
 export * from "./playbook-phase-history";
+export * from "./parent-admission";
 export * from "./programming-language";
 export * from "./interview-session-context";
 export * from "./manual-question-type-correction";

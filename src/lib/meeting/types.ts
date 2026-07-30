@@ -568,6 +568,28 @@ export interface ActiveInterviewChild {
   basedOnObservationIds: string[];
 }
 
+export type ParentAdmissionDurability = "provisional" | "durable";
+
+export type ParentAdmissionAction =
+  | "append-only"
+  | "provisional"
+  | "create-parent"
+  | "reseed-parent"
+  | "preserve-parent";
+
+export interface ParentAdmissionRecord {
+  durability: ParentAdmissionDurability;
+  action: Extract<
+    ParentAdmissionAction,
+    "create-parent" | "reseed-parent"
+  >;
+  authoritySource: string;
+  sourceTurnIds: string[];
+  sourceObservationIds: string[];
+  reason: string;
+  admittedAt: number;
+}
+
 export type WhiteboardDomainTrack =
   | "general_sd"
   | "ml_sd"
@@ -681,6 +703,7 @@ export interface ActiveInterviewParent {
   sourceQuestionRevision?: number;
   settlementId?: string;
   parentContextHandoff?: ParentContextHandoff;
+  admission?: ParentAdmissionRecord;
   child?: ActiveInterviewChild;
   revisions: number;
 }

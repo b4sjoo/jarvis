@@ -5,6 +5,11 @@ import {
   type PlaybookPhaseDecision,
 } from "./playbook-phase.js";
 import {
+  createParentAdmissionRecord,
+  decideParentAdmission,
+  type ParentAdmissionDecision,
+} from "./parent-admission.js";
+import {
   isParentCanonicalQuestionType,
   normalizeCanonicalQuestionType,
   type CanonicalQuestionType,
@@ -18,6 +23,7 @@ import type {
 
 export type SourceOwnedTransitionKind =
   | "new-parent"
+  | "reseed-parent"
   | "child-probe"
   | "resume-parent"
   | "phase-progress";
@@ -47,6 +53,7 @@ export interface SourceOwnedTransitionCandidate {
   questionInstanceId?: string;
   playbook?: SelectedInterviewPlaybook;
   phaseDecision?: PlaybookPhaseDecision;
+  parentAdmission?: ParentAdmissionDecision;
   expiresAt?: number;
   state: SourceOwnedTransitionState;
   rejectionReason?: string;
@@ -121,6 +128,8 @@ export function createSourceOwnedTransitionCandidate(
     existingTask: input.existingTask,
     phaseDecision: input.phaseDecision,
     playbook: input.playbook,
+    questionType,
+    mutationAuthorized: input.mutationAuthorized,
   });
   if (!kind) return undefined;
 
@@ -158,6 +167,15 @@ export function createSourceOwnedTransitionCandidate(
     phaseDecision: input.phaseDecision
       ? clonePhaseDecision(input.phaseDecision)
       : undefined,
+    parentAdmission:
+      kind === "new-parent" || kind === "reseed-parent"
+        ? decideParentAdmission({
+            existingParent: input.existingTask,
+            relation: input.relation,
+            questionType,
+            mutationAuthorized: input.mutationAuthorized,
+          })
+        : undefined,
     expiresAt: input.expiresAt,
     state: "pending",
     createdAt: now,
@@ -296,6 +314,12 @@ export function formatSourceOwnedTransitionForTrace(
     sourceTransitionPhaseAfter: commitResult?.phaseAfter,
     sourceTransitionProgressBefore: commitResult?.progressBefore,
     sourceTransitionProgressAfter: commitResult?.progressAfter,
+    sourceTransitionParentAdmissionAction:
+      candidate.parentAdmission?.action,
+    sourceTransitionParentAdmissionReason:
+      candidate.parentAdmission?.reason,
+    sourceTransitionParentAdmissionInvalidatedState:
+      candidate.parentAdmission?.invalidatedState,
     sourceTransitionModelRequestStartedAt: extra.modelRequestStartedAt,
     sourceTransitionModelOutcome: extra.modelOutcome,
     sourceTransitionSurvivedModelOutcome:
@@ -308,8 +332,20 @@ function chooseTransitionKind(input: {
   existingTask?: ActiveInterviewParent;
   phaseDecision?: PlaybookPhaseDecision;
   playbook?: SelectedInterviewPlaybook;
+  questionType: CanonicalQuestionType;
+  mutationAuthorized: boolean;
 }): SourceOwnedTransitionKind | undefined {
-  if (input.relation === "new-parent") return "new-parent";
+  if (input.relation === "new-parent") {
+    const admission = decideParentAdmission({
+      existingParent: input.existingTask,
+      relation: input.relation,
+      questionType: input.questionType,
+      mutationAuthorized: input.mutationAuthorized,
+    });
+    return admission.action === "reseed-parent"
+      ? "reseed-parent"
+      : "new-parent";
+  }
   if (input.relation === "child-probe") return "child-probe";
   if (input.relation === "resume-parent") return "resume-parent";
   if (input.relation !== "followup-parent") return undefined;
@@ -336,13 +372,15 @@ function authorizeCandidate(
 ) {
   if (!mutationAuthorized) return "mutation-unauthorized";
   if (
-    candidate.kind === "new-parent" &&
+    (candidate.kind === "new-parent" ||
+      candidate.kind === "reseed-parent") &&
     !isParentCanonicalQuestionType(candidate.questionType)
   ) {
     return "new-parent-type-not-eligible";
   }
   if (
     candidate.kind !== "new-parent" &&
+    candidate.kind !== "reseed-parent" &&
     !candidate.expectedParentId
   ) {
     return "active-parent-required";
@@ -355,6 +393,7 @@ function authorizeCandidate(
   }
   if (
     (candidate.kind === "new-parent" ||
+      candidate.kind === "reseed-parent" ||
       candidate.kind === "child-probe") &&
     !candidate.question
   ) {
@@ -418,10 +457,86 @@ function applyTransition(
         startObservationId: candidate.sourceObservationIds[0],
         promptTranscriptStartTurnId: candidate.sourceTurnIds[0],
         canonicalQuestionSourceTurnIds: [...candidate.sourceTurnIds],
+        admission: createParentAdmissionRecord({
+          action: "create-parent",
+          authoritySource: candidate.authoritySource,
+          sourceTurnIds: candidate.sourceTurnIds,
+          sourceObservationIds: candidate.sourceObservationIds,
+          reason:
+            candidate.parentAdmission?.reason ??
+            "source-owned-new-parent",
+          admittedAt: now,
+        }),
         revisions: 1,
       },
       mutationApplied: true,
       reason: "new-parent-committed",
+    };
+  }
+
+  if (candidate.kind === "reseed-parent") {
+    if (!currentTask) {
+      return {
+        task: currentTask,
+        mutationApplied: false,
+        reason: "active-parent-required",
+      };
+    }
+    const stableKind = candidate.questionType;
+    if (!isParentCanonicalQuestionType(stableKind)) {
+      return {
+        task: currentTask,
+        mutationApplied: false,
+        reason: "reseed-parent-type-not-eligible",
+      };
+    }
+    const phase =
+      candidate.phaseDecision?.phase ??
+      candidate.playbook?.phase ??
+      "follow_up";
+    const playbook = withPlaybookPhase(candidate.playbook, phase);
+    return {
+      task: {
+        id: currentTask.id,
+        source: candidate.source,
+        stableKind,
+        topic: candidate.question || "Unknown interview task",
+        playbook,
+        playbookPhase: phase,
+        phaseProgress: applyPlaybookPhaseDecisionToProgress(
+          createInitialPlaybookPhaseProgress(stableKind, playbook?.phase),
+          candidate.phaseDecision,
+          playbook?.phase
+        ),
+        projectBinding: undefined,
+        supportedFactAnchors: [],
+        latestUsefulAnswer: undefined,
+        previousUsefulAnswer: undefined,
+        whiteboardArtifact: undefined,
+        createdAt: currentTask.createdAt,
+        updatedAt: now,
+        expiresAt: candidate.expiresAt,
+        originQuestionId: candidate.questionInstanceId,
+        startTurnId: candidate.sourceTurnIds[0],
+        startObservationId: candidate.sourceObservationIds[0],
+        promptTranscriptStartTurnId: candidate.sourceTurnIds[0],
+        canonicalQuestionSourceTurnIds: [...candidate.sourceTurnIds],
+        parentContextHandoff: undefined,
+        admission: createParentAdmissionRecord({
+          action: "reseed-parent",
+          authoritySource: candidate.authoritySource,
+          sourceTurnIds: candidate.sourceTurnIds,
+          sourceObservationIds: candidate.sourceObservationIds,
+          reason:
+            candidate.parentAdmission?.reason ??
+            "source-owned-parent-reseed",
+          admittedAt: now,
+        }),
+        child: undefined,
+        revisions: currentTask.revisions + 1,
+      },
+      mutationApplied: true,
+      reason: "parent-reseed-committed",
     };
   }
 

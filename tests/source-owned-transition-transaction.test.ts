@@ -231,10 +231,89 @@ test("creates a screen parent before its model produces an answer", () => {
   assert.equal(result.task?.stableKind, "general-system-design");
   assert.equal(result.task?.startObservationId, "screen-a");
   assert.equal(result.task?.latestUsefulAnswer, undefined);
+  assert.equal(result.task?.admission?.durability, "durable");
+  assert.equal(result.task?.admission?.action, "create-parent");
   assert.equal(
     sourceOwnedTransitionSurvivesModelOutcome(result, "empty-output"),
     true
   );
+});
+
+test("reseeds a provisional parent and invalidates stale project state atomically", () => {
+  const parent = makeParent({
+    stableKind: "project-deep-dive",
+    topic: "Throttling",
+    projectBinding: {
+      projectId: "throttling",
+      projectName: "Throttling",
+      primaryEntryId: "mem_throttling",
+      evidenceEntryIds: ["mem_throttling"],
+      source: "memory",
+      confidence: 0.9,
+      lockedAt: 10,
+      revision: 1,
+      reason: "legacy-binding",
+    },
+    supportedFactAnchors: ["mem_throttling"],
+    child: {
+      id: "child-old",
+      createdAt: 20,
+      updatedAt: 20,
+      questionType: "field-knowledge",
+      relation: "child-probe",
+      intent: "concept-probe",
+      question: "What is a token bucket?",
+      basedOnTurnIds: ["turn-old-child"],
+      basedOnObservationIds: [],
+    },
+    admission: {
+      durability: "provisional",
+      action: "create-parent",
+      authoritySource: "legacy-provisional",
+      sourceTurnIds: ["turn-old"],
+      sourceObservationIds: [],
+      reason: "legacy-weak-parent",
+      admittedAt: 10,
+    },
+  });
+  const candidate = createSourceOwnedTransitionCandidate({
+    sessionId: "session-a",
+    runtimeEpoch: 3,
+    source: "voice",
+    sourceTurnIds: ["turn-agentic"],
+    existingTask: parent,
+    relation: "new-parent",
+    authoritySource: "accepted-transcript",
+    mutationAuthorized: true,
+    questionType: "project-deep-dive",
+    question: "Tell me about the Agentic Memory project.",
+    playbook: makePlaybook(
+      "project_deep_dive",
+      "project-deep-dive",
+      "project_narrative"
+    ),
+    now: 100,
+  });
+  assert.ok(candidate);
+  assert.equal(candidate.kind, "reseed-parent");
+
+  const result = commitSourceOwnedTransition({
+    candidate,
+    currentTask: parent,
+    currentSessionId: "session-a",
+    currentRuntimeEpoch: 3,
+    now: 110,
+  });
+
+  assert.equal(result.task?.id, parent.id);
+  assert.equal(result.task?.topic, "Tell me about the Agentic Memory project.");
+  assert.equal(result.task?.projectBinding, undefined);
+  assert.deepEqual(result.task?.supportedFactAnchors, []);
+  assert.equal(result.task?.whiteboardArtifact, undefined);
+  assert.equal(result.task?.child, undefined);
+  assert.equal(result.task?.playbookPhase, "project_narrative");
+  assert.equal(result.task?.admission?.action, "reseed-parent");
+  assert.equal(result.task?.revisions, parent.revisions + 1);
 });
 
 test("keeps a screen child committed when the model is cancelled", () => {
