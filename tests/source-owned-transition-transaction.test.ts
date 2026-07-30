@@ -44,6 +44,11 @@ test("commits a child before output and preserves parent artifacts", () => {
   assert.equal(result.mutationApplied, true);
   assert.equal(result.task?.id, parent.id);
   assert.equal(result.task?.child?.questionType, "coding");
+  assert.equal(result.task?.child?.returnCapsule?.parentId, parent.id);
+  assert.equal(
+    result.task?.child?.returnCapsule?.parentPhase,
+    "design_framing"
+  );
   assert.equal(result.task?.whiteboardArtifact, parent.whiteboardArtifact);
   assert.equal(
     sourceOwnedTransitionSurvivesModelOutcome(result, "error"),
@@ -91,6 +96,176 @@ test("resumes a parent without restarting its phase", () => {
   assert.equal(result.task?.child, undefined);
   assert.equal(result.task?.playbookPhase, "design_framing");
   assert.deepEqual(result.task?.phaseProgress, parent.phaseProgress);
+});
+
+test("resumes a child from its bounded parent capsule", () => {
+  const parent = makeParent({
+    stableKind: "project-deep-dive",
+    topic: "Agentic Memory",
+    playbook: makePlaybook(
+      "project_deep_dive",
+      "project-deep-dive",
+      "architecture_decision"
+    ),
+    playbookPhase: "architecture_decision",
+    phaseProgress: {
+      project_narrative: true,
+      architecture_decision: true,
+    },
+    projectBinding: {
+      projectId: "agentic-memory",
+      projectName: "Agentic Memory",
+      primaryEntryId: "mem-agentic",
+      evidenceEntryIds: ["mem-agentic"],
+      source: "interviewer-explicit",
+      confidence: 1,
+      lockedAt: 10,
+      revision: 4,
+      reason: "explicit-project",
+    },
+    supportedFactAnchors: ["mem-agentic", "mem-agentic-parser"],
+  });
+  const childCandidate = createSourceOwnedTransitionCandidate({
+    sessionId: "session-a",
+    runtimeEpoch: 3,
+    source: "voice",
+    sourceTurnIds: ["turn-child"],
+    existingTask: parent,
+    relation: "child-probe",
+    authoritySource: "accepted-transcript",
+    mutationAuthorized: true,
+    questionType: "field-knowledge",
+    question: "Why can LLM JSON output be invalid?",
+    subtaskIntent: "concept-probe",
+    now: 100,
+  });
+  assert.ok(childCandidate);
+  const childResult = commitSourceOwnedTransition({
+    candidate: childCandidate,
+    currentTask: parent,
+    currentSessionId: "session-a",
+    currentRuntimeEpoch: 3,
+    now: 110,
+  });
+  assert.ok(childResult.task);
+  assert.equal(
+    childResult.task.child?.returnCapsule?.projectBindingRevision,
+    4
+  );
+  assert.equal(
+    childResult.task.child?.returnCapsule?.topicCapsule,
+    "Agentic Memory"
+  );
+
+  const withChildMutation = {
+    ...childResult.task,
+    playbookPhase: "follow_up" as const,
+    supportedFactAnchors: ["child-only-anchor"],
+  };
+  const resumeCandidate = createSourceOwnedTransitionCandidate({
+    sessionId: "session-a",
+    runtimeEpoch: 3,
+    source: "voice",
+    sourceTurnIds: ["turn-resume"],
+    existingTask: withChildMutation,
+    relation: "resume-parent",
+    authoritySource: "accepted-transcript",
+    mutationAuthorized: true,
+    questionType: "project-deep-dive",
+    question: "Let's return to the architecture tradeoff.",
+    now: 120,
+  });
+  assert.ok(resumeCandidate);
+  const resumed = commitSourceOwnedTransition({
+    candidate: resumeCandidate,
+    currentTask: withChildMutation,
+    currentSessionId: "session-a",
+    currentRuntimeEpoch: 3,
+    now: 130,
+  });
+
+  assert.equal(resumed.mutationApplied, true);
+  assert.equal(resumed.task?.child, undefined);
+  assert.equal(resumed.task?.playbookPhase, "architecture_decision");
+  assert.deepEqual(resumed.task?.supportedFactAnchors, [
+    "mem-agentic",
+    "mem-agentic-parser",
+  ]);
+  assert.equal(resumed.task?.projectBinding?.projectId, "agentic-memory");
+});
+
+test("rejects parent resume after the project binding changes", () => {
+  const parent = makeParent({
+    stableKind: "project-deep-dive",
+    projectBinding: {
+      projectId: "agentic-memory",
+      projectName: "Agentic Memory",
+      primaryEntryId: "mem-agentic",
+      evidenceEntryIds: ["mem-agentic"],
+      source: "interviewer-explicit",
+      confidence: 1,
+      lockedAt: 10,
+      revision: 2,
+      reason: "explicit-project",
+    },
+  });
+  const childCandidate = createSourceOwnedTransitionCandidate({
+    sessionId: "session-a",
+    runtimeEpoch: 3,
+    source: "voice",
+    sourceTurnIds: ["turn-child"],
+    existingTask: parent,
+    relation: "child-probe",
+    authoritySource: "accepted-transcript",
+    mutationAuthorized: true,
+    questionType: "coding",
+    question: "Implement a parser helper.",
+    subtaskIntent: "implementation-probe",
+    now: 100,
+  });
+  assert.ok(childCandidate);
+  const childResult = commitSourceOwnedTransition({
+    candidate: childCandidate,
+    currentTask: parent,
+    currentSessionId: "session-a",
+    currentRuntimeEpoch: 3,
+    now: 110,
+  });
+  assert.ok(childResult.task);
+  const rebound = {
+    ...childResult.task,
+    projectBinding: {
+      ...childResult.task.projectBinding!,
+      projectId: "throttling",
+      projectName: "Throttling",
+      revision: 3,
+    },
+  };
+  const resumeCandidate = createSourceOwnedTransitionCandidate({
+    sessionId: "session-a",
+    runtimeEpoch: 3,
+    source: "voice",
+    sourceTurnIds: ["turn-resume"],
+    existingTask: rebound,
+    relation: "resume-parent",
+    authoritySource: "accepted-transcript",
+    mutationAuthorized: true,
+    questionType: "project-deep-dive",
+    question: "Back to the project.",
+    now: 120,
+  });
+  assert.ok(resumeCandidate);
+  const resumed = commitSourceOwnedTransition({
+    candidate: resumeCandidate,
+    currentTask: rebound,
+    currentSessionId: "session-a",
+    currentRuntimeEpoch: 3,
+    now: 130,
+  });
+
+  assert.equal(resumed.mutationApplied, false);
+  assert.equal(resumed.reason, "parent-return-capsule-binding-mismatch");
+  assert.equal(resumed.task?.child?.id, childResult.task.child?.id);
 });
 
 test("commits source-supported phase progress before model output", () => {

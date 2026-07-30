@@ -548,7 +548,24 @@ function cloneActiveInterviewTask(
     canonicalQuestionSourceTurnIds: task.canonicalQuestionSourceTurnIds
       ? [...task.canonicalQuestionSourceTurnIds]
       : undefined,
-    child: task.child ? { ...task.child } : undefined,
+    child: task.child
+      ? {
+          ...task.child,
+          basedOnTurnIds: [...task.child.basedOnTurnIds],
+          basedOnObservationIds: [...task.child.basedOnObservationIds],
+          returnCapsule: task.child.returnCapsule
+            ? {
+                ...task.child.returnCapsule,
+                allowedFactAnchorIds: [
+                  ...task.child.returnCapsule.allowedFactAnchorIds,
+                ],
+                artifactCompatibility: {
+                  ...task.child.returnCapsule.artifactCompatibility,
+                },
+              }
+            : undefined,
+        }
+      : undefined,
     whiteboardArtifact: task.whiteboardArtifact
       ? { ...task.whiteboardArtifact }
       : undefined,

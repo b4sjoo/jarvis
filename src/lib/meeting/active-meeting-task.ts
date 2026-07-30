@@ -5,6 +5,7 @@ import type {
   InterviewPlaybookPhase,
   InterviewSubtaskIntent,
   ParentContextHandoff,
+  ParentReturnCapsule,
   ProjectBinding,
   ScreenCaptureTarget,
   ScreenObservation,
@@ -69,6 +70,7 @@ export interface ActiveMeetingChild {
   artifactId?: string;
   basedOnTurnIds: string[];
   basedOnObservationIds: string[];
+  returnCapsule?: ParentReturnCapsule;
 }
 
 export interface ActiveMeetingScreenContext {
@@ -268,6 +270,10 @@ export function getActiveMeetingTaskTraceMetadata(
     activeMeetingChildId: task.child?.id,
     activeMeetingChildQuestionType: task.child?.questionType,
     activeMeetingChildIntent: task.child?.intent,
+    activeMeetingChildReturnParentId: task.child?.returnCapsule?.parentId,
+    activeMeetingChildReturnPhase: task.child?.returnCapsule?.parentPhase,
+    activeMeetingChildReturnProjectBindingRevision:
+      task.child?.returnCapsule?.projectBindingRevision,
     activeMeetingScreenTaskId: task.screen?.activeScreenTaskId,
     activeMeetingScreenAskFrame: task.screen?.askFrame,
     activeMeetingScreenTopicDomain: task.screen?.topicDomain,
@@ -317,6 +323,9 @@ export function formatActiveMeetingTaskForPrompt(
           `- Question: ${task.child.question}`,
           task.child.compactSummary
             ? `- Compact summary: ${task.child.compactSummary}`
+            : undefined,
+          task.child.returnCapsule
+            ? `- Resume target: parent=${task.child.returnCapsule.parentId}, phase=${task.child.returnCapsule.parentPhase}, projectBindingRevision=${task.child.returnCapsule.projectBindingRevision ?? "none"}`
             : undefined,
         ]
           .filter(Boolean)
@@ -406,7 +415,16 @@ export function formatActiveMeetingTaskForRecording(
         task.parent.parentContextHandoff
       ),
     },
-    child: task.child ? { ...task.child } : undefined,
+    child: task.child
+      ? {
+          ...task.child,
+          basedOnTurnIds: [...task.child.basedOnTurnIds],
+          basedOnObservationIds: [...task.child.basedOnObservationIds],
+          returnCapsule: cloneParentReturnCapsule(
+            task.child.returnCapsule
+          ),
+        }
+      : undefined,
     screen: task.screen ? { ...task.screen } : undefined,
     divergence: task.divergence ? { ...task.divergence } : undefined,
   };
@@ -556,6 +574,18 @@ function buildChild(task: RuntimeActiveInterviewChild): ActiveMeetingChild {
     ...task,
     basedOnTurnIds: [...task.basedOnTurnIds],
     basedOnObservationIds: [...task.basedOnObservationIds],
+    returnCapsule: cloneParentReturnCapsule(task.returnCapsule),
+  };
+}
+
+function cloneParentReturnCapsule(
+  capsule: ParentReturnCapsule | undefined
+): ParentReturnCapsule | undefined {
+  if (!capsule) return undefined;
+  return {
+    ...capsule,
+    allowedFactAnchorIds: [...capsule.allowedFactAnchorIds],
+    artifactCompatibility: { ...capsule.artifactCompatibility },
   };
 }
 

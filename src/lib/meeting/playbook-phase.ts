@@ -425,6 +425,41 @@ export function formatCodingPlaybookPhaseContract(
   ].join("\n");
 }
 
+export function formatProjectDeepDivePhaseContract(
+  phase: InterviewPlaybookPhase
+) {
+  if (phase === "architecture_decision") {
+    return [
+      "projectDeepDivePhaseContract:",
+      "- Explain the architecture or decision currently being probed, my ownership, the viable alternatives, and the decisive tradeoff.",
+      "- Keep the explanation logically layered and meeting-ready. Do not restart the project overview.",
+      "- Use only project-compatible evidence; distinguish implemented behavior from a future improvement.",
+    ].join("\n");
+  }
+  if (phase === "validation_reliability") {
+    return [
+      "projectDeepDivePhaseContract:",
+      "- Explain the concrete failure or risk, how I debugged or validated it, the evidence used, and the recovery or reliability mechanism.",
+      "- Prefer tests, traces, rollout checks, and observed behavior over generic best practices.",
+      "- Do not invent validation, metrics, incidents, or mechanisms that are absent from supported project evidence.",
+    ].join("\n");
+  }
+  if (phase === "impact_lessons") {
+    return [
+      "projectDeepDivePhaseContract:",
+      "- State supported impact, known limitations, what I learned, and the highest-value next improvement.",
+      "- Separate measured outcomes from qualitative outcomes and future proposals.",
+      "- Do not introduce unsupported numbers or restart the project narrative.",
+    ].join("\n");
+  }
+  return [
+    "projectDeepDivePhaseContract:",
+    "- Give a 30-45 second spoken introduction: problem, previous limitation, my role and contribution, and supported outcome.",
+    "- Stay at the project level unless the interviewer asks for an internal mechanism or decision.",
+    "- Establish one clear project anchor and do not borrow facts from another project.",
+  ].join("\n");
+}
+
 export function decidePlaybookPhaseProgression(
   input: PlaybookPhaseDecisionInput
 ): PlaybookPhaseDecision {
@@ -477,6 +512,7 @@ export function decidePlaybookPhaseProgression(
     requirementsReady: requirementState?.requirementsReady,
     flags,
     subtaskIntent: input.subtaskIntent,
+    relation: input.relation,
   });
   const action = decideAction({
     questionType,
@@ -730,6 +766,17 @@ export function formatPlaybookPhaseDecisionForPrompt(
     "- For Coding baseline_reasoning, explain the simplest correct solution and a small dry run. Do not emit a full Code section.",
     "- For Coding optimized_pseudocode, explain the bottleneck, optimized structure, pseudocode, edge cases, dry run, and target complexity. Do not emit a full Code section.",
     "- For Coding implementation_validation, emit complete runnable Code in the selected language plus exact Complexity and validation cases.",
+    task?.parent.questionType === "project-deep-dive" ||
+    normalizeCanonicalQuestionType(task?.parent.questionType) ===
+      "project-deep-dive" ||
+    decision?.phase === "project_narrative" ||
+    decision?.phase === "architecture_decision" ||
+    decision?.phase === "validation_reliability" ||
+    decision?.phase === "impact_lessons"
+      ? formatProjectDeepDivePhaseContract(
+          decision?.phase ?? task?.parent.playbookPhase ?? "project_narrative"
+        )
+      : undefined,
     "- Required artifacts are authoritative. Do not add a forbidden Code or Whiteboard section merely because the answer profile supports it.",
   ];
 
@@ -780,7 +827,14 @@ function chooseManualNextPhase(
     return "design_framing";
   }
   if (questionType === "behavioral") return "follow_up";
-  if (questionType === "project-deep-dive") return "follow_up";
+  if (questionType === "project-deep-dive") {
+    if (currentPhase === "project_narrative") return "architecture_decision";
+    if (currentPhase === "architecture_decision") {
+      return "validation_reliability";
+    }
+    if (currentPhase === "validation_reliability") return "impact_lessons";
+    return "impact_lessons";
+  }
   if (questionType === "field-knowledge") return "follow_up";
   if (questionType === "coding") {
     const codingPhase = normalizeCodingPhase(currentPhase);
@@ -823,11 +877,11 @@ function chooseManualNextFlags(
   }
 
   if (questionType === "project-deep-dive") {
-    if (!hasProgress(phaseProgress, "hard_problem")) {
-      return ["hard_problem", "architecture"];
+    if (currentPhase === "project_narrative") {
+      return ["architecture", "hard_problem", "tradeoff_decision"];
     }
-    if (!hasProgress(phaseProgress, "tradeoff_decision")) {
-      return ["tradeoff_decision", "validation_debugging"];
+    if (currentPhase === "architecture_decision") {
+      return ["validation_debugging"];
     }
     return ["impact_lesson", "tradeoffs_wrapup"];
   }
@@ -1058,6 +1112,7 @@ function choosePhase({
   requirementsReady,
   flags,
   subtaskIntent,
+  relation,
 }: {
   questionType: CanonicalQuestionType | undefined;
   currentPhase: InterviewPlaybookPhase;
@@ -1065,6 +1120,7 @@ function choosePhase({
   requirementsReady?: boolean;
   flags: PlaybookPhaseFlag[];
   subtaskIntent?: InterviewSubtaskIntent;
+  relation?: InterviewTaskRelation;
 }): InterviewPlaybookPhase {
   if (questionType === "behavioral") return "story_selection";
   if (questionType === "coding") {
@@ -1075,7 +1131,13 @@ function choosePhase({
     });
   }
   if (questionType === "field-knowledge") return "concept_explanation";
-  if (questionType === "project-deep-dive") return "project_narrative";
+  if (questionType === "project-deep-dive") {
+    return chooseProjectDeepDivePhase({
+      currentPhase,
+      flags,
+      relation,
+    });
+  }
 
   if (
     questionType === "general-system-design" ||
@@ -1095,6 +1157,41 @@ function choosePhase({
   }
 
   return currentPhase;
+}
+
+const PROJECT_DEEP_DIVE_PHASES: InterviewPlaybookPhase[] = [
+  "project_narrative",
+  "architecture_decision",
+  "validation_reliability",
+  "impact_lessons",
+];
+
+function chooseProjectDeepDivePhase({
+  currentPhase,
+  flags,
+  relation,
+}: {
+  currentPhase: InterviewPlaybookPhase;
+  flags: PlaybookPhaseFlag[];
+  relation?: InterviewTaskRelation;
+}): InterviewPlaybookPhase {
+  const normalizedCurrent = PROJECT_DEEP_DIVE_PHASES.includes(currentPhase)
+    ? currentPhase
+    : "project_narrative";
+  if (relation === "resume-parent") return normalizedCurrent;
+
+  const requestedPhase = flags.includes("impact_lesson")
+    ? "impact_lessons"
+    : flags.includes("validation_debugging")
+      ? "validation_reliability"
+      : flags.includes("architecture") ||
+          flags.includes("hard_problem") ||
+          flags.includes("tradeoff_decision")
+        ? "architecture_decision"
+        : "project_narrative";
+  const currentIndex = PROJECT_DEEP_DIVE_PHASES.indexOf(normalizedCurrent);
+  const requestedIndex = PROJECT_DEEP_DIVE_PHASES.indexOf(requestedPhase);
+  return PROJECT_DEEP_DIVE_PHASES[Math.max(currentIndex, requestedIndex)];
 }
 
 function decideAction({

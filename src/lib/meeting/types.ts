@@ -362,6 +362,9 @@ export type InterviewPlaybookPhase =
   | "requirement_clarification"
   | "design_framing"
   | "project_narrative"
+  | "architecture_decision"
+  | "validation_reliability"
+  | "impact_lessons"
   | "concept_explanation"
   | "follow_up";
 
@@ -627,6 +630,20 @@ export type InterviewSubtaskIntent =
   | "low-value"
   | "unknown";
 
+export interface ParentReturnCapsule {
+  parentId: string;
+  parentRevisionAtAttach: number;
+  projectBindingRevision?: number;
+  parentPhase: InterviewPlaybookPhase;
+  topicCapsule: string;
+  allowedFactAnchorIds: string[];
+  artifactCompatibility: {
+    policy: "preserve-parent-artifacts";
+    whiteboardArtifactId?: string;
+  };
+  createdAt: number;
+}
+
 export interface ActiveInterviewChild {
   id: string;
   createdAt: number;
@@ -639,6 +656,7 @@ export interface ActiveInterviewChild {
   artifactId?: string;
   basedOnTurnIds: string[];
   basedOnObservationIds: string[];
+  returnCapsule?: ParentReturnCapsule;
 }
 
 export type ParentAdmissionDurability = "provisional" | "durable";

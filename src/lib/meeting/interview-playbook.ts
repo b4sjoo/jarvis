@@ -15,6 +15,7 @@ import type {
 } from "./types.js";
 import {
   formatCodingPlaybookPhaseContract,
+  formatProjectDeepDivePhaseContract,
   resolvePlaybookRequiredArtifacts,
 } from "./playbook-phase.js";
 import {
@@ -176,7 +177,7 @@ export function selectInterviewPlaybook({
       reason,
       allowedFamilies: ["project-deep-dive", "ai-ml-system-design", "system-design"],
       firstMove:
-        "Anchor on a real project, state my role, then explain problem, architecture, hard decision, validation, impact, and lesson.",
+        "Anchor on one real project and give a 30-45 second introduction covering the problem, previous limitation, my role and contribution, and supported outcome.",
       clarifyingStrategy:
         "If the prompt mixes past project and future improvement, ask whether to discuss the existing implementation first or propose a future design.",
       outputContract:
@@ -241,6 +242,9 @@ export function formatInterviewPlaybookForPrompt(
     `requiredArtifacts: ${requiredArtifacts.join(", ")}`,
     playbook.id === "coding_algorithm"
       ? formatCodingPlaybookPhaseContract(playbook.phase)
+      : undefined,
+    playbook.id === "project_deep_dive"
+      ? formatProjectDeepDivePhaseContract(playbook.phase)
       : undefined,
   ]
     .filter(Boolean)

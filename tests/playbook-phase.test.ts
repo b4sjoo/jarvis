@@ -191,10 +191,98 @@ test("project deep dive records hard problem and tradeoff progress", () => {
     relation: "followup-parent",
   });
 
-  assert.equal(decision.phase, "project_narrative");
+  assert.equal(decision.phase, "architecture_decision");
   assert.ok(decision.flags.includes("hard_problem"));
   assert.ok(decision.flags.includes("tradeoff_decision"));
   assert.ok(decision.flags.includes("tradeoffs_wrapup"));
+});
+
+test("project deep dive advances through evidence-led phases without regressing", () => {
+  const validation = decidePlaybookPhaseProgression({
+    questionType: "project-deep-dive",
+    playbookId: "project_deep_dive",
+    currentPhase: "architecture_decision",
+    phaseProgress: {
+      project_narrative: true,
+      architecture_decision: true,
+    },
+    latestTurnText:
+      "What failed during rollout, and how did you debug and validate the recovery?",
+    relation: "followup-parent",
+  });
+  const nonRegressing = decidePlaybookPhaseProgression({
+    questionType: "project-deep-dive",
+    playbookId: "project_deep_dive",
+    currentPhase: "validation_reliability",
+    phaseProgress: {
+      project_narrative: true,
+      architecture_decision: true,
+      validation_reliability: true,
+    },
+    latestTurnText: "Why did you choose that architecture?",
+    relation: "followup-parent",
+  });
+  const impact = decidePlaybookPhaseProgression({
+    questionType: "project-deep-dive",
+    playbookId: "project_deep_dive",
+    currentPhase: "validation_reliability",
+    phaseProgress: {
+      project_narrative: true,
+      architecture_decision: true,
+      validation_reliability: true,
+    },
+    latestTurnText:
+      "What was the impact, what did you learn, and what would you improve next?",
+    relation: "followup-parent",
+  });
+
+  assert.equal(validation.phase, "validation_reliability");
+  assert.equal(nonRegressing.phase, "validation_reliability");
+  assert.equal(impact.phase, "impact_lessons");
+});
+
+test("manual next walks project deep dive through four coarse phases", () => {
+  const makeTask = (
+    phase:
+      | "project_narrative"
+      | "architecture_decision"
+      | "validation_reliability"
+      | "impact_lessons"
+  ) => ({
+    id: "task-project",
+    source: "voice" as const,
+    parent: {
+      id: "parent-project",
+      questionType: "project-deep-dive" as const,
+      topic: "Agentic Memory",
+      playbookPhase: phase,
+      phaseProgress: { [phase]: true },
+      supportedFactAnchors: [],
+      createdAt: 1,
+      updatedAt: 1,
+    },
+  });
+
+  const architecture = decideManualNextPhaseTransition(
+    makeTask("project_narrative")
+  );
+  const validation = decideManualNextPhaseTransition(
+    makeTask("architecture_decision")
+  );
+  const impact = decideManualNextPhaseTransition(
+    makeTask("validation_reliability")
+  );
+  const terminal = decideManualNextPhaseTransition(
+    makeTask("impact_lessons")
+  );
+
+  assert.equal(architecture.phase, "architecture_decision");
+  assert.ok(architecture.flags.includes("tradeoff_decision"));
+  assert.equal(validation.phase, "validation_reliability");
+  assert.ok(validation.flags.includes("validation_debugging"));
+  assert.equal(impact.phase, "impact_lessons");
+  assert.ok(impact.flags.includes("impact_lesson"));
+  assert.equal(terminal.phase, "impact_lessons");
 });
 
 test("manual next deterministically advances general system design to whiteboard", () => {

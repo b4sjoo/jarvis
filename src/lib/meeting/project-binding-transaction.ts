@@ -125,6 +125,17 @@ export function commitProjectBindingSettlement({
             basedOnObservationIds: [
               ...currentTask.child.basedOnObservationIds,
             ],
+            returnCapsule: currentTask.child.returnCapsule
+              ? {
+                  ...currentTask.child.returnCapsule,
+                  allowedFactAnchorIds: [
+                    ...currentTask.child.returnCapsule.allowedFactAnchorIds,
+                  ],
+                  artifactCompatibility: {
+                    ...currentTask.child.returnCapsule.artifactCompatibility,
+                  },
+                }
+              : undefined,
           }
         : undefined,
     whiteboardArtifact: invalidateProjectState
@@ -218,6 +229,17 @@ function cloneTask(task: ActiveInterviewParent): ActiveInterviewParent {
           basedOnObservationIds: [
             ...task.child.basedOnObservationIds,
           ],
+          returnCapsule: task.child.returnCapsule
+            ? {
+                ...task.child.returnCapsule,
+                allowedFactAnchorIds: [
+                  ...task.child.returnCapsule.allowedFactAnchorIds,
+                ],
+                artifactCompatibility: {
+                  ...task.child.returnCapsule.artifactCompatibility,
+                },
+              }
+            : undefined,
         }
       : undefined,
     phaseProgress: { ...task.phaseProgress },

@@ -51,3 +51,36 @@ test("changes the coding output contract with the committed phase", () => {
     /complete runnable implementation/
   );
 });
+
+test("changes project deep-dive guidance with the committed phase", () => {
+  const narrative = selectInterviewPlaybook({
+    query: "Tell me about your Agentic Memory project.",
+    questionType: "project-deep-dive",
+  });
+  const architecture = withInterviewPlaybookPhase(
+    narrative,
+    "architecture_decision"
+  );
+  const validation = withInterviewPlaybookPhase(
+    narrative,
+    "validation_reliability"
+  );
+  const impact = withInterviewPlaybookPhase(narrative, "impact_lessons");
+
+  assert.match(
+    formatInterviewPlaybookForPrompt(narrative),
+    /30-45 second spoken introduction/
+  );
+  assert.match(
+    formatInterviewPlaybookForPrompt(architecture),
+    /viable alternatives/
+  );
+  assert.match(
+    formatInterviewPlaybookForPrompt(validation),
+    /tests, traces, rollout checks/
+  );
+  assert.match(
+    formatInterviewPlaybookForPrompt(impact),
+    /known limitations/
+  );
+});

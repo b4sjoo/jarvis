@@ -18,6 +18,7 @@ import type {
   ActiveInterviewParent,
   InterviewSubtaskIntent,
   InterviewTaskRelation,
+  ParentReturnCapsule,
   SelectedInterviewPlaybook,
 } from "./types.js";
 
@@ -310,6 +311,12 @@ export function formatSourceOwnedTransitionForTrace(
       commitResult?.parentAfterRevision,
     sourceTransitionChildBeforeId: commitResult?.childBeforeId,
     sourceTransitionChildAfterId: commitResult?.childAfterId,
+    sourceTransitionReturnCapsuleParentId:
+      commitResult?.task?.child?.returnCapsule?.parentId,
+    sourceTransitionReturnCapsulePhase:
+      commitResult?.task?.child?.returnCapsule?.parentPhase,
+    sourceTransitionReturnCapsuleProjectBindingRevision:
+      commitResult?.task?.child?.returnCapsule?.projectBindingRevision,
     sourceTransitionPhaseBefore: commitResult?.phaseBefore,
     sourceTransitionPhaseAfter: commitResult?.phaseAfter,
     sourceTransitionProgressBefore: commitResult?.progressBefore,
@@ -581,6 +588,7 @@ function applyTransition(
           basedOnObservationIds: [
             ...candidate.sourceObservationIds,
           ],
+          returnCapsule: createParentReturnCapsule(currentTask, now),
         },
         updatedAt: now,
         expiresAt: candidate.expiresAt,
@@ -599,9 +607,30 @@ function applyTransition(
         reason: "already-applied",
       };
     }
+    const capsule = currentTask.child.returnCapsule;
+    if (capsule) {
+      const incompatibility = validateParentReturnCapsule(
+        currentTask,
+        capsule
+      );
+      if (incompatibility) {
+        return {
+          task: currentTask,
+          mutationApplied: false,
+          reason: incompatibility,
+        };
+      }
+    }
     return {
       task: {
         ...currentTask,
+        playbook: capsule
+          ? withPlaybookPhase(currentTask.playbook, capsule.parentPhase)
+          : currentTask.playbook,
+        playbookPhase: capsule?.parentPhase ?? currentTask.playbookPhase,
+        supportedFactAnchors: capsule
+          ? [...capsule.allowedFactAnchorIds]
+          : currentTask.supportedFactAnchors,
         child: undefined,
         updatedAt: now,
         expiresAt: candidate.expiresAt,
@@ -648,6 +677,49 @@ function applyTransition(
     mutationApplied: true,
     reason: "phase-progress-committed",
   };
+}
+
+function createParentReturnCapsule(
+  task: ActiveInterviewParent,
+  createdAt: number
+): ParentReturnCapsule {
+  return {
+    parentId: task.id,
+    parentRevisionAtAttach: task.revisions,
+    projectBindingRevision: task.projectBinding?.revision,
+    parentPhase: task.playbookPhase,
+    topicCapsule: task.topic.trim().slice(0, 700),
+    allowedFactAnchorIds: [...task.supportedFactAnchors],
+    artifactCompatibility: {
+      policy: "preserve-parent-artifacts",
+      whiteboardArtifactId: task.whiteboardArtifact?.id,
+    },
+    createdAt,
+  };
+}
+
+function validateParentReturnCapsule(
+  task: ActiveInterviewParent,
+  capsule: ParentReturnCapsule
+) {
+  if (capsule.parentId !== task.id) {
+    return "parent-return-capsule-id-mismatch";
+  }
+  if (task.revisions < capsule.parentRevisionAtAttach) {
+    return "parent-return-capsule-revision-regressed";
+  }
+  if (
+    capsule.projectBindingRevision !== task.projectBinding?.revision
+  ) {
+    return "parent-return-capsule-binding-mismatch";
+  }
+  if (
+    capsule.artifactCompatibility.whiteboardArtifactId !==
+    task.whiteboardArtifact?.id
+  ) {
+    return "parent-return-capsule-artifact-mismatch";
+  }
+  return undefined;
 }
 
 function clonePhaseDecision(
