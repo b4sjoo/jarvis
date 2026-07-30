@@ -428,6 +428,8 @@ test("preserves a cached whiteboard across compatible system-design correction",
     activeParentTaskId: "parent_1",
     activeParentQuestionType: "ai-ml-system-design",
     artifact: {
+      id: "whiteboard_1",
+      revision: 3,
       parentTaskId: "parent_1",
       content: "Client -> API -> Service",
     },
@@ -438,6 +440,7 @@ test("preserves a cached whiteboard across compatible system-design correction",
   assert.deepEqual(display, {
     whiteboard: { kind: "replace", value: "Client -> API -> Service" },
     isCached: true,
+    viewKey: "whiteboard_1:3",
   });
 });
 

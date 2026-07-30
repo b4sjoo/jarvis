@@ -1,6 +1,7 @@
 import React from "react";
 import {
   Streamdown,
+  type ControlsConfig,
   type MermaidErrorComponentProps,
 } from "streamdown";
 import "katex/dist/katex.min.css";
@@ -10,12 +11,25 @@ interface MarkdownRendererProps {
   children: string;
   isStreaming?: boolean;
   mermaidErrorComponent?: React.ComponentType<MermaidErrorComponentProps>;
+  controls?: ControlsConfig;
 }
+
+const DEFAULT_CONTROLS: ControlsConfig = {
+  table: true,
+  code: true,
+  mermaid: {
+    download: true,
+    copy: true,
+    fullscreen: false,
+    panZoom: false,
+  },
+};
 
 export function Markdown({
   children,
   isStreaming = false,
   mermaidErrorComponent,
+  controls = DEFAULT_CONTROLS,
 }: MarkdownRendererProps) {
   return (
     <Streamdown
@@ -27,16 +41,7 @@ export function Markdown({
           ? { errorComponent: mermaidErrorComponent }
           : undefined
       }
-      controls={{
-        table: true,
-        code: true,
-        mermaid: {
-          download: true,
-          copy: true,
-          fullscreen: false,
-          panZoom: false,
-        },
-      }}
+      controls={controls}
     >
       {children}
     </Streamdown>

@@ -116,5 +116,6 @@ export * from "./transcript-fusion";
 export * from "./types";
 export * from "./whiteboard-artifact";
 export * from "./whiteboard-ascii-fallback";
+export * from "./whiteboard-viewport";
 export * from "./whiteboard-syntax-repair";
 export * from "./whiteboard-syntax-repair-request";

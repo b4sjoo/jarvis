@@ -135,7 +135,7 @@ import {
   useRef,
   useState,
 } from "react";
-import { WhiteboardMermaidError } from "./whiteboard-mermaid-error";
+import { WhiteboardViewer } from "./whiteboard-viewer";
 
 const statusLabel = {
   idle: "Ready",
@@ -788,6 +788,7 @@ export const MeetingAssistant = ({
         focusedQuestion: displaySuggestionSections.focusedQuestion,
         approach: displaySuggestionSections.approach,
         whiteboard: displaySuggestionSections.whiteboard,
+        whiteboardViewKey: whiteboardArtifactDisplay.viewKey,
         code: displaySuggestionSections.code,
         complexity: displaySuggestionSections.complexity,
         clarifyingQuestion: displaySuggestionSections.clarifyingQuestion,
@@ -873,6 +874,7 @@ export const MeetingAssistant = ({
       displaySuggestionSections.profile,
       displaySuggestionSections.hasTechnicalDetails,
       displaySuggestionSections.whiteboard,
+      whiteboardArtifactDisplay.viewKey,
     ]
   );
   const focusSnapshotRef = useRef(focusSnapshot);
@@ -1501,6 +1503,7 @@ export const MeetingAssistant = ({
               suggestionSections={displaySuggestionSections}
               codingArtifactCached={codingArtifactDisplay.isCached}
               whiteboardArtifactCached={whiteboardArtifactDisplay.isCached}
+              whiteboardViewKey={whiteboardArtifactDisplay.viewKey}
               hasCorrectableQuestion={hasCorrectableQuestion}
               effectiveQuestionType={effectiveQuestionType}
               transientPersonalStatusLabel={
@@ -1855,10 +1858,9 @@ export const MeetingAssistant = ({
                           </Badge>
                         ) : null}
                       </div>
-                      <MeetingMarkdownText
-                        className={cn(WRAP_TEXT_CLASS, "text-xs leading-5")}
+                      <WhiteboardViewer
                         value={displaySuggestionSections.whiteboard}
-                        whiteboard
+                        viewKey={whiteboardArtifactDisplay.viewKey}
                       />
                     </section>
                   ) : null}
@@ -2683,6 +2685,7 @@ const FocusModePanel = ({
   suggestionSections,
   codingArtifactCached,
   whiteboardArtifactCached,
+  whiteboardViewKey,
   hasCorrectableQuestion,
   effectiveQuestionType,
   transientPersonalStatusLabel,
@@ -2719,6 +2722,7 @@ const FocusModePanel = ({
   suggestionSections: MeetingAnswerDisplayModel;
   codingArtifactCached: boolean;
   whiteboardArtifactCached: boolean;
+  whiteboardViewKey?: string;
   hasCorrectableQuestion: boolean;
   effectiveQuestionType?: CanonicalQuestionType;
   transientPersonalStatusLabel?: string;
@@ -2824,10 +2828,9 @@ const FocusModePanel = ({
                     </Badge>
                   ) : null}
                 </div>
-                <MeetingMarkdownText
-                  className={cn(WRAP_TEXT_CLASS, "text-xs leading-5")}
+                <WhiteboardViewer
                   value={suggestionSections.whiteboard}
-                  whiteboard
+                  viewKey={whiteboardViewKey}
                 />
               </section>
             ) : null}
@@ -7352,21 +7355,13 @@ const MEETING_MARKDOWN_CLASS =
 const MeetingMarkdownText = ({
   value,
   className,
-  whiteboard = false,
 }: {
   value: string;
   className?: string;
-  whiteboard?: boolean;
 }) => {
   return (
     <div className={cn(MEETING_MARKDOWN_CLASS, className)}>
-      <Markdown
-        mermaidErrorComponent={
-          whiteboard ? WhiteboardMermaidError : undefined
-        }
-      >
-        {normalizeMeetingMarkdown(value)}
-      </Markdown>
+      <Markdown>{normalizeMeetingMarkdown(value)}</Markdown>
     </div>
   );
 };

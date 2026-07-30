@@ -38,6 +38,7 @@ export interface WhiteboardArtifactUpdateInput {
 export interface WhiteboardArtifactDisplay {
   whiteboard: ArtifactProjectionDecision;
   isCached: boolean;
+  viewKey?: string;
 }
 
 export type WhiteboardRenderCandidateKind =
@@ -417,7 +418,8 @@ export function resolveWhiteboardArtifactDisplay({
   artifact?: Pick<
     WhiteboardArtifact,
     "parentTaskId" | "content" | "renderState"
-  >;
+  > &
+    Partial<Pick<WhiteboardArtifact, "id" | "revision">>;
   sourceParentTaskId?: string;
   sourceParentQuestionType?: string;
 }): WhiteboardArtifactDisplay {
@@ -443,6 +445,9 @@ export function resolveWhiteboardArtifactDisplay({
         !sourceMatchesParent ||
         !artifact.renderState ||
         artifact.renderState?.status === "preserved-last-valid",
+      ...(artifact.id && artifact.revision
+        ? { viewKey: `${artifact.id}:${artifact.revision}` }
+        : {}),
     };
   }
 

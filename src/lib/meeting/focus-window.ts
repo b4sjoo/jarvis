@@ -119,6 +119,7 @@ export type MeetingFocusSectionsSnapshot = {
   focusedQuestion: string;
   approach: string;
   whiteboard: string;
+  whiteboardViewKey?: string;
   code: string;
   complexity: string;
   clarifyingQuestion: string;
