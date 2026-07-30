@@ -485,8 +485,12 @@ import {
   resolveTransientPersonalStatusDecision,
   restrictMemoryContextForPersonalEvidence,
   formatProjectBindingDecisionForTrace,
+  formatProjectBindingSettlementCommitForTrace,
+  formatProjectMemorySettlementForTrace,
+  commitProjectBindingSettlement,
   projectBindingMatchesProjectHint,
   resolveProjectBinding,
+  settleMemoryContextForProjectBinding,
   getActiveMeetingTaskTraceMetadata,
   areSuggestionsForSameParentTask,
   buildSuggestionTaskMetadata,
@@ -5363,6 +5367,7 @@ export function useMeetingAssistant() {
       taskId,
       runtimeToken,
       currentOperationId,
+      memoryStage = "prompt-injection",
     }: {
       traceId?: string;
       taskId?: string;
@@ -5381,6 +5386,7 @@ export function useMeetingAssistant() {
       personalEvidenceDecision?: PersonalEvidenceDecision;
       runtimeToken?: RuntimeCommitToken;
       currentOperationId?: () => string | null | undefined;
+      memoryStage?: "candidate-discovery" | "prompt-injection";
     }): Promise<MemoryRetrievalResult | undefined> => {
       const resolvedQuestionType =
         questionType ?? inferMemoryQuestionTypeFromQuery(query);
@@ -5400,13 +5406,18 @@ export function useMeetingAssistant() {
       });
 
       let memoryStepId: string | undefined;
+      const memoryStepName =
+        memoryStage === "candidate-discovery"
+          ? "Memory candidate discovery"
+          : "Memory retrieval";
       if (!state.settings.useMemory) {
         if (traceId) {
           memoryStepId = traceStoreRef.current.startStep(
             traceId,
-            "Memory retrieval",
+            memoryStepName,
             {
               source,
+              memoryStage,
               skippedReason: "use-memory-disabled",
               useCase: resolvedUseCase,
               questionType: resolvedQuestionType,
@@ -5447,9 +5458,10 @@ export function useMeetingAssistant() {
           });
           memoryStepId = traceStoreRef.current.startStep(
             traceId,
-            "Memory retrieval",
+            memoryStepName,
             {
               source,
+              memoryStage,
               useCase: resolvedUseCase,
               questionType: resolvedQuestionType,
               askFrame,
@@ -5607,9 +5619,12 @@ export function useMeetingAssistant() {
         if (traceId) {
           traceStoreRef.current.recordOutput(
             traceId,
-            "injected memory context",
+            memoryStage === "candidate-discovery"
+              ? "project candidate memory context"
+              : "injected memory context",
             formatMemorySelectionForTrace(memoryContext),
             {
+              memoryStage,
               ...buildMemoryEvaluationTraceMetadata(memoryContext),
               ...memoryPerformanceTraceMetadata,
               selectedEntries: memoryContext.entries.length,
@@ -5669,6 +5684,7 @@ export function useMeetingAssistant() {
               ...diagramOverlayTraceMetadata,
               ...memoryRoleTraceMetadata,
               ...memoryPerformanceTraceMetadata,
+              memoryStage,
               personalEvidenceFilteredEntries,
             },
           });
@@ -8050,7 +8066,14 @@ export function useMeetingAssistant() {
         settledExecutionPlan?.taskRelation ??
         advisorTaskSignals.taskRelation,
     });
-    const memoryContext = await loadMemoryForPrompt({
+    const advisorRequiresProjectBinding =
+      advisorTaskSignals.openingRoute?.commitParent !== false &&
+      ((settledExecutionPlan?.questionType ??
+        advisorQuestionType) === "project-deep-dive" ||
+        (advisorPersonalEvidenceDecision.enforced &&
+          advisorPersonalEvidenceDecision.requirement ===
+            "autobiographical-project"));
+    const candidateMemoryContext = await loadMemoryForPrompt({
       traceId,
       taskId: activeMeetingTaskId,
       source: "advisor",
@@ -8095,6 +8118,9 @@ export function useMeetingAssistant() {
       ),
       runtimeToken: effectiveRuntimeCommitToken,
       currentOperationId: () => activeAdvisorJobRef.current?.id,
+      memoryStage: advisorRequiresProjectBinding
+        ? "candidate-discovery"
+        : "prompt-injection",
     });
     if (rejectStaleCommit("post-memory")) return;
     const projectBindingDecision = resolveProjectBinding({
@@ -8109,13 +8135,7 @@ export function useMeetingAssistant() {
       relation:
         settledExecutionPlan?.taskRelation ??
         advisorTaskSignals.taskRelation,
-      requiresProjectBinding:
-        advisorTaskSignals.openingRoute?.commitParent !== false &&
-        ((settledExecutionPlan?.questionType ??
-          advisorQuestionType) === "project-deep-dive" ||
-          (advisorPersonalEvidenceDecision.enforced &&
-            advisorPersonalEvidenceDecision.requirement ===
-              "autobiographical-project")),
+      requiresProjectBinding: advisorRequiresProjectBinding,
       projectAnchor:
         settledExecutionPlan?.memoryPolicy.projectAnchor ??
         advisorProjectAnchor,
@@ -8128,8 +8148,115 @@ export function useMeetingAssistant() {
       currentSourceText: advisorCurrentQuestionEvidenceText,
       sourceTurnIds:
         advisorJob.logicalQuestionUnit?.sourceTurnIds ?? [],
-      memoryContext,
+      memoryContext: candidateMemoryContext,
     });
+    const projectBindingContextBefore =
+      contextManagerRef.current.getState();
+    const projectBindingCommitResult =
+      commitProjectBindingSettlement({
+        currentTask: transientPersonalStatusDecision
+          ? undefined
+          : projectBindingContextBefore.activeInterviewTask,
+        decision: projectBindingDecision,
+        expectedParentId:
+          projectBindingContextBefore.activeInterviewTask?.id,
+        expectedParentRevision:
+          projectBindingContextBefore.activeInterviewTask?.revisions,
+      });
+    const projectBindingCommitMetadata =
+      formatProjectBindingSettlementCommitForTrace(
+        projectBindingCommitResult
+      );
+    if (projectBindingCommitResult.committed) {
+      contextManagerRef.current.setActiveMeetingTaskState({
+        activeScreenTask:
+          projectBindingContextBefore.activeScreenTask,
+        activeInterviewTask:
+          projectBindingCommitResult.task ?? null,
+      });
+      const projectBindingContextAfter =
+        contextManagerRef.current.buildAdvisorPromptContext();
+      promptContext = {
+        ...promptContext,
+        activeScreenTask:
+          projectBindingContextAfter.activeScreenTask,
+        activeInterviewTask:
+          projectBindingContextAfter.activeInterviewTask,
+        activeMeetingTask:
+          projectBindingContextAfter.activeMeetingTask,
+      };
+      activeMeetingTaskId = getAdvisorActiveTaskId(promptContext);
+      effectiveRuntimeCommitToken = rebaseRuntimeCommitToken({
+        token: effectiveRuntimeCommitToken,
+        snapshot: readRuntimeCommitSnapshot(),
+      });
+      const committedProjectBindingContext =
+        contextManagerRef.current.getState();
+      setState((previous) => ({
+        ...previous,
+        activeInterviewTask:
+          committedProjectBindingContext.activeInterviewTask,
+        activeMeetingTask:
+          committedProjectBindingContext.activeMeetingTask,
+      }));
+      if (committedProjectBindingContext.activeMeetingTask) {
+        sessionRecordingManagerRef.current?.recordActiveMeetingTaskSnapshot(
+          committedProjectBindingContext.activeMeetingTask,
+          traceId
+        );
+      }
+    }
+    const projectMemorySettlement =
+      settleMemoryContextForProjectBinding({
+        candidateContext: candidateMemoryContext,
+        bindingDecision: projectBindingDecision,
+      });
+    const memoryContext = projectMemorySettlement.memoryContext;
+    const projectMemorySettlementMetadata =
+      formatProjectMemorySettlementForTrace(projectMemorySettlement);
+    if (traceId && advisorRequiresProjectBinding) {
+      traceStoreRef.current.updateMetadata(
+        traceId,
+        projectMemorySettlementMetadata
+      );
+      const projectMemorySettlementStepId =
+        traceStoreRef.current.startStep(
+          traceId,
+          "Settled project memory context",
+          projectMemorySettlementMetadata
+        );
+      if (memoryContext) {
+        traceStoreRef.current.recordOutput(
+          traceId,
+          "settled project memory context",
+          formatMemorySelectionForTrace(memoryContext),
+          {
+            ...projectMemorySettlementMetadata,
+            memoryStage: "prompt-injection",
+          }
+        );
+        sessionRecordingManagerRef.current?.recordMemoryRetrieval({
+          traceId,
+          taskId: activeMeetingTaskId,
+          query: advisorRetrievalQuery,
+          diagramDomainQuery: advisorDiagramDomainContext.query,
+          source: "advisor",
+          memoryContext,
+          metadata: {
+            ...projectMemorySettlementMetadata,
+            memoryStage: "prompt-injection",
+          },
+        });
+      }
+      traceStoreRef.current.finishStep(
+        traceId,
+        projectMemorySettlementStepId,
+        projectMemorySettlement.state === "blocked-unsettled-binding"
+          ? "cancelled"
+          : "success",
+        projectMemorySettlementMetadata
+      );
+    }
     const factAnchorDecision = buildFactAnchorDecision({
       questionType:
         advisorTaskSignals.openingRoute?.commitParent === false
@@ -8157,6 +8284,7 @@ export function useMeetingAssistant() {
         source: "advisor",
         questionType: advisorQuestionType,
         ...formatProjectBindingDecisionForTrace(projectBindingDecision),
+        ...projectBindingCommitMetadata,
       };
       traceStoreRef.current.updateMetadata(traceId, projectBindingMetadata);
       const projectBindingStepId = traceStoreRef.current.startStep(
@@ -8196,8 +8324,8 @@ export function useMeetingAssistant() {
     promptContext = {
       ...promptContext,
       activeMeetingTask:
-        settledExecutionPlan?.taskSnapshot ??
-        promptContext.activeMeetingTask,
+        promptContext.activeMeetingTask ??
+        settledExecutionPlan?.taskSnapshot,
       memoryContext: memoryContext?.contextText,
       interviewPlaybook:
         transientPersonalStatusDecision
@@ -8680,9 +8808,7 @@ export function useMeetingAssistant() {
               : "model-output",
             expiresAt: getActiveScreenTaskExpiresAt(state.settings),
             supportedFactAnchors:
-              projectBindingDecision.binding
-                ? [projectBindingDecision.binding.projectName]
-                : extractSupportedFactAnchorsFromMemory(memoryContext),
+              extractSupportedFactAnchorsFromMemory(memoryContext),
             projectBinding: projectBindingDecision.binding,
             artifactAuthorization:
               settledArtifactAuthorization,
@@ -16470,7 +16596,7 @@ export function useMeetingAssistant() {
         const screenSourceTransitionAllowsTaskMutation =
           !screenSourceOwnedTransitionResult ||
           screenSourceTransitionCommittedBeforeModel;
-        const screenExecutionContextState =
+        let screenExecutionContextState =
           contextManagerRef.current.getState();
         screenEvidencePacket = buildScreenEvidencePacket(
           screenExecutionContextState,
@@ -16532,7 +16658,12 @@ export function useMeetingAssistant() {
             questionType: screenMemoryQuestionType,
             mode: state.settings.personalEvidenceGuardrailMode,
           });
-        const memoryContext = await loadMemoryForPrompt({
+        const screenRequiresProjectBinding =
+          screenMemoryQuestionType === "project-deep-dive" ||
+          (screenPersonalEvidenceDecision.enforced &&
+            screenPersonalEvidenceDecision.requirement ===
+              "autobiographical-project");
+        const candidateMemoryContext = await loadMemoryForPrompt({
           traceId: trace.id,
           source: "screen",
           query: screenMemoryQuery,
@@ -16558,6 +16689,9 @@ export function useMeetingAssistant() {
           ),
           runtimeToken: screenRuntimeToken,
           currentOperationId: () => activeScreenOperationIdRef.current,
+          memoryStage: screenRequiresProjectBinding
+            ? "candidate-discovery"
+            : "prompt-injection",
         });
         if (rejectStaleScreenOperation("post-memory")) return;
         const screenProjectBindingDecision = resolveProjectBinding({
@@ -16565,16 +16699,108 @@ export function useMeetingAssistant() {
             existingScreenProjectBinding,
           questionType: screenMemoryQuestionType,
           relation: provisionalScreenTaskRelation,
-          requiresProjectBinding:
-            screenMemoryQuestionType === "project-deep-dive" ||
-            (screenPersonalEvidenceDecision.enforced &&
-              screenPersonalEvidenceDecision.requirement ===
-                "autobiographical-project"),
+          requiresProjectBinding: screenRequiresProjectBinding,
           projectAnchor: screenPreflight?.projectAnchor,
           currentSourceText: screenCurrentQuestionEvidenceText,
           sourceObservationIds: [observation.id],
-          memoryContext,
+          memoryContext: candidateMemoryContext,
         });
+        const screenProjectBindingCommitResult =
+          commitProjectBindingSettlement({
+            currentTask:
+              screenExecutionContextState.activeInterviewTask,
+            decision: screenProjectBindingDecision,
+            expectedParentId:
+              screenExecutionContextState.activeInterviewTask?.id,
+            expectedParentRevision:
+              screenExecutionContextState.activeInterviewTask
+                ?.revisions,
+          });
+        const screenProjectBindingCommitMetadata =
+          formatProjectBindingSettlementCommitForTrace(
+            screenProjectBindingCommitResult
+          );
+        if (screenProjectBindingCommitResult.committed) {
+          contextManagerRef.current.setActiveMeetingTaskState({
+            activeScreenTask:
+              screenExecutionContextState.activeScreenTask,
+            activeInterviewTask:
+              screenProjectBindingCommitResult.task ?? null,
+          });
+          screenRuntimeToken = rebaseRuntimeCommitToken({
+            token: screenRuntimeToken,
+            snapshot: readRuntimeCommitSnapshot(),
+          });
+          screenExecutionContextState =
+            contextManagerRef.current.getState();
+          setState((previous) => ({
+            ...previous,
+            activeInterviewTask:
+              screenExecutionContextState.activeInterviewTask,
+            activeMeetingTask:
+              screenExecutionContextState.activeMeetingTask,
+          }));
+          if (screenExecutionContextState.activeMeetingTask) {
+            sessionRecordingManagerRef.current?.recordActiveMeetingTaskSnapshot(
+              screenExecutionContextState.activeMeetingTask,
+              trace.id
+            );
+          }
+        }
+        const screenProjectMemorySettlement =
+          settleMemoryContextForProjectBinding({
+            candidateContext: candidateMemoryContext,
+            bindingDecision: screenProjectBindingDecision,
+          });
+        const memoryContext =
+          screenProjectMemorySettlement.memoryContext;
+        const screenProjectMemorySettlementMetadata =
+          formatProjectMemorySettlementForTrace(
+            screenProjectMemorySettlement
+          );
+        if (screenRequiresProjectBinding) {
+          traceStoreRef.current.updateMetadata(
+            trace.id,
+            screenProjectMemorySettlementMetadata
+          );
+          const screenProjectMemorySettlementStepId =
+            traceStoreRef.current.startStep(
+              trace.id,
+              "Settled project memory context",
+              screenProjectMemorySettlementMetadata
+            );
+          if (memoryContext) {
+            traceStoreRef.current.recordOutput(
+              trace.id,
+              "settled project memory context",
+              formatMemorySelectionForTrace(memoryContext),
+              {
+                ...screenProjectMemorySettlementMetadata,
+                memoryStage: "prompt-injection",
+              }
+            );
+            sessionRecordingManagerRef.current?.recordMemoryRetrieval({
+              traceId: trace.id,
+              query: screenMemoryQuery,
+              diagramDomainQuery: screenDiagramDomainContext.query,
+              source: "screen",
+              memoryContext,
+              metadata: {
+                ...screenProjectMemorySettlementMetadata,
+                memoryStage: "prompt-injection",
+              },
+            });
+          }
+          traceStoreRef.current.finishStep(
+            trace.id,
+            screenProjectMemorySettlementStepId,
+            screenProjectMemorySettlement.state ===
+              "blocked-unsettled-binding"
+              ? "cancelled"
+              : "success",
+            screenProjectMemorySettlementMetadata
+          );
+        }
         const screenFactAnchorDecision = buildFactAnchorDecision({
           questionType: screenMemoryQuestionType,
           questionText: screenCurrentQuestionEvidenceText,
@@ -16607,6 +16833,7 @@ export function useMeetingAssistant() {
           ...formatProjectBindingDecisionForTrace(
             screenProjectBindingDecision
           ),
+          ...screenProjectBindingCommitMetadata,
         };
         traceStoreRef.current.updateMetadata(
           trace.id,
@@ -17253,7 +17480,7 @@ export function useMeetingAssistant() {
               projectAnchor: screenPreflight?.projectAnchor,
               currentSourceText: screenCurrentQuestionEvidenceText,
               sourceObservationIds: [observation.id],
-              memoryContext,
+              memoryContext: candidateMemoryContext,
             });
           const reconciledProjectBindingMetadata = {
             source: "screen",
@@ -17359,9 +17586,7 @@ export function useMeetingAssistant() {
                 : "model-output",
             expiresAt: getActiveScreenTaskExpiresAt(state.settings, now),
             supportedFactAnchors:
-              reconciledScreenProjectBindingDecision.binding
-                ? [reconciledScreenProjectBindingDecision.binding.projectName]
-                : extractSupportedFactAnchorsFromMemory(memoryContext),
+              extractSupportedFactAnchorsFromMemory(memoryContext),
             projectBinding:
               reconciledScreenProjectBindingDecision.binding,
             artifactAuthorization: screenArtifactAuthorization,

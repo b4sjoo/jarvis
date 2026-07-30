@@ -74,6 +74,8 @@ export * from "./opening-route";
 export * from "./memory-evaluation";
 export * from "./personal-evidence-guardrail";
 export * from "./project-binding";
+export * from "./project-binding-transaction";
+export * from "./project-memory-settlement";
 export * from "./primary-ask-projection";
 export * from "./question-lineage";
 export * from "./runtime-commit-authorization";

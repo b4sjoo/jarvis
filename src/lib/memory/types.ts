@@ -271,6 +271,7 @@ export type MemoryRejectReason =
   | "diagram-overlay-question-type-blocked"
   | "diagram-overlay-domain-blocked"
   | "project-anchor-mismatch"
+  | "settled-project-binding-mismatch"
   | "missing-required-tag-hint"
   | "no-retrieval-match"
   | "budget-truncated";
