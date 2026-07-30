@@ -1740,6 +1740,30 @@ export interface WhiteboardRenderHumanEvaluation {
   preservationVerdict?: "correct" | "overwritten" | "not-applicable";
 }
 
+export type ProjectTrajectoryChildContinuity =
+  | "none"
+  | "child-attached"
+  | "parent-resumed";
+
+export interface ProjectTrajectoryHumanEvaluation {
+  detectedProjectId?: string;
+  detectedProjectName?: string;
+  detectedProjectBindingRevision?: number;
+  expectedProjectId?: string;
+  expectedProjectName?: string;
+  detectedPhase?: InterviewPlaybookPhase;
+  expectedPhase?: InterviewPlaybookPhase;
+  detectedFactAnchorState?: FactAnchorState;
+  expectedFactAnchorState?: FactAnchorState;
+  detectedChildContinuity?: ProjectTrajectoryChildContinuity;
+  expectedChildContinuity?: ProjectTrajectoryChildContinuity;
+  projectCorrect?: boolean;
+  phaseCorrect?: boolean;
+  factSupportCorrect?: boolean;
+  childContinuityCorrect?: boolean;
+  unsupportedFirstPersonClaim?: boolean;
+}
+
 export interface QuestionHumanEvaluation {
   id: string;
   sessionId?: string;
@@ -1806,6 +1830,7 @@ export interface QuestionHumanEvaluation {
   answerSufficiency?: AnswerSufficiencyHumanEvaluation;
   currentQuestionSettlement?: CurrentQuestionSettlementHumanEvaluation;
   whiteboardRender?: WhiteboardRenderHumanEvaluation;
+  projectTrajectory?: ProjectTrajectoryHumanEvaluation;
   memoryRetrievalSnapshot?: MemoryRetrievalEvaluationSnapshot;
   memoryEntryLabels: MemoryEntryEvaluationLabel[];
   missingExpectedMemory: MissingExpectedMemoryLabel[];

@@ -47,6 +47,8 @@ import type {
   CriticalMomentOutcomeEvaluationPatch,
   CriticalMomentFailureReason,
   DisplayTranscriptHistoryEntry,
+  FactAnchorState,
+  InterviewPlaybookPhase,
   MeetingResponseActionMode,
   MeetingResponseConfig,
   MeetingResponseLanguage,
@@ -65,6 +67,7 @@ import type {
   MemoryRetrievalEvaluationSnapshotResolution,
   PersonalEvidenceGuardrailMode,
   PersonalStatusDomain,
+  ProjectTrajectoryChildContinuity,
   SemanticTaxonomyMode,
   QuestionHumanEvaluation,
   ScreenCaptureTarget,
@@ -4972,6 +4975,23 @@ const evaluationParentActions: HumanExpectedParentAction[] = [
   "none",
 ];
 
+const projectTrajectoryPhases: InterviewPlaybookPhase[] = [
+  "project_narrative",
+  "architecture_decision",
+  "validation_reliability",
+  "impact_lessons",
+];
+
+const projectTrajectoryFactAnchorStates: FactAnchorState[] = [
+  "strong-anchor",
+  "weak-anchor",
+  "no-anchor",
+  "not-required",
+];
+
+const projectTrajectoryChildContinuities: ProjectTrajectoryChildContinuity[] =
+  ["none", "child-attached", "parent-resumed"];
+
 function normalizeEvaluationTaskRelation(
   value: string | undefined
 ): InterviewTaskRelation | undefined {
@@ -5091,6 +5111,19 @@ const TraceHumanEvaluationPanel = ({
     useState<InterviewTaskRelation>();
   const [expectedParentAction, setExpectedParentAction] =
     useState<HumanExpectedParentAction>();
+  const [projectTrajectoryFixOpen, setProjectTrajectoryFixOpen] =
+    useState(false);
+  const [expectedProjectName, setExpectedProjectName] = useState("");
+  const [expectedProjectPhase, setExpectedProjectPhase] =
+    useState<InterviewPlaybookPhase>();
+  const [expectedProjectFactAnchorState, setExpectedProjectFactAnchorState] =
+    useState<FactAnchorState>();
+  const [expectedProjectChildContinuity, setExpectedProjectChildContinuity] =
+    useState<ProjectTrajectoryChildContinuity>();
+  const [
+    expectedUnsupportedFirstPersonClaim,
+    setExpectedUnsupportedFirstPersonClaim,
+  ] = useState<boolean>();
   const evaluationOpenedAtRef = useRef<number | undefined>(undefined);
   const evaluationClickCountRef = useRef(0);
   const expandedEvaluationRegionsRef = useRef(new Set<string>());
@@ -5170,6 +5203,33 @@ const TraceHumanEvaluationPanel = ({
     projectionV2?.activeFacts["expected-context-read-scope"]?.fact;
   const activeArtifactIntentFact =
     projectionV2?.activeFacts["expected-artifact-intent"]?.fact;
+  const activeProjectTrajectoryFact =
+    projectionV2?.activeFacts["expected-project-trajectory"]?.fact;
+  const observedProjectId =
+    projectionV2?.observed?.projectId ??
+    readStringMetadata(trace.metadata, "activeMeetingProjectBindingId") ??
+    readStringMetadata(trace.metadata, "projectBindingProjectId");
+  const observedProjectName =
+    projectionV2?.observed?.projectName ??
+    readStringMetadata(trace.metadata, "activeMeetingProjectBindingName") ??
+    readStringMetadata(trace.metadata, "projectBindingProjectName");
+  const observedProjectBindingRevision =
+    projectionV2?.observed?.projectBindingRevision ??
+    readNumberMetadata(
+      trace.metadata,
+      "activeMeetingProjectBindingRevision"
+    ) ??
+    readNumberMetadata(trace.metadata, "projectBindingRevision");
+  const observedProjectPhase = projectionV2?.observed?.playbookPhase;
+  const observedProjectFactAnchorState =
+    projectionV2?.observed?.factAnchorState;
+  const observedProjectChildContinuity =
+    projectionV2?.observed?.childContinuity;
+  const showProjectTrajectoryEvaluation =
+    observedQuestionType === "project-deep-dive" ||
+    detectedQuestionType === "project-deep-dive" ||
+    detectedPlaybook === "project_deep_dive" ||
+    Boolean(observedProjectId || observedProjectName);
   const observedContextReadScope =
     typeof trace.metadata?.settledExecutionPlanContextReadScope === "string"
       ? trace.metadata.settledExecutionPlanContextReadScope
@@ -5418,6 +5478,80 @@ const TraceHumanEvaluationPanel = ({
       kind: "expected-artifact-intent",
       expectedIntent,
     });
+  };
+
+  const recordExpectedProjectTrajectory = (
+    fact: Extract<
+      HumanGroundTruthFactV2,
+      { kind: "expected-project-trajectory" }
+    >
+  ) => {
+    const projectCorrect = compareProjectEvaluationLabels(
+      fact.expectedProjectId ?? fact.expectedProjectName,
+      observedProjectId ?? observedProjectName
+    );
+    const phaseCorrect =
+      fact.expectedPhase && observedProjectPhase
+        ? fact.expectedPhase === observedProjectPhase
+        : undefined;
+    const factSupportCorrect =
+      fact.expectedFactAnchorState && observedProjectFactAnchorState
+        ? fact.expectedFactAnchorState ===
+          observedProjectFactAnchorState
+        : undefined;
+    const childContinuityCorrect =
+      fact.expectedChildContinuity && observedProjectChildContinuity
+        ? fact.expectedChildContinuity ===
+          observedProjectChildContinuity
+        : undefined;
+    onUpdateQuestion({
+      projectTrajectory: {
+        ...questionEvaluation?.projectTrajectory,
+        detectedProjectId: observedProjectId,
+        detectedProjectName: observedProjectName,
+        detectedProjectBindingRevision:
+          observedProjectBindingRevision,
+        detectedPhase: observedProjectPhase,
+        detectedFactAnchorState: observedProjectFactAnchorState,
+        detectedChildContinuity: observedProjectChildContinuity,
+        expectedProjectId: fact.expectedProjectId,
+        expectedProjectName: fact.expectedProjectName,
+        expectedPhase: fact.expectedPhase,
+        expectedFactAnchorState: fact.expectedFactAnchorState,
+        expectedChildContinuity: fact.expectedChildContinuity,
+        projectCorrect,
+        phaseCorrect,
+        factSupportCorrect,
+        childContinuityCorrect,
+        unsupportedFirstPersonClaim:
+          fact.unsupportedFirstPersonClaim,
+      },
+    });
+    recordGroundTruth(fact);
+  };
+
+  const recordObservedProjectTrajectory = () => {
+    recordExpectedProjectTrajectory({
+      kind: "expected-project-trajectory",
+      expectedProjectId: observedProjectId,
+      expectedProjectName: observedProjectName,
+      expectedPhase: observedProjectPhase,
+      expectedFactAnchorState: observedProjectFactAnchorState,
+      expectedChildContinuity: observedProjectChildContinuity,
+    });
+  };
+
+  const saveCorrectedProjectTrajectory = () => {
+    recordExpectedProjectTrajectory({
+      kind: "expected-project-trajectory",
+      expectedProjectName: expectedProjectName.trim() || undefined,
+      expectedPhase: expectedProjectPhase,
+      expectedFactAnchorState: expectedProjectFactAnchorState,
+      expectedChildContinuity: expectedProjectChildContinuity,
+      unsupportedFirstPersonClaim:
+        expectedUnsupportedFirstPersonClaim,
+    });
+    setProjectTrajectoryFixOpen(false);
   };
 
   const recordObservedTaskSettlement = () => {
@@ -5934,6 +6068,198 @@ const TraceHumanEvaluationPanel = ({
             ))}
           </div>
         </div>
+        {showProjectTrajectoryEvaluation ? (
+          <div className="rounded-sm border border-border/60 p-2">
+            <div className="text-[10px] font-medium uppercase text-muted-foreground">
+              Project trajectory
+            </div>
+            <div className="mt-1 break-words font-mono text-[9px] text-muted-foreground">
+              observed: {observedProjectName ?? observedProjectId ?? "unbound"}
+              {observedProjectBindingRevision !== undefined
+                ? `@${observedProjectBindingRevision}`
+                : ""}
+              {" / "}
+              {observedProjectPhase ?? "phase-unknown"}
+              {" / "}
+              {observedProjectFactAnchorState ?? "fact-unknown"}
+              {" / "}
+              {observedProjectChildContinuity ?? "continuity-unknown"}
+            </div>
+            {activeProjectTrajectoryFact?.kind ===
+            "expected-project-trajectory" ? (
+              <div className="mt-1 break-words font-mono text-[9px]">
+                expected:{" "}
+                {activeProjectTrajectoryFact.expectedProjectName ??
+                  activeProjectTrajectoryFact.expectedProjectId ??
+                  "unspecified"}
+                {" / "}
+                {activeProjectTrajectoryFact.expectedPhase ??
+                  "phase-unspecified"}
+                {" / "}
+                {activeProjectTrajectoryFact.expectedFactAnchorState ??
+                  "fact-unspecified"}
+                {" / "}
+                {activeProjectTrajectoryFact.expectedChildContinuity ??
+                  "continuity-unspecified"}
+              </div>
+            ) : null}
+            <div className="mt-2 flex flex-wrap gap-1">
+              <Button
+                size="sm"
+                variant={
+                  projectionV2?.verdicts.projectCorrect === true &&
+                  projectionV2.verdicts.playbookPhaseCorrect !== false &&
+                  projectionV2.verdicts.factSupportCorrect !== false &&
+                  projectionV2.verdicts.childContinuityCorrect !== false
+                    ? "default"
+                    : "outline"
+                }
+                className="h-6 px-2 text-[9px]"
+                disabled={
+                  !observedProjectId &&
+                  !observedProjectName &&
+                  !observedProjectPhase &&
+                  !observedProjectFactAnchorState
+                }
+                onClick={recordObservedProjectTrajectory}
+              >
+                Correct
+              </Button>
+              <Button
+                size="sm"
+                variant={projectTrajectoryFixOpen ? "default" : "outline"}
+                className="h-6 px-2 text-[9px]"
+                onClick={() => {
+                  const activeFact =
+                    activeProjectTrajectoryFact?.kind ===
+                    "expected-project-trajectory"
+                      ? activeProjectTrajectoryFact
+                      : undefined;
+                  setExpectedProjectName(
+                    activeFact?.expectedProjectName ??
+                      activeFact?.expectedProjectId ??
+                      observedProjectName ??
+                      observedProjectId ??
+                      ""
+                  );
+                  setExpectedProjectPhase(
+                    activeFact?.expectedPhase ?? observedProjectPhase
+                  );
+                  setExpectedProjectFactAnchorState(
+                    activeFact?.expectedFactAnchorState ??
+                      observedProjectFactAnchorState
+                  );
+                  setExpectedProjectChildContinuity(
+                    activeFact?.expectedChildContinuity ??
+                      observedProjectChildContinuity
+                  );
+                  setExpectedUnsupportedFirstPersonClaim(
+                    activeFact?.unsupportedFirstPersonClaim
+                  );
+                  setProjectTrajectoryFixOpen((open) => !open);
+                }}
+              >
+                Fix
+              </Button>
+            </div>
+            {projectTrajectoryFixOpen ? (
+              <div className="mt-2 space-y-2 rounded-sm bg-muted/30 p-2">
+                <Label className="text-[9px] text-muted-foreground">
+                  Expected project
+                </Label>
+                <Input
+                  value={expectedProjectName}
+                  onChange={(event) =>
+                    setExpectedProjectName(event.target.value)
+                  }
+                  placeholder="Project id or name"
+                  className="h-7 text-[10px]"
+                />
+                <CriticalMomentButtonGroup
+                  label="Expected phase"
+                  options={projectTrajectoryPhases.map((phase) => [
+                    phase,
+                    phase,
+                  ])}
+                  value={expectedProjectPhase}
+                  onSelect={(value) =>
+                    setExpectedProjectPhase(
+                      projectTrajectoryPhases.find(
+                        (phase) => phase === value
+                      )
+                    )
+                  }
+                />
+                <CriticalMomentButtonGroup
+                  label="Expected fact support"
+                  options={projectTrajectoryFactAnchorStates.map(
+                    (state) => [state, state]
+                  )}
+                  value={expectedProjectFactAnchorState}
+                  onSelect={(value) =>
+                    setExpectedProjectFactAnchorState(
+                      projectTrajectoryFactAnchorStates.find(
+                        (state) => state === value
+                      )
+                    )
+                  }
+                />
+                <CriticalMomentButtonGroup
+                  label="Expected child/resume"
+                  options={projectTrajectoryChildContinuities.map(
+                    (continuity) => [continuity, continuity]
+                  )}
+                  value={expectedProjectChildContinuity}
+                  onSelect={(value) =>
+                    setExpectedProjectChildContinuity(
+                      projectTrajectoryChildContinuities.find(
+                        (continuity) => continuity === value
+                      )
+                    )
+                  }
+                />
+                <div>
+                  <div className="mb-1 text-[9px] text-muted-foreground">
+                    Unsupported first-person claim
+                  </div>
+                  <div className="flex gap-1">
+                    {[false, true].map((value) => (
+                      <Button
+                        key={String(value)}
+                        size="sm"
+                        variant={
+                          expectedUnsupportedFirstPersonClaim === value
+                            ? "default"
+                            : "outline"
+                        }
+                        className="h-6 px-2 text-[9px]"
+                        onClick={() =>
+                          setExpectedUnsupportedFirstPersonClaim(value)
+                        }
+                      >
+                        {value ? "Present" : "Absent"}
+                      </Button>
+                    ))}
+                  </div>
+                </div>
+                <Button
+                  size="sm"
+                  className="h-7 px-2 text-[10px]"
+                  disabled={
+                    !expectedProjectName.trim() &&
+                    !expectedProjectPhase &&
+                    !expectedProjectFactAnchorState &&
+                    !expectedProjectChildContinuity &&
+                    expectedUnsupportedFirstPersonClaim === undefined
+                  }
+                  onClick={saveCorrectedProjectTrajectory}
+                >
+                  Save trajectory
+                </Button>
+              </div>
+            ) : null}
+          </div>
+        ) : null}
         {detectedQuestionType ? (
           <div className="rounded-sm bg-muted/40 p-2 text-[10px]">
             <span className="text-muted-foreground">Detected type: </span>
@@ -7302,6 +7628,26 @@ function readStringMetadata(
 ) {
   const value = metadata?.[key];
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function readNumberMetadata(
+  metadata: Record<string, unknown> | undefined,
+  key: string
+) {
+  const value = metadata?.[key];
+  return typeof value === "number" && Number.isFinite(value)
+    ? value
+    : undefined;
+}
+
+function compareProjectEvaluationLabels(
+  expected: string | undefined,
+  observed: string | undefined
+) {
+  if (!expected || !observed) return undefined;
+  const normalize = (value: string) =>
+    value.trim().toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+  return normalize(expected) === normalize(observed);
 }
 
 const TraceClassifierMetadata = ({

@@ -49,6 +49,7 @@ export interface QuestionEvaluationIdentity {
   whiteboardArtifactRevision?: number;
   whiteboardArtifactDomainTrack?: string;
   whiteboardRender?: QuestionHumanEvaluation["whiteboardRender"];
+  projectTrajectory?: QuestionHumanEvaluation["projectTrajectory"];
   manualPhaseFrom?: string;
   manualPhaseTo?: string;
   manualPhaseTargetArtifact?: string;
@@ -456,6 +457,15 @@ export function upsertQuestionHumanEvaluation(
           }
         : undefined
     ),
+    projectTrajectory: mergeProjectTrajectoryEvaluation(
+      existing?.projectTrajectory,
+      identity.projectTrajectory || patch.projectTrajectory
+        ? {
+            ...identity.projectTrajectory,
+            ...patch.projectTrajectory,
+          }
+        : undefined
+    ),
     memoryRetrievalSnapshot:
       normalizeMemoryRetrievalEvaluationSnapshot(
         patch.memoryRetrievalSnapshot
@@ -836,6 +846,9 @@ function normalizeQuestionHumanEvaluation(
     whiteboardRender: normalizeWhiteboardRenderEvaluation(
       candidate.whiteboardRender
     ),
+    projectTrajectory: normalizeProjectTrajectoryEvaluation(
+      candidate.projectTrajectory
+    ),
     memoryRetrievalSnapshot: normalizeMemoryRetrievalEvaluationSnapshot(
       candidate.memoryRetrievalSnapshot
     ),
@@ -860,6 +873,66 @@ function mergeTaxonomyAdjudicationEvaluation(
     ...existing,
     ...patch,
   };
+}
+
+function mergeProjectTrajectoryEvaluation(
+  existing: QuestionHumanEvaluation["projectTrajectory"],
+  patch: QuestionHumanEvaluation["projectTrajectory"]
+): QuestionHumanEvaluation["projectTrajectory"] {
+  if (!existing && !patch) return undefined;
+  return normalizeProjectTrajectoryEvaluation({
+    ...existing,
+    ...patch,
+  });
+}
+
+function normalizeProjectTrajectoryEvaluation(
+  value: QuestionHumanEvaluation["projectTrajectory"]
+): QuestionHumanEvaluation["projectTrajectory"] {
+  if (!value || typeof value !== "object") return undefined;
+  const detectedPhase = normalizeProjectTrajectoryPhase(value.detectedPhase);
+  const expectedPhase = normalizeProjectTrajectoryPhase(value.expectedPhase);
+  const detectedFactAnchorState = normalizeFactAnchorState(
+    value.detectedFactAnchorState
+  );
+  const expectedFactAnchorState = normalizeFactAnchorState(
+    value.expectedFactAnchorState
+  );
+  const detectedChildContinuity = normalizeProjectChildContinuity(
+    value.detectedChildContinuity
+  );
+  const expectedChildContinuity = normalizeProjectChildContinuity(
+    value.expectedChildContinuity
+  );
+  const normalized = {
+    detectedProjectId: readOptionalString(value.detectedProjectId),
+    detectedProjectName: readOptionalString(value.detectedProjectName),
+    detectedProjectBindingRevision:
+      typeof value.detectedProjectBindingRevision === "number" &&
+      Number.isFinite(value.detectedProjectBindingRevision)
+        ? value.detectedProjectBindingRevision
+        : undefined,
+    expectedProjectId: readOptionalString(value.expectedProjectId),
+    expectedProjectName: readOptionalString(value.expectedProjectName),
+    detectedPhase,
+    expectedPhase,
+    detectedFactAnchorState,
+    expectedFactAnchorState,
+    detectedChildContinuity,
+    expectedChildContinuity,
+    projectCorrect: readOptionalBoolean(value.projectCorrect),
+    phaseCorrect: readOptionalBoolean(value.phaseCorrect),
+    factSupportCorrect: readOptionalBoolean(value.factSupportCorrect),
+    childContinuityCorrect: readOptionalBoolean(
+      value.childContinuityCorrect
+    ),
+    unsupportedFirstPersonClaim: readOptionalBoolean(
+      value.unsupportedFirstPersonClaim
+    ),
+  };
+  return Object.values(normalized).some((candidate) => candidate !== undefined)
+    ? normalized
+    : undefined;
 }
 
 function mergeTransientPersonalStatusEvaluation(
@@ -1560,6 +1633,57 @@ function normalizeMissingExpectedMemory(
     if (!id && !note) return [];
     return [{ id, note }];
   });
+}
+
+function normalizeProjectTrajectoryPhase(
+  value: unknown
+): NonNullable<
+  QuestionHumanEvaluation["projectTrajectory"]
+>["detectedPhase"] {
+  return value === "story_selection" ||
+    value === "baseline_reasoning" ||
+    value === "optimized_pseudocode" ||
+    value === "implementation_validation" ||
+    value === "solution_planning" ||
+    value === "requirement_clarification" ||
+    value === "design_framing" ||
+    value === "project_narrative" ||
+    value === "architecture_decision" ||
+    value === "validation_reliability" ||
+    value === "impact_lessons" ||
+    value === "concept_explanation" ||
+    value === "follow_up"
+    ? value
+    : undefined;
+}
+
+function normalizeFactAnchorState(
+  value: unknown
+): NonNullable<
+  QuestionHumanEvaluation["projectTrajectory"]
+>["detectedFactAnchorState"] {
+  return value === "strong-anchor" ||
+    value === "weak-anchor" ||
+    value === "no-anchor" ||
+    value === "not-required"
+    ? value
+    : undefined;
+}
+
+function normalizeProjectChildContinuity(
+  value: unknown
+): NonNullable<
+  QuestionHumanEvaluation["projectTrajectory"]
+>["detectedChildContinuity"] {
+  return value === "none" ||
+    value === "child-attached" ||
+    value === "parent-resumed"
+    ? value
+    : undefined;
+}
+
+function readOptionalBoolean(value: unknown) {
+  return typeof value === "boolean" ? value : undefined;
 }
 
 function readOptionalString(value: unknown) {

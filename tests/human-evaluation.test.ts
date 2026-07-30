@@ -957,3 +957,59 @@ test("keeps independent task-relation adjudication labels on the question denomi
     "contaminated"
   );
 });
+
+test("merges project trajectory observations with expected human facts", () => {
+  const evaluations = upsertQuestionHumanEvaluation(
+    [],
+    {
+      sessionId: "session_project",
+      traceId: "trace_project",
+      traceKind: "voice",
+      taskId: "parent_project",
+      parentTaskId: "parent_project",
+      taskSource: "voice",
+      questionType: "project-deep-dive",
+      projectTrajectory: {
+        detectedProjectId: "agentic-memory",
+        detectedProjectName: "Agentic Memory",
+        detectedProjectBindingRevision: 3,
+        detectedPhase: "architecture_decision",
+        detectedFactAnchorState: "strong-anchor",
+        detectedChildContinuity: "parent-resumed",
+      },
+    },
+    {
+      projectTrajectory: {
+        expectedProjectId: "agentic-memory",
+        expectedProjectName: "Agentic Memory",
+        expectedPhase: "architecture_decision",
+        expectedFactAnchorState: "strong-anchor",
+        expectedChildContinuity: "parent-resumed",
+        projectCorrect: true,
+        phaseCorrect: true,
+        factSupportCorrect: true,
+        childContinuityCorrect: true,
+        unsupportedFirstPersonClaim: false,
+      },
+    }
+  );
+
+  assert.deepEqual(evaluations[0]?.projectTrajectory, {
+    detectedProjectId: "agentic-memory",
+    detectedProjectName: "Agentic Memory",
+    detectedProjectBindingRevision: 3,
+    expectedProjectId: "agentic-memory",
+    expectedProjectName: "Agentic Memory",
+    detectedPhase: "architecture_decision",
+    expectedPhase: "architecture_decision",
+    detectedFactAnchorState: "strong-anchor",
+    expectedFactAnchorState: "strong-anchor",
+    detectedChildContinuity: "parent-resumed",
+    expectedChildContinuity: "parent-resumed",
+    projectCorrect: true,
+    phaseCorrect: true,
+    factSupportCorrect: true,
+    childContinuityCorrect: true,
+    unsupportedFirstPersonClaim: false,
+  });
+});

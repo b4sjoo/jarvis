@@ -56,7 +56,7 @@ import { serializeMeetingTraceExport } from "./trace.js";
 
 const SESSION_RECORDING_SCHEMA_VERSION = 1;
 const SESSION_RECORDING_INTEGRITY_SCHEMA_VERSION = 1;
-const SESSION_TRACE_SUMMARY_SCHEMA_VERSION = 31;
+const SESSION_TRACE_SUMMARY_SCHEMA_VERSION = 32;
 const SESSION_TRACE_INDEX_SCHEMA_VERSION = 1;
 const MAX_RECORDED_WRITE_FAILURES = 20;
 
@@ -721,6 +721,26 @@ export interface SessionCompactTraceSummary {
     confidence?: number;
     revision?: number;
     candidateCount?: number;
+  };
+  projectTrajectory?: {
+    joinKey: string;
+    parentId?: string;
+    parentRevision?: number;
+    projectId?: string;
+    projectName?: string;
+    projectBindingRevision?: number;
+    phase?: string;
+    factAnchorState?: string;
+    unsupportedClaimRisk?: string;
+    claimSupportAllowCount: number;
+    claimSupportRejectCount: number;
+    claimSupportClarificationCount: number;
+    transitionKind?: string;
+    childId?: string;
+    childIntent?: string;
+    returnParentId?: string;
+    returnPhase?: string;
+    returnProjectBindingRevision?: number;
   };
   sttValidation?: {
     disposition: string;
@@ -1639,6 +1659,7 @@ export class SessionRecordingManager {
         activeMeetingTaskId: task.id,
         activeMeetingTaskSource: task.source,
         activeMeetingParentId: task.parent.id,
+        activeMeetingParentRevision: task.parent.revisions,
         activeMeetingParentQuestionType: task.parent.questionType,
         activeMeetingParentPhase: task.parent.playbookPhase,
         activeMeetingProjectBindingId: task.parent.projectBinding?.projectId,
@@ -1655,6 +1676,19 @@ export class SessionRecordingManager {
         activeMeetingChildId: task.child?.id,
         activeMeetingChildQuestionType: task.child?.questionType,
         activeMeetingChildIntent: task.child?.intent,
+        activeMeetingChildReturnParentId:
+          task.child?.returnCapsule?.parentId,
+        activeMeetingChildReturnPhase:
+          task.child?.returnCapsule?.parentPhase,
+        activeMeetingChildReturnProjectBindingRevision:
+          task.child?.returnCapsule?.projectBindingRevision,
+        activeMeetingChildReturnFactAnchorCount:
+          task.child?.returnCapsule?.allowedFactAnchorIds.length,
+        projectTrajectoryJoinKey: buildProjectTrajectoryJoinKey({
+          parentId: task.parent.id,
+          projectBindingRevision:
+            task.parent.projectBinding?.revision,
+        }),
         activeScreenTaskId: task.screen?.activeScreenTaskId,
         hasScreenContext: Boolean(task.screen),
         divergence: task.divergence?.reason,
@@ -3571,7 +3605,7 @@ function filterTraceMetricsPayload(payload: string, recordedTraceIds: Set<string
   }
 }
 
-function buildCompactTraceSummary({
+export function buildCompactTraceSummary({
   sessionId,
   trace,
   trigger,
@@ -4672,6 +4706,10 @@ function buildCompactTraceSummary({
         "projectBindingCandidateCount"
       ),
     },
+    projectTrajectory: buildProjectTrajectoryTraceSummary(
+      trace,
+      metadataSources
+    ),
     sttValidation: buildSttValidationTraceSummary(metadataSources),
     audioSegment: buildAudioSegmentDispositionTraceSummary(metadataSources),
     nativeAudioBoundary:
@@ -6503,6 +6541,156 @@ function summarizeCaptureTarget(value: unknown): SessionCompactTraceSummary["cap
     originalImageWidth: readNumber(value.originalImageWidth),
     originalImageHeight: readNumber(value.originalImageHeight),
   };
+}
+
+function buildProjectTrajectoryTraceSummary(
+  trace: MeetingTrace,
+  metadataSources: Record<string, unknown>[]
+): SessionCompactTraceSummary["projectTrajectory"] {
+  const parentId =
+    readFirstString(metadataSources, "activeMeetingParentId") ??
+    readFirstString(metadataSources, "sourceTransitionParentAfterId");
+  const parentRevision =
+    readFirstNumberFromMetadata(
+      metadataSources,
+      "activeMeetingParentRevision"
+    ) ??
+    readFirstNumberFromMetadata(
+      metadataSources,
+      "sourceTransitionParentAfterRevision"
+    );
+  const projectId =
+    readFirstString(metadataSources, "activeMeetingProjectBindingId") ??
+    readFirstString(metadataSources, "projectBindingProjectId");
+  const projectName =
+    readFirstString(metadataSources, "activeMeetingProjectBindingName") ??
+    readFirstString(metadataSources, "projectBindingProjectName");
+  const projectBindingRevision =
+    readFirstNumberFromMetadata(
+      metadataSources,
+      "activeMeetingProjectBindingRevision"
+    ) ??
+    readFirstNumberFromMetadata(
+      metadataSources,
+      "projectBindingRevision"
+    );
+  const phase =
+    readFirstString(metadataSources, "activeMeetingParentPhase") ??
+    readFirstString(metadataSources, "playbookPhaseDecisionPhase") ??
+    readFirstString(metadataSources, "playbookPhase");
+  const factAnchorState = readFirstString(
+    metadataSources,
+    "factAnchorState"
+  );
+  const transitionKind = readFirstString(
+    metadataSources,
+    "sourceTransitionKind"
+  );
+  const childId =
+    readFirstString(metadataSources, "activeMeetingChildId") ??
+    readFirstString(metadataSources, "sourceTransitionChildAfterId");
+  const returnParentId =
+    readFirstString(
+      metadataSources,
+      "activeMeetingChildReturnParentId"
+    ) ??
+    readFirstString(
+      metadataSources,
+      "sourceTransitionReturnCapsuleParentId"
+    );
+  const claimSupport = readFirstClaimSupportCounts(metadataSources);
+  if (
+    !parentId &&
+    !projectId &&
+    !projectName &&
+    !phase &&
+    !factAnchorState &&
+    !transitionKind
+  ) {
+    return undefined;
+  }
+
+  return {
+    joinKey: buildProjectTrajectoryJoinKey({
+      traceId: trace.id,
+      parentId,
+      projectBindingRevision,
+    }),
+    parentId,
+    parentRevision,
+    projectId,
+    projectName,
+    projectBindingRevision,
+    phase,
+    factAnchorState,
+    unsupportedClaimRisk: readFirstString(
+      metadataSources,
+      "unsupportedClaimRisk"
+    ),
+    claimSupportAllowCount: claimSupport.allow,
+    claimSupportRejectCount: claimSupport.reject,
+    claimSupportClarificationCount: claimSupport.needsClarification,
+    transitionKind,
+    childId,
+    childIntent: readFirstString(
+      metadataSources,
+      "activeMeetingChildIntent"
+    ),
+    returnParentId,
+    returnPhase:
+      readFirstString(
+        metadataSources,
+        "activeMeetingChildReturnPhase"
+      ) ??
+      readFirstString(
+        metadataSources,
+        "sourceTransitionReturnCapsulePhase"
+      ),
+    returnProjectBindingRevision:
+      readFirstNumberFromMetadata(
+        metadataSources,
+        "activeMeetingChildReturnProjectBindingRevision"
+      ) ??
+      readFirstNumberFromMetadata(
+        metadataSources,
+        "sourceTransitionReturnCapsuleProjectBindingRevision"
+      ),
+  };
+}
+
+function buildProjectTrajectoryJoinKey(input: {
+  traceId?: string;
+  parentId?: string;
+  projectBindingRevision?: number;
+}) {
+  return [
+    "project-trajectory",
+    input.traceId ?? "snapshot",
+    input.parentId ?? "unbound",
+    input.projectBindingRevision ?? "no-binding-revision",
+  ].join(":");
+}
+
+function readFirstClaimSupportCounts(
+  metadataSources: Record<string, unknown>[]
+) {
+  for (const metadata of metadataSources) {
+    const decisions = metadata.factAnchorClaimSupportDecisions;
+    if (!Array.isArray(decisions)) continue;
+    return decisions.reduce(
+      (counts, value) => {
+        if (!isRecord(value)) return counts;
+        if (value.decision === "allow") counts.allow += 1;
+        if (value.decision === "reject") counts.reject += 1;
+        if (value.decision === "needs-clarification") {
+          counts.needsClarification += 1;
+        }
+        return counts;
+      },
+      { allow: 0, reject: 0, needsClarification: 0 }
+    );
+  }
+  return { allow: 0, reject: 0, needsClarification: 0 };
 }
 
 function readFirstString(

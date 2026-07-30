@@ -108,6 +108,26 @@ export interface LongitudinalTraceSummary {
     repairRevalidationDisposition?: string;
     repairBehaviorMutationBlocked?: boolean;
   };
+  projectTrajectory?: {
+    joinKey?: string;
+    parentId?: string;
+    parentRevision?: number;
+    projectId?: string;
+    projectName?: string;
+    projectBindingRevision?: number;
+    phase?: string;
+    factAnchorState?: string;
+    unsupportedClaimRisk?: string;
+    claimSupportAllowCount?: number;
+    claimSupportRejectCount?: number;
+    claimSupportClarificationCount?: number;
+    transitionKind?: string;
+    childId?: string;
+    childIntent?: string;
+    returnParentId?: string;
+    returnPhase?: string;
+    returnProjectBindingRevision?: number;
+  };
   timingsMs?: {
     model?: number;
     advisor?: number;
@@ -359,6 +379,19 @@ export interface SessionLongitudinalEvaluationReport {
     validationLatencyMs: DistributionMetric;
     repairQueueWaitMs: DistributionMetric;
     repairDurationMs: DistributionMetric;
+  };
+  projectTrajectoryFunnel: {
+    observedTraces: number;
+    humanLabeled: number;
+    projectAgreement: RateMetric;
+    phaseAgreement: RateMetric;
+    factSupportAgreement: RateMetric;
+    childContinuityAgreement: RateMetric;
+    unsupportedFirstPersonClaimCount: number;
+    wrongProjectFactSupportCount: number;
+    phaseRestartCount: number;
+    childResumeObserved: number;
+    childResumeSuccessRate: RateMetric;
   };
   evidenceGaps: {
     unlabeledProductionTraces: number;
@@ -624,6 +657,20 @@ export function buildSessionLongitudinalEvaluationReport(
       ): report is TaskRelationAuthorityConvergenceReportV1 =>
         Boolean(report)
     );
+  const projectTrajectoryTraces = production.filter(({ trace }) =>
+    Boolean(trace.projectTrajectory)
+  );
+  const projectTrajectoryProjections = inputs.flatMap((input) =>
+    (input.humanEvaluationProjectionsV2 ?? []).filter(
+      (projection) =>
+        projection.activeFacts["expected-project-trajectory"]?.fact.kind ===
+        "expected-project-trajectory"
+    )
+  );
+  const childResumeTraces = projectTrajectoryTraces.filter(
+    ({ trace }) =>
+      trace.projectTrajectory?.transitionKind === "resume-parent"
+  );
 
   return {
     version: 2,
@@ -922,6 +969,57 @@ export function buildSessionLongitudinalEvaluationReport(
         settledWhiteboardRepairAttempts.map(
           ({ trace }) => trace.whiteboard?.repairDurationMs
         )
+      ),
+    },
+    projectTrajectoryFunnel: {
+      observedTraces: projectTrajectoryTraces.length,
+      humanLabeled: projectTrajectoryProjections.length,
+      projectAgreement: verdictRate(
+        projectTrajectoryProjections,
+        "projectCorrect"
+      ),
+      phaseAgreement: verdictRate(
+        projectTrajectoryProjections,
+        "playbookPhaseCorrect"
+      ),
+      factSupportAgreement: verdictRate(
+        projectTrajectoryProjections,
+        "factSupportCorrect"
+      ),
+      childContinuityAgreement: verdictRate(
+        projectTrajectoryProjections,
+        "childContinuityCorrect"
+      ),
+      unsupportedFirstPersonClaimCount:
+        projectTrajectoryProjections.filter(
+          (projection) =>
+            projection.verdicts.unsupportedFirstPersonClaim === true
+        ).length,
+      wrongProjectFactSupportCount:
+        projectTrajectoryProjections.filter(
+          (projection) =>
+            projection.verdicts.projectCorrect === false &&
+            (projection.observed?.factAnchorState === "strong-anchor" ||
+              projection.observed?.factAnchorState === "weak-anchor")
+        ).length,
+      phaseRestartCount: countProjectPhaseRestarts(
+        projectTrajectoryTraces
+      ),
+      childResumeObserved: childResumeTraces.length,
+      childResumeSuccessRate: rate(
+        childResumeTraces.filter(({ trace }) => {
+          const trajectory = trace.projectTrajectory;
+          return Boolean(
+            trajectory?.parentId &&
+              trajectory.returnParentId === trajectory.parentId &&
+              trajectory?.phase &&
+              trajectory.returnPhase === trajectory.phase &&
+              (trajectory.returnProjectBindingRevision === undefined ||
+                trajectory.projectBindingRevision ===
+                  trajectory.returnProjectBindingRevision)
+          );
+        }).length,
+        childResumeTraces.length
       ),
     },
     evidenceGaps: {
@@ -1423,6 +1521,16 @@ export function renderSessionLongitudinalEvaluationMarkdown(
     `Repair queue wait: ${formatDistribution(report.whiteboardRenderFunnel.repairQueueWaitMs)}`,
     `Repair duration: ${formatDistribution(report.whiteboardRenderFunnel.repairDurationMs)}`,
     "",
+    "## Project Trajectory Grounding",
+    "",
+    `Observed / human labeled: ${report.projectTrajectoryFunnel.observedTraces} / ${report.projectTrajectoryFunnel.humanLabeled}`,
+    `Project agreement: ${formatRate(report.projectTrajectoryFunnel.projectAgreement)}`,
+    `Phase agreement: ${formatRate(report.projectTrajectoryFunnel.phaseAgreement)}`,
+    `Fact-support agreement: ${formatRate(report.projectTrajectoryFunnel.factSupportAgreement)}`,
+    `Child/resume agreement: ${formatRate(report.projectTrajectoryFunnel.childContinuityAgreement)}`,
+    `Child resume success: ${formatRate(report.projectTrajectoryFunnel.childResumeSuccessRate)}`,
+    `Phase restarts / wrong-project fact support / unsupported first-person claims: ${report.projectTrajectoryFunnel.phaseRestartCount} / ${report.projectTrajectoryFunnel.wrongProjectFactSupportCount} / ${report.projectTrajectoryFunnel.unsupportedFirstPersonClaimCount}`,
+    "",
     "## Evidence Gaps",
     "",
     `- Unlabeled production traces: ${report.evidenceGaps.unlabeledProductionTraces}`,
@@ -1640,6 +1748,53 @@ function aggregateRates(metrics: RateMetric[]): RateMetric {
     sum(metrics.map((metric) => metric.numerator)),
     sum(metrics.map((metric) => metric.denominator))
   );
+}
+
+function verdictRate(
+  projections: HumanEvaluationProjectionV2[],
+  key:
+    | "projectCorrect"
+    | "playbookPhaseCorrect"
+    | "factSupportCorrect"
+    | "childContinuityCorrect"
+) {
+  const comparable = projections
+    .map((projection) => projection.verdicts[key])
+    .filter((value): value is boolean => typeof value === "boolean");
+  return rate(
+    comparable.filter(Boolean).length,
+    comparable.length
+  );
+}
+
+function countProjectPhaseRestarts(rows: JoinedTrace[]) {
+  const phaseRank = new Map([
+    ["project_narrative", 0],
+    ["architecture_decision", 1],
+    ["validation_reliability", 2],
+    ["impact_lessons", 3],
+  ]);
+  const highestByParent = new Map<string, number>();
+  let restarts = 0;
+  for (const { trace } of [...rows].sort(
+    (left, right) =>
+      (left.trace.startedAt ?? 0) - (right.trace.startedAt ?? 0)
+  )) {
+    const parentId = trace.projectTrajectory?.parentId;
+    const phase = trace.projectTrajectory?.phase;
+    const rank = phase ? phaseRank.get(phase) : undefined;
+    if (!parentId || rank === undefined) continue;
+    const highest = highestByParent.get(parentId);
+    if (
+      highest !== undefined &&
+      rank < highest &&
+      trace.projectTrajectory?.transitionKind !== "child-probe"
+    ) {
+      restarts += 1;
+    }
+    highestByParent.set(parentId, Math.max(highest ?? rank, rank));
+  }
+  return restarts;
 }
 
 function rate(numerator: number, denominator: number): RateMetric {

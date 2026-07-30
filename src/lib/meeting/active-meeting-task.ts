@@ -245,6 +245,7 @@ export function getActiveMeetingTaskTraceMetadata(
     activeMeetingTaskId: task.id,
     activeMeetingTaskSource: task.source,
     activeMeetingParentId: task.parent.id,
+    activeMeetingParentRevision: task.parent.revisions,
     activeMeetingParentQuestionType: task.parent.questionType,
     activeMeetingParentPhase: task.parent.playbookPhase,
     activeMeetingParentOriginQuestionId: task.parent.originQuestionId,

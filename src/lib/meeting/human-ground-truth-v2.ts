@@ -9,8 +9,11 @@ import type {
   ExpectedAdvisorAction,
   HumanEvaluationVerdict,
   HumanExpectedParentAction,
+  FactAnchorState,
+  InterviewPlaybookPhase,
   InterviewTaskRelation,
   MeetingTrace,
+  ProjectTrajectoryChildContinuity,
   QuestionHumanEvaluation,
 } from "./types.js";
 import type { AdvisorContextReadScope } from "./response-only-task-scope.js";
@@ -18,7 +21,7 @@ import type { SettledAdvisorArtifactIntent } from "./settled-advisor-execution-p
 
 export const HUMAN_GROUND_TRUTH_SCHEMA_VERSION = 2 as const;
 export const HUMAN_EVALUATION_DERIVATION_VERSION =
-  "human-evaluation-v2.2";
+  "human-evaluation-v2.3";
 
 export type HumanGroundTruthConfirmation = "confirmed" | "suggested";
 
@@ -105,6 +108,16 @@ export interface ArtifactQualityFactV2 {
   verdict: "useful" | "partial" | "wrong" | "missing";
 }
 
+export interface ExpectedProjectTrajectoryFactV2 {
+  kind: "expected-project-trajectory";
+  expectedProjectId?: string;
+  expectedProjectName?: string;
+  expectedPhase?: InterviewPlaybookPhase;
+  expectedFactAnchorState?: FactAnchorState;
+  expectedChildContinuity?: ProjectTrajectoryChildContinuity;
+  unsupportedFirstPersonClaim?: boolean;
+}
+
 export type HumanGroundTruthFactV2 =
   | ExpectedTaskSettlementFactV2
   | ExpectedQuestionTypeFactV2
@@ -114,7 +127,8 @@ export type HumanGroundTruthFactV2 =
   | PrimaryAskCorrectionFactV2
   | AnswerQualityFactV2
   | MemoryLabelFactV2
-  | ArtifactQualityFactV2;
+  | ArtifactQualityFactV2
+  | ExpectedProjectTrajectoryFactV2;
 
 export interface HumanGroundTruthEventV2 {
   schemaVersion: typeof HUMAN_GROUND_TRUTH_SCHEMA_VERSION;
@@ -147,6 +161,12 @@ export interface HumanEvaluationObservedSnapshotV2 {
   artifactIntent?: SettledAdvisorArtifactIntent;
   primaryAsk?: string;
   answerCommitted?: boolean;
+  projectId?: string;
+  projectName?: string;
+  projectBindingRevision?: number;
+  playbookPhase?: InterviewPlaybookPhase;
+  factAnchorState?: FactAnchorState;
+  childContinuity?: ProjectTrajectoryChildContinuity;
 }
 
 export interface HumanEvaluationConflictV2 {
@@ -176,6 +196,11 @@ export interface HumanEvaluationProjectionV2 {
     answerOutcome?: AnswerQualityFactV2["outcome"];
     contextReadScopeCorrect?: boolean;
     artifactIntentCorrect?: boolean;
+    projectCorrect?: boolean;
+    playbookPhaseCorrect?: boolean;
+    factSupportCorrect?: boolean;
+    childContinuityCorrect?: boolean;
+    unsupportedFirstPersonClaim?: boolean;
   };
   conflicts: HumanEvaluationConflictV2[];
   computedAt: number;
@@ -337,6 +362,8 @@ export function deriveHumanEvaluationProjectionV2(input: {
     activeFacts["expected-context-read-scope"]?.fact;
   const artifactIntent =
     activeFacts["expected-artifact-intent"]?.fact;
+  const projectTrajectory =
+    activeFacts["expected-project-trajectory"]?.fact;
   const expectedQuestionType =
     settlement?.kind === "expected-task-settlement"
       ? settlement.expectedQuestionType
@@ -391,6 +418,38 @@ export function deriveHumanEvaluationProjectionV2(input: {
           ? artifactIntent.expectedIntent ===
             input.observed.artifactIntent
           : undefined,
+      projectCorrect:
+        projectTrajectory?.kind === "expected-project-trajectory"
+          ? compareExpectedProject(
+              projectTrajectory,
+              input.observed
+            )
+          : undefined,
+      playbookPhaseCorrect:
+        projectTrajectory?.kind === "expected-project-trajectory" &&
+        projectTrajectory.expectedPhase &&
+        input.observed?.playbookPhase
+          ? projectTrajectory.expectedPhase ===
+            input.observed.playbookPhase
+          : undefined,
+      factSupportCorrect:
+        projectTrajectory?.kind === "expected-project-trajectory" &&
+        projectTrajectory.expectedFactAnchorState &&
+        input.observed?.factAnchorState
+          ? projectTrajectory.expectedFactAnchorState ===
+            input.observed.factAnchorState
+          : undefined,
+      childContinuityCorrect:
+        projectTrajectory?.kind === "expected-project-trajectory" &&
+        projectTrajectory.expectedChildContinuity &&
+        input.observed?.childContinuity
+          ? projectTrajectory.expectedChildContinuity ===
+            input.observed.childContinuity
+          : undefined,
+      unsupportedFirstPersonClaim:
+        projectTrajectory?.kind === "expected-project-trajectory"
+          ? projectTrajectory.unsupportedFirstPersonClaim
+          : undefined,
     },
     conflicts,
     computedAt: input.now ?? Date.now(),
@@ -432,6 +491,27 @@ export function buildHumanEvaluationObservedSnapshotV2(
   const artifactIntent = normalizeArtifactIntent(
     metadata.settledExecutionPlanArtifactIntent
   );
+  const projectId = readString(
+    metadata.activeMeetingProjectBindingId ??
+      metadata.projectBindingProjectId
+  );
+  const projectName = readString(
+    metadata.activeMeetingProjectBindingName ??
+      metadata.projectBindingProjectName
+  );
+  const projectBindingRevision = readNumber(
+    metadata.activeMeetingProjectBindingRevision ??
+      metadata.projectBindingRevision
+  );
+  const playbookPhase = normalizePlaybookPhase(
+    metadata.activeMeetingParentPhase ??
+      metadata.playbookPhaseDecisionPhase ??
+      metadata.playbookPhase
+  );
+  const factAnchorState = normalizeFactAnchorState(
+    metadata.factAnchorState
+  );
+  const childContinuity = resolveObservedChildContinuity(metadata);
   const traceEvidence = {
     traceId: trace.id,
     questionType,
@@ -442,6 +522,12 @@ export function buildHumanEvaluationObservedSnapshotV2(
     answerCommitted,
     contextReadScope,
     artifactIntent,
+    projectId,
+    projectName,
+    projectBindingRevision,
+    playbookPhase,
+    factAnchorState,
+    childContinuity,
   };
   return {
     ...traceEvidence,
@@ -554,6 +640,36 @@ export function importLegacyQuestionEvaluationV2(
           expectedContextTurnIds: [
             ...(evaluation.expectedContextTurnIds ?? []),
           ],
+        },
+      })
+    );
+  }
+  const projectTrajectory = evaluation.projectTrajectory;
+  if (
+    projectTrajectory &&
+    (projectTrajectory.expectedProjectId ||
+      projectTrajectory.expectedProjectName ||
+      projectTrajectory.expectedPhase ||
+      projectTrajectory.expectedFactAnchorState ||
+      projectTrajectory.expectedChildContinuity ||
+      projectTrajectory.unsupportedFirstPersonClaim !== undefined)
+  ) {
+    events.push(
+      createHumanGroundTruthEventV2({
+        ...base,
+        eventId: `legacy:${evaluation.id}:project-trajectory`,
+        actionId: `legacy:${evaluation.id}:project-trajectory`,
+        fact: {
+          kind: "expected-project-trajectory",
+          expectedProjectId: projectTrajectory.expectedProjectId,
+          expectedProjectName: projectTrajectory.expectedProjectName,
+          expectedPhase: projectTrajectory.expectedPhase,
+          expectedFactAnchorState:
+            projectTrajectory.expectedFactAnchorState,
+          expectedChildContinuity:
+            projectTrajectory.expectedChildContinuity,
+          unsupportedFirstPersonClaim:
+            projectTrajectory.unsupportedFirstPersonClaim,
         },
       })
     );
@@ -676,6 +792,13 @@ function normalizeFact(fact: HumanGroundTruthFactV2): HumanGroundTruthFactV2 {
   }
   if (fact.kind === "memory-label") {
     return { ...fact, memoryIds: uniqueStrings(fact.memoryIds) };
+  }
+  if (fact.kind === "expected-project-trajectory") {
+    return {
+      ...fact,
+      expectedProjectId: cleanOptional(fact.expectedProjectId),
+      expectedProjectName: cleanOptional(fact.expectedProjectName),
+    };
   }
   return fact;
 }
@@ -983,7 +1106,125 @@ function normalizeStoredFact(
       verdict: fact.verdict,
     };
   }
+  if (fact.kind === "expected-project-trajectory") {
+    const expectedPhase = normalizePlaybookPhase(fact.expectedPhase);
+    const expectedFactAnchorState = normalizeFactAnchorState(
+      fact.expectedFactAnchorState
+    );
+    const expectedChildContinuity = normalizeChildContinuity(
+      fact.expectedChildContinuity
+    );
+    const expectedProjectId = readString(fact.expectedProjectId);
+    const expectedProjectName = readString(fact.expectedProjectName);
+    const unsupportedFirstPersonClaim = readBoolean(
+      fact.unsupportedFirstPersonClaim
+    );
+    if (
+      expectedProjectId ||
+      expectedProjectName ||
+      expectedPhase ||
+      expectedFactAnchorState ||
+      expectedChildContinuity ||
+      unsupportedFirstPersonClaim !== undefined
+    ) {
+      return {
+        kind: fact.kind,
+        expectedProjectId,
+        expectedProjectName,
+        expectedPhase,
+        expectedFactAnchorState,
+        expectedChildContinuity,
+        unsupportedFirstPersonClaim,
+      };
+    }
+  }
   return undefined;
+}
+
+function compareExpectedProject(
+  fact: ExpectedProjectTrajectoryFactV2,
+  observed: HumanEvaluationObservedSnapshotV2 | undefined
+) {
+  if (fact.expectedProjectId && observed?.projectId) {
+    return normalizeProjectLabel(fact.expectedProjectId) ===
+      normalizeProjectLabel(observed.projectId);
+  }
+  if (fact.expectedProjectName && observed?.projectName) {
+    return normalizeProjectLabel(fact.expectedProjectName) ===
+      normalizeProjectLabel(observed.projectName);
+  }
+  return undefined;
+}
+
+function normalizeProjectLabel(value: string) {
+  return value.trim().toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+}
+
+function resolveObservedChildContinuity(
+  metadata: Record<string, unknown>
+): ProjectTrajectoryChildContinuity | undefined {
+  const transitionKind = readString(metadata.sourceTransitionKind);
+  const relation = readString(
+    metadata.currentQuestionSettlementRelation ??
+      metadata.sourceTransitionRelation ??
+      metadata.taskRelation
+  );
+  if (
+    transitionKind === "resume-parent" ||
+    relation === "resume-parent"
+  ) {
+    return "parent-resumed";
+  }
+  if (
+    transitionKind === "child-probe" ||
+    relation === "child-probe" ||
+    readString(metadata.activeMeetingChildId)
+  ) {
+    return "child-attached";
+  }
+  if (readString(metadata.activeMeetingParentId)) return "none";
+  return undefined;
+}
+
+function normalizeChildContinuity(
+  value: unknown
+): ProjectTrajectoryChildContinuity | undefined {
+  return value === "none" ||
+    value === "child-attached" ||
+    value === "parent-resumed"
+    ? value
+    : undefined;
+}
+
+function normalizeFactAnchorState(
+  value: unknown
+): FactAnchorState | undefined {
+  return value === "strong-anchor" ||
+    value === "weak-anchor" ||
+    value === "no-anchor" ||
+    value === "not-required"
+    ? value
+    : undefined;
+}
+
+function normalizePlaybookPhase(
+  value: unknown
+): InterviewPlaybookPhase | undefined {
+  return value === "story_selection" ||
+    value === "baseline_reasoning" ||
+    value === "optimized_pseudocode" ||
+    value === "implementation_validation" ||
+    value === "solution_planning" ||
+    value === "requirement_clarification" ||
+    value === "design_framing" ||
+    value === "project_narrative" ||
+    value === "architecture_decision" ||
+    value === "validation_reliability" ||
+    value === "impact_lessons" ||
+    value === "concept_explanation" ||
+    value === "follow_up"
+    ? value
+    : undefined;
 }
 
 function normalizeParentAction(
@@ -1096,6 +1337,12 @@ function readStringArray(value: unknown) {
 
 function readBoolean(value: unknown) {
   return typeof value === "boolean" ? value : undefined;
+}
+
+function readNumber(value: unknown) {
+  return typeof value === "number" && Number.isFinite(value)
+    ? value
+    : undefined;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

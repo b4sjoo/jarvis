@@ -80,7 +80,9 @@ import {
   MeetingTaxonomyAdjudicationSettings,
   MeetingContextState,
   InterviewBriefType,
+  FactAnchorState,
   InterviewPlaybookPhase,
+  ProjectTrajectoryChildContinuity,
   InterviewSubtaskIntent,
   InterviewTaskRelation,
   InterviewSessionBrief,
@@ -4602,6 +4604,57 @@ export function useMeetingAssistant() {
           readStringFromTraceMetadata(trace.metadata, "playbookPhaseDecisionPhase") ??
           readStringFromTraceMetadata(trace.metadata, "playbookPhase") ??
           activeMeetingTask?.parent.playbookPhase,
+        projectTrajectory: {
+          detectedProjectId:
+            readStringFromTraceMetadata(
+              trace.metadata,
+              "activeMeetingProjectBindingId"
+            ) ??
+            readStringFromTraceMetadata(
+              trace.metadata,
+              "projectBindingProjectId"
+            ) ??
+            activeMeetingTask?.parent.projectBinding?.projectId,
+          detectedProjectName:
+            readStringFromTraceMetadata(
+              trace.metadata,
+              "activeMeetingProjectBindingName"
+            ) ??
+            readStringFromTraceMetadata(
+              trace.metadata,
+              "projectBindingProjectName"
+            ) ??
+            activeMeetingTask?.parent.projectBinding?.projectName,
+          detectedProjectBindingRevision:
+            readNumberFromTraceMetadata(
+              trace.metadata,
+              "activeMeetingProjectBindingRevision"
+            ) ??
+            readNumberFromTraceMetadata(
+              trace.metadata,
+              "projectBindingRevision"
+            ) ??
+            activeMeetingTask?.parent.projectBinding?.revision,
+          detectedPhase:
+            readInterviewPlaybookPhaseFromTraceMetadata(
+              trace.metadata,
+              "activeMeetingParentPhase"
+            ) ??
+            readInterviewPlaybookPhaseFromTraceMetadata(
+              trace.metadata,
+              "playbookPhaseDecisionPhase"
+            ) ??
+            activeMeetingTask?.parent.playbookPhase,
+          detectedFactAnchorState: readFactAnchorStateFromTraceMetadata(
+            trace.metadata,
+            "factAnchorState"
+          ),
+          detectedChildContinuity:
+            resolveProjectTrajectoryChildContinuity(
+              trace.metadata,
+              activeMeetingTask
+            ),
+        },
         whiteboardArtifactId:
           traceEvalMetadata.whiteboardArtifactId ??
           activeWhiteboardEvalMetadata.whiteboardArtifactId,
@@ -21892,6 +21945,76 @@ function readNumberFromTraceMetadata(
   const value = metadata?.[key];
   return typeof value === "number" && Number.isFinite(value)
     ? value
+    : undefined;
+}
+
+function readInterviewPlaybookPhaseFromTraceMetadata(
+  metadata: Record<string, unknown> | undefined,
+  key: string
+): InterviewPlaybookPhase | undefined {
+  const value = readStringFromTraceMetadata(metadata, key);
+  return value === "story_selection" ||
+    value === "baseline_reasoning" ||
+    value === "optimized_pseudocode" ||
+    value === "implementation_validation" ||
+    value === "solution_planning" ||
+    value === "requirement_clarification" ||
+    value === "design_framing" ||
+    value === "project_narrative" ||
+    value === "architecture_decision" ||
+    value === "validation_reliability" ||
+    value === "impact_lessons" ||
+    value === "concept_explanation" ||
+    value === "follow_up"
+    ? value
+    : undefined;
+}
+
+function readFactAnchorStateFromTraceMetadata(
+  metadata: Record<string, unknown> | undefined,
+  key: string
+): FactAnchorState | undefined {
+  const value = readStringFromTraceMetadata(metadata, key);
+  return value === "strong-anchor" ||
+    value === "weak-anchor" ||
+    value === "no-anchor" ||
+    value === "not-required"
+    ? value
+    : undefined;
+}
+
+function resolveProjectTrajectoryChildContinuity(
+  metadata: Record<string, unknown> | undefined,
+  activeMeetingTask: ActiveMeetingTask | undefined
+): ProjectTrajectoryChildContinuity | undefined {
+  const transitionKind = readStringFromTraceMetadata(
+    metadata,
+    "sourceTransitionKind"
+  );
+  const relation =
+    readStringFromTraceMetadata(
+      metadata,
+      "currentQuestionSettlementRelation"
+    ) ??
+    readStringFromTraceMetadata(metadata, "sourceTransitionRelation") ??
+    readStringFromTraceMetadata(metadata, "taskRelation");
+  if (
+    transitionKind === "resume-parent" ||
+    relation === "resume-parent"
+  ) {
+    return "parent-resumed";
+  }
+  if (
+    transitionKind === "child-probe" ||
+    relation === "child-probe" ||
+    readStringFromTraceMetadata(metadata, "activeMeetingChildId") ||
+    activeMeetingTask?.child
+  ) {
+    return "child-attached";
+  }
+  return activeMeetingTask?.parent ||
+    readStringFromTraceMetadata(metadata, "activeMeetingParentId")
+    ? "none"
     : undefined;
 }
 
