@@ -243,6 +243,33 @@ test("a committed general-system-design settlement atomically leaves the coding 
   assert.equal(plan.artifactPolicy.allowWhiteboard, true);
   assert.equal(plan.artifactPolicy.allowCode, false);
   assert.equal(plan.artifactIntent, "revise-whiteboard");
+  assert.equal(plan.whiteboardFormatPreference, "mermaid");
+});
+
+test("settled design plans honor an explicit ASCII request", () => {
+  const designSettlement = settlement({
+    questionType: "general-system-design",
+  });
+  const plan = buildSettledAdvisorExecutionPlan({
+    settlement: designSettlement,
+    activeMeetingTask: activeTask("general-system-design"),
+    taskBoundaryCommitted: false,
+    childOwnsResponse: false,
+    providerSnapshot: providers,
+    playbook: playbook("general-system-design"),
+    memoryUseCase: "system_design_interview",
+    askFrame: "hypothetical-design",
+    topicDomain: "backend",
+    sourceQuestion: "Please show the architecture in ASCII.",
+  });
+
+  assert.equal(plan.artifactIntent, "revise-whiteboard");
+  assert.equal(plan.whiteboardFormatPreference, "plain-text");
+  assert.equal(
+    formatSettledAdvisorExecutionPlanForTrace(plan)
+      .settledExecutionPlanWhiteboardFormatPreference,
+    "plain-text"
+  );
 });
 
 test("semantic setup preserves a design parent and revises its whiteboard", () => {

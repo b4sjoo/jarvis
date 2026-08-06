@@ -206,6 +206,7 @@ import {
   formatActiveQuestionTermCorrectionForTrace,
   formatAnswerSufficiencyDecisionForTrace,
   parseMeetingAnswer,
+  serializeMeetingAnswer,
   parseMeetingTraceMetrics,
   prewarmWhiteboardRenderValidator,
   resolveMeetingAnswerProfile,
@@ -242,6 +243,9 @@ import {
   serializeMeetingTraceMetrics,
   inferTrustedProgrammingLanguage,
   formatWhiteboardRenderValidationForTrace,
+  applyWhiteboardFormatPolicy,
+  formatWhiteboardFormatPolicyForTrace,
+  resolveWhiteboardFormatPreference,
   authorizeWhiteboardSyntaxRepairLease,
   buildWhiteboardSyntaxRepairPrompts,
   createWhiteboardSyntaxRepairLease,
@@ -8493,6 +8497,8 @@ export function useMeetingAssistant() {
       transientPersonalStatusDecision,
       projectBindingDecision,
       openingRoute: advisorTaskSignals.openingRoute,
+      whiteboardFormatPreference:
+        settledExecutionPlan?.whiteboardFormatPreference,
       currentQuestionProjection: advisorJob.logicalQuestionUnit
         ? {
             answerFocusText: advisorQuestionAnswerFocusText,
@@ -8675,6 +8681,36 @@ export function useMeetingAssistant() {
       });
       finalContent = factAnchorOutputDecision.effectiveContent;
       parsedMeetingAnswer = factAnchorOutputDecision.effectiveAnswer;
+      const whiteboardFormatPolicyDecision =
+        applyWhiteboardFormatPolicy({
+          whiteboard: parsedMeetingAnswer.sections.whiteboard,
+          preference:
+            settledExecutionPlan?.whiteboardFormatPreference ??
+            resolveWhiteboardFormatPreference({
+              questionType: advisorQuestionType,
+              artifactIntent: settledExecutionPlan?.artifactIntent,
+              sourceQuestion: advisorQuestionSemanticEvidenceText,
+            }),
+        });
+      if (
+        whiteboardFormatPolicyDecision.effectiveWhiteboard &&
+        whiteboardFormatPolicyDecision.effectiveWhiteboard !==
+          parsedMeetingAnswer.sections.whiteboard
+      ) {
+        parsedMeetingAnswer = {
+          ...parsedMeetingAnswer,
+          sections: {
+            ...parsedMeetingAnswer.sections,
+            whiteboard:
+              whiteboardFormatPolicyDecision.effectiveWhiteboard,
+          },
+        };
+        finalContent = serializeMeetingAnswer(parsedMeetingAnswer);
+        parsedMeetingAnswer = {
+          ...parsedMeetingAnswer,
+          rawContent: finalContent,
+        };
+      }
       const factAnchorOutputMetadata =
         formatFactAnchorOutputDecisionForTrace(factAnchorOutputDecision, {
           partialOutputHeld: holdAdvisorPartialForFactAnchor,
@@ -9004,6 +9040,12 @@ export function useMeetingAssistant() {
           decision: whiteboardRenderValidation,
           before: previousWhiteboard,
           after: nextWhiteboard,
+        }),
+        ...formatWhiteboardFormatPolicyForTrace({
+          decision: whiteboardFormatPolicyDecision,
+          validationDisposition:
+            whiteboardRenderValidation?.disposition,
+          visibleStatus: nextWhiteboard?.renderState?.status,
         }),
       };
       if (traceId) {
@@ -17397,6 +17439,19 @@ export function useMeetingAssistant() {
             ? (["whiteboard"] as AnswerArtifactSection[])
             : []),
         ];
+        const screenWhiteboardFormatPreference =
+          resolveWhiteboardFormatPreference({
+            questionType: screenMemoryQuestionType,
+            artifactIntent: screenGenerationAuthorizedArtifacts.includes(
+              "whiteboard"
+            )
+              ? "revise-whiteboard"
+              : "none",
+            sourceQuestion: screenCurrentQuestionEvidenceText,
+          });
+        traceStoreRef.current.updateMetadata(trace.id, {
+          screenWhiteboardFormatPreference,
+        });
         const screenGenerationContext =
           contextManagerRef.current.getState();
         const screenGenerationParent =
@@ -17493,6 +17548,8 @@ export function useMeetingAssistant() {
               screenResponseOnlyTaskScope?.parentReadContext,
             factAnchorDecision: screenFactAnchorDecision,
             projectBindingDecision: screenProjectBindingDecision,
+            whiteboardFormatPreference:
+              screenWhiteboardFormatPreference,
             signal: analysisController.signal,
             requestOptions: screenModelRequestOptions,
             trace: {
@@ -17648,10 +17705,37 @@ export function useMeetingAssistant() {
           parsedAnswer: parsedScreenMeetingAnswer,
           expectedProfile: screenAnswerProfile,
         });
-        const committedScreenTaskContent =
+        let committedScreenTaskContent =
           screenFactAnchorOutputDecision.effectiveContent;
         parsedScreenMeetingAnswer =
           screenFactAnchorOutputDecision.effectiveAnswer;
+        const screenWhiteboardFormatPolicyDecision =
+          applyWhiteboardFormatPolicy({
+            whiteboard:
+              parsedScreenMeetingAnswer.sections.whiteboard,
+            preference: screenWhiteboardFormatPreference,
+          });
+        if (
+          screenWhiteboardFormatPolicyDecision.effectiveWhiteboard &&
+          screenWhiteboardFormatPolicyDecision.effectiveWhiteboard !==
+            parsedScreenMeetingAnswer.sections.whiteboard
+        ) {
+          parsedScreenMeetingAnswer = {
+            ...parsedScreenMeetingAnswer,
+            sections: {
+              ...parsedScreenMeetingAnswer.sections,
+              whiteboard:
+                screenWhiteboardFormatPolicyDecision.effectiveWhiteboard,
+            },
+          };
+          committedScreenTaskContent = serializeMeetingAnswer(
+            parsedScreenMeetingAnswer
+          );
+          parsedScreenMeetingAnswer = {
+            ...parsedScreenMeetingAnswer,
+            rawContent: committedScreenTaskContent,
+          };
+        }
         const screenFactAnchorOutputMetadata =
           formatFactAnchorOutputDecisionForTrace(
             screenFactAnchorOutputDecision,
@@ -18122,6 +18206,12 @@ export function useMeetingAssistant() {
               decision: screenWhiteboardRenderValidation,
               before: previousWhiteboard,
               after: nextWhiteboard,
+            }),
+            ...formatWhiteboardFormatPolicyForTrace({
+              decision: screenWhiteboardFormatPolicyDecision,
+              validationDisposition:
+                screenWhiteboardRenderValidation?.disposition,
+              visibleStatus: nextWhiteboard?.renderState?.status,
             }),
           };
           traceStoreRef.current.updateMetadata(

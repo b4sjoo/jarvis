@@ -266,6 +266,9 @@ test("reports whiteboard validation, repair, fallback, and latency denominators"
             validationDisposition: "valid-mermaid",
             validationDurationMs: 12,
             renderStatus: "valid-mermaid",
+            mermaidEligible: true,
+            mermaidRequested: true,
+            mermaidCommitted: true,
           },
         },
         {
@@ -282,6 +285,9 @@ test("reports whiteboard validation, repair, fallback, and latency denominators"
             repairQueueWaitMs: 15,
             repairDurationMs: 420,
             repairRevalidationDisposition: "valid-mermaid",
+            mermaidEligible: true,
+            mermaidRequested: true,
+            mermaidCommitted: false,
           },
         },
         {
@@ -297,6 +303,14 @@ test("reports whiteboard validation, repair, fallback, and latency denominators"
             repairQueueWaitMs: 25,
             repairDurationMs: 700,
             repairRevalidationDisposition: "invalid-mermaid",
+            mermaidEligible: true,
+            mermaidRequested: true,
+            mermaidCommitted: false,
+            formatPolicyMiss: true,
+            formatConversionAttempted: true,
+            formatConversionDisposition: "no-flow-structure",
+            asciiFallback: true,
+            asciiFallbackReason: "no-flow-structure",
           },
         },
       ],
@@ -312,6 +326,13 @@ test("reports whiteboard validation, repair, fallback, and latency denominators"
   assert.equal(report.whiteboardRenderFunnel.repairSuccessRate.rate, 0.5);
   assert.equal(report.whiteboardRenderFunnel.preservedLastValidRate.rate, 0.5);
   assert.equal(report.whiteboardRenderFunnel.asciiFallbackRate.rate, 0.5);
+  assert.equal(report.whiteboardRenderFunnel.mermaidEligibleCount, 3);
+  assert.equal(report.whiteboardRenderFunnel.mermaidRequestedCount, 3);
+  assert.equal(report.whiteboardRenderFunnel.mermaidCommittedCount, 1);
+  assert.equal(report.whiteboardRenderFunnel.mermaidCommitRate.rate, 1 / 3);
+  assert.equal(report.whiteboardRenderFunnel.formatPolicyMissCount, 1);
+  assert.equal(report.whiteboardRenderFunnel.formatConversionAttemptCount, 1);
+  assert.equal(report.whiteboardRenderFunnel.formatAsciiFallbackCount, 1);
   assert.equal(report.whiteboardRenderFunnel.validationLatencyMs.p50Ms, 20);
   assert.equal(report.whiteboardRenderFunnel.repairQueueWaitMs.p95Ms, 25);
   assert.equal(report.whiteboardRenderFunnel.repairDurationMs.maxMs, 700);
@@ -319,6 +340,7 @@ test("reports whiteboard validation, repair, fallback, and latency denominators"
   const markdown = renderSessionLongitudinalEvaluationMarkdown(report);
   assert.match(markdown, /## Whiteboard Render Integrity/);
   assert.match(markdown, /Repair success rate: 50.0% \(1\/2\)/);
+  assert.match(markdown, /Mermaid eligible \/ requested \/ committed: 3 \/ 3 \/ 1/);
 });
 
 const SESSION: LongitudinalSessionInput = {

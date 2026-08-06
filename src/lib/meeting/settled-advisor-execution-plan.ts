@@ -28,6 +28,10 @@ import {
   type CanonicalQuestionType,
 } from "./task-taxonomy.js";
 import { resolvePlaybookRequiredArtifacts } from "./playbook-phase.js";
+import {
+  resolveWhiteboardFormatPreference,
+  type WhiteboardFormatPreference,
+} from "./whiteboard-format-policy.js";
 import type {
   InterviewPlaybookPhase,
   InterviewSubtaskIntent,
@@ -112,6 +116,7 @@ export interface SettledAdvisorExecutionPlan {
   responseIntent: SettledAdvisorResponseIntent;
   contextReadScope: AdvisorContextReadScope;
   artifactIntent: SettledAdvisorArtifactIntent;
+  whiteboardFormatPreference: WhiteboardFormatPreference;
   taskMutationPolicy: TaskLifecycleCommand;
   taskSnapshot?: ActiveMeetingTask;
   expectedParentId?: string;
@@ -272,6 +277,11 @@ export function buildSettledAdvisorExecutionPlan(input: {
     transientPersonalStatusDecision,
     artifactPolicy,
   });
+  const whiteboardFormatPreference = resolveWhiteboardFormatPreference({
+    questionType: responseOwner.questionType,
+    artifactIntent,
+    sourceQuestion: input.sourceQuestion,
+  });
   const taskMutationPolicy = resolveTaskMutationPolicy({
     settlement: input.settlement,
     relation,
@@ -309,6 +319,7 @@ export function buildSettledAdvisorExecutionPlan(input: {
     responseIntent,
     contextReadScope,
     artifactIntent,
+    whiteboardFormatPreference,
     taskMutationKind: taskMutationPolicy.kind,
     responseOnlyTaskScopeId: responseOnlyTaskScope?.scopeId,
     transientPersonalStatusDecisionId:
@@ -331,6 +342,7 @@ export function buildSettledAdvisorExecutionPlan(input: {
     responseIntent,
     contextReadScope,
     artifactIntent,
+    whiteboardFormatPreference,
     taskMutationPolicy,
     taskSnapshot,
     expectedParentId,
@@ -494,6 +506,8 @@ export function formatSettledAdvisorExecutionPlanForTrace(
       plan.contextReadScope,
     settledExecutionPlanArtifactIntent:
       plan.artifactIntent,
+    settledExecutionPlanWhiteboardFormatPreference:
+      plan.whiteboardFormatPreference,
     settledExecutionPlanTaskMutationCommand:
       plan.taskMutationPolicy.kind,
     settledExecutionPlanExpectedParentId: plan.expectedParentId,
@@ -742,6 +756,7 @@ function createExecutionPlanId(input: {
   responseIntent: SettledAdvisorResponseIntent;
   contextReadScope: AdvisorContextReadScope;
   artifactIntent: SettledAdvisorArtifactIntent;
+  whiteboardFormatPreference: WhiteboardFormatPreference;
   taskMutationKind: TaskLifecycleCommand["kind"];
   responseOnlyTaskScopeId?: string;
   transientPersonalStatusDecisionId?: string;
@@ -768,6 +783,7 @@ function createExecutionPlanId(input: {
       input.responseIntent,
       input.contextReadScope,
       input.artifactIntent,
+      input.whiteboardFormatPreference,
       input.taskMutationKind,
       input.responseOnlyTaskScopeId ?? "",
       input.transientPersonalStatusDecisionId ?? "",

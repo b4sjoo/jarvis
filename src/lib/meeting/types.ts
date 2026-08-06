@@ -1165,6 +1165,7 @@ export interface AdvisorPromptContext {
   latestTurn?: TranscriptTurn;
   responseActionContextScope?: AdvisorContextScopeSnapshot;
   advisorEvidencePacket?: AdvisorEvidencePacket;
+  whiteboardFormatPreference?: import("./whiteboard-format-policy.js").WhiteboardFormatPreference;
 }
 
 export type AdvisorCurrentQuestionEvidenceSource =

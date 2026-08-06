@@ -56,7 +56,7 @@ import { serializeMeetingTraceExport } from "./trace.js";
 
 const SESSION_RECORDING_SCHEMA_VERSION = 1;
 const SESSION_RECORDING_INTEGRITY_SCHEMA_VERSION = 1;
-const SESSION_TRACE_SUMMARY_SCHEMA_VERSION = 32;
+const SESSION_TRACE_SUMMARY_SCHEMA_VERSION = 33;
 const SESSION_TRACE_INDEX_SCHEMA_VERSION = 1;
 const MAX_RECORDED_WRITE_FAILURES = 20;
 
@@ -966,6 +966,15 @@ export interface SessionCompactTraceSummary {
     repairDurationMs?: number;
     repairRevalidationDisposition?: string;
     repairBehaviorMutationBlocked?: boolean;
+    formatPreference?: string;
+    mermaidEligible?: boolean;
+    mermaidRequested?: boolean;
+    mermaidCommitted?: boolean;
+    formatPolicyMiss?: boolean;
+    formatConversionAttempted?: boolean;
+    formatConversionDisposition?: string;
+    asciiFallback?: boolean;
+    asciiFallbackReason?: string;
   };
   manualPhase?: {
     from?: string;
@@ -6799,12 +6808,17 @@ function buildWhiteboardTraceSummary(
     metadataSources,
     "whiteboardRepairOperationId"
   );
+  const formatPreference = readFirstString(
+    metadataSources,
+    "whiteboardFormatPreference"
+  );
   if (
     !artifactId &&
     revision === undefined &&
     !domainTrack &&
     !validationOperationId &&
-    !repairOperationId
+    !repairOperationId &&
+    !formatPreference
   ) {
     return undefined;
   }
@@ -6885,6 +6899,39 @@ function buildWhiteboardTraceSummary(
     repairBehaviorMutationBlocked: readFirstBoolean(
       metadataSources,
       "whiteboardRepairBehaviorMutationBlocked"
+    ),
+    formatPreference,
+    mermaidEligible: readFirstBoolean(
+      metadataSources,
+      "whiteboardMermaidEligible"
+    ),
+    mermaidRequested: readFirstBoolean(
+      metadataSources,
+      "whiteboardMermaidRequested"
+    ),
+    mermaidCommitted: readFirstBoolean(
+      metadataSources,
+      "whiteboardMermaidCommitted"
+    ),
+    formatPolicyMiss: readFirstBoolean(
+      metadataSources,
+      "whiteboardFormatPolicyMiss"
+    ),
+    formatConversionAttempted: readFirstBoolean(
+      metadataSources,
+      "whiteboardFormatConversionAttempted"
+    ),
+    formatConversionDisposition: readFirstString(
+      metadataSources,
+      "whiteboardFormatConversionDisposition"
+    ),
+    asciiFallback: readFirstBoolean(
+      metadataSources,
+      "whiteboardAsciiFallback"
+    ),
+    asciiFallbackReason: readFirstString(
+      metadataSources,
+      "whiteboardAsciiFallbackReason"
     ),
   };
 }

@@ -107,6 +107,15 @@ export interface LongitudinalTraceSummary {
     repairDurationMs?: number;
     repairRevalidationDisposition?: string;
     repairBehaviorMutationBlocked?: boolean;
+    formatPreference?: string;
+    mermaidEligible?: boolean;
+    mermaidRequested?: boolean;
+    mermaidCommitted?: boolean;
+    formatPolicyMiss?: boolean;
+    formatConversionAttempted?: boolean;
+    formatConversionDisposition?: string;
+    asciiFallback?: boolean;
+    asciiFallbackReason?: string;
   };
   projectTrajectory?: {
     joinKey?: string;
@@ -371,6 +380,15 @@ export interface SessionLongitudinalEvaluationReport {
     successfulShadowRepairs: number;
     preservedLastValidCount: number;
     asciiFallbackCount: number;
+    mermaidEligibleCount: number;
+    mermaidRequestedCount: number;
+    mermaidCommittedCount: number;
+    formatPolicyMissCount: number;
+    formatConversionAttemptCount: number;
+    formatAsciiFallbackCount: number;
+    mermaidCommitRate: RateMetric;
+    formatPolicyMissRate: RateMetric;
+    formatConversionAttemptRate: RateMetric;
     validationFailureRate: RateMetric;
     repairAttemptRate: RateMetric;
     repairSuccessRate: RateMetric;
@@ -640,6 +658,25 @@ export function buildSessionLongitudinalEvaluationReport(
     ({ trace }) =>
       trace.whiteboard?.fallbackKind === "deterministic-ascii" ||
       trace.whiteboard?.renderStatus === "ascii-fallback"
+  );
+  const mermaidEligibleWhiteboards = production.filter(
+    ({ trace }) => trace.whiteboard?.mermaidEligible === true
+  );
+  const mermaidRequestedWhiteboards = mermaidEligibleWhiteboards.filter(
+    ({ trace }) => trace.whiteboard?.mermaidRequested === true
+  );
+  const mermaidCommittedWhiteboards = mermaidRequestedWhiteboards.filter(
+    ({ trace }) => trace.whiteboard?.mermaidCommitted === true
+  );
+  const whiteboardFormatPolicyMisses = mermaidRequestedWhiteboards.filter(
+    ({ trace }) => trace.whiteboard?.formatPolicyMiss === true
+  );
+  const whiteboardFormatConversionAttempts =
+    whiteboardFormatPolicyMisses.filter(
+      ({ trace }) => trace.whiteboard?.formatConversionAttempted === true
+    );
+  const whiteboardFormatAsciiFallbacks = mermaidEligibleWhiteboards.filter(
+    ({ trace }) => trace.whiteboard?.asciiFallback === true
   );
   const relationReports = inputs
     .map((input) => input.taskRelationAdjudicationReport)
@@ -935,6 +972,25 @@ export function buildSessionLongitudinalEvaluationReport(
       successfulShadowRepairs: successfulShadowRepairs.length,
       preservedLastValidCount: preservedLastValid.length,
       asciiFallbackCount: asciiFallbacks.length,
+      mermaidEligibleCount: mermaidEligibleWhiteboards.length,
+      mermaidRequestedCount: mermaidRequestedWhiteboards.length,
+      mermaidCommittedCount: mermaidCommittedWhiteboards.length,
+      formatPolicyMissCount: whiteboardFormatPolicyMisses.length,
+      formatConversionAttemptCount:
+        whiteboardFormatConversionAttempts.length,
+      formatAsciiFallbackCount: whiteboardFormatAsciiFallbacks.length,
+      mermaidCommitRate: rate(
+        mermaidCommittedWhiteboards.length,
+        mermaidRequestedWhiteboards.length
+      ),
+      formatPolicyMissRate: rate(
+        whiteboardFormatPolicyMisses.length,
+        mermaidRequestedWhiteboards.length
+      ),
+      formatConversionAttemptRate: rate(
+        whiteboardFormatConversionAttempts.length,
+        whiteboardFormatPolicyMisses.length
+      ),
       validationFailureRate: rate(
         invalidWhiteboardCandidates.length,
         whiteboardCandidates.length
@@ -1517,6 +1573,10 @@ export function renderSessionLongitudinalEvaluationMarkdown(
     `Repair success rate: ${formatRate(report.whiteboardRenderFunnel.repairSuccessRate)}`,
     `Preserved last valid: ${formatRate(report.whiteboardRenderFunnel.preservedLastValidRate)}`,
     `ASCII fallback: ${formatRate(report.whiteboardRenderFunnel.asciiFallbackRate)}`,
+    `Mermaid eligible / requested / committed: ${report.whiteboardRenderFunnel.mermaidEligibleCount} / ${report.whiteboardRenderFunnel.mermaidRequestedCount} / ${report.whiteboardRenderFunnel.mermaidCommittedCount}`,
+    `Mermaid commit rate: ${formatRate(report.whiteboardRenderFunnel.mermaidCommitRate)}`,
+    `Format policy misses / conversions / ASCII fallbacks: ${report.whiteboardRenderFunnel.formatPolicyMissCount} / ${report.whiteboardRenderFunnel.formatConversionAttemptCount} / ${report.whiteboardRenderFunnel.formatAsciiFallbackCount}`,
+    `Format policy miss / conversion attempt rate: ${formatRate(report.whiteboardRenderFunnel.formatPolicyMissRate)} / ${formatRate(report.whiteboardRenderFunnel.formatConversionAttemptRate)}`,
     `Validation latency: ${formatDistribution(report.whiteboardRenderFunnel.validationLatencyMs)}`,
     `Repair queue wait: ${formatDistribution(report.whiteboardRenderFunnel.repairQueueWaitMs)}`,
     `Repair duration: ${formatDistribution(report.whiteboardRenderFunnel.repairDurationMs)}`,

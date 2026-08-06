@@ -33,6 +33,26 @@ test("gives the advisor a focused ask plus bounded semantic context", () => {
   assert.match(message, /Use Answer focus as the only ask to answer/);
 });
 
+test("makes the settled Mermaid preference explicit in the system-design contract", () => {
+  const message = buildAdvisorUserMessage(
+    {
+      transcript: "them: Design a URL shortener.",
+      screenContext: "",
+      rollingSummary: "",
+      userProfileContext: "",
+      glossaryText: "",
+      whiteboardFormatPreference: "mermaid",
+    },
+    { answerProfile: "system-design" }
+  );
+
+  assert.match(
+    message,
+    /<whiteboard_format_policy>[\s\S]*Preference: mermaid/
+  );
+  assert.match(message, /exactly one compact valid ```mermaid fenced flowchart/);
+});
+
 test("formats the bounded response-action context scope", () => {
   const formatted = formatResponseActionContextScope({
     operationId: "scope-narrow",
