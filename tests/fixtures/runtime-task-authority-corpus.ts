@@ -81,7 +81,7 @@ export const EXPLICIT_ASK_AUTHORITY_CORPUS: ExplicitAskAuthorityFixture[] = [
     expectedPrimaryAsk:
       "Give me a high-level design for a ticket selling system.",
     targetAdmission: true,
-    expectedLegacyLocalType: undefined,
+    expectedLegacyLocalType: "general-system-design",
     expectedLocalType: "general-system-design",
   },
   {
@@ -138,7 +138,7 @@ export const AMBIGUOUS_TYPE_AUTHORITY_CORPUS: AmbiguousTypeAuthorityFixture[] = 
   {
     id: "high-level-design-for",
     text: "Give me a high-level design for a ticket selling system.",
-    currentLocalType: undefined,
+    currentLocalType: "general-system-design",
     targetDisposition: "exact-high",
     targetType: "general-system-design",
   },
