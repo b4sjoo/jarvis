@@ -9,6 +9,7 @@ import {
   type QuestionTypeInferenceDecision,
 } from "./task-taxonomy.js";
 import type {
+  CurrentQuestionSettlementDecision,
   CurrentQuestionSettlementProposal,
   ProvisionalCurrentQuestion,
 } from "./current-question-settlement.js";
@@ -20,6 +21,8 @@ export const QUESTION_TYPE_ADJUDICATION_SCHEMA_VERSION = 1;
 export const QUESTION_TYPE_ADJUDICATION_PROMPT_VERSION =
   "question-type-adjudication-v1";
 export const QUESTION_TYPE_ADJUDICATION_MAX_OUTPUT_CHARS = 2_048;
+export const QUESTION_TYPE_ENFORCEMENT_MIN_CONFIDENCE = 0.95;
+export const QUESTION_TYPE_ENFORCEMENT_WAIT_BUDGET_MS = 1_200;
 
 export interface QuestionTypeAdjudicationRequest {
   schemaVersion: 1;
@@ -62,6 +65,34 @@ export interface QuestionTypeAdjudicationEligibilityDecision {
   eligible: boolean;
   reason: string;
   triggerReasons: string[];
+}
+
+export type QuestionTypeEnforcementReason =
+  | "authorized"
+  | "operation-not-enforcement"
+  | "local-type-already-concrete"
+  | "source-not-substantive"
+  | "manual-authority-conflict"
+  | "operation-lease-not-authorized"
+  | "candidate-missing"
+  | "candidate-type-unknown"
+  | "candidate-confidence-below-threshold"
+  | "settlement-type-mutation-not-authorized"
+  | "advisor-release-window-closed";
+
+export interface QuestionTypeEnforcementDecision {
+  authorized: boolean;
+  reason: QuestionTypeEnforcementReason;
+  localQuestionType: CanonicalQuestionType;
+  proposedQuestionType: CanonicalQuestionType;
+  confidence: number;
+  minimumConfidence: number;
+}
+
+export interface QuestionTypeAdjudicationRuntimeOutcome {
+  disposition: string;
+  enforcement: QuestionTypeEnforcementDecision;
+  settlement?: CurrentQuestionSettlementDecision;
 }
 
 export function normalizeQuestionTypeAdjudicationMode(
@@ -289,6 +320,94 @@ export function createQuestionTypeSettlementProposal(input: {
   };
 }
 
+export function decideQuestionTypeEnforcement(input: {
+  mode: MeetingQuestionTypeAdjudicationMode;
+  localQuestionType?: unknown;
+  candidate?: LlmQuestionTypeAdjudication;
+  settlement?: CurrentQuestionSettlementDecision;
+  sourceOwnedSubstantive: boolean;
+  manualAuthorityConflict: boolean;
+  operationLeaseAuthorized: boolean;
+  advisorReleaseWindowOpen: boolean;
+  minimumConfidence?: number;
+}): QuestionTypeEnforcementDecision {
+  const localQuestionType =
+    normalizeQuestionType(input.localQuestionType);
+  const proposedQuestionType = normalizeQuestionType(
+    input.candidate?.questionType
+  );
+  const confidence = clampConfidence(input.candidate?.confidence);
+  const minimumConfidence = clampConfidence(
+    input.minimumConfidence ?? QUESTION_TYPE_ENFORCEMENT_MIN_CONFIDENCE
+  );
+  const reject = (
+    reason: Exclude<QuestionTypeEnforcementReason, "authorized">
+  ): QuestionTypeEnforcementDecision => ({
+    authorized: false,
+    reason,
+    localQuestionType,
+    proposedQuestionType,
+    confidence,
+    minimumConfidence,
+  });
+
+  if (input.mode !== "enforcement") {
+    return reject("operation-not-enforcement");
+  }
+  if (localQuestionType !== "unknown") {
+    return reject("local-type-already-concrete");
+  }
+  if (!input.sourceOwnedSubstantive) {
+    return reject("source-not-substantive");
+  }
+  if (input.manualAuthorityConflict) {
+    return reject("manual-authority-conflict");
+  }
+  if (!input.operationLeaseAuthorized) {
+    return reject("operation-lease-not-authorized");
+  }
+  if (!input.candidate) return reject("candidate-missing");
+  if (proposedQuestionType === "unknown") {
+    return reject("candidate-type-unknown");
+  }
+  if (confidence < minimumConfidence) {
+    return reject("candidate-confidence-below-threshold");
+  }
+  if (!input.settlement?.typeMutationAuthorized) {
+    return reject("settlement-type-mutation-not-authorized");
+  }
+  if (!input.advisorReleaseWindowOpen) {
+    return reject("advisor-release-window-closed");
+  }
+
+  return {
+    authorized: true,
+    reason: "authorized",
+    localQuestionType,
+    proposedQuestionType,
+    confidence,
+    minimumConfidence,
+  };
+}
+
+export function formatQuestionTypeEnforcementForTrace(
+  decision: QuestionTypeEnforcementDecision | undefined
+) {
+  return {
+    questionTypeAdjudicationEnforcementAuthorized:
+      decision?.authorized ?? false,
+    questionTypeAdjudicationEnforcementReason: decision?.reason,
+    questionTypeAdjudicationEnforcementLocalType:
+      decision?.localQuestionType,
+    questionTypeAdjudicationEnforcementProposedType:
+      decision?.proposedQuestionType,
+    questionTypeAdjudicationEnforcementConfidence:
+      decision?.confidence,
+    questionTypeAdjudicationEnforcementMinimumConfidence:
+      decision?.minimumConfidence,
+  };
+}
+
 export function formatQuestionTypeAdjudicationForTrace(input: {
   mode: MeetingQuestionTypeAdjudicationMode;
   eligibility?: QuestionTypeAdjudicationEligibilityDecision;
@@ -359,4 +478,14 @@ function estimateWordEquivalents(value: string) {
     .split(/\s+/u)
     .filter(Boolean).length;
   return words + Math.ceil(cjkCharacters / 2);
+}
+
+function normalizeQuestionType(value: unknown): CanonicalQuestionType {
+  return isCanonicalQuestionType(value) ? value : "unknown";
+}
+
+function clampConfidence(value: unknown) {
+  return typeof value === "number" && Number.isFinite(value)
+    ? Math.max(0, Math.min(1, value))
+    : 0;
 }

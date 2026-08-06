@@ -3784,23 +3784,25 @@ const ConfigurationsPanel = ({
               <div className="flex items-center justify-between gap-2">
                 <div>
                   <div className="text-[10px] font-medium uppercase text-muted-foreground">
-                    LLM Type Adjudication
+                    LLM Type Enforcement
                   </div>
                   <div className="mt-0.5 text-[10px] text-muted-foreground">
-                    Type-only Shadow; cannot mutate task state
+                    {taxonomyAdjudication.questionTypeMode === "enforcement"
+                      ? "High-confidence unknown-only repair"
+                      : "Shadow only; relation and parent stay blocked"}
                   </div>
                 </div>
                 <Switch
                   checked={
-                    taxonomyAdjudication.questionTypeMode !== "off"
+                    taxonomyAdjudication.questionTypeMode === "enforcement"
                   }
                   onCheckedChange={(enabled) => {
                     onTaxonomyAdjudicationChange({
                       ...taxonomyAdjudication,
-                      enabled:
-                        enabled ||
-                        taxonomyAdjudication.taskRelationMode !== "off",
-                      questionTypeMode: enabled ? "shadow" : "off",
+                      enabled: true,
+                      questionTypeMode: enabled
+                        ? "enforcement"
+                        : "shadow",
                     });
                   }}
                 />

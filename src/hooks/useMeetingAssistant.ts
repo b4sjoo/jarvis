@@ -264,12 +264,18 @@ import {
   requestShortIntentGate,
   QuestionTypeAdjudicationJob,
   QuestionTypeAdjudicationRequestResult,
+  QuestionTypeAdjudicationRuntimeOutcome,
+  QuestionTypeEnforcementDecision,
   QUESTION_TYPE_ADJUDICATION_MAX_OUTPUT_CHARS,
+  QUESTION_TYPE_ENFORCEMENT_MIN_CONFIDENCE,
+  QUESTION_TYPE_ENFORCEMENT_WAIT_BUDGET_MS,
   buildQuestionTypeAdjudicationPrompts,
   buildQuestionTypeAdjudicationRequest,
   createQuestionTypeSettlementProposal,
   decideQuestionTypeAdjudicationEligibility,
+  decideQuestionTypeEnforcement,
   formatQuestionTypeAdjudicationForTrace,
+  formatQuestionTypeEnforcementForTrace,
   normalizeQuestionTypeAdjudicationMode,
   requestQuestionTypeAdjudication,
   TaskRelationAdjudicationJob,
@@ -1605,6 +1611,21 @@ interface RunAdvisorOptions {
   currentQuestionSettlementOverride?: CurrentQuestionSettlementDecision;
   settledExecutionPlanOverride?: SettledAdvisorExecutionPlan;
   responseOnlyTaskScopeOverride?: ResponseOnlyTaskScope;
+}
+
+interface QuestionTypeAdjudicationScheduleHandle {
+  enforcementWindowRequested: boolean;
+  outcome: Promise<QuestionTypeAdjudicationRuntimeOutcome>;
+}
+
+interface ScheduleAdvisorAfterTypeWindowInput {
+  handle?: QuestionTypeAdjudicationScheduleHandle;
+  mode: AdvisorRequestMode;
+  traceId: string;
+  turnIntentDecision: AdvisorTurnIntentDecision;
+  triggerTurnId: string;
+  questionLineage?: QuestionInstanceLineage;
+  logicalQuestionUnit: LogicalQuestionUnit;
 }
 
 interface ForceAdviseRuntimeTarget {
@@ -6598,12 +6619,22 @@ export function useMeetingAssistant() {
     if (transientPersonalStatusDecision) {
       advisorTaskSignals = routedAdvisorTaskSignals;
     }
+    const llmTypeOnlySettlement = Boolean(
+      currentQuestionSettlement?.typeAuthoritySource ===
+        "llm-type-repair" &&
+        currentQuestionSettlement.typeMutationAuthorized &&
+        !currentQuestionSettlement.relationMutationAuthorized &&
+        currentQuestionSettlement.questionType !== "unknown" &&
+        advisorJob.logicalQuestionUnit
+    );
     const responseOnlyPreservedTask =
       options.responseOnlyTaskScopeOverride
         ? originalPromptContext.activeMeetingTask
-        : advisorTaskSignals.responseOnlyRelation
-        ? originalPromptContext.activeMeetingTask
-        : undefined;
+        : llmTypeOnlySettlement
+          ? originalPromptContext.activeMeetingTask
+          : advisorTaskSignals.responseOnlyRelation
+            ? originalPromptContext.activeMeetingTask
+            : undefined;
     const responseOnlyBaseContextReadScope =
       resolveResponseOnlyContextReadScope({
         preservedParent: responseOnlyPreservedTask,
@@ -6618,8 +6649,11 @@ export function useMeetingAssistant() {
           advisorQuestionSemanticEvidenceText,
         activeParentId:
           originalPromptContext.activeMeetingTask?.parent.id,
-        relation: advisorTaskSignals.taskRelation,
+        relation: llmTypeOnlySettlement
+          ? "unknown"
+          : advisorTaskSignals.taskRelation,
         responseOnlyRelation:
+          llmTypeOnlySettlement ||
           advisorTaskSignals.responseOnlyRelation,
         responseAction: options.responseAction,
         hasManualCorrection: Boolean(
@@ -6676,6 +6710,21 @@ export function useMeetingAssistant() {
     }
     const responseOnlyTaskScope: ResponseOnlyTaskScope | undefined =
       options.responseOnlyTaskScopeOverride ??
+      (llmTypeOnlySettlement && advisorJob.logicalQuestionUnit
+        ? createResponseOnlyTaskScope({
+            logicalQuestionUnitId:
+              advisorJob.logicalQuestionUnit.id,
+            revision: advisorJob.logicalQuestionUnit.revision,
+            sourceQuestion: advisorQuestionAnswerFocusText,
+            sourceTurnIds:
+              advisorJob.logicalQuestionUnit.sourceTurnIds,
+            inferredType:
+              currentQuestionSettlement?.questionType ?? "unknown",
+            relationDisposition: "ambiguous",
+            preservedParent: responseOnlyPreservedTask,
+            contextReadScope: "current-only",
+          })
+        : undefined) ??
       (advisorTaskSignals.responseOnlyRelation &&
       advisorJob.logicalQuestionUnit
         ? createResponseOnlyTaskScope({
@@ -9475,7 +9524,9 @@ export function useMeetingAssistant() {
     triggerTurnId?: string,
     questionLineage?: QuestionInstanceLineage,
     logicalQuestionUnit?: LogicalQuestionUnit,
-    taskMutationAuthority: AdvisorTaskMutationAuthority = "input-evidence"
+    taskMutationAuthority: AdvisorTaskMutationAuthority = "input-evidence",
+    currentQuestionSettlementOverride?: CurrentQuestionSettlementDecision,
+    debounceMs = ADVISOR_DEBOUNCE_MS
   ) => {
     if (!activeRef.current) return;
 
@@ -9504,8 +9555,9 @@ export function useMeetingAssistant() {
         triggerTurnId,
         advisorJob,
         logicalQuestionUnit,
+        currentQuestionSettlementOverride,
       });
-    }, ADVISOR_DEBOUNCE_MS);
+    }, Math.max(0, debounceMs));
   }, [activateAdvisorJob, buildAdvisorJob, runAdvisor]);
 
   const publishCanonicalLogicalQuestionTarget = useCallback(
@@ -10818,23 +10870,51 @@ export function useMeetingAssistant() {
       turnGateAction: string;
       logicalQuestionUnit?: LogicalQuestionUnit;
       lexical: QuestionTypeInferenceDecision;
-    }) => {
-      if (!logicalQuestionUnit) return;
+    }): QuestionTypeAdjudicationScheduleHandle | undefined => {
+      if (!logicalQuestionUnit) return undefined;
       const contextState = contextManagerRef.current.getState();
       const settings = taxonomyAdjudicationSettingsRef.current;
       const mode = settings.questionTypeMode;
       const request = buildQuestionTypeAdjudicationRequest({
         logicalQuestionUnit,
       });
+      const manualAuthorityConflict = Boolean(
+        manualCorrectionOperationCoordinatorRef.current.getActiveOperationId()
+      );
       const eligibility = decideQuestionTypeAdjudicationEligibility({
         mode,
         speaker: turn.speaker,
         projection: request.question,
         lexical,
-        manualCorrectionActive: Boolean(
-          manualCorrectionOperationCoordinatorRef.current.getActiveOperationId()
-        ),
+        manualCorrectionActive: manualAuthorityConflict,
         turnGateAction,
+      });
+      const localQuestionType =
+        normalizeCanonicalQuestionType(lexical.type) ?? "unknown";
+      const sourceOwnedSubstantive =
+        turnGateAction === "answer-refresh" && request.question.safe;
+      const enforcementWindowRequested = Boolean(
+        mode === "enforcement" &&
+          eligibility.eligible &&
+          localQuestionType === "unknown" &&
+          sourceOwnedSubstantive &&
+          !manualAuthorityConflict
+      );
+      const immediateHandle = (
+        disposition: string
+      ): QuestionTypeAdjudicationScheduleHandle => ({
+        enforcementWindowRequested,
+        outcome: Promise.resolve({
+          disposition,
+          enforcement: decideQuestionTypeEnforcement({
+            mode,
+            localQuestionType,
+            sourceOwnedSubstantive,
+            manualAuthorityConflict,
+            operationLeaseAuthorized: false,
+            advisorReleaseWindowOpen: true,
+          }),
+        }),
       });
       const circuit = questionTypeAdjudicationCircuitRef.current.read(
         "question-type-adjudication",
@@ -10870,7 +10950,7 @@ export function useMeetingAssistant() {
             metadata: baseMetadata,
           }
         );
-        return;
+        return immediateHandle("not-eligible");
       }
       if (circuit.open) {
         const metadata = {
@@ -10888,7 +10968,7 @@ export function useMeetingAssistant() {
             metadata,
           }
         );
-        return;
+        return immediateHandle("provider-circuit-open");
       }
 
       const modelRoute = resolveRuntimeInferenceModelRouteFromSnapshot({
@@ -10929,7 +11009,7 @@ export function useMeetingAssistant() {
             metadata,
           }
         );
-        return;
+        return immediateHandle("provider-configuration-error");
       }
 
       const activeParent = contextState.activeMeetingTask?.parent;
@@ -11022,6 +11102,14 @@ export function useMeetingAssistant() {
       });
 
       let stepId: string | undefined;
+      let resolveOutcome:
+        | ((outcome: QuestionTypeAdjudicationRuntimeOutcome) => void)
+        | undefined;
+      const outcome = new Promise<QuestionTypeAdjudicationRuntimeOutcome>(
+        (resolve) => {
+          resolveOutcome = resolve;
+        }
+      );
       questionTypeAdjudicationRuntimeRef.current!.schedule({
         job: {
           operationId: lease.operationId,
@@ -11062,7 +11150,9 @@ export function useMeetingAssistant() {
           traceStoreRef.current.updateMetadata(traceId, metadata);
           stepId = traceStoreRef.current.startStep(
             traceId,
-            "Question type adjudication shadow",
+            mode === "enforcement"
+              ? "Question type adjudication enforcement"
+              : "Question type adjudication shadow",
             metadata
           );
         },
@@ -11156,12 +11246,32 @@ export function useMeetingAssistant() {
                   allowLlmTypeRepair: mode === "enforcement",
                   allowLlmRelationRepair: false,
                   allowLlmActionRepair: false,
+                  llmTypeRepairMinConfidence:
+                    QUESTION_TYPE_ENFORCEMENT_MIN_CONFIDENCE,
                   runtimeMutationAuthorized: false,
                   questionComplete: true,
                   commitParent: false,
                 },
               })
             : undefined;
+          const enforcement = decideQuestionTypeEnforcement({
+            mode,
+            localQuestionType,
+            candidate: parsedValue,
+            settlement: settlementPreview,
+            sourceOwnedSubstantive,
+            manualAuthorityConflict: Boolean(
+              manualCorrectionOperationCoordinatorRef.current.getActiveOperationId()
+            ),
+            operationLeaseAuthorized: authorization.authorized,
+            advisorReleaseWindowOpen: true,
+          });
+          const effectiveDisposition = enforcement.authorized
+            ? "enforcement-authorized"
+            : mode === "enforcement" &&
+                finalDisposition === "shadow-observed"
+              ? "enforcement-rejected"
+              : finalDisposition;
           const rawOutput = result?.rawOutput ?? "";
           const recordingActive =
             sessionRecordingManagerRef.current?.getState().active ??
@@ -11180,9 +11290,10 @@ export function useMeetingAssistant() {
               mode,
               eligibility,
               request,
-              disposition: finalDisposition,
+              disposition: effectiveDisposition,
               candidate: parsedValue,
             }),
+            ...formatQuestionTypeEnforcementForTrace(enforcement),
             ...formatCurrentQuestionSettlementForTrace(
               settlementPreview
             ),
@@ -11287,17 +11398,24 @@ export function useMeetingAssistant() {
             }
           }
           traceStoreRef.current.updateMetadata(traceId, metadata);
+          resolveOutcome?.({
+            disposition: effectiveDisposition,
+            enforcement,
+            settlement: enforcement.authorized
+              ? settlementPreview
+              : undefined,
+          });
           if (stepId) {
             traceStoreRef.current.finishStep(
               traceId,
               stepId,
-              finalDisposition === "error" ||
-                finalDisposition === "provider-auth-error" ||
-                finalDisposition === "provider-error-content" ||
-                finalDisposition === "invalid-output"
+              effectiveDisposition === "error" ||
+                effectiveDisposition === "provider-auth-error" ||
+                effectiveDisposition === "provider-error-content" ||
+                effectiveDisposition === "invalid-output"
                 ? "error"
-                : finalDisposition === "stale" ||
-                    finalDisposition === "superseded"
+                : effectiveDisposition === "stale" ||
+                    effectiveDisposition === "superseded"
                   ? "cancelled"
                   : "success",
               metadata,
@@ -11317,7 +11435,11 @@ export function useMeetingAssistant() {
             }
           );
         },
-      });
+      }, enforcementWindowRequested ? 0 : undefined);
+      return {
+        enforcementWindowRequested,
+        outcome,
+      };
     },
     []
   );
@@ -12866,7 +12988,7 @@ export function useMeetingAssistant() {
         lexical,
         metadata: initialMetadata,
       });
-      scheduleQuestionTypeAdjudication({
+      const questionTypeAdjudication = scheduleQuestionTypeAdjudication({
         turn,
         traceId,
         turnGateAction,
@@ -12899,7 +13021,7 @@ export function useMeetingAssistant() {
           logicalQuestionUnit,
           lexical,
         });
-        return;
+        return questionTypeAdjudication;
       }
 
       const stepId = traceStoreRef.current.startStep(
@@ -13111,6 +13233,7 @@ export function useMeetingAssistant() {
             lexical,
           });
         });
+      return questionTypeAdjudication;
     },
     [
       recordSemanticEmbeddingRuntimeEvent,
@@ -13118,6 +13241,163 @@ export function useMeetingAssistant() {
       scheduleTaskRelationAdjudication,
       scheduleTaxonomyAdjudicationShadow,
     ]
+  );
+
+  const scheduleAdvisorAfterQuestionTypeWindow = useCallback(
+    (input: ScheduleAdvisorAfterTypeWindowInput) => {
+      if (!input.handle?.enforcementWindowRequested) return false;
+
+      const waitStartedAt = Date.now();
+      const logicalQuestionLease = createLogicalQuestionUnitLease(
+        input.logicalQuestionUnit
+      );
+      let advisorReleased = false;
+      let waitTimer: number | undefined;
+
+      const dispatchAdvisor = (
+        outcome: QuestionTypeAdjudicationRuntimeOutcome | undefined,
+        waitDisposition: string
+      ) => {
+        if (advisorReleased) return;
+        advisorReleased = true;
+        if (waitTimer !== undefined) window.clearTimeout(waitTimer);
+
+        const leaseAuthorization = authorizeLogicalQuestionUnitLease(
+          logicalQuestionLease,
+          logicalQuestionUnitRef.current
+        );
+        const waitMs = Math.max(0, Date.now() - waitStartedAt);
+        const settlement = outcome?.enforcement.authorized
+          ? outcome.settlement
+          : undefined;
+        const releaseAuthorized = Boolean(
+          activeRef.current &&
+            leaseAuthorization.authorized &&
+            settlement
+        );
+        const metadata = {
+          questionTypeAdjudicationWaitBudgetMs:
+            QUESTION_TYPE_ENFORCEMENT_WAIT_BUDGET_MS,
+          questionTypeAdjudicationWaitMs: waitMs,
+          questionTypeAdjudicationWaitDisposition: waitDisposition,
+          questionTypeAdjudicationAppliedToRuntime:
+            releaseAuthorized,
+          questionTypeAdjudicationAppliedType:
+            releaseAuthorized ? settlement?.questionType : undefined,
+          questionTypeAdjudicationRelationMutationBlocked: true,
+          questionTypeAdjudicationParentMutationBlocked: true,
+          questionTypeAdjudicationArtifactMutationBlocked: true,
+          questionTypeAdjudicationReleaseLeaseAuthorized:
+            leaseAuthorization.authorized,
+          questionTypeAdjudicationReleaseLeaseReason:
+            leaseAuthorization.reason,
+          ...formatQuestionTypeEnforcementForTrace(
+            outcome?.enforcement
+          ),
+        };
+        traceStoreRef.current.updateMetadata(input.traceId, metadata);
+        sessionRecordingManagerRef.current?.recordCaptureLifecycle({
+          stage: "question-type-enforcement-release",
+          traceId: input.traceId,
+          taskId:
+            contextManagerRef.current.getState().activeMeetingTask?.id,
+          ...metadata,
+        });
+
+        if (!activeRef.current || !leaseAuthorization.authorized) {
+          traceStoreRef.current.finishTrace(
+            input.traceId,
+            "cancelled",
+            activeRef.current
+              ? `Question type wait became stale: ${leaseAuthorization.reason}`
+              : "Meeting stopped during question type wait."
+          );
+          return;
+        }
+
+        const debounceStepId = traceStoreRef.current.startStep(
+          input.traceId,
+          "Advisor debounce scheduled",
+          {
+            debounceMs: 0,
+            reason: releaseAuthorized
+              ? "question-type-enforcement-released"
+              : "question-type-wait-fail-open",
+            questionTypeAdjudicationWaitMs: waitMs,
+          }
+        );
+        traceStoreRef.current.finishStep(
+          input.traceId,
+          debounceStepId,
+          "success"
+        );
+        scheduleAdvisor(
+          input.mode,
+          input.traceId,
+          input.turnIntentDecision,
+          input.triggerTurnId,
+          input.questionLineage,
+          input.logicalQuestionUnit,
+          "input-evidence",
+          releaseAuthorized ? settlement : undefined,
+          0
+        );
+      };
+
+      traceStoreRef.current.updateMetadata(input.traceId, {
+        questionTypeAdjudicationWaitStartedAt: waitStartedAt,
+        questionTypeAdjudicationWaitBudgetMs:
+          QUESTION_TYPE_ENFORCEMENT_WAIT_BUDGET_MS,
+        questionTypeAdjudicationWaitDisposition: "pending",
+      });
+      waitTimer = window.setTimeout(() => {
+        dispatchAdvisor(undefined, "deadline-expired-fail-open");
+      }, QUESTION_TYPE_ENFORCEMENT_WAIT_BUDGET_MS);
+
+      void input.handle.outcome.then(
+        (outcome) => {
+          if (!advisorReleased) {
+            dispatchAdvisor(
+              outcome,
+              outcome.enforcement.authorized
+                ? "settled-and-released-before-deadline"
+                : "settled-without-repair-fail-open"
+            );
+            return;
+          }
+
+          const lateDecision: QuestionTypeEnforcementDecision = {
+            ...outcome.enforcement,
+            authorized: false,
+            reason: "advisor-release-window-closed",
+          };
+          const metadata = {
+            ...formatQuestionTypeEnforcementForTrace(lateDecision),
+            questionTypeAdjudicationAppliedToRuntime: false,
+            questionTypeAdjudicationLateAfterAdvisorRelease: true,
+            questionTypeAdjudicationWaitDisposition:
+              "settled-after-deadline-shadow-only",
+            questionTypeAdjudicationWaitMs: Math.max(
+              0,
+              Date.now() - waitStartedAt
+            ),
+          };
+          traceStoreRef.current.updateMetadata(input.traceId, metadata);
+          sessionRecordingManagerRef.current?.recordCaptureLifecycle({
+            stage: "question-type-enforcement-late-result",
+            traceId: input.traceId,
+            taskId:
+              contextManagerRef.current.getState().activeMeetingTask?.id,
+            ...metadata,
+          });
+        },
+        () => {
+          dispatchAdvisor(undefined, "operation-error-fail-open");
+        }
+      );
+      return true;
+    },
+    [scheduleAdvisor]
   );
 
   const buildLogicalQuestionForTurn = useCallback(
@@ -14421,12 +14701,27 @@ export function useMeetingAssistant() {
             turn,
             intentDecision: turnIntentDecision,
           });
-          scheduleSemanticTaxonomyShadow({
-            turn,
-            traceId,
-            turnGateAction: "answer-refresh",
-            logicalQuestionUnit,
-          });
+          const questionTypeAdjudication =
+            scheduleSemanticTaxonomyShadow({
+              turn,
+              traceId,
+              turnGateAction: "answer-refresh",
+              logicalQuestionUnit,
+            });
+          if (
+            scheduleAdvisorAfterQuestionTypeWindow({
+              handle: questionTypeAdjudication,
+              mode: contextState.activeMeetingTask?.screen
+                ? "screen-anchored"
+                : "live",
+              traceId,
+              turnIntentDecision,
+              triggerTurnId: turn.id,
+              logicalQuestionUnit,
+            })
+          ) {
+            return;
+          }
           const debounceStepId = traceStoreRef.current.startStep(
             traceId,
             "Advisor debounce scheduled",
@@ -14705,6 +15000,9 @@ export function useMeetingAssistant() {
             turnGateReason: turnGate.reason,
           }
         );
+        let questionTypeAdjudication:
+          | QuestionTypeAdjudicationScheduleHandle
+          | undefined;
         if (logicalQuestionUnit) {
           if (
             shortIntentLocalDecision.disposition ===
@@ -14718,7 +15016,7 @@ export function useMeetingAssistant() {
             });
             return;
           }
-          scheduleSemanticTaxonomyShadow({
+          questionTypeAdjudication = scheduleSemanticTaxonomyShadow({
             turn,
             traceId,
             turnGateAction: turnGate.action,
@@ -14820,6 +15118,23 @@ export function useMeetingAssistant() {
           }
         }
 
+        if (
+          logicalQuestionUnit &&
+          scheduleAdvisorAfterQuestionTypeWindow({
+            handle: questionTypeAdjudication,
+            mode: contextState.activeMeetingTask?.screen
+              ? "screen-anchored"
+              : "live",
+            traceId,
+            turnIntentDecision: turnGate,
+            triggerTurnId: turn.id,
+            questionLineage: advisorQuestionLineage,
+            logicalQuestionUnit,
+          })
+        ) {
+          return;
+        }
+
         const debounceStepId = traceStoreRef.current.startStep(
           traceId,
           "Advisor debounce scheduled",
@@ -14894,6 +15209,7 @@ export function useMeetingAssistant() {
       schedulePendingAnswerCommit,
       scheduleShortIntentGate,
       scheduleSemanticTaxonomyShadow,
+      scheduleAdvisorAfterQuestionTypeWindow,
       scheduleAdvisor,
       selectedSttProvider,
       settleNativeAudioSegment,

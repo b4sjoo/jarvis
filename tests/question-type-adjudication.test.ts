@@ -6,6 +6,7 @@ import {
   buildQuestionTypeAdjudicationRequest,
   createQuestionTypeSettlementProposal,
   decideQuestionTypeAdjudicationEligibility,
+  decideQuestionTypeEnforcement,
   normalizeQuestionTypeAdjudicationMode,
   parseQuestionTypeAdjudicationOutput,
 } from "../src/lib/meeting/question-type-adjudication.js";
@@ -252,4 +253,140 @@ test("Task 144 accepts only the proposed type while relation and parent stay blo
   assert.equal(enforcementPreview.typeMutationAuthorized, true);
   assert.equal(enforcementPreview.relationMutationAuthorized, false);
   assert.equal(enforcementPreview.parentMutationAuthorized, false);
+});
+
+test("authorizes only high-confidence unknown-to-concrete type repair", () => {
+  const logicalQuestionUnit = unit(
+    "Design a URL shortener for me."
+  );
+  const currentQuestion = createProvisionalCurrentQuestion({
+    logicalQuestionUnit,
+    sourceKind: "voice",
+  });
+  const candidate = {
+    schemaVersion: 1 as const,
+    questionType: "general-system-design" as const,
+    confidence: 0.97,
+    evidenceSpans: ["URL shortener"],
+  };
+  const settlement = settleCurrentQuestion({
+    currentQuestion,
+    llmProposal: createQuestionTypeSettlementProposal({
+      currentQuestion,
+      adjudication: candidate,
+    }),
+    manualCorrectionRevision: 0,
+    policy: {
+      allowLlmTypeRepair: true,
+      llmTypeRepairMinConfidence: 0.95,
+      runtimeMutationAuthorized: false,
+      questionComplete: true,
+      commitParent: false,
+    },
+  });
+
+  assert.deepEqual(
+    decideQuestionTypeEnforcement({
+      mode: "enforcement",
+      localQuestionType: "unknown",
+      candidate,
+      settlement,
+      sourceOwnedSubstantive: true,
+      manualAuthorityConflict: false,
+      operationLeaseAuthorized: true,
+      advisorReleaseWindowOpen: true,
+    }),
+    {
+      authorized: true,
+      reason: "authorized",
+      localQuestionType: "unknown",
+      proposedQuestionType: "general-system-design",
+      confidence: 0.97,
+      minimumConfidence: 0.95,
+    }
+  );
+});
+
+test("keeps type enforcement narrow across confidence, authority, and timing guards", () => {
+  const logicalQuestionUnit = unit(
+    "Design a URL shortener for me."
+  );
+  const currentQuestion = createProvisionalCurrentQuestion({
+    logicalQuestionUnit,
+    sourceKind: "voice",
+  });
+  const candidate = {
+    schemaVersion: 1 as const,
+    questionType: "general-system-design" as const,
+    confidence: 0.97,
+    evidenceSpans: ["URL shortener"],
+  };
+  const settlement = settleCurrentQuestion({
+    currentQuestion,
+    llmProposal: createQuestionTypeSettlementProposal({
+      currentQuestion,
+      adjudication: candidate,
+    }),
+    manualCorrectionRevision: 0,
+    policy: {
+      allowLlmTypeRepair: true,
+      llmTypeRepairMinConfidence: 0.95,
+      runtimeMutationAuthorized: false,
+      questionComplete: true,
+      commitParent: false,
+    },
+  });
+  const base = {
+    mode: "enforcement" as const,
+    localQuestionType: "unknown",
+    candidate,
+    settlement,
+    sourceOwnedSubstantive: true,
+    manualAuthorityConflict: false,
+    operationLeaseAuthorized: true,
+    advisorReleaseWindowOpen: true,
+  };
+
+  assert.equal(
+    decideQuestionTypeEnforcement({
+      ...base,
+      localQuestionType: "coding",
+    }).reason,
+    "local-type-already-concrete"
+  );
+  assert.equal(
+    decideQuestionTypeEnforcement({
+      ...base,
+      candidate: { ...candidate, confidence: 0.94 },
+    }).reason,
+    "candidate-confidence-below-threshold"
+  );
+  assert.equal(
+    decideQuestionTypeEnforcement({
+      ...base,
+      manualAuthorityConflict: true,
+    }).reason,
+    "manual-authority-conflict"
+  );
+  assert.equal(
+    decideQuestionTypeEnforcement({
+      ...base,
+      operationLeaseAuthorized: false,
+    }).reason,
+    "operation-lease-not-authorized"
+  );
+  assert.equal(
+    decideQuestionTypeEnforcement({
+      ...base,
+      advisorReleaseWindowOpen: false,
+    }).reason,
+    "advisor-release-window-closed"
+  );
+  assert.equal(
+    decideQuestionTypeEnforcement({
+      ...base,
+      mode: "shadow",
+    }).reason,
+    "operation-not-enforcement"
+  );
 });
