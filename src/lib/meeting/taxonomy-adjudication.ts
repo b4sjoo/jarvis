@@ -18,9 +18,10 @@ import {
 } from "./task-taxonomy.js";
 
 export const TAXONOMY_ADJUDICATION_SCHEMA_VERSION = 2;
+export const TAXONOMY_ADJUDICATION_OUTPUT_CONTRACT_VERSION = 3;
 export const TAXONOMY_ADJUDICATION_PROMPT_VERSION =
-  "interviewer-intent-adjudication-prompt-v4";
-export const TAXONOMY_ADJUDICATION_MAX_OUTPUT_CHARS = 4_096;
+  "interviewer-intent-adjudication-prompt-v5-compact-source-catalog";
+export const TAXONOMY_ADJUDICATION_MAX_OUTPUT_CHARS = 2_048;
 export const TAXONOMY_ADJUDICATION_MAX_INPUT_CHARS = 1_200;
 export const TAXONOMY_ADJUDICATION_MAX_PARENT_CHARS = 400;
 export const TAXONOMY_ADJUDICATION_MAX_ME_CONTEXT_CHARS = 300;
@@ -120,19 +121,51 @@ export interface TaxonomyAdjudicationRequest {
 
 export interface LlmTaxonomyAdjudication {
   schemaVersion: 2;
+  outputContractVersion?: 2 | 3;
   speechAct: InterviewerSpeechAct;
   questionType: CanonicalQuestionType;
   relation: InterviewerIntentRelation;
   evidenceMode: InterviewerEvidenceMode;
   action: InterviewerIntentAction;
   normalizedQuestion: string;
-  normalizedQuestionSource?: "model" | "source-primary-ask-repair";
+  normalizedQuestionSource?:
+    | "model"
+    | "source-primary-ask-repair"
+    | "source-catalog";
   normalizedQuestionRepairReason?: "action-object-not-preserved";
   primaryAskSpans: TaxonomyAdjudicationSourceSpan[];
   standalone: boolean;
   evidenceSpans: string[];
   confidence: number;
   ambiguityReason?: string;
+}
+
+const TAXONOMY_ADJUDICATION_REASON_CODES = [
+  "clear",
+  "multi-ask",
+  "parent-link",
+  "type-ambiguous",
+  "speech-act-ambiguous",
+  "insufficient-source",
+  "stt-uncertain",
+] as const;
+
+type TaxonomyAdjudicationReasonCode =
+  (typeof TAXONOMY_ADJUDICATION_REASON_CODES)[number];
+
+type TaxonomyAdjudicationSourceKind =
+  | "q"
+  | "p"
+  | "c"
+  | "s"
+  | "b"
+  | "w";
+
+interface TaxonomyAdjudicationCatalogEntry {
+  index: number;
+  kind: TaxonomyAdjudicationSourceKind;
+  text: string;
+  turnId?: string;
 }
 
 export type TaxonomyAdjudicationParseErrorKind =
@@ -529,25 +562,75 @@ export function buildTaxonomyAdjudicationRequest(input: {
   };
 }
 
+function buildTaxonomyAdjudicationSourceCatalog(
+  request: TaxonomyAdjudicationRequest
+): TaxonomyAdjudicationCatalogEntry[] {
+  const entries: TaxonomyAdjudicationCatalogEntry[] = [];
+  const append = (
+    kind: TaxonomyAdjudicationSourceKind,
+    text: string | undefined,
+    turnId?: string
+  ) => {
+    const normalized = normalizeSpace(text ?? "");
+    if (!normalized) return;
+    entries.push({
+      index: entries.length,
+      kind,
+      text: normalized,
+      turnId,
+    });
+  };
+
+  for (const source of request.question.sourceTurns) {
+    const segments = splitSentences(source.text);
+    for (const segment of segments.length ? segments : [source.text]) {
+      append("q", segment, source.turnId);
+    }
+  }
+  append("p", request.activeParent?.topic);
+  append("p", request.activeParent?.playbookPhase);
+  for (const entity of request.activeParent?.sharedScenarioEntities ?? []) {
+    append("p", entity);
+  }
+  append("c", request.sourceContext?.latestMeCorrection);
+  append("s", request.sourceContext?.sectionHint);
+  append("b", request.sourceContext?.preparationPrior);
+  for (const evidence of request.taskSwitchEvidence) {
+    append("w", evidence);
+  }
+  return entries;
+}
+
 export function buildTaxonomyAdjudicationPrompts(
   request: TaxonomyAdjudicationRequest
 ) {
   const canonicalQuestionTypes = CANONICAL_QUESTION_TYPES.join(", ");
-  const {
-    text: _mergedQuestionText,
-    ...sourceAddressableQuestion
-  } = request.question;
+  const sourceCatalog = buildTaxonomyAdjudicationSourceCatalog(request);
   const packet = {
-    ...request,
-    question: sourceAddressableQuestion,
+    v: TAXONOMY_ADJUDICATION_OUTPUT_CONTRACT_VERSION,
+    id: request.logicalQuestionUnitId,
+    rev: request.logicalQuestionUnitRevision,
+    lang: request.sourceLanguage,
+    stt: request.sttUncertaintyMarkers,
+    parent: request.activeParent
+      ? {
+          qt: request.activeParent.questionType,
+          rev: request.activeParent.revision,
+        }
+      : undefined,
+    sources: sourceCatalog.map((source) => ({
+      i: source.index,
+      k: source.kind,
+      t: source.text,
+    })),
   };
   return {
     systemPrompt: [
       "You independently classify one bounded interviewer utterance for Jarvis.",
-      "Return one JSON object only. Do not answer the interview question.",
-      "Use only source-owned question text, compact parent context, the latest candidate correction, section hint, and preparation prior.",
+      "Return one compact JSON object only. Never answer the interview question and never copy source text into the output.",
+      "Use only the indexed source catalog. Source kinds are q=current interviewer question-unit text, p=active parent context, c=latest candidate correction, s=section hint, b=preparation prior, w=task-switch evidence.",
       "No keyword or embedding classifier result is supplied; make an independent judgment.",
-      "question.sourceTurns is an ordered array of source-owned {turnId,text} records. The source may contain setup, quoted or future example questions, and one current terminal ask. Classify the current primary ask, not quoted examples.",
+      "The ordered q records may contain setup, quoted or future example questions, and one current terminal ask. Classify the current primary ask, not quoted examples.",
       "Choose speechAct, questionType, relation, evidenceMode, and action.",
       "Allowed speechAct: question, directive, constraint, correction, acknowledgement, section-transition, logistics, informational.",
       `Allowed questionType: ${canonicalQuestionTypes}. Use unknown for recruiter logistics, scheduling, compensation, sponsorship, procedural guidance, acknowledgements, filler, and any speech outside these interview-task families.`,
@@ -555,14 +638,12 @@ export function buildTaxonomyAdjudicationPrompts(
       "Allowed evidenceMode: personal-experience, hypothetical-design, factual-explanation, unknown.",
       "Allowed action: answer, append-context, buffer, ignore.",
       "For a recruiter self-introduction, resume walkthrough, or project-opening request, use project-deep-dive. For recruiter logistics or filler, use unknown.",
-      "normalizedQuestion is the normalized current primary or terminal ask. It must be non-empty when action is answer; otherwise it may be an empty string.",
-      "For an action request, normalizedQuestion must preserve both the requested operation and its concrete target object from primaryAskSpans. Never replace a concrete request such as 'Let's do a ride-sharing backend' with a generic label such as 'design question'.",
-      "primaryAskSpans is an array of {turnId,text}. Each text must be an exact verbatim substring of the source turn named by turnId. Use the occurrence that is the current primary ask, even when identical text appears in an earlier quoted or future example. It must be non-empty when action is answer and may be empty otherwise.",
-      "evidenceSpans must contain exact verbatim substrings from supplied source text or compact parent context.",
-      "Example logistics result: {\"schemaVersion\":2,\"speechAct\":\"logistics\",\"questionType\":\"unknown\",\"relation\":\"none\",\"evidenceMode\":\"unknown\",\"action\":\"append-context\",\"normalizedQuestion\":\"\",\"primaryAskSpans\":[],\"standalone\":false,\"evidenceSpans\":[\"The call will take thirty minutes\"],\"confidence\":0.95}.",
-      "Example filler result: {\"schemaVersion\":2,\"speechAct\":\"acknowledgement\",\"questionType\":\"unknown\",\"relation\":\"none\",\"evidenceMode\":\"unknown\",\"action\":\"ignore\",\"normalizedQuestion\":\"\",\"primaryAskSpans\":[],\"standalone\":false,\"evidenceSpans\":[\"Sounds good\"],\"confidence\":0.98}.",
-      "Example answer primaryAskSpans: [{\"turnId\":\"turn-2\",\"text\":\"How does this role sound relative to what you are looking for?\"}].",
-      "Schema: {schemaVersion:2,speechAct,questionType,relation,evidenceMode,action,normalizedQuestion,primaryAskSpans:[{turnId,text}],standalone,evidenceSpans,confidence,ambiguityReason?}.",
+      "pa is an array of q source indices that exactly compose the current primary ask. It must be non-empty when act=answer and empty otherwise. Preserve both the requested operation and concrete object by selecting all necessary q records.",
+      "ev is a non-empty array of source indices grounding the decision. Do not emit source text.",
+      "Allowed rc reason codes: clear, multi-ask, parent-link, type-ambiguous, speech-act-ambiguous, insufficient-source, stt-uncertain.",
+      "Use full enum values but compact keys. Example answer: {\"v\":3,\"sa\":\"directive\",\"qt\":\"general-system-design\",\"rel\":\"new-parent\",\"em\":\"hypothetical-design\",\"act\":\"answer\",\"pa\":[0],\"ev\":[0],\"st\":true,\"cf\":0.96,\"rc\":\"clear\"}.",
+      "Example filler: {\"v\":3,\"sa\":\"acknowledgement\",\"qt\":\"unknown\",\"rel\":\"none\",\"em\":\"unknown\",\"act\":\"ignore\",\"pa\":[],\"ev\":[0],\"st\":false,\"cf\":0.98,\"rc\":\"clear\"}.",
+      "Schema: {v:3,sa,qt,rel,em,act,pa:number[],ev:number[],st:boolean,cf:number,rc}.",
     ].join(" "),
     userMessage: JSON.stringify(packet),
   };
@@ -587,6 +668,13 @@ export function parseTaxonomyAdjudicationOutput(
     return parseFailure("output-is-not-object", "schema");
   }
   const candidate = parsed as Record<string, unknown>;
+  if (candidate.v === TAXONOMY_ADJUDICATION_OUTPUT_CONTRACT_VERSION) {
+    return parseCompactTaxonomyAdjudicationOutput(
+      candidate,
+      request,
+      decoded.envelope
+    );
+  }
   if (candidate.schemaVersion !== TAXONOMY_ADJUDICATION_SCHEMA_VERSION) {
     return parseFailure("unsupported-schema-version", "schema");
   }
@@ -696,6 +784,7 @@ export function parseTaxonomyAdjudicationOutput(
     envelope: decoded.envelope,
     value: {
       schemaVersion: TAXONOMY_ADJUDICATION_SCHEMA_VERSION,
+      outputContractVersion: 2,
       speechAct: candidate.speechAct,
       questionType: candidate.questionType,
       relation: candidate.relation,
@@ -717,6 +806,153 @@ export function parseTaxonomyAdjudicationOutput(
       ambiguityReason: candidate.ambiguityReason as string | undefined,
     },
   };
+}
+
+function parseCompactTaxonomyAdjudicationOutput(
+  candidate: Record<string, unknown>,
+  request: TaxonomyAdjudicationRequest,
+  envelope: TaxonomyAdjudicationOutputEnvelope
+): TaxonomyAdjudicationParseResult {
+  const allowedKeys = new Set([
+    "v",
+    "sa",
+    "qt",
+    "rel",
+    "em",
+    "act",
+    "pa",
+    "ev",
+    "st",
+    "cf",
+    "rc",
+  ]);
+  if (Object.keys(candidate).some((key) => !allowedKeys.has(key))) {
+    return parseFailure("unexpected-compact-output-field", "schema");
+  }
+  if (!isInterviewerSpeechAct(candidate.sa)) {
+    return parseFailure("invalid-speech-act", "schema");
+  }
+  if (!isCanonicalQuestionType(candidate.qt)) {
+    return parseFailure("invalid-question-type", "schema");
+  }
+  if (!isTaxonomyAdjudicationRelation(candidate.rel)) {
+    return parseFailure("invalid-relation", "schema");
+  }
+  if (!isInterviewerEvidenceMode(candidate.em)) {
+    return parseFailure("invalid-evidence-mode", "schema");
+  }
+  if (!isInterviewerIntentAction(candidate.act)) {
+    return parseFailure("invalid-action", "schema");
+  }
+  if (typeof candidate.st !== "boolean") {
+    return parseFailure("invalid-standalone", "schema");
+  }
+  if (
+    typeof candidate.cf !== "number" ||
+    !Number.isFinite(candidate.cf) ||
+    candidate.cf < 0 ||
+    candidate.cf > 1
+  ) {
+    return parseFailure("invalid-confidence", "schema");
+  }
+  if (!isTaxonomyAdjudicationReasonCode(candidate.rc)) {
+    return parseFailure("invalid-reason-code", "schema");
+  }
+  if (!isCompactSourceIndexArray(candidate.pa, 8)) {
+    return parseFailure("invalid-primary-ask-references", "schema");
+  }
+  if (!isCompactSourceIndexArray(candidate.ev, 8) || candidate.ev.length === 0) {
+    return parseFailure("invalid-evidence-references", "schema");
+  }
+
+  const catalog = buildTaxonomyAdjudicationSourceCatalog(request);
+  const primaryEntries = resolveCompactSourceReferences(candidate.pa, catalog);
+  const evidenceEntries = resolveCompactSourceReferences(candidate.ev, catalog);
+  if (!primaryEntries || primaryEntries.some((entry) => entry.kind !== "q")) {
+    return parseFailure("invalid-primary-ask-reference", "evidence");
+  }
+  if (!evidenceEntries) {
+    return parseFailure("invalid-evidence-reference", "evidence");
+  }
+  if (candidate.act === "answer" && primaryEntries.length === 0) {
+    return parseFailure("missing-primary-ask", "schema");
+  }
+  if (candidate.act !== "answer" && primaryEntries.length > 0) {
+    return parseFailure("unexpected-primary-ask", "schema");
+  }
+
+  const primaryAskSpans = primaryEntries.map((entry) => ({
+    turnId: entry.turnId ?? "",
+    text: entry.text,
+  }));
+  if (primaryAskSpans.some((span) => !span.turnId)) {
+    return parseFailure("invalid-primary-ask-reference", "evidence");
+  }
+  const normalizedQuestion = normalizeSpace(
+    primaryAskSpans.map((span) => span.text).join(" ")
+  );
+  if (candidate.act === "answer" && !normalizedQuestion) {
+    return parseFailure("missing-normalized-question", "schema");
+  }
+
+  return {
+    ok: true,
+    evidenceSpansValid: true,
+    envelope,
+    value: {
+      schemaVersion: TAXONOMY_ADJUDICATION_SCHEMA_VERSION,
+      outputContractVersion: TAXONOMY_ADJUDICATION_OUTPUT_CONTRACT_VERSION,
+      speechAct: candidate.sa,
+      questionType: candidate.qt,
+      relation: candidate.rel,
+      evidenceMode: candidate.em,
+      action: candidate.act,
+      normalizedQuestion,
+      normalizedQuestionSource: "source-catalog",
+      primaryAskSpans,
+      standalone: candidate.st,
+      evidenceSpans: evidenceEntries.map((entry) => entry.text),
+      confidence: candidate.cf,
+      ambiguityReason: candidate.rc,
+    },
+  };
+}
+
+function isCompactSourceIndexArray(
+  value: unknown,
+  maxLength: number
+): value is number[] {
+  return (
+    Array.isArray(value) &&
+    value.length <= maxLength &&
+    value.every(
+      (item, index) =>
+        Number.isSafeInteger(item) &&
+        item >= 0 &&
+        value.indexOf(item) === index
+    )
+  );
+}
+
+function resolveCompactSourceReferences(
+  references: number[],
+  catalog: TaxonomyAdjudicationCatalogEntry[]
+) {
+  const entries = references.map((reference) => catalog[reference]);
+  return entries.every(Boolean)
+    ? (entries as TaxonomyAdjudicationCatalogEntry[])
+    : undefined;
+}
+
+function isTaxonomyAdjudicationReasonCode(
+  value: unknown
+): value is TaxonomyAdjudicationReasonCode {
+  return (
+    typeof value === "string" &&
+    TAXONOMY_ADJUDICATION_REASON_CODES.includes(
+      value as TaxonomyAdjudicationReasonCode
+    )
+  );
 }
 
 function preservesActionObject(source: string, normalizedQuestion: string) {
@@ -983,19 +1219,27 @@ function decodeTaxonomyAdjudicationEnvelope(
       value: unknown;
       envelope: TaxonomyAdjudicationOutputEnvelope;
     }
-  | { ok: false; reason: "malformed-json" | "invalid-output-wrapper" } {
+  | {
+      ok: false;
+      reason: "malformed-json" | "truncated-json" | "invalid-output-wrapper";
+    } {
   const fenced = stripJsonFence(rawOutput);
   let parsed: unknown;
   try {
     parsed = JSON.parse(fenced.value);
   } catch {
-    return { ok: false, reason: "malformed-json" };
+    return {
+      ok: false,
+      reason: looksLikeTruncatedJson(rawOutput, fenced.value)
+        ? "truncated-json"
+        : "malformed-json",
+    };
   }
   if (
     parsed &&
     typeof parsed === "object" &&
     !Array.isArray(parsed) &&
-    "schemaVersion" in parsed
+    ("schemaVersion" in parsed || "v" in parsed)
   ) {
     return {
       ok: true,
@@ -1022,6 +1266,15 @@ function decodeTaxonomyAdjudicationEnvelope(
     };
   }
   return { ok: false, reason: "invalid-output-wrapper" };
+}
+
+function looksLikeTruncatedJson(rawOutput: string, strippedValue: string) {
+  const raw = rawOutput.trim();
+  const value = strippedValue.trim();
+  if (/^```(?:json)?\s*/iu.test(raw) && !/```\s*$/u.test(raw)) return true;
+  if (value.startsWith("{") && !value.endsWith("}")) return true;
+  if (value.startsWith("[") && !value.endsWith("]")) return true;
+  return false;
 }
 
 function decodeNestedTaxonomyAdjudicationValue(

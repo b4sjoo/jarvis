@@ -582,7 +582,7 @@ test("records whiteboard validation and recovery artifacts", async () => {
   );
   assert.ok(summaryWrite);
   const summary = parsePayload(summaryWrite);
-  assert.equal(summary.version, 34);
+  assert.equal(summary.version, 35);
   assert.deepEqual(summary.whiteboard, {
     artifactId: "whiteboard_1",
     revision: 1,
@@ -1062,6 +1062,8 @@ test("late LLM taxonomy adjudication stays joinable after trace export", async (
       taxonomyAdjudicationPromptVersion:
         "interviewer-intent-adjudication-prompt-v3",
       taxonomyAdjudicationSchemaVersion: 2,
+      taxonomyAdjudicationOutputContractVersion: 3,
+      taxonomyAdjudicationParsedOutputContractVersion: 3,
       taxonomyAdjudicationRequestHash: "request-hash-1",
       taxonomyAdjudicationDisposition: "completed",
       taxonomyAdjudicationOperationId: "intent-op-1",
@@ -1099,6 +1101,8 @@ test("late LLM taxonomy adjudication stays joinable after trace export", async (
       interviewerIntentLlmPromptVersion:
         "interviewer-intent-adjudication-prompt-v3",
       interviewerIntentLlmSchemaVersion: 2,
+      interviewerIntentLlmOutputContractVersion: 3,
+      interviewerIntentLlmParsedOutputContractVersion: 3,
       interviewerIntentLlmRequestHash: "request-hash-1",
       interviewerIntentLlmOperationId: "intent-op-1",
       interviewerIntentLlmUnitId: "logical_1",
@@ -1211,6 +1215,8 @@ test("late LLM taxonomy adjudication stays joinable after trace export", async (
   assert.equal(intent.settlementTaskId, "task_2");
   assert.equal(intent.providerId, "fast-classifier");
   assert.equal(intent.outputEnvelope, "direct");
+  assert.equal(intent.outputContractVersion, 3);
+  assert.equal(intent.parsedOutputContractVersion, 3);
   assert.equal(intent.leaseAuthorized, true);
   assert.equal(intent.normalizedQuestion, undefined);
   assert.equal(intent.primaryAskSpanTexts, undefined);
@@ -1226,6 +1232,8 @@ test("late LLM taxonomy adjudication stays joinable after trace export", async (
     "primary-ask",
   ]);
   assert.equal(adjudication.relation, "new-parent");
+  assert.equal(adjudication.outputContractVersion, 3);
+  assert.equal(adjudication.parsedOutputContractVersion, 3);
   assert.equal(adjudication.scheduledTaskId, "task_1");
   assert.equal(adjudication.settlementTaskId, "task_2");
   assert.equal(adjudication.leaseAuthorized, true);
@@ -1331,11 +1339,15 @@ test("compact trace summaries preserve task boundary and cross-domain evidence",
       logicalQuestionLeaseAuthorizationReason: "logical-question-current",
       logicalQuestionLeaseAuthorizationStage: "final-commit",
       forceAdviseTargetStatus: "already-advised",
+      forceAdviseAutomaticExecutionState: "visible-committed",
+      forceAdviseManualExecutionState: "idle",
+      forceAdviseVisibleCommitRevision: 7,
       forceAdviseEligible: false,
       forceAdviseRetryable: false,
       forceAdviseEligibilityReason: "advisor-committed",
       forceAdviseRepairCause: "intent-false-negative",
       forceAdviseAdvisorOutcome: "visible-answer-committed",
+      forceAdviseRecoveredPendingCandidate: false,
       manualCorrectionOwnership: "canonical-logical-question",
       taskRelation: "new-parent",
       advisorPromptIncludedLogicalQuestion: true,
@@ -1387,7 +1399,7 @@ test("compact trace summaries preserve task boundary and cross-domain evidence",
   );
   assert.ok(summaryWrite);
   const summary = parsePayload(summaryWrite);
-  assert.equal(summary.version, 34);
+  assert.equal(summary.version, 35);
   assert.equal(summary.taskRelation, "new-parent");
   assert.equal(summary.logicalQuestionUnitRevision, 3);
   assert.equal(summary.phaseSignal, "assumption-authorized");
@@ -1406,6 +1418,13 @@ test("compact trace summaries preserve task boundary and cross-domain evidence",
   assert.equal(summary.advisorOutputCommittedToUi, true);
   assert.equal(summary.visibleAnswerChanged, true);
   assert.equal(summary.forceAdviseRetryable, false);
+  assert.equal(
+    summary.forceAdviseAutomaticExecutionState,
+    "visible-committed"
+  );
+  assert.equal(summary.forceAdviseManualExecutionState, "idle");
+  assert.equal(summary.forceAdviseVisibleCommitRevision, 7);
+  assert.equal(summary.forceAdviseRecoveredPendingCandidate, false);
   assert.equal(summary.forceAdviseEligibilityReason, "advisor-committed");
   assert.equal(summary.forceAdviseRepairCause, "intent-false-negative");
   assert.equal(
@@ -1601,7 +1620,7 @@ test("compact trace summaries preserve bounded STT request evidence", async () =
   );
   assert.ok(summaryWrite);
   const summary = parsePayload(summaryWrite);
-  assert.equal(summary.version, 34);
+  assert.equal(summary.version, 35);
   assert.equal(
     (summary.timingsMs as Record<string, unknown>).stt,
     1_580
@@ -1743,7 +1762,7 @@ test("refreshes compact STT lifecycle evidence after a late provider abort", asy
   );
   assert.ok(summaryWrites.length >= 2);
   const summary = parsePayload(summaryWrites[summaryWrites.length - 1]!);
-  assert.equal(summary.version, 34);
+  assert.equal(summary.version, 35);
   assert.equal(
     (summary.sttRequest as Record<string, unknown>).abortRequested,
     true
@@ -1808,7 +1827,7 @@ test("compact trace summaries preserve hard memory invalidation evidence", async
   );
   assert.ok(summaryWrite);
   const summary = parsePayload(summaryWrite);
-  assert.equal(summary.version, 34);
+  assert.equal(summary.version, 35);
   const memory = summary.memory as Record<string, unknown>;
   assert.equal(memory.authorityRevision, 2);
   assert.equal(memory.invalidationKind, "hard");
@@ -2069,7 +2088,7 @@ test("records compact current-question settlement and execution-plan evidence", 
   assert.equal(serializedPlan.includes("taskSnapshot"), false);
   assert.equal(serializedPlan.includes("variables"), false);
   const summary = parsePayload(summaryWrite);
-  assert.equal(summary.version, 34);
+  assert.equal(summary.version, 35);
   assert.equal(
     (
       summary.currentQuestionSettlement as Record<string, unknown>
@@ -2185,7 +2204,7 @@ test("records a current-question term correction without copying provider state"
     false
   );
   const summary = parsePayload(summaryWrite);
-  assert.equal(summary.version, 34);
+  assert.equal(summary.version, 35);
   assert.equal(
     summary.manualTermCorrectionId,
     "term_correction_hnsw"

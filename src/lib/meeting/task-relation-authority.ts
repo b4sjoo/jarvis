@@ -38,6 +38,24 @@ export function decideCrossTypeTaskRelationAuthority(input: {
     return undefined;
   }
 
+  const projectSwitchEvidence = findEvidenceSpans(
+    input.currentText,
+    EXPLICIT_PROJECT_SWITCH_PATTERNS
+  );
+  if (
+    activeQuestionType === "project-deep-dive" &&
+    candidateQuestionType === "project-deep-dive" &&
+    projectSwitchEvidence.length > 0
+  ) {
+    return {
+      relation: "new-parent",
+      disposition: "authorized",
+      relationEvidenceAuthorized: true,
+      reason: "explicit-project-switch",
+      evidenceSpans: projectSwitchEvidence,
+    };
+  }
+
   if (input.explicitTaskSwitch) {
     if (!isParentCanonicalQuestionType(candidateQuestionType)) {
       return {
@@ -239,6 +257,12 @@ function findEvidenceSpans(text: string, patterns: RegExp[]) {
 const EXPLICIT_TASK_SWITCH_PATTERNS = [
   /\b(?:now|next|then)\s+(?:let'?s\s+)?(?:move|switch|turn|go)\s+(?:on\s+)?(?:to|into)\b/i,
   /\b(?:a|the)\s+(?:new|separate|unrelated)\s+(?:question|problem|task)\b/i,
+];
+
+const EXPLICIT_PROJECT_SWITCH_PATTERNS = [
+  /\b(?:another|different|separate)\b.{0,90}\b(?:project|system|service|feature|platform|example)\b.{0,140}\b(?:you(?:['’]ve| have)?\s+(?:owned|built|designed|implemented|developed|led|worked on)|from your (?:work|experience|background))\b/i,
+  /\b(?:tell me about|describe|walk me through|give me an example of)\b.{0,90}\b(?:another|different|separate)\b.{0,90}\b(?:project|system|service|feature|platform|example)\b/i,
+  /(?:另一个|另外一个|不同的|其他的).{0,50}(?:项目|系统|服务|功能|经历).{0,70}(?:你负责|你做过|你设计|你实现|你拥有|你参与)/u,
 ];
 
 const EXPLICIT_PARENT_BINDING_PATTERNS = [

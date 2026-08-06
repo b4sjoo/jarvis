@@ -136,6 +136,55 @@ Supporting anchor IDs: -`),
   );
 });
 
+test("removes an unsupported personal claim while preserving useful bounded guidance", () => {
+  const result = enforceFactAnchorOutput({
+    decision: makeDecision({
+      state: "weak-anchor",
+      action: "answer-with-caveats",
+      supportedAnchorIds: [],
+      requiredFor: "project-deep-dive",
+    }),
+    parsedAnswer: parseMeetingAnswer(`中文思路: 保留可验证的方法，不编造个人结果。
+Answer: I personally validated this system with a production rollout. A reliable validation plan should cover load, fairness, failure injection, and rollback signals.
+Approach: I would start with a shadow deployment and compare rejection rate, latency, and recovery behavior.
+Answer disposition: bounded-with-caveat
+Supporting anchor IDs: -`),
+  });
+
+  assert.equal(result.modelOutputAuthorized, false);
+  assert.equal(result.commitSource, "sanitized-model-output");
+  assert.equal(result.reason, "bounded-output-sanitized");
+  assert.doesNotMatch(result.effectiveContent, /personally validated/i);
+  assert.match(result.effectiveContent, /reliable validation plan/i);
+  assert.match(result.effectiveContent, /I would start/i);
+  assert.equal(result.sanitizedClaimCount, 1);
+  assert.ok(result.preservedClaimCount >= 2);
+  assert.deepEqual(result.sanitizedSections, ["answer"]);
+
+  const trace = formatFactAnchorOutputDecisionForTrace(result);
+  assert.equal(trace.factAnchorClaimSanitizationApplied, true);
+  assert.equal(trace.factAnchorSanitizedClaimCount, 1);
+});
+
+test("allows an explicitly hypothetical first-person recommendation", () => {
+  const output = parseMeetingAnswer(`Answer: I would validate the design with shadow traffic and failure injection before rollout.
+Answer disposition: bounded-with-caveat
+Supporting anchor IDs: -`);
+  const result = enforceFactAnchorOutput({
+    decision: makeDecision({
+      state: "weak-anchor",
+      action: "answer-with-caveats",
+      supportedAnchorIds: [],
+      requiredFor: "project-deep-dive",
+    }),
+    parsedAnswer: output,
+  });
+
+  assert.equal(result.modelOutputAuthorized, true);
+  assert.equal(result.commitSource, "model-output");
+  assert.equal(result.effectiveContent, output.rawContent);
+});
+
 test("uses only verified weak-anchor choices", () => {
   const decision = makeDecision({
     state: "weak-anchor",

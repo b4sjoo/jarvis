@@ -60,7 +60,7 @@ import { serializeMeetingTraceExport } from "./trace.js";
 
 const SESSION_RECORDING_SCHEMA_VERSION = 1;
 const SESSION_RECORDING_INTEGRITY_SCHEMA_VERSION = 1;
-const SESSION_TRACE_SUMMARY_SCHEMA_VERSION = 34;
+const SESSION_TRACE_SUMMARY_SCHEMA_VERSION = 35;
 const SESSION_TRACE_INDEX_SCHEMA_VERSION = 1;
 const MAX_RECORDED_WRITE_FAILURES = 20;
 
@@ -321,6 +321,9 @@ export interface SessionCompactTraceSummary {
   logicalQuestionLeaseAuthorizationReason?: string;
   logicalQuestionLeaseAuthorizationStage?: string;
   forceAdviseTargetStatus?: string;
+  forceAdviseAutomaticExecutionState?: string;
+  forceAdviseManualExecutionState?: string;
+  forceAdviseVisibleCommitRevision?: number;
   forceAdviseEligible?: boolean;
   forceAdviseRetryable?: boolean;
   forceAdviseEligibilityReason?: string;
@@ -328,6 +331,7 @@ export interface SessionCompactTraceSummary {
   forceAdviseAdvisorOutcome?: string;
   forceAdviseOwnershipAuthorized?: boolean;
   forceAdviseOwnershipReason?: string;
+  forceAdviseRecoveredPendingCandidate?: boolean;
   manualCorrectionOwnership?: string;
   advisorPromptIncludedLogicalQuestion?: boolean;
   advisorPromptLogicalQuestionSourceCount?: number;
@@ -587,6 +591,8 @@ export interface SessionCompactTraceSummary {
     skipReason?: string;
     promptVersion?: string;
     schemaVersion?: number;
+    outputContractVersion?: number;
+    parsedOutputContractVersion?: number;
     requestHash?: string;
     operationId?: string;
     unitId?: string;
@@ -599,6 +605,7 @@ export interface SessionCompactTraceSummary {
     providerDisposition?: string;
     parseDisposition?: string;
     parseErrorKind?: string;
+    parseError?: string;
     outputEnvelope?: string;
     staleReason?: string;
     leaseAuthorized?: boolean;
@@ -641,6 +648,8 @@ export interface SessionCompactTraceSummary {
     skipReason?: string;
     promptVersion?: string;
     schemaVersion?: number;
+    outputContractVersion?: number;
+    parsedOutputContractVersion?: number;
     requestHash?: string;
     operationId?: string;
     unitId?: string;
@@ -653,6 +662,7 @@ export interface SessionCompactTraceSummary {
     providerDisposition?: string;
     parseDisposition?: string;
     parseErrorKind?: string;
+    parseError?: string;
     outputEnvelope?: string;
     staleReason?: string;
     leaseAuthorized?: boolean;
@@ -749,6 +759,7 @@ export interface SessionCompactTraceSummary {
     confidence?: number;
     revision?: number;
     candidateCount?: number;
+    explicitAliases?: string[];
   };
   projectTrajectory?: {
     joinKey: string;
@@ -759,7 +770,11 @@ export interface SessionCompactTraceSummary {
     projectBindingRevision?: number;
     phase?: string;
     factAnchorState?: string;
+    factRequirementSource?: string;
     unsupportedClaimRisk?: string;
+    factOutputCommitSource?: string;
+    sanitizedClaimCount?: number;
+    preservedClaimCount?: number;
     claimSupportAllowCount: number;
     claimSupportRejectCount: number;
     claimSupportClarificationCount: number;
@@ -769,6 +784,19 @@ export interface SessionCompactTraceSummary {
     returnParentId?: string;
     returnPhase?: string;
     returnProjectBindingRevision?: number;
+  };
+  clarifyingInteraction?: {
+    requestId?: string;
+    questionKey?: string;
+    optionSource?: string;
+    optionCount?: number;
+    booleanFallbackUsed?: boolean;
+    misleadingBooleanFallbackPrevented?: boolean;
+    selectedLabel?: string;
+    state?: string;
+    terminalReason?: string;
+    startedAt?: number;
+    completedAt?: number;
   };
   sttValidation?: {
     disposition: string;
@@ -1046,6 +1074,10 @@ interface SessionAnswerStabilityAggregate {
   deliveryLockCount: number;
   pendingCommitCount: number;
   pendingDropCount: number;
+  pendingWithoutVisibleAnswerCount: number;
+  deliveryLockBlockedFirstVisibleCommitCount: number;
+  forceAdviseRecoveredPendingCandidateCount: number;
+  forceAdviseEligibleWithoutVisibleCommitCount: number;
   manualOverrideCount: number;
   incorrectVisibleRefreshLabelCount: number;
   midReadInterruptionLabelCount: number;
@@ -4023,6 +4055,18 @@ export function buildCompactTraceSummary({
       metadataSources,
       "forceAdviseTargetStatus"
     ),
+    forceAdviseAutomaticExecutionState: readFirstString(
+      metadataSources,
+      "forceAdviseAutomaticExecutionState"
+    ),
+    forceAdviseManualExecutionState: readFirstString(
+      metadataSources,
+      "forceAdviseManualExecutionState"
+    ),
+    forceAdviseVisibleCommitRevision: readFirstNumberFromMetadata(
+      metadataSources,
+      "forceAdviseVisibleCommitRevision"
+    ),
     forceAdviseEligible: readFirstBoolean(
       metadataSources,
       "forceAdviseEligible"
@@ -4050,6 +4094,10 @@ export function buildCompactTraceSummary({
     forceAdviseOwnershipReason: readFirstString(
       metadataSources,
       "forceAdviseOwnershipReason"
+    ),
+    forceAdviseRecoveredPendingCandidate: readFirstBoolean(
+      metadataSources,
+      "forceAdviseRecoveredPendingCandidate"
     ),
     manualCorrectionOwnership: readFirstString(
       metadataSources,
@@ -4794,11 +4842,58 @@ export function buildCompactTraceSummary({
         metadataSources,
         "projectBindingCandidateCount"
       ),
+      explicitAliases: readFirstStringList(
+        metadataSources,
+        "projectBindingExplicitAliases"
+      ),
     },
     projectTrajectory: buildProjectTrajectoryTraceSummary(
       trace,
       metadataSources
     ),
+    clarifyingInteraction: {
+      requestId: readFirstString(metadataSources, "clarifyingRequestId"),
+      questionKey: readFirstString(
+        metadataSources,
+        "clarifyingQuestionKey"
+      ),
+      optionSource: readFirstString(
+        metadataSources,
+        "clarifyingOptionSource"
+      ),
+      optionCount: readFirstNumberFromMetadata(
+        metadataSources,
+        "clarifyingOptionCount"
+      ),
+      booleanFallbackUsed: readFirstBoolean(
+        metadataSources,
+        "clarifyingBooleanFallbackUsed"
+      ),
+      misleadingBooleanFallbackPrevented: readFirstBoolean(
+        metadataSources,
+        "clarifyingMisleadingBooleanFallbackPrevented"
+      ),
+      selectedLabel: readFirstString(
+        metadataSources,
+        "clarifyingSelectedLabel"
+      ),
+      state: readFirstString(
+        metadataSources,
+        "clarifyingSelectionState"
+      ),
+      terminalReason: readFirstString(
+        metadataSources,
+        "clarifyingSelectionTerminalReason"
+      ),
+      startedAt: readFirstNumberFromMetadata(
+        metadataSources,
+        "clarifyingSelectionStartedAt"
+      ),
+      completedAt: readFirstNumberFromMetadata(
+        metadataSources,
+        "clarifyingSelectionCompletedAt"
+      ),
+    },
     sttValidation: buildSttValidationTraceSummary(metadataSources),
     audioSegment: buildAudioSegmentDispositionTraceSummary(metadataSources),
     nativeAudioBoundary:
@@ -5258,6 +5353,14 @@ function buildInterviewerIntentLlmTraceSummary(
       metadataSources,
       "interviewerIntentLlmSchemaVersion"
     ),
+    outputContractVersion: readFirstNumberFromMetadata(
+      metadataSources,
+      "interviewerIntentLlmOutputContractVersion"
+    ),
+    parsedOutputContractVersion: readFirstNumberFromMetadata(
+      metadataSources,
+      "interviewerIntentLlmParsedOutputContractVersion"
+    ),
     requestHash: readFirstString(
       metadataSources,
       "interviewerIntentLlmRequestHash"
@@ -5293,6 +5396,10 @@ function buildInterviewerIntentLlmTraceSummary(
     parseErrorKind: readFirstString(
       metadataSources,
       "interviewerIntentLlmParseErrorKind"
+    ),
+    parseError: readFirstString(
+      metadataSources,
+      "interviewerIntentLlmParseError"
     ),
     outputEnvelope: readFirstString(
       metadataSources,
@@ -5751,6 +5858,14 @@ function buildTaxonomyAdjudicationTraceSummary(
       metadataSources,
       "taxonomyAdjudicationSchemaVersion"
     ),
+    outputContractVersion: readFirstNumberFromMetadata(
+      metadataSources,
+      "taxonomyAdjudicationOutputContractVersion"
+    ),
+    parsedOutputContractVersion: readFirstNumberFromMetadata(
+      metadataSources,
+      "taxonomyAdjudicationParsedOutputContractVersion"
+    ),
     requestHash: readFirstString(
       metadataSources,
       "taxonomyAdjudicationRequestHash"
@@ -5792,6 +5907,10 @@ function buildTaxonomyAdjudicationTraceSummary(
     parseErrorKind: readFirstString(
       metadataSources,
       "taxonomyAdjudicationParseErrorKind"
+    ),
+    parseError: readFirstString(
+      metadataSources,
+      "taxonomyAdjudicationParseError"
     ),
     outputEnvelope: readFirstString(
       metadataSources,
@@ -6034,6 +6153,29 @@ function aggregateAnswerStability(
       (summary) =>
         summary.pendingAnswerDisposition === "stale" ||
         summary.pendingAnswerDisposition === "dropped"
+    ).length,
+    pendingWithoutVisibleAnswerCount: summaries.filter(
+      (summary) =>
+        summary.forceAdviseAutomaticExecutionState ===
+          "delivery-pending" &&
+        summary.advisorOutputCommittedToUi !== true
+    ).length,
+    deliveryLockBlockedFirstVisibleCommitCount: summaries.filter(
+      (summary) =>
+        summary.stableAnswerCommitDisposition === "pending" &&
+        (summary.visibleAnswerRevisionBefore ?? 0) === 0
+    ).length,
+    forceAdviseRecoveredPendingCandidateCount: summaries.filter(
+      (summary) =>
+        summary.forceAdviseRecoveredPendingCandidate === true
+    ).length,
+    forceAdviseEligibleWithoutVisibleCommitCount: summaries.filter(
+      (summary) =>
+        summary.forceAdviseEligible === true &&
+        summary.forceAdviseAutomaticExecutionState !==
+          "visible-committed" &&
+        summary.forceAdviseManualExecutionState !==
+          "visible-committed"
     ).length,
     manualOverrideCount: summaries.filter(
       (summary) =>
@@ -6771,9 +6913,25 @@ function buildProjectTrajectoryTraceSummary(
     projectBindingRevision,
     phase,
     factAnchorState,
+    factRequirementSource: readFirstString(
+      metadataSources,
+      "factAnchorRequirementSource"
+    ),
     unsupportedClaimRisk: readFirstString(
       metadataSources,
       "unsupportedClaimRisk"
+    ),
+    factOutputCommitSource: readFirstString(
+      metadataSources,
+      "factAnchorOutputCommitSource"
+    ),
+    sanitizedClaimCount: readFirstNumberFromMetadata(
+      metadataSources,
+      "factAnchorSanitizedClaimCount"
+    ),
+    preservedClaimCount: readFirstNumberFromMetadata(
+      metadataSources,
+      "factAnchorPreservedClaimCount"
     ),
     claimSupportAllowCount: claimSupport.allow,
     claimSupportRejectCount: claimSupport.reject,

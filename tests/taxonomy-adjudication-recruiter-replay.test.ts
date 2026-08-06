@@ -112,8 +112,13 @@ test("replays recruiter openings, dense terminal asks, logistics, and split LQU 
     denseRequest
   );
 
-  assert.deepEqual(densePacket.question.sourceTurns, [
-    { turnId: denseTurn.id, text: denseText },
+  assert.deepEqual(densePacket.sources, [
+    {
+      i: 0,
+      k: "q",
+      t: "You can ask the team what challenges they face and what the scope looks like.",
+    },
+    { i: 1, k: "q", t: denseAsk },
   ]);
   assert.equal("evidence" in densePacket, false);
   assert.equal(denseResult.ok, true);

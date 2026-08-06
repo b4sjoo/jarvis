@@ -68,6 +68,7 @@ export interface PendingAnswerRevision {
   disposition: PendingAnswerDisposition;
   reason: string;
   resetSections: boolean;
+  latestUsefulAnswerMutationAuthorized: boolean;
   runtimeTypeRepairOutputAuthority?: RuntimeTypeRepairOutputAuthority;
 }
 

@@ -170,7 +170,11 @@ export function buildFactAnchorDecision({
       questionType,
       mode: personalEvidenceGuardrailMode,
     });
-  const requiredFor = getFactAnchorRequirement(questionType, personalEvidence);
+  const requirementResolution = resolveFactAnchorRequirement(
+    questionType,
+    personalEvidence
+  );
+  const requiredFor = requirementResolution.requiredFor;
   if (requiredFor === "none") {
     return {
       state: "not-required",
@@ -181,6 +185,8 @@ export function buildFactAnchorDecision({
       personalEvidence,
       selectedPersonalEvidenceSources: [],
       claimSupportDecisions: [],
+      requirementSource: requirementResolution.source,
+      requirementReason: requirementResolution.reason,
       unsupportedClaimRisk:
         personalEvidence.mode === "shadow" &&
         personalEvidence.confidenceTier === "high" &&
@@ -191,12 +197,16 @@ export function buildFactAnchorDecision({
   }
 
   if (requiredFor === "personal-logistics") {
-    return buildPersonalStatusFactDecision({
-      questionText,
-      personalEvidence,
-      memoryContext,
-      confirmedMeFacts,
-    });
+    return {
+      ...buildPersonalStatusFactDecision({
+        questionText,
+        personalEvidence,
+        memoryContext,
+        confirmedMeFacts,
+      }),
+      requirementSource: requirementResolution.source,
+      requirementReason: requirementResolution.reason,
+    };
   }
 
   if (
@@ -221,6 +231,8 @@ export function buildFactAnchorDecision({
       selectedPersonalEvidenceSources: [],
       claimPredicateFamily: "project-overview",
       claimSupportDecisions: [],
+      requirementSource: requirementResolution.source,
+      requirementReason: requirementResolution.reason,
       unsupportedClaimRisk: "high",
     };
   }
@@ -264,6 +276,8 @@ export function buildFactAnchorDecision({
       selectedPersonalEvidenceSources: [],
       claimPredicateFamily: predicateFamily,
       claimSupportDecisions,
+      requirementSource: requirementResolution.source,
+      requirementReason: requirementResolution.reason,
       unsupportedClaimRisk: "guarded",
     };
   }
@@ -282,6 +296,8 @@ export function buildFactAnchorDecision({
       selectedPersonalEvidenceSources: [],
       claimPredicateFamily: predicateFamily,
       claimSupportDecisions,
+      requirementSource: requirementResolution.source,
+      requirementReason: requirementResolution.reason,
       unsupportedClaimRisk: "high",
     };
   }
@@ -300,6 +316,8 @@ export function buildFactAnchorDecision({
     selectedPersonalEvidenceSources: [],
     claimPredicateFamily: predicateFamily,
     claimSupportDecisions,
+    requirementSource: requirementResolution.source,
+    requirementReason: requirementResolution.reason,
     unsupportedClaimRisk: "high",
   };
 }
@@ -313,6 +331,12 @@ export function formatFactAnchorDecisionForPrompt(
     `State: ${decision.state}`,
     `Required for: ${decision.requiredFor}`,
     `Action: ${decision.action}`,
+    decision.requirementSource
+      ? `Requirement source: ${decision.requirementSource}`
+      : undefined,
+    decision.requirementReason
+      ? `Requirement reason: ${decision.requirementReason}`
+      : undefined,
     `Personal evidence requirement: ${decision.personalEvidence.requirement}`,
     `Personal evidence confidence: ${decision.personalEvidence.confidenceTier} (${decision.personalEvidence.confidence.toFixed(2)})`,
     `Personal evidence mode: ${decision.personalEvidence.mode}`,
@@ -372,6 +396,8 @@ export function formatFactAnchorDecisionForTrace(
     factAnchorState: decision.state,
     factAnchorRequiredFor: decision.requiredFor,
     factAnchorAction: decision.action,
+    factAnchorRequirementSource: decision.requirementSource,
+    factAnchorRequirementReason: decision.requirementReason,
     factAnchorSupportedIds: decision.supportedAnchorIds,
     factAnchorSupportedTitles: decision.supportedAnchorTitles,
     factAnchorSelectedId: decision.selectedAnchorId,
@@ -393,21 +419,61 @@ export function formatFactAnchorDecisionForTrace(
   };
 }
 
-function getFactAnchorRequirement(
+function resolveFactAnchorRequirement(
   questionType: MemoryQuestionType | undefined,
   personalEvidence: FactAnchorDecision["personalEvidence"]
-): FactAnchorRequiredFor {
+): {
+  requiredFor: FactAnchorRequiredFor;
+  source: NonNullable<FactAnchorDecision["requirementSource"]>;
+  reason: string;
+} {
   if (personalEvidence.enforced) {
     if (personalEvidence.requirement === "personal-logistics") {
-      return "personal-logistics";
+      return {
+        requiredFor: "personal-logistics",
+        source: "current-question-personal-evidence",
+        reason: "current-question-requires-personal-logistics-evidence",
+      };
     }
-    return personalEvidence.requirement === "autobiographical-behavioral"
-      ? "behavioral"
-      : "project-deep-dive";
+    return {
+      requiredFor:
+        personalEvidence.requirement === "autobiographical-behavioral"
+          ? "behavioral"
+          : "project-deep-dive",
+      source: "current-question-personal-evidence",
+      reason: "current-question-requires-autobiographical-evidence",
+    };
   }
-  if (questionType === "behavioral") return "behavioral";
-  if (questionType === "project-deep-dive") return "project-deep-dive";
-  return "none";
+  if (
+    personalEvidence.requirement === "not-required" &&
+    personalEvidence.confidenceTier === "high" &&
+    personalEvidence.counterSignals.length > 0
+  ) {
+    return {
+      requiredFor: "none",
+      source: "current-question-personal-evidence",
+      reason: "explicit-hypothetical-current-question-overrides-parent-type",
+    };
+  }
+  if (questionType === "behavioral") {
+    return {
+      requiredFor: "behavioral",
+      source: "settled-question-type",
+      reason: "settled-behavioral-question-type",
+    };
+  }
+  if (questionType === "project-deep-dive") {
+    return {
+      requiredFor: "project-deep-dive",
+      source: "settled-question-type",
+      reason: "settled-project-deep-dive-question-type",
+    };
+  }
+  return {
+    requiredFor: "none",
+    source: "none",
+    reason: "current-question-does-not-require-personal-fact-evidence",
+  };
 }
 
 function buildPersonalStatusFactDecision({

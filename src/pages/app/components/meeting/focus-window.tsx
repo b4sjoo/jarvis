@@ -431,7 +431,7 @@ function MeetingFocusControlsWindow({
                 variant="outline"
                 className="ml-auto h-7 shrink-0 gap-1 px-2 text-[10px]"
                 onClick={() => sendFocusAction({ type: "force-advise" })}
-                disabled={!snapshot.forceAdviseAvailable || snapshot.isBusy}
+                disabled={!snapshot.forceAdviseAvailable}
                 title={
                   snapshot.forceAdviseAvailable
                     ? "Force one advisor response for this transcript"
@@ -439,7 +439,7 @@ function MeetingFocusControlsWindow({
                       ? "Advisor repair is running"
                       : snapshot.forceAdviseCompleted
                         ? "This transcript has already been advised"
-                        : "No suppressed interviewer turn is available"
+                        : "No recoverable interviewer turn is available"
                 }
               >
                 {snapshot.forceAdvisePending ? (
@@ -559,11 +559,13 @@ function FocusClarifyingActionButtons({
 }) {
   const options = snapshot.sections.clarifyingOptions;
   const selectedAnswerLabel = snapshot.selectedClarifyingAnswerLabel;
+  const selectionPending = snapshot.clarifyingSelectionState === "pending";
 
   return (
     <div className="mt-3 space-y-2">
       <div className="grid grid-cols-2 gap-1.5">
-        {snapshot.isTaskSwitchClarifyingQuestion || options.length < 2 ? (
+        {snapshot.isTaskSwitchClarifyingQuestion ||
+        snapshot.showClarifyingBooleanFallback ? (
           <>
             <FocusClarifyingButton
               icon={<CheckIcon className="h-3 w-3 shrink-0" />}
@@ -571,7 +573,7 @@ function FocusClarifyingActionButtons({
                 snapshot.isTaskSwitchClarifyingQuestion ? "New task" : "Yes"
               }
               selected={selectedAnswerLabel === "New task" || selectedAnswerLabel === "Yes"}
-              disabled={snapshot.isBusy}
+              disabled={snapshot.isBusy || selectionPending}
               onClick={() => {
                 if (snapshot.isTaskSwitchClarifyingQuestion) {
                   sendFocusAction({ type: "new-task" });
@@ -584,7 +586,7 @@ function FocusClarifyingActionButtons({
               icon={<XIcon className="h-3 w-3 shrink-0" />}
               label={snapshot.isTaskSwitchClarifyingQuestion ? "Same task" : "No"}
               selected={selectedAnswerLabel === "Same task" || selectedAnswerLabel === "No"}
-              disabled={snapshot.isBusy}
+              disabled={snapshot.isBusy || selectionPending}
               onClick={() => {
                 if (snapshot.isTaskSwitchClarifyingQuestion) {
                   sendFocusAction({ type: "same-task" });
@@ -594,14 +596,14 @@ function FocusClarifyingActionButtons({
               }}
             />
           </>
-        ) : (
+        ) : options.length ? (
           options.slice(0, 4).map((option) => (
             <FocusClarifyingButton
               key={option.id}
               label={option.label}
               title={option.label}
               selected={selectedAnswerLabel === option.label}
-              disabled={snapshot.isBusy}
+              disabled={snapshot.isBusy || selectionPending}
               onClick={() => {
                 sendClarifyingAnswer("option", {
                   label: option.label,
@@ -610,26 +612,29 @@ function FocusClarifyingActionButtons({
               }}
             />
           ))
-        )}
+        ) : null}
         <FocusClarifyingButton
           label="Not sure"
           selected={selectedAnswerLabel === "Not sure"}
-          disabled={snapshot.isBusy}
+          disabled={snapshot.isBusy || selectionPending}
           onClick={() => sendClarifyingAnswer("not-sure")}
         />
         <FocusClarifyingButton
           label="Dismiss"
-          disabled={snapshot.isBusy}
+          disabled={snapshot.isBusy || selectionPending}
           onClick={() => sendFocusAction({ type: "dismiss-clarifying-question" })}
         />
       </div>
       {selectedAnswerLabel ? (
         <div className="flex min-w-0 items-center gap-1.5 rounded-sm bg-primary/10 px-2 py-1 text-[10px] text-primary">
-          {snapshot.isBusy ? (
+          {selectionPending ? (
             <Loader2Icon className="h-3 w-3 animate-spin" />
+          ) : snapshot.clarifyingSelectionState === "succeeded" ? (
+            <CheckIcon className="h-3 w-3" />
           ) : null}
           <span className="min-w-0 truncate">
-            Selected: {selectedAnswerLabel}. Jarvis is updating.
+            {snapshot.clarifyingSelectionMessage ??
+              `Selected: ${selectedAnswerLabel}.`}
           </span>
         </div>
       ) : null}

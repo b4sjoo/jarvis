@@ -165,6 +165,22 @@ test("keeps meaningful questions separate within one parent trajectory", () => {
   assert.equal(separated[1].memoryEntryLabels[0].label, "relevant");
 });
 
+test("preserves clarifying-option correctness labels", () => {
+  const evaluations = upsertQuestionHumanEvaluation(
+    [],
+    {
+      sessionId: "session_clarifying",
+      traceId: "trace_clarifying",
+      traceKind: "voice",
+      questionId: "question_clarifying",
+    },
+    { clarifyingOptionsVerdict: "misleading" }
+  );
+
+  assert.equal(evaluations.length, 1);
+  assert.equal(evaluations[0].clarifyingOptionsVerdict, "misleading");
+});
+
 test("preserves a legacy parent-scoped record when its trace is relabeled", () => {
   const existing = upsertQuestionHumanEvaluation(
     [],

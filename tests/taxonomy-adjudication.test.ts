@@ -217,13 +217,112 @@ test("sends the bounded source turn instead of a local primary-ask candidate", (
   const promptPacket = JSON.parse(
     buildTaxonomyAdjudicationPrompts(request).userMessage
   );
-  assert.equal("text" in promptPacket.question, false);
-  assert.deepEqual(promptPacket.question.sourceTurns, [
-    { turnId: "turn-a", text },
+  assert.equal("question" in promptPacket, false);
+  assert.deepEqual(promptPacket.sources, [
+    {
+      i: 0,
+      k: "q",
+      t: "You can ask team members what challenges they face.",
+    },
+    {
+      i: 1,
+      k: "q",
+      t: "How does this role sound relative to what you are looking for?",
+    },
   ]);
   assert.doesNotMatch(
     buildTaxonomyAdjudicationPrompts(request).userMessage,
     /test-local-candidate|answer-primary-ask/
+  );
+});
+
+test("parses compact v3 source references without requiring model text echoes", () => {
+  const sourceText = "Design a RAG system for a trip planning app.";
+  const request = buildTaxonomyAdjudicationRequest({
+    logicalQuestionUnit: unit(sourceText),
+    activeParent: {
+      questionType: "general-system-design",
+      topic: "Design a trip planning app",
+    },
+  });
+  const prompts = buildTaxonomyAdjudicationPrompts(request);
+  const packet = JSON.parse(prompts.userMessage);
+  assert.deepEqual(packet.sources, [
+    { i: 0, k: "q", t: sourceText },
+    { i: 1, k: "p", t: "Design a trip planning app" },
+  ]);
+  assert.doesNotMatch(prompts.systemPrompt, /normalizedQuestion is/i);
+
+  const parsed = parseTaxonomyAdjudicationOutput(
+    JSON.stringify({
+      v: 3,
+      sa: "directive",
+      qt: "ai-ml-system-design",
+      rel: "linked-parent-extension",
+      em: "hypothetical-design",
+      act: "answer",
+      pa: [0],
+      ev: [0, 1],
+      st: true,
+      cf: 0.94,
+      rc: "parent-link",
+    }),
+    request
+  );
+
+  assert.equal(parsed.ok, true);
+  if (parsed.ok) {
+    assert.equal(parsed.value.outputContractVersion, 3);
+    assert.equal(parsed.value.normalizedQuestion, sourceText);
+    assert.equal(parsed.value.normalizedQuestionSource, "source-catalog");
+    assert.deepEqual(parsed.value.primaryAskSpans, [
+      { turnId: "turn-a", text: sourceText },
+    ]);
+    assert.deepEqual(parsed.value.evidenceSpans, [
+      sourceText,
+      "Design a trip planning app",
+    ]);
+  }
+});
+
+test("rejects invalid compact references and distinguishes truncated JSON", () => {
+  const request = buildTaxonomyAdjudicationRequest({
+    logicalQuestionUnit: unit("Design a URL shortener."),
+  });
+  const compact = {
+    v: 3,
+    sa: "directive",
+    qt: "general-system-design",
+    rel: "new-parent",
+    em: "hypothetical-design",
+    act: "answer",
+    pa: [0],
+    ev: [0],
+    st: true,
+    cf: 0.96,
+    rc: "clear",
+  };
+
+  assert.deepEqual(
+    parseTaxonomyAdjudicationOutput(
+      JSON.stringify({ ...compact, pa: [99] }),
+      request
+    ),
+    {
+      ok: false,
+      reason: "invalid-primary-ask-reference",
+      errorKind: "evidence",
+      evidenceSpansValid: false,
+    }
+  );
+  assert.deepEqual(
+    parseTaxonomyAdjudicationOutput('{"v":3,"sa":"directive"', request),
+    {
+      ok: false,
+      reason: "truncated-json",
+      errorKind: "parse",
+      evidenceSpansValid: false,
+    }
   );
 });
 
@@ -510,7 +609,7 @@ test("rejects invalid canonical enums and incomplete answer schemas", () => {
   const malformed = parseTaxonomyAdjudicationOutput("{not-json", request);
   assert.deepEqual(malformed, {
     ok: false,
-    reason: "malformed-json",
+    reason: "truncated-json",
     errorKind: "parse",
     evidenceSpansValid: false,
   });

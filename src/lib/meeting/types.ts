@@ -496,6 +496,7 @@ export interface ProjectTopicEvidence {
   sourceText: string;
   explicitProjectIds: string[];
   explicitProjectNames: string[];
+  explicitProjectAliases?: string[];
   featureTerms: string[];
   actionTerms: string[];
   resultTerms: string[];
@@ -522,6 +523,7 @@ export interface ProjectBindingCandidate {
   projectName: string;
   primaryEntryId: string;
   evidenceEntryIds: string[];
+  identityAliases?: string[];
   score: number;
 }
 
@@ -584,6 +586,11 @@ export interface FactAnchorDecision {
   unsupportedClaimRisk: "none" | "guarded" | "high" | "shadow-observed";
   claimPredicateFamily?: ClaimPredicateFamily;
   claimSupportDecisions: ClaimSupportDecision[];
+  requirementSource?:
+    | "current-question-personal-evidence"
+    | "settled-question-type"
+    | "none";
+  requirementReason?: string;
 }
 
 export interface ActiveScreenTask {
@@ -1072,6 +1079,31 @@ export interface ClarifyingQuestionFeedback {
   answer: ClarifyingQuestionAnswer;
   answerLabel?: string;
   answerValue?: string;
+  requestId?: string;
+  questionKey?: string;
+  optionSource?: import("./clarifying-options.js").ClarifyingOptionSource;
+  optionCount?: number;
+  booleanFallbackUsed?: boolean;
+}
+
+export type ClarifyingSelectionLifecycleState =
+  | "pending"
+  | "succeeded"
+  | "failed"
+  | "stale";
+
+export interface ClarifyingQuestionInteractionContext {
+  questionKey: string;
+  optionSource: import("./clarifying-options.js").ClarifyingOptionSource;
+  optionCount: number;
+  booleanFallbackUsed: boolean;
+}
+
+export interface ClarifyingQuestionInteractionOutcome {
+  requestId: string;
+  traceId?: string;
+  state: ClarifyingSelectionLifecycleState;
+  reason: string;
 }
 
 export interface AdvisorSuggestion {
@@ -1664,9 +1696,26 @@ export interface AdvisorIntentHumanEvaluation {
 export type ForceAdviseTargetStatus =
   | "ready"
   | "advising"
+  | "delivery-pending"
   | "already-advised"
   | "repairing"
   | "repaired"
+  | "failed"
+  | "stale";
+
+export type ForceAdviseAutomaticExecutionState =
+  | "not-started"
+  | "running"
+  | "model-completed"
+  | "delivery-pending"
+  | "visible-committed"
+  | "failed"
+  | "stale";
+
+export type ForceAdviseManualExecutionState =
+  | "idle"
+  | "running"
+  | "visible-committed"
   | "failed"
   | "stale";
 
@@ -1680,6 +1729,9 @@ export interface ForceAdviseTargetPresentation {
   logicalQuestionUnitRevision: number;
   sourceTurnIds: string[];
   status: ForceAdviseTargetStatus;
+  automaticExecutionState: ForceAdviseAutomaticExecutionState;
+  manualExecutionState: ForceAdviseManualExecutionState;
+  visibleCommitRevision?: number;
   repairTraceId?: string;
   updatedAt: number;
 }
@@ -1808,6 +1860,7 @@ export interface QuestionHumanEvaluation {
   expectedContextTurnIds?: string[];
   correctedRelation?: string;
   primaryAskCorrect?: boolean;
+  clarifyingOptionsVerdict?: "correct" | "misleading" | "missing";
   playbookId?: string;
   detectedPlaybookPhase?: string;
   correctedPlaybookPhase?: string;

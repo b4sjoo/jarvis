@@ -184,6 +184,53 @@ test("current interviewer project evidence outranks a stale parent binding", () 
   assert.equal(decision.bindingRevision, 3);
 });
 
+test("a named feature alias binds its canonical evidence project", () => {
+  const decision = resolveProjectBinding({
+    questionType: "project-deep-dive",
+    relation: "new-parent",
+    currentSourceText:
+      "You mentioned the custom model lifecycle work and distributed task routing. What did you own?",
+    sourceTurnIds: ["turn_feature_alias"],
+    memoryContext: makeMemoryResult([
+      makeRetrieved(
+        makeEntry({
+          id: "mem_mlcommons_custom_model_lifecycle",
+          type: "project_context",
+          title: "Custom model lifecycle APIs in ML Commons",
+          projectId: "ml_commons_platform_small_features",
+          projectName: "ML Commons Platform Smaller Features",
+          tags: ["backend-system"],
+          keywords: ["custom-model-lifecycle"],
+        })
+      ),
+      makeRetrieved(
+        makeEntry({
+          id: "mem_throttling",
+          type: "project_context",
+          title: "Distributed rate limiting for LLM access in ML Commons",
+          projectId: "throttling",
+          projectName: "Throttling",
+        })
+      ),
+    ]),
+  });
+
+  assert.equal(decision.action, "bind");
+  assert.equal(
+    decision.binding?.projectId,
+    "ml_commons_platform_small_features"
+  );
+  assert.equal(decision.sourceAuthority, "interviewer-explicit");
+  assert.deepEqual(decision.topicEvidence?.explicitProjectAliases, [
+    "custom model lifecycle",
+  ]);
+  assert.deepEqual(
+    formatProjectBindingDecisionForTrace(decision)
+      .projectBindingExplicitAliases,
+    ["custom model lifecycle"]
+  );
+});
+
 test("structured user selection remains authoritative without raw microphone context", () => {
   const decision = resolveProjectBinding({
     existingBinding: makeBinding(),

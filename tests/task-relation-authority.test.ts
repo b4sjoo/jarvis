@@ -90,6 +90,32 @@ test("an explicit same-type task switch authorizes a new parent", () => {
   assert.equal(decision?.relationEvidenceAuthorized, true);
 });
 
+test("an explicit request for another owned project starts a new project parent", () => {
+  const decision = decideCrossTypeTaskRelationAuthority({
+    activeQuestionType: "project-deep-dive",
+    candidateQuestionType: "project-deep-dive",
+    currentText:
+      "Can you tell me about another backend system or service you've owned where consistency was critical?",
+  });
+
+  assert.equal(decision?.relation, "new-parent");
+  assert.equal(decision?.disposition, "authorized");
+  assert.equal(decision?.relationEvidenceAuthorized, true);
+  assert.equal(decision?.reason, "explicit-project-switch");
+  assert.match(decision?.evidenceSpans[0] ?? "", /another backend system/i);
+});
+
+test("another component inside the same design does not create a project parent", () => {
+  const decision = decideCrossTypeTaskRelationAuthority({
+    activeQuestionType: "project-deep-dive",
+    candidateQuestionType: "project-deep-dive",
+    currentText:
+      "How would another cache service fit inside this same project?",
+  });
+
+  assert.equal(decision, undefined);
+});
+
 test("an explicit switch to a non-parent type uses response-only scope", () => {
   const decision = decideCrossTypeTaskRelationAuthority({
     activeQuestionType: "general-system-design",

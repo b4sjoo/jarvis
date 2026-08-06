@@ -366,6 +366,9 @@ export function upsertQuestionHumanEvaluation(
       normalizeInterviewTaskRelation(existing?.correctedRelation),
     primaryAskCorrect:
       patch.primaryAskCorrect ?? existing?.primaryAskCorrect,
+    clarifyingOptionsVerdict:
+      normalizeClarifyingOptionsVerdict(patch.clarifyingOptionsVerdict) ??
+      existing?.clarifyingOptionsVerdict,
     playbookId:
       patch.playbookId ?? existing?.playbookId ?? identity.playbookId,
     detectedPlaybookPhase:
@@ -793,6 +796,9 @@ function normalizeQuestionHumanEvaluation(
       typeof candidate.primaryAskCorrect === "boolean"
         ? candidate.primaryAskCorrect
         : undefined,
+    clarifyingOptionsVerdict: normalizeClarifyingOptionsVerdict(
+      candidate.clarifyingOptionsVerdict
+    ),
     playbookId: readOptionalString(candidate.playbookId),
     detectedPlaybookPhase: readOptionalString(candidate.detectedPlaybookPhase),
     correctedPlaybookPhase: readOptionalString(candidate.correctedPlaybookPhase),
@@ -862,6 +868,14 @@ function normalizeQuestionHumanEvaluation(
     updatedAt:
       typeof candidate.updatedAt === "number" ? candidate.updatedAt : Date.now(),
   };
+}
+
+function normalizeClarifyingOptionsVerdict(value: unknown) {
+  return value === "correct" ||
+    value === "misleading" ||
+    value === "missing"
+    ? value
+    : undefined;
 }
 
 function mergeTaxonomyAdjudicationEvaluation(

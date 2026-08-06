@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   applyInterviewChildProbeTransition,
+  commitVisibleUsefulAnswerToParent,
   decideInterviewTaskContinuityBranch,
 } from "../src/lib/meeting/interview-task-continuity.js";
 import type {
@@ -120,6 +121,46 @@ test("applies a child probe without replacing parent trajectory state", () => {
   assert.equal(next.whiteboardArtifact, parent.whiteboardArtifact);
   assert.equal(next.child, child);
   assert.equal(next.revisions, parent.revisions + 1);
+});
+
+test("updates durable useful-answer history only from a visible commit", () => {
+  const parent = {
+    ...makeParent(),
+    latestUsefulAnswer: "Previous visible answer",
+  };
+  const result = commitVisibleUsefulAnswerToParent({
+    parent,
+    taskId: parent.id,
+    summary: "New visible answer",
+    committedAt: 3_000,
+  });
+
+  assert.equal(result.committed, true);
+  assert.equal(result.parent?.latestUsefulAnswer, "New visible answer");
+  assert.equal(result.parent?.previousUsefulAnswer, "Previous visible answer");
+  assert.equal(result.parent?.updatedAt, 3_000);
+});
+
+test("does not update useful-answer history for the wrong task or empty output", () => {
+  const parent = makeParent();
+  assert.equal(
+    commitVisibleUsefulAnswerToParent({
+      parent,
+      taskId: "other-parent",
+      summary: "Hidden candidate",
+      committedAt: 3_000,
+    }).committed,
+    false
+  );
+  assert.equal(
+    commitVisibleUsefulAnswerToParent({
+      parent,
+      taskId: parent.id,
+      summary: "  ",
+      committedAt: 3_000,
+    }).committed,
+    false
+  );
 });
 
 function makeParent(): ActiveInterviewParent {

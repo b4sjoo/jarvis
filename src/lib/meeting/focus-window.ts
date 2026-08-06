@@ -1,6 +1,7 @@
 import type {
   ClarifyingQuestionAnswer,
   ClarifyingQuestionOption,
+  ClarifyingSelectionLifecycleState,
   InterviewBriefType,
   ManualQuestionTypeCorrection,
   ManualQuestionTypeCorrectionSource,
@@ -158,7 +159,10 @@ export type MeetingFocusSnapshot = {
   audioControl: NativeAudioPauseResumeControlPresentation;
   showClarifyingQuestion: boolean;
   clarifyingQuestion: string;
+  showClarifyingBooleanFallback: boolean;
   selectedClarifyingAnswerLabel?: string;
+  clarifyingSelectionState?: ClarifyingSelectionLifecycleState;
+  clarifyingSelectionMessage?: string;
   isTaskSwitchClarifyingQuestion: boolean;
   interviewTypes: InterviewBriefType[];
   effectiveQuestionType?: CanonicalQuestionType;
@@ -234,7 +238,10 @@ export const EMPTY_MEETING_FOCUS_SNAPSHOT: MeetingFocusSnapshot = {
   },
   showClarifyingQuestion: false,
   clarifyingQuestion: "",
+  showClarifyingBooleanFallback: false,
   selectedClarifyingAnswerLabel: undefined,
+  clarifyingSelectionState: undefined,
+  clarifyingSelectionMessage: undefined,
   isTaskSwitchClarifyingQuestion: false,
   interviewTypes: [],
   effectiveQuestionType: undefined,

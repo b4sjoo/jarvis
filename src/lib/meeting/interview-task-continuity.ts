@@ -121,3 +121,33 @@ export function applyInterviewChildProbeTransition(input: {
     revisions: input.parent.revisions + 1,
   };
 }
+
+export function commitVisibleUsefulAnswerToParent(input: {
+  parent?: ActiveInterviewParent;
+  taskId: string | null;
+  summary: string;
+  committedAt: number;
+}): {
+  parent?: ActiveInterviewParent;
+  committed: boolean;
+} {
+  const summary = input.summary.trim();
+  if (!input.parent || input.parent.id !== input.taskId || !summary) {
+    return { parent: input.parent, committed: false };
+  }
+
+  const previousUsefulAnswer =
+    input.parent.latestUsefulAnswer &&
+    input.parent.latestUsefulAnswer !== summary
+      ? input.parent.latestUsefulAnswer
+      : input.parent.previousUsefulAnswer;
+  return {
+    parent: {
+      ...input.parent,
+      previousUsefulAnswer,
+      latestUsefulAnswer: summary,
+      updatedAt: input.committedAt,
+    },
+    committed: true,
+  };
+}

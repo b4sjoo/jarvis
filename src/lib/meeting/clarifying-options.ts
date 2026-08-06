@@ -1,6 +1,26 @@
 import type { ClarifyingQuestionOption } from "./types";
 
 const MAX_CLARIFYING_OPTIONS = 4;
+const MAX_PROJECT_CLARIFYING_OPTIONS = 3;
+
+export type ClarifyingOptionSource =
+  | "structured-answer"
+  | "project-binding"
+  | "question-literal"
+  | "boolean-fallback"
+  | "none";
+
+export interface ClarifyingOptionDisplayModel {
+  options: ClarifyingQuestionOption[];
+  source: ClarifyingOptionSource;
+  showBooleanFallback: boolean;
+  misleadingBooleanFallbackPrevented: boolean;
+}
+
+export interface ProjectBindingClarifyingCandidate {
+  projectId?: string;
+  projectName: string;
+}
 
 export function parseClarifyingOptionsText(
   value: string
@@ -31,11 +51,84 @@ export function getDisplayClarifyingOptions({
   question: string;
   options?: ClarifyingQuestionOption[];
 }) {
-  if (options?.length) {
-    return normalizeClarifyingOptions(options);
+  return buildClarifyingOptionDisplayModel({ question, options }).options;
+}
+
+export function buildClarifyingOptionDisplayModel({
+  question,
+  options,
+  projectBindingCandidates,
+  projectBindingNeedsSelection = false,
+}: {
+  question: string;
+  options?: ClarifyingQuestionOption[];
+  projectBindingCandidates?: ProjectBindingClarifyingCandidate[];
+  projectBindingNeedsSelection?: boolean;
+}): ClarifyingOptionDisplayModel {
+  const structuredOptions = normalizeClarifyingOptions(options ?? []);
+  if (structuredOptions.length) {
+    return buildDisplayModel(structuredOptions, "structured-answer");
   }
 
-  return inferClarifyingOptionsFromQuestion(question);
+  if (projectBindingNeedsSelection) {
+    const projectOptions = buildProjectBindingOptions(
+      projectBindingCandidates ?? []
+    );
+    if (projectOptions.length) {
+      return buildDisplayModel(projectOptions, "project-binding");
+    }
+  }
+
+  const literalOptions = inferClarifyingOptionsFromQuestion(question);
+  if (literalOptions.length > 1) {
+    return buildDisplayModel(literalOptions, "question-literal");
+  }
+
+  if (isLikelyBooleanClarifyingQuestion(question)) {
+    return {
+      options: [],
+      source: "boolean-fallback",
+      showBooleanFallback: true,
+      misleadingBooleanFallbackPrevented: false,
+    };
+  }
+
+  return {
+    options: [],
+    source: "none",
+    showBooleanFallback: false,
+    misleadingBooleanFallbackPrevented: Boolean(question.trim()),
+  };
+}
+
+export function readProjectBindingClarifyingCandidates(
+  metadata: Record<string, unknown> | undefined
+): {
+  needsSelection: boolean;
+  candidates: ProjectBindingClarifyingCandidate[];
+} {
+  const needsSelection = metadata?.projectBindingAction === "needs-selection";
+  if (!needsSelection || !Array.isArray(metadata.projectBindingCandidates)) {
+    return { needsSelection, candidates: [] };
+  }
+
+  const candidates = metadata.projectBindingCandidates
+    .map<ProjectBindingClarifyingCandidate | undefined>((value) => {
+      if (!value || typeof value !== "object") return undefined;
+      const candidate = value as Record<string, unknown>;
+      if (typeof candidate.projectName !== "string") return undefined;
+      const projectName = candidate.projectName.trim();
+      if (!projectName) return undefined;
+      return typeof candidate.projectId === "string"
+        ? { projectId: candidate.projectId, projectName }
+        : { projectName };
+    })
+    .filter(
+      (candidate): candidate is ProjectBindingClarifyingCandidate =>
+        Boolean(candidate)
+    );
+
+  return { needsSelection, candidates };
 }
 
 export function normalizeClarifyingOptions(options: ClarifyingQuestionOption[]) {
@@ -46,14 +139,63 @@ export function normalizeClarifyingOptions(options: ClarifyingQuestionOption[]) 
 
 export function isLikelyBooleanClarifyingQuestion(question: string) {
   const normalized = question.trim().toLowerCase();
-  if (!normalized) return true;
+  if (!normalized) return false;
   if (/\b(or|versus|vs\.?)\b/.test(normalized)) return false;
-  if (/(which|what|where|when|who|how many|how much)\b/.test(normalized)) {
+  if (
+    /\b(which|what|where|when|who|why|how|choose|pick|select|option)\b/.test(
+      normalized
+    )
+  ) {
     return false;
   }
-  return /^(should|do|does|did|is|are|can|could|would|will|was|were)\b/.test(
+  return /^(should|do|does|did|is|are|can|could|would|will|was|were|shall|may)\b/.test(
     normalized
   );
+}
+
+function buildDisplayModel(
+  options: ClarifyingQuestionOption[],
+  source: ClarifyingOptionSource
+): ClarifyingOptionDisplayModel {
+  return {
+    options,
+    source,
+    showBooleanFallback: false,
+    misleadingBooleanFallbackPrevented: false,
+  };
+}
+
+function buildProjectBindingOptions(
+  candidates: ProjectBindingClarifyingCandidate[]
+) {
+  const unique = candidates.reduce<ProjectBindingClarifyingCandidate[]>(
+    (result, candidate) => {
+      const identity = (candidate.projectId ?? candidate.projectName)
+        .trim()
+        .toLowerCase();
+      if (
+        identity &&
+        !result.some(
+          (item) =>
+            (item.projectId ?? item.projectName).trim().toLowerCase() ===
+            identity
+        )
+      ) {
+        result.push(candidate);
+      }
+      return result;
+    },
+    []
+  );
+
+  return unique.slice(0, MAX_PROJECT_CLARIFYING_OPTIONS).map((candidate, index) => ({
+    id: `project-${buildOptionId(
+      candidate.projectId ?? candidate.projectName,
+      index
+    )}`,
+    label: candidate.projectName,
+    value: candidate.projectId ?? candidate.projectName,
+  }));
 }
 
 function inferClarifyingOptionsFromQuestion(question: string) {

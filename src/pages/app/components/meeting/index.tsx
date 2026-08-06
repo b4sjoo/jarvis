@@ -17,6 +17,7 @@ import { useMeetingAssistant, useShortcuts, useWindowResize } from "@/hooks";
 import type {
   ClarifyingQuestionAnswer,
   ClarifyingQuestionOption,
+  ClarifyingSelectionLifecycleState,
   CanonicalQuestionType,
   AdvisorSuggestion,
   HumanEvalFailureReason,
@@ -78,7 +79,7 @@ import {
   MEETING_FOCUS_ACTION_EVENT,
   MEETING_FOCUS_SNAPSHOT_EVENT,
   getActiveMeetingParentQuestionType,
-  getDisplayClarifyingOptions,
+  buildClarifyingOptionDisplayModel,
   getActiveMeetingTaskFocusSummary,
   getActiveMeetingTaskId,
   buildMeetingAnswerDisplayModel,
@@ -94,6 +95,7 @@ import {
   resolveNativeAudioPrimaryControlAction,
   resolveCodingArtifactDisplay,
   resolveWhiteboardArtifactDisplay,
+  readProjectBindingClarifyingCandidates,
   resolveVisibleAnswerEvaluationTarget,
   resolveTraceMemoryEvaluationSnapshot,
   stripOuterCodeFence,
@@ -381,6 +383,10 @@ type ClarifyingSelectionState = {
   label: string;
   value?: string;
   submittedAt: number;
+  status: ClarifyingSelectionLifecycleState;
+  requestId?: string;
+  traceId?: string;
+  reason?: string;
 };
 
 type NativeAudioFaultFeedback = {
@@ -434,8 +440,8 @@ export const MeetingAssistant = ({
   );
   const forceAdviseAvailable = forceAdviseEligibility.eligible;
   const forceAdvisePending =
-    forceAdviseStatus === "advising" ||
-    forceAdviseStatus === "repairing";
+    meeting.latestInterviewerTurnCandidate?.manualExecutionState ===
+      "running" || forceAdviseStatus === "repairing";
   const forceAdviseCompleted =
     forceAdviseStatus === "repaired" ||
     forceAdviseStatus === "already-advised";
@@ -695,17 +701,43 @@ export const MeetingAssistant = ({
   const clarifyingQuestion = suggestionSections.clarifyingQuestion.trim();
   const rawClarifyingOptions = suggestionSections.clarifyingOptions ?? [];
   const hasTechnicalDetails = suggestionSections.hasTechnicalDetails;
-  const clarifyingQuestionKey = clarifyingQuestion
-    ? `${meeting.latestSuggestion?.id ?? displaySuggestion}:${clarifyingQuestion}`
-    : "";
-  const clarifyingOptions = useMemo(
+  const clarifyingSourceTrace = meeting.latestSuggestion?.sourceTraceId
+    ? meeting.traces.find(
+        (trace) => trace.id === meeting.latestSuggestion?.sourceTraceId
+      )
+    : undefined;
+  const projectBindingClarifyingCandidates = useMemo(
     () =>
-      getDisplayClarifyingOptions({
+      readProjectBindingClarifyingCandidates(
+        clarifyingSourceTrace?.metadata
+      ),
+    [clarifyingSourceTrace?.metadata]
+  );
+  const clarifyingQuestionOwner =
+    meeting.latestSuggestion?.questionLineage?.questionInstanceId ??
+    meeting.latestSuggestion?.parentTaskId ??
+    meeting.latestSuggestion?.id ??
+    displaySuggestion;
+  const clarifyingQuestionKey = clarifyingQuestion
+    ? `${clarifyingQuestionOwner}:${clarifyingQuestion}`
+    : "";
+  const clarifyingOptionDisplay = useMemo(
+    () =>
+      buildClarifyingOptionDisplayModel({
         question: clarifyingQuestion,
         options: rawClarifyingOptions,
+        projectBindingNeedsSelection:
+          projectBindingClarifyingCandidates.needsSelection,
+        projectBindingCandidates:
+          projectBindingClarifyingCandidates.candidates,
       }),
-    [clarifyingQuestion, rawClarifyingOptions]
+    [
+      clarifyingQuestion,
+      projectBindingClarifyingCandidates,
+      rawClarifyingOptions,
+    ]
   );
+  const clarifyingOptions = clarifyingOptionDisplay.options;
   const activeClarifyingSelection =
     clarifyingSelection?.questionKey === clarifyingQuestionKey
       ? clarifyingSelection
@@ -720,6 +752,40 @@ export const MeetingAssistant = ({
     if (clarifyingSelection.questionKey === clarifyingQuestionKey) return;
     setClarifyingSelection(null);
   }, [clarifyingQuestionKey, clarifyingSelection]);
+  useEffect(() => {
+    if (!activeClarifyingSelection?.traceId) return;
+    const trace = meeting.traces.find(
+      (candidate) => candidate.id === activeClarifyingSelection.traceId
+    );
+    const recordedState = trace?.metadata?.clarifyingSelectionState;
+    if (
+      recordedState !== "pending" &&
+      recordedState !== "succeeded" &&
+      recordedState !== "failed" &&
+      recordedState !== "stale"
+    ) {
+      return;
+    }
+    const reason =
+      typeof trace?.metadata?.clarifyingSelectionTerminalReason === "string"
+        ? trace.metadata.clarifyingSelectionTerminalReason
+        : activeClarifyingSelection.reason;
+    if (
+      activeClarifyingSelection.status === recordedState &&
+      activeClarifyingSelection.reason === reason
+    ) {
+      return;
+    }
+    setClarifyingSelection((current) =>
+      current?.questionKey === clarifyingQuestionKey
+        ? { ...current, status: recordedState, reason }
+        : current
+    );
+  }, [
+    activeClarifyingSelection,
+    clarifyingQuestionKey,
+    meeting.traces,
+  ]);
   const isBusy =
     meeting.status === "starting" ||
     meeting.status === "reconnecting" ||
@@ -811,7 +877,13 @@ export const MeetingAssistant = ({
       audioControl: audioPauseResumeControl,
       showClarifyingQuestion,
       clarifyingQuestion,
+      showClarifyingBooleanFallback:
+        clarifyingOptionDisplay.showBooleanFallback,
       selectedClarifyingAnswerLabel: activeClarifyingSelection?.label,
+      clarifyingSelectionState: activeClarifyingSelection?.status,
+      clarifyingSelectionMessage: formatClarifyingSelectionMessage(
+        activeClarifyingSelection
+      ),
       isTaskSwitchClarifyingQuestion,
       interviewTypes: editableBriefForFocus.interviewTypes,
       effectiveQuestionType,
@@ -838,7 +910,10 @@ export const MeetingAssistant = ({
     }),
     [
       clarifyingQuestion,
+      clarifyingOptionDisplay.showBooleanFallback,
       activeClarifyingSelection?.label,
+      activeClarifyingSelection?.status,
+      activeClarifyingSelection?.reason,
       editableBriefForFocus.interviewTypes,
       focusModeActive,
       isBusy,
@@ -1247,16 +1322,62 @@ export const MeetingAssistant = ({
             : answer === "not-sure"
               ? "Not sure"
               : "Selected option");
+      const submittedAt = Date.now();
       setClarifyingSelection({
         questionKey: clarifyingQuestionKey,
         label,
         value: option?.value,
-        submittedAt: Date.now(),
+        submittedAt,
+        status: "pending",
       });
       setDismissedQuestionKey(null);
-      void meeting.answerClarifyingQuestion(clarifyingQuestion, answer, option);
+      void meeting
+        .answerClarifyingQuestion(clarifyingQuestion, answer, option, {
+          questionKey: clarifyingQuestionKey,
+          optionSource: clarifyingOptionDisplay.source,
+          optionCount: clarifyingOptions.length,
+          booleanFallbackUsed:
+            clarifyingOptionDisplay.showBooleanFallback &&
+            (answer === "yes" || answer === "no"),
+        })
+        .then((outcome) => {
+          setClarifyingSelection((current) =>
+            current?.questionKey === clarifyingQuestionKey &&
+            current.submittedAt === submittedAt
+              ? {
+                  ...current,
+                  requestId: outcome.requestId,
+                  traceId: outcome.traceId,
+                  status: outcome.state,
+                  reason: outcome.reason,
+                }
+              : current
+          );
+        })
+        .catch((error) => {
+          setClarifyingSelection((current) =>
+            current?.questionKey === clarifyingQuestionKey &&
+            current.submittedAt === submittedAt
+              ? {
+                  ...current,
+                  status: "failed",
+                  reason:
+                    error instanceof Error
+                      ? error.message
+                      : "clarifying-request-failed",
+                }
+              : current
+          );
+        });
     },
-    [clarifyingQuestion, clarifyingQuestionKey, meeting.answerClarifyingQuestion]
+    [
+      clarifyingOptionDisplay.showBooleanFallback,
+      clarifyingOptionDisplay.source,
+      clarifyingOptions.length,
+      clarifyingQuestion,
+      clarifyingQuestionKey,
+      meeting.answerClarifyingQuestion,
+    ]
   );
 
   const handleSpeechCorrectionSubmit = useCallback(() => {
@@ -1274,6 +1395,8 @@ export const MeetingAssistant = ({
       questionKey: clarifyingQuestionKey,
       label: "New task",
       submittedAt: Date.now(),
+      status: "succeeded",
+      reason: "manual-new-task-confirmed",
     });
     meeting.clearActiveScreenTask();
     setDismissedQuestionKey(clarifyingQuestionKey);
@@ -1286,6 +1409,8 @@ export const MeetingAssistant = ({
       questionKey: clarifyingQuestionKey,
       label: "Same task",
       submittedAt: Date.now(),
+      status: "succeeded",
+      reason: "manual-same-task-confirmed",
     });
     setDismissedQuestionKey(clarifyingQuestionKey);
   }, [clarifyingQuestionKey]);
@@ -1544,7 +1669,14 @@ export const MeetingAssistant = ({
               showClarifyingQuestion={showClarifyingQuestion}
               clarifyingQuestion={clarifyingQuestion}
               clarifyingOptions={clarifyingOptions}
+              showClarifyingBooleanFallback={
+                clarifyingOptionDisplay.showBooleanFallback
+              }
               selectedClarifyingAnswerLabel={activeClarifyingSelection?.label}
+              clarifyingSelectionState={activeClarifyingSelection?.status}
+              clarifyingSelectionMessage={formatClarifyingSelectionMessage(
+                activeClarifyingSelection
+              )}
               isTaskSwitchClarifyingQuestion={isTaskSwitchClarifyingQuestion}
               onClarifyingAnswer={handleClarifyingAnswer}
               onNewTaskConfirmation={handleNewTaskConfirmation}
@@ -1698,7 +1830,7 @@ export const MeetingAssistant = ({
                     onClick={() => {
                       void meeting.forceAdviseLatestTurn();
                     }}
-                    disabled={!forceAdviseAvailable || isBusy}
+                    disabled={!forceAdviseAvailable}
                     title={
                       forceAdviseAvailable
                         ? "Force one advisor response for this transcript"
@@ -1706,7 +1838,7 @@ export const MeetingAssistant = ({
                           ? "Advisor repair is running"
                           : forceAdviseCompleted
                             ? "This transcript has already been advised"
-                            : "No suppressed interviewer turn is available"
+                            : "No recoverable interviewer turn is available"
                     }
                   >
                     {forceAdvisePending ? (
@@ -2043,10 +2175,17 @@ export const MeetingAssistant = ({
                   <ClarifyingActionButtons
                     isBusy={isBusy}
                     selectedAnswerLabel={activeClarifyingSelection?.label}
+                    selectionState={activeClarifyingSelection?.status}
+                    selectionMessage={formatClarifyingSelectionMessage(
+                      activeClarifyingSelection
+                    )}
                     isTaskSwitchClarifyingQuestion={
                       isTaskSwitchClarifyingQuestion
                     }
                     clarifyingOptions={clarifyingOptions}
+                    showBooleanFallback={
+                      clarifyingOptionDisplay.showBooleanFallback
+                    }
                     onClarifyingAnswer={handleClarifyingAnswer}
                     onNewTaskConfirmation={handleNewTaskConfirmation}
                     onSameTaskConfirmation={handleSameTaskConfirmation}
@@ -2713,7 +2852,10 @@ const FocusModePanel = ({
   showClarifyingQuestion,
   clarifyingQuestion,
   clarifyingOptions,
+  showClarifyingBooleanFallback,
   selectedClarifyingAnswerLabel,
+  clarifyingSelectionState,
+  clarifyingSelectionMessage,
   isTaskSwitchClarifyingQuestion,
   onClarifyingAnswer,
   onNewTaskConfirmation,
@@ -2750,7 +2892,10 @@ const FocusModePanel = ({
   showClarifyingQuestion: boolean;
   clarifyingQuestion: string;
   clarifyingOptions: ClarifyingQuestionOption[];
+  showClarifyingBooleanFallback: boolean;
   selectedClarifyingAnswerLabel?: string;
+  clarifyingSelectionState?: ClarifyingSelectionLifecycleState;
+  clarifyingSelectionMessage?: string;
   isTaskSwitchClarifyingQuestion: boolean;
   onClarifyingAnswer: (
     answer: ClarifyingQuestionAnswer,
@@ -2887,7 +3032,10 @@ const FocusModePanel = ({
                     isTaskSwitchClarifyingQuestion
                   }
                   clarifyingOptions={clarifyingOptions}
+                  showBooleanFallback={showClarifyingBooleanFallback}
                   selectedAnswerLabel={selectedClarifyingAnswerLabel}
+                  selectionState={clarifyingSelectionState}
+                  selectionMessage={clarifyingSelectionMessage}
                   onClarifyingAnswer={onClarifyingAnswer}
                   onNewTaskConfirmation={onNewTaskConfirmation}
                   onSameTaskConfirmation={onSameTaskConfirmation}
@@ -2974,7 +3122,7 @@ const FocusModePanel = ({
                   variant="outline"
                   className="ml-auto h-6 shrink-0 gap-1 px-2 text-[10px]"
                   onClick={onForceAdvise}
-                  disabled={!forceAdviseAvailable || isBusy}
+                  disabled={!forceAdviseAvailable}
                   title={
                     forceAdviseAvailable
                       ? "Force one advisor response for this transcript"
@@ -2982,7 +3130,7 @@ const FocusModePanel = ({
                         ? "Advisor repair is running"
                         : forceAdviseCompleted
                           ? "This transcript has already been advised"
-                          : "No suppressed interviewer turn is available"
+                          : "No recoverable interviewer turn is available"
                   }
                 >
                   {forceAdvisePending ? (
@@ -3268,8 +3416,11 @@ function formatTermCorrectionStatus(
 const ClarifyingActionButtons = ({
   isBusy,
   selectedAnswerLabel,
+  selectionState,
+  selectionMessage,
   isTaskSwitchClarifyingQuestion,
   clarifyingOptions,
+  showBooleanFallback,
   onClarifyingAnswer,
   onNewTaskConfirmation,
   onSameTaskConfirmation,
@@ -3277,8 +3428,11 @@ const ClarifyingActionButtons = ({
 }: {
   isBusy: boolean;
   selectedAnswerLabel?: string;
+  selectionState?: ClarifyingSelectionLifecycleState;
+  selectionMessage?: string;
   isTaskSwitchClarifyingQuestion: boolean;
   clarifyingOptions: ClarifyingQuestionOption[];
+  showBooleanFallback: boolean;
   onClarifyingAnswer: (
     answer: ClarifyingQuestionAnswer,
     option?: { label?: string; value?: string }
@@ -3313,7 +3467,7 @@ const ClarifyingActionButtons = ({
         )}
         title={label}
         onClick={onClick}
-        disabled={isBusy}
+        disabled={isBusy || selectionState === "pending"}
         aria-pressed={isSelected}
       >
         {icon}
@@ -3327,7 +3481,7 @@ const ClarifyingActionButtons = ({
   return (
     <div className="mt-3 space-y-2">
       <div className="grid grid-cols-2 gap-1.5">
-        {isTaskSwitchClarifyingQuestion || clarifyingOptions.length < 2 ? (
+        {isTaskSwitchClarifyingQuestion || showBooleanFallback ? (
           <>
             {renderButton({
               icon: <CheckIcon className="h-3 w-3 shrink-0" />,
@@ -3344,7 +3498,7 @@ const ClarifyingActionButtons = ({
                 : () => onClarifyingAnswer("no"),
             })}
           </>
-        ) : (
+        ) : clarifyingOptions.length ? (
           clarifyingOptions.slice(0, 4).map((option) =>
             renderButton({
               key: option.id,
@@ -3357,7 +3511,7 @@ const ClarifyingActionButtons = ({
               },
             })
           )
-        )}
+        ) : null}
         {renderButton({
           icon: <HelpCircleIcon className="h-3 w-3 shrink-0" />,
           label: "Not sure",
@@ -3372,15 +3526,35 @@ const ClarifyingActionButtons = ({
       </div>
       {selectedAnswerLabel ? (
         <div className="flex min-w-0 items-center gap-1.5 rounded-sm bg-primary/10 px-2 py-1 text-[10px] text-primary">
-          {isBusy ? <Loader2Icon className="h-3 w-3 animate-spin" /> : null}
+          {selectionState === "pending" ? (
+            <Loader2Icon className="h-3 w-3 animate-spin" />
+          ) : selectionState === "succeeded" ? (
+            <CheckIcon className="h-3 w-3" />
+          ) : null}
           <span className="min-w-0 truncate">
-            Selected: {selectedAnswerLabel}. Jarvis is updating.
+            {selectionMessage ?? `Selected: ${selectedAnswerLabel}.`}
           </span>
         </div>
       ) : null}
     </div>
   );
 };
+
+function formatClarifyingSelectionMessage(
+  selection: ClarifyingSelectionState | null
+) {
+  if (!selection) return undefined;
+  if (selection.status === "pending") {
+    return `Selected: ${selection.label}. Jarvis is updating.`;
+  }
+  if (selection.status === "succeeded") {
+    return `Applied: ${selection.label}.`;
+  }
+  if (selection.status === "failed") {
+    return `Could not apply ${selection.label}. Select it again to retry.`;
+  }
+  return `Selection expired: ${selection.label}.`;
+}
 
 const InterviewSessionBriefPanel = ({
   open,
@@ -5150,6 +5324,17 @@ const TraceHumanEvaluationPanel = ({
     typeof trace.metadata?.primaryAskNormalizedText === "string"
       ? trace.metadata.primaryAskNormalizedText
       : undefined;
+  const clarifyingOptionSource =
+    typeof trace.metadata?.clarifyingOptionSource === "string"
+      ? trace.metadata.clarifyingOptionSource
+      : undefined;
+  const clarifyingOptionCount =
+    typeof trace.metadata?.clarifyingOptionCount === "number"
+      ? trace.metadata.clarifyingOptionCount
+      : undefined;
+  const showClarifyingOptionsEvaluation =
+    trace.metadata?.clarifyingQuestionPresent === true ||
+    typeof trace.metadata?.clarifyingRequestId === "string";
   const currentQuestionSettlementId =
     typeof trace.metadata?.currentQuestionSettlementId === "string"
       ? trace.metadata.currentQuestionSettlementId
@@ -5807,6 +5992,42 @@ const TraceHumanEvaluationPanel = ({
             </div>
           ) : null}
         </div>
+
+        {showClarifyingOptionsEvaluation ? (
+          <div className="rounded-sm border border-border/60 p-2">
+            <div className="mb-1 text-[10px] font-medium uppercase text-muted-foreground">
+              Clarifying options
+            </div>
+            <div className="mb-2 break-words font-mono text-[9px] text-muted-foreground">
+              observed: {clarifyingOptionSource ?? "none"} / {clarifyingOptionCount ?? 0} options
+            </div>
+            <div className="flex flex-wrap gap-1">
+              {(
+                [
+                  ["correct", "Correct"],
+                  ["misleading", "Misleading"],
+                  ["missing", "Missing"],
+                ] as const
+              ).map(([verdict, label]) => (
+                <Button
+                  key={verdict}
+                  size="sm"
+                  variant={
+                    questionEvaluation?.clarifyingOptionsVerdict === verdict
+                      ? "default"
+                      : "outline"
+                  }
+                  className="h-7 px-2 text-[10px]"
+                  onClick={() =>
+                    onUpdateQuestion({ clarifyingOptionsVerdict: verdict })
+                  }
+                >
+                  {label}
+                </Button>
+              ))}
+            </div>
+          </div>
+        ) : null}
 
         <div className="rounded-sm border border-border/60 p-2">
           <div className="mb-1 text-[10px] font-medium uppercase text-muted-foreground">

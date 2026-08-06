@@ -370,6 +370,8 @@ export function formatProjectBindingDecisionForTrace(
     projectBindingConfidence: decision.binding?.confidence,
     projectBindingRevision: decision.bindingRevision,
     projectBindingTopicCompatible: decision.topicCompatible,
+    projectBindingExplicitAliases:
+      decision.topicEvidence?.explicitProjectAliases ?? [],
     projectBindingSourceTurnIds: decision.sourceTurnIds,
     projectBindingSourceObservationIds: decision.sourceObservationIds,
     projectBindingPreviousProjectId: decision.previousBinding?.projectId,
@@ -409,19 +411,30 @@ export function buildProjectTopicEvidence({
   candidates: ProjectBindingCandidate[];
 }): ProjectTopicEvidence {
   const text = [sourceText, projectAnchor].filter(Boolean).join(" ").trim();
-  const explicitMatches = candidates.filter((candidate) =>
-    projectIdentityAppearsExplicitly(sourceText, candidate)
-  );
+  const explicitMatches = candidates
+    .map((candidate) => ({
+      candidate,
+      alias: findExplicitProjectAlias(sourceText, candidate),
+    }))
+    .filter(
+      (
+        item
+      ): item is {
+        candidate: ProjectBindingCandidate;
+        alias: string;
+      } => Boolean(item.alias)
+    );
   const terms = tokenizeProjectEvidence(text);
 
   return {
     sourceText: (sourceText ?? "").trim().slice(0, 700),
     explicitProjectIds: explicitMatches
-      .map((candidate) => candidate.projectId)
+      .map(({ candidate }) => candidate.projectId)
       .filter((value): value is string => Boolean(value)),
     explicitProjectNames: explicitMatches.map(
-      (candidate) => candidate.projectName
+      ({ candidate }) => candidate.projectName
     ),
+    explicitProjectAliases: explicitMatches.map(({ alias }) => alias),
     featureTerms: terms.filter((term) =>
       PROJECT_FEATURE_TERMS.has(term)
     ),
@@ -445,7 +458,7 @@ export function deriveExplicitProjectSelectionFromSource({
   now?: number;
 }): ExplicitProjectSelection | undefined {
   const matches = candidates.filter((candidate) =>
-    projectIdentityAppearsExplicitly(sourceText, candidate)
+    Boolean(findExplicitProjectAlias(sourceText, candidate))
   );
   if (matches.length !== 1) return undefined;
   const match = matches[0];
@@ -521,6 +534,11 @@ export function collectProjectBindingCandidates(
         primaryEntryId: ordered[0].entry.id,
         evidenceEntryIds: Array.from(
           new Set(ordered.map((item) => item.entry.id))
+        ),
+        identityAliases: collectProjectIdentityAliases(
+          group.projectName,
+          group.projectId,
+          ordered
         ),
         score: ordered[0].score,
       };
@@ -633,23 +651,32 @@ function isProjectBindingTopicCompatible(
   );
 }
 
-function projectIdentityAppearsExplicitly(
+function findExplicitProjectAlias(
   sourceText: string | undefined,
-  candidate: Pick<ProjectBindingCandidate, "projectId" | "projectName">
+  candidate: Pick<
+    ProjectBindingCandidate,
+    "projectId" | "projectName" | "identityAliases"
+  >
 ) {
   const sourceTokens = tokenizeProjectEvidence(sourceText);
-  if (!sourceTokens.length) return false;
+  if (!sourceTokens.length) return undefined;
   const identities = [candidate.projectName, candidate.projectId].filter(
     (value): value is string => Boolean(value?.trim())
   );
 
-  return identities.some((identity) => {
+  const identityMatch = identities.find((identity) => {
     const identityTokens = tokenizeProjectEvidence(identity).filter(
       (token) => !GENERIC_PROJECT_IDENTITY_TERMS.has(token)
     );
     if (!identityTokens.length) return false;
     return identityTokens.every((token) => sourceTokens.includes(token));
   });
+  if (identityMatch) return normalizeProjectAlias(identityMatch);
+
+  const normalizedSource = ` ${sourceTokens.join(" ")} `;
+  return candidate.identityAliases?.find((alias) =>
+    normalizedSource.includes(` ${normalizeProjectAlias(alias)} `)
+  );
 }
 
 function findMatchingCandidate(
@@ -657,9 +684,52 @@ function findMatchingCandidate(
   selection: string
 ) {
   const matches = candidates.filter((candidate) =>
-    projectIdentityMatches(selection, candidate)
+    projectIdentityMatches(selection, candidate) ||
+      Boolean(findExplicitProjectAlias(selection, candidate))
   );
   return matches.length === 1 ? matches[0] : undefined;
+}
+
+function collectProjectIdentityAliases(
+  projectName: string,
+  projectId: string | undefined,
+  entries: RetrievedMemoryEntry[]
+) {
+  const rawAliases = [
+    projectName,
+    projectId,
+    ...entries.flatMap(({ entry }) => [
+      entry.title,
+      ...entry.tags,
+      ...entry.keywords,
+    ]),
+  ].filter((value): value is string => Boolean(value?.trim()));
+
+  return Array.from(
+    new Set(rawAliases.flatMap(buildDiscriminativeProjectAliases))
+  );
+}
+
+function buildDiscriminativeProjectAliases(value: string) {
+  const tokens = tokenizeProjectEvidence(value).filter(
+    (token) =>
+      !GENERIC_PROJECT_IDENTITY_TERMS.has(token) &&
+      !PROJECT_ALIAS_STOP_TERMS.has(token)
+  );
+  if (tokens.length < 2) return [];
+  if (tokens.length <= 4) return [tokens.join(" ")];
+
+  const aliases: string[] = [];
+  for (const size of [4, 3]) {
+    for (let index = 0; index + size <= tokens.length; index += 1) {
+      aliases.push(tokens.slice(index, index + size).join(" "));
+    }
+  }
+  return aliases;
+}
+
+function normalizeProjectAlias(value: string) {
+  return tokenizeProjectEvidence(value).join(" ");
 }
 
 function projectBindingMatchesCandidate(
@@ -715,6 +785,21 @@ const GENERIC_PROJECT_IDENTITY_TERMS = new Set([
   "tool",
   "app",
   "application",
+]);
+
+const PROJECT_ALIAS_STOP_TERMS = new Set([
+  "a",
+  "an",
+  "and",
+  "api",
+  "apis",
+  "for",
+  "in",
+  "of",
+  "on",
+  "the",
+  "to",
+  "with",
 ]);
 
 const PROJECT_FEATURE_TERMS = new Set([

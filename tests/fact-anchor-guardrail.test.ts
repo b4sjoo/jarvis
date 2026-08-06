@@ -346,6 +346,29 @@ test("does not enforce a hypothetical implementation request", () => {
   assert.equal(decision.state, "not-required");
 });
 
+test("current hypothetical framing overrides an inherited project-deep-dive type", () => {
+  const decision = buildFactAnchorDecision({
+    questionType: "project-deep-dive",
+    questionText:
+      "In general, how would you approach validating a distributed backend system in production?",
+    personalEvidenceGuardrailMode: "enforcement",
+    memoryContext: makeMemoryResult([]),
+  });
+
+  assert.equal(decision.personalEvidence.requirement, "not-required");
+  assert.equal(decision.requiredFor, "none");
+  assert.equal(decision.state, "not-required");
+  assert.equal(
+    decision.requirementSource,
+    "current-question-personal-evidence"
+  );
+  assert.equal(
+    formatFactAnchorDecisionForTrace(decision)
+      .factAnchorRequirementReason,
+    "explicit-hypothetical-current-question-overrides-parent-type"
+  );
+});
+
 test("offers project choices instead of blending multiple eligible projects", () => {
   const decision = buildFactAnchorDecision({
     questionType: "project-deep-dive",
