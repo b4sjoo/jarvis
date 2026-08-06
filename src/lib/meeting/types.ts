@@ -1122,6 +1122,10 @@ export interface AdvisorSuggestion {
   codeArtifactMutationAuthorized?: boolean;
   complexityArtifactMutationAuthorized?: boolean;
   whiteboardArtifactMutationAuthorized?: boolean;
+  codeArtifactRevision?: number;
+  complexityArtifactRevision?: number;
+  presentationArtifactAuthority?:
+    import("./screen-artifact-authority.js").ScreenPresentationArtifactAuthoritySource;
   basedOnTurnIds: string[];
   basedOnObservationIds: string[];
   confidence: "low" | "medium" | "high";
@@ -1927,4 +1931,5 @@ export interface MeetingAssistantState {
   humanEvaluations: TraceHumanEvaluation[];
   questionEvaluations: QuestionHumanEvaluation[];
   speechCorrections: SpeechCorrection[];
+  presentationArtifactResetRevision: number;
 }

@@ -82,6 +82,7 @@ export * from "./primary-ask-projection";
 export * from "./question-lineage";
 export * from "./runtime-commit-authorization";
 export * from "./screen-observation.service";
+export * from "./screen-artifact-authority";
 export * from "./screen-task-scope";
 export * from "./screen-task-answer";
 export * from "./sentence-completion-buffer";

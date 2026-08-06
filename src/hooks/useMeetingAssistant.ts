@@ -229,6 +229,10 @@ import {
   formatInterviewerAssumptionAuthorizationForTrace,
   formatPlaybookPhaseDecisionForTrace,
   resolvePlaybookRequiredArtifacts,
+  resolveScreenGenerationRequestedArtifacts,
+  resolveManualScreenPlaybookSubtaskIntent,
+  authorizeManualScreenPresentationArtifacts,
+  formatScreenPresentationArtifactAuthorityForTrace,
   formatInterviewPlaybookForTrace,
   withInterviewPlaybookPhase,
   readTraceHumanEvaluations,
@@ -727,6 +731,7 @@ const INITIAL_STATE: MeetingAssistantState = {
   humanEvaluations: [],
   questionEvaluations: [],
   speechCorrections: [],
+  presentationArtifactResetRevision: 0,
 };
 
 const DEFAULT_MEETING_ASSISTANT_SETTINGS = INITIAL_STATE.settings;
@@ -1191,6 +1196,8 @@ function clearActiveScreenTaskState(
     manualQuestionTypeCorrection: undefined,
     currentQuestionLineage: undefined,
     latestInterviewerTurnCandidate: undefined,
+    presentationArtifactResetRevision:
+      previous.presentationArtifactResetRevision + 1,
   };
 }
 
@@ -4186,6 +4193,8 @@ export function useMeetingAssistant() {
         activeScreenTask: undefined,
         activeInterviewTask: undefined,
         activeMeetingTask: undefined,
+        presentationArtifactResetRevision:
+          previous.presentationArtifactResetRevision + 1,
         latestSuggestion: null,
         latestReliableSuggestion: null,
         partialSuggestion: "",
@@ -6451,6 +6460,8 @@ export function useMeetingAssistant() {
 
       setState((previous) => ({
         ...clearActiveMeetingTaskProjection(previous),
+        presentationArtifactResetRevision:
+          previous.presentationArtifactResetRevision + 1,
         status: "idle",
         interviewSessionBrief: contextState.interviewSessionBrief,
         interviewSessionContext: contextState.interviewSessionContext,
@@ -17046,7 +17057,11 @@ export function useMeetingAssistant() {
       let modelStepId: string | undefined;
       let screenModelPromptText = "";
       let screenGenerationLease: AnswerGenerationLease | undefined;
-      let screenGenerationAuthorizedArtifacts:
+      let screenGenerationRequestedArtifacts:
+        AnswerArtifactSection[] = [];
+      let screenPresentationAuthorizedArtifacts:
+        AnswerArtifactSection[] = [];
+      let screenParentAuthorizedArtifacts:
         AnswerArtifactSection[] = [];
       let screenLatestUsefulAnswerMutationAuthorized = false;
       let screenSourceOwnedTransitionResult:
@@ -17084,7 +17099,7 @@ export function useMeetingAssistant() {
                   responseActionRevisionRef.current,
                 artifactOwnerId: currentParent?.id ?? null,
                 authorizedArtifacts:
-                  screenGenerationAuthorizedArtifacts,
+                  screenGenerationRequestedArtifacts,
               }
             )
           : undefined;
@@ -17115,6 +17130,10 @@ export function useMeetingAssistant() {
                   leaseAuthorization,
                   stage
                 )
+              : {}),
+            ...(!decision.authorized ||
+            (leaseAuthorization && !leaseAuthorization.authorized)
+              ? { artifactCacheDisposition: "stale-rejected" }
               : {}),
           }
         );
@@ -17775,6 +17794,14 @@ export function useMeetingAssistant() {
           interviewSessionBrief: preflightContextState.interviewSessionBrief,
           interviewSessionContext: preflightContextState.interviewSessionContext,
         });
+        const screenSubtaskIntent =
+          resolveManualScreenPlaybookSubtaskIntent({
+            questionType: screenMemoryQuestionType,
+            inferredIntent: inferAdvisorSubtaskIntent(
+              screenEvidenceText,
+              readMemoryQuestionType(taskKind) ?? "unknown"
+            ),
+          });
         const screenPhaseDecision = decidePlaybookPhaseProgression({
           questionType: normalizeQuestionTypeAlias(screenMemoryQuestionType),
           playbookId: screenPlaybook?.id,
@@ -17794,10 +17821,7 @@ export function useMeetingAssistant() {
           latestTurnText: recentTranscript,
           currentQuestion: screenCurrentQuestionEvidenceText,
           relation: provisionalScreenTaskRelation,
-          subtaskIntent: inferAdvisorSubtaskIntent(
-            screenEvidenceText,
-            readMemoryQuestionType(taskKind) ?? "unknown"
-          ),
+          subtaskIntent: screenSubtaskIntent,
           askFrame: screenPreflight?.askFrame ?? screenMemoryAskFrame,
         });
         const screenRuntimePlaybook = withInterviewPlaybookPhase(
@@ -17856,10 +17880,7 @@ export function useMeetingAssistant() {
               screenCurrentQuestionEvidenceText ||
               observation.captureTarget?.title?.trim() ||
               "",
-            subtaskIntent: inferAdvisorSubtaskIntent(
-              screenEvidenceText,
-              readMemoryQuestionType(taskKind) ?? "unknown"
-            ),
+            subtaskIntent: screenSubtaskIntent,
             questionInstanceId: observation.id,
             playbook: screenRuntimePlaybook,
             phaseDecision: screenPhaseDecision,
@@ -18246,20 +18267,14 @@ export function useMeetingAssistant() {
           formatMeetingModelRouteForTrace(screenModelRoute);
         const screenModelRequestOptions =
           getMeetingModelRequestOptions(screenModelRoute);
-        screenGenerationAuthorizedArtifacts = [
-          "answer",
-          ...(screenUsesCodingModel
-            ? (["code", "complexity"] as AnswerArtifactSection[])
-            : []),
-          ...(screenMemoryQuestionType === "general-system-design" ||
-          screenMemoryQuestionType === "ai-ml-system-design"
-            ? (["whiteboard"] as AnswerArtifactSection[])
-            : []),
-        ];
+        screenGenerationRequestedArtifacts =
+          resolveScreenGenerationRequestedArtifacts(
+            screenPhaseDecision.requiredArtifacts
+          );
         const screenWhiteboardFormatPreference =
           resolveWhiteboardFormatPreference({
             questionType: screenMemoryQuestionType,
-            artifactIntent: screenGenerationAuthorizedArtifacts.includes(
+            artifactIntent: screenGenerationRequestedArtifacts.includes(
               "whiteboard"
             )
               ? "revise-whiteboard"
@@ -18317,7 +18332,7 @@ export function useMeetingAssistant() {
             .join(":"),
           artifactOwnerId: screenGenerationParent?.id ?? null,
           requestedArtifacts:
-            screenGenerationAuthorizedArtifacts,
+            screenGenerationRequestedArtifacts,
         });
         const screenLeaseStartAuthorization =
           authorizeAnswerGenerationLease(screenGenerationLease, {
@@ -18337,7 +18352,7 @@ export function useMeetingAssistant() {
               responseActionRevisionRef.current,
             artifactOwnerId: screenGenerationParent?.id ?? null,
             authorizedArtifacts:
-              screenGenerationAuthorizedArtifacts,
+              screenGenerationRequestedArtifacts,
           });
         traceStoreRef.current.updateMetadata(
           trace.id,
@@ -18573,6 +18588,32 @@ export function useMeetingAssistant() {
             rawContent: committedScreenTaskContent,
           };
         }
+        const screenPresentationArtifactAuthority =
+          authorizeManualScreenPresentationArtifacts({
+            requestedArtifacts: screenGenerationRequestedArtifacts,
+            parsedAnswer: parsedScreenMeetingAnswer,
+          });
+        screenPresentationAuthorizedArtifacts =
+          screenPresentationArtifactAuthority.authorizedArtifacts;
+        const screenPresentationArtifactMetadata =
+          formatScreenPresentationArtifactAuthorityForTrace(
+            screenPresentationArtifactAuthority
+          );
+        traceStoreRef.current.updateMetadata(
+          trace.id,
+          screenPresentationArtifactMetadata
+        );
+        const screenPresentationArtifactStepId =
+          traceStoreRef.current.startStep(
+            trace.id,
+            "Screen presentation artifact authority",
+            screenPresentationArtifactMetadata
+          );
+        traceStoreRef.current.finishStep(
+          trace.id,
+          screenPresentationArtifactStepId,
+          "success"
+        );
         const screenFactAnchorOutputMetadata =
           formatFactAnchorOutputDecisionForTrace(
             screenFactAnchorOutputDecision,
@@ -18962,11 +19003,20 @@ export function useMeetingAssistant() {
               creatingParent:
                 !existingInterviewTask &&
                 screenRelationDecision.relation === "new-parent",
-              subtaskIntent: inferAdvisorSubtaskIntent(
-                screenEvidenceText,
-                readMemoryQuestionType(taskKind) ?? "unknown"
-              ),
+              subtaskIntent: screenSubtaskIntent,
             });
+          screenParentAuthorizedArtifacts = [
+            "answer",
+            ...(screenArtifactAuthorization.allowCode
+              ? (["code"] as AnswerArtifactSection[])
+              : []),
+            ...(screenArtifactAuthorization.allowComplexity
+              ? (["complexity"] as AnswerArtifactSection[])
+              : []),
+            ...(screenArtifactAuthorization.allowWhiteboard
+              ? (["whiteboard"] as AnswerArtifactSection[])
+              : []),
+          ];
           screenLatestUsefulAnswerMutationAuthorized =
             screenArtifactAuthorization.allowLatestUsefulAnswer &&
             !screenResponseOnlyTaskScope;
@@ -18987,10 +19037,7 @@ export function useMeetingAssistant() {
             source: "screen",
             questionType: taskKind,
             relation: screenContinuityRelation,
-            subtaskIntent: inferAdvisorSubtaskIntent(
-              screenEvidenceText,
-              readMemoryQuestionType(taskKind) ?? "unknown"
-            ),
+            subtaskIntent: screenSubtaskIntent,
             question: screenTaskTopic,
             finalContent: committedScreenTaskContent,
             parsedAnswer: parsedScreenMeetingAnswer,
@@ -19196,11 +19243,12 @@ export function useMeetingAssistant() {
               basedOnObservationIds: [observation.id],
               confidence: "medium",
               codeArtifactMutationAuthorized:
-                screenGenerationAuthorizedArtifacts.includes("code"),
+                screenPresentationAuthorizedArtifacts.includes("code"),
               complexityArtifactMutationAuthorized:
-                screenGenerationAuthorizedArtifacts.includes("complexity"),
+                screenPresentationAuthorizedArtifacts.includes("complexity"),
               whiteboardArtifactMutationAuthorized:
-                screenGenerationAuthorizedArtifacts.includes("whiteboard"),
+                screenPresentationAuthorizedArtifacts.includes("whiteboard"),
+              presentationArtifactAuthority: "manual-screen",
             }
           : {
               id: requestId,
@@ -19262,7 +19310,7 @@ export function useMeetingAssistant() {
             ? commitStableAnswerRevision({
                 current: previousStableAnswer,
                 candidate: nextSuggestion,
-                authorizedArtifacts: screenGenerationAuthorizedArtifacts,
+                authorizedArtifacts: screenPresentationAuthorizedArtifacts,
                 taskId: screenCommitTaskId,
                 logicalQuestionUnitId:
                   screenGenerationLease?.logicalQuestionUnitId ?? null,
@@ -19301,13 +19349,31 @@ export function useMeetingAssistant() {
             stable: nextStableAnswer,
             progress: screenDeliveryProgressAtCommit,
             decision: screenStableCommitDecision,
-            authorizedArtifacts: screenGenerationAuthorizedArtifacts,
+            authorizedArtifacts: screenPresentationAuthorizedArtifacts,
             requestedArtifacts:
               screenGenerationLease?.requestedArtifacts,
             previousCommittedAt: previousStableAnswer?.committedAt,
           });
         traceStoreRef.current.updateMetadata(trace.id, {
           ...screenStableCommitMetadata,
+          parentAuthorizedArtifacts: screenParentAuthorizedArtifacts,
+          screenAuthorizedArtifacts:
+            screenPresentationAuthorizedArtifacts,
+          committedArtifacts: nextStableAnswer
+            ? screenPresentationAuthorizedArtifacts
+            : [],
+          previousCodeRevision:
+            previousStableAnswer?.sections.code.revision,
+          nextCodeRevision:
+            nextStableAnswer?.sections.code.revision,
+          previousComplexityRevision:
+            previousStableAnswer?.sections.complexity.revision,
+          nextComplexityRevision:
+            nextStableAnswer?.sections.complexity.revision,
+          renderedCodeArtifactRevision:
+            nextStableAnswer?.sections.code.revision,
+          renderedComplexityArtifactRevision:
+            nextStableAnswer?.sections.complexity.revision,
           advisorOutputCommittedToUi:
             screenVisibleAnswerCommitted,
           visibleAnswerChanged:

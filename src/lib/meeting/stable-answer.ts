@@ -214,6 +214,9 @@ export function commitStableAnswerRevision(input: {
       codeArtifactMutationAuthorized: authorized.has("code"),
       complexityArtifactMutationAuthorized: authorized.has("complexity"),
       whiteboardArtifactMutationAuthorized: authorized.has("whiteboard"),
+      codeArtifactRevision: sectionRevisions.code.revision,
+      complexityArtifactRevision:
+        sectionRevisions.complexity.revision,
     },
     sections: sectionRevisions,
     committedAt: now,
