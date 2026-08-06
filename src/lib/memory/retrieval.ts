@@ -32,7 +32,11 @@ import {
   classifyRuntimeMemoryRole,
   resolveRetrievedMemoryRole,
 } from "./runtime-role.js";
-import { getMemoryInterviewFamilyGateRejectReason } from "./interview-family.js";
+import {
+  resolveMemoryInterviewFamilies,
+  resolveMemoryInterviewFamilyGateDecision,
+} from "./interview-family.js";
+import { createMemoryInterviewFamilyResolutionRecorder } from "./interview-family-telemetry.js";
 import { formatMemoryContext } from "./context-format.js";
 
 const DEFAULT_MAX_ENTRIES = 5;
@@ -78,6 +82,8 @@ callbacks: MemoryRetrievalRuntimeCallbacks = {}): Promise<MemoryRetrievalResult>
   const policyScoringStartedAt = monotonicNow();
   const rejectRecorder = createMemoryRejectRecorder();
   const overlayRejectRecorder = createMemoryRejectRecorder();
+  const interviewFamilyRecorder =
+    createMemoryInterviewFamilyResolutionRecorder();
   const policySnapshot = buildMemoryPolicySnapshot({
     useCase,
     interviewTypes,
@@ -103,6 +109,7 @@ callbacks: MemoryRetrievalRuntimeCallbacks = {}): Promise<MemoryRetrievalResult>
   const diagramOverlayRejections = new Map(
     diagramOverlayGate.rejected.map((item) => [item.entryId, item])
   );
+  let interviewFamilyEvaluationMs = 0;
 
   for (const entry of entries) {
     const diagramRejection = diagramOverlayRejections.get(entry.id);
@@ -118,6 +125,10 @@ callbacks: MemoryRetrievalRuntimeCallbacks = {}): Promise<MemoryRetrievalResult>
       questionType,
       memoryPolicy
     );
+    if (decision.familyGateDecision) {
+      interviewFamilyRecorder.record(entry.id, decision.familyGateDecision);
+      interviewFamilyEvaluationMs += decision.familyGateEvaluationMs;
+    }
     if (decision.eligible) {
       eligibleEntries.push(entry);
     } else {
@@ -127,7 +138,6 @@ callbacks: MemoryRetrievalRuntimeCallbacks = {}): Promise<MemoryRetrievalResult>
       }
     }
   }
-
   const queryTokens = tokenize(query);
   const scoringContext = {
     useCase,
@@ -243,6 +253,10 @@ callbacks: MemoryRetrievalRuntimeCallbacks = {}): Promise<MemoryRetrievalResult>
     lastUsageFlushSuccess: usageEnqueue.lastFlush?.success,
     degradedReason: snapshot.telemetry.degradedReason,
   };
+  const interviewFamilyResolution = interviewFamilyRecorder.summary(
+    budgeted.entries.map((item) => item.entry.id),
+    interviewFamilyEvaluationMs
+  );
 
   return {
     entries: budgeted.entries,
@@ -252,6 +266,7 @@ callbacks: MemoryRetrievalRuntimeCallbacks = {}): Promise<MemoryRetrievalResult>
     eligibleCount: eligibleEntries.length,
     rejectedCount: rejectRecorder.total(),
     rejectSummary: rejectRecorder.summary(),
+    interviewFamilyResolution,
     overlaySelection: buildMemoryOverlaySelectionSummary(
       budgeted.entries,
       overlayRejectRecorder.summary(),
@@ -336,6 +351,7 @@ export function formatMemorySelectionForTrace(result: MemoryRetrievalResult) {
     .map((item, index) => {
       const entry = item.entry;
       const runtimeRole = resolveRetrievedMemoryRole(item);
+      const familyDecision = resolveMemoryInterviewFamilies(entry);
       return [
         `${index + 1}. ${entry.title}`,
         `id=${entry.id}`,
@@ -344,6 +360,16 @@ export function formatMemorySelectionForTrace(result: MemoryRetrievalResult) {
         `runtimeRole=${runtimeRole.role}`,
         `anchorEligible=${runtimeRole.anchorEligible}`,
         `anchorEligibilityReason=${runtimeRole.anchorEligibilityReason}`,
+        `interviewFamilies=${familyDecision.families.join(",")}`,
+        `interviewFamilyResolution=${familyDecision.resolutionReason}@v${familyDecision.resolutionVersion}`,
+        `suppressedInterviewFamilies=${
+          familyDecision.suppressedEvidence
+            .map(
+              (evidence) =>
+                `${evidence.family}->${evidence.suppressedBySpecificFamily}`
+            )
+            .join(",") || "none"
+        }`,
         `score=${item.score}`,
         `reason=${item.matchReason.join(", ") || "always"}`,
         "",
@@ -503,35 +529,37 @@ function getEntryEligibilityDecision(
   if (!useCaseMatched) {
     return { eligible: false as const, reason: "use-case-mismatch" as const };
   }
-  const gateRejectReason = getInterviewGateRejectReason(
-    entry,
-    interviewTypes,
-    questionType,
-    memoryPolicy
-  );
-  if (gateRejectReason) {
-    return { eligible: false as const, reason: gateRejectReason };
-  }
-
-  if (isProjectAnchorMismatch(entry, memoryPolicy?.strictProjectAnchor)) {
-    return { eligible: false as const, reason: "project-anchor-mismatch" as const };
-  }
-
-  return { eligible: true as const };
-}
-
-function getInterviewGateRejectReason(
-  entry: MemoryEntry,
-  interviewTypes: MemoryInterviewType[] | undefined,
-  questionType: MemoryQuestionType | undefined,
-  memoryPolicy: MemoryRetrievalPolicy | undefined
-): MemoryRejectReason | undefined {
-  return getMemoryInterviewFamilyGateRejectReason({
+  const familyGateStartedAt = monotonicNow();
+  const familyGateDecision = resolveMemoryInterviewFamilyGateDecision({
     entry,
     interviewTypes,
     questionType,
     memoryPolicy,
   });
+  const familyGateEvaluationMs = elapsedMs(familyGateStartedAt);
+  if (familyGateDecision.rejectReason) {
+    return {
+      eligible: false as const,
+      reason: familyGateDecision.rejectReason,
+      familyGateDecision,
+      familyGateEvaluationMs,
+    };
+  }
+
+  if (isProjectAnchorMismatch(entry, memoryPolicy?.strictProjectAnchor)) {
+    return {
+      eligible: false as const,
+      reason: "project-anchor-mismatch" as const,
+      familyGateDecision,
+      familyGateEvaluationMs,
+    };
+  }
+
+  return {
+    eligible: true as const,
+    familyGateDecision,
+    familyGateEvaluationMs,
+  };
 }
 
 interface MemoryScoringContext {

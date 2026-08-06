@@ -10,6 +10,7 @@ import {
   buildRuntimeMemoryRoleTelemetry,
   extractRuntimeFactAnchorLabels,
   flushMemoryContextUsage,
+  formatMemoryInterviewFamilyResolutionForTrace,
   formatMemoryRetrievalPerformanceForTrace,
   formatMemorySelectionForTrace,
   prewarmMemoryContextSnapshot,
@@ -5966,6 +5967,10 @@ export function useMeetingAssistant() {
             memoryRoleTelemetry.anchorIneligibleCount,
           runtimeMemoryRoles: memoryRoleTelemetry.entries,
         };
+        const interviewFamilyTraceMetadata =
+          formatMemoryInterviewFamilyResolutionForTrace(
+            memoryContext.interviewFamilyResolution
+          );
 
         if (traceId) {
           traceStoreRef.current.recordOutput(
@@ -6002,6 +6007,7 @@ export function useMeetingAssistant() {
               rejectSummary: memoryContext.rejectSummary,
               ...diagramOverlayTraceMetadata,
               ...memoryRoleTraceMetadata,
+              ...interviewFamilyTraceMetadata,
               memoryPolicySnapshot: memoryContext.policySnapshot,
               totalChars: memoryContext.totalChars,
               personalEvidenceFilteredEntries,
@@ -6034,6 +6040,7 @@ export function useMeetingAssistant() {
               diagramTopicDomain: diagramTopicDomain ?? "unknown",
               ...diagramOverlayTraceMetadata,
               ...memoryRoleTraceMetadata,
+              ...interviewFamilyTraceMetadata,
               ...memoryPerformanceTraceMetadata,
               memoryStage,
               personalEvidenceFilteredEntries,
@@ -6065,6 +6072,7 @@ export function useMeetingAssistant() {
             rejectSummary: memoryContext.rejectSummary,
             ...diagramOverlayTraceMetadata,
             ...memoryRoleTraceMetadata,
+            ...interviewFamilyTraceMetadata,
             ...memoryPerformanceTraceMetadata,
             memoryPolicySnapshot: memoryContext.policySnapshot,
             totalChars: memoryContext.totalChars,
@@ -6081,6 +6089,7 @@ export function useMeetingAssistant() {
               diagramTopicDomain: diagramTopicDomain ?? "unknown",
               ...diagramOverlayTraceMetadata,
               ...memoryRoleTraceMetadata,
+              ...interviewFamilyTraceMetadata,
               ...memoryPerformanceTraceMetadata,
             }
           );

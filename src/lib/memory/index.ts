@@ -2,6 +2,7 @@ export * from "./curated-drafts";
 export * from "./context-format";
 export * from "./diagram-overlay";
 export * from "./interview-family";
+export * from "./interview-family-telemetry";
 export * from "./parser";
 export * from "./retrieval";
 export * from "./retrieval-runtime";

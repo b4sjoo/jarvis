@@ -44,6 +44,20 @@ export interface RuntimeMemoryRoleTelemetryEntry {
   evidenceEntryIds: string[];
   interviewFamilies: string[];
   interviewFamilySource: "explicit" | "inferred" | "general";
+  interviewFamilyResolutionVersion: number;
+  interviewFamilyResolutionReason: string;
+  interviewFamilyEvidence: Array<{
+    family: string;
+    sourceKind: string;
+    sourceValueHash: string;
+    explicit: boolean;
+  }>;
+  suppressedInterviewFamilyEvidence: Array<{
+    family: string;
+    sourceKind: string;
+    sourceValueHash: string;
+    suppressedBySpecificFamily?: string;
+  }>;
 }
 
 export interface RuntimeMemoryRoleTelemetry {
@@ -157,6 +171,25 @@ export function buildRuntimeMemoryRoleTelemetry(
       evidenceEntryIds: [...item.entry.evidenceEntryIds],
       interviewFamilies: familyDecision.families,
       interviewFamilySource: familyDecision.source,
+      interviewFamilyResolutionVersion: familyDecision.resolutionVersion,
+      interviewFamilyResolutionReason: familyDecision.resolutionReason,
+      interviewFamilyEvidence: familyDecision.evidenceDetails
+        .slice(0, 8)
+        .map((evidence) => ({
+          family: evidence.family,
+          sourceKind: evidence.sourceKind,
+          sourceValueHash: evidence.sourceValueHash,
+          explicit: evidence.explicit,
+        })),
+      suppressedInterviewFamilyEvidence: familyDecision.suppressedEvidence
+        .slice(0, 8)
+        .map((evidence) => ({
+          family: evidence.family,
+          sourceKind: evidence.sourceKind,
+          sourceValueHash: evidence.sourceValueHash,
+          suppressedBySpecificFamily:
+            evidence.suppressedBySpecificFamily,
+        })),
     };
   });
 

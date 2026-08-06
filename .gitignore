@@ -25,6 +25,7 @@ public/transformers-wasm/
 .tmp-answer-sufficiency-reflection/
 .tmp-taxonomy-adjudication-reflection/
 .tmp-session-longitudinal-evaluation/
+.tmp-kmb-interview-family-reflection/
 
 # Editor directories and files
 .vscode/*
