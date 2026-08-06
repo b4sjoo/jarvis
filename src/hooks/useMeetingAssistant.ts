@@ -34,6 +34,7 @@ import {
   AdvisorTaskMutationAuthority,
   AnswerArtifactSection,
   AnswerGenerationLease,
+  RuntimeTypeRepairOutputAuthority,
   AnswerDeliveryProgress,
   PendingAnswerRevision,
   StableAnswerRevision,
@@ -140,6 +141,7 @@ import {
   base64WavToBlob,
   buildAmazonLeadershipPrincipleMemoryHint,
   authorizeAnswerGenerationLease,
+  authorizeRuntimeTypeRepairOutputAuthority,
   buildAnswerSufficiencySemanticText,
   buildDiagramOverlayEvalTraceMetadata,
   buildCurrentTaskDiagramDomainContext,
@@ -157,6 +159,7 @@ import {
   createInterviewSessionContextFromBrief,
   createMeetingId,
   createAnswerGenerationLease,
+  createRuntimeTypeRepairOutputAuthority,
   decideRefreshAuthority,
   decideStableAnswerCommit,
   detectAnswerSufficiencyShadow,
@@ -203,6 +206,7 @@ import {
   formatAnswerGenerationLeaseForTrace,
   formatStableAnswerCommitForTrace,
   formatRefreshAuthorityForTrace,
+  formatRuntimeTypeRepairOutputAuthorityForTrace,
   formatActiveQuestionTermCorrectionForTrace,
   formatAnswerSufficiencyDecisionForTrace,
   parseMeetingAnswer,
@@ -1617,6 +1621,7 @@ interface RunAdvisorOptions {
   manualPhaseTargetOverride?: InterviewPlaybookPhase;
   manualPhaseOperationId?: string;
   currentQuestionSettlementOverride?: CurrentQuestionSettlementDecision;
+  runtimeTypeRepairOutputAuthority?: RuntimeTypeRepairOutputAuthority;
   settledExecutionPlanOverride?: SettledAdvisorExecutionPlan;
   responseOnlyTaskScopeOverride?: ResponseOnlyTaskScope;
 }
@@ -6048,6 +6053,8 @@ export function useMeetingAssistant() {
     const refreshAuthority = decideRefreshAuthority({
       source,
       turnIntentDecision: options.turnIntentDecision,
+      runtimeTypeRepairOutputAuthority:
+        options.runtimeTypeRepairOutputAuthority,
     });
     if (
       source === "regenerate" ||
@@ -6105,6 +6112,8 @@ export function useMeetingAssistant() {
       logicalQuestionUnit: options.logicalQuestionUnit,
       taskMutationAuthority,
       refreshAuthority,
+      runtimeTypeRepairOutputAuthority:
+        options.runtimeTypeRepairOutputAuthority,
       manualCorrectionRevision: manualCorrectionRevisionRef.current,
       responseActionRevision: responseActionRevisionRef.current,
     });
@@ -6608,11 +6617,40 @@ export function useMeetingAssistant() {
         options.clarifyingFeedback ||
         options.manualQuestionTypeCorrection
     );
-    const executionAuthorization = authorizeAdvisorExecution({
-      force,
-      hasExplicitAction,
-      decision: inferredTurnIntentDecision,
-    });
+    const runtimeTypeRepairOutputAuthorization =
+      advisorJob.runtimeTypeRepairOutputAuthority
+        ? authorizeRuntimeTypeRepairOutputAuthority(
+            advisorJob.runtimeTypeRepairOutputAuthority,
+            {
+              settlementId: currentQuestionSettlement?.settlementId,
+              sessionId:
+                contextManagerRef.current.getState().sessionId,
+              runtimeEpoch: runtimeEpochRef.current,
+              logicalQuestionUnitId:
+                logicalQuestionUnitRef.current?.id,
+              logicalQuestionRevision:
+                logicalQuestionUnitRef.current?.revision,
+              manualCorrectionRevision:
+                manualCorrectionRevisionRef.current,
+            }
+          )
+        : undefined;
+    const runtimeTypeRepairOutputAuthorized =
+      runtimeTypeRepairOutputAuthorization?.authorized === true;
+    const executionAuthorization =
+      advisorJob.runtimeTypeRepairOutputAuthority
+        ? {
+            authorized: runtimeTypeRepairOutputAuthorized,
+            reason: runtimeTypeRepairOutputAuthorized
+              ? "runtime-type-repair-output-authority"
+              : `runtime-type-repair-denied:${runtimeTypeRepairOutputAuthorization?.reason ?? "missing-authorization"}`,
+            bypassed: runtimeTypeRepairOutputAuthorized,
+          }
+        : authorizeAdvisorExecution({
+            force,
+            hasExplicitAction,
+            decision: inferredTurnIntentDecision,
+          });
     const taskMutationAuthorization = authorizeAdvisorTaskMutation({
       authority: advisorJob.taskMutationAuthority,
       turnIntentDecision: inferredTurnIntentDecision,
@@ -7250,6 +7288,10 @@ export function useMeetingAssistant() {
         advisorExecutionAuthorized: executionAuthorization.authorized,
         advisorExecutionAuthorizationReason: executionAuthorization.reason,
         advisorExecutionBypassed: executionAuthorization.bypassed,
+        ...formatRuntimeTypeRepairOutputAuthorityForTrace(
+          advisorJob.runtimeTypeRepairOutputAuthority,
+          runtimeTypeRepairOutputAuthorization
+        ),
         ...formatQuestionLineageForTrace(questionLineage),
         ...formatTransientPersonalStatusForTrace(
           transientPersonalStatusDecision
@@ -7333,6 +7375,7 @@ export function useMeetingAssistant() {
 
     if (
       !force &&
+      !runtimeTypeRepairOutputAuthorized &&
       !advisorEngineRef.current.shouldRequestSuggestion(latestTurn)
     ) {
       recordCurrentQuestionSettlement();
@@ -7914,6 +7957,8 @@ export function useMeetingAssistant() {
                   phase: playbookPhaseDecision.phase,
                 }
               : undefined,
+          responseAuthorityId:
+            advisorJob.runtimeTypeRepairOutputAuthority?.id,
         });
       }
       settledAdvisorExecutionPlanRef.current =
@@ -8020,12 +8065,14 @@ export function useMeetingAssistant() {
       formatMeetingModelRouteForTrace(advisorModelRoute);
     const advisorModelRequestOptions =
       getMeetingModelRequestOptions(advisorModelRoute);
-    generationAuthorizedArtifacts = settledExecutionPlan
-      ? resolveAuthorizedAnswerArtifacts({
-          artifactPolicy: settledExecutionPlan.artifactPolicy,
-          artifactIntent: settledExecutionPlan.artifactIntent,
-        })
-      : ["answer"];
+    generationAuthorizedArtifacts = runtimeTypeRepairOutputAuthorized
+      ? ["answer"]
+      : settledExecutionPlan
+        ? resolveAuthorizedAnswerArtifacts({
+            artifactPolicy: settledExecutionPlan.artifactPolicy,
+            artifactIntent: settledExecutionPlan.artifactIntent,
+          })
+        : ["answer"];
     const generationContextState =
       contextManagerRef.current.getState();
     const generationParent =
@@ -9618,7 +9665,8 @@ export function useMeetingAssistant() {
     logicalQuestionUnit?: LogicalQuestionUnit,
     taskMutationAuthority: AdvisorTaskMutationAuthority = "input-evidence",
     currentQuestionSettlementOverride?: CurrentQuestionSettlementDecision,
-    debounceMs = ADVISOR_DEBOUNCE_MS
+    debounceMs = ADVISOR_DEBOUNCE_MS,
+    runtimeTypeRepairOutputAuthority?: RuntimeTypeRepairOutputAuthority
   ) => {
     if (!activeRef.current) return;
 
@@ -9636,6 +9684,7 @@ export function useMeetingAssistant() {
           currentQuestionLineageRef.current
         ),
       logicalQuestionUnit,
+      runtimeTypeRepairOutputAuthority,
     });
     if (!activateAdvisorJob(advisorJob)) return;
     advisorDebounceTimerRef.current = window.setTimeout(() => {
@@ -9648,6 +9697,7 @@ export function useMeetingAssistant() {
         advisorJob,
         logicalQuestionUnit,
         currentQuestionSettlementOverride,
+        runtimeTypeRepairOutputAuthority,
       });
     }, Math.max(0, debounceMs));
   }, [activateAdvisorJob, buildAdvisorJob, runAdvisor]);
@@ -11496,6 +11546,7 @@ export function useMeetingAssistant() {
             settlement: enforcement.authorized
               ? settlementPreview
               : undefined,
+            operationId: settlement.job.lease.operationId,
           });
           if (stepId) {
             traceStoreRef.current.finishStep(
@@ -13362,10 +13413,22 @@ export function useMeetingAssistant() {
         const settlement = outcome?.enforcement.authorized
           ? outcome.settlement
           : undefined;
-        const releaseAuthorized = Boolean(
+        const releaseEligible = Boolean(
           activeRef.current &&
             leaseAuthorization.authorized &&
             settlement
+        );
+        const runtimeTypeRepairOutputAuthority =
+          releaseEligible && settlement && outcome?.operationId
+            ? createRuntimeTypeRepairOutputAuthority({
+                operationId: outcome.operationId,
+                settlement,
+                manualCorrectionRevision:
+                  manualCorrectionRevisionRef.current,
+              })
+            : undefined;
+        const releaseAuthorized = Boolean(
+          releaseEligible && runtimeTypeRepairOutputAuthority
         );
         const metadata = {
           questionTypeAdjudicationWaitBudgetMs:
@@ -13383,6 +13446,9 @@ export function useMeetingAssistant() {
             leaseAuthorization.authorized,
           questionTypeAdjudicationReleaseLeaseReason:
             leaseAuthorization.reason,
+          ...formatRuntimeTypeRepairOutputAuthorityForTrace(
+            runtimeTypeRepairOutputAuthority
+          ),
           ...formatQuestionTypeEnforcementForTrace(
             outcome?.enforcement
           ),
@@ -13430,9 +13496,12 @@ export function useMeetingAssistant() {
           input.triggerTurnId,
           input.questionLineage,
           input.logicalQuestionUnit,
-          "input-evidence",
+          releaseAuthorized
+            ? "runtime-type-repair"
+            : "input-evidence",
           releaseAuthorized ? settlement : undefined,
-          0
+          0,
+          runtimeTypeRepairOutputAuthority
         );
       };
 

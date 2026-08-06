@@ -377,6 +377,34 @@ test("runtime intent answer can commit output without mutating task state", () =
   );
 });
 
+test("runtime type repair authorizes output only", () => {
+  const shadow = decideAdvisorTurnIntent("Multi-region failover.", {
+    hasActiveTask: true,
+  });
+
+  assert.deepEqual(
+    authorizeAdvisorTaskMutation({
+      authority: "runtime-type-repair",
+      turnIntentDecision: shadow,
+    }),
+    {
+      authorized: false,
+      reason: "runtime-type-repair-output-only",
+    }
+  );
+  assert.deepEqual(
+    authorizeAdvisorOutputCommit({
+      authority: "runtime-type-repair",
+      executionAuthorized: true,
+      turnIntentDecision: shadow,
+    }),
+    {
+      authorized: true,
+      reason: "runtime-type-repair-output-authority",
+    }
+  );
+});
+
 test("output authority follows execution without granting task mutation", () => {
   const allowed = decideAdvisorTurnIntent(
     "How would you design a distributed cache?",

@@ -113,6 +113,7 @@ export interface SettledAdvisorExecutionPlan {
   relation: CurrentQuestionRelation;
   taskRelation: InterviewTaskRelation;
   responseAuthorized: boolean;
+  responseAuthorityId?: string;
   responseIntent: SettledAdvisorResponseIntent;
   contextReadScope: AdvisorContextReadScope;
   artifactIntent: SettledAdvisorArtifactIntent;
@@ -179,6 +180,7 @@ export function buildSettledAdvisorExecutionPlan(input: {
   subtaskIntent?: InterviewSubtaskIntent;
   explicitTaskMutationCommand?: TaskLifecycleCommand;
   expectedActiveMeetingTask?: ActiveMeetingTask;
+  responseAuthorityId?: string;
   createdAt?: number;
 }): SettledAdvisorExecutionPlan {
   const relation = toInterviewTaskRelation(input.settlement.relation);
@@ -339,6 +341,9 @@ export function buildSettledAdvisorExecutionPlan(input: {
     relation: input.settlement.relation,
     taskRelation: relation,
     responseAuthorized: input.settlement.responseAuthorized,
+    ...(input.responseAuthorityId
+      ? { responseAuthorityId: input.responseAuthorityId }
+      : {}),
     responseIntent,
     contextReadScope,
     artifactIntent,
@@ -500,6 +505,12 @@ export function formatSettledAdvisorExecutionPlanForTrace(
     settledExecutionPlanTaskRelation: plan.taskRelation,
     settledExecutionPlanResponseAuthorized:
       plan.responseAuthorized,
+    ...(plan.responseAuthorityId
+      ? {
+          settledExecutionPlanResponseAuthorityId:
+            plan.responseAuthorityId,
+        }
+      : {}),
     settledExecutionPlanResponseIntent:
       plan.responseIntent,
     settledExecutionPlanContextReadScope:

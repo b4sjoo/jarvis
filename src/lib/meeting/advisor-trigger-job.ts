@@ -1,5 +1,8 @@
 import type { AdvisorTurnIntentDecision } from "./advisor-turn-intent.js";
-import type { RefreshAuthorityDecision } from "./answer-generation-lease.js";
+import type {
+  RefreshAuthorityDecision,
+  RuntimeTypeRepairOutputAuthority,
+} from "./answer-generation-lease.js";
 import { createMeetingId } from "./context-manager.js";
 import {
   formatLogicalQuestionUnitForTrace,
@@ -34,6 +37,7 @@ export type AdvisorTaskMutationAuthority =
   | "input-evidence"
   | "preserve-parent"
   | "runtime-intent-answer"
+  | "runtime-type-repair"
   | "manual-correction";
 
 export type AdvisorJobOutcome =
@@ -64,6 +68,7 @@ export interface AdvisorTriggerJob {
   logicalQuestionUnit?: LogicalQuestionUnit;
   taskMutationAuthority: AdvisorTaskMutationAuthority;
   refreshAuthority: RefreshAuthorityDecision;
+  runtimeTypeRepairOutputAuthority?: RuntimeTypeRepairOutputAuthority;
   manualCorrectionRevision: number;
   responseActionRevision: number;
   snapshotTurnCount: number;
@@ -85,6 +90,7 @@ export interface CreateAdvisorTriggerJobInput {
   logicalQuestionUnit?: LogicalQuestionUnit;
   taskMutationAuthority: AdvisorTaskMutationAuthority;
   refreshAuthority?: RefreshAuthorityDecision;
+  runtimeTypeRepairOutputAuthority?: RuntimeTypeRepairOutputAuthority;
   manualCorrectionRevision?: number;
   responseActionRevision?: number;
   scheduledAt?: number;
@@ -115,6 +121,7 @@ export interface AdvisorTaskMutationAuthorization {
     | "manual-correction-authority"
     | "explicit-action-authority"
     | "runtime-intent-action-only"
+    | "runtime-type-repair-output-only"
     | "missing-turn-intent-decision"
     | "turn-intent-would-suppress"
     | "turn-intent-not-answer-refresh";
@@ -125,6 +132,7 @@ export interface AdvisorOutputCommitAuthorization {
   reason:
     | "substantive-output-authority"
     | "runtime-intent-answer-output-authority"
+    | "runtime-type-repair-output-authority"
     | "manual-action-output-authority"
     | "execution-not-authorized"
     | "turn-intent-not-answer-refresh";
@@ -188,10 +196,17 @@ export function createAdvisorTriggerJob(
                 ? "manual-correction"
                 : input.source === "force-advise"
                   ? "force-advise"
-                  : "explicit-response-action",
+                : "explicit-response-action",
           hardOverride: input.source !== "live-turn",
           maySupersedeGeneration: true,
         },
+    runtimeTypeRepairOutputAuthority:
+      input.runtimeTypeRepairOutputAuthority
+        ? {
+            ...input.runtimeTypeRepairOutputAuthority,
+            authorizedArtifacts: ["answer"],
+          }
+        : undefined,
     manualCorrectionRevision: input.manualCorrectionRevision ?? 0,
     responseActionRevision: input.responseActionRevision ?? 0,
     snapshotTurnCount: input.snapshotTurnCount,
@@ -281,6 +296,12 @@ export function authorizeAdvisorTaskMutation(input: {
   if (input.authority === "runtime-intent-answer") {
     return { authorized: false, reason: "runtime-intent-action-only" };
   }
+  if (input.authority === "runtime-type-repair") {
+    return {
+      authorized: false,
+      reason: "runtime-type-repair-output-only",
+    };
+  }
 
   const decision = input.turnIntentDecision;
   if (!decision) {
@@ -325,6 +346,12 @@ export function authorizeAdvisorOutputCommit(input: {
           authorized: false,
           reason: "turn-intent-not-answer-refresh",
         };
+  }
+  if (input.authority === "runtime-type-repair") {
+    return {
+      authorized: true,
+      reason: "runtime-type-repair-output-authority",
+    };
   }
 
   const decision = input.turnIntentDecision;
@@ -411,6 +438,9 @@ export function formatAdvisorTriggerJobForTrace(
     refreshAuthorityAuthorized: job.refreshAuthority.authorized,
     refreshAuthorityReason: job.refreshAuthority.reason,
     refreshAuthorityHardOverride: job.refreshAuthority.hardOverride,
+    ...(job.refreshAuthority.authorityId
+      ? { refreshAuthorityId: job.refreshAuthority.authorityId }
+      : {}),
     advisorJobManualCorrectionRevision: job.manualCorrectionRevision,
     advisorJobResponseActionRevision: job.responseActionRevision,
     advisorJobSnapshotTurnCount: job.snapshotTurnCount,

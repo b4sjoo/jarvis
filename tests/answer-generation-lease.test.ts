@@ -2,11 +2,14 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   authorizeAnswerGenerationLease,
+  authorizeRuntimeTypeRepairOutputAuthority,
   createAnswerGenerationLease,
+  createRuntimeTypeRepairOutputAuthority,
   decideRefreshAuthority,
   formatAnswerGenerationLeaseForTrace,
 } from "../src/lib/meeting/answer-generation-lease.js";
 import { decideAdvisorTurnIntent } from "../src/lib/meeting/advisor-turn-intent.js";
+import type { CurrentQuestionSettlementDecision } from "../src/lib/meeting/current-question-settlement.js";
 
 test("grants refresh authority to substantive turns and explicit actions", () => {
   const substantive = decideRefreshAuthority({
@@ -76,6 +79,93 @@ test("grants action-only refresh authority to a released runtime intent answer",
   assert.equal(authority.authorized, true);
   assert.equal(authority.kind, "runtime-intent-answer");
   assert.equal(authority.hardOverride, false);
+});
+
+function buildTypeRepairSettlement(
+  overrides: Partial<CurrentQuestionSettlementDecision> = {}
+): CurrentQuestionSettlementDecision {
+  return {
+    settlementId: "settlement-a",
+    logicalQuestionUnitId: "question-a",
+    revision: 2,
+    sessionId: "session-a",
+    runtimeEpoch: 4,
+    sourceHash: "source-a",
+    questionType: "general-system-design",
+    relation: "unknown",
+    action: "answer",
+    evidenceMode: "hypothetical-design",
+    authority: "llm-type-repair",
+    authoritySource: "llm-type-repair",
+    typeAuthoritySource: "llm-type-repair",
+    relationAuthoritySource: "provisional",
+    actionAuthoritySource: "provisional",
+    typeMutationAuthorized: true,
+    relationMutationAuthorized: false,
+    parentMutationAuthorized: false,
+    responseAuthorized: true,
+    confidence: 0.95,
+    manualCorrectionRevision: 1,
+    rejectedProposals: [],
+    reasons: ["response-authorized"],
+    ...overrides,
+  };
+}
+
+test("turns an accepted type repair into one answer-only refresh authority", () => {
+  const authority = createRuntimeTypeRepairOutputAuthority({
+    operationId: "type-operation-a",
+    settlement: buildTypeRepairSettlement(),
+    manualCorrectionRevision: 1,
+    createdAt: 100,
+  });
+
+  assert.ok(authority);
+  assert.deepEqual(authority.authorizedArtifacts, ["answer"]);
+  assert.equal(authority.typeAuthority, "llm-type-repair");
+  const refresh = decideRefreshAuthority({
+    source: "live-turn",
+    turnIntentDecision: decideAdvisorTurnIntent("Kubernetes.", {
+      hasActiveTask: true,
+    }),
+    runtimeTypeRepairOutputAuthority: authority,
+  });
+  assert.equal(refresh.authorized, true);
+  assert.equal(refresh.kind, "runtime-type-repair");
+  assert.equal(refresh.authorityId, authority.id);
+});
+
+test("rejects stale type-repair output authority and broader mutation", () => {
+  const authority = createRuntimeTypeRepairOutputAuthority({
+    operationId: "type-operation-a",
+    settlement: buildTypeRepairSettlement(),
+    manualCorrectionRevision: 1,
+  });
+  assert.ok(authority);
+  assert.deepEqual(
+    authorizeRuntimeTypeRepairOutputAuthority(authority, {
+      settlementId: "settlement-a",
+      sessionId: "session-a",
+      runtimeEpoch: 4,
+      logicalQuestionUnitId: "question-a",
+      logicalQuestionRevision: 3,
+      manualCorrectionRevision: 1,
+    }),
+    {
+      authorized: false,
+      reason: "logical-question-revision-mismatch",
+    }
+  );
+  assert.equal(
+    createRuntimeTypeRepairOutputAuthority({
+      operationId: "type-operation-b",
+      settlement: buildTypeRepairSettlement({
+        relationMutationAuthorized: true,
+      }),
+      manualCorrectionRevision: 1,
+    }),
+    undefined
+  );
 });
 
 function buildLease() {

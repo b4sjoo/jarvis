@@ -5,6 +5,9 @@ import type {
   AdvisorTurnIntentDecision,
 } from "./advisor-turn-intent.js";
 import { createMeetingId } from "./context-manager.js";
+import type {
+  CurrentQuestionSettlementDecision,
+} from "./current-question-settlement.js";
 
 export type AnswerArtifactSection =
   | "answer"
@@ -16,6 +19,7 @@ export type RefreshAuthorityKind =
   | "automatic-substantive"
   | "shadow-fail-open"
   | "runtime-intent-answer"
+  | "runtime-type-repair"
   | "manual-hard-override"
   | "screen-hard-override"
   | "denied";
@@ -31,12 +35,51 @@ export interface RefreshAuthorityDecision {
     | "force-advise"
     | "screen-capture"
     | "runtime-intent-answer"
+    | "runtime-type-repair"
     | "missing-turn-intent"
     | "turn-intent-not-authorized"
     | "turn-intent-not-answer-refresh"
     | "shadow-fail-open-disallowed";
   hardOverride: boolean;
   maySupersedeGeneration: boolean;
+  authorityId?: string;
+}
+
+export interface RuntimeTypeRepairOutputAuthority {
+  id: string;
+  operationId: string;
+  settlementId: string;
+  sessionId: string;
+  runtimeEpoch: number;
+  logicalQuestionUnitId: string;
+  logicalQuestionRevision: number;
+  manualCorrectionRevision: number;
+  typeAuthority: "llm-type-repair";
+  authorizedArtifacts: ["answer"];
+  createdAt: number;
+}
+
+export interface RuntimeTypeRepairOutputAuthoritySnapshot {
+  settlementId?: string;
+  sessionId: string;
+  runtimeEpoch: number;
+  logicalQuestionUnitId?: string;
+  logicalQuestionRevision?: number;
+  manualCorrectionRevision: number;
+}
+
+export type RuntimeTypeRepairOutputAuthorityReason =
+  | "authorized"
+  | "settlement-mismatch"
+  | "session-mismatch"
+  | "runtime-epoch-mismatch"
+  | "logical-question-mismatch"
+  | "logical-question-revision-mismatch"
+  | "manual-correction-revision-mismatch";
+
+export interface RuntimeTypeRepairOutputAuthorization {
+  authorized: boolean;
+  reason: RuntimeTypeRepairOutputAuthorityReason;
 }
 
 export interface AnswerGenerationLease {
@@ -94,7 +137,18 @@ export interface AnswerGenerationLeaseAuthorization {
 export function decideRefreshAuthority(input: {
   source: AdvisorJobSource | "screen";
   turnIntentDecision?: AdvisorTurnIntentDecision;
+  runtimeTypeRepairOutputAuthority?: RuntimeTypeRepairOutputAuthority;
 }): RefreshAuthorityDecision {
+  if (input.runtimeTypeRepairOutputAuthority) {
+    return {
+      authorized: true,
+      kind: "runtime-type-repair",
+      reason: "runtime-type-repair",
+      hardOverride: false,
+      maySupersedeGeneration: true,
+      authorityId: input.runtimeTypeRepairOutputAuthority.id,
+    };
+  }
   if (input.source === "screen") {
     return {
       authorized: true,
@@ -197,6 +251,105 @@ export function decideRefreshAuthority(input: {
   };
 }
 
+export function createRuntimeTypeRepairOutputAuthority(input: {
+  operationId: string;
+  settlement: CurrentQuestionSettlementDecision;
+  manualCorrectionRevision: number;
+  createdAt?: number;
+}): RuntimeTypeRepairOutputAuthority | undefined {
+  if (
+    input.settlement.typeAuthoritySource !== "llm-type-repair" ||
+    !input.settlement.typeMutationAuthorized ||
+    input.settlement.relationMutationAuthorized ||
+    input.settlement.parentMutationAuthorized ||
+    !input.settlement.responseAuthorized ||
+    input.settlement.action !== "answer"
+  ) {
+    return undefined;
+  }
+
+  return {
+    id: createMeetingId("runtime_type_repair_output_authority"),
+    operationId: input.operationId,
+    settlementId: input.settlement.settlementId,
+    sessionId: input.settlement.sessionId,
+    runtimeEpoch: input.settlement.runtimeEpoch,
+    logicalQuestionUnitId:
+      input.settlement.logicalQuestionUnitId,
+    logicalQuestionRevision: input.settlement.revision,
+    manualCorrectionRevision: input.manualCorrectionRevision,
+    typeAuthority: "llm-type-repair",
+    authorizedArtifacts: ["answer"],
+    createdAt: input.createdAt ?? Date.now(),
+  };
+}
+
+export function authorizeRuntimeTypeRepairOutputAuthority(
+  authority: RuntimeTypeRepairOutputAuthority,
+  current: RuntimeTypeRepairOutputAuthoritySnapshot
+): RuntimeTypeRepairOutputAuthorization {
+  if (authority.settlementId !== current.settlementId) {
+    return { authorized: false, reason: "settlement-mismatch" };
+  }
+  if (authority.sessionId !== current.sessionId) {
+    return { authorized: false, reason: "session-mismatch" };
+  }
+  if (authority.runtimeEpoch !== current.runtimeEpoch) {
+    return { authorized: false, reason: "runtime-epoch-mismatch" };
+  }
+  if (
+    authority.logicalQuestionUnitId !==
+    current.logicalQuestionUnitId
+  ) {
+    return { authorized: false, reason: "logical-question-mismatch" };
+  }
+  if (
+    authority.logicalQuestionRevision !==
+    current.logicalQuestionRevision
+  ) {
+    return {
+      authorized: false,
+      reason: "logical-question-revision-mismatch",
+    };
+  }
+  if (
+    authority.manualCorrectionRevision !==
+    current.manualCorrectionRevision
+  ) {
+    return {
+      authorized: false,
+      reason: "manual-correction-revision-mismatch",
+    };
+  }
+  return { authorized: true, reason: "authorized" };
+}
+
+export function formatRuntimeTypeRepairOutputAuthorityForTrace(
+  authority: RuntimeTypeRepairOutputAuthority | undefined,
+  authorization?: RuntimeTypeRepairOutputAuthorization
+) {
+  return {
+    runtimeTypeRepairOutputAuthorityId: authority?.id,
+    runtimeTypeRepairOperationId: authority?.operationId,
+    runtimeTypeRepairSettlementId: authority?.settlementId,
+    runtimeTypeRepairSessionId: authority?.sessionId,
+    runtimeTypeRepairRuntimeEpoch: authority?.runtimeEpoch,
+    runtimeTypeRepairLogicalQuestionUnitId:
+      authority?.logicalQuestionUnitId,
+    runtimeTypeRepairLogicalQuestionRevision:
+      authority?.logicalQuestionRevision,
+    runtimeTypeRepairManualCorrectionRevision:
+      authority?.manualCorrectionRevision,
+    runtimeTypeRepairTypeAuthority: authority?.typeAuthority,
+    runtimeTypeRepairAuthorizedArtifacts:
+      authority?.authorizedArtifacts,
+    runtimeTypeRepairOutputAuthorized:
+      authorization?.authorized,
+    runtimeTypeRepairOutputAuthorizationReason:
+      authorization?.reason,
+  };
+}
+
 export function createAnswerGenerationLease(
   input: Omit<AnswerGenerationLease, "id" | "startedAt"> & {
     startedAt?: number;
@@ -285,6 +438,9 @@ export function formatRefreshAuthorityForTrace(
     refreshAuthorityAuthorized: decision.authorized,
     refreshAuthorityReason: decision.reason,
     refreshAuthorityHardOverride: decision.hardOverride,
+    ...(decision.authorityId
+      ? { refreshAuthorityId: decision.authorityId }
+      : {}),
     refreshAuthorityMaySupersedeGeneration:
       decision.maySupersedeGeneration,
   };

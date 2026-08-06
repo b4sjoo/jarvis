@@ -93,6 +93,7 @@ export interface QuestionTypeAdjudicationRuntimeOutcome {
   disposition: string;
   enforcement: QuestionTypeEnforcementDecision;
   settlement?: CurrentQuestionSettlementDecision;
+  operationId?: string;
 }
 
 export function normalizeQuestionTypeAdjudicationMode(
