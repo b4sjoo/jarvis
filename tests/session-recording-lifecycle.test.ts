@@ -779,9 +779,25 @@ test("session summaries retain answer delivery and artifact stability evidence",
       pendingAnswerOperationId: "pending_1",
       requestedArtifacts: ["answer", "code"],
       authorizedArtifacts: ["answer"],
+      generationRequestedArtifacts: ["answer", "complexity"],
+      parsedArtifacts: ["answer", "code", "complexity"],
+      parentAuthorizedArtifacts: ["answer"],
+      screenAuthorizedArtifacts: ["answer", "code", "complexity"],
+      committedArtifacts: ["answer", "code", "complexity"],
+      screenArtifactAuthoritySource: "manual-screen",
+      screenArtifactAuthorityAuthorized: true,
+      screenArtifactAuthorityReason: "manual-screen-result; code-present",
+      playbookArtifactContractMismatch: true,
+      playbookArtifactContractMismatchReasons: [
+        "code:not-requested-by-playbook",
+      ],
+      artifactCacheDisposition: "replaced",
       artifactMutationRejectedReasons: ["code:not-authorized"],
       answerSectionRevision: 2,
       codeSectionRevision: 1,
+      previousCodeRevision: 0,
+      nextCodeRevision: 1,
+      renderedCodeArtifactRevision: 1,
       answerDwellMs: 5_400,
       advisorIntentAuthoritySource: "runtime-intent-gate",
       shortIntentLocalDisposition: "runtime-required",
@@ -816,6 +832,15 @@ test("session summaries retain answer delivery and artifact stability evidence",
   assert.equal(compact.answerDeliveryLockState, "update-ready");
   assert.deepEqual(compact.authorizedArtifacts, ["answer"]);
   assert.equal(compact.answerSectionRevision, 2);
+  assert.equal(compact.screenArtifactAuthoritySource, "manual-screen");
+  assert.deepEqual(compact.screenAuthorizedArtifacts, [
+    "answer",
+    "code",
+    "complexity",
+  ]);
+  assert.equal(compact.playbookArtifactContractMismatch, true);
+  assert.equal(compact.artifactCacheDisposition, "replaced");
+  assert.equal(compact.renderedCodeArtifactRevision, 1);
   assert.equal(compact.advisorIntentAuthoritySource, "runtime-intent-gate");
   assert.equal(compact.shortIntentGateAppliedAction, "answer");
 

@@ -359,11 +359,28 @@ export interface SessionCompactTraceSummary {
   pendingAnswerOperationId?: string;
   requestedArtifacts: string[];
   authorizedArtifacts: string[];
+  generationRequestedArtifacts: string[];
+  parsedArtifacts: string[];
+  parentAuthorizedArtifacts: string[];
+  screenAuthorizedArtifacts: string[];
+  committedArtifacts: string[];
+  screenArtifactAuthoritySource?: string;
+  screenArtifactAuthorityAuthorized?: boolean;
+  screenArtifactAuthorityReason?: string;
+  playbookArtifactContractMismatch?: boolean;
+  playbookArtifactContractMismatchReasons: string[];
+  artifactCacheDisposition?: string;
   artifactMutationRejectedReasons: string[];
   answerSectionRevision?: number;
   codeSectionRevision?: number;
   complexitySectionRevision?: number;
   whiteboardSectionRevision?: number;
+  previousCodeRevision?: number;
+  nextCodeRevision?: number;
+  previousComplexityRevision?: number;
+  nextComplexityRevision?: number;
+  renderedCodeArtifactRevision?: number;
+  renderedComplexityArtifactRevision?: number;
   codeMutationWithoutCodeIntent?: boolean;
   answerDwellMs?: number;
   manualQuestionTypeCorrectionId?: string;
@@ -4205,6 +4222,50 @@ export function buildCompactTraceSummary({
       metadataSources,
       "authorizedArtifacts"
     ),
+    generationRequestedArtifacts: readFirstStringList(
+      metadataSources,
+      "generationRequestedArtifacts"
+    ),
+    parsedArtifacts: readFirstStringList(
+      metadataSources,
+      "parsedArtifacts"
+    ),
+    parentAuthorizedArtifacts: readFirstStringList(
+      metadataSources,
+      "parentAuthorizedArtifacts"
+    ),
+    screenAuthorizedArtifacts: readFirstStringList(
+      metadataSources,
+      "screenAuthorizedArtifacts"
+    ),
+    committedArtifacts: readFirstStringList(
+      metadataSources,
+      "committedArtifacts"
+    ),
+    screenArtifactAuthoritySource: readFirstString(
+      metadataSources,
+      "screenArtifactAuthoritySource"
+    ),
+    screenArtifactAuthorityAuthorized: readFirstBoolean(
+      metadataSources,
+      "screenArtifactAuthorityAuthorized"
+    ),
+    screenArtifactAuthorityReason: readFirstString(
+      metadataSources,
+      "screenArtifactAuthorityReason"
+    ),
+    playbookArtifactContractMismatch: readFirstBoolean(
+      metadataSources,
+      "playbookArtifactContractMismatch"
+    ),
+    playbookArtifactContractMismatchReasons: readFirstStringList(
+      metadataSources,
+      "playbookArtifactContractMismatchReasons"
+    ),
+    artifactCacheDisposition: readFirstString(
+      metadataSources,
+      "artifactCacheDisposition"
+    ),
     artifactMutationRejectedReasons: readFirstStringList(
       metadataSources,
       "artifactMutationRejectedReasons"
@@ -4224,6 +4285,30 @@ export function buildCompactTraceSummary({
     whiteboardSectionRevision: readFirstNumberFromMetadata(
       metadataSources,
       "whiteboardSectionRevision"
+    ),
+    previousCodeRevision: readFirstNumberFromMetadata(
+      metadataSources,
+      "previousCodeRevision"
+    ),
+    nextCodeRevision: readFirstNumberFromMetadata(
+      metadataSources,
+      "nextCodeRevision"
+    ),
+    previousComplexityRevision: readFirstNumberFromMetadata(
+      metadataSources,
+      "previousComplexityRevision"
+    ),
+    nextComplexityRevision: readFirstNumberFromMetadata(
+      metadataSources,
+      "nextComplexityRevision"
+    ),
+    renderedCodeArtifactRevision: readFirstNumberFromMetadata(
+      metadataSources,
+      "renderedCodeArtifactRevision"
+    ),
+    renderedComplexityArtifactRevision: readFirstNumberFromMetadata(
+      metadataSources,
+      "renderedComplexityArtifactRevision"
     ),
     codeMutationWithoutCodeIntent: readFirstBoolean(
       metadataSources,
