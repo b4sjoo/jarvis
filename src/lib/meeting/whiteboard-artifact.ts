@@ -15,6 +15,10 @@ import {
   normalizeCanonicalQuestionType,
 } from "./task-taxonomy.js";
 import { buildWhiteboardAsciiFallback } from "./whiteboard-ascii-fallback.js";
+import {
+  sanitizeWhiteboardMermaidSyntax,
+  type WhiteboardMermaidSanitationChange,
+} from "./whiteboard-mermaid-sanitizer.js";
 
 export interface WhiteboardArtifactUpdateInput {
   existing?: WhiteboardArtifact;
@@ -61,6 +65,11 @@ export interface WhiteboardRenderValidationDecision {
   durationMs: number;
   parserErrorClass?: string;
   parserErrorDetail?: string;
+  resolvedWhiteboard?: string;
+  sanitationDisposition?: "not-needed" | "applied" | "failed";
+  sanitationChanges?: WhiteboardMermaidSanitationChange[];
+  originalParserErrorClass?: string;
+  originalParserErrorDetail?: string;
 }
 
 export interface WhiteboardRenderValidationInput {
@@ -138,36 +147,48 @@ export async function validateWhiteboardRenderCandidate({
     });
   }
 
-  try {
-    const mermaid = (await loadMermaidModule()).default;
-    for (const block of mermaidBlocks) {
-      if (!block) {
-        return invalidMermaidDecision({
+  const originalFailure = await parseMermaidBlocks(mermaidBlocks);
+  if (originalFailure) {
+    const sanitation = sanitizeWhiteboardMermaidSyntax(normalized);
+    if (sanitation.changed) {
+      const sanitizedBlocks = extractMermaidBlocks(sanitation.whiteboard);
+      const sanitizedFailure = sanitizedBlocks.length
+        ? await parseMermaidBlocks(sanitizedBlocks)
+        : originalFailure;
+      if (!sanitizedFailure) {
+        return {
           operationId,
+          candidateKind: "mermaid",
           candidateFingerprint,
-          parserErrorClass: "empty-mermaid-diagram",
-          parserErrorDetail: "The Mermaid block is empty.",
-          startedAt,
-        });
+          disposition: "valid-mermaid",
+          valid: true,
+          durationMs: elapsedMs(startedAt),
+          resolvedWhiteboard: sanitation.whiteboard,
+          sanitationDisposition: "applied",
+          sanitationChanges: sanitation.changes,
+          originalParserErrorClass: originalFailure.parserErrorClass,
+          originalParserErrorDetail: originalFailure.parserErrorDetail,
+        };
       }
-      const parsed = await mermaid.parse(block, { suppressErrors: true });
-      if (!parsed) {
-        return invalidMermaidDecision({
-          operationId,
-          candidateFingerprint,
-          parserErrorClass: "mermaid-syntax-error",
-          parserErrorDetail:
-            "The Mermaid parser rejected the diagram without a diagnostic message.",
-          startedAt,
-        });
-      }
+      return invalidMermaidDecision({
+        operationId,
+        candidateFingerprint,
+        parserErrorClass: sanitizedFailure.parserErrorClass,
+        parserErrorDetail: sanitizedFailure.parserErrorDetail,
+        resolvedWhiteboard: sanitation.whiteboard,
+        sanitationDisposition: "failed",
+        sanitationChanges: sanitation.changes,
+        originalParserErrorClass: originalFailure.parserErrorClass,
+        originalParserErrorDetail: originalFailure.parserErrorDetail,
+        startedAt,
+      });
     }
-  } catch (error) {
     return invalidMermaidDecision({
       operationId,
       candidateFingerprint,
-      parserErrorClass: classifyMermaidParserError(error),
-      parserErrorDetail: normalizeMermaidParserErrorDetail(error),
+      parserErrorClass: originalFailure.parserErrorClass,
+      parserErrorDetail: originalFailure.parserErrorDetail,
+      sanitationDisposition: "not-needed",
       startedAt,
     });
   }
@@ -179,6 +200,7 @@ export async function validateWhiteboardRenderCandidate({
     disposition: "valid-mermaid",
     valid: true,
     durationMs: elapsedMs(startedAt),
+    sanitationDisposition: "not-needed",
   };
 }
 
@@ -204,6 +226,12 @@ export function formatWhiteboardRenderValidationForTrace({
     whiteboardRenderValidationDurationMs: decision?.durationMs ?? 0,
     whiteboardRenderParserErrorClass: decision?.parserErrorClass,
     whiteboardRenderParserErrorDetail: decision?.parserErrorDetail,
+    whiteboardRenderSanitationDisposition:
+      decision?.sanitationDisposition,
+    whiteboardRenderSanitationChanges:
+      decision?.sanitationChanges,
+    whiteboardRenderOriginalParserErrorClass:
+      decision?.originalParserErrorClass,
     whiteboardRenderVisibleRevisionBefore: before?.revision,
     whiteboardRenderVisibleRevisionAfter: visibleRevisionAfter,
     whiteboardRenderPreservedLastValid:
@@ -241,19 +269,23 @@ export function updateWhiteboardArtifactFromAnswer({
     return existing;
   }
 
-  const whiteboard =
+  const candidateWhiteboard =
     normalizeWhiteboardText(parsed.sections.whiteboard) ||
     (!existing && provisional
       ? buildProvisionalWhiteboard(parentTopic, parentQuestionType)
       : "");
-  if (!whiteboard) {
+  if (!candidateWhiteboard) {
     return existing;
   }
 
   const candidateValidation = authorizeWhiteboardCandidate({
-    whiteboard,
+    whiteboard: candidateWhiteboard,
     renderValidation,
   });
+  const whiteboard =
+    candidateValidation.valid && renderValidation?.resolvedWhiteboard
+      ? normalizeWhiteboardText(renderValidation.resolvedWhiteboard)
+      : candidateWhiteboard;
   if (!candidateValidation.valid) {
     const preserved = preserveLastValidWhiteboard({
       existing,
@@ -696,7 +728,14 @@ function createAsciiFallbackWhiteboard({
       candidateFingerprint: decision.candidateFingerprint,
       validationDurationMs: decision.durationMs,
       parserErrorClass: decision.parserErrorClass,
-      fallbackKind: "deterministic-ascii",
+      fallbackKind:
+        fallback.source === "mermaid-topology"
+          ? "deterministic-ascii"
+          : fallback.source === "mermaid-edge-list"
+            ? "deterministic-edge-list"
+            : fallback.source === "sanitized-text"
+              ? "sanitized-text"
+              : "unavailable",
       fallbackReason: `invalid-mermaid:${fallback.source}`,
       validatedAt: now,
     },
@@ -711,12 +750,22 @@ function invalidMermaidDecision({
   candidateFingerprint,
   parserErrorClass,
   parserErrorDetail,
+  resolvedWhiteboard,
+  sanitationDisposition,
+  sanitationChanges,
+  originalParserErrorClass,
+  originalParserErrorDetail,
   startedAt,
 }: {
   operationId: string;
   candidateFingerprint: string;
   parserErrorClass: string;
   parserErrorDetail?: string;
+  resolvedWhiteboard?: string;
+  sanitationDisposition?: "not-needed" | "applied" | "failed";
+  sanitationChanges?: WhiteboardMermaidSanitationChange[];
+  originalParserErrorClass?: string;
+  originalParserErrorDetail?: string;
   startedAt: number;
 }): WhiteboardRenderValidationDecision {
   return {
@@ -728,7 +777,55 @@ function invalidMermaidDecision({
     durationMs: elapsedMs(startedAt),
     parserErrorClass,
     parserErrorDetail,
+    resolvedWhiteboard,
+    sanitationDisposition,
+    sanitationChanges,
+    originalParserErrorClass,
+    originalParserErrorDetail,
   };
+}
+
+async function parseMermaidBlocks(blocks: string[]) {
+  let mermaid: (Awaited<ReturnType<typeof loadMermaidModule>>)["default"];
+  try {
+    mermaid = (await loadMermaidModule()).default;
+  } catch (error) {
+    return {
+      parserErrorClass: "mermaid-parser-unavailable",
+      parserErrorDetail: normalizeMermaidParserErrorDetail(error),
+    };
+  }
+  for (const block of blocks) {
+    if (!block) {
+      return {
+        parserErrorClass: "empty-mermaid-diagram",
+        parserErrorDetail: "The Mermaid block is empty.",
+      };
+    }
+    try {
+      const parsed = await mermaid.parse(block, { suppressErrors: true });
+      if (parsed) continue;
+      try {
+        await mermaid.parse(block, { suppressErrors: false });
+      } catch (error) {
+        return {
+          parserErrorClass: classifyMermaidParserError(error),
+          parserErrorDetail: normalizeMermaidParserErrorDetail(error),
+        };
+      }
+      return {
+        parserErrorClass: "mermaid-syntax-error",
+        parserErrorDetail:
+          "The Mermaid parser rejected the diagram without a diagnostic message.",
+      };
+    } catch (error) {
+      return {
+        parserErrorClass: classifyMermaidParserError(error),
+        parserErrorDetail: normalizeMermaidParserErrorDetail(error),
+      };
+    }
+  }
+  return undefined;
 }
 
 function classifyMermaidParserError(error: unknown) {
@@ -737,7 +834,7 @@ function classifyMermaidParserError(error: unknown) {
   if (normalizedName && normalizedName !== "error") {
     return `mermaid-${normalizedName.replace(/[^a-z0-9]+/g, "-")}`;
   }
-  return "mermaid-parser-error";
+  return "mermaid-syntax-error";
 }
 
 function normalizeMermaidParserErrorDetail(error: unknown) {

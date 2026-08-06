@@ -352,11 +352,46 @@ test("preserves the last valid revision when Mermaid validation fails", async ()
   assert.equal(trace.whiteboardRenderVisibleRevisionAfter, 1);
 });
 
+test("promotes deterministic Mermaid sanitation to the visible artifact", async () => {
+  const unsafeWhiteboard = [
+    "```mermaid",
+    "flowchart TD",
+    "  Client → API",
+    "```",
+  ].join("\n");
+  const validation = await validateWhiteboardRenderCandidate({
+    whiteboard: unsafeWhiteboard,
+    operationId: "validation_sanitized",
+  });
+
+  assert.equal(validation.valid, true);
+  assert.equal(validation.sanitationDisposition, "applied");
+  assert.ok(validation.resolvedWhiteboard);
+  assert.match(validation.resolvedWhiteboard, /Client --> API/);
+
+  const artifact = updateWhiteboardArtifactFromAnswer({
+    parentTaskId: "parent_sanitized",
+    parentQuestionType: "general-system-design",
+    parentTopic: "Design a service",
+    finalContent: `Whiteboard:\n${unsafeWhiteboard}`,
+    phase: "design_framing",
+    renderValidation: validation,
+    updateSource: "model-output",
+    now: 1,
+  });
+
+  assert.ok(artifact);
+  assert.equal(artifact.renderState?.status, "valid-mermaid");
+  assert.match(artifact.content, /Client --> API/);
+  assert.doesNotMatch(artifact.content, /→/);
+});
+
 test("projects a first invalid Mermaid revision to an authorized ASCII artifact", async () => {
   const invalidWhiteboard = [
     "```mermaid",
     "flowchart TD",
     "  subgraph Open Constraints & Unclear Scale",
+    "  Client --> API",
     "```",
   ].join("\n");
   const validation = await validateWhiteboardRenderCandidate({
@@ -383,7 +418,9 @@ test("projects a first invalid Mermaid revision to an authorized ASCII artifact"
     "deterministic-ascii"
   );
   assert.doesNotMatch(artifact.content, /```mermaid/);
-  assert.match(artifact.content, /Open Constraints/);
+  assert.match(artifact.content, /Architecture sketch \(ASCII fallback\)/);
+  assert.match(artifact.content, /\[Client\]/);
+  assert.match(artifact.content, /\\--> \[API\]/);
 });
 
 test("uses ASCII fallback when Mermaid validation belongs to different content", async () => {

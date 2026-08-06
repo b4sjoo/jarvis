@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  WHITEBOARD_VIEWPORT_DEFAULT_ZOOM,
   WHITEBOARD_VIEWPORT_MAX_ZOOM,
   WHITEBOARD_VIEWPORT_MIN_ZOOM,
   clampWhiteboardViewportOffset,
@@ -10,11 +11,12 @@ import {
 
 test("clamps whiteboard zoom to the supported range", () => {
   assert.equal(clampWhiteboardViewportZoom(0.25), WHITEBOARD_VIEWPORT_MIN_ZOOM);
+  assert.equal(clampWhiteboardViewportZoom(0.75), 0.75);
   assert.equal(clampWhiteboardViewportZoom(2.5), 2.5);
   assert.equal(clampWhiteboardViewportZoom(8), WHITEBOARD_VIEWPORT_MAX_ZOOM);
   assert.equal(
     clampWhiteboardViewportZoom(Number.NaN),
-    WHITEBOARD_VIEWPORT_MIN_ZOOM
+    WHITEBOARD_VIEWPORT_DEFAULT_ZOOM
   );
 });
 

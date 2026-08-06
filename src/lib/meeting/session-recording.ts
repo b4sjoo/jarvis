@@ -972,6 +972,9 @@ export interface SessionCompactTraceSummary {
     validationDisposition?: string;
     validationDurationMs?: number;
     parserErrorClass?: string;
+    sanitationDisposition?: string;
+    sanitationChanges?: string[];
+    originalParserErrorClass?: string;
     visibleRevisionBefore?: number;
     visibleRevisionAfter?: number;
     preservedLastValid?: boolean;
@@ -6951,6 +6954,18 @@ function buildWhiteboardTraceSummary(
     parserErrorClass: readFirstString(
       metadataSources,
       "whiteboardRenderParserErrorClass"
+    ),
+    sanitationDisposition: readFirstString(
+      metadataSources,
+      "whiteboardRenderSanitationDisposition"
+    ),
+    sanitationChanges: readFirstStringList(
+      metadataSources,
+      "whiteboardRenderSanitationChanges"
+    ),
+    originalParserErrorClass: readFirstString(
+      metadataSources,
+      "whiteboardRenderOriginalParserErrorClass"
     ),
     visibleRevisionBefore: readFirstNumberFromMetadata(
       metadataSources,

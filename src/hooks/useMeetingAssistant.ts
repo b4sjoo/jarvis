@@ -4125,8 +4125,10 @@ export function useMeetingAssistant() {
         return;
       }
 
+      const repairCandidateWhiteboard =
+        validation.resolvedWhiteboard ?? candidateWhiteboard;
       const request = createWhiteboardSyntaxRepairRequest({
-        whiteboard: candidateWhiteboard,
+        whiteboard: repairCandidateWhiteboard,
         parserError:
           validation.parserErrorDetail ??
           validation.parserErrorClass ??
@@ -4239,6 +4241,10 @@ export function useMeetingAssistant() {
         whiteboardRepairPromptVersion: request.promptVersion,
         whiteboardRepairSchemaVersion: request.schemaVersion,
         whiteboardRepairInputChars: promptText.length,
+        whiteboardRepairDeterministicSanitation:
+          validation.sanitationDisposition,
+        whiteboardRepairDeterministicSanitationChanges:
+          validation.sanitationChanges,
       };
       whiteboardSyntaxRepairAttemptKeysRef.current.add(attemptKey);
       while (whiteboardSyntaxRepairAttemptKeysRef.current.size > 256) {

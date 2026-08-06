@@ -93,6 +93,9 @@ export interface LongitudinalTraceSummary {
     validationDisposition?: string;
     validationDurationMs?: number;
     parserErrorClass?: string;
+    sanitationDisposition?: string;
+    sanitationChanges?: string[];
+    originalParserErrorClass?: string;
     visibleRevisionBefore?: number;
     visibleRevisionAfter?: number;
     preservedLastValid?: boolean;
@@ -375,6 +378,8 @@ export interface SessionLongitudinalEvaluationReport {
   whiteboardRenderFunnel: {
     observedCandidates: number;
     invalidCandidates: number;
+    sanitationAttempts: number;
+    sanitationSuccesses: number;
     repairAttempts: number;
     settledRepairAttempts: number;
     successfulShadowRepairs: number;
@@ -634,6 +639,14 @@ export function buildSessionLongitudinalEvaluationReport(
   const invalidWhiteboardCandidates = whiteboardCandidates.filter(
     ({ trace }) =>
       trace.whiteboard?.validationDisposition === "invalid-mermaid"
+  );
+  const whiteboardSanitationAttempts = whiteboardCandidates.filter(
+    ({ trace }) =>
+      trace.whiteboard?.sanitationDisposition === "applied" ||
+      trace.whiteboard?.sanitationDisposition === "failed"
+  );
+  const whiteboardSanitationSuccesses = whiteboardCandidates.filter(
+    ({ trace }) => trace.whiteboard?.sanitationDisposition === "applied"
   );
   const whiteboardRepairAttempts = invalidWhiteboardCandidates.filter(
     ({ trace }) => Boolean(trace.whiteboard?.repairOperationId)
@@ -967,6 +980,8 @@ export function buildSessionLongitudinalEvaluationReport(
     whiteboardRenderFunnel: {
       observedCandidates: whiteboardCandidates.length,
       invalidCandidates: invalidWhiteboardCandidates.length,
+      sanitationAttempts: whiteboardSanitationAttempts.length,
+      sanitationSuccesses: whiteboardSanitationSuccesses.length,
       repairAttempts: whiteboardRepairAttempts.length,
       settledRepairAttempts: settledWhiteboardRepairAttempts.length,
       successfulShadowRepairs: successfulShadowRepairs.length,
@@ -1568,6 +1583,7 @@ export function renderSessionLongitudinalEvaluationMarkdown(
     "## Whiteboard Render Integrity",
     "",
     `Candidates -> invalid -> repair attempts -> settled -> successful shadow repairs: ${report.whiteboardRenderFunnel.observedCandidates} -> ${report.whiteboardRenderFunnel.invalidCandidates} -> ${report.whiteboardRenderFunnel.repairAttempts} -> ${report.whiteboardRenderFunnel.settledRepairAttempts} -> ${report.whiteboardRenderFunnel.successfulShadowRepairs}`,
+    `Deterministic sanitation attempts / successes: ${report.whiteboardRenderFunnel.sanitationAttempts} / ${report.whiteboardRenderFunnel.sanitationSuccesses}`,
     `Validation failure rate: ${formatRate(report.whiteboardRenderFunnel.validationFailureRate)}`,
     `Repair attempt rate: ${formatRate(report.whiteboardRenderFunnel.repairAttemptRate)}`,
     `Repair success rate: ${formatRate(report.whiteboardRenderFunnel.repairSuccessRate)}`,

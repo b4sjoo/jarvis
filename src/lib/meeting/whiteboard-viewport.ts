@@ -1,6 +1,7 @@
-export const WHITEBOARD_VIEWPORT_MIN_ZOOM = 1;
+export const WHITEBOARD_VIEWPORT_MIN_ZOOM = 0.5;
+export const WHITEBOARD_VIEWPORT_DEFAULT_ZOOM = 1;
 export const WHITEBOARD_VIEWPORT_MAX_ZOOM = 4;
-export const WHITEBOARD_VIEWPORT_ZOOM_STEP = 0.5;
+export const WHITEBOARD_VIEWPORT_ZOOM_STEP = 0.25;
 
 export interface WhiteboardViewportOffset {
   x: number;
@@ -16,7 +17,7 @@ export interface WhiteboardViewportBounds {
 }
 
 export function clampWhiteboardViewportZoom(value: number) {
-  if (!Number.isFinite(value)) return WHITEBOARD_VIEWPORT_MIN_ZOOM;
+  if (!Number.isFinite(value)) return WHITEBOARD_VIEWPORT_DEFAULT_ZOOM;
   return Math.min(
     WHITEBOARD_VIEWPORT_MAX_ZOOM,
     Math.max(WHITEBOARD_VIEWPORT_MIN_ZOOM, value)

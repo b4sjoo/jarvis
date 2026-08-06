@@ -28,10 +28,12 @@ test("builds a bounded atomic request from invalid Mermaid", () => {
   assert.ok(request);
   assert.equal(request.input.diagramKind, "flowchart");
   assert.equal(request.input.parserError, "mermaid-syntax-error");
+  assert.match(request.input.parserContext ?? "", /subgraph Open Constraints/);
   assert.doesNotMatch(request.input.mermaid, /```/);
   const prompts = buildWhiteboardSyntaxRepairPrompts(request);
   assert.match(prompts.systemPrompt, /Change syntax only/);
   assert.match(prompts.userMessage, /Open Constraints/);
+  assert.match(prompts.userMessage, /parserContext/);
 });
 
 test("bounds parser diagnostics before sending the repair request", () => {

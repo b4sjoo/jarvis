@@ -5,7 +5,7 @@ import {
 import type { RuntimeInferenceRuntimeJob } from "./runtime-inference-runtime.js";
 
 export const WHITEBOARD_SYNTAX_REPAIR_PROMPT_VERSION =
-  "whiteboard-syntax-repair-v1";
+  "whiteboard-syntax-repair-v2";
 export const WHITEBOARD_SYNTAX_REPAIR_SCHEMA_VERSION = 1;
 export const WHITEBOARD_SYNTAX_REPAIR_MAX_MERMAID_CHARS = 12_000;
 export const WHITEBOARD_SYNTAX_REPAIR_MAX_ASCII_CHARS = 4_000;
@@ -21,6 +21,7 @@ export type WhiteboardDiagramKind =
 export interface WhiteboardSyntaxRepairInput {
   mermaid: string;
   parserError: string;
+  parserContext?: string;
   diagramKind: WhiteboardDiagramKind;
 }
 
@@ -134,6 +135,7 @@ export function createWhiteboardSyntaxRepairRequest(input: {
           0,
           WHITEBOARD_SYNTAX_REPAIR_MAX_PARSER_ERROR_CHARS
         ) || "mermaid-syntax-error",
+      parserContext: extractParserContext(mermaid, input.parserError),
       diagramKind: inferWhiteboardDiagramKind(mermaid),
     },
   };
@@ -145,6 +147,8 @@ export function buildWhiteboardSyntaxRepairPrompts(
   const systemPrompt = [
     "You repair Mermaid syntax for a live interview whiteboard.",
     "Change syntax only. Preserve every component, label, edge, group, and direction.",
+    "Treat parserError and parserContext as the primary repair target.",
+    'For unsafe labels, use a stable identifier with a quoted label, such as group_id["Display label"].',
     "Do not add architecture, delete constraints, rename concepts, or explain your work.",
     "Return exactly one JSON object and no Markdown fences.",
     'Schema: {"mermaid":"string","asciiFallback":"string","changedSyntaxOnly":true}',
@@ -155,10 +159,38 @@ export function buildWhiteboardSyntaxRepairPrompts(
     promptVersion: request.promptVersion,
     schemaVersion: request.schemaVersion,
     parserError: request.input.parserError,
+    parserContext: request.input.parserContext,
     diagramKind: request.input.diagramKind,
     mermaid: request.input.mermaid,
   });
   return { systemPrompt, userMessage };
+}
+
+function extractParserContext(mermaid: string, parserError: string) {
+  const lines = mermaid.split(/\r?\n/);
+  const lineNumber = Number(
+    parserError.match(/(?:line|row)\s+(\d+)/i)?.[1] ?? ""
+  );
+  if (Number.isInteger(lineNumber) && lineNumber > 0) {
+    return lines
+      .slice(Math.max(0, lineNumber - 2), Math.min(lines.length, lineNumber + 1))
+      .map((line, index) => `${Math.max(1, lineNumber - 1) + index}: ${line}`)
+      .join("\n")
+      .slice(0, WHITEBOARD_SYNTAX_REPAIR_MAX_PARSER_ERROR_CHARS);
+  }
+  const suspiciousIndex = lines.findIndex(
+    (line) =>
+      /^\s*subgraph\s+.+[\s&/:()]/i.test(line) ||
+      /\b[A-Za-z_][\w-]*\s*[\[{][^\]\}]*[&/:()][^\]\}]*[\]\}]/.test(
+        line
+      )
+  );
+  if (suspiciousIndex < 0) return undefined;
+  return lines
+    .slice(Math.max(0, suspiciousIndex - 1), suspiciousIndex + 2)
+    .map((line, index) => `${Math.max(1, suspiciousIndex) + index}: ${line}`)
+    .join("\n")
+    .slice(0, WHITEBOARD_SYNTAX_REPAIR_MAX_PARSER_ERROR_CHARS);
 }
 
 export function parseWhiteboardSyntaxRepairOutput(

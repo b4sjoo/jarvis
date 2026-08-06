@@ -265,6 +265,8 @@ test("reports whiteboard validation, repair, fallback, and latency denominators"
             validationOperationId: "validation_valid",
             validationDisposition: "valid-mermaid",
             validationDurationMs: 12,
+            sanitationDisposition: "applied",
+            sanitationChanges: ["quoted-node-label"],
             renderStatus: "valid-mermaid",
             mermaidEligible: true,
             mermaidRequested: true,
@@ -319,6 +321,8 @@ test("reports whiteboard validation, repair, fallback, and latency denominators"
 
   assert.equal(report.whiteboardRenderFunnel.observedCandidates, 3);
   assert.equal(report.whiteboardRenderFunnel.invalidCandidates, 2);
+  assert.equal(report.whiteboardRenderFunnel.sanitationAttempts, 1);
+  assert.equal(report.whiteboardRenderFunnel.sanitationSuccesses, 1);
   assert.equal(report.whiteboardRenderFunnel.repairAttempts, 2);
   assert.equal(report.whiteboardRenderFunnel.settledRepairAttempts, 2);
   assert.equal(report.whiteboardRenderFunnel.successfulShadowRepairs, 1);
@@ -340,6 +344,7 @@ test("reports whiteboard validation, repair, fallback, and latency denominators"
   const markdown = renderSessionLongitudinalEvaluationMarkdown(report);
   assert.match(markdown, /## Whiteboard Render Integrity/);
   assert.match(markdown, /Repair success rate: 50.0% \(1\/2\)/);
+  assert.match(markdown, /Deterministic sanitation attempts \/ successes: 1 \/ 1/);
   assert.match(markdown, /Mermaid eligible \/ requested \/ committed: 3 \/ 3 \/ 1/);
 });
 

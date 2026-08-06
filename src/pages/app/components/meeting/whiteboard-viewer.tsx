@@ -1,6 +1,7 @@
 import { Button, Markdown } from "@/components";
 import {
   WHITEBOARD_VIEWPORT_MAX_ZOOM,
+  WHITEBOARD_VIEWPORT_DEFAULT_ZOOM,
   WHITEBOARD_VIEWPORT_MIN_ZOOM,
   WHITEBOARD_VIEWPORT_ZOOM_STEP,
   clampWhiteboardViewportOffset,
@@ -59,7 +60,7 @@ export function WhiteboardViewer({
   const viewportRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<DragState | null>(null);
-  const [zoom, setZoom] = useState(WHITEBOARD_VIEWPORT_MIN_ZOOM);
+  const [zoom, setZoom] = useState(WHITEBOARD_VIEWPORT_DEFAULT_ZOOM);
   const [offset, setOffset] = useState<WhiteboardViewportOffset>({
     x: 0,
     y: 0,
@@ -95,7 +96,7 @@ export function WhiteboardViewer({
   );
 
   const resetViewport = useCallback(() => {
-    setZoom(WHITEBOARD_VIEWPORT_MIN_ZOOM);
+    setZoom(WHITEBOARD_VIEWPORT_DEFAULT_ZOOM);
     setOffset({ x: 0, y: 0 });
   }, []);
 
@@ -227,6 +228,11 @@ export function WhiteboardViewer({
       <WhiteboardToolbar
         expanded={expanded}
         zoom={zoom}
+        resetAvailable={
+          zoom !== WHITEBOARD_VIEWPORT_DEFAULT_ZOOM ||
+          offset.x !== 0 ||
+          offset.y !== 0
+        }
         onExpand={() => setExpanded((current) => !current)}
         onReset={resetViewport}
         onZoomIn={() =>
@@ -245,7 +251,7 @@ export function WhiteboardViewer({
         style={{
           cursor: dragging ? "grabbing" : "grab",
           touchAction:
-            zoom > WHITEBOARD_VIEWPORT_MIN_ZOOM ? "none" : "pan-y",
+            zoom > WHITEBOARD_VIEWPORT_DEFAULT_ZOOM ? "none" : "pan-y",
         }}
         role="application"
         aria-label="Interactive whiteboard diagram"
@@ -306,6 +312,7 @@ export function WhiteboardViewer({
 function WhiteboardToolbar({
   expanded,
   zoom,
+  resetAvailable,
   onExpand,
   onReset,
   onZoomIn,
@@ -313,6 +320,7 @@ function WhiteboardToolbar({
 }: {
   expanded: boolean;
   zoom: number;
+  resetAvailable: boolean;
   onExpand: () => void;
   onReset: () => void;
   onZoomIn: () => void;
@@ -348,7 +356,7 @@ function WhiteboardToolbar({
         className={buttonClass}
         title="Reset whiteboard view"
         aria-label="Reset whiteboard view"
-        disabled={zoom === WHITEBOARD_VIEWPORT_MIN_ZOOM}
+        disabled={!resetAvailable}
         onClick={onReset}
       >
         <RotateCcwIcon />

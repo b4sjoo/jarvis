@@ -721,6 +721,9 @@ export interface WhiteboardRenderState {
   parserErrorClass?: string;
   fallbackKind?:
     | "deterministic-ascii"
+    | "deterministic-edge-list"
+    | "sanitized-text"
+    | "unavailable"
     | "model-ascii"
     | "last-valid"
     | "renderer-boundary";

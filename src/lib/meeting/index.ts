@@ -123,6 +123,7 @@ export * from "./types";
 export * from "./whiteboard-artifact";
 export * from "./whiteboard-ascii-fallback";
 export * from "./whiteboard-format-policy";
+export * from "./whiteboard-mermaid-sanitizer";
 export * from "./whiteboard-viewport";
 export * from "./whiteboard-syntax-repair";
 export * from "./whiteboard-syntax-repair-request";
