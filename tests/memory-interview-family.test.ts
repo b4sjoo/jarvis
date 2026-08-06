@@ -3,8 +3,13 @@ import test from "node:test";
 import {
   auditMemoryInterviewFamilyNormalization,
   getMemoryInterviewFamilyGateRejectReason,
+  resolveMemoryInterviewFamilyGateDecision,
   resolveMemoryInterviewFamilies,
 } from "../src/lib/memory/interview-family.js";
+import {
+  createMemoryInterviewFamilyResolutionRecorder,
+  formatMemoryInterviewFamilyResolutionForTrace,
+} from "../src/lib/memory/interview-family-telemetry.js";
 import { classifyRuntimeMemoryRole } from "../src/lib/memory/runtime-role.js";
 import type { MemoryEntry } from "../src/lib/memory/types.js";
 
@@ -17,11 +22,14 @@ test("specialized project evidence receives families independently from runtime 
     title: "Agentic Memory retrieval pipeline",
   });
 
-  assert.deepEqual(resolveMemoryInterviewFamilies(entry), {
-    families: ["ai-ml-system-design", "project-deep-dive"],
-    source: "inferred",
-    evidence: ["ai-ml-metadata", "project-metadata"],
-  });
+  const decision = resolveMemoryInterviewFamilies(entry);
+  assert.deepEqual(decision.families, [
+    "ai-ml-system-design",
+    "project-deep-dive",
+  ]);
+  assert.equal(decision.source, "inferred");
+  assert.equal(decision.resolutionReason, "independent-inferred-evidence");
+  assert.equal(decision.resolutionVersion, 2);
   assert.equal(classifyRuntimeMemoryRole(entry).role, "fact-evidence");
 });
 
@@ -64,19 +72,16 @@ test("multi-family memories pass when one family is explicitly allowed", () => {
 });
 
 test("explicit families override inference and general memory stays general", () => {
-  assert.deepEqual(
-    resolveMemoryInterviewFamilies(
-      makeEntry({
-        title: "RAG notes",
-        interviewFamilies: ["project-deep-dive"],
-      })
-    ),
-    {
-      families: ["project-deep-dive"],
-      source: "explicit",
-      evidence: ["explicit:project-deep-dive"],
-    }
+  const explicit = resolveMemoryInterviewFamilies(
+    makeEntry({
+      title: "RAG notes",
+      interviewFamilies: ["project-deep-dive"],
+    })
   );
+  assert.deepEqual(explicit.families, ["project-deep-dive"]);
+  assert.equal(explicit.source, "explicit");
+  assert.equal(explicit.resolutionReason, "explicit-family");
+  assert.deepEqual(explicit.evidence, ["explicit:project-deep-dive"]);
   assert.deepEqual(resolveMemoryInterviewFamilies(makeEntry({})).families, [
     "general",
   ]);
@@ -105,13 +110,93 @@ test("hyphenated and underscored specialized metadata resolves to canonical fami
     resolveMemoryInterviewFamilies(
       makeEntry({ tags: ["ai_ml_system_design"] })
     ).families,
-    ["ai-ml-system-design", "system-design"]
+    ["ai-ml-system-design"]
   );
   assert.deepEqual(
     resolveMemoryInterviewFamilies(
       makeEntry({ tags: ["project-deep-dive"] })
     ).families,
     ["project-deep-dive"]
+  );
+});
+
+test("specific family suppresses a generic family from the same evidence", () => {
+  const decision = resolveMemoryInterviewFamilies(
+    makeEntry({
+      id: "mem_aiml_mlsd_answer_contract",
+      title: "AI ML system design answer contract",
+      tags: ["ai-ml-system-design", "machine-learning"],
+    })
+  );
+
+  assert.deepEqual(decision.families, ["ai-ml-system-design"]);
+  assert.equal(decision.resolutionReason, "specific-family-dominance");
+  assert.ok(
+    decision.suppressedEvidence.some(
+      (item) =>
+        item.family === "system-design" &&
+        item.suppressedBySpecificFamily === "ai-ml-system-design"
+    )
+  );
+});
+
+test("independent generic evidence can intentionally supplement an inferred specialized family", () => {
+  const decision = resolveMemoryInterviewFamilies(
+    makeEntry({
+      title: "RAG serving contract",
+      tags: ["general-system-design"],
+    })
+  );
+
+  assert.deepEqual(decision.families, [
+    "ai-ml-system-design",
+    "system-design",
+  ]);
+  assert.equal(decision.resolutionReason, "independent-inferred-evidence");
+});
+
+test("explicit multi-family metadata remains authoritative", () => {
+  const decision = resolveMemoryInterviewFamilies(
+    makeEntry({
+      title: "RAG system design contract",
+      interviewFamilies: ["ai-ml-system-design", "system-design"],
+    })
+  );
+
+  assert.deepEqual(decision.families, [
+    "ai-ml-system-design",
+    "system-design",
+  ]);
+  assert.equal(decision.resolutionReason, "explicit-multi-family");
+  assert.equal(decision.suppressedEvidence.length, 0);
+});
+
+test("coding entry type prevents inferred AI ML cross-family use without explicit metadata", () => {
+  const entry = makeEntry({
+    id: "mem_aiml_coding_whiteboard_trigger_pack",
+    type: "coding_question",
+    title: "AIML coding whiteboard trigger pack",
+    tags: ["ai-ml-system-design", "coding"],
+  });
+  const decision = resolveMemoryInterviewFamilies(entry);
+
+  assert.deepEqual(decision.families, ["coding"]);
+  assert.ok(
+    decision.suppressedEvidence.some(
+      (item) => item.family === "ai-ml-system-design"
+    )
+  );
+  assert.equal(
+    getMemoryInterviewFamilyGateRejectReason({
+      entry,
+      questionType: "general-system-design",
+      memoryPolicy: {
+        id: "general-system-design",
+        allowedFamilies: ["system-design"],
+        blockedFamilies: ["coding", "ai-ml-system-design"],
+      },
+    }),
+    "playbook-family-blocked"
   );
 });
 
@@ -163,6 +248,86 @@ test("family audit preserves truly general entries and reports no normalized ali
   assert.deepEqual(
     auditMemoryInterviewFamilyNormalization([general, specialized]),
     []
+  );
+});
+
+test("replays the August 6 General SD family leak without admitting specialized entries", () => {
+  const entries = [
+    makeEntry({
+      id: "mem_aiml_mlsd_answer_contract",
+      type: "interview_framework",
+      title: "AI ML system design answer contract",
+      tags: ["ai-ml-system-design", "machine-learning"],
+    }),
+    makeEntry({
+      id: "mem_gsd_answer_os",
+      type: "interview_framework",
+      title: "General system design answer operating system",
+      tags: ["system-design", "general-system-design"],
+    }),
+    makeEntry({
+      id: "mem_aiml_rag_system_design_contract",
+      type: "interview_framework",
+      title: "RAG system design contract",
+      tags: ["ai-ml-system-design", "rag"],
+    }),
+    makeEntry({
+      id: "mem_gsd_problem_classifier",
+      type: "interview_framework",
+      title: "General system design problem classifier",
+      tags: ["system-design", "general-system-design"],
+    }),
+    makeEntry({
+      id: "mem_aiml_coding_whiteboard_trigger_pack",
+      type: "coding_question",
+      title: "AIML coding whiteboard trigger pack",
+      tags: ["ai-ml-system-design", "coding"],
+    }),
+    makeEntry({
+      id: "mem_aiml_agent_design_contract",
+      type: "interview_framework",
+      title: "Agent system design contract",
+      tags: ["ai-ml-system-design", "agent"],
+    }),
+  ];
+  const policy = {
+    id: "general_system_design",
+    allowedFamilies: ["system-design" as const],
+    blockedFamilies: ["coding" as const, "ai-ml-system-design" as const],
+  };
+  const recorder = createMemoryInterviewFamilyResolutionRecorder();
+  const allowed: string[] = [];
+
+  for (const entry of entries) {
+    const decision = resolveMemoryInterviewFamilyGateDecision({
+      entry,
+      questionType: "general-system-design",
+      memoryPolicy: policy,
+    });
+    recorder.record(entry.id, decision);
+    if (!decision.rejectReason) allowed.push(entry.id);
+  }
+
+  assert.deepEqual(allowed, ["mem_gsd_answer_os", "mem_gsd_problem_classifier"]);
+  const telemetry = recorder.summary(allowed);
+  assert.equal(telemetry.resolutionVersion, 2);
+  assert.equal(telemetry.familyPolicyAllowCount, 2);
+  assert.equal(telemetry.familyPolicyRejectCount, 4);
+  assert.ok(telemetry.specificFamilyDominanceCount >= 3);
+  assert.ok(telemetry.genericSubstringSuppressedCount >= 3);
+  assert.deepEqual(
+    telemetry.samples
+      .filter((sample) => sample.selected)
+      .map((sample) => sample.entryId)
+      .sort(),
+    ["mem_gsd_answer_os", "mem_gsd_problem_classifier"]
+  );
+  const trace = formatMemoryInterviewFamilyResolutionForTrace(telemetry);
+  assert.equal(trace.memoryInterviewFamilyResolutionVersion, 2);
+  assert.equal(trace.memoryFamilyPolicyRejectCount, 4);
+  assert.doesNotMatch(
+    JSON.stringify(trace),
+    /AI ML system design answer contract/
   );
 });
 

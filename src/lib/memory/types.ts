@@ -315,9 +315,44 @@ export interface MemoryRetrievalResult {
   eligibleCount: number;
   rejectedCount: number;
   rejectSummary: MemoryRejectSummary[];
+  interviewFamilyResolution?: MemoryInterviewFamilyResolutionTelemetry;
   overlaySelection?: MemoryOverlaySelectionSummary;
   policySnapshot: MemoryPolicySnapshot;
   performance?: MemoryRetrievalPerformance;
+}
+
+export interface MemoryInterviewFamilyResolutionTelemetryEvidence {
+  family: MemoryInterviewFamily;
+  sourceKind: string;
+  sourceValueHash: string;
+  explicit: boolean;
+  suppressedBySpecificFamily?: MemoryInterviewFamily;
+}
+
+export interface MemoryInterviewFamilyResolutionTelemetrySample {
+  entryId: string;
+  finalFamilies: string[];
+  source: "explicit" | "inferred" | "general";
+  resolutionReason: string;
+  disposition: string;
+  rejectReason?: MemoryRejectReason;
+  selected: boolean;
+  evidence: MemoryInterviewFamilyResolutionTelemetryEvidence[];
+  suppressedEvidence: MemoryInterviewFamilyResolutionTelemetryEvidence[];
+}
+
+export interface MemoryInterviewFamilyResolutionTelemetry {
+  resolutionVersion: number;
+  evaluationMs: number;
+  specificFamilyDominanceCount: number;
+  genericSubstringSuppressedCount: number;
+  explicitMultiFamilyEntryCount: number;
+  independentGenericEvidenceCount: number;
+  familyPolicyAllowCount: number;
+  familyPolicyRejectCount: number;
+  familyPolicyAllowReasons: Record<string, number>;
+  familyPolicyRejectReasons: Record<string, number>;
+  samples: MemoryInterviewFamilyResolutionTelemetrySample[];
 }
 
 export interface MemoryRetrievalPerformance {
