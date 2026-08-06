@@ -35,6 +35,15 @@ export interface LogicalQuestionMaterializationDecision {
     | "empty-or-punctuation-only-turn";
 }
 
+export interface LogicalQuestionPublicationDecision {
+  publishCanonical: boolean;
+  mayInvalidateGeneration: boolean;
+  reason:
+    | "not-materialized"
+    | "canonical-substantive-turn"
+    | "provisional-intent-settlement";
+}
+
 export function createLogicalQuestionUnitLease(
   unit: LogicalQuestionUnit
 ): LogicalQuestionUnitLease {
@@ -115,6 +124,46 @@ export function decideLogicalQuestionMaterialization({
   return {
     materialize: false,
     reason: "empty-or-punctuation-only-turn",
+  };
+}
+
+export function decideLogicalQuestionPublication({
+  materialization,
+  runtimeIntentSettlementPending,
+}: {
+  materialization: LogicalQuestionMaterializationDecision;
+  runtimeIntentSettlementPending: boolean;
+}): LogicalQuestionPublicationDecision {
+  if (!materialization.materialize) {
+    return {
+      publishCanonical: false,
+      mayInvalidateGeneration: false,
+      reason: "not-materialized",
+    };
+  }
+  if (runtimeIntentSettlementPending) {
+    return {
+      publishCanonical: false,
+      mayInvalidateGeneration: false,
+      reason: "provisional-intent-settlement",
+    };
+  }
+  return {
+    publishCanonical: true,
+    mayInvalidateGeneration: true,
+    reason: "canonical-substantive-turn",
+  };
+}
+
+export function formatLogicalQuestionPublicationForTrace(
+  decision: LogicalQuestionPublicationDecision
+) {
+  return {
+    canonicalLogicalQuestionPublicationReason: decision.reason,
+    canonicalLogicalQuestionPublicationAuthorized:
+      decision.publishCanonical,
+    provisionalTurnGenerationInvalidationBlocked:
+      !decision.mayInvalidateGeneration,
   };
 }
 

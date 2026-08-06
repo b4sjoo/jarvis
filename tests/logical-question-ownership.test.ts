@@ -5,6 +5,7 @@ import {
   createCanonicalLogicalQuestionLineage,
   createLogicalQuestionUnitLease,
   decideLogicalQuestionMaterialization,
+  decideLogicalQuestionPublication,
 } from "../src/lib/meeting/logical-question-ownership.js";
 import type { LogicalQuestionUnit } from "../src/lib/meeting/logical-question-unit.js";
 import { composeLogicalQuestionUnit } from "../src/lib/meeting/logical-question-unit.js";
@@ -83,6 +84,36 @@ test("materializes every non-filler turn as a recoverable logical question", () 
       exactHighFiller: true,
     }),
     { materialize: false, reason: "exact-high-filler" }
+  );
+});
+
+test("keeps unresolved short intent provisional so it cannot invalidate a generation", () => {
+  const materialization = decideLogicalQuestionMaterialization({
+    action: "answer-refresh",
+    wordEquivalent: 2,
+  });
+
+  assert.deepEqual(
+    decideLogicalQuestionPublication({
+      materialization,
+      runtimeIntentSettlementPending: true,
+    }),
+    {
+      publishCanonical: false,
+      mayInvalidateGeneration: false,
+      reason: "provisional-intent-settlement",
+    }
+  );
+  assert.deepEqual(
+    decideLogicalQuestionPublication({
+      materialization,
+      runtimeIntentSettlementPending: false,
+    }),
+    {
+      publishCanonical: true,
+      mayInvalidateGeneration: true,
+      reason: "canonical-substantive-turn",
+    }
   );
 });
 

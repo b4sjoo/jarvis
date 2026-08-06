@@ -346,10 +346,12 @@ import {
   createCanonicalLogicalQuestionLineage,
   createLogicalQuestionUnitLease,
   decideLogicalQuestionMaterialization,
+  decideLogicalQuestionPublication,
   decideForceAdviseEligibility,
   classifyForceAdviseRepairCause,
   forceAdviseStatusAfterAdvisorOutcome,
   formatLogicalQuestionLeaseForTrace,
+  formatLogicalQuestionPublicationForTrace,
   formatPrimaryAskProjectionForTrace,
   primaryAskAnswerFocusText,
   primaryAskClassifierText,
@@ -9506,6 +9508,75 @@ export function useMeetingAssistant() {
     }, ADVISOR_DEBOUNCE_MS);
   }, [activateAdvisorJob, buildAdvisorJob, runAdvisor]);
 
+  const publishCanonicalLogicalQuestionTarget = useCallback(
+    ({
+      logicalQuestionUnit,
+      traceId,
+      turn,
+      intentDecision,
+    }: {
+      logicalQuestionUnit: LogicalQuestionUnit;
+      traceId: string;
+      turn: TranscriptTurn;
+      intentDecision: AdvisorTurnIntentDecision;
+    }) => {
+      const terminalNoAnswer = currentQuestionTerminalNoAnswerRef.current;
+      if (
+        terminalNoAnswer &&
+        logicalQuestionUnit.id !== terminalNoAnswer.logicalQuestionUnitId
+      ) {
+        currentQuestionTerminalNoAnswerRef.current = undefined;
+      }
+      logicalQuestionUnitRef.current = logicalQuestionUnit;
+      const logicalQuestionLease =
+        createLogicalQuestionUnitLease(logicalQuestionUnit);
+      const questionLineage = createCanonicalLogicalQuestionLineage({
+        unit: logicalQuestionUnit,
+        traceId,
+      });
+      const presentation: ForceAdviseTargetPresentation = {
+        originalTraceId: traceId,
+        turnId: turn.id,
+        text: logicalQuestionUnit.normalizedText || turn.text,
+        observedAction: toObservedAdvisorAction(intentDecision),
+        executionAuthorized: intentDecision.executionAuthorized,
+        logicalQuestionUnitId: logicalQuestionUnit.id,
+        logicalQuestionUnitRevision: logicalQuestionUnit.revision,
+        sourceTurnIds: [...logicalQuestionUnit.sourceTurnIds],
+        status: intentDecision.executionAuthorized
+          ? "advising"
+          : "ready",
+        updatedAt: Date.now(),
+      };
+      const eligibility = decideForceAdviseEligibility(presentation);
+      const target: ForceAdviseRuntimeTarget = {
+        presentation,
+        turn: { ...turn },
+        intentDecision,
+        logicalQuestionUnit,
+        logicalQuestionLease,
+        questionLineage,
+      };
+      latestForceAdviseTargetRef.current = target;
+      setState((previous) => ({
+        ...previous,
+        latestInterviewerTurnCandidate: presentation,
+      }));
+      traceStoreRef.current.updateMetadata(traceId, {
+        ...formatLogicalQuestionUnitForTrace(logicalQuestionUnit),
+        ...formatLogicalQuestionLeaseForTrace(logicalQuestionLease),
+        ...formatQuestionLineageForTrace(questionLineage),
+        canonicalLogicalQuestionTargetPublished: true,
+        forceAdviseTargetStatus: presentation.status,
+        forceAdviseEligible: eligibility.eligible,
+        forceAdviseRetryable: eligibility.retryable,
+        forceAdviseEligibilityReason: eligibility.reason,
+      });
+      return target;
+    },
+    []
+  );
+
   const scheduleShortIntentGate = useCallback(
     ({
       turn,
@@ -9764,7 +9835,11 @@ export function useMeetingAssistant() {
                 shortIntentGateRuntimeRef.current?.getCurrentOperationId(),
               sessionId: latestContext.sessionId,
               runtimeEpoch: runtimeEpochRef.current,
-              logicalQuestionUnit: logicalQuestionUnitRef.current,
+              // This candidate remains provisional until the action-only
+              // gate releases answer authority. Runtime operation identity,
+              // session, epoch, and task-boundary checks still reject stale
+              // candidates without replacing the current canonical LQU.
+              logicalQuestionUnit,
               taskBoundaryEpoch: hashTaxonomyTaskBoundary({
                 parentId: latestParent?.id,
                 questionType: latestParentQuestionType,
@@ -9924,6 +9999,18 @@ export function useMeetingAssistant() {
               );
               return;
             }
+            publishCanonicalLogicalQuestionTarget({
+              logicalQuestionUnit,
+              traceId,
+              turn,
+              intentDecision: validAppliedDecision,
+            });
+            traceStoreRef.current.updateMetadata(traceId, {
+              provisionalLogicalQuestionReleased: true,
+              provisionalLogicalQuestionReleaseReason:
+                "runtime-intent-answer",
+              provisionalTurnGenerationInvalidationBlocked: false,
+            });
             const debounceStepId = traceStoreRef.current.startStep(
               traceId,
               "Advisor debounce scheduled",
@@ -9972,11 +10059,19 @@ export function useMeetingAssistant() {
               transcriptTurns: updatedContext.transcriptTurns,
             }));
           }
+          traceStoreRef.current.updateMetadata(traceId, {
+            provisionalLogicalQuestionReleased: false,
+            provisionalLogicalQuestionReleaseReason:
+              validAppliedDecision?.reason ??
+              result?.parseDisposition ??
+              settlement.disposition,
+            provisionalTurnGenerationInvalidationBlocked: true,
+          });
           traceStoreRef.current.finishTrace(traceId, "success");
         },
       });
     },
-    [scheduleAdvisor]
+    [publishCanonicalLogicalQuestionTarget, scheduleAdvisor]
   );
 
   const appendTranscriptTurnForTrace = useCallback(
@@ -13033,6 +13128,7 @@ export function useMeetingAssistant() {
       explicitTaskSwitch = false,
       sectionHint,
       primaryAskProjection,
+      commitCanonical = true,
     }: {
       turn: TranscriptTurn;
       traceId: string;
@@ -13040,6 +13136,7 @@ export function useMeetingAssistant() {
       explicitTaskSwitch?: boolean;
       sectionHint?: PendingInterviewSectionHint;
       primaryAskProjection?: PrimaryAskProjection;
+      commitCanonical?: boolean;
     }) => {
       const contextState = contextManagerRef.current.getState();
       const previous = logicalQuestionUnitRef.current;
@@ -13114,80 +13211,24 @@ export function useMeetingAssistant() {
         primaryAskProjection: effectivePrimaryAskProjection,
         terminalNoAnswerBoundary,
       });
-      if (
-        terminalNoAnswer &&
-        logicalQuestionUnit.id !==
-          terminalNoAnswer.logicalQuestionUnitId
-      ) {
-        currentQuestionTerminalNoAnswerRef.current = undefined;
+      if (commitCanonical) {
+        if (
+          terminalNoAnswer &&
+          logicalQuestionUnit.id !==
+            terminalNoAnswer.logicalQuestionUnitId
+        ) {
+          currentQuestionTerminalNoAnswerRef.current = undefined;
+        }
+        logicalQuestionUnitRef.current = logicalQuestionUnit;
       }
-      logicalQuestionUnitRef.current = logicalQuestionUnit;
       traceStoreRef.current.updateMetadata(
         traceId,
-        formatLogicalQuestionUnitForTrace(logicalQuestionUnit)
+        {
+          ...formatLogicalQuestionUnitForTrace(logicalQuestionUnit),
+          logicalQuestionCandidateOnly: !commitCanonical,
+        }
       );
       return logicalQuestionUnit;
-    },
-    []
-  );
-
-  const publishCanonicalLogicalQuestionTarget = useCallback(
-    ({
-      logicalQuestionUnit,
-      traceId,
-      turn,
-      intentDecision,
-    }: {
-      logicalQuestionUnit: LogicalQuestionUnit;
-      traceId: string;
-      turn: TranscriptTurn;
-      intentDecision: AdvisorTurnIntentDecision;
-    }) => {
-      const logicalQuestionLease =
-        createLogicalQuestionUnitLease(logicalQuestionUnit);
-      const questionLineage = createCanonicalLogicalQuestionLineage({
-        unit: logicalQuestionUnit,
-        traceId,
-      });
-      const presentation: ForceAdviseTargetPresentation = {
-        originalTraceId: traceId,
-        turnId: turn.id,
-        text: logicalQuestionUnit.normalizedText || turn.text,
-        observedAction: toObservedAdvisorAction(intentDecision),
-        executionAuthorized: intentDecision.executionAuthorized,
-        logicalQuestionUnitId: logicalQuestionUnit.id,
-        logicalQuestionUnitRevision: logicalQuestionUnit.revision,
-        sourceTurnIds: [...logicalQuestionUnit.sourceTurnIds],
-        status: intentDecision.executionAuthorized
-          ? "advising"
-          : "ready",
-        updatedAt: Date.now(),
-      };
-      const eligibility = decideForceAdviseEligibility(presentation);
-      const target: ForceAdviseRuntimeTarget = {
-        presentation,
-        turn: { ...turn },
-        intentDecision,
-        logicalQuestionUnit,
-        logicalQuestionLease,
-        questionLineage,
-      };
-      latestForceAdviseTargetRef.current = target;
-      setState((previous) => ({
-        ...previous,
-        latestInterviewerTurnCandidate: presentation,
-      }));
-      traceStoreRef.current.updateMetadata(traceId, {
-        ...formatLogicalQuestionUnitForTrace(logicalQuestionUnit),
-        ...formatLogicalQuestionLeaseForTrace(logicalQuestionLease),
-        ...formatQuestionLineageForTrace(questionLineage),
-        canonicalLogicalQuestionTargetPublished: true,
-        forceAdviseTargetStatus: presentation.status,
-        forceAdviseEligible: eligibility.eligible,
-        forceAdviseRetryable: eligibility.retryable,
-        forceAdviseEligibilityReason: eligibility.reason,
-      });
-      return target;
     },
     []
   );
@@ -14507,11 +14548,21 @@ export function useMeetingAssistant() {
             wordEquivalent,
             exactHighFiller: isExactLowValueAcknowledgement(turn.text),
           });
+        const logicalQuestionPublication =
+          decideLogicalQuestionPublication({
+            materialization: logicalQuestionMaterialization,
+            runtimeIntentSettlementPending:
+              shortIntentLocalDecision.disposition ===
+              "runtime-required",
+          });
         traceStoreRef.current.updateMetadata(traceId, {
           canonicalLogicalQuestionMaterialized:
             logicalQuestionMaterialization.materialize,
           canonicalLogicalQuestionMaterializationReason:
             logicalQuestionMaterialization.reason,
+          ...formatLogicalQuestionPublicationForTrace(
+            logicalQuestionPublication
+          ),
         });
         const gateStepId = traceStoreRef.current.startStep(
           traceId,
@@ -14591,9 +14642,14 @@ export function useMeetingAssistant() {
                     ? sectionHintConsumption.hint
                     : undefined,
                 primaryAskProjection,
+                commitCanonical:
+                  logicalQuestionPublication.publishCanonical,
               })
             : undefined;
-        if (logicalQuestionUnit) {
+        if (
+          logicalQuestionUnit &&
+          logicalQuestionPublication.publishCanonical
+        ) {
           publishCanonicalLogicalQuestionTarget({
             logicalQuestionUnit,
             traceId,
