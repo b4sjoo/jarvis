@@ -1,10 +1,40 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  applySourceOwnedPhaseControlToTurnIntent,
   authorizeAdvisorExecution,
   decideAdvisorTurnIntent,
   formatAdvisorTurnIntentForTrace,
 } from "../src/lib/meeting/advisor-turn-intent.js";
+import { decideInterviewerAssumptionAuthorization } from "../src/lib/meeting/playbook-phase.js";
+
+test("admits an authorized interviewer phase-control statement as a substantive refresh", () => {
+  const base = decideAdvisorTurnIntent(
+    "You can make the hypothesis by yourself.",
+    { hasActiveTask: true }
+  );
+  const phaseControl = decideInterviewerAssumptionAuthorization({
+    text: "You can make the hypothesis by yourself.",
+    speaker: "them",
+    activeQuestionType: "general-system-design",
+    currentPhase: "requirement_clarification",
+    sourceTurnId: "turn-assumption",
+  }).phaseControl;
+  const decision = applySourceOwnedPhaseControlToTurnIntent(
+    base,
+    phaseControl
+  );
+
+  assert.equal(base.phaseControl, undefined);
+  assert.equal(decision.action, "answer-refresh");
+  assert.equal(decision.executionAuthorized, true);
+  assert.equal(decision.followupScopeSource, "active-task");
+  assert.equal(decision.phaseControl?.signal, "assumption-authorized");
+  assert.equal(
+    formatAdvisorTurnIntentForTrace(decision).phaseSignal,
+    "assumption-authorized"
+  );
+});
 
 test("enforces abstention for a technical declarative statement", () => {
   const decision = decideAdvisorTurnIntent(

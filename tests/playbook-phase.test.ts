@@ -2,11 +2,111 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   applyPlaybookPhaseDecisionToProgress,
+  decideInterviewerAssumptionAuthorization,
   decideManualNextPhaseTransition,
   decidePlaybookPhaseProgression,
   formatPlaybookPhaseDecisionForPrompt,
   formatPlaybookPhaseDecisionForTrace,
 } from "../src/lib/meeting/playbook-phase.js";
+
+test("authorizes a source-owned assumption signal only at a design requirement boundary", () => {
+  const authorized = decideInterviewerAssumptionAuthorization({
+    text: "You can make the hypothesis by yourself.",
+    speaker: "them",
+    activeQuestionType: "general-system-design",
+    currentPhase: "requirement_clarification",
+    sourceTurnId: "turn-assumption",
+  });
+
+  assert.equal(authorized.state, "authorized");
+  assert.equal(authorized.phaseControl?.signal, "assumption-authorized");
+  assert.equal(authorized.phaseBefore, "requirement_clarification");
+  assert.equal(authorized.phaseAfter, "design_framing");
+  assert.equal(authorized.whiteboardRevisionRequested, true);
+
+  for (const decision of [
+    decideInterviewerAssumptionAuthorization({
+      text: "You can make reasonable assumptions.",
+      speaker: "me",
+      activeQuestionType: "general-system-design",
+      currentPhase: "requirement_clarification",
+    }),
+    decideInterviewerAssumptionAuthorization({
+      text: "You can make reasonable assumptions.",
+      speaker: "them",
+      activeQuestionType: "coding",
+      currentPhase: "requirement_clarification",
+    }),
+    decideInterviewerAssumptionAuthorization({
+      text: "You can make reasonable assumptions.",
+      speaker: "them",
+      activeQuestionType: "ai-ml-system-design",
+      currentPhase: "design_framing",
+    }),
+    decideInterviewerAssumptionAuthorization({
+      text: "You can make reasonable assumptions.",
+      speaker: "them",
+      activeQuestionType: "ai-ml-system-design",
+      currentPhase: "requirement_clarification",
+      hasActiveChild: true,
+    }),
+  ]) {
+    assert.equal(decision.state, "context-only");
+    assert.equal(decision.whiteboardRevisionRequested, false);
+  }
+
+  assert.equal(
+    decideInterviewerAssumptionAuthorization({
+      text: "Please do not make any assumptions.",
+      speaker: "them",
+      activeQuestionType: "general-system-design",
+      currentPhase: "requirement_clarification",
+    }).state,
+    "not-detected"
+  );
+
+  const blockedAfterSettlement = decidePlaybookPhaseProgression({
+    questionType: "ai-ml-system-design",
+    playbookId: "aiml_system_design",
+    currentPhase: "requirement_clarification",
+    phaseProgress: {},
+    latestTurnText: "You can make reasonable assumptions.",
+    relation: "followup-parent",
+    phaseControlSettled: true,
+  });
+  assert.equal(
+    blockedAfterSettlement.phase,
+    "requirement_clarification"
+  );
+  assert.equal(blockedAfterSettlement.requirementsReady, false);
+});
+
+test("uses settled phase-control evidence instead of reparsing the advisor text", () => {
+  const phaseControl = decideInterviewerAssumptionAuthorization({
+    text: "You can make the hypothesis by yourself.",
+    speaker: "them",
+    activeQuestionType: "general-system-design",
+    currentPhase: "requirement_clarification",
+    sourceTurnId: "turn-assumption",
+  }).phaseControl;
+  assert.ok(phaseControl);
+
+  const decision = decidePlaybookPhaseProgression({
+    questionType: "general-system-design",
+    playbookId: "general_system_design",
+    currentPhase: "requirement_clarification",
+    phaseProgress: {},
+    latestTurnText: "Please continue.",
+    relation: "followup-parent",
+    phaseControl,
+  });
+
+  assert.equal(decision.phase, "design_framing");
+  assert.equal(decision.action, "advance");
+  assert.equal(decision.phaseCompletionSource, "explicit-assumptions");
+  assert.ok(decision.requiredArtifacts.includes("whiteboard"));
+  assert.equal(decision.phaseControl?.sourceTurnId, "turn-assumption");
+});
 
 test("routes general system design whiteboard requests to design framing", () => {
   const decision = decidePlaybookPhaseProgression({

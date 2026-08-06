@@ -2,6 +2,7 @@ import { calculateWordEquivalent } from "./transcript-fusion.js";
 import { decideSentenceCompletion } from "./sentence-completion-buffer.js";
 import { inferExplicitProgrammingLanguageFromText } from "./programming-language.js";
 import { classifyAdjacentConstraintKinds } from "./adjacent-question-constraint.js";
+import type { PlaybookPhaseControlEvidence } from "./playbook-phase.js";
 
 export type AdvisorTurnIntent =
   | "direct-question"
@@ -34,6 +35,7 @@ export interface AdvisorTurnIntentDecision {
   executionAuthorized: boolean;
   followupScopeSource?: "active-task" | "provisional-question" | "none";
   authoritySource?: "local" | "runtime-intent-gate";
+  phaseControl?: PlaybookPhaseControlEvidence;
 }
 
 export interface AdvisorTurnIntentOptions {
@@ -335,6 +337,39 @@ export function authorizeAdvisorExecution({
   };
 }
 
+export function applySourceOwnedPhaseControlToTurnIntent(
+  decision: AdvisorTurnIntentDecision,
+  phaseControl: PlaybookPhaseControlEvidence | undefined
+): AdvisorTurnIntentDecision {
+  if (!phaseControl) return decision;
+  return {
+    ...decision,
+    intent: "constraint-or-follow-up",
+    confidence: Math.max(decision.confidence, 0.99),
+    evidence: Array.from(
+      new Set([
+        ...decision.evidence,
+        "source-owned-phase-control",
+        phaseControl.signal,
+        ...phaseControl.evidence,
+      ])
+    ),
+    action: "answer-refresh",
+    recommendedAction: "answer-refresh",
+    reason: `source-owned-phase-control:${phaseControl.signal}`,
+    contextPromptEligible: true,
+    enforcement: "allow",
+    wouldSuppress: false,
+    executionAuthorized: true,
+    followupScopeSource: "active-task",
+    authoritySource: "local",
+    phaseControl: {
+      ...phaseControl,
+      evidence: [...phaseControl.evidence],
+    },
+  };
+}
+
 export function formatAdvisorTurnIntentForTrace(
   decision: AdvisorTurnIntentDecision
 ) {
@@ -358,6 +393,9 @@ export function formatAdvisorTurnIntentForTrace(
       : undefined,
     advisorProviderCallAvoided: exactAcknowledgementSuppressed,
     advisorAvoidedCallOpportunity: exactAcknowledgementSuppressed,
+    phaseSignal: decision.phaseControl?.signal,
+    phaseSignalSource: decision.phaseControl?.source,
+    phaseSignalSourceTurnId: decision.phaseControl?.sourceTurnId,
   };
 }
 

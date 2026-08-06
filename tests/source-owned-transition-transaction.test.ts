@@ -5,6 +5,10 @@ import {
   createSourceOwnedTransitionCandidate,
   sourceOwnedTransitionSurvivesModelOutcome,
 } from "../src/lib/meeting/source-owned-transition-transaction.js";
+import {
+  decideInterviewerAssumptionAuthorization,
+  decidePlaybookPhaseProgression,
+} from "../src/lib/meeting/playbook-phase.js";
 import type {
   ActiveInterviewParent,
   InterviewPlaybookId,
@@ -525,6 +529,77 @@ test("keeps a screen child committed when the model is cancelled", () => {
   );
   assert.equal(
     sourceOwnedTransitionSurvivesModelOutcome(result, "cancelled"),
+    true
+  );
+});
+
+test("commits one source-owned assumption phase transition before advisor output", () => {
+  const parent = makeParent({
+    stableKind: "general-system-design",
+    topic: "Design a URL shortener",
+    playbook: makePlaybook(
+      "general_system_design",
+      "general-system-design",
+      "requirement_clarification"
+    ),
+    playbookPhase: "requirement_clarification",
+    phaseProgress: {},
+    child: undefined,
+  });
+  const phaseControl = decideInterviewerAssumptionAuthorization({
+    text: "You can make the hypothesis by yourself.",
+    speaker: "them",
+    activeQuestionType: parent.stableKind,
+    currentPhase: parent.playbookPhase,
+    sourceTurnId: "turn-assumption",
+  }).phaseControl;
+  assert.ok(phaseControl);
+  const phaseDecision = decidePlaybookPhaseProgression({
+    questionType: parent.stableKind,
+    playbookId: parent.playbook?.id,
+    currentPhase: parent.playbookPhase,
+    phaseProgress: parent.phaseProgress,
+    latestTurnText: "Please continue.",
+    relation: "followup-parent",
+    phaseControl,
+  });
+  const candidate = createSourceOwnedTransitionCandidate({
+    sessionId: "session-a",
+    runtimeEpoch: 3,
+    source: "voice",
+    sourceTurnIds: ["turn-assumption"],
+    logicalQuestionUnitId: "lqu-assumption",
+    logicalQuestionRevision: 1,
+    existingTask: parent,
+    relation: "followup-parent",
+    authoritySource: "source-owned-phase-control",
+    mutationAuthorized: true,
+    questionType: parent.stableKind,
+    question: "You can make the hypothesis by yourself.",
+    playbook: parent.playbook,
+    phaseDecision,
+    now: 100,
+  });
+  assert.ok(candidate);
+
+  const result = commitSourceOwnedTransition({
+    candidate,
+    currentTask: parent,
+    currentSessionId: "session-a",
+    currentRuntimeEpoch: 3,
+    now: 110,
+  });
+
+  assert.equal(result.candidate.kind, "phase-progress");
+  assert.equal(result.candidate.state, "committed");
+  assert.equal(result.task?.id, parent.id);
+  assert.equal(result.task?.playbookPhase, "design_framing");
+  assert.equal(result.task?.phaseProgress.requirements, true);
+  assert.equal(result.task?.phaseProgress.requirement_clarification, true);
+  assert.equal(result.task?.child, undefined);
+  assert.equal(result.task?.whiteboardArtifact, parent.whiteboardArtifact);
+  assert.equal(
+    sourceOwnedTransitionSurvivesModelOutcome(result, "error"),
     true
   );
 });

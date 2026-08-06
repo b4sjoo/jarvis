@@ -78,6 +78,35 @@ export type PlaybookPhaseCompletionSource =
   | "explicit-assumptions"
   | "manual-next";
 
+export type PlaybookPhaseControlSignal = "assumption-authorized";
+
+export interface PlaybookPhaseControlEvidence {
+  signal: PlaybookPhaseControlSignal;
+  source: "interviewer" | "runtime-llm";
+  sourceTurnId?: string;
+  evidence: string[];
+}
+
+export type InterviewerAssumptionAuthorizationState =
+  | "not-detected"
+  | "context-only"
+  | "authorized";
+
+export interface InterviewerAssumptionAuthorizationDecision {
+  state: InterviewerAssumptionAuthorizationState;
+  reason:
+    | "signal-not-detected"
+    | "source-not-interviewer"
+    | "active-parent-not-system-design"
+    | "active-phase-not-requirement-clarification"
+    | "active-child-present"
+    | "authorized";
+  phaseControl?: PlaybookPhaseControlEvidence;
+  phaseBefore?: InterviewPlaybookPhase;
+  phaseAfter?: InterviewPlaybookPhase;
+  whiteboardRevisionRequested: boolean;
+}
+
 export interface PlaybookPhaseDecision {
   phase: InterviewPlaybookPhase;
   flags: PlaybookPhaseFlag[];
@@ -100,6 +129,7 @@ export interface PlaybookPhaseDecision {
   whiteboardProvisional?: boolean;
   whiteboardOpenConstraintCategories?: PlaybookRequirementEvidenceCategory[];
   whiteboardRevisionReason?: string;
+  phaseControl?: PlaybookPhaseControlEvidence;
 }
 
 export interface PlaybookPhaseDecisionInput {
@@ -113,6 +143,8 @@ export interface PlaybookPhaseDecisionInput {
   relation?: InterviewTaskRelation;
   subtaskIntent?: InterviewSubtaskIntent;
   askFrame?: TaskAskFrame;
+  phaseControl?: PlaybookPhaseControlEvidence;
+  phaseControlSettled?: boolean;
 }
 
 const REQUIREMENT_PATTERNS = [
@@ -503,6 +535,8 @@ export function decidePlaybookPhaseProgression(
         text,
         askFrame: input.askFrame,
         phaseProgress: input.phaseProgress,
+        phaseControl: input.phaseControl,
+        phaseControlSettled: input.phaseControlSettled,
       })
     : undefined;
   const phase = choosePhase({
@@ -572,6 +606,89 @@ export function decidePlaybookPhaseProgression(
         : currentPhase !== phase
           ? "requirement-readiness-satisfied"
           : "phase-follow-up",
+    phaseControl: input.phaseControl
+      ? clonePhaseControlEvidence(input.phaseControl)
+      : undefined,
+  };
+}
+
+export function decideInterviewerAssumptionAuthorization(input: {
+  text: string;
+  speaker: "me" | "them" | "unknown";
+  activeQuestionType?: unknown;
+  currentPhase?: InterviewPlaybookPhase;
+  hasActiveChild?: boolean;
+  sourceTurnId?: string;
+}): InterviewerAssumptionAuthorizationDecision {
+  const evidence = detectAssumptionAuthorizationEvidence(input.text);
+  if (evidence.length === 0) {
+    return {
+      state: "not-detected",
+      reason: "signal-not-detected",
+      whiteboardRevisionRequested: false,
+    };
+  }
+
+  const contextOnly = (
+    reason: Exclude<
+      InterviewerAssumptionAuthorizationDecision["reason"],
+      "signal-not-detected" | "authorized"
+    >
+  ): InterviewerAssumptionAuthorizationDecision => ({
+    state: "context-only",
+    reason,
+    phaseBefore: input.currentPhase,
+    whiteboardRevisionRequested: false,
+  });
+
+  if (input.speaker !== "them") {
+    return contextOnly("source-not-interviewer");
+  }
+  const questionType = normalizeCanonicalQuestionType(
+    input.activeQuestionType
+  );
+  if (!isSystemDesignQuestionType(questionType)) {
+    return contextOnly("active-parent-not-system-design");
+  }
+  if (input.currentPhase !== "requirement_clarification") {
+    return contextOnly(
+      "active-phase-not-requirement-clarification"
+    );
+  }
+  if (input.hasActiveChild) {
+    return contextOnly("active-child-present");
+  }
+
+  return {
+    state: "authorized",
+    reason: "authorized",
+    phaseControl: {
+      signal: "assumption-authorized",
+      source: "interviewer",
+      sourceTurnId: input.sourceTurnId,
+      evidence,
+    },
+    phaseBefore: input.currentPhase,
+    phaseAfter: "design_framing",
+    whiteboardRevisionRequested: true,
+  };
+}
+
+export function formatInterviewerAssumptionAuthorizationForTrace(
+  decision: InterviewerAssumptionAuthorizationDecision
+) {
+  return {
+    phaseSignal: decision.phaseControl?.signal,
+    phaseSignalSource: decision.phaseControl?.source,
+    phaseSignalSourceTurnId: decision.phaseControl?.sourceTurnId,
+    assumptionAuthorizationState: decision.state,
+    assumptionAuthorizationReason: decision.reason,
+    assumptionAuthorizationEvidence:
+      decision.phaseControl?.evidence,
+    phaseBefore: decision.phaseBefore,
+    phaseAfter: decision.phaseAfter,
+    whiteboardRevisionRequested:
+      decision.whiteboardRevisionRequested,
   };
 }
 
@@ -813,6 +930,9 @@ export function formatPlaybookPhaseDecisionForTrace(
     whiteboardOpenConstraintCategories:
       decision.whiteboardOpenConstraintCategories,
     whiteboardRevisionReason: decision.whiteboardRevisionReason,
+    phaseSignal: decision.phaseControl?.signal,
+    phaseSignalSource: decision.phaseControl?.source,
+    phaseSignalSourceTurnId: decision.phaseControl?.sourceTurnId,
   };
 }
 
@@ -1282,11 +1402,15 @@ function resolveRequirementState({
   text,
   askFrame,
   phaseProgress,
+  phaseControl,
+  phaseControlSettled,
 }: {
   questionType: "general-system-design" | "ai-ml-system-design";
   text: string;
   askFrame?: TaskAskFrame;
   phaseProgress?: Record<string, boolean>;
+  phaseControl?: PlaybookPhaseControlEvidence;
+  phaseControlSettled?: boolean;
 }): RequirementState {
   const previous = readObservedRequirementCategories(phaseProgress);
   const current =
@@ -1298,7 +1422,9 @@ function resolveRequirementState({
     ...current,
   ]);
   const required = getRequiredRequirementCategories(questionType);
-  const explicitAssumptions = asksToProceedWithAssumptions(text);
+  const explicitAssumptions =
+    phaseControl?.signal === "assumption-authorized" ||
+    (!phaseControlSettled && asksToProceedWithAssumptions(text));
   const requirementsReady =
     Boolean(phaseProgress?.requirements) ||
     explicitAssumptions ||
@@ -1409,9 +1535,53 @@ function hasScaleEvidence(text: string) {
 }
 
 function asksToProceedWithAssumptions(text: string) {
-  return /\b(make|use|take)\s+(?:some\s+|reasonable\s+)?assumptions?\b|\bassume (?:what you need|reasonable defaults?)\b|\bproceed with (?:your |reasonable )?assumptions?\b/.test(
-    text
-  );
+  return detectAssumptionAuthorizationEvidence(text).length > 0;
+}
+
+function detectAssumptionAuthorizationEvidence(text: string) {
+  const normalized = normalizePhaseText([text]);
+  if (
+    /\b(?:do not|don't|cannot|can't|should not|shouldn't)\s+(?:make|use|take)?\s*(?:any\s+)?assumptions?\b/.test(
+      normalized
+    )
+  ) {
+    return [];
+  }
+
+  const patterns: Array<[string, RegExp]> = [
+    [
+      "permission-to-make-assumptions",
+      /\b(?:you\s+(?:can|may|should)|please|feel free to)\s+(?:just\s+)?(?:make|use|take)\s+(?:(?:your own|reasonable|some|the necessary)\s+)?assumptions?\b/,
+    ],
+    [
+      "permission-to-assume-needed-values",
+      /\b(?:you\s+(?:can|may)|please)\s+assume\s+(?:whatever|anything|what)\s+(?:you\s+)?(?:need|want)\b/,
+    ],
+    [
+      "proceed-with-assumptions",
+      /\b(?:proceed|continue|move forward)\s+with\s+(?:(?:your|reasonable|the necessary)\s+)?assumptions?\b/,
+    ],
+    [
+      "make-assumptions-and-proceed",
+      /\b(?:make|use|take)\s+(?:(?:your own|reasonable|some|the necessary)\s+)?assumptions?\s+(?:and\s+)?(?:proceed|continue|move forward)\b/,
+    ],
+    [
+      "permission-to-form-hypothesis",
+      /\b(?:you\s+(?:can|may|should)|please)\s+(?:make|choose|use|form)\s+(?:(?:the|a|your own|reasonable)\s+)?hypothes(?:is|es)\s+(?:(?:by\s+)?yourself|on your own)\b/,
+    ],
+  ];
+  return patterns
+    .filter(([, pattern]) => pattern.test(normalized))
+    .map(([label]) => label);
+}
+
+function clonePhaseControlEvidence(
+  evidence: PlaybookPhaseControlEvidence
+): PlaybookPhaseControlEvidence {
+  return {
+    ...evidence,
+    evidence: [...evidence.evidence],
+  };
 }
 
 function hasRequirementReadiness(

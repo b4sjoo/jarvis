@@ -1217,6 +1217,14 @@ test("compact trace summaries preserve task boundary and cross-domain evidence",
       ],
       logicalQuestionBoundaryReason: "bounded-followup",
       logicalQuestionTruncated: false,
+      phaseSignal: "assumption-authorized",
+      phaseSignalSource: "interviewer",
+      phaseSignalSourceTurnId: "turn_2",
+      assumptionAuthorizationState: "authorized",
+      assumptionAuthorizationReason: "authorized",
+      phaseBefore: "requirement_clarification",
+      phaseAfter: "design_framing",
+      whiteboardRevisionRequested: true,
       canonicalLogicalQuestionMaterialized: true,
       canonicalLogicalQuestionMaterializationReason: "answer-refresh",
       primaryAskSpeechAct: "question",
@@ -1312,6 +1320,13 @@ test("compact trace summaries preserve task boundary and cross-domain evidence",
   assert.equal(summary.version, 32);
   assert.equal(summary.taskRelation, "new-parent");
   assert.equal(summary.logicalQuestionUnitRevision, 3);
+  assert.equal(summary.phaseSignal, "assumption-authorized");
+  assert.equal(summary.phaseSignalSource, "interviewer");
+  assert.equal(summary.phaseSignalSourceTurnId, "turn_2");
+  assert.equal(summary.assumptionAuthorizationState, "authorized");
+  assert.equal(summary.phaseBefore, "requirement_clarification");
+  assert.equal(summary.phaseAfter, "design_framing");
+  assert.equal(summary.whiteboardRevisionRequested, true);
   assert.deepEqual(summary.logicalQuestionSourceTurnIds, ["turn_1", "turn_2"]);
   assert.deepEqual(summary.logicalQuestionCompositionReasons, [
     "new-question",

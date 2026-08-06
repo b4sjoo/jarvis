@@ -244,6 +244,14 @@ export interface SessionCompactTraceSummary {
   playbookId?: string;
   playbookPhase?: string;
   playbookSubtype?: string;
+  phaseSignal?: string;
+  phaseSignalSource?: string;
+  phaseSignalSourceTurnId?: string;
+  assumptionAuthorizationState?: string;
+  assumptionAuthorizationReason?: string;
+  phaseBefore?: string;
+  phaseAfter?: string;
+  whiteboardRevisionRequested?: boolean;
   turnGateAction?: string;
   turnGateReason?: string;
   advisorTurnIntent?: string;
@@ -3696,6 +3704,29 @@ export function buildCompactTraceSummary({
       readFirstString(metadataSources, "playbookPhaseDecisionPhase") ??
       readFirstString(metadataSources, "playbookPhase"),
     playbookSubtype: readFirstString(metadataSources, "playbookSubtype"),
+    phaseSignal: readFirstString(metadataSources, "phaseSignal"),
+    phaseSignalSource: readFirstString(
+      metadataSources,
+      "phaseSignalSource"
+    ),
+    phaseSignalSourceTurnId: readFirstString(
+      metadataSources,
+      "phaseSignalSourceTurnId"
+    ),
+    assumptionAuthorizationState: readFirstString(
+      metadataSources,
+      "assumptionAuthorizationState"
+    ),
+    assumptionAuthorizationReason: readFirstString(
+      metadataSources,
+      "assumptionAuthorizationReason"
+    ),
+    phaseBefore: readFirstString(metadataSources, "phaseBefore"),
+    phaseAfter: readFirstString(metadataSources, "phaseAfter"),
+    whiteboardRevisionRequested: readFirstBoolean(
+      metadataSources,
+      "whiteboardRevisionRequested"
+    ),
     turnGateAction: readFirstString(metadataSources, "turnGateAction"),
     turnGateReason: readFirstString(metadataSources, "turnGateReason"),
     advisorTurnIntent: readFirstString(metadataSources, "advisorTurnIntent"),

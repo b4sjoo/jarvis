@@ -216,6 +216,8 @@ import {
   createInitialPlaybookPhaseProgress,
   decideManualNextPhaseTransition,
   decidePlaybookPhaseProgression,
+  decideInterviewerAssumptionAuthorization,
+  formatInterviewerAssumptionAuthorizationForTrace,
   formatPlaybookPhaseDecisionForTrace,
   resolvePlaybookRequiredArtifacts,
   formatInterviewPlaybookForTrace,
@@ -338,6 +340,7 @@ import {
   settleCurrentQuestion,
   settleCurrentQuestionTerminalNoAnswer,
   expireTaskBoundaryCandidate,
+  applySourceOwnedPhaseControlToTurnIntent,
   decideAdvisorTurnIntent,
   decideSentenceCompletion,
   decideSentenceCompletionContinuation,
@@ -1290,6 +1293,7 @@ interface AdvisorTaskSignals {
     | "active-parent-continuity"
     | "manual-question-type-correction"
     | "semantic-unknown-rescue"
+    | "source-owned-phase-control"
     | "section-hint";
   taxonomyFallbackSuppressed?: boolean;
   unknownTaskMutationBlocked?: boolean;
@@ -6507,11 +6511,52 @@ export function useMeetingAssistant() {
           unknownTaskMutationBlocked: false,
         }
       : correctedAdvisorTaskSignals;
+    const sourceOwnedPhaseControl =
+      advisorJob.turnIntentDecision?.phaseControl;
+    const activePhaseControlQuestionType =
+      normalizeCanonicalQuestionType(
+        getAdvisorActiveQuestionType(promptContext)
+      );
+    const phaseControlledAdvisorTaskSignals =
+      sourceOwnedPhaseControl &&
+      (activePhaseControlQuestionType === "general-system-design" ||
+        activePhaseControlQuestionType === "ai-ml-system-design")
+        ? {
+            ...semanticAdvisorTaskSignals,
+            questionType: activePhaseControlQuestionType,
+            questionTypeDecision: undefined,
+            askFrame:
+              getAdvisorActiveAskFrame(promptContext) ??
+              semanticAdvisorTaskSignals.askFrame,
+            topicDomain:
+              getAdvisorActiveTopicDomain(promptContext) ??
+              semanticAdvisorTaskSignals.topicDomain,
+            projectAnchor:
+              getAdvisorActiveProjectAnchor(promptContext) ??
+              semanticAdvisorTaskSignals.projectAnchor,
+            query: buildFocusedAdvisorTaskQuery(
+              promptContext,
+              advisorQuestionSemanticEvidenceText
+            ),
+            taskRelation: "followup-parent" as const,
+            taskRelationAuthorityDecision: undefined,
+            relationEvidenceAuthorized: true,
+            responseOnlyRelation: false,
+            subtaskIntent: "unknown" as InterviewSubtaskIntent,
+            source: "source-owned-phase-control",
+            reuseActivePlaybook: true,
+            openingRoute: undefined,
+            latestTurnTaxonomyBoundaryReason:
+              "source-owned-phase-control" as const,
+            taxonomyFallbackSuppressed: true,
+            unknownTaskMutationBlocked: false,
+          }
+        : semanticAdvisorTaskSignals;
     const advisorCurrentQuestionEvidenceText =
       advisorQuestionSemanticEvidenceText;
     const advisorPersonalEvidenceDecision = detectPersonalEvidenceRequirement({
       questionText: advisorCurrentQuestionEvidenceText,
-      questionType: semanticAdvisorTaskSignals.questionType,
+      questionType: phaseControlledAdvisorTaskSignals.questionType,
       mode: state.settings.personalEvidenceGuardrailMode,
     });
     const transientPersonalStatusDecision =
@@ -6543,7 +6588,7 @@ export function useMeetingAssistant() {
           taxonomyFallbackSuppressed: true,
           unknownTaskMutationBlocked: true,
         }
-      : semanticAdvisorTaskSignals;
+      : phaseControlledAdvisorTaskSignals;
     const inferredTurnIntentDecision =
       advisorJob.turnIntentDecision ??
       (latestTurn?.speaker === "them"
@@ -7402,6 +7447,11 @@ export function useMeetingAssistant() {
       relation: advisorTaskSignals.taskRelation,
       subtaskIntent: advisorTaskSignals.subtaskIntent,
       askFrame: advisorAskFrame ?? getAdvisorActiveAskFrame(promptContext),
+      phaseControl: sourceOwnedPhaseControl,
+      phaseControlSettled: Boolean(
+        advisorJob.source === "live-turn" &&
+          promptContext.activeMeetingTask?.parent
+      ),
     });
     const defaultManualPhaseDecision =
       decideManualNextPhaseTransition(
@@ -14786,7 +14836,7 @@ export function useMeetingAssistant() {
           );
         }
 
-        const turnGate = reconcilePrimaryAskTurnDecision(
+        const baseTurnGate = reconcilePrimaryAskTurnDecision(
           primaryAskProjection,
           evaluateThemTurnForAdvisor(
             { ...turn, text: projectedAnswerFocusText },
@@ -14799,6 +14849,30 @@ export function useMeetingAssistant() {
             }
           )
         );
+        const assumptionAuthorizationDecision =
+          decideInterviewerAssumptionAuthorization({
+            text: turn.text,
+            speaker: turn.speaker,
+            activeQuestionType:
+              activeContextState.activeMeetingTask?.parent.questionType,
+            currentPhase:
+              activeContextState.activeMeetingTask?.parent.playbookPhase,
+            hasActiveChild: Boolean(
+              activeContextState.activeMeetingTask?.child
+            ),
+            sourceTurnId: turn.id,
+          });
+        const turnGate = applySourceOwnedPhaseControlToTurnIntent(
+          baseTurnGate,
+          assumptionAuthorizationDecision.phaseControl
+        );
+        const phaseControlMetadata =
+          formatInterviewerAssumptionAuthorizationForTrace(
+            assumptionAuthorizationDecision
+          );
+        const taxonomyTurnGateAction = turnGate.phaseControl
+          ? "phase-control"
+          : turnGate.action;
         const keywordIntentEvidence =
           formatInterviewerIntentKeywordEvidenceForTrace(
             extractInterviewerIntentKeywordEvidence({
@@ -14823,6 +14897,7 @@ export function useMeetingAssistant() {
         }
         traceStoreRef.current.updateMetadata(traceId, {
           ...formatAdvisorTurnIntentForTrace(turnGate),
+          ...phaseControlMetadata,
           ...keywordIntentEvidence,
           ...formatShortIntentLocalDecisionForTrace(
             shortIntentLocalDecision
@@ -14866,6 +14941,7 @@ export function useMeetingAssistant() {
             action: turnGate.action,
             reason: turnGate.reason,
             ...formatAdvisorTurnIntentForTrace(turnGate),
+            ...phaseControlMetadata,
             ...keywordIntentEvidence,
             turnId: turn.id,
             transcriptChars: turn.text.trim().length,
@@ -14958,7 +15034,7 @@ export function useMeetingAssistant() {
             scheduleSemanticTaxonomyShadow({
               turn,
               traceId,
-              turnGateAction: turnGate.action,
+              turnGateAction: taxonomyTurnGateAction,
               logicalQuestionUnit,
             });
           }
@@ -15019,7 +15095,7 @@ export function useMeetingAssistant() {
           questionTypeAdjudication = scheduleSemanticTaxonomyShadow({
             turn,
             traceId,
-            turnGateAction: turnGate.action,
+            turnGateAction: taxonomyTurnGateAction,
             logicalQuestionUnit,
           });
         }

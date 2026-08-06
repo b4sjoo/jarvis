@@ -319,6 +319,8 @@ export function formatSourceOwnedTransitionForTrace(
       commitResult?.task?.child?.returnCapsule?.projectBindingRevision,
     sourceTransitionPhaseBefore: commitResult?.phaseBefore,
     sourceTransitionPhaseAfter: commitResult?.phaseAfter,
+    phaseBefore: commitResult?.phaseBefore,
+    phaseAfter: commitResult?.phaseAfter,
     sourceTransitionProgressBefore: commitResult?.progressBefore,
     sourceTransitionProgressAfter: commitResult?.progressAfter,
     sourceTransitionParentAdmissionAction:
@@ -744,6 +746,12 @@ function clonePhaseDecision(
       decision.whiteboardOpenConstraintCategories
         ? [...decision.whiteboardOpenConstraintCategories]
         : undefined,
+    phaseControl: decision.phaseControl
+      ? {
+          ...decision.phaseControl,
+          evidence: [...decision.phaseControl.evidence],
+        }
+      : undefined,
   };
 }
 
