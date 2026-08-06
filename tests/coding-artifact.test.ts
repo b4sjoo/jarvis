@@ -281,6 +281,95 @@ test("does not persist code from an artifact-unauthorized response", () => {
   assert.equal(next, existing);
 });
 
+test("lets a manual screen result replace code without parent settlement", () => {
+  const next = updateCodingArtifactCache({
+    activeParentTaskId: "parent_previous",
+    activeParentQuestionType: "coding",
+    cache: {
+      scope: "session-screen",
+      parentTaskId: "parent_previous",
+      parentQuestionType: "coding",
+      code: "def old(): pass",
+      complexity: "O(n)",
+      updatedAt: 100,
+    },
+    sections: sections(
+      "Answer: Use SQL grouping.\nCode:\n```sql\nSELECT value FROM items;\n```\nComplexity: O(n)"
+    ),
+    sourceCodeMutationAuthorized: true,
+    sourceComplexityMutationAuthorized: true,
+    sourcePresentationArtifactAuthority: "manual-screen",
+    sourceSuggestionId: "screen_result_new",
+    updatedAt: 200,
+  });
+
+  assert.ok(next);
+  assert.equal(next.scope, "session-screen");
+  assert.equal(next.code, "SELECT value FROM items;");
+  assert.equal(next.sourceSuggestionId, "screen_result_new");
+});
+
+test("keeps the latest screen artifact across a later parent transition", () => {
+  const screenCache = {
+    scope: "session-screen" as const,
+    parentTaskId: "parent_coding",
+    parentQuestionType: "coding" as const,
+    code: "def solve(): return 1",
+    complexity: "O(1)",
+    updatedAt: 100,
+  };
+  const behavioral = sections(
+    "Question: Tell me about a conflict.\nAnswer: I aligned the team."
+  );
+
+  const next = updateCodingArtifactCache({
+    activeParentTaskId: "parent_behavioral",
+    activeParentQuestionType: "behavioral",
+    cache: screenCache,
+    sections: behavioral,
+    sourceParentTaskId: "parent_behavioral",
+    sourceParentQuestionType: "behavioral",
+    sourceSuggestionId: "behavioral_answer",
+    updatedAt: 200,
+  });
+  const display = resolveCodingArtifactDisplay({
+    activeParentTaskId: "parent_behavioral",
+    activeParentQuestionType: "behavioral",
+    cache: next,
+    sections: behavioral,
+    sourceParentTaskId: "parent_behavioral",
+    sourceParentQuestionType: "behavioral",
+  });
+
+  assert.equal(next, screenCache);
+  assert.equal(projectArtifacts(behavioral, display).code, screenCache.code);
+  assert.equal(display.isCached, true);
+});
+
+test("an empty manual screen section preserves the session artifact", () => {
+  const screenCache = {
+    scope: "session-screen" as const,
+    parentTaskId: "parent_coding",
+    parentQuestionType: "coding" as const,
+    code: "def solve(): return 1",
+    complexity: "O(1)",
+    updatedAt: 100,
+  };
+
+  const next = updateCodingArtifactCache({
+    activeParentTaskId: "",
+    cache: screenCache,
+    sections: sections("Answer: I need more visible problem context.\nCode: -"),
+    sourceCodeMutationAuthorized: false,
+    sourceComplexityMutationAuthorized: false,
+    sourcePresentationArtifactAuthority: "manual-screen",
+    sourceSuggestionId: "screen_empty",
+    updatedAt: 200,
+  });
+
+  assert.equal(next, screenCache);
+});
+
 function sections(content: string) {
   return buildMeetingAnswerDisplayModel({ content });
 }

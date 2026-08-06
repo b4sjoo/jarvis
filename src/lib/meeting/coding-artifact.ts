@@ -8,12 +8,19 @@ import {
   normalizeCanonicalQuestionType,
   type CanonicalQuestionType,
 } from "./task-taxonomy.js";
+import type { ScreenPresentationArtifactAuthoritySource } from "./screen-artifact-authority.js";
+
+export type CodingArtifactCacheScope = "parent" | "session-screen";
 
 export interface CodingArtifactCache {
+  scope?: CodingArtifactCacheScope;
   parentTaskId: string;
   parentQuestionType: CanonicalQuestionType;
   code: string;
   complexity: string;
+  revision?: number;
+  codeRevision?: number;
+  complexityRevision?: number;
   updatedAt: number;
   sourceSuggestionId?: string;
 }
@@ -29,6 +36,7 @@ interface CodingArtifactScope {
   activeParentQuestionType?: string;
   sourceParentTaskId?: string;
   sourceParentQuestionType?: string;
+  sourcePresentationArtifactAuthority?: ScreenPresentationArtifactAuthoritySource;
 }
 
 export function updateCodingArtifactCache({
@@ -40,6 +48,9 @@ export function updateCodingArtifactCache({
   sourceParentQuestionType,
   sourceCodeMutationAuthorized,
   sourceComplexityMutationAuthorized,
+  sourcePresentationArtifactAuthority,
+  sourceCodeRevision,
+  sourceComplexityRevision,
   sourceSuggestionId,
   updatedAt,
 }: CodingArtifactScope & {
@@ -47,13 +58,23 @@ export function updateCodingArtifactCache({
   sections: MeetingAnswerDisplayModel;
   sourceCodeMutationAuthorized?: boolean;
   sourceComplexityMutationAuthorized?: boolean;
+  sourcePresentationArtifactAuthority?: ScreenPresentationArtifactAuthoritySource;
+  sourceCodeRevision?: number;
+  sourceComplexityRevision?: number;
   sourceSuggestionId?: string;
   updatedAt: number;
 }): CodingArtifactCache | null {
+  const manualScreenAuthority =
+    sourcePresentationArtifactAuthority === "manual-screen";
   const canonicalParentQuestionType = normalizeCanonicalQuestionType(
     activeParentQuestionType
   );
-  if (!activeParentTaskId || !canonicalParentQuestionType) return null;
+  if (
+    (!activeParentTaskId || !canonicalParentQuestionType) &&
+    !manualScreenAuthority
+  ) {
+    return cache?.scope === "session-screen" ? cache : null;
+  }
 
   const scopedCache = getScopedCodingArtifactCache(
     cache,
@@ -67,17 +88,22 @@ export function updateCodingArtifactCache({
     return scopedCache;
   }
 
-  if (!doesArtifactSourceBelongToParent({
-    activeParentTaskId,
-    activeParentQuestionType: canonicalParentQuestionType,
-    sourceParentTaskId,
-    sourceParentQuestionType,
-  })) {
+  if (
+    !manualScreenAuthority &&
+    !doesArtifactSourceBelongToParent({
+      activeParentTaskId,
+      activeParentQuestionType: canonicalParentQuestionType,
+      sourceParentTaskId,
+      sourceParentQuestionType,
+    })
+  ) {
     return scopedCache;
   }
 
   const artifactPatch = readCodingArtifactPatch({
-    activeTaskKind: canonicalParentQuestionType,
+    activeTaskKind: manualScreenAuthority
+      ? "coding"
+      : canonicalParentQuestionType,
     hasExistingCache: Boolean(scopedCache),
     sections,
   });
@@ -106,11 +132,38 @@ export function updateCodingArtifactCache({
     return scopedCache;
   }
 
+  const codeChanged = scopedCache?.code !== nextCode;
+  const complexityChanged = scopedCache?.complexity !== nextComplexity;
+  const artifactChanged = codeChanged || complexityChanged;
+
   return {
-    parentTaskId: activeParentTaskId,
-    parentQuestionType: canonicalParentQuestionType,
+    scope: manualScreenAuthority ? "session-screen" : "parent",
+    parentTaskId:
+      activeParentTaskId || sourceParentTaskId || "manual-screen-session",
+    parentQuestionType:
+      canonicalParentQuestionType ??
+      normalizeCanonicalQuestionType(sourceParentQuestionType) ??
+      "coding",
     code: nextCode,
     complexity: nextComplexity,
+    revision:
+      artifactChanged
+        ? (scopedCache?.revision ?? 0) + 1
+        : scopedCache?.revision ?? 1,
+    codeRevision:
+      Math.max(
+        sourceCodeRevision ?? 0,
+        codeChanged
+          ? (scopedCache?.codeRevision ?? 0) + 1
+          : scopedCache?.codeRevision ?? 0
+      ),
+    complexityRevision:
+      Math.max(
+        sourceComplexityRevision ?? 0,
+        complexityChanged
+          ? (scopedCache?.complexityRevision ?? 0) + 1
+          : scopedCache?.complexityRevision ?? 0
+      ),
     updatedAt,
     sourceSuggestionId,
   };
@@ -123,6 +176,7 @@ export function resolveCodingArtifactDisplay({
   sections,
   sourceParentTaskId,
   sourceParentQuestionType,
+  sourcePresentationArtifactAuthority,
 }: CodingArtifactScope & {
   cache: CodingArtifactCache | null;
   sections: MeetingAnswerDisplayModel;
@@ -130,24 +184,28 @@ export function resolveCodingArtifactDisplay({
   const canonicalParentQuestionType = normalizeCanonicalQuestionType(
     activeParentQuestionType
   );
-  if (!activeParentTaskId || !canonicalParentQuestionType) {
-    return emptyCodingArtifactDisplay();
-  }
 
   const scopedCache = getScopedCodingArtifactCache(
     cache,
     activeParentTaskId,
     canonicalParentQuestionType
   );
-  const sourceMatchesParent = doesArtifactSourceBelongToParent({
-    activeParentTaskId,
-    activeParentQuestionType: canonicalParentQuestionType,
-    sourceParentTaskId,
-    sourceParentQuestionType,
-  });
+  const manualScreenAuthority =
+    sourcePresentationArtifactAuthority === "manual-screen";
+  const sourceMatchesParent =
+    manualScreenAuthority ||
+    (Boolean(activeParentTaskId && canonicalParentQuestionType) &&
+      doesArtifactSourceBelongToParent({
+        activeParentTaskId,
+        activeParentQuestionType: canonicalParentQuestionType,
+        sourceParentTaskId,
+        sourceParentQuestionType,
+      }));
   const artifactPatch = sourceMatchesParent
     ? readCodingArtifactPatch({
-        activeTaskKind: canonicalParentQuestionType,
+        activeTaskKind: manualScreenAuthority
+          ? "coding"
+          : canonicalParentQuestionType,
         hasExistingCache: Boolean(scopedCache),
         sections,
       })
@@ -181,8 +239,10 @@ export function resolveCodingArtifactDisplay({
 function getScopedCodingArtifactCache(
   cache: CodingArtifactCache | null,
   activeParentTaskId: string,
-  activeParentQuestionType: CanonicalQuestionType
+  activeParentQuestionType: CanonicalQuestionType | undefined
 ) {
+  if (cache?.scope === "session-screen") return cache;
+  if (!activeParentTaskId || !activeParentQuestionType) return null;
   return cache?.parentTaskId === activeParentTaskId &&
     areCompatibleParentContinuityTypes(
       cache.parentQuestionType,

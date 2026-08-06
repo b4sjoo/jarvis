@@ -417,6 +417,9 @@ export const MeetingAssistant = ({
     useState<NativeAudioFaultFeedback>({ status: "idle" });
   const [codingArtifactCache, setCodingArtifactCache] =
     useState<CodingArtifactCache | null>(null);
+  const presentationArtifactResetRevisionRef = useRef(
+    meeting.presentationArtifactResetRevision
+  );
   const screenHotkeyInFlightRef = useRef(false);
   const lastScreenHotkeyAtRef = useRef(0);
 
@@ -514,11 +517,6 @@ export const MeetingAssistant = ({
     ? activeTaskKind
     : completedSuggestionParentQuestionType;
   useEffect(() => {
-    if (!activeParentTaskId) {
-      setCodingArtifactCache(null);
-      return;
-    }
-
     if (meeting.partialSuggestion) return;
 
     setCodingArtifactCache((previous) => {
@@ -533,6 +531,12 @@ export const MeetingAssistant = ({
           meeting.latestSuggestion?.codeArtifactMutationAuthorized,
         sourceComplexityMutationAuthorized:
           meeting.latestSuggestion?.complexityArtifactMutationAuthorized,
+        sourcePresentationArtifactAuthority:
+          meeting.latestSuggestion?.presentationArtifactAuthority,
+        sourceCodeRevision:
+          meeting.latestSuggestion?.codeArtifactRevision,
+        sourceComplexityRevision:
+          meeting.latestSuggestion?.complexityArtifactRevision,
         sourceSuggestionId: meeting.latestSuggestion?.id,
         updatedAt: Date.now(),
       });
@@ -544,6 +548,9 @@ export const MeetingAssistant = ({
     completedSuggestionParentQuestionType,
     meeting.latestSuggestion?.codeArtifactMutationAuthorized,
     meeting.latestSuggestion?.complexityArtifactMutationAuthorized,
+    meeting.latestSuggestion?.presentationArtifactAuthority,
+    meeting.latestSuggestion?.codeArtifactRevision,
+    meeting.latestSuggestion?.complexityArtifactRevision,
     meeting.latestSuggestion?.id,
     meeting.partialSuggestion,
     suggestionSections.primaryAnswer,
@@ -552,6 +559,17 @@ export const MeetingAssistant = ({
     suggestionSections.complexity,
     suggestionSections.focusedQuestion,
   ]);
+  useEffect(() => {
+    if (
+      presentationArtifactResetRevisionRef.current ===
+      meeting.presentationArtifactResetRevision
+    ) {
+      return;
+    }
+    presentationArtifactResetRevisionRef.current =
+      meeting.presentationArtifactResetRevision;
+    setCodingArtifactCache(null);
+  }, [meeting.presentationArtifactResetRevision]);
   const codingArtifactDisplay = useMemo(() => {
     return resolveCodingArtifactDisplay({
       activeParentTaskId,
@@ -560,6 +578,10 @@ export const MeetingAssistant = ({
       sections: suggestionSections,
       sourceParentTaskId: displayedSuggestionParentTaskId,
       sourceParentQuestionType: displayedSuggestionParentQuestionType,
+      sourcePresentationArtifactAuthority:
+        meeting.partialSuggestion
+          ? undefined
+          : meeting.latestSuggestion?.presentationArtifactAuthority,
     });
   }, [
     activeParentTaskId,
@@ -567,6 +589,7 @@ export const MeetingAssistant = ({
     codingArtifactCache,
     displayedSuggestionParentTaskId,
     displayedSuggestionParentQuestionType,
+    meeting.latestSuggestion?.presentationArtifactAuthority,
     suggestionSections.primaryAnswer,
     suggestionSections.approach,
     suggestionSections.code,
