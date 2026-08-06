@@ -53,6 +53,33 @@ test("makes the settled Mermaid preference explicit in the system-design contrac
   assert.match(message, /exactly one compact valid ```mermaid fenced flowchart/);
 });
 
+test("blocks numeric QPS when General SD evidence has inventory and ratio only", () => {
+  const message = buildAdvisorUserMessage(
+    {
+      transcript:
+        "them: Assume 100 million URLs and a 10:1 read/write ratio.",
+      screenContext: "",
+      rollingSummary: "",
+      userProfileContext: "",
+      glossaryText: "",
+      currentQuestionProjection: {
+        answerFocusText: "Refine the architecture.",
+        semanticEvidenceText:
+          "Assume 100 million URLs and a 10:1 read/write ratio.",
+        sourceTurnIds: ["turn-scale"],
+      },
+    },
+    { answerProfile: "system-design" }
+  );
+
+  assert.match(
+    message,
+    /<capacity_estimation_guardrail>[\s\S]*Disposition: missing-time-basis/
+  );
+  assert.match(message, /Numeric QPS authorized: false/);
+  assert.match(message, /Do not emit a numeric QPS range/);
+});
+
 test("formats the bounded response-action context scope", () => {
   const formatted = formatResponseActionContextScope({
     operationId: "scope-narrow",

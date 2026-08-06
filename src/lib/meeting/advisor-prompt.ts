@@ -25,6 +25,10 @@ import {
   formatResponseActionContextScope,
 } from "./response-action-contract.js";
 import { formatBoundedParentReadContextForPrompt } from "./response-only-task-scope.js";
+import {
+  formatCapacityEstimationGuardrailForPrompt,
+  resolveCapacityEstimationGuardrail,
+} from "./capacity-estimation-guardrail.js";
 
 export function buildAdvisorSystemPrompt() {
   return [
@@ -94,6 +98,25 @@ export function buildAdvisorUserMessage(
     context.interviewPlaybook,
     context.playbookPhaseDecision?.phase ?? context.activeMeetingTask?.parent.playbookPhase
   );
+  const capacityEstimationGuardrail =
+    resolveCapacityEstimationGuardrail({
+      questionType:
+        runtimePlaybook?.questionType ??
+        context.activeMeetingTask?.child?.questionType ??
+        context.activeMeetingTask?.parent.questionType ??
+        context.activeScreenTask?.kind ??
+        (answerProfile === "system-design"
+          ? "general-system-design"
+          : undefined),
+      sourceText: context.currentQuestionProjection
+        ? [
+            context.currentQuestionProjection.answerFocusText,
+            context.currentQuestionProjection.semanticEvidenceText,
+          ].join("\n")
+        : [context.activeScreenTask?.question, context.latestTurn?.text]
+            .filter(Boolean)
+            .join("\n"),
+    });
   const contextMode = hasScreenAnchoredTask
     ? "screen-anchored"
     : hasTranscript && hasScreenContext
@@ -151,6 +174,11 @@ export function buildAdvisorUserMessage(
       context.activeMeetingTask
     ),
     "</playbook_phase_state>",
+    "<capacity_estimation_guardrail>",
+    formatCapacityEstimationGuardrailForPrompt(
+      capacityEstimationGuardrail
+    ),
+    "</capacity_estimation_guardrail>",
     "<whiteboard_format_policy>",
     formatWhiteboardFormatPolicyForPrompt(
       context.whiteboardFormatPreference
@@ -439,6 +467,7 @@ function buildMeetingAnswerContractInstructions(
       "Question: restate the focused design problem in the requested meeting language.",
       "Answer: concise design direction or the most useful current-phase answer in the requested meeting language.",
       "Approach: logically ordered requirements, scale, architecture, tradeoffs, metrics, or next-step reasoning.",
+      "Capacity rule: obey <capacity_estimation_guardrail>. Never derive numeric QPS from inventory, user count, read/write ratio, or peak factor without a request/action time basis; ask for one or state explicit mutable assumptions first.",
       "Whiteboard: always provide the evolving infrastructure artifact. During requirement_clarification, output a shallow PROVISIONAL skeleton with known scope and open constraints; never use '-' for a system-design parent. When <whiteboard_format_policy> says mermaid, output exactly one compact valid ```mermaid fenced flowchart. When it says plain-text, output a compact readable ASCII artifact.",
       ...clarification,
       ...authorityEvidence,

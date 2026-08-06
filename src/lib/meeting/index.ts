@@ -17,6 +17,7 @@ export * from "./advisor-trigger-job";
 export * from "./answer-generation-lease";
 export * from "./adjacent-question-constraint";
 export * from "./active-meeting-task";
+export * from "./capacity-estimation-guardrail";
 export * from "./active-question-term-correction";
 export * from "./clarifying-options";
 export * from "./coding-artifact";

@@ -49,6 +49,10 @@ import {
 } from "./programming-language";
 import { formatBoundedParentReadContextForPrompt } from "./response-only-task-scope";
 import type { WhiteboardFormatPreference } from "./whiteboard-format-policy";
+import {
+  formatCapacityEstimationGuardrailForPrompt,
+  resolveCapacityEstimationGuardrail,
+} from "./capacity-estimation-guardrail";
 
 export type ScreenCaptureTargetType = "active-window" | "current-monitor";
 
@@ -561,6 +565,16 @@ function buildScreenTaskUserMessage({
     interviewPlaybook,
     playbookPhaseDecision?.phase
   );
+  const capacityEstimationGuardrail =
+    resolveCapacityEstimationGuardrail({
+      questionType:
+        runtimePlaybook?.questionType ??
+        screenPreflight?.canonicalQuestionType ??
+        screenPreflight?.questionType,
+      sourceText: [screenPreflight?.question, recentTranscript]
+        .filter(Boolean)
+        .join("\n"),
+    });
   const target = observation.captureTarget
     ? formatCaptureTargetForPrompt(observation.captureTarget)
     : "Unknown capture target";
@@ -603,6 +617,11 @@ function buildScreenTaskUserMessage({
       activeMeetingTask
     ),
     "</playbook_phase_state>",
+    "<capacity_estimation_guardrail>",
+    formatCapacityEstimationGuardrailForPrompt(
+      capacityEstimationGuardrail
+    ),
+    "</capacity_estimation_guardrail>",
     "<whiteboard_format_policy>",
     whiteboardFormatPreference === "plain-text"
       ? "Preference: plain-text. The visible question explicitly requested ASCII or plain text."
@@ -697,7 +716,7 @@ function buildScreenTaskUserMessage({
     "Clarifying options: 2-4 short option labels if the clarification is a choice, otherwise '-'.",
     "If it is a general backend/system design question, output:",
     "中文思路: 用中文先给通用系统设计抓手：核心需求、规模、API/data model、consistency、latency、可靠性、成本取舍，以及建议先问的问题。",
-    "Answer: give a short opening answer or framing statement, include a rough QPS/capacity estimate if traffic numbers are visible, and include 2-3 requirement clarification questions that would materially change the design. If scale is not visible, explicitly say you would first ask for DAU/actions-per-user/peak factor before estimating QPS; use QPS = users * actions_per_user_per_day / 86400 * peak_factor as the default estimation frame. If important requirements are missing, do not fake a full design; propose the first backend design direction and ask for the highest-value clarification.",
+    "Answer: give a short opening answer or framing statement and include 2-3 requirement clarification questions that would materially change the design. Obey <capacity_estimation_guardrail>: calculate rough QPS only when the visible/source evidence provides direct throughput or a request/action time basis. Inventory, user count, read/write ratio, or peak factor alone cannot authorize numeric QPS. Otherwise ask for DAU plus actions-per-user-per-day and peak factor, ask for requests per time window, or state explicit mutable time-basis assumptions before calculating. If important requirements are missing, do not fake a full design; propose the first backend design direction and ask for the highest-value clarification.",
     "Approach: outline requirements, APIs/data model, architecture, scaling, consistency, reliability, observability, and tradeoffs.",
     "Whiteboard: provide exactly one compact valid Mermaid fenced flowchart by default. During requirement_clarification, mark the diagram PROVISIONAL and show only known scope, a Client --> Interface/API --> Core capability --> State boundary --> Response path, and open scale/correctness/latency constraints. After readiness, refine supported details. Use ASCII only when the visible question explicitly requests it.",
     "Code: -",

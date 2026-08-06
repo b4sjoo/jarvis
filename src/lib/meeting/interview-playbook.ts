@@ -135,7 +135,7 @@ export function selectInterviewPlaybook({
       clarifyingStrategy:
         "Prefer concrete requirement questions: DAU/actions/peak factor, consistency vs latency, single-region vs global, and out-of-scope boundaries.",
       outputContract:
-        "During requirement clarification, Answer is a short framing plus 2-3 high-value questions and Whiteboard is a PROVISIONAL request/data-path skeleton with open constraints. After readiness, Approach and Whiteboard evolve through APIs/data model, architecture, scaling, correctness, reliability, and observability.",
+        "During requirement clarification, Answer is a short framing plus 2-3 high-value questions and Whiteboard is a PROVISIONAL request/data-path skeleton with open constraints. Numeric QPS requires direct throughput or a request/action time basis; inventory, user count, read/write ratio, or peak factor alone is insufficient. Otherwise ask for the missing time basis or state explicit mutable assumptions before calculating. After readiness, Approach and Whiteboard evolve through APIs/data model, architecture, scaling, correctness, reliability, and observability.",
       followUpPolicy:
         "Follow-ups should update the affected phase: capacity, data model, write path, consistency, failure mode, or deep dive subsystem.",
       maxEntries: 6,

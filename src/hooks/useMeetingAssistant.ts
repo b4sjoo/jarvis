@@ -250,6 +250,8 @@ import {
   applyWhiteboardFormatPolicy,
   formatWhiteboardFormatPolicyForTrace,
   resolveWhiteboardFormatPreference,
+  formatCapacityEstimationGuardrailForTrace,
+  resolveCapacityEstimationGuardrail,
   authorizeWhiteboardSyntaxRepairLease,
   buildWhiteboardSyntaxRepairPrompts,
   createWhiteboardSyntaxRepairLease,
@@ -8871,6 +8873,28 @@ export function useMeetingAssistant() {
           }
         : undefined,
     };
+    const advisorCapacityEstimationGuardrail =
+      resolveCapacityEstimationGuardrail({
+        questionType: advisorQuestionType,
+        sourceText: advisorCurrentQuestionEvidenceText,
+      });
+    if (traceId) {
+      const capacityMetadata =
+        formatCapacityEstimationGuardrailForTrace(
+          advisorCapacityEstimationGuardrail
+        );
+      traceStoreRef.current.updateMetadata(traceId, capacityMetadata);
+      const capacityStepId = traceStoreRef.current.startStep(
+        traceId,
+        "Capacity estimation guardrail",
+        capacityMetadata
+      );
+      traceStoreRef.current.finishStep(
+        traceId,
+        capacityStepId,
+        "success"
+      );
+    }
     const advisorModelPromptContext = transientPersonalStatusDecision
       ? {
           ...promptContext,
@@ -17929,9 +17953,29 @@ export function useMeetingAssistant() {
               : "none",
             sourceQuestion: screenCurrentQuestionEvidenceText,
           });
+        const screenCapacityEstimationGuardrail =
+          resolveCapacityEstimationGuardrail({
+            questionType: screenMemoryQuestionType,
+            sourceText: screenCurrentQuestionEvidenceText,
+          });
+        const screenCapacityMetadata =
+          formatCapacityEstimationGuardrailForTrace(
+            screenCapacityEstimationGuardrail
+          );
         traceStoreRef.current.updateMetadata(trace.id, {
           screenWhiteboardFormatPreference,
+          ...screenCapacityMetadata,
         });
+        const screenCapacityStepId = traceStoreRef.current.startStep(
+          trace.id,
+          "Capacity estimation guardrail",
+          screenCapacityMetadata
+        );
+        traceStoreRef.current.finishStep(
+          trace.id,
+          screenCapacityStepId,
+          "success"
+        );
         const screenGenerationContext =
           contextManagerRef.current.getState();
         const screenGenerationParent =
