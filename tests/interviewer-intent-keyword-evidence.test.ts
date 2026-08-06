@@ -74,3 +74,28 @@ test("serializes factor evidence as trace-only counterfactual metadata", () => {
     1
   );
 });
+
+test("traces a derived keyword view without rewriting source evidence", () => {
+  const text = "Please design a URL shortener for me.";
+  const turnDecision = decideAdvisorTurnIntent(text, {
+    hasActiveTask: false,
+  });
+  const evidence = extractInterviewerIntentKeywordEvidence({
+    text,
+    turnDecision,
+    currentTurnId: "turn_keyword_view",
+  });
+  const metadata = formatInterviewerIntentKeywordEvidenceForTrace(evidence);
+
+  assert.equal(evidence.keywordView.text, "design url shortener for me");
+  assert.equal(evidence.counterfactual.evidenceSpans[0]?.text, text);
+  assert.equal(
+    metadata.interviewerIntentKeywordCanonicalizationApplied,
+    true
+  );
+  assert.equal(metadata.interviewerIntentKeywordSourceTextLength, text.length);
+  assert.notEqual(
+    metadata.interviewerIntentKeywordSourceTextHash,
+    metadata.interviewerIntentKeywordCanonicalTextHash
+  );
+});

@@ -4,6 +4,7 @@ import {
   type InterviewerIntentDecision,
 } from "./interviewer-intent.js";
 import {
+  buildQuestionTypeKeywordView,
   inferQuestionTypeDecisionFromText,
   type QuestionTypeInferenceDecision,
 } from "./task-taxonomy.js";
@@ -18,6 +19,7 @@ export interface InterviewerIntentKeywordEvidence {
   domainMarkers: string[];
   transitionMarkers: string[];
   hardNegativeMarkers: string[];
+  keywordView: ReturnType<typeof buildQuestionTypeKeywordView>;
   questionTypeDecision: QuestionTypeInferenceDecision;
   counterfactual: InterviewerIntentDecision;
 }
@@ -37,7 +39,8 @@ export function extractInterviewerIntentKeywordEvidence({
   contextTurnIds = [],
   currentTurnId,
 }: ExtractInterviewerIntentKeywordEvidenceInput): InterviewerIntentKeywordEvidence {
-  const normalized = normalize(text);
+  const keywordView = buildQuestionTypeKeywordView(text);
+  const normalized = keywordView.text;
   const questionTypeDecision = inferQuestionTypeDecisionFromText(text);
   const speechActMarkers = unique([
     ...turnDecision.evidence.filter((entry) =>
@@ -66,6 +69,7 @@ export function extractInterviewerIntentKeywordEvidence({
         /blocked|ambiguous|weak/.test(entry)
       ),
     ]),
+    keywordView,
     questionTypeDecision,
     counterfactual: projectInterviewerIntentDecision({
       turnDecision,
@@ -91,6 +95,18 @@ export function formatInterviewerIntentKeywordEvidenceForTrace(
     interviewerIntentKeywordDomainMarkers: evidence.domainMarkers,
     interviewerIntentKeywordTransitionMarkers: evidence.transitionMarkers,
     interviewerIntentKeywordHardNegativeMarkers: evidence.hardNegativeMarkers,
+    interviewerIntentKeywordSourceTextLength:
+      evidence.keywordView.sourceTextLength,
+    interviewerIntentKeywordSourceTextHash:
+      evidence.keywordView.sourceTextHash,
+    interviewerIntentKeywordCanonicalTextLength:
+      evidence.keywordView.canonicalTextLength,
+    interviewerIntentKeywordCanonicalTextHash:
+      evidence.keywordView.canonicalTextHash,
+    interviewerIntentKeywordCanonicalizationApplied:
+      evidence.keywordView.applied,
+    interviewerIntentKeywordCanonicalizationTransformations:
+      evidence.keywordView.transformations,
     interviewerIntentKeywordQuestionType:
       evidence.questionTypeDecision.type ?? "unknown",
     interviewerIntentKeywordQuestionTypeLegacy:
@@ -197,14 +213,6 @@ const HARD_NEGATIVE_PATTERNS: Array<[string, RegExp]> = [
   ["acknowledgement-prefix", /^(?:yes|yeah|right|okay|ok|good|great|thanks)\b|^(?:好的|明白|可以|谢谢)/u],
   ["indirect-question-clause", /\b(?:discussed|explained|mentioned)\s+(?:what|why|where|how)\b|讨论了|解释了|提到了/u],
 ];
-
-function normalize(text: string) {
-  return text
-    .toLowerCase()
-    .replace(/[’']/g, "'")
-    .replace(/\s+/g, " ")
-    .trim();
-}
 
 function matchLabels(
   text: string,

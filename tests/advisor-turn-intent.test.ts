@@ -236,6 +236,8 @@ test("suppresses exact acknowledgement variants without suppressing a real add-o
     "Looks good to me.",
     "That looks good to me.",
     "This sounds good to me.",
+    "Mm, OK.",
+    "Mm-hmm, okay.",
   ]) {
     const decision = decideAdvisorTurnIntent(text, {
       hasActiveTask: true,
@@ -267,6 +269,14 @@ test("suppresses exact acknowledgement variants without suppressing a real add-o
   assert.equal(addOn.intent, "direct-question");
   assert.equal(addOn.action, "answer-refresh");
   assert.equal(addOn.executionAuthorized, true);
+
+  const acousticAddOn = decideAdvisorTurnIntent(
+    "Mm, OK, now estimate QPS.",
+    { hasActiveTask: true }
+  );
+  assert.equal(acousticAddOn.intent, "direct-question");
+  assert.equal(acousticAddOn.action, "answer-refresh");
+  assert.equal(acousticAddOn.executionAuthorized, true);
 });
 
 test("execution authorization fails closed unless intent or an explicit action permits work", () => {

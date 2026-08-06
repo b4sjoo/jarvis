@@ -610,6 +610,15 @@ export function isExactLowValueAcknowledgement(text: string) {
     .split(" ")
     .filter(Boolean);
   if (
+    repeatedTokens.length >= 1 &&
+    repeatedTokens.length <= 5 &&
+    repeatedTokens.every((token) =>
+      ACKNOWLEDGEMENT_ONLY_TOKENS.has(token)
+    )
+  ) {
+    return true;
+  }
+  if (
     repeatedTokens.length >= 2 &&
     repeatedTokens.length <= 4 &&
     repeatedTokens.every((token) => token === repeatedTokens[0]) &&
@@ -630,6 +639,30 @@ export function isExactLowValueAcknowledgement(text: string) {
     normalizedAcknowledgement
   );
 }
+
+const ACKNOWLEDGEMENT_ONLY_TOKENS = new Set([
+  "ah",
+  "eh",
+  "er",
+  "good",
+  "great",
+  "hmm",
+  "mm",
+  "mhm",
+  "nice",
+  "no",
+  "ok",
+  "okay",
+  "perfect",
+  "right",
+  "sure",
+  "thanks",
+  "uh",
+  "um",
+  "yeah",
+  "yep",
+  "yes",
+]);
 
 function canonicalizeAcknowledgement(text: string) {
   const acousticFamily = text

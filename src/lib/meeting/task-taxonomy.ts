@@ -70,6 +70,16 @@ export interface QuestionTypeInferenceOptions {
   };
 }
 
+export interface QuestionTypeKeywordView {
+  text: string;
+  sourceTextLength: number;
+  sourceTextHash: string;
+  canonicalTextLength: number;
+  canonicalTextHash: string;
+  applied: boolean;
+  transformations: string[];
+}
+
 export type TaskTaxonomyAuthoritySource =
   | "accepted-transcript"
   | "screen-preflight"
@@ -517,7 +527,8 @@ export function inferQuestionTypeDecisionFromText(
   text: string,
   options: QuestionTypeInferenceOptions = {}
 ): QuestionTypeInferenceDecision {
-  const normalized = text.toLowerCase();
+  const keywordView = buildQuestionTypeKeywordView(text);
+  const normalized = keywordView.text;
   const scores: Partial<Record<CanonicalQuestionType, number>> = {};
   const evidence: string[] = [];
   const ambiguousTerms = collectQuestionTypeTerms(normalized);
@@ -669,11 +680,14 @@ export function inferQuestionTypeDecisionFromText(
 
   const hasHypotheticalDesignFrame =
     /\bsystem design\b/.test(normalized) ||
-    /\b(design|architect|build)\s+(a|an|the|this)\b/.test(normalized) ||
+    /\b(design|architect|build)\s+(?:(?:a|an|the|this)\s+)?\S/.test(
+      normalized
+    ) ||
+    /^(?:design|architect)\s+\S/.test(normalized) ||
     /\b(how would you|can you|please)\s+(design|architect|build|implement)\b/.test(
       normalized
     ) ||
-    /\b(implement|build)\s+(a|an|the)\s+(scalable|distributed|highly available|fault tolerant)\b/.test(
+    /\b(implement|build)\s+(?:(?:a|an|the)\s+)?(?:scalable|distributed|highly available|fault tolerant)\b/.test(
       normalized
     );
   const hasHighLevelDesignRequest =
@@ -688,6 +702,17 @@ export function inferQuestionTypeDecisionFromText(
     /\b(qps|throughput|traffic|scale|scalable|availability|reliability|latency|storage|database|microservice|requirements?|consistency|partition|load balancer)\b/.test(
       normalized
     );
+  const hasTechnicalProductDesignTarget =
+    /^(?:design|architect)\s+\S/.test(normalized) &&
+    /\b(?:url|web|mobile|online|distributed|real[- ]?time|backend|frontend|data|notification|payment|search|storage|shortener|service|system|app|application|platform|pipeline|network|feed|chat|booking|ticket|delivery|sharing|marketplace|streaming)\b/.test(
+      normalized
+    ) &&
+    !hasCodingActionObject &&
+    !hasAlgorithmDesignRequest &&
+    !hasExplicitCodeOutputRequest &&
+    !hasCodingArtifact &&
+    !hasFunctionImplementationFrame &&
+    !hasDataStructureOrAlgorithmObject;
   const hasAimlContext =
     /\b(ai|ml|machine learning|llm|rag|retrieval|retrieval augmented|embedding|vector|model serving|agent|evaluation|eval|fine-tuning|feature store|recommendation|recommender|ranking|personalization|training pipeline|inference)\b/.test(
       normalized
@@ -708,7 +733,8 @@ export function inferQuestionTypeDecisionFromText(
     hasHypotheticalDesignFrame &&
     (hasSystemDesignObject ||
       hasScaleOrRequirementContext ||
-      hasExplicitAimlArchitectureObject);
+      hasExplicitAimlArchitectureObject ||
+      hasTechnicalProductDesignTarget);
 
   if (hasStrongSystemDesignFrame && hasAimlContext) {
     addEvidence("ai-ml-system-design", 0.96, "hypothetical-ai-ml-design");
@@ -986,6 +1012,52 @@ export function inferCanonicalQuestionTypeFromText(
   return inferQuestionTypeDecisionFromText(text).type;
 }
 
+export function buildQuestionTypeKeywordView(
+  sourceText: string
+): QuestionTypeKeywordView {
+  const transformations: string[] = [];
+  let text = sourceText
+    .toLowerCase()
+    .replace(/[’]/gu, "'")
+    .replace(/[^\p{L}\p{N}+#'\-]+/gu, " ")
+    .replace(/\s+/gu, " ")
+    .trim();
+
+  const apply = (pattern: RegExp, replacement: string, label: string) => {
+    const next = text.replace(pattern, replacement).replace(/\s+/gu, " ").trim();
+    if (next !== text) {
+      transformations.push(label);
+      text = next;
+    }
+  };
+
+  apply(
+    /^(?:(?:well|so|then|and|but|okay|ok|right|sure|great|thanks|thank you|mm+|mhm|hmm|uh|um)\s+)+(?=\S)/u,
+    "",
+    "leading-discourse-or-acknowledgement"
+  );
+  apply(
+    /^(?:please\s+|(?:can|could|would|will)\s+you\s+(?:please\s+)?|i(?:'d| would)\s+like\s+you\s+to\s+|let(?:'s| us)\s+)/u,
+    "",
+    "leading-politeness"
+  );
+  apply(
+    /^((?:design|architect|build|implement|write|create|show|provide|describe|explain|outline|propose|sketch|estimate)(?:\s+me)?)\s+(?:a|an|the)\s+/u,
+    "$1 ",
+    "command-object-article"
+  );
+
+  return {
+    text,
+    sourceTextLength: sourceText.length,
+    sourceTextHash: hashKeywordViewText(sourceText),
+    canonicalTextLength: text.length,
+    canonicalTextHash: hashKeywordViewText(text),
+    applied: transformations.length > 0,
+    transformations,
+  };
+}
+
 function collectQuestionTypeTerms(text: string) {
   const terms = text.match(
     /\b(implement|build|write|solve|typescript|javascript|python|java|rust|go|golang|algorithm|binary tree|linked list|graph|heap|stack|queue|dp|dynamic programming)\b/g
@@ -995,4 +1067,13 @@ function collectQuestionTypeTerms(text: string) {
 
 function roundTaxonomyScore(value: number) {
   return Math.round(value * 100) / 100;
+}
+
+function hashKeywordViewText(value: string) {
+  let hash = 2_166_136_261;
+  for (const character of value) {
+    hash ^= character.charCodeAt(0);
+    hash = Math.imul(hash, 16_777_619);
+  }
+  return (hash >>> 0).toString(16).padStart(8, "0");
 }

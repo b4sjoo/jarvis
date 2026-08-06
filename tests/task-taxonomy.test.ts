@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   areCompatibleQuestionTypes,
+  buildQuestionTypeKeywordView,
   canQuestionTypeDecisionOverrideParent,
   decideLatestTurnTaxonomyBoundary,
   fromHumanEvalQuestionType,
@@ -292,6 +293,40 @@ test("infers canonical question type from lightweight text signals", () => {
     "field-knowledge"
   );
   assert.equal(inferCanonicalQuestionTypeFromText("hello"), undefined);
+});
+
+test("uses a keyword-only canonical view for polite article-bearing design asks", () => {
+  const source = "Please design a URL shortener for me.";
+  const keywordView = buildQuestionTypeKeywordView(source);
+
+  assert.equal(keywordView.text, "design url shortener for me");
+  assert.equal(keywordView.sourceTextLength, source.length);
+  assert.equal(keywordView.applied, true);
+  assert.deepEqual(keywordView.transformations, [
+    "leading-politeness",
+    "command-object-article",
+  ]);
+  assert.equal(
+    inferCanonicalQuestionTypeFromText(source),
+    "general-system-design"
+  );
+  assert.equal(
+    inferCanonicalQuestionTypeFromText("Design URL shortener."),
+    "general-system-design"
+  );
+});
+
+test("keeps coding and project hard negatives ahead of canonical design admission", () => {
+  assert.equal(
+    inferCanonicalQuestionTypeFromText("Please design an algorithm for top k"),
+    "coding"
+  );
+  assert.equal(
+    inferCanonicalQuestionTypeFromText(
+      "Could you please walk me through the URL shortener you built?"
+    ),
+    "project-deep-dive"
+  );
 });
 
 test("uses action, object, and frame together for implement and stack questions", () => {
