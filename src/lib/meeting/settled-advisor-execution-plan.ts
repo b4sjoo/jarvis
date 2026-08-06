@@ -191,9 +191,21 @@ export function buildSettledAdvisorExecutionPlan(input: {
     !responseOnlyTaskScope && input.activeMeetingTask
     ? cloneActiveMeetingTask(input.activeMeetingTask)
     : undefined;
-  const playbook = input.playbook
+  const selectedPlaybook = input.playbook
     ? cloneSelectedPlaybook(input.playbook)
     : undefined;
+  const readOnlyParentContinuity =
+    responseOnlyTaskScope?.readOnlyParentContinuity;
+  const retainedParentPhase =
+    readOnlyParentContinuity?.compatibleWithInferredType
+      ? readOnlyParentContinuity.playbookPhase
+      : undefined;
+  const playbook = selectedPlaybook && retainedParentPhase
+    ? deepFreeze({
+        ...selectedPlaybook,
+        phase: retainedParentPhase,
+      })
+    : selectedPlaybook;
   const transientPersonalStatusDecision =
     input.transientPersonalStatusDecision
       ? cloneTransientPersonalStatusDecision(
@@ -202,7 +214,9 @@ export function buildSettledAdvisorExecutionPlan(input: {
       : undefined;
   const playbookPhase = transientPersonalStatusDecision
     ? taskSnapshot?.parent.playbookPhase
-    : playbook?.phase ?? taskSnapshot?.parent.playbookPhase;
+    : retainedParentPhase ??
+      playbook?.phase ??
+      taskSnapshot?.parent.playbookPhase;
   const responseOwner: MeetingResponseOwnerResolution =
     transientPersonalStatusDecision
       ? {
@@ -243,20 +257,19 @@ export function buildSettledAdvisorExecutionPlan(input: {
     subtaskIntent: input.subtaskIntent,
   });
   const artifactPolicy = authorizeResponseArtifactMutation({
-    parentTaskId: responseOnlyTaskScope
-      ? undefined
-      : taskSnapshot?.parent.id,
-    parentQuestionType: responseOnlyTaskScope
-      ? undefined
-      : taskSnapshot?.parent.questionType,
+    parentTaskId:
+      readOnlyParentContinuity?.parentId ??
+      taskSnapshot?.parent.id,
+    parentQuestionType:
+      readOnlyParentContinuity?.questionType ??
+      taskSnapshot?.parent.questionType,
     responseOwnerQuestionType: responseOwner.questionType,
     responseOwnerSource: responseOwner.source,
     relation,
     subtaskIntent: input.subtaskIntent,
     requiredArtifacts,
-    creatingParent:
-      input.taskBoundaryCommitted &&
-      input.settlement.parentMutationAuthorized,
+    creatingParent: input.taskBoundaryCommitted,
+    readOnlyParentContinuity: Boolean(readOnlyParentContinuity),
   });
   const factAnchorPolicy = transientPersonalStatusDecision
     ? {
@@ -553,6 +566,18 @@ export function formatSettledAdvisorExecutionPlanForTrace(
       plan.responseOnlyTaskScope?.relationDisposition,
     settledExecutionPlanResponseOnlyPreservedParentId:
       plan.responseOnlyTaskScope?.preservedParentId,
+    settledExecutionPlanReadOnlyParentType:
+      plan.responseOnlyTaskScope?.readOnlyParentContinuity
+        ?.questionType,
+    settledExecutionPlanReadOnlyParentPhase:
+      plan.responseOnlyTaskScope?.readOnlyParentContinuity
+        ?.playbookPhase,
+    settledExecutionPlanReadOnlyParentCompatible:
+      plan.responseOnlyTaskScope?.readOnlyParentContinuity
+        ?.compatibleWithInferredType,
+    settledExecutionPlanReadOnlyArtifactOwnerId:
+      plan.responseOnlyTaskScope?.readOnlyParentContinuity
+        ?.artifactOwnerParentId,
     settledExecutionPlanResponseOnlyParentContextInjected:
       plan.responseOnlyTaskScope
         ? plan.contextReadScope === "active-parent-read" ||
@@ -662,10 +687,7 @@ function resolveTaskMutationPolicy(input: {
     return { kind: "preserve" };
   }
   if (input.explicitCommand) return input.explicitCommand;
-  if (
-    input.taskBoundaryCommitted &&
-    input.settlement.parentMutationAuthorized
-  ) {
+  if (input.taskBoundaryCommitted) {
     return {
       kind: "create-parent",
       type: input.settlement.questionType,

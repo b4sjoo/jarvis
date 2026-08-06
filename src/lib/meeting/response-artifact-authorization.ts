@@ -15,6 +15,7 @@ export type ResponseArtifactMutationDisposition =
   | "coding-child-authorized"
   | "design-child-authorized"
   | "display-only-child"
+  | "display-only-parent-continuity"
   | "display-only-transient"
   | "rejected-incompatible-owner"
   | "rejected-missing-parent";
@@ -41,6 +42,7 @@ export function authorizeResponseArtifactMutation(input: {
   subtaskIntent?: InterviewSubtaskIntent;
   requiredArtifacts?: AnswerArtifactSection[];
   creatingParent?: boolean;
+  readOnlyParentContinuity?: boolean;
 }): ResponseArtifactMutationAuthorization {
   const parentQuestionType =
     normalizeCanonicalQuestionType(input.parentQuestionType) ?? undefined;
@@ -71,6 +73,19 @@ export function authorizeResponseArtifactMutation(input: {
       ...base,
       disposition: "rejected-missing-parent",
       reason: "persistent-artifacts-require-canonical-parent",
+      allowLatestUsefulAnswer: false,
+      allowWhiteboard: false,
+      allowCode: false,
+      allowComplexity: false,
+      allowParentContextMutation: false,
+    };
+  }
+
+  if (input.readOnlyParentContinuity) {
+    return {
+      ...base,
+      disposition: "display-only-parent-continuity",
+      reason: "response-only-scope-preserves-read-only-artifact-owner",
       allowLatestUsefulAnswer: false,
       allowWhiteboard: false,
       allowCode: false,

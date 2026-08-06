@@ -46,7 +46,21 @@ export type TaskBoundaryAuthoritySource =
   | "manual-correction"
   | "opening-route"
   | "accepted-transcript"
+  | "accepted-llm-type-first-parent"
   | "semantic-unknown-rescue";
+
+export interface LlmTypeRepairFirstParentAdmissionDecision {
+  authorized: boolean;
+  reason:
+    | "authorized-source-owned-primary-ask"
+    | "active-parent-present"
+    | "type-repair-output-not-authorized"
+    | "settlement-not-type-only-repair"
+    | "question-type-not-parent-eligible"
+    | "logical-question-mismatch"
+    | "source-owned-primary-ask-missing";
+  proposedRelation: "new-parent" | "unknown";
+}
 
 export type TaskBoundaryMutationDisposition =
   | "commit-before-advisor"
@@ -217,6 +231,77 @@ export function createTaskBoundaryCandidate(
   };
 }
 
+export function decideLlmTypeRepairFirstParentAdmission(input: {
+  logicalQuestionUnit?: LogicalQuestionUnit;
+  settlement?: CurrentQuestionSettlementDecision;
+  hasActiveParent: boolean;
+  outputAuthorityAuthorized: boolean;
+}): LlmTypeRepairFirstParentAdmissionDecision {
+  if (input.hasActiveParent) {
+    return firstParentDecision(false, "active-parent-present");
+  }
+  if (!input.outputAuthorityAuthorized) {
+    return firstParentDecision(
+      false,
+      "type-repair-output-not-authorized"
+    );
+  }
+
+  const settlement = input.settlement;
+  if (
+    !settlement ||
+    settlement.typeAuthoritySource !== "llm-type-repair" ||
+    !settlement.typeMutationAuthorized ||
+    settlement.relationMutationAuthorized ||
+    settlement.relation !== "unknown"
+  ) {
+    return firstParentDecision(
+      false,
+      "settlement-not-type-only-repair"
+    );
+  }
+  if (!isParentCanonicalQuestionType(settlement.questionType)) {
+    return firstParentDecision(
+      false,
+      "question-type-not-parent-eligible"
+    );
+  }
+
+  const unit = input.logicalQuestionUnit;
+  if (
+    !unit ||
+    unit.id !== settlement.logicalQuestionUnitId ||
+    unit.revision !== settlement.revision ||
+    unit.sessionId !== settlement.sessionId ||
+    unit.runtimeEpoch !== settlement.runtimeEpoch
+  ) {
+    return firstParentDecision(false, "logical-question-mismatch");
+  }
+  const primaryAsk = unit.primaryAskProjection;
+  const sourceOwnedPrimaryAsk = Boolean(
+    primaryAsk &&
+      primaryAsk.disposition === "answer-primary-ask" &&
+      (primaryAsk.speechAct === "question" ||
+        primaryAsk.speechAct === "directive") &&
+      primaryAsk.confidence >= 0.9 &&
+      primaryAsk.normalizedPrimaryAsk?.trim() &&
+      primaryAsk.sourceTurnIds.some((turnId) =>
+        unit.sourceTurnIds.includes(turnId)
+      )
+  );
+  if (!sourceOwnedPrimaryAsk) {
+    return firstParentDecision(
+      false,
+      "source-owned-primary-ask-missing"
+    );
+  }
+
+  return firstParentDecision(
+    true,
+    "authorized-source-owned-primary-ask"
+  );
+}
+
 export function commitTaskBoundaryCandidate(
   candidate: TaskBoundaryCandidate,
   parentId: string,
@@ -323,6 +408,7 @@ export function buildCommittedTaskBoundaryParent(input: {
   questionInstanceId?: string;
   playbook?: SelectedInterviewPlaybook;
   phaseDecision?: PlaybookPhaseDecision;
+  settlementId?: string;
   expiresAt?: number;
   parentContextHandoff?: ParentContextHandoff;
   now?: number;
@@ -370,7 +456,8 @@ export function buildCommittedTaskBoundaryParent(input: {
     ],
     sourceQuestionUnitId: input.logicalQuestionUnit.id,
     sourceQuestionRevision: input.logicalQuestionUnit.revision,
-    settlementId: input.candidate.settlement?.settlementId,
+    settlementId:
+      input.settlementId ?? input.candidate.settlement?.settlementId,
     parentContextHandoff: input.parentContextHandoff,
     revisions: 1,
   };
@@ -403,4 +490,15 @@ function mutationAuthorityFromSettlement(
 function clampConfidence(value: number | undefined) {
   if (typeof value !== "number" || !Number.isFinite(value)) return 0;
   return Math.max(0, Math.min(1, value));
+}
+
+function firstParentDecision(
+  authorized: boolean,
+  reason: LlmTypeRepairFirstParentAdmissionDecision["reason"]
+): LlmTypeRepairFirstParentAdmissionDecision {
+  return {
+    authorized,
+    reason,
+    proposedRelation: authorized ? "new-parent" : "unknown",
+  };
 }

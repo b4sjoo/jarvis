@@ -2,9 +2,11 @@ import type { ActiveMeetingTask } from "./active-meeting-task.js";
 import type {
   AdvisorBoundedParentReadContext,
   AdvisorPromptContext,
+  InterviewPlaybookPhase,
   InterviewSessionBrief,
   InterviewTaskRelation,
 } from "./types.js";
+import { areCompatibleParentContinuityTypes } from "./task-taxonomy.js";
 
 export type ResponseOnlyRelationDisposition =
   | "pending"
@@ -18,6 +20,17 @@ export type AdvisorContextReadScope =
   | "active-child-read"
   | "bounded-recent-history";
 
+export interface ResponseOnlyParentContinuity {
+  parentId: string;
+  parentRevision: number;
+  questionType: string;
+  playbookPhase: InterviewPlaybookPhase;
+  artifactOwnerParentId: string;
+  whiteboardArtifactId?: string;
+  whiteboardArtifactRevision?: number;
+  compatibleWithInferredType: boolean;
+}
+
 export interface ResponseOnlyTaskScope {
   scopeId: string;
   logicalQuestionUnitId: string;
@@ -28,6 +41,7 @@ export interface ResponseOnlyTaskScope {
   relationDisposition: ResponseOnlyRelationDisposition;
   preservedParentId?: string;
   preservedParentRevision?: number;
+  readOnlyParentContinuity?: ResponseOnlyParentContinuity;
   contextReadScope: AdvisorContextReadScope;
   parentReadContext?: AdvisorBoundedParentReadContext;
   artifactMutation: "none";
@@ -67,6 +81,10 @@ export function createResponseOnlyTaskScope(input: {
     preservedParentId: input.preservedParent?.parent.id,
     preservedParentRevision:
       input.preservedParent?.parent.revisions,
+    readOnlyParentContinuity: buildReadOnlyParentContinuity({
+      task: input.preservedParent,
+      inferredType: input.inferredType,
+    }),
     contextReadScope,
     parentReadContext: buildBoundedParentReadContext(
       input.preservedParent,
@@ -147,6 +165,18 @@ export function formatResponseOnlyTaskScopeForTrace(
     responseOnlyPreservedParentId: scope.preservedParentId,
     responseOnlyPreservedParentRevision:
       scope.preservedParentRevision,
+    responseOnlyReadOnlyParentType:
+      scope.readOnlyParentContinuity?.questionType,
+    responseOnlyReadOnlyParentPhase:
+      scope.readOnlyParentContinuity?.playbookPhase,
+    responseOnlyReadOnlyParentCompatible:
+      scope.readOnlyParentContinuity?.compatibleWithInferredType,
+    responseOnlyReadOnlyArtifactOwnerId:
+      scope.readOnlyParentContinuity?.artifactOwnerParentId,
+    responseOnlyReadOnlyWhiteboardArtifactId:
+      scope.readOnlyParentContinuity?.whiteboardArtifactId,
+    responseOnlyReadOnlyWhiteboardArtifactRevision:
+      scope.readOnlyParentContinuity?.whiteboardArtifactRevision,
     responseOnlyContextReadScope: scope.contextReadScope,
     responseOnlyParentReadContextPresent:
       Boolean(scope.parentReadContext),
@@ -256,6 +286,31 @@ function buildBoundedParentReadContext(
       "code-artifact",
       "whiteboard-artifact",
     ],
+  };
+}
+
+function buildReadOnlyParentContinuity(input: {
+  task: ActiveMeetingTask | undefined;
+  inferredType: string;
+}): ResponseOnlyParentContinuity | undefined {
+  const parent = input.task?.parent;
+  if (!parent) return undefined;
+
+  return {
+    parentId: parent.id,
+    parentRevision: parent.revisions ?? 0,
+    questionType: parent.questionType,
+    playbookPhase: parent.playbookPhase,
+    artifactOwnerParentId:
+      parent.whiteboardArtifact?.parentTaskId ?? parent.id,
+    whiteboardArtifactId: parent.whiteboardArtifact?.id,
+    whiteboardArtifactRevision:
+      parent.whiteboardArtifact?.revision,
+    compatibleWithInferredType:
+      areCompatibleParentContinuityTypes(
+        parent.questionType,
+        input.inferredType
+      ),
   };
 }
 

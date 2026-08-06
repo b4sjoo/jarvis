@@ -543,10 +543,10 @@ const DIRECT_ASK_HEAD_PATTERN =
   /(?:(?:can|could|would|will|do|does|did|is|are|was|were|have|has|had|should)\s+(?:you|your|this|that|it|there)\b|(?:how|what|why|when|where|which|who|whether)\b|(?:tell|walk|talk|give|show|explain|describe|outline|propose|design|create|sketch|implement|write|code|solve|compare|estimate|evaluate|discuss|share|redraw)\b|(?:请|怎么|如何|为什么|什么|是否|哪里|哪个|解释|描述|设计|实现|编写|估算|比较|重画))/giu;
 
 const DIRECT_ASK_PATTERN =
-  /(?:^|(?:(?:\b(?:but|and|so|now|then|okay|with that|given that|my question is|for you|before we finish)\b[\s,:-]*)|(?:\b(?:thanks|thank you)\b[\s,:-]*and\b[\s,:-]*)))(?<ask>(?:(?:can|could|would|will|do|does|did|is|are|was|were|have|has|had|should)\s+(?:you|your|this|that|it|there)\b|(?:how|what|why|when|where|which|who|whether)\b|(?:tell|walk|talk|give|show|explain|describe|outline|propose|design|create|sketch|implement|write|code|solve|compare|estimate|evaluate|discuss|share|redraw)\b|(?:请|怎么|如何|为什么|什么|是否|哪里|哪个|解释|描述|设计|实现|编写|估算|比较|重画)))/giu;
+  /(?:^|(?:(?:\b(?:but|and|so|now|then|okay|with that|given that|my question is|for you|before we finish)\b[\s,:-]*)|(?:\b(?:thanks|thank you)\b[\s,:-]*and\b[\s,:-]*)))(?<ask>(?:please\s+)?(?:(?:can|could|would|will|do|does|did|is|are|was|were|have|has|had|should)\s+(?:you|your|this|that|it|there)\b|(?:how|what|why|when|where|which|who|whether)\b|(?:tell|walk|talk|give|show|explain|describe|outline|propose|design|create|sketch|implement|write|code|solve|compare|estimate|evaluate|discuss|share|redraw)\b|(?:请|怎么|如何|为什么|什么|是否|哪里|哪个|解释|描述|设计|实现|编写|估算|比较|重画)))/giu;
 
 const ACTION_OBJECT_DIRECTIVE_PATTERN =
-  /(?:^|(?:\b(?:but|and|so|now|then|okay|alright|right)\b[\s,:-]*))(?<ask>(?:maybe\s+)?(?:let(?:'s| us)\s+)?(?:do|design|build|implement|write|code|solve|create|sketch|add|change|update|modify|revise|redraw|keep)\s+.+)$/iu;
+  /(?:^|(?:\b(?:but|and|so|now|then|okay|alright|right)\b[\s,:-]*))(?<ask>(?:please\s+)?(?:maybe\s+)?(?:let(?:'s| us)\s+)?(?:do|design|build|implement|write|code|solve|create|sketch|add|change|update|modify|revise|redraw|keep)\s+.+)$/iu;
 
 function isDirectAskText(candidate: string, wholeSpan: string) {
   const normalized = normalizeSpace(candidate);
@@ -646,7 +646,7 @@ function hasConcreteDirectiveObject(text: string) {
     .toLocaleLowerCase()
     .replace(/[.!?。！？]+$/u, "");
   const match =
-    /^(?:maybe\s+)?(?:let(?:'s| us)\s+)?(?:do|design|build|implement|write|code|solve|create|sketch|add|change|update|modify|revise|redraw|keep)\s+(?<object>.+)$/iu.exec(
+    /^(?:please\s+)?(?:maybe\s+)?(?:let(?:'s| us)\s+)?(?:do|design|build|implement|write|code|solve|create|sketch|add|change|update|modify|revise|redraw|keep)\s+(?<object>.+)$/iu.exec(
       normalized
     );
   const object = match?.groups?.object?.trim();
@@ -657,7 +657,7 @@ function hasConcreteDirectiveObject(text: string) {
 }
 
 function isDirective(text: string) {
-  const normalized = normalizeSpace(text);
+  const normalized = normalizeSpace(text).replace(/^please\s+/iu, "");
   return (
     /^(?:tell|walk|talk|give|show|explain|describe|outline|propose|design|create|sketch|implement|write|code|solve|compare|estimate|evaluate|discuss|share|add|change|update|modify|revise|redraw|keep|请|解释|描述|设计|实现|编写|估算|比较|增加|修改|更新|重画|保留)\b/iu.test(
       normalized

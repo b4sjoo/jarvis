@@ -173,7 +173,7 @@ test("explicit resume and correction retain relation authority", () => {
   assert.equal(correction?.relationEvidenceAuthorized, true);
 });
 
-test("response-only prompt scope excludes durable parent continuity", () => {
+test("response-only current scope excludes generated continuity but retains read-only parent identity", () => {
   const activeMeetingTask = task();
   const scope = createResponseOnlyTaskScope({
     logicalQuestionUnitId: "question-new",
@@ -232,6 +232,22 @@ test("response-only prompt scope excludes durable parent continuity", () => {
   assert.equal(scoped.interviewSessionBrief?.notes, "");
   assert.equal(scoped.confirmedMeFacts, undefined);
   assert.equal(scope.preservedParentId, activeMeetingTask.parent.id);
+  assert.equal(
+    scope.readOnlyParentContinuity?.parentId,
+    activeMeetingTask.parent.id
+  );
+  assert.equal(
+    scope.readOnlyParentContinuity?.questionType,
+    "ai-ml-system-design"
+  );
+  assert.equal(
+    scope.readOnlyParentContinuity?.playbookPhase,
+    "design_framing"
+  );
+  assert.equal(
+    scope.readOnlyParentContinuity?.compatibleWithInferredType,
+    false
+  );
   assert.equal(scope.contextReadScope, "current-only");
   assert.equal(scope.artifactMutation, "none");
   assert.equal(scope.taskMutation, "none");
@@ -343,6 +359,11 @@ test("response-only independent task proposals cannot read the parent", () => {
 
   assert.equal(contextReadScope, "current-only");
   assert.equal(scope.parentReadContext, undefined);
+  assert.equal(scope.readOnlyParentContinuity?.parentId, "task-parent");
+  assert.equal(
+    scope.readOnlyParentContinuity?.compatibleWithInferredType,
+    false
+  );
 });
 
 test("bounded recent history keeps only the source-owned parent read capsule", () => {

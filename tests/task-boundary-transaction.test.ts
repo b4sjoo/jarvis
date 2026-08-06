@@ -4,6 +4,7 @@ import {
   buildCommittedTaskBoundaryParent,
   commitTaskBoundaryCandidate,
   createTaskBoundaryCandidate,
+  decideLlmTypeRepairFirstParentAdmission,
   expireTaskBoundaryCandidate,
   taskBoundarySurvivesAdvisorOutcome,
 } from "../src/lib/meeting/task-boundary-transaction.js";
@@ -77,6 +78,74 @@ test("commits a complete high-authority new parent before advisor execution", ()
   assert.equal(committed.state, "committed");
   assert.equal(taskBoundarySurvivesAdvisorOutcome(committed, "cancelled"), true);
   assert.equal(taskBoundarySurvivesAdvisorOutcome(committed, "error"), true);
+});
+
+test("admits the first parent from an accepted type repair only for a source-owned primary ask", () => {
+  const text = "Please design a URL shortener.";
+  const primaryAskProjection = projectPrimaryAsk({
+    turnId: "turn-b",
+    text,
+  });
+  const unit: LogicalQuestionUnit = {
+    ...logicalQuestion(text),
+    sourceTurnIds: ["turn-b"],
+    sources: [
+      {
+        turnId: "turn-b",
+        text,
+        startedAt: 30,
+        endedAt: 40,
+      },
+    ],
+    primaryAskProjection,
+  };
+  const currentQuestion = createProvisionalCurrentQuestion({
+    logicalQuestionUnit: unit,
+    sourceKind: "voice",
+  });
+  const repairedSettlement = settleCurrentQuestion({
+    currentQuestion,
+    llmProposal: {
+      source: "llm-type-repair",
+      sessionId: unit.sessionId,
+      runtimeEpoch: unit.runtimeEpoch,
+      logicalQuestionUnitId: unit.id,
+      revision: unit.revision,
+      sourceHash: currentQuestion.sourceHash,
+      questionType: "general-system-design",
+      relation: "unknown",
+      action: "answer",
+      confidence: 0.97,
+      typeEvidenceAuthorized: true,
+      relationEvidenceAuthorized: false,
+      actionEvidenceAuthorized: false,
+    },
+    manualCorrectionRevision: 0,
+    policy: {
+      allowLlmTypeRepair: true,
+      runtimeMutationAuthorized: false,
+      questionComplete: true,
+      commitParent: false,
+    },
+  });
+
+  const decision = decideLlmTypeRepairFirstParentAdmission({
+    logicalQuestionUnit: unit,
+    settlement: repairedSettlement,
+    hasActiveParent: false,
+    outputAuthorityAuthorized: true,
+  });
+  const blockedWithParent = decideLlmTypeRepairFirstParentAdmission({
+    logicalQuestionUnit: unit,
+    settlement: repairedSettlement,
+    hasActiveParent: true,
+    outputAuthorityAuthorized: true,
+  });
+
+  assert.equal(decision.authorized, true);
+  assert.equal(decision.proposedRelation, "new-parent");
+  assert.equal(blockedWithParent.authorized, false);
+  assert.equal(blockedWithParent.reason, "active-parent-present");
 });
 
 test("keeps setup objects in the committed parent topic", () => {

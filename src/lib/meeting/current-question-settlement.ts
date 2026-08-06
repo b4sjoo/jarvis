@@ -28,6 +28,7 @@ export type CurrentQuestionAuthoritySource =
   | "opening-route"
   | "accepted-transcript"
   | "semantic-unknown-rescue"
+  | "accepted-llm-type-first-parent"
   | "llm-type-repair"
   | "provisional-only";
 
@@ -814,6 +815,7 @@ function resolveCurrentQuestionAuthority(
   }
   if (
     source === "semantic-unknown-rescue" ||
+    source === "accepted-llm-type-first-parent" ||
     source === "llm-type-repair"
   ) {
     return "llm-type-repair";

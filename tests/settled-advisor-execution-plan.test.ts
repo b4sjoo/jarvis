@@ -209,10 +209,93 @@ test("response-only plan routes from the current question without exposing paren
   assert.equal(plan.artifactPolicy.allowCode, false);
   assert.equal(plan.artifactPolicy.allowWhiteboard, false);
   assert.equal(plan.artifactPolicy.allowParentContextMutation, false);
+  assert.equal(
+    plan.artifactPolicy.disposition,
+    "display-only-parent-continuity"
+  );
   assert.equal(plan.responseIntent, "advise");
   assert.equal(plan.contextReadScope, "current-only");
   assert.equal(plan.artifactIntent, "preserve");
   assert.deepEqual(plan.taskMutationPolicy, { kind: "preserve" });
+});
+
+test("same-domain current-only repair retains parent phase without exposing a mutable task snapshot", () => {
+  const preservedTask = activeTask("general-system-design", {
+    playbookPhase: "design_framing",
+  });
+  const repairedSettlement = settlement({
+    questionType: "ai-ml-system-design",
+    relation: "unknown",
+    typeAuthoritySource: "llm-type-repair",
+    relationAuthoritySource: "provisional",
+    relationMutationAuthorized: false,
+    parentMutationAuthorized: false,
+  });
+  const responseOnlyTaskScope = createResponseOnlyTaskScope({
+    logicalQuestionUnitId: repairedSettlement.logicalQuestionUnitId,
+    revision: repairedSettlement.revision,
+    sourceQuestion: "How does the retrieval tier scale?",
+    sourceTurnIds: ["turn-a"],
+    inferredType: "ai-ml-system-design",
+    relationDisposition: "ambiguous",
+    preservedParent: preservedTask,
+    now: 100,
+  });
+  const plan = buildSettledAdvisorExecutionPlan({
+    settlement: repairedSettlement,
+    activeMeetingTask: preservedTask,
+    preBoundaryQuestionType: "general-system-design",
+    taskBoundaryCommitted: false,
+    childOwnsResponse: false,
+    providerSnapshot: providers,
+    playbook: playbook("general-system-design"),
+    memoryUseCase: "system_design_interview",
+    askFrame: "hypothetical-design",
+    topicDomain: "backend",
+    responseOnlyTaskScope,
+    createdAt: 100,
+  });
+
+  assert.equal(plan.taskSnapshot, undefined);
+  assert.equal(plan.playbookPhase, "design_framing");
+  assert.equal(plan.playbook?.phase, "design_framing");
+  assert.equal(plan.artifactIntent, "preserve");
+  assert.equal(plan.artifactPolicy.allowWhiteboard, false);
+  assert.equal(
+    plan.responseOnlyTaskScope?.readOnlyParentContinuity
+      ?.artifactOwnerParentId,
+    preservedTask.parent.id
+  );
+});
+
+test("a precommitted runtime boundary remains the creating-parent lifecycle fact when settlement is answer-only", () => {
+  const repairedSettlement = settlement({
+    questionType: "coding",
+    relation: "unknown",
+    typeAuthoritySource: "llm-type-repair",
+    relationAuthoritySource: "provisional",
+    relationMutationAuthorized: false,
+    parentMutationAuthorized: false,
+  });
+  const plan = buildSettledAdvisorExecutionPlan({
+    settlement: repairedSettlement,
+    activeMeetingTask: activeTask("coding"),
+    taskBoundaryCommitted: true,
+    childOwnsResponse: false,
+    providerSnapshot: providers,
+    playbook: playbook(),
+    memoryUseCase: "coding_interview",
+    askFrame: "direct-answer",
+    topicDomain: "backend",
+    sourceQuestion: "Implement a queue.",
+    createdAt: 100,
+  });
+
+  assert.equal(
+    plan.artifactPolicy.disposition,
+    "parent-owner-authorized"
+  );
+  assert.equal(plan.taskMutationPolicy.kind, "create-parent");
 });
 
 test("a committed general-system-design settlement atomically leaves the coding route", () => {

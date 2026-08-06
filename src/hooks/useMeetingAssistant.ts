@@ -321,6 +321,7 @@ import {
   commitTaskBoundaryCandidate,
   commitSourceOwnedTransition,
   createTaskBoundaryCandidate,
+  decideLlmTypeRepairFirstParentAdmission,
   createProvisionalCurrentQuestion,
   createSourceOwnedTransitionCandidate,
   createTaskLifecycleTransaction,
@@ -6714,6 +6715,16 @@ export function useMeetingAssistant() {
         currentQuestionSettlement.questionType !== "unknown" &&
         advisorJob.logicalQuestionUnit
     );
+    const llmTypeRepairFirstParentAdmission =
+      decideLlmTypeRepairFirstParentAdmission({
+        logicalQuestionUnit: advisorJob.logicalQuestionUnit,
+        settlement: currentQuestionSettlement,
+        hasActiveParent: Boolean(
+          originalPromptContext.activeMeetingTask?.parent
+        ),
+        outputAuthorityAuthorized:
+          runtimeTypeRepairOutputAuthorized,
+      });
     const responseOnlyPreservedTask =
       options.responseOnlyTaskScopeOverride
         ? originalPromptContext.activeMeetingTask
@@ -6797,7 +6808,9 @@ export function useMeetingAssistant() {
     }
     const responseOnlyTaskScope: ResponseOnlyTaskScope | undefined =
       options.responseOnlyTaskScopeOverride ??
-      (llmTypeOnlySettlement && advisorJob.logicalQuestionUnit
+      (llmTypeOnlySettlement &&
+      !llmTypeRepairFirstParentAdmission.authorized &&
+      advisorJob.logicalQuestionUnit
         ? createResponseOnlyTaskScope({
             logicalQuestionUnitId:
               advisorJob.logicalQuestionUnit.id,
@@ -7190,24 +7203,43 @@ export function useMeetingAssistant() {
       });
       currentQuestionSettlementRecorded = true;
     };
-    let taskBoundaryCandidate = createTaskBoundaryCandidate({
-      logicalQuestionUnit: advisorJob.logicalQuestionUnit,
-      currentQuestion: provisionalCurrentQuestion,
-      settlement: currentQuestionSettlement,
-      proposedQuestionType: advisorTaskSignals.questionType,
-      proposedRelation: advisorTaskSignals.taskRelation,
-      authoritySource: taskBoundaryAuthoritySource,
-      sourceKind: currentQuestionSourceKind,
-      sourceObservationIds: currentQuestionSourceObservationIds,
-      confidence: advisorTaskSignals.openingRoute
-        ? 1
-        : questionTypeDecisionAuthorityConfidence(
-            advisorTaskSignals.questionTypeDecision
-          ),
-      questionComplete,
-      mutationAuthorized: taskMutationAuthorization.authorized,
-      commitParent,
-    });
+    let taskBoundaryCandidate =
+      llmTypeRepairFirstParentAdmission.authorized
+        ? createTaskBoundaryCandidate({
+            logicalQuestionUnit: advisorJob.logicalQuestionUnit,
+            currentQuestion: provisionalCurrentQuestion,
+            proposedQuestionType:
+              currentQuestionSettlement?.questionType,
+            proposedRelation: "new-parent",
+            authoritySource: "accepted-llm-type-first-parent",
+            sourceKind: currentQuestionSourceKind,
+            sourceObservationIds:
+              currentQuestionSourceObservationIds,
+            confidence: currentQuestionSettlement?.confidence,
+            questionComplete: true,
+            mutationAuthorized: true,
+            commitParent: true,
+          })
+        : createTaskBoundaryCandidate({
+            logicalQuestionUnit: advisorJob.logicalQuestionUnit,
+            currentQuestion: provisionalCurrentQuestion,
+            settlement: currentQuestionSettlement,
+            proposedQuestionType: advisorTaskSignals.questionType,
+            proposedRelation: advisorTaskSignals.taskRelation,
+            authoritySource: taskBoundaryAuthoritySource,
+            sourceKind: currentQuestionSourceKind,
+            sourceObservationIds:
+              currentQuestionSourceObservationIds,
+            confidence: advisorTaskSignals.openingRoute
+              ? 1
+              : questionTypeDecisionAuthorityConfidence(
+                  advisorTaskSignals.questionTypeDecision
+                ),
+            questionComplete,
+            mutationAuthorized:
+              taskMutationAuthorization.authorized,
+            commitParent,
+          });
     if (
       taskBoundaryCandidate &&
       (taskBoundaryCandidate.mutationDisposition ===
@@ -7292,6 +7324,12 @@ export function useMeetingAssistant() {
           advisorJob.runtimeTypeRepairOutputAuthority,
           runtimeTypeRepairOutputAuthorization
         ),
+        llmTypeRepairFirstParentAdmissionAuthorized:
+          llmTypeRepairFirstParentAdmission.authorized,
+        llmTypeRepairFirstParentAdmissionReason:
+          llmTypeRepairFirstParentAdmission.reason,
+        llmTypeRepairFirstParentProposedRelation:
+          llmTypeRepairFirstParentAdmission.proposedRelation,
         ...formatQuestionLineageForTrace(questionLineage),
         ...formatTransientPersonalStatusForTrace(
           transientPersonalStatusDecision
@@ -7472,7 +7510,10 @@ export function useMeetingAssistant() {
       taskMutationAuthorization.authorized;
     const preservedPlaybookPhase = startsNewParentForPhase
       ? advisorPlaybook?.phase ?? "follow_up"
-      : promptContext.activeMeetingTask?.parent.playbookPhase ??
+      : responseOnlyTaskScope?.readOnlyParentContinuity
+            ?.compatibleWithInferredType
+        ? responseOnlyTaskScope.readOnlyParentContinuity.playbookPhase
+        : promptContext.activeMeetingTask?.parent.playbookPhase ??
         promptContext.activeInterviewTask?.playbookPhase ??
         advisorPlaybook?.phase ??
         "follow_up";
@@ -7660,6 +7701,7 @@ export function useMeetingAssistant() {
           questionInstanceId: questionLineage?.questionInstanceId,
           playbook: advisorRuntimePlaybook,
           phaseDecision: playbookPhaseDecision,
+          settlementId: currentQuestionSettlement?.settlementId,
           expiresAt: getActiveScreenTaskExpiresAt(state.settings),
           parentContextHandoff,
         });
