@@ -63,6 +63,7 @@ export * from "./runtime-inference-runtime";
 export * from "./short-intent-gate";
 export * from "./short-intent-gate-request";
 export * from "./question-type-adjudication";
+export * from "./question-type-adjudication-outcome";
 export * from "./question-type-adjudication-request";
 export * from "./task-relation-adjudication";
 export * from "./task-relation-adjudication-request";

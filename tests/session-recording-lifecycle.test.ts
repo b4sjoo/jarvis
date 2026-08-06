@@ -18,6 +18,7 @@ import {
   createHumanGroundTruthEventV2,
   deriveHumanEvaluationProjectionV2,
 } from "../src/lib/meeting/human-ground-truth-v2.js";
+import { createQuestionTypeAdjudicationOutcomeEvent } from "../src/lib/meeting/question-type-adjudication.js";
 
 interface InvokeCall {
   command: string;
@@ -195,6 +196,42 @@ test("records append-only V2 ground truth and derived projection artifacts", asy
     )[0]?.inputTraceHashes[0],
     "trace-hash-v2"
   );
+});
+
+test("records question-type post-release outcomes in a dedicated append-only ledger", async () => {
+  const native = new ControlledRecordingInvoke();
+  const manager = new SessionRecordingManager(undefined, native.invoke);
+  const recording = await manager.start(START_OPTIONS);
+  const sessionId = required(recording.sessionId);
+  const outcome = createQuestionTypeAdjudicationOutcomeEvent({
+    operationId: "operation_outcome",
+    sessionId,
+    runtimeEpoch: 4,
+    logicalQuestionUnitId: "lqu_outcome",
+    logicalQuestionUnitRevision: 2,
+    traceId: "trace_outcome",
+    stage: "delivery",
+    disposition: "visible-committed",
+    enforcementAuthorized: true,
+    settlementApplied: true,
+    advisorStarted: true,
+    modelCompleted: true,
+    visibleCommitted: true,
+  });
+
+  manager.recordQuestionTypeAdjudicationOutcome(outcome);
+  await manager.stop("test-complete");
+
+  const writes = native.calls.filter(
+    (call) =>
+      call.command === "write_meeting_session_recording_text" &&
+      stringArg(call, "relativePath") ===
+        "taxonomy/question-type-adjudication-outcomes.jsonl"
+  );
+  assert.equal(writes.length, 1);
+  const payload = JSON.parse(stringArg(writes[0]!, "payload"));
+  assert.equal(payload.operationId, "operation_outcome");
+  assert.equal(payload.visibleCommitted, true);
 });
 
 test("drains late writes into their original folder before allowing stop-start", async () => {
@@ -539,7 +576,7 @@ test("records whiteboard validation and recovery artifacts", async () => {
   );
   assert.ok(summaryWrite);
   const summary = parsePayload(summaryWrite);
-  assert.equal(summary.version, 33);
+  assert.equal(summary.version, 34);
   assert.deepEqual(summary.whiteboard, {
     artifactId: "whiteboard_1",
     revision: 1,
@@ -1341,7 +1378,7 @@ test("compact trace summaries preserve task boundary and cross-domain evidence",
   );
   assert.ok(summaryWrite);
   const summary = parsePayload(summaryWrite);
-  assert.equal(summary.version, 33);
+  assert.equal(summary.version, 34);
   assert.equal(summary.taskRelation, "new-parent");
   assert.equal(summary.logicalQuestionUnitRevision, 3);
   assert.equal(summary.phaseSignal, "assumption-authorized");
@@ -1555,7 +1592,7 @@ test("compact trace summaries preserve bounded STT request evidence", async () =
   );
   assert.ok(summaryWrite);
   const summary = parsePayload(summaryWrite);
-  assert.equal(summary.version, 33);
+  assert.equal(summary.version, 34);
   assert.equal(
     (summary.timingsMs as Record<string, unknown>).stt,
     1_580
@@ -1697,7 +1734,7 @@ test("refreshes compact STT lifecycle evidence after a late provider abort", asy
   );
   assert.ok(summaryWrites.length >= 2);
   const summary = parsePayload(summaryWrites[summaryWrites.length - 1]!);
-  assert.equal(summary.version, 33);
+  assert.equal(summary.version, 34);
   assert.equal(
     (summary.sttRequest as Record<string, unknown>).abortRequested,
     true
@@ -1762,7 +1799,7 @@ test("compact trace summaries preserve hard memory invalidation evidence", async
   );
   assert.ok(summaryWrite);
   const summary = parsePayload(summaryWrite);
-  assert.equal(summary.version, 33);
+  assert.equal(summary.version, 34);
   const memory = summary.memory as Record<string, unknown>;
   assert.equal(memory.authorityRevision, 2);
   assert.equal(memory.invalidationKind, "hard");
@@ -2023,7 +2060,7 @@ test("records compact current-question settlement and execution-plan evidence", 
   assert.equal(serializedPlan.includes("taskSnapshot"), false);
   assert.equal(serializedPlan.includes("variables"), false);
   const summary = parsePayload(summaryWrite);
-  assert.equal(summary.version, 33);
+  assert.equal(summary.version, 34);
   assert.equal(
     (
       summary.currentQuestionSettlement as Record<string, unknown>
@@ -2139,7 +2176,7 @@ test("records a current-question term correction without copying provider state"
     false
   );
   const summary = parsePayload(summaryWrite);
-  assert.equal(summary.version, 33);
+  assert.equal(summary.version, 34);
   assert.equal(
     summary.manualTermCorrectionId,
     "term_correction_hnsw"

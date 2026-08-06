@@ -32,6 +32,10 @@ import type {
   HumanEvaluationProjectionV2,
   HumanGroundTruthEventV2,
 } from "./human-ground-truth-v2.js";
+import {
+  formatQuestionTypeAdjudicationOutcomeForTrace,
+  type QuestionTypeAdjudicationOutcomeEvent,
+} from "./question-type-adjudication.js";
 import { projectHumanEvaluationsForLegacyConsumers } from "./human-evaluation-v2-consumers.js";
 import {
   collectActiveMeetingTaskIdentityIds,
@@ -56,7 +60,7 @@ import { serializeMeetingTraceExport } from "./trace.js";
 
 const SESSION_RECORDING_SCHEMA_VERSION = 1;
 const SESSION_RECORDING_INTEGRITY_SCHEMA_VERSION = 1;
-const SESSION_TRACE_SUMMARY_SCHEMA_VERSION = 33;
+const SESSION_TRACE_SUMMARY_SCHEMA_VERSION = 34;
 const SESSION_TRACE_INDEX_SCHEMA_VERSION = 1;
 const MAX_RECORDED_WRITE_FAILURES = 20;
 
@@ -117,6 +121,7 @@ interface SessionRecordingEvent {
     | "interviewer-intent-llm-decision"
     | "taxonomy-adjudication-decision"
     | "question-type-adjudication-decision"
+    | "question-type-adjudication-outcome"
     | "task-relation-adjudication-decision"
     | "answer-sufficiency-decision"
     | "current-question-settlement"
@@ -681,6 +686,21 @@ export interface SessionCompactTraceSummary {
     ambientStarts?: number;
     substantiveStarts?: number;
     reservedSubstantiveAvailable?: boolean;
+  };
+  questionTypeAdjudicationOutcome?: {
+    operationId?: string;
+    stage?: string;
+    disposition?: string;
+    settlementId?: string;
+    outputAuthorityId?: string;
+    enforcementAuthorized?: boolean;
+    settlementApplied?: boolean;
+    advisorStarted?: boolean;
+    modelCompleted?: boolean;
+    deliveryPending?: boolean;
+    visibleCommitted?: boolean;
+    reason?: string;
+    recordedAt?: number;
   };
   answerSufficiency?: {
     operationId?: string;
@@ -2563,6 +2583,30 @@ export class SessionRecordingManager {
       [artifactPath],
       traceId,
       taskId
+    );
+  }
+
+  recordQuestionTypeAdjudicationOutcome(
+    outcome: QuestionTypeAdjudicationOutcomeEvent
+  ) {
+    const session = this.getWritableSession({ traceId: outcome.traceId });
+    if (!session) return;
+    const artifactPath =
+      "taxonomy/question-type-adjudication-outcomes.jsonl";
+    this.enqueue(session, () =>
+      this.writeText(
+        session,
+        artifactPath,
+        `${JSON.stringify(outcome)}\n`,
+        true
+      )
+    );
+    this.recordEvent(
+      "question-type-adjudication-outcome",
+      formatQuestionTypeAdjudicationOutcomeForTrace(outcome),
+      [artifactPath],
+      outcome.traceId,
+      outcome.taskId
     );
   }
 
@@ -4670,6 +4714,8 @@ export function buildCompactTraceSummary({
       buildInterviewerIntentLlmTraceSummary(metadataSources),
     taxonomyAdjudication:
       buildTaxonomyAdjudicationTraceSummary(metadataSources),
+    questionTypeAdjudicationOutcome:
+      buildQuestionTypeAdjudicationOutcomeTraceSummary(metadataSources),
     answerSufficiency:
       buildAnswerSufficiencyTraceSummary(metadataSources),
     personalEvidence: {
@@ -5609,6 +5655,65 @@ function readSemanticTopCandidateType(
     if (bestType) return bestType;
   }
   return undefined;
+}
+
+function buildQuestionTypeAdjudicationOutcomeTraceSummary(
+  metadataSources: Array<Record<string, unknown>>
+): NonNullable<SessionCompactTraceSummary["questionTypeAdjudicationOutcome"]> {
+  return {
+    operationId: readFirstString(
+      metadataSources,
+      "questionTypeAdjudicationOutcomeOperationId"
+    ),
+    stage: readFirstString(
+      metadataSources,
+      "questionTypeAdjudicationOutcomeStage"
+    ),
+    disposition: readFirstString(
+      metadataSources,
+      "questionTypeAdjudicationOutcomeDisposition"
+    ),
+    settlementId: readFirstString(
+      metadataSources,
+      "questionTypeAdjudicationOutcomeSettlementId"
+    ),
+    outputAuthorityId: readFirstString(
+      metadataSources,
+      "questionTypeAdjudicationOutcomeAuthorityId"
+    ),
+    enforcementAuthorized: readFirstBoolean(
+      metadataSources,
+      "questionTypeAdjudicationOutcomeEnforcementAuthorized"
+    ),
+    settlementApplied: readFirstBoolean(
+      metadataSources,
+      "questionTypeAdjudicationOutcomeSettlementApplied"
+    ),
+    advisorStarted: readFirstBoolean(
+      metadataSources,
+      "questionTypeAdjudicationOutcomeAdvisorStarted"
+    ),
+    modelCompleted: readFirstBoolean(
+      metadataSources,
+      "questionTypeAdjudicationOutcomeModelCompleted"
+    ),
+    deliveryPending: readFirstBoolean(
+      metadataSources,
+      "questionTypeAdjudicationOutcomeDeliveryPending"
+    ),
+    visibleCommitted: readFirstBoolean(
+      metadataSources,
+      "questionTypeAdjudicationOutcomeVisibleCommitted"
+    ),
+    reason: readFirstString(
+      metadataSources,
+      "questionTypeAdjudicationOutcomeReason"
+    ),
+    recordedAt: readFirstNumberFromMetadata(
+      metadataSources,
+      "questionTypeAdjudicationOutcomeRecordedAt"
+    ),
+  };
 }
 
 function buildTaxonomyAdjudicationTraceSummary(

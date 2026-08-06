@@ -273,6 +273,8 @@ import {
   hashShortIntentSourceText,
   requestShortIntentGate,
   QuestionTypeAdjudicationJob,
+  QuestionTypeAdjudicationOutcomeDisposition,
+  QuestionTypeAdjudicationOutcomeStage,
   QuestionTypeAdjudicationRequestResult,
   QuestionTypeAdjudicationRuntimeOutcome,
   QuestionTypeEnforcementDecision,
@@ -281,10 +283,12 @@ import {
   QUESTION_TYPE_ENFORCEMENT_WAIT_BUDGET_MS,
   buildQuestionTypeAdjudicationPrompts,
   buildQuestionTypeAdjudicationRequest,
+  createQuestionTypeAdjudicationOutcomeEvent,
   createQuestionTypeSettlementProposal,
   decideQuestionTypeAdjudicationEligibility,
   decideQuestionTypeEnforcement,
   formatQuestionTypeAdjudicationForTrace,
+  formatQuestionTypeAdjudicationOutcomeForTrace,
   formatQuestionTypeEnforcementForTrace,
   normalizeQuestionTypeAdjudicationMode,
   requestQuestionTypeAdjudication,
@@ -461,6 +465,7 @@ import {
   type HumanGroundTruthInteractionV2,
   type HumanGroundTruthSubjectV2,
   type HumanGroundTruthSource,
+  type HumanEvaluationProjectionV2,
   type HumanEvaluationObservedSnapshotV2,
   upsertCriticalMomentEvaluation,
   buildCriticalMomentCandidates,
@@ -1629,6 +1634,7 @@ interface RunAdvisorOptions {
 
 interface QuestionTypeAdjudicationScheduleHandle {
   enforcementWindowRequested: boolean;
+  operationId?: string;
   outcome: Promise<QuestionTypeAdjudicationRuntimeOutcome>;
 }
 
@@ -2217,12 +2223,164 @@ export function useMeetingAssistant() {
   >(undefined);
   const pendingAnswerCommitHandlerRef = useRef<() => void>(() => undefined);
 
+  const recordQuestionTypeAdjudicationOutcome = useCallback(
+    (input: {
+      traceId: string;
+      taskId?: string;
+      authority?: RuntimeTypeRepairOutputAuthority;
+      operationId?: string;
+      sessionId?: string;
+      runtimeEpoch?: number;
+      logicalQuestionUnitId?: string;
+      logicalQuestionUnitRevision?: number;
+      settlementId?: string;
+      proposedQuestionType?: CanonicalQuestionType;
+      stage: QuestionTypeAdjudicationOutcomeStage;
+      disposition: QuestionTypeAdjudicationOutcomeDisposition;
+      enforcementAuthorized?: boolean;
+      settlementApplied?: boolean;
+      advisorStarted?: boolean;
+      modelCompleted?: boolean;
+      deliveryPending?: boolean;
+      visibleCommitted?: boolean;
+      reason?: string;
+    }) => {
+      const authority = input.authority;
+      const operationId = authority?.operationId ?? input.operationId;
+      const sessionId = authority?.sessionId ?? input.sessionId;
+      const runtimeEpoch = authority?.runtimeEpoch ?? input.runtimeEpoch;
+      const logicalQuestionUnitId =
+        authority?.logicalQuestionUnitId ?? input.logicalQuestionUnitId;
+      const logicalQuestionUnitRevision =
+        authority?.logicalQuestionRevision ??
+        input.logicalQuestionUnitRevision;
+      if (
+        !operationId ||
+        !sessionId ||
+        runtimeEpoch === undefined ||
+        !logicalQuestionUnitId ||
+        logicalQuestionUnitRevision === undefined
+      ) {
+        return;
+      }
+
+      const existingMetadata = traceStoreRef.current
+        .getTraces()
+        .find((trace) => trace.id === input.traceId)?.metadata;
+      const cumulativeBoolean = (
+        explicit: boolean | undefined,
+        metadataKey: string,
+        fallback = false
+      ) =>
+        explicit ??
+        (existingMetadata?.[metadataKey] === true || fallback);
+
+      const outcome = createQuestionTypeAdjudicationOutcomeEvent({
+        operationId,
+        sessionId,
+        runtimeEpoch,
+        logicalQuestionUnitId,
+        logicalQuestionUnitRevision,
+        traceId: input.traceId,
+        taskId: input.taskId,
+        settlementId: authority?.settlementId ?? input.settlementId,
+        outputAuthorityId: authority?.id,
+        proposedQuestionType: input.proposedQuestionType,
+        stage: input.stage,
+        disposition: input.disposition,
+        enforcementAuthorized:
+          cumulativeBoolean(
+            input.enforcementAuthorized,
+            "questionTypeAdjudicationOutcomeEnforcementAuthorized",
+            Boolean(authority)
+          ),
+        settlementApplied:
+          cumulativeBoolean(
+            input.settlementApplied,
+            "questionTypeAdjudicationOutcomeSettlementApplied",
+            Boolean(authority)
+          ),
+        advisorStarted: cumulativeBoolean(
+          input.advisorStarted,
+          "questionTypeAdjudicationOutcomeAdvisorStarted"
+        ),
+        modelCompleted: cumulativeBoolean(
+          input.modelCompleted,
+          "questionTypeAdjudicationOutcomeModelCompleted"
+        ),
+        deliveryPending: cumulativeBoolean(
+          input.deliveryPending,
+          "questionTypeAdjudicationOutcomeDeliveryPending"
+        ),
+        visibleCommitted: cumulativeBoolean(
+          input.visibleCommitted,
+          "questionTypeAdjudicationOutcomeVisibleCommitted"
+        ),
+        reason: input.reason,
+      });
+      traceStoreRef.current.updateMetadata(
+        input.traceId,
+        formatQuestionTypeAdjudicationOutcomeForTrace(outcome)
+      );
+      sessionRecordingManagerRef.current?.recordQuestionTypeAdjudicationOutcome(
+        outcome
+      );
+    },
+    []
+  );
+
   const clearPendingAnswerCommitTimer = useCallback(() => {
     if (pendingAnswerCommitTimerRef.current !== null) {
       window.clearTimeout(pendingAnswerCommitTimerRef.current);
       pendingAnswerCommitTimerRef.current = null;
     }
   }, []);
+
+  const refreshHumanEvaluationObservedProjectionForTrace = useCallback(
+    (trace: MeetingTrace) => {
+      const current = humanEvaluationProjectionsV2Ref.current;
+      const matching = current.filter((projection) =>
+        projection.subject.traceIds.includes(trace.id)
+      );
+      if (!matching.length) return;
+
+      const observed = buildHumanEvaluationObservedSnapshotV2(trace);
+      const replacements = new Map<string, HumanEvaluationProjectionV2>();
+      for (const projection of matching) {
+        if (projection.observed?.traceHash === observed.traceHash) continue;
+        const legacyEvaluation = questionEvaluationsRef.current.find(
+          (evaluation) =>
+            evaluation.questionId === projection.subject.questionId ||
+            evaluation.traceIds.some((traceId) =>
+              projection.subject.traceIds.includes(traceId)
+            )
+        );
+        const refreshed = deriveHumanEvaluationProjectionV2({
+          sessionId: projection.sessionId,
+          subject: projection.subject,
+          events: humanGroundTruthEventsV2Ref.current,
+          observed,
+          legacyEvaluation,
+        });
+        replacements.set(projection.projectionId, refreshed);
+      }
+      if (!replacements.size) return;
+
+      const next = current.map(
+        (projection) =>
+          replacements.get(projection.projectionId) ?? projection
+      );
+      humanEvaluationProjectionsV2Ref.current = next;
+      persistHumanEvaluationProjectionsV2(next);
+      setHumanEvaluationProjectionsV2(next);
+      for (const projection of replacements.values()) {
+        sessionRecordingManagerRef.current?.recordHumanEvaluationProjectionV2(
+          projection
+        );
+      }
+    },
+    []
+  );
 
   const refreshRecordedCompletedTrace = useCallback((traceId?: string) => {
     if (!traceId) return;
@@ -2233,12 +2391,13 @@ export function useMeetingAssistant() {
           candidate.id === traceId && candidate.status !== "running"
       );
     if (completedTrace) {
+      refreshHumanEvaluationObservedProjectionForTrace(completedTrace);
       sessionRecordingManagerRef.current?.refreshRecordedTrace(
         completedTrace,
         getAutoExportTrigger(completedTrace)
       );
     }
-  }, []);
+  }, [refreshHumanEvaluationObservedProjectionForTrace]);
 
   const publishStableAnswerRevision = useCallback(
     (
@@ -2365,6 +2524,18 @@ export function useMeetingAssistant() {
             pendingAnswerReason: staleReason,
           }
         );
+        if (pending.runtimeTypeRepairOutputAuthority) {
+          recordQuestionTypeAdjudicationOutcome({
+            traceId: pending.suggestion.sourceTraceId,
+            taskId: pending.taskId ?? undefined,
+            authority: pending.runtimeTypeRepairOutputAuthority,
+            stage: "delivery",
+            disposition: "stale-dropped",
+            advisorStarted: true,
+            modelCompleted: true,
+            reason: staleReason,
+          });
+        }
         refreshRecordedCompletedTrace(pending.suggestion.sourceTraceId);
       }
       setState((previous) => ({
@@ -2422,6 +2593,18 @@ export function useMeetingAssistant() {
             pendingAnswerReason: "candidate-invalid-at-release",
           }
         );
+        if (pending.runtimeTypeRepairOutputAuthority) {
+          recordQuestionTypeAdjudicationOutcome({
+            traceId: pending.suggestion.sourceTraceId,
+            taskId: pending.taskId ?? undefined,
+            authority: pending.runtimeTypeRepairOutputAuthority,
+            stage: "delivery",
+            disposition: "stale-dropped",
+            advisorStarted: true,
+            modelCompleted: true,
+            reason: "candidate-invalid-at-release",
+          });
+        }
         refreshRecordedCompletedTrace(pending.suggestion.sourceTraceId);
       }
       setState((previous) => ({
@@ -2463,6 +2646,19 @@ export function useMeetingAssistant() {
           visibleAnswerRevisionAfter: stable.revision,
         }
       );
+      if (pending.runtimeTypeRepairOutputAuthority) {
+        recordQuestionTypeAdjudicationOutcome({
+          traceId: pending.suggestion.sourceTraceId,
+          taskId: pending.taskId ?? undefined,
+          authority: pending.runtimeTypeRepairOutputAuthority,
+          stage: "delivery",
+          disposition: "visible-committed",
+          advisorStarted: true,
+          modelCompleted: true,
+          visibleCommitted: true,
+          reason: "pending-answer-visible-commit",
+        });
+      }
       refreshRecordedCompletedTrace(pending.suggestion.sourceTraceId);
     }
     publishStableAnswerRevision(stable, {
@@ -2471,6 +2667,7 @@ export function useMeetingAssistant() {
     });
   }, [
     publishStableAnswerRevision,
+    recordQuestionTypeAdjudicationOutcome,
     refreshRecordedCompletedTrace,
     schedulePendingAnswerCommit,
   ]);
@@ -2487,6 +2684,7 @@ export function useMeetingAssistant() {
       logicalQuestionRevision: number | null;
       resetSections: boolean;
       reason: string;
+      runtimeTypeRepairOutputAuthority?: RuntimeTypeRepairOutputAuthority;
     }) => {
       const now = Date.now();
       const supersededPending = pendingAnswerRevisionRef.current;
@@ -2500,6 +2698,19 @@ export function useMeetingAssistant() {
               pendingAnswerReason: "superseded-by-newer-pending-answer",
             }
           );
+          if (supersededPending.runtimeTypeRepairOutputAuthority) {
+            recordQuestionTypeAdjudicationOutcome({
+              traceId: supersededPending.suggestion.sourceTraceId,
+              taskId: supersededPending.taskId ?? undefined,
+              authority:
+                supersededPending.runtimeTypeRepairOutputAuthority,
+              stage: "delivery",
+              disposition: "cancelled-by-new-job",
+              advisorStarted: true,
+              modelCompleted: true,
+              reason: "superseded-by-newer-pending-answer",
+            });
+          }
           refreshRecordedCompletedTrace(
             supersededPending.suggestion.sourceTraceId
           );
@@ -2530,6 +2741,8 @@ export function useMeetingAssistant() {
         disposition: "waiting-delivery",
         reason: input.reason,
         resetSections: input.resetSections,
+        runtimeTypeRepairOutputAuthority:
+          input.runtimeTypeRepairOutputAuthority,
       };
       pendingAnswerRevisionRef.current = pending;
       if (input.suggestion.sourceTraceId) {
@@ -2564,7 +2777,11 @@ export function useMeetingAssistant() {
       schedulePendingAnswerCommit();
       return pending;
     },
-    [refreshRecordedCompletedTrace, schedulePendingAnswerCommit]
+    [
+      recordQuestionTypeAdjudicationOutcome,
+      refreshRecordedCompletedTrace,
+      schedulePendingAnswerCommit,
+    ]
   );
 
   const abortActiveSttRequests = useCallback(
@@ -3464,6 +3681,24 @@ export function useMeetingAssistant() {
       const resolvedOutcome = hadPendingTimer
         ? "replaced-before-execution"
         : outcome;
+      if (job.traceId && job.runtimeTypeRepairOutputAuthority) {
+        recordQuestionTypeAdjudicationOutcome({
+          traceId: job.traceId,
+          taskId: job.expectedParentId,
+          authority: job.runtimeTypeRepairOutputAuthority,
+          proposedQuestionType:
+            normalizeCanonicalQuestionType(
+              job.promptContextSnapshot.activeMeetingTask?.parent.questionType
+            ),
+          stage: "delivery",
+          disposition:
+            resolvedOutcome === "cancelled-by-new-job" ||
+            resolvedOutcome === "replaced-before-execution"
+              ? "cancelled-by-new-job"
+              : "cancelled-by-runtime-boundary",
+          reason,
+        });
+      }
       updateForceAdviseTargetForAdvisorOutcome({
         advisorJob: job,
         status: "failed",
@@ -3504,6 +3739,7 @@ export function useMeetingAssistant() {
     },
     [
       finishRunningAdvisorJobTrace,
+      recordQuestionTypeAdjudicationOutcome,
       updateForceAdviseTargetForAdvisorOutcome,
     ]
   );
@@ -3563,6 +3799,22 @@ export function useMeetingAssistant() {
         commitAuthorizationReason?: string;
       } = {}
     ) => {
+      if (
+        job.traceId &&
+        job.runtimeTypeRepairOutputAuthority &&
+        outcome !== "committed"
+      ) {
+        recordQuestionTypeAdjudicationOutcome({
+          traceId: job.traceId,
+          taskId: job.expectedParentId,
+          authority: job.runtimeTypeRepairOutputAuthority,
+          stage: "delivery",
+          disposition: outcome === "error" ? "error" : "suppressed",
+          reason:
+            extra.commitAuthorizationReason ??
+            (outcome === "error" ? "advisor-error" : "advisor-suppressed"),
+        });
+      }
       if (job.traceId) {
         traceStoreRef.current.updateMetadata(
           job.traceId,
@@ -3573,7 +3825,7 @@ export function useMeetingAssistant() {
         activeAdvisorJobRef.current = null;
       }
     },
-    []
+    [recordQuestionTypeAdjudicationOutcome]
   );
 
   const clearPendingConfirmationForRuntimeReset = useCallback((reason: string) => {
@@ -5127,6 +5379,7 @@ export function useMeetingAssistant() {
   const recordCompletedTracesForSession = useCallback((traces: MeetingTrace[]) => {
     for (const trace of traces) {
       if (trace.status === "running") continue;
+      refreshHumanEvaluationObservedProjectionForTrace(trace);
       if (!sessionRecordingManagerRef.current?.canRecordTrace(trace)) continue;
       if (sessionRecordedTraceIdsRef.current.has(trace.id)) continue;
       sessionRecordedTraceIdsRef.current.add(trace.id);
@@ -5135,7 +5388,7 @@ export function useMeetingAssistant() {
         getAutoExportTrigger(trace)
       );
     }
-  }, []);
+  }, [refreshHumanEvaluationObservedProjectionForTrace]);
 
   const maybeAutoExportTraces = useCallback(
     (traces: MeetingTrace[]) => {
@@ -8230,6 +8483,19 @@ export function useMeetingAssistant() {
       }));
       return;
     }
+    if (traceId && advisorJob.runtimeTypeRepairOutputAuthority) {
+      recordQuestionTypeAdjudicationOutcome({
+        traceId,
+        taskId: activeMeetingTaskId,
+        authority: advisorJob.runtimeTypeRepairOutputAuthority,
+        proposedQuestionType:
+          normalizeCanonicalQuestionType(advisorQuestionType),
+        stage: "advisor-start",
+        disposition: "advisor-started",
+        advisorStarted: true,
+        reason: "advisor-model-request-authorized",
+      });
+    }
     updateForceAdviseTargetForAdvisorOutcome({
       advisorJob,
       status: "advising",
@@ -8860,6 +9126,20 @@ export function useMeetingAssistant() {
             traceId,
             outputSuppressedMetadata
           );
+          if (advisorJob.runtimeTypeRepairOutputAuthority) {
+            recordQuestionTypeAdjudicationOutcome({
+              traceId,
+              taskId: activeMeetingTaskId,
+              authority: advisorJob.runtimeTypeRepairOutputAuthority,
+              proposedQuestionType:
+                normalizeCanonicalQuestionType(advisorQuestionType),
+              stage: "model-complete",
+              disposition: "suppressed",
+              advisorStarted: true,
+              modelCompleted: true,
+              reason: outputCommitAuthorization.reason,
+            });
+          }
         }
         setState((previous) => ({
           ...previous,
@@ -9444,6 +9724,8 @@ export function useMeetingAssistant() {
                 advisorJob.logicalQuestionUnit?.revision ?? null,
               resetSections: resetVisibleSections,
               reason: stableAnswerCommitDecision.reason,
+              runtimeTypeRepairOutputAuthority:
+                advisorJob.runtimeTypeRepairOutputAuthority,
             })
           : null;
       const committedVisibleAnswer = Boolean(nextStableAnswer);
@@ -9543,6 +9825,30 @@ export function useMeetingAssistant() {
       };
       if (traceId) {
         traceStoreRef.current.updateMetadata(traceId, outputCommitMetadata);
+        if (advisorJob.runtimeTypeRepairOutputAuthority) {
+          recordQuestionTypeAdjudicationOutcome({
+            traceId,
+            taskId: contextState.activeMeetingTask?.parent.id,
+            authority: advisorJob.runtimeTypeRepairOutputAuthority,
+            proposedQuestionType:
+              normalizeCanonicalQuestionType(advisorQuestionType),
+            stage: committedVisibleAnswer ? "delivery" : "model-complete",
+            disposition: committedVisibleAnswer
+              ? "visible-committed"
+              : pendingAnswer
+                ? "delivery-pending"
+                : "model-completed",
+            advisorStarted: true,
+            modelCompleted: true,
+            deliveryPending: Boolean(pendingAnswer),
+            visibleCommitted: committedVisibleAnswer,
+            reason: committedVisibleAnswer
+              ? "stable-answer-visible-commit"
+              : pendingAnswer
+                ? stableAnswerCommitDecision.reason
+                : "empty-or-silent-answer",
+          });
+        }
       }
       releaseAdvisorJob(advisorJob, "committed", {
         commitAuthorized: finalCommitDecision.authorized,
@@ -9688,7 +9994,10 @@ export function useMeetingAssistant() {
     buildAdvisorJob,
     finishRunningAdvisorJobTrace,
     loadMemoryForPrompt,
+    publishStableAnswerRevision,
+    queuePendingAnswerRevision,
     recordCommittedPlaybookPhaseTransition,
+    recordQuestionTypeAdjudicationOutcome,
     releaseAdvisorJob,
     resolveMeetingModelRoute,
     scheduleWhiteboardSyntaxRepairShadow,
@@ -11244,6 +11553,8 @@ export function useMeetingAssistant() {
           lease.sourceTurnIdsHash,
         questionTypeAdjudicationTaskBoundaryEpoch:
           lease.taskBoundaryEpoch,
+        questionTypeAdjudicationRuntimeEpoch:
+          lease.runtimeEpoch,
         questionTypeAdjudicationManualCorrectionRevision:
           lease.manualCorrectionRevision,
         questionTypeAdjudicationExpectedParentId:
@@ -11623,6 +11934,7 @@ export function useMeetingAssistant() {
       }, enforcementWindowRequested ? 0 : undefined);
       return {
         enforcementWindowRequested,
+        operationId: lease.operationId,
         outcome,
       };
     },
@@ -13495,13 +13807,43 @@ export function useMeetingAssistant() {
             outcome?.enforcement
           ),
         };
+        const releaseTaskId =
+          contextManagerRef.current.getState().activeMeetingTask?.id;
         traceStoreRef.current.updateMetadata(input.traceId, metadata);
         sessionRecordingManagerRef.current?.recordCaptureLifecycle({
           stage: "question-type-enforcement-release",
           traceId: input.traceId,
-          taskId:
-            contextManagerRef.current.getState().activeMeetingTask?.id,
+          taskId: releaseTaskId,
           ...metadata,
+        });
+        recordQuestionTypeAdjudicationOutcome({
+          traceId: input.traceId,
+          taskId: releaseTaskId,
+          authority: runtimeTypeRepairOutputAuthority,
+          operationId:
+            outcome?.operationId ?? input.handle?.operationId,
+          sessionId: logicalQuestionLease.sessionId,
+          runtimeEpoch: logicalQuestionLease.runtimeEpoch,
+          logicalQuestionUnitId:
+            logicalQuestionLease.logicalQuestionUnitId,
+          logicalQuestionUnitRevision:
+            logicalQuestionLease.logicalQuestionUnitRevision,
+          settlementId: settlement?.settlementId,
+          proposedQuestionType: settlement?.questionType,
+          stage: "release",
+          disposition: releaseAuthorized
+            ? "settlement-applied"
+            : leaseAuthorization.authorized
+              ? "enforcement-denied"
+              : "stale-dropped",
+          enforcementAuthorized:
+            outcome?.enforcement.authorized ?? false,
+          settlementApplied: releaseAuthorized,
+          reason: releaseAuthorized
+            ? "runtime-type-repair-authority-issued"
+            : leaseAuthorization.authorized
+              ? outcome?.enforcement.reason ?? waitDisposition
+              : leaseAuthorization.reason,
         });
 
         if (!activeRef.current || !leaseAuthorization.authorized) {
@@ -13593,6 +13935,27 @@ export function useMeetingAssistant() {
               contextManagerRef.current.getState().activeMeetingTask?.id,
             ...metadata,
           });
+          recordQuestionTypeAdjudicationOutcome({
+            traceId: input.traceId,
+            taskId:
+              contextManagerRef.current.getState().activeMeetingTask?.id,
+            operationId:
+              outcome.operationId ?? input.handle?.operationId,
+            sessionId: logicalQuestionLease.sessionId,
+            runtimeEpoch: logicalQuestionLease.runtimeEpoch,
+            logicalQuestionUnitId:
+              logicalQuestionLease.logicalQuestionUnitId,
+            logicalQuestionUnitRevision:
+              logicalQuestionLease.logicalQuestionUnitRevision,
+            settlementId: outcome.settlement?.settlementId,
+            proposedQuestionType:
+              outcome.settlement?.questionType,
+            stage: "release",
+            disposition: "stale-dropped",
+            enforcementAuthorized: false,
+            settlementApplied: false,
+            reason: "advisor-release-window-closed",
+          });
         },
         () => {
           dispatchAdvisor(undefined, "operation-error-fail-open");
@@ -13600,7 +13963,7 @@ export function useMeetingAssistant() {
       );
       return true;
     },
-    [scheduleAdvisor]
+    [recordQuestionTypeAdjudicationOutcome, scheduleAdvisor]
   );
 
   const buildLogicalQuestionForTurn = useCallback(

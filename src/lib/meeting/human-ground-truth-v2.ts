@@ -157,6 +157,16 @@ export interface HumanEvaluationObservedSnapshotV2 {
   relation?: InterviewTaskRelation;
   parentAction?: HumanExpectedParentAction;
   runtimeAction?: ExpectedAdvisorAction;
+  runtimeOperationId?: string;
+  advisorOutcome?:
+    | "suppressed"
+    | "model-completed"
+    | "delivery-pending"
+    | "visible-committed"
+    | "stale-dropped"
+    | "cancelled-by-new-job"
+    | "cancelled-by-runtime-boundary"
+    | "error";
   contextReadScope?: AdvisorContextReadScope;
   artifactIntent?: SettledAdvisorArtifactIntent;
   primaryAsk?: string;
@@ -479,6 +489,12 @@ export function buildHumanEvaluationObservedSnapshotV2(
     readBoolean(metadata.currentQuestionSettlementParentMutationAuthorized)
   );
   const runtimeAction = resolveObservedRuntimeAction(metadata);
+  const runtimeOperationId = readString(
+    metadata.questionTypeAdjudicationOutcomeOperationId ??
+      metadata.questionTypeAdjudicationOperationId ??
+      metadata.advisorJobId
+  );
+  const advisorOutcome = resolveObservedAdvisorOutcome(metadata);
   const primaryAsk = readString(
     metadata.primaryAskNormalizedText ?? metadata.logicalQuestionNormalizedText
   );
@@ -518,6 +534,8 @@ export function buildHumanEvaluationObservedSnapshotV2(
     relation,
     parentAction,
     runtimeAction,
+    runtimeOperationId,
+    advisorOutcome,
     primaryAsk,
     answerCommitted,
     contextReadScope,
@@ -533,6 +551,71 @@ export function buildHumanEvaluationObservedSnapshotV2(
     ...traceEvidence,
     traceHash: fingerprint(stableStringify(traceEvidence)),
   };
+}
+
+function resolveObservedAdvisorOutcome(
+  metadata: Record<string, unknown>
+): HumanEvaluationObservedSnapshotV2["advisorOutcome"] {
+  if (
+    readBoolean(metadata.advisorOutputCommittedToUi) === true ||
+    readBoolean(
+      metadata.questionTypeAdjudicationOutcomeVisibleCommitted
+    ) === true
+  ) {
+    return "visible-committed";
+  }
+  if (
+    readString(metadata.advisorOutputDisposition) === "pending-delivery" ||
+    readBoolean(
+      metadata.questionTypeAdjudicationOutcomeDeliveryPending
+    ) === true
+  ) {
+    return "delivery-pending";
+  }
+  const adjudicationDisposition = readString(
+    metadata.questionTypeAdjudicationOutcomeDisposition
+  );
+  if (
+    adjudicationDisposition === "suppressed" ||
+    adjudicationDisposition === "stale-dropped" ||
+    adjudicationDisposition === "cancelled-by-new-job" ||
+    adjudicationDisposition === "cancelled-by-runtime-boundary" ||
+    adjudicationDisposition === "error"
+  ) {
+    return adjudicationDisposition === "suppressed"
+      ? "suppressed"
+      : adjudicationDisposition;
+  }
+  const advisorJobOutcome = readString(metadata.advisorJobOutcome);
+  if (
+    advisorJobOutcome === "cancelled-by-new-job" ||
+    advisorJobOutcome === "replaced-before-execution"
+  ) {
+    return "cancelled-by-new-job";
+  }
+  if (advisorJobOutcome === "cancelled-by-runtime-boundary") {
+    return "cancelled-by-runtime-boundary";
+  }
+  if (advisorJobOutcome === "stale-commit-rejected") {
+    return "stale-dropped";
+  }
+  if (advisorJobOutcome === "error") return "error";
+  if (
+    readBoolean(metadata.questionTypeAdjudicationOutcomeModelCompleted) ===
+      true ||
+    readString(metadata.advisorOutputDisposition) === "empty-or-silent" ||
+    readString(metadata.advisorOutputDisposition) ===
+      "output-commit-not-authorized"
+  ) {
+    return "model-completed";
+  }
+  if (
+    advisorJobOutcome === "suppressed" ||
+    readBoolean(metadata.advisorExecutionAuthorized) === false
+  ) {
+    return "suppressed";
+  }
+  return undefined;
 }
 
 export function buildHumanGroundTruthSubjectV2(input: {

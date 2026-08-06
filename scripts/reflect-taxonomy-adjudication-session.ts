@@ -17,6 +17,12 @@ import {
   renderTaskRelationAuthorityConvergenceMarkdown,
 } from "../src/lib/meeting/task-relation-authority-convergence.js";
 import {
+  buildQuestionTypeAdjudicationOutcomeReport,
+  renderQuestionTypeAdjudicationOutcomeMarkdown,
+  type QuestionTypeAdjudicationRecordedDecision,
+} from "../src/lib/meeting/question-type-adjudication-outcome.js";
+import type { QuestionTypeAdjudicationOutcomeEvent } from "../src/lib/meeting/question-type-adjudication.js";
+import {
   loadSessionHumanEvaluationConsumerView,
   writeHumanEvaluationCompatibilityReport,
 } from "./session-human-evaluation-v2.js";
@@ -54,6 +60,22 @@ async function main() {
           "task-relation-decisions.jsonl"
         )
       );
+    const questionTypeDecisions =
+      await readOptionalJsonLines<QuestionTypeAdjudicationRecordedDecision>(
+        path.join(
+          sessionDirectory,
+          "taxonomy",
+          "question-type-adjudications.jsonl"
+        )
+      );
+    const questionTypeOutcomes =
+      await readOptionalJsonLines<QuestionTypeAdjudicationOutcomeEvent>(
+        path.join(
+          sessionDirectory,
+          "taxonomy",
+          "question-type-adjudication-outcomes.jsonl"
+        )
+      );
     const report = buildTaxonomyAdjudicationReflectionReport({
       decisions,
       traces: tracePayload.traces ?? [],
@@ -67,6 +89,11 @@ async function main() {
     const relationConvergence =
       buildTaskRelationAuthorityConvergenceReportV1({
         relationReport,
+      });
+    const questionTypeOutcomeReport =
+      buildQuestionTypeAdjudicationOutcomeReport({
+        decisions: questionTypeDecisions,
+        outcomes: questionTypeOutcomes,
       });
     const outputDirectory = options.outputDirectory
       ? options.sessionDirectories.length === 1
@@ -106,6 +133,18 @@ async function main() {
       ),
       "utf8"
     );
+    await writeFile(
+      path.join(outputDirectory, "question-type-outcomes.json"),
+      `${JSON.stringify(questionTypeOutcomeReport, null, 2)}\n`,
+      "utf8"
+    );
+    await writeFile(
+      path.join(outputDirectory, "question-type-outcomes.md"),
+      renderQuestionTypeAdjudicationOutcomeMarkdown(
+        questionTypeOutcomeReport
+      ),
+      "utf8"
+    );
     await writeHumanEvaluationCompatibilityReport(
       sessionDirectory,
       evaluationView.report
@@ -119,6 +158,7 @@ async function main() {
         metrics: relationConvergence.metrics,
         graduation: relationConvergence.graduation,
       },
+      questionTypeOutcomes: questionTypeOutcomeReport.metrics,
     });
   }
   process.stdout.write(`${JSON.stringify({ sessions: summaries }, null, 2)}\n`);

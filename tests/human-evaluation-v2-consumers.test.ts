@@ -136,6 +136,68 @@ test("V2-only projections produce explicit synthetic consumer rows", () => {
   assert.equal(result.report.warnings[0]?.code, "v2-only-projection");
 });
 
+test("reports legacy observed-action drift without overriding the final trace", () => {
+  const subject = {
+    questionId: "question_observed_drift",
+    traceIds: ["trace_observed_drift"],
+    sourceTurnIds: ["turn_observed_drift"],
+  };
+  const runtime = createHumanGroundTruthEventV2({
+    eventId: "event_observed_drift",
+    sessionId: "session_1",
+    subject,
+    source: "explicit-ui",
+    fact: {
+      kind: "expected-runtime-action",
+      expectedAction: "advise",
+    },
+    now: 10,
+  });
+  const projection = deriveHumanEvaluationProjectionV2({
+    sessionId: "session_1",
+    subject,
+    events: [runtime],
+    observed: {
+      traceId: "trace_observed_drift",
+      traceHash: "hash_final",
+      runtimeAction: "advise",
+      advisorOutcome: "visible-committed",
+    },
+    now: 11,
+  });
+  const legacy = createEvaluation({
+    questionId: subject.questionId,
+    traceIds: [...subject.traceIds],
+    advisorIntent: {
+      schemaVersion: 1,
+      verdict: "false-negative",
+      expectedAction: "advise",
+      observedAction: "suppressed",
+      source: "explicit-human-label",
+      originalTraceId: "trace_observed_drift",
+      sourceTurnIds: [...subject.sourceTurnIds],
+      createdAt: 10,
+      updatedAt: 10,
+    },
+  });
+
+  const result = projectHumanEvaluationsForLegacyConsumers({
+    evaluations: [legacy],
+    projections: [projection],
+  });
+
+  assert.equal(
+    result.report.dimensions.observedRuntimeAction.disagreement,
+    1
+  );
+  assert.ok(
+    result.report.warnings.some(
+      (warning) => warning.code === "observed-runtime-mismatch"
+    )
+  );
+  assert.equal(result.evaluations[0]?.advisorIntent?.observedAction, "advised");
+});
+
 test("independent context and artifact labels keep separate denominators", () => {
   const subject = {
     questionId: "question_planes",

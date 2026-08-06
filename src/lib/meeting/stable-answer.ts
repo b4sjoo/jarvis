@@ -2,6 +2,7 @@ import type {
   AnswerArtifactSection,
   AnswerGenerationLease,
   RefreshAuthorityDecision,
+  RuntimeTypeRepairOutputAuthority,
 } from "./answer-generation-lease.js";
 import {
   parseMeetingAnswer,
@@ -67,6 +68,7 @@ export interface PendingAnswerRevision {
   disposition: PendingAnswerDisposition;
   reason: string;
   resetSections: boolean;
+  runtimeTypeRepairOutputAuthority?: RuntimeTypeRepairOutputAuthority;
 }
 
 export interface AnswerDeliveryPresentation {

@@ -311,6 +311,10 @@ test("projects the observed runtime tuple from trace metadata", () => {
       currentQuestionSettlementParentMutationAuthorized: true,
       advisorExecutionAuthorized: false,
       turnGateAction: "append-only",
+      questionTypeAdjudicationOutcomeOperationId: "operation-a",
+      questionTypeAdjudicationOutcomeDisposition: "visible-committed",
+      questionTypeAdjudicationOutcomeVisibleCommitted: true,
+      advisorOutputCommittedToUi: true,
       primaryAskNormalizedText: "How would retrieval work?",
       settledExecutionPlanContextReadScope: "active-parent-read",
       settledExecutionPlanArtifactIntent: "revise-whiteboard",
@@ -320,7 +324,9 @@ test("projects the observed runtime tuple from trace metadata", () => {
   assert.equal(observed.questionType, "ai-ml-system-design");
   assert.equal(observed.relation, "child-probe");
   assert.equal(observed.parentAction, "attach-child");
-  assert.equal(observed.runtimeAction, "append-context");
+  assert.equal(observed.runtimeAction, "advise");
+  assert.equal(observed.runtimeOperationId, "operation-a");
+  assert.equal(observed.advisorOutcome, "visible-committed");
   assert.equal(observed.contextReadScope, "active-parent-read");
   assert.equal(observed.artifactIntent, "revise-whiteboard");
   assert.match(observed.traceHash, /^\d+:[0-9a-f]+$/);

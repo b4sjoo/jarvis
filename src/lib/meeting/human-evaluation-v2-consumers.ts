@@ -17,6 +17,7 @@ type CompatibilityDimension =
   | "relation"
   | "parentAction"
   | "runtimeAction"
+  | "observedRuntimeAction"
   | "answerOutcome"
   | "contextReadScope"
   | "artifactIntent";
@@ -61,7 +62,8 @@ export interface HumanEvaluationV2CompatibilityReport {
       | "v1-only-evaluation"
       | "v2-only-projection"
       | "v2-conflicting-facts"
-      | "v1-lossy-field";
+      | "v1-lossy-field"
+      | "observed-runtime-mismatch";
     subjectId: string;
     detail: string;
   }>;
@@ -201,6 +203,33 @@ export function buildHumanEvaluationV2CompatibilityReport(input: {
         subjectId: evaluation.id,
         detail:
           "A V1 correctness boolean has no exact expected value and was not promoted to V2 ground truth.",
+      })),
+    ...pairs
+      .filter(({ evaluation, projection }) => {
+        const legacyObserved = readV1Dimension(
+          evaluation,
+          "observedRuntimeAction"
+        );
+        const finalObserved = readV2Dimension(
+          projection,
+          "observedRuntimeAction"
+        );
+        return Boolean(
+          legacyObserved &&
+            finalObserved &&
+            legacyObserved !== finalObserved
+        );
+      })
+      .map(({ evaluation, projection }) => ({
+        code: "observed-runtime-mismatch" as const,
+        subjectId: projection.projectionId,
+        detail: `Legacy observed action ${readV1Dimension(
+          evaluation,
+          "observedRuntimeAction"
+        )} conflicts with final trace action ${readV2Dimension(
+          projection,
+          "observedRuntimeAction"
+        )}.`,
       })),
   ];
 
@@ -520,6 +549,18 @@ function readV1Dimension(
   if (dimension === "runtimeAction") {
     return evaluation.advisorIntent?.expectedAction;
   }
+  if (dimension === "observedRuntimeAction") {
+    const observed = evaluation.advisorIntent?.observedAction;
+    return observed === "advised"
+      ? "advise"
+      : observed === "append-only"
+        ? "append-context"
+        : observed === "buffered"
+          ? "buffer"
+          : observed === "suppressed"
+            ? "ignore"
+            : undefined;
+  }
   if (
     dimension === "answerOutcome" &&
     evaluation.answer.verdict !== "not_applicable"
@@ -550,6 +591,9 @@ function readV2Dimension(
     return dimension === "relation"
       ? settlement.expectedRelation
       : settlement.expectedParentAction;
+  }
+  if (dimension === "observedRuntimeAction") {
+    return projection.observed?.runtimeAction;
   }
   return readSimpleV2Fact(projection, dimension);
 }
@@ -591,6 +635,7 @@ function createEmptyDimensionReport() {
     relation: create(),
     parentAction: create(),
     runtimeAction: create(),
+    observedRuntimeAction: create(),
     answerOutcome: create(),
     contextReadScope: create(),
     artifactIntent: create(),
