@@ -14,6 +14,8 @@ import {
   generateMessageId,
   generateRequestId,
   safeLocalStorage,
+  selectAcceptedTransientImageFiles,
+  selectTransientImagePayloads,
 } from "@/lib";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -201,14 +203,9 @@ export const useCompletion = () => {
         }));
 
         // Handle image attachments
-        const imagesBase64: string[] = [];
-        if (state.attachedFiles.length > 0) {
-          state.attachedFiles.forEach((file) => {
-            if (file.type.startsWith("image/")) {
-              imagesBase64.push(file.base64);
-            }
-          });
-        }
+        const imagesBase64 = selectTransientImagePayloads(
+          state.attachedFiles
+        );
 
         let fullResponse = "";
 
@@ -559,16 +556,11 @@ export const useCompletion = () => {
 
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files || []);
-    const MAX_FILES = 6;
 
-    files.forEach((file) => {
-      if (
-        file.type.startsWith("image/") &&
-        state.attachedFiles.length < MAX_FILES
-      ) {
-        addFile(file);
-      }
-    });
+    selectAcceptedTransientImageFiles(
+      files,
+      state.attachedFiles.length
+    ).forEach(addFile);
 
     // Reset input so same file can be selected again
     e.target.value = "";
@@ -772,19 +764,13 @@ export const useCompletion = () => {
       if (hasImages) {
         e.preventDefault();
 
-        const processedFiles: File[] = [];
-
-        Array.from(items).forEach((item) => {
-          if (
-            item.type.startsWith("image/") &&
-            state.attachedFiles.length + processedFiles.length < MAX_FILES
-          ) {
-            const file = item.getAsFile();
-            if (file) {
-              processedFiles.push(file);
-            }
-          }
-        });
+        const clipboardFiles = Array.from(items)
+          .map((item) => item.getAsFile())
+          .filter((file): file is File => Boolean(file));
+        const processedFiles = selectAcceptedTransientImageFiles(
+          clipboardFiles,
+          state.attachedFiles.length
+        );
 
         // Process all files
         await Promise.all(processedFiles.map((file) => addFile(file)));
