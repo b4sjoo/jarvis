@@ -20,6 +20,7 @@ export type SemanticTaxonomyReadiness =
 export type SemanticEmbeddingConsumer =
   | "interviewer-intent"
   | "answer-sufficiency"
+  | "advisor-response-consistency"
   | "benchmark"
   | "unspecified";
 

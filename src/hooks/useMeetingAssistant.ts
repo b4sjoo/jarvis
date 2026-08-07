@@ -37,6 +37,8 @@ import {
   AnswerGenerationLease,
   RuntimeTypeRepairOutputAuthority,
   AnswerDeliveryProgress,
+  AdvisorResponseChallengeCoordinator,
+  AdvisorResponseFingerprintCache,
   PendingAnswerRevision,
   StableAnswerRevision,
   RuntimeCommitToken,
@@ -148,6 +150,12 @@ import {
   authorizeAnswerGenerationLease,
   authorizeRuntimeTypeRepairOutputAuthority,
   buildAnswerSufficiencySemanticText,
+  authorizeAdvisorResponseFingerprintLease,
+  collectAdvisorIndependentChallengeEvidence,
+  cosineSimilarity,
+  createAdvisorHypothesisChallenge,
+  createAdvisorResponseFingerprintLease,
+  createAdvisorResponseFingerprintRecord,
   buildDiagramOverlayEvalTraceMetadata,
   buildCurrentTaskDiagramDomainContext,
   applyActiveQuestionTermCorrection,
@@ -214,12 +222,16 @@ import {
   formatRuntimeTypeRepairOutputAuthorityForTrace,
   formatActiveQuestionTermCorrectionForTrace,
   formatAnswerSufficiencyDecisionForTrace,
+  formatAdvisorHypothesisChallengeForTrace,
+  formatAdvisorResponseConsistencyForTrace,
+  formatAdvisorResponseFingerprintForTrace,
   parseMeetingAnswer,
   serializeMeetingAnswer,
   parseMeetingTraceMetrics,
   prewarmWhiteboardRenderValidator,
   resolveMeetingAnswerProfile,
   resolveAuthorizedAnswerArtifacts,
+  observeAdvisorResponseConsistency,
   preflightScreenObservation,
   selectInterviewPlaybook,
   applyPlaybookPhaseDecisionToProgress,
@@ -1657,6 +1669,25 @@ interface RunAdvisorOptions {
   responseOnlyTaskScopeOverride?: ResponseOnlyTaskScope;
 }
 
+interface AdvisorResponseFingerprintSourceContext {
+  questionText: string;
+  questionType: CanonicalQuestionType;
+  relation?: CurrentQuestionSettlementDecision["relation"];
+  settlementId?: string;
+  executionPlanId?: string;
+  playbookPhase?: string;
+  logicalQuestionUnitId: string | null;
+  logicalQuestionRevision: number | null;
+  requiredArtifacts: AnswerArtifactSection[];
+  artifactIntent?: SettledAdvisorExecutionPlan["artifactIntent"];
+  artifactPolicy?: {
+    allowCode: boolean;
+    allowComplexity: boolean;
+    allowWhiteboard: boolean;
+  };
+  answerSufficiencyDecision?: AnswerSufficiencyDecision;
+}
+
 interface QuestionTypeAdjudicationScheduleHandle {
   enforcementWindowRequested: boolean;
   operationId?: string;
@@ -2194,6 +2225,15 @@ export function useMeetingAssistant() {
   const responseActionRevisionRef = useRef(0);
   const visibleAnswerRevisionRef = useRef(0);
   const stableAnswerRevisionRef = useRef<StableAnswerRevision | null>(null);
+  const advisorResponseFingerprintCacheRef = useRef(
+    new AdvisorResponseFingerprintCache()
+  );
+  const advisorResponseChallengeCoordinatorRef = useRef(
+    new AdvisorResponseChallengeCoordinator()
+  );
+  const advisorResponseFingerprintContextByTraceRef = useRef(
+    new Map<string, AdvisorResponseFingerprintSourceContext>()
+  );
   const recentAdvisorContinuityRef = useRef<
     AdvisorGeneratedContinuityCapsule[]
   >([]);
@@ -2541,6 +2581,407 @@ export function useMeetingAssistant() {
     []
   );
 
+  const scheduleAdvisorResponseConsistencyShadow = useCallback(
+    ({
+      stable,
+      previousStable,
+    }: {
+      stable: StableAnswerRevision;
+      previousStable: StableAnswerRevision | null;
+    }) => {
+      const parsedAnswer = stable.suggestion.meetingAnswer;
+      if (!parsedAnswer) return;
+
+      const sourceTraceId = stable.suggestion.sourceTraceId;
+      const sourceContext = sourceTraceId
+        ? advisorResponseFingerprintContextByTraceRef.current.get(
+            sourceTraceId
+          )
+        : undefined;
+      if (sourceTraceId) {
+        advisorResponseFingerprintContextByTraceRef.current.delete(
+          sourceTraceId
+        );
+      }
+      const trace = sourceTraceId
+        ? traceStoreRef.current
+            .getTraces()
+            .find((candidate) => candidate.id === sourceTraceId)
+        : undefined;
+      const traceMetadata = trace?.metadata ?? {};
+      const contextState = contextManagerRef.current.getState();
+      const questionType =
+        sourceContext?.questionType ??
+        normalizeCanonicalQuestionType(
+          stable.suggestion.questionType ??
+            traceMetadata.settledExecutionPlanQuestionType ??
+            traceMetadata.currentQuestionSettlementType
+        ) ??
+        "unknown";
+      const questionText =
+        sourceContext?.questionText.trim() ||
+        parsedAnswer.sections.question?.trim() ||
+        "";
+      const mutatedArtifacts = ([
+        "code",
+        "complexity",
+        "whiteboard",
+      ] as const).filter(
+        (artifact) =>
+          stable.sections[artifact].revision !==
+          (previousStable?.sections[artifact].revision ?? 0)
+      );
+      const record = createAdvisorResponseFingerprintRecord({
+        sessionId: contextState.sessionId,
+        runtimeEpoch: runtimeEpochRef.current,
+        logicalQuestionUnitId:
+          sourceContext?.logicalQuestionUnitId ??
+          stable.logicalQuestionUnitId,
+        logicalQuestionRevision:
+          sourceContext?.logicalQuestionRevision ??
+          stable.logicalQuestionRevision,
+        settlementId:
+          sourceContext?.settlementId ??
+          (typeof traceMetadata.currentQuestionSettlementId === "string"
+            ? traceMetadata.currentQuestionSettlementId
+            : undefined),
+        executionPlanId:
+          sourceContext?.executionPlanId ??
+          (typeof traceMetadata.settledExecutionPlanId === "string"
+            ? traceMetadata.settledExecutionPlanId
+            : undefined),
+        answerRevision: stable.revision,
+        sourceTraceId,
+        questionType,
+        relation: sourceContext?.relation,
+        parentTaskId: stable.taskId ?? undefined,
+        playbookPhase:
+          sourceContext?.playbookPhase ??
+          contextState.activeMeetingTask?.parent.playbookPhase,
+        manualCorrectionRevision:
+          manualCorrectionRevisionRef.current,
+        questionText,
+        parsedAnswer,
+        requiredArtifacts: sourceContext?.requiredArtifacts,
+        artifactIntent: sourceContext?.artifactIntent,
+        artifactPolicy: sourceContext?.artifactPolicy,
+        mutatedArtifacts,
+        answerSufficiencyDecision:
+          sourceContext?.answerSufficiencyDecision,
+      });
+      const previous =
+        advisorResponseFingerprintCacheRef.current.findPreviousComparable(
+          record.fingerprint
+        );
+      advisorResponseFingerprintCacheRef.current.add(record);
+
+      const fingerprintMetadata =
+        formatAdvisorResponseFingerprintForTrace(record.fingerprint);
+      if (sourceTraceId) {
+        traceStoreRef.current.updateMetadata(
+          sourceTraceId,
+          fingerprintMetadata
+        );
+      }
+      sessionRecordingManagerRef.current?.recordAdvisorResponseFingerprint({
+        traceId: sourceTraceId,
+        taskId: stable.taskId ?? undefined,
+        fingerprint: record.fingerprint,
+      });
+
+      if (
+        !previous ||
+        !record.semanticSource.questionText ||
+        !record.semanticSource.answerText ||
+        !previous.semanticSource.questionText ||
+        !previous.semanticSource.answerText
+      ) {
+        if (sourceTraceId) {
+          traceStoreRef.current.updateMetadata(sourceTraceId, {
+            advisorResponseConsistencyDisposition:
+              previous ? "semantic-input-empty" : "no-previous-response",
+            advisorResponseBehaviorMutationBlocked: true,
+          });
+        }
+        return;
+      }
+
+      const lease = createAdvisorResponseFingerprintLease(
+        record.fingerprint
+      );
+      const admission =
+        advisorResponseChallengeCoordinatorRef.current.begin(lease);
+      if (!admission.accepted) {
+        if (sourceTraceId) {
+          traceStoreRef.current.updateMetadata(sourceTraceId, {
+            advisorResponseConsistencyDisposition: "coalesced",
+            advisorResponseConsistencyAdmissionReason:
+              admission.reason,
+            advisorResponseBehaviorMutationBlocked: true,
+          });
+        }
+        return;
+      }
+
+      const includeApproach = Boolean(
+        previous.semanticSource.approachText &&
+          record.semanticSource.approachText
+      );
+      const semanticTexts = [
+        previous.semanticSource.questionText,
+        record.semanticSource.questionText,
+        previous.semanticSource.answerText,
+        record.semanticSource.answerText,
+        ...(includeApproach
+          ? [
+              previous.semanticSource.approachText,
+              record.semanticSource.approachText,
+            ]
+          : []),
+      ];
+      const runtime = semanticTaxonomyRuntimeRef.current!;
+      runtime.pinSession(
+        {
+          sessionId: record.fingerprint.sessionId,
+          runtimeEpoch: record.fingerprint.runtimeEpoch,
+        },
+        "advisor-response-consistency-shadow"
+      );
+      const stepId = sourceTraceId
+        ? traceStoreRef.current.startStep(
+            sourceTraceId,
+            "Advisor response consistency shadow",
+            {
+              advisorResponseFingerprintId:
+                record.fingerprint.fingerprintId,
+              advisorResponsePreviousFingerprintId:
+                previous.fingerprint.fingerprintId,
+              advisorResponseConsistencyMode: "shadow",
+              advisorResponseBehaviorMutationBlocked: true,
+            }
+          )
+        : undefined;
+      semanticEmbeddingRevisionRef.current += 1;
+      const semanticRequestRevision =
+        semanticEmbeddingRevisionRef.current;
+      void runtime
+        .embed(
+          {
+            sessionId: record.fingerprint.sessionId,
+            runtimeEpoch: record.fingerprint.runtimeEpoch,
+            turnId: record.fingerprint.fingerprintId,
+            texts: semanticTexts,
+            kind: "query",
+          },
+          {
+            consumer: "advisor-response-consistency",
+            coalescingKey: `${record.fingerprint.sessionId}:advisor-response:${
+              record.fingerprint.logicalQuestionUnitId ?? "unbound"
+            }`,
+            revision: semanticRequestRevision,
+            priority: 3,
+            onTelemetry: (telemetry) => {
+              const metadata =
+                formatSemanticEmbeddingRuntimeTelemetryForTrace(
+                  telemetry
+                );
+              if (sourceTraceId) {
+                traceStoreRef.current.updateMetadata(
+                  sourceTraceId,
+                  metadata
+                );
+              }
+              if (sourceTraceId) {
+                sessionRecordingManagerRef.current?.recordSemanticEmbeddingRuntimeEvent({
+                  traceId: sourceTraceId,
+                  taskId: stable.taskId ?? undefined,
+                  metadata,
+                });
+              }
+            },
+          }
+        )
+        .then((embedding) => {
+          const currentStable = stableAnswerRevisionRef.current;
+          const leaseAuthorization =
+            authorizeAdvisorResponseFingerprintLease({
+              lease,
+              sessionId: contextManagerRef.current.getState().sessionId,
+              runtimeEpoch: runtimeEpochRef.current,
+              logicalQuestionUnitId:
+                currentStable?.logicalQuestionUnitId ?? null,
+              logicalQuestionRevision:
+                currentStable?.logicalQuestionRevision ?? null,
+              visibleAnswerRevision:
+                visibleAnswerRevisionRef.current,
+              manualCorrectionRevision:
+                manualCorrectionRevisionRef.current,
+            });
+          const coordinatorAuthorized =
+            advisorResponseChallengeCoordinatorRef.current.authorize(
+              lease
+            );
+          if (
+            embedding.status !== "success" ||
+            !coordinatorAuthorized ||
+            !leaseAuthorization.authorized
+          ) {
+            advisorResponseChallengeCoordinatorRef.current.settle(lease);
+            const metadata = {
+              advisorResponseConsistencyDisposition:
+                embedding.status === "success"
+                  ? "stale"
+                  : embedding.status,
+              advisorResponseConsistencyLeaseAuthorized:
+                leaseAuthorization.authorized,
+              advisorResponseConsistencyLeaseRejectionReasons:
+                leaseAuthorization.rejectionReasons,
+              advisorResponseConsistencyCoordinatorAuthorized:
+                coordinatorAuthorized,
+              advisorResponseBehaviorMutationBlocked: true,
+            };
+            if (sourceTraceId) {
+              traceStoreRef.current.updateMetadata(
+                sourceTraceId,
+                metadata
+              );
+              if (stepId) {
+                traceStoreRef.current.finishStep(
+                  sourceTraceId,
+                  stepId,
+                  embedding.status === "error" ? "error" : "cancelled",
+                  metadata,
+                  "reason" in embedding ? embedding.reason : undefined
+                );
+              }
+            }
+            sessionRecordingManagerRef.current?.recordCaptureLifecycle({
+              stage: "advisor-response-consistency-terminal",
+              traceId: sourceTraceId,
+              taskId: stable.taskId ?? undefined,
+              ...metadata,
+            });
+            return;
+          }
+
+          const questionSimilarity = cosineSimilarity(
+            embedding.embeddings[0] ?? [],
+            embedding.embeddings[1] ?? []
+          );
+          const answerSimilarity = cosineSimilarity(
+            embedding.embeddings[2] ?? [],
+            embedding.embeddings[3] ?? []
+          );
+          const approachSimilarity = includeApproach
+            ? cosineSimilarity(
+                embedding.embeddings[4] ?? [],
+                embedding.embeddings[5] ?? []
+              )
+            : undefined;
+          const observation = observeAdvisorResponseConsistency({
+            previous: previous.fingerprint,
+            current: record.fingerprint,
+            questionSimilarity,
+            answerSimilarity,
+            approachSimilarity,
+            modelVersion: embedding.modelVersion,
+            embeddingDurationMs: embedding.durationMs,
+          });
+          const contextAction =
+            traceMetadata.responseActionContextAction ===
+              "narrow-context" ||
+            traceMetadata.responseActionContextAction ===
+              "enhance-context"
+              ? traceMetadata.responseActionContextAction
+              : undefined;
+          const independentEvidence =
+            collectAdvisorIndependentChallengeEvidence({
+              questionType,
+              traceMetadata,
+              answerSufficiencyDecision:
+                sourceContext?.answerSufficiencyDecision,
+              artifactMismatch:
+                observation.artifactMismatchReasons.length > 0,
+              manualCorrectionApplied:
+                traceMetadata.currentQuestionSettlementAuthority ===
+                "explicit-manual",
+              contextAction,
+              manualRegenerate:
+                traceMetadata.source === "advisor-regenerate",
+            });
+          const challenge = createAdvisorHypothesisChallenge({
+            observation,
+            independentEvidence,
+          });
+          const metadata = {
+            ...formatAdvisorResponseConsistencyForTrace(observation),
+            ...formatAdvisorHypothesisChallengeForTrace(challenge),
+          };
+          if (sourceTraceId) {
+            traceStoreRef.current.updateMetadata(
+              sourceTraceId,
+              metadata
+            );
+            if (stepId) {
+              traceStoreRef.current.finishStep(
+                sourceTraceId,
+                stepId,
+                "success",
+                metadata
+              );
+            }
+          }
+          sessionRecordingManagerRef.current?.recordAdvisorResponseConsistency(
+            {
+              traceId: sourceTraceId,
+              taskId: stable.taskId ?? undefined,
+              observation,
+            }
+          );
+          sessionRecordingManagerRef.current?.recordAdvisorHypothesisChallenge(
+            {
+              traceId: sourceTraceId,
+              taskId: stable.taskId ?? undefined,
+              challenge,
+            }
+          );
+          advisorResponseChallengeCoordinatorRef.current.settle(lease);
+        })
+        .catch((error) => {
+          advisorResponseChallengeCoordinatorRef.current.settle(lease);
+          const message =
+            error instanceof Error ? error.message : String(error);
+          const metadata = {
+            advisorResponseConsistencyDisposition: "orchestration-error",
+            advisorResponseConsistencyError: message.slice(0, 500),
+            advisorResponseBehaviorMutationBlocked: true,
+          };
+          if (sourceTraceId) {
+            traceStoreRef.current.updateMetadata(
+              sourceTraceId,
+              metadata
+            );
+            if (stepId) {
+              traceStoreRef.current.finishStep(
+                sourceTraceId,
+                stepId,
+                "error",
+                metadata,
+                message
+              );
+            }
+          }
+          sessionRecordingManagerRef.current?.recordCaptureLifecycle({
+            stage: "advisor-response-consistency-terminal",
+            traceId: sourceTraceId,
+            taskId: stable.taskId ?? undefined,
+            ...metadata,
+          });
+        });
+    },
+    []
+  );
+
   const publishStableAnswerRevision = useCallback(
     (
       stable: StableAnswerRevision,
@@ -2552,6 +2993,7 @@ export function useMeetingAssistant() {
     ) => {
       clearPendingAnswerCommitTimer();
       const pending = pendingAnswerRevisionRef.current;
+      const previousStable = stableAnswerRevisionRef.current;
       stableAnswerRevisionRef.current = stable;
       visibleAnswerRevisionRef.current = stable.revision;
       pendingAnswerRevisionRef.current = null;
@@ -2651,8 +3093,15 @@ export function useMeetingAssistant() {
         latestUsefulAnswerVisibleCommitAuthorized:
           options.commitLatestUsefulAnswer === true,
       });
+      scheduleAdvisorResponseConsistencyShadow({
+        stable,
+        previousStable,
+      });
     },
-    [clearPendingAnswerCommitTimer]
+    [
+      clearPendingAnswerCommitTimer,
+      scheduleAdvisorResponseConsistencyShadow,
+    ]
   );
 
   const schedulePendingAnswerCommit = useCallback(
@@ -3517,6 +3966,9 @@ export function useMeetingAssistant() {
     currentQuestionSettlementRef.current = undefined;
     currentQuestionTerminalNoAnswerRef.current = undefined;
     settledAdvisorExecutionPlanRef.current = undefined;
+    advisorResponseFingerprintCacheRef.current.reset();
+    advisorResponseChallengeCoordinatorRef.current.reset();
+    advisorResponseFingerprintContextByTraceRef.current.clear();
     manualCorrectionOperationCoordinatorRef.current.reset();
     return {
       runtimeInvalidationReason: reason,
@@ -9214,6 +9666,9 @@ export function useMeetingAssistant() {
 
     let finalContent = "";
     let advisorModelPromptText = "";
+    let advisorAnswerSufficiencyDecision:
+      | AnswerSufficiencyDecision
+      | undefined;
 
     try {
       for await (const event of advisorEngineRef.current.streamSuggestion({
@@ -9551,6 +10006,7 @@ export function useMeetingAssistant() {
             basePromptContext: promptContext,
             originalModelPromptText: advisorModelPromptText,
           });
+        advisorAnswerSufficiencyDecision = answerSufficiencyDecision;
         traceStoreRef.current.updateMetadata(
           traceId,
           formatAnswerSufficiencyDecisionForTrace(
@@ -10090,6 +10546,38 @@ export function useMeetingAssistant() {
         nextStableAnswer?.revision ?? visibleAnswerRevisionBefore;
       const deliveryProgressAtCommit =
         answerDeliveryProgressRef.current;
+      if (traceId && nextStableAnswer) {
+        advisorResponseFingerprintContextByTraceRef.current.set(traceId, {
+          questionText:
+            advisorQuestionAnswerFocusText ||
+            advisorQuestionSemanticEvidenceText,
+          questionType:
+            normalizeCanonicalQuestionType(
+              settledExecutionPlan?.questionType ?? advisorQuestionType
+            ) ?? "unknown",
+          relation:
+            settledExecutionPlan?.relation ??
+            currentQuestionSettlement?.relation,
+          settlementId:
+            settledExecutionPlan?.settlementId ??
+            currentQuestionSettlement?.settlementId,
+          executionPlanId: settledExecutionPlan?.id,
+          playbookPhase:
+            settledExecutionPlan?.playbookPhase ??
+            advisorRuntimePlaybook?.phase,
+          logicalQuestionUnitId:
+            nextStableAnswer.logicalQuestionUnitId,
+          logicalQuestionRevision:
+            nextStableAnswer.logicalQuestionRevision,
+          requiredArtifacts:
+            settledExecutionPlan?.requiredArtifacts ??
+            generationAuthorizedArtifacts,
+          artifactIntent: settledExecutionPlan?.artifactIntent,
+          artifactPolicy: settledExecutionPlan?.artifactPolicy,
+          answerSufficiencyDecision:
+            advisorAnswerSufficiencyDecision,
+        });
+      }
       setState((previous) => ({
         ...previous,
         status: activeRef.current
@@ -17249,6 +17737,10 @@ export function useMeetingAssistant() {
       let screenParentAuthorizedArtifacts:
         AnswerArtifactSection[] = [];
       let screenLatestUsefulAnswerMutationAuthorized = false;
+      let screenAnswerSufficiencyDecision:
+        | AnswerSufficiencyDecision
+        | undefined;
+      let screenAnswerSufficiencyQuestion = "";
       let screenSourceOwnedTransitionResult:
         | SourceOwnedTransitionCommitResult
         | undefined;
@@ -19244,6 +19736,7 @@ export function useMeetingAssistant() {
           screenPreflight?.question?.trim() ??
           observation.captureTarget?.title?.trim() ??
           "";
+        screenAnswerSufficiencyQuestion = screenQuestionForSufficiency;
         if (screenQuestionForSufficiency) {
           const sufficiencyMeetingContext =
             contextManagerRef.current.getState();
@@ -19288,6 +19781,7 @@ export function useMeetingAssistant() {
                 contextManagerRef.current.buildAdvisorPromptContext(),
               originalModelPromptText: screenModelPromptText,
             });
+          screenAnswerSufficiencyDecision = answerSufficiencyDecision;
           traceStoreRef.current.updateMetadata(
             trace.id,
             formatAnswerSufficiencyDecisionForTrace(
@@ -19890,6 +20384,60 @@ export function useMeetingAssistant() {
           nextStableAnswer?.revision ?? visibleAnswerRevisionBefore;
         const screenDeliveryProgressAtCommit =
           answerDeliveryProgressRef.current;
+        if (nextStableAnswer) {
+          advisorResponseFingerprintContextByTraceRef.current.set(
+            trace.id,
+            {
+              questionText:
+                screenAnswerSufficiencyQuestion ||
+                screenCurrentQuestionEvidenceText ||
+                screenTaskTopic ||
+                "",
+              questionType:
+                normalizeCanonicalQuestionType(
+                  settledScreenTaskKind
+                ) ?? "unknown",
+              relation: screenCurrentQuestionSettlement?.relation,
+              settlementId:
+                screenCurrentQuestionSettlement?.settlementId,
+              playbookPhase: screenRuntimePlaybook?.phase,
+              logicalQuestionUnitId:
+                nextStableAnswer.logicalQuestionUnitId,
+              logicalQuestionRevision:
+                nextStableAnswer.logicalQuestionRevision,
+              requiredArtifacts: screenPhaseDecision.requiredArtifacts,
+              artifactIntent:
+                screenPresentationAuthorizedArtifacts.includes(
+                  "whiteboard"
+                )
+                  ? "revise-whiteboard"
+                  : screenPresentationAuthorizedArtifacts.includes(
+                        "code"
+                      ) ||
+                      screenPresentationAuthorizedArtifacts.includes(
+                        "complexity"
+                      )
+                    ? "revise-code"
+                    : "preserve",
+              artifactPolicy: {
+                allowCode:
+                  screenPresentationAuthorizedArtifacts.includes(
+                    "code"
+                  ),
+                allowComplexity:
+                  screenPresentationAuthorizedArtifacts.includes(
+                    "complexity"
+                  ),
+                allowWhiteboard:
+                  screenPresentationAuthorizedArtifacts.includes(
+                    "whiteboard"
+                  ),
+              },
+              answerSufficiencyDecision:
+                screenAnswerSufficiencyDecision,
+            }
+          );
+        }
         setState((previous) => ({
           ...previous,
           status: activeRef.current ? "listening" : idleReturnStatus,
