@@ -1,0 +1,23 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "strict": true,
+    "skipLibCheck": true,
+    "outDir": ".tmp-local-intent-corpus-readiness",
+    "rootDir": ".",
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["./src/*"]
+    },
+    "types": ["node"]
+  },
+  "include": [
+    "scripts/build-local-intent-corpus-readiness.ts",
+    "scripts/lib/local-intent-corpus-*.ts",
+    "src/lib/meeting/taxonomy-evaluation.ts",
+    "src/lib/meeting/task-taxonomy.ts",
+    "src/lib/memory/types.ts"
+  ]
+}
