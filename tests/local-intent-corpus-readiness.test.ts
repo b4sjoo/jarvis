@@ -86,6 +86,16 @@ test("builds a deterministic private sidecar without modifying source trees", as
         row.heads?.["question-type"]?.value === "general-system-design"
     )
   );
+  const followUpExample = normalized.find(
+    (row) => row.sourceText === "What storage would you use?"
+  );
+  assert.equal(
+    followUpExample?.boundedContext?.previousInterviewerText,
+    "Design a fixture system."
+  );
+  assert.deepEqual(followUpExample?.boundedContext?.interveningMeText, [
+    "I would start with the write path.",
+  ]);
   assert.equal(first.qualityReport.goNoGo.threeHeadTraining, "no-go");
   assert.equal(
     first.qualityReport.usableSplitCountsByHead["speech-act"].excluded,
@@ -163,6 +173,15 @@ async function createSessionFixture(recordingsRoot: string) {
         endedAt: 300,
         isFinal: true,
         source: "system-audio",
+      },
+      {
+        id: "turn-me-1",
+        speaker: "me",
+        text: "I would start with the write path.",
+        startedAt: 325,
+        endedAt: 350,
+        isFinal: true,
+        source: "microphone",
       },
       {
         id: "turn-2",

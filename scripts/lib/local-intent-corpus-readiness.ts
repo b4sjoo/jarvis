@@ -52,7 +52,7 @@ import {
 } from "./local-intent-corpus-utils.js";
 
 export const LOCAL_INTENT_CORPUS_BUILDER_REVISION =
-  "local-intent-corpus-readiness-v2";
+  "local-intent-corpus-readiness-v3";
 
 export interface BuildLocalIntentCorpusReadinessOptions {
   recordingsRoot: string;
@@ -299,7 +299,15 @@ async function materializeSession(
       },
       boundedContext: {
         activeParentType: readString(selected.parentBefore, "questionType"),
+        activePhase:
+          readString(selected.parentBefore, "playbookPhase") ??
+          readString(selected.parentBefore, "phase"),
         previousInterviewerText: previousTurn?.text,
+        interveningMeText: findInterveningMeText(
+          evidence.turns,
+          previousTurn?.endedAt,
+          sourceTurns[0]?.startedAt ?? createdAt
+        ),
       },
       grouping: defaultGrouping(sessionHash, rootGroupId),
       eligibility:
@@ -378,12 +386,7 @@ async function materializeSession(
         ],
         materialization: "single-turn-exact",
       },
-      boundedContext: {
-        previousInterviewerText: findPreviousInterviewerTurn(
-          evidence.turns,
-          turn.startedAt
-        )?.text,
-      },
+      boundedContext: boundedContextBeforeTurn(evidence.turns, turn.startedAt),
       grouping: defaultGrouping(sessionHash, rootGroupId),
       eligibility:
         container.inventory.integrity === "complete"
@@ -780,6 +783,49 @@ function findPreviousInterviewerTurn(
   return [...turns]
     .filter((turn) => turn.speaker === "them" && turn.endedAt < before)
     .sort((left, right) => right.endedAt - left.endedAt)[0];
+}
+
+function boundedContextBeforeTurn(
+  turns: RecordedTranscriptTurn[],
+  before: number
+) {
+  const previousTurn = findPreviousInterviewerTurn(turns, before);
+  return {
+    previousInterviewerText: previousTurn?.text,
+    interveningMeText: findInterveningMeText(
+      turns,
+      previousTurn?.endedAt,
+      before
+    ),
+  };
+}
+
+function findInterveningMeText(
+  turns: RecordedTranscriptTurn[],
+  after: number | undefined,
+  before: number
+) {
+  if (after === undefined) return [];
+  const selected = turns
+    .filter(
+      (turn) =>
+        turn.speaker === "me" &&
+        turn.isFinal &&
+        turn.startedAt >= after &&
+        turn.endedAt <= before &&
+        turn.text.trim()
+    )
+    .sort((left, right) => left.startedAt - right.startedAt)
+    .slice(-4);
+  let remaining = 1_600;
+  const bounded: string[] = [];
+  for (let index = selected.length - 1; index >= 0 && remaining > 0; index -= 1) {
+    const text = selected[index].text.trim();
+    const retained = text.length <= remaining ? text : text.slice(-remaining);
+    remaining -= retained.length;
+    if (retained) bounded.unshift(retained);
+  }
+  return bounded;
 }
 
 function inferModality(

@@ -114,6 +114,7 @@ export interface LocalIntentNormalizedExample {
     activeParentType?: string;
     activePhase?: string;
     previousInterviewerText?: string;
+    interveningMeText?: string[];
   };
   grouping: {
     rootGroupId: string;
