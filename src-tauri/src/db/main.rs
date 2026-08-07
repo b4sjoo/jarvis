@@ -24,5 +24,12 @@ pub fn migrations() -> Vec<Migration> {
             sql: include_str!("migrations/knowledge-memory-base.sql"),
             kind: MigrationKind::Up,
         },
+        // Migration 4: Create shared preparation workspace metadata tables
+        Migration {
+            version: 4,
+            description: "create_preparation_workspace_tables",
+            sql: include_str!("migrations/preparation-workspaces.sql"),
+            kind: MigrationKind::Up,
+        },
     ]
 }

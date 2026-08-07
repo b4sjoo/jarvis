@@ -9,4 +9,5 @@ export * from "./platform";
 export * from "./analytics";
 export * from "./response-settings.constants";
 export * from "./conversation-attachment-lifecycle";
+export * from "./preparation";
 export * from "./meeting";

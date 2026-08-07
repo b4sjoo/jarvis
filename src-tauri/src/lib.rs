@@ -1,5 +1,6 @@
 mod capture;
 mod db;
+mod preparation_storage;
 mod shortcuts;
 mod stt_evaluation;
 mod window;
@@ -424,6 +425,10 @@ pub fn run() {
             stt_evaluation::cleanup_stt_evaluation_captures,
             stt_evaluation::record_stt_evaluation_submitted_audio,
             stt_evaluation::record_stt_evaluation_transcript_event,
+            preparation_storage::ensure_preparation_workspace_storage,
+            preparation_storage::stage_preparation_workspace_storage_delete,
+            preparation_storage::restore_preparation_workspace_storage_delete,
+            preparation_storage::commit_preparation_workspace_storage_delete,
             window::set_window_height,
             window::open_dashboard,
             window::toggle_dashboard,
