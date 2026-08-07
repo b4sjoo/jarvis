@@ -130,6 +130,7 @@ import {
   QuestionHumanEvaluation,
   QuestionInstanceLineage,
   ScreenObservation,
+  ScreenOperationCoordinator,
   ScreenPreflightResult,
   ScreenQuestionType,
   ScreenTaskKind,
@@ -2202,7 +2203,9 @@ export function useMeetingAssistant() {
     useRef<PendingAnswerRevision | null>(null);
   const pendingAnswerCommitTimerRef = useRef<number | null>(null);
   const microphoneSpeakingRef = useRef(false);
-  const activeScreenOperationIdRef = useRef<string | null>(null);
+  const screenOperationCoordinatorRef = useRef(
+    new ScreenOperationCoordinator()
+  );
   const manualCorrectionOperationCoordinatorRef = useRef(
     new ManualCorrectionOperationCoordinator()
   );
@@ -3494,7 +3497,7 @@ export function useMeetingAssistant() {
   const advanceRuntimeEpoch = useCallback((reason: string) => {
     const previousEpoch = runtimeEpochRef.current;
     runtimeEpochRef.current += 1;
-    activeScreenOperationIdRef.current = null;
+    screenOperationCoordinatorRef.current.reset();
     semanticTaxonomyEvidenceByTurnRef.current.clear();
     taxonomyAdjudicationRuntimeRef.current?.cancelAll("superseded");
     shortIntentGateRuntimeRef.current?.cancelAll("superseded");
@@ -17158,10 +17161,22 @@ export function useMeetingAssistant() {
       source: ScreenObservation["source"] = "full-screen",
       options: CaptureScreenContextOptions = {}
     ) => {
-      if (activeScreenOperationIdRef.current) {
-        return;
+      const screenOperationId = createMeetingId("screen_operation");
+      const screenOperationRequestedAt = options.requestedAt ?? Date.now();
+      const screenOperationClaim =
+        screenOperationCoordinatorRef.current.claim(
+          screenOperationId,
+          screenOperationRequestedAt
+        );
+      const supersededAnalysisController = screenAnalysisAbortRef.current;
+      if (supersededAnalysisController) {
+        supersededAnalysisController.abort(
+          "superseded-by-newer-screen-operation"
+        );
+        if (screenAnalysisAbortRef.current === supersededAnalysisController) {
+          screenAnalysisAbortRef.current = null;
+        }
       }
-
       whiteboardSyntaxRepairRuntimeRef.current?.cancelAll("superseded");
       flushPendingSentenceCompletion("screen-capture");
       const screenRefreshAuthority = decideRefreshAuthority({
@@ -17174,23 +17189,51 @@ export function useMeetingAssistant() {
         "screen-capture-started",
         "cancelled-by-new-job"
       );
-      const screenOperationId = createMeetingId("screen_operation");
       let screenRuntimeToken = createRuntimeCommitToken({
         operationId: screenOperationId,
         pipeline: "screen",
         snapshot: readRuntimeCommitSnapshot(),
       });
-      activeScreenOperationIdRef.current = screenOperationId;
       const trace = traceStoreRef.current.startTrace(
         "screen",
         {
           source,
+          screenOperationId,
+          screenOperationRequestedAt,
+          screenOperationAdmission: screenOperationClaim.supersedesOperationId
+            ? "superseding"
+            : "initial",
+          screenOperationQueuePolicy: "latest-wins",
+          supersedesScreenOperationId:
+            screenOperationClaim.supersedesOperationId,
+          supersedesScreenTraceId: screenOperationClaim.supersedesTraceId,
+          screenOperationAdmissionLatencyMs:
+            Date.now() - screenOperationRequestedAt,
           privacyMode: state.settings.privacyMode,
           screenContextEnabled: state.settings.screenContextEnabled,
           ...formatRefreshAuthorityForTrace(screenRefreshAuthority),
         },
         options.requestedAt
       );
+      screenOperationCoordinatorRef.current.attachTrace(
+        screenOperationId,
+        trace.id
+      );
+      if (screenOperationClaim.supersedesTraceId) {
+        traceStoreRef.current.updateMetadata(
+          screenOperationClaim.supersedesTraceId,
+          {
+            screenOperationDisposition: "superseded",
+            supersededByScreenOperationId: screenOperationId,
+            supersededByScreenTraceId: trace.id,
+          }
+        );
+      }
+      setState((previous) => ({
+        ...previous,
+        partialSuggestion: "",
+        error: null,
+      }));
       let analysisController: AbortController | null = null;
       const returnStatus = state.status;
       const idleReturnStatus = returnStatus === "paused" ? "paused" : "idle";
@@ -17213,7 +17256,8 @@ export function useMeetingAssistant() {
         authorizeRuntimeCommit({
           token: screenRuntimeToken,
           current: readRuntimeCommitSnapshot(),
-          currentOperationId: activeScreenOperationIdRef.current,
+          currentOperationId:
+            screenOperationCoordinatorRef.current.getActiveOperationId(),
         });
       const rejectStaleScreenOperation = (stage: string) => {
         const decision = readScreenAuthorization();
@@ -17275,7 +17319,18 @@ export function useMeetingAssistant() {
               : {}),
             ...(!decision.authorized ||
             (leaseAuthorization && !leaseAuthorization.authorized)
-              ? { artifactCacheDisposition: "stale-rejected" }
+              ? {
+                  artifactCacheDisposition: "stale-rejected",
+                  screenOperationDisposition:
+                    decision.reason === "pipeline-owner-mismatch"
+                      ? "superseded"
+                      : "stale-rejected",
+                  activeScreenOperationId:
+                    screenOperationCoordinatorRef.current.getActiveOperationId(),
+                  activeScreenTraceId:
+                    screenOperationCoordinatorRef.current.getActiveOperation()
+                      ?.traceId,
+                }
               : {}),
           }
         );
@@ -18536,7 +18591,8 @@ export function useMeetingAssistant() {
               provisionalScreenTaskRelation !== "new-parent"
           ),
           runtimeToken: screenRuntimeToken,
-          currentOperationId: () => activeScreenOperationIdRef.current,
+          currentOperationId: () =>
+            screenOperationCoordinatorRef.current.getActiveOperationId(),
           memoryStage: screenRequiresProjectBinding
             ? "candidate-discovery"
             : "prompt-injection",
@@ -19864,6 +19920,7 @@ export function useMeetingAssistant() {
             previousCommittedAt: previousStableAnswer?.committedAt,
           });
         traceStoreRef.current.updateMetadata(trace.id, {
+          screenOperationDisposition: "committed",
           ...screenStableCommitMetadata,
           parentAuthorizedArtifacts: screenParentAuthorizedArtifacts,
           screenAuthorizedArtifacts:
@@ -19992,9 +20049,7 @@ export function useMeetingAssistant() {
               : "Failed to capture screen context.",
         }));
       } finally {
-        if (activeScreenOperationIdRef.current === screenOperationId) {
-          activeScreenOperationIdRef.current = null;
-        }
+        screenOperationCoordinatorRef.current.release(screenOperationId);
       }
     },
     [

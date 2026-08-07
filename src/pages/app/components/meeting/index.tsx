@@ -293,7 +293,7 @@ const memoryEntryLabelOptions: Array<{
 ];
 
 const HOTKEY_CAPTURE_SETTLE_MS = 180;
-const HOTKEY_CAPTURE_DEBOUNCE_MS = 1_000;
+const HOTKEY_CAPTURE_DEBOUNCE_MS = 250;
 const MEETING_PANEL_WIDTH = 920;
 const PANEL_WIDTH_CLASS = "w-[920px] max-w-[100vw]";
 const WRAP_TEXT_CLASS =
@@ -420,7 +420,7 @@ export const MeetingAssistant = ({
   const presentationArtifactResetRevisionRef = useRef(
     meeting.presentationArtifactResetRevision
   );
-  const screenHotkeyInFlightRef = useRef(false);
+  const screenHotkeyRequestRevisionRef = useRef(0);
   const lastScreenHotkeyAtRef = useRef(0);
 
   const latestTurn = [...meeting.transcriptTurns]
@@ -995,32 +995,40 @@ export const MeetingAssistant = ({
     const requestedAt = Date.now();
 
     if (
-      screenHotkeyInFlightRef.current ||
       requestedAt - lastScreenHotkeyAtRef.current < HOTKEY_CAPTURE_DEBOUNCE_MS
     ) {
       return;
     }
 
-    screenHotkeyInFlightRef.current = true;
+    const requestRevision = screenHotkeyRequestRevisionRef.current + 1;
+    screenHotkeyRequestRevisionRef.current = requestRevision;
     lastScreenHotkeyAtRef.current = requestedAt;
 
     try {
       if (open) {
         setOpen(false);
         await waitForHotkeyCaptureSettle();
+        if (screenHotkeyRequestRevisionRef.current !== requestRevision) return;
         await resizeWindow(false);
         await waitForHotkeyCaptureSettle();
+        if (screenHotkeyRequestRevisionRef.current !== requestRevision) return;
       }
 
       await meeting.captureScreenContext("hotkey", {
         requestedAt,
         onCaptured: () => {
-          setOpen(true);
+          if (screenHotkeyRequestRevisionRef.current === requestRevision) {
+            setOpen(true);
+          }
         },
       });
-      setOpen(true);
+      if (screenHotkeyRequestRevisionRef.current === requestRevision) {
+        setOpen(true);
+      }
     } finally {
-      screenHotkeyInFlightRef.current = false;
+      if (screenHotkeyRequestRevisionRef.current === requestRevision) {
+        setOpen(true);
+      }
     }
   }, [meeting.captureScreenContext, open, resizeWindow]);
 

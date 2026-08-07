@@ -81,6 +81,7 @@ export * from "./project-memory-settlement";
 export * from "./primary-ask-projection";
 export * from "./question-lineage";
 export * from "./runtime-commit-authorization";
+export * from "./screen-operation-coordinator";
 export * from "./screen-observation.service";
 export * from "./screen-artifact-authority";
 export * from "./screen-task-scope";
