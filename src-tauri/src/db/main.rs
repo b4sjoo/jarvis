@@ -31,5 +31,12 @@ pub fn migrations() -> Vec<Migration> {
             sql: include_str!("migrations/preparation-workspaces.sql"),
             kind: MigrationKind::Up,
         },
+        // Migration 5: Create interview-specific process and round tables
+        Migration {
+            version: 5,
+            description: "create_interview_preparation_domain_tables",
+            sql: include_str!("migrations/interview-preparation-domain.sql"),
+            kind: MigrationKind::Up,
+        },
     ]
 }

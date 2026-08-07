@@ -11,6 +11,7 @@ import {
   Screenshot,
   Chats,
   Responses,
+  InterviewPreparation,
 } from "@/pages";
 import { DashboardLayout } from "@/layouts";
 
@@ -29,6 +30,14 @@ export default function AppRoutes() {
           <Route path="/settings" element={<Settings />} />
           <Route path="/audio" element={<Audio />} />
           <Route path="/responses" element={<Responses />} />
+          <Route
+            path="/interview-preparation"
+            element={<InterviewPreparation />}
+          />
+          <Route
+            path="/interview-preparation/:processId"
+            element={<InterviewPreparation />}
+          />
           <Route path="/dev-space" element={<DevSpace />} />
         </Route>
       </Routes>
