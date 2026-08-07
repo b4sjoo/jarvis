@@ -742,7 +742,8 @@ function normalizeQuestionHumanEvaluation(
       candidate.manualQuestionTypeCorrectionScope === "child-retype" ||
       candidate.manualQuestionTypeCorrectionScope === "resume-parent" ||
       candidate.manualQuestionTypeCorrectionScope === "linked-parent-extension" ||
-      candidate.manualQuestionTypeCorrectionScope === "independent-new-parent"
+      candidate.manualQuestionTypeCorrectionScope === "independent-new-parent" ||
+      candidate.manualQuestionTypeCorrectionScope === "current-only"
         ? candidate.manualQuestionTypeCorrectionScope
         : undefined,
     manualQuestionTypeCorrectionBoundaryReason: readOptionalString(

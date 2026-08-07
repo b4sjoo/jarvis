@@ -1,4 +1,5 @@
 import type { ActiveMeetingTask } from "./active-meeting-task";
+import type { CurrentQuestionRelation } from "./current-question-settlement.js";
 import type { LogicalQuestionUnit } from "./logical-question-unit.js";
 import type {
   ActiveInterviewParent,
@@ -175,6 +176,8 @@ export function decideManualCorrectionScope({
   classifierConfidence,
   explicitTaskSwitch = false,
   currentQuestionMatchesParentOrigin = false,
+  currentQuestionRelation,
+  currentQuestionSource,
 }: {
   task?: ActiveMeetingTask;
   decision: ManualQuestionTypeCorrectionDecision;
@@ -184,6 +187,8 @@ export function decideManualCorrectionScope({
   classifierConfidence?: number;
   explicitTaskSwitch?: boolean;
   currentQuestionMatchesParentOrigin?: boolean;
+  currentQuestionRelation?: CurrentQuestionRelation;
+  currentQuestionSource?: "voice" | "screen" | "mixed";
 }): ManualCorrectionScopeDecision {
   const currentQuestionIsChild = Boolean(
     task?.child &&
@@ -227,6 +232,31 @@ export function decideManualCorrectionScope({
       ...base,
       scope: "child-retype",
       reason: "manual-correction-targets-current-child-question",
+    };
+  }
+
+  if (currentQuestionRelation === "new-parent") {
+    return {
+      ...base,
+      scope:
+        continuity.score >= 4
+          ? "linked-parent-extension"
+          : "independent-new-parent",
+      reason:
+        continuity.score >= 4
+          ? "authorized-new-parent-keeps-bounded-domain-link"
+          : "authorized-new-parent-re-roots-current-question",
+    };
+  }
+
+  if (
+    currentQuestionRelation === "unknown" &&
+    !currentQuestionIsParentOrigin
+  ) {
+    return {
+      ...base,
+      scope: "current-only",
+      reason: `${currentQuestionSource ?? "unknown"}-question-relation-unsettled`,
     };
   }
 
@@ -648,6 +678,21 @@ export function buildManualCorrectionParentTransition({
   now?: number;
   expiresAt?: number;
 }): ManualCorrectionParentTransition {
+  if (scopeDecision.scope === "current-only") {
+    return {
+      parent,
+      previousParentId: parent.id,
+      nextParentId: parent.id,
+      preservedContextFields: [
+        "active-parent-read-only",
+        "current-question-type-authority",
+      ],
+      clearedContextFields: [],
+      promptTranscriptStartTurnId: parent.promptTranscriptStartTurnId,
+      startedNewParent: false,
+    };
+  }
+
   const shouldStartNewParent =
     decision.target !== "provisional-question" &&
     (scopeDecision.scope === "linked-parent-extension" ||

@@ -829,7 +829,8 @@ export type ManualCorrectionScope =
   | "child-retype"
   | "resume-parent"
   | "linked-parent-extension"
-  | "independent-new-parent";
+  | "independent-new-parent"
+  | "current-only";
 
 export type ManualQuestionTypeCorrectionStatus =
   | "pending"
@@ -865,12 +866,24 @@ export interface ManualQuestionTypeCorrection {
   preservedContextFields?: string[];
   clearedContextFields?: string[];
   promptTranscriptStartTurnId?: string;
+  logicalQuestionUnitId?: string;
+  logicalQuestionRevision?: number;
+  sourceObservationIds?: string[];
+  questionOriginTraceId?: string;
+  settlementId?: string;
+  settledRelation?: string;
   detectedType: CanonicalQuestionType;
   correctedType: CanonicalQuestionType;
   correctionTraceId: string;
   supersedesCorrectionId?: string;
   supersededByCorrectionId?: string;
   regenerationTraceId?: string;
+  regenerationCommitDisposition?:
+    | "committed"
+    | "no-stable-answer-commit"
+    | "cancelled"
+    | "error";
+  regenerationRetryable?: boolean;
   evaluationId?: string;
   status: ManualQuestionTypeCorrectionStatus;
   regenerationStatus: ManualQuestionTypeRegenerationStatus;

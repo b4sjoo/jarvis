@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   areSuggestionsForSameParentTask,
   buildSuggestionTaskMetadata,
+  restoreSuggestionProjectionAfterFailedManualCorrection,
   stageSuggestionProjectionForManualCorrection,
 } from "../src/lib/meeting/suggestion-task.js";
 import type {
@@ -97,6 +98,25 @@ test("does not promote a clarifying question to reliable answer history", () => 
   assert.equal(staged.latestReliableSuggestion, previousReliable);
 });
 
+test("restores the previous stable answer after correction regeneration has no commit", () => {
+  const previousReliable = makeSuggestion({
+    id: "suggestion_stable",
+    content: "A reliable answer that must remain visible.",
+  });
+  const restored = restoreSuggestionProjectionAfterFailedManualCorrection(
+    {
+      latestSuggestion: null,
+      latestReliableSuggestion: previousReliable,
+      partialSuggestion: "-",
+    } as MeetingAssistantState,
+    previousReliable
+  );
+
+  assert.equal(restored.latestSuggestion, previousReliable);
+  assert.equal(restored.latestReliableSuggestion, null);
+  assert.equal(restored.partialSuggestion, "");
+});
+
 function makeActiveMeetingTask(): ActiveMeetingTask {
   const now = 1_779_000_000_000;
   return {
@@ -128,7 +148,10 @@ function makeActiveMeetingTask(): ActiveMeetingTask {
 
 function makeSuggestion(
   patch: Partial<
-    Pick<AdvisorSuggestion, "parentTaskId" | "taskId" | "questionType">
+    Pick<
+      AdvisorSuggestion,
+      "id" | "content" | "parentTaskId" | "taskId" | "questionType"
+    >
   >
 ): AdvisorSuggestion {
   return {

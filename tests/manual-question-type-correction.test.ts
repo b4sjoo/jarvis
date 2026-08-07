@@ -274,6 +274,76 @@ test("splits an independent travel agent from a ride-share parent", () => {
   );
 });
 
+test("uses an authorized new-parent settlement instead of retyping a stale parent", () => {
+  const task = makeActiveTask({ questionType: "coding" });
+  task.parent.topic = "Implement a multiset data structure";
+  const decision = decideManualQuestionTypeCorrection(task, "behavioral");
+  const scope = decideManualCorrectionScope({
+    task,
+    decision,
+    lineage: makeLineage("screen:obs_behavioral"),
+    latestQuestionText:
+      "Tell me about a time you persuaded a skeptical stakeholder.",
+    classifierConfidence: 0.99,
+    currentQuestionRelation: "new-parent",
+    currentQuestionSource: "screen",
+  });
+
+  assert.equal(scope.scope, "independent-new-parent");
+  assert.equal(scope.reason, "authorized-new-parent-re-roots-current-question");
+});
+
+test("keeps a relation-unsettled screen correction current-only", () => {
+  const task = makeActiveTask({ questionType: "coding" });
+  const decision = decideManualQuestionTypeCorrection(task, "behavioral");
+  const scope = decideManualCorrectionScope({
+    task,
+    decision,
+    lineage: makeLineage("screen:obs_behavioral"),
+    latestQuestionText:
+      "Tell me about a time you persuaded a skeptical stakeholder.",
+    classifierConfidence: 0.99,
+    currentQuestionRelation: "unknown",
+    currentQuestionSource: "screen",
+  });
+
+  assert.equal(scope.scope, "current-only");
+  assert.equal(scope.reason, "screen-question-relation-unsettled");
+});
+
+test("does not let a current-only correction mutate the active parent", () => {
+  const parent = makeInterviewParent({
+    id: "parent_coding",
+    stableKind: "coding",
+    topic: "Implement a multiset data structure",
+  });
+  const task = makeActiveTask({ questionType: "coding" });
+  const decision = decideManualQuestionTypeCorrection(task, "behavioral");
+  const scopeDecision = decideManualCorrectionScope({
+    task,
+    decision,
+    lineage: makeLineage("screen:obs_behavioral"),
+    latestQuestionText:
+      "Tell me about a time you persuaded a skeptical stakeholder.",
+    currentQuestionRelation: "unknown",
+    currentQuestionSource: "screen",
+  });
+  const transition = buildManualCorrectionParentTransition({
+    parent,
+    decision,
+    scopeDecision,
+    latestQuestionText:
+      "Tell me about a time you persuaded a skeptical stakeholder.",
+    transcriptTurns: [],
+    newParentId: "parent_behavioral",
+  });
+
+  assert.equal(transition.parent, parent);
+  assert.equal(transition.startedNewParent, false);
+  assert.equal(transition.previousParentId, "parent_coding");
+  assert.equal(transition.nextParentId, "parent_coding");
+});
+
 test("creates a linked parent for a recommendation extension of the same app", () => {
   const task = makeActiveTask({ questionType: "general-system-design" });
   task.parent.topic = "Design a food delivery app";

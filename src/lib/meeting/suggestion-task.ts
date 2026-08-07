@@ -68,6 +68,31 @@ export function stageSuggestionProjectionForManualCorrection(
   };
 }
 
+export function restoreSuggestionProjectionAfterFailedManualCorrection(
+  previous: MeetingAssistantState,
+  reliableSuggestion: AdvisorSuggestion | null | undefined
+): Pick<
+  MeetingAssistantState,
+  "partialSuggestion" | "latestSuggestion" | "latestReliableSuggestion"
+> {
+  if (!reliableSuggestion || !isReliableSuggestion(reliableSuggestion)) {
+    return {
+      partialSuggestion: "",
+      latestSuggestion: previous.latestSuggestion,
+      latestReliableSuggestion: previous.latestReliableSuggestion,
+    };
+  }
+
+  return {
+    partialSuggestion: "",
+    latestSuggestion: reliableSuggestion,
+    latestReliableSuggestion:
+      previous.latestReliableSuggestion?.id === reliableSuggestion.id
+        ? null
+        : previous.latestReliableSuggestion,
+  };
+}
+
 function isReliableSuggestion(suggestion: AdvisorSuggestion) {
   const content = suggestion.content.trim();
   return Boolean(
