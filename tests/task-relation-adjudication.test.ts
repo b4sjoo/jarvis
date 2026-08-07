@@ -11,6 +11,7 @@ import {
   buildTaskRelationAdjudicationRequest,
   compareTaskRelationAdjudication,
   createTaskRelationSettlementProposal,
+  decideNarrowScreenRelationRelease,
   decideTaskRelationAdjudicationEligibility,
   deriveRuntimeTaskRelationFromAtomicDecision,
   parseTaskRelationAdjudicationOutput,
@@ -445,6 +446,14 @@ test("runs only for evaluation-active unresolved source-owned questions", () => 
   assert.equal(
     decideTaskRelationAdjudicationEligibility({
       ...common,
+      evaluationActive: false,
+      runtimeReleaseRequested: true,
+    }).auditKind,
+    "screen-release-candidate"
+  );
+  assert.equal(
+    decideTaskRelationAdjudicationEligibility({
+      ...common,
       evaluationActive: true,
       deterministicRelationAuthorized: true,
       deterministicRelation: "new-parent",
@@ -475,6 +484,133 @@ test("runs only for evaluation-active unresolved source-owned questions", () => 
       turnGateAction: "append-only",
     }).reason,
     "turn-gate-not-answer:append-only"
+  );
+});
+
+test("narrowly releases a grounded cross-type manual screen boundary", () => {
+  const candidate = {
+    schemaVersion: 2 as const,
+    relation: "new-parent" as const,
+    dependency: "parent-independent" as const,
+    continuationShape: "unclear" as const,
+    returnIntent: "no-resume" as const,
+    switchIntent: "no-explicit-switch" as const,
+    standaloneSufficiency: "sufficient" as const,
+    confidence: 0.98,
+    currentQuestionEvidenceSpans: [
+      "Tell me about a time you persuaded a stakeholder",
+    ],
+    parentEvidenceSpans: [],
+    explicitBinding: false,
+    standalone: true,
+  };
+  const common = {
+    sourceKind: "screen" as const,
+    screenBoundaryPrior: true,
+    currentQuestionType: "behavioral",
+    activeParentQuestionType: "coding",
+    typeAuthoritySource: "screen-preflight",
+    typeEvidenceAuthorized: true,
+    typeConfidence: 0.99,
+    questionComplete: true,
+    manualCorrectionActive: false,
+    hasActiveChild: false,
+    operationLeaseAuthorized: true,
+    releaseWindowOpen: true,
+  };
+
+  assert.deepEqual(
+    decideNarrowScreenRelationRelease(common),
+    {
+      requested: true,
+      authorized: false,
+      reason: "eligible-awaiting-candidate",
+      currentQuestionType: "behavioral",
+      activeParentQuestionType: "coding",
+      typeConfidence: 0.99,
+      relationConfidence: 0,
+      minimumConfidence: 0.95,
+    }
+  );
+  assert.equal(
+    decideNarrowScreenRelationRelease({
+      ...common,
+      candidate,
+    }).authorized,
+    true
+  );
+});
+
+test("narrow screen relation release fails closed on continuity or stale evidence", () => {
+  const candidate = {
+    schemaVersion: 2 as const,
+    relation: "new-parent" as const,
+    dependency: "parent-independent" as const,
+    continuationShape: "unclear" as const,
+    returnIntent: "no-resume" as const,
+    switchIntent: "explicit-switch" as const,
+    standaloneSufficiency: "sufficient" as const,
+    confidence: 0.99,
+    currentQuestionEvidenceSpans: ["Design a notification system"],
+    parentEvidenceSpans: [],
+    explicitBinding: false,
+    standalone: true,
+  };
+  const common = {
+    sourceKind: "screen" as const,
+    screenBoundaryPrior: true,
+    currentQuestionType: "general-system-design",
+    activeParentQuestionType: "coding",
+    typeAuthoritySource: "screen-preflight",
+    typeEvidenceAuthorized: true,
+    typeConfidence: 0.99,
+    questionComplete: true,
+    manualCorrectionActive: false,
+    hasActiveChild: false,
+    operationLeaseAuthorized: true,
+    releaseWindowOpen: true,
+    candidate,
+  };
+
+  assert.equal(
+    decideNarrowScreenRelationRelease({
+      ...common,
+      hasActiveChild: true,
+    }).reason,
+    "active-child-conflict"
+  );
+  assert.equal(
+    decideNarrowScreenRelationRelease({
+      ...common,
+      operationLeaseAuthorized: false,
+    }).reason,
+    "operation-lease-not-authorized"
+  );
+  assert.equal(
+    decideNarrowScreenRelationRelease({
+      ...common,
+      releaseWindowOpen: false,
+    }).reason,
+    "release-window-closed"
+  );
+  assert.equal(
+    decideNarrowScreenRelationRelease({
+      ...common,
+      candidate: {
+        ...candidate,
+        dependency: "parent-dependent",
+        continuationShape: "mainline",
+        parentEvidenceSpans: ["coding parent"],
+      },
+    }).reason,
+    "candidate-not-parent-independent"
+  );
+  assert.equal(
+    decideNarrowScreenRelationRelease({
+      ...common,
+      typeAuthoritySource: "screen-source-fallback",
+    }).reason,
+    "screen-type-source-not-authoritative"
   );
 });
 
@@ -575,4 +711,75 @@ test("Task 144 accepts relation evidence for preview while parent mutation remai
   assert.equal(preview.relationMutationAuthorized, true);
   assert.equal(preview.parentMutationAuthorized, false);
   assert.equal(preview.responseAuthorized, true);
+});
+
+test("one settlement composes authoritative screen type with released LLM relation", () => {
+  const logicalQuestionUnit = unit(
+    "Tell me about a time you persuaded a skeptical stakeholder"
+  );
+  const currentQuestion = createProvisionalCurrentQuestion({
+    logicalQuestionUnit,
+    sourceKind: "screen",
+    sourceObservationIds: ["observation-behavioral"],
+  });
+  const deterministicProposal = {
+    source: "deterministic-fast-path" as const,
+    sessionId: currentQuestion.sessionId,
+    runtimeEpoch: currentQuestion.runtimeEpoch,
+    logicalQuestionUnitId: currentQuestion.logicalQuestionUnitId,
+    revision: currentQuestion.revision,
+    sourceHash: currentQuestion.sourceHash,
+    questionType: "behavioral",
+    relation: "unknown" as const,
+    action: "answer" as const,
+    confidence: 0.99,
+    typeEvidenceAuthorized: true,
+    relationEvidenceAuthorized: false,
+    actionEvidenceAuthorized: true,
+    expectedParentId: "parent-a",
+    expectedParentRevision: 3,
+  };
+  const llmProposal = createTaskRelationSettlementProposal({
+    currentQuestion,
+    adjudication: {
+      schemaVersion: 2,
+      relation: "new-parent",
+      dependency: "parent-independent",
+      continuationShape: "unclear",
+      returnIntent: "no-resume",
+      switchIntent: "no-explicit-switch",
+      standaloneSufficiency: "sufficient",
+      confidence: 0.98,
+      currentQuestionEvidenceSpans: ["persuaded a skeptical stakeholder"],
+      parentEvidenceSpans: [],
+      explicitBinding: false,
+      standalone: true,
+    },
+    expectedParentId: "parent-a",
+    expectedParentRevision: 3,
+  });
+
+  const settlement = settleCurrentQuestion({
+    currentQuestion,
+    deterministicProposal,
+    llmProposal,
+    activeParentId: "parent-a",
+    activeParentRevision: 3,
+    manualCorrectionRevision: 0,
+    policy: {
+      allowLlmTypeRepair: false,
+      allowLlmRelationRepair: true,
+      allowLlmActionRepair: false,
+      llmRelationRepairMinConfidence: 0.95,
+      runtimeMutationAuthorized: true,
+      questionComplete: true,
+      commitParent: true,
+    },
+  });
+
+  assert.equal(settlement.questionType, "behavioral");
+  assert.equal(settlement.typeAuthoritySource, "deterministic-fast-path");
+  assert.equal(settlement.relation, "new-parent");
+  assert.equal(settlement.relationAuthoritySource, "llm-type-repair");
+  assert.equal(settlement.parentMutationAuthorized, true);
 });

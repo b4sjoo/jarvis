@@ -1,5 +1,6 @@
 import type { ActiveMeetingTask } from "./active-meeting-task.js";
 import type {
+  CurrentQuestionSettlementDecision,
   CurrentQuestionSettlementProposal,
   ProvisionalCurrentQuestion,
 } from "./current-question-settlement.js";
@@ -12,6 +13,11 @@ import {
   type TaxonomyAdjudicationProjection,
 } from "./taxonomy-adjudication.js";
 import { hasConstraintOrCorrectionSignal } from "./transcript-fusion.js";
+import {
+  isParentCanonicalQuestionType,
+  normalizeCanonicalQuestionType,
+  type CanonicalQuestionType,
+} from "./task-taxonomy.js";
 import type {
   MeetingTaskRelationAdjudicationMode,
   TranscriptTurn,
@@ -24,6 +30,8 @@ export const TASK_RELATION_ADJUDICATION_MAX_OUTPUT_CHARS = 4_096;
 export const TASK_RELATION_ADJUDICATION_MAX_PARENT_CHARS = 480;
 export const TASK_RELATION_ADJUDICATION_MAX_TRANSITION_CHARS = 600;
 export const TASK_RELATION_ADJUDICATION_MAX_SOURCE_EVIDENCE_CHARS = 720;
+export const SCREEN_RELATION_RELEASE_MIN_CONFIDENCE = 0.95;
+export const SCREEN_RELATION_RELEASE_WAIT_BUDGET_MS = 1_500;
 
 export const RUNTIME_TASK_RELATIONS = [
   "new-parent",
@@ -167,7 +175,69 @@ export interface TaskRelationAdjudicationEligibilityDecision {
   eligible: boolean;
   reason: string;
   triggerReasons: string[];
-  auditKind?: "unresolved-proposal" | "deterministic-comparison";
+  auditKind?:
+    | "unresolved-proposal"
+    | "deterministic-comparison"
+    | "screen-release-candidate";
+}
+
+export type NarrowScreenRelationReleaseReason =
+  | "eligible-awaiting-candidate"
+  | "authorized"
+  | "source-is-not-manual-screen"
+  | "screen-boundary-prior-missing"
+  | "active-parent-missing"
+  | "current-type-not-parent-eligible"
+  | "current-type-matches-parent"
+  | "screen-type-evidence-not-authorized"
+  | "screen-type-source-not-authoritative"
+  | "screen-type-confidence-below-threshold"
+  | "question-incomplete"
+  | "manual-correction-active"
+  | "active-child-conflict"
+  | "candidate-missing"
+  | "operation-lease-not-authorized"
+  | "release-window-closed"
+  | "candidate-confidence-below-threshold"
+  | "candidate-relation-not-new-parent"
+  | "candidate-not-parent-independent"
+  | "candidate-not-standalone"
+  | "candidate-binds-existing-parent";
+
+export interface NarrowScreenRelationReleaseDecision {
+  requested: boolean;
+  authorized: boolean;
+  reason: NarrowScreenRelationReleaseReason;
+  currentQuestionType: CanonicalQuestionType;
+  activeParentQuestionType: CanonicalQuestionType;
+  typeConfidence: number;
+  relationConfidence: number;
+  minimumConfidence: number;
+}
+
+export interface NarrowScreenRelationReleaseInput {
+  sourceKind: "voice" | "screen" | "mixed";
+  screenBoundaryPrior: boolean;
+  currentQuestionType: unknown;
+  activeParentQuestionType: unknown;
+  typeAuthoritySource?: string;
+  typeEvidenceAuthorized: boolean;
+  typeConfidence?: number;
+  questionComplete: boolean;
+  manualCorrectionActive: boolean;
+  hasActiveChild: boolean;
+  operationLeaseAuthorized?: boolean;
+  releaseWindowOpen?: boolean;
+  candidate?: LlmTaskRelationAdjudication;
+}
+
+export interface TaskRelationAdjudicationRuntimeOutcome {
+  disposition: string;
+  candidate?: LlmTaskRelationAdjudication;
+  settlement?: CurrentQuestionSettlementDecision;
+  operationId?: string;
+  operationLeaseAuthorized: boolean;
+  narrowScreenRelease: NarrowScreenRelationReleaseDecision;
 }
 
 export type TaskRelationAdjudicationComparisonOutcome =
@@ -254,6 +324,7 @@ export function buildTaskRelationAdjudicationRequest(input: {
 export function decideTaskRelationAdjudicationEligibility(input: {
   mode: MeetingTaskRelationAdjudicationMode;
   evaluationActive: boolean;
+  runtimeReleaseRequested?: boolean;
   speaker: "me" | "them" | "unknown";
   request: TaskRelationAdjudicationRequest;
   manualCorrectionActive: boolean;
@@ -267,7 +338,9 @@ export function decideTaskRelationAdjudicationEligibility(input: {
     triggerReasons: [] as string[],
   });
   if (input.mode === "off") return skip("task-relation-operation-off");
-  if (!input.evaluationActive) return skip("evaluation-inactive");
+  if (!input.evaluationActive && !input.runtimeReleaseRequested) {
+    return skip("evaluation-inactive");
+  }
   if (input.speaker !== "them") return skip("speaker-is-not-interviewer");
   if (!input.request.currentQuestion.safe) {
     return skip("unsafe-question-projection");
@@ -282,6 +355,17 @@ export function decideTaskRelationAdjudicationEligibility(input: {
     estimateWordEquivalents(input.request.currentQuestion.text) < 3
   ) {
     return skip("question-unit-too-short");
+  }
+  if (input.runtimeReleaseRequested) {
+    return {
+      eligible: true,
+      reason: "screen-relation-release-candidate",
+      triggerReasons: [
+        "screen-boundary-prior",
+        "cross-type-parent-eligible-question",
+      ],
+      auditKind: "screen-release-candidate",
+    };
   }
   if (input.deterministicRelationAuthorized) {
     if (
@@ -311,6 +395,126 @@ export function decideTaskRelationAdjudicationEligibility(input: {
         : "active-parent-present",
     ],
     auditKind: "unresolved-proposal",
+  };
+}
+
+export function decideNarrowScreenRelationRelease(
+  input: NarrowScreenRelationReleaseInput
+): NarrowScreenRelationReleaseDecision {
+  const currentQuestionType =
+    normalizeCanonicalQuestionType(input.currentQuestionType) ?? "unknown";
+  const activeParentQuestionType =
+    normalizeCanonicalQuestionType(input.activeParentQuestionType) ??
+    "unknown";
+  const typeConfidence = normalizeConfidence(input.typeConfidence);
+  const relationConfidence = normalizeConfidence(
+    input.candidate?.confidence
+  );
+  const reject = (
+    reason: NarrowScreenRelationReleaseReason,
+    requested = false
+  ): NarrowScreenRelationReleaseDecision => ({
+    requested,
+    authorized: false,
+    reason,
+    currentQuestionType,
+    activeParentQuestionType,
+    typeConfidence,
+    relationConfidence,
+    minimumConfidence: SCREEN_RELATION_RELEASE_MIN_CONFIDENCE,
+  });
+
+  if (input.sourceKind !== "screen") {
+    return reject("source-is-not-manual-screen");
+  }
+  if (!input.screenBoundaryPrior) {
+    return reject("screen-boundary-prior-missing");
+  }
+  if (activeParentQuestionType === "unknown") {
+    return reject("active-parent-missing");
+  }
+  if (!isParentCanonicalQuestionType(currentQuestionType)) {
+    return reject("current-type-not-parent-eligible");
+  }
+  if (currentQuestionType === activeParentQuestionType) {
+    return reject("current-type-matches-parent");
+  }
+  if (!input.typeEvidenceAuthorized) {
+    return reject("screen-type-evidence-not-authorized");
+  }
+  if (input.typeAuthoritySource !== "screen-preflight") {
+    return reject("screen-type-source-not-authoritative");
+  }
+  if (typeConfidence < SCREEN_RELATION_RELEASE_MIN_CONFIDENCE) {
+    return reject("screen-type-confidence-below-threshold");
+  }
+  if (!input.questionComplete) {
+    return reject("question-incomplete");
+  }
+  if (input.manualCorrectionActive) {
+    return reject("manual-correction-active");
+  }
+  if (input.hasActiveChild) {
+    return reject("active-child-conflict");
+  }
+  if (!input.candidate) {
+    return reject("eligible-awaiting-candidate", true);
+  }
+  if (!input.operationLeaseAuthorized) {
+    return reject("operation-lease-not-authorized", true);
+  }
+  if (input.releaseWindowOpen === false) {
+    return reject("release-window-closed", true);
+  }
+  if (relationConfidence < SCREEN_RELATION_RELEASE_MIN_CONFIDENCE) {
+    return reject("candidate-confidence-below-threshold", true);
+  }
+  if (input.candidate.relation !== "new-parent") {
+    return reject("candidate-relation-not-new-parent", true);
+  }
+  if (input.candidate.dependency !== "parent-independent") {
+    return reject("candidate-not-parent-independent", true);
+  }
+  if (
+    input.candidate.standaloneSufficiency !== "sufficient" ||
+    !input.candidate.standalone
+  ) {
+    return reject("candidate-not-standalone", true);
+  }
+  if (
+    input.candidate.explicitBinding ||
+    input.candidate.returnIntent === "resume-suspended-parent" ||
+    input.candidate.parentEvidenceSpans.length > 0
+  ) {
+    return reject("candidate-binds-existing-parent", true);
+  }
+
+  return {
+    requested: true,
+    authorized: true,
+    reason: "authorized",
+    currentQuestionType,
+    activeParentQuestionType,
+    typeConfidence,
+    relationConfidence,
+    minimumConfidence: SCREEN_RELATION_RELEASE_MIN_CONFIDENCE,
+  };
+}
+
+export function formatNarrowScreenRelationReleaseForTrace(
+  decision: NarrowScreenRelationReleaseDecision
+) {
+  return {
+    taskRelationScreenReleaseRequested: decision.requested,
+    taskRelationScreenReleaseAuthorized: decision.authorized,
+    taskRelationScreenReleaseReason: decision.reason,
+    taskRelationScreenReleaseCurrentType: decision.currentQuestionType,
+    taskRelationScreenReleaseParentType:
+      decision.activeParentQuestionType,
+    taskRelationScreenReleaseTypeConfidence: decision.typeConfidence,
+    taskRelationScreenReleaseRelationConfidence:
+      decision.relationConfidence,
+    taskRelationScreenReleaseMinConfidence: decision.minimumConfidence,
   };
 }
 
@@ -971,6 +1175,12 @@ function estimateWordEquivalents(value: string) {
     .split(/\s+/u)
     .filter(Boolean).length;
   return words + Math.ceil(cjkCharacters / 2);
+}
+
+function normalizeConfidence(value: unknown) {
+  return typeof value === "number" && Number.isFinite(value)
+    ? Math.max(0, Math.min(1, value))
+    : 0;
 }
 
 const TRANSITION_EVIDENCE_PATTERNS = [
