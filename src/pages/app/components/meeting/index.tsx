@@ -88,6 +88,7 @@ import {
   evaluateTaskSettlementTupleCompatibilityV2,
   guardAsyncUnlisten,
   normalizeCanonicalQuestionType,
+  normalizeArtifactIntentEvaluationFamily,
   overlayMeetingAnswerArtifacts,
   resolveMeetingAnswerProfile,
   resolveCriticalMomentExpectedFacts,
@@ -5453,9 +5454,9 @@ const TraceHumanEvaluationPanel = ({
       ? trace.metadata.settledExecutionPlanContextReadScope
       : undefined;
   const observedArtifactIntent =
-    typeof trace.metadata?.settledExecutionPlanArtifactIntent === "string"
-      ? trace.metadata.settledExecutionPlanArtifactIntent
-      : undefined;
+    normalizeArtifactIntentEvaluationFamily(
+      trace.metadata?.settledExecutionPlanArtifactIntent
+    );
   const transientPersonalStatusDomain =
     typeof trace.metadata?.transientPersonalStatusDomain === "string"
       ? (trace.metadata
@@ -5689,7 +5690,6 @@ const TraceHumanEvaluationPanel = ({
       | "none"
       | "preserve"
       | "revise-code"
-      | "revise-complexity"
       | "revise-whiteboard"
   ) => {
     recordGroundTruth({
@@ -6300,7 +6300,6 @@ const TraceHumanEvaluationPanel = ({
                 ["none", "None"],
                 ["preserve", "Preserve"],
                 ["revise-code", "Code"],
-                ["revise-complexity", "Complexity"],
                 ["revise-whiteboard", "Whiteboard"],
               ] as const
             ).map(([intent, label]) => (

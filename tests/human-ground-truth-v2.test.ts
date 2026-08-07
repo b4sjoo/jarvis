@@ -7,6 +7,7 @@ import {
   deriveHumanEvaluationProjectionV2,
   evaluateTaskSettlementTupleCompatibilityV2,
   importLegacyQuestionEvaluationV2,
+  normalizeArtifactIntentEvaluationFamily,
 } from "../src/lib/meeting/human-ground-truth-v2.js";
 import type {
   MeetingTrace,
@@ -19,6 +20,56 @@ const SUBJECT = {
   traceIds: ["trace_1"],
   sourceTurnIds: ["turn_1"],
 };
+
+test("normalizes legacy Complexity evaluation intent into the Code family", () => {
+  assert.equal(
+    normalizeArtifactIntentEvaluationFamily("revise-complexity"),
+    "revise-code"
+  );
+
+  const legacyEvent = createHumanGroundTruthEventV2({
+    eventId: "event_legacy_complexity",
+    sessionId: "session_1",
+    subject: SUBJECT,
+    source: "imported-legacy",
+    fact: {
+      kind: "expected-artifact-intent",
+      expectedIntent: "revise-complexity",
+    },
+    now: 2,
+  });
+  assert.deepEqual(legacyEvent.fact, {
+    kind: "expected-artifact-intent",
+    expectedIntent: "revise-code",
+  });
+});
+
+test("compares observed Complexity mutation as part of the Code family", () => {
+  const expectedCode = createHumanGroundTruthEventV2({
+    eventId: "event_expected_code",
+    sessionId: "session_1",
+    subject: SUBJECT,
+    source: "explicit-ui",
+    fact: {
+      kind: "expected-artifact-intent",
+      expectedIntent: "revise-code",
+    },
+    now: 2,
+  });
+  const projection = deriveHumanEvaluationProjectionV2({
+    sessionId: "session_1",
+    subject: SUBJECT,
+    events: [expectedCode],
+    observed: {
+      traceId: "trace_1",
+      traceHash: "hash_1",
+      artifactIntent: "revise-complexity",
+    },
+    now: 3,
+  });
+
+  assert.equal(projection.verdicts.artifactIntentCorrect, true);
+});
 
 test("validates relation and parent-action tuples before ground truth is saved", () => {
   const canonicalTuples = [

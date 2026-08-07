@@ -425,8 +425,12 @@ export function deriveHumanEvaluationProjectionV2(input: {
       artifactIntentCorrect:
         artifactIntent?.kind === "expected-artifact-intent" &&
         input.observed?.artifactIntent
-          ? artifactIntent.expectedIntent ===
-            input.observed.artifactIntent
+          ? normalizeArtifactIntentEvaluationFamily(
+              artifactIntent.expectedIntent
+            ) ===
+            normalizeArtifactIntentEvaluationFamily(
+              input.observed.artifactIntent
+            )
           : undefined,
       projectCorrect:
         projectTrajectory?.kind === "expected-project-trajectory"
@@ -504,7 +508,7 @@ export function buildHumanEvaluationObservedSnapshotV2(
   const contextReadScope = normalizeContextReadScope(
     metadata.settledExecutionPlanContextReadScope
   );
-  const artifactIntent = normalizeArtifactIntent(
+  const artifactIntent = normalizeArtifactIntentEvaluationFamily(
     metadata.settledExecutionPlanArtifactIntent
   );
   const projectId = readString(
@@ -860,6 +864,15 @@ function normalizeSubject(
 }
 
 function normalizeFact(fact: HumanGroundTruthFactV2): HumanGroundTruthFactV2 {
+  if (fact.kind === "expected-artifact-intent") {
+    const expectedIntent = normalizeArtifactIntentEvaluationFamily(
+      fact.expectedIntent
+    );
+    return {
+      ...fact,
+      expectedIntent: expectedIntent ?? fact.expectedIntent,
+    };
+  }
   if (fact.kind === "primary-ask-correction") {
     return {
       ...fact,
@@ -1113,7 +1126,9 @@ function normalizeStoredFact(
     }
   }
   if (fact.kind === "expected-artifact-intent") {
-    const expectedIntent = normalizeArtifactIntent(fact.expectedIntent);
+    const expectedIntent = normalizeArtifactIntentEvaluationFamily(
+      fact.expectedIntent
+    );
     if (expectedIntent) {
       return { kind: fact.kind, expectedIntent };
     }
@@ -1352,13 +1367,13 @@ function normalizeContextReadScope(
     : undefined;
 }
 
-function normalizeArtifactIntent(
+export function normalizeArtifactIntentEvaluationFamily(
   value: unknown
 ): SettledAdvisorArtifactIntent | undefined {
+  if (value === "revise-complexity") return "revise-code";
   return value === "none" ||
     value === "preserve" ||
     value === "revise-code" ||
-    value === "revise-complexity" ||
     value === "revise-whiteboard"
     ? value
     : undefined;
