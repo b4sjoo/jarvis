@@ -82,6 +82,7 @@ export const MaterialPanel = ({
             name: "Preparation materials",
             extensions: [
               "pdf",
+              "docx",
               "txt",
               "md",
               "markdown",
@@ -230,7 +231,7 @@ export const MaterialPanel = ({
           <DialogHeader>
             <DialogTitle>Add preparation materials</DialogTitle>
             <DialogDescription>
-              PDF, text, Markdown, PNG, JPEG, or HEIC. Stored locally.
+              PDF, DOCX, text, Markdown, PNG, JPEG, or HEIC. Stored locally.
             </DialogDescription>
           </DialogHeader>
           <div className="grid gap-2 text-sm">

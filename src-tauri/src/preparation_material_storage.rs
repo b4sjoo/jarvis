@@ -9,11 +9,20 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use tauri::AppHandle;
 use uuid::Uuid;
+use zip::ZipArchive;
 
 const TEXT_MAX_BYTES: u64 = 10 * 1024 * 1024;
 const IMAGE_MAX_BYTES: u64 = 25 * 1024 * 1024;
 const PDF_MAX_BYTES: u64 = 50 * 1024 * 1024;
+const DOCX_MAX_BYTES: u64 = 25 * 1024 * 1024;
+const DOCX_MAX_ENTRIES: usize = 512;
+const DOCX_MAX_UNCOMPRESSED_BYTES: u64 = 100 * 1024 * 1024;
+const DOCX_CONTENT_TYPES_MAX_BYTES: u64 = 1024 * 1024;
 const COPY_BUFFER_BYTES: usize = 64 * 1024;
+const DOCX_MIME_TYPE: &str =
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+const DOCX_MAIN_CONTENT_TYPE: &str =
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml";
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -238,6 +247,11 @@ fn detect_material_format(path: &Path, size_bytes: u64) -> Result<MaterialFormat
             mime_type: "application/pdf",
             max_bytes: PDF_MAX_BYTES,
         },
+        "docx" => MaterialFormat {
+            extension: "docx",
+            mime_type: DOCX_MIME_TYPE,
+            max_bytes: DOCX_MAX_BYTES,
+        },
         "txt" => MaterialFormat {
             extension: "txt",
             mime_type: "text/plain",
@@ -263,12 +277,10 @@ fn detect_material_format(path: &Path, size_bytes: u64) -> Result<MaterialFormat
             mime_type: "image/heic",
             max_bytes: IMAGE_MAX_BYTES,
         },
-        _ => {
-            return Err(
-                "Supported preparation materials are PDF, TXT, Markdown, PNG, JPEG, and HEIC."
-                    .to_string(),
-            )
-        }
+        _ => return Err(
+            "Supported preparation materials are PDF, DOCX, TXT, Markdown, PNG, JPEG, and HEIC."
+                .to_string(),
+        ),
     };
     if size_bytes > format.max_bytes {
         return Err(format!(
@@ -289,6 +301,9 @@ fn validate_file_signature(path: &Path, format: &MaterialFormat) -> Result<(), S
         }
         return Ok(());
     }
+    if format.mime_type == DOCX_MIME_TYPE {
+        return validate_docx_container(path);
+    }
 
     let mut file = File::open(path)
         .map_err(|error| format!("Failed to validate selected material: {error}"))?;
@@ -307,6 +322,68 @@ fn validate_file_signature(path: &Path, format: &MaterialFormat) -> Result<(), S
     if !valid {
         return Err("Selected material content does not match its file extension.".to_string());
     }
+    Ok(())
+}
+
+fn validate_docx_container(path: &Path) -> Result<(), String> {
+    let file = File::open(path)
+        .map_err(|error| format!("Failed to validate selected DOCX material: {error}"))?;
+    let mut archive = ZipArchive::new(file)
+        .map_err(|_| "Selected DOCX material is not a valid OOXML archive.".to_string())?;
+    if archive.len() == 0 || archive.len() > DOCX_MAX_ENTRIES {
+        return Err("Selected DOCX material has an unsafe archive structure.".to_string());
+    }
+
+    let mut total_uncompressed_bytes = 0_u64;
+    let mut has_document = false;
+    for index in 0..archive.len() {
+        let entry = archive
+            .by_index(index)
+            .map_err(|_| "Selected DOCX material has an invalid archive entry.".to_string())?;
+        if entry.enclosed_name().is_none() {
+            return Err("Selected DOCX material contains an unsafe archive path.".to_string());
+        }
+        total_uncompressed_bytes = total_uncompressed_bytes
+            .checked_add(entry.size())
+            .ok_or_else(|| "Selected DOCX material is too large to inspect safely.".to_string())?;
+        if total_uncompressed_bytes > DOCX_MAX_UNCOMPRESSED_BYTES {
+            return Err("Selected DOCX material expands beyond the safe limit.".to_string());
+        }
+        if entry.name() == "word/document.xml" && !entry.is_dir() {
+            has_document = true;
+        }
+    }
+    if !has_document {
+        return Err("Selected DOCX material is missing the main Word document.".to_string());
+    }
+
+    let content_types = {
+        let mut entry = archive
+            .by_name("[Content_Types].xml")
+            .map_err(|_| "Selected DOCX material is missing its content types.".to_string())?;
+        if entry.size() > DOCX_CONTENT_TYPES_MAX_BYTES {
+            return Err("Selected DOCX content types exceed the safe limit.".to_string());
+        }
+        let mut content = String::new();
+        entry
+            .read_to_string(&mut content)
+            .map_err(|_| "Selected DOCX content types are not valid UTF-8 XML.".to_string())?;
+        content
+    };
+    if !content_types.contains(DOCX_MAIN_CONTENT_TYPE) {
+        return Err("Selected file is not a standard macro-free DOCX document.".to_string());
+    }
+
+    let mut document = archive
+        .by_name("word/document.xml")
+        .map_err(|_| "Selected DOCX material is missing the main Word document.".to_string())?;
+    if document.size() == 0 {
+        return Err("Selected DOCX material has an empty main document.".to_string());
+    }
+    let mut marker = [0_u8; 1];
+    document
+        .read_exact(&mut marker)
+        .map_err(|_| "Selected DOCX main document cannot be read safely.".to_string())?;
     Ok(())
 }
 
@@ -339,9 +416,23 @@ fn validate_material_delete_token(material_id: &str, token: &str) -> Result<(), 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use zip::write::SimpleFileOptions;
+    use zip::ZipWriter;
 
     fn test_root() -> PathBuf {
         std::env::temp_dir().join(format!("jarvis-material-test-{}", Uuid::new_v4()))
+    }
+
+    fn write_test_zip(path: &Path, entries: &[(&str, &[u8])]) {
+        let file = File::create(path).unwrap();
+        let mut archive = ZipWriter::new(file);
+        for (name, content) in entries {
+            archive
+                .start_file(*name, SimpleFileOptions::default())
+                .unwrap();
+            archive.write_all(content).unwrap();
+        }
+        archive.finish().unwrap();
     }
 
     #[test]
@@ -386,6 +477,93 @@ mod tests {
 
         assert!(detect_material_format(&fake_pdf, 9).is_err());
         assert!(detect_material_format(&binary_text, 2).is_err());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn accepts_a_standard_macro_free_docx_container() {
+        let root = test_root();
+        fs::create_dir_all(&root).unwrap();
+        let docx = root.join("interview packet.docx");
+        let content_types = format!(
+            "<Types><Override PartName=\"/word/document.xml\" ContentType=\"{DOCX_MAIN_CONTENT_TYPE}\"/></Types>"
+        );
+        write_test_zip(
+            &docx,
+            &[
+                ("[Content_Types].xml", content_types.as_bytes()),
+                (
+                    "word/document.xml",
+                    b"<w:document xmlns:w=\"wordprocessingml\"><w:body/></w:document>",
+                ),
+            ],
+        );
+
+        let format = detect_material_format(&docx, fs::metadata(&docx).unwrap().len()).unwrap();
+        assert_eq!(format.extension, "docx");
+        assert_eq!(format.mime_type, DOCX_MIME_TYPE);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn rejects_non_docx_zip_macro_enabled_and_corrupt_docx_files() {
+        let root = test_root();
+        fs::create_dir_all(&root).unwrap();
+
+        let arbitrary_zip = root.join("notes.docx");
+        write_test_zip(&arbitrary_zip, &[("notes.txt", b"not a Word document")]);
+        assert!(detect_material_format(
+            &arbitrary_zip,
+            fs::metadata(&arbitrary_zip).unwrap().len()
+        )
+        .is_err());
+
+        let macro_docx = root.join("macro.docx");
+        write_test_zip(
+            &macro_docx,
+            &[
+                (
+                    "[Content_Types].xml",
+                    b"<Types><Override PartName=\"/word/document.xml\" ContentType=\"application/vnd.ms-word.document.macroEnabled.main+xml\"/></Types>",
+                ),
+                (
+                    "word/document.xml",
+                    b"<w:document xmlns:w=\"wordprocessingml\"><w:body/></w:document>",
+                ),
+            ],
+        );
+        assert!(
+            detect_material_format(&macro_docx, fs::metadata(&macro_docx).unwrap().len()).is_err()
+        );
+
+        let corrupt_docx = root.join("corrupt.docx");
+        fs::write(&corrupt_docx, b"PK not really a ZIP archive").unwrap();
+        assert!(
+            detect_material_format(&corrupt_docx, fs::metadata(&corrupt_docx).unwrap().len())
+                .is_err()
+        );
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn rejects_docx_archives_over_the_entry_limit() {
+        let root = test_root();
+        fs::create_dir_all(&root).unwrap();
+        let docx = root.join("too-many-entries.docx");
+        let file = File::create(&docx).unwrap();
+        let mut archive = ZipWriter::new(file);
+        for index in 0..=DOCX_MAX_ENTRIES {
+            archive
+                .start_file(
+                    format!("word/entry-{index}.xml"),
+                    SimpleFileOptions::default(),
+                )
+                .unwrap();
+        }
+        archive.finish().unwrap();
+
+        assert!(detect_material_format(&docx, fs::metadata(&docx).unwrap().len()).is_err());
         fs::remove_dir_all(root).unwrap();
     }
 
