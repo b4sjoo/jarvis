@@ -22,6 +22,8 @@ import {
   type InterviewProcess,
   type InterviewProcessDetail,
   type InterviewRoundStage,
+  interviewPreparationMaterialService,
+  type PreparationMaterial,
 } from "@/lib/preparation";
 import {
   Archive,
@@ -43,6 +45,7 @@ import {
   useState,
 } from "react";
 import { useNavigate, useParams } from "react-router-dom";
+import { MaterialPanel } from "./components/MaterialPanel";
 
 type MobilePanel = "processes" | "conversation" | "review";
 
@@ -51,9 +54,11 @@ const InterviewPreparation = () => {
   const navigate = useNavigate();
   const [processes, setProcesses] = useState<InterviewProcess[]>([]);
   const [detail, setDetail] = useState<InterviewProcessDetail>();
+  const [materials, setMaterials] = useState<PreparationMaterial[]>([]);
   const [showArchived, setShowArchived] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string>();
+  const [notice, setNotice] = useState<string>();
   const [createOpen, setCreateOpen] = useState(false);
   const [roundOpen, setRoundOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
@@ -73,10 +78,24 @@ const InterviewPreparation = () => {
     setDetail(loaded);
   }, []);
 
+  const loadMaterials = useCallback(async (id: string | undefined) => {
+    if (!id) {
+      setMaterials([]);
+      return;
+    }
+    setMaterials(await interviewPreparationMaterialService.list(id));
+  }, []);
+
   useEffect(() => {
     let cancelled = false;
+    setError(undefined);
+    setNotice(undefined);
     setIsLoading(true);
-    Promise.all([loadProcesses(), loadDetail(processId)])
+    Promise.all([
+      loadProcesses(),
+      loadDetail(processId),
+      loadMaterials(processId),
+    ])
       .catch((reason) => {
         if (!cancelled) setError(errorMessage(reason));
       })
@@ -86,12 +105,16 @@ const InterviewPreparation = () => {
     return () => {
       cancelled = true;
     };
-  }, [loadDetail, loadProcesses, processId]);
+  }, [loadDetail, loadMaterials, loadProcesses, processId]);
 
   const refresh = async (selectedId = processId) => {
     setError(undefined);
     try {
-      await Promise.all([loadProcesses(), loadDetail(selectedId)]);
+      await Promise.all([
+        loadProcesses(),
+        loadDetail(selectedId),
+        loadMaterials(selectedId),
+      ]);
     } catch (reason) {
       setError(errorMessage(reason));
     }
@@ -154,6 +177,9 @@ const InterviewPreparation = () => {
         <div className="border-destructive/30 bg-destructive/10 text-destructive border px-3 py-2 text-sm">
           {error}
         </div>
+      )}
+      {notice && (
+        <div className="border bg-muted px-3 py-2 text-sm">{notice}</div>
       )}
 
       <MobilePanelSelector value={mobilePanel} onChange={setMobilePanel} />
@@ -238,7 +264,19 @@ const InterviewPreparation = () => {
         <section
           className={`${mobilePanel === "review" ? "block" : "hidden"} border-l lg:block`}
         >
-          <ReviewedStatePanel detail={detail} />
+          <ReviewedStatePanel
+            detail={detail}
+            materials={materials}
+            onMaterialsChanged={() => loadMaterials(detail?.process.id)}
+            onMaterialError={(message) => {
+              setNotice(undefined);
+              setError(message);
+            }}
+            onMaterialNotice={(message) => {
+              setError(undefined);
+              setNotice(message);
+            }}
+          />
         </section>
       </div>
 
@@ -248,6 +286,7 @@ const InterviewPreparation = () => {
         onCreated={(created) => {
           setCreateOpen(false);
           setProcesses((current) => [created.process, ...current]);
+          setMaterials([]);
           navigate(`/interview-preparation/${created.process.id}`);
           setMobilePanel("conversation");
         }}
@@ -383,8 +422,31 @@ const ProcessWorkspace = ({
   </div>
 );
 
-const ReviewedStatePanel = ({ detail }: { detail?: InterviewProcessDetail }) => (
+const ReviewedStatePanel = ({
+  detail,
+  materials,
+  onMaterialsChanged,
+  onMaterialError,
+  onMaterialNotice,
+}: {
+  detail?: InterviewProcessDetail;
+  materials: PreparationMaterial[];
+  onMaterialsChanged: () => Promise<void>;
+  onMaterialError: (message: string) => void;
+  onMaterialNotice: (message: string) => void;
+}) => (
   <div className="min-h-[640px]">
+    {detail && (
+      <MaterialPanel
+        processId={detail.process.id}
+        processStatus={detail.process.status}
+        rounds={detail.rounds}
+        materials={materials}
+        onChanged={onMaterialsChanged}
+        onError={onMaterialError}
+        onNotice={onMaterialNotice}
+      />
+    )}
     <div className="flex h-12 items-center justify-between border-b px-4">
       <span className="text-sm font-semibold">Reviewed State</span>
       <Badge variant="outline">Draft</Badge>

@@ -95,3 +95,78 @@ export interface PreparationSourceRef {
   contentHash: string;
   createdAt: number;
 }
+
+export type PreparationMaterialRevisionStatus =
+  | "pending"
+  | "extracting"
+  | "ready"
+  | "needs-review"
+  | "unsupported"
+  | "failed";
+
+export interface PreparationMaterialRevision {
+  id: string;
+  materialId: string;
+  revision: number;
+  sourceChecksumSha256: string;
+  extractionStatus: PreparationMaterialRevisionStatus;
+  extractedTextRelativePath?: string;
+  extractionMetadata?: string;
+  createdAt: number;
+  completedAt?: number;
+}
+
+export interface PreparationMaterialRepository {
+  insert(input: {
+    material: PreparationMaterial;
+    revision: PreparationMaterialRevision;
+    sourceRef: PreparationSourceRef;
+  }): Promise<void>;
+  get(id: string): Promise<PreparationMaterial | undefined>;
+  list(workspaceId: string): Promise<PreparationMaterial[]>;
+  findByChecksum(
+    workspaceId: string,
+    checksumSha256: string
+  ): Promise<PreparationMaterial | undefined>;
+  setLifecycle(input: {
+    id: string;
+    workspaceId: string;
+    status: PreparationMaterialStatus;
+    updatedAt: number;
+    deletedAt?: number;
+  }): Promise<void>;
+}
+
+export interface ImportedPreparationMaterialFile {
+  originalFileName: string;
+  mimeType: string;
+  extension: string;
+  sizeBytes: number;
+  checksumSha256: string;
+  storageRelativePath: string;
+}
+
+export interface PreparationMaterialStorageGateway {
+  import(input: {
+    kind: PreparationWorkspaceKind;
+    workspaceId: string;
+    materialId: string;
+    sourcePath: string;
+  }): Promise<ImportedPreparationMaterialFile>;
+  stageDelete(input: {
+    kind: PreparationWorkspaceKind;
+    workspaceId: string;
+    materialId: string;
+  }): Promise<{ token?: string }>;
+  restoreDelete(input: {
+    kind: PreparationWorkspaceKind;
+    workspaceId: string;
+    materialId: string;
+    token: string;
+  }): Promise<void>;
+  commitDelete(input: {
+    kind: PreparationWorkspaceKind;
+    workspaceId: string;
+    token: string;
+  }): Promise<void>;
+}

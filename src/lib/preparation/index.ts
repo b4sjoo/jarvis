@@ -3,4 +3,6 @@ export * from "./workspace-service.js";
 export * from "./tauri-storage.js";
 export * from "./interview-types.js";
 export * from "./interview-process-service.js";
+export * from "./material-service.js";
+export * from "./material-tauri-storage.js";
 export * from "./app-service.js";

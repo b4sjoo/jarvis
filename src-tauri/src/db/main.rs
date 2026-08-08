@@ -38,5 +38,12 @@ pub fn migrations() -> Vec<Migration> {
             sql: include_str!("migrations/interview-preparation-domain.sql"),
             kind: MigrationKind::Up,
         },
+        // Migration 6: Enforce active material checksum uniqueness per workspace
+        Migration {
+            version: 6,
+            description: "add_preparation_material_constraints",
+            sql: include_str!("migrations/preparation-material-constraints.sql"),
+            kind: MigrationKind::Up,
+        },
     ]
 }

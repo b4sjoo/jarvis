@@ -1,5 +1,6 @@
 mod capture;
 mod db;
+mod preparation_material_storage;
 mod preparation_storage;
 mod shortcuts;
 mod stt_evaluation;
@@ -400,6 +401,7 @@ pub fn run() {
         .manage(shortcuts::RegisteredShortcuts::default())
         .manage(shortcuts::MoveWindowState::default())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_keychain::init())
         .plugin(tauri_plugin_shell::init())
@@ -429,6 +431,10 @@ pub fn run() {
             preparation_storage::stage_preparation_workspace_storage_delete,
             preparation_storage::restore_preparation_workspace_storage_delete,
             preparation_storage::commit_preparation_workspace_storage_delete,
+            preparation_material_storage::import_preparation_material_file,
+            preparation_material_storage::stage_preparation_material_storage_delete,
+            preparation_material_storage::restore_preparation_material_storage_delete,
+            preparation_material_storage::commit_preparation_material_storage_delete,
             window::set_window_height,
             window::open_dashboard,
             window::toggle_dashboard,

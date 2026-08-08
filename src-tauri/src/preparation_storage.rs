@@ -102,7 +102,7 @@ pub fn commit_preparation_workspace_storage_delete(
     Ok(true)
 }
 
-fn preparation_relative_root(kind: &str, workspace_id: &str) -> Result<PathBuf, String> {
+pub(crate) fn preparation_relative_root(kind: &str, workspace_id: &str) -> Result<PathBuf, String> {
     validate_workspace_id(workspace_id)?;
     let namespace = match kind {
         "interview" => INTERVIEW_PREPARATION_DIR,
@@ -112,20 +112,24 @@ fn preparation_relative_root(kind: &str, workspace_id: &str) -> Result<PathBuf, 
     Ok(PathBuf::from(namespace).join(workspace_id))
 }
 
-fn validate_workspace_id(workspace_id: &str) -> Result<(), String> {
-    if workspace_id.is_empty() || workspace_id.len() > MAX_WORKSPACE_ID_CHARS {
-        return Err("Invalid preparation workspace id.".to_string());
+pub(crate) fn validate_preparation_identifier(value: &str, label: &str) -> Result<(), String> {
+    if value.is_empty() || value.len() > MAX_WORKSPACE_ID_CHARS {
+        return Err(format!("Invalid preparation {label}."));
     }
-    if !workspace_id
+    if !value
         .chars()
         .all(|character| character.is_ascii_alphanumeric() || matches!(character, '-' | '_'))
     {
-        return Err("Invalid preparation workspace id.".to_string());
+        return Err(format!("Invalid preparation {label}."));
     }
     Ok(())
 }
 
-fn validate_storage_token(token: &str) -> Result<(), String> {
+fn validate_workspace_id(workspace_id: &str) -> Result<(), String> {
+    validate_preparation_identifier(workspace_id, "workspace id")
+}
+
+pub(crate) fn validate_storage_token(token: &str) -> Result<(), String> {
     if token.is_empty() || token.len() > 256 {
         return Err("Invalid preparation storage delete token.".to_string());
     }
@@ -161,7 +165,7 @@ fn preparation_trash_path(
     app_data_path(app, &PathBuf::from(namespace).join(".trash").join(token))
 }
 
-fn app_data_path(app: &AppHandle, relative_root: &Path) -> Result<PathBuf, String> {
+pub(crate) fn app_data_path(app: &AppHandle, relative_root: &Path) -> Result<PathBuf, String> {
     let app_data = app
         .path()
         .app_data_dir()
@@ -169,7 +173,7 @@ fn app_data_path(app: &AppHandle, relative_root: &Path) -> Result<PathBuf, Strin
     Ok(app_data.join(relative_root))
 }
 
-fn reject_symlink(path: &Path) -> Result<(), String> {
+pub(crate) fn reject_symlink(path: &Path) -> Result<(), String> {
     match fs::symlink_metadata(path) {
         Ok(metadata) if metadata.file_type().is_symlink() => {
             Err("Preparation workspace storage cannot be a symlink.".to_string())
@@ -182,7 +186,7 @@ fn reject_symlink(path: &Path) -> Result<(), String> {
     }
 }
 
-fn path_to_relative_string(path: &Path) -> String {
+pub(crate) fn path_to_relative_string(path: &Path) -> String {
     path.components()
         .map(|component| component.as_os_str().to_string_lossy())
         .collect::<Vec<_>>()
