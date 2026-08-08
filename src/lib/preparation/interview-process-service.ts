@@ -27,6 +27,18 @@ export interface CreateInterviewRoundInput {
   preferredProgrammingLanguage?: string;
 }
 
+export interface UpdateInterviewProcessInput {
+  title: string;
+  company?: string;
+  role?: string;
+}
+
+export interface UpdateInterviewRoundInput {
+  title?: string;
+  stage: InterviewRoundStage;
+  scheduledAt?: number;
+}
+
 export interface InterviewProcessServiceDependencies {
   repository: InterviewProcessRepository;
   workspaces: PreparationWorkspaceLifecycle;
@@ -63,6 +75,7 @@ export function createInterviewProcessService(
         input: input.initialRound,
         id: createId(),
         timestamp,
+        existingRounds: [],
       });
 
       try {
@@ -101,14 +114,65 @@ export function createInterviewProcessService(
       const process = await requireProcess(dependencies.repository, processId);
       requireActiveProcess(process);
       const timestamp = now();
+      const existingRounds = await dependencies.repository.listRounds(process.id);
       const round = createRoundRecord({
         processId: process.id,
         input,
         id: createId(),
         timestamp,
+        existingRounds,
       });
       await dependencies.repository.insertRound(round);
       return round;
+    },
+
+    async updateProcess(processId: string, input: UpdateInterviewProcessInput) {
+      const previous = await requireProcess(dependencies.repository, processId);
+      requireActiveProcess(previous);
+      const timestamp = now();
+      const process: InterviewProcess = {
+        ...previous,
+        title: normalizeRequiredText(input.title, "Process title", 160),
+        company: normalizeOptionalText(input.company, 120),
+        role: normalizeOptionalText(input.role, 160),
+        updatedAt: timestamp,
+      };
+      await dependencies.repository.updateProcess({ previous, process });
+      return process;
+    },
+
+    async updateRound(
+      processId: string,
+      roundId: string,
+      input: UpdateInterviewRoundInput
+    ) {
+      const [process, round, existingRounds] = await Promise.all([
+        requireProcess(dependencies.repository, processId),
+        dependencies.repository.getRound(roundId),
+        dependencies.repository.listRounds(processId),
+      ]);
+      requireActiveProcess(process);
+      if (!round || round.processId !== process.id) {
+        throw new Error("Interview round does not belong to this process.");
+      }
+      const timestamp = now();
+      const updated: InterviewRound = {
+        ...round,
+        title: resolveRoundTitle(
+          input.title,
+          input.stage,
+          existingRounds.filter((entry) => entry.id !== round.id)
+        ),
+        stage: input.stage,
+        expectedInterviewTypes:
+          input.stage === round.stage
+            ? round.expectedInterviewTypes
+            : expectedTypesForStage(input.stage),
+        scheduledAt: input.scheduledAt,
+        updatedAt: timestamp,
+      };
+      await dependencies.repository.updateRound(updated);
+      return updated;
     },
 
     async setActiveRound(processId: string, roundId: string) {
@@ -151,13 +215,16 @@ function createRoundRecord(input: {
   input: CreateInterviewRoundInput;
   id: string;
   timestamp: number;
+  existingRounds: InterviewRound[];
 }): InterviewRound {
   return {
     id: input.id,
     processId: input.processId,
-    title:
-      normalizeOptionalText(input.input.title, 120) ??
-      formatRoundStage(input.input.stage),
+    title: resolveRoundTitle(
+      input.input.title,
+      input.input.stage,
+      input.existingRounds
+    ),
     stage: input.input.stage,
     expectedInterviewTypes:
       input.input.expectedInterviewTypes ?? expectedTypesForStage(input.input.stage),
@@ -172,6 +239,35 @@ function createRoundRecord(input: {
     createdAt: input.timestamp,
     updatedAt: input.timestamp,
   };
+}
+
+function resolveRoundTitle(
+  title: string | undefined,
+  stage: InterviewRoundStage,
+  existingRounds: InterviewRound[]
+) {
+  const explicit = normalizeOptionalText(title, 120);
+  const existingKeys = new Set(
+    existingRounds.map((round) => normalizeRoundTitleKey(round.title))
+  );
+  if (explicit) {
+    if (existingKeys.has(normalizeRoundTitleKey(explicit))) {
+      throw new Error("Round title must be unique within this interview process.");
+    }
+    return explicit;
+  }
+
+  const base = formatRoundStage(stage);
+  if (!existingKeys.has(normalizeRoundTitleKey(base))) return base;
+  for (let suffix = 2; suffix <= existingRounds.length + 2; suffix += 1) {
+    const candidate = `${base} ${suffix}`;
+    if (!existingKeys.has(normalizeRoundTitleKey(candidate))) return candidate;
+  }
+  throw new Error("Could not generate a unique round title.");
+}
+
+function normalizeRoundTitleKey(title: string) {
+  return title.trim().replace(/\s+/g, " ").toLowerCase();
 }
 
 export function expectedTypesForStage(

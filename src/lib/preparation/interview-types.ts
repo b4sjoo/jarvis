@@ -61,9 +61,14 @@ export interface InterviewProcessDetail {
 
 export interface InterviewProcessRepository {
   insertProcess(process: InterviewProcess): Promise<void>;
+  updateProcess(input: {
+    previous: InterviewProcess;
+    process: InterviewProcess;
+  }): Promise<void>;
   getProcess(id: string): Promise<InterviewProcess | undefined>;
   listProcesses(input?: { includeArchived?: boolean }): Promise<InterviewProcess[]>;
   insertRound(round: InterviewRound): Promise<void>;
+  updateRound(round: InterviewRound): Promise<void>;
   getRound(id: string): Promise<InterviewRound | undefined>;
   listRounds(processId: string): Promise<InterviewRound[]>;
   setActiveRound(input: {

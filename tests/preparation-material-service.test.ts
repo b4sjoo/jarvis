@@ -189,6 +189,7 @@ function createHarness(
 
   const interviewProcesses: InterviewProcessRepository = {
     async insertProcess() {},
+    async updateProcess() {},
     async getProcess() {
       return undefined;
     },
@@ -196,6 +197,7 @@ function createHarness(
       return [];
     },
     async insertRound() {},
+    async updateRound() {},
     async getRound(roundId) {
       return rounds.get(roundId);
     },

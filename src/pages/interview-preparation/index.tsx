@@ -21,6 +21,7 @@ import {
   interviewPreparationService,
   type InterviewProcess,
   type InterviewProcessDetail,
+  type InterviewRound,
   type InterviewRoundStage,
   interviewPreparationMaterialService,
   type PreparationMaterial,
@@ -33,6 +34,7 @@ import {
   FileText,
   Loader2,
   MessageSquare,
+  Pencil,
   Plus,
   RotateCcw,
   Trash2,
@@ -60,7 +62,9 @@ const InterviewPreparation = () => {
   const [error, setError] = useState<string>();
   const [notice, setNotice] = useState<string>();
   const [createOpen, setCreateOpen] = useState(false);
+  const [processEditOpen, setProcessEditOpen] = useState(false);
   const [roundOpen, setRoundOpen] = useState(false);
+  const [roundEditTarget, setRoundEditTarget] = useState<InterviewRound>();
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [mobilePanel, setMobilePanel] = useState<MobilePanel>("processes");
 
@@ -88,6 +92,8 @@ const InterviewPreparation = () => {
 
   useEffect(() => {
     let cancelled = false;
+    setProcessEditOpen(false);
+    setRoundEditTarget(undefined);
     setError(undefined);
     setNotice(undefined);
     setIsLoading(true);
@@ -239,6 +245,8 @@ const InterviewPreparation = () => {
             <ProcessWorkspace
               detail={detail}
               onAddRound={() => setRoundOpen(true)}
+              onEditProcess={() => setProcessEditOpen(true)}
+              onEditRound={setRoundEditTarget}
               onSetActiveRound={async (roundId) => {
                 try {
                   await interviewPreparationService.setActiveRound(
@@ -300,6 +308,26 @@ const InterviewPreparation = () => {
           await refresh(detail?.process.id);
         }}
       />
+      <EditProcessDialog
+        process={detail?.process}
+        open={processEditOpen}
+        onOpenChange={setProcessEditOpen}
+        onUpdated={async () => {
+          setProcessEditOpen(false);
+          await refresh(detail?.process.id);
+        }}
+      />
+      <EditRoundDialog
+        processId={detail?.process.id}
+        round={roundEditTarget}
+        onOpenChange={(open) => {
+          if (!open) setRoundEditTarget(undefined);
+        }}
+        onUpdated={async () => {
+          setRoundEditTarget(undefined);
+          await refresh(detail?.process.id);
+        }}
+      />
       <Dialog open={deleteOpen} onOpenChange={setDeleteOpen}>
         <DialogContent>
           <DialogHeader>
@@ -325,6 +353,8 @@ const InterviewPreparation = () => {
 const ProcessWorkspace = ({
   detail,
   onAddRound,
+  onEditProcess,
+  onEditRound,
   onSetActiveRound,
   onArchive,
   onReopen,
@@ -332,6 +362,8 @@ const ProcessWorkspace = ({
 }: {
   detail: InterviewProcessDetail;
   onAddRound: () => void;
+  onEditProcess: () => void;
+  onEditRound: (round: InterviewRound) => void;
   onSetActiveRound: (roundId: string) => Promise<void>;
   onArchive: () => Promise<void>;
   onReopen: () => Promise<void>;
@@ -350,6 +382,16 @@ const ProcessWorkspace = ({
         </div>
       </div>
       <div className="flex shrink-0 gap-1">
+        {detail.process.status === "active" && (
+          <Button
+            size="icon"
+            variant="outline"
+            title="Edit process"
+            onClick={onEditProcess}
+          >
+            <Pencil className="size-4" />
+          </Button>
+        )}
         {detail.process.status === "archived" ? (
           <Button size="icon" variant="outline" title="Reopen" onClick={onReopen}>
             <RotateCcw className="size-4" />
@@ -381,31 +423,45 @@ const ProcessWorkspace = ({
         {detail.rounds.map((round) => {
           const active = round.id === detail.process.activeRoundId;
           return (
-            <button
+            <div
               key={round.id}
-              className="flex w-full items-center gap-3 border-b px-4 py-3 text-left last:border-b-0 hover:bg-muted/60 disabled:cursor-default"
-              onClick={() => onSetActiveRound(round.id)}
-              disabled={active || detail.process.status === "archived"}
+              className="flex items-stretch border-b last:border-b-0"
             >
-              {active ? (
-                <CheckCircle2 className="size-4 shrink-0 text-primary" />
-              ) : (
-                <Circle className="size-4 shrink-0 text-muted-foreground" />
-              )}
-              <div className="min-w-0 flex-1">
-                <div className="truncate text-sm font-medium">{round.title}</div>
-                <div className="mt-0.5 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-                  <span>{formatRoundStage(round.stage)}</span>
-                  {round.scheduledAt && (
-                    <span className="flex items-center gap-1">
-                      <CalendarDays className="size-3" />
-                      {new Date(round.scheduledAt).toLocaleString()}
-                    </span>
-                  )}
+              <button
+                className="flex min-w-0 flex-1 items-center gap-3 px-4 py-3 text-left hover:bg-muted/60 disabled:cursor-default"
+                onClick={() => onSetActiveRound(round.id)}
+                disabled={active || detail.process.status === "archived"}
+              >
+                {active ? (
+                  <CheckCircle2 className="size-4 shrink-0 text-primary" />
+                ) : (
+                  <Circle className="size-4 shrink-0 text-muted-foreground" />
+                )}
+                <div className="min-w-0 flex-1">
+                  <div className="truncate text-sm font-medium">{round.title}</div>
+                  <div className="mt-0.5 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                    <span>{formatRoundStage(round.stage)}</span>
+                    {round.scheduledAt && (
+                      <span className="flex items-center gap-1">
+                        <CalendarDays className="size-3" />
+                        {new Date(round.scheduledAt).toLocaleString()}
+                      </span>
+                    )}
+                  </div>
                 </div>
-              </div>
-              <Badge variant="outline">{round.expectedTypePolicy}</Badge>
-            </button>
+                <Badge variant="outline">{round.expectedTypePolicy}</Badge>
+              </button>
+              <Button
+                size="icon"
+                variant="ghost"
+                className="my-auto mr-2 shrink-0"
+                title={`Edit ${round.title}`}
+                disabled={detail.process.status === "archived"}
+                onClick={() => onEditRound(round)}
+              >
+                <Pencil className="size-4" />
+              </Button>
+            </div>
           );
         })}
       </div>
@@ -440,6 +496,7 @@ const ReviewedStatePanel = ({
       <MaterialPanel
         processId={detail.process.id}
         processStatus={detail.process.status}
+        activeRoundId={detail.process.activeRoundId}
         rounds={detail.rounds}
         materials={materials}
         onChanged={onMaterialsChanged}
@@ -624,6 +681,170 @@ const CreateRoundDialog = ({
   );
 };
 
+const EditProcessDialog = ({
+  process,
+  open,
+  onOpenChange,
+  onUpdated,
+}: {
+  process?: InterviewProcess;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  onUpdated: () => Promise<void>;
+}) => {
+  const [title, setTitle] = useState("");
+  const [company, setCompany] = useState("");
+  const [role, setRole] = useState("");
+  const [isSaving, setIsSaving] = useState(false);
+  const [error, setError] = useState<string>();
+
+  useEffect(() => {
+    if (!open || !process) return;
+    setTitle(process.title);
+    setCompany(process.company ?? "");
+    setRole(process.role ?? "");
+    setError(undefined);
+  }, [open, process]);
+
+  const submit = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!process) return;
+    setIsSaving(true);
+    setError(undefined);
+    try {
+      await interviewPreparationService.updateProcess(process.id, {
+        title,
+        company,
+        role,
+      });
+      await onUpdated();
+    } catch (reason) {
+      setError(errorMessage(reason));
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent>
+        <form onSubmit={submit} className="grid gap-4">
+          <DialogHeader>
+            <DialogTitle>Edit interview process</DialogTitle>
+            <DialogDescription>
+              Existing rounds and material scopes keep their identities.
+            </DialogDescription>
+          </DialogHeader>
+          <Field label="Process title">
+            <Input value={title} onChange={(event) => setTitle(event.target.value)} />
+          </Field>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <Field label="Company">
+              <Input value={company} onChange={(event) => setCompany(event.target.value)} />
+            </Field>
+            <Field label="Role">
+              <Input value={role} onChange={(event) => setRole(event.target.value)} />
+            </Field>
+          </div>
+          {error && <div className="text-sm text-destructive">{error}</div>}
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
+              Cancel
+            </Button>
+            <Button type="submit" disabled={!process || !title.trim() || isSaving}>
+              {isSaving && <Loader2 className="size-4 animate-spin" />}
+              Save
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+};
+
+const EditRoundDialog = ({
+  processId,
+  round,
+  onOpenChange,
+  onUpdated,
+}: {
+  processId?: string;
+  round?: InterviewRound;
+  onOpenChange: (open: boolean) => void;
+  onUpdated: () => Promise<void>;
+}) => {
+  const [title, setTitle] = useState("");
+  const [stage, setStage] = useState<InterviewRoundStage>("coding");
+  const [scheduledAt, setScheduledAt] = useState("");
+  const [isSaving, setIsSaving] = useState(false);
+  const [error, setError] = useState<string>();
+
+  useEffect(() => {
+    if (!round) return;
+    setTitle(round.title);
+    setStage(round.stage);
+    setScheduledAt(toLocalDateTimeInput(round.scheduledAt));
+    setError(undefined);
+  }, [round]);
+
+  const submit = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!processId || !round) return;
+    setIsSaving(true);
+    setError(undefined);
+    try {
+      await interviewPreparationService.updateRound(processId, round.id, {
+        title,
+        stage,
+        scheduledAt: scheduledAt ? new Date(scheduledAt).getTime() : undefined,
+      });
+      await onUpdated();
+    } catch (reason) {
+      setError(errorMessage(reason));
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  return (
+    <Dialog open={Boolean(round)} onOpenChange={onOpenChange}>
+      <DialogContent>
+        <form onSubmit={submit} className="grid gap-4">
+          <DialogHeader>
+            <DialogTitle>Edit interview round</DialogTitle>
+            <DialogDescription>
+              The round ID and existing material assignments remain unchanged.
+            </DialogDescription>
+          </DialogHeader>
+          <Field label="Round title">
+            <Input value={title} onChange={(event) => setTitle(event.target.value)} />
+          </Field>
+          <Field label="Stage">
+            <RoundStageSelect value={stage} onChange={setStage} />
+          </Field>
+          <Field label="Scheduled time">
+            <Input
+              type="datetime-local"
+              value={scheduledAt}
+              onChange={(event) => setScheduledAt(event.target.value)}
+            />
+          </Field>
+          {error && <div className="text-sm text-destructive">{error}</div>}
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
+              Cancel
+            </Button>
+            <Button type="submit" disabled={!processId || !round || isSaving}>
+              {isSaving && <Loader2 className="size-4 animate-spin" />}
+              Save
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+};
+
 const RoundStageSelect = ({
   value,
   onChange,
@@ -695,6 +916,13 @@ const FilterButton = ({
 
 function errorMessage(reason: unknown) {
   return reason instanceof Error ? reason.message : String(reason);
+}
+
+function toLocalDateTimeInput(timestamp: number | undefined) {
+  if (!timestamp) return "";
+  const local = new Date(timestamp);
+  local.setMinutes(local.getMinutes() - local.getTimezoneOffset());
+  return local.toISOString().slice(0, 16);
 }
 
 export default InterviewPreparation;

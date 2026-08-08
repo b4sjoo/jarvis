@@ -73,6 +73,51 @@ export const interviewProcessRepository: InterviewProcessRepository = {
     );
   },
 
+  async updateProcess({ previous, process }) {
+    const db = await getDatabase();
+    const processResult = await db.execute(
+      `UPDATE interview_processes
+       SET company = ?, role = ?, updated_at = ?
+       WHERE id = ?`,
+      [
+        process.company ?? null,
+        process.role ?? null,
+        process.updatedAt,
+        process.id,
+      ]
+    );
+    if (processResult.rowsAffected === 0) {
+      throw new Error("Interview process not found.");
+    }
+
+    try {
+      const workspaceResult = await db.execute(
+        `UPDATE preparation_workspaces
+         SET title = ?, updated_at = ?
+         WHERE id = ? AND status = 'active'`,
+        [process.title, process.updatedAt, process.workspaceId]
+      );
+      if (workspaceResult.rowsAffected === 0) {
+        throw new Error("Active interview preparation workspace not found.");
+      }
+    } catch (error) {
+      await db
+        .execute(
+          `UPDATE interview_processes
+           SET company = ?, role = ?, updated_at = ?
+           WHERE id = ?`,
+          [
+            previous.company ?? null,
+            previous.role ?? null,
+            previous.updatedAt,
+            previous.id,
+          ]
+        )
+        .catch(() => {});
+      throw error;
+    }
+  },
+
   async getProcess(id) {
     const db = await getDatabase();
     const rows = await db.select<InterviewProcessRow[]>(
@@ -116,6 +161,33 @@ export const interviewProcessRepository: InterviewProcessRepository = {
         round.archivedAt ?? null,
       ]
     );
+  },
+
+  async updateRound(round) {
+    const db = await getDatabase();
+    const result = await db.execute(
+      `UPDATE interview_rounds
+       SET title = ?, stage = ?, expected_interview_types = ?,
+           expected_type_policy = ?, scheduled_at = ?, interviewer_name = ?,
+           interviewer_role = ?, preferred_programming_language = ?, updated_at = ?
+       WHERE id = ? AND process_id = ? AND archived_at IS NULL`,
+      [
+        round.title,
+        round.stage,
+        JSON.stringify(round.expectedInterviewTypes),
+        round.expectedTypePolicy,
+        round.scheduledAt ?? null,
+        round.interviewerName ?? null,
+        round.interviewerRole ?? null,
+        round.preferredProgrammingLanguage ?? null,
+        round.updatedAt,
+        round.id,
+        round.processId,
+      ]
+    );
+    if (result.rowsAffected === 0) {
+      throw new Error("Interview round not found.");
+    }
   },
 
   async getRound(id) {

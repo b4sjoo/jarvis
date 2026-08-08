@@ -87,6 +87,61 @@ test("adds and activates a later round without changing round semantics", async 
   ]);
 });
 
+test("numbers blank round titles and rejects normalized duplicates", async () => {
+  const harness = createHarness();
+  const service = createInterviewProcessService(harness.dependencies);
+  const detail = await service.create({
+    title: "Process",
+    initialRound: { stage: "coding" },
+  });
+
+  const second = await service.addRound(detail.process.id, { stage: "coding" });
+  assert.equal(detail.rounds[0].title, "Coding");
+  assert.equal(second.title, "Coding 2");
+  await assert.rejects(
+    service.addRound(detail.process.id, {
+      stage: "behavioral",
+      title: "  CODING   2 ",
+    }),
+    /must be unique/
+  );
+});
+
+test("edits process and round metadata without changing their identities", async () => {
+  const harness = createHarness();
+  const service = createInterviewProcessService(harness.dependencies);
+  const detail = await service.create({
+    title: "Typo",
+    company: "Snowflak",
+    initialRound: { stage: "coding" },
+  });
+  const process = await service.updateProcess(detail.process.id, {
+    title: "Snowflake Interview",
+    company: "Snowflake",
+    role: "Senior ML Engineer",
+  });
+  const round = await service.updateRound(
+    detail.process.id,
+    detail.rounds[0].id,
+    {
+      title: "System Design",
+      stage: "ai-ml-system-design",
+      scheduledAt: 9_000,
+    }
+  );
+
+  assert.equal(process.id, detail.process.id);
+  assert.equal(process.title, "Snowflake Interview");
+  assert.equal(round.id, detail.rounds[0].id);
+  assert.equal(round.stage, "ai-ml-system-design");
+  assert.equal(round.scheduledAt, 9_000);
+  assert.deepEqual(round.expectedInterviewTypes, [
+    "ai-ml-system-design",
+    "field-knowledge",
+    "coding",
+  ]);
+});
+
 test("reloads the active process and its rounds from the repository", async () => {
   const harness = createHarness();
   const service = createInterviewProcessService(harness.dependencies);
@@ -134,6 +189,18 @@ test("keeps archived interview processes read-only", async () => {
 
   await assert.rejects(
     service.addRound(detail.process.id, { stage: "behavioral" }),
+    /read-only/
+  );
+  await assert.rejects(
+    service.updateProcess(detail.process.id, {
+      title: "Still archived",
+    }),
+    /read-only/
+  );
+  await assert.rejects(
+    service.updateRound(detail.process.id, detail.rounds[0].id, {
+      stage: "coding",
+    }),
     /read-only/
   );
 });
@@ -189,6 +256,9 @@ function createHarness(options: { failRoundInsert?: boolean } = {}) {
     async insertProcess(process) {
       processes.set(process.id, { ...process });
     },
+    async updateProcess(input) {
+      processes.set(input.process.id, { ...input.process });
+    },
     async getProcess(processId) {
       const process = processes.get(processId);
       return process ? { ...process } : undefined;
@@ -198,6 +268,9 @@ function createHarness(options: { failRoundInsert?: boolean } = {}) {
     },
     async insertRound(round) {
       if (options.failRoundInsert) throw new Error("round insert failed");
+      rounds.set(round.id, { ...round });
+    },
+    async updateRound(round) {
       rounds.set(round.id, { ...round });
     },
     async getRound(roundId) {

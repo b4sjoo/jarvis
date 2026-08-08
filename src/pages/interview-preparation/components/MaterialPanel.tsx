@@ -15,6 +15,8 @@ import {
 } from "@/components";
 import {
   interviewPreparationMaterialService,
+  formatPreparationMaterialType,
+  materialsForActiveRound,
   type InterviewRound,
   type PreparationMaterial,
   type PreparationMaterialScope,
@@ -36,6 +38,7 @@ const PROCESS_SCOPE = "workspace";
 export const MaterialPanel = ({
   processId,
   processStatus,
+  activeRoundId,
   rounds,
   materials,
   onChanged,
@@ -44,6 +47,7 @@ export const MaterialPanel = ({
 }: {
   processId: string;
   processStatus: PreparationWorkspaceStatus;
+  activeRoundId?: string;
   rounds: InterviewRound[];
   materials: PreparationMaterial[];
   onChanged: () => Promise<void>;
@@ -53,6 +57,11 @@ export const MaterialPanel = ({
   const [addOpen, setAddOpen] = useState(false);
   const [scopeValue, setScopeValue] = useState(PROCESS_SCOPE);
   const [isImporting, setIsImporting] = useState(false);
+  const [importFeedback, setImportFeedback] = useState<{
+    added: string[];
+    duplicates: string[];
+    failures: string[];
+  }>();
   const [deleteTarget, setDeleteTarget] = useState<PreparationMaterial>();
   const [inspectTarget, setInspectTarget] = useState<PreparationMaterial>();
   const [isDeleting, setIsDeleting] = useState(false);
@@ -61,17 +70,24 @@ export const MaterialPanel = ({
     () => new Map(rounds.map((round) => [round.id, round.title])),
     [rounds]
   );
+  const visibleMaterials = useMemo(
+    () => materialsForActiveRound(materials, activeRoundId),
+    [activeRoundId, materials]
+  );
   const readOnly = processStatus !== "active";
 
   useEffect(() => {
     setScopeValue(PROCESS_SCOPE);
     setAddOpen(false);
+    setImportFeedback(undefined);
     setDeleteTarget(undefined);
     setInspectTarget(undefined);
   }, [processId]);
 
   const chooseFiles = async () => {
     setIsImporting(true);
+    setImportFeedback(undefined);
+    onNotice("");
     try {
       const selection = await open({
         title: "Add interview preparation materials",
@@ -109,25 +125,21 @@ export const MaterialPanel = ({
       const failures = outcomes.filter((outcome) => outcome.status === "failed");
 
       await onChanged();
-      setAddOpen(false);
-      onNotice(
-        [
-          imported.length ? `${imported.length} added` : "",
-          duplicates.length ? `${duplicates.length} duplicate` : "",
-          failures.length ? `${failures.length} failed` : "",
-        ]
-          .filter(Boolean)
-          .join(" · ")
-      );
-      if (failures.length) {
-        onError(
-          failures
-            .map((outcome) =>
-              outcome.status === "failed" ? outcome.error : ""
-            )
-            .filter(Boolean)
-            .join(" ")
-        );
+      if (duplicates.length || failures.length) {
+        setImportFeedback({
+          added: imported.map((outcome) =>
+            outcome.status === "imported" ? outcome.material.displayName : ""
+          ),
+          duplicates: duplicates.map((outcome) =>
+            outcome.status === "duplicate" ? outcome.existing.displayName : ""
+          ),
+          failures: failures.map((outcome) =>
+            outcome.status === "failed" ? outcome.error : ""
+          ),
+        });
+      } else {
+        setAddOpen(false);
+        onNotice(`${imported.length} added`);
       }
     } catch (reason) {
       onError(errorMessage(reason));
@@ -160,21 +172,24 @@ export const MaterialPanel = ({
         <div className="flex h-12 items-center justify-between border-b px-4">
           <div className="flex items-center gap-2">
             <span className="text-sm font-semibold">Materials</span>
-            <Badge variant="outline">{materials.length}</Badge>
+            <Badge variant="outline">{visibleMaterials.length}</Badge>
           </div>
           <Button
             size="icon"
             variant="ghost"
             title="Add materials"
             disabled={readOnly}
-            onClick={() => setAddOpen(true)}
+            onClick={() => {
+              setImportFeedback(undefined);
+              setAddOpen(true);
+            }}
           >
             <Plus className="size-4" />
           </Button>
         </div>
-        {materials.length ? (
+        {visibleMaterials.length ? (
           <div className="max-h-64 overflow-y-auto">
-            {materials.map((material) => (
+            {visibleMaterials.map((material) => (
               <div
                 key={material.id}
                 className="flex items-start gap-3 border-b px-4 py-3 last:border-b-0"
@@ -221,12 +236,18 @@ export const MaterialPanel = ({
           </div>
         ) : (
           <div className="px-4 py-8 text-center text-sm text-muted-foreground">
-            No materials
+            No materials for the active round
           </div>
         )}
       </section>
 
-      <Dialog open={addOpen} onOpenChange={setAddOpen}>
+      <Dialog
+        open={addOpen}
+        onOpenChange={(open) => {
+          setAddOpen(open);
+          if (open) setImportFeedback(undefined);
+        }}
+      >
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Add preparation materials</DialogTitle>
@@ -250,6 +271,35 @@ export const MaterialPanel = ({
               </SelectContent>
             </Select>
           </div>
+          {importFeedback && (
+            <div
+              aria-live="polite"
+              className={`border px-3 py-2 text-sm ${
+                importFeedback.failures.length
+                  ? "border-destructive/30 bg-destructive/10"
+                  : "border-amber-500/30 bg-amber-500/10"
+              }`}
+            >
+              {importFeedback.added.length > 0 && (
+                <div className="font-medium">
+                  Added {importFeedback.added.length}:{" "}
+                  {importFeedback.added.join(", ")}
+                </div>
+              )}
+              {importFeedback.duplicates.length > 0 && (
+                <div className="font-medium">
+                  Duplicate content skipped ({importFeedback.duplicates.length}).
+                  Already stored as:{" "}
+                  {importFeedback.duplicates.join(", ")}
+                </div>
+              )}
+              {importFeedback.failures.map((failure, index) => (
+                <div key={`${failure}-${index}`} className="text-destructive">
+                  {failure}
+                </div>
+              ))}
+            </div>
+          )}
           <DialogFooter>
             <Button variant="outline" onClick={() => setAddOpen(false)}>
               Cancel
@@ -286,7 +336,7 @@ export const MaterialPanel = ({
               <dt className="text-muted-foreground">Scope</dt>
               <dd>{scopeLabel(inspectTarget.scope, roundTitles)}</dd>
               <dt className="text-muted-foreground">Type</dt>
-              <dd>{inspectTarget.mimeType}</dd>
+              <dd>{formatPreparationMaterialType(inspectTarget)}</dd>
               <dt className="text-muted-foreground">Size</dt>
               <dd>{formatBytes(inspectTarget.sizeBytes)}</dd>
               <dt className="text-muted-foreground">Status</dt>
