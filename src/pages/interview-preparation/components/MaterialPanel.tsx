@@ -15,11 +15,14 @@ import {
 } from "@/components";
 import {
   interviewPreparationMaterialService,
+  interviewPreparationMaterialExtractionService,
   formatPreparationMaterialScope,
   formatPreparationMaterialType,
   materialsForActiveRound,
   type InterviewRound,
   type PreparationMaterial,
+  type PreparationMaterialRevisionStatus,
+  type PreparationExtractionInspection,
   type PreparationMaterialScope,
   type PreparationWorkspaceStatus,
 } from "@/lib/preparation";
@@ -67,6 +70,9 @@ export const MaterialPanel = ({
   }>();
   const [deleteTarget, setDeleteTarget] = useState<PreparationMaterial>();
   const [inspectTarget, setInspectTarget] = useState<PreparationMaterial>();
+  const [inspection, setInspection] = useState<PreparationExtractionInspection>();
+  const [isInspecting, setIsInspecting] = useState(false);
+  const [isRetryingExtraction, setIsRetryingExtraction] = useState(false);
   const [scopeEditTarget, setScopeEditTarget] = useState<PreparationMaterial>();
   const [scopeEditValue, setScopeEditValue] = useState(PROCESS_SCOPE);
   const [isDeleting, setIsDeleting] = useState(false);
@@ -88,8 +94,44 @@ export const MaterialPanel = ({
     setImportFeedback(undefined);
     setDeleteTarget(undefined);
     setInspectTarget(undefined);
+    setInspection(undefined);
     setScopeEditTarget(undefined);
   }, [processId]);
+
+  useEffect(() => {
+    if (!inspectTarget) {
+      setInspection(undefined);
+      return;
+    }
+    let cancelled = false;
+    setIsInspecting(true);
+    void interviewPreparationMaterialExtractionService
+      .inspect(processId, inspectTarget.id)
+      .then((result) => {
+        if (!cancelled) setInspection(result);
+      })
+      .catch((reason) => {
+        if (!cancelled) onError(errorMessage(reason));
+      })
+      .finally(() => {
+        if (!cancelled) setIsInspecting(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [inspectTarget, onError, processId]);
+
+  useEffect(() => {
+    if (!inspectTarget) return;
+    const current = materials.find((material) => material.id === inspectTarget.id);
+    if (
+      current &&
+      (current.status !== inspectTarget.status ||
+        current.updatedAt !== inspectTarget.updatedAt)
+    ) {
+      setInspectTarget(current);
+    }
+  }, [inspectTarget, materials]);
 
   const chooseFiles = async () => {
     setIsImporting(true);
@@ -200,6 +242,30 @@ export const MaterialPanel = ({
     }
   };
 
+  const retryExtraction = async () => {
+    if (!inspectTarget) return;
+    setIsRetryingExtraction(true);
+    try {
+      const result = await interviewPreparationMaterialExtractionService.schedule(
+        processId,
+        inspectTarget.id,
+        { force: true }
+      );
+      setInspection(result);
+      await onChanged();
+      onNotice("Material extraction completed");
+    } catch (reason) {
+      onError(errorMessage(reason));
+      const result = await interviewPreparationMaterialExtractionService
+        .inspect(processId, inspectTarget.id)
+        .catch(() => undefined);
+      setInspection(result);
+      await onChanged();
+    } finally {
+      setIsRetryingExtraction(false);
+    }
+  };
+
   return (
     <>
       <section className="border-b">
@@ -247,7 +313,7 @@ export const MaterialPanel = ({
                       {formatPreparationMaterialScope(material.scope, roundTitles)}
                     </span>
                     <span>·</span>
-                    <span>Stored</span>
+                    <span>{formatExtractionStatus(material.status)}</span>
                   </div>
                 </div>
                 <Button
@@ -420,10 +486,10 @@ export const MaterialPanel = ({
       <Dialog
         open={Boolean(inspectTarget)}
         onOpenChange={(open) => {
-          if (!open) setInspectTarget(undefined);
+          if (!open && !isRetryingExtraction) setInspectTarget(undefined);
         }}
       >
-        <DialogContent>
+        <DialogContent className="max-w-2xl">
           <DialogHeader>
             <DialogTitle>Material details</DialogTitle>
             <DialogDescription>
@@ -431,25 +497,110 @@ export const MaterialPanel = ({
             </DialogDescription>
           </DialogHeader>
           {inspectTarget && (
-            <dl className="grid grid-cols-[7rem_minmax(0,1fr)] gap-x-4 gap-y-3 text-sm">
-              <dt className="text-muted-foreground">Name</dt>
-              <dd className="break-words">{inspectTarget.originalFileName}</dd>
-              <dt className="text-muted-foreground">Scope</dt>
-              <dd>
-                {formatPreparationMaterialScope(inspectTarget.scope, roundTitles)}
-              </dd>
-              <dt className="text-muted-foreground">Type</dt>
-              <dd>{formatPreparationMaterialType(inspectTarget)}</dd>
-              <dt className="text-muted-foreground">Size</dt>
-              <dd>{formatBytes(inspectTarget.sizeBytes)}</dd>
-              <dt className="text-muted-foreground">Status</dt>
-              <dd>{inspectTarget.status}</dd>
-              <dt className="text-muted-foreground">SHA-256</dt>
-              <dd className="break-all font-mono text-xs">
-                {inspectTarget.checksumSha256}
-              </dd>
-            </dl>
+            <div className="grid gap-4">
+              <dl className="grid grid-cols-[7rem_minmax(0,1fr)] gap-x-4 gap-y-3 text-sm">
+                <dt className="text-muted-foreground">Name</dt>
+                <dd className="break-words">{inspectTarget.originalFileName}</dd>
+                <dt className="text-muted-foreground">Scope</dt>
+                <dd>
+                  {formatPreparationMaterialScope(inspectTarget.scope, roundTitles)}
+                </dd>
+                <dt className="text-muted-foreground">Type</dt>
+                <dd>{formatPreparationMaterialType(inspectTarget)}</dd>
+                <dt className="text-muted-foreground">Size</dt>
+                <dd>{formatBytes(inspectTarget.sizeBytes)}</dd>
+                <dt className="text-muted-foreground">Extraction</dt>
+                <dd className="flex items-center gap-2">
+                  {(isInspecting || inspectTarget.status === "extracting") && (
+                    <Loader2 className="size-3.5 animate-spin" />
+                  )}
+                  {formatExtractionStatus(
+                    inspection?.candidate.status ?? inspectTarget.status
+                  )}
+                </dd>
+                {inspection?.candidate.metadata && (
+                  <>
+                    <dt className="text-muted-foreground">Method</dt>
+                    <dd>{formatExtractionMethod(inspection.candidate.metadata.method)}</dd>
+                    <dt className="text-muted-foreground">Output</dt>
+                    <dd>
+                      {inspection.candidate.metadata.textChars.toLocaleString()} chars
+                      {inspection.candidate.metadata.pageCount
+                        ? ` · ${inspection.candidate.metadata.pageCount} pages`
+                        : ""}
+                      {` · ${inspection.candidate.metadata.chunkCount} chunks`}
+                      {` · ${inspection.candidate.metadata.durationMs} ms`}
+                    </dd>
+                  </>
+                )}
+                <dt className="text-muted-foreground">SHA-256</dt>
+                <dd className="break-all font-mono text-xs">
+                  {inspectTarget.checksumSha256}
+                </dd>
+              </dl>
+
+              {inspection?.candidate.metadata?.warningCodes.length ? (
+                <div className="border-amber-500/30 bg-amber-500/10 border px-3 py-2 text-sm">
+                  {inspection.candidate.metadata.warningCodes
+                    .map(formatExtractionWarning)
+                    .join(" · ")}
+                  {inspection.candidate.metadata.error
+                    ? `: ${inspection.candidate.metadata.error}`
+                    : ""}
+                </div>
+              ) : null}
+
+              {inspection?.chunks.length ? (
+                <div className="grid gap-2">
+                  <div className="text-sm font-medium">Extracted preview</div>
+                  <div className="max-h-72 overflow-y-auto border px-3">
+                    {inspection.chunks.slice(0, 12).map((chunk) => (
+                      <div key={chunk.id} className="border-b py-3 last:border-b-0">
+                        {(chunk.page || chunk.section) && (
+                          <div className="mb-1 text-xs text-muted-foreground">
+                            {[
+                              chunk.page ? `Page ${chunk.page}` : undefined,
+                              chunk.section,
+                            ]
+                              .filter(Boolean)
+                              .join(" · ")}
+                          </div>
+                        )}
+                        <div className="whitespace-pre-wrap text-sm leading-6">
+                          {chunk.content}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                  {inspection.chunks.length > 12 && (
+                    <div className="text-xs text-muted-foreground">
+                      Previewing 12 of {inspection.chunks.length} chunks
+                    </div>
+                  )}
+                </div>
+              ) : null}
+            </div>
           )}
+          {inspection &&
+            ["extracting", "failed", "ready", "needs-review"].includes(
+              inspection.candidate.status
+            ) && (
+              <DialogFooter>
+                <Button
+                  onClick={retryExtraction}
+                  disabled={isRetryingExtraction || readOnly}
+                >
+                  {isRetryingExtraction && (
+                    <Loader2 className="size-4 animate-spin" />
+                  )}
+                  {inspection.candidate.status === "extracting"
+                    ? "Restart extraction"
+                    : inspection.candidate.status === "failed"
+                      ? "Retry extraction"
+                      : "Re-run extraction"}
+                </Button>
+              </DialogFooter>
+            )}
         </DialogContent>
       </Dialog>
 
@@ -503,6 +654,67 @@ function formatBytes(size: number) {
   if (size < 1024) return `${size} B`;
   if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
   return `${(size / 1024 / 1024).toFixed(1)} MB`;
+}
+
+function formatExtractionStatus(
+  status: PreparationMaterial["status"] | PreparationMaterialRevisionStatus
+) {
+  switch (status) {
+    case "pending":
+    case "received":
+      return "Queued";
+    case "extracting":
+      return "Extracting";
+    case "ready":
+      return "Ready";
+    case "needs-review":
+      return "Needs review";
+    case "unsupported":
+      return "Unsupported";
+    case "failed":
+      return "Failed";
+    case "deleted":
+      return "Deleted";
+  }
+}
+
+function formatExtractionMethod(method: string) {
+  switch (method) {
+    case "plain-text":
+      return "Plain text";
+    case "markdown":
+      return "Markdown sections";
+    case "docx-text":
+      return "DOCX structure";
+    case "pdf-text":
+      return "Digital PDF pages";
+    default:
+      return "No local text extractor";
+  }
+}
+
+function formatExtractionWarning(code: string) {
+  switch (code) {
+    case "ocr-required":
+      return "OCR is required and remains disabled";
+    case "empty-extraction":
+      return "No readable local text was found";
+    case "empty-pages":
+      return "One or more pages contained no readable text";
+    case "text-truncated":
+      return "Extraction exceeded the local safety budget";
+    case "embedded-images-unread":
+      return "Substantial embedded images were not included in local text extraction";
+    case "pdf-page-extraction-failed":
+      return "One or more PDF pages could not be extracted";
+    case "pdf-page-parser-panic":
+    case "pdf-parser-panic":
+      return "The PDF parser recovered from malformed content";
+    case "extraction-failed":
+      return "Local extraction failed";
+    default:
+      return code;
+  }
 }
 
 function errorMessage(reason: unknown) {

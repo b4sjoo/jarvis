@@ -1,4 +1,5 @@
 export * from "./types.js";
+export * from "./extraction-types.js";
 export * from "./workspace-service.js";
 export * from "./tauri-storage.js";
 export * from "./interview-types.js";
@@ -7,4 +8,6 @@ export * from "./material-service.js";
 export * from "./material-presentation.js";
 export * from "./round-scheduling.js";
 export * from "./material-tauri-storage.js";
+export * from "./material-extraction-tauri.js";
+export * from "./material-extraction-service.js";
 export * from "./app-service.js";

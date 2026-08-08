@@ -1,5 +1,6 @@
 mod capture;
 mod db;
+mod preparation_material_extraction;
 mod preparation_material_storage;
 mod preparation_storage;
 mod shortcuts;
@@ -43,6 +44,11 @@ fn get_app_version() -> String {
 #[tauri::command]
 fn write_meeting_trace_log(message: String) {
     eprintln!("{}", message);
+}
+
+#[tauri::command]
+fn write_preparation_trace_log(message: String) {
+    eprintln!("[preparation-trace] {}", message);
 }
 
 #[tauri::command]
@@ -426,6 +432,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_app_version,
             write_meeting_trace_log,
+            write_preparation_trace_log,
             log_preparation_material_import_summary,
             read_meeting_trace_metrics,
             write_meeting_trace_metrics,
@@ -445,6 +452,8 @@ pub fn run() {
             preparation_storage::restore_preparation_workspace_storage_delete,
             preparation_storage::commit_preparation_workspace_storage_delete,
             preparation_material_storage::import_preparation_material_file,
+            preparation_material_extraction::extract_preparation_material_file,
+            preparation_material_extraction::discard_preparation_material_extraction_file,
             preparation_material_storage::stage_preparation_material_storage_delete,
             preparation_material_storage::restore_preparation_material_storage_delete,
             preparation_material_storage::commit_preparation_material_storage_delete,

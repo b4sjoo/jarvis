@@ -31,6 +31,7 @@ test("imports an immutable process-scoped material with revision and source", as
   assert.equal(inserted.revision.extractionStatus, "pending");
   assert.equal(inserted.sourceRef.sourceKind, "user-upload");
   assert.equal(inserted.sourceRef.contentHash, "checksum-resume");
+  assert.deepEqual(harness.scheduledExtractions, ["workspace-1:id-1"]);
 });
 
 test("deduplicates matching content within one process and discards the copy", async () => {
@@ -279,6 +280,7 @@ function createHarness(
   );
   const inserted: Parameters<PreparationMaterialRepository["insert"]>[0][] = [];
   const storageEvents: string[] = [];
+  const scheduledExtractions: string[] = [];
   let id = 0;
   let timestamp = 10;
 
@@ -397,11 +399,18 @@ function createHarness(
     inserted,
     materials,
     storageEvents,
+    scheduledExtractions,
     dependencies: {
       materials: materialRepository,
       materialStorage,
       workspaces,
       interviewProcesses,
+      extractionScheduler: {
+        async schedule(workspaceId: string, materialId: string) {
+          scheduledExtractions.push(`${workspaceId}:${materialId}`);
+          return undefined;
+        },
+      },
       now: () => ++timestamp,
       createId: () => `id-${++id}`,
     },

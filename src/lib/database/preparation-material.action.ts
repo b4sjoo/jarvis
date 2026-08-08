@@ -24,6 +24,30 @@ interface PreparationMaterialRow {
   deleted_at: number | null;
 }
 
+const MATERIAL_SELECT = `
+  SELECT
+    m.id, m.workspace_id, m.scope_kind, m.scope_id, m.display_name,
+    m.original_file_name, m.mime_type, m.extension, m.size_bytes,
+    m.checksum_sha256, m.storage_relative_path,
+    CASE
+      WHEN m.status = 'deleted' OR m.deleted_at IS NOT NULL THEN 'deleted'
+      ELSE COALESCE(
+        (
+          SELECT CASE latest.extraction_status
+            WHEN 'pending' THEN 'received'
+            ELSE latest.extraction_status
+          END
+          FROM preparation_material_revisions latest
+          WHERE latest.material_id = m.id
+          ORDER BY latest.revision DESC
+          LIMIT 1
+        ),
+        m.status
+      )
+    END AS status,
+    m.created_at, m.updated_at, m.deleted_at
+  FROM preparation_materials m`;
+
 export const preparationMaterialRepository: PreparationMaterialRepository = {
   async insert({ material, revision, sourceRef }) {
     const db = await getDatabase();
@@ -98,7 +122,7 @@ export const preparationMaterialRepository: PreparationMaterialRepository = {
   async get(id) {
     const db = await getDatabase();
     const rows = await db.select<PreparationMaterialRow[]>(
-      "SELECT * FROM preparation_materials WHERE id = ?",
+      `${MATERIAL_SELECT} WHERE m.id = ?`,
       [id]
     );
     return rows[0] ? mapMaterialRow(rows[0]) : undefined;
@@ -107,9 +131,9 @@ export const preparationMaterialRepository: PreparationMaterialRepository = {
   async list(workspaceId) {
     const db = await getDatabase();
     const rows = await db.select<PreparationMaterialRow[]>(
-      `SELECT * FROM preparation_materials
-       WHERE workspace_id = ? AND status <> 'deleted' AND deleted_at IS NULL
-       ORDER BY created_at DESC`,
+      `${MATERIAL_SELECT}
+       WHERE m.workspace_id = ? AND m.status <> 'deleted' AND m.deleted_at IS NULL
+       ORDER BY m.created_at DESC`,
       [workspaceId]
     );
     return rows.map(mapMaterialRow);
@@ -118,9 +142,9 @@ export const preparationMaterialRepository: PreparationMaterialRepository = {
   async findByChecksum(workspaceId, checksumSha256) {
     const db = await getDatabase();
     const rows = await db.select<PreparationMaterialRow[]>(
-      `SELECT * FROM preparation_materials
-       WHERE workspace_id = ? AND checksum_sha256 = ?
-         AND status <> 'deleted' AND deleted_at IS NULL
+      `${MATERIAL_SELECT}
+       WHERE m.workspace_id = ? AND m.checksum_sha256 = ?
+         AND m.status <> 'deleted' AND m.deleted_at IS NULL
        LIMIT 1`,
       [workspaceId, checksumSha256]
     );

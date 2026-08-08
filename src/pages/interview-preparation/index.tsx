@@ -20,6 +20,7 @@ import {
   formatRoundStage,
   formatRoundStageLabel,
   INTERVIEW_ROUND_STAGES,
+  interviewPreparationMaterialExtractionService,
   interviewPreparationService,
   type InterviewProcess,
   type InterviewProcessDetail,
@@ -119,6 +120,47 @@ const InterviewPreparation = () => {
       cancelled = true;
     };
   }, [loadDetail, loadMaterials, loadProcesses, processId]);
+
+  useEffect(() => {
+    if (!processId) return;
+    void interviewPreparationMaterialExtractionService
+      .resumeWorkspace(processId)
+      .catch((reason) => setError(errorMessage(reason)));
+  }, [processId]);
+
+  useEffect(() => {
+    if (
+      !processId ||
+      !materials.some((material) =>
+        ["received", "extracting"].includes(material.status)
+      )
+    ) {
+      return;
+    }
+    const timer = window.setInterval(() => {
+      void loadMaterials(processId).catch((reason) =>
+        setError(errorMessage(reason))
+      );
+    }, 750);
+    return () => window.clearInterval(timer);
+  }, [loadMaterials, materials, processId]);
+
+  useEffect(() => {
+    if (
+      !processId ||
+      !materials.some((material) =>
+        ["received", "extracting"].includes(material.status)
+      )
+    ) {
+      return;
+    }
+    const timer = window.setInterval(() => {
+      void interviewPreparationMaterialExtractionService
+        .resumeWorkspace(processId)
+        .catch((reason) => setError(errorMessage(reason)));
+    }, 5_000);
+    return () => window.clearInterval(timer);
+  }, [materials, processId]);
 
   const refresh = async (selectedId = processId) => {
     setError(undefined);

@@ -10,6 +10,7 @@ import type {
   PreparationSourceRef,
   PreparationWorkspaceRepository,
 } from "./types.js";
+import type { PreparationMaterialExtractionScheduler } from "./extraction-types.js";
 
 const MAX_FILES_PER_IMPORT = 12;
 
@@ -18,6 +19,7 @@ export interface PreparationMaterialServiceDependencies {
   materialStorage: PreparationMaterialStorageGateway;
   workspaces: PreparationWorkspaceRepository;
   interviewProcesses: InterviewProcessRepository;
+  extractionScheduler?: PreparationMaterialExtractionScheduler;
   now?: () => number;
   createId?: () => string;
 }
@@ -411,6 +413,9 @@ async function importOne(input: {
       },
       sourceRef,
     });
+    void input.dependencies.extractionScheduler
+      ?.schedule(input.workspaceId, material.id)
+      .catch(() => {});
     return { status: "imported", material };
   } catch (error) {
     const concurrentDuplicate = await input.dependencies.materials

@@ -52,5 +52,12 @@ pub fn migrations() -> Vec<Migration> {
             sql: include_str!("migrations/interview-round-custom-stage.sql"),
             kind: MigrationKind::Up,
         },
+        // Migration 8: Add revision-bound local extraction leases and chunks
+        Migration {
+            version: 8,
+            description: "add_preparation_material_extraction",
+            sql: include_str!("migrations/preparation-material-extraction.sql"),
+            kind: MigrationKind::Up,
+        },
     ]
 }

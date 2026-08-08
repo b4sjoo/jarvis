@@ -112,6 +112,8 @@ export interface PreparationMaterialRevision {
   extractionStatus: PreparationMaterialRevisionStatus;
   extractedTextRelativePath?: string;
   extractionMetadata?: string;
+  extractionRequestId?: string;
+  extractionStartedAt?: number;
   createdAt: number;
   completedAt?: number;
 }
