@@ -1,3 +1,4 @@
+use crate::preparation_ocr::{ocr_pdf_page, OcrLine};
 use crate::preparation_storage::{
     app_data_path, path_to_relative_string, preparation_relative_root, reject_symlink,
     validate_preparation_identifier,
@@ -21,12 +22,17 @@ const MAX_CHUNKS: usize = 2_000;
 const DOCX_DOCUMENT_MAX_BYTES: u64 = 20 * 1024 * 1024;
 const SUBSTANTIVE_IMAGE_MIN_SHORT_EDGE: i64 = 200;
 const SUBSTANTIVE_IMAGE_MIN_PIXELS: i64 = 200_000;
+const PDF_OCR_MAX_PAGES: usize = 40;
+const PDF_OCR_MAX_DIMENSION: usize = 2_200;
+const PDF_OCR_MIN_CONFIDENCE: f32 = 0.55;
 
 #[derive(Debug, Clone)]
 struct SourceBlock {
     content: String,
     page: Option<u32>,
     section: Option<String>,
+    source_method: &'static str,
+    confidence: Option<f32>,
 }
 
 #[derive(Debug, Serialize)]
@@ -37,6 +43,8 @@ pub struct ExtractedPreparationChunk {
     search_text: String,
     page: Option<u32>,
     section: Option<String>,
+    source_method: String,
+    confidence: Option<f32>,
     start_offset: usize,
     end_offset: usize,
 }
@@ -49,6 +57,12 @@ pub struct PreparationMaterialExtractionResult {
     extracted_text_relative_path: Option<String>,
     text_chars: usize,
     page_count: Option<usize>,
+    ocr_page_count: usize,
+    ocr_average_confidence: Option<f32>,
+    ocr_candidate_page_count: usize,
+    ocr_processed_page_count: usize,
+    ocr_failed_page_count: usize,
+    ocr_supplement_chars: usize,
     warning_codes: Vec<String>,
     duration_ms: u128,
     chunks: Vec<ExtractedPreparationChunk>,
@@ -59,6 +73,14 @@ struct ParsedMaterial {
     blocks: Vec<SourceBlock>,
     page_count: Option<usize>,
     warning_codes: Vec<String>,
+    ocr_summary: OcrSummary,
+}
+
+#[derive(Default)]
+struct OcrSummary {
+    candidate_page_count: usize,
+    processed_page_count: usize,
+    failed_page_count: usize,
 }
 
 #[tauri::command]
@@ -131,6 +153,27 @@ fn extract_material_at_root(
 
     let started = Instant::now();
     let mut parsed = parse_material(&original_path, extension)?;
+    let ocr_page_count = parsed
+        .blocks
+        .iter()
+        .filter(|block| block.source_method == "pdf-ocr")
+        .filter_map(|block| block.page)
+        .collect::<std::collections::HashSet<_>>()
+        .len();
+    let ocr_confidences = parsed
+        .blocks
+        .iter()
+        .filter(|block| block.source_method == "pdf-ocr")
+        .filter_map(|block| block.confidence)
+        .collect::<Vec<_>>();
+    let ocr_average_confidence = (!ocr_confidences.is_empty())
+        .then(|| ocr_confidences.iter().sum::<f32>() / ocr_confidences.len() as f32);
+    let ocr_supplement_chars = parsed
+        .blocks
+        .iter()
+        .filter(|block| block.source_method == "pdf-ocr")
+        .map(|block| block.content.chars().count())
+        .sum();
     let (text, chunks, truncated) = build_chunks(&parsed.blocks);
     if truncated {
         parsed.warning_codes.push("text-truncated".to_string());
@@ -188,6 +231,12 @@ fn extract_material_at_root(
         extracted_text_relative_path,
         text_chars: text.chars().count(),
         page_count: parsed.page_count,
+        ocr_page_count,
+        ocr_average_confidence,
+        ocr_candidate_page_count: parsed.ocr_summary.candidate_page_count,
+        ocr_processed_page_count: parsed.ocr_summary.processed_page_count,
+        ocr_failed_page_count: parsed.ocr_summary.failed_page_count,
+        ocr_supplement_chars,
         warning_codes: parsed.warning_codes,
         duration_ms: started.elapsed().as_millis(),
         chunks,
@@ -214,18 +263,21 @@ fn parse_material(path: &Path, extension: &str) -> Result<ParsedMaterial, String
             blocks: parse_plain_text(&read_utf8(path)?),
             page_count: None,
             warning_codes: Vec::new(),
+            ocr_summary: OcrSummary::default(),
         }),
         "md" => Ok(ParsedMaterial {
             method: "markdown",
             blocks: parse_markdown(&read_utf8(path)?),
             page_count: None,
             warning_codes: Vec::new(),
+            ocr_summary: OcrSummary::default(),
         }),
         "docx" => Ok(ParsedMaterial {
             method: "docx-text",
             blocks: parse_docx(path)?,
             page_count: None,
             warning_codes: Vec::new(),
+            ocr_summary: OcrSummary::default(),
         }),
         "pdf" => parse_pdf(path),
         "png" | "jpg" | "heic" => Ok(ParsedMaterial {
@@ -233,6 +285,7 @@ fn parse_material(path: &Path, extension: &str) -> Result<ParsedMaterial, String
             blocks: Vec::new(),
             page_count: None,
             warning_codes: vec!["ocr-required".to_string()],
+            ocr_summary: OcrSummary::default(),
         }),
         _ => Err("Preparation material format cannot be extracted.".to_string()),
     }
@@ -244,6 +297,9 @@ fn warning_requires_review(code: &str) -> bool {
         "empty-pages"
             | "text-truncated"
             | "embedded-images-unread"
+            | "ocr-low-confidence"
+            | "ocr-page-budget-exceeded"
+            | "ocr-page-failed"
             | "pdf-page-extraction-failed"
             | "pdf-page-parser-panic"
             | "pdf-parser-panic"
@@ -258,6 +314,7 @@ fn parse_pdf(path: &Path) -> Result<ParsedMaterial, String> {
             blocks: Vec::new(),
             page_count: None,
             warning_codes: vec!["pdf-parser-panic".to_string()],
+            ocr_summary: OcrSummary::default(),
         }),
     }
 }
@@ -271,19 +328,23 @@ fn parse_pdf_inner(path: &Path) -> Result<ParsedMaterial, String> {
             .map_err(|error| format!("Digital PDF decryption failed: {error}"))?;
     }
 
-    let page_count = document.get_pages().len();
+    let pages = document.get_pages();
+    let page_count = pages.len();
     let mut warning_codes = Vec::new();
-    if count_substantive_pdf_images(&document) > 0 {
-        warning_codes.push("embedded-images-unread".to_string());
-    }
+    let image_pages = substantive_pdf_image_pages(&document, &pages);
+    let unassigned_substantive_images =
+        count_substantive_pdf_images(&document) > 0 && image_pages.is_empty();
 
     let mut blocks = Vec::new();
+    let mut digital_text_by_page = std::collections::HashMap::new();
     for page_number in 1..=page_count as u32 {
         let result = catch_unwind(AssertUnwindSafe(|| document.extract_text(&[page_number])));
         match result {
             Ok(Ok(page_text)) => {
+                digital_text_by_page.insert(page_number, page_text.clone());
                 blocks.extend(parse_plain_text(&page_text).into_iter().map(|mut block| {
                     block.page = Some(page_number);
+                    block.source_method = "pdf-text";
                     block
                 }));
             }
@@ -296,12 +357,144 @@ fn parse_pdf_inner(path: &Path) -> Result<ParsedMaterial, String> {
         }
     }
 
+    let had_digital_text = !blocks.is_empty();
+    let mut ocr_added = false;
+    let mut ocr_failed_page_count = 0;
+    let mut unresolved_image_pages = usize::from(unassigned_substantive_images);
+    if image_pages.len() > PDF_OCR_MAX_PAGES {
+        warning_codes.push("ocr-page-budget-exceeded".to_string());
+        unresolved_image_pages += image_pages.len() - PDF_OCR_MAX_PAGES;
+    }
+    for page_number in image_pages.iter().take(PDF_OCR_MAX_PAGES) {
+        match ocr_pdf_page(
+            path,
+            page_number.saturating_sub(1) as usize,
+            PDF_OCR_MAX_DIMENSION,
+        ) {
+            Ok(page) => {
+                let digital_text = digital_text_by_page
+                    .get(page_number)
+                    .map(String::as_str)
+                    .unwrap_or_default();
+                let supplemental = supplemental_ocr_lines(&page.lines, digital_text);
+                if supplemental.is_empty() {
+                    unresolved_image_pages += 1;
+                    ocr_failed_page_count += 1;
+                    continue;
+                }
+                let confidence = supplemental.iter().map(|line| line.confidence).sum::<f32>()
+                    / supplemental.len() as f32;
+                if confidence < PDF_OCR_MIN_CONFIDENCE
+                    || page.average_confidence < PDF_OCR_MIN_CONFIDENCE
+                {
+                    warning_codes.push("ocr-low-confidence".to_string());
+                }
+                blocks.push(SourceBlock {
+                    content: supplemental
+                        .iter()
+                        .map(|line| line.text.as_str())
+                        .collect::<Vec<_>>()
+                        .join("\n"),
+                    page: Some(*page_number),
+                    section: Some("OCR supplement".to_string()),
+                    source_method: "pdf-ocr",
+                    confidence: Some(confidence),
+                });
+                ocr_added = true;
+                warning_codes.push("ocr-applied".to_string());
+            }
+            Err(_error) => {
+                #[cfg(test)]
+                eprintln!("pdf OCR failed on page {page_number}: {_error}");
+                unresolved_image_pages += 1;
+                ocr_failed_page_count += 1;
+                warning_codes.push("ocr-page-failed".to_string());
+            }
+        }
+    }
+    if unresolved_image_pages > 0 {
+        warning_codes.push("embedded-images-unread".to_string());
+    }
+
     Ok(ParsedMaterial {
-        method: "pdf-text",
+        method: if ocr_added {
+            if had_digital_text {
+                "pdf-hybrid-ocr"
+            } else {
+                "pdf-ocr"
+            }
+        } else {
+            "pdf-text"
+        },
         blocks,
         page_count: Some(page_count),
         warning_codes,
+        ocr_summary: OcrSummary {
+            candidate_page_count: image_pages.len(),
+            processed_page_count: image_pages.len().min(PDF_OCR_MAX_PAGES),
+            failed_page_count: ocr_failed_page_count,
+        },
     })
+}
+
+fn substantive_pdf_image_pages(
+    document: &Document,
+    pages: &std::collections::BTreeMap<u32, lopdf::ObjectId>,
+) -> Vec<u32> {
+    pages
+        .iter()
+        .filter_map(|(page_number, page_id)| {
+            document
+                .get_page_images(*page_id)
+                .ok()
+                .is_some_and(|images| {
+                    images.iter().any(|image| {
+                        image.width.min(image.height) >= SUBSTANTIVE_IMAGE_MIN_SHORT_EDGE
+                            && image.width.saturating_mul(image.height)
+                                >= SUBSTANTIVE_IMAGE_MIN_PIXELS
+                    })
+                })
+                .then_some(*page_number)
+        })
+        .collect()
+}
+
+fn supplemental_ocr_lines(lines: &[OcrLine], digital_text: &str) -> Vec<OcrLine> {
+    let digital = normalize_ocr_comparison(digital_text);
+    let mut seen = std::collections::HashSet::new();
+    lines
+        .iter()
+        .filter_map(|line| {
+            let text = normalize_block(&line.text);
+            let normalized = normalize_ocr_comparison(&text);
+            if normalized.len() < 3
+                || (!digital.is_empty() && digital.contains(&normalized))
+                || !seen.insert(normalized)
+            {
+                return None;
+            }
+            Some(OcrLine {
+                text,
+                confidence: line.confidence,
+            })
+        })
+        .collect()
+}
+
+fn normalize_ocr_comparison(content: &str) -> String {
+    content
+        .chars()
+        .map(|character| {
+            if character.is_alphanumeric() {
+                character.to_ascii_lowercase()
+            } else {
+                ' '
+            }
+        })
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 fn count_substantive_pdf_images(document: &Document) -> usize {
@@ -345,6 +538,8 @@ fn parse_plain_text(content: &str) -> Vec<SourceBlock> {
             content,
             page: None,
             section: None,
+            source_method: "plain-text",
+            confidence: None,
         })
         .collect()
 }
@@ -363,6 +558,8 @@ fn parse_markdown(content: &str) -> Vec<SourceBlock> {
                 content: text,
                 page: None,
                 section: (!path.is_empty()).then(|| path.join(" > ")),
+                source_method: "markdown",
+                confidence: None,
             });
         }
     };
@@ -390,6 +587,8 @@ fn parse_markdown(content: &str) -> Vec<SourceBlock> {
                     content: heading,
                     page: None,
                     section: Some(heading_path.join(" > ")),
+                    source_method: "markdown",
+                    confidence: None,
                 });
                 continue;
             }
@@ -479,6 +678,8 @@ fn parse_docx_xml(xml: &str) -> Result<Vec<SourceBlock>, String> {
                             content,
                             page: None,
                             section: (!heading_path.is_empty()).then(|| heading_path.join(" > ")),
+                            source_method: "docx-text",
+                            confidence: None,
                         });
                     }
                     in_paragraph = false;
@@ -589,6 +790,8 @@ fn build_chunks(blocks: &[SourceBlock]) -> (String, Vec<ExtractedPreparationChun
             let can_merge = chunks.last().is_some_and(|chunk| {
                 chunk.page == block.page
                     && chunk.section == block.section
+                    && chunk.source_method == block.source_method
+                    && chunk.confidence == block.confidence
                     && chunk.content.chars().count() + 2 + accepted.chars().count()
                         <= MAX_CHUNK_CHARS
             });
@@ -615,6 +818,8 @@ fn build_chunks(blocks: &[SourceBlock]) -> (String, Vec<ExtractedPreparationChun
                     search_text: String::new(),
                     page: block.page,
                     section: block.section.clone(),
+                    source_method: block.source_method.to_string(),
+                    confidence: block.confidence,
                     start_offset,
                     end_offset: char_count,
                 });
@@ -864,6 +1069,8 @@ mod tests {
         assert_eq!(result.status, "ready");
         assert_eq!(result.page_count, Some(1));
         assert_eq!(result.chunks[0].page, Some(1));
+        assert_eq!(result.chunks[0].source_method, "pdf-text");
+        assert_eq!(result.chunks[0].confidence, None);
         assert!(result.chunks[0].content.contains("retrieval system"));
 
         fs::remove_dir_all(root).unwrap();
@@ -984,18 +1191,80 @@ mod tests {
         .unwrap();
 
         eprintln!(
-            "status={} pages={:?} chars={} chunks={} duration_ms={} warnings={:?}",
+            "status={} pages={:?} ocr_candidates={} ocr_processed={} ocr_pages={} ocr_failed={} ocr_chars={} ocr_confidence={:?} chars={} chunks={} duration_ms={} warnings={:?}",
             result.status,
             result.page_count,
+            result.ocr_candidate_page_count,
+            result.ocr_processed_page_count,
+            result.ocr_page_count,
+            result.ocr_failed_page_count,
+            result.ocr_supplement_chars,
+            result.ocr_average_confidence,
             result.text_chars,
             result.chunks.len(),
             result.duration_ms,
             result.warning_codes
         );
+        if let Ok(ground_truth_path) = std::env::var("JARVIS_PDF_EXTRACTION_GROUND_TRUTH_PATH") {
+            let ground_truth = fs::read_to_string(ground_truth_path).unwrap();
+            let combined =
+                fs::read_to_string(material_root.join("extraction/1/extracted-request-1.txt"))
+                    .unwrap();
+            let mut digital_document = Document::load(&path).unwrap();
+            if digital_document.is_encrypted() {
+                digital_document.decrypt("").unwrap();
+            }
+            let digital = digital_document
+                .get_pages()
+                .keys()
+                .filter_map(|page| digital_document.extract_text(&[*page]).ok())
+                .collect::<Vec<_>>()
+                .join("\n");
+            let digital_scores = token_set_scores(&digital, &ground_truth);
+            let combined_scores = token_set_scores(&combined, &ground_truth);
+            eprintln!(
+                "token_set digital_precision={:.3} digital_recall={:.3} combined_precision={:.3} combined_recall={:.3}",
+                digital_scores.0,
+                digital_scores.1,
+                combined_scores.0,
+                combined_scores.1
+            );
+        }
+        if std::env::var("JARVIS_PDF_EXTRACTION_PRINT_OCR").is_ok() {
+            for chunk in result
+                .chunks
+                .iter()
+                .filter(|chunk| chunk.source_method == "pdf-ocr")
+                .take(4)
+            {
+                eprintln!(
+                    "ocr page={:?} confidence={:?}\n{}",
+                    chunk.page, chunk.confidence, chunk.content
+                );
+            }
+        }
         assert!(result.page_count.is_some_and(|count| count > 0));
         assert!(result.text_chars > 0);
         assert!(!result.chunks.is_empty());
         fs::remove_dir_all(root).unwrap();
+    }
+
+    fn token_set_scores(candidate: &str, ground_truth: &str) -> (f32, f32) {
+        let candidate = evaluation_tokens(candidate);
+        let ground_truth = evaluation_tokens(ground_truth);
+        let overlap = candidate.intersection(&ground_truth).count() as f32;
+        (
+            overlap / candidate.len().max(1) as f32,
+            overlap / ground_truth.len().max(1) as f32,
+        )
+    }
+
+    fn evaluation_tokens(content: &str) -> std::collections::HashSet<String> {
+        normalize_ocr_comparison(content)
+            .split_whitespace()
+            .filter(|token| token.len() > 1)
+            .map(str::to_string)
+            .collect()
     }
 
     #[test]
@@ -1003,6 +1272,51 @@ mod tests {
         let parsed = parse_material(Path::new("unused.png"), "png").unwrap();
         assert!(parsed.blocks.is_empty());
         assert_eq!(parsed.warning_codes, vec!["ocr-required"]);
+    }
+
+    #[test]
+    fn ocr_supplement_drops_digital_duplicates_and_preserves_new_text() {
+        let lines = vec![
+            OcrLine {
+                text: "Question text remains readable".to_string(),
+                confidence: 0.98,
+            },
+            OcrLine {
+                text: "Strength indicator: explains customer impact".to_string(),
+                confidence: 0.91,
+            },
+            OcrLine {
+                text: "Strength indicator: explains customer impact".to_string(),
+                confidence: 0.90,
+            },
+        ];
+
+        let supplemental = supplemental_ocr_lines(&lines, "Question text remains readable.");
+
+        assert_eq!(supplemental.len(), 1);
+        assert_eq!(
+            supplemental[0].text,
+            "Strength indicator: explains customer impact"
+        );
+        assert_eq!(supplemental[0].confidence, 0.91);
+    }
+
+    #[test]
+    fn ocr_chunk_keeps_source_and_confidence_provenance() {
+        let blocks = vec![SourceBlock {
+            content: "Definition from an embedded table".to_string(),
+            page: Some(3),
+            section: Some("OCR supplement".to_string()),
+            source_method: "pdf-ocr",
+            confidence: Some(0.87),
+        }];
+
+        let (_, chunks, truncated) = build_chunks(&blocks);
+
+        assert!(!truncated);
+        assert_eq!(chunks[0].source_method, "pdf-ocr");
+        assert_eq!(chunks[0].confidence, Some(0.87));
+        assert_eq!(chunks[0].page, Some(3));
     }
 
     #[test]

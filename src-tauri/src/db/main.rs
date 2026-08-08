@@ -59,5 +59,12 @@ pub fn migrations() -> Vec<Migration> {
             sql: include_str!("migrations/preparation-material-extraction.sql"),
             kind: MigrationKind::Up,
         },
+        // Migration 9: Preserve per-chunk extraction provenance and OCR confidence
+        Migration {
+            version: 9,
+            description: "add_preparation_material_ocr_provenance",
+            sql: include_str!("migrations/preparation-material-ocr.sql"),
+            kind: MigrationKind::Up,
+        },
     ]
 }

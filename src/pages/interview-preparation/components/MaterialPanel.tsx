@@ -528,6 +528,16 @@ export const MaterialPanel = ({
                       {inspection.candidate.metadata.pageCount
                         ? ` · ${inspection.candidate.metadata.pageCount} pages`
                         : ""}
+                      {inspection.candidate.metadata.ocrPageCount
+                        ? ` · ${inspection.candidate.metadata.ocrPageCount} OCR pages`
+                        : ""}
+                      {inspection.candidate.metadata.ocrAverageConfidence !==
+                      undefined
+                        ? ` · ${Math.round(
+                            inspection.candidate.metadata.ocrAverageConfidence *
+                              100
+                          )}% OCR confidence`
+                        : ""}
                       {` · ${inspection.candidate.metadata.chunkCount} chunks`}
                       {` · ${inspection.candidate.metadata.durationMs} ms`}
                     </dd>
@@ -556,11 +566,15 @@ export const MaterialPanel = ({
                   <div className="max-h-72 overflow-y-auto border px-3">
                     {inspection.chunks.slice(0, 12).map((chunk) => (
                       <div key={chunk.id} className="border-b py-3 last:border-b-0">
-                        {(chunk.page || chunk.section) && (
+                        {(chunk.page || chunk.section || chunk.sourceMethod) && (
                           <div className="mb-1 text-xs text-muted-foreground">
                             {[
                               chunk.page ? `Page ${chunk.page}` : undefined,
                               chunk.section,
+                              formatChunkSource(chunk.sourceMethod),
+                              chunk.confidence !== undefined
+                                ? `${Math.round(chunk.confidence * 100)}% confidence`
+                                : undefined,
                             ]
                               .filter(Boolean)
                               .join(" · ")}
@@ -688,6 +702,10 @@ function formatExtractionMethod(method: string) {
       return "DOCX structure";
     case "pdf-text":
       return "Digital PDF pages";
+    case "pdf-ocr":
+      return "Local PDF OCR";
+    case "pdf-hybrid-ocr":
+      return "Digital PDF + local OCR";
     default:
       return "No local text extractor";
   }
@@ -705,6 +723,14 @@ function formatExtractionWarning(code: string) {
       return "Extraction exceeded the local safety budget";
     case "embedded-images-unread":
       return "Substantial embedded images were not included in local text extraction";
+    case "ocr-applied":
+      return "Local OCR supplemented embedded PDF image text";
+    case "ocr-low-confidence":
+      return "Some OCR text has low recognition confidence";
+    case "ocr-page-budget-exceeded":
+      return "The PDF exceeded the bounded OCR page budget";
+    case "ocr-page-failed":
+      return "One or more image-bearing PDF pages could not be OCR processed";
     case "pdf-page-extraction-failed":
       return "One or more PDF pages could not be extracted";
     case "pdf-page-parser-panic":
@@ -714,6 +740,23 @@ function formatExtractionWarning(code: string) {
       return "Local extraction failed";
     default:
       return code;
+  }
+}
+
+function formatChunkSource(sourceMethod: string) {
+  switch (sourceMethod) {
+    case "pdf-ocr":
+      return "OCR";
+    case "pdf-text":
+      return "Digital text";
+    case "docx-text":
+      return "DOCX text";
+    case "markdown":
+      return "Markdown";
+    case "plain-text":
+      return "Plain text";
+    default:
+      return sourceMethod;
   }
 }
 

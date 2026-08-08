@@ -33,6 +33,8 @@ interface PreparationMaterialChunkRow {
   search_text: string;
   page: number | null;
   section: string | null;
+  source_method: string;
+  confidence: number | null;
   start_offset: number | null;
   end_offset: number | null;
   created_at: number;
@@ -154,8 +156,8 @@ export const preparationMaterialExtractionRepository: PreparationMaterialExtract
         `INSERT INTO preparation_material_chunks
           (id, workspace_id, material_id, material_revision_id,
            extraction_request_id, ordinal, content, search_text, page, section,
-           start_offset, end_offset, created_at)
-         SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+           source_method, confidence, start_offset, end_offset, created_at)
+         SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
          WHERE EXISTS (
            SELECT 1
            FROM preparation_material_revisions r
@@ -179,6 +181,8 @@ export const preparationMaterialExtractionRepository: PreparationMaterialExtract
           chunk.searchText,
           chunk.page ?? null,
           chunk.section ?? null,
+          chunk.sourceMethod,
+          chunk.confidence ?? null,
           chunk.startOffset ?? null,
           chunk.endOffset ?? null,
           chunk.createdAt,
@@ -345,6 +349,8 @@ function mapChunk(row: PreparationMaterialChunkRow): PreparationMaterialChunk {
     searchText: row.search_text,
     page: row.page ?? undefined,
     section: row.section ?? undefined,
+    sourceMethod: row.source_method,
+    confidence: row.confidence ?? undefined,
     startOffset: row.start_offset ?? undefined,
     endOffset: row.end_offset ?? undefined,
     createdAt: row.created_at,

@@ -5,6 +5,8 @@ export type PreparationExtractionMethod =
   | "markdown"
   | "docx-text"
   | "pdf-text"
+  | "pdf-ocr"
+  | "pdf-hybrid-ocr"
   | "none";
 
 export interface PreparationMaterialChunk {
@@ -18,6 +20,8 @@ export interface PreparationMaterialChunk {
   searchText: string;
   page?: number;
   section?: string;
+  sourceMethod: string;
+  confidence?: number;
   startOffset?: number;
   endOffset?: number;
   createdAt: number;
@@ -29,6 +33,8 @@ export interface NativePreparationMaterialChunk {
   searchText: string;
   page?: number;
   section?: string;
+  sourceMethod: string;
+  confidence?: number;
   startOffset: number;
   endOffset: number;
 }
@@ -42,6 +48,12 @@ export interface NativePreparationMaterialExtractionResult {
   extractedTextRelativePath?: string;
   textChars: number;
   pageCount?: number;
+  ocrPageCount: number;
+  ocrAverageConfidence?: number;
+  ocrCandidatePageCount: number;
+  ocrProcessedPageCount: number;
+  ocrFailedPageCount: number;
+  ocrSupplementChars: number;
   warningCodes: string[];
   durationMs: number;
   chunks: NativePreparationMaterialChunk[];
@@ -51,6 +63,12 @@ export interface PreparationExtractionMetadata {
   method: PreparationExtractionMethod;
   textChars: number;
   pageCount?: number;
+  ocrPageCount?: number;
+  ocrAverageConfidence?: number;
+  ocrCandidatePageCount?: number;
+  ocrProcessedPageCount?: number;
+  ocrFailedPageCount?: number;
+  ocrSupplementChars?: number;
   chunkCount: number;
   warningCodes: string[];
   durationMs: number;
@@ -154,6 +172,12 @@ export interface PreparationExtractionTraceEvent {
   method?: PreparationExtractionMethod;
   textChars?: number;
   pageCount?: number;
+  ocrPageCount?: number;
+  ocrAverageConfidence?: number;
+  ocrCandidatePageCount?: number;
+  ocrProcessedPageCount?: number;
+  ocrFailedPageCount?: number;
+  ocrSupplementChars?: number;
   chunkCount?: number;
   warningCodes?: string[];
   durationMs?: number;

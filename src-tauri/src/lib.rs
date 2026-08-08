@@ -2,6 +2,7 @@ mod capture;
 mod db;
 mod preparation_material_extraction;
 mod preparation_material_storage;
+mod preparation_ocr;
 mod preparation_storage;
 mod shortcuts;
 mod stt_evaluation;
