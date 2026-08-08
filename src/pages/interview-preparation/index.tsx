@@ -16,7 +16,9 @@ import {
 } from "@/components";
 import { PageLayout } from "@/layouts";
 import {
+  buildRoundTimeOptions,
   formatRoundStage,
+  formatRoundStageLabel,
   INTERVIEW_ROUND_STAGES,
   interviewPreparationService,
   type InterviewProcess,
@@ -24,7 +26,9 @@ import {
   type InterviewRound,
   type InterviewRoundStage,
   interviewPreparationMaterialService,
+  localRoundScheduleToTimestamp,
   type PreparationMaterial,
+  timestampToLocalRoundSchedule,
 } from "@/lib/preparation";
 import {
   Archive,
@@ -65,6 +69,8 @@ const InterviewPreparation = () => {
   const [processEditOpen, setProcessEditOpen] = useState(false);
   const [roundOpen, setRoundOpen] = useState(false);
   const [roundEditTarget, setRoundEditTarget] = useState<InterviewRound>();
+  const [roundDeleteTarget, setRoundDeleteTarget] = useState<InterviewRound>();
+  const [isDeletingRound, setIsDeletingRound] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [mobilePanel, setMobilePanel] = useState<MobilePanel>("processes");
 
@@ -94,6 +100,7 @@ const InterviewPreparation = () => {
     let cancelled = false;
     setProcessEditOpen(false);
     setRoundEditTarget(undefined);
+    setRoundDeleteTarget(undefined);
     setError(undefined);
     setNotice(undefined);
     setIsLoading(true);
@@ -161,6 +168,27 @@ const InterviewPreparation = () => {
       setMobilePanel("processes");
     } catch (reason) {
       setError(errorMessage(reason));
+    }
+  };
+
+  const handleDeleteRound = async () => {
+    if (!detail || !roundDeleteTarget) return;
+    setIsDeletingRound(true);
+    setError(undefined);
+    try {
+      const result = await interviewPreparationService.deleteRound(
+        detail.process.id,
+        roundDeleteTarget.id
+      );
+      setRoundDeleteTarget(undefined);
+      await refresh(detail.process.id);
+      setNotice(
+        `${roundDeleteTarget.title} deleted · ${result.deletedMaterialCount} materials removed`
+      );
+    } catch (reason) {
+      setError(errorMessage(reason));
+    } finally {
+      setIsDeletingRound(false);
     }
   };
 
@@ -247,6 +275,7 @@ const InterviewPreparation = () => {
               onAddRound={() => setRoundOpen(true)}
               onEditProcess={() => setProcessEditOpen(true)}
               onEditRound={setRoundEditTarget}
+              onDeleteRound={setRoundDeleteTarget}
               onSetActiveRound={async (roundId) => {
                 try {
                   await interviewPreparationService.setActiveRound(
@@ -328,6 +357,51 @@ const InterviewPreparation = () => {
           await refresh(detail?.process.id);
         }}
       />
+      <Dialog
+        open={Boolean(roundDeleteTarget)}
+        onOpenChange={(open) => {
+          if (!open && !isDeletingRound) setRoundDeleteTarget(undefined);
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Delete interview round?</DialogTitle>
+            <DialogDescription>
+              This permanently removes {roundDeleteTarget?.title} and{" "}
+              {roundDeleteTarget
+                ? materials.filter(
+                    (material) =>
+                      material.scope.kind === "round" &&
+                      material.scope.roundId === roundDeleteTarget.id
+                  ).length
+                : 0}{" "}
+              round-specific materials. Related preparation data will also be
+              deleted. This action cannot be undone.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              disabled={isDeletingRound}
+              onClick={() => setRoundDeleteTarget(undefined)}
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              disabled={isDeletingRound}
+              onClick={handleDeleteRound}
+            >
+              {isDeletingRound ? (
+                <Loader2 className="size-4 animate-spin" />
+              ) : (
+                <Trash2 className="size-4" />
+              )}
+              Delete round
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
       <Dialog open={deleteOpen} onOpenChange={setDeleteOpen}>
         <DialogContent>
           <DialogHeader>
@@ -355,6 +429,7 @@ const ProcessWorkspace = ({
   onAddRound,
   onEditProcess,
   onEditRound,
+  onDeleteRound,
   onSetActiveRound,
   onArchive,
   onReopen,
@@ -364,6 +439,7 @@ const ProcessWorkspace = ({
   onAddRound: () => void;
   onEditProcess: () => void;
   onEditRound: (round: InterviewRound) => void;
+  onDeleteRound: (round: InterviewRound) => void;
   onSetActiveRound: (roundId: string) => Promise<void>;
   onArchive: () => Promise<void>;
   onReopen: () => Promise<void>;
@@ -440,7 +516,7 @@ const ProcessWorkspace = ({
                 <div className="min-w-0 flex-1">
                   <div className="truncate text-sm font-medium">{round.title}</div>
                   <div className="mt-0.5 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-                    <span>{formatRoundStage(round.stage)}</span>
+                    <span>{formatRoundStageLabel(round)}</span>
                     {round.scheduledAt && (
                       <span className="flex items-center gap-1">
                         <CalendarDays className="size-3" />
@@ -460,6 +536,23 @@ const ProcessWorkspace = ({
                 onClick={() => onEditRound(round)}
               >
                 <Pencil className="size-4" />
+              </Button>
+              <Button
+                size="icon"
+                variant="ghost"
+                className="my-auto mr-2 shrink-0"
+                title={
+                  detail.rounds.length <= 1
+                    ? "An interview process must keep one round"
+                    : `Delete ${round.title}`
+                }
+                disabled={
+                  detail.process.status === "archived" ||
+                  detail.rounds.length <= 1
+                }
+                onClick={() => onDeleteRound(round)}
+              >
+                <Trash2 className="size-4" />
               </Button>
             </div>
           );
@@ -541,6 +634,7 @@ const CreateProcessDialog = ({
   const [company, setCompany] = useState("");
   const [role, setRole] = useState("");
   const [stage, setStage] = useState<InterviewRoundStage>("recruiter-screen");
+  const [customStageLabel, setCustomStageLabel] = useState("");
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string>();
 
@@ -553,12 +647,13 @@ const CreateProcessDialog = ({
         title,
         company,
         role,
-        initialRound: { stage },
+        initialRound: { stage, customStageLabel },
       });
       setTitle("");
       setCompany("");
       setRole("");
       setStage("recruiter-screen");
+      setCustomStageLabel("");
       onCreated(created);
     } catch (reason) {
       setError(errorMessage(reason));
@@ -591,12 +686,29 @@ const CreateProcessDialog = ({
           <Field label="Initial round">
             <RoundStageSelect value={stage} onChange={setStage} />
           </Field>
+          {stage === "other" && (
+            <Field label="Custom stage">
+              <Input
+                value={customStageLabel}
+                maxLength={80}
+                onChange={(event) => setCustomStageLabel(event.target.value)}
+                placeholder="e.g. Product sense"
+              />
+            </Field>
+          )}
           {error && <div className="text-sm text-destructive">{error}</div>}
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
               Cancel
             </Button>
-            <Button type="submit" disabled={!title.trim() || isSaving}>
+            <Button
+              type="submit"
+              disabled={
+                !title.trim() ||
+                (stage === "other" && !customStageLabel.trim()) ||
+                isSaving
+              }
+            >
               {isSaving && <Loader2 className="size-4 animate-spin" />}
               Create
             </Button>
@@ -620,7 +732,9 @@ const CreateRoundDialog = ({
 }) => {
   const [title, setTitle] = useState("");
   const [stage, setStage] = useState<InterviewRoundStage>("coding");
-  const [scheduledAt, setScheduledAt] = useState("");
+  const [customStageLabel, setCustomStageLabel] = useState("");
+  const [scheduledDate, setScheduledDate] = useState("");
+  const [scheduledTime, setScheduledTime] = useState("");
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string>();
 
@@ -633,10 +747,16 @@ const CreateRoundDialog = ({
       await interviewPreparationService.addRound(processId, {
         title,
         stage,
-        scheduledAt: scheduledAt ? new Date(scheduledAt).getTime() : undefined,
+        customStageLabel,
+        scheduledAt: localRoundScheduleToTimestamp({
+          date: scheduledDate,
+          time: scheduledTime,
+        }),
       });
       setTitle("");
-      setScheduledAt("");
+      setCustomStageLabel("");
+      setScheduledDate("");
+      setScheduledTime("");
       await onCreated();
     } catch (reason) {
       setError(errorMessage(reason));
@@ -658,19 +778,35 @@ const CreateRoundDialog = ({
           <Field label="Stage">
             <RoundStageSelect value={stage} onChange={setStage} />
           </Field>
-          <Field label="Scheduled time">
-            <Input
-              type="datetime-local"
-              value={scheduledAt}
-              onChange={(event) => setScheduledAt(event.target.value)}
-            />
-          </Field>
+          {stage === "other" && (
+            <Field label="Custom stage">
+              <Input
+                value={customStageLabel}
+                maxLength={80}
+                onChange={(event) => setCustomStageLabel(event.target.value)}
+                placeholder="e.g. Product sense"
+              />
+            </Field>
+          )}
+          <RoundScheduleFields
+            date={scheduledDate}
+            time={scheduledTime}
+            onDateChange={setScheduledDate}
+            onTimeChange={setScheduledTime}
+          />
           {error && <div className="text-sm text-destructive">{error}</div>}
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
               Cancel
             </Button>
-            <Button type="submit" disabled={!processId || isSaving}>
+            <Button
+              type="submit"
+              disabled={
+                !processId ||
+                (stage === "other" && !customStageLabel.trim()) ||
+                isSaving
+              }
+            >
               {isSaving && <Loader2 className="size-4 animate-spin" />}
               Add round
             </Button>
@@ -775,7 +911,9 @@ const EditRoundDialog = ({
 }) => {
   const [title, setTitle] = useState("");
   const [stage, setStage] = useState<InterviewRoundStage>("coding");
-  const [scheduledAt, setScheduledAt] = useState("");
+  const [customStageLabel, setCustomStageLabel] = useState("");
+  const [scheduledDate, setScheduledDate] = useState("");
+  const [scheduledTime, setScheduledTime] = useState("");
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string>();
 
@@ -783,7 +921,10 @@ const EditRoundDialog = ({
     if (!round) return;
     setTitle(round.title);
     setStage(round.stage);
-    setScheduledAt(toLocalDateTimeInput(round.scheduledAt));
+    setCustomStageLabel(round.customStageLabel ?? "");
+    const schedule = timestampToLocalRoundSchedule(round.scheduledAt);
+    setScheduledDate(schedule.date);
+    setScheduledTime(schedule.time);
     setError(undefined);
   }, [round]);
 
@@ -796,7 +937,11 @@ const EditRoundDialog = ({
       await interviewPreparationService.updateRound(processId, round.id, {
         title,
         stage,
-        scheduledAt: scheduledAt ? new Date(scheduledAt).getTime() : undefined,
+        customStageLabel,
+        scheduledAt: localRoundScheduleToTimestamp({
+          date: scheduledDate,
+          time: scheduledTime,
+        }),
       });
       await onUpdated();
     } catch (reason) {
@@ -822,19 +967,36 @@ const EditRoundDialog = ({
           <Field label="Stage">
             <RoundStageSelect value={stage} onChange={setStage} />
           </Field>
-          <Field label="Scheduled time">
-            <Input
-              type="datetime-local"
-              value={scheduledAt}
-              onChange={(event) => setScheduledAt(event.target.value)}
-            />
-          </Field>
+          {stage === "other" && (
+            <Field label="Custom stage">
+              <Input
+                value={customStageLabel}
+                maxLength={80}
+                onChange={(event) => setCustomStageLabel(event.target.value)}
+                placeholder="e.g. Product sense"
+              />
+            </Field>
+          )}
+          <RoundScheduleFields
+            date={scheduledDate}
+            time={scheduledTime}
+            onDateChange={setScheduledDate}
+            onTimeChange={setScheduledTime}
+          />
           {error && <div className="text-sm text-destructive">{error}</div>}
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
               Cancel
             </Button>
-            <Button type="submit" disabled={!processId || !round || isSaving}>
+            <Button
+              type="submit"
+              disabled={
+                !processId ||
+                !round ||
+                (stage === "other" && !customStageLabel.trim()) ||
+                isSaving
+              }
+            >
               {isSaving && <Loader2 className="size-4 animate-spin" />}
               Save
             </Button>
@@ -844,6 +1006,53 @@ const EditRoundDialog = ({
     </Dialog>
   );
 };
+
+const RoundScheduleFields = ({
+  date,
+  time,
+  onDateChange,
+  onTimeChange,
+}: {
+  date: string;
+  time: string;
+  onDateChange: (value: string) => void;
+  onTimeChange: (value: string) => void;
+}) => (
+  <div className="grid gap-1.5 text-sm">
+    <span className="font-medium">Scheduled time</span>
+    <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto]">
+      <Input
+        type="date"
+        value={date}
+        aria-label="Scheduled date"
+        onChange={(event) => onDateChange(event.target.value)}
+      />
+      <Select value={time} onValueChange={onTimeChange}>
+        <SelectTrigger className="w-full" aria-label="Scheduled time">
+          <SelectValue placeholder="Select time" />
+        </SelectTrigger>
+        <SelectContent className="max-h-72">
+          {buildRoundTimeOptions(time).map((option) => (
+            <SelectItem key={option.value} value={option.value}>
+              {option.label}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+      <Button
+        type="button"
+        variant="outline"
+        disabled={!date && !time}
+        onClick={() => {
+          onDateChange("");
+          onTimeChange("");
+        }}
+      >
+        Clear
+      </Button>
+    </div>
+  </div>
+);
 
 const RoundStageSelect = ({
   value,
@@ -916,13 +1125,6 @@ const FilterButton = ({
 
 function errorMessage(reason: unknown) {
   return reason instanceof Error ? reason.message : String(reason);
-}
-
-function toLocalDateTimeInput(timestamp: number | undefined) {
-  if (!timestamp) return "";
-  const local = new Date(timestamp);
-  local.setMinutes(local.getMinutes() - local.getTimezoneOffset());
-  return local.toISOString().slice(0, 16);
 }
 
 export default InterviewPreparation;

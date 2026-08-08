@@ -27,6 +27,7 @@ interface InterviewRoundRow {
   process_id: string;
   title: string;
   stage: InterviewRoundStage;
+  custom_stage_label: string | null;
   expected_interview_types: string;
   expected_type_policy: PreparationExpectedTypePolicy;
   scheduled_at: number | null;
@@ -140,16 +141,17 @@ export const interviewProcessRepository: InterviewProcessRepository = {
     const db = await getDatabase();
     await db.execute(
       `INSERT INTO interview_rounds
-        (id, process_id, title, stage, expected_interview_types,
+        (id, process_id, title, stage, custom_stage_label, expected_interview_types,
          expected_type_policy, scheduled_at, interviewer_name,
          interviewer_role, preferred_programming_language, created_at,
          updated_at, archived_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         round.id,
         round.processId,
         round.title,
         round.stage,
+        round.customStageLabel ?? null,
         JSON.stringify(round.expectedInterviewTypes),
         round.expectedTypePolicy,
         round.scheduledAt ?? null,
@@ -167,13 +169,14 @@ export const interviewProcessRepository: InterviewProcessRepository = {
     const db = await getDatabase();
     const result = await db.execute(
       `UPDATE interview_rounds
-       SET title = ?, stage = ?, expected_interview_types = ?,
+       SET title = ?, stage = ?, custom_stage_label = ?, expected_interview_types = ?,
            expected_type_policy = ?, scheduled_at = ?, interviewer_name = ?,
            interviewer_role = ?, preferred_programming_language = ?, updated_at = ?
        WHERE id = ? AND process_id = ? AND archived_at IS NULL`,
       [
         round.title,
         round.stage,
+        round.customStageLabel ?? null,
         JSON.stringify(round.expectedInterviewTypes),
         round.expectedTypePolicy,
         round.scheduledAt ?? null,
@@ -190,10 +193,60 @@ export const interviewProcessRepository: InterviewProcessRepository = {
     }
   },
 
+  async deleteRound(input) {
+    const db = await getDatabase();
+    const activeRoundChanges = input.previousActiveRoundId === input.roundId;
+    if (activeRoundChanges) {
+      const processResult = await db.execute(
+        `UPDATE interview_processes
+         SET active_round_id = ?, updated_at = ?
+         WHERE id = ? AND active_round_id = ?`,
+        [
+          input.nextActiveRoundId ?? null,
+          input.updatedAt,
+          input.processId,
+          input.roundId,
+        ]
+      );
+      if (processResult.rowsAffected === 0) {
+        throw new Error("Interview process active round changed before deletion.");
+      }
+    }
+
+    try {
+      const roundResult = await db.execute(
+        `UPDATE interview_rounds
+         SET archived_at = ?, updated_at = ?
+         WHERE id = ? AND process_id = ? AND archived_at IS NULL`,
+        [input.updatedAt, input.updatedAt, input.roundId, input.processId]
+      );
+      if (roundResult.rowsAffected === 0) {
+        throw new Error("Interview round not found.");
+      }
+    } catch (error) {
+      if (activeRoundChanges) {
+        await db
+          .execute(
+            `UPDATE interview_processes
+             SET active_round_id = ?, updated_at = ?
+             WHERE id = ? AND active_round_id = ?`,
+            [
+              input.previousActiveRoundId ?? null,
+              input.updatedAt,
+              input.processId,
+              input.nextActiveRoundId ?? null,
+            ]
+          )
+          .catch(() => {});
+      }
+      throw error;
+    }
+  },
+
   async getRound(id) {
     const db = await getDatabase();
     const rows = await db.select<InterviewRoundRow[]>(
-      "SELECT * FROM interview_rounds WHERE id = ?",
+      "SELECT * FROM interview_rounds WHERE id = ? AND archived_at IS NULL",
       [id]
     );
     return rows[0] ? mapRoundRow(rows[0]) : undefined;
@@ -245,6 +298,7 @@ function mapRoundRow(row: InterviewRoundRow): InterviewRound {
     processId: row.process_id,
     title: row.title,
     stage: row.stage,
+    customStageLabel: row.custom_stage_label ?? undefined,
     expectedInterviewTypes: parseExpectedTypes(row.expected_interview_types),
     expectedTypePolicy: row.expected_type_policy,
     scheduledAt: row.scheduled_at ?? undefined,

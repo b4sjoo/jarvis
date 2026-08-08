@@ -1,4 +1,7 @@
-import type { PreparationMaterial } from "./types.js";
+import type {
+  PreparationMaterial,
+  PreparationMaterialScope,
+} from "./types.js";
 
 export function materialsForActiveRound(
   materials: PreparationMaterial[],
@@ -24,4 +27,13 @@ export function formatPreparationMaterialType(material: PreparationMaterial) {
     default:
       return material.extension?.toUpperCase() ?? material.mimeType;
   }
+}
+
+export function formatPreparationMaterialScope(
+  scope: PreparationMaterialScope,
+  roundTitles: Map<string, string>
+) {
+  return scope.kind === "workspace"
+    ? "Entire process"
+    : roundTitles.get(scope.roundId) ?? "Round";
 }

@@ -3,6 +3,7 @@ import type {
   InterviewProcessDetail,
   InterviewProcessRepository,
   InterviewRound,
+  InterviewRoundResourceLifecycle,
   InterviewRoundStage,
   PreparationExpectedInterviewType,
   PreparationExpectedTypePolicy,
@@ -19,6 +20,7 @@ export interface CreateInterviewProcessInput {
 export interface CreateInterviewRoundInput {
   title?: string;
   stage: InterviewRoundStage;
+  customStageLabel?: string;
   expectedInterviewTypes?: PreparationExpectedInterviewType[];
   expectedTypePolicy?: PreparationExpectedTypePolicy;
   scheduledAt?: number;
@@ -36,12 +38,14 @@ export interface UpdateInterviewProcessInput {
 export interface UpdateInterviewRoundInput {
   title?: string;
   stage: InterviewRoundStage;
+  customStageLabel?: string;
   scheduledAt?: number;
 }
 
 export interface InterviewProcessServiceDependencies {
   repository: InterviewProcessRepository;
   workspaces: PreparationWorkspaceLifecycle;
+  roundResources: InterviewRoundResourceLifecycle;
   now?: () => number;
   createId?: () => string;
 }
@@ -70,15 +74,15 @@ export function createInterviewProcessService(
         createdAt: timestamp,
         updatedAt: timestamp,
       };
-      const round = createRoundRecord({
-        processId: process.id,
-        input: input.initialRound,
-        id: createId(),
-        timestamp,
-        existingRounds: [],
-      });
-
+      let round: InterviewRound;
       try {
+        round = createRoundRecord({
+          processId: process.id,
+          input: input.initialRound,
+          id: createId(),
+          timestamp,
+          existingRounds: [],
+        });
         await dependencies.repository.insertProcess(process);
         await dependencies.repository.insertRound(round);
         await dependencies.repository.setActiveRound({
@@ -156,14 +160,20 @@ export function createInterviewProcessService(
         throw new Error("Interview round does not belong to this process.");
       }
       const timestamp = now();
+      const customStageLabel = normalizeCustomStageLabel(
+        input.stage,
+        input.customStageLabel
+      );
       const updated: InterviewRound = {
         ...round,
         title: resolveRoundTitle(
           input.title,
           input.stage,
+          customStageLabel,
           existingRounds.filter((entry) => entry.id !== round.id)
         ),
         stage: input.stage,
+        customStageLabel,
         expectedInterviewTypes:
           input.stage === round.stage
             ? round.expectedInterviewTypes
@@ -173,6 +183,61 @@ export function createInterviewProcessService(
       };
       await dependencies.repository.updateRound(updated);
       return updated;
+    },
+
+    async deleteRound(processId: string, roundId: string) {
+      const [process, round, rounds] = await Promise.all([
+        requireProcess(dependencies.repository, processId),
+        dependencies.repository.getRound(roundId),
+        dependencies.repository.listRounds(processId),
+      ]);
+      requireActiveProcess(process);
+      if (!round || round.processId !== process.id) {
+        throw new Error("Interview round does not belong to this process.");
+      }
+      if (rounds.length <= 1) {
+        throw new Error("An interview process must keep at least one round.");
+      }
+
+      const nextRound = rounds.find((entry) => entry.id !== round.id);
+      const resources = await dependencies.roundResources.stageDelete({
+        processId,
+        roundId,
+      });
+      const timestamp = now();
+      try {
+        await dependencies.repository.deleteRound({
+          processId,
+          roundId,
+          previousActiveRoundId: process.activeRoundId,
+          nextActiveRoundId:
+            process.activeRoundId === roundId
+              ? nextRound?.id
+              : process.activeRoundId,
+          updatedAt: timestamp,
+        });
+      } catch (error) {
+        try {
+          await resources.rollback();
+        } catch (rollbackError) {
+          throw new AggregateError(
+            [error, rollbackError],
+            "Round deletion failed and its resources could not be fully restored."
+          );
+        }
+        throw error;
+      }
+
+      await resources.commit();
+      return {
+        deletedRoundId: roundId,
+        activeRoundId:
+          process.activeRoundId === roundId
+            ? nextRound?.id
+            : process.activeRoundId,
+        deletedMaterialCount: resources.materialCount,
+        deletedConversationCount: resources.conversationCount,
+      };
     },
 
     async setActiveRound(processId: string, roundId: string) {
@@ -217,15 +282,21 @@ function createRoundRecord(input: {
   timestamp: number;
   existingRounds: InterviewRound[];
 }): InterviewRound {
+  const customStageLabel = normalizeCustomStageLabel(
+    input.input.stage,
+    input.input.customStageLabel
+  );
   return {
     id: input.id,
     processId: input.processId,
     title: resolveRoundTitle(
       input.input.title,
       input.input.stage,
+      customStageLabel,
       input.existingRounds
     ),
     stage: input.input.stage,
+    customStageLabel,
     expectedInterviewTypes:
       input.input.expectedInterviewTypes ?? expectedTypesForStage(input.input.stage),
     expectedTypePolicy: input.input.expectedTypePolicy ?? "advisory",
@@ -244,6 +315,7 @@ function createRoundRecord(input: {
 function resolveRoundTitle(
   title: string | undefined,
   stage: InterviewRoundStage,
+  customStageLabel: string | undefined,
   existingRounds: InterviewRound[]
 ) {
   const explicit = normalizeOptionalText(title, 120);
@@ -257,7 +329,7 @@ function resolveRoundTitle(
     return explicit;
   }
 
-  const base = formatRoundStage(stage);
+  const base = customStageLabel ?? formatRoundStage(stage);
   if (!existingKeys.has(normalizeRoundTitleKey(base))) return base;
   for (let suffix = 2; suffix <= existingRounds.length + 2; suffix += 1) {
     const candidate = `${base} ${suffix}`;
@@ -312,6 +384,21 @@ export function formatRoundStage(stage: InterviewRoundStage) {
     )
     .join(" ")
     .replace("AI ML", "AI/ML");
+}
+
+export function formatRoundStageLabel(
+  round: Pick<InterviewRound, "stage" | "customStageLabel">
+) {
+  return round.customStageLabel ?? formatRoundStage(round.stage);
+}
+
+function normalizeCustomStageLabel(
+  stage: InterviewRoundStage,
+  customStageLabel: string | undefined
+) {
+  return stage === "other"
+    ? normalizeRequiredText(customStageLabel ?? "", "Custom stage", 80)
+    : undefined;
 }
 
 function normalizeRequiredText(value: string, label: string, maxLength: number) {

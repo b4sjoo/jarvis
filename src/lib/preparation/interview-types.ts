@@ -43,6 +43,7 @@ export interface InterviewRound {
   processId: string;
   title: string;
   stage: InterviewRoundStage;
+  customStageLabel?: string;
   expectedInterviewTypes: PreparationExpectedInterviewType[];
   expectedTypePolicy: PreparationExpectedTypePolicy;
   scheduledAt?: number;
@@ -69,6 +70,13 @@ export interface InterviewProcessRepository {
   listProcesses(input?: { includeArchived?: boolean }): Promise<InterviewProcess[]>;
   insertRound(round: InterviewRound): Promise<void>;
   updateRound(round: InterviewRound): Promise<void>;
+  deleteRound(input: {
+    processId: string;
+    roundId: string;
+    previousActiveRoundId?: string;
+    nextActiveRoundId?: string;
+    updatedAt: number;
+  }): Promise<void>;
   getRound(id: string): Promise<InterviewRound | undefined>;
   listRounds(processId: string): Promise<InterviewRound[]>;
   setActiveRound(input: {
@@ -76,6 +84,20 @@ export interface InterviewProcessRepository {
     roundId: string;
     updatedAt: number;
   }): Promise<void>;
+}
+
+export interface InterviewRoundResourceDeletionLease {
+  materialCount: number;
+  conversationCount: number;
+  commit(): Promise<void>;
+  rollback(): Promise<void>;
+}
+
+export interface InterviewRoundResourceLifecycle {
+  stageDelete(input: {
+    processId: string;
+    roundId: string;
+  }): Promise<InterviewRoundResourceDeletionLease>;
 }
 
 export interface PreparationWorkspaceLifecycle {

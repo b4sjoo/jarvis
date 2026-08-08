@@ -14,11 +14,6 @@ export const preparationWorkspaceService = createPreparationWorkspaceService({
   storage: tauriPreparationWorkspaceStorage,
 });
 
-export const interviewPreparationService = createInterviewProcessService({
-  repository: interviewProcessRepository,
-  workspaces: preparationWorkspaceService,
-});
-
 export const interviewPreparationMaterialService =
   createPreparationMaterialService({
     materials: preparationMaterialRepository,
@@ -26,3 +21,12 @@ export const interviewPreparationMaterialService =
     workspaces: preparationWorkspaceRepository,
     interviewProcesses: interviewProcessRepository,
   });
+
+export const interviewPreparationService = createInterviewProcessService({
+  repository: interviewProcessRepository,
+  workspaces: preparationWorkspaceService,
+  roundResources: {
+    stageDelete: ({ processId, roundId }) =>
+      interviewPreparationMaterialService.stageRoundDeletion(processId, roundId),
+  },
+});

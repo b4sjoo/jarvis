@@ -1,4 +1,7 @@
-import type { InterviewProcessRepository } from "./interview-types.js";
+import type {
+  InterviewProcessRepository,
+  InterviewRoundResourceDeletionLease,
+} from "./interview-types.js";
 import type {
   PreparationMaterial,
   PreparationMaterialRepository,
@@ -136,7 +139,209 @@ export function createPreparationMaterialService(
         throw error;
       }
     },
+
+    async updateScope(
+      workspaceId: string,
+      materialId: string,
+      scope: PreparationMaterialScope
+    ) {
+      await requireWritableInterviewWorkspace(dependencies, workspaceId);
+      await validateScope(dependencies.interviewProcesses, workspaceId, scope);
+      const material = await dependencies.materials.get(materialId);
+      if (
+        !material ||
+        material.workspaceId !== workspaceId ||
+        material.status === "deleted"
+      ) {
+        throw new Error("Preparation material not found.");
+      }
+      if (sameMaterialScope(material.scope, scope)) return material;
+
+      const updatedAt = now();
+      await dependencies.materials.updateScope({
+        id: material.id,
+        workspaceId,
+        scope,
+        updatedAt,
+      });
+      return { ...material, scope, updatedAt };
+    },
+
+    async stageRoundDeletion(
+      workspaceId: string,
+      roundId: string
+    ): Promise<InterviewRoundResourceDeletionLease> {
+      const workspace = await requireWritableInterviewWorkspace(
+        dependencies,
+        workspaceId
+      );
+      await validateScope(dependencies.interviewProcesses, workspaceId, {
+        kind: "round",
+        roundId,
+      });
+      const materials = (await dependencies.materials.list(workspaceId)).filter(
+        (material) =>
+          material.scope.kind === "round" && material.scope.roundId === roundId
+      );
+      return stageMaterialDeletionLease({
+        dependencies,
+        workspaceKind: workspace.kind,
+        workspaceId,
+        materials,
+        now,
+      });
+    },
   };
+}
+
+function sameMaterialScope(
+  current: PreparationMaterialScope,
+  next: PreparationMaterialScope
+) {
+  return (
+    current.kind === next.kind &&
+    (current.kind === "workspace" ||
+      (next.kind === "round" && current.roundId === next.roundId))
+  );
+}
+
+async function stageMaterialDeletionLease(input: {
+  dependencies: PreparationMaterialServiceDependencies;
+  workspaceKind: "interview";
+  workspaceId: string;
+  materials: PreparationMaterial[];
+  now: () => number;
+}): Promise<InterviewRoundResourceDeletionLease> {
+  const staged: Array<{
+    material: PreparationMaterial;
+    token?: string;
+  }> = [];
+  try {
+    for (const material of input.materials) {
+      const result = await input.dependencies.materialStorage.stageDelete({
+        kind: input.workspaceKind,
+        workspaceId: input.workspaceId,
+        materialId: material.id,
+      });
+      staged.push({ material, token: result.token });
+    }
+  } catch (error) {
+    const restoration = await restoreStagedMaterialDirectories(input, staged);
+    if (restoration.failures.length) {
+      throw new AggregateError(
+        [error, ...restoration.failures],
+        "Round material staging failed and could not be fully restored."
+      );
+    }
+    throw error;
+  }
+
+  const hidden: PreparationMaterial[] = [];
+  try {
+    const timestamp = input.now();
+    for (const entry of staged) {
+      await input.dependencies.materials.setLifecycle({
+        id: entry.material.id,
+        workspaceId: input.workspaceId,
+        status: "deleted",
+        updatedAt: timestamp,
+        deletedAt: timestamp,
+      });
+      hidden.push(entry.material);
+    }
+  } catch (error) {
+    try {
+      await rollbackStagedMaterialDeletion(input, staged, hidden);
+    } catch (rollbackError) {
+      throw new AggregateError(
+        [error, rollbackError],
+        "Round material metadata failed and could not be fully restored."
+      );
+    }
+    throw error;
+  }
+
+  let settled = false;
+  return {
+    materialCount: staged.length,
+    conversationCount: 0,
+    async commit() {
+      if (settled) return;
+      for (const entry of staged) {
+        if (!entry.token) continue;
+        await input.dependencies.materialStorage.commitDelete({
+          kind: input.workspaceKind,
+          workspaceId: input.workspaceId,
+          token: entry.token,
+        });
+      }
+      settled = true;
+    },
+    async rollback() {
+      if (settled) return;
+      await rollbackStagedMaterialDeletion(input, staged, hidden);
+      settled = true;
+    },
+  };
+}
+
+async function rollbackStagedMaterialDeletion(
+  input: {
+    dependencies: PreparationMaterialServiceDependencies;
+    workspaceKind: "interview";
+    workspaceId: string;
+    now: () => number;
+  },
+  staged: Array<{ material: PreparationMaterial; token?: string }>,
+  hidden: PreparationMaterial[]
+) {
+  const restoration = await restoreStagedMaterialDirectories(input, staged);
+  for (const material of hidden) {
+    if (!restoration.restored.has(material.id)) continue;
+    await input.dependencies.materials.setLifecycle({
+      id: material.id,
+      workspaceId: input.workspaceId,
+      status: material.status,
+      updatedAt: input.now(),
+      deletedAt: material.deletedAt,
+    });
+  }
+  if (restoration.failures.length) {
+    throw new AggregateError(
+      restoration.failures,
+      `Could not restore ${restoration.failures.length} staged round material(s).`
+    );
+  }
+}
+
+async function restoreStagedMaterialDirectories(
+  input: {
+    dependencies: PreparationMaterialServiceDependencies;
+    workspaceKind: "interview";
+    workspaceId: string;
+  },
+  staged: Array<{ material: PreparationMaterial; token?: string }>
+) {
+  const restored = new Set<string>();
+  const failures: unknown[] = [];
+  for (const entry of [...staged].reverse()) {
+    if (!entry.token) {
+      restored.add(entry.material.id);
+      continue;
+    }
+    try {
+      await input.dependencies.materialStorage.restoreDelete({
+        kind: input.workspaceKind,
+        workspaceId: input.workspaceId,
+        materialId: entry.material.id,
+        token: entry.token,
+      });
+      restored.add(entry.material.id);
+    } catch (error) {
+      failures.push(error);
+    }
+  }
+  return { restored, failures };
 }
 
 async function importOne(input: {

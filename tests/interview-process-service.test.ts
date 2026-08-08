@@ -1,10 +1,14 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createInterviewProcessService } from "../src/lib/preparation/interview-process-service.js";
+import {
+  createInterviewProcessService,
+  formatRoundStageLabel,
+} from "../src/lib/preparation/interview-process-service.js";
 import type {
   InterviewProcess,
   InterviewProcessRepository,
   InterviewRound,
+  InterviewRoundResourceLifecycle,
   PreparationWorkspaceLifecycle,
 } from "../src/lib/preparation/interview-types.js";
 
@@ -39,12 +43,30 @@ test("allows unresolved company and role without inventing values", async () => 
 
   const detail = await service.create({
     title: "Upcoming interview",
-    initialRound: { stage: "other" },
+    initialRound: { stage: "other", customStageLabel: "Conversation" },
   });
 
   assert.equal(detail.process.company, undefined);
   assert.equal(detail.process.role, undefined);
   assert.deepEqual(detail.rounds[0].expectedInterviewTypes, []);
+  assert.equal(formatRoundStageLabel(detail.rounds[0]), "Conversation");
+});
+
+test("requires and persists a custom label for Other rounds", async () => {
+  const harness = createHarness();
+  const service = createInterviewProcessService(harness.dependencies);
+
+  await assert.rejects(
+    service.create({ title: "Missing label", initialRound: { stage: "other" } }),
+    /Custom stage/
+  );
+  const detail = await service.create({
+    title: "Custom stage",
+    initialRound: { stage: "other", customStageLabel: "Domain Expertise" },
+  });
+
+  assert.equal(detail.rounds[0].title, "Domain Expertise");
+  assert.equal(detail.rounds[0].customStageLabel, "Domain Expertise");
 });
 
 test("rejects an active round owned by another process", async () => {
@@ -163,6 +185,65 @@ test("reloads the active process and its rounds from the repository", async () =
   );
 });
 
+test("deletes an active round, its resources, and selects the next round", async () => {
+  const harness = createHarness();
+  const service = createInterviewProcessService(harness.dependencies);
+  const detail = await service.create({
+    title: "Deletable",
+    initialRound: { stage: "recruiter-screen" },
+  });
+  const coding = await service.addRound(detail.process.id, { stage: "coding" });
+
+  const result = await service.deleteRound(
+    detail.process.id,
+    detail.rounds[0].id
+  );
+  const reloaded = await service.get(detail.process.id);
+
+  assert.equal(result.activeRoundId, coding.id);
+  assert.equal(result.deletedMaterialCount, 2);
+  assert.equal(reloaded?.process.activeRoundId, coding.id);
+  assert.deepEqual(reloaded?.rounds.map((round) => round.id), [coding.id]);
+  assert.deepEqual(harness.roundResourceEvents, [
+    `stage:${detail.rounds[0].id}`,
+    `commit:${detail.rounds[0].id}`,
+  ]);
+});
+
+test("rejects deleting the last round before staging resources", async () => {
+  const harness = createHarness();
+  const service = createInterviewProcessService(harness.dependencies);
+  const detail = await service.create({
+    title: "One round",
+    initialRound: { stage: "coding" },
+  });
+
+  await assert.rejects(
+    service.deleteRound(detail.process.id, detail.rounds[0].id),
+    /keep at least one round/
+  );
+  assert.deepEqual(harness.roundResourceEvents, []);
+});
+
+test("rolls back staged round resources when round deletion fails", async () => {
+  const harness = createHarness({ failRoundDelete: true });
+  const service = createInterviewProcessService(harness.dependencies);
+  const detail = await service.create({
+    title: "Rollback",
+    initialRound: { stage: "coding" },
+  });
+  await service.addRound(detail.process.id, { stage: "behavioral" });
+
+  await assert.rejects(
+    service.deleteRound(detail.process.id, detail.rounds[0].id),
+    /round delete failed/
+  );
+  assert.deepEqual(harness.roundResourceEvents, [
+    `stage:${detail.rounds[0].id}`,
+    `rollback:${detail.rounds[0].id}`,
+  ]);
+});
+
 test("removes the workspace when process creation cannot settle", async () => {
   const harness = createHarness({ failRoundInsert: true });
   const service = createInterviewProcessService(harness.dependencies);
@@ -205,10 +286,13 @@ test("keeps archived interview processes read-only", async () => {
   );
 });
 
-function createHarness(options: { failRoundInsert?: boolean } = {}) {
+function createHarness(
+  options: { failRoundInsert?: boolean; failRoundDelete?: boolean } = {}
+) {
   const processes = new Map<string, InterviewProcess>();
   const rounds = new Map<string, InterviewRound>();
   const workspaceEvents: string[] = [];
+  const roundResourceEvents: string[] = [];
   let workspaceId = 0;
   let roundId = 0;
   let timestamp = 1_000;
@@ -273,6 +357,20 @@ function createHarness(options: { failRoundInsert?: boolean } = {}) {
     async updateRound(round) {
       rounds.set(round.id, { ...round });
     },
+    async deleteRound(input) {
+      if (options.failRoundDelete) throw new Error("round delete failed");
+      rounds.delete(input.roundId);
+      if (input.previousActiveRoundId === input.roundId) {
+        const process = processes.get(input.processId);
+        if (process) {
+          processes.set(input.processId, {
+            ...process,
+            activeRoundId: input.nextActiveRoundId,
+            updatedAt: input.updatedAt,
+          });
+        }
+      }
+    },
     async getRound(roundId) {
       const round = rounds.get(roundId);
       return round ? { ...round } : undefined;
@@ -295,9 +393,25 @@ function createHarness(options: { failRoundInsert?: boolean } = {}) {
 
   return {
     workspaceEvents,
+    roundResourceEvents,
     dependencies: {
       repository,
       workspaces,
+      roundResources: {
+        async stageDelete(input) {
+          roundResourceEvents.push(`stage:${input.roundId}`);
+          return {
+            materialCount: 2,
+            conversationCount: 0,
+            async commit() {
+              roundResourceEvents.push(`commit:${input.roundId}`);
+            },
+            async rollback() {
+              roundResourceEvents.push(`rollback:${input.roundId}`);
+            },
+          };
+        },
+      } satisfies InterviewRoundResourceLifecycle,
       now: () => ++timestamp,
       createId: () => `round-${++roundId}`,
     },

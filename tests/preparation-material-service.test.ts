@@ -85,6 +85,43 @@ test("keeps archived processes read-only", async () => {
   assert.deepEqual(harness.storageEvents, []);
 });
 
+test("reassigns material scope without replacing its immutable original", async () => {
+  const existing = material({ id: "material-1" });
+  const harness = createHarness({ existingMaterials: [existing] });
+  const service = createPreparationMaterialService(harness.dependencies);
+
+  const updated = await service.updateScope("workspace-1", "material-1", {
+    kind: "round",
+    roundId: "round-1",
+  });
+
+  assert.deepEqual(updated.scope, { kind: "round", roundId: "round-1" });
+  assert.equal(updated.id, existing.id);
+  assert.equal(updated.checksumSha256, existing.checksumSha256);
+  assert.equal(updated.storageRelativePath, existing.storageRelativePath);
+  assert.deepEqual(harness.storageEvents, []);
+});
+
+test("rejects reassigning material scope to a round owned by another process", async () => {
+  const existing = material({ id: "material-1" });
+  const harness = createHarness({
+    existingMaterials: [existing],
+    rounds: [round({ id: "foreign-round", processId: "workspace-2" })],
+  });
+  const service = createPreparationMaterialService(harness.dependencies);
+
+  await assert.rejects(
+    service.updateScope("workspace-1", "material-1", {
+      kind: "round",
+      roundId: "foreign-round",
+    }),
+    /does not belong/
+  );
+  assert.deepEqual(harness.materials.get("material-1")?.scope, {
+    kind: "workspace",
+  });
+});
+
 test("restores file and metadata when material deletion cannot commit", async () => {
   const existing = material({ id: "material-1" });
   const harness = createHarness({
@@ -146,6 +183,75 @@ test("removes a copied file when database insertion fails", async () => {
   ]);
 });
 
+test("stages and commits deletion for round-scoped materials only", async () => {
+  const roundMaterial = material({
+    id: "round-material",
+    scope: { kind: "round", roundId: "round-1" },
+  });
+  const processMaterial = material({ id: "process-material" });
+  const harness = createHarness({
+    existingMaterials: [roundMaterial, processMaterial],
+  });
+  const service = createPreparationMaterialService(harness.dependencies);
+
+  const lease = await service.stageRoundDeletion("workspace-1", "round-1");
+  assert.equal(lease.materialCount, 1);
+  assert.equal(harness.materials.get("round-material")?.status, "deleted");
+  assert.equal(harness.materials.get("process-material")?.status, "received");
+
+  await lease.commit();
+  assert.deepEqual(harness.storageEvents, [
+    "stage:round-material",
+    "commit:round-material--delete",
+  ]);
+});
+
+test("restores staged round materials when the owner rolls deletion back", async () => {
+  const roundMaterial = material({
+    id: "round-material",
+    scope: { kind: "round", roundId: "round-1" },
+  });
+  const harness = createHarness({ existingMaterials: [roundMaterial] });
+  const service = createPreparationMaterialService(harness.dependencies);
+
+  const lease = await service.stageRoundDeletion("workspace-1", "round-1");
+  await lease.rollback();
+
+  assert.equal(harness.materials.get("round-material")?.status, "received");
+  assert.deepEqual(harness.storageEvents, [
+    "stage:round-material",
+    "restore:round-material--delete",
+  ]);
+});
+
+test("attempts every round material restore after one restore fails", async () => {
+  const first = material({
+    id: "first",
+    scope: { kind: "round", roundId: "round-1" },
+  });
+  const second = material({
+    id: "second",
+    scope: { kind: "round", roundId: "round-1" },
+  });
+  const harness = createHarness({
+    existingMaterials: [first, second],
+    failStorageRestoreFor: ["second"],
+  });
+  const service = createPreparationMaterialService(harness.dependencies);
+
+  const lease = await service.stageRoundDeletion("workspace-1", "round-1");
+  await assert.rejects(lease.rollback(), /Could not restore 1 staged round material/);
+
+  assert.equal(harness.materials.get("first")?.status, "received");
+  assert.equal(harness.materials.get("second")?.status, "deleted");
+  assert.deepEqual(harness.storageEvents, [
+    "stage:first",
+    "stage:second",
+    "restore:second--delete",
+    "restore:first--delete",
+  ]);
+});
+
 function createHarness(
   options: {
     workspaceStatus?: PreparationWorkspace["status"];
@@ -154,6 +260,7 @@ function createHarness(
     failInsert?: boolean;
     failStorageCommit?: boolean;
     failStorageRestore?: boolean;
+    failStorageRestoreFor?: string[];
   } = {}
 ) {
   const workspace: PreparationWorkspace = {
@@ -198,6 +305,7 @@ function createHarness(
     },
     async insertRound() {},
     async updateRound() {},
+    async deleteRound() {},
     async getRound(roundId) {
       return rounds.get(roundId);
     },
@@ -230,6 +338,17 @@ function createHarness(
           entry.status !== "deleted"
       );
     },
+    async updateScope(input) {
+      const entry = materials.get(input.id);
+      if (!entry || entry.workspaceId !== input.workspaceId) {
+        throw new Error("not found");
+      }
+      materials.set(input.id, {
+        ...entry,
+        scope: input.scope,
+        updatedAt: input.updatedAt,
+      });
+    },
     async setLifecycle(input) {
       const entry = materials.get(input.id);
       if (!entry) throw new Error("not found");
@@ -261,7 +380,12 @@ function createHarness(
     },
     async restoreDelete(input) {
       storageEvents.push(`restore:${input.token}`);
-      if (options.failStorageRestore) throw new Error("storage restore failed");
+      if (
+        options.failStorageRestore ||
+        options.failStorageRestoreFor?.includes(input.materialId)
+      ) {
+        throw new Error("storage restore failed");
+      }
     },
     async commitDelete(input) {
       storageEvents.push(`commit:${input.token}`);

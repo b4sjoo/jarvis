@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  formatPreparationMaterialScope,
   formatPreparationMaterialType,
   materialsForActiveRound,
 } from "../src/lib/preparation/material-presentation.js";
@@ -49,6 +50,22 @@ test("uses human-readable material types without changing MIME provenance", () =
   assert.equal(
     docx.mimeType,
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+  );
+});
+
+test("uses an explicit entire-process scope label", () => {
+  const roundTitles = new Map([["round-1", "Coding 1"]]);
+
+  assert.equal(
+    formatPreparationMaterialScope({ kind: "workspace" }, roundTitles),
+    "Entire process"
+  );
+  assert.equal(
+    formatPreparationMaterialScope(
+      { kind: "round", roundId: "round-1" },
+      roundTitles
+    ),
+    "Coding 1"
   );
 });
 

@@ -15,6 +15,7 @@ import {
 } from "@/components";
 import {
   interviewPreparationMaterialService,
+  formatPreparationMaterialScope,
   formatPreparationMaterialType,
   materialsForActiveRound,
   type InterviewRound,
@@ -22,12 +23,14 @@ import {
   type PreparationMaterialScope,
   type PreparationWorkspaceStatus,
 } from "@/lib/preparation";
+import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import {
   FileImage,
   FileText,
   Info,
   Loader2,
+  Pencil,
   Plus,
   Trash2,
 } from "lucide-react";
@@ -64,7 +67,10 @@ export const MaterialPanel = ({
   }>();
   const [deleteTarget, setDeleteTarget] = useState<PreparationMaterial>();
   const [inspectTarget, setInspectTarget] = useState<PreparationMaterial>();
+  const [scopeEditTarget, setScopeEditTarget] = useState<PreparationMaterial>();
+  const [scopeEditValue, setScopeEditValue] = useState(PROCESS_SCOPE);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [isUpdatingScope, setIsUpdatingScope] = useState(false);
 
   const roundTitles = useMemo(
     () => new Map(rounds.map((round) => [round.id, round.title])),
@@ -82,6 +88,7 @@ export const MaterialPanel = ({
     setImportFeedback(undefined);
     setDeleteTarget(undefined);
     setInspectTarget(undefined);
+    setScopeEditTarget(undefined);
   }, [processId]);
 
   const chooseFiles = async () => {
@@ -123,6 +130,11 @@ export const MaterialPanel = ({
         (outcome) => outcome.status === "duplicate"
       );
       const failures = outcomes.filter((outcome) => outcome.status === "failed");
+      void invoke("log_preparation_material_import_summary", {
+        addedCount: imported.length,
+        duplicateCount: duplicates.length,
+        failedCount: failures.length,
+      }).catch(() => {});
 
       await onChanged();
       if (duplicates.length || failures.length) {
@@ -163,6 +175,28 @@ export const MaterialPanel = ({
       onError(errorMessage(reason));
     } finally {
       setIsDeleting(false);
+    }
+  };
+
+  const updateMaterialScope = async () => {
+    if (!scopeEditTarget) return;
+    setIsUpdatingScope(true);
+    try {
+      const scope = parseScope(scopeEditValue);
+      await interviewPreparationMaterialService.updateScope(
+        processId,
+        scopeEditTarget.id,
+        scope
+      );
+      setScopeEditTarget(undefined);
+      await onChanged();
+      onNotice(
+        `Material moved to ${formatPreparationMaterialScope(scope, roundTitles)}`
+      );
+    } catch (reason) {
+      onError(errorMessage(reason));
+    } finally {
+      setIsUpdatingScope(false);
     }
   };
 
@@ -209,7 +243,9 @@ export const MaterialPanel = ({
                   <div className="mt-1 flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
                     <span>{formatBytes(material.sizeBytes)}</span>
                     <span>·</span>
-                    <span>{scopeLabel(material.scope, roundTitles)}</span>
+                    <span>
+                      {formatPreparationMaterialScope(material.scope, roundTitles)}
+                    </span>
                     <span>·</span>
                     <span>Stored</span>
                   </div>
@@ -221,6 +257,18 @@ export const MaterialPanel = ({
                   onClick={() => setInspectTarget(material)}
                 >
                   <Info className="size-4" />
+                </Button>
+                <Button
+                  size="icon"
+                  variant="ghost"
+                  title="Change material scope"
+                  disabled={readOnly}
+                  onClick={() => {
+                    setScopeEditTarget(material);
+                    setScopeEditValue(scopeToValue(material.scope));
+                  }}
+                >
+                  <Pencil className="size-4" />
                 </Button>
                 <Button
                   size="icon"
@@ -317,6 +365,59 @@ export const MaterialPanel = ({
       </Dialog>
 
       <Dialog
+        open={Boolean(scopeEditTarget)}
+        onOpenChange={(open) => {
+          if (!open && !isUpdatingScope) setScopeEditTarget(undefined);
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Change material scope</DialogTitle>
+            <DialogDescription>
+              Only the assignment changes. The original file, checksum, revision,
+              and provenance stay unchanged.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-2 text-sm">
+            <span className="font-medium">Scope</span>
+            <Select value={scopeEditValue} onValueChange={setScopeEditValue}>
+              <SelectTrigger className="w-full">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={PROCESS_SCOPE}>Entire process</SelectItem>
+                {rounds.map((round) => (
+                  <SelectItem key={round.id} value={`round:${round.id}`}>
+                    {round.title}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              disabled={isUpdatingScope}
+              onClick={() => setScopeEditTarget(undefined)}
+            >
+              Cancel
+            </Button>
+            <Button
+              disabled={
+                isUpdatingScope ||
+                !scopeEditTarget ||
+                scopeEditValue === scopeToValue(scopeEditTarget.scope)
+              }
+              onClick={updateMaterialScope}
+            >
+              {isUpdatingScope && <Loader2 className="size-4 animate-spin" />}
+              Save scope
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
         open={Boolean(inspectTarget)}
         onOpenChange={(open) => {
           if (!open) setInspectTarget(undefined);
@@ -334,7 +435,9 @@ export const MaterialPanel = ({
               <dt className="text-muted-foreground">Name</dt>
               <dd className="break-words">{inspectTarget.originalFileName}</dd>
               <dt className="text-muted-foreground">Scope</dt>
-              <dd>{scopeLabel(inspectTarget.scope, roundTitles)}</dd>
+              <dd>
+                {formatPreparationMaterialScope(inspectTarget.scope, roundTitles)}
+              </dd>
               <dt className="text-muted-foreground">Type</dt>
               <dd>{formatPreparationMaterialType(inspectTarget)}</dd>
               <dt className="text-muted-foreground">Size</dt>
@@ -392,13 +495,8 @@ function parseScope(value: string): PreparationMaterialScope {
     : { kind: "workspace" };
 }
 
-function scopeLabel(
-  scope: PreparationMaterialScope,
-  roundTitles: Map<string, string>
-) {
-  return scope.kind === "workspace"
-    ? "Process"
-    : roundTitles.get(scope.roundId) ?? "Round";
+function scopeToValue(scope: PreparationMaterialScope) {
+  return scope.kind === "round" ? `round:${scope.roundId}` : PROCESS_SCOPE;
 }
 
 function formatBytes(size: number) {

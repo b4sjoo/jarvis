@@ -128,6 +128,12 @@ export interface PreparationMaterialRepository {
     workspaceId: string,
     checksumSha256: string
   ): Promise<PreparationMaterial | undefined>;
+  updateScope(input: {
+    id: string;
+    workspaceId: string;
+    scope: PreparationMaterialScope;
+    updatedAt: number;
+  }): Promise<void>;
   setLifecycle(input: {
     id: string;
     workspaceId: string;

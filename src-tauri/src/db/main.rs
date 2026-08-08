@@ -45,5 +45,12 @@ pub fn migrations() -> Vec<Migration> {
             sql: include_str!("migrations/preparation-material-constraints.sql"),
             kind: MigrationKind::Up,
         },
+        // Migration 7: Preserve user-defined labels for Other interview rounds
+        Migration {
+            version: 7,
+            description: "add_interview_round_custom_stage_label",
+            sql: include_str!("migrations/interview-round-custom-stage.sql"),
+            kind: MigrationKind::Up,
+        },
     ]
 }

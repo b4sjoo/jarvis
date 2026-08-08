@@ -45,6 +45,18 @@ fn write_meeting_trace_log(message: String) {
     eprintln!("{}", message);
 }
 
+#[tauri::command]
+fn log_preparation_material_import_summary(
+    added_count: u32,
+    duplicate_count: u32,
+    failed_count: u32,
+) {
+    eprintln!(
+        "[interview-preparation] material-import-settled added={} duplicate={} failed={}",
+        added_count, duplicate_count, failed_count
+    );
+}
+
 const MEETING_TRACE_METRICS_FILE: &str = "meeting-trace-metrics.json";
 const MEETING_TRACE_METRICS_MAX_BYTES: usize = 2 * 1024 * 1024;
 const MEETING_TRACE_EXPORTS_DIR: &str = "meeting-trace-exports";
@@ -414,6 +426,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_app_version,
             write_meeting_trace_log,
+            log_preparation_material_import_summary,
             read_meeting_trace_metrics,
             write_meeting_trace_metrics,
             export_meeting_trace,

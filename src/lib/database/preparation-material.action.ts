@@ -127,6 +127,26 @@ export const preparationMaterialRepository: PreparationMaterialRepository = {
     return rows[0] ? mapMaterialRow(rows[0]) : undefined;
   },
 
+  async updateScope(input) {
+    const db = await getDatabase();
+    const result = await db.execute(
+      `UPDATE preparation_materials
+       SET scope_kind = ?, scope_id = ?, updated_at = ?
+       WHERE id = ? AND workspace_id = ?
+         AND status <> 'deleted' AND deleted_at IS NULL`,
+      [
+        input.scope.kind,
+        input.scope.kind === "round" ? input.scope.roundId : null,
+        input.updatedAt,
+        input.id,
+        input.workspaceId,
+      ]
+    );
+    if (result.rowsAffected === 0) {
+      throw new Error("Preparation material not found.");
+    }
+  },
+
   async setLifecycle(input) {
     const db = await getDatabase();
     const result = await db.execute(
