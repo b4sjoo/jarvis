@@ -5,3 +5,8 @@ export interface TYPE_PROVIDER {
   isCustom?: boolean;
   curl: string;
 }
+
+export interface SelectedAiProviderConfig {
+  provider: string;
+  variables: Record<string, string>;
+}

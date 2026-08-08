@@ -11,3 +11,4 @@ export * from "./material-tauri-storage.js";
 export * from "./material-extraction-tauri.js";
 export * from "./material-extraction-service.js";
 export * from "./app-service.js";
+export * from "./model-route.js";

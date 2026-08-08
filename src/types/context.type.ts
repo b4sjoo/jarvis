@@ -1,5 +1,9 @@
 import { Dispatch, SetStateAction } from "react";
-import { ScreenshotConfig, TYPE_PROVIDER } from "@/types";
+import {
+  ScreenshotConfig,
+  SelectedAiProviderConfig,
+  TYPE_PROVIDER,
+} from "@/types";
 import { CursorType, CustomizableState } from "@/lib/storage";
 
 export type IContextType = {
@@ -7,17 +11,12 @@ export type IContextType = {
   setSystemPrompt: Dispatch<SetStateAction<string>>;
   allAiProviders: TYPE_PROVIDER[];
   customAiProviders: TYPE_PROVIDER[];
-  selectedAIProvider: {
-    provider: string;
-    variables: Record<string, string>;
-  };
-  onSetSelectedAIProvider: ({
-    provider,
-    variables,
-  }: {
-    provider: string;
-    variables: Record<string, string>;
-  }) => void;
+  selectedAIProvider: SelectedAiProviderConfig;
+  onSetSelectedAIProvider: (selection: SelectedAiProviderConfig) => void;
+  selectedPreparationAIProvider: SelectedAiProviderConfig;
+  onSetSelectedPreparationAIProvider: (
+    selection: SelectedAiProviderConfig
+  ) => void;
   allSttProviders: TYPE_PROVIDER[];
   customSttProviders: TYPE_PROVIDER[];
   selectedSttProvider: {

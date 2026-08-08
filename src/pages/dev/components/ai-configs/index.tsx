@@ -14,8 +14,22 @@ export const AIProviders = (settings: UseSettingsReturn) => {
 
       {/* Custom Provider */}
       <CustomProviders {...settings} />
-      {/* Providers Selection */}
-      <Providers {...settings} />
+      <Providers
+        allAiProviders={settings.allAiProviders}
+        selectedProvider={settings.selectedAIProvider}
+        onSetSelectedProvider={settings.onSetSelectedAIProvider}
+        title="Direct Conversation Model"
+        description="Used by the main Jarvis conversation experience. This selection is independent from interview preparation."
+        placeholder="Choose a conversation model"
+      />
+      <Providers
+        allAiProviders={settings.allAiProviders}
+        selectedProvider={settings.selectedPreparationAIProvider}
+        onSetSelectedProvider={settings.onSetSelectedPreparationAIProvider}
+        title="Preparation Model"
+        description="Used for interview preparation conversations, material synthesis, and multimodal analysis. Configure a capable long-context model independently."
+        placeholder="Choose a preparation model"
+      />
     </div>
   );
 };

@@ -16,7 +16,12 @@ import {
   CursorType,
   updateCursorType,
 } from "@/lib/storage";
-import { IContextType, ScreenshotConfig, TYPE_PROVIDER } from "@/types";
+import {
+  IContextType,
+  ScreenshotConfig,
+  SelectedAiProviderConfig,
+  TYPE_PROVIDER,
+} from "@/types";
 import curl2Json from "@bany/curl-to-json";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -99,10 +104,13 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
   const [customAiProviders, setCustomAiProviders] = useState<TYPE_PROVIDER[]>(
     []
   );
-  const [selectedAIProvider, setSelectedAIProvider] = useState<{
-    provider: string;
-    variables: Record<string, string>;
-  }>({
+  const [selectedAIProvider, setSelectedAIProvider] =
+    useState<SelectedAiProviderConfig>({
+      provider: "",
+      variables: {},
+    });
+  const [selectedPreparationAIProvider, setSelectedPreparationAIProvider] =
+    useState<SelectedAiProviderConfig>({
     provider: "",
     variables: {},
   });
@@ -211,6 +219,15 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
     );
     if (savedSelectedAi) {
       setSelectedAIProvider(JSON.parse(savedSelectedAi));
+    }
+
+    const savedSelectedPreparationAi = safeLocalStorage.getItem(
+      STORAGE_KEYS.SELECTED_PREPARATION_AI_PROVIDER
+    );
+    if (savedSelectedPreparationAi) {
+      setSelectedPreparationAIProvider(
+        JSON.parse(savedSelectedPreparationAi)
+      );
     }
 
     // Load selected STT provider
@@ -386,6 +403,7 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
       if (
         e.key === STORAGE_KEYS.CUSTOM_AI_PROVIDERS ||
         e.key === STORAGE_KEYS.SELECTED_AI_PROVIDER ||
+        e.key === STORAGE_KEYS.SELECTED_PREPARATION_AI_PROVIDER ||
         e.key === STORAGE_KEYS.CUSTOM_SPEECH_PROVIDERS ||
         e.key === STORAGE_KEYS.SELECTED_STT_PROVIDER ||
         e.key === STORAGE_KEYS.SYSTEM_PROMPT ||
@@ -426,6 +444,15 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
       );
     }
   }, [selectedAIProvider]);
+
+  useEffect(() => {
+    if (selectedPreparationAIProvider.provider) {
+      safeLocalStorage.setItem(
+        STORAGE_KEYS.SELECTED_PREPARATION_AI_PROVIDER,
+        JSON.stringify(selectedPreparationAIProvider)
+      );
+    }
+  }, [selectedPreparationAIProvider]);
 
   // Sync selected STT to localStorage
   useEffect(() => {
@@ -475,6 +502,22 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
 
     setSelectedAIProvider((prev) => ({
       ...prev,
+      provider,
+      variables,
+    }));
+  };
+
+  const onSetSelectedPreparationAIProvider = ({
+    provider,
+    variables,
+  }: SelectedAiProviderConfig) => {
+    if (provider && !allAiProviders.some((candidate) => candidate.id === provider)) {
+      console.warn(`Invalid Preparation AI provider ID: ${provider}`);
+      return;
+    }
+
+    setSelectedPreparationAIProvider((previous) => ({
+      ...previous,
       provider,
       variables,
     }));
@@ -558,6 +601,8 @@ export const AppProvider = ({ children }: { children: ReactNode }) => {
     customAiProviders,
     selectedAIProvider,
     onSetSelectedAIProvider,
+    selectedPreparationAIProvider,
+    onSetSelectedPreparationAIProvider,
     allSttProviders,
     customSttProviders,
     selectedSttProvider,

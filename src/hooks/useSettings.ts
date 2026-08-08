@@ -14,8 +14,10 @@ export const useSettings = () => {
     allAiProviders,
     allSttProviders,
     selectedAIProvider,
+    selectedPreparationAIProvider,
     selectedSttProvider,
     onSetSelectedAIProvider,
+    onSetSelectedPreparationAIProvider,
     onSetSelectedSttProvider,
   } = useApp();
   const [variables, setVariables] = useState<{ key: string; value: string }[]>(
@@ -99,8 +101,10 @@ export const useSettings = () => {
     allAiProviders,
     allSttProviders,
     selectedAIProvider,
+    selectedPreparationAIProvider,
     selectedSttProvider,
     onSetSelectedAIProvider,
+    onSetSelectedPreparationAIProvider,
     onSetSelectedSttProvider,
     handleDeleteAllChatsConfirm,
     showDeleteConfirmDialog,

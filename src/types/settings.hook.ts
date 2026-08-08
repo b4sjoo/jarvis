@@ -1,4 +1,7 @@
-import { TYPE_PROVIDER } from "./provider.type";
+import {
+  SelectedAiProviderConfig,
+  TYPE_PROVIDER,
+} from "./provider.type";
 import { ScreenshotConfig, ScreenshotMode } from "./settings";
 
 export interface UseSettingsReturn {
@@ -11,7 +14,8 @@ export interface UseSettingsReturn {
   handleScreenshotEnabledChange: (enabled: boolean) => void;
   allAiProviders: TYPE_PROVIDER[];
   allSttProviders: TYPE_PROVIDER[];
-  selectedAIProvider: { provider: string; variables: Record<string, string> };
+  selectedAIProvider: SelectedAiProviderConfig;
+  selectedPreparationAIProvider: SelectedAiProviderConfig;
   selectedSttProvider: {
     provider: string;
     variables: Record<string, string>;
@@ -20,6 +24,9 @@ export interface UseSettingsReturn {
     provider: string;
     variables: Record<string, string>;
   }) => void;
+  onSetSelectedPreparationAIProvider: (
+    provider: SelectedAiProviderConfig
+  ) => void;
   onSetSelectedSttProvider: (provider: {
     provider: string;
     variables: Record<string, string>;
