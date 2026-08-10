@@ -7,6 +7,7 @@ import type {
   PreparationExpectedInterviewType,
 } from "./interview-types.js";
 import { createPreparationProfileSourceFingerprint } from "./preparation-composition-service.js";
+import { buildPreparationSnapshotArtifactManifest } from "./snapshot-artifact-manifest.js";
 import {
   PREPARATION_PLAYBOOK_REGISTRY_VERSION,
   PREPARATION_RUNTIME_CAPABILITY_VERSION,
@@ -38,6 +39,20 @@ const MAX_EVIDENCE_ITEMS = 32;
 const MAX_NARRATIVE_NODES = 40;
 const MAX_EVIDENCE_INDEX_ITEMS = 120;
 const MAX_SPEECH_BIAS_TERMS = 32;
+
+export class PreparationCurrentContextSwitchRequiredError extends Error {
+  readonly code = "preparation-current-context-switch-required";
+
+  constructor(
+    readonly current: { processId?: string; roundId?: string; snapshotId?: string },
+    readonly target: { processId: string; roundId: string; snapshotId?: string }
+  ) {
+    super(
+      "Another interview Round is current. Confirm the context switch before continuing."
+    );
+    this.name = "PreparationCurrentContextSwitchRequiredError";
+  }
+}
 
 export interface PreparationSnapshotEvent {
   name:
@@ -96,6 +111,23 @@ export function createPreparationSnapshotService(dependencies: {
       return dependencies.snapshots.getActive(input);
     },
 
+    getCurrentContext() {
+      return dependencies.snapshots.getCurrentContext();
+    },
+
+    async getCurrentSnapshot() {
+      const context = await dependencies.snapshots.getCurrentContext();
+      if (!context.processId || !context.selectedSnapshotId) return undefined;
+      return dependencies.snapshots.get(
+        context.processId,
+        context.selectedSnapshotId
+      );
+    },
+
+    listCurrentContextEvents() {
+      return dependencies.snapshots.listCurrentContextEvents();
+    },
+
     listActivationEvents(input: { processId: string; roundId: string }) {
       return dependencies.snapshots.listActivationEvents(input);
     },
@@ -139,8 +171,20 @@ export function createPreparationSnapshotService(dependencies: {
               return { snapshot: existing, created: false };
             }
             const version = await dependencies.snapshots.nextVersion(input);
+            const snapshotId = `preparation-snapshot-${createId()}`;
+            const artifactManifest = buildPreparationSnapshotArtifactManifest({
+              snapshotId,
+              payload: {
+                ...prepared.artifacts,
+                sourceManifest: prepared.sourceManifest,
+                warnings: prepared.warnings,
+              },
+              statementIdsByContent: statementIdsByNormalizedContent(
+                prepared.confirmedStatements
+              ),
+            });
             const snapshot: InterviewPreparationSnapshot = {
-              id: `preparation-snapshot-${createId()}`,
+              id: snapshotId,
               processId: input.processId,
               roundId: input.roundId,
               version,
@@ -153,6 +197,7 @@ export function createPreparationSnapshotService(dependencies: {
               contentHash: prepared.contentHash,
               runtimeCharCount: prepared.runtimeCharCount,
               ...prepared.artifacts,
+              artifactManifest,
               sourceManifest: prepared.sourceManifest,
               warnings: prepared.warnings,
               status: "ready",
@@ -211,17 +256,70 @@ export function createPreparationSnapshotService(dependencies: {
       );
     },
 
+    async setCurrentContext(input: {
+      processId: string;
+      roundId: string;
+      allowContextSwitch?: boolean;
+    }) {
+      const [context, process, round] = await Promise.all([
+        dependencies.snapshots.getCurrentContext(),
+        dependencies.interviewProcesses.getProcess(input.processId),
+        dependencies.interviewProcesses.getRound(input.roundId),
+      ]);
+      requireWritableRound(process, round, input);
+      const switchesContext = Boolean(
+        context.processId &&
+          (context.processId !== input.processId || context.roundId !== input.roundId)
+      );
+      if (switchesContext && !input.allowContextSwitch) {
+        throw new PreparationCurrentContextSwitchRequiredError(
+          {
+            processId: context.processId,
+            roundId: context.roundId,
+            snapshotId: context.selectedSnapshotId,
+          },
+          input
+        );
+      }
+      const updatedAt = now();
+      const settled = await dependencies.snapshots.setCurrentContext({
+        processId: input.processId,
+        roundId: input.roundId,
+        expectedRevision: context.revision,
+        updatedAt,
+      });
+      if (!settled) {
+        throw new Error("The current interview context changed. Review it and try again.");
+      }
+      return dependencies.snapshots.getCurrentContext();
+    },
+
     async activate(input: {
       processId: string;
       roundId: string;
       snapshotId: string;
+      allowContextSwitch?: boolean;
     }) {
-      const snapshot = await dependencies.snapshots.get(
-        input.processId,
-        input.snapshotId
-      );
+      const [snapshot, context] = await Promise.all([
+        dependencies.snapshots.get(input.processId, input.snapshotId),
+        dependencies.snapshots.getCurrentContext(),
+      ]);
       if (!snapshot || snapshot.roundId !== input.roundId) {
         throw new Error("Preparation snapshot not found for this round.");
+      }
+      const switchesContext = Boolean(
+        context.processId &&
+          (context.processId !== input.processId || context.roundId !== input.roundId)
+      );
+      if (switchesContext && !input.allowContextSwitch) {
+        throw new PreparationCurrentContextSwitchRequiredError(
+          {
+            processId: context.processId,
+            roundId: context.roundId,
+            snapshotId: context.selectedSnapshotId,
+          },
+          input
+        );
       }
       await validateSnapshotActivationAuthority(dependencies, snapshot);
       const activatedAt = now();
@@ -230,6 +328,7 @@ export function createPreparationSnapshotService(dependencies: {
         roundId: input.roundId,
         snapshotId: input.snapshotId,
         expectedContentHash: snapshot.contentHash,
+        expectedContextRevision: context.revision,
         activatedAt,
       });
       if (!activated) {
@@ -243,6 +342,14 @@ export function createPreparationSnapshotService(dependencies: {
       });
       if (!active || active.id !== input.snapshotId) {
         throw new Error("Snapshot activation did not settle on the selected version.");
+      }
+      const settledContext = await dependencies.snapshots.getCurrentContext();
+      if (
+        settledContext.processId !== input.processId ||
+        settledContext.roundId !== input.roundId ||
+        settledContext.selectedSnapshotId !== input.snapshotId
+      ) {
+        throw new Error("Snapshot activation did not settle the global current context.");
       }
       emit({
         name: "Preparation snapshot activated",
@@ -282,10 +389,12 @@ export function createPreparationSnapshotService(dependencies: {
         throw new Error("The selected snapshot is no longer active for this round.");
       }
       const deactivatedAt = now();
+      const context = await dependencies.snapshots.getCurrentContext();
       const deactivated = await dependencies.snapshots.deactivate({
         processId: input.processId,
         roundId: input.roundId,
         snapshotId: input.snapshotId,
+        expectedContextRevision: context.revision,
         deactivatedAt,
       });
       if (!deactivated) {
@@ -1048,6 +1157,10 @@ export function diffPreparationSnapshots(
     ["opening", "Opening pack", next.openingPack.items, previous?.openingPack.items],
     ["narratives", "Narratives", next.narrativePack.graphs, previous?.narrativePack.graphs],
     ["playbooks", "Playbook overlays", next.playbookOverlays, previous?.playbookOverlays],
+    ["session-launch", "Session launch plan", next.sessionLaunchPlan, previous?.sessionLaunchPlan],
+    ["warnings", "Warnings", next.warnings, previous?.warnings],
+    ["evidence-index", "Evidence index", next.evidenceIndex, previous?.evidenceIndex],
+    ["source-manifest", "Source manifest", next.sourceManifest, previous?.sourceManifest],
   ] as const;
   return sections.map(([id, label, nextValue, previousValue]) => {
     const unchanged =
@@ -1092,7 +1205,12 @@ function describeSnapshotSectionChanges(
   previousValue: unknown
 ) {
   if (previousValue === undefined) return ["Added in the initial snapshot"];
-  if (id === "runtime-brief" || id === "strategy") {
+  if (
+    id === "runtime-brief" ||
+    id === "strategy" ||
+    id === "session-launch" ||
+    id === "source-manifest"
+  ) {
     const previous = previousValue as Record<string, unknown>;
     const next = nextValue as Record<string, unknown>;
     return Array.from(new Set([...Object.keys(previous), ...Object.keys(next)]))
@@ -1138,6 +1256,10 @@ function snapshotItemKey(
       return String(item.graphId ?? "");
     case "playbooks":
       return String(item.expectedInterviewType ?? "");
+    case "warnings":
+      return `${String(item.code ?? "")}\u0000${String(item.message ?? "")}`;
+    case "evidence-index":
+      return `${String(item.sourceType ?? "")}\u0000${String(item.sourceId ?? "")}`;
     default:
       return stableJson(value);
   }
@@ -1161,6 +1283,10 @@ function snapshotItemLabel(
       );
     case "playbooks":
       return boundedLabel(String(item.expectedInterviewType ?? "playbook"));
+    case "warnings":
+      return boundedLabel(String(item.message ?? item.code ?? "warning"));
+    case "evidence-index":
+      return boundedLabel(String(item.title ?? item.sourceId ?? "source"));
     default:
       return "item";
   }
@@ -1227,6 +1353,17 @@ function dedupeBy<T>(items: T[], key: (item: T) => string) {
 
 function uniqueStrings(values: string[]) {
   return Array.from(new Set(values.map((value) => value.trim()).filter(Boolean)));
+}
+
+function statementIdsByNormalizedContent(
+  statements: PreparationStatementWithSources[]
+) {
+  const result = new Map<string, string[]>();
+  for (const statement of statements) {
+    const key = statement.content.trim().replace(/\s+/gu, " ").toLowerCase();
+    result.set(key, [...(result.get(key) ?? []), statement.id].sort());
+  }
+  return result;
 }
 
 function errorMessage(error: unknown) {

@@ -109,6 +109,56 @@ test("adds and activates a later round without changing round semantics", async 
   ]);
 });
 
+test("Mixed rounds persist an explicit interview-type subset", async () => {
+  const harness = createHarness();
+  const service = createInterviewProcessService(harness.dependencies);
+  const detail = await service.create({
+    title: "Mixed loop",
+    initialRound: {
+      stage: "mixed",
+      expectedInterviewTypes: [
+        "project-deep-dive",
+        "behavioral",
+        "field-knowledge",
+      ],
+    },
+  });
+
+  assert.deepEqual(detail.rounds[0].expectedInterviewTypes, [
+    "behavioral",
+    "field-knowledge",
+    "project-deep-dive",
+  ]);
+  const updated = await service.updateRound(
+    detail.process.id,
+    detail.rounds[0].id,
+    {
+      stage: "mixed",
+      expectedInterviewTypes: ["coding", "general-system-design"],
+    }
+  );
+  assert.deepEqual(updated.expectedInterviewTypes, [
+    "coding",
+    "general-system-design",
+  ]);
+});
+
+test("Mixed rounds reject an underspecified interview-type subset", async () => {
+  const harness = createHarness();
+  const service = createInterviewProcessService(harness.dependencies);
+
+  await assert.rejects(
+    service.create({
+      title: "Invalid mixed loop",
+      initialRound: {
+        stage: "mixed",
+        expectedInterviewTypes: ["coding"],
+      },
+    }),
+    /at least two interview types/u
+  );
+});
+
 test("numbers blank round titles and rejects normalized duplicates", async () => {
   const harness = createHarness();
   const service = createInterviewProcessService(harness.dependencies);

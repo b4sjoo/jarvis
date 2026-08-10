@@ -115,5 +115,12 @@ pub fn migrations() -> Vec<Migration> {
             sql: include_str!("migrations/preparation-snapshot-selection.sql"),
             kind: MigrationKind::Up,
         },
+        // Migration 17: Enforce one global current Process, Round, and snapshot
+        Migration {
+            version: 17,
+            description: "add_preparation_global_current_context",
+            sql: include_str!("migrations/preparation-global-current-context.sql"),
+            kind: MigrationKind::Up,
+        },
     ]
 }

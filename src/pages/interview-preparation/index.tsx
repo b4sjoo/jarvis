@@ -20,12 +20,16 @@ import {
   formatRoundStage,
   formatRoundStageLabel,
   INTERVIEW_ROUND_STAGES,
+  PREPARATION_EXPECTED_INTERVIEW_TYPES,
   interviewPreparationMaterialExtractionService,
+  interviewPreparationSnapshotService,
   interviewPreparationService,
   type InterviewProcess,
   type InterviewProcessDetail,
   type InterviewRound,
   type InterviewRoundStage,
+  type PreparationExpectedInterviewType,
+  type PreparationCurrentContext,
   interviewPreparationMaterialService,
   localRoundScheduleToTimestamp,
   type PreparationMaterial,
@@ -41,6 +45,8 @@ import {
   Plus,
   RotateCcw,
   Trash2,
+  Check,
+  Crosshair,
 } from "lucide-react";
 import {
   type FormEvent,
@@ -77,6 +83,11 @@ const InterviewPreparation = () => {
   const [mobilePanel, setMobilePanel] = useState<MobilePanel>("processes");
   const [expandedWorkspaceSurface, setExpandedWorkspaceSurface] =
     useState<ExpandedWorkspaceSurface>();
+  const [currentContext, setCurrentContext] = useState<PreparationCurrentContext>({
+    revision: 0,
+    updatedAt: 0,
+  });
+  const [currentRoundTarget, setCurrentRoundTarget] = useState<InterviewRound>();
 
   const loadProcesses = useCallback(async () => {
     const loaded = await interviewPreparationService.list(true);
@@ -100,6 +111,10 @@ const InterviewPreparation = () => {
     setMaterials(await interviewPreparationMaterialService.list(id));
   }, []);
 
+  const loadCurrentContext = useCallback(async () => {
+    setCurrentContext(await interviewPreparationSnapshotService.getCurrentContext());
+  }, []);
+
   const handleWorkspaceMaterialsChanged = useCallback(
     () => loadMaterials(processId),
     [loadMaterials, processId]
@@ -120,6 +135,7 @@ const InterviewPreparation = () => {
     setProcessEditOpen(false);
     setRoundEditTarget(undefined);
     setRoundDeleteTarget(undefined);
+    setCurrentRoundTarget(undefined);
     setError(undefined);
     setNotice(undefined);
     setExpandedWorkspaceSurface(undefined);
@@ -128,6 +144,7 @@ const InterviewPreparation = () => {
       loadProcesses(),
       loadDetail(processId),
       loadMaterials(processId),
+      loadCurrentContext(),
     ])
       .catch((reason) => {
         if (!cancelled) setError(errorMessage(reason));
@@ -138,7 +155,7 @@ const InterviewPreparation = () => {
     return () => {
       cancelled = true;
     };
-  }, [loadDetail, loadMaterials, loadProcesses, processId]);
+  }, [loadCurrentContext, loadDetail, loadMaterials, loadProcesses, processId]);
 
   useEffect(() => {
     if (!processId) return;
@@ -188,6 +205,7 @@ const InterviewPreparation = () => {
         loadProcesses(),
         loadDetail(selectedId),
         loadMaterials(selectedId),
+        loadCurrentContext(),
       ]);
     } catch (reason) {
       setError(errorMessage(reason));
@@ -337,6 +355,9 @@ const InterviewPreparation = () => {
                   <div className="line-clamp-2 text-sm font-medium">
                     {process.title}
                   </div>
+                  {currentContext.processId === process.id && (
+                    <Badge className="mt-1 rounded-sm text-[10px]">Current</Badge>
+                  )}
                   <div className="mt-1 line-clamp-1 text-xs text-muted-foreground">
                     {[process.company, process.role].filter(Boolean).join(" · ") ||
                       "Unresolved company and role"}
@@ -363,6 +384,7 @@ const InterviewPreparation = () => {
           {detail ? (
             <ProcessWorkspace
               detail={detail}
+              currentContext={currentContext}
               materials={materials}
               onMaterialsChanged={handleWorkspaceMaterialsChanged}
               onError={handleWorkspaceError}
@@ -386,6 +408,23 @@ const InterviewPreparation = () => {
                   setError(errorMessage(reason));
                 }
               }}
+              onSetCurrentRound={(round) => {
+                if (
+                  currentContext.processId &&
+                  (currentContext.processId !== detail.process.id ||
+                    currentContext.roundId !== round.id)
+                ) {
+                  setCurrentRoundTarget(round);
+                  return;
+                }
+                void interviewPreparationSnapshotService
+                  .setCurrentContext({
+                    processId: detail.process.id,
+                    roundId: round.id,
+                  })
+                  .then(() => refresh(detail.process.id))
+                  .catch((reason) => setError(errorMessage(reason)));
+              }}
               onArchive={handleArchive}
               onReopen={handleReopen}
               onDelete={() => setDeleteOpen(true)}
@@ -408,6 +447,7 @@ const InterviewPreparation = () => {
         >
           <ReviewedStatePanel
             detail={detail}
+            currentContext={currentContext}
             materials={materials}
             expanded={expandedWorkspaceSurface === "review"}
             onExpandedChange={handleReviewedStateExpandedChange}
@@ -420,6 +460,7 @@ const InterviewPreparation = () => {
               setError(undefined);
               setNotice(message);
             }}
+            onCurrentContextChanged={() => refresh(detail?.process.id)}
           />
         </section>
       </div>
@@ -509,6 +550,44 @@ const InterviewPreparation = () => {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+      <Dialog
+        open={Boolean(currentRoundTarget)}
+        onOpenChange={(open) => !open && setCurrentRoundTarget(undefined)}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Switch the current interview context?</DialogTitle>
+            <DialogDescription>
+              {currentContext.selectedSnapshotId
+                ? "This will deactivate the selected snapshot for the previous Round. Snapshot history remains available."
+                : "This changes which Process and Round can select the single runtime snapshot."}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setCurrentRoundTarget(undefined)}>
+              Cancel
+            </Button>
+            <Button
+              onClick={() => {
+                if (!detail || !currentRoundTarget) return;
+                void interviewPreparationSnapshotService
+                  .setCurrentContext({
+                    processId: detail.process.id,
+                    roundId: currentRoundTarget.id,
+                    allowContextSwitch: true,
+                  })
+                  .then(async () => {
+                    setCurrentRoundTarget(undefined);
+                    await refresh(detail.process.id);
+                  })
+                  .catch((reason) => setError(errorMessage(reason)));
+              }}
+            >
+              <Crosshair className="size-4" /> Set current
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
       <Dialog open={deleteOpen} onOpenChange={setDeleteOpen}>
         <DialogContent>
           <DialogHeader>
@@ -533,6 +612,7 @@ const InterviewPreparation = () => {
 
 const ProcessWorkspace = ({
   detail,
+  currentContext,
   materials,
   onMaterialsChanged,
   onError,
@@ -544,11 +624,13 @@ const ProcessWorkspace = ({
   conversationExpanded,
   onConversationDetailChange,
   onSetActiveRound,
+  onSetCurrentRound,
   onArchive,
   onReopen,
   onDelete,
 }: {
   detail: InterviewProcessDetail;
+  currentContext: PreparationCurrentContext;
   materials: PreparationMaterial[];
   onMaterialsChanged: () => Promise<void>;
   onError: (message: string) => void;
@@ -560,6 +642,7 @@ const ProcessWorkspace = ({
   conversationExpanded: boolean;
   onConversationDetailChange: (open: boolean) => void;
   onSetActiveRound: (roundId: string) => Promise<void>;
+  onSetCurrentRound: (round: InterviewRound) => void;
   onArchive: () => Promise<void>;
   onReopen: () => Promise<void>;
   onDelete: () => void;
@@ -572,6 +655,9 @@ const ProcessWorkspace = ({
         <div className="flex items-center gap-2">
           <h2 className="truncate text-base font-semibold">{detail.process.title}</h2>
           <Badge variant="outline">{detail.process.status}</Badge>
+          {currentContext.processId === detail.process.id && (
+            <Badge className="rounded-sm text-[10px]">Current</Badge>
+          )}
         </div>
         <div className="mt-1 text-xs text-muted-foreground">
           {[detail.process.company, detail.process.role].filter(Boolean).join(" · ") ||
@@ -619,6 +705,9 @@ const ProcessWorkspace = ({
       <div className="max-h-56 overflow-y-auto border-t">
         {detail.rounds.map((round) => {
           const active = round.id === detail.process.activeRoundId;
+          const current =
+            currentContext.processId === detail.process.id &&
+            currentContext.roundId === round.id;
           return (
             <div
               key={round.id}
@@ -648,6 +737,16 @@ const ProcessWorkspace = ({
                 </div>
                 <Badge variant="outline">{round.expectedTypePolicy}</Badge>
               </button>
+              <Button
+                size="icon"
+                variant={current ? "secondary" : "ghost"}
+                className="my-auto mr-1 shrink-0"
+                title={current ? `${round.title} is current` : `Set ${round.title} as current`}
+                disabled={current || detail.process.status === "archived"}
+                onClick={() => onSetCurrentRound(round)}
+              >
+                <Crosshair className="size-4" />
+              </Button>
               <Button
                 size="icon"
                 variant="ghost"
@@ -695,20 +794,24 @@ const ProcessWorkspace = ({
 
 const ReviewedStatePanel = ({
   detail,
+  currentContext,
   materials,
   onMaterialsChanged,
   onMaterialError,
   onMaterialNotice,
   expanded,
   onExpandedChange,
+  onCurrentContextChanged,
 }: {
   detail?: InterviewProcessDetail;
+  currentContext: PreparationCurrentContext;
   materials: PreparationMaterial[];
   onMaterialsChanged: () => Promise<void>;
   onMaterialError: (message: string) => void;
   onMaterialNotice: (message: string) => void;
   expanded: boolean;
   onExpandedChange: (expanded: boolean) => void;
+  onCurrentContextChanged: () => Promise<void>;
 }) => (
   <div className="min-h-[640px]">
     {detail && (
@@ -728,10 +831,12 @@ const ReviewedStatePanel = ({
     {detail ? (
       <ReviewedPreparationPanel
         detail={detail}
+        currentContext={currentContext}
         expanded={expanded}
         onExpandedChange={onExpandedChange}
         onError={onMaterialError}
         onNotice={onMaterialNotice}
+        onCurrentContextChanged={onCurrentContextChanged}
       />
     ) : (
       <div className="px-4 py-10 text-center text-sm text-muted-foreground">
@@ -755,6 +860,9 @@ const CreateProcessDialog = ({
   const [role, setRole] = useState("");
   const [stage, setStage] = useState<InterviewRoundStage>("recruiter-screen");
   const [customStageLabel, setCustomStageLabel] = useState("");
+  const [expectedTypes, setExpectedTypes] = useState<
+    PreparationExpectedInterviewType[]
+  >([...PREPARATION_EXPECTED_INTERVIEW_TYPES]);
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string>();
 
@@ -767,13 +875,18 @@ const CreateProcessDialog = ({
         title,
         company,
         role,
-        initialRound: { stage, customStageLabel },
+        initialRound: {
+          stage,
+          customStageLabel,
+          expectedInterviewTypes: stage === "mixed" ? expectedTypes : undefined,
+        },
       });
       setTitle("");
       setCompany("");
       setRole("");
       setStage("recruiter-screen");
       setCustomStageLabel("");
+      setExpectedTypes([...PREPARATION_EXPECTED_INTERVIEW_TYPES]);
       onCreated(created);
     } catch (reason) {
       setError(errorMessage(reason));
@@ -816,6 +929,12 @@ const CreateProcessDialog = ({
               />
             </Field>
           )}
+          {stage === "mixed" && (
+            <ExpectedInterviewTypeSelector
+              value={expectedTypes}
+              onChange={setExpectedTypes}
+            />
+          )}
           {error && <div className="text-sm text-destructive">{error}</div>}
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
@@ -826,6 +945,7 @@ const CreateProcessDialog = ({
               disabled={
                 !title.trim() ||
                 (stage === "other" && !customStageLabel.trim()) ||
+                (stage === "mixed" && expectedTypes.length < 2) ||
                 isSaving
               }
             >
@@ -853,6 +973,9 @@ const CreateRoundDialog = ({
   const [title, setTitle] = useState("");
   const [stage, setStage] = useState<InterviewRoundStage>("coding");
   const [customStageLabel, setCustomStageLabel] = useState("");
+  const [expectedTypes, setExpectedTypes] = useState<
+    PreparationExpectedInterviewType[]
+  >([...PREPARATION_EXPECTED_INTERVIEW_TYPES]);
   const [scheduledDate, setScheduledDate] = useState("");
   const [scheduledTime, setScheduledTime] = useState("");
   const [isSaving, setIsSaving] = useState(false);
@@ -868,6 +991,7 @@ const CreateRoundDialog = ({
         title,
         stage,
         customStageLabel,
+        expectedInterviewTypes: stage === "mixed" ? expectedTypes : undefined,
         scheduledAt: localRoundScheduleToTimestamp({
           date: scheduledDate,
           time: scheduledTime,
@@ -875,6 +999,7 @@ const CreateRoundDialog = ({
       });
       setTitle("");
       setCustomStageLabel("");
+      setExpectedTypes([...PREPARATION_EXPECTED_INTERVIEW_TYPES]);
       setScheduledDate("");
       setScheduledTime("");
       await onCreated();
@@ -908,6 +1033,12 @@ const CreateRoundDialog = ({
               />
             </Field>
           )}
+          {stage === "mixed" && (
+            <ExpectedInterviewTypeSelector
+              value={expectedTypes}
+              onChange={setExpectedTypes}
+            />
+          )}
           <RoundScheduleFields
             date={scheduledDate}
             time={scheduledTime}
@@ -924,6 +1055,7 @@ const CreateRoundDialog = ({
               disabled={
                 !processId ||
                 (stage === "other" && !customStageLabel.trim()) ||
+                (stage === "mixed" && expectedTypes.length < 2) ||
                 isSaving
               }
             >
@@ -1032,6 +1164,9 @@ const EditRoundDialog = ({
   const [title, setTitle] = useState("");
   const [stage, setStage] = useState<InterviewRoundStage>("coding");
   const [customStageLabel, setCustomStageLabel] = useState("");
+  const [expectedTypes, setExpectedTypes] = useState<
+    PreparationExpectedInterviewType[]
+  >([...PREPARATION_EXPECTED_INTERVIEW_TYPES]);
   const [scheduledDate, setScheduledDate] = useState("");
   const [scheduledTime, setScheduledTime] = useState("");
   const [isSaving, setIsSaving] = useState(false);
@@ -1042,6 +1177,11 @@ const EditRoundDialog = ({
     setTitle(round.title);
     setStage(round.stage);
     setCustomStageLabel(round.customStageLabel ?? "");
+    setExpectedTypes(
+      round.stage === "mixed"
+        ? round.expectedInterviewTypes
+        : [...PREPARATION_EXPECTED_INTERVIEW_TYPES]
+    );
     const schedule = timestampToLocalRoundSchedule(round.scheduledAt);
     setScheduledDate(schedule.date);
     setScheduledTime(schedule.time);
@@ -1058,6 +1198,7 @@ const EditRoundDialog = ({
         title,
         stage,
         customStageLabel,
+        expectedInterviewTypes: stage === "mixed" ? expectedTypes : undefined,
         scheduledAt: localRoundScheduleToTimestamp({
           date: scheduledDate,
           time: scheduledTime,
@@ -1097,6 +1238,12 @@ const EditRoundDialog = ({
               />
             </Field>
           )}
+          {stage === "mixed" && (
+            <ExpectedInterviewTypeSelector
+              value={expectedTypes}
+              onChange={setExpectedTypes}
+            />
+          )}
           <RoundScheduleFields
             date={scheduledDate}
             time={scheduledTime}
@@ -1114,6 +1261,7 @@ const EditRoundDialog = ({
                 !processId ||
                 !round ||
                 (stage === "other" && !customStageLabel.trim()) ||
+                (stage === "mixed" && expectedTypes.length < 2) ||
                 isSaving
               }
             >
@@ -1124,6 +1272,57 @@ const EditRoundDialog = ({
         </form>
       </DialogContent>
     </Dialog>
+  );
+};
+
+const ExpectedInterviewTypeSelector = ({
+  value,
+  onChange,
+}: {
+  value: PreparationExpectedInterviewType[];
+  onChange: (value: PreparationExpectedInterviewType[]) => void;
+}) => {
+  const selected = new Set(value);
+  return (
+    <div className="grid gap-1.5 text-sm">
+      <div>
+        <div className="font-medium">Expected interview types</div>
+        <div className="text-xs text-muted-foreground">
+          Mixed requires at least two types. The compiled snapshot preserves this
+          exact set.
+        </div>
+      </div>
+      <div className="grid grid-cols-2 gap-1 sm:grid-cols-3">
+        {PREPARATION_EXPECTED_INTERVIEW_TYPES.map((type) => {
+          const active = selected.has(type);
+          return (
+            <button
+              key={type}
+              type="button"
+              aria-pressed={active}
+              className={`flex min-h-9 items-center gap-1.5 border px-2 py-1.5 text-left text-xs ${active ? "border-primary bg-primary/10 text-foreground" : "text-muted-foreground"}`}
+              onClick={() =>
+                onChange(
+                  active
+                    ? value.filter((candidate) => candidate !== type)
+                    : [...value, type].sort()
+                )
+              }
+            >
+              <span className="flex size-4 shrink-0 items-center justify-center border">
+                {active && <Check className="size-3" />}
+              </span>
+              <span>{formatExpectedInterviewType(type)}</span>
+            </button>
+          );
+        })}
+      </div>
+      {value.length < 2 && (
+        <div className="text-xs text-destructive">
+          Select at least two interview types.
+        </div>
+      )}
+    </div>
   );
 };
 
@@ -1242,6 +1441,18 @@ const FilterButton = ({
     {label}
   </button>
 );
+
+function formatExpectedInterviewType(type: PreparationExpectedInterviewType) {
+  return type
+    .split("-")
+    .map((word) =>
+      word === "ai" || word === "ml"
+        ? word.toUpperCase()
+        : `${word[0]?.toUpperCase() ?? ""}${word.slice(1)}`
+    )
+    .join(" ")
+    .replace("AI ML", "AI/ML");
+}
 
 function errorMessage(reason: unknown) {
   return reason instanceof Error ? reason.message : String(reason);

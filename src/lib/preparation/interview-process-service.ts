@@ -9,6 +9,7 @@ import type {
   PreparationExpectedTypePolicy,
   PreparationWorkspaceLifecycle,
 } from "./interview-types.js";
+import { PREPARATION_EXPECTED_INTERVIEW_TYPES } from "./interview-types.js";
 
 export interface CreateInterviewProcessInput {
   title: string;
@@ -39,6 +40,8 @@ export interface UpdateInterviewRoundInput {
   title?: string;
   stage: InterviewRoundStage;
   customStageLabel?: string;
+  expectedInterviewTypes?: PreparationExpectedInterviewType[];
+  expectedTypePolicy?: PreparationExpectedTypePolicy;
   scheduledAt?: number;
 }
 
@@ -174,10 +177,14 @@ export function createInterviewProcessService(
         ),
         stage: input.stage,
         customStageLabel,
-        expectedInterviewTypes:
-          input.stage === round.stage
-            ? round.expectedInterviewTypes
-            : expectedTypesForStage(input.stage),
+        expectedInterviewTypes: resolveExpectedInterviewTypes({
+          stage: input.stage,
+          requested: input.expectedInterviewTypes,
+          current:
+            input.stage === round.stage ? round.expectedInterviewTypes : undefined,
+        }),
+        expectedTypePolicy:
+          input.expectedTypePolicy ?? round.expectedTypePolicy,
         scheduledAt: input.scheduledAt,
         updatedAt: timestamp,
       };
@@ -297,8 +304,10 @@ function createRoundRecord(input: {
     ),
     stage: input.input.stage,
     customStageLabel,
-    expectedInterviewTypes:
-      input.input.expectedInterviewTypes ?? expectedTypesForStage(input.input.stage),
+    expectedInterviewTypes: resolveExpectedInterviewTypes({
+      stage: input.input.stage,
+      requested: input.input.expectedInterviewTypes,
+    }),
     expectedTypePolicy: input.input.expectedTypePolicy ?? "advisory",
     scheduledAt: input.input.scheduledAt,
     interviewerName: normalizeOptionalText(input.input.interviewerName, 120),
@@ -310,6 +319,24 @@ function createRoundRecord(input: {
     createdAt: input.timestamp,
     updatedAt: input.timestamp,
   };
+}
+
+function resolveExpectedInterviewTypes(input: {
+  stage: InterviewRoundStage;
+  requested?: PreparationExpectedInterviewType[];
+  current?: PreparationExpectedInterviewType[];
+}) {
+  if (input.stage !== "mixed") return expectedTypesForStage(input.stage);
+  const allowed = new Set(PREPARATION_EXPECTED_INTERVIEW_TYPES);
+  const values = Array.from(
+    new Set((input.requested ?? input.current ?? expectedTypesForStage("mixed")).filter(
+      (value) => allowed.has(value)
+    ))
+  ).sort();
+  if (values.length < 2) {
+    throw new Error("Mixed rounds must include at least two interview types.");
+  }
+  return values;
 }
 
 function resolveRoundTitle(

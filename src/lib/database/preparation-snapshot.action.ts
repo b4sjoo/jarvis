@@ -1,8 +1,11 @@
 import type {
   InterviewPreparationSnapshot,
   PreparationSnapshotActivationEvent,
+  PreparationCurrentContext,
+  PreparationCurrentContextEvent,
   PreparationSnapshotRepository,
 } from "@/lib/preparation/snapshot-types";
+import { ensurePreparationSnapshotArtifactManifest } from "@/lib/preparation/snapshot-artifact-manifest";
 import { getDatabase } from "./config";
 
 interface SnapshotRow {
@@ -33,6 +36,27 @@ interface ActivationEventRow {
   snapshot_id: string;
   previous_snapshot_id: string | null;
   action: PreparationSnapshotActivationEvent["action"];
+  created_at: number;
+}
+
+interface CurrentContextRow {
+  process_id: string | null;
+  round_id: string | null;
+  selected_snapshot_id: string | null;
+  revision: number;
+  updated_at: number;
+}
+
+interface CurrentContextEventRow {
+  id: string;
+  previous_process_id: string | null;
+  previous_round_id: string | null;
+  previous_snapshot_id: string | null;
+  process_id: string | null;
+  round_id: string | null;
+  selected_snapshot_id: string | null;
+  action: PreparationCurrentContextEvent["action"];
+  revision: number;
   created_at: number;
 }
 
@@ -70,9 +94,15 @@ export const preparationSnapshotRepository: PreparationSnapshotRepository = {
     const db = await getDatabase();
     const rows = await db.select<SnapshotRow[]>(
       `${SNAPSHOT_SELECT}
-       AND process_id = ? AND round_id = ? AND status = 'active'
+       AND process_id = ? AND round_id = ?
+       AND id = (
+         SELECT selected_snapshot_id
+         FROM interview_preparation_current_context
+         WHERE singleton_id = 1
+           AND process_id = ? AND round_id = ?
+       )
        LIMIT 1`,
-      [input.processId, input.roundId]
+      [input.processId, input.roundId, input.processId, input.roundId]
     );
     return rows[0] ? mapSnapshot(rows[0]) : undefined;
   },
@@ -97,6 +127,50 @@ export const preparationSnapshotRepository: PreparationSnapshotRepository = {
       [input.processId, input.roundId]
     );
     return rows[0]?.version ?? 1;
+  },
+
+  async getCurrentContext() {
+    const db = await getDatabase();
+    const rows = await db.select<CurrentContextRow[]>(
+      `SELECT process_id, round_id, selected_snapshot_id, revision, updated_at
+       FROM interview_preparation_current_context
+       WHERE singleton_id = 1
+       LIMIT 1`
+    );
+    return mapCurrentContext(rows[0]);
+  },
+
+  async setCurrentContext(input) {
+    const db = await getDatabase();
+    const updated = await db.execute(
+      `UPDATE interview_preparation_current_context
+       SET process_id = ?,
+           round_id = ?,
+           selected_snapshot_id = CASE
+             WHEN process_id = ? AND round_id = ? THEN selected_snapshot_id
+             ELSE NULL
+           END,
+           revision = revision + 1,
+           updated_at = ?
+       WHERE singleton_id = 1 AND revision = ?
+         AND (process_id IS NOT ? OR round_id IS NOT ?)`,
+      [
+        input.processId,
+        input.roundId,
+        input.processId,
+        input.roundId,
+        input.updatedAt,
+        input.expectedRevision,
+        input.processId,
+        input.roundId,
+      ]
+    );
+    if (updated.rowsAffected > 0) return true;
+    const context = await this.getCurrentContext();
+    return (
+      context.processId === input.processId &&
+      context.roundId === input.roundId
+    );
   },
 
   async insert(input) {
@@ -286,26 +360,17 @@ export const preparationSnapshotRepository: PreparationSnapshotRepository = {
 
   async activate(input) {
     const db = await getDatabase();
-    await db.execute(
-      `INSERT OR IGNORE INTO interview_preparation_snapshot_selections
-        (process_id, round_id, active_snapshot_id, revision, updated_at)
-       SELECT process.id, round.id, NULL, 0, ?
-       FROM interview_processes process
-       JOIN preparation_workspaces workspace ON workspace.id = process.workspace_id
-       JOIN interview_rounds round ON round.process_id = process.id
-       WHERE process.id = ? AND round.id = ?
-         AND workspace.status = 'active' AND round.archived_at IS NULL`,
-      [input.activatedAt, input.processId, input.roundId]
-    );
     const updated = await db.execute(
-      `UPDATE interview_preparation_snapshot_selections AS selection
-       SET active_snapshot_id = ?, revision = revision + 1, updated_at = ?
-       WHERE selection.process_id = ? AND selection.round_id = ?
-         AND selection.active_snapshot_id IS NOT ?
+      `UPDATE interview_preparation_current_context AS context
+       SET process_id = ?, round_id = ?, selected_snapshot_id = ?,
+           revision = revision + 1, updated_at = ?
+       WHERE context.singleton_id = 1
+         AND context.revision = ?
+         AND context.selected_snapshot_id IS NOT ?
          AND EXISTS (
            SELECT 1 FROM interview_preparation_snapshots snapshot
-           WHERE snapshot.id = ? AND snapshot.process_id = selection.process_id
-             AND snapshot.round_id = selection.round_id
+           WHERE snapshot.id = ? AND snapshot.process_id = ?
+             AND snapshot.round_id = ?
              AND snapshot.content_hash = ?
              AND snapshot.build_status = 'committed'
              AND snapshot.status IN ('ready', 'active', 'superseded')
@@ -384,58 +449,60 @@ export const preparationSnapshotRepository: PreparationSnapshotRepository = {
              )
          )`,
       [
-        input.snapshotId,
-        input.activatedAt,
         input.processId,
         input.roundId,
         input.snapshotId,
+        input.activatedAt,
+        input.expectedContextRevision,
         input.snapshotId,
+        input.snapshotId,
+        input.processId,
+        input.roundId,
         input.expectedContentHash,
       ]
     );
     if (updated.rowsAffected > 0) return true;
-    const active = await db.select<Array<{ active_snapshot_id: string | null }>>(
-      `SELECT active_snapshot_id
-       FROM interview_preparation_snapshot_selections
-       WHERE process_id = ? AND round_id = ? LIMIT 1`,
-      [input.processId, input.roundId]
+    const context = await this.getCurrentContext();
+    return (
+      context.processId === input.processId &&
+      context.roundId === input.roundId &&
+      context.selectedSnapshotId === input.snapshotId
     );
-    return active[0]?.active_snapshot_id === input.snapshotId;
   },
 
   async deactivate(input) {
     const db = await getDatabase();
     const updated = await db.execute(
-      `UPDATE interview_preparation_snapshot_selections AS selection
-       SET active_snapshot_id = NULL, revision = revision + 1, updated_at = ?
-       WHERE selection.process_id = ? AND selection.round_id = ?
-         AND selection.active_snapshot_id = ?
+      `UPDATE interview_preparation_current_context AS context
+       SET selected_snapshot_id = NULL, revision = revision + 1, updated_at = ?
+       WHERE context.singleton_id = 1
+         AND context.revision = ?
+         AND context.process_id = ? AND context.round_id = ?
+         AND context.selected_snapshot_id = ?
          AND EXISTS (
            SELECT 1
            FROM interview_processes process
            JOIN preparation_workspaces workspace ON workspace.id = process.workspace_id
            JOIN interview_rounds round ON round.process_id = process.id
-           WHERE process.id = selection.process_id
-             AND round.id = selection.round_id
+           WHERE process.id = context.process_id
+             AND round.id = context.round_id
              AND workspace.status = 'active' AND round.archived_at IS NULL
          )`,
       [
         input.deactivatedAt,
+        input.expectedContextRevision,
         input.processId,
         input.roundId,
         input.snapshotId,
       ]
     );
     if (updated.rowsAffected > 0) return true;
-    const selection = await db.select<
-      Array<{ active_snapshot_id: string | null }>
-    >(
-      `SELECT active_snapshot_id
-       FROM interview_preparation_snapshot_selections
-       WHERE process_id = ? AND round_id = ? LIMIT 1`,
-      [input.processId, input.roundId]
+    const context = await this.getCurrentContext();
+    return (
+      context.processId === input.processId &&
+      context.roundId === input.roundId &&
+      context.selectedSnapshotId === undefined
     );
-    return selection.length > 0 && selection[0]?.active_snapshot_id === null;
   },
 
   async listActivationEvents(input) {
@@ -458,11 +525,35 @@ export const preparationSnapshotRepository: PreparationSnapshotRepository = {
       createdAt: row.created_at,
     }));
   },
+
+  async listCurrentContextEvents() {
+    const db = await getDatabase();
+    const rows = await db.select<CurrentContextEventRow[]>(
+      `SELECT id, previous_process_id, previous_round_id,
+              previous_snapshot_id, process_id, round_id,
+              selected_snapshot_id, action, revision, created_at
+       FROM preparation_current_context_events
+       ORDER BY created_at DESC, revision DESC
+       LIMIT 200`
+    );
+    return rows.map((row) => ({
+      id: row.id,
+      previousProcessId: row.previous_process_id ?? undefined,
+      previousRoundId: row.previous_round_id ?? undefined,
+      previousSnapshotId: row.previous_snapshot_id ?? undefined,
+      processId: row.process_id ?? undefined,
+      roundId: row.round_id ?? undefined,
+      selectedSnapshotId: row.selected_snapshot_id ?? undefined,
+      action: row.action,
+      revision: row.revision,
+      createdAt: row.created_at,
+    }));
+  },
 };
 
 function mapSnapshot(row: SnapshotRow): InterviewPreparationSnapshot {
   const payload = parseSnapshot(row.snapshot_json);
-  return {
+  return ensurePreparationSnapshotArtifactManifest({
     ...payload,
     id: row.id,
     processId: row.process_id,
@@ -481,7 +572,7 @@ function mapSnapshot(row: SnapshotRow): InterviewPreparationSnapshot {
     status: row.status,
     createdAt: row.created_at,
     activatedAt: row.activated_at ?? undefined,
-  };
+  });
 }
 
 function parseSnapshot(value: string): InterviewPreparationSnapshot {
@@ -490,4 +581,14 @@ function parseSnapshot(value: string): InterviewPreparationSnapshot {
     throw new Error("Stored preparation snapshot is invalid.");
   }
   return parsed as InterviewPreparationSnapshot;
+}
+
+function mapCurrentContext(row: CurrentContextRow | undefined): PreparationCurrentContext {
+  return {
+    processId: row?.process_id ?? undefined,
+    roundId: row?.round_id ?? undefined,
+    selectedSnapshotId: row?.selected_snapshot_id ?? undefined,
+    revision: row?.revision ?? 0,
+    updatedAt: row?.updated_at ?? 0,
+  };
 }

@@ -100,6 +100,40 @@ test("changed reviewed evidence compiles a new version and produces a bounded di
     diff.find((section) => section.id === "runtime-brief")?.status,
     "unchanged"
   );
+  const firstArtifact = first.artifactManifest.artifacts.find(
+    (artifact) => artifact.artifactPath === "evidence/fact-1"
+  );
+  const secondArtifact = second.artifactManifest.artifacts.find(
+    (artifact) => artifact.artifactPath === "evidence/fact-1"
+  );
+  assert.ok(firstArtifact);
+  assert.ok(secondArtifact);
+  assert.equal(firstArtifact.lineageKey, secondArtifact.lineageKey);
+  assert.notEqual(firstArtifact.artifactId, secondArtifact.artifactId);
+  assert.notEqual(firstArtifact.contentHash, secondArtifact.contentHash);
+});
+
+test("snapshot artifacts use stable semantic paths instead of array indexes", async () => {
+  const fixture = createFixture();
+  const snapshot = (
+    await fixture.service.compile({
+      processId: PROCESS_ID,
+      roundId: ROUND_ID,
+      profileRevisionId: fixture.profile.id,
+    })
+  ).snapshot;
+
+  assert.ok(snapshot.artifactManifest.artifacts.length > 0);
+  assert.ok(
+    snapshot.artifactManifest.artifacts.every(
+      (artifact) => !/(^|\/)\d+(\/|$)/u.test(artifact.artifactPath)
+    )
+  );
+  assert.ok(
+    snapshot.artifactManifest.artifacts.every(
+      (artifact) => artifact.sourceRefs.length > 0
+    )
+  );
 });
 
 test("failed stale activation preserves the previously active snapshot", async () => {
@@ -187,6 +221,46 @@ test("active snapshot can be explicitly deactivated without deleting it", async 
   });
   assert.equal(reactivated.status, "active");
   assert.equal(fixture.events.at(-1)?.action, "reactivated");
+});
+
+test("activating outside the current Round requires explicit switch authority", async () => {
+  const fixture = createFixture();
+  await fixture.repository.setCurrentContext({
+    processId: "other-process",
+    roundId: "other-round",
+    expectedRevision: 0,
+    updatedAt: 1,
+  });
+  const snapshot = (
+    await fixture.service.compile({
+      processId: PROCESS_ID,
+      roundId: ROUND_ID,
+      profileRevisionId: fixture.profile.id,
+    })
+  ).snapshot;
+
+  await assert.rejects(
+    fixture.service.activate({
+      processId: PROCESS_ID,
+      roundId: ROUND_ID,
+      snapshotId: snapshot.id,
+    }),
+    /Confirm the context switch/u
+  );
+  const active = await fixture.service.activate({
+    processId: PROCESS_ID,
+    roundId: ROUND_ID,
+    snapshotId: snapshot.id,
+    allowContextSwitch: true,
+  });
+  assert.equal(active.status, "active");
+  assert.deepEqual(await fixture.service.getCurrentContext(), {
+    processId: PROCESS_ID,
+    roundId: ROUND_ID,
+    selectedSnapshotId: snapshot.id,
+    revision: 2,
+    updatedAt: 101,
+  });
 });
 
 test("older snapshot can roll back when its pinned authority remains valid", async () => {
@@ -360,6 +434,7 @@ function createFixture() {
     statements,
     snapshots,
     events,
+    repository,
     service,
     get profile() {
       return currentProfile;
@@ -544,6 +619,10 @@ function snapshotRepository(
   snapshots: InterviewPreparationSnapshot[],
   events: PreparationSnapshotActivationEvent[]
 ): PreparationSnapshotRepository {
+  let currentContext = {
+    revision: 0,
+    updatedAt: 0,
+  } as Awaited<ReturnType<PreparationSnapshotRepository["getCurrentContext"]>>;
   return {
     async get(processId, snapshotId) {
       return snapshots.find(
@@ -589,10 +668,34 @@ function snapshotRepository(
         ) + 1
       );
     },
+    async getCurrentContext() {
+      return { ...currentContext };
+    },
+    async setCurrentContext(input) {
+      if (currentContext.revision !== input.expectedRevision) return false;
+      if (
+        currentContext.processId === input.processId &&
+        currentContext.roundId === input.roundId
+      ) {
+        return true;
+      }
+      const previous = snapshots.find(
+        (snapshot) => snapshot.id === currentContext.selectedSnapshotId
+      );
+      if (previous) previous.status = "ready";
+      currentContext = {
+        processId: input.processId,
+        roundId: input.roundId,
+        revision: currentContext.revision + 1,
+        updatedAt: input.updatedAt,
+      };
+      return true;
+    },
     async insert(input) {
       snapshots.push(input.snapshot);
     },
     async activate(input) {
+      if (currentContext.revision !== input.expectedContextRevision) return false;
       const target = snapshots.find(
         (snapshot) =>
           snapshot.id === input.snapshotId &&
@@ -602,10 +705,7 @@ function snapshotRepository(
       );
       if (!target) return false;
       const previous = snapshots.find(
-        (snapshot) =>
-          snapshot.processId === input.processId &&
-          snapshot.roundId === input.roundId &&
-          snapshot.status === "active"
+        (snapshot) => snapshot.id === currentContext.selectedSnapshotId
       );
       if (previous?.id === target.id) return true;
       const reactivated =
@@ -614,6 +714,13 @@ function snapshotRepository(
       if (previous && previous.id !== target.id) previous.status = "superseded";
       target.status = "active";
       target.activatedAt = input.activatedAt;
+      currentContext = {
+        processId: input.processId,
+        roundId: input.roundId,
+        selectedSnapshotId: target.id,
+        revision: currentContext.revision + 1,
+        updatedAt: input.activatedAt,
+      };
       events.push({
         id: `event-${events.length + 1}`,
         processId: input.processId,
@@ -630,6 +737,7 @@ function snapshotRepository(
       return true;
     },
     async deactivate(input) {
+      if (currentContext.revision !== input.expectedContextRevision) return false;
       const target = snapshots.find(
         (snapshot) =>
           snapshot.id === input.snapshotId &&
@@ -639,6 +747,12 @@ function snapshotRepository(
       );
       if (!target) return false;
       target.status = "ready";
+      currentContext = {
+        processId: input.processId,
+        roundId: input.roundId,
+        revision: currentContext.revision + 1,
+        updatedAt: input.deactivatedAt,
+      };
       events.push({
         id: `event-${events.length + 1}`,
         processId: input.processId,
@@ -652,6 +766,9 @@ function snapshotRepository(
     },
     async listActivationEvents() {
       return events;
+    },
+    async listCurrentContextEvents() {
+      return [];
     },
   };
 }

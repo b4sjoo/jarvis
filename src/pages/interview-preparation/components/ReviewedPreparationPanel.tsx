@@ -34,6 +34,8 @@ import {
   type InterviewPreparationProfileRevision,
   type InterviewPreparationSnapshot,
   type InterviewProcessDetail,
+  type PreparationCurrentContext,
+  type PreparationSnapshotDiffSection,
   type PreparationConversation,
   type PreparationConversationScope,
   type PreparationNarrativeGraph,
@@ -69,16 +71,20 @@ const PROCESS_SCOPE = "process";
 
 export const ReviewedPreparationPanel = ({
   detail,
+  currentContext,
   expanded,
   onExpandedChange,
   onError,
   onNotice,
+  onCurrentContextChanged,
 }: {
   detail: InterviewProcessDetail;
+  currentContext: PreparationCurrentContext;
   expanded: boolean;
   onExpandedChange: (expanded: boolean) => void;
   onError: (message: string) => void;
   onNotice: (message: string) => void;
+  onCurrentContextChanged: () => Promise<void>;
 }) => {
   const { allAiProviders, selectedPreparationAIProvider } = useApp();
   const [scopeValue, setScopeValue] = useState(
@@ -91,6 +97,8 @@ export const ReviewedPreparationPanel = ({
   const [profile, setProfile] = useState<InterviewPreparationProfileRevision>();
   const [narratives, setNarratives] = useState<PreparationNarrativeGraph[]>([]);
   const [snapshots, setSnapshots] = useState<InterviewPreparationSnapshot[]>([]);
+  const [selectedSnapshot, setSelectedSnapshot] =
+    useState<InterviewPreparationSnapshot>();
   const [selectedConversationId, setSelectedConversationId] = useState("");
   const [statusFilter, setStatusFilter] = useState<PreparationStatementStatus | "all">(
     "all"
@@ -138,7 +146,6 @@ export const ReviewedPreparationPanel = ({
     !!profile &&
     profile.sourceFingerprint ===
       createPreparationProfileSourceFingerprint(confirmedStatements);
-  const activeSnapshot = snapshots.find((snapshot) => snapshot.status === "active");
   const route = interviewPreparationStatementProposalService.resolveRoute({
     providers: allAiProviders,
     selectedProvider: selectedPreparationAIProvider,
@@ -153,6 +160,7 @@ export const ReviewedPreparationPanel = ({
         nextProfile,
         nextNarratives,
         nextSnapshots,
+        nextSelectedSnapshot,
       ] =
         await Promise.all([
           interviewPreparationStatementService.list({
@@ -174,6 +182,7 @@ export const ReviewedPreparationPanel = ({
                 roundId: scope.roundId,
               })
             : Promise.resolve([]),
+          interviewPreparationSnapshotService.getCurrentSnapshot(),
         ]);
       setStatements(nextStatements);
       setConversations(nextConversations);
@@ -182,6 +191,7 @@ export const ReviewedPreparationPanel = ({
         nextNarratives.filter((graph) => sameScope(graph.scope, scope))
       );
       setSnapshots(nextSnapshots);
+      setSelectedSnapshot(nextSelectedSnapshot);
       setSelectedConversationId((current) => {
         const currentConversation = nextConversations.find(
           (conversation) => conversation.id === current
@@ -655,22 +665,29 @@ export const ReviewedPreparationPanel = ({
       />
       <SnapshotReviewDialog
         snapshot={snapshotReview}
-        activeSnapshot={activeSnapshot}
+        selectedSnapshot={selectedSnapshot}
+        comparisonSnapshot={resolveSnapshotComparison({
+          snapshot: snapshotReview,
+          selectedSnapshot,
+          snapshots,
+        })}
+        currentContext={currentContext}
         stale={
           Boolean(snapshotReview) &&
           (!profileIsCurrent || snapshotReview?.profileRevisionId !== profile?.id)
         }
         readOnly={readOnly}
         onOpenChange={(open) => !open && setSnapshotReview(undefined)}
-        onActivate={async () => {
+        onActivate={async (allowContextSwitch) => {
           if (!snapshotReview) return;
           const active = await interviewPreparationSnapshotService.activate({
             processId: detail.process.id,
             roundId: snapshotReview.roundId,
             snapshotId: snapshotReview.id,
+            allowContextSwitch,
           });
           setSnapshotReview(active);
-          await refresh();
+          await Promise.all([refresh(), onCurrentContextChanged()]);
           onNotice(`Snapshot version ${active.version} activated`);
         }}
         onDeactivate={async () => {
@@ -682,7 +699,7 @@ export const ReviewedPreparationPanel = ({
               snapshotId: snapshotReview.id,
             });
           setSnapshotReview(deactivated);
-          await refresh();
+          await Promise.all([refresh(), onCurrentContextChanged()]);
           onNotice(`Snapshot version ${deactivated.version} deactivated`);
         }}
       />
@@ -732,7 +749,9 @@ const SnapshotRow = ({
 
 const SnapshotReviewDialog = ({
   snapshot,
-  activeSnapshot,
+  selectedSnapshot,
+  comparisonSnapshot,
+  currentContext,
   stale,
   readOnly,
   onOpenChange,
@@ -740,35 +759,50 @@ const SnapshotReviewDialog = ({
   onDeactivate,
 }: {
   snapshot?: InterviewPreparationSnapshot;
-  activeSnapshot?: InterviewPreparationSnapshot;
+  selectedSnapshot?: InterviewPreparationSnapshot;
+  comparisonSnapshot?: InterviewPreparationSnapshot;
+  currentContext: PreparationCurrentContext;
   stale: boolean;
   readOnly: boolean;
   onOpenChange: (open: boolean) => void;
-  onActivate: () => Promise<void>;
+  onActivate: (allowContextSwitch: boolean) => Promise<void>;
   onDeactivate: () => Promise<void>;
 }) => {
   const [isChangingSelection, setIsChangingSelection] = useState(false);
   const [localError, setLocalError] = useState("");
+  const [confirmContextSwitch, setConfirmContextSwitch] = useState(false);
   const diff = useMemo(
     () =>
       snapshot
         ? diffPreparationSnapshots(
             snapshot,
-            activeSnapshot?.id === snapshot.id ? snapshot : activeSnapshot
+            comparisonSnapshot
           )
         : [],
-    [activeSnapshot, snapshot]
+    [comparisonSnapshot, snapshot]
   );
 
   useEffect(() => {
     setLocalError("");
+    setConfirmContextSwitch(false);
   }, [snapshot?.id]);
 
-  const activate = async () => {
+  const activate = async (allowContextSwitch = false) => {
+    if (
+      !allowContextSwitch &&
+      snapshot &&
+      currentContext.processId &&
+      (currentContext.processId !== snapshot.processId ||
+        currentContext.roundId !== snapshot.roundId)
+    ) {
+      setConfirmContextSwitch(true);
+      return;
+    }
     setIsChangingSelection(true);
     setLocalError("");
     try {
-      await onActivate();
+      await onActivate(allowContextSwitch);
+      setConfirmContextSwitch(false);
     } catch (reason) {
       setLocalError(errorMessage(reason));
     } finally {
@@ -788,16 +822,18 @@ const SnapshotReviewDialog = ({
     }
   };
 
-  const isActive = snapshot?.status === "active";
+  const isActive = snapshot?.id === currentContext.selectedSnapshotId;
   const isRollback =
     snapshot !== undefined &&
-    activeSnapshot !== undefined &&
-    snapshot.id !== activeSnapshot.id &&
-    snapshot.version < activeSnapshot.version;
+    selectedSnapshot !== undefined &&
+    snapshot.processId === selectedSnapshot.processId &&
+    snapshot.roundId === selectedSnapshot.roundId &&
+    snapshot.id !== selectedSnapshot.id &&
+    snapshot.version < selectedSnapshot.version;
 
   return (
     <Dialog open={Boolean(snapshot)} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[88vh] overflow-y-auto sm:max-w-2xl">
+      <DialogContent className="max-h-[88vh] w-[calc(100vw-2rem)] max-w-6xl overflow-x-hidden overflow-y-auto sm:max-w-6xl">
         <DialogHeader>
           <DialogTitle>
             Review snapshot{snapshot ? ` v${snapshot.version}` : ""}
@@ -807,7 +843,7 @@ const SnapshotReviewDialog = ({
           </DialogDescription>
         </DialogHeader>
         {snapshot && (
-          <div className="grid gap-4">
+          <div className="grid min-w-0 gap-4">
             <div className="grid grid-cols-2 gap-px border bg-border text-xs sm:grid-cols-4">
               <SnapshotMetric label="Status" value={labelize(snapshot.status)} />
               <SnapshotMetric
@@ -826,10 +862,17 @@ const SnapshotReviewDialog = ({
 
             <section>
               <div className="text-xs font-semibold">
-                {activeSnapshot
-                  ? `Changes from active version ${activeSnapshot.version}`
+                {comparisonSnapshot
+                  ? `Changes from ${comparisonSnapshot.id === selectedSnapshot?.id ? "selected" : "previous"} snapshot v${comparisonSnapshot.version}`
                   : "Initial activation contents"}
               </div>
+              {comparisonSnapshot &&
+                (comparisonSnapshot.processId !== snapshot.processId ||
+                  comparisonSnapshot.roundId !== snapshot.roundId) && (
+                  <div className="mt-1 text-[11px] text-amber-700 dark:text-amber-300">
+                    Cross-scope comparison: {comparisonSnapshot.processId} / {comparisonSnapshot.roundId} → {snapshot.processId} / {snapshot.roundId}
+                  </div>
+                )}
               <div className="mt-2 border">
                 {diff.map((section) => (
                   <div
@@ -864,20 +907,7 @@ const SnapshotReviewDialog = ({
               </div>
             </section>
 
-            <section>
-              <div className="text-xs font-semibold">Runtime brief</div>
-              <div className="mt-2 grid gap-1 border px-3 py-2 text-xs text-muted-foreground">
-                <span>
-                  {snapshot.runtimeBrief.company ?? "Unresolved company"} · {snapshot.runtimeBrief.role ?? "Unresolved role"}
-                </span>
-                <span>
-                  {snapshot.runtimeBrief.roundTitle} · {labelize(snapshot.runtimeBrief.stage)}
-                </span>
-                <span>
-                  Types: {snapshot.runtimeBrief.expectedInterviewTypes.join(", ") || "Unresolved"}
-                </span>
-              </div>
-            </section>
+            <SnapshotContentsInspector snapshot={snapshot} diff={diff} />
 
             {snapshot.warnings.length > 0 && (
               <section>
@@ -896,7 +926,7 @@ const SnapshotReviewDialog = ({
 
             <section>
               <div className="text-xs font-semibold">Pinned provenance</div>
-              <div className="mt-2 border px-3 py-2 font-mono text-[10px] leading-4 text-muted-foreground">
+              <div className="mt-2 break-all border px-3 py-2 font-mono text-[10px] leading-4 text-muted-foreground">
                 <div>hash {snapshot.contentHash}</div>
                 <div>profile {snapshot.profileRevisionId}</div>
                 <div>compiler {snapshot.compilerVersion}</div>
@@ -906,6 +936,8 @@ const SnapshotReviewDialog = ({
                 </div>
               </div>
             </section>
+
+            <SnapshotArtifactInspector snapshot={snapshot} />
           </div>
         )}
         {stale && (
@@ -934,7 +966,7 @@ const SnapshotReviewDialog = ({
               !snapshot
             }
             variant={isActive ? "outline" : "default"}
-            onClick={() => void (isActive ? deactivate() : activate())}
+            onClick={() => void (isActive ? deactivate() : activate(false))}
           >
             {isChangingSelection ? (
               <Loader2 className="size-4 animate-spin" />
@@ -951,6 +983,49 @@ const SnapshotReviewDialog = ({
           </Button>
         </DialogFooter>
       </DialogContent>
+      <Dialog
+        open={confirmContextSwitch}
+        onOpenChange={setConfirmContextSwitch}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Switch current Round and activate?</DialogTitle>
+            <DialogDescription>
+              Only one snapshot can be selected globally. The prior selection will
+              be deactivated, while its immutable version and activation history
+              remain available.
+            </DialogDescription>
+          </DialogHeader>
+          {localError && (
+            <div
+              role="alert"
+              className="border border-destructive/50 bg-destructive/10 px-3 py-2 text-sm text-destructive"
+            >
+              {localError}
+            </div>
+          )}
+          <DialogFooter>
+            <Button
+              variant="outline"
+              disabled={isChangingSelection}
+              onClick={() => setConfirmContextSwitch(false)}
+            >
+              Cancel
+            </Button>
+            <Button
+              disabled={isChangingSelection}
+              onClick={() => void activate(true)}
+            >
+              {isChangingSelection ? (
+                <Loader2 className="size-4 animate-spin" />
+              ) : (
+                <Power className="size-4" />
+              )}
+              Switch and activate
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </Dialog>
   );
 };
@@ -960,6 +1035,112 @@ const SnapshotMetric = ({ label, value }: { label: string; value: string }) => (
     <div className="text-[10px] uppercase text-muted-foreground">{label}</div>
     <div className="mt-1 truncate text-xs font-medium">{value}</div>
   </div>
+);
+
+const SnapshotContentsInspector = ({
+  snapshot,
+  diff,
+}: {
+  snapshot: InterviewPreparationSnapshot;
+  diff: PreparationSnapshotDiffSection[];
+}) => {
+  const diffById = new Map(diff.map((section) => [section.id, section]));
+  const sections = [
+    ["runtime-brief", "Runtime Brief", snapshot.runtimeBrief],
+    ["strategy", "Preparation Strategy", snapshot.strategy],
+    ["evidence", "Evidence Pack", snapshot.evidencePack],
+    ["speech-bias", "Speech Bias Terms", snapshot.speechBiasTerms],
+    ["opening", "Opening Pack", snapshot.openingPack],
+    ["narratives", "Narrative Pack", snapshot.narrativePack],
+    ["playbooks", "Playbook Overlays", snapshot.playbookOverlays],
+    ["session-launch", "Session Launch Plan", snapshot.sessionLaunchPlan],
+    ["warnings", "Warnings", snapshot.warnings],
+    ["evidence-index", "Evidence Index", snapshot.evidenceIndex],
+    ["source-manifest", "Source Manifest", snapshot.sourceManifest],
+  ] as const;
+  return (
+    <section>
+      <div className="text-xs font-semibold">Snapshot Inspector</div>
+      <div className="mt-2 border">
+        {sections.map(([id, label, value], index) => {
+          const sectionDiff = diffById.get(id);
+          return (
+            <details
+              key={id}
+              open={index === 0}
+              className="border-b last:border-b-0"
+            >
+              <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-3 py-2 text-xs hover:bg-muted/40">
+                <span>{label}</span>
+                <Badge
+                  variant={sectionDiff?.status === "changed" ? "default" : "outline"}
+                  className="rounded-sm text-[10px]"
+                >
+                  {labelize(sectionDiff?.status ?? "added")}
+                </Badge>
+              </summary>
+              {sectionDiff?.changes.length ? (
+                <ul className="border-t bg-muted/20 px-3 py-2 text-[11px] text-muted-foreground">
+                  {sectionDiff.changes.map((change) => (
+                    <li key={change}>{change}</li>
+                  ))}
+                </ul>
+              ) : null}
+              <pre className="max-h-72 overflow-x-hidden overflow-y-auto whitespace-pre-wrap break-words [overflow-wrap:anywhere] border-t bg-background px-3 py-2 font-mono text-[10px] leading-4 text-muted-foreground">
+                {JSON.stringify(value, null, 2)}
+              </pre>
+            </details>
+          );
+        })}
+      </div>
+    </section>
+  );
+};
+
+const SnapshotArtifactInspector = ({
+  snapshot,
+}: {
+  snapshot: InterviewPreparationSnapshot;
+}) => (
+  <section>
+    <div className="flex items-center justify-between gap-3">
+      <div className="text-xs font-semibold">Artifact identity and provenance</div>
+      <Badge variant="outline" className="rounded-sm text-[10px]">
+        {snapshot.artifactManifest.artifacts.length} artifacts
+      </Badge>
+    </div>
+    <div className="mt-2 max-h-80 overflow-y-auto border">
+      {snapshot.artifactManifest.artifacts.map((artifact) => (
+        <details key={artifact.artifactId} className="border-b last:border-b-0">
+          <summary className="cursor-pointer list-none px-3 py-2 hover:bg-muted/40">
+            <div className="flex items-center justify-between gap-3">
+              <span className="truncate font-mono text-[10px]">
+                {artifact.artifactPath}
+              </span>
+              <Badge variant="outline" className="rounded-sm text-[9px]">
+                {artifact.section}
+              </Badge>
+            </div>
+          </summary>
+          <div className="grid gap-1 border-t bg-muted/20 px-3 py-2 font-mono text-[10px] leading-4 text-muted-foreground">
+            <div className="break-all">artifact {artifact.artifactId}</div>
+            <div className="break-all">lineage {artifact.lineageKey}</div>
+            <div className="break-all">content {artifact.contentHash}</div>
+            <div className="mt-1 font-sans text-[10px] font-medium text-foreground/80">
+              Sources
+            </div>
+            {artifact.sourceRefs.map((source) => (
+              <div key={`${source.kind}:${source.id}`} className="break-all">
+                {source.kind}:{source.id}
+                {source.revision !== undefined ? `@r${source.revision}` : ""}
+                {source.contentHash ? ` · ${source.contentHash}` : ""}
+              </div>
+            ))}
+          </div>
+        </details>
+      ))}
+    </div>
+  </section>
 );
 
 const StatementRow = ({
@@ -1537,6 +1718,20 @@ function parseScope(value: string): PreparationConversationScope {
 
 function sameScope(left: PreparationConversationScope, right: PreparationConversationScope) {
   return left.kind === right.kind && (left.kind === "process" || (right.kind === "round" && left.roundId === right.roundId));
+}
+
+function resolveSnapshotComparison(input: {
+  snapshot?: InterviewPreparationSnapshot;
+  selectedSnapshot?: InterviewPreparationSnapshot;
+  snapshots: InterviewPreparationSnapshot[];
+}) {
+  if (!input.snapshot) return undefined;
+  if (input.selectedSnapshot?.id !== input.snapshot.id) {
+    return input.selectedSnapshot;
+  }
+  return [...input.snapshots]
+    .filter((candidate) => candidate.version < input.snapshot!.version)
+    .sort((left, right) => right.version - left.version)[0];
 }
 
 function isConversationVisibleToScope(

@@ -23,6 +23,16 @@ export type PreparationExpectedInterviewType =
   | "field-knowledge"
   | "personal-logistics";
 
+export const PREPARATION_EXPECTED_INTERVIEW_TYPES = [
+  "behavioral",
+  "coding",
+  "general-system-design",
+  "ai-ml-system-design",
+  "project-deep-dive",
+  "field-knowledge",
+  "personal-logistics",
+] as const satisfies readonly PreparationExpectedInterviewType[];
+
 export type PreparationExpectedTypePolicy = "advisory" | "restricted";
 
 export interface InterviewProcess {

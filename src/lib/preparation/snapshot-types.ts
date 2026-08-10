@@ -11,7 +11,7 @@ import type {
   PreparationStatementSourceType,
 } from "./statement-types.js";
 
-export const PREPARATION_SNAPSHOT_COMPILER_VERSION = "preparation-snapshot-v1";
+export const PREPARATION_SNAPSHOT_COMPILER_VERSION = "preparation-snapshot-v2";
 export const PREPARATION_PLAYBOOK_REGISTRY_VERSION = "interview-playbook-v1";
 export const PREPARATION_RUNTIME_CAPABILITY_VERSION =
   "meeting-preparation-runtime-v1";
@@ -188,6 +188,50 @@ export interface PreparationSnapshotWarning {
   severity: "warning";
 }
 
+export type PreparationSnapshotArtifactSection =
+  | "runtime-brief"
+  | "strategy"
+  | "evidence"
+  | "speech-bias"
+  | "opening"
+  | "narratives"
+  | "playbooks"
+  | "session-launch"
+  | "warnings"
+  | "evidence-index";
+
+export interface PreparationSnapshotArtifactSourceRef {
+  kind:
+    | "process"
+    | "round"
+    | "profile"
+    | "statement"
+    | "preparation-message"
+    | "user-confirmation"
+    | "narrative-node"
+    | "material-revision"
+    | "curated-kmb"
+    | "canonical-playbook"
+    | "compiler";
+  id: string;
+  revision?: number;
+  contentHash?: string;
+}
+
+export interface PreparationSnapshotArtifactIdentity {
+  artifactId: string;
+  lineageKey: string;
+  artifactPath: string;
+  section: PreparationSnapshotArtifactSection;
+  contentHash: string;
+  sourceRefs: PreparationSnapshotArtifactSourceRef[];
+}
+
+export interface PreparationSnapshotArtifactManifest {
+  version: "preparation-artifact-manifest-v1";
+  artifacts: PreparationSnapshotArtifactIdentity[];
+}
+
 export interface InterviewPreparationSnapshot {
   id: string;
   processId: string;
@@ -210,11 +254,38 @@ export interface InterviewPreparationSnapshot {
   sessionLaunchPlan: PreparationSessionLaunchPlan;
   playbookOverlays: PreparationPlaybookOverlay[];
   evidenceIndex: PreparationSnapshotEvidenceIndexEntry[];
+  artifactManifest: PreparationSnapshotArtifactManifest;
   sourceManifest: PreparationSnapshotSourceManifest;
   warnings: PreparationSnapshotWarning[];
   status: InterviewPreparationSnapshotStatus;
   createdAt: number;
   activatedAt?: number;
+}
+
+export interface PreparationCurrentContext {
+  processId?: string;
+  roundId?: string;
+  selectedSnapshotId?: string;
+  revision: number;
+  updatedAt: number;
+}
+
+export interface PreparationCurrentContextEvent {
+  id: string;
+  previousProcessId?: string;
+  previousRoundId?: string;
+  previousSnapshotId?: string;
+  processId?: string;
+  roundId?: string;
+  selectedSnapshotId?: string;
+  action:
+    | "current-context-set"
+    | "context-switched"
+    | "snapshot-activated"
+    | "snapshot-deactivated"
+    | "migration-cleared";
+  revision: number;
+  createdAt: number;
 }
 
 export interface PreparationSnapshotActivationEvent {
@@ -246,6 +317,13 @@ export interface PreparationSnapshotRepository {
     roundId: string;
   }): Promise<InterviewPreparationSnapshot[]>;
   nextVersion(input: { processId: string; roundId: string }): Promise<number>;
+  getCurrentContext(): Promise<PreparationCurrentContext>;
+  setCurrentContext(input: {
+    processId: string;
+    roundId: string;
+    expectedRevision: number;
+    updatedAt: number;
+  }): Promise<boolean>;
   insert(input: {
     snapshot: InterviewPreparationSnapshot;
     statementRevisions: Array<{ statementId: string; statementRevision: number }>;
@@ -267,18 +345,21 @@ export interface PreparationSnapshotRepository {
     roundId: string;
     snapshotId: string;
     expectedContentHash: string;
+    expectedContextRevision: number;
     activatedAt: number;
   }): Promise<boolean>;
   deactivate(input: {
     processId: string;
     roundId: string;
     snapshotId: string;
+    expectedContextRevision: number;
     deactivatedAt: number;
   }): Promise<boolean>;
   listActivationEvents(input: {
     processId: string;
     roundId: string;
   }): Promise<PreparationSnapshotActivationEvent[]>;
+  listCurrentContextEvents(): Promise<PreparationCurrentContextEvent[]>;
 }
 
 export interface PreparationSnapshotDiffSection {
@@ -289,7 +370,11 @@ export interface PreparationSnapshotDiffSection {
     | "speech-bias"
     | "opening"
     | "narratives"
-    | "playbooks";
+    | "playbooks"
+    | "session-launch"
+    | "warnings"
+    | "evidence-index"
+    | "source-manifest";
   label: string;
   status: "added" | "unchanged" | "changed";
   previousCount: number;
