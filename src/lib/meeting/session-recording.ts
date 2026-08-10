@@ -65,10 +65,16 @@ import {
   type ResponseOnlyTaskScope,
 } from "./response-only-task-scope.js";
 import { serializeMeetingTraceExport } from "./trace.js";
+import {
+  buildPreparationAnswerAttributionIndex,
+  type PreparationArtifactEvaluation,
+  type PreparationArtifactUseReceipt,
+  type PreparationRuntimeProvenanceSnapshot,
+} from "./preparation-runtime-provenance.js";
 
 const SESSION_RECORDING_SCHEMA_VERSION = 1;
 const SESSION_RECORDING_INTEGRITY_SCHEMA_VERSION = 1;
-const SESSION_TRACE_SUMMARY_SCHEMA_VERSION = 35;
+const SESSION_TRACE_SUMMARY_SCHEMA_VERSION = 36;
 const SESSION_TRACE_INDEX_SCHEMA_VERSION = 1;
 const MAX_RECORDED_WRITE_FAILURES = 20;
 
@@ -144,6 +150,9 @@ interface SessionRecordingEvent {
     | "native-speech-event"
     | "native-audio-liveness"
     | "audio-segment-disposition"
+    | "preparation-runtime-context"
+    | "preparation-artifact-use"
+    | "preparation-artifact-evaluation"
     | "runtime-reset"
     | "runtime-continued"
     | "error";
@@ -176,6 +185,19 @@ interface ActiveSessionRecording {
   humanEvaluationProjectionsV2: Map<string, HumanEvaluationProjectionV2>;
   criticalMomentCandidates: Map<string, CriticalMomentCandidate>;
   criticalMomentEvaluations: Map<string, CriticalMomentEvaluation>;
+  preparationRuntimeContexts: Map<
+    string,
+    PreparationRuntimeProvenanceSnapshot
+  >;
+  preparationArtifactUseReceipts: Map<
+    string,
+    PreparationArtifactUseReceipt
+  >;
+  preparationArtifactEvaluations: Map<
+    string,
+    PreparationArtifactEvaluation
+  >;
+  untraceablePreparationArtifactUseCount: number;
   writeQueue: Promise<void>;
   enqueueVersion: number;
   pendingWrites: number;
@@ -354,6 +376,10 @@ export interface SessionCompactTraceSummary {
   refreshAuthorityReason?: string;
   refreshAuthorityHardOverride?: boolean;
   answerGenerationLeaseId?: string;
+  preparationContextRevision?: number;
+  preparationArtifactUseReceiptIds: string[];
+  preparationArtifactIds: string[];
+  preparationArtifactConsumers: string[];
   leaseAuthorizedAtStart?: boolean;
   leaseAuthorizedAtCommit?: boolean;
   staleCommitRejected?: boolean;
@@ -1280,6 +1306,10 @@ export class SessionRecordingManager {
           humanEvaluationProjectionsV2: new Map(),
           criticalMomentCandidates: new Map(),
           criticalMomentEvaluations: new Map(),
+          preparationRuntimeContexts: new Map(),
+          preparationArtifactUseReceipts: new Map(),
+          preparationArtifactEvaluations: new Map(),
+          untraceablePreparationArtifactUseCount: 0,
           writeQueue: Promise.resolve(),
           enqueueVersion: 0,
           pendingWrites: 0,
@@ -1439,6 +1469,21 @@ export class SessionRecordingManager {
           },
           recordingIntegrity,
           evaluationIntegrity,
+          preparationRuntimeIntegrity: {
+            contextSnapshotCount: session.preparationRuntimeContexts.size,
+            artifactUseReceiptCount:
+              session.preparationArtifactUseReceipts.size,
+            artifactEvaluationCount:
+              session.preparationArtifactEvaluations.size,
+            answerAttributionCount:
+              buildPreparationAnswerAttributionIndex(
+                Array.from(
+                  session.preparationArtifactUseReceipts.values()
+                )
+              ).length,
+            untraceableArtifactUseCount:
+              session.untraceablePreparationArtifactUseCount,
+          },
         });
       } catch (error) {
         this.lastError = error instanceof Error ? error.message : String(error);
@@ -2356,6 +2401,199 @@ export class SessionRecordingManager {
   ) {
     if (!this.getWritableSession()) return;
     this.recordEvent(kind, metadata);
+  }
+
+  recordPreparationRuntimeContext(
+    context: PreparationRuntimeProvenanceSnapshot
+  ) {
+    const session = this.getWritableSession();
+    if (!session) return;
+    const key = `${context.meetingSessionId}:${context.preparationContextRevision}`;
+    if (session.preparationRuntimeContexts.has(key)) return;
+    const snapshot = structuredClone(context);
+    session.preparationRuntimeContexts.set(key, snapshot);
+    const contextPath = `preparation/runtime-contexts/${encodeURIComponent(
+      context.meetingSessionId
+    )}-r${context.preparationContextRevision}.json`;
+    const latestPath = "preparation/runtime-context.latest.json";
+    const manifestPath = context.pinnedSnapshot
+      ? `preparation/snapshot-manifests/${encodeURIComponent(
+          context.pinnedSnapshot.snapshotId
+        )}-v${context.pinnedSnapshot.version}.json`
+      : undefined;
+    this.enqueue(session, async () => {
+      await this.writeJson(session, contextPath, snapshot);
+      await this.writeJson(session, latestPath, snapshot);
+      if (manifestPath && context.pinnedSnapshot) {
+        await this.writeJson(session, manifestPath, {
+          recordedAt: Date.now(),
+          meetingSessionId: context.meetingSessionId,
+          preparationContextRevision:
+            context.preparationContextRevision,
+          selectionRevision: context.selectionRevision,
+          snapshotId: context.pinnedSnapshot.snapshotId,
+          snapshotVersion: context.pinnedSnapshot.version,
+          snapshotContentHash: context.pinnedSnapshot.contentHash,
+          artifactManifest:
+            context.pinnedSnapshot.artifactManifest,
+        });
+      }
+    });
+    this.recordEvent(
+      "preparation-runtime-context",
+      {
+        meetingSessionId: context.meetingSessionId,
+        preparationContextRevision:
+          context.preparationContextRevision,
+        selectionRevision: context.selectionRevision,
+        mode: context.mode,
+        loadState: context.loadState,
+        snapshotId: context.pinnedSnapshot?.snapshotId,
+        snapshotVersion: context.pinnedSnapshot?.version,
+        snapshotContentHash:
+          context.pinnedSnapshot?.contentHash,
+        artifactCount:
+          context.pinnedSnapshot?.artifactManifest.artifacts.length ?? 0,
+        projectionCount: context.projectionCatalog.length,
+        runtimeReinforcementEnabled:
+          context.capabilities.runtimeReinforcement.enabled,
+        personalizedGuidanceEnabled:
+          context.capabilities.personalizedGuidance.enabled,
+      },
+      [contextPath, latestPath, ...(manifestPath ? [manifestPath] : [])]
+    );
+  }
+
+  recordPreparationArtifactUse(
+    receipts: PreparationArtifactUseReceipt[]
+  ) {
+    const session = this.getWritableSession({
+      traceId: receipts[0]?.traceId,
+    });
+    if (!session || receipts.length === 0) return;
+    const untraceableReceipts = receipts.filter(
+      (receipt) => !isTraceablePreparationArtifactUse(session, receipt)
+    );
+    if (untraceableReceipts.length > 0) {
+      session.untraceablePreparationArtifactUseCount +=
+        untraceableReceipts.length;
+      this.recordEvent(
+        "error",
+        {
+          scope: "preparation-artifact-use",
+          reason: "untraceable-artifact-use",
+          rejectedReceiptIds: untraceableReceipts.map(
+            (receipt) => receipt.receiptId
+          ),
+        },
+        [],
+        receipts[0]?.traceId
+      );
+      throw new Error(
+        "Preparation artifact use is not authorized by the recorded snapshot manifest."
+      );
+    }
+    for (const receipt of receipts) {
+      session.preparationArtifactUseReceipts.set(
+        receipt.receiptId,
+        structuredClone(receipt)
+      );
+    }
+    const artifactPath = "preparation/artifact-use-receipts.jsonl";
+    const indexPath = "preparation/answer-attribution-index.json";
+    this.enqueue(session, async () => {
+      await this.writeText(
+        session,
+        artifactPath,
+        receipts.map((receipt) => JSON.stringify(receipt)).join("\n") + "\n",
+        true
+      );
+      await this.writeJson(
+        session,
+        indexPath,
+        buildPreparationAnswerAttributionIndex(
+          Array.from(session.preparationArtifactUseReceipts.values())
+        )
+      );
+    });
+    for (const receipt of receipts) {
+      this.recordEvent(
+        "preparation-artifact-use",
+        {
+          receiptId: receipt.receiptId,
+          meetingSessionId: receipt.meetingSessionId,
+          preparationContextRevision:
+            receipt.preparationContextRevision,
+          snapshotId: receipt.snapshotId,
+          snapshotVersion: receipt.snapshotVersion,
+          artifactId: receipt.artifactId,
+          lineageKey: receipt.lineageKey,
+          consumer: receipt.consumer,
+          targetKind: receipt.targetKind,
+          targetId: receipt.targetId,
+          questionId: receipt.questionId,
+          answerRevision: receipt.answerRevision,
+          generationLeaseId: receipt.generationLeaseId,
+        },
+        [artifactPath, indexPath],
+        receipt.traceId
+      );
+    }
+  }
+
+  recordPreparationArtifactEvaluation(
+    evaluation: PreparationArtifactEvaluation
+  ) {
+    const session = this.getWritableSession({
+      traceId: evaluation.traceId,
+    });
+    if (!session) return;
+    const receipt = session.preparationArtifactUseReceipts.get(
+      evaluation.receiptId
+    );
+    if (
+      !receipt ||
+      receipt.snapshotId !== evaluation.snapshotId ||
+      receipt.artifactId !== evaluation.artifactId ||
+      receipt.lineageKey !== evaluation.lineageKey ||
+      receipt.traceId !== evaluation.traceId ||
+      receipt.questionId !== evaluation.questionId ||
+      receipt.answerRevision !== evaluation.answerRevision ||
+      receipt.consumer !== evaluation.consumer
+    ) {
+      throw new Error(
+        "Preparation artifact feedback requires a matching recorded use receipt."
+      );
+    }
+    session.preparationArtifactEvaluations.set(
+      evaluation.receiptId,
+      structuredClone(evaluation)
+    );
+    const artifactPath =
+      "human-evaluation/preparation-artifact-evaluations.json";
+    this.enqueue(session, () =>
+      this.writeJson(
+        session,
+        artifactPath,
+        Array.from(session.preparationArtifactEvaluations.values())
+      )
+    );
+    this.recordEvent(
+      "preparation-artifact-evaluation",
+      {
+        evaluationId: evaluation.evaluationId,
+        receiptId: evaluation.receiptId,
+        snapshotId: evaluation.snapshotId,
+        artifactId: evaluation.artifactId,
+        lineageKey: evaluation.lineageKey,
+        consumer: evaluation.consumer,
+        label: evaluation.label,
+        questionId: evaluation.questionId,
+        answerRevision: evaluation.answerRevision,
+      },
+      [artifactPath],
+      evaluation.traceId
+    );
   }
 
   recordSemanticTaxonomyDecision({
@@ -3840,6 +4078,49 @@ function filterTraceMetricsPayload(payload: string, recordedTraceIds: Set<string
   }
 }
 
+function isTraceablePreparationArtifactUse(
+  session: ActiveSessionRecording,
+  receipt: PreparationArtifactUseReceipt
+) {
+  const context = session.preparationRuntimeContexts.get(
+    `${receipt.meetingSessionId}:${receipt.preparationContextRevision}`
+  );
+  const snapshot = context?.pinnedSnapshot;
+  if (
+    context?.mode !== "prepared" ||
+    context.loadState !== "ready" ||
+    !snapshot ||
+    context.selectionRevision !== receipt.selectionRevision ||
+    snapshot.snapshotId !== receipt.snapshotId ||
+    snapshot.version !== receipt.snapshotVersion ||
+    snapshot.contentHash !== receipt.snapshotContentHash
+  ) {
+    return false;
+  }
+  const projection = context.projectionCatalog.find(
+    (candidate) =>
+      candidate.projectionId === receipt.projectionId &&
+      candidate.consumer === receipt.consumer &&
+      candidate.snapshotId === receipt.snapshotId &&
+      candidate.preparationContextRevision ===
+        receipt.preparationContextRevision &&
+      candidate.artifactIds.includes(receipt.artifactId) &&
+      candidate.artifactLineageKeys.includes(receipt.lineageKey) &&
+      candidate.artifactPaths.includes(receipt.artifactPath)
+  );
+  const artifact = snapshot.artifactManifest.artifacts.find(
+    (candidate) => candidate.artifactId === receipt.artifactId
+  );
+  return Boolean(
+    projection &&
+      artifact &&
+      artifact.lineageKey === receipt.lineageKey &&
+      artifact.artifactPath === receipt.artifactPath &&
+      artifact.section === receipt.section &&
+      artifact.contentHash === receipt.artifactContentHash
+  );
+}
+
 export function buildCompactTraceSummary({
   sessionId,
   trace,
@@ -4282,6 +4563,25 @@ export function buildCompactTraceSummary({
     answerGenerationLeaseId: readFirstString(
       metadataSources,
       "answerGenerationLeaseId"
+    ),
+    preparationContextRevision: readFirstNumberFromMetadata(
+      metadataSources,
+      "answerGenerationLeasePreparationContextRevision"
+    ) ?? readFirstNumberFromMetadata(
+      metadataSources,
+      "preparationContextRevision"
+    ),
+    preparationArtifactUseReceiptIds: readFirstStringList(
+      metadataSources,
+      "preparationArtifactUseReceiptIds"
+    ),
+    preparationArtifactIds: readFirstStringList(
+      metadataSources,
+      "preparationArtifactIds"
+    ),
+    preparationArtifactConsumers: readFirstStringList(
+      metadataSources,
+      "preparationArtifactConsumers"
     ),
     leaseAuthorizedAtStart: readFirstBoolean(
       metadataSources,

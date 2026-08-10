@@ -66,6 +66,9 @@ import type {
   MeetingTraceValueSummary,
   MemoryEntryEvaluationLabelValue,
   MemoryRetrievalEvaluationSnapshotResolution,
+  PreparationArtifactEvaluation,
+  PreparationArtifactEvaluationLabel,
+  PreparationArtifactUseReceipt,
   PersonalEvidenceGuardrailMode,
   PersonalStatusDomain,
   ProjectTrajectoryChildContinuity,
@@ -99,6 +102,7 @@ import {
   readProjectBindingClarifyingCandidates,
   resolveVisibleAnswerEvaluationTarget,
   resolveTraceMemoryEvaluationSnapshot,
+  selectPreparationArtifactUseReceiptsForEvaluation,
   stripOuterCodeFence,
   summarizeMeetingTraces,
   updateCodingArtifactCache,
@@ -291,6 +295,16 @@ const memoryEntryLabelOptions: Array<{
   { id: "relevant", label: "Relevant" },
   { id: "irrelevant", label: "Irrelevant" },
   { id: "forbidden", label: "Forbidden" },
+];
+
+const preparationArtifactEvaluationOptions: Array<{
+  id: PreparationArtifactEvaluationLabel;
+  label: string;
+}> = [
+  { id: "helpful", label: "Helpful" },
+  { id: "irrelevant", label: "Irrelevant" },
+  { id: "polluting", label: "Polluting" },
+  { id: "over-constraining", label: "Over-constraining" },
 ];
 
 const HOTKEY_CAPTURE_SETTLE_MS = 180;
@@ -675,6 +689,23 @@ export const MeetingAssistant = ({
     : undefined;
   const answerMemoryEvaluationSnapshot =
     resolveTraceMemoryEvaluationSnapshot(evaluationTrace);
+  const answerPreparationArtifactUses = useMemo(() => {
+    if (!evaluationTrace) return [];
+    return selectPreparationArtifactUseReceiptsForEvaluation({
+      receipts: meeting.preparationArtifactUses,
+      traceId: evaluationTrace.id,
+      questionId: answerQuestionEvaluation?.questionId,
+      answerRevision:
+        typeof evaluationTrace.metadata?.visibleAnswerRevisionAfter ===
+        "number"
+          ? evaluationTrace.metadata.visibleAnswerRevisionAfter
+          : undefined,
+    });
+  }, [
+    answerQuestionEvaluation?.questionId,
+    evaluationTrace,
+    meeting.preparationArtifactUses,
+  ]);
   const currentTranscriptTurnIds = useMemo(
     () => new Set(meeting.transcriptTurns.map((turn) => turn.id)),
     [meeting.transcriptTurns]
@@ -2638,6 +2669,12 @@ export const MeetingAssistant = ({
                         questionEvaluation={answerQuestionEvaluation}
                         projectionV2={answerEvaluationProjectionV2}
                         memorySnapshot={answerMemoryEvaluationSnapshot}
+                        preparationArtifactUses={
+                          answerPreparationArtifactUses
+                        }
+                        preparationArtifactEvaluations={
+                          meeting.preparationArtifactEvaluations
+                        }
                         onUpdate={(patch) => {
                           meeting.updateTraceHumanEvaluation(
                             evaluationTrace.id,
@@ -2658,6 +2695,15 @@ export const MeetingAssistant = ({
                               ...options,
                               uiSurface: "normal-debug-evaluation",
                             }
+                          );
+                        }}
+                        onUpdatePreparationArtifactEvaluation={(
+                          receiptId,
+                          label
+                        ) => {
+                          meeting.updatePreparationArtifactEvaluation(
+                            receiptId,
+                            label
                           );
                         }}
                       />
@@ -5249,9 +5295,12 @@ const TraceHumanEvaluationPanel = ({
   questionEvaluation,
   projectionV2,
   memorySnapshot,
+  preparationArtifactUses,
+  preparationArtifactEvaluations,
   onUpdate,
   onUpdateQuestion,
   onRecordGroundTruth,
+  onUpdatePreparationArtifactEvaluation,
 }: {
   trace: MeetingTrace;
   detectedQuestionType?: string;
@@ -5285,6 +5334,8 @@ const TraceHumanEvaluationPanel = ({
   questionEvaluation: QuestionHumanEvaluation | undefined;
   projectionV2: HumanEvaluationProjectionV2 | undefined;
   memorySnapshot: MemoryRetrievalEvaluationSnapshotResolution;
+  preparationArtifactUses: PreparationArtifactUseReceipt[];
+  preparationArtifactEvaluations: PreparationArtifactEvaluation[];
   onUpdate: (patch: {
     taskQuality?: HumanEvalTaskQuality;
     correctedQuestionType?: HumanEvalQuestionType;
@@ -5306,6 +5357,10 @@ const TraceHumanEvaluationPanel = ({
       confirmation?: "confirmed" | "suggested";
       interaction?: HumanGroundTruthInteractionV2;
     }
+  ) => void;
+  onUpdatePreparationArtifactEvaluation: (
+    receiptId: string,
+    label: PreparationArtifactEvaluationLabel
   ) => void;
 }) => {
   const failureReasons = evaluation?.failureReasons ?? [];
@@ -7726,6 +7781,65 @@ const TraceHumanEvaluationPanel = ({
               </div>
             )}
           </div>
+          {preparationArtifactUses.length ? (
+            <div className="mt-2">
+              <div className="mb-1 text-[10px] font-medium uppercase text-muted-foreground">
+                Used preparation artifacts
+              </div>
+              <div className="space-y-1">
+                {preparationArtifactUses.map((receipt) => {
+                  const selectedLabel = preparationArtifactEvaluations.find(
+                    (evaluation) => evaluation.receiptId === receipt.receiptId
+                  )?.label;
+                  return (
+                    <div
+                      key={receipt.receiptId}
+                      className="min-w-0 rounded-sm bg-muted/40 p-2"
+                    >
+                      <div
+                        className="mb-1 truncate text-[10px] font-medium"
+                        title={receipt.artifactPath}
+                      >
+                        {receipt.artifactPath}
+                      </div>
+                      <div
+                        className="mb-1 truncate font-mono text-[9px] text-muted-foreground"
+                        title={`${receipt.artifactId} / ${receipt.lineageKey}`}
+                      >
+                        {receipt.consumer} / {receipt.targetKind} / snapshot v
+                        {receipt.snapshotVersion}
+                        {receipt.answerRevision == null
+                          ? ""
+                          : ` / answer r${receipt.answerRevision}`}
+                      </div>
+                      <div className="flex flex-wrap gap-1">
+                        {preparationArtifactEvaluationOptions.map((option) => (
+                          <Button
+                            key={option.id}
+                            size="sm"
+                            variant={
+                              selectedLabel === option.id
+                                ? "default"
+                                : "outline"
+                            }
+                            className="h-6 px-2 text-[10px]"
+                            onClick={() =>
+                              onUpdatePreparationArtifactEvaluation(
+                                receipt.receiptId,
+                                option.id
+                              )
+                            }
+                          >
+                            {option.label}
+                          </Button>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          ) : null}
           <div className="mt-2">
             <div className="mb-1 text-[10px] font-medium uppercase text-muted-foreground">
               Missing expected memory

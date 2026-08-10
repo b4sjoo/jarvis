@@ -172,6 +172,7 @@ function buildLease() {
   return createAnswerGenerationLease({
     sessionId: "session-a",
     runtimeEpoch: 4,
+    preparationContextRevision: 7,
     taskId: "parent-a",
     taskRevision: 3,
     logicalQuestionUnitId: "question-a",
@@ -191,6 +192,7 @@ function buildCurrentSnapshot() {
   return {
     sessionId: "session-a",
     runtimeEpoch: 4,
+    preparationContextRevision: 7,
     taskId: "parent-a",
     taskRevision: 3,
     logicalQuestionUnitId: "question-a",
@@ -213,6 +215,14 @@ test("authorizes only the exact visible answer and question revision", () => {
       authorizedArtifacts: [...current.authorizedArtifacts],
     }).authorized,
     true
+  );
+  assert.equal(
+    authorizeAnswerGenerationLease(lease, {
+      ...current,
+      preparationContextRevision: 8,
+      authorizedArtifacts: [...current.authorizedArtifacts],
+    }).reason,
+    "preparation-context-revision-mismatch"
   );
   assert.equal(
     authorizeAnswerGenerationLease(lease, {
@@ -278,6 +288,10 @@ test("formats replay-safe lease metadata for stale commits", () => {
   );
 
   assert.equal(metadata.answerGenerationLeaseId, lease.id);
+  assert.equal(
+    metadata.answerGenerationLeasePreparationContextRevision,
+    7
+  );
   assert.equal(metadata.leaseAuthorizedAtCommit, false);
   assert.equal(metadata.staleCommitRejected, true);
   assert.equal(metadata.staleReason, "visible-answer-revision-mismatch");

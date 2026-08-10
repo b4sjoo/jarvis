@@ -25,6 +25,11 @@ import {
   observeAdvisorResponseConsistency,
 } from "../src/lib/meeting/advisor-response-consistency.js";
 import { parseMeetingAnswer } from "../src/lib/meeting/meeting-answer.js";
+import type {
+  PreparationArtifactEvaluation,
+  PreparationArtifactUseReceipt,
+  PreparationRuntimeProvenanceSnapshot,
+} from "../src/lib/meeting/preparation-runtime-provenance.js";
 
 interface InvokeCall {
   command: string;
@@ -588,7 +593,7 @@ test("records whiteboard validation and recovery artifacts", async () => {
   );
   assert.ok(summaryWrite);
   const summary = parsePayload(summaryWrite);
-  assert.equal(summary.version, 35);
+  assert.equal(summary.version, 36);
   assert.deepEqual(summary.whiteboard, {
     artifactId: "whiteboard_1",
     revision: 1,
@@ -1537,7 +1542,7 @@ test("compact trace summaries preserve task boundary and cross-domain evidence",
   );
   assert.ok(summaryWrite);
   const summary = parsePayload(summaryWrite);
-  assert.equal(summary.version, 35);
+  assert.equal(summary.version, 36);
   assert.equal(summary.taskRelation, "new-parent");
   assert.equal(summary.logicalQuestionUnitRevision, 3);
   assert.equal(summary.phaseSignal, "assumption-authorized");
@@ -1758,7 +1763,7 @@ test("compact trace summaries preserve bounded STT request evidence", async () =
   );
   assert.ok(summaryWrite);
   const summary = parsePayload(summaryWrite);
-  assert.equal(summary.version, 35);
+  assert.equal(summary.version, 36);
   assert.equal(
     (summary.timingsMs as Record<string, unknown>).stt,
     1_580
@@ -1900,7 +1905,7 @@ test("refreshes compact STT lifecycle evidence after a late provider abort", asy
   );
   assert.ok(summaryWrites.length >= 2);
   const summary = parsePayload(summaryWrites[summaryWrites.length - 1]!);
-  assert.equal(summary.version, 35);
+  assert.equal(summary.version, 36);
   assert.equal(
     (summary.sttRequest as Record<string, unknown>).abortRequested,
     true
@@ -1965,7 +1970,7 @@ test("compact trace summaries preserve hard memory invalidation evidence", async
   );
   assert.ok(summaryWrite);
   const summary = parsePayload(summaryWrite);
-  assert.equal(summary.version, 35);
+  assert.equal(summary.version, 36);
   const memory = summary.memory as Record<string, unknown>;
   assert.equal(memory.authorityRevision, 2);
   assert.equal(memory.invalidationKind, "hard");
@@ -2226,7 +2231,7 @@ test("records compact current-question settlement and execution-plan evidence", 
   assert.equal(serializedPlan.includes("taskSnapshot"), false);
   assert.equal(serializedPlan.includes("variables"), false);
   const summary = parsePayload(summaryWrite);
-  assert.equal(summary.version, 35);
+  assert.equal(summary.version, 36);
   assert.equal(
     (
       summary.currentQuestionSettlement as Record<string, unknown>
@@ -2342,7 +2347,7 @@ test("records a current-question term correction without copying provider state"
     false
   );
   const summary = parsePayload(summaryWrite);
-  assert.equal(summary.version, 35);
+  assert.equal(summary.version, 36);
   assert.equal(
     summary.manualTermCorrectionId,
     "term_correction_hnsw"
@@ -2358,6 +2363,232 @@ test("records a current-question term correction without copying provider state"
   assert.equal(summary.manualTermCorrectionLatencyMs, 250);
 
   await manager.stop("test-complete");
+});
+
+test("records preparation provenance, use receipts, and answer-bound feedback", async () => {
+  const native = new ControlledRecordingInvoke();
+  const manager = new SessionRecordingManager(undefined, native.invoke);
+  const recording = await manager.start(START_OPTIONS);
+  const artifact = {
+    artifactId: "artifact-1",
+    lineageKey: "lineage-1",
+    artifactPath: "runtime-brief/company",
+    section: "runtime-brief" as const,
+    contentHash: "artifact-hash",
+    sourceRefs: [
+      {
+        kind: "process" as const,
+        id: "process-1",
+        contentHash: "process-hash",
+      },
+    ],
+  };
+  const context: PreparationRuntimeProvenanceSnapshot = {
+    version: "meeting-preparation-provenance-v1",
+    meetingSessionId: "meeting-1",
+    preparationContextRevision: 2,
+    selectionRevision: 7,
+    mode: "prepared",
+    loadState: "ready",
+    capabilities: {
+      runtimeReinforcement: {
+        version: "meeting-preparation-10b-v1",
+        available: true,
+        enabled: false,
+      },
+      personalizedGuidance: {
+        version: "meeting-preparation-10c-v1",
+        available: true,
+        enabled: false,
+        requiresRuntimeReinforcement: true,
+      },
+    },
+    pinnedSnapshot: {
+      snapshotId: "snapshot-1",
+      processId: "process-1",
+      roundId: "round-1",
+      version: 3,
+      contentHash: "snapshot-hash",
+      compilerVersion: "compiler-1",
+      playbookRegistryVersion: "playbook-1",
+      runtimeCapabilityVersion: "runtime-1",
+      selectionRevision: 7,
+      selectedAt: 50,
+      artifactManifest: {
+        version: "preparation-artifact-manifest-v1",
+        artifacts: [artifact],
+      },
+    },
+    projectionCatalog: [
+      {
+        projectionId: "snapshot-1:runtime-brief",
+        group: "runtime-reinforcement",
+        consumer: "runtime-brief",
+        snapshotId: "snapshot-1",
+        preparationContextRevision: 2,
+        artifactIds: [artifact.artifactId],
+        artifactLineageKeys: [artifact.lineageKey],
+        artifactPaths: [artifact.artifactPath],
+      },
+    ],
+    capturedAt: 100,
+  };
+  const receipt: PreparationArtifactUseReceipt = {
+    version: "meeting-preparation-provenance-v1",
+    receiptId: "receipt-1",
+    meetingSessionId: "meeting-1",
+    preparationContextRevision: 2,
+    selectionRevision: 7,
+    snapshotId: "snapshot-1",
+    snapshotVersion: 3,
+    snapshotContentHash: "snapshot-hash",
+    projectionId: "snapshot-1:runtime-brief",
+    artifactId: artifact.artifactId,
+    lineageKey: artifact.lineageKey,
+    artifactPath: artifact.artifactPath,
+    section: artifact.section,
+    artifactContentHash: artifact.contentHash,
+    sourceRefs: artifact.sourceRefs,
+    consumer: "runtime-brief",
+    targetKind: "advisor-prompt",
+    targetId: "prompt-1",
+    traceId: "trace-preparation-1",
+    questionId: "question-1",
+    answerRevision: 4,
+    generationLeaseId: "lease-1",
+    createdAt: 120,
+  };
+  const evaluation: PreparationArtifactEvaluation = {
+    version: "meeting-preparation-provenance-v1",
+    evaluationId: "evaluation-1",
+    receiptId: receipt.receiptId,
+    meetingSessionId: receipt.meetingSessionId,
+    traceId: receipt.traceId,
+    questionId: receipt.questionId,
+    answerRevision: receipt.answerRevision,
+    snapshotId: receipt.snapshotId,
+    artifactId: receipt.artifactId,
+    lineageKey: receipt.lineageKey,
+    consumer: receipt.consumer,
+    label: "helpful",
+    createdAt: 130,
+    updatedAt: 130,
+  };
+
+  manager.recordPreparationRuntimeContext(context);
+  manager.recordPreparationArtifactUse([receipt]);
+  assert.throws(
+    () =>
+      manager.recordPreparationArtifactEvaluation({
+        ...evaluation,
+        artifactId: "artifact-not-used",
+      }),
+    /matching recorded use receipt/u
+  );
+  manager.recordPreparationArtifactEvaluation(evaluation);
+  manager.recordTrace(
+    buildCompletedTrace(receipt.traceId, Date.now(), {
+      preparationContextRevision: receipt.preparationContextRevision,
+      preparationArtifactUseReceiptIds: [receipt.receiptId],
+      preparationArtifactIds: [receipt.artifactId],
+      preparationArtifactConsumers: [receipt.consumer],
+    }),
+    "manual"
+  );
+  await settle();
+  await manager.stop("test-complete");
+
+  const paths = native.calls
+    .filter((call) => call.command === "write_meeting_session_recording_text")
+    .map((call) => stringArg(call, "relativePath"));
+  assert.ok(paths.includes("preparation/runtime-context.latest.json"));
+  assert.ok(
+    paths.includes("preparation/snapshot-manifests/snapshot-1-v3.json")
+  );
+  assert.ok(paths.includes("preparation/artifact-use-receipts.jsonl"));
+  assert.ok(paths.includes("preparation/answer-attribution-index.json"));
+  assert.ok(
+    paths.includes("human-evaluation/preparation-artifact-evaluations.json")
+  );
+  const summaryWrite = native.calls.find(
+    (call) =>
+      call.command === "write_meeting_session_recording_text" &&
+      stringArg(call, "relativePath") ===
+        `traces/${receipt.traceId}/summary.json`
+  );
+  assert.ok(summaryWrite);
+  const summary = parsePayload(summaryWrite);
+  assert.equal(summary.version, 36);
+  assert.equal(
+    summary.preparationContextRevision,
+    receipt.preparationContextRevision
+  );
+  assert.deepEqual(summary.preparationArtifactUseReceiptIds, [
+    receipt.receiptId,
+  ]);
+  assert.deepEqual(summary.preparationArtifactIds, [receipt.artifactId]);
+  assert.deepEqual(summary.preparationArtifactConsumers, [receipt.consumer]);
+  const finalManifest = native.stoppedManifest(
+    required(recording.folderName)
+  );
+  assert.ok(finalManifest);
+  const integrity = finalManifest.preparationRuntimeIntegrity;
+  assert.equal(integrity.contextSnapshotCount, 1);
+  assert.equal(integrity.artifactUseReceiptCount, 1);
+  assert.equal(integrity.artifactEvaluationCount, 1);
+  assert.equal(integrity.answerAttributionCount, 1);
+  assert.equal(integrity.untraceableArtifactUseCount, 0);
+});
+
+test("rejects an artifact receipt that has no recorded snapshot lineage", async () => {
+  const native = new ControlledRecordingInvoke();
+  const manager = new SessionRecordingManager(undefined, native.invoke);
+  const recording = await manager.start(START_OPTIONS);
+  const receipt: PreparationArtifactUseReceipt = {
+    version: "meeting-preparation-provenance-v1",
+    receiptId: "receipt-untraceable",
+    meetingSessionId: "meeting-missing",
+    preparationContextRevision: 9,
+    selectionRevision: 9,
+    snapshotId: "snapshot-missing",
+    snapshotVersion: 1,
+    snapshotContentHash: "snapshot-hash",
+    projectionId: "projection-missing",
+    artifactId: "artifact-missing",
+    lineageKey: "lineage-missing",
+    artifactPath: "runtime-brief/missing",
+    section: "runtime-brief",
+    artifactContentHash: "artifact-hash",
+    sourceRefs: [],
+    consumer: "runtime-brief",
+    targetKind: "advisor-prompt",
+    targetId: "prompt-missing",
+    traceId: "trace-missing",
+    answerRevision: null,
+    createdAt: 100,
+  };
+
+  assert.throws(
+    () => manager.recordPreparationArtifactUse([receipt]),
+    /not authorized by the recorded snapshot manifest/u
+  );
+  await manager.stop("test-complete");
+
+  const finalManifest = native.stoppedManifest(
+    required(recording.folderName)
+  );
+  assert.equal(
+    finalManifest?.preparationRuntimeIntegrity
+      .untraceableArtifactUseCount,
+    1
+  );
+  const receiptWrites = native.calls.filter(
+    (call) =>
+      call.command === "write_meeting_session_recording_text" &&
+      stringArg(call, "relativePath") ===
+        "preparation/artifact-use-receipts.jsonl"
+  );
+  assert.equal(receiptWrites.length, 0);
 });
 
 const START_OPTIONS = {
@@ -2495,6 +2726,8 @@ class ControlledRecordingInvoke {
           evaluationIntegrity: payload.evaluationIntegrity as {
             compatibilityReportPath: string;
           },
+          preparationRuntimeIntegrity:
+            payload.preparationRuntimeIntegrity as Record<string, unknown>,
         };
       }
     }

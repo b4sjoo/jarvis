@@ -86,6 +86,7 @@ export interface AnswerGenerationLease {
   id: string;
   sessionId: string;
   runtimeEpoch: number;
+  preparationContextRevision: number;
   taskId: string | null;
   taskRevision: number | null;
   logicalQuestionUnitId: string | null;
@@ -103,6 +104,7 @@ export interface AnswerGenerationLease {
 export interface AnswerGenerationLeaseSnapshot {
   sessionId: string;
   runtimeEpoch: number;
+  preparationContextRevision: number;
   taskId: string | null;
   taskRevision: number | null;
   logicalQuestionUnitId: string | null;
@@ -118,6 +120,7 @@ export type AnswerGenerationLeaseAuthorizationReason =
   | "authorized"
   | "session-mismatch"
   | "runtime-epoch-mismatch"
+  | "preparation-context-revision-mismatch"
   | "task-owner-mismatch"
   | "task-revision-mismatch"
   | "logical-question-mismatch"
@@ -374,6 +377,12 @@ export function authorizeAnswerGenerationLease(
   if (lease.runtimeEpoch !== current.runtimeEpoch) {
     return rejected("runtime-epoch-mismatch");
   }
+  if (
+    lease.preparationContextRevision !==
+    current.preparationContextRevision
+  ) {
+    return rejected("preparation-context-revision-mismatch");
+  }
   if (lease.taskId !== current.taskId) {
     return rejected("task-owner-mismatch");
   }
@@ -456,6 +465,8 @@ export function formatAnswerGenerationLeaseForTrace(
     answerGenerationLeaseStage: stage,
     answerGenerationLeaseSessionId: lease.sessionId,
     answerGenerationLeaseRuntimeEpoch: lease.runtimeEpoch,
+    answerGenerationLeasePreparationContextRevision:
+      lease.preparationContextRevision,
     answerGenerationLeaseTaskId: lease.taskId ?? undefined,
     answerGenerationLeaseTaskRevision: lease.taskRevision ?? undefined,
     answerGenerationLeaseLogicalQuestionUnitId:

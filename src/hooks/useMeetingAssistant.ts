@@ -128,7 +128,12 @@ import {
   detectOpeningTaskRoute,
   OpeningRouteContext,
   ParentQuestionType,
+  PreparationArtifactEvaluation,
+  PreparationArtifactEvaluationLabel,
+  PreparationArtifactUseReceipt,
   PreparationRuntimeContext,
+  PreparationRuntimeProvenanceLedger,
+  RecordPreparationArtifactUseInput,
   ParsedMeetingAnswer,
   QuestionEvaluationIdentity,
   QuestionHumanEvaluation,
@@ -1943,6 +1948,11 @@ export function useMeetingAssistant() {
   const [criticalMomentEvaluations, setCriticalMomentEvaluations] = useState(
     () => readCriticalMomentEvaluations()
   );
+  const [preparationArtifactUses, setPreparationArtifactUses] = useState<
+    PreparationArtifactUseReceipt[]
+  >([]);
+  const [preparationArtifactEvaluations, setPreparationArtifactEvaluations] =
+    useState<PreparationArtifactEvaluation[]>([]);
   const criticalMomentCandidatesRef = useRef(criticalMomentCandidates);
   criticalMomentCandidatesRef.current = criticalMomentCandidates;
   const criticalMomentCandidateFingerprintBySessionRef = useRef(
@@ -2107,6 +2117,12 @@ export function useMeetingAssistant() {
       preparationContextRevision: 0,
     })
   );
+  const preparationProvenanceLedgerRef =
+    useRef<PreparationRuntimeProvenanceLedger>(
+      new PreparationRuntimeProvenanceLedger(
+        preparationRuntimeContextRef.current
+      )
+    );
   const preparationContextRevisionRef = useRef(0);
   const preparationPinRequestRef = useRef(0);
   const pinPreparationRuntimeForSession = useCallback(
@@ -2122,6 +2138,10 @@ export function useMeetingAssistant() {
         loadState: "loading",
       });
       preparationRuntimeContextRef.current = loadingContext;
+      preparationProvenanceLedgerRef.current =
+        new PreparationRuntimeProvenanceLedger(loadingContext);
+      setPreparationArtifactUses([]);
+      setPreparationArtifactEvaluations([]);
       setState((previous) => ({
         ...previous,
         preparationRuntime:
@@ -2148,11 +2168,16 @@ export function useMeetingAssistant() {
       }
 
       preparationRuntimeContextRef.current = pinnedContext;
+      preparationProvenanceLedgerRef.current =
+        new PreparationRuntimeProvenanceLedger(pinnedContext);
       setState((previous) => ({
         ...previous,
         preparationRuntime:
           toPreparationRuntimePresentation(pinnedContext),
       }));
+      sessionRecordingManagerRef.current?.recordPreparationRuntimeContext(
+        preparationProvenanceLedgerRef.current.getSnapshot()
+      );
       return { applied: true, context: pinnedContext };
     },
     []
@@ -5337,6 +5362,9 @@ export function useMeetingAssistant() {
             taxonomyAdjudicationRoute.missingRequiredVariables,
         }),
       });
+      sessionRecordingManagerRef.current?.recordPreparationRuntimeContext(
+        preparationProvenanceLedgerRef.current.getSnapshot()
+      );
       sessionRecordingManagerRef.current?.recordRuntimeBoundary(
         "runtime-reset",
         {
@@ -7393,6 +7421,8 @@ export function useMeetingAssistant() {
           {
             sessionId: currentContextState.sessionId,
             runtimeEpoch: runtimeEpochRef.current,
+            preparationContextRevision:
+              preparationRuntimeContextRef.current.preparationContextRevision,
             taskId: currentParent?.id ?? null,
             taskRevision: currentParent?.revisions ?? null,
             logicalQuestionUnitId:
@@ -9224,6 +9254,8 @@ export function useMeetingAssistant() {
     answerGenerationLease = createAnswerGenerationLease({
       sessionId: generationContextState.sessionId,
       runtimeEpoch: runtimeEpochRef.current,
+      preparationContextRevision:
+        preparationRuntimeContextRef.current.preparationContextRevision,
       taskId: generationParent?.id ?? null,
       taskRevision: generationParent?.revisions ?? null,
       logicalQuestionUnitId:
@@ -9253,6 +9285,8 @@ export function useMeetingAssistant() {
       authorizeAnswerGenerationLease(answerGenerationLease, {
         sessionId: generationContextState.sessionId,
         runtimeEpoch: runtimeEpochRef.current,
+        preparationContextRevision:
+          preparationRuntimeContextRef.current.preparationContextRevision,
         taskId: generationParent?.id ?? null,
         taskRevision: generationParent?.revisions ?? null,
         logicalQuestionUnitId:
@@ -17866,6 +17900,9 @@ export function useMeetingAssistant() {
                   manualCorrectionRevisionRef.current,
                 responseActionRevision:
                   responseActionRevisionRef.current,
+                preparationContextRevision:
+                  preparationRuntimeContextRef.current
+                    .preparationContextRevision,
                 artifactOwnerId: currentParent?.id ?? null,
                 authorizedArtifacts:
                   screenGenerationRequestedArtifacts,
@@ -19430,6 +19467,8 @@ export function useMeetingAssistant() {
             manualCorrectionRevisionRef.current,
           responseActionRevision:
             screenResponseActionRevision,
+          preparationContextRevision:
+            preparationRuntimeContextRef.current.preparationContextRevision,
           modelRoute: [
             screenModelRoute.route,
             screenModelRoute.resolvedProviderId,
@@ -19456,6 +19495,8 @@ export function useMeetingAssistant() {
               manualCorrectionRevisionRef.current,
             responseActionRevision:
               responseActionRevisionRef.current,
+            preparationContextRevision:
+              preparationRuntimeContextRef.current.preparationContextRevision,
             artifactOwnerId: screenGenerationParent?.id ?? null,
             authorizedArtifacts:
               screenGenerationRequestedArtifacts,
@@ -24602,6 +24643,66 @@ export function useMeetingAssistant() {
     };
   }, []);
 
+  const recordPreparationArtifactUse = useCallback(
+    <T,>(input: RecordPreparationArtifactUseInput<T>) => {
+      const receipts =
+        preparationProvenanceLedgerRef.current.recordUse(input);
+      const allReceipts =
+        preparationProvenanceLedgerRef.current.listReceipts();
+      setPreparationArtifactUses(allReceipts);
+      sessionRecordingManagerRef.current?.recordPreparationArtifactUse(
+        receipts
+      );
+      const traceReceipts = allReceipts.filter(
+        (receipt) => receipt.traceId === input.traceId
+      );
+      traceStoreRef.current.updateMetadata(input.traceId, {
+        preparationContextRevision:
+          preparationRuntimeContextRef.current.preparationContextRevision,
+        preparationSnapshotId:
+          preparationRuntimeContextRef.current.pinnedSnapshot?.snapshotId,
+        preparationArtifactUseReceiptIds: traceReceipts.map(
+          (receipt) => receipt.receiptId
+        ),
+        preparationArtifactIds: [
+          ...new Set(
+            traceReceipts.map((receipt) => receipt.artifactId)
+          ),
+        ],
+        preparationArtifactConsumers: [
+          ...new Set(
+            traceReceipts.map((receipt) => receipt.consumer)
+          ),
+        ],
+      });
+      return receipts;
+    },
+    []
+  );
+
+  const updatePreparationArtifactEvaluation = useCallback(
+    (
+      receiptId: string,
+      label: PreparationArtifactEvaluationLabel,
+      note?: string
+    ) => {
+      const evaluation =
+        preparationProvenanceLedgerRef.current.recordEvaluation({
+          receiptId,
+          label,
+          note,
+        });
+      setPreparationArtifactEvaluations(
+        preparationProvenanceLedgerRef.current.listEvaluations()
+      );
+      sessionRecordingManagerRef.current?.recordPreparationArtifactEvaluation(
+        evaluation
+      );
+      return evaluation;
+    },
+    []
+  );
+
   const stopOnUnmountRef = useRef(stop);
   stopOnUnmountRef.current = stop;
 
@@ -24665,6 +24766,10 @@ export function useMeetingAssistant() {
     criticalMomentEvaluations,
     humanGroundTruthEventsV2,
     humanEvaluationProjectionsV2,
+    preparationArtifactUses,
+    preparationArtifactEvaluations,
+    recordPreparationArtifactUse,
+    updatePreparationArtifactEvaluation,
     isActive: activeRef.current,
   };
 }
