@@ -131,6 +131,7 @@ import {
   PreparationArtifactEvaluation,
   PreparationArtifactEvaluationLabel,
   PreparationArtifactUseReceipt,
+  PreparationPersonalizedGuidance,
   PreparationRuntimeContext,
   PreparationRuntimeProvenanceLedger,
   RecordPreparationArtifactUseInput,
@@ -266,10 +267,12 @@ import {
   readMeetingEvalTraceMetadata,
   loadPreparationRuntimeContext,
   preparationProjectionArtifactIds,
+  resolvePreparationPersonalizedGuidance,
   resolvePreparationRuntimeReinforcement,
   resolveTraceMemoryEvaluationSnapshot,
   resolveSuggestionQuestionLineage,
   toPreparationRuntimePresentation,
+  toAdvisorPersonalizedPreparationEvidence,
   updatePreparationRuntimeCapabilities,
   resolveActiveMeetingTaskIdentity,
   buildSpeechBiasContext,
@@ -2222,6 +2225,97 @@ export function useMeetingAssistant() {
       return receipts;
     },
     []
+  );
+  const recordPreparationPromptGuidanceUses = useCallback(
+    (input: {
+      guidance: PreparationPersonalizedGuidance | undefined;
+      targetId: string;
+      traceId: string;
+      questionId?: string;
+      answerRevision: number;
+      generationLeaseId: string;
+    }) => {
+      const guidance = input.guidance;
+      if (!guidance?.enabled) return;
+      const record = <T,>(entry: {
+        projection: RecordPreparationArtifactUseInput<T>["projection"];
+        usedArtifactIds: string[];
+        consumer: PreparationArtifactUseReceipt["consumer"];
+      }) => {
+        if (!entry.usedArtifactIds.length) return;
+        recordPreparationArtifactUse({
+          ...entry,
+          targetKind: "advisor-prompt",
+          targetId: input.targetId,
+          traceId: input.traceId,
+          questionId: input.questionId,
+          answerRevision: input.answerRevision,
+          generationLeaseId: input.generationLeaseId,
+        });
+      };
+      if (guidance.strategy) {
+        record({
+          projection: guidance.strategy.projection,
+          usedArtifactIds: guidance.strategy.usedArtifactIds,
+          consumer: "strategy",
+        });
+      }
+      for (const item of guidance.factEvidence) {
+        record({
+          projection: item.projection,
+          usedArtifactIds: item.usedArtifactIds,
+          consumer: "fact-anchor",
+        });
+      }
+      for (const item of guidance.openingItems) {
+        record({
+          projection: item.projection,
+          usedArtifactIds: item.usedArtifactIds,
+          consumer: "opening",
+        });
+      }
+      for (const narrative of guidance.narratives) {
+        record({
+          projection: narrative.projection,
+          usedArtifactIds: narrative.usedArtifactIds,
+          consumer: "narrative",
+        });
+      }
+      if (guidance.playbookOverlay) {
+        record({
+          projection: guidance.playbookOverlay.projection,
+          usedArtifactIds:
+            guidance.playbookOverlay.usedArtifactIds,
+          consumer: "playbook-overlay",
+        });
+      }
+    },
+    [recordPreparationArtifactUse]
+  );
+  const recordPreparationKmbHintUses = useCallback(
+    (input: {
+      guidance: PreparationPersonalizedGuidance | undefined;
+      targetId: string;
+      traceId: string;
+      questionId?: string;
+      answerRevision?: number | null;
+      generationLeaseId?: string;
+    }) => {
+      for (const hint of input.guidance?.kmbEvidenceHints ?? []) {
+        recordPreparationArtifactUse({
+          projection: hint.projection,
+          usedArtifactIds: hint.usedArtifactIds,
+          consumer: "kmb-hint",
+          targetKind: "retrieval",
+          targetId: input.targetId,
+          traceId: input.traceId,
+          questionId: input.questionId,
+          answerRevision: input.answerRevision,
+          generationLeaseId: input.generationLeaseId,
+        });
+      }
+    },
+    [recordPreparationArtifactUse]
   );
   const traceMetricsPersistTimerRef = useRef<number | null>(null);
   const traceMetricsPersistRetryTimerRef = useRef<number | null>(null);
@@ -8093,6 +8187,9 @@ export function useMeetingAssistant() {
     let advisorEvidencePacket = buildAdvisorEvidencePacket({});
     let advisorRetrievalQuery = "";
     let includePreparedProgrammingLanguage = false;
+    let preparationPersonalizedGuidance:
+      | PreparationPersonalizedGuidance
+      | undefined;
     const refreshAdvisorEvidencePacket = () => {
       const currentQuestionText =
         advisorQuestionSemanticEvidenceText;
@@ -8125,6 +8222,16 @@ export function useMeetingAssistant() {
           includePreparedProgrammingLanguage
             ? preparationRuntimeReinforcement.programmingLanguage?.value
             : undefined,
+        personalizedGuidance:
+          toAdvisorPersonalizedPreparationEvidence(
+            preparationPersonalizedGuidance ?? {
+              enabled: false,
+              factEvidence: [],
+              kmbEvidenceHints: [],
+              openingItems: [],
+              narratives: [],
+            }
+          ),
         activatedFactIds: transientPersonalStatusDecision
           ? undefined
           : promptContext.activeMeetingTask?.parent.supportedFactAnchors ??
@@ -8165,11 +8272,17 @@ export function useMeetingAssistant() {
                 text: amazonLeadershipPrincipleHint,
               }
             : undefined,
+          ...(preparationPersonalizedGuidance?.kmbEvidenceHints.map(
+            (hint) => ({
+              role: "preparation-kmb-hint" as const,
+              text: hint.value.title,
+            })
+          ) ?? []),
         ].filter(
           (
             hint
           ): hint is {
-            role: "source-metadata";
+            role: "source-metadata" | "preparation-kmb-hint";
             text: string;
           } => Boolean(hint)
         ),
@@ -9164,24 +9277,6 @@ export function useMeetingAssistant() {
         Boolean(options.settledExecutionPlanOverride)
     );
     refreshAdvisorEvidencePacket();
-    if (traceId) {
-      const evidencePacketMetadata =
-        formatAdvisorEvidencePacketForTrace(
-          advisorEvidencePacket,
-          advisorRetrievalQuery
-        );
-      const evidencePacketStepId =
-        traceStoreRef.current.startStep(
-          traceId,
-          "Advisor evidence packet built",
-          evidencePacketMetadata
-        );
-      traceStoreRef.current.finishStep(
-        traceId,
-        evidencePacketStepId,
-        "success"
-      );
-    }
 
     if (currentQuestionSettlement) {
       if (!settledExecutionPlan) {
@@ -9326,8 +9421,45 @@ export function useMeetingAssistant() {
       advisorUsesCodingModel &&
         advisorProgrammingLanguage.source === "preparation-prior"
     );
-    if (includePreparedProgrammingLanguage) {
-      refreshAdvisorEvidencePacket();
+    preparationPersonalizedGuidance =
+      transientPersonalStatusDecision
+        ? undefined
+        : resolvePreparationPersonalizedGuidance(
+            preparationRuntimeContextRef.current,
+            {
+              questionType: responseOwner.questionType,
+              taskRelation:
+                settledExecutionPlan?.taskRelation ??
+                advisorTaskSignals.taskRelation,
+              playbookId:
+                settledExecutionPlan?.playbookId ??
+                advisorRuntimePlaybook?.id,
+              playbookPhase:
+                settledExecutionPlan?.playbookPhase ??
+                playbookPhaseDecision.phase,
+              openingRoute: advisorTaskSignals.openingRoute,
+              projectAnchor: advisorProjectAnchor,
+              query: advisorQuestionSemanticEvidenceText,
+            }
+          );
+    refreshAdvisorEvidencePacket();
+    if (traceId) {
+      const evidencePacketMetadata =
+        formatAdvisorEvidencePacketForTrace(
+          advisorEvidencePacket,
+          advisorRetrievalQuery
+        );
+      const evidencePacketStepId =
+        traceStoreRef.current.startStep(
+          traceId,
+          "Advisor evidence packet built",
+          evidencePacketMetadata
+        );
+      traceStoreRef.current.finishStep(
+        traceId,
+        evidencePacketStepId,
+        "success"
+      );
     }
     if (
       responseOwner.questionType === "general-system-design" ||
@@ -9475,6 +9607,17 @@ export function useMeetingAssistant() {
         ),
         consumer: "programming-language",
         targetKind: "advisor-prompt",
+        targetId: answerGenerationLease.id,
+        traceId,
+        questionId: advisorJob.logicalQuestionUnit?.id,
+        answerRevision:
+          answerGenerationLease.baseVisibleAnswerRevision + 1,
+        generationLeaseId: answerGenerationLease.id,
+      });
+    }
+    if (traceId) {
+      recordPreparationPromptGuidanceUses({
+        guidance: preparationPersonalizedGuidance,
         targetId: answerGenerationLease.id,
         traceId,
         questionId: advisorJob.logicalQuestionUnit?.id,
@@ -9635,6 +9778,17 @@ export function useMeetingAssistant() {
         (advisorPersonalEvidenceDecision.enforced &&
           advisorPersonalEvidenceDecision.requirement ===
             "autobiographical-project"));
+    if (traceId) {
+      recordPreparationKmbHintUses({
+        guidance: preparationPersonalizedGuidance,
+        targetId: `${answerGenerationLease.id}:memory-retrieval`,
+        traceId,
+        questionId: advisorJob.logicalQuestionUnit?.id,
+        answerRevision:
+          answerGenerationLease.baseVisibleAnswerRevision + 1,
+        generationLeaseId: answerGenerationLease.id,
+      });
+    }
     const candidateMemoryContext = await loadMemoryForPrompt({
       traceId,
       taskId: activeMeetingTaskId,
@@ -9838,6 +9992,16 @@ export function useMeetingAssistant() {
         advisorProjectAnchor,
       personalEvidenceDecision: advisorPersonalEvidenceDecision,
       projectBindingDecision,
+      preparationFactEvidence:
+        toAdvisorPersonalizedPreparationEvidence(
+          preparationPersonalizedGuidance ?? {
+            enabled: false,
+            factEvidence: [],
+            kmbEvidenceHints: [],
+            openingItems: [],
+            narratives: [],
+          }
+        )?.factEvidence,
     });
     const holdAdvisorPartialForFactAnchor =
       factAnchorDecision.requiredFor !== "none";
@@ -11169,6 +11333,8 @@ export function useMeetingAssistant() {
     queuePendingAnswerRevision,
     recordCommittedPlaybookPhaseTransition,
     recordPreparationArtifactUse,
+    recordPreparationKmbHintUses,
+    recordPreparationPromptGuidanceUses,
     recordQuestionTypeAdjudicationOutcome,
     releaseAdvisorJob,
     resolveMeetingModelRoute,
@@ -18655,6 +18821,9 @@ export function useMeetingAssistant() {
             screenCurrentQuestionEvidenceText,
             screenPreflight
           );
+        let screenPersonalizedGuidance:
+          | PreparationPersonalizedGuidance
+          | undefined;
         const buildScreenEvidencePacket = (
           contextState: MeetingContextState,
           includeParentContinuity = true
@@ -18696,6 +18865,16 @@ export function useMeetingAssistant() {
               includeScreenPreparedProgrammingLanguage
                 ? screenProgrammingLanguage.language
                 : undefined,
+            personalizedGuidance:
+              toAdvisorPersonalizedPreparationEvidence(
+                screenPersonalizedGuidance ?? {
+                  enabled: false,
+                  factEvidence: [],
+                  kmbEvidenceHints: [],
+                  openingItems: [],
+                  narratives: [],
+                }
+              ),
             activatedFactIds: includeParentContinuity
               ? contextState.activeMeetingTask?.parent
                   .supportedFactAnchors ??
@@ -18750,13 +18929,20 @@ export function useMeetingAssistant() {
                     text: amazonLeadershipPrincipleHint,
                   }
                 : undefined,
+              ...(screenPersonalizedGuidance?.kmbEvidenceHints.map(
+                (hint) => ({
+                  role: "preparation-kmb-hint" as const,
+                  text: hint.value.title,
+                })
+              ) ?? []),
             ].filter(
               (
                 hint
               ): hint is {
                 role:
                   | "source-metadata"
-                  | "preparation-guidance";
+                  | "preparation-guidance"
+                  | "preparation-kmb-hint";
                 text: string;
               } => Boolean(hint)
             ),
@@ -19214,6 +19400,18 @@ export function useMeetingAssistant() {
           screenPlaybook,
           screenPhaseDecision.phase
         );
+        screenPersonalizedGuidance =
+          resolvePreparationPersonalizedGuidance(
+            preparationRuntimeContextRef.current,
+            {
+              questionType: settledScreenQuestionType,
+              taskRelation: provisionalScreenTaskRelation,
+              playbookId: screenRuntimePlaybook?.id,
+              playbookPhase: screenPhaseDecision.phase,
+              projectAnchor: screenPreflight?.projectAnchor,
+              query: screenCurrentQuestionEvidenceText,
+            }
+          );
         const screenPlaybookMetadata =
           formatInterviewPlaybookForTrace(screenRuntimePlaybook);
         traceStoreRef.current.updateMetadata(trace.id, {
@@ -19480,6 +19678,13 @@ export function useMeetingAssistant() {
           (screenPersonalEvidenceDecision.enforced &&
             screenPersonalEvidenceDecision.requirement ===
               "autobiographical-project");
+        recordPreparationKmbHintUses({
+          guidance: screenPersonalizedGuidance,
+          targetId: `screen:${observation.id}:memory-retrieval`,
+          traceId: trace.id,
+          questionId: `screen:${observation.id}`,
+          answerRevision: visibleAnswerRevisionRef.current + 1,
+        });
         const candidateMemoryContext = await loadMemoryForPrompt({
           traceId: trace.id,
           source: "screen",
@@ -19639,6 +19844,16 @@ export function useMeetingAssistant() {
           projectAnchor: screenPreflight?.projectAnchor,
           personalEvidenceDecision: screenPersonalEvidenceDecision,
           projectBindingDecision: screenProjectBindingDecision,
+          preparationFactEvidence:
+            toAdvisorPersonalizedPreparationEvidence(
+              screenPersonalizedGuidance ?? {
+                enabled: false,
+                factEvidence: [],
+                kmbEvidenceHints: [],
+                openingItems: [],
+                narratives: [],
+              }
+            )?.factEvidence,
         });
         const holdScreenPartialForFactAnchor =
           screenFactAnchorDecision.requiredFor !== "none";
@@ -19857,6 +20072,15 @@ export function useMeetingAssistant() {
             generationLeaseId: screenGenerationLease.id,
           });
         }
+        recordPreparationPromptGuidanceUses({
+          guidance: screenPersonalizedGuidance,
+          targetId: screenGenerationLease.id,
+          traceId: trace.id,
+          questionId: `screen:${observation.id}`,
+          answerRevision:
+            screenGenerationLease.baseVisibleAnswerRevision + 1,
+          generationLeaseId: screenGenerationLease.id,
+        });
         const screenTaskContent = await withTimeout(
           solveScreenAnchoredTask({
             observation,
@@ -21089,6 +21313,8 @@ export function useMeetingAssistant() {
       loadMemoryForPrompt,
       recordCommittedPlaybookPhaseTransition,
       recordPreparationArtifactUse,
+      recordPreparationKmbHintUses,
+      recordPreparationPromptGuidanceUses,
       readRuntimeCommitSnapshot,
       resolveMeetingModelRoute,
       scheduleTaskRelationAdjudication,

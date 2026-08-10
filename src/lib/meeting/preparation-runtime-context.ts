@@ -485,7 +485,7 @@ function buildPreparedRuntimeContext(input: {
     pinnedSnapshot,
     capabilities: buildCapabilities(true, {
       runtimeReinforcementEnabled: true,
-      personalizedGuidanceEnabled: false,
+      personalizedGuidanceEnabled: true,
     }),
     projections: { lowImpact, personalized },
   });

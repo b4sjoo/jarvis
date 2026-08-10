@@ -3,6 +3,7 @@ import type {
   AdvisorEvidencePacket,
   AdvisorGeneratedContinuityEvidence,
   AdvisorGeneratedGuidanceEvidence,
+  AdvisorPersonalizedPreparationEvidence,
   AdvisorRetrievalHint,
   AdvisorRetrievalHintRole,
   InterviewSessionBrief,
@@ -25,6 +26,7 @@ export interface BuildAdvisorEvidencePacketInput {
   interviewSessionContext?: InterviewSessionContext;
   preparationRuntimeBrief?: PreparationRuntimeBrief;
   preferredProgrammingLanguage?: string;
+  personalizedGuidance?: AdvisorPersonalizedPreparationEvidence;
   activatedFactIds?: string[];
   generatedGuidance?: AdvisorGeneratedGuidanceEvidence;
   generatedContinuity?: AdvisorGeneratedContinuityEvidence;
@@ -111,6 +113,9 @@ export function buildAdvisorEvidencePacket(
       guidanceHints,
       activatedFactIds,
       rawGuidanceRejectedAsFactCount: guidanceHints.length,
+      personalizedGuidance: normalizePersonalizedGuidance(
+        input.personalizedGuidance
+      ),
     },
     generatedGuidance,
     generatedContinuity,
@@ -204,6 +209,11 @@ export function formatAdvisorEvidencePacketForPrompt(
       .filter(Boolean)
       .join("\n") || "No preparation guidance.",
     "</preparation_guidance>",
+    "<personalized_preparation>",
+    formatPersonalizedGuidance(
+      packet.preparation.personalizedGuidance
+    ),
+    "</personalized_preparation>",
     "<generated_guidance>",
     packet.generatedGuidance
       ? `source trace: ${packet.generatedGuidance.sourceTraceId}\ncontinuity only: ${packet.generatedGuidance.text}`
@@ -235,6 +245,7 @@ export function formatAdvisorEvidencePacketForTrace(
 ): Record<string, unknown> {
   if (!packet) return {};
 
+  const personalized = packet.preparation.personalizedGuidance;
   const roleCounts = packet.retrievalHints.reduce<Record<string, number>>(
     (counts, hint) => {
       counts[hint.role] = (counts[hint.role] ?? 0) + 1;
@@ -271,6 +282,28 @@ export function formatAdvisorEvidencePacketForTrace(
     ),
     preparationActivatedFactCount:
       packet.preparation.activatedFactIds.length,
+    preparationPersonalizedGuidancePresent: Boolean(personalized),
+    preparationStrategyCategories:
+      personalized?.strategy
+        ? Object.entries(personalized.strategy)
+            .filter(([, values]) => Boolean(values?.length))
+            .map(([category]) => category)
+        : [],
+    preparationFactEvidenceCount:
+      personalized?.factEvidence.length ?? 0,
+    preparationOpeningItemCount:
+      personalized?.openingItems.length ?? 0,
+    preparationNarrativeGraphCount:
+      personalized?.narratives.length ?? 0,
+    preparationNarrativeNodeCount:
+      personalized?.narratives.reduce(
+        (total, graph) => total + graph.nodes.length,
+        0
+      ) ?? 0,
+    preparationPlaybookOverlayId:
+      personalized?.playbookOverlay?.canonicalPlaybookId,
+    preparationPlaybookOverlayFamily:
+      personalized?.playbookOverlay?.expectedInterviewType,
     rejectedRawBriefFactAnchorCount:
       packet.preparation.rawGuidanceRejectedAsFactCount,
     generatedGuidancePresent: Boolean(packet.generatedGuidance),
@@ -357,6 +390,125 @@ function normalizeRuntimeBrief(
       brief.unresolvedHighImpactAssumptions
     ),
   };
+}
+
+function normalizePersonalizedGuidance(
+  guidance: AdvisorPersonalizedPreparationEvidence | undefined
+): AdvisorPersonalizedPreparationEvidence | undefined {
+  if (!guidance) return undefined;
+  return {
+    strategy: guidance.strategy
+      ? Object.fromEntries(
+          Object.entries(guidance.strategy).map(([key, values]) => [
+            key,
+            uniqueStrings(values ?? []).map((value) =>
+              boundText(value, MAX_GUIDANCE_HINT_CHARS)
+            ),
+          ])
+        )
+      : undefined,
+    factEvidence: guidance.factEvidence.slice(0, 6).map((item) => ({
+      ...item,
+      content: boundText(item.content, 1_200) ?? "",
+      allowedWording: boundText(item.allowedWording, 600),
+      prohibitedWording: uniqueStrings(item.prohibitedWording)
+        .slice(0, 6)
+        .map((value) => boundText(value, 300) ?? "")
+        .filter(Boolean),
+      sourceIds: uniqueStrings(item.sourceIds).slice(0, 8),
+    })),
+    openingItems: guidance.openingItems.slice(0, 2).map((item) => ({
+      ...item,
+      renderedDraft: boundText(item.renderedDraft, 1_800) ?? "",
+      statementIds: uniqueStrings(item.statementIds).slice(0, 12),
+    })),
+    narratives: guidance.narratives.slice(0, 1).map((graph) => ({
+      ...graph,
+      nodes: graph.nodes.slice(0, 4).map((node) => ({
+        ...node,
+        content: boundText(node.content, 1_200) ?? "",
+        statementIds: uniqueStrings(node.statementIds).slice(0, 12),
+      })),
+    })),
+    playbookOverlay: guidance.playbookOverlay
+      ? {
+          ...guidance.playbookOverlay,
+          evidenceStatementIds: uniqueStrings(
+            guidance.playbookOverlay.evidenceStatementIds
+          ).slice(0, 16),
+          companyCriteria: uniqueStrings(
+            guidance.playbookOverlay.companyCriteria
+          )
+            .slice(0, 6)
+            .map((value) => boundText(value, 500) ?? "")
+            .filter(Boolean),
+          prohibitedOverclaims: uniqueStrings(
+            guidance.playbookOverlay.prohibitedOverclaims
+          )
+            .slice(0, 8)
+            .map((value) => boundText(value, 300) ?? "")
+            .filter(Boolean),
+        }
+      : undefined,
+  };
+}
+
+function formatPersonalizedGuidance(
+  guidance: AdvisorPersonalizedPreparationEvidence | undefined
+) {
+  if (!guidance) return "No personalized preparation guidance.";
+  const strategy = guidance.strategy
+    ? Object.entries(guidance.strategy).flatMap(([category, values]) =>
+        (values ?? []).map(
+          (value) => `strategy ${category}: ${value}`
+        )
+      )
+    : [];
+  const facts = guidance.factEvidence.map((item) =>
+    [
+      `fact id=${item.statementId} ownership=${item.ownership}`,
+      `content: ${item.content}`,
+      item.allowedWording
+        ? `allowed wording: ${item.allowedWording}`
+        : undefined,
+      item.prohibitedWording.length
+        ? `prohibited wording: ${item.prohibitedWording.join(" | ")}`
+        : undefined,
+    ]
+      .filter(Boolean)
+      .join("\n")
+  );
+  const openings = guidance.openingItems.map(
+    (item) =>
+      `opening ${item.nodeKind} subject=${item.subjectId} statement_ids=${item.statementIds.join(",")}:\n${item.renderedDraft}`
+  );
+  const narratives = guidance.narratives.flatMap((graph) =>
+    graph.nodes.map(
+      (node) =>
+        `narrative ${node.kind} subject=${graph.subjectId} statement_ids=${node.statementIds.join(",")}:\n${node.content}`
+    )
+  );
+  const overlay = guidance.playbookOverlay
+    ? [
+        `playbook overlay id=${guidance.playbookOverlay.canonicalPlaybookId} family=${guidance.playbookOverlay.expectedInterviewType}`,
+        ...guidance.playbookOverlay.companyCriteria.map(
+          (value) => `company criterion: ${value}`
+        ),
+        ...guidance.playbookOverlay.prohibitedOverclaims.map(
+          (value) => `prohibited overclaim: ${value}`
+        ),
+      ]
+    : [];
+  return [
+    "Authority: strategy and playbook overlays guide framing only. They cannot create facts, mutate the task, or advance the playbook phase.",
+    "Fact evidence may support first-person wording only when the fact-anchor guardrail lists its statement id. Respect ownership and prohibited wording.",
+    "Opening and narrative drafts are reviewed answer material for the matched subject only; do not transfer them to another project or task.",
+    ...strategy,
+    ...facts,
+    ...openings,
+    ...narratives,
+    ...overlay,
+  ].join("\n");
 }
 
 function normalizeGeneratedGuidance(

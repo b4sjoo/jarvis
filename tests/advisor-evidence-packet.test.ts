@@ -165,3 +165,75 @@ test("records evidence roles without copying private Brief text", () => {
   assert.equal(trace.rejectedRawBriefFactAnchorCount, 1);
   assert.equal(JSON.stringify(trace).includes(privateNote), false);
 });
+
+test("formats personalized preparation authority and bounded trace counts", () => {
+  const packet = buildAdvisorEvidencePacket({
+    currentQuestion: {
+      text: "Tell me about the Agentic Memory architecture.",
+      source: "voice-lqu",
+      sourceTurnIds: ["turn-project"],
+    },
+    personalizedGuidance: {
+      strategy: {
+        priorities: ["Explain the user problem before implementation."],
+        risks: ["Avoid unsupported ownership claims."],
+      },
+      factEvidence: [
+        {
+          statementId: "fact-agentic-memory",
+          content: "I designed a two-phase extraction and mutation pipeline.",
+          ownership: "candidate-owned",
+          allowedWording: "I designed the pipeline boundary.",
+          prohibitedWording: ["I built the whole platform alone."],
+          sourceIds: ["statement-1"],
+        },
+      ],
+      openingItems: [],
+      narratives: [
+        {
+          graphId: "agentic-memory",
+          subjectKind: "project",
+          subjectId: "agentic-memory",
+          nodes: [
+            {
+              nodeId: "architecture",
+              kind: "architecture",
+              title: "Architecture",
+              content: "Separate extraction from mutation decisions.",
+              statementIds: ["fact-agentic-memory"],
+            },
+          ],
+        },
+      ],
+      playbookOverlay: {
+        canonicalPlaybookId: "project_deep_dive",
+        expectedInterviewType: "project-deep-dive",
+        evidenceStatementIds: ["fact-agentic-memory"],
+        companyCriteria: ["Explain individual contribution."],
+        prohibitedOverclaims: ["Do not claim sole ownership."],
+      },
+    },
+    additionalRetrievalHints: [
+      {
+        role: "preparation-kmb-hint",
+        text: "Agentic Memory implementation evidence",
+      },
+    ],
+  });
+  const prompt = formatAdvisorEvidencePacketForPrompt(packet);
+  const trace = formatAdvisorEvidencePacketForTrace(packet);
+
+  assert.match(prompt, /cannot create facts/i);
+  assert.match(prompt, /fact id=fact-agentic-memory/);
+  assert.match(prompt, /playbook overlay id=project_deep_dive/);
+  assert.deepEqual(trace.preparationStrategyCategories, [
+    "priorities",
+    "risks",
+  ]);
+  assert.equal(trace.preparationFactEvidenceCount, 1);
+  assert.equal(trace.preparationNarrativeNodeCount, 1);
+  assert.equal(trace.preparationPlaybookOverlayId, "project_deep_dive");
+  assert.deepEqual(trace.retrievalHintRoleCounts, {
+    "preparation-kmb-hint": 1,
+  });
+});

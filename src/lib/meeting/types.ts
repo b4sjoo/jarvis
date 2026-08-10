@@ -13,7 +13,11 @@ import type {
 import type { ActiveMeetingTask } from "./active-meeting-task";
 import type { PlaybookPhaseDecision } from "./playbook-phase";
 import type { AudioInputLivenessPresentation } from "./audio-input-liveness";
-import type { PreparationRuntimeBrief } from "../preparation/index.js";
+import type {
+  PreparationNarrativeNodeKind,
+  PreparationRuntimeBrief,
+  PreparationStrategy,
+} from "../preparation/index.js";
 
 export type TranscriptSpeaker = "them" | "me" | "unknown";
 
@@ -1231,6 +1235,7 @@ export type AdvisorRetrievalHintRole =
   | "company-prior"
   | "interview-type-prior"
   | "preparation-guidance"
+  | "preparation-kmb-hint"
   | "continuity"
   | "source-metadata";
 
@@ -1258,6 +1263,61 @@ export interface AdvisorPreparationEvidence {
   guidanceHints: string[];
   activatedFactIds: string[];
   rawGuidanceRejectedAsFactCount: number;
+  personalizedGuidance?: AdvisorPersonalizedPreparationEvidence;
+}
+
+export interface AdvisorPreparedFactEvidence {
+  statementId: string;
+  content: string;
+  ownership:
+    | "candidate-owned"
+    | "team-owned"
+    | "upstream-existing"
+    | "future-design";
+  allowedWording?: string;
+  prohibitedWording: string[];
+  sourceIds: string[];
+}
+
+export interface AdvisorPreparedOpeningEvidence {
+  graphId: string;
+  nodeId: string;
+  subjectKind: "self-introduction" | "project" | "role-fit";
+  subjectId: string;
+  nodeKind: "positioning" | "intro-30s" | "main-story-90s";
+  title: string;
+  renderedDraft: string;
+  statementIds: string[];
+}
+
+export interface AdvisorPreparedNarrativeEvidence {
+  graphId: string;
+  subjectKind: "self-introduction" | "project" | "role-fit";
+  subjectId: string;
+  nodes: Array<{
+    nodeId: string;
+    kind: PreparationNarrativeNodeKind;
+    title: string;
+    content: string;
+    targetSeconds?: number;
+    statementIds: string[];
+  }>;
+}
+
+export interface AdvisorPreparedPlaybookOverlayEvidence {
+  canonicalPlaybookId: string;
+  expectedInterviewType: string;
+  evidenceStatementIds: string[];
+  companyCriteria: string[];
+  prohibitedOverclaims: string[];
+}
+
+export interface AdvisorPersonalizedPreparationEvidence {
+  strategy?: Partial<PreparationStrategy>;
+  factEvidence: AdvisorPreparedFactEvidence[];
+  openingItems: AdvisorPreparedOpeningEvidence[];
+  narratives: AdvisorPreparedNarrativeEvidence[];
+  playbookOverlay?: AdvisorPreparedPlaybookOverlayEvidence;
 }
 
 export interface AdvisorGeneratedGuidanceEvidence {

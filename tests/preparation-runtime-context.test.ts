@@ -56,7 +56,7 @@ test("a selected snapshot is pinned through typed, provenance-bearing projection
   assert.equal(context.pinnedSnapshot?.snapshotId, snapshot.id);
   assert.equal(context.pinnedSnapshot?.selectionRevision, 8);
   assert.equal(context.capabilities.runtimeReinforcement.enabled, true);
-  assert.equal(context.capabilities.personalizedGuidance.enabled, false);
+  assert.equal(context.capabilities.personalizedGuidance.enabled, true);
   assert.equal(
     context.projections?.lowImpact.programmingLanguage?.value,
     "Java"

@@ -273,6 +273,18 @@ export function createPreparationArtifactUseReceipts<T>(input: {
       "The preparation projection does not belong to the current context revision."
     );
   }
+  const personalizedConsumer = PERSONALIZED_GUIDANCE_CONSUMERS.has(
+    input.consumer
+  );
+  const capabilityEnabled = personalizedConsumer
+    ? input.context.capabilities.personalizedGuidance.enabled
+    : input.context.capabilities.runtimeReinforcement.enabled;
+  if (!capabilityEnabled) {
+    throw new PreparationRuntimeProvenanceError(
+      "consumer-capability-disabled",
+      `Preparation consumer ${input.consumer} is disabled for the current context revision.`
+    );
+  }
   const usedArtifactIds = [...new Set(input.usedArtifactIds.filter(Boolean))];
   if (usedArtifactIds.length === 0) {
     throw new PreparationRuntimeProvenanceError(
@@ -356,6 +368,15 @@ export function createPreparationArtifactUseReceipts<T>(input: {
     };
   });
 }
+
+const PERSONALIZED_GUIDANCE_CONSUMERS = new Set<PreparationArtifactConsumer>([
+  "strategy",
+  "kmb-hint",
+  "fact-anchor",
+  "opening",
+  "narrative",
+  "playbook-overlay",
+]);
 
 export function buildPreparationAnswerAttributionIndex(
   receipts: PreparationArtifactUseReceipt[]

@@ -588,6 +588,57 @@ test("does not promote a historical project label without settled evidence", () 
   );
 });
 
+test("accepts reviewed preparation evidence as a bounded project fact anchor", () => {
+  const decision = buildFactAnchorDecision({
+    questionType: "project-deep-dive",
+    questionText: "What architecture did you personally design?",
+    preparationFactEvidence: [
+      {
+        statementId: "prep-agentic-architecture",
+        content:
+          "I designed a two-phase extraction and mutation architecture.",
+        ownership: "candidate-owned",
+        allowedWording:
+          "I designed the extraction and mutation boundary.",
+        prohibitedWording: ["I built the entire platform alone."],
+        sourceIds: ["material-1"],
+      },
+    ],
+  });
+
+  assert.equal(decision.state, "strong-anchor");
+  assert.equal(decision.selectedAnchorId, "prep-agentic-architecture");
+  assert.deepEqual(decision.supportedAnchorIds, [
+    "prep-agentic-architecture",
+  ]);
+  assert.equal(
+    decision.claimSupportDecisions[0]?.reason,
+    "reviewed-preparation-evidence-supports-current-predicate"
+  );
+});
+
+test("rejects future or upstream preparation evidence as first-person history", () => {
+  const decision = buildFactAnchorDecision({
+    questionType: "behavioral",
+    questionText: "Tell me about a time you influenced a decision.",
+    preparationFactEvidence: [
+      {
+        statementId: "prep-future-design",
+        content: "A future design could add automatic consolidation.",
+        ownership: "future-design",
+        prohibitedWording: [],
+        sourceIds: ["message-1"],
+      },
+    ],
+  });
+
+  assert.notEqual(decision.state, "strong-anchor");
+  assert.equal(
+    decision.claimSupportDecisions[0]?.reason,
+    "preparation-evidence-ownership-is-not-first-person-compatible"
+  );
+});
+
 function makeMemoryResult(
   entries: RetrievedMemoryEntry[]
 ): MemoryRetrievalResult {

@@ -1,10 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  resolvePreparationPersonalizedGuidance,
   resolvePreparationRuntimeReinforcement,
+  toAdvisorPersonalizedPreparationEvidence,
   toPreparedSpeechBiasTerms,
 } from "../src/lib/meeting/preparation-runtime-consumers.js";
 import type {
+  PreparationRuntimeArtifactRef,
   PreparationRuntimeContext,
   PreparationRuntimeProjection,
 } from "../src/lib/meeting/preparation-runtime-context.js";
@@ -57,6 +60,56 @@ test("prepared speech terms retain high-weight preparation provenance", () => {
     { term: "HNSW", source: "preparation", weight: "high" },
     { term: "H N S W", source: "preparation", weight: "high" },
   ]);
+});
+
+test("personalized guidance selects only matching family, project, and playbook artifacts", () => {
+  const context = createContext();
+  context.capabilities.personalizedGuidance.enabled = true;
+  const guidance = resolvePreparationPersonalizedGuidance(context, {
+    questionType: "project-deep-dive",
+    taskRelation: "followup-parent",
+    playbookId: "project_deep_dive",
+    playbookPhase: "architecture_decision",
+    openingRoute: {
+      kind: "project-intro",
+      source: "test",
+      projectAnchor: "agentic-memory",
+      commitParent: true,
+    },
+    projectAnchor: "agentic-memory",
+    query: "Explain the Agentic Memory architecture and tradeoffs",
+  });
+
+  assert.equal(guidance.enabled, true);
+  assert.deepEqual(guidance.factEvidence.map((item) => item.value.statementId), [
+    "statement-agentic",
+  ]);
+  assert.deepEqual(guidance.kmbEvidenceHints.map((item) => item.value.entryId), [
+    "kmb-agentic",
+  ]);
+  assert.equal(guidance.openingItems[0]?.value.subjectId, "agentic-memory");
+  assert.equal(guidance.narratives[0]?.subjectId, "agentic-memory");
+  assert.equal(
+    guidance.playbookOverlay?.value.canonicalPlaybookId,
+    "project_deep_dive"
+  );
+  assert.ok(guidance.strategy?.value.likelyBranches?.length);
+
+  const promptEvidence = toAdvisorPersonalizedPreparationEvidence(guidance);
+  assert.equal(promptEvidence?.factEvidence[0]?.ownership, "candidate-owned");
+  assert.equal(promptEvidence?.playbookOverlay?.expectedInterviewType, "project-deep-dive");
+});
+
+test("personalized guidance fails closed when its capability is disabled", () => {
+  const guidance = resolvePreparationPersonalizedGuidance(createContext(), {
+    questionType: "project-deep-dive",
+    playbookId: "project_deep_dive",
+    query: "Agentic Memory",
+  });
+
+  assert.equal(guidance.enabled, false);
+  assert.deepEqual(guidance.factEvidence, []);
+  assert.equal(toAdvisorPersonalizedPreparationEvidence(guidance), undefined);
 });
 
 function createContext(): PreparationRuntimeContext {
@@ -129,18 +182,125 @@ function createContext(): PreparationRuntimeContext {
         ],
       },
       personalized: {
-        strategy: projection("strategy", {
-          priorities: [],
-          risks: [],
-          questionsToAsk: [],
-          likelyBranches: [],
-          timeAllocation: [],
-        }),
-        factEvidence: [],
-        kmbEvidenceHints: [],
-        openingItems: [],
-        narrativeGraphs: [],
-        playbookOverlays: [],
+        strategy: projection(
+          "strategy",
+          {
+            priorities: ["Explain the architecture clearly"],
+            risks: ["Do not overclaim ownership"],
+            questionsToAsk: ["Which component should I expand?"],
+            likelyBranches: ["Tradeoff follow-up"],
+            timeAllocation: ["Start with a concise overview"],
+          },
+          [
+            artifact("strategy/priorities/one"),
+            artifact("strategy/risks/one"),
+            artifact("strategy/questionsToAsk/one"),
+            artifact("strategy/likelyBranches/one"),
+            artifact("strategy/timeAllocation/one"),
+          ]
+        ),
+        factEvidence: [
+          projection(
+            "fact-agentic",
+            {
+              statementId: "statement-agentic",
+              statementRevision: 1,
+              domain: "project-evidence",
+              content: "I designed the Agentic Memory consolidation API.",
+              ownership: "candidate-owned",
+              allowedWording: "I designed the consolidation API.",
+              prohibitedWording: ["I built the platform alone."],
+              allowedInterviewFamilies: ["project-deep-dive"],
+              sourceIds: ["material-agentic"],
+            },
+            [artifact("evidence/statement-agentic")]
+          ),
+          projection(
+            "fact-behavioral",
+            {
+              statementId: "statement-behavioral",
+              statementRevision: 1,
+              domain: "candidate-fact",
+              content: "I resolved a stakeholder conflict.",
+              ownership: "candidate-owned",
+              prohibitedWording: [],
+              allowedInterviewFamilies: ["behavioral"],
+              sourceIds: ["material-behavioral"],
+            },
+            [artifact("evidence/statement-behavioral")]
+          ),
+        ],
+        kmbEvidenceHints: [
+          projection(
+            "kmb-agentic",
+            {
+              entryId: "kmb-agentic",
+              title: "Agentic Memory architecture",
+              contentHash: "hash-agentic",
+            },
+            [artifact("evidence-index/curated-kmb/kmb-agentic")]
+          ),
+          projection(
+            "kmb-throttling",
+            {
+              entryId: "kmb-throttling",
+              title: "Distributed throttling",
+              contentHash: "hash-throttling",
+            },
+            [artifact("evidence-index/curated-kmb/kmb-throttling")]
+          ),
+        ],
+        openingItems: [
+          projection(
+            "opening-agentic",
+            {
+              graphId: "graph-agentic",
+              nodeId: "node-intro",
+              subjectKind: "project",
+              subjectId: "agentic-memory",
+              nodeKind: "intro-30s",
+              title: "Agentic Memory intro",
+              renderedDraft: "I built durable context for agents.",
+              statementIds: ["statement-agentic"],
+            },
+            [artifact("opening/graph-agentic/node-intro")]
+          ),
+        ],
+        narrativeGraphs: [
+          projection(
+            "narrative-agentic",
+            {
+              graphId: "graph-agentic",
+              graphRevision: 1,
+              subjectKind: "project",
+              subjectId: "agentic-memory",
+              nodes: [
+                {
+                  nodeId: "node-architecture",
+                  kind: "architecture",
+                  title: "Architecture",
+                  content: "Extraction and mutation are separated.",
+                  statementIds: ["statement-agentic"],
+                },
+              ],
+              edges: [],
+            },
+            [artifact("narratives/graph-agentic/nodes/node-architecture")]
+          ),
+        ],
+        playbookOverlays: [
+          projection(
+            "overlay-project",
+            {
+              canonicalPlaybookId: "project_deep_dive",
+              expectedInterviewType: "project-deep-dive",
+              evidenceStatementIds: ["statement-agentic"],
+              companyCriteria: ["Explain customer impact"],
+              prohibitedOverclaims: ["Do not invent scale"],
+            },
+            [artifact("playbooks/project-deep-dive")]
+          ),
+        ],
       },
     },
   };
@@ -148,13 +308,25 @@ function createContext(): PreparationRuntimeContext {
 
 function projection<T>(
   id: string,
-  value: T
+  value: T,
+  artifactRefs: PreparationRuntimeArtifactRef[] = []
 ): PreparationRuntimeProjection<T> {
   return {
     projectionId: `snapshot-1:${id}`,
     snapshotId: "snapshot-1",
     preparationContextRevision: 2,
     value,
-    artifactRefs: [],
+    artifactRefs,
+  };
+}
+
+function artifact(artifactPath: string): PreparationRuntimeArtifactRef {
+  return {
+    artifactId: `artifact:${artifactPath}`,
+    lineageKey: `lineage:${artifactPath}`,
+    artifactPath,
+    section: artifactPath.split("/")[0] as PreparationRuntimeArtifactRef["section"],
+    contentHash: `hash:${artifactPath}`,
+    sourceRefs: [],
   };
 }

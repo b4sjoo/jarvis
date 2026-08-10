@@ -293,6 +293,52 @@ test("a capability revision preserves history and rejects the prior projection",
   );
 });
 
+test("disabled preparation capabilities reject consumer receipts", () => {
+  const context = createContext();
+  const disabled = updatePreparationRuntimeCapabilities(context, {
+    preparationContextRevision: 7,
+    runtimeReinforcementEnabled: false,
+    personalizedGuidanceEnabled: false,
+  });
+  const ledger = new PreparationRuntimeProvenanceLedger(disabled);
+  const runtimeProjection = required(
+    disabled.projections?.lowImpact.runtimeBrief
+  );
+  const strategyProjection = required(
+    disabled.projections?.personalized.strategy
+  );
+
+  assert.throws(
+    () =>
+      ledger.recordUse({
+        projection: runtimeProjection,
+        usedArtifactIds: [runtimeProjection.artifactRefs[0]!.artifactId],
+        consumer: "runtime-brief",
+        targetKind: "advisor-prompt",
+        targetId: "disabled-runtime-prompt",
+        traceId: "trace-disabled-runtime",
+      }),
+    (error) =>
+      error instanceof PreparationRuntimeProvenanceError &&
+      error.code === "consumer-capability-disabled"
+  );
+  assert.throws(
+    () =>
+      ledger.recordUse({
+        projection: strategyProjection,
+        usedArtifactIds: [strategyProjection.artifactRefs[0]!.artifactId],
+        consumer: "strategy",
+        targetKind: "advisor-prompt",
+        targetId: "disabled-strategy-prompt",
+        traceId: "trace-disabled-strategy",
+      }),
+    (error) =>
+      error instanceof PreparationRuntimeProvenanceError &&
+      error.code === "consumer-capability-disabled"
+  );
+  assert.equal(ledger.listReceipts().length, 0);
+});
+
 function createContext(): PreparationRuntimeContext {
   const runtimeArtifact = artifact({
     artifactId: "artifact-runtime",
@@ -373,12 +419,12 @@ function createContext(): PreparationRuntimeContext {
       runtimeReinforcement: {
         version: "meeting-preparation-10b-v1",
         available: true,
-        enabled: false,
+        enabled: true,
       },
       personalizedGuidance: {
         version: "meeting-preparation-10c-v1",
         available: true,
-        enabled: false,
+        enabled: true,
         requiresRuntimeReinforcement: true,
       },
     },

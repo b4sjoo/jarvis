@@ -10,6 +10,7 @@ import {
 import type {
   FactAnchorDecision,
   FactAnchorRequiredFor,
+  AdvisorPreparedFactEvidence,
   ClaimPredicateFamily,
   ClaimSupportDecision,
   PersonalEvidenceDecision,
@@ -110,6 +111,7 @@ export interface BuildFactAnchorDecisionInput {
   projectAnchor?: string;
   personalEvidenceDecision?: PersonalEvidenceDecision;
   projectBindingDecision?: ProjectBindingDecision;
+  preparationFactEvidence?: AdvisorPreparedFactEvidence[];
 }
 
 export function restrictMemoryContextForPersonalEvidence(
@@ -162,6 +164,7 @@ export function buildFactAnchorDecision({
   projectAnchor,
   personalEvidenceDecision,
   projectBindingDecision,
+  preparationFactEvidence = [],
 }: BuildFactAnchorDecisionInput): FactAnchorDecision {
   const personalEvidence =
     personalEvidenceDecision ??
@@ -247,6 +250,12 @@ export function buildFactAnchorDecision({
     projectBindingDecision,
     predicateFamily,
   });
+  const preparationClaimSupportDecisions =
+    evaluatePreparationClaimSupport({
+      evidence: preparationFactEvidence,
+      predicateFamily,
+    });
+  claimSupportDecisions.push(...preparationClaimSupportDecisions);
   const allowedAnchorIds = new Set(
     claimSupportDecisions
       .filter((decision) => decision.decision === "allow")
@@ -257,20 +266,29 @@ export function buildFactAnchorDecision({
     memoryContext?.entries ?? [],
     projectBindingDecision
   ).filter((item) => allowedAnchorIds.has(item.entry.id));
+  const preparationAnchors = preparationFactEvidence.filter((item) =>
+    allowedAnchorIds.has(item.statementId)
+  );
   const supportedAnchorIds = uniqueStrings([
     ...memoryAnchors.map((item) => item.entry.id),
+    ...preparationAnchors.map((item) => item.statementId),
   ]);
   const supportedAnchorTitles = uniqueStrings([
     ...memoryAnchors.map(formatMemoryAnchorTitle),
+    ...preparationAnchors.map(
+      (item) => item.allowedWording ?? item.content.slice(0, 160)
+    ),
   ]);
 
-  if (memoryAnchors.length) {
+  if (memoryAnchors.length || preparationAnchors.length) {
     return {
       state: "strong-anchor",
       requiredFor,
       supportedAnchorIds,
       supportedAnchorTitles,
-      selectedAnchorId: memoryAnchors[0]?.entry.id,
+      selectedAnchorId:
+        memoryAnchors[0]?.entry.id ??
+        preparationAnchors[0]?.statementId,
       action: "answer-with-anchor",
       personalEvidence,
       selectedPersonalEvidenceSources: [],
@@ -792,6 +810,58 @@ function evaluateClaimSupport({
   }
 
   return decisions;
+}
+
+function evaluatePreparationClaimSupport({
+  evidence,
+  predicateFamily,
+}: {
+  evidence: AdvisorPreparedFactEvidence[];
+  predicateFamily: ClaimPredicateFamily;
+}): ClaimSupportDecision[] {
+  return evidence.map((item) => {
+    const firstPersonCompatible =
+      item.ownership === "candidate-owned" ||
+      item.ownership === "team-owned";
+    const evidenceText = normalizeEvidenceText(
+      [item.content, item.allowedWording].filter(Boolean).join(" ")
+    );
+    const predicateTerms = CLAIM_PREDICATE_TERMS[predicateFamily];
+    const predicateCompatible =
+      predicateFamily === "project-overview" ||
+      predicateFamily === "behavioral-story" ||
+      hasAnyEvidenceTerm(evidenceText, predicateTerms);
+    const supportSpan = extractSupportSpan(
+      item.allowedWording ?? item.content,
+      predicateFamily === "project-overview" ||
+        predicateFamily === "behavioral-story"
+        ? []
+        : predicateTerms
+    );
+    const supportSpanPresent = Boolean(supportSpan);
+    const allowed =
+      firstPersonCompatible &&
+      predicateCompatible &&
+      supportSpanPresent;
+    return {
+      claimId: `claim:${predicateFamily}:preparation:${item.statementId}`,
+      predicateFamily,
+      anchorId: item.statementId,
+      projectCompatible: true,
+      predicateCompatible,
+      supportSpanPresent,
+      supportSpan,
+      conflictFree: firstPersonCompatible,
+      decision: allowed ? "allow" : "reject",
+      reason: allowed
+        ? "reviewed-preparation-evidence-supports-current-predicate"
+        : !firstPersonCompatible
+          ? "preparation-evidence-ownership-is-not-first-person-compatible"
+          : !predicateCompatible
+            ? "preparation-evidence-does-not-support-current-claim-family"
+            : "preparation-evidence-has-no-bounded-support-span",
+    };
+  });
 }
 
 function evaluateMemoryClaimSupport({
