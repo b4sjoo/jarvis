@@ -9,6 +9,7 @@ import type {
   InterviewSessionContext,
 } from "./types.js";
 import type { ActiveMeetingTask } from "./active-meeting-task.js";
+import type { PreparationRuntimeBrief } from "../preparation/index.js";
 
 const MAX_CURRENT_QUESTION_CHARS = 4_000;
 const MAX_GUIDANCE_HINT_CHARS = 800;
@@ -22,6 +23,8 @@ export interface BuildAdvisorEvidencePacketInput {
   activeMeetingTask?: ActiveMeetingTask;
   interviewSessionBrief?: InterviewSessionBrief;
   interviewSessionContext?: InterviewSessionContext;
+  preparationRuntimeBrief?: PreparationRuntimeBrief;
+  preferredProgrammingLanguage?: string;
   activatedFactIds?: string[];
   generatedGuidance?: AdvisorGeneratedGuidanceEvidence;
   generatedContinuity?: AdvisorGeneratedContinuityEvidence;
@@ -34,6 +37,12 @@ export function buildAdvisorEvidencePacket(
   const currentQuestion = normalizeCurrentQuestion(input.currentQuestion);
   const continuity = buildContinuityEvidence(input.activeMeetingTask);
   const guidanceHints = uniqueStrings([
+    ...(input.preparationRuntimeBrief?.focusAreas ?? []).map((value) =>
+      boundText(value, MAX_GUIDANCE_HINT_CHARS)
+    ),
+    ...(input.preparationRuntimeBrief?.compactNotes ?? []).map((value) =>
+      boundText(value, MAX_GUIDANCE_HINT_CHARS)
+    ),
     boundText(
       input.interviewSessionBrief?.focusAreas,
       MAX_GUIDANCE_HINT_CHARS
@@ -44,6 +53,7 @@ export function buildAdvisorEvidencePacket(
     ),
   ]);
   const targetCompany =
+    cleanText(input.preparationRuntimeBrief?.company) ??
     cleanText(input.interviewSessionBrief?.targetCompany) ??
     cleanText(input.interviewSessionContext?.targetCompany?.value);
   const interviewTypes = Array.from(
@@ -90,6 +100,14 @@ export function buildAdvisorEvidencePacket(
     preparation: {
       targetCompany,
       interviewTypes,
+      runtimeBrief: input.preparationRuntimeBrief
+        ? normalizeRuntimeBrief(input.preparationRuntimeBrief)
+        : undefined,
+      preferredProgrammingLanguage:
+        cleanText(input.preferredProgrammingLanguage) ??
+        cleanText(
+          input.preparationRuntimeBrief?.preferredProgrammingLanguage
+        ),
       guidanceHints,
       activatedFactIds,
       rawGuidanceRejectedAsFactCount: guidanceHints.length,
@@ -161,8 +179,20 @@ export function formatAdvisorEvidencePacketForPrompt(
       packet.preparation.targetCompany
         ? `target company: ${packet.preparation.targetCompany}`
         : undefined,
+      packet.preparation.runtimeBrief?.role
+        ? `target role: ${packet.preparation.runtimeBrief.role}`
+        : undefined,
+      packet.preparation.runtimeBrief?.roundTitle
+        ? `round: ${packet.preparation.runtimeBrief.roundTitle}`
+        : undefined,
+      packet.preparation.runtimeBrief?.stage
+        ? `round stage: ${packet.preparation.runtimeBrief.stage}`
+        : undefined,
       packet.preparation.interviewTypes.length
         ? `interview types: ${packet.preparation.interviewTypes.join(", ")}`
+        : undefined,
+      packet.preparation.preferredProgrammingLanguage
+        ? `preferred programming language: ${packet.preparation.preferredProgrammingLanguage}`
         : undefined,
       ...packet.preparation.guidanceHints.map(
         (hint) => `guidance only: ${hint}`
@@ -311,6 +341,20 @@ function buildContinuityEvidence(
     capsule,
     sourceTurnIds: uniqueStrings(
       task.parent.canonicalQuestionSourceTurnIds ?? []
+    ),
+  };
+}
+
+function normalizeRuntimeBrief(
+  brief: PreparationRuntimeBrief
+): PreparationRuntimeBrief {
+  return {
+    ...brief,
+    expectedInterviewTypes: [...brief.expectedInterviewTypes],
+    focusAreas: uniqueStrings(brief.focusAreas),
+    compactNotes: uniqueStrings(brief.compactNotes),
+    unresolvedHighImpactAssumptions: uniqueStrings(
+      brief.unresolvedHighImpactAssumptions
     ),
   };
 }

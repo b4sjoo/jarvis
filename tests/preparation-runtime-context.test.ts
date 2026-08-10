@@ -4,6 +4,7 @@ import {
   createNeutralPreparationRuntimeContext,
   loadPreparationRuntimeContext,
   toPreparationRuntimePresentation,
+  updatePreparationRuntimeCapabilities,
 } from "../src/lib/meeting/preparation-runtime-context.js";
 import { buildPreparationSnapshotArtifactManifest } from "../src/lib/preparation/snapshot-artifact-manifest.js";
 import type {
@@ -54,7 +55,7 @@ test("a selected snapshot is pinned through typed, provenance-bearing projection
   assert.equal(context.loadState, "ready");
   assert.equal(context.pinnedSnapshot?.snapshotId, snapshot.id);
   assert.equal(context.pinnedSnapshot?.selectionRevision, 8);
-  assert.equal(context.capabilities.runtimeReinforcement.enabled, false);
+  assert.equal(context.capabilities.runtimeReinforcement.enabled, true);
   assert.equal(context.capabilities.personalizedGuidance.enabled, false);
   assert.equal(
     context.projections?.lowImpact.programmingLanguage?.value,
@@ -134,6 +135,72 @@ test("the public presentation exposes identity and counts but no preparation tex
     personalized: 0,
   });
   assert.equal("projections" in presentation, false);
+});
+
+test("capability updates cascade, rebase projections, and require monotonic revisions", async () => {
+  const snapshot = createSnapshot();
+  const prepared = await loadPreparationRuntimeContext({
+    meetingSessionId: "meeting-6",
+    preparationContextRevision: 2,
+    loader: {
+      readSelection: async () => selectedContext(snapshot, 11),
+      readSelectedSnapshot: async () => snapshot,
+    },
+  });
+  const personalized = updatePreparationRuntimeCapabilities(prepared, {
+    preparationContextRevision: 3,
+    personalizedGuidanceEnabled: true,
+  });
+  assert.equal(
+    personalized.capabilities.runtimeReinforcement.enabled,
+    true
+  );
+  assert.equal(
+    personalized.capabilities.personalizedGuidance.enabled,
+    true
+  );
+  assert.equal(
+    personalized.projections?.personalized.strategy
+      .preparationContextRevision,
+    3
+  );
+
+  const disabled = updatePreparationRuntimeCapabilities(personalized, {
+    preparationContextRevision: 4,
+    runtimeReinforcementEnabled: false,
+    personalizedGuidanceEnabled: true,
+  });
+  assert.equal(
+    disabled.capabilities.runtimeReinforcement.enabled,
+    false
+  );
+  assert.equal(
+    disabled.capabilities.personalizedGuidance.enabled,
+    false
+  );
+  assert.throws(
+    () =>
+      updatePreparationRuntimeCapabilities(disabled, {
+        preparationContextRevision: 4,
+        runtimeReinforcementEnabled: true,
+      }),
+    /newer context revision/u
+  );
+});
+
+test("neutral mode cannot enable preparation capabilities", () => {
+  const neutral = createNeutralPreparationRuntimeContext({
+    meetingSessionId: "meeting-7",
+    preparationContextRevision: 1,
+  });
+  const updated = updatePreparationRuntimeCapabilities(neutral, {
+    preparationContextRevision: 2,
+    runtimeReinforcementEnabled: true,
+    personalizedGuidanceEnabled: true,
+  });
+  assert.equal(updated.mode, "neutral");
+  assert.equal(updated.capabilities.runtimeReinforcement.enabled, false);
+  assert.equal(updated.capabilities.personalizedGuidance.enabled, false);
 });
 
 function selectedContext(

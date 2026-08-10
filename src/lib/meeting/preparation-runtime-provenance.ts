@@ -134,7 +134,7 @@ export interface RecordPreparationArtifactUseInput<T> {
 }
 
 export class PreparationRuntimeProvenanceLedger {
-  private readonly context: PreparationRuntimeContext;
+  private context: PreparationRuntimeContext;
   private readonly receipts = new Map<string, PreparationArtifactUseReceipt>();
   private readonly evaluations = new Map<string, PreparationArtifactEvaluation>();
 
@@ -144,6 +144,25 @@ export class PreparationRuntimeProvenanceLedger {
 
   getContextRevision() {
     return this.context.preparationContextRevision;
+  }
+
+  updateContext(context: PreparationRuntimeContext) {
+    if (context.meetingSessionId !== this.context.meetingSessionId) {
+      throw new PreparationRuntimeProvenanceError(
+        "meeting-session-mismatch",
+        "Preparation provenance cannot cross Meeting Session boundaries."
+      );
+    }
+    if (
+      context.preparationContextRevision <=
+      this.context.preparationContextRevision
+    ) {
+      throw new PreparationRuntimeProvenanceError(
+        "non-monotonic-context-revision",
+        "Preparation provenance requires a newer context revision."
+      );
+    }
+    this.context = context;
   }
 
   getSnapshot(): PreparationRuntimeProvenanceSnapshot {

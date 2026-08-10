@@ -265,9 +265,12 @@ import {
   buildCriticalMomentGroundTruthSubject,
   readMeetingEvalTraceMetadata,
   loadPreparationRuntimeContext,
+  preparationProjectionArtifactIds,
+  resolvePreparationRuntimeReinforcement,
   resolveTraceMemoryEvaluationSnapshot,
   resolveSuggestionQuestionLineage,
   toPreparationRuntimePresentation,
+  updatePreparationRuntimeCapabilities,
   resolveActiveMeetingTaskIdentity,
   buildSpeechBiasContext,
   formatSpeechBiasPromptForTrace,
@@ -2184,6 +2187,42 @@ export function useMeetingAssistant() {
   );
   const advisorEngineRef = useRef(new AdvisorEngine());
   const traceStoreRef = useRef(new MeetingTraceStore());
+  const recordPreparationArtifactUse = useCallback(
+    <T,>(input: RecordPreparationArtifactUseInput<T>) => {
+      const receipts =
+        preparationProvenanceLedgerRef.current.recordUse(input);
+      const allReceipts =
+        preparationProvenanceLedgerRef.current.listReceipts();
+      setPreparationArtifactUses(allReceipts);
+      sessionRecordingManagerRef.current?.recordPreparationArtifactUse(
+        receipts
+      );
+      const traceReceipts = allReceipts.filter(
+        (receipt) => receipt.traceId === input.traceId
+      );
+      traceStoreRef.current.updateMetadata(input.traceId, {
+        preparationContextRevision:
+          preparationRuntimeContextRef.current.preparationContextRevision,
+        preparationSnapshotId:
+          preparationRuntimeContextRef.current.pinnedSnapshot?.snapshotId,
+        preparationArtifactUseReceiptIds: traceReceipts.map(
+          (receipt) => receipt.receiptId
+        ),
+        preparationArtifactIds: [
+          ...new Set(
+            traceReceipts.map((receipt) => receipt.artifactId)
+          ),
+        ],
+        preparationArtifactConsumers: [
+          ...new Set(
+            traceReceipts.map((receipt) => receipt.consumer)
+          ),
+        ],
+      });
+      return receipts;
+    },
+    []
+  );
   const traceMetricsPersistTimerRef = useRef<number | null>(null);
   const traceMetricsPersistRetryTimerRef = useRef<number | null>(null);
   const traceMetricsPersistQueueRef = useRef<Promise<void>>(Promise.resolve());
@@ -7514,6 +7553,53 @@ export function useMeetingAssistant() {
     }
 
     let promptContext = advisorJob.promptContextSnapshot;
+    const preparationRuntimeReinforcement =
+      resolvePreparationRuntimeReinforcement(
+        preparationRuntimeContextRef.current,
+        promptContext.interviewSessionBrief
+      );
+    const preparationRuntimeBrief =
+      preparationRuntimeReinforcement.runtimeBrief?.value;
+    if (
+      preparationRuntimeReinforcement.enabled &&
+      preparationRuntimeReinforcement.effectiveInterviewBrief
+    ) {
+      const preparedCompanyContext = preparationRuntimeBrief?.company
+        ? createInterviewSessionContextFromBrief(
+            preparationRuntimeReinforcement.effectiveInterviewBrief
+          )
+        : undefined;
+      promptContext = {
+        ...promptContext,
+        interviewSessionBrief:
+          preparationRuntimeReinforcement.effectiveInterviewBrief,
+        interviewSessionContext: preparedCompanyContext
+          ? {
+              ...promptContext.interviewSessionContext,
+              ...preparedCompanyContext,
+            }
+          : promptContext.interviewSessionContext,
+      };
+      if (
+        traceId &&
+        preparationRuntimeReinforcement.questionTypePrior
+      ) {
+        recordPreparationArtifactUse({
+          projection:
+            preparationRuntimeReinforcement.questionTypePrior,
+          usedArtifactIds: preparationProjectionArtifactIds(
+            preparationRuntimeReinforcement.questionTypePrior
+          ),
+          consumer: "question-type-prior",
+          targetKind: "question-settlement",
+          targetId:
+            advisorJob.logicalQuestionUnit?.id ?? advisorJob.id,
+          traceId,
+          questionId: advisorJob.logicalQuestionUnit?.id,
+          answerRevision: null,
+        });
+      }
+    }
     const originalPromptContext = promptContext;
     const latestTurn = promptContext.latestTurn;
     const hasContext = Boolean(
@@ -8006,6 +8092,7 @@ export function useMeetingAssistant() {
     );
     let advisorEvidencePacket = buildAdvisorEvidencePacket({});
     let advisorRetrievalQuery = "";
+    let includePreparedProgrammingLanguage = false;
     const refreshAdvisorEvidencePacket = () => {
       const currentQuestionText =
         advisorQuestionSemanticEvidenceText;
@@ -8033,6 +8120,11 @@ export function useMeetingAssistant() {
           promptContext.interviewSessionBrief,
         interviewSessionContext:
           promptContext.interviewSessionContext,
+        preparationRuntimeBrief,
+        preferredProgrammingLanguage:
+          includePreparedProgrammingLanguage
+            ? preparationRuntimeReinforcement.programmingLanguage?.value
+            : undefined,
         activatedFactIds: transientPersonalStatusDecision
           ? undefined
           : promptContext.activeMeetingTask?.parent.supportedFactAnchors ??
@@ -9219,6 +9311,24 @@ export function useMeetingAssistant() {
       });
     const advisorUsesCodingModel =
       responseOwner.questionType === "coding";
+    const advisorProgrammingLanguage =
+      inferTrustedProgrammingLanguage({
+        textHints: [
+          advisorQuestionSemanticEvidenceText,
+          promptContext.latestTurn?.text,
+        ],
+        codeFenceContent: promptContext.activeScreenTask?.content,
+        activeTaskLanguage: promptContext.activeScreenTask?.language,
+        preparationLanguage:
+          preparationRuntimeReinforcement.programmingLanguage?.value,
+      });
+    includePreparedProgrammingLanguage = Boolean(
+      advisorUsesCodingModel &&
+        advisorProgrammingLanguage.source === "preparation-prior"
+    );
+    if (includePreparedProgrammingLanguage) {
+      refreshAdvisorEvidencePacket();
+    }
     if (
       responseOwner.questionType === "general-system-design" ||
       responseOwner.questionType === "ai-ml-system-design"
@@ -9315,6 +9425,62 @@ export function useMeetingAssistant() {
           "start"
         ),
         modelRequestOptions: advisorModelRequestOptions,
+        preparedProgrammingLanguage:
+          includePreparedProgrammingLanguage
+            ? advisorProgrammingLanguage.language
+            : undefined,
+      });
+    }
+    if (
+      traceId &&
+      preparationRuntimeReinforcement.runtimeBrief
+    ) {
+      const usedArtifactIds = preparationProjectionArtifactIds(
+        preparationRuntimeReinforcement.runtimeBrief,
+        [
+          "runtime-brief/company",
+          "runtime-brief/role",
+          "runtime-brief/roundId",
+          "runtime-brief/roundTitle",
+          "runtime-brief/stage",
+          "runtime-brief/focusAreas",
+          "runtime-brief/compactNotes",
+        ]
+      );
+      if (usedArtifactIds.length) {
+        recordPreparationArtifactUse({
+          projection: preparationRuntimeReinforcement.runtimeBrief,
+          usedArtifactIds,
+          consumer: "runtime-brief",
+          targetKind: "advisor-prompt",
+          targetId: answerGenerationLease.id,
+          traceId,
+          questionId: advisorJob.logicalQuestionUnit?.id,
+          answerRevision:
+            answerGenerationLease.baseVisibleAnswerRevision + 1,
+          generationLeaseId: answerGenerationLease.id,
+        });
+      }
+    }
+    if (
+      traceId &&
+      includePreparedProgrammingLanguage &&
+      preparationRuntimeReinforcement.programmingLanguage
+    ) {
+      recordPreparationArtifactUse({
+        projection:
+          preparationRuntimeReinforcement.programmingLanguage,
+        usedArtifactIds: preparationProjectionArtifactIds(
+          preparationRuntimeReinforcement.programmingLanguage
+        ),
+        consumer: "programming-language",
+        targetKind: "advisor-prompt",
+        targetId: answerGenerationLease.id,
+        traceId,
+        questionId: advisorJob.logicalQuestionUnit?.id,
+        answerRevision:
+          answerGenerationLease.baseVisibleAnswerRevision + 1,
+        generationLeaseId: answerGenerationLease.id,
       });
     }
     if (rejectStaleCommit("generation-lease-start")) return;
@@ -10392,6 +10558,8 @@ export function useMeetingAssistant() {
             inferTrustedProgrammingLanguage({
               textHints: [latestTurn?.text],
               activeTaskLanguage: nextActiveScreenTask.language,
+              preparationLanguage:
+                preparationRuntimeReinforcement.programmingLanguage?.value,
             }).language ?? nextActiveScreenTask.language,
           content: finalContent.trim(),
           basedOnTurnIds,
@@ -11000,6 +11168,7 @@ export function useMeetingAssistant() {
     publishStableAnswerRevision,
     queuePendingAnswerRevision,
     recordCommittedPlaybookPhaseTransition,
+    recordPreparationArtifactUse,
     recordQuestionTypeAdjudicationOutcome,
     releaseAdvisorJob,
     resolveMeetingModelRoute,
@@ -15371,10 +15540,61 @@ export function useMeetingAssistant() {
           });
         }
 
+        const speechBiasBaseContext =
+          contextManagerRef.current.getState();
+        const speechPreparation =
+          resolvePreparationRuntimeReinforcement(
+            preparationRuntimeContextRef.current,
+            speechBiasBaseContext.interviewSessionBrief
+          );
+        const preparedCompanyContext =
+          speechPreparation.runtimeBrief?.value.company &&
+          speechPreparation.effectiveInterviewBrief
+            ? createInterviewSessionContextFromBrief(
+                speechPreparation.effectiveInterviewBrief
+              )
+            : undefined;
         const speechBias = buildSpeechBiasContext(
-          contextManagerRef.current.getState(),
-          speechCorrectionsRef.current
+          {
+            ...speechBiasBaseContext,
+            interviewSessionBrief:
+              speechPreparation.effectiveInterviewBrief ??
+              speechBiasBaseContext.interviewSessionBrief,
+            interviewSessionContext: preparedCompanyContext
+              ? {
+                  ...speechBiasBaseContext.interviewSessionContext,
+                  ...preparedCompanyContext,
+                }
+              : speechBiasBaseContext.interviewSessionContext,
+          },
+          speechCorrectionsRef.current,
+          speechPreparation.speechBiasTerms.map(
+            (projection) => projection.value
+          )
         );
+        for (const projection of speechPreparation.speechBiasTerms) {
+          if (
+            !speechBias.preparationStatementIds.includes(
+              projection.value.statementId
+            )
+          ) {
+            continue;
+          }
+          recordPreparationArtifactUse({
+            projection,
+            usedArtifactIds:
+              preparationProjectionArtifactIds(projection),
+            consumer: "speech-bias",
+            targetKind: "stt-segment",
+            targetId: `${segment.sessionId}:${segment.sequence}`,
+            traceId,
+            answerRevision: null,
+            sttSegmentLineage: {
+              audioSessionId: segment.sessionId,
+              sequence: segment.sequence,
+            },
+          });
+        }
         const pendingContinuation = pendingSentenceCompletionRef.current;
         const continuationLease =
           pendingContinuation?.continuationPromptLease;
@@ -16906,6 +17126,7 @@ export function useMeetingAssistant() {
       publishCanonicalLogicalQuestionTarget,
       promoteMeTurnForFusion,
       readAudioSegmentCommitAuthorization,
+      recordPreparationArtifactUse,
       resolvePendingConfirmationForMeTurn,
       schedulePendingAnswerCommit,
       scheduleShortIntentGate,
@@ -18305,6 +18526,20 @@ export function useMeetingAssistant() {
         }
 
         const preflightContextState = contextManagerRef.current.getState();
+        const screenPreparationRuntime =
+          resolvePreparationRuntimeReinforcement(
+            preparationRuntimeContextRef.current,
+            preflightContextState.interviewSessionBrief
+          );
+        const screenPreparationRuntimeBrief =
+          screenPreparationRuntime.runtimeBrief?.value;
+        const screenPreparedCompanyContext =
+          screenPreparationRuntimeBrief?.company &&
+          screenPreparationRuntime.effectiveInterviewBrief
+            ? createInterviewSessionContextFromBrief(
+                screenPreparationRuntime.effectiveInterviewBrief
+              )
+            : undefined;
         const screenCurrentQuestionEvidenceText =
           screenPreflight?.question?.trim() ?? "";
         const screenEvidenceText = [
@@ -18314,7 +18549,11 @@ export function useMeetingAssistant() {
           .filter(Boolean)
           .join("\n");
         const screenSourceFallbackQuestionType =
-          inferCanonicalQuestionTypeFromText(screenEvidenceText);
+          inferQuestionTypeDecisionFromText(screenEvidenceText, {
+            interviewSessionBrief:
+              screenPreparationRuntime.effectiveInterviewBrief ??
+              preflightContextState.interviewSessionBrief,
+          }).type ?? inferCanonicalQuestionTypeFromText(screenEvidenceText);
         const screenTaxonomyDecision = resolveTaskTaxonomyAuthority({
           candidates: [
             {
@@ -18363,6 +18602,23 @@ export function useMeetingAssistant() {
             : screenTaxonomyDecision.effectiveQuestionType;
         const taskKind =
           normalizeScreenQuestionType(screenMemoryQuestionType) ?? "unknown";
+        const screenProgrammingLanguage =
+          inferTrustedProgrammingLanguage({
+            screenPreflightLanguage:
+              screenPreflight?.programmingLanguage,
+            textHints: [
+              screenPreflight?.question,
+              recentTranscript,
+            ],
+            activeTaskLanguage:
+              preflightContextState.activeScreenTask?.language,
+            preparationLanguage:
+              screenPreparationRuntime.programmingLanguage?.value,
+          });
+        let includeScreenPreparedProgrammingLanguage = Boolean(
+          taskKind === "coding" &&
+            screenProgrammingLanguage.source === "preparation-prior"
+        );
         if (
           taskKind === "general-system-design" ||
           taskKind === "ai-ml-system-design"
@@ -18373,6 +18629,23 @@ export function useMeetingAssistant() {
           ...formatTaskTaxonomyAuthorityForTrace(screenTaxonomyDecision),
           screenSourceEvidenceChars: screenEvidenceText.length,
         });
+        if (
+          screenEvidenceText.trim() &&
+          screenPreparationRuntime.questionTypePrior
+        ) {
+          recordPreparationArtifactUse({
+            projection: screenPreparationRuntime.questionTypePrior,
+            usedArtifactIds: preparationProjectionArtifactIds(
+              screenPreparationRuntime.questionTypePrior
+            ),
+            consumer: "question-type-prior",
+            targetKind: "question-settlement",
+            targetId: `screen:${observation.id}`,
+            traceId: trace.id,
+            questionId: `screen:${observation.id}`,
+            answerRevision: null,
+          });
+        }
         const screenMemoryAskFrame = inferMemoryAskFrameFromScreenPreflight(
           screenCurrentQuestionEvidenceText,
           screenPreflight
@@ -18388,7 +18661,12 @@ export function useMeetingAssistant() {
         ) => {
           const amazonLeadershipPrincipleHint =
             buildAmazonLeadershipPrincipleMemoryHint(
-              contextState.interviewSessionContext,
+              screenPreparedCompanyContext
+                ? {
+                    ...contextState.interviewSessionContext,
+                    ...screenPreparedCompanyContext,
+                  }
+                : contextState.interviewSessionContext,
               screenCurrentQuestionEvidenceText
             );
           return buildAdvisorEvidencePacket({
@@ -18404,9 +18682,20 @@ export function useMeetingAssistant() {
               ? contextState.activeMeetingTask
               : undefined,
             interviewSessionBrief:
+              screenPreparationRuntime.effectiveInterviewBrief ??
               contextState.interviewSessionBrief,
             interviewSessionContext:
-              contextState.interviewSessionContext,
+              screenPreparedCompanyContext
+                ? {
+                    ...contextState.interviewSessionContext,
+                    ...screenPreparedCompanyContext,
+                  }
+                : contextState.interviewSessionContext,
+            preparationRuntimeBrief: screenPreparationRuntimeBrief,
+            preferredProgrammingLanguage:
+              includeScreenPreparedProgrammingLanguage
+                ? screenProgrammingLanguage.language
+                : undefined,
             activatedFactIds: includeParentContinuity
               ? contextState.activeMeetingTask?.parent
                   .supportedFactAnchors ??
@@ -18655,6 +18944,7 @@ export function useMeetingAssistant() {
               screenRelationQuestion,
               {
                 interviewSessionBrief:
+                  screenPreparationRuntime.effectiveInterviewBrief ??
                   preflightContextState.interviewSessionBrief,
               }
             ),
@@ -18793,6 +19083,10 @@ export function useMeetingAssistant() {
         const settledScreenQuestionType =
           screenCurrentQuestionSettlement?.questionType ??
           screenMemoryQuestionType;
+        includeScreenPreparedProgrammingLanguage = Boolean(
+          settledScreenQuestionType === "coding" &&
+            screenProgrammingLanguage.source === "preparation-prior"
+        );
         const settledScreenTaskKind =
           normalizeScreenQuestionType(settledScreenQuestionType) ??
           "unknown";
@@ -19516,6 +19810,53 @@ export function useMeetingAssistant() {
         if (rejectStaleScreenOperation("generation-lease-start")) {
           return;
         }
+        if (screenPreparationRuntime.runtimeBrief) {
+          const usedArtifactIds = preparationProjectionArtifactIds(
+            screenPreparationRuntime.runtimeBrief,
+            [
+              "runtime-brief/company",
+              "runtime-brief/role",
+              "runtime-brief/roundId",
+              "runtime-brief/roundTitle",
+              "runtime-brief/stage",
+              "runtime-brief/focusAreas",
+              "runtime-brief/compactNotes",
+            ]
+          );
+          if (usedArtifactIds.length) {
+            recordPreparationArtifactUse({
+              projection: screenPreparationRuntime.runtimeBrief,
+              usedArtifactIds,
+              consumer: "runtime-brief",
+              targetKind: "advisor-prompt",
+              targetId: screenGenerationLease.id,
+              traceId: trace.id,
+              questionId: `screen:${observation.id}`,
+              answerRevision:
+                screenGenerationLease.baseVisibleAnswerRevision + 1,
+              generationLeaseId: screenGenerationLease.id,
+            });
+          }
+        }
+        if (
+          includeScreenPreparedProgrammingLanguage &&
+          screenPreparationRuntime.programmingLanguage
+        ) {
+          recordPreparationArtifactUse({
+            projection: screenPreparationRuntime.programmingLanguage,
+            usedArtifactIds: preparationProjectionArtifactIds(
+              screenPreparationRuntime.programmingLanguage
+            ),
+            consumer: "programming-language",
+            targetKind: "artifact-generation",
+            targetId: screenGenerationLease.id,
+            traceId: trace.id,
+            questionId: `screen:${observation.id}`,
+            answerRevision:
+              screenGenerationLease.baseVisibleAnswerRevision + 1,
+            generationLeaseId: screenGenerationLease.id,
+          });
+        }
         const screenTaskContent = await withTimeout(
           solveScreenAnchoredTask({
             observation,
@@ -19531,11 +19872,18 @@ export function useMeetingAssistant() {
             interviewSessionBrief:
               screenResponseOnlyTaskScope
                 ? sanitizeInterviewBriefForResponseOnly(
-                    screenExecutionContextState.interviewSessionBrief
+                    screenPreparationRuntime.effectiveInterviewBrief ??
+                      screenExecutionContextState.interviewSessionBrief
                   )
-                : screenExecutionContextState.interviewSessionBrief,
+                : screenPreparationRuntime.effectiveInterviewBrief ??
+                  screenExecutionContextState.interviewSessionBrief,
             interviewSessionContext:
-              screenExecutionContextState.interviewSessionContext,
+              screenPreparedCompanyContext
+                ? {
+                    ...screenExecutionContextState.interviewSessionContext,
+                    ...screenPreparedCompanyContext,
+                  }
+                : screenExecutionContextState.interviewSessionContext,
             screenPreflight,
             interviewPlaybook: screenRuntimePlaybook,
             playbookPhaseDecision: screenPhaseDecision,
@@ -20010,6 +20358,8 @@ export function useMeetingAssistant() {
             screenPreflightLanguage: screenPreflight?.programmingLanguage,
             textHints: [screenPreflight?.question, recentTranscript],
             codeFenceContent: committedScreenTaskContent,
+            preparationLanguage:
+              screenPreparationRuntime.programmingLanguage?.value,
           });
           traceStoreRef.current.updateMetadata(trace.id, {
             programmingLanguage: screenLanguage.language,
@@ -20738,6 +21088,7 @@ export function useMeetingAssistant() {
       flushPendingSentenceCompletion,
       loadMemoryForPrompt,
       recordCommittedPlaybookPhaseTransition,
+      recordPreparationArtifactUse,
       readRuntimeCommitSnapshot,
       resolveMeetingModelRoute,
       scheduleTaskRelationAdjudication,
@@ -21812,6 +22163,223 @@ export function useMeetingAssistant() {
     resolveCurrentSuggestionQuestionLineage,
     runAdvisor,
   ]);
+
+  const setPreparationRuntimeCapabilities = useCallback(
+    async (update: {
+      runtimeReinforcementEnabled?: boolean;
+      personalizedGuidanceEnabled?: boolean;
+    }) => {
+      const previousContext = preparationRuntimeContextRef.current;
+      if (
+        previousContext.mode !== "prepared" ||
+        previousContext.loadState !== "ready"
+      ) {
+        return;
+      }
+      const requestedRuntime =
+        update.runtimeReinforcementEnabled ??
+        previousContext.capabilities.runtimeReinforcement.enabled;
+      const requestedPersonalized =
+        update.personalizedGuidanceEnabled ??
+        previousContext.capabilities.personalizedGuidance.enabled;
+      const effectivePersonalized =
+        requestedRuntime && requestedPersonalized;
+      if (
+        requestedRuntime ===
+          previousContext.capabilities.runtimeReinforcement.enabled &&
+        effectivePersonalized ===
+          previousContext.capabilities.personalizedGuidance.enabled
+      ) {
+        return;
+      }
+
+      const questionLineage =
+        resolveCurrentSuggestionQuestionLineage();
+      const currentStableAnswer = stableAnswerRevisionRef.current;
+      const disabledConsumers = new Set<
+        PreparationArtifactUseReceipt["consumer"]
+      >(
+        requestedRuntime
+          ? [
+              "strategy",
+              "kmb-hint",
+              "fact-anchor",
+              "opening",
+              "narrative",
+              "playbook-overlay",
+            ]
+          : [
+              "runtime-brief",
+              "question-type-prior",
+              "programming-language",
+              "speech-bias",
+              "strategy",
+              "kmb-hint",
+              "fact-anchor",
+              "opening",
+              "narrative",
+              "playbook-overlay",
+            ]
+      );
+      const currentAnswerUsedDisabledPreparation = Boolean(
+        currentStableAnswer?.suggestion.sourceTraceId &&
+          preparationProvenanceLedgerRef.current
+            .listReceipts()
+            .some(
+              (receipt) =>
+                receipt.traceId ===
+                  currentStableAnswer.suggestion.sourceTraceId &&
+                disabledConsumers.has(receipt.consumer)
+            )
+      );
+
+      cancelActiveAdvisorJob(
+        "preparation-runtime-capability-changed",
+        "cancelled-by-runtime-boundary"
+      );
+      screenAnalysisAbortRef.current?.abort(
+        "preparation-runtime-capability-changed"
+      );
+      screenAnalysisAbortRef.current = null;
+      const preparationContextRevision =
+        preparationContextRevisionRef.current + 1;
+      preparationContextRevisionRef.current = preparationContextRevision;
+      const nextContext = updatePreparationRuntimeCapabilities(
+        previousContext,
+        {
+          preparationContextRevision,
+          runtimeReinforcementEnabled: requestedRuntime,
+          personalizedGuidanceEnabled: effectivePersonalized,
+        }
+      );
+      preparationRuntimeContextRef.current = nextContext;
+      preparationProvenanceLedgerRef.current.updateContext(nextContext);
+      responseActionRevisionRef.current += 1;
+
+      let contextState = contextManagerRef.current.getState();
+      if (currentAnswerUsedDisabledPreparation) {
+        clearPendingAnswerCommitTimer();
+        stableAnswerRevisionRef.current = null;
+        pendingAnswerRevisionRef.current = null;
+        answerDeliveryProgressRef.current = null;
+        recentAdvisorContinuityRef.current = [];
+        visibleAnswerRevisionRef.current += 1;
+        const parent = contextState.activeInterviewTask;
+        const activeScreenTask = contextState.activeScreenTask;
+        contextManagerRef.current.setActiveMeetingTaskState({
+          activeScreenTask: activeScreenTask
+            ? {
+                ...activeScreenTask,
+                content: "",
+                updatedAt: Date.now(),
+              }
+            : null,
+          activeInterviewTask: parent
+            ? {
+                ...parent,
+                latestUsefulAnswer: undefined,
+                previousUsefulAnswer: undefined,
+                whiteboardArtifact: undefined,
+                supportedFactAnchors: [],
+                projectBinding: undefined,
+                updatedAt: Date.now(),
+                revisions: parent.revisions + 1,
+              }
+            : null,
+        });
+        contextState = contextManagerRef.current.getState();
+      }
+
+      setState((previous) => ({
+        ...previous,
+        preparationRuntime:
+          toPreparationRuntimePresentation(nextContext),
+        ...(currentAnswerUsedDisabledPreparation
+          ? {
+              latestSuggestion: null,
+              latestReliableSuggestion: null,
+              partialSuggestion: "",
+              lastMemoryContext: undefined,
+              activeScreenTask: contextState.activeScreenTask,
+              activeInterviewTask: contextState.activeInterviewTask,
+              activeMeetingTask: contextState.activeMeetingTask,
+              presentationArtifactResetRevision:
+                previous.presentationArtifactResetRevision + 1,
+              answerDelivery: toAnswerDeliveryPresentation({
+                visibleAnswerRevision:
+                  visibleAnswerRevisionRef.current,
+              }),
+            }
+          : {}),
+        error: null,
+      }));
+      sessionRecordingManagerRef.current?.recordPreparationRuntimeContext(
+        preparationProvenanceLedgerRef.current.getSnapshot()
+      );
+
+      const boundaryTrace = traceStoreRef.current.startTrace(
+        contextState.activeScreenTask ? "screen" : "voice",
+        {
+          source: "preparation-runtime-capability-toggle",
+          preparationContextRevision,
+          preparationSnapshotId: nextContext.pinnedSnapshot?.snapshotId,
+          previousRuntimeReinforcementEnabled:
+            previousContext.capabilities.runtimeReinforcement.enabled,
+          runtimeReinforcementEnabled:
+            nextContext.capabilities.runtimeReinforcement.enabled,
+          previousPersonalizedGuidanceEnabled:
+            previousContext.capabilities.personalizedGuidance.enabled,
+          personalizedGuidanceEnabled:
+            nextContext.capabilities.personalizedGuidance.enabled,
+          personalizedGuidanceCascadeDisabled:
+            !requestedRuntime && requestedPersonalized,
+          currentPreparedArtifactsInvalidated:
+            currentAnswerUsedDisabledPreparation,
+        }
+      );
+      sessionRecordingManagerRef.current?.recordCaptureLifecycle({
+        stage: "preparation-runtime-capability-changed",
+        traceId: boundaryTrace.id,
+        preparationContextRevision,
+        snapshotId: nextContext.pinnedSnapshot?.snapshotId,
+        runtimeReinforcementEnabled:
+          nextContext.capabilities.runtimeReinforcement.enabled,
+        personalizedGuidanceEnabled:
+          nextContext.capabilities.personalizedGuidance.enabled,
+        currentPreparedArtifactsInvalidated:
+          currentAnswerUsedDisabledPreparation,
+      });
+
+      const hasRegenerationContext = Boolean(
+        contextState.activeMeetingTask ||
+          contextState.transcriptTurns.some(
+            (turn) => turn.speaker === "them" && turn.text.trim()
+          )
+      );
+      if (!hasRegenerationContext) {
+        traceStoreRef.current.finishTrace(
+          boundaryTrace.id,
+          "success"
+        );
+        return;
+      }
+
+      await runAdvisor({
+        force: true,
+        mode: "regenerate",
+        traceId: boundaryTrace.id,
+        advisorJobSource: "regenerate",
+        taskMutationAuthority: "preserve-parent",
+        questionLineage,
+      });
+    },
+    [
+      cancelActiveAdvisorJob,
+      clearPendingAnswerCommitTimer,
+      resolveCurrentSuggestionQuestionLineage,
+      runAdvisor,
+    ]
+  );
 
   const forceAdviseLatestTurn = useCallback(async () => {
     flushPendingSentenceCompletion("force-advise");
@@ -24643,43 +25211,6 @@ export function useMeetingAssistant() {
     };
   }, []);
 
-  const recordPreparationArtifactUse = useCallback(
-    <T,>(input: RecordPreparationArtifactUseInput<T>) => {
-      const receipts =
-        preparationProvenanceLedgerRef.current.recordUse(input);
-      const allReceipts =
-        preparationProvenanceLedgerRef.current.listReceipts();
-      setPreparationArtifactUses(allReceipts);
-      sessionRecordingManagerRef.current?.recordPreparationArtifactUse(
-        receipts
-      );
-      const traceReceipts = allReceipts.filter(
-        (receipt) => receipt.traceId === input.traceId
-      );
-      traceStoreRef.current.updateMetadata(input.traceId, {
-        preparationContextRevision:
-          preparationRuntimeContextRef.current.preparationContextRevision,
-        preparationSnapshotId:
-          preparationRuntimeContextRef.current.pinnedSnapshot?.snapshotId,
-        preparationArtifactUseReceiptIds: traceReceipts.map(
-          (receipt) => receipt.receiptId
-        ),
-        preparationArtifactIds: [
-          ...new Set(
-            traceReceipts.map((receipt) => receipt.artifactId)
-          ),
-        ],
-        preparationArtifactConsumers: [
-          ...new Set(
-            traceReceipts.map((receipt) => receipt.consumer)
-          ),
-        ],
-      });
-      return receipts;
-    },
-    []
-  );
-
   const updatePreparationArtifactEvaluation = useCallback(
     (
       receiptId: string,
@@ -24726,6 +25257,7 @@ export function useMeetingAssistant() {
     setActiveScreenTaskTimeoutMinutes,
     setInterviewSessionBrief,
     clearInterviewSessionBrief,
+    setPreparationRuntimeCapabilities,
     setUseMemory,
     setPersonalEvidenceGuardrailMode,
     setSemanticTaxonomyMode,

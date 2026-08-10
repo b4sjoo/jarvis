@@ -13,6 +13,7 @@ import type {
 import type { ActiveMeetingTask } from "./active-meeting-task";
 import type { PlaybookPhaseDecision } from "./playbook-phase";
 import type { AudioInputLivenessPresentation } from "./audio-input-liveness";
+import type { PreparationRuntimeBrief } from "../preparation/index.js";
 
 export type TranscriptSpeaker = "them" | "me" | "unknown";
 
@@ -101,6 +102,7 @@ export interface DisplayTranscriptWindow {
 
 export type SpeechBiasTermSource =
   | "brief"
+  | "preparation"
   | "active-task"
   | "glossary"
   | "transcript"
@@ -124,6 +126,7 @@ export interface SpeechBiasContext {
   terms: SpeechBiasTerm[];
   correctionRules: SpeechCorrectionRule[];
   prompt: string;
+  preparationStatementIds: string[];
 }
 
 export type ActiveQuestionTermCorrectionDisposition =
@@ -1250,6 +1253,8 @@ export interface AdvisorContinuityEvidence {
 export interface AdvisorPreparationEvidence {
   targetCompany?: string;
   interviewTypes: InterviewBriefType[];
+  runtimeBrief?: PreparationRuntimeBrief;
+  preferredProgrammingLanguage?: string;
   guidanceHints: string[];
   activatedFactIds: string[];
   rawGuidanceRejectedAsFactCount: number;

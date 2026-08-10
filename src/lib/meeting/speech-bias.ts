@@ -6,6 +6,7 @@ import type {
   SpeechCorrectionRule,
   SpeechNormalizationResult,
 } from "./types";
+import type { PreparationSpeechBiasTerm } from "../preparation/index.js";
 import { createMeetingId } from "./context-manager";
 
 const MAX_BIAS_TERMS = 24;
@@ -60,7 +61,8 @@ const KNOWN_TECH_TERMS = [
 
 export function buildSpeechBiasContext(
   context: MeetingContextState,
-  corrections: SpeechCorrection[]
+  corrections: SpeechCorrection[],
+  preparedTerms: PreparationSpeechBiasTerm[] = []
 ): SpeechBiasContext {
   const terms: SpeechBiasTerm[] = [];
   const addTerm = (
@@ -84,6 +86,13 @@ export function buildSpeechBiasContext(
 
   addTerm(context.interviewSessionBrief?.targetCompany, "brief", "high");
   addTerm(context.interviewSessionContext?.targetCompany?.value, "brief", "high");
+
+  for (const prepared of preparedTerms) {
+    addTerm(prepared.canonicalTerm, "preparation", "high");
+    for (const alias of prepared.aliases) {
+      addTerm(alias, "preparation", "high");
+    }
+  }
 
   for (const term of extractLikelyTerms(
     [
@@ -142,8 +151,34 @@ export function buildSpeechBiasContext(
     addTerm(correction.to ?? correction.term, "correction", "high");
   }
 
-  const correctionRules = buildCorrectionRules(terms, corrections);
+  const correctionRules = dedupeRules([
+    ...buildCorrectionRules(terms, corrections),
+    ...preparedTerms.flatMap((prepared) =>
+      prepared.aliases
+        .filter(
+          (alias) =>
+            alias.trim() &&
+            alias.trim().toLowerCase() !==
+              prepared.canonicalTerm.trim().toLowerCase()
+        )
+        .map((alias) => ({
+          from: alias,
+          to: prepared.canonicalTerm,
+          source: "bias" as const,
+          reason: "reviewed preparation terminology",
+        }))
+    ),
+  ]);
   const prompt = buildSpeechPrompt(terms, correctionRules);
+  const normalizedPrompt = prompt.toLocaleLowerCase();
+  const preparationStatementIds = preparedTerms
+    .filter((prepared) =>
+      [prepared.canonicalTerm, ...prepared.aliases].some((term) =>
+        Boolean(term.trim()) &&
+        normalizedPrompt.includes(term.trim().toLocaleLowerCase())
+      )
+    )
+    .map((prepared) => prepared.statementId);
 
   return {
     terms: terms
@@ -154,6 +189,9 @@ export function buildSpeechBiasContext(
       .slice(0, MAX_BIAS_TERMS),
     correctionRules,
     prompt,
+    preparationStatementIds: Array.from(
+      new Set(preparationStatementIds)
+    ),
   };
 }
 

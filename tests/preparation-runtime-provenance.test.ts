@@ -11,6 +11,7 @@ import type {
   PreparationRuntimeContext,
   PreparationRuntimeProjection,
 } from "../src/lib/meeting/preparation-runtime-context.js";
+import { updatePreparationRuntimeCapabilities } from "../src/lib/meeting/preparation-runtime-context.js";
 
 test("a pinned context records no influence until a consumer emits a receipt", () => {
   const ledger = new PreparationRuntimeProvenanceLedger(createContext());
@@ -239,6 +240,56 @@ test("evaluation selects only receipts from the visible trace or answer revision
   assert.deepEqual(
     selected.map((receipt) => receipt.targetId),
     ["prompt-current", "prompt-same-answer"]
+  );
+});
+
+test("a capability revision preserves history and rejects the prior projection", () => {
+  const context = createContext();
+  const ledger = new PreparationRuntimeProvenanceLedger(context);
+  const oldProjection = required(
+    context.projections?.lowImpact.runtimeBrief
+  );
+  const artifactId = oldProjection.artifactRefs[0]!.artifactId;
+  const [receipt] = ledger.recordUse({
+    projection: oldProjection,
+    usedArtifactIds: [artifactId],
+    consumer: "runtime-brief",
+    targetKind: "advisor-prompt",
+    targetId: "prompt-before-toggle",
+    traceId: "trace-before-toggle",
+  });
+  const updated = updatePreparationRuntimeCapabilities(context, {
+    preparationContextRevision: 7,
+    runtimeReinforcementEnabled: true,
+  });
+  ledger.updateContext(updated);
+
+  assert.equal(ledger.listReceipts()[0]?.receiptId, receipt?.receiptId);
+  assert.throws(
+    () =>
+      ledger.recordUse({
+        projection: oldProjection,
+        usedArtifactIds: [artifactId],
+        consumer: "runtime-brief",
+        targetKind: "advisor-prompt",
+        targetId: "stale-prompt",
+        traceId: "trace-after-toggle",
+      }),
+    /current context revision/u
+  );
+
+  const currentProjection = required(
+    updated.projections?.lowImpact.runtimeBrief
+  );
+  assert.doesNotThrow(() =>
+    ledger.recordUse({
+      projection: currentProjection,
+      usedArtifactIds: [artifactId],
+      consumer: "runtime-brief",
+      targetKind: "advisor-prompt",
+      targetId: "current-prompt",
+      traceId: "trace-after-toggle",
+    })
   );
 });
 

@@ -30,12 +30,12 @@ export interface PreparationRuntimeCapabilityState {
   runtimeReinforcement: {
     version: typeof PREPARATION_RUNTIME_REINFORCEMENT_VERSION;
     available: boolean;
-    enabled: false;
+    enabled: boolean;
   };
   personalizedGuidance: {
     version: typeof PREPARATION_PERSONALIZED_GUIDANCE_VERSION;
     available: boolean;
-    enabled: false;
+    enabled: boolean;
     requiresRuntimeReinforcement: true;
   };
 }
@@ -132,6 +132,10 @@ export interface PreparationRuntimePresentation {
   loadState: PreparationRuntimeLoadState;
   snapshot?: Omit<PinnedPreparationSnapshotIdentity, "artifactManifest"> & {
     artifactCount: number;
+    company?: string;
+    role?: string;
+    roundTitle?: string;
+    stage?: PreparationRuntimeBrief["stage"];
   };
   capabilities: PreparationRuntimeCapabilityState;
   projectionCounts: {
@@ -144,6 +148,13 @@ export interface PreparationRuntimePresentation {
 export interface PreparationRuntimeContextLoader {
   readSelection(): Promise<PreparationCurrentContext>;
   readSelectedSnapshot(): Promise<InterviewPreparationSnapshot | undefined>;
+}
+
+export interface PreparationRuntimeCapabilityUpdate {
+  preparationContextRevision: number;
+  runtimeReinforcementEnabled?: boolean;
+  personalizedGuidanceEnabled?: boolean;
+  createdAt?: number;
 }
 
 export function createNeutralPreparationRuntimeContext(input: {
@@ -262,6 +273,13 @@ export function toPreparationRuntimePresentation(
           selectedAt: snapshot.selectedAt,
           activatedAt: snapshot.activatedAt,
           artifactCount: snapshot.artifactManifest.artifacts.length,
+          company:
+            context.projections?.lowImpact.runtimeBrief.value.company,
+          role: context.projections?.lowImpact.runtimeBrief.value.role,
+          roundTitle:
+            context.projections?.lowImpact.runtimeBrief.value.roundTitle,
+          stage:
+            context.projections?.lowImpact.runtimeBrief.value.stage,
         }
       : undefined,
     capabilities: clone(context.capabilities),
@@ -273,6 +291,48 @@ export function toPreparationRuntimePresentation(
     },
     loadFailure: context.loadFailure ? { ...context.loadFailure } : undefined,
   };
+}
+
+export function updatePreparationRuntimeCapabilities(
+  context: PreparationRuntimeContext,
+  update: PreparationRuntimeCapabilityUpdate
+): PreparationRuntimeContext {
+  if (update.preparationContextRevision <= context.preparationContextRevision) {
+    throw new PreparationRuntimePinError(
+      "non-monotonic-context-revision",
+      "Preparation capability updates require a newer context revision."
+    );
+  }
+
+  const available =
+    context.mode === "prepared" &&
+    context.loadState === "ready" &&
+    Boolean(context.pinnedSnapshot && context.projections);
+  const requestedRuntime =
+    update.runtimeReinforcementEnabled ??
+    context.capabilities.runtimeReinforcement.enabled;
+  const runtimeEnabled = available && requestedRuntime;
+  const requestedPersonalized =
+    update.personalizedGuidanceEnabled ??
+    context.capabilities.personalizedGuidance.enabled;
+  const personalizedEnabled =
+    available && runtimeEnabled && requestedPersonalized;
+
+  return deepFreeze({
+    ...clone(context),
+    preparationContextRevision: update.preparationContextRevision,
+    createdAt: update.createdAt ?? Date.now(),
+    capabilities: buildCapabilities(available, {
+      runtimeReinforcementEnabled: runtimeEnabled,
+      personalizedGuidanceEnabled: personalizedEnabled,
+    }),
+    projections: context.projections
+      ? rebaseProjections(
+          context.projections,
+          update.preparationContextRevision
+        )
+      : undefined,
+  });
 }
 
 function buildPreparedRuntimeContext(input: {
@@ -423,25 +483,67 @@ function buildPreparedRuntimeContext(input: {
     loadState: "ready",
     createdAt: input.createdAt ?? Date.now(),
     pinnedSnapshot,
-    capabilities: buildCapabilities(true),
+    capabilities: buildCapabilities(true, {
+      runtimeReinforcementEnabled: true,
+      personalizedGuidanceEnabled: false,
+    }),
     projections: { lowImpact, personalized },
   });
 }
 
 function buildCapabilities(
-  available: boolean
+  available: boolean,
+  enabled: {
+    runtimeReinforcementEnabled?: boolean;
+    personalizedGuidanceEnabled?: boolean;
+  } = {}
 ): PreparationRuntimeCapabilityState {
+  const runtimeEnabled =
+    available && Boolean(enabled.runtimeReinforcementEnabled);
   return {
     runtimeReinforcement: {
       version: PREPARATION_RUNTIME_REINFORCEMENT_VERSION,
       available,
-      enabled: false,
+      enabled: runtimeEnabled,
     },
     personalizedGuidance: {
       version: PREPARATION_PERSONALIZED_GUIDANCE_VERSION,
       available,
-      enabled: false,
+      enabled:
+        runtimeEnabled &&
+        Boolean(enabled.personalizedGuidanceEnabled),
       requiresRuntimeReinforcement: true,
+    },
+  };
+}
+
+function rebaseProjections(
+  projections: NonNullable<PreparationRuntimeContext["projections"]>,
+  preparationContextRevision: number
+): NonNullable<PreparationRuntimeContext["projections"]> {
+  const rebase = <T>(projection: PreparationRuntimeProjection<T>) => ({
+    ...clone(projection),
+    preparationContextRevision,
+  });
+  return {
+    lowImpact: {
+      runtimeBrief: rebase(projections.lowImpact.runtimeBrief),
+      questionTypePrior: rebase(projections.lowImpact.questionTypePrior),
+      programmingLanguage: projections.lowImpact.programmingLanguage
+        ? rebase(projections.lowImpact.programmingLanguage)
+        : undefined,
+      speechBiasTerms: projections.lowImpact.speechBiasTerms.map(rebase),
+    },
+    personalized: {
+      strategy: rebase(projections.personalized.strategy),
+      factEvidence: projections.personalized.factEvidence.map(rebase),
+      kmbEvidenceHints:
+        projections.personalized.kmbEvidenceHints.map(rebase),
+      openingItems: projections.personalized.openingItems.map(rebase),
+      narrativeGraphs:
+        projections.personalized.narrativeGraphs.map(rebase),
+      playbookOverlays:
+        projections.personalized.playbookOverlays.map(rebase),
     },
   };
 }

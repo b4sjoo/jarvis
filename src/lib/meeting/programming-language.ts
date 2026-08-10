@@ -2,7 +2,8 @@ export type ProgrammingLanguageSource =
   | "screen-preflight"
   | "explicit-text"
   | "code-fence"
-  | "active-task";
+  | "active-task"
+  | "preparation-prior";
 
 export interface ProgrammingLanguageInference {
   language?: string;
@@ -80,11 +81,13 @@ export function inferTrustedProgrammingLanguage({
   textHints = [],
   codeFenceContent,
   activeTaskLanguage,
+  preparationLanguage,
 }: {
   screenPreflightLanguage?: string;
   textHints?: Array<string | undefined>;
   codeFenceContent?: string;
   activeTaskLanguage?: string;
+  preparationLanguage?: string;
 }): ProgrammingLanguageInference {
   const preflightLanguage = normalizeProgrammingLanguageName(
     screenPreflightLanguage
@@ -110,6 +113,13 @@ export function inferTrustedProgrammingLanguage({
   const existingLanguage = normalizeProgrammingLanguageName(activeTaskLanguage);
   if (existingLanguage) {
     return { language: existingLanguage, source: "active-task" };
+  }
+
+  const preparedLanguage = normalizeProgrammingLanguageName(
+    preparationLanguage
+  );
+  if (preparedLanguage) {
+    return { language: preparedLanguage, source: "preparation-prior" };
   }
 
   return {};

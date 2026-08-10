@@ -69,6 +69,7 @@ import type {
   PreparationArtifactEvaluation,
   PreparationArtifactEvaluationLabel,
   PreparationArtifactUseReceipt,
+  PreparationRuntimePresentation,
   PersonalEvidenceGuardrailMode,
   PersonalStatusDomain,
   ProjectTrajectoryChildContinuity,
@@ -1830,6 +1831,10 @@ export const MeetingAssistant = ({
                 brief={meeting.interviewSessionBrief}
                 onBriefChange={meeting.setInterviewSessionBrief}
                 onClear={meeting.clearInterviewSessionBrief}
+                preparationRuntime={meeting.preparationRuntime}
+                onPreparationRuntimeChange={
+                  meeting.setPreparationRuntimeCapabilities
+                }
               />
 
               {meeting.setupWarnings.length > 0 ? (
@@ -3640,12 +3645,19 @@ const InterviewSessionBriefPanel = ({
   brief,
   onBriefChange,
   onClear,
+  preparationRuntime,
+  onPreparationRuntimeChange,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   brief?: InterviewSessionBrief;
   onBriefChange: (brief: InterviewSessionBrief | undefined) => void;
   onClear: () => void;
+  preparationRuntime: PreparationRuntimePresentation;
+  onPreparationRuntimeChange: (update: {
+    runtimeReinforcementEnabled?: boolean;
+    personalizedGuidanceEnabled?: boolean;
+  }) => Promise<void>;
 }) => {
   const editableBrief = getEditableInterviewSessionBrief(brief);
   const hasBrief = !isEditableInterviewSessionBriefEmpty(editableBrief);
@@ -3691,6 +3703,82 @@ const InterviewSessionBriefPanel = ({
 
       {open ? (
         <div className="space-y-3 border-t border-border/50 p-3">
+          <div className="space-y-2 rounded-sm border border-border/60 p-2.5">
+            <div className="flex min-w-0 items-start justify-between gap-2">
+              <div className="min-w-0">
+                <div className="text-[10px] font-medium uppercase text-muted-foreground">
+                  Preparation snapshot
+                </div>
+                <div className="mt-0.5 truncate text-xs font-medium">
+                  {formatPreparationRuntimeIdentity(preparationRuntime)}
+                </div>
+                <div className="mt-0.5 truncate text-[10px] text-muted-foreground">
+                  {formatPreparationRuntimeDetail(preparationRuntime)}
+                </div>
+              </div>
+              <Badge
+                variant="outline"
+                className="h-5 shrink-0 px-1.5 text-[10px]"
+              >
+                {preparationRuntime.mode === "prepared" &&
+                preparationRuntime.loadState === "ready"
+                  ? "Prepared"
+                  : "Neutral"}
+              </Badge>
+            </div>
+
+            <div className="flex items-center justify-between gap-3 border-t border-border/50 pt-2">
+              <div className="min-w-0">
+                <div className="text-[11px] font-medium">
+                  Prepared Runtime Context
+                </div>
+                <div className="text-[10px] text-muted-foreground">
+                  Brief, round prior, coding language, and speech terms
+                </div>
+              </div>
+              <Switch
+                checked={
+                  preparationRuntime.capabilities.runtimeReinforcement.enabled
+                }
+                disabled={
+                  !preparationRuntime.capabilities.runtimeReinforcement
+                    .available
+                }
+                onCheckedChange={(runtimeReinforcementEnabled) => {
+                  void onPreparationRuntimeChange({
+                    runtimeReinforcementEnabled,
+                  });
+                }}
+              />
+            </div>
+
+            <div className="flex items-center justify-between gap-3 border-t border-border/50 pt-2">
+              <div className="min-w-0">
+                <div className="text-[11px] font-medium">
+                  Personalized Guidance
+                </div>
+                <div className="text-[10px] text-muted-foreground">
+                  Strategy, evidence, narratives, and playbook overlays
+                </div>
+              </div>
+              <Switch
+                checked={
+                  preparationRuntime.capabilities.personalizedGuidance.enabled
+                }
+                disabled={
+                  !preparationRuntime.capabilities.personalizedGuidance
+                    .available ||
+                  !preparationRuntime.capabilities.runtimeReinforcement.enabled
+                }
+                onCheckedChange={(personalizedGuidanceEnabled) => {
+                  void onPreparationRuntimeChange({
+                    personalizedGuidanceEnabled,
+                  });
+                }}
+              />
+            </div>
+          </div>
+
           <div className="grid gap-2 md:grid-cols-[minmax(0,1fr)_auto]">
             <div className="min-w-0">
               <Label className="mb-1.5 block text-[10px] font-medium uppercase text-muted-foreground">
@@ -3783,6 +3871,31 @@ const InterviewSessionBriefPanel = ({
     </section>
   );
 };
+
+function formatPreparationRuntimeIdentity(
+  runtime: PreparationRuntimePresentation
+) {
+  if (runtime.loadState === "loading") return "Loading selected snapshot...";
+  if (runtime.loadState === "failed") return "Preparation unavailable";
+  if (!runtime.snapshot) return "No selected preparation snapshot";
+  return [runtime.snapshot.company, runtime.snapshot.roundTitle]
+    .filter(Boolean)
+    .join(" · ") || `Snapshot v${runtime.snapshot.version}`;
+}
+
+function formatPreparationRuntimeDetail(
+  runtime: PreparationRuntimePresentation
+) {
+  if (runtime.loadFailure?.message) return runtime.loadFailure.message;
+  if (!runtime.snapshot) return "Jarvis is using neutral meeting context.";
+  return [
+    runtime.snapshot.role,
+    runtime.snapshot.stage,
+    `v${runtime.snapshot.version}`,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+}
 
 const ConfigurationsPanel = ({
   open,

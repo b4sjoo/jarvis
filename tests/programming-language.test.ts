@@ -76,7 +76,14 @@ test("prioritizes preflight and explicit constraints over code fences and active
   assert.deepEqual(
     inferTrustedProgrammingLanguage({
       activeTaskLanguage: "Go",
+      preparationLanguage: "Java",
     }),
     { language: "Go", source: "active-task" }
+  );
+  assert.deepEqual(
+    inferTrustedProgrammingLanguage({
+      preparationLanguage: "Java",
+    }),
+    { language: "Java", source: "preparation-prior" }
   );
 });
