@@ -604,6 +604,13 @@ export function normalizeInterviewBriefCompany(
     : undefined;
 }
 
+export function normalizeInterviewBriefCompanyLock(
+  companyName: string | undefined,
+  requestedLock: boolean | undefined
+) {
+  return Boolean(normalizeInterviewBriefCompany(companyName) && requestedLock);
+}
+
 function createInterviewTargetCompanyFromBrief(
   brief: InterviewSessionBrief | undefined,
   now = Date.now()

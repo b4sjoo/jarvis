@@ -66,7 +66,6 @@ const interviewBriefTypeOptions: Array<{
   { id: "system-design", label: "General system design", shortLabel: "Gen SD" },
   { id: "ai-ml-system-design", label: "AI/ML system design", shortLabel: "AI/ML SD" },
   { id: "project-deep-dive", label: "Project deep-dive", shortLabel: "Project" },
-  { id: "mixed", label: "Mixed", shortLabel: "Mixed" },
 ];
 
 const concreteInterviewBriefTypes = interviewBriefTypeOptions
@@ -368,28 +367,24 @@ function MeetingFocusControlsWindow({
             <span className="truncate">{typeStatusLabel}</span>
           </Badge>
           <div className="flex min-w-0 flex-wrap gap-1.5">
-            {interviewBriefTypeOptions
-              .filter(
-                (option) => !hasCorrectableQuestion || option.id !== "mixed"
-              )
-              .map((option) => {
-                const selected = hasCorrectableQuestion
-                  ? toCanonicalFocusQuestionType(option.id) ===
-                    snapshot.effectiveQuestionType
-                  : interviewTypes.includes(option.id);
-                return (
-                  <Button
-                    key={option.id}
-                    size="sm"
-                    variant={selected ? "default" : "outline"}
-                    className="h-8 min-w-[88px] shrink-0 px-3 text-[10px]"
-                    title={option.label}
-                    onClick={() => updateInterviewTypes(option.id)}
-                  >
-                    {option.shortLabel}
-                  </Button>
-                );
-              })}
+            {interviewBriefTypeOptions.map((option) => {
+              const selected = hasCorrectableQuestion
+                ? toCanonicalFocusQuestionType(option.id) ===
+                  snapshot.effectiveQuestionType
+                : interviewTypes.includes(option.id);
+              return (
+                <Button
+                  key={option.id}
+                  size="sm"
+                  variant={selected ? "default" : "outline"}
+                  className="h-8 min-w-[88px] shrink-0 px-3 text-[10px]"
+                  title={option.label}
+                  onClick={() => updateInterviewTypes(option.id)}
+                >
+                  {option.shortLabel}
+                </Button>
+              );
+            })}
           </div>
           <Button
             key={snapshot.audioControl.action}
@@ -707,13 +702,6 @@ function toggleInterviewBriefType(
 ): InterviewBriefType[] {
   const current = new Set(currentTypes);
 
-  if (type === "mixed") {
-    const allSelected = concreteInterviewBriefTypes.every((candidate) =>
-      current.has(candidate)
-    );
-    return allSelected ? [] : [...concreteInterviewBriefTypes, "mixed"];
-  }
-
   if (forceSingleConcrete) {
     return [type];
   }
@@ -727,10 +715,7 @@ function toggleInterviewBriefType(
   const concreteTypes = concreteInterviewBriefTypes.filter((candidate) =>
     current.has(candidate)
   );
-  const allConcreteSelected =
-    concreteTypes.length === concreteInterviewBriefTypes.length;
-
-  return allConcreteSelected ? [...concreteTypes, "mixed"] : concreteTypes;
+  return concreteTypes;
 }
 
 function toCanonicalFocusQuestionType(

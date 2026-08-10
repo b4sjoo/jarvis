@@ -171,7 +171,7 @@ test("maps interview brief UI values through canonical runtime values", () => {
   );
 });
 
-test("normalizes mixed interview brief selections while preserving UI vocabulary", () => {
+test("normalizes interview brief selections to explicit concrete types", () => {
   assert.deepEqual(
     normalizeInterviewBriefTypes(["behavioral", "coding"]),
     ["behavioral", "coding"]
@@ -184,7 +184,6 @@ test("normalizes mixed interview brief selections while preserving UI vocabulary
       "system-design",
       "ai-ml-system-design",
       "project-deep-dive",
-      "mixed",
     ]
   );
   assert.deepEqual(
@@ -201,7 +200,6 @@ test("normalizes mixed interview brief selections while preserving UI vocabulary
       "system-design",
       "ai-ml-system-design",
       "project-deep-dive",
-      "mixed",
     ]
   );
 });

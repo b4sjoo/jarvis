@@ -328,7 +328,7 @@ const FOCUS_NEXT_PHASE_SHORTCUT_LABEL = "Cmd+Shift+Right";
 const EMPTY_INTERVIEW_SESSION_BRIEF: InterviewSessionBrief = {
   targetCompany: "",
   targetCompanyNormalized: undefined,
-  companyLocked: true,
+  companyLocked: false,
   interviewTypes: [],
 };
 
@@ -342,7 +342,6 @@ const interviewBriefTypeOptions: Array<{
   { id: "system-design", label: "General system design", shortLabel: "Gen SD" },
   { id: "ai-ml-system-design", label: "AI/ML system design", shortLabel: "AI/ML SD" },
   { id: "project-deep-dive", label: "Project deep-dive", shortLabel: "Project" },
-  { id: "mixed", label: "Mixed", shortLabel: "Mixed" },
 ];
 
 const concreteInterviewBriefTypes = interviewBriefTypeOptions
@@ -355,13 +354,6 @@ function toggleInterviewBriefType(
   forceSingleConcrete = false
 ): InterviewBriefType[] {
   const current = new Set(currentTypes);
-
-  if (type === "mixed") {
-    const allSelected = concreteInterviewBriefTypes.every((candidate) =>
-      current.has(candidate)
-    );
-    return allSelected ? [] : [...concreteInterviewBriefTypes, "mixed"];
-  }
 
   if (forceSingleConcrete) {
     return [type];
@@ -376,10 +368,7 @@ function toggleInterviewBriefType(
   const concreteTypes = concreteInterviewBriefTypes.filter((candidate) =>
     current.has(candidate)
   );
-  const allConcreteSelected =
-    concreteTypes.length === concreteInterviewBriefTypes.length;
-
-  return allConcreteSelected ? [...concreteTypes, "mixed"] : concreteTypes;
+  return concreteTypes;
 }
 
 function waitForHotkeyCaptureSettle() {
@@ -3299,7 +3288,7 @@ const InterviewTypeButtonGrid = ({
       className={cn(
         compact
           ? "flex min-w-0 flex-wrap gap-1"
-          : "grid grid-cols-2 gap-1 md:grid-cols-6"
+          : "grid grid-cols-2 gap-1 md:grid-cols-5"
       )}
     >
       {interviewBriefTypeOptions.map((option) => {
@@ -3359,29 +3348,27 @@ const CurrentQuestionTypeControl = ({
 
   return (
     <div className="flex min-w-0 flex-wrap items-center gap-1">
-      {interviewBriefTypeOptions
-        .filter((option) => option.id !== "mixed")
-        .map((option) => {
-          const canonicalType = normalizeCanonicalQuestionType(option.id);
-          if (!canonicalType) return null;
-          const selected = canonicalType === effectiveType;
+      {interviewBriefTypeOptions.map((option) => {
+        const canonicalType = normalizeCanonicalQuestionType(option.id);
+        if (!canonicalType) return null;
+        const selected = canonicalType === effectiveType;
 
-          return (
-            <Button
-              key={option.id}
-              size="sm"
-              variant={selected ? "default" : "outline"}
-              className={cn(
-                "h-7 min-w-[72px] px-2 text-[10px]",
-                compact && "h-6 min-w-[64px] shrink-0 px-1.5"
-              )}
-              title={`Correct the current question to ${option.label}`}
-              onClick={() => onCorrect(canonicalType)}
-            >
-              {option.shortLabel}
-            </Button>
-          );
-        })}
+        return (
+          <Button
+            key={option.id}
+            size="sm"
+            variant={selected ? "default" : "outline"}
+            className={cn(
+              "h-7 min-w-[72px] px-2 text-[10px]",
+              compact && "h-6 min-w-[64px] shrink-0 px-1.5"
+            )}
+            title={`Correct the current question to ${option.label}`}
+            onClick={() => onCorrect(canonicalType)}
+          >
+            {option.shortLabel}
+          </Button>
+        );
+      })}
       {statusLabel ? (
         <span
           className={cn(
@@ -3787,21 +3774,31 @@ const InterviewSessionBriefPanel = ({
                 placeholder="Amazon, OpenAI, Anthropic..."
                 className="h-8 text-xs"
                 onChange={(event) => {
-                  updateBrief({ targetCompany: event.currentTarget.value });
+                  const targetCompany = event.currentTarget.value;
+                  updateBrief({
+                    targetCompany,
+                    companyLocked: targetCompany.trim()
+                      ? editableBrief.companyLocked
+                      : false,
+                  });
                 }}
               />
             </div>
             <div className="flex min-w-[170px] items-center justify-between gap-2 rounded-sm border border-border/60 p-2">
               <div>
                 <div className="text-[10px] font-medium uppercase text-muted-foreground">
-                  Lock company
+                  Lock entered company
                 </div>
                 <div className="mt-0.5 text-[10px] text-muted-foreground">
-                  Skip inference when set
+                  Prevent inferred replacement
                 </div>
               </div>
               <Switch
-                checked={editableBrief.companyLocked}
+                checked={
+                  Boolean(editableBrief.targetCompany.trim()) &&
+                  editableBrief.companyLocked
+                }
+                disabled={!editableBrief.targetCompany.trim()}
                 onCheckedChange={(companyLocked) => {
                   updateBrief({ companyLocked });
                 }}
@@ -8345,7 +8342,8 @@ function getEditableInterviewSessionBrief(
     ...EMPTY_INTERVIEW_SESSION_BRIEF,
     ...brief,
     interviewTypes: brief?.interviewTypes ?? [],
-    companyLocked: brief?.companyLocked ?? true,
+    companyLocked:
+      Boolean(brief?.targetCompany.trim()) && (brief?.companyLocked ?? false),
   };
 }
 

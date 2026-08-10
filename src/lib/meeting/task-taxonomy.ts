@@ -432,8 +432,8 @@ export function normalizeInterviewBriefTypes(
     uniqueTypes.includes(type)
   );
 
-  if (hasMixed || concreteTypes.length === CONCRETE_INTERVIEW_TYPES.length) {
-    return [...CONCRETE_INTERVIEW_TYPES, "mixed"];
+  if (hasMixed) {
+    return [...CONCRETE_INTERVIEW_TYPES];
   }
 
   return concreteTypes;

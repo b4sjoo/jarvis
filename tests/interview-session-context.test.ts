@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   createInterviewSessionContextFromBrief,
   detectInterviewCompanyDecision,
+  normalizeInterviewBriefCompanyLock,
   updateInterviewSessionContextFromScreenText,
   updateInterviewSessionContextFromTurn,
 } from "../src/lib/meeting/interview-session-context.js";
@@ -26,6 +27,13 @@ function transcriptTurn(
     source: speaker === "me" ? "microphone" : "system-audio",
   };
 }
+
+test("only enables a company lock when a company is present", () => {
+  assert.equal(normalizeInterviewBriefCompanyLock("", true), false);
+  assert.equal(normalizeInterviewBriefCompanyLock("   ", true), false);
+  assert.equal(normalizeInterviewBriefCompanyLock("Amazon", false), false);
+  assert.equal(normalizeInterviewBriefCompanyLock("Amazon", true), true);
+});
 
 test("selects an explicit Reddit target before rejecting AWS candidate history", () => {
   const update = updateInterviewSessionContextFromTurn(

@@ -196,6 +196,7 @@ import {
   hasConstraintOrCorrectionSignal,
   isInterviewSessionBriefEmpty,
   normalizeInterviewBriefCompany,
+  normalizeInterviewBriefCompanyLock,
   extractScreenTaskQuestion,
   isShortConfirmationLike,
   buildMeetingAnswerSummary,
@@ -705,7 +706,7 @@ const DEFAULT_TAXONOMY_ADJUDICATION_SETTINGS: MeetingTaxonomyAdjudicationSetting
 const DEFAULT_INTERVIEW_SESSION_BRIEF: InterviewSessionBrief = {
   targetCompany: "",
   targetCompanyNormalized: undefined,
-  companyLocked: true,
+  companyLocked: false,
   interviewTypes: [],
 };
 
@@ -874,10 +875,12 @@ function normalizeInterviewSessionBrief(
     ...DEFAULT_INTERVIEW_SESSION_BRIEF,
     targetCompany,
     targetCompanyNormalized: company?.normalized,
-    companyLocked:
+    companyLocked: normalizeInterviewBriefCompanyLock(
+      targetCompany,
       typeof parsed.companyLocked === "boolean"
         ? parsed.companyLocked
-        : DEFAULT_INTERVIEW_SESSION_BRIEF.companyLocked,
+        : DEFAULT_INTERVIEW_SESSION_BRIEF.companyLocked
+    ),
     interviewTypes: normalizedInterviewTypes,
     updatedAt:
       typeof parsed.updatedAt === "number" ? parsed.updatedAt : Date.now(),

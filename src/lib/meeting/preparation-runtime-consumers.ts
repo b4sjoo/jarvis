@@ -132,7 +132,10 @@ export function resolvePreparationRuntimeReinforcement(
             : fallbackBrief?.targetCompanyNormalized,
           companyLocked: targetCompany
             ? true
-            : (fallbackBrief?.companyLocked ?? true),
+            : Boolean(
+                fallbackBrief?.targetCompany.trim() &&
+                  fallbackBrief.companyLocked
+              ),
           interviewTypes:
             preparedTypes.length > 0
               ? preparedTypes
