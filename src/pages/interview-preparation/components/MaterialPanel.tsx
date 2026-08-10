@@ -12,6 +12,7 @@ import {
   SelectItem,
   SelectTrigger,
   SelectValue,
+  Textarea,
 } from "@/components";
 import {
   interviewPreparationMaterialService,
@@ -77,6 +78,9 @@ export const MaterialPanel = ({
   const [scopeEditValue, setScopeEditValue] = useState(PROCESS_SCOPE);
   const [isDeleting, setIsDeleting] = useState(false);
   const [isUpdatingScope, setIsUpdatingScope] = useState(false);
+  const [manualTextOpen, setManualTextOpen] = useState(false);
+  const [manualText, setManualText] = useState("");
+  const [isSavingReview, setIsSavingReview] = useState(false);
 
   const roundTitles = useMemo(
     () => new Map(rounds.map((round) => [round.id, round.title])),
@@ -96,6 +100,8 @@ export const MaterialPanel = ({
     setInspectTarget(undefined);
     setInspection(undefined);
     setScopeEditTarget(undefined);
+    setManualTextOpen(false);
+    setManualText("");
   }, [processId]);
 
   useEffect(() => {
@@ -263,6 +269,68 @@ export const MaterialPanel = ({
       await onChanged();
     } finally {
       setIsRetryingExtraction(false);
+    }
+  };
+
+  const refreshInspection = async () => {
+    if (!inspectTarget) return undefined;
+    const result = await interviewPreparationMaterialExtractionService.inspect(
+      processId,
+      inspectTarget.id
+    );
+    setInspection(result);
+    await onChanged();
+    return result;
+  };
+
+  const approveMaterial = async () => {
+    if (!inspectTarget) return;
+    setIsSavingReview(true);
+    try {
+      const approved = await interviewPreparationMaterialExtractionService.approve(
+        processId,
+        inspectTarget.id
+      );
+      if (!approved) {
+        throw new Error("Material changed; reopen the details and retry.");
+      }
+      await refreshInspection();
+      onNotice("Material marked ready");
+    } catch (reason) {
+      onError(errorMessage(reason));
+    } finally {
+      setIsSavingReview(false);
+    }
+  };
+
+  const openManualText = () => {
+    setManualText(
+      inspection?.chunks.map((chunk) => chunk.content).join("\n\n") ?? ""
+    );
+    setManualTextOpen(true);
+  };
+
+  const saveManualText = async (markReady: boolean) => {
+    if (!inspectTarget || !manualText.trim()) return;
+    setIsSavingReview(true);
+    try {
+      await interviewPreparationMaterialExtractionService.commitManualText({
+        workspaceId: processId,
+        materialId: inspectTarget.id,
+        text: manualText,
+        markReady,
+      });
+      setManualTextOpen(false);
+      await refreshInspection();
+      onNotice(
+        markReady
+          ? "Manual material text saved and marked ready"
+          : "Manual material text saved for review"
+      );
+    } catch (reason) {
+      onError(errorMessage(reason));
+    } finally {
+      setIsSavingReview(false);
     }
   };
 
@@ -489,7 +557,7 @@ export const MaterialPanel = ({
           if (!open && !isRetryingExtraction) setInspectTarget(undefined);
         }}
       >
-        <DialogContent className="max-w-2xl">
+        <DialogContent className="max-h-[calc(100vh-2rem)] max-w-2xl grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden">
           <DialogHeader>
             <DialogTitle>Material details</DialogTitle>
             <DialogDescription>
@@ -497,7 +565,7 @@ export const MaterialPanel = ({
             </DialogDescription>
           </DialogHeader>
           {inspectTarget && (
-            <div className="grid gap-4">
+            <div className="grid min-h-0 gap-4 overflow-y-auto pr-2">
               <dl className="grid grid-cols-[7rem_minmax(0,1fr)] gap-x-4 gap-y-3 text-sm">
                 <dt className="text-muted-foreground">Name</dt>
                 <dd className="break-words">{inspectTarget.originalFileName}</dd>
@@ -518,6 +586,26 @@ export const MaterialPanel = ({
                     inspection?.candidate.status ?? inspectTarget.status
                   )}
                 </dd>
+                {inspection && (
+                  <>
+                    <dt className="text-muted-foreground">Review</dt>
+                    <dd>
+                      <Badge
+                        variant="outline"
+                        className={
+                          inspection.candidate.reviewStatus === "needs-review"
+                            ? "border-destructive/60 bg-destructive/10 text-destructive"
+                            : ""
+                        }
+                      >
+                        {formatReviewStatus(inspection.candidate.reviewStatus)}
+                      </Badge>
+                      {inspection.candidate.reviewActor
+                        ? ` · ${inspection.candidate.reviewActor}`
+                        : ""}
+                    </dd>
+                  </>
+                )}
                 {inspection?.candidate.metadata && (
                   <>
                     <dt className="text-muted-foreground">Method</dt>
@@ -560,6 +648,21 @@ export const MaterialPanel = ({
                 </div>
               ) : null}
 
+              {inspection?.candidate.qualitySignals.length ? (
+                <div className="border-destructive/40 bg-destructive/10 border px-3 py-2 text-sm">
+                  <div className="font-medium">Review signals</div>
+                  {inspection.candidate.qualitySignals.map((signal) => (
+                    <div key={`${signal.code}:${signal.page ?? ""}`} className="mt-1">
+                      {signal.page ? `Page ${signal.page} · ` : ""}
+                      {signal.detail}
+                      {signal.confidence !== undefined
+                        ? ` · ${Math.round(signal.confidence * 100)}% confidence`
+                        : ""}
+                    </div>
+                  ))}
+                </div>
+              ) : null}
+
               {inspection?.chunks.length ? (
                 <div className="grid gap-2">
                   <div className="text-sm font-medium">Extracted preview</div>
@@ -595,14 +698,34 @@ export const MaterialPanel = ({
               ) : null}
             </div>
           )}
-          {inspection &&
-            ["extracting", "failed", "ready", "needs-review"].includes(
-              inspection.candidate.status
-            ) && (
-              <DialogFooter>
+          {inspection && (
+              <DialogFooter className="flex-wrap">
+                {inspectTarget?.mimeType.startsWith("image/") && (
+                  <Button
+                    variant="outline"
+                    onClick={openManualText}
+                    disabled={isSavingReview || readOnly}
+                  >
+                    <Pencil className="size-4" />
+                    Edit extracted content
+                  </Button>
+                )}
+                {inspection.candidate.reviewStatus === "needs-review" && (
+                  <Button
+                    variant="outline"
+                    onClick={approveMaterial}
+                    disabled={isSavingReview || readOnly}
+                  >
+                    {isSavingReview && <Loader2 className="size-4 animate-spin" />}
+                    Mark ready
+                  </Button>
+                )}
+                {["extracting", "failed", "ready", "needs-review"].includes(
+                  inspection.candidate.status
+                ) && (
                 <Button
                   onClick={retryExtraction}
-                  disabled={isRetryingExtraction || readOnly}
+                  disabled={isRetryingExtraction || isSavingReview || readOnly}
                 >
                   {isRetryingExtraction && (
                     <Loader2 className="size-4 animate-spin" />
@@ -613,8 +736,53 @@ export const MaterialPanel = ({
                       ? "Retry extraction"
                       : "Re-run extraction"}
                 </Button>
+                )}
               </DialogFooter>
             )}
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={manualTextOpen}
+        onOpenChange={(open) => !isSavingReview && setManualTextOpen(open)}
+      >
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>Edit extracted material content</DialogTitle>
+            <DialogDescription>
+              This creates a new local revision. The immutable original and prior
+              extraction remain preserved.
+            </DialogDescription>
+          </DialogHeader>
+          <Textarea
+            value={manualText}
+            onChange={(event) => setManualText(event.target.value)}
+            placeholder="Enter the visible material content"
+            className="min-h-80 resize-y font-mono text-sm"
+          />
+          <DialogFooter>
+            <Button
+              variant="outline"
+              disabled={isSavingReview}
+              onClick={() => setManualTextOpen(false)}
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="outline"
+              disabled={isSavingReview || !manualText.trim()}
+              onClick={() => void saveManualText(false)}
+            >
+              Save for review
+            </Button>
+            <Button
+              disabled={isSavingReview || !manualText.trim()}
+              onClick={() => void saveManualText(true)}
+            >
+              {isSavingReview && <Loader2 className="size-4 animate-spin" />}
+              Save and mark ready
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
 
@@ -706,6 +874,12 @@ function formatExtractionMethod(method: string) {
       return "Local PDF OCR";
     case "pdf-hybrid-ocr":
       return "Digital PDF + local OCR";
+    case "cloud-ocr":
+      return "Preparation Model image text";
+    case "multimodal-recovery":
+      return "Preparation Model file recovery";
+    case "manual-transcription":
+      return "Manual transcription";
     default:
       return "No local text extractor";
   }
@@ -738,6 +912,12 @@ function formatExtractionWarning(code: string) {
       return "The PDF parser recovered from malformed content";
     case "extraction-failed":
       return "Local extraction failed";
+    case "cloud-ocr-unverified":
+      return "Model-extracted image text requires review";
+    case "multimodal-recovery-unverified":
+      return "Model-recovered file text requires review";
+    case "manual-transcription-unverified":
+      return "Manual material text requires review";
     default:
       return code;
   }
@@ -755,8 +935,25 @@ function formatChunkSource(sourceMethod: string) {
       return "Markdown";
     case "plain-text":
       return "Plain text";
+    case "cloud-ocr":
+      return "Model image text";
+    case "multimodal-recovery":
+      return "Model file recovery";
+    case "manual-transcription":
+      return "Manual transcription";
     default:
       return sourceMethod;
+  }
+}
+
+function formatReviewStatus(status: PreparationExtractionInspection["candidate"]["reviewStatus"]) {
+  switch (status) {
+    case "unreviewed":
+      return "Runtime accepted";
+    case "needs-review":
+      return "Needs review";
+    case "approved":
+      return "User approved";
   }
 }
 

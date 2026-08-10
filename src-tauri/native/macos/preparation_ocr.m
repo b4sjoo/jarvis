@@ -35,6 +35,36 @@ static char *jarvis_ocr_error(NSString *message) {
   });
 }
 
+static CGImageRef jarvis_copy_srgb_image(CGImageRef source) {
+  if (source == NULL) {
+    return NULL;
+  }
+  size_t source_width = CGImageGetWidth(source);
+  size_t source_height = CGImageGetHeight(source);
+  if (source_width == 0 || source_height == 0) {
+    return NULL;
+  }
+  size_t width = ((source_width + 15) / 16) * 16;
+  size_t height = ((source_height + 15) / 16) * 16;
+
+  CGColorSpaceRef color_space = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
+  if (color_space == NULL) {
+    return NULL;
+  }
+  CGContextRef context = CGBitmapContextCreate(
+      NULL, width, height, 8, width * 4, color_space,
+      kCGImageAlphaPremultipliedLast | kCGBitmapByteOrder32Big);
+  CGColorSpaceRelease(color_space);
+  if (context == NULL) {
+    return NULL;
+  }
+  CGContextSetInterpolationQuality(context, kCGInterpolationHigh);
+  CGContextDrawImage(context, CGRectMake(0, 0, width, height), source);
+  CGImageRef normalized = CGBitmapContextCreateImage(context);
+  CGContextRelease(context);
+  return normalized;
+}
+
 char *jarvis_ocr_pdf_page(const char *pdf_path, size_t page_index,
                           size_t max_dimension) {
   @autoreleasepool {
@@ -68,8 +98,11 @@ char *jarvis_ocr_pdf_page(const char *pdf_path, size_t page_index,
 
       CGFloat bounded_dimension = (CGFloat)MAX((size_t)512, max_dimension);
       CGFloat scale = bounded_dimension / longest_edge;
-      NSSize render_size = NSMakeSize(MAX(1, floor(NSWidth(bounds) * scale)),
-                                      MAX(1, floor(NSHeight(bounds) * scale)));
+      CGFloat rendered_width = MAX(16, floor(NSWidth(bounds) * scale));
+      CGFloat rendered_height = MAX(16, floor(NSHeight(bounds) * scale));
+      rendered_width = MAX(16, floor(rendered_width / 16.0) * 16.0);
+      rendered_height = MAX(16, floor(rendered_height / 16.0) * 16.0);
+      NSSize render_size = NSMakeSize(rendered_width, rendered_height);
       NSImage *thumbnail = [page thumbnailOfSize:render_size
                                           forBox:kPDFDisplayBoxMediaBox];
       NSData *tiff_data = thumbnail.TIFFRepresentation;
@@ -78,26 +111,44 @@ char *jarvis_ocr_pdf_page(const char *pdf_path, size_t page_index,
       if (bitmap == nil || bitmap.CGImage == NULL) {
         return jarvis_ocr_error(@"PDFKit could not render the page.");
       }
-      CGImageRef cg_image = CGImageCreateCopy(bitmap.CGImage);
+      CGImageRef cg_image = jarvis_copy_srgb_image(bitmap.CGImage);
       if (cg_image == NULL) {
-        return jarvis_ocr_error(@"PDFKit could not create a rendered page image.");
+        return jarvis_ocr_error(@"PDFKit could not create an sRGB page image.");
       }
 
+      NSBitmapImageRep *vision_bitmap =
+          [[NSBitmapImageRep alloc] initWithCGImage:cg_image];
+      NSData *vision_png = [vision_bitmap
+          representationUsingType:NSBitmapImageFileTypePNG
+                        properties:@{}];
+      CGImageRelease(cg_image);
+      if (vision_png == nil) {
+        return jarvis_ocr_error(@"PDFKit could not encode the OCR page image.");
+      }
+
+      if (@available(macOS 10.15, *)) {
       VNRecognizeTextRequest *request = [[VNRecognizeTextRequest alloc] init];
       request.recognitionLevel = VNRequestTextRecognitionLevelAccurate;
       request.usesLanguageCorrection = YES;
       if (@available(macOS 13.0, *)) {
         request.automaticallyDetectsLanguage = YES;
+      } else {
+        request.recognitionLanguages = @[ @"en-US" ];
       }
 
       VNImageRequestHandler *handler =
-          [[VNImageRequestHandler alloc] initWithCGImage:cg_image options:@{}];
+          [[VNImageRequestHandler alloc] initWithData:vision_png options:@{}];
       NSError *request_error = nil;
       if (![handler performRequests:@[ request ] error:&request_error]) {
-        CGImageRelease(cg_image);
-        return jarvis_ocr_error(request_error.localizedDescription ?: @"Vision OCR failed.");
+        NSString *message = @"Vision OCR failed.";
+        if (request_error != nil) {
+          message = [NSString stringWithFormat:@"Vision OCR failed (%@/%ld): %@",
+                                               request_error.domain,
+                                               (long)request_error.code,
+                                               request_error.description];
+        }
+        return jarvis_ocr_error(message);
       }
-      CGImageRelease(cg_image);
 
       NSArray<VNRecognizedTextObservation *> *observations = request.results ?: @[];
       observations = [observations sortedArrayUsingComparator:^NSComparisonResult(
@@ -145,8 +196,68 @@ char *jarvis_ocr_pdf_page(const char *pdf_path, size_t page_index,
         @"averageConfidence": @(average_confidence),
         @"lines": lines
       });
+      } else {
+        return jarvis_ocr_error(@"Local PDF OCR requires macOS 10.15 or newer.");
+      }
     } @catch (NSException *exception) {
       return jarvis_ocr_error(exception.reason ?: @"Native OCR raised an exception.");
+    }
+  }
+}
+
+char *jarvis_render_pdf_page(const char *pdf_path, size_t page_index,
+                             size_t max_dimension) {
+  @autoreleasepool {
+    @try {
+      if (pdf_path == NULL) {
+        return jarvis_ocr_error(@"PDF path is unavailable.");
+      }
+      NSString *path = [NSString stringWithUTF8String:pdf_path];
+      if (path == nil) {
+        return jarvis_ocr_error(@"PDF path is not valid UTF-8.");
+      }
+      PDFDocument *document = [[PDFDocument alloc]
+          initWithURL:[NSURL fileURLWithPath:path isDirectory:NO]];
+      if (document == nil) {
+        return jarvis_ocr_error(@"PDFKit could not open the document.");
+      }
+      if (page_index >= (size_t)document.pageCount) {
+        return jarvis_ocr_error(@"PDF page index is out of range.");
+      }
+      PDFPage *page = [document pageAtIndex:(NSInteger)page_index];
+      if (page == nil) {
+        return jarvis_ocr_error(@"PDFKit could not load the page.");
+      }
+      NSRect bounds = [page boundsForBox:kPDFDisplayBoxMediaBox];
+      CGFloat longest_edge = MAX(NSWidth(bounds), NSHeight(bounds));
+      if (longest_edge <= 0) {
+        return jarvis_ocr_error(@"PDF page has invalid dimensions.");
+      }
+      CGFloat bounded_dimension = (CGFloat)MAX((size_t)512, max_dimension);
+      CGFloat scale = bounded_dimension / longest_edge;
+      NSSize render_size = NSMakeSize(
+          MAX(16, floor(NSWidth(bounds) * scale)),
+          MAX(16, floor(NSHeight(bounds) * scale)));
+      NSImage *thumbnail = [page thumbnailOfSize:render_size
+                                          forBox:kPDFDisplayBoxMediaBox];
+      NSData *tiff_data = thumbnail.TIFFRepresentation;
+      NSBitmapImageRep *bitmap =
+          tiff_data == nil ? nil : [NSBitmapImageRep imageRepWithData:tiff_data];
+      NSData *png = [bitmap representationUsingType:NSBitmapImageFileTypePNG
+                                         properties:@{}];
+      if (png == nil) {
+        return jarvis_ocr_error(@"PDFKit could not encode the rendered page.");
+      }
+      return jarvis_copy_json(@{
+        @"success": @YES,
+        @"base64": [png base64EncodedStringWithOptions:0],
+        @"mediaType": @"image/png",
+        @"pageNumber": @(page_index + 1),
+        @"pageCount": @(document.pageCount),
+        @"lines": @[]
+      });
+    } @catch (NSException *exception) {
+      return jarvis_ocr_error(exception.reason ?: @"Native PDF rendering raised an exception.");
     }
   }
 }

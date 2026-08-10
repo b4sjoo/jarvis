@@ -1,4 +1,9 @@
-import type { PreparationMaterialRevisionStatus } from "./types.js";
+import type {
+  PreparationMaterialQualitySignal,
+  PreparationMaterialReviewActor,
+  PreparationMaterialReviewStatus,
+  PreparationMaterialRevisionStatus,
+} from "./types.js";
 
 export type PreparationExtractionMethod =
   | "plain-text"
@@ -7,6 +12,9 @@ export type PreparationExtractionMethod =
   | "pdf-text"
   | "pdf-ocr"
   | "pdf-hybrid-ocr"
+  | "cloud-ocr"
+  | "multimodal-recovery"
+  | "manual-transcription"
   | "none";
 
 export interface PreparationMaterialChunk {
@@ -73,8 +81,30 @@ export interface PreparationExtractionMetadata {
   warningCodes: string[];
   durationMs: number;
   offsetUnit: "unicode-scalar";
+  recoveryMode?: "full-replacement" | "page-patch";
+  baseRevisionId?: string;
+  patchedPages?: number[];
+  inheritedChunkCount?: number;
+  replacedChunkCount?: number;
+  recoveredChunkCount?: number;
   error?: string;
 }
+
+export interface PreparationRecoveredPage {
+  pageNumber: number;
+  text: string;
+}
+
+export type PreparationRecoveredContent =
+  | {
+      kind: "full";
+      text: string;
+    }
+  | {
+      kind: "pdf-pages";
+      pageCount: number;
+      pages: PreparationRecoveredPage[];
+    };
 
 export interface PreparationExtractionCandidate {
   workspaceId: string;
@@ -89,6 +119,11 @@ export interface PreparationExtractionCandidate {
   completedAt?: number;
   extractedTextRelativePath?: string;
   metadata?: PreparationExtractionMetadata;
+  reviewStatus: PreparationMaterialReviewStatus;
+  reviewActor?: PreparationMaterialReviewActor;
+  reviewUpdatedAt?: number;
+  qualitySignals: PreparationMaterialQualitySignal[];
+  derivedFromRevisionId?: string;
 }
 
 export interface PreparationExtractionInspection {
@@ -124,6 +159,9 @@ export interface PreparationMaterialExtractionRepository {
     extractedTextRelativePath?: string;
     metadata: PreparationExtractionMetadata;
     chunks: PreparationMaterialChunk[];
+    reviewStatus: PreparationMaterialReviewStatus;
+    reviewActor: PreparationMaterialReviewActor;
+    qualitySignals?: PreparationMaterialQualitySignal[];
     completedAt: number;
   }): Promise<boolean>;
   fail(input: {
@@ -133,6 +171,37 @@ export interface PreparationMaterialExtractionRepository {
     requestId: string;
     metadata: PreparationExtractionMetadata;
     completedAt: number;
+  }): Promise<boolean>;
+  createDerivedRevision(input: {
+    workspaceId: string;
+    materialId: string;
+    baseRevisionId: string;
+    revisionId: string;
+    requestId: string;
+    createdAt: number;
+    reviewStatus: PreparationMaterialReviewStatus;
+    reviewActor: PreparationMaterialReviewActor;
+    qualitySignals?: PreparationMaterialQualitySignal[];
+    action: "recovery-created" | "manual-content-created";
+  }): Promise<PreparationExtractionCandidate | undefined>;
+  discardDerivedRevision(input: {
+    workspaceId: string;
+    materialId: string;
+    revisionId: string;
+    requestId: string;
+    baseRevisionId: string;
+  }): Promise<boolean>;
+  setReviewState(input: {
+    workspaceId: string;
+    materialId: string;
+    revisionId: string;
+    reviewStatus: PreparationMaterialReviewStatus;
+    actor: PreparationMaterialReviewActor;
+    qualitySignals?: PreparationMaterialQualitySignal[];
+    eventId: string;
+    action: "quality-flagged" | "approved";
+    detail?: string;
+    updatedAt: number;
   }): Promise<boolean>;
   listChunks(revisionId: string): Promise<PreparationMaterialChunk[]>;
 }
@@ -182,6 +251,10 @@ export interface PreparationExtractionTraceEvent {
   warningCodes?: string[];
   durationMs?: number;
   committed?: boolean;
+  baseRevisionId?: string;
+  patchedPages?: number[];
+  inheritedChunkCount?: number;
+  replacedChunkCount?: number;
 }
 
 export interface PreparationMaterialExtractionScheduler {

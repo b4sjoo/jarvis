@@ -458,6 +458,8 @@ pub fn run() {
             preparation_material_storage::stage_preparation_material_storage_delete,
             preparation_material_storage::restore_preparation_material_storage_delete,
             preparation_material_storage::commit_preparation_material_storage_delete,
+            preparation_material_storage::read_preparation_material_image,
+            preparation_material_storage::read_preparation_material_visuals,
             window::set_window_height,
             window::open_dashboard,
             window::toggle_dashboard,

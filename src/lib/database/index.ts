@@ -6,3 +6,7 @@ export * from "./preparation-workspace.action";
 export * from "./interview-process.action";
 export * from "./preparation-material.action";
 export * from "./preparation-extraction.action";
+export * from "./preparation-conversation.action";
+export * from "./preparation-context.action";
+export * from "./preparation-statement.action";
+export * from "./preparation-snapshot.action";

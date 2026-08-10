@@ -92,6 +92,300 @@ test("resumes a stale extraction lease after a previous app run", async () => {
   assert.notEqual(harness.candidate.requestId, "orphaned-request");
 });
 
+test("indexes explicit cloud image text as unverified review-required evidence", async () => {
+  const harness = createHarness();
+  harness.candidate.extension = "png";
+  const service = createPreparationMaterialExtractionService(harness.dependencies);
+
+  const inspection = await service.commitCloudImageText(
+    "workspace-1",
+    "material-1",
+    "```text\nArchitecture diagram\nAPI -> Queue -> Worker\n```"
+  );
+
+  assert.equal(inspection?.candidate.status, "ready");
+  assert.equal(inspection?.candidate.reviewStatus, "needs-review");
+  assert.equal(inspection?.candidate.metadata?.method, "cloud-ocr");
+  assert.deepEqual(inspection?.candidate.metadata?.warningCodes, [
+    "cloud-ocr-unverified",
+  ]);
+  assert.equal(
+    inspection?.chunks[0].content,
+    "Architecture diagram\nAPI -> Queue -> Worker"
+  );
+  assert.equal(inspection?.chunks[0].sourceMethod, "cloud-ocr");
+  assert.equal(harness.gatewayCalls, 0);
+});
+
+test("persists model recovery as a derived review-required revision", async () => {
+  const harness = createHarness();
+  harness.candidate.extension = "png";
+  const service = createPreparationMaterialExtractionService(harness.dependencies);
+
+  const inspection = await service.commitRecoveredText({
+    workspaceId: "workspace-1",
+    materialId: "material-1",
+    baseRevisionId: "revision-1",
+    content: { kind: "full", text: "Recovered image text" },
+    qualitySignals: [
+      {
+        code: "unread-page",
+        detail: "Page 2 remained unreadable",
+        page: 2,
+        source: "model",
+      },
+    ],
+  });
+
+  assert.equal(inspection?.candidate.revision, 2);
+  assert.equal(inspection?.candidate.reviewStatus, "needs-review");
+  assert.equal(inspection?.candidate.derivedFromRevisionId, "revision-1");
+  assert.equal(inspection?.chunks[0].sourceMethod, "multimodal-recovery");
+  assert.equal(inspection?.candidate.qualitySignals[0]?.code, "unread-page");
+});
+
+test("rejects a non-page-addressed PDF recovery at the service boundary", async () => {
+  const harness = createHarness();
+  harness.candidate.status = "ready";
+  harness.candidate.extension = "pdf";
+  const service = createPreparationMaterialExtractionService(harness.dependencies);
+
+  await assert.rejects(
+    service.commitRecoveredText({
+      workspaceId: "workspace-1",
+      materialId: "material-1",
+      baseRevisionId: "revision-1",
+      content: { kind: "full", text: "A partial page disguised as a document" },
+    }),
+    /page-addressed output/
+  );
+  assert.equal(harness.candidate.revision, 1);
+});
+
+test("materializes a PDF page patch without dropping untouched pages", async () => {
+  const harness = createHarness();
+  harness.candidate.status = "ready";
+  harness.candidate.reviewStatus = "approved";
+  harness.candidate.extension = "pdf";
+  harness.candidate.metadata = {
+    method: "pdf-text",
+    textChars: 32,
+    pageCount: 3,
+    chunkCount: 3,
+    warningCodes: [],
+    durationMs: 1,
+    offsetUnit: "unicode-scalar",
+  };
+  harness.chunks.push(
+    baseChunk(0, 1, "First page"),
+    baseChunk(1, 2, "Old second page"),
+    baseChunk(2, 3, "Third page")
+  );
+  const service = createPreparationMaterialExtractionService(harness.dependencies);
+
+  const inspection = await service.commitRecoveredText({
+    workspaceId: "workspace-1",
+    materialId: "material-1",
+    baseRevisionId: "revision-1",
+    content: {
+      kind: "pdf-pages",
+      pageCount: 3,
+      pages: [{ pageNumber: 2, text: "Recovered second page" }],
+    },
+  });
+
+  assert.equal(inspection?.candidate.revision, 2);
+  assert.equal(inspection?.candidate.reviewStatus, "needs-review");
+  assert.equal(inspection?.candidate.metadata?.recoveryMode, "page-patch");
+  assert.deepEqual(inspection?.candidate.metadata?.patchedPages, [2]);
+  assert.equal(inspection?.candidate.metadata?.inheritedChunkCount, 2);
+  assert.equal(inspection?.candidate.metadata?.replacedChunkCount, 1);
+  assert.deepEqual(
+    inspection?.chunks.map((chunk) => [chunk.page, chunk.content, chunk.sourceMethod]),
+    [
+      [1, "First page", "pdf-text"],
+      [2, "Recovered second page", "multimodal-recovery"],
+      [3, "Third page", "pdf-text"],
+    ]
+  );
+});
+
+test("accumulates successive PDF page patches on the latest complete revision", async () => {
+  const harness = createHarness();
+  harness.candidate.status = "ready";
+  harness.candidate.extension = "pdf";
+  harness.candidate.metadata = {
+    method: "pdf-text",
+    textChars: 28,
+    pageCount: 3,
+    chunkCount: 3,
+    warningCodes: [],
+    durationMs: 1,
+    offsetUnit: "unicode-scalar",
+  };
+  harness.chunks.push(
+    baseChunk(0, 1, "First page"),
+    baseChunk(1, 2, "Second page"),
+    baseChunk(2, 3, "Third page")
+  );
+  const service = createPreparationMaterialExtractionService(harness.dependencies);
+
+  await service.commitRecoveredText({
+    workspaceId: "workspace-1",
+    materialId: "material-1",
+    baseRevisionId: "revision-1",
+    content: {
+      kind: "pdf-pages",
+      pageCount: 3,
+      pages: [{ pageNumber: 2, text: "Recovered page two" }],
+    },
+  });
+  const secondBaseRevisionId = harness.candidate.revisionId;
+  const inspection = await service.commitRecoveredText({
+    workspaceId: "workspace-1",
+    materialId: "material-1",
+    baseRevisionId: secondBaseRevisionId,
+    content: {
+      kind: "pdf-pages",
+      pageCount: 3,
+      pages: [{ pageNumber: 3, text: "Recovered page three" }],
+    },
+  });
+
+  assert.equal(inspection?.candidate.revision, 3);
+  assert.deepEqual(
+    inspection?.chunks.map((chunk) => [chunk.page, chunk.content]),
+    [
+      [1, "First page"],
+      [2, "Recovered page two"],
+      [3, "Recovered page three"],
+    ]
+  );
+});
+
+test("rejects a stale PDF page patch without creating a revision", async () => {
+  const harness = createHarness();
+  harness.candidate.status = "ready";
+  harness.candidate.extension = "pdf";
+  harness.candidate.metadata = {
+    method: "pdf-text",
+    textChars: 10,
+    pageCount: 1,
+    chunkCount: 1,
+    warningCodes: [],
+    durationMs: 1,
+    offsetUnit: "unicode-scalar",
+  };
+  harness.chunks.push(baseChunk(0, 1, "Original"));
+  const service = createPreparationMaterialExtractionService(harness.dependencies);
+
+  await assert.rejects(
+    service.commitRecoveredText({
+      workspaceId: "workspace-1",
+      materialId: "material-1",
+      baseRevisionId: "stale-revision",
+      content: {
+        kind: "pdf-pages",
+        pageCount: 1,
+        pages: [{ pageNumber: 1, text: "Late replacement" }],
+      },
+    }),
+    /changed/
+  );
+
+  assert.equal(harness.candidate.revisionId, "revision-1");
+  assert.equal(harness.chunks[0]?.content, "Original");
+});
+
+test("rejects a partial PDF patch when the base has no page map", async () => {
+  const harness = createHarness();
+  harness.candidate.status = "ready";
+  harness.candidate.extension = "pdf";
+  harness.candidate.metadata = {
+    method: "multimodal-recovery",
+    textChars: 10,
+    pageCount: 3,
+    chunkCount: 1,
+    warningCodes: ["multimodal-recovery-unverified"],
+    durationMs: 1,
+    offsetUnit: "unicode-scalar",
+  };
+  harness.chunks.push(baseChunk(0, undefined, "Legacy page-less recovery"));
+  const service = createPreparationMaterialExtractionService(harness.dependencies);
+
+  await assert.rejects(
+    service.commitRecoveredText({
+      workspaceId: "workspace-1",
+      materialId: "material-1",
+      baseRevisionId: "revision-1",
+      content: {
+        kind: "pdf-pages",
+        pageCount: 3,
+        pages: [{ pageNumber: 2, text: "Recovered second page" }],
+      },
+    }),
+    /no reliable page map/
+  );
+});
+
+test("allows a page-less PDF base only when every source page is recovered", async () => {
+  const harness = createHarness();
+  harness.candidate.status = "ready";
+  harness.candidate.extension = "pdf";
+  harness.candidate.metadata = {
+    method: "multimodal-recovery",
+    textChars: 10,
+    pageCount: 2,
+    chunkCount: 1,
+    warningCodes: ["multimodal-recovery-unverified"],
+    durationMs: 1,
+    offsetUnit: "unicode-scalar",
+  };
+  harness.chunks.push(baseChunk(0, undefined, "Legacy incomplete text"));
+  const service = createPreparationMaterialExtractionService(harness.dependencies);
+
+  const inspection = await service.commitRecoveredText({
+    workspaceId: "workspace-1",
+    materialId: "material-1",
+    baseRevisionId: "revision-1",
+    content: {
+      kind: "pdf-pages",
+      pageCount: 2,
+      pages: [
+        { pageNumber: 1, text: "Recovered first page" },
+        { pageNumber: 2, text: "Recovered second page" },
+      ],
+    },
+  });
+
+  assert.equal(inspection?.candidate.metadata?.recoveryMode, "full-replacement");
+  assert.equal(inspection?.candidate.metadata?.inheritedChunkCount, 0);
+  assert.deepEqual(
+    inspection?.chunks.map((chunk) => [chunk.page, chunk.content]),
+    [
+      [1, "Recovered first page"],
+      [2, "Recovered second page"],
+    ]
+  );
+});
+
+test("requires an explicit user action before recovered evidence is approved", async () => {
+  const harness = createHarness();
+  harness.candidate.extension = "png";
+  const service = createPreparationMaterialExtractionService(harness.dependencies);
+  await service.commitRecoveredText({
+    workspaceId: "workspace-1",
+    materialId: "material-1",
+    baseRevisionId: "revision-1",
+    content: { kind: "full", text: "Recovered text" },
+  });
+
+  assert.equal(harness.candidate.reviewStatus, "needs-review");
+  assert.equal(await service.approve("workspace-1", "material-1"), true);
+  assert.equal(harness.candidate.reviewStatus, "approved");
+  assert.deepEqual(harness.candidate.qualitySignals, []);
+});
+
 function createHarness(
   options: {
     gatewayResult?: Promise<NativePreparationMaterialExtractionResult>;
@@ -109,6 +403,8 @@ function createHarness(
     revision: 1,
     sourceChecksumSha256: "checksum-1",
     status: "pending",
+    reviewStatus: "unreviewed",
+    qualitySignals: [],
   };
   let gatewayCalls = 0;
   const discardedRequests: string[] = [];
@@ -151,6 +447,9 @@ function createHarness(
       candidate.completedAt = input.completedAt;
       candidate.extractedTextRelativePath = input.extractedTextRelativePath;
       candidate.metadata = input.metadata;
+      candidate.reviewStatus = input.reviewStatus;
+      candidate.reviewActor = input.reviewActor;
+      candidate.qualitySignals = input.qualitySignals ?? [];
       chunks.splice(0, chunks.length, ...input.chunks);
       return true;
     },
@@ -165,6 +464,58 @@ function createHarness(
       candidate.completedAt = input.completedAt;
       candidate.metadata = input.metadata;
       chunks.length = 0;
+      return true;
+    },
+    async createDerivedRevision(input) {
+      if (
+        input.materialId !== candidate.materialId ||
+        input.workspaceId !== candidate.workspaceId ||
+        input.baseRevisionId !== candidate.revisionId
+      ) {
+        return undefined;
+      }
+      const previousRevisionId = candidate.revisionId;
+      candidate.revision += 1;
+      candidate.revisionId = input.revisionId;
+      candidate.requestId = input.requestId;
+      candidate.startedAt = input.createdAt;
+      candidate.status = "extracting";
+      candidate.reviewStatus = input.reviewStatus;
+      candidate.reviewActor = input.reviewActor;
+      candidate.qualitySignals = input.qualitySignals ?? [];
+      candidate.derivedFromRevisionId = previousRevisionId;
+      chunks.length = 0;
+      return { ...candidate };
+    },
+    async discardDerivedRevision(input) {
+      if (
+        input.materialId !== candidate.materialId ||
+        input.revisionId !== candidate.revisionId ||
+        input.requestId !== candidate.requestId ||
+        input.baseRevisionId !== candidate.derivedFromRevisionId
+      ) {
+        return false;
+      }
+      candidate.revision -= 1;
+      candidate.revisionId = input.baseRevisionId;
+      candidate.requestId = undefined;
+      candidate.startedAt = undefined;
+      candidate.status = "ready";
+      candidate.derivedFromRevisionId = undefined;
+      chunks.length = 0;
+      return true;
+    },
+    async setReviewState(input) {
+      if (
+        input.materialId !== candidate.materialId ||
+        input.revisionId !== candidate.revisionId
+      ) {
+        return false;
+      }
+      candidate.reviewStatus = input.reviewStatus;
+      candidate.reviewActor = input.actor;
+      candidate.reviewUpdatedAt = input.updatedAt;
+      candidate.qualitySignals = input.qualitySignals ?? [];
       return true;
     },
     async listChunks() {
@@ -230,6 +581,26 @@ function nativeResult(): NativePreparationMaterialExtractionResult {
         endOffset: 26,
       },
     ],
+  };
+}
+
+function baseChunk(
+  ordinal: number,
+  page: number | undefined,
+  content: string
+): PreparationMaterialChunk {
+  return {
+    id: `base-chunk-${ordinal}`,
+    workspaceId: "workspace-1",
+    materialId: "material-1",
+    materialRevisionId: "revision-1",
+    extractionRequestId: "base-request",
+    ordinal,
+    content,
+    searchText: content.toLowerCase(),
+    page,
+    sourceMethod: "pdf-text",
+    createdAt: 1,
   };
 }
 

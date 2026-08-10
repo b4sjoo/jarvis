@@ -36,9 +36,7 @@ import {
   CalendarDays,
   CheckCircle2,
   Circle,
-  FileText,
   Loader2,
-  MessageSquare,
   Pencil,
   Plus,
   RotateCcw,
@@ -53,8 +51,11 @@ import {
 } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { MaterialPanel } from "./components/MaterialPanel";
+import { PreparationConversationPanel } from "./components/PreparationConversationPanel";
+import { ReviewedPreparationPanel } from "./components/ReviewedPreparationPanel";
 
 type MobilePanel = "processes" | "conversation" | "review";
+type ExpandedWorkspaceSurface = "conversation" | "review";
 
 const InterviewPreparation = () => {
   const { processId } = useParams();
@@ -74,6 +75,8 @@ const InterviewPreparation = () => {
   const [isDeletingRound, setIsDeletingRound] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [mobilePanel, setMobilePanel] = useState<MobilePanel>("processes");
+  const [expandedWorkspaceSurface, setExpandedWorkspaceSurface] =
+    useState<ExpandedWorkspaceSurface>();
 
   const loadProcesses = useCallback(async () => {
     const loaded = await interviewPreparationService.list(true);
@@ -97,6 +100,21 @@ const InterviewPreparation = () => {
     setMaterials(await interviewPreparationMaterialService.list(id));
   }, []);
 
+  const handleWorkspaceMaterialsChanged = useCallback(
+    () => loadMaterials(processId),
+    [loadMaterials, processId]
+  );
+
+  const handleWorkspaceError = useCallback((message: string) => {
+    setNotice(undefined);
+    setError(message || undefined);
+  }, []);
+
+  const handleWorkspaceNotice = useCallback((message: string) => {
+    setError(undefined);
+    setNotice(message || undefined);
+  }, []);
+
   useEffect(() => {
     let cancelled = false;
     setProcessEditOpen(false);
@@ -104,6 +122,7 @@ const InterviewPreparation = () => {
     setRoundDeleteTarget(undefined);
     setError(undefined);
     setNotice(undefined);
+    setExpandedWorkspaceSurface(undefined);
     setIsLoading(true);
     Promise.all([
       loadProcesses(),
@@ -179,6 +198,18 @@ const InterviewPreparation = () => {
     navigate(`/interview-preparation/${id}`);
     setMobilePanel("conversation");
   };
+
+  const handleConversationDetailChange = useCallback((open: boolean) => {
+    setExpandedWorkspaceSurface((current) =>
+      open ? "conversation" : current === "conversation" ? undefined : current
+    );
+  }, []);
+
+  const handleReviewedStateExpandedChange = useCallback((expanded: boolean) => {
+    setExpandedWorkspaceSurface((current) =>
+      expanded ? "review" : current === "review" ? undefined : current
+    );
+  }, []);
 
   const handleArchive = async () => {
     if (!detail) return;
@@ -258,11 +289,23 @@ const InterviewPreparation = () => {
         <div className="border bg-muted px-3 py-2 text-sm">{notice}</div>
       )}
 
-      <MobilePanelSelector value={mobilePanel} onChange={setMobilePanel} />
+      {!expandedWorkspaceSurface && (
+        <MobilePanelSelector value={mobilePanel} onChange={setMobilePanel} />
+      )}
 
-      <div className="grid min-h-[640px] overflow-hidden border lg:grid-cols-[260px_minmax(0,1fr)_300px]">
+      <div
+        className={`grid min-h-[640px] overflow-hidden border ${
+          expandedWorkspaceSurface
+            ? "grid-cols-1"
+            : "lg:grid-cols-[260px_minmax(0,1fr)_380px]"
+        }`}
+      >
         <section
-          className={`border-r ${mobilePanel === "processes" ? "block" : "hidden"} lg:block`}
+          className={
+            expandedWorkspaceSurface
+              ? "hidden"
+              : `border-r ${mobilePanel === "processes" ? "block" : "hidden"} lg:block`
+          }
         >
           <div className="flex h-12 items-center justify-between border-b px-3">
             <span className="text-sm font-semibold">Processes</span>
@@ -309,11 +352,25 @@ const InterviewPreparation = () => {
         </section>
 
         <section
-          className={`${mobilePanel === "conversation" ? "block" : "hidden"} min-w-0 lg:block`}
+          className={
+            expandedWorkspaceSurface === "review"
+              ? "hidden"
+              : expandedWorkspaceSurface === "conversation"
+                ? "block min-w-0"
+                : `${mobilePanel === "conversation" ? "block" : "hidden"} min-w-0 lg:block`
+          }
         >
           {detail ? (
             <ProcessWorkspace
               detail={detail}
+              materials={materials}
+              onMaterialsChanged={handleWorkspaceMaterialsChanged}
+              onError={handleWorkspaceError}
+              onNotice={handleWorkspaceNotice}
+              conversationExpanded={
+                expandedWorkspaceSurface === "conversation"
+              }
+              onConversationDetailChange={handleConversationDetailChange}
               onAddRound={() => setRoundOpen(true)}
               onEditProcess={() => setProcessEditOpen(true)}
               onEditRound={setRoundEditTarget}
@@ -341,11 +398,19 @@ const InterviewPreparation = () => {
         </section>
 
         <section
-          className={`${mobilePanel === "review" ? "block" : "hidden"} border-l lg:block`}
+          className={
+            expandedWorkspaceSurface === "conversation"
+              ? "hidden"
+              : expandedWorkspaceSurface === "review"
+                ? "block min-w-0"
+                : `${mobilePanel === "review" ? "block" : "hidden"} border-l lg:block`
+          }
         >
           <ReviewedStatePanel
             detail={detail}
             materials={materials}
+            expanded={expandedWorkspaceSurface === "review"}
+            onExpandedChange={handleReviewedStateExpandedChange}
             onMaterialsChanged={() => loadMaterials(detail?.process.id)}
             onMaterialError={(message) => {
               setNotice(undefined);
@@ -468,27 +533,41 @@ const InterviewPreparation = () => {
 
 const ProcessWorkspace = ({
   detail,
+  materials,
+  onMaterialsChanged,
+  onError,
+  onNotice,
   onAddRound,
   onEditProcess,
   onEditRound,
   onDeleteRound,
+  conversationExpanded,
+  onConversationDetailChange,
   onSetActiveRound,
   onArchive,
   onReopen,
   onDelete,
 }: {
   detail: InterviewProcessDetail;
+  materials: PreparationMaterial[];
+  onMaterialsChanged: () => Promise<void>;
+  onError: (message: string) => void;
+  onNotice: (message: string) => void;
   onAddRound: () => void;
   onEditProcess: () => void;
   onEditRound: (round: InterviewRound) => void;
   onDeleteRound: (round: InterviewRound) => void;
+  conversationExpanded: boolean;
+  onConversationDetailChange: (open: boolean) => void;
   onSetActiveRound: (roundId: string) => Promise<void>;
   onArchive: () => Promise<void>;
   onReopen: () => Promise<void>;
   onDelete: () => void;
 }) => (
   <div className="flex min-h-[640px] flex-col">
-    <div className="flex min-h-20 items-start justify-between gap-3 border-b px-4 py-3">
+    <div
+      className={`${conversationExpanded ? "hidden" : "flex"} min-h-20 items-start justify-between gap-3 border-b px-4 py-3`}
+    >
       <div className="min-w-0">
         <div className="flex items-center gap-2">
           <h2 className="truncate text-base font-semibold">{detail.process.title}</h2>
@@ -525,7 +604,7 @@ const ProcessWorkspace = ({
       </div>
     </div>
 
-    <div className="border-b">
+    <div className={conversationExpanded ? "hidden" : "border-b"}>
       <div className="flex h-11 items-center justify-between px-4">
         <span className="text-sm font-semibold">Rounds</span>
         <Button
@@ -602,14 +681,15 @@ const ProcessWorkspace = ({
       </div>
     </div>
 
-    <div className="flex flex-1 flex-col">
-      <div className="flex h-11 items-center gap-2 border-b px-4 text-sm font-semibold">
-        <MessageSquare className="size-4" /> Preparation Conversation
-      </div>
-      <div className="flex flex-1 items-center justify-center px-6 text-sm text-muted-foreground">
-        No preparation messages
-      </div>
-    </div>
+    <PreparationConversationPanel
+      key={detail.process.id}
+      detail={detail}
+      materials={materials}
+      onMaterialsChanged={onMaterialsChanged}
+      onError={onError}
+      onNotice={onNotice}
+      onDetailViewChange={onConversationDetailChange}
+    />
   </div>
 );
 
@@ -619,42 +699,40 @@ const ReviewedStatePanel = ({
   onMaterialsChanged,
   onMaterialError,
   onMaterialNotice,
+  expanded,
+  onExpandedChange,
 }: {
   detail?: InterviewProcessDetail;
   materials: PreparationMaterial[];
   onMaterialsChanged: () => Promise<void>;
   onMaterialError: (message: string) => void;
   onMaterialNotice: (message: string) => void;
+  expanded: boolean;
+  onExpandedChange: (expanded: boolean) => void;
 }) => (
   <div className="min-h-[640px]">
     {detail && (
-      <MaterialPanel
-        processId={detail.process.id}
-        processStatus={detail.process.status}
-        activeRoundId={detail.process.activeRoundId}
-        rounds={detail.rounds}
-        materials={materials}
-        onChanged={onMaterialsChanged}
+      <div className={expanded ? "hidden" : "block"}>
+        <MaterialPanel
+          processId={detail.process.id}
+          processStatus={detail.process.status}
+          activeRoundId={detail.process.activeRoundId}
+          rounds={detail.rounds}
+          materials={materials}
+          onChanged={onMaterialsChanged}
+          onError={onMaterialError}
+          onNotice={onMaterialNotice}
+        />
+      </div>
+    )}
+    {detail ? (
+      <ReviewedPreparationPanel
+        detail={detail}
+        expanded={expanded}
+        onExpandedChange={onExpandedChange}
         onError={onMaterialError}
         onNotice={onMaterialNotice}
       />
-    )}
-    <div className="flex h-12 items-center justify-between border-b px-4">
-      <span className="text-sm font-semibold">Reviewed State</span>
-      <Badge variant="outline">Draft</Badge>
-    </div>
-    {detail ? (
-      <div>
-        {["Logistics", "Evidence", "Terminology", "Strategy"].map((label) => (
-          <div key={label} className="flex items-center justify-between border-b px-4 py-3">
-            <span className="text-sm">{label}</span>
-            <span className="text-xs text-muted-foreground">0</span>
-          </div>
-        ))}
-        <div className="flex items-center gap-2 px-4 py-4 text-xs text-muted-foreground">
-          <FileText className="size-4" /> No reviewed items
-        </div>
-      </div>
     ) : (
       <div className="px-4 py-10 text-center text-sm text-muted-foreground">
         No active process

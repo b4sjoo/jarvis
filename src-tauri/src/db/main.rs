@@ -66,5 +66,54 @@ pub fn migrations() -> Vec<Migration> {
             sql: include_str!("migrations/preparation-material-ocr.sql"),
             kind: MigrationKind::Up,
         },
+        // Migration 10: Add process/round-scoped preparation conversations
+        Migration {
+            version: 10,
+            description: "add_preparation_conversations",
+            sql: include_str!("migrations/preparation-conversations.sql"),
+            kind: MigrationKind::Up,
+        },
+        // Migration 11: Allow multiple preparation sessions and branched edits
+        Migration {
+            version: 11,
+            description: "add_preparation_conversation_sessions",
+            sql: include_str!("migrations/preparation-conversation-sessions.sql"),
+            kind: MigrationKind::Up,
+        },
+        // Migration 12: Separate extraction completeness from review authority
+        Migration {
+            version: 12,
+            description: "add_preparation_material_review_authority",
+            sql: include_str!("migrations/preparation-material-review.sql"),
+            kind: MigrationKind::Up,
+        },
+        // Migration 13: Add reviewed preparation statements and draft composition state
+        Migration {
+            version: 13,
+            description: "add_preparation_statement_authority",
+            sql: include_str!("migrations/preparation-statement-authority.sql"),
+            kind: MigrationKind::Up,
+        },
+        // Migration 14: Preserve edit and review as separate audit revisions
+        Migration {
+            version: 14,
+            description: "separate_preparation_statement_edit_review_events",
+            sql: include_str!("migrations/preparation-statement-review-events.sql"),
+            kind: MigrationKind::Up,
+        },
+        // Migration 15: Add immutable preparation snapshots and explicit activation
+        Migration {
+            version: 15,
+            description: "add_interview_preparation_runtime_snapshots",
+            sql: include_str!("migrations/preparation-runtime-snapshots.sql"),
+            kind: MigrationKind::Up,
+        },
+        // Migration 16: Separate immutable snapshots from mutable Round selection
+        Migration {
+            version: 16,
+            description: "add_interview_preparation_snapshot_selection",
+            sql: include_str!("migrations/preparation-snapshot-selection.sql"),
+            kind: MigrationKind::Up,
+        },
     ]
 }

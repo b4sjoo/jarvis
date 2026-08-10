@@ -33,8 +33,10 @@ const MATERIAL_SELECT = `
       WHEN m.status = 'deleted' OR m.deleted_at IS NOT NULL THEN 'deleted'
       ELSE COALESCE(
         (
-          SELECT CASE latest.extraction_status
-            WHEN 'pending' THEN 'received'
+          SELECT CASE
+            WHEN latest.review_status = 'approved' THEN 'ready'
+            WHEN latest.review_status = 'needs-review' THEN 'needs-review'
+            WHEN latest.extraction_status = 'pending' THEN 'received'
             ELSE latest.extraction_status
           END
           FROM preparation_material_revisions latest

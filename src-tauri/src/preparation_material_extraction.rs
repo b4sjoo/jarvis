@@ -23,7 +23,7 @@ const DOCX_DOCUMENT_MAX_BYTES: u64 = 20 * 1024 * 1024;
 const SUBSTANTIVE_IMAGE_MIN_SHORT_EDGE: i64 = 200;
 const SUBSTANTIVE_IMAGE_MIN_PIXELS: i64 = 200_000;
 const PDF_OCR_MAX_PAGES: usize = 40;
-const PDF_OCR_MAX_DIMENSION: usize = 2_200;
+const PDF_OCR_MAX_DIMENSION: usize = 2_048;
 const PDF_OCR_MIN_CONFIDENCE: f32 = 0.55;
 
 #[derive(Debug, Clone)]
@@ -331,9 +331,14 @@ fn parse_pdf_inner(path: &Path) -> Result<ParsedMaterial, String> {
     let pages = document.get_pages();
     let page_count = pages.len();
     let mut warning_codes = Vec::new();
-    let image_pages = substantive_pdf_image_pages(&document, &pages);
+    let detected_image_pages = substantive_pdf_image_pages(&document, &pages);
     let unassigned_substantive_images =
-        count_substantive_pdf_images(&document) > 0 && image_pages.is_empty();
+        count_substantive_pdf_images(&document) > 0 && detected_image_pages.is_empty();
+    let image_pages = select_ocr_candidate_pages(
+        &detected_image_pages,
+        pages.keys().copied(),
+        unassigned_substantive_images,
+    );
 
     let mut blocks = Vec::new();
     let mut digital_text_by_page = std::collections::HashMap::new();
@@ -360,7 +365,7 @@ fn parse_pdf_inner(path: &Path) -> Result<ParsedMaterial, String> {
     let had_digital_text = !blocks.is_empty();
     let mut ocr_added = false;
     let mut ocr_failed_page_count = 0;
-    let mut unresolved_image_pages = usize::from(unassigned_substantive_images);
+    let mut unresolved_image_pages = 0;
     if image_pages.len() > PDF_OCR_MAX_PAGES {
         warning_codes.push("ocr-page-budget-exceeded".to_string());
         unresolved_image_pages += image_pages.len() - PDF_OCR_MAX_PAGES;
@@ -435,6 +440,17 @@ fn parse_pdf_inner(path: &Path) -> Result<ParsedMaterial, String> {
             failed_page_count: ocr_failed_page_count,
         },
     })
+}
+
+fn select_ocr_candidate_pages(
+    detected_image_pages: &[u32],
+    all_page_numbers: impl IntoIterator<Item = u32>,
+    has_unassigned_substantive_images: bool,
+) -> Vec<u32> {
+    if has_unassigned_substantive_images {
+        return all_page_numbers.into_iter().collect();
+    }
+    detected_image_pages.to_vec()
 }
 
 fn substantive_pdf_image_pages(
@@ -1138,6 +1154,15 @@ mod tests {
             .any(|chunk| chunk.content.contains("Question text remains readable")));
 
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn unassigned_substantive_images_fall_back_to_bounded_document_pages() {
+        assert_eq!(
+            select_ocr_candidate_pages(&[], [1, 2, 3], true),
+            vec![1, 2, 3]
+        );
+        assert_eq!(select_ocr_candidate_pages(&[2], [1, 2, 3], false), vec![2]);
     }
 
     #[test]

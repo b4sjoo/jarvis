@@ -5,6 +5,7 @@ import type {
   PreparationMaterialExtractionRepository,
 } from "@/lib/preparation/extraction-types";
 import type { PreparationMaterialRevisionStatus } from "@/lib/preparation/types";
+import type { PreparationMaterialQualitySignal } from "@/lib/preparation/types";
 import { getDatabase } from "./config";
 
 interface ExtractionCandidateRow {
@@ -20,6 +21,11 @@ interface ExtractionCandidateRow {
   completed_at: number | null;
   extracted_text_relative_path: string | null;
   extraction_metadata: string | null;
+  review_status: "unreviewed" | "needs-review" | "approved";
+  review_actor: "runtime" | "model" | "user" | null;
+  review_updated_at: number | null;
+  quality_signals_json: string;
+  derived_from_revision_id: string | null;
 }
 
 interface PreparationMaterialChunkRow {
@@ -53,7 +59,12 @@ const CURRENT_EXTRACTION_SELECT = `
     r.extraction_started_at,
     r.completed_at,
     r.extracted_text_relative_path,
-    r.extraction_metadata
+    r.extraction_metadata,
+    r.review_status,
+    r.review_actor,
+    r.review_updated_at,
+    r.quality_signals_json,
+    r.derived_from_revision_id
   FROM preparation_materials m
   JOIN preparation_workspaces w ON w.id = m.workspace_id
   JOIN preparation_material_revisions r ON r.material_id = m.id
@@ -66,12 +77,7 @@ const CURRENT_EXTRACTION_SELECT = `
 
 export const preparationMaterialExtractionRepository: PreparationMaterialExtractionRepository = {
   async getCurrent(materialId) {
-    const db = await getDatabase();
-    const rows = await db.select<ExtractionCandidateRow[]>(
-      `${CURRENT_EXTRACTION_SELECT} AND m.id = ? LIMIT 1`,
-      [materialId]
-    );
-    return rows[0] ? mapCandidate(rows[0]) : undefined;
+    return getCurrentCandidate(materialId);
   },
 
   async listRecoverable(workspaceId, staleBefore) {
@@ -101,7 +107,11 @@ export const preparationMaterialExtractionRepository: PreparationMaterialExtract
            extraction_request_id = ?,
            extraction_started_at = ?,
            completed_at = NULL,
-           extraction_metadata = NULL
+           extraction_metadata = NULL,
+           review_status = 'unreviewed',
+           review_actor = 'runtime',
+           review_updated_at = ?,
+           quality_signals_json = '[]'
        WHERE id = ? AND material_id = ? AND source_checksum_sha256 = ?
          AND EXISTS (
            SELECT 1 FROM preparation_materials m
@@ -124,6 +134,7 @@ export const preparationMaterialExtractionRepository: PreparationMaterialExtract
          )`,
       [
         input.requestId,
+        input.startedAt,
         input.startedAt,
         input.revisionId,
         input.materialId,
@@ -203,6 +214,10 @@ export const preparationMaterialExtractionRepository: PreparationMaterialExtract
        SET extraction_status = ?,
            extracted_text_relative_path = ?,
            extraction_metadata = ?,
+           review_status = ?,
+           review_actor = ?,
+           review_updated_at = ?,
+           quality_signals_json = ?,
            completed_at = ?
        WHERE id = ? AND material_id = ?
          AND extraction_status = 'extracting'
@@ -219,6 +234,10 @@ export const preparationMaterialExtractionRepository: PreparationMaterialExtract
         input.status,
         input.extractedTextRelativePath ?? null,
         JSON.stringify(input.metadata),
+        input.reviewStatus,
+        input.reviewActor,
+        input.completedAt,
+        JSON.stringify(input.qualitySignals ?? []),
         input.completedAt,
         input.revisionId,
         input.materialId,
@@ -285,6 +304,180 @@ export const preparationMaterialExtractionRepository: PreparationMaterialExtract
     return true;
   },
 
+  async createDerivedRevision(input) {
+    const db = await getDatabase();
+    const inserted = await db.execute(
+      `INSERT INTO preparation_material_revisions
+        (id, material_id, revision, source_checksum_sha256,
+         extraction_status, extraction_request_id, extraction_started_at,
+         extraction_metadata, review_status, review_actor, review_updated_at,
+         quality_signals_json, derived_from_revision_id, created_at)
+       SELECT ?, m.id, base.revision + 1, base.source_checksum_sha256,
+              'extracting', ?, ?, NULL, ?, ?, ?, ?, base.id, ?
+       FROM preparation_materials m
+       JOIN preparation_workspaces w ON w.id = m.workspace_id
+       JOIN preparation_material_revisions base
+         ON base.id = ? AND base.material_id = m.id
+       WHERE m.id = ? AND m.workspace_id = ?
+         AND m.status <> 'deleted' AND m.deleted_at IS NULL
+         AND w.status = 'active'
+         AND base.id = (
+           SELECT latest.id
+           FROM preparation_material_revisions latest
+           WHERE latest.material_id = m.id
+           ORDER BY latest.revision DESC
+           LIMIT 1
+         )`,
+      [
+        input.revisionId,
+        input.requestId,
+        input.createdAt,
+        input.reviewStatus,
+        input.reviewActor,
+        input.createdAt,
+        JSON.stringify(input.qualitySignals ?? []),
+        input.createdAt,
+        input.baseRevisionId,
+        input.materialId,
+        input.workspaceId,
+      ]
+    );
+    if (inserted.rowsAffected === 0) return undefined;
+    try {
+      await db.execute(
+        `INSERT INTO preparation_material_review_events
+          (id, workspace_id, material_id, material_revision_id, action, actor,
+           reason_codes_json, detail, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?)`,
+        [
+          `${input.revisionId}-event`,
+          input.workspaceId,
+          input.materialId,
+          input.revisionId,
+          input.action,
+          input.reviewActor,
+          JSON.stringify((input.qualitySignals ?? []).map((signal) => signal.code)),
+          input.createdAt,
+        ]
+      );
+    } catch (error) {
+      await db.execute(
+        `DELETE FROM preparation_material_revisions
+         WHERE id = ? AND material_id = ?
+           AND extraction_status = 'extracting'
+           AND extraction_request_id = ?
+           AND derived_from_revision_id = ?`,
+        [
+          input.revisionId,
+          input.materialId,
+          input.requestId,
+          input.baseRevisionId,
+        ]
+      );
+      throw error;
+    }
+    return getCurrentCandidate(input.materialId);
+  },
+
+  async discardDerivedRevision(input) {
+    const db = await getDatabase();
+    const discarded = await db.execute(
+      `DELETE FROM preparation_material_revisions
+       WHERE id = ? AND material_id = ?
+         AND extraction_status = 'extracting'
+         AND extraction_request_id = ?
+         AND derived_from_revision_id = ?
+         AND id = (
+           SELECT latest.id
+           FROM preparation_material_revisions latest
+           WHERE latest.material_id = ?
+           ORDER BY latest.revision DESC
+           LIMIT 1
+         )
+         AND EXISTS (
+           SELECT 1 FROM preparation_materials m
+           JOIN preparation_workspaces w ON w.id = m.workspace_id
+           WHERE m.id = preparation_material_revisions.material_id
+             AND m.workspace_id = ? AND w.status = 'active'
+             AND m.status <> 'deleted' AND m.deleted_at IS NULL
+         )`,
+      [
+        input.revisionId,
+        input.materialId,
+        input.requestId,
+        input.baseRevisionId,
+        input.materialId,
+        input.workspaceId,
+      ]
+    );
+    return discarded.rowsAffected > 0;
+  },
+
+  async setReviewState(input) {
+    const db = await getDatabase();
+    const updated = await db.execute(
+      `UPDATE preparation_material_revisions
+       SET review_status = ?, review_actor = ?, review_updated_at = ?,
+           quality_signals_json = ?
+       WHERE id = ? AND material_id = ?
+         AND id = (
+           SELECT latest.id
+           FROM preparation_material_revisions latest
+           WHERE latest.material_id = ?
+           ORDER BY latest.revision DESC
+           LIMIT 1
+         )
+         AND EXISTS (
+           SELECT 1 FROM preparation_materials m
+           JOIN preparation_workspaces w ON w.id = m.workspace_id
+           WHERE m.id = preparation_material_revisions.material_id
+             AND m.workspace_id = ? AND w.status = 'active'
+             AND m.status <> 'deleted' AND m.deleted_at IS NULL
+         )`,
+      [
+        input.reviewStatus,
+        input.actor,
+        input.updatedAt,
+        JSON.stringify(input.qualitySignals ?? []),
+        input.revisionId,
+        input.materialId,
+        input.materialId,
+        input.workspaceId,
+      ]
+    );
+    if (updated.rowsAffected === 0) return false;
+    await db.execute(
+      `UPDATE preparation_materials
+       SET status = ?, updated_at = ?
+       WHERE id = ? AND workspace_id = ?
+         AND status <> 'deleted' AND deleted_at IS NULL`,
+      [
+        input.reviewStatus === "approved" ? "ready" : "needs-review",
+        input.updatedAt,
+        input.materialId,
+        input.workspaceId,
+      ]
+    );
+    await db.execute(
+      `INSERT INTO preparation_material_review_events
+        (id, workspace_id, material_id, material_revision_id, action, actor,
+         reason_codes_json, detail, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        input.eventId,
+        input.workspaceId,
+        input.materialId,
+        input.revisionId,
+        input.action,
+        input.actor,
+        JSON.stringify((input.qualitySignals ?? []).map((signal) => signal.code)),
+        input.detail ?? null,
+        input.updatedAt,
+      ]
+    );
+    return true;
+  },
+
   async listChunks(revisionId) {
     const db = await getDatabase();
     const rows = await db.select<PreparationMaterialChunkRow[]>(
@@ -300,6 +493,15 @@ export const preparationMaterialExtractionRepository: PreparationMaterialExtract
     return rows.map(mapChunk);
   },
 };
+
+async function getCurrentCandidate(materialId: string) {
+  const db = await getDatabase();
+  const rows = await db.select<ExtractionCandidateRow[]>(
+    `${CURRENT_EXTRACTION_SELECT} AND m.id = ? LIMIT 1`,
+    [materialId]
+  );
+  return rows[0] ? mapCandidate(rows[0]) : undefined;
+}
 
 async function deleteRequestChunks(revisionId: string, requestId: string) {
   const db = await getDatabase();
@@ -324,7 +526,44 @@ function mapCandidate(row: ExtractionCandidateRow): PreparationExtractionCandida
     completedAt: row.completed_at ?? undefined,
     extractedTextRelativePath: row.extracted_text_relative_path ?? undefined,
     metadata: parseMetadata(row.extraction_metadata),
+    reviewStatus: row.review_status,
+    reviewActor: row.review_actor ?? undefined,
+    reviewUpdatedAt: row.review_updated_at ?? undefined,
+    qualitySignals: parseQualitySignals(row.quality_signals_json),
+    derivedFromRevisionId: row.derived_from_revision_id ?? undefined,
   };
+}
+
+function parseQualitySignals(value: string): PreparationMaterialQualitySignal[] {
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .map((raw): PreparationMaterialQualitySignal | undefined => {
+        if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
+        const signal = raw as Record<string, unknown>;
+        if (
+          typeof signal.code !== "string" ||
+          typeof signal.detail !== "string" ||
+          (signal.source !== "runtime" && signal.source !== "model")
+        ) {
+          return undefined;
+        }
+        return {
+          code: signal.code,
+          detail: signal.detail,
+          confidence:
+            typeof signal.confidence === "number"
+              ? signal.confidence
+              : undefined,
+          page: typeof signal.page === "number" ? signal.page : undefined,
+          source: signal.source as PreparationMaterialQualitySignal["source"],
+        };
+      })
+      .filter((signal): signal is PreparationMaterialQualitySignal => Boolean(signal));
+  } catch {
+    return [];
+  }
 }
 
 function parseMetadata(value: string | null): PreparationExtractionMetadata | undefined {

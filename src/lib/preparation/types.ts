@@ -104,6 +104,21 @@ export type PreparationMaterialRevisionStatus =
   | "unsupported"
   | "failed";
 
+export type PreparationMaterialReviewStatus =
+  | "unreviewed"
+  | "needs-review"
+  | "approved";
+
+export type PreparationMaterialReviewActor = "runtime" | "model" | "user";
+
+export interface PreparationMaterialQualitySignal {
+  code: string;
+  detail: string;
+  confidence?: number;
+  page?: number;
+  source: "runtime" | "model";
+}
+
 export interface PreparationMaterialRevision {
   id: string;
   materialId: string;
@@ -114,6 +129,11 @@ export interface PreparationMaterialRevision {
   extractionMetadata?: string;
   extractionRequestId?: string;
   extractionStartedAt?: number;
+  reviewStatus?: PreparationMaterialReviewStatus;
+  reviewActor?: PreparationMaterialReviewActor;
+  reviewUpdatedAt?: number;
+  qualitySignals?: PreparationMaterialQualitySignal[];
+  derivedFromRevisionId?: string;
   createdAt: number;
   completedAt?: number;
 }

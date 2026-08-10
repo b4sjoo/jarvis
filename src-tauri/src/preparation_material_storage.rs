@@ -2,6 +2,7 @@ use crate::preparation_storage::{
     app_data_path, path_to_relative_string, preparation_relative_root, reject_symlink,
     validate_preparation_identifier, validate_storage_token,
 };
+use base64::{engine::general_purpose, Engine as _};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::fs::{self, File, OpenOptions};
@@ -19,6 +20,9 @@ const DOCX_MAX_ENTRIES: usize = 512;
 const DOCX_MAX_UNCOMPRESSED_BYTES: u64 = 100 * 1024 * 1024;
 const DOCX_CONTENT_TYPES_MAX_BYTES: u64 = 1024 * 1024;
 const COPY_BUFFER_BYTES: usize = 64 * 1024;
+const VISUAL_MAX_PAGES: usize = 8;
+const VISUAL_MAX_DIMENSION: usize = 1_600;
+const VISUAL_MAX_BASE64_CHARS: usize = 24 * 1024 * 1024;
 const DOCX_MIME_TYPE: &str =
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
 const DOCX_MAIN_CONTENT_TYPE: &str =
@@ -39,6 +43,31 @@ pub struct ImportedPreparationMaterialFile {
 #[serde(rename_all = "camelCase")]
 pub struct StagedPreparationMaterialDeletion {
     token: Option<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PreparationMaterialImagePayload {
+    base64: String,
+    media_type: String,
+    size_bytes: u64,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PreparationMaterialVisualPage {
+    base64: String,
+    media_type: String,
+    page_number: usize,
+    page_count: usize,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PreparationMaterialVisualPayload {
+    material_kind: String,
+    page_count: usize,
+    pages: Vec<PreparationMaterialVisualPage>,
 }
 
 #[derive(Clone, Copy)]
@@ -127,6 +156,193 @@ pub fn commit_preparation_material_storage_delete(
     fs::remove_dir_all(&trash)
         .map_err(|error| format!("Failed to commit material deletion: {error}"))?;
     Ok(true)
+}
+
+#[tauri::command]
+pub fn read_preparation_material_image(
+    app: AppHandle,
+    workspace_kind: String,
+    workspace_id: String,
+    material_id: String,
+) -> Result<PreparationMaterialImagePayload, String> {
+    validate_preparation_identifier(&material_id, "material id")?;
+    let relative_root = preparation_relative_root(&workspace_kind, &workspace_id)?;
+    let root = app_data_path(&app, &relative_root)?;
+    let material_root = root.join("materials").join(&material_id);
+    reject_symlink(&material_root)?;
+    if !material_root.is_dir() {
+        return Err("Preparation image material was not found.".to_string());
+    }
+
+    let candidates = [
+        ("original.png", "image/png"),
+        ("original.jpg", "image/jpeg"),
+        ("original.heic", "image/heic"),
+    ];
+    for (file_name, media_type) in candidates {
+        let path = material_root.join(file_name);
+        if !path.exists() {
+            continue;
+        }
+        reject_symlink(&path)?;
+        let metadata = fs::metadata(&path)
+            .map_err(|error| format!("Failed to inspect preparation image: {error}"))?;
+        if !metadata.is_file() || metadata.len() > IMAGE_MAX_BYTES {
+            return Err("Preparation image is not a supported regular file.".to_string());
+        }
+        let bytes = fs::read(&path)
+            .map_err(|error| format!("Failed to read preparation image: {error}"))?;
+        return Ok(PreparationMaterialImagePayload {
+            base64: general_purpose::STANDARD.encode(bytes),
+            media_type: media_type.to_string(),
+            size_bytes: metadata.len(),
+        });
+    }
+
+    Err("Preparation material is not a supported image.".to_string())
+}
+
+#[tauri::command]
+pub fn read_preparation_material_visuals(
+    app: AppHandle,
+    workspace_kind: String,
+    workspace_id: String,
+    material_id: String,
+    requested_pages: Option<Vec<usize>>,
+    max_pages: Option<usize>,
+) -> Result<PreparationMaterialVisualPayload, String> {
+    validate_preparation_identifier(&material_id, "material id")?;
+    let relative_root = preparation_relative_root(&workspace_kind, &workspace_id)?;
+    let root = app_data_path(&app, &relative_root)?;
+    let material_root = root.join("materials").join(&material_id);
+    reject_symlink(&material_root)?;
+    if !material_root.is_dir() {
+        return Err("Preparation material was not found.".to_string());
+    }
+
+    for (file_name, media_type) in [
+        ("original.png", "image/png"),
+        ("original.jpg", "image/jpeg"),
+        ("original.heic", "image/heic"),
+    ] {
+        let path = material_root.join(file_name);
+        if !path.exists() {
+            continue;
+        }
+        reject_symlink(&path)?;
+        let metadata = fs::metadata(&path)
+            .map_err(|error| format!("Failed to inspect preparation image: {error}"))?;
+        if !metadata.is_file() || metadata.len() > IMAGE_MAX_BYTES {
+            return Err("Preparation image is not a supported regular file.".to_string());
+        }
+        let bytes = fs::read(&path)
+            .map_err(|error| format!("Failed to read preparation image: {error}"))?;
+        let base64 = general_purpose::STANDARD.encode(bytes);
+        if base64.len() > VISUAL_MAX_BASE64_CHARS {
+            return Err("Preparation image exceeds the visual request budget.".to_string());
+        }
+        return Ok(PreparationMaterialVisualPayload {
+            material_kind: "image".to_string(),
+            page_count: 1,
+            pages: vec![PreparationMaterialVisualPage {
+                base64,
+                media_type: media_type.to_string(),
+                page_number: 1,
+                page_count: 1,
+            }],
+        });
+    }
+
+    let pdf_path = material_root.join("original.pdf");
+    if !pdf_path.exists() {
+        return Err("Preparation material has no supported visual representation.".to_string());
+    }
+    reject_symlink(&pdf_path)?;
+    let metadata = fs::metadata(&pdf_path)
+        .map_err(|error| format!("Failed to inspect preparation PDF: {error}"))?;
+    if !metadata.is_file() || metadata.len() > PDF_MAX_BYTES {
+        return Err("Preparation PDF is not a supported regular file.".to_string());
+    }
+
+    let page_limit = max_pages
+        .unwrap_or(VISUAL_MAX_PAGES)
+        .clamp(1, VISUAL_MAX_PAGES);
+    let requested = normalize_requested_pages(requested_pages.unwrap_or_default(), page_limit);
+    let first_page = requested.first().copied().unwrap_or(1);
+    let first = crate::preparation_ocr::render_pdf_page(
+        &pdf_path,
+        first_page.saturating_sub(1),
+        VISUAL_MAX_DIMENSION,
+    )?;
+    let page_count = first.page_count;
+    let selected_pages = if requested.is_empty() {
+        select_balanced_pages(page_count, page_limit)
+    } else {
+        requested
+            .into_iter()
+            .filter(|page| *page <= page_count)
+            .take(page_limit)
+            .collect::<Vec<_>>()
+    };
+    if selected_pages.is_empty() {
+        return Err("Requested PDF pages are outside the document range.".to_string());
+    }
+
+    let mut total_chars = 0_usize;
+    let mut pages = Vec::with_capacity(selected_pages.len());
+    for page_number in selected_pages {
+        let rendered = if page_number == first.page_number {
+            first.clone()
+        } else {
+            crate::preparation_ocr::render_pdf_page(
+                &pdf_path,
+                page_number - 1,
+                VISUAL_MAX_DIMENSION,
+            )?
+        };
+        total_chars = total_chars.saturating_add(rendered.base64.len());
+        if total_chars > VISUAL_MAX_BASE64_CHARS {
+            return Err("Selected PDF pages exceed the visual request budget.".to_string());
+        }
+        pages.push(PreparationMaterialVisualPage {
+            base64: rendered.base64,
+            media_type: rendered.media_type,
+            page_number: rendered.page_number,
+            page_count: rendered.page_count,
+        });
+    }
+
+    Ok(PreparationMaterialVisualPayload {
+        material_kind: "pdf".to_string(),
+        page_count,
+        pages,
+    })
+}
+
+fn normalize_requested_pages(mut pages: Vec<usize>, limit: usize) -> Vec<usize> {
+    pages.retain(|page| *page > 0);
+    pages.sort_unstable();
+    pages.dedup();
+    pages.truncate(limit.clamp(1, VISUAL_MAX_PAGES));
+    pages
+}
+
+fn select_balanced_pages(page_count: usize, limit: usize) -> Vec<usize> {
+    if page_count == 0 || limit == 0 {
+        return Vec::new();
+    }
+    if page_count <= limit {
+        return (1..=page_count).collect();
+    }
+    if limit == 1 {
+        return vec![1];
+    }
+    let mut pages = (0..limit)
+        .map(|index| 1 + index * (page_count - 1) / (limit - 1))
+        .collect::<Vec<_>>();
+    pages.sort_unstable();
+    pages.dedup();
+    pages
 }
 
 fn import_material_at_root(
@@ -565,6 +781,24 @@ mod tests {
 
         assert!(detect_material_format(&docx, fs::metadata(&docx).unwrap().len()).is_err());
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn selects_bounded_pdf_pages_with_first_and_last_coverage() {
+        assert_eq!(select_balanced_pages(3, 8), vec![1, 2, 3]);
+        assert_eq!(select_balanced_pages(20, 1), vec![1]);
+        let selected = select_balanced_pages(20, 8);
+        assert_eq!(selected.first(), Some(&1));
+        assert_eq!(selected.last(), Some(&20));
+        assert_eq!(selected.len(), 8);
+    }
+
+    #[test]
+    fn normalizes_explicit_pdf_pages_to_the_visual_budget() {
+        assert_eq!(
+            normalize_requested_pages(vec![0, 4, 2, 4, 9, 1], 3),
+            vec![1, 2, 4]
+        );
     }
 
     #[test]
