@@ -9,9 +9,19 @@ import {
 } from "../src/lib/meeting/advisor-evidence-packet.js";
 import { detectPersonalEvidenceRequirement } from "../src/lib/meeting/personal-evidence-guardrail.js";
 import { buildActiveMeetingTask } from "../src/lib/meeting/active-meeting-task.js";
-import type { ActiveInterviewParent } from "../src/lib/meeting/types.js";
+import type {
+  ActiveInterviewParent,
+  InterviewSessionBrief,
+} from "../src/lib/meeting/types.js";
 
-test("keeps raw Brief text out of current-question evidence", () => {
+test("ignores removed legacy Brief text fields", () => {
+  const legacyBrief = {
+    targetCompany: "Example",
+    companyLocked: true,
+    interviewTypes: ["coding"],
+    focusAreas: "Coding and system design",
+    notes: "I am available to start on September 1.",
+  } as InterviewSessionBrief & { focusAreas: string; notes: string };
   const packet = buildAdvisorEvidencePacket({
     currentQuestion: {
       text: "Implement a stack using two queues.",
@@ -20,21 +30,15 @@ test("keeps raw Brief text out of current-question evidence", () => {
       logicalQuestionUnitId: "lqu-question",
       revision: 2,
     },
-    interviewSessionBrief: {
-      targetCompany: "Example",
-      companyLocked: true,
-      interviewTypes: ["coding"],
-      focusAreas: "Coding and system design",
-      notes: "I am available to start on September 1.",
-    },
+    interviewSessionBrief: legacyBrief,
   });
 
   assert.equal(
     getCurrentQuestionEvidenceText(packet),
     "Implement a stack using two queues."
   );
-  assert.equal(packet.preparation.guidanceHints.length, 2);
-  assert.equal(packet.preparation.rawGuidanceRejectedAsFactCount, 2);
+  assert.equal(packet.preparation.guidanceHints.length, 0);
+  assert.equal(packet.preparation.rawGuidanceRejectedAsFactCount, 0);
   const personalEvidence = detectPersonalEvidenceRequirement({
     questionText: getCurrentQuestionEvidenceText(packet),
     questionType: "coding",
@@ -142,6 +146,12 @@ test("builds a bounded continuity capsule without prior generated answers", () =
 
 test("records evidence roles without copying private Brief text", () => {
   const privateNote = "Private availability is September 1.";
+  const legacyBrief = {
+    targetCompany: "Example",
+    companyLocked: true,
+    interviewTypes: ["mixed"],
+    notes: privateNote,
+  } as InterviewSessionBrief & { notes: string };
   const packet = buildAdvisorEvidencePacket({
     currentQuestion: {
       text: "What is consistent hashing?",
@@ -149,20 +159,14 @@ test("records evidence roles without copying private Brief text", () => {
       sourceTurnIds: [],
       screenObservationId: "screen-a",
     },
-    interviewSessionBrief: {
-      targetCompany: "Example",
-      companyLocked: true,
-      interviewTypes: ["mixed"],
-      focusAreas: "",
-      notes: privateNote,
-    },
+    interviewSessionBrief: legacyBrief,
   });
   const query = buildAdvisorEvidenceRetrievalQuery(packet, "screen-task");
   const trace = formatAdvisorEvidencePacketForTrace(packet, query);
 
   assert.equal(trace.currentQuestionEvidenceSource, "screen-preflight");
   assert.equal(trace.currentQuestionScreenObservationId, "screen-a");
-  assert.equal(trace.rejectedRawBriefFactAnchorCount, 1);
+  assert.equal(trace.rejectedRawBriefFactAnchorCount, 0);
   assert.equal(JSON.stringify(trace).includes(privateNote), false);
 });
 

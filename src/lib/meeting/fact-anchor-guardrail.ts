@@ -395,7 +395,7 @@ export function formatFactAnchorDecisionForPrompt(
       ? `Reason: ${decision.missingAnchorReason}`
       : undefined,
     decision.personalEvidence.requirement === "personal-logistics"
-      ? "Personal status/logistics rule: use only the listed profile-memory or confirmed-Me anchors. Raw Interview Brief focus areas and notes are guidance only. Never borrow project/story facts or infer recovery/status. If the needed fact is absent, ask for it or stay explicitly fact-neutral."
+      ? "Personal status/logistics rule: use only the listed profile-memory or confirmed-Me anchors. Manual company/type defaults are not fact evidence. Never borrow project/story facts or infer recovery/status. If the needed fact is absent, ask for it or stay explicitly fact-neutral."
       : undefined,
     decision.personalEvidence.enforced
       ? "Classifier-independent rule: enforce Action even if the question type is coding, field knowledge, system design, or unknown. Question wording and suggested alternatives are not evidence."
@@ -548,7 +548,7 @@ function buildPersonalStatusFactDecision({
     supportedAnchorTitles: [],
     action: "ask-clarification",
     missingAnchorReason:
-      "No relevant profile-memory or confirmed-Me fact supports this personal status/logistics answer. Raw Interview Brief focus areas and notes are guidance only.",
+      "No relevant profile-memory or confirmed-Me fact supports this personal status/logistics answer. Manual company/type defaults are not fact evidence.",
     personalEvidence,
     selectedPersonalEvidenceSources: [],
     claimPredicateFamily: "personal-status",

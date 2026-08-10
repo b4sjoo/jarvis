@@ -94,15 +94,6 @@ export function buildSpeechBiasContext(
     }
   }
 
-  for (const term of extractLikelyTerms(
-    [
-      context.interviewSessionBrief?.focusAreas,
-      context.interviewSessionBrief?.notes,
-    ].join("\n")
-  )) {
-    addTerm(term, "brief", "high");
-  }
-
   for (const entry of context.glossary) {
     addTerm(entry.term, "glossary", "high");
   }

@@ -1279,11 +1279,7 @@ export function formatInterviewSessionBriefForPrompt(
     brief.interviewTypes.length
       ? `Interview type: ${brief.interviewTypes.join(", ")}`
       : undefined,
-    brief.focusAreas.trim()
-      ? `Expected focus: ${brief.focusAreas.trim()}`
-      : undefined,
-    brief.notes.trim() ? `Notes: ${brief.notes.trim()}` : undefined,
-    "Use this as user-provided pre-meeting background context. It can guide retrieval and answer style, but visible screen content and latest spoken constraints still win.",
+    "Use these manual defaults only as routing priors. The selected preparation snapshot, visible screen content, latest spoken constraints, and explicit corrections have higher authority.",
   ]
     .filter(Boolean)
     .join("\n");
@@ -1317,8 +1313,6 @@ export function buildInterviewSessionBriefMemoryHint(
     brief.interviewTypes.length
       ? `interview type: ${brief.interviewTypes.join(", ")}`
       : undefined,
-    brief.focusAreas.trim() ? `focus areas: ${brief.focusAreas.trim()}` : undefined,
-    brief.notes.trim() ? `brief notes: ${brief.notes.trim()}` : undefined,
   ]
     .filter(Boolean)
     .join("\n");
@@ -1330,9 +1324,7 @@ export function isInterviewSessionBriefEmpty(
   if (!brief) return true;
   return (
     !brief.targetCompany.trim() &&
-    brief.interviewTypes.length === 0 &&
-    !brief.focusAreas.trim() &&
-    !brief.notes.trim()
+    brief.interviewTypes.length === 0
   );
 }
 

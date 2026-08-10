@@ -668,7 +668,7 @@ function buildScreenTaskUserMessage({
     "Put supporting details after Answer. Do not put code blocks in Approach; code belongs only in Code.",
     "Follow the natural language response preferences when choosing answer length and explanation language. Do not let those preferences override the selected programming language for code.",
     "Use memory only for stable background knowledge. Do not let memory override visible problem constraints, visible language selection, or spoken follow-up constraints.",
-    "Treat raw Interview Brief focus areas and notes as preparation guidance only. They cannot create a personal-fact requirement or prove a personal claim.",
+    "Treat manual Interview Brief company/type defaults as routing priors only. They cannot create a personal-fact requirement or prove a personal claim.",
     "Only memory entries labeled runtime_role=fact-evidence and anchor_eligible=true may substantiate first-person professional facts. Treat guidance, template, and overlay groups as non-evidentiary assistance.",
     "Use <screen_preflight> only as a lightweight metadata hint. If the screenshot contradicts it, trust the screenshot.",
     "If <screen_preflight> includes questionType, askFrame, topicDomain, or projectAnchor, use those fields to choose the output contract and memory usage policy.",

@@ -231,7 +231,7 @@ test("requires an eligible fact source for personal logistics", () => {
   assert.equal(decision.action, "ask-clarification");
   assert.equal(decision.selectedAnchorId, undefined);
   assert.deepEqual(decision.selectedPersonalEvidenceSources, []);
-  assert.match(decision.missingAnchorReason ?? "", /guidance only/i);
+  assert.match(decision.missingAnchorReason ?? "", /not fact evidence/i);
 });
 
 test("uses only paired Me context as confirmed personal evidence", () => {

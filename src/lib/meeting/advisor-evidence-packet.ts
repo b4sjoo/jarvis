@@ -45,14 +45,6 @@ export function buildAdvisorEvidencePacket(
     ...(input.preparationRuntimeBrief?.compactNotes ?? []).map((value) =>
       boundText(value, MAX_GUIDANCE_HINT_CHARS)
     ),
-    boundText(
-      input.interviewSessionBrief?.focusAreas,
-      MAX_GUIDANCE_HINT_CHARS
-    ),
-    boundText(
-      input.interviewSessionBrief?.notes,
-      MAX_GUIDANCE_HINT_CHARS
-    ),
   ]);
   const targetCompany =
     cleanText(input.preparationRuntimeBrief?.company) ??

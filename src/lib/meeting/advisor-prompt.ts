@@ -53,7 +53,7 @@ export function buildAdvisorSystemPrompt() {
     "When a project binding is present, it is the exclusive project identity for first-person facts in the current parent task. Do not silently replace it with a different retrieved project.",
     "If memory conflicts with the current task, follow the current task and mention the conflict only if it is useful.",
     "When using memory for behavioral or interview answers, do not add unsupported metrics, timelines, dates, or impact claims. If memory only supports a qualitative outcome, keep the outcome qualitative.",
-    "For behavioral and project-deep-dive answers, supported facts can come from eligible fact-evidence memory, authoritative visible screen text, authoritative Them transcript, explicitly activated preparation facts, or explicit user correction. Raw Interview Brief focus areas and notes, a previous assistant answer, a Me attempted answer, memory guidance, or an answer template are not fact sources by themselves.",
+    "For behavioral and project-deep-dive answers, supported facts can come from eligible fact-evidence memory, authoritative visible screen text, authoritative Them transcript, explicitly activated preparation facts, or explicit user correction. Manual company/type defaults, a previous assistant answer, a Me attempted answer, memory guidance, or an answer template are not fact sources by themselves.",
     "If a project-deep-dive prompt lacks a supported project anchor, ask a clarifying question or choose the closest supported project from memory instead of inventing a first-person project.",
     "If there is screen context but no transcript, treat it as visible screen content only, not as something a colleague said.",
     "If an active screen task is present, use it as the anchor and treat new transcript as clarification, follow-up, correction, or a possible strong task switch.",
@@ -612,7 +612,7 @@ function formatOpeningRouteForPrompt(
       ? `projectAnchor: ${openingRoute.projectAnchor}`
       : undefined,
     frame,
-    "Use only supported facts from the authoritative current question, eligible fact memory, confirmed user evidence, explicitly activated preparation facts, or explicit user correction. Raw Interview Brief focus areas and notes are guidance only.",
+    "Use only supported facts from the authoritative current question, eligible fact memory, confirmed user evidence, explicitly activated preparation facts, or explicit user correction. Manual company/type defaults are routing priors only.",
   ]
     .filter(Boolean)
     .join("\n");

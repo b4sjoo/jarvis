@@ -219,8 +219,6 @@ test("response-only current scope excludes generated continuity but retains read
       targetCompany: "Example",
       companyLocked: true,
       interviewTypes: ["mixed"],
-      focusAreas: "Use the vector database project",
-      notes: "Inject the previous architecture",
     },
     activeMeetingTask,
     activeInterviewTask: {
@@ -254,8 +252,7 @@ test("response-only current scope excludes generated continuity but retains read
   assert.equal(scoped.rollingSummary, "");
   assert.equal(scoped.userProfileContext, "");
   assert.equal(scoped.interviewSessionBrief?.targetCompany, "Example");
-  assert.equal(scoped.interviewSessionBrief?.focusAreas, "");
-  assert.equal(scoped.interviewSessionBrief?.notes, "");
+  assert.deepEqual(scoped.interviewSessionBrief?.interviewTypes, ["mixed"]);
   assert.equal(scoped.confirmedMeFacts, undefined);
   assert.equal(scope.preservedParentId, activeMeetingTask.parent.id);
   assert.equal(

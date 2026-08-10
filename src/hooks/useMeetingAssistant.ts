@@ -537,7 +537,6 @@ import {
   createResponseOnlyTaskScope,
   formatResponseOnlyTaskScopeForTrace,
   resolveResponseOnlyContextReadScope,
-  sanitizeInterviewBriefForResponseOnly,
   toAdvisorGeneratedContinuityEvidence,
   classifyInterviewTransitionTurn,
   reconcileInterviewTransitionTurnWithPrimaryAsk,
@@ -708,8 +707,6 @@ const DEFAULT_INTERVIEW_SESSION_BRIEF: InterviewSessionBrief = {
   targetCompanyNormalized: undefined,
   companyLocked: true,
   interviewTypes: [],
-  focusAreas: "",
-  notes: "",
 };
 
 const INITIAL_PREPARATION_RUNTIME_CONTEXT =
@@ -882,8 +879,6 @@ function normalizeInterviewSessionBrief(
         ? parsed.companyLocked
         : DEFAULT_INTERVIEW_SESSION_BRIEF.companyLocked,
     interviewTypes: normalizedInterviewTypes,
-    focusAreas: typeof parsed.focusAreas === "string" ? parsed.focusAreas : "",
-    notes: typeof parsed.notes === "string" ? parsed.notes : "",
     updatedAt:
       typeof parsed.updatedAt === "number" ? parsed.updatedAt : Date.now(),
   };
@@ -20094,13 +20089,8 @@ export function useMeetingAssistant() {
             memoryContext: memoryContext?.contextText,
             advisorEvidencePacket: screenEvidencePacket,
             interviewSessionBrief:
-              screenResponseOnlyTaskScope
-                ? sanitizeInterviewBriefForResponseOnly(
-                    screenPreparationRuntime.effectiveInterviewBrief ??
-                      screenExecutionContextState.interviewSessionBrief
-                  )
-                : screenPreparationRuntime.effectiveInterviewBrief ??
-                  screenExecutionContextState.interviewSessionBrief,
+              screenPreparationRuntime.effectiveInterviewBrief ??
+              screenExecutionContextState.interviewSessionBrief,
             interviewSessionContext:
               screenPreparedCompanyContext
                 ? {

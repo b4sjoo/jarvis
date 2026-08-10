@@ -137,8 +137,6 @@ export function resolvePreparationRuntimeReinforcement(
             preparedTypes.length > 0
               ? preparedTypes
               : [...fallbackTypes],
-          focusAreas: fallbackBrief?.focusAreas ?? "",
-          notes: fallbackBrief?.notes ?? "",
           updatedAt: fallbackBrief?.updatedAt,
         }
       : undefined;

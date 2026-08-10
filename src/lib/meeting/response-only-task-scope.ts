@@ -3,7 +3,6 @@ import type {
   AdvisorBoundedParentReadContext,
   AdvisorPromptContext,
   InterviewPlaybookPhase,
-  InterviewSessionBrief,
   InterviewTaskRelation,
 } from "./types.js";
 import { areCompatibleParentContinuityTypes } from "./task-taxonomy.js";
@@ -129,9 +128,7 @@ export function applyResponseOnlyTaskScopeToPromptContext(
     responseOnlyParentReadContext: scope.parentReadContext
       ? cloneParentReadContext(scope.parentReadContext)
       : undefined,
-    interviewSessionBrief: sanitizeInterviewBriefForResponseOnly(
-      context.interviewSessionBrief
-    ),
+    interviewSessionBrief: context.interviewSessionBrief,
     activeScreenTask: undefined,
     activeInterviewTask: undefined,
     activeMeetingTask: undefined,
@@ -220,17 +217,6 @@ export function formatBoundedParentReadContextForPrompt(
   ]
     .filter(Boolean)
     .join("\n");
-}
-
-export function sanitizeInterviewBriefForResponseOnly(
-  brief: InterviewSessionBrief | undefined
-): InterviewSessionBrief | undefined {
-  if (!brief) return undefined;
-  return {
-    ...brief,
-    focusAreas: "",
-    notes: "",
-  };
 }
 
 function buildBoundedParentReadContext(

@@ -956,8 +956,6 @@ export interface InterviewSessionBrief {
   targetCompanyNormalized?: string;
   companyLocked: boolean;
   interviewTypes: InterviewBriefType[];
-  focusAreas: string;
-  notes: string;
   updatedAt?: number;
 }
 

@@ -330,8 +330,6 @@ const EMPTY_INTERVIEW_SESSION_BRIEF: InterviewSessionBrief = {
   targetCompanyNormalized: undefined,
   companyLocked: true,
   interviewTypes: [],
-  focusAreas: "",
-  notes: "",
 };
 
 const interviewBriefTypeOptions: Array<{
@@ -3823,38 +3821,10 @@ const InterviewSessionBriefPanel = ({
             />
           </div>
 
-          <div>
-            <Label className="mb-1.5 block text-[10px] font-medium uppercase text-muted-foreground">
-              Focus areas
-            </Label>
-            <Textarea
-              value={editableBrief.focusAreas}
-              placeholder="Leadership principles, likely topics, system design themes..."
-              className="min-h-16 resize-none text-xs"
-              onChange={(event) => {
-                updateBrief({ focusAreas: event.currentTarget.value });
-              }}
-            />
-          </div>
-
-          <div>
-            <Label className="mb-1.5 block text-[10px] font-medium uppercase text-muted-foreground">
-              Notes
-            </Label>
-            <Textarea
-              value={editableBrief.notes}
-              placeholder="Anything known before the call: interviewer hints, role scope, expected round length..."
-              className="min-h-20 resize-none text-xs"
-              onChange={(event) => {
-                updateBrief({ notes: event.currentTarget.value });
-              }}
-            />
-          </div>
-
           <div className="flex items-center justify-between gap-2">
             <div className="min-w-0 text-[10px] text-muted-foreground">
-              Used as session background context, independent from software
-              configuration.
+              Manual company and type defaults. Prepared context comes from
+              the selected snapshot.
             </div>
             <Button
               size="sm"
@@ -8376,23 +8346,19 @@ function getEditableInterviewSessionBrief(
     ...brief,
     interviewTypes: brief?.interviewTypes ?? [],
     companyLocked: brief?.companyLocked ?? true,
-    focusAreas: brief?.focusAreas ?? "",
-    notes: brief?.notes ?? "",
   };
 }
 
 function isEditableInterviewSessionBriefEmpty(brief: InterviewSessionBrief) {
   return (
     !brief.targetCompany.trim() &&
-    brief.interviewTypes.length === 0 &&
-    !brief.focusAreas.trim() &&
-    !brief.notes.trim()
+    brief.interviewTypes.length === 0
   );
 }
 
 function formatInterviewBriefSummary(brief: InterviewSessionBrief) {
   if (isEditableInterviewSessionBriefEmpty(brief)) {
-    return "No pre-meeting background context";
+    return "No manual interview defaults";
   }
 
   const parts = [
@@ -8401,7 +8367,6 @@ function formatInterviewBriefSummary(brief: InterviewSessionBrief) {
     brief.interviewTypes.length
       ? brief.interviewTypes.map(formatInterviewBriefType).join(", ")
       : undefined,
-    brief.focusAreas.trim() || brief.notes.trim() || undefined,
   ].filter(Boolean);
 
   return parts.join(" / ");

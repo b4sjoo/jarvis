@@ -20,8 +20,6 @@ test("prepared company and round types outrank legacy brief defaults", () => {
     targetCompanyNormalized: "legacy-company",
     companyLocked: false,
     interviewTypes: ["behavioral"],
-    focusAreas: "legacy focus",
-    notes: "legacy note",
   });
 
   assert.equal(result.enabled, true);
@@ -31,7 +29,10 @@ test("prepared company and round types outrank legacy brief defaults", () => {
     "coding",
     "ai-ml-system-design",
   ]);
-  assert.equal(result.effectiveInterviewBrief?.focusAreas, "legacy focus");
+  assert.equal(
+    "focusAreas" in (result.effectiveInterviewBrief ?? {}),
+    false
+  );
   assert.equal(result.programmingLanguage?.value, "Java");
 });
 
@@ -42,8 +43,6 @@ test("disabled and neutral contexts expose no prepared consumer values", () => {
     targetCompany: "Manual",
     companyLocked: true,
     interviewTypes: ["behavioral"],
-    focusAreas: "",
-    notes: "",
   });
 
   assert.equal(result.enabled, false);

@@ -128,8 +128,6 @@ test("does not let same-company transcript evidence downgrade a brief lock", () 
       targetCompany: "Amazon",
       companyLocked: true,
       interviewTypes: ["mixed"],
-      focusAreas: "",
-      notes: "",
       updatedAt: 5_000,
     },
     5_000
@@ -159,8 +157,6 @@ test("does not let screen evidence replace a different locked company", () => {
       targetCompany: "Microsoft",
       companyLocked: true,
       interviewTypes: ["mixed"],
-      focusAreas: "",
-      notes: "",
       updatedAt: 5_000,
     },
     5_000
