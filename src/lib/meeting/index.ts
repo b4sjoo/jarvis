@@ -46,6 +46,7 @@ export * from "./playbook-phase";
 export * from "./playbook-phase-history";
 export * from "./parent-admission";
 export * from "./programming-language";
+export * from "./preparation-runtime-context";
 export * from "./interview-session-context";
 export * from "./manual-question-type-correction";
 export * from "./interview-task-continuity";

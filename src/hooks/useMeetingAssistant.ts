@@ -22,6 +22,7 @@ import {
   type MemoryTopicDomain,
   type MemoryUseCase,
 } from "@/lib/memory";
+import { interviewPreparationSnapshotService } from "@/lib/preparation";
 import {
   AdvisorEngine,
   buildAdvisorEvidencePacket,
@@ -127,6 +128,7 @@ import {
   detectOpeningTaskRoute,
   OpeningRouteContext,
   ParentQuestionType,
+  PreparationRuntimeContext,
   ParsedMeetingAnswer,
   QuestionEvaluationIdentity,
   QuestionHumanEvaluation,
@@ -171,6 +173,7 @@ import {
   captureScreenObservation,
   createInterviewSessionContextFromBrief,
   createMeetingId,
+  createNeutralPreparationRuntimeContext,
   createAnswerGenerationLease,
   createRuntimeTypeRepairOutputAuthority,
   decideRefreshAuthority,
@@ -256,8 +259,10 @@ import {
   readCriticalMomentEvaluations,
   buildCriticalMomentGroundTruthSubject,
   readMeetingEvalTraceMetadata,
+  loadPreparationRuntimeContext,
   resolveTraceMemoryEvaluationSnapshot,
   resolveSuggestionQuestionLineage,
+  toPreparationRuntimePresentation,
   resolveActiveMeetingTaskIdentity,
   buildSpeechBiasContext,
   formatSpeechBiasPromptForTrace,
@@ -696,12 +701,21 @@ const DEFAULT_INTERVIEW_SESSION_BRIEF: InterviewSessionBrief = {
   notes: "",
 };
 
+const INITIAL_PREPARATION_RUNTIME_CONTEXT =
+  createNeutralPreparationRuntimeContext({
+    meetingSessionId: "meeting-session-not-started",
+    preparationContextRevision: 0,
+  });
+
 const INITIAL_STATE: MeetingAssistantState = {
   status: "idle",
   transcriptTurns: [],
   screenObservations: [],
   interviewSessionBrief: undefined,
   interviewSessionContext: undefined,
+  preparationRuntime: toPreparationRuntimePresentation(
+    INITIAL_PREPARATION_RUNTIME_CONTEXT
+  ),
   latestSuggestion: null,
   latestReliableSuggestion: null,
   partialSuggestion: "",
@@ -2086,6 +2100,62 @@ export function useMeetingAssistant() {
     new MeetingContextManager({
       interviewSessionBrief: initialInterviewSessionBrief,
     })
+  );
+  const preparationRuntimeContextRef = useRef<PreparationRuntimeContext>(
+    createNeutralPreparationRuntimeContext({
+      meetingSessionId: contextManagerRef.current.getState().sessionId,
+      preparationContextRevision: 0,
+    })
+  );
+  const preparationContextRevisionRef = useRef(0);
+  const preparationPinRequestRef = useRef(0);
+  const pinPreparationRuntimeForSession = useCallback(
+    async (meetingSessionId: string) => {
+      const requestId = preparationPinRequestRef.current + 1;
+      preparationPinRequestRef.current = requestId;
+      const preparationContextRevision =
+        preparationContextRevisionRef.current + 1;
+      preparationContextRevisionRef.current = preparationContextRevision;
+      const loadingContext = createNeutralPreparationRuntimeContext({
+        meetingSessionId,
+        preparationContextRevision,
+        loadState: "loading",
+      });
+      preparationRuntimeContextRef.current = loadingContext;
+      setState((previous) => ({
+        ...previous,
+        preparationRuntime:
+          toPreparationRuntimePresentation(loadingContext),
+      }));
+
+      const pinnedContext = await loadPreparationRuntimeContext({
+        meetingSessionId,
+        preparationContextRevision,
+        loader: {
+          readSelection: () =>
+            interviewPreparationSnapshotService.getCurrentContext(),
+          readSelectedSnapshot: () =>
+            interviewPreparationSnapshotService.getCurrentSnapshot(),
+        },
+      });
+      const currentMeetingSessionId =
+        contextManagerRef.current.getState().sessionId;
+      if (
+        preparationPinRequestRef.current !== requestId ||
+        currentMeetingSessionId !== meetingSessionId
+      ) {
+        return { applied: false, context: pinnedContext };
+      }
+
+      preparationRuntimeContextRef.current = pinnedContext;
+      setState((previous) => ({
+        ...previous,
+        preparationRuntime:
+          toPreparationRuntimePresentation(pinnedContext),
+      }));
+      return { applied: true, context: pinnedContext };
+    },
+    []
   );
   const advisorEngineRef = useRef(new AdvisorEngine());
   const traceStoreRef = useRef(new MeetingTraceStore());
@@ -4609,7 +4679,7 @@ export function useMeetingAssistant() {
   );
 
   const resetMeetingRuntimeForNewSession = useCallback(
-    (reason: string) => {
+    async (reason: string) => {
       const runtimeBoundary = advanceRuntimeEpoch(reason);
       const previousContext = contextManagerRef.current.getState();
       const previousTraceCount = traceStoreRef.current
@@ -4696,6 +4766,10 @@ export function useMeetingAssistant() {
         displayTranscriptWindow: undefined,
       }));
 
+      const preparationPin = await pinPreparationRuntimeForSession(
+        contextState.sessionId
+      );
+
       return {
         ...runtimeBoundary,
         reason,
@@ -4707,6 +4781,20 @@ export function useMeetingAssistant() {
         hadActiveMeetingTask: Boolean(previousContext.activeMeetingTask),
         hadActiveScreenTask: Boolean(previousContext.activeScreenTask),
         hadActiveInterviewTask: Boolean(previousContext.activeInterviewTask),
+        meetingSessionId: contextState.sessionId,
+        preparationContextRevision:
+          preparationPin.context.preparationContextRevision,
+        preparationSelectionRevision:
+          preparationPin.context.selectionRevision,
+        preparationRuntimeMode: preparationPin.context.mode,
+        preparationRuntimeLoadState: preparationPin.context.loadState,
+        preparationSnapshotId:
+          preparationPin.context.pinnedSnapshot?.snapshotId,
+        preparationSnapshotVersion:
+          preparationPin.context.pinnedSnapshot?.version,
+        preparationSnapshotContentHash:
+          preparationPin.context.pinnedSnapshot?.contentHash,
+        preparationPinApplied: preparationPin.applied,
         cleared: [
           "transcriptTurns",
           "screenObservations",
@@ -4737,6 +4825,7 @@ export function useMeetingAssistant() {
       clearPendingAnswerCommitTimer,
       clearPendingConfirmationForRuntimeReset,
       clearPendingSentenceCompletionForRuntimeReset,
+      pinPreparationRuntimeForSession,
       revokeAudioDrainAuthorization,
     ]
   );
@@ -5216,7 +5305,7 @@ export function useMeetingAssistant() {
 
   const startSessionRecording = useCallback(async () => {
     try {
-      const resetBoundary = resetMeetingRuntimeForNewSession(
+      const resetBoundary = await resetMeetingRuntimeForNewSession(
         "session-recording-started"
       );
       const contextState = contextManagerRef.current.getState();
@@ -17271,7 +17360,9 @@ export function useMeetingAssistant() {
           }
 
           const resetBoundary = policy.resetContext
-            ? resetMeetingRuntimeForNewSession("meeting-assistant-started")
+            ? await resetMeetingRuntimeForNewSession(
+                "meeting-assistant-started"
+              )
             : undefined;
           if (resetBoundary) {
             sessionRecordingManagerRef.current?.recordRuntimeBoundary(

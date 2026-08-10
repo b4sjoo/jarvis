@@ -1921,6 +1921,7 @@ export interface MeetingAssistantState {
   screenObservations: ScreenObservation[];
   interviewSessionBrief?: InterviewSessionBrief;
   interviewSessionContext?: InterviewSessionContext;
+  preparationRuntime: import("./preparation-runtime-context").PreparationRuntimePresentation;
   activeScreenTask?: ActiveScreenTask;
   activeInterviewTask?: ActiveInterviewParent;
   activeMeetingTask?: ActiveMeetingTask;
