@@ -21,6 +21,7 @@ import MaterialPanel from "./MaterialPanel";
 import ConversationPanel from "./ConversationPanel";
 import ReviewedStatePanel from "./ReviewedStatePanel";
 import SnapshotPanel from "./SnapshotPanel";
+import PostCallReviewPanel from "./PostCallReviewPanel";
 
 export type CaseWorkspaceView =
   | "overview"
@@ -28,7 +29,8 @@ export type CaseWorkspaceView =
   | "materials"
   | "conversations"
   | "reviewed"
-  | "snapshots";
+  | "snapshots"
+  | "post-call";
 
 export const CASE_WORKSPACE_VIEWS: Array<{
   id: CaseWorkspaceView;
@@ -40,6 +42,7 @@ export const CASE_WORKSPACE_VIEWS: Array<{
   { id: "conversations", label: "Conversations" },
   { id: "reviewed", label: "Reviewed state" },
   { id: "snapshots", label: "Snapshots" },
+  { id: "post-call", label: "Post-call" },
 ];
 
 const splitLines = (value: string) =>
@@ -259,7 +262,9 @@ export default function CasesPage({
 
             {view === "snapshots" ? <SnapshotPanel caseId={selectedCase.id} plans={plans} onStartCall={onStartPreparedCall} /> : null}
 
-            {!(["overview", "plans", "materials", "conversations", "reviewed", "snapshots"] as CaseWorkspaceView[]).includes(view) ? <section className="case-future"><ShieldCheck size={22} /><h3>{CASE_WORKSPACE_VIEWS.find((item) => item.id === view)?.label}</h3><p>This surface activates in its dedicated Task 1 slice.</p></section> : null}
+            {view === "post-call" ? <PostCallReviewPanel caseId={selectedCase.id} onRevisionChange={async () => { if (service) setRevision(await service.getCurrentRevision(selectedCase.id)); }} onPlanChange={async () => { if (service) setPlans(await service.listCallPlans(selectedCase.id)); }} /> : null}
+
+            {!(["overview", "plans", "materials", "conversations", "reviewed", "snapshots", "post-call"] as CaseWorkspaceView[]).includes(view) ? <section className="case-future"><ShieldCheck size={22} /><h3>{CASE_WORKSPACE_VIEWS.find((item) => item.id === view)?.label}</h3><p>This surface activates in its dedicated Task 1 slice.</p></section> : null}
           </div>
         </> : <section className="case-route-boundary"><FileText size={26} /><h2>Prepare one call at a time</h2><p>Create a case to establish the state that future calls may use.</p><button type="button" onClick={() => setCaseForm(blankCase())}><Plus size={15} /> Create case</button></section>}
       </main>
