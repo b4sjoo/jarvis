@@ -2,15 +2,19 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::fs::{self, File, OpenOptions};
-use std::io::{Read, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use tauri::{AppHandle, Manager};
 use uuid::Uuid;
+use zip::write::SimpleFileOptions;
+use zip::ZipWriter;
 
 const CALL_RECORDINGS_DIR: &str = "call-session-recordings";
 const STATUS_FILE: &str = "recording-state.json";
 const EVENTS_FILE: &str = "events.jsonl";
 const MANIFEST_FILE: &str = "manifest.json";
+const EXPORTS_DIR: &str = "exports";
 const MAX_EVENT_BYTES: usize = 2 * 1024 * 1024;
 const MAX_SESSION_ID_CHARS: usize = 160;
 
@@ -35,6 +39,15 @@ pub struct CallRecordingStatus {
     pub started_at: u64,
     pub ended_at: Option<u64>,
     pub last_error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CallRecordingSummary {
+    pub status: CallRecordingStatus,
+    pub human_evaluation_count: u64,
+    pub manifest_available: bool,
+    pub integrity_error: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -119,6 +132,39 @@ pub fn list_recoverable_call_recordings(
 ) -> Result<Vec<CallRecordingStatus>, String> {
     let root = recordings_root(&app)?;
     list_recoverable_at_root(&root)
+}
+
+#[tauri::command]
+pub fn list_call_recordings(app: AppHandle) -> Result<Vec<CallRecordingSummary>, String> {
+    let root = recordings_root(&app)?;
+    list_all_at_root(&root)
+}
+
+#[tauri::command]
+pub fn reveal_call_recordings_root(app: AppHandle) -> Result<(), String> {
+    let root = recordings_root(&app)?;
+    fs::create_dir_all(&root)
+        .map_err(|error| format!("Failed to create call recordings directory: {error}"))?;
+    reveal_path(&root, false)
+}
+
+#[tauri::command]
+pub fn reveal_call_recording(app: AppHandle, call_session_id: String) -> Result<(), String> {
+    let root = recordings_root(&app)?;
+    let session_dir = session_dir(&root, &call_session_id)?;
+    reject_symlink(&session_dir)?;
+    if !session_dir.is_dir() {
+        return Err("Call recording does not exist.".to_string());
+    }
+    reveal_path(&session_dir, false)
+}
+
+#[tauri::command]
+pub fn export_call_recording(app: AppHandle, call_session_id: String) -> Result<String, String> {
+    let root = recordings_root(&app)?;
+    let exported = export_at_root(&root, &call_session_id)?;
+    reveal_path(&exported, true)?;
+    Ok(exported.to_string_lossy().to_string())
 }
 
 fn recordings_root(app: &AppHandle) -> Result<PathBuf, String> {
@@ -283,9 +329,7 @@ fn abandon_at_root(
     let mut status = read_status(&session_dir)?;
     if !matches!(
         status.state,
-        CallRecordingState::Open
-            | CallRecordingState::Closing
-            | CallRecordingState::CloseFailed
+        CallRecordingState::Open | CallRecordingState::Closing | CallRecordingState::CloseFailed
     ) {
         return Err("Call recording is not recoverable.".to_string());
     }
@@ -295,9 +339,7 @@ fn abandon_at_root(
     Ok(status)
 }
 
-fn list_recoverable_at_root(
-    recordings_root: &Path,
-) -> Result<Vec<CallRecordingStatus>, String> {
+fn list_recoverable_at_root(recordings_root: &Path) -> Result<Vec<CallRecordingStatus>, String> {
     reject_symlink(recordings_root)?;
     if !recordings_root.exists() {
         return Ok(Vec::new());
@@ -328,6 +370,141 @@ fn list_recoverable_at_root(
     Ok(recoverable)
 }
 
+fn list_all_at_root(recordings_root: &Path) -> Result<Vec<CallRecordingSummary>, String> {
+    reject_symlink(recordings_root)?;
+    if !recordings_root.exists() {
+        return Ok(Vec::new());
+    }
+    let mut recordings = Vec::new();
+    for entry in fs::read_dir(recordings_root)
+        .map_err(|error| format!("Failed to read call recordings directory: {error}"))?
+    {
+        let entry = entry.map_err(|error| format!("Failed to inspect call recording: {error}"))?;
+        let path = entry.path();
+        reject_symlink(&path)?;
+        if !path.is_dir() || entry.file_name() == EXPORTS_DIR {
+            continue;
+        }
+        let Ok(status) = read_status(&path) else {
+            continue;
+        };
+        let (human_evaluation_count, integrity_error) =
+            match count_event_kind(&path.join(EVENTS_FILE), "human-evaluation") {
+                Ok(count) => (count, None),
+                Err(error) => (0, Some(error)),
+            };
+        recordings.push(CallRecordingSummary {
+            status,
+            human_evaluation_count,
+            manifest_available: path.join(MANIFEST_FILE).is_file(),
+            integrity_error,
+        });
+    }
+    recordings.sort_by(|left, right| right.status.started_at.cmp(&left.status.started_at));
+    Ok(recordings)
+}
+
+fn count_event_kind(path: &Path, target_kind: &str) -> Result<u64, String> {
+    reject_symlink(path)?;
+    let file = File::open(path)
+        .map_err(|error| format!("Failed to inspect call recording events: {error}"))?;
+    let mut count = 0_u64;
+    for line in BufReader::new(file).lines() {
+        let line =
+            line.map_err(|error| format!("Failed to read call recording events: {error}"))?;
+        if line.trim().is_empty() {
+            continue;
+        }
+        let event: CallRecordingEvent = serde_json::from_str(&line)
+            .map_err(|error| format!("Invalid call recording event: {error}"))?;
+        if event.kind == target_kind {
+            count = count.saturating_add(1);
+        }
+    }
+    Ok(count)
+}
+
+fn export_at_root(recordings_root: &Path, call_session_id: &str) -> Result<PathBuf, String> {
+    validate_session_id(call_session_id)?;
+    reject_symlink(recordings_root)?;
+    let session_dir = session_dir(recordings_root, call_session_id)?;
+    reject_symlink(&session_dir)?;
+    let status = read_status(&session_dir)?;
+    if status.state == CallRecordingState::Closed && !session_dir.join(MANIFEST_FILE).is_file() {
+        return Err("Closed call recording is missing its manifest.".to_string());
+    }
+    let exports_dir = recordings_root.join(EXPORTS_DIR);
+    reject_symlink(&exports_dir)?;
+    fs::create_dir_all(&exports_dir)
+        .map_err(|error| format!("Failed to create call recording exports: {error}"))?;
+    reject_symlink(&exports_dir)?;
+
+    let export_path = exports_dir.join(format!("{call_session_id}.zip"));
+    reject_symlink(&export_path)?;
+    let file = File::create(&export_path)
+        .map_err(|error| format!("Failed to create call recording export: {error}"))?;
+    let mut archive = ZipWriter::new(file);
+    let options = SimpleFileOptions::default();
+    for name in [STATUS_FILE, EVENTS_FILE, MANIFEST_FILE] {
+        let source = session_dir.join(name);
+        reject_symlink(&source)?;
+        if !source.is_file() {
+            continue;
+        }
+        archive
+            .start_file(name, options)
+            .map_err(|error| format!("Failed to stage call recording export: {error}"))?;
+        let mut source_file = File::open(&source)
+            .map_err(|error| format!("Failed to read call recording export source: {error}"))?;
+        std::io::copy(&mut source_file, &mut archive)
+            .map_err(|error| format!("Failed to write call recording export: {error}"))?;
+    }
+    let export_file = archive
+        .finish()
+        .map_err(|error| format!("Failed to finalize call recording export: {error}"))?;
+    export_file
+        .sync_all()
+        .map_err(|error| format!("Failed to sync call recording export: {error}"))?;
+    Ok(export_path)
+}
+
+fn reveal_path(path: &Path, select_file: bool) -> Result<(), String> {
+    reject_symlink(path)?;
+    #[cfg(target_os = "macos")]
+    let status = if select_file {
+        Command::new("open").arg("-R").arg(path).status()
+    } else {
+        Command::new("open").arg(path).status()
+    };
+
+    #[cfg(target_os = "windows")]
+    let status = if select_file {
+        Command::new("explorer")
+            .arg(format!("/select,{}", path.to_string_lossy()))
+            .status()
+    } else {
+        Command::new("explorer").arg(path).status()
+    };
+
+    #[cfg(target_os = "linux")]
+    let status = Command::new("xdg-open")
+        .arg(if select_file {
+            path.parent().unwrap_or(path)
+        } else {
+            path
+        })
+        .status();
+
+    let status =
+        status.map_err(|error| format!("Failed to open call recording location: {error}"))?;
+    if !status.success() {
+        return Err(
+            "The system file manager could not open the call recording location.".to_string(),
+        );
+    }
+    Ok(())
+}
+
 fn session_dir(recordings_root: &Path, call_session_id: &str) -> Result<PathBuf, String> {
     validate_session_id(call_session_id)?;
     Ok(recordings_root.join(call_session_id))
@@ -339,8 +516,7 @@ fn read_status(session_dir: &Path) -> Result<CallRecordingStatus, String> {
     reject_symlink(&path)?;
     let content = fs::read_to_string(&path)
         .map_err(|error| format!("Failed to read call recording state: {error}"))?;
-    serde_json::from_str(&content)
-        .map_err(|error| format!("Invalid call recording state: {error}"))
+    serde_json::from_str(&content).map_err(|error| format!("Invalid call recording state: {error}"))
 }
 
 fn write_status(session_dir: &Path, status: &CallRecordingStatus) -> Result<(), String> {
@@ -534,6 +710,36 @@ mod tests {
         start_at_root(&root, "call-test-3", 1).unwrap();
         assert!(append_at_root(&root, "call-test-3", &event("call-other", 1)).is_err());
         assert!(start_at_root(&root, "../escape", 1).is_err());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn lists_evaluations_and_exports_a_portable_bundle() {
+        let root = test_root();
+        let session_id = "call-test-4";
+        start_at_root(&root, session_id, 1).unwrap();
+        let evaluation = serde_json::json!({
+            "eventId": "event-evaluation-1",
+            "callSessionId": session_id,
+            "sequence": 1,
+            "kind": "human-evaluation",
+            "occurredAt": 2,
+            "payload": { "label": "helpful" }
+        })
+        .to_string();
+        append_at_root(&root, session_id, &evaluation).unwrap();
+        close_at_root(&root, session_id, 20).unwrap();
+
+        let summaries = list_all_at_root(&root).unwrap();
+        assert_eq!(summaries.len(), 1);
+        assert_eq!(summaries[0].human_evaluation_count, 1);
+        assert!(summaries[0].manifest_available);
+        assert_eq!(summaries[0].integrity_error, None);
+
+        let export = export_at_root(&root, session_id).unwrap();
+        assert!(export.is_file());
+        let archive = zip::ZipArchive::new(File::open(export).unwrap()).unwrap();
+        assert_eq!(archive.len(), 3);
         fs::remove_dir_all(root).unwrap();
     }
 }

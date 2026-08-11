@@ -31,6 +31,7 @@ import CallingPage from "@/pages/calling";
 import AudioSettingsPage from "@/pages/audio";
 import ModelSettingsPage from "@/pages/models";
 import ShortcutSettingsPage from "@/pages/shortcuts";
+import SessionsPage from "@/pages/sessions";
 import "./app.css";
 
 type AppSection =
@@ -105,16 +106,12 @@ const isTauri = () => "__TAURI_INTERNALS__" in window;
 function Placeholder({
   section,
 }: {
-  section: Exclude<AppSection, "call" | "audio" | "shortcuts" | "models">;
+  section: Exclude<AppSection, "call" | "audio" | "shortcuts" | "models" | "sessions">;
 }) {
   const content: Record<typeof section, { title: string; body: string }> = {
     cases: {
       title: "Case Preparation is next",
       body: "Task 1 will build the case workspace here without changing the realtime call surface.",
-    },
-    sessions: {
-      title: "Session history is local",
-      body: "Recording discovery, recovery, and export will move into this route in Task 2E.",
     },
     settings: {
       title: "Application controls",
@@ -442,6 +439,8 @@ export default function MossApp() {
               lastAction={lastShortcutAction}
               onSave={saveShortcuts}
             />
+          ) : activeSection === "sessions" ? (
+            <SessionsPage controller={controller} />
           ) : (
             <Placeholder section={activeSection} />
           )}
@@ -449,7 +448,11 @@ export default function MossApp() {
 
         <footer className="app-statusbar">
           <span>Local-first runtime ready</span>
-          <span>{controller.recordingStatus ? `Recording ${controller.recordingStatus.state}` : "No active recording"}</span>
+          <span>
+            {controller.recordingStatus
+              ? `${controller.recordingStatus.callSessionId} · ${controller.recordingStatus.eventCount} events · ${controller.recordingStatus.state}`
+              : "No active recording"}
+          </span>
         </footer>
       </section>
     </div>

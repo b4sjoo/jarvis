@@ -59,6 +59,10 @@ pub fn run() {
             recording::retry_call_recording_close,
             recording::abandon_call_recording,
             recording::list_recoverable_call_recordings,
+            recording::list_call_recordings,
+            recording::reveal_call_recordings_root,
+            recording::reveal_call_recording,
+            recording::export_call_recording,
             speaker::start_call_audio_session,
             speaker::stop_call_audio_session,
             #[cfg(debug_assertions)]

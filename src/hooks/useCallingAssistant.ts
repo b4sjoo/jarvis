@@ -10,6 +10,7 @@ import {
   loadAudioSettings,
   authorizeNativeSpeechSegment,
   createCancellableOperation,
+  listCallRecordings,
   listRecoverableCallRecordings,
   loadModelRouteSettings,
   loadProviderSecret,
@@ -26,6 +27,7 @@ import {
   type AudioSettings,
   type CallRecordingEventKind,
   type CallRecordingStatus,
+  type CallRecordingSummary,
   type CallTurnSettlement,
   type GuidanceEvaluationLabel,
   type ModelRouteSettings,
@@ -197,6 +199,9 @@ export function useCallingAssistant() {
   const [recoverableRecordings, setRecoverableRecordings] = useState<
     CallRecordingStatus[]
   >([]);
+  const [callRecordings, setCallRecordings] = useState<
+    CallRecordingSummary[]
+  >([]);
 
   const publish = useCallback(
     () => setRuntime(runtimeRef.current.snapshot()),
@@ -212,7 +217,11 @@ export function useCallingAssistant() {
       const recording = recordingRef.current;
       if (!recording) return null;
       try {
-        return await recording.append(kind, payload, occurredAt);
+        const status = await recording.append(kind, payload, occurredAt);
+        if (recordingRef.current === recording && status) {
+          setRecordingStatus(status);
+        }
+        return status;
       } catch (error) {
         setRecordingError(errorMessage(error));
         throw error;
@@ -256,6 +265,14 @@ export function useCallingAssistant() {
     }
   }, []);
 
+  const refreshCallRecordings = useCallback(async () => {
+    try {
+      setCallRecordings(await listCallRecordings());
+    } catch (error) {
+      setRecordingError(errorMessage(error));
+    }
+  }, []);
+
   const abortOperations = useCallback((reason: string) => {
     for (const operation of activeOperationsRef.current) {
       operation.cancel(reason);
@@ -286,7 +303,8 @@ export function useCallingAssistant() {
   useEffect(() => {
     void refreshSecrets();
     void refreshRecoverableRecordings();
-  }, [refreshRecoverableRecordings, refreshSecrets]);
+    void refreshCallRecordings();
+  }, [refreshCallRecordings, refreshRecoverableRecordings, refreshSecrets]);
 
   const executeAdvisor = useCallback(
     async (owner: ActiveCallRuntime, force = false) => {
@@ -665,6 +683,7 @@ export function useCallingAssistant() {
       const status = await recording.start(Date.now());
       setRecordingStatus(status);
       bindRuntimeRecording(owner);
+      void refreshCallRecordings();
     }
 
     segmentLedgerRef.current = new AudioSegmentDispositionLedger();
@@ -681,7 +700,7 @@ export function useCallingAssistant() {
       });
       publish();
     }
-  }, [abortOperations, bindRuntimeRecording, publish, startCapture]);
+  }, [abortOperations, bindRuntimeRecording, publish, refreshCallRecordings, startCapture]);
 
   const stopNativeCapture = useCallback(async (): Promise<CaptureLease | null> => {
     if (
@@ -757,6 +776,7 @@ export function useCallingAssistant() {
         owner.setTransitionObserver(undefined);
         owner.dispatch({ type: "CloseSucceeded", occurredAt: Date.now() });
         setRecordingError(null);
+        void refreshCallRecordings();
       } catch (error) {
         owner.dispatch({
           type: "CloseFailed",
@@ -765,12 +785,13 @@ export function useCallingAssistant() {
         });
         setRecordingError(errorMessage(error));
         await refreshRecoverableRecordings();
+        await refreshCallRecordings();
         publish();
         throw error;
       }
       publish();
     },
-    [publish, recordEvent, refreshRecoverableRecordings]
+    [publish, recordEvent, refreshCallRecordings, refreshRecoverableRecordings]
   );
 
   const end = useCallback(async () => {
@@ -801,23 +822,26 @@ export function useCallingAssistant() {
     setRecordingStatus(status);
     owner.setTransitionObserver(undefined);
     setRecordingError(null);
+    void refreshCallRecordings();
     publish();
-  }, [publish]);
+  }, [publish, refreshCallRecordings]);
 
   const retryRecoveredRecording = useCallback(
     async (callSessionId: string) => {
       await retryRecoveredCallRecording(callSessionId);
       await refreshRecoverableRecordings();
+      await refreshCallRecordings();
     },
-    [refreshRecoverableRecordings]
+    [refreshCallRecordings, refreshRecoverableRecordings]
   );
 
   const abandonRecoveredRecording = useCallback(
     async (callSessionId: string) => {
       await abandonRecoveredCallRecording(callSessionId);
       await refreshRecoverableRecordings();
+      await refreshCallRecordings();
     },
-    [refreshRecoverableRecordings]
+    [refreshCallRecordings, refreshRecoverableRecordings]
   );
 
   const requestGuidance = useCallback(async () => {
@@ -968,6 +992,7 @@ export function useCallingAssistant() {
     recordingStatus,
     recordingError,
     recoverableRecordings,
+    callRecordings,
     start,
     pause,
     resume,
@@ -976,6 +1001,7 @@ export function useCallingAssistant() {
     abandonClose,
     retryRecoveredRecording,
     abandonRecoveredRecording,
+    refreshCallRecordings,
     requestGuidance,
     evaluateGuidance,
     saveConfiguration,

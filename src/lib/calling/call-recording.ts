@@ -18,6 +18,13 @@ export interface CallRecordingStatus {
   lastError?: string;
 }
 
+export interface CallRecordingSummary {
+  status: CallRecordingStatus;
+  humanEvaluationCount: number;
+  manifestAvailable: boolean;
+  integrityError: string | null;
+}
+
 export type CallRecordingEventKind =
   | "runtime-command"
   | "native-audio-lifecycle"
@@ -155,6 +162,18 @@ export class CallRecordingProjection {
 
 export const listRecoverableCallRecordings = () =>
   invoke<CallRecordingStatus[]>("list_recoverable_call_recordings");
+
+export const listCallRecordings = () =>
+  invoke<CallRecordingSummary[]>("list_call_recordings");
+
+export const revealCallRecordingsRoot = () =>
+  invoke<void>("reveal_call_recordings_root");
+
+export const revealCallRecording = (callSessionId: string) =>
+  invoke<void>("reveal_call_recording", { callSessionId });
+
+export const exportCallRecording = (callSessionId: string) =>
+  invoke<string>("export_call_recording", { callSessionId });
 
 export const retryRecoveredCallRecording = (
   callSessionId: string,

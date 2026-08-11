@@ -78,3 +78,12 @@ test("model routes and shortcuts live outside the companion surface", () => {
   assert.match(appShell, /ShortcutSettingsPage/);
   assert.match(appShell, /recordShortcutAction/);
 });
+
+test("session history exposes recording evidence without adding a new evaluation ontology", () => {
+  const sessionsView = source("src/pages/sessions/index.tsx");
+  assert.match(sessionsView, /humanEvaluationCount/);
+  assert.match(sessionsView, /exportCallRecording/);
+  assert.match(sessionsView, /revealCallRecording/);
+  assert.match(sessionsView, /retryRecoveredRecording/);
+  assert.doesNotMatch(sessionsView, /question type|artifact intent|parent action/i);
+});
