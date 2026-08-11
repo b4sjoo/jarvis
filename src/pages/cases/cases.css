@@ -187,6 +187,50 @@
 .conversation-edit-notice button { display: grid; width: 20px; height: 20px; place-items: center; border: 0; background: transparent; color: inherit; cursor: pointer; }
 .case-modal select { min-height: 34px; padding: 0 8px; border: 1px solid var(--border-strong); border-radius: 5px; background: var(--surface-input); font-size: 11px; }
 
+.reviewed-state { position: relative; min-height: 100%; }
+.reviewed-state > .case-section-toolbar button:disabled { opacity: .4; cursor: default; }
+.reviewed-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); border: 1px solid var(--border-subtle); border-radius: 7px; overflow: hidden; }
+.reviewed-grid > section { min-height: 180px; padding: 12px; border-right: 1px solid var(--border-subtle); border-bottom: 1px solid var(--border-subtle); }
+.reviewed-grid > section:nth-child(2n) { border-right: 0; }
+.reviewed-grid > section > header { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
+.reviewed-grid h4 { margin: 0; font-size: 11px; }
+.reviewed-grid > section > header span { display: grid; min-width: 20px; height: 20px; place-items: center; border-radius: 4px; background: var(--surface-hover); color: var(--text-muted); font-size: 8px; }
+.reviewed-statement { display: grid; width: 100%; grid-template-columns: auto minmax(0, 1fr) auto; gap: 8px; align-items: center; padding: 8px 0; border: 0; border-top: 1px solid var(--border-subtle); background: transparent; text-align: left; cursor: pointer; }
+.reviewed-statement > span:nth-child(2) { min-width: 0; }
+.reviewed-statement strong,
+.reviewed-statement small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.reviewed-statement strong { color: var(--text-secondary); font-size: 10px; }
+.reviewed-statement small { margin-top: 3px; color: var(--text-muted); font-size: 8px; }
+.reviewed-kind { padding: 2px 5px; border-radius: 3px; background: var(--surface-hover); color: var(--text-muted); font-size: 7px; font-weight: 750; text-transform: uppercase; }
+.reviewed-kind.commitment,
+.reviewed-kind.deadline { background: var(--warning-soft); color: var(--warning-text); }
+.reviewed-kind.fact,
+.reviewed-kind.objective { background: var(--success-soft); color: var(--success-text); }
+.reviewed-empty { margin: 14px 0; color: var(--text-muted); font-size: 9px; }
+.reviewed-parties article { padding: 7px 0; border-top: 1px solid var(--border-subtle); }
+.reviewed-parties article strong,
+.reviewed-parties article small { display: block; }
+.reviewed-parties article strong { font-size: 10px; }
+.reviewed-parties article small { margin-top: 2px; color: var(--text-muted); font-size: 8px; }
+.reviewed-inspector { position: absolute; z-index: 6; top: 0; right: 0; bottom: 0; display: flex; width: min(520px, 72%); flex-direction: column; overflow: auto; border: 1px solid var(--border-strong); background: var(--surface-raised); box-shadow: -8px 0 30px rgb(24 24 27 / 10%); }
+.reviewed-inspector > header { display: flex; align-items: start; justify-content: space-between; gap: 12px; padding: 14px; border-bottom: 1px solid var(--border-subtle); }
+.reviewed-inspector > header span { color: var(--text-muted); font-size: 8px; font-weight: 750; text-transform: uppercase; }
+.reviewed-inspector > header h3 { margin: 5px 0 0; font-size: 12px; line-height: 1.45; }
+.reviewed-inspector > header button { display: grid; width: 28px; height: 28px; place-items: center; border: 1px solid var(--border-subtle); border-radius: 5px; background: transparent; cursor: pointer; }
+.reviewed-inspector dl { margin: 0; padding: 10px 14px; border-bottom: 1px solid var(--border-subtle); }
+.reviewed-inspector dl div { display: grid; grid-template-columns: 95px minmax(0, 1fr); gap: 8px; padding: 4px 0; }
+.reviewed-inspector dt { color: var(--text-muted); font-size: 8px; }
+.reviewed-inspector dd { margin: 0; color: var(--text-secondary); font-size: 9px; }
+.reviewed-inspector > section { min-height: 0; flex: 1; overflow: auto; padding: 12px 14px; }
+.reviewed-inspector > section h4 { margin: 0 0 8px; font-size: 10px; }
+.reviewed-inspector > section article { padding: 8px 0; border-top: 1px solid var(--border-subtle); }
+.reviewed-inspector > section strong { font-size: 8px; }
+.reviewed-inspector > section p { margin: 4px 0 0; color: var(--text-secondary); font-size: 9px; line-height: 1.45; }
+.reviewed-inspector > footer { display: flex; justify-content: flex-end; gap: 6px; padding: 10px 14px; border-top: 1px solid var(--border-subtle); }
+.reviewed-inspector > footer button { display: inline-flex; min-height: 30px; align-items: center; gap: 5px; padding: 0 9px; border: 1px solid var(--border-strong); border-radius: 5px; background: var(--surface-raised); font-size: 9px; cursor: pointer; }
+.reviewed-inspector > footer button.primary { border-color: var(--accent-strong); background: var(--accent-strong); color: white; }
+.reviewed-inspector > footer button.danger { color: var(--danger-text); }
+
 @media (max-width: 900px) {
   .case-workspace { grid-template-columns: 205px minmax(0, 1fr); }
   .case-plans article { grid-template-columns: 1fr auto; }
@@ -196,4 +240,7 @@
   .conversation-index.compact { display: none; }
   .conversation-thread { min-height: 520px; }
   .conversation-back { display: grid !important; }
+  .reviewed-grid { grid-template-columns: 1fr; }
+  .reviewed-grid > section { border-right: 0; }
+  .reviewed-inspector { width: 100%; }
 }

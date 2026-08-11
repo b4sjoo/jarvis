@@ -466,7 +466,7 @@ export function serializePreparationContext(context: PreparationModelContext) {
   const materialLines = context.materialEvidence.map(
     (item) => `[MATERIAL:${item.chunkId}] ${item.materialName}${item.pageNumber ? ` page ${item.pageNumber}` : ""}: ${item.content}`
   );
-  const recent = context.recentMessages.map((item) => `${item.role.toUpperCase()}: ${item.content}`);
+  const recent = context.recentMessages.map((item) => `[MESSAGE:${item.id}@${item.revision}] ${item.role.toUpperCase()}: ${item.content}`);
   return [
     `CASE: ${context.identity.caseTitle} (${context.identity.caseId})`,
     context.identity.callPlanId ? `CALL PLAN: ${context.identity.callPlanTitle} (${context.identity.callPlanId})` : "SCOPE: Entire case",

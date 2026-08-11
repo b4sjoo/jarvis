@@ -71,7 +71,7 @@ export interface PreparationModelContext {
     objective: string;
   };
   currentRequest: string;
-  recentMessages: Array<{ role: "user" | "assistant"; content: string }>;
+  recentMessages: Array<{ id: string; revision: number; role: "user" | "assistant"; content: string }>;
   rollingSummary?: string;
   confirmedStatements: Array<{
     id: string;
@@ -200,7 +200,7 @@ export async function composePreparationContext(input: {
       objective: plans[0]?.objective || cases[0].primary_objective,
     },
     currentRequest: input.currentRequest,
-    recentMessages: recentMessages.map((message) => ({ role: message.role, content: message.content })),
+    recentMessages: recentMessages.map((message) => ({ id: message.id, revision: message.revision, role: message.role, content: message.content })),
     rollingSummary,
     confirmedStatements: confirmed.map((statement) => ({
       id: statement.id,

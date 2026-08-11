@@ -27,7 +27,7 @@ test("Task 1D serialization keeps evidence roles explicit", () => {
   const serialized = serializePreparationContext({
     identity: { caseId: "case-a", caseTitle: "Refund", objective: "Recover charge" },
     currentRequest: "What should I ask?",
-    recentMessages: [{ role: "user", content: "Prepare the next call" }],
+    recentMessages: [{ id: "message-1", revision: 1, role: "user", content: "Prepare the next call" }],
     confirmedStatements: [{ id: "statement-1", kind: "fact", claimState: "supported", content: "Cancellation confirmed" }],
     materialEvidence: [{ chunkId: "chunk-1", materialId: "material-1", materialName: "receipt.pdf", content: "Cancelled on May 1" }],
     unresolvedRisks: ["Refund timing unknown"],
