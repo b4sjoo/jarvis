@@ -6,6 +6,7 @@ import {
   LoaderCircle,
   Plus,
   RefreshCw,
+  Sparkles,
   Trash2,
   X,
 } from "lucide-react";
@@ -35,6 +36,9 @@ export default function MaterialPanel({
   const [items, setItems] = useState<MaterialWithRun[]>([]);
   const [selected, setSelected] = useState<MaterialWithRun | null>(null);
   const [chunks, setChunks] = useState<ExtractionChunk[]>([]);
+  const [runs, setRuns] = useState<ExtractionRun[]>([]);
+  const [recoveryMode, setRecoveryMode] = useState<"model" | "manual" | null>(null);
+  const [recoveryText, setRecoveryText] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -56,8 +60,11 @@ export default function MaterialPanel({
   useEffect(() => { void refresh().catch((reason) => setError(String(reason))); }, [refresh]);
 
   useEffect(() => {
-    if (!service || !selected?.run) { setChunks([]); return; }
-    void service.listChunks(selected.run.id).then(setChunks).catch((reason) => setError(String(reason)));
+    if (!service || !selected?.run) { setChunks([]); setRuns([]); return; }
+    void Promise.all([
+      service.listChunks(selected.run.id),
+      service.listExtractionRuns(selected.material.id),
+    ]).then(([nextChunks, nextRuns]) => { setChunks(nextChunks); setRuns(nextRuns); }).catch((reason) => setError(String(reason)));
   }, [selected, service]);
 
   const run = async (operation: () => Promise<void>) => {
@@ -118,6 +125,15 @@ export default function MaterialPanel({
       <dl><div><dt>Content hash</dt><dd>{selected.material.contentHash.slice(0, 18)}...</dd></div><div><dt>Output hash</dt><dd>{selected.run?.outputHash.slice(0, 18) ?? "Unavailable"}...</dd></div><div><dt>Scope</dt><dd>{selected.material.callPlanId ? "Call plan" : "Entire case"}</dd></div></dl>
       {selected.run?.qualitySignals.length ? <section><h4>Review signals</h4>{selected.run.qualitySignals.map((signal, index) => <p key={`${signal.code}-${index}`}>{signal.detail}</p>)}</section> : null}
       <section className="material-preview"><h4>Extracted preview</h4>{chunks.map((chunk) => <article key={chunk.id}>{chunk.pageNumber ? <small>Page {chunk.pageNumber}</small> : null}<p>{chunk.content}</p></article>)}{chunks.length === 0 ? <p>No text is available. Use explicit recovery or manual content.</p> : null}</section>
+      <section className="material-run-history"><h4>Immutable extraction history</h4>{runs.map((runItem) => <article key={runItem.id} className={runItem.id === selected.material.selectedExtractionRunId ? "selected" : ""}><span><strong>{runItem.method}</strong><small>{runItem.engine} · {new Date(runItem.createdAt).toLocaleString()}</small></span>{runItem.id === selected.material.selectedExtractionRunId ? <em>Selected</em> : <button type="button" onClick={() => void run(async () => { await service?.selectRun(selected.material, runItem.id); await refresh(); })}>Use</button>}</article>)}</section>
+      <footer className="material-recovery-actions"><button type="button" disabled={busy || !["pdf", "png", "jpg", "heic"].includes(selected.material.extension)} onClick={() => { setRecoveryText(""); setRecoveryMode("model"); }}><Sparkles size={13} /> Model recovery</button><button type="button" disabled={busy} onClick={() => { setRecoveryText(""); setRecoveryMode("manual"); }}><Plus size={13} /> Manual content</button></footer>
     </aside> : null}
+
+    {selected && recoveryMode ? <div className="case-modal-layer"><section className="case-modal" role="dialog" aria-modal="true">
+      <header><div><span>Immutable recovery run</span><h2>{recoveryMode === "model" ? "Recover with the Complex model" : "Add manual extraction"}</h2></div><button type="button" onClick={() => setRecoveryMode(null)}><X size={17} /></button></header>
+      <p className="muted">The result creates a new needs-review ExtractionRun. Existing content remains unchanged.</p>
+      <label>{recoveryMode === "model" ? "Optional instruction" : "Faithful material content"}<textarea autoFocus value={recoveryText} onChange={(event) => setRecoveryText(event.target.value)} placeholder={recoveryMode === "model" ? "Example: focus on the table on page 2" : "Paste or type the recoverable content"} /></label>
+      <footer><button type="button" className="secondary" onClick={() => setRecoveryMode(null)}>Cancel</button><button type="button" disabled={busy || (recoveryMode === "manual" && !recoveryText.trim())} onClick={() => void run(async () => { if (recoveryMode === "model") await service?.recoverWithModel(selected.material, recoveryText); else await service?.addManualContent(selected.material, recoveryText); setRecoveryMode(null); setRecoveryText(""); await refresh(); })}>{recoveryMode === "model" ? "Recover" : "Create run"}</button></footer>
+    </section></div> : null}
   </section>;
 }

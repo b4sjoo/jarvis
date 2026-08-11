@@ -147,6 +147,17 @@
 .material-preview article { padding: 9px 0; border-top: 1px solid var(--border-subtle); }
 .material-preview article small { color: var(--text-muted); font-size: 8px; text-transform: uppercase; }
 .material-preview article p { margin: 3px 0 0; color: var(--text-secondary); font-size: 10px; line-height: 1.5; }
+.material-run-history article { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 7px 0; border-top: 1px solid var(--border-subtle); }
+.material-run-history article span { min-width: 0; }
+.material-run-history strong,
+.material-run-history small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.material-run-history strong { font-size: 9px; text-transform: uppercase; }
+.material-run-history small { margin-top: 2px; color: var(--text-muted); font-size: 8px; }
+.material-run-history article em { color: var(--success-text); font-size: 8px; font-style: normal; font-weight: 750; text-transform: uppercase; }
+.material-run-history article button { min-height: 25px; padding: 0 7px; border: 1px solid var(--border-strong); border-radius: 4px; background: var(--surface-raised); font-size: 8px; cursor: pointer; }
+.material-recovery-actions { display: flex; gap: 7px; margin-top: auto; }
+.material-recovery-actions button { display: inline-flex; min-height: 30px; align-items: center; gap: 5px; padding: 0 8px; border: 1px solid var(--border-strong); border-radius: 5px; background: var(--surface-raised); font-size: 9px; cursor: pointer; }
+.material-recovery-actions button:disabled { opacity: .4; cursor: default; }
 
 .preparation-conversations { display: grid; min-height: 520px; height: 100%; grid-template-columns: minmax(240px, 320px) minmax(0, 1fr); border: 1px solid var(--border-subtle); border-radius: 7px; overflow: hidden; }
 .conversation-index { display: flex; min-width: 0; flex-direction: column; border-right: 1px solid var(--border-subtle); }

@@ -105,6 +105,52 @@ export async function requestChatCompletion(input: {
   return parseChatProviderResponse(input.route, await response.json());
 }
 
+export async function requestMultimodalCompletion(input: {
+  route: ChatModelRouteConfig;
+  apiKey: string;
+  prompt: string;
+  mediaType: string;
+  base64Data: string;
+  fileName: string;
+  signal?: AbortSignal;
+}) {
+  const provider = getChatProvider(input.route.provider);
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  let body: Record<string, unknown>;
+  if (provider.protocol === "anthropic-messages") {
+    headers["x-api-key"] = input.apiKey;
+    headers["anthropic-version"] = "2023-06-01";
+    const media = input.mediaType === "application/pdf"
+      ? { type: "document", source: { type: "base64", media_type: input.mediaType, data: input.base64Data } }
+      : { type: "image", source: { type: "base64", media_type: input.mediaType, data: input.base64Data } };
+    body = {
+      model: input.route.model,
+      max_tokens: input.route.maxOutputTokens,
+      messages: [{ role: "user", content: [{ type: "text", text: input.prompt }, media] }],
+    };
+  } else {
+    if (input.apiKey) headers.Authorization = `Bearer ${input.apiKey}`;
+    const media = input.mediaType === "application/pdf"
+      ? { type: "file", file: { filename: input.fileName, file_data: `data:${input.mediaType};base64,${input.base64Data}` } }
+      : { type: "image_url", image_url: { url: `data:${input.mediaType};base64,${input.base64Data}`, detail: "high" } };
+    body = {
+      model: input.route.model,
+      messages: [{ role: "user", content: [{ type: "text", text: input.prompt }, media] }],
+      max_tokens: input.route.maxOutputTokens,
+    };
+  }
+  const response = await fetch(provider.endpoint, {
+    method: "POST",
+    headers,
+    body: JSON.stringify(body),
+    signal: input.signal,
+  });
+  if (!response.ok) {
+    throw new Error(`Multimodal recovery failed (${response.status}): ${await response.text()}`);
+  }
+  return parseChatProviderResponse(input.route, await response.json());
+}
+
 export async function requestChatCompletionStream(input: {
   route: ChatModelRouteConfig;
   apiKey: string;

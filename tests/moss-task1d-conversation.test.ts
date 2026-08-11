@@ -30,6 +30,7 @@ test("Task 1D serialization keeps evidence roles explicit", () => {
     recentMessages: [{ id: "message-1", revision: 1, role: "user", content: "Prepare the next call" }],
     confirmedStatements: [{ id: "statement-1", kind: "fact", claimState: "supported", content: "Cancellation confirmed" }],
     materialEvidence: [{ chunkId: "chunk-1", materialId: "material-1", materialName: "receipt.pdf", content: "Cancelled on May 1" }],
+    curatedGuidance: [],
     unresolvedRisks: ["Refund timing unknown"],
     manifest: { caseId: "case-a", statementIds: ["statement-1"], extractionChunkIds: ["chunk-1"], materialRevisionHashes: ["hash"], kmbContentHashes: [], truncated: false, contextHash: "context-hash" },
   });

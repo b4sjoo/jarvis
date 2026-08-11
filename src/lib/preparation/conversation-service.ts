@@ -467,6 +467,9 @@ export function serializePreparationContext(context: PreparationModelContext) {
     (item) => `[MATERIAL:${item.chunkId}] ${item.materialName}${item.pageNumber ? ` page ${item.pageNumber}` : ""}: ${item.content}`
   );
   const recent = context.recentMessages.map((item) => `[MESSAGE:${item.id}@${item.revision}] ${item.role.toUpperCase()}: ${item.content}`);
+  const guidance = context.curatedGuidance.map(
+    (item) => `[KMB:${item.id}] ${item.title}: ${item.content}`
+  );
   return [
     `CASE: ${context.identity.caseTitle} (${context.identity.caseId})`,
     context.identity.callPlanId ? `CALL PLAN: ${context.identity.callPlanTitle} (${context.identity.callPlanId})` : "SCOPE: Entire case",
@@ -476,6 +479,7 @@ export function serializePreparationContext(context: PreparationModelContext) {
     `RECENT CONVERSATION:\n${recent.join("\n")}`,
     `CONFIRMED STATE:\n${statementLines.join("\n") || "None"}`,
     `SOURCE MATERIAL:\n${materialLines.join("\n") || "None"}`,
+    `CURATED GUIDANCE:\n${guidance.join("\n") || "None"}`,
     `UNRESOLVED RISKS:\n${context.unresolvedRisks.join("\n") || "None"}`,
   ].filter(Boolean).join("\n\n");
 }

@@ -106,6 +106,7 @@ pub fn run() {
             set_stealth_mode,
             content_storage::import_content_file,
             content_storage::delete_content_file,
+            content_storage::read_content_file_base64,
             case_material_extraction::extract_case_material,
             recording::start_call_recording,
             recording::append_call_recording_event,

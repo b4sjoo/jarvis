@@ -1,3 +1,4 @@
+use base64::{engine::general_purpose::STANDARD, Engine as _};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::fs::{self, File, OpenOptions};
@@ -17,6 +18,7 @@ const DOCX_MAX_ENTRIES: usize = 512;
 const DOCX_MAX_UNCOMPRESSED_BYTES: u64 = 100 * 1024 * 1024;
 const DOCX_CONTENT_TYPES_MAX_BYTES: u64 = 1024 * 1024;
 const COPY_BUFFER_BYTES: usize = 64 * 1024;
+const MULTIMODAL_READ_MAX_BYTES: u64 = 50 * 1024 * 1024;
 const DOCX_MIME_TYPE: &str =
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
 const DOCX_MAIN_CONTENT_TYPE: &str =
@@ -31,6 +33,16 @@ pub struct ImportedContentFile {
     size_bytes: u64,
     checksum_sha256: String,
     storage_relative_path: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContentFilePayload {
+    mime_type: String,
+    extension: String,
+    size_bytes: u64,
+    checksum_sha256: String,
+    base64_data: String,
 }
 
 #[derive(Clone, Copy)]
@@ -103,6 +115,57 @@ pub fn delete_content_file(
             .map_err(|error| format!("Failed to clean empty content collection: {error}"))?;
     }
     Ok(true)
+}
+
+#[tauri::command]
+pub fn read_content_file_base64(
+    app: AppHandle,
+    collection_id: String,
+    content_id: String,
+    extension: String,
+) -> Result<ContentFilePayload, String> {
+    validate_identifier(&collection_id, "collection id")?;
+    validate_identifier(&content_id, "content id")?;
+    let extension = extension.trim().to_ascii_lowercase();
+    let mime_type = match extension.as_str() {
+        "pdf" => "application/pdf",
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "heic" | "heif" => "image/heic",
+        _ => return Err("Only PDF and image materials support multimodal recovery.".to_string()),
+    };
+    let normalized_extension = if extension == "jpeg" {
+        "jpg"
+    } else if extension == "heif" {
+        "heic"
+    } else {
+        extension.as_str()
+    };
+    let app_data = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| format!("Failed to resolve app data directory: {error}"))?;
+    let collection_root = app_data.join(CONTENT_SOURCES_DIR).join(&collection_id);
+    let content_root = collection_root.join(&content_id);
+    let path = content_root.join(format!("original.{normalized_extension}"));
+    reject_symlink(&collection_root)?;
+    reject_symlink(&content_root)?;
+    reject_symlink(&path)?;
+    let metadata = fs::metadata(&path)
+        .map_err(|error| format!("Failed to inspect material for recovery: {error}"))?;
+    if !metadata.is_file() || metadata.len() > MULTIMODAL_READ_MAX_BYTES {
+        return Err("Material cannot be loaded within the multimodal size limit.".to_string());
+    }
+    let bytes = fs::read(&path)
+        .map_err(|error| format!("Failed to read material for recovery: {error}"))?;
+    let checksum_sha256 = format!("{:x}", Sha256::digest(&bytes));
+    Ok(ContentFilePayload {
+        mime_type: mime_type.to_string(),
+        extension: normalized_extension.to_string(),
+        size_bytes: metadata.len(),
+        checksum_sha256,
+        base64_data: STANDARD.encode(bytes),
+    })
 }
 
 fn import_content_at_root(

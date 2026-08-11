@@ -1,6 +1,10 @@
 import { sha256 } from "../calling/immutable-snapshot.js";
 import type { SqlDatabase } from "./database.js";
 import type { PreparationContextManifest } from "./types.js";
+import {
+  retrieveCaseKnowledge,
+  type CuratedKnowledgeEntry,
+} from "./retrieval-service.js";
 
 interface ContextChunkRow {
   id: string;
@@ -87,6 +91,12 @@ export interface PreparationModelContext {
     pageNumber?: number;
     content: string;
   }>;
+  curatedGuidance: Array<{
+    id: string;
+    title: string;
+    content: string;
+    contentHash: string;
+  }>;
   unresolvedRisks: string[];
   manifest: PreparationContextManifest;
 }
@@ -98,6 +108,7 @@ export async function composePreparationContext(input: {
   callPlanId?: string;
   currentRequest: string;
   maxChars?: number;
+  curatedEntries?: CuratedKnowledgeEntry[];
 }): Promise<PreparationModelContext> {
   const maxChars = input.maxChars ?? 18_000;
   const cases = await input.database.select<Array<{
@@ -154,6 +165,14 @@ export async function composePreparationContext(input: {
     [input.caseId, input.callPlanId ?? ""]
   );
   const ranked = rankPreparationChunks(input.currentRequest, chunks);
+  const aggregated = await retrieveCaseKnowledge({
+    database: input.database,
+    caseId: input.caseId,
+    callPlanId: input.callPlanId,
+    query: input.currentRequest,
+    curatedEntries: input.curatedEntries,
+    limit: 30,
+  });
 
   let usedChars = input.currentRequest.length;
   const take = <T>(values: T[], size: (value: T) => number, limit: number) => {
@@ -172,6 +191,11 @@ export async function composePreparationContext(input: {
   ).reverse();
   const confirmed = take(statements, (statement) => statement.content.length, 40);
   const evidence = take(ranked, (chunk) => chunk.content.length, 14);
+  const guidance = take(
+    aggregated.filter((candidate) => candidate.sourceKind === "kmb"),
+    (candidate) => candidate.content.length,
+    6
+  );
   const rollingSummary = conversations[0].generated_summary ?? undefined;
   const truncated =
     recentMessages.length < messages.length ||
@@ -184,7 +208,7 @@ export async function composePreparationContext(input: {
     statementIds: confirmed.map((statement) => statement.id),
     extractionChunkIds: evidence.map((chunk) => chunk.id),
     materialRevisionHashes: [...new Set(evidence.map((chunk) => chunk.output_hash))],
-    kmbContentHashes: [] as string[],
+    kmbContentHashes: guidance.map((item) => item.contentHash),
     truncated,
   };
   const manifest: PreparationContextManifest = {
@@ -215,6 +239,12 @@ export async function composePreparationContext(input: {
       materialName: chunk.display_name,
       pageNumber: chunk.page_number ?? undefined,
       content: chunk.content,
+    })),
+    curatedGuidance: guidance.map((item) => ({
+      id: item.id,
+      title: item.label,
+      content: item.content,
+      contentHash: item.contentHash,
     })),
     unresolvedRisks: statements
       .filter((statement) => statement.claim_state === "unknown" || statement.kind === "risk")
