@@ -1,10 +1,10 @@
 {
-  "name": "jarvis",
+  "name": "moss",
   "private": true,
-  "version": "0.1.9",
-  "description": "A personal desktop meeting assistant for real-time transcription, screen context, and AI guidance.",
+  "version": "0.1.0",
+  "description": "A local-first calling helper with reliable realtime guidance.",
   "author": {
-    "name": "Jarvis personal fork"
+    "name": "MOSS"
   },
   "license": "GPL-3.0",
   "homepage": "",
@@ -20,7 +20,7 @@
     "tauri",
     "desktop-app",
     "privacy-first",
-    "meeting-assistant",
+    "calling-helper",
     "speech-to-text",
     "llm",
     "chatgpt",

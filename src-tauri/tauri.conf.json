@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Jarvis",
-  "version": "0.1.9",
-  "identifier": "dev.seasonsg.jarvis",
+  "productName": "MOSS",
+  "version": "0.1.0",
+  "identifier": "dev.seasonsg.moss",
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:1420",
@@ -13,7 +13,7 @@
     "macOSPrivateApi": true,
     "windows": [
       {
-        "title": "Jarvis - AI Assistant",
+        "title": "MOSS - Calling Helper",
         "width": 600,
         "height": 54,
         "decorations": false,
@@ -43,12 +43,12 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "resources": ["info.plist", "jarvis.desktop"],
+    "resources": ["info.plist", "moss.desktop"],
     "macOS": { "minimumSystemVersion": "10.13" }
   },
   "plugins": {
     "sql": {
-      "preload": ["sqlite:jarvis.db"]
+      "preload": ["sqlite:moss.db"]
     }
   }
 }

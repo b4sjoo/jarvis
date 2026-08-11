@@ -3,7 +3,7 @@ import Database from "@tauri-apps/plugin-sql";
 /**
  * Database configuration
  */
-export const DB_NAME = "sqlite:jarvis.db";
+export const DB_NAME = "sqlite:moss.db";
 
 let dbInstance: Database | null = null;
 

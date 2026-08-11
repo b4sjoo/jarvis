@@ -1,0 +1,10 @@
+[Desktop Entry]
+Categories=Utility;
+Type=Application
+Name=MOSS
+Comment=Local-first calling helper
+Exec=moss
+Icon=moss
+Terminal=false
+StartupNotify=true
+StartupWMClass=moss

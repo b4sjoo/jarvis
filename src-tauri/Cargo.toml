@@ -1,14 +1,14 @@
 [package]
-name = "jarvis"
-version = "0.1.9"
-description = "A personal desktop meeting assistant for real-time transcription, screen context, and AI guidance."
-authors = ["Jarvis personal fork"]
+name = "moss"
+version = "0.1.0"
+description = "A local-first calling helper with reliable realtime guidance."
+authors = ["MOSS"]
 license = "GPL-3.0"
 repository = ""
 homepage = ""
 documentation = ""
 readme = "../README.md"
-keywords = ["ai-assistant", "tauri", "desktop-app", "privacy-first", "meeting-assistant"]
+keywords = ["ai-assistant", "tauri", "desktop-app", "privacy-first", "calling-helper"]
 categories = ["gui", "multimedia", "accessibility", "science", "development-tools"]
 edition = "2021"
 
@@ -18,7 +18,7 @@ edition = "2021"
 # The `_lib` suffix may seem redundant but it is necessary
 # to make the lib name unique and wouldn't conflict with the bin name.
 # This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
-name = "jarvis_lib"
+name = "moss_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]

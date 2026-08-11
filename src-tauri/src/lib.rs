@@ -408,7 +408,7 @@ pub fn run() {
     let mut builder = tauri::Builder::default()
         .plugin(
             tauri_plugin_sql::Builder::default()
-                .add_migrations("sqlite:jarvis.db", db::migrations())
+                .add_migrations("sqlite:moss.db", db::migrations())
                 .build(),
         )
         .manage(AudioState::default())
