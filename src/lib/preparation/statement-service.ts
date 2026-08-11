@@ -394,6 +394,9 @@ export class ReviewedCaseStateService {
     );
     if (result.rowsAffected !== 1) throw new Error("CaseStatement revision conflict.");
     await this.recordReviewEvent(current.caseId, current.id, "edited", input.expectedRevision + 1);
+    if (current.createdBy === "complex-model-proposal") {
+      await this.recordDerivedEvaluation(current.caseId, current.id, "needs-edit");
+    }
   }
 
   async confirmStatement(statementId: string, expectedRevision: number) {
@@ -414,6 +417,9 @@ export class ReviewedCaseStateService {
       await this.commitCaseRevision({ caseId: current.caseId, statement: current, commandId: `confirm_statement_${crypto.randomUUID()}` });
     });
     await this.recordReviewEvent(current.caseId, current.id, "confirmed", expectedRevision + 1);
+    if (current.createdBy === "complex-model-proposal") {
+      await this.recordDerivedEvaluation(current.caseId, current.id, "correct");
+    }
   }
 
   async rejectStatement(statementId: string, expectedRevision: number) {
@@ -568,6 +574,20 @@ export class ReviewedCaseStateService {
 
   private async recordReviewEvent(caseId: string, statementId: string, status: string, revision: number) {
     await this.recordOperation(caseId, undefined, `statement_review_${crypto.randomUUID()}`, "statement-review", status, { statementId, revision });
+  }
+
+  private async recordDerivedEvaluation(
+    caseId: string,
+    statementId: string,
+    label: "correct" | "needs-edit"
+  ) {
+    await this.database.execute(
+      `INSERT INTO preparation_human_evaluations (
+        id, case_id, call_session_id, snapshot_id, subject_kind,
+        subject_id, label, note, source, occurred_at
+      ) VALUES (?, ?, NULL, NULL, 'statement-proposal', ?, ?, NULL, 'derived', ?)`,
+      [`preparation_evaluation_${crypto.randomUUID()}`, caseId, statementId, label, Date.now()]
+    );
   }
 
   private async recordOperation(caseId: string, callPlanId: string | undefined, operationId: string, kind: string, status: string, payload: unknown) {

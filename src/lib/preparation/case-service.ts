@@ -377,11 +377,6 @@ export class CasePreparationService {
     if (result.rowsAffected !== 1) throw new Error("Call plan was not found.");
   }
 
-  async deleteCase(caseId: string) {
-    const result = await this.database.execute("DELETE FROM cases WHERE id = ?", [caseId]);
-    if (result.rowsAffected !== 1) throw new Error("Case was not found.");
-  }
-
   private async insertRevision(revision: CaseRevision) {
     await this.database.execute(
       `INSERT INTO case_revisions (

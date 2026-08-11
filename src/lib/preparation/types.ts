@@ -372,10 +372,42 @@ export type CallPreparationBinding =
       boundAt: number;
     };
 
+export type PreparationEvaluationSubjectKind =
+  | "material-extraction"
+  | "retrieval"
+  | "statement-proposal"
+  | "snapshot-artifact"
+  | "post-call-update";
+
 export type PreparationHumanEvaluationLabel =
+  | "complete"
+  | "partial"
+  | "wrong"
+  | "unreadable"
   | "helpful"
   | "irrelevant"
+  | "missing"
   | "polluting"
+  | "correct"
+  | "needs-edit"
+  | "unsupported"
+  | "duplicate"
   | "over-constraining"
   | "incorrect"
-  | "missing";
+  | "missed"
+  | "wrong-party"
+  | "wrong-condition"
+  | "wrong-date";
+
+export interface PreparationHumanEvaluation {
+  id: string;
+  caseId: string;
+  callSessionId?: string;
+  snapshotId?: string;
+  subjectKind: PreparationEvaluationSubjectKind;
+  subjectId: string;
+  label: PreparationHumanEvaluationLabel;
+  note?: string;
+  source: "explicit" | "derived";
+  occurredAt: number;
+}

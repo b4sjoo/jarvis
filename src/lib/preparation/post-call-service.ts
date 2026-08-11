@@ -427,6 +427,21 @@ export class PostCallReviewService {
       statementId: statement.id,
       callSessionId: pending.callSessionId,
     });
+    if (input.action === "accept") {
+      await this.database.execute(
+        `INSERT INTO preparation_human_evaluations (
+          id, case_id, call_session_id, snapshot_id, subject_kind,
+          subject_id, label, note, source, occurred_at
+        ) VALUES (?, ?, ?, NULL, 'post-call-update', ?, 'correct', NULL, 'derived', ?)`,
+        [
+          `preparation_evaluation_${crypto.randomUUID()}`,
+          pending.caseId,
+          pending.callSessionId,
+          pending.id,
+          Date.now(),
+        ]
+      );
+    }
   }
 
   async createFollowUpPlan(callSessionId: string): Promise<CallPlan> {

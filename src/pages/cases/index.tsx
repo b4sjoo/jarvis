@@ -11,6 +11,7 @@ import {
 import { isTauriRuntime } from "@/lib/calling";
 import {
   CasePreparationService,
+  CasePrivacyService,
   type CallPlan,
   type CallPreparationSnapshotBundle,
   type CaseRecord,
@@ -22,6 +23,7 @@ import ConversationPanel from "./ConversationPanel";
 import ReviewedStatePanel from "./ReviewedStatePanel";
 import SnapshotPanel from "./SnapshotPanel";
 import PostCallReviewPanel from "./PostCallReviewPanel";
+import EvaluationPanel from "./EvaluationPanel";
 
 export type CaseWorkspaceView =
   | "overview"
@@ -30,7 +32,8 @@ export type CaseWorkspaceView =
   | "conversations"
   | "reviewed"
   | "snapshots"
-  | "post-call";
+  | "post-call"
+  | "evaluation";
 
 export const CASE_WORKSPACE_VIEWS: Array<{
   id: CaseWorkspaceView;
@@ -43,6 +46,7 @@ export const CASE_WORKSPACE_VIEWS: Array<{
   { id: "reviewed", label: "Reviewed state" },
   { id: "snapshots", label: "Snapshots" },
   { id: "post-call", label: "Post-call" },
+  { id: "evaluation", label: "Evaluation" },
 ];
 
 const splitLines = (value: string) =>
@@ -111,8 +115,8 @@ export default function CasesPage({
   useEffect(() => {
     if (!isTauriRuntime()) return;
     let active = true;
-    void CasePreparationService.open()
-      .then(async (owner) => {
+    void Promise.all([CasePreparationService.open(), CasePrivacyService.open()])
+      .then(async ([owner]) => {
         if (!active) return;
         setService(owner);
         await refreshCases(owner);
@@ -264,7 +268,9 @@ export default function CasesPage({
 
             {view === "post-call" ? <PostCallReviewPanel caseId={selectedCase.id} onRevisionChange={async () => { if (service) setRevision(await service.getCurrentRevision(selectedCase.id)); }} onPlanChange={async () => { if (service) setPlans(await service.listCallPlans(selectedCase.id)); }} /> : null}
 
-            {!(["overview", "plans", "materials", "conversations", "reviewed", "snapshots", "post-call"] as CaseWorkspaceView[]).includes(view) ? <section className="case-future"><ShieldCheck size={22} /><h3>{CASE_WORKSPACE_VIEWS.find((item) => item.id === view)?.label}</h3><p>This surface activates in its dedicated Task 1 slice.</p></section> : null}
+            {view === "evaluation" ? <EvaluationPanel caseId={selectedCase.id} onCaseDeleted={async () => { if (service) await refreshCases(service); setView("overview"); }} /> : null}
+
+            {!(["overview", "plans", "materials", "conversations", "reviewed", "snapshots", "post-call", "evaluation"] as CaseWorkspaceView[]).includes(view) ? <section className="case-future"><ShieldCheck size={22} /><h3>{CASE_WORKSPACE_VIEWS.find((item) => item.id === view)?.label}</h3><p>This surface activates in its dedicated Task 1 slice.</p></section> : null}
           </div>
         </> : <section className="case-route-boundary"><FileText size={26} /><h2>Prepare one call at a time</h2><p>Create a case to establish the state that future calls may use.</p><button type="button" onClick={() => setCaseForm(blankCase())}><Plus size={15} /> Create case</button></section>}
       </main>

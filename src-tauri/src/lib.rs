@@ -1,5 +1,6 @@
-mod content_storage;
 mod case_material_extraction;
+mod case_privacy;
+mod content_storage;
 mod db;
 mod recording;
 mod speaker;
@@ -104,6 +105,10 @@ pub fn run() {
             write_call_trace_log,
             exit_app,
             set_stealth_mode,
+            case_privacy::export_case_bundle,
+            case_privacy::stage_case_deletion,
+            case_privacy::restore_case_deletion,
+            case_privacy::finalize_case_deletion,
             content_storage::import_content_file,
             content_storage::delete_content_file,
             content_storage::read_content_file_base64,

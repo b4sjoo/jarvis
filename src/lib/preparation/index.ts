@@ -10,3 +10,5 @@ export * from "./retrieval-service.js";
 export * from "./snapshot-service.js";
 export * from "./runtime-handoff.js";
 export * from "./post-call-service.js";
+export * from "./privacy-service.js";
+export * from "./evaluation-service.js";
