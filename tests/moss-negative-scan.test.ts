@@ -84,7 +84,6 @@ test("MOSS removed obsolete routes, model assets, scripts, and dependencies", as
     "@tauri-apps/plugin-autostart",
     "@tauri-apps/plugin-opener",
     "@tauri-apps/plugin-process",
-    "@tauri-apps/plugin-sql",
     "mermaid",
     "tauri-plugin-macos-permissions-api",
   ]) {

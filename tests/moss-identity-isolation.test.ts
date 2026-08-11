@@ -21,15 +21,19 @@ test("MOSS uses an isolated bundle identity and database", async () => {
   }
 });
 
-test("MOSS migration history starts at version one without interview tables", async () => {
-  const [migrationRegistry, baseline] = await Promise.all([
+test("MOSS migration history adds an isolated Case domain without interview tables", async () => {
+  const [migrationRegistry, baseline, preparation] = await Promise.all([
     read("src-tauri/src/db/main.rs"),
     read("src-tauri/src/db/migrations/moss-runtime-baseline.sql"),
+    read("src-tauri/src/db/migrations/moss-case-preparation.sql"),
   ]);
 
   assert.match(migrationRegistry, /version:\s*1/);
-  assert.doesNotMatch(migrationRegistry, /version:\s*(?:[2-9]|\d{2,})/);
+  assert.match(migrationRegistry, /version:\s*2/);
   assert.match(baseline, /call_runtime_sessions/);
   assert.match(baseline, /call_recording_close_attempts/);
   assert.doesNotMatch(baseline, /interview|preparation|jarvis/i);
+  assert.match(preparation, /CREATE TABLE IF NOT EXISTS cases/);
+  assert.match(preparation, /call_session_preparation_bindings/);
+  assert.doesNotMatch(preparation, /InterviewProcess|InterviewRound|jarvis/i);
 });
