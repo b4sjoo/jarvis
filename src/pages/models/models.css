@@ -2,71 +2,6 @@
   max-width: 1080px;
 }
 
-.settings-page-header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 20px;
-  margin-bottom: 18px;
-}
-
-.settings-page-header h2 {
-  margin: 4px 0 5px;
-  color: var(--text-primary);
-  font-size: 19px;
-}
-
-.settings-page-header p {
-  max-width: 680px;
-  margin: 0;
-  color: var(--text-muted);
-  font-size: 12px;
-  line-height: 1.5;
-}
-
-.settings-eyebrow {
-  color: var(--accent-strong);
-  font-size: 10px;
-  font-weight: 750;
-  text-transform: uppercase;
-}
-
-.settings-revision {
-  flex: 0 0 auto;
-  padding: 5px 8px;
-  border: 1px solid var(--border-subtle);
-  border-radius: 5px;
-  color: var(--text-muted);
-  font-size: 10px;
-}
-
-.settings-notice {
-  display: flex;
-  align-items: flex-start;
-  gap: 10px;
-  margin-bottom: 18px;
-  padding: 12px 14px;
-  border: 1px solid var(--border-accent);
-  border-radius: 6px;
-  background: var(--accent-soft);
-  color: var(--accent-strong);
-}
-
-.settings-notice > div {
-  display: grid;
-  gap: 2px;
-}
-
-.settings-notice strong {
-  font-size: 12px;
-}
-
-.settings-notice span {
-  color: var(--text-secondary);
-  font-size: 11px;
-  line-height: 1.4;
-}
-
 .model-route-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -150,22 +85,6 @@
 
 .secret-input input {
   padding-left: 34px;
-}
-
-.settings-message {
-  margin-top: 16px;
-  padding: 10px 12px;
-  border: 1px solid var(--border-accent);
-  border-radius: 6px;
-  background: var(--success-soft);
-  color: var(--success-text);
-  font-size: 12px;
-}
-
-.settings-error {
-  border-color: var(--danger-border);
-  background: var(--danger-soft);
-  color: var(--danger-text);
 }
 
 @media (max-width: 860px) {

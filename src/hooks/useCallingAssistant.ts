@@ -949,6 +949,18 @@ export function useCallingAssistant() {
     [queueRecordingEvent]
   );
 
+  const recordInterfaceAction = useCallback(
+    (payload: {
+      action: "switch-mode" | "hide" | "quit";
+      source: "ui" | "shortcut" | "system";
+      outcome: "requested" | "completed" | "failed";
+      detail?: string;
+    }) => {
+      queueRecordingEvent("interface-action", payload);
+    },
+    [queueRecordingEvent]
+  );
+
   const saveAudioConfiguration = useCallback(
     async (next: AudioSettings) => {
       const state = runtimeRef.current.snapshot().state;
@@ -1007,6 +1019,7 @@ export function useCallingAssistant() {
     saveConfiguration,
     saveAudioConfiguration,
     recordShortcutAction,
+    recordInterfaceAction,
   };
 }
 

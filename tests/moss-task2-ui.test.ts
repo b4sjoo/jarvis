@@ -18,8 +18,10 @@ const source = (path: string) =>
   readFileSync(resolve(process.cwd(), path), "utf8");
 
 test("control and companion profiles keep distinct window responsibilities", () => {
+  const tauriConfig = JSON.parse(source("src-tauri/tauri.conf.json"));
   assert.equal(MOSS_WINDOW_PROFILES.control.alwaysOnTop, false);
   assert.equal(MOSS_WINDOW_PROFILES.companion.alwaysOnTop, true);
+  assert.equal(tauriConfig.app.windows[0].alwaysOnTop, false);
   assert.ok(
     MOSS_WINDOW_PROFILES.control.width > MOSS_WINDOW_PROFILES.companion.width
   );
@@ -86,4 +88,16 @@ test("session history exposes recording evidence without adding a new evaluation
   assert.match(sessionsView, /revealCallRecording/);
   assert.match(sessionsView, /retryRecoveredRecording/);
   assert.doesNotMatch(sessionsView, /question type|artifact intent|parent action/i);
+});
+
+test("application settings preserve a recoverable Dock-hidden lifecycle", () => {
+  const appShell = source("src/pages/app/index.tsx");
+  const appSettings = source("src/pages/settings/index.tsx");
+  const callingStyles = source("src/pages/calling/calling.css");
+  assert.match(appShell, /Resolve the global show\/hide shortcut before hiding MOSS/);
+  assert.match(appShell, /recordInterfaceAction/);
+  assert.match(appShell, /setInterfaceMode\(previousMode\)/);
+  assert.match(appSettings, /Dock-hidden operation/);
+  assert.match(appSettings, /raw audio/i);
+  assert.doesNotMatch(callingStyles, /moss-settings-backdrop|route-grid/);
 });

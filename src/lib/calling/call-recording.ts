@@ -33,6 +33,7 @@ export type CallRecordingEventKind =
   | "audio-settings-updated"
   | "model-settings-updated"
   | "shortcut-action"
+  | "interface-action"
   | "stt-operation-dispatched"
   | "stt-operation-returned"
   | "model-operation-dispatched"

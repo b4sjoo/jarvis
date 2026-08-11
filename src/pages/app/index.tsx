@@ -32,6 +32,7 @@ import AudioSettingsPage from "@/pages/audio";
 import ModelSettingsPage from "@/pages/models";
 import ShortcutSettingsPage from "@/pages/shortcuts";
 import SessionsPage from "@/pages/sessions";
+import AppSettingsPage from "@/pages/settings";
 import "./app.css";
 
 type AppSection =
@@ -106,16 +107,12 @@ const isTauri = () => "__TAURI_INTERNALS__" in window;
 function Placeholder({
   section,
 }: {
-  section: Exclude<AppSection, "call" | "audio" | "shortcuts" | "models" | "sessions">;
+  section: "cases";
 }) {
   const content: Record<typeof section, { title: string; body: string }> = {
     cases: {
       title: "Case Preparation is next",
       body: "Task 1 will build the case workspace here without changing the realtime call surface.",
-    },
-    settings: {
-      title: "Application controls",
-      body: "Privacy, local storage, version, and window behavior will remain separate from realtime guidance.",
     },
   };
   const selected = content[section];
@@ -167,6 +164,11 @@ export default function MossApp() {
     if (quitting) return;
     setQuitting(true);
     setQuitError(null);
+    controller.recordInterfaceAction({
+      action: "quit",
+      source: "ui",
+      outcome: "requested",
+    });
     try {
       if (closableStates.has(controller.runtime.state)) {
         await controller.end();
@@ -176,16 +178,42 @@ export default function MossApp() {
       }
       if (isTauri()) await invoke("exit_app");
     } catch (error) {
-      setQuitError(error instanceof Error ? error.message : String(error));
+      const detail = error instanceof Error ? error.message : String(error);
+      controller.recordInterfaceAction({
+        action: "quit",
+        source: "ui",
+        outcome: "failed",
+        detail,
+      });
+      setQuitError(detail);
     } finally {
       setQuitting(false);
     }
   }, [controller, quitting]);
 
-  const applyInterfaceMode = useCallback(async (mode: MossInterfaceMode) => {
+  const applyInterfaceMode = useCallback(async (
+    mode: MossInterfaceMode,
+    source: "ui" | "shortcut" | "system" = "ui"
+  ) => {
+    const previousMode = interfaceModeRef.current;
     setWindowError(null);
+    interfaceModeRef.current = mode;
     setInterfaceMode(mode);
-    if (!isTauri()) return;
+    controllerRef.current.recordInterfaceAction({
+      action: "switch-mode",
+      source,
+      outcome: "requested",
+      detail: mode,
+    });
+    if (!isTauri()) {
+      controllerRef.current.recordInterfaceAction({
+        action: "switch-mode",
+        source,
+        outcome: "completed",
+        detail: mode,
+      });
+      return;
+    }
     try {
       const profile = MOSS_WINDOW_PROFILES[mode];
       const appWindow = getCurrentWindow();
@@ -195,10 +223,55 @@ export default function MossApp() {
       await appWindow.setSize(new LogicalSize(profile.width, profile.height));
       await appWindow.setAlwaysOnTop(profile.alwaysOnTop);
       await appWindow.center();
+      controllerRef.current.recordInterfaceAction({
+        action: "switch-mode",
+        source,
+        outcome: "completed",
+        detail: mode,
+      });
     } catch (error) {
-      setWindowError(error instanceof Error ? error.message : String(error));
+      const detail = error instanceof Error ? error.message : String(error);
+      interfaceModeRef.current = previousMode;
+      setInterfaceMode(previousMode);
+      controllerRef.current.recordInterfaceAction({
+        action: "switch-mode",
+        source,
+        outcome: "failed",
+        detail,
+      });
+      setWindowError(detail);
+      throw error;
     }
   }, []);
+
+  const hideMoss = useCallback(async () => {
+    if (shortcutRegistrationError) {
+      throw new Error("Resolve the global show/hide shortcut before hiding MOSS.");
+    }
+    controllerRef.current.recordInterfaceAction({
+      action: "hide",
+      source: "ui",
+      outcome: "requested",
+    });
+    if (!isTauri()) return;
+    try {
+      await getCurrentWindow().hide();
+      controllerRef.current.recordInterfaceAction({
+        action: "hide",
+        source: "ui",
+        outcome: "completed",
+      });
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      controllerRef.current.recordInterfaceAction({
+        action: "hide",
+        source: "ui",
+        outcome: "failed",
+        detail,
+      });
+      throw error;
+    }
+  }, [shortcutRegistrationError]);
 
   const executeShortcut = useCallback(
     async (action: ShortcutAction, accelerator: string) => {
@@ -241,7 +314,8 @@ export default function MossApp() {
           }
         } else if (action === "toggle-interface") {
           await applyInterfaceMode(
-            interfaceModeRef.current === "control" ? "companion" : "control"
+            interfaceModeRef.current === "control" ? "companion" : "control",
+            "shortcut"
           );
         } else if (action === "toggle-listening") {
           const state = activeController.runtime.state;
@@ -329,7 +403,7 @@ export default function MossApp() {
   }, []);
 
   useEffect(() => {
-    void applyInterfaceMode("control");
+    void applyInterfaceMode("control", "system").catch(() => undefined);
   }, [applyInterfaceMode]);
 
   useEffect(() => {
@@ -349,7 +423,7 @@ export default function MossApp() {
         {windowError && <div className="app-alert" role="alert">{windowError}</div>}
         <CallingPage
           controller={controller}
-          onOpenControlCenter={() => void applyInterfaceMode("control")}
+          onOpenControlCenter={() => void applyInterfaceMode("control").catch(() => undefined)}
         />
       </div>
     );
@@ -415,7 +489,7 @@ export default function MossApp() {
           {activeSection === "call" && (
             <button
               className="secondary-button workspace-companion-button"
-              onClick={() => void applyInterfaceMode("companion")}
+              onClick={() => void applyInterfaceMode("companion").catch(() => undefined)}
             >
               <PictureInPicture2 size={16} />
               Live companion
@@ -441,6 +515,14 @@ export default function MossApp() {
             />
           ) : activeSection === "sessions" ? (
             <SessionsPage controller={controller} />
+          ) : activeSection === "settings" ? (
+            <AppSettingsPage
+              interfaceMode={interfaceMode}
+              shortcuts={shortcutSettings}
+              onSwitchMode={(mode) => applyInterfaceMode(mode)}
+              onHide={hideMoss}
+              onQuit={quit}
+            />
           ) : (
             <Placeholder section={activeSection} />
           )}

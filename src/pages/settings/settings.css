@@ -1,0 +1,62 @@
+.app-settings-page {
+  max-width: 980px;
+}
+
+.app-setting-list {
+  border-top: 1px solid var(--border-subtle);
+}
+
+.app-setting-row {
+  display: grid;
+  grid-template-columns: 36px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 14px;
+  min-height: 88px;
+  padding: 14px 0;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.app-setting-row h3 {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 13px;
+}
+
+.app-setting-row p {
+  max-width: 650px;
+  margin: 4px 0 0;
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.setting-value {
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.app-setting-danger .field-icon {
+  color: var(--danger-text);
+}
+
+.settings-footnote {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-top: 16px;
+  color: var(--text-muted);
+  font-size: 10px;
+}
+
+@media (max-width: 700px) {
+  .app-setting-row {
+    grid-template-columns: 36px minmax(0, 1fr);
+  }
+
+  .app-setting-row > button,
+  .app-setting-row > .setting-value {
+    grid-column: 2;
+    justify-self: start;
+  }
+}
