@@ -20,10 +20,12 @@ import {
   SHORTCUT_SCHEME_VERSION,
   GlobalShortcutRegistry,
   MOSS_WINDOW_PROFILES,
+  applyNativeStealthMode,
   callStatusLabel,
   isEditableElement,
   isTauriRuntime,
-  shortcutDisplayText,
+  loadApplicationSettings,
+  persistApplicationSettings,
   type MossInterfaceMode,
   type ShortcutAction,
 } from "@/lib/calling";
@@ -89,7 +91,7 @@ const sections: Array<{
   {
     id: "settings",
     label: "App Settings",
-    description: "Inspect privacy, storage, and window behavior.",
+    description: "Manage privacy and desktop visibility.",
     icon: Settings,
   },
 ];
@@ -129,6 +131,9 @@ export default function MossApp() {
     useState<MossInterfaceMode>("control");
   const [activeSection, setActiveSection] = useState<AppSection>("call");
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [applicationSettings, setApplicationSettings] = useState(() =>
+    loadApplicationSettings()
+  );
   const [quitError, setQuitError] = useState<string | null>(null);
   const [quitting, setQuitting] = useState(false);
   const [windowError, setWindowError] = useState<string | null>(null);
@@ -238,34 +243,44 @@ export default function MossApp() {
     }
   }, []);
 
-  const hideMoss = useCallback(async () => {
-    if (shortcutRegistrationError) {
-      throw new Error("Resolve the global show/hide shortcut before hiding MOSS.");
-    }
+  const setStealthMode = useCallback(async (enabled: boolean) => {
+    const previous = applicationSettings;
     controllerRef.current.recordInterfaceAction({
-      action: "hide",
+      action: "set-stealth-mode",
       source: "ui",
       outcome: "requested",
+      detail: enabled ? "enabled" : "disabled",
     });
-    if (!isTauriRuntime()) return;
     try {
-      await getCurrentWindow().hide();
+      await applyNativeStealthMode(enabled);
+      const next = {
+        revision: previous.revision + 1,
+        stealthMode: enabled,
+      };
+      try {
+        persistApplicationSettings(next);
+      } catch (error) {
+        await applyNativeStealthMode(previous.stealthMode).catch(() => undefined);
+        throw error;
+      }
+      setApplicationSettings(next);
       controllerRef.current.recordInterfaceAction({
-        action: "hide",
+        action: "set-stealth-mode",
         source: "ui",
         outcome: "completed",
+        detail: enabled ? "enabled" : "disabled",
       });
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);
       controllerRef.current.recordInterfaceAction({
-        action: "hide",
+        action: "set-stealth-mode",
         source: "ui",
         outcome: "failed",
         detail,
       });
       throw error;
     }
-  }, [shortcutRegistrationError]);
+  }, [applicationSettings]);
 
   const executeShortcut = useCallback(
     async (action: ShortcutAction, accelerator: string) => {
@@ -379,6 +394,13 @@ export default function MossApp() {
   }, [applyInterfaceMode]);
 
   useEffect(() => {
+    void applyNativeStealthMode(applicationSettings.stealthMode).catch((error) => {
+      setWindowError(error instanceof Error ? error.message : String(error));
+    });
+    // Apply the persisted startup value once; later changes use setStealthMode.
+  }, []);
+
+  useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.metaKey && event.key.toLowerCase() === "q") {
         event.preventDefault();
@@ -487,11 +509,9 @@ export default function MossApp() {
             <SessionsPage controller={controller} />
           ) : activeSection === "settings" ? (
             <AppSettingsPage
-              interfaceMode={interfaceMode}
               nativeRuntimeAvailable={controller.nativeRuntimeAvailable}
-              visibilityShortcut={shortcutDisplayText("toggle-visibility")}
-              onSwitchMode={(mode) => applyInterfaceMode(mode)}
-              onHide={hideMoss}
+              stealthMode={applicationSettings.stealthMode}
+              onSetStealthMode={setStealthMode}
             />
           ) : (
             <Placeholder section={activeSection} />

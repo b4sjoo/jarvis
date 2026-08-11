@@ -73,14 +73,17 @@ test("session history exposes recording evidence without adding a new evaluation
   assert.doesNotMatch(sessionsView, /question type|artifact intent|parent action/i);
 });
 
-test("application settings preserve a recoverable Dock-hidden lifecycle", () => {
+test("application settings expose privacy and desktop stealth without duplicate actions", () => {
   const appShell = source("src/pages/app/index.tsx");
   const appSettings = source("src/pages/settings/index.tsx");
   const callingStyles = source("src/pages/calling/calling.css");
-  assert.match(appShell, /Resolve the global show\/hide shortcut before hiding MOSS/);
   assert.match(appShell, /recordInterfaceAction/);
   assert.match(appShell, /setWindowError\(detail\)/);
-  assert.match(appSettings, /Dock-hidden operation/);
+  assert.match(appSettings, /Stealth Mode/);
   assert.match(appSettings, /raw audio/i);
+  assert.doesNotMatch(
+    appSettings,
+    /Call recordings|Window mode|Dock-hidden operation|Open folder|Hide MOSS/
+  );
   assert.doesNotMatch(callingStyles, /moss-settings-backdrop|route-grid/);
 });

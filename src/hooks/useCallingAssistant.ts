@@ -1036,7 +1036,7 @@ export function useCallingAssistant() {
 
   const recordInterfaceAction = useCallback(
     (payload: {
-      action: "switch-mode" | "hide" | "quit";
+      action: "switch-mode" | "quit" | "set-stealth-mode";
       source: "ui" | "shortcut" | "system";
       outcome: "requested" | "completed" | "failed";
       detail?: string;

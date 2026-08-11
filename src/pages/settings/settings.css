@@ -36,6 +36,63 @@
   font-weight: 650;
 }
 
+.setting-switch {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 64px;
+  cursor: pointer;
+}
+
+.setting-switch input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  opacity: 0;
+}
+
+.setting-switch-track {
+  display: inline-flex;
+  align-items: center;
+  width: 34px;
+  height: 20px;
+  padding: 2px;
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  background: var(--surface-muted);
+  transition: background 140ms ease, border-color 140ms ease;
+}
+
+.setting-switch-track > span {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--text-muted);
+  transition: transform 140ms ease, background 140ms ease;
+}
+
+.setting-switch input:checked + .setting-switch-track {
+  border-color: var(--text-primary);
+  background: var(--text-primary);
+}
+
+.setting-switch input:checked + .setting-switch-track > span {
+  background: var(--surface-raised);
+  transform: translateX(14px);
+}
+
+.setting-switch input:focus-visible + .setting-switch-track {
+  outline: 2px solid var(--text-primary);
+  outline-offset: 2px;
+}
+
+.setting-switch-disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
 .settings-footnote {
   display: flex;
   align-items: center;
@@ -63,7 +120,7 @@
     grid-template-columns: 24px minmax(0, 1fr);
   }
 
-  .app-setting-row > button,
+  .app-setting-row > .setting-switch,
   .app-setting-row > .setting-value {
     grid-column: 2;
     justify-self: start;

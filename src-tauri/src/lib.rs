@@ -36,6 +36,33 @@ fn exit_app(app: tauri::AppHandle) {
     app.exit(0);
 }
 
+#[tauri::command]
+fn set_stealth_mode(app: tauri::AppHandle, enabled: bool) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        let policy = if enabled {
+            tauri::ActivationPolicy::Accessory
+        } else {
+            tauri::ActivationPolicy::Regular
+        };
+        app.set_activation_policy(policy)
+            .map_err(|error| format!("Failed to update Dock visibility: {error}"))?;
+    }
+
+    #[cfg(any(target_os = "windows", target_os = "linux"))]
+    {
+        use tauri::Manager;
+        let window = app
+            .get_webview_window("main")
+            .ok_or_else(|| "Main window is unavailable".to_string())?;
+        window
+            .set_skip_taskbar(enabled)
+            .map_err(|error| format!("Failed to update taskbar visibility: {error}"))?;
+    }
+
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let mut builder = tauri::Builder::default()
@@ -52,6 +79,7 @@ pub fn run() {
             get_app_version,
             write_call_trace_log,
             exit_app,
+            set_stealth_mode,
             content_storage::import_content_file,
             recording::start_call_recording,
             recording::append_call_recording_event,
