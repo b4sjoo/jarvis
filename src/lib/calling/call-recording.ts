@@ -24,6 +24,8 @@ export type CallRecordingEventKind =
   | "audio-segment-observed"
   | "audio-segment-settled"
   | "audio-settings-updated"
+  | "model-settings-updated"
+  | "shortcut-action"
   | "stt-operation-dispatched"
   | "stt-operation-returned"
   | "model-operation-dispatched"

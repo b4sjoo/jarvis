@@ -11,6 +11,7 @@
     "keychain:allow-get-item",
     "keychain:allow-save-item",
     "keychain:allow-remove-item",
+    "global-shortcut:default",
     "core:window:allow-start-dragging",
     "sql:default",
     "sql:allow-execute",

@@ -82,7 +82,6 @@ test("MOSS removed obsolete routes, model assets, scripts, and dependencies", as
     "@bany/curl-to-json",
     "@huggingface/transformers",
     "@tauri-apps/plugin-autostart",
-    "@tauri-apps/plugin-global-shortcut",
     "@tauri-apps/plugin-opener",
     "@tauri-apps/plugin-process",
     "@tauri-apps/plugin-sql",
@@ -95,7 +94,6 @@ test("MOSS removed obsolete routes, model assets, scripts, and dependencies", as
   const cargoManifest = await readFile("src-tauri/Cargo.toml", "utf8");
   for (const obsolete of [
     "tauri-plugin-autostart",
-    "tauri-plugin-global-shortcut",
     "tauri-plugin-machine-uid",
     "tauri-plugin-opener",
     "tauri-plugin-shell",

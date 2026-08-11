@@ -15,5 +15,6 @@ export * from "./prompts.js";
 export * from "./provider-client.js";
 export * from "./recording-close.js";
 export * from "./revisioned-conversation.js";
+export * from "./shortcut-settings.js";
 export * from "./stable-guidance.js";
 export * from "./types.js";

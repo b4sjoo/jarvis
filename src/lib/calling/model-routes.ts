@@ -17,6 +17,7 @@ export interface SttRouteConfig {
 }
 
 export interface ModelRouteSettings {
+  revision: number;
   chat: Record<ChatRouteId, ChatModelRouteConfig>;
   stt: SttRouteConfig;
 }
@@ -25,6 +26,7 @@ const SETTINGS_KEY = "moss.model-routes.v1";
 const secretKey = (route: ChatRouteId | "stt") => `moss.provider.${route}.api-key`;
 
 export const DEFAULT_MODEL_ROUTES: ModelRouteSettings = {
+  revision: 1,
   chat: {
     runtime: { id: "runtime", endpoint: "https://api.openai.com/v1/chat/completions", model: "gpt-4.1-mini", timeoutMs: 8_000, maxOutputTokens: 500 },
     advisor: { id: "advisor", endpoint: "https://api.openai.com/v1/chat/completions", model: "gpt-4.1", timeoutMs: 30_000, maxOutputTokens: 1_200 },
@@ -39,6 +41,10 @@ export function loadModelRouteSettings(): ModelRouteSettings {
     if (!raw) return structuredClone(DEFAULT_MODEL_ROUTES);
     const parsed = JSON.parse(raw) as Partial<ModelRouteSettings>;
     return {
+      revision:
+        Number.isInteger(parsed.revision) && Number(parsed.revision) > 0
+          ? Number(parsed.revision)
+          : DEFAULT_MODEL_ROUTES.revision,
       chat: {
         runtime: { ...DEFAULT_MODEL_ROUTES.chat.runtime, ...parsed.chat?.runtime, id: "runtime" },
         advisor: { ...DEFAULT_MODEL_ROUTES.chat.advisor, ...parsed.chat?.advisor, id: "advisor" },

@@ -1,0 +1,77 @@
+.shortcuts-page {
+  max-width: 900px;
+}
+
+.shortcut-notice {
+  border-color: var(--warning-border);
+  background: var(--warning-soft);
+  color: var(--warning-text);
+}
+
+.shortcut-list {
+  border-top: 1px solid var(--border-subtle);
+}
+
+.shortcut-row {
+  display: grid;
+  grid-template-columns: 34px minmax(220px, 1fr) minmax(260px, 360px);
+  align-items: center;
+  gap: 12px;
+  min-height: 64px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.shortcut-icon {
+  width: 32px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--surface-sidebar);
+  color: var(--accent-strong);
+}
+
+.shortcut-copy {
+  display: grid;
+  gap: 2px;
+}
+
+.shortcut-copy strong {
+  color: var(--text-primary);
+  font-size: 13px;
+}
+
+.shortcut-copy small {
+  color: var(--text-muted);
+  font-size: 10px;
+}
+
+.shortcut-row input {
+  width: 100%;
+  min-width: 0;
+  height: 38px;
+  padding: 0 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  background: var(--surface-input);
+  color: var(--text-primary);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+}
+
+.shortcut-row input:focus {
+  border-color: var(--accent-strong);
+  outline: 2px solid var(--accent-soft);
+}
+
+@media (max-width: 760px) {
+  .shortcut-row {
+    grid-template-columns: 34px minmax(0, 1fr);
+    padding: 10px 0;
+  }
+
+  .shortcut-row input {
+    grid-column: 1 / -1;
+  }
+}

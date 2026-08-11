@@ -6,25 +6,13 @@ import {
   Pause,
   Play,
   RotateCcw,
-  Settings,
   Sparkles,
   Square,
   ThumbsDown,
   ThumbsUp,
-  X,
 } from "lucide-react";
-import type {
-  CallingAssistantController,
-  CallingProviderSecrets,
-} from "@/hooks/useCallingAssistant";
-import type { ChatRouteId, ModelRouteSettings } from "@/lib/calling";
+import type { CallingAssistantController } from "@/hooks/useCallingAssistant";
 import "./calling.css";
-
-const routeLabels: Record<ChatRouteId, string> = {
-  runtime: "Runtime",
-  advisor: "Advisor",
-  complex: "Complex Task",
-};
 
 const statusLabel: Record<string, string> = {
   planned: "Ready",
@@ -39,57 +27,6 @@ const statusLabel: Record<string, string> = {
   abandoned: "Abandoned",
 };
 
-function ProviderSettings({
-  initial,
-  onClose,
-  onSave,
-}: {
-  initial: ModelRouteSettings;
-  onClose: () => void;
-  onSave: (settings: ModelRouteSettings, secrets: CallingProviderSecrets) => Promise<void>;
-}) {
-  const [draft, setDraft] = useState(() => structuredClone(initial));
-  const [secrets, setSecrets] = useState<CallingProviderSecrets>({ runtime: "", advisor: "", complex: "", stt: "" });
-  const [saving, setSaving] = useState(false);
-
-  const updateChat = (route: ChatRouteId, field: "endpoint" | "model", value: string) => {
-    setDraft((current) => ({ ...current, chat: { ...current.chat, [route]: { ...current.chat[route], [field]: value } } }));
-  };
-
-  return (
-    <div className="moss-settings-backdrop" role="presentation">
-      <section className="moss-settings" role="dialog" aria-modal="true" aria-label="Model routes">
-        <header>
-          <div>
-            <h2>Model Routes</h2>
-            <p>Independent OpenAI-compatible endpoints. Secrets are stored in the OS keychain.</p>
-          </div>
-          <button className="icon-button" onClick={onClose} aria-label="Close settings"><X size={18} /></button>
-        </header>
-        <div className="route-grid">
-          {(Object.keys(routeLabels) as ChatRouteId[]).map((route) => (
-            <fieldset key={route}>
-              <legend>{routeLabels[route]}</legend>
-              <label>Endpoint<input value={draft.chat[route].endpoint} onChange={(event) => updateChat(route, "endpoint", event.target.value)} /></label>
-              <label>Model<input value={draft.chat[route].model} onChange={(event) => updateChat(route, "model", event.target.value)} /></label>
-              <label>API key<input type="password" autoComplete="off" placeholder="Enter to replace" value={secrets[route]} onChange={(event) => setSecrets((current) => ({ ...current, [route]: event.target.value }))} /></label>
-            </fieldset>
-          ))}
-          <fieldset>
-            <legend>Speech-to-Text</legend>
-            <label>Endpoint<input value={draft.stt.endpoint} onChange={(event) => setDraft((current) => ({ ...current, stt: { ...current.stt, endpoint: event.target.value } }))} /></label>
-            <label>Model<input value={draft.stt.model} onChange={(event) => setDraft((current) => ({ ...current, stt: { ...current.stt, model: event.target.value } }))} /></label>
-            <label>API key<input type="password" autoComplete="off" placeholder="Enter to replace" value={secrets.stt} onChange={(event) => setSecrets((current) => ({ ...current, stt: event.target.value }))} /></label>
-          </fieldset>
-        </div>
-        <footer>
-          <button className="secondary-button" onClick={onClose}>Cancel</button>
-          <button className="primary-button" disabled={saving} onClick={async () => { setSaving(true); try { await onSave(draft, secrets); onClose(); } finally { setSaving(false); } }}>{saving ? "Saving" : "Save routes"}</button>
-        </footer>
-      </section>
-    </div>
-  );
-}
 
 export default function CallingPage({
   controller,
@@ -100,7 +37,6 @@ export default function CallingPage({
   embedded?: boolean;
   onOpenControlCenter?: () => void;
 }) {
-  const [settingsOpen, setSettingsOpen] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const latestThem = useMemo(() => [...controller.runtime.transcript].reverse().find((turn) => turn.speaker === "them"), [controller.runtime.transcript]);
   const currentEvaluation = useMemo(
@@ -137,7 +73,6 @@ export default function CallingPage({
         )}
         <div className="moss-brand"><span className="brand-mark"><Headphones size={17} /></span><div><strong>MOSS</strong><span>Calling Helper</span></div></div>
         <div className={`status status-${state}`}><span />{statusLabel[state] ?? state}</div>
-        <button className="icon-button" onClick={() => setSettingsOpen(true)} aria-label="Open model settings" title="Model routes"><Settings size={18} /></button>
       </header>}
 
       <section className="moss-guidance" aria-live="polite">
@@ -203,7 +138,6 @@ export default function CallingPage({
         {state === "close-failed" && <button className="danger-button" onClick={() => void run(controller.abandonClose)}><ArchiveX size={16} />Abandon</button>}
         <span className="route-health">Runtime {controller.configured.runtime ? "ready" : "local fallback"} · Advisor {controller.configured.advisor ? "ready" : "not set"} · STT {controller.configured.stt ? "ready" : "not set"}{controller.recordingStatus ? ` · Recording ${controller.recordingStatus.state}` : ""}</span>
       </footer>
-      {settingsOpen && <ProviderSettings initial={controller.settings} onClose={() => setSettingsOpen(false)} onSave={controller.saveConfiguration} />}
     </div>
   );
 }

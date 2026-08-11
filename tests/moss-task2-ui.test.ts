@@ -8,6 +8,11 @@ import {
   normalizeAudioSettings,
 } from "../src/lib/calling/audio-settings.js";
 import { MOSS_WINDOW_PROFILES } from "../src/lib/calling/interface-mode.js";
+import {
+  DEFAULT_SHORTCUT_SETTINGS,
+  normalizeShortcutSettings,
+  validateShortcutSettings,
+} from "../src/lib/calling/shortcut-settings.js";
 
 const source = (path: string) =>
   readFileSync(resolve(process.cwd(), path), "utf8");
@@ -51,4 +56,25 @@ test("audio profiles map to bounded native VAD values", () => {
   assert.equal(bounded.vadConfig.sensitivity_rms, 1);
   assert.equal(bounded.vadConfig.silence_duration_ms, 100);
   assert.equal(bounded.vadConfig.minimum_speech_duration_ms, 5_000);
+});
+
+test("global shortcut settings reject collisions before native registration", () => {
+  const defaults = normalizeShortcutSettings(DEFAULT_SHORTCUT_SETTINGS);
+  assert.doesNotThrow(() => validateShortcutSettings(defaults));
+
+  const collision = structuredClone(defaults);
+  collision.bindings["end-call"] = collision.bindings["request-guidance"];
+  assert.throws(
+    () => validateShortcutSettings(collision),
+    /conflicts with Request guidance/
+  );
+});
+
+test("model routes and shortcuts live outside the companion surface", () => {
+  const callingView = source("src/pages/calling/index.tsx");
+  const appShell = source("src/pages/app/index.tsx");
+  assert.doesNotMatch(callingView, /ProviderSettings|Open model settings/);
+  assert.match(appShell, /ModelSettingsPage/);
+  assert.match(appShell, /ShortcutSettingsPage/);
+  assert.match(appShell, /recordShortcutAction/);
 });

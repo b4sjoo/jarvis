@@ -384,6 +384,7 @@ export function useCallingAssistant() {
           endpoint: settingsRef.current.stt.endpoint,
           model: settingsRef.current.stt.model,
           language: settingsRef.current.stt.language,
+          modelConfigRevision: settingsRef.current.revision,
           durationMs: segment.durationMs,
           endReason: segment.endReason,
         },
@@ -628,6 +629,7 @@ export function useCallingAssistant() {
         expected: true,
         reason: "start-completed",
         audioConfigRevision: audioSettingsRef.current.revision,
+        modelConfigRevision: settingsRef.current.revision,
         inputDeviceId: audioSettingsRef.current.inputDeviceId,
         outputDeviceId: audioSettingsRef.current.outputDeviceId,
         vadConfig: audioSettingsRef.current.vadConfig,
@@ -859,7 +861,11 @@ export function useCallingAssistant() {
 
   const saveConfiguration = useCallback(
     async (next: ModelRouteSettings, secrets: ProviderSecrets) => {
-      saveModelRouteSettings(next);
+      const saved = {
+        ...structuredClone(next),
+        revision: settingsRef.current.revision + 1,
+      };
+      saveModelRouteSettings(saved);
       const mergedSecrets = { ...secretsRef.current };
       await Promise.all(
         (Object.keys(secrets) as Array<keyof ProviderSecrets>).map(
@@ -870,8 +876,8 @@ export function useCallingAssistant() {
           }
         )
       );
-      settingsRef.current = next;
-      setSettings(next);
+      settingsRef.current = saved;
+      setSettings(saved);
       secretsRef.current = mergedSecrets;
       setConfigured({
         runtime: Boolean(mergedSecrets.runtime),
@@ -879,8 +885,44 @@ export function useCallingAssistant() {
         complex: Boolean(mergedSecrets.complex),
         stt: Boolean(mergedSecrets.stt),
       });
+      queueRecordingEvent("model-settings-updated", {
+        revision: saved.revision,
+        routes: {
+          runtime: {
+            endpoint: saved.chat.runtime.endpoint,
+            model: saved.chat.runtime.model,
+          },
+          advisor: {
+            endpoint: saved.chat.advisor.endpoint,
+            model: saved.chat.advisor.model,
+          },
+          complex: {
+            endpoint: saved.chat.complex.endpoint,
+            model: saved.chat.complex.model,
+          },
+          stt: {
+            endpoint: saved.stt.endpoint,
+            model: saved.stt.model,
+            language: saved.stt.language,
+          },
+        },
+      });
+      return saved;
     },
-    []
+    [queueRecordingEvent]
+  );
+
+  const recordShortcutAction = useCallback(
+    (payload: {
+      action: string;
+      accelerator: string;
+      outcome: "triggered" | "completed" | "ignored" | "failed";
+      detail?: string;
+      shortcutConfigRevision?: number;
+    }) => {
+      queueRecordingEvent("shortcut-action", payload);
+    },
+    [queueRecordingEvent]
   );
 
   const saveAudioConfiguration = useCallback(
@@ -938,6 +980,7 @@ export function useCallingAssistant() {
     evaluateGuidance,
     saveConfiguration,
     saveAudioConfiguration,
+    recordShortcutAction,
   };
 }
 

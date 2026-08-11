@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { LogicalSize } from "@tauri-apps/api/dpi";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -17,11 +17,20 @@ import {
 } from "lucide-react";
 import { useCallingAssistant } from "@/hooks/useCallingAssistant";
 import {
+  GlobalShortcutRegistry,
   MOSS_WINDOW_PROFILES,
+  isEditableElement,
+  loadShortcutSettings,
+  normalizeShortcutSettings,
+  persistShortcutSettings,
   type MossInterfaceMode,
+  type ShortcutAction,
+  type ShortcutSettings,
 } from "@/lib/calling";
 import CallingPage from "@/pages/calling";
 import AudioSettingsPage from "@/pages/audio";
+import ModelSettingsPage from "@/pages/models";
+import ShortcutSettingsPage from "@/pages/shortcuts";
 import "./app.css";
 
 type AppSection =
@@ -96,7 +105,7 @@ const isTauri = () => "__TAURI_INTERNALS__" in window;
 function Placeholder({
   section,
 }: {
-  section: Exclude<AppSection, "call" | "audio">;
+  section: Exclude<AppSection, "call" | "audio" | "shortcuts" | "models">;
 }) {
   const content: Record<typeof section, { title: string; body: string }> = {
     cases: {
@@ -106,14 +115,6 @@ function Placeholder({
     sessions: {
       title: "Session history is local",
       body: "Recording discovery, recovery, and export will move into this route in Task 2E.",
-    },
-    shortcuts: {
-      title: "One command path",
-      body: "Task 2D will register shortcuts that invoke the same runtime commands as visible controls.",
-    },
-    models: {
-      title: "Independent model routes",
-      body: "Runtime, Advisor, Complex Task, and Speech-to-Text settings will live here in Task 2D.",
     },
     settings: {
       title: "Application controls",
@@ -139,6 +140,26 @@ export default function MossApp() {
   const [quitError, setQuitError] = useState<string | null>(null);
   const [quitting, setQuitting] = useState(false);
   const [windowError, setWindowError] = useState<string | null>(null);
+  const [shortcutSettings, setShortcutSettings] = useState<ShortcutSettings>(
+    () => loadShortcutSettings()
+  );
+  const [shortcutRegistrationError, setShortcutRegistrationError] = useState<
+    string | null
+  >(null);
+  const [lastShortcutAction, setLastShortcutAction] = useState<string | null>(
+    null
+  );
+  const shortcutRegistryRef = useRef(new GlobalShortcutRegistry());
+  const shortcutSettingsRef = useRef(shortcutSettings);
+  const controllerRef = useRef(controller);
+  const interfaceModeRef = useRef(interfaceMode);
+  const shortcutHandlerRef = useRef<
+    (action: ShortcutAction, accelerator: string) => Promise<void>
+  >(async () => undefined);
+
+  controllerRef.current = controller;
+  interfaceModeRef.current = interfaceMode;
+  shortcutSettingsRef.current = shortcutSettings;
 
   const section = useMemo(
     () => sections.find((candidate) => candidate.id === activeSection) ?? sections[0],
@@ -182,6 +203,134 @@ export default function MossApp() {
     }
   }, []);
 
+  const executeShortcut = useCallback(
+    async (action: ShortcutAction, accelerator: string) => {
+      const activeController = controllerRef.current;
+      const revision = shortcutSettingsRef.current.revision;
+      const record = (
+        outcome: "triggered" | "completed" | "ignored" | "failed",
+        detail?: string
+      ) =>
+        activeController.recordShortcutAction({
+          action,
+          accelerator,
+          outcome,
+          detail,
+          shortcutConfigRevision: revision,
+        });
+
+      const protectsEditing = [
+        "toggle-listening",
+        "request-guidance",
+        "end-call",
+      ].includes(action);
+      if (protectsEditing && isEditableElement(document.activeElement)) {
+        const detail = "Ignored while editing text or settings.";
+        setLastShortcutAction(detail);
+        record("ignored", "editable-element-focused");
+        return;
+      }
+
+      record("triggered");
+      try {
+        if (action === "toggle-visibility") {
+          if (!isTauri()) return;
+          const appWindow = getCurrentWindow();
+          if (await appWindow.isVisible()) {
+            await appWindow.hide();
+          } else {
+            await appWindow.show();
+            await appWindow.setFocus();
+          }
+        } else if (action === "toggle-interface") {
+          await applyInterfaceMode(
+            interfaceModeRef.current === "control" ? "companion" : "control"
+          );
+        } else if (action === "toggle-listening") {
+          const state = activeController.runtime.state;
+          if (["planned", "closed", "start-failed", "abandoned"].includes(state)) {
+            await activeController.start();
+          } else if (state === "live") {
+            await activeController.pause();
+          } else if (["paused", "recovering"].includes(state)) {
+            await activeController.resume();
+          } else {
+            throw new Error(`Listening cannot change while the call is ${state}.`);
+          }
+        } else if (action === "request-guidance") {
+          const hasCounterpartyTurn = activeController.runtime.transcript.some(
+            (turn) => turn.speaker === "them"
+          );
+          if (!hasCounterpartyTurn) {
+            throw new Error("Guidance needs a counterparty turn first.");
+          }
+          if (!activeController.configured.advisor) {
+            throw new Error("Configure the Advisor model before requesting guidance.");
+          }
+          await activeController.requestGuidance();
+        } else if (action === "end-call") {
+          if (!["live", "paused", "recovering", "start-failed"].includes(activeController.runtime.state)) {
+            throw new Error("There is no active call to end.");
+          }
+          await activeController.end();
+        }
+        const detail = `${action} completed.`;
+        setLastShortcutAction(detail);
+        record("completed");
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error);
+        setLastShortcutAction(detail);
+        record("failed", detail);
+      }
+    },
+    [applyInterfaceMode]
+  );
+
+  shortcutHandlerRef.current = executeShortcut;
+
+  useEffect(() => {
+    let disposed = false;
+    void shortcutRegistryRef.current
+      .replace(shortcutSettingsRef.current, (action, accelerator) =>
+        shortcutHandlerRef.current(action, accelerator)
+      )
+      .then(() => {
+        if (!disposed) setShortcutRegistrationError(null);
+      })
+      .catch((error) => {
+        if (!disposed) {
+          setShortcutRegistrationError(
+            error instanceof Error ? error.message : String(error)
+          );
+        }
+      });
+    return () => {
+      disposed = true;
+      void shortcutRegistryRef.current.clear();
+    };
+  }, []);
+
+  const saveShortcuts = useCallback(async (next: ShortcutSettings) => {
+    const saved = normalizeShortcutSettings({
+      ...next,
+      revision: shortcutSettingsRef.current.revision + 1,
+    });
+    try {
+      await shortcutRegistryRef.current.replace(
+        saved,
+        (action, accelerator) => shortcutHandlerRef.current(action, accelerator)
+      );
+      persistShortcutSettings(saved);
+      shortcutSettingsRef.current = saved;
+      setShortcutSettings(saved);
+      setShortcutRegistrationError(null);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setShortcutRegistrationError(message);
+      throw error;
+    }
+  }, []);
+
   useEffect(() => {
     void applyInterfaceMode("control");
   }, [applyInterfaceMode]);
@@ -192,16 +341,10 @@ export default function MossApp() {
         event.preventDefault();
         void quit();
       }
-      if (event.metaKey && event.shiftKey && event.key.toLowerCase() === "m") {
-        event.preventDefault();
-        void applyInterfaceMode(
-          interfaceMode === "control" ? "companion" : "control"
-        );
-      }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [applyInterfaceMode, interfaceMode, quit]);
+  }, [quit]);
 
   if (interfaceMode === "companion") {
     return (
@@ -290,6 +433,15 @@ export default function MossApp() {
             <CallingPage controller={controller} embedded />
           ) : activeSection === "audio" ? (
             <AudioSettingsPage controller={controller} />
+          ) : activeSection === "models" ? (
+            <ModelSettingsPage controller={controller} />
+          ) : activeSection === "shortcuts" ? (
+            <ShortcutSettingsPage
+              settings={shortcutSettings}
+              registrationError={shortcutRegistrationError}
+              lastAction={lastShortcutAction}
+              onSave={saveShortcuts}
+            />
           ) : (
             <Placeholder section={activeSection} />
           )}

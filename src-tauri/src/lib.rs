@@ -47,6 +47,7 @@ pub fn run() {
         .manage(AudioState::default())
         .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_keychain::init())
+        .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .invoke_handler(tauri::generate_handler![
             get_app_version,
             write_call_trace_log,
