@@ -65,3 +65,13 @@ export interface CallTranscriptTurn {
   text: string;
   occurredAt: number;
 }
+
+export type GuidanceEvaluationLabel = "helpful" | "not-useful";
+
+export interface GuidanceEvaluationFact {
+  id: string;
+  callSessionId: string;
+  guidanceRevision: number;
+  label: GuidanceEvaluationLabel;
+  occurredAt: number;
+}

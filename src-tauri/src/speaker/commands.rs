@@ -1,9 +1,8 @@
-// Jarvis AI Speech Detection, and capture system audio (speaker output) as a stream of f32 samples.
+// MOSS speech detection, and capture system audio (speaker output) as a stream of f32 samples.
 use crate::speaker::{
     AudioDevice, SpeakerInput, SpeakerStream, SpeakerStreamTermination,
     SpeakerStreamTerminationReason,
 };
-use crate::stt_evaluation::create_raw_evaluation_capture_tap;
 use anyhow::Result;
 use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
 use futures_util::{FutureExt, StreamExt};
@@ -12,24 +11,24 @@ use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 use std::io::Cursor;
 use std::panic::AssertUnwindSafe;
+use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter, Listener, Manager};
-use tauri_plugin_shell::ShellExt;
 use tracing::{error, warn};
 use uuid::Uuid;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NativeCaptureOwner {
-    Meeting,
+    Call,
     System,
 }
 
 impl NativeCaptureOwner {
     fn as_str(self) -> &'static str {
         match self {
-            Self::Meeting => "call",
+            Self::Call => "call",
             Self::System => "system",
         }
     }
@@ -37,7 +36,7 @@ impl NativeCaptureOwner {
     #[cfg(debug_assertions)]
     fn parse(value: &str) -> Option<Self> {
         match value {
-            "call" => Some(Self::Meeting),
+            "call" => Some(Self::Call),
             "system" => Some(Self::System),
             _ => None,
         }
@@ -248,7 +247,7 @@ struct NativeSegmentBoundary {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct MeetingAudioStatus {
+pub struct CallAudioStatus {
     pub active: bool,
     pub system_capture_active: bool,
     pub capture_owner: Option<String>,
@@ -264,7 +263,7 @@ pub struct MeetingAudioStatus {
 #[serde(rename_all = "camelCase")]
 pub struct NativeAudioStopResult {
     pub disposition: &'static str,
-    pub status: MeetingAudioStatus,
+    pub status: CallAudioStatus,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -690,8 +689,8 @@ fn decide_debug_audio_fault(
 pub struct DebugAudioFaultResult {
     disposition: &'static str,
     fault_injection_id: String,
-    previous_status: MeetingAudioStatus,
-    current_status: MeetingAudioStatus,
+    previous_status: CallAudioStatus,
+    current_status: CallAudioStatus,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -836,44 +835,19 @@ fn take_capture_termination_request(
 }
 
 #[tauri::command]
-pub async fn start_system_audio_capture(
-    app: AppHandle,
-    vad_config: Option<VadConfig>,
-    device_id: Option<String>,
-) -> Result<MeetingAudioStatus, String> {
-    start_audio_capture(
-        app.clone(),
-        vad_config,
-        device_id,
-        NativeCaptureOwner::System,
-    )
-    .await?;
-    get_meeting_audio_status(app).await
-}
-
-#[tauri::command]
-pub async fn start_meeting_audio_session(
-    app: AppHandle,
-    vad_config: Option<VadConfig>,
-    device_id: Option<String>,
-) -> Result<MeetingAudioStatus, String> {
-    start_audio_capture(
-        app.clone(),
-        vad_config,
-        device_id,
-        NativeCaptureOwner::Meeting,
-    )
-    .await?;
-    get_meeting_audio_status(app).await
-}
-
-#[tauri::command]
 pub async fn start_call_audio_session(
     app: AppHandle,
     vad_config: Option<VadConfig>,
     device_id: Option<String>,
-) -> Result<MeetingAudioStatus, String> {
-    start_meeting_audio_session(app, vad_config, device_id).await
+) -> Result<CallAudioStatus, String> {
+    start_audio_capture(
+        app.clone(),
+        vad_config,
+        device_id,
+        NativeCaptureOwner::Call,
+    )
+    .await?;
+    get_call_audio_status(app).await
 }
 
 async fn start_audio_capture(
@@ -1162,11 +1136,6 @@ async fn run_vad_capture(
     let mut rollover_family_id: Option<String> = None;
     let mut segment_sequence = 0_u64;
     let mut liveness = VadLivenessAccumulator::default();
-    let mut evaluation_tap = if capture_owner == NativeCaptureOwner::Meeting {
-        create_raw_evaluation_capture_tap(&app, &capture_session_id, capture_generation, sr)
-    } else {
-        None
-    };
     let (tail_end_reason, mut outcome) = loop {
         if let Some(outcome) = take_capture_termination_request(
             &termination_requested,
@@ -1195,9 +1164,6 @@ async fn run_vad_capture(
                     ),
             );
         };
-        if let Some(tap) = evaluation_tap.as_mut() {
-            tap.push_sample(sample);
-        }
         buffer.push_back(sample);
 
         while buffer.len() >= config.hop_size {
@@ -1703,11 +1669,6 @@ async fn run_continuous_capture(
     let start_time = Instant::now();
     let max_duration = Duration::from_secs(config.max_recording_duration_secs);
     let mut segment_sequence = 0_u64;
-    let mut evaluation_tap = if capture_owner == NativeCaptureOwner::Meeting {
-        create_raw_evaluation_capture_tap(&app, &capture_session_id, capture_generation, sr)
-    } else {
-        None
-    };
 
     // Atomic flag for manual stop
     let stop_flag = Arc::new(AtomicBool::new(false));
@@ -1754,9 +1715,6 @@ async fn run_continuous_capture(
                             break;
                         }
 
-                        if let Some(tap) = evaluation_tap.as_mut() {
-                            tap.push_sample(sample);
-                        }
                         audio_buffer.push(sample);
 
                         let elapsed = start_time.elapsed();
@@ -2365,55 +2323,22 @@ async fn stop_audio_capture_for_owner(
 }
 
 #[tauri::command]
-pub async fn stop_system_audio_capture(
-    app: AppHandle,
-    expected_capture_session_id: Option<String>,
-    expected_capture_generation: Option<u64>,
-) -> Result<NativeAudioStopResult, String> {
-    let disposition = stop_audio_capture_for_owner(
-        app.clone(),
-        NativeCaptureOwner::System,
-        expected_capture_session_id,
-        expected_capture_generation,
-    )
-    .await?;
-    Ok(NativeAudioStopResult {
-        disposition: disposition.as_str(),
-        status: get_meeting_audio_status(app).await?,
-    })
-}
-
-#[tauri::command]
-pub async fn stop_meeting_audio_session(
-    app: AppHandle,
-    expected_capture_session_id: Option<String>,
-    expected_capture_generation: Option<u64>,
-) -> Result<NativeAudioStopResult, String> {
-    let disposition = stop_audio_capture_for_owner(
-        app.clone(),
-        NativeCaptureOwner::Meeting,
-        expected_capture_session_id,
-        expected_capture_generation,
-    )
-    .await?;
-    Ok(NativeAudioStopResult {
-        disposition: disposition.as_str(),
-        status: get_meeting_audio_status(app).await?,
-    })
-}
-
-#[tauri::command]
 pub async fn stop_call_audio_session(
     app: AppHandle,
     expected_capture_session_id: Option<String>,
     expected_capture_generation: Option<u64>,
 ) -> Result<NativeAudioStopResult, String> {
-    stop_meeting_audio_session(
-        app,
+    let disposition = stop_audio_capture_for_owner(
+        app.clone(),
+        NativeCaptureOwner::Call,
         expected_capture_session_id,
         expected_capture_generation,
     )
-    .await
+    .await?;
+    Ok(NativeAudioStopResult {
+        disposition: disposition.as_str(),
+        status: get_call_audio_status(app).await?,
+    })
 }
 
 #[cfg(debug_assertions)]
@@ -2437,7 +2362,7 @@ pub async fn debug_inject_native_audio_fault(
         return Err("Debug audio fault requires a bounded injection id".to_string());
     }
 
-    let previous_status = get_meeting_audio_status(app.clone()).await?;
+    let previous_status = get_call_audio_status(app.clone()).await?;
     let state = app.state::<crate::AudioState>();
     let requested_at_ms = now_ms();
     let disposition = {
@@ -2544,12 +2469,12 @@ pub async fn debug_inject_native_audio_fault(
         disposition: disposition.as_str(),
         fault_injection_id: injection_id.to_string(),
         previous_status,
-        current_status: get_meeting_audio_status(app).await?,
+        current_status: get_call_audio_status(app).await?,
     })
 }
 
 #[tauri::command]
-pub async fn get_meeting_audio_status(app: AppHandle) -> Result<MeetingAudioStatus, String> {
+pub async fn get_call_audio_status(app: AppHandle) -> Result<CallAudioStatus, String> {
     let state = app.state::<crate::AudioState>();
 
     let (system_capture_active, capture_owner, capture_session_id, capture_generation) = {
@@ -2591,7 +2516,7 @@ pub async fn get_meeting_audio_status(app: AppHandle) -> Result<MeetingAudioStat
         .enabled;
     let active = system_capture_active && capture_owner.as_deref() == Some("call");
 
-    Ok(MeetingAudioStatus {
+    Ok(CallAudioStatus {
         active,
         system_capture_active,
         capture_owner,
@@ -2602,16 +2527,6 @@ pub async fn get_meeting_audio_status(app: AppHandle) -> Result<MeetingAudioStat
         capture_session_id,
         capture_generation,
     })
-}
-
-/// Manual stop for continuous recording
-#[tauri::command]
-pub async fn manual_stop_continuous(app: AppHandle) -> Result<(), String> {
-    let _ = app.emit("manual-stop-continuous", ());
-
-    tokio::time::sleep(tokio::time::Duration::from_millis(20)).await;
-
-    Ok(())
 }
 
 #[tauri::command]
@@ -2626,12 +2541,11 @@ pub fn check_system_audio_access(_app: AppHandle) -> Result<bool, String> {
 }
 
 #[tauri::command]
-pub async fn request_system_audio_access(app: AppHandle) -> Result<(), String> {
+pub async fn request_system_audio_access(_app: AppHandle) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     {
-        app.shell()
-            .command("open")
-            .args(["x-apple.systempreferences:com.apple.preference.security?Privacy_AudioCapture"])
+        Command::new("open")
+            .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_AudioCapture")
             .spawn()
             .map_err(|e| {
                 error!("Failed to open system preferences: {}", e);
@@ -2640,8 +2554,8 @@ pub async fn request_system_audio_access(app: AppHandle) -> Result<(), String> {
     }
     #[cfg(target_os = "windows")]
     {
-        app.shell()
-            .command("ms-settings:sound")
+        Command::new("cmd")
+            .args(["/C", "start", "ms-settings:sound"])
             .spawn()
             .map_err(|e| {
                 error!("Failed to open sound settings: {}", e);
@@ -2650,15 +2564,11 @@ pub async fn request_system_audio_access(app: AppHandle) -> Result<(), String> {
     }
     #[cfg(target_os = "linux")]
     {
-        let commands = ["pavucontrol", "gnome-control-center sound"];
-        let mut opened = false;
-
-        for cmd in &commands {
-            if app.shell().command(cmd).spawn().is_ok() {
-                opened = true;
-                break;
-            }
-        }
+        let opened = Command::new("pavucontrol").spawn().is_ok()
+            || Command::new("gnome-control-center")
+                .arg("sound")
+                .spawn()
+                .is_ok();
 
         if !opened {
             warn!("Failed to open audio settings on Linux");
@@ -2899,7 +2809,7 @@ mod tests {
             capture_session_id: "capture-test".to_string(),
             capture_generation: 3,
             candidate_segment_sequence: 8,
-            owner: "meeting",
+            owner: "call",
             source: "system-audio",
             occurred_at_ms: 1234,
             sample_rate: 48_000,
@@ -2909,7 +2819,7 @@ mod tests {
         assert_eq!(value["captureSessionId"], "capture-test");
         assert_eq!(value["captureGeneration"], 3);
         assert_eq!(value["candidateSegmentSequence"], 8);
-        assert_eq!(value["owner"], "meeting");
+        assert_eq!(value["owner"], "call");
         assert_eq!(value["source"], "system-audio");
         assert_eq!(value["occurredAtMs"], 1234);
         assert_eq!(value["sampleRate"], 48_000);
@@ -2923,7 +2833,7 @@ mod tests {
         let event = liveness.take_snapshot(
             "capture-test",
             3,
-            NativeCaptureOwner::Meeting,
+            NativeCaptureOwner::Call,
             48_000,
             "speech-candidate",
             "speech-start",
@@ -3015,7 +2925,7 @@ mod tests {
     fn native_termination_request_is_consumed_only_by_its_capture_lease() {
         let requested = AtomicBool::new(true);
         let request = Mutex::new(Some(NativeCaptureTerminationRequest {
-            owner: NativeCaptureOwner::Meeting,
+            owner: NativeCaptureOwner::Call,
             capture_session_id: "capture-test".to_string(),
             capture_generation: 3,
             outcome: CaptureRunOutcome::panic()
@@ -3025,7 +2935,7 @@ mod tests {
         assert!(take_capture_termination_request(
             &requested,
             &request,
-            NativeCaptureOwner::Meeting,
+            NativeCaptureOwner::Call,
             "capture-other",
             3,
         )
@@ -3035,7 +2945,7 @@ mod tests {
         let outcome = take_capture_termination_request(
             &requested,
             &request,
-            NativeCaptureOwner::Meeting,
+            NativeCaptureOwner::Call,
             "capture-test",
             3,
         )
@@ -3083,7 +2993,7 @@ mod tests {
             event_type: "stopped",
             capture_session_id: "capture-test".to_string(),
             capture_generation: 3,
-            owner: "meeting",
+            owner: "call",
             occurred_at_ms: 1234,
             reason: Some("stream-ended".to_string()),
             message: None,
@@ -3102,7 +3012,7 @@ mod tests {
         assert_eq!(value["eventType"], "stopped");
         assert_eq!(value["captureSessionId"], "capture-test");
         assert_eq!(value["captureGeneration"], 3);
-        assert_eq!(value["owner"], "meeting");
+        assert_eq!(value["owner"], "call");
         assert_eq!(value["reason"], "stream-ended");
         assert_eq!(value["expected"], false);
         assert_eq!(value["recoverability"], "retry-once");
@@ -3117,7 +3027,7 @@ mod tests {
             capture_session_id: "capture-test".to_string(),
             capture_generation: 3,
             attempted_segment_sequence: 8,
-            owner: "meeting",
+            owner: "call",
             occurred_at_ms: 1234,
             reason: "wav-encoding-failed",
             message: "writer failed".to_string(),
@@ -3127,7 +3037,7 @@ mod tests {
         assert_eq!(value["captureSessionId"], "capture-test");
         assert_eq!(value["captureGeneration"], 3);
         assert_eq!(value["attemptedSegmentSequence"], 8);
-        assert_eq!(value["owner"], "meeting");
+        assert_eq!(value["owner"], "call");
         assert_eq!(value["reason"], "wav-encoding-failed");
         assert!(value.get("audioBase64").is_none());
     }
@@ -3137,16 +3047,16 @@ mod tests {
         let mut control = NativeCaptureControl::default();
         let first = claim_capture_lease(
             &mut control,
-            NativeCaptureOwner::Meeting,
-            "meeting-1".to_string(),
+            NativeCaptureOwner::Call,
+            "call-1".to_string(),
         )
         .expect("first capture should claim the controller");
         control.phase = NativeCapturePhase::Idle;
         control.lease = None;
         let second = claim_capture_lease(
             &mut control,
-            NativeCaptureOwner::Meeting,
-            "meeting-2".to_string(),
+            NativeCaptureOwner::Call,
+            "call-2".to_string(),
         )
         .expect("second capture should claim the controller");
 
@@ -3157,12 +3067,12 @@ mod tests {
     #[test]
     fn concurrent_owner_claims_have_exactly_one_winner() {
         let mut control = NativeCaptureControl::default();
-        let meeting = claim_capture_lease(
+        let call = claim_capture_lease(
             &mut control,
-            NativeCaptureOwner::Meeting,
-            "meeting-1".to_string(),
+            NativeCaptureOwner::Call,
+            "call-1".to_string(),
         )
-        .expect("meeting should claim the idle controller");
+        .expect("call should claim the idle controller");
 
         let legacy = claim_capture_lease(
             &mut control,
@@ -3172,7 +3082,7 @@ mod tests {
 
         assert!(legacy.is_err());
         assert_eq!(control.phase, NativeCapturePhase::Starting);
-        assert_eq!(control.lease, Some(meeting));
+        assert_eq!(control.lease, Some(call));
     }
 
     #[test]
@@ -3180,15 +3090,15 @@ mod tests {
         let mut control = NativeCaptureControl::default();
         let lease = claim_capture_lease(
             &mut control,
-            NativeCaptureOwner::Meeting,
-            "meeting-1".to_string(),
+            NativeCaptureOwner::Call,
+            "call-1".to_string(),
         )
-        .expect("meeting should claim the idle controller");
+        .expect("call should claim the idle controller");
 
         assert_eq!(
             begin_capture_stop(
                 &mut control,
-                NativeCaptureOwner::Meeting,
+                NativeCaptureOwner::Call,
                 Some(&lease.session_id),
                 Some(lease.generation),
             ),
@@ -3209,10 +3119,10 @@ mod tests {
         let mut control = NativeCaptureControl::default();
         let lease = claim_capture_lease(
             &mut control,
-            NativeCaptureOwner::Meeting,
-            "meeting-1".to_string(),
+            NativeCaptureOwner::Call,
+            "call-1".to_string(),
         )
-        .expect("meeting capture should claim the controller");
+        .expect("call capture should claim the controller");
         control.phase = NativeCapturePhase::Active;
 
         assert_eq!(
@@ -3222,13 +3132,13 @@ mod tests {
                 Some(&lease.session_id),
                 Some(lease.generation),
             ),
-            NativeStopDecision::WrongOwner(NativeCaptureOwner::Meeting)
+            NativeStopDecision::WrongOwner(NativeCaptureOwner::Call)
         );
         assert_eq!(control.phase, NativeCapturePhase::Active);
         assert_eq!(
             begin_capture_stop(
                 &mut control,
-                NativeCaptureOwner::Meeting,
+                NativeCaptureOwner::Call,
                 Some(&lease.session_id),
                 Some(lease.generation),
             ),
@@ -3242,16 +3152,16 @@ mod tests {
         let mut control = NativeCaptureControl::default();
         let old = claim_capture_lease(
             &mut control,
-            NativeCaptureOwner::Meeting,
-            "meeting-old".to_string(),
+            NativeCaptureOwner::Call,
+            "call-old".to_string(),
         )
         .expect("old capture should claim the controller");
         control.phase = NativeCapturePhase::Idle;
         control.lease = None;
         let current = claim_capture_lease(
             &mut control,
-            NativeCaptureOwner::Meeting,
-            "meeting-current".to_string(),
+            NativeCaptureOwner::Call,
+            "call-current".to_string(),
         )
         .expect("current capture should claim the controller");
         control.phase = NativeCapturePhase::Active;
@@ -3259,7 +3169,7 @@ mod tests {
         assert_eq!(
             begin_capture_stop(
                 &mut control,
-                NativeCaptureOwner::Meeting,
+                NativeCaptureOwner::Call,
                 Some(&old.session_id),
                 Some(old.generation),
             ),
@@ -3303,20 +3213,20 @@ mod tests {
     fn debug_fault_requires_the_exact_active_capture_lease() {
         let mut control = NativeCaptureControl::default();
         assert_eq!(
-            decide_debug_audio_fault(&control, NativeCaptureOwner::Meeting, "meeting-1", 1,),
+            decide_debug_audio_fault(&control, NativeCaptureOwner::Call, "call-1", 1,),
             DebugAudioFaultDisposition::AlreadyIdle
         );
 
         let lease = claim_capture_lease(
             &mut control,
-            NativeCaptureOwner::Meeting,
-            "meeting-1".to_string(),
+            NativeCaptureOwner::Call,
+            "call-1".to_string(),
         )
-        .expect("meeting capture should claim the controller");
+        .expect("call capture should claim the controller");
         assert_eq!(
             decide_debug_audio_fault(
                 &control,
-                NativeCaptureOwner::Meeting,
+                NativeCaptureOwner::Call,
                 &lease.session_id,
                 lease.generation,
             ),
@@ -3335,7 +3245,7 @@ mod tests {
         assert_eq!(
             decide_debug_audio_fault(
                 &control,
-                NativeCaptureOwner::Meeting,
+                NativeCaptureOwner::Call,
                 "stale-session",
                 lease.generation,
             ),
@@ -3344,7 +3254,7 @@ mod tests {
         assert_eq!(
             decide_debug_audio_fault(
                 &control,
-                NativeCaptureOwner::Meeting,
+                NativeCaptureOwner::Call,
                 &lease.session_id,
                 lease.generation,
             ),
@@ -3362,17 +3272,17 @@ mod tests {
                 .expect("capture control should lock");
             let lease = claim_capture_lease(
                 &mut control,
-                NativeCaptureOwner::Meeting,
-                "meeting-1".to_string(),
+                NativeCaptureOwner::Call,
+                "call-1".to_string(),
             )
-            .expect("meeting capture should claim the controller");
+            .expect("call capture should claim the controller");
             control.phase = NativeCapturePhase::Active;
             lease
         };
 
         assert!(release_active_capture_if_owner(
             &state,
-            NativeCaptureOwner::Meeting,
+            NativeCaptureOwner::Call,
             "stale-session",
             lease.generation,
         )
@@ -3380,7 +3290,7 @@ mod tests {
         .is_none());
         assert!(release_active_capture_if_owner(
             &state,
-            NativeCaptureOwner::Meeting,
+            NativeCaptureOwner::Call,
             &lease.session_id,
             lease.generation,
         )

@@ -5,18 +5,18 @@ import test from "node:test";
 const read = (path: string) => readFile(path, "utf8");
 
 test("MOSS uses an isolated bundle identity and database", async () => {
-  const [tauriConfig, databaseConfig, rustBootstrap] = await Promise.all([
+  const [tauriConfig, packageManifest, rustBootstrap] = await Promise.all([
     read("src-tauri/tauri.conf.json"),
-    read("src/lib/database/config.ts"),
+    read("package.json"),
     read("src-tauri/src/lib.rs"),
   ]);
 
   assert.match(tauriConfig, /dev\.seasonsg\.moss/);
   assert.match(tauriConfig, /sqlite:moss\.db/);
-  assert.match(databaseConfig, /sqlite:moss\.db/);
+  assert.match(packageManifest, /"name":\s*"moss"/);
   assert.match(rustBootstrap, /sqlite:moss\.db/);
 
-  for (const source of [tauriConfig, databaseConfig, rustBootstrap]) {
+  for (const source of [tauriConfig, packageManifest, rustBootstrap]) {
     assert.doesNotMatch(source, /sqlite:jarvis\.db/);
   }
 });

@@ -10,7 +10,6 @@
     "frontendDist": "../dist"
   },
   "app": {
-    "macOSPrivateApi": true,
     "windows": [
       {
         "title": "MOSS - Calling Helper",
@@ -23,7 +22,7 @@
         "visibleOnAllWorkspaces": true,
         "skipTaskbar": true,
         "visible": true,
-        "center": false,
+        "center": true,
         "contentProtected": true,
         "focus": true,
         "acceptFirstMouse": true,

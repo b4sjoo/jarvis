@@ -52,6 +52,7 @@ export class StableGuidanceStore {
 
   record(receipt: GuidanceReceipt) {
     this.#receipts.push({ ...receipt });
+    if (this.#receipts.length > 500) this.#receipts.shift();
   }
 
   commit(input: {

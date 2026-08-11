@@ -1,5 +1,17 @@
 import { useMemo, useState } from "react";
-import { Headphones, Pause, Play, Settings, Sparkles, Square, X } from "lucide-react";
+import {
+  ArchiveX,
+  Headphones,
+  Pause,
+  Play,
+  RotateCcw,
+  Settings,
+  Sparkles,
+  Square,
+  ThumbsDown,
+  ThumbsUp,
+  X,
+} from "lucide-react";
 import { useCallingAssistant, type CallingProviderSecrets } from "@/hooks/useCallingAssistant";
 import type { ChatRouteId, ModelRouteSettings } from "@/lib/calling";
 import "./calling.css";
@@ -80,12 +92,24 @@ export default function CallingPage() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const latestThem = useMemo(() => [...controller.runtime.transcript].reverse().find((turn) => turn.speaker === "them"), [controller.runtime.transcript]);
+  const currentEvaluation = useMemo(
+    () => controller.runtime.humanEvaluations.find(
+      (fact) => fact.guidanceRevision === controller.runtime.guidanceRevision
+    ),
+    [controller.runtime.guidanceRevision, controller.runtime.humanEvaluations]
+  );
+  const historicalRecoverables = useMemo(
+    () => controller.recoverableRecordings.filter(
+      (recording) => recording.callSessionId !== controller.runtime.callSessionId
+    ),
+    [controller.recoverableRecordings, controller.runtime.callSessionId]
+  );
   const run = async (action: () => Promise<void>) => {
     setActionError(null);
     try { await action(); } catch (error) { setActionError(error instanceof Error ? error.message : String(error)); }
   };
   const state = controller.runtime.state;
-  const canStart = state === "planned" || state === "closed" || state === "start-failed";
+  const canStart = ["planned", "closed", "start-failed", "abandoned"].includes(state);
 
   return (
     <main className="moss-shell">
@@ -105,6 +129,23 @@ export default function CallingPage() {
               <div><h3>Avoid</h3>{controller.runtime.visibleGuidance.avoid.length ? controller.runtime.visibleGuidance.avoid.map((line) => <p key={line}>{line}</p>) : <p className="muted">No active warning.</p>}</div>
             </div>
             <div className="guidance-footer"><span><b>Call state</b> {controller.runtime.visibleGuidance.callState}</span><span><b>Next move</b> {controller.runtime.visibleGuidance.nextMove}</span></div>
+            <div className="guidance-evaluation" aria-label="Evaluate this guidance">
+              <span>{currentEvaluation ? "Feedback recorded" : "Was this useful?"}</span>
+              <button
+                className={currentEvaluation?.label === "helpful" ? "evaluation-selected" : "icon-button"}
+                disabled={Boolean(currentEvaluation) || !["live", "paused", "recovering"].includes(state)}
+                onClick={() => void run(() => controller.evaluateGuidance("helpful"))}
+                aria-label="Mark guidance helpful"
+                title="Helpful"
+              ><ThumbsUp size={15} /></button>
+              <button
+                className={currentEvaluation?.label === "not-useful" ? "evaluation-selected" : "icon-button"}
+                disabled={Boolean(currentEvaluation) || !["live", "paused", "recovering"].includes(state)}
+                onClick={() => void run(() => controller.evaluateGuidance("not-useful"))}
+                aria-label="Mark guidance not useful"
+                title="Not useful"
+              ><ThumbsDown size={15} /></button>
+            </div>
           </div>
         ) : (
           <div className="empty-guidance"><Sparkles size={22} /><p>Guidance appears here after an actionable counterparty turn.</p></div>
@@ -116,15 +157,30 @@ export default function CallingPage() {
         <p>{latestThem?.text ?? "Listening has not started."}</p>
       </section>
 
-      {(actionError || controller.runtime.lastError) && <div className="moss-error">{actionError ?? controller.runtime.lastError}</div>}
+      {historicalRecoverables.length > 0 && (
+        <section className="recording-recovery" aria-label="Recoverable call recordings">
+          <strong>Unfinished recordings</strong>
+          {historicalRecoverables.map((recording) => (
+            <div key={recording.callSessionId}>
+              <span title={recording.recordingPath}>{recording.callSessionId} · {recording.state} · {recording.eventCount} events</span>
+              <button className="icon-button" onClick={() => void run(() => controller.retryRecoveredRecording(recording.callSessionId))} aria-label={`Retry closing ${recording.callSessionId}`} title="Retry close"><RotateCcw size={15} /></button>
+              <button className="icon-button" onClick={() => void run(() => controller.abandonRecoveredRecording(recording.callSessionId))} aria-label={`Abandon ${recording.callSessionId}`} title="Abandon recording"><ArchiveX size={15} /></button>
+            </div>
+          ))}
+        </section>
+      )}
+
+      {(actionError || controller.runtime.lastError || controller.recordingError) && <div className="moss-error">{actionError ?? controller.runtime.lastError ?? controller.recordingError}</div>}
 
       <footer className="moss-actions">
-        {canStart && <button className="primary-button" onClick={() => void run(controller.start)}><Play size={17} />Start call</button>}
+        {canStart && <button className="primary-button" onClick={() => void run(controller.start)}><Play size={17} />{state === "start-failed" ? "Retry start" : "Start call"}</button>}
         {state === "live" && <button className="secondary-button" onClick={() => void run(controller.pause)}><Pause size={17} />Pause</button>}
         {(state === "paused" || state === "recovering") && <button className="primary-button" onClick={() => void run(controller.resume)}><Play size={17} />Resume</button>}
         {(["live", "paused", "recovering"] as string[]).includes(state) && <button className="secondary-button" disabled={!latestThem || !controller.configured.advisor} onClick={() => void run(controller.requestGuidance)}><Sparkles size={17} />Advise</button>}
         {(["live", "paused", "recovering", "start-failed"] as string[]).includes(state) && <button className="danger-button" onClick={() => void run(controller.end)}><Square size={15} />End</button>}
-        <span className="route-health">Runtime {controller.configured.runtime ? "ready" : "local fallback"} · Advisor {controller.configured.advisor ? "ready" : "not set"} · STT {controller.configured.stt ? "ready" : "not set"}</span>
+        {state === "close-failed" && <button className="primary-button" onClick={() => void run(controller.retryClose)}><RotateCcw size={16} />Retry close</button>}
+        {state === "close-failed" && <button className="danger-button" onClick={() => void run(controller.abandonClose)}><ArchiveX size={16} />Abandon</button>}
+        <span className="route-health">Runtime {controller.configured.runtime ? "ready" : "local fallback"} · Advisor {controller.configured.advisor ? "ready" : "not set"} · STT {controller.configured.stt ? "ready" : "not set"}{controller.recordingStatus ? ` · Recording ${controller.recordingStatus.state}` : ""}</span>
       </footer>
       {settingsOpen && <ProviderSettings initial={controller.settings} onClose={() => setSettingsOpen(false)} onSave={controller.saveConfiguration} />}
     </main>

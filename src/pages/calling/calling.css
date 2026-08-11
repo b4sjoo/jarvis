@@ -3,8 +3,9 @@
 body { margin: 0; background: #0f1113; }
 button, input { font: inherit; }
 button { color: inherit; }
-.moss-shell { height: 100vh; display: grid; grid-template-rows: 58px minmax(260px, 1fr) minmax(112px, auto) auto 68px; overflow: hidden; background: #0f1113; }
+.moss-shell { height: 100vh; display: flex; flex-direction: column; overflow: hidden; background: #0f1113; }
 .moss-topbar { display: flex; align-items: center; gap: 14px; padding: 0 18px; border-bottom: 1px solid #2b3035; background: #15181b; }
+.moss-topbar { flex: 0 0 58px; }
 .moss-brand { display: flex; align-items: center; gap: 10px; min-width: 180px; }
 .moss-brand > div:last-child { display: grid; gap: 1px; }
 .moss-brand strong { font-size: 14px; }
@@ -18,7 +19,7 @@ button { color: inherit; }
 .icon-button { width: 34px; height: 34px; border: 1px solid transparent; background: transparent; border-radius: 5px; display: grid; place-items: center; cursor: pointer; }
 .icon-button:hover { background: #252a2f; border-color: #353b41; }
 .moss-guidance, .moss-transcript { min-width: 0; padding: 16px 18px; overflow: auto; }
-.moss-guidance { border-bottom: 1px solid #292e33; }
+.moss-guidance { flex: 1 1 260px; min-height: 220px; border-bottom: 1px solid #292e33; }
 .section-heading { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 12px; text-transform: uppercase; font-size: 11px; color: #8f9aa3; font-weight: 700; }
 .section-heading small { text-transform: none; font-weight: 500; }
 .guidance-layout { display: grid; grid-template-columns: minmax(0, 1.45fr) minmax(220px, .8fr); gap: 18px; }
@@ -29,13 +30,19 @@ button { color: inherit; }
 .guidance-secondary p { margin: 4px 0; font-size: 13px; line-height: 1.45; }
 .guidance-footer { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 8px 24px; padding-top: 12px; border-top: 1px solid #292e33; color: #b9c1c7; font-size: 12px; }
 .guidance-footer b { color: #edf0f2; margin-right: 5px; }
+.guidance-evaluation { grid-column: 1 / -1; display: flex; align-items: center; justify-content: flex-end; gap: 6px; color: #7f8a92; font-size: 11px; }
+.evaluation-selected { width: 34px; height: 34px; border: 1px solid #79903a; border-radius: 5px; display: grid; place-items: center; background: #263019; color: #d7f36a; }
 .muted { color: #737e86; }
 .empty-guidance { height: calc(100% - 28px); min-height: 170px; display: grid; place-content: center; justify-items: center; gap: 6px; color: #69747c; text-align: center; }
 .empty-guidance p { margin: 0; font-size: 13px; }
-.moss-transcript { background: #121518; }
+.moss-transcript { flex: 0 1 auto; min-height: 100px; max-height: 190px; background: #121518; }
 .moss-transcript p { margin: 0; font-size: 15px; line-height: 1.5; color: #d2d8dc; }
 .moss-error { margin: 0 18px; padding: 9px 11px; border-left: 3px solid #ef7a7a; background: #2b1b1c; color: #ffc0c0; font-size: 12px; }
-.moss-actions { display: flex; align-items: center; gap: 8px; padding: 12px 18px; border-top: 1px solid #2b3035; background: #15181b; }
+.recording-recovery { flex: 0 0 auto; max-height: 118px; overflow: auto; padding: 9px 18px; border-top: 1px solid #453f26; background: #252315; color: #dcd6aa; font-size: 11px; }
+.recording-recovery > strong { display: block; margin-bottom: 5px; color: #f2df76; }
+.recording-recovery > div { display: flex; align-items: center; gap: 5px; min-width: 0; }
+.recording-recovery > div > span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.moss-actions { flex: 0 0 68px; display: flex; align-items: center; gap: 8px; padding: 12px 18px; border-top: 1px solid #2b3035; background: #15181b; }
 .primary-button, .secondary-button, .danger-button { min-height: 36px; border-radius: 5px; border: 1px solid transparent; padding: 0 13px; display: inline-flex; align-items: center; justify-content: center; gap: 7px; cursor: pointer; font-weight: 650; font-size: 13px; }
 .primary-button { background: #d7f36a; color: #171b13; }
 .secondary-button { background: #24292e; border-color: #353b41; }

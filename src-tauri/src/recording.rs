@@ -1,0 +1,539 @@
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use sha2::{Digest, Sha256};
+use std::fs::{self, File, OpenOptions};
+use std::io::{Read, Write};
+use std::path::{Path, PathBuf};
+use tauri::{AppHandle, Manager};
+use uuid::Uuid;
+
+const CALL_RECORDINGS_DIR: &str = "call-session-recordings";
+const STATUS_FILE: &str = "recording-state.json";
+const EVENTS_FILE: &str = "events.jsonl";
+const MANIFEST_FILE: &str = "manifest.json";
+const MAX_EVENT_BYTES: usize = 2 * 1024 * 1024;
+const MAX_SESSION_ID_CHARS: usize = 160;
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum CallRecordingState {
+    Open,
+    Closing,
+    Closed,
+    CloseFailed,
+    Abandoned,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CallRecordingStatus {
+    pub call_session_id: String,
+    pub recording_path: String,
+    pub state: CallRecordingState,
+    pub attempt: u32,
+    pub event_count: u64,
+    pub started_at: u64,
+    pub ended_at: Option<u64>,
+    pub last_error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CallRecordingEvent {
+    event_id: String,
+    call_session_id: String,
+    sequence: u64,
+    kind: String,
+    occurred_at: u64,
+    payload: Value,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CallRecordingManifest {
+    version: u32,
+    call_session_id: String,
+    started_at: u64,
+    ended_at: u64,
+    event_count: u64,
+    events_sha256: String,
+    raw_audio_retained: bool,
+}
+
+#[tauri::command]
+pub fn start_call_recording(
+    app: AppHandle,
+    call_session_id: String,
+    started_at: u64,
+) -> Result<CallRecordingStatus, String> {
+    let root = recordings_root(&app)?;
+    start_at_root(&root, &call_session_id, started_at)
+}
+
+#[tauri::command]
+pub fn append_call_recording_event(
+    app: AppHandle,
+    call_session_id: String,
+    event_payload: String,
+) -> Result<CallRecordingStatus, String> {
+    if event_payload.len() > MAX_EVENT_BYTES {
+        return Err("Call recording event exceeds the size limit.".to_string());
+    }
+    let root = recordings_root(&app)?;
+    append_at_root(&root, &call_session_id, &event_payload)
+}
+
+#[tauri::command]
+pub fn close_call_recording(
+    app: AppHandle,
+    call_session_id: String,
+    ended_at: u64,
+) -> Result<CallRecordingStatus, String> {
+    let root = recordings_root(&app)?;
+    close_at_root(&root, &call_session_id, ended_at)
+}
+
+#[tauri::command]
+pub fn retry_call_recording_close(
+    app: AppHandle,
+    call_session_id: String,
+    ended_at: u64,
+) -> Result<CallRecordingStatus, String> {
+    let root = recordings_root(&app)?;
+    close_at_root(&root, &call_session_id, ended_at)
+}
+
+#[tauri::command]
+pub fn abandon_call_recording(
+    app: AppHandle,
+    call_session_id: String,
+    occurred_at: u64,
+) -> Result<CallRecordingStatus, String> {
+    let root = recordings_root(&app)?;
+    abandon_at_root(&root, &call_session_id, occurred_at)
+}
+
+#[tauri::command]
+pub fn list_recoverable_call_recordings(
+    app: AppHandle,
+) -> Result<Vec<CallRecordingStatus>, String> {
+    let root = recordings_root(&app)?;
+    list_recoverable_at_root(&root)
+}
+
+fn recordings_root(app: &AppHandle) -> Result<PathBuf, String> {
+    let app_data = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| format!("Failed to resolve app data directory: {error}"))?;
+    Ok(app_data.join(CALL_RECORDINGS_DIR))
+}
+
+fn start_at_root(
+    recordings_root: &Path,
+    call_session_id: &str,
+    started_at: u64,
+) -> Result<CallRecordingStatus, String> {
+    validate_session_id(call_session_id)?;
+    reject_symlink(recordings_root)?;
+    fs::create_dir_all(recordings_root)
+        .map_err(|error| format!("Failed to create call recordings directory: {error}"))?;
+    reject_symlink(recordings_root)?;
+
+    let session_dir = session_dir(recordings_root, call_session_id)?;
+    reject_symlink(&session_dir)?;
+    if session_dir.exists() {
+        let existing = read_status(&session_dir)?;
+        if existing.state == CallRecordingState::Closed
+            || existing.state == CallRecordingState::Abandoned
+        {
+            return Err("Call recording already reached a terminal state.".to_string());
+        }
+        return Ok(existing);
+    }
+
+    fs::create_dir(&session_dir)
+        .map_err(|error| format!("Failed to create call recording: {error}"))?;
+    File::create(session_dir.join(EVENTS_FILE))
+        .and_then(|file| file.sync_all())
+        .map_err(|error| format!("Failed to initialize call recording events: {error}"))?;
+
+    let status = CallRecordingStatus {
+        call_session_id: call_session_id.to_string(),
+        recording_path: session_dir.to_string_lossy().to_string(),
+        state: CallRecordingState::Open,
+        attempt: 0,
+        event_count: 0,
+        started_at,
+        ended_at: None,
+        last_error: None,
+    };
+    write_status(&session_dir, &status)?;
+    Ok(status)
+}
+
+fn append_at_root(
+    recordings_root: &Path,
+    call_session_id: &str,
+    event_payload: &str,
+) -> Result<CallRecordingStatus, String> {
+    validate_session_id(call_session_id)?;
+    let session_dir = session_dir(recordings_root, call_session_id)?;
+    reject_symlink(&session_dir)?;
+    let mut status = read_status(&session_dir)?;
+    if !matches!(
+        status.state,
+        CallRecordingState::Open | CallRecordingState::CloseFailed
+    ) {
+        return Err("Call recording is not open for events.".to_string());
+    }
+
+    let event: CallRecordingEvent = serde_json::from_str(event_payload)
+        .map_err(|error| format!("Invalid call recording event: {error}"))?;
+    if event.call_session_id != call_session_id {
+        return Err("Call recording event belongs to another session.".to_string());
+    }
+    if event.sequence != status.event_count.saturating_add(1) {
+        return Err("Call recording event sequence is not contiguous.".to_string());
+    }
+    validate_event_token(&event.event_id, "event id")?;
+    validate_event_token(&event.kind, "event kind")?;
+
+    let serialized = serde_json::to_string(&event)
+        .map_err(|error| format!("Failed to serialize call recording event: {error}"))?;
+    let events_path = session_dir.join(EVENTS_FILE);
+    reject_symlink(&events_path)?;
+    let mut file = OpenOptions::new()
+        .create(false)
+        .append(true)
+        .open(&events_path)
+        .map_err(|error| format!("Failed to open call recording events: {error}"))?;
+    file.write_all(serialized.as_bytes())
+        .and_then(|_| file.write_all(b"\n"))
+        .and_then(|_| file.sync_data())
+        .map_err(|error| format!("Failed to append call recording event: {error}"))?;
+
+    status.event_count = event.sequence;
+    write_status(&session_dir, &status)?;
+    Ok(status)
+}
+
+fn close_at_root(
+    recordings_root: &Path,
+    call_session_id: &str,
+    ended_at: u64,
+) -> Result<CallRecordingStatus, String> {
+    validate_session_id(call_session_id)?;
+    let session_dir = session_dir(recordings_root, call_session_id)?;
+    reject_symlink(&session_dir)?;
+    let mut status = read_status(&session_dir)?;
+    if status.state == CallRecordingState::Closed {
+        return Ok(status);
+    }
+    if status.state == CallRecordingState::Abandoned {
+        return Err("Abandoned call recording cannot be closed.".to_string());
+    }
+
+    status.state = CallRecordingState::Closing;
+    status.attempt = status.attempt.saturating_add(1);
+    status.ended_at = Some(ended_at);
+    status.last_error = None;
+    write_status(&session_dir, &status)?;
+
+    let close_result = (|| {
+        let (events_sha256, line_count) = hash_events(&session_dir.join(EVENTS_FILE))?;
+        if line_count != status.event_count {
+            return Err("Call recording event count does not match the event log.".to_string());
+        }
+        let manifest = CallRecordingManifest {
+            version: 1,
+            call_session_id: call_session_id.to_string(),
+            started_at: status.started_at,
+            ended_at,
+            event_count: status.event_count,
+            events_sha256,
+            raw_audio_retained: false,
+        };
+        write_json_atomically(&session_dir.join(MANIFEST_FILE), &manifest)
+    })();
+
+    match close_result {
+        Ok(()) => {
+            status.state = CallRecordingState::Closed;
+            write_status(&session_dir, &status)?;
+            Ok(status)
+        }
+        Err(error) => {
+            status.state = CallRecordingState::CloseFailed;
+            status.last_error = Some(error.clone());
+            let _ = write_status(&session_dir, &status);
+            Err(error)
+        }
+    }
+}
+
+fn abandon_at_root(
+    recordings_root: &Path,
+    call_session_id: &str,
+    occurred_at: u64,
+) -> Result<CallRecordingStatus, String> {
+    validate_session_id(call_session_id)?;
+    let session_dir = session_dir(recordings_root, call_session_id)?;
+    reject_symlink(&session_dir)?;
+    let mut status = read_status(&session_dir)?;
+    if !matches!(
+        status.state,
+        CallRecordingState::Open
+            | CallRecordingState::Closing
+            | CallRecordingState::CloseFailed
+    ) {
+        return Err("Call recording is not recoverable.".to_string());
+    }
+    status.state = CallRecordingState::Abandoned;
+    status.ended_at = Some(occurred_at);
+    write_status(&session_dir, &status)?;
+    Ok(status)
+}
+
+fn list_recoverable_at_root(
+    recordings_root: &Path,
+) -> Result<Vec<CallRecordingStatus>, String> {
+    reject_symlink(recordings_root)?;
+    if !recordings_root.exists() {
+        return Ok(Vec::new());
+    }
+    let mut recoverable = Vec::new();
+    for entry in fs::read_dir(recordings_root)
+        .map_err(|error| format!("Failed to read call recordings directory: {error}"))?
+    {
+        let entry = entry.map_err(|error| format!("Failed to inspect call recording: {error}"))?;
+        let path = entry.path();
+        reject_symlink(&path)?;
+        if !path.is_dir() {
+            continue;
+        }
+        let Ok(status) = read_status(&path) else {
+            continue;
+        };
+        if matches!(
+            status.state,
+            CallRecordingState::Open
+                | CallRecordingState::Closing
+                | CallRecordingState::CloseFailed
+        ) {
+            recoverable.push(status);
+        }
+    }
+    recoverable.sort_by_key(|status| status.started_at);
+    Ok(recoverable)
+}
+
+fn session_dir(recordings_root: &Path, call_session_id: &str) -> Result<PathBuf, String> {
+    validate_session_id(call_session_id)?;
+    Ok(recordings_root.join(call_session_id))
+}
+
+fn read_status(session_dir: &Path) -> Result<CallRecordingStatus, String> {
+    reject_symlink(session_dir)?;
+    let path = session_dir.join(STATUS_FILE);
+    reject_symlink(&path)?;
+    let content = fs::read_to_string(&path)
+        .map_err(|error| format!("Failed to read call recording state: {error}"))?;
+    serde_json::from_str(&content)
+        .map_err(|error| format!("Invalid call recording state: {error}"))
+}
+
+fn write_status(session_dir: &Path, status: &CallRecordingStatus) -> Result<(), String> {
+    write_json_atomically(&session_dir.join(STATUS_FILE), status)
+}
+
+fn write_json_atomically<T: Serialize>(path: &Path, value: &T) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        reject_symlink(parent)?;
+    }
+    reject_symlink(path)?;
+    let payload = serde_json::to_vec_pretty(value)
+        .map_err(|error| format!("Failed to serialize recording data: {error}"))?;
+    let temporary = path.with_extension(format!("tmp-{}", Uuid::new_v4()));
+    let mut file = OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(&temporary)
+        .map_err(|error| format!("Failed to stage recording data: {error}"))?;
+    file.write_all(&payload)
+        .and_then(|_| file.sync_all())
+        .map_err(|error| format!("Failed to sync recording data: {error}"))?;
+    drop(file);
+
+    #[cfg(not(target_os = "windows"))]
+    fs::rename(&temporary, path)
+        .map_err(|error| format!("Failed to commit recording data: {error}"))?;
+
+    #[cfg(target_os = "windows")]
+    {
+        let backup = path.with_extension("bak");
+        if backup.exists() {
+            fs::remove_file(&backup)
+                .map_err(|error| format!("Failed to remove recording backup: {error}"))?;
+        }
+        if path.exists() {
+            fs::rename(path, &backup)
+                .map_err(|error| format!("Failed to stage recording backup: {error}"))?;
+        }
+        if let Err(error) = fs::rename(&temporary, path) {
+            if backup.exists() {
+                let _ = fs::rename(&backup, path);
+            }
+            return Err(format!("Failed to commit recording data: {error}"));
+        }
+        if backup.exists() {
+            fs::remove_file(backup)
+                .map_err(|error| format!("Failed to remove recording backup: {error}"))?;
+        }
+    }
+    Ok(())
+}
+
+fn hash_events(path: &Path) -> Result<(String, u64), String> {
+    reject_symlink(path)?;
+    let mut file = File::open(path)
+        .map_err(|error| format!("Failed to open call recording events: {error}"))?;
+    let mut hasher = Sha256::new();
+    let mut buffer = [0_u8; 64 * 1024];
+    let mut lines = 0_u64;
+    let mut previous_was_newline = true;
+    loop {
+        let count = file
+            .read(&mut buffer)
+            .map_err(|error| format!("Failed to read call recording events: {error}"))?;
+        if count == 0 {
+            break;
+        }
+        hasher.update(&buffer[..count]);
+        for byte in &buffer[..count] {
+            if *byte == b'\n' {
+                lines = lines.saturating_add(1);
+                previous_was_newline = true;
+            } else {
+                previous_was_newline = false;
+            }
+        }
+    }
+    if !previous_was_newline {
+        lines = lines.saturating_add(1);
+    }
+    Ok((format!("{:x}", hasher.finalize()), lines))
+}
+
+fn validate_session_id(value: &str) -> Result<(), String> {
+    if value.is_empty() || value.len() > MAX_SESSION_ID_CHARS {
+        return Err("Invalid call session id.".to_string());
+    }
+    if !value
+        .chars()
+        .all(|character| character.is_ascii_alphanumeric() || matches!(character, '-' | '_'))
+    {
+        return Err("Invalid call session id.".to_string());
+    }
+    Ok(())
+}
+
+fn validate_event_token(value: &str, label: &str) -> Result<(), String> {
+    if value.is_empty() || value.len() > 200 {
+        return Err(format!("Invalid call recording {label}."));
+    }
+    if !value.chars().all(|character| {
+        character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | ':' | '.')
+    }) {
+        return Err(format!("Invalid call recording {label}."));
+    }
+    Ok(())
+}
+
+fn reject_symlink(path: &Path) -> Result<(), String> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_symlink() => {
+            Err("Call recording storage cannot be a symlink.".to_string())
+        }
+        Ok(_) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(format!("Failed to inspect call recording storage: {error}")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_root() -> PathBuf {
+        std::env::temp_dir().join(format!("moss-recording-test-{}", Uuid::new_v4()))
+    }
+
+    fn event(session_id: &str, sequence: u64) -> String {
+        serde_json::json!({
+            "eventId": format!("event-{sequence}"),
+            "callSessionId": session_id,
+            "sequence": sequence,
+            "kind": "transcript-committed",
+            "occurredAt": sequence,
+            "payload": { "text": "hello" }
+        })
+        .to_string()
+    }
+
+    #[test]
+    fn records_contiguous_events_and_closes_with_a_hash() {
+        let root = test_root();
+        let session_id = "call-test-1";
+        start_at_root(&root, session_id, 1).unwrap();
+        assert_eq!(
+            append_at_root(&root, session_id, &event(session_id, 1))
+                .unwrap()
+                .event_count,
+            1
+        );
+        assert!(append_at_root(&root, session_id, &event(session_id, 3)).is_err());
+
+        let closed = close_at_root(&root, session_id, 20).unwrap();
+        assert_eq!(closed.state, CallRecordingState::Closed);
+        let manifest = fs::read_to_string(root.join(session_id).join(MANIFEST_FILE)).unwrap();
+        assert!(manifest.contains("eventsSha256"));
+        assert!(manifest.contains("\"rawAudioRetained\": false"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn failed_close_remains_discoverable_and_retries_after_restart() {
+        let root = test_root();
+        let session_id = "call-test-2";
+        start_at_root(&root, session_id, 1).unwrap();
+        append_at_root(&root, session_id, &event(session_id, 1)).unwrap();
+        let events = root.join(session_id).join(EVENTS_FILE);
+        let backup = root.join(session_id).join("events.backup");
+        fs::rename(&events, &backup).unwrap();
+        fs::create_dir(&events).unwrap();
+
+        assert!(close_at_root(&root, session_id, 20).is_err());
+        let recovered = list_recoverable_at_root(&root).unwrap();
+        assert_eq!(recovered.len(), 1);
+        assert_eq!(recovered[0].state, CallRecordingState::CloseFailed);
+        assert_eq!(recovered[0].attempt, 1);
+
+        fs::remove_dir(&events).unwrap();
+        fs::rename(&backup, &events).unwrap();
+        let closed = close_at_root(&root, session_id, 30).unwrap();
+        assert_eq!(closed.state, CallRecordingState::Closed);
+        assert_eq!(closed.attempt, 2);
+        assert!(list_recoverable_at_root(&root).unwrap().is_empty());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn rejects_cross_session_events_and_path_traversal() {
+        let root = test_root();
+        start_at_root(&root, "call-test-3", 1).unwrap();
+        assert!(append_at_root(&root, "call-test-3", &event("call-other", 1)).is_err());
+        assert!(start_at_root(&root, "../escape", 1).is_err());
+        fs::remove_dir_all(root).unwrap();
+    }
+}

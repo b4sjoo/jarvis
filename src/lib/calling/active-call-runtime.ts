@@ -11,6 +11,7 @@ import type {
   CallTranscriptTurn,
   CallTurnSettlement,
   GuidanceFrame,
+  GuidanceEvaluationFact,
 } from "./types.js";
 
 export interface ActiveCallRuntimeState {
@@ -26,6 +27,7 @@ export interface ActiveCallRuntimeState {
   guidanceRevision: number;
   activeOperations: Record<ModelRouteKind, string | null>;
   receipts: GuidanceReceipt[];
+  humanEvaluations: GuidanceEvaluationFact[];
   lastError?: string;
   updatedAt: number;
 }
@@ -43,11 +45,22 @@ export type ActiveCallCommand =
   | { type: "RecordReceipt"; receipt: GuidanceReceipt }
   | { type: "CommitGuidance"; frame: GuidanceFrame; occurredAt: number }
   | { type: "RecordHumanOverride"; reason: string; occurredAt: number }
+  | { type: "RecordHumanEvaluation"; fact: GuidanceEvaluationFact }
   | { type: "CloseCall"; occurredAt: number }
   | { type: "CloseSucceeded"; occurredAt: number }
   | { type: "CloseFailed"; error: string; occurredAt: number }
   | { type: "RetryCloseCall"; occurredAt: number }
   | { type: "AbandonCall"; occurredAt: number };
+
+export interface ActiveCallTransition {
+  command: ActiveCallCommand;
+  before: ActiveCallRuntimeState;
+  after: ActiveCallRuntimeState;
+}
+
+export type ActiveCallTransitionObserver = (
+  transition: ActiveCallTransition
+) => void;
 
 const noOperations = (): Record<ModelRouteKind, string | null> => ({
   runtime: null,
@@ -70,6 +83,7 @@ export function createActiveCallRuntimeState(input: {
     guidanceRevision: 0,
     activeOperations: noOperations(),
     receipts: [],
+    humanEvaluations: [],
     updatedAt: input.createdAt,
   };
 }
@@ -134,7 +148,11 @@ export function reduceActiveCallRuntime(
         updatedAt: command.occurredAt,
       };
     case "RecordReceipt":
-      return { ...state, receipts: [...state.receipts, { ...command.receipt }], updatedAt: command.receipt.occurredAt };
+      return {
+        ...state,
+        receipts: [...state.receipts, { ...command.receipt }].slice(-500),
+        updatedAt: command.receipt.occurredAt,
+      };
     case "CommitGuidance":
       return {
         ...state,
@@ -142,18 +160,44 @@ export function reduceActiveCallRuntime(
         guidanceRevision: state.guidanceRevision + 1,
         updatedAt: command.occurredAt,
       };
-    case "RecordHumanOverride":
+    case "RecordHumanOverride": {
+      const receipt: GuidanceReceipt = {
+        requestId: `human:${state.runtimeEpoch + 1}`,
+        status: "cancelled",
+        occurredAt: command.occurredAt,
+        reason: command.reason,
+      };
       return {
         ...state,
         runtimeEpoch: state.runtimeEpoch + 1,
         activeOperations: noOperations(),
-        receipts: [...state.receipts, {
-          requestId: `human:${state.runtimeEpoch + 1}`,
-          status: "cancelled",
-          occurredAt: command.occurredAt,
-          reason: command.reason,
-        }],
+        receipts: [...state.receipts, receipt].slice(-500),
         updatedAt: command.occurredAt,
+      };
+    }
+    case "RecordHumanEvaluation":
+      if (
+        command.fact.callSessionId !== state.callSessionId ||
+        command.fact.guidanceRevision < 1 ||
+        command.fact.guidanceRevision > state.guidanceRevision
+      ) {
+        return state;
+      }
+      if (
+        state.humanEvaluations.some(
+          (candidate) =>
+            candidate.guidanceRevision === command.fact.guidanceRevision
+        )
+      ) {
+        return state;
+      }
+      return {
+        ...state,
+        humanEvaluations: [
+          ...state.humanEvaluations,
+          structuredClone(command.fact),
+        ].slice(-500),
+        updatedAt: command.fact.occurredAt,
       };
     case "CloseCall":
       requireState(state, ["live", "paused", "recovering", "start-failed"], command.type);
@@ -176,21 +220,38 @@ export function reduceActiveCallRuntime(
 export class ActiveCallRuntime {
   #state: ActiveCallRuntimeState;
   readonly #guidance = new StableGuidanceStore();
+  #transitionObserver?: ActiveCallTransitionObserver;
 
-  constructor(input: { callSessionId: string; createdAt?: number }) {
+  constructor(input: {
+    callSessionId: string;
+    createdAt?: number;
+    onTransition?: ActiveCallTransitionObserver;
+  }) {
     this.#state = createActiveCallRuntimeState({
       callSessionId: input.callSessionId,
       createdAt: input.createdAt ?? Date.now(),
     });
+    this.#transitionObserver = input.onTransition;
   }
 
   snapshot() {
     return structuredClone(this.#state);
   }
 
+  setTransitionObserver(observer?: ActiveCallTransitionObserver) {
+    this.#transitionObserver = observer;
+  }
+
   dispatch(command: ActiveCallCommand) {
+    const before = this.snapshot();
     this.#state = reduceActiveCallRuntime(this.#state, command);
-    return this.snapshot();
+    const after = this.snapshot();
+    this.#transitionObserver?.({
+      command: structuredClone(command),
+      before,
+      after,
+    });
+    return after;
   }
 
   selectOperation<TInput>(input: {
