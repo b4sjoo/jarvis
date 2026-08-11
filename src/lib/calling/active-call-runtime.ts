@@ -252,7 +252,8 @@ export class ActiveCallRuntime {
       authorized: authorization.authorized,
       occurredAt,
     });
-    const receipt = this.#guidance.receipts.at(-1);
+    const receipts = this.#guidance.receipts;
+    const receipt = receipts[receipts.length - 1];
     if (receipt) this.dispatch({ type: "RecordReceipt", receipt });
     if (committed && this.#guidance.visible) {
       this.dispatch({ type: "CommitGuidance", frame: this.#guidance.visible, occurredAt });

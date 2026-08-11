@@ -30,10 +30,10 @@ const buildTimestamp = new Date().toISOString();
 export default defineConfig(async () => ({
   plugins: [react(), tailwindcss()],
   define: {
-    __JARVIS_APP_VERSION__: JSON.stringify(packageJson.version ?? "unknown"),
-    __JARVIS_GIT_COMMIT__: JSON.stringify(gitCommit),
-    __JARVIS_GIT_DIRTY__: JSON.stringify(gitDirty),
-    __JARVIS_BUILD_TIMESTAMP__: JSON.stringify(buildTimestamp),
+    __MOSS_APP_VERSION__: JSON.stringify(packageJson.version ?? "unknown"),
+    __MOSS_GIT_COMMIT__: JSON.stringify(gitCommit),
+    __MOSS_GIT_DIRTY__: JSON.stringify(gitDirty),
+    __MOSS_BUILD_TIMESTAMP__: JSON.stringify(buildTimestamp),
   },
   resolve: {
     alias: {
