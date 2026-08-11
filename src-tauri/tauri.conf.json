@@ -14,20 +14,20 @@
     "windows": [
       {
         "title": "MOSS - Calling Helper",
-        "width": 600,
-        "height": 54,
+        "width": 820,
+        "height": 680,
         "decorations": false,
-        "transparent": true,
-        "alwaysOnTop": false,
-        "resizable": false,
+        "transparent": false,
+        "alwaysOnTop": true,
+        "resizable": true,
         "visibleOnAllWorkspaces": true,
         "skipTaskbar": true,
         "visible": true,
         "center": false,
         "contentProtected": true,
-        "focus": false,
+        "focus": true,
         "acceptFirstMouse": true,
-        "shadow": false
+        "shadow": true
       }
     ],
     "security": { "csp": null }

@@ -29,7 +29,7 @@ pub enum NativeCaptureOwner {
 impl NativeCaptureOwner {
     fn as_str(self) -> &'static str {
         match self {
-            Self::Meeting => "meeting",
+            Self::Meeting => "call",
             Self::System => "system",
         }
     }
@@ -37,7 +37,7 @@ impl NativeCaptureOwner {
     #[cfg(debug_assertions)]
     fn parse(value: &str) -> Option<Self> {
         match value {
-            "meeting" => Some(Self::Meeting),
+            "call" => Some(Self::Meeting),
             "system" => Some(Self::System),
             _ => None,
         }
@@ -865,6 +865,15 @@ pub async fn start_meeting_audio_session(
     )
     .await?;
     get_meeting_audio_status(app).await
+}
+
+#[tauri::command]
+pub async fn start_call_audio_session(
+    app: AppHandle,
+    vad_config: Option<VadConfig>,
+    device_id: Option<String>,
+) -> Result<MeetingAudioStatus, String> {
+    start_meeting_audio_session(app, vad_config, device_id).await
 }
 
 async fn start_audio_capture(
@@ -2393,6 +2402,20 @@ pub async fn stop_meeting_audio_session(
     })
 }
 
+#[tauri::command]
+pub async fn stop_call_audio_session(
+    app: AppHandle,
+    expected_capture_session_id: Option<String>,
+    expected_capture_generation: Option<u64>,
+) -> Result<NativeAudioStopResult, String> {
+    stop_meeting_audio_session(
+        app,
+        expected_capture_session_id,
+        expected_capture_generation,
+    )
+    .await
+}
+
 #[cfg(debug_assertions)]
 #[tauri::command]
 pub async fn debug_inject_native_audio_fault(
@@ -2566,7 +2589,7 @@ pub async fn get_meeting_audio_status(app: AppHandle) -> Result<MeetingAudioStat
         .lock()
         .map_err(|e| format!("Failed to get VAD config: {}", e))?
         .enabled;
-    let active = system_capture_active && capture_owner.as_deref() == Some("meeting");
+    let active = system_capture_active && capture_owner.as_deref() == Some("call");
 
     Ok(MeetingAudioStatus {
         active,
