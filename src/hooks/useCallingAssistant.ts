@@ -748,6 +748,8 @@ export function useCallingAssistant() {
         });
         setRecordingError(errorMessage(error));
         await refreshRecoverableRecordings();
+        publish();
+        throw error;
       }
       publish();
     },

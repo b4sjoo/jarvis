@@ -25,11 +25,8 @@
     }
   },
   "include": [
-    "src/vite-env.d.ts",
-    "src/main.tsx",
-    "src/hooks/useCallingAssistant.ts",
-    "src/lib/calling/**/*.ts",
-    "src/pages/calling/**/*.tsx"
+    "src/**/*.ts",
+    "src/**/*.tsx"
   ],
   "references": [{ "path": "./tsconfig.node.json" }]
 }

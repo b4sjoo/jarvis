@@ -12,7 +12,10 @@ import {
   ThumbsUp,
   X,
 } from "lucide-react";
-import { useCallingAssistant, type CallingProviderSecrets } from "@/hooks/useCallingAssistant";
+import type {
+  CallingAssistantController,
+  CallingProviderSecrets,
+} from "@/hooks/useCallingAssistant";
 import type { ChatRouteId, ModelRouteSettings } from "@/lib/calling";
 import "./calling.css";
 
@@ -87,8 +90,13 @@ function ProviderSettings({
   );
 }
 
-export default function CallingPage() {
-  const controller = useCallingAssistant();
+export default function CallingPage({
+  controller,
+  embedded = false,
+}: {
+  controller: CallingAssistantController;
+  embedded?: boolean;
+}) {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const latestThem = useMemo(() => [...controller.runtime.transcript].reverse().find((turn) => turn.speaker === "them"), [controller.runtime.transcript]);
@@ -112,12 +120,12 @@ export default function CallingPage() {
   const canStart = ["planned", "closed", "start-failed", "abandoned"].includes(state);
 
   return (
-    <main className="moss-shell">
-      <header className="moss-topbar" data-tauri-drag-region>
+    <div className={`moss-shell${embedded ? " moss-shell-embedded" : ""}`}>
+      {!embedded && <header className="moss-topbar" data-tauri-drag-region>
         <div className="moss-brand"><span className="brand-mark"><Headphones size={17} /></span><div><strong>MOSS</strong><span>Calling Helper</span></div></div>
         <div className={`status status-${state}`}><span />{statusLabel[state] ?? state}</div>
         <button className="icon-button" onClick={() => setSettingsOpen(true)} aria-label="Open model settings" title="Model routes"><Settings size={18} /></button>
-      </header>
+      </header>}
 
       <section className="moss-guidance" aria-live="polite">
         <div className="section-heading"><span>Live Guidance</span><small>revision {controller.runtime.guidanceRevision}</small></div>
@@ -183,6 +191,6 @@ export default function CallingPage() {
         <span className="route-health">Runtime {controller.configured.runtime ? "ready" : "local fallback"} · Advisor {controller.configured.advisor ? "ready" : "not set"} · STT {controller.configured.stt ? "ready" : "not set"}{controller.recordingStatus ? ` · Recording ${controller.recordingStatus.state}` : ""}</span>
       </footer>
       {settingsOpen && <ProviderSettings initial={controller.settings} onClose={() => setSettingsOpen(false)} onSave={controller.saveConfiguration} />}
-    </main>
+    </div>
   );
 }

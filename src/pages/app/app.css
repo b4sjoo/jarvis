@@ -1,0 +1,265 @@
+.app-shell {
+  display: grid;
+  grid-template-columns: 224px minmax(0, 1fr);
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: var(--surface-page);
+  color: var(--text-primary);
+}
+
+.app-shell.sidebar-collapsed {
+  grid-template-columns: 64px minmax(0, 1fr);
+}
+
+.app-sidebar {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid var(--border-subtle);
+  background: var(--surface-sidebar);
+}
+
+.app-identity {
+  height: 68px;
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 0 16px;
+  border-bottom: 1px solid var(--border-subtle);
+  user-select: none;
+}
+
+.app-mark {
+  width: 34px;
+  height: 34px;
+  flex: 0 0 34px;
+  display: grid;
+  place-items: center;
+  border-radius: 7px;
+  background: var(--accent-strong);
+  color: #fff;
+}
+
+.app-identity > span:last-child {
+  min-width: 0;
+  display: grid;
+  gap: 1px;
+}
+
+.app-identity strong {
+  font-size: 14px;
+  line-height: 1.2;
+}
+
+.app-identity small {
+  color: var(--text-muted);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.app-sidebar nav {
+  flex: 1;
+  display: grid;
+  align-content: start;
+  gap: 3px;
+  padding: 12px 10px;
+  overflow-y: auto;
+}
+
+.nav-item {
+  width: 100%;
+  min-height: 40px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 11px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.nav-item:hover {
+  background: var(--surface-hover);
+  color: var(--text-primary);
+}
+
+.nav-item-active {
+  border-color: var(--border-accent);
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+}
+
+.sidebar-collapsed .nav-item {
+  justify-content: center;
+  padding: 0;
+}
+
+.sidebar-footer {
+  padding: 10px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.quit-item {
+  color: var(--danger-text);
+}
+
+.quit-item:hover {
+  background: var(--danger-soft);
+  color: var(--danger-text);
+}
+
+.app-workspace {
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.workspace-header {
+  min-height: 68px;
+  flex: 0 0 68px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0 20px;
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--surface-raised);
+}
+
+.workspace-header > div:nth-child(2) {
+  min-width: 0;
+}
+
+.workspace-header h1 {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 17px;
+  line-height: 1.25;
+}
+
+.workspace-header p {
+  margin: 3px 0 0;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workspace-call-state {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--text-muted);
+  font-size: 11px;
+  text-transform: capitalize;
+}
+
+.workspace-call-state > span {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--status-idle);
+}
+
+.workspace-call-state.state-live > span {
+  background: var(--status-success);
+}
+
+.workspace-call-state.state-starting > span,
+.workspace-call-state.state-recovering > span {
+  background: var(--status-warning);
+}
+
+.workspace-call-state.state-start-failed > span,
+.workspace-call-state.state-close-failed > span {
+  background: var(--status-danger);
+}
+
+.workspace-content {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
+.workspace-content.call-route {
+  display: flex;
+  overflow: hidden;
+}
+
+.app-alert {
+  flex: 0 0 auto;
+  margin: 12px 20px 0;
+  padding: 10px 12px;
+  border: 1px solid var(--danger-border);
+  border-radius: 6px;
+  background: var(--danger-soft);
+  color: var(--danger-text);
+  font-size: 12px;
+}
+
+.empty-route {
+  min-height: 100%;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  padding: 48px;
+  color: var(--text-muted);
+  text-align: center;
+}
+
+.empty-route svg {
+  color: var(--accent-strong);
+}
+
+.empty-route h2 {
+  margin: 12px 0 6px;
+  color: var(--text-primary);
+  font-size: 18px;
+}
+
+.empty-route p {
+  max-width: 520px;
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.app-statusbar {
+  min-height: 28px;
+  flex: 0 0 28px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 0 14px;
+  border-top: 1px solid var(--border-subtle);
+  background: var(--surface-sidebar);
+  color: var(--text-faint);
+  font-size: 10px;
+}
+
+@media (max-width: 760px) {
+  .app-shell {
+    grid-template-columns: 64px minmax(0, 1fr);
+  }
+
+  .app-identity > span:last-child,
+  .nav-item span {
+    display: none;
+  }
+
+  .nav-item {
+    justify-content: center;
+    padding: 0;
+  }
+}

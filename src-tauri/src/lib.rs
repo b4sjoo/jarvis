@@ -31,6 +31,11 @@ fn write_call_trace_log(message: String) {
     eprintln!("[call-trace] {message}");
 }
 
+#[tauri::command]
+fn exit_app(app: tauri::AppHandle) {
+    app.exit(0);
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let mut builder = tauri::Builder::default()
@@ -45,6 +50,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_app_version,
             write_call_trace_log,
+            exit_app,
             content_storage::import_content_file,
             recording::start_call_recording,
             recording::append_call_recording_event,
