@@ -70,7 +70,7 @@ export default function AppSettingsPage({
           <span className="field-icon"><ShieldCheck size={17} /></span>
           <div>
             <h3>Privacy boundary</h3>
-            <p>Audio is transcribed through the configured STT route. Runtime and Advisor prompts use their configured endpoints. MOSS retains event evidence locally and does not retain raw audio.</p>
+            <p>Audio is transcribed through the configured STT route. Runtime and Advisor prompts use their selected providers. MOSS retains event evidence locally and does not retain raw audio.</p>
           </div>
           <span className="setting-value">Local evidence</span>
         </section>

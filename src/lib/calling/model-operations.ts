@@ -59,6 +59,7 @@ const recordDispatch = (input: {
     {
       operationId: input.operationId,
       route: input.routeId,
+      provider: input.route.provider,
       endpoint: input.route.endpoint,
       model: input.route.model,
       timeoutMs: input.route.timeoutMs,

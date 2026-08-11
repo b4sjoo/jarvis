@@ -20,6 +20,7 @@ import {
   SHORTCUT_SCHEME_VERSION,
   GlobalShortcutRegistry,
   MOSS_WINDOW_PROFILES,
+  callStatusLabel,
   isEditableElement,
   isTauriRuntime,
   shortcutDisplayText,
@@ -455,7 +456,7 @@ export default function MossApp() {
           </div>
           <div className={`workspace-call-state state-${controller.runtime.state}`}>
             <span />
-            {controller.runtime.state}
+            {callStatusLabel(controller.runtime.state)}
           </div>
           {activeSection === "call" && (
             <button

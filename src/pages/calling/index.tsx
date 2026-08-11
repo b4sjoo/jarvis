@@ -12,20 +12,8 @@ import {
   ThumbsUp,
 } from "lucide-react";
 import type { CallingAssistantController } from "@/hooks/useCallingAssistant";
+import { callStatusLabel } from "@/lib/calling";
 import "./calling.css";
-
-const statusLabel: Record<string, string> = {
-  planned: "Ready",
-  starting: "Starting",
-  live: "Listening",
-  paused: "Paused",
-  recovering: "Recovering",
-  closing: "Closing",
-  closed: "Closed",
-  "start-failed": "Start failed",
-  "close-failed": "Close failed",
-  abandoned: "Abandoned",
-};
 
 
 export default function CallingPage({
@@ -72,7 +60,7 @@ export default function CallingPage({
           </button>
         )}
         <div className="moss-brand" data-tauri-drag-region><span className="brand-mark"><Headphones size={17} /></span><div><strong>MOSS</strong><span>Calling Helper</span></div></div>
-        <div className={`status status-${state}`} data-tauri-drag-region><span />{statusLabel[state] ?? state}</div>
+        <div className={`status status-${state}`} data-tauri-drag-region><span />{callStatusLabel(state)}</div>
       </header>}
 
       <section className="moss-guidance" aria-live="polite">

@@ -4,7 +4,17 @@ import type {
   CallingAssistantController,
   CallingProviderSecrets,
 } from "@/hooks/useCallingAssistant";
-import type { ChatRouteId, ModelRouteSettings } from "@/lib/calling";
+import {
+  CHAT_PROVIDERS,
+  STT_LANGUAGES,
+  STT_PROVIDERS,
+  getChatProvider,
+  getSttProvider,
+  type ChatProviderId,
+  type ChatRouteId,
+  type ModelRouteSettings,
+  type SttProviderId,
+} from "@/lib/calling";
 import "./models.css";
 
 const routeLabels: Record<ChatRouteId, string> = {
@@ -37,14 +47,41 @@ export default function ModelSettingsPage({
 
   const updateChat = (
     route: ChatRouteId,
-    field: "endpoint" | "model",
-    value: string
+    model: string
   ) => {
     setDraft((current) => ({
       ...current,
       chat: {
         ...current.chat,
-        [route]: { ...current.chat[route], [field]: value },
+        [route]: { ...current.chat[route], model },
+      },
+    }));
+  };
+
+  const updateChatProvider = (
+    route: ChatRouteId,
+    provider: ChatProviderId
+  ) => {
+    setDraft((current) => ({
+      ...current,
+      chat: {
+        ...current.chat,
+        [route]: {
+          ...current.chat[route],
+          provider,
+          endpoint: getChatProvider(provider).endpoint,
+        },
+      },
+    }));
+  };
+
+  const updateSttProvider = (provider: SttProviderId) => {
+    setDraft((current) => ({
+      ...current,
+      stt: {
+        ...current.stt,
+        provider,
+        endpoint: getSttProvider(provider).endpoint,
       },
     }));
   };
@@ -97,18 +134,25 @@ export default function ModelSettingsPage({
               </span>
             </legend>
             <label>
-              Endpoint
-              <input
-                value={draft.chat[route].endpoint}
-                onChange={(event) => updateChat(route, "endpoint", event.target.value)}
-                spellCheck={false}
-              />
+              Provider
+              <select
+                value={draft.chat[route].provider}
+                onChange={(event) =>
+                  updateChatProvider(route, event.target.value as ChatProviderId)
+                }
+              >
+                {CHAT_PROVIDERS.map((provider) => (
+                  <option value={provider.id} key={provider.id}>
+                    {provider.name}
+                  </option>
+                ))}
+              </select>
             </label>
             <label>
               Model
               <input
                 value={draft.chat[route].model}
-                onChange={(event) => updateChat(route, "model", event.target.value)}
+                onChange={(event) => updateChat(route, event.target.value)}
                 spellCheck={false}
               />
             </label>
@@ -119,7 +163,14 @@ export default function ModelSettingsPage({
                 <input
                   type="password"
                   autoComplete="off"
-                  placeholder="Enter to replace"
+                  placeholder={
+                    getChatProvider(draft.chat[route].provider).requiresApiKey
+                      ? "Enter to replace"
+                      : "Not required"
+                  }
+                  disabled={
+                    !getChatProvider(draft.chat[route].provider).requiresApiKey
+                  }
                   value={secrets[route]}
                   onChange={(event) =>
                     setSecrets((current) => ({
@@ -142,17 +193,19 @@ export default function ModelSettingsPage({
             </span>
           </legend>
           <label>
-            Endpoint
-            <input
-              value={draft.stt.endpoint}
+            Provider
+            <select
+              value={draft.stt.provider}
               onChange={(event) =>
-                setDraft((current) => ({
-                  ...current,
-                  stt: { ...current.stt, endpoint: event.target.value },
-                }))
+                updateSttProvider(event.target.value as SttProviderId)
               }
-              spellCheck={false}
-            />
+            >
+              {STT_PROVIDERS.map((provider) => (
+                <option value={provider.id} key={provider.id}>
+                  {provider.name}
+                </option>
+              ))}
+            </select>
           </label>
           <label>
             Model
@@ -168,8 +221,8 @@ export default function ModelSettingsPage({
             />
           </label>
           <label>
-            Language hint
-            <input
+            Language
+            <select
               value={draft.stt.language}
               onChange={(event) =>
                 setDraft((current) => ({
@@ -177,8 +230,13 @@ export default function ModelSettingsPage({
                   stt: { ...current.stt, language: event.target.value },
                 }))
               }
-              spellCheck={false}
-            />
+            >
+              {STT_LANGUAGES.map((language) => (
+                <option value={language.code} key={language.code || "auto"}>
+                  {language.flag} {language.name}
+                </option>
+              ))}
+            </select>
           </label>
           <label>
             API key
@@ -187,7 +245,12 @@ export default function ModelSettingsPage({
               <input
                 type="password"
                 autoComplete="off"
-                placeholder="Enter to replace"
+                placeholder={
+                  getSttProvider(draft.stt.provider).requiresApiKey
+                    ? "Enter to replace"
+                    : "Not required"
+                }
+                disabled={!getSttProvider(draft.stt.provider).requiresApiKey}
                 value={secrets.stt}
                 onChange={(event) =>
                   setSecrets((current) => ({

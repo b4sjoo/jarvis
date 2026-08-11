@@ -51,7 +51,8 @@
   font-weight: 650;
 }
 
-.model-route input {
+.model-route input,
+.model-route select {
   width: 100%;
   min-width: 0;
   height: 38px;
@@ -64,10 +65,20 @@
   font-weight: 500;
 }
 
-.model-route input:focus {
+.model-route select {
+  appearance: auto;
+}
+
+.model-route input:focus,
+.model-route select:focus {
   border-color: var(--focus-ring);
   outline: 2px solid var(--accent-soft);
   outline-offset: 0;
+}
+
+.model-route input:disabled {
+  color: var(--text-faint);
+  background: var(--surface-subtle);
 }
 
 .secret-input {

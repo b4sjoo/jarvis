@@ -13,6 +13,8 @@ import {
   listCallRecordings,
   listRecoverableCallRecordings,
   isTauriRuntime,
+  getChatProvider,
+  getSttProvider,
   loadModelRouteSettings,
   loadProviderSecret,
   requestTranscription,
@@ -20,6 +22,7 @@ import {
   runAdvisorModelOperation,
   runRuntimeModelOperation,
   persistAudioSettings,
+  normalizeModelRouteSettings,
   saveModelRouteSettings,
   saveProviderSecret,
   updateNativeVadConfig,
@@ -303,10 +306,18 @@ export function useCallingAssistant() {
     ]);
     secretsRef.current = { runtime: runtimeKey, advisor, complex, stt };
     setConfigured({
-      runtime: Boolean(runtimeKey),
-      advisor: Boolean(advisor),
-      complex: Boolean(complex),
-      stt: Boolean(stt),
+      runtime:
+        !getChatProvider(settingsRef.current.chat.runtime.provider)
+          .requiresApiKey || Boolean(runtimeKey),
+      advisor:
+        !getChatProvider(settingsRef.current.chat.advisor.provider)
+          .requiresApiKey || Boolean(advisor),
+      complex:
+        !getChatProvider(settingsRef.current.chat.complex.provider)
+          .requiresApiKey || Boolean(complex),
+      stt:
+        !getSttProvider(settingsRef.current.stt.provider).requiresApiKey ||
+        Boolean(stt),
     });
   }, []);
 
@@ -320,8 +331,13 @@ export function useCallingAssistant() {
     async (owner: ActiveCallRuntime, force = false) => {
       const snapshot = owner.snapshot();
       if (!force && !snapshot.latestSettlement?.responseAuthorized) return;
-      const apiKey = secretsRef.current.advisor;
-      if (!apiKey) return;
+      const provider = getChatProvider(
+        settingsRef.current.chat.advisor.provider
+      );
+      const apiKey = provider.requiresApiKey
+        ? secretsRef.current.advisor
+        : "";
+      if (provider.requiresApiKey && !apiKey) return;
       await runAdvisorModelOperation({
         owner,
         apiKey,
@@ -349,8 +365,13 @@ export function useCallingAssistant() {
         momentUnitId,
         evidenceRevision: snapshot.evidenceRevision,
       });
-      const apiKey = secretsRef.current.runtime;
-      if (apiKey) {
+      const provider = getChatProvider(
+        settingsRef.current.chat.runtime.provider
+      );
+      const apiKey = provider.requiresApiKey
+        ? secretsRef.current.runtime
+        : "";
+      if (!provider.requiresApiKey || apiKey) {
         const outcome = await runRuntimeModelOperation({
           owner,
           apiKey,
@@ -388,7 +409,8 @@ export function useCallingAssistant() {
         observedAt
       );
       const sttSecret = secretsRef.current.stt;
-      if (!sttSecret) {
+      const sttProvider = getSttProvider(settingsRef.current.stt.provider);
+      if (sttProvider.requiresApiKey && !sttSecret) {
         const result = segmentLedgerRef.current.settle({
           identity,
           disposition: "failed",
@@ -409,6 +431,7 @@ export function useCallingAssistant() {
         {
           operationId,
           ...identity,
+          provider: settingsRef.current.stt.provider,
           endpoint: settingsRef.current.stt.endpoint,
           model: settingsRef.current.stt.model,
           language: settingsRef.current.stt.language,
@@ -907,11 +930,38 @@ export function useCallingAssistant() {
 
   const saveConfiguration = useCallback(
     async (next: ModelRouteSettings, secrets: ProviderSecrets) => {
-      const saved = {
-        ...structuredClone(next),
+      const saved = normalizeModelRouteSettings({
+        ...next,
         revision: settingsRef.current.revision + 1,
-      };
-      saveModelRouteSettings(saved);
+      });
+      const chatRoutes = ["runtime", "advisor", "complex"] as const;
+      for (const route of chatRoutes) {
+        const provider = getChatProvider(saved.chat[route].provider);
+        const providerChanged =
+          saved.chat[route].provider !==
+          settingsRef.current.chat[route].provider;
+        if (
+          providerChanged &&
+          provider.requiresApiKey &&
+          !secrets[route].trim()
+        ) {
+          throw new Error(
+            `Enter the ${provider.name} API key after changing the ${route} provider.`
+          );
+        }
+      }
+      const sttProvider = getSttProvider(saved.stt.provider);
+      const sttProviderChanged =
+        saved.stt.provider !== settingsRef.current.stt.provider;
+      if (
+        sttProviderChanged &&
+        sttProvider.requiresApiKey &&
+        !secrets.stt.trim()
+      ) {
+        throw new Error(
+          `Enter the ${sttProvider.name} API key after changing the STT provider.`
+        );
+      }
       const mergedSecrets = { ...secretsRef.current };
       await Promise.all(
         (Object.keys(secrets) as Array<keyof ProviderSecrets>).map(
@@ -922,31 +972,44 @@ export function useCallingAssistant() {
           }
         )
       );
+      saveModelRouteSettings(saved);
       settingsRef.current = saved;
       setSettings(saved);
       secretsRef.current = mergedSecrets;
       setConfigured({
-        runtime: Boolean(mergedSecrets.runtime),
-        advisor: Boolean(mergedSecrets.advisor),
-        complex: Boolean(mergedSecrets.complex),
-        stt: Boolean(mergedSecrets.stt),
+        runtime:
+          !getChatProvider(saved.chat.runtime.provider).requiresApiKey ||
+          Boolean(mergedSecrets.runtime),
+        advisor:
+          !getChatProvider(saved.chat.advisor.provider).requiresApiKey ||
+          Boolean(mergedSecrets.advisor),
+        complex:
+          !getChatProvider(saved.chat.complex.provider).requiresApiKey ||
+          Boolean(mergedSecrets.complex),
+        stt:
+          !getSttProvider(saved.stt.provider).requiresApiKey ||
+          Boolean(mergedSecrets.stt),
       });
       queueRecordingEvent("model-settings-updated", {
         revision: saved.revision,
         routes: {
           runtime: {
+            provider: saved.chat.runtime.provider,
             endpoint: saved.chat.runtime.endpoint,
             model: saved.chat.runtime.model,
           },
           advisor: {
+            provider: saved.chat.advisor.provider,
             endpoint: saved.chat.advisor.endpoint,
             model: saved.chat.advisor.model,
           },
           complex: {
+            provider: saved.chat.complex.provider,
             endpoint: saved.chat.complex.endpoint,
             model: saved.chat.complex.model,
           },
           stt: {
+            provider: saved.stt.provider,
             endpoint: saved.stt.endpoint,
             model: saved.stt.model,
             language: saved.stt.language,
