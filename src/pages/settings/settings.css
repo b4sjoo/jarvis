@@ -36,10 +36,6 @@
   font-weight: 650;
 }
 
-.app-setting-danger .field-icon {
-  color: var(--danger-text);
-}
-
 .settings-footnote {
   display: flex;
   align-items: center;

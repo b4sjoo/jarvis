@@ -1,4 +1,8 @@
 import { invoke } from "@tauri-apps/api/core";
+import {
+  isTauriRuntime,
+  requireTauriRuntime,
+} from "./runtime-environment.js";
 
 export type CallRecordingState =
   | "open"
@@ -74,11 +78,26 @@ export interface CallRecordingTransport {
 }
 
 const tauriTransport: CallRecordingTransport = {
-  start: (input) => invoke("start_call_recording", input),
-  append: (input) => invoke("append_call_recording_event", input),
-  close: (input) => invoke("close_call_recording", input),
-  retry: (input) => invoke("retry_call_recording_close", input),
-  abandon: (input) => invoke("abandon_call_recording", input),
+  start: (input) => {
+    requireTauriRuntime("Call recording");
+    return invoke("start_call_recording", input);
+  },
+  append: (input) => {
+    requireTauriRuntime("Call recording");
+    return invoke("append_call_recording_event", input);
+  },
+  close: (input) => {
+    requireTauriRuntime("Call recording");
+    return invoke("close_call_recording", input);
+  },
+  retry: (input) => {
+    requireTauriRuntime("Call recording recovery");
+    return invoke("retry_call_recording_close", input);
+  },
+  abandon: (input) => {
+    requireTauriRuntime("Call recording recovery");
+    return invoke("abandon_call_recording", input);
+  },
 };
 
 export class CallRecordingProjection {
@@ -162,34 +181,48 @@ export class CallRecordingProjection {
 }
 
 export const listRecoverableCallRecordings = () =>
-  invoke<CallRecordingStatus[]>("list_recoverable_call_recordings");
+  isTauriRuntime()
+    ? invoke<CallRecordingStatus[]>("list_recoverable_call_recordings")
+    : Promise.resolve([]);
 
 export const listCallRecordings = () =>
-  invoke<CallRecordingSummary[]>("list_call_recordings");
+  isTauriRuntime()
+    ? invoke<CallRecordingSummary[]>("list_call_recordings")
+    : Promise.resolve([]);
 
-export const revealCallRecordingsRoot = () =>
-  invoke<void>("reveal_call_recordings_root");
+export const revealCallRecordingsRoot = () => {
+  requireTauriRuntime("Opening the recordings folder");
+  return invoke<void>("reveal_call_recordings_root");
+};
 
-export const revealCallRecording = (callSessionId: string) =>
-  invoke<void>("reveal_call_recording", { callSessionId });
+export const revealCallRecording = (callSessionId: string) => {
+  requireTauriRuntime("Opening a call recording");
+  return invoke<void>("reveal_call_recording", { callSessionId });
+};
 
-export const exportCallRecording = (callSessionId: string) =>
-  invoke<string>("export_call_recording", { callSessionId });
+export const exportCallRecording = (callSessionId: string) => {
+  requireTauriRuntime("Exporting a call recording");
+  return invoke<string>("export_call_recording", { callSessionId });
+};
 
 export const retryRecoveredCallRecording = (
   callSessionId: string,
   endedAt = Date.now()
-) =>
-  invoke<CallRecordingStatus>("retry_call_recording_close", {
+) => {
+  requireTauriRuntime("Call recording recovery");
+  return invoke<CallRecordingStatus>("retry_call_recording_close", {
     callSessionId,
     endedAt,
   });
+};
 
 export const abandonRecoveredCallRecording = (
   callSessionId: string,
   occurredAt = Date.now()
-) =>
-  invoke<CallRecordingStatus>("abandon_call_recording", {
+) => {
+  requireTauriRuntime("Call recording recovery");
+  return invoke<CallRecordingStatus>("abandon_call_recording", {
     callSessionId,
     occurredAt,
   });
+};

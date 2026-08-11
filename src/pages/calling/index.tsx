@@ -60,7 +60,7 @@ export default function CallingPage({
 
   return (
     <div className={`moss-shell${embedded ? " moss-shell-embedded" : ""}`}>
-      {!embedded && <header className="moss-topbar" data-tauri-drag-region>
+      {!embedded && <header className="moss-topbar">
         {onOpenControlCenter && (
           <button
             className="icon-button"
@@ -71,8 +71,8 @@ export default function CallingPage({
             <LayoutDashboard size={18} />
           </button>
         )}
-        <div className="moss-brand"><span className="brand-mark"><Headphones size={17} /></span><div><strong>MOSS</strong><span>Calling Helper</span></div></div>
-        <div className={`status status-${state}`}><span />{statusLabel[state] ?? state}</div>
+        <div className="moss-brand" data-tauri-drag-region><span className="brand-mark"><Headphones size={17} /></span><div><strong>MOSS</strong><span>Calling Helper</span></div></div>
+        <div className={`status status-${state}`} data-tauri-drag-region><span />{statusLabel[state] ?? state}</div>
       </header>}
 
       <section className="moss-guidance" aria-live="polite">
@@ -113,6 +113,13 @@ export default function CallingPage({
         <p>{latestThem?.text ?? "Listening has not started."}</p>
       </section>
 
+      {!controller.nativeRuntimeAvailable && (
+        <div className="moss-runtime-notice" role="status">
+          Browser preview is active. Native audio and local call recording are
+          available in the MOSS desktop app.
+        </div>
+      )}
+
       {historicalRecoverables.length > 0 && (
         <section className="recording-recovery" aria-label="Recoverable call recordings">
           <strong>Unfinished recordings</strong>
@@ -129,14 +136,14 @@ export default function CallingPage({
       {(actionError || controller.runtime.lastError || controller.recordingError) && <div className="moss-error">{actionError ?? controller.runtime.lastError ?? controller.recordingError}</div>}
 
       <footer className="moss-actions">
-        {canStart && <button className="primary-button" onClick={() => void run(controller.start)}><Play size={17} />{state === "start-failed" ? "Retry start" : "Start call"}</button>}
+        {canStart && <button className="primary-button" disabled={!controller.nativeRuntimeAvailable} title={controller.nativeRuntimeAvailable ? undefined : "Available in the desktop app"} onClick={() => void run(controller.start)}><Play size={17} />{state === "start-failed" ? "Retry start" : "Start call"}</button>}
         {state === "live" && <button className="secondary-button" onClick={() => void run(controller.pause)}><Pause size={17} />Pause</button>}
         {(state === "paused" || state === "recovering") && <button className="primary-button" onClick={() => void run(controller.resume)}><Play size={17} />Resume</button>}
         {(["live", "paused", "recovering"] as string[]).includes(state) && <button className="secondary-button" disabled={!latestThem || !controller.configured.advisor} onClick={() => void run(controller.requestGuidance)}><Sparkles size={17} />Advise</button>}
         {(["live", "paused", "recovering", "start-failed"] as string[]).includes(state) && <button className="danger-button" onClick={() => void run(controller.end)}><Square size={15} />End</button>}
         {state === "close-failed" && <button className="primary-button" onClick={() => void run(controller.retryClose)}><RotateCcw size={16} />Retry close</button>}
         {state === "close-failed" && <button className="danger-button" onClick={() => void run(controller.abandonClose)}><ArchiveX size={16} />Abandon</button>}
-        <span className="route-health">Runtime {controller.configured.runtime ? "ready" : "local fallback"} · Advisor {controller.configured.advisor ? "ready" : "not set"} · STT {controller.configured.stt ? "ready" : "not set"}{controller.recordingStatus ? ` · Recording ${controller.recordingStatus.state}` : ""}</span>
+        <span className="route-health">{controller.nativeRuntimeAvailable ? "Desktop" : "Browser preview"} · Runtime {controller.configured.runtime ? "ready" : "local fallback"} · Advisor {controller.configured.advisor ? "ready" : "not set"} · STT {controller.configured.stt ? "ready" : "not set"}{controller.recordingStatus ? ` · Recording ${controller.recordingStatus.state}` : ""}</span>
       </footer>
     </div>
   );

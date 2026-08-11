@@ -21,6 +21,7 @@ import {
   GlobalShortcutRegistry,
   MOSS_WINDOW_PROFILES,
   isEditableElement,
+  isTauriRuntime,
   shortcutDisplayText,
   type MossInterfaceMode,
   type ShortcutAction,
@@ -100,8 +101,6 @@ const closableStates = new Set([
   "start-failed",
 ]);
 
-const isTauri = () => "__TAURI_INTERNALS__" in window;
-
 function Placeholder({
   section,
 }: {
@@ -169,7 +168,7 @@ export default function MossApp() {
       if (controller.runtime.state === "close-failed") {
         throw new Error("Close the active recording before quitting MOSS.");
       }
-      if (isTauri()) await invoke("exit_app");
+      if (isTauriRuntime()) await invoke("exit_app");
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);
       controller.recordInterfaceAction({
@@ -190,15 +189,15 @@ export default function MossApp() {
   ) => {
     const previousMode = interfaceModeRef.current;
     setWindowError(null);
-    interfaceModeRef.current = mode;
-    setInterfaceMode(mode);
     controllerRef.current.recordInterfaceAction({
       action: "switch-mode",
       source,
       outcome: "requested",
       detail: mode,
     });
-    if (!isTauri()) {
+    if (!isTauriRuntime()) {
+      interfaceModeRef.current = mode;
+      setInterfaceMode(mode);
       controllerRef.current.recordInterfaceAction({
         action: "switch-mode",
         source,
@@ -216,6 +215,8 @@ export default function MossApp() {
       await appWindow.setSize(new LogicalSize(profile.width, profile.height));
       await appWindow.setAlwaysOnTop(profile.alwaysOnTop);
       await appWindow.center();
+      interfaceModeRef.current = mode;
+      setInterfaceMode(mode);
       controllerRef.current.recordInterfaceAction({
         action: "switch-mode",
         source,
@@ -225,7 +226,6 @@ export default function MossApp() {
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);
       interfaceModeRef.current = previousMode;
-      setInterfaceMode(previousMode);
       controllerRef.current.recordInterfaceAction({
         action: "switch-mode",
         source,
@@ -246,7 +246,7 @@ export default function MossApp() {
       source: "ui",
       outcome: "requested",
     });
-    if (!isTauri()) return;
+    if (!isTauriRuntime()) return;
     try {
       await getCurrentWindow().hide();
       controllerRef.current.recordInterfaceAction({
@@ -296,7 +296,7 @@ export default function MossApp() {
       record("triggered");
       try {
         if (action === "toggle-visibility") {
-          if (!isTauri()) return;
+          if (!isTauriRuntime()) return;
           const appWindow = getCurrentWindow();
           if (await appWindow.isVisible()) {
             await appWindow.hide();
@@ -440,7 +440,7 @@ export default function MossApp() {
       </aside>
 
       <section className="app-workspace">
-        <header className="workspace-header" data-tauri-drag-region>
+        <header className="workspace-header">
           <button
             className="icon-button"
             onClick={() => setSidebarCollapsed((current) => !current)}
@@ -449,7 +449,7 @@ export default function MossApp() {
           >
             <PanelLeft size={18} />
           </button>
-          <div>
+          <div data-tauri-drag-region>
             <h1>{section.label}</h1>
             <p>{section.description}</p>
           </div>
@@ -487,10 +487,10 @@ export default function MossApp() {
           ) : activeSection === "settings" ? (
             <AppSettingsPage
               interfaceMode={interfaceMode}
+              nativeRuntimeAvailable={controller.nativeRuntimeAvailable}
               visibilityShortcut={shortcutDisplayText("toggle-visibility")}
               onSwitchMode={(mode) => applyInterfaceMode(mode)}
               onHide={hideMoss}
-              onQuit={quit}
             />
           ) : (
             <Placeholder section={activeSection} />

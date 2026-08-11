@@ -12,6 +12,7 @@ import {
   createCancellableOperation,
   listCallRecordings,
   listRecoverableCallRecordings,
+  isTauriRuntime,
   loadModelRouteSettings,
   loadProviderSecret,
   requestTranscription,
@@ -168,6 +169,7 @@ async function drainQueueUntilStable(
 }
 
 export function useCallingAssistant() {
+  const nativeRuntimeAvailable = isTauriRuntime();
   const runtimeRef = useRef(makeRuntime());
   const [runtime, setRuntime] = useState<ActiveCallRuntimeState>(() =>
     runtimeRef.current.snapshot()
@@ -258,20 +260,28 @@ export function useCallingAssistant() {
   );
 
   const refreshRecoverableRecordings = useCallback(async () => {
+    if (!nativeRuntimeAvailable) {
+      setRecoverableRecordings([]);
+      return;
+    }
     try {
       setRecoverableRecordings(await listRecoverableCallRecordings());
     } catch (error) {
       setRecordingError(errorMessage(error));
     }
-  }, []);
+  }, [nativeRuntimeAvailable]);
 
   const refreshCallRecordings = useCallback(async () => {
+    if (!nativeRuntimeAvailable) {
+      setCallRecordings([]);
+      return;
+    }
     try {
       setCallRecordings(await listCallRecordings());
     } catch (error) {
       setRecordingError(errorMessage(error));
     }
-  }, []);
+  }, [nativeRuntimeAvailable]);
 
   const abortOperations = useCallback((reason: string) => {
     for (const operation of activeOperationsRef.current) {
@@ -520,6 +530,7 @@ export function useCallingAssistant() {
   }, []);
 
   useEffect(() => {
+    if (!nativeRuntimeAvailable) return;
     let disposed = false;
     let stopSpeech: (() => void) | undefined;
     let stopLifecycle: (() => void) | undefined;
@@ -619,6 +630,7 @@ export function useCallingAssistant() {
     publish,
     queueRecordingEvent,
     releaseCaptureLease,
+    nativeRuntimeAvailable,
   ]);
 
   const startCapture = useCallback(
@@ -659,6 +671,9 @@ export function useCallingAssistant() {
   );
 
   const start = useCallback(async () => {
+    if (!nativeRuntimeAvailable) {
+      throw new Error("Start calls from the MOSS desktop app.");
+    }
     if (!secretsRef.current.stt) {
       throw new Error("Configure Speech-to-Text before starting a call.");
     }
@@ -700,7 +715,14 @@ export function useCallingAssistant() {
       });
       publish();
     }
-  }, [abortOperations, bindRuntimeRecording, publish, refreshCallRecordings, startCapture]);
+  }, [
+    abortOperations,
+    bindRuntimeRecording,
+    nativeRuntimeAvailable,
+    publish,
+    refreshCallRecordings,
+    startCapture,
+  ]);
 
   const stopNativeCapture = useCallback(async (): Promise<CaptureLease | null> => {
     if (
@@ -997,6 +1019,7 @@ export function useCallingAssistant() {
   );
 
   return {
+    nativeRuntimeAvailable,
     runtime,
     settings,
     audioSettings,

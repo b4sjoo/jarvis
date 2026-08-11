@@ -1,4 +1,5 @@
 import { getItem, saveItem } from "tauri-plugin-keychain";
+import { isTauriRuntime } from "./runtime-environment.js";
 
 export type ChatRouteId = "runtime" | "advisor" | "complex";
 
@@ -65,13 +66,13 @@ const browserSecrets = new Map<string, string>();
 
 export async function loadProviderSecret(route: ChatRouteId | "stt") {
   const key = secretKey(route);
-  if (!("__TAURI_INTERNALS__" in window)) return browserSecrets.get(key) ?? "";
+  if (!isTauriRuntime()) return browserSecrets.get(key) ?? "";
   return (await getItem(key)) ?? "";
 }
 
 export async function saveProviderSecret(route: ChatRouteId | "stt", secret: string) {
   const key = secretKey(route);
-  if (!("__TAURI_INTERNALS__" in window)) {
+  if (!isTauriRuntime()) {
     browserSecrets.set(key, secret);
     return;
   }

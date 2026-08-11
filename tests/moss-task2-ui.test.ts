@@ -79,7 +79,7 @@ test("application settings preserve a recoverable Dock-hidden lifecycle", () => 
   const callingStyles = source("src/pages/calling/calling.css");
   assert.match(appShell, /Resolve the global show\/hide shortcut before hiding MOSS/);
   assert.match(appShell, /recordInterfaceAction/);
-  assert.match(appShell, /setInterfaceMode\(previousMode\)/);
+  assert.match(appShell, /setWindowError\(detail\)/);
   assert.match(appSettings, /Dock-hidden operation/);
   assert.match(appSettings, /raw audio/i);
   assert.doesNotMatch(callingStyles, /moss-settings-backdrop|route-grid/);

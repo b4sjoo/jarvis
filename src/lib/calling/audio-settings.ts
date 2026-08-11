@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { isTauriRuntime } from "./runtime-environment.js";
 
 export type AudioProfile = "quiet" | "balanced" | "sensitive" | "custom";
 
@@ -193,7 +194,7 @@ export function persistAudioSettings(settings: AudioSettings) {
 }
 
 export async function loadAudioDevices() {
-  if (!("__TAURI_INTERNALS__" in window)) {
+  if (!isTauriRuntime()) {
     return { input: [] as AudioDevice[], output: [] as AudioDevice[] };
   }
   const [input, output] = await Promise.all([
@@ -204,6 +205,6 @@ export async function loadAudioDevices() {
 }
 
 export async function updateNativeVadConfig(config: VadConfig) {
-  if (!("__TAURI_INTERNALS__" in window)) return;
+  if (!isTauriRuntime()) return;
   await invoke("update_vad_config", { config });
 }

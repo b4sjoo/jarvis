@@ -1,3 +1,5 @@
+import { isTauriRuntime } from "./runtime-environment.js";
+
 export type ShortcutAction =
   | "toggle-visibility"
   | "toggle-interface"
@@ -75,9 +77,6 @@ const fixedActions: readonly ShortcutAction[] = [
 ];
 
 const shortcutPattern = /^CommandOrControl\+Shift\+[A-Z0-9]$/;
-
-const isTauri = () =>
-  typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
 export function validateFixedShortcutDefinitions(
   definitions: readonly ShortcutDefinition[] = FIXED_SHORTCUT_DEFINITIONS
@@ -185,7 +184,7 @@ export class GlobalShortcutRegistry {
   private async clearNow() {
     const previous = this.bindings;
     this.bindings = [];
-    if (!isTauri() || previous.length === 0) return;
+    if (!isTauriRuntime() || previous.length === 0) return;
     const { unregister } = await import(
       "@tauri-apps/plugin-global-shortcut"
     );
@@ -196,7 +195,7 @@ export class GlobalShortcutRegistry {
 
   private async replaceNow(handler: ShortcutHandler) {
     const next = fixedShortcutBindings();
-    if (!isTauri()) {
+    if (!isTauriRuntime()) {
       this.bindings = next;
       return;
     }

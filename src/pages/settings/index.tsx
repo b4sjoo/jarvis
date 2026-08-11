@@ -6,10 +6,10 @@ import {
   FolderOpen,
   Info,
   PanelTop,
-  Power,
   ShieldCheck,
 } from "lucide-react";
 import {
+  isTauriRuntime,
   revealCallRecordingsRoot,
   type MossInterfaceMode,
 } from "@/lib/calling";
@@ -17,20 +17,18 @@ import "./settings.css";
 
 interface AppSettingsPageProps {
   interfaceMode: MossInterfaceMode;
+  nativeRuntimeAvailable: boolean;
   visibilityShortcut: string;
   onSwitchMode: (mode: MossInterfaceMode) => Promise<void>;
   onHide: () => Promise<void>;
-  onQuit: () => Promise<void>;
 }
-
-const isTauri = () => "__TAURI_INTERNALS__" in window;
 
 export default function AppSettingsPage({
   interfaceMode,
+  nativeRuntimeAvailable,
   visibilityShortcut,
   onSwitchMode,
   onHide,
-  onQuit,
 }: AppSettingsPageProps) {
   const [version, setVersion] = useState("0.1.0");
   const [busy, setBusy] = useState<string | null>(null);
@@ -38,7 +36,7 @@ export default function AppSettingsPage({
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (isTauri()) {
+    if (isTauriRuntime()) {
       void invoke<string>("get_app_version").then(setVersion).catch(() => undefined);
     }
   }, []);
@@ -86,7 +84,8 @@ export default function AppSettingsPage({
           <button
             className="secondary-button"
             onClick={() => void run("storage", revealCallRecordingsRoot, "Opened the recordings folder.")}
-            disabled={busy !== null}
+            disabled={busy !== null || !nativeRuntimeAvailable}
+            title={nativeRuntimeAvailable ? undefined : "Available in the desktop app"}
           >
             <FolderOpen size={15} />
             Open folder
@@ -120,27 +119,13 @@ export default function AppSettingsPage({
           <button
             className="secondary-button"
             onClick={() => void run("hide", onHide)}
-            disabled={busy !== null}
+            disabled={busy !== null || !nativeRuntimeAvailable}
+            title={nativeRuntimeAvailable ? undefined : "Available in the desktop app"}
           >
             Hide MOSS
           </button>
         </section>
 
-        <section className="app-setting-row app-setting-danger">
-          <span className="field-icon"><Power size={17} /></span>
-          <div>
-            <h3>Quit MOSS</h3>
-            <p>An active call is drained and its recording is closed before the application exits.</p>
-          </div>
-          <button
-            className="danger-button"
-            onClick={() => void run("quit", onQuit)}
-            disabled={busy !== null}
-          >
-            <Power size={15} />
-            Quit
-          </button>
-        </section>
       </div>
 
       {(message || error) && (
