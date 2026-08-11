@@ -1,4 +1,5 @@
 import type { ChatModelRouteConfig, SttRouteConfig } from "./model-routes.js";
+import { fetch } from "@tauri-apps/plugin-http";
 
 export interface ChatMessage {
   role: "system" | "user" | "assistant";

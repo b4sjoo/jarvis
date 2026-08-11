@@ -1,4 +1,3 @@
-mod capture;
 mod db;
 mod preparation_material_extraction;
 mod preparation_material_storage;
@@ -17,7 +16,6 @@ use std::{fs, path::PathBuf};
 use tauri::{AppHandle, Manager, WebviewWindow};
 use tokio::task::JoinHandle;
 mod speaker;
-use capture::CaptureState;
 use speaker::{NativeCaptureControl, NativeCaptureTerminationRequest, VadConfig};
 
 #[cfg(target_os = "macos")]
@@ -413,7 +411,6 @@ pub fn run() {
         )
         .manage(AudioState::default())
         .manage(stt_evaluation::SttEvaluationCaptureState::default())
-        .manage(CaptureState::default())
         .manage(shortcuts::WindowVisibility {
             is_hidden: Mutex::new(false),
         })
@@ -464,14 +461,6 @@ pub fn run() {
             window::open_dashboard,
             window::toggle_dashboard,
             window::move_window,
-            window::show_meeting_focus_windows,
-            window::hide_meeting_focus_windows,
-            window::set_meeting_focus_controls_geometry,
-            capture::capture_to_base64,
-            capture::capture_screen_context_to_base64,
-            capture::start_screen_capture,
-            capture::capture_selected_area,
-            capture::close_overlay_window,
             shortcuts::check_shortcuts_registered,
             shortcuts::get_registered_shortcuts,
             shortcuts::update_shortcuts,

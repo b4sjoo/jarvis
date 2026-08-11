@@ -6,10 +6,6 @@
   <key>NSMicrophoneUsageDescription</key>
   <string>MOSS needs access to your microphone for voice input functionality. System audio capture uses virtual audio devices and does not access your microphone.</string>
   
-  <!-- Screen Capture -->
-  <key>NSScreenCaptureUsageDescription</key>
-  <string>MOSS does not capture the screen in its Calling runtime.</string>
-  
   <!-- System Audio -->
   <key>NSAudioCaptureUsageDescription</key>
   <string>MOSS needs access to system audio to transcribe calls and provide realtime guidance.</string>

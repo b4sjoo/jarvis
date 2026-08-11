@@ -1,7 +1,6 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import path from "path";
-import tailwindcss from "@tailwindcss/vite";
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 
@@ -28,7 +27,7 @@ const buildTimestamp = new Date().toISOString();
 
 // https://vite.dev/config/
 export default defineConfig(async () => ({
-  plugins: [react(), tailwindcss()],
+  plugins: [react()],
   define: {
     __MOSS_APP_VERSION__: JSON.stringify(packageJson.version ?? "unknown"),
     __MOSS_GIT_COMMIT__: JSON.stringify(gitCommit),

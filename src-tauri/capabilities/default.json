@@ -4,9 +4,7 @@
   "description": "Capability for the main window on macOS",
   "windows": [
     "main",
-    "dashboard",
-    "meeting-focus-answer",
-    "meeting-focus-controls"
+    "dashboard"
   ],
   "platforms": ["macOS"],
   "permissions": [
