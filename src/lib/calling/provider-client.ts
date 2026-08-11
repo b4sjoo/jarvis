@@ -105,6 +105,68 @@ export async function requestChatCompletion(input: {
   return parseChatProviderResponse(input.route, await response.json());
 }
 
+export async function requestChatCompletionStream(input: {
+  route: ChatModelRouteConfig;
+  apiKey: string;
+  messages: ChatMessage[];
+  signal?: AbortSignal;
+  onText: (completeText: string) => void;
+}) {
+  const provider = getChatProvider(input.route.provider);
+  const request = buildChatProviderRequest(input);
+  const body = JSON.parse(String(request.init.body)) as Record<string, unknown>;
+  body.stream = true;
+  const response = await fetch(request.endpoint, {
+    ...request.init,
+    body: JSON.stringify(body),
+    signal: input.signal,
+  });
+  if (!response.ok) {
+    throw new Error(`Model request failed (${response.status}): ${await response.text()}`);
+  }
+  if (!response.body) {
+    throw new Error(`${provider.name} returned no response stream.`);
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let complete = "";
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const events = buffer.split("\n\n");
+    buffer = events.pop() ?? "";
+    for (const event of events) {
+      const data = event
+        .split("\n")
+        .filter((line) => line.startsWith("data:"))
+        .map((line) => line.slice(5).trim())
+        .join("\n");
+      if (!data || data === "[DONE]") continue;
+      try {
+        const payload = JSON.parse(data) as {
+          choices?: Array<{ delta?: { content?: string } }>;
+          delta?: { type?: string; text?: string };
+        };
+        const text = provider.protocol === "anthropic-messages"
+          ? payload.delta?.text
+          : payload.choices?.[0]?.delta?.content;
+        if (text) {
+          complete += text;
+          input.onText(complete);
+        }
+      } catch {
+        // Ignore provider keepalive and non-text events.
+      }
+    }
+  }
+  complete = complete.trim();
+  if (!complete) throw new Error(`${provider.name} returned no streamed text content.`);
+  return complete;
+}
+
 export function buildTranscriptionProviderRequest(input: {
   route: SttRouteConfig;
   apiKey: string;
