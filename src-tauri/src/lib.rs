@@ -2,6 +2,7 @@ mod case_material_extraction;
 mod case_privacy;
 mod content_storage;
 mod db;
+mod preparation_transaction;
 mod recording;
 mod speaker;
 
@@ -96,6 +97,7 @@ pub fn run() {
                 .build(),
         )
         .manage(AudioState::default())
+        .manage(preparation_transaction::PreparationTransactionState::default())
         .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_keychain::init())
@@ -109,6 +111,11 @@ pub fn run() {
             case_privacy::stage_case_deletion,
             case_privacy::restore_case_deletion,
             case_privacy::finalize_case_deletion,
+            preparation_transaction::begin_preparation_transaction,
+            preparation_transaction::execute_preparation_transaction,
+            preparation_transaction::select_preparation_transaction,
+            preparation_transaction::commit_preparation_transaction,
+            preparation_transaction::rollback_preparation_transaction,
             content_storage::import_content_file,
             content_storage::delete_content_file,
             content_storage::read_content_file_base64,

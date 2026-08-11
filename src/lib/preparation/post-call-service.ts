@@ -245,7 +245,7 @@ export class PostCallReviewService {
       const turnById = new Map(turns.map((turn) => [turn.id, turn]));
       const now = Date.now();
       const proposals: PendingCaseUpdate[] = [];
-      await withTransaction(this.database, async () => {
+      await withTransaction(this.database, async (transaction) => {
         for (const draft of drafts) {
           const sourceTurns = draft.sourceTurnIds.map((turnId) => {
             const turn = turnById.get(turnId);
@@ -284,7 +284,7 @@ export class PostCallReviewService {
             createdAt: now,
             updatedAt: now,
           };
-          await this.database.execute(
+          await transaction.execute(
             `INSERT INTO pending_case_updates (
               id, case_id, call_session_id, kind, proposed_statement_json,
               source_turn_ids_json, review_state, row_revision, created_at, updated_at
@@ -358,9 +358,9 @@ export class PostCallReviewService {
       createdAt: now,
       updatedAt: now,
     };
-    await withTransaction(this.database, async () => {
-      const current = await this.currentRevision(pending.caseId);
-      await this.database.execute(
+    await withTransaction(this.database, async (transaction) => {
+      const current = await this.currentRevision(pending.caseId, transaction);
+      await transaction.execute(
         `INSERT INTO case_statements (
           id, case_id, revision, kind, content, subject_party_id, speaker_party_id,
           review_state, claim_state, jurisdiction, valid_from, valid_until,
@@ -376,7 +376,7 @@ export class PostCallReviewService {
         ]
       );
       for (const source of statement.sourceRefs) {
-        await this.database.execute(
+        await transaction.execute(
           `INSERT INTO case_statement_sources (
             id, statement_id, source_kind, source_id, source_revision,
             content_hash, page_number, quoted_text, created_at
@@ -401,14 +401,14 @@ export class PostCallReviewService {
         sourceCommandId: `post_call_review_${crypto.randomUUID()}`,
         createdAt: now,
       };
-      await this.insertRevision(revision);
-      const changedCase = await this.database.execute(
+      await this.insertRevision(revision, transaction);
+      const changedCase = await transaction.execute(
         `UPDATE cases SET current_revision_id = ?, row_revision = row_revision + 1, updated_at = ?
          WHERE id = ? AND current_revision_id = ?`,
         [revision.id, now, pending.caseId, current.id]
       );
       if (changedCase.rowsAffected !== 1) throw new Error("CaseRevision commit conflict.");
-      const changedPending = await this.database.execute(
+      const changedPending = await transaction.execute(
         `UPDATE pending_case_updates SET proposed_statement_json = ?, review_state = ?,
          row_revision = row_revision + 1, updated_at = ?
          WHERE id = ? AND row_revision = ? AND review_state = 'pending'`,
@@ -500,8 +500,11 @@ export class PostCallReviewService {
     });
   }
 
-  private async currentRevision(caseId: string): Promise<CaseRevision> {
-    const rows = await this.database.select<Array<{
+  private async currentRevision(
+    caseId: string,
+    database: SqlDatabase = this.database
+  ): Promise<CaseRevision> {
+    const rows = await database.select<Array<{
       id: string;
       case_id: string;
       revision: number;
@@ -536,8 +539,8 @@ export class PostCallReviewService {
     };
   }
 
-  private async insertRevision(revision: CaseRevision) {
-    await this.database.execute(
+  private async insertRevision(revision: CaseRevision, database: SqlDatabase = this.database) {
+    await database.execute(
       `INSERT INTO case_revisions (
         id, case_id, revision, parent_revision_id, primary_objective,
         acceptable_fallbacks_json, party_ids_json, statement_ids_json,

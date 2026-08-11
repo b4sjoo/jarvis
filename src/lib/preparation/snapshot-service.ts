@@ -296,8 +296,8 @@ export class CallPreparationSnapshotService {
     );
     if (existing[0]) return mapSnapshot(existing[0]);
     const bundle: CallPreparationSnapshotBundle = { ...hashInput, state: "draft", contentHash };
-    await withTransaction(this.database, async () => {
-      await this.database.execute(
+    await withTransaction(this.database, async (transaction) => {
+      await transaction.execute(
         `INSERT INTO call_preparation_snapshots (
           id, compile_id, case_id, case_revision_id, call_plan_id, version, state,
           bundle_json, source_manifest_json, artifact_manifest_json, warnings_json,
@@ -306,7 +306,7 @@ export class CallPreparationSnapshotService {
         [id, compileId, input.caseId, frozen.caseRevision.id, input.callPlanId, version, encodeJson(bundle), encodeJson(frozen.manifest), encodeJson(artifactManifest), encodeJson(warnings), contentHash, SNAPSHOT_COMPILER_VERSION, compiledAt, compiledAt]
       );
       for (const artifact of artifactManifest) {
-        await this.database.execute(
+        await transaction.execute(
           `INSERT INTO snapshot_artifacts (
             id, snapshot_id, lineage_key, artifact_path, section, content_hash, source_refs_json, created_at
           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -325,13 +325,13 @@ export class CallPreparationSnapshotService {
     if (snapshot.warnings.some((warning) => warning.severity === "error")) {
       throw new Error("Resolve snapshot errors before marking it ready.");
     }
-    await withTransaction(this.database, async () => {
-      await this.revalidateManifest(snapshot.caseId, snapshot.sourceManifest);
-      await this.database.execute(
+    await withTransaction(this.database, async (transaction) => {
+      await this.revalidateManifest(snapshot.caseId, snapshot.sourceManifest, transaction);
+      await transaction.execute(
         "UPDATE call_preparation_snapshots SET state = 'superseded', updated_at = ? WHERE case_id = ? AND call_plan_id = ? AND state = 'ready'",
         [Date.now(), snapshot.caseId, snapshot.callPlanId]
       );
-      const changed = await this.database.execute(
+      const changed = await transaction.execute(
         "UPDATE call_preparation_snapshots SET state = 'ready', updated_at = ? WHERE id = ? AND state = 'draft'",
         [Date.now(), snapshot.id]
       );
@@ -515,12 +515,16 @@ export class CallPreparationSnapshotService {
     return artifacts;
   }
 
-  private async revalidateManifest(caseId: string, manifest: SnapshotSourceManifest) {
-    const caseRows = await this.database.select<Array<{ current_revision_id: string }>>("SELECT current_revision_id FROM cases WHERE id = ?", [caseId]);
+  private async revalidateManifest(
+    caseId: string,
+    manifest: SnapshotSourceManifest,
+    database: SqlDatabase = this.database
+  ) {
+    const caseRows = await database.select<Array<{ current_revision_id: string }>>("SELECT current_revision_id FROM cases WHERE id = ?", [caseId]);
     if (caseRows[0]?.current_revision_id !== manifest.caseRevisionId) throw new Error("CaseRevision changed after snapshot source freeze.");
-    const planRows = await this.database.select<Array<{ row_revision: number }>>("SELECT row_revision FROM call_plans WHERE id = ? AND case_id = ?", [manifest.callPlanId, caseId]);
+    const planRows = await database.select<Array<{ row_revision: number }>>("SELECT row_revision FROM call_plans WHERE id = ? AND case_id = ?", [manifest.callPlanId, caseId]);
     if (planRows[0]?.row_revision !== manifest.callPlanRevision) throw new Error("CallPlan changed after snapshot source freeze.");
-    const currentExtractionRows = await this.database.select<Array<{ material_id: string; run_id: string; output_hash: string }>>(
+    const currentExtractionRows = await database.select<Array<{ material_id: string; run_id: string; output_hash: string }>>(
       `SELECT material.id AS material_id, run.id AS run_id, run.output_hash
        FROM case_materials material JOIN extraction_runs run ON run.id = material.selected_extraction_run_id
        WHERE material.case_id = ? AND (material.call_plan_id IS NULL OR material.call_plan_id = ?)
@@ -533,7 +537,7 @@ export class CallPreparationSnapshotService {
       throw new Error("The eligible ExtractionRun source set changed after snapshot source freeze.");
     }
     for (const expected of manifest.extractionRuns) {
-      const rows = await this.database.select<Array<{ selected_extraction_run_id: string; output_hash: string; status: string; review_status: string }>>(
+      const rows = await database.select<Array<{ selected_extraction_run_id: string; output_hash: string; status: string; review_status: string }>>(
         `SELECT material.selected_extraction_run_id, run.output_hash, run.status, material.review_status
          FROM case_materials material JOIN extraction_runs run ON run.id = material.selected_extraction_run_id
          WHERE material.id = ? AND material.case_id = ?`,
@@ -546,10 +550,10 @@ export class CallPreparationSnapshotService {
       }
     }
     for (const expected of manifest.statements) {
-      const rows = await this.database.select<Array<{ revision: number; content: string; review_state: string }>>("SELECT revision, content, review_state FROM case_statements WHERE id = ? AND case_id = ?", [expected.statementId, caseId]);
+      const rows = await database.select<Array<{ revision: number; content: string; review_state: string }>>("SELECT revision, content, review_state FROM case_statements WHERE id = ? AND case_id = ?", [expected.statementId, caseId]);
       const current = rows[0];
       if (!current || current.review_state !== "confirmed" || current.revision !== expected.revision) throw new Error("A confirmed statement changed after snapshot source freeze.");
-      const sourceRows = await this.database.select<Array<{ id: string; source_kind: string; source_id: string; source_revision: number | null; content_hash: string; page_number: number | null; quoted_text: string | null }>>("SELECT * FROM case_statement_sources WHERE statement_id = ? ORDER BY created_at", [expected.statementId]);
+      const sourceRows = await database.select<Array<{ id: string; source_kind: string; source_id: string; source_revision: number | null; content_hash: string; page_number: number | null; quoted_text: string | null }>>("SELECT * FROM case_statement_sources WHERE statement_id = ? ORDER BY created_at", [expected.statementId]);
       const contentHash = await sha256(canonicalize({ content: current.content, sources: sourceRows.map((source) => ({ id: source.id, sourceKind: source.source_kind, sourceId: source.source_id, sourceRevision: source.source_revision ?? undefined, contentHash: source.content_hash, pageNumber: source.page_number ?? undefined, quotedText: source.quoted_text ?? undefined })), revision: current.revision }));
       if (contentHash !== expected.contentHash) throw new Error("A confirmed statement hash changed after snapshot source freeze.");
     }

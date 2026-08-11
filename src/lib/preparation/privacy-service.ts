@@ -193,22 +193,27 @@ export class CasePrivacyService {
     const caseIdHash = await sha256(caseId);
     const sessionIds = sessions.map((session) => session.id);
     const now = Date.now();
-    await withTransaction(this.database, async () => {
-      const marked = await this.database.execute(
+    await withTransaction(this.database, async (transaction) => {
+      const marked = await transaction.execute(
         "UPDATE cases SET deletion_state = 'deleting', updated_at = ? WHERE id = ? AND deletion_state = 'active'",
         [now, caseId]
       );
       if (marked.rowsAffected !== 1) throw new Error("Case deletion ownership changed.");
-      await this.database.execute(
+      await transaction.execute(
         `INSERT INTO case_deletion_operations (
           operation_id, case_id, case_id_hash, linked_session_ids_json,
           state, created_at, updated_at
         ) VALUES (?, ?, ?, ?, 'prepared', ?, ?)`,
         [operationId, caseId, caseIdHash, encodeJson(sessionIds), now, now]
       );
-      await this.writeAudit(caseIdHash, operationId, "delete", "started", {
-        linkedSessions: sessionIds.length,
-      });
+      await this.writeAudit(
+        caseIdHash,
+        operationId,
+        "delete",
+        "started",
+        { linkedSessions: sessionIds.length },
+        transaction
+      );
     });
 
     let staged: NativeStageResult;
@@ -233,16 +238,16 @@ export class CasePrivacyService {
     }
 
     try {
-      await withTransaction(this.database, async () => {
+      await withTransaction(this.database, async (transaction) => {
         for (const sessionId of sessionIds) {
-          await this.database.execute("DELETE FROM call_runtime_sessions WHERE id = ?", [sessionId]);
+          await transaction.execute("DELETE FROM call_runtime_sessions WHERE id = ?", [sessionId]);
         }
-        const deleted = await this.database.execute(
+        const deleted = await transaction.execute(
           "DELETE FROM cases WHERE id = ? AND deletion_state = 'deleting'",
           [caseId]
         );
         if (deleted.rowsAffected !== 1) throw new Error("Case deletion lost database ownership.");
-        const marked = await this.database.execute(
+        const marked = await transaction.execute(
           "UPDATE case_deletion_operations SET state = 'db-deleted', updated_at = ? WHERE operation_id = ? AND state = 'staged'",
           [Date.now(), operationId]
         );
@@ -307,12 +312,12 @@ export class CasePrivacyService {
           );
         } else {
           await this.native.restoreDeletion(operation.operation_id);
-          await withTransaction(this.database, async () => {
-            await this.database.execute(
+          await withTransaction(this.database, async (transaction) => {
+            await transaction.execute(
               "UPDATE cases SET deletion_state = 'active', updated_at = ? WHERE id = ? AND deletion_state = 'deleting'",
               [Date.now(), operation.case_id]
             );
-            await this.database.execute(
+            await transaction.execute(
               "UPDATE case_deletion_operations SET state = 'failed', error = ?, updated_at = ? WHERE operation_id = ?",
               ["Recovered before database deletion completed.", Date.now(), operation.operation_id]
             );
@@ -370,9 +375,10 @@ export class CasePrivacyService {
     operationId: string,
     action: "export" | "delete" | "recovery",
     status: "started" | "complete" | "failed",
-    itemCounts: Record<string, unknown>
+    itemCounts: Record<string, unknown>,
+    database: SqlDatabase = this.database
   ) {
-    await this.database.execute(
+    await database.execute(
       `INSERT INTO case_privacy_audits (
         id, case_id_hash, operation_id, action, status, item_counts_json, occurred_at
       ) VALUES (?, ?, ?, ?, ?, ?, ?)`,

@@ -212,8 +212,8 @@ export class CasePreparationService {
 
   async createCase(input: Parameters<typeof createInitialCaseState>[0]) {
     const created = createInitialCaseState(input);
-    await withTransaction(this.database, async () => {
-      await this.database.execute(
+    await withTransaction(this.database, async (transaction) => {
+      await transaction.execute(
         `INSERT INTO cases (
           id, title, status, case_type, current_revision_id, row_revision, created_at, updated_at
         ) VALUES (?, ?, ?, ?, NULL, ?, ?, ?)`,
@@ -227,8 +227,8 @@ export class CasePreparationService {
           created.record.updatedAt,
         ]
       );
-      await this.insertRevision(created.revision);
-      const result = await this.database.execute(
+      await this.insertRevision(created.revision, transaction);
+      const result = await transaction.execute(
         "UPDATE cases SET current_revision_id = ? WHERE id = ? AND current_revision_id IS NULL",
         [created.revision.id, created.record.id]
       );
@@ -377,8 +377,8 @@ export class CasePreparationService {
     if (result.rowsAffected !== 1) throw new Error("Call plan was not found.");
   }
 
-  private async insertRevision(revision: CaseRevision) {
-    await this.database.execute(
+  private async insertRevision(revision: CaseRevision, database: SqlDatabase = this.database) {
+    await database.execute(
       `INSERT INTO case_revisions (
         id, case_id, revision, parent_revision_id, primary_objective,
         acceptable_fallbacks_json, party_ids_json, statement_ids_json,

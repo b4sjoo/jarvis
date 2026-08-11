@@ -184,3 +184,29 @@ test("Task 1J exposes one dashboard for trace, attribution, isolation, export, a
   assert.match(evaluation, /FROM case_privacy_audits WHERE case_id_hash = \?/);
   assert.match(route, /id: "evaluation", label: "Evaluation"/);
 });
+
+test("Task 1J preparation transactions keep native connection affinity", () => {
+  const database = readFileSync("src/lib/preparation/database.ts", "utf8");
+  const native = readFileSync("src-tauri/src/preparation_transaction.rs", "utf8");
+  const serviceSources = [
+    "case-service.ts",
+    "conversation-service.ts",
+    "material-service.ts",
+    "post-call-service.ts",
+    "privacy-service.ts",
+    "runtime-handoff.ts",
+    "snapshot-service.ts",
+    "statement-service.ts",
+  ].map((file) => readFileSync(`src/lib/preparation/${file}`, "utf8")).join("\n");
+  assert.match(database, /begin_preparation_transaction/);
+  assert.match(database, /new NativeTransactionDatabase\(transactionId\)/);
+  assert.match(database, /withWriteOwnership/);
+  assert.match(native, /HashMap<String, SqliteConnection>/);
+  assert.match(native, /BEGIN IMMEDIATE/);
+  assert.match(native, /finish_transaction\(&transaction_id, "COMMIT"/);
+  assert.doesNotMatch(serviceSources, /withTransaction\(this\.database, async \(\) =>/);
+  assert.equal(
+    serviceSources.match(/withTransaction\(this\.database, async \(transaction\)/g)?.length,
+    20
+  );
+});

@@ -232,18 +232,18 @@ export class PreparationConversationService {
       status: "committed",
       createdAt: Date.now(),
     };
-    await withTransaction(this.database, async () => {
-      const claimed = await this.database.execute(
+    await withTransaction(this.database, async (transaction) => {
+      const claimed = await transaction.execute(
         `UPDATE preparation_conversations SET head_revision = ?, updated_at = ?
          WHERE id = ? AND head_revision = ?`,
         [newRevision, message.createdAt, input.conversation.id, input.conversation.headRevision]
       );
       if (claimed.rowsAffected !== 1) throw new Error("Conversation revision conflict.");
-      await this.database.execute(
+      await transaction.execute(
         "UPDATE preparation_messages SET status = 'superseded' WHERE conversation_id = ? AND revision >= ? AND status = 'committed'",
         [input.conversation.id, targets[0].revision]
       );
-      await this.insertMessage(message);
+      await this.insertMessage(message, transaction);
     });
     return this.generateAssistant({
       conversation: { ...input.conversation, headRevision: newRevision },
@@ -273,15 +273,15 @@ export class PreparationConversationService {
       status: "committed",
       createdAt: now,
     };
-    await withTransaction(this.database, async () => {
-      const claimed = await this.database.execute(
+    await withTransaction(this.database, async (transaction) => {
+      const claimed = await transaction.execute(
         `UPDATE preparation_conversations SET head_revision = ?, updated_at = ?,
          title = CASE WHEN head_revision = 0 THEN ? ELSE title END
          WHERE id = ? AND case_id = ? AND head_revision = ?`,
         [revision, now, conversationTitle(input.content), input.conversation.id, input.conversation.caseId, input.conversation.headRevision]
       );
       if (claimed.rowsAffected !== 1) throw new Error("Conversation revision conflict.");
-      await this.insertMessage(message);
+      await this.insertMessage(message, transaction);
     });
     return message;
   }
@@ -390,20 +390,20 @@ export class PreparationConversationService {
       operationId: input.operationId,
       createdAt: Date.now(),
     };
-    await withTransaction(this.database, async () => {
-      const claimed = await this.database.execute(
+    await withTransaction(this.database, async (transaction) => {
+      const claimed = await transaction.execute(
         `UPDATE preparation_conversations SET head_revision = ?, updated_at = ?
          WHERE id = ? AND head_revision = ?`,
         [revision, message.createdAt, input.conversation.id, input.conversation.headRevision]
       );
       if (claimed.rowsAffected !== 1) throw new Error("Preparation response became stale.");
-      await this.insertMessage(message);
+      await this.insertMessage(message, transaction);
     });
     return message;
   }
 
-  private async insertMessage(message: PreparationMessage) {
-    await this.database.execute(
+  private async insertMessage(message: PreparationMessage, database: SqlDatabase = this.database) {
+    await database.execute(
       `INSERT INTO preparation_messages (
         id, conversation_id, revision, parent_message_id, role, content,
         material_refs_json, proposed_artifact_refs_json, context_manifest_json,

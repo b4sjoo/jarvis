@@ -248,14 +248,17 @@ export class ReviewedCaseStateService {
       createdAt: now,
       updatedAt: now,
     };
-    await withTransaction(this.database, async () => {
-      await this.database.execute(
+    await withTransaction(this.database, async (transaction) => {
+      await transaction.execute(
         `INSERT INTO case_parties (id, case_id, display_name, role, organization, review_state,
           source_refs_json, row_revision, created_at, updated_at)
          VALUES (?, ?, ?, ?, ?, 'confirmed', ?, 1, ?, ?)`,
         [party.id, party.caseId, party.displayName, party.role, party.organization ?? null, encodeJson(party.sourceRefs), now, now]
       );
-      await this.commitCaseRevision({ caseId: input.caseId, partyId: party.id, commandId: `party_command_${crypto.randomUUID()}` });
+      await this.commitCaseRevision(
+        { caseId: input.caseId, partyId: party.id, commandId: `party_command_${crypto.randomUUID()}` },
+        transaction
+      );
     });
     return party;
   }
@@ -407,14 +410,17 @@ export class ReviewedCaseStateService {
       sourceCount: current.sourceRefs.length,
       highImpact: isHighImpactStatement(current.kind),
     });
-    await withTransaction(this.database, async () => {
-      const changed = await this.database.execute(
+    await withTransaction(this.database, async (transaction) => {
+      const changed = await transaction.execute(
         `UPDATE case_statements SET review_state = 'confirmed', revision = revision + 1, updated_at = ?
          WHERE id = ? AND revision = ? AND review_state IN ('proposed', 'rejected')`,
         [Date.now(), current.id, expectedRevision]
       );
       if (changed.rowsAffected !== 1) throw new Error("CaseStatement revision conflict.");
-      await this.commitCaseRevision({ caseId: current.caseId, statement: current, commandId: `confirm_statement_${crypto.randomUUID()}` });
+      await this.commitCaseRevision(
+        { caseId: current.caseId, statement: current, commandId: `confirm_statement_${crypto.randomUUID()}` },
+        transaction
+      );
     });
     await this.recordReviewEvent(current.caseId, current.id, "confirmed", expectedRevision + 1);
     if (current.createdBy === "complex-model-proposal") {
@@ -430,14 +436,17 @@ export class ReviewedCaseStateService {
     const current = await this.getStatement(statementId);
     requireExpectedRevision({ entity: "CaseStatement", expected: expectedRevision, actual: current.revision });
     requireTransition({ entity: "CaseStatement", from: current.reviewState, to: "superseded", allowed: STATEMENT_REVIEW_TRANSITIONS });
-    await withTransaction(this.database, async () => {
-      const changed = await this.database.execute(
+    await withTransaction(this.database, async (transaction) => {
+      const changed = await transaction.execute(
         "UPDATE case_statements SET review_state = 'superseded', revision = revision + 1, updated_at = ? WHERE id = ? AND revision = ?",
         [Date.now(), current.id, expectedRevision]
       );
       if (changed.rowsAffected !== 1) throw new Error("CaseStatement revision conflict.");
       if (current.reviewState === "confirmed") {
-        await this.commitCaseRevision({ caseId: current.caseId, removeStatementId: current.id, commandId: `supersede_statement_${crypto.randomUUID()}` });
+        await this.commitCaseRevision(
+          { caseId: current.caseId, removeStatementId: current.id, commandId: `supersede_statement_${crypto.randomUUID()}` },
+          transaction
+        );
       }
     });
     await this.recordReviewEvent(current.caseId, current.id, "superseded", expectedRevision + 1);
@@ -490,8 +499,8 @@ export class ReviewedCaseStateService {
       createdAt: now,
       updatedAt: now,
     };
-    await withTransaction(this.database, async () => {
-      await this.database.execute(
+    await withTransaction(this.database, async (transaction) => {
+      await transaction.execute(
         `INSERT INTO case_statements (
           id, case_id, revision, kind, content, subject_party_id, speaker_party_id,
           review_state, claim_state, jurisdiction, valid_from, valid_until,
@@ -500,7 +509,7 @@ export class ReviewedCaseStateService {
         [statement.id, statement.caseId, statement.kind, statement.content, statement.claimState, statement.jurisdiction ?? null, encodeJson(statement.allowedUses), statement.allowedWording ?? null, statement.createdBy, now, now]
       );
       for (const source of statement.sourceRefs) {
-        await this.database.execute(
+        await transaction.execute(
           `INSERT INTO case_statement_sources (
             id, statement_id, source_kind, source_id, source_revision, content_hash, page_number, quoted_text, created_at
           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -517,8 +526,8 @@ export class ReviewedCaseStateService {
     partyId?: string;
     removeStatementId?: string;
     commandId: string;
-  }) {
-    const rows = await this.database.select<Array<{
+  }, database: SqlDatabase = this.database) {
+    const rows = await database.select<Array<{
       row_revision: number;
       current_revision_id: string;
       id: string;
@@ -557,14 +566,14 @@ export class ReviewedCaseStateService {
       sourceCommandId: input.commandId,
       createdAt: Date.now(),
     };
-    await this.database.execute(
+    await database.execute(
       `INSERT INTO case_revisions (
         id, case_id, revision, parent_revision_id, primary_objective, acceptable_fallbacks_json,
         party_ids_json, statement_ids_json, next_action_ids_json, source_command_id, created_at
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [revision.id, revision.caseId, revision.revision, revision.parentRevisionId, revision.primaryObjective, encodeJson(revision.acceptableFallbacks), encodeJson(revision.partyIds), encodeJson(revision.statementIds), encodeJson(revision.nextActionIds), revision.sourceCommandId, revision.createdAt]
     );
-    const changed = await this.database.execute(
+    const changed = await database.execute(
       `UPDATE cases SET current_revision_id = ?, row_revision = row_revision + 1, updated_at = ?
        WHERE id = ? AND current_revision_id = ? AND row_revision = ?`,
       [revision.id, revision.createdAt, input.caseId, current.current_revision_id, current.row_revision]

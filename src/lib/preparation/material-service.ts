@@ -283,8 +283,8 @@ export class MaterialPreparationService {
 
     const runId = `extraction_${crypto.randomUUID()}`;
     const signals = result.qualitySignals.map(qualitySignal);
-    await withTransaction(this.database, async () => {
-      await this.database.execute(
+    await withTransaction(this.database, async (transaction) => {
+      await transaction.execute(
         `INSERT INTO extraction_runs (
           id, material_id, method, engine, engine_version, options_hash,
           output_hash, status, quality_signals_json, created_at, completed_at
@@ -304,7 +304,7 @@ export class MaterialPreparationService {
         ]
       );
       for (const chunk of result.chunks) {
-        await this.database.execute(
+        await transaction.execute(
           `INSERT INTO extraction_chunks (
             id, extraction_run_id, ordinal, page_number, content, content_hash,
             char_start, char_end, confidence, created_at
@@ -323,7 +323,7 @@ export class MaterialPreparationService {
           ]
         );
       }
-      await this.selectExtractionRun(material, runId, result.status);
+      await this.selectExtractionRun(material, runId, result.status, transaction);
     });
     const rows = await this.database.select<ExtractionRunRow[]>(
       "SELECT * FROM extraction_runs WHERE id = ?",
@@ -483,8 +483,8 @@ export class MaterialPreparationService {
       { code: "model-recovered", severity: "warning", detail: `${input.method} recovery requires human review` },
       { code: "manual-review", severity: "warning", detail: "Recovered text is not authoritative until approved" },
     ];
-    await withTransaction(this.database, async () => {
-      await this.database.execute(
+    await withTransaction(this.database, async (transaction) => {
+      await transaction.execute(
         `INSERT INTO extraction_runs (
           id, material_id, method, engine, engine_version, options_hash, output_hash,
           status, quality_signals_json, created_at, completed_at
@@ -494,7 +494,7 @@ export class MaterialPreparationService {
       let charStart = 0;
       for (const [ordinal, content] of chunks.entries()) {
         const charEnd = charStart + content.length;
-        await this.database.execute(
+        await transaction.execute(
           `INSERT INTO extraction_chunks (
             id, extraction_run_id, ordinal, page_number, content, content_hash,
             char_start, char_end, confidence, created_at
@@ -503,14 +503,19 @@ export class MaterialPreparationService {
         );
         charStart = charEnd + 2;
       }
-      await this.selectExtractionRun(input.material, runId, "needs-review");
+      await this.selectExtractionRun(input.material, runId, "needs-review", transaction);
     });
     const rows = await this.database.select<ExtractionRunRow[]>("SELECT * FROM extraction_runs WHERE id = ?", [runId]);
     return mapRun(rows[0]);
   }
 
-  private async selectExtractionRun(material: CaseMaterial, runId: string, status: ExtractionRun["status"]) {
-    const result = await this.database.execute(
+  private async selectExtractionRun(
+    material: CaseMaterial,
+    runId: string,
+    status: ExtractionRun["status"],
+    database: SqlDatabase = this.database
+  ) {
+    const result = await database.execute(
       `UPDATE case_materials SET selected_extraction_run_id = ?,
        review_status = CASE WHEN ? = 'needs-review' THEN 'pending' ELSE review_status END,
        row_revision = row_revision + 1, updated_at = ?

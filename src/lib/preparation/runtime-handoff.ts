@@ -129,8 +129,8 @@ export class RuntimeHandoffService {
 
   async bind(preparation: RuntimePreparationContext) {
     const startedAt = Date.now();
-    await withTransaction(this.database, async () => {
-      await this.database.execute(
+    await withTransaction(this.database, async (transaction) => {
+      await transaction.execute(
         `INSERT INTO call_runtime_sessions (
           id, state, runtime_epoch, logical_revision, created_at, updated_at
         ) VALUES (?, 'planned', 0, 0, ?, ?)
@@ -138,7 +138,7 @@ export class RuntimeHandoffService {
         [preparation.callSessionId, preparation.boundAt, preparation.boundAt]
       );
       if (preparation.mode === "prepared") {
-        const rows = await this.database.select<Array<{
+        const rows = await transaction.select<Array<{
           state: string;
           content_hash: string;
           case_revision_id: string;
@@ -159,7 +159,7 @@ export class RuntimeHandoffService {
           throw new Error("Ready snapshot changed before CallSession binding.");
         }
       }
-      const existing = await this.database.select<Array<{
+      const existing = await transaction.select<Array<{
         mode: string;
         snapshot_id: string | null;
         snapshot_content_hash: string | null;
@@ -174,7 +174,7 @@ export class RuntimeHandoffService {
         if (!same) throw new Error("CallSession already has another preparation binding.");
         return;
       }
-      await this.database.execute(
+      await transaction.execute(
         `INSERT INTO call_session_preparation_bindings (
           call_session_id, case_id, case_revision_id, call_plan_id, snapshot_id,
           snapshot_content_hash, mode, bound_at
@@ -193,7 +193,7 @@ export class RuntimeHandoffService {
           : [preparation.callSessionId, null, null, null, null, null, preparation.mode, preparation.boundAt]
       );
       if (preparation.mode === "prepared") {
-        await this.database.execute(
+        await transaction.execute(
           `INSERT INTO preparation_operation_events (
             id, case_id, call_plan_id, operation_id, operation_kind, status, payload_json, occurred_at
           ) VALUES (?, ?, ?, ?, 'call-session-binding', 'committed', ?, ?)`,
@@ -220,8 +220,8 @@ export class RuntimeHandoffService {
         "SELECT COALESCE(MAX(sequence), 0) + 1 AS next_sequence FROM call_runtime_events WHERE call_session_id = ?",
         [transition.after.callSessionId]
       );
-      await withTransaction(this.database, async () => {
-        await this.database.execute(
+      await withTransaction(this.database, async (transaction) => {
+        await transaction.execute(
           `INSERT INTO call_runtime_events (
             id, call_session_id, sequence, event_kind, payload_json, occurred_at
           ) VALUES (?, ?, ?, 'runtime-command', ?, ?)`,
@@ -249,7 +249,7 @@ export class RuntimeHandoffService {
             transition.after.updatedAt,
           ]
         );
-        await this.database.execute(
+        await transaction.execute(
           `UPDATE call_runtime_sessions SET state = ?, runtime_epoch = ?, logical_revision = ?,
            started_at = COALESCE(started_at, ?), closed_at = ?, updated_at = ? WHERE id = ?`,
           [
@@ -273,9 +273,9 @@ export class RuntimeHandoffService {
     if (!artifactIds.length) return;
     const occurredAt = input.occurredAt ?? Date.now();
     this.enqueue(async () => {
-      await withTransaction(this.database, async () => {
+      await withTransaction(this.database, async (transaction) => {
         for (const artifactId of artifactIds) {
-          await this.database.execute(
+          await transaction.execute(
             `INSERT INTO snapshot_artifact_receipts (
               id, call_session_id, snapshot_id, artifact_id, operation_id,
               target, status, reason, occurred_at
