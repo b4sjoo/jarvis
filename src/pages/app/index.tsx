@@ -21,6 +21,7 @@ import {
   type MossInterfaceMode,
 } from "@/lib/calling";
 import CallingPage from "@/pages/calling";
+import AudioSettingsPage from "@/pages/audio";
 import "./app.css";
 
 type AppSection =
@@ -95,7 +96,7 @@ const isTauri = () => "__TAURI_INTERNALS__" in window;
 function Placeholder({
   section,
 }: {
-  section: Exclude<AppSection, "call">;
+  section: Exclude<AppSection, "call" | "audio">;
 }) {
   const content: Record<typeof section, { title: string; body: string }> = {
     cases: {
@@ -105,10 +106,6 @@ function Placeholder({
     sessions: {
       title: "Session history is local",
       body: "Recording discovery, recovery, and export will move into this route in Task 2E.",
-    },
-    audio: {
-      title: "Audio controls are coming back",
-      body: "Task 2C will restore device selection, safe presets, and advanced speech segmentation controls.",
     },
     shortcuts: {
       title: "One command path",
@@ -291,6 +288,8 @@ export default function MossApp() {
         <main className={activeSection === "call" ? "workspace-content call-route" : "workspace-content"}>
           {activeSection === "call" ? (
             <CallingPage controller={controller} embedded />
+          ) : activeSection === "audio" ? (
+            <AudioSettingsPage controller={controller} />
           ) : (
             <Placeholder section={activeSection} />
           )}

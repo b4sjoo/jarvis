@@ -7,6 +7,7 @@ import {
   CallRecordingProjection,
   OperationAbortError,
   abandonRecoveredCallRecording,
+  loadAudioSettings,
   authorizeNativeSpeechSegment,
   createCancellableOperation,
   listRecoverableCallRecordings,
@@ -16,10 +17,13 @@ import {
   retryRecoveredCallRecording,
   runAdvisorModelOperation,
   runRuntimeModelOperation,
+  persistAudioSettings,
   saveModelRouteSettings,
   saveProviderSecret,
+  updateNativeVadConfig,
   type ActiveCallRuntimeState,
   type ActiveCallTransition,
+  type AudioSettings,
   type CallRecordingEventKind,
   type CallRecordingStatus,
   type CallTurnSettlement,
@@ -170,6 +174,10 @@ export function useCallingAssistant() {
     loadModelRouteSettings()
   );
   const settingsRef = useRef(settings);
+  const [audioSettings, setAudioSettings] = useState<AudioSettings>(() =>
+    loadAudioSettings()
+  );
+  const audioSettingsRef = useRef(audioSettings);
   const secretsRef = useRef<ProviderSecrets>(blankSecrets());
   const [configured, setConfigured] = useState<
     Record<keyof ProviderSecrets, boolean>
@@ -600,7 +608,10 @@ export function useCallingAssistant() {
       if (!hasAccess) throw new Error("System audio permission is required.");
       const status = await invoke<NativeCallAudioStatus>(
         "start_call_audio_session",
-        { vadConfig: null, deviceId: null }
+        {
+          vadConfig: audioSettingsRef.current.vadConfig,
+          deviceId: audioSettingsRef.current.outputDeviceId,
+        }
       );
       if (!status.captureSessionId || status.captureGeneration == null) {
         throw new Error("Native capture started without a lease.");
@@ -616,6 +627,10 @@ export function useCallingAssistant() {
         occurredAtMs: Date.now(),
         expected: true,
         reason: "start-completed",
+        audioConfigRevision: audioSettingsRef.current.revision,
+        inputDeviceId: audioSettingsRef.current.inputDeviceId,
+        outputDeviceId: audioSettingsRef.current.outputDeviceId,
+        vadConfig: audioSettingsRef.current.vadConfig,
       });
       owner.dispatch({ type: "CaptureStarted", occurredAt: Date.now() });
       publish();
@@ -868,6 +883,33 @@ export function useCallingAssistant() {
     []
   );
 
+  const saveAudioConfiguration = useCallback(
+    async (next: AudioSettings) => {
+      const state = runtimeRef.current.snapshot().state;
+      if (["starting", "live", "recovering", "closing"].includes(state)) {
+        throw new Error("Pause the active call before applying audio settings.");
+      }
+      const saved = {
+        ...structuredClone(next),
+        revision: audioSettingsRef.current.revision + 1,
+      };
+      await updateNativeVadConfig(saved.vadConfig);
+      persistAudioSettings(saved);
+      audioSettingsRef.current = saved;
+      setAudioSettings(saved);
+      queueRecordingEvent("audio-settings-updated", {
+        revision: saved.revision,
+        inputDeviceId: saved.inputDeviceId,
+        outputDeviceId: saved.outputDeviceId,
+        profile: saved.profile,
+        vadConfig: saved.vadConfig,
+        appliesOnNextCaptureGeneration: state === "paused",
+      });
+      return saved;
+    },
+    [queueRecordingEvent]
+  );
+
   useEffect(
     () => () => {
       abortOperations("calling-ui-unmounted");
@@ -879,6 +921,7 @@ export function useCallingAssistant() {
   return {
     runtime,
     settings,
+    audioSettings,
     configured,
     recordingStatus,
     recordingError,
@@ -894,6 +937,7 @@ export function useCallingAssistant() {
     requestGuidance,
     evaluateGuidance,
     saveConfiguration,
+    saveAudioConfiguration,
   };
 }
 

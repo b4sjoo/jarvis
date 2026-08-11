@@ -1,0 +1,253 @@
+.settings-page {
+  width: min(900px, 100%);
+  margin: 0 auto;
+  padding: 24px 28px 36px;
+}
+
+.settings-section {
+  padding: 0 0 24px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.settings-section + .settings-section {
+  padding-top: 24px;
+}
+
+.settings-section-heading {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 18px;
+  margin-bottom: 16px;
+}
+
+.settings-section-heading h2 {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 15px;
+}
+
+.settings-section-heading p {
+  margin: 4px 0 0;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.device-list {
+  display: grid;
+  gap: 10px;
+}
+
+.device-field {
+  display: grid;
+  grid-template-columns: 36px minmax(180px, 1fr) minmax(220px, 320px);
+  align-items: center;
+  gap: 12px;
+  padding: 12px 0;
+}
+
+.field-icon {
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--surface-sidebar);
+  color: var(--accent-strong);
+}
+
+.field-copy {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.field-copy strong {
+  font-size: 13px;
+}
+
+.field-copy small {
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.device-field select {
+  width: 100%;
+  height: 38px;
+  padding: 0 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: 5px;
+  background: var(--surface-input);
+  color: var(--text-primary);
+  font-size: 12px;
+}
+
+.profile-control {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.profile-option {
+  min-height: 64px;
+  display: grid;
+  align-content: center;
+  gap: 3px;
+  padding: 10px 14px;
+  border: 0;
+  border-right: 1px solid var(--border-strong);
+  background: var(--surface-raised);
+  color: var(--text-secondary);
+  cursor: pointer;
+  text-align: left;
+}
+
+.profile-option:last-child {
+  border-right: 0;
+}
+
+.profile-option:hover {
+  background: var(--surface-hover);
+}
+
+.profile-option-active {
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+}
+
+.profile-option strong {
+  font-size: 13px;
+}
+
+.profile-option small {
+  color: var(--text-muted);
+  font-size: 10px;
+}
+
+.revision-badge {
+  flex: 0 0 auto;
+  padding: 4px 7px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  color: var(--text-muted);
+  font-size: 10px;
+}
+
+.advanced-audio {
+  margin-top: 14px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.advanced-audio summary {
+  padding: 14px 0;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.range-grid {
+  display: grid;
+  gap: 4px;
+}
+
+.range-field {
+  display: grid;
+  grid-template-columns: minmax(200px, 1fr) 76px minmax(220px, 1fr);
+  align-items: center;
+  gap: 14px;
+  min-height: 58px;
+}
+
+.range-field > span {
+  display: grid;
+  gap: 3px;
+}
+
+.range-field strong {
+  font-size: 12px;
+}
+
+.range-field small {
+  color: var(--text-muted);
+  font-size: 10px;
+}
+
+.range-field output {
+  color: var(--text-secondary);
+  font-size: 11px;
+  text-align: right;
+}
+
+.range-field input {
+  width: 100%;
+  accent-color: var(--accent-strong);
+}
+
+.inline-notice {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-top: 14px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 5px;
+  font-size: 11px;
+}
+
+.warning-notice {
+  border-color: var(--warning-border);
+  background: var(--warning-soft);
+  color: var(--warning-text);
+}
+
+.success-notice {
+  background: var(--success-soft);
+  color: var(--success-text);
+}
+
+.error-notice {
+  border-color: var(--danger-border);
+  background: var(--danger-soft);
+  color: var(--danger-text);
+}
+
+.settings-actions {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  padding-top: 22px;
+}
+
+.spin {
+  animation: spin 800ms linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+@media (max-width: 760px) {
+  .settings-page {
+    padding: 18px;
+  }
+
+  .device-field,
+  .range-field {
+    grid-template-columns: 36px minmax(0, 1fr);
+  }
+
+  .device-field select,
+  .range-field input {
+    grid-column: 1 / -1;
+  }
+
+  .range-field output {
+    display: none;
+  }
+}

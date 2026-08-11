@@ -23,6 +23,7 @@ export type CallRecordingEventKind =
   | "native-audio-lifecycle"
   | "audio-segment-observed"
   | "audio-segment-settled"
+  | "audio-settings-updated"
   | "stt-operation-dispatched"
   | "stt-operation-returned"
   | "model-operation-dispatched"

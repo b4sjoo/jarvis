@@ -1,4 +1,5 @@
 export * from "./audio-segment.js";
+export * from "./audio-settings.js";
 export * from "./active-call-runtime.js";
 export * from "./bounded-context.js";
 export * from "./call-recording.js";
