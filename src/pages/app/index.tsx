@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { LogicalSize } from "@tauri-apps/api/dpi";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
   AudioLines,
   BookOpenText,
@@ -8,11 +10,16 @@ import {
   Headphones,
   History,
   PanelLeft,
+  PictureInPicture2,
   Power,
   Settings,
   SlidersHorizontal,
 } from "lucide-react";
 import { useCallingAssistant } from "@/hooks/useCallingAssistant";
+import {
+  MOSS_WINDOW_PROFILES,
+  type MossInterfaceMode,
+} from "@/lib/calling";
 import CallingPage from "@/pages/calling";
 import "./app.css";
 
@@ -128,10 +135,13 @@ function Placeholder({
 
 export default function MossApp() {
   const controller = useCallingAssistant();
+  const [interfaceMode, setInterfaceMode] =
+    useState<MossInterfaceMode>("control");
   const [activeSection, setActiveSection] = useState<AppSection>("call");
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [quitError, setQuitError] = useState<string | null>(null);
   const [quitting, setQuitting] = useState(false);
+  const [windowError, setWindowError] = useState<string | null>(null);
 
   const section = useMemo(
     () => sections.find((candidate) => candidate.id === activeSection) ?? sections[0],
@@ -157,16 +167,56 @@ export default function MossApp() {
     }
   }, [controller, quitting]);
 
+  const applyInterfaceMode = useCallback(async (mode: MossInterfaceMode) => {
+    setWindowError(null);
+    setInterfaceMode(mode);
+    if (!isTauri()) return;
+    try {
+      const profile = MOSS_WINDOW_PROFILES[mode];
+      const appWindow = getCurrentWindow();
+      await appWindow.setMinSize(
+        new LogicalSize(profile.minWidth, profile.minHeight)
+      );
+      await appWindow.setSize(new LogicalSize(profile.width, profile.height));
+      await appWindow.setAlwaysOnTop(profile.alwaysOnTop);
+      await appWindow.center();
+    } catch (error) {
+      setWindowError(error instanceof Error ? error.message : String(error));
+    }
+  }, []);
+
+  useEffect(() => {
+    void applyInterfaceMode("control");
+  }, [applyInterfaceMode]);
+
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.metaKey && event.key.toLowerCase() === "q") {
         event.preventDefault();
         void quit();
       }
+      if (event.metaKey && event.shiftKey && event.key.toLowerCase() === "m") {
+        event.preventDefault();
+        void applyInterfaceMode(
+          interfaceMode === "control" ? "companion" : "control"
+        );
+      }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [quit]);
+  }, [applyInterfaceMode, interfaceMode, quit]);
+
+  if (interfaceMode === "companion") {
+    return (
+      <div className="companion-shell">
+        {windowError && <div className="app-alert" role="alert">{windowError}</div>}
+        <CallingPage
+          controller={controller}
+          onOpenControlCenter={() => void applyInterfaceMode("control")}
+        />
+      </div>
+    );
+  }
 
   return (
     <div className={`app-shell${sidebarCollapsed ? " sidebar-collapsed" : ""}`}>
@@ -225,9 +275,18 @@ export default function MossApp() {
             <span />
             {controller.runtime.state}
           </div>
+          {activeSection === "call" && (
+            <button
+              className="secondary-button workspace-companion-button"
+              onClick={() => void applyInterfaceMode("companion")}
+            >
+              <PictureInPicture2 size={16} />
+              Live companion
+            </button>
+          )}
         </header>
 
-        {quitError && <div className="app-alert" role="alert">{quitError}</div>}
+        {(quitError || windowError) && <div className="app-alert" role="alert">{quitError ?? windowError}</div>}
 
         <main className={activeSection === "call" ? "workspace-content call-route" : "workspace-content"}>
           {activeSection === "call" ? (

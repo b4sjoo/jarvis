@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import {
   ArchiveX,
   Headphones,
+  LayoutDashboard,
   Pause,
   Play,
   RotateCcw,
@@ -93,9 +94,11 @@ function ProviderSettings({
 export default function CallingPage({
   controller,
   embedded = false,
+  onOpenControlCenter,
 }: {
   controller: CallingAssistantController;
   embedded?: boolean;
+  onOpenControlCenter?: () => void;
 }) {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -122,6 +125,16 @@ export default function CallingPage({
   return (
     <div className={`moss-shell${embedded ? " moss-shell-embedded" : ""}`}>
       {!embedded && <header className="moss-topbar" data-tauri-drag-region>
+        {onOpenControlCenter && (
+          <button
+            className="icon-button"
+            onClick={onOpenControlCenter}
+            aria-label="Open control center"
+            title="Control center"
+          >
+            <LayoutDashboard size={18} />
+          </button>
+        )}
         <div className="moss-brand"><span className="brand-mark"><Headphones size={17} /></span><div><strong>MOSS</strong><span>Calling Helper</span></div></div>
         <div className={`status status-${state}`}><span />{statusLabel[state] ?? state}</div>
         <button className="icon-button" onClick={() => setSettingsOpen(true)} aria-label="Open model settings" title="Model routes"><Settings size={18} /></button>

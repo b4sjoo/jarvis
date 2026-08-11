@@ -5,6 +5,7 @@ export * from "./call-recording.js";
 export * from "./cancellable-operation.js";
 export * from "./human-truth.js";
 export * from "./immutable-snapshot.js";
+export * from "./interface-mode.js";
 export * from "./model-parsers.js";
 export * from "./model-operations.js";
 export * from "./model-routes.js";
