@@ -4,7 +4,6 @@ import { LogicalSize } from "@tauri-apps/api/dpi";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
   AudioLines,
-  BookOpenText,
   Command,
   FolderKanban,
   Headphones,
@@ -35,6 +34,7 @@ import ModelSettingsPage from "@/pages/models";
 import ShortcutReferencePage from "@/pages/shortcuts";
 import SessionsPage from "@/pages/sessions";
 import AppSettingsPage from "@/pages/settings";
+import CasesPage from "@/pages/cases";
 import "./app.css";
 
 type AppSection =
@@ -103,27 +103,6 @@ const closableStates = new Set([
   "recovering",
   "start-failed",
 ]);
-
-function Placeholder({
-  section,
-}: {
-  section: "cases";
-}) {
-  const content: Record<typeof section, { title: string; body: string }> = {
-    cases: {
-      title: "Case Preparation is next",
-      body: "Task 1 will build the case workspace here without changing the realtime call surface.",
-    },
-  };
-  const selected = content[section];
-  return (
-    <section className="empty-route" aria-labelledby={`${section}-title`}>
-      <BookOpenText size={24} />
-      <h2 id={`${section}-title`}>{selected.title}</h2>
-      <p>{selected.body}</p>
-    </section>
-  );
-}
 
 export default function MossApp() {
   const controller = useCallingAssistant();
@@ -507,15 +486,15 @@ export default function MossApp() {
             />
           ) : activeSection === "sessions" ? (
             <SessionsPage controller={controller} />
+          ) : activeSection === "cases" ? (
+            <CasesPage />
           ) : activeSection === "settings" ? (
             <AppSettingsPage
               nativeRuntimeAvailable={controller.nativeRuntimeAvailable}
               stealthMode={applicationSettings.stealthMode}
               onSetStealthMode={setStealthMode}
             />
-          ) : (
-            <Placeholder section={activeSection} />
-          )}
+          ) : null}
         </main>
 
         <footer className="app-statusbar">
