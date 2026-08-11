@@ -2,25 +2,19 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   AudioSegmentDispositionLedger,
-} from "../src/lib/meeting/audio-segment-disposition.js";
-import {
-  authorizeNativeSpeechDetectedEvent,
-} from "../src/lib/meeting/native-speech-event.js";
-import {
-  createCancellableSttRequest,
-  SttRequestAbortError,
-  type SttRequestLifecycleEvent,
-} from "../src/lib/meeting/stt-request-lifecycle.js";
-import {
-  authorizeRuntimeCommit,
-  createRuntimeCommitToken,
-} from "../src/lib/meeting/runtime-commit-authorization.js";
+  authorizeNativeSpeechSegment,
+  createCancellableOperation,
+  OperationAbortError,
+  type CancellableOperationEvent,
+  authorizeOperationCommit,
+  createOperationLease,
+} from "../src/lib/calling/index.js";
 
 const nativeSegment = {
   captureSessionId: "capture-moss-a",
   captureGeneration: 2,
   segmentSequence: 4,
-  owner: "meeting" as const,
+  owner: "call" as const,
   capturedAtMs: 2_300,
   speechStartedAtMs: 1_000,
   speechEndedAtMs: 2_250,
@@ -32,21 +26,17 @@ const nativeSegment = {
   endReason: "silence" as const,
   overlapSampleCount: 0,
   overlapDurationMs: 0,
-  vadSilenceTargetSamples: 50_160,
-  vadMinimumSpeechSamples: 7_824,
-  vadPreSpeechSamples: 13_392,
-  vadMaximumSegmentSamples: 1_440_000,
   mediaType: "audio/wav" as const,
   audioBase64: "UklGRg==",
 };
 
 test("MOSS preservation gate: stale native audio cannot enter STT", () => {
-  const stale = authorizeNativeSpeechDetectedEvent({
+  const stale = authorizeNativeSpeechSegment({
     payload: nativeSegment,
     activeCaptureSessionId: "capture-moss-b",
     activeCaptureGeneration: 2,
     lastAcceptedSequence: 0,
-    expectedOwner: "meeting",
+    expectedOwner: "call",
   });
   assert.equal(stale.authorized, false);
   if (!stale.authorized) {
@@ -55,12 +45,12 @@ test("MOSS preservation gate: stale native audio cannot enter STT", () => {
     assert.equal(stale.event?.segmentSequence, 4);
   }
 
-  const current = authorizeNativeSpeechDetectedEvent({
+  const current = authorizeNativeSpeechSegment({
     payload: nativeSegment,
     activeCaptureSessionId: "capture-moss-a",
     activeCaptureGeneration: 2,
     lastAcceptedSequence: 3,
-    expectedOwner: "meeting",
+    expectedOwner: "call",
   });
   assert.equal(current.authorized, true);
 });
@@ -92,13 +82,13 @@ test("MOSS preservation gate: one segment receives one canonical disposition", (
 });
 
 test("MOSS preservation gate: cancelled STT cannot surface a late provider result", async () => {
-  const events: SttRequestLifecycleEvent[] = [];
+  const events: CancellableOperationEvent[] = [];
   let resolveProvider!: (value: string) => void;
   const provider = new Promise<string>((resolve) => {
     resolveProvider = resolve;
   });
-  const request = createCancellableSttRequest({
-    requestId: "stt-moss-a",
+  const request = createCancellableOperation({
+    operationId: "stt-moss-a",
     timeoutMs: 1_000,
     execute: () => provider,
     onEvent: (event) => events.push(event),
@@ -109,7 +99,7 @@ test("MOSS preservation gate: cancelled STT cannot surface a late provider resul
   await assert.rejects(
     request.promise,
     (error) =>
-      error instanceof SttRequestAbortError &&
+      error instanceof OperationAbortError &&
       error.reason === "audio-session-invalidated"
   );
   resolveProvider("late transcript");
@@ -124,38 +114,47 @@ test("MOSS preservation gate: cancelled STT cannot surface a late provider resul
 test("MOSS preservation gate: async output commits only to its exact runtime owner", () => {
   const snapshot = {
     runtimeEpoch: 3,
-    sessionId: "call-moss-a",
-    parentId: "legacy-parent",
-    parentRevision: 2,
+    callSessionId: "call-moss-a",
+    momentUnitId: "moment-a",
+    evidenceRevision: 2,
+    logicalRevision: 4,
   };
-  const token = createRuntimeCommitToken({
+  const token = createOperationLease({ envelope: {
+    ...snapshot,
     operationId: "advisor-moss-a",
-    pipeline: "advisor",
-    snapshot,
-  });
+    operationKind: "guidance",
+    route: "advisor",
+    contextSnapshotHash: "hash-a",
+    timeoutMs: 10_000,
+    input: {},
+  }});
 
   assert.equal(
-    authorizeRuntimeCommit({
-      token,
+    authorizeOperationCommit({
+      lease: token,
       current: snapshot,
-      currentOperationId: "advisor-moss-a",
+      activeOperationId: "advisor-moss-a",
+      expectedRoute: "advisor",
     }).authorized,
     true
   );
-  assert.equal(
-    authorizeRuntimeCommit({
-      token,
-      current: { ...snapshot, sessionId: "call-moss-b" },
-      currentOperationId: "advisor-moss-a",
-    }).reason,
-    "session-mismatch"
-  );
-  assert.equal(
-    authorizeRuntimeCommit({
-      token,
-      current: snapshot,
-      currentOperationId: "advisor-moss-b",
-    }).reason,
-    "pipeline-owner-mismatch"
-  );
+  const wrongSession = authorizeOperationCommit({
+    lease: token,
+    current: { ...snapshot, callSessionId: "call-moss-b" },
+    activeOperationId: "advisor-moss-a",
+    expectedRoute: "advisor",
+  });
+  assert.equal(wrongSession.authorized, false);
+  if (!wrongSession.authorized) assert.equal(wrongSession.reason, "session-mismatch");
+
+  const wrongOwner = authorizeOperationCommit({
+    lease: token,
+    current: snapshot,
+    activeOperationId: "advisor-moss-b",
+    expectedRoute: "advisor",
+  });
+  assert.equal(wrongOwner.authorized, false);
+  if (!wrongOwner.authorized) {
+    assert.equal(wrongOwner.reason, "operation-owner-mismatch");
+  }
 });
