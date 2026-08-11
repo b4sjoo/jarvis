@@ -1,8 +1,5 @@
 mod db;
-mod preparation_material_extraction;
-mod preparation_material_storage;
-mod preparation_ocr;
-mod preparation_storage;
+mod content_storage;
 mod shortcuts;
 mod stt_evaluation;
 mod window;
@@ -43,23 +40,6 @@ fn get_app_version() -> String {
 #[tauri::command]
 fn write_meeting_trace_log(message: String) {
     eprintln!("{}", message);
-}
-
-#[tauri::command]
-fn write_preparation_trace_log(message: String) {
-    eprintln!("[preparation-trace] {}", message);
-}
-
-#[tauri::command]
-fn log_preparation_material_import_summary(
-    added_count: u32,
-    duplicate_count: u32,
-    failed_count: u32,
-) {
-    eprintln!(
-        "[interview-preparation] material-import-settled added={} duplicate={} failed={}",
-        added_count, duplicate_count, failed_count
-    );
 }
 
 const MEETING_TRACE_METRICS_FILE: &str = "meeting-trace-metrics.json";
@@ -417,7 +397,6 @@ pub fn run() {
         .manage(shortcuts::RegisteredShortcuts::default())
         .manage(shortcuts::MoveWindowState::default())
         .plugin(tauri_plugin_opener::init())
-        .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_keychain::init())
         .plugin(tauri_plugin_shell::init())
@@ -430,8 +409,6 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_app_version,
             write_meeting_trace_log,
-            write_preparation_trace_log,
-            log_preparation_material_import_summary,
             read_meeting_trace_metrics,
             write_meeting_trace_metrics,
             export_meeting_trace,
@@ -445,18 +422,7 @@ pub fn run() {
             stt_evaluation::cleanup_stt_evaluation_captures,
             stt_evaluation::record_stt_evaluation_submitted_audio,
             stt_evaluation::record_stt_evaluation_transcript_event,
-            preparation_storage::ensure_preparation_workspace_storage,
-            preparation_storage::stage_preparation_workspace_storage_delete,
-            preparation_storage::restore_preparation_workspace_storage_delete,
-            preparation_storage::commit_preparation_workspace_storage_delete,
-            preparation_material_storage::import_preparation_material_file,
-            preparation_material_extraction::extract_preparation_material_file,
-            preparation_material_extraction::discard_preparation_material_extraction_file,
-            preparation_material_storage::stage_preparation_material_storage_delete,
-            preparation_material_storage::restore_preparation_material_storage_delete,
-            preparation_material_storage::commit_preparation_material_storage_delete,
-            preparation_material_storage::read_preparation_material_image,
-            preparation_material_storage::read_preparation_material_visuals,
+            content_storage::import_content_file,
             window::set_window_height,
             window::open_dashboard,
             window::toggle_dashboard,

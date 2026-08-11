@@ -24,19 +24,16 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 dotenv = "0.15"
-cc = "1"
 
 [dependencies]
 tauri = { version = "2", features = ["macos-private-api"] }
 tauri-plugin-opener = "2"
-tauri-plugin-dialog = "2"
 tauri-plugin-http = "2.5.2"
 tauri-plugin-global-shortcut = "2"
 tauri-plugin-keychain = "2.0"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
-image = "0.25.6"
 base64 = "0.22"
 cpal = "0.15.3"
 hound = "3.5.1"
@@ -44,9 +41,6 @@ tokio = { version = "1.0", features = ["full"] }
 once_cell = "1.19.0"
 uuid = { version = "1.0", features = ["v4"] }
 zip = { version = "6", default-features = false, features = ["deflate-flate2-zlib-rs"] }
-quick-xml = "0.38.1"
-lopdf = "0.42.0"
-reqwest = { version = "0.12", features = ["json", "stream", "multipart"] }
 dotenv = "0.15"
 futures-util = "0.3"
 anyhow = "1.0"
@@ -70,12 +64,6 @@ libpulse-simple-binding = "2.29.0"
 
 [target.'cfg(any(target_os = "macos", windows, target_os = "linux"))'.dependencies]
 tauri-plugin-autostart = "2.5.0"
-
-[profile.dev.package.image]
-opt-level = 3
-
-[profile.dev.package.png]
-opt-level = 3
 
 [profile.dev.package.flate2]
 opt-level = 3
