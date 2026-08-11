@@ -16,6 +16,7 @@ import {
   type CaseRevision,
 } from "@/lib/preparation";
 import "./cases.css";
+import MaterialPanel from "./MaterialPanel";
 
 export type CaseWorkspaceView =
   | "overview"
@@ -240,7 +241,9 @@ export default function CasesPage() {
               </article>)}</div>
             </section> : null}
 
-            {!(["overview", "plans"] as CaseWorkspaceView[]).includes(view) ? <section className="case-future"><ShieldCheck size={22} /><h3>{CASE_WORKSPACE_VIEWS.find((item) => item.id === view)?.label}</h3><p>This surface activates in its dedicated Task 1 slice.</p></section> : null}
+            {view === "materials" ? <MaterialPanel caseId={selectedCase.id} plans={plans} /> : null}
+
+            {!(["overview", "plans", "materials"] as CaseWorkspaceView[]).includes(view) ? <section className="case-future"><ShieldCheck size={22} /><h3>{CASE_WORKSPACE_VIEWS.find((item) => item.id === view)?.label}</h3><p>This surface activates in its dedicated Task 1 slice.</p></section> : null}
           </div>
         </> : <section className="case-route-boundary"><FileText size={26} /><h2>Prepare one call at a time</h2><p>Create a case to establish the state that future calls may use.</p><button type="button" onClick={() => setCaseForm(blankCase())}><Plus size={15} /> Create case</button></section>}
       </main>

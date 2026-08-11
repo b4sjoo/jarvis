@@ -1,4 +1,5 @@
 mod content_storage;
+mod case_material_extraction;
 mod db;
 mod recording;
 mod speaker;
@@ -95,6 +96,7 @@ pub fn run() {
         )
         .manage(AudioState::default())
         .plugin(tauri_plugin_http::init())
+        .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_keychain::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .invoke_handler(tauri::generate_handler![
@@ -103,6 +105,8 @@ pub fn run() {
             exit_app,
             set_stealth_mode,
             content_storage::import_content_file,
+            content_storage::delete_content_file,
+            case_material_extraction::extract_case_material,
             recording::start_call_recording,
             recording::append_call_recording_event,
             recording::close_call_recording,

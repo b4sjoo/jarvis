@@ -61,6 +61,50 @@ pub fn import_content_file(
     )
 }
 
+#[tauri::command]
+pub fn delete_content_file(
+    app: AppHandle,
+    collection_id: String,
+    content_id: String,
+) -> Result<bool, String> {
+    validate_identifier(&collection_id, "collection id")?;
+    validate_identifier(&content_id, "content id")?;
+    let app_data = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| format!("Failed to resolve app data directory: {error}"))?;
+    let collection_root = app_data.join(CONTENT_SOURCES_DIR).join(&collection_id);
+    let content_root = collection_root.join(&content_id);
+    reject_symlink(&collection_root)?;
+    reject_symlink(&content_root)?;
+    if !content_root.exists() {
+        return Ok(false);
+    }
+    if !content_root.is_dir() {
+        return Err("Content storage is not a directory.".to_string());
+    }
+    for entry in fs::read_dir(&content_root)
+        .map_err(|error| format!("Failed to inspect content storage: {error}"))?
+    {
+        let path = entry
+            .map_err(|error| format!("Failed to inspect content storage: {error}"))?
+            .path();
+        reject_symlink(&path)?;
+    }
+    fs::remove_dir_all(&content_root)
+        .map_err(|error| format!("Failed to delete content storage: {error}"))?;
+    if collection_root
+        .read_dir()
+        .map_err(|error| format!("Failed to inspect content collection: {error}"))?
+        .next()
+        .is_none()
+    {
+        fs::remove_dir(&collection_root)
+            .map_err(|error| format!("Failed to clean empty content collection: {error}"))?;
+    }
+    Ok(true)
+}
+
 fn import_content_at_root(
     collection_root: &Path,
     collection_relative_root: &Path,
