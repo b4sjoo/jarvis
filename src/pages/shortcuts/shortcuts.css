@@ -3,9 +3,7 @@
 }
 
 .shortcut-notice {
-  border-color: var(--warning-border);
-  background: var(--warning-soft);
-  color: var(--warning-text);
+  color: var(--text-secondary);
 }
 
 .shortcut-list {
@@ -13,28 +11,27 @@
 }
 
 .shortcut-row {
+  min-height: 68px;
   display: grid;
-  grid-template-columns: 34px minmax(220px, 1fr) minmax(260px, 360px);
+  grid-template-columns: 24px minmax(220px, 1fr) auto;
   align-items: center;
-  gap: 12px;
-  min-height: 64px;
+  gap: 14px;
+  padding: 10px 0;
   border-bottom: 1px solid var(--border-subtle);
 }
 
 .shortcut-icon {
-  width: 32px;
-  height: 32px;
+  width: 24px;
+  height: 24px;
   display: grid;
   place-items: center;
-  border: 1px solid var(--border-subtle);
-  border-radius: 6px;
-  background: var(--surface-sidebar);
-  color: var(--accent-strong);
+  color: var(--text-muted);
 }
 
 .shortcut-copy {
+  min-width: 0;
   display: grid;
-  gap: 2px;
+  gap: 3px;
 }
 
 .shortcut-copy strong {
@@ -44,34 +41,41 @@
 
 .shortcut-copy small {
   color: var(--text-muted);
-  font-size: 10px;
-}
-
-.shortcut-row input {
-  width: 100%;
-  min-width: 0;
-  height: 38px;
-  padding: 0 10px;
-  border: 1px solid var(--border-strong);
-  border-radius: 6px;
-  background: var(--surface-input);
-  color: var(--text-primary);
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 11px;
+  line-height: 1.4;
 }
 
-.shortcut-row input:focus {
-  border-color: var(--accent-strong);
-  outline: 2px solid var(--accent-soft);
+.shortcut-keycaps {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 5px;
 }
 
-@media (max-width: 760px) {
+.shortcut-keycaps kbd {
+  min-width: 29px;
+  height: 29px;
+  display: inline-grid;
+  place-items: center;
+  padding: 0 8px;
+  border: 1px solid var(--border-strong);
+  border-bottom-color: var(--text-faint);
+  border-radius: 6px;
+  background: var(--surface-raised);
+  color: var(--text-secondary);
+  box-shadow: 0 1px 0 rgb(24 24 27 / 8%);
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+@media (max-width: 680px) {
   .shortcut-row {
-    grid-template-columns: 34px minmax(0, 1fr);
-    padding: 10px 0;
+    grid-template-columns: 24px minmax(0, 1fr);
   }
 
-  .shortcut-row input {
-    grid-column: 1 / -1;
+  .shortcut-keycaps {
+    grid-column: 2;
+    justify-content: flex-start;
   }
 }

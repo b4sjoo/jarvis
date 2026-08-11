@@ -12,7 +12,7 @@
   min-width: 0;
   margin: 0;
   padding: 16px;
-  border: 1px solid var(--border-strong);
+  border: 1px solid var(--border-subtle);
   border-radius: 8px;
   background: var(--surface-raised);
 }
@@ -57,7 +57,7 @@
   height: 38px;
   padding: 0 10px;
   border: 1px solid var(--border-strong);
-  border-radius: 6px;
+  border-radius: 8px;
   background: var(--surface-input);
   color: var(--text-primary);
   font: inherit;
@@ -65,7 +65,7 @@
 }
 
 .model-route input:focus {
-  border-color: var(--accent);
+  border-color: var(--focus-ring);
   outline: 2px solid var(--accent-soft);
   outline-offset: 0;
 }

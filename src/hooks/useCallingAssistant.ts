@@ -942,7 +942,7 @@ export function useCallingAssistant() {
       accelerator: string;
       outcome: "triggered" | "completed" | "ignored" | "failed";
       detail?: string;
-      shortcutConfigRevision?: number;
+      shortcutSchemeVersion?: number;
     }) => {
       queueRecordingEvent("shortcut-action", payload);
     },

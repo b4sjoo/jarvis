@@ -17,20 +17,18 @@ import {
 } from "lucide-react";
 import { useCallingAssistant } from "@/hooks/useCallingAssistant";
 import {
+  SHORTCUT_SCHEME_VERSION,
   GlobalShortcutRegistry,
   MOSS_WINDOW_PROFILES,
   isEditableElement,
-  loadShortcutSettings,
-  normalizeShortcutSettings,
-  persistShortcutSettings,
+  shortcutDisplayText,
   type MossInterfaceMode,
   type ShortcutAction,
-  type ShortcutSettings,
 } from "@/lib/calling";
 import CallingPage from "@/pages/calling";
 import AudioSettingsPage from "@/pages/audio";
 import ModelSettingsPage from "@/pages/models";
-import ShortcutSettingsPage from "@/pages/shortcuts";
+import ShortcutReferencePage from "@/pages/shortcuts";
 import SessionsPage from "@/pages/sessions";
 import AppSettingsPage from "@/pages/settings";
 import "./app.css";
@@ -77,7 +75,7 @@ const sections: Array<{
   {
     id: "shortcuts",
     label: "Shortcuts",
-    description: "Configure fast, reliable call controls.",
+    description: "Reference the fixed controls available during a call.",
     icon: Command,
   },
   {
@@ -134,9 +132,6 @@ export default function MossApp() {
   const [quitError, setQuitError] = useState<string | null>(null);
   const [quitting, setQuitting] = useState(false);
   const [windowError, setWindowError] = useState<string | null>(null);
-  const [shortcutSettings, setShortcutSettings] = useState<ShortcutSettings>(
-    () => loadShortcutSettings()
-  );
   const [shortcutRegistrationError, setShortcutRegistrationError] = useState<
     string | null
   >(null);
@@ -144,7 +139,6 @@ export default function MossApp() {
     null
   );
   const shortcutRegistryRef = useRef(new GlobalShortcutRegistry());
-  const shortcutSettingsRef = useRef(shortcutSettings);
   const controllerRef = useRef(controller);
   const interfaceModeRef = useRef(interfaceMode);
   const shortcutHandlerRef = useRef<
@@ -153,7 +147,6 @@ export default function MossApp() {
 
   controllerRef.current = controller;
   interfaceModeRef.current = interfaceMode;
-  shortcutSettingsRef.current = shortcutSettings;
 
   const section = useMemo(
     () => sections.find((candidate) => candidate.id === activeSection) ?? sections[0],
@@ -276,7 +269,6 @@ export default function MossApp() {
   const executeShortcut = useCallback(
     async (action: ShortcutAction, accelerator: string) => {
       const activeController = controllerRef.current;
-      const revision = shortcutSettingsRef.current.revision;
       const record = (
         outcome: "triggered" | "completed" | "ignored" | "failed",
         detail?: string
@@ -286,7 +278,7 @@ export default function MossApp() {
           accelerator,
           outcome,
           detail,
-          shortcutConfigRevision: revision,
+          shortcutSchemeVersion: SHORTCUT_SCHEME_VERSION,
         });
 
       const protectsEditing = [
@@ -362,7 +354,7 @@ export default function MossApp() {
   useEffect(() => {
     let disposed = false;
     void shortcutRegistryRef.current
-      .replace(shortcutSettingsRef.current, (action, accelerator) =>
+      .replace((action, accelerator) =>
         shortcutHandlerRef.current(action, accelerator)
       )
       .then(() => {
@@ -379,27 +371,6 @@ export default function MossApp() {
       disposed = true;
       void shortcutRegistryRef.current.clear();
     };
-  }, []);
-
-  const saveShortcuts = useCallback(async (next: ShortcutSettings) => {
-    const saved = normalizeShortcutSettings({
-      ...next,
-      revision: shortcutSettingsRef.current.revision + 1,
-    });
-    try {
-      await shortcutRegistryRef.current.replace(
-        saved,
-        (action, accelerator) => shortcutHandlerRef.current(action, accelerator)
-      );
-      persistShortcutSettings(saved);
-      shortcutSettingsRef.current = saved;
-      setShortcutSettings(saved);
-      setShortcutRegistrationError(null);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      setShortcutRegistrationError(message);
-      throw error;
-    }
   }, []);
 
   useEffect(() => {
@@ -507,18 +478,16 @@ export default function MossApp() {
           ) : activeSection === "models" ? (
             <ModelSettingsPage controller={controller} />
           ) : activeSection === "shortcuts" ? (
-            <ShortcutSettingsPage
-              settings={shortcutSettings}
+            <ShortcutReferencePage
               registrationError={shortcutRegistrationError}
               lastAction={lastShortcutAction}
-              onSave={saveShortcuts}
             />
           ) : activeSection === "sessions" ? (
             <SessionsPage controller={controller} />
           ) : activeSection === "settings" ? (
             <AppSettingsPage
               interfaceMode={interfaceMode}
-              shortcuts={shortcutSettings}
+              visibilityShortcut={shortcutDisplayText("toggle-visibility")}
               onSwitchMode={(mode) => applyInterfaceMode(mode)}
               onHide={hideMoss}
               onQuit={quit}

@@ -21,22 +21,21 @@
 }
 
 .app-identity {
-  height: 68px;
+  height: 64px;
   display: flex;
   align-items: center;
   gap: 11px;
-  padding: 0 16px;
-  border-bottom: 1px solid var(--border-subtle);
+  padding: 0 17px;
   user-select: none;
 }
 
 .app-mark {
-  width: 34px;
-  height: 34px;
-  flex: 0 0 34px;
+  width: 30px;
+  height: 30px;
+  flex: 0 0 30px;
   display: grid;
   place-items: center;
-  border-radius: 7px;
+  border-radius: 8px;
   background: var(--accent-strong);
   color: #fff;
 }
@@ -62,8 +61,8 @@
   flex: 1;
   display: grid;
   align-content: start;
-  gap: 3px;
-  padding: 12px 10px;
+  gap: 2px;
+  padding: 10px 9px;
   overflow-y: auto;
 }
 
@@ -74,8 +73,8 @@
   align-items: center;
   gap: 10px;
   padding: 0 11px;
-  border: 1px solid transparent;
-  border-radius: 6px;
+  border: 0;
+  border-radius: 7px;
   background: transparent;
   color: var(--text-secondary);
   cursor: pointer;
@@ -91,9 +90,8 @@
 }
 
 .nav-item-active {
-  border-color: var(--border-accent);
   background: var(--accent-soft);
-  color: var(--accent-strong);
+  color: var(--text-primary);
 }
 
 .sidebar-collapsed .nav-item {
@@ -102,8 +100,7 @@
 }
 
 .sidebar-footer {
-  padding: 10px;
-  border-top: 1px solid var(--border-subtle);
+  padding: 9px;
 }
 
 .quit-item {
@@ -124,12 +121,12 @@
 }
 
 .workspace-header {
-  min-height: 68px;
-  flex: 0 0 68px;
+  min-height: 64px;
+  flex: 0 0 64px;
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 0 20px;
+  padding: 0 22px;
   border-bottom: 1px solid var(--border-subtle);
   background: var(--surface-raised);
 }
@@ -204,7 +201,7 @@
 .settings-page {
   width: min(900px, 100%);
   margin: 0 auto;
-  padding: 24px 28px 36px;
+  padding: 26px 30px 40px;
 }
 
 .settings-page-header {
@@ -230,7 +227,7 @@
 }
 
 .settings-eyebrow {
-  color: var(--accent-strong);
+  color: var(--text-muted);
   font-size: 10px;
   font-weight: 750;
   text-transform: uppercase;
@@ -240,7 +237,8 @@
   flex: 0 0 auto;
   padding: 5px 8px;
   border: 1px solid var(--border-subtle);
-  border-radius: 5px;
+  border-radius: 6px;
+  background: var(--surface-muted);
   color: var(--text-muted);
   font-size: 10px;
 }
@@ -251,10 +249,10 @@
   gap: 10px;
   margin-bottom: 18px;
   padding: 12px 14px;
-  border: 1px solid var(--border-accent);
-  border-radius: 6px;
-  background: var(--accent-soft);
-  color: var(--accent-strong);
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--surface-muted);
+  color: var(--text-secondary);
 }
 
 .settings-notice > div {
@@ -275,8 +273,8 @@
 .settings-message {
   margin-top: 16px;
   padding: 10px 12px;
-  border: 1px solid var(--border-accent);
-  border-radius: 6px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
   background: var(--success-soft);
   color: var(--success-text);
   font-size: 12px;
@@ -296,14 +294,11 @@
 }
 
 .field-icon {
-  width: 34px;
-  height: 34px;
+  width: 24px;
+  height: 24px;
   display: grid;
   place-items: center;
-  border: 1px solid var(--border-subtle);
-  border-radius: 6px;
-  background: var(--surface-sidebar);
-  color: var(--accent-strong);
+  color: var(--text-muted);
 }
 
 .app-alert {
@@ -311,7 +306,7 @@
   margin: 12px 20px 0;
   padding: 10px 12px;
   border: 1px solid var(--danger-border);
-  border-radius: 6px;
+  border-radius: 8px;
   background: var(--danger-soft);
   color: var(--danger-text);
   font-size: 12px;
@@ -328,7 +323,7 @@
 }
 
 .empty-route svg {
-  color: var(--accent-strong);
+  color: var(--text-secondary);
 }
 
 .empty-route h2 {
@@ -353,7 +348,7 @@
   gap: 12px;
   padding: 0 14px;
   border-top: 1px solid var(--border-subtle);
-  background: var(--surface-sidebar);
+  background: var(--surface-raised);
   color: var(--text-faint);
   font-size: 10px;
 }
@@ -374,7 +369,7 @@
 
 .companion-shell > .app-alert {
   position: fixed;
-  inset: 66px 18px auto;
+  inset: 60px 18px auto;
   z-index: 10;
   margin: 0;
 }

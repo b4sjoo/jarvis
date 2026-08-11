@@ -4,35 +4,37 @@
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   color-scheme: light;
-  color: #171a1d;
-  background: #f4f6f8;
-  --surface-page: #f4f6f8;
+  color: #18181b;
+  background: #ffffff;
+  --surface-page: #ffffff;
   --surface-raised: #ffffff;
-  --surface-sidebar: #fafbfc;
-  --surface-hover: #eef2f5;
+  --surface-sidebar: #fafafa;
+  --surface-hover: #f4f4f5;
+  --surface-muted: #f7f7f8;
   --surface-input: #ffffff;
-  --text-primary: #171a1d;
-  --text-secondary: #3f484f;
-  --text-muted: #69747d;
-  --text-faint: #89939b;
-  --border-subtle: #dfe4e8;
-  --border-strong: #c9d0d6;
-  --border-accent: #b7d2f3;
-  --accent-strong: #1769aa;
-  --accent-hover: #0f568e;
-  --accent-soft: #eaf3fc;
-  --status-idle: #8b959d;
-  --status-success: #25845b;
-  --status-warning: #b67216;
-  --status-danger: #c13f47;
-  --danger-text: #a72f38;
-  --danger-border: #efc2c5;
-  --danger-soft: #fff0f1;
-  --warning-text: #805312;
-  --warning-border: #e8d09c;
-  --warning-soft: #fff8e7;
-  --success-text: #216a4b;
-  --success-soft: #edf8f2;
+  --text-primary: #18181b;
+  --text-secondary: #3f3f46;
+  --text-muted: #71717a;
+  --text-faint: #a1a1aa;
+  --border-subtle: #e4e4e7;
+  --border-strong: #d4d4d8;
+  --border-accent: #a1a1aa;
+  --accent-strong: #18181b;
+  --accent-hover: #27272a;
+  --accent-soft: #f4f4f5;
+  --focus-ring: #52525b;
+  --status-idle: #a1a1aa;
+  --status-success: #27805a;
+  --status-warning: #b26b12;
+  --status-danger: #c33f49;
+  --danger-text: #a8323b;
+  --danger-border: #efc6c9;
+  --danger-soft: #fff1f2;
+  --warning-text: #805113;
+  --warning-border: #ead3a3;
+  --warning-soft: #fffbeb;
+  --success-text: #216848;
+  --success-soft: #eff9f3;
 }
 
 html,
@@ -63,7 +65,7 @@ button {
   box-sizing: border-box;
   letter-spacing: 0;
   scrollbar-width: thin;
-  scrollbar-color: #bec7ce transparent;
+  scrollbar-color: #d4d4d8 transparent;
 }
 
 *::-webkit-scrollbar {
@@ -73,10 +75,10 @@ button {
 
 *::-webkit-scrollbar-thumb {
   border-radius: 4px;
-  background: #bec7ce;
+  background: #d4d4d8;
 }
 
 :focus-visible {
-  outline: 2px solid var(--accent-strong);
+  outline: 2px solid var(--focus-ring);
   outline-offset: 2px;
 }

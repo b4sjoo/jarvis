@@ -12,13 +12,12 @@ import {
 import {
   revealCallRecordingsRoot,
   type MossInterfaceMode,
-  type ShortcutSettings,
 } from "@/lib/calling";
 import "./settings.css";
 
 interface AppSettingsPageProps {
   interfaceMode: MossInterfaceMode;
-  shortcuts: ShortcutSettings;
+  visibilityShortcut: string;
   onSwitchMode: (mode: MossInterfaceMode) => Promise<void>;
   onHide: () => Promise<void>;
   onQuit: () => Promise<void>;
@@ -28,7 +27,7 @@ const isTauri = () => "__TAURI_INTERNALS__" in window;
 
 export default function AppSettingsPage({
   interfaceMode,
-  shortcuts,
+  visibilityShortcut,
   onSwitchMode,
   onHide,
   onQuit,
@@ -116,7 +115,7 @@ export default function AppSettingsPage({
           <span className="field-icon"><EyeOff size={17} /></span>
           <div>
             <h3>Dock-hidden operation</h3>
-            <p>MOSS runs as an accessory app. Restore a hidden window with {shortcuts.bindings["toggle-visibility"]}.</p>
+            <p>MOSS runs as an accessory app. Restore a hidden window with <kbd className="inline-shortcut">{visibilityShortcut}</kbd>.</p>
           </div>
           <button
             className="secondary-button"

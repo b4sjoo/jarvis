@@ -10,9 +10,9 @@ export interface ShortcutBinding {
   accelerator: string;
 }
 
-export interface ShortcutSettings {
-  revision: number;
-  bindings: Record<ShortcutAction, string>;
+export interface ShortcutDefinition extends ShortcutBinding {
+  label: string;
+  description: string;
 }
 
 export interface ShortcutRegistrationFailure {
@@ -21,7 +21,9 @@ export interface ShortcutRegistrationFailure {
   message: string;
 }
 
-export const SHORTCUT_SETTINGS_STORAGE_KEY = "moss.shortcut-settings.v1";
+export type ShortcutDisplayPlatform = "macos" | "other";
+
+export const SHORTCUT_SCHEME_VERSION = 1;
 
 export const SHORTCUT_ACTION_LABELS: Record<ShortcutAction, string> = {
   "toggle-visibility": "Show or hide MOSS",
@@ -31,100 +33,132 @@ export const SHORTCUT_ACTION_LABELS: Record<ShortcutAction, string> = {
   "end-call": "End current call",
 };
 
-export const DEFAULT_SHORTCUT_SETTINGS: ShortcutSettings = {
-  revision: 1,
-  bindings: {
-    "toggle-visibility": "CommandOrControl+Shift+M",
-    "toggle-interface": "CommandOrControl+Shift+L",
-    "toggle-listening": "CommandOrControl+Shift+P",
-    "request-guidance": "CommandOrControl+Shift+A",
-    "end-call": "CommandOrControl+Shift+E",
+export const FIXED_SHORTCUT_DEFINITIONS: readonly ShortcutDefinition[] = [
+  {
+    action: "toggle-visibility",
+    accelerator: "CommandOrControl+Shift+M",
+    label: SHORTCUT_ACTION_LABELS["toggle-visibility"],
+    description: "Restore MOSS after hiding its window.",
   },
-};
+  {
+    action: "toggle-interface",
+    accelerator: "CommandOrControl+Shift+L",
+    label: SHORTCUT_ACTION_LABELS["toggle-interface"],
+    description: "Move between configuration and the live companion.",
+  },
+  {
+    action: "toggle-listening",
+    accelerator: "CommandOrControl+Shift+P",
+    label: SHORTCUT_ACTION_LABELS["toggle-listening"],
+    description: "Start a call or pause and resume active listening.",
+  },
+  {
+    action: "request-guidance",
+    accelerator: "CommandOrControl+Shift+A",
+    label: SHORTCUT_ACTION_LABELS["request-guidance"],
+    description: "Ask the Advisor to respond to the latest counterparty turn.",
+  },
+  {
+    action: "end-call",
+    accelerator: "CommandOrControl+Shift+E",
+    label: SHORTCUT_ACTION_LABELS["end-call"],
+    description: "Drain capture and close the current call recording.",
+  },
+];
+
+const fixedActions: readonly ShortcutAction[] = [
+  "toggle-visibility",
+  "toggle-interface",
+  "toggle-listening",
+  "request-guidance",
+  "end-call",
+];
+
+const shortcutPattern = /^CommandOrControl\+Shift\+[A-Z0-9]$/;
 
 const isTauri = () =>
   typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
-const shortcutPattern =
-  /^(?:(?:CommandOrControl|CmdOrCtrl|Command|Cmd|Control|Ctrl|Alt|Option|Shift|Super|Meta)\+)+(?:[A-Z0-9]|F(?:[1-9]|1[0-9]|2[0-4])|Space|Enter|Escape|Tab|Arrow(?:Up|Down|Left|Right))$/i;
+export function validateFixedShortcutDefinitions(
+  definitions: readonly ShortcutDefinition[] = FIXED_SHORTCUT_DEFINITIONS
+) {
+  const seenActions = new Set<ShortcutAction>();
+  const seenAccelerators = new Map<string, ShortcutAction>();
 
-export function normalizeShortcutAccelerator(value: string) {
-  return value
-    .trim()
-    .split("+")
-    .map((part) => part.trim())
-    .filter(Boolean)
-    .join("+");
-}
-
-export function validateShortcutSettings(settings: ShortcutSettings) {
-  const seen = new Map<string, ShortcutAction>();
-  for (const action of Object.keys(settings.bindings) as ShortcutAction[]) {
-    const accelerator = normalizeShortcutAccelerator(settings.bindings[action]);
-    if (!shortcutPattern.test(accelerator)) {
+  for (const definition of definitions) {
+    if (!fixedActions.includes(definition.action)) {
+      throw new Error(`Unknown fixed shortcut action: ${definition.action}.`);
+    }
+    if (seenActions.has(definition.action)) {
+      throw new Error(`${definition.label} is defined more than once.`);
+    }
+    if (!shortcutPattern.test(definition.accelerator)) {
       throw new Error(
-        `${SHORTCUT_ACTION_LABELS[action]} has an invalid shortcut. Use modifiers and one key, for example CommandOrControl+Shift+M.`
+        `${definition.label} has an invalid fixed shortcut: ${definition.accelerator}.`
       );
     }
-    const canonical = accelerator.toLowerCase();
-    const existing = seen.get(canonical);
+
+    const canonical = definition.accelerator.toLowerCase();
+    const existing = seenAccelerators.get(canonical);
     if (existing) {
       throw new Error(
-        `${SHORTCUT_ACTION_LABELS[action]} conflicts with ${SHORTCUT_ACTION_LABELS[existing]}.`
+        `${definition.label} conflicts with ${SHORTCUT_ACTION_LABELS[existing]}.`
       );
     }
-    seen.set(canonical, action);
+    seenActions.add(definition.action);
+    seenAccelerators.set(canonical, definition.action);
+  }
+
+  const missing = fixedActions.filter((action) => !seenActions.has(action));
+  if (missing.length > 0) {
+    throw new Error(`Missing fixed shortcuts: ${missing.join(", ")}.`);
   }
 }
 
-export function normalizeShortcutSettings(
-  value: Partial<ShortcutSettings> | null | undefined
-): ShortcutSettings {
-  const bindings = { ...DEFAULT_SHORTCUT_SETTINGS.bindings };
-  if (value?.bindings && typeof value.bindings === "object") {
-    for (const action of Object.keys(bindings) as ShortcutAction[]) {
-      const candidate = value.bindings[action];
-      if (typeof candidate === "string" && candidate.trim()) {
-        bindings[action] = normalizeShortcutAccelerator(candidate);
-      }
-    }
-  }
-  return {
-    revision:
-      Number.isInteger(value?.revision) && Number(value?.revision) > 0
-        ? Number(value?.revision)
-        : DEFAULT_SHORTCUT_SETTINGS.revision,
-    bindings,
-  };
-}
-
-export function loadShortcutSettings(): ShortcutSettings {
-  if (typeof localStorage === "undefined") {
-    return structuredClone(DEFAULT_SHORTCUT_SETTINGS);
-  }
-  try {
-    const raw = localStorage.getItem(SHORTCUT_SETTINGS_STORAGE_KEY);
-    return normalizeShortcutSettings(raw ? JSON.parse(raw) : null);
-  } catch {
-    return structuredClone(DEFAULT_SHORTCUT_SETTINGS);
-  }
-}
-
-export function persistShortcutSettings(settings: ShortcutSettings) {
-  validateShortcutSettings(settings);
-  if (typeof localStorage !== "undefined") {
-    localStorage.setItem(
-      SHORTCUT_SETTINGS_STORAGE_KEY,
-      JSON.stringify(normalizeShortcutSettings(settings))
-    );
-  }
-}
-
-export function shortcutBindings(settings: ShortcutSettings): ShortcutBinding[] {
-  return (Object.keys(settings.bindings) as ShortcutAction[]).map((action) => ({
+export function fixedShortcutBindings(): ShortcutBinding[] {
+  validateFixedShortcutDefinitions();
+  return FIXED_SHORTCUT_DEFINITIONS.map(({ action, accelerator }) => ({
     action,
-    accelerator: normalizeShortcutAccelerator(settings.bindings[action]),
+    accelerator,
   }));
+}
+
+export function fixedShortcutDefinition(action: ShortcutAction) {
+  const definition = FIXED_SHORTCUT_DEFINITIONS.find(
+    (candidate) => candidate.action === action
+  );
+  if (!definition) {
+    throw new Error(`Missing fixed shortcut definition for ${action}.`);
+  }
+  return definition;
+}
+
+export function detectShortcutDisplayPlatform(): ShortcutDisplayPlatform {
+  if (typeof navigator === "undefined") return "other";
+  return /mac/i.test(navigator.platform) ? "macos" : "other";
+}
+
+export function shortcutDisplayParts(
+  action: ShortcutAction,
+  platform: ShortcutDisplayPlatform = detectShortcutDisplayPlatform()
+) {
+  const definition = fixedShortcutDefinition(action);
+  return definition.accelerator.split("+").map((part) => {
+    if (part === "CommandOrControl") {
+      return platform === "macos" ? "⌘" : "Ctrl";
+    }
+    if (part === "Shift") {
+      return platform === "macos" ? "⇧" : "Shift";
+    }
+    return part;
+  });
+}
+
+export function shortcutDisplayText(
+  action: ShortcutAction,
+  platform: ShortcutDisplayPlatform = detectShortcutDisplayPlatform()
+) {
+  return shortcutDisplayParts(action, platform).join(" ");
 }
 
 type ShortcutHandler = (
@@ -136,8 +170,8 @@ export class GlobalShortcutRegistry {
   private bindings: ShortcutBinding[] = [];
   private operation: Promise<void> = Promise.resolve();
 
-  replace(settings: ShortcutSettings, handler: ShortcutHandler) {
-    const task = this.operation.then(() => this.replaceNow(settings, handler));
+  replace(handler: ShortcutHandler) {
+    const task = this.operation.then(() => this.replaceNow(handler));
     this.operation = task.catch(() => undefined);
     return task;
   }
@@ -160,18 +194,14 @@ export class GlobalShortcutRegistry {
     );
   }
 
-  private async replaceNow(
-    settings: ShortcutSettings,
-    handler: ShortcutHandler
-  ) {
-    validateShortcutSettings(settings);
-    const next = shortcutBindings(settings);
+  private async replaceNow(handler: ShortcutHandler) {
+    const next = fixedShortcutBindings();
     if (!isTauri()) {
       this.bindings = next;
       return;
     }
 
-    const { register, unregister } = await import(
+    const { isRegistered, register, unregister } = await import(
       "@tauri-apps/plugin-global-shortcut"
     );
     const previous = this.bindings;
@@ -182,14 +212,22 @@ export class GlobalShortcutRegistry {
     }
 
     const registered: ShortcutBinding[] = [];
+    let failedBinding: ShortcutBinding | undefined;
     try {
       for (const binding of next) {
+        failedBinding = binding;
         await register(binding.accelerator, (event) => {
           if (event.state === "Pressed") {
             void handler(binding.action, binding.accelerator);
           }
         });
         registered.push(binding);
+      }
+      for (const binding of next) {
+        failedBinding = binding;
+        if (!(await isRegistered(binding.accelerator))) {
+          throw new Error("The native shortcut registry did not confirm it.");
+        }
       }
       this.bindings = next;
     } catch (error) {
@@ -206,11 +244,10 @@ export class GlobalShortcutRegistry {
         }).catch(() => undefined);
       }
       this.bindings = previous;
-      const failed = next[registered.length];
       const message = error instanceof Error ? error.message : String(error);
       const failure: ShortcutRegistrationFailure = {
-        action: failed?.action ?? "toggle-visibility",
-        accelerator: failed?.accelerator ?? "unknown",
+        action: failedBinding?.action ?? "toggle-visibility",
+        accelerator: failedBinding?.accelerator ?? "unknown",
         message,
       };
       throw new Error(
@@ -229,3 +266,5 @@ export function isEditableElement(element: Element | null) {
     element.tagName === "SELECT"
   );
 }
+
+validateFixedShortcutDefinitions();
