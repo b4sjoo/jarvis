@@ -51,3 +51,13 @@ test("Tauri bundles only generated desktop icon variants", () => {
     "icons/icon.ico",
   ]);
 });
+
+test("macOS development restores the signed-off icon after leaving stealth mode", () => {
+  const nativeShell = binary("src-tauri/src/lib.rs").toString("utf8");
+  assert.match(nativeShell, /fn restore_development_application_icon/);
+  assert.match(nativeShell, /include_bytes!\("\.\.\/icons\/icon\.icns"\)/);
+  assert.match(
+    nativeShell,
+    /if !enabled \{\s*restore_development_application_icon\(&app\)\?/s
+  );
+});

@@ -31,6 +31,23 @@ fn write_call_trace_log(message: String) {
     eprintln!("[call-trace] {message}");
 }
 
+#[cfg(all(target_os = "macos", debug_assertions))]
+fn restore_development_application_icon(app: &tauri::AppHandle) -> Result<(), String> {
+    app.run_on_main_thread(|| {
+        use objc2::AllocAnyThread;
+        use objc2_app_kit::{NSApplication, NSImage};
+        use objc2_foundation::{MainThreadMarker, NSData};
+
+        let marker = unsafe { MainThreadMarker::new_unchecked() };
+        let application = NSApplication::sharedApplication(marker);
+        let data = NSData::with_bytes(include_bytes!("../icons/icon.icns"));
+        let icon = NSImage::initWithData(NSImage::alloc(), &data)
+            .expect("the generated MOSS development icon must be valid");
+        unsafe { application.setApplicationIconImage(Some(&icon)) };
+    })
+    .map_err(|error| format!("Failed to refresh the development Dock icon: {error}"))
+}
+
 #[tauri::command]
 fn exit_app(app: tauri::AppHandle) {
     app.exit(0);
@@ -47,6 +64,11 @@ fn set_stealth_mode(app: tauri::AppHandle, enabled: bool) -> Result<(), String> 
         };
         app.set_activation_policy(policy)
             .map_err(|error| format!("Failed to update Dock visibility: {error}"))?;
+
+        #[cfg(debug_assertions)]
+        if !enabled {
+            restore_development_application_icon(&app)?;
+        }
     }
 
     #[cfg(any(target_os = "windows", target_os = "linux"))]
