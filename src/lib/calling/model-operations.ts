@@ -11,7 +11,11 @@ import { requestChatCompletion } from "./provider-client.js";
 import { sha256 } from "./immutable-snapshot.js";
 import type { ActiveCallRuntime } from "./active-call-runtime.js";
 import type { CallRecordingEventKind } from "./call-recording.js";
-import type { CallTurnSettlement } from "./types.js";
+import type {
+  CallTurnSettlement,
+  PreparedArtifactReceiptStatus,
+  PreparedArtifactTarget,
+} from "./types.js";
 
 interface CancellableHandle {
   cancel: (reason: string) => boolean;
@@ -29,6 +33,13 @@ interface ModelOperationDependencies {
     payload: unknown,
     occurredAt?: number
   ) => void;
+  recordPreparedArtifacts?: (input: {
+    target: PreparedArtifactTarget;
+    status: PreparedArtifactReceiptStatus;
+    operationId: string;
+    reason?: string;
+    occurredAt?: number;
+  }) => void;
 }
 
 const message = (error: unknown) =>
@@ -43,6 +54,21 @@ const recordReceipt = (
   input.owner.dispatch(receipt);
   input.publish();
 };
+
+const recordPreparedArtifacts = (
+  input: ModelOperationDependencies,
+  target: PreparedArtifactTarget,
+  status: PreparedArtifactReceiptStatus,
+  operationId: string,
+  occurredAt: number,
+  reason?: string
+) => input.recordPreparedArtifacts?.({
+  target,
+  status,
+  operationId,
+  reason,
+  occurredAt,
+});
 
 const recordDispatch = (input: {
   dependencies: ModelOperationDependencies;
@@ -105,8 +131,12 @@ export async function runAdvisorModelOperation(
     turns: snapshot.transcript,
     maxChars: 6_000,
   });
+  const preparation = snapshot.preparation.mode === "prepared"
+    ? snapshot.preparation.advisor
+    : null;
   const operationId = `advisor_${crypto.randomUUID()}`;
-  const contextJson = JSON.stringify(context);
+  const modelInput = { callEvidence: context, preparation };
+  const contextJson = JSON.stringify(modelInput);
   const userPrompt = `Bounded call context:\n${contextJson}`;
   const envelope = input.owner.selectOperation({
     operationId,
@@ -114,8 +144,9 @@ export async function runAdvisorModelOperation(
     route: "advisor",
     contextSnapshotHash: await sha256(contextJson),
     timeoutMs: input.route.timeoutMs,
-    input: context,
+    input: modelInput,
   });
+  recordPreparedArtifacts(input, "advisor", "selected", operationId, Date.now());
   recordReceipt(input, {
     type: "RecordReceipt",
     receipt: {
@@ -125,6 +156,7 @@ export async function runAdvisorModelOperation(
     },
   });
   const dispatchedAt = Date.now();
+  recordPreparedArtifacts(input, "advisor", "dispatched", operationId, dispatchedAt);
   recordDispatch({
     dependencies: input,
     operationId,
@@ -180,6 +212,7 @@ export async function runAdvisorModelOperation(
         occurredAt: returnedAt,
       },
     });
+    recordPreparedArtifacts(input, "advisor", "provider-returned", operationId, returnedAt);
     const frame = parseGuidanceFrame(raw);
     const authorization = input.owner.authorize(
       createOperationLease({ envelope }),
@@ -194,7 +227,18 @@ export async function runAdvisorModelOperation(
         reason: authorization.authorized ? undefined : authorization.reason,
       },
     });
-    input.owner.commitGuidance({ envelope, frame });
+    recordPreparedArtifacts(
+      input,
+      "advisor",
+      authorization.authorized ? "commit-authorized" : "stale",
+      operationId,
+      Date.now(),
+      authorization.authorized ? undefined : authorization.reason
+    );
+    const commit = input.owner.commitGuidance({ envelope, frame });
+    if (commit.committed) {
+      recordPreparedArtifacts(input, "advisor", "visible", operationId, Date.now());
+    }
     input.publish();
   } catch (error) {
     const failedAt = Date.now();
@@ -218,6 +262,14 @@ export async function runAdvisorModelOperation(
           reason: message(error),
         },
       });
+      recordPreparedArtifacts(
+        input,
+        "advisor",
+        cancelled ? "cancelled" : "failed",
+        operationId,
+        failedAt,
+        message(error)
+      );
     }
   } finally {
     input.unregister(operation);
@@ -240,7 +292,11 @@ export async function runRuntimeModelOperation(
     turns: snapshot.transcript,
     maxChars: 3_200,
   });
-  const contextJson = JSON.stringify(context);
+  const preparation = snapshot.preparation.mode === "prepared"
+    ? snapshot.preparation.runtime
+    : null;
+  const modelInput = { callEvidence: context, preparation };
+  const contextJson = JSON.stringify(modelInput);
   const operationId = `runtime_${crypto.randomUUID()}`;
   const userPrompt = `Bounded call evidence:\n${contextJson}`;
   const envelope = input.owner.selectOperation({
@@ -249,8 +305,9 @@ export async function runRuntimeModelOperation(
     route: "runtime",
     contextSnapshotHash: await sha256(contextJson),
     timeoutMs: input.route.timeoutMs,
-    input: context,
+    input: modelInput,
   });
+  recordPreparedArtifacts(input, "runtime", "selected", operationId, Date.now());
   recordReceipt(input, {
     type: "RecordReceipt",
     receipt: {
@@ -260,6 +317,7 @@ export async function runRuntimeModelOperation(
     },
   });
   const dispatchedAt = Date.now();
+  recordPreparedArtifacts(input, "runtime", "dispatched", operationId, dispatchedAt);
   recordDispatch({
     dependencies: input,
     operationId,
@@ -315,6 +373,7 @@ export async function runRuntimeModelOperation(
         occurredAt: returnedAt,
       },
     });
+    recordPreparedArtifacts(input, "runtime", "provider-returned", operationId, returnedAt);
     const authorization = input.owner.authorize(
       createOperationLease({ envelope }),
       "runtime"
@@ -328,6 +387,14 @@ export async function runRuntimeModelOperation(
         reason: authorization.authorized ? undefined : authorization.reason,
       },
     });
+    recordPreparedArtifacts(
+      input,
+      "runtime",
+      authorization.authorized ? "commit-authorized" : "stale",
+      operationId,
+      Date.now(),
+      authorization.authorized ? undefined : authorization.reason
+    );
     if (!authorization.authorized) return { status: "stale" };
     return {
       status: "settled",
@@ -362,6 +429,14 @@ export async function runRuntimeModelOperation(
         reason: message(error),
       },
     });
+    recordPreparedArtifacts(
+      input,
+      "runtime",
+      cancelled ? "cancelled" : "failed",
+      operationId,
+      failedAt,
+      message(error)
+    );
     return cancelled
       ? { status: "cancelled" }
       : { status: "failed", error: message(error) };

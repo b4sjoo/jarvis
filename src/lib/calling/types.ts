@@ -75,3 +75,77 @@ export interface GuidanceEvaluationFact {
   label: GuidanceEvaluationLabel;
   occurredAt: number;
 }
+
+export type PreparedArtifactTarget = "stt" | "runtime" | "advisor" | "post-call";
+
+export type PreparedArtifactReceiptStatus =
+  | "selected"
+  | "dispatched"
+  | "provider-returned"
+  | "commit-authorized"
+  | "visible"
+  | "rejected"
+  | "stale"
+  | "failed"
+  | "cancelled";
+
+export interface PreparedArtifactDescriptor {
+  artifactId: string;
+  section: string;
+  contentHash: string;
+  sourceRefs: Array<{
+    sourceKind: string;
+    sourceId: string;
+    contentHash: string;
+  }>;
+}
+
+export interface PreparedPlaybookStage {
+  id: "orient" | "establish" | "request" | "resolve" | "confirm-close";
+  goal: string;
+  prompts: string[];
+  exitSignals: string[];
+}
+
+export type RuntimePreparationContext =
+  | {
+      mode: "neutral";
+      callSessionId: string;
+      boundAt: number;
+    }
+  | {
+      mode: "prepared";
+      callSessionId: string;
+      boundAt: number;
+      caseId: string;
+      caseRevisionId: string;
+      callPlanId: string;
+      snapshotId: string;
+      snapshotContentHash: string;
+      artifacts: PreparedArtifactDescriptor[];
+      artifactIdsByTarget: Record<PreparedArtifactTarget, string[]>;
+      stt: {
+        speechBiasTerms: string[];
+      };
+      runtime: {
+        objective: string;
+        acceptableOutcomes: string[];
+        questionsToAsk: string[];
+        knownRisks: string[];
+        stages: PreparedPlaybookStage[];
+        fallbackMoves: string[];
+      };
+      advisor: {
+        callBrief: unknown;
+        caseSnapshot: unknown;
+        playbook: unknown;
+        evidenceIndex: unknown;
+        safetyConstraints: unknown;
+      };
+      postCall: {
+        callBrief: unknown;
+        caseSnapshot: unknown;
+        evidenceIndex: unknown;
+        safetyConstraints: unknown;
+      };
+    };

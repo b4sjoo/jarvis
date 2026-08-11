@@ -43,6 +43,8 @@ export type CallRecordingEventKind =
   | "model-operation-dispatched"
   | "model-operation-returned"
   | "human-evaluation"
+  | "preparation-binding"
+  | "snapshot-artifact-receipt"
   | "call-close-attempt";
 
 export interface CallRecordingEvent {

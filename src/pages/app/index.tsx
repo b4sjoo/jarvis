@@ -35,6 +35,7 @@ import ShortcutReferencePage from "@/pages/shortcuts";
 import SessionsPage from "@/pages/sessions";
 import AppSettingsPage from "@/pages/settings";
 import CasesPage from "@/pages/cases";
+import type { CallPreparationSnapshotBundle } from "@/lib/preparation";
 import "./app.css";
 
 type AppSection =
@@ -260,6 +261,14 @@ export default function MossApp() {
       throw error;
     }
   }, [applicationSettings]);
+
+  const startPreparedCall = useCallback(
+    async (snapshot: CallPreparationSnapshotBundle) => {
+      setActiveSection("call");
+      await controller.start({ snapshot });
+    },
+    [controller.start]
+  );
 
   const executeShortcut = useCallback(
     async (action: ShortcutAction, accelerator: string) => {
@@ -487,7 +496,7 @@ export default function MossApp() {
           ) : activeSection === "sessions" ? (
             <SessionsPage controller={controller} />
           ) : activeSection === "cases" ? (
-            <CasesPage />
+            <CasesPage onStartPreparedCall={startPreparedCall} />
           ) : activeSection === "settings" ? (
             <AppSettingsPage
               nativeRuntimeAvailable={controller.nativeRuntimeAvailable}

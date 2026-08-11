@@ -12,6 +12,7 @@ import type {
   CallTurnSettlement,
   GuidanceFrame,
   GuidanceEvaluationFact,
+  RuntimePreparationContext,
 } from "./types.js";
 
 export interface ActiveCallRuntimeState {
@@ -28,6 +29,7 @@ export interface ActiveCallRuntimeState {
   activeOperations: Record<ModelRouteKind, string | null>;
   receipts: GuidanceReceipt[];
   humanEvaluations: GuidanceEvaluationFact[];
+  preparation: RuntimePreparationContext;
   lastError?: string;
   updatedAt: number;
 }
@@ -71,7 +73,16 @@ const noOperations = (): Record<ModelRouteKind, string | null> => ({
 export function createActiveCallRuntimeState(input: {
   callSessionId: string;
   createdAt: number;
+  preparation?: RuntimePreparationContext;
 }): ActiveCallRuntimeState {
+  const preparation = input.preparation ?? {
+    mode: "neutral" as const,
+    callSessionId: input.callSessionId,
+    boundAt: input.createdAt,
+  };
+  if (preparation.callSessionId !== input.callSessionId) {
+    throw new Error("Preparation context belongs to another CallSession.");
+  }
   return {
     callSessionId: input.callSessionId,
     state: "planned",
@@ -84,6 +95,7 @@ export function createActiveCallRuntimeState(input: {
     activeOperations: noOperations(),
     receipts: [],
     humanEvaluations: [],
+    preparation: structuredClone(preparation),
     updatedAt: input.createdAt,
   };
 }
@@ -225,11 +237,13 @@ export class ActiveCallRuntime {
   constructor(input: {
     callSessionId: string;
     createdAt?: number;
+    preparation?: RuntimePreparationContext;
     onTransition?: ActiveCallTransitionObserver;
   }) {
     this.#state = createActiveCallRuntimeState({
       callSessionId: input.callSessionId,
       createdAt: input.createdAt ?? Date.now(),
+      preparation: input.preparation,
     });
     this.#transitionObserver = input.onTransition;
   }

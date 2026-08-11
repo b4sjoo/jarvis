@@ -12,6 +12,7 @@ import { isTauriRuntime } from "@/lib/calling";
 import {
   CasePreparationService,
   type CallPlan,
+  type CallPreparationSnapshotBundle,
   type CaseRecord,
   type CaseRevision,
 } from "@/lib/preparation";
@@ -71,7 +72,13 @@ const localDateTime = (timestamp?: number) => {
   return new Date(timestamp - offset).toISOString().slice(0, 16);
 };
 
-export default function CasesPage() {
+export default function CasesPage({
+  onStartPreparedCall,
+}: {
+  onStartPreparedCall?: (
+    snapshot: CallPreparationSnapshotBundle
+  ) => Promise<void>;
+}) {
   const [service, setService] = useState<CasePreparationService | null>(null);
   const [cases, setCases] = useState<CaseRecord[]>([]);
   const [selectedCaseId, setSelectedCaseId] = useState<string | null>(null);
@@ -250,7 +257,7 @@ export default function CasesPage() {
 
             {view === "reviewed" ? <ReviewedStatePanel caseId={selectedCase.id} onRevisionChange={async () => { if (service) setRevision(await service.getCurrentRevision(selectedCase.id)); }} /> : null}
 
-            {view === "snapshots" ? <SnapshotPanel caseId={selectedCase.id} plans={plans} /> : null}
+            {view === "snapshots" ? <SnapshotPanel caseId={selectedCase.id} plans={plans} onStartCall={onStartPreparedCall} /> : null}
 
             {!(["overview", "plans", "materials", "conversations", "reviewed", "snapshots"] as CaseWorkspaceView[]).includes(view) ? <section className="case-future"><ShieldCheck size={22} /><h3>{CASE_WORKSPACE_VIEWS.find((item) => item.id === view)?.label}</h3><p>This surface activates in its dedicated Task 1 slice.</p></section> : null}
           </div>

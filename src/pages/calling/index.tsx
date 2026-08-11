@@ -45,6 +45,7 @@ export default function CallingPage({
   };
   const state = controller.runtime.state;
   const canStart = ["planned", "closed", "start-failed", "abandoned"].includes(state);
+  const preparation = controller.runtime.preparation;
 
   return (
     <div className={`moss-shell${embedded ? " moss-shell-embedded" : ""}`}>
@@ -64,7 +65,7 @@ export default function CallingPage({
       </header>}
 
       <section className="moss-guidance" aria-live="polite">
-        <div className="section-heading"><span>Live Guidance</span><small>revision {controller.runtime.guidanceRevision}</small></div>
+        <div className="section-heading"><span>Live Guidance</span><small>{preparation.mode === "prepared" ? `Prepared · ${preparation.runtime.objective}` : "Neutral · no preparation snapshot"} · revision {controller.runtime.guidanceRevision}</small></div>
         {controller.runtime.visibleGuidance ? (
           <div className="guidance-layout">
             <div className="guidance-primary"><h2>Say</h2>{controller.runtime.visibleGuidance.say.map((line) => <p key={line}>{line}</p>)}</div>
