@@ -85,15 +85,11 @@ export function buildAdvisorUserMessage(
     resolveMeetingAnswerProfile(
       context.interviewPlaybook?.questionType ??
         context.activeMeetingTask?.child?.questionType ??
-        context.activeMeetingTask?.parent.questionType ??
-        context.activeScreenTask?.kind
+        context.activeMeetingTask?.parent.questionType
     );
   const hasTranscript = Boolean(context.transcript.trim() || context.latestTurn);
   const hasScreenContext = Boolean(context.screenContext.trim());
-  const hasScreenAnchoredTask = Boolean(
-    context.activeMeetingTask?.screen ??
-      (!context.activeMeetingTask && context.activeScreenTask)
-  );
+  const hasScreenAnchoredTask = Boolean(context.activeMeetingTask?.screen);
   const runtimePlaybook = withInterviewPlaybookPhase(
     context.interviewPlaybook,
     context.playbookPhaseDecision?.phase ?? context.activeMeetingTask?.parent.playbookPhase
@@ -104,7 +100,6 @@ export function buildAdvisorUserMessage(
         runtimePlaybook?.questionType ??
         context.activeMeetingTask?.child?.questionType ??
         context.activeMeetingTask?.parent.questionType ??
-        context.activeScreenTask?.kind ??
         (answerProfile === "system-design"
           ? "general-system-design"
           : undefined),
@@ -113,7 +108,7 @@ export function buildAdvisorUserMessage(
             context.currentQuestionProjection.answerFocusText,
             context.currentQuestionProjection.semanticEvidenceText,
           ].join("\n")
-        : [context.activeScreenTask?.question, context.latestTurn?.text]
+        : [context.activeMeetingTask?.screen?.question, context.latestTurn?.text]
             .filter(Boolean)
             .join("\n"),
     });
@@ -641,15 +636,15 @@ function formatSourceSpecificTaskContext(context: AdvisorPromptContext) {
             .filter(Boolean)
             .join("\n")
         : undefined,
-      context.activeInterviewTask
-        ? [
-            "Interview source metadata:",
-            `Source: ${context.activeInterviewTask.source}`,
-            `Revisions: ${context.activeInterviewTask.revisions}`,
-          ]
-            .filter(Boolean)
-            .join("\n")
-        : undefined,
+      [
+        "Interview source metadata:",
+        `Source: ${context.activeMeetingTask.source}`,
+        context.activeMeetingTask.parent.revisions !== undefined
+          ? `Revisions: ${context.activeMeetingTask.parent.revisions}`
+          : undefined,
+      ]
+        .filter(Boolean)
+        .join("\n"),
     ].filter(Boolean);
 
     return parts.length
@@ -657,82 +652,7 @@ function formatSourceSpecificTaskContext(context: AdvisorPromptContext) {
       : "Source-specific task context is represented in active_meeting_task.";
   }
 
-  return [
-    context.activeScreenTask
-      ? ["Legacy screen task fallback:", formatActiveScreenTask(context.activeScreenTask)]
-          .filter(Boolean)
-          .join("\n")
-      : undefined,
-    context.activeInterviewTask
-      ? [
-          "Legacy interview task fallback:",
-          formatActiveInterviewTask(context.activeInterviewTask),
-        ]
-          .filter(Boolean)
-          .join("\n")
-      : undefined,
-  ]
-    .filter(Boolean)
-    .join("\n\n") || "No source-specific task context.";
-}
-
-function formatActiveScreenTask(
-  task: NonNullable<AdvisorPromptContext["activeScreenTask"]>
-) {
-  return [
-    `Kind: ${task.kind}`,
-    task.language ? `Language: ${task.language}` : undefined,
-    task.classifier?.askFrame
-      ? `Ask frame: ${task.classifier.askFrame}`
-      : undefined,
-    task.classifier?.topicDomain
-      ? `Topic domain: ${task.classifier.topicDomain}`
-      : undefined,
-    task.classifier?.projectAnchor
-      ? `Project anchor: ${task.classifier.projectAnchor}`
-      : undefined,
-    typeof task.classifier?.confidence === "number"
-      ? `Classifier confidence: ${task.classifier.confidence}`
-      : undefined,
-    task.question ? `Question: ${task.question}` : undefined,
-    "Current answer:",
-    task.content,
-  ]
-    .filter(Boolean)
-    .join("\n");
-}
-
-function formatActiveInterviewTask(
-  task: NonNullable<AdvisorPromptContext["activeInterviewTask"]>
-) {
-  return [
-    `Parent id: ${task.id}`,
-    `Source: ${task.source}`,
-    `Stable kind: ${task.stableKind}`,
-    `Topic: ${task.topic || "unknown"}`,
-    `Playbook phase: ${task.playbookPhase}`,
-    task.supportedFactAnchors.length
-      ? `Supported fact anchors: ${task.supportedFactAnchors.join(", ")}`
-      : undefined,
-    task.child
-      ? [
-          "Active child probe:",
-          `Kind: ${task.child.questionType}`,
-          `Intent: ${task.child.intent}`,
-          `Question: ${task.child.question}`,
-          task.child.compactSummary
-            ? `Compact summary: ${task.child.compactSummary}`
-            : undefined,
-        ]
-          .filter(Boolean)
-          .join("\n")
-      : undefined,
-    task.latestUsefulAnswer
-      ? `Latest useful answer summary: ${task.latestUsefulAnswer.slice(0, 700)}`
-      : undefined,
-  ]
-    .filter(Boolean)
-    .join("\n");
+  return "No source-specific task context.";
 }
 
 function formatClarifyingAnswer(feedback: ClarifyingQuestionFeedback) {

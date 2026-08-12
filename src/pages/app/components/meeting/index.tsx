@@ -934,7 +934,7 @@ export const MeetingAssistant = ({
       currentQuestionId: meeting.currentQuestionLineage?.questionInstanceId,
       questionTypeCorrected:
         Boolean(activeManualQuestionTypeCorrection) ||
-        meeting.activeScreenTask?.classifier?.overrideSource ===
+        meeting.taskRuntime.screenAttachment?.classifier?.overrideSource ===
           "interview-type-selector",
       manualQuestionTypeCorrection: activeManualQuestionTypeCorrection,
       activeTask: getActiveMeetingTaskFocusSummary(meeting.activeMeetingTask),
@@ -973,7 +973,7 @@ export const MeetingAssistant = ({
       activeManualQuestionTypeCorrection,
       effectiveQuestionType,
       transientPersonalStatusLabel,
-      meeting.activeScreenTask?.classifier?.overrideSource,
+      meeting.taskRuntime.screenAttachment?.classifier?.overrideSource,
       hasActiveMeetingTask,
       hasCorrectableQuestion,
       hasActiveMeetingScreenContext,
@@ -1449,9 +1449,9 @@ export const MeetingAssistant = ({
       status: "succeeded",
       reason: "manual-new-task-confirmed",
     });
-    meeting.clearActiveScreenTask();
+    meeting.clearActiveTask();
     setDismissedQuestionKey(clarifyingQuestionKey);
-  }, [clarifyingQuestionKey, meeting.clearActiveScreenTask]);
+  }, [clarifyingQuestionKey, meeting.clearActiveTask]);
 
   const handleSameTaskConfirmation = useCallback(() => {
     if (!clarifyingQuestionKey) return;
@@ -2844,7 +2844,7 @@ export const MeetingAssistant = ({
                 variant="outline"
                 className="h-8 gap-1.5 text-xs"
                 title="Clear active task"
-                onClick={meeting.clearActiveScreenTask}
+                onClick={meeting.clearActiveTask}
                 disabled={!hasActiveMeetingTask}
               >
                 <Trash2Icon className="h-3.5 w-3.5" />

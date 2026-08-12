@@ -386,6 +386,7 @@ function baseContext(
     rollingSummary: "",
     userProfileContext: "OLD_USER_PROFILE",
     glossaryText: "OLD_GLOSSARY",
+    taskRuntime: { revision: 0 },
     confirmedMeFacts: [{ id: "fact-old", text: "OLD_CONFIRMED_FACT" }],
   };
 }
@@ -399,6 +400,7 @@ function meetingContext(
     startedAt: 0,
     transcriptTurns,
     screenObservations: [],
+    taskRuntime: { revision: 0 },
     activeMeetingTask: task,
     rollingSummary: "",
     userProfileContext: "",
@@ -450,6 +452,7 @@ function activeTask(input: {
 } = {}): ActiveMeetingTask {
   return {
     id: "parent-task",
+    runtimeRevision: 1,
     source: "voice",
     parent: {
       id: "parent-task",

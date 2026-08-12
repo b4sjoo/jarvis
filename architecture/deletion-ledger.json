@@ -17,7 +17,13 @@
       ],
       "deletionGate": "All live task mutation and projection consumers use the canonical Task 151 runtime state; old recordings remain readable through a boundary decoder.",
       "rollbackBoundary": "Task 151 writer cutover and legacy-root deletion remain separate commits.",
-      "status": "candidate"
+      "status": "deleted",
+      "forbiddenPatterns": [
+        "setActiveScreenTask(",
+        "clearActiveScreenTask(",
+        "recordTaskSnapshot(",
+        "activeScreenTask?: ActiveScreenTask;"
+      ]
     },
     {
       "id": "task-runtime-legacy-active-interview-root",
@@ -33,7 +39,15 @@
       ],
       "deletionGate": "The Task 151 reducer is the sole live task writer and every prompt, UI, recording, and evaluation consumer observes one task revision.",
       "rollbackBoundary": "Task 151 consumer migration, writer cutover, and legacy-root deletion remain separate commits.",
-      "status": "candidate"
+      "status": "deleted",
+      "forbiddenPatterns": [
+        "setActiveInterviewTask(",
+        "clearActiveInterviewTask(",
+        "setActiveMeetingTaskState(",
+        "clearActiveMeetingTask(",
+        "clearActiveMeetingTaskProjection",
+        "activeInterviewTask?: ActiveInterviewParent;"
+      ]
     },
     {
       "id": "direct-native-exit-without-runtime-drain",

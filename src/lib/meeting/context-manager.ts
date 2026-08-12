@@ -23,7 +23,6 @@ import {
   cloneMeetingTaskRuntimeState,
   createMeetingTaskRuntimeState,
   projectActiveMeetingTask,
-  projectLegacyMeetingTaskRoots,
   reduceMeetingTaskRuntimeMutation,
   type MeetingTaskRuntimeMutation,
   type MeetingTaskRuntimeState,
@@ -41,13 +40,13 @@ export interface MeetingContextManagerOptions {
   interviewSessionBrief?: InterviewSessionBrief;
 }
 
-export interface ActiveMeetingTaskStatePatch {
-  activeScreenTask?: ActiveScreenTask | null;
-  activeInterviewTask?: ActiveInterviewParent | null;
-}
+type StoredMeetingContextState = Omit<
+  MeetingContextState,
+  "taskRuntime" | "activeMeetingTask"
+>;
 
 export class MeetingContextManager {
-  private state: MeetingContextState;
+  private state: StoredMeetingContextState;
   private taskRuntimeState: MeetingTaskRuntimeState;
   private readonly transcriptWindowMs: number;
   private readonly maxScreenObservations: number;
@@ -79,9 +78,6 @@ export class MeetingContextManager {
   getState(): MeetingContextState {
     this.clearExpiredActiveMeetingTask();
     const activeMeetingTask = this.buildActiveMeetingTask();
-    const legacyTaskRoots = projectLegacyMeetingTaskRoots(
-      this.taskRuntimeState
-    );
 
     return {
       ...this.state,
@@ -93,7 +89,7 @@ export class MeetingContextManager {
       interviewSessionContext: cloneInterviewSessionContext(
         this.state.interviewSessionContext
       ),
-      ...legacyTaskRoots,
+      taskRuntime: cloneMeetingTaskRuntimeState(this.taskRuntimeState),
       activeMeetingTask,
       glossary: [...this.state.glossary],
     };
@@ -221,61 +217,6 @@ export class MeetingContextManager {
     };
   }
 
-  setActiveScreenTask(task: ActiveScreenTask) {
-    this.applyTaskRuntimeMutation({
-      id: createMeetingId("task_runtime_compat"),
-      kind: "replace-projection",
-      reason: "legacy-set-active-screen-task",
-      screenAttachment: task,
-    });
-  }
-
-  setActiveMeetingTaskState(patch: ActiveMeetingTaskStatePatch) {
-    this.applyTaskRuntimeMutation({
-      id: createMeetingId("task_runtime_compat"),
-      kind: "replace-projection",
-      reason: "legacy-set-active-meeting-task-state",
-      screenAttachment: patch.activeScreenTask,
-      parent: patch.activeInterviewTask,
-    });
-  }
-
-  clearActiveMeetingTask() {
-    this.applyTaskRuntimeMutation({
-      id: createMeetingId("task_runtime_clear"),
-      kind: "clear",
-      scope: "all",
-      reason: "clear-active-meeting-task",
-    });
-  }
-
-  clearActiveScreenTask() {
-    this.applyTaskRuntimeMutation({
-      id: createMeetingId("task_runtime_clear"),
-      kind: "clear",
-      scope: "screen",
-      reason: "clear-active-screen-task",
-    });
-  }
-
-  setActiveInterviewTask(task: ActiveInterviewParent) {
-    this.applyTaskRuntimeMutation({
-      id: createMeetingId("task_runtime_compat"),
-      kind: "replace-projection",
-      reason: "legacy-set-active-interview-task",
-      parent: task,
-    });
-  }
-
-  clearActiveInterviewTask() {
-    this.applyTaskRuntimeMutation({
-      id: createMeetingId("task_runtime_clear"),
-      kind: "clear",
-      scope: "parent",
-      reason: "clear-active-interview-task",
-    });
-  }
-
   getTaskRuntimeState() {
     return cloneMeetingTaskRuntimeState(this.taskRuntimeState);
   }
@@ -380,9 +321,6 @@ export class MeetingContextManager {
     const latestTurn =
       this.state.transcriptTurns[this.state.transcriptTurns.length - 1];
     const activeMeetingTask = this.buildActiveMeetingTask();
-    const legacyTaskRoots = projectLegacyMeetingTaskRoots(
-      this.taskRuntimeState
-    );
     const promptTranscriptTurns = this.getPromptTranscriptTurns(
       activeMeetingTask?.parent.promptTranscriptStartTurnId
     );
@@ -399,15 +337,12 @@ export class MeetingContextManager {
       interviewSessionContext: cloneInterviewSessionContext(
         this.state.interviewSessionContext
       ),
-      ...legacyTaskRoots,
+      taskRuntime: cloneMeetingTaskRuntimeState(this.taskRuntimeState),
       activeMeetingTask,
       rollingSummary: this.state.rollingSummary,
       userProfileContext: this.state.userProfileContext,
       glossaryText: this.formatGlossary(),
-      interviewPlaybook:
-        activeMeetingTask?.parent.playbook ??
-        legacyTaskRoots.activeScreenTask?.playbook ??
-        legacyTaskRoots.activeInterviewTask?.playbook,
+      interviewPlaybook: activeMeetingTask?.parent.playbook,
       confirmedMeFacts: collectConfirmedMeFacts(this.state.transcriptTurns),
       latestTurn,
     };
@@ -462,9 +397,6 @@ export class MeetingContextManager {
 
   private formatScreenContext() {
     const activeMeetingTask = this.buildActiveMeetingTask();
-    const legacyTaskRoots = projectLegacyMeetingTaskRoots(
-      this.taskRuntimeState
-    );
     const activeTaskContext = activeMeetingTask?.screen
       ? [
           "Active meeting screen context:",
@@ -493,21 +425,7 @@ export class MeetingContextManager {
         ]
           .filter(Boolean)
           .join("\n")
-      : legacyTaskRoots.activeScreenTask
-        ? [
-            "Active screen task:",
-            legacyTaskRoots.activeScreenTask.question
-              ? `Question: ${legacyTaskRoots.activeScreenTask.question}`
-              : undefined,
-            `Kind: ${legacyTaskRoots.activeScreenTask.kind}`,
-            legacyTaskRoots.activeScreenTask.language
-              ? `Language: ${legacyTaskRoots.activeScreenTask.language}`
-              : undefined,
-            legacyTaskRoots.activeScreenTask.content,
-          ]
-            .filter(Boolean)
-            .join("\n")
-        : "";
+      : "";
 
     const observationContext = this.state.screenObservations
       .map((observation) => {
@@ -555,77 +473,5 @@ function cloneInterviewSessionBrief(
   return {
     ...brief,
     interviewTypes: [...brief.interviewTypes],
-  };
-}
-
-function cloneActiveInterviewTask(
-  task: ActiveInterviewParent | undefined
-): ActiveInterviewParent | undefined {
-  if (!task) return undefined;
-
-  return {
-    ...task,
-    playbook: task.playbook ? { ...task.playbook } : undefined,
-    phaseProgress: { ...task.phaseProgress },
-    projectBinding: task.projectBinding
-      ? {
-          ...task.projectBinding,
-          evidenceEntryIds: [...task.projectBinding.evidenceEntryIds],
-        }
-      : undefined,
-    supportedFactAnchors: [...task.supportedFactAnchors],
-    canonicalQuestionSourceTurnIds: task.canonicalQuestionSourceTurnIds
-      ? [...task.canonicalQuestionSourceTurnIds]
-      : undefined,
-    child: task.child
-      ? {
-          ...task.child,
-          basedOnTurnIds: [...task.child.basedOnTurnIds],
-          basedOnObservationIds: [...task.child.basedOnObservationIds],
-          returnCapsule: task.child.returnCapsule
-            ? {
-                ...task.child.returnCapsule,
-                allowedFactAnchorIds: [
-                  ...task.child.returnCapsule.allowedFactAnchorIds,
-                ],
-                artifactCompatibility: {
-                  ...task.child.returnCapsule.artifactCompatibility,
-                },
-              }
-            : undefined,
-        }
-      : undefined,
-    whiteboardArtifact: task.whiteboardArtifact
-      ? { ...task.whiteboardArtifact }
-      : undefined,
-    parentContextHandoff: task.parentContextHandoff
-      ? {
-          ...task.parentContextHandoff,
-          sharedScenarioContext: {
-            ...task.parentContextHandoff.sharedScenarioContext,
-            domainEntities:
-              task.parentContextHandoff.sharedScenarioContext.domainEntities
-                ? [
-                    ...task.parentContextHandoff.sharedScenarioContext
-                      .domainEntities,
-                  ]
-                : undefined,
-            applicableScaleAssumptions:
-              task.parentContextHandoff.sharedScenarioContext.applicableScaleAssumptions?.map(
-                (item) => ({ ...item })
-              ),
-            sharedRequirements:
-              task.parentContextHandoff.sharedScenarioContext.sharedRequirements
-                ? [
-                    ...task.parentContextHandoff.sharedScenarioContext
-                      .sharedRequirements,
-                  ]
-                : undefined,
-          },
-          excludedContextKinds: [
-            ...task.parentContextHandoff.excludedContextKinds,
-          ],
-        }
-      : undefined,
   };
 }

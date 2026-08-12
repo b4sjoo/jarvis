@@ -140,8 +140,10 @@ export function applyAdvisorScreenScopeToPromptContext(
   return {
     ...context,
     screenContext: "",
-    activeScreenTask: undefined,
-    activeInterviewTask: undefined,
+    taskRuntime: {
+      revision: context.taskRuntime.revision,
+      lastMutation: context.taskRuntime.lastMutation,
+    },
     activeMeetingTask: undefined,
     interviewPlaybook: undefined,
     playbookPhaseDecision: undefined,

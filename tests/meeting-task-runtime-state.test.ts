@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  cloneMeetingTaskRuntimeState,
   createMeetingTaskRuntimeState,
   projectActiveMeetingTask,
-  projectLegacyMeetingTaskRoots,
   reduceMeetingTaskRuntimeMutation,
 } from "../src/lib/meeting/active-meeting-task.js";
 import type {
@@ -16,7 +16,8 @@ test("stores parent and screen attachment under one runtime revision", () => {
     state: createMeetingTaskRuntimeState(),
     mutation: {
       id: "mutation-1",
-      kind: "replace-projection",
+      kind: "commit-transition",
+      transition: "create-parent",
       reason: "characterization",
       parent: parent(),
       screenAttachment: screen(),
@@ -44,7 +45,8 @@ test("rejects a stale runtime revision without partial mutation", () => {
     state: createMeetingTaskRuntimeState(),
     mutation: {
       id: "mutation-1",
-      kind: "replace-projection",
+      kind: "commit-transition",
+      transition: "create-parent",
       reason: "seed",
       parent: parent(),
     },
@@ -53,7 +55,8 @@ test("rejects a stale runtime revision without partial mutation", () => {
     state: initial,
     mutation: {
       id: "mutation-stale",
-      kind: "replace-projection",
+      kind: "commit-transition",
+      transition: "update-source-attachment",
       reason: "stale",
       expectedRevision: 0,
       screenAttachment: screen(),
@@ -72,7 +75,8 @@ test("clears a screen-owned parent atomically with its attachment", () => {
     state: createMeetingTaskRuntimeState(),
     mutation: {
       id: "mutation-1",
-      kind: "replace-projection",
+      kind: "commit-transition",
+      transition: "create-parent",
       reason: "seed",
       parent: parent({ source: "screen" }),
       screenAttachment: screen(),
@@ -94,32 +98,34 @@ test("clears a screen-owned parent atomically with its attachment", () => {
   assert.equal(projectActiveMeetingTask({ state: result.state }), undefined);
 });
 
-test("legacy compatibility projections cannot mutate the canonical root", () => {
+test("cloned runtime snapshots cannot mutate the canonical root", () => {
   const state = reduceMeetingTaskRuntimeMutation({
     state: createMeetingTaskRuntimeState(),
     mutation: {
       id: "mutation-1",
-      kind: "replace-projection",
+      kind: "commit-transition",
+      transition: "create-parent",
       reason: "seed",
       parent: parent(),
       screenAttachment: screen(),
     },
   }).state;
-  const projection = projectLegacyMeetingTaskRoots(state);
+  const snapshot = cloneMeetingTaskRuntimeState(state);
 
-  projection.activeInterviewTask!.topic = "mutated";
-  projection.activeScreenTask!.content = "mutated";
+  snapshot.parent!.topic = "mutated";
+  snapshot.screenAttachment!.content = "mutated";
 
   assert.equal(state.parent?.topic, "Design a URL shortener");
   assert.equal(state.screenAttachment?.content, "Answer");
 });
 
-test("expires both legacy projections through one runtime mutation", () => {
+test("expires parent and screen attachment through one runtime mutation", () => {
   const state = reduceMeetingTaskRuntimeMutation({
     state: createMeetingTaskRuntimeState(),
     mutation: {
       id: "mutation-1",
-      kind: "replace-projection",
+      kind: "commit-transition",
+      transition: "create-parent",
       reason: "seed",
       parent: parent({ expiresAt: 50 }),
       screenAttachment: screen({ expiresAt: 50 }),
@@ -145,7 +151,8 @@ test("accepts a semantic phase command and rejects a mislabeled transition", () 
     state: createMeetingTaskRuntimeState(),
     mutation: {
       id: "mutation-1",
-      kind: "replace-projection",
+      kind: "commit-transition",
+      transition: "create-parent",
       reason: "seed",
       parent: parent(),
     },

@@ -125,7 +125,8 @@ test("builds a bounded continuity capsule without prior generated answers", () =
     revisions: 1,
   };
   const task = buildActiveMeetingTask({
-    activeInterviewTask: parent,
+    parent: parent,
+    runtimeRevision: 1,
   });
   const packet = buildAdvisorEvidencePacket({
     currentQuestion: {

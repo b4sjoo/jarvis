@@ -260,6 +260,8 @@ export function createArchitectureContractBaseline(analysis, sourceCommit) {
 }
 
 const TASK_MUTATION_METHODS = new Set([
+  "clearTaskRuntime",
+  "commitTaskRuntimeTransition",
   "clearActiveInterviewTask",
   "clearActiveMeetingTask",
   "clearActiveScreenTask",

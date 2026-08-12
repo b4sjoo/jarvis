@@ -10,7 +10,10 @@ import type {
   TaxonomyInterviewBriefType,
   TransitionalQuestionType,
 } from "./task-taxonomy";
-import type { ActiveMeetingTask } from "./active-meeting-task";
+import type {
+  ActiveMeetingTask,
+  MeetingTaskRuntimeState,
+} from "./active-meeting-task";
 import type { PlaybookPhaseDecision } from "./playbook-phase";
 import type { AudioInputLivenessPresentation } from "./audio-input-liveness";
 import type {
@@ -306,8 +309,7 @@ export interface MeetingContextState {
   screenObservations: ScreenObservation[];
   interviewSessionBrief?: InterviewSessionBrief;
   interviewSessionContext?: InterviewSessionContext;
-  activeScreenTask?: ActiveScreenTask;
-  activeInterviewTask?: ActiveInterviewParent;
+  taskRuntime: MeetingTaskRuntimeState;
   activeMeetingTask?: ActiveMeetingTask;
   rollingSummary: string;
   userProfileContext: string;
@@ -1202,8 +1204,7 @@ export interface AdvisorPromptContext {
   responseOnlyParentReadContext?: AdvisorBoundedParentReadContext;
   interviewSessionBrief?: InterviewSessionBrief;
   interviewSessionContext?: InterviewSessionContext;
-  activeScreenTask?: ActiveScreenTask;
-  activeInterviewTask?: ActiveInterviewParent;
+  taskRuntime: MeetingTaskRuntimeState;
   activeMeetingTask?: ActiveMeetingTask;
   rollingSummary: string;
   userProfileContext: string;
@@ -1985,8 +1986,7 @@ export interface MeetingAssistantState {
   interviewSessionBrief?: InterviewSessionBrief;
   interviewSessionContext?: InterviewSessionContext;
   preparationRuntime: import("./preparation-runtime-context").PreparationRuntimePresentation;
-  activeScreenTask?: ActiveScreenTask;
-  activeInterviewTask?: ActiveInterviewParent;
+  taskRuntime: MeetingTaskRuntimeState;
   activeMeetingTask?: ActiveMeetingTask;
   manualQuestionTypeCorrection?: ManualQuestionTypeCorrection;
   currentQuestionLineage?: QuestionInstanceLineage;

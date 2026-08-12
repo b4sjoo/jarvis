@@ -185,6 +185,7 @@ function contextSelection(
       rollingSummary: "",
       userProfileContext: "",
       glossaryText: "",
+      taskRuntime: { revision: 0 },
     },
     logicalQuestionUnitId: "lqu",
     logicalQuestionUnitRevision: 1,

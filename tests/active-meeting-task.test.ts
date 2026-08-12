@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   buildActiveMeetingTask,
-  clearActiveMeetingTaskProjection,
   collectActiveMeetingTaskIdentityIds,
   formatActiveMeetingTaskForRecording,
   formatActiveMeetingTaskForPrompt,
@@ -16,32 +15,15 @@ import type {
 } from "../src/lib/meeting/types.js";
 
 const now = 1_779_000_000_000;
+const runtimeRevision = 7;
 
-test("clears every active task projection while preserving unrelated state", () => {
-  const state = {
-    status: "listening",
-    activeScreenTask: makeScreenTask(),
-    activeInterviewTask: makeInterviewTask(),
-    activeMeetingTask: buildActiveMeetingTask({
-      activeScreenTask: makeScreenTask(),
-      activeInterviewTask: makeInterviewTask(),
-    }),
-  };
-
-  const cleared = clearActiveMeetingTaskProjection(state);
-
-  assert.equal(cleared.status, "listening");
-  assert.equal(cleared.activeScreenTask, undefined);
-  assert.equal(cleared.activeInterviewTask, undefined);
-  assert.equal(cleared.activeMeetingTask, undefined);
-});
-
-test("builds a screen-only active meeting task from legacy screen state", () => {
+test("builds a screen-only active meeting task from a canonical screen attachment", () => {
   const screenTask = makeScreenTask();
   const observation = makeObservation();
   const task = buildActiveMeetingTask({
-    activeScreenTask: screenTask,
+    screenAttachment: screenTask,
     latestObservation: observation,
+    runtimeRevision,
   });
 
   assert.equal(task?.id, "screen_task_1");
@@ -57,7 +39,8 @@ test("builds a screen-only active meeting task from legacy screen state", () => 
 
 test("does not treat playbook labels as supported fact anchors", () => {
   const task = buildActiveMeetingTask({
-    activeScreenTask: makeScreenTask({
+    runtimeRevision,
+    screenAttachment: makeScreenTask({
       kind: "project-deep-dive",
       classifier: {
         questionType: "project-deep-dive",
@@ -86,7 +69,10 @@ test("does not treat playbook labels as supported fact anchors", () => {
 
 test("builds a voice-only active meeting task from active interview parent", () => {
   const interviewTask = makeInterviewTask({ source: "voice" });
-  const task = buildActiveMeetingTask({ activeInterviewTask: interviewTask });
+  const task = buildActiveMeetingTask({
+    parent: interviewTask,
+    runtimeRevision,
+  });
 
   assert.equal(task?.id, "parent_1");
   assert.equal(task?.source, "voice");
@@ -103,9 +89,10 @@ test("uses interview parent as stable id for mixed screen and voice state", () =
     startObservationId: "obs_1",
   });
   const task = buildActiveMeetingTask({
-    activeScreenTask: screenTask,
-    activeInterviewTask: interviewTask,
+    screenAttachment: screenTask,
+    parent: interviewTask,
     latestObservation: makeObservation(),
+    runtimeRevision,
   });
 
   assert.equal(task?.id, "parent_1");
@@ -130,7 +117,10 @@ test("keeps child probes under the parent without changing parent question type"
       basedOnObservationIds: ["obs_1"],
     },
   });
-  const task = buildActiveMeetingTask({ activeInterviewTask: interviewTask });
+  const task = buildActiveMeetingTask({
+    parent: interviewTask,
+    runtimeRevision,
+  });
 
   assert.equal(task?.parent.questionType, "ai-ml-system-design");
   assert.equal(task?.child?.questionType, "field-knowledge");
@@ -139,16 +129,21 @@ test("keeps child probes under the parent without changing parent question type"
 
 test("exposes trace metadata and prompt text for evaluation corpus linking", () => {
   const task = buildActiveMeetingTask({
-    activeScreenTask: makeScreenTask(),
-    activeInterviewTask: makeInterviewTask({
+    screenAttachment: makeScreenTask(),
+    parent: makeInterviewTask({
       stableKind: "coding",
       startObservationId: "obs_1",
     }),
     latestObservation: makeObservation(),
+    runtimeRevision,
   });
 
   const metadata = getActiveMeetingTaskTraceMetadata(task);
   assert.equal(metadata.activeMeetingTaskId, "parent_1");
+  assert.equal(
+    metadata.activeMeetingTaskRuntimeRevision,
+    runtimeRevision
+  );
   assert.equal(metadata.activeMeetingParentQuestionType, "coding");
   assert.equal(metadata.activeMeetingScreenTaskId, "screen_task_1");
   assert.equal(metadata.activeMeetingScreenAskFrame, "direct-answer");
@@ -158,7 +153,8 @@ test("exposes trace metadata and prompt text for evaluation corpus linking", () 
 
 test("exposes and safely records the canonical project binding", () => {
   const task = buildActiveMeetingTask({
-    activeInterviewTask: makeInterviewTask({
+    runtimeRevision,
+    parent: makeInterviewTask({
       stableKind: "project-deep-dive",
       projectBinding: {
         projectId: "agentic-memory",
@@ -185,6 +181,7 @@ test("exposes and safely records the canonical project binding", () => {
   );
 
   const recorded = formatActiveMeetingTaskForRecording(task!);
+  assert.equal(recorded.runtimeRevision, runtimeRevision);
   recorded.parent.projectBinding?.evidenceEntryIds.push("mutated-copy");
   assert.deepEqual(task?.parent.projectBinding?.evidenceEntryIds, [
     "mem_agentic",
@@ -194,7 +191,8 @@ test("exposes and safely records the canonical project binding", () => {
 
 test("exposes a bounded parent handoff without sharing mutable recording state", () => {
   const task = buildActiveMeetingTask({
-    activeInterviewTask: makeInterviewTask({
+    runtimeRevision,
+    parent: makeInterviewTask({
       id: "parent_recommender",
       stableKind: "ai-ml-system-design",
       promptTranscriptStartTurnId: "turn_recommender",
@@ -235,8 +233,9 @@ test("exposes a bounded parent handoff without sharing mutable recording state",
 
 test("surfaces screen/interview divergence instead of silently hiding it", () => {
   const task = buildActiveMeetingTask({
-    activeScreenTask: makeScreenTask({ kind: "coding" }),
-    activeInterviewTask: makeInterviewTask({
+    runtimeRevision,
+    screenAttachment: makeScreenTask({ kind: "coding" }),
+    parent: makeInterviewTask({
       stableKind: "behavioral",
       startObservationId: "obs_1",
     }),
@@ -249,11 +248,12 @@ test("surfaces screen/interview divergence instead of silently hiding it", () =>
 
 test("resolves active meeting task identity from canonical metadata first", () => {
   const task = buildActiveMeetingTask({
-    activeScreenTask: makeScreenTask(),
-    activeInterviewTask: makeInterviewTask({
+    screenAttachment: makeScreenTask(),
+    parent: makeInterviewTask({
       stableKind: "coding",
       startObservationId: "obs_1",
     }),
+    runtimeRevision,
   });
 
   const identity = resolveActiveMeetingTaskIdentity({
@@ -305,7 +305,8 @@ test("resolves legacy task identity when canonical metadata is absent", () => {
 
 test("falls back to active meeting task only when trace metadata has no identity", () => {
   const task = buildActiveMeetingTask({
-    activeInterviewTask: makeInterviewTask({
+    runtimeRevision,
+    parent: makeInterviewTask({
       source: "voice",
       child: {
         id: "child_1",

@@ -16,6 +16,7 @@ import type {
   ActiveInterviewParent,
   TranscriptTurn,
 } from "../src/lib/meeting/types.js";
+import { setTestActiveParent } from "./helpers/meeting-task-runtime.js";
 
 function parent(
   stableKind: ActiveInterviewParent["stableKind"],
@@ -193,7 +194,7 @@ test("the linked handoff carries source facts but excludes old QPS and answers",
     parentContextHandoff: handoff,
   });
   assert.ok(nextParent);
-  manager.setActiveInterviewTask(nextParent);
+  setTestActiveParent(manager, nextParent);
 
   const activeTask = manager.buildAdvisorPromptContext().activeMeetingTask;
   const serialized = JSON.stringify(activeTask);
@@ -242,7 +243,7 @@ test("replays coding to general SD to independent AI/ML SD without parent leakag
       question.text,
       index + 1
     );
-    const currentParent = manager.getState().activeInterviewTask;
+    const currentParent = manager.getState().taskRuntime.parent;
     const transition = decideCrossDomainParentTransition({
       previousParent: currentParent,
       nextQuestionType: inferred.type,
@@ -266,7 +267,7 @@ test("replays coding to general SD to independent AI/ML SD without parent leakag
       source: "voice",
     });
     assert.ok(nextParent);
-    manager.setActiveInterviewTask(nextParent);
+    setTestActiveParent(manager, nextParent);
   }
 
   const prompt = manager.buildAdvisorPromptContext();

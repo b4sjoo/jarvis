@@ -45,6 +45,7 @@ function unit(text: string, revision = 1): LogicalQuestionUnit {
 function activeTask(withChild = false): ActiveMeetingTask {
   return {
     id: "parent-a",
+    runtimeRevision: 1,
     source: "voice",
     parent: {
       id: "parent-a",

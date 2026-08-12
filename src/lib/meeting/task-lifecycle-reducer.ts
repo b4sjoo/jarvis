@@ -53,8 +53,8 @@ export interface TaskLifecycleReduction {
   authorized: boolean;
   mutationApplied: boolean;
   reason: TaskLifecycleReductionReason;
-  activeInterviewTask?: ActiveInterviewParent | null;
-  activeScreenTask?: ActiveScreenTask | null;
+  parent?: ActiveInterviewParent | null;
+  screenAttachment?: ActiveScreenTask | null;
   activeMeetingTask?: ActiveMeetingTask;
   parentBeforeId?: string;
   parentBeforeRevision?: number;
@@ -104,6 +104,7 @@ export function reduceTaskLifecycleTransaction(input: {
   currentLogicalQuestionUnitId?: string;
   currentLogicalQuestionRevision?: number;
   currentManualCorrectionRevision: number;
+  currentTaskRuntimeRevision: number;
   currentActiveInterviewTask?: ActiveInterviewParent;
   currentActiveScreenTask?: ActiveScreenTask;
 }): TaskLifecycleReduction {
@@ -118,8 +119,8 @@ export function reduceTaskLifecycleTransaction(input: {
       reason,
       before: input.currentActiveInterviewTask,
       after: input.currentActiveInterviewTask,
-      activeInterviewTask: input.currentActiveInterviewTask,
-      activeScreenTask: input.currentActiveScreenTask,
+      parent: input.currentActiveInterviewTask,
+      screenAttachment: input.currentActiveScreenTask,
     });
 
   if (transaction.sessionId !== input.currentSessionId) {
@@ -172,8 +173,8 @@ export function reduceTaskLifecycleTransaction(input: {
       reason: "preserved",
       before: input.currentActiveInterviewTask,
       after: input.currentActiveInterviewTask,
-      activeInterviewTask: input.currentActiveInterviewTask,
-      activeScreenTask: input.currentActiveScreenTask,
+      parent: input.currentActiveInterviewTask,
+      screenAttachment: input.currentActiveScreenTask,
     });
   }
 
@@ -210,8 +211,9 @@ export function reduceTaskLifecycleTransaction(input: {
   }
 
   const activeMeetingTask = buildActiveMeetingTask({
-    activeScreenTask: proposedScreen,
-    activeInterviewTask: proposedParent,
+    screenAttachment: proposedScreen,
+    parent: proposedParent,
+    runtimeRevision: input.currentTaskRuntimeRevision + 1,
   });
   if (
     !activeMeetingTask ||
@@ -236,8 +238,8 @@ export function reduceTaskLifecycleTransaction(input: {
     reason: "committed",
     before: input.currentActiveInterviewTask,
     after: proposedParent,
-    activeInterviewTask: proposedParent,
-    activeScreenTask: proposedScreen,
+    parent: proposedParent,
+    screenAttachment: proposedScreen,
     activeMeetingTask,
   });
 }
@@ -356,8 +358,8 @@ function buildReduction(input: {
   reason: TaskLifecycleReductionReason;
   before?: ActiveInterviewParent;
   after?: ActiveInterviewParent;
-  activeInterviewTask?: ActiveInterviewParent | null;
-  activeScreenTask?: ActiveScreenTask | null;
+  parent?: ActiveInterviewParent | null;
+  screenAttachment?: ActiveScreenTask | null;
   activeMeetingTask?: ActiveMeetingTask;
 }): TaskLifecycleReduction {
   return {
@@ -366,10 +368,8 @@ function buildReduction(input: {
     authorized: input.authorized,
     mutationApplied: input.mutationApplied,
     reason: input.reason,
-    activeInterviewTask: cloneInterviewParent(
-      input.activeInterviewTask
-    ),
-    activeScreenTask: cloneScreenTask(input.activeScreenTask),
+    parent: cloneInterviewParent(input.parent),
+    screenAttachment: cloneScreenTask(input.screenAttachment),
     activeMeetingTask: input.activeMeetingTask
       ? cloneActiveMeetingTask(input.activeMeetingTask)
       : undefined,

@@ -3,6 +3,8 @@
   "sourceCommit": "7d11713c6dfab23d283da1432487b33cb4eaccf6",
   "taskMutation": {
     "methodNames": [
+      "clearTaskRuntime",
+      "commitTaskRuntimeTransition",
       "clearActiveInterviewTask",
       "clearActiveMeetingTask",
       "clearActiveScreenTask",
@@ -12,8 +14,8 @@
     ],
     "allowedModules": [
       {
-        "file": "src/pages/app/components/meeting/index.tsx",
-        "maxCallsites": 1
+        "file": "src/hooks/useMeetingAssistant.ts",
+        "maxCallsites": 2
       }
     ]
   },

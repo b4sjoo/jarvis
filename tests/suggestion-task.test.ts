@@ -121,6 +121,7 @@ function makeActiveMeetingTask(): ActiveMeetingTask {
   const now = 1_779_000_000_000;
   return {
     id: "parent_1",
+    runtimeRevision: 1,
     source: "mixed",
     parent: {
       id: "parent_1",

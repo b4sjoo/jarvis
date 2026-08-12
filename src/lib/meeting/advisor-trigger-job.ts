@@ -144,10 +144,9 @@ export function createAdvisorTriggerJob(
   const snapshot = cloneAdvisorPromptContext(input.promptContext);
   const id = createMeetingId("advisor_job");
   const expectedParentId =
-    snapshot.activeMeetingTask?.parent.id ?? snapshot.activeInterviewTask?.id;
+    snapshot.activeMeetingTask?.parent.id;
   const expectedParentRevision =
-    snapshot.activeMeetingTask?.parent.revisions ??
-    snapshot.activeInterviewTask?.revisions;
+    snapshot.activeMeetingTask?.parent.revisions;
   return {
     id,
     source: input.source,

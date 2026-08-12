@@ -24,6 +24,7 @@ export type ActiveMeetingTaskSource = "screen" | "voice" | "mixed";
 
 export interface ActiveMeetingTask {
   id: string;
+  runtimeRevision: number;
   source: ActiveMeetingTaskSource;
   parent: ActiveMeetingParent;
   child?: ActiveMeetingChild;
@@ -126,11 +127,6 @@ interface MeetingTaskRuntimeMutationBase {
 
 export type MeetingTaskRuntimeMutation =
   | (MeetingTaskRuntimeMutationBase & {
-      kind: "replace-projection";
-      parent?: ActiveInterviewParent | null;
-      screenAttachment?: ActiveScreenTask | null;
-    })
-  | (MeetingTaskRuntimeMutationBase & {
       kind: "clear";
       scope: "all" | "parent" | "screen";
     })
@@ -230,19 +226,11 @@ export function projectActiveMeetingTask(input: {
   latestObservation?: ScreenObservation;
 }): ActiveMeetingTask | undefined {
   return buildActiveMeetingTask({
-    activeScreenTask: input.state.screenAttachment,
-    activeInterviewTask: input.state.parent,
+    screenAttachment: input.state.screenAttachment,
+    parent: input.state.parent,
     latestObservation: input.latestObservation,
+    runtimeRevision: input.state.revision,
   });
-}
-
-export function projectLegacyMeetingTaskRoots(
-  state: MeetingTaskRuntimeState
-) {
-  return {
-    activeScreenTask: cloneRuntimeValue(state.screenAttachment),
-    activeInterviewTask: cloneRuntimeValue(state.parent),
-  };
 }
 
 export function cloneMeetingTaskRuntimeState(
@@ -258,50 +246,42 @@ export function cloneMeetingTaskRuntimeState(
   };
 }
 
-export function clearActiveMeetingTaskProjection<
-  T extends {
-    activeScreenTask?: unknown;
-    activeInterviewTask?: unknown;
-    activeMeetingTask?: unknown;
-  },
->(state: T): T {
-  return {
-    ...state,
-    activeScreenTask: undefined,
-    activeInterviewTask: undefined,
-    activeMeetingTask: undefined,
-  };
-}
-
 export function buildActiveMeetingTask(input: {
-  activeScreenTask?: ActiveScreenTask;
-  activeInterviewTask?: ActiveInterviewParent;
+  screenAttachment?: ActiveScreenTask;
+  parent?: ActiveInterviewParent;
   latestObservation?: ScreenObservation;
+  runtimeRevision: number;
 }): ActiveMeetingTask | undefined {
-  const { activeScreenTask, activeInterviewTask, latestObservation } = input;
+  const {
+    screenAttachment,
+    parent: interviewParent,
+    latestObservation,
+    runtimeRevision,
+  } = input;
 
-  if (!activeScreenTask && !activeInterviewTask) return undefined;
+  if (!screenAttachment && !interviewParent) return undefined;
 
-  const screen = activeScreenTask
-    ? buildScreenContext(activeScreenTask, latestObservation)
+  const screen = screenAttachment
+    ? buildScreenContext(screenAttachment, latestObservation)
     : undefined;
 
-  const parent = activeInterviewTask
-    ? buildParentFromInterviewTask(activeInterviewTask)
-    : activeScreenTask
-      ? buildParentFromScreenTask(activeScreenTask)
+  const parent = interviewParent
+    ? buildParentFromInterviewTask(interviewParent)
+    : screenAttachment
+      ? buildParentFromScreenTask(screenAttachment)
       : undefined;
 
   if (!parent) return undefined;
 
-  const source = computeTaskSource(activeScreenTask, activeInterviewTask);
-  const child = activeInterviewTask?.child
-    ? buildChild(activeInterviewTask.child)
+  const source = computeTaskSource(screenAttachment, interviewParent);
+  const child = interviewParent?.child
+    ? buildChild(interviewParent.child)
     : undefined;
-  const divergence = detectDivergence(activeScreenTask, parent);
+  const divergence = detectDivergence(screenAttachment, parent);
 
   return {
     id: parent.id,
+    runtimeRevision,
     source,
     parent,
     child,
@@ -398,6 +378,7 @@ export function getActiveMeetingTaskTraceMetadata(
 
   return {
     activeMeetingTaskId: task.id,
+    activeMeetingTaskRuntimeRevision: task.runtimeRevision,
     activeMeetingTaskSource: task.source,
     activeMeetingParentId: task.parent.id,
     activeMeetingParentRevision: task.parent.revisions,
@@ -556,6 +537,7 @@ export function formatActiveMeetingTaskForRecording(
 ) {
   return {
     id: task.id,
+    runtimeRevision: task.runtimeRevision,
     source: task.source,
     parent: {
       ...task.parent,
@@ -849,26 +831,6 @@ function applyRuntimeMutation(
   patch: Partial<MeetingTaskRuntimeState>;
   rejectionReason?: "invalid-transition";
 } {
-  if (mutation.kind === "replace-projection") {
-    const parent =
-      mutation.parent === undefined
-        ? state.parent
-        : mutation.parent ?? undefined;
-    const screenAttachment =
-      mutation.screenAttachment === undefined
-        ? state.screenAttachment
-        : mutation.screenAttachment ?? undefined;
-    return {
-      changed:
-        mutation.parent !== undefined ||
-        mutation.screenAttachment !== undefined,
-      patch: {
-        parent: cloneRuntimeValue(parent),
-        screenAttachment: cloneRuntimeValue(screenAttachment),
-      },
-    };
-  }
-
   if (mutation.kind === "commit-transition") {
     const parent =
       mutation.parent === undefined

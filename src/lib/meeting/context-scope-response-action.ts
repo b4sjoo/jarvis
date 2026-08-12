@@ -527,8 +527,10 @@ function buildSafePromptContext(input: {
       : "",
     interviewSessionBrief: undefined,
     interviewSessionContext: undefined,
-    activeScreenTask: undefined,
-    activeInterviewTask: undefined,
+    taskRuntime: {
+      revision: input.baseContext.taskRuntime.revision,
+      lastMutation: input.baseContext.taskRuntime.lastMutation,
+    },
     activeMeetingTask: sanitizeActiveMeetingTask(input.activeMeetingTask),
     rollingSummary: "",
     userProfileContext: "",

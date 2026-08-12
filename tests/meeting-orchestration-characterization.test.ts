@@ -33,6 +33,11 @@ import type {
   TranscriptTurn,
 } from "../src/lib/meeting/types.js";
 import {
+  setTestActiveParent,
+  setTestScreenAttachment,
+  setTestTaskRuntime,
+} from "./helpers/meeting-task-runtime.js";
+import {
   MeetingOrchestrationHarness,
   type ControlledOrchestrationOperation,
   type OrchestrationCommitResult,
@@ -40,7 +45,7 @@ import {
 
 test("resolves advisor jobs out of order without letting the replaced job mutate state", async () => {
   const manager = new MeetingContextManager();
-  manager.setActiveInterviewTask(makeParent());
+  setTestActiveParent(manager, makeParent());
   const harness = new MeetingOrchestrationHarness(manager);
   const sessionId = manager.getState().sessionId;
   const jobA = createAdvisorTriggerJob({
@@ -78,7 +83,7 @@ test("resolves advisor jobs out of order without letting the replaced job mutate
     reason: "parent-revision-mismatch",
   });
 
-  const parent = manager.getState().activeInterviewTask;
+  const parent = manager.getState().taskRuntime.parent;
   assert.equal(parent?.latestUsefulAnswer, "newer answer");
   assert.equal(parent?.revisions, 2);
   assert.deepEqual(
@@ -93,7 +98,7 @@ test("resolves advisor jobs out of order without letting the replaced job mutate
 
 test("rejects an advisor completion from the previous meeting session", async () => {
   const manager = new MeetingContextManager();
-  manager.setActiveInterviewTask(makeParent());
+  setTestActiveParent(manager, makeParent());
   const harness = new MeetingOrchestrationHarness(manager);
   const job = createAdvisorTriggerJob({
     source: "live-turn",
@@ -149,7 +154,8 @@ test("keeps a trigger-owned question stable when a later informational turn arri
           if (!decision.authorized) {
             return rejected(decision.reason);
           }
-          contextManager.setActiveInterviewTask(
+          setTestActiveParent(
+            contextManager,
             makeParent({
               topic: job.promptContextSnapshot.latestTurn?.text ?? "missing",
               latestUsefulAnswer: value,
@@ -176,7 +182,7 @@ test("keeps a trigger-owned question stable when a later informational turn arri
 
   assert.equal(job.promptContextSnapshot.latestTurn?.id, "turn-a");
   assert.equal(
-    manager.getState().activeInterviewTask?.topic,
+    manager.getState().taskRuntime.parent?.topic,
     "Design a distributed cache"
   );
   assert.equal(manager.getState().transcriptTurns.length, 2);
@@ -283,7 +289,8 @@ test("preserves provisional question lineage when an adjacent constraint replace
 
 test("manual next advances phase without replacing the active parent", async () => {
   const manager = new MeetingContextManager();
-  manager.setActiveInterviewTask(
+  setTestActiveParent(
+    manager,
     makeParent({ playbookPhase: "requirement_clarification" })
   );
   const harness = new MeetingOrchestrationHarness(manager);
@@ -292,7 +299,7 @@ test("manual next advances phase without replacing the active parent", async () 
     id: "manual-next",
     kind: "advisor",
     commit: ({ contextManager }) => {
-      const current = contextManager.getState().activeInterviewTask;
+      const current = contextManager.getState().taskRuntime.parent;
       assert.ok(current);
       const taskMutation = decideAdvisorTaskMutation({
         authority: "preserve-parent",
@@ -321,7 +328,7 @@ test("manual next advances phase without replacing the active parent", async () 
           source: "manual-next",
         },
       });
-      contextManager.setActiveInterviewTask({
+      setTestActiveParent(contextManager, {
         ...current,
         playbookPhase: phaseDecision.phase,
         revisions: current.revisions + 1,
@@ -342,7 +349,8 @@ test("manual next advances phase without replacing the active parent", async () 
 
 test("manual next rebases authorization before deferred memory completion", async () => {
   const manager = new MeetingContextManager();
-  manager.setActiveInterviewTask(
+  setTestActiveParent(
+    manager,
     makeParent({ playbookPhase: "requirement_clarification" })
   );
   const harness = new MeetingOrchestrationHarness(manager);
@@ -353,9 +361,9 @@ test("manual next rebases authorization before deferred memory completion", asyn
   );
   harness.activateOperation("advisor", initialToken.operationId);
 
-  const current = manager.getState().activeInterviewTask;
+  const current = manager.getState().taskRuntime.parent;
   assert.ok(current);
-  manager.setActiveInterviewTask({
+  setTestActiveParent(manager, {
     ...current,
     playbookPhase: "design_framing",
     revisions: current.revisions + 1,
@@ -375,9 +383,9 @@ test("manual next rebases authorization before deferred memory completion", asyn
         currentOperationId: currentHarness.getActiveOperationId("advisor"),
       });
       if (!decision.authorized) return rejected(decision.reason);
-      const parent = contextManager.getState().activeInterviewTask;
+      const parent = contextManager.getState().taskRuntime.parent;
       assert.ok(parent);
-      contextManager.setActiveInterviewTask({
+      setTestActiveParent(contextManager, {
         ...parent,
         latestUsefulAnswer: value,
       });
@@ -391,16 +399,16 @@ test("manual next rebases authorization before deferred memory completion", asyn
     reason: "authorized",
   });
   assert.equal(
-    manager.getState().activeInterviewTask?.latestUsefulAnswer,
+    manager.getState().taskRuntime.parent?.latestUsefulAnswer,
     "Use a write-heavy location pipeline."
   );
 });
 
 test("clears the old screen when a voice completion commits a new parent", async () => {
   const manager = new MeetingContextManager();
-  manager.setActiveMeetingTaskState({
-    activeScreenTask: makeScreenTask(),
-    activeInterviewTask: makeParent({ source: "screen" }),
+  setTestTaskRuntime(manager, {
+    screenAttachment: makeScreenTask(),
+    parent: makeParent({ source: "screen" }),
   });
   const harness = new MeetingOrchestrationHarness(manager);
   const operation = harness.startOperation<string>({
@@ -411,12 +419,12 @@ test("clears the old screen when a voice completion commits a new parent", async
       const decision = decideAdvisorScreenScope({
         triggerSource: "live-turn",
         relation: "new-parent",
-        hasActiveScreenTask: Boolean(state.activeScreenTask),
+        hasActiveScreenTask: Boolean(state.taskRuntime.screenAttachment),
       });
-      contextManager.setActiveMeetingTaskState({
-        activeScreenTask:
-          decision.action === "clear" ? null : state.activeScreenTask,
-        activeInterviewTask: makeParent({
+      setTestTaskRuntime(contextManager, {
+        screenAttachment:
+          decision.action === "clear" ? null : state.taskRuntime.screenAttachment,
+        parent: makeParent({
           id: "parent-voice-b",
           source: "voice",
           stableKind: "behavioral",
@@ -432,7 +440,7 @@ test("clears the old screen when a voice completion commits a new parent", async
   await operation.completion;
   const state = manager.getState();
 
-  assert.equal(state.activeScreenTask, undefined);
+  assert.equal(state.taskRuntime.screenAttachment, undefined);
   assert.equal(state.activeMeetingTask?.parent.id, "parent-voice-b");
   assert.equal(state.activeMeetingTask?.source, "voice");
   assert.equal(state.activeMeetingTask?.screen, undefined);
@@ -455,9 +463,9 @@ test("shadow low-value execution preserves output, parent, phase, answer, and wh
     updatedAt: 110,
     createdAt: 100,
   };
-  manager.setActiveMeetingTaskState({
-    activeScreenTask: makeScreenTask(),
-    activeInterviewTask: makeParent({ whiteboardArtifact: whiteboard }),
+  setTestTaskRuntime(manager, {
+    screenAttachment: makeScreenTask(),
+    parent: makeParent({ whiteboardArtifact: whiteboard }),
   });
   const harness = new MeetingOrchestrationHarness(manager);
   const before = harness.getStateDigest();
@@ -489,14 +497,14 @@ test("shadow low-value execution preserves output, parent, phase, answer, and wh
       const screenScope = decideAdvisorScreenScope({
         triggerSource: "live-turn",
         relation: taskMutation.relation,
-        hasActiveScreenTask: Boolean(state.activeScreenTask),
+        hasActiveScreenTask: Boolean(state.taskRuntime.screenAttachment),
         taskMutationAuthorized: authorization.authorized,
       });
       if (taskMutation.commitParent) {
-        contextManager.setActiveMeetingTaskState({
-          activeScreenTask:
-            screenScope.action === "clear" ? null : state.activeScreenTask,
-          activeInterviewTask: makeParent({
+        setTestTaskRuntime(contextManager, {
+          screenAttachment:
+            screenScope.action === "clear" ? null : state.taskRuntime.screenAttachment,
+          parent: makeParent({
             id: "incorrect-replacement",
             latestUsefulAnswer: "incorrect shadow answer",
           }),
@@ -519,18 +527,18 @@ test("shadow low-value execution preserves output, parent, phase, answer, and wh
   assert.equal(visibleOutput, "");
   assert.deepEqual(after, before);
   assert.equal(
-    state.activeInterviewTask?.latestUsefulAnswer,
+    state.taskRuntime.parent?.latestUsefulAnswer,
     "Clarify scale and consistency."
   );
-  assert.deepEqual(state.activeInterviewTask?.whiteboardArtifact, whiteboard);
-  assert.equal(state.activeScreenTask?.id, "screen-task-a");
+  assert.deepEqual(state.taskRuntime.parent?.whiteboardArtifact, whiteboard);
+  assert.equal(state.taskRuntime.screenAttachment?.id, "screen-task-a");
 });
 
 test("a late unknown screen result cannot replace a newer voice parent", async () => {
   const manager = new MeetingContextManager();
-  manager.setActiveMeetingTaskState({
-    activeScreenTask: makeScreenTask(),
-    activeInterviewTask: makeParent({ source: "screen" }),
+  setTestTaskRuntime(manager, {
+    screenAttachment: makeScreenTask(),
+    parent: makeParent({ source: "screen" }),
   });
   const harness = new MeetingOrchestrationHarness(manager);
   const screenOperation = harness.startOperation<string>({
@@ -542,7 +550,7 @@ test("a late unknown screen result cannot replace a newer voice parent", async (
         hasAnswer: true,
       });
       if (decision.mutationAuthorized) {
-        contextManager.setActiveScreenTask({
+        setTestScreenAttachment(contextManager, {
           ...makeScreenTask(),
           id: "screen-unknown",
           kind: "unknown",
@@ -559,12 +567,12 @@ test("a late unknown screen result cannot replace a newer voice parent", async (
         triggerSource: "live-turn",
         relation: "new-parent",
         hasActiveScreenTask: Boolean(
-          contextManager.getState().activeScreenTask
+          contextManager.getState().taskRuntime.screenAttachment
         ),
       });
-      contextManager.setActiveMeetingTaskState({
-        activeScreenTask: decision.action === "clear" ? null : undefined,
-        activeInterviewTask: makeParent({
+      setTestTaskRuntime(contextManager, {
+        screenAttachment: decision.action === "clear" ? null : undefined,
+        parent: makeParent({
           id: "parent-voice-new",
           source: "voice",
           stableKind: "ai-ml-system-design",
@@ -584,7 +592,7 @@ test("a late unknown screen result cannot replace a newer voice parent", async (
   const state = manager.getState();
   assert.equal(state.activeMeetingTask?.parent.id, "parent-voice-new");
   assert.equal(state.activeMeetingTask?.source, "voice");
-  assert.equal(state.activeScreenTask, undefined);
+  assert.equal(state.taskRuntime.screenAttachment, undefined);
   assert.deepEqual(
     harness.getOperationEvents("screen-unknown-late").map((entry) => entry.event),
     ["started", "resolved", "committed"]
@@ -593,7 +601,7 @@ test("a late unknown screen result cannot replace a newer voice parent", async (
 
 test("rejects a screen completion from an older runtime epoch", async () => {
   const manager = new MeetingContextManager();
-  manager.setActiveInterviewTask(makeParent());
+  setTestActiveParent(manager, makeParent());
   const harness = new MeetingOrchestrationHarness(manager);
   const token = createHarnessToken(harness, "screen-reset", "screen");
   harness.activateOperation("screen", token.operationId);
@@ -607,7 +615,8 @@ test("rejects a screen completion from an older runtime epoch", async () => {
         currentOperationId: currentHarness.getActiveOperationId("screen"),
       });
       if (!decision.authorized) return rejected(decision.reason);
-      contextManager.setActiveInterviewTask(
+      setTestActiveParent(
+        contextManager,
         makeParent({ latestUsefulAnswer: value })
       );
       return committed(decision.reason);
@@ -627,7 +636,7 @@ test("rejects a screen completion from an older runtime epoch", async () => {
 
 test("rejects an advisor completion after parent retype changes revision", async () => {
   const manager = new MeetingContextManager();
-  manager.setActiveInterviewTask(makeParent());
+  setTestActiveParent(manager, makeParent());
   const harness = new MeetingOrchestrationHarness(manager);
   const token = createHarnessToken(harness, "advisor-before-retype", "advisor");
   harness.activateOperation("advisor", token.operationId);
@@ -641,16 +650,17 @@ test("rejects an advisor completion after parent retype changes revision", async
         currentOperationId: currentHarness.getActiveOperationId("advisor"),
       });
       if (!decision.authorized) return rejected(decision.reason);
-      contextManager.setActiveInterviewTask(
+      setTestActiveParent(
+        contextManager,
         makeParent({ latestUsefulAnswer: value })
       );
       return committed(decision.reason);
     },
   });
 
-  const current = manager.getState().activeInterviewTask;
+  const current = manager.getState().taskRuntime.parent;
   assert.ok(current);
-  manager.setActiveInterviewTask({
+  setTestActiveParent(manager, {
     ...current,
     stableKind: "behavioral",
     revisions: current.revisions + 1,
@@ -661,12 +671,12 @@ test("rejects an advisor completion after parent retype changes revision", async
     outcome: "rejected",
     reason: "parent-revision-mismatch",
   });
-  assert.equal(manager.getState().activeInterviewTask?.stableKind, "behavioral");
+  assert.equal(manager.getState().taskRuntime.parent?.stableKind, "behavioral");
 });
 
 test("rejects memory after reset but allows transcript-only runtime changes", async () => {
   const manager = new MeetingContextManager();
-  manager.setActiveInterviewTask(makeParent());
+  setTestActiveParent(manager, makeParent());
   const harness = new MeetingOrchestrationHarness(manager);
   const acceptedToken = createHarnessToken(
     harness,
@@ -716,11 +726,11 @@ test("rejects memory after reset but allows transcript-only runtime changes", as
 
 test("an exact correction token follows its one owned regeneration mutation", () => {
   const manager = new MeetingContextManager();
-  manager.setActiveInterviewTask(makeParent());
+  setTestActiveParent(manager, makeParent());
   const harness = new MeetingOrchestrationHarness(manager);
-  const current = manager.getState().activeInterviewTask;
+  const current = manager.getState().taskRuntime.parent;
   assert.ok(current);
-  manager.setActiveInterviewTask({
+  setTestActiveParent(manager, {
     ...current,
     stableKind: "project-deep-dive",
     revisions: current.revisions + 1,
@@ -732,9 +742,9 @@ test("an exact correction token follows its one owned regeneration mutation", ()
   );
   harness.activateOperation("correction", token.operationId);
 
-  const corrected = manager.getState().activeInterviewTask;
+  const corrected = manager.getState().taskRuntime.parent;
   assert.ok(corrected);
-  manager.setActiveInterviewTask({
+  setTestActiveParent(manager, {
     ...corrected,
     latestUsefulAnswer: "corrected answer",
     revisions: corrected.revisions + 1,
@@ -757,7 +767,7 @@ test("an exact correction token follows its one owned regeneration mutation", ()
 
 test("rejects correction completion after its corrected parent is replaced", () => {
   const manager = new MeetingContextManager();
-  manager.setActiveInterviewTask(makeParent());
+  setTestActiveParent(manager, makeParent());
   const harness = new MeetingOrchestrationHarness(manager);
   const token = createHarnessToken(
     harness,
@@ -765,7 +775,7 @@ test("rejects correction completion after its corrected parent is replaced", () 
     "correction"
   );
   harness.activateOperation("correction", token.operationId);
-  manager.setActiveInterviewTask(makeParent({ id: "replacement-parent" }));
+  setTestActiveParent(manager, makeParent({ id: "replacement-parent" }));
 
   assert.equal(
     rebaseRuntimeCommitTokenAfterOwnedParentMutation({
@@ -787,7 +797,7 @@ test("rejects correction completion after its corrected parent is replaced", () 
 
 test("rejects an old correction after a newer correction takes ownership", async () => {
   const manager = new MeetingContextManager();
-  manager.setActiveInterviewTask(makeParent());
+  setTestActiveParent(manager, makeParent());
   const harness = new MeetingOrchestrationHarness(manager);
   const token = createHarnessToken(
     harness,
@@ -833,9 +843,9 @@ function createAdvisorCompletion(
         return rejected(decision.reason);
       }
 
-      const current = contextManager.getState().activeInterviewTask;
+      const current = contextManager.getState().taskRuntime.parent;
       assert.ok(current);
-      contextManager.setActiveInterviewTask({
+      setTestActiveParent(contextManager, {
         ...current,
         latestUsefulAnswer: value,
         updatedAt: current.updatedAt + 1,

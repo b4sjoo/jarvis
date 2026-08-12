@@ -129,8 +129,10 @@ export function applyResponseOnlyTaskScopeToPromptContext(
       ? cloneParentReadContext(scope.parentReadContext)
       : undefined,
     interviewSessionBrief: context.interviewSessionBrief,
-    activeScreenTask: undefined,
-    activeInterviewTask: undefined,
+    taskRuntime: {
+      revision: context.taskRuntime.revision,
+      lastMutation: context.taskRuntime.lastMutation,
+    },
     activeMeetingTask: undefined,
     rollingSummary: "",
     userProfileContext: "",

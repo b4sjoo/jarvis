@@ -19,6 +19,7 @@ function buildPromptContext(): AdvisorPromptContext {
     rollingSummary: "",
     userProfileContext: "",
     glossaryText: "",
+    taskRuntime: { revision: 0 },
     latestTurn: {
       id: "turn-a",
       speaker: "them",

@@ -5,15 +5,24 @@ import type {
   ActiveInterviewParent,
   ActiveScreenTask,
 } from "../src/lib/meeting/types.js";
+import {
+  clearTestTaskRuntime,
+  setTestScreenAttachment,
+  setTestTaskRuntime,
+} from "./helpers/meeting-task-runtime.js";
 
 const now = Date.now();
 
 test("context manager exposes canonical active meeting task for screen state", () => {
   const manager = new MeetingContextManager();
 
-  manager.setActiveScreenTask(makeScreenTask());
+  setTestScreenAttachment(manager, makeScreenTask());
 
   const state = manager.getState();
+  assert.equal(
+    state.activeMeetingTask?.runtimeRevision,
+    state.taskRuntime.revision
+  );
   assert.equal(state.activeMeetingTask?.id, "screen_task_1");
   assert.equal(state.activeMeetingTask?.source, "screen");
   assert.equal(state.activeMeetingTask?.parent.questionType, "coding");
@@ -23,9 +32,9 @@ test("context manager exposes canonical active meeting task for screen state", (
 test("context manager exposes parent task as canonical id for mixed state", () => {
   const manager = new MeetingContextManager();
 
-  manager.setActiveMeetingTaskState({
-    activeScreenTask: makeScreenTask({ basedOnTurnIds: ["turn_1"] }),
-    activeInterviewTask: makeInterviewTask({
+  setTestTaskRuntime(manager, {
+    screenAttachment: makeScreenTask({ basedOnTurnIds: ["turn_1"] }),
+    parent: makeInterviewTask({
       source: "screen",
       stableKind: "coding",
       startObservationId: "obs_1",
@@ -33,22 +42,26 @@ test("context manager exposes parent task as canonical id for mixed state", () =
   });
 
   const state = manager.getState();
+  assert.equal(
+    state.activeMeetingTask?.runtimeRevision,
+    state.taskRuntime.revision
+  );
   assert.equal(state.activeMeetingTask?.id, "parent_1");
   assert.equal(state.activeMeetingTask?.source, "mixed");
   assert.equal(state.activeMeetingTask?.parent.id, "parent_1");
   assert.equal(state.activeMeetingTask?.screen?.activeScreenTaskId, "screen_task_1");
 });
 
-test("context manager clears canonical task when legacy task state is cleared", () => {
+test("context manager clears the canonical task runtime", () => {
   const manager = new MeetingContextManager();
 
-  manager.setActiveMeetingTaskState({
-    activeScreenTask: makeScreenTask(),
-    activeInterviewTask: makeInterviewTask(),
+  setTestTaskRuntime(manager, {
+    screenAttachment: makeScreenTask(),
+    parent: makeInterviewTask(),
   });
   assert.ok(manager.getState().activeMeetingTask);
 
-  manager.clearActiveMeetingTask();
+  clearTestTaskRuntime(manager);
   assert.equal(manager.getState().activeMeetingTask, undefined);
 });
 
@@ -64,8 +77,8 @@ test("scopes advisor transcript to a re-rooted parent boundary", () => {
   manager.addTranscriptTurn(
     makeTurn("turn_constraint", "Use offline and online evaluation")
   );
-  manager.setActiveMeetingTaskState({
-    activeInterviewTask: makeInterviewTask({
+  setTestTaskRuntime(manager, {
+    parent: makeInterviewTask({
       id: "parent_travel_agent",
       stableKind: "ai-ml-system-design",
       topic: "Design a self-evolving travel recommendation agent",

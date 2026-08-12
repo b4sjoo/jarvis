@@ -14,6 +14,7 @@ test("gives the advisor a focused ask plus bounded semantic context", () => {
     rollingSummary: "",
     userProfileContext: "",
     glossaryText: "",
+    taskRuntime: { revision: 0 },
     currentQuestionProjection: {
       answerFocusText: "explain which components need to change.",
       semanticEvidenceText:
@@ -41,6 +42,7 @@ test("makes the settled Mermaid preference explicit in the system-design contrac
       rollingSummary: "",
       userProfileContext: "",
       glossaryText: "",
+      taskRuntime: { revision: 0 },
       whiteboardFormatPreference: "mermaid",
     },
     { answerProfile: "system-design" }
@@ -62,6 +64,7 @@ test("blocks numeric QPS when General SD evidence has inventory and ratio only",
       rollingSummary: "",
       userProfileContext: "",
       glossaryText: "",
+      taskRuntime: { revision: 0 },
       currentQuestionProjection: {
         answerFocusText: "Refine the architecture.",
         semanticEvidenceText:

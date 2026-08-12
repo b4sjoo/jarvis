@@ -12,6 +12,7 @@ import type {
   ActiveInterviewParent,
   ActiveScreenTask,
 } from "../src/lib/meeting/types.js";
+import { setTestTaskRuntime } from "./helpers/meeting-task-runtime.js";
 
 test("clears an existing screen scope when a live voice turn opens a new parent", () => {
   const decision = decideAdvisorScreenScope({
@@ -56,9 +57,9 @@ test("keeps screen scope for child, resume, follow-up, and explicit actions", ()
 
 test("removes task-owned context from a new voice parent prompt projection", () => {
   const manager = new MeetingContextManager();
-  manager.setActiveMeetingTaskState({
-    activeScreenTask: makeScreenTask(),
-    activeInterviewTask: makeParent(),
+  setTestTaskRuntime(manager, {
+    screenAttachment: makeScreenTask(),
+    parent: makeParent(),
   });
   const original = manager.buildAdvisorPromptContext();
   const projected = applyAdvisorScreenScopeToPromptContext(
@@ -72,8 +73,8 @@ test("removes task-owned context from a new voice parent prompt projection", () 
 
   assert.ok(original.activeMeetingTask);
   assert.equal(projected.screenContext, "");
-  assert.equal(projected.activeScreenTask, undefined);
-  assert.equal(projected.activeInterviewTask, undefined);
+  assert.equal(projected.taskRuntime.screenAttachment, undefined);
+  assert.equal(projected.taskRuntime.parent, undefined);
   assert.equal(projected.activeMeetingTask, undefined);
   assert.equal(projected.interviewPlaybook, undefined);
   assert.equal(manager.getState().activeMeetingTask?.id, "parent-screen");

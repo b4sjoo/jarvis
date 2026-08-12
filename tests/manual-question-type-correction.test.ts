@@ -742,6 +742,7 @@ function makeActiveTask({
 }): ActiveMeetingTask {
   return {
     id: "meeting_task_1",
+    runtimeRevision: 1,
     source: "voice",
     parent: {
       id: "parent_1",

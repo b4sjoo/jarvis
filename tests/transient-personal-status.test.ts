@@ -13,6 +13,7 @@ function activeTask(
 ): ActiveMeetingTask {
   return {
     id: "parent-a",
+    runtimeRevision: 1,
     source: "voice",
     parent: {
       id: "parent-a",

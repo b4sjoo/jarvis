@@ -21,6 +21,7 @@ import {
   settleCurrentQuestion,
 } from "../src/lib/meeting/current-question-settlement.js";
 import { projectPrimaryAsk } from "../src/lib/meeting/primary-ask-projection.js";
+import { setTestActiveParent } from "./helpers/meeting-task-runtime.js";
 
 function logicalQuestion(
   text = "Design a food delivery service"
@@ -313,7 +314,7 @@ test("a committed boundary survives cancellation of its advisor owner", () => {
     source: "voice",
   });
   assert.ok(parent);
-  manager.setActiveInterviewTask(parent);
+  setTestActiveParent(manager, parent);
   const rebased = rebaseRuntimeCommitToken({
     token,
     snapshot: buildRuntimeCommitSnapshot({
@@ -324,7 +325,7 @@ test("a committed boundary survives cancellation of its advisor owner", () => {
   const committed = commitTaskBoundaryCandidate(candidate, parent.id);
 
   assert.equal(rebased.parentExpectation.kind, "exact");
-  assert.equal(manager.getState().activeInterviewTask?.id, parent.id);
+  assert.equal(manager.getState().taskRuntime.parent?.id, parent.id);
   assert.equal(taskBoundarySurvivesAdvisorOutcome(committed, "cancelled"), true);
 });
 
@@ -375,7 +376,7 @@ test("a precommitted parent re-roots prompt transcript at its first source turn"
     source: "voice",
   });
   assert.ok(parent);
-  manager.setActiveInterviewTask(parent);
+  setTestActiveParent(manager, parent);
 
   const prompt = manager.buildAdvisorPromptContext();
   assert.doesNotMatch(prompt.transcript, /queue using two stacks/);

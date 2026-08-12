@@ -3,7 +3,6 @@ import { TYPE_PROVIDER } from "@/types";
 import type { MemoryRejectSummary, MemoryRetrievalResult } from "@/lib/memory";
 import {
   ActiveQuestionTermCorrection,
-  ActiveScreenTask,
   InterviewSessionBrief,
   InterviewSessionContext,
   MeetingAssistantSettings,
@@ -1757,28 +1756,6 @@ export class SessionRecordingManager {
     );
   }
 
-  recordTaskSnapshot(task: ActiveScreenTask, traceId?: string) {
-    const session = this.getWritableSession({ traceId });
-    if (!session) return;
-
-    const path = `tasks/${sanitizeFilePart(task.id)}/task.json`;
-    session.recordedTaskIds.add(task.id);
-    if (traceId) session.recordedTraceIds.add(traceId);
-    this.enqueue(session, () => this.writeJson(session, path, task));
-    this.recordEvent(
-      "task-snapshot",
-      {
-        activeScreenTaskId: task.id,
-        kind: task.kind,
-        question: task.question,
-        observationId: task.observationId,
-      },
-      [path],
-      traceId,
-      task.id
-    );
-  }
-
   recordActiveMeetingTaskSnapshot(task: ActiveMeetingTask, traceId?: string) {
     const session = this.getWritableSession({ traceId });
     if (!session) return;
@@ -1802,6 +1779,7 @@ export class SessionRecordingManager {
       "active-meeting-task-snapshot",
       {
         activeMeetingTaskId: task.id,
+        activeMeetingTaskRuntimeRevision: task.runtimeRevision,
         activeMeetingTaskSource: task.source,
         activeMeetingParentId: task.parent.id,
         activeMeetingParentRevision: task.parent.revisions,

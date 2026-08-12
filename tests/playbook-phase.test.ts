@@ -350,6 +350,7 @@ test("manual next walks project deep dive through four coarse phases", () => {
       | "impact_lessons"
   ) => ({
     id: "task-project",
+    runtimeRevision: 1,
     source: "voice" as const,
     parent: {
       id: "parent-project",
@@ -388,6 +389,7 @@ test("manual next walks project deep dive through four coarse phases", () => {
 test("manual next deterministically advances general system design to whiteboard", () => {
   const decision = decideManualNextPhaseTransition({
     id: "task_1",
+    runtimeRevision: 1,
     source: "voice",
     parent: {
       id: "parent_1",
@@ -418,6 +420,7 @@ test("manual next deterministically advances general system design to whiteboard
 test("manual next advances AI/ML design without restarting requirements", () => {
   const decision = decideManualNextPhaseTransition({
     id: "task_2",
+    runtimeRevision: 1,
     source: "mixed",
     parent: {
       id: "parent_2",
@@ -518,6 +521,7 @@ test("advances coding to implementation only on an explicit implementation ask",
 test("manual next walks coding through three coarse stages without a fourth phase", () => {
   const baseline = decideManualNextPhaseTransition({
     id: "task-coding",
+    runtimeRevision: 1,
     source: "voice",
     parent: {
       id: "parent-coding",
@@ -532,6 +536,7 @@ test("manual next walks coding through three coarse stages without a fourth phas
   });
   const optimized = decideManualNextPhaseTransition({
     id: "task-coding",
+    runtimeRevision: 2,
     source: "voice",
     parent: {
       id: "parent-coding",
@@ -549,6 +554,7 @@ test("manual next walks coding through three coarse stages without a fourth phas
   });
   const implementation = decideManualNextPhaseTransition({
     id: "task-coding",
+    runtimeRevision: 3,
     source: "voice",
     parent: {
       id: "parent-coding",

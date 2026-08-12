@@ -14,6 +14,7 @@ import {
   replayOrchestrationSteps,
   type OrchestrationCommitResult,
 } from "./helpers/meeting-orchestration-harness.js";
+import { setTestActiveParent } from "./helpers/meeting-task-runtime.js";
 
 interface ReplayBaseline {
   schemaVersion: 1;
@@ -48,7 +49,7 @@ test("rejects replay steps that move the manual clock backward", async () => {
 
 async function runOutOfOrderAnswerReplay() {
   const manager = new MeetingContextManager();
-  manager.setActiveInterviewTask(makeParent());
+  setTestActiveParent(manager, makeParent());
   const harness = new MeetingOrchestrationHarness(manager);
   let visibleAnswerRevision = 0;
   let visibleAnswer = "initial answer";

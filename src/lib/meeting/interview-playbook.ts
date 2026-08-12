@@ -33,7 +33,7 @@ export interface SelectInterviewPlaybookInput {
   topicDomain?: TaskTopicDomain;
   projectAnchor?: string;
   classifierConfidence?: number;
-  activeScreenTask?: { playbook?: SelectedInterviewPlaybook };
+  activeTaskPlaybook?: SelectedInterviewPlaybook;
   interviewSessionBrief?: InterviewSessionBrief;
   interviewSessionContext?: InterviewSessionContext;
 }
@@ -45,15 +45,15 @@ export function selectInterviewPlaybook({
   topicDomain,
   projectAnchor,
   classifierConfidence,
-  activeScreenTask,
+  activeTaskPlaybook,
   interviewSessionBrief,
   interviewSessionContext,
 }: SelectInterviewPlaybookInput): SelectedInterviewPlaybook | undefined {
-  if (activeScreenTask?.playbook) {
+  if (activeTaskPlaybook) {
     return {
-      ...activeScreenTask.playbook,
+      ...activeTaskPlaybook,
       phase: "follow_up",
-      reason: `${activeScreenTask.playbook.reason}; reused active task playbook`,
+      reason: `${activeTaskPlaybook.reason}; reused active task playbook`,
     };
   }
 

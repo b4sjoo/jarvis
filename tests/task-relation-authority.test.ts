@@ -221,17 +221,20 @@ test("response-only current scope excludes generated continuity but retains read
       interviewTypes: ["mixed"],
     },
     activeMeetingTask,
-    activeInterviewTask: {
-      id: activeMeetingTask.parent.id,
-      source: "voice",
-      stableKind: "ai-ml-system-design",
-      topic: activeMeetingTask.parent.topic,
-      playbookPhase: "design_framing",
-      phaseProgress: {},
-      supportedFactAnchors: ["project-a"],
-      createdAt: 1,
-      updatedAt: 2,
-      revisions: 3,
+    taskRuntime: {
+      revision: 1,
+      parent: {
+        id: activeMeetingTask.parent.id,
+        source: "voice",
+        stableKind: "ai-ml-system-design",
+        topic: activeMeetingTask.parent.topic,
+        playbookPhase: "design_framing",
+        phaseProgress: {},
+        supportedFactAnchors: ["project-a"],
+        createdAt: 1,
+        updatedAt: 2,
+        revisions: 3,
+      },
     },
     rollingSummary: "parent summary",
     userProfileContext: "private parent facts",
@@ -247,7 +250,7 @@ test("response-only current scope excludes generated continuity but retains read
   assert.equal(scoped.transcript, "Them: Explain HNSW.");
   assert.deepEqual(scoped.advisorPromptSourceTurnIds, ["turn-new"]);
   assert.equal(scoped.activeMeetingTask, undefined);
-  assert.equal(scoped.activeInterviewTask, undefined);
+  assert.equal(scoped.taskRuntime.parent, undefined);
   assert.equal(scoped.screenContext, "");
   assert.equal(scoped.rollingSummary, "");
   assert.equal(scoped.userProfileContext, "");
@@ -339,6 +342,7 @@ test("response-only follow-up reads a bounded source-owned parent capsule", () =
       rollingSummary: "generated summary",
       userProfileContext: "profile",
       glossaryText: "HNSW",
+      taskRuntime: { revision: 0 },
     },
     scope
   );
@@ -410,6 +414,7 @@ test("bounded recent history keeps only the source-owned parent read capsule", (
       rollingSummary: "generated summary",
       userProfileContext: "profile",
       glossaryText: "",
+      taskRuntime: { revision: 0 },
     },
     scope
   );
@@ -427,6 +432,7 @@ test("bounded recent history keeps only the source-owned parent read capsule", (
 function task(): ActiveMeetingTask {
   return {
     id: "task-parent",
+    runtimeRevision: 1,
     source: "voice",
     parent: {
       id: "task-parent",

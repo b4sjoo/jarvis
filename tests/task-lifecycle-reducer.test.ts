@@ -116,11 +116,13 @@ function playbook(): SelectedInterviewPlaybook {
 
 function meetingTask(
   activeParent: ActiveInterviewParent,
-  activeScreen?: ActiveScreenTask
+  activeScreen?: ActiveScreenTask,
+  runtimeRevision = 3
 ) {
   return buildActiveMeetingTask({
-    activeInterviewTask: activeParent,
-    activeScreenTask: activeScreen,
+    parent: activeParent,
+    screenAttachment: activeScreen,
+    runtimeRevision,
   })!;
 }
 
@@ -195,6 +197,7 @@ test("atomically replaces a corrected parent under one settled plan", () => {
     currentLogicalQuestionUnitId: "question-a",
     currentLogicalQuestionRevision: 2,
     currentManualCorrectionRevision: 1,
+    currentTaskRuntimeRevision: 3,
     currentActiveInterviewTask: beforeParent,
     currentActiveScreenTask: beforeScreen,
   });
@@ -202,6 +205,7 @@ test("atomically replaces a corrected parent under one settled plan", () => {
   assert.equal(reduction.authorized, true);
   assert.equal(reduction.mutationApplied, true);
   assert.equal(reduction.reason, "committed");
+  assert.equal(reduction.activeMeetingTask?.runtimeRevision, 4);
   assert.equal(
     reduction.activeMeetingTask?.parent.questionType,
     "coding"
@@ -246,6 +250,7 @@ test("rejects a stale correction revision without changing the parent", () => {
     currentLogicalQuestionUnitId: "question-a",
     currentLogicalQuestionRevision: 2,
     currentManualCorrectionRevision: 2,
+    currentTaskRuntimeRevision: 3,
     currentActiveInterviewTask: beforeParent,
   });
 
@@ -255,7 +260,7 @@ test("rejects a stale correction revision without changing the parent", () => {
     "manual-correction-revision-mismatch"
   );
   assert.equal(
-    reduction.activeInterviewTask?.stableKind,
+    reduction.parent?.stableKind,
     "general-system-design"
   );
 });
@@ -284,13 +289,14 @@ test("rejects a stale parent revision without applying a partial transition", ()
     currentLogicalQuestionUnitId: "question-a",
     currentLogicalQuestionRevision: 2,
     currentManualCorrectionRevision: 1,
+    currentTaskRuntimeRevision: 3,
     currentActiveInterviewTask: currentParent,
   });
 
   assert.equal(reduction.authorized, false);
   assert.equal(reduction.reason, "parent-revision-mismatch");
   assert.equal(
-    reduction.activeInterviewTask?.stableKind,
+    reduction.parent?.stableKind,
     "general-system-design"
   );
 });
@@ -315,6 +321,7 @@ test("rejects an incomplete correction projection without mutating the parent", 
     currentLogicalQuestionUnitId: "question-a",
     currentLogicalQuestionRevision: 2,
     currentManualCorrectionRevision: 1,
+    currentTaskRuntimeRevision: 3,
     currentActiveInterviewTask: beforeParent,
   });
 
@@ -322,7 +329,7 @@ test("rejects an incomplete correction projection without mutating the parent", 
   assert.equal(reduction.mutationApplied, false);
   assert.equal(reduction.reason, "proposed-parent-required");
   assert.equal(
-    reduction.activeInterviewTask?.stableKind,
+    reduction.parent?.stableKind,
     "general-system-design"
   );
   assert.equal(reduction.activeMeetingTask, undefined);
@@ -367,6 +374,7 @@ test("rejects a retype that retains an incompatible whiteboard", () => {
     currentLogicalQuestionUnitId: "question-a",
     currentLogicalQuestionRevision: 2,
     currentManualCorrectionRevision: 1,
+    currentTaskRuntimeRevision: 3,
     currentActiveInterviewTask: beforeParent,
   });
 
