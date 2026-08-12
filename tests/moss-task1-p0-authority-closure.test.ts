@@ -1,5 +1,10 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 import { sha256 } from "../src/lib/calling/index.js";
 import {
@@ -13,18 +18,108 @@ import {
 
 const read = (path: string) => readFileSync(path, "utf8");
 
-test("Task 1 P0 migration makes authority, provenance, and deletion state durable", () => {
-  const migration = read("src-tauri/src/db/migrations/moss-case-authority-closure.sql");
+test("Task 1 P0 preserves applied migration 4 and moves later deletion work to migration 5", () => {
+  const migration4 = read("src-tauri/src/db/migrations/moss-case-authority-closure.sql");
+  const migration5 = read("src-tauri/src/db/migrations/moss-case-deletion-recovery.sql");
   const registry = read("src-tauri/src/db/main.rs");
-  assert.match(migration, /source_status TEXT NOT NULL DEFAULT 'current'/);
-  assert.match(migration, /CREATE TABLE case_statement_events/);
-  assert.match(migration, /commitment_detail_json/);
-  assert.match(migration, /deadline_detail_json/);
-  assert.match(migration, /item_refs_json TEXT NOT NULL DEFAULT '\[\]'/);
-  assert.match(migration, /CREATE TABLE material_deletion_operations/);
-  assert.match(migration, /'restore-failed'/);
-  assert.match(migration, /'finalize-failed'/);
+  assert.equal(
+    createHash("sha384").update(migration4).digest("hex"),
+    "4bfa7b72397bf831e22ced78555b84b4a9f47a0f4785b942b43e0ac628597e87d4a36ccd6f2ae68b915bafaa44d4f7dc"
+  );
+  assert.match(migration4, /source_status TEXT NOT NULL DEFAULT 'current'/);
+  assert.match(migration4, /CREATE TABLE case_statement_events/);
+  assert.match(migration4, /commitment_detail_json/);
+  assert.match(migration4, /deadline_detail_json/);
+  assert.match(migration4, /item_refs_json TEXT NOT NULL DEFAULT '\[\]'/);
+  assert.match(migration4, /CREATE TABLE material_deletion_operations/);
+  assert.doesNotMatch(migration4, /RENAME TO case_deletion_operations_v1/);
+  assert.match(migration5, /RENAME TO case_deletion_operations_v1/);
+  assert.match(migration5, /'restore-failed'/);
+  assert.match(migration5, /'finalize-failed'/);
+  assert.match(migration5, /WHEN state = 'failed' THEN 'restore-failed'/);
   assert.match(registry, /moss-case-authority-closure\.sql/);
+  assert.match(registry, /version:\s*5[\s\S]*moss-case-deletion-recovery\.sql/);
+});
+
+test("Task 1 P0 migration 5 upgrades an applied v4 deletion receipt", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "moss-migration-v5-"));
+  const database = join(directory, "upgrade.db");
+  const setup = join(directory, "setup.sql");
+  const migration5 = read("src-tauri/src/db/migrations/moss-case-deletion-recovery.sql");
+  try {
+    await writeFile(setup, `
+      PRAGMA foreign_keys = ON;
+      CREATE TABLE case_deletion_operations (
+        operation_id TEXT PRIMARY KEY NOT NULL,
+        case_id TEXT NOT NULL,
+        case_id_hash TEXT NOT NULL,
+        linked_session_ids_json TEXT NOT NULL DEFAULT '[]',
+        state TEXT NOT NULL CHECK (state IN (
+          'prepared', 'staged', 'db-deleted', 'complete', 'failed'
+        )),
+        error TEXT,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+      CREATE INDEX idx_case_deletion_operations_state
+        ON case_deletion_operations(state, updated_at);
+      INSERT INTO case_deletion_operations (
+        operation_id, case_id, case_id_hash, state, created_at, updated_at
+      ) VALUES ('operation-1', 'case-1', 'hash-1', 'failed', 1, 1);
+    `);
+    execFileSync("sqlite3", [database, `.read ${setup}`]);
+    const migrationPath = join(directory, "migration-5.sql");
+    await writeFile(migrationPath, migration5);
+    execFileSync("sqlite3", [database, `.read ${migrationPath}`]);
+    const state = execFileSync(
+      "sqlite3",
+      [database, "SELECT state FROM case_deletion_operations WHERE operation_id = 'operation-1';"],
+      { encoding: "utf8" }
+    ).trim();
+    assert.equal(state, "restore-failed");
+    const foreignKeyErrors = execFileSync(
+      "sqlite3",
+      [database, "PRAGMA foreign_key_check;"],
+      { encoding: "utf8" }
+    ).trim();
+    assert.equal(foreignKeyErrors, "");
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("Task 1 P0 migration chain creates a clean database through version 5", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "moss-migration-chain-"));
+  const database = join(directory, "fresh.db");
+  const migrations = [
+    "moss-runtime-baseline.sql",
+    "moss-case-preparation.sql",
+    "moss-case-hardening.sql",
+    "moss-case-authority-closure.sql",
+    "moss-case-deletion-recovery.sql",
+  ].map((filename) => read(`src-tauri/src/db/migrations/${filename}`));
+  try {
+    execFileSync("sqlite3", [database], {
+      input: migrations.join("\n"),
+      encoding: "utf8",
+    });
+    const tables = execFileSync(
+      "sqlite3",
+      [database, "SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name;"],
+      { encoding: "utf8" }
+    );
+    assert.match(tables, /case_statement_events/);
+    assert.match(tables, /material_deletion_operations/);
+    assert.match(tables, /snapshot_artifacts/);
+    const foreignKeyErrors = execFileSync(
+      "sqlite3",
+      [database, "PRAGMA foreign_key_check;"],
+      { encoding: "utf8" }
+    ).trim();
+    assert.equal(foreignKeyErrors, "");
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
 });
 
 test("Task 1 P0 commitment and deadline details use narrow structured contracts", () => {

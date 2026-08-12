@@ -26,5 +26,11 @@ pub fn migrations() -> Vec<Migration> {
             sql: include_str!("migrations/moss-case-authority-closure.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 5,
+            description: "harden_moss_case_deletion_recovery",
+            sql: include_str!("migrations/moss-case-deletion-recovery.sql"),
+            kind: MigrationKind::Up,
+        },
     ]
 }
