@@ -194,10 +194,26 @@ test("model settings expose provider and language choices without endpoint input
   assert.match(models, /STT_PROVIDERS\.map/);
   assert.match(models, /STT_LANGUAGES\.map/);
   assert.doesNotMatch(models, /<label>\s*Endpoint/);
-  assert.match(models, /<select/);
+  assert.match(models, /<MossSelect/);
+  assert.doesNotMatch(models, /<select/);
 
   const hook = source("src/hooks/useCallingAssistant.ts");
   assert.match(hook, /providerChanged/);
   assert.match(hook, /API key after changing/);
   assert.match(hook, /provider: saved\.chat\.runtime\.provider/);
+});
+
+test("desktop credentials use MOSS-owned narrow commands and readable failures", () => {
+  const routes = source("src/lib/calling/model-routes.ts");
+  const nativeStore = source("src-tauri/src/credential_store.rs");
+  const nativeShell = source("src-tauri/src/lib.rs");
+  const packageManifest = source("package.json");
+
+  assert.match(routes, /invoke<string \| null>\("get_provider_secret"/);
+  assert.match(routes, /MOSS could not \$\{action\} provider credentials/);
+  assert.match(nativeStore, /const ALLOWED_KEYS: \[&str; 4\]/);
+  assert.match(nativeStore, /get_generic_password/);
+  assert.match(nativeShell, /credential_store::get_provider_secret/);
+  assert.doesNotMatch(nativeShell, /tauri_plugin_keychain::init/);
+  assert.doesNotMatch(packageManifest, /tauri-plugin-keychain/);
 });

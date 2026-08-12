@@ -7,6 +7,7 @@ import {
   RotateCcw,
   X,
 } from "lucide-react";
+import MossSelect from "@/components/ui/MossSelect";
 import {
   PostCallReviewService,
   type LinkedCallSession,
@@ -92,10 +93,18 @@ export default function PostCallReviewPanel({
     <header className="case-section-toolbar">
       <div><h3>Post-call review</h3><p>Convert sourced call events into reviewed Case revisions.</p></div>
       <div>
-        <select value={sessionId} onChange={(event) => setSessionId(event.target.value)} aria-label="Completed call session">
-          <option value="">Choose a prepared call</option>
-          {sessions.map((session) => <option key={session.callSessionId} value={session.callSessionId}>{session.callPlanTitle} · {session.state}</option>)}
-        </select>
+        <MossSelect
+          ariaLabel="Completed call session"
+          value={sessionId}
+          onValueChange={setSessionId}
+          options={[
+            { value: "", label: "Choose a prepared call" },
+            ...sessions.map((session) => ({
+              value: session.callSessionId,
+              label: `${session.callPlanTitle} · ${session.state}`,
+            })),
+          ]}
+        />
         <button type="button" title="Refresh linked sessions" disabled={busy} onClick={() => service && void run(() => refresh(service, sessionId))}><RotateCcw size={14} /></button>
       </div>
     </header>

@@ -9,6 +9,7 @@ import {
   UserRoundPlus,
   X,
 } from "lucide-react";
+import MossSelect from "@/components/ui/MossSelect";
 import {
   PreparationConversationService,
   ReviewedCaseStateService,
@@ -173,7 +174,7 @@ export default function ReviewedStatePanel({ caseId, onRevisionChange }: Reviewe
     <header className="case-section-toolbar">
       <div><h3>Reviewed Case State</h3><p>Models propose. Human commands create authoritative revisions.</p></div>
       <div>
-        <select value={conversationId} onChange={(event) => setConversationId(event.target.value)} aria-label="Conversation source"><option value="">Choose conversation</option>{conversations.map((conversation) => <option key={conversation.id} value={conversation.id}>{conversation.title}</option>)}</select>
+        <MossSelect ariaLabel="Conversation source" value={conversationId} onValueChange={setConversationId} options={[{ value: "", label: "Choose conversation" }, ...conversations.map((conversation) => ({ value: conversation.id, label: conversation.title }))]} />
         <button type="button" disabled={busy || !conversationId} onClick={() => {
           const conversation = conversations.find((item) => item.id === conversationId);
           if (!service || !conversation) return;
@@ -203,16 +204,16 @@ export default function ReviewedStatePanel({ caseId, onRevisionChange }: Reviewe
 
     {statementForm ? <div className="case-modal-layer"><section className="case-modal wide" role="dialog" aria-modal="true">
       <header><div><span>Reviewable statement</span><h2>{statementForm.id ? "Edit proposal" : "Add statement proposal"}</h2></div><button type="button" onClick={() => setStatementForm(null)}><X size={17} /></button></header>
-      <div className="case-form-row"><label>Kind<select value={statementForm.kind} onChange={(event) => setStatementForm({ ...statementForm, kind: event.target.value as CaseStatementKind })}>{STATEMENT_KIND_OPTIONS.map((kind) => <option key={kind}>{kind}</option>)}</select></label><label>Claim state<select value={statementForm.claimState} onChange={(event) => setStatementForm({ ...statementForm, claimState: event.target.value as ClaimState })}>{CLAIM_STATE_OPTIONS.map((state) => <option key={state}>{state}</option>)}</select></label></div>
+      <div className="case-form-row"><label>Kind<MossSelect ariaLabel="Statement kind" value={statementForm.kind} onValueChange={(kind) => setStatementForm({ ...statementForm, kind: kind as CaseStatementKind })} options={STATEMENT_KIND_OPTIONS.map((kind) => ({ value: kind, label: kind }))} /></label><label>Claim state<MossSelect ariaLabel="Claim state" value={statementForm.claimState} onValueChange={(claimState) => setStatementForm({ ...statementForm, claimState: claimState as ClaimState })} options={CLAIM_STATE_OPTIONS.map((state) => ({ value: state, label: state }))} /></label></div>
       <label>Content<textarea autoFocus value={statementForm.content} onChange={(event) => setStatementForm({ ...statementForm, content: event.target.value })} /></label>
-      <div className="case-form-row thirds"><label>Allowed uses<textarea value={statementForm.allowedUses} onChange={(event) => setStatementForm({ ...statementForm, allowedUses: event.target.value })} placeholder="One per line" /></label><label>Allowed wording<textarea value={statementForm.allowedWording} onChange={(event) => setStatementForm({ ...statementForm, allowedWording: event.target.value })} /></label><label>Jurisdiction<input value={statementForm.jurisdiction} onChange={(event) => setStatementForm({ ...statementForm, jurisdiction: event.target.value })} /></label></div>
+      <div className="case-form-row thirds statement-constraints"><label>Allowed uses<textarea value={statementForm.allowedUses} onChange={(event) => setStatementForm({ ...statementForm, allowedUses: event.target.value })} placeholder="One per line" /></label><label>Allowed wording<textarea value={statementForm.allowedWording} onChange={(event) => setStatementForm({ ...statementForm, allowedWording: event.target.value })} /></label><label>Jurisdiction<textarea value={statementForm.jurisdiction} onChange={(event) => setStatementForm({ ...statementForm, jurisdiction: event.target.value })} /></label></div>
       <footer><button type="button" className="secondary" onClick={() => setStatementForm(null)}>Cancel</button><button type="button" disabled={busy} onClick={saveStatement}>Save proposal</button></footer>
     </section></div> : null}
 
     {partyForm ? <div className="case-modal-layer"><section className="case-modal" role="dialog" aria-modal="true">
       <header><div><span>Case party</span><h2>Add a confirmed party</h2></div><button type="button" onClick={() => setPartyForm(null)}><X size={17} /></button></header>
       <label>Name<input autoFocus value={partyForm.displayName} onChange={(event) => setPartyForm({ ...partyForm, displayName: event.target.value })} /></label>
-      <label>Role<select value={partyForm.role} onChange={(event) => setPartyForm({ ...partyForm, role: event.target.value as CaseParty["role"] })}>{PARTY_ROLES.map((role) => <option key={role}>{role}</option>)}</select></label>
+      <label>Role<MossSelect ariaLabel="Party role" value={partyForm.role} onValueChange={(role) => setPartyForm({ ...partyForm, role: role as CaseParty["role"] })} options={PARTY_ROLES.map((role) => ({ value: role, label: role }))} /></label>
       <label>Organization<input value={partyForm.organization} onChange={(event) => setPartyForm({ ...partyForm, organization: event.target.value })} /></label>
       <footer><button type="button" className="secondary" onClick={() => setPartyForm(null)}>Cancel</button><button type="button" disabled={busy} onClick={() => { if (!service) return; void run(async () => { await service.createParty({ caseId, ...partyForm }); await onRevisionChange(); setPartyForm(null); }); }}>Add party</button></footer>
     </section></div> : null}

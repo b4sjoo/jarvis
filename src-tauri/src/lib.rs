@@ -1,6 +1,7 @@
 mod case_material_extraction;
 mod case_privacy;
 mod content_storage;
+mod credential_store;
 mod db;
 mod preparation_transaction;
 mod recording;
@@ -100,13 +101,15 @@ pub fn run() {
         .manage(preparation_transaction::PreparationTransactionState::default())
         .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_keychain::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .invoke_handler(tauri::generate_handler![
             get_app_version,
             write_call_trace_log,
             exit_app,
             set_stealth_mode,
+            credential_store::get_provider_secret,
+            credential_store::save_provider_secret,
+            credential_store::remove_provider_secret,
             case_privacy::export_case_bundle,
             case_privacy::stage_case_deletion,
             case_privacy::restore_case_deletion,

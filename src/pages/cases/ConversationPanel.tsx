@@ -10,6 +10,7 @@ import {
   Settings2,
   X,
 } from "lucide-react";
+import MossSelect from "@/components/ui/MossSelect";
 import {
   PreparationConversationService,
   type CallPlan,
@@ -245,7 +246,7 @@ export default function ConversationPanel({
       {form ? <div className="case-modal-layer"><section className="case-modal" role="dialog" aria-modal="true">
         <header><div><span>Conversation session</span><h2>{selected ? "Edit session" : "New preparation session"}</h2></div><button type="button" onClick={() => setForm(null)}><X size={17} /></button></header>
         <label>Title <small>Defaults to the first message</small><input autoFocus value={form.title} onChange={(event) => setForm({ ...form, title: event.target.value })} /></label>
-        <label>Scope<select value={form.callPlanId} onChange={(event) => setForm({ ...form, callPlanId: event.target.value })}><option value="">Entire case</option>{plans.map((plan) => <option key={plan.id} value={plan.id}>{plan.title}</option>)}</select></label>
+        <label>Scope<MossSelect ariaLabel="Conversation scope" value={form.callPlanId} onValueChange={(callPlanId) => setForm({ ...form, callPlanId })} options={[{ value: "", label: "Entire case" }, ...plans.map((plan) => ({ value: plan.id, label: plan.title }))]} /></label>
         <footer><button type="button" className="secondary" onClick={() => setForm(null)}>Cancel</button><button type="button" disabled={busy} onClick={saveConversation}>{selected ? "Save" : "Create"}</button></footer>
       </section></div> : null}
     </section>

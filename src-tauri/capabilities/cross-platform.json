@@ -6,10 +6,6 @@
   "platforms": ["windows", "linux"],
   "permissions": [
     "core:default",
-    "keychain:default",
-    "keychain:allow-get-item",
-    "keychain:allow-save-item",
-    "keychain:allow-remove-item",
     "global-shortcut:allow-register",
     "global-shortcut:allow-unregister",
     "global-shortcut:allow-is-registered",

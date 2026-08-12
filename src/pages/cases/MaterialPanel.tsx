@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
+import MossSelect from "@/components/ui/MossSelect";
 import {
   Check,
   FileSearch,
@@ -93,10 +94,15 @@ export default function MaterialPanel({
     <header className="case-section-toolbar">
       <div><h3>Materials</h3><p>{eligibleCount} of {items.length} visible materials are snapshot eligible.</p></div>
       <div>
-        <select aria-label="Material scope" value={scope} onChange={(event) => setScope(event.target.value)}>
-          <option value="case">Entire case</option>
-          {plans.map((plan) => <option value={plan.id} key={plan.id}>{plan.title}</option>)}
-        </select>
+        <MossSelect
+          ariaLabel="Material scope"
+          value={scope}
+          onValueChange={setScope}
+          options={[
+            { value: "case", label: "Entire case" },
+            ...plans.map((plan) => ({ value: plan.id, label: plan.title })),
+          ]}
+        />
         <button type="button" disabled={busy} onClick={importFile}>{busy ? <LoaderCircle className="spin" size={15} /> : <Plus size={15} />} Import</button>
       </div>
     </header>

@@ -4,6 +4,8 @@
   width: 100%;
   height: 100%;
   overflow: hidden;
+  border: 0.5px solid var(--border-window);
+  border-radius: 16px;
   background: var(--surface-page);
   color: var(--text-primary);
 }
@@ -30,13 +32,11 @@
 }
 
 .app-mark {
-  width: 30px;
-  height: 30px;
-  flex: 0 0 30px;
+  width: 31px;
+  height: 31px;
+  flex: 0 0 31px;
   display: grid;
   place-items: center;
-  border-radius: 8px;
-  overflow: hidden;
   background: transparent;
 }
 
@@ -50,17 +50,18 @@
 .app-identity > span:last-child {
   min-width: 0;
   display: grid;
-  gap: 1px;
+  gap: 2px;
 }
 
 .app-identity strong {
-  font-size: 14px;
-  line-height: 1.2;
+  font-size: var(--font-section-title);
+  line-height: 16px;
 }
 
 .app-identity small {
   color: var(--text-muted);
-  font-size: 11px;
+  font-size: var(--font-ui);
+  line-height: 13px;
   white-space: nowrap;
 }
 
@@ -85,7 +86,7 @@
   background: transparent;
   color: var(--text-secondary);
   cursor: pointer;
-  font-size: 13px;
+  font-size: var(--font-body-large);
   font-weight: 600;
   text-align: left;
   white-space: nowrap;
@@ -145,7 +146,7 @@
 .workspace-header h1 {
   margin: 0;
   color: var(--text-primary);
-  font-size: 17px;
+  font-size: var(--font-display);
   line-height: 1.25;
 }
 
@@ -153,7 +154,7 @@
   margin: 3px 0 0;
   overflow: hidden;
   color: var(--text-muted);
-  font-size: 11px;
+  font-size: var(--font-ui);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -164,7 +165,7 @@
   align-items: center;
   gap: 7px;
   color: var(--text-muted);
-  font-size: 11px;
+  font-size: var(--font-ui);
   text-transform: capitalize;
 }
 
@@ -222,32 +223,22 @@
 .settings-page-header h2 {
   margin: 4px 0 5px;
   color: var(--text-primary);
-  font-size: 19px;
+  font-size: var(--font-page-title);
 }
 
 .settings-page-header p {
   max-width: 680px;
   margin: 0;
   color: var(--text-muted);
-  font-size: 12px;
+  font-size: var(--font-body);
   line-height: 1.5;
 }
 
 .settings-eyebrow {
   color: var(--text-muted);
-  font-size: 10px;
+  font-size: var(--font-small);
   font-weight: 750;
   text-transform: uppercase;
-}
-
-.settings-revision {
-  flex: 0 0 auto;
-  padding: 5px 8px;
-  border: 1px solid var(--border-subtle);
-  border-radius: 6px;
-  background: var(--surface-muted);
-  color: var(--text-muted);
-  font-size: 10px;
 }
 
 .settings-notice {
@@ -268,12 +259,12 @@
 }
 
 .settings-notice strong {
-  font-size: 12px;
+  font-size: var(--font-body);
 }
 
 .settings-notice span {
   color: var(--text-secondary);
-  font-size: 11px;
+  font-size: var(--font-ui);
   line-height: 1.4;
 }
 
@@ -284,7 +275,7 @@
   border-radius: 8px;
   background: var(--success-soft);
   color: var(--success-text);
-  font-size: 12px;
+  font-size: var(--font-body);
 }
 
 .settings-error {
@@ -316,7 +307,7 @@
   border-radius: 8px;
   background: var(--danger-soft);
   color: var(--danger-text);
-  font-size: 12px;
+  font-size: var(--font-body);
 }
 
 .empty-route {
@@ -336,13 +327,13 @@
 .empty-route h2 {
   margin: 12px 0 6px;
   color: var(--text-primary);
-  font-size: 18px;
+  font-size: var(--font-display-large);
 }
 
 .empty-route p {
   max-width: 520px;
   margin: 0;
-  font-size: 13px;
+  font-size: var(--font-body-large);
   line-height: 1.55;
 }
 
@@ -357,7 +348,7 @@
   border-top: 1px solid var(--border-subtle);
   background: var(--surface-raised);
   color: var(--text-faint);
-  font-size: 10px;
+  font-size: var(--font-small);
 }
 
 .app-statusbar > span {
@@ -370,6 +361,8 @@
 .companion-shell {
   width: 100%;
   height: 100%;
+  border: 0.5px solid var(--border-window);
+  border-radius: 16px;
   overflow: hidden;
   background: var(--surface-raised);
 }

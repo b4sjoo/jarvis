@@ -7,6 +7,7 @@ import {
   Speaker,
 } from "lucide-react";
 import type { CallingAssistantController } from "@/hooks/useCallingAssistant";
+import MossSelect from "@/components/ui/MossSelect";
 import {
   DEFAULT_VAD_CONFIG,
   applyAudioProfile,
@@ -60,14 +61,18 @@ function DeviceSelect({
     <label className="device-field">
       <span className="field-icon"><Icon size={17} /></span>
       <span className="field-copy"><strong>{label}</strong><small>{description}</small></span>
-      <select value={value ?? ""} onChange={(event) => onChange(event.target.value || null)}>
-        <option value="">System default</option>
-        {devices.map((device) => (
-          <option key={device.id} value={device.id}>
-            {device.name}{device.is_default ? " (Default)" : ""}
-          </option>
-        ))}
-      </select>
+      <MossSelect
+        ariaLabel={`${label} device`}
+        value={value ?? ""}
+        onValueChange={(deviceId) => onChange(deviceId || null)}
+        options={[
+          { value: "", label: "System default" },
+          ...devices.map((device) => ({
+            value: device.id,
+            label: `${device.name}${device.is_default ? " (Default)" : ""}`,
+          })),
+        ]}
+      />
     </label>
   );
 }
@@ -154,8 +159,8 @@ export default function AudioSettingsPage({
       setDraft(structuredClone(saved));
       setMessage(
         controller.runtime.state === "paused"
-          ? `Revision ${saved.revision} will apply when listening resumes.`
-          : `Audio revision ${saved.revision} saved.`
+          ? "Audio settings will apply when listening resumes."
+          : "Audio settings saved."
       );
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason));
@@ -197,7 +202,6 @@ export default function AudioSettingsPage({
       <section className="settings-section">
         <div className="settings-section-heading">
           <div><h2>Speech detection</h2><p>Start with a profile, then adjust advanced values only when a recording shows a problem.</p></div>
-          <span className="revision-badge">revision {controller.audioSettings.revision}</span>
         </div>
         <div className="profile-control" role="radiogroup" aria-label="Speech detection profile">
           {profiles.map((profile) => (
@@ -218,8 +222,7 @@ export default function AudioSettingsPage({
           ))}
         </div>
 
-        <details className="advanced-audio" open={draft.profile === "custom"}>
-          <summary>Advanced speech segmentation</summary>
+        <div className="advanced-audio">
           <div className="range-grid">
             <RangeField
               label="Speech sensitivity"
@@ -272,7 +275,7 @@ export default function AudioSettingsPage({
               onChange={(value) => setDraft((current) => updateVad(current, "max_recording_duration_secs", value))}
             />
           </div>
-        </details>
+        </div>
       </section>
 
       {blocked && <div className="inline-notice warning-notice">Pause the call before applying audio changes. Browsing these settings does not interrupt capture.</div>}

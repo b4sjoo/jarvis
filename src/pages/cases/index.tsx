@@ -9,9 +9,13 @@ import {
   X,
 } from "lucide-react";
 import { isTauriRuntime } from "@/lib/calling";
+import MossSelect from "@/components/ui/MossSelect";
 import {
   CasePreparationService,
   CasePrivacyService,
+  buildCallPlanTimeOptions,
+  localCallPlanScheduleToTimestamp,
+  timestampToLocalCallPlanSchedule,
   type CallPlan,
   type CallPreparationSnapshotBundle,
   type CaseRecord,
@@ -67,17 +71,20 @@ interface PlanForm {
   outcomes: string;
   questions: string;
   risks: string;
-  scheduledAt: string;
+  scheduledDate: string;
+  scheduledTime: string;
 }
 
 const blankCase = (): CaseForm => ({ title: "", objective: "", fallbacks: "", caseType: "" });
-const blankPlan = (): PlanForm => ({ title: "", objective: "", outcomes: "", questions: "", risks: "", scheduledAt: "" });
-
-const localDateTime = (timestamp?: number) => {
-  if (!timestamp) return "";
-  const offset = new Date(timestamp).getTimezoneOffset() * 60_000;
-  return new Date(timestamp - offset).toISOString().slice(0, 16);
-};
+const blankPlan = (): PlanForm => ({
+  title: "",
+  objective: "",
+  outcomes: "",
+  questions: "",
+  risks: "",
+  scheduledDate: "",
+  scheduledTime: "",
+});
 
 export default function CasesPage({
   onStartPreparedCall,
@@ -181,21 +188,28 @@ export default function CasesPage({
     });
   };
 
-  const editPlan = (plan: CallPlan) => setPlanForm({
-    id: plan.id,
-    revision: plan.rowRevision,
-    title: plan.title,
-    objective: plan.objective,
-    outcomes: plan.acceptableOutcomes.join("\n"),
-    questions: plan.questionsToAsk.join("\n"),
-    risks: plan.knownRisks.join("\n"),
-    scheduledAt: localDateTime(plan.scheduledAt),
-  });
+  const editPlan = (plan: CallPlan) => {
+    const schedule = timestampToLocalCallPlanSchedule(plan.scheduledAt);
+    setPlanForm({
+      id: plan.id,
+      revision: plan.rowRevision,
+      title: plan.title,
+      objective: plan.objective,
+      outcomes: plan.acceptableOutcomes.join("\n"),
+      questions: plan.questionsToAsk.join("\n"),
+      risks: plan.knownRisks.join("\n"),
+      scheduledDate: schedule.date,
+      scheduledTime: schedule.time,
+    });
+  };
 
   const submitPlan = () => {
     if (!service || !selectedCaseId || !planForm) return;
     void run(async () => {
-      const scheduledAt = planForm.scheduledAt ? new Date(planForm.scheduledAt).getTime() : undefined;
+      const scheduledAt = localCallPlanScheduleToTimestamp({
+        date: planForm.scheduledDate,
+        time: planForm.scheduledTime,
+      });
       if (planForm.id && planForm.revision) {
         const existing = plans.find((plan) => plan.id === planForm.id);
         if (!existing) throw new Error("Call plan was not found.");
@@ -297,7 +311,24 @@ export default function CasesPage({
 
       {planForm ? <div className="case-modal-layer"><section className="case-modal wide" role="dialog" aria-modal="true">
         <header><div><span>Call plan</span><h2>{planForm.id ? "Edit the planned call" : "Plan the next call"}</h2></div><button type="button" onClick={() => setPlanForm(null)}><X size={17} /></button></header>
-        <div className="case-form-row"><label>Title<input autoFocus value={planForm.title} onChange={(event) => setPlanForm({ ...planForm, title: event.target.value })} /></label><label>Scheduled time<input type="datetime-local" value={planForm.scheduledAt} onChange={(event) => setPlanForm({ ...planForm, scheduledAt: event.target.value })} /></label></div>
+        <div className="case-form-row plan-primary-fields">
+          <label>Title<input autoFocus value={planForm.title} onChange={(event) => setPlanForm({ ...planForm, title: event.target.value })} /></label>
+          <fieldset className="case-schedule-field">
+            <legend>Scheduled time</legend>
+            <div>
+              <input aria-label="Scheduled date" type="date" value={planForm.scheduledDate} onChange={(event) => setPlanForm({ ...planForm, scheduledDate: event.target.value })} />
+              <MossSelect
+                ariaLabel="Scheduled time"
+                value={planForm.scheduledTime}
+                onValueChange={(scheduledTime) => setPlanForm({ ...planForm, scheduledTime })}
+                options={[
+                  { value: "", label: "Select time" },
+                  ...buildCallPlanTimeOptions(planForm.scheduledTime),
+                ]}
+              />
+            </div>
+          </fieldset>
+        </div>
         <label>Objective<textarea value={planForm.objective} onChange={(event) => setPlanForm({ ...planForm, objective: event.target.value })} /></label>
         <div className="case-form-row thirds"><label>Acceptable outcomes<textarea value={planForm.outcomes} onChange={(event) => setPlanForm({ ...planForm, outcomes: event.target.value })} placeholder="One per line" /></label><label>Questions to ask<textarea value={planForm.questions} onChange={(event) => setPlanForm({ ...planForm, questions: event.target.value })} placeholder="One per line" /></label><label>Known risks<textarea value={planForm.risks} onChange={(event) => setPlanForm({ ...planForm, risks: event.target.value })} placeholder="One per line" /></label></div>
         <footer><button className="secondary" type="button" onClick={() => setPlanForm(null)}>Cancel</button><button type="button" disabled={busy} onClick={submitPlan}>Save plan</button></footer>

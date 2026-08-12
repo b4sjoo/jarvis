@@ -10,7 +10,7 @@ import {
   ThumbsDown,
   ThumbsUp,
 } from "lucide-react";
-import mossLogo from "../../../src-tauri/icons/icon.png";
+import mossLogo from "@/assets/moss-mark.png";
 import type { CallingAssistantController } from "@/hooks/useCallingAssistant";
 import { callStatusLabel } from "@/lib/calling";
 import "./calling.css";
@@ -93,7 +93,7 @@ export default function CallingPage({
             </div>
           </div>
         ) : (
-          <div className="empty-guidance"><Sparkles size={22} /><p>Guidance appears here after an actionable counterparty turn.</p></div>
+          <div className="empty-guidance"><img className="empty-guidance-mark" src={mossLogo} alt="" aria-hidden="true" /><p>Guidance appears here after an actionable counterparty turn.</p></div>
         )}
       </section>
 

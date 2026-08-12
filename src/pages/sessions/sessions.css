@@ -14,14 +14,14 @@
 .sessions-header h2 {
   margin: 4px 0 5px;
   color: var(--text-primary);
-  font-size: 19px;
+  font-size: var(--font-page-title);
 }
 
 .sessions-header p {
   max-width: 650px;
   margin: 0;
   color: var(--text-muted);
-  font-size: 12px;
+  font-size: var(--font-body);
   line-height: 1.5;
 }
 
@@ -47,7 +47,7 @@
   background: var(--surface-raised);
   color: var(--text-secondary);
   cursor: pointer;
-  font-size: 11px;
+  font-size: var(--font-ui);
   font-weight: 650;
 }
 
@@ -92,14 +92,14 @@
   min-width: 0;
   overflow: hidden;
   color: var(--text-primary);
-  font-size: 12px;
+  font-size: var(--font-body);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .session-primary small {
   color: var(--text-muted);
-  font-size: 10px;
+  font-size: var(--font-small);
 }
 
 .recording-state {
@@ -108,7 +108,7 @@
   border-radius: 4px;
   background: var(--surface-hover);
   color: var(--text-secondary);
-  font-size: 9px;
+  font-size: var(--font-small);
   font-weight: 700;
   text-transform: uppercase;
 }
@@ -131,7 +131,7 @@
 
 .session-integrity {
   color: var(--danger-text);
-  font-size: 10px;
+  font-size: var(--font-small);
 }
 
 .session-metrics {
@@ -139,7 +139,7 @@
   align-items: center;
   gap: 15px;
   color: var(--text-muted);
-  font-size: 10px;
+  font-size: var(--font-small);
   white-space: nowrap;
 }
 
@@ -173,11 +173,11 @@
 
 .empty-sessions strong {
   color: var(--text-secondary);
-  font-size: 13px;
+  font-size: var(--font-body-large);
 }
 
 .empty-sessions span {
-  font-size: 11px;
+  font-size: var(--font-ui);
 }
 
 @media (max-width: 900px) {

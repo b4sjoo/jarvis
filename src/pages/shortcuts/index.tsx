@@ -1,7 +1,6 @@
 import { Command, ShieldCheck } from "lucide-react";
 import {
   FIXED_SHORTCUT_DEFINITIONS,
-  SHORTCUT_SCHEME_VERSION,
   shortcutDisplayParts,
 } from "@/lib/calling";
 import "./shortcuts.css";
@@ -26,7 +25,6 @@ export default function ShortcutReferencePage({
             calls. Visible buttons and shortcuts invoke the same runtime commands.
           </p>
         </div>
-        <span className="settings-revision">Scheme {SHORTCUT_SCHEME_VERSION}</span>
       </header>
 
       <div className="settings-notice shortcut-notice">

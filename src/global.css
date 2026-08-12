@@ -5,7 +5,7 @@
   -webkit-font-smoothing: antialiased;
   color-scheme: light;
   color: #18181b;
-  background: #ffffff;
+  background: transparent;
   --surface-page: #ffffff;
   --surface-raised: #ffffff;
   --surface-sidebar: #fafafa;
@@ -19,6 +19,7 @@
   --border-subtle: #e4e4e7;
   --border-strong: #d4d4d8;
   --border-accent: #a1a1aa;
+  --border-window: rgb(63 63 70 / 10%);
   --accent-strong: #18181b;
   --accent-hover: #27272a;
   --accent-soft: #f4f4f5;
@@ -35,6 +36,17 @@
   --warning-soft: #fffbeb;
   --success-text: #216848;
   --success-soft: #eff9f3;
+  --font-micro: 10px;
+  --font-caption: 11px;
+  --font-small: 12px;
+  --font-ui: 13px;
+  --font-body: 14px;
+  --font-body-large: 15px;
+  --font-section-title: 16px;
+  --font-heading: 17px;
+  --font-display: 19px;
+  --font-display-large: 20px;
+  --font-page-title: 21px;
 }
 
 html,
@@ -47,12 +59,11 @@ body,
 }
 
 body {
-  background: var(--surface-page);
+  background: transparent;
 }
 
 button,
 input,
-select,
 textarea {
   font: inherit;
 }

@@ -36,7 +36,7 @@ import SessionsPage from "@/pages/sessions";
 import AppSettingsPage from "@/pages/settings";
 import CasesPage from "@/pages/cases";
 import type { CallPreparationSnapshotBundle } from "@/lib/preparation";
-import mossLogo from "../../../src-tauri/icons/icon.png";
+import mossLogo from "@/assets/moss-mark.png";
 import "./app.css";
 
 type AppSection =

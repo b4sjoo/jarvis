@@ -17,7 +17,6 @@
   align-items: center;
   gap: 14px;
   padding: 10px 0;
-  border-bottom: 1px solid var(--border-subtle);
 }
 
 .shortcut-icon {
@@ -36,12 +35,12 @@
 
 .shortcut-copy strong {
   color: var(--text-primary);
-  font-size: 13px;
+  font-size: var(--font-body-large);
 }
 
 .shortcut-copy small {
   color: var(--text-muted);
-  font-size: 11px;
+  font-size: var(--font-ui);
   line-height: 1.4;
 }
 
@@ -65,7 +64,7 @@
   color: var(--text-secondary);
   box-shadow: 0 1px 0 rgb(24 24 27 / 8%);
   font-family: inherit;
-  font-size: 11px;
+  font-size: var(--font-ui);
   font-weight: 700;
 }
 

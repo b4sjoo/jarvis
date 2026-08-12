@@ -13,26 +13,25 @@
   gap: 14px;
   min-height: 88px;
   padding: 14px 0;
-  border-bottom: 1px solid var(--border-subtle);
 }
 
 .app-setting-row h3 {
   margin: 0;
   color: var(--text-primary);
-  font-size: 13px;
+  font-size: var(--font-body-large);
 }
 
 .app-setting-row p {
   max-width: 650px;
   margin: 4px 0 0;
   color: var(--text-muted);
-  font-size: 11px;
+  font-size: var(--font-ui);
   line-height: 1.5;
 }
 
 .setting-value {
   color: var(--text-secondary);
-  font-size: 11px;
+  font-size: var(--font-ui);
   font-weight: 650;
 }
 
@@ -99,7 +98,7 @@
   gap: 7px;
   margin-top: 16px;
   color: var(--text-muted);
-  font-size: 10px;
+  font-size: var(--font-small);
 }
 
 .inline-shortcut {
@@ -110,7 +109,7 @@
   background: var(--surface-raised);
   color: var(--text-secondary);
   font: inherit;
-  font-size: 10px;
+  font-size: var(--font-small);
   font-weight: 700;
   white-space: nowrap;
 }

@@ -7,6 +7,7 @@ import {
   ShieldAlert,
   X,
 } from "lucide-react";
+import MossSelect from "@/components/ui/MossSelect";
 import {
   CallPreparationSnapshotService,
   diffSnapshotBundles,
@@ -81,7 +82,7 @@ export default function SnapshotPanel({ caseId, plans, onStartCall }: SnapshotPa
   return <section className="snapshot-panel">
     <header className="case-section-toolbar">
       <div><h3>Call preparation snapshots</h3><p>Freeze reviewed state into one explicit runtime handoff.</p></div>
-      <div><select value={planId} onChange={(event) => setPlanId(event.target.value)} aria-label="Call plan to prepare"><option value="">Choose call plan</option>{plans.map((plan) => <option key={plan.id} value={plan.id}>{plan.title}</option>)}</select><button type="button" disabled={busy || !planId} onClick={() => { if (!service || !planId) return; void run(async () => { const compiled = await service.compileDraft({ caseId, callPlanId: planId }); await refresh(service, compiled.id); }); }}><RefreshCw size={14} className={busy ? "spin" : ""} /> Compile draft</button></div>
+      <div><MossSelect ariaLabel="Call plan to prepare" value={planId} onValueChange={setPlanId} options={[{ value: "", label: "Choose call plan" }, ...plans.map((plan) => ({ value: plan.id, label: plan.title }))]} /><button type="button" disabled={busy || !planId} onClick={() => { if (!service || !planId) return; void run(async () => { const compiled = await service.compileDraft({ caseId, callPlanId: planId }); await refresh(service, compiled.id); }); }}><RefreshCw size={14} className={busy ? "spin" : ""} /> Compile draft</button></div>
     </header>
     {error ? <div className="case-inline-error" role="alert"><span>{error}</span><button type="button" onClick={() => setError(null)}><X size={13} /></button></div> : null}
     <div className="snapshot-layout">

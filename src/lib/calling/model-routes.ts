@@ -1,4 +1,4 @@
-import { getItem, saveItem } from "tauri-plugin-keychain";
+import { invoke } from "@tauri-apps/api/core";
 import {
   getChatProvider,
   getSttProvider,
@@ -153,10 +153,25 @@ export function saveModelRouteSettings(settings: ModelRouteSettings) {
 
 const browserSecrets = new Map<string, string>();
 
+const credentialFailure = (action: "read" | "save", cause: unknown) => {
+  console.error(`[moss-credentials] Failed to ${action} provider credentials.`, cause);
+  const nextStep =
+    action === "read"
+      ? "Restart MOSS, then open Models and save the API key again."
+      : "Open Models and try saving the API key again.";
+  return new Error(
+    `MOSS could not ${action} provider credentials in the system keychain. ${nextStep}`
+  );
+};
+
 export async function loadProviderSecret(route: ChatRouteId | "stt") {
   const key = secretKey(route);
   if (!isTauriRuntime()) return browserSecrets.get(key) ?? "";
-  return (await getItem(key)) ?? "";
+  try {
+    return (await invoke<string | null>("get_provider_secret", { key })) ?? "";
+  } catch (cause) {
+    throw credentialFailure("read", cause);
+  }
 }
 
 export async function saveProviderSecret(route: ChatRouteId | "stt", secret: string) {
@@ -165,5 +180,9 @@ export async function saveProviderSecret(route: ChatRouteId | "stt", secret: str
     browserSecrets.set(key, secret);
     return;
   }
-  await saveItem(key, secret);
+  try {
+    await invoke("save_provider_secret", { key, secret });
+  } catch (cause) {
+    throw credentialFailure("save", cause);
+  }
 }

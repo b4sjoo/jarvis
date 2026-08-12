@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { KeyRound, Save, Server, ShieldCheck } from "lucide-react";
+import MossSelect from "@/components/ui/MossSelect";
 import type {
   CallingAssistantController,
   CallingProviderSecrets,
@@ -93,7 +94,8 @@ export default function ModelSettingsPage({
     try {
       const saved = await controller.saveConfiguration(draft, secrets);
       setSecrets({ runtime: "", advisor: "", complex: "", stt: "" });
-      setMessage(`Model routes saved as revision ${saved.revision}.`);
+      setDraft(structuredClone(saved));
+      setMessage("Model routes saved.");
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
@@ -112,7 +114,6 @@ export default function ModelSettingsPage({
             Complex Task handles deliberate work, and STT transcribes audio.
           </p>
         </div>
-        <span className="settings-revision">Revision {controller.settings.revision}</span>
       </header>
 
       <div className="settings-notice">
@@ -135,18 +136,17 @@ export default function ModelSettingsPage({
             </legend>
             <label>
               Provider
-              <select
+              <MossSelect
+                ariaLabel={`${routeLabels[route]} provider`}
                 value={draft.chat[route].provider}
-                onChange={(event) =>
-                  updateChatProvider(route, event.target.value as ChatProviderId)
+                onValueChange={(provider) =>
+                  updateChatProvider(route, provider as ChatProviderId)
                 }
-              >
-                {CHAT_PROVIDERS.map((provider) => (
-                  <option value={provider.id} key={provider.id}>
-                    {provider.name}
-                  </option>
-                ))}
-              </select>
+                options={CHAT_PROVIDERS.map((provider) => ({
+                  value: provider.id,
+                  label: provider.name,
+                }))}
+              />
             </label>
             <label>
               Model
@@ -194,18 +194,17 @@ export default function ModelSettingsPage({
           </legend>
           <label>
             Provider
-            <select
+            <MossSelect
+              ariaLabel="Speech-to-Text provider"
               value={draft.stt.provider}
-              onChange={(event) =>
-                updateSttProvider(event.target.value as SttProviderId)
+              onValueChange={(provider) =>
+                updateSttProvider(provider as SttProviderId)
               }
-            >
-              {STT_PROVIDERS.map((provider) => (
-                <option value={provider.id} key={provider.id}>
-                  {provider.name}
-                </option>
-              ))}
-            </select>
+              options={STT_PROVIDERS.map((provider) => ({
+                value: provider.id,
+                label: provider.name,
+              }))}
+            />
           </label>
           <label>
             Model
@@ -222,21 +221,20 @@ export default function ModelSettingsPage({
           </label>
           <label>
             Language
-            <select
+            <MossSelect
+              ariaLabel="Speech-to-Text language"
               value={draft.stt.language}
-              onChange={(event) =>
+              onValueChange={(language) =>
                 setDraft((current) => ({
                   ...current,
-                  stt: { ...current.stt, language: event.target.value },
+                  stt: { ...current.stt, language },
                 }))
               }
-            >
-              {STT_LANGUAGES.map((language) => (
-                <option value={language.code} key={language.code || "auto"}>
-                  {language.flag} {language.name}
-                </option>
-              ))}
-            </select>
+              options={STT_LANGUAGES.map((language) => ({
+                value: language.code,
+                label: `${language.flag} ${language.name}`,
+              }))}
+            />
           </label>
           <label>
             API key

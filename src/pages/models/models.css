@@ -24,13 +24,13 @@
   width: 100%;
   padding: 0 4px;
   color: var(--text-primary);
-  font-size: 14px;
+  font-size: var(--font-section-title);
   font-weight: 700;
 }
 
 .model-route legend span {
   margin-left: auto;
-  font-size: 11px;
+  font-size: var(--font-ui);
   font-weight: 650;
 }
 
@@ -47,33 +47,31 @@
   gap: 6px;
   margin-top: 13px;
   color: var(--text-muted);
-  font-size: 12px;
+  font-size: var(--font-body);
   font-weight: 650;
 }
 
-.model-route input,
-.model-route select {
+.model-route input {
   width: 100%;
   min-width: 0;
-  height: 38px;
+  height: 42px;
   padding: 0 10px;
   border: 1px solid var(--border-strong);
-  border-radius: 8px;
+  border-radius: 12px;
   background: var(--surface-input);
   color: var(--text-primary);
   font: inherit;
   font-weight: 500;
 }
 
-.model-route select {
-  appearance: auto;
-}
-
-.model-route input:focus,
-.model-route select:focus {
+.model-route input:focus {
   border-color: var(--focus-ring);
   outline: 2px solid var(--accent-soft);
   outline-offset: 0;
+}
+
+.model-route .moss-select-trigger {
+  font-weight: 500;
 }
 
 .model-route input:disabled {

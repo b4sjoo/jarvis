@@ -10,13 +10,14 @@
     "frontendDist": "../dist"
   },
   "app": {
+    "macOSPrivateApi": true,
     "windows": [
       {
         "title": "MOSS - Calling Helper",
         "width": 1080,
         "height": 760,
         "decorations": false,
-        "transparent": false,
+        "transparent": true,
         "alwaysOnTop": false,
         "resizable": true,
         "visibleOnAllWorkspaces": true,

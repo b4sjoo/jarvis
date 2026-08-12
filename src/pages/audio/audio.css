@@ -1,6 +1,5 @@
 .settings-section {
-  padding: 0 0 24px;
-  border-bottom: 1px solid var(--border-subtle);
+  padding: 0 0 26px;
 }
 
 .settings-section + .settings-section {
@@ -13,18 +12,20 @@
   justify-content: space-between;
   gap: 18px;
   margin-bottom: 16px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--border-subtle);
 }
 
 .settings-section-heading h2 {
   margin: 0;
   color: var(--text-primary);
-  font-size: 15px;
+  font-size: var(--font-heading);
 }
 
 .settings-section-heading p {
   margin: 4px 0 0;
   color: var(--text-muted);
-  font-size: 12px;
+  font-size: var(--font-body);
   line-height: 1.45;
 }
 
@@ -48,24 +49,20 @@
 }
 
 .field-copy strong {
-  font-size: 13px;
+  font-size: var(--font-body-large);
 }
 
 .field-copy small {
   color: var(--text-muted);
-  font-size: 11px;
+  font-size: var(--font-ui);
   line-height: 1.35;
 }
 
-.device-field select {
+.device-field .moss-select-trigger {
   width: 100%;
-  height: 38px;
-  padding: 0 10px;
-  border: 1px solid var(--border-strong);
-  border-radius: 8px;
-  background: var(--surface-input);
+  height: 42px;
   color: var(--text-primary);
-  font-size: 12px;
+  font-size: var(--font-body);
 }
 
 .profile-control {
@@ -108,39 +105,20 @@
 }
 
 .profile-option strong {
-  font-size: 13px;
+  font-size: var(--font-body-large);
 }
 
 .profile-option small {
   color: var(--text-muted);
-  font-size: 10px;
+  font-size: var(--font-small);
 }
 
 .profile-option-active small {
   color: rgb(255 255 255 / 68%);
 }
 
-.revision-badge {
-  flex: 0 0 auto;
-  padding: 4px 7px;
-  border: 1px solid var(--border-subtle);
-  border-radius: 6px;
-  background: var(--surface-muted);
-  color: var(--text-muted);
-  font-size: 10px;
-}
-
 .advanced-audio {
-  margin-top: 14px;
-  border-top: 1px solid var(--border-subtle);
-}
-
-.advanced-audio summary {
-  padding: 14px 0;
-  color: var(--text-secondary);
-  cursor: pointer;
-  font-size: 12px;
-  font-weight: 650;
+  margin-top: 16px;
 }
 
 .range-grid {
@@ -162,17 +140,17 @@
 }
 
 .range-field strong {
-  font-size: 12px;
+  font-size: var(--font-body);
 }
 
 .range-field small {
   color: var(--text-muted);
-  font-size: 10px;
+  font-size: var(--font-small);
 }
 
 .range-field output {
   color: var(--text-secondary);
-  font-size: 11px;
+  font-size: var(--font-ui);
   text-align: right;
 }
 
@@ -189,7 +167,7 @@
   padding: 10px 12px;
   border: 1px solid var(--border-subtle);
   border-radius: 8px;
-  font-size: 11px;
+  font-size: var(--font-ui);
 }
 
 .warning-notice {
@@ -223,7 +201,7 @@
     grid-template-columns: 24px minmax(0, 1fr);
   }
 
-  .device-field select,
+  .device-field .moss-select-trigger,
   .range-field input {
     grid-column: 1 / -1;
   }

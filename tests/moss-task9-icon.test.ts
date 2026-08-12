@@ -37,6 +37,12 @@ test("desktop icon assets derive from one square RGBA identity", () => {
     [...binary("src-tauri/icons/icon.ico").subarray(0, 4)],
     [0, 0, 1, 0]
   );
+
+  assert.deepEqual(readPngHeader("src/assets/moss-mark.png"), {
+    width: 273,
+    height: 248,
+    colorType: 6,
+  });
 });
 
 test("Tauri bundles only generated desktop icon variants", () => {
@@ -65,11 +71,16 @@ test("macOS development restores the signed-off icon after leaving stealth mode"
 test("the application shell and companion use the signed-off MOSS identity", () => {
   const appShell = binary("src/pages/app/index.tsx").toString("utf8");
   const companion = binary("src/pages/calling/index.tsx").toString("utf8");
+  const appStyles = binary("src/pages/app/app.css").toString("utf8");
+  const companionStyles = binary("src/pages/calling/calling.css").toString("utf8");
 
   for (const source of [appShell, companion]) {
-    assert.match(source, /src-tauri\/icons\/icon\.png/);
+    assert.match(source, /@\/assets\/moss-mark\.png/);
     assert.match(source, /<img src=\{mossLogo\} alt="" aria-hidden="true"/);
   }
+  assert.match(companion, /className="empty-guidance-mark"/);
   assert.doesNotMatch(appShell, /className="app-mark"><Headphones/);
   assert.doesNotMatch(companion, /className="brand-mark"><Headphones/);
+  assert.match(appStyles, /\.app-mark\s*\{[^}]*width: 31px;[^}]*height: 31px/s);
+  assert.match(companionStyles, /\.brand-mark\s*\{[^}]*width: 31px;[^}]*height: 31px/s);
 });

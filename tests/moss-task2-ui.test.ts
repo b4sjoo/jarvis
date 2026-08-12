@@ -14,9 +14,16 @@ const source = (path: string) =>
 
 test("control and companion profiles keep distinct window responsibilities", () => {
   const tauriConfig = JSON.parse(source("src-tauri/tauri.conf.json"));
+  const appStyles = source("src/pages/app/app.css");
   assert.equal(MOSS_WINDOW_PROFILES.control.alwaysOnTop, false);
   assert.equal(MOSS_WINDOW_PROFILES.companion.alwaysOnTop, true);
   assert.equal(tauriConfig.app.windows[0].alwaysOnTop, false);
+  assert.equal(tauriConfig.app.windows[0].transparent, true);
+  assert.equal(tauriConfig.app.windows[0].shadow, true);
+  assert.match(appStyles, /\.app-shell\s*\{[^}]*border-radius: 16px/s);
+  assert.match(appStyles, /\.app-shell\s*\{[^}]*border: 0\.5px solid var\(--border-window\)/s);
+  assert.match(appStyles, /\.companion-shell\s*\{[^}]*border-radius: 16px/s);
+  assert.match(appStyles, /\.companion-shell\s*\{[^}]*border: 0\.5px solid var\(--border-window\)/s);
   assert.ok(
     MOSS_WINDOW_PROFILES.control.width > MOSS_WINDOW_PROFILES.companion.width
   );
@@ -53,6 +60,19 @@ test("audio profiles map to bounded native VAD values", () => {
   assert.equal(bounded.vadConfig.sensitivity_rms, 1);
   assert.equal(bounded.vadConfig.silence_duration_ms, 100);
   assert.equal(bounded.vadConfig.minimum_speech_duration_ms, 5_000);
+});
+
+test("audio settings keep advanced speech controls visible without internal revisions", () => {
+  const audioPage = source("src/pages/audio/index.tsx");
+  const audioStyles = source("src/pages/audio/audio.css");
+  assert.match(audioPage, /<div className="advanced-audio">/);
+  assert.doesNotMatch(audioPage, /<details|<summary|revision-badge|Audio revision/);
+  assert.match(
+    audioStyles,
+    /\.settings-section-heading\s*\{[^}]*border-bottom: 1px solid var\(--border-subtle\)/s
+  );
+  assert.doesNotMatch(audioStyles, /\.settings-section\s*\{[^}]*border-bottom/s);
+  assert.doesNotMatch(audioStyles, /\.advanced-audio\s*\{[^}]*border-top/s);
 });
 
 test("model routes and shortcuts live outside the companion surface", () => {

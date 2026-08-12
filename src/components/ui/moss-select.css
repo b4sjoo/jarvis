@@ -1,0 +1,129 @@
+.moss-select-trigger {
+  display: inline-flex;
+  width: 100%;
+  min-width: 0;
+  height: 42px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 0 12px 0 13px;
+  overflow: hidden;
+  border: 1px solid var(--border-strong);
+  border-radius: 12px;
+  background: var(--surface-input);
+  color: var(--text-primary);
+  font-size: var(--font-ui);
+  line-height: 1;
+  text-align: left;
+  cursor: pointer;
+}
+
+.moss-select-trigger > span:first-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.moss-select-trigger:hover:not(:disabled) {
+  border-color: var(--border-accent);
+  background: var(--surface-hover);
+}
+
+.moss-select-trigger[data-state="open"] {
+  border-color: var(--border-accent);
+}
+
+.moss-select-trigger:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.moss-select-chevron {
+  display: inline-flex;
+  flex: 0 0 auto;
+  color: var(--text-faint);
+}
+
+.moss-select-content {
+  z-index: 100;
+  width: var(--radix-select-trigger-width);
+  max-height: min(336px, var(--radix-select-content-available-height));
+  overflow: hidden;
+  border: 1px solid var(--border-strong);
+  border-radius: 12px;
+  background: var(--surface-raised);
+  box-shadow: 0 14px 36px rgb(24 24 27 / 14%);
+  transform-origin: var(--radix-select-content-transform-origin);
+  animation: moss-select-open 110ms ease-out;
+}
+
+.moss-select-viewport {
+  padding: 4px;
+}
+
+.moss-select-item {
+  position: relative;
+  display: flex;
+  width: 100%;
+  min-height: 42px;
+  align-items: center;
+  padding: 0 34px 0 11px;
+  border-radius: 10px;
+  color: var(--text-primary);
+  font-size: var(--font-ui);
+  line-height: 1.25;
+  cursor: default;
+  outline: none;
+  user-select: none;
+}
+
+.moss-select-item[data-highlighted] {
+  background: var(--surface-hover);
+}
+
+.moss-select-item:focus-visible {
+  outline: none;
+}
+
+.moss-select-item[data-disabled] {
+  color: var(--text-faint);
+  opacity: 0.65;
+}
+
+.moss-select-item[data-state="checked"] {
+  font-weight: 650;
+}
+
+.moss-select-indicator {
+  position: absolute;
+  right: 11px;
+  display: inline-flex;
+  color: var(--text-secondary);
+}
+
+.moss-select-scroll-button {
+  display: flex;
+  height: 28px;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+}
+
+@keyframes moss-select-open {
+  from {
+    opacity: 0;
+    transform: scale(0.985);
+  }
+
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .moss-select-content {
+    animation: none;
+  }
+}

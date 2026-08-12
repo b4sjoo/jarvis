@@ -59,5 +59,6 @@ test("Task 1D conversation UI has a centered icon action and reversible workspac
   assert.match(panel, /event\.key === "Escape"/);
   assert.match(page, /case-workspace\$\{conversationExpanded \? " conversation-expanded"/);
   assert.match(styles, /\.case-workspace\.conversation-expanded > \.case-sidebar/);
+  assert.match(styles, /\.preparation-conversations\.expanded > \.conversation-index \{ display: none; \}/);
   assert.match(styles, /\.conversation-index > \.case-section-toolbar button \{ display: grid;[^}]*place-items: center/s);
 });
