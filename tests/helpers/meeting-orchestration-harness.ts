@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { MeetingContextManager } from "../../src/lib/meeting/context-manager.js";
 import {
   normalizeCanonicalQuestionType,
@@ -17,7 +18,8 @@ export type OrchestrationOperationKind =
   | "screen"
   | "memory"
   | "correction"
-  | "recording";
+  | "recording"
+  | "runtime";
 
 export type OrchestrationOperationOutcome = "committed" | "rejected";
 
@@ -34,6 +36,10 @@ export interface RuntimeStateDigest {
   whiteboardRevision?: number;
   latestSuggestionTraceId?: string;
   recordingSessionId?: string;
+  generationOwnerId?: string;
+  generationRevision?: number;
+  activeAdvisorJobId?: string;
+  activeOperationIds?: Partial<Record<OrchestrationOperationKind, string>>;
 }
 
 export interface OrchestrationCommitResult {
@@ -45,7 +51,14 @@ export interface OrchestrationJournalEntry {
   order: number;
   operationId: string;
   kind: OrchestrationOperationKind;
-  event: "started" | "resolved" | "committed" | "rejected" | "failed";
+  event:
+    | "started"
+    | "resolved"
+    | "committed"
+    | "rejected"
+    | "failed"
+    | "checkpoint";
+  occurredAt: number;
   reason?: string;
   state: RuntimeStateDigest;
 }
@@ -71,6 +84,19 @@ interface StartOperationInput<T> {
   }): OrchestrationCommitResult | Promise<OrchestrationCommitResult>;
 }
 
+export interface OrchestrationReplayStep {
+  id: string;
+  atMs: number;
+  run(harness: MeetingOrchestrationHarness): void | Promise<void>;
+}
+
+export interface CanonicalOrchestrationDigest {
+  schemaVersion: 1;
+  algorithm: "sha256";
+  hash: string;
+  canonicalPayload: string;
+}
+
 /**
  * Deterministic async driver for runtime characterization tests.
  *
@@ -90,6 +116,8 @@ export class MeetingOrchestrationHarness {
   private runtimeEpoch = 1;
   private latestSuggestionTraceId?: string;
   private recordingSessionId?: string;
+  private generationOwnerId?: string;
+  private generationRevision?: number;
   private journalSequence = 0;
   private readonly journal: OrchestrationJournalEntry[] = [];
 
@@ -191,6 +219,8 @@ export class MeetingOrchestrationHarness {
     this.runtimeEpoch += 1;
     this.activeAdvisorJobId = undefined;
     this.activeOperationIds.clear();
+    this.generationOwnerId = undefined;
+    this.generationRevision = undefined;
     return this.runtimeEpoch;
   }
 
@@ -200,6 +230,15 @@ export class MeetingOrchestrationHarness {
 
   setRecordingSessionId(sessionId: string | undefined) {
     this.recordingSessionId = sessionId;
+  }
+
+  setGenerationOwner(ownerId: string | undefined, revision?: number) {
+    this.generationOwnerId = ownerId;
+    this.generationRevision = ownerId ? revision : undefined;
+  }
+
+  recordCheckpoint(id: string, reason?: string) {
+    this.record(id, "runtime", "checkpoint", reason);
   }
 
   getStateDigest(): RuntimeStateDigest {
@@ -220,6 +259,45 @@ export class MeetingOrchestrationHarness {
       whiteboardRevision: task?.parent.whiteboardArtifact?.revision,
       latestSuggestionTraceId: this.latestSuggestionTraceId,
       recordingSessionId: this.recordingSessionId,
+      generationOwnerId: this.generationOwnerId,
+      generationRevision: this.generationRevision,
+      activeAdvisorJobId: this.activeAdvisorJobId,
+      activeOperationIds: Object.fromEntries(
+        [...this.activeOperationIds].sort(([left], [right]) =>
+          left.localeCompare(right)
+        )
+      ),
+    };
+  }
+
+  getCanonicalDigest(): CanonicalOrchestrationDigest {
+    const aliases = new Map<string, string>();
+    const aliasSession = (sessionId: string) => {
+      let alias = aliases.get(sessionId);
+      if (!alias) {
+        alias = `session-${aliases.size + 1}`;
+        aliases.set(sessionId, alias);
+      }
+      return alias;
+    };
+    const normalizeState = (state: RuntimeStateDigest) => ({
+      ...state,
+      sessionId: aliasSession(state.sessionId),
+    });
+    const journal = this.getJournal().map((entry) => ({
+        ...entry,
+        state: normalizeState(entry.state),
+      }));
+    const payload = {
+      state: normalizeState(this.getStateDigest()),
+      journal,
+    };
+    const canonicalPayload = canonicalJson(payload);
+    return {
+      schemaVersion: 1,
+      algorithm: "sha256",
+      hash: createHash("sha256").update(canonicalPayload).digest("hex"),
+      canonicalPayload,
     };
   }
 
@@ -247,8 +325,49 @@ export class MeetingOrchestrationHarness {
       operationId,
       kind,
       event,
+      occurredAt: this.scheduler.now(),
       reason,
       state: this.getStateDigest(),
     });
   }
+}
+
+export async function replayOrchestrationSteps(
+  harness: MeetingOrchestrationHarness,
+  steps: OrchestrationReplayStep[]
+) {
+  let previousAt = harness.scheduler.now();
+  const ordered = steps
+    .map((step, index) => ({ step, index }))
+    .sort(
+      (left, right) =>
+        left.step.atMs - right.step.atMs || left.index - right.index
+    );
+  for (const { step } of ordered) {
+    if (!Number.isFinite(step.atMs) || step.atMs < previousAt) {
+      throw new Error(`Replay step ${step.id} has an invalid time ${step.atMs}`);
+    }
+    harness.scheduler.advanceBy(step.atMs - harness.scheduler.now());
+    harness.recordCheckpoint(step.id, "before");
+    await step.run(harness);
+    await Promise.resolve();
+    harness.recordCheckpoint(step.id, "after");
+    previousAt = step.atMs;
+  }
+  return harness.getCanonicalDigest();
+}
+
+function canonicalJson(value: unknown): string {
+  return JSON.stringify(canonicalize(value));
+}
+
+function canonicalize(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonicalize);
+  if (!value || typeof value !== "object") return value;
+  return Object.fromEntries(
+    Object.entries(value)
+      .filter(([, child]) => child !== undefined)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, child]) => [key, canonicalize(child)])
+  );
 }

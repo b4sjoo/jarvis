@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "scenario": "out-of-order-answer-generation",
+  "expectedDigest": "629f2c72eb9f22c74b2da4dd1eaae438df0bd4a5014a1d5d55adf041cf10551a",
+  "expectedFinalAnswer": "newer answer",
+  "expectedOutcomes": {
+    "generation-new": {
+      "outcome": "committed",
+      "reason": "authorized"
+    },
+    "generation-old": {
+      "outcome": "rejected",
+      "reason": "visible-answer-revision-mismatch"
+    }
+  }
+}
