@@ -12,6 +12,7 @@ import {
 } from "../src/lib/calling/provider-catalog.js";
 import {
   DEFAULT_MODEL_ROUTES,
+  commitProviderConfigurationTransaction,
   normalizeModelRouteSettings,
 } from "../src/lib/calling/model-routes.js";
 import {
@@ -216,4 +217,80 @@ test("desktop credentials use MOSS-owned narrow commands and readable failures",
   assert.match(nativeShell, /credential_store::get_provider_secret/);
   assert.doesNotMatch(nativeShell, /tauri_plugin_keychain::init/);
   assert.doesNotMatch(packageManifest, /tauri-plugin-keychain/);
+});
+
+test("provider configuration compensates earlier key writes before rejecting a partial save", async () => {
+  const stored = new Map<string, string>([
+    ["runtime", "old-runtime"],
+    ["advisor", "old-advisor"],
+  ]);
+  const events: string[] = [];
+  await assert.rejects(
+    commitProviderConfigurationTransaction({
+      revision: 9,
+      previousSecrets: {
+        runtime: "old-runtime",
+        advisor: "old-advisor",
+        complex: "",
+        stt: "",
+      },
+      nextSecrets: {
+        runtime: "new-runtime",
+        advisor: "new-advisor",
+        complex: "",
+        stt: "",
+      },
+      changedRoutes: ["runtime", "advisor"],
+      writeSecret: async (route, value) => {
+        if (route === "advisor" && value === "new-advisor") {
+          throw new Error("keychain denied write");
+        }
+        stored.set(route, value);
+      },
+      removeSecret: async (route) => {
+        stored.delete(route);
+      },
+      commitSettings: () => {
+        throw new Error("settings must not commit");
+      },
+      onEvent: (event) => events.push(event.status),
+    }),
+    /keychain denied write/
+  );
+  assert.equal(stored.get("runtime"), "old-runtime");
+  assert.equal(stored.get("advisor"), "old-advisor");
+  assert.deepEqual(events, ["started", "compensated"]);
+});
+
+test("provider configuration restores keys when the settings revision cannot commit", async () => {
+  const stored = new Map<string, string>([["stt", "old-stt"]]);
+  await assert.rejects(
+    commitProviderConfigurationTransaction({
+      revision: 10,
+      previousSecrets: {
+        runtime: "",
+        advisor: "",
+        complex: "",
+        stt: "old-stt",
+      },
+      nextSecrets: {
+        runtime: "",
+        advisor: "",
+        complex: "",
+        stt: "new-stt",
+      },
+      changedRoutes: ["stt"],
+      writeSecret: async (route, value) => {
+        stored.set(route, value);
+      },
+      removeSecret: async (route) => {
+        stored.delete(route);
+      },
+      commitSettings: () => {
+        throw new Error("local storage unavailable");
+      },
+    }),
+    /local storage unavailable/
+  );
+  assert.equal(stored.get("stt"), "old-stt");
 });

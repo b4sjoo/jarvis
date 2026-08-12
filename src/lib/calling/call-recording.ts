@@ -61,6 +61,7 @@ export type CallRecordingEventKind =
   | "rollover-transcript-family"
   | "audio-settings-updated"
   | "model-settings-updated"
+  | "credential-transaction"
   | "shortcut-action"
   | "interface-action"
   | "stt-operation-dispatched"

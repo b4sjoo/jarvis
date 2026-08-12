@@ -124,6 +124,12 @@ export default function ModelSettingsPage({
         </div>
       </div>
 
+      {controller.credentialError && (
+        <div className="settings-message settings-error" role="alert">
+          {controller.credentialError}
+        </div>
+      )}
+
       <div className="model-route-grid">
         {(Object.keys(routeLabels) as ChatRouteId[]).map((route) => (
           <fieldset className="model-route" key={route}>

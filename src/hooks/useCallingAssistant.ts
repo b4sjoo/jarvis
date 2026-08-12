@@ -11,6 +11,7 @@ import {
   loadAudioSettings,
   authorizeNativeSpeechSegment,
   createCancellableOperation,
+  commitProviderConfigurationTransaction,
   createSessionBoundRecordingWriter,
   listCallRecordings,
   listRecoverableCallRecordings,
@@ -26,7 +27,6 @@ import {
   persistAudioSettings,
   normalizeModelRouteSettings,
   saveModelRouteSettings,
-  saveProviderSecret,
   updateNativeVadConfig,
   type ActiveCallRuntimeState,
   type ActiveCallTransition,
@@ -234,6 +234,7 @@ export function useCallingAssistant() {
   const [configured, setConfigured] = useState<
     Record<keyof ProviderSecrets, boolean>
   >({ runtime: false, advisor: false, complex: false, stt: false });
+  const [credentialError, setCredentialError] = useState<string | null>(null);
   const captureSessionIdRef = useRef<string | null>(null);
   const captureGenerationRef = useRef<number | null>(null);
   const lastSegmentSequenceRef = useRef(0);
@@ -396,26 +397,36 @@ export function useCallingAssistant() {
   }, [settings]);
 
   const refreshSecrets = useCallback(async () => {
-    const [runtimeKey, advisor, complex, stt] = await Promise.all([
-      loadProviderSecret("runtime"),
-      loadProviderSecret("advisor"),
-      loadProviderSecret("complex"),
-      loadProviderSecret("stt"),
-    ]);
-    secretsRef.current = { runtime: runtimeKey, advisor, complex, stt };
+    const routes = ["runtime", "advisor", "complex", "stt"] as const;
+    const results = await Promise.allSettled(
+      routes.map((route) => loadProviderSecret(route))
+    );
+    const loaded = blankSecrets();
+    const failedRoutes: string[] = [];
+    results.forEach((result, index) => {
+      const route = routes[index];
+      if (result.status === "fulfilled") loaded[route] = result.value;
+      else failedRoutes.push(route);
+    });
+    secretsRef.current = loaded;
+    setCredentialError(
+      failedRoutes.length
+        ? `MOSS could not read ${failedRoutes.join(", ")} credentials from the macOS Keychain. Restart MOSS, then save those routes again.`
+        : null
+    );
     setConfigured({
       runtime:
         !getChatProvider(settingsRef.current.chat.runtime.provider)
-          .requiresApiKey || Boolean(runtimeKey),
+          .requiresApiKey || Boolean(loaded.runtime),
       advisor:
         !getChatProvider(settingsRef.current.chat.advisor.provider)
-          .requiresApiKey || Boolean(advisor),
+          .requiresApiKey || Boolean(loaded.advisor),
       complex:
         !getChatProvider(settingsRef.current.chat.complex.provider)
-          .requiresApiKey || Boolean(complex),
+          .requiresApiKey || Boolean(loaded.complex),
       stt:
         !getSttProvider(settingsRef.current.stt.provider).requiresApiKey ||
-        Boolean(stt),
+        Boolean(loaded.stt),
     });
   }, []);
 
@@ -1424,20 +1435,31 @@ export function useCallingAssistant() {
           `Enter the ${sttProvider.name} API key after changing the STT provider.`
         );
       }
-      const mergedSecrets = { ...secretsRef.current };
-      await Promise.all(
-        (Object.keys(secrets) as Array<keyof ProviderSecrets>).map(
-          async (route) => {
-            if (!secrets[route].trim()) return;
-            mergedSecrets[route] = secrets[route].trim();
-            await saveProviderSecret(route, mergedSecrets[route]);
-          }
-        )
-      );
-      saveModelRouteSettings(saved);
+      const previousSecrets = { ...secretsRef.current };
+      const mergedSecrets = { ...previousSecrets };
+      const changedRoutes = (Object.keys(secrets) as Array<keyof ProviderSecrets>)
+        .filter((route) => Boolean(secrets[route].trim()));
+      for (const route of changedRoutes) {
+        mergedSecrets[route] = secrets[route].trim();
+      }
+      try {
+        await commitProviderConfigurationTransaction({
+          revision: saved.revision,
+          previousSecrets,
+          nextSecrets: mergedSecrets,
+          changedRoutes,
+          commitSettings: () => saveModelRouteSettings(saved),
+          onEvent: (event) =>
+            queueRecordingEvent("credential-transaction", event),
+        });
+      } catch (error) {
+        setCredentialError(errorMessage(error));
+        throw error;
+      }
       settingsRef.current = saved;
       setSettings(saved);
       secretsRef.current = mergedSecrets;
+      setCredentialError(null);
       setConfigured({
         runtime:
           !getChatProvider(saved.chat.runtime.provider).requiresApiKey ||
@@ -1549,6 +1571,7 @@ export function useCallingAssistant() {
     settings,
     audioSettings,
     configured,
+    credentialError,
     recordingStatus,
     recordingError,
     recoverableRecordings,

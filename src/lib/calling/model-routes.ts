@@ -186,3 +186,89 @@ export async function saveProviderSecret(route: ChatRouteId | "stt", secret: str
     throw credentialFailure("save", cause);
   }
 }
+
+export async function removeProviderSecret(route: ChatRouteId | "stt") {
+  const key = secretKey(route);
+  if (!isTauriRuntime()) {
+    browserSecrets.delete(key);
+    return;
+  }
+  try {
+    await invoke("remove_provider_secret", { key });
+  } catch (cause) {
+    throw credentialFailure("save", cause);
+  }
+}
+
+export type ProviderSecretRoute = ChatRouteId | "stt";
+
+export interface ProviderSecretTransactionEvent {
+  status: "started" | "succeeded" | "compensated" | "failed";
+  revision: number;
+  routes: ProviderSecretRoute[];
+  failedStage?: "credential-write" | "settings-commit" | "compensation";
+}
+
+export async function commitProviderConfigurationTransaction(input: {
+  revision: number;
+  previousSecrets: Record<ProviderSecretRoute, string>;
+  nextSecrets: Record<ProviderSecretRoute, string>;
+  changedRoutes: ProviderSecretRoute[];
+  writeSecret?: (route: ProviderSecretRoute, value: string) => Promise<void>;
+  removeSecret?: (route: ProviderSecretRoute) => Promise<void>;
+  commitSettings: () => void | Promise<void>;
+  onEvent?: (event: ProviderSecretTransactionEvent) => void;
+}) {
+  const write = input.writeSecret ?? saveProviderSecret;
+  const remove = input.removeSecret ?? removeProviderSecret;
+  const applied: ProviderSecretRoute[] = [];
+  const routes = [...input.changedRoutes];
+  input.onEvent?.({
+    status: "started",
+    revision: input.revision,
+    routes,
+  });
+
+  let failedStage: ProviderSecretTransactionEvent["failedStage"] =
+    "credential-write";
+  try {
+    for (const route of routes) {
+      const value = input.nextSecrets[route];
+      if (value) await write(route, value);
+      else await remove(route);
+      applied.push(route);
+    }
+    failedStage = "settings-commit";
+    await input.commitSettings();
+    input.onEvent?.({
+      status: "succeeded",
+      revision: input.revision,
+      routes,
+    });
+  } catch (error) {
+    const compensationErrors: string[] = [];
+    for (const route of applied.reverse()) {
+      try {
+        const previous = input.previousSecrets[route];
+        if (previous) await write(route, previous);
+        else await remove(route);
+      } catch (compensationError) {
+        compensationErrors.push(
+          `${route}: ${compensationError instanceof Error ? compensationError.message : String(compensationError)}`
+        );
+      }
+    }
+    input.onEvent?.({
+      status: compensationErrors.length ? "failed" : "compensated",
+      revision: input.revision,
+      routes,
+      failedStage: compensationErrors.length ? "compensation" : failedStage,
+    });
+    if (compensationErrors.length) {
+      throw new Error(
+        `Provider configuration failed and credential compensation was incomplete (${compensationErrors.join("; ")}).`
+      );
+    }
+    throw error;
+  }
+}
