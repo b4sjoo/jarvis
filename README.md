@@ -54,6 +54,17 @@ Run the desktop app:
 npm run tauri dev
 ```
 
+If the default development port `1420` is already in use, set one alternate
+port for both Vite and Tauri:
+
+```bash
+JARVIS_DEV_PORT=1422 npm run tauri dev
+```
+
+The same variable works for the browser preview with
+`JARVIS_DEV_PORT=1422 npm run dev`. Invalid or out-of-range values fail before
+the development processes start.
+
 Build the frontend:
 
 ```bash

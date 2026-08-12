@@ -75,8 +75,7 @@ export const useMenuItems = () => {
   const footerItems: {
     icon: React.ElementType;
     label: string;
-    href?: string;
-    action?: () => Promise<void>;
+    action: () => Promise<void>;
   }[] = [
     {
       icon: PowerIcon,

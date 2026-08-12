@@ -33,7 +33,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
-    "test": "tsc -p tsconfig.test.json && node --test .tmp-tests/tests/**/*.test.js",
+    "test": "node scripts/clean-test-output.mjs && tsc -p tsconfig.test.json && node --test .tmp-tests/tests/**/*.test.js tests/jarvis-dev-port.test.mjs",
     "taxonomy:evaluate": "tsc -p tsconfig.taxonomy-evaluation.json && node .tmp-taxonomy-evaluation/scripts/evaluate-taxonomy-corpus.js",
     "intent:corpus:readiness": "tsc -p tsconfig.local-intent-corpus-readiness.json && node .tmp-local-intent-corpus-readiness/scripts/build-local-intent-corpus-readiness.js",
     "intent:corpus:pilot": "tsc -p tsconfig.local-intent-corpus-readiness.json && node .tmp-local-intent-corpus-readiness/scripts/build-local-intent-annotation-pilot.js",
@@ -49,7 +49,7 @@
     "taxonomy:adjudication:reflect": "tsc -p tsconfig.taxonomy-adjudication-reflection.json && node .tmp-taxonomy-adjudication-reflection/scripts/reflect-taxonomy-adjudication-session.js",
     "session:longitudinal:reflect": "tsc -p tsconfig.session-longitudinal-evaluation.json && node .tmp-session-longitudinal-evaluation/scripts/reflect-session-longitudinal-evaluation.js",
     "preview": "vite preview",
-    "tauri": "tauri"
+    "tauri": "node scripts/run-tauri.mjs"
   },
   "dependencies": {
     "@bany/curl-to-json": "^1.2.8",
