@@ -14,6 +14,11 @@ const openStatus = (callSessionId: string): CallRecordingStatus => ({
   state: "open",
   attempt: 0,
   eventCount: 0,
+  attemptedEventCount: 0,
+  persistedEventCount: 0,
+  droppedEventCount: 0,
+  health: "healthy",
+  incompletenessReasons: [],
   startedAt: 1,
 });
 
@@ -108,6 +113,64 @@ test("recording close remains retryable after a transport failure", async () => 
   await assert.rejects(recording.close(3), /disk busy/);
   assert.equal((await recording.retryClose(4))?.state, "closed");
   assert.equal(closeAttempts, 2);
+});
+
+test("an append failure remains visible as incomplete after later events and close", async () => {
+  let status = openStatus("call-recording-incomplete");
+  let appendAttempts = 0;
+  let closeCompleteness: unknown;
+  const transport: CallRecordingTransport = {
+    async start() {
+      return structuredClone(status);
+    },
+    async append({ eventPayload }) {
+      appendAttempts += 1;
+      if (appendAttempts === 1) throw new Error("disk unavailable");
+      const event = JSON.parse(eventPayload) as CallRecordingEvent;
+      status = {
+        ...status,
+        eventCount: event.sequence,
+        persistedEventCount: event.sequence,
+      };
+      return structuredClone(status);
+    },
+    async close(input) {
+      closeCompleteness = input.completeness;
+      status = {
+        ...status,
+        state: "closed",
+        health: "incomplete",
+        attemptedEventCount: input.completeness?.attemptedEventCount ?? 0,
+        persistedEventCount: input.completeness?.persistedEventCount ?? 0,
+        droppedEventCount: input.completeness?.droppedEventCount ?? 0,
+        incompletenessReasons: input.completeness?.incompletenessReasons ?? [],
+      };
+      return structuredClone(status);
+    },
+    async retry() {
+      throw new Error("retry should not run");
+    },
+    async abandon() {
+      throw new Error("abandon should not run");
+    },
+  };
+  const recording = new CallRecordingProjection({
+    callSessionId: status.callSessionId,
+    transport,
+  });
+  await recording.start(1);
+  await assert.rejects(
+    recording.append("audio-segment-observed", { segment: 1 }, 2),
+    /disk unavailable/
+  );
+  await recording.append("audio-segment-observed", { segment: 2 }, 3);
+  const closed = await recording.close(4);
+
+  assert.equal(closed?.health, "incomplete");
+  assert.equal(closed?.attemptedEventCount, 2);
+  assert.equal(closed?.persistedEventCount, 1);
+  assert.equal(closed?.droppedEventCount, 1);
+  assert.match(JSON.stringify(closeCompleteness), /disk unavailable/);
 });
 
 test("a full runtime lifecycle is reconstructable from transition events", () => {

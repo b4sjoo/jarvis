@@ -868,6 +868,9 @@ export function useCallingAssistant() {
           event.payload,
           event.payload.occurredAtMs
         );
+        recordingRef.current?.markIncomplete(
+          `native-segment-dropped:${event.payload.reason}`
+        );
       }
     ).then((stop) => {
       if (disposed) stop();
@@ -1090,6 +1093,9 @@ export function useCallingAssistant() {
     const lease = await stopNativeCapture();
     await drainCurrentAudioQueue();
     for (const family of rolloverAssemblerRef.current.abandonAll()) {
+      recordingRef.current?.markIncomplete(
+        `rollover-family-abandoned:${family.familyId}`
+      );
       queueRecordingEvent("rollover-transcript-family", {
         ...family,
         status: "abandoned",

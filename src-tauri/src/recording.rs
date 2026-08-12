@@ -28,6 +28,27 @@ pub enum CallRecordingState {
     Abandoned,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum CallRecordingHealth {
+    #[default]
+    Healthy,
+    Incomplete,
+    CloseFailed,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CallRecordingCompleteness {
+    pub health: CallRecordingHealth,
+    pub attempted_event_count: u64,
+    pub persisted_event_count: u64,
+    pub dropped_event_count: u64,
+    #[serde(default)]
+    pub incompleteness_reasons: Vec<String>,
+    pub terminal_state: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct CallRecordingStatus {
@@ -36,6 +57,16 @@ pub struct CallRecordingStatus {
     pub state: CallRecordingState,
     pub attempt: u32,
     pub event_count: u64,
+    #[serde(default)]
+    pub attempted_event_count: u64,
+    #[serde(default)]
+    pub persisted_event_count: u64,
+    #[serde(default)]
+    pub dropped_event_count: u64,
+    #[serde(default)]
+    pub health: CallRecordingHealth,
+    #[serde(default)]
+    pub incompleteness_reasons: Vec<String>,
     pub started_at: u64,
     pub ended_at: Option<u64>,
     pub last_error: Option<String>,
@@ -71,6 +102,18 @@ struct CallRecordingManifest {
     event_count: u64,
     events_sha256: String,
     raw_audio_retained: bool,
+    #[serde(default)]
+    health: CallRecordingHealth,
+    #[serde(default)]
+    attempted_event_count: u64,
+    #[serde(default)]
+    persisted_event_count: u64,
+    #[serde(default)]
+    dropped_event_count: u64,
+    #[serde(default)]
+    incompleteness_reasons: Vec<String>,
+    #[serde(default)]
+    terminal_state: String,
 }
 
 #[tauri::command]
@@ -101,9 +144,10 @@ pub fn close_call_recording(
     app: AppHandle,
     call_session_id: String,
     ended_at: u64,
+    completeness: Option<CallRecordingCompleteness>,
 ) -> Result<CallRecordingStatus, String> {
     let root = recordings_root(&app)?;
-    close_at_root(&root, &call_session_id, ended_at)
+    close_at_root(&root, &call_session_id, ended_at, completeness.as_ref())
 }
 
 #[tauri::command]
@@ -111,9 +155,10 @@ pub fn retry_call_recording_close(
     app: AppHandle,
     call_session_id: String,
     ended_at: u64,
+    completeness: Option<CallRecordingCompleteness>,
 ) -> Result<CallRecordingStatus, String> {
     let root = recordings_root(&app)?;
-    close_at_root(&root, &call_session_id, ended_at)
+    close_at_root(&root, &call_session_id, ended_at, completeness.as_ref())
 }
 
 #[tauri::command]
@@ -121,9 +166,10 @@ pub fn abandon_call_recording(
     app: AppHandle,
     call_session_id: String,
     occurred_at: u64,
+    completeness: Option<CallRecordingCompleteness>,
 ) -> Result<CallRecordingStatus, String> {
     let root = recordings_root(&app)?;
-    abandon_at_root(&root, &call_session_id, occurred_at)
+    abandon_at_root(&root, &call_session_id, occurred_at, completeness.as_ref())
 }
 
 #[tauri::command]
@@ -210,6 +256,11 @@ fn start_at_root(
         state: CallRecordingState::Open,
         attempt: 0,
         event_count: 0,
+        attempted_event_count: 0,
+        persisted_event_count: 0,
+        dropped_event_count: 0,
+        health: CallRecordingHealth::Healthy,
+        incompleteness_reasons: Vec::new(),
         started_at,
         ended_at: None,
         last_error: None,
@@ -260,6 +311,8 @@ fn append_at_root(
         .map_err(|error| format!("Failed to append call recording event: {error}"))?;
 
     status.event_count = event.sequence;
+    status.attempted_event_count = status.attempted_event_count.saturating_add(1);
+    status.persisted_event_count = event.sequence;
     write_status(&session_dir, &status)?;
     Ok(status)
 }
@@ -268,6 +321,7 @@ fn close_at_root(
     recordings_root: &Path,
     call_session_id: &str,
     ended_at: u64,
+    completeness: Option<&CallRecordingCompleteness>,
 ) -> Result<CallRecordingStatus, String> {
     validate_session_id(call_session_id)?;
     let session_dir = session_dir(recordings_root, call_session_id)?;
@@ -284,21 +338,33 @@ fn close_at_root(
     status.attempt = status.attempt.saturating_add(1);
     status.ended_at = Some(ended_at);
     status.last_error = None;
+    apply_completeness(&mut status, completeness, "closed")?;
     write_status(&session_dir, &status)?;
 
     let close_result = (|| {
-        let (events_sha256, line_count) = hash_events(&session_dir.join(EVENTS_FILE))?;
+        let events_path = session_dir.join(EVENTS_FILE);
+        let (events_sha256, line_count) = hash_events(&events_path)?;
         if line_count != status.event_count {
             return Err("Call recording event count does not match the event log.".to_string());
         }
+        validate_event_log(&events_path, call_session_id, status.event_count)?;
+        if status.persisted_event_count != status.event_count {
+            return Err("Call recording persisted count does not match the event log.".to_string());
+        }
         let manifest = CallRecordingManifest {
-            version: 1,
+            version: 2,
             call_session_id: call_session_id.to_string(),
             started_at: status.started_at,
             ended_at,
             event_count: status.event_count,
             events_sha256,
             raw_audio_retained: false,
+            health: status.health.clone(),
+            attempted_event_count: status.attempted_event_count,
+            persisted_event_count: status.persisted_event_count,
+            dropped_event_count: status.dropped_event_count,
+            incompleteness_reasons: status.incompleteness_reasons.clone(),
+            terminal_state: "closed".to_string(),
         };
         write_json_atomically(&session_dir.join(MANIFEST_FILE), &manifest)
     })();
@@ -311,6 +377,7 @@ fn close_at_root(
         }
         Err(error) => {
             status.state = CallRecordingState::CloseFailed;
+            status.health = CallRecordingHealth::CloseFailed;
             status.last_error = Some(error.clone());
             let _ = write_status(&session_dir, &status);
             Err(error)
@@ -322,6 +389,7 @@ fn abandon_at_root(
     recordings_root: &Path,
     call_session_id: &str,
     occurred_at: u64,
+    completeness: Option<&CallRecordingCompleteness>,
 ) -> Result<CallRecordingStatus, String> {
     validate_session_id(call_session_id)?;
     let session_dir = session_dir(recordings_root, call_session_id)?;
@@ -335,6 +403,7 @@ fn abandon_at_root(
     }
     status.state = CallRecordingState::Abandoned;
     status.ended_at = Some(occurred_at);
+    apply_completeness(&mut status, completeness, "abandoned")?;
     write_status(&session_dir, &status)?;
     Ok(status)
 }
@@ -388,11 +457,9 @@ fn list_all_at_root(recordings_root: &Path) -> Result<Vec<CallRecordingSummary>,
         let Ok(status) = read_status(&path) else {
             continue;
         };
-        let (human_evaluation_count, integrity_error) =
-            match count_event_kind(&path.join(EVENTS_FILE), "human-evaluation") {
-                Ok(count) => (count, None),
-                Err(error) => (0, Some(error)),
-            };
+        let human_evaluation_count =
+            count_event_kind(&path.join(EVENTS_FILE), "human-evaluation").unwrap_or(0);
+        let integrity_error = verify_recording_integrity(&path, &status).err();
         recordings.push(CallRecordingSummary {
             status,
             human_evaluation_count,
@@ -422,6 +489,114 @@ fn count_event_kind(path: &Path, target_kind: &str) -> Result<u64, String> {
         }
     }
     Ok(count)
+}
+
+fn apply_completeness(
+    status: &mut CallRecordingStatus,
+    completeness: Option<&CallRecordingCompleteness>,
+    expected_terminal_state: &str,
+) -> Result<(), String> {
+    let Some(completeness) = completeness else {
+        status.attempted_event_count = status.attempted_event_count.max(status.event_count);
+        status.persisted_event_count = status.event_count;
+        return Ok(());
+    };
+    if completeness.terminal_state != expected_terminal_state {
+        return Err(
+            "Call recording terminal state does not match the close operation.".to_string(),
+        );
+    }
+    if completeness.persisted_event_count != status.event_count {
+        return Err("Call recording completeness uses a stale persisted count.".to_string());
+    }
+    if completeness.attempted_event_count
+        < completeness
+            .persisted_event_count
+            .saturating_add(completeness.dropped_event_count)
+    {
+        return Err("Call recording completeness counts are inconsistent.".to_string());
+    }
+    status.attempted_event_count = completeness.attempted_event_count;
+    status.persisted_event_count = completeness.persisted_event_count;
+    status.dropped_event_count = completeness.dropped_event_count;
+    status.incompleteness_reasons = completeness
+        .incompleteness_reasons
+        .iter()
+        .filter_map(|reason| {
+            let trimmed = reason.trim();
+            (!trimmed.is_empty()).then(|| trimmed.chars().take(500).collect::<String>())
+        })
+        .take(100)
+        .collect();
+    status.health = if status.dropped_event_count > 0 || !status.incompleteness_reasons.is_empty() {
+        CallRecordingHealth::Incomplete
+    } else {
+        completeness.health.clone()
+    };
+    Ok(())
+}
+
+fn validate_event_log(
+    path: &Path,
+    call_session_id: &str,
+    expected_count: u64,
+) -> Result<(), String> {
+    reject_symlink(path)?;
+    let file = File::open(path)
+        .map_err(|error| format!("Failed to inspect call recording events: {error}"))?;
+    let mut expected_sequence = 1_u64;
+    for line in BufReader::new(file).lines() {
+        let line =
+            line.map_err(|error| format!("Failed to read call recording events: {error}"))?;
+        if line.trim().is_empty() {
+            continue;
+        }
+        let event: CallRecordingEvent = serde_json::from_str(&line)
+            .map_err(|error| format!("Invalid call recording event: {error}"))?;
+        if event.call_session_id != call_session_id {
+            return Err("Call recording event log contains another session.".to_string());
+        }
+        if event.sequence != expected_sequence {
+            return Err("Call recording event log contains a sequence gap.".to_string());
+        }
+        expected_sequence = expected_sequence.saturating_add(1);
+    }
+    if expected_sequence.saturating_sub(1) != expected_count {
+        return Err("Call recording event log count is inconsistent.".to_string());
+    }
+    Ok(())
+}
+
+fn verify_recording_integrity(
+    session_dir: &Path,
+    status: &CallRecordingStatus,
+) -> Result<(), String> {
+    let events_path = session_dir.join(EVENTS_FILE);
+    validate_event_log(&events_path, &status.call_session_id, status.event_count)?;
+    let (hash, count) = hash_events(&events_path)?;
+    if count != status.event_count {
+        return Err("Call recording event count does not match its status.".to_string());
+    }
+    if status.persisted_event_count != status.event_count {
+        return Err("Call recording persisted count does not match its status.".to_string());
+    }
+    let manifest_path = session_dir.join(MANIFEST_FILE);
+    if status.state != CallRecordingState::Closed {
+        return Ok(());
+    }
+    let manifest: CallRecordingManifest = serde_json::from_str(
+        &fs::read_to_string(&manifest_path)
+            .map_err(|error| format!("Closed call recording is missing its manifest: {error}"))?,
+    )
+    .map_err(|error| format!("Invalid call recording manifest: {error}"))?;
+    if manifest.call_session_id != status.call_session_id
+        || manifest.event_count != count
+        || manifest.events_sha256 != hash
+        || manifest.terminal_state != "closed"
+    {
+        return Err("Call recording manifest does not match the event log.".to_string());
+    }
+    Ok(())
 }
 
 fn export_at_root(recordings_root: &Path, call_session_id: &str) -> Result<PathBuf, String> {
@@ -516,7 +691,17 @@ fn read_status(session_dir: &Path) -> Result<CallRecordingStatus, String> {
     reject_symlink(&path)?;
     let content = fs::read_to_string(&path)
         .map_err(|error| format!("Failed to read call recording state: {error}"))?;
-    serde_json::from_str(&content).map_err(|error| format!("Invalid call recording state: {error}"))
+    let mut status: CallRecordingStatus = serde_json::from_str(&content)
+        .map_err(|error| format!("Invalid call recording state: {error}"))?;
+    if status.persisted_event_count == 0 && status.event_count > 0 {
+        status.persisted_event_count = status.event_count;
+    }
+    status.attempted_event_count = status.attempted_event_count.max(
+        status
+            .persisted_event_count
+            .saturating_add(status.dropped_event_count),
+    );
+    Ok(status)
 }
 
 fn write_status(session_dir: &Path, status: &CallRecordingStatus) -> Result<(), String> {
@@ -670,7 +855,7 @@ mod tests {
         );
         assert!(append_at_root(&root, session_id, &event(session_id, 3)).is_err());
 
-        let closed = close_at_root(&root, session_id, 20).unwrap();
+        let closed = close_at_root(&root, session_id, 20, None).unwrap();
         assert_eq!(closed.state, CallRecordingState::Closed);
         let manifest = fs::read_to_string(root.join(session_id).join(MANIFEST_FILE)).unwrap();
         assert!(manifest.contains("eventsSha256"));
@@ -689,7 +874,7 @@ mod tests {
         fs::rename(&events, &backup).unwrap();
         fs::create_dir(&events).unwrap();
 
-        assert!(close_at_root(&root, session_id, 20).is_err());
+        assert!(close_at_root(&root, session_id, 20, None).is_err());
         let recovered = list_recoverable_at_root(&root).unwrap();
         assert_eq!(recovered.len(), 1);
         assert_eq!(recovered[0].state, CallRecordingState::CloseFailed);
@@ -697,7 +882,7 @@ mod tests {
 
         fs::remove_dir(&events).unwrap();
         fs::rename(&backup, &events).unwrap();
-        let closed = close_at_root(&root, session_id, 30).unwrap();
+        let closed = close_at_root(&root, session_id, 30, None).unwrap();
         assert_eq!(closed.state, CallRecordingState::Closed);
         assert_eq!(closed.attempt, 2);
         assert!(list_recoverable_at_root(&root).unwrap().is_empty());
@@ -728,7 +913,7 @@ mod tests {
         })
         .to_string();
         append_at_root(&root, session_id, &evaluation).unwrap();
-        close_at_root(&root, session_id, 20).unwrap();
+        close_at_root(&root, session_id, 20, None).unwrap();
 
         let summaries = list_all_at_root(&root).unwrap();
         assert_eq!(summaries.len(), 1);
@@ -740,6 +925,58 @@ mod tests {
         assert!(export.is_file());
         let archive = zip::ZipArchive::new(File::open(export).unwrap()).unwrap();
         assert_eq!(archive.len(), 3);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn closes_incomplete_recordings_without_presenting_them_as_healthy() {
+        let root = test_root();
+        let session_id = "call-test-incomplete";
+        start_at_root(&root, session_id, 1).unwrap();
+        append_at_root(&root, session_id, &event(session_id, 1)).unwrap();
+        let completeness = CallRecordingCompleteness {
+            health: CallRecordingHealth::Incomplete,
+            attempted_event_count: 2,
+            persisted_event_count: 1,
+            dropped_event_count: 1,
+            incompleteness_reasons: vec!["append:model-operation-returned:disk busy".to_string()],
+            terminal_state: "closed".to_string(),
+        };
+
+        let status = close_at_root(&root, session_id, 20, Some(&completeness)).unwrap();
+        assert_eq!(status.state, CallRecordingState::Closed);
+        assert_eq!(status.health, CallRecordingHealth::Incomplete);
+        assert_eq!(status.attempted_event_count, 2);
+        assert_eq!(status.persisted_event_count, 1);
+        assert_eq!(status.dropped_event_count, 1);
+
+        let manifest: CallRecordingManifest = serde_json::from_str(
+            &fs::read_to_string(root.join(session_id).join(MANIFEST_FILE)).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(manifest.version, 2);
+        assert_eq!(manifest.health, CallRecordingHealth::Incomplete);
+        assert_eq!(manifest.terminal_state, "closed");
+        assert_eq!(list_all_at_root(&root).unwrap()[0].integrity_error, None);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn summary_integrity_detects_post_close_event_tampering() {
+        let root = test_root();
+        let session_id = "call-test-tampered";
+        start_at_root(&root, session_id, 1).unwrap();
+        append_at_root(&root, session_id, &event(session_id, 1)).unwrap();
+        close_at_root(&root, session_id, 20, None).unwrap();
+        OpenOptions::new()
+            .append(true)
+            .open(root.join(session_id).join(EVENTS_FILE))
+            .unwrap()
+            .write_all(b"{}\n")
+            .unwrap();
+
+        let summaries = list_all_at_root(&root).unwrap();
+        assert!(summaries[0].integrity_error.is_some());
         fs::remove_dir_all(root).unwrap();
     }
 }

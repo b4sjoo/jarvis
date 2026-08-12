@@ -11,12 +11,31 @@ export type CallRecordingState =
   | "close-failed"
   | "abandoned";
 
+export type CallRecordingHealth =
+  | "healthy"
+  | "incomplete"
+  | "close-failed";
+
+export interface CallRecordingCompleteness {
+  health: CallRecordingHealth;
+  attemptedEventCount: number;
+  persistedEventCount: number;
+  droppedEventCount: number;
+  incompletenessReasons: string[];
+  terminalState: "closed" | "abandoned";
+}
+
 export interface CallRecordingStatus {
   callSessionId: string;
   recordingPath: string;
   state: CallRecordingState;
   attempt: number;
   eventCount: number;
+  attemptedEventCount: number;
+  persistedEventCount: number;
+  droppedEventCount: number;
+  health: CallRecordingHealth;
+  incompletenessReasons: string[];
   startedAt: number;
   endedAt?: number;
   lastError?: string;
@@ -74,14 +93,17 @@ export interface CallRecordingTransport {
   close(input: {
     callSessionId: string;
     endedAt: number;
+    completeness?: CallRecordingCompleteness;
   }): Promise<CallRecordingStatus>;
   retry(input: {
     callSessionId: string;
     endedAt: number;
+    completeness?: CallRecordingCompleteness;
   }): Promise<CallRecordingStatus>;
   abandon(input: {
     callSessionId: string;
     occurredAt: number;
+    completeness?: CallRecordingCompleteness;
   }): Promise<CallRecordingStatus>;
 }
 
@@ -113,6 +135,10 @@ export class CallRecordingProjection {
   readonly #transport: CallRecordingTransport;
   #status: CallRecordingStatus | null = null;
   #tail: Promise<void> = Promise.resolve();
+  #attemptedEventCount = 0;
+  #persistedEventCount = 0;
+  #droppedEventCount = 0;
+  #incompletenessReasons = new Set<string>();
 
   constructor(input: {
     callSessionId: string;
@@ -123,7 +149,20 @@ export class CallRecordingProjection {
   }
 
   get status() {
-    return this.#status ? structuredClone(this.#status) : null;
+    if (!this.#status) return null;
+    return structuredClone({
+      ...this.#status,
+      attemptedEventCount: this.#attemptedEventCount,
+      persistedEventCount: this.#persistedEventCount,
+      droppedEventCount: this.#droppedEventCount,
+      health:
+        this.#status.state === "close-failed"
+          ? "close-failed"
+          : this.#incompletenessReasons.size > 0
+            ? "incomplete"
+            : "healthy",
+      incompletenessReasons: [...this.#incompletenessReasons],
+    } satisfies CallRecordingStatus);
   }
 
   async start(startedAt: number) {
@@ -131,13 +170,21 @@ export class CallRecordingProjection {
       callSessionId: this.callSessionId,
       startedAt,
     });
+    this.#attemptedEventCount = this.#status.attemptedEventCount ?? 0;
+    this.#persistedEventCount =
+      this.#status.persistedEventCount ?? this.#status.eventCount;
+    this.#droppedEventCount = this.#status.droppedEventCount ?? 0;
+    this.#incompletenessReasons = new Set(
+      this.#status.incompletenessReasons ?? []
+    );
     return this.status;
   }
 
   append(kind: CallRecordingEventKind, payload: unknown, occurredAt = Date.now()) {
     const task = this.#tail.then(async () => {
       if (!this.#status) throw new Error("Call recording has not started.");
-      const sequence = this.#status.eventCount + 1;
+      this.#attemptedEventCount += 1;
+      const sequence = this.#persistedEventCount + 1;
       const event: CallRecordingEvent = {
         eventId: `call-event-${crypto.randomUUID()}`,
         callSessionId: this.callSessionId,
@@ -146,13 +193,29 @@ export class CallRecordingProjection {
         occurredAt,
         payload: structuredClone(payload),
       };
-      this.#status = await this.#transport.append({
-        callSessionId: this.callSessionId,
-        eventPayload: JSON.stringify(event),
-      });
+      try {
+        this.#status = await this.#transport.append({
+          callSessionId: this.callSessionId,
+          eventPayload: JSON.stringify(event),
+        });
+        this.#persistedEventCount = this.#status.eventCount;
+      } catch (error) {
+        this.#droppedEventCount += 1;
+        this.markIncomplete(`append:${kind}:${message(error)}`);
+        throw error;
+      }
     });
-    this.#tail = task.catch(() => undefined);
+    this.#tail = task.then(
+      () => undefined,
+      () => undefined
+    );
     return task.then(() => this.status);
+  }
+
+  markIncomplete(reason: string) {
+    const normalized = reason.trim().slice(0, 500);
+    if (normalized) this.#incompletenessReasons.add(normalized);
+    return this.status;
   }
 
   async drain() {
@@ -165,7 +228,9 @@ export class CallRecordingProjection {
     this.#status = await this.#transport.close({
       callSessionId: this.callSessionId,
       endedAt,
+      completeness: this.#completeness("closed"),
     });
+    this.#adoptStatus(this.#status);
     return this.status;
   }
 
@@ -174,7 +239,9 @@ export class CallRecordingProjection {
     this.#status = await this.#transport.retry({
       callSessionId: this.callSessionId,
       endedAt,
+      completeness: this.#completeness("closed"),
     });
+    this.#adoptStatus(this.#status);
     return this.status;
   }
 
@@ -183,10 +250,44 @@ export class CallRecordingProjection {
     this.#status = await this.#transport.abandon({
       callSessionId: this.callSessionId,
       occurredAt,
+      completeness: this.#completeness("abandoned"),
     });
+    this.#adoptStatus(this.#status);
     return this.status;
   }
+
+  #completeness(terminalState: "closed" | "abandoned"): CallRecordingCompleteness {
+    return {
+      health: this.#incompletenessReasons.size ? "incomplete" : "healthy",
+      attemptedEventCount: this.#attemptedEventCount,
+      persistedEventCount: this.#persistedEventCount,
+      droppedEventCount: this.#droppedEventCount,
+      incompletenessReasons: [...this.#incompletenessReasons],
+      terminalState,
+    };
+  }
+
+  #adoptStatus(status: CallRecordingStatus) {
+    this.#attemptedEventCount = Math.max(
+      this.#attemptedEventCount,
+      status.attemptedEventCount ?? 0
+    );
+    this.#persistedEventCount = Math.max(
+      this.#persistedEventCount,
+      status.persistedEventCount ?? status.eventCount
+    );
+    this.#droppedEventCount = Math.max(
+      this.#droppedEventCount,
+      status.droppedEventCount ?? 0
+    );
+    for (const reason of status.incompletenessReasons ?? []) {
+      this.#incompletenessReasons.add(reason);
+    }
+  }
 }
+
+const message = (error: unknown) =>
+  error instanceof Error ? error.message : String(error);
 
 export const listRecoverableCallRecordings = () =>
   isTauriRuntime()
