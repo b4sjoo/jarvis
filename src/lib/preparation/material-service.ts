@@ -13,6 +13,7 @@ import {
   type SqlDatabase,
   withTransaction,
 } from "./database.js";
+import { reconcileCaseStatementSourceAuthority } from "./source-authority.js";
 import type {
   CaseMaterial,
   ExtractionChunk,
@@ -36,6 +37,40 @@ interface ContentFilePayload {
   checksumSha256: string;
   base64Data: string;
 }
+
+interface MaterialDeletionOperationRow {
+  operation_id: string;
+  case_id: string;
+  material_id: string;
+  state:
+    | "prepared"
+    | "staged"
+    | "db-deleted"
+    | "restore-failed"
+    | "finalize-failed"
+    | "restored"
+    | "complete";
+}
+
+export interface MaterialDeletionNativeTransport {
+  stage(input: {
+    operationId: string;
+    collectionId: string;
+    contentId: string;
+  }): Promise<boolean>;
+  restore(input: {
+    operationId: string;
+    collectionId: string;
+    contentId: string;
+  }): Promise<boolean>;
+  finalize(operationId: string): Promise<boolean>;
+}
+
+const materialDeletionNativeTransport: MaterialDeletionNativeTransport = {
+  stage: (input) => invoke<boolean>("stage_content_deletion", input),
+  restore: (input) => invoke<boolean>("restore_content_deletion", input),
+  finalize: (operationId) => invoke<boolean>("finalize_content_deletion", { operationId }),
+};
 
 interface NativeExtractionResult {
   method: "native-text";
@@ -176,10 +211,15 @@ export function materialSnapshotEligible(input: {
 }
 
 export class MaterialPreparationService {
-  constructor(private readonly database: SqlDatabase) {}
+  constructor(
+    private readonly database: SqlDatabase,
+    private readonly deletionNative: MaterialDeletionNativeTransport = materialDeletionNativeTransport
+  ) {}
 
   static async open() {
-    return new MaterialPreparationService(await loadPreparationDatabase());
+    const service = new MaterialPreparationService(await loadPreparationDatabase());
+    await service.recoverPendingMaterialDeletions();
+    return service;
   }
 
   async listMaterials(caseId: string, callPlanId?: string) {
@@ -278,6 +318,7 @@ export class MaterialPreparationService {
     );
     if (existing[0]) {
       await this.selectExtractionRun(material, existing[0].id, existing[0].status);
+      await reconcileCaseStatementSourceAuthority(this.database, material.caseId);
       return mapRun(existing[0]);
     }
 
@@ -325,6 +366,7 @@ export class MaterialPreparationService {
       }
       await this.selectExtractionRun(material, runId, result.status, transaction);
     });
+    await reconcileCaseStatementSourceAuthority(this.database, material.caseId);
     const rows = await this.database.select<ExtractionRunRow[]>(
       "SELECT * FROM extraction_runs WHERE id = ?",
       [runId]
@@ -355,6 +397,7 @@ export class MaterialPreparationService {
     );
     if (!rows[0]) throw new Error("Extraction run belongs to a different material.");
     await this.selectExtractionRun(material, runId, rows[0].status);
+    await reconcileCaseStatementSourceAuthority(this.database, material.caseId);
   }
 
   async addManualContent(material: CaseMaterial, content: string) {
@@ -423,6 +466,7 @@ export class MaterialPreparationService {
       [status, Date.now(), material.id, material.caseId, material.rowRevision]
     );
     if (result.rowsAffected !== 1) throw new Error("Material revision conflict.");
+    await reconcileCaseStatementSourceAuthority(this.database, material.caseId);
   }
 
   async moveMaterial(input: {
@@ -444,15 +488,144 @@ export class MaterialPreparationService {
   }
 
   async deleteMaterial(material: CaseMaterial) {
-    const result = await this.database.execute(
-      "DELETE FROM case_materials WHERE id = ? AND case_id = ? AND row_revision = ?",
-      [material.id, material.caseId, material.rowRevision]
+    const operationId = `material_delete_${crypto.randomUUID()}`;
+    const now = Date.now();
+    await this.database.execute(
+      `INSERT INTO material_deletion_operations (
+        operation_id, case_id, material_id, state, created_at, updated_at
+      ) VALUES (?, ?, ?, 'prepared', ?, ?)`,
+      [operationId, material.caseId, material.id, now, now]
     );
-    if (result.rowsAffected !== 1) throw new Error("Material revision conflict.");
-    await invoke("delete_content_file", {
+    const nativeInput = {
+      operationId,
       collectionId: material.caseId,
       contentId: material.id,
-    });
+    };
+    try {
+      await this.deletionNative.stage(nativeInput);
+      await this.database.execute(
+        `UPDATE material_deletion_operations SET state = 'staged', error = NULL,
+         updated_at = ? WHERE operation_id = ? AND state = 'prepared'`,
+        [Date.now(), operationId]
+      );
+    } catch (error) {
+      await this.restoreFailedMaterialDeletion(operationId, nativeInput, error);
+      throw error;
+    }
+    try {
+      await withTransaction(this.database, async (transaction) => {
+        const result = await transaction.execute(
+          "DELETE FROM case_materials WHERE id = ? AND case_id = ? AND row_revision = ?",
+          [material.id, material.caseId, material.rowRevision]
+        );
+        if (result.rowsAffected !== 1) throw new Error("Material revision conflict.");
+        const marked = await transaction.execute(
+          `UPDATE material_deletion_operations SET state = 'db-deleted',
+           error = NULL, updated_at = ? WHERE operation_id = ? AND state = 'staged'`,
+          [Date.now(), operationId]
+        );
+        if (marked.rowsAffected !== 1) throw new Error("Material deletion receipt changed before commit.");
+      });
+    } catch (error) {
+      await this.restoreFailedMaterialDeletion(operationId, nativeInput, error);
+      throw error;
+    }
+    await reconcileCaseStatementSourceAuthority(this.database, material.caseId);
+    try {
+      await this.deletionNative.finalize(operationId);
+      await this.database.execute(
+        `UPDATE material_deletion_operations SET state = 'complete', error = NULL,
+         updated_at = ? WHERE operation_id = ? AND state = 'db-deleted'`,
+        [Date.now(), operationId]
+      );
+    } catch (error) {
+      await this.database.execute(
+        `UPDATE material_deletion_operations SET state = 'finalize-failed',
+         error = ?, updated_at = ? WHERE operation_id = ? AND state = 'db-deleted'`,
+        [this.errorMessage(error), Date.now(), operationId]
+      );
+      throw new Error("Material was removed, but file cleanup will retry on next launch.");
+    }
+  }
+
+  async recoverPendingMaterialDeletions() {
+    const operations = await this.database.select<MaterialDeletionOperationRow[]>(
+      `SELECT operation_id, case_id, material_id, state
+       FROM material_deletion_operations
+       WHERE state NOT IN ('restored', 'complete') ORDER BY created_at`
+    );
+    const recovered: string[] = [];
+    for (const operation of operations) {
+      const materialRows = await this.database.select<Array<{ id: string }>>(
+        "SELECT id FROM case_materials WHERE id = ? AND case_id = ?",
+        [operation.material_id, operation.case_id]
+      );
+      const nativeInput = {
+        operationId: operation.operation_id,
+        collectionId: operation.case_id,
+        contentId: operation.material_id,
+      };
+      try {
+        if (
+          operation.state === "db-deleted" ||
+          operation.state === "finalize-failed" ||
+          !materialRows[0]
+        ) {
+          await this.deletionNative.finalize(operation.operation_id);
+          await this.database.execute(
+            `UPDATE material_deletion_operations SET state = 'complete',
+             error = NULL, updated_at = ? WHERE operation_id = ?`,
+            [Date.now(), operation.operation_id]
+          );
+        } else {
+          await this.deletionNative.restore(nativeInput);
+          await this.database.execute(
+            `UPDATE material_deletion_operations SET state = 'restored',
+             error = NULL, updated_at = ? WHERE operation_id = ?`,
+            [Date.now(), operation.operation_id]
+          );
+        }
+        await reconcileCaseStatementSourceAuthority(this.database, operation.case_id);
+        recovered.push(operation.operation_id);
+      } catch (error) {
+        await this.database.execute(
+          `UPDATE material_deletion_operations SET state = ?, error = ?,
+           updated_at = ? WHERE operation_id = ?`,
+          [
+            materialRows[0] ? "restore-failed" : "finalize-failed",
+            this.errorMessage(error),
+            Date.now(),
+            operation.operation_id,
+          ]
+        ).catch(() => undefined);
+      }
+    }
+    return recovered;
+  }
+
+  private async restoreFailedMaterialDeletion(
+    operationId: string,
+    nativeInput: { operationId: string; collectionId: string; contentId: string },
+    originalError: unknown
+  ) {
+    try {
+      await this.deletionNative.restore(nativeInput);
+      await this.database.execute(
+        `UPDATE material_deletion_operations SET state = 'restored', error = ?,
+         updated_at = ? WHERE operation_id = ?`,
+        [this.errorMessage(originalError), Date.now(), operationId]
+      );
+    } catch (restoreError) {
+      await this.database.execute(
+        `UPDATE material_deletion_operations SET state = 'restore-failed',
+         error = ?, updated_at = ? WHERE operation_id = ?`,
+        [this.errorMessage(restoreError), Date.now(), operationId]
+      ).catch(() => undefined);
+    }
+  }
+
+  private errorMessage(error: unknown) {
+    return (error instanceof Error ? error.message : String(error)).slice(0, 1_000);
   }
 
   private async createRecoveryRun(input: {
@@ -474,6 +647,7 @@ export class MaterialPreparationService {
     );
     if (existing[0]) {
       await this.selectExtractionRun(input.material, existing[0].id, existing[0].status);
+      await reconcileCaseStatementSourceAuthority(this.database, input.material.caseId);
       return mapRun(existing[0]);
     }
     const chunks = splitRecoveredContent(normalized);
@@ -505,6 +679,7 @@ export class MaterialPreparationService {
       }
       await this.selectExtractionRun(input.material, runId, "needs-review", transaction);
     });
+    await reconcileCaseStatementSourceAuthority(this.database, input.material.caseId);
     const rows = await this.database.select<ExtractionRunRow[]>("SELECT * FROM extraction_runs WHERE id = ?", [runId]);
     return mapRun(rows[0]);
   }

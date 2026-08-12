@@ -293,7 +293,12 @@
 .snapshot-section pre { max-height: 320px; overflow: auto; margin: 8px 0 0; padding: 10px; border: 1px solid var(--border-subtle); border-radius: 5px; background: var(--surface-input); color: var(--text-secondary); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: var(--font-small); line-height: 1.45; white-space: pre-wrap; }
 .snapshot-provenance { padding: 12px 14px; }
 .snapshot-provenance > p { margin: 0 0 8px; color: var(--text-muted); font-size: var(--font-small); }
-.snapshot-provenance article { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 7px 0; border-top: 1px solid var(--border-subtle); }
+.snapshot-provenance details { border-top: 1px solid var(--border-subtle); }
+.snapshot-provenance summary,
+.snapshot-provenance article { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 7px 0; }
+.snapshot-provenance summary { cursor: pointer; list-style: none; }
+.snapshot-provenance summary::-webkit-details-marker { display: none; }
+.snapshot-provenance details > article { padding-left: 12px; }
 .snapshot-provenance strong,
 .snapshot-provenance small { display: block; }
 .snapshot-provenance strong { font-size: var(--font-small); }

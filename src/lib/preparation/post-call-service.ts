@@ -14,6 +14,12 @@ import {
   type SqlDatabase,
   withTransaction,
 } from "./database.js";
+import {
+  parseCommitmentDetail,
+  parseDeadlineDetail,
+  requireStructuredStatementDetails,
+  requireStructuredStatementReferences,
+} from "./statement-service.js";
 import type {
   CallPlan,
   CallPreparationSnapshotBundle,
@@ -21,6 +27,8 @@ import type {
   CaseSourceRef,
   CaseStatement,
   CaseStatementKind,
+  CommitmentDetail,
+  DeadlineDetail,
   PendingCaseUpdate,
 } from "./types.js";
 
@@ -34,8 +42,8 @@ const POST_CALL_KINDS = new Set<PendingCaseUpdate["kind"]>([
 
 const POST_CALL_SYSTEM_PROMPT = `You propose post-call updates for MOSS from one bounded, completed CallSession.
 Return JSON only:
-{"updates":[{"kind":"claim|commitment|deadline|reference-number|action","content":"...","sourceTurnIds":["exact-turn-id"],"dateTime":"optional ISO-8601"}]}
-Every update must cite one or more exact supplied turn IDs. Preserve the speaker, conditions, uncertainty, dates, time zones, amounts, and reference numbers in content. Do not treat the preparation snapshot as proof that something happened during the call. Do not mutate prior case state, resolve conflicts, or invent IDs. Omit acknowledgements and duplicate statements.`;
+{"updates":[{"kind":"claim|commitment|deadline|reference-number|action","content":"...","sourceTurnIds":["exact-turn-id"],"dateTime":"optional ISO-8601","commitmentDetail":{"promisorPartyId":"exact-party-id","beneficiaryPartyId":"optional exact-party-id","action":"...","conditions":["..."],"certainty":"explicit|conditional|ambiguous","lifecycle":"pending-confirmation|active|fulfilled|missed|disputed|superseded|cancelled"},"deadlineDetail":{"linkedStatementId":"exact existing commitment-or-action statement id","originalPhrase":"...","precision":"exact|range|relative|unknown","dayKind":"calendar|business|unspecified","timezone":"optional","anchorDate":"optional ISO date","resolvedDate":"optional ISO date"}}]}
+Every update must cite one or more exact supplied turn IDs. Commitment updates require commitmentDetail and deadline updates require deadlineDetail. Use only supplied exact party and statement IDs. Preserve the speaker, conditions, uncertainty, dates, time zones, amounts, and reference numbers in content. Do not treat the preparation snapshot as proof that something happened during the call. Do not mutate prior case state, resolve conflicts, or invent IDs. Omit acknowledgements and duplicate statements.`;
 
 interface PendingRow {
   id: string;
@@ -55,6 +63,8 @@ interface PostCallDraft {
   content: string;
   sourceTurnIds: string[];
   dateTime?: string;
+  commitmentDetail?: CommitmentDetail;
+  deadlineDetail?: DeadlineDetail;
 }
 
 export interface LinkedCallSession {
@@ -104,7 +114,10 @@ export function parsePostCallProposalResponse(value: string): PostCallDraft[] {
     if (dateTime && !Number.isFinite(Date.parse(dateTime))) {
       throw new Error(`Post-call update ${index + 1} has an invalid dateTime.`);
     }
-    return { kind, content, sourceTurnIds, dateTime };
+    const commitmentDetail = parseCommitmentDetail(record.commitmentDetail, index);
+    const deadlineDetail = parseDeadlineDetail(record.deadlineDetail, index);
+    requireStructuredStatementDetails({ kind, commitmentDetail, deadlineDetail });
+    return { kind, content, sourceTurnIds, dateTime, commitmentDetail, deadlineDetail };
   });
 }
 
@@ -214,6 +227,7 @@ export class PostCallReviewService {
         evidenceIndex: snapshot.evidenceIndex,
         safetyConstraints: snapshot.safetyConstraints,
       },
+      structuredReferences: await this.loadStructuredReferenceOptions(binding.caseId),
     };
     const route = loadModelRouteSettings().chat.complex;
     const provider = getChatProvider(route.provider);
@@ -268,8 +282,12 @@ export class PostCallReviewService {
             content: draft.content,
             sourceRefs,
             claimState: "asserted",
+            sourceStatus: "current",
+            sourceStaleReasons: [],
             validUntil: draft.dateTime ? Date.parse(draft.dateTime) : undefined,
             allowedUses: ["call-preparation", "advisor-grounding"],
+            commitmentDetail: draft.commitmentDetail,
+            deadlineDetail: draft.deadlineDetail,
             createdBy: "complex-model-proposal",
           };
           const proposal: PendingCaseUpdate = {
@@ -358,14 +376,18 @@ export class PostCallReviewService {
       createdAt: now,
       updatedAt: now,
     };
+    requireStructuredStatementDetails(statement);
+    await requireStructuredStatementReferences(this.database, statement);
     await withTransaction(this.database, async (transaction) => {
       const current = await this.currentRevision(pending.caseId, transaction);
       await transaction.execute(
         `INSERT INTO case_statements (
           id, case_id, revision, kind, content, subject_party_id, speaker_party_id,
           review_state, claim_state, jurisdiction, valid_from, valid_until,
-          allowed_uses_json, allowed_wording, supersedes_id, created_by, created_at, updated_at
-        ) VALUES (?, ?, 1, ?, ?, ?, ?, 'confirmed', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          allowed_uses_json, allowed_wording, supersedes_id, created_by, created_at,
+          updated_at, source_status, source_stale_reasons_json,
+          commitment_detail_json, deadline_detail_json
+        ) VALUES (?, ?, 1, ?, ?, ?, ?, 'confirmed', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           statement.id, statement.caseId, statement.kind, statement.content,
           statement.subjectPartyId ?? null, statement.speakerPartyId ?? null,
@@ -373,6 +395,9 @@ export class PostCallReviewService {
           statement.validFrom ?? null, statement.validUntil ?? null,
           encodeJson(statement.allowedUses), statement.allowedWording ?? null,
           statement.supersedesId ?? null, statement.createdBy, now, now,
+          statement.sourceStatus, encodeJson(statement.sourceStaleReasons),
+          statement.commitmentDetail ? encodeJson(statement.commitmentDetail) : null,
+          statement.deadlineDetail ? encodeJson(statement.deadlineDetail) : null,
         ]
       );
       for (const source of statement.sourceRefs) {
@@ -384,6 +409,19 @@ export class PostCallReviewService {
           [source.id, statement.id, source.sourceKind, source.sourceId, source.sourceRevision ?? null, source.contentHash, source.pageNumber ?? null, source.quotedText ?? null, now]
         );
       }
+      await transaction.execute(
+        `INSERT INTO case_statement_events (
+          id, case_id, statement_id, event_type, to_statement_id, to_state,
+          statement_revision, payload_json, occurred_at
+        ) VALUES (?, ?, ?, 'created', ?, 'confirmed', 1, '{}', ?)`,
+        [
+          `statement_event_${crypto.randomUUID()}`,
+          statement.caseId,
+          statement.id,
+          statement.id,
+          now,
+        ]
+      );
       const statementIds = [...current.statementIds, statement.id];
       const nextActionIds = statement.kind === "action"
         ? [...current.nextActionIds, statement.id]
@@ -498,6 +536,43 @@ export class PostCallReviewService {
       updateId: pending.id,
       callSessionId: pending.callSessionId,
     });
+  }
+
+  private async loadStructuredReferenceOptions(caseId: string) {
+    const [parties, statements] = await Promise.all([
+      this.database.select<Array<{
+        id: string;
+        display_name: string;
+        role: string;
+      }>>(
+        `SELECT id, display_name, role FROM case_parties
+         WHERE case_id = ? AND review_state = 'confirmed' ORDER BY created_at`,
+        [caseId]
+      ),
+      this.database.select<Array<{
+        id: string;
+        kind: CaseStatementKind;
+        content: string;
+      }>>(
+        `SELECT id, kind, content FROM case_statements
+         WHERE case_id = ? AND review_state = 'confirmed'
+         AND source_status = 'current' AND kind IN ('commitment', 'action')
+         ORDER BY created_at`,
+        [caseId]
+      ),
+    ]);
+    return {
+      parties: parties.map((party) => ({
+        partyId: party.id,
+        displayName: party.display_name,
+        role: party.role,
+      })),
+      linkableStatements: statements.map((statement) => ({
+        statementId: statement.id,
+        kind: statement.kind,
+        content: statement.content,
+      })),
+    };
   }
 
   private async currentRevision(

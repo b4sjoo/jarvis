@@ -207,6 +207,6 @@ test("Task 1J preparation transactions keep native connection affinity", () => {
   assert.doesNotMatch(serviceSources, /withTransaction\(this\.database, async \(\) =>/);
   assert.equal(
     serviceSources.match(/withTransaction\(this\.database, async \(transaction\)/g)?.length,
-    20
+    24
   );
 });

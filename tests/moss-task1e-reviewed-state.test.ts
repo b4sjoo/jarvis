@@ -8,7 +8,7 @@ import {
 
 test("Task 1E parses fenced structured proposals without granting authority", () => {
   const proposals = parseStatementProposalResponse(`\`\`\`json
-  {"statements":[{"kind":"commitment","content":"Merchant will refund after approval","claimState":"asserted","sourceMessageIds":["message-1"],"sourceChunkIds":[],"allowedUses":["call-preparation"]}]}
+  {"statements":[{"kind":"commitment","content":"Merchant will refund after approval","claimState":"asserted","sourceMessageIds":["message-1"],"sourceChunkIds":[],"allowedUses":["call-preparation"],"commitmentDetail":{"promisorPartyId":"party-merchant","action":"Refund after approval","conditions":["approval"],"certainty":"conditional","lifecycle":"pending-confirmation"}}]}
   \`\`\``);
   assert.equal(proposals[0]?.kind, "commitment");
   assert.equal(proposals[0]?.claimState, "asserted");
@@ -26,6 +26,8 @@ test("Task 1E confirmation creates a new immutable CaseRevision", () => {
   assert.match(source, /requireStatementConfirmation/);
   assert.match(source, /INSERT INTO case_revisions/);
   assert.match(source, /current_revision_id = \?.*current_revision_id = \?/s);
-  assert.match(source, /Confirmed statements must be superseded/);
+  assert.match(source, /supersedesId: current\.id/);
+  assert.match(source, /replacedConfirmedId/);
+  assert.match(source, /removeStatementId: replacedConfirmedId/);
   assert.doesNotMatch(source, /UPDATE case_revisions SET/);
 });

@@ -31,7 +31,14 @@ interface DeletionOperationRow {
   case_id: string;
   case_id_hash: string;
   linked_session_ids_json: string;
-  state: "prepared" | "staged" | "db-deleted" | "complete" | "failed";
+  state:
+    | "prepared"
+    | "staged"
+    | "db-deleted"
+    | "restore-failed"
+    | "finalize-failed"
+    | "restored"
+    | "complete";
 }
 
 interface NativeStageResult {
@@ -228,12 +235,7 @@ export class CasePrivacyService {
         [Date.now(), operationId]
       );
     } catch (error) {
-      await this.native.restoreDeletion(operationId).catch(() => undefined);
-      await this.database.execute(
-        "UPDATE cases SET deletion_state = 'active', updated_at = ? WHERE id = ? AND deletion_state = 'deleting'",
-        [Date.now(), caseId]
-      ).catch(() => undefined);
-      await this.failDeletion(operationId, caseIdHash, error);
+      await this.restoreFailedDeletion({ operationId, caseId, caseIdHash }, error);
       throw error;
     }
 
@@ -254,12 +256,7 @@ export class CasePrivacyService {
         if (marked.rowsAffected !== 1) throw new Error("Case deletion receipt changed before commit.");
       });
     } catch (error) {
-      await this.native.restoreDeletion(operationId).catch(() => undefined);
-      await this.database.execute(
-        "UPDATE cases SET deletion_state = 'active', updated_at = ? WHERE id = ? AND deletion_state = 'deleting'",
-        [Date.now(), caseId]
-      ).catch(() => undefined);
-      await this.failDeletion(operationId, caseIdHash, error);
+      await this.restoreFailedDeletion({ operationId, caseId, caseIdHash }, error);
       throw error;
     }
 
@@ -283,7 +280,8 @@ export class CasePrivacyService {
       };
     } catch (error) {
       await this.database.execute(
-        "UPDATE case_deletion_operations SET error = ?, updated_at = ? WHERE operation_id = ? AND state = 'db-deleted'",
+        `UPDATE case_deletion_operations SET state = 'finalize-failed',
+         error = ?, updated_at = ? WHERE operation_id = ? AND state = 'db-deleted'`,
         [this.errorMessage(error), Date.now(), operationId]
       );
       await this.writeAudit(caseIdHash, operationId, "delete", "failed", {
@@ -296,18 +294,27 @@ export class CasePrivacyService {
   async recoverPendingDeletions() {
     const operations = await this.database.select<DeletionOperationRow[]>(
       `SELECT operation_id, case_id, case_id_hash, linked_session_ids_json, state
-       FROM case_deletion_operations WHERE state IN ('prepared', 'staged', 'db-deleted')
+       FROM case_deletion_operations
+       WHERE state NOT IN ('restored', 'complete')
        ORDER BY created_at`
     );
     const recovered: string[] = [];
     for (const operation of operations) {
       try {
-        if (operation.state === "db-deleted") {
+        const caseRows = await this.database.select<Array<{ id: string }>>(
+          "SELECT id FROM cases WHERE id = ?",
+          [operation.case_id]
+        );
+        if (
+          operation.state === "db-deleted" ||
+          operation.state === "finalize-failed" ||
+          !caseRows[0]
+        ) {
           await this.native.finalizeDeletion(operation.operation_id);
           await this.database.execute(
             `UPDATE case_deletion_operations SET state = 'complete', case_id = case_id_hash,
              linked_session_ids_json = '[]', error = NULL, updated_at = ?
-             WHERE operation_id = ? AND state = 'db-deleted'`,
+             WHERE operation_id = ?`,
             [Date.now(), operation.operation_id]
           );
         } else {
@@ -318,7 +325,8 @@ export class CasePrivacyService {
               [Date.now(), operation.case_id]
             );
             await transaction.execute(
-              "UPDATE case_deletion_operations SET state = 'failed', error = ?, updated_at = ? WHERE operation_id = ?",
+              `UPDATE case_deletion_operations SET state = 'restored', error = ?,
+               updated_at = ? WHERE operation_id = ?`,
               ["Recovered before database deletion completed.", Date.now(), operation.operation_id]
             );
           });
@@ -332,6 +340,20 @@ export class CasePrivacyService {
         );
         recovered.push(operation.operation_id);
       } catch (error) {
+        const caseRows = await this.database.select<Array<{ id: string }>>(
+          "SELECT id FROM cases WHERE id = ?",
+          [operation.case_id]
+        ).catch(() => []);
+        await this.database.execute(
+          `UPDATE case_deletion_operations SET state = ?, error = ?, updated_at = ?
+           WHERE operation_id = ?`,
+          [
+            caseRows[0] ? "restore-failed" : "finalize-failed",
+            this.errorMessage(error),
+            Date.now(),
+            operation.operation_id,
+          ]
+        ).catch(() => undefined);
         await this.writeAudit(
           operation.case_id_hash,
           operation.operation_id,
@@ -362,12 +384,38 @@ export class CasePrivacyService {
     for (const row of rows) service.cancel(row.id, "case-deletion");
   }
 
-  private async failDeletion(operationId: string, caseIdHash: string, error: unknown) {
-    await this.database.execute(
-      "UPDATE case_deletion_operations SET state = 'failed', error = ?, updated_at = ? WHERE operation_id = ?",
-      [this.errorMessage(error), Date.now(), operationId]
+  private async restoreFailedDeletion(
+    input: { operationId: string; caseId: string; caseIdHash: string },
+    originalError: unknown
+  ) {
+    try {
+      await this.native.restoreDeletion(input.operationId);
+      await withTransaction(this.database, async (transaction) => {
+        await transaction.execute(
+          `UPDATE cases SET deletion_state = 'active', updated_at = ?
+           WHERE id = ? AND deletion_state = 'deleting'`,
+          [Date.now(), input.caseId]
+        );
+        await transaction.execute(
+          `UPDATE case_deletion_operations SET state = 'restored', error = ?,
+           updated_at = ? WHERE operation_id = ?`,
+          [this.errorMessage(originalError), Date.now(), input.operationId]
+        );
+      });
+    } catch (restoreError) {
+      await this.database.execute(
+        `UPDATE case_deletion_operations SET state = 'restore-failed',
+         error = ?, updated_at = ? WHERE operation_id = ?`,
+        [this.errorMessage(restoreError), Date.now(), input.operationId]
+      ).catch(() => undefined);
+    }
+    await this.writeAudit(
+      input.caseIdHash,
+      input.operationId,
+      "delete",
+      "failed",
+      {}
     ).catch(() => undefined);
-    await this.writeAudit(caseIdHash, operationId, "delete", "failed", {}).catch(() => undefined);
   }
 
   private async writeAudit(

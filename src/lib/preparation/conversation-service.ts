@@ -16,6 +16,7 @@ import {
   composePreparationContext,
   type PreparationModelContext,
 } from "./preparation-context.js";
+import { reconcileCaseStatementSourceAuthority } from "./source-authority.js";
 import type {
   PreparationConversation,
   PreparationMessage,
@@ -245,6 +246,10 @@ export class PreparationConversationService {
       );
       await this.insertMessage(message, transaction);
     });
+    await reconcileCaseStatementSourceAuthority(
+      this.database,
+      input.conversation.caseId
+    );
     return this.generateAssistant({
       conversation: { ...input.conversation, headRevision: newRevision },
       request: content,

@@ -11,7 +11,7 @@ import {
 
 test("Task 1I parses only sourced post-call update proposals", () => {
   const parsed = parsePostCallProposalResponse(`\`\`\`json
-    {"updates":[{"kind":"deadline","content":"The counterparty committed to reply by Friday at 5 PM Pacific.","sourceTurnIds":["turn-1"],"dateTime":"2026-08-14T17:00:00-07:00"}]}
+    {"updates":[{"kind":"deadline","content":"The counterparty committed to reply by Friday at 5 PM Pacific.","sourceTurnIds":["turn-1"],"dateTime":"2026-08-14T17:00:00-07:00","deadlineDetail":{"linkedStatementId":"commitment-1","originalPhrase":"by Friday at 5 PM Pacific","precision":"exact","dayKind":"calendar","timezone":"America/Los_Angeles","resolvedDate":"2026-08-14T17:00:00-07:00"}}]}
   \`\`\``);
   assert.equal(parsed[0].kind, "deadline");
   assert.deepEqual(parsed[0].sourceTurnIds, ["turn-1"]);
@@ -52,6 +52,9 @@ class ReviewDatabase implements SqlDatabase {
           turn: { id: "turn-1", speaker: "them", text: this.turnText, occurredAt: 4 },
         },
       }) }] as T;
+    }
+    if (query.includes("FROM case_parties")) {
+      return [{ id: "party-counterparty" }] as T;
     }
     if (query.includes("FROM case_revisions revision")) {
       return [{
@@ -98,6 +101,15 @@ test("Task 1I human acceptance atomically creates a sourced statement and CaseRe
       claimState: "asserted",
       allowedUses: ["call-preparation", "advisor-grounding"],
       createdBy: "complex-model-proposal",
+      sourceStatus: "current",
+      sourceStaleReasons: [],
+      commitmentDetail: {
+        promisorPartyId: "party-counterparty",
+        action: "Send the written decision",
+        conditions: [],
+        certainty: "explicit",
+        lifecycle: "active",
+      },
     },
     sourceTurnIds: ["turn-1"],
     reviewState: "pending",
@@ -132,6 +144,15 @@ test("Task 1I refuses review when its exact source turn no longer matches", asyn
       claimState: "asserted",
       allowedUses: ["call-preparation"],
       createdBy: "complex-model-proposal",
+      sourceStatus: "current",
+      sourceStaleReasons: [],
+      commitmentDetail: {
+        promisorPartyId: "party-counterparty",
+        action: "Reply",
+        conditions: [],
+        certainty: "explicit",
+        lifecycle: "active",
+      },
     },
     sourceTurnIds: ["turn-1"],
     reviewState: "pending",

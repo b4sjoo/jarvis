@@ -14,14 +14,19 @@ import {
   withTransaction,
 } from "./database.js";
 import { retrieveCaseKnowledge, type CuratedKnowledgeEntry } from "./retrieval-service.js";
+import { reconcileCaseStatementSourceAuthority } from "./source-authority.js";
 import type {
+  CallBrief,
   CallPlan,
   CallPlaybookSnapshot,
   CallPreparationSnapshotBundle,
+  CaseSnapshot,
   CaseSourceRef,
   CaseStatement,
   EvidenceIndexEntry,
+  SafetyPolicyConstraints,
   SnapshotArtifactRef,
+  SnapshotArtifactItemRef,
   SnapshotSourceManifest,
   SnapshotWarning,
   SpeechBiasTerm,
@@ -79,11 +84,14 @@ interface FrozenSourceSet {
   curatedEntries: CuratedKnowledgeEntry[];
   manifest: SnapshotSourceManifest;
   warnings: SnapshotWarning[];
+  caseRevisionRef: CaseSourceRef;
+  callPlanRef: CaseSourceRef;
 }
 
 export interface SnapshotModelProposal {
   playbook: CallPlaybookSnapshot;
   speechBiasTerms: Array<{ term: string; aliases: string[] }>;
+  unresolvedStageIds: CallPlaybookSnapshot["stages"][number]["id"][];
 }
 
 export interface CuratedKnowledgeProvider {
@@ -92,13 +100,7 @@ export interface CuratedKnowledgeProvider {
 
 const genericStage = (id: CallPlaybookSnapshot["stages"][number]["id"]): CallPlaybookSnapshot["stages"][number] => ({
   id,
-  goal: ({
-    orient: "Confirm who is present and the purpose of the call.",
-    establish: "Establish the relevant facts, constraints, and unresolved points.",
-    request: "State the requested outcome and a supported fallback.",
-    resolve: "Address objections, conditions, and missing evidence.",
-    "confirm-close": "Confirm commitments, dates, reference numbers, and next actions.",
-  })[id],
+  goal: "Unresolved: no sourced stage guidance was produced.",
   prompts: [],
   exitSignals: [],
 });
@@ -114,12 +116,18 @@ export function parseSnapshotModelProposal(value: string): SnapshotModelProposal
     ? parsed.playbook as Record<string, unknown>
     : {};
   const rawStages = Array.isArray(playbook.stages) ? playbook.stages : [];
+  const unresolvedStageIds: SnapshotModelProposal["unresolvedStageIds"] = [];
   const stages = STAGE_IDS.map((id) => {
     const raw = rawStages.find((item) => item && typeof item === "object" && (item as Record<string, unknown>).id === id) as Record<string, unknown> | undefined;
-    if (!raw) return genericStage(id);
+    if (!raw) {
+      unresolvedStageIds.push(id);
+      return genericStage(id);
+    }
+    const goal = typeof raw.goal === "string" && raw.goal.trim() ? raw.goal.trim() : "";
+    if (!goal) unresolvedStageIds.push(id);
     return {
       id,
-      goal: typeof raw.goal === "string" && raw.goal.trim() ? raw.goal.trim() : genericStage(id).goal,
+      goal: goal || genericStage(id).goal,
       prompts: strings(raw.prompts).slice(0, 5),
       exitSignals: strings(raw.exitSignals).slice(0, 5),
     };
@@ -133,6 +141,7 @@ export function parseSnapshotModelProposal(value: string): SnapshotModelProposal
   return {
     playbook: { stages, fallbackMoves: strings(playbook.fallbackMoves).slice(0, 8) },
     speechBiasTerms,
+    unresolvedStageIds,
   };
 }
 
@@ -148,7 +157,10 @@ const mapSnapshot = (row: SnapshotRow): CallPreparationSnapshotBundle => {
     version: row.version,
     state: row.state,
     sourceManifest: decodeJson(row.source_manifest_json, bundle.sourceManifest),
-    artifactManifest: decodeJson(row.artifact_manifest_json, bundle.artifactManifest),
+    artifactManifest: decodeJson<SnapshotArtifactRef[]>(
+      row.artifact_manifest_json,
+      bundle.artifactManifest
+    ).map((artifact) => ({ ...artifact, itemRefs: artifact.itemRefs ?? [] })),
     warnings: decodeJson(row.warnings_json, bundle.warnings),
     contentHash: row.content_hash,
     compilerVersion: row.compiler_version,
@@ -158,6 +170,26 @@ const mapSnapshot = (row: SnapshotRow): CallPreparationSnapshotBundle => {
 
 export async function snapshotBundleHash(bundleContent: unknown) {
   return sha256(canonicalize(bundleContent));
+}
+
+async function statementAuthorityHash(statement: CaseStatement) {
+  return sha256(canonicalize({
+    id: statement.id,
+    revision: statement.revision,
+    kind: statement.kind,
+    content: statement.content,
+    subjectPartyId: statement.subjectPartyId,
+    speakerPartyId: statement.speakerPartyId,
+    sourceRefs: statement.sourceRefs,
+    claimState: statement.claimState,
+    jurisdiction: statement.jurisdiction,
+    validFrom: statement.validFrom,
+    validUntil: statement.validUntil,
+    allowedUses: statement.allowedUses,
+    allowedWording: statement.allowedWording,
+    commitmentDetail: statement.commitmentDetail,
+    deadlineDetail: statement.deadlineDetail,
+  }));
 }
 
 export function diffSnapshotBundles(current: CallPreparationSnapshotBundle, previous?: CallPreparationSnapshotBundle) {
@@ -193,6 +225,7 @@ export class CallPreparationSnapshotService {
 
   async compileDraft(input: { caseId: string; callPlanId: string; curatedEntries?: CuratedKnowledgeEntry[] }) {
     const compileId = `snapshot_compile_${crypto.randomUUID()}`;
+    await reconcileCaseStatementSourceAuthority(this.database, input.caseId);
     const frozen = await this.freezeSources(input.caseId, input.callPlanId, input.curatedEntries ?? []);
     await this.recordOperation(input.caseId, input.callPlanId, compileId, "snapshot-source-freeze", "committed", frozen.manifest);
     const route = loadModelRouteSettings().chat.complex;
@@ -229,22 +262,32 @@ export class CallPreparationSnapshotService {
       throw error;
     }
     const { speechBiasTerms, warnings: groundingWarnings } = this.groundSpeechBias(proposal.speechBiasTerms, frozen);
-    const warnings = [...frozen.warnings, ...groundingWarnings];
+    const warnings = [
+      ...frozen.warnings,
+      ...groundingWarnings,
+      ...proposal.unresolvedStageIds.map((stageId): SnapshotWarning => ({
+        code: "unresolved-playbook-stage",
+        severity: "warning",
+        message: `Playbook stage '${stageId}' is unresolved because the model did not produce sourced guidance.`,
+        sourceRefs: [],
+      })),
+      ...this.validatePlaybookWording(proposal.playbook, frozen),
+    ];
     const previous = (await this.list(input.caseId, input.callPlanId))[0];
     const version = (previous?.version ?? 0) + 1;
     const compiledAt = Date.now();
     const id = `call_snapshot_${crypto.randomUUID()}`;
-    const caseSnapshot = {
+    const caseSnapshot: CaseSnapshot = {
       objective: frozen.caseRevision.primaryObjective,
       acceptableFallbacks: frozen.caseRevision.acceptableFallbacks,
       supportedStatements: frozen.statements.filter(({ statement }) => statement.claimState === "supported" || statement.claimState === "asserted").map(({ statement }) => ({ statementId: statement.id, kind: statement.kind, content: statement.content, allowedWording: statement.allowedWording })),
       disputedClaims: frozen.statements.filter(({ statement }) => statement.claimState === "disputed").map(({ statement }) => ({ statementId: statement.id, content: statement.content })),
       unknowns: frozen.statements.filter(({ statement }) => statement.claimState === "unknown" || statement.kind === "unknown").map(({ statement }) => ({ statementId: statement.id, content: statement.content })),
-      commitments: frozen.statements.filter(({ statement }) => statement.kind === "commitment").map(({ statement }) => ({ statementId: statement.id, content: statement.content })),
-      deadlines: frozen.statements.filter(({ statement }) => statement.kind === "deadline").map(({ statement }) => ({ statementId: statement.id, content: statement.content })),
+      commitments: frozen.statements.filter(({ statement }) => statement.kind === "commitment").map(({ statement }) => ({ statementId: statement.id, content: statement.content, detail: statement.commitmentDetail })),
+      deadlines: frozen.statements.filter(({ statement }) => statement.kind === "deadline").map(({ statement }) => ({ statementId: statement.id, content: statement.content, detail: statement.deadlineDetail })),
       nextActions: frozen.statements.filter(({ statement }) => statement.kind === "action").map(({ statement }) => ({ statementId: statement.id, content: statement.content })),
     };
-    const callBrief = {
+    const callBrief: CallBrief = {
       objective: frozen.callPlan.objective,
       counterpartyNames: frozen.parties.filter((party) => frozen.callPlan.counterpartyIds.includes(party.id)).map((party) => party.displayName),
       acceptableOutcomes: frozen.callPlan.acceptableOutcomes,
@@ -252,7 +295,7 @@ export class CallPreparationSnapshotService {
       knownRisks: frozen.callPlan.knownRisks,
       scheduledAt: frozen.callPlan.scheduledAt,
     };
-    const safetyConstraints = {
+    const safetyConstraints: SafetyPolicyConstraints = {
       prohibitedClaims: frozen.statements.filter(({ statement }) => statement.reviewState !== "confirmed").map(({ statement }) => statement.content),
       uncertainClaims: frozen.statements.filter(({ statement }) => ["unknown", "disputed", "stale"].includes(statement.claimState)).map(({ statement }) => statement.content),
       missingJurisdictions: frozen.statements.filter(({ statement }) => ["commitment", "deadline"].includes(statement.kind) && !statement.jurisdiction).map(({ statement }) => statement.content),
@@ -308,9 +351,10 @@ export class CallPreparationSnapshotService {
       for (const artifact of artifactManifest) {
         await transaction.execute(
           `INSERT INTO snapshot_artifacts (
-            id, snapshot_id, lineage_key, artifact_path, section, content_hash, source_refs_json, created_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-          [artifact.artifactId, id, artifact.lineageKey, artifact.artifactPath, artifact.section, artifact.contentHash, encodeJson(artifact.sourceRefs), compiledAt]
+            id, snapshot_id, lineage_key, artifact_path, section, content_hash,
+            source_refs_json, item_refs_json, created_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [artifact.artifactId, id, artifact.lineageKey, artifact.artifactPath, artifact.section, artifact.contentHash, encodeJson(artifact.sourceRefs), encodeJson(artifact.itemRefs), compiledAt]
         );
       }
     });
@@ -326,6 +370,7 @@ export class CallPreparationSnapshotService {
       throw new Error("Resolve snapshot errors before marking it ready.");
     }
     await withTransaction(this.database, async (transaction) => {
+      await reconcileCaseStatementSourceAuthority(transaction, snapshot.caseId);
       await this.revalidateManifest(snapshot.caseId, snapshot.sourceManifest, transaction);
       await transaction.execute(
         "UPDATE call_preparation_snapshots SET state = 'superseded', updated_at = ? WHERE case_id = ? AND call_plan_id = ? AND state = 'ready'",
@@ -386,6 +431,8 @@ export class CallPreparationSnapshotService {
       subject_party_id: string | null; speaker_party_id: string | null; review_state: CaseStatement["reviewState"];
       claim_state: CaseStatement["claimState"]; jurisdiction: string | null; valid_from: number | null;
       valid_until: number | null; allowed_uses_json: string; allowed_wording: string | null;
+      source_status: CaseStatement["sourceStatus"]; source_stale_reasons_json: string;
+      commitment_detail_json: string | null; deadline_detail_json: string | null;
       supersedes_id: string | null; created_by: CaseStatement["createdBy"]; created_at: number; updated_at: number;
     }>>(`SELECT * FROM case_statements WHERE case_id = ? AND id IN (${statementIds.map(() => "?").join(",")}) AND review_state = 'confirmed' ORDER BY id`, [caseId, ...statementIds]) : [];
     const sourceRows = statementIds.length ? await this.database.select<Array<{
@@ -393,7 +440,7 @@ export class CallPreparationSnapshotService {
       source_revision: number | null; content_hash: string; page_number: number | null; quoted_text: string | null;
     }>>(`SELECT source.* FROM case_statement_sources source JOIN case_statements statement ON statement.id = source.statement_id WHERE statement.case_id = ? AND statement.id IN (${statementIds.map(() => "?").join(",")}) ORDER BY source.created_at`, [caseId, ...statementIds]) : [];
     const statements: FrozenStatement[] = [];
-    for (const row of statementRows) {
+    for (const row of statementRows.filter((item) => item.source_status === "current")) {
       const sources = sourceRows.filter((source) => source.statement_id === row.id).map((source) => ({
         id: source.id, sourceKind: source.source_kind, sourceId: source.source_id,
         sourceRevision: source.source_revision ?? undefined, contentHash: source.content_hash,
@@ -403,12 +450,20 @@ export class CallPreparationSnapshotService {
         id: row.id, caseId: row.case_id, revision: row.revision, kind: row.kind, content: row.content,
         subjectPartyId: row.subject_party_id ?? undefined, speakerPartyId: row.speaker_party_id ?? undefined,
         sourceRefs: sources, reviewState: row.review_state, claimState: row.claim_state,
+        sourceStatus: row.source_status,
+        sourceStaleReasons: decodeJson<string[]>(row.source_stale_reasons_json, []),
         jurisdiction: row.jurisdiction ?? undefined, validFrom: row.valid_from ?? undefined,
         validUntil: row.valid_until ?? undefined, allowedUses: decodeJson(row.allowed_uses_json, []),
         allowedWording: row.allowed_wording ?? undefined, supersedesId: row.supersedes_id ?? undefined,
+        commitmentDetail: row.commitment_detail_json
+          ? decodeJson(row.commitment_detail_json, undefined)
+          : undefined,
+        deadlineDetail: row.deadline_detail_json
+          ? decodeJson(row.deadline_detail_json, undefined)
+          : undefined,
         createdBy: row.created_by, createdAt: row.created_at, updatedAt: row.updated_at,
       };
-      statements.push({ statement, contentHash: await sha256(canonicalize({ content: statement.content, sources: statement.sourceRefs, revision: statement.revision })) });
+      statements.push({ statement, contentHash: await statementAuthorityHash(statement) });
     }
     const partyIds = decodeJson<string[]>(revisionRow.party_ids_json, []);
     const partyRows = partyIds.length ? await this.database.select<Array<{ id: string; display_name: string; organization: string | null; source_refs_json: string }>>(
@@ -457,13 +512,55 @@ export class CallPreparationSnapshotService {
       compilerVersion: SNAPSHOT_COMPILER_VERSION,
     };
     const warnings: SnapshotWarning[] = [];
+    for (const stale of statementRows.filter((item) => item.source_status === "stale")) {
+      warnings.push({
+        code: "stale-confirmed-statement-excluded",
+        severity: "warning",
+        message: `Confirmed statement '${stale.id}' was excluded because its source changed.`,
+        sourceRefs: [],
+      });
+    }
     if (!statements.length) warnings.push({ code: "no-confirmed-statements", severity: "warning", message: "The snapshot has no confirmed Case Statements.", sourceRefs: [] });
     if (!partyRows.length) warnings.push({ code: "no-confirmed-party", severity: "warning", message: "No confirmed party is available for the call.", sourceRefs: [] });
     if (!callPlan.questionsToAsk.length) warnings.push({ code: "no-planned-questions", severity: "info", message: "The CallPlan has no explicit questions to ask.", sourceRefs: [] });
+    const caseRevisionContent = {
+      id: revisionRow.id,
+      revision: revisionRow.revision,
+      primaryObjective: revisionRow.primary_objective,
+      acceptableFallbacks: decodeJson<string[]>(revisionRow.acceptable_fallbacks_json, []),
+      partyIds,
+      statementIds,
+      nextActionIds: decodeJson<string[]>(revisionRow.next_action_ids_json, []),
+    };
+    const caseRevisionRef: CaseSourceRef = {
+      id: `snapshot_source_case_revision_${revisionRow.id}`,
+      sourceKind: "case-revision",
+      sourceId: revisionRow.id,
+      sourceRevision: revisionRow.revision,
+      contentHash: await sha256(canonicalize(caseRevisionContent)),
+      quotedText: canonicalize({
+        primaryObjective: caseRevisionContent.primaryObjective,
+        acceptableFallbacks: caseRevisionContent.acceptableFallbacks,
+      }),
+    };
+    const callPlanRef: CaseSourceRef = {
+      id: `snapshot_source_call_plan_${callPlan.id}`,
+      sourceKind: "call-plan",
+      sourceId: callPlan.id,
+      sourceRevision: callPlan.rowRevision,
+      contentHash: await sha256(canonicalize(callPlan)),
+      quotedText: canonicalize({
+        title: callPlan.title,
+        objective: callPlan.objective,
+        acceptableOutcomes: callPlan.acceptableOutcomes,
+        questionsToAsk: callPlan.questionsToAsk,
+        knownRisks: callPlan.knownRisks,
+      }),
+    };
     return {
       caseId,
       caseType: cases[0].case_type ?? undefined,
-      caseRevision: { id: revisionRow.id, revision: revisionRow.revision, primaryObjective: revisionRow.primary_objective, acceptableFallbacks: decodeJson(revisionRow.acceptable_fallbacks_json, []), partyIds, statementIds, nextActionIds: decodeJson(revisionRow.next_action_ids_json, []) },
+      caseRevision: caseRevisionContent,
       callPlan,
       parties: partyRows.map((party) => ({ id: party.id, displayName: party.display_name, organization: party.organization ?? undefined, sourceRefs: decodeJson(party.source_refs_json, []) })),
       statements,
@@ -472,6 +569,8 @@ export class CallPreparationSnapshotService {
       curatedEntries,
       manifest,
       warnings,
+      caseRevisionRef,
+      callPlanRef,
     };
   }
 
@@ -497,19 +596,217 @@ export class CallPreparationSnapshotService {
     return { speechBiasTerms, warnings };
   }
 
+  private statementSourceRefs(frozen: FrozenSourceSet, statementId: string) {
+    const item = frozen.statements.find(
+      (candidate) => candidate.statement.id === statementId
+    );
+    if (!item) return [];
+    return this.dedupeSourceRefs([
+      {
+        id: `snapshot_source_statement_${item.statement.id}`,
+        sourceKind: "case-statement",
+        sourceId: item.statement.id,
+        sourceRevision: item.statement.revision,
+        contentHash: item.contentHash,
+        quotedText: item.statement.content,
+      },
+      ...item.statement.sourceRefs,
+    ]);
+  }
+
+  private sourceRefsForGeneratedText(frozen: FrozenSourceSet, value: unknown) {
+    const text = canonicalize(value).toLocaleLowerCase();
+    const tokens = new Set(
+      text.split(/[^\p{L}\p{N}]+/u).filter((token) => token.length >= 4)
+    );
+    const candidates: Array<{ text: string; refs: CaseSourceRef[] }> = [
+      {
+        text: frozen.caseRevisionRef.quotedText ?? "",
+        refs: [frozen.caseRevisionRef],
+      },
+      {
+        text: frozen.callPlanRef.quotedText ?? "",
+        refs: [frozen.callPlanRef],
+      },
+      ...frozen.statements.map((item) => ({
+        text: item.statement.content,
+        refs: this.statementSourceRefs(frozen, item.statement.id),
+      })),
+      ...frozen.evidence.map((item) => ({
+        text: item.excerpt,
+        refs: item.sourceRefs,
+      })),
+    ];
+    const matched = candidates
+      .filter((candidate) => {
+        const candidateTokens = new Set(
+          candidate.text.toLocaleLowerCase()
+            .split(/[^\p{L}\p{N}]+/u)
+            .filter((token) => token.length >= 4)
+        );
+        return [...tokens].some((token) => candidateTokens.has(token));
+      })
+      .flatMap((candidate) => candidate.refs);
+    return this.dedupeSourceRefs(
+      matched.length ? matched : [frozen.callPlanRef, frozen.caseRevisionRef]
+    );
+  }
+
+  private validatePlaybookWording(
+    playbook: CallPlaybookSnapshot,
+    frozen: FrozenSourceSet
+  ): SnapshotWarning[] {
+    const sourceText = [
+      frozen.caseRevisionRef.quotedText ?? "",
+      frozen.callPlanRef.quotedText ?? "",
+      ...frozen.parties.flatMap((party) => [party.displayName, party.organization ?? ""]),
+      ...frozen.statements.map((item) => item.statement.content),
+      ...frozen.evidence.map((item) => item.excerpt),
+    ].join("\n").toLocaleLowerCase();
+    const outputText = canonicalize(playbook);
+    const sensitive = [...new Set(
+      outputText.match(/\b(?:[$€£]?\d[\d,.:%/-]*|[A-Z]{3,}[A-Z0-9-]*)\b/g) ?? []
+    )];
+    const allowedGeneric = new Set(["MOSS", "JSON", "ISO", "UTC", "PDF"]);
+    return sensitive
+      .filter((token) => !allowedGeneric.has(token))
+      .filter((token) => !sourceText.includes(token.toLocaleLowerCase()))
+      .map((token): SnapshotWarning => ({
+        code: "unsupported-playbook-wording",
+        severity: "error",
+        message: `Playbook wording '${token}' was not found in any frozen source.`,
+        sourceRefs: [],
+      }));
+  }
+
+  private dedupeSourceRefs(refs: CaseSourceRef[]) {
+    return [...new Map(
+      refs.map((ref) => [
+        `${ref.sourceKind}:${ref.sourceId}:${ref.sourceRevision ?? ""}:${ref.contentHash}`,
+        ref,
+      ])
+    ).values()];
+  }
+
   private async buildArtifactManifest(snapshotId: string, sections: Record<string, unknown>, frozen: FrozenSourceSet) {
-    const allSources = frozen.evidence.flatMap((item) => item.sourceRefs);
     const entries = Object.entries(sections);
     const artifacts: SnapshotArtifactRef[] = [];
     for (const [section, content] of entries) {
       const contentHash = await sha256(canonicalize(content));
+      const itemRefs: SnapshotArtifactItemRef[] = [];
+      const addItem = async (
+        itemPath: string,
+        value: unknown,
+        sourceRefs: CaseSourceRef[]
+      ) => {
+        itemRefs.push({
+          itemPath,
+          contentHash: await sha256(canonicalize(value)),
+          sourceRefs: this.dedupeSourceRefs(sourceRefs),
+        });
+      };
+      if (section === "caseSnapshot") {
+        const snapshot = content as CaseSnapshot;
+        await addItem("objective", snapshot.objective, [frozen.caseRevisionRef]);
+        for (const [index, fallback] of snapshot.acceptableFallbacks.entries()) {
+          await addItem(`acceptableFallbacks.${index}`, fallback, [frozen.caseRevisionRef]);
+        }
+        for (const key of [
+          "supportedStatements",
+          "disputedClaims",
+          "unknowns",
+          "commitments",
+          "deadlines",
+          "nextActions",
+        ] as const) {
+          for (const [index, item] of snapshot[key].entries()) {
+            await addItem(
+              `${key}.${index}`,
+              item,
+              this.statementSourceRefs(frozen, item.statementId)
+            );
+          }
+        }
+      } else if (section === "callBrief") {
+        const brief = content as CallBrief;
+        await addItem("objective", brief.objective, [frozen.callPlanRef]);
+        for (const key of [
+          "acceptableOutcomes",
+          "questionsToAsk",
+          "knownRisks",
+        ] as const) {
+          for (const [index, item] of brief[key].entries()) {
+            await addItem(`${key}.${index}`, item, [frozen.callPlanRef]);
+          }
+        }
+        for (const [index, name] of brief.counterpartyNames.entries()) {
+          const party = frozen.parties.find((candidate) => candidate.displayName === name);
+          await addItem(
+            `counterpartyNames.${index}`,
+            name,
+            party?.sourceRefs.length ? party.sourceRefs : [frozen.callPlanRef]
+          );
+        }
+        if (brief.scheduledAt !== undefined) {
+          await addItem("scheduledAt", brief.scheduledAt, [frozen.callPlanRef]);
+        }
+      } else if (section === "playbookSnapshot") {
+        const playbook = content as CallPlaybookSnapshot;
+        for (const stage of playbook.stages) {
+          await addItem(
+            `stages.${stage.id}`,
+            stage,
+            this.sourceRefsForGeneratedText(frozen, stage)
+          );
+        }
+        for (const [index, move] of playbook.fallbackMoves.entries()) {
+          await addItem(
+            `fallbackMoves.${index}`,
+            move,
+            this.sourceRefsForGeneratedText(frozen, move)
+          );
+        }
+      } else if (section === "speechBiasTerms") {
+        for (const [index, term] of (content as SpeechBiasTerm[]).entries()) {
+          await addItem(`terms.${index}`, term, term.sourceRefs);
+        }
+      } else if (section === "evidenceIndex") {
+        for (const [index, evidence] of (content as EvidenceIndexEntry[]).entries()) {
+          await addItem(`evidence.${index}`, evidence, evidence.sourceRefs);
+        }
+      } else if (section === "safetyConstraints") {
+        const constraints = content as SafetyPolicyConstraints;
+        for (const key of [
+          "prohibitedClaims",
+          "uncertainClaims",
+          "missingJurisdictions",
+          "requiredAttribution",
+        ] as const) {
+          for (const [index, item] of constraints[key].entries()) {
+            const statement = frozen.statements.find(
+              (candidate) => candidate.statement.content === item
+            );
+            await addItem(
+              `${key}.${index}`,
+              item,
+              statement
+                ? this.statementSourceRefs(frozen, statement.statement.id)
+                : [frozen.caseRevisionRef]
+            );
+          }
+        }
+      }
+      const sourceRefs = this.dedupeSourceRefs(
+        itemRefs.flatMap((item) => item.sourceRefs)
+      );
       artifacts.push({
         artifactId: `snapshot_artifact_${crypto.randomUUID()}`,
         lineageKey: `${frozen.callPlan.id}:${section}`,
         artifactPath: `${snapshotId}/${section}`,
         section,
         contentHash,
-        sourceRefs: section === "playbookSnapshot" ? [] : allSources,
+        sourceRefs,
+        itemRefs,
       });
     }
     return artifacts;
@@ -550,11 +847,79 @@ export class CallPreparationSnapshotService {
       }
     }
     for (const expected of manifest.statements) {
-      const rows = await database.select<Array<{ revision: number; content: string; review_state: string }>>("SELECT revision, content, review_state FROM case_statements WHERE id = ? AND case_id = ?", [expected.statementId, caseId]);
+      const rows = await database.select<Array<{
+        id: string;
+        case_id: string;
+        revision: number;
+        kind: CaseStatement["kind"];
+        content: string;
+        subject_party_id: string | null;
+        speaker_party_id: string | null;
+        review_state: CaseStatement["reviewState"];
+        claim_state: CaseStatement["claimState"];
+        source_status: CaseStatement["sourceStatus"];
+        source_stale_reasons_json: string;
+        jurisdiction: string | null;
+        valid_from: number | null;
+        valid_until: number | null;
+        allowed_uses_json: string;
+        allowed_wording: string | null;
+        commitment_detail_json: string | null;
+        deadline_detail_json: string | null;
+        supersedes_id: string | null;
+        created_by: CaseStatement["createdBy"];
+        created_at: number;
+        updated_at: number;
+      }>>(
+        "SELECT * FROM case_statements WHERE id = ? AND case_id = ?",
+        [expected.statementId, caseId]
+      );
       const current = rows[0];
-      if (!current || current.review_state !== "confirmed" || current.revision !== expected.revision) throw new Error("A confirmed statement changed after snapshot source freeze.");
+      if (
+        !current ||
+        current.review_state !== "confirmed" ||
+        current.source_status !== "current" ||
+        current.revision !== expected.revision
+      ) throw new Error("A confirmed statement or its source changed after snapshot source freeze.");
       const sourceRows = await database.select<Array<{ id: string; source_kind: string; source_id: string; source_revision: number | null; content_hash: string; page_number: number | null; quoted_text: string | null }>>("SELECT * FROM case_statement_sources WHERE statement_id = ? ORDER BY created_at", [expected.statementId]);
-      const contentHash = await sha256(canonicalize({ content: current.content, sources: sourceRows.map((source) => ({ id: source.id, sourceKind: source.source_kind, sourceId: source.source_id, sourceRevision: source.source_revision ?? undefined, contentHash: source.content_hash, pageNumber: source.page_number ?? undefined, quotedText: source.quoted_text ?? undefined })), revision: current.revision }));
+      const statement: CaseStatement = {
+        id: current.id,
+        caseId: current.case_id,
+        revision: current.revision,
+        kind: current.kind,
+        content: current.content,
+        subjectPartyId: current.subject_party_id ?? undefined,
+        speakerPartyId: current.speaker_party_id ?? undefined,
+        sourceRefs: sourceRows.map((source) => ({
+          id: source.id,
+          sourceKind: source.source_kind as CaseSourceRef["sourceKind"],
+          sourceId: source.source_id,
+          sourceRevision: source.source_revision ?? undefined,
+          contentHash: source.content_hash,
+          pageNumber: source.page_number ?? undefined,
+          quotedText: source.quoted_text ?? undefined,
+        })),
+        reviewState: current.review_state,
+        claimState: current.claim_state,
+        sourceStatus: current.source_status,
+        sourceStaleReasons: decodeJson(current.source_stale_reasons_json, []),
+        jurisdiction: current.jurisdiction ?? undefined,
+        validFrom: current.valid_from ?? undefined,
+        validUntil: current.valid_until ?? undefined,
+        allowedUses: decodeJson(current.allowed_uses_json, []),
+        allowedWording: current.allowed_wording ?? undefined,
+        commitmentDetail: current.commitment_detail_json
+          ? decodeJson(current.commitment_detail_json, undefined)
+          : undefined,
+        deadlineDetail: current.deadline_detail_json
+          ? decodeJson(current.deadline_detail_json, undefined)
+          : undefined,
+        supersedesId: current.supersedes_id ?? undefined,
+        createdBy: current.created_by,
+        createdAt: current.created_at,
+        updatedAt: current.updated_at,
+      };
+      const contentHash = await statementAuthorityHash(statement);
       if (contentHash !== expected.contentHash) throw new Error("A confirmed statement hash changed after snapshot source freeze.");
     }
     if (manifest.kmbEntries.length) {

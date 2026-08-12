@@ -73,6 +73,7 @@ const bundle = (): CallPreparationSnapshotBundle => ({
     section,
     contentHash: `hash-${section}`,
     sourceRefs: [],
+    itemRefs: [],
   })),
   sourceManifest: {
     caseRevisionId: "case-revision-1",

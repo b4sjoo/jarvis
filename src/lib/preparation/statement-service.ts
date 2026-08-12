@@ -14,6 +14,7 @@ import {
 } from "./database.js";
 import { serializePreparationContext } from "./conversation-service.js";
 import { composePreparationContext } from "./preparation-context.js";
+import { inspectStatementSourceAuthority } from "./source-authority.js";
 import {
   requireExpectedRevision,
   requireStatementConfirmation,
@@ -27,6 +28,8 @@ import type {
   CaseStatement,
   CaseStatementKind,
   ClaimState,
+  CommitmentDetail,
+  DeadlineDetail,
   PreparationConversation,
   StatementReviewState,
 } from "./types.js";
@@ -44,7 +47,7 @@ const HIGH_IMPACT_KINDS = new Set<CaseStatementKind>([
 
 const PROPOSAL_SYSTEM_PROMPT = `You propose reviewable Case Statements for MOSS.
 Return only JSON with this shape:
-{"statements":[{"kind":"fact|claim|unknown|risk|commitment|deadline|reference-number|action|objective","content":"...","claimState":"asserted|supported|disputed|unknown|stale","sourceMessageIds":["..."],"sourceChunkIds":["..."],"allowedUses":["call-preparation"],"allowedWording":"optional","jurisdiction":"optional"}]}
+{"statements":[{"kind":"fact|claim|unknown|risk|commitment|deadline|reference-number|action|objective","content":"...","claimState":"asserted|supported|disputed|unknown|stale","sourceMessageIds":["..."],"sourceChunkIds":["..."],"allowedUses":["call-preparation"],"allowedWording":"optional","jurisdiction":"optional","commitmentDetail":{"promisorPartyId":"...","beneficiaryPartyId":"optional","action":"...","conditions":["..."],"certainty":"explicit|conditional|ambiguous","lifecycle":"pending-confirmation|active|fulfilled|missed|disputed|superseded|cancelled"},"deadlineDetail":{"linkedStatementId":"...","originalPhrase":"...","precision":"exact|range|relative|unknown","dayKind":"calendar|business|unspecified","timezone":"optional","anchorDate":"optional ISO date","resolvedDate":"optional ISO date"}}]}
 Keep source roles separate. A user message can support what the user asserted; an assistant message is never evidence. Material chunk IDs must exactly match the supplied identifiers. Do not confirm proposals or invent source IDs. Preserve conditions, speaker attribution, original relative dates, uncertainty, and reference numbers in the statement text.`;
 
 interface StatementRow {
@@ -62,6 +65,10 @@ interface StatementRow {
   valid_until: number | null;
   allowed_uses_json: string;
   allowed_wording: string | null;
+  source_status: CaseStatement["sourceStatus"];
+  source_stale_reasons_json: string;
+  commitment_detail_json: string | null;
+  deadline_detail_json: string | null;
   supersedes_id: string | null;
   created_by: CaseStatement["createdBy"];
   created_at: number;
@@ -101,16 +108,108 @@ export interface StatementProposalDraft {
   allowedUses: string[];
   allowedWording?: string;
   jurisdiction?: string;
+  commitmentDetail?: CommitmentDetail;
+  deadlineDetail?: DeadlineDetail;
 }
 
 export const isHighImpactStatement = (kind: CaseStatementKind) =>
   HIGH_IMPACT_KINDS.has(kind);
+
+export function requireStructuredStatementDetails(input: {
+  kind: CaseStatementKind;
+  commitmentDetail?: CommitmentDetail;
+  deadlineDetail?: DeadlineDetail;
+}) {
+  if (input.kind === "commitment" && !input.commitmentDetail) {
+    throw new Error("Commitment details are required before confirmation.");
+  }
+  if (input.kind === "deadline" && !input.deadlineDetail) {
+    throw new Error("Deadline details are required before confirmation.");
+  }
+}
 
 const cleanJson = (value: string) => value
   .trim()
   .replace(/^```(?:json)?\s*/i, "")
   .replace(/\s*```$/, "")
   .trim();
+
+const COMMITMENT_CERTAINTIES = new Set<CommitmentDetail["certainty"]>([
+  "explicit", "conditional", "ambiguous",
+]);
+const COMMITMENT_LIFECYCLES = new Set<CommitmentDetail["lifecycle"]>([
+  "pending-confirmation", "active", "fulfilled", "missed", "disputed",
+  "superseded", "cancelled",
+]);
+const DEADLINE_PRECISIONS = new Set<DeadlineDetail["precision"]>([
+  "exact", "range", "relative", "unknown",
+]);
+const DEADLINE_DAY_KINDS = new Set<NonNullable<DeadlineDetail["dayKind"]>>([
+  "calendar", "business", "unspecified",
+]);
+
+const optionalText = (value: unknown) =>
+  typeof value === "string" && value.trim() ? value.trim() : undefined;
+
+export const parseCommitmentDetail = (
+  value: unknown,
+  index: number
+): CommitmentDetail | undefined => {
+  if (!value || typeof value !== "object") return undefined;
+  const record = value as Record<string, unknown>;
+  const promisorPartyId = optionalText(record.promisorPartyId);
+  const action = optionalText(record.action);
+  const certainty = record.certainty as CommitmentDetail["certainty"];
+  const lifecycle = record.lifecycle as CommitmentDetail["lifecycle"];
+  if (
+    !promisorPartyId ||
+    !action ||
+    !COMMITMENT_CERTAINTIES.has(certainty) ||
+    !COMMITMENT_LIFECYCLES.has(lifecycle)
+  ) {
+    throw new Error(`Statement proposal ${index + 1} has invalid commitment details.`);
+  }
+  return {
+    promisorPartyId,
+    beneficiaryPartyId: optionalText(record.beneficiaryPartyId),
+    action,
+    conditions: Array.isArray(record.conditions)
+      ? record.conditions.filter((item): item is string => typeof item === "string")
+          .map((item) => item.trim()).filter(Boolean)
+      : [],
+    certainty,
+    lifecycle,
+  };
+};
+
+export const parseDeadlineDetail = (
+  value: unknown,
+  index: number
+): DeadlineDetail | undefined => {
+  if (!value || typeof value !== "object") return undefined;
+  const record = value as Record<string, unknown>;
+  const linkedStatementId = optionalText(record.linkedStatementId);
+  const originalPhrase = optionalText(record.originalPhrase);
+  const precision = record.precision as DeadlineDetail["precision"];
+  const dayKind = optionalText(record.dayKind) as DeadlineDetail["dayKind"];
+  if (
+    !linkedStatementId ||
+    !originalPhrase ||
+    !DEADLINE_PRECISIONS.has(precision) ||
+    (dayKind && !DEADLINE_DAY_KINDS.has(dayKind))
+  ) {
+    throw new Error(`Statement proposal ${index + 1} has invalid deadline details.`);
+  }
+  return {
+    linkedStatementId,
+    originalPhrase,
+    precision,
+    dayKind,
+    timezone: optionalText(record.timezone),
+    anchorDate: optionalText(record.anchorDate),
+    resolvedDate: optionalText(record.resolvedDate),
+  };
+};
 
 export function parseStatementProposalResponse(value: string): StatementProposalDraft[] {
   const parsed = JSON.parse(cleanJson(value)) as { statements?: unknown[] };
@@ -137,8 +236,55 @@ export function parseStatementProposalResponse(value: string): StatementProposal
       allowedUses: strings(record.allowedUses),
       allowedWording: typeof record.allowedWording === "string" && record.allowedWording.trim() ? record.allowedWording.trim() : undefined,
       jurisdiction: typeof record.jurisdiction === "string" && record.jurisdiction.trim() ? record.jurisdiction.trim() : undefined,
+      commitmentDetail: parseCommitmentDetail(record.commitmentDetail, index),
+      deadlineDetail: parseDeadlineDetail(record.deadlineDetail, index),
     };
   });
+}
+
+export async function requireStructuredStatementReferences(
+  database: SqlDatabase,
+  statement: CaseStatement
+) {
+  if (statement.commitmentDetail) {
+    const partyIds = [
+      statement.commitmentDetail.promisorPartyId,
+      statement.commitmentDetail.beneficiaryPartyId,
+    ].filter((value): value is string => Boolean(value));
+    const placeholders = partyIds.map(() => "?").join(",");
+    const rows = partyIds.length
+      ? await database.select<Array<{ id: string }>>(
+        `SELECT id FROM case_parties WHERE case_id = ?
+         AND review_state = 'confirmed' AND id IN (${placeholders})`,
+        [statement.caseId, ...partyIds]
+      )
+      : [];
+    if (new Set(rows.map((row) => row.id)).size !== new Set(partyIds).size) {
+      throw new Error("Commitment parties must be confirmed parties in this Case.");
+    }
+  }
+  if (statement.deadlineDetail) {
+    if (statement.deadlineDetail.linkedStatementId === statement.id) {
+      throw new Error("A deadline cannot link to itself.");
+    }
+    const rows = await database.select<Array<{
+      id: string;
+      kind: CaseStatementKind;
+      review_state: StatementReviewState;
+    }>>(
+      `SELECT id, kind, review_state FROM case_statements
+       WHERE id = ? AND case_id = ?`,
+      [statement.deadlineDetail.linkedStatementId, statement.caseId]
+    );
+    const linked = rows[0];
+    if (
+      !linked ||
+      linked.review_state !== "confirmed" ||
+      !["commitment", "action"].includes(linked.kind)
+    ) {
+      throw new Error("A deadline must link to a confirmed commitment or action in this Case.");
+    }
+  }
 }
 
 const mapSource = (row: SourceRow): CaseSourceRef => ({
@@ -162,11 +308,19 @@ const mapStatement = (row: StatementRow, sources: CaseSourceRef[]): CaseStatemen
   sourceRefs: sources,
   reviewState: row.review_state,
   claimState: row.claim_state,
+  sourceStatus: row.source_status,
+  sourceStaleReasons: decodeJson<string[]>(row.source_stale_reasons_json, []),
   jurisdiction: row.jurisdiction ?? undefined,
   validFrom: row.valid_from ?? undefined,
   validUntil: row.valid_until ?? undefined,
   allowedUses: decodeJson(row.allowed_uses_json, []),
   allowedWording: row.allowed_wording ?? undefined,
+  commitmentDetail: row.commitment_detail_json
+    ? decodeJson<CommitmentDetail | undefined>(row.commitment_detail_json, undefined)
+    : undefined,
+  deadlineDetail: row.deadline_detail_json
+    ? decodeJson<DeadlineDetail | undefined>(row.deadline_detail_json, undefined)
+    : undefined,
   supersedesId: row.supersedes_id ?? undefined,
   createdBy: row.created_by,
   createdAt: row.created_at,
@@ -271,6 +425,8 @@ export class ReviewedCaseStateService {
     allowedUses?: string[];
     allowedWording?: string;
     jurisdiction?: string;
+    commitmentDetail?: CommitmentDetail;
+    deadlineDetail?: DeadlineDetail;
   }) {
     const content = input.content.trim();
     if (!content) throw new Error("Statement content is required.");
@@ -290,6 +446,8 @@ export class ReviewedCaseStateService {
       allowedUses: input.allowedUses ?? ["call-preparation"],
       allowedWording: input.allowedWording,
       jurisdiction: input.jurisdiction,
+      commitmentDetail: input.commitmentDetail,
+      deadlineDetail: input.deadlineDetail,
       createdBy: "user",
     });
   }
@@ -345,7 +503,10 @@ export class ReviewedCaseStateService {
             quotedText: message.content.slice(0, 500),
           }] : [];
         });
-        for (const source of messageSources) source.contentHash = await sha256(source.quotedText ?? "");
+        for (const source of messageSources) {
+          const message = validMessages.find((item) => item.id === source.sourceId);
+          source.contentHash = await sha256(message?.content ?? "");
+        }
         const chunkSources: CaseSourceRef[] = draft.sourceChunkIds.flatMap((chunkId) => {
           const chunk = validChunks.find((item) => item.id === chunkId);
           return chunk ? [{
@@ -381,25 +542,78 @@ export class ReviewedCaseStateService {
     allowedUses: string[];
     allowedWording?: string;
     jurisdiction?: string;
+    commitmentDetail?: CommitmentDetail;
+    deadlineDetail?: DeadlineDetail;
   }) {
     const current = await this.getStatement(input.statementId);
     requireExpectedRevision({ entity: "CaseStatement", expected: input.expectedRevision, actual: current.revision });
-    if (current.reviewState !== "proposed" && current.reviewState !== "rejected") {
-      throw new Error("Confirmed statements must be superseded rather than edited in place.");
-    }
+    if (current.reviewState === "superseded") throw new Error("A superseded statement cannot be revised.");
     const content = input.content.trim();
     if (!content) throw new Error("Statement content is required.");
-    const result = await this.database.execute(
-      `UPDATE case_statements SET content = ?, kind = ?, claim_state = ?, allowed_uses_json = ?,
-       allowed_wording = ?, jurisdiction = ?, review_state = 'proposed', revision = revision + 1, updated_at = ?
-       WHERE id = ? AND revision = ?`,
-      [content, input.kind, input.claimState, encodeJson(input.allowedUses), input.allowedWording?.trim() || null, input.jurisdiction?.trim() || null, Date.now(), input.statementId, input.expectedRevision]
-    );
-    if (result.rowsAffected !== 1) throw new Error("CaseStatement revision conflict.");
-    await this.recordReviewEvent(current.caseId, current.id, "edited", input.expectedRevision + 1);
+    const now = Date.now();
+    const editSource: CaseSourceRef = {
+      id: `statement_source_${crypto.randomUUID()}`,
+      sourceKind: "user",
+      sourceId: `user_edit_${crypto.randomUUID()}`,
+      contentHash: await sha256(content),
+      quotedText: content,
+    };
+    const replacement: CaseStatement = {
+      ...current,
+      id: `statement_${crypto.randomUUID()}`,
+      revision: current.revision + 1,
+      kind: input.kind,
+      content,
+      sourceRefs: [editSource],
+      reviewState: "proposed",
+      claimState: input.claimState,
+      sourceStatus: "current",
+      sourceStaleReasons: [],
+      allowedUses: input.allowedUses,
+      allowedWording: input.allowedWording?.trim() || undefined,
+      jurisdiction: input.jurisdiction?.trim() || undefined,
+      commitmentDetail: input.commitmentDetail,
+      deadlineDetail: input.deadlineDetail,
+      supersedesId: current.id,
+      createdBy: "user",
+      createdAt: now,
+      updatedAt: now,
+    };
+    await withTransaction(this.database, async (transaction) => {
+      await this.insertStatement(replacement, transaction);
+      if (current.reviewState !== "confirmed") {
+        const changed = await transaction.execute(
+          `UPDATE case_statements SET review_state = 'superseded', updated_at = ?
+           WHERE id = ? AND revision = ? AND review_state = ?`,
+          [now, current.id, input.expectedRevision, current.reviewState]
+        );
+        if (changed.rowsAffected !== 1) throw new Error("CaseStatement revision conflict.");
+        await this.insertStatementEvent({
+          caseId: current.caseId,
+          statementId: current.id,
+          eventType: "review-transition",
+          revision: current.revision,
+          fromStatementId: current.id,
+          toStatementId: replacement.id,
+          fromState: current.reviewState,
+          toState: "superseded",
+        }, transaction);
+      }
+      await this.insertStatementEvent({
+        caseId: current.caseId,
+        statementId: replacement.id,
+        eventType: "edited",
+        revision: replacement.revision,
+        fromStatementId: current.id,
+        toStatementId: replacement.id,
+        fromState: current.reviewState,
+        toState: "proposed",
+      }, transaction);
+    });
     if (current.createdBy === "complex-model-proposal") {
       await this.recordDerivedEvaluation(current.caseId, current.id, "needs-edit");
     }
+    return replacement;
   }
 
   async confirmStatement(statementId: string, expectedRevision: number) {
@@ -410,19 +624,63 @@ export class ReviewedCaseStateService {
       sourceCount: current.sourceRefs.length,
       highImpact: isHighImpactStatement(current.kind),
     });
+    requireStructuredStatementDetails(current);
+    await requireStructuredStatementReferences(this.database, current);
+    const authority = await inspectStatementSourceAuthority(this.database, current.id);
+    if (authority.status !== "current") {
+      throw new Error(`Statement sources changed: ${authority.reasons.join(", ")}`);
+    }
     await withTransaction(this.database, async (transaction) => {
+      let replacedConfirmedId: string | undefined;
+      if (current.supersedesId) {
+        const replaced = await transaction.select<Array<{ review_state: StatementReviewState }>>(
+          "SELECT review_state FROM case_statements WHERE id = ? AND case_id = ?",
+          [current.supersedesId, current.caseId]
+        );
+        if (replaced[0]?.review_state === "confirmed") {
+          const superseded = await transaction.execute(
+            `UPDATE case_statements SET review_state = 'superseded', updated_at = ?
+             WHERE id = ? AND case_id = ? AND review_state = 'confirmed'`,
+            [Date.now(), current.supersedesId, current.caseId]
+          );
+          if (superseded.rowsAffected !== 1) throw new Error("Superseded statement changed before confirmation.");
+          replacedConfirmedId = current.supersedesId;
+          await this.insertStatementEvent({
+            caseId: current.caseId,
+            statementId: current.supersedesId,
+            eventType: "review-transition",
+            revision: Math.max(1, current.revision - 1),
+            fromState: "confirmed",
+            toState: "superseded",
+            toStatementId: current.id,
+          }, transaction);
+        }
+      }
       const changed = await transaction.execute(
-        `UPDATE case_statements SET review_state = 'confirmed', revision = revision + 1, updated_at = ?
+        `UPDATE case_statements SET review_state = 'confirmed', updated_at = ?
          WHERE id = ? AND revision = ? AND review_state IN ('proposed', 'rejected')`,
         [Date.now(), current.id, expectedRevision]
       );
       if (changed.rowsAffected !== 1) throw new Error("CaseStatement revision conflict.");
       await this.commitCaseRevision(
-        { caseId: current.caseId, statement: current, commandId: `confirm_statement_${crypto.randomUUID()}` },
+        {
+          caseId: current.caseId,
+          statement: { ...current, reviewState: "confirmed" },
+          removeStatementId: replacedConfirmedId,
+          commandId: `confirm_statement_${crypto.randomUUID()}`,
+        },
         transaction
       );
+      await this.insertStatementEvent({
+        caseId: current.caseId,
+        statementId: current.id,
+        eventType: "review-transition",
+        revision: current.revision,
+        fromState: current.reviewState,
+        toState: "confirmed",
+      }, transaction);
     });
-    await this.recordReviewEvent(current.caseId, current.id, "confirmed", expectedRevision + 1);
+    await this.recordReviewEvent(current.caseId, current.id, "confirmed", expectedRevision);
     if (current.createdBy === "complex-model-proposal") {
       await this.recordDerivedEvaluation(current.caseId, current.id, "correct");
     }
@@ -438,8 +696,8 @@ export class ReviewedCaseStateService {
     requireTransition({ entity: "CaseStatement", from: current.reviewState, to: "superseded", allowed: STATEMENT_REVIEW_TRANSITIONS });
     await withTransaction(this.database, async (transaction) => {
       const changed = await transaction.execute(
-        "UPDATE case_statements SET review_state = 'superseded', revision = revision + 1, updated_at = ? WHERE id = ? AND revision = ?",
-        [Date.now(), current.id, expectedRevision]
+        "UPDATE case_statements SET review_state = 'superseded', updated_at = ? WHERE id = ? AND revision = ? AND review_state = ?",
+        [Date.now(), current.id, expectedRevision, current.reviewState]
       );
       if (changed.rowsAffected !== 1) throw new Error("CaseStatement revision conflict.");
       if (current.reviewState === "confirmed") {
@@ -448,8 +706,16 @@ export class ReviewedCaseStateService {
           transaction
         );
       }
+      await this.insertStatementEvent({
+        caseId: current.caseId,
+        statementId: current.id,
+        eventType: "review-transition",
+        revision: current.revision,
+        fromState: current.reviewState,
+        toState: "superseded",
+      }, transaction);
     });
-    await this.recordReviewEvent(current.caseId, current.id, "superseded", expectedRevision + 1);
+    await this.recordReviewEvent(current.caseId, current.id, "superseded", expectedRevision);
   }
 
   private async transitionStatement(statementId: string, expectedRevision: number, state: StatementReviewState) {
@@ -457,11 +723,19 @@ export class ReviewedCaseStateService {
     requireExpectedRevision({ entity: "CaseStatement", expected: expectedRevision, actual: current.revision });
     requireTransition({ entity: "CaseStatement", from: current.reviewState, to: state, allowed: STATEMENT_REVIEW_TRANSITIONS });
     const changed = await this.database.execute(
-      "UPDATE case_statements SET review_state = ?, revision = revision + 1, updated_at = ? WHERE id = ? AND revision = ?",
-      [state, Date.now(), current.id, expectedRevision]
+      "UPDATE case_statements SET review_state = ?, updated_at = ? WHERE id = ? AND revision = ? AND review_state = ?",
+      [state, Date.now(), current.id, expectedRevision, current.reviewState]
     );
     if (changed.rowsAffected !== 1) throw new Error("CaseStatement revision conflict.");
-    await this.recordReviewEvent(current.caseId, current.id, state, expectedRevision + 1);
+    await this.insertStatementEvent({
+      caseId: current.caseId,
+      statementId: current.id,
+      eventType: "review-transition",
+      revision: current.revision,
+      fromState: current.reviewState,
+      toState: state,
+    });
+    await this.recordReviewEvent(current.caseId, current.id, state, expectedRevision);
   }
 
   private async getStatement(statementId: string) {
@@ -480,6 +754,8 @@ export class ReviewedCaseStateService {
     allowedUses: string[];
     allowedWording?: string;
     jurisdiction?: string;
+    commitmentDetail?: CommitmentDetail;
+    deadlineDetail?: DeadlineDetail;
     createdBy: CaseStatement["createdBy"];
   }) {
     const now = Date.now();
@@ -492,32 +768,120 @@ export class ReviewedCaseStateService {
       sourceRefs: input.sourceRefs,
       reviewState: "proposed",
       claimState: input.claimState,
+      sourceStatus: "current",
+      sourceStaleReasons: [],
       jurisdiction: input.jurisdiction,
       allowedUses: input.allowedUses,
       allowedWording: input.allowedWording,
+      commitmentDetail: input.commitmentDetail,
+      deadlineDetail: input.deadlineDetail,
       createdBy: input.createdBy,
       createdAt: now,
       updatedAt: now,
     };
     await withTransaction(this.database, async (transaction) => {
-      await transaction.execute(
-        `INSERT INTO case_statements (
-          id, case_id, revision, kind, content, subject_party_id, speaker_party_id,
-          review_state, claim_state, jurisdiction, valid_from, valid_until,
-          allowed_uses_json, allowed_wording, supersedes_id, created_by, created_at, updated_at
-        ) VALUES (?, ?, 1, ?, ?, NULL, NULL, 'proposed', ?, ?, NULL, NULL, ?, ?, NULL, ?, ?, ?)`,
-        [statement.id, statement.caseId, statement.kind, statement.content, statement.claimState, statement.jurisdiction ?? null, encodeJson(statement.allowedUses), statement.allowedWording ?? null, statement.createdBy, now, now]
-      );
-      for (const source of statement.sourceRefs) {
-        await transaction.execute(
-          `INSERT INTO case_statement_sources (
-            id, statement_id, source_kind, source_id, source_revision, content_hash, page_number, quoted_text, created_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-          [source.id, statement.id, source.sourceKind, source.sourceId, source.sourceRevision ?? null, source.contentHash, source.pageNumber ?? null, source.quotedText ?? null, now]
-        );
-      }
+      await this.insertStatement(statement, transaction);
+      await this.insertStatementEvent({
+        caseId: statement.caseId,
+        statementId: statement.id,
+        eventType: "created",
+        revision: statement.revision,
+        toStatementId: statement.id,
+        toState: statement.reviewState,
+      }, transaction);
     });
     return statement;
+  }
+
+  private async insertStatement(
+    statement: CaseStatement,
+    database: SqlDatabase = this.database
+  ) {
+    await database.execute(
+      `INSERT INTO case_statements (
+        id, case_id, revision, kind, content, subject_party_id, speaker_party_id,
+        review_state, claim_state, jurisdiction, valid_from, valid_until,
+        allowed_uses_json, allowed_wording, supersedes_id, created_by, created_at,
+        updated_at, source_status, source_stale_reasons_json,
+        commitment_detail_json, deadline_detail_json
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        statement.id,
+        statement.caseId,
+        statement.revision,
+        statement.kind,
+        statement.content,
+        statement.subjectPartyId ?? null,
+        statement.speakerPartyId ?? null,
+        statement.reviewState,
+        statement.claimState,
+        statement.jurisdiction ?? null,
+        statement.validFrom ?? null,
+        statement.validUntil ?? null,
+        encodeJson(statement.allowedUses),
+        statement.allowedWording ?? null,
+        statement.supersedesId ?? null,
+        statement.createdBy,
+        statement.createdAt,
+        statement.updatedAt,
+        statement.sourceStatus,
+        encodeJson(statement.sourceStaleReasons),
+        statement.commitmentDetail ? encodeJson(statement.commitmentDetail) : null,
+        statement.deadlineDetail ? encodeJson(statement.deadlineDetail) : null,
+      ]
+    );
+    for (const source of statement.sourceRefs) {
+      await database.execute(
+        `INSERT INTO case_statement_sources (
+          id, statement_id, source_kind, source_id, source_revision,
+          content_hash, page_number, quoted_text, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          source.id,
+          statement.id,
+          source.sourceKind,
+          source.sourceId,
+          source.sourceRevision ?? null,
+          source.contentHash,
+          source.pageNumber ?? null,
+          source.quotedText ?? null,
+          statement.createdAt,
+        ]
+      );
+    }
+  }
+
+  private async insertStatementEvent(input: {
+    caseId: string;
+    statementId: string;
+    eventType: "created" | "edited" | "review-transition";
+    revision: number;
+    fromStatementId?: string;
+    toStatementId?: string;
+    fromState?: StatementReviewState;
+    toState?: StatementReviewState;
+    payload?: unknown;
+  }, database: SqlDatabase = this.database) {
+    await database.execute(
+      `INSERT INTO case_statement_events (
+        id, case_id, statement_id, event_type, from_statement_id,
+        to_statement_id, from_state, to_state, statement_revision,
+        payload_json, occurred_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        `statement_event_${crypto.randomUUID()}`,
+        input.caseId,
+        input.statementId,
+        input.eventType,
+        input.fromStatementId ?? null,
+        input.toStatementId ?? null,
+        input.fromState ?? null,
+        input.toState ?? null,
+        input.revision,
+        encodeJson(input.payload ?? {}),
+        Date.now(),
+      ]
+    );
   }
 
   private async commitCaseRevision(input: {

@@ -9,6 +9,7 @@ use uuid::Uuid;
 use zip::ZipArchive;
 
 const CONTENT_SOURCES_DIR: &str = "content-sources";
+const CONTENT_DELETIONS_DIR: &str = ".material-deletions";
 const MAX_IDENTIFIER_CHARS: usize = 128;
 const TEXT_MAX_BYTES: u64 = 10 * 1024 * 1024;
 const IMAGE_MAX_BYTES: u64 = 25 * 1024 * 1024;
@@ -114,6 +115,148 @@ pub fn delete_content_file(
         fs::remove_dir(&collection_root)
             .map_err(|error| format!("Failed to clean empty content collection: {error}"))?;
     }
+    Ok(true)
+}
+
+#[tauri::command]
+pub fn stage_content_deletion(
+    app: AppHandle,
+    operation_id: String,
+    collection_id: String,
+    content_id: String,
+) -> Result<bool, String> {
+    let app_data = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| format!("Failed to resolve app data directory: {error}"))?;
+    stage_content_deletion_at_root(
+        &app_data,
+        &operation_id,
+        &collection_id,
+        &content_id,
+    )
+}
+
+#[tauri::command]
+pub fn restore_content_deletion(
+    app: AppHandle,
+    operation_id: String,
+    collection_id: String,
+    content_id: String,
+) -> Result<bool, String> {
+    let app_data = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| format!("Failed to resolve app data directory: {error}"))?;
+    restore_content_deletion_at_root(
+        &app_data,
+        &operation_id,
+        &collection_id,
+        &content_id,
+    )
+}
+
+#[tauri::command]
+pub fn finalize_content_deletion(
+    app: AppHandle,
+    operation_id: String,
+) -> Result<bool, String> {
+    let app_data = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| format!("Failed to resolve app data directory: {error}"))?;
+    finalize_content_deletion_at_root(&app_data, &operation_id)
+}
+
+fn material_deletion_root(app_data: &Path, operation_id: &str) -> PathBuf {
+    app_data
+        .join(CONTENT_SOURCES_DIR)
+        .join(CONTENT_DELETIONS_DIR)
+        .join(operation_id)
+}
+
+fn stage_content_deletion_at_root(
+    app_data: &Path,
+    operation_id: &str,
+    collection_id: &str,
+    content_id: &str,
+) -> Result<bool, String> {
+    validate_identifier(operation_id, "operation id")?;
+    validate_identifier(collection_id, "collection id")?;
+    validate_identifier(content_id, "content id")?;
+    let sources_root = app_data.join(CONTENT_SOURCES_DIR);
+    let collection_root = sources_root.join(collection_id);
+    let content_root = collection_root.join(content_id);
+    let operation_root = material_deletion_root(app_data, operation_id);
+    let staged_content = operation_root.join("content");
+    reject_symlink(&sources_root)?;
+    reject_symlink(&collection_root)?;
+    reject_symlink(&content_root)?;
+    reject_symlink(&operation_root)?;
+    reject_symlink(&staged_content)?;
+    if staged_content.exists() {
+        return Ok(true);
+    }
+    if !content_root.exists() {
+        return Ok(false);
+    }
+    if !content_root.is_dir() {
+        return Err("Content storage is not a directory.".to_string());
+    }
+    fs::create_dir_all(&operation_root)
+        .map_err(|error| format!("Failed to create material deletion staging: {error}"))?;
+    fs::rename(&content_root, &staged_content)
+        .map_err(|error| format!("Failed to stage material content for deletion: {error}"))?;
+    Ok(true)
+}
+
+fn restore_content_deletion_at_root(
+    app_data: &Path,
+    operation_id: &str,
+    collection_id: &str,
+    content_id: &str,
+) -> Result<bool, String> {
+    validate_identifier(operation_id, "operation id")?;
+    validate_identifier(collection_id, "collection id")?;
+    validate_identifier(content_id, "content id")?;
+    let sources_root = app_data.join(CONTENT_SOURCES_DIR);
+    let collection_root = sources_root.join(collection_id);
+    let content_root = collection_root.join(content_id);
+    let operation_root = material_deletion_root(app_data, operation_id);
+    let staged_content = operation_root.join("content");
+    reject_symlink(&collection_root)?;
+    reject_symlink(&content_root)?;
+    reject_symlink(&operation_root)?;
+    reject_symlink(&staged_content)?;
+    if !staged_content.exists() {
+        return Ok(false);
+    }
+    if content_root.exists() {
+        return Err("Material content already exists at its restore target.".to_string());
+    }
+    fs::create_dir_all(&collection_root)
+        .map_err(|error| format!("Failed to recreate content collection: {error}"))?;
+    fs::rename(&staged_content, &content_root)
+        .map_err(|error| format!("Failed to restore staged material content: {error}"))?;
+    if operation_root.exists() {
+        fs::remove_dir_all(&operation_root)
+            .map_err(|error| format!("Failed to clean material deletion staging: {error}"))?;
+    }
+    Ok(true)
+}
+
+fn finalize_content_deletion_at_root(
+    app_data: &Path,
+    operation_id: &str,
+) -> Result<bool, String> {
+    validate_identifier(operation_id, "operation id")?;
+    let operation_root = material_deletion_root(app_data, operation_id);
+    reject_symlink(&operation_root)?;
+    if !operation_root.exists() {
+        return Ok(false);
+    }
+    fs::remove_dir_all(&operation_root)
+        .map_err(|error| format!("Failed to finalize material deletion: {error}"))?;
     Ok(true)
 }
 
@@ -542,6 +685,40 @@ mod tests {
         fs::write(&binary_text, [0xff, 0x00]).unwrap();
         assert!(detect_content_format(&fake_pdf, 9).is_err());
         assert!(detect_content_format(&binary_text, 2).is_err());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn material_deletion_can_stage_restore_and_finalize_idempotently() {
+        let root = test_root();
+        let content = root.join(CONTENT_SOURCES_DIR).join("case-1").join("material-1");
+        fs::create_dir_all(&content).unwrap();
+        fs::write(content.join("original.txt"), b"recoverable").unwrap();
+
+        assert!(stage_content_deletion_at_root(
+            &root,
+            "operation-1",
+            "case-1",
+            "material-1"
+        ).unwrap());
+        assert!(!content.exists());
+        assert!(restore_content_deletion_at_root(
+            &root,
+            "operation-1",
+            "case-1",
+            "material-1"
+        ).unwrap());
+        assert_eq!(fs::read(content.join("original.txt")).unwrap(), b"recoverable");
+
+        assert!(stage_content_deletion_at_root(
+            &root,
+            "operation-2",
+            "case-1",
+            "material-1"
+        ).unwrap());
+        assert!(finalize_content_deletion_at_root(&root, "operation-2").unwrap());
+        assert!(!content.exists());
+        assert!(!finalize_content_deletion_at_root(&root, "operation-2").unwrap());
         fs::remove_dir_all(root).unwrap();
     }
 

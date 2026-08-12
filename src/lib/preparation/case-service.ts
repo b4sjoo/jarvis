@@ -245,6 +245,8 @@ export class CasePreparationService {
     title: string;
     status: CaseState;
     caseType?: string;
+    primaryObjective?: string;
+    acceptableFallbacks?: string[];
   }) {
     const current = await this.getCase(input.caseId);
     if (!current) throw new Error("Case was not found.");
@@ -260,21 +262,52 @@ export class CasePreparationService {
       allowed: CASE_TRANSITIONS,
     });
     if (!input.title.trim()) throw new Error("Case title is required.");
+    const currentRevision = await this.getCurrentRevision(input.caseId);
+    if (!currentRevision) throw new Error("Current CaseRevision was not found.");
+    const primaryObjective = input.primaryObjective === undefined
+      ? currentRevision.primaryObjective
+      : input.primaryObjective.trim();
+    if (!primaryObjective) throw new Error("Primary objective is required.");
+    const acceptableFallbacks = input.acceptableFallbacks === undefined
+      ? currentRevision.acceptableFallbacks
+      : input.acceptableFallbacks.map((value) => value.trim()).filter(Boolean);
+    const revisionChanged =
+      primaryObjective !== currentRevision.primaryObjective ||
+      JSON.stringify(acceptableFallbacks) !== JSON.stringify(currentRevision.acceptableFallbacks);
     const updatedAt = Date.now();
-    const result = await this.database.execute(
-      `UPDATE cases SET title = ?, status = ?, case_type = ?,
-       row_revision = row_revision + 1, updated_at = ?
-       WHERE id = ? AND row_revision = ?`,
-      [
-        input.title.trim(),
-        input.status,
-        input.caseType?.trim() || null,
-        updatedAt,
-        input.caseId,
-        input.expectedRevision,
-      ]
-    );
-    if (result.rowsAffected !== 1) throw new Error("Case revision conflict.");
+    await withTransaction(this.database, async (transaction) => {
+      let revisionId = current.currentRevisionId;
+      if (revisionChanged) {
+        const revision: CaseRevision = {
+          ...currentRevision,
+          id: id("case_revision"),
+          revision: currentRevision.revision + 1,
+          parentRevisionId: currentRevision.id,
+          primaryObjective,
+          acceptableFallbacks,
+          sourceCommandId: id("update_case_command"),
+          createdAt: updatedAt,
+        };
+        await this.insertRevision(revision, transaction);
+        revisionId = revision.id;
+      }
+      const result = await transaction.execute(
+        `UPDATE cases SET title = ?, status = ?, case_type = ?,
+         current_revision_id = ?, row_revision = row_revision + 1, updated_at = ?
+         WHERE id = ? AND row_revision = ? AND current_revision_id = ?`,
+        [
+          input.title.trim(),
+          input.status,
+          input.caseType?.trim() || null,
+          revisionId,
+          updatedAt,
+          input.caseId,
+          input.expectedRevision,
+          current.currentRevisionId,
+        ]
+      );
+      if (result.rowsAffected !== 1) throw new Error("Case revision conflict.");
+    });
     return this.getCase(input.caseId);
   }
 

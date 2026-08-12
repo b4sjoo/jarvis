@@ -12,6 +12,7 @@ export type ClaimState =
   | "disputed"
   | "unknown"
   | "stale";
+export type StatementSourceStatus = "current" | "stale";
 
 export type CaseStatementKind =
   | "objective"
@@ -29,7 +30,10 @@ export type CaseSourceKind =
   | "conversation"
   | "call-turn"
   | "user"
-  | "kmb";
+  | "kmb"
+  | "case-revision"
+  | "call-plan"
+  | "case-statement";
 
 export interface CaseSourceRef {
   id: string;
@@ -178,15 +182,45 @@ export interface CaseStatement {
   sourceRefs: CaseSourceRef[];
   reviewState: StatementReviewState;
   claimState: ClaimState;
+  sourceStatus: StatementSourceStatus;
+  sourceStaleReasons: string[];
   jurisdiction?: string;
   validFrom?: number;
   validUntil?: number;
   allowedUses: string[];
   allowedWording?: string;
+  commitmentDetail?: CommitmentDetail;
+  deadlineDetail?: DeadlineDetail;
   supersedesId?: string;
   createdBy: "user" | "runtime-proposal" | "complex-model-proposal";
   createdAt: number;
   updatedAt: number;
+}
+
+export interface CommitmentDetail {
+  promisorPartyId: string;
+  beneficiaryPartyId?: string;
+  action: string;
+  conditions: string[];
+  certainty: "explicit" | "conditional" | "ambiguous";
+  lifecycle:
+    | "pending-confirmation"
+    | "active"
+    | "fulfilled"
+    | "missed"
+    | "disputed"
+    | "superseded"
+    | "cancelled";
+}
+
+export interface DeadlineDetail {
+  linkedStatementId: string;
+  originalPhrase: string;
+  precision: "exact" | "range" | "relative" | "unknown";
+  dayKind?: "calendar" | "business" | "unspecified";
+  timezone?: string;
+  anchorDate?: string;
+  resolvedDate?: string;
 }
 
 export interface PreparationConversation {
@@ -252,6 +286,13 @@ export interface SnapshotArtifactRef {
   section: string;
   contentHash: string;
   sourceRefs: CaseSourceRef[];
+  itemRefs: SnapshotArtifactItemRef[];
+}
+
+export interface SnapshotArtifactItemRef {
+  itemPath: string;
+  contentHash: string;
+  sourceRefs: CaseSourceRef[];
 }
 
 export interface SnapshotSourceManifest {
@@ -281,8 +322,16 @@ export interface CaseSnapshot {
   }>;
   disputedClaims: Array<{ statementId: string; content: string }>;
   unknowns: Array<{ statementId: string; content: string }>;
-  commitments: Array<{ statementId: string; content: string }>;
-  deadlines: Array<{ statementId: string; content: string }>;
+  commitments: Array<{
+    statementId: string;
+    content: string;
+    detail?: CommitmentDetail;
+  }>;
+  deadlines: Array<{
+    statementId: string;
+    content: string;
+    detail?: DeadlineDetail;
+  }>;
   nextActions: Array<{ statementId: string; content: string }>;
 }
 
