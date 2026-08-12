@@ -71,7 +71,13 @@ export default function SessionsPage({
           : recording
       )
       .filter((recording) => {
-        if (filter === "unfinished") return unfinishedStates.has(recording.status.state);
+        if (filter === "unfinished") {
+          return (
+            unfinishedStates.has(recording.status.state) ||
+            recording.status.health !== "healthy" ||
+            Boolean(recording.integrityError)
+          );
+        }
         if (filter === "closed") return recording.status.state === "closed";
         return true;
       });
@@ -157,6 +163,7 @@ export default function SessionsPage({
           recordings.map((recording) => {
             const { status } = recording;
             const unfinished = unfinishedStates.has(status.state);
+            const incomplete = status.health !== "healthy";
             const isCurrent = controller.recordingStatus?.callSessionId === status.callSessionId;
             return (
               <article className="session-row" key={status.callSessionId}>
@@ -164,16 +171,31 @@ export default function SessionsPage({
                   <div>
                     <strong title={status.callSessionId}>{status.callSessionId}</strong>
                     <span className={`recording-state recording-state-${status.state}`}>{status.state}</span>
+                    {incomplete && (
+                      <span className={`recording-health recording-health-${status.health}`}>
+                        {status.health}
+                      </span>
+                    )}
                   </div>
                   <small>
                     {formatDate(status.startedAt)} · {formatDuration(recording)}
                     {status.endedAt ? ` · ended ${formatDate(status.endedAt)}` : ""}
                   </small>
                   {recording.integrityError && <span className="session-integrity">{recording.integrityError}</span>}
+                  {status.incompletenessReasons.length > 0 && (
+                    <span className="session-integrity">
+                      Evidence incomplete: {status.incompletenessReasons.join(", ")}
+                    </span>
+                  )}
                 </div>
 
                 <div className="session-metrics">
-                  <span><b>{status.eventCount}</b> events</span>
+                  <span>
+                    <b>{status.persistedEventCount}/{status.attemptedEventCount}</b> events saved
+                  </span>
+                  {status.droppedEventCount > 0 && (
+                    <span className="session-dropped"><b>{status.droppedEventCount}</b> dropped</span>
+                  )}
                   <span><ThumbsUp size={13} /><b>{recording.humanEvaluationCount}</b> evaluations</span>
                   <span><b>{recording.manifestAvailable ? "Yes" : "No"}</b> manifest</span>
                 </div>

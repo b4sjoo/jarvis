@@ -129,6 +129,22 @@
   color: var(--success-text);
 }
 
+.recording-health {
+  flex: 0 0 auto;
+  padding: 3px 6px;
+  border-radius: 4px;
+  background: var(--warning-soft);
+  color: var(--warning-text);
+  font-size: var(--font-small);
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.recording-health-close-failed {
+  background: var(--danger-soft);
+  color: var(--danger-text);
+}
+
 .session-integrity {
   color: var(--danger-text);
   font-size: var(--font-small);
@@ -151,6 +167,11 @@
 
 .session-metrics b {
   color: var(--text-primary);
+}
+
+.session-metrics .session-dropped,
+.session-metrics .session-dropped b {
+  color: var(--danger-text);
 }
 
 .session-actions {

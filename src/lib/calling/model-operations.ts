@@ -107,6 +107,7 @@ const recordReturn = (input: {
   raw?: string;
   error?: string;
   fallbackUsed?: boolean;
+  ownerAuthorized: boolean;
 }) => {
   input.dependencies.record(
     "model-operation-returned",
@@ -118,6 +119,7 @@ const recordReturn = (input: {
       raw: input.raw,
       error: input.error,
       fallbackUsed: input.fallbackUsed,
+      ownerAuthorized: input.ownerAuthorized,
     },
     input.occurredAt
   );
@@ -194,6 +196,7 @@ export async function runAdvisorModelOperation(
   try {
     const raw = await operation.promise;
     const returnedAt = Date.now();
+    const ownerAuthorized = input.isCurrentOwner();
     recordReturn({
       dependencies: input,
       operationId,
@@ -202,8 +205,9 @@ export async function runAdvisorModelOperation(
       status: "success",
       occurredAt: returnedAt,
       raw,
+      ownerAuthorized,
     });
-    if (!input.isCurrentOwner()) return;
+    if (!ownerAuthorized) return;
     recordReceipt(input, {
       type: "RecordReceipt",
       receipt: {
@@ -243,6 +247,7 @@ export async function runAdvisorModelOperation(
   } catch (error) {
     const failedAt = Date.now();
     const cancelled = error instanceof OperationAbortError;
+    const ownerAuthorized = input.isCurrentOwner();
     recordReturn({
       dependencies: input,
       operationId,
@@ -251,8 +256,9 @@ export async function runAdvisorModelOperation(
       status: cancelled ? "cancelled" : "failed",
       occurredAt: failedAt,
       error: message(error),
+      ownerAuthorized,
     });
-    if (input.isCurrentOwner()) {
+    if (ownerAuthorized) {
       recordReceipt(input, {
         type: "RecordReceipt",
         receipt: {
@@ -355,6 +361,7 @@ export async function runRuntimeModelOperation(
   try {
     const raw = await operation.promise;
     const returnedAt = Date.now();
+    const ownerAuthorized = input.isCurrentOwner();
     recordReturn({
       dependencies: input,
       operationId,
@@ -363,8 +370,9 @@ export async function runRuntimeModelOperation(
       status: "success",
       occurredAt: returnedAt,
       raw,
+      ownerAuthorized,
     });
-    if (!input.isCurrentOwner()) return { status: "stale" };
+    if (!ownerAuthorized) return { status: "stale" };
     recordReceipt(input, {
       type: "RecordReceipt",
       receipt: {
@@ -409,6 +417,7 @@ export async function runRuntimeModelOperation(
   } catch (error) {
     const failedAt = Date.now();
     const cancelled = error instanceof OperationAbortError;
+    const ownerAuthorized = input.isCurrentOwner();
     recordReturn({
       dependencies: input,
       operationId,
@@ -418,8 +427,9 @@ export async function runRuntimeModelOperation(
       occurredAt: failedAt,
       error: message(error),
       fallbackUsed: !cancelled,
+      ownerAuthorized,
     });
-    if (!input.isCurrentOwner()) return { status: "stale" };
+    if (!ownerAuthorized) return { status: "stale" };
     recordReceipt(input, {
       type: "RecordReceipt",
       receipt: {

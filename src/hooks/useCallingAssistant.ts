@@ -7,9 +7,11 @@ import {
   CallRecordingProjection,
   OperationAbortError,
   RolloverTranscriptAssembler,
+  NATIVE_CALL_AUDIO_EVENTS,
   abandonRecoveredCallRecording,
   loadAudioSettings,
   authorizeNativeSpeechSegment,
+  authorizeNativeOwnedAudioEvent,
   createCancellableOperation,
   commitProviderConfigurationTransaction,
   createSessionBoundRecordingWriter,
@@ -70,14 +72,11 @@ interface NativeAudioLifecycleEvent {
   diagnostics?: unknown;
 }
 
-interface NativeOwnedAudioEvent {
+interface NativeAudioSegmentDroppedEvent {
   captureSessionId: string;
   captureGeneration: number;
   owner: "call" | "system";
   occurredAtMs: number;
-}
-
-interface NativeAudioSegmentDroppedEvent extends NativeOwnedAudioEvent {
   attemptedSegmentSequence: number;
   reason: string;
   message: string;
@@ -750,8 +749,20 @@ export function useCallingAssistant() {
   }, []);
 
   const drainCurrentAudioQueue = useCallback(async () => {
-    await drainQueueUntilStable(() => queueRef.current);
-  }, []);
+    try {
+      await drainQueueUntilStable(() => queueRef.current);
+    } catch (error) {
+      recordingRef.current?.markIncomplete("audio-queue-drain-timeout");
+      queueRecordingEvent("audio-queue-observation", {
+        phase: "drain-timeout",
+        depth: queueMetricsRef.current.depth,
+        maxDepth: queueMetricsRef.current.maxDepth,
+        maxWaitMs: queueMetricsRef.current.maxWaitMs,
+        error: errorMessage(error),
+      });
+      throw error;
+    }
+  }, [queueRecordingEvent]);
 
   useEffect(() => {
     if (!nativeRuntimeAvailable) return;
@@ -762,36 +773,27 @@ export function useCallingAssistant() {
     let stopDropped: (() => void) | undefined;
     let stopLifecycle: (() => void) | undefined;
 
-    const authorizeOwnedEvent = (
-      payload: unknown,
-      kind: CallRecordingEventKind
-    ): payload is NativeOwnedAudioEvent => {
-      if (!payload || typeof payload !== "object") return false;
-      const candidate = payload as Partial<NativeOwnedAudioEvent>;
-      const valid =
-        candidate.owner === "call" &&
-        typeof candidate.captureSessionId === "string" &&
-        Number.isSafeInteger(candidate.captureGeneration) &&
-        typeof candidate.occurredAtMs === "number";
-      if (!valid) return false;
-      if (
-        candidate.captureSessionId !== captureSessionIdRef.current ||
-        candidate.captureGeneration !== captureGenerationRef.current
-      ) {
+    const authorizeOwnedEvent = (payload: unknown, kind: CallRecordingEventKind) => {
+      const authorization = authorizeNativeOwnedAudioEvent({
+        payload,
+        activeCaptureSessionId: captureSessionIdRef.current ?? "",
+        activeCaptureGeneration: captureGenerationRef.current ?? -1,
+        expectedOwner: "call",
+      });
+      if (!authorization.authorized) {
         queueRecordingEvent("native-audio-event-rejected", {
           sourceKind: kind,
-          captureSessionId: candidate.captureSessionId,
-          captureGeneration: candidate.captureGeneration,
+          captureSessionId: authorization.event?.captureSessionId,
+          captureGeneration: authorization.event?.captureGeneration,
           activeCaptureSessionId: captureSessionIdRef.current,
           activeCaptureGeneration: captureGenerationRef.current,
-          reason: "capture-lease-mismatch",
+          reason: authorization.reason,
         });
-        return false;
       }
-      return true;
+      return authorization;
     };
 
-    void listen<unknown>("speech-detected", (event) => {
+    void listen<unknown>(NATIVE_CALL_AUDIO_EVENTS.segment, (event) => {
       const authorization = authorizeNativeSpeechSegment({
         payload: event.payload,
         activeCaptureSessionId: captureSessionIdRef.current ?? "",
@@ -868,24 +870,32 @@ export function useCallingAssistant() {
       else stopSpeech = stop;
     });
 
-    void listen<NativeOwnedAudioEvent>("speech-start", (event) => {
-      if (!authorizeOwnedEvent(event.payload, "native-audio-speech-start")) return;
+    void listen<unknown>(NATIVE_CALL_AUDIO_EVENTS.speechStart, (event) => {
+      const authorization = authorizeOwnedEvent(
+        event.payload,
+        "native-audio-speech-start"
+      );
+      if (!authorization.authorized) return;
       queueRecordingEvent(
         "native-audio-speech-start",
-        event.payload,
-        event.payload.occurredAtMs
+        authorization.event,
+        authorization.event.occurredAtMs
       );
     }).then((stop) => {
       if (disposed) stop();
       else stopSpeechStart = stop;
     });
 
-    void listen<NativeOwnedAudioEvent>("native-audio-liveness", (event) => {
-      if (!authorizeOwnedEvent(event.payload, "native-audio-liveness")) return;
+    void listen<unknown>(NATIVE_CALL_AUDIO_EVENTS.liveness, (event) => {
+      const authorization = authorizeOwnedEvent(
+        event.payload,
+        "native-audio-liveness"
+      );
+      if (!authorization.authorized) return;
       queueRecordingEvent(
         "native-audio-liveness",
-        event.payload,
-        event.payload.occurredAtMs
+        authorization.event,
+        authorization.event.occurredAtMs
       );
     }).then((stop) => {
       if (disposed) stop();
@@ -893,14 +903,13 @@ export function useCallingAssistant() {
     });
 
     void listen<NativeAudioSegmentDroppedEvent>(
-      "native-audio-segment-dropped",
+      NATIVE_CALL_AUDIO_EVENTS.segmentDropped,
       (event) => {
-        if (
-          !authorizeOwnedEvent(
-            event.payload,
-            "native-audio-segment-dropped"
-          )
-        ) return;
+        const authorization = authorizeOwnedEvent(
+          event.payload,
+          "native-audio-segment-dropped"
+        );
+        if (!authorization.authorized) return;
         queueRecordingEvent(
           "native-audio-segment-dropped",
           event.payload,
@@ -916,7 +925,7 @@ export function useCallingAssistant() {
     });
 
     void listen<NativeAudioLifecycleEvent>(
-      "native-audio-lifecycle",
+      NATIVE_CALL_AUDIO_EVENTS.lifecycle,
       (event) => {
         const lifecycle = event.payload;
         if (
@@ -942,7 +951,7 @@ export function useCallingAssistant() {
           captureSessionId: lifecycle.captureSessionId,
           captureGeneration: lifecycle.captureGeneration,
         };
-        void drainCurrentAudioQueue().then(() => {
+        void drainCurrentAudioQueue().catch(() => undefined).then(() => {
           if (disposed || runtimeRef.current !== owner) return;
           const state = owner.snapshot().state;
           if (!["live", "starting", "recovering"].includes(state)) return;

@@ -1,5 +1,63 @@
 export type NativeCaptureOwner = "call" | "system";
 
+export const NATIVE_CALL_AUDIO_EVENTS = {
+  segment: "speech-detected",
+  speechStart: "speech-start",
+  liveness: "native-audio-liveness",
+  segmentDropped: "native-audio-segment-dropped",
+  lifecycle: "native-audio-lifecycle",
+} as const;
+
+export interface NativeOwnedAudioEvent {
+  captureSessionId: string;
+  captureGeneration: number;
+  owner: NativeCaptureOwner;
+  occurredAtMs: number;
+}
+
+export type NativeOwnedAudioAuthorization =
+  | { authorized: true; event: NativeOwnedAudioEvent }
+  | {
+      authorized: false;
+      reason:
+        | "invalid-payload"
+        | "capture-session-mismatch"
+        | "capture-generation-mismatch"
+        | "owner-mismatch";
+      event?: NativeOwnedAudioEvent;
+    };
+
+export function authorizeNativeOwnedAudioEvent(input: {
+  payload: unknown;
+  activeCaptureSessionId: string;
+  activeCaptureGeneration: number;
+  expectedOwner: NativeCaptureOwner;
+}): NativeOwnedAudioAuthorization {
+  if (!input.payload || typeof input.payload !== "object") {
+    return { authorized: false, reason: "invalid-payload" };
+  }
+  const candidate = input.payload as Partial<NativeOwnedAudioEvent>;
+  if (
+    typeof candidate.captureSessionId !== "string" ||
+    !Number.isSafeInteger(candidate.captureGeneration) ||
+    (candidate.owner !== "call" && candidate.owner !== "system") ||
+    typeof candidate.occurredAtMs !== "number"
+  ) {
+    return { authorized: false, reason: "invalid-payload" };
+  }
+  const event = candidate as NativeOwnedAudioEvent;
+  if (event.captureSessionId !== input.activeCaptureSessionId) {
+    return { authorized: false, reason: "capture-session-mismatch", event };
+  }
+  if (event.captureGeneration !== input.activeCaptureGeneration) {
+    return { authorized: false, reason: "capture-generation-mismatch", event };
+  }
+  if (event.owner !== input.expectedOwner) {
+    return { authorized: false, reason: "owner-mismatch", event };
+  }
+  return { authorized: true, event };
+}
+
 export interface AudioSegmentIdentity {
   captureSessionId: string;
   captureGeneration: number;
