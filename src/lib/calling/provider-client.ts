@@ -7,6 +7,15 @@ export interface ChatMessage {
   content: string;
 }
 
+function buildAnthropicHeaders(apiKey: string): Record<string, string> {
+  return {
+    "Content-Type": "application/json",
+    "x-api-key": apiKey,
+    "anthropic-version": "2023-06-01",
+    "anthropic-dangerous-direct-browser-access": "true",
+  };
+}
+
 export function buildChatProviderRequest(input: {
   route: ChatModelRouteConfig;
   apiKey: string;
@@ -22,11 +31,7 @@ export function buildChatProviderRequest(input: {
       endpoint: provider.endpoint,
       init: {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-api-key": input.apiKey,
-          "anthropic-version": "2023-06-01",
-        },
+        headers: buildAnthropicHeaders(input.apiKey),
         body: JSON.stringify({
           model: input.route.model,
           system,
@@ -105,21 +110,20 @@ export async function requestChatCompletion(input: {
   return parseChatProviderResponse(input.route, await response.json());
 }
 
-export async function requestMultimodalCompletion(input: {
+export function buildMultimodalProviderRequest(input: {
   route: ChatModelRouteConfig;
   apiKey: string;
   prompt: string;
   mediaType: string;
   base64Data: string;
   fileName: string;
-  signal?: AbortSignal;
 }) {
   const provider = getChatProvider(input.route.provider);
-  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  const headers: Record<string, string> = provider.protocol === "anthropic-messages"
+    ? buildAnthropicHeaders(input.apiKey)
+    : { "Content-Type": "application/json" };
   let body: Record<string, unknown>;
   if (provider.protocol === "anthropic-messages") {
-    headers["x-api-key"] = input.apiKey;
-    headers["anthropic-version"] = "2023-06-01";
     const media = input.mediaType === "application/pdf"
       ? { type: "document", source: { type: "base64", media_type: input.mediaType, data: input.base64Data } }
       : { type: "image", source: { type: "base64", media_type: input.mediaType, data: input.base64Data } };
@@ -139,10 +143,28 @@ export async function requestMultimodalCompletion(input: {
       max_tokens: input.route.maxOutputTokens,
     };
   }
-  const response = await fetch(provider.endpoint, {
-    method: "POST",
-    headers,
-    body: JSON.stringify(body),
+  return {
+    endpoint: provider.endpoint,
+    init: {
+      method: "POST",
+      headers,
+      body: JSON.stringify(body),
+    } satisfies RequestInit,
+  };
+}
+
+export async function requestMultimodalCompletion(input: {
+  route: ChatModelRouteConfig;
+  apiKey: string;
+  prompt: string;
+  mediaType: string;
+  base64Data: string;
+  fileName: string;
+  signal?: AbortSignal;
+}) {
+  const request = buildMultimodalProviderRequest(input);
+  const response = await fetch(request.endpoint, {
+    ...request.init,
     signal: input.signal,
   });
   if (!response.ok) {

@@ -17,6 +17,7 @@ import {
 } from "../src/lib/calling/model-routes.js";
 import {
   buildChatProviderRequest,
+  buildMultimodalProviderRequest,
   buildTranscriptionProviderRequest,
   parseChatProviderResponse,
 } from "../src/lib/calling/provider-client.js";
@@ -114,6 +115,12 @@ test("chat adapters keep OpenAI-compatible and Anthropic protocols distinct", ()
     (openAiRequest.init.headers as Record<string, string>).Authorization,
     "Bearer openai-secret"
   );
+  assert.equal(
+    (openAiRequest.init.headers as Record<string, string>)[
+      "anthropic-dangerous-direct-browser-access"
+    ],
+    undefined
+  );
   assert.deepEqual(
     JSON.parse(String(openAiRequest.init.body)).messages[0],
     { role: "system", content: "System" }
@@ -141,6 +148,12 @@ test("chat adapters keep OpenAI-compatible and Anthropic protocols distinct", ()
     (anthropicRequest.init.headers as Record<string, string>)["x-api-key"],
     "anthropic-secret"
   );
+  assert.equal(
+    (anthropicRequest.init.headers as Record<string, string>)[
+      "anthropic-dangerous-direct-browser-access"
+    ],
+    "true"
+  );
   assert.equal(anthropicBody.system, "System");
   assert.deepEqual(anthropicBody.messages, [
     { role: "user", content: "Question" },
@@ -151,6 +164,33 @@ test("chat adapters keep OpenAI-compatible and Anthropic protocols distinct", ()
     }),
     "Answer"
   );
+});
+
+test("Anthropic multimodal requests opt into the same direct desktop transport", () => {
+  const anthropicRoute = normalizeModelRouteSettings({
+    chat: {
+      complex: {
+        ...DEFAULT_MODEL_ROUTES.chat.complex,
+        provider: "anthropic",
+        model: "claude-sonnet-4-5",
+      },
+    },
+  }).chat.complex;
+  const request = buildMultimodalProviderRequest({
+    route: anthropicRoute,
+    apiKey: "anthropic-secret",
+    prompt: "Read this document.",
+    mediaType: "application/pdf",
+    base64Data: "cGRm",
+    fileName: "case.pdf",
+  });
+  const headers = request.init.headers as Record<string, string>;
+  assert.equal(headers["x-api-key"], "anthropic-secret");
+  assert.equal(headers["anthropic-version"], "2023-06-01");
+  assert.equal(headers["anthropic-dangerous-direct-browser-access"], "true");
+
+  const body = JSON.parse(String(request.init.body));
+  assert.equal(body.messages[0].content[1].type, "document");
 });
 
 test("STT adapters translate model and language fields per provider", () => {
