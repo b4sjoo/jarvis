@@ -94,6 +94,7 @@ export default function CasesPage({
   const [view, setView] = useState<CaseWorkspaceView>("overview");
   const [caseForm, setCaseForm] = useState<CaseForm | null>(null);
   const [planForm, setPlanForm] = useState<PlanForm | null>(null);
+  const [conversationExpanded, setConversationExpanded] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -144,6 +145,14 @@ export default function CasesPage({
       .catch((reason) => active && setError(String(reason)));
     return () => { active = false; };
   }, [selectedCaseId, service]);
+
+  useEffect(() => {
+    setConversationExpanded(false);
+  }, [selectedCaseId]);
+
+  useEffect(() => {
+    if (view !== "conversations") setConversationExpanded(false);
+  }, [view]);
 
   const run = async (operation: () => Promise<void>) => {
     setBusy(true);
@@ -222,7 +231,7 @@ export default function CasesPage({
   }
 
   return (
-    <div className="case-workspace">
+    <div className={`case-workspace${conversationExpanded ? " conversation-expanded" : ""}`}>
       <aside className="case-sidebar">
         <header><div><span>Case workspace</span><h2>Cases</h2></div><button type="button" title="Create case" onClick={() => setCaseForm(blankCase())}><Plus size={17} /></button></header>
         <div className="case-list">
@@ -260,7 +269,7 @@ export default function CasesPage({
 
             {view === "materials" ? <MaterialPanel caseId={selectedCase.id} plans={plans} /> : null}
 
-            {view === "conversations" ? <ConversationPanel caseId={selectedCase.id} plans={plans} /> : null}
+            {view === "conversations" ? <ConversationPanel caseId={selectedCase.id} plans={plans} expanded={conversationExpanded} onExpandedChange={setConversationExpanded} /> : null}
 
             {view === "reviewed" ? <ReviewedStatePanel caseId={selectedCase.id} onRevisionChange={async () => { if (service) setRevision(await service.getCurrentRevision(selectedCase.id)); }} /> : null}
 

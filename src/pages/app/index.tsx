@@ -36,6 +36,7 @@ import SessionsPage from "@/pages/sessions";
 import AppSettingsPage from "@/pages/settings";
 import CasesPage from "@/pages/cases";
 import type { CallPreparationSnapshotBundle } from "@/lib/preparation";
+import mossLogo from "../../../src-tauri/icons/icon.png";
 import "./app.css";
 
 type AppSection =
@@ -415,7 +416,7 @@ export default function MossApp() {
     <div className={`app-shell${sidebarCollapsed ? " sidebar-collapsed" : ""}`}>
       <aside className="app-sidebar">
         <div className="app-identity" data-tauri-drag-region>
-          <span className="app-mark"><Headphones size={18} /></span>
+          <span className="app-mark"><img src={mossLogo} alt="" aria-hidden="true" /></span>
           {!sidebarCollapsed && <span><strong>MOSS</strong><small>Calling Helper</small></span>}
         </div>
 

@@ -47,3 +47,17 @@ test("Task 1D service owns abort, CAS, and superseded branch boundaries", () => 
   assert.match(source, /status = 'superseded'.*revision >=/s);
   assert.match(source, /context_manifest_json/);
 });
+
+test("Task 1D conversation UI has a centered icon action and reversible workspace expansion", () => {
+  const panel = readFileSync("src/pages/cases/ConversationPanel.tsx", "utf8");
+  const page = readFileSync("src/pages/cases/index.tsx", "utf8");
+  const styles = readFileSync("src/pages/cases/cases.css", "utf8");
+
+  assert.match(panel, /aria-label="New conversation"/);
+  assert.match(panel, /expanded \? <Minimize2/);
+  assert.match(panel, /onExpandedChange\(!expanded\)/);
+  assert.match(panel, /event\.key === "Escape"/);
+  assert.match(page, /case-workspace\$\{conversationExpanded \? " conversation-expanded"/);
+  assert.match(styles, /\.case-workspace\.conversation-expanded > \.case-sidebar/);
+  assert.match(styles, /\.conversation-index > \.case-section-toolbar button \{ display: grid;[^}]*place-items: center/s);
+});

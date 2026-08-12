@@ -61,3 +61,15 @@ test("macOS development restores the signed-off icon after leaving stealth mode"
     /if !enabled \{\s*restore_development_application_icon\(&app\)\?/s
   );
 });
+
+test("the application shell and companion use the signed-off MOSS identity", () => {
+  const appShell = binary("src/pages/app/index.tsx").toString("utf8");
+  const companion = binary("src/pages/calling/index.tsx").toString("utf8");
+
+  for (const source of [appShell, companion]) {
+    assert.match(source, /src-tauri\/icons\/icon\.png/);
+    assert.match(source, /<img src=\{mossLogo\} alt="" aria-hidden="true"/);
+  }
+  assert.doesNotMatch(appShell, /className="app-mark"><Headphones/);
+  assert.doesNotMatch(companion, /className="brand-mark"><Headphones/);
+});

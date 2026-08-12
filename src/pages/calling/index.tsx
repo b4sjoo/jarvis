@@ -1,7 +1,6 @@
 import { useMemo, useState } from "react";
 import {
   ArchiveX,
-  Headphones,
   LayoutDashboard,
   Pause,
   Play,
@@ -11,6 +10,7 @@ import {
   ThumbsDown,
   ThumbsUp,
 } from "lucide-react";
+import mossLogo from "../../../src-tauri/icons/icon.png";
 import type { CallingAssistantController } from "@/hooks/useCallingAssistant";
 import { callStatusLabel } from "@/lib/calling";
 import "./calling.css";
@@ -60,7 +60,7 @@ export default function CallingPage({
             <LayoutDashboard size={18} />
           </button>
         )}
-        <div className="moss-brand" data-tauri-drag-region><span className="brand-mark"><Headphones size={17} /></span><div><strong>MOSS</strong><span>Calling Helper</span></div></div>
+        <div className="moss-brand" data-tauri-drag-region><span className="brand-mark"><img src={mossLogo} alt="" aria-hidden="true" /></span><div><strong>MOSS</strong><span>Calling Helper</span></div></div>
         <div className={`status status-${state}`} data-tauri-drag-region><span />{callStatusLabel(state)}</div>
       </header>}
 

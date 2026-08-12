@@ -51,8 +51,15 @@
   display: grid;
   place-items: center;
   border-radius: 8px;
-  background: var(--accent-strong);
-  color: #fff !important;
+  overflow: hidden;
+  background: transparent;
+}
+
+.brand-mark img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
 }
 
 .status {

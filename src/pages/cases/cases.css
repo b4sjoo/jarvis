@@ -1,4 +1,9 @@
 .case-workspace { display: grid; grid-template-columns: 250px minmax(0, 1fr); height: 100%; min-height: 0; background: var(--surface-page); }
+.case-workspace.conversation-expanded { grid-template-columns: minmax(0, 1fr); }
+.case-workspace.conversation-expanded > .case-sidebar,
+.case-workspace.conversation-expanded .case-main > .case-header,
+.case-workspace.conversation-expanded .case-main > .case-tabs { display: none; }
+.case-workspace.conversation-expanded .case-content { padding: 0; overflow: hidden; }
 .case-sidebar { display: flex; min-width: 0; flex-direction: column; border-right: 1px solid var(--border-subtle); background: var(--surface-sidebar); }
 .case-sidebar > header,
 .case-header,
@@ -160,9 +165,11 @@
 .material-recovery-actions button:disabled { opacity: .4; cursor: default; }
 
 .preparation-conversations { display: grid; min-height: 520px; height: 100%; grid-template-columns: minmax(240px, 320px) minmax(0, 1fr); border: 1px solid var(--border-subtle); border-radius: 7px; overflow: hidden; }
+.preparation-conversations.expanded { min-height: 0; border: 0; border-radius: 0; }
 .conversation-index { display: flex; min-width: 0; flex-direction: column; border-right: 1px solid var(--border-subtle); }
 .conversation-index > .case-section-toolbar { padding: 12px; margin: 0; border-bottom: 1px solid var(--border-subtle); }
-.conversation-index > .case-section-toolbar button { width: 32px; padding: 0; justify-content: center; font-size: 0; }
+.conversation-index > .case-section-toolbar button { display: grid; width: 32px; height: 32px; min-height: 32px; padding: 0; place-items: center; gap: 0; line-height: 0; }
+.conversation-index > .case-section-toolbar button svg { display: block; }
 .conversation-list { min-height: 0; flex: 1; overflow: auto; padding: 6px; }
 .conversation-list > button { display: flex; width: 100%; align-items: center; justify-content: space-between; gap: 10px; padding: 10px; border: 1px solid transparent; border-radius: 5px; background: transparent; text-align: left; cursor: pointer; }
 .conversation-list > button:hover { background: var(--surface-hover); }
@@ -178,6 +185,7 @@
 .conversation-thread > header h3 { margin: 0; font-size: 12px; }
 .conversation-thread > header p { margin: 3px 0 0; color: var(--text-muted); font-size: 9px; }
 .conversation-thread > header button { display: grid; width: 30px; height: 30px; place-items: center; border: 1px solid var(--border-subtle); border-radius: 5px; background: var(--surface-raised); cursor: pointer; }
+.conversation-thread-actions { display: flex; align-items: center; gap: 6px; }
 .conversation-back { display: none !important; }
 .conversation-messages { min-height: 0; flex: 1; overflow: auto; padding: 16px; }
 .conversation-messages article { max-width: min(720px, 88%); margin: 0 0 12px; padding: 10px 12px; border: 1px solid var(--border-subtle); border-radius: 7px; background: var(--surface-raised); }

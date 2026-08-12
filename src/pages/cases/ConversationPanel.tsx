@@ -3,7 +3,9 @@ import {
   Ban,
   ChevronLeft,
   Edit3,
+  Maximize2,
   MessageSquarePlus,
+  Minimize2,
   Send,
   Settings2,
   X,
@@ -18,6 +20,8 @@ import {
 interface ConversationPanelProps {
   caseId: string;
   plans: CallPlan[];
+  expanded: boolean;
+  onExpandedChange: (expanded: boolean) => void;
 }
 
 interface ConversationForm {
@@ -30,7 +34,12 @@ const scopeLabel = (conversation: PreparationConversation, plans: CallPlan[]) =>
     ? plans.find((plan) => plan.id === conversation.callPlanId)?.title ?? "Deleted call plan"
     : "Entire case";
 
-export default function ConversationPanel({ caseId, plans }: ConversationPanelProps) {
+export default function ConversationPanel({
+  caseId,
+  plans,
+  expanded,
+  onExpandedChange,
+}: ConversationPanelProps) {
   const [service, setService] = useState<PreparationConversationService | null>(null);
   const [conversations, setConversations] = useState<PreparationConversation[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -84,6 +93,15 @@ export default function ConversationPanel({ caseId, plans }: ConversationPanelPr
       .catch((reason) => active && setError(String(reason)));
     return () => { active = false; };
   }, [selectedId, service]);
+
+  useEffect(() => {
+    if (!expanded) return;
+    const restoreWorkspace = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onExpandedChange(false);
+    };
+    window.addEventListener("keydown", restoreWorkspace);
+    return () => window.removeEventListener("keydown", restoreWorkspace);
+  }, [expanded, onExpandedChange]);
 
   const run = async (operation: () => Promise<void>) => {
     setBusy(true);
@@ -156,14 +174,14 @@ export default function ConversationPanel({ caseId, plans }: ConversationPanelPr
   };
 
   return (
-    <section className="preparation-conversations">
+    <section className={`preparation-conversations${expanded ? " expanded" : ""}`}>
       <aside className={selected ? "conversation-index compact" : "conversation-index"}>
         <header className="case-section-toolbar">
           <div><h3>Preparation conversations</h3><p>Each session has an explicit evidence scope.</p></div>
-          <button type="button" title="New conversation" onClick={() => {
+          <button type="button" title="New conversation" aria-label="New conversation" onClick={() => {
             setSelectedId(null);
             setForm({ title: "", callPlanId: "" });
-          }}><MessageSquarePlus size={15} /> New</button>
+          }}><MessageSquarePlus size={15} /></button>
         </header>
         <div className="conversation-list">
           {conversations.map((conversation) => (
@@ -183,9 +201,20 @@ export default function ConversationPanel({ caseId, plans }: ConversationPanelPr
 
       {selected ? <div className="conversation-thread">
         <header>
-          <button type="button" className="conversation-back" title="Conversation history" onClick={() => setSelectedId(null)}><ChevronLeft size={16} /></button>
+          <button type="button" className="conversation-back" title="Conversation history" onClick={() => { onExpandedChange(false); setSelectedId(null); }}><ChevronLeft size={16} /></button>
           <div><h3>{selected.title}</h3><p>{scopeLabel(selected, plans)} · revision {selected.headRevision}</p></div>
-          <button type="button" title="Edit conversation" onClick={() => setForm({ title: selected.title, callPlanId: selected.callPlanId ?? "" })}><Settings2 size={15} /></button>
+          <div className="conversation-thread-actions">
+            <button type="button" title="Edit conversation" onClick={() => setForm({ title: selected.title, callPlanId: selected.callPlanId ?? "" })}><Settings2 size={15} /></button>
+            <button
+              type="button"
+              title={expanded ? "Restore Case workspace" : "Expand conversation"}
+              aria-label={expanded ? "Restore Case workspace" : "Expand conversation"}
+              aria-pressed={expanded}
+              onClick={() => onExpandedChange(!expanded)}
+            >
+              {expanded ? <Minimize2 size={15} /> : <Maximize2 size={15} />}
+            </button>
+          </div>
         </header>
         <div className="conversation-messages">
           {messages.map((message) => <article key={message.id} className={message.role}>
