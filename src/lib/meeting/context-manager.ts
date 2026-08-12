@@ -19,7 +19,15 @@ import {
   collectConfirmedMeFacts,
   shouldIncludeTurnInAdvisorPrompt,
 } from "./transcript-fusion.js";
-import { buildActiveMeetingTask } from "./active-meeting-task.js";
+import {
+  cloneMeetingTaskRuntimeState,
+  createMeetingTaskRuntimeState,
+  projectActiveMeetingTask,
+  projectLegacyMeetingTaskRoots,
+  reduceMeetingTaskRuntimeMutation,
+  type MeetingTaskRuntimeMutation,
+  type MeetingTaskRuntimeState,
+} from "./active-meeting-task.js";
 
 const DEFAULT_TRANSCRIPT_WINDOW_MS = 2 * 60 * 1000;
 const DEFAULT_MAX_SCREEN_OBSERVATIONS = 5;
@@ -39,6 +47,7 @@ export interface ActiveMeetingTaskStatePatch {
 
 export class MeetingContextManager {
   private state: MeetingContextState;
+  private taskRuntimeState: MeetingTaskRuntimeState;
   private readonly transcriptWindowMs: number;
   private readonly maxScreenObservations: number;
 
@@ -48,6 +57,7 @@ export class MeetingContextManager {
     this.maxScreenObservations =
       options.maxScreenObservations ?? DEFAULT_MAX_SCREEN_OBSERVATIONS;
 
+    this.taskRuntimeState = createMeetingTaskRuntimeState();
     this.state = {
       sessionId: createMeetingId("meeting"),
       startedAt: Date.now(),
@@ -68,6 +78,9 @@ export class MeetingContextManager {
   getState(): MeetingContextState {
     this.clearExpiredActiveMeetingTask();
     const activeMeetingTask = this.buildActiveMeetingTask();
+    const legacyTaskRoots = projectLegacyMeetingTaskRoots(
+      this.taskRuntimeState
+    );
 
     return {
       ...this.state,
@@ -79,12 +92,7 @@ export class MeetingContextManager {
       interviewSessionContext: cloneInterviewSessionContext(
         this.state.interviewSessionContext
       ),
-      activeScreenTask: this.state.activeScreenTask
-        ? { ...this.state.activeScreenTask }
-        : undefined,
-      activeInterviewTask: cloneActiveInterviewTask(
-        this.state.activeInterviewTask
-      ),
+      ...legacyTaskRoots,
       activeMeetingTask,
       glossary: [...this.state.glossary],
     };
@@ -93,6 +101,7 @@ export class MeetingContextManager {
   reset(options: MeetingContextManagerOptions = {}) {
     const interviewSessionBrief =
       options.interviewSessionBrief ?? this.state.interviewSessionBrief;
+    this.taskRuntimeState = createMeetingTaskRuntimeState();
     this.state = {
       sessionId: createMeetingId("meeting"),
       startedAt: Date.now(),
@@ -212,61 +221,62 @@ export class MeetingContextManager {
   }
 
   setActiveScreenTask(task: ActiveScreenTask) {
-    this.state = {
-      ...this.state,
-      activeScreenTask: { ...task },
-    };
+    this.applyTaskRuntimeMutation({
+      id: createMeetingId("task_runtime_compat"),
+      kind: "replace-projection",
+      reason: "legacy-set-active-screen-task",
+      screenAttachment: task,
+    });
   }
 
   setActiveMeetingTaskState(patch: ActiveMeetingTaskStatePatch) {
-    const nextState = { ...this.state };
-
-    if ("activeScreenTask" in patch) {
-      nextState.activeScreenTask = patch.activeScreenTask
-        ? { ...patch.activeScreenTask }
-        : undefined;
-    }
-
-    if ("activeInterviewTask" in patch) {
-      nextState.activeInterviewTask = cloneActiveInterviewTask(
-        patch.activeInterviewTask ?? undefined
-      );
-    }
-
-    this.state = nextState;
+    this.applyTaskRuntimeMutation({
+      id: createMeetingId("task_runtime_compat"),
+      kind: "replace-projection",
+      reason: "legacy-set-active-meeting-task-state",
+      screenAttachment: patch.activeScreenTask,
+      parent: patch.activeInterviewTask,
+    });
   }
 
   clearActiveMeetingTask() {
-    this.state = {
-      ...this.state,
-      activeScreenTask: undefined,
-      activeInterviewTask: undefined,
-    };
+    this.applyTaskRuntimeMutation({
+      id: createMeetingId("task_runtime_clear"),
+      kind: "clear",
+      scope: "all",
+      reason: "clear-active-meeting-task",
+    });
   }
 
   clearActiveScreenTask() {
-    this.state = {
-      ...this.state,
-      activeScreenTask: undefined,
-      activeInterviewTask:
-        this.state.activeInterviewTask?.source === "screen"
-          ? undefined
-          : this.state.activeInterviewTask,
-    };
+    this.applyTaskRuntimeMutation({
+      id: createMeetingId("task_runtime_clear"),
+      kind: "clear",
+      scope: "screen",
+      reason: "clear-active-screen-task",
+    });
   }
 
   setActiveInterviewTask(task: ActiveInterviewParent) {
-    this.state = {
-      ...this.state,
-      activeInterviewTask: cloneActiveInterviewTask(task),
-    };
+    this.applyTaskRuntimeMutation({
+      id: createMeetingId("task_runtime_compat"),
+      kind: "replace-projection",
+      reason: "legacy-set-active-interview-task",
+      parent: task,
+    });
   }
 
   clearActiveInterviewTask() {
-    this.state = {
-      ...this.state,
-      activeInterviewTask: undefined,
-    };
+    this.applyTaskRuntimeMutation({
+      id: createMeetingId("task_runtime_clear"),
+      kind: "clear",
+      scope: "parent",
+      reason: "clear-active-interview-task",
+    });
+  }
+
+  getTaskRuntimeState() {
+    return cloneMeetingTaskRuntimeState(this.taskRuntimeState);
   }
 
   clearInterviewSessionContext() {
@@ -294,32 +304,13 @@ export class MeetingContextManager {
   }
 
   clearExpiredActiveMeetingTask(now = Date.now()) {
-    const task = this.state.activeScreenTask;
-    const interviewTask = this.state.activeInterviewTask;
-    let changed = false;
-
-    if (task?.expiresAt && task.expiresAt <= now) {
-      this.state = {
-        ...this.state,
-        activeScreenTask: undefined,
-        activeInterviewTask:
-          interviewTask?.source === "screen" ? undefined : interviewTask,
-      };
-      changed = true;
-    }
-
-    if (
-      this.state.activeInterviewTask?.expiresAt &&
-      this.state.activeInterviewTask.expiresAt <= now
-    ) {
-      this.state = {
-        ...this.state,
-        activeInterviewTask: undefined,
-      };
-      changed = true;
-    }
-
-    return changed;
+    return this.applyTaskRuntimeMutation({
+      id: createMeetingId("task_runtime_expire"),
+      kind: "expire",
+      reason: "active-task-expiration",
+      now,
+      appliedAt: now,
+    }).mutationApplied;
   }
 
   clearExpiredActiveScreenTask(now = Date.now()) {
@@ -360,6 +351,9 @@ export class MeetingContextManager {
     const latestTurn =
       this.state.transcriptTurns[this.state.transcriptTurns.length - 1];
     const activeMeetingTask = this.buildActiveMeetingTask();
+    const legacyTaskRoots = projectLegacyMeetingTaskRoots(
+      this.taskRuntimeState
+    );
     const promptTranscriptTurns = this.getPromptTranscriptTurns(
       activeMeetingTask?.parent.promptTranscriptStartTurnId
     );
@@ -376,32 +370,35 @@ export class MeetingContextManager {
       interviewSessionContext: cloneInterviewSessionContext(
         this.state.interviewSessionContext
       ),
-      activeScreenTask: this.state.activeScreenTask
-        ? { ...this.state.activeScreenTask }
-        : undefined,
-      activeInterviewTask: cloneActiveInterviewTask(
-        this.state.activeInterviewTask
-      ),
+      ...legacyTaskRoots,
       activeMeetingTask,
       rollingSummary: this.state.rollingSummary,
       userProfileContext: this.state.userProfileContext,
       glossaryText: this.formatGlossary(),
       interviewPlaybook:
         activeMeetingTask?.parent.playbook ??
-        this.state.activeScreenTask?.playbook ??
-        this.state.activeInterviewTask?.playbook,
+        legacyTaskRoots.activeScreenTask?.playbook ??
+        legacyTaskRoots.activeInterviewTask?.playbook,
       confirmedMeFacts: collectConfirmedMeFacts(this.state.transcriptTurns),
       latestTurn,
     };
   }
 
   private buildActiveMeetingTask() {
-    return buildActiveMeetingTask({
-      activeScreenTask: this.state.activeScreenTask,
-      activeInterviewTask: this.state.activeInterviewTask,
+    return projectActiveMeetingTask({
+      state: this.taskRuntimeState,
       latestObservation:
         this.state.screenObservations[this.state.screenObservations.length - 1],
     });
+  }
+
+  private applyTaskRuntimeMutation(mutation: MeetingTaskRuntimeMutation) {
+    const result = reduceMeetingTaskRuntimeMutation({
+      state: this.taskRuntimeState,
+      mutation,
+    });
+    this.taskRuntimeState = result.state;
+    return result;
   }
 
   private trimTranscriptWindow(turns: TranscriptTurn[]) {
@@ -436,6 +433,9 @@ export class MeetingContextManager {
 
   private formatScreenContext() {
     const activeMeetingTask = this.buildActiveMeetingTask();
+    const legacyTaskRoots = projectLegacyMeetingTaskRoots(
+      this.taskRuntimeState
+    );
     const activeTaskContext = activeMeetingTask?.screen
       ? [
           "Active meeting screen context:",
@@ -464,17 +464,17 @@ export class MeetingContextManager {
         ]
           .filter(Boolean)
           .join("\n")
-      : this.state.activeScreenTask
+      : legacyTaskRoots.activeScreenTask
         ? [
             "Active screen task:",
-            this.state.activeScreenTask.question
-              ? `Question: ${this.state.activeScreenTask.question}`
+            legacyTaskRoots.activeScreenTask.question
+              ? `Question: ${legacyTaskRoots.activeScreenTask.question}`
               : undefined,
-            `Kind: ${this.state.activeScreenTask.kind}`,
-            this.state.activeScreenTask.language
-              ? `Language: ${this.state.activeScreenTask.language}`
+            `Kind: ${legacyTaskRoots.activeScreenTask.kind}`,
+            legacyTaskRoots.activeScreenTask.language
+              ? `Language: ${legacyTaskRoots.activeScreenTask.language}`
               : undefined,
-            this.state.activeScreenTask.content,
+            legacyTaskRoots.activeScreenTask.content,
           ]
             .filter(Boolean)
             .join("\n")

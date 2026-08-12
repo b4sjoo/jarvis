@@ -1,0 +1,176 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import {
+  createMeetingTaskRuntimeState,
+  projectActiveMeetingTask,
+  projectLegacyMeetingTaskRoots,
+  reduceMeetingTaskRuntimeMutation,
+} from "../src/lib/meeting/active-meeting-task.js";
+import type {
+  ActiveInterviewParent,
+  ActiveScreenTask,
+} from "../src/lib/meeting/types.js";
+
+test("stores parent and screen attachment under one runtime revision", () => {
+  const result = reduceMeetingTaskRuntimeMutation({
+    state: createMeetingTaskRuntimeState(),
+    mutation: {
+      id: "mutation-1",
+      kind: "replace-projection",
+      reason: "characterization",
+      parent: parent(),
+      screenAttachment: screen(),
+      appliedAt: 100,
+    },
+  });
+
+  assert.equal(result.authorized, true);
+  assert.equal(result.mutationApplied, true);
+  assert.equal(result.state.revision, 1);
+  assert.equal(result.state.lastMutation?.id, "mutation-1");
+  assert.equal(
+    projectActiveMeetingTask({ state: result.state })?.parent.id,
+    "parent-1"
+  );
+  assert.equal(
+    projectActiveMeetingTask({ state: result.state })?.screen
+      ?.activeScreenTaskId,
+    "screen-1"
+  );
+});
+
+test("rejects a stale runtime revision without partial mutation", () => {
+  const initial = reduceMeetingTaskRuntimeMutation({
+    state: createMeetingTaskRuntimeState(),
+    mutation: {
+      id: "mutation-1",
+      kind: "replace-projection",
+      reason: "seed",
+      parent: parent(),
+    },
+  }).state;
+  const result = reduceMeetingTaskRuntimeMutation({
+    state: initial,
+    mutation: {
+      id: "mutation-stale",
+      kind: "replace-projection",
+      reason: "stale",
+      expectedRevision: 0,
+      screenAttachment: screen(),
+    },
+  });
+
+  assert.equal(result.authorized, false);
+  assert.equal(result.reason, "revision-mismatch");
+  assert.equal(result.state.revision, 1);
+  assert.equal(result.state.screenAttachment, undefined);
+  assert.equal(result.state.parent?.id, "parent-1");
+});
+
+test("clears a screen-owned parent atomically with its attachment", () => {
+  const seeded = reduceMeetingTaskRuntimeMutation({
+    state: createMeetingTaskRuntimeState(),
+    mutation: {
+      id: "mutation-1",
+      kind: "replace-projection",
+      reason: "seed",
+      parent: parent({ source: "screen" }),
+      screenAttachment: screen(),
+    },
+  }).state;
+  const result = reduceMeetingTaskRuntimeMutation({
+    state: seeded,
+    mutation: {
+      id: "mutation-clear",
+      kind: "clear",
+      scope: "screen",
+      reason: "manual-clear",
+    },
+  });
+
+  assert.equal(result.state.revision, 2);
+  assert.equal(result.state.parent, undefined);
+  assert.equal(result.state.screenAttachment, undefined);
+  assert.equal(projectActiveMeetingTask({ state: result.state }), undefined);
+});
+
+test("legacy compatibility projections cannot mutate the canonical root", () => {
+  const state = reduceMeetingTaskRuntimeMutation({
+    state: createMeetingTaskRuntimeState(),
+    mutation: {
+      id: "mutation-1",
+      kind: "replace-projection",
+      reason: "seed",
+      parent: parent(),
+      screenAttachment: screen(),
+    },
+  }).state;
+  const projection = projectLegacyMeetingTaskRoots(state);
+
+  projection.activeInterviewTask!.topic = "mutated";
+  projection.activeScreenTask!.content = "mutated";
+
+  assert.equal(state.parent?.topic, "Design a URL shortener");
+  assert.equal(state.screenAttachment?.content, "Answer");
+});
+
+test("expires both legacy projections through one runtime mutation", () => {
+  const state = reduceMeetingTaskRuntimeMutation({
+    state: createMeetingTaskRuntimeState(),
+    mutation: {
+      id: "mutation-1",
+      kind: "replace-projection",
+      reason: "seed",
+      parent: parent({ expiresAt: 50 }),
+      screenAttachment: screen({ expiresAt: 50 }),
+    },
+  }).state;
+  const result = reduceMeetingTaskRuntimeMutation({
+    state,
+    mutation: {
+      id: "mutation-expire",
+      kind: "expire",
+      reason: "timer",
+      now: 50,
+    },
+  });
+
+  assert.equal(result.mutationApplied, true);
+  assert.equal(result.state.parent, undefined);
+  assert.equal(result.state.screenAttachment, undefined);
+});
+
+function parent(
+  overrides: Partial<ActiveInterviewParent> = {}
+): ActiveInterviewParent {
+  return {
+    id: "parent-1",
+    source: "voice",
+    stableKind: "general-system-design",
+    topic: "Design a URL shortener",
+    playbookPhase: "requirement_clarification",
+    phaseProgress: {},
+    supportedFactAnchors: [],
+    createdAt: 1,
+    updatedAt: 2,
+    revisions: 1,
+    ...overrides,
+  };
+}
+
+function screen(
+  overrides: Partial<ActiveScreenTask> = {}
+): ActiveScreenTask {
+  return {
+    id: "screen-1",
+    observationId: "observation-1",
+    createdAt: 1,
+    updatedAt: 2,
+    question: "Design a URL shortener",
+    kind: "general-system-design",
+    content: "Answer",
+    basedOnTurnIds: [],
+    basedOnObservationId: "observation-1",
+    ...overrides,
+  };
+}

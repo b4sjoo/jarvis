@@ -103,6 +103,134 @@ export interface ActiveMeetingTaskIdentityResolution {
   taskSource?: ActiveMeetingTaskSource;
 }
 
+export interface MeetingTaskRuntimeState {
+  revision: number;
+  parent?: ActiveInterviewParent;
+  screenAttachment?: ActiveScreenTask;
+  lastMutation?: MeetingTaskRuntimeMutationReceipt;
+}
+
+export interface MeetingTaskRuntimeMutationReceipt {
+  id: string;
+  kind: MeetingTaskRuntimeMutation["kind"];
+  reason: string;
+  appliedAt: number;
+}
+
+interface MeetingTaskRuntimeMutationBase {
+  id: string;
+  reason: string;
+  expectedRevision?: number;
+  appliedAt?: number;
+}
+
+export type MeetingTaskRuntimeMutation =
+  | (MeetingTaskRuntimeMutationBase & {
+      kind: "replace-projection";
+      parent?: ActiveInterviewParent | null;
+      screenAttachment?: ActiveScreenTask | null;
+    })
+  | (MeetingTaskRuntimeMutationBase & {
+      kind: "clear";
+      scope: "all" | "parent" | "screen";
+    })
+  | (MeetingTaskRuntimeMutationBase & {
+      kind: "expire";
+      now: number;
+    });
+
+export interface MeetingTaskRuntimeMutationResult {
+  state: MeetingTaskRuntimeState;
+  authorized: boolean;
+  mutationApplied: boolean;
+  reason: "committed" | "preserved" | "revision-mismatch";
+}
+
+export function createMeetingTaskRuntimeState(): MeetingTaskRuntimeState {
+  return { revision: 0 };
+}
+
+export function reduceMeetingTaskRuntimeMutation(input: {
+  state: MeetingTaskRuntimeState;
+  mutation: MeetingTaskRuntimeMutation;
+}): MeetingTaskRuntimeMutationResult {
+  const current = cloneMeetingTaskRuntimeState(input.state);
+  const { mutation } = input;
+  if (
+    mutation.expectedRevision !== undefined &&
+    mutation.expectedRevision !== current.revision
+  ) {
+    return {
+      state: current,
+      authorized: false,
+      mutationApplied: false,
+      reason: "revision-mismatch",
+    };
+  }
+
+  const next = applyRuntimeMutation(current, mutation);
+  if (!next.changed) {
+    return {
+      state: current,
+      authorized: true,
+      mutationApplied: false,
+      reason: "preserved",
+    };
+  }
+
+  const appliedAt = mutation.appliedAt ?? Date.now();
+  return {
+    state: {
+      revision: current.revision + 1,
+      parent: cloneRuntimeValue(current.parent),
+      screenAttachment: cloneRuntimeValue(current.screenAttachment),
+      ...next.patch,
+      lastMutation: {
+        id: mutation.id,
+        kind: mutation.kind,
+        reason: mutation.reason,
+        appliedAt,
+      },
+    },
+    authorized: true,
+    mutationApplied: true,
+    reason: "committed",
+  };
+}
+
+export function projectActiveMeetingTask(input: {
+  state: MeetingTaskRuntimeState;
+  latestObservation?: ScreenObservation;
+}): ActiveMeetingTask | undefined {
+  return buildActiveMeetingTask({
+    activeScreenTask: input.state.screenAttachment,
+    activeInterviewTask: input.state.parent,
+    latestObservation: input.latestObservation,
+  });
+}
+
+export function projectLegacyMeetingTaskRoots(
+  state: MeetingTaskRuntimeState
+) {
+  return {
+    activeScreenTask: cloneRuntimeValue(state.screenAttachment),
+    activeInterviewTask: cloneRuntimeValue(state.parent),
+  };
+}
+
+export function cloneMeetingTaskRuntimeState(
+  state: MeetingTaskRuntimeState
+): MeetingTaskRuntimeState {
+  return {
+    revision: state.revision,
+    parent: cloneRuntimeValue(state.parent),
+    screenAttachment: cloneRuntimeValue(state.screenAttachment),
+    lastMutation: state.lastMutation
+      ? { ...state.lastMutation }
+      : undefined,
+  };
+}
+
 export function clearActiveMeetingTaskProjection<
   T extends {
     activeScreenTask?: unknown;
@@ -684,4 +812,84 @@ function uniqueStrings(values: Array<string | undefined>) {
   return Array.from(
     new Set(values.filter((value): value is string => Boolean(value)))
   );
+}
+
+function applyRuntimeMutation(
+  state: MeetingTaskRuntimeState,
+  mutation: MeetingTaskRuntimeMutation
+): {
+  changed: boolean;
+  patch: Partial<MeetingTaskRuntimeState>;
+} {
+  if (mutation.kind === "replace-projection") {
+    const parent =
+      mutation.parent === undefined
+        ? state.parent
+        : mutation.parent ?? undefined;
+    const screenAttachment =
+      mutation.screenAttachment === undefined
+        ? state.screenAttachment
+        : mutation.screenAttachment ?? undefined;
+    return {
+      changed:
+        mutation.parent !== undefined ||
+        mutation.screenAttachment !== undefined,
+      patch: {
+        parent: cloneRuntimeValue(parent),
+        screenAttachment: cloneRuntimeValue(screenAttachment),
+      },
+    };
+  }
+
+  if (mutation.kind === "clear") {
+    if (mutation.scope === "all") {
+      return {
+        changed: Boolean(state.parent || state.screenAttachment),
+        patch: { parent: undefined, screenAttachment: undefined },
+      };
+    }
+    if (mutation.scope === "parent") {
+      return {
+        changed: Boolean(state.parent),
+        patch: { parent: undefined },
+      };
+    }
+    return {
+      changed: Boolean(
+        state.screenAttachment || state.parent?.source === "screen"
+      ),
+      patch: {
+        screenAttachment: undefined,
+        parent:
+          state.parent?.source === "screen"
+            ? undefined
+            : cloneRuntimeValue(state.parent),
+      },
+    };
+  }
+
+  let parent = cloneRuntimeValue(state.parent);
+  let screenAttachment = cloneRuntimeValue(state.screenAttachment);
+  let changed = false;
+  if (
+    screenAttachment?.expiresAt &&
+    screenAttachment.expiresAt <= mutation.now
+  ) {
+    screenAttachment = undefined;
+    if (parent?.source === "screen") parent = undefined;
+    changed = true;
+  }
+  if (parent?.expiresAt && parent.expiresAt <= mutation.now) {
+    parent = undefined;
+    changed = true;
+  }
+  return {
+    changed,
+    patch: { parent, screenAttachment },
+  };
+}
+
+function cloneRuntimeValue<T>(value: T): T {
+  if (value === undefined || value === null) return value;
+  return JSON.parse(JSON.stringify(value)) as T;
 }
