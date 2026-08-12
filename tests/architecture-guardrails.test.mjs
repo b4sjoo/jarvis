@@ -28,7 +28,7 @@ function expectFailure(result, fragment) {
 test("accepts the tracked architecture baseline", () => {
   const result = evaluate();
   assert.equal(result.ok, true, result.errors.join("\n"));
-  assert.equal(result.metrics.taskWriterModules, 2);
+  assert.equal(result.metrics.taskWriterModules, 1);
   assert.equal(result.metrics.liveLegacyImports, 0);
   assert.equal(result.metrics.importCycles, 5);
   assert.equal(result.metrics.frontendCommandsWithoutNativeRegistration, 1);

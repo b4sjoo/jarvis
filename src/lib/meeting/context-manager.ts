@@ -27,6 +27,7 @@ import {
   reduceMeetingTaskRuntimeMutation,
   type MeetingTaskRuntimeMutation,
   type MeetingTaskRuntimeState,
+  type MeetingTaskRuntimeTransitionKind,
 } from "./active-meeting-task.js";
 
 const DEFAULT_TRANSCRIPT_WINDOW_MS = 2 * 60 * 1000;
@@ -277,6 +278,34 @@ export class MeetingContextManager {
 
   getTaskRuntimeState() {
     return cloneMeetingTaskRuntimeState(this.taskRuntimeState);
+  }
+
+  commitTaskRuntimeTransition(input: {
+    id: string;
+    transition: MeetingTaskRuntimeTransitionKind;
+    reason: string;
+    expectedRevision?: number;
+    parent?: ActiveInterviewParent | null;
+    screenAttachment?: ActiveScreenTask | null;
+    appliedAt?: number;
+  }) {
+    return this.applyTaskRuntimeMutation({
+      ...input,
+      kind: "commit-transition",
+    });
+  }
+
+  clearTaskRuntime(input: {
+    id: string;
+    scope: "all" | "screen" | "parent";
+    reason: string;
+    expectedRevision?: number;
+    appliedAt?: number;
+  }) {
+    return this.applyTaskRuntimeMutation({
+      ...input,
+      kind: "clear",
+    });
   }
 
   clearInterviewSessionContext() {

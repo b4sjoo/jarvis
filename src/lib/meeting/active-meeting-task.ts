@@ -137,13 +137,32 @@ export type MeetingTaskRuntimeMutation =
   | (MeetingTaskRuntimeMutationBase & {
       kind: "expire";
       now: number;
+    })
+  | (MeetingTaskRuntimeMutationBase & {
+      kind: "commit-transition";
+      transition: MeetingTaskRuntimeTransitionKind;
+      parent?: ActiveInterviewParent | null;
+      screenAttachment?: ActiveScreenTask | null;
     });
+
+export type MeetingTaskRuntimeTransitionKind =
+  | "create-parent"
+  | "replace-parent"
+  | "attach-child"
+  | "resume-parent"
+  | "advance-phase"
+  | "update-parent-context"
+  | "update-source-attachment";
 
 export interface MeetingTaskRuntimeMutationResult {
   state: MeetingTaskRuntimeState;
   authorized: boolean;
   mutationApplied: boolean;
-  reason: "committed" | "preserved" | "revision-mismatch";
+  reason:
+    | "committed"
+    | "preserved"
+    | "revision-mismatch"
+    | "invalid-transition";
 }
 
 export function createMeetingTaskRuntimeState(): MeetingTaskRuntimeState {
@@ -169,6 +188,14 @@ export function reduceMeetingTaskRuntimeMutation(input: {
   }
 
   const next = applyRuntimeMutation(current, mutation);
+  if (next.rejectionReason) {
+    return {
+      state: current,
+      authorized: false,
+      mutationApplied: false,
+      reason: next.rejectionReason,
+    };
+  }
   if (!next.changed) {
     return {
       state: current,
@@ -820,6 +847,7 @@ function applyRuntimeMutation(
 ): {
   changed: boolean;
   patch: Partial<MeetingTaskRuntimeState>;
+  rejectionReason?: "invalid-transition";
 } {
   if (mutation.kind === "replace-projection") {
     const parent =
@@ -830,6 +858,41 @@ function applyRuntimeMutation(
       mutation.screenAttachment === undefined
         ? state.screenAttachment
         : mutation.screenAttachment ?? undefined;
+    return {
+      changed:
+        mutation.parent !== undefined ||
+        mutation.screenAttachment !== undefined,
+      patch: {
+        parent: cloneRuntimeValue(parent),
+        screenAttachment: cloneRuntimeValue(screenAttachment),
+      },
+    };
+  }
+
+  if (mutation.kind === "commit-transition") {
+    const parent =
+      mutation.parent === undefined
+        ? state.parent
+        : mutation.parent ?? undefined;
+    const screenAttachment =
+      mutation.screenAttachment === undefined
+        ? state.screenAttachment
+        : mutation.screenAttachment ?? undefined;
+    if (
+      !isValidRuntimeTransition({
+        transition: mutation.transition,
+        beforeParent: state.parent,
+        afterParent: parent,
+        beforeScreen: state.screenAttachment,
+        afterScreen: screenAttachment,
+      })
+    ) {
+      return {
+        changed: false,
+        patch: {},
+        rejectionReason: "invalid-transition",
+      };
+    }
     return {
       changed:
         mutation.parent !== undefined ||
@@ -887,6 +950,76 @@ function applyRuntimeMutation(
     changed,
     patch: { parent, screenAttachment },
   };
+}
+
+function isValidRuntimeTransition(input: {
+  transition: MeetingTaskRuntimeTransitionKind;
+  beforeParent?: ActiveInterviewParent;
+  afterParent?: ActiveInterviewParent;
+  beforeScreen?: ActiveScreenTask;
+  afterScreen?: ActiveScreenTask;
+}) {
+  const { transition, beforeParent, afterParent } = input;
+  if (transition === "create-parent") {
+    return Boolean(
+      !beforeParent &&
+        afterParent &&
+        afterParent.revisions >= 1
+    );
+  }
+  if (transition === "replace-parent") {
+    return Boolean(
+      beforeParent &&
+        afterParent &&
+        (beforeParent.id !== afterParent.id ||
+          beforeParent.stableKind !== afterParent.stableKind) &&
+        afterParent.revisions >= 1
+    );
+  }
+  if (transition === "attach-child") {
+    return Boolean(
+      beforeParent &&
+        afterParent &&
+        beforeParent.id === afterParent.id &&
+        afterParent.child &&
+        afterParent.revisions === beforeParent.revisions + 1
+    );
+  }
+  if (transition === "resume-parent") {
+    return Boolean(
+      beforeParent?.child &&
+        afterParent &&
+        beforeParent.id === afterParent.id &&
+        !afterParent.child &&
+        afterParent.revisions === beforeParent.revisions + 1
+    );
+  }
+  if (transition === "advance-phase") {
+    return Boolean(
+      beforeParent &&
+        afterParent &&
+        beforeParent.id === afterParent.id &&
+        beforeParent.playbookPhase !== afterParent.playbookPhase &&
+        afterParent.revisions === beforeParent.revisions + 1
+    );
+  }
+  if (transition === "update-parent-context") {
+    return Boolean(
+      (!beforeParent && !afterParent) ||
+        (beforeParent &&
+          afterParent &&
+          beforeParent.id === afterParent.id &&
+          afterParent.revisions >= beforeParent.revisions)
+    );
+  }
+  return Boolean(
+    input.beforeScreen?.id !== input.afterScreen?.id ||
+      input.beforeScreen?.updatedAt !== input.afterScreen?.updatedAt ||
+      input.beforeScreen?.content !== input.afterScreen?.content ||
+      input.beforeScreen?.expiresAt !== input.afterScreen?.expiresAt ||
+      input.beforeParent?.id !== input.afterParent?.id ||
+      input.beforeParent?.revisions !== input.afterParent?.revisions
+  );
 }
 
 function cloneRuntimeValue<T>(value: T): T {

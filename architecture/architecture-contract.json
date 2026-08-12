@@ -12,10 +12,6 @@
     ],
     "allowedModules": [
       {
-        "file": "src/hooks/useMeetingAssistant.ts",
-        "maxCallsites": 17
-      },
-      {
         "file": "src/pages/app/components/meeting/index.tsx",
         "maxCallsites": 1
       }

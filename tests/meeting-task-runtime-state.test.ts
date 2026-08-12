@@ -140,6 +140,48 @@ test("expires both legacy projections through one runtime mutation", () => {
   assert.equal(result.state.screenAttachment, undefined);
 });
 
+test("accepts a semantic phase command and rejects a mislabeled transition", () => {
+  const state = reduceMeetingTaskRuntimeMutation({
+    state: createMeetingTaskRuntimeState(),
+    mutation: {
+      id: "mutation-1",
+      kind: "replace-projection",
+      reason: "seed",
+      parent: parent(),
+    },
+  }).state;
+  const phaseParent = parent({
+    playbookPhase: "design_framing",
+    revisions: 2,
+  });
+  const accepted = reduceMeetingTaskRuntimeMutation({
+    state,
+    mutation: {
+      id: "phase-1",
+      kind: "commit-transition",
+      transition: "advance-phase",
+      reason: "manual-next",
+      parent: phaseParent,
+    },
+  });
+  const rejected = reduceMeetingTaskRuntimeMutation({
+    state,
+    mutation: {
+      id: "phase-invalid",
+      kind: "commit-transition",
+      transition: "attach-child",
+      reason: "mislabeled",
+      parent: phaseParent,
+    },
+  });
+
+  assert.equal(accepted.authorized, true);
+  assert.equal(accepted.state.parent?.playbookPhase, "design_framing");
+  assert.equal(rejected.authorized, false);
+  assert.equal(rejected.reason, "invalid-transition");
+  assert.equal(rejected.state.parent?.playbookPhase, "requirement_clarification");
+});
+
 function parent(
   overrides: Partial<ActiveInterviewParent> = {}
 ): ActiveInterviewParent {
