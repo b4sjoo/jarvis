@@ -6,6 +6,7 @@ import {
   AudioSegmentDispositionLedger,
   CallRecordingProjection,
   OperationAbortError,
+  RolloverTranscriptAssembler,
   abandonRecoveredCallRecording,
   loadAudioSettings,
   authorizeNativeSpeechSegment,
@@ -50,6 +51,8 @@ interface NativeCallAudioStatus {
   active: boolean;
   captureSessionId?: string;
   captureGeneration?: number;
+  deviceId?: string;
+  sampleRate?: number;
 }
 
 interface NativeAudioLifecycleEvent {
@@ -63,6 +66,19 @@ interface NativeAudioLifecycleEvent {
   expected: boolean;
   recoverability: string;
   diagnostics?: unknown;
+}
+
+interface NativeOwnedAudioEvent {
+  captureSessionId: string;
+  captureGeneration: number;
+  owner: "call" | "system";
+  occurredAtMs: number;
+}
+
+interface NativeAudioSegmentDroppedEvent extends NativeOwnedAudioEvent {
+  attemptedSegmentSequence: number;
+  reason: string;
+  message: string;
 }
 
 interface CaptureLease {
@@ -171,11 +187,16 @@ const fallbackSettlement = (input: {
 
 async function drainQueueUntilStable(
   currentQueue: () => Promise<void>,
-  quietCycles = 3
+  quietCycles = 3,
+  timeoutMs = 3_000
 ) {
+  const startedAt = Date.now();
   let observed = currentQueue();
   let stableCycles = 0;
   while (stableCycles < quietCycles) {
+    if (Date.now() - startedAt > timeoutMs) {
+      throw new Error("Audio processing did not drain within 3 seconds.");
+    }
     await observed.catch(() => undefined);
     await new Promise((resolve) => window.setTimeout(resolve, 40));
     const next = currentQueue();
@@ -210,7 +231,9 @@ export function useCallingAssistant() {
   const captureGenerationRef = useRef<number | null>(null);
   const lastSegmentSequenceRef = useRef(0);
   const segmentLedgerRef = useRef(new AudioSegmentDispositionLedger());
+  const rolloverAssemblerRef = useRef(new RolloverTranscriptAssembler());
   const queueRef = useRef<Promise<void>>(Promise.resolve());
+  const queueMetricsRef = useRef({ depth: 0, maxDepth: 0, maxWaitMs: 0 });
   const activeOperationsRef = useRef(
     new Set<{ cancel: (reason: string) => boolean }>()
   );
@@ -596,6 +619,28 @@ export function useCallingAssistant() {
           operationId,
           occurredAt: returnedAt,
         });
+        const assembled = rolloverAssemblerRef.current.accept({
+          segment,
+          transcript: text,
+          completedAtMs: returnedAt,
+        });
+        queueRecordingEvent(
+          "rollover-transcript-family",
+          {
+            ...identity,
+            status: assembled.status,
+            familyId: assembled.familyId,
+            segmentCount: assembled.segmentCount,
+            overlapRemovedChars: assembled.overlapRemovedChars,
+            mergeUncertain: assembled.mergeUncertain,
+            firstSpeechStartedAtMs: assembled.firstSpeechStartedAtMs,
+            completedAtMs: assembled.completedAtMs,
+          },
+          returnedAt
+        );
+        if (assembled.status === "pending") return;
+        const logicalText = assembled.text?.trim() ?? "";
+        if (!logicalText) return;
         const momentUnitId = `moment_${crypto.randomUUID()}`;
         owner.dispatch({
           type: "SubmitTranscriptTurn",
@@ -603,7 +648,7 @@ export function useCallingAssistant() {
           turn: {
             id: `turn_${crypto.randomUUID()}`,
             speaker: "them",
-            text,
+            text: logicalText,
             occurredAt: returnedAt,
           },
         });
@@ -614,7 +659,7 @@ export function useCallingAssistant() {
           operationId,
           occurredAt: returnedAt,
         });
-        await settleTurn(owner, text, momentUnitId);
+        await settleTurn(owner, logicalText, momentUnitId);
       } catch (error) {
         const failedAt = Date.now();
         queueRecordingEvent(
@@ -674,7 +719,39 @@ export function useCallingAssistant() {
     if (!nativeRuntimeAvailable) return;
     let disposed = false;
     let stopSpeech: (() => void) | undefined;
+    let stopSpeechStart: (() => void) | undefined;
+    let stopLiveness: (() => void) | undefined;
+    let stopDropped: (() => void) | undefined;
     let stopLifecycle: (() => void) | undefined;
+
+    const authorizeOwnedEvent = (
+      payload: unknown,
+      kind: CallRecordingEventKind
+    ): payload is NativeOwnedAudioEvent => {
+      if (!payload || typeof payload !== "object") return false;
+      const candidate = payload as Partial<NativeOwnedAudioEvent>;
+      const valid =
+        candidate.owner === "call" &&
+        typeof candidate.captureSessionId === "string" &&
+        Number.isSafeInteger(candidate.captureGeneration) &&
+        typeof candidate.occurredAtMs === "number";
+      if (!valid) return false;
+      if (
+        candidate.captureSessionId !== captureSessionIdRef.current ||
+        candidate.captureGeneration !== captureGenerationRef.current
+      ) {
+        queueRecordingEvent("native-audio-event-rejected", {
+          sourceKind: kind,
+          captureSessionId: candidate.captureSessionId,
+          captureGeneration: candidate.captureGeneration,
+          activeCaptureSessionId: captureSessionIdRef.current,
+          activeCaptureGeneration: captureGenerationRef.current,
+          reason: "capture-lease-mismatch",
+        });
+        return false;
+      }
+      return true;
+    };
 
     void listen<unknown>("speech-detected", (event) => {
       const authorization = authorizeNativeSpeechSegment({
@@ -702,16 +779,103 @@ export function useCallingAssistant() {
       }
       lastSegmentSequenceRef.current = authorization.event.segmentSequence;
       const owner = runtimeRef.current;
+      const enqueuedAt = Date.now();
+      queueMetricsRef.current.depth += 1;
+      queueMetricsRef.current.maxDepth = Math.max(
+        queueMetricsRef.current.maxDepth,
+        queueMetricsRef.current.depth
+      );
+      queueRecordingEvent("audio-queue-observation", {
+        phase: "enqueued",
+        segmentSequence: authorization.event.segmentSequence,
+        depth: queueMetricsRef.current.depth,
+        maxDepth: queueMetricsRef.current.maxDepth,
+      }, enqueuedAt);
       queueRef.current = queueRef.current
         .catch(() => undefined)
-        .then(() => processSegment(owner, authorization.event));
+        .then(async () => {
+          const dequeuedAt = Date.now();
+          const waitMs = dequeuedAt - enqueuedAt;
+          queueMetricsRef.current.maxWaitMs = Math.max(
+            queueMetricsRef.current.maxWaitMs,
+            waitMs
+          );
+          queueRecordingEvent("audio-queue-observation", {
+            phase: "dequeued",
+            segmentSequence: authorization.event.segmentSequence,
+            depth: queueMetricsRef.current.depth,
+            waitMs,
+            maxDepth: queueMetricsRef.current.maxDepth,
+            maxWaitMs: queueMetricsRef.current.maxWaitMs,
+          }, dequeuedAt);
+          try {
+            await processSegment(owner, authorization.event);
+          } finally {
+            queueMetricsRef.current.depth = Math.max(
+              0,
+              queueMetricsRef.current.depth - 1
+            );
+            queueRecordingEvent("audio-queue-observation", {
+              phase: "settled",
+              segmentSequence: authorization.event.segmentSequence,
+              depth: queueMetricsRef.current.depth,
+              totalMs: Date.now() - enqueuedAt,
+              maxDepth: queueMetricsRef.current.maxDepth,
+              maxWaitMs: queueMetricsRef.current.maxWaitMs,
+            });
+          }
+        });
     }).then((stop) => {
       if (disposed) stop();
       else stopSpeech = stop;
     });
 
+    void listen<NativeOwnedAudioEvent>("speech-start", (event) => {
+      if (!authorizeOwnedEvent(event.payload, "native-audio-speech-start")) return;
+      queueRecordingEvent(
+        "native-audio-speech-start",
+        event.payload,
+        event.payload.occurredAtMs
+      );
+    }).then((stop) => {
+      if (disposed) stop();
+      else stopSpeechStart = stop;
+    });
+
+    void listen<NativeOwnedAudioEvent>("native-audio-liveness", (event) => {
+      if (!authorizeOwnedEvent(event.payload, "native-audio-liveness")) return;
+      queueRecordingEvent(
+        "native-audio-liveness",
+        event.payload,
+        event.payload.occurredAtMs
+      );
+    }).then((stop) => {
+      if (disposed) stop();
+      else stopLiveness = stop;
+    });
+
+    void listen<NativeAudioSegmentDroppedEvent>(
+      "native-audio-segment-dropped",
+      (event) => {
+        if (
+          !authorizeOwnedEvent(
+            event.payload,
+            "native-audio-segment-dropped"
+          )
+        ) return;
+        queueRecordingEvent(
+          "native-audio-segment-dropped",
+          event.payload,
+          event.payload.occurredAtMs
+        );
+      }
+    ).then((stop) => {
+      if (disposed) stop();
+      else stopDropped = stop;
+    });
+
     void listen<NativeAudioLifecycleEvent>(
-      "capture-lifecycle",
+      "native-audio-lifecycle",
       (event) => {
         const lifecycle = event.payload;
         if (
@@ -762,6 +926,9 @@ export function useCallingAssistant() {
     return () => {
       disposed = true;
       stopSpeech?.();
+      stopSpeechStart?.();
+      stopLiveness?.();
+      stopDropped?.();
       stopLifecycle?.();
     };
   }, [
@@ -802,7 +969,9 @@ export function useCallingAssistant() {
         audioConfigRevision: audioSettingsRef.current.revision,
         modelConfigRevision: settingsRef.current.revision,
         inputDeviceId: audioSettingsRef.current.inputDeviceId,
-        outputDeviceId: audioSettingsRef.current.outputDeviceId,
+        requestedOutputDeviceId: audioSettingsRef.current.outputDeviceId,
+        resolvedOutputDeviceId: status.deviceId ?? null,
+        resolvedSampleRate: status.sampleRate ?? null,
         vadConfig: audioSettingsRef.current.vadConfig,
       });
       owner.dispatch({ type: "CaptureStarted", occurredAt: Date.now() });
@@ -874,6 +1043,8 @@ export function useCallingAssistant() {
     }
 
     segmentLedgerRef.current = new AudioSegmentDispositionLedger();
+    rolloverAssemblerRef.current = new RolloverTranscriptAssembler();
+    queueMetricsRef.current = { depth: 0, maxDepth: 0, maxWaitMs: 0 };
     queueRef.current = Promise.resolve();
     owner.dispatch({ type: "StartCall", occurredAt: Date.now() });
     publish();
@@ -918,8 +1089,20 @@ export function useCallingAssistant() {
   const stopAndDrainCapture = useCallback(async () => {
     const lease = await stopNativeCapture();
     await drainCurrentAudioQueue();
+    for (const family of rolloverAssemblerRef.current.abandonAll()) {
+      queueRecordingEvent("rollover-transcript-family", {
+        ...family,
+        status: "abandoned",
+        reason: "capture-ended-before-logical-family-completed",
+      });
+    }
     releaseCaptureLease(lease);
-  }, [drainCurrentAudioQueue, releaseCaptureLease, stopNativeCapture]);
+  }, [
+    drainCurrentAudioQueue,
+    queueRecordingEvent,
+    releaseCaptureLease,
+    stopNativeCapture,
+  ]);
 
   const pause = useCallback(async () => {
     await stopAndDrainCapture();

@@ -18,6 +18,7 @@ export * from "./provider-client.js";
 export * from "./provider-catalog.js";
 export * from "./recording-close.js";
 export * from "./revisioned-conversation.js";
+export * from "./rollover-transcript.js";
 export * from "./shortcut-settings.js";
 export * from "./runtime-environment.js";
 export * from "./stable-guidance.js";
