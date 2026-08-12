@@ -11,6 +11,7 @@ import {
   loadAudioSettings,
   authorizeNativeSpeechSegment,
   createCancellableOperation,
+  createSessionBoundRecordingWriter,
   listCallRecordings,
   listRecoverableCallRecordings,
   isTauriRuntime,
@@ -39,6 +40,7 @@ import {
   type NativeSpeechSegment,
   type PreparedArtifactReceiptStatus,
   type PreparedArtifactTarget,
+  type SessionBoundRecordingWriter,
 } from "@/lib/calling";
 import {
   RuntimeHandoffService,
@@ -95,6 +97,11 @@ interface ProviderSecrets {
 
 interface StartCallOptions {
   snapshot?: CallPreparationSnapshotBundle;
+}
+
+interface RuntimeEvidenceBinding {
+  writer: SessionBoundRecordingWriter;
+  handoff: RuntimeHandoffService;
 }
 
 const blankSecrets = (): ProviderSecrets => ({
@@ -238,6 +245,7 @@ export function useCallingAssistant() {
     new Set<{ cancel: (reason: string) => boolean }>()
   );
   const recordingRef = useRef<CallRecordingProjection | null>(null);
+  const recordingWriterRef = useRef<SessionBoundRecordingWriter | null>(null);
   const handoffServiceRef = useRef<RuntimeHandoffService | null>(null);
   const [recordingStatus, setRecordingStatus] =
     useState<CallRecordingStatus | null>(null);
@@ -260,18 +268,23 @@ export function useCallingAssistant() {
       payload: unknown,
       occurredAt = Date.now()
     ) => {
-      const recording = recordingRef.current;
-      if (!recording) return null;
-      try {
-        const status = await recording.append(kind, payload, occurredAt);
-        if (recordingRef.current === recording && status) {
-          setRecordingStatus(status);
-        }
-        return status;
-      } catch (error) {
-        setRecordingError(errorMessage(error));
-        throw error;
+      return recordingWriterRef.current?.record(kind, payload, occurredAt) ?? null;
+    },
+    []
+  );
+
+  const captureEvidenceBinding = useCallback(
+    (owner: ActiveCallRuntime): RuntimeEvidenceBinding | null => {
+      const writer = recordingWriterRef.current;
+      const handoff = handoffServiceRef.current;
+      if (
+        !writer ||
+        !handoff ||
+        writer.callSessionId !== owner.snapshot().callSessionId
+      ) {
+        return null;
       }
+      return { writer, handoff };
     },
     []
   );
@@ -292,7 +305,8 @@ export function useCallingAssistant() {
         operationId: string;
         reason?: string;
         occurredAt?: number;
-      }
+      },
+      binding?: RuntimeEvidenceBinding | null
     ) => {
       const preparation = owner.snapshot().preparation;
       if (preparation.mode !== "prepared") return;
@@ -302,7 +316,8 @@ export function useCallingAssistant() {
       const artifacts = preparation.artifacts.filter((artifact) =>
         artifactIds.includes(artifact.artifactId)
       );
-      queueRecordingEvent(
+      const evidence = binding ?? captureEvidenceBinding(owner);
+      evidence?.writer.queue(
         "snapshot-artifact-receipt",
         {
           snapshotId: preparation.snapshotId,
@@ -315,26 +330,26 @@ export function useCallingAssistant() {
         },
         occurredAt
       );
-      handoffServiceRef.current?.recordArtifactReceipt({
+      evidence?.handoff.recordArtifactReceipt({
         preparation,
         ...input,
         occurredAt,
       });
     },
-    [queueRecordingEvent]
+    [captureEvidenceBinding]
   );
 
   const bindRuntimeRecording = useCallback(
     (owner: ActiveCallRuntime, handoff: RuntimeHandoffService) => {
+      const binding = captureEvidenceBinding(owner);
       owner.setTransitionObserver((transition) => {
         if (
           runtimeRef.current !== owner ||
-          recordingRef.current?.callSessionId !==
-            transition.after.callSessionId
+          binding?.writer.callSessionId !== transition.after.callSessionId
         ) {
           return;
         }
-        queueRecordingEvent(
+        binding.writer.queue(
           "runtime-command",
           transitionPayload(transition),
           transition.after.updatedAt
@@ -342,7 +357,7 @@ export function useCallingAssistant() {
         handoff.recordTransition(transition);
       });
     },
-    [queueRecordingEvent]
+    [captureEvidenceBinding]
   );
 
   const refreshRecoverableRecordings = useCallback(async () => {
@@ -421,6 +436,8 @@ export function useCallingAssistant() {
         ? secretsRef.current.advisor
         : "";
       if (provider.requiresApiKey && !apiKey) return;
+      const evidence = captureEvidenceBinding(owner);
+      if (!evidence) return;
       await runAdvisorModelOperation({
         owner,
         apiKey,
@@ -429,12 +446,12 @@ export function useCallingAssistant() {
         publish,
         register: (operation) => activeOperationsRef.current.add(operation),
         unregister: (operation) => activeOperationsRef.current.delete(operation),
-        record: queueRecordingEvent,
+        record: evidence.writer.queue,
         recordPreparedArtifacts: (receipt) =>
-          recordPreparedArtifacts(owner, receipt),
+          recordPreparedArtifacts(owner, receipt, evidence),
       });
     },
-    [publish, queueRecordingEvent, recordPreparedArtifacts]
+    [captureEvidenceBinding, publish, recordPreparedArtifacts]
   );
 
   const settleTurn = useCallback(
@@ -444,6 +461,8 @@ export function useCallingAssistant() {
       momentUnitId: string
     ) => {
       const snapshot = owner.snapshot();
+      const evidence = captureEvidenceBinding(owner);
+      if (!evidence) return;
       let settlement = fallbackSettlement({
         text,
         callSessionId: snapshot.callSessionId,
@@ -466,9 +485,9 @@ export function useCallingAssistant() {
           publish,
           register: (operation) => activeOperationsRef.current.add(operation),
           unregister: (operation) => activeOperationsRef.current.delete(operation),
-          record: queueRecordingEvent,
+          record: evidence.writer.queue,
           recordPreparedArtifacts: (receipt) =>
-            recordPreparedArtifacts(owner, receipt),
+            recordPreparedArtifacts(owner, receipt, evidence),
         });
         if (outcome.status === "settled") settlement = outcome.settlement;
         if (outcome.status === "cancelled" || outcome.status === "stale") return;
@@ -478,11 +497,19 @@ export function useCallingAssistant() {
       publish();
       if (settlement.responseAuthorized) void executeAdvisor(owner);
     },
-    [executeAdvisor, publish, queueRecordingEvent, recordPreparedArtifacts]
+    [
+      captureEvidenceBinding,
+      executeAdvisor,
+      publish,
+      recordPreparedArtifacts,
+    ]
   );
 
   const processSegment = useCallback(
     async (owner: ActiveCallRuntime, segment: NativeSpeechSegment) => {
+      const evidence = captureEvidenceBinding(owner);
+      if (!evidence) return;
+      const record = evidence.writer.queue;
       const identity = {
         captureSessionId: segment.captureSessionId,
         captureGeneration: segment.captureGeneration,
@@ -490,7 +517,7 @@ export function useCallingAssistant() {
       };
       const observedAt = Date.now();
       segmentLedgerRef.current.observe({ identity, observedAt });
-      queueRecordingEvent(
+      record(
         "audio-segment-observed",
         segmentMetadata(segment),
         observedAt
@@ -503,7 +530,7 @@ export function useCallingAssistant() {
           disposition: "failed",
           settledAt: Date.now(),
         });
-        queueRecordingEvent("audio-segment-settled", {
+        record("audio-segment-settled", {
           ...identity,
           ...result,
           reason: "stt-provider-not-configured",
@@ -522,8 +549,8 @@ export function useCallingAssistant() {
         status: "selected",
         operationId,
         occurredAt: dispatchedAt,
-      });
-      queueRecordingEvent(
+      }, evidence);
+      record(
         "stt-operation-dispatched",
         {
           operationId,
@@ -547,7 +574,7 @@ export function useCallingAssistant() {
         status: "dispatched",
         operationId,
         occurredAt: dispatchedAt,
-      });
+      }, evidence);
       const operation = createCancellableOperation({
         operationId,
         timeoutMs: 30_000,
@@ -564,7 +591,7 @@ export function useCallingAssistant() {
       try {
         const text = await operation.promise;
         const returnedAt = Date.now();
-        queueRecordingEvent(
+        record(
           "stt-operation-returned",
           {
             operationId,
@@ -580,7 +607,7 @@ export function useCallingAssistant() {
           status: "provider-returned",
           operationId,
           occurredAt: returnedAt,
-        });
+        }, evidence);
         if (
           runtimeRef.current !== owner ||
           owner.snapshot().state !== "live"
@@ -590,7 +617,7 @@ export function useCallingAssistant() {
             disposition: "stale",
             settledAt: returnedAt,
           });
-          queueRecordingEvent("audio-segment-settled", {
+          record("audio-segment-settled", {
             ...identity,
             ...result,
             reason: "runtime-owner-or-state-changed",
@@ -601,7 +628,7 @@ export function useCallingAssistant() {
             operationId,
             reason: "runtime-owner-or-state-changed",
             occurredAt: returnedAt,
-          });
+          }, evidence);
           return;
         }
         const result = segmentLedgerRef.current.settle({
@@ -609,7 +636,7 @@ export function useCallingAssistant() {
           disposition: "accepted",
           settledAt: returnedAt,
         });
-        queueRecordingEvent("audio-segment-settled", {
+        record("audio-segment-settled", {
           ...identity,
           ...result,
         });
@@ -618,13 +645,13 @@ export function useCallingAssistant() {
           status: "commit-authorized",
           operationId,
           occurredAt: returnedAt,
-        });
+        }, evidence);
         const assembled = rolloverAssemblerRef.current.accept({
           segment,
           transcript: text,
           completedAtMs: returnedAt,
         });
-        queueRecordingEvent(
+        record(
           "rollover-transcript-family",
           {
             ...identity,
@@ -658,11 +685,11 @@ export function useCallingAssistant() {
           status: "visible",
           operationId,
           occurredAt: returnedAt,
-        });
+        }, evidence);
         await settleTurn(owner, logicalText, momentUnitId);
       } catch (error) {
         const failedAt = Date.now();
-        queueRecordingEvent(
+        record(
           "stt-operation-returned",
           {
             operationId,
@@ -680,7 +707,7 @@ export function useCallingAssistant() {
             error instanceof OperationAbortError ? "stale" : "failed",
           settledAt: failedAt,
         });
-        queueRecordingEvent("audio-segment-settled", {
+        record("audio-segment-settled", {
           ...identity,
           ...result,
           reason: errorMessage(error),
@@ -692,12 +719,12 @@ export function useCallingAssistant() {
           operationId,
           reason: errorMessage(error),
           occurredAt: failedAt,
-        });
+        }, evidence);
       } finally {
         activeOperationsRef.current.delete(operation);
       }
     },
-    [publish, queueRecordingEvent, recordPreparedArtifacts, settleTurn]
+    [captureEvidenceBinding, publish, recordPreparedArtifacts, settleTurn]
   );
 
   const releaseCaptureLease = useCallback((lease: CaptureLease | null) => {
@@ -1004,23 +1031,47 @@ export function useCallingAssistant() {
       owner.setTransitionObserver(undefined);
       owner = makeRuntime(options?.snapshot);
       runtimeRef.current = owner;
+      recordingRef.current = null;
+      recordingWriterRef.current = null;
+      handoffServiceRef.current = null;
       const recording = new CallRecordingProjection({
         callSessionId: owner.snapshot().callSessionId,
       });
-      recordingRef.current = recording;
-      const status = await recording.start(Date.now());
-      setRecordingStatus(status);
-      const handoff = await RuntimeHandoffService.open();
+      let recordingStarted = false;
       try {
+        const status = await recording.start(Date.now());
+        recordingStarted = true;
+        setRecordingStatus(status);
+        const handoff = await RuntimeHandoffService.open();
         await handoff.bind(owner.snapshot().preparation);
+        recordingRef.current = recording;
+        recordingWriterRef.current = createSessionBoundRecordingWriter({
+          recording,
+          onStatus: (nextStatus) => {
+            if (recordingRef.current === recording) {
+              setRecordingStatus(nextStatus);
+            }
+          },
+          onError: (error) => {
+            if (recordingRef.current === recording) {
+              setRecordingError(errorMessage(error));
+            }
+          },
+        });
+        handoffServiceRef.current = handoff;
+        bindRuntimeRecording(owner, handoff);
       } catch (error) {
-        const abandoned = await recording.abandon(Date.now()).catch(() => null);
+        const abandoned = recordingStarted
+          ? await recording.abandon(Date.now()).catch(() => null)
+          : null;
         if (abandoned) setRecordingStatus(abandoned);
-        recordingRef.current = null;
+        if (recordingRef.current === recording) {
+          recordingRef.current = null;
+          recordingWriterRef.current = null;
+          handoffServiceRef.current = null;
+        }
         throw error;
       }
-      handoffServiceRef.current = handoff;
-      bindRuntimeRecording(owner, handoff);
       const preparation = owner.snapshot().preparation;
       queueRecordingEvent("preparation-binding", {
         ...preparation,
@@ -1139,48 +1190,71 @@ export function useCallingAssistant() {
   const closeActiveRecording = useCallback(
     async (owner: ActiveCallRuntime, retry: boolean) => {
       const recording = recordingRef.current;
+      const writer = recordingWriterRef.current;
+      const handoff = handoffServiceRef.current;
       if (!recording || recording.callSessionId !== owner.snapshot().callSessionId) {
         throw new Error("The active call recording is unavailable.");
       }
-      await handoffServiceRef.current?.drain();
-      const attemptedAt = Date.now();
-      await recordEvent(
-        "call-close-attempt",
-        {
-          retry,
-          attempt: (recording.status?.attempt ?? 0) + 1,
-          pendingEventCount: recording.status?.eventCount ?? 0,
-        },
-        attemptedAt
-      );
+      if (!writer || writer.callSessionId !== recording.callSessionId || !handoff) {
+        throw new Error("The active call evidence binding is unavailable.");
+      }
       try {
+        await handoff.drain();
+        const attemptedAt = Date.now();
+        await writer.record(
+          "call-close-attempt",
+          {
+            retry,
+            attempt: (recording.status?.attempt ?? 0) + 1,
+            pendingEventCount: recording.status?.eventCount ?? 0,
+            recordingHealth: recording.status?.health ?? "healthy",
+          },
+          attemptedAt
+        );
+        await recording.drain();
+        owner.setTransitionObserver((transition) => {
+          handoff.recordTransition(transition);
+        });
         const status = retry
           ? await recording.retryClose(Date.now())
           : await recording.close(Date.now());
         setRecordingStatus(status);
-        owner.setTransitionObserver((transition) => {
-          handoffServiceRef.current?.recordTransition(transition);
-        });
         owner.dispatch({ type: "CloseSucceeded", occurredAt: Date.now() });
-        await handoffServiceRef.current?.drain();
-        owner.setTransitionObserver(undefined);
+        publish();
+        await handoff.drain();
         setRecordingError(null);
         void refreshCallRecordings();
       } catch (error) {
-        owner.dispatch({
-          type: "CloseFailed",
-          error: errorMessage(error),
-          occurredAt: Date.now(),
-        });
-        setRecordingError(errorMessage(error));
+        const runtimeState = owner.snapshot().state;
+        if (runtimeState === "closing") {
+          bindRuntimeRecording(owner, handoff);
+          owner.dispatch({
+            type: "CloseFailed",
+            error: errorMessage(error),
+            occurredAt: Date.now(),
+          });
+          await recording.drain();
+          await handoff.drain().catch(() => undefined);
+          setRecordingError(errorMessage(error));
+        } else {
+          setRecordingError(
+            `Call closed, but its runtime projection could not finish: ${errorMessage(error)}`
+          );
+        }
         await refreshRecoverableRecordings();
         await refreshCallRecordings();
         publish();
         throw error;
       }
+      owner.setTransitionObserver(undefined);
       publish();
     },
-    [publish, recordEvent, refreshCallRecordings, refreshRecoverableRecordings]
+    [
+      bindRuntimeRecording,
+      publish,
+      refreshCallRecordings,
+      refreshRecoverableRecordings,
+    ]
   );
 
   const end = useCallback(async () => {
@@ -1236,6 +1310,7 @@ export function useCallingAssistant() {
 
   const requestGuidance = useCallback(async () => {
     const owner = runtimeRef.current;
+    abortOperations("manual-guidance-request");
     owner.dispatch({
       type: "RecordHumanOverride",
       reason: "manual-guidance-request",
@@ -1243,7 +1318,7 @@ export function useCallingAssistant() {
     });
     publish();
     await executeAdvisor(owner, true);
-  }, [executeAdvisor, publish]);
+  }, [abortOperations, executeAdvisor, publish]);
 
   const evaluateGuidance = useCallback(
     async (label: GuidanceEvaluationLabel) => {

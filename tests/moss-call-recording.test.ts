@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   ActiveCallRuntime,
   CallRecordingProjection,
+  createSessionBoundRecordingWriter,
   type CallRecordingEvent,
   type CallRecordingStatus,
   type CallRecordingTransport,
@@ -171,6 +172,66 @@ test("an append failure remains visible as incomplete after later events and clo
   assert.equal(closed?.persistedEventCount, 1);
   assert.equal(closed?.droppedEventCount, 1);
   assert.match(JSON.stringify(closeCompleteness), /disk unavailable/);
+});
+
+test("session-bound writers cannot redirect a late event into a newer recording", async () => {
+  const events = new Map<string, CallRecordingEvent[]>();
+  const makeTransport = (callSessionId: string): CallRecordingTransport => {
+    let status = openStatus(callSessionId);
+    events.set(callSessionId, []);
+    return {
+      async start() {
+        return structuredClone(status);
+      },
+      async append({ eventPayload }) {
+        const event = JSON.parse(eventPayload) as CallRecordingEvent;
+        events.get(callSessionId)?.push(event);
+        status = {
+          ...status,
+          eventCount: event.sequence,
+          persistedEventCount: event.sequence,
+        };
+        return structuredClone(status);
+      },
+      async close() {
+        return { ...status, state: "closed" };
+      },
+      async retry() {
+        return { ...status, state: "closed" };
+      },
+      async abandon() {
+        return { ...status, state: "abandoned" };
+      },
+    };
+  };
+  const firstRecording = new CallRecordingProjection({
+    callSessionId: "call-first",
+    transport: makeTransport("call-first"),
+  });
+  const secondRecording = new CallRecordingProjection({
+    callSessionId: "call-second",
+    transport: makeTransport("call-second"),
+  });
+  await firstRecording.start(1);
+  await secondRecording.start(2);
+  const firstWriter = createSessionBoundRecordingWriter({
+    recording: firstRecording,
+  });
+  const secondWriter = createSessionBoundRecordingWriter({
+    recording: secondRecording,
+  });
+
+  await secondWriter.record("model-operation-dispatched", { operationId: "new" });
+  await firstWriter.record("model-operation-returned", { operationId: "late-old" });
+
+  assert.deepEqual(
+    events.get("call-first")?.map((event) => event.payload),
+    [{ operationId: "late-old" }]
+  );
+  assert.deepEqual(
+    events.get("call-second")?.map((event) => event.payload),
+    [{ operationId: "new" }]
+  );
 });
 
 test("a full runtime lifecycle is reconstructable from transition events", () => {

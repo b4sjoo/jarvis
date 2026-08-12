@@ -286,6 +286,49 @@ export class CallRecordingProjection {
   }
 }
 
+export interface SessionBoundRecordingWriter {
+  callSessionId: string;
+  record: (
+    kind: CallRecordingEventKind,
+    payload: unknown,
+    occurredAt?: number
+  ) => Promise<CallRecordingStatus | null>;
+  queue: (
+    kind: CallRecordingEventKind,
+    payload: unknown,
+    occurredAt?: number
+  ) => void;
+}
+
+export function createSessionBoundRecordingWriter(input: {
+  recording: CallRecordingProjection;
+  onStatus?: (status: CallRecordingStatus) => void;
+  onError?: (error: unknown) => void;
+}): SessionBoundRecordingWriter {
+  const recording = input.recording;
+  const record = async (
+    kind: CallRecordingEventKind,
+    payload: unknown,
+    occurredAt = Date.now()
+  ) => {
+    try {
+      const status = await recording.append(kind, payload, occurredAt);
+      if (status) input.onStatus?.(status);
+      return status;
+    } catch (error) {
+      input.onError?.(error);
+      throw error;
+    }
+  };
+  return {
+    callSessionId: recording.callSessionId,
+    record,
+    queue: (kind, payload, occurredAt) => {
+      void record(kind, payload, occurredAt).catch(() => undefined);
+    },
+  };
+}
+
 const message = (error: unknown) =>
   error instanceof Error ? error.message : String(error);
 
