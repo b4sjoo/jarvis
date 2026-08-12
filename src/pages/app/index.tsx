@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { LogicalSize } from "@tauri-apps/api/dpi";
+import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
   AudioLines,
@@ -98,14 +99,6 @@ const sections: Array<{
   },
 ];
 
-const closableStates = new Set([
-  "starting",
-  "live",
-  "paused",
-  "recovering",
-  "start-failed",
-]);
-
 export default function MossApp() {
   const controller = useCallingAssistant();
   const [interfaceMode, setInterfaceMode] =
@@ -125,6 +118,7 @@ export default function MossApp() {
     null
   );
   const shortcutRegistryRef = useRef(new GlobalShortcutRegistry());
+  const quittingRef = useRef(false);
   const controllerRef = useRef(controller);
   const interfaceModeRef = useRef(interfaceMode);
   const shortcutHandlerRef = useRef<
@@ -139,36 +133,37 @@ export default function MossApp() {
     [activeSection]
   );
 
-  const quit = useCallback(async () => {
-    if (quitting) return;
+  const quit = useCallback(async (source: "ui" | "system" = "ui") => {
+    if (quittingRef.current) return;
+    quittingRef.current = true;
     setQuitting(true);
     setQuitError(null);
-    controller.recordInterfaceAction({
+    const activeController = controllerRef.current;
+    activeController.recordInterfaceAction({
       action: "quit",
-      source: "ui",
+      source,
       outcome: "requested",
     });
     try {
-      if (closableStates.has(controller.runtime.state)) {
-        await controller.end();
-      }
-      if (controller.runtime.state === "close-failed") {
-        throw new Error("Close the active recording before quitting MOSS.");
-      }
+      await activeController.prepareForExit();
       if (isTauriRuntime()) await invoke("exit_app");
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);
-      controller.recordInterfaceAction({
+      activeController.recordInterfaceAction({
         action: "quit",
-        source: "ui",
+        source,
         outcome: "failed",
         detail,
       });
       setQuitError(detail);
+      if (isTauriRuntime()) {
+        await invoke("cancel_exit_app").catch(() => undefined);
+      }
     } finally {
+      quittingRef.current = false;
       setQuitting(false);
     }
-  }, [controller, quitting]);
+  }, []);
 
   const applyInterfaceMode = useCallback(async (
     mode: MossInterfaceMode,
@@ -400,6 +395,22 @@ export default function MossApp() {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [quit]);
 
+  useEffect(() => {
+    if (!isTauriRuntime()) return;
+    let disposed = false;
+    let stop: (() => void) | undefined;
+    void listen<{ source?: string }>("graceful-exit-requested", () => {
+      if (!disposed) void quit("system");
+    }).then((unlisten) => {
+      if (disposed) unlisten();
+      else stop = unlisten;
+    });
+    return () => {
+      disposed = true;
+      stop?.();
+    };
+  }, [quit]);
+
   if (interfaceMode === "companion") {
     return (
       <div className="companion-shell">
@@ -441,7 +452,7 @@ export default function MossApp() {
         <div className="sidebar-footer">
           <button
             className="nav-item quit-item"
-            onClick={() => void quit()}
+            onClick={() => void quit("ui")}
             disabled={quitting}
             title={sidebarCollapsed ? "Quit MOSS" : undefined}
           >

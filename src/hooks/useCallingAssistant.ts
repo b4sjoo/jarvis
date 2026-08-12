@@ -985,6 +985,16 @@ export function useCallingAssistant() {
       if (!status.captureSessionId || status.captureGeneration == null) {
         throw new Error("Native capture started without a lease.");
       }
+      if (
+        runtimeRef.current !== owner ||
+        !["starting", "recovering"].includes(owner.snapshot().state)
+      ) {
+        await invoke("stop_call_audio_session", {
+          expectedCaptureSessionId: status.captureSessionId,
+          expectedCaptureGeneration: status.captureGeneration,
+        }).catch(() => undefined);
+        throw new OperationAbortError("Native capture owner changed during start.");
+      }
       captureSessionIdRef.current = status.captureSessionId;
       captureGenerationRef.current = status.captureGeneration;
       lastSegmentSequenceRef.current = 0;
@@ -1105,12 +1115,14 @@ export function useCallingAssistant() {
     try {
       await startCapture(owner);
     } catch (error) {
-      owner.dispatch({
-        type: "StartFailed",
-        error: errorMessage(error),
-        occurredAt: Date.now(),
-      });
-      publish();
+      if (owner.snapshot().state === "starting") {
+        owner.dispatch({
+          type: "StartFailed",
+          error: errorMessage(error),
+          occurredAt: Date.now(),
+        });
+        publish();
+      }
     }
   }, [
     abortOperations,
@@ -1265,6 +1277,36 @@ export function useCallingAssistant() {
     publish();
     await closeActiveRecording(owner, false);
   }, [abortOperations, closeActiveRecording, publish, stopAndDrainCapture]);
+
+  const prepareForExit = useCallback(async () => {
+    const owner = runtimeRef.current;
+    if (owner.snapshot().state === "starting") {
+      owner.dispatch({
+        type: "StartFailed",
+        error: "Application exit requested while audio capture was starting.",
+        occurredAt: Date.now(),
+      });
+      publish();
+    }
+    if (
+      ["live", "paused", "recovering", "start-failed"].includes(
+        owner.snapshot().state
+      )
+    ) {
+      await end();
+    }
+    const finalState = runtimeRef.current.snapshot().state;
+    const finalRecordingState = recordingRef.current?.status?.state;
+    if (["closing", "close-failed"].includes(finalState)) {
+      throw new Error("Close the active call recording before quitting MOSS.");
+    }
+    if (
+      finalRecordingState &&
+      !["closed", "abandoned"].includes(finalRecordingState)
+    ) {
+      throw new Error("The active call recording has not reached a terminal state.");
+    }
+  }, [end, publish]);
 
   const retryClose = useCallback(async () => {
     const owner = runtimeRef.current;
@@ -1515,6 +1557,7 @@ export function useCallingAssistant() {
     pause,
     resume,
     end,
+    prepareForExit,
     retryClose,
     abandonClose,
     retryRecoveredRecording,

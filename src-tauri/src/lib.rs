@@ -7,9 +7,11 @@ mod preparation_transaction;
 mod recording;
 mod speaker;
 
+use serde::Serialize;
 use speaker::{NativeCaptureControl, NativeCaptureTerminationRequest, VadConfig};
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+use tauri::{Emitter, Manager};
 use tokio::task::JoinHandle;
 
 #[derive(Default)]
@@ -23,6 +25,47 @@ pub struct AudioState {
     capture_stop_requested: Arc<AtomicBool>,
     capture_termination_requested: Arc<AtomicBool>,
     capture_termination_request: Arc<Mutex<Option<NativeCaptureTerminationRequest>>>,
+}
+
+#[derive(Default)]
+struct GracefulExitState {
+    authorized: AtomicBool,
+    request_pending: AtomicBool,
+}
+
+impl GracefulExitState {
+    fn authorize(&self) {
+        self.authorized.store(true, Ordering::Release);
+        self.request_pending.store(false, Ordering::Release);
+    }
+
+    fn cancel_request(&self) {
+        self.request_pending.store(false, Ordering::Release);
+    }
+
+    fn is_authorized(&self) -> bool {
+        self.authorized.load(Ordering::Acquire)
+    }
+
+    fn begin_request(&self) -> bool {
+        !self.request_pending.swap(true, Ordering::AcqRel)
+    }
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct GracefulExitRequest {
+    source: &'static str,
+}
+
+fn request_graceful_exit(app: &tauri::AppHandle, state: &GracefulExitState, source: &'static str) {
+    if !state.begin_request() {
+        return;
+    }
+    if let Err(error) = app.emit("graceful-exit-requested", GracefulExitRequest { source }) {
+        state.cancel_request();
+        eprintln!("Failed to request graceful MOSS exit: {error}");
+    }
 }
 
 #[tauri::command]
@@ -53,8 +96,14 @@ fn restore_development_application_icon(app: &tauri::AppHandle) -> Result<(), St
 }
 
 #[tauri::command]
-fn exit_app(app: tauri::AppHandle) {
+fn exit_app(app: tauri::AppHandle, state: tauri::State<GracefulExitState>) {
+    state.authorize();
     app.exit(0);
+}
+
+#[tauri::command]
+fn cancel_exit_app(state: tauri::State<GracefulExitState>) {
+    state.cancel_request();
 }
 
 #[tauri::command]
@@ -98,6 +147,7 @@ pub fn run() {
                 .build(),
         )
         .manage(AudioState::default())
+        .manage(GracefulExitState::default())
         .manage(preparation_transaction::PreparationTransactionState::default())
         .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_dialog::init())
@@ -106,6 +156,7 @@ pub fn run() {
             get_app_version,
             write_call_trace_log,
             exit_app,
+            cancel_exit_app,
             set_stealth_mode,
             credential_store::get_provider_secret,
             credential_store::save_provider_secret,
@@ -163,7 +214,50 @@ pub fn run() {
         builder = builder.plugin(tauri_plugin_macos_permissions::init());
     }
 
-    builder
-        .run(tauri::generate_context!())
-        .expect("error while running MOSS");
+    let app = builder
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                let state = window.state::<GracefulExitState>();
+                if !state.is_authorized() {
+                    api.prevent_close();
+                    request_graceful_exit(window.app_handle(), &state, "window-close");
+                }
+            }
+        })
+        .build(tauri::generate_context!())
+        .expect("error while building MOSS");
+
+    app.run(|app_handle, event| {
+        if let tauri::RunEvent::ExitRequested { api, .. } = event {
+            let state = app_handle.state::<GracefulExitState>();
+            if !state.is_authorized() {
+                api.prevent_exit();
+                request_graceful_exit(app_handle, &state, "application-exit");
+            }
+        }
+    });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::GracefulExitState;
+
+    #[test]
+    fn graceful_exit_state_deduplicates_requests_until_cancelled() {
+        let state = GracefulExitState::default();
+        assert!(state.begin_request());
+        assert!(!state.begin_request());
+        state.cancel_request();
+        assert!(state.begin_request());
+    }
+
+    #[test]
+    fn graceful_exit_authorization_releases_the_native_gate() {
+        let state = GracefulExitState::default();
+        assert!(!state.is_authorized());
+        state.begin_request();
+        state.authorize();
+        assert!(state.is_authorized());
+        assert!(state.begin_request());
+    }
 }
