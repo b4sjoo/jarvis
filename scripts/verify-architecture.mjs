@@ -1,0 +1,110 @@
+#!/usr/bin/env node
+
+import { execFileSync } from "node:child_process";
+import fs from "node:fs";
+import path from "node:path";
+import {
+  createArchitectureContractBaseline,
+  discoverArchitecture,
+  evaluateArchitectureAnalysis,
+  loadArchitectureContract,
+} from "./lib/architecture-analysis.mjs";
+import { loadDeletionLedger } from "./lib/maintainability-deletion-ledger.mjs";
+
+const repositoryRoot = process.cwd();
+const analysis = discoverArchitecture(repositoryRoot);
+
+if (
+  process.argv.includes("--print-baseline") ||
+  process.argv.includes("--write-baseline")
+) {
+  let sourceCommit = "unknown";
+  try {
+    sourceCommit = execFileSync("git", ["rev-parse", "HEAD"], {
+      cwd: repositoryRoot,
+      encoding: "utf8",
+    }).trim();
+  } catch {
+    // A source archive without Git can still print a usable baseline.
+  }
+  const baseline = `${JSON.stringify(
+    createArchitectureContractBaseline(analysis, sourceCommit),
+    null,
+    2
+  )}\n`;
+  if (process.argv.includes("--write-baseline")) {
+    const contractPath = path.resolve(
+      repositoryRoot,
+      "architecture",
+      "architecture-contract.json"
+    );
+    if (
+      fs.existsSync(contractPath) &&
+      !process.argv.includes("--force-baseline")
+    ) {
+      console.error(
+        "Architecture contract already exists; pass --force-baseline only after reviewing an intentional boundary change."
+      );
+      process.exit(1);
+    }
+    fs.mkdirSync(path.dirname(contractPath), { recursive: true });
+    fs.writeFileSync(contractPath, baseline);
+    console.log(`Architecture baseline: ${path.relative(repositoryRoot, contractPath)}`);
+  } else {
+    console.log(baseline.trimEnd());
+  }
+  process.exit(0);
+}
+
+const contract = loadArchitectureContract(repositoryRoot);
+const ledger = loadDeletionLedger(repositoryRoot);
+const evaluation = evaluateArchitectureAnalysis({
+  analysis,
+  contract,
+  ledger,
+});
+
+if (process.argv.includes("--json")) {
+  console.log(JSON.stringify(evaluation, null, 2));
+} else {
+  console.log(formatMetrics(evaluation.metrics));
+}
+
+if (process.argv.includes("--report")) {
+  const reportPath = path.resolve(
+    repositoryRoot,
+    ".tmp-architecture",
+    "architecture-report.json"
+  );
+  fs.mkdirSync(path.dirname(reportPath), { recursive: true });
+  fs.writeFileSync(
+    reportPath,
+    `${JSON.stringify({
+      schemaVersion: 1,
+      generatedAt: new Date().toISOString(),
+      sourceCommit: contract.sourceCommit,
+      command: "npm run verify:architecture",
+      ...evaluation,
+    }, null, 2)}\n`
+  );
+  console.log(`Architecture report: ${path.relative(repositoryRoot, reportPath)}`);
+}
+
+if (!evaluation.ok) {
+  console.error("Architecture verification failed:");
+  for (const error of evaluation.errors) console.error(`- ${error}`);
+  process.exit(1);
+}
+
+function formatMetrics(metrics) {
+  return [
+    "Architecture verification passed",
+    `task-writers=${metrics.taskWriterCallsites}/${metrics.taskWriterModules} modules`,
+    `legacy-imports=${metrics.liveLegacyImports}`,
+    `cycles=${metrics.importCycles}/${metrics.importCycleEdges} edges`,
+    `meeting-barrel-consumers=${metrics.broadMeetingBarrelConsumers}`,
+    `ipc-commands=${metrics.registeredCommands}/${metrics.staticFrontendInvokes + metrics.wrappedFrontendInvokes} called`,
+    `ipc-known-exceptions=${metrics.frontendCommandsWithoutNativeRegistration + metrics.nativeCommandsWithoutFrontendCall}`,
+    `ledger=${metrics.deletionLedgerEntries}`,
+  ].join(" | ");
+}
