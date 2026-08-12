@@ -33,7 +33,10 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
-    "test": "node scripts/clean-test-output.mjs && tsc -p tsconfig.test.json && node --test .tmp-tests/tests/**/*.test.js tests/jarvis-dev-port.test.mjs",
+    "test": "node scripts/clean-test-output.mjs && tsc -p tsconfig.test.json && node --test .tmp-tests/tests/**/*.test.js tests/jarvis-dev-port.test.mjs tests/maintainability-deletion-ledger.test.mjs tests/architecture-guardrails.test.mjs tests/tracked-document-boundary.test.mjs tests/next-major-verification.test.mjs",
+    "verify:deletion-ledger": "node scripts/verify-maintainability-ledger.mjs",
+    "verify:architecture": "node scripts/verify-architecture.mjs --report",
+    "verify:next-major": "node scripts/verify-next-major.mjs",
     "taxonomy:evaluate": "tsc -p tsconfig.taxonomy-evaluation.json && node .tmp-taxonomy-evaluation/scripts/evaluate-taxonomy-corpus.js",
     "intent:corpus:readiness": "tsc -p tsconfig.local-intent-corpus-readiness.json && node .tmp-local-intent-corpus-readiness/scripts/build-local-intent-corpus-readiness.js",
     "intent:corpus:pilot": "tsc -p tsconfig.local-intent-corpus-readiness.json && node .tmp-local-intent-corpus-readiness/scripts/build-local-intent-annotation-pilot.js",

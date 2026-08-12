@@ -27,12 +27,19 @@ Jarvis is currently designed for local personal use only.
 
 ## Architecture Notes
 
-The app uses:
+Start with [ARCHITECTURE.md](ARCHITECTURE.md) for the tracked, privacy-safe
+runtime map and [architecture/README.md](architecture/README.md) for the
+refactor guardrails. In short, the app uses:
 
 - `src/` for the React frontend, hooks, provider configuration, and assistant UI.
 - `src-tauri/` for the native shell, global shortcuts, window behavior, capture, audio capture, and local database.
-- `docs/meeting-assistant-low-level-design.md` for the low-level meeting assistant design.
-- `docs/meeting-assistant-task-tracking.md` for task status and decision tracking.
+- `src/lib/meeting/` for deterministic meeting policy, authority, and artifact contracts.
+- `src/lib/preparation/` for Interview Preparation Workspace composition and snapshot services.
+- `architecture/` for deletion governance, architecture drift baselines, and canonical replay evidence.
+
+Detailed product working documents remain local and gitignored because they can
+contain private interview and memory context. A clean checkout does not depend
+on them for setup or verification.
 
 ## Development
 
@@ -76,6 +83,19 @@ Check the Rust side:
 ```bash
 cd src-tauri
 cargo check
+```
+
+Run the fast architecture guardrails:
+
+```bash
+npm run verify:architecture
+```
+
+Run the full next-major verification suite (architecture, tests, production
+build, and Rust check):
+
+```bash
+npm run verify:next-major
 ```
 
 ## Configuration

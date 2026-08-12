@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 1,
+  "recordedAt": "2026-08-12",
+  "sourceCommit": "6d3923f",
+  "environment": "darwin local development machine",
+  "investigationThresholdMultiplier": 1.2,
+  "gates": [
+    {
+      "name": "architecture",
+      "baselineMs": 2300,
+      "investigationThresholdMs": 2760
+    },
+    {
+      "name": "tests",
+      "baselineMs": 10300,
+      "investigationThresholdMs": 12360
+    },
+    {
+      "name": "frontend-build",
+      "baselineMs": 25891,
+      "investigationThresholdMs": 31070
+    },
+    {
+      "name": "rust-check",
+      "baselineMs": 42980,
+      "investigationThresholdMs": 51576
+    }
+  ]
+}

@@ -12,6 +12,7 @@ import {
 import { loadDeletionLedger } from "./lib/maintainability-deletion-ledger.mjs";
 
 const repositoryRoot = process.cwd();
+const verificationStartedAt = Date.now();
 const analysis = discoverArchitecture(repositoryRoot);
 
 if (
@@ -71,6 +72,7 @@ if (process.argv.includes("--json")) {
 }
 
 if (process.argv.includes("--report")) {
+  const currentCommit = readCurrentCommit(repositoryRoot);
   const reportPath = path.resolve(
     repositoryRoot,
     ".tmp-architecture",
@@ -82,8 +84,12 @@ if (process.argv.includes("--report")) {
     `${JSON.stringify({
       schemaVersion: 1,
       generatedAt: new Date().toISOString(),
-      sourceCommit: contract.sourceCommit,
+      sourceCommit: currentCommit,
+      baselineSourceCommit: contract.sourceCommit,
+      workingTreeChangeCount: readWorkingTreeChangeCount(repositoryRoot),
       command: "npm run verify:architecture",
+      durationMs: Date.now() - verificationStartedAt,
+      knownIpcExceptions: contract.ipc.reconciliation,
       ...evaluation,
     }, null, 2)}\n`
   );
@@ -107,4 +113,28 @@ function formatMetrics(metrics) {
     `ipc-known-exceptions=${metrics.frontendCommandsWithoutNativeRegistration + metrics.nativeCommandsWithoutFrontendCall}`,
     `ledger=${metrics.deletionLedgerEntries}`,
   ].join(" | ");
+}
+
+function readCurrentCommit(cwd) {
+  try {
+    return execFileSync("git", ["rev-parse", "HEAD"], {
+      cwd,
+      encoding: "utf8",
+    }).trim();
+  } catch {
+    return "unknown";
+  }
+}
+
+function readWorkingTreeChangeCount(cwd) {
+  try {
+    return execFileSync("git", ["status", "--porcelain"], {
+      cwd,
+      encoding: "utf8",
+    })
+      .split("\n")
+      .filter(Boolean).length;
+  } catch {
+    return undefined;
+  }
 }
