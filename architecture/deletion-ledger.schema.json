@@ -1,0 +1,95 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://jarvis.local/schemas/maintainability-deletion-ledger.schema.json",
+  "title": "Jarvis Maintainability Deletion Ledger",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "updatedAt", "entries"],
+  "properties": {
+    "version": {
+      "const": 1
+    },
+    "updatedAt": {
+      "type": "string",
+      "format": "date"
+    },
+    "entries": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/entry"
+      }
+    }
+  },
+  "$defs": {
+    "entry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "symbolOrSurface",
+        "verdict",
+        "ownerTaskId",
+        "persistedDataImpact",
+        "proofCommands",
+        "deletionGate",
+        "rollbackBoundary",
+        "status"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+        },
+        "symbolOrSurface": {
+          "type": "string",
+          "minLength": 1
+        },
+        "verdict": {
+          "enum": ["delete", "migrate-then-delete", "keep-boundary"]
+        },
+        "ownerTaskId": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "replacement": {
+          "type": "string",
+          "minLength": 1
+        },
+        "persistedDataImpact": {
+          "enum": ["none", "settings", "database", "recording"]
+        },
+        "historicalReader": {
+          "type": "string",
+          "minLength": 1
+        },
+        "proofCommands": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "deletionGate": {
+          "type": "string",
+          "minLength": 1
+        },
+        "rollbackBoundary": {
+          "type": "string",
+          "minLength": 1
+        },
+        "status": {
+          "enum": ["candidate", "migration-ready", "deleted", "retained"]
+        },
+        "forbiddenPatterns": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    }
+  }
+}

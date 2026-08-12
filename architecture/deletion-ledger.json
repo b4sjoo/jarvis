@@ -1,0 +1,169 @@
+{
+  "$schema": "./deletion-ledger.schema.json",
+  "version": 1,
+  "updatedAt": "2026-08-12",
+  "entries": [
+    {
+      "id": "task-runtime-legacy-active-screen-root",
+      "symbolOrSurface": "MeetingContextState.activeScreenTask live mutable root",
+      "verdict": "migrate-then-delete",
+      "ownerTaskId": 151,
+      "replacement": "MeetingTaskRuntimeState screen attachment projection",
+      "persistedDataImpact": "recording",
+      "historicalReader": "versioned task-state recording decoder",
+      "proofCommands": [
+        "npm run verify:architecture",
+        "npm test"
+      ],
+      "deletionGate": "All live task mutation and projection consumers use the canonical Task 151 runtime state; old recordings remain readable through a boundary decoder.",
+      "rollbackBoundary": "Task 151 writer cutover and legacy-root deletion remain separate commits.",
+      "status": "candidate"
+    },
+    {
+      "id": "task-runtime-legacy-active-interview-root",
+      "symbolOrSurface": "MeetingContextState.activeInterviewTask live mutable root",
+      "verdict": "migrate-then-delete",
+      "ownerTaskId": 151,
+      "replacement": "MeetingTaskRuntimeState parent and child ownership",
+      "persistedDataImpact": "recording",
+      "historicalReader": "versioned task-state recording decoder",
+      "proofCommands": [
+        "npm run verify:architecture",
+        "npm test"
+      ],
+      "deletionGate": "The Task 151 reducer is the sole live task writer and every prompt, UI, recording, and evaluation consumer observes one task revision.",
+      "rollbackBoundary": "Task 151 consumer migration, writer cutover, and legacy-root deletion remain separate commits.",
+      "status": "candidate"
+    },
+    {
+      "id": "direct-native-exit-without-runtime-drain",
+      "symbolOrSurface": "Frontend direct invoke of exit_app",
+      "verdict": "migrate-then-delete",
+      "ownerTaskId": 162,
+      "replacement": "bounded graceful application shutdown coordinator",
+      "persistedDataImpact": "recording",
+      "proofCommands": [
+        "npm run verify:architecture",
+        "npm test"
+      ],
+      "deletionGate": "Every user-visible quit entry freezes new work and settles native capture, recording, trace, and Focus-window participants before terminal exit.",
+      "rollbackBoundary": "Task 162 coordinator wiring can roll back without changing participant state machines.",
+      "status": "candidate"
+    },
+    {
+      "id": "native-audio-split-control-state",
+      "symbolOrSurface": "AudioState lifecycle represented by independently mutable locks and flags",
+      "verdict": "migrate-then-delete",
+      "ownerTaskId": 163,
+      "replacement": "transactional native audio control state with generation-owned cancellation tokens",
+      "persistedDataImpact": "none",
+      "proofCommands": [
+        "npm run verify:architecture",
+        "cargo test",
+        "cargo check"
+      ],
+      "deletionGate": "All shared audio metadata transitions validate owner, session, and generation; stale completion cannot mutate current state.",
+      "rollbackBoundary": "Task 163 control-state migration remains independent from VAD, STT, and recovery-policy changes.",
+      "status": "candidate"
+    },
+    {
+      "id": "recording-nontransactional-startup-publication",
+      "symbolOrSurface": "Session Recording startup publishes partial ownership before all required files are ready",
+      "verdict": "migrate-then-delete",
+      "ownerTaskId": 126,
+      "replacement": "transactional recording startup publication",
+      "persistedDataImpact": "recording",
+      "historicalReader": "versioned Session Recording loader",
+      "proofCommands": [
+        "npm run verify:architecture",
+        "npm test"
+      ],
+      "deletionGate": "Failed startup leaves no visible partial session owner and preserves enough evidence for retry or cleanup.",
+      "rollbackBoundary": "Task 126 staging and publication changes remain one independently revertible slice.",
+      "status": "candidate"
+    },
+    {
+      "id": "recording-one-shot-terminal-manifest-close",
+      "symbolOrSurface": "Session Recording terminal manifest close without retryable publication ownership",
+      "verdict": "migrate-then-delete",
+      "ownerTaskId": 127,
+      "replacement": "retryable terminal-manifest publication transaction",
+      "persistedDataImpact": "recording",
+      "historicalReader": "versioned Session Recording loader",
+      "proofCommands": [
+        "npm run verify:architecture",
+        "npm test"
+      ],
+      "deletionGate": "Close failure preserves unresolved ownership and can retry without marking an incomplete recording complete.",
+      "rollbackBoundary": "Task 127 close-state migration stays separate from Task 162 application shutdown orchestration.",
+      "status": "candidate"
+    },
+    {
+      "id": "mutable-preparation-extraction-output",
+      "symbolOrSurface": "Force extraction overwrites chunks and review output behind one material revision",
+      "verdict": "migrate-then-delete",
+      "ownerTaskId": 164,
+      "replacement": "immutable extraction runs with compare-and-swap selected-run ownership",
+      "persistedDataImpact": "database",
+      "historicalReader": "material revision and extraction-run migration reader",
+      "proofCommands": [
+        "npm run verify:architecture",
+        "npm test",
+        "cargo check"
+      ],
+      "deletionGate": "Statements and snapshots pin an immutable extraction run; referenced runs cannot be overwritten or deleted.",
+      "rollbackBoundary": "Task 164 schema, backfill, writer cutover, and old-output cleanup remain separate commits.",
+      "status": "candidate"
+    },
+    {
+      "id": "destructive-curated-kmb-rebuild",
+      "symbolOrSurface": "Curated KMB rebuild deletes and recreates content behind stable logical identities",
+      "verdict": "migrate-then-delete",
+      "ownerTaskId": 165,
+      "replacement": "staged immutable KMB content revisions with separate mutable policy",
+      "persistedDataImpact": "database",
+      "historicalReader": "KMB revision migration reader",
+      "proofCommands": [
+        "npm run verify:architecture",
+        "npm test"
+      ],
+      "deletionGate": "Rebuild stages and validates a complete generation before activation, while snapshots pin exact revisions and hashes.",
+      "rollbackBoundary": "Task 165 revision schema, staged rebuild, activation, and destructive-path deletion remain separate commits.",
+      "status": "candidate"
+    },
+    {
+      "id": "unversioned-preparation-snapshot-envelope",
+      "symbolOrSurface": "Preparation snapshot activation trusts preflight hashes without final SQL-boundary revision verification",
+      "verdict": "migrate-then-delete",
+      "ownerTaskId": 165,
+      "replacement": "versioned snapshot envelope with transactional revision and content-hash validation",
+      "persistedDataImpact": "database",
+      "historicalReader": "versioned preparation snapshot decoder",
+      "proofCommands": [
+        "npm run verify:architecture",
+        "npm test",
+        "cargo check"
+      ],
+      "deletionGate": "Snapshot activation revalidates every pinned revision and hash inside the final database transaction.",
+      "rollbackBoundary": "Task 165 envelope migration and activation cutover remain independently revertible.",
+      "status": "candidate"
+    },
+    {
+      "id": "best-effort-legacy-chat-startup-migration",
+      "symbolOrSurface": "Legacy localStorage chat migration deletes source after partial or parse failure",
+      "verdict": "migrate-then-delete",
+      "ownerTaskId": 166,
+      "replacement": "preflighted staging import with transactional publication and count/hash receipt",
+      "persistedDataImpact": "database",
+      "historicalReader": "explicit legacy chat upgrade boundary",
+      "proofCommands": [
+        "npm run verify:architecture",
+        "npm test",
+        "cargo check"
+      ],
+      "deletionGate": "Migration is retryable and source deletion requires complete parse, import, count, and hash verification.",
+      "rollbackBoundary": "Task 166 backup, staging, publication, and legacy startup-path retirement remain separate commits.",
+      "status": "candidate"
+    }
+  ]
+}
