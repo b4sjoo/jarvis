@@ -47,6 +47,7 @@ export interface CallRecordingSummary {
   manifestAvailable: boolean;
   integrityError: string | null;
   audioRecording: CallAudioRecordingSummary | null;
+  audioStoragePath: string | null;
 }
 
 export type CallAudioRecordingState =

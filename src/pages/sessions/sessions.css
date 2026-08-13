@@ -67,7 +67,7 @@
 
 .session-row {
   display: grid;
-  grid-template-columns: minmax(260px, 1fr) minmax(270px, auto) auto;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   gap: 18px;
   min-height: 86px;
@@ -86,6 +86,7 @@
   display: flex;
   align-items: center;
   gap: 8px;
+  flex-wrap: wrap;
 }
 
 .session-primary strong {
@@ -145,37 +146,24 @@
   color: var(--danger-text);
 }
 
-.session-integrity {
-  color: var(--danger-text);
+.audio-expiry {
+  flex: 0 0 auto;
+  padding: 3px 6px;
+  border-radius: 4px;
+  background: var(--warning-soft);
+  color: var(--warning-text);
   font-size: var(--font-small);
+  font-weight: 700;
 }
 
-.session-metrics {
-  display: flex;
-  align-items: center;
-  gap: 15px;
-  color: var(--text-muted);
-  font-size: var(--font-small);
-  white-space: nowrap;
-}
-
-.session-metrics span {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-}
-
-.session-metrics b {
-  color: var(--text-primary);
-}
-
-.session-metrics .session-dropped,
-.session-metrics .session-dropped b {
+.audio-expiry-expired {
+  background: var(--danger-soft);
   color: var(--danger-text);
 }
 
 .session-actions {
   display: flex;
+  align-items: center;
   gap: 4px;
 }
 
@@ -289,6 +277,116 @@
   font-size: var(--font-body);
 }
 
+.session-modal-layer {
+  position: fixed;
+  z-index: 60;
+  inset: 0.5px;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  border-radius: 15.5px;
+  background: rgb(24 24 27 / 28%);
+}
+
+.session-modal {
+  width: min(640px, 100%);
+  max-height: min(760px, 90vh);
+  overflow: auto;
+  padding: 18px;
+  border: 1px solid var(--border-strong);
+  border-radius: 12px;
+  background: var(--surface-raised);
+  box-shadow: 0 18px 54px rgb(24 24 27 / 17%);
+}
+
+.session-modal > header,
+.session-modal > footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.session-modal > header span {
+  color: var(--text-muted);
+  font-size: var(--font-small);
+  font-weight: 750;
+  text-transform: uppercase;
+}
+
+.session-modal h3 {
+  margin: 3px 0 0;
+  overflow-wrap: anywhere;
+  color: var(--text-primary);
+  font-size: var(--font-section-title);
+}
+
+.session-detail-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin: 16px 0 0;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.session-detail-grid > div {
+  min-width: 0;
+  padding: 10px 12px;
+  border-right: 1px solid var(--border-subtle);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.session-detail-grid > div:nth-child(2n) {
+  border-right: 0;
+}
+
+.session-detail-grid > div:nth-last-child(-n + 2) {
+  border-bottom: 0;
+}
+
+.session-detail-grid dt {
+  color: var(--text-muted);
+  font-size: var(--font-small);
+}
+
+.session-detail-grid dd {
+  margin: 4px 0 0;
+  overflow-wrap: anywhere;
+  color: var(--text-primary);
+  font-size: var(--font-ui);
+  font-weight: 700;
+}
+
+.session-detail-help,
+.session-export-modal > p {
+  margin: 14px 0 0;
+  color: var(--text-muted);
+  font-size: var(--font-small);
+  line-height: 1.5;
+}
+
+.session-detail-warning {
+  display: grid;
+  gap: 5px;
+  margin-top: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--danger-border);
+  border-radius: 8px;
+  background: var(--danger-soft);
+  color: var(--danger-text);
+  font-size: var(--font-small);
+}
+
+.session-export-modal {
+  width: min(480px, 100%);
+}
+
+.session-export-modal > footer {
+  justify-content: flex-end;
+  margin-top: 18px;
+}
+
 .danger-icon {
   color: var(--danger-text);
 }
@@ -312,14 +410,7 @@
 }
 
 @media (max-width: 900px) {
-  .session-row {
-    grid-template-columns: minmax(0, 1fr) auto;
-  }
-
-  .session-metrics {
-    grid-column: 1 / -1;
-    grid-row: 2;
-  }
+  .session-row { grid-template-columns: minmax(0, 1fr) auto; }
 }
 
 @media (max-width: 680px) {
@@ -336,7 +427,6 @@
     grid-template-columns: 1fr;
   }
 
-  .session-metrics,
   .session-actions {
     grid-column: 1;
     grid-row: auto;
@@ -348,5 +438,20 @@
 
   .session-audio-tracks {
     grid-template-columns: 1fr;
+  }
+
+  .session-detail-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .session-detail-grid > div,
+  .session-detail-grid > div:nth-child(2n),
+  .session-detail-grid > div:nth-last-child(-n + 2) {
+    border-right: 0;
+    border-bottom: 1px solid var(--border-subtle);
+  }
+
+  .session-detail-grid > div:last-child {
+    border-bottom: 0;
   }
 }

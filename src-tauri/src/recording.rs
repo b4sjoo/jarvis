@@ -81,6 +81,7 @@ pub struct CallRecordingSummary {
     pub manifest_available: bool,
     pub integrity_error: Option<String>,
     pub audio_recording: Option<crate::call_audio_evidence::CallAudioRecordingSummary>,
+    pub audio_storage_path: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -197,7 +198,8 @@ pub fn list_recoverable_call_recordings(
 #[tauri::command]
 pub fn list_call_recordings(app: AppHandle) -> Result<Vec<CallRecordingSummary>, String> {
     let root = recordings_root(&app)?;
-    list_all_at_root(&root)
+    let audio_root = crate::call_audio_evidence::audio_recordings_root(&app)?;
+    list_all_at_roots(&root, &audio_root)
 }
 
 #[tauri::command]
@@ -226,7 +228,13 @@ pub fn export_call_recording(
     include_audio: Option<bool>,
 ) -> Result<String, String> {
     let root = recordings_root(&app)?;
-    let exported = export_at_root(&root, &call_session_id, include_audio.unwrap_or(false))?;
+    let audio_root = crate::call_audio_evidence::audio_recordings_root(&app)?;
+    let exported = export_at_roots(
+        &root,
+        &audio_root,
+        &call_session_id,
+        include_audio.unwrap_or(false),
+    )?;
     reveal_path(&exported, true)?;
     Ok(exported.to_string_lossy().to_string())
 }
@@ -412,8 +420,7 @@ fn close_at_root(
             }
         };
         let raw_audio_retained = audio_recording.as_ref().is_some_and(|audio| {
-            audio.retention_mode
-                != crate::call_audio_evidence::CallAudioRetentionMode::Deleted
+            audio.retention_mode != crate::call_audio_evidence::CallAudioRetentionMode::Deleted
                 && audio.chunk_count > 0
         });
         let manifest = CallRecordingManifest {
@@ -505,7 +512,10 @@ fn list_recoverable_at_root(recordings_root: &Path) -> Result<Vec<CallRecordingS
     Ok(recoverable)
 }
 
-fn list_all_at_root(recordings_root: &Path) -> Result<Vec<CallRecordingSummary>, String> {
+fn list_all_at_roots(
+    recordings_root: &Path,
+    audio_root: &Path,
+) -> Result<Vec<CallRecordingSummary>, String> {
     reject_symlink(recordings_root)?;
     if !recordings_root.exists() {
         return Ok(Vec::new());
@@ -525,18 +535,47 @@ fn list_all_at_root(recordings_root: &Path) -> Result<Vec<CallRecordingSummary>,
         };
         let human_evaluation_count =
             count_event_kind(&path.join(EVENTS_FILE), "human-evaluation").unwrap_or(0);
-        let integrity_error = verify_recording_integrity(&path, &status).err();
-        let audio_recording = crate::call_audio_evidence::read_for_session_dir(&path)
-            .ok()
-            .flatten()
-            .as_ref()
-            .map(crate::call_audio_evidence::summarize);
+        let mut integrity_error = verify_recording_integrity(&path, &status).err();
+        let (audio_recording, audio_storage_path) =
+            match crate::call_audio_evidence::read_for_session_dir(&path) {
+                Ok(Some(mut manifest)) => {
+                    let storage = crate::call_audio_evidence::ensure_audio_payload_storage(
+                        &path,
+                        audio_root,
+                        &status.call_session_id,
+                        &mut manifest,
+                        false,
+                    );
+                    match storage {
+                        Ok(storage) => (
+                            Some(crate::call_audio_evidence::summarize(&manifest)),
+                            Some(storage.to_string_lossy().to_string()),
+                        ),
+                        Err(error) => {
+                            integrity_error = Some(match integrity_error {
+                                Some(existing) => format!("{existing} Audio storage: {error}"),
+                                None => format!("Audio storage: {error}"),
+                            });
+                            (Some(crate::call_audio_evidence::summarize(&manifest)), None)
+                        }
+                    }
+                }
+                Ok(None) => (None, None),
+                Err(error) => {
+                    integrity_error = Some(match integrity_error {
+                        Some(existing) => format!("{existing} Audio manifest: {error}"),
+                        None => format!("Audio manifest: {error}"),
+                    });
+                    (None, None)
+                }
+            };
         recordings.push(CallRecordingSummary {
             status,
             human_evaluation_count,
             manifest_available: path.join(MANIFEST_FILE).is_file(),
             integrity_error,
             audio_recording,
+            audio_storage_path,
         });
     }
     recordings.sort_by(|left, right| right.status.started_at.cmp(&left.status.started_at));
@@ -671,8 +710,9 @@ fn verify_recording_integrity(
     Ok(())
 }
 
-fn export_at_root(
+fn export_at_roots(
     recordings_root: &Path,
+    audio_root: &Path,
     call_session_id: &str,
     include_audio: bool,
 ) -> Result<PathBuf, String> {
@@ -722,31 +762,36 @@ fn export_at_root(
         if !audio_manifest_path.is_file() {
             return Err("This session has no audio recording to export.".to_string());
         }
-        let audio_manifest: crate::call_audio_evidence::CallAudioManifest = serde_json::from_str(
-            &fs::read_to_string(&audio_manifest_path)
-                .map_err(|error| format!("Failed to read the audio manifest: {error}"))?,
-        )
-        .map_err(|error| format!("Invalid call audio manifest: {error}"))?;
+        let mut audio_manifest: crate::call_audio_evidence::CallAudioManifest =
+            serde_json::from_str(
+                &fs::read_to_string(&audio_manifest_path)
+                    .map_err(|error| format!("Failed to read the audio manifest: {error}"))?,
+            )
+            .map_err(|error| format!("Invalid call audio manifest: {error}"))?;
         if audio_manifest.retention_mode
             == crate::call_audio_evidence::CallAudioRetentionMode::Deleted
         {
             return Err("This session's audio has been deleted.".to_string());
         }
+        let audio_dir = crate::call_audio_evidence::ensure_audio_payload_storage(
+            &session_dir,
+            audio_root,
+            call_session_id,
+            &mut audio_manifest,
+            false,
+        )?;
         for chunk in &audio_manifest.chunks {
             let relative = Path::new(&chunk.relative_path);
-            let mut components = relative.components();
-            if components.next()
-                != Some(Component::Normal(std::ffi::OsStr::new(
-                    crate::call_audio_evidence::AUDIO_DIR,
-                )))
-                || !components.all(|component| matches!(component, Component::Normal(_)))
+            if relative.components().count() != 1
+                || !relative
+                    .components()
+                    .all(|component| matches!(component, Component::Normal(_)))
             {
                 return Err("Call audio manifest contains an unsafe chunk path.".to_string());
             }
-            let source = session_dir.join(relative);
+            let source = audio_dir.join(relative);
             reject_symlink(&source)?;
-            if !source.is_file()
-                || crate::call_audio_evidence::hash_file(&source)? != chunk.sha256
+            if !source.is_file() || crate::call_audio_evidence::hash_file(&source)? != chunk.sha256
             {
                 return Err(format!(
                     "Call audio chunk is missing or does not match its hash: {}",
@@ -754,7 +799,7 @@ fn export_at_root(
                 ));
             }
             archive
-                .start_file(&chunk.relative_path, options)
+                .start_file(format!("audio/{}", chunk.relative_path), options)
                 .map_err(|error| format!("Failed to stage call audio export: {error}"))?;
             let mut source_file = File::open(&source)
                 .map_err(|error| format!("Failed to read call audio export source: {error}"))?;
@@ -958,6 +1003,10 @@ mod tests {
         std::env::temp_dir().join(format!("moss-recording-test-{}", Uuid::new_v4()))
     }
 
+    fn test_audio_root(recordings_root: &Path) -> PathBuf {
+        recordings_root.with_extension("audio")
+    }
+
     fn event(session_id: &str, sequence: u64) -> String {
         serde_json::json!({
             "eventId": format!("event-{sequence}"),
@@ -1044,13 +1093,14 @@ mod tests {
         append_at_root(&root, session_id, &evaluation).unwrap();
         close_at_root(&root, session_id, 20, None).unwrap();
 
-        let summaries = list_all_at_root(&root).unwrap();
+        let audio_root = test_audio_root(&root);
+        let summaries = list_all_at_roots(&root, &audio_root).unwrap();
         assert_eq!(summaries.len(), 1);
         assert_eq!(summaries[0].human_evaluation_count, 1);
         assert!(summaries[0].manifest_available);
         assert_eq!(summaries[0].integrity_error, None);
 
-        let export = export_at_root(&root, session_id, false).unwrap();
+        let export = export_at_roots(&root, &audio_root, session_id, false).unwrap();
         assert!(export.is_file());
         let archive = zip::ZipArchive::new(File::open(export).unwrap()).unwrap();
         assert_eq!(archive.len(), 3);
@@ -1065,19 +1115,21 @@ mod tests {
         };
 
         let root = test_root();
+        let audio_root = test_audio_root(&root);
         let session_id = "call-audio-export";
         start_at_root(&root, session_id, 1).unwrap();
         append_at_root(&root, session_id, &event(session_id, 1)).unwrap();
         close_at_root(&root, session_id, 20, None).unwrap();
         let session_dir = root.join(session_id);
-        let audio_dir = session_dir.join(crate::call_audio_evidence::AUDIO_DIR);
+        let audio_dir =
+            crate::call_audio_evidence::audio_payload_dir_at_root(&audio_root, session_id).unwrap();
         fs::create_dir_all(&audio_dir).unwrap();
-        let relative_path = "audio/them-generation-1-part-1.wav";
-        let audio_path = session_dir.join(relative_path);
+        let relative_path = "them-generation-1-part-1.wav";
+        let audio_path = audio_dir.join(relative_path);
         fs::write(&audio_path, b"test wav evidence").unwrap();
         let sha256 = crate::call_audio_evidence::hash_file(&audio_path).unwrap();
         let manifest = CallAudioManifest {
-            version: 1,
+            version: 2,
             audio_recording_revision: 1,
             call_session_id: session_id.to_string(),
             state: CallAudioRecordingState::RetainedTemporarily,
@@ -1125,7 +1177,7 @@ mod tests {
         )
         .unwrap();
 
-        let metadata_only = export_at_root(&root, session_id, false).unwrap();
+        let metadata_only = export_at_roots(&root, &audio_root, session_id, false).unwrap();
         let mut metadata_archive =
             zip::ZipArchive::new(File::open(metadata_only).unwrap()).unwrap();
         assert!(metadata_archive
@@ -1133,10 +1185,13 @@ mod tests {
             .is_ok());
         assert!(metadata_archive.by_name(relative_path).is_err());
 
-        let with_audio = export_at_root(&root, session_id, true).unwrap();
+        let with_audio = export_at_roots(&root, &audio_root, session_id, true).unwrap();
         let mut audio_archive = zip::ZipArchive::new(File::open(with_audio).unwrap()).unwrap();
-        assert!(audio_archive.by_name(relative_path).is_ok());
+        assert!(audio_archive
+            .by_name(&format!("audio/{relative_path}"))
+            .is_ok());
         fs::remove_dir_all(root).unwrap();
+        fs::remove_dir_all(audio_root).unwrap();
     }
 
     #[test]
@@ -1168,7 +1223,10 @@ mod tests {
         assert_eq!(manifest.version, 3);
         assert_eq!(manifest.health, CallRecordingHealth::Incomplete);
         assert_eq!(manifest.terminal_state, "closed");
-        assert_eq!(list_all_at_root(&root).unwrap()[0].integrity_error, None);
+        assert_eq!(
+            list_all_at_roots(&root, &test_audio_root(&root)).unwrap()[0].integrity_error,
+            None
+        );
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -1206,8 +1264,30 @@ mod tests {
             .write_all(b"{}\n")
             .unwrap();
 
-        let summaries = list_all_at_root(&root).unwrap();
+        let summaries = list_all_at_roots(&root, &test_audio_root(&root)).unwrap();
         assert!(summaries[0].integrity_error.is_some());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn summary_integrity_exposes_an_invalid_audio_manifest() {
+        let root = test_root();
+        let session_id = "call-test-invalid-audio-manifest";
+        start_at_root(&root, session_id, 1).unwrap();
+        append_at_root(&root, session_id, &event(session_id, 1)).unwrap();
+        close_at_root(&root, session_id, 20, None).unwrap();
+        fs::write(
+            root.join(session_id)
+                .join(crate::call_audio_evidence::AUDIO_MANIFEST_FILE),
+            b"{",
+        )
+        .unwrap();
+
+        let summaries = list_all_at_roots(&root, &test_audio_root(&root)).unwrap();
+        assert!(summaries[0]
+            .integrity_error
+            .as_deref()
+            .is_some_and(|error| error.contains("Audio manifest")));
         fs::remove_dir_all(root).unwrap();
     }
 }

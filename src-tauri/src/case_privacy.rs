@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::fs::{self, File};
 use std::io::{Read, Write};
-use std::path::Path;
+use std::path::{Component, Path};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Manager};
 use uuid::Uuid;
@@ -11,6 +11,7 @@ use zip::ZipWriter;
 
 const CONTENT_SOURCES_DIR: &str = "content-sources";
 const CALL_RECORDINGS_DIR: &str = "call-session-recordings";
+const CALL_AUDIO_RECORDINGS_DIR: &str = "call-audio-recordings";
 const PRIVACY_STAGING_DIR: &str = ".case-privacy-staging";
 const CASE_EXPORTS_DIR: &str = "case-exports";
 const MAX_IDENTIFIER_CHARS: usize = 160;
@@ -23,6 +24,7 @@ pub struct CaseDeletionStageResult {
     operation_id: String,
     staged_content: bool,
     staged_recording_count: u64,
+    staged_audio_count: u64,
 }
 
 #[derive(Debug, Serialize)]
@@ -30,6 +32,7 @@ pub struct CaseDeletionStageResult {
 pub struct CaseDeletionRestoreResult {
     restored_content: bool,
     restored_recording_count: u64,
+    restored_audio_count: u64,
     stage_found: bool,
 }
 
@@ -51,6 +54,8 @@ struct DeletionManifest {
     call_session_ids: Vec<String>,
     staged_content: bool,
     staged_recording_ids: Vec<String>,
+    #[serde(default)]
+    staged_audio_ids: Vec<String>,
 }
 
 #[derive(Default)]
@@ -168,14 +173,44 @@ fn export_at_root(
     }
     for session_id in normalized_session_ids(call_session_ids) {
         let session_root = app_data.join(CALL_RECORDINGS_DIR).join(&session_id);
+        let manifest_path = session_root.join(crate::call_audio_evidence::AUDIO_MANIFEST_FILE);
+        let audio_evidence = if manifest_path.is_file() {
+            let mut manifest: crate::call_audio_evidence::CallAudioManifest = serde_json::from_str(
+                &fs::read_to_string(&manifest_path)
+                    .map_err(|error| format!("Failed to read Case audio manifest: {error}"))?,
+            )
+            .map_err(|error| format!("Invalid Case audio manifest: {error}"))?;
+            let payload = crate::call_audio_evidence::ensure_audio_payload_storage(
+                &session_root,
+                &app_data.join(CALL_AUDIO_RECORDINGS_DIR),
+                &session_id,
+                &mut manifest,
+                false,
+            )?;
+            (manifest.retention_mode != crate::call_audio_evidence::CallAudioRetentionMode::Deleted)
+                .then_some((manifest, payload))
+        } else {
+            None
+        };
         if session_root.exists() {
             archive_directory(
                 &mut archive,
                 &session_root,
                 &Path::new("recordings").join(&session_id),
                 &mut stats,
-                (!include_audio).then_some(crate::call_audio_evidence::AUDIO_DIR),
+                Some("audio"),
             )?;
+        }
+        if include_audio {
+            if let Some((manifest, payload)) = audio_evidence.as_ref() {
+                archive_audio_chunks(
+                    &mut archive,
+                    payload,
+                    &Path::new("recordings").join(&session_id).join("audio"),
+                    manifest,
+                    &mut stats,
+                )?;
+            }
         }
     }
 
@@ -191,6 +226,56 @@ fn export_at_root(
         source_bytes: stats.source_bytes,
         checksum_sha256,
     })
+}
+
+fn archive_audio_chunks(
+    archive: &mut ZipWriter<File>,
+    payload_root: &Path,
+    archive_root: &Path,
+    manifest: &crate::call_audio_evidence::CallAudioManifest,
+    stats: &mut ArchiveStats,
+) -> Result<(), String> {
+    reject_symlink(payload_root)?;
+    if !manifest.chunks.is_empty() && !payload_root.is_dir() {
+        return Err("Retained call audio payload is missing.".to_string());
+    }
+    for chunk in &manifest.chunks {
+        let relative = Path::new(&chunk.relative_path);
+        if relative.components().count() != 1
+            || !relative
+                .components()
+                .all(|component| matches!(component, Component::Normal(_)))
+        {
+            return Err("Call audio manifest contains an unsafe chunk path.".to_string());
+        }
+        let source = payload_root.join(relative);
+        reject_symlink(&source)?;
+        if !source.is_file() || crate::call_audio_evidence::hash_file(&source)? != chunk.sha256 {
+            return Err(format!(
+                "Call audio chunk is missing or does not match its hash: {}",
+                chunk.relative_path
+            ));
+        }
+        let metadata = source
+            .metadata()
+            .map_err(|error| format!("Failed to inspect call audio export source: {error}"))?;
+        stats.file_count = stats.file_count.saturating_add(1);
+        if stats.file_count > MAX_EXPORT_FILES {
+            return Err("Case export contains too many files.".to_string());
+        }
+        stats.source_bytes = stats.source_bytes.saturating_add(metadata.len());
+        archive
+            .start_file(
+                path_to_archive_string(&archive_root.join(relative))?,
+                SimpleFileOptions::default(),
+            )
+            .map_err(|error| format!("Failed to stage call audio export: {error}"))?;
+        let mut source_file = File::open(&source)
+            .map_err(|error| format!("Failed to read call audio export source: {error}"))?;
+        std::io::copy(&mut source_file, archive)
+            .map_err(|error| format!("Failed to write call audio export: {error}"))?;
+    }
+    Ok(())
 }
 
 fn stage_at_root(
@@ -218,9 +303,32 @@ fn stage_at_root(
     let content_source = app_data.join(CONTENT_SOURCES_DIR).join(case_id);
     let content_target = operation_root.join("content");
     let recordings_target = operation_root.join("recordings");
+    let audio_target = operation_root.join("audio-recordings");
     let mut staged_content = false;
     let mut staged_recording_ids = Vec::new();
+    let mut staged_audio_ids = Vec::new();
     let stage_result = (|| {
+        let audio_root = app_data.join(CALL_AUDIO_RECORDINGS_DIR);
+        for session_id in normalized_session_ids(call_session_ids) {
+            let session_source = app_data.join(CALL_RECORDINGS_DIR).join(&session_id);
+            let manifest_path =
+                session_source.join(crate::call_audio_evidence::AUDIO_MANIFEST_FILE);
+            if !manifest_path.is_file() {
+                continue;
+            }
+            let mut manifest: crate::call_audio_evidence::CallAudioManifest = serde_json::from_str(
+                &fs::read_to_string(&manifest_path)
+                    .map_err(|error| format!("Failed to read linked audio manifest: {error}"))?,
+            )
+            .map_err(|error| format!("Invalid linked audio manifest: {error}"))?;
+            crate::call_audio_evidence::ensure_audio_payload_storage(
+                &session_source,
+                &audio_root,
+                &session_id,
+                &mut manifest,
+                false,
+            )?;
+        }
         if content_source.exists() {
             reject_symlink(&content_source)?;
             fs::rename(&content_source, &content_target)
@@ -244,13 +352,36 @@ fn stage_at_root(
             })?;
             staged_recording_ids.push(session_id);
         }
+        for session_id in normalized_session_ids(call_session_ids) {
+            let source = crate::call_audio_evidence::audio_payload_dir_at_root(
+                &app_data.join(CALL_AUDIO_RECORDINGS_DIR),
+                &session_id,
+            )?;
+            if !source.exists() {
+                continue;
+            }
+            reject_symlink(&source)?;
+            if !audio_target.exists() {
+                fs::create_dir(&audio_target)
+                    .map_err(|error| format!("Failed to create audio deletion staging: {error}"))?;
+            }
+            let target = audio_target.join(format!(
+                "{}{}",
+                crate::call_audio_evidence::AUDIO_SESSION_PREFIX,
+                session_id
+            ));
+            fs::rename(&source, &target)
+                .map_err(|error| format!("Failed to stage linked audio for deletion: {error}"))?;
+            staged_audio_ids.push(session_id);
+        }
         let manifest = DeletionManifest {
-            version: 1,
+            version: 2,
             operation_id: operation_id.to_string(),
             case_id: case_id.to_string(),
             call_session_ids: normalized_session_ids(call_session_ids),
             staged_content,
             staged_recording_ids: staged_recording_ids.clone(),
+            staged_audio_ids: staged_audio_ids.clone(),
         };
         write_manifest(&operation_root, &manifest)
     })();
@@ -262,6 +393,7 @@ fn stage_at_root(
             case_id,
             staged_content,
             &staged_recording_ids,
+            &staged_audio_ids,
         );
         let _ = fs::remove_dir_all(&operation_root);
         return Err(error);
@@ -270,6 +402,7 @@ fn stage_at_root(
         operation_id: operation_id.to_string(),
         staged_content,
         staged_recording_count: staged_recording_ids.len() as u64,
+        staged_audio_count: staged_audio_ids.len() as u64,
     })
 }
 
@@ -284,6 +417,7 @@ fn restore_at_root(
         return Ok(CaseDeletionRestoreResult {
             restored_content: false,
             restored_recording_count: 0,
+            restored_audio_count: 0,
             stage_found: false,
         });
     }
@@ -291,18 +425,20 @@ fn restore_at_root(
     if manifest.operation_id != operation_id {
         return Err("Deletion staging manifest belongs to another operation.".to_string());
     }
-    let restored_recording_count = rollback_partial_stage(
+    let (restored_recording_count, restored_audio_count) = rollback_partial_stage(
         app_data,
         &operation_root,
         &manifest.case_id,
         manifest.staged_content,
         &manifest.staged_recording_ids,
+        &manifest.staged_audio_ids,
     )?;
     fs::remove_dir_all(&operation_root)
         .map_err(|error| format!("Failed to clean restored deletion staging: {error}"))?;
     Ok(CaseDeletionRestoreResult {
         restored_content: manifest.staged_content,
         restored_recording_count,
+        restored_audio_count,
         stage_found: true,
     })
 }
@@ -329,8 +465,10 @@ fn rollback_partial_stage(
     case_id: &str,
     staged_content: bool,
     staged_recording_ids: &[String],
-) -> Result<u64, String> {
+    staged_audio_ids: &[String],
+) -> Result<(u64, u64), String> {
     let mut restored_recordings = 0_u64;
+    let mut restored_audio = 0_u64;
     if staged_content {
         let source = operation_root.join("content");
         let target = app_data.join(CONTENT_SOURCES_DIR).join(case_id);
@@ -360,7 +498,32 @@ fn rollback_partial_stage(
             .map_err(|error| format!("Failed to restore staged call recording: {error}"))?;
         restored_recordings = restored_recordings.saturating_add(1);
     }
-    Ok(restored_recordings)
+    for session_id in staged_audio_ids {
+        validate_identifier(session_id, "call session id")?;
+        let directory_name = format!(
+            "{}{}",
+            crate::call_audio_evidence::AUDIO_SESSION_PREFIX,
+            session_id
+        );
+        let source = operation_root
+            .join("audio-recordings")
+            .join(&directory_name);
+        if !source.exists() {
+            continue;
+        }
+        reject_symlink(&source)?;
+        let target = app_data
+            .join(CALL_AUDIO_RECORDINGS_DIR)
+            .join(&directory_name);
+        ensure_restore_parent(&target)?;
+        if target.exists() {
+            return Err("Linked audio restore target already exists.".to_string());
+        }
+        fs::rename(&source, &target)
+            .map_err(|error| format!("Failed to restore staged call audio: {error}"))?;
+        restored_audio = restored_audio.saturating_add(1);
+    }
+    Ok((restored_recordings, restored_audio))
 }
 
 fn archive_directory(
@@ -540,15 +703,38 @@ mod tests {
             b"event",
         )
         .unwrap();
-        fs::create_dir_all(root.join("call-session-recordings/call-1/audio")).unwrap();
+        let session_dir = root.join("call-session-recordings/call-1");
+        let audio_root = root.join(CALL_AUDIO_RECORDINGS_DIR);
+        let audio_dir =
+            crate::call_audio_evidence::audio_payload_dir_at_root(&audio_root, "call-1").unwrap();
+        fs::create_dir_all(&audio_dir).unwrap();
+        let audio_path = audio_dir.join("them.wav");
+        fs::write(&audio_path, b"audio").unwrap();
+        let mut audio_manifest = crate::call_audio_evidence::empty_manifest("call-1", 1);
+        audio_manifest.state =
+            crate::call_audio_evidence::CallAudioRecordingState::RetainedTemporarily;
+        audio_manifest.retention_mode =
+            crate::call_audio_evidence::CallAudioRetentionMode::Temporary;
+        audio_manifest.expires_at = Some(100);
+        audio_manifest.chunks = vec![crate::call_audio_evidence::CallAudioChunk {
+            audio_chunk_id: "audio-them-1-1".to_string(),
+            channel: crate::call_audio_evidence::CallAudioChannel::Them,
+            capture_generation: 1,
+            part: 1,
+            started_at: 1,
+            ended_at: 2,
+            sample_rate: 16_000,
+            channel_count: 1,
+            sample_format: "pcm-s16le".to_string(),
+            duration_ms: 1,
+            byte_count: 5,
+            sha256: crate::call_audio_evidence::hash_file(&audio_path).unwrap(),
+            relative_path: "them.wav".to_string(),
+            gap_count: 0,
+        }];
         fs::write(
-            root.join("call-session-recordings/call-1/audio-manifest.json"),
-            b"{}",
-        )
-        .unwrap();
-        fs::write(
-            root.join("call-session-recordings/call-1/audio/them.wav"),
-            b"audio",
+            session_dir.join(crate::call_audio_evidence::AUDIO_MANIFEST_FILE),
+            serde_json::to_vec_pretty(&audio_manifest).unwrap(),
         )
         .unwrap();
 
@@ -568,9 +754,7 @@ mod tests {
         assert!(archive
             .by_name("recordings/call-1/audio-manifest.json")
             .is_ok());
-        assert!(archive
-            .by_name("recordings/call-1/audio/them.wav")
-            .is_err());
+        assert!(archive.by_name("recordings/call-1/audio/them.wav").is_err());
         drop(archive);
 
         std::thread::sleep(std::time::Duration::from_millis(2));
@@ -583,9 +767,18 @@ mod tests {
         )
         .unwrap();
         let mut archive = ZipArchive::new(File::open(&with_audio.path).unwrap()).unwrap();
-        assert!(archive
-            .by_name("recordings/call-1/audio/them.wav")
-            .is_ok());
+        assert!(archive.by_name("recordings/call-1/audio/them.wav").is_ok());
+        drop(archive);
+
+        fs::write(&audio_path, b"tampered").unwrap();
+        assert!(export_at_root(
+            &root,
+            "case-1",
+            r#"{"version":1,"case":{"id":"case-1"}}"#,
+            &["call-1".to_string()],
+            true,
+        )
+        .is_err());
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -604,19 +797,22 @@ mod tests {
             b"event",
         )
         .unwrap();
-        fs::create_dir_all(root.join("call-session-recordings/call-1/audio")).unwrap();
-        fs::write(
-            root.join("call-session-recordings/call-1/audio/them.wav"),
-            b"audio",
+        let audio_dir = crate::call_audio_evidence::audio_payload_dir_at_root(
+            &root.join(CALL_AUDIO_RECORDINGS_DIR),
+            "call-1",
         )
         .unwrap();
+        fs::create_dir_all(&audio_dir).unwrap();
+        fs::write(audio_dir.join("them.wav"), b"audio").unwrap();
 
         let staged = stage_at_root(&root, "delete-1", "case-1", &["call-1".to_string()]).unwrap();
         assert!(staged.staged_content);
         assert_eq!(staged.staged_recording_count, 1);
+        assert_eq!(staged.staged_audio_count, 1);
         assert!(!root.join("content-sources/case-1").exists());
         let restored = restore_at_root(&root, "delete-1").unwrap();
         assert!(restored.stage_found);
+        assert_eq!(restored.restored_audio_count, 1);
         assert!(root
             .join("content-sources/case-1/material-1/original.txt")
             .is_file());
@@ -624,13 +820,14 @@ mod tests {
             .join("call-session-recordings/call-1/events.jsonl")
             .is_file());
         assert!(root
-            .join("call-session-recordings/call-1/audio/them.wav")
+            .join("call-audio-recordings/audio_call-1/them.wav")
             .is_file());
 
         stage_at_root(&root, "delete-2", "case-1", &["call-1".to_string()]).unwrap();
         assert!(finalize_at_root(&root, "delete-2").unwrap());
         assert!(!root.join("content-sources/case-1").exists());
         assert!(!root.join("call-session-recordings/call-1").exists());
+        assert!(!root.join("call-audio-recordings/audio_call-1").exists());
         fs::remove_dir_all(root).unwrap();
     }
 

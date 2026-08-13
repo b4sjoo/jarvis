@@ -45,6 +45,7 @@ interface NativeStageResult {
   operationId: string;
   stagedContent: boolean;
   stagedRecordingCount: number;
+  stagedAudioCount: number;
 }
 
 export interface CasePrivacyNativeTransport {
@@ -275,11 +276,15 @@ export class CasePrivacyService {
         linkedSessions: sessionIds.length,
         stagedContentGroups: staged.stagedContent ? 1 : 0,
         stagedRecordings: staged.stagedRecordingCount,
+        stagedAudioRecordings: staged.stagedAudioCount,
       });
       return {
         operationId,
         deletedSessionCount: sessionIds.length,
-        stagedFileGroupCount: (staged.stagedContent ? 1 : 0) + staged.stagedRecordingCount,
+        stagedFileGroupCount:
+          (staged.stagedContent ? 1 : 0) +
+          staged.stagedRecordingCount +
+          staged.stagedAudioCount,
       };
     } catch (error) {
       await this.database.execute(

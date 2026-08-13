@@ -7,9 +7,7 @@ use std::fs::{self, File};
 use std::io::{BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::mpsc::{
-    channel, sync_channel, Receiver, Sender, SyncSender, TrySendError,
-};
+use std::sync::mpsc::{channel, sync_channel, Receiver, Sender, SyncSender, TrySendError};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
@@ -17,7 +15,9 @@ use tauri::AppHandle;
 use tauri::Manager;
 
 pub const AUDIO_MANIFEST_FILE: &str = "audio-manifest.json";
-pub const AUDIO_DIR: &str = "audio";
+pub const CALL_AUDIO_RECORDINGS_DIR: &str = "call-audio-recordings";
+pub const AUDIO_SESSION_PREFIX: &str = "audio_";
+const LEGACY_AUDIO_DIR: &str = "audio";
 const AUDIO_DELETE_STAGING_DIR: &str = ".audio-deleting";
 const TEMPORARY_RETENTION_MS: u64 = 72 * 60 * 60 * 1_000;
 const MAX_SESSION_ID_CHARS: usize = 160;
@@ -194,7 +194,7 @@ pub struct CallAudioCleanupResult {
 
 pub(crate) fn empty_manifest(call_session_id: &str, requested_at: u64) -> CallAudioManifest {
     CallAudioManifest {
-        version: 1,
+        version: 2,
         audio_recording_revision: 1,
         call_session_id: call_session_id.to_string(),
         state: CallAudioRecordingState::Starting,
@@ -263,7 +263,7 @@ pub(crate) fn read_for_session_dir(
             .map_err(|error| format!("Failed to read audio manifest: {error}"))?,
     )
     .map_err(|error| format!("Invalid audio manifest: {error}"))?;
-    if manifest.version != 1 {
+    if !matches!(manifest.version, 1 | 2) {
         return Err("Unsupported audio manifest version.".to_string());
     }
     Ok(Some(manifest))
@@ -300,8 +300,7 @@ pub(crate) fn finalize_temporary_retention(
     let Some(mut manifest) = read_for_session_dir(session_dir)? else {
         return Ok(None);
     };
-    if manifest.retention_mode == CallAudioRetentionMode::Temporary
-        && manifest.deleted_at.is_none()
+    if manifest.retention_mode == CallAudioRetentionMode::Temporary && manifest.deleted_at.is_none()
     {
         manifest.audio_recording_revision = manifest.audio_recording_revision.saturating_add(1);
         manifest.expires_at = Some(closed_at.saturating_add(TEMPORARY_RETENTION_MS));
@@ -322,7 +321,17 @@ pub fn get_call_audio_recording(
     call_session_id: String,
 ) -> Result<Option<CallAudioManifest>, String> {
     let session_dir = resolve_session_dir(&app, &call_session_id)?;
-    read_for_session_dir(&session_dir)
+    let Some(mut manifest) = read_for_session_dir(&session_dir)? else {
+        return Ok(None);
+    };
+    ensure_audio_payload_storage(
+        &session_dir,
+        &audio_recordings_root(&app)?,
+        &call_session_id,
+        &mut manifest,
+        false,
+    )?;
+    Ok(Some(manifest))
 }
 
 #[tauri::command]
@@ -332,20 +341,15 @@ pub fn preserve_call_audio_recording(
     expected_revision: u64,
     occurred_at: u64,
 ) -> Result<CallAudioManifest, String> {
-    mutate_retention(
-        &app,
-        &call_session_id,
-        expected_revision,
-        |manifest| {
-            ensure_not_deleted(manifest)?;
-            manifest.retention_mode = CallAudioRetentionMode::Preserved;
-            manifest.state = CallAudioRecordingState::Preserved;
-            manifest.expires_at = None;
-            manifest.preserved_at = Some(occurred_at);
-            append_retention_action(manifest, "preserve", "user", occurred_at, 1);
-            Ok(())
-        },
-    )
+    mutate_retention(&app, &call_session_id, expected_revision, |manifest| {
+        ensure_not_deleted(manifest)?;
+        manifest.retention_mode = CallAudioRetentionMode::Preserved;
+        manifest.state = CallAudioRecordingState::Preserved;
+        manifest.expires_at = None;
+        manifest.preserved_at = Some(occurred_at);
+        append_retention_action(manifest, "preserve", "user", occurred_at, 1);
+        Ok(())
+    })
 }
 
 #[tauri::command]
@@ -358,6 +362,15 @@ pub fn restore_temporary_call_audio_retention(
     let session_dir = resolve_session_dir(&app, &call_session_id)?;
     let closed_at = read_call_closed_at(&session_dir)?
         .ok_or_else(|| "End the call before restoring temporary retention.".to_string())?;
+    if let Some(mut manifest) = read_for_session_dir(&session_dir)? {
+        ensure_audio_payload_storage(
+            &session_dir,
+            &audio_recordings_root(&app)?,
+            &call_session_id,
+            &mut manifest,
+            false,
+        )?;
+    }
     mutate_retention_at_dir(&session_dir, expected_revision, |manifest| {
         ensure_not_deleted(manifest)?;
         manifest.retention_mode = CallAudioRetentionMode::Temporary;
@@ -377,7 +390,14 @@ pub fn delete_call_audio_recording(
     occurred_at: u64,
 ) -> Result<CallAudioManifest, String> {
     let session_dir = resolve_session_dir(&app, &call_session_id)?;
-    delete_at_session_dir(&session_dir, expected_revision, occurred_at, "user")
+    let audio_root = audio_recordings_root(&app)?;
+    delete_at_session_dir(
+        &session_dir,
+        &audio_root,
+        expected_revision,
+        occurred_at,
+        "user",
+    )
 }
 
 #[tauri::command]
@@ -385,7 +405,11 @@ pub fn cleanup_expired_call_audio(
     app: AppHandle,
     occurred_at: u64,
 ) -> Result<CallAudioCleanupResult, String> {
-    cleanup_expired_at_root(&crate::recording::recordings_root(&app)?, occurred_at)
+    cleanup_expired_at_roots(
+        &crate::recording::recordings_root(&app)?,
+        &audio_recordings_root(&app)?,
+        occurred_at,
+    )
 }
 
 #[tauri::command]
@@ -428,6 +452,13 @@ pub fn start_call_audio_evidence(
         None if expected_revision == 0 => empty_manifest(&call_session_id, requested_at),
         None => return Err("Audio recording changed. Refresh before trying again.".to_string()),
     };
+    let audio_dir = ensure_audio_payload_storage(
+        &session_dir,
+        &audio_recordings_root(&app)?,
+        &call_session_id,
+        &mut manifest,
+        true,
+    )?;
     manifest.audio_recording_revision = manifest.audio_recording_revision.saturating_add(1);
     manifest.state = CallAudioRecordingState::Starting;
     manifest.requested_at = requested_at;
@@ -437,11 +468,9 @@ pub fn start_call_audio_evidence(
     manifest.retryable = false;
     write_for_session_dir(&session_dir, &manifest)?;
 
-    fs::create_dir_all(session_dir.join(AUDIO_DIR))
-        .map_err(|error| format!("Failed to create audio evidence directory: {error}"))?;
     let them_part = next_part(&manifest, CallAudioChannel::Them, capture_generation);
     let them = spawn_channel_writer(
-        &session_dir,
+        &audio_dir,
         CallAudioChannel::Them,
         capture_generation,
         them_part,
@@ -450,24 +479,25 @@ pub fn start_call_audio_evidence(
     )?;
 
     let microphone_error = Arc::new(Mutex::new(None));
-    let (me, microphone_stop, microphone_done, microphone_thread, microphone_failure) = match start_microphone_capture(
-        &session_dir,
-        capture_generation,
-        next_part(&manifest, CallAudioChannel::Me, capture_generation),
-        requested_at,
-        input_device_id.as_deref(),
-        microphone_error.clone(),
-    ) {
-        Ok((writer, stop, done, thread)) => {
-            (Some(writer), Some(stop), Some(done), Some(thread), None)
-        }
-        Err(error) => {
-            if let Ok(mut slot) = microphone_error.lock() {
-                *slot = Some(error.clone());
+    let (me, microphone_stop, microphone_done, microphone_thread, microphone_failure) =
+        match start_microphone_capture(
+            &audio_dir,
+            capture_generation,
+            next_part(&manifest, CallAudioChannel::Me, capture_generation),
+            requested_at,
+            input_device_id.as_deref(),
+            microphone_error.clone(),
+        ) {
+            Ok((writer, stop, done, thread)) => {
+                (Some(writer), Some(stop), Some(done), Some(thread), None)
             }
-            (None, None, None, None, Some(error))
-        }
-    };
+            Err(error) => {
+                if let Ok(mut slot) = microphone_error.lock() {
+                    *slot = Some(error.clone());
+                }
+                (None, None, None, None, Some(error))
+            }
+        };
 
     if let Some(channel) = channel_mut(&mut manifest, CallAudioChannel::Them) {
         channel.health = CallAudioChannelHealth::Complete;
@@ -633,12 +663,9 @@ fn stop_active_capture(
         them_overflow,
     );
     match me_result {
-        Some(result) => apply_channel_result(
-            &mut manifest,
-            CallAudioChannel::Me,
-            result,
-            me_overflow,
-        ),
+        Some(result) => {
+            apply_channel_result(&mut manifest, CallAudioChannel::Me, result, me_overflow)
+        }
         None => {
             if let Some(channel) = channel_mut(&mut manifest, CallAudioChannel::Me) {
                 channel.health = CallAudioChannelHealth::Missing;
@@ -661,7 +688,7 @@ fn stop_active_capture(
 }
 
 fn spawn_channel_writer(
-    session_dir: &Path,
+    audio_dir: &Path,
     channel: CallAudioChannel,
     capture_generation: u64,
     first_part: u32,
@@ -671,7 +698,7 @@ fn spawn_channel_writer(
     let (sender, receiver) = sync_channel::<Vec<f32>>(WRITER_QUEUE_CAPACITY);
     let overflow_count = Arc::new(AtomicU64::new(0));
     spawn_channel_writer_with_receiver(
-        session_dir,
+        audio_dir,
         channel,
         capture_generation,
         first_part,
@@ -685,7 +712,7 @@ fn spawn_channel_writer(
 
 #[allow(clippy::too_many_arguments)]
 fn spawn_channel_writer_with_receiver(
-    session_dir: &Path,
+    audio_dir: &Path,
     channel: CallAudioChannel,
     capture_generation: u64,
     first_part: u32,
@@ -695,7 +722,7 @@ fn spawn_channel_writer_with_receiver(
     receiver: Receiver<Vec<f32>>,
     overflow_count: Arc<AtomicU64>,
 ) -> Result<ChannelWriterHandle, String> {
-    let root = session_dir.to_path_buf();
+    let root = audio_dir.to_path_buf();
     let thread_channel = channel.clone();
     let (completion_sender, completion_receiver) = std::sync::mpsc::channel();
     let join = thread::Builder::new()
@@ -723,18 +750,21 @@ fn spawn_channel_writer_with_receiver(
 }
 
 fn start_microphone_capture(
-    session_dir: &Path,
+    audio_dir: &Path,
     capture_generation: u64,
     first_part: u32,
     started_at: u64,
     requested_device: Option<&str>,
     microphone_error: Arc<Mutex<Option<String>>>,
-) -> Result<(
-    ChannelWriterHandle,
-    Sender<()>,
-    Receiver<()>,
-    JoinHandle<()>,
-), String> {
+) -> Result<
+    (
+        ChannelWriterHandle,
+        Sender<()>,
+        Receiver<()>,
+        JoinHandle<()>,
+    ),
+    String,
+> {
     let requested_device = requested_device.map(str::to_string);
     let (startup_sender, startup_receiver) = channel::<Result<u32, String>>();
     let (stop_sender, stop_receiver) = channel::<()>();
@@ -771,7 +801,9 @@ fn start_microphone_capture(
                     .map_err(|error| format!("Failed to read microphone configuration: {error}"))?;
                 let sample_rate = supported.sample_rate().0;
                 if !(8_000..=96_000).contains(&sample_rate) {
-                    return Err("Microphone sample rate is outside the supported range.".to_string());
+                    return Err(
+                        "Microphone sample rate is outside the supported range.".to_string()
+                    );
                 }
                 let channels = supported.channels() as usize;
                 let stream_config: StreamConfig = supported.clone().into();
@@ -844,7 +876,7 @@ fn start_microphone_capture(
         }
     };
     let writer = match spawn_channel_writer_with_receiver(
-        session_dir,
+        audio_dir,
         CallAudioChannel::Me,
         capture_generation,
         first_part,
@@ -922,9 +954,7 @@ fn enqueue_samples(writer: &ChannelWriterHandle, samples: &[f32], sample_rate: u
     }
 }
 
-fn finish_channel_writer(
-    writer: &mut ChannelWriterHandle,
-) -> Result<Vec<CallAudioChunk>, String> {
+fn finish_channel_writer(writer: &mut ChannelWriterHandle) -> Result<Vec<CallAudioChunk>, String> {
     writer.sender.take();
     let Some(completion) = writer.completion.take() else {
         return Err(format!(
@@ -946,7 +976,7 @@ fn finish_channel_writer(
 }
 
 fn write_channel_chunks(
-    session_dir: &Path,
+    audio_dir: &Path,
     channel: CallAudioChannel,
     capture_generation: u64,
     mut part: u32,
@@ -964,7 +994,7 @@ fn write_channel_chunks(
     for samples in receiver {
         for sample in samples {
             if writer.is_none() {
-                let next_path = chunk_path(session_dir, &channel, capture_generation, part);
+                let next_path = chunk_path(audio_dir, &channel, capture_generation, part);
                 writer = Some(
                     WavWriter::create(
                         &next_path,
@@ -997,7 +1027,10 @@ fn write_channel_chunks(
                     sample_count,
                     chunk_started_at,
                 )?);
-                chunk_started_at = chunks.last().map(|chunk| chunk.ended_at).unwrap_or(started_at);
+                chunk_started_at = chunks
+                    .last()
+                    .map(|chunk| chunk.ended_at)
+                    .unwrap_or(started_at);
                 sample_count = 0;
                 part = part.saturating_add(1);
             }
@@ -1055,12 +1088,11 @@ fn finalize_chunk(
         duration_ms,
         byte_count,
         sha256,
-        relative_path: format!(
-            "{AUDIO_DIR}/{}",
-            path.file_name()
-                .and_then(|value| value.to_str())
-                .unwrap_or("audio.wav")
-        ),
+        relative_path: path
+            .file_name()
+            .and_then(|value| value.to_str())
+            .unwrap_or("audio.wav")
+            .to_string(),
         gap_count: 0,
     })
 }
@@ -1109,9 +1141,7 @@ fn next_part(
     manifest
         .chunks
         .iter()
-        .filter(|chunk| {
-            chunk.channel == channel && chunk.capture_generation == capture_generation
-        })
+        .filter(|chunk| chunk.channel == channel && chunk.capture_generation == capture_generation)
         .map(|chunk| chunk.part)
         .max()
         .unwrap_or(0)
@@ -1129,12 +1159,12 @@ fn channel_mut(
 }
 
 fn chunk_path(
-    session_dir: &Path,
+    audio_dir: &Path,
     channel: &CallAudioChannel,
     capture_generation: u64,
     part: u32,
 ) -> PathBuf {
-    session_dir.join(AUDIO_DIR).join(format!(
+    audio_dir.join(format!(
         "{}-generation-{}-part-{}.wav",
         channel_name(channel),
         capture_generation,
@@ -1171,7 +1201,17 @@ fn get_manifest_for_app(
     call_session_id: &str,
 ) -> Result<Option<CallAudioManifest>, String> {
     let session_dir = resolve_session_dir(app, call_session_id)?;
-    read_for_session_dir(&session_dir)
+    let Some(mut manifest) = read_for_session_dir(&session_dir)? else {
+        return Ok(None);
+    };
+    ensure_audio_payload_storage(
+        &session_dir,
+        &audio_recordings_root(app)?,
+        call_session_id,
+        &mut manifest,
+        false,
+    )?;
+    Ok(Some(manifest))
 }
 
 fn mutate_retention<F>(
@@ -1184,6 +1224,15 @@ where
     F: FnOnce(&mut CallAudioManifest) -> Result<(), String>,
 {
     let session_dir = resolve_session_dir(app, call_session_id)?;
+    if let Some(mut manifest) = read_for_session_dir(&session_dir)? {
+        ensure_audio_payload_storage(
+            &session_dir,
+            &audio_recordings_root(app)?,
+            call_session_id,
+            &mut manifest,
+            false,
+        )?;
+    }
     mutate_retention_at_dir(&session_dir, expected_revision, mutate)
 }
 
@@ -1208,12 +1257,21 @@ where
 
 fn delete_at_session_dir(
     session_dir: &Path,
+    audio_root: &Path,
     expected_revision: u64,
     occurred_at: u64,
     actor: &str,
 ) -> Result<CallAudioManifest, String> {
     let mut manifest = read_for_session_dir(session_dir)?
         .ok_or_else(|| "This session has no audio recording.".to_string())?;
+    let call_session_id = manifest.call_session_id.clone();
+    let audio_dir = ensure_audio_payload_storage(
+        session_dir,
+        audio_root,
+        &call_session_id,
+        &mut manifest,
+        false,
+    )?;
     if manifest.audio_recording_revision != expected_revision {
         return Err("Audio recording changed. Refresh before trying again.".to_string());
     }
@@ -1227,8 +1285,9 @@ fn delete_at_session_dir(
     manifest.last_error = None;
     write_for_session_dir(session_dir, &manifest)?;
 
-    let audio_dir = session_dir.join(AUDIO_DIR);
-    let staged_dir = session_dir.join(AUDIO_DELETE_STAGING_DIR);
+    let staged_dir = audio_root.join(format!(
+        ".{AUDIO_SESSION_PREFIX}{call_session_id}{AUDIO_DELETE_STAGING_DIR}"
+    ));
     let deletion = (|| {
         reject_symlink(&audio_dir)?;
         reject_symlink(&staged_dir)?;
@@ -1285,8 +1344,9 @@ fn append_retention_action(
     });
 }
 
-fn cleanup_expired_at_root(
+fn cleanup_expired_at_roots(
     recordings_root: &Path,
+    audio_root: &Path,
     occurred_at: u64,
 ) -> Result<CallAudioCleanupResult, String> {
     let mut result = CallAudioCleanupResult {
@@ -1312,13 +1372,16 @@ fn cleanup_expired_at_root(
         };
         result.scanned_count = result.scanned_count.saturating_add(1);
         if manifest.retention_mode != CallAudioRetentionMode::Temporary
-            || manifest.expires_at.is_none_or(|expires_at| expires_at > occurred_at)
+            || manifest
+                .expires_at
+                .is_none_or(|expires_at| expires_at > occurred_at)
         {
             continue;
         }
         result.expired_count = result.expired_count.saturating_add(1);
         match delete_at_session_dir(
             &session_dir,
+            audio_root,
             manifest.audio_recording_revision,
             occurred_at,
             "retention-policy",
@@ -1326,14 +1389,112 @@ fn cleanup_expired_at_root(
             Ok(_) => result.deleted_count = result.deleted_count.saturating_add(1),
             Err(error) => {
                 result.failed_count = result.failed_count.saturating_add(1);
-                result.failures.push(format!(
-                    "{}: {error}",
-                    manifest.call_session_id
-                ));
+                result
+                    .failures
+                    .push(format!("{}: {error}", manifest.call_session_id));
             }
         }
     }
     Ok(result)
+}
+
+pub(crate) fn audio_recordings_root(app: &AppHandle) -> Result<PathBuf, String> {
+    let app_data = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| format!("Failed to resolve app data directory: {error}"))?;
+    Ok(app_data.join(CALL_AUDIO_RECORDINGS_DIR))
+}
+
+pub(crate) fn audio_payload_dir_at_root(
+    audio_root: &Path,
+    call_session_id: &str,
+) -> Result<PathBuf, String> {
+    validate_session_id(call_session_id)?;
+    Ok(audio_root.join(format!("{AUDIO_SESSION_PREFIX}{call_session_id}")))
+}
+
+pub(crate) fn ensure_audio_payload_storage(
+    session_dir: &Path,
+    audio_root: &Path,
+    call_session_id: &str,
+    manifest: &mut CallAudioManifest,
+    create: bool,
+) -> Result<PathBuf, String> {
+    validate_session_id(call_session_id)?;
+    reject_symlink(session_dir)?;
+    reject_symlink(audio_root)?;
+    let target = audio_payload_dir_at_root(audio_root, call_session_id)?;
+    let legacy = session_dir.join(LEGACY_AUDIO_DIR);
+    reject_symlink(&target)?;
+    reject_symlink(&legacy)?;
+
+    if target.exists() && legacy.exists() {
+        return Err("Both legacy and current audio payload directories exist.".to_string());
+    }
+
+    let mut moved_legacy = false;
+    if legacy.exists() {
+        fs::create_dir_all(audio_root)
+            .map_err(|error| format!("Failed to create audio recordings directory: {error}"))?;
+        reject_symlink(audio_root)?;
+        fs::rename(&legacy, &target)
+            .map_err(|error| format!("Failed to migrate legacy call audio: {error}"))?;
+        moved_legacy = true;
+    } else if create && !target.exists() {
+        fs::create_dir_all(audio_root)
+            .map_err(|error| format!("Failed to create audio recordings directory: {error}"))?;
+        reject_symlink(audio_root)?;
+        fs::create_dir(&target)
+            .map_err(|error| format!("Failed to create audio payload directory: {error}"))?;
+    }
+
+    if manifest.version == 1 {
+        if manifest.retention_mode != CallAudioRetentionMode::Deleted
+            && !manifest.chunks.is_empty()
+            && !target.is_dir()
+        {
+            if moved_legacy {
+                let _ = fs::rename(&target, &legacy);
+            }
+            return Err("Legacy audio manifest has no matching payload directory.".to_string());
+        }
+        let original = manifest.clone();
+        for chunk in &mut manifest.chunks {
+            let path = Path::new(&chunk.relative_path);
+            let mut components = path.components();
+            if components.next()
+                != Some(std::path::Component::Normal(std::ffi::OsStr::new(
+                    LEGACY_AUDIO_DIR,
+                )))
+                || components.clone().count() != 1
+            {
+                *manifest = original;
+                if moved_legacy {
+                    let _ = fs::rename(&target, &legacy);
+                }
+                return Err("Legacy audio manifest contains an unsafe chunk path.".to_string());
+            }
+            chunk.relative_path = components
+                .next()
+                .and_then(|component| match component {
+                    std::path::Component::Normal(value) => value.to_str(),
+                    _ => None,
+                })
+                .ok_or_else(|| "Legacy audio manifest contains an invalid chunk path.".to_string())?
+                .to_string();
+        }
+        manifest.version = 2;
+        if let Err(error) = write_for_session_dir(session_dir, manifest) {
+            *manifest = original;
+            if moved_legacy {
+                let _ = fs::rename(&target, &legacy);
+            }
+            return Err(error);
+        }
+    }
+
+    Ok(target)
 }
 
 fn resolve_session_dir(app: &AppHandle, call_session_id: &str) -> Result<PathBuf, String> {
@@ -1395,8 +1556,10 @@ mod tests {
     }
 
     fn ready_session(root: &Path, session_id: &str, closed_at: u64) -> PathBuf {
-        let session_dir = root.join(session_id);
-        fs::create_dir_all(session_dir.join(AUDIO_DIR)).unwrap();
+        let session_dir = root.join("call-session-recordings").join(session_id);
+        let audio_root = root.join(CALL_AUDIO_RECORDINGS_DIR);
+        fs::create_dir_all(&session_dir).unwrap();
+        fs::create_dir_all(audio_payload_dir_at_root(&audio_root, session_id).unwrap()).unwrap();
         fs::write(
             session_dir.join("recording-state.json"),
             serde_json::json!({ "endedAt": closed_at }).to_string(),
@@ -1449,10 +1612,18 @@ mod tests {
     fn expired_cleanup_deletes_audio_but_keeps_an_auditable_tombstone() {
         let root = test_root();
         let session_dir = ready_session(&root, "call-3", 1_000);
-        fs::write(session_dir.join(AUDIO_DIR).join("them.wav"), b"audio").unwrap();
-        let result = cleanup_expired_at_root(&root, 1_000 + TEMPORARY_RETENTION_MS).unwrap();
+        let recordings_root = root.join("call-session-recordings");
+        let audio_root = root.join(CALL_AUDIO_RECORDINGS_DIR);
+        let audio_dir = audio_payload_dir_at_root(&audio_root, "call-3").unwrap();
+        fs::write(audio_dir.join("them.wav"), b"audio").unwrap();
+        let result = cleanup_expired_at_roots(
+            &recordings_root,
+            &audio_root,
+            1_000 + TEMPORARY_RETENTION_MS,
+        )
+        .unwrap();
         assert_eq!(result.deleted_count, 1);
-        assert!(!session_dir.join(AUDIO_DIR).exists());
+        assert!(!audio_dir.exists());
         let manifest = read_for_session_dir(&session_dir).unwrap().unwrap();
         assert_eq!(manifest.retention_mode, CallAudioRetentionMode::Deleted);
         assert!(manifest.deleted_at.is_some());
@@ -1471,23 +1642,66 @@ mod tests {
     }
 
     #[test]
+    fn legacy_session_audio_is_migrated_to_the_dedicated_audio_root() {
+        let root = test_root();
+        let session_dir = root.join("call-session-recordings/call-legacy");
+        let legacy_dir = session_dir.join(LEGACY_AUDIO_DIR);
+        let audio_root = root.join(CALL_AUDIO_RECORDINGS_DIR);
+        fs::create_dir_all(&legacy_dir).unwrap();
+        let legacy_path = legacy_dir.join("them.wav");
+        fs::write(&legacy_path, b"audio").unwrap();
+        let mut manifest = empty_manifest("call-legacy", 1);
+        manifest.version = 1;
+        manifest.state = CallAudioRecordingState::RetainedTemporarily;
+        manifest.retention_mode = CallAudioRetentionMode::Temporary;
+        manifest.chunks = vec![CallAudioChunk {
+            audio_chunk_id: "audio-them-1-1".to_string(),
+            channel: CallAudioChannel::Them,
+            capture_generation: 1,
+            part: 1,
+            started_at: 1,
+            ended_at: 2,
+            sample_rate: 16_000,
+            channel_count: 1,
+            sample_format: "pcm-s16le".to_string(),
+            duration_ms: 1,
+            byte_count: 5,
+            sha256: hash_file(&legacy_path).unwrap(),
+            relative_path: "audio/them.wav".to_string(),
+            gap_count: 0,
+        }];
+        write_for_session_dir(&session_dir, &manifest).unwrap();
+
+        let payload = ensure_audio_payload_storage(
+            &session_dir,
+            &audio_root,
+            "call-legacy",
+            &mut manifest,
+            false,
+        )
+        .unwrap();
+        assert!(payload.join("them.wav").is_file());
+        assert!(!legacy_dir.exists());
+        assert_eq!(manifest.version, 2);
+        assert_eq!(manifest.chunks[0].relative_path, "them.wav");
+        assert_eq!(
+            read_for_session_dir(&session_dir).unwrap().unwrap().version,
+            2
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn channel_writer_creates_hashed_pcm_wav_evidence() {
         let root = test_root();
-        fs::create_dir_all(root.join(AUDIO_DIR)).unwrap();
+        fs::create_dir_all(&root).unwrap();
         let (sender, receiver) = sync_channel(2);
         sender.send(vec![0.0, 0.25, -0.25, 1.0, -1.0]).unwrap();
         drop(sender);
 
-        let chunks = write_channel_chunks(
-            &root,
-            CallAudioChannel::Them,
-            7,
-            1,
-            8_000,
-            1_000,
-            receiver,
-        )
-        .unwrap();
+        let chunks =
+            write_channel_chunks(&root, CallAudioChannel::Them, 7, 1, 8_000, 1_000, receiver)
+                .unwrap();
 
         assert_eq!(chunks.len(), 1);
         assert_eq!(chunks[0].sample_format, "pcm-s16le");

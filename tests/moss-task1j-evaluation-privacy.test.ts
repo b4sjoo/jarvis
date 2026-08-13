@@ -162,7 +162,12 @@ test("Task 1J deletion workflow commits database removal only between native sta
     exportCase: async () => ({ path: "unused", fileCount: 0, sourceBytes: 0, checksumSha256: "hash" }),
     stageDeletion: async () => {
       order.push("native-stage");
-      return { operationId: "delete-a", stagedContent: true, stagedRecordingCount: 1 };
+      return {
+        operationId: "delete-a",
+        stagedContent: true,
+        stagedRecordingCount: 1,
+        stagedAudioCount: 1,
+      };
     },
     restoreDeletion: async () => undefined,
     finalizeDeletion: async () => { order.push("native-finalize"); },
@@ -170,7 +175,7 @@ test("Task 1J deletion workflow commits database removal only between native sta
   const result = await new CasePrivacyService(new PrivacyDatabase(), native).deleteCase("case-a");
   assert.deepEqual(order, ["native-stage", "database-delete", "native-finalize"]);
   assert.equal(result.deletedSessionCount, 1);
-  assert.equal(result.stagedFileGroupCount, 2);
+  assert.equal(result.stagedFileGroupCount, 3);
 });
 
 test("Task 1J exposes one dashboard for trace, attribution, isolation, export, and delete", () => {

@@ -21,6 +21,7 @@ test("Task 12 keeps call audio user-controlled, visible, and disabled by default
 test("Task 12 exposes retention, playback, and explicit audio export boundaries", () => {
   const sessions = source("src/pages/sessions/index.tsx");
   const recording = source("src/lib/calling/call-recording.ts");
+  const nativeAudio = source("src-tauri/src/call_audio_evidence.rs");
   const privacy = source("src/lib/preparation/privacy-service.ts");
   const casePanel = source("src/pages/cases/EvaluationPanel.tsx");
 
@@ -28,9 +29,17 @@ test("Task 12 exposes retention, playback, and explicit audio export boundaries"
   assert.match(sessions, /restoreTemporaryCallAudioRetention/);
   assert.match(sessions, /deleteCallAudioRecording/);
   assert.match(sessions, /<audio controls preload="metadata"/);
-  assert.match(sessions, /exportCallRecording\(status\.callSessionId, false\)/);
-  assert.match(sessions, /exportCallRecording\(status\.callSessionId, true\)/);
+  assert.match(sessions, /Include retained audio\?/);
+  assert.match(
+    sessions,
+    /exportCallRecording\(recording\.status\.callSessionId, includeAudio\)/
+  );
+  assert.doesNotMatch(sessions, /Export ZIP with audio/);
+  assert.match(sessions, /AUDIO EXPIRE SOON/);
+  assert.match(sessions, /Session information/);
   assert.match(recording, /includeAudio = false/);
+  assert.match(nativeAudio, /CALL_AUDIO_RECORDINGS_DIR: &str = "call-audio-recordings"/);
+  assert.match(nativeAudio, /AUDIO_SESSION_PREFIX: &str = "audio_"/);
   assert.match(privacy, /exportCase\(caseId: string, includeAudio = false\)/);
   assert.match(privacy, /rawAudioIncluded: includeAudio/);
   assert.match(casePanel, /Export with audio/);
