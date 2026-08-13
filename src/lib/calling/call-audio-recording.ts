@@ -50,6 +50,57 @@ export interface CallAudioCleanupResult {
   failures: string[];
 }
 
+export interface ActiveCallAudioStatus {
+  active: boolean;
+  callSessionId: string | null;
+  captureGeneration: number | null;
+  themOverflowCount: number;
+  meOverflowCount: number;
+  microphoneFailure: string | null;
+}
+
+export function startCallAudioEvidence(input: {
+  callSessionId: string;
+  captureGeneration: number;
+  systemSampleRate: number;
+  inputDeviceId?: string;
+  expectedRevision: number;
+  requestedAt?: number;
+}) {
+  requireTauriRuntime("Call audio recording");
+  return invoke<CallAudioManifest>("start_call_audio_evidence", {
+    ...input,
+    inputDeviceId: input.inputDeviceId || null,
+    requestedAt: input.requestedAt ?? Date.now(),
+  });
+}
+
+export function stopCallAudioEvidence(input: {
+  callSessionId: string;
+  expectedRevision: number;
+  occurredAt?: number;
+}) {
+  requireTauriRuntime("Call audio recording");
+  return invoke<CallAudioManifest>("stop_call_audio_evidence", {
+    ...input,
+    occurredAt: input.occurredAt ?? Date.now(),
+  });
+}
+
+export async function getActiveCallAudioStatus() {
+  if (!isTauriRuntime()) {
+    return {
+      active: false,
+      callSessionId: null,
+      captureGeneration: null,
+      themOverflowCount: 0,
+      meOverflowCount: 0,
+      microphoneFailure: null,
+    } satisfies ActiveCallAudioStatus;
+  }
+  return invoke<ActiveCallAudioStatus>("get_active_call_audio_status");
+}
+
 export async function getCallAudioRecording(callSessionId: string) {
   if (!isTauriRuntime()) return null;
   return invoke<CallAudioManifest | null>("get_call_audio_recording", {

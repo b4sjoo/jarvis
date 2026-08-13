@@ -148,6 +148,7 @@ pub fn run() {
                 .build(),
         )
         .manage(AudioState::default())
+        .manage(call_audio_evidence::CallAudioEvidenceState::default())
         .manage(GracefulExitState::default())
         .manage(preparation_transaction::PreparationTransactionState::default())
         .plugin(tauri_plugin_http::init())
@@ -194,6 +195,9 @@ pub fn run() {
             call_audio_evidence::restore_temporary_call_audio_retention,
             call_audio_evidence::delete_call_audio_recording,
             call_audio_evidence::cleanup_expired_call_audio,
+            call_audio_evidence::start_call_audio_evidence,
+            call_audio_evidence::stop_call_audio_evidence,
+            call_audio_evidence::get_active_call_audio_status,
             speaker::start_call_audio_session,
             speaker::stop_call_audio_session,
             #[cfg(debug_assertions)]

@@ -15,6 +15,7 @@ import {
   createCancellableOperation,
   commitProviderConfigurationTransaction,
   cleanupExpiredCallAudio,
+  getActiveCallAudioStatus,
   createSessionBoundRecordingWriter,
   listCallRecordings,
   listRecoverableCallRecordings,
@@ -27,6 +28,8 @@ import {
   retryRecoveredCallRecording,
   runAdvisorModelOperation,
   runRuntimeModelOperation,
+  startCallAudioEvidence,
+  stopCallAudioEvidence,
   persistAudioSettings,
   normalizeModelRouteSettings,
   saveModelRouteSettings,
@@ -38,6 +41,7 @@ import {
   type CallRecordingEventKind,
   type CallRecordingStatus,
   type CallRecordingSummary,
+  type CallAudioManifest,
   type CallTurnSettlement,
   type GuidanceEvaluationLabel,
   type ModelRouteSettings,
@@ -241,6 +245,7 @@ export function useCallingAssistant() {
   const [credentialError, setCredentialError] = useState<string | null>(null);
   const captureSessionIdRef = useRef<string | null>(null);
   const captureGenerationRef = useRef<number | null>(null);
+  const captureSampleRateRef = useRef<number | null>(null);
   const lastSegmentSequenceRef = useRef(0);
   const segmentLedgerRef = useRef(new AudioSegmentDispositionLedger());
   const rolloverAssemblerRef = useRef(new RolloverTranscriptAssembler());
@@ -265,6 +270,15 @@ export function useCallingAssistant() {
   const [callRecordings, setCallRecordings] = useState<
     CallRecordingSummary[]
   >([]);
+  const audioRecordingManifestRef = useRef<CallAudioManifest | null>(null);
+  const audioRecordingDesiredRef = useRef(false);
+  const [audioRecordingManifest, setAudioRecordingManifest] =
+    useState<CallAudioManifest | null>(null);
+  const [audioRecordingDesired, setAudioRecordingDesired] = useState(false);
+  const [audioRecordingArmed, setAudioRecordingArmed] = useState(false);
+  const [audioRecordingError, setAudioRecordingError] = useState<string | null>(
+    null
+  );
 
   const publish = useCallback(
     () => setRuntime(runtimeRef.current.snapshot()),
@@ -306,6 +320,97 @@ export function useCallingAssistant() {
       void recordEvent(kind, payload, occurredAt).catch(() => undefined);
     },
     [recordEvent]
+  );
+
+  const adoptAudioRecordingManifest = useCallback(
+    (manifest: CallAudioManifest | null) => {
+      audioRecordingManifestRef.current = manifest;
+      setAudioRecordingManifest(manifest);
+    },
+    []
+  );
+
+  const startAudioEvidenceForCapture = useCallback(
+    async (owner: ActiveCallRuntime, reason: string) => {
+      const captureGeneration = captureGenerationRef.current;
+      const systemSampleRate = captureSampleRateRef.current;
+      if (captureGeneration == null || systemSampleRate == null) {
+        throw new Error("System audio capture is not ready for evidence recording.");
+      }
+      const current = audioRecordingManifestRef.current;
+      if (current && current.callSessionId !== owner.snapshot().callSessionId) {
+        throw new Error("Audio evidence belongs to another CallSession.");
+      }
+      const requestedAt = Date.now();
+      const manifest = await startCallAudioEvidence({
+        callSessionId: owner.snapshot().callSessionId,
+        captureGeneration,
+        systemSampleRate,
+        inputDeviceId: audioSettingsRef.current.inputDeviceId ?? undefined,
+        expectedRevision: current?.audioRecordingRevision ?? 0,
+        requestedAt,
+      });
+      adoptAudioRecordingManifest(manifest);
+      setAudioRecordingArmed(false);
+      setAudioRecordingError(null);
+      queueRecordingEvent(
+        "audio-evidence-lifecycle",
+        {
+          eventType: "started",
+          reason,
+          audioRecordingRevision: manifest.audioRecordingRevision,
+          captureGeneration,
+          channels: manifest.channels,
+        },
+        requestedAt
+      );
+      return manifest;
+    },
+    [adoptAudioRecordingManifest, queueRecordingEvent]
+  );
+
+  const stopAudioEvidenceForCapture = useCallback(
+    async (owner: ActiveCallRuntime, reason: string) => {
+      const status = await getActiveCallAudioStatus();
+      if (!status.active) {
+        setAudioRecordingArmed(audioRecordingDesiredRef.current);
+        return audioRecordingManifestRef.current;
+      }
+      if (status.callSessionId !== owner.snapshot().callSessionId) {
+        throw new Error("Active audio evidence belongs to another CallSession.");
+      }
+      const current = audioRecordingManifestRef.current;
+      if (!current) {
+        throw new Error("Active audio evidence has no local manifest projection.");
+      }
+      const stoppedAt = Date.now();
+      const manifest = await stopCallAudioEvidence({
+        callSessionId: current.callSessionId,
+        expectedRevision: current.audioRecordingRevision,
+        occurredAt: stoppedAt,
+      });
+      adoptAudioRecordingManifest(manifest);
+      setAudioRecordingArmed(audioRecordingDesiredRef.current);
+      if (manifest.state === "partial" || manifest.state === "error") {
+        setAudioRecordingError(
+          manifest.lastError || "Call audio evidence is incomplete."
+        );
+      }
+      queueRecordingEvent(
+        "audio-evidence-lifecycle",
+        {
+          eventType: "stopped",
+          reason,
+          audioRecordingRevision: manifest.audioRecordingRevision,
+          captureGeneration: status.captureGeneration,
+          channels: manifest.channels,
+          chunkCount: manifest.chunks.length,
+        },
+        stoppedAt
+      );
+      return manifest;
+    },
+    [adoptAudioRecordingManifest, queueRecordingEvent]
   );
 
   const recordPreparedArtifacts = useCallback(
@@ -922,6 +1027,7 @@ export function useCallingAssistant() {
     ) {
       captureSessionIdRef.current = null;
       captureGenerationRef.current = null;
+      captureSampleRateRef.current = null;
     }
   }, []);
 
@@ -1128,10 +1234,21 @@ export function useCallingAssistant() {
           captureSessionId: lifecycle.captureSessionId,
           captureGeneration: lifecycle.captureGeneration,
         };
-        void drainCurrentAudioQueue().catch(() => undefined).then(() => {
+        void drainCurrentAudioQueue().catch(() => undefined).then(async () => {
           if (disposed || runtimeRef.current !== owner) return;
           const state = owner.snapshot().state;
           if (!["live", "starting", "recovering"].includes(state)) return;
+          if (audioRecordingDesiredRef.current) {
+            await stopAudioEvidenceForCapture(
+              owner,
+              "native-capture-terminated"
+            ).catch((error) => {
+              setAudioRecordingError(errorMessage(error));
+              recordingRef.current?.markIncomplete(
+                `audio-evidence-native-termination:${errorMessage(error)}`
+              );
+            });
+          }
           releaseCaptureLease(lease);
           abortOperations("native-capture-terminated");
           owner.dispatch({
@@ -1166,6 +1283,7 @@ export function useCallingAssistant() {
     queueRecordingEvent,
     releaseCaptureLease,
     nativeRuntimeAvailable,
+    stopAudioEvidenceForCapture,
   ]);
 
   const startCapture = useCallback(
@@ -1194,6 +1312,7 @@ export function useCallingAssistant() {
       }
       captureSessionIdRef.current = status.captureSessionId;
       captureGenerationRef.current = status.captureGeneration;
+      captureSampleRateRef.current = status.sampleRate ?? null;
       lastSegmentSequenceRef.current = 0;
       queueRecordingEvent("native-audio-lifecycle", {
         eventType: "started",
@@ -1241,6 +1360,12 @@ export function useCallingAssistant() {
       recordingRef.current = null;
       recordingWriterRef.current = null;
       handoffServiceRef.current = null;
+      audioRecordingManifestRef.current = null;
+      audioRecordingDesiredRef.current = false;
+      setAudioRecordingManifest(null);
+      setAudioRecordingDesired(false);
+      setAudioRecordingArmed(false);
+      setAudioRecordingError(null);
       const recording = new CallRecordingProjection({
         callSessionId: owner.snapshot().callSessionId,
       });
@@ -1371,15 +1496,62 @@ export function useCallingAssistant() {
     stopNativeCapture,
   ]);
 
+  const startAudioRecording = useCallback(async () => {
+    const owner = runtimeRef.current;
+    const state = owner.snapshot().state;
+    if (!["live", "paused"].includes(state)) {
+      throw new Error("Start the call before recording audio evidence.");
+    }
+    audioRecordingDesiredRef.current = true;
+    setAudioRecordingDesired(true);
+    setAudioRecordingError(null);
+    if (state === "paused") {
+      setAudioRecordingArmed(true);
+      queueRecordingEvent("audio-evidence-lifecycle", {
+        eventType: "armed",
+        reason: "manual-start-while-paused",
+      });
+      return;
+    }
+    try {
+      await startAudioEvidenceForCapture(owner, "manual-start");
+    } catch (error) {
+      audioRecordingDesiredRef.current = false;
+      setAudioRecordingDesired(false);
+      setAudioRecordingArmed(false);
+      setAudioRecordingError(errorMessage(error));
+      throw error;
+    }
+  }, [queueRecordingEvent, startAudioEvidenceForCapture]);
+
+  const stopAudioRecording = useCallback(async () => {
+    const owner = runtimeRef.current;
+    audioRecordingDesiredRef.current = false;
+    setAudioRecordingDesired(false);
+    setAudioRecordingArmed(false);
+    try {
+      await stopAudioEvidenceForCapture(owner, "manual-stop");
+      setAudioRecordingError(null);
+    } catch (error) {
+      setAudioRecordingError(errorMessage(error));
+      throw error;
+    }
+  }, [stopAudioEvidenceForCapture]);
+
   const pause = useCallback(async () => {
     await stopAndDrainCapture();
+    if (audioRecordingDesiredRef.current) {
+      await stopAudioEvidenceForCapture(runtimeRef.current, "call-paused").catch(
+        (error) => setAudioRecordingError(errorMessage(error))
+      );
+    }
     abortOperations("call-paused");
     runtimeRef.current.dispatch({
       type: "PauseCall",
       occurredAt: Date.now(),
     });
     publish();
-  }, [abortOperations, publish, stopAndDrainCapture]);
+  }, [abortOperations, publish, stopAndDrainCapture, stopAudioEvidenceForCapture]);
 
   const resume = useCallback(async () => {
     const owner = runtimeRef.current;
@@ -1387,6 +1559,11 @@ export function useCallingAssistant() {
     publish();
     try {
       await startCapture(owner);
+      if (audioRecordingDesiredRef.current) {
+        await startAudioEvidenceForCapture(owner, "call-resumed").catch((error) =>
+          setAudioRecordingError(errorMessage(error))
+        );
+      }
     } catch (error) {
       owner.dispatch({
         type: "RequireRecovery",
@@ -1395,7 +1572,7 @@ export function useCallingAssistant() {
       });
       publish();
     }
-  }, [publish, startCapture]);
+  }, [publish, startAudioEvidenceForCapture, startCapture]);
 
   const closeActiveRecording = useCallback(
     async (owner: ActiveCallRuntime, retry: boolean) => {
@@ -1479,11 +1656,26 @@ export function useCallingAssistant() {
   const end = useCallback(async () => {
     const owner = runtimeRef.current;
     await stopAndDrainCapture();
+    await stopAudioEvidenceForCapture(owner, "call-ended").catch((error) => {
+      setAudioRecordingError(errorMessage(error));
+      recordingRef.current?.markIncomplete(
+        `audio-evidence-stop:${errorMessage(error)}`
+      );
+    });
+    audioRecordingDesiredRef.current = false;
+    setAudioRecordingDesired(false);
+    setAudioRecordingArmed(false);
     abortOperations("call-closing");
     owner.dispatch({ type: "CloseCall", occurredAt: Date.now() });
     publish();
     await closeActiveRecording(owner, false);
-  }, [abortOperations, closeActiveRecording, publish, stopAndDrainCapture]);
+  }, [
+    abortOperations,
+    closeActiveRecording,
+    publish,
+    stopAndDrainCapture,
+    stopAudioEvidenceForCapture,
+  ]);
 
   const prepareForExit = useCallback(async () => {
     const owner = runtimeRef.current;
@@ -1791,7 +1983,13 @@ export function useCallingAssistant() {
     recordingError,
     recoverableRecordings,
     callRecordings,
+    audioRecordingManifest,
+    audioRecordingDesired,
+    audioRecordingArmed,
+    audioRecordingError,
     start,
+    startAudioRecording,
+    stopAudioRecording,
     pause,
     resume,
     end,

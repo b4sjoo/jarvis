@@ -1174,6 +1174,12 @@ async fn run_vad_capture(
                 }
             }
 
+            crate::call_audio_evidence::append_system_audio_samples(
+                &app,
+                capture_generation,
+                sr,
+                &mono,
+            );
             let mono = apply_noise_gate(&mono, config.noise_gate_threshold);
             let (rms, peak) = calculate_audio_metrics(&mono);
             let is_speech = rms > config.sensitivity_rms || peak > config.peak_threshold;
@@ -1512,6 +1518,12 @@ async fn run_vad_capture(
 
     if in_speech && !buffer.is_empty() {
         let remaining: Vec<f32> = buffer.drain(..).collect();
+        crate::call_audio_evidence::append_system_audio_samples(
+            &app,
+            capture_generation,
+            sr,
+            &remaining,
+        );
         let remaining = apply_noise_gate(&remaining, config.noise_gate_threshold);
         let (rms, peak) = calculate_audio_metrics(&remaining);
         let is_speech = rms > config.sensitivity_rms || peak > config.peak_threshold;
@@ -1522,6 +1534,14 @@ async fn run_vad_capture(
             silence_samples = silence_samples.saturating_add(remaining.len());
         }
         speech_buffer.extend_from_slice(&remaining);
+    } else if !buffer.is_empty() {
+        let remaining: Vec<f32> = buffer.drain(..).collect();
+        crate::call_audio_evidence::append_system_audio_samples(
+            &app,
+            capture_generation,
+            sr,
+            &remaining,
+        );
     }
 
     let tail_candidate_segment_sequence = in_speech.then_some(segment_sequence + 1);
@@ -1669,6 +1689,7 @@ async fn run_continuous_capture(
     let start_time = Instant::now();
     let max_duration = Duration::from_secs(config.max_recording_duration_secs);
     let mut segment_sequence = 0_u64;
+    let mut audio_evidence_samples_sent = 0_usize;
 
     // Atomic flag for manual stop
     let stop_flag = Arc::new(AtomicBool::new(false));
@@ -1716,6 +1737,17 @@ async fn run_continuous_capture(
                         }
 
                         audio_buffer.push(sample);
+                        if audio_buffer.len().saturating_sub(audio_evidence_samples_sent)
+                            >= config.hop_size
+                        {
+                            crate::call_audio_evidence::append_system_audio_samples(
+                                &app,
+                                capture_generation,
+                                sr,
+                                &audio_buffer[audio_evidence_samples_sent..],
+                            );
+                            audio_evidence_samples_sent = audio_buffer.len();
+                        }
 
                         let elapsed = start_time.elapsed();
 
@@ -1754,6 +1786,15 @@ async fn run_continuous_capture(
 
     // Clean up event listener (CRITICAL)
     app.unlisten(stop_listener);
+
+    if audio_evidence_samples_sent < audio_buffer.len() {
+        crate::call_audio_evidence::append_system_audio_samples(
+            &app,
+            capture_generation,
+            sr,
+            &audio_buffer[audio_evidence_samples_sent..],
+        );
+    }
 
     // Process and emit audio
     let mut termination_emitted_segment_sequence = None;
