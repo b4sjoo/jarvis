@@ -1,8 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
-import { convertFileSrc } from "@tauri-apps/api/core";
 import {
   ArchiveX,
-  Clock3,
   Download,
   FolderOpen,
   Headphones,
@@ -19,9 +17,9 @@ import {
   deleteCallAudioRecording,
   getCallAudioRecording,
   preserveCallAudioRecording,
+  revealCallAudioRecording,
   revealCallRecording,
   revealCallRecordingsRoot,
-  restoreTemporaryCallAudioRetention,
   type CallAudioManifest,
   type CallRecordingState,
   type CallRecordingSummary,
@@ -59,6 +57,16 @@ const formatDuration = (recording: CallRecordingSummary) => {
   return `${minutes}m ${remaining}s`;
 };
 
+const formatAudioDuration = (durationMs: number) => {
+  const totalSeconds = Math.max(0, Math.round(durationMs / 1_000));
+  const hours = Math.floor(totalSeconds / 3_600);
+  const minutes = Math.floor((totalSeconds % 3_600) / 60);
+  const seconds = totalSeconds % 60;
+  if (hours > 0) return `${hours}h ${minutes}m ${seconds}s`;
+  if (minutes > 0) return `${minutes}m ${seconds}s`;
+  return `${seconds}s`;
+};
+
 const formatBytes = (bytes: number) => {
   if (bytes < 1_024) return `${bytes} B`;
   if (bytes < 1_024 ** 2) return `${(bytes / 1_024).toFixed(1)} KB`;
@@ -76,8 +84,7 @@ const audioRetentionLabel = (audio: {
   return audio.expiresAt ? formatDateTime(audio.expiresAt) : "Temporary audio";
 };
 
-// Temporarily widened for visual review; production target is 24 hours.
-const AUDIO_EXPIRE_SOON_MS = 72 * 60 * 60 * 1_000;
+const AUDIO_EXPIRE_SOON_MS = 24 * 60 * 60 * 1_000;
 
 const audioExpiryState = (
   audio: CallRecordingSummary["audioRecording"],
@@ -92,12 +99,6 @@ const audioExpiryState = (
   return audio.expiresAt - now <= AUDIO_EXPIRE_SOON_MS ? "soon" : null;
 };
 
-const formatAudioChunkDuration = (durationMs: number) => {
-  const totalSeconds = Math.max(0, Math.round(durationMs / 1_000));
-  const minutes = Math.floor(totalSeconds / 60);
-  return `${minutes}:${String(totalSeconds % 60).padStart(2, "0")}`;
-};
-
 export default function SessionsPage({
   controller,
 }: {
@@ -107,7 +108,7 @@ export default function SessionsPage({
   const [busy, setBusy] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [expandedAudioId, setExpandedAudioId] = useState<string | null>(null);
+  const [audioSessionId, setAudioSessionId] = useState<string | null>(null);
   const [audioManifest, setAudioManifest] = useState<CallAudioManifest | null>(null);
   const [infoSessionId, setInfoSessionId] = useState<string | null>(null);
   const [exportSessionId, setExportSessionId] = useState<string | null>(null);
@@ -139,7 +140,8 @@ export default function SessionsPage({
           return (
             unfinishedStates.has(recording.status.state) ||
             recording.status.health !== "healthy" ||
-            Boolean(recording.integrityError)
+            Boolean(recording.integrityError) ||
+            audioExpiryState(recording.audioRecording, now) !== null
           );
         }
         if (filter === "closed") return recording.status.state === "closed";
@@ -150,6 +152,7 @@ export default function SessionsPage({
     controller.recordingStatus,
     controller.runtime.humanEvaluations.length,
     filter,
+    now,
   ]);
 
   const infoRecording = recordings.find(
@@ -175,17 +178,12 @@ export default function SessionsPage({
   };
 
   const openAudio = async (callSessionId: string) => {
-    if (expandedAudioId === callSessionId) {
-      setExpandedAudioId(null);
-      setAudioManifest(null);
-      return;
-    }
     setBusy(`audio-${callSessionId}`);
     setError(null);
     try {
       const manifest = await getCallAudioRecording(callSessionId);
       setAudioManifest(manifest);
-      setExpandedAudioId(callSessionId);
+      setAudioSessionId(manifest ? callSessionId : null);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
@@ -353,7 +351,7 @@ export default function SessionsPage({
                     </button>
                   )}
                   <button
-                    className={expandedAudioId === status.callSessionId ? "icon-button session-action-active" : "icon-button"}
+                    className={audioSessionId === status.callSessionId ? "icon-button session-action-active" : "icon-button"}
                     onClick={() => void openAudio(status.callSessionId)}
                     disabled={busy !== null || !recording.audioRecording}
                     aria-label={`Review audio for ${status.callSessionId}`}
@@ -392,70 +390,6 @@ export default function SessionsPage({
                   </button>
                 </div>
 
-                {expandedAudioId === status.callSessionId && audioManifest && (
-                  <section className="session-audio-panel" aria-label={`Audio evidence for ${status.callSessionId}`}>
-                    <header>
-                      <div>
-                        <strong>{audioRetentionLabel(audioManifest)}</strong>
-                        <span title="This revision increases whenever audio capture or retention state changes. It prevents stale controls from changing newer audio state.">
-                          {formatBytes(audioManifest.channels.reduce((sum, channel) => sum + channel.byteCount, 0))} · Audio revision {audioManifest.audioRecordingRevision}
-                          {audioManifest.retentionMode === "temporary" && audioManifest.expiresAt ? ` · ${formatDateTime(audioManifest.expiresAt)}` : ""}
-                        </span>
-                      </div>
-                      <div className="session-audio-actions">
-                        {audioManifest.retentionMode === "temporary" && audioManifest.state !== "deleted" && (
-                          <button className="secondary-button" disabled={busy !== null} onClick={() => void updateAudio(
-                            `preserve-${status.callSessionId}`,
-                            () => preserveCallAudioRecording({ callSessionId: status.callSessionId, expectedRevision: audioManifest.audioRecordingRevision }),
-                            "Audio preserved until you delete it."
-                          )}><ShieldCheck size={14} />Preserve</button>
-                        )}
-                        {audioManifest.retentionMode === "preserved" && (
-                          <button className="secondary-button" disabled={busy !== null} onClick={() => void updateAudio(
-                            `temporary-${status.callSessionId}`,
-                            () => restoreTemporaryCallAudioRetention({ callSessionId: status.callSessionId, expectedRevision: audioManifest.audioRecordingRevision }),
-                            "The 72-hour retention policy was restored."
-                          )}><Clock3 size={14} />Restore 72 hours</button>
-                        )}
-                        {audioManifest.retentionMode !== "deleted" && (
-                          <button className="danger-button" disabled={busy !== null} onClick={() => {
-                            if (!window.confirm("Permanently delete this session's audio? Transcript, events, and the deletion tombstone will remain.")) return;
-                            void updateAudio(
-                              `delete-audio-${status.callSessionId}`,
-                              () => deleteCallAudioRecording({ callSessionId: status.callSessionId, expectedRevision: audioManifest.audioRecordingRevision }),
-                              "Audio deleted; structured session evidence remains."
-                            );
-                          }}><Trash2 size={14} />Delete audio</button>
-                        )}
-                      </div>
-                    </header>
-                    <div className="session-audio-health">
-                      {audioManifest.channels.map((channel) => (
-                        <span key={channel.channel} className={`audio-health audio-health-${channel.health}`}>
-                          <b>{channel.channel}</b> {channel.health} · {channel.chunkCount} chunks · {channel.gapCount} gaps
-                        </span>
-                      ))}
-                    </div>
-                    {audioManifest.retentionMode !== "deleted" &&
-                    audioManifest.chunks.length > 0 &&
-                    recording.audioStoragePath ? (
-                      <div className="session-audio-tracks">
-                        {(["them", "me"] as const).map((channel) => {
-                          const chunks = audioManifest.chunks.filter((chunk) => chunk.channel === channel);
-                          if (!chunks.length) return null;
-                          return <div key={channel}><strong>{channel === "them" ? "Counterparty" : "You"}</strong>{chunks.map((chunk) => (
-                            <label key={chunk.audioChunkId}>
-                              <span>Generation {chunk.captureGeneration} · part {chunk.part} · {formatAudioChunkDuration(chunk.durationMs)}</span>
-                              <audio controls preload="metadata" src={convertFileSrc(`${recording.audioStoragePath}/${chunk.relativePath}`)} />
-                            </label>
-                          ))}</div>;
-                        })}
-                      </div>
-                    ) : (
-                      <p className="session-audio-empty">No playable audio remains.</p>
-                    )}
-                  </section>
-                )}
               </article>
             );
           })
@@ -485,14 +419,7 @@ export default function SessionsPage({
               <div><dt>Events</dt><dd>{infoRecording.status.persistedEventCount}/{infoRecording.status.attemptedEventCount}</dd></div>
               <div><dt>Dropped events</dt><dd>{infoRecording.status.droppedEventCount}</dd></div>
               <div><dt>Guidance feedback</dt><dd>{infoRecording.humanEvaluationCount}</dd></div>
-              <div><dt>Manifest</dt><dd>{infoRecording.manifestAvailable ? "Yes" : "No"}</dd></div>
-              <div><dt>Audio chunks</dt><dd>{infoRecording.audioRecording?.chunkCount ?? 0}</dd></div>
-              <div><dt>Audio state</dt><dd>{infoRecording.audioRecording?.retentionMode ?? "none"}</dd></div>
-              <div><dt>Audio expires</dt><dd>{formatDateTime(infoRecording.audioRecording?.expiresAt)}</dd></div>
             </dl>
-            <p className="session-detail-help">
-              Manifest Yes means a closed-session receipt exists. A healthy receipt binds the final event count to its SHA-256 hash; any validation failure appears above as incomplete evidence. Guidance feedback counts explicit helpful or not-useful actions on visible guidance.
-            </p>
             {(infoRecording.integrityError || infoRecording.status.incompletenessReasons.length > 0) && (
               <div className="session-detail-warning">
                 <strong>Evidence incomplete:</strong>
@@ -500,6 +427,93 @@ export default function SessionsPage({
                 {infoRecording.status.incompletenessReasons.map((reason) => <span key={reason}>{reason}</span>)}
               </div>
             )}
+          </section>
+        </div>
+      )}
+
+      {audioSessionId && audioManifest && (
+        <div className="session-modal-layer" onMouseDown={(event) => {
+          if (event.target === event.currentTarget) {
+            setAudioSessionId(null);
+            setAudioManifest(null);
+          }
+        }}>
+          <section className="session-modal session-audio-modal" role="dialog" aria-modal="true" aria-labelledby="audio-info-title">
+            <header>
+              <div>
+                <span>Audio information</span>
+                <h3 id="audio-info-title">{audioManifest.callSessionId}</h3>
+              </div>
+              <button className="icon-button" onClick={() => {
+                setAudioSessionId(null);
+                setAudioManifest(null);
+              }} aria-label="Close audio information" title="Close">
+                <X size={16} />
+              </button>
+            </header>
+
+            <div className="session-audio-summary">
+              <strong>{audioRetentionLabel(audioManifest)}</strong>
+              <span>{formatBytes(audioManifest.channels.reduce((sum, channel) => sum + channel.byteCount, 0))}</span>
+            </div>
+
+            <dl className="session-detail-grid session-audio-detail-grid">
+              <div><dt>Recording state</dt><dd>{audioManifest.state}</dd></div>
+              <div><dt>Retention</dt><dd>{audioManifest.retentionMode}</dd></div>
+              <div><dt>Audio chunks</dt><dd>{audioManifest.chunks.length}</dd></div>
+              <div><dt>Audio revision</dt><dd>{audioManifest.audioRecordingRevision}</dd></div>
+              <div><dt>Counterparty duration</dt><dd>{formatAudioDuration(audioManifest.channels.find((channel) => channel.channel === "them")?.durationMs ?? 0)}</dd></div>
+              <div><dt>Your duration</dt><dd>{formatAudioDuration(audioManifest.channels.find((channel) => channel.channel === "me")?.durationMs ?? 0)}</dd></div>
+              <div><dt>Started</dt><dd>{formatDateTime(audioManifest.startedAt)}</dd></div>
+              <div><dt>Stopped</dt><dd>{formatDateTime(audioManifest.stoppedAt)}</dd></div>
+              <div><dt>Expiration date</dt><dd>{formatDateTime(audioManifest.expiresAt)}</dd></div>
+              <div><dt>Preserved</dt><dd>{formatDateTime(audioManifest.preservedAt)}</dd></div>
+            </dl>
+
+            <div className="session-audio-health">
+              {audioManifest.channels.map((channel) => (
+                <span key={channel.channel} className={`audio-health audio-health-${channel.health}`}>
+                  <b>{channel.channel === "them" ? "Counterparty" : "You"}</b> {channel.health} · {channel.chunkCount} chunks · {channel.gapCount} gaps
+                </span>
+              ))}
+            </div>
+
+            {(audioManifest.lastError || audioManifest.failureStage) && (
+              <div className="session-detail-warning">
+                <strong>Audio evidence incomplete:</strong>
+                {audioManifest.failureStage && <span>{audioManifest.failureStage}</span>}
+                {audioManifest.lastError && <span>{audioManifest.lastError}</span>}
+              </div>
+            )}
+
+            <footer className="session-audio-actions">
+              {audioManifest.retentionMode === "temporary" && audioManifest.state !== "deleted" && (
+                <button className="secondary-button" disabled={busy !== null} onClick={() => void updateAudio(
+                  `preserve-${audioSessionId}`,
+                  () => preserveCallAudioRecording({ callSessionId: audioSessionId, expectedRevision: audioManifest.audioRecordingRevision }),
+                  "Audio preserved until you delete it."
+                )}><ShieldCheck size={14} />Preserve</button>
+              )}
+              {audioManifest.retentionMode !== "deleted" && (
+                <button className="danger-button" disabled={busy !== null} onClick={() => {
+                  if (!window.confirm("Permanently delete this session's audio? Transcript, events, and the deletion tombstone will remain.")) return;
+                  void updateAudio(
+                    `delete-audio-${audioSessionId}`,
+                    () => deleteCallAudioRecording({ callSessionId: audioSessionId, expectedRevision: audioManifest.audioRecordingRevision }),
+                    "Audio deleted; structured session evidence remains."
+                  );
+                }}><Trash2 size={14} />Delete</button>
+              )}
+              <button
+                className="secondary-button"
+                disabled={busy !== null || audioManifest.retentionMode === "deleted"}
+                onClick={() => void run(
+                  `reveal-audio-${audioSessionId}`,
+                  () => revealCallAudioRecording(audioSessionId),
+                  "Opened the audio folder."
+                )}
+              ><FolderOpen size={14} />Open folder</button>
+            </footer>
           </section>
         </div>
       )}

@@ -353,36 +353,6 @@ pub fn preserve_call_audio_recording(
 }
 
 #[tauri::command]
-pub fn restore_temporary_call_audio_retention(
-    app: AppHandle,
-    call_session_id: String,
-    expected_revision: u64,
-    occurred_at: u64,
-) -> Result<CallAudioManifest, String> {
-    let session_dir = resolve_session_dir(&app, &call_session_id)?;
-    let closed_at = read_call_closed_at(&session_dir)?
-        .ok_or_else(|| "End the call before restoring temporary retention.".to_string())?;
-    if let Some(mut manifest) = read_for_session_dir(&session_dir)? {
-        ensure_audio_payload_storage(
-            &session_dir,
-            &audio_recordings_root(&app)?,
-            &call_session_id,
-            &mut manifest,
-            false,
-        )?;
-    }
-    mutate_retention_at_dir(&session_dir, expected_revision, |manifest| {
-        ensure_not_deleted(manifest)?;
-        manifest.retention_mode = CallAudioRetentionMode::Temporary;
-        manifest.state = CallAudioRecordingState::RetainedTemporarily;
-        manifest.expires_at = Some(closed_at.saturating_add(TEMPORARY_RETENTION_MS));
-        manifest.preserved_at = None;
-        append_retention_action(manifest, "restore-temporary", "user", occurred_at, 1);
-        Ok(())
-    })
-}
-
-#[tauri::command]
 pub fn delete_call_audio_recording(
     app: AppHandle,
     call_session_id: String,
@@ -398,6 +368,25 @@ pub fn delete_call_audio_recording(
         occurred_at,
         "user",
     )
+}
+
+#[tauri::command]
+pub fn reveal_call_audio_recording(app: AppHandle, call_session_id: String) -> Result<(), String> {
+    let session_dir = resolve_session_dir(&app, &call_session_id)?;
+    let mut manifest = read_for_session_dir(&session_dir)?
+        .ok_or_else(|| "This session has no audio recording.".to_string())?;
+    ensure_not_deleted(&manifest)?;
+    let audio_dir = ensure_audio_payload_storage(
+        &session_dir,
+        &audio_recordings_root(&app)?,
+        &call_session_id,
+        &mut manifest,
+        false,
+    )?;
+    if !audio_dir.is_dir() {
+        return Err("This session's audio folder does not exist.".to_string());
+    }
+    crate::recording::reveal_path(&audio_dir, false)
 }
 
 #[tauri::command]
@@ -1505,15 +1494,6 @@ fn resolve_session_dir(app: &AppHandle, call_session_id: &str) -> Result<PathBuf
         return Err("Call recording does not exist.".to_string());
     }
     Ok(path)
-}
-
-fn read_call_closed_at(session_dir: &Path) -> Result<Option<u64>, String> {
-    let value: serde_json::Value = serde_json::from_str(
-        &fs::read_to_string(session_dir.join("recording-state.json"))
-            .map_err(|error| format!("Failed to read call recording state: {error}"))?,
-    )
-    .map_err(|error| format!("Invalid call recording state: {error}"))?;
-    Ok(value.get("endedAt").and_then(serde_json::Value::as_u64))
 }
 
 fn ensure_not_deleted(manifest: &CallAudioManifest) -> Result<(), String> {

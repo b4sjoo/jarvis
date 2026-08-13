@@ -126,18 +126,6 @@ export function preserveCallAudioRecording(input: {
   });
 }
 
-export function restoreTemporaryCallAudioRetention(input: {
-  callSessionId: string;
-  expectedRevision: number;
-  occurredAt?: number;
-}) {
-  requireTauriRuntime("Call audio retention");
-  return invoke<CallAudioManifest>("restore_temporary_call_audio_retention", {
-    ...input,
-    occurredAt: input.occurredAt ?? Date.now(),
-  });
-}
-
 export function deleteCallAudioRecording(input: {
   callSessionId: string;
   expectedRevision: number;
@@ -148,6 +136,11 @@ export function deleteCallAudioRecording(input: {
     ...input,
     occurredAt: input.occurredAt ?? Date.now(),
   });
+}
+
+export function revealCallAudioRecording(callSessionId: string) {
+  requireTauriRuntime("Call audio evidence");
+  return invoke<void>("reveal_call_audio_recording", { callSessionId });
 }
 
 export async function cleanupExpiredCallAudio(occurredAt = Date.now()) {

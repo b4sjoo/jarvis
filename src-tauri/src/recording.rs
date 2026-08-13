@@ -816,7 +816,7 @@ fn export_at_roots(
     Ok(export_path)
 }
 
-fn reveal_path(path: &Path, select_file: bool) -> Result<(), String> {
+pub(crate) fn reveal_path(path: &Path, select_file: bool) -> Result<(), String> {
     reject_symlink(path)?;
     #[cfg(target_os = "macos")]
     let status = if select_file {
