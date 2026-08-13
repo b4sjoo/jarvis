@@ -4,6 +4,7 @@ import {
   AlertTriangle,
   CheckCircle2,
   Download,
+  FileArchive,
   RefreshCw,
   ShieldCheck,
   Trash2,
@@ -90,11 +91,12 @@ export default function EvaluationPanel({
     });
   };
 
-  const exportCase = () => {
+  const exportCase = (includeAudio = false) => {
     if (!privacyService || !evaluationService) return;
+    if (includeAudio && !window.confirm("Export this Case with audio from linked calls? Exported copies are not managed by MOSS's 72-hour cleanup policy.")) return;
     void run(async () => {
-      const result = await privacyService.exportCase(caseId);
-      setMessage(`Exported ${result.fileCount} files to ${result.path}`);
+      const result = await privacyService.exportCase(caseId, includeAudio);
+      setMessage(`Exported ${result.fileCount} files${includeAudio ? " with audio" : " without audio"} to ${result.path}`);
       await refresh(evaluationService);
     });
   };
@@ -122,7 +124,8 @@ export default function EvaluationPanel({
         <div><h3>Evaluation and privacy</h3><p>Trace effective preparation, audit isolation, and control the complete local Case lifecycle.</p></div>
         <div>
           <button type="button" disabled={busy} onClick={() => evaluationService && void run(() => refresh(evaluationService))}><RefreshCw size={14} /> Refresh</button>
-          <button type="button" disabled={busy} onClick={exportCase}><Download size={14} /> Export</button>
+          <button type="button" disabled={busy} onClick={() => exportCase(false)}><Download size={14} /> Export</button>
+          <button type="button" disabled={busy} onClick={() => exportCase(true)}><FileArchive size={14} /> Export with audio</button>
           <button className="danger" type="button" disabled={busy} onClick={deleteCase}><Trash2 size={14} /> Delete</button>
         </div>
       </header>

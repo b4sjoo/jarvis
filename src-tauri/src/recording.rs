@@ -1112,6 +1112,7 @@ mod tests {
                 relative_path: relative_path.to_string(),
                 gap_count: 0,
             }],
+            retention_actions: Vec::new(),
             failure_stage: None,
             last_error: None,
             retryable: false,

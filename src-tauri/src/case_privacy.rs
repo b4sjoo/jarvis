@@ -65,12 +65,19 @@ pub fn export_case_bundle(
     case_id: String,
     metadata_json: String,
     call_session_ids: Vec<String>,
+    include_audio: Option<bool>,
 ) -> Result<CaseExportResult, String> {
     let app_data = app
         .path()
         .app_data_dir()
         .map_err(|error| format!("Failed to resolve app data directory: {error}"))?;
-    export_at_root(&app_data, &case_id, &metadata_json, &call_session_ids)
+    export_at_root(
+        &app_data,
+        &case_id,
+        &metadata_json,
+        &call_session_ids,
+        include_audio.unwrap_or(false),
+    )
 }
 
 #[tauri::command]
@@ -113,6 +120,7 @@ fn export_at_root(
     case_id: &str,
     metadata_json: &str,
     call_session_ids: &[String],
+    include_audio: bool,
 ) -> Result<CaseExportResult, String> {
     validate_identifier(case_id, "case id")?;
     validate_session_ids(call_session_ids)?;
@@ -155,6 +163,7 @@ fn export_at_root(
             &content_root,
             Path::new("materials"),
             &mut stats,
+            None,
         )?;
     }
     for session_id in normalized_session_ids(call_session_ids) {
@@ -165,6 +174,7 @@ fn export_at_root(
                 &session_root,
                 &Path::new("recordings").join(&session_id),
                 &mut stats,
+                (!include_audio).then_some(crate::call_audio_evidence::AUDIO_DIR),
             )?;
         }
     }
@@ -358,6 +368,7 @@ fn archive_directory(
     source_root: &Path,
     archive_root: &Path,
     stats: &mut ArchiveStats,
+    excluded_root_directory: Option<&str>,
 ) -> Result<(), String> {
     reject_symlink(source_root)?;
     if !source_root.is_dir() {
@@ -369,6 +380,9 @@ fn archive_directory(
         .map_err(|error| format!("Failed to inspect Case export source: {error}"))?;
     entries.sort_by_key(|entry| entry.file_name());
     for entry in entries {
+        if excluded_root_directory.is_some_and(|excluded| entry.file_name() == excluded) {
+            continue;
+        }
         let path = entry.path();
         reject_symlink(&path)?;
         let archive_path = archive_root.join(entry.file_name());
@@ -376,7 +390,7 @@ fn archive_directory(
             .metadata()
             .map_err(|error| format!("Failed to inspect Case export item: {error}"))?;
         if metadata.is_dir() {
-            archive_directory(archive, &path, &archive_path, stats)?;
+            archive_directory(archive, &path, &archive_path, stats, None)?;
             continue;
         }
         if !metadata.is_file() {
@@ -526,19 +540,52 @@ mod tests {
             b"event",
         )
         .unwrap();
+        fs::create_dir_all(root.join("call-session-recordings/call-1/audio")).unwrap();
+        fs::write(
+            root.join("call-session-recordings/call-1/audio-manifest.json"),
+            b"{}",
+        )
+        .unwrap();
+        fs::write(
+            root.join("call-session-recordings/call-1/audio/them.wav"),
+            b"audio",
+        )
+        .unwrap();
 
         let exported = export_at_root(
             &root,
             "case-1",
             r#"{"version":1,"case":{"id":"case-1"}}"#,
             &["call-1".to_string()],
+            false,
         )
         .unwrap();
-        assert_eq!(exported.file_count, 3);
+        assert_eq!(exported.file_count, 4);
         let mut archive = ZipArchive::new(File::open(&exported.path).unwrap()).unwrap();
         assert!(archive.by_name("case-export.json").is_ok());
         assert!(archive.by_name("materials/material-1/original.txt").is_ok());
         assert!(archive.by_name("recordings/call-1/events.jsonl").is_ok());
+        assert!(archive
+            .by_name("recordings/call-1/audio-manifest.json")
+            .is_ok());
+        assert!(archive
+            .by_name("recordings/call-1/audio/them.wav")
+            .is_err());
+        drop(archive);
+
+        std::thread::sleep(std::time::Duration::from_millis(2));
+        let with_audio = export_at_root(
+            &root,
+            "case-1",
+            r#"{"version":1,"case":{"id":"case-1"}}"#,
+            &["call-1".to_string()],
+            true,
+        )
+        .unwrap();
+        let mut archive = ZipArchive::new(File::open(&with_audio.path).unwrap()).unwrap();
+        assert!(archive
+            .by_name("recordings/call-1/audio/them.wav")
+            .is_ok());
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -557,6 +604,12 @@ mod tests {
             b"event",
         )
         .unwrap();
+        fs::create_dir_all(root.join("call-session-recordings/call-1/audio")).unwrap();
+        fs::write(
+            root.join("call-session-recordings/call-1/audio/them.wav"),
+            b"audio",
+        )
+        .unwrap();
 
         let staged = stage_at_root(&root, "delete-1", "case-1", &["call-1".to_string()]).unwrap();
         assert!(staged.staged_content);
@@ -570,6 +623,9 @@ mod tests {
         assert!(root
             .join("call-session-recordings/call-1/events.jsonl")
             .is_file());
+        assert!(root
+            .join("call-session-recordings/call-1/audio/them.wav")
+            .is_file());
 
         stage_at_root(&root, "delete-2", "case-1", &["call-1".to_string()]).unwrap();
         assert!(finalize_at_root(&root, "delete-2").unwrap());
@@ -582,7 +638,7 @@ mod tests {
     fn rejects_traversal_and_symlink_export_sources() {
         let root = test_root();
         assert!(stage_at_root(&root, "delete-1", "../case", &[]).is_err());
-        assert!(export_at_root(&root, "../case", "{}", &[]).is_err());
+        assert!(export_at_root(&root, "../case", "{}", &[], false).is_err());
 
         #[cfg(unix)]
         {
@@ -594,7 +650,7 @@ mod tests {
                 root.join("content-sources/case-1/leak.txt"),
             )
             .unwrap();
-            assert!(export_at_root(&root, "case-1", "{}", &[]).is_err());
+            assert!(export_at_root(&root, "case-1", "{}", &[], false).is_err());
         }
         fs::remove_dir_all(root).unwrap();
     }

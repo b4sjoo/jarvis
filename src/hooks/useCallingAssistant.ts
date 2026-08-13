@@ -272,6 +272,7 @@ export function useCallingAssistant() {
   >([]);
   const audioRecordingManifestRef = useRef<CallAudioManifest | null>(null);
   const audioRecordingDesiredRef = useRef(false);
+  const audioHealthObservationRef = useRef("");
   const [audioRecordingManifest, setAudioRecordingManifest] =
     useState<CallAudioManifest | null>(null);
   const [audioRecordingDesired, setAudioRecordingDesired] = useState(false);
@@ -384,6 +385,7 @@ export function useCallingAssistant() {
         throw new Error("Active audio evidence has no local manifest projection.");
       }
       const stoppedAt = Date.now();
+      const stopStartedAt = performance.now();
       const manifest = await stopCallAudioEvidence({
         callSessionId: current.callSessionId,
         expectedRevision: current.audioRecordingRevision,
@@ -405,6 +407,7 @@ export function useCallingAssistant() {
           captureGeneration: status.captureGeneration,
           channels: manifest.channels,
           chunkCount: manifest.chunks.length,
+          stopDurationMs: Math.round(performance.now() - stopStartedAt),
         },
         stoppedAt
       );
@@ -634,6 +637,51 @@ export function useCallingAssistant() {
     const interval = window.setInterval(cleanup, 60 * 60 * 1_000);
     return () => window.clearInterval(interval);
   }, [nativeRuntimeAvailable, refreshCallRecordings]);
+
+  useEffect(() => {
+    if (!nativeRuntimeAvailable || !audioRecordingDesired) {
+      audioHealthObservationRef.current = "";
+      return;
+    }
+    let disposed = false;
+    const observe = async () => {
+      try {
+        const status = await getActiveCallAudioStatus();
+        if (disposed || !status.active) return;
+        const signature = JSON.stringify({
+          callSessionId: status.callSessionId,
+          captureGeneration: status.captureGeneration,
+          themOverflowCount: status.themOverflowCount,
+          meOverflowCount: status.meOverflowCount,
+          microphoneFailure: status.microphoneFailure,
+        });
+        if (signature === audioHealthObservationRef.current) return;
+        audioHealthObservationRef.current = signature;
+        queueRecordingEvent("audio-evidence-lifecycle", {
+          eventType: "health-observed",
+          ...status,
+        });
+        if (
+          status.microphoneFailure ||
+          status.themOverflowCount > 0 ||
+          status.meOverflowCount > 0
+        ) {
+          setAudioRecordingError(
+            status.microphoneFailure ||
+              "Call audio evidence has a writer queue gap. Live assistance is continuing."
+          );
+        }
+      } catch (error) {
+        if (!disposed) setAudioRecordingError(errorMessage(error));
+      }
+    };
+    void observe();
+    const interval = window.setInterval(observe, 2_000);
+    return () => {
+      disposed = true;
+      window.clearInterval(interval);
+    };
+  }, [audioRecordingDesired, nativeRuntimeAvailable, queueRecordingEvent]);
 
   const executeAdvisor = useCallback(
     async (owner: ActiveCallRuntime, force = false) => {
@@ -1539,11 +1587,27 @@ export function useCallingAssistant() {
   }, [stopAudioEvidenceForCapture]);
 
   const pause = useCallback(async () => {
-    await stopAndDrainCapture();
+    let captureStopError: unknown;
+    try {
+      await stopAndDrainCapture();
+    } catch (error) {
+      captureStopError = error;
+    }
     if (audioRecordingDesiredRef.current) {
       await stopAudioEvidenceForCapture(runtimeRef.current, "call-paused").catch(
-        (error) => setAudioRecordingError(errorMessage(error))
+        (error) => {
+          setAudioRecordingError(errorMessage(error));
+          recordingRef.current?.markIncomplete(
+            `audio-evidence-pause-stop:${errorMessage(error)}`
+          );
+        }
       );
+    }
+    if (captureStopError) {
+      audioRecordingDesiredRef.current = false;
+      setAudioRecordingDesired(false);
+      setAudioRecordingArmed(false);
+      throw captureStopError;
     }
     abortOperations("call-paused");
     runtimeRef.current.dispatch({
@@ -1655,7 +1719,15 @@ export function useCallingAssistant() {
 
   const end = useCallback(async () => {
     const owner = runtimeRef.current;
-    await stopAndDrainCapture();
+    let captureStopError: unknown;
+    try {
+      await stopAndDrainCapture();
+    } catch (error) {
+      captureStopError = error;
+      recordingRef.current?.markIncomplete(
+        `native-capture-stop:${errorMessage(error)}`
+      );
+    }
     await stopAudioEvidenceForCapture(owner, "call-ended").catch((error) => {
       setAudioRecordingError(errorMessage(error));
       recordingRef.current?.markIncomplete(
@@ -1665,6 +1737,7 @@ export function useCallingAssistant() {
     audioRecordingDesiredRef.current = false;
     setAudioRecordingDesired(false);
     setAudioRecordingArmed(false);
+    if (captureStopError) throw captureStopError;
     abortOperations("call-closing");
     owner.dispatch({ type: "CloseCall", occurredAt: Date.now() });
     publish();

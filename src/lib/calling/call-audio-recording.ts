@@ -37,6 +37,12 @@ export interface CallAudioManifest {
   deletedAt: number | null;
   channels: CallAudioChannelStatus[];
   chunks: CallAudioChunk[];
+  retentionActions: Array<{
+    action: string;
+    actor: string;
+    occurredAt: number;
+    audioRecordingRevision: number;
+  }>;
   failureStage: string | null;
   lastError: string | null;
   retryable: boolean;
@@ -123,9 +129,13 @@ export function preserveCallAudioRecording(input: {
 export function restoreTemporaryCallAudioRetention(input: {
   callSessionId: string;
   expectedRevision: number;
+  occurredAt?: number;
 }) {
   requireTauriRuntime("Call audio retention");
-  return invoke<CallAudioManifest>("restore_temporary_call_audio_retention", input);
+  return invoke<CallAudioManifest>("restore_temporary_call_audio_retention", {
+    ...input,
+    occurredAt: input.occurredAt ?? Date.now(),
+  });
 }
 
 export function deleteCallAudioRecording(input: {

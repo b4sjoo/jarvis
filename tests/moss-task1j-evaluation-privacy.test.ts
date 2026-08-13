@@ -139,7 +139,8 @@ test("Task 1J deletion stages files before database removal and preserves a dura
   assert.match(privacy, /state = 'db-deleted'/);
   assert.doesNotMatch(privacy, /ai_providers|stt_providers|keychain/i);
   assert.match(privacy, /providerSecretsIncluded: false/);
-  assert.match(privacy, /rawAudioIncluded: false/);
+  assert.match(privacy, /exportCase\(caseId: string, includeAudio = false\)/);
+  assert.match(privacy, /rawAudioIncluded: includeAudio/);
   assert.match(native, /reject_symlink/);
 });
 
@@ -178,7 +179,9 @@ test("Task 1J exposes one dashboard for trace, attribution, isolation, export, a
   const route = readFileSync("src/pages/cases/index.tsx", "utf8");
   assert.match(page, /First validation domain readiness/);
   assert.match(page, /Only `visible` receipts are eligible for attribution/);
-  assert.match(page, /exportCase\(caseId\)/);
+  assert.match(page, /exportCase\(caseId, includeAudio\)/);
+  assert.match(page, /exportCase\(false\)/);
+  assert.match(page, /exportCase\(true\)/);
   assert.match(page, /deleteCase\(caseId\)/);
   assert.match(evaluation, /case-privacy:\$\{row\.action\}/);
   assert.match(evaluation, /FROM case_privacy_audits WHERE case_id_hash = \?/);

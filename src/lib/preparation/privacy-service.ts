@@ -52,6 +52,7 @@ export interface CasePrivacyNativeTransport {
     caseId: string;
     metadataJson: string;
     callSessionIds: string[];
+    includeAudio: boolean;
   }): Promise<CaseExportResult>;
   stageDeletion(input: {
     operationId: string;
@@ -124,7 +125,7 @@ export class CasePrivacyService {
     return service;
   }
 
-  async exportCase(caseId: string): Promise<CaseExportResult> {
+  async exportCase(caseId: string, includeAudio = false): Promise<CaseExportResult> {
     const caseRows = await this.database.select<Record<string, unknown>[]>(
       "SELECT * FROM cases WHERE id = ?",
       [caseId]
@@ -155,7 +156,7 @@ export class CasePrivacyService {
         case: caseRows[0],
         tables,
         privacy: {
-          rawAudioIncluded: false,
+          rawAudioIncluded: includeAudio,
           providerSecretsIncluded: false,
           materialBase64Included: false,
         },
@@ -164,6 +165,7 @@ export class CasePrivacyService {
         caseId,
         metadataJson: JSON.stringify(metadata),
         callSessionIds: linkedSessions.map((session) => session.id),
+        includeAudio,
       });
       const itemCounts = Object.fromEntries(
         Object.entries(tables).map(([name, rows]) => [name, rows.length])
@@ -171,6 +173,7 @@ export class CasePrivacyService {
       await this.writeAudit(caseIdHash, operationId, "export", "complete", {
         ...itemCounts,
         exportedFiles: result.fileCount,
+        rawAudioIncluded: includeAudio,
       });
       return result;
     } catch (error) {

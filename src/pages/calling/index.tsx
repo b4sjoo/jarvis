@@ -25,6 +25,13 @@ const formatAudioTime = (durationMs: number) => {
   return `${String(minutes).padStart(2, "0")}:${String(seconds % 60).padStart(2, "0")}`;
 };
 
+const estimatePcmStorage = (durationMs: number) => {
+  const bytes = Math.max(0, durationMs / 1_000) * 48_000 * 2 * 2;
+  return bytes < 1_024 ** 2
+    ? `${Math.max(1, Math.round(bytes / 1_024))} KB`
+    : `${(bytes / 1_024 ** 2).toFixed(1)} MB`;
+};
+
 export default function CallingPage({
   controller,
   embedded = false,
@@ -71,7 +78,7 @@ export default function CallingPage({
   const audioStatus = controller.audioRecordingArmed
     ? "Armed"
     : audioIsWriting
-      ? `REC ${formatAudioTime(audioDurationMs)}`
+      ? `REC ${formatAudioTime(audioDurationMs)} · ~${estimatePcmStorage(audioDurationMs)}`
       : audioManifest?.state === "partial" || audioManifest?.state === "error"
         ? "Partial audio"
         : controller.audioRecordingDesired

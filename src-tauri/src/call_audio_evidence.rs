@@ -23,6 +23,7 @@ const TEMPORARY_RETENTION_MS: u64 = 72 * 60 * 60 * 1_000;
 const MAX_SESSION_ID_CHARS: usize = 160;
 const WRITER_QUEUE_CAPACITY: usize = 64;
 const MAX_CHUNK_DURATION_SECS: u64 = 15 * 60;
+const WRITER_STOP_TIMEOUT: Duration = Duration::from_millis(500);
 
 #[derive(Default)]
 pub struct CallAudioEvidenceState {
@@ -35,6 +36,7 @@ struct ActiveCallAudioCapture {
     them: ChannelWriterHandle,
     me: Option<ChannelWriterHandle>,
     microphone_stop: Option<Sender<()>>,
+    microphone_done: Option<Receiver<()>>,
     microphone_thread: Option<JoinHandle<()>>,
     microphone_error: Arc<Mutex<Option<String>>>,
 }
@@ -43,7 +45,8 @@ struct ChannelWriterHandle {
     channel: CallAudioChannel,
     sender: Option<SyncSender<Vec<f32>>>,
     overflow_count: Arc<AtomicU64>,
-    join: Option<JoinHandle<Result<Vec<CallAudioChunk>, String>>>,
+    completion: Option<Receiver<Result<Vec<CallAudioChunk>, String>>>,
+    join: Option<JoinHandle<()>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -146,11 +149,22 @@ pub struct CallAudioManifest {
     pub channels: Vec<CallAudioChannelStatus>,
     pub chunks: Vec<CallAudioChunk>,
     #[serde(default)]
+    pub retention_actions: Vec<CallAudioRetentionAction>,
+    #[serde(default)]
     pub failure_stage: Option<String>,
     #[serde(default)]
     pub last_error: Option<String>,
     #[serde(default)]
     pub retryable: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CallAudioRetentionAction {
+    pub action: String,
+    pub actor: String,
+    pub occurred_at: u64,
+    pub audio_recording_revision: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -196,6 +210,7 @@ pub(crate) fn empty_manifest(call_session_id: &str, requested_at: u64) -> CallAu
             empty_channel(CallAudioChannel::Me),
         ],
         chunks: Vec::new(),
+        retention_actions: Vec::new(),
         failure_stage: None,
         last_error: None,
         retryable: false,
@@ -327,6 +342,7 @@ pub fn preserve_call_audio_recording(
             manifest.state = CallAudioRecordingState::Preserved;
             manifest.expires_at = None;
             manifest.preserved_at = Some(occurred_at);
+            append_retention_action(manifest, "preserve", "user", occurred_at, 1);
             Ok(())
         },
     )
@@ -337,6 +353,7 @@ pub fn restore_temporary_call_audio_retention(
     app: AppHandle,
     call_session_id: String,
     expected_revision: u64,
+    occurred_at: u64,
 ) -> Result<CallAudioManifest, String> {
     let session_dir = resolve_session_dir(&app, &call_session_id)?;
     let closed_at = read_call_closed_at(&session_dir)?
@@ -347,6 +364,7 @@ pub fn restore_temporary_call_audio_retention(
         manifest.state = CallAudioRecordingState::RetainedTemporarily;
         manifest.expires_at = Some(closed_at.saturating_add(TEMPORARY_RETENTION_MS));
         manifest.preserved_at = None;
+        append_retention_action(manifest, "restore-temporary", "user", occurred_at, 1);
         Ok(())
     })
 }
@@ -359,7 +377,7 @@ pub fn delete_call_audio_recording(
     occurred_at: u64,
 ) -> Result<CallAudioManifest, String> {
     let session_dir = resolve_session_dir(&app, &call_session_id)?;
-    delete_at_session_dir(&session_dir, expected_revision, occurred_at)
+    delete_at_session_dir(&session_dir, expected_revision, occurred_at, "user")
 }
 
 #[tauri::command]
@@ -432,7 +450,7 @@ pub fn start_call_audio_evidence(
     )?;
 
     let microphone_error = Arc::new(Mutex::new(None));
-    let (me, microphone_stop, microphone_thread, microphone_failure) = match start_microphone_capture(
+    let (me, microphone_stop, microphone_done, microphone_thread, microphone_failure) = match start_microphone_capture(
         &session_dir,
         capture_generation,
         next_part(&manifest, CallAudioChannel::Me, capture_generation),
@@ -440,12 +458,14 @@ pub fn start_call_audio_evidence(
         input_device_id.as_deref(),
         microphone_error.clone(),
     ) {
-        Ok((writer, stop, thread)) => (Some(writer), Some(stop), Some(thread), None),
+        Ok((writer, stop, done, thread)) => {
+            (Some(writer), Some(stop), Some(done), Some(thread), None)
+        }
         Err(error) => {
             if let Ok(mut slot) = microphone_error.lock() {
                 *slot = Some(error.clone());
             }
-            (None, None, None, Some(error))
+            (None, None, None, None, Some(error))
         }
     };
 
@@ -472,6 +492,7 @@ pub fn start_call_audio_evidence(
         them,
         me,
         microphone_stop,
+        microphone_done,
         microphone_thread,
         microphone_error,
     });
@@ -580,8 +601,16 @@ fn stop_active_capture(
     if let Some(stop) = capture.microphone_stop.take() {
         let _ = stop.send(());
     }
-    if let Some(thread) = capture.microphone_thread.take() {
-        let _ = thread.join();
+    let microphone_stopped = capture
+        .microphone_done
+        .take()
+        .is_none_or(|done| done.recv_timeout(WRITER_STOP_TIMEOUT).is_ok());
+    if microphone_stopped {
+        if let Some(thread) = capture.microphone_thread.take() {
+            let _ = thread.join();
+        }
+    } else if let Ok(mut slot) = capture.microphone_error.lock() {
+        *slot = Some("Microphone capture did not stop within 500 ms.".to_string());
     }
     let them_overflow = capture.them.overflow_count.load(Ordering::Acquire);
     let me_overflow = capture
@@ -668,10 +697,11 @@ fn spawn_channel_writer_with_receiver(
 ) -> Result<ChannelWriterHandle, String> {
     let root = session_dir.to_path_buf();
     let thread_channel = channel.clone();
+    let (completion_sender, completion_receiver) = std::sync::mpsc::channel();
     let join = thread::Builder::new()
         .name(format!("moss-audio-{}", channel_name(&channel)))
         .spawn(move || {
-            write_channel_chunks(
+            let result = write_channel_chunks(
                 &root,
                 thread_channel,
                 capture_generation,
@@ -679,13 +709,15 @@ fn spawn_channel_writer_with_receiver(
                 sample_rate,
                 started_at,
                 receiver,
-            )
+            );
+            let _ = completion_sender.send(result);
         })
         .map_err(|error| format!("Failed to start audio writer: {error}"))?;
     Ok(ChannelWriterHandle {
         channel,
         sender: Some(sender),
         overflow_count,
+        completion: Some(completion_receiver),
         join: Some(join),
     })
 }
@@ -697,10 +729,16 @@ fn start_microphone_capture(
     started_at: u64,
     requested_device: Option<&str>,
     microphone_error: Arc<Mutex<Option<String>>>,
-) -> Result<(ChannelWriterHandle, Sender<()>, JoinHandle<()>), String> {
+) -> Result<(
+    ChannelWriterHandle,
+    Sender<()>,
+    Receiver<()>,
+    JoinHandle<()>,
+), String> {
     let requested_device = requested_device.map(str::to_string);
     let (startup_sender, startup_receiver) = channel::<Result<u32, String>>();
     let (stop_sender, stop_receiver) = channel::<()>();
+    let (done_sender, done_receiver) = channel::<()>();
     let (sample_sender, sample_receiver) = sync_channel::<Vec<f32>>(WRITER_QUEUE_CAPACITY);
     let microphone_sample_sender = sample_sender.clone();
     let overflow = Arc::new(AtomicU64::new(0));
@@ -784,6 +822,7 @@ fn start_microphone_capture(
                     *slot = Some(error);
                 }
             }
+            let _ = done_sender.send(());
         })
         .map_err(|error| format!("Failed to start microphone thread: {error}"))?;
 
@@ -791,12 +830,16 @@ fn start_microphone_capture(
         Ok(Ok(sample_rate)) => sample_rate,
         Ok(Err(error)) => {
             let _ = stop_sender.send(());
-            let _ = microphone_thread.join();
+            if done_receiver.recv_timeout(WRITER_STOP_TIMEOUT).is_ok() {
+                let _ = microphone_thread.join();
+            }
             return Err(error);
         }
         Err(_) => {
             let _ = stop_sender.send(());
-            let _ = microphone_thread.join();
+            if done_receiver.recv_timeout(WRITER_STOP_TIMEOUT).is_ok() {
+                let _ = microphone_thread.join();
+            }
             return Err("Microphone capture did not start within three seconds.".to_string());
         }
     };
@@ -814,11 +857,13 @@ fn start_microphone_capture(
         Ok(writer) => writer,
         Err(error) => {
             let _ = stop_sender.send(());
-            let _ = microphone_thread.join();
+            if done_receiver.recv_timeout(WRITER_STOP_TIMEOUT).is_ok() {
+                let _ = microphone_thread.join();
+            }
             return Err(error);
         }
     };
-    Ok((writer, stop_sender, microphone_thread))
+    Ok((writer, stop_sender, done_receiver, microphone_thread))
 }
 
 fn build_microphone_stream<T>(
@@ -881,14 +926,23 @@ fn finish_channel_writer(
     writer: &mut ChannelWriterHandle,
 ) -> Result<Vec<CallAudioChunk>, String> {
     writer.sender.take();
-    let Some(join) = writer.join.take() else {
+    let Some(completion) = writer.completion.take() else {
         return Err(format!(
             "{} audio writer is unavailable.",
             channel_name(&writer.channel)
         ));
     };
-    join.join()
-        .map_err(|_| format!("{} audio writer panicked.", channel_name(&writer.channel)))?
+    let result = completion.recv_timeout(WRITER_STOP_TIMEOUT).map_err(|_| {
+        format!(
+            "{} audio writer did not stop within 500 ms.",
+            channel_name(&writer.channel)
+        )
+    })?;
+    if let Some(join) = writer.join.take() {
+        join.join()
+            .map_err(|_| format!("{} audio writer panicked.", channel_name(&writer.channel)))?;
+    }
+    result
 }
 
 fn write_channel_chunks(
@@ -1156,6 +1210,7 @@ fn delete_at_session_dir(
     session_dir: &Path,
     expected_revision: u64,
     occurred_at: u64,
+    actor: &str,
 ) -> Result<CallAudioManifest, String> {
     let mut manifest = read_for_session_dir(session_dir)?
         .ok_or_else(|| "This session has no audio recording.".to_string())?;
@@ -1208,8 +1263,26 @@ fn delete_at_session_dir(
     for channel in &mut manifest.channels {
         channel.health = CallAudioChannelHealth::Deleted;
     }
+    append_retention_action(&mut manifest, "delete", actor, occurred_at, 0);
     write_for_session_dir(session_dir, &manifest)?;
     Ok(manifest)
+}
+
+fn append_retention_action(
+    manifest: &mut CallAudioManifest,
+    action: &str,
+    actor: &str,
+    occurred_at: u64,
+    future_revision_delta: u64,
+) {
+    manifest.retention_actions.push(CallAudioRetentionAction {
+        action: action.to_string(),
+        actor: actor.to_string(),
+        occurred_at,
+        audio_recording_revision: manifest
+            .audio_recording_revision
+            .saturating_add(future_revision_delta),
+    });
 }
 
 fn cleanup_expired_at_root(
@@ -1248,6 +1321,7 @@ fn cleanup_expired_at_root(
             &session_dir,
             manifest.audio_recording_revision,
             occurred_at,
+            "retention-policy",
         ) {
             Ok(_) => result.deleted_count = result.deleted_count.saturating_add(1),
             Err(error) => {
@@ -1356,10 +1430,18 @@ mod tests {
         let preserved = mutate_retention_at_dir(&session_dir, 1, |manifest| {
             manifest.retention_mode = CallAudioRetentionMode::Preserved;
             manifest.expires_at = None;
+            append_retention_action(manifest, "preserve", "user", 2_000, 1);
             Ok(())
         })
         .unwrap();
         assert_eq!(preserved.retention_mode, CallAudioRetentionMode::Preserved);
+        assert_eq!(preserved.retention_actions.len(), 1);
+        assert_eq!(preserved.retention_actions[0].action, "preserve");
+        assert_eq!(preserved.retention_actions[0].actor, "user");
+        assert_eq!(
+            preserved.retention_actions[0].audio_recording_revision,
+            preserved.audio_recording_revision
+        );
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -1374,6 +1456,9 @@ mod tests {
         let manifest = read_for_session_dir(&session_dir).unwrap().unwrap();
         assert_eq!(manifest.retention_mode, CallAudioRetentionMode::Deleted);
         assert!(manifest.deleted_at.is_some());
+        assert_eq!(manifest.retention_actions.len(), 1);
+        assert_eq!(manifest.retention_actions[0].action, "delete");
+        assert_eq!(manifest.retention_actions[0].actor, "retention-policy");
         fs::remove_dir_all(root).unwrap();
     }
 

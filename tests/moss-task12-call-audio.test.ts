@@ -21,6 +21,8 @@ test("Task 12 keeps call audio user-controlled, visible, and disabled by default
 test("Task 12 exposes retention, playback, and explicit audio export boundaries", () => {
   const sessions = source("src/pages/sessions/index.tsx");
   const recording = source("src/lib/calling/call-recording.ts");
+  const privacy = source("src/lib/preparation/privacy-service.ts");
+  const casePanel = source("src/pages/cases/EvaluationPanel.tsx");
 
   assert.match(sessions, /preserveCallAudioRecording/);
   assert.match(sessions, /restoreTemporaryCallAudioRetention/);
@@ -29,4 +31,7 @@ test("Task 12 exposes retention, playback, and explicit audio export boundaries"
   assert.match(sessions, /exportCallRecording\(status\.callSessionId, false\)/);
   assert.match(sessions, /exportCallRecording\(status\.callSessionId, true\)/);
   assert.match(recording, /includeAudio = false/);
+  assert.match(privacy, /exportCase\(caseId: string, includeAudio = false\)/);
+  assert.match(privacy, /rawAudioIncluded: includeAudio/);
+  assert.match(casePanel, /Export with audio/);
 });
