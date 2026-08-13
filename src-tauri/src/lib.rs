@@ -179,6 +179,7 @@ pub fn run() {
             case_material_extraction::extract_case_material,
             recording::start_call_recording,
             recording::append_call_recording_event,
+            recording::mark_call_recording_incomplete,
             recording::close_call_recording,
             recording::retry_call_recording_close,
             recording::abandon_call_recording,

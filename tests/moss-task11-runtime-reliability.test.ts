@@ -81,3 +81,14 @@ test("Task 11 sessions expose incomplete evidence instead of presenting a health
   assert.match(sessions, /status\.attemptedEventCount/);
   assert.match(sessions, /status\.droppedEventCount/);
 });
+
+test("Task 11 records UI projection detach instead of hiding a remount gap", () => {
+  const hook = source("src/hooks/useCallingAssistant.ts");
+  const runtime = source("src/lib/calling/active-call-runtime.ts");
+  const recording = source("src-tauri/src/recording.rs");
+  assert.match(runtime, /bindTransitionObserver/);
+  assert.match(hook, /runtime-projection-lifecycle/);
+  assert.match(hook, /runtime-projection-detached/);
+  assert.match(hook, /persistIncomplete/);
+  assert.match(recording, /mark_call_recording_incomplete/);
+});

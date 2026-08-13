@@ -65,6 +65,11 @@ export type ActiveCallTransitionObserver = (
   transition: ActiveCallTransition
 ) => void;
 
+export interface ActiveCallTransitionObserverBinding {
+  ownerToken: string;
+  detach: () => boolean;
+}
+
 const noOperations = (): Record<ModelRouteKind, string | null> => ({
   runtime: null,
   advisor: null,
@@ -239,7 +244,10 @@ export function reduceActiveCallRuntime(
 export class ActiveCallRuntime {
   #state: ActiveCallRuntimeState;
   readonly #guidance = new StableGuidanceStore();
-  #transitionObserver?: ActiveCallTransitionObserver;
+  #transitionObserver?: {
+    ownerToken: string;
+    observer: ActiveCallTransitionObserver;
+  };
 
   constructor(input: {
     callSessionId: string;
@@ -252,22 +260,43 @@ export class ActiveCallRuntime {
       createdAt: input.createdAt ?? Date.now(),
       preparation: input.preparation,
     });
-    this.#transitionObserver = input.onTransition;
+    if (input.onTransition) {
+      this.#transitionObserver = {
+        ownerToken: "constructor",
+        observer: input.onTransition,
+      };
+    }
   }
 
   snapshot() {
     return structuredClone(this.#state);
   }
 
-  setTransitionObserver(observer?: ActiveCallTransitionObserver) {
-    this.#transitionObserver = observer;
+  bindTransitionObserver(
+    ownerToken: string,
+    observer: ActiveCallTransitionObserver
+  ): ActiveCallTransitionObserverBinding {
+    const normalizedOwnerToken = ownerToken.trim();
+    if (!normalizedOwnerToken) {
+      throw new Error("Transition observer owner token is required.");
+    }
+    const registration = { ownerToken: normalizedOwnerToken, observer };
+    this.#transitionObserver = registration;
+    return {
+      ownerToken: normalizedOwnerToken,
+      detach: () => {
+        if (this.#transitionObserver !== registration) return false;
+        this.#transitionObserver = undefined;
+        return true;
+      },
+    };
   }
 
   dispatch(command: ActiveCallCommand) {
     const before = this.snapshot();
     this.#state = reduceActiveCallRuntime(this.#state, command);
     const after = this.snapshot();
-    this.#transitionObserver?.({
+    this.#transitionObserver?.observer({
       command: structuredClone(command),
       before,
       after,

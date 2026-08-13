@@ -69,6 +69,7 @@ export type CallRecordingEventKind =
   | "model-operation-dispatched"
   | "model-operation-returned"
   | "runtime-advisor-authority"
+  | "runtime-projection-lifecycle"
   | "human-evaluation"
   | "preparation-binding"
   | "snapshot-artifact-receipt"
@@ -91,6 +92,10 @@ export interface CallRecordingTransport {
   append(input: {
     callSessionId: string;
     eventPayload: string;
+  }): Promise<CallRecordingStatus>;
+  markIncomplete?(input: {
+    callSessionId: string;
+    reason: string;
   }): Promise<CallRecordingStatus>;
   close(input: {
     callSessionId: string;
@@ -117,6 +122,10 @@ const tauriTransport: CallRecordingTransport = {
   append: (input) => {
     requireTauriRuntime("Call recording");
     return invoke("append_call_recording_event", input);
+  },
+  markIncomplete: (input) => {
+    requireTauriRuntime("Call recording integrity");
+    return invoke("mark_call_recording_incomplete", input);
   },
   close: (input) => {
     requireTauriRuntime("Call recording");
@@ -217,6 +226,18 @@ export class CallRecordingProjection {
   markIncomplete(reason: string) {
     const normalized = reason.trim().slice(0, 500);
     if (normalized) this.#incompletenessReasons.add(normalized);
+    return this.status;
+  }
+
+  async persistIncomplete(reason: string) {
+    this.markIncomplete(reason);
+    if (!this.#status) throw new Error("Call recording has not started.");
+    if (!this.#transport.markIncomplete) return this.status;
+    this.#status = await this.#transport.markIncomplete({
+      callSessionId: this.callSessionId,
+      reason,
+    });
+    this.#adoptStatus(this.#status);
     return this.status;
   }
 

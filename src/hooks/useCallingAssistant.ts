@@ -32,6 +32,7 @@ import {
   updateNativeVadConfig,
   type ActiveCallRuntimeState,
   type ActiveCallTransition,
+  type ActiveCallTransitionObserverBinding,
   type AudioSettings,
   type CallRecordingEventKind,
   type CallRecordingStatus,
@@ -250,6 +251,10 @@ export function useCallingAssistant() {
   const recordingRef = useRef<CallRecordingProjection | null>(null);
   const recordingWriterRef = useRef<SessionBoundRecordingWriter | null>(null);
   const handoffServiceRef = useRef<RuntimeHandoffService | null>(null);
+  const runtimeObserverBindingRef = useRef<{
+    owner: ActiveCallRuntime;
+    binding: ActiveCallTransitionObserverBinding;
+  } | null>(null);
   const [recordingStatus, setRecordingStatus] =
     useState<CallRecordingStatus | null>(null);
   const [recordingError, setRecordingError] = useState<string | null>(null);
@@ -346,12 +351,22 @@ export function useCallingAssistant() {
   );
 
   const bindRuntimeRecording = useCallback(
-    (owner: ActiveCallRuntime, handoff: RuntimeHandoffService) => {
+    (
+      owner: ActiveCallRuntime,
+      handoff: RuntimeHandoffService,
+      reason = "recording-bound"
+    ) => {
       const binding = captureEvidenceBinding(owner);
-      owner.setTransitionObserver((transition) => {
+      if (!binding) {
+        throw new Error("The runtime evidence binding is unavailable.");
+      }
+      runtimeObserverBindingRef.current?.binding.detach();
+      const observerBinding = owner.bindTransitionObserver(
+        `call-recording:${owner.snapshot().callSessionId}`,
+        (transition) => {
         if (
           runtimeRef.current !== owner ||
-          binding?.writer.callSessionId !== transition.after.callSessionId
+          binding.writer.callSessionId !== transition.after.callSessionId
         ) {
           return;
         }
@@ -361,7 +376,59 @@ export function useCallingAssistant() {
           transition.after.updatedAt
         );
         handoff.recordTransition(transition);
+        }
+      );
+      runtimeObserverBindingRef.current = {
+        owner,
+        binding: observerBinding,
+      };
+      binding.writer.queue("runtime-projection-lifecycle", {
+        eventType: "attached",
+        ownerToken: observerBinding.ownerToken,
+        reason,
+        runtimeEpoch: owner.snapshot().runtimeEpoch,
+        evidenceRevision: owner.snapshot().evidenceRevision,
       });
+    },
+    [captureEvidenceBinding]
+  );
+
+  const detachRuntimeRecording = useCallback((owner: ActiveCallRuntime) => {
+    const current = runtimeObserverBindingRef.current;
+    if (!current || current.owner !== owner) return false;
+    const detached = current.binding.detach();
+    if (runtimeObserverBindingRef.current === current) {
+      runtimeObserverBindingRef.current = null;
+    }
+    return detached;
+  }, []);
+
+  const discloseRuntimeProjectionGap = useCallback(
+    (owner: ActiveCallRuntime, reason: string) => {
+      const evidence = captureEvidenceBinding(owner);
+      if (!evidence) return;
+      const normalizedReason = `runtime-projection-detached:${reason}`;
+      evidence.recording.markIncomplete(normalizedReason);
+      void evidence.writer
+        .record("runtime-projection-lifecycle", {
+          eventType: "detached",
+          reason,
+          runtimeEpoch: owner.snapshot().runtimeEpoch,
+          evidenceRevision: owner.snapshot().evidenceRevision,
+          recoverable: true,
+        })
+        .catch(() => undefined)
+        .then(() => evidence.recording.persistIncomplete(normalizedReason))
+        .then((status) => {
+          if (recordingRef.current === evidence.recording && status) {
+            setRecordingStatus(status);
+          }
+        })
+        .catch((error) => {
+          if (recordingRef.current === evidence.recording) {
+            setRecordingError(errorMessage(error));
+          }
+        });
     },
     [captureEvidenceBinding]
   );
@@ -1146,7 +1213,7 @@ export function useCallingAssistant() {
     abortOperations("call-starting");
     setRecordingError(null);
     if (owner.snapshot().state !== "start-failed") {
-      owner.setTransitionObserver(undefined);
+      detachRuntimeRecording(owner);
       owner = makeRuntime(options?.snapshot);
       runtimeRef.current = owner;
       recordingRef.current = null;
@@ -1235,6 +1302,7 @@ export function useCallingAssistant() {
   }, [
     abortOperations,
     bindRuntimeRecording,
+    detachRuntimeRecording,
     nativeRuntimeAvailable,
     publish,
     queueRecordingEvent,
@@ -1318,6 +1386,7 @@ export function useCallingAssistant() {
       if (!writer || writer.callSessionId !== recording.callSessionId || !handoff) {
         throw new Error("The active call evidence binding is unavailable.");
       }
+      let handoffObserver: ActiveCallTransitionObserverBinding | null = null;
       try {
         await handoff.drain();
         const attemptedAt = Date.now();
@@ -1332,9 +1401,13 @@ export function useCallingAssistant() {
           attemptedAt
         );
         await recording.drain();
-        owner.setTransitionObserver((transition) => {
-          handoff.recordTransition(transition);
-        });
+        detachRuntimeRecording(owner);
+        handoffObserver = owner.bindTransitionObserver(
+          `runtime-handoff:${owner.snapshot().callSessionId}`,
+          (transition) => {
+            handoff.recordTransition(transition);
+          }
+        );
         const status = retry
           ? await recording.retryClose(Date.now())
           : await recording.close(Date.now());
@@ -1342,9 +1415,13 @@ export function useCallingAssistant() {
         owner.dispatch({ type: "CloseSucceeded", occurredAt: Date.now() });
         publish();
         await handoff.drain();
+        handoffObserver.detach();
+        handoffObserver = null;
         setRecordingError(null);
         void refreshCallRecordings();
       } catch (error) {
+        handoffObserver?.detach();
+        handoffObserver = null;
         const runtimeState = owner.snapshot().state;
         if (runtimeState === "closing") {
           bindRuntimeRecording(owner, handoff);
@@ -1366,11 +1443,11 @@ export function useCallingAssistant() {
         publish();
         throw error;
       }
-      owner.setTransitionObserver(undefined);
       publish();
     },
     [
       bindRuntimeRecording,
+      detachRuntimeRecording,
       publish,
       refreshCallRecordings,
       refreshRecoverableRecordings,
@@ -1434,11 +1511,11 @@ export function useCallingAssistant() {
     await handoffServiceRef.current?.drain();
     const status = await recording.abandon(Date.now());
     setRecordingStatus(status);
-    owner.setTransitionObserver(undefined);
+    detachRuntimeRecording(owner);
     setRecordingError(null);
     void refreshCallRecordings();
     publish();
-  }, [publish, refreshCallRecordings]);
+  }, [detachRuntimeRecording, publish, refreshCallRecordings]);
 
   const retryRecoveredRecording = useCallback(
     async (callSessionId: string) => {
@@ -1654,13 +1731,32 @@ export function useCallingAssistant() {
     [queueRecordingEvent]
   );
 
-  useEffect(
-    () => () => {
+  useEffect(() => {
+    const owner = runtimeRef.current;
+    const handoff = handoffServiceRef.current;
+    if (handoff && captureEvidenceBinding(owner)) {
+      bindRuntimeRecording(owner, handoff, "calling-ui-mounted");
+    }
+    return () => {
+      const activeOwner = runtimeRef.current;
+      const state = activeOwner.snapshot().state;
       abortOperations("calling-ui-unmounted");
-      runtimeRef.current.setTransitionObserver(undefined);
-    },
-    [abortOperations]
-  );
+      if (
+        ["starting", "live", "paused", "recovering", "closing", "close-failed"].includes(
+          state
+        )
+      ) {
+        discloseRuntimeProjectionGap(activeOwner, "calling-ui-unmounted");
+      }
+      detachRuntimeRecording(activeOwner);
+    };
+  }, [
+    abortOperations,
+    bindRuntimeRecording,
+    captureEvidenceBinding,
+    detachRuntimeRecording,
+    discloseRuntimeProjectionGap,
+  ]);
 
   return {
     nativeRuntimeAvailable,

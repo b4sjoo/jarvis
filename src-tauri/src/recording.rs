@@ -140,6 +140,16 @@ pub fn append_call_recording_event(
 }
 
 #[tauri::command]
+pub fn mark_call_recording_incomplete(
+    app: AppHandle,
+    call_session_id: String,
+    reason: String,
+) -> Result<CallRecordingStatus, String> {
+    let root = recordings_root(&app)?;
+    mark_incomplete_at_root(&root, &call_session_id, &reason)
+}
+
+#[tauri::command]
 pub fn close_call_recording(
     app: AppHandle,
     call_session_id: String,
@@ -313,6 +323,34 @@ fn append_at_root(
     status.event_count = event.sequence;
     status.attempted_event_count = status.attempted_event_count.saturating_add(1);
     status.persisted_event_count = event.sequence;
+    write_status(&session_dir, &status)?;
+    Ok(status)
+}
+
+fn mark_incomplete_at_root(
+    recordings_root: &Path,
+    call_session_id: &str,
+    reason: &str,
+) -> Result<CallRecordingStatus, String> {
+    validate_session_id(call_session_id)?;
+    let session_dir = session_dir(recordings_root, call_session_id)?;
+    reject_symlink(&session_dir)?;
+    let mut status = read_status(&session_dir)?;
+    if !matches!(
+        status.state,
+        CallRecordingState::Open | CallRecordingState::CloseFailed
+    ) {
+        return Err("Call recording no longer accepts integrity updates.".to_string());
+    }
+    let normalized = reason.trim();
+    if normalized.is_empty() {
+        return Err("Call recording incompleteness reason is required.".to_string());
+    }
+    let normalized: String = normalized.chars().take(500).collect();
+    status.health = CallRecordingHealth::Incomplete;
+    if !status.incompleteness_reasons.contains(&normalized) {
+        status.incompleteness_reasons.push(normalized);
+    }
     write_status(&session_dir, &status)?;
     Ok(status)
 }
@@ -958,6 +996,26 @@ mod tests {
         assert_eq!(manifest.health, CallRecordingHealth::Incomplete);
         assert_eq!(manifest.terminal_state, "closed");
         assert_eq!(list_all_at_root(&root).unwrap()[0].integrity_error, None);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn observer_detach_marks_an_open_recording_incomplete_immediately() {
+        let root = test_root();
+        let session_id = "call-test-observer-detach";
+        start_at_root(&root, session_id, 1).unwrap();
+        let status = mark_incomplete_at_root(
+            &root,
+            session_id,
+            "runtime-projection-detached:calling-ui-unmounted",
+        )
+        .unwrap();
+        assert_eq!(status.health, CallRecordingHealth::Incomplete);
+        assert_eq!(status.incompleteness_reasons.len(), 1);
+        assert_eq!(
+            list_recoverable_at_root(&root).unwrap()[0].health,
+            CallRecordingHealth::Incomplete
+        );
         fs::remove_dir_all(root).unwrap();
     }
 

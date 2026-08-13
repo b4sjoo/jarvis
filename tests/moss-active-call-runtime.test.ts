@@ -90,3 +90,20 @@ test("runtime authorizes actionable evidence despite a negative model recommenda
     reason: "actionable-disposition",
   });
 });
+
+test("transition observer rebinding is single-owner and stale detach is harmless", () => {
+  const runtime = new ActiveCallRuntime({ callSessionId: "call-1", createdAt: 1 });
+  const observed: string[] = [];
+  const first = runtime.bindTransitionObserver("recording:call-1", () => {
+    observed.push("first");
+  });
+  const second = runtime.bindTransitionObserver("recording:call-1", () => {
+    observed.push("second");
+  });
+  assert.equal(first.detach(), false);
+  runtime.dispatch({ type: "StartCall", occurredAt: 2 });
+  assert.deepEqual(observed, ["second"]);
+  assert.equal(second.detach(), true);
+  runtime.dispatch({ type: "CaptureStarted", occurredAt: 3 });
+  assert.deepEqual(observed, ["second"]);
+});
