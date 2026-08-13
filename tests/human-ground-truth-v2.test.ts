@@ -9,6 +9,11 @@ import {
   importLegacyQuestionEvaluationV2,
   normalizeArtifactIntentEvaluationFamily,
 } from "../src/lib/meeting/human-ground-truth-v2.js";
+import {
+  buildHumanEvaluationProjectionMaterializationRevisionV2,
+  canRefreshHumanEvaluationProjectionFromTraceV2,
+  summarizeHumanEvaluationProjectionMaterializationV2,
+} from "../src/lib/meeting/human-evaluation-projection-materialization.js";
 import type {
   MeetingTrace,
   QuestionHumanEvaluation,
@@ -20,6 +25,88 @@ const SUBJECT = {
   traceIds: ["trace_1"],
   sourceTurnIds: ["turn_1"],
 };
+
+test("materializes projections by semantic revision and one observed trace", () => {
+  const event = createHumanGroundTruthEventV2({
+    eventId: "event_projection_revision",
+    sessionId: "session_1",
+    subject: {
+      ...SUBJECT,
+      traceIds: ["trace_1", "trace_related"],
+    },
+    source: "explicit-ui",
+    fact: {
+      kind: "expected-runtime-action",
+      expectedAction: "advise",
+    },
+    now: 1,
+  });
+  const first = deriveHumanEvaluationProjectionV2({
+    sessionId: "session_1",
+    subject: event.subject,
+    events: [event],
+    observed: {
+      traceId: "trace_1",
+      traceHash: "trace-hash-1",
+      runtimeAction: "ignore",
+    },
+    now: 2,
+  });
+  const evidenceRefresh = {
+    ...first,
+    computedAt: 3,
+    observed: {
+      ...first.observed!,
+      traceHash: "trace-hash-2",
+    },
+    inputTraceHashes: ["trace-hash-2"],
+  };
+  const changedFact = {
+    ...evidenceRefresh,
+    observed: {
+      ...evidenceRefresh.observed,
+      runtimeAction: "advise" as const,
+    },
+  };
+
+  assert.equal(
+    buildHumanEvaluationProjectionMaterializationRevisionV2(first),
+    buildHumanEvaluationProjectionMaterializationRevisionV2(evidenceRefresh)
+  );
+  assert.notEqual(
+    buildHumanEvaluationProjectionMaterializationRevisionV2(first),
+    buildHumanEvaluationProjectionMaterializationRevisionV2(changedFact)
+  );
+  assert.equal(
+    canRefreshHumanEvaluationProjectionFromTraceV2(first, "trace_1"),
+    true
+  );
+  assert.equal(
+    canRefreshHumanEvaluationProjectionFromTraceV2(
+      first,
+      "trace_related"
+    ),
+    false
+  );
+  assert.deepEqual(
+    summarizeHumanEvaluationProjectionMaterializationV2({
+      currentProjections: [changedFact],
+      history: [first, evidenceRefresh, changedFact],
+      groundTruthEventCount: 1,
+    }),
+    {
+      schemaVersion: 1,
+      groundTruthEventCount: 1,
+      projectionAttemptCount: 3,
+      projectionDeltaCount: 2,
+      duplicateSuppressionCount: 0,
+      uniqueProjectionCount: 1,
+      supersededProjectionCount: 1,
+      rawProjectionHistoryCount: 3,
+      duplicateProjectionHistoryCount: 1,
+    }
+  );
+});
 
 test("normalizes legacy Complexity evaluation intent into the Code family", () => {
   assert.equal(

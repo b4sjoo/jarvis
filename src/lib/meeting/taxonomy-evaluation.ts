@@ -128,6 +128,7 @@ export interface PrivateHumanGroundTruthEventRecord {
 
 export interface PrivateHumanEvaluationProjectionRecord {
   projectionId: string;
+  materializationRevision?: string;
   sessionId?: string;
   subject?: {
     questionId?: string;

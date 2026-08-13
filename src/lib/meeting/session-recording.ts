@@ -40,6 +40,11 @@ import type {
   HumanGroundTruthEventV2,
 } from "./human-ground-truth-v2.js";
 import {
+  buildHumanEvaluationProjectionMaterializationRevisionV2,
+  HUMAN_EVALUATION_PROJECTION_MATERIALIZATION_SCHEMA_VERSION,
+  type HumanEvaluationProjectionMaterializationStatsV2,
+} from "./human-evaluation-projection-materialization.js";
+import {
   formatQuestionTypeAdjudicationOutcomeForTrace,
   type QuestionTypeAdjudicationOutcomeEvent,
 } from "./question-type-adjudication.js";
@@ -182,6 +187,12 @@ interface ActiveSessionRecording {
   questionHumanEvaluations: Map<string, QuestionHumanEvaluation>;
   humanGroundTruthEventsV2: Map<string, HumanGroundTruthEventV2>;
   humanEvaluationProjectionsV2: Map<string, HumanEvaluationProjectionV2>;
+  humanEvaluationProjectionRevisionsV2: Map<string, string>;
+  humanEvaluationProjectionSeenRevisionsV2: Map<string, Set<string>>;
+  humanEvaluationProjectionAttemptCountV2: number;
+  humanEvaluationProjectionDeltaCountV2: number;
+  humanEvaluationProjectionDuplicateSuppressionCountV2: number;
+  humanEvaluationProjectionSupersededCountV2: number;
   criticalMomentCandidates: Map<string, CriticalMomentCandidate>;
   criticalMomentEvaluations: Map<string, CriticalMomentEvaluation>;
   preparationRuntimeContexts: Map<
@@ -1303,6 +1314,12 @@ export class SessionRecordingManager {
           questionHumanEvaluations: new Map(),
           humanGroundTruthEventsV2: new Map(),
           humanEvaluationProjectionsV2: new Map(),
+          humanEvaluationProjectionRevisionsV2: new Map(),
+          humanEvaluationProjectionSeenRevisionsV2: new Map(),
+          humanEvaluationProjectionAttemptCountV2: 0,
+          humanEvaluationProjectionDeltaCountV2: 0,
+          humanEvaluationProjectionDuplicateSuppressionCountV2: 0,
+          humanEvaluationProjectionSupersededCountV2: 0,
           criticalMomentCandidates: new Map(),
           criticalMomentEvaluations: new Map(),
           preparationRuntimeContexts: new Map(),
@@ -1369,6 +1386,17 @@ export class SessionRecordingManager {
 
       try {
         await this.drainStable(session);
+        const projectionMaterialization =
+          buildHumanEvaluationProjectionMaterializationStatsV2(session);
+        if (session.humanEvaluationProjectionsV2.size > 0) {
+          await this.tryFinalizationWrite(session, () =>
+            this.writeJson(
+              session,
+              "human-evaluation/projections-v2.json",
+              buildHumanEvaluationProjectionSnapshotV2(session)
+            )
+          );
+        }
         const evaluationView =
           projectHumanEvaluationsForLegacyConsumers({
             evaluations: Array.from(
@@ -1431,6 +1459,7 @@ export class SessionRecordingManager {
           ).filter(
             (projection) => projection.inputTraceHashes.length > 0
           ).length,
+          v2ProjectionMaterialization: projectionMaterialization,
           consumerEvaluationCount: evaluationView.evaluations.length,
           matchedProjectionCount:
             evaluationView.report.matchedProjectionCount,
@@ -2194,6 +2223,35 @@ export class SessionRecordingManager {
     const session = this.getWritableSession();
     if (!session || projection.sessionId !== session.sessionId) return;
 
+    session.humanEvaluationProjectionAttemptCountV2 += 1;
+    const materializationRevision =
+      buildHumanEvaluationProjectionMaterializationRevisionV2(projection);
+    const seenRevisions =
+      session.humanEvaluationProjectionSeenRevisionsV2.get(
+        projection.projectionId
+      ) ?? new Set<string>();
+    if (seenRevisions.has(materializationRevision)) {
+      session.humanEvaluationProjectionDuplicateSuppressionCountV2 += 1;
+      return;
+    }
+
+    const previousRevision =
+      session.humanEvaluationProjectionRevisionsV2.get(
+        projection.projectionId
+      );
+    seenRevisions.add(materializationRevision);
+    session.humanEvaluationProjectionSeenRevisionsV2.set(
+      projection.projectionId,
+      seenRevisions
+    );
+    session.humanEvaluationProjectionRevisionsV2.set(
+      projection.projectionId,
+      materializationRevision
+    );
+    session.humanEvaluationProjectionDeltaCountV2 += 1;
+    if (previousRevision) {
+      session.humanEvaluationProjectionSupersededCountV2 += 1;
+    }
     session.humanEvaluationProjectionsV2.set(
       projection.projectionId,
       projection
@@ -2201,14 +2259,7 @@ export class SessionRecordingManager {
     const snapshotPath = "human-evaluation/projections-v2.json";
     const historyPath = "human-evaluation/projections-v2.jsonl";
     const snapshot = JSON.stringify(
-      {
-        savedAt: Date.now(),
-        sessionId: session.sessionId,
-        derivationVersion: projection.derivationVersion,
-        projections: Array.from(
-          session.humanEvaluationProjectionsV2.values()
-        ),
-      },
+      buildHumanEvaluationProjectionSnapshotV2(session),
       null,
       2
     );
@@ -2228,7 +2279,10 @@ export class SessionRecordingManager {
       await this.writeText(
         session,
         historyPath,
-        `${JSON.stringify(projection)}\n`,
+        `${JSON.stringify({
+          ...projection,
+          materializationRevision,
+        })}\n`,
         true
       );
       await this.writeJson(
@@ -2247,6 +2301,11 @@ export class SessionRecordingManager {
         inputEventCount: projection.inputEventIds.length,
         inputTraceHashCount: projection.inputTraceHashes.length,
         conflictCount: projection.conflicts.length,
+        materializationRevision,
+        projectionDeltaCount:
+          session.humanEvaluationProjectionDeltaCountV2,
+        duplicateSuppressionCount:
+          session.humanEvaluationProjectionDuplicateSuppressionCountV2,
       },
       [snapshotPath, historyPath],
       projection.subject.traceIds[0]
@@ -3979,6 +4038,45 @@ function buildSessionRecordingReadme(sessionId: string) {
     "- Keep this folder private.",
     "",
   ].join("\n");
+}
+
+function buildHumanEvaluationProjectionMaterializationStatsV2(
+  session: ActiveSessionRecording
+): HumanEvaluationProjectionMaterializationStatsV2 {
+  return {
+    schemaVersion:
+      HUMAN_EVALUATION_PROJECTION_MATERIALIZATION_SCHEMA_VERSION,
+    groundTruthEventCount: session.humanGroundTruthEventsV2.size,
+    projectionAttemptCount:
+      session.humanEvaluationProjectionAttemptCountV2,
+    projectionDeltaCount: session.humanEvaluationProjectionDeltaCountV2,
+    duplicateSuppressionCount:
+      session.humanEvaluationProjectionDuplicateSuppressionCountV2,
+    uniqueProjectionCount: session.humanEvaluationProjectionsV2.size,
+    supersededProjectionCount:
+      session.humanEvaluationProjectionSupersededCountV2,
+  };
+}
+
+function buildHumanEvaluationProjectionSnapshotV2(
+  session: ActiveSessionRecording
+) {
+  const projections = Array.from(
+    session.humanEvaluationProjectionsV2.values()
+  );
+  return {
+    savedAt: Date.now(),
+    sessionId: session.sessionId,
+    derivationVersion: projections[0]?.derivationVersion,
+    materialization:
+      buildHumanEvaluationProjectionMaterializationStatsV2(session),
+    currentRevisions: Object.fromEntries(
+      Array.from(session.humanEvaluationProjectionRevisionsV2.entries()).sort(
+        ([left], [right]) => left.localeCompare(right)
+      )
+    ),
+    projections,
+  };
 }
 
 function sanitizeMeetingAssistantSettings(settings: MeetingAssistantSettings) {

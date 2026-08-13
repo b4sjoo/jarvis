@@ -510,6 +510,7 @@ import {
   appendHumanGroundTruthEventV2,
   buildHumanEvaluationObservedSnapshotV2,
   buildHumanGroundTruthSubjectV2,
+  canRefreshHumanEvaluationProjectionFromTraceV2,
   createHumanGroundTruthEventV2,
   deriveHumanEvaluationProjectionV2,
   findActiveHumanGroundTruthEventV2,
@@ -2763,7 +2764,10 @@ export function useMeetingAssistant() {
     (trace: MeetingTrace) => {
       const current = humanEvaluationProjectionsV2Ref.current;
       const matching = current.filter((projection) =>
-        projection.subject.traceIds.includes(trace.id)
+        canRefreshHumanEvaluationProjectionFromTraceV2(
+          projection,
+          trace.id
+        )
       );
       if (!matching.length) return;
 

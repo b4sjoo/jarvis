@@ -134,7 +134,8 @@ async function readSession(directory: string): Promise<LongitudinalSessionInput>
     });
   await writeHumanEvaluationCompatibilityReport(
     directory,
-    evaluationView.report
+    evaluationView.report,
+    evaluationView.materialization
   );
   const compactByTrace = new Map(
     (tracePayload.traces ?? []).map((trace) => [trace.traceId, trace])

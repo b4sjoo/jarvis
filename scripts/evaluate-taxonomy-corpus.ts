@@ -11,6 +11,10 @@ import {
   type TaxonomyEvaluationExample,
 } from "../src/lib/meeting/taxonomy-evaluation.js";
 import { inferQuestionTypeDecisionFromText } from "../src/lib/meeting/task-taxonomy.js";
+import {
+  summarizeHumanEvaluationProjectionMaterializationV2,
+  type HumanEvaluationProjectionMaterializationStatsV2,
+} from "../src/lib/meeting/human-evaluation-projection-materialization.js";
 
 interface CliOptions {
   sessionDirectories: string[];
@@ -34,6 +38,9 @@ async function main() {
       v1: "snapshot" | "history" | "missing";
       v2: "snapshot" | "history" | "missing";
     };
+    projectionMaterialization: ReturnType<
+      typeof summarizeHumanEvaluationProjectionMaterializationV2
+    >;
   }> = [];
 
   for (const sessionDirectory of options.sessionDirectories) {
@@ -67,6 +74,8 @@ async function main() {
         v1: evaluationsPayload.source,
         v2: projectionsPayload.source,
       },
+      projectionMaterialization:
+        projectionsPayload.projectionMaterialization,
     });
   }
 
@@ -108,6 +117,33 @@ async function main() {
         ),
         v1V2Disagreements: imports.reduce(
           (total, item) => total + item.stats.disagreementCount,
+          0
+        ),
+        rawGroundTruthEvents: imports.reduce(
+          (total, item) =>
+            total + item.projectionMaterialization.groundTruthEventCount,
+          0
+        ),
+        uniqueProjections: imports.reduce(
+          (total, item) =>
+            total + item.projectionMaterialization.uniqueProjectionCount,
+          0
+        ),
+        supersededProjections: imports.reduce(
+          (total, item) =>
+            total + item.projectionMaterialization.supersededProjectionCount,
+          0
+        ),
+        duplicateProjectionHistoryEvents: imports.reduce(
+          (total, item) =>
+            total +
+            item.projectionMaterialization.duplicateProjectionHistoryCount,
+          0
+        ),
+        duplicateProjectionSuppressions: imports.reduce(
+          (total, item) =>
+            total +
+            item.projectionMaterialization.duplicateSuppressionCount,
           0
         ),
         accuracy: report.metrics.accuracy,
@@ -210,32 +246,49 @@ async function readEvaluationSnapshot(sessionDirectory: string) {
 }
 
 async function readProjectionSnapshot(sessionDirectory: string) {
-  const snapshot = await readOptionalJson<{
-    sessionId?: string;
-    projections?: PrivateHumanEvaluationProjectionRecord[];
-  }>(
-    path.join(
-      sessionDirectory,
-      "human-evaluation",
-      "projections-v2.json"
-    )
-  );
-  if (snapshot) {
-    return {
-      payload: snapshot,
-      projections: snapshot.projections ?? [],
-      source: "snapshot" as const,
-    };
-  }
-
-  const history =
-    await readOptionalJsonLines<PrivateHumanEvaluationProjectionRecord>(
+  const [snapshot, history, groundTruthEvents] = await Promise.all([
+    readOptionalJson<{
+      sessionId?: string;
+      projections?: PrivateHumanEvaluationProjectionRecord[];
+      materialization?: HumanEvaluationProjectionMaterializationStatsV2;
+    }>(
+      path.join(
+        sessionDirectory,
+        "human-evaluation",
+        "projections-v2.json"
+      )
+    ),
+    readOptionalJsonLines<PrivateHumanEvaluationProjectionRecord>(
       path.join(
         sessionDirectory,
         "human-evaluation",
         "projections-v2.jsonl"
       )
-    );
+    ),
+    readOptionalJsonLines<unknown>(
+      path.join(
+        sessionDirectory,
+        "human-evaluation",
+        "ground-truth-v2.jsonl"
+      )
+    ),
+  ]);
+  const projectionMaterialization =
+    summarizeHumanEvaluationProjectionMaterializationV2({
+      currentProjections: snapshot?.projections ?? [],
+      history,
+      groundTruthEventCount: groundTruthEvents.length,
+      recorded: snapshot?.materialization,
+    });
+  if (snapshot) {
+    return {
+      payload: snapshot,
+      projections: snapshot.projections ?? [],
+      source: "snapshot" as const,
+      projectionMaterialization,
+    };
+  }
+
   const latestByProjectionId = new Map<
     string,
     PrivateHumanEvaluationProjectionRecord
@@ -255,6 +308,7 @@ async function readProjectionSnapshot(sessionDirectory: string) {
     payload: undefined,
     projections,
     source: projections.length ? ("history" as const) : ("missing" as const),
+    projectionMaterialization,
   };
 }
 

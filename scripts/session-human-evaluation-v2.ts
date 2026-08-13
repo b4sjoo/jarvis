@@ -4,42 +4,77 @@ import {
   projectHumanEvaluationsForLegacyConsumers,
   type HumanEvaluationV2CompatibilityReport,
 } from "../src/lib/meeting/human-evaluation-v2-consumers.js";
+import {
+  summarizeHumanEvaluationProjectionMaterializationV2,
+  type HumanEvaluationProjectionMaterializationDiagnosticsV2,
+  type HumanEvaluationProjectionMaterializationRecordV2,
+  type HumanEvaluationProjectionMaterializationStatsV2,
+} from "../src/lib/meeting/human-evaluation-projection-materialization.js";
 import type { HumanEvaluationProjectionV2 } from "../src/lib/meeting/human-ground-truth-v2.js";
 import type { QuestionHumanEvaluation } from "../src/lib/meeting/types.js";
 
 export async function loadSessionHumanEvaluationConsumerView(
   sessionDirectory: string
 ) {
-  const [v1Payload, v2Payload] = await Promise.all([
-    readOptionalJson<{ evaluations?: QuestionHumanEvaluation[] }>(
-      path.join(
-        sessionDirectory,
-        "human-evaluation",
-        "question-evaluations.json"
+  const [v1Payload, v2Payload, projectionHistory, groundTruthEvents] =
+    await Promise.all([
+      readOptionalJson<{ evaluations?: QuestionHumanEvaluation[] }>(
+        path.join(
+          sessionDirectory,
+          "human-evaluation",
+          "question-evaluations.json"
+        ),
+        { evaluations: [] }
       ),
-      { evaluations: [] }
-    ),
-    readOptionalJson<{ projections?: HumanEvaluationProjectionV2[] }>(
-      path.join(
-        sessionDirectory,
-        "human-evaluation",
-        "projections-v2.json"
+      readOptionalJson<{
+        projections?: HumanEvaluationProjectionV2[];
+        materialization?: HumanEvaluationProjectionMaterializationStatsV2;
+      }>(
+        path.join(
+          sessionDirectory,
+          "human-evaluation",
+          "projections-v2.json"
+        ),
+        { projections: [] }
       ),
-      { projections: [] }
-    ),
-  ]);
+      readOptionalJsonLines<
+        HumanEvaluationProjectionMaterializationRecordV2<HumanEvaluationProjectionV2>
+      >(
+        path.join(
+          sessionDirectory,
+          "human-evaluation",
+          "projections-v2.jsonl"
+        )
+      ),
+      readOptionalJsonLines<unknown>(
+        path.join(
+          sessionDirectory,
+          "human-evaluation",
+          "ground-truth-v2.jsonl"
+        )
+      ),
+    ]);
+  const materialization =
+    summarizeHumanEvaluationProjectionMaterializationV2({
+      currentProjections: v2Payload.projections ?? [],
+      history: projectionHistory,
+      groundTruthEventCount: groundTruthEvents.length,
+      recorded: v2Payload.materialization,
+    });
   return {
     ...projectHumanEvaluationsForLegacyConsumers({
       evaluations: v1Payload.evaluations ?? [],
       projections: v2Payload.projections ?? [],
     }),
     projections: v2Payload.projections ?? [],
+    materialization,
   };
 }
 
 export async function writeHumanEvaluationCompatibilityReport(
   sessionDirectory: string,
-  report: HumanEvaluationV2CompatibilityReport
+  report: HumanEvaluationV2CompatibilityReport,
+  materialization?: HumanEvaluationProjectionMaterializationDiagnosticsV2
 ) {
   const outputDirectory = path.join(
     sessionDirectory,
@@ -50,19 +85,20 @@ export async function writeHumanEvaluationCompatibilityReport(
   await Promise.all([
     writeFile(
       path.join(outputDirectory, "compatibility.json"),
-      `${JSON.stringify(report, null, 2)}\n`,
+      `${JSON.stringify({ ...report, materialization }, null, 2)}\n`,
       "utf8"
     ),
     writeFile(
       path.join(outputDirectory, "compatibility.md"),
-      renderCompatibilityMarkdown(report),
+      renderCompatibilityMarkdown(report, materialization),
       "utf8"
     ),
   ]);
 }
 
 function renderCompatibilityMarkdown(
-  report: HumanEvaluationV2CompatibilityReport
+  report: HumanEvaluationV2CompatibilityReport,
+  materialization?: HumanEvaluationProjectionMaterializationDiagnosticsV2
 ) {
   const lines = [
     "# Human Evaluation V1/V2 Compatibility",
@@ -79,6 +115,17 @@ function renderCompatibilityMarkdown(
     `- Label duration P50/P90: ${formatMetric(report.interaction.durationP50Ms, "ms")} / ${formatMetric(report.interaction.durationP90Ms, "ms")}`,
     `- Label clicks P50/P90: ${formatMetric(report.interaction.clickCountP50)} / ${formatMetric(report.interaction.clickCountP90)}`,
     `- Expert audit expanded: ${report.interaction.expertAuditExpandedCount}`,
+    "",
+    "## Projection Materialization",
+    "",
+    `- Raw ground-truth events: ${materialization?.groundTruthEventCount ?? "-"}`,
+    `- Projection attempts: ${materialization?.projectionAttemptCount ?? "-"}`,
+    `- Materialized deltas: ${materialization?.projectionDeltaCount ?? "-"}`,
+    `- Unique projections: ${materialization?.uniqueProjectionCount ?? "-"}`,
+    `- Superseded projections: ${materialization?.supersededProjectionCount ?? "-"}`,
+    `- Runtime duplicate suppressions: ${materialization?.duplicateSuppressionCount ?? "-"}`,
+    `- Raw projection history rows: ${materialization?.rawProjectionHistoryCount ?? "-"}`,
+    `- Duplicate projection history rows: ${materialization?.duplicateProjectionHistoryCount ?? "-"}`,
     "",
     "## Dimension Parity",
     "",
@@ -112,6 +159,18 @@ async function readOptionalJson<T>(filePath: string, fallback: T) {
     return JSON.parse(await readFile(filePath, "utf8")) as T;
   } catch (error) {
     if (isMissingFile(error)) return fallback;
+    throw error;
+  }
+}
+
+async function readOptionalJsonLines<T>(filePath: string): Promise<T[]> {
+  try {
+    return (await readFile(filePath, "utf8"))
+      .split(/\r?\n/)
+      .filter(Boolean)
+      .map((line) => JSON.parse(line) as T);
+  } catch (error) {
+    if (isMissingFile(error)) return [];
     throw error;
   }
 }

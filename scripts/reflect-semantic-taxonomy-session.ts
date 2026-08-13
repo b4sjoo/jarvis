@@ -52,7 +52,8 @@ async function main() {
     );
     await writeHumanEvaluationCompatibilityReport(
       sessionDirectory,
-      evaluationView.report
+      evaluationView.report,
+      evaluationView.materialization
     );
     summaries.push({
       sessionDirectory,

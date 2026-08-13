@@ -209,6 +209,127 @@ test("records append-only V2 ground truth and derived projection artifacts", asy
   );
 });
 
+test("suppresses unchanged V2 projection materializations in long sessions", async () => {
+  const native = new ControlledRecordingInvoke();
+  const manager = new SessionRecordingManager(undefined, native.invoke);
+  const recording = await manager.start(START_OPTIONS);
+  const sessionId = required(recording.sessionId);
+  const subject = {
+    questionId: "question_projection_compaction",
+    traceIds: ["trace_projection_compaction", "trace_related"],
+    sourceTurnIds: ["turn_projection_compaction"],
+  };
+  const event = createHumanGroundTruthEventV2({
+    eventId: "ground_truth_projection_compaction",
+    sessionId,
+    subject,
+    source: "explicit-ui",
+    sourceTraceId: "trace_projection_compaction",
+    fact: {
+      kind: "expected-runtime-action",
+      expectedAction: "advise",
+    },
+    now: 1,
+  });
+  const initial = deriveHumanEvaluationProjectionV2({
+    sessionId,
+    subject,
+    events: [event],
+    observed: {
+      traceId: "trace_projection_compaction",
+      traceHash: "trace-hash-initial",
+      runtimeAction: "ignore",
+    },
+    now: 2,
+  });
+
+  manager.recordHumanGroundTruthEventV2(event);
+  for (let index = 0; index < 100; index += 1) {
+    manager.recordHumanEvaluationProjectionV2({
+      ...initial,
+      computedAt: initial.computedAt + index,
+      observed: {
+        ...initial.observed!,
+        traceHash: `trace-hash-initial-${index}`,
+      },
+      inputTraceHashes: [`trace-hash-initial-${index}`],
+    });
+  }
+
+  const revised = deriveHumanEvaluationProjectionV2({
+    sessionId,
+    subject,
+    events: [event],
+    observed: {
+      traceId: "trace_projection_compaction",
+      traceHash: "trace-hash-revised",
+      runtimeAction: "advise",
+    },
+    now: 200,
+  });
+  manager.recordHumanEvaluationProjectionV2(revised);
+  for (let index = 0; index < 50; index += 1) {
+    manager.recordHumanEvaluationProjectionV2({
+      ...revised,
+      computedAt: revised.computedAt + index + 1,
+      observed: {
+        ...revised.observed!,
+        traceHash: `trace-hash-revised-${index}`,
+      },
+      inputTraceHashes: [`trace-hash-revised-${index}`],
+    });
+  }
+
+  await manager.stop("test-complete");
+
+  const projectionHistoryWrites = native.calls.filter(
+    (call) =>
+      call.command === "write_meeting_session_recording_text" &&
+      stringArg(call, "relativePath") ===
+        "human-evaluation/projections-v2.jsonl"
+  );
+  assert.equal(projectionHistoryWrites.length, 2);
+  assert.ok(
+    projectionHistoryWrites.every((call) =>
+      Boolean(parsePayload(call).materializationRevision)
+    )
+  );
+
+  const projectionSnapshots = native.calls.filter(
+    (call) =>
+      call.command === "write_meeting_session_recording_text" &&
+      stringArg(call, "relativePath") ===
+        "human-evaluation/projections-v2.json"
+  );
+  const finalSnapshot = parsePayload(projectionSnapshots.at(-1)!);
+  const materialization = finalSnapshot.materialization as Record<
+    string,
+    number
+  >;
+  assert.equal(materialization.groundTruthEventCount, 1);
+  assert.equal(materialization.projectionAttemptCount, 151);
+  assert.equal(materialization.projectionDeltaCount, 2);
+  assert.equal(materialization.duplicateSuppressionCount, 149);
+  assert.equal(materialization.uniqueProjectionCount, 1);
+  assert.equal(materialization.supersededProjectionCount, 1);
+  assert.equal(
+    (
+      finalSnapshot.projections as Array<{
+        observed?: { runtimeAction?: string };
+      }>
+    )[0]?.observed?.runtimeAction,
+    "advise"
+  );
+
+  const stoppedManifest = native.stoppedManifest(
+    required(recording.folderName)
+  );
+  assert.deepEqual(
+    stoppedManifest?.evaluationIntegrity.v2ProjectionMaterialization,
+    materialization
+  );
+});
+
 test("records question-type post-release outcomes in a dedicated append-only ledger", async () => {
   const native = new ControlledRecordingInvoke();
   const manager = new SessionRecordingManager(undefined, native.invoke);
@@ -2725,6 +2846,7 @@ class ControlledRecordingInvoke {
           },
           evaluationIntegrity: payload.evaluationIntegrity as {
             compatibilityReportPath: string;
+            v2ProjectionMaterialization?: Record<string, number>;
           },
           preparationRuntimeIntegrity:
             payload.preparationRuntimeIntegrity as Record<string, unknown>,
