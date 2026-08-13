@@ -124,6 +124,7 @@ export * from "./stt-request-evidence";
 export * from "./stt-request-lifecycle";
 export * from "./stt-continuation-prompt";
 export * from "./stable-answer";
+export * from "./staged-answer-delivery";
 export * from "./stt-prompt-echo-retry";
 export * from "./transcript-fusion";
 export * from "./types";

@@ -185,6 +185,7 @@ import {
   createRuntimeTypeRepairOutputAuthority,
   decideRefreshAuthority,
   decideStableAnswerCommit,
+  decideStagedAnswerPartial,
   detectAnswerSufficiencyShadow,
   detectInterviewCompany,
   formatInterviewCompanyDecisionForTrace,
@@ -229,6 +230,7 @@ import {
   formatMeetingAnswerTraceMetadata,
   formatAnswerGenerationLeaseForTrace,
   formatStableAnswerCommitForTrace,
+  formatStagedAnswerDeliveryForTrace,
   formatRefreshAuthorityForTrace,
   formatRuntimeTypeRepairOutputAuthorityForTrace,
   formatActiveQuestionTermCorrectionForTrace,
@@ -617,6 +619,12 @@ import {
   ANSWER_DELIVERY_IDLE_RELEASE_MS,
   PENDING_ANSWER_TTL_MS,
 } from "@/lib/meeting";
+import {
+  composePhaseNavigationPromptContext,
+  formatPhaseNavigationPromptMetricsForTrace,
+  isPhaseNavigationAction,
+  measureTaggedPromptSectionChars,
+} from "@/lib/meeting/phase-navigation-prompt-context";
 
 const ADVISOR_DEBOUNCE_MS = 750;
 const STT_TIMEOUT_MS = 30_000;
@@ -10232,7 +10240,7 @@ export function useMeetingAssistant() {
         "success"
       );
     }
-    const advisorModelPromptContext = transientPersonalStatusDecision
+    const baseAdvisorModelPromptContext = transientPersonalStatusDecision
       ? {
           ...promptContext,
           transcript: advisorCurrentQuestionEvidenceText
@@ -10250,9 +10258,62 @@ export function useMeetingAssistant() {
           projectBindingDecision: undefined,
         }
       : promptContext;
+    const phaseNavigationPrompt = isPhaseNavigationAction(
+      options.responseAction
+    )
+      ? composePhaseNavigationPromptContext({
+          action: options.responseAction,
+          promptContext: baseAdvisorModelPromptContext,
+          currentSuggestion: options.currentSuggestion,
+        })
+      : undefined;
+    const advisorModelPromptContext =
+      phaseNavigationPrompt?.promptContext ?? baseAdvisorModelPromptContext;
+    const advisorModelCurrentSuggestion = phaseNavigationPrompt
+      ? phaseNavigationPrompt.currentSuggestion
+      : options.currentSuggestion;
+    const phaseNavigationPromptMetadata = phaseNavigationPrompt
+      ? formatPhaseNavigationPromptMetricsForTrace(
+          phaseNavigationPrompt.metrics
+        )
+      : {};
+    if (traceId && phaseNavigationPrompt) {
+      traceStoreRef.current.updateMetadata(
+        traceId,
+        phaseNavigationPromptMetadata
+      );
+    }
 
     let finalContent = "";
     let advisorModelPromptText = "";
+    const stagedAnswerDeliveryExplicitRequest =
+      advisorJob.source !== "live-turn";
+    let stagedAnswerDeliveryChunkCount = 0;
+    let stagedAnswerDeliveryFirstChunkAt: number | undefined;
+    let stagedAnswerDeliveryFirstVisiblePartialAt: number | undefined;
+    let stagedAnswerDeliveryVisible = false;
+    const rollbackStagedAnswerDelivery = (reason: string) => {
+      if (!stagedAnswerDeliveryVisible) return;
+      stagedAnswerDeliveryVisible = false;
+      setState((previous) => ({
+        ...previous,
+        partialSuggestion: "",
+      }));
+      if (traceId) {
+        traceStoreRef.current.updateMetadata(
+          traceId,
+          formatStagedAnswerDeliveryForTrace({
+            explicitRequest: stagedAnswerDeliveryExplicitRequest,
+            chunkCount: stagedAnswerDeliveryChunkCount,
+            firstChunkAt: stagedAnswerDeliveryFirstChunkAt,
+            firstVisiblePartialAt:
+              stagedAnswerDeliveryFirstVisiblePartialAt,
+            visibleStreamStarted: true,
+            rollbackReason: reason,
+          })
+        );
+      }
+    };
     let advisorAnswerSufficiencyDecision:
       | AnswerSufficiencyDecision
       | undefined;
@@ -10268,7 +10329,7 @@ export function useMeetingAssistant() {
         responseAction: options.responseAction,
         responseConfig,
         answerProfile: advisorAnswerProfile,
-        currentSuggestion: options.currentSuggestion,
+        currentSuggestion: advisorModelCurrentSuggestion,
         clarifyingFeedback: options.clarifyingFeedback,
         trace: traceId
           ? {
@@ -10283,6 +10344,15 @@ export function useMeetingAssistant() {
                     input.userMessage,
                     advisorJob.logicalQuestionUnit
                   );
+                const advisorPromptEnvelopeMetadata = {
+                  advisorSystemPromptChars: input.systemPrompt.length,
+                  advisorUserMessageChars: input.userMessage.length,
+                  advisorPromptResponseContractChars:
+                    measureTaggedPromptSectionChars(
+                      input.userMessage,
+                      "output"
+                    ),
+                };
                 traceStoreRef.current.updateMetadata(traceId, {
                   advisorPromptIncludedLogicalQuestion,
                   advisorPromptLogicalQuestionSourceCount:
@@ -10295,6 +10365,7 @@ export function useMeetingAssistant() {
                       modelRequestStartedAt,
                     }
                   ),
+                  ...advisorPromptEnvelopeMetadata,
                 });
                 traceStoreRef.current.recordInput(
                   traceId,
@@ -10309,6 +10380,8 @@ export function useMeetingAssistant() {
                     responseConfig: input.responseConfig,
                     requestOptions: input.requestOptions,
                     ...advisorModelRouteMetadata,
+                    ...phaseNavigationPromptMetadata,
+                    ...advisorPromptEnvelopeMetadata,
                     imageCount: input.imageCount,
                   }
                 );
@@ -10326,6 +10399,8 @@ export function useMeetingAssistant() {
                     responseConfig: input.responseConfig,
                     requestOptions: input.requestOptions,
                     ...advisorModelRouteMetadata,
+                    ...phaseNavigationPromptMetadata,
+                    ...advisorPromptEnvelopeMetadata,
                     imageCount: input.imageCount,
                   },
                 });
@@ -10342,6 +10417,8 @@ export function useMeetingAssistant() {
                     responseLanguage: input.responseConfig?.language,
                     requestOptions: input.requestOptions,
                     ...advisorModelRouteMetadata,
+                    ...phaseNavigationPromptMetadata,
+                    ...advisorPromptEnvelopeMetadata,
                     promptChars:
                       input.systemPrompt.length + input.userMessage.length,
                   }
@@ -10374,13 +10451,47 @@ export function useMeetingAssistant() {
             }
           : undefined,
       })) {
-        if (rejectStaleCommit("partial-output")) return;
+        stagedAnswerDeliveryChunkCount += 1;
+        stagedAnswerDeliveryFirstChunkAt ??= Date.now();
+        if (rejectStaleCommit("partial-output")) {
+          rollbackStagedAnswerDelivery("stale-partial-output");
+          return;
+        }
         finalContent = event.accumulated;
-        if (
-          outputCommitAuthorization.authorized &&
-          !holdAdvisorPartialForFactAnchor &&
-          !stableAnswerRevisionRef.current
-        ) {
+        const stagedPartialDecision = decideStagedAnswerPartial({
+          accumulated: event.accumulated,
+          explicitRequest: stagedAnswerDeliveryExplicitRequest,
+          stableAnswerPresent: Boolean(stableAnswerRevisionRef.current),
+          guardrailHeld:
+            !outputCommitAuthorization.authorized ||
+            holdAdvisorPartialForFactAnchor,
+          visibleStreamStarted: stagedAnswerDeliveryVisible,
+        });
+        if (stagedPartialDecision.visible) {
+          if (
+            stagedPartialDecision.startsVisibleStream ||
+            (!stagedAnswerDeliveryFirstVisiblePartialAt &&
+              stagedAnswerDeliveryExplicitRequest)
+          ) {
+            stagedAnswerDeliveryFirstVisiblePartialAt = Date.now();
+            if (traceId) {
+              traceStoreRef.current.updateMetadata(
+                traceId,
+                formatStagedAnswerDeliveryForTrace({
+                  explicitRequest:
+                    stagedAnswerDeliveryExplicitRequest,
+                  chunkCount: stagedAnswerDeliveryChunkCount,
+                  firstChunkAt: stagedAnswerDeliveryFirstChunkAt,
+                  firstVisiblePartialAt:
+                    stagedAnswerDeliveryFirstVisiblePartialAt,
+                  visibleStreamStarted: true,
+                })
+              );
+            }
+          }
+          stagedAnswerDeliveryVisible =
+            stagedAnswerDeliveryVisible ||
+            stagedAnswerDeliveryExplicitRequest;
           setState((previous) => ({
             ...previous,
             partialSuggestion: event.accumulated,
@@ -10396,7 +10507,10 @@ export function useMeetingAssistant() {
       }
 
       const finalCommitDecision = readCommitDecision();
-      if (rejectStaleCommit("final-commit", finalCommitDecision)) return;
+      if (rejectStaleCommit("final-commit", finalCommitDecision)) {
+        rollbackStagedAnswerDelivery("stale-final-commit");
+        return;
+      }
 
       let parsedMeetingAnswer = parseMeetingAnswer(finalContent, {
         expectedProfile: advisorAnswerProfile,
@@ -10662,7 +10776,12 @@ export function useMeetingAssistant() {
             );
           }
         }
-        if (rejectStaleCommit("whiteboard-render-validation")) return;
+        if (rejectStaleCommit("whiteboard-render-validation")) {
+          rollbackStagedAnswerDelivery(
+            "stale-whiteboard-render-validation"
+          );
+          return;
+        }
       }
 
       let contextState = contextManagerRef.current.getState();
@@ -11317,10 +11436,23 @@ export function useMeetingAssistant() {
           ...meetingAnswerMetadata,
           ...answerArtifactMetadata,
           ...outputCommitMetadata,
+          ...formatStagedAnswerDeliveryForTrace({
+            explicitRequest: stagedAnswerDeliveryExplicitRequest,
+            chunkCount: stagedAnswerDeliveryChunkCount,
+            firstChunkAt: stagedAnswerDeliveryFirstChunkAt,
+            firstVisiblePartialAt:
+              stagedAnswerDeliveryFirstVisiblePartialAt,
+            visibleStreamStarted: stagedAnswerDeliveryVisible,
+          }),
         });
         traceStoreRef.current.finishTrace(traceId, "success");
       }
     } catch (error) {
+      rollbackStagedAnswerDelivery(
+        error instanceof Error && error.name === "AbortError"
+          ? "provider-request-aborted"
+          : "advisor-execution-error"
+      );
       if (error instanceof Error && error.name === "AbortError") {
         const commitDecision = readCommitDecision();
         if (activeAdvisorJobRef.current?.id === advisorJob.id) {
@@ -20291,6 +20423,30 @@ export function useMeetingAssistant() {
             screenGenerationLease.baseVisibleAnswerRevision + 1,
           generationLeaseId: screenGenerationLease.id,
         });
+        let screenStagedChunkCount = 0;
+        let screenStagedFirstChunkAt: number | undefined;
+        let screenStagedFirstVisiblePartialAt: number | undefined;
+        let screenStagedVisible = false;
+        const clearScreenStagedPartial = (reason: string) => {
+          if (!screenStagedVisible) return;
+          screenStagedVisible = false;
+          setState((previous) => ({
+            ...previous,
+            partialSuggestion: "",
+          }));
+          traceStoreRef.current.updateMetadata(
+            trace.id,
+            formatStagedAnswerDeliveryForTrace({
+              explicitRequest: true,
+              chunkCount: screenStagedChunkCount,
+              firstChunkAt: screenStagedFirstChunkAt,
+              firstVisiblePartialAt:
+                screenStagedFirstVisiblePartialAt,
+              visibleStreamStarted: true,
+              rollbackReason: reason,
+            })
+          );
+        };
         const screenTaskContent = await withTimeout(
           solveScreenAnchoredTask({
             observation,
@@ -20414,6 +20570,8 @@ export function useMeetingAssistant() {
               },
             },
             onPartialContent: (partialContent) => {
+              screenStagedChunkCount += 1;
+              screenStagedFirstChunkAt ??= Date.now();
               if (screenAnalysisAbortRef.current !== analysisController) {
                 return;
               }
@@ -20429,10 +20587,34 @@ export function useMeetingAssistant() {
                 return;
               }
 
-              if (
-                !holdScreenPartialForFactAnchor &&
-                !stableAnswerRevisionRef.current
-              ) {
+              const stagedPartialDecision = decideStagedAnswerPartial({
+                accumulated: partialContent,
+                explicitRequest: true,
+                stableAnswerPresent: Boolean(
+                  stableAnswerRevisionRef.current
+                ),
+                guardrailHeld: holdScreenPartialForFactAnchor,
+                visibleStreamStarted: screenStagedVisible,
+              });
+              if (stagedPartialDecision.visible) {
+                if (
+                  stagedPartialDecision.startsVisibleStream ||
+                  !screenStagedFirstVisiblePartialAt
+                ) {
+                  screenStagedFirstVisiblePartialAt = Date.now();
+                  traceStoreRef.current.updateMetadata(
+                    trace.id,
+                    formatStagedAnswerDeliveryForTrace({
+                      explicitRequest: true,
+                      chunkCount: screenStagedChunkCount,
+                      firstChunkAt: screenStagedFirstChunkAt,
+                      firstVisiblePartialAt:
+                        screenStagedFirstVisiblePartialAt,
+                      visibleStreamStarted: true,
+                    })
+                  );
+                }
+                screenStagedVisible = true;
                 setState((previous) => ({
                   ...previous,
                   status: "thinking",
@@ -20470,7 +20652,10 @@ export function useMeetingAssistant() {
           traceStoreRef.current.finishTrace(trace.id, "cancelled");
           return;
         }
-        if (rejectStaleScreenOperation("post-model")) return;
+        if (rejectStaleScreenOperation("post-model")) {
+          clearScreenStagedPartial("stale-post-model");
+          return;
+        }
 
         const screenAnswerProfile = resolveMeetingAnswerProfile(
           settledScreenTaskKind
@@ -21410,6 +21595,14 @@ export function useMeetingAssistant() {
           visibleAnswerRevisionAfter,
           baseVisibleAnswerRevision:
             screenGenerationLease?.baseVisibleAnswerRevision,
+          ...formatStagedAnswerDeliveryForTrace({
+            explicitRequest: true,
+            chunkCount: screenStagedChunkCount,
+            firstChunkAt: screenStagedFirstChunkAt,
+            firstVisiblePartialAt:
+              screenStagedFirstVisiblePartialAt,
+            visibleStreamStarted: screenStagedVisible,
+          }),
         });
         if (
           screenWhiteboardRenderValidation &&
@@ -21428,8 +21621,14 @@ export function useMeetingAssistant() {
         traceStoreRef.current.finishTrace(trace.id, "success");
       } catch (error) {
         analysisController?.abort();
-        if (screenAnalysisAbortRef.current === analysisController) {
+        const ownsCurrentScreenOperation =
+          screenAnalysisAbortRef.current === analysisController;
+        if (ownsCurrentScreenOperation) {
           screenAnalysisAbortRef.current = null;
+          setState((previous) => ({
+            ...previous,
+            partialSuggestion: "",
+          }));
         }
 
         const runtimeDecision = readScreenAuthorization();
@@ -23186,6 +23385,15 @@ export function useMeetingAssistant() {
           }));
           return;
         }
+        const phaseNavigationLogicalQuestionUnit =
+          resolveResponseActionLogicalQuestionUnit({
+            currentLogicalQuestionUnit: logicalQuestionUnitRef.current,
+            meetingContext,
+            runtimeEpoch: runtimeEpochRef.current,
+            preferScreen: Boolean(
+              meetingContext.taskRuntime.screenAttachment
+            ),
+          });
         const parentHistory =
           playbookPhaseHistoryRef.current.parents[
             existingInterviewTask.id
@@ -23305,6 +23513,8 @@ export function useMeetingAssistant() {
             taskMutationAuthority: "preserve-parent",
             questionLineage:
               resolveCurrentSuggestionQuestionLineage(),
+            logicalQuestionUnit:
+              phaseNavigationLogicalQuestionUnit,
           });
           return;
         }
@@ -23344,6 +23554,8 @@ export function useMeetingAssistant() {
             taskMutationAuthority: "preserve-parent",
             questionLineage:
               resolveCurrentSuggestionQuestionLineage(),
+            logicalQuestionUnit:
+              phaseNavigationLogicalQuestionUnit,
             manualPhaseTargetOverride:
               forwardDecision.targetPhase,
             manualPhaseOperationId: operationId,
