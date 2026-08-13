@@ -8,6 +8,7 @@ import {
   decideAdvisorJobCommit,
   decideAdvisorTaskMutation,
   formatAdvisorTriggerJobForTrace,
+  resolveAdvisorLogicalQuestionAuthorizationTarget,
 } from "../src/lib/meeting/advisor-trigger-job.js";
 import { decideAdvisorTurnIntent } from "../src/lib/meeting/advisor-turn-intent.js";
 import type { AdvisorPromptContext } from "../src/lib/meeting/types.js";
@@ -219,6 +220,54 @@ test("freezes and traces the bounded logical question owned by a job", () => {
   assert.equal(
     metadata.logicalQuestionChars,
     "Implement a queue Use two stacks".length
+  );
+});
+
+test("manual correction validates against its current target instead of the runtime voice target", () => {
+  const runtimeCurrent = {
+    id: "voice-question",
+    revision: 1,
+    sessionId: "session-a",
+    runtimeEpoch: 1,
+    currentTurnId: "turn-a",
+    sourceTurnIds: ["turn-a"],
+    sources: [],
+    normalizedText: "Voice question",
+    startedAt: 1,
+    updatedAt: 1,
+    compositionReasons: [],
+    boundaryReason: "bounded-continuation" as const,
+    truncated: false,
+  };
+  const manualCorrectionTarget = {
+    ...runtimeCurrent,
+    id: "screen-question",
+    currentTurnId: "screen:observation-a",
+    sourceTurnIds: ["screen:observation-a"],
+    normalizedText: "Screen question",
+  };
+
+  assert.deepEqual(
+    resolveAdvisorLogicalQuestionAuthorizationTarget({
+      jobSource: "manual-correction",
+      runtimeCurrent,
+      manualCorrectionTarget,
+    }),
+    {
+      source: "manual-correction-target",
+      logicalQuestionUnit: manualCorrectionTarget,
+    }
+  );
+  assert.deepEqual(
+    resolveAdvisorLogicalQuestionAuthorizationTarget({
+      jobSource: "live-turn",
+      runtimeCurrent,
+      manualCorrectionTarget,
+    }),
+    {
+      source: "runtime-current",
+      logicalQuestionUnit: runtimeCurrent,
+    }
   );
 });
 

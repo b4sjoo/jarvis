@@ -101,6 +101,29 @@ export interface AdvisorJobCommitDecision {
   reason: RuntimeCommitAuthorizationReason;
 }
 
+export interface AdvisorLogicalQuestionAuthorizationTarget {
+  source: "runtime-current" | "manual-correction-target";
+  logicalQuestionUnit?: LogicalQuestionUnit;
+}
+
+export function resolveAdvisorLogicalQuestionAuthorizationTarget(input: {
+  jobSource: AdvisorJobSource;
+  runtimeCurrent?: LogicalQuestionUnit;
+  manualCorrectionTarget?: LogicalQuestionUnit;
+}): AdvisorLogicalQuestionAuthorizationTarget {
+  if (input.jobSource === "manual-correction") {
+    return {
+      source: "manual-correction-target",
+      logicalQuestionUnit: input.manualCorrectionTarget,
+    };
+  }
+
+  return {
+    source: "runtime-current",
+    logicalQuestionUnit: input.runtimeCurrent,
+  };
+}
+
 export interface AdvisorTaskMutationDecision {
   relation: InterviewTaskRelation;
   commitParent: boolean;

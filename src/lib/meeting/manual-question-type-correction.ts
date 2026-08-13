@@ -22,17 +22,36 @@ import { isWhiteboardParentType } from "./whiteboard-artifact.js";
 
 export interface ManualCorrectionOperationClaim {
   operationId: string;
+  accepted: boolean;
   supersedesOperationId?: string;
+  duplicateOfOperationId?: string;
 }
 
 export class ManualCorrectionOperationCoordinator {
   private activeOperationId: string | null = null;
+  private activeRequestKey: string | null = null;
 
-  claim(operationId: string): ManualCorrectionOperationClaim {
+  claim(
+    operationId: string,
+    requestKey?: string
+  ): ManualCorrectionOperationClaim {
+    if (
+      requestKey &&
+      this.activeOperationId &&
+      this.activeRequestKey === requestKey
+    ) {
+      return {
+        operationId,
+        accepted: false,
+        duplicateOfOperationId: this.activeOperationId,
+      };
+    }
     const supersedesOperationId = this.activeOperationId ?? undefined;
     this.activeOperationId = operationId;
+    this.activeRequestKey = requestKey ?? null;
     return {
       operationId,
+      accepted: true,
       supersedesOperationId,
     };
   }
@@ -48,11 +67,13 @@ export class ManualCorrectionOperationCoordinator {
   release(operationId: string) {
     if (!this.owns(operationId)) return false;
     this.activeOperationId = null;
+    this.activeRequestKey = null;
     return true;
   }
 
   reset() {
     this.activeOperationId = null;
+    this.activeRequestKey = null;
   }
 }
 
@@ -235,6 +256,14 @@ export function decideManualCorrectionScope({
     };
   }
 
+  if (!task || decision.target === "provisional-question") {
+    return {
+      ...base,
+      scope: "independent-new-parent",
+      reason: "manual-correction-promotes-question-without-active-parent",
+    };
+  }
+
   if (currentQuestionRelation === "new-parent") {
     return {
       ...base,
@@ -257,14 +286,6 @@ export function decideManualCorrectionScope({
       ...base,
       scope: "current-only",
       reason: `${currentQuestionSource ?? "unknown"}-question-relation-unsettled`,
-    };
-  }
-
-  if (!task || decision.target === "provisional-question") {
-    return {
-      ...base,
-      scope: "independent-new-parent",
-      reason: "manual-correction-promotes-question-without-active-parent",
     };
   }
 

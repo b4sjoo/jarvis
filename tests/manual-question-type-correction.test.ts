@@ -27,10 +27,12 @@ test("lets a newer manual correction replace the active operation", () => {
 
   assert.deepEqual(coordinator.claim("correction-a"), {
     operationId: "correction-a",
+    accepted: true,
     supersedesOperationId: undefined,
   });
   assert.deepEqual(coordinator.claim("correction-b"), {
     operationId: "correction-b",
+    accepted: true,
     supersedesOperationId: "correction-a",
   });
   assert.equal(coordinator.owns("correction-a"), false);
@@ -39,6 +41,29 @@ test("lets a newer manual correction replace the active operation", () => {
   assert.equal(coordinator.getActiveOperationId(), "correction-b");
   assert.equal(coordinator.release("correction-b"), true);
   assert.equal(coordinator.getActiveOperationId(), null);
+});
+
+test("coalesces duplicate correction clicks for the same question revision", () => {
+  const coordinator = new ManualCorrectionOperationCoordinator();
+
+  assert.equal(
+    coordinator.claim("correction-a", "session:question:1:coding").accepted,
+    true
+  );
+  assert.deepEqual(
+    coordinator.claim("correction-b", "session:question:1:coding"),
+    {
+      operationId: "correction-b",
+      accepted: false,
+      duplicateOfOperationId: "correction-a",
+    }
+  );
+  assert.equal(coordinator.getActiveOperationId(), "correction-a");
+  assert.equal(coordinator.release("correction-a"), true);
+  assert.equal(
+    coordinator.claim("correction-c", "session:question:1:coding").accepted,
+    true
+  );
 });
 
 test("treats selecting the effective question type as a no-op", () => {
@@ -309,6 +334,25 @@ test("keeps a relation-unsettled screen correction current-only", () => {
 
   assert.equal(scope.scope, "current-only");
   assert.equal(scope.reason, "screen-question-relation-unsettled");
+});
+
+test("promotes a provisional question even when its relation is unsettled", () => {
+  const decision = decideProvisionalQuestionTypeCorrection("behavioral");
+  const scope = decideManualCorrectionScope({
+    decision,
+    lineage: makeLineage("screen:obs_behavioral"),
+    latestQuestionText:
+      "Tell me about a time you persuaded a skeptical stakeholder.",
+    classifierConfidence: 0.99,
+    currentQuestionRelation: "unknown",
+    currentQuestionSource: "screen",
+  });
+
+  assert.equal(scope.scope, "independent-new-parent");
+  assert.equal(
+    scope.reason,
+    "manual-correction-promotes-question-without-active-parent"
+  );
 });
 
 test("does not let a current-only correction mutate the active parent", () => {

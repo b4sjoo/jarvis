@@ -384,6 +384,7 @@ import {
   decideCrossDomainParentTransition,
   formatAdvisorEvidencePacketForTrace,
   formatAdvisorTriggerJobForTrace,
+  resolveAdvisorLogicalQuestionAuthorizationTarget,
   formatBoundedRecentHistoryForTrace,
   formatCrossDomainParentTransitionForTrace,
   formatRuntimeCommitAuthorizationForTrace,
@@ -7485,6 +7486,13 @@ export function useMeetingAssistant() {
     const logicalQuestionLease = advisorJob.logicalQuestionUnit
       ? createLogicalQuestionUnitLease(advisorJob.logicalQuestionUnit)
       : undefined;
+    const readLogicalQuestionAuthorizationTarget = () =>
+      resolveAdvisorLogicalQuestionAuthorizationTarget({
+        jobSource: advisorJob.source,
+        runtimeCurrent: logicalQuestionUnitRef.current,
+        manualCorrectionTarget:
+          latestManualCorrectionTargetRef.current?.logicalQuestionUnit,
+      });
     const readCommitDecision = () =>
       authorizeRuntimeCommit({
         token: effectiveRuntimeCommitToken,
@@ -7527,19 +7535,25 @@ export function useMeetingAssistant() {
       }
 
       if (logicalQuestionLease) {
+        const logicalQuestionAuthorizationTarget =
+          readLogicalQuestionAuthorizationTarget();
         const logicalQuestionAuthorization =
           authorizeLogicalQuestionUnitLease(
             logicalQuestionLease,
-            logicalQuestionUnitRef.current
+            logicalQuestionAuthorizationTarget.logicalQuestionUnit
           );
         if (traceId) {
           traceStoreRef.current.updateMetadata(
             traceId,
-            formatLogicalQuestionLeaseForTrace(
-              logicalQuestionLease,
-              logicalQuestionAuthorization,
-              stage
-            )
+            {
+              ...formatLogicalQuestionLeaseForTrace(
+                logicalQuestionLease,
+                logicalQuestionAuthorization,
+                stage
+              ),
+              logicalQuestionAuthorizationTargetSource:
+                logicalQuestionAuthorizationTarget.source,
+            }
           );
         }
         if (!logicalQuestionAuthorization.authorized) {
@@ -7583,15 +7597,17 @@ export function useMeetingAssistant() {
 
       if (settledExecutionPlan) {
         const currentContextState = contextManagerRef.current.getState();
+        const currentLogicalQuestion =
+          readLogicalQuestionAuthorizationTarget().logicalQuestionUnit;
         const planAuthorization = authorizeSettledAdvisorExecutionPlan({
           plan: settledExecutionPlan,
           currentSettlement: currentQuestionSettlementRef.current,
           currentSessionId: currentContextState.sessionId,
           currentRuntimeEpoch: runtimeEpochRef.current,
           currentLogicalQuestionUnitId:
-            logicalQuestionUnitRef.current?.id,
+            currentLogicalQuestion?.id,
           currentLogicalQuestionRevision:
-            logicalQuestionUnitRef.current?.revision,
+            currentLogicalQuestion?.revision,
           currentSourceHash:
             currentQuestionSettlementRef.current?.sourceHash,
           currentActiveMeetingTask:
@@ -7650,6 +7666,8 @@ export function useMeetingAssistant() {
       if (answerGenerationLease) {
         const currentContextState = contextManagerRef.current.getState();
         const currentParent = currentContextState.activeMeetingTask?.parent;
+        const currentLogicalQuestion =
+          readLogicalQuestionAuthorizationTarget().logicalQuestionUnit;
         const leaseAuthorization = authorizeAnswerGenerationLease(
           answerGenerationLease,
           {
@@ -7660,9 +7678,9 @@ export function useMeetingAssistant() {
             taskId: currentParent?.id ?? null,
             taskRevision: currentParent?.revisions ?? null,
             logicalQuestionUnitId:
-              logicalQuestionUnitRef.current?.id ?? null,
+              currentLogicalQuestion?.id ?? null,
             logicalQuestionRevision:
-              logicalQuestionUnitRef.current?.revision ?? null,
+              currentLogicalQuestion?.revision ?? null,
             visibleAnswerRevision: visibleAnswerRevisionRef.current,
             manualCorrectionRevision:
               manualCorrectionRevisionRef.current,
@@ -8019,9 +8037,11 @@ export function useMeetingAssistant() {
                 contextManagerRef.current.getState().sessionId,
               runtimeEpoch: runtimeEpochRef.current,
               logicalQuestionUnitId:
-                logicalQuestionUnitRef.current?.id,
+                readLogicalQuestionAuthorizationTarget().logicalQuestionUnit
+                  ?.id,
               logicalQuestionRevision:
-                logicalQuestionUnitRef.current?.revision,
+                readLogicalQuestionAuthorizationTarget().logicalQuestionUnit
+                  ?.revision,
               manualCorrectionRevision:
                 manualCorrectionRevisionRef.current,
             }
@@ -9437,6 +9457,8 @@ export function useMeetingAssistant() {
         settledExecutionPlan.promptContract.profile;
       const planCreationContext =
         contextManagerRef.current.getState();
+      const planCreationLogicalQuestion =
+        readLogicalQuestionAuthorizationTarget().logicalQuestionUnit;
       const planCreationAuthorization =
         authorizeSettledAdvisorExecutionPlan({
           plan: settledExecutionPlan,
@@ -9445,9 +9467,9 @@ export function useMeetingAssistant() {
           currentSessionId: planCreationContext.sessionId,
           currentRuntimeEpoch: runtimeEpochRef.current,
           currentLogicalQuestionUnitId:
-            logicalQuestionUnitRef.current?.id,
+            planCreationLogicalQuestion?.id,
           currentLogicalQuestionRevision:
-            logicalQuestionUnitRef.current?.revision,
+            planCreationLogicalQuestion?.revision,
           currentSourceHash:
             currentQuestionSettlementRef.current?.sourceHash,
           currentActiveMeetingTask:
@@ -9630,27 +9652,26 @@ export function useMeetingAssistant() {
       artifactOwnerId: generationParent?.id ?? null,
       requestedArtifacts: generationAuthorizedArtifacts,
     });
-    const leaseStartAuthorization =
-      authorizeAnswerGenerationLease(answerGenerationLease, {
+    const leaseStartLogicalQuestion =
+      readLogicalQuestionAuthorizationTarget().logicalQuestionUnit;
+    const leaseStartAuthorization = authorizeAnswerGenerationLease(
+      answerGenerationLease,
+      {
         sessionId: generationContextState.sessionId,
         runtimeEpoch: runtimeEpochRef.current,
         preparationContextRevision:
           preparationRuntimeContextRef.current.preparationContextRevision,
         taskId: generationParent?.id ?? null,
         taskRevision: generationParent?.revisions ?? null,
-        logicalQuestionUnitId:
-          logicalQuestionUnitRef.current?.id ?? null,
-        logicalQuestionRevision:
-          logicalQuestionUnitRef.current?.revision ?? null,
-        visibleAnswerRevision:
-          visibleAnswerRevisionRef.current,
-        manualCorrectionRevision:
-          manualCorrectionRevisionRef.current,
-        responseActionRevision:
-          responseActionRevisionRef.current,
+        logicalQuestionUnitId: leaseStartLogicalQuestion?.id ?? null,
+        logicalQuestionRevision: leaseStartLogicalQuestion?.revision ?? null,
+        visibleAnswerRevision: visibleAnswerRevisionRef.current,
+        manualCorrectionRevision: manualCorrectionRevisionRef.current,
+        responseActionRevision: responseActionRevisionRef.current,
         artifactOwnerId: generationParent?.id ?? null,
         authorizedArtifacts: generationAuthorizedArtifacts,
-      });
+      }
+    );
     if (traceId) {
       traceStoreRef.current.updateMetadata(traceId, {
         ...responseOwnerMetadata,
@@ -21639,8 +21660,19 @@ export function useMeetingAssistant() {
           : "provisional-question";
 
       const eventId = createMeetingId("question_type_correction");
+      const correctionRequestKey = [
+        contextState.sessionId,
+        runtimeEpochRef.current,
+        correctionLogicalQuestionUnit.id,
+        correctionLogicalQuestionUnit.revision,
+        correctedType,
+      ].join(":");
       const operationClaim =
-        manualCorrectionOperationCoordinatorRef.current.claim(eventId);
+        manualCorrectionOperationCoordinatorRef.current.claim(
+          eventId,
+          correctionRequestKey
+        );
+      if (!operationClaim.accepted) return;
       manualCorrectionRevisionRef.current += 1;
       pendingInterviewSectionHintRef.current = undefined;
       const correctionRuntimeToken = createRuntimeCommitToken({
@@ -22099,7 +22131,14 @@ export function useMeetingAssistant() {
           correctionLifecycleToken,
           "post-correction-mutation"
         );
-        if (!correctedParentAuthorization.authorized) return;
+        if (!correctedParentAuthorization.authorized) {
+          traceStoreRef.current.finishTrace(
+            correctionTrace.id,
+            "cancelled",
+            correctedParentAuthorization.reason
+          );
+          return;
+        }
 
         correction = {
           ...correction,
@@ -22150,7 +22189,6 @@ export function useMeetingAssistant() {
           mutationStepId,
           "success"
         );
-        traceStoreRef.current.finishTrace(correctionTrace.id, "success");
         sessionRecordingManagerRef.current?.recordActiveMeetingTaskSnapshot(
           correctedActiveTask,
           correctionTrace.id
@@ -22372,7 +22410,14 @@ export function useMeetingAssistant() {
           completionToken,
           "post-correction-regeneration"
         );
-        if (!completionAuthorization.authorized) return;
+        if (!completionAuthorization.authorized) {
+          traceStoreRef.current.finishTrace(
+            correctionTrace.id,
+            "cancelled",
+            completionAuthorization.reason
+          );
+          return;
+        }
         correction = {
           ...correction,
           regenerationStatus:
@@ -22405,6 +22450,15 @@ export function useMeetingAssistant() {
           manualQuestionTypeCorrection: correction,
           error: correction.error ?? null,
         }));
+        traceStoreRef.current.finishTrace(
+          correctionTrace.id,
+          stableAnswerCommitted
+            ? "success"
+            : regenerationStatus === "cancelled"
+              ? "cancelled"
+              : "error",
+          correction.error
+        );
       } catch (error) {
         const failureAuthorization = recordCorrectionAuthorization(
           correctionLifecycleToken ?? correctionRuntimeToken,
@@ -22433,7 +22487,6 @@ export function useMeetingAssistant() {
             undefined,
             error
           );
-          traceStoreRef.current.finishTrace(correctionTrace.id, "error", error);
         } else if (correction.regenerationTraceId) {
           const regenerationTrace = traceStoreRef.current
             .getTraces()
@@ -22445,6 +22498,12 @@ export function useMeetingAssistant() {
               error
             );
           }
+        }
+        const correctionTraceState = traceStoreRef.current
+          .getTraces()
+          .find((trace) => trace.id === correctionTrace.id);
+        if (correctionTraceState?.status === "running") {
+          traceStoreRef.current.finishTrace(correctionTrace.id, "error", error);
         }
         sessionRecordingManagerRef.current?.recordManualQuestionTypeCorrection(
           correction
