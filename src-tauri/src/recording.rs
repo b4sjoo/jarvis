@@ -14,6 +14,7 @@ const CALL_RECORDINGS_DIR: &str = "call-session-recordings";
 const STATUS_FILE: &str = "recording-state.json";
 const EVENTS_FILE: &str = "events.jsonl";
 const MANIFEST_FILE: &str = "manifest.json";
+const AUDIO_EVALUATION_FILE: &str = "audio-evaluation-report.json";
 const EXPORTS_DIR: &str = "exports";
 const MAX_EVENT_BYTES: usize = 2 * 1024 * 1024;
 const MAX_SESSION_ID_CHARS: usize = 160;
@@ -701,6 +702,7 @@ fn export_at_root(
         EVENTS_FILE,
         MANIFEST_FILE,
         crate::call_audio_evidence::AUDIO_MANIFEST_FILE,
+        AUDIO_EVALUATION_FILE,
     ] {
         let source = session_dir.join(name);
         reject_symlink(&source)?;

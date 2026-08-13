@@ -33,7 +33,8 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
-    "test": "tsc -p tsconfig.test.json && node --test .tmp-tests/tests/moss-*.test.js tests/moss-dev-port.test.mjs",
+    "test": "tsc -p tsconfig.test.json && node --test .tmp-tests/tests/moss-*.test.js tests/moss-*.test.mjs",
+    "audio:analyze": "node scripts/analyze-call-audio.mjs",
     "preview": "vite preview",
     "tauri": "node scripts/run-tauri.mjs"
   },
