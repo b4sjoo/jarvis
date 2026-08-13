@@ -62,6 +62,7 @@ test("a rollover family produces one logical transcript after its final segment"
     completedAtMs: 1_000,
   });
   assert.equal(first.status, "pending");
+  assert.equal(first.failedSegmentCount, 0);
 
   const final = assembler.accept({
     segment: segment(2, "silence", "family-1"),
@@ -70,6 +71,7 @@ test("a rollover family produces one logical transcript after its final segment"
   });
   assert.equal(final.status, "ready");
   assert.equal(final.segmentCount, 2);
+  assert.equal(final.failedSegmentCount, 0);
   assert.equal(
     final.text,
     "Walk me through the proposed payment schedule and the approval path"
@@ -87,4 +89,61 @@ test("ordinary segments remain immediate logical transcripts", () => {
   assert.equal(result.status, "ready");
   assert.equal(result.segmentCount, 1);
   assert.equal(result.text, "Could you confirm the renewal date?");
+});
+
+test("a failed rollover tail commits the accepted prefix once as degraded", () => {
+  const assembler = new RolloverTranscriptAssembler();
+  assembler.accept({
+    segment: segment(1, "forced-rollover", "family-1"),
+    transcript: "Please wait for the leader to admit you",
+    completedAtMs: 1_000,
+  });
+
+  const final = assembler.settle({
+    segment: segment(2, "silence", "family-1"),
+    outcome: "empty",
+    completedAtMs: 2_000,
+  });
+
+  assert.equal(final.status, "ready");
+  assert.equal(final.text, "Please wait for the leader to admit you");
+  assert.equal(final.segmentCount, 2);
+  assert.equal(final.failedSegmentCount, 1);
+  assert.equal(final.mergeUncertain, true);
+  assert.equal(final.terminalOutcome, "empty");
+  assert.equal(final.degradedReason, "rollover-family-member-unavailable");
+  assert.deepEqual(assembler.abandonAll(), []);
+});
+
+test("a failed rollover member remains bounded until a later terminal success", () => {
+  const assembler = new RolloverTranscriptAssembler();
+  const failed = assembler.settle({
+    segment: segment(1, "forced-rollover", "family-1"),
+    outcome: "failed",
+    completedAtMs: 1_000,
+  });
+  assert.equal(failed.status, "pending");
+
+  const final = assembler.accept({
+    segment: segment(2, "silence", "family-1"),
+    transcript: "The terminal segment remains usable.",
+    completedAtMs: 2_000,
+  });
+  assert.equal(final.status, "ready");
+  assert.equal(final.text, "The terminal segment remains usable.");
+  assert.equal(final.failedSegmentCount, 1);
+  assert.equal(final.degradedReason, "rollover-family-member-unavailable");
+});
+
+test("a terminal family failure without accepted text closes as failed", () => {
+  const assembler = new RolloverTranscriptAssembler();
+  const final = assembler.settle({
+    segment: segment(2, "silence", "family-1"),
+    outcome: "cancelled",
+    completedAtMs: 2_000,
+  });
+  assert.equal(final.status, "failed");
+  assert.equal(final.text, undefined);
+  assert.equal(final.failedSegmentCount, 1);
+  assert.deepEqual(assembler.abandonAll(), []);
 });

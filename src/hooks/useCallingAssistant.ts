@@ -42,6 +42,8 @@ import {
   type NativeSpeechSegment,
   type PreparedArtifactReceiptStatus,
   type PreparedArtifactTarget,
+  type RolloverTranscriptOutcome,
+  type RolloverTranscriptResult,
   type SessionBoundRecordingWriter,
 } from "@/lib/calling";
 import {
@@ -99,6 +101,7 @@ interface StartCallOptions {
 }
 
 interface RuntimeEvidenceBinding {
+  recording: CallRecordingProjection;
   writer: SessionBoundRecordingWriter;
   handoff: RuntimeHandoffService;
 }
@@ -276,15 +279,18 @@ export function useCallingAssistant() {
   const captureEvidenceBinding = useCallback(
     (owner: ActiveCallRuntime): RuntimeEvidenceBinding | null => {
       const writer = recordingWriterRef.current;
+      const recording = recordingRef.current;
       const handoff = handoffServiceRef.current;
       if (
+        !recording ||
         !writer ||
         !handoff ||
+        recording.callSessionId !== owner.snapshot().callSessionId ||
         writer.callSessionId !== owner.snapshot().callSessionId
       ) {
         return null;
       }
-      return { writer, handoff };
+      return { recording, writer, handoff };
     },
     []
   );
@@ -526,6 +532,80 @@ export function useCallingAssistant() {
         segmentSequence: segment.segmentSequence,
       };
       const observedAt = Date.now();
+
+      const commitRolloverResult = async (
+        assembled: RolloverTranscriptResult,
+        operationId: string,
+        occurredAt: number
+      ) => {
+        record(
+          "rollover-transcript-family",
+          {
+            ...identity,
+            status: assembled.status,
+            familyId: assembled.familyId,
+            segmentCount: assembled.segmentCount,
+            failedSegmentCount: assembled.failedSegmentCount,
+            overlapRemovedChars: assembled.overlapRemovedChars,
+            mergeUncertain: assembled.mergeUncertain,
+            firstSpeechStartedAtMs: assembled.firstSpeechStartedAtMs,
+            completedAtMs: assembled.completedAtMs,
+            terminalOutcome: assembled.terminalOutcome,
+            degradedReason: assembled.degradedReason,
+          },
+          occurredAt
+        );
+        if (assembled.degradedReason && assembled.familyId) {
+          evidence.recording.markIncomplete(
+            `${assembled.degradedReason}:${assembled.familyId}`
+          );
+        }
+        if (assembled.status !== "ready") return;
+        const logicalText = assembled.text?.trim() ?? "";
+        if (!logicalText) return;
+        if (
+          runtimeRef.current !== owner ||
+          owner.snapshot().state !== "live"
+        ) {
+          evidence.recording.markIncomplete(
+            `rollover-ready-after-owner-change:${assembled.familyId ?? identity.segmentSequence}`
+          );
+          return;
+        }
+        const momentUnitId = `moment_${crypto.randomUUID()}`;
+        owner.dispatch({
+          type: "SubmitTranscriptTurn",
+          momentUnitId,
+          turn: {
+            id: `turn_${crypto.randomUUID()}`,
+            speaker: "them",
+            text: logicalText,
+            occurredAt,
+          },
+        });
+        publish();
+        recordPreparedArtifacts(owner, {
+          target: "stt",
+          status: "visible",
+          operationId,
+          occurredAt,
+        }, evidence);
+        await settleTurn(owner, logicalText, momentUnitId);
+      };
+
+      const settleFailedRollover = async (
+        outcome: Exclude<RolloverTranscriptOutcome, "success">,
+        operationId: string,
+        occurredAt: number
+      ) => {
+        const assembled = rolloverAssemblerRef.current.settle({
+          segment,
+          outcome,
+          completedAtMs: occurredAt,
+        });
+        await commitRolloverResult(assembled, operationId, occurredAt);
+      };
+
       segmentLedgerRef.current.observe({ identity, observedAt });
       record(
         "audio-segment-observed",
@@ -545,6 +625,11 @@ export function useCallingAssistant() {
           ...result,
           reason: "stt-provider-not-configured",
         });
+        await settleFailedRollover(
+          "failed",
+          `stt_${segment.captureSessionId}_${segment.segmentSequence}`,
+          Date.now()
+        );
         return;
       }
 
@@ -656,47 +741,13 @@ export function useCallingAssistant() {
           operationId,
           occurredAt: returnedAt,
         }, evidence);
-        const assembled = rolloverAssemblerRef.current.accept({
+        const assembled = rolloverAssemblerRef.current.settle({
           segment,
+          outcome: text.trim() ? "success" : "empty",
           transcript: text,
           completedAtMs: returnedAt,
         });
-        record(
-          "rollover-transcript-family",
-          {
-            ...identity,
-            status: assembled.status,
-            familyId: assembled.familyId,
-            segmentCount: assembled.segmentCount,
-            overlapRemovedChars: assembled.overlapRemovedChars,
-            mergeUncertain: assembled.mergeUncertain,
-            firstSpeechStartedAtMs: assembled.firstSpeechStartedAtMs,
-            completedAtMs: assembled.completedAtMs,
-          },
-          returnedAt
-        );
-        if (assembled.status === "pending") return;
-        const logicalText = assembled.text?.trim() ?? "";
-        if (!logicalText) return;
-        const momentUnitId = `moment_${crypto.randomUUID()}`;
-        owner.dispatch({
-          type: "SubmitTranscriptTurn",
-          momentUnitId,
-          turn: {
-            id: `turn_${crypto.randomUUID()}`,
-            speaker: "them",
-            text: logicalText,
-            occurredAt: returnedAt,
-          },
-        });
-        publish();
-        recordPreparedArtifacts(owner, {
-          target: "stt",
-          status: "visible",
-          operationId,
-          occurredAt: returnedAt,
-        }, evidence);
-        await settleTurn(owner, logicalText, momentUnitId);
+        await commitRolloverResult(assembled, operationId, returnedAt);
       } catch (error) {
         const failedAt = Date.now();
         record(
@@ -730,6 +781,20 @@ export function useCallingAssistant() {
           reason: errorMessage(error),
           occurredAt: failedAt,
         }, evidence);
+        if (
+          runtimeRef.current === owner &&
+          owner.snapshot().state === "live"
+        ) {
+          await settleFailedRollover(
+            error instanceof OperationAbortError
+              ? "cancelled"
+              : /no transcript/i.test(errorMessage(error))
+                ? "empty"
+                : "failed",
+            operationId,
+            failedAt
+          );
+        }
       } finally {
         activeOperationsRef.current.delete(operation);
       }

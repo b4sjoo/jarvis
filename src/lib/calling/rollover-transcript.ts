@@ -1,20 +1,30 @@
 import type { NativeSpeechSegment } from "./audio-segment.js";
 
 export interface RolloverTranscriptResult {
-  status: "pending" | "ready";
+  status: "pending" | "ready" | "failed";
   text?: string;
   familyId?: string;
   segmentCount: number;
+  failedSegmentCount: number;
   overlapRemovedChars: number;
   mergeUncertain: boolean;
   firstSpeechStartedAtMs: number;
   completedAtMs?: number;
+  terminalOutcome?: RolloverTranscriptOutcome;
+  degradedReason?: string;
 }
+
+export type RolloverTranscriptOutcome =
+  | "success"
+  | "empty"
+  | "failed"
+  | "cancelled";
 
 interface TranscriptFamily {
   familyId: string;
   text: string;
   segmentCount: number;
+  failedSegmentCount: number;
   overlapRemovedChars: number;
   mergeUncertain: boolean;
   firstSpeechStartedAtMs: number;
@@ -102,28 +112,54 @@ export class RolloverTranscriptAssembler {
     transcript: string;
     completedAtMs: number;
   }): RolloverTranscriptResult {
+    return this.settle({
+      segment: input.segment,
+      outcome: input.transcript.trim() ? "success" : "empty",
+      transcript: input.transcript,
+      completedAtMs: input.completedAtMs,
+    });
+  }
+
+  settle(input: {
+    segment: NativeSpeechSegment;
+    outcome: RolloverTranscriptOutcome;
+    transcript?: string;
+    completedAtMs: number;
+  }): RolloverTranscriptResult {
     const familyId = input.segment.rolloverFamilyId;
     if (!familyId) {
+      const text = input.transcript?.trim() ?? "";
       return {
-        status: "ready",
-        text: input.transcript.trim(),
+        status: input.outcome === "success" && text ? "ready" : "failed",
+        text: text || undefined,
         segmentCount: 1,
+        failedSegmentCount: input.outcome === "success" ? 0 : 1,
         overlapRemovedChars: 0,
-        mergeUncertain: input.segment.endReason === "forced-rollover",
+        mergeUncertain:
+          input.segment.endReason === "forced-rollover" ||
+          input.outcome !== "success",
         firstSpeechStartedAtMs: input.segment.speechStartedAtMs,
         completedAtMs: input.completedAtMs,
+        terminalOutcome: input.outcome,
       };
     }
 
     const current = this.#families.get(familyId);
-    const merged = mergeRolloverTranscripts(
-      current?.text ?? "",
-      input.transcript
-    );
+    const succeeded =
+      input.outcome === "success" && Boolean(input.transcript?.trim());
+    const merged = succeeded
+      ? mergeRolloverTranscripts(current?.text ?? "", input.transcript ?? "")
+      : {
+          text: current?.text ?? "",
+          overlapRemovedChars: 0,
+          uncertain: true,
+        };
     const family: TranscriptFamily = {
       familyId,
       text: merged.text,
       segmentCount: (current?.segmentCount ?? 0) + 1,
+      failedSegmentCount:
+        (current?.failedSegmentCount ?? 0) + (succeeded ? 0 : 1),
       overlapRemovedChars:
         (current?.overlapRemovedChars ?? 0) + merged.overlapRemovedChars,
       mergeUncertain: (current?.mergeUncertain ?? false) || merged.uncertain,
@@ -137,6 +173,7 @@ export class RolloverTranscriptAssembler {
         status: "pending",
         familyId,
         segmentCount: family.segmentCount,
+        failedSegmentCount: family.failedSegmentCount,
         overlapRemovedChars: family.overlapRemovedChars,
         mergeUncertain: family.mergeUncertain,
         firstSpeechStartedAtMs: family.firstSpeechStartedAtMs,
@@ -144,15 +181,22 @@ export class RolloverTranscriptAssembler {
     }
 
     this.#families.delete(familyId);
+    const text = family.text.trim();
+    const degradedReason = family.failedSegmentCount
+      ? "rollover-family-member-unavailable"
+      : undefined;
     return {
-      status: "ready",
-      text: family.text,
+      status: text ? "ready" : "failed",
+      text: text || undefined,
       familyId,
       segmentCount: family.segmentCount,
+      failedSegmentCount: family.failedSegmentCount,
       overlapRemovedChars: family.overlapRemovedChars,
       mergeUncertain: family.mergeUncertain,
       firstSpeechStartedAtMs: family.firstSpeechStartedAtMs,
       completedAtMs: input.completedAtMs,
+      terminalOutcome: input.outcome,
+      degradedReason,
     };
   }
 
@@ -160,6 +204,7 @@ export class RolloverTranscriptAssembler {
     const abandoned = [...this.#families.values()].map((family) => ({
       familyId: family.familyId,
       segmentCount: family.segmentCount,
+      failedSegmentCount: family.failedSegmentCount,
       overlapRemovedChars: family.overlapRemovedChars,
       mergeUncertain: true,
       firstSpeechStartedAtMs: family.firstSpeechStartedAtMs,
