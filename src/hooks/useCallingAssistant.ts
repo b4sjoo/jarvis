@@ -592,7 +592,7 @@ export function useCallingAssistant() {
     secretsRef.current = loaded;
     setCredentialError(
       failedRoutes.length
-        ? `MOSS could not read ${failedRoutes.join(", ")} credentials from the macOS Keychain. Restart MOSS, then save those routes again.`
+        ? `MOSS could not read ${failedRoutes.join(", ")} credentials from its local private vault. Open Models and save those routes again.`
         : null
     );
     setConfigured({

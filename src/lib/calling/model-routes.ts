@@ -157,10 +157,10 @@ const credentialFailure = (action: "read" | "save", cause: unknown) => {
   console.error(`[moss-credentials] Failed to ${action} provider credentials.`, cause);
   const nextStep =
     action === "read"
-      ? "Restart MOSS, then open Models and save the API key again."
+      ? "Open Models and save the affected API key again."
       : "Open Models and try saving the API key again.";
   return new Error(
-    `MOSS could not ${action} provider credentials in the system keychain. ${nextStep}`
+    `MOSS could not ${action} provider credentials in its local private vault. ${nextStep}`
   );
 };
 

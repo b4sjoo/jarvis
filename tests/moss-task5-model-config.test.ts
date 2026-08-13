@@ -253,7 +253,10 @@ test("desktop credentials use MOSS-owned narrow commands and readable failures",
   assert.match(routes, /invoke<string \| null>\("get_provider_secret"/);
   assert.match(routes, /MOSS could not \$\{action\} provider credentials/);
   assert.match(nativeStore, /const ALLOWED_KEYS: \[&str; 4\]/);
-  assert.match(nativeStore, /get_generic_password/);
+  assert.match(nativeStore, /provider-credentials\.json/);
+  assert.match(nativeStore, /create_new\(true\)/);
+  assert.match(nativeStore, /Permissions::from_mode\(0o600\)/);
+  assert.doesNotMatch(nativeStore, /get_generic_password|security_framework/);
   assert.match(nativeShell, /credential_store::get_provider_secret/);
   assert.doesNotMatch(nativeShell, /tauri_plugin_keychain::init/);
   assert.doesNotMatch(packageManifest, /tauri-plugin-keychain/);
@@ -283,7 +286,7 @@ test("provider configuration compensates earlier key writes before rejecting a p
       changedRoutes: ["runtime", "advisor"],
       writeSecret: async (route, value) => {
         if (route === "advisor" && value === "new-advisor") {
-          throw new Error("keychain denied write");
+          throw new Error("vault denied write");
         }
         stored.set(route, value);
       },
@@ -295,7 +298,7 @@ test("provider configuration compensates earlier key writes before rejecting a p
       },
       onEvent: (event) => events.push(event.status),
     }),
-    /keychain denied write/
+    /vault denied write/
   );
   assert.equal(stored.get("runtime"), "old-runtime");
   assert.equal(stored.get("advisor"), "old-advisor");

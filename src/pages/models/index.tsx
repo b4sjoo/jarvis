@@ -120,7 +120,7 @@ export default function ModelSettingsPage({
         <ShieldCheck size={18} />
         <div>
           <strong>Prompts remain versioned product contracts.</strong>
-          <span>API keys are replaced only when a new value is entered and remain in the OS keychain.</span>
+          <span>API keys are replaced only when a new value is entered and remain in MOSS's local private vault.</span>
         </div>
       </div>
 

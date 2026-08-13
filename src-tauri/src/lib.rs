@@ -149,6 +149,7 @@ pub fn run() {
         )
         .manage(AudioState::default())
         .manage(call_audio_evidence::CallAudioEvidenceState::default())
+        .manage(credential_store::CredentialStoreState::default())
         .manage(GracefulExitState::default())
         .manage(preparation_transaction::PreparationTransactionState::default())
         .plugin(tauri_plugin_http::init())
