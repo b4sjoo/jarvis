@@ -338,6 +338,7 @@ import {
   TaskRelationAdjudicationRuntimeOutcome,
   NarrowScreenRelationReleaseInput,
   TASK_RELATION_ADJUDICATION_MAX_OUTPUT_CHARS,
+  SCREEN_RELATION_RELEASE_ADMISSION_WAIT_BUDGET_MS,
   SCREEN_RELATION_RELEASE_WAIT_BUDGET_MS,
   buildTaskRelationAdjudicationPrompts,
   buildTaskRelationAdjudicationRequest,
@@ -536,6 +537,7 @@ import {
   decideInterviewTaskContinuityBranch,
   decideActiveParentTaskRelationAuthority,
   decideCrossTypeTaskRelationAuthority,
+  isExplicitResumeParentTranscript,
   formatTaskRelationAuthorityForTrace,
   applyResponseOnlyTaskScopeToPromptContext,
   createResponseOnlyTaskScope,
@@ -1814,6 +1816,11 @@ interface QuestionTypeAdjudicationScheduleHandle {
 interface TaskRelationAdjudicationScheduleHandle {
   releaseWindowRequested: boolean;
   operationId?: string;
+  admission: Promise<{
+    scheduledAt: number;
+    startedAt: number;
+    queueWaitMs: number;
+  } | undefined>;
   outcome: Promise<TaskRelationAdjudicationRuntimeOutcome>;
 }
 
@@ -13437,7 +13444,8 @@ export function useMeetingAssistant() {
       deterministicProposal,
       narrowScreenRelease,
     }: {
-      turn: Pick<TranscriptTurn, "speaker">;
+      turn: Pick<TranscriptTurn, "speaker"> &
+        Partial<Pick<TranscriptTurn, "text">>;
       traceId: string;
       turnGateAction: string;
       logicalQuestionUnit?: LogicalQuestionUnit;
@@ -13494,6 +13502,7 @@ export function useMeetingAssistant() {
         disposition: string
       ): TaskRelationAdjudicationScheduleHandle => ({
         releaseWindowRequested,
+        admission: Promise.resolve(undefined),
         outcome: Promise.resolve({
           disposition,
           operationLeaseAuthorized: false,
@@ -13506,6 +13515,7 @@ export function useMeetingAssistant() {
         recentTurns: contextState.transcriptTurns,
       });
       const currentText = request.currentQuestion.text;
+      const sourceOwnedCurrentText = turn.text?.trim() || currentText;
       const explicitTaskSwitch = isTaskSwitchTranscript(currentText);
       const crossTypeAuthority =
         decideCrossTypeTaskRelationAuthority({
@@ -13523,7 +13533,7 @@ export function useMeetingAssistant() {
               hasActiveChild: Boolean(activeMeetingTask.child),
               explicitResume: Boolean(
                 activeMeetingTask.child &&
-                  isResumeParentTranscript(currentText)
+                  isResumeParentTranscript(sourceOwnedCurrentText)
               ),
               correction: hasConstraintOrCorrectionSignal(
                 currentText
@@ -13782,6 +13792,28 @@ export function useMeetingAssistant() {
           resolveOutcome = resolve;
         }
       );
+      const scheduledAt = Date.now();
+      let resolveAdmission:
+        | ((
+            admission:
+              | {
+                  scheduledAt: number;
+                  startedAt: number;
+                  queueWaitMs: number;
+                }
+              | undefined
+          ) => void)
+        | undefined;
+      const admission = new Promise<
+        | {
+            scheduledAt: number;
+            startedAt: number;
+            queueWaitMs: number;
+          }
+        | undefined
+      >((resolve) => {
+        resolveAdmission = resolve;
+      });
       taskRelationAdjudicationRuntimeRef.current!.schedule({
         job: {
           operationId: lease.operationId,
@@ -13808,6 +13840,11 @@ export function useMeetingAssistant() {
             },
           }),
         onStarted: (_job, startedAt, budget) => {
+          resolveAdmission?.({
+            scheduledAt,
+            startedAt,
+            queueWaitMs: Math.max(0, startedAt - scheduledAt),
+          });
           const metadata = {
             ...scheduledMetadata,
             taskRelationAdjudicationStartedAt: startedAt,
@@ -13829,6 +13866,9 @@ export function useMeetingAssistant() {
           );
         },
         onSettled: (runtimeSettlement) => {
+          if (runtimeSettlement.startedAt === undefined) {
+            resolveAdmission?.(undefined);
+          }
           const latestContext =
             contextManagerRef.current.getState();
           const latestTask = latestContext.activeMeetingTask;
@@ -14149,6 +14189,7 @@ export function useMeetingAssistant() {
       return {
         releaseWindowRequested,
         operationId: lease.operationId,
+        admission,
         outcome,
       };
     },
@@ -19158,6 +19199,8 @@ export function useMeetingAssistant() {
           | TaskRelationAdjudicationScheduleHandle
           | undefined;
         let screenRelationSettlementWaitMs = 0;
+        let screenRelationAdmissionWaitMs = 0;
+        let screenRelationExecutionWaitMs = 0;
         let screenRelationSettlementWaitDisposition = "not-awaited";
         const narrowScreenReleaseInput = {
           sourceKind: "screen" as const,
@@ -19277,11 +19320,30 @@ export function useMeetingAssistant() {
           screenDeterministicSettlementProposal
         ) {
           const waitStartedAt = Date.now();
+          let waitStage: "admission" | "execution" = "admission";
           try {
-            const outcome = await withTimeout(
-              taskRelationAdjudicationHandle.outcome,
-              SCREEN_RELATION_RELEASE_WAIT_BUDGET_MS,
-              "Screen relation release window expired."
+            const admissionStartedAt = Date.now();
+            const admission = await withTimeout(
+              taskRelationAdjudicationHandle.admission,
+              SCREEN_RELATION_RELEASE_ADMISSION_WAIT_BUDGET_MS,
+              "Screen relation release admission window expired."
+            );
+            screenRelationAdmissionWaitMs = Math.max(
+              0,
+              Date.now() - admissionStartedAt
+            );
+            waitStage = "execution";
+            const executionStartedAt = Date.now();
+            const outcome = admission
+              ? await withTimeout(
+                  taskRelationAdjudicationHandle.outcome,
+                  SCREEN_RELATION_RELEASE_WAIT_BUDGET_MS,
+                  "Screen relation release execution window expired."
+                )
+              : await taskRelationAdjudicationHandle.outcome;
+            screenRelationExecutionWaitMs = Math.max(
+              0,
+              Date.now() - executionStartedAt
             );
             if (rejectStaleScreenOperation("post-relation-settlement")) {
               return;
@@ -19344,6 +19406,12 @@ export function useMeetingAssistant() {
               ),
               taskRelationAdjudicationWaitBudgetMs:
                 SCREEN_RELATION_RELEASE_WAIT_BUDGET_MS,
+              taskRelationAdjudicationAdmissionWaitBudgetMs:
+                SCREEN_RELATION_RELEASE_ADMISSION_WAIT_BUDGET_MS,
+              taskRelationAdjudicationAdmissionWaitMs:
+                screenRelationAdmissionWaitMs,
+              taskRelationAdjudicationExecutionWaitMs:
+                screenRelationExecutionWaitMs,
               taskRelationAdjudicationWaitMs: Math.max(
                 0,
                 screenRelationSettlementWaitMs
@@ -19359,12 +19427,18 @@ export function useMeetingAssistant() {
               Date.now() - waitStartedAt
             );
             screenRelationSettlementWaitDisposition =
-              "deadline-expired-response-only";
+              `${waitStage}-deadline-expired-response-only`;
             traceStoreRef.current.updateMetadata(trace.id, {
               taskRelationScreenReleaseAuthorized: false,
               taskRelationScreenReleaseReason: "release-window-closed",
               taskRelationAdjudicationWaitBudgetMs:
                 SCREEN_RELATION_RELEASE_WAIT_BUDGET_MS,
+              taskRelationAdjudicationAdmissionWaitBudgetMs:
+                SCREEN_RELATION_RELEASE_ADMISSION_WAIT_BUDGET_MS,
+              taskRelationAdjudicationAdmissionWaitMs:
+                screenRelationAdmissionWaitMs,
+              taskRelationAdjudicationExecutionWaitMs:
+                screenRelationExecutionWaitMs,
               taskRelationAdjudicationWaitMs: Math.max(
                 0,
                 screenRelationSettlementWaitMs
@@ -26180,6 +26254,20 @@ function resolveAdvisorTaskSignals(
   const activeQuestionType = getAdvisorActiveQuestionType(context);
 
   if (hasAdvisorActiveTask(context) && activeQuestionType) {
+    const hasActiveChild = hasAdvisorActiveChild(context);
+    const explicitResumeText = latestThemText || latestUsefulText;
+    const explicitResumeDecision = decideActiveParentTaskRelationAuthority({
+      hasLatestUsefulText: Boolean(latestUsefulText),
+      hasActiveChild,
+      explicitResume: Boolean(
+        hasActiveChild &&
+          explicitResumeText &&
+          isExplicitResumeParentTranscript(explicitResumeText)
+      ),
+      correction: false,
+      logistics: false,
+      broadResumeProposal: false,
+    });
     const latestParentKind = normalizeInterviewParentKind(latestQuestionType);
     const latestIsParentKind = Boolean(
       latestParentKind && isParentInterviewKind(latestParentKind)
@@ -26189,12 +26277,15 @@ function resolveAdvisorTaskSignals(
       (hasQuestionOrTaskSignal(latestUsefulText) ||
         isTaskSwitchTranscript(latestUsefulText));
     const taskRelationAuthorityDecision =
-      decideCrossTypeTaskRelationAuthority({
-        activeQuestionType,
-        candidateQuestionType: latestQuestionType,
-        currentText: latestUsefulText,
-        explicitTaskSwitch: isTaskSwitchTranscript(latestUsefulText),
-      });
+      explicitResumeDecision?.relation === "resume-parent" &&
+      explicitResumeDecision.relationEvidenceAuthorized
+        ? explicitResumeDecision
+        : decideCrossTypeTaskRelationAuthority({
+            activeQuestionType,
+            candidateQuestionType: latestQuestionType,
+            currentText: latestUsefulText,
+            explicitTaskSwitch: isTaskSwitchTranscript(latestUsefulText),
+          });
     const authorizedNewParent =
       taskRelationAuthorityDecision?.relation === "new-parent" &&
       taskRelationAuthorityDecision.relationEvidenceAuthorized;
@@ -26324,13 +26415,15 @@ function resolveAdvisorTaskSignals(
       };
     }
 
-    const hasActiveChild = hasAdvisorActiveChild(context);
     const latestSubtaskIntent = inferAdvisorSubtaskIntent(
       latestUsefulText,
       activeQuestionType
     );
     const relationDecision =
-      decideActiveParentTaskRelationAuthority({
+      taskRelationAuthorityDecision?.relation === "resume-parent" &&
+      taskRelationAuthorityDecision.relationEvidenceAuthorized
+        ? taskRelationAuthorityDecision
+        : decideActiveParentTaskRelationAuthority({
         hasLatestUsefulText: Boolean(latestUsefulText),
         hasActiveChild,
         explicitResume: Boolean(

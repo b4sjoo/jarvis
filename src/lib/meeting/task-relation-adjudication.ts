@@ -31,6 +31,7 @@ export const TASK_RELATION_ADJUDICATION_MAX_PARENT_CHARS = 480;
 export const TASK_RELATION_ADJUDICATION_MAX_TRANSITION_CHARS = 600;
 export const TASK_RELATION_ADJUDICATION_MAX_SOURCE_EVIDENCE_CHARS = 720;
 export const SCREEN_RELATION_RELEASE_MIN_CONFIDENCE = 0.95;
+export const SCREEN_RELATION_RELEASE_ADMISSION_WAIT_BUDGET_MS = 500;
 export const SCREEN_RELATION_RELEASE_WAIT_BUDGET_MS = 1_500;
 
 export const RUNTIME_TASK_RELATIONS = [
@@ -188,7 +189,6 @@ export type NarrowScreenRelationReleaseReason =
   | "screen-boundary-prior-missing"
   | "active-parent-missing"
   | "current-type-not-parent-eligible"
-  | "current-type-matches-parent"
   | "screen-type-evidence-not-authorized"
   | "screen-type-source-not-authoritative"
   | "screen-type-confidence-below-threshold"
@@ -362,7 +362,7 @@ export function decideTaskRelationAdjudicationEligibility(input: {
       reason: "screen-relation-release-candidate",
       triggerReasons: [
         "screen-boundary-prior",
-        "cross-type-parent-eligible-question",
+        "parent-eligible-screen-question",
       ],
       auditKind: "screen-release-candidate",
     };
@@ -435,9 +435,6 @@ export function decideNarrowScreenRelationRelease(
   }
   if (!isParentCanonicalQuestionType(currentQuestionType)) {
     return reject("current-type-not-parent-eligible");
-  }
-  if (currentQuestionType === activeParentQuestionType) {
-    return reject("current-type-matches-parent");
   }
   if (!input.typeEvidenceAuthorized) {
     return reject("screen-type-evidence-not-authorized");

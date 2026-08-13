@@ -542,6 +542,40 @@ test("narrowly releases a grounded cross-type manual screen boundary", () => {
   );
 });
 
+test("narrowly releases a grounded same-type manual screen milestone", () => {
+  const decision = decideNarrowScreenRelationRelease({
+    sourceKind: "screen",
+    screenBoundaryPrior: true,
+    currentQuestionType: "coding",
+    activeParentQuestionType: "coding",
+    typeAuthoritySource: "screen-preflight",
+    typeEvidenceAuthorized: true,
+    typeConfidence: 0.99,
+    questionComplete: true,
+    manualCorrectionActive: false,
+    hasActiveChild: false,
+    operationLeaseAuthorized: true,
+    releaseWindowOpen: true,
+    candidate: {
+      schemaVersion: 2,
+      relation: "new-parent",
+      dependency: "parent-independent",
+      continuationShape: "unclear",
+      returnIntent: "no-resume",
+      switchIntent: "explicit-switch",
+      standaloneSufficiency: "sufficient",
+      confidence: 0.97,
+      currentQuestionEvidenceSpans: ["Implement an LRU cache"],
+      parentEvidenceSpans: [],
+      explicitBinding: false,
+      standalone: true,
+    },
+  });
+
+  assert.equal(decision.authorized, true);
+  assert.equal(decision.reason, "authorized");
+});
+
 test("narrow screen relation release fails closed on continuity or stale evidence", () => {
   const candidate = {
     schemaVersion: 2 as const,

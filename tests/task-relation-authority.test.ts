@@ -9,6 +9,7 @@ import {
 import {
   decideActiveParentTaskRelationAuthority,
   decideCrossTypeTaskRelationAuthority,
+  isExplicitResumeParentTranscript,
 } from "../src/lib/meeting/task-relation-authority.js";
 import type { ActiveMeetingTask } from "../src/lib/meeting/active-meeting-task.js";
 import type { AdvisorPromptContext } from "../src/lib/meeting/types.js";
@@ -197,6 +198,19 @@ test("explicit resume and correction retain relation authority", () => {
   assert.equal(resume?.relationEvidenceAuthorized, true);
   assert.equal(correction?.relation, "correction");
   assert.equal(correction?.relationEvidenceAuthorized, true);
+});
+
+test("explicit resume detection uses the source-owned transition wording", () => {
+  assert.equal(
+    isExplicitResumeParentTranscript(
+      "Let's return to the main ride-sharing design and discuss observability."
+    ),
+    true
+  );
+  assert.equal(
+    isExplicitResumeParentTranscript("What metrics would you use?"),
+    false
+  );
 });
 
 test("response-only current scope excludes generated continuity but retains read-only parent identity", () => {

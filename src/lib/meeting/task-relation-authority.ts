@@ -211,6 +211,22 @@ export function decideActiveParentTaskRelationAuthority(input: {
   };
 }
 
+export function isExplicitResumeParentTranscript(text: string) {
+  const normalized = text
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!normalized) return false;
+
+  return (
+    /\b(back to|return to|go back to|continue|resume|for the original question|for the previous question|for the system we discussed)\b/i.test(
+      normalized
+    ) ||
+    /回到|继续刚才|刚才那个系统|刚才的问题|恢复主线/.test(text)
+  );
+}
+
 export function formatTaskRelationAuthorityForTrace(
   decision: TaskRelationAuthorityDecision | undefined
 ): Record<string, unknown> {
