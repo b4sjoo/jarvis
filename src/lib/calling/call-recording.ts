@@ -418,9 +418,15 @@ export const revealCallRecording = (callSessionId: string) => {
   return invoke<void>("reveal_call_recording", { callSessionId });
 };
 
-export const exportCallRecording = (callSessionId: string) => {
+export const exportCallRecording = (
+  callSessionId: string,
+  includeAudio = false
+) => {
   requireTauriRuntime("Exporting a call recording");
-  return invoke<string>("export_call_recording", { callSessionId });
+  return invoke<string>("export_call_recording", {
+    callSessionId,
+    includeAudio,
+  });
 };
 
 export const retryRecoveredCallRecording = (

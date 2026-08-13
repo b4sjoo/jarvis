@@ -3,7 +3,7 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::fs::{self, File, OpenOptions};
 use std::io::{BufRead, BufReader, Read, Write};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::process::Command;
 use tauri::{AppHandle, Manager};
 use uuid::Uuid;
@@ -219,9 +219,13 @@ pub fn reveal_call_recording(app: AppHandle, call_session_id: String) -> Result<
 }
 
 #[tauri::command]
-pub fn export_call_recording(app: AppHandle, call_session_id: String) -> Result<String, String> {
+pub fn export_call_recording(
+    app: AppHandle,
+    call_session_id: String,
+    include_audio: Option<bool>,
+) -> Result<String, String> {
     let root = recordings_root(&app)?;
-    let exported = export_at_root(&root, &call_session_id)?;
+    let exported = export_at_root(&root, &call_session_id, include_audio.unwrap_or(false))?;
     reveal_path(&exported, true)?;
     Ok(exported.to_string_lossy().to_string())
 }
@@ -666,7 +670,11 @@ fn verify_recording_integrity(
     Ok(())
 }
 
-fn export_at_root(recordings_root: &Path, call_session_id: &str) -> Result<PathBuf, String> {
+fn export_at_root(
+    recordings_root: &Path,
+    call_session_id: &str,
+    include_audio: bool,
+) -> Result<PathBuf, String> {
     validate_session_id(call_session_id)?;
     reject_symlink(recordings_root)?;
     let session_dir = session_dir(recordings_root, call_session_id)?;
@@ -681,13 +689,19 @@ fn export_at_root(recordings_root: &Path, call_session_id: &str) -> Result<PathB
         .map_err(|error| format!("Failed to create call recording exports: {error}"))?;
     reject_symlink(&exports_dir)?;
 
-    let export_path = exports_dir.join(format!("{call_session_id}.zip"));
+    let suffix = if include_audio { "-with-audio" } else { "" };
+    let export_path = exports_dir.join(format!("{call_session_id}{suffix}.zip"));
     reject_symlink(&export_path)?;
     let file = File::create(&export_path)
         .map_err(|error| format!("Failed to create call recording export: {error}"))?;
     let mut archive = ZipWriter::new(file);
     let options = SimpleFileOptions::default();
-    for name in [STATUS_FILE, EVENTS_FILE, MANIFEST_FILE] {
+    for name in [
+        STATUS_FILE,
+        EVENTS_FILE,
+        MANIFEST_FILE,
+        crate::call_audio_evidence::AUDIO_MANIFEST_FILE,
+    ] {
         let source = session_dir.join(name);
         reject_symlink(&source)?;
         if !source.is_file() {
@@ -700,6 +714,51 @@ fn export_at_root(recordings_root: &Path, call_session_id: &str) -> Result<PathB
             .map_err(|error| format!("Failed to read call recording export source: {error}"))?;
         std::io::copy(&mut source_file, &mut archive)
             .map_err(|error| format!("Failed to write call recording export: {error}"))?;
+    }
+    if include_audio {
+        let audio_manifest_path = session_dir.join(crate::call_audio_evidence::AUDIO_MANIFEST_FILE);
+        if !audio_manifest_path.is_file() {
+            return Err("This session has no audio recording to export.".to_string());
+        }
+        let audio_manifest: crate::call_audio_evidence::CallAudioManifest = serde_json::from_str(
+            &fs::read_to_string(&audio_manifest_path)
+                .map_err(|error| format!("Failed to read the audio manifest: {error}"))?,
+        )
+        .map_err(|error| format!("Invalid call audio manifest: {error}"))?;
+        if audio_manifest.retention_mode
+            == crate::call_audio_evidence::CallAudioRetentionMode::Deleted
+        {
+            return Err("This session's audio has been deleted.".to_string());
+        }
+        for chunk in &audio_manifest.chunks {
+            let relative = Path::new(&chunk.relative_path);
+            let mut components = relative.components();
+            if components.next()
+                != Some(Component::Normal(std::ffi::OsStr::new(
+                    crate::call_audio_evidence::AUDIO_DIR,
+                )))
+                || !components.all(|component| matches!(component, Component::Normal(_)))
+            {
+                return Err("Call audio manifest contains an unsafe chunk path.".to_string());
+            }
+            let source = session_dir.join(relative);
+            reject_symlink(&source)?;
+            if !source.is_file()
+                || crate::call_audio_evidence::hash_file(&source)? != chunk.sha256
+            {
+                return Err(format!(
+                    "Call audio chunk is missing or does not match its hash: {}",
+                    chunk.relative_path
+                ));
+            }
+            archive
+                .start_file(&chunk.relative_path, options)
+                .map_err(|error| format!("Failed to stage call audio export: {error}"))?;
+            let mut source_file = File::open(&source)
+                .map_err(|error| format!("Failed to read call audio export source: {error}"))?;
+            std::io::copy(&mut source_file, &mut archive)
+                .map_err(|error| format!("Failed to write call audio export: {error}"))?;
+        }
     }
     let export_file = archive
         .finish()
@@ -989,10 +1048,91 @@ mod tests {
         assert!(summaries[0].manifest_available);
         assert_eq!(summaries[0].integrity_error, None);
 
-        let export = export_at_root(&root, session_id).unwrap();
+        let export = export_at_root(&root, session_id, false).unwrap();
         assert!(export.is_file());
         let archive = zip::ZipArchive::new(File::open(export).unwrap()).unwrap();
         assert_eq!(archive.len(), 3);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn audio_export_is_opt_in_and_verifies_chunk_hashes() {
+        use crate::call_audio_evidence::{
+            CallAudioChannel, CallAudioChannelHealth, CallAudioChannelStatus, CallAudioChunk,
+            CallAudioManifest, CallAudioRecordingState, CallAudioRetentionMode,
+        };
+
+        let root = test_root();
+        let session_id = "call-audio-export";
+        start_at_root(&root, session_id, 1).unwrap();
+        append_at_root(&root, session_id, &event(session_id, 1)).unwrap();
+        close_at_root(&root, session_id, 20, None).unwrap();
+        let session_dir = root.join(session_id);
+        let audio_dir = session_dir.join(crate::call_audio_evidence::AUDIO_DIR);
+        fs::create_dir_all(&audio_dir).unwrap();
+        let relative_path = "audio/them-generation-1-part-1.wav";
+        let audio_path = session_dir.join(relative_path);
+        fs::write(&audio_path, b"test wav evidence").unwrap();
+        let sha256 = crate::call_audio_evidence::hash_file(&audio_path).unwrap();
+        let manifest = CallAudioManifest {
+            version: 1,
+            audio_recording_revision: 1,
+            call_session_id: session_id.to_string(),
+            state: CallAudioRecordingState::RetainedTemporarily,
+            requested_at: 2,
+            started_at: Some(2),
+            stopped_at: Some(19),
+            retention_mode: CallAudioRetentionMode::Temporary,
+            expires_at: Some(100),
+            preserved_at: None,
+            deleted_at: None,
+            channels: vec![CallAudioChannelStatus {
+                channel: CallAudioChannel::Them,
+                health: CallAudioChannelHealth::Complete,
+                chunk_count: 1,
+                byte_count: 17,
+                duration_ms: 10,
+                gap_count: 0,
+                overflow_count: 0,
+                failure: None,
+            }],
+            chunks: vec![CallAudioChunk {
+                audio_chunk_id: "audio-them-1-1".to_string(),
+                channel: CallAudioChannel::Them,
+                capture_generation: 1,
+                part: 1,
+                started_at: 2,
+                ended_at: 12,
+                sample_rate: 16_000,
+                channel_count: 1,
+                sample_format: "pcm-s16le".to_string(),
+                duration_ms: 10,
+                byte_count: 17,
+                sha256,
+                relative_path: relative_path.to_string(),
+                gap_count: 0,
+            }],
+            failure_stage: None,
+            last_error: None,
+            retryable: false,
+        };
+        fs::write(
+            session_dir.join(crate::call_audio_evidence::AUDIO_MANIFEST_FILE),
+            serde_json::to_vec_pretty(&manifest).unwrap(),
+        )
+        .unwrap();
+
+        let metadata_only = export_at_root(&root, session_id, false).unwrap();
+        let mut metadata_archive =
+            zip::ZipArchive::new(File::open(metadata_only).unwrap()).unwrap();
+        assert!(metadata_archive
+            .by_name(crate::call_audio_evidence::AUDIO_MANIFEST_FILE)
+            .is_ok());
+        assert!(metadata_archive.by_name(relative_path).is_err());
+
+        let with_audio = export_at_root(&root, session_id, true).unwrap();
+        let mut audio_archive = zip::ZipArchive::new(File::open(with_audio).unwrap()).unwrap();
+        assert!(audio_archive.by_name(relative_path).is_ok());
         fs::remove_dir_all(root).unwrap();
     }
 

@@ -1095,7 +1095,7 @@ fn channel_name(channel: &CallAudioChannel) -> &'static str {
     }
 }
 
-fn hash_file(path: &Path) -> Result<String, String> {
+pub(crate) fn hash_file(path: &Path) -> Result<String, String> {
     let mut file = File::open(path)
         .map_err(|error| format!("Failed to read audio chunk for hashing: {error}"))?;
     let mut hasher = Sha256::new();

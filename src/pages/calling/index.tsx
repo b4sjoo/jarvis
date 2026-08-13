@@ -1,6 +1,7 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   ArchiveX,
+  Circle,
   LayoutDashboard,
   Pause,
   Play,
@@ -9,12 +10,20 @@ import {
   Square,
   ThumbsDown,
   ThumbsUp,
+  X,
 } from "lucide-react";
 import mossLogo from "@/assets/moss-mark.png";
 import type { CallingAssistantController } from "@/hooks/useCallingAssistant";
 import { callStatusLabel } from "@/lib/calling";
 import "./calling.css";
 
+const AUDIO_NOTICE_ACCEPTED_KEY = "moss.call-audio-notice-accepted.v1";
+
+const formatAudioTime = (durationMs: number) => {
+  const seconds = Math.max(0, Math.floor(durationMs / 1_000));
+  const minutes = Math.floor(seconds / 60);
+  return `${String(minutes).padStart(2, "0")}:${String(seconds % 60).padStart(2, "0")}`;
+};
 
 export default function CallingPage({
   controller,
@@ -26,6 +35,8 @@ export default function CallingPage({
   onOpenControlCenter?: () => void;
 }) {
   const [actionError, setActionError] = useState<string | null>(null);
+  const [showAudioNotice, setShowAudioNotice] = useState(false);
+  const [audioClock, setAudioClock] = useState(() => Date.now());
   const latestThem = useMemo(() => [...controller.runtime.transcript].reverse().find((turn) => turn.speaker === "them"), [controller.runtime.transcript]);
   const currentEvaluation = useMemo(
     () => controller.runtime.humanEvaluations.find(
@@ -46,6 +57,50 @@ export default function CallingPage({
   const state = controller.runtime.state;
   const canStart = ["planned", "closed", "start-failed", "abandoned"].includes(state);
   const preparation = controller.runtime.preparation;
+  const audioManifest = controller.audioRecordingManifest;
+  const audioIsWriting = audioManifest?.state === "recording";
+  const recordedDurationMs = Math.max(
+    0,
+    ...(audioManifest?.channels.map((channel) => channel.durationMs) ?? [])
+  );
+  const audioDurationMs = recordedDurationMs + (
+    audioIsWriting ? Math.max(0, audioClock - audioManifest.requestedAt) : 0
+  );
+  const canToggleAudio = ["live", "paused"].includes(state)
+    || (state === "recovering" && controller.audioRecordingDesired);
+  const audioStatus = controller.audioRecordingArmed
+    ? "Armed"
+    : audioIsWriting
+      ? `REC ${formatAudioTime(audioDurationMs)}`
+      : audioManifest?.state === "partial" || audioManifest?.state === "error"
+        ? "Partial audio"
+        : controller.audioRecordingDesired
+          ? "Starting"
+          : null;
+
+  useEffect(() => {
+    if (!audioIsWriting) return;
+    const timer = window.setInterval(() => setAudioClock(Date.now()), 1_000);
+    return () => window.clearInterval(timer);
+  }, [audioIsWriting]);
+
+  const toggleAudioRecording = () => {
+    if (controller.audioRecordingDesired) {
+      void run(controller.stopAudioRecording);
+      return;
+    }
+    if (window.localStorage.getItem(AUDIO_NOTICE_ACCEPTED_KEY) === "true") {
+      void run(controller.startAudioRecording);
+      return;
+    }
+    setShowAudioNotice(true);
+  };
+
+  const confirmAudioRecording = () => {
+    window.localStorage.setItem(AUDIO_NOTICE_ACCEPTED_KEY, "true");
+    setShowAudioNotice(false);
+    void run(controller.startAudioRecording);
+  };
 
   return (
     <div className={`moss-shell${embedded ? " moss-shell-embedded" : ""}`}>
@@ -122,18 +177,52 @@ export default function CallingPage({
         </section>
       )}
 
-      {(actionError || controller.runtime.lastError || controller.recordingError) && <div className="moss-error">{actionError ?? controller.runtime.lastError ?? controller.recordingError}</div>}
+      {(actionError || controller.runtime.lastError || controller.recordingError || controller.audioRecordingError) && <div className="moss-error">{actionError ?? controller.runtime.lastError ?? controller.recordingError ?? controller.audioRecordingError}</div>}
 
       <footer className="moss-actions">
         {canStart && <button className="primary-button" disabled={!controller.nativeRuntimeAvailable} title={controller.nativeRuntimeAvailable ? undefined : "Available in the desktop app"} onClick={() => void run(controller.start)}><Play size={17} />{state === "start-failed" ? "Retry start" : "Start call"}</button>}
         {state === "live" && <button className="secondary-button" onClick={() => void run(controller.pause)}><Pause size={17} />Pause</button>}
         {(state === "paused" || state === "recovering") && <button className="primary-button" onClick={() => void run(controller.resume)}><Play size={17} />Resume</button>}
+        {(["live", "paused", "recovering"] as string[]).includes(state) && (
+          <div className="audio-recording-control">
+            <button
+              className={controller.audioRecordingDesired ? "recording-button recording-button-active" : "recording-button"}
+              disabled={!canToggleAudio}
+              onClick={toggleAudioRecording}
+              aria-label={controller.audioRecordingDesired ? "Stop call audio recording" : "Record call audio"}
+              title={controller.audioRecordingDesired ? "Stop audio recording" : "Record both sides locally"}
+            >
+              {controller.audioRecordingDesired ? <Square size={13} fill="currentColor" /> : <Circle size={17} fill="currentColor" />}
+            </button>
+            {audioStatus && <span className={audioIsWriting ? "audio-recording-status audio-recording-status-live" : "audio-recording-status"}>{audioStatus}</span>}
+          </div>
+        )}
         {(["live", "paused", "recovering"] as string[]).includes(state) && <button className="secondary-button" disabled={!latestThem || !controller.configured.advisor} onClick={() => void run(controller.requestGuidance)}><Sparkles size={17} />Advise</button>}
         {(["live", "paused", "recovering", "start-failed"] as string[]).includes(state) && <button className="danger-button" onClick={() => void run(controller.end)}><Square size={15} />End</button>}
         {state === "close-failed" && <button className="primary-button" onClick={() => void run(controller.retryClose)}><RotateCcw size={16} />Retry close</button>}
         {state === "close-failed" && <button className="danger-button" onClick={() => void run(controller.abandonClose)}><ArchiveX size={16} />Abandon</button>}
         <span className="route-health">{controller.nativeRuntimeAvailable ? "Desktop" : "Browser preview"} · Runtime {controller.configured.runtime ? "ready" : "local fallback"} · Advisor {controller.configured.advisor ? "ready" : "not set"} · STT {controller.configured.stt ? "ready" : "not set"}{controller.recordingStatus ? ` · Recording ${controller.recordingStatus.state}` : ""}</span>
       </footer>
+
+      {showAudioNotice && (
+        <div className="audio-notice-layer">
+          <section className="audio-notice" role="dialog" aria-modal="true" aria-labelledby="audio-notice-title">
+            <header>
+              <div>
+                <span>Local audio evidence</span>
+                <h2 id="audio-notice-title">Record both sides of this call?</h2>
+              </div>
+              <button className="icon-button" onClick={() => setShowAudioNotice(false)} aria-label="Close recording notice"><X size={17} /></button>
+            </header>
+            <p>MOSS will save separate local tracks for your microphone and system audio. Temporary audio becomes eligible for deletion 72 hours after the call closes.</p>
+            <p>You are responsible for obtaining any consent required by the participants and applicable law.</p>
+            <footer>
+              <button className="secondary-button" onClick={() => setShowAudioNotice(false)}>Cancel</button>
+              <button className="danger-button" onClick={confirmAudioRecording}><Circle size={15} fill="currentColor" />Start recording</button>
+            </footer>
+          </section>
+        </div>
+      )}
     </div>
   );
 }

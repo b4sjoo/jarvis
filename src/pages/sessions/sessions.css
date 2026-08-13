@@ -179,6 +179,116 @@
   gap: 4px;
 }
 
+.session-action-active {
+  border-color: var(--border-strong);
+  background: var(--surface-hover);
+  color: var(--text-primary);
+}
+
+.session-audio-panel {
+  min-width: 0;
+  grid-column: 1 / -1;
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--surface-muted);
+}
+
+.session-audio-panel > header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.session-audio-panel > header > div:first-child {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.session-audio-panel > header strong {
+  color: var(--text-primary);
+  font-size: var(--font-body);
+}
+
+.session-audio-panel > header span {
+  color: var(--text-muted);
+  font-size: var(--font-small);
+}
+
+.session-audio-actions,
+.session-audio-health {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 7px;
+}
+
+.session-audio-actions .danger-button {
+  margin-left: 0;
+}
+
+.audio-health {
+  padding: 5px 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--surface-raised);
+  color: var(--text-secondary);
+  font-size: var(--font-small);
+}
+
+.audio-health-partial,
+.audio-health-missing {
+  border-color: var(--warning-border);
+  background: var(--warning-soft);
+  color: var(--warning-text);
+}
+
+.audio-health-deleted {
+  color: var(--text-muted);
+}
+
+.session-audio-tracks {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.session-audio-tracks > div {
+  min-width: 0;
+  display: grid;
+  align-content: start;
+  gap: 8px;
+}
+
+.session-audio-tracks > div > strong {
+  color: var(--text-secondary);
+  font-size: var(--font-ui);
+  text-transform: uppercase;
+}
+
+.session-audio-tracks label {
+  min-width: 0;
+  display: grid;
+  gap: 5px;
+  color: var(--text-muted);
+  font-size: var(--font-small);
+}
+
+.session-audio-tracks audio {
+  width: 100%;
+  height: 36px;
+}
+
+.session-audio-empty {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: var(--font-body);
+}
+
 .danger-icon {
   color: var(--danger-text);
 }
@@ -230,5 +340,13 @@
   .session-actions {
     grid-column: 1;
     grid-row: auto;
+  }
+
+  .session-audio-panel > header {
+    flex-direction: column;
+  }
+
+  .session-audio-tracks {
+    grid-template-columns: 1fr;
   }
 }
