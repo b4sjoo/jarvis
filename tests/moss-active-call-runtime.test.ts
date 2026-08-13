@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { ActiveCallRuntime, createOperationLease, parseGuidanceFrame, parseRuntimeSettlement } from "../src/lib/calling/index.js";
+import { ActiveCallRuntime, createOperationLease, parseGuidanceFrame, parseRuntimeSettlement, resolveAdvisorAuthority } from "../src/lib/calling/index.js";
 
 test("ActiveCallRuntime is the single writer for a complete call lifecycle", () => {
   const runtime = new ActiveCallRuntime({ callSessionId: "call-1", createdAt: 1 });
@@ -43,4 +43,50 @@ test("model parsers enforce narrow MOSS contracts", () => {
   const frame = parseGuidanceFrame('{"say":["Confirm it."],"ask":[],"avoid":[],"evidence":[],"callState":"Verification","nextMove":"Wait"}');
   assert.equal(frame.say[0], "Confirm it.");
   assert.throws(() => parseGuidanceFrame('{"say":[],"ask":[],"avoid":[],"evidence":[],"callState":"","nextMove":""}'));
+});
+
+test("runtime owns Advisor authority when model fields contradict", () => {
+  const runtime = new ActiveCallRuntime({ callSessionId: "call-1", createdAt: 1 });
+  runtime.dispatch({ type: "StartCall", occurredAt: 2 });
+  runtime.dispatch({ type: "CaptureStarted", occurredAt: 3 });
+  runtime.dispatch({ type: "SubmitTranscriptTurn", momentUnitId: "m1", turn: { id: "t1", speaker: "them", text: "That is useful background.", occurredAt: 4 } });
+  runtime.dispatch({
+    type: "ApplyRuntimeSettlement",
+    settlement: {
+      callSessionId: "call-1",
+      momentUnitId: "m1",
+      evidenceRevision: 1,
+      disposition: "context-only",
+      counterpartyMove: "informational",
+      phaseSignal: "hold",
+      candidateUpdates: [],
+      responseAuthorized: true,
+      settledAt: 5,
+    },
+  });
+  const settlement = runtime.snapshot().latestSettlement;
+  assert.equal(settlement?.modelResponseAuthorized, true);
+  assert.equal(settlement?.responseAuthorized, false);
+  assert.equal(settlement?.advisorAuthorityNormalized, true);
+  assert.equal(settlement?.advisorAuthorityReason, "context-only-disposition");
+});
+
+test("runtime authorizes actionable evidence despite a negative model recommendation", () => {
+  const decision = resolveAdvisorAuthority({
+    callSessionId: "call-1",
+    momentUnitId: "m1",
+    evidenceRevision: 1,
+    disposition: "actionable",
+    counterpartyMove: "request",
+    phaseSignal: "hold",
+    candidateUpdates: [],
+    responseAuthorized: false,
+    settledAt: 5,
+  });
+  assert.deepEqual(decision, {
+    modelRequested: false,
+    responseAuthorized: true,
+    normalized: true,
+    reason: "actionable-disposition",
+  });
 });

@@ -68,6 +68,7 @@ export type CallRecordingEventKind =
   | "stt-operation-returned"
   | "model-operation-dispatched"
   | "model-operation-returned"
+  | "runtime-advisor-authority"
   | "human-evaluation"
   | "preparation-binding"
   | "snapshot-artifact-receipt"

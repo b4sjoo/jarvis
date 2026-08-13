@@ -27,6 +27,7 @@ export function parseRuntimeSettlement(input: {
     counterpartyMove: parsed.counterpartyMove as CounterpartyMove,
     phaseSignal: parsed.phaseSignal as PhaseSignal,
     responseAuthorized: parsed.responseAuthorized,
+    modelResponseAuthorized: parsed.responseAuthorized,
     candidateUpdates: updates.flatMap((entry, index) => {
       if (!entry || typeof entry !== "object") return [];
       const value = entry as { kind?: unknown; value?: unknown };

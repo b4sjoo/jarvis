@@ -47,6 +47,12 @@ export interface CallTurnSettlement {
   phaseSignal: PhaseSignal;
   candidateUpdates: PendingCaseUpdateProposal[];
   responseAuthorized: boolean;
+  modelResponseAuthorized?: boolean;
+  advisorAuthorityNormalized?: boolean;
+  advisorAuthorityReason?:
+    | "actionable-disposition"
+    | "context-only-disposition"
+    | "incomplete-evidence";
   settledAt: number;
 }
 

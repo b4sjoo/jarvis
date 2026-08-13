@@ -1,5 +1,6 @@
 export * from "./audio-segment.js";
 export * from "./audio-settings.js";
+export * from "./advisor-authority.js";
 export * from "./application-settings.js";
 export * from "./active-call-runtime.js";
 export * from "./bounded-context.js";

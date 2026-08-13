@@ -5,6 +5,7 @@ import {
   type OperationLease,
   type RuntimeOperationEnvelope,
 } from "./operation-authority.js";
+import { applyAdvisorAuthority } from "./advisor-authority.js";
 import { StableGuidanceStore, type GuidanceReceipt } from "./stable-guidance.js";
 import type {
   CallSessionState,
@@ -152,7 +153,13 @@ export function reduceActiveCallRuntime(
       ) {
         return state;
       }
-      return { ...state, latestSettlement: structuredClone(command.settlement), updatedAt: command.settlement.settledAt };
+      return {
+        ...state,
+        latestSettlement: structuredClone(
+          applyAdvisorAuthority(command.settlement)
+        ),
+        updatedAt: command.settlement.settledAt,
+      };
     case "SelectOperation":
       return {
         ...state,

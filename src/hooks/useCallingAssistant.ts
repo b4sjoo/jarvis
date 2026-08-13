@@ -509,9 +509,32 @@ export function useCallingAssistant() {
         if (outcome.status === "cancelled" || outcome.status === "stale") return;
       }
       if (runtimeRef.current !== owner) return;
-      owner.dispatch({ type: "ApplyRuntimeSettlement", settlement });
+      const after = owner.dispatch({ type: "ApplyRuntimeSettlement", settlement });
+      const committed = after.latestSettlement;
+      if (
+        !committed ||
+        committed.momentUnitId !== momentUnitId ||
+        committed.evidenceRevision !== snapshot.evidenceRevision
+      ) {
+        return;
+      }
+      evidence.writer.queue(
+        "runtime-advisor-authority",
+        {
+          momentUnitId,
+          evidenceRevision: committed.evidenceRevision,
+          disposition: committed.disposition,
+          counterpartyMove: committed.counterpartyMove,
+          phaseSignal: committed.phaseSignal,
+          modelRequested: committed.modelResponseAuthorized,
+          responseAuthorized: committed.responseAuthorized,
+          normalized: committed.advisorAuthorityNormalized,
+          reason: committed.advisorAuthorityReason,
+        },
+        committed.settledAt
+      );
       publish();
-      if (settlement.responseAuthorized) void executeAdvisor(owner);
+      if (committed.responseAuthorized) void executeAdvisor(owner);
     },
     [
       captureEvidenceBinding,
