@@ -1,4 +1,5 @@
 mod case_material_extraction;
+mod call_audio_evidence;
 mod case_privacy;
 mod content_storage;
 mod credential_store;
@@ -188,6 +189,11 @@ pub fn run() {
             recording::reveal_call_recordings_root,
             recording::reveal_call_recording,
             recording::export_call_recording,
+            call_audio_evidence::get_call_audio_recording,
+            call_audio_evidence::preserve_call_audio_recording,
+            call_audio_evidence::restore_temporary_call_audio_retention,
+            call_audio_evidence::delete_call_audio_recording,
+            call_audio_evidence::cleanup_expired_call_audio,
             speaker::start_call_audio_session,
             speaker::stop_call_audio_session,
             #[cfg(debug_assertions)]

@@ -5,6 +5,7 @@ export * from "./application-settings.js";
 export * from "./active-call-runtime.js";
 export * from "./bounded-context.js";
 export * from "./call-recording.js";
+export * from "./call-audio-recording.js";
 export * from "./call-status.js";
 export * from "./cancellable-operation.js";
 export * from "./human-truth.js";

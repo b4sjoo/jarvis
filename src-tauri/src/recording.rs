@@ -79,6 +79,7 @@ pub struct CallRecordingSummary {
     pub human_evaluation_count: u64,
     pub manifest_available: bool,
     pub integrity_error: Option<String>,
+    pub audio_recording: Option<crate::call_audio_evidence::CallAudioRecordingSummary>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -102,6 +103,8 @@ struct CallRecordingManifest {
     event_count: u64,
     events_sha256: String,
     raw_audio_retained: bool,
+    #[serde(default)]
+    audio_recording: Option<crate::call_audio_evidence::CallAudioRecordingSummary>,
     #[serde(default)]
     health: CallRecordingHealth,
     #[serde(default)]
@@ -223,7 +226,7 @@ pub fn export_call_recording(app: AppHandle, call_session_id: String) -> Result<
     Ok(exported.to_string_lossy().to_string())
 }
 
-fn recordings_root(app: &AppHandle) -> Result<PathBuf, String> {
+pub(crate) fn recordings_root(app: &AppHandle) -> Result<PathBuf, String> {
     let app_data = app
         .path()
         .app_data_dir()
@@ -389,14 +392,34 @@ fn close_at_root(
         if status.persisted_event_count != status.event_count {
             return Err("Call recording persisted count does not match the event log.".to_string());
         }
+        let audio_recording = match crate::call_audio_evidence::finalize_temporary_retention(
+            &session_dir,
+            ended_at,
+        ) {
+            Ok(manifest) => manifest.as_ref().map(crate::call_audio_evidence::summarize),
+            Err(error) => {
+                status.health = CallRecordingHealth::Incomplete;
+                status
+                    .incompleteness_reasons
+                    .push(format!("audio-retention-finalize:{error}"));
+                write_status(&session_dir, &status)?;
+                None
+            }
+        };
+        let raw_audio_retained = audio_recording.as_ref().is_some_and(|audio| {
+            audio.retention_mode
+                != crate::call_audio_evidence::CallAudioRetentionMode::Deleted
+                && audio.chunk_count > 0
+        });
         let manifest = CallRecordingManifest {
-            version: 2,
+            version: 3,
             call_session_id: call_session_id.to_string(),
             started_at: status.started_at,
             ended_at,
             event_count: status.event_count,
             events_sha256,
-            raw_audio_retained: false,
+            raw_audio_retained,
+            audio_recording,
             health: status.health.clone(),
             attempted_event_count: status.attempted_event_count,
             persisted_event_count: status.persisted_event_count,
@@ -498,11 +521,17 @@ fn list_all_at_root(recordings_root: &Path) -> Result<Vec<CallRecordingSummary>,
         let human_evaluation_count =
             count_event_kind(&path.join(EVENTS_FILE), "human-evaluation").unwrap_or(0);
         let integrity_error = verify_recording_integrity(&path, &status).err();
+        let audio_recording = crate::call_audio_evidence::read_for_session_dir(&path)
+            .ok()
+            .flatten()
+            .as_ref()
+            .map(crate::call_audio_evidence::summarize);
         recordings.push(CallRecordingSummary {
             status,
             human_evaluation_count,
             manifest_available: path.join(MANIFEST_FILE).is_file(),
             integrity_error,
+            audio_recording,
         });
     }
     recordings.sort_by(|left, right| right.status.started_at.cmp(&left.status.started_at));
@@ -898,6 +927,7 @@ mod tests {
         let manifest = fs::read_to_string(root.join(session_id).join(MANIFEST_FILE)).unwrap();
         assert!(manifest.contains("eventsSha256"));
         assert!(manifest.contains("\"rawAudioRetained\": false"));
+        assert!(manifest.contains("\"audioRecording\": null"));
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -992,7 +1022,7 @@ mod tests {
             &fs::read_to_string(root.join(session_id).join(MANIFEST_FILE)).unwrap(),
         )
         .unwrap();
-        assert_eq!(manifest.version, 2);
+        assert_eq!(manifest.version, 3);
         assert_eq!(manifest.health, CallRecordingHealth::Incomplete);
         assert_eq!(manifest.terminal_state, "closed");
         assert_eq!(list_all_at_root(&root).unwrap()[0].integrity_error, None);

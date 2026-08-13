@@ -14,6 +14,7 @@ import {
   authorizeNativeOwnedAudioEvent,
   createCancellableOperation,
   commitProviderConfigurationTransaction,
+  cleanupExpiredCallAudio,
   createSessionBoundRecordingWriter,
   listCallRecordings,
   listRecoverableCallRecordings,
@@ -507,6 +508,27 @@ export function useCallingAssistant() {
     void refreshRecoverableRecordings();
     void refreshCallRecordings();
   }, [refreshCallRecordings, refreshRecoverableRecordings, refreshSecrets]);
+
+  useEffect(() => {
+    if (!nativeRuntimeAvailable) return;
+    const cleanup = () => {
+      void cleanupExpiredCallAudio()
+        .then((result) => {
+          if (result.deletedCount || result.failedCount) {
+            void refreshCallRecordings();
+          }
+          if (result.failedCount) {
+            setRecordingError(
+              `MOSS could not delete ${result.failedCount} expired audio recording${result.failedCount === 1 ? "" : "s"}.`
+            );
+          }
+        })
+        .catch((error) => setRecordingError(errorMessage(error)));
+    };
+    cleanup();
+    const interval = window.setInterval(cleanup, 60 * 60 * 1_000);
+    return () => window.clearInterval(interval);
+  }, [nativeRuntimeAvailable, refreshCallRecordings]);
 
   const executeAdvisor = useCallback(
     async (owner: ActiveCallRuntime, force = false) => {

@@ -46,6 +46,46 @@ export interface CallRecordingSummary {
   humanEvaluationCount: number;
   manifestAvailable: boolean;
   integrityError: string | null;
+  audioRecording: CallAudioRecordingSummary | null;
+}
+
+export type CallAudioRecordingState =
+  | "off"
+  | "starting"
+  | "recording"
+  | "stopping"
+  | "retained-temporarily"
+  | "preserved"
+  | "deleting"
+  | "deleted"
+  | "partial"
+  | "error";
+
+export type CallAudioRetentionMode = "temporary" | "preserved" | "deleted";
+export type CallAudioChannelHealth = "complete" | "partial" | "missing" | "deleted";
+
+export interface CallAudioChannelStatus {
+  channel: "them" | "me";
+  health: CallAudioChannelHealth;
+  chunkCount: number;
+  byteCount: number;
+  durationMs: number;
+  gapCount: number;
+  overflowCount: number;
+  failure: string | null;
+}
+
+export interface CallAudioRecordingSummary {
+  audioRecordingRevision: number;
+  state: CallAudioRecordingState;
+  retentionMode: CallAudioRetentionMode;
+  expiresAt: number | null;
+  preservedAt: number | null;
+  deletedAt: number | null;
+  chunkCount: number;
+  byteCount: number;
+  durationMs: number;
+  channels: CallAudioChannelStatus[];
 }
 
 export type CallRecordingEventKind =

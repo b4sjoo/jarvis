@@ -1,0 +1,105 @@
+import { invoke } from "@tauri-apps/api/core";
+import type {
+  CallAudioChannelStatus,
+  CallAudioRecordingState,
+  CallAudioRetentionMode,
+} from "./call-recording.js";
+import { isTauriRuntime, requireTauriRuntime } from "./runtime-environment.js";
+
+export interface CallAudioChunk {
+  audioChunkId: string;
+  channel: "them" | "me";
+  captureGeneration: number;
+  part: number;
+  startedAt: number;
+  endedAt: number;
+  sampleRate: number;
+  channelCount: number;
+  sampleFormat: string;
+  durationMs: number;
+  byteCount: number;
+  sha256: string;
+  relativePath: string;
+  gapCount: number;
+}
+
+export interface CallAudioManifest {
+  version: number;
+  audioRecordingRevision: number;
+  callSessionId: string;
+  state: CallAudioRecordingState;
+  requestedAt: number;
+  startedAt: number | null;
+  stoppedAt: number | null;
+  retentionMode: CallAudioRetentionMode;
+  expiresAt: number | null;
+  preservedAt: number | null;
+  deletedAt: number | null;
+  channels: CallAudioChannelStatus[];
+  chunks: CallAudioChunk[];
+  failureStage: string | null;
+  lastError: string | null;
+  retryable: boolean;
+}
+
+export interface CallAudioCleanupResult {
+  scannedCount: number;
+  expiredCount: number;
+  deletedCount: number;
+  failedCount: number;
+  failures: string[];
+}
+
+export async function getCallAudioRecording(callSessionId: string) {
+  if (!isTauriRuntime()) return null;
+  return invoke<CallAudioManifest | null>("get_call_audio_recording", {
+    callSessionId,
+  });
+}
+
+export function preserveCallAudioRecording(input: {
+  callSessionId: string;
+  expectedRevision: number;
+  occurredAt?: number;
+}) {
+  requireTauriRuntime("Call audio retention");
+  return invoke<CallAudioManifest>("preserve_call_audio_recording", {
+    ...input,
+    occurredAt: input.occurredAt ?? Date.now(),
+  });
+}
+
+export function restoreTemporaryCallAudioRetention(input: {
+  callSessionId: string;
+  expectedRevision: number;
+}) {
+  requireTauriRuntime("Call audio retention");
+  return invoke<CallAudioManifest>("restore_temporary_call_audio_retention", input);
+}
+
+export function deleteCallAudioRecording(input: {
+  callSessionId: string;
+  expectedRevision: number;
+  occurredAt?: number;
+}) {
+  requireTauriRuntime("Call audio deletion");
+  return invoke<CallAudioManifest>("delete_call_audio_recording", {
+    ...input,
+    occurredAt: input.occurredAt ?? Date.now(),
+  });
+}
+
+export async function cleanupExpiredCallAudio(occurredAt = Date.now()) {
+  if (!isTauriRuntime()) {
+    return {
+      scannedCount: 0,
+      expiredCount: 0,
+      deletedCount: 0,
+      failedCount: 0,
+      failures: [],
+    } satisfies CallAudioCleanupResult;
+  }
+  return invoke<CallAudioCleanupResult>("cleanup_expired_call_audio", {
+    occurredAt,
+  });
+}
