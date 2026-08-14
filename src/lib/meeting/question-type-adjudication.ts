@@ -14,6 +14,7 @@ import type {
   ProvisionalCurrentQuestion,
 } from "./current-question-settlement.js";
 import type { RuntimeInferenceRuntimeJob } from "./runtime-inference-runtime.js";
+import type { RuntimeAxisConflictDecision } from "./runtime-axis-conflict.js";
 import type { TaxonomyAdjudicationLease } from "./taxonomy-adjudication.js";
 import type { MeetingQuestionTypeAdjudicationMode } from "./types.js";
 
@@ -300,6 +301,7 @@ export function decideQuestionTypeAdjudicationEligibility(input: {
   lexical: QuestionTypeInferenceDecision;
   manualCorrectionActive: boolean;
   turnGateAction: string;
+  sameAxisConflict?: RuntimeAxisConflictDecision<CanonicalQuestionType>;
 }): QuestionTypeAdjudicationEligibilityDecision {
   const wordEquivalent = estimateWordEquivalents(
     input.projection.text
@@ -360,7 +362,8 @@ export function decideQuestionTypeAdjudicationEligibility(input: {
       wordEquivalent < 24 &&
       sentenceCount <= 1 &&
       input.projection.projectionReason === "within-limit" &&
-      input.projection.omittedSourceTurnIds.length === 0
+      input.projection.omittedSourceTurnIds.length === 0 &&
+      !input.sameAxisConflict?.conflict
   );
   if (simpleHighConfidenceLocal) {
     return shadowObservation(
@@ -381,6 +384,9 @@ export function decideQuestionTypeAdjudicationEligibility(input: {
     input.projection.projectionReason !== "within-limit" ||
     input.projection.omittedSourceTurnIds.length > 0
       ? "bounded-question-projection"
+      : undefined,
+    input.sameAxisConflict?.conflict
+      ? "same-axis-proposal-conflict"
       : undefined,
     input.turnGateAction === "answer-refresh"
       ? "source-owned-answer-opportunity"

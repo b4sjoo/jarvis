@@ -67,6 +67,7 @@ export * from "./rollover-transcript";
 export * from "./runtime-inference";
 export * from "./runtime-inference-health";
 export * from "./runtime-inference-runtime";
+export * from "./runtime-axis-conflict";
 export * from "./short-intent-gate";
 export * from "./short-intent-gate-request";
 export * from "./question-type-adjudication";

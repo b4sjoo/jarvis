@@ -233,6 +233,27 @@ test("waits only for lower-confidence, long, or multi-sentence type review", () 
       "multi-sentence-question-unit"
     )
   );
+
+  const conflicting = decideQuestionTypeAdjudicationEligibility({
+    mode: "enforcement",
+    speaker: "them",
+    projection: simpleRequest.question,
+    lexical: { ...exactHigh, confidence: 0.97 },
+    manualCorrectionActive: false,
+    turnGateAction: "answer-refresh",
+    sameAxisConflict: {
+      axis: "question-type",
+      conflict: true,
+      reason: "eligible-proposals-disagree",
+      eligibleProposalCount: 2,
+      sources: ["question-type-lexical", "section-hint"],
+      values: ["coding", "general-system-design"],
+    },
+  });
+  assert.equal(conflicting.executionMode, "enforcement-window");
+  assert.ok(
+    conflicting.triggerReasons.includes("same-axis-proposal-conflict")
+  );
 });
 
 test("migrates the legacy enabled flag to an explicit operation mode", () => {

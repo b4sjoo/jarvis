@@ -60,6 +60,7 @@ import {
   PendingAnswerRevision,
   StableAnswerRevision,
   RuntimeCommitToken,
+  RuntimeAxisConflictDecision,
   AdvisorTurnIntentDecision,
   extractInterviewerIntentKeywordEvidence,
   formatInterviewerIntentKeywordEvidenceForTrace,
@@ -250,12 +251,14 @@ import {
   formatRefreshAuthorityForTrace,
   formatRuntimeTypeRepairOutputAuthorityForTrace,
   formatResponseOpportunityGenerationGateForTrace,
+  formatRuntimeAxisConflictForTrace,
   formatActiveQuestionTermCorrectionForTrace,
   formatAnswerSufficiencyDecisionForTrace,
   formatAdvisorHypothesisChallengeForTrace,
   formatAdvisorResponseConsistencyForTrace,
   formatAdvisorResponseFingerprintForTrace,
   parseMeetingAnswer,
+  detectRuntimeAxisConflict,
   serializeMeetingAnswer,
   parseMeetingTraceMetrics,
   prewarmWhiteboardRenderValidator,
@@ -14155,12 +14158,16 @@ export function useMeetingAssistant() {
       turnGateAction,
       logicalQuestionUnit,
       lexical,
+      questionTypeAxisConflict,
     }: {
       turn: Pick<TranscriptTurn, "speaker">;
       traceId: string;
       turnGateAction: string;
       logicalQuestionUnit?: LogicalQuestionUnit;
       lexical: QuestionTypeInferenceDecision;
+      questionTypeAxisConflict?: RuntimeAxisConflictDecision<
+        CanonicalQuestionType
+      >;
     }): QuestionTypeAdjudicationScheduleHandle | undefined => {
       if (!logicalQuestionUnit) return undefined;
       const contextState = contextManagerRef.current.getState();
@@ -14179,6 +14186,7 @@ export function useMeetingAssistant() {
         lexical,
         manualCorrectionActive: manualAuthorityConflict,
         turnGateAction,
+        sameAxisConflict: questionTypeAxisConflict,
       });
       const localQuestionType =
         normalizeCanonicalQuestionType(lexical.type) ?? "unknown";
@@ -14228,6 +14236,10 @@ export function useMeetingAssistant() {
             : "not-eligible",
         }),
         ...formatRuntimeInferenceCircuitForTrace(circuit),
+        ...formatRuntimeAxisConflictForTrace(
+          questionTypeAxisConflict,
+          "questionTypeAxis"
+        ),
         questionTypeAdjudicationLocalType:
           lexical.type ?? "unknown",
         questionTypeAdjudicationLocalCertainty:
@@ -16374,11 +16386,15 @@ export function useMeetingAssistant() {
       traceId,
       turnGateAction,
       logicalQuestionUnit,
+      questionTypeAxisConflict,
     }: {
       turn: TranscriptTurn;
       traceId: string;
       turnGateAction: string;
       logicalQuestionUnit?: LogicalQuestionUnit;
+      questionTypeAxisConflict?: RuntimeAxisConflictDecision<
+        CanonicalQuestionType
+      >;
     }) => {
       const contextState = contextManagerRef.current.getState();
       const sessionId = contextState.sessionId;
@@ -16440,6 +16456,7 @@ export function useMeetingAssistant() {
         turnGateAction,
         logicalQuestionUnit,
         lexical,
+        questionTypeAxisConflict,
       });
       const taskRelationAdjudication = scheduleTaskRelationAdjudication({
         turn,
@@ -18651,8 +18668,37 @@ export function useMeetingAssistant() {
           runtimeEpoch: runtimeEpochRef.current,
           now: turn.endedAt,
         });
+        const questionTypeAxisConflict = detectRuntimeAxisConflict({
+          axis: "question-type",
+          proposals: [
+            {
+              source: "question-type-lexical",
+              value:
+                currentQuestionType === "unknown"
+                  ? undefined
+                  : currentQuestionType,
+              eligible: currentQuestionType !== "unknown",
+              productionEligible: true,
+            },
+            {
+              source: "interviewer-section-hint",
+              value: sectionHintConsumption.hint?.questionType,
+              eligible:
+                sectionHintConsumption.disposition === "applied" ||
+                sectionHintConsumption.disposition === "conflicted",
+              productionEligible: true,
+            },
+          ],
+        });
         pendingInterviewSectionHintRef.current =
           sectionHintConsumption.nextHint;
+        traceStoreRef.current.updateMetadata(
+          traceId,
+          formatRuntimeAxisConflictForTrace(
+            questionTypeAxisConflict,
+            "questionTypeAxis"
+          )
+        );
         if (sectionHintConsumption.disposition !== "no-hint") {
           const sectionHintMetadata = {
             ...formatInterviewSectionHintForTrace(sectionHintConsumption),
@@ -18710,6 +18756,7 @@ export function useMeetingAssistant() {
               traceId,
               turnGateAction: taxonomyTurnGateAction,
               logicalQuestionUnit,
+              questionTypeAxisConflict,
             });
           }
           traceStoreRef.current.updateMetadata(traceId, {
@@ -18835,6 +18882,7 @@ export function useMeetingAssistant() {
             traceId,
             turnGateAction: taxonomyTurnGateAction,
             logicalQuestionUnit,
+            questionTypeAxisConflict,
           });
         }
 
