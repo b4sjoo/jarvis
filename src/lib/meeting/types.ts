@@ -903,8 +903,6 @@ export interface ManualQuestionTypeCorrection {
 }
 
 export type InterviewSessionContextSource =
-  | "transcript"
-  | "screen"
   | "manual"
   | "brief";
 
@@ -917,38 +915,8 @@ export interface InterviewTargetCompany {
   updatedAt: number;
 }
 
-export type InterviewCompanyMentionRole =
-  | "interview-target"
-  | "interviewer-employer"
-  | "candidate-history"
-  | "comparison-only"
-  | "unknown";
-
-export type InterviewCompanyCandidateDisposition =
-  | "no-candidate"
-  | "candidate-proposed"
-  | "candidate-rejected-speaker"
-  | "candidate-rejected-role"
-  | "candidate-rejected-lock"
-  | "candidate-rejected-confidence"
-  | "candidate-conflict"
-  | "candidate-committed";
-
-export interface InterviewCompanyHistoryEntry {
-  id: string;
-  company?: string;
-  normalized?: string;
-  mentionRole: InterviewCompanyMentionRole;
-  disposition: InterviewCompanyCandidateDisposition;
-  source: InterviewSessionContextSource;
-  speaker?: TranscriptSpeaker;
-  reason: string;
-  occurredAt: number;
-}
-
 export interface InterviewSessionContext {
   targetCompany?: InterviewTargetCompany;
-  companyHistory?: InterviewCompanyHistoryEntry[];
 }
 
 export type InterviewBriefType = TaxonomyInterviewBriefType;

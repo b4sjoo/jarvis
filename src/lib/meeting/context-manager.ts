@@ -12,8 +12,6 @@ import {
 import {
   createInterviewSessionContextFromBrief,
   updateInterviewSessionContextFromBrief,
-  updateInterviewSessionContextFromScreenText,
-  updateInterviewSessionContextFromTurn,
 } from "./interview-session-context.js";
 import {
   collectConfirmedMeFacts,
@@ -121,18 +119,10 @@ export class MeetingContextManager {
       ...this.state.transcriptTurns,
       { ...turn, text: trimmedText },
     ]);
-    const interviewContextUpdate = updateInterviewSessionContextFromTurn(
-      this.state.interviewSessionContext,
-      { ...turn, text: trimmedText }
-    );
-
     this.state = {
       ...this.state,
       transcriptTurns: nextTurns,
-      interviewSessionContext: interviewContextUpdate.context,
     };
-
-    return interviewContextUpdate;
   }
 
   updateTranscriptTurnText(turnId: string, text: string) {
@@ -186,21 +176,6 @@ export class MeetingContextManager {
         observation,
       ].slice(-this.maxScreenObservations),
     };
-  }
-
-  updateInterviewSessionContextFromScreenText(text: string, evidence?: string) {
-    const interviewContextUpdate = updateInterviewSessionContextFromScreenText(
-      this.state.interviewSessionContext,
-      text,
-      evidence
-    );
-
-    this.state = {
-      ...this.state,
-      interviewSessionContext: interviewContextUpdate.context,
-    };
-
-    return interviewContextUpdate;
   }
 
   updateScreenObservation(
@@ -459,9 +434,6 @@ function cloneInterviewSessionContext(
     targetCompany: context.targetCompany
       ? { ...context.targetCompany }
       : undefined,
-    companyHistory: context.companyHistory?.map((entry) => ({
-      ...entry,
-    })),
   };
 }
 

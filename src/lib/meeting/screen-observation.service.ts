@@ -110,7 +110,6 @@ export interface ScreenPreflightResult extends TaskClassifierMetadata {
   programmingLanguage?: string;
   rawQuestionType?: string;
   canonicalQuestionType?: CanonicalQuestionType;
-  targetCompany?: string;
   isBehavioralInterview?: boolean;
   amazonLeadershipPrinciple?: string;
 }
@@ -465,7 +464,7 @@ function buildScreenPreflightUserMessage({
     "<task>",
     "Return JSON only, with no Markdown fences.",
     "Schema:",
-    '{"question": string|null, "questionType": "behavioral"|"coding"|"general-system-design"|"ai-ml-system-design"|"project-deep-dive"|"field-knowledge"|"unknown", "askFrame": "hypothetical-design"|"past-project"|"ambiguous"|"direct-answer"|"unknown", "topicDomain": "ai-ml-infra"|"agentic-ai"|"search"|"backend"|"unknown", "projectAnchor": string|null, "programmingLanguage": string|null, "confidence": number, "targetCompany": string|null, "isBehavioralInterview": boolean, "amazonLeadershipPrinciple": string|null}',
+    '{"question": string|null, "questionType": "behavioral"|"coding"|"general-system-design"|"ai-ml-system-design"|"project-deep-dive"|"field-knowledge"|"unknown", "askFrame": "hypothetical-design"|"past-project"|"ambiguous"|"direct-answer"|"unknown", "topicDomain": "ai-ml-infra"|"agentic-ai"|"search"|"backend"|"unknown", "projectAnchor": string|null, "programmingLanguage": string|null, "confidence": number, "isBehavioralInterview": boolean, "amazonLeadershipPrinciple": string|null}',
     "question: the active visible interview/software-engineering question near the cursor, or null.",
     "questionType: classify the question. Use ai-ml-system-design for hypothetical AI/ML infra design such as RAG, model serving, agent memory, evaluation, retrieval, vector search, model routing, or AI platform architecture. Use general-system-design for non-AI backend/system design such as ticket selling, rate limiter, chat, booking, feeds, or storage systems. Use field-knowledge for direct conceptual questions such as 'what is X', 'explain X', 'compare X and Y', or 'what are the tradeoffs of X' when they do not ask to design a system. Use project-deep-dive when the question asks about a project the candidate built, their role, tradeoffs, architecture, impact, or lessons.",
     "askFrame: hypothetical-design for future/imagined design questions; past-project for questions about the candidate's actual past work; ambiguous when it asks both about an existing project and a future improvement; direct-answer for field knowledge, coding, or behavioral questions.",
@@ -473,10 +472,9 @@ function buildScreenPreflightUserMessage({
     "projectAnchor: if the question visibly names or clearly points to a project, return that project name, such as Agentic Memory, Model Interface, NeuralSearch, BeagleStone, AOS Release, or null.",
     "programmingLanguage: for coding questions, return the visible selected/requested programming language such as Python, Java, Go, TypeScript, JavaScript, C++, Rust, Kotlin, Swift, or null. Only use visible screen evidence, not general problem text.",
     "confidence: number from 0 to 1 for the classifier fields.",
-    "targetCompany: a visible company name such as Amazon, Google, Microsoft, Meta, Anthropic, OpenAI, Stripe, Airbnb, or null. Use visible text like 'from Amazon' if present.",
     "Do not classify as behavioral only because the target company is visible, because the interview type includes behavioral, or because a previous question was behavioral.",
     "isBehavioralInterview: true only for personal story questions asking about the candidate's past behavior, decisions, conflict, failure, leadership, or examples from experience. It must be false for coding, field-knowledge, AI/ML system design, general system design, and project deep-dive questions.",
-    "amazonLeadershipPrinciple: if targetCompany is Amazon and the question clearly maps to one Amazon Leadership Principle, return its name; otherwise null.",
+    "amazonLeadershipPrinciple: if the visible question itself clearly maps to one Amazon Leadership Principle, return its name; otherwise null.",
     "For Amazon, prefer Bias for Action when the question asks about moving forward, acting quickly, reversible decisions, or deciding whether to gather more information before acting.",
     "</task>",
   ].join("\n");
@@ -794,7 +792,6 @@ function parseScreenPreflightOutput(output: string): ScreenPreflightResult {
         typeof parsed.confidence === "number"
           ? clampConfidence(parsed.confidence)
           : fallbackClassifier.confidence,
-      targetCompany: readOptionalString(parsed.targetCompany),
       isBehavioralInterview:
         typeof parsed.isBehavioralInterview === "boolean"
           ? parsed.isBehavioralInterview

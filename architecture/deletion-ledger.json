@@ -1,7 +1,7 @@
 {
   "$schema": "./deletion-ledger.schema.json",
   "version": 1,
-  "updatedAt": "2026-08-12",
+  "updatedAt": "2026-08-14",
   "entries": [
     {
       "id": "task-runtime-legacy-active-screen-root",
@@ -47,6 +47,28 @@
         "clearActiveMeetingTask(",
         "clearActiveMeetingTaskProjection",
         "activeInterviewTask?: ActiveInterviewParent;"
+      ]
+    },
+    {
+      "id": "local-company-inference-authority",
+      "symbolOrSurface": "Transcript and Screen company detectors with direct InterviewSessionContext mutation authority",
+      "verdict": "delete",
+      "ownerTaskId": 147,
+      "replacement": "Snapshot or explicit human company authority, followed by unresolved-only metadata Runtime LLM settlement",
+      "persistedDataImpact": "recording",
+      "historicalReader": "versioned Session Recording trace reader",
+      "proofCommands": [
+        "npm run verify:architecture",
+        "npm test"
+      ],
+      "deletionGate": "Live transcript and Screen paths cannot infer or mutate targetCompany; authoritative values may only be canonicalized after they already exist.",
+      "rollbackBoundary": "Task 147A local-authority deletion remains separate from Task 147C proposal production and Task 147E unresolved-only enforcement.",
+      "status": "deleted",
+      "forbiddenPatterns": [
+        "detectInterviewCompany(",
+        "detectInterviewCompanyDecision(",
+        "updateInterviewSessionContextFromTurn(",
+        "updateInterviewSessionContextFromScreenText("
       ]
     },
     {

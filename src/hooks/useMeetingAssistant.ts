@@ -187,8 +187,6 @@ import {
   decideStableAnswerCommit,
   decideStagedAnswerPartial,
   detectAnswerSufficiencyShadow,
-  detectInterviewCompany,
-  formatInterviewCompanyDecisionForTrace,
   formatDisplayTranscriptForTrace,
   calculateWordEquivalent,
   classifyMeTurn,
@@ -12596,8 +12594,7 @@ export function useMeetingAssistant() {
       segment: QueuedSpeechSegment,
       metadata: Record<string, unknown> = {}
     ) => {
-      const interviewContextUpdate =
-        contextManagerRef.current.addTranscriptTurn(turn);
+      contextManagerRef.current.addTranscriptTurn(turn);
       sessionRecordingManagerRef.current?.recordTranscriptTurn(turn);
       const canonicalCandidate =
         segment.sttEvaluationCanonicalCandidate;
@@ -12657,56 +12654,7 @@ export function useMeetingAssistant() {
           typeof metadata.transcriptAppendReason === "string"
             ? metadata.transcriptAppendReason
             : "accepted-source-turn",
-        ...formatInterviewCompanyDecisionForTrace(
-          interviewContextUpdate?.companyDecision
-        ),
       });
-
-      if (
-        interviewContextUpdate?.companyDecision &&
-        interviewContextUpdate.companyDecision.disposition !==
-          "no-candidate"
-      ) {
-        const companyStepId = traceStoreRef.current.startStep(
-          traceId,
-          "Interview company candidate evaluated",
-          formatInterviewCompanyDecisionForTrace(
-            interviewContextUpdate.companyDecision
-          )
-        );
-        traceStoreRef.current.finishStep(
-          traceId,
-          companyStepId,
-          "success"
-        );
-      }
-
-      if (interviewContextUpdate?.changed) {
-        const targetCompany =
-          interviewContextUpdate.targetCompany ??
-          contextState.interviewSessionContext?.targetCompany;
-        const interviewStepId = traceStoreRef.current.startStep(
-          traceId,
-          "Interview session context updated",
-          {
-            targetCompany: targetCompany?.value,
-            confidence: targetCompany?.confidence,
-            source: targetCompany?.source,
-          }
-        );
-        traceStoreRef.current.finishStep(
-          traceId,
-          interviewStepId,
-          "success",
-          {
-            evidenceChars: targetCompany?.evidence.length ?? 0,
-          }
-        );
-        traceStoreRef.current.updateMetadata(traceId, {
-          targetCompany: targetCompany?.value,
-          targetCompanyConfidence: targetCompany?.confidence,
-        });
-      }
 
       setState((previous) => ({
         ...previous,
@@ -12717,7 +12665,7 @@ export function useMeetingAssistant() {
         activeMeetingTask: contextState.activeMeetingTask,
       }));
 
-      return { contextState, interviewContextUpdate };
+      return { contextState };
     },
     []
   );
@@ -19367,35 +19315,12 @@ export function useMeetingAssistant() {
               "Screen preflight timed out."
             );
             if (rejectStaleScreenOperation("post-preflight")) return;
-            const preflightContextUpdate =
-              contextManagerRef.current.updateInterviewSessionContextFromScreenText(
-                [
-                  screenPreflight.targetCompany
-                    ? `${screenPreflight.targetCompany} interview`
-                    : undefined,
-                  screenPreflight.question,
-                ]
-                  .filter(Boolean)
-                  .join("\n"),
-                [
-                  screenPreflight.targetCompany,
-                  screenPreflight.question,
-                ]
-                  .filter(Boolean)
-                  .join(" - ")
-              );
-            const targetCompany =
-              preflightContextUpdate?.targetCompany ??
-              contextManagerRef.current.getState().interviewSessionContext
-                ?.targetCompany;
-
             traceStoreRef.current.finishStep(
               trace.id,
               preflightStepId,
               "success",
               {
                 questionChars: screenPreflight.question?.length ?? 0,
-                targetCompany: screenPreflight.targetCompany,
                 ...formatQuestionTypeTraceMetadata(
                   screenPreflight.questionType,
                   screenPreflight.rawQuestionType
@@ -19407,10 +19332,6 @@ export function useMeetingAssistant() {
                 behavioral: screenPreflight.isBehavioralInterview,
                 amazonLeadershipPrinciple:
                   screenPreflight.amazonLeadershipPrinciple,
-                contextUpdated: Boolean(preflightContextUpdate?.changed),
-                ...formatInterviewCompanyDecisionForTrace(
-                  preflightContextUpdate?.companyDecision
-                ),
               }
             );
             traceStoreRef.current.updateMetadata(trace.id, {
@@ -19422,67 +19343,7 @@ export function useMeetingAssistant() {
               topicDomain: screenPreflight.topicDomain,
               projectAnchor: screenPreflight.projectAnchor,
               classifierConfidence: screenPreflight.confidence,
-              ...formatInterviewCompanyDecisionForTrace(
-                preflightContextUpdate?.companyDecision
-              ),
             });
-
-            if (
-              preflightContextUpdate?.companyDecision &&
-              preflightContextUpdate.companyDecision.disposition !==
-                "no-candidate"
-            ) {
-              const companyStepId =
-                traceStoreRef.current.startStep(
-                  trace.id,
-                  "Interview company candidate evaluated",
-                  formatInterviewCompanyDecisionForTrace(
-                    preflightContextUpdate.companyDecision
-                  )
-                );
-              traceStoreRef.current.finishStep(
-                trace.id,
-                companyStepId,
-                "success"
-              );
-            }
-
-            if (preflightContextUpdate?.changed) {
-              const interviewStepId = traceStoreRef.current.startStep(
-                trace.id,
-                "Interview session context updated",
-                {
-                  targetCompany: targetCompany?.value,
-                  confidence: targetCompany?.confidence,
-                  source: targetCompany?.source,
-                }
-              );
-              traceStoreRef.current.finishStep(
-                trace.id,
-                interviewStepId,
-                "success",
-                {
-                  evidenceChars: targetCompany?.evidence.length ?? 0,
-                }
-              );
-              traceStoreRef.current.updateMetadata(trace.id, {
-                targetCompany: targetCompany?.value,
-                targetCompanyConfidence: targetCompany?.confidence,
-                ...formatQuestionTypeTraceMetadata(
-                  screenPreflight.questionType,
-                  screenPreflight.rawQuestionType
-                ),
-                askFrame: screenPreflight.askFrame,
-                topicDomain: screenPreflight.topicDomain,
-                projectAnchor: screenPreflight.projectAnchor,
-                classifierConfidence: screenPreflight.confidence,
-              });
-              setState((previous) => ({
-                ...previous,
-                interviewSessionContext:
-                  contextManagerRef.current.getState().interviewSessionContext,
-              }));
-            }
           } catch (error) {
             if (rejectStaleScreenOperation("post-preflight")) return;
             traceStoreRef.current.finishStep(
@@ -28761,15 +28622,9 @@ function evaluateThemTurnForAdvisor(
   }
 ) {
   const trimmed = turn.text.trim();
-  const hasQuestion = hasQuestionOrTaskSignal(trimmed);
   return decideAdvisorTurnIntent(trimmed, {
     hasActiveTask: options.hasActiveTask,
     hasRecentQuestionContext: options.hasRecentQuestionContext,
-    hasCompanyContextOnly: Boolean(
-      detectInterviewCompany(trimmed) &&
-        !hasQuestion &&
-        calculateWordEquivalent(trimmed) <= 18
-    ),
   });
 }
 
