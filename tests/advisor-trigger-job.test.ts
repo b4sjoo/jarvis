@@ -280,6 +280,17 @@ test("manual correction validates against its current target instead of the runt
       logicalQuestionUnit: manualCorrectionTarget,
     }
   );
+  assert.deepEqual(
+    resolveAdvisorLogicalQuestionAuthorizationTarget({
+      jobSource: "force-advise",
+      runtimeCurrent,
+      responseRecoveryTarget: manualCorrectionTarget,
+    }),
+    {
+      source: "response-recovery-target",
+      logicalQuestionUnit: manualCorrectionTarget,
+    }
+  );
 });
 
 test("explicit response actions preserve the active parent", () => {

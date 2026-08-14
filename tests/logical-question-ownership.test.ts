@@ -4,6 +4,7 @@ import {
   authorizeLogicalQuestionUnitLease,
   createCanonicalLogicalQuestionLineage,
   createLogicalQuestionUnitLease,
+  createResponseRecoveryQuestionLineage,
   decideLogicalQuestionMaterialization,
   decideLogicalQuestionPublication,
 } from "../src/lib/meeting/logical-question-ownership.js";
@@ -138,6 +139,18 @@ test("canonical lineage keeps one question identity across revisions", () => {
   assert.equal(firstLineage.questionInstanceId, revisedLineage.questionInstanceId);
   assert.equal(revisedLineage.triggerTurnId, "turn_3");
   assert.equal(revisedLineage.identityState, "canonical");
+});
+
+test("response recovery lineage is provisional and revision scoped", () => {
+  const unit = makeLogicalQuestionUnit();
+  const lineage = createResponseRecoveryQuestionLineage({
+    unit,
+    traceId: "trace_recovery",
+  });
+
+  assert.equal(lineage.questionInstanceId, "recovery:lqu:logical-question-a:2");
+  assert.equal(lineage.identityState, "provisional");
+  assert.equal(lineage.triggerTurnId, "turn_2");
 });
 
 test("a split-question revision stales every lease bound to the earlier turn", () => {

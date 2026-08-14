@@ -184,6 +184,23 @@ export function createCanonicalLogicalQuestionLineage({
   };
 }
 
+export function createResponseRecoveryQuestionLineage({
+  unit,
+  traceId,
+}: {
+  unit: LogicalQuestionUnit;
+  traceId: string;
+}): QuestionInstanceLineage {
+  return {
+    questionInstanceId: `recovery:lqu:${unit.id}:${unit.revision}`,
+    questionOriginTraceId: traceId,
+    triggerTurnId: unit.currentTurnId,
+    sessionId: unit.sessionId,
+    runtimeEpoch: unit.runtimeEpoch,
+    identityState: "provisional",
+  };
+}
+
 export function formatLogicalQuestionLeaseForTrace(
   lease: LogicalQuestionUnitLease | undefined,
   authorization?: LogicalQuestionLeaseAuthorization,

@@ -6,14 +6,70 @@ import {
   decideForceAdviseEligibility,
   deriveForceAdviseTargetStatus,
   forceAdviseStatusAfterAdvisorOutcome,
+  matchesForceAdviseTargetTransition,
 } from "../src/lib/meeting/force-advise.js";
 
-test("force advise is available for a suppressed canonical target", () => {
+test("force advise is available for a suppressed response recovery target", () => {
   assert.deepEqual(decideForceAdviseEligibility({ status: "ready" }), {
     eligible: true,
     retryable: true,
-    reason: "canonical-target-ready",
+    reason: "recovery-target-ready",
   });
+});
+
+test("a newer recovery target is eligible even after the canonical answer committed", () => {
+  assert.equal(
+    decideForceAdviseEligibility({
+      status: "already-advised",
+      automaticExecutionState: "visible-committed",
+    }).eligible,
+    false
+  );
+  assert.deepEqual(
+    decideForceAdviseEligibility({
+      status: "ready",
+      automaticExecutionState: "not-started",
+      manualExecutionState: "idle",
+    }),
+    {
+      eligible: true,
+      retryable: true,
+      reason: "recovery-target-ready",
+    }
+  );
+});
+
+test("recovery transitions require the exact target identity", () => {
+  const current = {
+    targetId: "response-recovery:trace-new:turn-new:lqu-a:2",
+    targetKind: "response-recovery" as const,
+    logicalQuestionUnitId: "lqu-a",
+    logicalQuestionUnitRevision: 2,
+  };
+
+  assert.equal(
+    matchesForceAdviseTargetTransition(current, {
+      logicalQuestionUnitId: "lqu-a",
+      logicalQuestionUnitRevision: 2,
+    }),
+    false
+  );
+  assert.equal(
+    matchesForceAdviseTargetTransition(current, {
+      targetId: "response-recovery:trace-old:turn-old:lqu-a:2",
+      logicalQuestionUnitId: "lqu-a",
+      logicalQuestionUnitRevision: 2,
+    }),
+    false
+  );
+  assert.equal(
+    matchesForceAdviseTargetTransition(current, {
+      targetId: current.targetId,
+      logicalQuestionUnitId: "lqu-a",
+      logicalQuestionUnitRevision: 2,
+    }),
+    true
+  );
 });
 
 test("force advise becomes retryable after an advisor execution failure", () => {

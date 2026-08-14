@@ -6,8 +6,8 @@ import type {
 } from "./types.js";
 
 export type ForceAdviseEligibilityReason =
-  | "no-canonical-target"
-  | "canonical-target-ready"
+  | "no-recovery-target"
+  | "recovery-target-ready"
   | "previous-advisor-attempt-failed"
   | "automatic-advisor-running"
   | "automatic-model-completed"
@@ -15,12 +15,44 @@ export type ForceAdviseEligibilityReason =
   | "advisor-committed"
   | "manual-repair-running"
   | "manual-repair-committed"
-  | "stale-canonical-target";
+  | "stale-recovery-target";
 
 export interface ForceAdviseEligibilityDecision {
   eligible: boolean;
   retryable: boolean;
   reason: ForceAdviseEligibilityReason;
+}
+
+export function matchesForceAdviseTargetTransition(
+  current: Pick<
+    ForceAdviseTargetPresentation,
+    | "targetId"
+    | "targetKind"
+    | "logicalQuestionUnitId"
+    | "logicalQuestionUnitRevision"
+  >,
+  incoming: {
+    targetId?: string;
+    logicalQuestionUnitId: string | null | undefined;
+    logicalQuestionUnitRevision: number | null | undefined;
+  }
+): boolean {
+  if (
+    !incoming.logicalQuestionUnitId ||
+    incoming.logicalQuestionUnitRevision === null ||
+    incoming.logicalQuestionUnitRevision === undefined
+  ) {
+    return false;
+  }
+  if (incoming.targetId) {
+    return current.targetId === incoming.targetId;
+  }
+  return (
+    current.targetKind === "canonical-question" &&
+    current.logicalQuestionUnitId === incoming.logicalQuestionUnitId &&
+    current.logicalQuestionUnitRevision ===
+      incoming.logicalQuestionUnitRevision
+  );
 }
 
 export type ForceAdviseRepairCause =
@@ -44,7 +76,7 @@ export function decideForceAdviseEligibility(
     return {
       eligible: false,
       retryable: false,
-      reason: "no-canonical-target",
+      reason: "no-recovery-target",
     };
   }
 
@@ -96,7 +128,7 @@ export function decideForceAdviseEligibility(
       return {
         eligible: true,
         retryable: true,
-        reason: "canonical-target-ready",
+        reason: "recovery-target-ready",
       };
     case "failed":
       return {
@@ -138,7 +170,7 @@ export function decideForceAdviseEligibility(
       return {
         eligible: false,
         retryable: false,
-        reason: "stale-canonical-target",
+        reason: "stale-recovery-target",
       };
   }
 }

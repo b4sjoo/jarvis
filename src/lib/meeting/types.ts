@@ -1774,6 +1774,8 @@ export type ForceAdviseManualExecutionState =
   | "stale";
 
 export interface ForceAdviseTargetPresentation {
+  targetId: string;
+  targetKind: "canonical-question" | "response-recovery";
   originalTraceId: string;
   turnId: string;
   text: string;

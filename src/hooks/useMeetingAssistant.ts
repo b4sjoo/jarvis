@@ -442,12 +442,14 @@ import {
   authorizeLogicalQuestionUnitLease,
   createCanonicalLogicalQuestionLineage,
   createLogicalQuestionUnitLease,
+  createResponseRecoveryQuestionLineage,
   decideLogicalQuestionMaterialization,
   decideLogicalQuestionPublication,
   decideForceAdviseEligibility,
   classifyForceAdviseRepairCause,
   deriveForceAdviseTargetStatus,
   forceAdviseStatusAfterAdvisorOutcome,
+  matchesForceAdviseTargetTransition,
   formatLogicalQuestionLeaseForTrace,
   formatLogicalQuestionPublicationForTrace,
   formatPrimaryAskProjectionForTrace,
@@ -2934,6 +2936,7 @@ export function useMeetingAssistant() {
 
   const transitionForceAdviseTarget = useCallback(
     (input: {
+      targetId?: string;
       logicalQuestionUnitId: string | null | undefined;
       logicalQuestionUnitRevision: number | null | undefined;
       automaticExecutionState?:
@@ -2948,13 +2951,10 @@ export function useMeetingAssistant() {
       const currentTarget = latestForceAdviseTargetRef.current;
       if (
         !currentTarget ||
-        !input.logicalQuestionUnitId ||
-        input.logicalQuestionUnitRevision === null ||
-        input.logicalQuestionUnitRevision === undefined ||
-        currentTarget.logicalQuestionUnit.id !==
-          input.logicalQuestionUnitId ||
-        currentTarget.logicalQuestionUnit.revision !==
-          input.logicalQuestionUnitRevision
+        !matchesForceAdviseTargetTransition(
+          currentTarget.presentation,
+          input
+        )
       ) {
         return undefined;
       }
@@ -3000,6 +3000,8 @@ export function useMeetingAssistant() {
       });
 
       const metadata = {
+        forceAdviseTargetId: presentation.targetId,
+        forceAdviseTargetKind: presentation.targetKind,
         forceAdviseTargetStatus: presentation.status,
         forceAdviseAutomaticExecutionState: automaticExecutionState,
         forceAdviseManualExecutionState: manualExecutionState,
@@ -7713,6 +7715,8 @@ export function useMeetingAssistant() {
         runtimeCurrent: logicalQuestionUnitRef.current,
         manualCorrectionTarget:
           latestManualCorrectionTargetRef.current?.logicalQuestionUnit,
+        responseRecoveryTarget:
+          latestForceAdviseTargetRef.current?.logicalQuestionUnit,
         supersessionProtectedTarget:
           pendingAdvisorGenerationSupersessionRef.current
             ?.protectedJobId === advisorJob.id
@@ -8512,6 +8516,9 @@ export function useMeetingAssistant() {
                 : responseOnlyBaseContextReadScope,
           })
         : undefined);
+    const responseMutationSuppressed =
+      Boolean(responseOnlyTaskScope) ||
+      advisorJob.source === "force-advise";
     const advisorScreenScopeDecision = decideAdvisorScreenScope({
       triggerSource: advisorJob.source,
       relation: advisorTaskSignals.taskRelation,
@@ -9371,6 +9378,7 @@ export function useMeetingAssistant() {
         );
     let taskBoundaryCommittedBeforeAdvisor = false;
     if (
+      !responseMutationSuppressed &&
       taskBoundaryCandidate?.commitPolicy === "immediate" &&
       advisorJob.logicalQuestionUnit
     ) {
@@ -9489,7 +9497,7 @@ export function useMeetingAssistant() {
     if (
       !manualPhaseAdvance &&
       !transientPersonalStatusDecision &&
-      !responseOnlyTaskScope &&
+      !responseMutationSuppressed &&
       advisorTaskSignals.taskRelation !== "new-parent" &&
       advisorJob.logicalQuestionUnit
     ) {
@@ -9865,14 +9873,17 @@ export function useMeetingAssistant() {
       formatMeetingModelRouteForTrace(advisorModelRoute);
     const advisorModelRequestOptions =
       getMeetingModelRequestOptions(advisorModelRoute);
-    generationAuthorizedArtifacts = runtimeTypeRepairOutputAuthorized
-      ? ["answer"]
-      : settledExecutionPlan
-        ? resolveAuthorizedAnswerArtifacts({
-            artifactPolicy: settledExecutionPlan.artifactPolicy,
-            artifactIntent: settledExecutionPlan.artifactIntent,
-          })
-        : ["answer"];
+    generationAuthorizedArtifacts =
+      advisorJob.source === "force-advise"
+        ? ["answer"]
+        : runtimeTypeRepairOutputAuthorized
+          ? ["answer"]
+          : settledExecutionPlan
+            ? resolveAuthorizedAnswerArtifacts({
+                artifactPolicy: settledExecutionPlan.artifactPolicy,
+                artifactIntent: settledExecutionPlan.artifactIntent,
+              })
+            : ["answer"];
     const generationContextState =
       contextManagerRef.current.getState();
     const generationParent =
@@ -11090,7 +11101,7 @@ export function useMeetingAssistant() {
       });
       const shouldCommitAdvisorParent =
         !transientPersonalStatusDecision &&
-        !responseOnlyTaskScope &&
+        !responseMutationSuppressed &&
         (settledExecutionPlan?.responseIntent === "advise" ||
           !settledExecutionPlan) &&
         advisorTaskMutationDecision.commitParent &&
@@ -11287,7 +11298,7 @@ export function useMeetingAssistant() {
 
       if (
         taskMutationAuthorization.authorized &&
-        !responseOnlyTaskScope
+        !responseMutationSuppressed
       ) {
         if (
           !taskBoundaryCommittedBeforeAdvisor &&
@@ -12086,6 +12097,88 @@ export function useMeetingAssistant() {
     runAdvisor,
   ]);
 
+  const publishResponseRecoveryTarget = useCallback(
+    ({
+      logicalQuestionUnit,
+      traceId,
+      turn,
+      intentDecision,
+      targetKind = "response-recovery",
+      questionLineage,
+    }: {
+      logicalQuestionUnit: LogicalQuestionUnit;
+      traceId: string;
+      turn: TranscriptTurn;
+      intentDecision: AdvisorTurnIntentDecision;
+      targetKind?: ForceAdviseTargetPresentation["targetKind"];
+      questionLineage?: QuestionInstanceLineage;
+    }) => {
+      const logicalQuestionLease =
+        createLogicalQuestionUnitLease(logicalQuestionUnit);
+      const effectiveQuestionLineage =
+        questionLineage ??
+        createResponseRecoveryQuestionLineage({
+          unit: logicalQuestionUnit,
+          traceId,
+        });
+      const automaticExecutionAuthorized =
+        targetKind === "canonical-question" &&
+        intentDecision.executionAuthorized;
+      const presentation: ForceAdviseTargetPresentation = {
+        targetId: `${targetKind}:${traceId}:${turn.id}:${logicalQuestionUnit.id}:${logicalQuestionUnit.revision}`,
+        targetKind,
+        originalTraceId: traceId,
+        turnId: turn.id,
+        text: logicalQuestionUnit.normalizedText || turn.text,
+        observedAction: toObservedAdvisorAction(intentDecision),
+        executionAuthorized: intentDecision.executionAuthorized,
+        logicalQuestionUnitId: logicalQuestionUnit.id,
+        logicalQuestionUnitRevision: logicalQuestionUnit.revision,
+        sourceTurnIds: [...logicalQuestionUnit.sourceTurnIds],
+        status: automaticExecutionAuthorized
+          ? "advising"
+          : "ready",
+        automaticExecutionState: automaticExecutionAuthorized
+          ? "running"
+          : "not-started",
+        manualExecutionState: "idle",
+        updatedAt: Date.now(),
+      };
+      const eligibility = decideForceAdviseEligibility(presentation);
+      const target: ForceAdviseRuntimeTarget = {
+        presentation,
+        turn: { ...turn },
+        intentDecision,
+        logicalQuestionUnit,
+        logicalQuestionLease,
+        questionLineage: effectiveQuestionLineage,
+      };
+      latestForceAdviseTargetRef.current = target;
+      setState((previous) => ({
+        ...previous,
+        latestInterviewerTurnCandidate: presentation,
+      }));
+      traceStoreRef.current.updateMetadata(traceId, {
+        ...formatLogicalQuestionUnitForTrace(logicalQuestionUnit),
+        ...formatLogicalQuestionLeaseForTrace(logicalQuestionLease),
+        ...formatQuestionLineageForTrace(effectiveQuestionLineage),
+        responseRecoveryTargetPublished: true,
+        responseRecoveryTargetId: presentation.targetId,
+        responseRecoveryTargetKind: targetKind,
+        forceAdviseTargetStatus: presentation.status,
+        forceAdviseAutomaticExecutionState:
+          presentation.automaticExecutionState,
+        forceAdviseManualExecutionState:
+          presentation.manualExecutionState,
+        forceAdviseEligible: eligibility.eligible,
+        forceAdviseRetryable: eligibility.retryable,
+        forceAdviseEligibilityReason: eligibility.reason,
+      });
+      return target;
+    },
+    []
+  );
+
   const publishCanonicalLogicalQuestionTarget = useCallback(
     ({
       logicalQuestionUnit,
@@ -12112,39 +12205,19 @@ export function useMeetingAssistant() {
         unit: logicalQuestionUnit,
         traceId,
       });
-      const presentation: ForceAdviseTargetPresentation = {
-        originalTraceId: traceId,
-        turnId: turn.id,
-        text: logicalQuestionUnit.normalizedText || turn.text,
-        observedAction: toObservedAdvisorAction(intentDecision),
-        executionAuthorized: intentDecision.executionAuthorized,
-        logicalQuestionUnitId: logicalQuestionUnit.id,
-        logicalQuestionUnitRevision: logicalQuestionUnit.revision,
-        sourceTurnIds: [...logicalQuestionUnit.sourceTurnIds],
-        status: intentDecision.executionAuthorized
-          ? "advising"
-          : "ready",
-        automaticExecutionState: intentDecision.executionAuthorized
-          ? "running"
-          : "not-started",
-        manualExecutionState: "idle",
-        updatedAt: Date.now(),
-      };
-      const eligibility = decideForceAdviseEligibility(presentation);
-      const target: ForceAdviseRuntimeTarget = {
-        presentation,
-        turn: { ...turn },
-        intentDecision,
+      const target = publishResponseRecoveryTarget({
         logicalQuestionUnit,
-        logicalQuestionLease,
+        traceId,
+        turn,
+        intentDecision,
+        targetKind: "canonical-question",
         questionLineage,
-      };
-      latestForceAdviseTargetRef.current = target;
+      });
       const manualCorrectionTarget: ManualCorrectionRuntimeTarget = {
         sourceKind: "voice",
         originTraceId: traceId,
         sourceObservationIds: [],
-        updatedAt: presentation.updatedAt,
+        updatedAt: target.presentation.updatedAt,
         turn: { ...turn },
         logicalQuestionUnit,
         logicalQuestionLease,
@@ -12161,30 +12234,15 @@ export function useMeetingAssistant() {
           manualCorrectionTargetHistoryRef.current,
           manualCorrectionTarget
         );
-      setState((previous) => ({
-        ...previous,
-        latestInterviewerTurnCandidate: presentation,
-      }));
       traceStoreRef.current.updateMetadata(traceId, {
-        ...formatLogicalQuestionUnitForTrace(logicalQuestionUnit),
-        ...formatLogicalQuestionLeaseForTrace(logicalQuestionLease),
-        ...formatQuestionLineageForTrace(questionLineage),
         canonicalLogicalQuestionTargetPublished: true,
         manualCorrectionTargetKind: manualCorrectionTarget.targetKind,
         manualCorrectionTargetHistorySize:
           manualCorrectionTargetHistoryRef.current.length,
-        forceAdviseTargetStatus: presentation.status,
-        forceAdviseAutomaticExecutionState:
-          presentation.automaticExecutionState,
-        forceAdviseManualExecutionState:
-          presentation.manualExecutionState,
-        forceAdviseEligible: eligibility.eligible,
-        forceAdviseRetryable: eligibility.retryable,
-        forceAdviseEligibilityReason: eligibility.reason,
       });
       return target;
     },
-    []
+    [publishResponseRecoveryTarget]
   );
 
   const scheduleResponseOpportunityInference = useCallback(
@@ -18306,6 +18364,13 @@ export function useMeetingAssistant() {
             turn,
             intentDecision: turnGate,
           });
+        } else if (logicalQuestionUnit) {
+          publishResponseRecoveryTarget({
+            logicalQuestionUnit,
+            traceId,
+            turn,
+            intentDecision: turnGate,
+          });
         }
 
         if (turnGate.action === "ignore") {
@@ -18566,6 +18631,7 @@ export function useMeetingAssistant() {
       isCurrentAudioSegment,
       publishDisplayTranscriptRevision,
       publishCanonicalLogicalQuestionTarget,
+      publishResponseRecoveryTarget,
       promoteMeTurnForFusion,
       readAudioSegmentCommitAuthorization,
       recordPreparationArtifactUse,
@@ -24084,9 +24150,17 @@ export function useMeetingAssistant() {
     if (!eligibility.eligible) {
       return;
     }
+    const activeContextState = contextManagerRef.current.getState();
     const ownershipAuthorization = authorizeLogicalQuestionUnitLease(
       target.logicalQuestionLease,
-      logicalQuestionUnitRef.current
+      target.presentation.targetKind === "canonical-question"
+        ? logicalQuestionUnitRef.current
+        : target.logicalQuestionUnit.sessionId ===
+              activeContextState.sessionId &&
+            target.logicalQuestionUnit.runtimeEpoch ===
+              runtimeEpochRef.current
+          ? target.logicalQuestionUnit
+          : undefined
     );
     traceStoreRef.current.updateMetadata(
       target.presentation.originalTraceId,
@@ -24099,6 +24173,8 @@ export function useMeetingAssistant() {
         forceAdviseOwnershipAuthorized:
           ownershipAuthorization.authorized,
         forceAdviseOwnershipReason: ownershipAuthorization.reason,
+        forceAdviseTargetId: target.presentation.targetId,
+        forceAdviseTargetKind: target.presentation.targetKind,
       }
     );
     if (!ownershipAuthorization.authorized) {
@@ -24132,6 +24208,8 @@ export function useMeetingAssistant() {
       forceAdviseRepairCause: classifyForceAdviseRepairCause(
         target.presentation
       ),
+      forceAdviseTargetId: target.presentation.targetId,
+      forceAdviseTargetKind: target.presentation.targetKind,
       ...formatLogicalQuestionLeaseForTrace(
         target.logicalQuestionLease,
         ownershipAuthorization,
@@ -24261,6 +24339,7 @@ export function useMeetingAssistant() {
       if (pendingReleaseDisposition === "committed") {
         const completedAt = Date.now();
         transitionForceAdviseTarget({
+          targetId: target.presentation.targetId,
           logicalQuestionUnitId: target.logicalQuestionUnit.id,
           logicalQuestionUnitRevision:
             target.logicalQuestionUnit.revision,
@@ -24315,6 +24394,7 @@ export function useMeetingAssistant() {
       completedTrace.metadata?.advisorOutputCommittedToUi === true;
     const completedAt = Date.now();
     transitionForceAdviseTarget({
+      targetId: target.presentation.targetId,
       logicalQuestionUnitId: target.logicalQuestionUnit.id,
       logicalQuestionUnitRevision: target.logicalQuestionUnit.revision,
       manualExecutionState: repaired ? "visible-committed" : "failed",
