@@ -2739,12 +2739,19 @@ export function useMeetingAssistant() {
       runtimeEpoch?: number;
       logicalQuestionUnitId?: string;
       logicalQuestionUnitRevision?: number;
+      originTraceId?: string;
+      settlementOperationId?: string;
       settlementId?: string;
+      advisorJobId?: string;
+      visibleAnswerRevision?: number;
       proposedQuestionType?: CanonicalQuestionType;
       stage: QuestionTypeAdjudicationOutcomeStage;
       disposition: QuestionTypeAdjudicationOutcomeDisposition;
       enforcementAuthorized?: boolean;
       settlementApplied?: boolean;
+      appliedToResponse?: boolean;
+      appliedToSettlement?: boolean;
+      appliedToParent?: boolean;
       advisorStarted?: boolean;
       modelCompleted?: boolean;
       deliveryPending?: boolean;
@@ -2788,9 +2795,13 @@ export function useMeetingAssistant() {
         logicalQuestionUnitId,
         logicalQuestionUnitRevision,
         traceId: input.traceId,
+        originTraceId: input.originTraceId ?? input.traceId,
         taskId: input.taskId,
+        settlementOperationId: input.settlementOperationId,
         settlementId: authority?.settlementId ?? input.settlementId,
         outputAuthorityId: authority?.id,
+        advisorJobId: input.advisorJobId,
+        visibleAnswerRevision: input.visibleAnswerRevision,
         proposedQuestionType: input.proposedQuestionType,
         stage: input.stage,
         disposition: input.disposition,
@@ -2806,6 +2817,19 @@ export function useMeetingAssistant() {
             "questionTypeAdjudicationOutcomeSettlementApplied",
             Boolean(authority)
           ),
+        appliedToResponse: cumulativeBoolean(
+          input.appliedToResponse,
+          "questionTypeAdjudicationOutcomeAppliedToResponse"
+        ),
+        appliedToSettlement: cumulativeBoolean(
+          input.appliedToSettlement,
+          "questionTypeAdjudicationOutcomeAppliedToSettlement",
+          Boolean(authority)
+        ),
+        appliedToParent: cumulativeBoolean(
+          input.appliedToParent,
+          "questionTypeAdjudicationOutcomeAppliedToParent"
+        ),
         advisorStarted: cumulativeBoolean(
           input.advisorStarted,
           "questionTypeAdjudicationOutcomeAdvisorStarted"
@@ -3626,10 +3650,12 @@ export function useMeetingAssistant() {
             traceId: pending.suggestion.sourceTraceId,
             taskId: pending.taskId ?? undefined,
             authority: pending.runtimeTypeRepairOutputAuthority,
+            advisorJobId: pending.advisorJobId,
             stage: "delivery",
             disposition: "stale-dropped",
             advisorStarted: true,
             modelCompleted: true,
+            appliedToResponse: true,
             reason: staleReason,
           });
         }
@@ -3716,10 +3742,12 @@ export function useMeetingAssistant() {
             traceId: pending.suggestion.sourceTraceId,
             taskId: pending.taskId ?? undefined,
             authority: pending.runtimeTypeRepairOutputAuthority,
+            advisorJobId: pending.advisorJobId,
             stage: "delivery",
             disposition: "stale-dropped",
             advisorStarted: true,
             modelCompleted: true,
+            appliedToResponse: true,
             reason: "candidate-invalid-at-release",
           });
         }
@@ -3793,6 +3821,9 @@ export function useMeetingAssistant() {
           traceId: pending.suggestion.sourceTraceId,
           taskId: pending.taskId ?? undefined,
           authority: pending.runtimeTypeRepairOutputAuthority,
+          advisorJobId: pending.advisorJobId,
+          visibleAnswerRevision: stable.revision,
+          appliedToResponse: true,
           stage: "delivery",
           disposition: "visible-committed",
           advisorStarted: true,
@@ -3839,6 +3870,7 @@ export function useMeetingAssistant() {
       resetSections: boolean;
       reason: string;
       latestUsefulAnswerMutationAuthorized: boolean;
+      advisorJobId?: string;
       runtimeTypeRepairOutputAuthority?: RuntimeTypeRepairOutputAuthority;
     }) => {
       const now = Date.now();
@@ -3874,10 +3906,12 @@ export function useMeetingAssistant() {
               taskId: supersededPending.taskId ?? undefined,
               authority:
                 supersededPending.runtimeTypeRepairOutputAuthority,
+              advisorJobId: supersededPending.advisorJobId,
               stage: "delivery",
               disposition: "cancelled-by-new-job",
               advisorStarted: true,
               modelCompleted: true,
+              appliedToResponse: true,
               reason: "superseded-by-newer-pending-answer",
             });
           }
@@ -3913,6 +3947,7 @@ export function useMeetingAssistant() {
         resetSections: input.resetSections,
         latestUsefulAnswerMutationAuthorized:
           input.latestUsefulAnswerMutationAuthorized,
+        advisorJobId: input.advisorJobId,
         runtimeTypeRepairOutputAuthority:
           input.runtimeTypeRepairOutputAuthority,
       };
@@ -4884,6 +4919,7 @@ export function useMeetingAssistant() {
           traceId: job.traceId,
           taskId: job.expectedParentId,
           authority: job.runtimeTypeRepairOutputAuthority,
+          advisorJobId: job.id,
           proposedQuestionType:
             normalizeCanonicalQuestionType(
               job.promptContextSnapshot.activeMeetingTask?.parent.questionType
@@ -4894,6 +4930,7 @@ export function useMeetingAssistant() {
             resolvedOutcome === "replaced-before-execution"
               ? "cancelled-by-new-job"
               : "cancelled-by-runtime-boundary",
+          appliedToResponse: !hadPendingTimer,
           reason,
         });
       }
@@ -5007,8 +5044,10 @@ export function useMeetingAssistant() {
           traceId: job.traceId,
           taskId: job.expectedParentId,
           authority: job.runtimeTypeRepairOutputAuthority,
+          advisorJobId: job.id,
           stage: "delivery",
           disposition: outcome === "error" ? "error" : "suppressed",
+          appliedToResponse: true,
           reason:
             extra.commitAuthorizationReason ??
             (outcome === "error" ? "advisor-error" : "advisor-suppressed"),
@@ -10024,11 +10063,13 @@ export function useMeetingAssistant() {
         traceId,
         taskId: activeMeetingTaskId,
         authority: advisorJob.runtimeTypeRepairOutputAuthority,
+        advisorJobId: advisorJob.id,
         proposedQuestionType:
           normalizeCanonicalQuestionType(advisorQuestionType),
         stage: "advisor-start",
         disposition: "advisor-started",
         advisorStarted: true,
+        appliedToResponse: true,
         reason: "advisor-model-request-authorized",
       });
     }
@@ -10890,12 +10931,14 @@ export function useMeetingAssistant() {
               traceId,
               taskId: activeMeetingTaskId,
               authority: advisorJob.runtimeTypeRepairOutputAuthority,
+              advisorJobId: advisorJob.id,
               proposedQuestionType:
                 normalizeCanonicalQuestionType(advisorQuestionType),
               stage: "model-complete",
               disposition: "suppressed",
               advisorStarted: true,
               modelCompleted: true,
+              appliedToResponse: true,
               reason: outputCommitAuthorization.reason,
             });
           }
@@ -11499,6 +11542,7 @@ export function useMeetingAssistant() {
               latestUsefulAnswerMutationAuthorized:
                 settledArtifactAuthorization.allowLatestUsefulAnswer &&
                 shouldCommitAdvisorParent,
+              advisorJobId: advisorJob.id,
               runtimeTypeRepairOutputAuthority:
                 advisorJob.runtimeTypeRepairOutputAuthority,
             })
@@ -11656,6 +11700,10 @@ export function useMeetingAssistant() {
             traceId,
             taskId: contextState.activeMeetingTask?.parent.id,
             authority: advisorJob.runtimeTypeRepairOutputAuthority,
+            advisorJobId: advisorJob.id,
+            visibleAnswerRevision: committedVisibleAnswer
+              ? visibleAnswerRevisionAfter
+              : undefined,
             proposedQuestionType:
               normalizeCanonicalQuestionType(advisorQuestionType),
             stage: committedVisibleAnswer ? "delivery" : "model-complete",
@@ -11666,6 +11714,7 @@ export function useMeetingAssistant() {
                 : "model-completed",
             advisorStarted: true,
             modelCompleted: true,
+            appliedToResponse: true,
             deliveryPending: Boolean(pendingAnswer),
             visibleCommitted: committedVisibleAnswer,
             reason: committedVisibleAnswer
@@ -13923,6 +13972,9 @@ export function useMeetingAssistant() {
         questionTypeAdjudicationPromptChars: promptText.length,
         questionTypeAdjudicationOperationId:
           lease.operationId,
+        questionTypeAdjudicationRuntimeSessionId:
+          lease.sessionId,
+        questionTypeAdjudicationOriginTraceId: traceId,
         questionTypeAdjudicationSourceTurnIdsHash:
           lease.sourceTurnIdsHash,
         questionTypeAdjudicationTaskBoundaryEpoch:
@@ -16408,6 +16460,8 @@ export function useMeetingAssistant() {
             logicalQuestionLease.logicalQuestionUnitId,
           logicalQuestionUnitRevision:
             logicalQuestionLease.logicalQuestionUnitRevision,
+          settlementOperationId:
+            settlement?.operationId ?? settlementOperationId,
           settlementId: settlement?.settlementId,
           proposedQuestionType: settlement?.questionType,
           stage: "release",
@@ -16419,6 +16473,8 @@ export function useMeetingAssistant() {
           enforcementAuthorized:
             outcome?.enforcement.authorized ?? false,
           settlementApplied: releaseAuthorized,
+          appliedToSettlement: releaseAuthorized,
+          appliedToParent: false,
           reason: releaseAuthorized
               ? convergedSettlement
                 ? "runtime-type-relation-settlement-authority-issued"
@@ -16559,6 +16615,8 @@ export function useMeetingAssistant() {
               logicalQuestionLease.logicalQuestionUnitId,
             logicalQuestionUnitRevision:
               logicalQuestionLease.logicalQuestionUnitRevision,
+            settlementOperationId:
+              outcome.settlement?.operationId ?? outcome.operationId,
             settlementId: outcome.settlement?.settlementId,
             proposedQuestionType:
               outcome.settlement?.questionType,
@@ -16566,6 +16624,8 @@ export function useMeetingAssistant() {
             disposition: "stale-dropped",
             enforcementAuthorized: false,
             settlementApplied: false,
+            appliedToSettlement: false,
+            appliedToParent: false,
             reason: "advisor-release-window-closed",
           });
         },

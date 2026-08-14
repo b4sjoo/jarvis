@@ -777,12 +777,20 @@ export interface SessionCompactTraceSummary {
   };
   questionTypeAdjudicationOutcome?: {
     operationId?: string;
+    runtimeSessionId?: string;
+    originTraceId?: string;
     stage?: string;
     disposition?: string;
+    settlementOperationId?: string;
     settlementId?: string;
     outputAuthorityId?: string;
+    advisorJobId?: string;
+    visibleAnswerRevision?: number;
     enforcementAuthorized?: boolean;
     settlementApplied?: boolean;
+    appliedToResponse?: boolean;
+    appliedToSettlement?: boolean;
+    appliedToParent?: boolean;
     advisorStarted?: boolean;
     modelCompleted?: boolean;
     deliveryPending?: boolean;
@@ -2917,6 +2925,11 @@ export class SessionRecordingManager {
     const payload = {
       recordedAt: Date.now(),
       sessionId: session.sessionId,
+      recordingSessionId: session.sessionId,
+      runtimeSessionId:
+        readString(metadata.questionTypeAdjudicationRuntimeSessionId) ??
+        readString(metadata.currentQuestionSettlementSessionId) ??
+        readString(metadata.runtimeInferenceCircuitSessionId),
       traceId,
       taskId,
       metadata,
@@ -2945,17 +2958,21 @@ export class SessionRecordingManager {
     if (!session) return;
     const artifactPath =
       "taxonomy/question-type-adjudication-outcomes.jsonl";
+    const recordedOutcome = {
+      ...outcome,
+      recordingSessionId: session.sessionId,
+    };
     this.enqueue(session, () =>
       this.writeText(
         session,
         artifactPath,
-        `${JSON.stringify(outcome)}\n`,
+        `${JSON.stringify(recordedOutcome)}\n`,
         true
       )
     );
     this.recordEvent(
       "question-type-adjudication-outcome",
-      formatQuestionTypeAdjudicationOutcomeForTrace(outcome),
+      formatQuestionTypeAdjudicationOutcomeForTrace(recordedOutcome),
       [artifactPath],
       outcome.traceId,
       outcome.taskId
@@ -6430,6 +6447,14 @@ function buildQuestionTypeAdjudicationOutcomeTraceSummary(
       metadataSources,
       "questionTypeAdjudicationOutcomeOperationId"
     ),
+    runtimeSessionId: readFirstString(
+      metadataSources,
+      "questionTypeAdjudicationOutcomeRuntimeSessionId"
+    ),
+    originTraceId: readFirstString(
+      metadataSources,
+      "questionTypeAdjudicationOutcomeOriginTraceId"
+    ),
     stage: readFirstString(
       metadataSources,
       "questionTypeAdjudicationOutcomeStage"
@@ -6437,6 +6462,10 @@ function buildQuestionTypeAdjudicationOutcomeTraceSummary(
     disposition: readFirstString(
       metadataSources,
       "questionTypeAdjudicationOutcomeDisposition"
+    ),
+    settlementOperationId: readFirstString(
+      metadataSources,
+      "questionTypeAdjudicationOutcomeSettlementOperationId"
     ),
     settlementId: readFirstString(
       metadataSources,
@@ -6446,6 +6475,14 @@ function buildQuestionTypeAdjudicationOutcomeTraceSummary(
       metadataSources,
       "questionTypeAdjudicationOutcomeAuthorityId"
     ),
+    advisorJobId: readFirstString(
+      metadataSources,
+      "questionTypeAdjudicationOutcomeAdvisorJobId"
+    ),
+    visibleAnswerRevision: readFirstNumberFromMetadata(
+      metadataSources,
+      "questionTypeAdjudicationOutcomeVisibleAnswerRevision"
+    ),
     enforcementAuthorized: readFirstBoolean(
       metadataSources,
       "questionTypeAdjudicationOutcomeEnforcementAuthorized"
@@ -6453,6 +6490,18 @@ function buildQuestionTypeAdjudicationOutcomeTraceSummary(
     settlementApplied: readFirstBoolean(
       metadataSources,
       "questionTypeAdjudicationOutcomeSettlementApplied"
+    ),
+    appliedToResponse: readFirstBoolean(
+      metadataSources,
+      "questionTypeAdjudicationOutcomeAppliedToResponse"
+    ),
+    appliedToSettlement: readFirstBoolean(
+      metadataSources,
+      "questionTypeAdjudicationOutcomeAppliedToSettlement"
+    ),
+    appliedToParent: readFirstBoolean(
+      metadataSources,
+      "questionTypeAdjudicationOutcomeAppliedToParent"
     ),
     advisorStarted: readFirstBoolean(
       metadataSources,

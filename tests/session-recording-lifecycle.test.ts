@@ -334,10 +334,10 @@ test("records question-type post-release outcomes in a dedicated append-only led
   const native = new ControlledRecordingInvoke();
   const manager = new SessionRecordingManager(undefined, native.invoke);
   const recording = await manager.start(START_OPTIONS);
-  const sessionId = required(recording.sessionId);
+  const recordingSessionId = required(recording.sessionId);
   const outcome = createQuestionTypeAdjudicationOutcomeEvent({
     operationId: "operation_outcome",
-    sessionId,
+    sessionId: "meeting_outcome",
     runtimeEpoch: 4,
     logicalQuestionUnitId: "lqu_outcome",
     logicalQuestionUnitRevision: 2,
@@ -348,6 +348,10 @@ test("records question-type post-release outcomes in a dedicated append-only led
     settlementApplied: true,
     advisorStarted: true,
     modelCompleted: true,
+    advisorJobId: "advisor_outcome",
+    visibleAnswerRevision: 9,
+    appliedToResponse: true,
+    appliedToSettlement: true,
     visibleCommitted: true,
   });
 
@@ -363,7 +367,41 @@ test("records question-type post-release outcomes in a dedicated append-only led
   assert.equal(writes.length, 1);
   const payload = JSON.parse(stringArg(writes[0]!, "payload"));
   assert.equal(payload.operationId, "operation_outcome");
+  assert.equal(payload.schemaVersion, 2);
+  assert.equal(payload.recordingSessionId, recordingSessionId);
+  assert.equal(payload.runtimeSessionId, "meeting_outcome");
+  assert.equal(payload.originTraceId, "trace_outcome");
+  assert.equal(payload.advisorJobId, "advisor_outcome");
+  assert.equal(payload.visibleAnswerRevision, 9);
   assert.equal(payload.visibleCommitted, true);
+});
+
+test("records question-type decisions with distinct recording and runtime sessions", async () => {
+  const native = new ControlledRecordingInvoke();
+  const manager = new SessionRecordingManager(undefined, native.invoke);
+  const recording = await manager.start(START_OPTIONS);
+  const recordingSessionId = required(recording.sessionId);
+
+  manager.recordQuestionTypeAdjudicationDecision({
+    traceId: "trace_decision",
+    metadata: {
+      questionTypeAdjudicationOperationId: "operation_decision",
+      questionTypeAdjudicationRuntimeSessionId: "meeting_decision",
+    },
+  });
+  await manager.stop("test-complete");
+
+  const write = native.calls.find(
+    (call) =>
+      call.command === "write_meeting_session_recording_text" &&
+      stringArg(call, "relativePath") ===
+        "taxonomy/question-type-adjudications.jsonl"
+  );
+  assert.ok(write);
+  const payload = JSON.parse(stringArg(write, "payload"));
+  assert.equal(payload.sessionId, recordingSessionId);
+  assert.equal(payload.recordingSessionId, recordingSessionId);
+  assert.equal(payload.runtimeSessionId, "meeting_decision");
 });
 
 test("drains late writes into their original folder before allowing stop-start", async () => {

@@ -69,6 +69,7 @@ export interface PendingAnswerRevision {
   reason: string;
   resetSections: boolean;
   latestUsefulAnswerMutationAuthorized: boolean;
+  advisorJobId?: string;
   runtimeTypeRepairOutputAuthority?: RuntimeTypeRepairOutputAuthority;
 }
 

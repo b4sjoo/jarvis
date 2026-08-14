@@ -96,7 +96,7 @@ export interface QuestionTypeAdjudicationRuntimeOutcome {
   operationId?: string;
 }
 
-export const QUESTION_TYPE_ADJUDICATION_OUTCOME_SCHEMA_VERSION = 1;
+export const QUESTION_TYPE_ADJUDICATION_OUTCOME_SCHEMA_VERSION = 2;
 
 export type QuestionTypeAdjudicationOutcomeStage =
   | "release"
@@ -118,22 +118,31 @@ export type QuestionTypeAdjudicationOutcomeDisposition =
   | "error";
 
 export interface QuestionTypeAdjudicationOutcomeEvent {
-  schemaVersion: typeof QUESTION_TYPE_ADJUDICATION_OUTCOME_SCHEMA_VERSION;
+  schemaVersion: 1 | typeof QUESTION_TYPE_ADJUDICATION_OUTCOME_SCHEMA_VERSION;
   outcomeId: string;
   operationId: string;
+  recordingSessionId?: string;
+  runtimeSessionId?: string;
+  originTraceId?: string;
   sessionId: string;
   runtimeEpoch: number;
   logicalQuestionUnitId: string;
   logicalQuestionUnitRevision: number;
   traceId: string;
   taskId?: string;
+  settlementOperationId?: string;
   settlementId?: string;
   outputAuthorityId?: string;
+  advisorJobId?: string;
+  visibleAnswerRevision?: number;
   proposedQuestionType?: CanonicalQuestionType;
   stage: QuestionTypeAdjudicationOutcomeStage;
   disposition: QuestionTypeAdjudicationOutcomeDisposition;
   enforcementAuthorized: boolean;
   settlementApplied: boolean;
+  appliedToResponse?: boolean;
+  appliedToSettlement?: boolean;
+  appliedToParent?: boolean;
   advisorStarted: boolean;
   modelCompleted: boolean;
   deliveryPending: boolean;
@@ -145,18 +154,27 @@ export interface QuestionTypeAdjudicationOutcomeEvent {
 export function createQuestionTypeAdjudicationOutcomeEvent(input: {
   operationId: string;
   sessionId: string;
+  recordingSessionId?: string;
+  runtimeSessionId?: string;
+  originTraceId?: string;
   runtimeEpoch: number;
   logicalQuestionUnitId: string;
   logicalQuestionUnitRevision: number;
   traceId: string;
   taskId?: string;
+  settlementOperationId?: string;
   settlementId?: string;
   outputAuthorityId?: string;
+  advisorJobId?: string;
+  visibleAnswerRevision?: number;
   proposedQuestionType?: CanonicalQuestionType;
   stage: QuestionTypeAdjudicationOutcomeStage;
   disposition: QuestionTypeAdjudicationOutcomeDisposition;
   enforcementAuthorized?: boolean;
   settlementApplied?: boolean;
+  appliedToResponse?: boolean;
+  appliedToSettlement?: boolean;
+  appliedToParent?: boolean;
   advisorStarted?: boolean;
   modelCompleted?: boolean;
   deliveryPending?: boolean;
@@ -169,19 +187,29 @@ export function createQuestionTypeAdjudicationOutcomeEvent(input: {
     schemaVersion: QUESTION_TYPE_ADJUDICATION_OUTCOME_SCHEMA_VERSION,
     outcomeId: `${input.operationId}:${input.stage}:${recordedAt}`,
     operationId: input.operationId,
+    recordingSessionId: input.recordingSessionId,
+    runtimeSessionId: input.runtimeSessionId ?? input.sessionId,
+    originTraceId: input.originTraceId ?? input.traceId,
     sessionId: input.sessionId,
     runtimeEpoch: input.runtimeEpoch,
     logicalQuestionUnitId: input.logicalQuestionUnitId,
     logicalQuestionUnitRevision: input.logicalQuestionUnitRevision,
     traceId: input.traceId,
     taskId: input.taskId,
+    settlementOperationId: input.settlementOperationId,
     settlementId: input.settlementId,
     outputAuthorityId: input.outputAuthorityId,
+    advisorJobId: input.advisorJobId,
+    visibleAnswerRevision: input.visibleAnswerRevision,
     proposedQuestionType: input.proposedQuestionType,
     stage: input.stage,
     disposition: input.disposition,
     enforcementAuthorized: input.enforcementAuthorized ?? false,
     settlementApplied: input.settlementApplied ?? false,
+    appliedToResponse: input.appliedToResponse ?? false,
+    appliedToSettlement:
+      input.appliedToSettlement ?? input.settlementApplied ?? false,
+    appliedToParent: input.appliedToParent ?? false,
     advisorStarted: input.advisorStarted ?? false,
     modelCompleted: input.modelCompleted ?? false,
     deliveryPending: input.deliveryPending ?? false,
@@ -197,15 +225,29 @@ export function formatQuestionTypeAdjudicationOutcomeForTrace(
   return {
     questionTypeAdjudicationOutcomeId: outcome.outcomeId,
     questionTypeAdjudicationOutcomeOperationId: outcome.operationId,
+    questionTypeAdjudicationOutcomeRuntimeSessionId:
+      outcome.runtimeSessionId,
+    questionTypeAdjudicationOutcomeOriginTraceId: outcome.originTraceId,
     questionTypeAdjudicationOutcomeStage: outcome.stage,
     questionTypeAdjudicationOutcomeDisposition: outcome.disposition,
     questionTypeAdjudicationOutcomeRecordedAt: outcome.recordedAt,
     questionTypeAdjudicationOutcomeSettlementId: outcome.settlementId,
+    questionTypeAdjudicationOutcomeSettlementOperationId:
+      outcome.settlementOperationId,
     questionTypeAdjudicationOutcomeAuthorityId: outcome.outputAuthorityId,
+    questionTypeAdjudicationOutcomeAdvisorJobId: outcome.advisorJobId,
+    questionTypeAdjudicationOutcomeVisibleAnswerRevision:
+      outcome.visibleAnswerRevision,
     questionTypeAdjudicationOutcomeEnforcementAuthorized:
       outcome.enforcementAuthorized,
     questionTypeAdjudicationOutcomeSettlementApplied:
       outcome.settlementApplied,
+    questionTypeAdjudicationOutcomeAppliedToResponse:
+      outcome.appliedToResponse,
+    questionTypeAdjudicationOutcomeAppliedToSettlement:
+      outcome.appliedToSettlement,
+    questionTypeAdjudicationOutcomeAppliedToParent:
+      outcome.appliedToParent,
     questionTypeAdjudicationOutcomeAdvisorStarted:
       outcome.advisorStarted,
     questionTypeAdjudicationOutcomeModelCompleted:
