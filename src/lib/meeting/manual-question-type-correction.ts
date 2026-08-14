@@ -6,6 +6,7 @@ import type {
   AdvisorSuggestion,
   ManualCorrectionScope,
   ParentContextHandoff,
+  ManualQuestionTypeCorrection,
   ManualQuestionTypeCorrectionTarget,
   QuestionInstanceLineage,
   SelectedInterviewPlaybook,
@@ -75,6 +76,192 @@ export class ManualCorrectionOperationCoordinator {
     this.activeOperationId = null;
     this.activeRequestKey = null;
   }
+}
+
+export type ManualCorrectionTargetKind =
+  | "substantive"
+  | "non-substantive";
+
+export interface ManualCorrectionTargetHistoryEntry {
+  logicalQuestionUnit: LogicalQuestionUnit;
+  updatedAt: number;
+  targetKind: ManualCorrectionTargetKind;
+  resolvedAt?: number;
+}
+
+export interface ManualCorrectionTargetSelection<T> {
+  target?: T;
+  reason:
+    | "latest-unresolved-substantive"
+    | "preferred-visible-question"
+    | "latest-substantive"
+    | "latest-canonical-fallback"
+    | "no-target";
+}
+
+const MANUAL_CORRECTION_TARGET_HISTORY_LIMIT = 8;
+
+export function classifyManualCorrectionTarget(input: {
+  sourceKind: "voice" | "screen" | "mixed";
+  text: string;
+  intent?: "confirmation" | "logistics" | "incomplete" | string;
+}): ManualCorrectionTargetKind {
+  if (input.sourceKind !== "voice") return "substantive";
+
+  const normalized = input.text
+    .toLowerCase()
+    .replace(/[’']/g, "'")
+    .replace(/\s+/g, " ")
+    .trim();
+  const isCommunicationMetaTurn =
+    /^(?:(?:did|do|can|could) you (?:get|hear|understand|follow) (?:my|the|that) (?:question|point)|(?:did|do) (?:that|this) make sense|are you (?:there|with me)|should i (?:repeat|say) (?:that|it) again|do you (?:want|need) me to repeat)/i.test(
+      normalized
+    );
+  if (
+    isCommunicationMetaTurn ||
+    input.intent === "confirmation" ||
+    input.intent === "logistics" ||
+    input.intent === "incomplete"
+  ) {
+    return "non-substantive";
+  }
+
+  return "substantive";
+}
+
+export function upsertManualCorrectionTargetHistory<
+  T extends ManualCorrectionTargetHistoryEntry,
+>(history: readonly T[], target: T): T[] {
+  const withoutCurrentUnit = history.filter(
+    (candidate) =>
+      candidate.logicalQuestionUnit.id !== target.logicalQuestionUnit.id
+  );
+  return [...withoutCurrentUnit, target]
+    .sort((left, right) => left.updatedAt - right.updatedAt)
+    .slice(-MANUAL_CORRECTION_TARGET_HISTORY_LIMIT);
+}
+
+export function markManualCorrectionTargetResolved<
+  T extends ManualCorrectionTargetHistoryEntry,
+>(
+  history: readonly T[],
+  input: {
+    logicalQuestionUnitId: string | null | undefined;
+    logicalQuestionRevision: number | null | undefined;
+    resolvedAt?: number;
+  }
+): T[] {
+  if (
+    !input.logicalQuestionUnitId ||
+    input.logicalQuestionRevision === null ||
+    input.logicalQuestionRevision === undefined
+  ) {
+    return [...history];
+  }
+  return history.map((candidate) =>
+    candidate.logicalQuestionUnit.id === input.logicalQuestionUnitId &&
+    candidate.logicalQuestionUnit.revision === input.logicalQuestionRevision
+      ? {
+          ...candidate,
+          resolvedAt: input.resolvedAt ?? Date.now(),
+        }
+      : candidate
+  );
+}
+
+export function selectManualCorrectionTargetFromHistory<
+  T extends ManualCorrectionTargetHistoryEntry,
+>(input: {
+  history: readonly T[];
+  latestCanonical?: T;
+  preferredLogicalQuestionUnitId?: string | null;
+  preferredLogicalQuestionRevision?: number | null;
+}): ManualCorrectionTargetSelection<T> {
+  const ordered = [...input.history].sort(
+    (left, right) => right.updatedAt - left.updatedAt
+  );
+  const unresolved = ordered.find(
+    (candidate) =>
+      candidate.targetKind === "substantive" && !candidate.resolvedAt
+  );
+  if (unresolved) {
+    return {
+      target: unresolved,
+      reason: "latest-unresolved-substantive",
+    };
+  }
+
+  const preferred = ordered.find(
+    (candidate) =>
+      candidate.targetKind === "substantive" &&
+      candidate.logicalQuestionUnit.id ===
+        input.preferredLogicalQuestionUnitId &&
+      candidate.logicalQuestionUnit.revision ===
+        input.preferredLogicalQuestionRevision
+  );
+  if (preferred) {
+    return { target: preferred, reason: "preferred-visible-question" };
+  }
+
+  const latestSubstantive = ordered.find(
+    (candidate) => candidate.targetKind === "substantive"
+  );
+  if (latestSubstantive) {
+    return { target: latestSubstantive, reason: "latest-substantive" };
+  }
+
+  const fallback = input.latestCanonical ?? ordered[0];
+  return fallback
+    ? { target: fallback, reason: "latest-canonical-fallback" }
+    : { reason: "no-target" };
+}
+
+export interface ManualCorrectionTerminalDecision {
+  status: ManualQuestionTypeCorrection["status"];
+  regenerationStatus: ManualQuestionTypeCorrection["regenerationStatus"];
+  regenerationRetryable: boolean;
+  error?: string;
+}
+
+export function decideManualCorrectionTerminalState(input: {
+  mutationApplied: boolean;
+  stableAnswerCommitted: boolean;
+  regenerationTraceStatus?: "running" | "success" | "error" | "cancelled";
+  authorizationFailureReason?: string;
+  failureMessage?: string;
+}): ManualCorrectionTerminalDecision {
+  if (input.stableAnswerCommitted) {
+    return {
+      status: input.mutationApplied ? "applied" : "failed",
+      regenerationStatus: input.mutationApplied ? "succeeded" : "idle",
+      regenerationRetryable: false,
+    };
+  }
+  if (!input.mutationApplied) {
+    return {
+      status: "failed",
+      regenerationStatus: "idle",
+      regenerationRetryable: false,
+      error:
+        input.failureMessage ??
+        input.authorizationFailureReason ??
+        "The question type correction could not be applied.",
+    };
+  }
+
+  const cancelled =
+    input.regenerationTraceStatus === "cancelled" ||
+    Boolean(input.authorizationFailureReason);
+  return {
+    status: "applied",
+    regenerationStatus: cancelled ? "cancelled" : "failed",
+    regenerationRetryable: true,
+    error:
+      input.failureMessage ??
+      (input.authorizationFailureReason
+        ? `Answer regeneration was cancelled because the correction lost runtime authority: ${input.authorizationFailureReason}. The corrected task type was kept and regeneration can be retried.`
+        : "The corrected question produced no valid answer. The previous reliable answer was preserved and regeneration can be retried."),
+  };
 }
 
 export interface ManualQuestionTypeCorrectionDecision {

@@ -379,6 +379,28 @@ export function createAnswerGenerationLease(
   };
 }
 
+export function rebaseAnswerGenerationLeaseAfterOwnedParentMutation(input: {
+  lease: AnswerGenerationLease;
+  taskId: string;
+  taskRevision: number | undefined;
+  expectedRevisionDelta?: number;
+}): AnswerGenerationLease | undefined {
+  if (
+    input.lease.taskId !== input.taskId ||
+    input.lease.artifactOwnerId !== input.taskId ||
+    input.lease.taskRevision === null ||
+    input.taskRevision === undefined ||
+    input.taskRevision !==
+      input.lease.taskRevision + (input.expectedRevisionDelta ?? 1)
+  ) {
+    return undefined;
+  }
+  return {
+    ...input.lease,
+    taskRevision: input.taskRevision,
+  };
+}
+
 export function authorizeAnswerGenerationLease(
   lease: AnswerGenerationLease,
   current: AnswerGenerationLeaseSnapshot

@@ -7,6 +7,7 @@ import {
   authorizeSettledAdvisorExecutionPlan,
   buildSettledAdvisorExecutionPlan,
   formatSettledAdvisorExecutionPlanForTrace,
+  rebaseSettledAdvisorExecutionPlanAfterOwnedParentMutation,
 } from "../src/lib/meeting/settled-advisor-execution-plan.js";
 import {
   primaryAskAnswerFocusText,
@@ -689,6 +690,76 @@ test("settles non-answer actions without borrowing task or artifact authority", 
   assert.equal(plan.responseIntent, "suppress");
   assert.equal(plan.artifactIntent, "none");
   assert.deepEqual(plan.taskMutationPolicy, { kind: "preserve" });
+});
+
+test("rebases a settled plan after its own project binding parent mutation", () => {
+  const currentSettlement = settlement({
+    relation: "followup-parent",
+    relationMutationAuthorized: false,
+    parentMutationAuthorized: false,
+  });
+  const beforeBinding = activeTask("project-deep-dive", {
+    revisions: 3,
+  });
+  const plan = buildSettledAdvisorExecutionPlan({
+    settlement: currentSettlement,
+    activeMeetingTask: beforeBinding,
+    taskBoundaryCommitted: false,
+    childOwnsResponse: false,
+    providerSnapshot: providers,
+    memoryUseCase: "project_deep_dive",
+    askFrame: "past-project",
+    topicDomain: "ai-ml-infra",
+  });
+  const afterBinding = activeTask("project-deep-dive", {
+    revisions: 4,
+    projectBinding: {
+      projectId: "agentic-memory",
+      projectName: "Agentic Memory",
+      primaryEntryId: "memory-agentic",
+      confidence: 1,
+      source: "memory",
+      evidenceEntryIds: ["memory-agentic"],
+      revision: 1,
+      lockedAt: 50,
+      reason: "test-owned-project-binding",
+    },
+  });
+
+  assert.equal(
+    authorizeSettledAdvisorExecutionPlan({
+      plan,
+      currentSettlement,
+      currentSessionId: "session-a",
+      currentRuntimeEpoch: 4,
+      currentLogicalQuestionUnitId: "question-a",
+      currentLogicalQuestionRevision: 2,
+      currentSourceHash: "source-a",
+      currentActiveMeetingTask: afterBinding,
+    }).reason,
+    "expected-parent-revision-mismatch"
+  );
+  const rebased =
+    rebaseSettledAdvisorExecutionPlanAfterOwnedParentMutation({
+      plan,
+      activeMeetingTask: afterBinding,
+    });
+  assert.ok(rebased);
+  assert.equal(rebased.expectedParentRevision, 4);
+  assert.equal(rebased.taskSnapshot?.parent.projectBinding?.projectId, "agentic-memory");
+  assert.equal(
+    authorizeSettledAdvisorExecutionPlan({
+      plan: rebased,
+      currentSettlement,
+      currentSessionId: "session-a",
+      currentRuntimeEpoch: 4,
+      currentLogicalQuestionUnitId: "question-a",
+      currentLogicalQuestionRevision: 2,
+      currentSourceHash: "source-a",
+      currentActiveMeetingTask: afterBinding,
+    }).authorized,
+    true
+  );
 });
 
 test("replays the July 24 coding to general and AI/ML design route sequence without parent leakage", () => {

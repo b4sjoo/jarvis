@@ -4,11 +4,17 @@ import type { ActiveMeetingTask } from "../src/lib/meeting/active-meeting-task.j
 import {
   applyManualQuestionTypeCorrectionToParent,
   buildManualCorrectionParentTransition,
+  classifyManualCorrectionTarget,
+  decideManualCorrectionTerminalState,
   decideManualQuestionTypeCorrection,
   decideManualCorrectionScope,
   decideProvisionalQuestionTypeCorrection,
+  markManualCorrectionTargetResolved,
   resolveManualCorrectionTarget,
+  selectManualCorrectionTargetFromHistory,
+  upsertManualCorrectionTargetHistory,
   ManualCorrectionOperationCoordinator,
+  type ManualCorrectionTargetHistoryEntry,
 } from "../src/lib/meeting/manual-question-type-correction.js";
 import type {
   ActiveInterviewChild,
@@ -63,6 +69,107 @@ test("coalesces duplicate correction clicks for the same question revision", () 
   assert.equal(
     coordinator.claim("correction-c", "session:question:1:coding").accepted,
     true
+  );
+});
+
+test("keeps a meta-confirmation from stealing an unresolved substantive correction target", () => {
+  const substantive = {
+    logicalQuestionUnit: makeLogicalQuestion(
+      "question-substantive",
+      "turn-substantive",
+      "Tell me about a time you missed a commitment."
+    ),
+    updatedAt: 10,
+    targetKind: classifyManualCorrectionTarget({
+      sourceKind: "voice",
+      text: "Tell me about a time you missed a commitment.",
+      intent: "direct-question",
+    }),
+  };
+  const metaConfirmation = {
+    logicalQuestionUnit: makeLogicalQuestion(
+      "question-meta",
+      "turn-meta",
+      "Did you get my question?"
+    ),
+    updatedAt: 20,
+    targetKind: classifyManualCorrectionTarget({
+      sourceKind: "voice",
+      text: "Did you get my question?",
+      intent: "direct-question",
+    }),
+  };
+  const history = upsertManualCorrectionTargetHistory(
+    upsertManualCorrectionTargetHistory([], substantive),
+    metaConfirmation
+  );
+
+  const selection = selectManualCorrectionTargetFromHistory({
+    history,
+    latestCanonical: metaConfirmation,
+  });
+  assert.equal(substantive.targetKind, "substantive");
+  assert.equal(metaConfirmation.targetKind, "non-substantive");
+  assert.equal(
+    selection.target?.logicalQuestionUnit.id,
+    "question-substantive"
+  );
+  assert.equal(selection.reason, "latest-unresolved-substantive");
+});
+
+test("falls back to the visible answered question after unresolved targets resolve", () => {
+  const target: ManualCorrectionTargetHistoryEntry = {
+    logicalQuestionUnit: makeLogicalQuestion(
+      "question-visible",
+      "turn-visible",
+      "Design a URL shortener."
+    ),
+    updatedAt: 10,
+    targetKind: "substantive" as const,
+  };
+  const history = markManualCorrectionTargetResolved([target], {
+    logicalQuestionUnitId: "question-visible",
+    logicalQuestionRevision: 1,
+    resolvedAt: 30,
+  });
+  const selection = selectManualCorrectionTargetFromHistory({
+    history,
+    preferredLogicalQuestionUnitId: "question-visible",
+    preferredLogicalQuestionRevision: 1,
+  });
+
+  assert.equal(selection.reason, "preferred-visible-question");
+  assert.equal(selection.target?.resolvedAt, 30);
+});
+
+test("always terminalizes an applied correction after stale completion authorization", () => {
+  assert.deepEqual(
+    decideManualCorrectionTerminalState({
+      mutationApplied: true,
+      stableAnswerCommitted: false,
+      regenerationTraceStatus: "cancelled",
+      authorizationFailureReason: "parent-revision-mismatch",
+    }),
+    {
+      status: "applied",
+      regenerationStatus: "cancelled",
+      regenerationRetryable: true,
+      error:
+        "Answer regeneration was cancelled because the correction lost runtime authority: parent-revision-mismatch. The corrected task type was kept and regeneration can be retried.",
+    }
+  );
+  assert.deepEqual(
+    decideManualCorrectionTerminalState({
+      mutationApplied: true,
+      stableAnswerCommitted: true,
+      regenerationTraceStatus: "success",
+      authorizationFailureReason: "parent-revision-mismatch",
+    }),
+    {
+      status: "applied",
+      regenerationStatus: "succeeded",
+      regenerationRetryable: false,
+    }
   );
 });
 
@@ -907,5 +1014,34 @@ function makeTurn(id: string, text: string): TranscriptTurn {
     endedAt: now + 1,
     isFinal: true,
     source: "system-audio",
+  };
+}
+
+function makeLogicalQuestion(
+  id: string,
+  turnId: string,
+  text: string
+): LogicalQuestionUnit {
+  return {
+    id,
+    revision: 1,
+    sessionId: "session_1",
+    runtimeEpoch: 1,
+    currentTurnId: turnId,
+    sourceTurnIds: [turnId],
+    sources: [
+      {
+        turnId,
+        text,
+        startedAt: now,
+        endedAt: now + 1,
+      },
+    ],
+    normalizedText: text,
+    startedAt: now,
+    updatedAt: now + 1,
+    compositionReasons: ["fresh-substantive-turn"],
+    boundaryReason: "fresh-substantive-turn",
+    truncated: false,
   };
 }

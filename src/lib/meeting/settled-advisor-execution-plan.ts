@@ -407,6 +407,67 @@ export function buildSettledAdvisorExecutionPlan(input: {
   };
 }
 
+export function rebaseSettledAdvisorExecutionPlanAfterOwnedParentMutation(
+  input: {
+    plan: SettledAdvisorExecutionPlan;
+    activeMeetingTask: ActiveMeetingTask;
+    expectedRevisionDelta?: number;
+  }
+): SettledAdvisorExecutionPlan | undefined {
+  const currentParent = input.activeMeetingTask.parent;
+  const expectedParentId =
+    input.plan.postMutationParentId ?? input.plan.expectedParentId;
+  const expectedParentRevision =
+    input.plan.postMutationParentRevision ??
+    input.plan.expectedParentRevision;
+  if (
+    !expectedParentId ||
+    expectedParentRevision === undefined ||
+    currentParent.id !== expectedParentId ||
+    currentParent.revisions !==
+      expectedParentRevision + (input.expectedRevisionDelta ?? 1)
+  ) {
+    return undefined;
+  }
+
+  const taskSnapshot = cloneActiveMeetingTask(input.activeMeetingTask);
+  const rebased: SettledAdvisorExecutionPlan = {
+    ...input.plan,
+    taskSnapshot,
+    expectedParentId: currentParent.id,
+    expectedParentRevision: currentParent.revisions,
+    postMutationParentId: currentParent.id,
+    postMutationParentRevision: currentParent.revisions,
+  };
+  return deepFreeze({
+    ...rebased,
+    id: createExecutionPlanId({
+      settlementId: rebased.settlementId,
+      responseOwner: rebased.responseOwner,
+      modelRoute: rebased.modelRoute,
+      playbook: rebased.playbook,
+      expectedParentId: rebased.expectedParentId,
+      expectedParentRevision: rebased.expectedParentRevision,
+      postMutationParentId: rebased.postMutationParentId,
+      postMutationParentRevision: rebased.postMutationParentRevision,
+      memoryUseCase: rebased.memoryPolicy.useCase,
+      askFrame: rebased.memoryPolicy.askFrame,
+      topicDomain: rebased.memoryPolicy.topicDomain,
+      projectAnchor: rebased.memoryPolicy.projectAnchor,
+      artifactDisposition: rebased.artifactPolicy.disposition,
+      requiredArtifacts: rebased.requiredArtifacts,
+      responseIntent: rebased.responseIntent,
+      contextReadScope: rebased.contextReadScope,
+      artifactIntent: rebased.artifactIntent,
+      whiteboardFormatPreference: rebased.whiteboardFormatPreference,
+      taskMutationKind: rebased.taskMutationPolicy.kind,
+      responseOnlyTaskScopeId: rebased.responseOnlyTaskScope?.scopeId,
+      transientPersonalStatusDecisionId:
+        rebased.transientPersonalStatusDecision?.id,
+    }),
+  });
+}
+
 export function authorizeSettledAdvisorExecutionPlan(input: {
   plan: SettledAdvisorExecutionPlan;
   currentSettlement?: CurrentQuestionSettlementDecision;

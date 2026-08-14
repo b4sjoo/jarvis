@@ -536,9 +536,14 @@ import {
   buildQuestionEvaluationPatchFromTrace,
   decideManualQuestionTypeCorrection,
   decideManualCorrectionScope,
+  decideManualCorrectionTerminalState,
   buildManualCorrectionParentTransition,
+  classifyManualCorrectionTarget,
   decideProvisionalQuestionTypeCorrection,
+  markManualCorrectionTargetResolved,
   resolveManualCorrectionTarget,
+  selectManualCorrectionTargetFromHistory,
+  upsertManualCorrectionTargetHistory,
   ManualCorrectionOperationCoordinator,
   decideInterviewTaskContinuityBranch,
   decideActiveParentTaskRelationAuthority,
@@ -585,6 +590,7 @@ import {
   stageSuggestionProjectionForManualCorrection,
   authorizeResponseArtifactMutation,
   authorizeSettledAdvisorExecutionPlan,
+  rebaseSettledAdvisorExecutionPlanAfterOwnedParentMutation,
   formatResponseArtifactAuthorizationForTrace,
   formatMeetingResponseOwnerForTrace,
   formatMeetingModelRouteForTrace,
@@ -617,6 +623,7 @@ import {
   resolveAdjacentConstraintInheritance,
   resolveInheritedQuestionLineageForTurnIntent,
   commitStableAnswerRevision,
+  rebaseAnswerGenerationLeaseAfterOwnedParentMutation,
   isAnswerDeliveryLockActive,
   toAnswerDeliveryPresentation,
   updateAnswerDeliveryProgress,
@@ -1873,6 +1880,8 @@ interface ManualCorrectionRuntimeTarget {
   logicalQuestionLease: LogicalQuestionUnitLease;
   questionLineage: QuestionInstanceLineage;
   settlement?: CurrentQuestionSettlementDecision;
+  targetKind: "substantive" | "non-substantive";
+  resolvedAt?: number;
 }
 
 interface CaptureScreenContextOptions {
@@ -2103,6 +2112,9 @@ export function useMeetingAssistant() {
   const latestManualCorrectionTargetRef = useRef<
     ManualCorrectionRuntimeTarget | undefined
   >(undefined);
+  const manualCorrectionTargetHistoryRef = useRef<
+    ManualCorrectionRuntimeTarget[]
+  >([]);
   const pendingInterviewSectionHintRef = useRef<
     PendingInterviewSectionHint | undefined
   >(undefined);
@@ -3346,6 +3358,29 @@ export function useMeetingAssistant() {
       const previousStable = stableAnswerRevisionRef.current;
       stableAnswerRevisionRef.current = stable;
       visibleAnswerRevisionRef.current = stable.revision;
+      manualCorrectionTargetHistoryRef.current =
+        markManualCorrectionTargetResolved(
+          manualCorrectionTargetHistoryRef.current,
+          {
+            logicalQuestionUnitId: stable.logicalQuestionUnitId,
+            logicalQuestionRevision: stable.logicalQuestionRevision,
+            resolvedAt: stable.committedAt,
+          }
+        );
+      const latestManualCorrectionTarget =
+        latestManualCorrectionTargetRef.current;
+      if (
+        latestManualCorrectionTarget &&
+        latestManualCorrectionTarget.logicalQuestionUnit.id ===
+          stable.logicalQuestionUnitId &&
+        latestManualCorrectionTarget.logicalQuestionUnit.revision ===
+          stable.logicalQuestionRevision
+      ) {
+        latestManualCorrectionTargetRef.current = {
+          ...latestManualCorrectionTarget,
+          resolvedAt: stable.committedAt,
+        };
+      }
       pendingAnswerRevisionRef.current = null;
       answerDeliveryProgressRef.current = null;
       let activeContextState = contextManagerRef.current.getState();
@@ -4310,6 +4345,7 @@ export function useMeetingAssistant() {
     adjacentQuestionScopeRef.current = null;
     logicalQuestionUnitRef.current = undefined;
     latestManualCorrectionTargetRef.current = undefined;
+    manualCorrectionTargetHistoryRef.current = [];
     answerRevisionByQuestionRef.current.clear();
     playbookPhaseHistoryRef.current = createPlaybookPhaseHistoryState();
     pendingInterviewSectionHintRef.current = undefined;
@@ -10092,12 +10128,62 @@ export function useMeetingAssistant() {
       });
       const committedProjectBindingContext =
         contextManagerRef.current.getState();
+      const committedProjectBindingTask =
+        committedProjectBindingContext.activeMeetingTask;
+      const rebasedSettledExecutionPlan =
+        settledExecutionPlan && committedProjectBindingTask
+          ? rebaseSettledAdvisorExecutionPlanAfterOwnedParentMutation({
+              plan: settledExecutionPlan,
+              activeMeetingTask: committedProjectBindingTask,
+            })
+          : undefined;
+      const rebasedAnswerGenerationLease =
+        answerGenerationLease && committedProjectBindingTask
+          ? rebaseAnswerGenerationLeaseAfterOwnedParentMutation({
+              lease: answerGenerationLease,
+              taskId: committedProjectBindingTask.parent.id,
+              taskRevision:
+                committedProjectBindingTask.parent.revisions,
+            })
+          : undefined;
+      if (rebasedSettledExecutionPlan) {
+        settledExecutionPlan = rebasedSettledExecutionPlan;
+        settledAdvisorExecutionPlanRef.current =
+          rebasedSettledExecutionPlan;
+      }
+      if (rebasedAnswerGenerationLease) {
+        answerGenerationLease = rebasedAnswerGenerationLease;
+      }
       setState((previous) => ({
         ...previous,
         taskRuntime: committedProjectBindingContext.taskRuntime,
         activeMeetingTask:
           committedProjectBindingContext.activeMeetingTask,
       }));
+      if (traceId) {
+        traceStoreRef.current.updateMetadata(traceId, {
+          projectBindingExecutionPlanRebased: Boolean(
+            rebasedSettledExecutionPlan
+          ),
+          projectBindingGenerationLeaseRebased: Boolean(
+            rebasedAnswerGenerationLease
+          ),
+          projectBindingOwnedParentRevision:
+            committedProjectBindingTask?.parent.revisions,
+          ...(rebasedSettledExecutionPlan
+            ? formatSettledAdvisorExecutionPlanForTrace(
+                rebasedSettledExecutionPlan
+              )
+            : {}),
+          ...(rebasedAnswerGenerationLease
+            ? formatAnswerGenerationLeaseForTrace(
+                rebasedAnswerGenerationLease,
+                undefined,
+                "project-binding-rebase"
+              )
+            : {}),
+        });
+      }
       if (committedProjectBindingContext.activeMeetingTask) {
         sessionRecordingManagerRef.current?.recordActiveMeetingTaskSnapshot(
           committedProjectBindingContext.activeMeetingTask,
@@ -11756,7 +11842,7 @@ export function useMeetingAssistant() {
         questionLineage,
       };
       latestForceAdviseTargetRef.current = target;
-      latestManualCorrectionTargetRef.current = {
+      const manualCorrectionTarget: ManualCorrectionRuntimeTarget = {
         sourceKind: "voice",
         originTraceId: traceId,
         sourceObservationIds: [],
@@ -11765,7 +11851,18 @@ export function useMeetingAssistant() {
         logicalQuestionUnit,
         logicalQuestionLease,
         questionLineage,
+        targetKind: classifyManualCorrectionTarget({
+          sourceKind: "voice",
+          text: logicalQuestionUnit.normalizedText || turn.text,
+          intent: intentDecision.intent,
+        }),
       };
+      latestManualCorrectionTargetRef.current = manualCorrectionTarget;
+      manualCorrectionTargetHistoryRef.current =
+        upsertManualCorrectionTargetHistory(
+          manualCorrectionTargetHistoryRef.current,
+          manualCorrectionTarget
+        );
       setState((previous) => ({
         ...previous,
         latestInterviewerTurnCandidate: presentation,
@@ -11775,6 +11872,9 @@ export function useMeetingAssistant() {
         ...formatLogicalQuestionLeaseForTrace(logicalQuestionLease),
         ...formatQuestionLineageForTrace(questionLineage),
         canonicalLogicalQuestionTargetPublished: true,
+        manualCorrectionTargetKind: manualCorrectionTarget.targetKind,
+        manualCorrectionTargetHistorySize:
+          manualCorrectionTargetHistoryRef.current.length,
         forceAdviseTargetStatus: presentation.status,
         forceAdviseAutomaticExecutionState:
           presentation.automaticExecutionState,
@@ -21663,7 +21763,7 @@ export function useMeetingAssistant() {
           screenRelationLogicalQuestionUnit &&
           screenQuestionLineage
         ) {
-          latestManualCorrectionTargetRef.current = {
+          const manualCorrectionTarget: ManualCorrectionRuntimeTarget = {
             sourceKind: "screen",
             originTraceId: trace.id,
             sourceObservationIds: [observation.id],
@@ -21674,13 +21774,26 @@ export function useMeetingAssistant() {
             ),
             questionLineage: screenQuestionLineage,
             settlement: screenCurrentQuestionSettlement,
+            targetKind: "substantive",
+            resolvedAt: nextStableAnswer.committedAt,
           };
+          latestManualCorrectionTargetRef.current = manualCorrectionTarget;
+          manualCorrectionTargetHistoryRef.current =
+            upsertManualCorrectionTargetHistory(
+              manualCorrectionTargetHistoryRef.current,
+              manualCorrectionTarget
+            );
           traceStoreRef.current.updateMetadata(trace.id, {
             manualCorrectionTargetPublished: true,
             manualCorrectionTargetSource: "screen",
             manualCorrectionTargetObservationIds: [observation.id],
             manualCorrectionTargetSettlementId:
               screenCurrentQuestionSettlement?.settlementId,
+            manualCorrectionTargetKind: manualCorrectionTarget.targetKind,
+            manualCorrectionTargetResolvedAt:
+              manualCorrectionTarget.resolvedAt,
+            manualCorrectionTargetHistorySize:
+              manualCorrectionTargetHistoryRef.current.length,
           });
         }
         const visibleAnswerRevisionAfter =
@@ -21949,20 +22062,28 @@ export function useMeetingAssistant() {
 
       const contextState = contextManagerRef.current.getState();
       const activeTask = contextState.activeMeetingTask;
-      const latestCanonicalTarget = latestManualCorrectionTargetRef.current;
+      const correctionTargetSelection =
+        selectManualCorrectionTargetFromHistory({
+          history: manualCorrectionTargetHistoryRef.current,
+          latestCanonical: latestManualCorrectionTargetRef.current,
+          preferredLogicalQuestionUnitId:
+            stableAnswerRevisionRef.current?.logicalQuestionUnitId,
+          preferredLogicalQuestionRevision:
+            stableAnswerRevisionRef.current?.logicalQuestionRevision,
+        });
+      const latestCanonicalTarget = correctionTargetSelection.target;
       const canonicalTargetIsLatest = Boolean(
         latestCanonicalTarget &&
-          (latestCanonicalTarget.originTraceId ===
-            state.latestSuggestion?.sourceTraceId ||
-            latestCanonicalTarget.updatedAt >=
-              (state.latestSuggestion?.createdAt ?? 0))
+          latestCanonicalTarget.logicalQuestionUnit.sessionId ===
+            contextState.sessionId &&
+          latestCanonicalTarget.logicalQuestionUnit.runtimeEpoch ===
+            runtimeEpochRef.current
       );
       const canonicalTargetAuthorization =
         latestCanonicalTarget && canonicalTargetIsLatest
           ? authorizeLogicalQuestionUnitLease(
               latestCanonicalTarget.logicalQuestionLease,
-              latestManualCorrectionTargetRef.current
-                ?.logicalQuestionUnit
+              latestCanonicalTarget.logicalQuestionUnit
             )
           : undefined;
       if (
@@ -21997,6 +22118,20 @@ export function useMeetingAssistant() {
         canonicalTargetAuthorization?.authorized
           ? latestCanonicalTarget
           : undefined;
+      if (canonicalCorrectionTarget) {
+        latestManualCorrectionTargetRef.current =
+          canonicalCorrectionTarget;
+        traceStoreRef.current.updateMetadata(
+          canonicalCorrectionTarget.originTraceId,
+          {
+            manualCorrectionTargetSelectionReason:
+              correctionTargetSelection.reason,
+            manualCorrectionTargetSelectedFromHistory: true,
+            manualCorrectionTargetHistorySize:
+              manualCorrectionTargetHistoryRef.current.length,
+          }
+        );
+      }
       const targetResolution = resolveManualCorrectionTarget({
         activeTask,
         currentQuestionLineage: state.currentQuestionLineage,
@@ -22207,6 +22342,10 @@ export function useMeetingAssistant() {
           manualQuestionTypeCorrectionSource: source,
           manualQuestionTypeCorrectionTarget: decision.target,
           manualCorrectionTargetSource: correctionTargetSource,
+          manualCorrectionTargetSelectionReason:
+            correctionTargetSelection.reason,
+          manualCorrectionTargetKind:
+            canonicalCorrectionTarget?.targetKind,
           detectedQuestionType: decision.detectedType,
           correctedQuestionType: decision.correctedType,
           correctionDecisionReason: decision.reason,
@@ -22351,6 +22490,86 @@ export function useMeetingAssistant() {
       let correctionLifecycleToken: RuntimeCommitToken | undefined;
       const correctionReliableAnswerFallback =
         stableAnswerRevisionRef.current;
+      let correctionTerminalized = false;
+      const finalizeCorrection = (input: {
+        stableAnswerCommitted?: boolean;
+        regenerationTraceStatus?:
+          | "running"
+          | "success"
+          | "error"
+          | "cancelled";
+        regenerationCommitDisposition?:
+          ManualQuestionTypeCorrection["regenerationCommitDisposition"];
+        authorizationFailureReason?: string;
+        failureMessage?: string;
+      }) => {
+        if (correctionTerminalized) return;
+        const stableAnswerCommitted =
+          input.stableAnswerCommitted ?? false;
+        const terminal = decideManualCorrectionTerminalState({
+          mutationApplied,
+          stableAnswerCommitted,
+          regenerationTraceStatus: input.regenerationTraceStatus,
+          authorizationFailureReason:
+            input.authorizationFailureReason,
+          failureMessage: input.failureMessage,
+        });
+        correction = {
+          ...correction,
+          status: terminal.status,
+          regenerationStatus: terminal.regenerationStatus,
+          regenerationCommitDisposition:
+            input.regenerationCommitDisposition ??
+            (stableAnswerCommitted
+              ? "committed"
+              : input.regenerationTraceStatus === "cancelled" ||
+                  input.authorizationFailureReason
+                ? "cancelled"
+                : input.regenerationTraceStatus === "error"
+                  ? "error"
+                  : "no-stable-answer-commit"),
+          regenerationRetryable: terminal.regenerationRetryable,
+          completedAt: Date.now(),
+          error: terminal.error,
+        };
+        correctionTerminalized = true;
+        sessionRecordingManagerRef.current?.recordManualQuestionTypeCorrection(
+          correction
+        );
+        setState((previous) => {
+          if (
+            previous.manualQuestionTypeCorrection?.eventId !== eventId
+          ) {
+            return previous;
+          }
+          return {
+            ...previous,
+            ...(!stableAnswerCommitted
+              ? restoreSuggestionProjectionAfterFailedManualCorrection(
+                  previous,
+                  correctionReliableAnswerFallback?.suggestion
+                )
+              : {}),
+            manualQuestionTypeCorrection: correction,
+            error: correction.error ?? null,
+          };
+        });
+        const correctionTraceState = traceStoreRef.current
+          .getTraces()
+          .find((trace) => trace.id === correctionTrace.id);
+        if (correctionTraceState?.status === "running") {
+          traceStoreRef.current.finishTrace(
+            correctionTrace.id,
+            stableAnswerCommitted
+              ? "success"
+              : input.regenerationTraceStatus === "cancelled" ||
+                  input.authorizationFailureReason
+                ? "cancelled"
+                : "error",
+            correction.error
+          );
+        }
+      };
 
       try {
         if (correctionLogicalQuestionLease) {
@@ -22389,6 +22608,12 @@ export function useMeetingAssistant() {
               error:
                 "The interviewer moved to a newer question before the correction could be applied.",
             }));
+            finalizeCorrection({
+              authorizationFailureReason:
+                correctionOwnershipAuthorization.reason,
+              failureMessage:
+                "The interviewer moved to a newer question before the correction could be applied.",
+            });
             return;
           }
         }
@@ -22564,6 +22789,9 @@ export function useMeetingAssistant() {
             "cancelled",
             mutationAuthorization.reason
           );
+          finalizeCorrection({
+            authorizationFailureReason: mutationAuthorization.reason,
+          });
           return;
         }
 
@@ -22615,6 +22843,10 @@ export function useMeetingAssistant() {
             "cancelled",
             correctedParentAuthorization.reason
           );
+          finalizeCorrection({
+            authorizationFailureReason:
+              correctedParentAuthorization.reason,
+          });
           return;
         }
 
@@ -22889,74 +23121,30 @@ export function useMeetingAssistant() {
           "post-correction-regeneration"
         );
         if (!completionAuthorization.authorized) {
-          traceStoreRef.current.finishTrace(
-            correctionTrace.id,
-            "cancelled",
-            completionAuthorization.reason
-          );
-          return;
+          traceStoreRef.current.updateMetadata(correctionTrace.id, {
+            correctionTerminalStateRecoveredAfterStaleAuthorization: true,
+            correctionTerminalAuthorizationReason:
+              completionAuthorization.reason,
+          });
         }
-        correction = {
-          ...correction,
-          regenerationStatus:
-            regenerationStatus === "success" && stableAnswerCommitted
-              ? "succeeded"
-              : regenerationStatus === "cancelled"
-                ? "cancelled"
-                : "failed",
+        finalizeCorrection({
+          stableAnswerCommitted,
+          regenerationTraceStatus: regenerationStatus,
           regenerationCommitDisposition,
-          regenerationRetryable: !stableAnswerCommitted,
-          completedAt: Date.now(),
-          error:
+          authorizationFailureReason:
+            completionAuthorization.authorized
+              ? undefined
+              : completionAuthorization.reason,
+          failureMessage:
             regenerationStatus === "error"
               ? "Answer regeneration failed. The corrected task type was kept."
-              : !stableAnswerCommitted
-                ? "The corrected question produced no valid answer. The previous reliable answer was preserved and regeneration can be retried."
               : undefined,
-        };
-        sessionRecordingManagerRef.current?.recordManualQuestionTypeCorrection(
-          correction
-        );
-        setState((previous) => ({
-          ...previous,
-          ...(!stableAnswerCommitted
-            ? restoreSuggestionProjectionAfterFailedManualCorrection(
-                previous,
-                stableAnswerBeforeRegeneration?.suggestion
-              )
-            : {}),
-          manualQuestionTypeCorrection: correction,
-          error: correction.error ?? null,
-        }));
-        traceStoreRef.current.finishTrace(
-          correctionTrace.id,
-          stableAnswerCommitted
-            ? "success"
-            : regenerationStatus === "cancelled"
-              ? "cancelled"
-              : "error",
-          correction.error
-        );
+        });
       } catch (error) {
         const failureAuthorization = recordCorrectionAuthorization(
           correctionLifecycleToken ?? correctionRuntimeToken,
           "correction-error-boundary"
         );
-        if (!failureAuthorization.authorized) return;
-        correction = {
-          ...correction,
-          status: mutationApplied ? "applied" : "failed",
-          regenerationStatus: mutationApplied ? "failed" : "idle",
-          completedAt: Date.now(),
-          error:
-            mutationApplied
-              ? `The task type was corrected, but answer regeneration failed: ${
-                  error instanceof Error ? error.message : "unknown error"
-                }`
-              : error instanceof Error
-                ? error.message
-                : "Failed to correct the active question type.",
-        };
         if (!mutationApplied) {
           traceStoreRef.current.finishStep(
             correctionTrace.id,
@@ -22981,21 +23169,38 @@ export function useMeetingAssistant() {
           .getTraces()
           .find((trace) => trace.id === correctionTrace.id);
         if (correctionTraceState?.status === "running") {
-          traceStoreRef.current.finishTrace(correctionTrace.id, "error", error);
+          traceStoreRef.current.updateMetadata(correctionTrace.id, {
+            correctionErrorBoundaryReached: true,
+            correctionErrorBoundaryAuthorization:
+              failureAuthorization.reason,
+          });
         }
-        sessionRecordingManagerRef.current?.recordManualQuestionTypeCorrection(
-          correction
-        );
-        setState((previous) => ({
-          ...previous,
-          ...restoreSuggestionProjectionAfterFailedManualCorrection(
-            previous,
-            correctionReliableAnswerFallback?.suggestion
-          ),
-          manualQuestionTypeCorrection: correction,
-          error: correction.error ?? null,
-        }));
+        finalizeCorrection({
+          regenerationTraceStatus: mutationApplied ? "error" : undefined,
+          authorizationFailureReason: failureAuthorization.authorized
+            ? undefined
+            : failureAuthorization.reason,
+          failureMessage: mutationApplied
+            ? `The task type was corrected, but answer regeneration failed: ${
+                error instanceof Error ? error.message : "unknown error"
+              }`
+            : error instanceof Error
+              ? error.message
+              : "Failed to correct the active question type.",
+        });
       } finally {
+        if (
+          !correctionTerminalized &&
+          manualCorrectionOperationCoordinatorRef.current.owns(eventId)
+        ) {
+          finalizeCorrection({
+            regenerationTraceStatus: mutationApplied
+              ? "cancelled"
+              : undefined,
+            authorizationFailureReason:
+              "correction-ended-without-terminal-outcome",
+          });
+        }
         manualCorrectionOperationCoordinatorRef.current.release(eventId);
       }
     },

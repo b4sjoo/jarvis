@@ -7,6 +7,7 @@ import {
   createRuntimeTypeRepairOutputAuthority,
   decideRefreshAuthority,
   formatAnswerGenerationLeaseForTrace,
+  rebaseAnswerGenerationLeaseAfterOwnedParentMutation,
 } from "../src/lib/meeting/answer-generation-lease.js";
 import { decideAdvisorTurnIntent } from "../src/lib/meeting/advisor-turn-intent.js";
 import type { CurrentQuestionSettlementDecision } from "../src/lib/meeting/current-question-settlement.js";
@@ -316,4 +317,41 @@ test("formats replay-safe lease metadata for stale commits", () => {
   assert.equal(metadata.staleCommitRejected, true);
   assert.equal(metadata.staleReason, "visible-answer-revision-mismatch");
   assert.equal(metadata.baseVisibleAnswerRevision, 8);
+});
+
+test("rebases a generation lease only for its own single parent revision mutation", () => {
+  const lease = buildLease();
+  const rebased = rebaseAnswerGenerationLeaseAfterOwnedParentMutation({
+    lease,
+    taskId: "parent-a",
+    taskRevision: 4,
+  });
+
+  assert.ok(rebased);
+  assert.equal(rebased.id, lease.id);
+  assert.equal(rebased.taskRevision, 4);
+  assert.equal(
+    authorizeAnswerGenerationLease(rebased, {
+      ...buildCurrentSnapshot(),
+      taskRevision: 4,
+      authorizedArtifacts: ["answer", "code", "complexity"],
+    }).authorized,
+    true
+  );
+  assert.equal(
+    rebaseAnswerGenerationLeaseAfterOwnedParentMutation({
+      lease,
+      taskId: "parent-b",
+      taskRevision: 4,
+    }),
+    undefined
+  );
+  assert.equal(
+    rebaseAnswerGenerationLeaseAfterOwnedParentMutation({
+      lease,
+      taskId: "parent-a",
+      taskRevision: 5,
+    }),
+    undefined
+  );
 });
