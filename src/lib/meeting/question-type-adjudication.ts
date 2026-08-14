@@ -65,12 +65,17 @@ export interface QuestionTypeAdjudicationEligibilityDecision {
   eligible: boolean;
   reason: string;
   triggerReasons: string[];
+  executionMode:
+    | "none"
+    | "shadow-observation"
+    | "enforcement-window";
+  wordEquivalent: number;
+  sentenceCount: number;
 }
 
 export type QuestionTypeEnforcementReason =
   | "authorized"
   | "operation-not-enforcement"
-  | "local-type-already-concrete"
   | "source-not-substantive"
   | "manual-authority-conflict"
   | "operation-lease-not-authorized"
@@ -296,33 +301,99 @@ export function decideQuestionTypeAdjudicationEligibility(input: {
   manualCorrectionActive: boolean;
   turnGateAction: string;
 }): QuestionTypeAdjudicationEligibilityDecision {
+  const wordEquivalent = estimateWordEquivalents(
+    input.projection.text
+  );
+  const sentenceCount = countQuestionSentences(
+    input.projection
+  );
   const skip = (reason: string) => ({
     eligible: false,
     reason,
     triggerReasons: [] as string[],
+    executionMode: "none" as const,
+    wordEquivalent,
+    sentenceCount,
   });
   if (input.mode === "off") return skip("question-type-operation-off");
   if (input.speaker !== "them") return skip("speaker-is-not-interviewer");
   if (!input.projection.safe) return skip("unsafe-question-projection");
-  if (input.manualCorrectionActive) {
-    return skip("manual-correction-authoritative");
-  }
-  if (input.lexical.certainty === "exact-high") {
-    return skip("local-exact-high-authoritative");
-  }
-  if (estimateWordEquivalents(input.projection.text) < 3) {
+  if (wordEquivalent < 3) {
     return skip("question-unit-too-short");
   }
 
+  const shadowObservation = (
+    reason: string,
+    triggerReasons: string[]
+  ): QuestionTypeAdjudicationEligibilityDecision => ({
+    eligible: true,
+    reason,
+    triggerReasons,
+    executionMode: "shadow-observation",
+    wordEquivalent,
+    sentenceCount,
+  });
+  if (input.manualCorrectionActive) {
+    return shadowObservation(
+      "manual-correction-shadow-observation",
+      ["manual-type-authority-present"]
+    );
+  }
+  if (input.turnGateAction !== "answer-refresh") {
+    return shadowObservation("non-answer-turn-shadow-observation", [
+      `turn-gate:${input.turnGateAction || "unknown"}`,
+    ]);
+  }
+  if (input.mode === "shadow") {
+    return shadowObservation("operation-shadow-observation", [
+      input.lexical.type && input.lexical.type !== "unknown"
+        ? "local-type-concrete"
+        : "local-type-abstained",
+    ]);
+  }
+
+  const simpleHighConfidenceLocal = Boolean(
+    input.lexical.type &&
+      input.lexical.type !== "unknown" &&
+      input.lexical.confidence >=
+        QUESTION_TYPE_ENFORCEMENT_MIN_CONFIDENCE &&
+      wordEquivalent < 24 &&
+      sentenceCount <= 1 &&
+      input.projection.projectionReason === "within-limit" &&
+      input.projection.omittedSourceTurnIds.length === 0
+  );
+  if (simpleHighConfidenceLocal) {
+    return shadowObservation(
+      "high-confidence-simple-local-shadow",
+      ["local-confidence-at-least-enforcement-threshold"]
+    );
+  }
+
+  const triggerReasons = [
+    !input.lexical.type || input.lexical.type === "unknown"
+      ? "local-type-abstained"
+      : input.lexical.confidence <
+          QUESTION_TYPE_ENFORCEMENT_MIN_CONFIDENCE
+        ? "local-confidence-below-enforcement-threshold"
+        : undefined,
+    wordEquivalent >= 24 ? "long-question-unit" : undefined,
+    sentenceCount >= 2 ? "multi-sentence-question-unit" : undefined,
+    input.projection.projectionReason !== "within-limit" ||
+    input.projection.omittedSourceTurnIds.length > 0
+      ? "bounded-question-projection"
+      : undefined,
+    input.turnGateAction === "answer-refresh"
+      ? "source-owned-answer-opportunity"
+      : `turn-gate:${input.turnGateAction || "unknown"}`,
+  ].filter((reason): reason is string => Boolean(reason));
+
   return {
     eligible: true,
-    reason: "local-type-abstained",
-    triggerReasons: [
-      "local-type-abstained",
-      input.turnGateAction === "answer-refresh"
-        ? "source-owned-answer-opportunity"
-        : `turn-gate:${input.turnGateAction || "unknown"}`,
-    ],
+    reason: "enforcement-review-required",
+    triggerReasons,
+    executionMode: "enforcement-window",
+    wordEquivalent,
+    sentenceCount,
   };
 }
 
@@ -519,9 +590,6 @@ export function decideQuestionTypeEnforcement(input: {
   if (input.mode !== "enforcement") {
     return reject("operation-not-enforcement");
   }
-  if (localQuestionType !== "unknown") {
-    return reject("local-type-already-concrete");
-  }
   if (!input.sourceOwnedSubstantive) {
     return reject("source-not-substantive");
   }
@@ -588,6 +656,12 @@ export function formatQuestionTypeAdjudicationForTrace(input: {
       input.eligibility?.reason,
     questionTypeAdjudicationTriggerReasons:
       input.eligibility?.triggerReasons,
+    questionTypeAdjudicationExecutionMode:
+      input.eligibility?.executionMode,
+    questionTypeAdjudicationWordEquivalent:
+      input.eligibility?.wordEquivalent,
+    questionTypeAdjudicationSentenceCount:
+      input.eligibility?.sentenceCount,
     questionTypeAdjudicationUnitId:
       input.request?.logicalQuestionUnitId,
     questionTypeAdjudicationUnitRevision:
@@ -643,6 +717,18 @@ function estimateWordEquivalents(value: string) {
     .split(/\s+/u)
     .filter(Boolean).length;
   return words + Math.ceil(cjkCharacters / 2);
+}
+
+function countQuestionSentences(
+  projection: TaxonomyAdjudicationProjection
+) {
+  return projection.sourceTurns.reduce((count, source) => {
+    const sentenceCount = source.text
+      .split(/[.!?。！？]+/u)
+      .map((sentence) => sentence.trim())
+      .filter(Boolean).length;
+    return count + Math.max(1, sentenceCount);
+  }, 0);
 }
 
 function normalizeQuestionType(value: unknown): CanonicalQuestionType {

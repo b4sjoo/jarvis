@@ -14184,10 +14184,13 @@ export function useMeetingAssistant() {
         normalizeCanonicalQuestionType(lexical.type) ?? "unknown";
       const sourceOwnedSubstantive =
         turnGateAction === "answer-refresh" && request.question.safe;
+      const effectiveQuestionTypeMode =
+        eligibility.executionMode === "enforcement-window"
+          ? "enforcement"
+          : "shadow";
       const enforcementWindowRequested = Boolean(
-        mode === "enforcement" &&
+        effectiveQuestionTypeMode === "enforcement" &&
           eligibility.eligible &&
-          localQuestionType === "unknown" &&
           sourceOwnedSubstantive &&
           !manualAuthorityConflict
       );
@@ -14198,7 +14201,7 @@ export function useMeetingAssistant() {
         outcome: Promise.resolve({
           disposition,
           enforcement: decideQuestionTypeEnforcement({
-            mode,
+            mode: effectiveQuestionTypeMode,
             localQuestionType,
             sourceOwnedSubstantive,
             manualAuthorityConflict,
@@ -14265,7 +14268,10 @@ export function useMeetingAssistant() {
       const modelRoute = resolveRuntimeInferenceModelRouteFromSnapshot({
         snapshot: meetingModelProviderSnapshotRef.current,
         operationKind: "question-type-adjudication",
-        reason: "local-question-type-abstained",
+        reason:
+          effectiveQuestionTypeMode === "enforcement"
+            ? "question-type-settlement-proposal"
+            : "question-type-observation",
       });
       const routeMetadata =
         formatRuntimeInferenceModelRouteForTrace(modelRoute);
@@ -14413,7 +14419,10 @@ export function useMeetingAssistant() {
           sessionId: contextState.sessionId,
           budgetKey: `${logicalQuestionUnit.id}:${logicalQuestionUnit.revision}`,
           budgetSlot: "type",
-          budgetReason: "local-question-type-abstained",
+          budgetReason:
+            effectiveQuestionTypeMode === "enforcement"
+              ? "question-type-settlement-proposal"
+              : "question-type-observation",
           traceId,
           lease,
           request,
@@ -14446,7 +14455,7 @@ export function useMeetingAssistant() {
           traceStoreRef.current.updateMetadata(traceId, metadata);
           stepId = traceStoreRef.current.startStep(
             traceId,
-            mode === "enforcement"
+            effectiveQuestionTypeMode === "enforcement"
               ? "Question type adjudication enforcement"
               : "Question type adjudication shadow",
             metadata
@@ -14540,7 +14549,8 @@ export function useMeetingAssistant() {
                 manualCorrectionRevision:
                   manualCorrectionRevisionRef.current,
                 policy: {
-                  allowLlmTypeRepair: mode === "enforcement",
+                  allowLlmTypeRepair:
+                    effectiveQuestionTypeMode === "enforcement",
                   allowLlmRelationRepair: false,
                   allowLlmActionRepair: false,
                   llmTypeRepairMinConfidence:
@@ -14552,7 +14562,7 @@ export function useMeetingAssistant() {
               })
             : undefined;
           const enforcement = decideQuestionTypeEnforcement({
-            mode,
+            mode: effectiveQuestionTypeMode,
             localQuestionType,
             candidate: parsedValue,
             settlement: settlementPreview,
@@ -14565,7 +14575,7 @@ export function useMeetingAssistant() {
           });
           const effectiveDisposition = enforcement.authorized
             ? "enforcement-authorized"
-            : mode === "enforcement" &&
+            : effectiveQuestionTypeMode === "enforcement" &&
                 finalDisposition === "shadow-observed"
               ? "enforcement-rejected"
               : finalDisposition;

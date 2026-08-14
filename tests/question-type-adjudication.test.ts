@@ -129,7 +129,7 @@ test("strictly parses grounded type output and rejects broader authority", () =>
   );
 });
 
-test("runs on local abstention but skips exact-high and manual authority", () => {
+test("always observes eligible type turns while manual authority stays shadow-only", () => {
   const logicalQuestionUnit = unit(
     "How would you approach this architecture?"
   );
@@ -145,13 +145,13 @@ test("runs on local abstention but skips exact-high and manual authority", () =>
     turnGateAction: "answer-refresh",
   });
   assert.equal(eligible.eligible, true);
-  assert.equal(eligible.reason, "local-type-abstained");
+  assert.equal(eligible.executionMode, "shadow-observation");
 
   const exactHigh = inferQuestionTypeDecisionFromText(
     "Implement a stack in Python."
   );
   assert.equal(exactHigh.certainty, "exact-high");
-  assert.equal(
+  const exactHighEligibility =
     decideQuestionTypeAdjudicationEligibility({
       mode: "shadow",
       speaker: "them",
@@ -159,10 +159,13 @@ test("runs on local abstention but skips exact-high and manual authority", () =>
       lexical: exactHigh,
       manualCorrectionActive: false,
       turnGateAction: "answer-refresh",
-    }).reason,
-    "local-exact-high-authoritative"
-  );
+    });
+  assert.equal(exactHighEligibility.eligible, true);
   assert.equal(
+    exactHighEligibility.executionMode,
+    "shadow-observation"
+  );
+  const manualEligibility =
     decideQuestionTypeAdjudicationEligibility({
       mode: "shadow",
       speaker: "them",
@@ -170,8 +173,65 @@ test("runs on local abstention but skips exact-high and manual authority", () =>
       lexical: abstainingLexical(),
       manualCorrectionActive: true,
       turnGateAction: "answer-refresh",
-    }).reason,
-    "manual-correction-authoritative"
+    });
+  assert.equal(manualEligibility.eligible, true);
+  assert.equal(
+    manualEligibility.reason,
+    "manual-correction-shadow-observation"
+  );
+});
+
+test("waits only for lower-confidence, long, or multi-sentence type review", () => {
+  const exactHigh = inferQuestionTypeDecisionFromText(
+    "Implement a stack in Python."
+  );
+  const simpleRequest = buildQuestionTypeAdjudicationRequest({
+    logicalQuestionUnit: unit("Implement a stack in Python."),
+  });
+  const simple = decideQuestionTypeAdjudicationEligibility({
+    mode: "enforcement",
+    speaker: "them",
+    projection: simpleRequest.question,
+    lexical: { ...exactHigh, confidence: 0.97 },
+    manualCorrectionActive: false,
+    turnGateAction: "answer-refresh",
+  });
+  assert.equal(simple.executionMode, "shadow-observation");
+  assert.equal(simple.reason, "high-confidence-simple-local-shadow");
+
+  const lowerConfidence = decideQuestionTypeAdjudicationEligibility({
+    mode: "enforcement",
+    speaker: "them",
+    projection: simpleRequest.question,
+    lexical: { ...exactHigh, confidence: 0.88 },
+    manualCorrectionActive: false,
+    turnGateAction: "answer-refresh",
+  });
+  assert.equal(lowerConfidence.executionMode, "enforcement-window");
+  assert.ok(
+    lowerConfidence.triggerReasons.includes(
+      "local-confidence-below-enforcement-threshold"
+    )
+  );
+
+  const multiSentenceRequest = buildQuestionTypeAdjudicationRequest({
+    logicalQuestionUnit: unit(
+      "Tell me about your project. What was the hardest decision?"
+    ),
+  });
+  const multiSentence = decideQuestionTypeAdjudicationEligibility({
+    mode: "enforcement",
+    speaker: "them",
+    projection: multiSentenceRequest.question,
+    lexical: { ...exactHigh, confidence: 0.97 },
+    manualCorrectionActive: false,
+    turnGateAction: "answer-refresh",
+  });
+  assert.equal(multiSentence.executionMode, "enforcement-window");
+  assert.ok(
+    multiSentence.triggerReasons.includes(
+      "multi-sentence-question-unit"
+    )
   );
 });
 
@@ -351,8 +411,8 @@ test("keeps type enforcement narrow across confidence, authority, and timing gua
     decideQuestionTypeEnforcement({
       ...base,
       localQuestionType: "coding",
-    }).reason,
-    "local-type-already-concrete"
+    }).authorized,
+    true
   );
   assert.equal(
     decideQuestionTypeEnforcement({
