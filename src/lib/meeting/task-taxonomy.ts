@@ -572,6 +572,23 @@ export function inferQuestionTypeDecisionFromText(
     addEvidence("behavioral", 1, "behavioral-story-frame");
   }
 
+  const hasProjectDepthDimension =
+    /\b(?:hardest|most challenging|most complex|most impactful|greatest impact|biggest impact|technical challenge|difficult decision|key decision|trade[ -]?off|ownership|contribution|role)\b/.test(
+      normalized
+    );
+  const hasCandidateProjectOwnership =
+    /\byour\b.{0,50}\b(?:project|system|feature|implementation|work)\b/.test(
+      normalized
+    ) ||
+    /\b(?:project|system|feature|implementation|work)\b.{0,70}\byou (?:have )?(?:worked on|built|implemented|owned|shipped|led|delivered)\b/.test(
+      normalized
+    );
+  const hasPastProjectDepthFrame =
+    /\b(?:what|which|how|tell me|describe|walk me through)\b/.test(
+      normalized
+    ) &&
+    hasProjectDepthDimension &&
+    hasCandidateProjectOwnership;
   const hasStrongPastProjectFrame =
     /\b(have you|did you|when you|how did you|what was your|who were your|walk me through|tell me about|describe)\b.{0,100}\b(shipped|built|implemented|owned|launched|deployed|operated|scaled|tested|validated|project|system|feature|contribution|role|partners|stakeholders)\b/.test(
       normalized
@@ -590,7 +607,7 @@ export function inferQuestionTypeDecisionFromText(
     ) ||
     /\bwho were your (primary )?(partners|stakeholders|collaborators)\b/.test(
       normalized
-    );
+    ) || hasPastProjectDepthFrame;
   const hasProjectStackContext =
     /\b(your|personal|our|production|backend|frontend|full|technology|technical|tech)\s+(contribution to the )?stack\b/.test(
       normalized
@@ -609,6 +626,9 @@ export function inferQuestionTypeDecisionFromText(
 
   if (!hasBehavioralFrame && hasStrongPastProjectFrame) {
     addEvidence("project-deep-dive", 0.95, "past-project-intent");
+  }
+  if (!hasBehavioralFrame && hasPastProjectDepthFrame) {
+    addEvidence("project-deep-dive", 0.95, "past-project-depth-frame");
   }
   if (!hasBehavioralFrame && hasExplicitProjectStackFrame) {
     addEvidence("project-deep-dive", 0.92, "project-stack-context");

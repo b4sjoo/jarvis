@@ -373,6 +373,37 @@ test("keeps the recorded recruiter project sequence out of coding", () => {
   }
 });
 
+test("recognizes a generic past-project depth frame without phrase-specific recruiter rules", () => {
+  for (const question of [
+    "What is the hardest technical project you have worked on?",
+    "What was the most challenging system you built?",
+    "Which project in your work had the greatest impact?",
+  ]) {
+    const decision = inferQuestionTypeDecisionFromText(question);
+    assert.equal(decision.type, "project-deep-dive", question);
+    assert.ok(decision.confidence >= 0.95, question);
+    assert.ok(
+      decision.evidence.includes("past-project-depth-frame"),
+      question
+    );
+  }
+});
+
+test("keeps generic complexity language out of the past-project signal", () => {
+  for (const question of [
+    "What is the hardest part of distributed systems?",
+    "Design the most complex system you can for this workload.",
+    "What makes this algorithm challenging?",
+  ]) {
+    const decision = inferQuestionTypeDecisionFromText(question);
+    assert.notEqual(decision.type, "project-deep-dive", question);
+    assert.ok(
+      !decision.evidence.includes("past-project-depth-frame"),
+      question
+    );
+  }
+});
+
 test("returns evidence and confidence without promoting ambiguous vocabulary", () => {
   const projectDecision = inferQuestionTypeDecisionFromText(
     "What was your specific personal contribution to the stack?"
