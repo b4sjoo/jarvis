@@ -24,6 +24,22 @@ import {
 } from "@/lib/memory";
 import { interviewPreparationSnapshotService } from "@/lib/preparation";
 import {
+  MEETING_METADATA_INFERENCE_MAX_OUTPUT_CHARS,
+  authorizeMeetingMetadataInferenceLease,
+  buildMeetingMetadataInferencePrompts,
+  buildMeetingMetadataInferenceRequest,
+  compareMeetingMetadataInference,
+  createMeetingMetadataInferenceLease,
+  decideMeetingMetadataInferenceEligibility,
+  formatMeetingMetadataInferenceForTrace,
+  projectMeetingMetadataOpeningEvidence,
+  type MeetingMetadataInferenceJob,
+} from "@/lib/meeting/meeting-metadata-inference";
+import {
+  requestMeetingMetadataInference,
+  type MeetingMetadataInferenceRequestResult,
+} from "@/lib/meeting/meeting-metadata-inference-request";
+import {
   AdvisorEngine,
   buildAdvisorEvidencePacket,
   buildAdvisorEvidenceRetrievalQuery,
@@ -2542,6 +2558,22 @@ export function useMeetingAssistant() {
   const shortIntentGateCircuitRef = useRef(
     new RuntimeInferenceSessionCircuitBreaker()
   );
+  const meetingMetadataInferenceRuntimeRef = useRef<
+    RuntimeInferenceOperationRuntime<
+      MeetingMetadataInferenceJob,
+      MeetingMetadataInferenceRequestResult
+    > | null
+  >(null);
+  if (meetingMetadataInferenceRuntimeRef.current === null) {
+    meetingMetadataInferenceRuntimeRef.current =
+      new RuntimeInferenceOperationRuntime<
+        MeetingMetadataInferenceJob,
+        MeetingMetadataInferenceRequestResult
+      >("meeting-metadata-inference");
+  }
+  const meetingMetadataInferenceCircuitRef = useRef(
+    new RuntimeInferenceSessionCircuitBreaker()
+  );
   const shortIntentGateSessionBudgetRef = useRef(
     new ShortIntentGateSessionBudget()
   );
@@ -4351,6 +4383,7 @@ export function useMeetingAssistant() {
     semanticTaxonomyEvidenceByTurnRef.current.clear();
     taxonomyAdjudicationRuntimeRef.current?.cancelAll("superseded");
     shortIntentGateRuntimeRef.current?.cancelAll("superseded");
+    meetingMetadataInferenceRuntimeRef.current?.cancelAll("superseded");
     questionTypeAdjudicationRuntimeRef.current?.cancelAll("superseded");
     taskRelationAdjudicationRuntimeRef.current?.cancelAll("superseded");
     whiteboardSyntaxRepairRuntimeRef.current?.cancelAll("superseded");
@@ -12587,6 +12620,369 @@ export function useMeetingAssistant() {
     [publishCanonicalLogicalQuestionTarget, scheduleAdvisor]
   );
 
+  const scheduleMeetingMetadataInference = useCallback(
+    ({ turn, traceId }: { turn: TranscriptTurn; traceId: string }) => {
+      if (turn.speaker !== "them") return;
+
+      const contextState = contextManagerRef.current.getState();
+      const recordingActive =
+        sessionRecordingManagerRef.current?.getState().active ?? false;
+      const authoritativeCompany =
+        contextState.interviewSessionContext?.targetCompany;
+      const evidence = projectMeetingMetadataOpeningEvidence({
+        transcriptTurns: contextState.transcriptTurns,
+        sessionStartedAt: contextState.startedAt,
+      });
+      const eligibility = decideMeetingMetadataInferenceEligibility({
+        currentTurnId: turn.id,
+        evidence,
+      });
+      const baseMetadata: Record<string, unknown> = {
+        ...formatRuntimeInferenceOperationForTrace(
+          "meeting-metadata-inference"
+        ),
+        meetingMetadataInferenceEligible: eligibility.eligible,
+        meetingMetadataInferenceEligibilityReason: eligibility.reason,
+        meetingMetadataInferenceSourceTurnId: turn.id,
+        meetingMetadataInferenceSourceHash: evidence.sourceHash,
+        meetingMetadataInferenceEvidenceTurnCount: evidence.turns.length,
+        meetingMetadataInferenceEvidenceChars: evidence.totalChars,
+        meetingMetadataInferenceAuthoritativeSource:
+          authoritativeCompany?.source,
+        meetingMetadataInferenceAuthoritativeCompany:
+          authoritativeCompany?.value,
+        meetingMetadataInferenceAppliedToRuntime: false,
+        meetingMetadataInferenceMutationDisposition:
+          "blocked-task-147c-shadow",
+      };
+      traceStoreRef.current.updateMetadata(traceId, baseMetadata);
+
+      if (!eligibility.eligible) {
+        traceStoreRef.current.updateMetadata(traceId, {
+          meetingMetadataInferenceDisposition: "ineligible",
+          meetingMetadataInferenceSkipReason: eligibility.reason,
+        });
+        return;
+      }
+      if (
+        authoritativeCompany &&
+        !debugModeRef.current &&
+        !recordingActive
+      ) {
+        traceStoreRef.current.updateMetadata(traceId, {
+          meetingMetadataInferenceDisposition:
+            "authoritative-observation-disabled",
+          meetingMetadataInferenceSkipReason:
+            "authoritative-source-requires-debug-or-recording",
+        });
+        return;
+      }
+      if (!taxonomyAdjudicationSettingsRef.current.enabled) {
+        traceStoreRef.current.updateMetadata(traceId, {
+          meetingMetadataInferenceDisposition: "operation-disabled",
+          meetingMetadataInferenceSkipReason:
+            "runtime-inference-disabled",
+        });
+        return;
+      }
+
+      const request = buildMeetingMetadataInferenceRequest({
+        sessionId: contextState.sessionId,
+        evidence,
+        authoritativeCompany,
+      });
+      const lease = createMeetingMetadataInferenceLease({
+        sessionId: contextState.sessionId,
+        runtimeEpoch: runtimeEpochRef.current,
+        request,
+      });
+      if (
+        meetingMetadataInferenceRuntimeRef.current?.getCurrentOperationId() ===
+        lease.operationId
+      ) {
+        traceStoreRef.current.updateMetadata(traceId, {
+          meetingMetadataInferenceDisposition: "duplicate-operation",
+          meetingMetadataInferenceOperationId: lease.operationId,
+        });
+        return;
+      }
+
+      const circuit = meetingMetadataInferenceCircuitRef.current.read(
+        "meeting-metadata-inference",
+        contextState.sessionId
+      );
+      if (circuit.open) {
+        traceStoreRef.current.updateMetadata(traceId, {
+          ...formatRuntimeInferenceCircuitForTrace(circuit),
+          meetingMetadataInferenceDisposition: "provider-circuit-open",
+          meetingMetadataInferenceSkipReason: "provider-circuit-open",
+        });
+        return;
+      }
+
+      const modelRoute = resolveRuntimeInferenceModelRouteFromSnapshot({
+        snapshot: meetingModelProviderSnapshotRef.current,
+        operationKind: "meeting-metadata-inference",
+        reason: "bounded-opening-meeting-metadata",
+      });
+      const routeMetadata =
+        formatRuntimeInferenceModelRouteForTrace(modelRoute);
+      if (!modelRoute.provider) {
+        const opened = meetingMetadataInferenceCircuitRef.current.open({
+          operationKind: "meeting-metadata-inference",
+          sessionId: contextState.sessionId,
+          reason: "provider-configuration-error",
+          detail:
+            modelRoute.missingRequiredVariables.length > 0
+              ? `missing:${modelRoute.missingRequiredVariables.join(",")}`
+              : modelRoute.fallbackReason,
+        });
+        traceStoreRef.current.updateMetadata(traceId, {
+          ...routeMetadata,
+          ...formatRuntimeInferenceCircuitForTrace(
+            opened.state,
+            opened.newlyOpened
+          ),
+          meetingMetadataInferenceDisposition:
+            "provider-configuration-error",
+          meetingMetadataInferenceSkipReason:
+            "provider-configuration-error",
+        });
+        return;
+      }
+
+      const prompts = buildMeetingMetadataInferencePrompts(request);
+      const promptText = [
+        prompts.systemPrompt,
+        prompts.userMessage,
+      ].join("\n\n");
+      const requestHash = hashTaxonomySourceTurnIds([
+        prompts.systemPrompt,
+        prompts.userMessage,
+      ]);
+      const scheduledTaskId = contextState.activeMeetingTask?.id;
+      const scheduledMetadata = {
+        ...baseMetadata,
+        ...routeMetadata,
+        meetingMetadataInferenceDisposition: "scheduled",
+        meetingMetadataInferenceOperationId: lease.operationId,
+        meetingMetadataInferenceRequestHash: requestHash,
+        meetingMetadataInferencePromptVersion: request.promptVersion,
+        meetingMetadataInferenceSchemaVersion: request.schemaVersion,
+        meetingMetadataInferenceInputChars: promptText.length,
+        meetingMetadataInferenceModelId: readSelectedProviderModelId(
+          modelRoute.selectedProvider
+        ),
+      };
+      traceStoreRef.current.updateMetadata(traceId, scheduledMetadata);
+      traceStoreRef.current.recordInput(
+        traceId,
+        "meeting metadata inference model input",
+        promptText,
+        {
+          operationId: lease.operationId,
+          requestHash,
+          metadataOnly: true,
+          runtimeMutationBlocked: true,
+          targetCompanyMutationApplied: false,
+        }
+      );
+      sessionRecordingManagerRef.current?.recordModelInput({
+        traceId,
+        taskId: scheduledTaskId,
+        label: "meeting metadata inference model input",
+        value: promptText,
+        metadata: {
+          operationId: lease.operationId,
+          requestHash,
+          metadataOnly: true,
+          runtimeMutationBlocked: true,
+          targetCompanyMutationApplied: false,
+        },
+      });
+
+      let stepId: string | undefined;
+      meetingMetadataInferenceRuntimeRef.current!.schedule({
+        job: {
+          operationId: lease.operationId,
+          operationKind: "meeting-metadata-inference",
+          sessionId: contextState.sessionId,
+          budgetKey: contextState.sessionId,
+          budgetSlot: request.openingEvidence.sourceHash,
+          budgetReason: "bounded-opening-evidence",
+          traceId,
+          lease,
+          request,
+        },
+        execute: (job, signal) =>
+          requestMeetingMetadataInference({
+            request: job.request,
+            provider: modelRoute.provider,
+            selectedProvider: modelRoute.selectedProvider,
+            signal,
+            onFirstToken: (at) => {
+              traceStoreRef.current.updateMetadata(traceId, {
+                meetingMetadataInferenceFirstTokenAt: at,
+              });
+            },
+          }),
+        onStarted: (_job, startedAt, budget) => {
+          const metadata = {
+            ...scheduledMetadata,
+            meetingMetadataInferenceStartedAt: startedAt,
+            meetingMetadataInferenceBudgetKey: budget.budgetKey,
+            meetingMetadataInferenceBudgetSlot: budget.slot,
+            meetingMetadataInferenceBudgetStartsBefore:
+              budget.startsBefore,
+            meetingMetadataInferenceBudgetStartsAfter:
+              budget.startsAfter,
+            meetingMetadataInferenceBudgetRemaining: budget.remaining,
+          };
+          traceStoreRef.current.updateMetadata(traceId, metadata);
+          stepId = traceStoreRef.current.startStep(
+            traceId,
+            "Meeting metadata inference",
+            metadata
+          );
+        },
+        onSettled: (settlement) => {
+          const latestContext = contextManagerRef.current.getState();
+          const latestAuthoritativeCompany =
+            latestContext.interviewSessionContext?.targetCompany;
+          const latestEvidence = projectMeetingMetadataOpeningEvidence({
+            transcriptTurns: latestContext.transcriptTurns,
+            sessionStartedAt: latestContext.startedAt,
+          });
+          const authorization = authorizeMeetingMetadataInferenceLease(
+            settlement.job.lease,
+            {
+              currentOperationId:
+                meetingMetadataInferenceRuntimeRef.current?.getCurrentOperationId(),
+              sessionId: latestContext.sessionId,
+              runtimeEpoch: runtimeEpochRef.current,
+              evidence: latestEvidence,
+              authoritativeCompany: latestAuthoritativeCompany,
+            }
+          );
+          const result = settlement.result;
+          const parsed = result?.parsed;
+          const proposal = parsed?.ok ? parsed.value : undefined;
+          const providerDisposition =
+            result?.providerDisposition ?? settlement.disposition;
+          if (
+            authorization.authorized &&
+            providerDisposition === "provider-auth-error"
+          ) {
+            meetingMetadataInferenceCircuitRef.current.open({
+              operationKind: "meeting-metadata-inference",
+              sessionId: latestContext.sessionId,
+              reason: "provider-auth-error",
+              detail: result?.rawOutput.slice(0, 240),
+            });
+          }
+          const comparison = proposal
+            ? compareMeetingMetadataInference({
+                authoritativeCompany: latestAuthoritativeCompany,
+                proposal,
+              })
+            : undefined;
+          const disposition =
+            settlement.disposition !== "completed"
+              ? settlement.disposition
+              : !authorization.authorized
+                ? "stale"
+                : result?.providerDisposition !== "completed-with-content"
+                  ? result?.providerDisposition ?? "completed-empty"
+                  : !parsed?.ok
+                    ? "invalid-output"
+                    : "shadow-observed";
+          const rawOutput = result?.rawOutput ?? "";
+          const latestRecordingActive =
+            sessionRecordingManagerRef.current?.getState().active ?? false;
+          const rawOutputStored = Boolean(
+            rawOutput &&
+              (debugModeRef.current || latestRecordingActive)
+          );
+          const boundedRawOutput = rawOutput.slice(
+            0,
+            MEETING_METADATA_INFERENCE_MAX_OUTPUT_CHARS
+          );
+          const metadata = {
+            ...scheduledMetadata,
+            ...formatMeetingMetadataInferenceForTrace({
+              request: settlement.job.request,
+              disposition,
+              leaseAuthorized: authorization.authorized,
+              staleReason: authorization.authorized
+                ? undefined
+                : authorization.reason,
+              proposal,
+              comparison,
+            }),
+            meetingMetadataInferenceProviderDisposition:
+              providerDisposition,
+            meetingMetadataInferenceParseDisposition:
+              result?.parseDisposition,
+            meetingMetadataInferenceParseValid: parsed?.ok ?? false,
+            meetingMetadataInferenceDurationMs: settlement.durationMs,
+            meetingMetadataInferenceQueueWaitMs:
+              settlement.queueWaitMs,
+            meetingMetadataInferenceBudgetExhausted:
+              settlement.disposition === "budget-exhausted",
+            meetingMetadataInferenceTimedOut:
+              settlement.error instanceof Error &&
+              /timeout/i.test(settlement.error.message),
+            meetingMetadataInferenceRawOutputStored: rawOutputStored,
+            meetingMetadataInferenceAppliedToRuntime: false,
+            meetingMetadataInferenceMutationDisposition:
+              "blocked-task-147c-shadow",
+          };
+          traceStoreRef.current.updateMetadata(traceId, metadata);
+          if (rawOutputStored) {
+            traceStoreRef.current.recordOutput(
+              traceId,
+              "meeting metadata inference raw output",
+              boundedRawOutput,
+              {
+                originalChars: rawOutput.length,
+                truncated: rawOutput.length > boundedRawOutput.length,
+                parseDisposition: result?.parseDisposition,
+                metadataOnly: true,
+                targetCompanyMutationApplied: false,
+              }
+            );
+            if (latestRecordingActive) {
+              sessionRecordingManagerRef.current?.recordModelOutput({
+                traceId,
+                taskId: scheduledTaskId,
+                label: "meeting metadata inference raw output",
+                value: boundedRawOutput,
+                metadata: {
+                  originalChars: rawOutput.length,
+                  truncated:
+                    rawOutput.length > boundedRawOutput.length,
+                  parseDisposition: result?.parseDisposition,
+                  metadataOnly: true,
+                  targetCompanyMutationApplied: false,
+                },
+              });
+            }
+          }
+          if (stepId) {
+            traceStoreRef.current.finishStep(
+              traceId,
+              stepId,
+              settlement.disposition === "error" ? "error" : "success",
+              metadata,
+              settlement.error
+            );
+          }
+        },
+      });
+    },
+    []
+  );
+
   const appendTranscriptTurnForTrace = useCallback(
     (
       turn: TranscriptTurn,
@@ -12665,9 +13061,11 @@ export function useMeetingAssistant() {
         activeMeetingTask: contextState.activeMeetingTask,
       }));
 
+      scheduleMeetingMetadataInference({ turn, traceId });
+
       return { contextState };
     },
-    []
+    [scheduleMeetingMetadataInference]
   );
 
   const publishDisplayTranscriptRevision = useCallback(
@@ -26441,6 +26839,7 @@ export function useMeetingAssistant() {
       void stopOnUnmountRef.current();
       taxonomyAdjudicationRuntimeRef.current?.cancelAll("disposed");
       shortIntentGateRuntimeRef.current?.cancelAll("disposed");
+      meetingMetadataInferenceRuntimeRef.current?.cancelAll("disposed");
       questionTypeAdjudicationRuntimeRef.current?.cancelAll("disposed");
       taskRelationAdjudicationRuntimeRef.current?.cancelAll("disposed");
       whiteboardSyntaxRepairRuntimeRef.current?.cancelAll("disposed");
