@@ -124,6 +124,7 @@ import {
   CurrentQuestionSettlementDecision,
   CurrentQuestionTerminalNoAnswerDecision,
   ResponseOnlyTaskScope,
+  ResponseOpportunityGenerationGateCoordinator,
   LogicalQuestionUnit,
   LogicalQuestionUnitLease,
   PrimaryAskProjection,
@@ -248,6 +249,7 @@ import {
   formatStagedAnswerDeliveryForTrace,
   formatRefreshAuthorityForTrace,
   formatRuntimeTypeRepairOutputAuthorityForTrace,
+  formatResponseOpportunityGenerationGateForTrace,
   formatActiveQuestionTermCorrectionForTrace,
   formatAnswerSufficiencyDecisionForTrace,
   formatAdvisorHypothesisChallengeForTrace,
@@ -2571,6 +2573,9 @@ export function useMeetingAssistant() {
         ResponseOpportunityRequestResult
       >("response-opportunity-inference");
   }
+  const responseOpportunityGenerationGateRef = useRef(
+    new ResponseOpportunityGenerationGateCoordinator()
+  );
   const responseOpportunityCircuitRef = useRef(
     new RuntimeInferenceSessionCircuitBreaker()
   );
@@ -4434,6 +4439,7 @@ export function useMeetingAssistant() {
     semanticTaxonomyEvidenceByTurnRef.current.clear();
     taxonomyAdjudicationRuntimeRef.current?.cancelAll("superseded");
     responseOpportunityRuntimeRef.current?.cancelAll("superseded");
+    responseOpportunityGenerationGateRef.current.cancelAll("superseded");
     meetingMetadataInferenceRuntimeRef.current?.cancelAll("superseded");
     questionTypeAdjudicationRuntimeRef.current?.cancelAll("superseded");
     taskRelationAdjudicationRuntimeRef.current?.cancelAll("superseded");
@@ -7667,6 +7673,14 @@ export function useMeetingAssistant() {
       refreshAuthority,
       runtimeTypeRepairOutputAuthority:
         options.runtimeTypeRepairOutputAuthority,
+      responseOpportunityGenerationGateOperationId:
+        options.logicalQuestionUnit
+          ? responseOpportunityGenerationGateRef.current.findOperationId({
+              logicalQuestionUnitId: options.logicalQuestionUnit.id,
+              logicalQuestionUnitRevision:
+                options.logicalQuestionUnit.revision,
+            })
+          : undefined,
       manualCorrectionRevision: manualCorrectionRevisionRef.current,
       responseActionRevision: responseActionRevisionRef.current,
     });
@@ -7683,6 +7697,46 @@ export function useMeetingAssistant() {
     const mode = advisorJob.mode;
     const force = options.force ?? false;
     const traceId = advisorJob.traceId;
+    const responseOpportunityGenerationGateOperationId =
+      advisorJob.responseOpportunityGenerationGateOperationId;
+    let responseOpportunityGenerationGate =
+      responseOpportunityGenerationGateRef.current.read(
+        responseOpportunityGenerationGateOperationId
+      );
+    const refreshResponseOpportunityGenerationGate = () => {
+      responseOpportunityGenerationGate =
+        responseOpportunityGenerationGateRef.current.read(
+          responseOpportunityGenerationGateOperationId
+        );
+      return responseOpportunityGenerationGate;
+    };
+    const responseOpportunityGenerationAuthorized = () =>
+      !responseOpportunityGenerationGateOperationId ||
+      refreshResponseOpportunityGenerationGate()?.disposition ===
+        "output-authorized";
+    const responseOpportunityGenerationTerminallySuppressed = () => {
+      const disposition =
+        refreshResponseOpportunityGenerationGate()?.disposition;
+      return (
+        disposition === "output-suppressed" ||
+        disposition === "unresolved" ||
+        disposition === "stale"
+      );
+    };
+    if (traceId && responseOpportunityGenerationGateOperationId) {
+      traceStoreRef.current.updateMetadata(traceId, {
+        ...formatResponseOpportunityGenerationGateForTrace(
+          responseOpportunityGenerationGate
+        ),
+        responseOpportunityGenerationCandidateState:
+          responseOpportunityGenerationGate?.disposition ===
+          "output-authorized"
+            ? "response-authority-granted"
+            : responseOpportunityGenerationTerminallySuppressed()
+              ? "response-authority-denied"
+              : "speculative-started",
+      });
+    }
     if (traceId && options.clarifyingFeedback?.requestId) {
       traceStoreRef.current.updateMetadata(traceId, {
         clarifyingRequestId: options.clarifyingFeedback.requestId,
@@ -7833,15 +7887,14 @@ export function useMeetingAssistant() {
           readLogicalQuestionAuthorizationTarget().logicalQuestionUnit;
         const planAuthorization = authorizeSettledAdvisorExecutionPlan({
           plan: settledExecutionPlan,
-          currentSettlement: currentQuestionSettlementRef.current,
+          currentSettlement: currentQuestionSettlement,
           currentSessionId: currentContextState.sessionId,
           currentRuntimeEpoch: runtimeEpochRef.current,
           currentLogicalQuestionUnitId:
             currentLogicalQuestion?.id,
           currentLogicalQuestionRevision:
             currentLogicalQuestion?.revision,
-          currentSourceHash:
-            currentQuestionSettlementRef.current?.sourceHash,
+          currentSourceHash: currentQuestionSettlement?.sourceHash,
           currentActiveMeetingTask:
             currentContextState.activeMeetingTask,
         });
@@ -7980,6 +8033,30 @@ export function useMeetingAssistant() {
     }
 
     if (rejectStaleCommit("pre-execution")) return;
+
+    if (responseOpportunityGenerationTerminallySuppressed()) {
+      const gate = refreshResponseOpportunityGenerationGate();
+      updateForceAdviseTargetForAdvisorOutcome({
+        advisorJob,
+        status: "failed",
+        outcome: `response-authority-${gate?.disposition ?? "missing"}`,
+      });
+      releaseAdvisorJob(advisorJob, "suppressed", {
+        commitAuthorized: false,
+        commitAuthorizationReason:
+          gate?.reason ?? "response-opportunity-generation-gate-missing",
+      });
+      if (traceId) {
+        traceStoreRef.current.updateMetadata(traceId, {
+          ...formatResponseOpportunityGenerationGateForTrace(gate),
+          responseOpportunityGenerationCandidateState:
+            "candidate-dropped-no-output",
+          advisorOutputCommittedToUi: false,
+        });
+        traceStoreRef.current.finishTrace(traceId, "success");
+      }
+      return;
+    }
 
     if (!activeRef.current && !force) {
       updateForceAdviseTargetForAdvisorOutcome({
@@ -8517,9 +8594,12 @@ export function useMeetingAssistant() {
                 : responseOnlyBaseContextReadScope,
           })
         : undefined);
-    const responseMutationSuppressed =
+    const responseMutationSuppressedByScope =
       Boolean(responseOnlyTaskScope) ||
       advisorJob.source === "force-advise";
+    let responseMutationSuppressed =
+      responseMutationSuppressedByScope ||
+      !responseOpportunityGenerationAuthorized();
     const advisorScreenScopeDecision = decideAdvisorScreenScope({
       triggerSource: advisorJob.source,
       relation: advisorTaskSignals.taskRelation,
@@ -8812,24 +8892,26 @@ export function useMeetingAssistant() {
       } else {
         currentQuestionSettlementDurationMs = 0;
       }
-      currentQuestionSettlementRef.current =
-        currentQuestionSettlement;
-      const currentManualCorrectionTarget =
-        latestManualCorrectionTargetRef.current;
-      if (
-        currentManualCorrectionTarget &&
-        currentManualCorrectionTarget.logicalQuestionUnit.id ===
-          advisorJob.logicalQuestionUnit.id &&
-        currentManualCorrectionTarget.logicalQuestionUnit.revision ===
-          advisorJob.logicalQuestionUnit.revision
-      ) {
-        latestManualCorrectionTargetRef.current = {
-          ...currentManualCorrectionTarget,
-          sourceKind: currentQuestionSourceKind,
-          sourceObservationIds: currentQuestionSourceObservationIds,
-          settlement: currentQuestionSettlement,
-          updatedAt: Date.now(),
-        };
+      if (!responseMutationSuppressed) {
+        currentQuestionSettlementRef.current =
+          currentQuestionSettlement;
+        const currentManualCorrectionTarget =
+          latestManualCorrectionTargetRef.current;
+        if (
+          currentManualCorrectionTarget &&
+          currentManualCorrectionTarget.logicalQuestionUnit.id ===
+            advisorJob.logicalQuestionUnit.id &&
+          currentManualCorrectionTarget.logicalQuestionUnit.revision ===
+            advisorJob.logicalQuestionUnit.revision
+        ) {
+          latestManualCorrectionTargetRef.current = {
+            ...currentManualCorrectionTarget,
+            sourceKind: currentQuestionSourceKind,
+            sourceObservationIds: currentQuestionSourceObservationIds,
+            settlement: currentQuestionSettlement,
+            updatedAt: Date.now(),
+          };
+        }
       }
       if (traceId) {
         traceStoreRef.current.updateMetadata(
@@ -8858,6 +8940,36 @@ export function useMeetingAssistant() {
         );
       }
     }
+    const commitDeferredResponseAuthorizedState = () => {
+      if (
+        responseMutationSuppressed ||
+        !advisorJob.logicalQuestionUnit ||
+        !currentQuestionSettlement
+      ) {
+        return;
+      }
+      currentQuestionSettlementRef.current = currentQuestionSettlement;
+      if (settledExecutionPlan) {
+        settledAdvisorExecutionPlanRef.current = settledExecutionPlan;
+      }
+      const currentManualCorrectionTarget =
+        latestManualCorrectionTargetRef.current;
+      if (
+        currentManualCorrectionTarget &&
+        currentManualCorrectionTarget.logicalQuestionUnit.id ===
+          advisorJob.logicalQuestionUnit.id &&
+        currentManualCorrectionTarget.logicalQuestionUnit.revision ===
+          advisorJob.logicalQuestionUnit.revision
+      ) {
+        latestManualCorrectionTargetRef.current = {
+          ...currentManualCorrectionTarget,
+          sourceKind: currentQuestionSourceKind,
+          sourceObservationIds: currentQuestionSourceObservationIds,
+          settlement: currentQuestionSettlement,
+          updatedAt: Date.now(),
+        };
+      }
+    };
     let currentQuestionSettlementRecorded = false;
     const recordCurrentQuestionSettlement = (
       parentCommitted = false
@@ -8959,6 +9071,7 @@ export function useMeetingAssistant() {
             commitParent,
           });
     if (
+      !responseMutationSuppressed &&
       taskBoundaryCandidate &&
       (taskBoundaryCandidate.mutationDisposition ===
         "commit-before-advisor" ||
@@ -9713,8 +9826,10 @@ export function useMeetingAssistant() {
             advisorJob.runtimeTypeRepairOutputAuthority?.id,
         });
       }
-      settledAdvisorExecutionPlanRef.current =
-        settledExecutionPlan;
+      if (!responseMutationSuppressed) {
+        settledAdvisorExecutionPlanRef.current =
+          settledExecutionPlan;
+      }
       advisorQuestionType =
         settledExecutionPlan.questionType;
       advisorAnswerProfile =
@@ -9723,19 +9838,17 @@ export function useMeetingAssistant() {
         contextManagerRef.current.getState();
       const planCreationLogicalQuestion =
         readLogicalQuestionAuthorizationTarget().logicalQuestionUnit;
-      const planCreationAuthorization =
-        authorizeSettledAdvisorExecutionPlan({
-          plan: settledExecutionPlan,
-          currentSettlement:
-            currentQuestionSettlementRef.current,
+        const planCreationAuthorization =
+          authorizeSettledAdvisorExecutionPlan({
+            plan: settledExecutionPlan,
+            currentSettlement: currentQuestionSettlement,
           currentSessionId: planCreationContext.sessionId,
           currentRuntimeEpoch: runtimeEpochRef.current,
           currentLogicalQuestionUnitId:
             planCreationLogicalQuestion?.id,
           currentLogicalQuestionRevision:
             planCreationLogicalQuestion?.revision,
-          currentSourceHash:
-            currentQuestionSettlementRef.current?.sourceHash,
+            currentSourceHash: currentQuestionSettlement?.sourceHash,
           currentActiveMeetingTask:
             planCreationContext.activeMeetingTask,
         });
@@ -10280,7 +10393,10 @@ export function useMeetingAssistant() {
       formatProjectBindingSettlementCommitForTrace(
         projectBindingCommitResult
       );
-    if (projectBindingCommitResult.committed) {
+    if (
+      projectBindingCommitResult.committed &&
+      !responseMutationSuppressed
+    ) {
       submitTaskRuntimeTransition(contextManagerRef.current, {
         transition: "update-parent-context",
         reason: "project-binding-settlement-committed",
@@ -10323,8 +10439,10 @@ export function useMeetingAssistant() {
           : undefined;
       if (rebasedSettledExecutionPlan) {
         settledExecutionPlan = rebasedSettledExecutionPlan;
-        settledAdvisorExecutionPlanRef.current =
-          rebasedSettledExecutionPlan;
+        if (!responseMutationSuppressed) {
+          settledAdvisorExecutionPlanRef.current =
+            rebasedSettledExecutionPlan;
+        }
       }
       if (rebasedAnswerGenerationLease) {
         answerGenerationLease = rebasedAnswerGenerationLease;
@@ -10618,9 +10736,70 @@ export function useMeetingAssistant() {
         );
       }
     };
+    const dropSpeculativeAdvisorCandidate = (
+      reason: string,
+      stage: "before-model" | "after-model"
+    ) => {
+      rollbackStagedAnswerDelivery(`response-authority-${reason}`);
+      const gate = refreshResponseOpportunityGenerationGate();
+      updateForceAdviseTargetForAdvisorOutcome({
+        advisorJob,
+        status: "failed",
+        outcome: `response-authority-${reason}`,
+      });
+      releaseAdvisorJob(advisorJob, "suppressed", {
+        commitAuthorized: false,
+        commitAuthorizationReason: reason,
+      });
+      setState((previous) => ({
+        ...previous,
+        status: activeRef.current
+          ? "listening"
+          : returnStatus === "paused"
+            ? "paused"
+            : "idle",
+        partialSuggestion: "",
+      }));
+      if (traceId) {
+        const metadata = {
+          ...formatResponseOpportunityGenerationGateForTrace(gate),
+          responseOpportunityGenerationCandidateState:
+            gate?.disposition === "output-suppressed"
+              ? "candidate-dropped-no-output"
+              : "candidate-dropped-unresolved",
+          responseOpportunityGenerationDropStage: stage,
+          advisorOutputCommittedToUi: false,
+        };
+        traceStoreRef.current.updateMetadata(traceId, metadata);
+        if (advisorStepId) {
+          traceStoreRef.current.finishStep(
+            traceId,
+            advisorStepId,
+            "success",
+            metadata
+          );
+        }
+        traceStoreRef.current.finishTrace(traceId, "success");
+      }
+    };
     let advisorAnswerSufficiencyDecision:
       | AnswerSufficiencyDecision
       | undefined;
+
+    if (responseOpportunityGenerationGateOperationId) {
+      const gateBeforeModel = refreshResponseOpportunityGenerationGate();
+      if (gateBeforeModel?.disposition === "output-authorized") {
+        responseMutationSuppressed = responseMutationSuppressedByScope;
+        commitDeferredResponseAuthorizedState();
+      } else if (responseOpportunityGenerationTerminallySuppressed()) {
+        dropSpeculativeAdvisorCandidate(
+          gateBeforeModel?.reason ??
+            "response-opportunity-generation-gate-missing",
+          "before-model"
+        );
+        return;
+      }
+    }
 
     try {
       for await (const event of advisorEngineRef.current.streamSuggestion({
@@ -10768,7 +10947,8 @@ export function useMeetingAssistant() {
           stableAnswerPresent: Boolean(stableAnswerRevisionRef.current),
           guardrailHeld:
             !outputCommitAuthorization.authorized ||
-            holdAdvisorPartialForFactAnchor,
+            holdAdvisorPartialForFactAnchor ||
+            !responseOpportunityGenerationAuthorized(),
           visibleStreamStarted: stagedAnswerDeliveryVisible,
         });
         if (stagedPartialDecision.visible) {
@@ -10808,6 +10988,31 @@ export function useMeetingAssistant() {
           finalContent,
           options.currentSuggestion
         );
+      }
+
+      if (responseOpportunityGenerationGateOperationId) {
+        const gate = await responseOpportunityGenerationGateRef.current.wait(
+          responseOpportunityGenerationGateOperationId,
+          2_200
+        );
+        responseOpportunityGenerationGate = gate;
+        if (traceId) {
+          traceStoreRef.current.updateMetadata(traceId, {
+            ...formatResponseOpportunityGenerationGateForTrace(gate),
+            responseOpportunityGenerationCandidateState:
+              gate.disposition === "output-authorized"
+                ? "response-authority-granted"
+                : "response-authority-denied",
+            responseOpportunityGenerationCandidateChars:
+              finalContent.length,
+          });
+        }
+        if (gate.disposition !== "output-authorized") {
+          dropSpeculativeAdvisorCandidate(gate.reason, "after-model");
+          return;
+        }
+        responseMutationSuppressed = responseMutationSuppressedByScope;
+        commitDeferredResponseAuthorizedState();
       }
 
       const finalCommitDecision = readCommitDecision();
@@ -11108,7 +11313,11 @@ export function useMeetingAssistant() {
         advisorTaskMutationDecision.commitParent &&
         advisorTaskSignals.openingRoute?.commitParent !== false &&
         (advisorTaskSignals.taskRelation !== "new-parent" ||
-          taskBoundaryCommittedBeforeAdvisor) &&
+          taskBoundaryCommittedBeforeAdvisor ||
+          Boolean(
+            responseOpportunityGenerationGateOperationId &&
+              responseOpportunityGenerationAuthorized()
+          )) &&
         (!sourceOwnedTransitionResult ||
           sourceOwnedTransitionCommittedBeforeAdvisor);
       const continuityRelation: InterviewTaskRelation =
@@ -11562,6 +11771,26 @@ export function useMeetingAssistant() {
       const committedVisibleAnswer = Boolean(nextStableAnswer);
       const visibleAnswerRevisionAfter =
         nextStableAnswer?.revision ?? visibleAnswerRevisionBefore;
+      if (
+        traceId &&
+        responseOpportunityGenerationGateOperationId
+      ) {
+        traceStoreRef.current.updateMetadata(traceId, {
+          ...formatResponseOpportunityGenerationGateForTrace(
+            refreshResponseOpportunityGenerationGate()
+          ),
+          responseOpportunityGenerationCandidateState:
+            committedVisibleAnswer
+              ? "candidate-committed"
+              : stableAnswerCommitDecision.disposition === "pending"
+                ? "candidate-delivery-pending"
+                : "candidate-not-committed",
+          responseOpportunityGenerationBaseVisibleRevision:
+            visibleAnswerRevisionBefore,
+          responseOpportunityGenerationVisibleRevision:
+            visibleAnswerRevisionAfter,
+        });
+      }
       const deliveryProgressAtCommit =
         answerDeliveryProgressRef.current;
       if (traceId && nextStableAnswer) {
@@ -12258,12 +12487,18 @@ export function useMeetingAssistant() {
       traceId: string;
       logicalQuestionUnit: LogicalQuestionUnit;
       originalDecision: AdvisorTurnIntentDecision;
-      executionMode: "authoritative" | "shadow-observation";
+      executionMode:
+        | "authoritative"
+        | "speculative-authoritative"
+        | "shadow-observation";
     }) => {
       const contextState = contextManagerRef.current.getState();
-      const authoritative = executionMode === "authoritative";
+      const authoritative = executionMode !== "shadow-observation";
+      const speculative =
+        executionMode === "speculative-authoritative";
+      const deferredAuthoritative = executionMode === "authoritative";
       const finishTraceIfAuthoritative = () => {
-        if (authoritative) {
+        if (deferredAuthoritative) {
           traceStoreRef.current.finishTrace(traceId, "success");
         }
       };
@@ -12283,6 +12518,23 @@ export function useMeetingAssistant() {
         request,
         manualCorrectionRevision: manualCorrectionRevisionRef.current,
       });
+      const generationGate = speculative
+        ? responseOpportunityGenerationGateRef.current.create(lease)
+        : undefined;
+      const settleGenerationGateUnresolved = (reason: string) => {
+        if (!generationGate) return;
+        const settled =
+          responseOpportunityGenerationGateRef.current.settle({
+            operationId: generationGate.operationId,
+            disposition: "unresolved",
+            reason,
+          });
+        traceStoreRef.current.updateMetadata(traceId, {
+          ...formatResponseOpportunityGenerationGateForTrace(settled),
+          responseOpportunityGenerationCandidateState:
+            "response-authority-denied",
+        });
+      };
       const baseMetadata: Record<string, unknown> = {
         ...formatRuntimeInferenceOperationForTrace(
           "response-opportunity-inference"
@@ -12297,13 +12549,19 @@ export function useMeetingAssistant() {
           logicalQuestionUnit.revision,
         responseOpportunityDecisionApplied: false,
         responseOpportunityExecutionMode: executionMode,
-        advisorExecutionAuthorized: authoritative
+        ...formatResponseOpportunityGenerationGateForTrace(
+          generationGate
+        ),
+        responseOpportunityGenerationCandidateState: speculative
+          ? "speculative-started"
+          : undefined,
+        advisorExecutionAuthorized: deferredAuthoritative
           ? false
           : originalDecision.executionAuthorized,
-        memoryRetrievalSuppressedReason: authoritative
+        memoryRetrievalSuppressedReason: deferredAuthoritative
           ? "response-opportunity-pending"
           : undefined,
-        modelExecutionSuppressedReason: authoritative
+        modelExecutionSuppressedReason: deferredAuthoritative
           ? "response-opportunity-pending"
           : undefined,
       };
@@ -12316,6 +12574,7 @@ export function useMeetingAssistant() {
           responseOpportunitySkipReason:
             "runtime-inference-disabled",
         });
+        settleGenerationGateUnresolved("runtime-inference-disabled");
         finishTraceIfAuthoritative();
         return;
       }
@@ -12330,6 +12589,7 @@ export function useMeetingAssistant() {
           responseOpportunityDisposition: "provider-circuit-open",
           responseOpportunitySkipReason: "provider-circuit-open",
         });
+        settleGenerationGateUnresolved("provider-circuit-open");
         finishTraceIfAuthoritative();
         return;
       }
@@ -12362,6 +12622,7 @@ export function useMeetingAssistant() {
           responseOpportunitySkipReason:
             "provider-configuration-error",
         });
+        settleGenerationGateUnresolved("provider-configuration-error");
         finishTraceIfAuthoritative();
         return;
       }
@@ -12385,6 +12646,7 @@ export function useMeetingAssistant() {
           : sessionBudget.reason,
       });
       if (!sessionBudget.authorized) {
+        settleGenerationGateUnresolved(sessionBudget.reason);
         finishTraceIfAuthoritative();
         return;
       }
@@ -12541,11 +12803,29 @@ export function useMeetingAssistant() {
                 original: originalDecision,
               })
             : undefined;
+          const generationGateDisposition = !authorization.authorized
+            ? "stale"
+            : releaseDecision?.generationDisposition ?? "unresolved";
+          const generationGateReason = !authorization.authorized
+            ? authorization.reason
+            : releaseDecision?.reason ??
+              result?.parseDisposition ??
+              settlement.disposition;
+          const settledGenerationGate = generationGate
+            ? responseOpportunityGenerationGateRef.current.settle({
+                operationId: generationGate.operationId,
+                disposition: generationGateDisposition,
+                reason: generationGateReason,
+              })
+            : undefined;
           const validAppliedDecision =
-            authoritative && releaseDecision?.released
+            deferredAuthoritative && releaseDecision?.released
               ? releaseDecision.advisorDecision
               : undefined;
-          const decisionApplied = Boolean(validAppliedDecision);
+          const decisionApplied =
+            Boolean(validAppliedDecision) ||
+            (speculative &&
+              generationGateDisposition === "output-authorized");
           const rawOutput = result?.rawOutput ?? "";
           const recordingActive =
             sessionRecordingManagerRef.current?.getState().active ?? false;
@@ -12558,6 +12838,14 @@ export function useMeetingAssistant() {
           );
           const metadata = {
             ...scheduledMetadata,
+            ...formatResponseOpportunityGenerationGateForTrace(
+              settledGenerationGate
+            ),
+            responseOpportunityGenerationCandidateState: speculative
+              ? generationGateDisposition === "output-authorized"
+                ? "response-authority-granted"
+                : "response-authority-denied"
+              : undefined,
             ...formatResponseOpportunityProposalForTrace(
               proposal || undefined
             ),
@@ -12677,6 +12965,10 @@ export function useMeetingAssistant() {
               metadata,
               settlement.error
             );
+          }
+
+          if (speculative) {
+            return;
           }
 
           if (!authoritative) {
@@ -18256,6 +18548,9 @@ export function useMeetingAssistant() {
           "deterministic-no-output"
         ) {
           responseOpportunityRuntimeRef.current?.cancelAll("superseded");
+          responseOpportunityGenerationGateRef.current.cancelAll(
+            "superseded"
+          );
         }
         traceStoreRef.current.updateMetadata(traceId, {
           ...formatAdvisorTurnIntentForTrace(turnGate),
@@ -27075,6 +27370,7 @@ export function useMeetingAssistant() {
       void stopOnUnmountRef.current();
       taxonomyAdjudicationRuntimeRef.current?.cancelAll("disposed");
       responseOpportunityRuntimeRef.current?.cancelAll("disposed");
+      responseOpportunityGenerationGateRef.current.cancelAll("disposed");
       meetingMetadataInferenceRuntimeRef.current?.cancelAll("disposed");
       questionTypeAdjudicationRuntimeRef.current?.cancelAll("disposed");
       taskRelationAdjudicationRuntimeRef.current?.cancelAll("disposed");

@@ -79,7 +79,7 @@ test("keeps exact fillers local while reviewing clear requests in runtime shadow
   assert.equal(ask.runtimeReviewRequired, true);
   assert.equal(
     resolveResponseOpportunityExecutionMode(ask),
-    "shadow-observation"
+    "speculative-authoritative"
   );
   assert.equal(resolveResponseOpportunityExecutionMode(filler), undefined);
 });
@@ -294,11 +294,14 @@ test("releases only high-confidence output requests", () => {
   });
 
   assert.equal(output.released, true);
+  assert.equal(output.generationDisposition, "output-authorized");
   assert.equal(output.advisorDecision?.action, "answer-refresh");
   assert.equal(output.advisorDecision?.executionAuthorized, true);
   assert.equal(noOutput.released, false);
-  assert.equal(noOutput.reason, "no-output-request-shadow-only");
+  assert.equal(noOutput.reason, "high-confidence-no-output-request");
+  assert.equal(noOutput.generationDisposition, "output-suppressed");
   assert.equal(unclear.released, false);
+  assert.equal(unclear.generationDisposition, "unresolved");
   assert.equal(lowConfidence.released, false);
 });
 

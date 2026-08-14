@@ -69,6 +69,7 @@ export interface AdvisorTriggerJob {
   taskMutationAuthority: AdvisorTaskMutationAuthority;
   refreshAuthority: RefreshAuthorityDecision;
   runtimeTypeRepairOutputAuthority?: RuntimeTypeRepairOutputAuthority;
+  responseOpportunityGenerationGateOperationId?: string;
   manualCorrectionRevision: number;
   responseActionRevision: number;
   snapshotTurnCount: number;
@@ -91,6 +92,7 @@ export interface CreateAdvisorTriggerJobInput {
   taskMutationAuthority: AdvisorTaskMutationAuthority;
   refreshAuthority?: RefreshAuthorityDecision;
   runtimeTypeRepairOutputAuthority?: RuntimeTypeRepairOutputAuthority;
+  responseOpportunityGenerationGateOperationId?: string;
   manualCorrectionRevision?: number;
   responseActionRevision?: number;
   scheduledAt?: number;
@@ -249,6 +251,8 @@ export function createAdvisorTriggerJob(
             authorizedArtifacts: ["answer"],
           }
         : undefined,
+    responseOpportunityGenerationGateOperationId:
+      input.responseOpportunityGenerationGateOperationId,
     manualCorrectionRevision: input.manualCorrectionRevision ?? 0,
     responseActionRevision: input.responseActionRevision ?? 0,
     snapshotTurnCount: input.snapshotTurnCount,
@@ -485,6 +489,12 @@ export function formatAdvisorTriggerJobForTrace(
       : {}),
     advisorJobManualCorrectionRevision: job.manualCorrectionRevision,
     advisorJobResponseActionRevision: job.responseActionRevision,
+    ...(job.responseOpportunityGenerationGateOperationId
+      ? {
+          advisorJobResponseOpportunityGenerationGateOperationId:
+            job.responseOpportunityGenerationGateOperationId,
+        }
+      : {}),
     advisorJobSnapshotTurnCount: job.snapshotTurnCount,
     advisorJobSnapshotLatestTurnId: job.promptContextSnapshot.latestTurn?.id,
     advisorJobGeneratedContinuityCandidateCount:

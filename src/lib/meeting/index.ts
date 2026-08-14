@@ -102,6 +102,7 @@ export * from "./semantic-taxonomy-runtime.protocol";
 export * from "./semantic-taxonomy-shadow";
 export * from "./settled-advisor-execution-plan";
 export * from "./response-only-task-scope";
+export * from "./response-opportunity-generation-gate";
 export * from "./session-recording";
 export * from "./session-task-review-index";
 export * from "./speech-bias";

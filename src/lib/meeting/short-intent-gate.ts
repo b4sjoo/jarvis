@@ -24,6 +24,7 @@ export type ResponseOpportunityLocalDisposition =
 
 export type ResponseOpportunityExecutionMode =
   | "authoritative"
+  | "speculative-authoritative"
   | "shadow-observation";
 
 export interface ResponseOpportunityLocalDecision {
@@ -106,10 +107,14 @@ export interface ResponseOpportunityProposal {
 
 export interface ResponseOpportunityReleaseDecision {
   released: boolean;
+  generationDisposition:
+    | "output-authorized"
+    | "output-suppressed"
+    | "unresolved";
   reason:
     | "high-confidence-output-request"
+    | "high-confidence-no-output-request"
     | "output-confidence-below-threshold"
-    | "no-output-request-shadow-only"
     | "unclear";
   advisorDecision?: AdvisorTurnIntentDecision;
 }
@@ -226,7 +231,7 @@ export function resolveResponseOpportunityExecutionMode(
   if (!decision.runtimeReviewRequired) return undefined;
   return decision.disposition === "runtime-required"
     ? "authoritative"
-    : "shadow-observation";
+    : "speculative-authoritative";
 }
 
 export function buildResponseOpportunityRequest(input: {
@@ -493,12 +498,10 @@ export function decideResponseOpportunityRelease(input: {
   original: AdvisorTurnIntentDecision;
 }): ResponseOpportunityReleaseDecision {
   if (input.result.decision === "unclear") {
-    return { released: false, reason: "unclear" };
-  }
-  if (input.result.decision === "no-output-request") {
     return {
       released: false,
-      reason: "no-output-request-shadow-only",
+      generationDisposition: "unresolved",
+      reason: "unclear",
     };
   }
   if (
@@ -507,11 +510,20 @@ export function decideResponseOpportunityRelease(input: {
   ) {
     return {
       released: false,
+      generationDisposition: "unresolved",
       reason: "output-confidence-below-threshold",
+    };
+  }
+  if (input.result.decision === "no-output-request") {
+    return {
+      released: false,
+      generationDisposition: "output-suppressed",
+      reason: "high-confidence-no-output-request",
     };
   }
   return {
     released: true,
+    generationDisposition: "output-authorized",
     reason: "high-confidence-output-request",
     advisorDecision: {
       ...input.original,
