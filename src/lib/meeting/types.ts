@@ -904,7 +904,8 @@ export interface ManualQuestionTypeCorrection {
 
 export type InterviewSessionContextSource =
   | "manual"
-  | "brief";
+  | "brief"
+  | "runtime-inference";
 
 export interface InterviewTargetCompany {
   value: string;
@@ -1422,11 +1423,15 @@ export type MeetingQuestionTypeAdjudicationMode =
 export type MeetingTaskRelationAdjudicationMode =
   MeetingQuestionTypeAdjudicationMode;
 
+export type MeetingMetadataInferenceMode =
+  MeetingQuestionTypeAdjudicationMode;
+
 export interface MeetingTaxonomyAdjudicationSettings
   extends SelectedProviderState {
   enabled: boolean;
   questionTypeMode: MeetingQuestionTypeAdjudicationMode;
   taskRelationMode: MeetingTaskRelationAdjudicationMode;
+  meetingMetadataMode: MeetingMetadataInferenceMode;
 }
 
 export interface MeetingAudioStatus {

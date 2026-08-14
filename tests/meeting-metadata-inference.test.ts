@@ -6,10 +6,12 @@ import {
   buildMeetingMetadataInferenceRequest,
   compareMeetingMetadataInference,
   createMeetingMetadataInferenceLease,
+  decideMeetingMetadataInferenceCommit,
   decideMeetingMetadataInferenceEligibility,
   parseMeetingMetadataInferenceOutput,
   projectMeetingMetadataOpeningEvidence,
 } from "../src/lib/meeting/meeting-metadata-inference.js";
+import { MeetingContextManager } from "../src/lib/meeting/context-manager.js";
 import type {
   InterviewTargetCompany,
   TranscriptTurn,
@@ -180,6 +182,7 @@ test("lease rejects newer evidence, epochs, and authoritative company changes", 
   const lease = createMeetingMetadataInferenceLease({
     sessionId: "session-a",
     runtimeEpoch: 3,
+    mode: "shadow",
     request,
     createdAt: 2_000,
   });
@@ -189,6 +192,7 @@ test("lease rejects newer evidence, epochs, and authoritative company changes", 
     runtimeEpoch: 3,
     evidence: request.openingEvidence,
     authoritativeCompany: authoritative,
+    mode: "shadow" as const,
   };
   assert.deepEqual(authorizeMeetingMetadataInferenceLease(lease, current), {
     authorized: true,
@@ -204,6 +208,13 @@ test("lease rejects newer evidence, epochs, and authoritative company changes", 
     authorizeMeetingMetadataInferenceLease(lease, {
       ...current,
       authoritativeCompany: { ...authoritative, value: "Google" },
+    }).authorized,
+    false
+  );
+  assert.equal(
+    authorizeMeetingMetadataInferenceLease(lease, {
+      ...current,
+      mode: "enforcement",
     }).authorized,
     false
   );
@@ -264,5 +275,136 @@ test("canonicalizes aliases only after a model proposal exists", () => {
       },
     }).disposition,
     "agreement"
+  );
+});
+
+test("authorizes only a grounded high-confidence unresolved enforcement proposal", () => {
+  const request = requestFrom([
+    turn("them-1", "I am the recruiter from AWS."),
+  ]);
+  const parsed = parseMeetingMetadataInferenceOutput(
+    JSON.stringify({
+      schemaVersion: 1,
+      company: "AWS",
+      confidence: 0.98,
+      evidenceSpans: ["recruiter from AWS"],
+      abstainReason: null,
+    }),
+    request
+  );
+  const shadow = decideMeetingMetadataInferenceCommit({
+    mode: "shadow",
+    leaseAuthorized: true,
+    parseResult: parsed,
+  });
+  assert.deepEqual(shadow, {
+    authorized: false,
+    reason: "mode-not-enforcement",
+  });
+
+  const authorized = decideMeetingMetadataInferenceCommit({
+    mode: "enforcement",
+    leaseAuthorized: true,
+    parseResult: parsed,
+  });
+  assert.equal(authorized.authorized, true);
+  if (authorized.authorized) {
+    assert.equal(authorized.targetCompany.value, "Amazon");
+    assert.equal(authorized.targetCompany.normalized, "amazon");
+  }
+});
+
+test("blocks low-confidence, stale, and already resolved proposals", () => {
+  const request = requestFrom([
+    turn("them-1", "I am the recruiter from Oracle."),
+  ]);
+  const lowConfidence = parseMeetingMetadataInferenceOutput(
+    JSON.stringify({
+      schemaVersion: 1,
+      company: "Oracle",
+      confidence: 0.91,
+      evidenceSpans: ["recruiter from Oracle"],
+      abstainReason: null,
+    }),
+    request
+  );
+  assert.equal(
+    decideMeetingMetadataInferenceCommit({
+      mode: "enforcement",
+      leaseAuthorized: true,
+      parseResult: lowConfidence,
+    }).reason,
+    "confidence-below-threshold"
+  );
+  assert.equal(
+    decideMeetingMetadataInferenceCommit({
+      mode: "enforcement",
+      leaseAuthorized: false,
+      parseResult: lowConfidence,
+    }).reason,
+    "lease-not-authorized"
+  );
+  assert.equal(
+    decideMeetingMetadataInferenceCommit({
+      mode: "enforcement",
+      leaseAuthorized: true,
+      currentCompany: {
+        value: "Google",
+        normalized: "google",
+        confidence: 1,
+        source: "brief",
+        evidence: "Preparation Snapshot",
+        updatedAt: 2_000,
+      },
+      parseResult: lowConfidence,
+    }).reason,
+    "company-already-resolved"
+  );
+});
+
+test("context manager atomically fills only an unresolved company", () => {
+  const manager = new MeetingContextManager();
+  const sessionId = manager.getState().sessionId;
+  const committed = manager.commitRuntimeInferredTargetCompany({
+    expectedSessionId: sessionId,
+    targetCompany: {
+      value: "Oracle",
+      normalized: "oracle",
+      confidence: 0.98,
+      evidence: "recruiter from Oracle",
+    },
+    updatedAt: 3_000,
+  });
+  assert.equal(committed.committed, true);
+  assert.equal(
+    manager.getState().interviewSessionContext?.targetCompany?.source,
+    "runtime-inference"
+  );
+  assert.deepEqual(
+    manager.commitRuntimeInferredTargetCompany({
+      expectedSessionId: sessionId,
+      targetCompany: {
+        value: "Taiwan",
+        normalized: "taiwan",
+        confidence: 0.99,
+        evidence: "based in Taiwan",
+      },
+    }),
+    { committed: false, reason: "company-already-resolved" }
+  );
+
+  manager.setInterviewSessionBrief({
+    targetCompany: "Google",
+    targetCompanyNormalized: "google",
+    companyLocked: true,
+    interviewTypes: [],
+  });
+  assert.equal(
+    manager.getState().interviewSessionContext?.targetCompany?.value,
+    "Google"
+  );
+  assert.equal(
+    manager.getState().interviewSessionContext?.targetCompany?.source,
+    "brief"
   );
 });

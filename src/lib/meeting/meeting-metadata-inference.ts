@@ -1,6 +1,7 @@
 import type { RuntimeInferenceRuntimeJob } from "./runtime-inference-runtime.js";
 import { normalizeInterviewBriefCompany } from "./interview-session-context.js";
 import type {
+  MeetingMetadataInferenceMode,
   InterviewTargetCompany,
   TranscriptTurn,
 } from "./types.js";
@@ -13,6 +14,7 @@ export const MEETING_METADATA_MAX_OPENING_TURNS = 6;
 export const MEETING_METADATA_MAX_TURN_CHARS = 600;
 export const MEETING_METADATA_MAX_EVIDENCE_CHARS = 1_800;
 export const MEETING_METADATA_OPENING_WINDOW_MS = 10 * 60 * 1_000;
+export const MEETING_METADATA_INFERENCE_COMMIT_MIN_CONFIDENCE = 0.92;
 
 export interface MeetingMetadataEvidenceTurn {
   id: string;
@@ -51,6 +53,7 @@ export interface MeetingMetadataInferenceLease {
   operationRevision: number;
   sourceHash: string;
   authoritativeCompanyHash: string;
+  mode: MeetingMetadataInferenceMode;
   createdAt: number;
 }
 
@@ -98,6 +101,24 @@ export interface MeetingMetadataInferenceComparison {
   authoritativeCompany?: string;
   proposedCompany?: string;
 }
+
+export type MeetingMetadataInferenceCommitDecision =
+  | {
+      authorized: true;
+      reason: "grounded-unresolved-company";
+      targetCompany: Omit<InterviewTargetCompany, "source" | "updatedAt">;
+    }
+  | {
+      authorized: false;
+      reason:
+        | "mode-not-enforcement"
+        | "lease-not-authorized"
+        | "company-already-resolved"
+        | "proposal-invalid"
+        | "proposal-abstained"
+        | "confidence-below-threshold"
+        | "proposal-company-invalid";
+    };
 
 export function projectMeetingMetadataOpeningEvidence(input: {
   transcriptTurns: TranscriptTurn[];
@@ -331,6 +352,7 @@ export function parseMeetingMetadataInferenceOutput(
 export function createMeetingMetadataInferenceLease(input: {
   sessionId: string;
   runtimeEpoch: number;
+  mode: MeetingMetadataInferenceMode;
   request: MeetingMetadataInferenceRequest;
   createdAt?: number;
 }): MeetingMetadataInferenceLease {
@@ -345,12 +367,14 @@ export function createMeetingMetadataInferenceLease(input: {
       input.request.operationRevision,
       input.request.openingEvidence.sourceHash,
       authoritativeCompanyHash,
+      input.mode,
     ].join(":"),
     sessionId: input.sessionId,
     runtimeEpoch: input.runtimeEpoch,
     operationRevision: input.request.operationRevision,
     sourceHash: input.request.openingEvidence.sourceHash,
     authoritativeCompanyHash,
+    mode: input.mode,
     createdAt: input.createdAt ?? Date.now(),
   };
 }
@@ -363,6 +387,7 @@ export function authorizeMeetingMetadataInferenceLease(
     runtimeEpoch: number;
     evidence: MeetingMetadataOpeningEvidence;
     authoritativeCompany?: InterviewTargetCompany;
+    mode: MeetingMetadataInferenceMode;
   }
 ): { authorized: true } | { authorized: false; reason: string } {
   const reject = (reason: string) => ({
@@ -398,6 +423,9 @@ export function authorizeMeetingMetadataInferenceLease(
   ) {
     return reject("authoritative-company-changed");
   }
+  if (lease.mode !== current.mode) {
+    return reject("inference-mode-changed");
+  }
   return { authorized: true };
 }
 
@@ -427,6 +455,53 @@ export function compareMeetingMetadataInference(input: {
       authoritative === proposed ? "agreement" : "conflict",
     authoritativeCompany: input.authoritativeCompany.value,
     proposedCompany,
+  };
+}
+
+export function decideMeetingMetadataInferenceCommit(input: {
+  mode: MeetingMetadataInferenceMode;
+  leaseAuthorized: boolean;
+  currentCompany?: InterviewTargetCompany;
+  parseResult: MeetingMetadataInferenceParseResult | undefined;
+}): MeetingMetadataInferenceCommitDecision {
+  if (input.mode !== "enforcement") {
+    return { authorized: false, reason: "mode-not-enforcement" };
+  }
+  if (!input.leaseAuthorized) {
+    return { authorized: false, reason: "lease-not-authorized" };
+  }
+  if (input.currentCompany) {
+    return { authorized: false, reason: "company-already-resolved" };
+  }
+  if (!input.parseResult?.ok) {
+    return { authorized: false, reason: "proposal-invalid" };
+  }
+  const proposal = input.parseResult.value;
+  if (!proposal.company) {
+    return { authorized: false, reason: "proposal-abstained" };
+  }
+  if (
+    proposal.confidence <
+    MEETING_METADATA_INFERENCE_COMMIT_MIN_CONFIDENCE
+  ) {
+    return {
+      authorized: false,
+      reason: "confidence-below-threshold",
+    };
+  }
+  const company = normalizeInterviewBriefCompany(proposal.company);
+  if (!company) {
+    return { authorized: false, reason: "proposal-company-invalid" };
+  }
+  return {
+    authorized: true,
+    reason: "grounded-unresolved-company",
+    targetCompany: {
+      value: company.value,
+      normalized: company.normalized,
+      confidence: proposal.confidence,
+      evidence: proposal.evidenceSpans.slice(0, 2).join(" | ").slice(0, 600),
+    },
   };
 }
 

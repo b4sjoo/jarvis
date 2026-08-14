@@ -30,6 +30,7 @@ import {
   buildMeetingMetadataInferenceRequest,
   compareMeetingMetadataInference,
   createMeetingMetadataInferenceLease,
+  decideMeetingMetadataInferenceCommit,
   decideMeetingMetadataInferenceEligibility,
   formatMeetingMetadataInferenceForTrace,
   projectMeetingMetadataOpeningEvidence,
@@ -830,6 +831,7 @@ const DEFAULT_TAXONOMY_ADJUDICATION_SETTINGS: MeetingTaxonomyAdjudicationSetting
   enabled: true,
   questionTypeMode: "shadow",
   taskRelationMode: "shadow",
+  meetingMetadataMode: "shadow",
   provider: "",
   variables: {},
 };
@@ -1215,12 +1217,20 @@ function normalizeTaxonomyAdjudicationSettings(
     parsed.taskRelationMode,
     legacyEnabled
   );
+  const meetingMetadataMode =
+    parsed.meetingMetadataMode === "off" ||
+    parsed.meetingMetadataMode === "shadow" ||
+    parsed.meetingMetadataMode === "enforcement"
+      ? parsed.meetingMetadataMode
+      : DEFAULT_TAXONOMY_ADJUDICATION_SETTINGS.meetingMetadataMode;
   return {
     enabled:
       questionTypeMode !== "off" ||
-      taskRelationMode !== "off",
+      taskRelationMode !== "off" ||
+      meetingMetadataMode !== "off",
     questionTypeMode,
     taskRelationMode,
+    meetingMetadataMode,
     ...selectedProvider,
   };
 }
@@ -6870,11 +6880,13 @@ export function useMeetingAssistant() {
 
   const setTaxonomyAdjudicationConfig = useCallback(
     (taxonomyAdjudication: MeetingTaxonomyAdjudicationSettings) => {
+      const normalized = normalizeTaxonomyAdjudicationSettings(
+        taxonomyAdjudication
+      );
+      taxonomyAdjudicationSettingsRef.current = normalized;
       updateSettings((previous) => ({
         ...previous,
-        taxonomyAdjudication: normalizeTaxonomyAdjudicationSettings(
-          taxonomyAdjudication
-        ),
+        taxonomyAdjudication: normalized,
       }));
     },
     [updateSettings]
@@ -12629,6 +12641,8 @@ export function useMeetingAssistant() {
         sessionRecordingManagerRef.current?.getState().active ?? false;
       const authoritativeCompany =
         contextState.interviewSessionContext?.targetCompany;
+      const metadataMode =
+        taxonomyAdjudicationSettingsRef.current.meetingMetadataMode;
       const evidence = projectMeetingMetadataOpeningEvidence({
         transcriptTurns: contextState.transcriptTurns,
         sessionStartedAt: contextState.startedAt,
@@ -12651,6 +12665,7 @@ export function useMeetingAssistant() {
           authoritativeCompany?.source,
         meetingMetadataInferenceAuthoritativeCompany:
           authoritativeCompany?.value,
+        meetingMetadataInferenceMode: metadataMode,
         meetingMetadataInferenceAppliedToRuntime: false,
         meetingMetadataInferenceMutationDisposition:
           "blocked-task-147c-shadow",
@@ -12677,7 +12692,7 @@ export function useMeetingAssistant() {
         });
         return;
       }
-      if (!taxonomyAdjudicationSettingsRef.current.enabled) {
+      if (metadataMode === "off") {
         traceStoreRef.current.updateMetadata(traceId, {
           meetingMetadataInferenceDisposition: "operation-disabled",
           meetingMetadataInferenceSkipReason:
@@ -12694,6 +12709,7 @@ export function useMeetingAssistant() {
       const lease = createMeetingMetadataInferenceLease({
         sessionId: contextState.sessionId,
         runtimeEpoch: runtimeEpochRef.current,
+        mode: metadataMode,
         request,
       });
       if (
@@ -12862,6 +12878,9 @@ export function useMeetingAssistant() {
               runtimeEpoch: runtimeEpochRef.current,
               evidence: latestEvidence,
               authoritativeCompany: latestAuthoritativeCompany,
+              mode:
+                taxonomyAdjudicationSettingsRef.current
+                  .meetingMetadataMode,
             }
           );
           const result = settlement.result;
@@ -12886,7 +12905,29 @@ export function useMeetingAssistant() {
                 proposal,
               })
             : undefined;
-          const disposition =
+          const commitDecision = decideMeetingMetadataInferenceCommit({
+            mode: settlement.job.lease.mode,
+            leaseAuthorized: authorization.authorized,
+            currentCompany: latestAuthoritativeCompany,
+            parseResult: parsed,
+          });
+          const commitResult = commitDecision.authorized
+            ? contextManagerRef.current.commitRuntimeInferredTargetCompany({
+                expectedSessionId: latestContext.sessionId,
+                targetCompany: commitDecision.targetCompany,
+                updatedAt: settlement.completedAt,
+              })
+            : undefined;
+          const committed = commitResult?.committed === true;
+          if (committed) {
+            const committedContext = contextManagerRef.current.getState();
+            setState((previous) => ({
+              ...previous,
+              interviewSessionContext:
+                committedContext.interviewSessionContext,
+            }));
+          }
+          const observationDisposition =
             settlement.disposition !== "completed"
               ? settlement.disposition
               : !authorization.authorized
@@ -12896,6 +12937,14 @@ export function useMeetingAssistant() {
                   : !parsed?.ok
                     ? "invalid-output"
                     : "shadow-observed";
+          const disposition = committed
+            ? "enforcement-committed"
+            : observationDisposition;
+          const mutationDisposition = committed
+            ? "committed-unresolved-company"
+            : commitDecision.authorized
+              ? `blocked-${commitResult?.reason ?? "atomic-commit-failed"}`
+              : `blocked-${commitDecision.reason}`;
           const rawOutput = result?.rawOutput ?? "";
           const latestRecordingActive =
             sessionRecordingManagerRef.current?.getState().active ?? false;
@@ -12933,9 +12982,20 @@ export function useMeetingAssistant() {
               settlement.error instanceof Error &&
               /timeout/i.test(settlement.error.message),
             meetingMetadataInferenceRawOutputStored: rawOutputStored,
-            meetingMetadataInferenceAppliedToRuntime: false,
+            meetingMetadataInferenceCommitAuthorized:
+              commitDecision.authorized,
+            meetingMetadataInferenceCommitDecisionReason:
+              commitDecision.reason,
+            meetingMetadataInferenceCommittedCompany: committed
+              ? commitResult.targetCompany.value
+              : undefined,
+            meetingMetadataInferenceCommittedSource: committed
+              ? commitResult.targetCompany.source
+              : undefined,
+            meetingMetadataInferenceAppliedToRuntime: committed,
             meetingMetadataInferenceMutationDisposition:
-              "blocked-task-147c-shadow",
+              mutationDisposition,
+            meetingMetadataInferenceMode: metadataMode,
           };
           traceStoreRef.current.updateMetadata(traceId, metadata);
           if (rawOutputStored) {

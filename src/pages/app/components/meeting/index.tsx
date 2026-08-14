@@ -4163,8 +4163,37 @@ const ConfigurationsPanel = ({
                   }}
                 />
               </div>
+              <div className="flex items-center justify-between gap-2 border-t border-border/50 pt-2">
+                <div>
+                  <div className="text-[10px] font-medium uppercase text-muted-foreground">
+                    Meeting Metadata Enforcement
+                  </div>
+                  <div className="mt-0.5 text-[10px] text-muted-foreground">
+                    {taxonomyAdjudication.meetingMetadataMode ===
+                    "enforcement"
+                      ? "Fill an empty company from grounded opening evidence"
+                      : "Shadow only; company stays unknown"}
+                  </div>
+                </div>
+                <Switch
+                  checked={
+                    taxonomyAdjudication.meetingMetadataMode ===
+                    "enforcement"
+                  }
+                  onCheckedChange={(enabled) => {
+                    onTaxonomyAdjudicationChange({
+                      ...taxonomyAdjudication,
+                      enabled: true,
+                      meetingMetadataMode: enabled
+                        ? "enforcement"
+                        : "shadow",
+                    });
+                  }}
+                />
+              </div>
               {taxonomyAdjudication.questionTypeMode !== "off" ||
-              taxonomyAdjudication.taskRelationMode !== "off" ? (
+              taxonomyAdjudication.taskRelationMode !== "off" ||
+              taxonomyAdjudication.meetingMetadataMode !== "off" ? (
                 <MeetingModelOverrideConfig
                   label="Adjudication model"
                   description="Optional fast model; defaults to the main model"
@@ -4177,6 +4206,8 @@ const ConfigurationsPanel = ({
                         taxonomyAdjudication.questionTypeMode,
                       taskRelationMode:
                         taxonomyAdjudication.taskRelationMode,
+                      meetingMetadataMode:
+                        taxonomyAdjudication.meetingMetadataMode,
                       ...selected,
                     });
                   }}

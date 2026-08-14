@@ -4093,6 +4093,8 @@ function sanitizeMeetingAssistantSettings(settings: MeetingAssistantSettings) {
         settings.taxonomyAdjudication.questionTypeMode,
       taskRelationMode:
         settings.taxonomyAdjudication.taskRelationMode,
+      meetingMetadataMode:
+        settings.taxonomyAdjudication.meetingMetadataMode,
       provider: settings.taxonomyAdjudication.provider,
       variableKeys: Object.keys(settings.taxonomyAdjudication.variables),
       variables: "[redacted]",

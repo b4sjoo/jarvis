@@ -5,6 +5,7 @@ import {
   GlossaryEntry,
   InterviewSessionBrief,
   InterviewSessionContext,
+  InterviewTargetCompany,
   MeetingContextState,
   ScreenObservation,
   TranscriptTurn,
@@ -246,6 +247,47 @@ export class MeetingContextManager {
     };
 
     return interviewContextUpdate;
+  }
+
+  commitRuntimeInferredTargetCompany(input: {
+    expectedSessionId: string;
+    targetCompany: Omit<
+      InterviewTargetCompany,
+      "source" | "updatedAt"
+    >;
+    updatedAt?: number;
+  }):
+    | {
+        committed: true;
+        targetCompany: InterviewTargetCompany;
+      }
+    | {
+        committed: false;
+        reason: "session-mismatch" | "company-already-resolved";
+      } {
+    if (this.state.sessionId !== input.expectedSessionId) {
+      return { committed: false, reason: "session-mismatch" };
+    }
+    if (this.state.interviewSessionContext?.targetCompany) {
+      return {
+        committed: false,
+        reason: "company-already-resolved",
+      };
+    }
+
+    const targetCompany: InterviewTargetCompany = {
+      ...input.targetCompany,
+      source: "runtime-inference",
+      updatedAt: input.updatedAt ?? Date.now(),
+    };
+    this.state = {
+      ...this.state,
+      interviewSessionContext: {
+        ...this.state.interviewSessionContext,
+        targetCompany,
+      },
+    };
+    return { committed: true, targetCompany: { ...targetCompany } };
   }
 
   clearExpiredActiveMeetingTask(now = Date.now()) {
