@@ -55,6 +55,7 @@ export interface RuntimeTypeRepairOutputAuthority {
   logicalQuestionRevision: number;
   manualCorrectionRevision: number;
   typeAuthority: "llm-type-repair";
+  authorityScope: "type-only" | "type-and-relation";
   authorizedArtifacts: ["answer"];
   createdAt: number;
 }
@@ -260,11 +261,18 @@ export function createRuntimeTypeRepairOutputAuthority(input: {
   manualCorrectionRevision: number;
   createdAt?: number;
 }): RuntimeTypeRepairOutputAuthority | undefined {
+  const typeOnly =
+    !input.settlement.relationMutationAuthorized &&
+    !input.settlement.parentMutationAuthorized;
+  const typeAndRelation =
+    input.settlement.relationAuthoritySource === "llm-type-repair" &&
+    input.settlement.relationMutationAuthorized &&
+    input.settlement.parentMutationAuthorized &&
+    input.settlement.relation === "new-parent";
   if (
     input.settlement.typeAuthoritySource !== "llm-type-repair" ||
     !input.settlement.typeMutationAuthorized ||
-    input.settlement.relationMutationAuthorized ||
-    input.settlement.parentMutationAuthorized ||
+    (!typeOnly && !typeAndRelation) ||
     !input.settlement.responseAuthorized ||
     input.settlement.action !== "answer"
   ) {
@@ -282,6 +290,9 @@ export function createRuntimeTypeRepairOutputAuthority(input: {
     logicalQuestionRevision: input.settlement.revision,
     manualCorrectionRevision: input.manualCorrectionRevision,
     typeAuthority: "llm-type-repair",
+    authorityScope: typeAndRelation
+      ? "type-and-relation"
+      : "type-only",
     authorizedArtifacts: ["answer"],
     createdAt: input.createdAt ?? Date.now(),
   };
@@ -344,6 +355,7 @@ export function formatRuntimeTypeRepairOutputAuthorityForTrace(
     runtimeTypeRepairManualCorrectionRevision:
       authority?.manualCorrectionRevision,
     runtimeTypeRepairTypeAuthority: authority?.typeAuthority,
+    runtimeTypeRepairAuthorityScope: authority?.authorityScope,
     runtimeTypeRepairAuthorizedArtifacts:
       authority?.authorizedArtifacts,
     runtimeTypeRepairOutputAuthorized:

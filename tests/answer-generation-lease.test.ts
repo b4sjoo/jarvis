@@ -123,6 +123,7 @@ test("turns an accepted type repair into one answer-only refresh authority", () 
   assert.ok(authority);
   assert.deepEqual(authority.authorizedArtifacts, ["answer"]);
   assert.equal(authority.typeAuthority, "llm-type-repair");
+  assert.equal(authority.authorityScope, "type-only");
   const refresh = decideRefreshAuthority({
     source: "live-turn",
     turnIntentDecision: decideAdvisorTurnIntent("Kubernetes.", {
@@ -133,6 +134,25 @@ test("turns an accepted type repair into one answer-only refresh authority", () 
   assert.equal(refresh.authorized, true);
   assert.equal(refresh.kind, "runtime-type-repair");
   assert.equal(refresh.authorityId, authority.id);
+});
+
+test("grants answer authority to one converged type-and-relation settlement", () => {
+  const authority = createRuntimeTypeRepairOutputAuthority({
+    operationId: "type-relation-operation-a",
+    settlement: buildTypeRepairSettlement({
+      questionType: "behavioral",
+      relation: "new-parent",
+      relationAuthoritySource: "llm-type-repair",
+      relationMutationAuthorized: true,
+      parentMutationAuthorized: true,
+    }),
+    manualCorrectionRevision: 1,
+    createdAt: 100,
+  });
+
+  assert.ok(authority);
+  assert.equal(authority.authorityScope, "type-and-relation");
+  assert.deepEqual(authority.authorizedArtifacts, ["answer"]);
 });
 
 test("rejects stale type-repair output authority and broader mutation", () => {

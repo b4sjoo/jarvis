@@ -1,8 +1,9 @@
 import type { ActiveMeetingTask } from "./active-meeting-task.js";
-import type {
-  CurrentQuestionSettlementDecision,
-  CurrentQuestionSettlementProposal,
-  ProvisionalCurrentQuestion,
+import {
+  settleCurrentQuestion,
+  type CurrentQuestionSettlementDecision,
+  type CurrentQuestionSettlementProposal,
+  type ProvisionalCurrentQuestion,
 } from "./current-question-settlement.js";
 import type { LogicalQuestionUnit } from "./logical-question-unit.js";
 import type { RuntimeInferenceRuntimeJob } from "./runtime-inference-runtime.js";
@@ -31,6 +32,7 @@ export const TASK_RELATION_ADJUDICATION_MAX_PARENT_CHARS = 480;
 export const TASK_RELATION_ADJUDICATION_MAX_TRANSITION_CHARS = 600;
 export const TASK_RELATION_ADJUDICATION_MAX_SOURCE_EVIDENCE_CHARS = 720;
 export const SCREEN_RELATION_RELEASE_MIN_CONFIDENCE = 0.95;
+export const VOICE_RELATION_RELEASE_MIN_CONFIDENCE = 0.95;
 export const SCREEN_RELATION_RELEASE_ADMISSION_WAIT_BUDGET_MS = 500;
 export const SCREEN_RELATION_RELEASE_WAIT_BUDGET_MS = 1_500;
 
@@ -179,7 +181,8 @@ export interface TaskRelationAdjudicationEligibilityDecision {
   auditKind?:
     | "unresolved-proposal"
     | "deterministic-comparison"
-    | "screen-release-candidate";
+    | "screen-release-candidate"
+    | "voice-release-candidate";
 }
 
 export type NarrowScreenRelationReleaseReason =
@@ -238,6 +241,44 @@ export interface TaskRelationAdjudicationRuntimeOutcome {
   operationId?: string;
   operationLeaseAuthorized: boolean;
   narrowScreenRelease: NarrowScreenRelationReleaseDecision;
+}
+
+export type NarrowVoiceRelationReleaseReason =
+  | "authorized"
+  | "source-is-not-voice"
+  | "active-parent-missing"
+  | "type-settlement-missing"
+  | "type-settlement-not-authoritative"
+  | "current-type-not-parent-eligible"
+  | "current-type-matches-parent"
+  | "manual-correction-active"
+  | "candidate-missing"
+  | "operation-lease-not-authorized"
+  | "release-window-closed"
+  | "candidate-confidence-below-threshold"
+  | "candidate-relation-not-new-parent"
+  | "candidate-not-parent-independent"
+  | "candidate-not-standalone"
+  | "candidate-binds-existing-parent";
+
+export interface NarrowVoiceRelationReleaseDecision {
+  requested: boolean;
+  authorized: boolean;
+  reason: NarrowVoiceRelationReleaseReason;
+  currentQuestionType: CanonicalQuestionType;
+  activeParentQuestionType: CanonicalQuestionType;
+  relationConfidence: number;
+  minimumConfidence: number;
+}
+
+export interface NarrowVoiceRelationReleaseInput {
+  sourceKind: "voice" | "screen" | "mixed";
+  activeParentQuestionType?: unknown;
+  typeSettlement?: CurrentQuestionSettlementDecision;
+  candidate?: LlmTaskRelationAdjudication;
+  manualCorrectionActive: boolean;
+  operationLeaseAuthorized?: boolean;
+  releaseWindowOpen?: boolean;
 }
 
 export type TaskRelationAdjudicationComparisonOutcome =
@@ -325,6 +366,7 @@ export function decideTaskRelationAdjudicationEligibility(input: {
   mode: MeetingTaskRelationAdjudicationMode;
   evaluationActive: boolean;
   runtimeReleaseRequested?: boolean;
+  runtimeReleaseSourceKind?: "screen" | "voice";
   speaker: "me" | "them" | "unknown";
   request: TaskRelationAdjudicationRequest;
   manualCorrectionActive: boolean;
@@ -357,14 +399,23 @@ export function decideTaskRelationAdjudicationEligibility(input: {
     return skip("question-unit-too-short");
   }
   if (input.runtimeReleaseRequested) {
+    const voiceRelease = input.runtimeReleaseSourceKind === "voice";
     return {
       eligible: true,
-      reason: "screen-relation-release-candidate",
+      reason: voiceRelease
+        ? "voice-relation-release-candidate"
+        : "screen-relation-release-candidate",
       triggerReasons: [
-        "screen-boundary-prior",
-        "parent-eligible-screen-question",
+        voiceRelease
+          ? "type-enforcement-window"
+          : "screen-boundary-prior",
+        voiceRelease
+          ? "voice-type-relation-convergence"
+          : "parent-eligible-screen-question",
       ],
-      auditKind: "screen-release-candidate",
+      auditKind: voiceRelease
+        ? "voice-release-candidate"
+        : "screen-release-candidate",
     };
   }
   if (input.deterministicRelationAuthorized) {
@@ -480,8 +531,7 @@ export function decideNarrowScreenRelationRelease(
   }
   if (
     input.candidate.explicitBinding ||
-    input.candidate.returnIntent === "resume-suspended-parent" ||
-    input.candidate.parentEvidenceSpans.length > 0
+    input.candidate.returnIntent === "resume-suspended-parent"
   ) {
     return reject("candidate-binds-existing-parent", true);
   }
@@ -498,6 +548,163 @@ export function decideNarrowScreenRelationRelease(
   };
 }
 
+export function decideNarrowVoiceRelationRelease(
+  input: NarrowVoiceRelationReleaseInput
+): NarrowVoiceRelationReleaseDecision {
+  const currentQuestionType =
+    normalizeCanonicalQuestionType(input.typeSettlement?.questionType) ??
+    "unknown";
+  const activeParentQuestionType =
+    normalizeCanonicalQuestionType(input.activeParentQuestionType) ??
+    "unknown";
+  const relationConfidence = normalizeConfidence(
+    input.candidate?.confidence
+  );
+  const reject = (
+    reason: NarrowVoiceRelationReleaseReason,
+    requested = false
+  ): NarrowVoiceRelationReleaseDecision => ({
+    requested,
+    authorized: false,
+    reason,
+    currentQuestionType,
+    activeParentQuestionType,
+    relationConfidence,
+    minimumConfidence: VOICE_RELATION_RELEASE_MIN_CONFIDENCE,
+  });
+
+  if (input.sourceKind !== "voice" && input.sourceKind !== "mixed") {
+    return reject("source-is-not-voice");
+  }
+  if (activeParentQuestionType === "unknown") {
+    return reject("active-parent-missing");
+  }
+  if (!input.typeSettlement) {
+    return reject("type-settlement-missing", true);
+  }
+  if (
+    input.typeSettlement.typeAuthoritySource !== "llm-type-repair" ||
+    !input.typeSettlement.typeMutationAuthorized
+  ) {
+    return reject("type-settlement-not-authoritative", true);
+  }
+  if (!isParentCanonicalQuestionType(currentQuestionType)) {
+    return reject("current-type-not-parent-eligible", true);
+  }
+  if (currentQuestionType === activeParentQuestionType) {
+    return reject("current-type-matches-parent", true);
+  }
+  if (input.manualCorrectionActive) {
+    return reject("manual-correction-active", true);
+  }
+  if (!input.candidate) {
+    return reject("candidate-missing", true);
+  }
+  if (!input.operationLeaseAuthorized) {
+    return reject("operation-lease-not-authorized", true);
+  }
+  if (input.releaseWindowOpen === false) {
+    return reject("release-window-closed", true);
+  }
+  if (relationConfidence < VOICE_RELATION_RELEASE_MIN_CONFIDENCE) {
+    return reject("candidate-confidence-below-threshold", true);
+  }
+  if (input.candidate.relation !== "new-parent") {
+    return reject("candidate-relation-not-new-parent", true);
+  }
+  if (input.candidate.dependency !== "parent-independent") {
+    return reject("candidate-not-parent-independent", true);
+  }
+  if (
+    input.candidate.standaloneSufficiency !== "sufficient" ||
+    !input.candidate.standalone
+  ) {
+    return reject("candidate-not-standalone", true);
+  }
+  if (
+    input.candidate.explicitBinding ||
+    input.candidate.returnIntent === "resume-suspended-parent"
+  ) {
+    return reject("candidate-binds-existing-parent", true);
+  }
+
+  return {
+    requested: true,
+    authorized: true,
+    reason: "authorized",
+    currentQuestionType,
+    activeParentQuestionType,
+    relationConfidence,
+    minimumConfidence: VOICE_RELATION_RELEASE_MIN_CONFIDENCE,
+  };
+}
+
+export function settleNarrowVoiceTypeRelation(input: {
+  operationId: string;
+  currentQuestion: ProvisionalCurrentQuestion;
+  typeSettlement: CurrentQuestionSettlementDecision;
+  relationCandidate: LlmTaskRelationAdjudication;
+  activeParentId: string;
+  activeParentRevision?: number;
+  manualCorrectionRevision: number;
+}): CurrentQuestionSettlementDecision | undefined {
+  if (
+    input.typeSettlement.logicalQuestionUnitId !==
+      input.currentQuestion.logicalQuestionUnitId ||
+    input.typeSettlement.revision !== input.currentQuestion.revision ||
+    input.typeSettlement.sessionId !== input.currentQuestion.sessionId ||
+    input.typeSettlement.runtimeEpoch !== input.currentQuestion.runtimeEpoch ||
+    input.typeSettlement.sourceHash !== input.currentQuestion.sourceHash
+  ) {
+    return undefined;
+  }
+
+  const llmProposal: CurrentQuestionSettlementProposal = {
+    source: "llm-type-repair",
+    sessionId: input.currentQuestion.sessionId,
+    runtimeEpoch: input.currentQuestion.runtimeEpoch,
+    logicalQuestionUnitId: input.currentQuestion.logicalQuestionUnitId,
+    revision: input.currentQuestion.revision,
+    sourceHash: input.currentQuestion.sourceHash,
+    questionType: input.typeSettlement.questionType,
+    relation: input.relationCandidate.relation,
+    action: "answer",
+    confidence: Math.min(
+      input.typeSettlement.confidence,
+      normalizeConfidence(input.relationCandidate.confidence)
+    ),
+    typeEvidenceAuthorized: true,
+    relationEvidenceAuthorized: true,
+    actionEvidenceAuthorized: true,
+    expectedParentId: input.activeParentId,
+    expectedParentRevision: input.activeParentRevision,
+    reasons: [
+      "runtime-type-relation-convergence",
+      "type-operation-authoritative",
+      "relation-operation-authoritative",
+    ],
+  };
+
+  return settleCurrentQuestion({
+    operationId: input.operationId,
+    currentQuestion: input.currentQuestion,
+    llmProposal,
+    activeParentId: input.activeParentId,
+    activeParentRevision: input.activeParentRevision,
+    manualCorrectionRevision: input.manualCorrectionRevision,
+    policy: {
+      allowLlmTypeRepair: true,
+      allowLlmRelationRepair: true,
+      allowLlmActionRepair: true,
+      llmTypeRepairMinConfidence: VOICE_RELATION_RELEASE_MIN_CONFIDENCE,
+      llmRelationRepairMinConfidence: VOICE_RELATION_RELEASE_MIN_CONFIDENCE,
+      runtimeMutationAuthorized: true,
+      questionComplete: true,
+      commitParent: true,
+    },
+  });
+}
+
 export function formatNarrowScreenRelationReleaseForTrace(
   decision: NarrowScreenRelationReleaseDecision
 ) {
@@ -512,6 +719,23 @@ export function formatNarrowScreenRelationReleaseForTrace(
     taskRelationScreenReleaseRelationConfidence:
       decision.relationConfidence,
     taskRelationScreenReleaseMinConfidence: decision.minimumConfidence,
+  };
+}
+
+export function formatNarrowVoiceRelationReleaseForTrace(
+  decision: NarrowVoiceRelationReleaseDecision | undefined
+) {
+  return {
+    taskRelationVoiceReleaseRequested: decision?.requested ?? false,
+    taskRelationVoiceReleaseAuthorized: decision?.authorized ?? false,
+    taskRelationVoiceReleaseReason: decision?.reason,
+    taskRelationVoiceReleaseCurrentType: decision?.currentQuestionType,
+    taskRelationVoiceReleaseParentType:
+      decision?.activeParentQuestionType,
+    taskRelationVoiceReleaseRelationConfidence:
+      decision?.relationConfidence,
+    taskRelationVoiceReleaseMinConfidence:
+      decision?.minimumConfidence,
   };
 }
 

@@ -12,9 +12,11 @@ import {
   compareTaskRelationAdjudication,
   createTaskRelationSettlementProposal,
   decideNarrowScreenRelationRelease,
+  decideNarrowVoiceRelationRelease,
   decideTaskRelationAdjudicationEligibility,
   deriveRuntimeTaskRelationFromAtomicDecision,
   parseTaskRelationAdjudicationOutput,
+  settleNarrowVoiceTypeRelation,
 } from "../src/lib/meeting/task-relation-adjudication.js";
 
 function unit(text: string, revision = 1): LogicalQuestionUnit {
@@ -539,6 +541,177 @@ test("narrowly releases a grounded cross-type manual screen boundary", () => {
       candidate,
     }).authorized,
     true
+  );
+  assert.equal(
+    decideNarrowScreenRelationRelease({
+      ...common,
+      candidate: {
+        ...candidate,
+        parentEvidenceSpans: [
+          "Compare this answer with the previous coding response",
+        ],
+      },
+    }).authorized,
+    true
+  );
+});
+
+test("narrowly converges authoritative voice type and relation into one parent settlement", () => {
+  const logicalQuestionUnit = unit(
+    "Tell me about a time you persuaded a skeptical stakeholder"
+  );
+  const currentQuestion = createProvisionalCurrentQuestion({
+    logicalQuestionUnit,
+    sourceKind: "voice",
+  });
+  const typeSettlement = settleCurrentQuestion({
+    operationId: "type-operation-a",
+    currentQuestion,
+    llmProposal: {
+      source: "llm-type-repair",
+      sessionId: currentQuestion.sessionId,
+      runtimeEpoch: currentQuestion.runtimeEpoch,
+      logicalQuestionUnitId: currentQuestion.logicalQuestionUnitId,
+      revision: currentQuestion.revision,
+      sourceHash: currentQuestion.sourceHash,
+      questionType: "behavioral",
+      relation: "unknown",
+      action: "answer",
+      confidence: 0.99,
+      typeEvidenceAuthorized: true,
+      relationEvidenceAuthorized: false,
+      actionEvidenceAuthorized: true,
+      expectedParentId: "parent-a",
+      expectedParentRevision: 3,
+    },
+    activeParentId: "parent-a",
+    activeParentRevision: 3,
+    manualCorrectionRevision: 0,
+    policy: {
+      allowLlmTypeRepair: true,
+      allowLlmRelationRepair: false,
+      allowLlmActionRepair: false,
+      llmTypeRepairMinConfidence: 0.95,
+      runtimeMutationAuthorized: false,
+      questionComplete: true,
+      commitParent: false,
+    },
+  });
+  const candidate = {
+    schemaVersion: 2 as const,
+    relation: "new-parent" as const,
+    dependency: "parent-independent" as const,
+    continuationShape: "unclear" as const,
+    returnIntent: "no-resume" as const,
+    switchIntent: "no-explicit-switch" as const,
+    standaloneSufficiency: "sufficient" as const,
+    confidence: 0.98,
+    currentQuestionEvidenceSpans: ["persuaded a skeptical stakeholder"],
+    parentEvidenceSpans: ["the previous coding task is unrelated"],
+    explicitBinding: false,
+    standalone: true,
+  };
+
+  const release = decideNarrowVoiceRelationRelease({
+    sourceKind: "voice",
+    activeParentQuestionType: "coding",
+    typeSettlement,
+    candidate,
+    manualCorrectionActive: false,
+    operationLeaseAuthorized: true,
+    releaseWindowOpen: true,
+  });
+  assert.equal(release.authorized, true);
+
+  const settlement = settleNarrowVoiceTypeRelation({
+    operationId: "type-operation-a",
+    currentQuestion,
+    typeSettlement,
+    relationCandidate: candidate,
+    activeParentId: "parent-a",
+    activeParentRevision: 3,
+    manualCorrectionRevision: 0,
+  });
+  assert.ok(settlement);
+  assert.equal(settlement.operationId, "type-operation-a");
+  assert.equal(settlement.questionType, "behavioral");
+  assert.equal(settlement.relation, "new-parent");
+  assert.equal(settlement.typeMutationAuthorized, true);
+  assert.equal(settlement.relationMutationAuthorized, true);
+  assert.equal(settlement.parentMutationAuthorized, true);
+});
+
+test("narrow voice relation release fails closed for continuity or binding", () => {
+  const logicalQuestionUnit = unit("Design a notification system");
+  const currentQuestion = createProvisionalCurrentQuestion({
+    logicalQuestionUnit,
+    sourceKind: "voice",
+  });
+  const typeSettlement = settleCurrentQuestion({
+    currentQuestion,
+    llmProposal: {
+      source: "llm-type-repair",
+      sessionId: currentQuestion.sessionId,
+      runtimeEpoch: currentQuestion.runtimeEpoch,
+      logicalQuestionUnitId: currentQuestion.logicalQuestionUnitId,
+      revision: currentQuestion.revision,
+      sourceHash: currentQuestion.sourceHash,
+      questionType: "general-system-design",
+      relation: "unknown",
+      action: "answer",
+      confidence: 0.99,
+      typeEvidenceAuthorized: true,
+      relationEvidenceAuthorized: false,
+      actionEvidenceAuthorized: true,
+    },
+    manualCorrectionRevision: 0,
+    policy: {
+      allowLlmTypeRepair: true,
+      allowLlmRelationRepair: false,
+      allowLlmActionRepair: false,
+      runtimeMutationAuthorized: false,
+      questionComplete: true,
+      commitParent: false,
+    },
+  });
+  const candidate = {
+    schemaVersion: 2 as const,
+    relation: "new-parent" as const,
+    dependency: "parent-independent" as const,
+    continuationShape: "unclear" as const,
+    returnIntent: "no-resume" as const,
+    switchIntent: "explicit-switch" as const,
+    standaloneSufficiency: "sufficient" as const,
+    confidence: 0.99,
+    currentQuestionEvidenceSpans: ["Design a notification system"],
+    parentEvidenceSpans: [],
+    explicitBinding: false,
+    standalone: true,
+  };
+
+  assert.equal(
+    decideNarrowVoiceRelationRelease({
+      sourceKind: "voice",
+      activeParentQuestionType: "general-system-design",
+      typeSettlement,
+      candidate,
+      manualCorrectionActive: false,
+      operationLeaseAuthorized: true,
+      releaseWindowOpen: true,
+    }).reason,
+    "current-type-matches-parent"
+  );
+  assert.equal(
+    decideNarrowVoiceRelationRelease({
+      sourceKind: "voice",
+      activeParentQuestionType: "coding",
+      typeSettlement,
+      candidate: { ...candidate, explicitBinding: true },
+      manualCorrectionActive: false,
+      operationLeaseAuthorized: true,
+      releaseWindowOpen: true,
+    }).reason,
+    "candidate-binds-existing-parent"
   );
 });
 

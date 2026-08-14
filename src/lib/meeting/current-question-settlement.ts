@@ -125,6 +125,7 @@ export interface CurrentQuestionSettlementPolicy {
 
 export interface CurrentQuestionSettlementDecision {
   settlementId: string;
+  operationId?: string;
   logicalQuestionUnitId: string;
   revision: number;
   sessionId: string;
@@ -347,6 +348,7 @@ export function decideCurrentQuestionMutationAuthority(input: {
 
 export function settleCurrentQuestion(input: {
   currentQuestion: ProvisionalCurrentQuestion;
+  operationId?: string;
   deterministicProposal?: CurrentQuestionSettlementProposal;
   llmProposal?: CurrentQuestionSettlementProposal;
   manualProposal?: CurrentQuestionSettlementProposal;
@@ -471,6 +473,7 @@ export function settleCurrentQuestion(input: {
 
   return {
     settlementId,
+    operationId: input.operationId,
     logicalQuestionUnitId:
       input.currentQuestion.logicalQuestionUnitId,
     revision: input.currentQuestion.revision,
@@ -711,6 +714,7 @@ export function formatCurrentQuestionSettlementForTrace(
   if (!decision) return {};
   return {
     currentQuestionSettlementId: decision.settlementId,
+    currentQuestionSettlementOperationId: decision.operationId,
     currentQuestionSettlementUnitId: decision.logicalQuestionUnitId,
     currentQuestionSettlementRevision: decision.revision,
     currentQuestionSettlementSessionId: decision.sessionId,
