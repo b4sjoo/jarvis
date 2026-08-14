@@ -269,6 +269,17 @@ test("manual correction validates against its current target instead of the runt
       logicalQuestionUnit: runtimeCurrent,
     }
   );
+  assert.deepEqual(
+    resolveAdvisorLogicalQuestionAuthorizationTarget({
+      jobSource: "live-turn",
+      runtimeCurrent,
+      supersessionProtectedTarget: manualCorrectionTarget,
+    }),
+    {
+      source: "supersession-protected",
+      logicalQuestionUnit: manualCorrectionTarget,
+    }
+  );
 });
 
 test("explicit response actions preserve the active parent", () => {

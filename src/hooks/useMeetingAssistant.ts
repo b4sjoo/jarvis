@@ -366,6 +366,8 @@ import {
   authorizeAdvisorExecution,
   authorizeAdvisorOutputCommit,
   createAdvisorTriggerJob,
+  decideAdvisorGenerationAdmission,
+  formatAdvisorGenerationAdmissionForTrace,
   authorizeRuntimeCommit,
   authorizeAdvisorTaskMutation,
   buildRuntimeCommitSnapshot,
@@ -1810,6 +1812,16 @@ interface RunAdvisorOptions {
   responseOnlyTaskScopeOverride?: ResponseOnlyTaskScope;
 }
 
+interface PendingAdvisorGenerationSupersession {
+  operationId: string;
+  protectedJobId: string;
+  protectedLogicalQuestionUnit?: LogicalQuestionUnit;
+  candidateJob: AdvisorTriggerJob;
+  candidateLogicalQuestionUnit?: LogicalQuestionUnit;
+  createdAt: number;
+  dispatch: () => void;
+}
+
 interface AdvisorResponseFingerprintSourceContext {
   questionText: string;
   questionType: CanonicalQuestionType;
@@ -2487,6 +2499,10 @@ export function useMeetingAssistant() {
   const latestScreenHashRef = useRef<string | undefined>(undefined);
   const advisorDebounceTimerRef = useRef<number | null>(null);
   const activeAdvisorJobRef = useRef<AdvisorTriggerJob | null>(null);
+  const pendingAdvisorGenerationSupersessionRef = useRef<
+    PendingAdvisorGenerationSupersession | undefined
+  >(undefined);
+  const promotePendingAdvisorGenerationRef = useRef<() => void>(() => {});
   const screenAnalysisAbortRef = useRef<AbortController | null>(null);
   const runtimeEpochRef = useRef(1);
   const semanticTaxonomyRuntimeRef = useRef<SemanticTaxonomyRuntime | null>(
@@ -4751,6 +4767,48 @@ export function useMeetingAssistant() {
     [transitionForceAdviseTarget]
   );
 
+  const clearPendingAdvisorGenerationSupersession = useCallback(
+    (reason: string) => {
+      const pending = pendingAdvisorGenerationSupersessionRef.current;
+      if (!pending) return;
+      pendingAdvisorGenerationSupersessionRef.current = undefined;
+      updateForceAdviseTargetForAdvisorOutcome({
+        advisorJob: pending.candidateJob,
+        status: "failed",
+        outcome: `supersession-candidate-dropped:${reason}`,
+      });
+      const traceId = pending.candidateJob.traceId;
+      const metadata = {
+        generationSupersessionOperationId: pending.operationId,
+        generationSupersessionStage: "candidate-dropped",
+        generationSupersessionDisposition: "cancelled",
+        generationSupersessionReason: reason,
+        generationSupersessionProtectedJobId: pending.protectedJobId,
+        generationSupersessionCandidateJobId: pending.candidateJob.id,
+        generationSupersessionWaitMs: Math.max(
+          0,
+          Date.now() - pending.createdAt
+        ),
+      };
+      if (traceId) {
+        traceStoreRef.current.updateMetadata(traceId, metadata);
+        const trace = traceStoreRef.current
+          .getTraces()
+          .find((candidate) => candidate.id === traceId);
+        if (trace?.status === "running") {
+          traceStoreRef.current.finishTrace(traceId, "cancelled", reason);
+        }
+      }
+      sessionRecordingManagerRef.current?.recordCaptureLifecycle({
+        stage: "advisor-generation-supersession-candidate-dropped",
+        traceId,
+        taskId: pending.candidateJob.expectedParentId,
+        ...metadata,
+      });
+    },
+    [updateForceAdviseTargetForAdvisorOutcome]
+  );
+
   const cancelActiveAdvisorJob = useCallback(
     (
       reason: string,
@@ -4769,6 +4827,9 @@ export function useMeetingAssistant() {
       const job = activeAdvisorJobRef.current;
       activeAdvisorJobRef.current = null;
       advisorEngineRef.current.cancelCurrentRequest();
+      clearPendingAdvisorGenerationSupersession(
+        `active-generation-cancelled:${reason}`
+      );
       if (!job) return;
 
       const resolvedOutcome = hadPendingTimer
@@ -4831,6 +4892,7 @@ export function useMeetingAssistant() {
       );
     },
     [
+      clearPendingAdvisorGenerationSupersession,
       finishRunningAdvisorJobTrace,
       recordQuestionTypeAdjudicationOutcome,
       updateForceAdviseTargetForAdvisorOutcome,
@@ -4916,6 +4978,14 @@ export function useMeetingAssistant() {
       }
       if (activeAdvisorJobRef.current?.id === job.id) {
         activeAdvisorJobRef.current = null;
+      }
+      if (
+        pendingAdvisorGenerationSupersessionRef.current?.protectedJobId ===
+        job.id
+      ) {
+        window.setTimeout(() => {
+          promotePendingAdvisorGenerationRef.current();
+        }, 0);
       }
     },
     [recordQuestionTypeAdjudicationOutcome]
@@ -7558,6 +7628,12 @@ export function useMeetingAssistant() {
         runtimeCurrent: logicalQuestionUnitRef.current,
         manualCorrectionTarget:
           latestManualCorrectionTargetRef.current?.logicalQuestionUnit,
+        supersessionProtectedTarget:
+          pendingAdvisorGenerationSupersessionRef.current
+            ?.protectedJobId === advisorJob.id
+            ? pendingAdvisorGenerationSupersessionRef.current
+                .protectedLogicalQuestionUnit
+            : undefined,
       });
     const readCommitDecision = () =>
       authorizeRuntimeCommit({
@@ -11742,6 +11818,64 @@ export function useMeetingAssistant() {
     updateForceAdviseTargetForAdvisorOutcome,
   ]);
 
+  const promotePendingAdvisorGeneration = useCallback(() => {
+    const pending = pendingAdvisorGenerationSupersessionRef.current;
+    if (!pending || activeAdvisorJobRef.current) return;
+
+    const contextState = contextManagerRef.current.getState();
+    const candidateLogicalQuestion = pending.candidateLogicalQuestionUnit;
+    const candidateStillCurrent = candidateLogicalQuestion
+      ? logicalQuestionUnitRef.current?.id === candidateLogicalQuestion.id &&
+        logicalQuestionUnitRef.current?.revision ===
+          candidateLogicalQuestion.revision
+      : true;
+    if (
+      !activeRef.current ||
+      contextState.sessionId !== pending.candidateJob.expectedSessionId ||
+      runtimeEpochRef.current !==
+        pending.candidateJob.runtimeCommitToken.runtimeEpoch ||
+      !candidateStillCurrent
+    ) {
+      clearPendingAdvisorGenerationSupersession(
+        !activeRef.current
+          ? "meeting-not-active"
+          : !candidateStillCurrent
+            ? "candidate-logical-question-no-longer-current"
+            : "candidate-runtime-boundary-stale"
+      );
+      return;
+    }
+
+    pendingAdvisorGenerationSupersessionRef.current = undefined;
+    const traceId = pending.candidateJob.traceId;
+    const metadata = {
+      generationSupersessionOperationId: pending.operationId,
+      generationSupersessionStage: "candidate-promoted",
+      generationSupersessionDisposition: "prior-generation-terminal",
+      generationSupersessionProtectedJobId: pending.protectedJobId,
+      generationSupersessionCandidateJobId: pending.candidateJob.id,
+      generationSupersessionWaitMs: Math.max(
+        0,
+        Date.now() - pending.createdAt
+      ),
+      generationSupersessionLeaseInvalidated: false,
+      generationSupersessionLeaseInvalidationReason:
+        "protected-generation-already-terminal",
+    };
+    if (traceId) {
+      traceStoreRef.current.updateMetadata(traceId, metadata);
+    }
+    sessionRecordingManagerRef.current?.recordCaptureLifecycle({
+      stage: "advisor-generation-supersession-candidate-promoted",
+      traceId,
+      taskId: pending.candidateJob.expectedParentId,
+      ...metadata,
+    });
+    pending.dispatch();
+  }, [clearPendingAdvisorGenerationSupersession]);
+  promotePendingAdvisorGenerationRef.current =
+    promotePendingAdvisorGeneration;
+
   const scheduleAdvisor = useCallback((
     mode: AdvisorRequestMode = "live",
     traceId?: string,
@@ -11772,21 +11906,90 @@ export function useMeetingAssistant() {
       logicalQuestionUnit,
       runtimeTypeRepairOutputAuthority,
     });
-    if (!activateAdvisorJob(advisorJob)) return;
-    advisorDebounceTimerRef.current = window.setTimeout(() => {
-      advisorDebounceTimerRef.current = null;
-      void runAdvisor({
-        mode,
-        traceId,
-        turnIntentDecision,
-        triggerTurnId,
-        advisorJob,
-        logicalQuestionUnit,
-        currentQuestionSettlementOverride,
-        runtimeTypeRepairOutputAuthority,
+    const admission = decideAdvisorGenerationAdmission({
+      activeJob: activeAdvisorJobRef.current,
+      incomingJob: advisorJob,
+      activeJobWaitingForDebounce:
+        advisorDebounceTimerRef.current !== null,
+    });
+    if (traceId) {
+      traceStoreRef.current.updateMetadata(traceId, {
+        ...formatAdvisorGenerationAdmissionForTrace(admission),
+        generationSupersessionCandidateJobId: advisorJob.id,
+        generationSupersessionActiveJobId:
+          activeAdvisorJobRef.current?.id,
       });
-    }, Math.max(0, debounceMs));
-  }, [activateAdvisorJob, buildAdvisorJob, runAdvisor]);
+    }
+    const dispatch = () => {
+      if (!activateAdvisorJob(advisorJob)) return;
+      const elapsedMs = Math.max(0, Date.now() - advisorJob.scheduledAt);
+      const remainingDebounceMs = Math.max(0, debounceMs - elapsedMs);
+      advisorDebounceTimerRef.current = window.setTimeout(() => {
+        advisorDebounceTimerRef.current = null;
+        void runAdvisor({
+          mode,
+          traceId,
+          turnIntentDecision,
+          triggerTurnId,
+          advisorJob,
+          logicalQuestionUnit,
+          currentQuestionSettlementOverride,
+          runtimeTypeRepairOutputAuthority,
+        });
+      }, remainingDebounceMs);
+    };
+    if (admission.action === "hold-supersession-pending") {
+      const protectedJob = activeAdvisorJobRef.current;
+      if (!protectedJob) {
+        dispatch();
+        return;
+      }
+      clearPendingAdvisorGenerationSupersession(
+        "superseded-by-newer-pending-candidate"
+      );
+      const operationId = createMeetingId(
+        "advisor_generation_supersession"
+      );
+      const pending: PendingAdvisorGenerationSupersession = {
+        operationId,
+        protectedJobId: protectedJob.id,
+        protectedLogicalQuestionUnit:
+          protectedJob.logicalQuestionUnit,
+        candidateJob: advisorJob,
+        candidateLogicalQuestionUnit: logicalQuestionUnit,
+        createdAt: Date.now(),
+        dispatch,
+      };
+      pendingAdvisorGenerationSupersessionRef.current = pending;
+      const metadata = {
+        generationSupersessionOperationId: operationId,
+        generationSupersessionStage: "candidate-arrived",
+        generationSupersessionDisposition: "supersession-pending",
+        generationSupersessionProtectedJobId: protectedJob.id,
+        generationSupersessionCandidateJobId: advisorJob.id,
+        generationSupersessionProtectedLogicalQuestionUnitId:
+          protectedJob.logicalQuestionUnit?.id,
+        generationSupersessionCandidateLogicalQuestionUnitId:
+          logicalQuestionUnit?.id,
+      };
+      if (traceId) {
+        traceStoreRef.current.updateMetadata(traceId, metadata);
+      }
+      sessionRecordingManagerRef.current?.recordCaptureLifecycle({
+        stage: "advisor-generation-supersession-candidate-arrived",
+        traceId,
+        taskId: advisorJob.expectedParentId,
+        ...metadata,
+      });
+      return;
+    }
+    dispatch();
+  }, [
+    activateAdvisorJob,
+    buildAdvisorJob,
+    clearPendingAdvisorGenerationSupersession,
+    runAdvisor,
+  ]);
 
   const publishCanonicalLogicalQuestionTarget = useCallback(
     ({

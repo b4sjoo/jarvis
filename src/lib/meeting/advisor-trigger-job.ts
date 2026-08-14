@@ -102,7 +102,10 @@ export interface AdvisorJobCommitDecision {
 }
 
 export interface AdvisorLogicalQuestionAuthorizationTarget {
-  source: "runtime-current" | "manual-correction-target";
+  source:
+    | "runtime-current"
+    | "manual-correction-target"
+    | "supersession-protected";
   logicalQuestionUnit?: LogicalQuestionUnit;
 }
 
@@ -110,11 +113,19 @@ export function resolveAdvisorLogicalQuestionAuthorizationTarget(input: {
   jobSource: AdvisorJobSource;
   runtimeCurrent?: LogicalQuestionUnit;
   manualCorrectionTarget?: LogicalQuestionUnit;
+  supersessionProtectedTarget?: LogicalQuestionUnit;
 }): AdvisorLogicalQuestionAuthorizationTarget {
   if (input.jobSource === "manual-correction") {
     return {
       source: "manual-correction-target",
       logicalQuestionUnit: input.manualCorrectionTarget,
+    };
+  }
+
+  if (input.supersessionProtectedTarget) {
+    return {
+      source: "supersession-protected",
+      logicalQuestionUnit: input.supersessionProtectedTarget,
     };
   }
 
