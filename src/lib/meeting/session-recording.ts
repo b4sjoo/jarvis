@@ -78,7 +78,7 @@ import {
 
 const SESSION_RECORDING_SCHEMA_VERSION = 1;
 const SESSION_RECORDING_INTEGRITY_SCHEMA_VERSION = 1;
-const SESSION_TRACE_SUMMARY_SCHEMA_VERSION = 36;
+const SESSION_TRACE_SUMMARY_SCHEMA_VERSION = 37;
 const SESSION_TRACE_INDEX_SCHEMA_VERSION = 1;
 const MAX_RECORDED_WRITE_FAILURES = 20;
 
@@ -986,6 +986,31 @@ export interface SessionCompactTraceSummary {
   responseLanguage?: string;
   modelRoute?: string;
   modelRouteReason?: string;
+  modelGeneration?: {
+    telemetryVersion?: number;
+    requestOrigin?: string;
+    providerId?: string;
+    modelId?: string;
+    route?: string;
+    streamingConfigured?: boolean;
+    timeoutMs?: number;
+    maxOutputTokens?: number;
+    responseLength?: string;
+    responseLanguage?: string;
+    promptContractId?: string;
+    promptContractVersion?: string;
+    configFingerprint?: string;
+    timingSemantics?: string;
+    networkFirstByteObservable?: boolean;
+    requestStartedAt?: number;
+    firstContentAt?: number;
+    firstVisiblePartialAt?: number;
+    completedAt?: number;
+    firstContentMs?: number;
+    firstVisiblePartialMs?: number;
+    durationMs?: number;
+    chunkCount?: number;
+  };
   answer?: {
     contractVersion?: string;
     profile?: string;
@@ -1023,6 +1048,9 @@ export interface SessionCompactTraceSummary {
     stateUpdate?: number;
     firstTokenFromTraceStart?: number;
     firstTokenFromModelStart?: number;
+    firstContentFromTraceStart?: number;
+    firstContentFromModelStart?: number;
+    firstVisiblePartialFromModelStart?: number;
   };
   payload: {
     audioBytes?: number;
@@ -4259,8 +4287,16 @@ export function buildCompactTraceSummary({
     ...collectTaskIdsFromTrace(trace),
   ]);
   const firstTokenAt =
+    readFirstNumberFromMetadata(
+      metadataSources,
+      "modelGenerationFirstContentAt"
+    ) ??
     readNumber(trace.metadata?.screenFirstTokenAt) ??
     readNumber(trace.metadata?.advisorFirstTokenAt);
+  const firstVisiblePartialAt = readFirstNumberFromMetadata(
+    metadataSources,
+    "modelGenerationFirstVisiblePartialAt"
+  );
 
   return {
     version: SESSION_TRACE_SUMMARY_SCHEMA_VERSION,
@@ -5577,6 +5613,97 @@ export function buildCompactTraceSummary({
     responseLanguage: readString(modelStep?.metadata?.responseLanguage),
     modelRoute: readFirstString(metadataSources, "modelRoute"),
     modelRouteReason: readFirstString(metadataSources, "modelRouteReason"),
+    modelGeneration: {
+      telemetryVersion: readFirstNumberFromMetadata(
+        metadataSources,
+        "modelGenerationTelemetryVersion"
+      ),
+      requestOrigin: readFirstString(
+        metadataSources,
+        "modelGenerationRequestOrigin"
+      ),
+      providerId: readFirstString(
+        metadataSources,
+        "modelGenerationProviderId"
+      ),
+      modelId: readFirstString(
+        metadataSources,
+        "modelGenerationModelId"
+      ),
+      route: readFirstString(metadataSources, "modelGenerationRoute"),
+      streamingConfigured: readFirstBoolean(
+        metadataSources,
+        "modelGenerationStreamingConfigured"
+      ),
+      timeoutMs: readFirstNumberFromMetadata(
+        metadataSources,
+        "modelGenerationTimeoutMs"
+      ),
+      maxOutputTokens: readFirstNumberFromMetadata(
+        metadataSources,
+        "modelGenerationMaxOutputTokens"
+      ),
+      responseLength: readFirstString(
+        metadataSources,
+        "modelGenerationResponseLength"
+      ),
+      responseLanguage: readFirstString(
+        metadataSources,
+        "modelGenerationResponseLanguage"
+      ),
+      promptContractId: readFirstString(
+        metadataSources,
+        "modelGenerationPromptContractId"
+      ),
+      promptContractVersion: readFirstString(
+        metadataSources,
+        "modelGenerationPromptContractVersion"
+      ),
+      configFingerprint: readFirstString(
+        metadataSources,
+        "modelGenerationConfigFingerprint"
+      ),
+      timingSemantics: readFirstString(
+        metadataSources,
+        "modelGenerationTimingSemantics"
+      ),
+      networkFirstByteObservable: readFirstBoolean(
+        metadataSources,
+        "modelGenerationNetworkFirstByteObservable"
+      ),
+      requestStartedAt: readFirstNumberFromMetadata(
+        metadataSources,
+        "modelGenerationRequestStartedAt"
+      ),
+      firstContentAt: readFirstNumberFromMetadata(
+        metadataSources,
+        "modelGenerationFirstContentAt"
+      ),
+      firstVisiblePartialAt: readFirstNumberFromMetadata(
+        metadataSources,
+        "modelGenerationFirstVisiblePartialAt"
+      ),
+      completedAt: readFirstNumberFromMetadata(
+        metadataSources,
+        "modelGenerationCompletedAt"
+      ),
+      firstContentMs: readFirstNumberFromMetadata(
+        metadataSources,
+        "modelGenerationFirstContentMs"
+      ),
+      firstVisiblePartialMs: readFirstNumberFromMetadata(
+        metadataSources,
+        "modelGenerationFirstVisiblePartialMs"
+      ),
+      durationMs: readFirstNumberFromMetadata(
+        metadataSources,
+        "modelGenerationDurationMs"
+      ),
+      chunkCount: readFirstNumberFromMetadata(
+        metadataSources,
+        "modelGenerationChunkCount"
+      ),
+    },
     answer: {
       contractVersion: readFirstString(
         metadataSources,
@@ -5640,6 +5767,18 @@ export function buildCompactTraceSummary({
       firstTokenFromModelStart:
         firstTokenAt && modelStep?.startedAt
           ? firstTokenAt - modelStep.startedAt
+          : undefined,
+      firstContentFromTraceStart:
+        firstTokenAt && trace.startedAt
+          ? firstTokenAt - trace.startedAt
+          : undefined,
+      firstContentFromModelStart:
+        firstTokenAt && modelStep?.startedAt
+          ? firstTokenAt - modelStep.startedAt
+          : undefined,
+      firstVisiblePartialFromModelStart:
+        firstVisiblePartialAt && modelStep?.startedAt
+          ? firstVisiblePartialAt - modelStep.startedAt
           : undefined,
     },
     payload: {

@@ -142,6 +142,7 @@ import {
   MeetingTrace,
   MeetingTraceExportRecord,
   MeetingTraceExportTrigger,
+  MEETING_ADVISOR_PROMPT_CONTRACT_VERSION,
   MeetingModelRequestOptions,
   MeetingModelProviderSnapshot,
   PENDING_CONFIRMATION_TTL_MS,
@@ -219,6 +220,7 @@ import {
   extractScreenTaskQuestion,
   isShortConfirmationLike,
   buildMeetingAnswerSummary,
+  buildModelGenerationIdentityForTrace,
   CaptureLifecycleCoordinator,
   authorizeNativeAudioLifecycleEvent,
   buildUnresolvedNativeAudioManualRecoveryMetadata,
@@ -245,6 +247,7 @@ import {
   parseNativeAudioSegmentDroppedEvent,
   buildMemoryEvaluationTraceMetadata,
   formatMeetingAnswerTraceMetadata,
+  formatModelGenerationTimingForTrace,
   formatAnswerGenerationLeaseForTrace,
   formatStableAnswerCommitForTrace,
   formatStagedAnswerDeliveryForTrace,
@@ -9990,6 +9993,25 @@ export function useMeetingAssistant() {
       formatMeetingModelRouteForTrace(advisorModelRoute);
     const advisorModelRequestOptions =
       getMeetingModelRequestOptions(advisorModelRoute);
+    const advisorModelGenerationIdentity =
+      buildModelGenerationIdentityForTrace({
+        requestOrigin: "advisor",
+        providerId: advisorModelRoute.resolvedProviderId,
+        modelId: readSelectedProviderModelId(
+          advisorModelRoute.selectedProvider
+        ),
+        modelRoute: advisorModelRoute.route,
+        streamingConfigured: Boolean(
+          advisorModelRoute.provider?.streaming
+        ),
+        requestOptions: advisorModelRequestOptions,
+        responseConfig,
+        promptContractId:
+          settledExecutionPlan?.promptContract.contractId ??
+          `meeting-answer:${advisorAnswerProfile}`,
+        promptContractVersion:
+          MEETING_ADVISOR_PROMPT_CONTRACT_VERSION,
+      });
     generationAuthorizedArtifacts =
       advisorJob.source === "force-advise"
         ? ["answer"]
@@ -10059,6 +10081,7 @@ export function useMeetingAssistant() {
       traceStoreRef.current.updateMetadata(traceId, {
         ...responseOwnerMetadata,
         ...advisorModelRouteMetadata,
+        ...advisorModelGenerationIdentity,
         ...formatRefreshAuthorityForTrace(
           advisorJob.refreshAuthority
         ),
@@ -10711,6 +10734,9 @@ export function useMeetingAssistant() {
 
     let finalContent = "";
     let advisorModelPromptText = "";
+    let advisorModelRequestStartedAt: number | undefined;
+    let advisorModelFirstContentAt: number | undefined;
+    let advisorModelCompletedAt: number | undefined;
     const stagedAnswerDeliveryExplicitRequest =
       advisorJob.source !== "live-turn";
     let stagedAnswerDeliveryChunkCount = 0;
@@ -10821,6 +10847,7 @@ export function useMeetingAssistant() {
           ? {
               onRequest: (input) => {
                 const modelRequestStartedAt = Date.now();
+                advisorModelRequestStartedAt = modelRequestStartedAt;
                 advisorModelPromptText = formatTraceModelInput(
                   input.systemPrompt,
                   input.userMessage
@@ -10852,6 +10879,11 @@ export function useMeetingAssistant() {
                     }
                   ),
                   ...advisorPromptEnvelopeMetadata,
+                  ...advisorModelGenerationIdentity,
+                  ...formatModelGenerationTimingForTrace({
+                    requestStartedAt: advisorModelRequestStartedAt,
+                    chunkCount: stagedAnswerDeliveryChunkCount,
+                  }),
                 });
                 traceStoreRef.current.recordInput(
                   traceId,
@@ -10911,11 +10943,29 @@ export function useMeetingAssistant() {
                 );
               },
               onFirstToken: () => {
+                advisorModelFirstContentAt ??= Date.now();
                 traceStoreRef.current.updateMetadata(traceId, {
-                  advisorFirstTokenAt: Date.now(),
+                  advisorFirstTokenAt: advisorModelFirstContentAt,
+                  advisorFirstContentAt: advisorModelFirstContentAt,
+                  ...formatModelGenerationTimingForTrace({
+                    requestStartedAt: advisorModelRequestStartedAt,
+                    firstContentAt: advisorModelFirstContentAt,
+                    chunkCount: stagedAnswerDeliveryChunkCount,
+                  }),
                 });
               },
               onComplete: (output) => {
+                advisorModelCompletedAt = Date.now();
+                traceStoreRef.current.updateMetadata(traceId, {
+                  ...formatModelGenerationTimingForTrace({
+                    requestStartedAt: advisorModelRequestStartedAt,
+                    firstContentAt: advisorModelFirstContentAt,
+                    firstVisiblePartialAt:
+                      stagedAnswerDeliveryFirstVisiblePartialAt,
+                    completedAt: advisorModelCompletedAt,
+                    chunkCount: stagedAnswerDeliveryChunkCount,
+                  }),
+                });
                 traceStoreRef.current.recordOutput(
                   traceId,
                   "advisor raw output",
@@ -10957,22 +11007,31 @@ export function useMeetingAssistant() {
         if (stagedPartialDecision.visible) {
           if (
             stagedPartialDecision.startsVisibleStream ||
-            (!stagedAnswerDeliveryFirstVisiblePartialAt &&
-              stagedAnswerDeliveryExplicitRequest)
+            !stagedAnswerDeliveryFirstVisiblePartialAt
           ) {
             stagedAnswerDeliveryFirstVisiblePartialAt = Date.now();
             if (traceId) {
               traceStoreRef.current.updateMetadata(
                 traceId,
-                formatStagedAnswerDeliveryForTrace({
-                  explicitRequest:
-                    stagedAnswerDeliveryExplicitRequest,
-                  chunkCount: stagedAnswerDeliveryChunkCount,
-                  firstChunkAt: stagedAnswerDeliveryFirstChunkAt,
-                  firstVisiblePartialAt:
-                    stagedAnswerDeliveryFirstVisiblePartialAt,
-                  visibleStreamStarted: true,
-                })
+                {
+                  ...formatStagedAnswerDeliveryForTrace({
+                    explicitRequest:
+                      stagedAnswerDeliveryExplicitRequest,
+                    chunkCount: stagedAnswerDeliveryChunkCount,
+                    firstChunkAt: stagedAnswerDeliveryFirstChunkAt,
+                    firstVisiblePartialAt:
+                      stagedAnswerDeliveryFirstVisiblePartialAt,
+                    visibleStreamStarted: true,
+                  }),
+                  ...formatModelGenerationTimingForTrace({
+                    requestStartedAt: advisorModelRequestStartedAt,
+                    firstContentAt: advisorModelFirstContentAt,
+                    firstVisiblePartialAt:
+                      stagedAnswerDeliveryFirstVisiblePartialAt,
+                    completedAt: advisorModelCompletedAt,
+                    chunkCount: stagedAnswerDeliveryChunkCount,
+                  }),
+                }
               );
             }
           }
@@ -11987,6 +12046,15 @@ export function useMeetingAssistant() {
             firstVisiblePartialAt:
               stagedAnswerDeliveryFirstVisiblePartialAt,
             visibleStreamStarted: stagedAnswerDeliveryVisible,
+          }),
+          ...advisorModelGenerationIdentity,
+          ...formatModelGenerationTimingForTrace({
+            requestStartedAt: advisorModelRequestStartedAt,
+            firstContentAt: advisorModelFirstContentAt,
+            firstVisiblePartialAt:
+              stagedAnswerDeliveryFirstVisiblePartialAt,
+            completedAt: advisorModelCompletedAt,
+            chunkCount: stagedAnswerDeliveryChunkCount,
           }),
         });
         traceStoreRef.current.finishTrace(traceId, "success");
@@ -21594,6 +21662,9 @@ export function useMeetingAssistant() {
         const screenUsesCodingModel =
           settledScreenQuestionType === "coding" ||
           screenRuntimePlaybook?.id === "coding_algorithm";
+        const screenAnswerProfile = resolveMeetingAnswerProfile(
+          settledScreenTaskKind
+        );
         const screenModelRoute = resolveMeetingModelRoute({
           useCodingModel: screenUsesCodingModel,
           requiresVision: true,
@@ -21603,6 +21674,23 @@ export function useMeetingAssistant() {
           formatMeetingModelRouteForTrace(screenModelRoute);
         const screenModelRequestOptions =
           getMeetingModelRequestOptions(screenModelRoute);
+        const screenModelGenerationIdentity =
+          buildModelGenerationIdentityForTrace({
+            requestOrigin: "screen",
+            providerId: screenModelRoute.resolvedProviderId,
+            modelId: readSelectedProviderModelId(
+              screenModelRoute.selectedProvider
+            ),
+            modelRoute: screenModelRoute.route,
+            streamingConfigured: Boolean(
+              screenModelRoute.provider?.streaming
+            ),
+            requestOptions: screenModelRequestOptions,
+            responseConfig: state.settings.response,
+            promptContractId: `meeting-answer:${screenAnswerProfile}`,
+            promptContractVersion:
+              MEETING_ADVISOR_PROMPT_CONTRACT_VERSION,
+          });
         screenGenerationRequestedArtifacts =
           resolveScreenGenerationRequestedArtifacts(
             screenPhaseDecision.requiredArtifacts
@@ -21698,6 +21786,7 @@ export function useMeetingAssistant() {
           trace.id,
           {
             ...screenModelRouteMetadata,
+            ...screenModelGenerationIdentity,
             ...formatAnswerGenerationLeaseForTrace(
               screenGenerationLease,
               screenLeaseStartAuthorization,
@@ -21768,6 +21857,9 @@ export function useMeetingAssistant() {
         let screenStagedChunkCount = 0;
         let screenStagedFirstChunkAt: number | undefined;
         let screenStagedFirstVisiblePartialAt: number | undefined;
+        let screenModelRequestStartedAt: number | undefined;
+        let screenModelFirstContentAt: number | undefined;
+        let screenModelCompletedAt: number | undefined;
         let screenStagedVisible = false;
         const clearScreenStagedPartial = (reason: string) => {
           if (!screenStagedVisible) return;
@@ -21829,6 +21921,7 @@ export function useMeetingAssistant() {
             trace: {
               onRequest: (input) => {
                 const modelRequestStartedAt = Date.now();
+                screenModelRequestStartedAt = modelRequestStartedAt;
                 screenModelPromptText = formatTraceModelInput(
                   input.systemPrompt,
                   input.userMessage
@@ -21845,6 +21938,11 @@ export function useMeetingAssistant() {
                     responseConfig: input.responseConfig,
                     requestOptions: input.requestOptions,
                     ...screenModelRouteMetadata,
+                    ...screenModelGenerationIdentity,
+                    ...formatModelGenerationTimingForTrace({
+                      requestStartedAt: screenModelRequestStartedAt,
+                      chunkCount: screenStagedChunkCount,
+                    }),
                     ...formatSourceOwnedTransitionForTrace(
                       screenSourceOwnedTransitionResult,
                       {
@@ -21888,11 +21986,29 @@ export function useMeetingAssistant() {
                 );
               },
               onFirstToken: () => {
+                screenModelFirstContentAt ??= Date.now();
                 traceStoreRef.current.updateMetadata(trace.id, {
-                  screenFirstTokenAt: Date.now(),
+                  screenFirstTokenAt: screenModelFirstContentAt,
+                  screenFirstContentAt: screenModelFirstContentAt,
+                  ...formatModelGenerationTimingForTrace({
+                    requestStartedAt: screenModelRequestStartedAt,
+                    firstContentAt: screenModelFirstContentAt,
+                    chunkCount: screenStagedChunkCount,
+                  }),
                 });
               },
               onComplete: (output) => {
+                screenModelCompletedAt = Date.now();
+                traceStoreRef.current.updateMetadata(trace.id, {
+                  ...formatModelGenerationTimingForTrace({
+                    requestStartedAt: screenModelRequestStartedAt,
+                    firstContentAt: screenModelFirstContentAt,
+                    firstVisiblePartialAt:
+                      screenStagedFirstVisiblePartialAt,
+                    completedAt: screenModelCompletedAt,
+                    chunkCount: screenStagedChunkCount,
+                  }),
+                });
                 traceStoreRef.current.recordOutput(
                   trace.id,
                   "screen model raw output",
@@ -21946,14 +22062,25 @@ export function useMeetingAssistant() {
                   screenStagedFirstVisiblePartialAt = Date.now();
                   traceStoreRef.current.updateMetadata(
                     trace.id,
-                    formatStagedAnswerDeliveryForTrace({
-                      explicitRequest: true,
-                      chunkCount: screenStagedChunkCount,
-                      firstChunkAt: screenStagedFirstChunkAt,
-                      firstVisiblePartialAt:
-                        screenStagedFirstVisiblePartialAt,
-                      visibleStreamStarted: true,
-                    })
+                    {
+                      ...formatStagedAnswerDeliveryForTrace({
+                        explicitRequest: true,
+                        chunkCount: screenStagedChunkCount,
+                        firstChunkAt: screenStagedFirstChunkAt,
+                        firstVisiblePartialAt:
+                          screenStagedFirstVisiblePartialAt,
+                        visibleStreamStarted: true,
+                      }),
+                      ...formatModelGenerationTimingForTrace({
+                        requestStartedAt:
+                          screenModelRequestStartedAt,
+                        firstContentAt: screenModelFirstContentAt,
+                        firstVisiblePartialAt:
+                          screenStagedFirstVisiblePartialAt,
+                        completedAt: screenModelCompletedAt,
+                        chunkCount: screenStagedChunkCount,
+                      }),
+                    }
                   );
                 }
                 screenStagedVisible = true;
@@ -21999,9 +22126,6 @@ export function useMeetingAssistant() {
           return;
         }
 
-        const screenAnswerProfile = resolveMeetingAnswerProfile(
-          settledScreenTaskKind
-        );
         let parsedScreenMeetingAnswer = parseMeetingAnswer(screenTaskContent, {
           expectedProfile: screenAnswerProfile,
         });
@@ -22957,6 +23081,15 @@ export function useMeetingAssistant() {
             firstVisiblePartialAt:
               screenStagedFirstVisiblePartialAt,
             visibleStreamStarted: screenStagedVisible,
+          }),
+          ...screenModelGenerationIdentity,
+          ...formatModelGenerationTimingForTrace({
+            requestStartedAt: screenModelRequestStartedAt,
+            firstContentAt: screenModelFirstContentAt,
+            firstVisiblePartialAt:
+              screenStagedFirstVisiblePartialAt,
+            completedAt: screenModelCompletedAt,
+            chunkCount: screenStagedChunkCount,
           }),
         });
         if (

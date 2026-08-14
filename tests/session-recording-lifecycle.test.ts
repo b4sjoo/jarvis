@@ -752,7 +752,7 @@ test("records whiteboard validation and recovery artifacts", async () => {
   );
   assert.ok(summaryWrite);
   const summary = parsePayload(summaryWrite);
-  assert.equal(summary.version, 36);
+  assert.equal(summary.version, 37);
   assert.deepEqual(summary.whiteboard, {
     artifactId: "whiteboard_1",
     revision: 1,
@@ -1717,7 +1717,7 @@ test("compact trace summaries preserve task boundary and cross-domain evidence",
   );
   assert.ok(summaryWrite);
   const summary = parsePayload(summaryWrite);
-  assert.equal(summary.version, 36);
+  assert.equal(summary.version, 37);
   assert.equal(summary.taskRelation, "new-parent");
   assert.equal(summary.logicalQuestionUnitRevision, 3);
   assert.equal(summary.phaseSignal, "assumption-authorized");
@@ -1938,7 +1938,7 @@ test("compact trace summaries preserve bounded STT request evidence", async () =
   );
   assert.ok(summaryWrite);
   const summary = parsePayload(summaryWrite);
-  assert.equal(summary.version, 36);
+  assert.equal(summary.version, 37);
   assert.equal(
     (summary.timingsMs as Record<string, unknown>).stt,
     1_580
@@ -2080,7 +2080,7 @@ test("refreshes compact STT lifecycle evidence after a late provider abort", asy
   );
   assert.ok(summaryWrites.length >= 2);
   const summary = parsePayload(summaryWrites[summaryWrites.length - 1]!);
-  assert.equal(summary.version, 36);
+  assert.equal(summary.version, 37);
   assert.equal(
     (summary.sttRequest as Record<string, unknown>).abortRequested,
     true
@@ -2145,7 +2145,7 @@ test("compact trace summaries preserve hard memory invalidation evidence", async
   );
   assert.ok(summaryWrite);
   const summary = parsePayload(summaryWrite);
-  assert.equal(summary.version, 36);
+  assert.equal(summary.version, 37);
   const memory = summary.memory as Record<string, unknown>;
   assert.equal(memory.authorityRevision, 2);
   assert.equal(memory.invalidationKind, "hard");
@@ -2353,6 +2353,28 @@ test("records compact current-question settlement and execution-plan evidence", 
       settledExecutionPlanAuthorizationReason: "authorized",
       settledExecutionPlanAuthorizationStage: "plan-created",
       settledExecutionPlanRejectionReasons: [],
+      modelGenerationTelemetryVersion: 1,
+      modelGenerationRequestOrigin: "advisor",
+      modelGenerationProviderId: "main-provider",
+      modelGenerationModelId: "gemini-2.5-pro",
+      modelGenerationRoute: "main",
+      modelGenerationStreamingConfigured: true,
+      modelGenerationTimeoutMs: 30_000,
+      modelGenerationMaxOutputTokens: 4_096,
+      modelGenerationPromptContractId: "meeting-answer:system-design",
+      modelGenerationPromptContractVersion: "meeting-advisor-prompt-v1",
+      modelGenerationConfigFingerprint: "abc12345",
+      modelGenerationTimingSemantics:
+        "first-content-not-network-first-byte",
+      modelGenerationNetworkFirstByteObservable: false,
+      modelGenerationRequestStartedAt: 1_000,
+      modelGenerationFirstContentAt: 1_250,
+      modelGenerationFirstVisiblePartialAt: 1_400,
+      modelGenerationCompletedAt: 1_900,
+      modelGenerationFirstContentMs: 250,
+      modelGenerationFirstVisiblePartialMs: 400,
+      modelGenerationDurationMs: 900,
+      modelGenerationChunkCount: 4,
       boundedRecentHistoryDecision: "authorized",
       boundedRecentHistoryReason: "authorized-deictic-followup",
       boundedRecentHistoryContextReadScope: "bounded-recent-history",
@@ -2406,7 +2428,7 @@ test("records compact current-question settlement and execution-plan evidence", 
   assert.equal(serializedPlan.includes("taskSnapshot"), false);
   assert.equal(serializedPlan.includes("variables"), false);
   const summary = parsePayload(summaryWrite);
-  assert.equal(summary.version, 36);
+  assert.equal(summary.version, 37);
   assert.equal(
     (
       summary.currentQuestionSettlement as Record<string, unknown>
@@ -2432,6 +2454,29 @@ test("records compact current-question settlement and execution-plan evidence", 
       .contextReadScope,
     "active-parent-read"
   );
+  assert.deepEqual(summary.modelGeneration, {
+    telemetryVersion: 1,
+    requestOrigin: "advisor",
+    providerId: "main-provider",
+    modelId: "gemini-2.5-pro",
+    route: "main",
+    streamingConfigured: true,
+    timeoutMs: 30_000,
+    maxOutputTokens: 4_096,
+    promptContractId: "meeting-answer:system-design",
+    promptContractVersion: "meeting-advisor-prompt-v1",
+    configFingerprint: "abc12345",
+    timingSemantics: "first-content-not-network-first-byte",
+    networkFirstByteObservable: false,
+    requestStartedAt: 1_000,
+    firstContentAt: 1_250,
+    firstVisiblePartialAt: 1_400,
+    completedAt: 1_900,
+    firstContentMs: 250,
+    firstVisiblePartialMs: 400,
+    durationMs: 900,
+    chunkCount: 4,
+  });
   assert.equal(
     (summary.boundedRecentHistory as Record<string, unknown>)
       .contextReadScope,
@@ -2522,7 +2567,7 @@ test("records a current-question term correction without copying provider state"
     false
   );
   const summary = parsePayload(summaryWrite);
-  assert.equal(summary.version, 36);
+  assert.equal(summary.version, 37);
   assert.equal(
     summary.manualTermCorrectionId,
     "term_correction_hnsw"
@@ -2693,7 +2738,7 @@ test("records preparation provenance, use receipts, and answer-bound feedback", 
   );
   assert.ok(summaryWrite);
   const summary = parsePayload(summaryWrite);
-  assert.equal(summary.version, 36);
+  assert.equal(summary.version, 37);
   assert.equal(
     summary.preparationContextRevision,
     receipt.preparationContextRevision
