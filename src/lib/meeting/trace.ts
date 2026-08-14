@@ -790,30 +790,43 @@ function summarizeShortIntent(
       (value) => value.shortHighInformationAllowed === true
     ),
     residualShortIntentAdjudicationCount: count(
-      (value) => value.residualShortIntentAdjudicationRequired === true
+      (value) =>
+        value.residualResponseOpportunityInferenceRequired === true ||
+        value.residualShortIntentAdjudicationRequired === true
     ),
     residualShortIntentIgnoreCount: count(
       (value) =>
-        value.shortIntentGateDecisionApplied === true &&
-        value.shortIntentGateAppliedAction === "ignore"
+        value.responseOpportunityDecision === "no-output-request" ||
+        (value.shortIntentGateDecisionApplied === true &&
+          value.shortIntentGateAppliedAction === "ignore")
     ),
     residualShortIntentAnswerCount: count(
       (value) =>
-        value.shortIntentGateDecisionApplied === true &&
-        value.shortIntentGateAppliedAction === "answer"
+        value.responseOpportunityReleased === true ||
+        (value.shortIntentGateDecisionApplied === true &&
+          value.shortIntentGateAppliedAction === "answer")
     ),
     intentGateBudgetExhaustedCount: count(
-      (value) => value.shortIntentGateBudgetExhausted === true
+      (value) =>
+        value.responseOpportunityBudgetExhausted === true ||
+        value.shortIntentGateBudgetExhausted === true
     ),
     intentGateTimeoutCount: count(
-      (value) => value.shortIntentGateTimedOut === true
+      (value) =>
+        value.responseOpportunityTimedOut === true ||
+        value.shortIntentGateTimedOut === true
     ),
     intentGateDecisionAppliedCount: count(
-      (value) => value.shortIntentGateDecisionApplied === true
+      (value) =>
+        value.responseOpportunityDecisionApplied === true ||
+        value.shortIntentGateDecisionApplied === true
     ),
     intentGateDurationMs: summarizeValues(
       metadata
-        .map((value) => readNumber(value.shortIntentGateDurationMs))
+        .map((value) =>
+          readNumber(value.responseOpportunityDurationMs) ??
+          readNumber(value.shortIntentGateDurationMs)
+        )
         .filter(isNumber)
     ),
   };

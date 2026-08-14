@@ -2,21 +2,21 @@ import { fetchAIResponse } from "@/lib/functions/ai-response.function";
 import type { TYPE_PROVIDER } from "@/types";
 import type { SelectedProviderState } from "./types.js";
 import {
-  buildShortIntentGatePrompts,
-  parseShortIntentGateOutput,
-  type ShortIntentGateParseResult,
-  type ShortIntentGateRequest,
+  buildResponseOpportunityPrompts,
+  parseResponseOpportunityOutput,
+  type ResponseOpportunityParseResult,
+  type ResponseOpportunityRequest,
 } from "./short-intent-gate.js";
 import { getRuntimeInferenceOperationDefinition } from "./runtime-inference.js";
 import { classifyTaxonomyAdjudicationProviderOutput } from "./taxonomy-adjudication-response.js";
 
 const OPERATION = getRuntimeInferenceOperationDefinition(
-  "short-intent-gate"
+  "response-opportunity-inference"
 );
 
-export interface ShortIntentGateRequestResult {
+export interface ResponseOpportunityRequestResult {
   rawOutput: string;
-  parsed: ShortIntentGateParseResult;
+  parsed: ResponseOpportunityParseResult;
   providerDisposition:
     | "completed-with-content"
     | "completed-empty"
@@ -27,14 +27,14 @@ export interface ShortIntentGateRequestResult {
   completedAt: number;
 }
 
-export async function requestShortIntentGate(input: {
-  request: ShortIntentGateRequest;
+export async function requestResponseOpportunity(input: {
+  request: ResponseOpportunityRequest;
   provider: TYPE_PROVIDER | undefined;
   selectedProvider: SelectedProviderState;
   signal: AbortSignal;
   onFirstToken?: (at: number) => void;
-}): Promise<ShortIntentGateRequestResult> {
-  const prompts = buildShortIntentGatePrompts(input.request);
+}): Promise<ResponseOpportunityRequestResult> {
+  const prompts = buildResponseOpportunityPrompts(input.request);
   const responseStream = fetchAIResponse({
     provider: input.provider,
     selectedProvider: input.selectedProvider,
@@ -58,20 +58,23 @@ export async function requestShortIntentGate(input: {
     rawOutput += chunk;
   }
   if (input.signal.aborted) {
-    throw new DOMException("Short intent gate aborted", "AbortError");
+    throw new DOMException(
+      "Response opportunity inference aborted",
+      "AbortError"
+    );
   }
 
   const providerDisposition =
     classifyTaxonomyAdjudicationProviderOutput(rawOutput);
   const parsed =
     providerDisposition === "completed-with-content"
-      ? parseShortIntentGateOutput(rawOutput, input.request)
+      ? parseResponseOpportunityOutput(rawOutput, input.request)
       : ({
           ok: false,
           reason: providerDisposition,
           errorKind: "provider",
           evidenceSpansValid: false,
-        } satisfies ShortIntentGateParseResult);
+        } satisfies ResponseOpportunityParseResult);
   return {
     rawOutput,
     parsed,

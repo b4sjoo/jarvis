@@ -40,8 +40,8 @@ test("registers each atomic runtime operation with an isolated policy", () => {
   const questionType = getRuntimeInferenceOperationDefinition(
     "question-type-adjudication"
   );
-  const shortIntent = getRuntimeInferenceOperationDefinition(
-    "short-intent-gate"
+  const responseOpportunity = getRuntimeInferenceOperationDefinition(
+    "response-opportunity-inference"
   );
   const metadata = getRuntimeInferenceOperationDefinition(
     "meeting-metadata-inference"
@@ -59,10 +59,10 @@ test("registers each atomic runtime operation with an isolated policy", () => {
   assert.equal(questionType.timeoutMs, 3_000);
   assert.equal(questionType.maxOutputTokens, 128);
   assert.equal(questionType.quiescenceMs, 350);
-  assert.equal(shortIntent.lane, "critical");
-  assert.equal(shortIntent.timeoutMs, 1_500);
-  assert.equal(shortIntent.maxOutputTokens, 96);
-  assert.equal(shortIntent.quiescenceMs, 0);
+  assert.equal(responseOpportunity.lane, "critical");
+  assert.equal(responseOpportunity.timeoutMs, 1_500);
+  assert.equal(responseOpportunity.maxOutputTokens, 96);
+  assert.equal(responseOpportunity.quiescenceMs, 0);
   assert.equal(metadata.lane, "background");
   assert.equal(whiteboard.timeoutMs, 3_000);
   assert.equal(whiteboard.maxOutputTokens, 768);
@@ -122,10 +122,10 @@ test("isolates quota consumption by operation", async () => {
     RuntimeInferenceRuntimeJob,
     string
   >("task-relation-adjudication");
-  const shortIntent = new RuntimeInferenceOperationRuntime<
+  const responseOpportunity = new RuntimeInferenceOperationRuntime<
     RuntimeInferenceRuntimeJob,
     string
-  >("short-intent-gate");
+  >("response-opportunity-inference");
   const settlements: string[] = [];
 
   const schedule = (
@@ -170,8 +170,11 @@ test("isolates quota consumption by operation", async () => {
     runtimeJob("task-relation-adjudication", "task-relation-1")
   );
   schedule(
-    shortIntent,
-    runtimeJob("short-intent-gate", "short-intent-1")
+    responseOpportunity,
+    runtimeJob(
+      "response-opportunity-inference",
+      "response-opportunity-1"
+    )
   );
   await new Promise((resolve) => setTimeout(resolve, 15));
 
@@ -181,7 +184,7 @@ test("isolates quota consumption by operation", async () => {
     "meeting-metadata-inference:completed",
     "question-type-adjudication:completed",
     "task-relation-adjudication:completed",
-    "short-intent-gate:completed",
+    "response-opportunity-inference:completed",
   ]);
 });
 

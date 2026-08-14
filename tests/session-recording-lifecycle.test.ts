@@ -932,6 +932,16 @@ test("session summaries retain answer delivery and artifact stability evidence",
       renderedCodeArtifactRevision: 1,
       answerDwellMs: 5_400,
       advisorIntentAuthoritySource: "runtime-intent-gate",
+      responseOpportunityLocalDisposition: "runtime-required",
+      residualResponseOpportunityInferenceRequired: true,
+      responseOpportunityDisposition: "completed",
+      responseOpportunityDecision: "output-request",
+      responseOpportunityConfidence: 0.96,
+      responseOpportunityReleased: true,
+      responseOpportunityReleaseReason:
+        "high-confidence-output-request",
+      responseOpportunityDecisionApplied: true,
+      responseOpportunityDurationMs: 810,
       shortIntentLocalDisposition: "runtime-required",
       residualShortIntentAdjudicationRequired: true,
       shortIntentGateDisposition: "completed",
@@ -974,6 +984,12 @@ test("session summaries retain answer delivery and artifact stability evidence",
   assert.equal(compact.artifactCacheDisposition, "replaced");
   assert.equal(compact.renderedCodeArtifactRevision, 1);
   assert.equal(compact.advisorIntentAuthoritySource, "runtime-intent-gate");
+  assert.equal(compact.responseOpportunityDecision, "output-request");
+  assert.equal(compact.responseOpportunityReleased, true);
+  assert.equal(
+    compact.responseOpportunityReleaseReason,
+    "high-confidence-output-request"
+  );
   assert.equal(compact.shortIntentGateAppliedAction, "answer");
 
   const sessionSummaryCalls = native.calls.filter(

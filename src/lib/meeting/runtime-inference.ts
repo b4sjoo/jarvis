@@ -3,7 +3,7 @@ export type ModelWorkloadClass = "runtime" | "advisor" | "complex";
 export type RuntimeInferenceOperationKind =
   | "taxonomy-adjudication"
   | "question-type-adjudication"
-  | "short-intent-gate"
+  | "response-opportunity-inference"
   | "meeting-metadata-inference"
   | "whiteboard-syntax-repair"
   | "task-relation-adjudication";
@@ -70,9 +70,9 @@ const DEFINITIONS: Record<
     quiescenceMs: 350,
     maxStartsPerBudgetSlot: 1,
   },
-  "short-intent-gate": {
+  "response-opportunity-inference": {
     workloadClass: "runtime",
-    operationKind: "short-intent-gate",
+    operationKind: "response-opportunity-inference",
     lane: "critical",
     timeoutMs: 1_500,
     maxOutputTokens: 96,

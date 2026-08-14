@@ -1,70 +1,62 @@
+import type { AdvisorTurnIntentDecision } from "./advisor-turn-intent.js";
 import type { LogicalQuestionUnit } from "./logical-question-unit.js";
 import type { RuntimeInferenceRuntimeJob } from "./runtime-inference-runtime.js";
-import type { TaxonomyAdjudicationLease } from "./taxonomy-adjudication.js";
 import { calculateWordEquivalent } from "./transcript-fusion.js";
-import type { ActiveMeetingTask } from "./active-meeting-task.js";
-import type { TranscriptTurn } from "./types.js";
-import type {
-  AdvisorTurnIntentDecision,
-} from "./advisor-turn-intent.js";
 
-export const SHORT_INTENT_GATE_SCHEMA_VERSION = 1;
-export const SHORT_INTENT_GATE_PROMPT_VERSION = "short-intent-gate-v1";
-export const SHORT_INTENT_GATE_MAX_OUTPUT_CHARS = 1_024;
-export const SHORT_INTENT_GATE_MAX_CONTEXT_TURNS = 2;
-export const SHORT_INTENT_GATE_SESSION_START_LIMIT = 120;
+export const RESPONSE_OPPORTUNITY_SCHEMA_VERSION = 2;
+export const RESPONSE_OPPORTUNITY_PROMPT_VERSION =
+  "response-opportunity-v2";
+export const RESPONSE_OPPORTUNITY_MAX_OUTPUT_CHARS = 1_024;
+export const RESPONSE_OPPORTUNITY_SESSION_START_LIMIT = 120;
+export const RESPONSE_OPPORTUNITY_RELEASE_MIN_CONFIDENCE = 0.85;
+export const RESPONSE_OPPORTUNITY_MAX_SOURCE_CHARS = 1_800;
+export const RESPONSE_OPPORTUNITY_PROPOSAL_TTL_MS = 30_000;
 
-export type ShortIntentGateAction =
-  | "ignore"
-  | "append-context"
-  | "answer";
+export type ResponseOpportunityDecision =
+  | "output-request"
+  | "no-output-request"
+  | "unclear";
 
-export type ShortIntentLocalDisposition =
-  | "not-short"
-  | "deterministic-ignore"
-  | "deterministic-append"
-  | "deterministic-answer"
+export type ResponseOpportunityLocalDisposition =
+  | "deterministic-no-output"
+  | "deterministic-output"
   | "runtime-required";
 
-export interface ShortIntentLocalDecision {
-  disposition: ShortIntentLocalDisposition;
+export interface ResponseOpportunityLocalDecision {
+  disposition: ResponseOpportunityLocalDisposition;
   reason: string;
   wordEquivalent: number;
-  highInformation: boolean;
+  decision: ResponseOpportunityDecision;
 }
 
-export interface ShortIntentGateRequest {
-  schemaVersion: 1;
+export interface ResponseOpportunitySourceSpan {
+  turnId: string;
+  text: string;
+}
+
+export interface ResponseOpportunityRequest {
+  schemaVersion: 2;
   promptVersion: string;
   logicalQuestionUnitId: string;
   logicalQuestionUnitRevision: number;
-  currentTurn: {
-    turnId: string;
-    text: string;
-  };
-  contextTurns: Array<{
-    turnId: string;
-    speaker: TranscriptTurn["speaker"];
-    text: string;
-  }>;
-  pendingConfirmation: boolean;
-  activeTask?: {
-    questionType: string;
-    topic: string;
-  };
+  currentTurnId: string;
+  sourceHash: string;
+  sourceSpans: ResponseOpportunitySourceSpan[];
+  manualForceAdvise: boolean;
 }
 
-export interface LlmShortIntentGateDecision {
-  schemaVersion: 1;
-  action: ShortIntentGateAction;
+export interface LlmResponseOpportunityDecision {
+  schemaVersion: 2;
+  decision: ResponseOpportunityDecision;
   confidence: number;
-  evidenceSpans: string[];
+  evidenceSpans: ResponseOpportunitySourceSpan[];
+  reason: string;
 }
 
-export type ShortIntentGateParseResult =
+export type ResponseOpportunityParseResult =
   | {
       ok: true;
-      value: LlmShortIntentGateDecision;
+      value: LlmResponseOpportunityDecision;
       evidenceSpansValid: true;
     }
   | {
@@ -74,15 +66,50 @@ export type ShortIntentGateParseResult =
       evidenceSpansValid: boolean;
     };
 
-export interface ShortIntentGateJob extends RuntimeInferenceRuntimeJob {
-  traceId: string;
-  lease: TaxonomyAdjudicationLease;
-  request: ShortIntentGateRequest;
-  sourceTurnId: string;
-  sourceTextHash: string;
+export interface ResponseOpportunityLease {
+  operationId: string;
+  sessionId: string;
+  runtimeEpoch: number;
+  logicalQuestionUnitId: string;
+  logicalQuestionUnitRevision: number;
+  sourceHash: string;
+  manualCorrectionRevision: number;
+  createdAt: number;
 }
 
-export interface ShortIntentGateSessionBudgetDecision {
+export interface ResponseOpportunityJob extends RuntimeInferenceRuntimeJob {
+  traceId: string;
+  lease: ResponseOpportunityLease;
+  request: ResponseOpportunityRequest;
+  sourceTurnId: string;
+}
+
+export interface ResponseOpportunityProposal {
+  operationId: string;
+  snapshotId: string;
+  logicalQuestionUnitId: string;
+  logicalQuestionRevision: number;
+  decision: ResponseOpportunityDecision;
+  confidence: number;
+  evidenceSpans: ResponseOpportunitySourceSpan[];
+  source: "runtime-llm";
+  capability: "settlement-proposal";
+  disposition: "success";
+  createdAt: number;
+  expiresAt: number;
+}
+
+export interface ResponseOpportunityReleaseDecision {
+  released: boolean;
+  reason:
+    | "high-confidence-output-request"
+    | "output-confidence-below-threshold"
+    | "no-output-request-shadow-only"
+    | "unclear";
+  advisorDecision?: AdvisorTurnIntentDecision;
+}
+
+export interface ResponseOpportunitySessionBudgetDecision {
   authorized: boolean;
   reason: "authorized" | "duplicate-operation" | "session-limit-exhausted";
   startsBefore: number;
@@ -90,13 +117,13 @@ export interface ShortIntentGateSessionBudgetDecision {
   limit: number;
 }
 
-export class ShortIntentGateSessionBudget {
+export class ResponseOpportunitySessionBudget {
   private readonly operationKeysBySession = new Map<string, Set<string>>();
 
   authorize(
     sessionId: string,
     operationKey: string
-  ): ShortIntentGateSessionBudgetDecision {
+  ): ResponseOpportunitySessionBudgetDecision {
     const operationKeys =
       this.operationKeysBySession.get(sessionId) ?? new Set<string>();
     const startsBefore = operationKeys.size;
@@ -106,16 +133,16 @@ export class ShortIntentGateSessionBudget {
         reason: "duplicate-operation",
         startsBefore,
         startsAfter: startsBefore,
-        limit: SHORT_INTENT_GATE_SESSION_START_LIMIT,
+        limit: RESPONSE_OPPORTUNITY_SESSION_START_LIMIT,
       };
     }
-    if (startsBefore >= SHORT_INTENT_GATE_SESSION_START_LIMIT) {
+    if (startsBefore >= RESPONSE_OPPORTUNITY_SESSION_START_LIMIT) {
       return {
         authorized: false,
         reason: "session-limit-exhausted",
         startsBefore,
         startsAfter: startsBefore,
-        limit: SHORT_INTENT_GATE_SESSION_START_LIMIT,
+        limit: RESPONSE_OPPORTUNITY_SESSION_START_LIMIT,
       };
     }
     operationKeys.add(operationKey);
@@ -131,143 +158,133 @@ export class ShortIntentGateSessionBudget {
       reason: "authorized",
       startsBefore,
       startsAfter: operationKeys.size,
-      limit: SHORT_INTENT_GATE_SESSION_START_LIMIT,
+      limit: RESPONSE_OPPORTUNITY_SESSION_START_LIMIT,
     };
   }
 }
 
-export function decideShortIntentLocalRoute(input: {
+export function decideResponseOpportunityLocalRoute(input: {
   text: string;
   decision: AdvisorTurnIntentDecision;
   pendingConfirmation?: boolean;
-}): ShortIntentLocalDecision {
+}): ResponseOpportunityLocalDecision {
   const wordEquivalent = calculateWordEquivalent(input.text);
   if (
     input.pendingConfirmation &&
     isShortConfirmationResponse(input.text)
   ) {
     return {
-      disposition: "deterministic-answer",
+      disposition: "deterministic-output",
       reason: "pending-confirmation-response",
       wordEquivalent,
-      highInformation: true,
-    };
-  }
-  if (input.decision.action === "ignore") {
-    return {
-      disposition: "deterministic-ignore",
-      reason: input.decision.reason,
-      wordEquivalent,
-      highInformation: false,
-    };
-  }
-  if (wordEquivalent >= 3) {
-    return {
-      disposition: "not-short",
-      reason: "three-or-more-word-equivalents",
-      wordEquivalent,
-      highInformation: false,
+      decision: "output-request",
     };
   }
   if (
-    input.decision.action === "append-only" ||
-    input.decision.action === "state-update"
+    input.decision.action === "ignore" &&
+    (input.decision.reason === "exact-acknowledgement" ||
+      input.decision.reason === "empty-transcript")
   ) {
     return {
-      disposition: "deterministic-append",
+      disposition: "deterministic-no-output",
       reason: input.decision.reason,
       wordEquivalent,
-      highInformation: false,
+      decision: "no-output-request",
     };
   }
   if (
-    input.decision.enforcement === "allow" ||
-    isHighInformationShortTurn(input.text)
+    input.decision.action === "answer-refresh" &&
+    input.decision.executionAuthorized
   ) {
     return {
-      disposition: "deterministic-answer",
-      reason:
-        input.decision.enforcement === "allow"
-          ? input.decision.reason
-          : "high-information-short-turn",
+      disposition: "deterministic-output",
+      reason: input.decision.reason,
       wordEquivalent,
-      highInformation: true,
+      decision: "output-request",
+    };
+  }
+  if (
+    input.decision.intent === "logistics" &&
+    input.decision.confidence >= 0.95
+  ) {
+    return {
+      disposition: "deterministic-no-output",
+      reason: input.decision.reason,
+      wordEquivalent,
+      decision: "no-output-request",
     };
   }
   return {
     disposition: "runtime-required",
-    reason: "residual-short-intent-ambiguity",
+    reason: "residual-response-opportunity-ambiguity",
     wordEquivalent,
-    highInformation: false,
+    decision: "unclear",
   };
 }
 
-export function buildShortIntentGateRequest(input: {
+export function buildResponseOpportunityRequest(input: {
   logicalQuestionUnit: LogicalQuestionUnit;
-  currentTurn: TranscriptTurn;
-  previousTurns: TranscriptTurn[];
-  pendingConfirmation: boolean;
-  activeMeetingTask?: ActiveMeetingTask;
-}): ShortIntentGateRequest {
+  manualForceAdvise?: boolean;
+}): ResponseOpportunityRequest {
+  const selectedSources = input.logicalQuestionUnit.sources.slice(-2);
+  let remainingChars = RESPONSE_OPPORTUNITY_MAX_SOURCE_CHARS;
+  const sourceSpans: ResponseOpportunitySourceSpan[] = [];
+  for (const [index, source] of selectedSources.entries()) {
+    if (remainingChars <= 0) break;
+    const isCurrent =
+      source.turnId === input.logicalQuestionUnit.currentTurnId;
+    const laterSourceCount = selectedSources.length - index - 1;
+    const reserveForLater = Math.min(
+      remainingChars,
+      laterSourceCount * 600
+    );
+    const available = Math.max(1, remainingChars - reserveForLater);
+    const text = projectBoundedSourceText(
+      source.text,
+      Math.min(available, isCurrent ? 1_200 : 600)
+    );
+    if (!text) continue;
+    sourceSpans.push({ turnId: source.turnId, text });
+    remainingChars -= text.length;
+  }
+  const sourceHash = hashResponseOpportunityEvidence(sourceSpans);
   return {
-    schemaVersion: SHORT_INTENT_GATE_SCHEMA_VERSION,
-    promptVersion: SHORT_INTENT_GATE_PROMPT_VERSION,
+    schemaVersion: RESPONSE_OPPORTUNITY_SCHEMA_VERSION,
+    promptVersion: RESPONSE_OPPORTUNITY_PROMPT_VERSION,
     logicalQuestionUnitId: input.logicalQuestionUnit.id,
     logicalQuestionUnitRevision: input.logicalQuestionUnit.revision,
-    currentTurn: {
-      turnId: input.currentTurn.id,
-      text: input.currentTurn.text.trim(),
-    },
-    contextTurns: input.previousTurns
-      .filter(
-        (turn) =>
-          turn.id !== input.currentTurn.id &&
-          Boolean(turn.text.trim())
-      )
-      .slice(-SHORT_INTENT_GATE_MAX_CONTEXT_TURNS)
-      .map((turn) => ({
-        turnId: turn.id,
-        speaker: turn.speaker,
-        text: turn.text.trim().slice(0, 500),
-      })),
-    pendingConfirmation: input.pendingConfirmation,
-    activeTask: input.activeMeetingTask
-      ? {
-          questionType: input.activeMeetingTask.parent.questionType,
-          topic: input.activeMeetingTask.parent.topic.slice(0, 300),
-        }
-      : undefined,
+    currentTurnId: input.logicalQuestionUnit.currentTurnId,
+    sourceHash,
+    sourceSpans,
+    manualForceAdvise: input.manualForceAdvise ?? false,
   };
 }
 
-export function buildShortIntentGatePrompts(
-  request: ShortIntentGateRequest
+export function buildResponseOpportunityPrompts(
+  request: ResponseOpportunityRequest
 ) {
   return {
     systemPrompt: [
-      "Classify only whether one short interviewer turn should create new Jarvis answer work.",
-      "Return one JSON object only. Do not answer the interview question.",
-      "Use contextTurns and activeTask only to resolve references; currentTurn alone owns the action.",
-      "Allowed action values are ignore, append-context, and answer.",
-      "Use ignore only for a greeting, acknowledgement, filler, or closing phrase that adds no useful context.",
-      "Use append-context for meaningful information that should be retained but does not ask for a response.",
-      "Use answer for a question, directive, correction, constraint, or substantive follow-up.",
-      "When a short technical entity could be a follow-up under the active task, prefer answer over ignore.",
-      "evidenceSpans must contain one or more exact verbatim substrings from currentTurn.text.",
-      "Do not classify question type, task relation, parent, playbook phase, or artifact intent.",
-      "Schema: {schemaVersion:1,action,confidence,evidenceSpans}.",
+      "Decide one thing only: whether the interviewer-owned source evidence currently asks the candidate for an output that Jarvis should help produce.",
+      "Return one JSON object only. Do not answer the interview content.",
+      "Use output-request for a question, directive, requested explanation, requested design or code, correction that requires a revised answer, constraint on an active answer, or an explicit phase-control instruction.",
+      "Use no-output-request for greetings, acknowledgements, closings, logistics, or information supplied in response to the candidate's own question when the interviewer does not ask anything back.",
+      "Use unclear when the bounded source is incomplete or does not support either conclusion.",
+      "Do not classify question type, task relation, parent, evidence mode, context scope, playbook phase, or artifact intent.",
+      "Every evidenceSpans item must contain a source turnId and an exact verbatim substring from that sourceSpans text.",
+      "Schema: {schemaVersion:2,decision:'output-request'|'no-output-request'|'unclear',confidence:number,evidenceSpans:[{turnId,text}],reason:string}.",
     ].join(" "),
     userMessage: JSON.stringify(request),
   };
 }
 
-export function parseShortIntentGateOutput(
+export function parseResponseOpportunityOutput(
   rawOutput: string,
-  request: ShortIntentGateRequest
-): ShortIntentGateParseResult {
+  request: ResponseOpportunityRequest
+): ResponseOpportunityParseResult {
   const trimmed = stripJsonFence(rawOutput.trim());
   if (!trimmed) return parseFailure("empty-output", "parse");
-  if (trimmed.length > SHORT_INTENT_GATE_MAX_OUTPUT_CHARS) {
+  if (trimmed.length > RESPONSE_OPPORTUNITY_MAX_OUTPUT_CHARS) {
     return parseFailure("output-too-large", "parse");
   }
 
@@ -283,22 +300,23 @@ export function parseShortIntentGateOutput(
   const candidate = decoded as Record<string, unknown>;
   const allowedKeys = new Set([
     "schemaVersion",
-    "action",
+    "decision",
     "confidence",
     "evidenceSpans",
+    "reason",
   ]);
   if (Object.keys(candidate).some((key) => !allowedKeys.has(key))) {
-    return parseFailure("non-intent-field-present", "schema");
+    return parseFailure("non-opportunity-field-present", "schema");
   }
-  if (candidate.schemaVersion !== SHORT_INTENT_GATE_SCHEMA_VERSION) {
+  if (candidate.schemaVersion !== RESPONSE_OPPORTUNITY_SCHEMA_VERSION) {
     return parseFailure("unsupported-schema-version", "schema");
   }
   if (
-    candidate.action !== "ignore" &&
-    candidate.action !== "append-context" &&
-    candidate.action !== "answer"
+    candidate.decision !== "output-request" &&
+    candidate.decision !== "no-output-request" &&
+    candidate.decision !== "unclear"
   ) {
-    return parseFailure("invalid-action", "schema");
+    return parseFailure("invalid-decision", "schema");
   }
   if (
     typeof candidate.confidence !== "number" ||
@@ -309,125 +327,284 @@ export function parseShortIntentGateOutput(
     return parseFailure("invalid-confidence", "schema");
   }
   if (
+    typeof candidate.reason !== "string" ||
+    !candidate.reason.trim() ||
+    candidate.reason.length > 240
+  ) {
+    return parseFailure("invalid-reason", "schema");
+  }
+  if (
     !Array.isArray(candidate.evidenceSpans) ||
     candidate.evidenceSpans.length === 0 ||
-    candidate.evidenceSpans.length > 4 ||
-    candidate.evidenceSpans.some(
-      (span) => typeof span !== "string" || !span.trim()
-    )
+    candidate.evidenceSpans.length > 4
   ) {
     return parseFailure("invalid-evidence-spans", "schema");
   }
-  const evidenceSpans = candidate.evidenceSpans as string[];
-  if (
-    evidenceSpans.some(
-      (span) => !request.currentTurn.text.includes(span)
-    )
-  ) {
-    return parseFailure("invalid-evidence-span", "evidence");
+  const evidenceSpans: ResponseOpportunitySourceSpan[] = [];
+  for (const value of candidate.evidenceSpans) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      return parseFailure("invalid-evidence-span", "schema");
+    }
+    const span = value as Record<string, unknown>;
+    if (
+      Object.keys(span).some(
+        (key) => key !== "turnId" && key !== "text"
+      ) ||
+      typeof span.turnId !== "string" ||
+      typeof span.text !== "string" ||
+      !span.text.trim()
+    ) {
+      return parseFailure("invalid-evidence-span", "schema");
+    }
+    const source = request.sourceSpans.find(
+      (candidateSource) => candidateSource.turnId === span.turnId
+    );
+    if (!source || !source.text.includes(span.text)) {
+      return parseFailure("invalid-evidence-span", "evidence");
+    }
+    evidenceSpans.push({ turnId: span.turnId, text: span.text });
   }
   return {
     ok: true,
     value: {
-      schemaVersion: SHORT_INTENT_GATE_SCHEMA_VERSION,
-      action: candidate.action,
+      schemaVersion: RESPONSE_OPPORTUNITY_SCHEMA_VERSION,
+      decision: candidate.decision,
       confidence: candidate.confidence,
       evidenceSpans,
+      reason: candidate.reason.trim(),
     },
     evidenceSpansValid: true,
   };
 }
 
-export function createShortIntentGateAdvisorDecision(input: {
-  result: LlmShortIntentGateDecision;
+export function createResponseOpportunityLease(input: {
+  sessionId: string;
+  runtimeEpoch: number;
+  logicalQuestionUnit: LogicalQuestionUnit;
+  request: ResponseOpportunityRequest;
+  manualCorrectionRevision: number;
+  createdAt?: number;
+}): ResponseOpportunityLease {
+  return {
+    operationId: [
+      "response_opportunity",
+      input.sessionId,
+      input.runtimeEpoch,
+      input.logicalQuestionUnit.id,
+      input.logicalQuestionUnit.revision,
+      input.request.sourceHash,
+      input.manualCorrectionRevision,
+    ].join(":"),
+    sessionId: input.sessionId,
+    runtimeEpoch: input.runtimeEpoch,
+    logicalQuestionUnitId: input.logicalQuestionUnit.id,
+    logicalQuestionUnitRevision: input.logicalQuestionUnit.revision,
+    sourceHash: input.request.sourceHash,
+    manualCorrectionRevision: input.manualCorrectionRevision,
+    createdAt: input.createdAt ?? Date.now(),
+  };
+}
+
+export function authorizeResponseOpportunityLease(
+  lease: ResponseOpportunityLease,
+  current: {
+    currentOperationId?: string;
+    sessionId: string;
+    runtimeEpoch: number;
+    logicalQuestionUnit: LogicalQuestionUnit;
+    request: ResponseOpportunityRequest;
+    manualCorrectionRevision: number;
+    logicalUnitClosed: boolean;
+  }
+): { authorized: true } | { authorized: false; reason: string } {
+  const reject = (reason: string) => ({
+    authorized: false as const,
+    reason,
+  });
+  if (lease.operationId !== current.currentOperationId) {
+    return reject("operation-id-mismatch");
+  }
+  if (lease.sessionId !== current.sessionId) {
+    return reject("session-id-mismatch");
+  }
+  if (lease.runtimeEpoch !== current.runtimeEpoch) {
+    return reject("runtime-epoch-mismatch");
+  }
+  if (lease.logicalQuestionUnitId !== current.logicalQuestionUnit.id) {
+    return reject("logical-question-id-mismatch");
+  }
+  if (
+    lease.logicalQuestionUnitRevision !==
+    current.logicalQuestionUnit.revision
+  ) {
+    return reject("logical-question-revision-mismatch");
+  }
+  if (lease.sourceHash !== current.request.sourceHash) {
+    return reject("source-hash-mismatch");
+  }
+  if (
+    lease.manualCorrectionRevision !== current.manualCorrectionRevision
+  ) {
+    return reject("manual-correction-revision-mismatch");
+  }
+  if (current.logicalUnitClosed) {
+    return reject("logical-question-closed");
+  }
+  return { authorized: true };
+}
+
+export function createResponseOpportunityProposal(input: {
+  operationId: string;
+  request: ResponseOpportunityRequest;
+  result: LlmResponseOpportunityDecision;
+  createdAt?: number;
+}): ResponseOpportunityProposal {
+  const createdAt = input.createdAt ?? Date.now();
+  return {
+    operationId: input.operationId,
+    snapshotId: [
+      input.request.logicalQuestionUnitId,
+      input.request.logicalQuestionUnitRevision,
+      input.request.sourceHash,
+    ].join(":"),
+    logicalQuestionUnitId: input.request.logicalQuestionUnitId,
+    logicalQuestionRevision:
+      input.request.logicalQuestionUnitRevision,
+    decision: input.result.decision,
+    confidence: input.result.confidence,
+    evidenceSpans: input.result.evidenceSpans.map((span) => ({ ...span })),
+    source: "runtime-llm",
+    capability: "settlement-proposal",
+    disposition: "success",
+    createdAt,
+    expiresAt: createdAt + RESPONSE_OPPORTUNITY_PROPOSAL_TTL_MS,
+  };
+}
+
+export function decideResponseOpportunityRelease(input: {
+  result: LlmResponseOpportunityDecision;
   original: AdvisorTurnIntentDecision;
-}): AdvisorTurnIntentDecision {
-  const evidence = [
-    ...input.original.evidence,
-    "runtime-short-intent-gate",
-    ...input.result.evidenceSpans.map(
-      (span) => `runtime-evidence:${span}`
-    ),
-  ];
-  if (input.result.action === "answer") {
+}): ResponseOpportunityReleaseDecision {
+  if (input.result.decision === "unclear") {
+    return { released: false, reason: "unclear" };
+  }
+  if (input.result.decision === "no-output-request") {
     return {
+      released: false,
+      reason: "no-output-request-shadow-only",
+    };
+  }
+  if (
+    input.result.confidence <
+    RESPONSE_OPPORTUNITY_RELEASE_MIN_CONFIDENCE
+  ) {
+    return {
+      released: false,
+      reason: "output-confidence-below-threshold",
+    };
+  }
+  return {
+    released: true,
+    reason: "high-confidence-output-request",
+    advisorDecision: {
       ...input.original,
+      intent: "direct-question",
       confidence: input.result.confidence,
-      evidence,
+      evidence: [
+        ...input.original.evidence,
+        "runtime-response-opportunity",
+        ...input.result.evidenceSpans.map(
+          (span) =>
+            `runtime-evidence:${span.turnId}:${span.text}`
+        ),
+      ],
       action: "answer-refresh",
       recommendedAction: "answer-refresh",
-      reason: "runtime-short-intent-answer",
+      reason: "runtime-response-opportunity-output-request",
       contextPromptEligible: true,
       enforcement: "allow",
       wouldSuppress: false,
       executionAuthorized: true,
       authoritySource: "runtime-intent-gate",
-    };
-  }
-  const action =
-    input.result.action === "ignore" ? "ignore" : "append-only";
-  return {
-    ...input.original,
-    intent:
-      input.result.action === "ignore"
-        ? "confirmation"
-        : "informational",
-    confidence: input.result.confidence,
-    evidence,
-    action,
-    recommendedAction: action,
-    reason: `runtime-short-intent-${input.result.action}`,
-    contextPromptEligible: input.result.action === "append-context",
-    enforcement: "enforce",
-    wouldSuppress: true,
-    executionAuthorized: false,
-    authoritySource: "runtime-intent-gate",
+    },
   };
 }
 
-export function formatShortIntentLocalDecisionForTrace(
-  decision: ShortIntentLocalDecision
+export function formatResponseOpportunityLocalDecisionForTrace(
+  decision: ResponseOpportunityLocalDecision
 ) {
+  const legacyDisposition =
+    decision.disposition === "deterministic-no-output"
+      ? "deterministic-ignore"
+      : decision.disposition === "deterministic-output"
+        ? "deterministic-answer"
+        : decision.disposition;
+  const canonicalFillerSuppressed =
+    decision.disposition === "deterministic-no-output" &&
+    (decision.reason === "exact-acknowledgement" ||
+      decision.reason === "empty-transcript");
   return {
-    shortIntentLocalDisposition: decision.disposition,
+    responseOpportunityLocalDisposition: decision.disposition,
+    responseOpportunityLocalReason: decision.reason,
+    responseOpportunityLocalDecision: decision.decision,
+    responseOpportunityWordEquivalent: decision.wordEquivalent,
+    canonicalFillerSuppressed,
+    shortHighInformationAllowed:
+      decision.disposition === "deterministic-output" &&
+      decision.wordEquivalent <= 3,
+    residualResponseOpportunityInferenceRequired:
+      decision.disposition === "runtime-required",
+    // Compatibility fields remain decode-only until Task 168 removes the
+    // historical short-intent vocabulary from stored summaries.
+    shortIntentLocalDisposition: legacyDisposition,
     shortIntentLocalReason: decision.reason,
     shortIntentWordEquivalent: decision.wordEquivalent,
-    shortIntentHighInformation: decision.highInformation,
-    canonicalFillerSuppressed:
-      decision.disposition === "deterministic-ignore",
-    shortHighInformationAllowed:
-      decision.disposition === "deterministic-answer" &&
-      decision.highInformation,
     residualShortIntentAdjudicationRequired:
       decision.disposition === "runtime-required",
   };
 }
 
-export function hashShortIntentSourceText(text: string) {
+export function formatResponseOpportunityProposalForTrace(
+  proposal: ResponseOpportunityProposal | undefined
+) {
+  return proposal
+    ? {
+        responseOpportunityProposalOperationId: proposal.operationId,
+        responseOpportunityProposalSnapshotId: proposal.snapshotId,
+        responseOpportunityProposalDecision: proposal.decision,
+        responseOpportunityProposalConfidence: proposal.confidence,
+        responseOpportunityProposalEvidenceSpans:
+          proposal.evidenceSpans,
+        responseOpportunityProposalSource: proposal.source,
+        responseOpportunityProposalCapability: proposal.capability,
+        responseOpportunityProposalDisposition: proposal.disposition,
+        responseOpportunityProposalCreatedAt: proposal.createdAt,
+        responseOpportunityProposalExpiresAt: proposal.expiresAt,
+      }
+    : {};
+}
+
+export function hashResponseOpportunityEvidence(
+  sourceSpans: ResponseOpportunitySourceSpan[]
+) {
   let hash = 2_166_136_261;
-  for (const character of text.trim().toLocaleLowerCase()) {
+  for (const character of sourceSpans
+    .flatMap((span) => [span.turnId, span.text])
+    .join("\u001f")) {
     hash ^= character.charCodeAt(0);
     hash = Math.imul(hash, 16_777_619);
   }
   return (hash >>> 0).toString(16).padStart(8, "0");
 }
 
-function isHighInformationShortTurn(text: string) {
+function projectBoundedSourceText(text: string, maxChars: number) {
   const trimmed = text.trim();
-  if (/[?？]/u.test(trimmed)) return true;
-  if (
-    /^(?:why|what|how|where|when|who|which|can|could|would|should|do|does|did|is|are|use|write|code|implement)\b/iu.test(
-      trimmed
-    )
-  ) {
-    return true;
-  }
-  if (/^(?:为什么|什么|怎么|如何|哪里|哪儿|谁|是否|用|写|实现)/u.test(trimmed)) {
-    return true;
-  }
-  return trimmed
-    .split(/\s+/u)
-    .some((token) => /^[A-Z][A-Z0-9+#.-]{1,}$/u.test(token));
+  if (trimmed.length <= maxChars) return trimmed;
+  const marker = "\n...[source omitted]...\n";
+  const available = Math.max(2, maxChars - marker.length);
+  const headChars = Math.min(300, Math.floor(available / 3));
+  const tailChars = available - headChars;
+  return `${trimmed.slice(0, headChars)}${marker}${trimmed.slice(-tailChars)}`;
 }
 
 function isShortConfirmationResponse(text: string) {
@@ -444,7 +621,7 @@ function stripJsonFence(value: string) {
 function parseFailure(
   reason: string,
   errorKind: "parse" | "schema" | "evidence" | "provider"
-): ShortIntentGateParseResult {
+): ResponseOpportunityParseResult {
   return {
     ok: false,
     reason,

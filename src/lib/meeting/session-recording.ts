@@ -308,6 +308,20 @@ export interface SessionCompactTraceSummary {
   advisorIntentAuthoritySource?: string;
   advisorWouldSuppress?: boolean;
   advisorExecutionAuthorized?: boolean;
+  responseOpportunityLocalDisposition?: string;
+  responseOpportunityLocalReason?: string;
+  responseOpportunityWordEquivalent?: number;
+  residualResponseOpportunityInferenceRequired?: boolean;
+  responseOpportunityDisposition?: string;
+  responseOpportunityDecision?: string;
+  responseOpportunityConfidence?: number;
+  responseOpportunityReleased?: boolean;
+  responseOpportunityReleaseReason?: string;
+  responseOpportunityDecisionApplied?: boolean;
+  responseOpportunityBudgetExhausted?: boolean;
+  responseOpportunityTimedOut?: boolean;
+  responseOpportunityDurationMs?: number;
+  responseOpportunityQueueWaitMs?: number;
   shortIntentLocalDisposition?: string;
   shortIntentLocalReason?: string;
   shortIntentWordEquivalent?: number;
@@ -4336,6 +4350,62 @@ export function buildCompactTraceSummary({
       metadataSources,
       "advisorExecutionAuthorized"
     ),
+    responseOpportunityLocalDisposition: readFirstString(
+      metadataSources,
+      "responseOpportunityLocalDisposition"
+    ),
+    responseOpportunityLocalReason: readFirstString(
+      metadataSources,
+      "responseOpportunityLocalReason"
+    ),
+    responseOpportunityWordEquivalent: readFirstNumberFromMetadata(
+      metadataSources,
+      "responseOpportunityWordEquivalent"
+    ),
+    residualResponseOpportunityInferenceRequired: readFirstBoolean(
+      metadataSources,
+      "residualResponseOpportunityInferenceRequired"
+    ),
+    responseOpportunityDisposition: readFirstString(
+      metadataSources,
+      "responseOpportunityDisposition"
+    ),
+    responseOpportunityDecision: readFirstString(
+      metadataSources,
+      "responseOpportunityDecision"
+    ),
+    responseOpportunityConfidence: readFirstNumberFromMetadata(
+      metadataSources,
+      "responseOpportunityConfidence"
+    ),
+    responseOpportunityReleased: readFirstBoolean(
+      metadataSources,
+      "responseOpportunityReleased"
+    ),
+    responseOpportunityReleaseReason: readFirstString(
+      metadataSources,
+      "responseOpportunityReleaseReason"
+    ),
+    responseOpportunityDecisionApplied: readFirstBoolean(
+      metadataSources,
+      "responseOpportunityDecisionApplied"
+    ),
+    responseOpportunityBudgetExhausted: readFirstBoolean(
+      metadataSources,
+      "responseOpportunityBudgetExhausted"
+    ),
+    responseOpportunityTimedOut: readFirstBoolean(
+      metadataSources,
+      "responseOpportunityTimedOut"
+    ),
+    responseOpportunityDurationMs: readFirstNumberFromMetadata(
+      metadataSources,
+      "responseOpportunityDurationMs"
+    ),
+    responseOpportunityQueueWaitMs: readFirstNumberFromMetadata(
+      metadataSources,
+      "responseOpportunityQueueWaitMs"
+    ),
     shortIntentLocalDisposition: readFirstString(
       metadataSources,
       "shortIntentLocalDisposition"
@@ -6791,29 +6861,42 @@ function aggregateShortIntent(
     ).length,
     residualShortIntentAdjudicationCount: summaries.filter(
       (summary) =>
+        summary.residualResponseOpportunityInferenceRequired === true ||
         summary.residualShortIntentAdjudicationRequired === true
     ).length,
     residualShortIntentIgnoreCount: summaries.filter(
       (summary) =>
-        summary.shortIntentGateDecisionApplied === true &&
-        summary.shortIntentGateAppliedAction === "ignore"
+        summary.responseOpportunityDecision === "no-output-request" ||
+        (summary.shortIntentGateDecisionApplied === true &&
+          summary.shortIntentGateAppliedAction === "ignore")
     ).length,
     residualShortIntentAnswerCount: summaries.filter(
       (summary) =>
-        summary.shortIntentGateDecisionApplied === true &&
-        summary.shortIntentGateAppliedAction === "answer"
+        summary.responseOpportunityReleased === true ||
+        (summary.shortIntentGateDecisionApplied === true &&
+          summary.shortIntentGateAppliedAction === "answer")
     ).length,
     intentGateBudgetExhaustedCount: summaries.filter(
-      (summary) => summary.shortIntentGateBudgetExhausted === true
+      (summary) =>
+        summary.responseOpportunityBudgetExhausted === true ||
+        summary.shortIntentGateBudgetExhausted === true
     ).length,
     intentGateTimeoutCount: summaries.filter(
-      (summary) => summary.shortIntentGateTimedOut === true
+      (summary) =>
+        summary.responseOpportunityTimedOut === true ||
+        summary.shortIntentGateTimedOut === true
     ).length,
     intentGateDecisionAppliedCount: summaries.filter(
-      (summary) => summary.shortIntentGateDecisionApplied === true
+      (summary) =>
+        summary.responseOpportunityDecisionApplied === true ||
+        summary.shortIntentGateDecisionApplied === true
     ).length,
     intentGateDurationMs: aggregateNumbers(
-      summaries.map((summary) => summary.shortIntentGateDurationMs)
+      summaries.map(
+        (summary) =>
+          summary.responseOpportunityDurationMs ??
+          summary.shortIntentGateDurationMs
+      )
     ),
   };
 }

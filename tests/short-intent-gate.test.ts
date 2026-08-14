@@ -2,99 +2,107 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { decideAdvisorTurnIntent } from "../src/lib/meeting/advisor-turn-intent.js";
 import {
-  SHORT_INTENT_GATE_SESSION_START_LIMIT,
-  ShortIntentGateSessionBudget,
-  buildShortIntentGatePrompts,
-  buildShortIntentGateRequest,
-  createShortIntentGateAdvisorDecision,
-  decideShortIntentLocalRoute,
-  parseShortIntentGateOutput,
+  RESPONSE_OPPORTUNITY_SESSION_START_LIMIT,
+  ResponseOpportunitySessionBudget,
+  authorizeResponseOpportunityLease,
+  buildResponseOpportunityPrompts,
+  buildResponseOpportunityRequest,
+  createResponseOpportunityLease,
+  createResponseOpportunityProposal,
+  decideResponseOpportunityLocalRoute,
+  decideResponseOpportunityRelease,
+  parseResponseOpportunityOutput,
 } from "../src/lib/meeting/short-intent-gate.js";
-import type {
-  LogicalQuestionUnit,
-} from "../src/lib/meeting/logical-question-unit.js";
-import type { TranscriptTurn } from "../src/lib/meeting/types.js";
+import type { LogicalQuestionUnit } from "../src/lib/meeting/logical-question-unit.js";
 
-function turn(
-  id: string,
-  text: string,
-  speaker: TranscriptTurn["speaker"] = "them"
-): TranscriptTurn {
-  return {
-    id,
-    speaker,
-    text,
-    startedAt: 10,
-    endedAt: 20,
-    isFinal: true,
-    source: speaker === "me" ? "microphone" : "system-audio",
+function logicalQuestionUnit(
+  currentText: string,
+  previousText?: string
+): LogicalQuestionUnit {
+  const current = {
+    turnId: "turn-current",
+    text: currentText,
+    startedAt: 30,
+    endedAt: 40,
   };
-}
-
-function logicalQuestionUnit(text: string): LogicalQuestionUnit {
+  const previous = previousText
+    ? [
+        {
+          turnId: "turn-previous",
+          text: previousText,
+          startedAt: 10,
+          endedAt: 20,
+        },
+      ]
+    : [];
   return {
     id: "lqu-a",
     revision: 3,
     sessionId: "session-a",
     runtimeEpoch: 2,
-    currentTurnId: "turn-current",
-    sourceTurnIds: ["turn-current"],
-    sources: [
-      {
-        turnId: "turn-current",
-        text,
-        startedAt: 10,
-        endedAt: 20,
-      },
-    ],
-    normalizedText: text,
-    startedAt: 10,
-    updatedAt: 20,
-    compositionReasons: ["initial-turn"],
+    currentTurnId: current.turnId,
+    sourceTurnIds: [...previous.map((source) => source.turnId), current.turnId],
+    sources: [...previous, current],
+    normalizedText: [previousText, currentText].filter(Boolean).join(" "),
+    startedAt: previous[0]?.startedAt ?? current.startedAt,
+    updatedAt: current.endedAt,
+    compositionReasons: previousText
+      ? ["initial-turn", "sentence-completion"]
+      : ["initial-turn"],
     boundaryReason: "new-logical-question",
     truncated: false,
   };
 }
 
-test("routes canonical fillers, high-information shorts, and residual ambiguity separately", () => {
-  for (const text of [
-    "Mm-hmm.",
-    "mm hmm",
-    "mmhmm",
-    "Uh-huh.",
-    "Hello.",
-    "Good Monday.",
-    "Of course, of course.",
-  ]) {
-    const decision = decideAdvisorTurnIntent(text, {
+test("keeps clear output requests and exact fillers on deterministic paths", () => {
+  const fillerText = "Mm-hmm.";
+  const filler = decideResponseOpportunityLocalRoute({
+    text: fillerText,
+    decision: decideAdvisorTurnIntent(fillerText, {
       hasActiveTask: true,
-    });
-    const route = decideShortIntentLocalRoute({ text, decision });
-    assert.equal(route.disposition, "deterministic-ignore", text);
-  }
-
-  for (const text of ["Why?", "RAG?", "HNSW", "Use Java"]) {
-    const decision = decideAdvisorTurnIntent(text, {
-      hasActiveTask: true,
-    });
-    const route = decideShortIntentLocalRoute({ text, decision });
-    assert.equal(route.disposition, "deterministic-answer", text);
-    assert.equal(route.highInformation, true, text);
-  }
-
-  const ambiguousText = "Kubernetes";
-  const ambiguous = decideShortIntentLocalRoute({
-    text: ambiguousText,
-    decision: decideAdvisorTurnIntent(ambiguousText, {
-      hasActiveTask: false,
     }),
   });
-  assert.equal(ambiguous.disposition, "runtime-required");
+  assert.equal(filler.disposition, "deterministic-no-output");
+  assert.equal(filler.decision, "no-output-request");
+
+  const askText = "Please design a URL shortener.";
+  const ask = decideResponseOpportunityLocalRoute({
+    text: askText,
+    decision: decideAdvisorTurnIntent(askText, {
+      hasActiveTask: true,
+    }),
+  });
+  assert.equal(ask.disposition, "deterministic-output");
+  assert.equal(ask.decision, "output-request");
+});
+
+test("sends contentful residual ambiguity to runtime regardless of length", () => {
+  for (const text of [
+    "The deployment environment uses Kubernetes.",
+    "The system currently serves several regions and the traffic pattern changes throughout the day.",
+  ]) {
+    const localDecision = decideAdvisorTurnIntent(text, {
+      hasActiveTask: true,
+    });
+    const route = decideResponseOpportunityLocalRoute({
+      text,
+      decision: {
+        ...localDecision,
+        intent: "informational",
+        action: "append-only",
+        recommendedAction: "append-only",
+        reason: "contentful-statement",
+        executionAuthorized: false,
+      },
+    });
+    assert.equal(route.disposition, "runtime-required", text);
+    assert.equal(route.decision, "unclear", text);
+  }
 });
 
 test("lets a pending confirmation outrank an acknowledgement rule", () => {
   const text = "Yes.";
-  const route = decideShortIntentLocalRoute({
+  const route = decideResponseOpportunityLocalRoute({
     text,
     decision: decideAdvisorTurnIntent(text, {
       hasActiveTask: true,
@@ -102,76 +110,68 @@ test("lets a pending confirmation outrank an acknowledgement rule", () => {
     pendingConfirmation: true,
   });
 
-  assert.equal(route.disposition, "deterministic-answer");
+  assert.equal(route.disposition, "deterministic-output");
   assert.equal(route.reason, "pending-confirmation-response");
 });
 
-test("builds a bounded action-only request", () => {
-  const request = buildShortIntentGateRequest({
-    logicalQuestionUnit: logicalQuestionUnit("Kubernetes"),
-    currentTurn: turn("turn-current", "Kubernetes"),
-    previousTurns: [
-      turn("turn-old", "Old unrelated context"),
-      turn("turn-me", "Do you mean the deployment platform?", "me"),
-      turn("turn-near", "Yes, in the active design"),
-      turn("turn-current", "Kubernetes"),
-    ],
-    pendingConfirmation: true,
+test("builds a bounded LQU-only request and preserves the terminal tail", () => {
+  const terminalAsk = "Where should the RAG data be stored?";
+  const longCurrent = `${"context ".repeat(300)}${terminalAsk}`;
+  const request = buildResponseOpportunityRequest({
+    logicalQuestionUnit: logicalQuestionUnit(
+      longCurrent,
+      "Earlier bounded source"
+    ),
   });
-  const prompts = buildShortIntentGatePrompts(request);
+  const prompts = buildResponseOpportunityPrompts(request);
 
   assert.deepEqual(
-    request.contextTurns.map((contextTurn) => contextTurn.turnId),
-    ["turn-me", "turn-near"]
+    request.sourceSpans.map((span) => span.turnId),
+    ["turn-previous", "turn-current"]
   );
-  assert.equal(request.pendingConfirmation, true);
-  assert.match(prompts.systemPrompt, /ignore, append-context, and answer/);
-  assert.match(prompts.systemPrompt, /Do not classify question type/);
-  assert.doesNotMatch(prompts.systemPrompt, /write an interview answer/i);
+  assert.equal(request.sourceSpans.length, 2);
+  assert.equal(
+    request.sourceSpans.at(-1)?.text.endsWith(terminalAsk),
+    true
+  );
+  assert.equal("activeTask" in request, false);
+  assert.equal("questionType" in request, false);
+  assert.equal("contextTurns" in request, false);
+  assert.match(prompts.systemPrompt, /one thing only/i);
+  assert.match(prompts.systemPrompt, /Do not classify question type/i);
 });
 
-test("strictly parses source-grounded action output", () => {
-  const request = buildShortIntentGateRequest({
+test("strictly parses exact turn-scoped evidence and rejects extra authority", () => {
+  const request = buildResponseOpportunityRequest({
     logicalQuestionUnit: logicalQuestionUnit("Kubernetes"),
-    currentTurn: turn("turn-current", "Kubernetes"),
-    previousTurns: [],
-    pendingConfirmation: false,
   });
-  const parsed = parseShortIntentGateOutput(
-    JSON.stringify({
-      schemaVersion: 1,
-      action: "answer",
-      confidence: 0.97,
-      evidenceSpans: ["Kubernetes"],
-    }),
-    request
+  const validOutput = {
+    schemaVersion: 2,
+    decision: "output-request",
+    confidence: 0.97,
+    evidenceSpans: [{ turnId: "turn-current", text: "Kubernetes" }],
+    reason: "The interviewer requests discussion of the named subject.",
+  };
+  assert.equal(
+    parseResponseOpportunityOutput(JSON.stringify(validOutput), request).ok,
+    true
   );
-  assert.equal(parsed.ok, true);
 
-  const extraSemanticAuthority = parseShortIntentGateOutput(
-    JSON.stringify({
-      schemaVersion: 1,
-      action: "answer",
-      confidence: 0.97,
-      evidenceSpans: ["Kubernetes"],
-      questionType: "system-design",
-    }),
+  const extraAuthority = parseResponseOpportunityOutput(
+    JSON.stringify({ ...validOutput, questionType: "system-design" }),
     request
   );
-  assert.equal(extraSemanticAuthority.ok, false);
-  if (!extraSemanticAuthority.ok) {
-    assert.equal(
-      extraSemanticAuthority.reason,
-      "non-intent-field-present"
-    );
+  assert.equal(extraAuthority.ok, false);
+  if (!extraAuthority.ok) {
+    assert.equal(extraAuthority.reason, "non-opportunity-field-present");
   }
 
-  const inventedEvidence = parseShortIntentGateOutput(
+  const inventedEvidence = parseResponseOpportunityOutput(
     JSON.stringify({
-      schemaVersion: 1,
-      action: "answer",
-      confidence: 0.97,
-      evidenceSpans: ["Kubernetes architecture"],
+      ...validOutput,
+      evidenceSpans: [
+        { turnId: "turn-current", text: "Kubernetes architecture" },
+      ],
     }),
     request
   );
@@ -181,57 +181,133 @@ test("strictly parses source-grounded action output", () => {
   }
 });
 
-test("releases only an answer action as advisor refresh authority", () => {
+test("response-opportunity lease is independent of parent and type state", () => {
+  const logicalUnit = logicalQuestionUnit("Please explain that tradeoff.");
+  const request = buildResponseOpportunityRequest({
+    logicalQuestionUnit: logicalUnit,
+  });
+  const lease = createResponseOpportunityLease({
+    sessionId: "session-a",
+    runtimeEpoch: 2,
+    logicalQuestionUnit: logicalUnit,
+    request,
+    manualCorrectionRevision: 4,
+    createdAt: 100,
+  });
+  const current = {
+    currentOperationId: lease.operationId,
+    sessionId: "session-a",
+    runtimeEpoch: 2,
+    logicalQuestionUnit: logicalUnit,
+    request,
+    manualCorrectionRevision: 4,
+    logicalUnitClosed: false,
+  };
+
+  assert.deepEqual(authorizeResponseOpportunityLease(lease, current), {
+    authorized: true,
+  });
+  assert.equal(
+    authorizeResponseOpportunityLease(lease, {
+      ...current,
+      logicalQuestionUnit: { ...logicalUnit, revision: 4 },
+    }).authorized,
+    false
+  );
+  assert.equal(
+    authorizeResponseOpportunityLease(lease, {
+      ...current,
+      manualCorrectionRevision: 5,
+    }).authorized,
+    false
+  );
+  assert.equal(
+    authorizeResponseOpportunityLease(lease, {
+      ...current,
+      logicalUnitClosed: true,
+    }).authorized,
+    false
+  );
+});
+
+test("releases only high-confidence output requests", () => {
   const original = decideAdvisorTurnIntent("Kubernetes", {
     hasActiveTask: false,
   });
-  const answer = createShortIntentGateAdvisorDecision({
+  const base = {
+    schemaVersion: 2 as const,
+    confidence: 0.93,
+    evidenceSpans: [{ turnId: "turn-current", text: "Kubernetes" }],
+    reason: "output requested",
+  };
+  const output = decideResponseOpportunityRelease({
     original,
-    result: {
-      schemaVersion: 1,
-      action: "answer",
-      confidence: 0.93,
-      evidenceSpans: ["Kubernetes"],
-    },
+    result: { ...base, decision: "output-request" },
   });
-  const ignore = createShortIntentGateAdvisorDecision({
+  const noOutput = decideResponseOpportunityRelease({
     original,
-    result: {
-      schemaVersion: 1,
-      action: "ignore",
-      confidence: 0.99,
-      evidenceSpans: ["Kubernetes"],
-    },
+    result: { ...base, decision: "no-output-request" },
+  });
+  const unclear = decideResponseOpportunityRelease({
+    original,
+    result: { ...base, decision: "unclear" },
+  });
+  const lowConfidence = decideResponseOpportunityRelease({
+    original,
+    result: { ...base, decision: "output-request", confidence: 0.7 },
   });
 
-  assert.equal(answer.action, "answer-refresh");
-  assert.equal(answer.executionAuthorized, true);
-  assert.equal(answer.authoritySource, "runtime-intent-gate");
-  assert.equal(ignore.action, "ignore");
-  assert.equal(ignore.executionAuthorized, false);
-  assert.equal(ignore.authoritySource, "runtime-intent-gate");
+  assert.equal(output.released, true);
+  assert.equal(output.advisorDecision?.action, "answer-refresh");
+  assert.equal(output.advisorDecision?.executionAuthorized, true);
+  assert.equal(noOutput.released, false);
+  assert.equal(noOutput.reason, "no-output-request-shadow-only");
+  assert.equal(unclear.released, false);
+  assert.equal(lowConfidence.released, false);
 });
 
-test("deduplicates one source revision and enforces the session cap", () => {
-  const budget = new ShortIntentGateSessionBudget();
-  const first = budget.authorize("session-a", "turn-a:hash-a:1");
-  const duplicate = budget.authorize("session-a", "turn-a:hash-a:1");
+test("creates a bounded proposal and enforces per-session dedupe", () => {
+  const logicalUnit = logicalQuestionUnit("Explain the storage choice.");
+  const request = buildResponseOpportunityRequest({
+    logicalQuestionUnit: logicalUnit,
+  });
+  const proposal = createResponseOpportunityProposal({
+    operationId: "operation-a",
+    request,
+    result: {
+      schemaVersion: 2,
+      decision: "output-request",
+      confidence: 0.95,
+      evidenceSpans: [
+        { turnId: "turn-current", text: "storage choice" },
+      ],
+      reason: "The interviewer requests an explanation.",
+    },
+    createdAt: 1_000,
+  });
+  assert.equal(proposal.source, "runtime-llm");
+  assert.equal(proposal.capability, "settlement-proposal");
+  assert.ok(proposal.expiresAt > proposal.createdAt);
 
+  const budget = new ResponseOpportunitySessionBudget();
+  const first = budget.authorize("session-a", "lqu-a:3:hash-a");
+  const duplicate = budget.authorize("session-a", "lqu-a:3:hash-a");
   assert.equal(first.authorized, true);
-  assert.equal(duplicate.authorized, false);
   assert.equal(duplicate.reason, "duplicate-operation");
 
-  for (let index = 1; index < SHORT_INTENT_GATE_SESSION_START_LIMIT; index += 1) {
+  for (
+    let index = 1;
+    index < RESPONSE_OPPORTUNITY_SESSION_START_LIMIT;
+    index += 1
+  ) {
     assert.equal(
-      budget.authorize("session-a", `turn-${index}:hash-${index}:1`)
+      budget.authorize("session-a", `lqu-${index}:1:hash-${index}`)
         .authorized,
       true
     );
   }
-  const exhausted = budget.authorize(
-    "session-a",
-    "turn-over-limit:hash-over-limit:1"
+  assert.equal(
+    budget.authorize("session-a", "over-limit").reason,
+    "session-limit-exhausted"
   );
-  assert.equal(exhausted.authorized, false);
-  assert.equal(exhausted.reason, "session-limit-exhausted");
 });
