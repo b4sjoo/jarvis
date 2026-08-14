@@ -331,6 +331,7 @@ import {
   decideResponseOpportunityLocalRoute,
   decideResponseOpportunityRelease,
   formatResponseOpportunityLocalDecisionForTrace,
+  resolveResponseOpportunityExecutionMode,
   formatResponseOpportunityProposalForTrace,
   requestResponseOpportunity,
   QuestionTypeAdjudicationJob,
@@ -12251,13 +12252,21 @@ export function useMeetingAssistant() {
       traceId,
       logicalQuestionUnit,
       originalDecision,
+      executionMode,
     }: {
       turn: TranscriptTurn;
       traceId: string;
       logicalQuestionUnit: LogicalQuestionUnit;
       originalDecision: AdvisorTurnIntentDecision;
+      executionMode: "authoritative" | "shadow-observation";
     }) => {
       const contextState = contextManagerRef.current.getState();
+      const authoritative = executionMode === "authoritative";
+      const finishTraceIfAuthoritative = () => {
+        if (authoritative) {
+          traceStoreRef.current.finishTrace(traceId, "success");
+        }
+      };
       const scheduledTaskId = contextState.activeMeetingTask?.id;
       const request = buildResponseOpportunityRequest({
         logicalQuestionUnit,
@@ -12287,11 +12296,16 @@ export function useMeetingAssistant() {
         responseOpportunityLogicalQuestionUnitRevision:
           logicalQuestionUnit.revision,
         responseOpportunityDecisionApplied: false,
-        advisorExecutionAuthorized: false,
-        memoryRetrievalSuppressedReason:
-          "response-opportunity-pending",
-        modelExecutionSuppressedReason:
-          "response-opportunity-pending",
+        responseOpportunityExecutionMode: executionMode,
+        advisorExecutionAuthorized: authoritative
+          ? false
+          : originalDecision.executionAuthorized,
+        memoryRetrievalSuppressedReason: authoritative
+          ? "response-opportunity-pending"
+          : undefined,
+        modelExecutionSuppressedReason: authoritative
+          ? "response-opportunity-pending"
+          : undefined,
       };
       traceStoreRef.current.updateMetadata(traceId, baseMetadata);
 
@@ -12302,7 +12316,7 @@ export function useMeetingAssistant() {
           responseOpportunitySkipReason:
             "runtime-inference-disabled",
         });
-        traceStoreRef.current.finishTrace(traceId, "success");
+        finishTraceIfAuthoritative();
         return;
       }
 
@@ -12316,7 +12330,7 @@ export function useMeetingAssistant() {
           responseOpportunityDisposition: "provider-circuit-open",
           responseOpportunitySkipReason: "provider-circuit-open",
         });
-        traceStoreRef.current.finishTrace(traceId, "success");
+        finishTraceIfAuthoritative();
         return;
       }
 
@@ -12348,7 +12362,7 @@ export function useMeetingAssistant() {
           responseOpportunitySkipReason:
             "provider-configuration-error",
         });
-        traceStoreRef.current.finishTrace(traceId, "success");
+        finishTraceIfAuthoritative();
         return;
       }
 
@@ -12371,7 +12385,7 @@ export function useMeetingAssistant() {
           : sessionBudget.reason,
       });
       if (!sessionBudget.authorized) {
-        traceStoreRef.current.finishTrace(traceId, "success");
+        finishTraceIfAuthoritative();
         return;
       }
 
@@ -12528,7 +12542,7 @@ export function useMeetingAssistant() {
               })
             : undefined;
           const validAppliedDecision =
-            releaseDecision?.released
+            authoritative && releaseDecision?.released
               ? releaseDecision.advisorDecision
               : undefined;
           const decisionApplied = Boolean(validAppliedDecision);
@@ -12567,7 +12581,9 @@ export function useMeetingAssistant() {
             responseOpportunityEvidenceSpans:
               parsedValue?.evidenceSpans,
             responseOpportunityDecisionApplied: decisionApplied,
-            responseOpportunityReleased: releaseDecision?.released ?? false,
+            responseOpportunityReleased:
+              authoritative && (releaseDecision?.released ?? false),
+            responseOpportunityShadowObserved: !authoritative,
             responseOpportunityReleaseReason:
               releaseDecision?.reason ??
               (authorization.authorized
@@ -12663,6 +12679,11 @@ export function useMeetingAssistant() {
             );
           }
 
+          if (!authoritative) {
+            refreshRecordedCompletedTrace(traceId);
+            return;
+          }
+
           if (
             validAppliedDecision?.action === "answer-refresh"
           ) {
@@ -12735,7 +12756,11 @@ export function useMeetingAssistant() {
         },
       });
     },
-    [publishCanonicalLogicalQuestionTarget, scheduleAdvisor]
+    [
+      publishCanonicalLogicalQuestionTarget,
+      refreshRecordedCompletedTrace,
+      scheduleAdvisor,
+    ]
   );
 
   const scheduleMeetingMetadataInference = useCallback(
@@ -18481,16 +18506,23 @@ export function useMeetingAssistant() {
           | RuntimeAdjudicationScheduleHandle
           | undefined;
         if (logicalQuestionUnit) {
-          if (
-            responseOpportunityLocalDecision.disposition ===
-            "runtime-required"
-          ) {
+          const responseOpportunityExecutionMode =
+            resolveResponseOpportunityExecutionMode(
+              responseOpportunityLocalDecision
+            );
+          if (responseOpportunityExecutionMode) {
             scheduleResponseOpportunityInference({
               turn,
               traceId,
               logicalQuestionUnit,
               originalDecision: turnGate,
+              executionMode: responseOpportunityExecutionMode,
             });
+          }
+          if (
+            responseOpportunityLocalDecision.disposition ===
+            "runtime-required"
+          ) {
             return;
           }
           runtimeAdjudication = scheduleSemanticTaxonomyShadow({

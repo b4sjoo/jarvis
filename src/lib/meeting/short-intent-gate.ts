@@ -22,11 +22,16 @@ export type ResponseOpportunityLocalDisposition =
   | "deterministic-output"
   | "runtime-required";
 
+export type ResponseOpportunityExecutionMode =
+  | "authoritative"
+  | "shadow-observation";
+
 export interface ResponseOpportunityLocalDecision {
   disposition: ResponseOpportunityLocalDisposition;
   reason: string;
   wordEquivalent: number;
   decision: ResponseOpportunityDecision;
+  runtimeReviewRequired: boolean;
 }
 
 export interface ResponseOpportunitySourceSpan {
@@ -178,6 +183,7 @@ export function decideResponseOpportunityLocalRoute(input: {
       reason: "pending-confirmation-response",
       wordEquivalent,
       decision: "output-request",
+      runtimeReviewRequired: true,
     };
   }
   if (
@@ -190,6 +196,7 @@ export function decideResponseOpportunityLocalRoute(input: {
       reason: input.decision.reason,
       wordEquivalent,
       decision: "no-output-request",
+      runtimeReviewRequired: false,
     };
   }
   if (
@@ -201,17 +208,7 @@ export function decideResponseOpportunityLocalRoute(input: {
       reason: input.decision.reason,
       wordEquivalent,
       decision: "output-request",
-    };
-  }
-  if (
-    input.decision.intent === "logistics" &&
-    input.decision.confidence >= 0.95
-  ) {
-    return {
-      disposition: "deterministic-no-output",
-      reason: input.decision.reason,
-      wordEquivalent,
-      decision: "no-output-request",
+      runtimeReviewRequired: true,
     };
   }
   return {
@@ -219,7 +216,17 @@ export function decideResponseOpportunityLocalRoute(input: {
     reason: "residual-response-opportunity-ambiguity",
     wordEquivalent,
     decision: "unclear",
+    runtimeReviewRequired: true,
   };
+}
+
+export function resolveResponseOpportunityExecutionMode(
+  decision: ResponseOpportunityLocalDecision
+): ResponseOpportunityExecutionMode | undefined {
+  if (!decision.runtimeReviewRequired) return undefined;
+  return decision.disposition === "runtime-required"
+    ? "authoritative"
+    : "shadow-observation";
 }
 
 export function buildResponseOpportunityRequest(input: {
@@ -553,7 +560,9 @@ export function formatResponseOpportunityLocalDecisionForTrace(
       decision.disposition === "deterministic-output" &&
       decision.wordEquivalent <= 3,
     residualResponseOpportunityInferenceRequired:
-      decision.disposition === "runtime-required",
+      decision.runtimeReviewRequired,
+    responseOpportunityRuntimeReviewRequired:
+      decision.runtimeReviewRequired,
     // Compatibility fields remain decode-only until Task 168 removes the
     // historical short-intent vocabulary from stored summaries.
     shortIntentLocalDisposition: legacyDisposition,

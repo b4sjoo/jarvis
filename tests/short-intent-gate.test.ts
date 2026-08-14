@@ -12,6 +12,7 @@ import {
   decideResponseOpportunityLocalRoute,
   decideResponseOpportunityRelease,
   parseResponseOpportunityOutput,
+  resolveResponseOpportunityExecutionMode,
 } from "../src/lib/meeting/short-intent-gate.js";
 import type { LogicalQuestionUnit } from "../src/lib/meeting/logical-question-unit.js";
 
@@ -54,7 +55,7 @@ function logicalQuestionUnit(
   };
 }
 
-test("keeps clear output requests and exact fillers on deterministic paths", () => {
+test("keeps exact fillers local while reviewing clear requests in runtime shadow", () => {
   const fillerText = "Mm-hmm.";
   const filler = decideResponseOpportunityLocalRoute({
     text: fillerText,
@@ -64,6 +65,7 @@ test("keeps clear output requests and exact fillers on deterministic paths", () 
   });
   assert.equal(filler.disposition, "deterministic-no-output");
   assert.equal(filler.decision, "no-output-request");
+  assert.equal(filler.runtimeReviewRequired, false);
 
   const askText = "Please design a URL shortener.";
   const ask = decideResponseOpportunityLocalRoute({
@@ -74,6 +76,12 @@ test("keeps clear output requests and exact fillers on deterministic paths", () 
   });
   assert.equal(ask.disposition, "deterministic-output");
   assert.equal(ask.decision, "output-request");
+  assert.equal(ask.runtimeReviewRequired, true);
+  assert.equal(
+    resolveResponseOpportunityExecutionMode(ask),
+    "shadow-observation"
+  );
+  assert.equal(resolveResponseOpportunityExecutionMode(filler), undefined);
 });
 
 test("sends contentful residual ambiguity to runtime regardless of length", () => {
@@ -97,6 +105,12 @@ test("sends contentful residual ambiguity to runtime regardless of length", () =
     });
     assert.equal(route.disposition, "runtime-required", text);
     assert.equal(route.decision, "unclear", text);
+    assert.equal(route.runtimeReviewRequired, true, text);
+    assert.equal(
+      resolveResponseOpportunityExecutionMode(route),
+      "authoritative",
+      text
+    );
   }
 });
 
@@ -112,6 +126,28 @@ test("lets a pending confirmation outrank an acknowledgement rule", () => {
 
   assert.equal(route.disposition, "deterministic-output");
   assert.equal(route.reason, "pending-confirmation-response");
+  assert.equal(route.runtimeReviewRequired, true);
+});
+
+test("sends contentful logistics to runtime instead of granting local no-output authority", () => {
+  const text = "The interview will end at 3 PM.";
+  const localDecision = decideAdvisorTurnIntent(text, {
+    hasActiveTask: true,
+  });
+  const route = decideResponseOpportunityLocalRoute({
+    text,
+    decision: {
+      ...localDecision,
+      intent: "logistics",
+      confidence: 0.99,
+      action: "append-only",
+      recommendedAction: "append-only",
+      executionAuthorized: false,
+    },
+  });
+
+  assert.equal(route.disposition, "runtime-required");
+  assert.equal(route.runtimeReviewRequired, true);
 });
 
 test("builds a bounded LQU-only request and preserves the terminal tail", () => {
