@@ -125,7 +125,6 @@ import {
   ManualQuestionTypeCorrectionSource,
   CurrentQuestionSettlementDecision,
   CurrentQuestionSettlementDisposition,
-  CurrentQuestionTerminalNoAnswerDecision,
   ResponseOnlyTaskScope,
   ResponseOpportunityGenerationGateCoordinator,
   LogicalQuestionUnit,
@@ -2192,9 +2191,6 @@ export function useMeetingAssistant() {
   );
   const currentQuestionSettlementRef = useRef<
     CurrentQuestionSettlementDecision | undefined
-  >(undefined);
-  const currentQuestionTerminalNoAnswerRef = useRef<
-    CurrentQuestionTerminalNoAnswerDecision | undefined
   >(undefined);
   const settledAdvisorExecutionPlanRef = useRef<
     SettledAdvisorExecutionPlan | undefined
@@ -4480,7 +4476,6 @@ export function useMeetingAssistant() {
     cancelledAdvisorTurnIdsRef.current.clear();
     taskBoundaryCandidateRef.current = undefined;
     currentQuestionSettlementRef.current = undefined;
-    currentQuestionTerminalNoAnswerRef.current = undefined;
     settledAdvisorExecutionPlanRef.current = undefined;
     advisorResponseFingerprintCacheRef.current.reset();
     advisorResponseChallengeCoordinatorRef.current.reset();
@@ -12585,13 +12580,6 @@ export function useMeetingAssistant() {
       turn: TranscriptTurn;
       intentDecision: AdvisorTurnIntentDecision;
     }) => {
-      const terminalNoAnswer = currentQuestionTerminalNoAnswerRef.current;
-      if (
-        terminalNoAnswer &&
-        logicalQuestionUnit.id !== terminalNoAnswer.logicalQuestionUnitId
-      ) {
-        currentQuestionTerminalNoAnswerRef.current = undefined;
-      }
       logicalQuestionUnitRef.current = logicalQuestionUnit;
       const logicalQuestionLease =
         createLogicalQuestionUnitLease(logicalQuestionUnit);
@@ -17414,31 +17402,9 @@ export function useMeetingAssistant() {
       if (activeTriggerTurnId && activeTriggerTurnId !== turn.id) {
         cancelledAdvisorTurnIds.add(activeTriggerTurnId);
       }
-      const terminalNoAnswer =
-        currentQuestionTerminalNoAnswerRef.current;
       const effectivePrimaryAskProjection =
         primaryAskProjection ??
         projectPrimaryAsk({ turnId: turn.id, text: turn.text });
-      const currentAdjudicationBudget =
-        decideTaxonomyAdjudicationBudgetForSource({
-          primaryAskProjection: effectivePrimaryAskProjection,
-          latestSourceText: turn.text,
-          turnGateAction: intentDecision.action,
-        });
-      const terminalNoAnswerBoundary =
-        terminalNoAnswer &&
-        terminalNoAnswer.sessionId === contextState.sessionId &&
-        terminalNoAnswer.runtimeEpoch === runtimeEpochRef.current
-          ? {
-              logicalQuestionUnitId:
-                terminalNoAnswer.logicalQuestionUnitId,
-              settledRevision: terminalNoAnswer.revision,
-              settledSourceTurnIds:
-                terminalNoAnswer.sourceTurnIds,
-              currentSourceOwnedSubstantive:
-                currentAdjudicationBudget.sourceOwnedSubstantive,
-            }
-          : undefined;
       const logicalQuestionUnit = composeLogicalQuestionUnit({
         currentTurn: turn,
         sessionId: contextState.sessionId,
@@ -17461,16 +17427,8 @@ export function useMeetingAssistant() {
         explicitTaskSwitch,
         sectionHint,
         primaryAskProjection: effectivePrimaryAskProjection,
-        terminalNoAnswerBoundary,
       });
       if (commitCanonical) {
-        if (
-          terminalNoAnswer &&
-          logicalQuestionUnit.id !==
-            terminalNoAnswer.logicalQuestionUnitId
-        ) {
-          currentQuestionTerminalNoAnswerRef.current = undefined;
-        }
         logicalQuestionUnitRef.current = logicalQuestionUnit;
       }
       traceStoreRef.current.updateMetadata(
