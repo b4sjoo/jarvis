@@ -1,4 +1,4 @@
-import { RESPONSE_OPPORTUNITY_MAX_OUTPUT_TOKENS } from "./short-intent-gate.js";
+import { RESPONSE_OPPORTUNITY_MAX_OUTPUT_TOKENS } from "./response-opportunity-contract.js";
 
 export type ModelWorkloadClass = "runtime" | "advisor" | "complex";
 
