@@ -336,6 +336,7 @@ import {
   buildResponseOpportunityRequest,
   createResponseOpportunityLease,
   createResponseOpportunityProposal,
+  decideResponseOpportunityFailureFallback,
   decideResponseOpportunityLocalRoute,
   decideResponseOpportunityRelease,
   formatResponseOpportunityLocalDecisionForTrace,
@@ -12577,6 +12578,10 @@ export function useMeetingAssistant() {
       const request = buildResponseOpportunityRequest({
         logicalQuestionUnit,
       });
+      const failureFallback = decideResponseOpportunityFailureFallback({
+        text: turn.text,
+        decision: originalDecision,
+      });
       const budgetKey = [
         logicalQuestionUnit.id,
         logicalQuestionUnit.revision,
@@ -12594,16 +12599,27 @@ export function useMeetingAssistant() {
         : undefined;
       const settleGenerationGateUnresolved = (reason: string) => {
         if (!generationGate) return;
+        const fallbackAuthorized = failureFallback.authorized;
         const settled =
           responseOpportunityGenerationGateRef.current.settle({
             operationId: generationGate.operationId,
-            disposition: "unresolved",
-            reason,
+            disposition: fallbackAuthorized
+              ? "output-authorized"
+              : "unresolved",
+            reason: fallbackAuthorized
+              ? `failure-fallback:${failureFallback.reason}`
+              : reason,
           });
         traceStoreRef.current.updateMetadata(traceId, {
           ...formatResponseOpportunityGenerationGateForTrace(settled),
           responseOpportunityGenerationCandidateState:
-            "response-authority-denied",
+            fallbackAuthorized
+              ? "response-authority-granted"
+              : "response-authority-denied",
+          responseOpportunityFailureFallbackAuthorized:
+            fallbackAuthorized,
+          responseOpportunityFailureFallbackReason:
+            failureFallback.reason,
         });
       };
       const baseMetadata: Record<string, unknown> = {
@@ -12620,6 +12636,10 @@ export function useMeetingAssistant() {
           logicalQuestionUnit.revision,
         responseOpportunityDecisionApplied: false,
         responseOpportunityExecutionMode: executionMode,
+        responseOpportunityFailureFallbackAuthorized:
+          failureFallback.authorized,
+        responseOpportunityFailureFallbackReason:
+          failureFallback.reason,
         ...formatResponseOpportunityGenerationGateForTrace(
           generationGate
         ),
@@ -12874,14 +12894,26 @@ export function useMeetingAssistant() {
                 original: originalDecision,
               })
             : undefined;
+          const releaseUnresolved =
+            !releaseDecision ||
+            releaseDecision.generationDisposition === "unresolved";
+          const failureFallbackApplied =
+            authorization.authorized &&
+            speculative &&
+            releaseUnresolved &&
+            failureFallback.authorized;
           const generationGateDisposition = !authorization.authorized
             ? "stale"
-            : releaseDecision?.generationDisposition ?? "unresolved";
+            : failureFallbackApplied
+              ? "output-authorized"
+              : releaseDecision?.generationDisposition ?? "unresolved";
           const generationGateReason = !authorization.authorized
             ? authorization.reason
-            : releaseDecision?.reason ??
-              result?.parseDisposition ??
-              settlement.disposition;
+            : failureFallbackApplied
+              ? `failure-fallback:${failureFallback.reason}`
+              : releaseDecision?.reason ??
+                result?.parseDisposition ??
+                settlement.disposition;
           const settledGenerationGate = generationGate
             ? responseOpportunityGenerationGateRef.current.settle({
                 operationId: generationGate.operationId,
@@ -12940,6 +12972,8 @@ export function useMeetingAssistant() {
             responseOpportunityEvidenceSpans:
               parsedValue?.evidenceSpans,
             responseOpportunityDecisionApplied: decisionApplied,
+            responseOpportunityFailureFallbackApplied:
+              failureFallbackApplied,
             responseOpportunityReleased:
               authoritative && (releaseDecision?.released ?? false),
             responseOpportunityShadowObserved: !authoritative,

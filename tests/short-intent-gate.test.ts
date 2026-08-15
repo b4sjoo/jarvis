@@ -2,6 +2,9 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { decideAdvisorTurnIntent } from "../src/lib/meeting/advisor-turn-intent.js";
 import {
+  RESPONSE_OPPORTUNITY_COMPACT_OUTPUT_WORST_CASE,
+  RESPONSE_OPPORTUNITY_MAX_OUTPUT_CHARS,
+  RESPONSE_OPPORTUNITY_MAX_OUTPUT_TOKENS,
   RESPONSE_OPPORTUNITY_SESSION_START_LIMIT,
   ResponseOpportunitySessionBudget,
   authorizeResponseOpportunityLease,
@@ -9,6 +12,7 @@ import {
   buildResponseOpportunityRequest,
   createResponseOpportunityLease,
   createResponseOpportunityProposal,
+  decideResponseOpportunityFailureFallback,
   decideResponseOpportunityLocalRoute,
   decideResponseOpportunityRelease,
   parseResponseOpportunityOutput,
@@ -182,11 +186,11 @@ test("strictly parses exact turn-scoped evidence and rejects extra authority", (
     logicalQuestionUnit: logicalQuestionUnit("Kubernetes"),
   });
   const validOutput = {
-    schemaVersion: 2,
-    decision: "output-request",
-    confidence: 0.97,
-    evidenceSpans: [{ turnId: "turn-current", text: "Kubernetes" }],
-    reason: "The interviewer requests discussion of the named subject.",
+    v: 3,
+    d: "o",
+    c: 0.97,
+    e: [0],
+    r: "ask",
   };
   assert.equal(
     parseResponseOpportunityOutput(JSON.stringify(validOutput), request).ok,
@@ -205,9 +209,7 @@ test("strictly parses exact turn-scoped evidence and rejects extra authority", (
   const inventedEvidence = parseResponseOpportunityOutput(
     JSON.stringify({
       ...validOutput,
-      evidenceSpans: [
-        { turnId: "turn-current", text: "Kubernetes architecture" },
-      ],
+      e: [1],
     }),
     request
   );
@@ -215,6 +217,69 @@ test("strictly parses exact turn-scoped evidence and rejects extra authority", (
   if (!inventedEvidence.ok) {
     assert.equal(inventedEvidence.errorKind, "evidence");
   }
+});
+
+test("compact output contract fits its derived provider budget", () => {
+  assert.ok(
+    RESPONSE_OPPORTUNITY_COMPACT_OUTPUT_WORST_CASE.length <=
+      RESPONSE_OPPORTUNITY_MAX_OUTPUT_CHARS
+  );
+  assert.ok(
+    RESPONSE_OPPORTUNITY_MAX_OUTPUT_TOKENS >=
+      Math.ceil(RESPONSE_OPPORTUNITY_MAX_OUTPUT_CHARS / 2)
+  );
+});
+
+test("accepts fenced compact provider output and rejects truncation", () => {
+  const request = buildResponseOpportunityRequest({
+    logicalQuestionUnit: logicalQuestionUnit("Explain HNSW."),
+  });
+  const fenced = parseResponseOpportunityOutput(
+    '```json\n{"v":3,"d":"o","c":0.96,"e":[0],"r":"ask"}\n```',
+    request
+  );
+  assert.equal(fenced.ok, true);
+  if (fenced.ok) {
+    assert.deepEqual(fenced.value.evidenceSpans, request.sourceSpans);
+  }
+
+  const truncated = parseResponseOpportunityOutput(
+    '{"v":3,"d":"o","c":0.96,"e":[0],"r":"ask"',
+    request
+  );
+  assert.equal(truncated.ok, false);
+  if (!truncated.ok) assert.equal(truncated.reason, "invalid-json");
+});
+
+test("fails open only for explicit task actions with a concrete object", () => {
+  const explicit = decideAdvisorTurnIntent(
+    "Please refine the architecture with multi-region failover.",
+    { hasActiveTask: true }
+  );
+  assert.deepEqual(
+    decideResponseOpportunityFailureFallback({
+      text: "Please refine the architecture with multi-region failover.",
+      decision: explicit,
+    }),
+    {
+      authorized: true,
+      reason: "explicit-task-action-with-object",
+    }
+  );
+
+  const metaCheck = decideAdvisorTurnIntent("Did you get my question?", {
+    hasActiveTask: true,
+  });
+  assert.deepEqual(
+    decideResponseOpportunityFailureFallback({
+      text: "Did you get my question?",
+      decision: metaCheck,
+    }),
+    {
+      authorized: false,
+      reason: "automatic-authority-not-concrete",
+    }
+  );
 });
 
 test("response-opportunity lease is independent of parent and type state", () => {
@@ -271,7 +336,7 @@ test("releases only high-confidence output requests", () => {
     hasActiveTask: false,
   });
   const base = {
-    schemaVersion: 2 as const,
+    schemaVersion: 3 as const,
     confidence: 0.93,
     evidenceSpans: [{ turnId: "turn-current", text: "Kubernetes" }],
     reason: "output requested",
@@ -314,7 +379,7 @@ test("creates a bounded proposal and enforces per-session dedupe", () => {
     operationId: "operation-a",
     request,
     result: {
-      schemaVersion: 2,
+      schemaVersion: 3,
       decision: "output-request",
       confidence: 0.95,
       evidenceSpans: [

@@ -3,10 +3,25 @@ import type { LogicalQuestionUnit } from "./logical-question-unit.js";
 import type { RuntimeInferenceRuntimeJob } from "./runtime-inference-runtime.js";
 import { calculateWordEquivalent } from "./transcript-fusion.js";
 
-export const RESPONSE_OPPORTUNITY_SCHEMA_VERSION = 2;
+export const RESPONSE_OPPORTUNITY_SCHEMA_VERSION = 3;
 export const RESPONSE_OPPORTUNITY_PROMPT_VERSION =
-  "response-opportunity-v2";
-export const RESPONSE_OPPORTUNITY_MAX_OUTPUT_CHARS = 1_024;
+  "response-opportunity-v3-compact";
+export const RESPONSE_OPPORTUNITY_COMPACT_OUTPUT_WORST_CASE =
+  JSON.stringify({
+    v: RESPONSE_OPPORTUNITY_SCHEMA_VERSION,
+    d: "u",
+    c: 1,
+    e: [0, 1],
+    r: "bounded-source-insufficient",
+  });
+export const RESPONSE_OPPORTUNITY_MAX_OUTPUT_CHARS =
+  RESPONSE_OPPORTUNITY_COMPACT_OUTPUT_WORST_CASE.length + 64;
+// Runtime providers tokenize JSON differently. Two characters per token plus
+// fixed headroom safely contains the worst legal compact response.
+export const RESPONSE_OPPORTUNITY_MAX_OUTPUT_TOKENS = Math.max(
+  128,
+  Math.ceil(RESPONSE_OPPORTUNITY_MAX_OUTPUT_CHARS / 2) + 16
+);
 export const RESPONSE_OPPORTUNITY_SESSION_START_LIMIT = 120;
 export const RESPONSE_OPPORTUNITY_RELEASE_MIN_CONFIDENCE = 0.85;
 export const RESPONSE_OPPORTUNITY_MAX_SOURCE_CHARS = 1_800;
@@ -16,6 +31,76 @@ export type ResponseOpportunityDecision =
   | "output-request"
   | "no-output-request"
   | "unclear";
+
+const RESPONSE_OPPORTUNITY_REASON_CODES = new Set([
+  "ask",
+  "directive",
+  "correction",
+  "constraint",
+  "phase-control",
+  "acknowledgement",
+  "greeting",
+  "closing",
+  "logistics",
+  "answer-to-candidate",
+  "bounded-source-insufficient",
+]);
+
+const RESPONSE_OPPORTUNITY_FALLBACK_ACTION_WORDS = new Set([
+  "analyze",
+  "analyse",
+  "build",
+  "calculate",
+  "code",
+  "compare",
+  "create",
+  "debug",
+  "describe",
+  "design",
+  "discuss",
+  "draw",
+  "estimate",
+  "explain",
+  "find",
+  "fix",
+  "give",
+  "implement",
+  "optimize",
+  "optimise",
+  "provide",
+  "refine",
+  "show",
+  "solve",
+  "store",
+  "stored",
+  "tell",
+  "update",
+  "walk",
+  "write",
+]);
+const RESPONSE_OPPORTUNITY_FALLBACK_STOP_WORDS = new Set([
+  "a",
+  "an",
+  "and",
+  "can",
+  "could",
+  "for",
+  "how",
+  "is",
+  "me",
+  "of",
+  "please",
+  "should",
+  "that",
+  "the",
+  "this",
+  "to",
+  "we",
+  "what",
+  "where",
+  "would",
+  "you",
+]);
 
 export type ResponseOpportunityLocalDisposition =
   | "deterministic-no-output"
@@ -35,13 +120,21 @@ export interface ResponseOpportunityLocalDecision {
   runtimeReviewRequired: boolean;
 }
 
+export interface ResponseOpportunityFailureFallbackDecision {
+  authorized: boolean;
+  reason:
+    | "explicit-phase-control"
+    | "explicit-task-action-with-object"
+    | "automatic-authority-not-concrete";
+}
+
 export interface ResponseOpportunitySourceSpan {
   turnId: string;
   text: string;
 }
 
 export interface ResponseOpportunityRequest {
-  schemaVersion: 2;
+  schemaVersion: 3;
   promptVersion: string;
   logicalQuestionUnitId: string;
   logicalQuestionUnitRevision: number;
@@ -52,7 +145,7 @@ export interface ResponseOpportunityRequest {
 }
 
 export interface LlmResponseOpportunityDecision {
-  schemaVersion: 2;
+  schemaVersion: 3;
   decision: ResponseOpportunityDecision;
   confidence: number;
   evidenceSpans: ResponseOpportunitySourceSpan[];
@@ -234,6 +327,47 @@ export function resolveResponseOpportunityExecutionMode(
     : "speculative-authoritative";
 }
 
+export function decideResponseOpportunityFailureFallback(input: {
+  text: string;
+  decision: AdvisorTurnIntentDecision;
+}): ResponseOpportunityFailureFallbackDecision {
+  if (input.decision.phaseControl) {
+    return { authorized: true, reason: "explicit-phase-control" };
+  }
+
+  const normalized = input.text
+    .toLowerCase()
+    .replace(/[^a-z0-9+#.\s-]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  const explicitTaskAction =
+    /\b(?:analy[sz]e|build|calculate|code|compare|create|debug|describe|design|discuss|draw|estimate|explain|find|fix|give|implement|optimi[sz]e|provide|refine|show|solve|store|stored|tell|update|walk|write)\b/.test(
+      normalized
+    );
+  const objectTokens = normalized
+    .split(" ")
+    .filter(Boolean)
+    .filter(
+      (token) =>
+        !RESPONSE_OPPORTUNITY_FALLBACK_STOP_WORDS.has(token) &&
+        !RESPONSE_OPPORTUNITY_FALLBACK_ACTION_WORDS.has(token)
+    );
+  if (
+    input.decision.executionAuthorized &&
+    explicitTaskAction &&
+    objectTokens.length >= 2
+  ) {
+    return {
+      authorized: true,
+      reason: "explicit-task-action-with-object",
+    };
+  }
+  return {
+    authorized: false,
+    reason: "automatic-authority-not-concrete",
+  };
+}
+
 export function buildResponseOpportunityRequest(input: {
   logicalQuestionUnit: LogicalQuestionUnit;
   manualForceAdvise?: boolean;
@@ -283,8 +417,10 @@ export function buildResponseOpportunityPrompts(
       "Use no-output-request for greetings, acknowledgements, closings, logistics, or information supplied in response to the candidate's own question when the interviewer does not ask anything back.",
       "Use unclear when the bounded source is incomplete or does not support either conclusion.",
       "Do not classify question type, task relation, parent, evidence mode, context scope, playbook phase, or artifact intent.",
-      "Every evidenceSpans item must contain a source turnId and an exact verbatim substring from that sourceSpans text.",
-      "Schema: {schemaVersion:2,decision:'output-request'|'no-output-request'|'unclear',confidence:number,evidenceSpans:[{turnId,text}],reason:string}.",
+      "Return only this compact schema: {v:3,d:'o'|'n'|'u',c:number,e:number[],r:string}.",
+      "d means o=output-request, n=no-output-request, u=unclear. c is confidence from 0 to 1.",
+      "e contains only zero-based indexes into sourceSpans; never copy source text or turn IDs into the output.",
+      "r must be exactly one of: ask,directive,correction,constraint,phase-control,acknowledgement,greeting,closing,logistics,answer-to-candidate,bounded-source-insufficient.",
     ].join(" "),
     userMessage: JSON.stringify(request),
   };
@@ -310,80 +446,70 @@ export function parseResponseOpportunityOutput(
     return parseFailure("output-is-not-object", "schema");
   }
   const candidate = decoded as Record<string, unknown>;
-  const allowedKeys = new Set([
-    "schemaVersion",
-    "decision",
-    "confidence",
-    "evidenceSpans",
-    "reason",
-  ]);
+  const allowedKeys = new Set(["v", "d", "c", "e", "r"]);
   if (Object.keys(candidate).some((key) => !allowedKeys.has(key))) {
     return parseFailure("non-opportunity-field-present", "schema");
   }
-  if (candidate.schemaVersion !== RESPONSE_OPPORTUNITY_SCHEMA_VERSION) {
+  if (candidate.v !== RESPONSE_OPPORTUNITY_SCHEMA_VERSION) {
     return parseFailure("unsupported-schema-version", "schema");
   }
   if (
-    candidate.decision !== "output-request" &&
-    candidate.decision !== "no-output-request" &&
-    candidate.decision !== "unclear"
+    candidate.d !== "o" &&
+    candidate.d !== "n" &&
+    candidate.d !== "u"
   ) {
     return parseFailure("invalid-decision", "schema");
   }
   if (
-    typeof candidate.confidence !== "number" ||
-    !Number.isFinite(candidate.confidence) ||
-    candidate.confidence < 0 ||
-    candidate.confidence > 1
+    typeof candidate.c !== "number" ||
+    !Number.isFinite(candidate.c) ||
+    candidate.c < 0 ||
+    candidate.c > 1
   ) {
     return parseFailure("invalid-confidence", "schema");
   }
   if (
-    typeof candidate.reason !== "string" ||
-    !candidate.reason.trim() ||
-    candidate.reason.length > 240
+    typeof candidate.r !== "string" ||
+    !RESPONSE_OPPORTUNITY_REASON_CODES.has(candidate.r)
   ) {
     return parseFailure("invalid-reason", "schema");
   }
   if (
-    !Array.isArray(candidate.evidenceSpans) ||
-    candidate.evidenceSpans.length === 0 ||
-    candidate.evidenceSpans.length > 4
+    !Array.isArray(candidate.e) ||
+    candidate.e.length === 0 ||
+    candidate.e.length > request.sourceSpans.length
   ) {
     return parseFailure("invalid-evidence-spans", "schema");
   }
+  const evidenceIndexes = new Set<number>();
   const evidenceSpans: ResponseOpportunitySourceSpan[] = [];
-  for (const value of candidate.evidenceSpans) {
-    if (!value || typeof value !== "object" || Array.isArray(value)) {
-      return parseFailure("invalid-evidence-span", "schema");
-    }
-    const span = value as Record<string, unknown>;
+  for (const value of candidate.e) {
     if (
-      Object.keys(span).some(
-        (key) => key !== "turnId" && key !== "text"
-      ) ||
-      typeof span.turnId !== "string" ||
-      typeof span.text !== "string" ||
-      !span.text.trim()
+      typeof value !== "number" ||
+      !Number.isInteger(value) ||
+      value < 0 ||
+      value >= request.sourceSpans.length ||
+      evidenceIndexes.has(value)
     ) {
-      return parseFailure("invalid-evidence-span", "schema");
+      return parseFailure("invalid-evidence-index", "evidence");
     }
-    const source = request.sourceSpans.find(
-      (candidateSource) => candidateSource.turnId === span.turnId
-    );
-    if (!source || !source.text.includes(span.text)) {
-      return parseFailure("invalid-evidence-span", "evidence");
-    }
-    evidenceSpans.push({ turnId: span.turnId, text: span.text });
+    evidenceIndexes.add(value);
+    evidenceSpans.push({ ...request.sourceSpans[value] });
   }
+  const decision =
+    candidate.d === "o"
+      ? "output-request"
+      : candidate.d === "n"
+        ? "no-output-request"
+        : "unclear";
   return {
     ok: true,
     value: {
       schemaVersion: RESPONSE_OPPORTUNITY_SCHEMA_VERSION,
-      decision: candidate.decision,
-      confidence: candidate.confidence,
+      decision,
+      confidence: candidate.c,
       evidenceSpans,
-      reason: candidate.reason.trim(),
+      reason: candidate.r,
     },
     evidenceSpansValid: true,
   };

@@ -1,3 +1,5 @@
+import { RESPONSE_OPPORTUNITY_MAX_OUTPUT_TOKENS } from "./short-intent-gate.js";
+
 export type ModelWorkloadClass = "runtime" | "advisor" | "complex";
 
 export type RuntimeInferenceOperationKind =
@@ -75,7 +77,7 @@ const DEFINITIONS: Record<
     operationKind: "response-opportunity-inference",
     lane: "critical",
     timeoutMs: 1_500,
-    maxOutputTokens: 96,
+    maxOutputTokens: RESPONSE_OPPORTUNITY_MAX_OUTPUT_TOKENS,
     quiescenceMs: 0,
     maxStartsPerBudgetSlot: 1,
   },

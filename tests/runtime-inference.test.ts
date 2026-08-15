@@ -6,6 +6,7 @@ import {
   formatRuntimeInferenceOperationForTrace,
   getRuntimeInferenceOperationDefinition,
 } from "../src/lib/meeting/runtime-inference.js";
+import { RESPONSE_OPPORTUNITY_MAX_OUTPUT_TOKENS } from "../src/lib/meeting/short-intent-gate.js";
 import {
   formatRuntimeInferenceCircuitForTrace,
   RuntimeInferenceSessionCircuitBreaker,
@@ -61,7 +62,10 @@ test("registers each atomic runtime operation with an isolated policy", () => {
   assert.equal(questionType.quiescenceMs, 350);
   assert.equal(responseOpportunity.lane, "critical");
   assert.equal(responseOpportunity.timeoutMs, 1_500);
-  assert.equal(responseOpportunity.maxOutputTokens, 96);
+  assert.equal(
+    responseOpportunity.maxOutputTokens,
+    RESPONSE_OPPORTUNITY_MAX_OUTPUT_TOKENS
+  );
   assert.equal(responseOpportunity.quiescenceMs, 0);
   assert.equal(metadata.lane, "background");
   assert.equal(whiteboard.timeoutMs, 3_000);
