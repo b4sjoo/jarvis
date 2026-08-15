@@ -17,7 +17,7 @@ import {
 import type {
   ResponseOpportunityGenerationGateSnapshot,
 } from "./response-opportunity-generation-gate.js";
-import { buildResponseOpportunityRequest } from "./short-intent-gate.js";
+import { buildResponseOpportunityRequest } from "./response-opportunity-contract.js";
 import {
   applyPlaybookPhaseDecisionToProgress,
   type PlaybookPhaseDecision,

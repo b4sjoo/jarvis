@@ -4,8 +4,13 @@ import {
   RESPONSE_OPPORTUNITY_COMPACT_OUTPUT_WORST_CASE,
   RESPONSE_OPPORTUNITY_MAX_OUTPUT_CHARS,
   RESPONSE_OPPORTUNITY_MAX_OUTPUT_TOKENS,
+  RESPONSE_OPPORTUNITY_MAX_SOURCE_CHARS,
   RESPONSE_OPPORTUNITY_PROMPT_VERSION,
   RESPONSE_OPPORTUNITY_SCHEMA_VERSION,
+  buildResponseOpportunityRequest,
+  hashResponseOpportunityEvidence,
+  type ResponseOpportunityRequest,
+  type ResponseOpportunitySourceSpan,
 } from "./response-opportunity-contract.js";
 import type { RuntimeInferenceRuntimeJob } from "./runtime-inference-runtime.js";
 import { calculateWordEquivalent } from "./transcript-fusion.js";
@@ -14,12 +19,16 @@ export {
   RESPONSE_OPPORTUNITY_COMPACT_OUTPUT_WORST_CASE,
   RESPONSE_OPPORTUNITY_MAX_OUTPUT_CHARS,
   RESPONSE_OPPORTUNITY_MAX_OUTPUT_TOKENS,
+  RESPONSE_OPPORTUNITY_MAX_SOURCE_CHARS,
   RESPONSE_OPPORTUNITY_PROMPT_VERSION,
   RESPONSE_OPPORTUNITY_SCHEMA_VERSION,
+  buildResponseOpportunityRequest,
+  hashResponseOpportunityEvidence,
+  type ResponseOpportunityRequest,
+  type ResponseOpportunitySourceSpan,
 };
 export const RESPONSE_OPPORTUNITY_SESSION_START_LIMIT = 120;
 export const RESPONSE_OPPORTUNITY_RELEASE_MIN_CONFIDENCE = 0.85;
-export const RESPONSE_OPPORTUNITY_MAX_SOURCE_CHARS = 1_800;
 export const RESPONSE_OPPORTUNITY_PROPOSAL_TTL_MS = 30_000;
 
 export type ResponseOpportunityDecision =
@@ -121,22 +130,6 @@ export interface ResponseOpportunityFailureFallbackDecision {
     | "explicit-phase-control"
     | "explicit-task-action-with-object"
     | "automatic-authority-not-concrete";
-}
-
-export interface ResponseOpportunitySourceSpan {
-  turnId: string;
-  text: string;
-}
-
-export interface ResponseOpportunityRequest {
-  schemaVersion: 3;
-  promptVersion: string;
-  logicalQuestionUnitId: string;
-  logicalQuestionUnitRevision: number;
-  currentTurnId: string;
-  sourceHash: string;
-  sourceSpans: ResponseOpportunitySourceSpan[];
-  manualForceAdvise: boolean;
 }
 
 export interface LlmResponseOpportunityDecision {
@@ -360,44 +353,6 @@ export function decideResponseOpportunityFailureFallback(input: {
   return {
     authorized: false,
     reason: "automatic-authority-not-concrete",
-  };
-}
-
-export function buildResponseOpportunityRequest(input: {
-  logicalQuestionUnit: LogicalQuestionUnit;
-  manualForceAdvise?: boolean;
-}): ResponseOpportunityRequest {
-  const selectedSources = input.logicalQuestionUnit.sources.slice(-2);
-  let remainingChars = RESPONSE_OPPORTUNITY_MAX_SOURCE_CHARS;
-  const sourceSpans: ResponseOpportunitySourceSpan[] = [];
-  for (const [index, source] of selectedSources.entries()) {
-    if (remainingChars <= 0) break;
-    const isCurrent =
-      source.turnId === input.logicalQuestionUnit.currentTurnId;
-    const laterSourceCount = selectedSources.length - index - 1;
-    const reserveForLater = Math.min(
-      remainingChars,
-      laterSourceCount * 600
-    );
-    const available = Math.max(1, remainingChars - reserveForLater);
-    const text = projectBoundedSourceText(
-      source.text,
-      Math.min(available, isCurrent ? 1_200 : 600)
-    );
-    if (!text) continue;
-    sourceSpans.push({ turnId: source.turnId, text });
-    remainingChars -= text.length;
-  }
-  const sourceHash = hashResponseOpportunityEvidence(sourceSpans);
-  return {
-    schemaVersion: RESPONSE_OPPORTUNITY_SCHEMA_VERSION,
-    promptVersion: RESPONSE_OPPORTUNITY_PROMPT_VERSION,
-    logicalQuestionUnitId: input.logicalQuestionUnit.id,
-    logicalQuestionUnitRevision: input.logicalQuestionUnit.revision,
-    currentTurnId: input.logicalQuestionUnit.currentTurnId,
-    sourceHash,
-    sourceSpans,
-    manualForceAdvise: input.manualForceAdvise ?? false,
   };
 }
 
@@ -724,29 +679,6 @@ export function formatResponseOpportunityProposalForTrace(
         responseOpportunityProposalExpiresAt: proposal.expiresAt,
       }
     : {};
-}
-
-export function hashResponseOpportunityEvidence(
-  sourceSpans: ResponseOpportunitySourceSpan[]
-) {
-  let hash = 2_166_136_261;
-  for (const character of sourceSpans
-    .flatMap((span) => [span.turnId, span.text])
-    .join("\u001f")) {
-    hash ^= character.charCodeAt(0);
-    hash = Math.imul(hash, 16_777_619);
-  }
-  return (hash >>> 0).toString(16).padStart(8, "0");
-}
-
-function projectBoundedSourceText(text: string, maxChars: number) {
-  const trimmed = text.trim();
-  if (trimmed.length <= maxChars) return trimmed;
-  const marker = "\n...[source omitted]...\n";
-  const available = Math.max(2, maxChars - marker.length);
-  const headChars = Math.min(300, Math.floor(available / 3));
-  const tailChars = available - headChars;
-  return `${trimmed.slice(0, headChars)}${marker}${trimmed.slice(-tailChars)}`;
 }
 
 function isShortConfirmationResponse(text: string) {
