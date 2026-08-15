@@ -76,10 +76,11 @@ import {
   type PreparationArtifactUseReceipt,
   type PreparationRuntimeProvenanceSnapshot,
 } from "./preparation-runtime-provenance.js";
+import { projectMeetingMetadataEvaluationObservation } from "./meeting-metadata-evaluation.js";
 
 const SESSION_RECORDING_SCHEMA_VERSION = 1;
 const SESSION_RECORDING_INTEGRITY_SCHEMA_VERSION = 1;
-const SESSION_TRACE_SUMMARY_SCHEMA_VERSION = 38;
+const SESSION_TRACE_SUMMARY_SCHEMA_VERSION = 39;
 const SESSION_TRACE_INDEX_SCHEMA_VERSION = 1;
 const MAX_RECORDED_WRITE_FAILURES = 20;
 
@@ -143,6 +144,7 @@ interface SessionRecordingEvent {
     | "question-type-adjudication-decision"
     | "question-type-adjudication-outcome"
     | "task-relation-adjudication-decision"
+    | "meeting-metadata-inference-decision"
     | "answer-sufficiency-decision"
     | "advisor-response-fingerprint"
     | "advisor-response-consistency-shadow"
@@ -628,6 +630,21 @@ export interface SessionCompactTraceSummary {
     modelVersion?: string;
     prototypeVersion?: string;
     calibrationVersion?: string;
+  };
+  meetingMetadata?: {
+    revision?: number;
+    operationId?: string;
+    mode?: string;
+    disposition?: string;
+    proposalCompany?: string;
+    committedCompany?: string;
+    authoritativeCompany?: string;
+    effectiveCompany?: string;
+    authoritySource?: string;
+    comparisonDisposition?: string;
+    staleReason?: string;
+    appliedToRuntime?: boolean;
+    overrideOccurred?: boolean;
   };
   semanticEmbeddingRuntime?: {
     requestId?: string;
@@ -3073,6 +3090,83 @@ export class SessionRecordingManager {
       traceId,
       taskId
     );
+  }
+
+  recordMeetingMetadataInferenceDecision({
+    traceId,
+    taskId,
+    metadata,
+  }: {
+    traceId: string;
+    taskId?: string;
+    metadata: Record<string, unknown>;
+  }) {
+    const session = this.getWritableSession({ traceId });
+    if (!session) return;
+    const decisionPath =
+      "runtime-inference/meeting-metadata-decisions.jsonl";
+    const historyPath = "session-context/company-history.jsonl";
+    const observation = projectMeetingMetadataEvaluationObservation(metadata);
+    const payload = {
+      recordedAt: Date.now(),
+      sessionId: session.sessionId,
+      traceId,
+      taskId,
+      metadataRevision: readNumber(
+        metadata.meetingMetadataInferenceRevision
+      ),
+      sourceHash: readString(
+        metadata.meetingMetadataInferenceSourceHash
+      ),
+      ...observation,
+      confidence: readNumber(
+        metadata.meetingMetadataInferenceConfidence
+      ),
+      commitAuthorized: readBoolean(
+        metadata.meetingMetadataInferenceCommitAuthorized
+      ),
+      commitDecisionReason: readString(
+        metadata.meetingMetadataInferenceCommitDecisionReason
+      ),
+      mutationDisposition: readString(
+        metadata.meetingMetadataInferenceMutationDisposition
+      ),
+    };
+    this.enqueue(session, async () => {
+      const line = `${JSON.stringify(payload)}\n`;
+      await this.writeText(session, decisionPath, line, true);
+      await this.writeText(session, historyPath, line, true);
+    });
+    this.recordEvent(
+      "meeting-metadata-inference-decision",
+      metadata,
+      [decisionPath, historyPath],
+      traceId,
+      taskId
+    );
+
+    const existing = session.traceSummaries.get(traceId);
+    if (!existing) return;
+    const updated: SessionCompactTraceSummary = {
+      ...existing,
+      meetingMetadata: buildMeetingMetadataTraceSummary([metadata]),
+    };
+    session.traceSummaries.set(traceId, updated);
+    this.enqueue(session, async () => {
+      await this.writeJson(
+        session,
+        `traces/${sanitizeFilePart(traceId)}/summary.json`,
+        updated
+      );
+      await this.writeJson(session, "metrics/trace-summaries.latest.json", {
+        version: SESSION_TRACE_SUMMARY_SCHEMA_VERSION,
+        savedAt: Date.now(),
+        sessionId: session.sessionId,
+        traces: Array.from(session.traceSummaries.values()).sort(
+          (left, right) => left.startedAt - right.startedAt
+        ),
+      });
+    });
   }
 
   recordAnswerSufficiencyDecision({
@@ -5521,6 +5615,7 @@ export function buildCompactTraceSummary({
       "sentenceBufferAbsoluteDeadlineAt"
     ),
     semanticTaxonomy: buildSemanticTaxonomyTraceSummary(metadataSources),
+    meetingMetadata: buildMeetingMetadataTraceSummary(metadataSources),
     semanticEmbeddingRuntime:
       buildSemanticEmbeddingRuntimeTraceSummary(metadataSources),
     interviewerIntentSemantic:
@@ -6035,6 +6130,37 @@ function buildSemanticTaxonomyTraceSummary(
       metadataSources,
       "taxonomySemanticCalibrationVersion"
     ),
+  };
+}
+
+function buildMeetingMetadataTraceSummary(
+  metadataSources: Record<string, unknown>[]
+): SessionCompactTraceSummary["meetingMetadata"] {
+  const metadata = Object.fromEntries(
+    metadataSources
+      .slice()
+      .reverse()
+      .flatMap((source) => Object.entries(source))
+  );
+  const observation = projectMeetingMetadataEvaluationObservation(metadata);
+  if (!observation.operationObserved) return undefined;
+  return {
+    revision: readFirstNumberFromMetadata(
+      metadataSources,
+      "meetingMetadataInferenceRevision"
+    ),
+    operationId: observation.operationId,
+    mode: observation.mode,
+    disposition: observation.disposition,
+    proposalCompany: observation.proposalCompany,
+    committedCompany: observation.committedCompany,
+    authoritativeCompany: observation.authoritativeCompany,
+    effectiveCompany: observation.effectiveCompany,
+    authoritySource: observation.authoritySource,
+    comparisonDisposition: observation.comparisonDisposition,
+    staleReason: observation.staleReason,
+    appliedToRuntime: observation.appliedToRuntime,
+    overrideOccurred: observation.overrideOccurred,
   };
 }
 
@@ -8235,6 +8361,10 @@ function readNumber(value: unknown) {
   return typeof value === "number" && Number.isFinite(value)
     ? value
     : undefined;
+}
+
+function readBoolean(value: unknown) {
+  return typeof value === "boolean" ? value : undefined;
 }
 
 function readMemoryRejectSummary(value: unknown): MemoryRejectSummary[] | undefined {

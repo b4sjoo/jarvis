@@ -42,6 +42,83 @@ test("renders N/A for a missing human-label denominator", () => {
   assert.match(markdown, /False activation: N\/A/);
 });
 
+test("separates metadata proposal quality from effective company safety", () => {
+  const subject = {
+    questionId: "company-opening",
+    traceIds: ["trace_company"],
+    sourceTurnIds: ["turn_company"],
+  };
+  const expected = createHumanGroundTruthEventV2({
+    eventId: "expected_company",
+    sessionId: "session-company",
+    subject,
+    source: "explicit-ui",
+    fact: {
+      kind: "expected-meeting-metadata",
+      expectedCompany: "Amazon",
+      errorKind: "wrong-target-company",
+    },
+    now: 1,
+  });
+  const projection = deriveHumanEvaluationProjectionV2({
+    sessionId: "session-company",
+    subject,
+    events: [expected],
+    observed: {
+      traceId: "trace_company",
+      traceHash: "company-hash",
+      meetingMetadata: {
+        operationObserved: true,
+        operationId: "metadata_1",
+        proposalCompany: "Google",
+        authoritativeCompany: "Amazon",
+        effectiveCompany: "Amazon",
+        authoritySource: "brief",
+        comparisonDisposition: "conflict",
+        appliedToRuntime: false,
+        overrideOccurred: false,
+      },
+    },
+    now: 2,
+  });
+  const report = buildSessionLongitudinalEvaluationReport([
+    {
+      directory: "/recordings/session-company",
+      manifest: { sessionId: "session-company" },
+      transcriptTurns: [],
+      questionEvaluations: [],
+      humanEvaluationProjectionsV2: [projection],
+      traceSummaries: [
+        {
+          traceId: "trace_company",
+          meetingMetadata: {
+            operationId: "metadata_1",
+            proposalCompany: "Google",
+            authoritativeCompany: "Amazon",
+            effectiveCompany: "Amazon",
+            authoritySource: "brief",
+            comparisonDisposition: "conflict",
+            appliedToRuntime: false,
+            overrideOccurred: false,
+          },
+        },
+      ],
+    },
+  ]);
+
+  assert.equal(report.meetingMetadataFunnel.operationsObserved, 1);
+  assert.equal(report.meetingMetadataFunnel.humanLabeled, 1);
+  assert.equal(report.meetingMetadataFunnel.proposalPrecision.rate, 0);
+  assert.equal(report.meetingMetadataFunnel.proposalRecall.rate, 0);
+  assert.equal(report.meetingMetadataFunnel.effectiveTargetPrecision.rate, 1);
+  assert.equal(report.meetingMetadataFunnel.effectiveTargetRecall.rate, 1);
+  assert.equal(report.meetingMetadataFunnel.conflictRate.rate, 1);
+  assert.equal(report.meetingMetadataFunnel.unauthorizedOverrideCount, 0);
+  assert.deepEqual(report.meetingMetadataFunnel.errorKinds, {
+    "wrong-target-company": 1,
+  });
+});
+
 test("builds product outcomes only from human-reviewed critical moments", () => {
   const momentSubject = {
     momentId: "moment_success",

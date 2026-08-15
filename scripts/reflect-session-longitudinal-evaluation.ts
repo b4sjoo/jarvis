@@ -356,6 +356,50 @@ function mergeRuntimeTraceEvidence(
         readNumber(metadata.taxonomyAdjudicationDurationMs) ??
         compact?.taxonomyAdjudication?.durationMs,
     },
+    meetingMetadata: {
+      ...compact?.meetingMetadata,
+      revision:
+        readNumber(metadata.meetingMetadataInferenceRevision) ??
+        compact?.meetingMetadata?.revision,
+      operationId:
+        readString(metadata.meetingMetadataInferenceOperationId) ??
+        compact?.meetingMetadata?.operationId,
+      mode:
+        readString(metadata.meetingMetadataInferenceMode) ??
+        compact?.meetingMetadata?.mode,
+      disposition:
+        readString(metadata.meetingMetadataInferenceDisposition) ??
+        compact?.meetingMetadata?.disposition,
+      proposalCompany:
+        readString(metadata.meetingMetadataInferenceProposalCompany) ??
+        compact?.meetingMetadata?.proposalCompany,
+      committedCompany:
+        readString(metadata.meetingMetadataInferenceCommittedCompany) ??
+        compact?.meetingMetadata?.committedCompany,
+      authoritativeCompany:
+        readString(metadata.meetingMetadataInferenceAuthoritativeCompany) ??
+        compact?.meetingMetadata?.authoritativeCompany,
+      effectiveCompany:
+        readString(metadata.meetingMetadataInferenceCommittedCompany) ??
+        readString(metadata.meetingMetadataInferenceAuthoritativeCompany) ??
+        readString(metadata.targetCompany) ??
+        compact?.meetingMetadata?.effectiveCompany,
+      authoritySource:
+        readString(metadata.meetingMetadataInferenceCommittedSource) ??
+        readString(metadata.meetingMetadataInferenceAuthoritativeSource) ??
+        compact?.meetingMetadata?.authoritySource,
+      comparisonDisposition:
+        readString(metadata.meetingMetadataInferenceComparisonDisposition) ??
+        compact?.meetingMetadata?.comparisonDisposition,
+      staleReason:
+        readString(metadata.meetingMetadataInferenceStaleReason) ??
+        compact?.meetingMetadata?.staleReason,
+      appliedToRuntime:
+        readBoolean(metadata.meetingMetadataInferenceAppliedToRuntime) ??
+        compact?.meetingMetadata?.appliedToRuntime,
+      overrideOccurred:
+        compact?.meetingMetadata?.overrideOccurred ?? false,
+    },
   };
 }
 

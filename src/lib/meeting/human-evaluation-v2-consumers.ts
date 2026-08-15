@@ -20,7 +20,8 @@ type CompatibilityDimension =
   | "observedRuntimeAction"
   | "answerOutcome"
   | "contextReadScope"
-  | "artifactIntent";
+  | "artifactIntent"
+  | "meetingMetadata";
 
 export interface HumanEvaluationDimensionParity {
   v1Labeled: number;
@@ -328,6 +329,8 @@ function applyProjectionToQuestionEvaluation(
   const runtime = projection.activeFacts["expected-runtime-action"]?.fact;
   const answer = projection.activeFacts["answer-quality"]?.fact;
   const primaryAsk = projection.activeFacts["primary-ask-correction"]?.fact;
+  const meetingMetadata =
+    projection.activeFacts["expected-meeting-metadata"]?.fact;
 
   return {
     ...evaluation,
@@ -345,6 +348,14 @@ function applyProjectionToQuestionEvaluation(
     correctedQuestionType: expectedType
       ? toHumanEvalQuestionType(expectedType)
       : evaluation.correctedQuestionType,
+    company:
+      projection.observed?.meetingMetadata?.effectiveCompany ??
+      evaluation.company,
+    correctedCompany:
+      meetingMetadata?.kind === "expected-meeting-metadata" &&
+      meetingMetadata.expectedCompany !== null
+        ? meetingMetadata.expectedCompany
+        : evaluation.correctedCompany,
     expectedRelation:
       settlement?.kind === "expected-task-settlement"
         ? settlement.expectedRelation
@@ -579,6 +590,9 @@ function readV1Dimension(
   ) {
     return mapAnswerVerdictToOutcome(evaluation.answer.verdict);
   }
+  if (dimension === "meetingMetadata") {
+    return evaluation.correctedCompany;
+  }
   return undefined;
 }
 
@@ -606,6 +620,12 @@ function readV2Dimension(
   }
   if (dimension === "observedRuntimeAction") {
     return projection.observed?.runtimeAction;
+  }
+  if (dimension === "meetingMetadata") {
+    const fact = projection.activeFacts["expected-meeting-metadata"]?.fact;
+    return fact?.kind === "expected-meeting-metadata"
+      ? fact.expectedCompany ?? "__unknown__"
+      : undefined;
   }
   return readSimpleV2Fact(projection, dimension);
 }
@@ -651,6 +671,7 @@ function createEmptyDimensionReport() {
     answerOutcome: create(),
     contextReadScope: create(),
     artifactIntent: create(),
+    meetingMetadata: create(),
   };
 }
 

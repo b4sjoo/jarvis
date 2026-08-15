@@ -61,6 +61,7 @@ export * from "./logical-question-ownership";
 export * from "./meeting-answer";
 export * from "./meeting-answer-display";
 export * from "./meeting-model-route";
+export * from "./meeting-metadata-evaluation";
 export * from "./model-generation-telemetry";
 export * from "./response-artifact-authorization";
 export * from "./response-action-contract";

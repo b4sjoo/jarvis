@@ -23,10 +23,16 @@ import {
   projectQuestionTypeObservation,
   type DurableQuestionOwnerMissingReason,
 } from "./question-type-observation.js";
+import {
+  meetingCompanyLabelsEqual,
+  projectMeetingMetadataEvaluationObservation,
+  type MeetingMetadataEvaluationErrorKind,
+  type MeetingMetadataEvaluationObservation,
+} from "./meeting-metadata-evaluation.js";
 
 export const HUMAN_GROUND_TRUTH_SCHEMA_VERSION = 2 as const;
 export const HUMAN_EVALUATION_DERIVATION_VERSION =
-  "human-evaluation-v2.5";
+  "human-evaluation-v2.6";
 
 export type HumanGroundTruthConfirmation = "confirmed" | "suggested";
 
@@ -135,6 +141,12 @@ export interface ExpectedProjectTrajectoryFactV2 {
   unsupportedFirstPersonClaim?: boolean;
 }
 
+export interface ExpectedMeetingMetadataFactV2 {
+  kind: "expected-meeting-metadata";
+  expectedCompany: string | null;
+  errorKind?: MeetingMetadataEvaluationErrorKind;
+}
+
 export type HumanGroundTruthFactV2 =
   | ExpectedTaskSettlementFactV2
   | ExpectedQuestionTypeFactV2
@@ -145,7 +157,8 @@ export type HumanGroundTruthFactV2 =
   | AnswerQualityFactV2
   | MemoryLabelFactV2
   | ArtifactQualityFactV2
-  | ExpectedProjectTrajectoryFactV2;
+  | ExpectedProjectTrajectoryFactV2
+  | ExpectedMeetingMetadataFactV2;
 
 export interface HumanGroundTruthEventV2 {
   schemaVersion: typeof HUMAN_GROUND_TRUTH_SCHEMA_VERSION;
@@ -205,6 +218,7 @@ export interface HumanEvaluationObservedSnapshotV2 {
   typeAppliedToParent?: boolean;
   durableOwnerMissing?: boolean;
   durableOwnerMissingReason?: DurableQuestionOwnerMissingReason;
+  meetingMetadata?: MeetingMetadataEvaluationObservation;
 }
 
 export interface HumanEvaluationConflictV2 {
@@ -241,6 +255,8 @@ export interface HumanEvaluationProjectionV2 {
     factSupportCorrect?: boolean;
     childContinuityCorrect?: boolean;
     unsupportedFirstPersonClaim?: boolean;
+    meetingMetadataProposalCorrect?: boolean;
+    meetingMetadataTargetCorrect?: boolean;
   };
   conflicts: HumanEvaluationConflictV2[];
   computedAt: number;
@@ -423,6 +439,8 @@ export function deriveHumanEvaluationProjectionV2(input: {
     activeFacts["expected-artifact-intent"]?.fact;
   const projectTrajectory =
     activeFacts["expected-project-trajectory"]?.fact;
+  const meetingMetadata =
+    activeFacts["expected-meeting-metadata"]?.fact;
   const expectedQuestionType =
     settlement?.kind === "expected-task-settlement"
       ? settlement.expectedQuestionType
@@ -517,6 +535,22 @@ export function deriveHumanEvaluationProjectionV2(input: {
         projectTrajectory?.kind === "expected-project-trajectory"
           ? projectTrajectory.unsupportedFirstPersonClaim
           : undefined,
+      meetingMetadataProposalCorrect:
+        meetingMetadata?.kind === "expected-meeting-metadata" &&
+        input.observed?.meetingMetadata?.operationObserved
+          ? meetingCompanyLabelsEqual(
+              meetingMetadata.expectedCompany,
+              input.observed.meetingMetadata.proposalCompany
+            )
+          : undefined,
+      meetingMetadataTargetCorrect:
+        meetingMetadata?.kind === "expected-meeting-metadata" &&
+        input.observed?.meetingMetadata?.operationObserved
+          ? meetingCompanyLabelsEqual(
+              meetingMetadata.expectedCompany,
+              input.observed.meetingMetadata.effectiveCompany
+            )
+          : undefined,
     },
     conflicts,
     computedAt: input.now ?? Date.now(),
@@ -580,6 +614,9 @@ export function buildHumanEvaluationObservedSnapshotV2(
     metadata.factAnchorState
   );
   const childContinuity = resolveObservedChildContinuity(metadata);
+  const meetingMetadata = projectMeetingMetadataEvaluationObservation(
+    metadata
+  );
   const traceEvidence = {
     traceId: trace.id,
     questionType,
@@ -598,6 +635,9 @@ export function buildHumanEvaluationObservedSnapshotV2(
     playbookPhase,
     factAnchorState,
     childContinuity,
+    meetingMetadata: meetingMetadata.operationObserved
+      ? meetingMetadata
+      : undefined,
     ...questionTypeObservation,
   };
   return {
@@ -781,6 +821,19 @@ export function importLegacyQuestionEvaluationV2(
       })
     );
   }
+  if (evaluation.correctedCompany?.trim()) {
+    events.push(
+      createHumanGroundTruthEventV2({
+        ...base,
+        eventId: `legacy:${evaluation.id}:meeting-metadata`,
+        actionId: `legacy:${evaluation.id}:meeting-metadata`,
+        fact: {
+          kind: "expected-meeting-metadata",
+          expectedCompany: evaluation.correctedCompany,
+        },
+      })
+    );
+  }
   const projectTrajectory = evaluation.projectTrajectory;
   if (
     projectTrajectory &&
@@ -944,6 +997,15 @@ function normalizeFact(fact: HumanGroundTruthFactV2): HumanGroundTruthFactV2 {
       ...fact,
       expectedProjectId: cleanOptional(fact.expectedProjectId),
       expectedProjectName: cleanOptional(fact.expectedProjectName),
+    };
+  }
+  if (fact.kind === "expected-meeting-metadata") {
+    return {
+      ...fact,
+      expectedCompany:
+        fact.expectedCompany === null
+          ? null
+          : fact.expectedCompany.trim().slice(0, 240),
     };
   }
   return fact;
@@ -1355,7 +1417,36 @@ function normalizeStoredFact(
       };
     }
   }
+  if (fact.kind === "expected-meeting-metadata") {
+    const expectedCompany =
+      fact.expectedCompany === null
+        ? null
+        : readString(fact.expectedCompany);
+    const errorKind = normalizeMeetingMetadataErrorKind(fact.errorKind);
+    if (expectedCompany !== undefined) {
+      return {
+        kind: fact.kind,
+        expectedCompany,
+        errorKind,
+      };
+    }
+  }
   return undefined;
+}
+
+function normalizeMeetingMetadataErrorKind(
+  value: unknown
+): MeetingMetadataEvaluationErrorKind | undefined {
+  return value === "missed-target-company" ||
+    value === "wrong-target-company" ||
+    value === "comparison-as-target" ||
+    value === "candidate-history-as-target" ||
+    value === "location-as-target" ||
+    value === "product-as-target" ||
+    value === "locked-brief-overridden" ||
+    value === "other"
+    ? value
+    : undefined;
 }
 
 function compareExpectedProject(

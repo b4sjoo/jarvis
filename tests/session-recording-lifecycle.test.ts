@@ -781,7 +781,7 @@ test("records whiteboard validation and recovery artifacts", async () => {
   );
   assert.ok(summaryWrite);
   const summary = parsePayload(summaryWrite);
-  assert.equal(summary.version, 38);
+  assert.equal(summary.version, 39);
   assert.deepEqual(summary.whiteboard, {
     artifactId: "whiteboard_1",
     revision: 1,
@@ -1205,6 +1205,79 @@ test("late semantic shadow evidence stays joinable after trace export", async ()
     (summary.semanticEmbeddingRuntime as Record<string, unknown>).queueWaitMs,
     18
   );
+
+  await manager.stop("test-complete");
+});
+
+test("meeting metadata decisions persist company history and refresh trace summaries", async () => {
+  const native = new ControlledRecordingInvoke();
+  const manager = new SessionRecordingManager(undefined, native.invoke);
+  await manager.start(START_OPTIONS);
+  await settle();
+
+  manager.recordTrace(
+    buildCompletedTrace("meeting_metadata_trace", Date.now()),
+    "manual"
+  );
+  await settle();
+  manager.recordMeetingMetadataInferenceDecision({
+    traceId: "meeting_metadata_trace",
+    taskId: "task_1",
+    metadata: {
+      meetingMetadataInferenceRevision: 7,
+      meetingMetadataInferenceOperationId: "metadata_operation_1",
+      meetingMetadataInferenceMode: "shadow",
+      meetingMetadataInferenceDisposition: "shadow-observed",
+      meetingMetadataInferenceProposalCompany: "Google",
+      meetingMetadataInferenceConfidence: 0.94,
+      meetingMetadataInferenceAuthoritativeCompany: "Amazon",
+      meetingMetadataInferenceAuthoritativeSource: "brief",
+      meetingMetadataInferenceComparisonDisposition: "conflict",
+      meetingMetadataInferenceAppliedToRuntime: false,
+      meetingMetadataInferenceCommitAuthorized: false,
+      meetingMetadataInferenceSourceHash: "source_hash_1",
+    },
+  });
+  await settle();
+
+  for (const relativePath of [
+    "runtime-inference/meeting-metadata-decisions.jsonl",
+    "session-context/company-history.jsonl",
+  ]) {
+    const write = native.calls.find(
+      (call) =>
+        call.command === "write_meeting_session_recording_text" &&
+        stringArg(call, "relativePath") === relativePath
+    );
+    assert.ok(write);
+    const payload = parsePayload(write);
+    assert.equal(payload.metadataRevision, 7);
+    assert.equal(payload.proposalCompany, "Google");
+    assert.equal(payload.effectiveCompany, "Amazon");
+    assert.equal(payload.overrideOccurred, false);
+  }
+
+  const summaryWrites = native.calls.filter(
+    (call) =>
+      call.command === "write_meeting_session_recording_text" &&
+      stringArg(call, "relativePath") ===
+        "traces/meeting_metadata_trace/summary.json"
+  );
+  const summary = parsePayload(summaryWrites[summaryWrites.length - 1]!);
+  assert.equal(summary.version, 39);
+  assert.deepEqual(summary.meetingMetadata, {
+    revision: 7,
+    operationId: "metadata_operation_1",
+    mode: "shadow",
+    disposition: "shadow-observed",
+    proposalCompany: "Google",
+    authoritativeCompany: "Amazon",
+    effectiveCompany: "Amazon",
+    authoritySource: "brief",
+    comparisonDisposition: "conflict",
+    appliedToRuntime: false,
+    overrideOccurred: false,
+  });
 
   await manager.stop("test-complete");
 });
@@ -1746,7 +1819,7 @@ test("compact trace summaries preserve task boundary and cross-domain evidence",
   );
   assert.ok(summaryWrite);
   const summary = parsePayload(summaryWrite);
-  assert.equal(summary.version, 38);
+  assert.equal(summary.version, 39);
   assert.equal(summary.taskRelation, "new-parent");
   assert.equal(summary.logicalQuestionUnitRevision, 3);
   assert.equal(summary.phaseSignal, "assumption-authorized");
@@ -1967,7 +2040,7 @@ test("compact trace summaries preserve bounded STT request evidence", async () =
   );
   assert.ok(summaryWrite);
   const summary = parsePayload(summaryWrite);
-  assert.equal(summary.version, 38);
+  assert.equal(summary.version, 39);
   assert.equal(
     (summary.timingsMs as Record<string, unknown>).stt,
     1_580
@@ -2109,7 +2182,7 @@ test("refreshes compact STT lifecycle evidence after a late provider abort", asy
   );
   assert.ok(summaryWrites.length >= 2);
   const summary = parsePayload(summaryWrites[summaryWrites.length - 1]!);
-  assert.equal(summary.version, 38);
+  assert.equal(summary.version, 39);
   assert.equal(
     (summary.sttRequest as Record<string, unknown>).abortRequested,
     true
@@ -2174,7 +2247,7 @@ test("compact trace summaries preserve hard memory invalidation evidence", async
   );
   assert.ok(summaryWrite);
   const summary = parsePayload(summaryWrite);
-  assert.equal(summary.version, 38);
+  assert.equal(summary.version, 39);
   const memory = summary.memory as Record<string, unknown>;
   assert.equal(memory.authorityRevision, 2);
   assert.equal(memory.invalidationKind, "hard");
@@ -2460,7 +2533,7 @@ test("records compact current-question settlement and execution-plan evidence", 
   assert.equal(serializedPlan.includes("taskSnapshot"), false);
   assert.equal(serializedPlan.includes("variables"), false);
   const summary = parsePayload(summaryWrite);
-  assert.equal(summary.version, 38);
+  assert.equal(summary.version, 39);
   assert.equal(
     (
       summary.currentQuestionSettlement as Record<string, unknown>
@@ -2644,7 +2717,7 @@ test("records a current-question term correction without copying provider state"
     false
   );
   const summary = parsePayload(summaryWrite);
-  assert.equal(summary.version, 38);
+  assert.equal(summary.version, 39);
   assert.equal(
     summary.manualTermCorrectionId,
     "term_correction_hnsw"
@@ -2815,7 +2888,7 @@ test("records preparation provenance, use receipts, and answer-bound feedback", 
   );
   assert.ok(summaryWrite);
   const summary = parsePayload(summaryWrite);
-  assert.equal(summary.version, 38);
+  assert.equal(summary.version, 39);
   assert.equal(
     summary.preparationContextRevision,
     receipt.preparationContextRevision

@@ -1,5 +1,5 @@
 import type { RuntimeInferenceRuntimeJob } from "./runtime-inference-runtime.js";
-import { normalizeInterviewBriefCompany } from "./interview-session-context.js";
+import { normalizeInterviewBriefCompany } from "./interview-company.js";
 import type {
   MeetingMetadataInferenceMode,
   InterviewTargetCompany,

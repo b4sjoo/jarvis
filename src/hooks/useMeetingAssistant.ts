@@ -13671,8 +13671,16 @@ export function useMeetingAssistant() {
             meetingMetadataInferenceMutationDisposition:
               mutationDisposition,
             meetingMetadataInferenceMode: metadataMode,
+            meetingMetadataInferenceRevision: settlement.completedAt,
           };
           traceStoreRef.current.updateMetadata(traceId, metadata);
+          sessionRecordingManagerRef.current?.recordMeetingMetadataInferenceDecision(
+            {
+              traceId,
+              taskId: scheduledTaskId,
+              metadata,
+            }
+          );
           if (rawOutputStored) {
             traceStoreRef.current.recordOutput(
               traceId,

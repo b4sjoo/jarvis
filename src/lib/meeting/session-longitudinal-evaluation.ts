@@ -83,6 +83,21 @@ export interface LongitudinalTraceSummary {
     parseValid?: boolean;
     durationMs?: number;
   };
+  meetingMetadata?: {
+    revision?: number;
+    operationId?: string;
+    mode?: string;
+    disposition?: string;
+    proposalCompany?: string;
+    committedCompany?: string;
+    authoritativeCompany?: string;
+    effectiveCompany?: string;
+    authoritySource?: string;
+    comparisonDisposition?: string;
+    staleReason?: string;
+    appliedToRuntime?: boolean;
+    overrideOccurred?: boolean;
+  };
   whiteboard?: {
     artifactId?: string;
     revision?: number;
@@ -374,6 +389,23 @@ export interface SessionLongitudinalEvaluationReport {
       number
     >;
     latencyMs: DistributionMetric;
+  };
+  meetingMetadataFunnel: {
+    operationsObserved: number;
+    proposalCount: number;
+    committedCount: number;
+    abstentionCount: number;
+    humanLabeled: number;
+    proposalPrecision: RateMetric;
+    proposalRecall: RateMetric;
+    effectiveTargetPrecision: RateMetric;
+    effectiveTargetRecall: RateMetric;
+    effectiveTargetAccuracy: RateMetric;
+    conflictRate: RateMetric;
+    staleRate: RateMetric;
+    unauthorizedOverrideCount: number;
+    errorKinds: Record<string, number>;
+    denominatorAuthority: "explicit-human-expected-company";
   };
   whiteboardRenderFunnel: {
     observedCandidates: number;
@@ -721,6 +753,57 @@ export function buildSessionLongitudinalEvaluationReport(
     ({ trace }) =>
       trace.projectTrajectory?.transitionKind === "resume-parent"
   );
+  const meetingMetadataTraces = production.filter(
+    ({ trace }) => trace.meetingMetadata?.operationId
+  );
+  const meetingMetadataProjections = Array.from(
+    new Map(
+      inputs
+        .flatMap((input) => input.humanEvaluationProjectionsV2 ?? [])
+        .filter(
+          (projection) =>
+            projection.activeFacts["expected-meeting-metadata"]?.fact.kind ===
+              "expected-meeting-metadata" &&
+            projection.observed?.meetingMetadata?.operationObserved
+        )
+        .map((projection) => [projection.projectionId, projection])
+    ).values()
+  );
+  const metadataExpectedPositive = meetingMetadataProjections.filter(
+    (projection) =>
+      projection.activeFacts["expected-meeting-metadata"]?.fact.kind ===
+        "expected-meeting-metadata" &&
+      projection.activeFacts["expected-meeting-metadata"]?.fact
+        .expectedCompany !== null
+  );
+  const metadataProposalPositive = meetingMetadataProjections.filter(
+    (projection) => Boolean(projection.observed?.meetingMetadata?.proposalCompany)
+  );
+  const metadataProposalTruePositive = metadataProposalPositive.filter(
+    (projection) => projection.verdicts.meetingMetadataProposalCorrect === true
+  );
+  const metadataTargetPositive = meetingMetadataProjections.filter(
+    (projection) => Boolean(projection.observed?.meetingMetadata?.effectiveCompany)
+  );
+  const metadataTargetTruePositive = metadataTargetPositive.filter(
+    (projection) => projection.verdicts.meetingMetadataTargetCorrect === true
+  );
+  const metadataComparisonTraces = meetingMetadataTraces.filter(
+    ({ trace }) =>
+      Boolean(
+        trace.meetingMetadata?.proposalCompany &&
+          trace.meetingMetadata.authoritativeCompany
+      )
+  );
+  const meetingMetadataErrorKinds: Record<string, number> = {};
+  for (const projection of meetingMetadataProjections) {
+    const fact = projection.activeFacts["expected-meeting-metadata"]?.fact;
+    if (fact?.kind !== "expected-meeting-metadata" || !fact.errorKind) {
+      continue;
+    }
+    meetingMetadataErrorKinds[fact.errorKind] =
+      (meetingMetadataErrorKinds[fact.errorKind] ?? 0) + 1;
+  }
 
   return {
     version: 2,
@@ -976,6 +1059,64 @@ export function buildSessionLongitudinalEvaluationReport(
           report.rows.map((row) => row.durationMs)
         )
       ),
+    },
+    meetingMetadataFunnel: {
+      operationsObserved: meetingMetadataTraces.length,
+      proposalCount: meetingMetadataTraces.filter(({ trace }) =>
+        Boolean(trace.meetingMetadata?.proposalCompany)
+      ).length,
+      committedCount: meetingMetadataTraces.filter(
+        ({ trace }) => trace.meetingMetadata?.appliedToRuntime === true
+      ).length,
+      abstentionCount: meetingMetadataTraces.filter(
+        ({ trace }) =>
+          !trace.meetingMetadata?.proposalCompany &&
+          trace.meetingMetadata?.disposition !== "ineligible"
+      ).length,
+      humanLabeled: meetingMetadataProjections.length,
+      proposalPrecision: rate(
+        metadataProposalTruePositive.length,
+        metadataProposalPositive.length
+      ),
+      proposalRecall: rate(
+        metadataProposalTruePositive.length,
+        metadataExpectedPositive.length
+      ),
+      effectiveTargetPrecision: rate(
+        metadataTargetTruePositive.length,
+        metadataTargetPositive.length
+      ),
+      effectiveTargetRecall: rate(
+        metadataTargetTruePositive.length,
+        metadataExpectedPositive.length
+      ),
+      effectiveTargetAccuracy: rate(
+        meetingMetadataProjections.filter(
+          (projection) =>
+            projection.verdicts.meetingMetadataTargetCorrect === true
+        ).length,
+        meetingMetadataProjections.length
+      ),
+      conflictRate: rate(
+        metadataComparisonTraces.filter(
+          ({ trace }) =>
+            trace.meetingMetadata?.comparisonDisposition === "conflict"
+        ).length,
+        metadataComparisonTraces.length
+      ),
+      staleRate: rate(
+        meetingMetadataTraces.filter(
+          ({ trace }) =>
+            Boolean(trace.meetingMetadata?.staleReason) ||
+            trace.meetingMetadata?.disposition === "stale"
+        ).length,
+        meetingMetadataTraces.length
+      ),
+      unauthorizedOverrideCount: meetingMetadataTraces.filter(
+        ({ trace }) => trace.meetingMetadata?.overrideOccurred === true
+      ).length,
+      errorKinds: meetingMetadataErrorKinds,
+      denominatorAuthority: "explicit-human-expected-company",
     },
     whiteboardRenderFunnel: {
       observedCandidates: whiteboardCandidates.length,
@@ -1580,6 +1721,16 @@ export function renderSessionLongitudinalEvaluationMarkdown(
     `Runtime mutation applied: ${report.relationAdjudicationFunnel.mutationApplied}`,
     `Latency: ${formatDistribution(report.relationAdjudicationFunnel.latencyMs)}`,
     "",
+    "## Meeting Metadata",
+    "",
+    `Operations / proposals / committed / abstained / human labeled: ${report.meetingMetadataFunnel.operationsObserved} / ${report.meetingMetadataFunnel.proposalCount} / ${report.meetingMetadataFunnel.committedCount} / ${report.meetingMetadataFunnel.abstentionCount} / ${report.meetingMetadataFunnel.humanLabeled}`,
+    `Proposal precision / recall: ${formatRate(report.meetingMetadataFunnel.proposalPrecision)} / ${formatRate(report.meetingMetadataFunnel.proposalRecall)}`,
+    `Effective target precision / recall / accuracy: ${formatRate(report.meetingMetadataFunnel.effectiveTargetPrecision)} / ${formatRate(report.meetingMetadataFunnel.effectiveTargetRecall)} / ${formatRate(report.meetingMetadataFunnel.effectiveTargetAccuracy)}`,
+    `Conflict / stale rate: ${formatRate(report.meetingMetadataFunnel.conflictRate)} / ${formatRate(report.meetingMetadataFunnel.staleRate)}`,
+    `Unauthorized overrides: ${report.meetingMetadataFunnel.unauthorizedOverrideCount}`,
+    `Error kinds: ${formatCountMap(report.meetingMetadataFunnel.errorKinds)}`,
+    `Denominator authority: ${report.meetingMetadataFunnel.denominatorAuthority}`,
+    "",
     "## Whiteboard Render Integrity",
     "",
     `Candidates -> invalid -> repair attempts -> settled -> successful shadow repairs: ${report.whiteboardRenderFunnel.observedCandidates} -> ${report.whiteboardRenderFunnel.invalidCandidates} -> ${report.whiteboardRenderFunnel.repairAttempts} -> ${report.whiteboardRenderFunnel.settledRepairAttempts} -> ${report.whiteboardRenderFunnel.successfulShadowRepairs}`,
@@ -1917,4 +2068,13 @@ function formatDistribution(metric: DistributionMetric) {
   return metric.samples
     ? `p50=${metric.p50Ms} ms, p95=${metric.p95Ms} ms, max=${metric.maxMs} ms, n=${metric.samples}`
     : "N/A";
+}
+
+function formatCountMap(values: Record<string, number>) {
+  const entries = Object.entries(values).sort(([left], [right]) =>
+    left.localeCompare(right)
+  );
+  return entries.length
+    ? entries.map(([key, count]) => `${key}=${count}`).join(", ")
+    : "none";
 }

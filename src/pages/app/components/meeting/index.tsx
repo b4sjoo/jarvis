@@ -65,6 +65,7 @@ import type {
   MeetingTraceKindSummary,
   MeetingTraceSummary,
   MeetingTraceValueSummary,
+  MeetingMetadataEvaluationErrorKind,
   MemoryEntryEvaluationLabelValue,
   MemoryRetrievalEvaluationSnapshotResolution,
   PreparationArtifactEvaluation,
@@ -94,8 +95,10 @@ import {
   guardAsyncUnlisten,
   normalizeCanonicalQuestionType,
   normalizeArtifactIntentEvaluationFamily,
+  meetingCompanyLabelsEqual,
   overlayMeetingAnswerArtifacts,
   projectQuestionTypeObservation,
+  projectMeetingMetadataEvaluationObservation,
   resolveMeetingAnswerProfile,
   resolveCriticalMomentExpectedFacts,
   resolveNativeAudioPauseResumeControl,
@@ -5556,6 +5559,10 @@ const TraceHumanEvaluationPanel = ({
     useState<HumanExpectedParentAction>();
   const [projectTrajectoryFixOpen, setProjectTrajectoryFixOpen] =
     useState(false);
+  const [meetingMetadataFixOpen, setMeetingMetadataFixOpen] = useState(false);
+  const [expectedMeetingCompany, setExpectedMeetingCompany] = useState("");
+  const [meetingMetadataErrorKind, setMeetingMetadataErrorKind] =
+    useState<MeetingMetadataEvaluationErrorKind>();
   const [expectedProjectName, setExpectedProjectName] = useState("");
   const [expectedProjectPhase, setExpectedProjectPhase] =
     useState<InterviewPlaybookPhase>();
@@ -5662,6 +5669,12 @@ const TraceHumanEvaluationPanel = ({
     projectionV2?.activeFacts["expected-artifact-intent"]?.fact;
   const activeProjectTrajectoryFact =
     projectionV2?.activeFacts["expected-project-trajectory"]?.fact;
+  const activeMeetingMetadataFact =
+    projectionV2?.activeFacts["expected-meeting-metadata"]?.fact;
+  const observedMeetingMetadata =
+    projectMeetingMetadataEvaluationObservation(trace.metadata ?? {});
+  const showMeetingMetadataEvaluation =
+    observedMeetingMetadata.operationObserved;
   const observedProjectId =
     projectionV2?.observed?.projectId ??
     readStringMetadata(trace.metadata, "activeMeetingProjectBindingId") ??
@@ -5984,6 +5997,29 @@ const TraceHumanEvaluationPanel = ({
       },
     });
     recordGroundTruth(fact);
+  };
+
+  const recordExpectedMeetingMetadata = (
+    expectedCompany: string | null,
+    errorKind?: MeetingMetadataEvaluationErrorKind
+  ) => {
+    const companyCorrect = meetingCompanyLabelsEqual(
+      expectedCompany,
+      observedMeetingMetadata.effectiveCompany
+    );
+    onUpdateQuestion({ correctedCompany: expectedCompany ?? "" });
+    onUpdate({
+      failureReasons:
+        companyCorrect && !errorKind
+          ? failureReasons.filter((reason) => reason !== "wrong-company")
+          : Array.from(new Set([...failureReasons, "wrong-company"])),
+    });
+    recordGroundTruth({
+      kind: "expected-meeting-metadata",
+      expectedCompany,
+      errorKind,
+    });
+    setMeetingMetadataFixOpen(false);
   };
 
   const recordObservedProjectTrajectory = () => {
@@ -6526,6 +6562,146 @@ const TraceHumanEvaluationPanel = ({
             Expert audit
           </summary>
           <div className="mt-2 space-y-2">
+        {showMeetingMetadataEvaluation ? (
+          <div className="rounded-sm border border-border/60 p-2">
+            <div className="text-[10px] font-medium uppercase text-muted-foreground">
+              Meeting metadata
+            </div>
+            <div className="mt-1 space-y-0.5 break-words font-mono text-[9px] text-muted-foreground">
+              <div>
+                proposal: {observedMeetingMetadata.proposalCompany ?? "unknown"}
+              </div>
+              <div>
+                effective: {observedMeetingMetadata.effectiveCompany ?? "unknown"}
+                {observedMeetingMetadata.authoritySource
+                  ? ` (${observedMeetingMetadata.authoritySource})`
+                  : ""}
+              </div>
+              <div>
+                disposition: {observedMeetingMetadata.disposition ?? "unknown"}
+                {observedMeetingMetadata.comparisonDisposition
+                  ? ` / ${observedMeetingMetadata.comparisonDisposition}`
+                  : ""}
+              </div>
+              <div>
+                applied: {formatObservedBoolean(
+                  observedMeetingMetadata.appliedToRuntime
+                )}
+                {observedMeetingMetadata.overrideOccurred
+                  ? " / authority override detected"
+                  : ""}
+              </div>
+            </div>
+            {activeMeetingMetadataFact?.kind ===
+            "expected-meeting-metadata" ? (
+              <div className="mt-1 break-words font-mono text-[9px]">
+                expected: {activeMeetingMetadataFact.expectedCompany ?? "unknown"}
+                {activeMeetingMetadataFact.errorKind
+                  ? ` / ${activeMeetingMetadataFact.errorKind}`
+                  : ""}
+              </div>
+            ) : null}
+            <div className="mt-2 flex flex-wrap gap-1">
+              <Button
+                size="sm"
+                variant={
+                  projectionV2?.verdicts.meetingMetadataTargetCorrect === true
+                    ? "default"
+                    : "outline"
+                }
+                className="h-6 px-2 text-[9px]"
+                onClick={() =>
+                  recordExpectedMeetingMetadata(
+                    observedMeetingMetadata.effectiveCompany ?? null
+                  )
+                }
+              >
+                Correct
+              </Button>
+              <Button
+                size="sm"
+                variant={
+                  activeMeetingMetadataFact?.kind ===
+                    "expected-meeting-metadata" &&
+                  activeMeetingMetadataFact.expectedCompany === null
+                    ? "default"
+                    : "outline"
+                }
+                className="h-6 px-2 text-[9px]"
+                onClick={() => recordExpectedMeetingMetadata(null)}
+              >
+                Should be unknown
+              </Button>
+              <Button
+                size="sm"
+                variant={meetingMetadataFixOpen ? "default" : "outline"}
+                className="h-6 px-2 text-[9px]"
+                onClick={() => {
+                  setExpectedMeetingCompany(
+                    activeMeetingMetadataFact?.kind ===
+                      "expected-meeting-metadata" &&
+                    activeMeetingMetadataFact.expectedCompany
+                      ? activeMeetingMetadataFact.expectedCompany
+                      : observedMeetingMetadata.effectiveCompany ?? ""
+                  );
+                  setMeetingMetadataErrorKind(
+                    activeMeetingMetadataFact?.kind ===
+                      "expected-meeting-metadata"
+                      ? activeMeetingMetadataFact.errorKind
+                      : undefined
+                  );
+                  setMeetingMetadataFixOpen((open) => !open);
+                }}
+              >
+                Fix
+              </Button>
+            </div>
+            {meetingMetadataFixOpen ? (
+              <div className="mt-2 space-y-2 rounded-sm bg-muted/30 p-2">
+                <Input
+                  value={expectedMeetingCompany}
+                  onChange={(event) =>
+                    setExpectedMeetingCompany(event.target.value)
+                  }
+                  placeholder="Expected target company"
+                  className="h-7 text-[10px]"
+                />
+                <CriticalMomentButtonGroup
+                  label="Failure kind"
+                  options={[
+                    ["missed-target-company", "Missed"],
+                    ["wrong-target-company", "Wrong"],
+                    ["comparison-as-target", "Comparison"],
+                    ["candidate-history-as-target", "Candidate history"],
+                    ["location-as-target", "Location"],
+                    ["product-as-target", "Product"],
+                    ["locked-brief-overridden", "Brief override"],
+                    ["other", "Other"],
+                  ]}
+                  value={meetingMetadataErrorKind}
+                  onSelect={(value) =>
+                    setMeetingMetadataErrorKind(
+                      value as MeetingMetadataEvaluationErrorKind
+                    )
+                  }
+                />
+                <Button
+                  size="sm"
+                  className="h-6 px-2 text-[9px]"
+                  disabled={!expectedMeetingCompany.trim()}
+                  onClick={() =>
+                    recordExpectedMeetingMetadata(
+                      expectedMeetingCompany.trim(),
+                      meetingMetadataErrorKind
+                    )
+                  }
+                >
+                  Save company
+                </Button>
+              </div>
+            ) : null}
+          </div>
+        ) : null}
         <div className="rounded-sm border border-border/60 p-2">
           <div className="text-[10px] font-medium uppercase text-muted-foreground">
             Context read scope

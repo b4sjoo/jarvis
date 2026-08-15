@@ -318,6 +318,74 @@ test("does not turn missing expected facts into successful verdicts", () => {
   assert.equal(projection.verdicts.parentActionCorrect, undefined);
 });
 
+test("scores metadata proposals separately from the effective target company", () => {
+  const expected = createHumanGroundTruthEventV2({
+    eventId: "event_expected_company",
+    sessionId: "session_1",
+    subject: SUBJECT,
+    source: "explicit-ui",
+    fact: {
+      kind: "expected-meeting-metadata",
+      expectedCompany: "Amazon",
+      errorKind: "wrong-target-company",
+    },
+    now: 2,
+  });
+  const projection = deriveHumanEvaluationProjectionV2({
+    sessionId: "session_1",
+    subject: SUBJECT,
+    events: [expected],
+    observed: {
+      traceId: "trace_1",
+      traceHash: "hash_1",
+      meetingMetadata: {
+        operationObserved: true,
+        proposalCompany: "Google",
+        authoritativeCompany: "Amazon",
+        effectiveCompany: "Amazon",
+        authoritySource: "brief",
+        overrideOccurred: false,
+      },
+    },
+    now: 3,
+  });
+
+  assert.equal(projection.verdicts.meetingMetadataProposalCorrect, false);
+  assert.equal(projection.verdicts.meetingMetadataTargetCorrect, true);
+});
+
+test("treats an explicit unknown company label as valid ground truth", () => {
+  const expectedUnknown = createHumanGroundTruthEventV2({
+    eventId: "event_expected_unknown_company",
+    sessionId: "session_1",
+    subject: SUBJECT,
+    source: "explicit-ui",
+    fact: {
+      kind: "expected-meeting-metadata",
+      expectedCompany: null,
+    },
+    now: 2,
+  });
+  const projection = deriveHumanEvaluationProjectionV2({
+    sessionId: "session_1",
+    subject: SUBJECT,
+    events: [expectedUnknown],
+    observed: {
+      traceId: "trace_1",
+      traceHash: "hash_1",
+      meetingMetadata: {
+        operationObserved: true,
+        disposition: "shadow-observed",
+        overrideOccurred: false,
+      },
+    },
+    now: 3,
+  });
+
+  assert.equal(projection.verdicts.meetingMetadataProposalCorrect, true);
+  assert.equal(projection.verdicts.meetingMetadataTargetCorrect, true);
+});
+
 test("retains same-priority conflicts until an explicit superseding event", () => {
   const first = createHumanGroundTruthEventV2({
     eventId: "event_first",
