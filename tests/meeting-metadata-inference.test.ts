@@ -8,6 +8,7 @@ import {
   createMeetingMetadataInferenceLease,
   decideMeetingMetadataInferenceCommit,
   decideMeetingMetadataInferenceEligibility,
+  formatMeetingMetadataInferenceForTrace,
   parseMeetingMetadataInferenceOutput,
   projectMeetingMetadataOpeningEvidence,
 } from "../src/lib/meeting/meeting-metadata-inference.js";
@@ -217,6 +218,37 @@ test("lease rejects newer evidence, epochs, and authoritative company changes", 
       mode: "enforcement",
     }).authorized,
     false
+  );
+});
+
+test("formats the latest authoritative company instead of the scheduled request snapshot", () => {
+  const request = requestFrom([
+    turn("them-1", "I am the recruiter from Oracle."),
+  ]);
+  const latestAuthoritativeCompany: InterviewTargetCompany = {
+    value: "Amazon",
+    normalized: "amazon",
+    confidence: 1,
+    source: "brief",
+    evidence: "Preparation Snapshot",
+    updatedAt: 2_000,
+  };
+
+  const metadata = formatMeetingMetadataInferenceForTrace({
+    request,
+    authoritativeCompany: latestAuthoritativeCompany,
+    disposition: "stale",
+    leaseAuthorized: false,
+    staleReason: "authoritative-company-changed",
+  });
+
+  assert.equal(
+    metadata.meetingMetadataInferenceAuthoritativeCompany,
+    "Amazon"
+  );
+  assert.equal(
+    metadata.meetingMetadataInferenceAuthoritativeSource,
+    "brief"
   );
 });
 

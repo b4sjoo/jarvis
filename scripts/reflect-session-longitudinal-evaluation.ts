@@ -17,6 +17,7 @@ import {
   type TaskRelationAdjudicationRecordedDecision,
 } from "../src/lib/meeting/task-relation-adjudication-reflection.js";
 import { buildTaskRelationAuthorityConvergenceReportV1 } from "../src/lib/meeting/task-relation-authority-convergence.js";
+import { projectMeetingMetadataEvaluationObservation } from "../src/lib/meeting/meeting-metadata-evaluation.js";
 import {
   loadSessionHumanEvaluationConsumerView,
   writeHumanEvaluationCompatibilityReport,
@@ -228,6 +229,8 @@ function mergeRuntimeTraceEvidence(
 ): LongitudinalTraceSummary {
   const metadata = runtime.metadata;
   const perTypeScores = readRecord(metadata.taxonomySemanticPerTypeScores);
+  const meetingMetadataObservation =
+    projectMeetingMetadataEvaluationObservation(metadata);
   return {
     ...compact,
     traceId: runtime.traceId,
@@ -398,7 +401,8 @@ function mergeRuntimeTraceEvidence(
         readBoolean(metadata.meetingMetadataInferenceAppliedToRuntime) ??
         compact?.meetingMetadata?.appliedToRuntime,
       overrideOccurred:
-        compact?.meetingMetadata?.overrideOccurred ?? false,
+        compact?.meetingMetadata?.overrideOccurred ??
+        meetingMetadataObservation.overrideOccurred,
     },
   };
 }

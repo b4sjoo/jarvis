@@ -16,6 +16,8 @@
   "include": [
     "src/vite-env.d.ts",
     "scripts/reflect-session-longitudinal-evaluation.ts",
+    "src/lib/meeting/interview-company.ts",
+    "src/lib/meeting/meeting-metadata-evaluation.ts",
     "src/lib/meeting/session-longitudinal-evaluation.ts",
     "src/lib/meeting/task-taxonomy.ts"
   ]

@@ -13623,6 +13623,7 @@ export function useMeetingAssistant() {
             ...scheduledMetadata,
             ...formatMeetingMetadataInferenceForTrace({
               request: settlement.job.request,
+              authoritativeCompany: latestAuthoritativeCompany,
               disposition,
               leaseAuthorized: authorization.authorized,
               staleReason: authorization.authorized

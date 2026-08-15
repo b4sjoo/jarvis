@@ -507,6 +507,7 @@ export function decideMeetingMetadataInferenceCommit(input: {
 
 export function formatMeetingMetadataInferenceForTrace(input: {
   request: MeetingMetadataInferenceRequest;
+  authoritativeCompany?: InterviewTargetCompany;
   disposition: string;
   leaseAuthorized?: boolean;
   staleReason?: string;
@@ -528,9 +529,9 @@ export function formatMeetingMetadataInferenceForTrace(input: {
     meetingMetadataInferenceOmittedTurnCount:
       input.request.openingEvidence.omittedTurnCount,
     meetingMetadataInferenceAuthoritativeSource:
-      input.request.authoritativeCompany?.source,
+      input.authoritativeCompany?.source,
     meetingMetadataInferenceAuthoritativeCompany:
-      input.request.authoritativeCompany?.value,
+      input.authoritativeCompany?.value,
     meetingMetadataInferenceLeaseAuthorized: input.leaseAuthorized,
     meetingMetadataInferenceStaleReason: input.staleReason,
     meetingMetadataInferenceProposalCompany: input.proposal?.company ?? undefined,
