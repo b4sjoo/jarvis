@@ -40,6 +40,11 @@ export type AdvisorTaskMutationAuthority =
   | "runtime-type-repair"
   | "manual-correction";
 
+export type AdvisorResponseAuthoritySource =
+  | "automatic-response-opportunity"
+  | "human-force-advise"
+  | "job-native";
+
 export type AdvisorJobOutcome =
   | "scheduled"
   | "executing"
@@ -70,6 +75,7 @@ export interface AdvisorTriggerJob {
   refreshAuthority: RefreshAuthorityDecision;
   runtimeTypeRepairOutputAuthority?: RuntimeTypeRepairOutputAuthority;
   responseOpportunityGenerationGateOperationId?: string;
+  responseAuthoritySource: AdvisorResponseAuthoritySource;
   manualCorrectionRevision: number;
   responseActionRevision: number;
   snapshotTurnCount: number;
@@ -192,6 +198,16 @@ export function createAdvisorTriggerJob(
     snapshot.activeMeetingTask?.parent.id;
   const expectedParentRevision =
     snapshot.activeMeetingTask?.parent.revisions;
+  const responseOpportunityGenerationGateOperationId =
+    input.source === "force-advise"
+      ? undefined
+      : input.responseOpportunityGenerationGateOperationId;
+  const responseAuthoritySource: AdvisorResponseAuthoritySource =
+    input.source === "force-advise"
+      ? "human-force-advise"
+      : responseOpportunityGenerationGateOperationId
+        ? "automatic-response-opportunity"
+        : "job-native";
   return {
     id,
     source: input.source,
@@ -251,8 +267,8 @@ export function createAdvisorTriggerJob(
             authorizedArtifacts: ["answer"],
           }
         : undefined,
-    responseOpportunityGenerationGateOperationId:
-      input.responseOpportunityGenerationGateOperationId,
+    responseOpportunityGenerationGateOperationId,
+    responseAuthoritySource,
     manualCorrectionRevision: input.manualCorrectionRevision ?? 0,
     responseActionRevision: input.responseActionRevision ?? 0,
     snapshotTurnCount: input.snapshotTurnCount,
@@ -489,6 +505,9 @@ export function formatAdvisorTriggerJobForTrace(
       : {}),
     advisorJobManualCorrectionRevision: job.manualCorrectionRevision,
     advisorJobResponseActionRevision: job.responseActionRevision,
+    advisorJobResponseAuthoritySource: job.responseAuthoritySource,
+    advisorJobAutomaticResponseOpportunityGateBypassed:
+      job.responseAuthoritySource === "human-force-advise",
     ...(job.responseOpportunityGenerationGateOperationId
       ? {
           advisorJobResponseOpportunityGenerationGateOperationId:

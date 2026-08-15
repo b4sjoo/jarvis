@@ -134,6 +134,8 @@ test("emits the job identity needed to reconstruct ownership", () => {
       refreshAuthorityHardOverride: false,
       advisorJobManualCorrectionRevision: 0,
       advisorJobResponseActionRevision: 0,
+      advisorJobResponseAuthoritySource: "job-native",
+      advisorJobAutomaticResponseOpportunityGateBypassed: false,
       advisorJobSnapshotTurnCount: 3,
       advisorJobSnapshotLatestTurnId: "turn-a",
       advisorJobGeneratedContinuityCandidateCount: 0,
@@ -167,6 +169,31 @@ test("emits inherited question lineage for answer-preserving actions", () => {
   assert.equal(metadata.questionInstanceId, "trace:trace-origin");
   assert.equal(metadata.questionOriginTraceId, "trace-origin");
   assert.equal(metadata.sourceSuggestionId, "suggestion-origin");
+});
+
+test("force advise owns answer authority without inheriting an automatic gate", () => {
+  const job = createAdvisorTriggerJob({
+    source: "force-advise",
+    mode: "live",
+    promptContext: buildPromptContext(),
+    sessionId: "session-a",
+    runtimeEpoch: 1,
+    snapshotTurnCount: 1,
+    taskMutationAuthority: "preserve-parent",
+    responseOpportunityGenerationGateOperationId: "automatic-gate-a",
+  });
+
+  assert.equal(job.responseOpportunityGenerationGateOperationId, undefined);
+  assert.equal(job.responseAuthoritySource, "human-force-advise");
+  const metadata = formatAdvisorTriggerJobForTrace(job, "scheduled");
+  assert.equal(
+    metadata.advisorJobAutomaticResponseOpportunityGateBypassed,
+    true
+  );
+  assert.equal(
+    metadata.advisorJobResponseAuthoritySource,
+    "human-force-advise"
+  );
 });
 
 test("freezes and traces the bounded logical question owned by a job", () => {
