@@ -18,6 +18,7 @@ export const RESPONSE_OPPORTUNITY_MAX_OUTPUT_TOKENS = Math.max(
   Math.ceil(RESPONSE_OPPORTUNITY_MAX_OUTPUT_CHARS / 2) + 16
 );
 export const RESPONSE_OPPORTUNITY_MAX_SOURCE_CHARS = 1_800;
+export const RESPONSE_OPPORTUNITY_MAX_CLARIFICATION_CHARS = 280;
 
 export interface ResponseOpportunitySourceSpan {
   turnId: string;
@@ -32,7 +33,20 @@ export interface ResponseOpportunityRequest {
   currentTurnId: string;
   sourceHash: string;
   sourceSpans: ResponseOpportunitySourceSpan[];
+  contextCapsule?: ResponseOpportunityContextCapsule;
   manualForceAdvise: boolean;
+}
+
+export interface ResponseOpportunityContextCapsule {
+  pendingClarification: {
+    summary: string;
+    logicalQuestionUnitId?: string;
+    logicalQuestionUnitRevision?: number;
+    parentId?: string;
+    playbookPhase?: string;
+    createdAt: number;
+    unresolved: true;
+  };
 }
 
 interface ResponseOpportunityLogicalQuestionUnitInput {
@@ -44,6 +58,7 @@ interface ResponseOpportunityLogicalQuestionUnitInput {
 
 export function buildResponseOpportunityRequest(input: {
   logicalQuestionUnit: ResponseOpportunityLogicalQuestionUnitInput;
+  contextCapsule?: ResponseOpportunityContextCapsule;
   manualForceAdvise?: boolean;
 }): ResponseOpportunityRequest {
   const selectedSources = input.logicalQuestionUnit.sources.slice(-2);
@@ -67,7 +82,13 @@ export function buildResponseOpportunityRequest(input: {
     sourceSpans.push({ turnId: source.turnId, text });
     remainingChars -= text.length;
   }
-  const sourceHash = hashResponseOpportunityEvidence(sourceSpans);
+  const contextCapsule = cloneResponseOpportunityContextCapsule(
+    input.contextCapsule
+  );
+  const sourceHash = hashResponseOpportunityEvidence(
+    sourceSpans,
+    contextCapsule
+  );
   return {
     schemaVersion: RESPONSE_OPPORTUNITY_SCHEMA_VERSION,
     promptVersion: RESPONSE_OPPORTUNITY_PROMPT_VERSION,
@@ -76,21 +97,82 @@ export function buildResponseOpportunityRequest(input: {
     currentTurnId: input.logicalQuestionUnit.currentTurnId,
     sourceHash,
     sourceSpans,
+    ...(contextCapsule ? { contextCapsule } : {}),
     manualForceAdvise: input.manualForceAdvise ?? false,
   };
 }
 
+export function createResponseOpportunityContextCapsule(input: {
+  clarification: string | null | undefined;
+  logicalQuestionUnitId?: string | null;
+  logicalQuestionUnitRevision?: number | null;
+  parentId?: string | null;
+  playbookPhase?: string | null;
+  createdAt: number;
+  unresolved: boolean;
+}): ResponseOpportunityContextCapsule | undefined {
+  const summary = projectBoundedSourceText(
+    input.clarification ?? "",
+    RESPONSE_OPPORTUNITY_MAX_CLARIFICATION_CHARS
+  );
+  if (!summary || summary === "-" || !input.unresolved) return undefined;
+  return {
+    pendingClarification: {
+      summary,
+      ...(input.logicalQuestionUnitId
+        ? { logicalQuestionUnitId: input.logicalQuestionUnitId }
+        : {}),
+      ...(input.logicalQuestionUnitRevision !== null &&
+      input.logicalQuestionUnitRevision !== undefined
+        ? {
+            logicalQuestionUnitRevision:
+              input.logicalQuestionUnitRevision,
+          }
+        : {}),
+      ...(input.parentId ? { parentId: input.parentId } : {}),
+      ...(input.playbookPhase
+        ? { playbookPhase: input.playbookPhase }
+        : {}),
+      createdAt: input.createdAt,
+      unresolved: true,
+    },
+  };
+}
+
 export function hashResponseOpportunityEvidence(
-  sourceSpans: ResponseOpportunitySourceSpan[]
+  sourceSpans: ResponseOpportunitySourceSpan[],
+  contextCapsule?: ResponseOpportunityContextCapsule
 ) {
   let hash = 2_166_136_261;
-  for (const character of sourceSpans
-    .flatMap((span) => [span.turnId, span.text])
-    .join("\u001f")) {
+  const sourceParts = sourceSpans.flatMap((span) => [
+    span.turnId,
+    span.text,
+  ]);
+  if (contextCapsule) {
+    sourceParts.push(JSON.stringify(contextCapsule));
+  }
+  for (const character of sourceParts.join("\u001f")) {
     hash ^= character.charCodeAt(0);
     hash = Math.imul(hash, 16_777_619);
   }
   return (hash >>> 0).toString(16).padStart(8, "0");
+}
+
+function cloneResponseOpportunityContextCapsule(
+  capsule: ResponseOpportunityContextCapsule | undefined
+) {
+  if (!capsule) return undefined;
+  const summary = projectBoundedSourceText(
+    capsule.pendingClarification.summary,
+    RESPONSE_OPPORTUNITY_MAX_CLARIFICATION_CHARS
+  );
+  if (!summary || summary === "-") return undefined;
+  return {
+    pendingClarification: {
+      ...capsule.pendingClarification,
+      summary,
+    },
+  };
 }
 
 function projectBoundedSourceText(text: string, maxChars: number) {

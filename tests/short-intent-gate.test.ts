@@ -5,12 +5,14 @@ import {
   RESPONSE_OPPORTUNITY_COMPACT_OUTPUT_WORST_CASE,
   RESPONSE_OPPORTUNITY_MAX_OUTPUT_CHARS,
   RESPONSE_OPPORTUNITY_MAX_OUTPUT_TOKENS,
+  RESPONSE_OPPORTUNITY_MAX_CLARIFICATION_CHARS,
   RESPONSE_OPPORTUNITY_SESSION_START_LIMIT,
   ResponseOpportunitySessionBudget,
   authorizeResponseOpportunityLease,
   buildResponseOpportunityPrompts,
   buildResponseOpportunityRequest,
   createResponseOpportunityLease,
+  createResponseOpportunityContextCapsule,
   createResponseOpportunityProposal,
   decideResponseOpportunityFailureFallback,
   decideResponseOpportunityLocalRoute,
@@ -177,8 +179,69 @@ test("builds a bounded LQU-only request and preserves the terminal tail", () => 
   assert.equal("activeTask" in request, false);
   assert.equal("questionType" in request, false);
   assert.equal("contextTurns" in request, false);
+  assert.equal("contextCapsule" in request, false);
   assert.match(prompts.systemPrompt, /one thing only/i);
   assert.match(prompts.systemPrompt, /Do not classify question type/i);
+});
+
+test("adds a bounded pending-clarification capsule without widening output authority", () => {
+  const clarification = `Which traffic scale should I use? ${"detail ".repeat(80)}`;
+  const contextCapsule = createResponseOpportunityContextCapsule({
+    clarification,
+    logicalQuestionUnitId: "lqu-design",
+    logicalQuestionUnitRevision: 2,
+    parentId: "parent-design",
+    playbookPhase: "requirement_clarification",
+    createdAt: 1_000,
+    unresolved: true,
+  });
+  const logicalUnit = logicalQuestionUnit(
+    "Yeah, you can make reasonable assumptions."
+  );
+  const withoutCapsule = buildResponseOpportunityRequest({
+    logicalQuestionUnit: logicalUnit,
+  });
+  const request = buildResponseOpportunityRequest({
+    logicalQuestionUnit: logicalUnit,
+    contextCapsule,
+  });
+  const prompts = buildResponseOpportunityPrompts(request);
+
+  assert.equal(
+    request.contextCapsule?.pendingClarification.summary.length,
+    RESPONSE_OPPORTUNITY_MAX_CLARIFICATION_CHARS
+  );
+  assert.equal(
+    request.contextCapsule?.pendingClarification.playbookPhase,
+    "requirement_clarification"
+  );
+  assert.equal(
+    request.contextCapsule?.pendingClarification.unresolved,
+    true
+  );
+  assert.notEqual(request.sourceHash, withoutCapsule.sourceHash);
+  assert.match(prompts.systemPrompt, /pendingClarification capsule/);
+  assert.match(prompts.systemPrompt, /read-only context/);
+  assert.match(prompts.systemPrompt, /Do not classify question type/);
+});
+
+test("omits a resolved or empty clarification capsule", () => {
+  assert.equal(
+    createResponseOpportunityContextCapsule({
+      clarification: "-",
+      createdAt: 1_000,
+      unresolved: true,
+    }),
+    undefined
+  );
+  assert.equal(
+    createResponseOpportunityContextCapsule({
+      clarification: "Which scale should I use?",
+      createdAt: 1_000,
+      unresolved: false,
+    }),
+    undefined
+  );
 });
 
 test("strictly parses exact turn-scoped evidence and rejects extra authority", () => {

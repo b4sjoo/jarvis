@@ -4,12 +4,15 @@ import {
   RESPONSE_OPPORTUNITY_COMPACT_OUTPUT_WORST_CASE,
   RESPONSE_OPPORTUNITY_MAX_OUTPUT_CHARS,
   RESPONSE_OPPORTUNITY_MAX_OUTPUT_TOKENS,
+  RESPONSE_OPPORTUNITY_MAX_CLARIFICATION_CHARS,
   RESPONSE_OPPORTUNITY_MAX_SOURCE_CHARS,
   RESPONSE_OPPORTUNITY_PROMPT_VERSION,
   RESPONSE_OPPORTUNITY_SCHEMA_VERSION,
   buildResponseOpportunityRequest,
+  createResponseOpportunityContextCapsule,
   hashResponseOpportunityEvidence,
   type ResponseOpportunityRequest,
+  type ResponseOpportunityContextCapsule,
   type ResponseOpportunitySourceSpan,
 } from "./response-opportunity-contract.js";
 import type { RuntimeInferenceRuntimeJob } from "./runtime-inference-runtime.js";
@@ -19,12 +22,15 @@ export {
   RESPONSE_OPPORTUNITY_COMPACT_OUTPUT_WORST_CASE,
   RESPONSE_OPPORTUNITY_MAX_OUTPUT_CHARS,
   RESPONSE_OPPORTUNITY_MAX_OUTPUT_TOKENS,
+  RESPONSE_OPPORTUNITY_MAX_CLARIFICATION_CHARS,
   RESPONSE_OPPORTUNITY_MAX_SOURCE_CHARS,
   RESPONSE_OPPORTUNITY_PROMPT_VERSION,
   RESPONSE_OPPORTUNITY_SCHEMA_VERSION,
   buildResponseOpportunityRequest,
+  createResponseOpportunityContextCapsule,
   hashResponseOpportunityEvidence,
   type ResponseOpportunityRequest,
+  type ResponseOpportunityContextCapsule,
   type ResponseOpportunitySourceSpan,
 };
 export const RESPONSE_OPPORTUNITY_SESSION_START_LIMIT = 120;
@@ -366,6 +372,11 @@ export function buildResponseOpportunityPrompts(
       "Use output-request for a question, directive, requested explanation, requested design or code, correction that requires a revised answer, constraint on an active answer, or an explicit phase-control instruction.",
       "Use no-output-request for greetings, acknowledgements, closings, logistics, or information supplied in response to the candidate's own question when the interviewer does not ask anything back.",
       "Use unclear when the bounded source is incomplete or does not support either conclusion.",
+      ...(request.contextCapsule
+        ? [
+            "The pendingClarification capsule is read-only context from Jarvis's last stable answer. A short confirmation, constraint, or permission that resolves it is an output-request because Jarvis should continue the existing answer. Do not infer any other task state from the capsule.",
+          ]
+        : []),
       "Do not classify question type, task relation, parent, evidence mode, context scope, playbook phase, or artifact intent.",
       "Return only this compact schema: {v:3,d:'o'|'n'|'u',c:number,e:number[],r:string}.",
       "d means o=output-request, n=no-output-request, u=unclear. c is confidence from 0 to 1.",

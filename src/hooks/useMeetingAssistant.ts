@@ -336,6 +336,7 @@ import {
   authorizeResponseOpportunityLease,
   buildResponseOpportunityPrompts,
   buildResponseOpportunityRequest,
+  createResponseOpportunityContextCapsule,
   createResponseOpportunityLease,
   createResponseOpportunityProposal,
   decideResponseOpportunityFailureFallback,
@@ -12658,8 +12659,40 @@ export function useMeetingAssistant() {
         }
       };
       const scheduledTaskId = contextState.activeMeetingTask?.id;
+      const readResponseOpportunityContextCapsule = () => {
+        const latestContext = contextManagerRef.current.getState();
+        const stableAnswer = stableAnswerRevisionRef.current;
+        const parent = latestContext.activeMeetingTask?.parent;
+        if (
+          stableAnswer?.taskId &&
+          parent &&
+          stableAnswer.taskId !== parent.id
+        ) {
+          return undefined;
+        }
+        return createResponseOpportunityContextCapsule({
+          clarification:
+            stableAnswer?.suggestion.meetingAnswer?.sections
+              .clarifyingQuestion,
+          logicalQuestionUnitId:
+            stableAnswer?.logicalQuestionUnitId,
+          logicalQuestionUnitRevision:
+            stableAnswer?.logicalQuestionRevision,
+          parentId: parent?.id,
+          playbookPhase: parent?.playbookPhase,
+          createdAt: stableAnswer?.committedAt ?? 0,
+          unresolved: Boolean(
+            stableAnswer &&
+              stableAnswer.revision ===
+                visibleAnswerRevisionRef.current
+          ),
+        });
+      };
+      const contextCapsule =
+        readResponseOpportunityContextCapsule();
       const request = buildResponseOpportunityRequest({
         logicalQuestionUnit,
+        contextCapsule,
       });
       const failureFallback = decideResponseOpportunityFailureFallback({
         text: turn.text,
@@ -12713,6 +12746,25 @@ export function useMeetingAssistant() {
         responseOpportunityDisposition: "eligible",
         responseOpportunitySourceTurnId: turn.id,
         responseOpportunitySourceHash: request.sourceHash,
+        responseOpportunityContextCapsulePresent: Boolean(
+          request.contextCapsule
+        ),
+        responseOpportunityPendingClarificationChars:
+          request.contextCapsule?.pendingClarification.summary.length,
+        responseOpportunityPendingClarificationLogicalQuestionUnitId:
+          request.contextCapsule?.pendingClarification
+            .logicalQuestionUnitId,
+        responseOpportunityPendingClarificationLogicalQuestionRevision:
+          request.contextCapsule?.pendingClarification
+            .logicalQuestionUnitRevision,
+        responseOpportunityPendingClarificationParentId:
+          request.contextCapsule?.pendingClarification.parentId,
+        responseOpportunityPendingClarificationPlaybookPhase:
+          request.contextCapsule?.pendingClarification.playbookPhase,
+        responseOpportunityPendingClarificationCreatedAt:
+          request.contextCapsule?.pendingClarification.createdAt,
+        responseOpportunityPendingClarificationUnresolved:
+          request.contextCapsule?.pendingClarification.unresolved,
         responseOpportunityLogicalQuestionUnitId:
           logicalQuestionUnit.id,
         responseOpportunityLogicalQuestionUnitRevision:
@@ -12927,6 +12979,8 @@ export function useMeetingAssistant() {
               : logicalQuestionUnit;
           const latestRequest = buildResponseOpportunityRequest({
             logicalQuestionUnit: latestLogicalQuestionUnit,
+            contextCapsule:
+              readResponseOpportunityContextCapsule(),
           });
           const authorization = authorizeResponseOpportunityLease(
             settlement.job.lease,
