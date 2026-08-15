@@ -524,6 +524,7 @@ import {
   formatTaxonomyAdjudicationCircuitForTrace,
   hashTaxonomySourceTurnIds,
   hashTaxonomyTaskBoundary,
+  observeTaxonomyAdjudicationShadowEffect,
   projectLogicalQuestionForAdjudication,
   requestTaxonomyAdjudication,
   resolveTaxonomyAdjudicationModelRouteFromSnapshot,
@@ -16241,20 +16242,12 @@ export function useMeetingAssistant() {
                   manualCorrectionRevisionRef.current,
               })
             : undefined;
-          const terminalNoAnswerRuntimeApplied = Boolean(
-            terminalNoAnswerDecision?.terminalNoAnswerAuthorized &&
-              arrivalStage !== "post-visible-answer"
-          );
           const activeAdvisorJob = activeAdvisorJobRef.current;
           const terminalNoAnswerAdvisorMatched = Boolean(
             activeAdvisorJob?.logicalQuestionUnit?.id ===
               logicalQuestionUnit.id &&
               activeAdvisorJob.logicalQuestionUnit.revision ===
                 logicalQuestionUnit.revision
-          );
-          const terminalNoAnswerAdvisorCancelled = Boolean(
-            terminalNoAnswerRuntimeApplied &&
-              terminalNoAnswerAdvisorMatched
           );
           const memoryRetrievalStarted =
             trace?.steps.some(
@@ -16264,13 +16257,20 @@ export function useMeetingAssistant() {
             trace?.steps.some(
               (step) => step.name === "Advisor model response"
             ) ?? false;
-          if (
-            terminalNoAnswerRuntimeApplied &&
-            terminalNoAnswerDecision
-          ) {
-            currentQuestionTerminalNoAnswerRef.current =
-              terminalNoAnswerDecision;
-          }
+          const terminalNoAnswerShadowObservation =
+            observeTaxonomyAdjudicationShadowEffect({
+              terminalNoAnswerAuthorized: Boolean(
+                terminalNoAnswerDecision?.terminalNoAnswerAuthorized
+              ),
+              arrivalStage,
+              advisorMatched: terminalNoAnswerAdvisorMatched,
+              memoryRetrievalStarted,
+              advisorModelStarted,
+            });
+          const terminalNoAnswerRuntimeApplied =
+            terminalNoAnswerShadowObservation.runtimeApplied;
+          const terminalNoAnswerAdvisorCancelled =
+            terminalNoAnswerShadowObservation.advisorCancelled;
           const terminalNoAnswerMetadata = {
             ...formatCurrentQuestionTerminalNoAnswerForTrace(
               terminalNoAnswerDecision
@@ -16285,17 +16285,21 @@ export function useMeetingAssistant() {
               terminalNoAnswerRuntimeApplied,
             interviewerIntentLlmTerminalNoAnswerApplied:
               terminalNoAnswerRuntimeApplied,
+            taxonomyAdjudicationTerminalNoAnswerWouldApply:
+              terminalNoAnswerShadowObservation.wouldApply,
+            interviewerIntentLlmTerminalNoAnswerWouldApply:
+              terminalNoAnswerShadowObservation.wouldApply,
             taxonomyAdjudicationTerminalNoAnswerApplyReason:
-              terminalNoAnswerRuntimeApplied
-                ? "authorized-before-visible-answer"
+              terminalNoAnswerShadowObservation.wouldApply
+                ? "shadow-observation-only"
                 : terminalNoAnswerDecision
                     ?.terminalNoAnswerAuthorized
                   ? "visible-answer-already-started"
                   : terminalNoAnswerDecision?.disposition ??
                     "candidate-unavailable",
             interviewerIntentLlmTerminalNoAnswerApplyReason:
-              terminalNoAnswerRuntimeApplied
-                ? "authorized-before-visible-answer"
+              terminalNoAnswerShadowObservation.wouldApply
+                ? "shadow-observation-only"
                 : terminalNoAnswerDecision
                     ?.terminalNoAnswerAuthorized
                   ? "visible-answer-already-started"
@@ -16303,6 +16307,10 @@ export function useMeetingAssistant() {
                     "candidate-unavailable",
             taxonomyAdjudicationTerminalNoAnswerAdvisorMatched:
               terminalNoAnswerAdvisorMatched,
+            taxonomyAdjudicationTerminalNoAnswerAdvisorWouldCancel:
+              terminalNoAnswerShadowObservation.wouldCancelAdvisor,
+            interviewerIntentLlmTerminalNoAnswerAdvisorWouldCancel:
+              terminalNoAnswerShadowObservation.wouldCancelAdvisor,
             taxonomyAdjudicationTerminalNoAnswerAdvisorCancelled:
               terminalNoAnswerAdvisorCancelled,
             interviewerIntentLlmTerminalNoAnswerAdvisorCancelled:
@@ -16312,11 +16320,13 @@ export function useMeetingAssistant() {
             taxonomyAdjudicationTerminalNoAnswerModelStarted:
               advisorModelStarted,
             taxonomyAdjudicationTerminalNoAnswerAvoidedMemoryOpportunity:
-              terminalNoAnswerRuntimeApplied &&
-              !memoryRetrievalStarted,
+              false,
             taxonomyAdjudicationTerminalNoAnswerAvoidedModelOpportunity:
-              terminalNoAnswerRuntimeApplied &&
-              !advisorModelStarted,
+              false,
+            taxonomyAdjudicationTerminalNoAnswerWouldAvoidMemoryOpportunity:
+              terminalNoAnswerShadowObservation.wouldAvoidMemoryOpportunity,
+            taxonomyAdjudicationTerminalNoAnswerWouldAvoidModelOpportunity:
+              terminalNoAnswerShadowObservation.wouldAvoidModelOpportunity,
           };
           const metadata = {
             ...scheduledMetadata,
@@ -16507,26 +16517,10 @@ export function useMeetingAssistant() {
             taskId: scheduledTaskId,
             metadata,
           });
-          if (terminalNoAnswerAdvisorCancelled) {
-            cancelActiveAdvisorJob(
-              terminalNoAnswerDecision?.operationKind ===
-                "informational-no-primary-ask"
-                ? "informational-no-primary-ask-settlement"
-                : "terminal-no-answer-settlement",
-              "cancelled-by-runtime-boundary"
-            );
-            setState((previous) => ({
-              ...previous,
-              status: activeRef.current
-                ? "listening"
-                : previous.status,
-              partialSuggestion: "",
-            }));
-          }
         },
       });
     },
-    [cancelActiveAdvisorJob]
+    []
   );
 
   const scheduleSemanticTaxonomyShadow = useCallback(

@@ -8,6 +8,7 @@ import {
   createTaxonomyAdjudicationLease,
   decideTaxonomyAdjudicationBudget,
   decideTaxonomyAdjudicationEligibility,
+  observeTaxonomyAdjudicationShadowEffect,
   type LlmTaxonomyAdjudication,
   parseTaxonomyAdjudicationOutput,
   projectLogicalQuestionForAdjudication,
@@ -110,6 +111,44 @@ test("isolates ambient adjudication from the reserved substantive slot", () => {
       }
     );
   }
+});
+
+test("combined intent shadow observes cancellation pressure without mutating runtime", () => {
+  assert.deepEqual(
+    observeTaxonomyAdjudicationShadowEffect({
+      terminalNoAnswerAuthorized: true,
+      arrivalStage: "advisor-in-flight-before-visible",
+      advisorMatched: true,
+      memoryRetrievalStarted: false,
+      advisorModelStarted: false,
+    }),
+    {
+      wouldApply: true,
+      wouldCancelAdvisor: true,
+      wouldAvoidMemoryOpportunity: true,
+      wouldAvoidModelOpportunity: true,
+      runtimeApplied: false,
+      advisorCancelled: false,
+    }
+  );
+
+  assert.deepEqual(
+    observeTaxonomyAdjudicationShadowEffect({
+      terminalNoAnswerAuthorized: true,
+      arrivalStage: "post-visible-answer",
+      advisorMatched: true,
+      memoryRetrievalStarted: true,
+      advisorModelStarted: true,
+    }),
+    {
+      wouldApply: false,
+      wouldCancelAdvisor: false,
+      wouldAvoidMemoryOpportunity: false,
+      wouldAvoidModelOpportunity: false,
+      runtimeApplied: false,
+      advisorCancelled: false,
+    }
+  );
 });
 
 test("strictly parses a grounded adjudication and rejects invented evidence", () => {

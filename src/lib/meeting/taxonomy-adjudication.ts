@@ -226,6 +226,43 @@ export interface TaxonomyAdjudicationBudgetDecision {
   sourceOwnedSubstantive: boolean;
 }
 
+export interface TaxonomyAdjudicationShadowObservationInput {
+  terminalNoAnswerAuthorized: boolean;
+  arrivalStage:
+    | "before-advisor-execution"
+    | "advisor-in-flight-before-visible"
+    | "post-visible-answer";
+  advisorMatched: boolean;
+  memoryRetrievalStarted: boolean;
+  advisorModelStarted: boolean;
+}
+
+export interface TaxonomyAdjudicationShadowObservation {
+  wouldApply: boolean;
+  wouldCancelAdvisor: boolean;
+  wouldAvoidMemoryOpportunity: boolean;
+  wouldAvoidModelOpportunity: boolean;
+  runtimeApplied: false;
+  advisorCancelled: false;
+}
+
+export function observeTaxonomyAdjudicationShadowEffect(
+  input: TaxonomyAdjudicationShadowObservationInput
+): TaxonomyAdjudicationShadowObservation {
+  const wouldApply =
+    input.terminalNoAnswerAuthorized &&
+    input.arrivalStage !== "post-visible-answer";
+  return {
+    wouldApply,
+    wouldCancelAdvisor: wouldApply && input.advisorMatched,
+    wouldAvoidMemoryOpportunity:
+      wouldApply && !input.memoryRetrievalStarted,
+    wouldAvoidModelOpportunity: wouldApply && !input.advisorModelStarted,
+    runtimeApplied: false,
+    advisorCancelled: false,
+  };
+}
+
 export interface TaxonomyAdjudicationLease {
   operationId: string;
   sessionId: string;
