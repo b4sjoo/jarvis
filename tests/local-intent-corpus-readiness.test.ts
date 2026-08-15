@@ -218,25 +218,48 @@ async function createSessionFixture(recordingsRoot: string) {
   );
   await writeFile(
     path.join(session, "human-evaluation", "ground-truth-v2.jsonl"),
-    `${JSON.stringify({
-      schemaVersion: 2,
-      eventId: "truth-1",
-      sessionId: "session-fixture-native",
-      subject: {
-        traceIds: ["trace-1"],
-        sourceTurnIds: ["turn-1"],
+    [
+      {
+        schemaVersion: 2,
+        eventId: "truth-1",
+        sessionId: "session-fixture-native",
+        subject: {
+          traceIds: ["trace-1"],
+          sourceTurnIds: ["turn-1"],
+        },
+        fact: {
+          kind: "expected-question-type",
+          expectedQuestionType: "general-system-design",
+        },
+        provenance: {
+          source: "explicit-ui",
+          actor: "human",
+          collection: "organic",
+          recordedAt: 600,
+        },
+        confirmation: "confirmed",
       },
-      fact: {
-        kind: "expected-question-type",
-        expectedQuestionType: "general-system-design",
+      {
+        schemaVersion: 2,
+        eventId: "truth-scripted-correction",
+        sessionId: "session-fixture-native",
+        subject: {
+          traceIds: ["trace-1"],
+          sourceTurnIds: ["turn-1"],
+        },
+        fact: {
+          kind: "expected-question-type",
+          expectedQuestionType: "coding",
+        },
+        provenance: {
+          source: "manual-type-correction",
+          actor: "human",
+          collection: "scripted-validation",
+          recordedAt: 610,
+        },
+        confirmation: "confirmed",
       },
-      provenance: {
-        source: "explicit-ui",
-        actor: "human",
-        recordedAt: 600,
-      },
-      confirmation: "confirmed",
-    })}\n`,
+    ].map((value) => JSON.stringify(value)).join("\n") + "\n",
     "utf8"
   );
 }

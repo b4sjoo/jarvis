@@ -1542,6 +1542,7 @@ export interface MeetingTraceExportRecord {
 export interface MeetingSessionRecordingState {
   active: boolean;
   lifecycle: "idle" | "starting" | "active" | "closing";
+  evaluationProvenance?: HumanEvaluationCollectionProvenance;
   sessionId?: string;
   folderName?: string;
   folderPath?: string;
@@ -1551,6 +1552,11 @@ export interface MeetingSessionRecordingState {
   artifactCount: number;
   lastError?: string;
 }
+
+export type HumanEvaluationCollectionProvenance =
+  | "organic"
+  | "scripted-validation"
+  | "replay";
 
 export type SttEvaluationCaptureLifecycle =
   | "idle"

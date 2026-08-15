@@ -100,6 +100,7 @@ import {
   NativeAudioManualRecoveryState,
   NativeAudioStopResult,
   MeetingAssistantSettings,
+  HumanEvaluationCollectionProvenance,
   MeetingAudioProfile,
   MeetingCodingModelSettings,
   MeetingTaxonomyAdjudicationSettings,
@@ -554,6 +555,7 @@ import {
   upsertHumanEvaluationProjectionV2,
   type HumanGroundTruthFactV2,
   type HumanGroundTruthInteractionV2,
+  type HumanGroundTruthEvaluationTargetV2,
   type HumanGroundTruthSubjectV2,
   type HumanGroundTruthSource,
   type HumanEvaluationProjectionV2,
@@ -2055,11 +2057,13 @@ interface SentenceCompletionMergeContext {
 
 interface RecordHumanGroundTruthOptionsV2 {
   source?: HumanGroundTruthSource;
+  collection?: HumanEvaluationCollectionProvenance;
   confirmation?: "confirmed" | "suggested";
   actionId?: string;
   repairTraceId?: string;
   uiSurface?: string;
   interaction?: HumanGroundTruthInteractionV2;
+  evaluationTarget?: HumanGroundTruthEvaluationTargetV2;
   evaluation?: QuestionHumanEvaluation;
 }
 
@@ -2113,6 +2117,15 @@ export function useMeetingAssistant() {
     humanEvaluations: readTraceHumanEvaluations(),
     questionEvaluations: readQuestionHumanEvaluations(),
   }));
+  const [
+    humanEvaluationCollectionProvenance,
+    setHumanEvaluationCollectionProvenance,
+  ] = useState<HumanEvaluationCollectionProvenance>("organic");
+  const humanEvaluationCollectionProvenanceRef = useRef(
+    humanEvaluationCollectionProvenance
+  );
+  humanEvaluationCollectionProvenanceRef.current =
+    humanEvaluationCollectionProvenance;
   const [humanGroundTruthEventsV2, setHumanGroundTruthEventsV2] = useState(
     () => readHumanGroundTruthEventsV2()
   );
@@ -5822,6 +5835,8 @@ export function useMeetingAssistant() {
           taxonomyAdjudicationMissingRequiredVariables:
             taxonomyAdjudicationRoute.missingRequiredVariables,
         }),
+        evaluationProvenance:
+          humanEvaluationCollectionProvenanceRef.current,
       });
       sessionRecordingManagerRef.current?.recordPreparationRuntimeContext(
         preparationProvenanceLedgerRef.current.getSnapshot()
@@ -5906,6 +5921,14 @@ export function useMeetingAssistant() {
       }
     },
     [startSessionRecording, stopSessionRecording]
+  );
+
+  const setSessionEvaluationProvenance = useCallback(
+    (provenance: HumanEvaluationCollectionProvenance) => {
+      if (state.sessionRecording.lifecycle !== "idle") return;
+      setHumanEvaluationCollectionProvenance(provenance);
+    },
+    [state.sessionRecording.lifecycle]
   );
 
   const setSttEvaluationCaptureEnabled = useCallback((enabled: boolean) => {
@@ -6410,12 +6433,18 @@ export function useMeetingAssistant() {
         subject,
         fact,
         source,
+        collection:
+          options.collection ??
+          sessionRecordingManagerRef.current?.getState()
+            .evaluationProvenance ??
+          humanEvaluationCollectionProvenanceRef.current,
         confirmation: options.confirmation,
         sourceTraceId,
         repairTraceId: options.repairTraceId,
         actionId: options.actionId,
         uiSurface: options.uiSurface,
         interaction: options.interaction,
+        evaluationTarget: options.evaluationTarget,
         supersedesEventId: previous?.eventId,
       });
       const events = appendHumanGroundTruthEventV2(
@@ -6478,12 +6507,30 @@ export function useMeetingAssistant() {
             candidate.traceIds.includes(traceId) ||
             (questionId && candidate.questionId === questionId)
         );
+      const derivedSubject = buildHumanGroundTruthSubjectV2({
+        trace,
+        evaluation,
+      });
+      const frozenTarget = options.evaluationTarget;
+      const subject = frozenTarget
+        ? {
+            questionId:
+              frozenTarget.questionId ?? derivedSubject.questionId,
+            taskId: frozenTarget.taskId ?? derivedSubject.taskId,
+            traceIds: Array.from(
+              new Set(
+                [
+                  frozenTarget.sourceTraceId,
+                  frozenTarget.repairTraceId,
+                ].filter((value): value is string => Boolean(value))
+              )
+            ),
+            sourceTurnIds: [...frozenTarget.sourceTurnIds],
+          }
+        : derivedSubject;
       commitHumanGroundTruthV2({
         sessionId,
-        subject: buildHumanGroundTruthSubjectV2({
-          trace,
-          evaluation,
-        }),
+        subject,
         fact,
         options,
         sourceTraceId: traceId,
@@ -23537,6 +23584,10 @@ export function useMeetingAssistant() {
       cancelActiveAdvisorJob("manual-question-type-correction");
 
       const requestedAt = Date.now();
+      const correctionEvaluationCollection =
+        sessionRecordingManagerRef.current?.getState()
+          .evaluationProvenance ??
+        humanEvaluationCollectionProvenanceRef.current;
       const correctionModelRoute = resolveManualCorrectionRegenerationRoute({
         snapshot: meetingModelProviderSnapshotRef.current,
         correctedType,
@@ -23579,6 +23630,7 @@ export function useMeetingAssistant() {
           continuityScore: correctionScopeDecision.continuityScore,
           continuityEvidence: correctionScopeDecision.continuityEvidence,
           correctionProviderAvailable: Boolean(correctionModelRoute.provider),
+          humanEvaluationCollection: correctionEvaluationCollection,
           ...correctionModelRouteMetadata,
           supersedesCorrectionId: operationClaim.supersedesOperationId,
           ...formatQuestionLineageForTrace(
@@ -24183,9 +24235,21 @@ export function useMeetingAssistant() {
               regenerationTrace.id,
             ],
             questionType: toHumanEvalQuestionType(decision.detectedType),
-            correctedQuestionType: toHumanEvalQuestionType(
-              decision.correctedType
-            ),
+            ...(correctionEvaluationCollection === "scripted-validation"
+              ? {}
+              : {
+                  correctedQuestionType: toHumanEvalQuestionType(
+                    decision.correctedType
+                  ),
+                  classification: {
+                    verdict: boundaryReassertionCandidate ? "ok" : "wrong",
+                    reasons: [
+                      boundaryReassertionCandidate
+                        ? "manual-runtime-boundary-correction"
+                        : "manual-runtime-correction",
+                    ],
+                  },
+                }),
             manualQuestionTypeCorrectionId: eventId,
             manualQuestionTypeCorrectionTraceId: correctionTrace.id,
             manualQuestionTypeRegenerationTraceId: regenerationTrace.id,
@@ -24198,14 +24262,6 @@ export function useMeetingAssistant() {
               parentTransition.previousParentId,
             manualQuestionTypeCorrectionNextParentId:
               parentTransition.nextParentId,
-            classification: {
-              verdict: boundaryReassertionCandidate ? "ok" : "wrong",
-              reasons: [
-                boundaryReassertionCandidate
-                  ? "manual-runtime-boundary-correction"
-                  : "manual-runtime-correction",
-              ],
-            },
           }
         );
         const evaluation = questionEvaluations.find(
@@ -24231,10 +24287,26 @@ export function useMeetingAssistant() {
           },
           {
             source: "manual-type-correction",
+            collection: correctionEvaluationCollection,
             actionId: eventId,
             repairTraceId: regenerationTrace.id,
             uiSurface: source,
             evaluation,
+            evaluationTarget: {
+              questionId,
+              taskId: correctedActiveTask.parent.id,
+              logicalQuestionUnitId: correctionLogicalQuestionUnit.id,
+              logicalQuestionUnitRevision:
+                correctionLogicalQuestionUnit.revision,
+              currentTurnId: correctionLogicalQuestionUnit.currentTurnId,
+              sourceTurnIds: [
+                ...correctionLogicalQuestionUnit.sourceTurnIds,
+              ],
+              sourceTraceId:
+                correctionQuestion.sourceTraceId ?? correctionTrace.id,
+              repairTraceId: regenerationTrace.id,
+              frozenAt: requestedAt,
+            },
           }
         );
         setState((previous) => ({
@@ -24778,6 +24850,10 @@ export function useMeetingAssistant() {
       ),
     });
     const requestedAt = Date.now();
+    const forceAdviseEvaluationCollection =
+      sessionRecordingManagerRef.current?.getState()
+        .evaluationProvenance ??
+      humanEvaluationCollectionProvenanceRef.current;
     const repairingPresentation: ForceAdviseTargetPresentation = {
       ...target.presentation,
       status: "repairing",
@@ -24806,6 +24882,7 @@ export function useMeetingAssistant() {
         forceAdviseManualExecutionState: "running",
         forceAdviseAutomaticExecutionState:
           target.presentation.automaticExecutionState,
+        humanEvaluationCollection: forceAdviseEvaluationCollection,
       }
     );
     traceStoreRef.current.updateMetadata(repairTrace.id, {
@@ -24818,54 +24895,60 @@ export function useMeetingAssistant() {
       forceAdviseRepairCause: classifyForceAdviseRepairCause(
         target.presentation
       ),
+      humanEvaluationCollection: forceAdviseEvaluationCollection,
     });
     const repairCause = classifyForceAdviseRepairCause(
       target.presentation
     );
-    if (repairCause === "intent-false-negative") {
+    if (
+      forceAdviseEvaluationCollection !== "scripted-validation" &&
+      repairCause === "intent-false-negative"
+    ) {
       updateTraceHumanEvaluation(target.presentation.originalTraceId, {
         advisorGateCorrectlySkipped: false,
         advisorGateShouldAdvise: true,
       });
     }
-    updateQuestionHumanEvaluation(target.presentation.originalTraceId, {
-      questionId: target.questionLineage.questionInstanceId,
-      traceIds: [
-        target.presentation.originalTraceId,
-        repairTrace.id,
-      ],
-      advisorIntent: {
-        schemaVersion: 1,
-        verdict:
-          repairCause === "intent-false-negative"
-            ? "false-negative"
-            : "ok",
-        expectedAction: "advise",
-        observedAction:
-          repairCause === "intent-false-negative"
-            ? target.presentation.observedAction
-            : "advised",
-        failureReason:
-          repairCause === "intent-false-negative"
-            ? "advisor-false-negative"
-            : undefined,
-        source: "manual-force-advise",
-        originalTraceId: target.presentation.originalTraceId,
-        logicalQuestionUnitId: target.logicalQuestionUnit.id,
-        logicalQuestionUnitRevision: target.logicalQuestionUnit.revision,
-        sourceTurnIds: [...target.logicalQuestionUnit.sourceTurnIds],
-        preDecision: {
-          intent: target.intentDecision.intent,
-          action: target.intentDecision.action,
-          enforcement: target.intentDecision.enforcement,
-          wouldSuppress: target.intentDecision.wouldSuppress,
-          executionAuthorized: target.intentDecision.executionAuthorized,
+    if (forceAdviseEvaluationCollection !== "scripted-validation") {
+      updateQuestionHumanEvaluation(target.presentation.originalTraceId, {
+        questionId: target.questionLineage.questionInstanceId,
+        traceIds: [
+          target.presentation.originalTraceId,
+          repairTrace.id,
+        ],
+        advisorIntent: {
+          schemaVersion: 1,
+          verdict:
+            repairCause === "intent-false-negative"
+              ? "false-negative"
+              : "ok",
+          expectedAction: "advise",
+          observedAction:
+            repairCause === "intent-false-negative"
+              ? target.presentation.observedAction
+              : "advised",
+          failureReason:
+            repairCause === "intent-false-negative"
+              ? "advisor-false-negative"
+              : undefined,
+          source: "manual-force-advise",
+          originalTraceId: target.presentation.originalTraceId,
+          logicalQuestionUnitId: target.logicalQuestionUnit.id,
+          logicalQuestionUnitRevision: target.logicalQuestionUnit.revision,
+          sourceTurnIds: [...target.logicalQuestionUnit.sourceTurnIds],
+          preDecision: {
+            intent: target.intentDecision.intent,
+            action: target.intentDecision.action,
+            enforcement: target.intentDecision.enforcement,
+            wouldSuppress: target.intentDecision.wouldSuppress,
+            executionAuthorized: target.intentDecision.executionAuthorized,
+          },
+          repairTraceId: repairTrace.id,
+          createdAt: requestedAt,
+          updatedAt: requestedAt,
         },
-        repairTraceId: repairTrace.id,
-        createdAt: requestedAt,
-        updatedAt: requestedAt,
-      },
-    });
+      });
+    }
     recordHumanGroundTruthV2(
       target.presentation.originalTraceId,
       {
@@ -24874,9 +24957,21 @@ export function useMeetingAssistant() {
       },
       {
         source: "manual-force-advise",
+        collection: forceAdviseEvaluationCollection,
         actionId: `force-advise:${target.logicalQuestionUnit.id}:${target.logicalQuestionUnit.revision}`,
         repairTraceId: repairTrace.id,
         uiSurface: "meeting-response-actions",
+        evaluationTarget: {
+          questionId: target.questionLineage.questionInstanceId,
+          taskId: activeContextState.activeMeetingTask?.parent.id,
+          logicalQuestionUnitId: target.logicalQuestionUnit.id,
+          logicalQuestionUnitRevision: target.logicalQuestionUnit.revision,
+          currentTurnId: target.logicalQuestionUnit.currentTurnId,
+          sourceTurnIds: [...target.logicalQuestionUnit.sourceTurnIds],
+          sourceTraceId: target.presentation.originalTraceId,
+          repairTraceId: repairTrace.id,
+          frozenAt: requestedAt,
+        },
       }
     );
 
@@ -27629,6 +27724,8 @@ export function useMeetingAssistant() {
     setMicrophoneContextEnabled,
     toggleMicrophoneContext,
     setSessionRecordingEnabled,
+    humanEvaluationCollectionProvenance,
+    setSessionEvaluationProvenance,
     setSttEvaluationCaptureEnabled,
     deleteSttEvaluationCapture,
     setResponseConfig,

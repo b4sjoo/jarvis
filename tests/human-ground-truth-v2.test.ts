@@ -396,6 +396,89 @@ test("deduplicates action-derived facts without rewriting history", () => {
   assert.equal(twice.length, 1);
 });
 
+test("keeps scripted intervention evidence out of semantic projection facts", () => {
+  const scriptedForceAdvise = createHumanGroundTruthEventV2({
+    eventId: "event_scripted_force_advise",
+    sessionId: "session_1",
+    subject: SUBJECT,
+    source: "manual-force-advise",
+    collection: "scripted-validation",
+    fact: {
+      kind: "expected-runtime-action",
+      expectedAction: "advise",
+    },
+    evaluationTarget: {
+      questionId: "question_1",
+      taskId: "task_1",
+      logicalQuestionUnitId: "lqu_1",
+      logicalQuestionUnitRevision: 3,
+      currentTurnId: "turn_1",
+      sourceTurnIds: ["turn_1"],
+      sourceTraceId: "trace_1",
+      repairTraceId: "trace_repair",
+      frozenAt: 10,
+    },
+    now: 10,
+  });
+  const projection = deriveHumanEvaluationProjectionV2({
+    sessionId: "session_1",
+    subject: SUBJECT,
+    events: [scriptedForceAdvise],
+    now: 11,
+  });
+
+  assert.equal(
+    projection.activeFacts["expected-runtime-action"],
+    undefined
+  );
+  assert.deepEqual(projection.semanticInputEventIds, []);
+  assert.deepEqual(projection.interventionOnlyEventIds, [
+    "event_scripted_force_advise",
+  ]);
+  assert.deepEqual(
+    scriptedForceAdvise.provenance.evaluationTarget,
+    {
+      questionId: "question_1",
+      taskId: "task_1",
+      logicalQuestionUnitId: "lqu_1",
+      logicalQuestionUnitRevision: 3,
+      currentTurnId: "turn_1",
+      sourceTurnIds: ["turn_1"],
+      sourceTraceId: "trace_1",
+      repairTraceId: "trace_repair",
+      frozenAt: 10,
+    }
+  );
+});
+
+test("allows an explicit semantic label in a scripted validation session", () => {
+  const explicitLabel = createHumanGroundTruthEventV2({
+    eventId: "event_scripted_explicit_label",
+    sessionId: "session_1",
+    subject: SUBJECT,
+    source: "explicit-ui",
+    collection: "scripted-validation",
+    fact: {
+      kind: "expected-runtime-action",
+      expectedAction: "ignore",
+    },
+    now: 12,
+  });
+  const projection = deriveHumanEvaluationProjectionV2({
+    sessionId: "session_1",
+    subject: SUBJECT,
+    events: [explicitLabel],
+    now: 13,
+  });
+
+  assert.equal(
+    projection.activeFacts["expected-runtime-action"]?.eventId,
+    explicitLabel.eventId
+  );
+  assert.deepEqual(projection.semanticInputEventIds, [explicitLabel.eventId]);
+  assert.deepEqual(projection.interventionOnlyEventIds, []);
+});
+
 test("imports only exact legacy expectations", () => {
   const legacy = createLegacyEvaluation({
     correctedQuestionType: "coding",
@@ -431,6 +514,9 @@ test("imports only exact legacy expectations", () => {
     imported.every(
       (event) => event.provenance.source === "imported-legacy"
     )
+  );
+  assert.ok(
+    imported.every((event) => event.provenance.collection === "replay")
   );
 });
 

@@ -620,6 +620,13 @@ function materializeHumanCandidates(input: {
     if (!match.example) continue;
     const provenance = asObject(record.payload.provenance);
     const source = readString(provenance, "source");
+    const collection = readString(provenance, "collection") ?? "organic";
+    if (
+      collection === "scripted-validation" &&
+      source !== "explicit-ui"
+    ) {
+      continue;
+    }
     candidates.push(
       normalizeLabelCandidateDisposition({
         schemaVersion: 1,

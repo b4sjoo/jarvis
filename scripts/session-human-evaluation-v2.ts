@@ -110,6 +110,8 @@ function renderCompatibilityMarkdown(
     `- V2-only projections: ${report.v2OnlyProjectionCount}`,
     `- Conflict projections: ${report.conflictProjectionCount}`,
     `- Projections with trace hashes: ${report.projectionsWithTraceHashes}`,
+    `- Semantic input events: ${report.semanticInputEventCount}`,
+    `- Intervention-only events: ${report.interventionOnlyEventCount}`,
     `- Derivation versions: ${report.derivationVersions.join(", ") || "-"}`,
     `- Interaction samples: ${report.interaction.measuredProjectionCount}`,
     `- Label duration P50/P90: ${formatMetric(report.interaction.durationP50Ms, "ms")} / ${formatMetric(report.interaction.durationP90Ms, "ms")}`,

@@ -7,6 +7,7 @@ import {
   InterviewSessionContext,
   MeetingAssistantSettings,
   MeetingSessionRecordingState,
+  HumanEvaluationCollectionProvenance,
   MeetingTrace,
   MeetingTraceExportTrigger,
   ManualQuestionTypeCorrection,
@@ -87,6 +88,7 @@ interface SessionRecordingStartOptions {
   interviewSessionBrief?: InterviewSessionBrief;
   interviewSessionContext?: InterviewSessionContext;
   providerSummary: SessionRecordingProviderSummary;
+  evaluationProvenance?: HumanEvaluationCollectionProvenance;
 }
 
 export interface SessionRecordingProviderSummary {
@@ -1310,6 +1312,8 @@ export class SessionRecordingManager {
       folderName: this.activeSession.folderName,
       folderPath: this.activeSession.folderPath,
       startedAt: this.activeSession.startedAt,
+      evaluationProvenance:
+        this.activeSession.manifestBase.evaluationProvenance,
       eventCount: this.activeSession.eventCount,
       artifactCount: this.activeSession.artifactCount,
       lastError: this.activeSession.lastError,
@@ -1326,6 +1330,8 @@ export class SessionRecordingManager {
 
       try {
         const startedAt = Date.now();
+        const evaluationProvenance =
+          options.evaluationProvenance ?? "organic";
         const sessionId = createMeetingId("session_recording");
         const folderName = buildSessionRecordingFolderName(sessionId, startedAt);
         const initialManifest = buildSessionRecordingManifest({
@@ -1338,6 +1344,7 @@ export class SessionRecordingManager {
           interviewSessionBrief: options.interviewSessionBrief,
           interviewSessionContext: options.interviewSessionContext,
           providerSummary: options.providerSummary,
+          evaluationProvenance,
         });
 
         const folderPath = await this.invokeCommand<string>(
@@ -1358,6 +1365,7 @@ export class SessionRecordingManager {
           interviewSessionBrief: options.interviewSessionBrief,
           interviewSessionContext: options.interviewSessionContext,
           providerSummary: options.providerSummary,
+          evaluationProvenance,
         });
         const session: ActiveSessionRecording = {
           generationId: createMeetingId("recording_generation"),
@@ -1426,6 +1434,7 @@ export class SessionRecordingManager {
         this.recordEvent("session-started", {
           folderPath,
           privacy: "raw audio omitted",
+          evaluationProvenance,
         });
         return this.getState();
       } catch (error) {
@@ -1532,6 +1541,10 @@ export class SessionRecordingManager {
             evaluationView.report.v1OnlyEvaluationCount,
           v2OnlyProjectionCount:
             evaluationView.report.v2OnlyProjectionCount,
+          v2SemanticInputEventCount:
+            evaluationView.report.semanticInputEventCount,
+          v2InterventionOnlyEventCount:
+            evaluationView.report.interventionOnlyEventCount,
           compatibilityWarningCount:
             evaluationView.report.warnings.length,
           compatibilityReportPath:
@@ -4046,6 +4059,7 @@ function buildSessionRecordingManifest({
   interviewSessionBrief,
   interviewSessionContext,
   providerSummary,
+  evaluationProvenance,
 }: {
   status: "running";
   sessionId: string;
@@ -4056,6 +4070,7 @@ function buildSessionRecordingManifest({
   interviewSessionBrief?: InterviewSessionBrief;
   interviewSessionContext?: InterviewSessionContext;
   providerSummary: SessionRecordingProviderSummary;
+  evaluationProvenance: HumanEvaluationCollectionProvenance;
 }) {
   return {
     version: SESSION_RECORDING_SCHEMA_VERSION,
@@ -4074,6 +4089,7 @@ function buildSessionRecordingManifest({
     interviewSessionBrief,
     interviewSessionContext,
     providerSummary,
+    evaluationProvenance,
   };
 }
 

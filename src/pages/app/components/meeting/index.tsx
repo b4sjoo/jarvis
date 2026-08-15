@@ -55,6 +55,7 @@ import type {
   MeetingResponseLanguage,
   MeetingResponseLength,
   MeetingSessionRecordingState,
+  HumanEvaluationCollectionProvenance,
   SttEvaluationCaptureState,
   ManualQuestionTypeCorrection,
   MeetingFocusAction,
@@ -1797,7 +1798,13 @@ export const MeetingAssistant = ({
                 nativeAudioFaultFeedback={nativeAudioFaultFeedback}
                 onNativeAudioFaultInject={handleNativeAudioFaultInjection}
                 sessionRecording={meeting.sessionRecording}
+                humanEvaluationCollectionProvenance={
+                  meeting.humanEvaluationCollectionProvenance
+                }
                 onSessionRecordingChange={meeting.setSessionRecordingEnabled}
+                onSessionEvaluationProvenanceChange={
+                  meeting.setSessionEvaluationProvenance
+                }
                 sttEvaluationCapture={meeting.sttEvaluationCapture}
                 sttEvaluationCaptureCanEnable={
                   !meeting.isActive &&
@@ -3896,7 +3903,9 @@ const ConfigurationsPanel = ({
   nativeAudioFaultFeedback,
   onNativeAudioFaultInject,
   sessionRecording,
+  humanEvaluationCollectionProvenance,
   onSessionRecordingChange,
+  onSessionEvaluationProvenanceChange,
   sttEvaluationCapture,
   sttEvaluationCaptureCanEnable,
   onSttEvaluationCaptureChange,
@@ -3939,7 +3948,11 @@ const ConfigurationsPanel = ({
     kind: NativeAudioDebugFaultKind
   ) => Promise<void>;
   sessionRecording: MeetingSessionRecordingState;
+  humanEvaluationCollectionProvenance: HumanEvaluationCollectionProvenance;
   onSessionRecordingChange: (enabled: boolean) => void;
+  onSessionEvaluationProvenanceChange: (
+    provenance: HumanEvaluationCollectionProvenance
+  ) => void;
   sttEvaluationCapture: SttEvaluationCaptureState;
   sttEvaluationCaptureCanEnable: boolean;
   onSttEvaluationCaptureChange: (enabled: boolean) => void;
@@ -4411,6 +4424,32 @@ const ConfigurationsPanel = ({
                   }
                   onCheckedChange={onSessionRecordingChange}
                 />
+              </div>
+              <div className="grid grid-cols-2 gap-1">
+                {(
+                  [
+                    ["organic", "Organic"],
+                    ["scripted-validation", "Scripted"],
+                  ] as const
+                ).map(([provenance, label]) => (
+                  <Button
+                    key={provenance}
+                    type="button"
+                    size="sm"
+                    variant={
+                      humanEvaluationCollectionProvenance === provenance
+                        ? "secondary"
+                        : "outline"
+                    }
+                    className="h-7 px-2 text-[10px]"
+                    disabled={sessionRecording.lifecycle !== "idle"}
+                    onClick={() =>
+                      onSessionEvaluationProvenanceChange(provenance)
+                    }
+                  >
+                    {label}
+                  </Button>
+                ))}
               </div>
               {sessionRecording.active ? (
                 <div className="space-y-1 text-[10px] text-muted-foreground">

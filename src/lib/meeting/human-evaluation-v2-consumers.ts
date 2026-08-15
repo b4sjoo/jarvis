@@ -10,7 +10,7 @@ import type {
   QuestionHumanEvaluation,
 } from "./types.js";
 
-const COMPATIBILITY_REPORT_VERSION = 1 as const;
+const COMPATIBILITY_REPORT_VERSION = 2 as const;
 
 type CompatibilityDimension =
   | "questionType"
@@ -43,6 +43,8 @@ export interface HumanEvaluationV2CompatibilityReport {
   v2OnlyProjectionCount: number;
   conflictProjectionCount: number;
   projectionsWithTraceHashes: number;
+  semanticInputEventCount: number;
+  interventionOnlyEventCount: number;
   interaction: {
     measuredProjectionCount: number;
     durationP50Ms?: number;
@@ -250,6 +252,16 @@ export function buildHumanEvaluationV2CompatibilityReport(input: {
     projectionsWithTraceHashes: input.projections.filter(
       (projection) => projection.inputTraceHashes.length > 0
     ).length,
+    semanticInputEventCount: new Set(
+      input.projections.flatMap(
+        (projection) => projection.semanticInputEventIds ?? []
+      )
+    ).size,
+    interventionOnlyEventCount: new Set(
+      input.projections.flatMap(
+        (projection) => projection.interventionOnlyEventIds ?? []
+      )
+    ).size,
     interaction: buildInteractionSummary(input.projections),
     dimensions,
     unmatchedV1EvaluationIds,

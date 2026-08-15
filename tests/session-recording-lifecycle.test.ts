@@ -64,6 +64,24 @@ test("serializes concurrent starts into one recording generation", async () => {
   assert.equal(manager.getState().lifecycle, "idle");
 });
 
+test("freezes scripted evaluation provenance in recording state and manifest", async () => {
+  const native = new ControlledRecordingInvoke();
+  const manager = new SessionRecordingManager(undefined, native.invoke);
+
+  const recording = await manager.start({
+    ...START_OPTIONS,
+    evaluationProvenance: "scripted-validation",
+  });
+
+  assert.equal(recording.evaluationProvenance, "scripted-validation");
+  const initialManifest = JSON.parse(
+    stringArg(native.startCalls()[0]!, "manifestPayload")
+  ) as Record<string, unknown>;
+  assert.equal(initialManifest.evaluationProvenance, "scripted-validation");
+
+  await manager.stop("test-complete");
+});
+
 test("records zero-trace critical moment candidates and reviewed outcomes", async () => {
   const native = new ControlledRecordingInvoke();
   const manager = new SessionRecordingManager(undefined, native.invoke);
@@ -206,6 +224,17 @@ test("records append-only V2 ground truth and derived projection artifacts", asy
       }>
     )[0]?.inputTraceHashes[0],
     "trace-hash-v2"
+  );
+  const stoppedManifest = native.stoppedManifest(
+    required(recording.folderName)
+  );
+  assert.equal(
+    stoppedManifest?.evaluationIntegrity.v2SemanticInputEventCount,
+    1
+  );
+  assert.equal(
+    stoppedManifest?.evaluationIntegrity.v2InterventionOnlyEventCount,
+    0
   );
 });
 
@@ -2973,6 +3002,8 @@ class ControlledRecordingInvoke {
           evaluationIntegrity: payload.evaluationIntegrity as {
             compatibilityReportPath: string;
             v2ProjectionMaterialization?: Record<string, number>;
+            v2SemanticInputEventCount?: number;
+            v2InterventionOnlyEventCount?: number;
           },
           preparationRuntimeIntegrity:
             payload.preparationRuntimeIntegrity as Record<string, unknown>,

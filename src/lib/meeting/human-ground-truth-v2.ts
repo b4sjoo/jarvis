@@ -15,13 +15,14 @@ import type {
   MeetingTrace,
   ProjectTrajectoryChildContinuity,
   QuestionHumanEvaluation,
+  HumanEvaluationCollectionProvenance,
 } from "./types.js";
 import type { AdvisorContextReadScope } from "./response-only-task-scope.js";
 import type { SettledAdvisorArtifactIntent } from "./settled-advisor-execution-plan.js";
 
 export const HUMAN_GROUND_TRUTH_SCHEMA_VERSION = 2 as const;
 export const HUMAN_EVALUATION_DERIVATION_VERSION =
-  "human-evaluation-v2.3";
+  "human-evaluation-v2.4";
 
 export type HumanGroundTruthConfirmation = "confirmed" | "suggested";
 
@@ -46,6 +47,18 @@ export interface HumanGroundTruthInteractionV2 {
   durationMs: number;
   clickCount: number;
   expandedRegions: string[];
+}
+
+export interface HumanGroundTruthEvaluationTargetV2 {
+  questionId?: string;
+  taskId?: string;
+  logicalQuestionUnitId?: string;
+  logicalQuestionUnitRevision?: number;
+  currentTurnId?: string;
+  sourceTurnIds: string[];
+  sourceTraceId?: string;
+  repairTraceId?: string;
+  frozenAt: number;
 }
 
 export interface ExpectedTaskSettlementFactV2 {
@@ -139,12 +152,14 @@ export interface HumanGroundTruthEventV2 {
   provenance: {
     source: HumanGroundTruthSource;
     actor: "human";
+    collection: HumanEvaluationCollectionProvenance;
     sourceTraceId?: string;
     repairTraceId?: string;
     actionId?: string;
     uiSurface?: string;
     recordedAt: number;
     interaction?: HumanGroundTruthInteractionV2;
+    evaluationTarget?: HumanGroundTruthEvaluationTargetV2;
   };
   confirmation: HumanGroundTruthConfirmation;
   supersedesEventId?: string;
@@ -192,6 +207,8 @@ export interface HumanEvaluationProjectionV2 {
   subject: HumanGroundTruthSubjectV2;
   derivationVersion: typeof HUMAN_EVALUATION_DERIVATION_VERSION;
   inputEventIds: string[];
+  semanticInputEventIds: string[];
+  interventionOnlyEventIds: string[];
   inputTraceHashes: string[];
   observed?: HumanEvaluationObservedSnapshotV2;
   interaction?: HumanGroundTruthInteractionV2;
@@ -221,12 +238,14 @@ export function createHumanGroundTruthEventV2(input: {
   subject: HumanGroundTruthSubjectV2;
   fact: HumanGroundTruthFactV2;
   source: HumanGroundTruthSource;
+  collection?: HumanEvaluationCollectionProvenance;
   confirmation?: HumanGroundTruthConfirmation;
   sourceTraceId?: string;
   repairTraceId?: string;
   actionId?: string;
   uiSurface?: string;
   interaction?: HumanGroundTruthInteractionV2;
+  evaluationTarget?: HumanGroundTruthEvaluationTargetV2;
   supersedesEventId?: string;
   eventId?: string;
   now?: number;
@@ -243,12 +262,17 @@ export function createHumanGroundTruthEventV2(input: {
     provenance: {
       source: input.source,
       actor: "human",
+      collection: input.collection ?? "organic",
       sourceTraceId: cleanOptional(input.sourceTraceId),
       repairTraceId: cleanOptional(input.repairTraceId),
       actionId: cleanOptional(input.actionId),
       uiSurface: cleanOptional(input.uiSurface),
       recordedAt: now,
       interaction: normalizeInteraction(input.interaction, now),
+      evaluationTarget: normalizeEvaluationTarget(
+        input.evaluationTarget,
+        now
+      ),
     },
     confirmation: input.confirmation ?? "confirmed",
     supersedesEventId: cleanOptional(input.supersedesEventId),
@@ -286,6 +310,15 @@ export function appendHumanGroundTruthEventV2(
         subjectsMatch(candidate.subject, event.subject))
   );
   return duplicate ? events : [...events, event];
+}
+
+export function isHumanGroundTruthSemanticEligibleV2(
+  event: HumanGroundTruthEventV2
+) {
+  return !(
+    event.provenance.collection === "scripted-validation" &&
+    event.provenance.source !== "explicit-ui"
+  );
 }
 
 export function findActiveHumanGroundTruthEventV2(
@@ -336,11 +369,14 @@ export function deriveHumanEvaluationProjectionV2(input: {
   const activeCandidates = candidates.filter(
     (event) => !supersededIds.has(event.eventId)
   );
+  const semanticCandidates = activeCandidates.filter(
+    isHumanGroundTruthSemanticEligibleV2
+  );
   const activeFacts: HumanEvaluationProjectionV2["activeFacts"] = {};
   const conflicts: HumanEvaluationConflictV2[] = [];
 
-  for (const kind of uniqueFactKinds(activeCandidates)) {
-    const sameKind = activeCandidates.filter(
+  for (const kind of uniqueFactKinds(semanticCandidates)) {
+    const sameKind = semanticCandidates.filter(
       (event) => event.fact.kind === kind
     );
     const highestPriority = Math.max(...sameKind.map(eventPriority));
@@ -392,6 +428,10 @@ export function deriveHumanEvaluationProjectionV2(input: {
     interaction: summarizeInteraction(activeCandidates),
     derivationVersion: HUMAN_EVALUATION_DERIVATION_VERSION,
     inputEventIds: activeCandidates.map((event) => event.eventId),
+    semanticInputEventIds: semanticCandidates.map((event) => event.eventId),
+    interventionOnlyEventIds: activeCandidates
+      .filter((event) => !isHumanGroundTruthSemanticEligibleV2(event))
+      .map((event) => event.eventId),
     inputTraceHashes: input.observed ? [input.observed.traceHash] : [],
     activeFacts,
     verdicts: {
@@ -661,6 +701,7 @@ export function importLegacyQuestionEvaluationV2(
     sessionId,
     subject,
     source: "imported-legacy" as const,
+    collection: "replay" as const,
     confirmation: "confirmed" as const,
     sourceTraceId: evaluation.traceIds[0],
     now: evaluation.updatedAt,
@@ -998,6 +1039,9 @@ function normalizeEvent(value: unknown) {
     },
     fact,
     source,
+    collection: normalizeCollectionProvenance(
+      value.provenance.collection
+    ),
     confirmation:
       value.confirmation === "suggested" ? "suggested" : "confirmed",
     sourceTraceId: readString(value.provenance.sourceTraceId),
@@ -1006,6 +1050,12 @@ function normalizeEvent(value: unknown) {
     uiSurface: readString(value.provenance.uiSurface),
     interaction: normalizeStoredInteraction(
       value.provenance.interaction,
+      typeof value.provenance.recordedAt === "number"
+        ? value.provenance.recordedAt
+        : Date.now()
+    ),
+    evaluationTarget: normalizeStoredEvaluationTarget(
+      value.provenance.evaluationTarget,
       typeof value.provenance.recordedAt === "number"
         ? value.provenance.recordedAt
         : Date.now()
@@ -1081,6 +1131,56 @@ function normalizeInteraction(
   };
 }
 
+function normalizeEvaluationTarget(
+  value: HumanGroundTruthEvaluationTargetV2 | undefined,
+  recordedAt: number
+): HumanGroundTruthEvaluationTargetV2 | undefined {
+  if (!value) return undefined;
+  const logicalQuestionUnitRevision = Number.isFinite(
+    value.logicalQuestionUnitRevision
+  )
+    ? Math.max(0, Math.floor(value.logicalQuestionUnitRevision!))
+    : undefined;
+  return {
+    questionId: cleanOptional(value.questionId),
+    taskId: cleanOptional(value.taskId),
+    logicalQuestionUnitId: cleanOptional(value.logicalQuestionUnitId),
+    logicalQuestionUnitRevision,
+    currentTurnId: cleanOptional(value.currentTurnId),
+    sourceTurnIds: uniqueStrings(value.sourceTurnIds),
+    sourceTraceId: cleanOptional(value.sourceTraceId),
+    repairTraceId: cleanOptional(value.repairTraceId),
+    frozenAt: Number.isFinite(value.frozenAt)
+      ? Math.min(Math.max(0, value.frozenAt), recordedAt)
+      : recordedAt,
+  };
+}
+
+function normalizeStoredEvaluationTarget(
+  value: unknown,
+  recordedAt: number
+) {
+  if (!isRecord(value)) return undefined;
+  return normalizeEvaluationTarget(
+    {
+      questionId: readString(value.questionId),
+      taskId: readString(value.taskId),
+      logicalQuestionUnitId: readString(value.logicalQuestionUnitId),
+      logicalQuestionUnitRevision:
+        typeof value.logicalQuestionUnitRevision === "number"
+          ? value.logicalQuestionUnitRevision
+          : undefined,
+      currentTurnId: readString(value.currentTurnId),
+      sourceTurnIds: readStringArray(value.sourceTurnIds),
+      sourceTraceId: readString(value.sourceTraceId),
+      repairTraceId: readString(value.repairTraceId),
+      frozenAt:
+        typeof value.frozenAt === "number" ? value.frozenAt : recordedAt,
+    },
+    recordedAt
+  );
+}
+
 function normalizeProjection(value: unknown) {
   if (!isRecord(value) || value.schemaVersion !== 2) return undefined;
   if (
@@ -1090,7 +1190,17 @@ function normalizeProjection(value: unknown) {
   ) {
     return undefined;
   }
-  return value as unknown as HumanEvaluationProjectionV2;
+  const inputEventIds = readStringArray(value.inputEventIds);
+  return {
+    ...value,
+    inputEventIds,
+    semanticInputEventIds: Array.isArray(value.semanticInputEventIds)
+      ? readStringArray(value.semanticInputEventIds)
+      : inputEventIds,
+    interventionOnlyEventIds: readStringArray(
+      value.interventionOnlyEventIds
+    ),
+  } as unknown as HumanEvaluationProjectionV2;
 }
 
 function normalizeStoredFact(
@@ -1388,6 +1498,14 @@ function isGroundTruthSource(value: unknown): value is HumanGroundTruthSource {
     value === "manual-context-action" ||
     value === "imported-legacy"
   );
+}
+
+function normalizeCollectionProvenance(
+  value: unknown
+): HumanEvaluationCollectionProvenance {
+  return value === "scripted-validation" || value === "replay"
+    ? value
+    : "organic";
 }
 
 function readStoredArray<T>(

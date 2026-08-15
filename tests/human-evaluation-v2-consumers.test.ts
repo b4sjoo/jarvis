@@ -86,6 +86,8 @@ test("V2 projections override exact legacy consumer expectations", () => {
     1
   );
   assert.equal(result.report.matchedProjectionCount, 1);
+  assert.equal(result.report.semanticInputEventCount, 2);
+  assert.equal(result.report.interventionOnlyEventCount, 0);
   assert.deepEqual(result.report.interaction, {
     measuredProjectionCount: 1,
     durationP50Ms: 8,
