@@ -1170,8 +1170,23 @@ interface SessionMetricsSummary {
   voice: SessionTraceKindAggregate;
   shortIntent: SessionShortIntentAggregate;
   answerStability: SessionAnswerStabilityAggregate;
+  modelGeneration: SessionModelGenerationAggregate;
   errors: number;
   cancelled: number;
+}
+
+interface SessionModelGenerationAggregate {
+  requestCount: number;
+  streamingConfiguredCount: number;
+  nonStreamingConfiguredCount: number;
+  missingFirstContentCount: number;
+  missingFirstVisiblePartialCount: number;
+  byRequestOrigin: Record<string, number>;
+  byRoute: Record<string, number>;
+  firstContentMs: SessionNumberAggregate;
+  firstVisiblePartialMs: SessionNumberAggregate;
+  durationMs: SessionNumberAggregate;
+  chunkCount: SessionNumberAggregate;
 }
 
 interface SessionAnswerStabilityAggregate {
@@ -6916,12 +6931,69 @@ function buildSessionMetricsSummary(
       productionSummaries,
       humanEvaluations
     ),
+    modelGeneration: aggregateModelGeneration(productionSummaries),
     errors: productionSummaries.filter((summary) => summary.status === "error")
       .length,
     cancelled: productionSummaries.filter(
       (summary) => summary.status === "cancelled"
     ).length,
   };
+}
+
+function aggregateModelGeneration(
+  summaries: SessionCompactTraceSummary[]
+): SessionModelGenerationAggregate {
+  const generations = summaries
+    .map((summary) => summary.modelGeneration)
+    .filter((generation) =>
+      Boolean(
+        generation &&
+          (generation.telemetryVersion !== undefined ||
+            generation.requestStartedAt !== undefined ||
+            generation.completedAt !== undefined)
+      )
+    ) as NonNullable<SessionCompactTraceSummary["modelGeneration"]>[];
+  return {
+    requestCount: generations.length,
+    streamingConfiguredCount: generations.filter(
+      (generation) => generation.streamingConfigured === true
+    ).length,
+    nonStreamingConfiguredCount: generations.filter(
+      (generation) => generation.streamingConfigured === false
+    ).length,
+    missingFirstContentCount: generations.filter(
+      (generation) => generation.firstContentMs === undefined
+    ).length,
+    missingFirstVisiblePartialCount: generations.filter(
+      (generation) => generation.firstVisiblePartialMs === undefined
+    ).length,
+    byRequestOrigin: countModelGenerationDimension(
+      generations.map((generation) => generation.requestOrigin)
+    ),
+    byRoute: countModelGenerationDimension(
+      generations.map((generation) => generation.route)
+    ),
+    firstContentMs: aggregateNumbers(
+      generations.map((generation) => generation.firstContentMs)
+    ),
+    firstVisiblePartialMs: aggregateNumbers(
+      generations.map((generation) => generation.firstVisiblePartialMs)
+    ),
+    durationMs: aggregateNumbers(
+      generations.map((generation) => generation.durationMs)
+    ),
+    chunkCount: aggregateNumbers(
+      generations.map((generation) => generation.chunkCount)
+    ),
+  };
+}
+
+function countModelGenerationDimension(values: Array<string | undefined>) {
+  return values.reduce<Record<string, number>>((counts, value) => {
+    const key = value ?? "unknown";
+    counts[key] = (counts[key] ?? 0) + 1;
+    return counts;
+  }, {});
 }
 
 function aggregateAnswerStability(

@@ -2477,6 +2477,33 @@ test("records compact current-question settlement and execution-plan evidence", 
     durationMs: 900,
     chunkCount: 4,
   });
+  const sessionSummaryWrite = native.calls
+    .filter(
+      (call) =>
+        call.command === "write_meeting_session_recording_text" &&
+        stringArg(call, "relativePath") === "metrics/session-summary.json"
+    )
+    .at(-1);
+  assert.ok(sessionSummaryWrite);
+  const sessionSummary = parsePayload(sessionSummaryWrite);
+  assert.deepEqual(sessionSummary.modelGeneration, {
+    requestCount: 1,
+    streamingConfiguredCount: 1,
+    nonStreamingConfiguredCount: 0,
+    missingFirstContentCount: 0,
+    missingFirstVisiblePartialCount: 0,
+    byRequestOrigin: { advisor: 1 },
+    byRoute: { main: 1 },
+    firstContentMs: { count: 1, p50: 250, p90: 250, max: 250 },
+    firstVisiblePartialMs: {
+      count: 1,
+      p50: 400,
+      p90: 400,
+      max: 400,
+    },
+    durationMs: { count: 1, p50: 900, p90: 900, max: 900 },
+    chunkCount: { count: 1, p50: 4, p90: 4, max: 4 },
+  });
   assert.equal(
     (summary.boundedRecentHistory as Record<string, unknown>)
       .contextReadScope,
