@@ -65,7 +65,6 @@ export interface LlmTypeRepairFirstParentAdmissionDecision {
     | "response-opportunity-missing"
     | "response-opportunity-not-authorized"
     | "response-opportunity-identity-mismatch"
-    | "response-opportunity-source-mismatch"
     | "bounded-substantive-ask-missing";
   proposedRelation: "new-parent" | "unknown";
   command?: {
@@ -311,15 +310,6 @@ export function decideLlmTypeRepairFirstParentAdmission(input: {
   const responseOpportunityRequest = buildResponseOpportunityRequest({
     logicalQuestionUnit: unit,
   });
-  if (
-    responseOpportunity.sourceHash !== responseOpportunityRequest.sourceHash
-  ) {
-    return firstParentDecision(
-      false,
-      "response-opportunity-source-mismatch",
-      responseOpportunity.operationId
-    );
-  }
   if (responseOpportunity.disposition !== "output-authorized") {
     return firstParentDecision(
       false,

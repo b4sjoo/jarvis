@@ -23,6 +23,7 @@ import {
 import { projectPrimaryAsk } from "../src/lib/meeting/primary-ask-projection.js";
 import {
   buildResponseOpportunityRequest,
+  createResponseOpportunityContextCapsule,
 } from "../src/lib/meeting/short-intent-gate.js";
 import { setTestActiveParent } from "./helpers/meeting-task-runtime.js";
 
@@ -191,6 +192,93 @@ test("admits the first parent only after type and response opportunity settle on
   });
   assert.equal(pending.authorized, false);
   assert.equal(pending.reason, "response-opportunity-not-authorized");
+});
+
+test("admits a contextual response gate without recomputing its leased source hash", () => {
+  const text = "Yes, use one million daily active users.";
+  const primaryAskProjection = projectPrimaryAsk({
+    turnId: "turn-b",
+    text,
+  });
+  const unit: LogicalQuestionUnit = {
+    ...logicalQuestion(text),
+    sourceTurnIds: ["turn-b"],
+    sources: [
+      {
+        turnId: "turn-b",
+        text,
+        startedAt: 30,
+        endedAt: 40,
+      },
+    ],
+    primaryAskProjection,
+  };
+  const currentQuestion = createProvisionalCurrentQuestion({
+    logicalQuestionUnit: unit,
+    sourceKind: "voice",
+  });
+  const repairedSettlement = settleCurrentQuestion({
+    currentQuestion,
+    llmProposal: {
+      source: "llm-type-repair",
+      sessionId: unit.sessionId,
+      runtimeEpoch: unit.runtimeEpoch,
+      logicalQuestionUnitId: unit.id,
+      revision: unit.revision,
+      sourceHash: currentQuestion.sourceHash,
+      questionType: "general-system-design",
+      relation: "unknown",
+      action: "answer",
+      confidence: 0.96,
+      typeEvidenceAuthorized: true,
+      relationEvidenceAuthorized: false,
+      actionEvidenceAuthorized: false,
+    },
+    manualCorrectionRevision: 0,
+    policy: {
+      allowLlmTypeRepair: true,
+      runtimeMutationAuthorized: false,
+      questionComplete: true,
+      commitParent: false,
+    },
+  });
+  const contextCapsule = createResponseOpportunityContextCapsule({
+    clarification: "What traffic scale should we assume?",
+    logicalQuestionUnitId: "logical-question-previous",
+    logicalQuestionUnitRevision: 1,
+    parentId: "parent-previous",
+    playbookPhase: "requirements",
+    createdAt: 25,
+    unresolved: true,
+  });
+  const responseOpportunityRequest = buildResponseOpportunityRequest({
+    logicalQuestionUnit: unit,
+    contextCapsule,
+  });
+
+  const decision = decideLlmTypeRepairFirstParentAdmission({
+    logicalQuestionUnit: unit,
+    settlement: repairedSettlement,
+    hasActiveParent: false,
+    outputAuthorityAuthorized: true,
+    responseOpportunityGate: {
+      operationId: "response-opportunity-contextual",
+      sessionId: unit.sessionId,
+      runtimeEpoch: unit.runtimeEpoch,
+      logicalQuestionUnitId: unit.id,
+      logicalQuestionUnitRevision: unit.revision,
+      sourceHash: responseOpportunityRequest.sourceHash,
+      manualCorrectionRevision: 0,
+      disposition: "output-authorized",
+      reason: "pending-clarification-resolved",
+      createdAt: 45,
+      settledAt: 50,
+    },
+  });
+
+  assert.equal(decision.authorized, true);
+  assert.equal(decision.proposedRelation, "new-parent");
+  assert.equal(decision.command?.type, "general-system-design");
 });
 
 test("keeps setup objects in the committed parent topic", () => {
