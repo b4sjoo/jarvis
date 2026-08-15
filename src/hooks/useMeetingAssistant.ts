@@ -23529,7 +23529,7 @@ export function useMeetingAssistant() {
         );
       }
       responseOpportunityRuntimeRef.current?.cancelAll(
-        "manual-question-type-correction"
+        "superseded"
       );
       responseOpportunityGenerationGateRef.current.cancelAll(
         "manual-question-type-correction"
