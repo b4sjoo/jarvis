@@ -79,7 +79,7 @@ import {
 
 const SESSION_RECORDING_SCHEMA_VERSION = 1;
 const SESSION_RECORDING_INTEGRITY_SCHEMA_VERSION = 1;
-const SESSION_TRACE_SUMMARY_SCHEMA_VERSION = 37;
+const SESSION_TRACE_SUMMARY_SCHEMA_VERSION = 38;
 const SESSION_TRACE_INDEX_SCHEMA_VERSION = 1;
 const MAX_RECORDED_WRITE_FAILURES = 20;
 
@@ -498,6 +498,9 @@ export interface SessionCompactTraceSummary {
     parentBeforeType?: string;
     parentAfterId?: string;
     parentAfterType?: string;
+    typeAppliedToResponse?: boolean;
+    typeAppliedToSettlement?: boolean;
+    typeAppliedToParent?: boolean;
     manualCorrectionRevision?: number;
     rejectedProposalCount?: number;
     reasons: string[];
@@ -3306,6 +3309,10 @@ export class SessionRecordingManager {
   }) {
     const session = this.getWritableSession({ traceId });
     if (!session) return;
+    const typeAppliedToParent = Boolean(
+      disposition === "committed-parent" &&
+        parentAfterType === settlement.questionType
+    );
     const artifactPath = `traces/${sanitizeFilePart(
       traceId
     )}/current-question-settlement.json`;
@@ -3324,6 +3331,8 @@ export class SessionRecordingManager {
       currentQuestionSettlementParentBeforeType: parentBeforeType,
       currentQuestionSettlementParentAfterId: parentAfterId,
       currentQuestionSettlementParentAfterType: parentAfterType,
+      currentQuestionSettlementAppliedToSettlement: true,
+      currentQuestionSettlementAppliedToParent: typeAppliedToParent,
     };
     const payload = {
       version: 1,
@@ -3356,6 +3365,10 @@ export class SessionRecordingManager {
       parentAfter: {
         id: parentAfterId,
         questionType: parentAfterType,
+      },
+      application: {
+        settlement: true,
+        parent: typeAppliedToParent,
       },
     };
     this.enqueue(session, () =>
@@ -5161,6 +5174,18 @@ export function buildCompactTraceSummary({
       parentAfterType: readFirstString(
         metadataSources,
         "currentQuestionSettlementParentAfterType"
+      ),
+      typeAppliedToResponse: readFirstBoolean(
+        metadataSources,
+        "currentQuestionSettlementAppliedToResponse"
+      ),
+      typeAppliedToSettlement: readFirstBoolean(
+        metadataSources,
+        "currentQuestionSettlementAppliedToSettlement"
+      ),
+      typeAppliedToParent: readFirstBoolean(
+        metadataSources,
+        "currentQuestionSettlementAppliedToParent"
       ),
       manualCorrectionRevision:
         readFirstNumberFromMetadata(

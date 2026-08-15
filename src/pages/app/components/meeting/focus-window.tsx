@@ -281,14 +281,31 @@ function MeetingFocusControlsWindow({
         ? `Corrected: ${formatFocusQuestionType(
             activeCorrection.correctedType
           )} · retry failed`
-        : `Current: ${effectiveTypeLabel}${
+        : `Question: ${effectiveTypeLabel}${
             snapshot.questionTypeCorrected ? " · corrected" : ""
           }`;
-  const typeStatusTitle = snapshot.activeTask?.child
-    ? `${typeStatusLabel}; parent: ${formatFocusQuestionType(
-        snapshot.activeTask.questionType
-      )}`
-    : typeStatusLabel;
+  const parentTypeLabel = formatFocusQuestionType(
+    snapshot.parentQuestionType
+  );
+  const typeStatusTitle = [
+    typeStatusLabel,
+    `authority: ${snapshot.currentQuestionTypeAuthority ?? "unknown"}`,
+    `parent: ${parentTypeLabel}${
+      snapshot.parentTaskId ? ` (${snapshot.parentTaskId})` : ""
+    }`,
+    `applied: response=${formatFocusBoolean(
+      snapshot.typeAppliedToResponse
+    )}, settlement=${formatFocusBoolean(
+      snapshot.typeAppliedToSettlement
+    )}, parent=${formatFocusBoolean(snapshot.typeAppliedToParent)}`,
+    snapshot.durableOwnerMissing
+      ? `durable owner missing: ${
+          snapshot.durableOwnerMissingReason ?? "unresolved"
+        }`
+      : undefined,
+  ]
+    .filter(Boolean)
+    .join("; ");
 
   const submitCorrection = () => {
     const trimmed = correction.trim();
@@ -358,13 +375,19 @@ function MeetingFocusControlsWindow({
           </div>
           <Badge
             variant="outline"
-            className="h-7 max-w-[180px] shrink-0 rounded-md px-2 text-[10px]"
+            className={cn(
+              "h-7 max-w-[300px] shrink-0 rounded-md px-2 text-[10px]",
+              snapshot.durableOwnerMissing &&
+                "border-amber-500/70 text-amber-700 dark:text-amber-300"
+            )}
             title={typeStatusTitle}
           >
             {correctionRunning ? (
               <Loader2Icon className="mr-1 h-3 w-3 shrink-0 animate-spin" />
             ) : null}
-            <span className="truncate">{typeStatusLabel}</span>
+            <span className="truncate">
+              {typeStatusLabel} · Parent: {parentTypeLabel}
+            </span>
           </Badge>
           <div className="flex min-w-0 flex-wrap gap-1.5">
             {interviewBriefTypeOptions.map((option) => {
@@ -733,6 +756,10 @@ function formatFocusQuestionType(type: string | undefined) {
   if (type === "project-deep-dive") return "Project";
   if (type === "field-knowledge") return "Field Knowledge";
   return "Unknown";
+}
+
+function formatFocusBoolean(value: boolean | undefined) {
+  return value === true ? "yes" : value === false ? "no" : "unknown";
 }
 
 function formatChineseThinkingText(value: string) {

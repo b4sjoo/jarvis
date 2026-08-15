@@ -9095,6 +9095,12 @@ export function useMeetingAssistant() {
         currentQuestionSettlementParentAfterId: parentAfter?.id,
         currentQuestionSettlementParentAfterType:
           parentAfter?.questionType,
+        currentQuestionSettlementAppliedToSettlement: true,
+        currentQuestionSettlementAppliedToParent: Boolean(
+          parentCommitted &&
+            parentAfter?.questionType ===
+              currentQuestionSettlement.questionType
+        ),
       };
       traceStoreRef.current.updateMetadata(traceId, metadata);
       sessionRecordingManagerRef.current?.recordCurrentQuestionSettlement({
@@ -9951,6 +9957,9 @@ export function useMeetingAssistant() {
             settledExecutionPlanOverrideApplied: Boolean(
               options.settledExecutionPlanOverride
             ),
+            currentQuestionSettlementAppliedToResponse:
+              settledExecutionPlan.questionType ===
+              currentQuestionSettlement.questionType,
           };
         traceStoreRef.current.updateMetadata(
           traceId,
@@ -11814,6 +11823,7 @@ export function useMeetingAssistant() {
           buildSuggestionTaskMetadata(contextState.activeMeetingTask),
           parsedMeetingAnswer
         ),
+        questionType: responseOwner.questionType,
         codeArtifactMutationAuthorized:
           settledArtifactAuthorization.allowCode,
         complexityArtifactMutationAuthorized:
@@ -23038,6 +23048,7 @@ export function useMeetingAssistant() {
                     updatedContextState.activeMeetingTask
                   )
                 : {}),
+              questionType: settledScreenTaskKind,
               basedOnTurnIds,
               basedOnObservationIds: [observation.id],
               confidence: "medium",
@@ -23060,6 +23071,7 @@ export function useMeetingAssistant() {
                     updatedContextState.activeMeetingTask
                   )
                 : {}),
+              questionType: settledScreenTaskKind,
               basedOnTurnIds,
               basedOnObservationIds: [observation.id],
               confidence: "low",

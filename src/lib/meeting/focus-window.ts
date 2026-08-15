@@ -166,6 +166,14 @@ export type MeetingFocusSnapshot = {
   isTaskSwitchClarifyingQuestion: boolean;
   interviewTypes: InterviewBriefType[];
   effectiveQuestionType?: CanonicalQuestionType;
+  currentQuestionTypeAuthority?: string;
+  parentQuestionType?: CanonicalQuestionType;
+  parentTaskId?: string;
+  typeAppliedToResponse?: boolean;
+  typeAppliedToSettlement?: boolean;
+  typeAppliedToParent?: boolean;
+  durableOwnerMissing: boolean;
+  durableOwnerMissingReason?: string;
   transientPersonalStatusLabel?: string;
   currentQuestionId?: string;
   questionTypeCorrected: boolean;
@@ -245,6 +253,14 @@ export const EMPTY_MEETING_FOCUS_SNAPSHOT: MeetingFocusSnapshot = {
   isTaskSwitchClarifyingQuestion: false,
   interviewTypes: [],
   effectiveQuestionType: undefined,
+  currentQuestionTypeAuthority: undefined,
+  parentQuestionType: undefined,
+  parentTaskId: undefined,
+  typeAppliedToResponse: undefined,
+  typeAppliedToSettlement: undefined,
+  typeAppliedToParent: undefined,
+  durableOwnerMissing: false,
+  durableOwnerMissingReason: undefined,
   transientPersonalStatusLabel: undefined,
   questionTypeCorrected: false,
   manualQuestionTypeCorrection: undefined,

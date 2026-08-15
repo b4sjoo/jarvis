@@ -19,10 +19,14 @@ import type {
 } from "./types.js";
 import type { AdvisorContextReadScope } from "./response-only-task-scope.js";
 import type { SettledAdvisorArtifactIntent } from "./settled-advisor-execution-plan.js";
+import {
+  projectQuestionTypeObservation,
+  type DurableQuestionOwnerMissingReason,
+} from "./question-type-observation.js";
 
 export const HUMAN_GROUND_TRUTH_SCHEMA_VERSION = 2 as const;
 export const HUMAN_EVALUATION_DERIVATION_VERSION =
-  "human-evaluation-v2.4";
+  "human-evaluation-v2.5";
 
 export type HumanGroundTruthConfirmation = "confirmed" | "suggested";
 
@@ -192,6 +196,15 @@ export interface HumanEvaluationObservedSnapshotV2 {
   playbookPhase?: InterviewPlaybookPhase;
   factAnchorState?: FactAnchorState;
   childContinuity?: ProjectTrajectoryChildContinuity;
+  observedCurrentQuestionType?: CanonicalQuestionType;
+  observedCurrentQuestionTypeAuthority?: string;
+  observedParentType?: CanonicalQuestionType;
+  observedParentId?: string;
+  typeAppliedToResponse?: boolean;
+  typeAppliedToSettlement?: boolean;
+  typeAppliedToParent?: boolean;
+  durableOwnerMissing?: boolean;
+  durableOwnerMissingReason?: DurableQuestionOwnerMissingReason;
 }
 
 export interface HumanEvaluationConflictV2 {
@@ -514,14 +527,9 @@ export function buildHumanEvaluationObservedSnapshotV2(
   trace: MeetingTrace
 ): HumanEvaluationObservedSnapshotV2 {
   const metadata = trace.metadata ?? {};
-  const questionType = normalizeCanonicalQuestionType(
-    readString(
-      metadata.currentQuestionSettlementType ??
-        metadata.settledExecutionPlanQuestionType ??
-        metadata.canonicalQuestionType ??
-        metadata.questionType
-    )
-  );
+  const questionTypeObservation = projectQuestionTypeObservation({ metadata });
+  const questionType =
+    questionTypeObservation.observedCurrentQuestionType;
   const relation = normalizeRelation(
     metadata.currentQuestionSettlementRelation ??
       metadata.settledExecutionPlanTaskRelation ??
@@ -590,6 +598,7 @@ export function buildHumanEvaluationObservedSnapshotV2(
     playbookPhase,
     factAnchorState,
     childContinuity,
+    ...questionTypeObservation,
   };
   return {
     ...traceEvidence,

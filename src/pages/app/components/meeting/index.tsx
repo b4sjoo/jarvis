@@ -95,6 +95,7 @@ import {
   normalizeCanonicalQuestionType,
   normalizeArtifactIntentEvaluationFamily,
   overlayMeetingAnswerArtifacts,
+  projectQuestionTypeObservation,
   resolveMeetingAnswerProfile,
   resolveCriticalMomentExpectedFacts,
   resolveNativeAudioPauseResumeControl,
@@ -878,10 +879,23 @@ export const MeetingAssistant = ({
     () => getEditableInterviewSessionBrief(meeting.interviewSessionBrief),
     [meeting.interviewSessionBrief]
   );
+  const currentQuestionTrace = meeting.latestSuggestion?.sourceTraceId
+    ? meeting.traces.find(
+        (trace) => trace.id === meeting.latestSuggestion?.sourceTraceId
+      )
+    : undefined;
+  const currentQuestionTypeObservation = projectQuestionTypeObservation({
+    metadata: currentQuestionTrace?.metadata,
+    fallbackCurrentQuestionType:
+      meeting.latestSuggestion?.questionType ??
+      meeting.activeMeetingTask?.child?.questionType ??
+      activeTaskKind,
+    fallbackParentType: activeTaskKind,
+    fallbackParentId: meeting.activeMeetingTask?.parent.id,
+  });
   const effectiveQuestionType =
-    normalizeCanonicalQuestionType(
-      meeting.activeMeetingTask?.child?.questionType ?? activeTaskKind
-    ) ?? (hasCorrectableQuestion ? "unknown" : undefined);
+    currentQuestionTypeObservation.observedCurrentQuestionType ??
+    (hasCorrectableQuestion ? "unknown" : undefined);
   const transientPersonalStatusLabel =
     meeting.latestSuggestion?.transientPersonalStatus?.label;
   const activeManualQuestionTypeCorrection =
@@ -931,6 +945,21 @@ export const MeetingAssistant = ({
       isTaskSwitchClarifyingQuestion,
       interviewTypes: editableBriefForFocus.interviewTypes,
       effectiveQuestionType,
+      currentQuestionTypeAuthority:
+        currentQuestionTypeObservation.observedCurrentQuestionTypeAuthority,
+      parentQuestionType:
+        currentQuestionTypeObservation.observedParentType,
+      parentTaskId: currentQuestionTypeObservation.observedParentId,
+      typeAppliedToResponse:
+        currentQuestionTypeObservation.typeAppliedToResponse,
+      typeAppliedToSettlement:
+        currentQuestionTypeObservation.typeAppliedToSettlement,
+      typeAppliedToParent:
+        currentQuestionTypeObservation.typeAppliedToParent,
+      durableOwnerMissing:
+        currentQuestionTypeObservation.durableOwnerMissing,
+      durableOwnerMissingReason:
+        currentQuestionTypeObservation.durableOwnerMissingReason,
       transientPersonalStatusLabel,
       currentQuestionId: meeting.currentQuestionLineage?.questionInstanceId,
       questionTypeCorrected:
@@ -970,6 +999,7 @@ export const MeetingAssistant = ({
       meeting.answerDelivery,
       meeting.activeMeetingTask,
       meeting.currentQuestionLineage,
+      currentQuestionTrace,
       activeTaskKind,
       activeManualQuestionTypeCorrection,
       effectiveQuestionType,
@@ -5593,9 +5623,12 @@ const TraceHumanEvaluationPanel = ({
     "boolean"
       ? trace.metadata.currentQuestionSettlementParentMutationAuthorized
       : undefined;
-  const observedQuestionType = normalizeCanonicalQuestionType(
-    currentQuestionSettlementType ?? detectedQuestionType
-  );
+  const questionTypeObservation = projectQuestionTypeObservation({
+    metadata: trace.metadata,
+    fallbackCurrentQuestionType: detectedQuestionType,
+  });
+  const observedQuestionType =
+    questionTypeObservation.observedCurrentQuestionType;
   const observedRelation = normalizeEvaluationTaskRelation(
     currentQuestionSettlementRelation
   );
@@ -6269,10 +6302,45 @@ const TraceHumanEvaluationPanel = ({
           <div className="mb-1 text-[10px] font-medium uppercase text-muted-foreground">
             Task settlement
           </div>
-          <div className="break-words font-mono text-[9px] text-muted-foreground">
-            observed: {observedQuestionType ?? "unknown"} /{" "}
-            {observedRelation ?? "unknown"} /{" "}
-            {observedParentAction ?? "unresolved"}
+          <div className="space-y-0.5 break-words font-mono text-[9px] text-muted-foreground">
+            <div>
+              current question: {observedQuestionType ?? "unknown"}
+              {questionTypeObservation.observedCurrentQuestionTypeAuthority
+                ? ` (${questionTypeObservation.observedCurrentQuestionTypeAuthority})`
+                : ""}
+            </div>
+            <div>
+              durable parent:{" "}
+              {questionTypeObservation.observedParentType ?? "none"}
+              {questionTypeObservation.observedParentId
+                ? ` (${questionTypeObservation.observedParentId})`
+                : ""}
+            </div>
+            <div>
+              settlement: {observedRelation ?? "unknown"} /{" "}
+              {observedParentAction ?? "unresolved"}
+            </div>
+            <div>
+              applied: response{" "}
+              {formatObservedBoolean(
+                questionTypeObservation.typeAppliedToResponse
+              )}
+              {" / settlement "}
+              {formatObservedBoolean(
+                questionTypeObservation.typeAppliedToSettlement
+              )}
+              {" / parent "}
+              {formatObservedBoolean(
+                questionTypeObservation.typeAppliedToParent
+              )}
+            </div>
+            {questionTypeObservation.durableOwnerMissing ? (
+              <div className="text-amber-700 dark:text-amber-300">
+                durable owner missing:{" "}
+                {questionTypeObservation.durableOwnerMissingReason ??
+                  "unresolved"}
+              </div>
+            ) : null}
           </div>
           {activeSettlementFact?.kind ===
           "expected-task-settlement" ? (
@@ -6887,6 +6955,34 @@ const TraceHumanEvaluationPanel = ({
                   ? " / parent mutation authorized"
                   : " / parent preserved"
                 : ""}
+            </div>
+            <div className="mt-1 space-y-0.5 break-words font-mono text-[9px] text-muted-foreground">
+              <div>
+                type authority:{" "}
+                {questionTypeObservation.observedCurrentQuestionTypeAuthority ??
+                  "unknown"}
+              </div>
+              <div>
+                durable parent:{" "}
+                {questionTypeObservation.observedParentType ?? "none"}
+                {questionTypeObservation.observedParentId
+                  ? ` (${questionTypeObservation.observedParentId})`
+                  : ""}
+              </div>
+              <div>
+                applied: response{" "}
+                {formatObservedBoolean(
+                  questionTypeObservation.typeAppliedToResponse
+                )}
+                {" / settlement "}
+                {formatObservedBoolean(
+                  questionTypeObservation.typeAppliedToSettlement
+                )}
+                {" / parent "}
+                {formatObservedBoolean(
+                  questionTypeObservation.typeAppliedToParent
+                )}
+              </div>
             </div>
             <div className="mt-2 space-y-2">
               <TaxonomyAdjudicationBooleanLabel
@@ -8157,6 +8253,10 @@ function readNumberMetadata(
     : undefined;
 }
 
+function formatObservedBoolean(value: boolean | undefined) {
+  return value === true ? "yes" : value === false ? "no" : "unknown";
+}
+
 function compareProjectEvaluationLabels(
   expected: string | undefined,
   observed: string | undefined
@@ -8172,9 +8272,35 @@ const TraceClassifierMetadata = ({
 }: {
   metadata: Record<string, unknown>;
 }) => {
+  const questionTypeObservation = projectQuestionTypeObservation({ metadata });
   const rows = (
     [
     ["Detected type", metadata.questionType],
+    [
+      "Current question",
+      questionTypeObservation.observedCurrentQuestionType,
+    ],
+    [
+      "Type authority",
+      questionTypeObservation.observedCurrentQuestionTypeAuthority,
+    ],
+    ["Durable parent", questionTypeObservation.observedParentType],
+    ["Durable parent id", questionTypeObservation.observedParentId],
+    [
+      "Applied to response",
+      questionTypeObservation.typeAppliedToResponse,
+    ],
+    [
+      "Applied to settlement",
+      questionTypeObservation.typeAppliedToSettlement,
+    ],
+    ["Applied to parent", questionTypeObservation.typeAppliedToParent],
+    [
+      "Durable owner gap",
+      questionTypeObservation.durableOwnerMissing
+        ? questionTypeObservation.durableOwnerMissingReason ?? "missing"
+        : "none",
+    ],
     ["Frame", metadata.askFrame],
     ["Domain", metadata.topicDomain],
     ["Project", metadata.projectAnchor],

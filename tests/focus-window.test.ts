@@ -68,6 +68,13 @@ test("focus snapshot excludes historical transcripts", () => {
   );
 });
 
+test("focus snapshot keeps current-question and durable-parent types separate", () => {
+  assert.equal(EMPTY_MEETING_FOCUS_SNAPSHOT.effectiveQuestionType, undefined);
+  assert.equal(EMPTY_MEETING_FOCUS_SNAPSHOT.parentQuestionType, undefined);
+  assert.equal(EMPTY_MEETING_FOCUS_SNAPSHOT.parentTaskId, undefined);
+  assert.equal(EMPTY_MEETING_FOCUS_SNAPSHOT.durableOwnerMissing, false);
+});
+
 test("focus controls keep short transcripts at the compact base geometry", () => {
   assert.deepEqual(
     resolveFocusControlsGeometry({

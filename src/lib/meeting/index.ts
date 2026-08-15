@@ -40,6 +40,7 @@ export * from "./force-advise";
 export * from "./focus-window";
 export * from "./human-evaluation";
 export * from "./human-ground-truth-v2";
+export * from "./question-type-observation";
 export * from "./human-evaluation-projection-materialization";
 export * from "./human-evaluation-v2-consumers";
 export * from "./interview-playbook";

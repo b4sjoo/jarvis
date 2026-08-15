@@ -556,6 +556,81 @@ test("projects the observed runtime tuple from trace metadata", () => {
   assert.match(observed.traceHash, /^\d+:[0-9a-f]+$/);
 });
 
+test("separates the current-question winner from an unresolved durable parent", () => {
+  const trace = {
+    id: "trace_response_only_parent",
+    kind: "voice",
+    status: "success",
+    startedAt: 1,
+    steps: [],
+    inputs: [],
+    outputs: [],
+    metadata: {
+      currentQuestionSettlementId: "settlement_1",
+      currentQuestionSettlementType: "general-system-design",
+      currentQuestionSettlementTypeAuthoritySource: "llm-type-repair",
+      currentQuestionSettlementRelation: "new-parent",
+      currentQuestionSettlementParentMutationAuthorized: false,
+      currentQuestionSettlementParentAfterId: "parent_unknown",
+      currentQuestionSettlementParentAfterType: "unknown",
+      currentQuestionSettlementAppliedToResponse: true,
+      currentQuestionSettlementAppliedToSettlement: true,
+      currentQuestionSettlementAppliedToParent: false,
+    },
+  } as MeetingTrace;
+
+  const observed = buildHumanEvaluationObservedSnapshotV2(trace);
+
+  assert.equal(observed.questionType, "general-system-design");
+  assert.equal(
+    observed.observedCurrentQuestionType,
+    "general-system-design"
+  );
+  assert.equal(
+    observed.observedCurrentQuestionTypeAuthority,
+    "llm-type-repair"
+  );
+  assert.equal(observed.observedParentId, "parent_unknown");
+  assert.equal(observed.observedParentType, "unknown");
+  assert.equal(observed.typeAppliedToResponse, true);
+  assert.equal(observed.typeAppliedToSettlement, true);
+  assert.equal(observed.typeAppliedToParent, false);
+  assert.equal(observed.durableOwnerMissing, true);
+  assert.equal(
+    observed.durableOwnerMissingReason,
+    "durable-parent-type-unknown"
+  );
+});
+
+test("does not treat an authorized child type as a missing durable parent", () => {
+  const trace = {
+    id: "trace_child_type",
+    kind: "voice",
+    status: "success",
+    startedAt: 1,
+    steps: [],
+    inputs: [],
+    outputs: [],
+    metadata: {
+      currentQuestionSettlementId: "settlement_child",
+      currentQuestionSettlementType: "field-knowledge",
+      currentQuestionSettlementRelation: "child-probe",
+      currentQuestionSettlementParentAfterId: "parent_ml",
+      currentQuestionSettlementParentAfterType: "ai-ml-system-design",
+      currentQuestionSettlementAppliedToResponse: true,
+      currentQuestionSettlementAppliedToSettlement: true,
+      currentQuestionSettlementAppliedToParent: false,
+    },
+  } as MeetingTrace;
+
+  const observed = buildHumanEvaluationObservedSnapshotV2(trace);
+
+  assert.equal(observed.observedCurrentQuestionType, "field-knowledge");
+  assert.equal(observed.observedParentType, "ai-ml-system-design");
+  assert.equal(observed.durableOwnerMissing, false);
+  assert.equal(observed.durableOwnerMissingReason, undefined);
+});
+
 function createLegacyEvaluation(
   patch: Partial<QuestionHumanEvaluation>
 ): QuestionHumanEvaluation {

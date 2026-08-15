@@ -781,7 +781,7 @@ test("records whiteboard validation and recovery artifacts", async () => {
   );
   assert.ok(summaryWrite);
   const summary = parsePayload(summaryWrite);
-  assert.equal(summary.version, 37);
+  assert.equal(summary.version, 38);
   assert.deepEqual(summary.whiteboard, {
     artifactId: "whiteboard_1",
     revision: 1,
@@ -1746,7 +1746,7 @@ test("compact trace summaries preserve task boundary and cross-domain evidence",
   );
   assert.ok(summaryWrite);
   const summary = parsePayload(summaryWrite);
-  assert.equal(summary.version, 37);
+  assert.equal(summary.version, 38);
   assert.equal(summary.taskRelation, "new-parent");
   assert.equal(summary.logicalQuestionUnitRevision, 3);
   assert.equal(summary.phaseSignal, "assumption-authorized");
@@ -1967,7 +1967,7 @@ test("compact trace summaries preserve bounded STT request evidence", async () =
   );
   assert.ok(summaryWrite);
   const summary = parsePayload(summaryWrite);
-  assert.equal(summary.version, 37);
+  assert.equal(summary.version, 38);
   assert.equal(
     (summary.timingsMs as Record<string, unknown>).stt,
     1_580
@@ -2109,7 +2109,7 @@ test("refreshes compact STT lifecycle evidence after a late provider abort", asy
   );
   assert.ok(summaryWrites.length >= 2);
   const summary = parsePayload(summaryWrites[summaryWrites.length - 1]!);
-  assert.equal(summary.version, 37);
+  assert.equal(summary.version, 38);
   assert.equal(
     (summary.sttRequest as Record<string, unknown>).abortRequested,
     true
@@ -2174,7 +2174,7 @@ test("compact trace summaries preserve hard memory invalidation evidence", async
   );
   assert.ok(summaryWrite);
   const summary = parsePayload(summaryWrite);
-  assert.equal(summary.version, 37);
+  assert.equal(summary.version, 38);
   const memory = summary.memory as Record<string, unknown>;
   assert.equal(memory.authorityRevision, 2);
   assert.equal(memory.invalidationKind, "hard");
@@ -2345,6 +2345,9 @@ test("records compact current-question settlement and execution-plan evidence", 
       currentQuestionSettlementParentBeforeType: "coding",
       currentQuestionSettlementParentAfterId: "parent_after",
       currentQuestionSettlementParentAfterType: "general-system-design",
+      currentQuestionSettlementAppliedToResponse: true,
+      currentQuestionSettlementAppliedToSettlement: true,
+      currentQuestionSettlementAppliedToParent: true,
       currentQuestionSettlementRejectedProposals: [],
       currentQuestionSettlementReasons: ["parent-mutation-authorized"],
       currentQuestionSettlementDurationMs: 1.25,
@@ -2457,12 +2460,30 @@ test("records compact current-question settlement and execution-plan evidence", 
   assert.equal(serializedPlan.includes("taskSnapshot"), false);
   assert.equal(serializedPlan.includes("variables"), false);
   const summary = parsePayload(summaryWrite);
-  assert.equal(summary.version, 37);
+  assert.equal(summary.version, 38);
   assert.equal(
     (
       summary.currentQuestionSettlement as Record<string, unknown>
     ).disposition,
     "committed-parent"
+  );
+  assert.deepEqual(
+    {
+      response: (
+        summary.currentQuestionSettlement as Record<string, unknown>
+      ).typeAppliedToResponse,
+      settlement: (
+        summary.currentQuestionSettlement as Record<string, unknown>
+      ).typeAppliedToSettlement,
+      parent: (
+        summary.currentQuestionSettlement as Record<string, unknown>
+      ).typeAppliedToParent,
+    },
+    {
+      response: true,
+      settlement: true,
+      parent: true,
+    }
   );
   assert.equal(
     (summary.settledExecutionPlan as Record<string, unknown>).modelRoute,
@@ -2623,7 +2644,7 @@ test("records a current-question term correction without copying provider state"
     false
   );
   const summary = parsePayload(summaryWrite);
-  assert.equal(summary.version, 37);
+  assert.equal(summary.version, 38);
   assert.equal(
     summary.manualTermCorrectionId,
     "term_correction_hnsw"
@@ -2794,7 +2815,7 @@ test("records preparation provenance, use receipts, and answer-bound feedback", 
   );
   assert.ok(summaryWrite);
   const summary = parsePayload(summaryWrite);
-  assert.equal(summary.version, 37);
+  assert.equal(summary.version, 38);
   assert.equal(
     summary.preparationContextRevision,
     receipt.preparationContextRevision
