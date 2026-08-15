@@ -1,5 +1,8 @@
 import type { ActiveMeetingTask } from "./active-meeting-task";
-import type { CurrentQuestionRelation } from "./current-question-settlement.js";
+import type {
+  CurrentQuestionRelation,
+  CurrentQuestionSettlementDisposition,
+} from "./current-question-settlement.js";
 import type { LogicalQuestionUnit } from "./logical-question-unit.js";
 import type {
   ActiveInterviewParent,
@@ -86,6 +89,7 @@ export interface ManualCorrectionTargetHistoryEntry {
   logicalQuestionUnit: LogicalQuestionUnit;
   updatedAt: number;
   targetKind: ManualCorrectionTargetKind;
+  settlementDisposition?: CurrentQuestionSettlementDisposition;
   resolvedAt?: number;
 }
 
@@ -93,6 +97,7 @@ export interface ManualCorrectionTargetSelection<T> {
   target?: T;
   reason:
     | "latest-unresolved-substantive"
+    | "latest-response-only-substantive"
     | "preferred-visible-question"
     | "latest-substantive"
     | "latest-canonical-fallback"
@@ -105,6 +110,8 @@ export function classifyManualCorrectionTarget(input: {
   sourceKind: "voice" | "screen" | "mixed";
   text: string;
   intent?: "confirmation" | "logistics" | "incomplete" | string;
+  followupScopeSource?: "active-task" | "provisional-question" | "none";
+  phaseControl?: boolean;
 }): ManualCorrectionTargetKind {
   if (input.sourceKind !== "voice") return "substantive";
 
@@ -119,6 +126,9 @@ export function classifyManualCorrectionTarget(input: {
     );
   if (
     isCommunicationMetaTurn ||
+    input.phaseControl ||
+    (input.intent === "constraint-or-follow-up" &&
+      input.followupScopeSource === "provisional-question") ||
     input.intent === "confirmation" ||
     input.intent === "logistics" ||
     input.intent === "incomplete"
@@ -191,6 +201,19 @@ export function selectManualCorrectionTargetFromHistory<
     };
   }
 
+  const latestSubstantive = ordered.find(
+    (candidate) => candidate.targetKind === "substantive"
+  );
+  if (
+    input.latestCanonical?.targetKind === "non-substantive" &&
+    latestSubstantive?.settlementDisposition === "response-only"
+  ) {
+    return {
+      target: latestSubstantive,
+      reason: "latest-response-only-substantive",
+    };
+  }
+
   const preferred = ordered.find(
     (candidate) =>
       candidate.targetKind === "substantive" &&
@@ -203,9 +226,6 @@ export function selectManualCorrectionTargetFromHistory<
     return { target: preferred, reason: "preferred-visible-question" };
   }
 
-  const latestSubstantive = ordered.find(
-    (candidate) => candidate.targetKind === "substantive"
-  );
   if (latestSubstantive) {
     return { target: latestSubstantive, reason: "latest-substantive" };
   }

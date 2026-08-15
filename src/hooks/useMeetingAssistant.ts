@@ -124,6 +124,7 @@ import {
   ManualQuestionTypeCorrection,
   ManualQuestionTypeCorrectionSource,
   CurrentQuestionSettlementDecision,
+  CurrentQuestionSettlementDisposition,
   CurrentQuestionTerminalNoAnswerDecision,
   ResponseOnlyTaskScope,
   ResponseOpportunityGenerationGateCoordinator,
@@ -1934,6 +1935,7 @@ interface ManualCorrectionRuntimeTarget {
   logicalQuestionLease: LogicalQuestionUnitLease;
   questionLineage: QuestionInstanceLineage;
   settlement?: CurrentQuestionSettlementDecision;
+  settlementDisposition?: CurrentQuestionSettlementDisposition;
   targetKind: "substantive" | "non-substantive";
   resolvedAt?: number;
 }
@@ -9053,6 +9055,28 @@ export function useMeetingAssistant() {
             transientPersonalStatusDecision
           ),
         });
+      const currentManualCorrectionTarget =
+        latestManualCorrectionTargetRef.current;
+      if (
+        currentManualCorrectionTarget &&
+        currentManualCorrectionTarget.logicalQuestionUnit.id ===
+          currentQuestionSettlement.logicalQuestionUnitId &&
+        currentManualCorrectionTarget.logicalQuestionUnit.revision ===
+          currentQuestionSettlement.revision
+      ) {
+        const settledCorrectionTarget: ManualCorrectionRuntimeTarget = {
+          ...currentManualCorrectionTarget,
+          settlement: currentQuestionSettlement,
+          settlementDisposition: disposition,
+          updatedAt: Date.now(),
+        };
+        latestManualCorrectionTargetRef.current = settledCorrectionTarget;
+        manualCorrectionTargetHistoryRef.current =
+          upsertManualCorrectionTargetHistory(
+            manualCorrectionTargetHistoryRef.current,
+            settledCorrectionTarget
+          );
+      }
       const metadata = {
         currentQuestionSettlementDisposition: disposition,
         currentQuestionSettlementSourceTurnIds:
@@ -12585,6 +12609,8 @@ export function useMeetingAssistant() {
           sourceKind: "voice",
           text: logicalQuestionUnit.normalizedText || turn.text,
           intent: intentDecision.intent,
+          followupScopeSource: intentDecision.followupScopeSource,
+          phaseControl: Boolean(intentDecision.phaseControl),
         }),
       };
       latestManualCorrectionTargetRef.current = manualCorrectionTarget;
@@ -23358,6 +23384,8 @@ export function useMeetingAssistant() {
 
       const contextState = contextManagerRef.current.getState();
       const activeTask = contextState.activeMeetingTask;
+      const clickedCorrectionTarget =
+        latestManualCorrectionTargetRef.current;
       const correctionTargetSelection =
         selectManualCorrectionTargetFromHistory({
           history: manualCorrectionTargetHistoryRef.current,
@@ -23368,6 +23396,14 @@ export function useMeetingAssistant() {
             stableAnswerRevisionRef.current?.logicalQuestionRevision,
         });
       const latestCanonicalTarget = correctionTargetSelection.target;
+      const skippedCorrectionTargets = latestCanonicalTarget
+        ? manualCorrectionTargetHistoryRef.current.filter(
+            (candidate) =>
+              candidate.updatedAt > latestCanonicalTarget.updatedAt &&
+              candidate.logicalQuestionUnit.id !==
+                latestCanonicalTarget.logicalQuestionUnit.id
+          )
+        : [];
       const canonicalTargetIsLatest = Boolean(
         latestCanonicalTarget &&
           latestCanonicalTarget.logicalQuestionUnit.sessionId ===
@@ -23650,6 +23686,26 @@ export function useMeetingAssistant() {
           manualCorrectionTargetSource: correctionTargetSource,
           manualCorrectionTargetSelectionReason:
             correctionTargetSelection.reason,
+          manualCorrectionClickedLogicalQuestionUnitId:
+            clickedCorrectionTarget?.logicalQuestionUnit.id,
+          manualCorrectionClickedLogicalQuestionRevision:
+            clickedCorrectionTarget?.logicalQuestionUnit.revision,
+          manualCorrectionResolvedLogicalQuestionUnitId:
+            canonicalCorrectionTarget?.logicalQuestionUnit.id,
+          manualCorrectionResolvedLogicalQuestionRevision:
+            canonicalCorrectionTarget?.logicalQuestionUnit.revision,
+          manualCorrectionInheritedSourceTurnIds:
+            canonicalCorrectionTarget?.logicalQuestionUnit.sourceTurnIds,
+          manualCorrectionSkippedTargetSourceTurnIds: Array.from(
+            new Set(
+              skippedCorrectionTargets.flatMap(
+                (candidate) =>
+                  candidate.logicalQuestionUnit.sourceTurnIds
+              )
+            )
+          ),
+          manualCorrectionTargetSettlementDisposition:
+            canonicalCorrectionTarget?.settlementDisposition,
           manualCorrectionTargetKind:
             canonicalCorrectionTarget?.targetKind,
           detectedQuestionType: decision.detectedType,

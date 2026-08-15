@@ -117,6 +117,72 @@ test("keeps a meta-confirmation from stealing an unresolved substantive correcti
   assert.equal(selection.reason, "latest-unresolved-substantive");
 });
 
+test("keeps a resolved response-only question ahead of a phase-control turn", () => {
+  const responseOnly = {
+    logicalQuestionUnit: makeLogicalQuestion(
+      "question-design",
+      "turn-design",
+      "Design a food delivery app."
+    ),
+    updatedAt: 10,
+    targetKind: "substantive" as const,
+    settlementDisposition: "response-only" as const,
+    resolvedAt: 15,
+  };
+  const phaseControl = {
+    logicalQuestionUnit: makeLogicalQuestion(
+      "question-phase-control",
+      "turn-phase-control",
+      "You can make reasonable assumptions."
+    ),
+    updatedAt: 20,
+    targetKind: classifyManualCorrectionTarget({
+      sourceKind: "voice",
+      text: "You can make reasonable assumptions.",
+      intent: "constraint-or-follow-up",
+      followupScopeSource: "provisional-question",
+      phaseControl: true,
+    }),
+  };
+  const history = upsertManualCorrectionTargetHistory(
+    upsertManualCorrectionTargetHistory([], responseOnly),
+    phaseControl
+  );
+
+  const selection = selectManualCorrectionTargetFromHistory({
+    history,
+    latestCanonical: phaseControl,
+    preferredLogicalQuestionUnitId: phaseControl.logicalQuestionUnit.id,
+    preferredLogicalQuestionRevision:
+      phaseControl.logicalQuestionUnit.revision,
+  });
+
+  assert.equal(phaseControl.targetKind, "non-substantive");
+  assert.equal(selection.reason, "latest-response-only-substantive");
+  assert.equal(selection.target?.logicalQuestionUnit.id, "question-design");
+});
+
+test("treats a scoped provisional follow-up as correction context", () => {
+  assert.equal(
+    classifyManualCorrectionTarget({
+      sourceKind: "voice",
+      text: "Use ten thousand requests per second.",
+      intent: "constraint-or-follow-up",
+      followupScopeSource: "provisional-question",
+    }),
+    "non-substantive"
+  );
+  assert.equal(
+    classifyManualCorrectionTarget({
+      sourceKind: "voice",
+      text: "Also support multi-region failover.",
+      intent: "constraint-or-follow-up",
+      followupScopeSource: "active-task",
+    }),
+    "substantive"
+  );
+});
+
 test("falls back to the visible answered question after unresolved targets resolve", () => {
   const target: ManualCorrectionTargetHistoryEntry = {
     logicalQuestionUnit: makeLogicalQuestion(
