@@ -23528,6 +23528,12 @@ export function useMeetingAssistant() {
           supersededCorrection
         );
       }
+      responseOpportunityRuntimeRef.current?.cancelAll(
+        "manual-question-type-correction"
+      );
+      responseOpportunityGenerationGateRef.current.cancelAll(
+        "manual-question-type-correction"
+      );
       cancelActiveAdvisorJob("manual-question-type-correction");
 
       const requestedAt = Date.now();
@@ -24124,6 +24130,9 @@ export function useMeetingAssistant() {
             manualQuestionTypeCorrectionTarget: decision.target,
             manualCorrectionTargetSource: correctionTargetSource,
             correctionRegenerationTriggered: true,
+            correctionResponseAuthoritySource: "human-type-correction",
+            correctionResponseAuthorityManualRevision:
+              manualCorrectionRevisionRef.current,
             manualCorrectionScope: correctionScopeDecision.scope,
             correctionScopeReason: correctionScopeDecision.reason,
             correctionProviderAvailable: Boolean(correctionModelRoute.provider),

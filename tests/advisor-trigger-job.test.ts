@@ -196,6 +196,33 @@ test("force advise owns answer authority without inheriting an automatic gate", 
   );
 });
 
+test("manual type correction regenerates under its corrected human authority", () => {
+  const job = createAdvisorTriggerJob({
+    source: "manual-correction",
+    mode: "live",
+    promptContext: buildPromptContext(),
+    sessionId: "session-a",
+    runtimeEpoch: 1,
+    snapshotTurnCount: 1,
+    taskMutationAuthority: "manual-correction",
+    responseOpportunityGenerationGateOperationId: "pre-correction-gate",
+    manualCorrectionRevision: 7,
+  });
+
+  assert.equal(job.responseOpportunityGenerationGateOperationId, undefined);
+  assert.equal(job.responseAuthoritySource, "human-type-correction");
+  assert.equal(job.manualCorrectionRevision, 7);
+  const metadata = formatAdvisorTriggerJobForTrace(job, "scheduled");
+  assert.equal(
+    metadata.advisorJobResponseAuthoritySource,
+    "human-type-correction"
+  );
+  assert.equal(
+    metadata.advisorJobAutomaticResponseOpportunityGateBypassed,
+    true
+  );
+});
+
 test("freezes and traces the bounded logical question owned by a job", () => {
   const logicalQuestionUnit = {
     id: "logical-question-a",

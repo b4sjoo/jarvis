@@ -43,6 +43,7 @@ export type AdvisorTaskMutationAuthority =
 export type AdvisorResponseAuthoritySource =
   | "automatic-response-opportunity"
   | "human-force-advise"
+  | "human-type-correction"
   | "job-native";
 
 export type AdvisorJobOutcome =
@@ -198,13 +199,17 @@ export function createAdvisorTriggerJob(
     snapshot.activeMeetingTask?.parent.id;
   const expectedParentRevision =
     snapshot.activeMeetingTask?.parent.revisions;
+  const humanResponseAuthority =
+    input.source === "force-advise" || input.source === "manual-correction";
   const responseOpportunityGenerationGateOperationId =
-    input.source === "force-advise"
+    humanResponseAuthority
       ? undefined
       : input.responseOpportunityGenerationGateOperationId;
   const responseAuthoritySource: AdvisorResponseAuthoritySource =
     input.source === "force-advise"
       ? "human-force-advise"
+      : input.source === "manual-correction"
+        ? "human-type-correction"
       : responseOpportunityGenerationGateOperationId
         ? "automatic-response-opportunity"
         : "job-native";
@@ -507,7 +512,8 @@ export function formatAdvisorTriggerJobForTrace(
     advisorJobResponseActionRevision: job.responseActionRevision,
     advisorJobResponseAuthoritySource: job.responseAuthoritySource,
     advisorJobAutomaticResponseOpportunityGateBypassed:
-      job.responseAuthoritySource === "human-force-advise",
+      job.responseAuthoritySource === "human-force-advise" ||
+      job.responseAuthoritySource === "human-type-correction",
     ...(job.responseOpportunityGenerationGateOperationId
       ? {
           advisorJobResponseOpportunityGenerationGateOperationId:
