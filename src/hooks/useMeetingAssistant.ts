@@ -8529,6 +8529,8 @@ export function useMeetingAssistant() {
         ),
         outputAuthorityAuthorized:
           runtimeTypeRepairOutputAuthorized,
+        responseOpportunityGate:
+          refreshResponseOpportunityGenerationGate(),
       });
     const responseOnlyPreservedTask =
       options.responseOnlyTaskScopeOverride
@@ -9094,8 +9096,9 @@ export function useMeetingAssistant() {
             logicalQuestionUnit: advisorJob.logicalQuestionUnit,
             currentQuestion: provisionalCurrentQuestion,
             proposedQuestionType:
-              currentQuestionSettlement?.questionType,
-            proposedRelation: "new-parent",
+              llmTypeRepairFirstParentAdmission.command?.type,
+            proposedRelation:
+              llmTypeRepairFirstParentAdmission.proposedRelation,
             authoritySource: "accepted-llm-type-first-parent",
             sourceKind: currentQuestionSourceKind,
             sourceObservationIds:
@@ -9216,6 +9219,10 @@ export function useMeetingAssistant() {
           llmTypeRepairFirstParentAdmission.reason,
         llmTypeRepairFirstParentProposedRelation:
           llmTypeRepairFirstParentAdmission.proposedRelation,
+        llmTypeRepairFirstParentAdmissionCommand:
+          llmTypeRepairFirstParentAdmission.command?.kind,
+        llmTypeRepairFirstParentAdmissionResponseOpportunityOperationId:
+          llmTypeRepairFirstParentAdmission.responseOpportunityOperationId,
         ...formatQuestionLineageForTrace(questionLineage),
         ...formatTransientPersonalStatusForTrace(
           transientPersonalStatusDecision
@@ -10064,7 +10071,8 @@ export function useMeetingAssistant() {
     generationAuthorizedArtifacts =
       advisorJob.source === "force-advise"
         ? ["answer"]
-        : runtimeTypeRepairOutputAuthorized
+        : runtimeTypeRepairOutputAuthorized &&
+            !taskBoundaryCommittedBeforeAdvisor
           ? ["answer"]
           : settledExecutionPlan
             ? resolveAuthorizedAnswerArtifacts({
@@ -10270,6 +10278,7 @@ export function useMeetingAssistant() {
         disposition: "advisor-started",
         advisorStarted: true,
         appliedToResponse: true,
+        appliedToParent: taskBoundaryCommittedBeforeAdvisor,
         reason: "advisor-model-request-authorized",
       });
     }
@@ -16864,6 +16873,16 @@ export function useMeetingAssistant() {
       const relationWindowRequested = Boolean(
         taskRelationHandle?.releaseWindowRequested
       );
+      const responseOpportunityGateOperationId =
+        responseOpportunityGenerationGateRef.current.findOperationId({
+          logicalQuestionUnitId: input.logicalQuestionUnit.id,
+          logicalQuestionUnitRevision:
+            input.logicalQuestionUnit.revision,
+        });
+      const responseOpportunityGate =
+        responseOpportunityGenerationGateRef.current.read(
+          responseOpportunityGateOperationId
+        );
 
       const waitStartedAt = Date.now();
       const logicalQuestionLease = createLogicalQuestionUnitLease(
@@ -17086,6 +17105,9 @@ export function useMeetingAssistant() {
         | undefined;
       let typeSettled = false;
       let relationSettled = !relationWindowRequested;
+      let responseOpportunitySettled =
+        !responseOpportunityGateOperationId ||
+        responseOpportunityGate?.disposition !== "pending";
 
       const releaseWhenSettled = () => {
         if (advisorReleased || !typeSettled) return;
@@ -17095,6 +17117,14 @@ export function useMeetingAssistant() {
             settledRelationOutcome,
             "settled-without-repair-fail-open"
           );
+          return;
+        }
+        const firstParentNeedsCommittedOutputRequest =
+          !contextManagerRef.current.getState().activeMeetingTask?.parent;
+        if (
+          firstParentNeedsCommittedOutputRequest &&
+          !responseOpportunitySettled
+        ) {
           return;
         }
         if (!relationSettled) return;
@@ -17217,6 +17247,27 @@ export function useMeetingAssistant() {
             releaseWhenSettled();
           }
         );
+      }
+      if (
+        responseOpportunityGateOperationId &&
+        !responseOpportunitySettled
+      ) {
+        void responseOpportunityGenerationGateRef.current
+          .wait(
+            responseOpportunityGateOperationId,
+            QUESTION_TYPE_ENFORCEMENT_WAIT_BUDGET_MS
+          )
+          .then((gate) => {
+            responseOpportunitySettled = true;
+            if (!advisorReleased) {
+              traceStoreRef.current.updateMetadata(input.traceId, {
+                ...formatResponseOpportunityGenerationGateForTrace(gate),
+                questionTypeAdjudicationWaitedForResponseOpportunity:
+                  true,
+              });
+              releaseWhenSettled();
+            }
+          });
       }
       return true;
     },

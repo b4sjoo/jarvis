@@ -21,6 +21,9 @@ import {
   settleCurrentQuestion,
 } from "../src/lib/meeting/current-question-settlement.js";
 import { projectPrimaryAsk } from "../src/lib/meeting/primary-ask-projection.js";
+import {
+  buildResponseOpportunityRequest,
+} from "../src/lib/meeting/short-intent-gate.js";
 import { setTestActiveParent } from "./helpers/meeting-task-runtime.js";
 
 function logicalQuestion(
@@ -81,7 +84,7 @@ test("commits a complete high-authority new parent before advisor execution", ()
   assert.equal(taskBoundarySurvivesAdvisorOutcome(committed, "error"), true);
 });
 
-test("admits the first parent from an accepted type repair only for a source-owned primary ask", () => {
+test("admits the first parent only after type and response opportunity settle on the same LQU", () => {
   const text = "Please design a URL shortener.";
   const primaryAskProjection = projectPrimaryAsk({
     turnId: "turn-b",
@@ -129,24 +132,65 @@ test("admits the first parent from an accepted type repair only for a source-own
       commitParent: false,
     },
   });
+  const responseOpportunityRequest = buildResponseOpportunityRequest({
+    logicalQuestionUnit: unit,
+  });
+  const responseOpportunityGate = {
+    operationId: "response-opportunity-a",
+    sessionId: unit.sessionId,
+    runtimeEpoch: unit.runtimeEpoch,
+    logicalQuestionUnitId: unit.id,
+    logicalQuestionUnitRevision: unit.revision,
+    sourceHash: responseOpportunityRequest.sourceHash,
+    manualCorrectionRevision: 0,
+    disposition: "output-authorized" as const,
+    reason: "high-confidence-output-request",
+    createdAt: 90,
+    settledAt: 95,
+  };
 
   const decision = decideLlmTypeRepairFirstParentAdmission({
     logicalQuestionUnit: unit,
     settlement: repairedSettlement,
     hasActiveParent: false,
     outputAuthorityAuthorized: true,
+    responseOpportunityGate,
   });
   const blockedWithParent = decideLlmTypeRepairFirstParentAdmission({
     logicalQuestionUnit: unit,
     settlement: repairedSettlement,
     hasActiveParent: true,
     outputAuthorityAuthorized: true,
+    responseOpportunityGate,
   });
 
   assert.equal(decision.authorized, true);
   assert.equal(decision.proposedRelation, "new-parent");
+  assert.deepEqual(decision.command, {
+    kind: "create-parent",
+    type: "general-system-design",
+    topic: text,
+  });
+  assert.equal(
+    decision.responseOpportunityOperationId,
+    responseOpportunityGate.operationId
+  );
   assert.equal(blockedWithParent.authorized, false);
   assert.equal(blockedWithParent.reason, "active-parent-present");
+
+  const pending = decideLlmTypeRepairFirstParentAdmission({
+    logicalQuestionUnit: unit,
+    settlement: repairedSettlement,
+    hasActiveParent: false,
+    outputAuthorityAuthorized: true,
+    responseOpportunityGate: {
+      ...responseOpportunityGate,
+      disposition: "pending",
+      settledAt: undefined,
+    },
+  });
+  assert.equal(pending.authorized, false);
+  assert.equal(pending.reason, "response-opportunity-not-authorized");
 });
 
 test("keeps setup objects in the committed parent topic", () => {
