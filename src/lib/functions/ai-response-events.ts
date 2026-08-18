@@ -31,6 +31,16 @@ export interface AIResponseExecutionIdentity {
   logicalQuestionRevision: number;
 }
 
+export interface AIResponseExecutionIdentityInput {
+  requestId?: string;
+  executionPlanId?: string;
+  modelId?: string;
+  sessionId?: string;
+  runtimeEpoch?: number;
+  logicalQuestionUnitId?: string;
+  logicalQuestionRevision?: number;
+}
+
 export interface AIResponseAttemptIdentity
   extends AIResponseExecutionIdentity {
   attemptId: string;

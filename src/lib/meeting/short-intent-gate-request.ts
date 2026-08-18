@@ -1,4 +1,10 @@
-import { fetchAIResponse } from "@/lib/functions/ai-response.function";
+import {
+  fetchAIResponseEvents,
+} from "@/lib/functions/ai-response.function";
+import type {
+  AIResponseExecutionIdentityInput,
+  AIResponseTerminalOutcome,
+} from "../functions/ai-response-events.js";
 import type { TYPE_PROVIDER } from "@/types";
 import type { SelectedProviderState } from "./types.js";
 import {
@@ -8,7 +14,7 @@ import {
   type ResponseOpportunityRequest,
 } from "./short-intent-gate.js";
 import { getRuntimeInferenceOperationDefinition } from "./runtime-inference.js";
-import { classifyTaxonomyAdjudicationProviderOutput } from "./taxonomy-adjudication-response.js";
+import { consumeRuntimeInferenceResponse } from "./runtime-inference-response.js";
 
 const OPERATION = getRuntimeInferenceOperationDefinition(
   "response-opportunity-inference"
@@ -23,6 +29,7 @@ export interface ResponseOpportunityRequestResult {
     | "provider-error-content"
     | "provider-auth-error";
   parseDisposition: string;
+  providerOutcome?: Readonly<AIResponseTerminalOutcome>;
   firstTokenAt?: number;
   completedAt: number;
 }
@@ -32,10 +39,11 @@ export async function requestResponseOpportunity(input: {
   provider: TYPE_PROVIDER | undefined;
   selectedProvider: SelectedProviderState;
   signal: AbortSignal;
+  executionIdentity?: AIResponseExecutionIdentityInput;
   onFirstToken?: (at: number) => void;
 }): Promise<ResponseOpportunityRequestResult> {
   const prompts = buildResponseOpportunityPrompts(input.request);
-  const responseStream = fetchAIResponse({
+  const responseEvents = fetchAIResponseEvents({
     provider: input.provider,
     selectedProvider: input.selectedProvider,
     systemPrompt: prompts.systemPrompt,
@@ -46,26 +54,23 @@ export async function requestResponseOpportunity(input: {
       timeoutMs: OPERATION.timeoutMs,
       maxOutputTokens: OPERATION.maxOutputTokens,
     },
+    executionIdentity: {
+      ...input.executionIdentity,
+      logicalQuestionUnitId:
+        input.executionIdentity?.logicalQuestionUnitId ??
+        input.request.logicalQuestionUnitId,
+      logicalQuestionRevision:
+        input.executionIdentity?.logicalQuestionRevision ??
+        input.request.logicalQuestionUnitRevision,
+    },
   });
-  let rawOutput = "";
-  let firstTokenAt: number | undefined;
-  for await (const chunk of responseStream) {
-    if (input.signal.aborted) break;
-    if (firstTokenAt === undefined && chunk) {
-      firstTokenAt = Date.now();
-      input.onFirstToken?.(firstTokenAt);
-    }
-    rawOutput += chunk;
-  }
-  if (input.signal.aborted) {
-    throw new DOMException(
-      "Response opportunity inference aborted",
-      "AbortError"
-    );
-  }
-
-  const providerDisposition =
-    classifyTaxonomyAdjudicationProviderOutput(rawOutput);
+  const providerResponse = await consumeRuntimeInferenceResponse({
+    responseEvents,
+    signal: input.signal,
+    operationLabel: "Response opportunity inference",
+    onFirstToken: input.onFirstToken,
+  });
+  const { rawOutput, providerDisposition } = providerResponse;
   const parsed =
     providerDisposition === "completed-with-content"
       ? parseResponseOpportunityOutput(rawOutput, input.request)
@@ -76,16 +81,13 @@ export async function requestResponseOpportunity(input: {
           evidenceSpansValid: false,
         } satisfies ResponseOpportunityParseResult);
   return {
-    rawOutput,
+    ...providerResponse,
     parsed,
-    providerDisposition,
     parseDisposition:
       providerDisposition === "completed-with-content"
         ? parsed.ok
           ? "valid-json"
           : parsed.reason
         : `not-run-${providerDisposition}`,
-    firstTokenAt,
-    completedAt: Date.now(),
   };
 }

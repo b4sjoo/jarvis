@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
-import { fetchAIResponse } from "@/lib/functions";
+import { fetchAIResponseEvents } from "@/lib/functions";
+import type { AIResponseExecutionIdentityInput } from "../functions/ai-response-events.js";
 import { TYPE_PROVIDER } from "@/types";
 import {
   ScreenCaptureTarget,
@@ -53,6 +54,10 @@ import {
   formatCapacityEstimationGuardrailForPrompt,
   resolveCapacityEstimationGuardrail,
 } from "./capacity-estimation-guardrail";
+import {
+  collectMeetingAIResponseCandidate,
+  requireMeetingAIResponseCandidate,
+} from "./meeting-ai-response.js";
 
 export type ScreenCaptureTargetType = "active-window" | "current-monitor";
 
@@ -68,6 +73,7 @@ export interface SummarizeScreenObservationOptions {
   selectedProvider: SelectedProviderState;
   autoPrompt?: string;
   signal?: AbortSignal;
+  executionIdentity?: AIResponseExecutionIdentityInput;
   trace?: MeetingModelTraceCallbacks;
 }
 
@@ -77,6 +83,7 @@ export interface PreflightScreenObservationOptions {
   selectedProvider: SelectedProviderState;
   recentTranscript?: string;
   signal?: AbortSignal;
+  executionIdentity?: AIResponseExecutionIdentityInput;
   trace?: MeetingModelTraceCallbacks;
 }
 
@@ -101,8 +108,10 @@ export interface SolveScreenAnchoredTaskOptions {
   whiteboardFormatPreference?: WhiteboardFormatPreference;
   signal?: AbortSignal;
   requestOptions?: MeetingModelRequestOptions;
+  executionIdentity?: AIResponseExecutionIdentityInput;
   trace?: MeetingModelTraceCallbacks;
   onPartialContent?: (content: string) => void;
+  onPartialReset?: () => void;
 }
 
 export interface ScreenPreflightResult extends TaskClassifierMetadata {
@@ -196,6 +205,7 @@ export async function summarizeScreenObservation({
   selectedProvider,
   autoPrompt,
   signal,
+  executionIdentity,
   trace,
 }: SummarizeScreenObservationOptions) {
   if (!observation.imageBase64) return "";
@@ -210,8 +220,6 @@ export async function summarizeScreenObservation({
     );
   }
 
-  let content = "";
-  let firstTokenSeen = false;
   const userMessage = buildScreenContextUserMessage(autoPrompt);
 
   trace?.onRequest?.({
@@ -228,27 +236,32 @@ export async function summarizeScreenObservation({
     mediaType: observation.imageMediaType || "image/png",
   };
 
-  for await (const chunk of fetchAIResponse({
-    provider,
-    selectedProvider,
-    systemPrompt: SCREEN_CONTEXT_SYSTEM_PROMPT,
-    userMessage,
-    imagesBase64: [imageInput],
-    signal,
-    applyResponseSettings: false,
-  })) {
-    if (!firstTokenSeen) {
-      firstTokenSeen = true;
-      trace?.onFirstToken?.();
-    }
-    content += chunk;
-  }
-
-  if (signal?.aborted) {
-    throw createAbortError();
-  }
-
-  const trimmed = content.trim();
+  const result = await collectMeetingAIResponseCandidate({
+    events: fetchAIResponseEvents({
+      provider,
+      selectedProvider,
+      systemPrompt: SCREEN_CONTEXT_SYSTEM_PROMPT,
+      userMessage,
+      imagesBase64: [imageInput],
+      signal,
+      applyResponseSettings: false,
+      executionIdentity: {
+        ...executionIdentity,
+        requestId:
+          executionIdentity?.requestId ??
+          `screen-summary:${observation.id}`,
+        executionPlanId:
+          executionIdentity?.executionPlanId ?? observation.id,
+        logicalQuestionUnitId:
+          executionIdentity?.logicalQuestionUnitId ?? observation.id,
+        logicalQuestionRevision:
+          executionIdentity?.logicalQuestionRevision ?? 0,
+      },
+    }),
+    onFirstContent: () => trace?.onFirstToken?.(),
+    onTerminal: (outcome) => trace?.onTerminal?.(outcome),
+  });
+  const trimmed = requireMeetingAIResponseCandidate(result).content.trim();
 
   const output = trimmed === "-" ? "" : trimmed;
   trace?.onComplete?.(output);
@@ -262,6 +275,7 @@ export async function preflightScreenObservation({
   selectedProvider,
   recentTranscript,
   signal,
+  executionIdentity,
   trace,
 }: PreflightScreenObservationOptions): Promise<ScreenPreflightResult> {
   if (!observation.imageBase64) return {};
@@ -276,8 +290,6 @@ export async function preflightScreenObservation({
     );
   }
 
-  let content = "";
-  let firstTokenSeen = false;
   const userMessage = buildScreenPreflightUserMessage({
     observation,
     recentTranscript,
@@ -294,28 +306,34 @@ export async function preflightScreenObservation({
     mode: "screen-preflight",
   });
 
-  for await (const chunk of fetchAIResponse({
-    provider,
-    selectedProvider,
-    systemPrompt: SCREEN_PREFLIGHT_SYSTEM_PROMPT,
-    userMessage,
-    imagesBase64: imageInputs,
-    signal,
-    applyResponseSettings: false,
-  })) {
-    if (!firstTokenSeen) {
-      firstTokenSeen = true;
-      trace?.onFirstToken?.();
-    }
-    content += chunk;
-  }
-
-  if (signal?.aborted) {
-    throw createAbortError();
-  }
-
-  const parsed = parseScreenPreflightOutput(content.trim());
-  trace?.onComplete?.(content.trim());
+  const result = await collectMeetingAIResponseCandidate({
+    events: fetchAIResponseEvents({
+      provider,
+      selectedProvider,
+      systemPrompt: SCREEN_PREFLIGHT_SYSTEM_PROMPT,
+      userMessage,
+      imagesBase64: imageInputs,
+      signal,
+      applyResponseSettings: false,
+      executionIdentity: {
+        ...executionIdentity,
+        requestId:
+          executionIdentity?.requestId ??
+          `screen-preflight:${observation.id}`,
+        executionPlanId:
+          executionIdentity?.executionPlanId ?? observation.id,
+        logicalQuestionUnitId:
+          executionIdentity?.logicalQuestionUnitId ?? observation.id,
+        logicalQuestionRevision:
+          executionIdentity?.logicalQuestionRevision ?? 0,
+      },
+    }),
+    onFirstContent: () => trace?.onFirstToken?.(),
+    onTerminal: (outcome) => trace?.onTerminal?.(outcome),
+  });
+  const content = requireMeetingAIResponseCandidate(result).content.trim();
+  const parsed = parseScreenPreflightOutput(content);
+  trace?.onComplete?.(content);
 
   return parsed;
 }
@@ -341,8 +359,10 @@ export async function solveScreenAnchoredTask({
   whiteboardFormatPreference,
   signal,
   requestOptions,
+  executionIdentity,
   trace,
   onPartialContent,
+  onPartialReset,
 }: SolveScreenAnchoredTaskOptions) {
   if (!observation.imageBase64) return "";
 
@@ -356,8 +376,6 @@ export async function solveScreenAnchoredTask({
     );
   }
 
-  let content = "";
-  let firstTokenSeen = false;
   const userMessage = buildScreenTaskUserMessage({
     observation,
     recentTranscript,
@@ -390,29 +408,42 @@ export async function solveScreenAnchoredTask({
     requestOptions,
   });
 
-  for await (const chunk of fetchAIResponse({
-    provider,
-    selectedProvider,
-    systemPrompt: SCREEN_TASK_SYSTEM_PROMPT,
-    userMessage,
-    imagesBase64: imageInputs,
-    signal,
-    applyResponseSettings: false,
-    requestOptions,
-  })) {
-    if (!firstTokenSeen) {
-      firstTokenSeen = true;
-      trace?.onFirstToken?.();
-    }
-    content += chunk;
-    onPartialContent?.(content);
-  }
-
-  if (signal?.aborted) {
-    throw createAbortError();
-  }
-
-  const trimmed = content.trim();
+  const result = await collectMeetingAIResponseCandidate({
+    events: fetchAIResponseEvents({
+      provider,
+      selectedProvider,
+      systemPrompt: SCREEN_TASK_SYSTEM_PROMPT,
+      userMessage,
+      imagesBase64: imageInputs,
+      signal,
+      applyResponseSettings: false,
+      requestOptions,
+      executionIdentity: {
+        ...executionIdentity,
+        requestId:
+          executionIdentity?.requestId ?? `screen-solve:${observation.id}`,
+        executionPlanId:
+          executionIdentity?.executionPlanId ??
+          (activeMeetingTask
+            ? `${activeMeetingTask.id}:revision:${activeMeetingTask.runtimeRevision}`
+            : observation.id),
+        logicalQuestionUnitId:
+          executionIdentity?.logicalQuestionUnitId ??
+          activeMeetingTask?.parent.sourceQuestionUnitId ??
+          observation.id,
+        logicalQuestionRevision:
+          executionIdentity?.logicalQuestionRevision ??
+          activeMeetingTask?.parent.sourceQuestionRevision ??
+          activeMeetingTask?.runtimeRevision ??
+          0,
+      },
+    }),
+    onFirstContent: () => trace?.onFirstToken?.(),
+    onPartialContent: (content) => onPartialContent?.(content),
+    onPartialReset,
+    onTerminal: (outcome) => trace?.onTerminal?.(outcome),
+  });
+  const trimmed = requireMeetingAIResponseCandidate(result).content.trim();
 
   const output = trimmed === "-" ? "" : trimmed;
   trace?.onComplete?.(output);
@@ -516,12 +547,6 @@ function buildScreenPreflightImageInputs(observation: ScreenObservation) {
   }
 
   return [fullImage].filter((image) => image.base64.trim().length > 0);
-}
-
-function createAbortError() {
-  const error = new Error("Screen analysis cancelled.");
-  error.name = "AbortError";
-  return error;
 }
 
 function buildScreenTaskUserMessage({

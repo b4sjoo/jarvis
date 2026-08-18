@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { consumeTaxonomyAdjudicationResponse } from "../src/lib/meeting/taxonomy-adjudication-response.js";
+import {
+  consumeTaxonomyAdjudicationResponse,
+  consumeTypedTaxonomyAdjudicationResponse,
+} from "../src/lib/meeting/taxonomy-adjudication-response.js";
+import { AIResponseEventBuilder } from "../src/lib/functions/ai-response-events.js";
 import {
   buildTaxonomyAdjudicationRequest,
   type LlmTaxonomyAdjudication,
@@ -94,6 +98,39 @@ test("keeps an empty provider completion distinct from parser failure", async ()
   });
 });
 
+test("typed provider failure never reaches taxonomy JSON parsing", async () => {
+  const builder = new AIResponseEventBuilder("provider-a", {
+    requestId: "request-a",
+    attemptId: "attempt-a",
+    executionPlanId: "plan-a",
+    modelId: "model-a",
+    sessionId: "session-a",
+    runtimeEpoch: 1,
+    logicalQuestionUnitId: "logical-a",
+    logicalQuestionRevision: 1,
+    attemptNumber: 1,
+    maxAttempts: 1,
+  });
+  const result = await consumeTypedTaxonomyAdjudicationResponse({
+    request: buildRequest(),
+    signal: new AbortController().signal,
+    responseEvents: events(
+      builder.terminal({
+        status: "failed",
+        failureClass: "transport",
+        retryable: true,
+        safeErrorSummary: '{"schemaVersion":2,"questionType":"coding"}',
+      })
+    ),
+  });
+
+  assert.equal(result.rawOutput, "");
+  assert.equal(result.providerDisposition, "provider-error-content");
+  assert.equal(result.parseDisposition, "not-run-provider-error-content");
+  assert.equal(result.providerOutcome?.failureClass, "transport");
+  assert.equal(result.parsed.ok, false);
+});
+
 function buildRequest() {
   const text = "Design a RAG system for a trip planning app.";
   const logicalQuestionUnit: LogicalQuestionUnit = {
@@ -117,5 +154,11 @@ function buildRequest() {
 }
 
 async function* chunks(...values: string[]) {
+  for (const value of values) yield value;
+}
+
+async function* events(
+  ...values: ReturnType<AIResponseEventBuilder["terminal"]>[]
+) {
   for (const value of values) yield value;
 }

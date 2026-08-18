@@ -3,6 +3,11 @@ import {
   type TaxonomyAdjudicationParseResult,
   type TaxonomyAdjudicationRequest,
 } from "./taxonomy-adjudication.js";
+import type {
+  AIResponseEvent,
+  AIResponseTerminalOutcome,
+} from "../functions/ai-response-events.js";
+import { consumeRuntimeInferenceResponse } from "./runtime-inference-response.js";
 
 export interface TaxonomyAdjudicationRequestResult {
   rawOutput: string;
@@ -13,8 +18,38 @@ export interface TaxonomyAdjudicationRequestResult {
     | "provider-error-content"
     | "provider-auth-error";
   parseDisposition: string;
+  providerOutcome?: Readonly<AIResponseTerminalOutcome>;
   firstTokenAt?: number;
   completedAt: number;
+}
+
+export async function consumeTypedTaxonomyAdjudicationResponse(input: {
+  request: TaxonomyAdjudicationRequest;
+  responseEvents: AsyncIterable<AIResponseEvent>;
+  signal: AbortSignal;
+  onFirstToken?: (at: number) => void;
+}): Promise<TaxonomyAdjudicationRequestResult> {
+  const providerResponse = await consumeRuntimeInferenceResponse({
+    responseEvents: input.responseEvents,
+    signal: input.signal,
+    operationLabel: "Taxonomy adjudication",
+    onFirstToken: input.onFirstToken,
+  });
+  const parsed = parseTaxonomyAdjudicationProviderResult({
+    providerDisposition: providerResponse.providerDisposition,
+    rawOutput: providerResponse.rawOutput,
+    request: input.request,
+  });
+  return {
+    ...providerResponse,
+    parsed,
+    parseDisposition:
+      providerResponse.providerDisposition === "completed-with-content"
+        ? parsed.ok
+          ? "valid-json"
+          : parsed.reason
+        : `not-run-${providerResponse.providerDisposition}`,
+  };
 }
 
 export async function consumeTaxonomyAdjudicationResponse(input: {

@@ -40,6 +40,7 @@ import {
   requestMeetingMetadataInference,
   type MeetingMetadataInferenceRequestResult,
 } from "@/lib/meeting/meeting-metadata-inference-request";
+import { formatRuntimeInferenceProviderOutcomeForTrace } from "@/lib/meeting/runtime-inference-response";
 import {
   AdvisorEngine,
   buildAdvisorEvidencePacket,
@@ -5591,6 +5592,17 @@ export function useMeetingAssistant() {
             provider: modelRoute.provider,
             selectedProvider: modelRoute.selectedProvider,
             signal,
+            executionIdentity: {
+              requestId: job.lease.operationId,
+              executionPlanId: job.lease.operationId,
+              modelId: readSelectedProviderModelId(
+                modelRoute.selectedProvider
+              ),
+              sessionId: job.lease.sessionId,
+              runtimeEpoch: job.lease.runtimeEpoch,
+              logicalQuestionUnitId: job.lease.parentTaskId,
+              logicalQuestionRevision: job.lease.parentRevision,
+            },
             onFirstToken: (at) => {
               traceStoreRef.current.updateMetadata(traceId, {
                 whiteboardRepairFirstTokenAt: at,
@@ -5668,7 +5680,9 @@ export function useMeetingAssistant() {
                 operationKind: "whiteboard-syntax-repair",
                 sessionId: settlement.job.lease.sessionId,
                 reason: "provider-auth-error",
-                detail: result?.rawOutput.slice(0, 240),
+                detail:
+                  result?.providerOutcome?.safeErrorSummary?.slice(0, 240) ??
+                  result?.rawOutput.slice(0, 240),
               });
             }
             const finalDisposition =
@@ -5683,8 +5697,8 @@ export function useMeetingAssistant() {
                       : !repairedValidation?.valid
                         ? "revalidation-failed"
                         : "shadow-valid";
-            const metadata =
-              formatWhiteboardSyntaxRepairForTrace({
+            const metadata = {
+              ...formatWhiteboardSyntaxRepairForTrace({
                 lease: settlement.job.lease,
                 disposition: finalDisposition,
                 authorization,
@@ -5697,7 +5711,12 @@ export function useMeetingAssistant() {
                 repairedParserErrorClass:
                   repairedValidation?.parserErrorClass,
                 firstTokenAt: result?.firstTokenAt,
-              });
+              }),
+              ...formatRuntimeInferenceProviderOutcomeForTrace(
+                result?.providerOutcome,
+                "whiteboardRepair"
+              ),
+            };
             traceStoreRef.current.updateMetadata(traceId, metadata);
             sessionRecordingManagerRef.current?.recordWhiteboardRenderRecovery({
               traceId,
@@ -10096,6 +10115,31 @@ export function useMeetingAssistant() {
         promptContractVersion:
           MEETING_ADVISOR_PROMPT_CONTRACT_VERSION,
       });
+    const advisorModelExecutionIdentity = {
+      requestId,
+      executionPlanId:
+        settledExecutionPlan?.id ??
+        promptContext.activeMeetingTask?.id ??
+        requestId,
+      modelId: readSelectedProviderModelId(
+        advisorModelRoute.selectedProvider
+      ),
+      sessionId:
+        settledExecutionPlan?.sessionId ??
+        contextManagerRef.current.getState().sessionId,
+      runtimeEpoch:
+        settledExecutionPlan?.runtimeEpoch ?? runtimeEpochRef.current,
+      logicalQuestionUnitId:
+        settledExecutionPlan?.logicalQuestionUnitId ??
+        advisorJob.logicalQuestionUnit?.id ??
+        promptContext.activeMeetingTask?.parent.sourceQuestionUnitId ??
+        "unscoped",
+      logicalQuestionRevision:
+        settledExecutionPlan?.logicalQuestionRevision ??
+        advisorJob.logicalQuestionUnit?.revision ??
+        promptContext.activeMeetingTask?.parent.sourceQuestionRevision ??
+        0,
+    };
     generationAuthorizedArtifacts =
       advisorJob.source === "force-advise"
         ? ["answer"]
@@ -10924,6 +10968,7 @@ export function useMeetingAssistant() {
         provider: advisorModelRoute.provider,
         selectedProvider: advisorModelRoute.selectedProvider,
         requestOptions: advisorModelRequestOptions,
+        executionIdentity: advisorModelExecutionIdentity,
         responseAction: options.responseAction,
         responseConfig,
         answerProfile: advisorAnswerProfile,
@@ -11040,6 +11085,19 @@ export function useMeetingAssistant() {
                   }),
                 });
               },
+              onTerminal: (outcome) => {
+                traceStoreRef.current.updateMetadata(traceId, {
+                  providerOutcomeStatus: outcome.status,
+                  providerFailureClass: outcome.failureClass,
+                  providerAttemptId: outcome.attemptId,
+                  providerAttemptNumber: outcome.attemptNumber,
+                  providerMaxAttempts: outcome.maxAttempts,
+                  providerRetryable: outcome.retryable,
+                  providerOutcomeFinal: outcome.final,
+                  providerAttemptDisposition: outcome.disposition,
+                  providerRequestId: outcome.requestId,
+                });
+              },
               onComplete: (output) => {
                 advisorModelCompletedAt = Date.now();
                 traceStoreRef.current.updateMetadata(traceId, {
@@ -11073,6 +11131,22 @@ export function useMeetingAssistant() {
             }
           : undefined,
       })) {
+        if (event.type === "partial-reset") {
+          finalContent = "";
+          stagedAnswerDeliveryChunkCount = 0;
+          stagedAnswerDeliveryFirstChunkAt = undefined;
+          stagedAnswerDeliveryFirstVisiblePartialAt = undefined;
+          stagedAnswerDeliveryVisible = false;
+          setState((previous) => ({
+            ...previous,
+            partialSuggestion: "",
+          }));
+          continue;
+        }
+        if (event.type === "candidate") {
+          finalContent = event.candidate.content;
+          continue;
+        }
         stagedAnswerDeliveryChunkCount += 1;
         stagedAnswerDeliveryFirstChunkAt ??= Date.now();
         if (rejectStaleCommit("partial-output")) {
@@ -12942,6 +13016,19 @@ export function useMeetingAssistant() {
             provider: modelRoute.provider,
             selectedProvider: modelRoute.selectedProvider,
             signal,
+            executionIdentity: {
+              requestId: job.operationId,
+              executionPlanId: job.lease.operationId,
+              modelId: readSelectedProviderModelId(
+                modelRoute.selectedProvider
+              ),
+              sessionId: job.sessionId,
+              runtimeEpoch: job.lease.runtimeEpoch,
+              logicalQuestionUnitId:
+                job.request.logicalQuestionUnitId,
+              logicalQuestionRevision:
+                job.request.logicalQuestionUnitRevision,
+            },
             onFirstToken: (at) => {
               traceStoreRef.current.updateMetadata(traceId, {
                 responseOpportunityFirstTokenAt: at,
@@ -13009,7 +13096,9 @@ export function useMeetingAssistant() {
               operationKind: "response-opportunity-inference",
               sessionId: latestContext.sessionId,
               reason: "provider-auth-error",
-              detail: result?.rawOutput.slice(0, 240),
+              detail:
+                result?.providerOutcome?.safeErrorSummary?.slice(0, 240) ??
+                result?.rawOutput.slice(0, 240),
             });
           }
           const proposal =
@@ -13075,6 +13164,10 @@ export function useMeetingAssistant() {
           );
           const metadata = {
             ...scheduledMetadata,
+            ...formatRuntimeInferenceProviderOutcomeForTrace(
+              result?.providerOutcome,
+              "responseOpportunity"
+            ),
             ...formatResponseOpportunityGenerationGateForTrace(
               settledGenerationGate
             ),
@@ -13498,6 +13591,17 @@ export function useMeetingAssistant() {
             provider: modelRoute.provider,
             selectedProvider: modelRoute.selectedProvider,
             signal,
+            executionIdentity: {
+              requestId: job.operationId,
+              executionPlanId: job.lease.operationId,
+              modelId: readSelectedProviderModelId(
+                modelRoute.selectedProvider
+              ),
+              sessionId: job.sessionId,
+              runtimeEpoch: job.lease.runtimeEpoch,
+              logicalQuestionUnitId: `meeting-metadata:${job.sessionId}`,
+              logicalQuestionRevision: job.request.operationRevision,
+            },
             onFirstToken: (at) => {
               traceStoreRef.current.updateMetadata(traceId, {
                 meetingMetadataInferenceFirstTokenAt: at,
@@ -13558,7 +13662,9 @@ export function useMeetingAssistant() {
               operationKind: "meeting-metadata-inference",
               sessionId: latestContext.sessionId,
               reason: "provider-auth-error",
-              detail: result?.rawOutput.slice(0, 240),
+              detail:
+                result?.providerOutcome?.safeErrorSummary?.slice(0, 240) ??
+                result?.rawOutput.slice(0, 240),
             });
           }
           const comparison = proposal
@@ -13620,6 +13726,10 @@ export function useMeetingAssistant() {
           );
           const metadata = {
             ...scheduledMetadata,
+            ...formatRuntimeInferenceProviderOutcomeForTrace(
+              result?.providerOutcome,
+              "meetingMetadataInference"
+            ),
             ...formatMeetingMetadataInferenceForTrace({
               request: settlement.job.request,
               authoritativeCompany: latestAuthoritativeCompany,
@@ -14691,6 +14801,19 @@ export function useMeetingAssistant() {
             provider: modelRoute.provider,
             selectedProvider: modelRoute.selectedProvider,
             signal,
+            executionIdentity: {
+              requestId: job.operationId,
+              executionPlanId: job.lease.operationId,
+              modelId: readSelectedProviderModelId(
+                modelRoute.selectedProvider
+              ),
+              sessionId: job.sessionId,
+              runtimeEpoch: job.lease.runtimeEpoch,
+              logicalQuestionUnitId:
+                job.request.logicalQuestionUnitId,
+              logicalQuestionRevision:
+                job.request.logicalQuestionUnitRevision,
+            },
             onFirstToken: (at) => {
               traceStoreRef.current.updateMetadata(traceId, {
                 questionTypeAdjudicationFirstTokenAt: at,
@@ -14769,7 +14892,9 @@ export function useMeetingAssistant() {
               operationKind: "question-type-adjudication",
               sessionId: settlement.job.lease.sessionId,
               reason: "provider-auth-error",
-              detail: result?.rawOutput.slice(0, 240),
+              detail:
+                result?.providerOutcome?.safeErrorSummary?.slice(0, 240) ??
+                result?.rawOutput.slice(0, 240),
             });
           }
           const finalDisposition =
@@ -14850,6 +14975,10 @@ export function useMeetingAssistant() {
           );
           const metadata = {
             ...scheduledMetadata,
+            ...formatRuntimeInferenceProviderOutcomeForTrace(
+              result?.providerOutcome,
+              "questionTypeAdjudication"
+            ),
             ...formatQuestionTypeAdjudicationForTrace({
               mode,
               eligibility,
@@ -15423,6 +15552,19 @@ export function useMeetingAssistant() {
             provider: modelRoute.provider,
             selectedProvider: modelRoute.selectedProvider,
             signal,
+            executionIdentity: {
+              requestId: job.operationId,
+              executionPlanId: job.lease.operationId,
+              modelId: readSelectedProviderModelId(
+                modelRoute.selectedProvider
+              ),
+              sessionId: job.sessionId,
+              runtimeEpoch: job.lease.runtimeEpoch,
+              logicalQuestionUnitId:
+                job.request.logicalQuestionUnitId,
+              logicalQuestionRevision:
+                job.request.logicalQuestionUnitRevision,
+            },
             onFirstToken: (at) => {
               traceStoreRef.current.updateMetadata(traceId, {
                 taskRelationAdjudicationFirstTokenAt: at,
@@ -15521,7 +15663,9 @@ export function useMeetingAssistant() {
               sessionId:
                 runtimeSettlement.job.lease.sessionId,
               reason: "provider-auth-error",
-              detail: result?.rawOutput.slice(0, 240),
+              detail:
+                result?.providerOutcome?.safeErrorSummary?.slice(0, 240) ??
+                result?.rawOutput.slice(0, 240),
             });
           }
           const finalDisposition =
@@ -15594,6 +15738,10 @@ export function useMeetingAssistant() {
           );
           const metadata = {
             ...scheduledMetadata,
+            ...formatRuntimeInferenceProviderOutcomeForTrace(
+              result?.providerOutcome,
+              "taskRelationAdjudication"
+            ),
             ...formatTaskRelationAdjudicationForTrace({
               mode,
               eligibility,
@@ -16116,6 +16264,19 @@ export function useMeetingAssistant() {
             provider: modelRoute.provider,
             selectedProvider: modelRoute.selectedProvider,
             signal,
+            executionIdentity: {
+              requestId: job.lease.operationId,
+              executionPlanId: job.lease.operationId,
+              modelId: readSelectedProviderModelId(
+                modelRoute.selectedProvider
+              ),
+              sessionId: job.lease.sessionId,
+              runtimeEpoch: job.lease.runtimeEpoch,
+              logicalQuestionUnitId:
+                job.request.logicalQuestionUnitId,
+              logicalQuestionRevision:
+                job.request.logicalQuestionUnitRevision,
+            },
             onFirstToken: (at) => {
               traceStoreRef.current.updateMetadata(traceId, {
                 taxonomyAdjudicationFirstTokenAt: at,
@@ -16233,7 +16394,11 @@ export function useMeetingAssistant() {
               ? taxonomyAdjudicationCircuitBreakerRef.current.open({
                   sessionId: settlement.job.lease.sessionId,
                   reason: "provider-auth-error",
-                  detail: rawOutput.slice(0, 240),
+                  detail:
+                    settlement.result?.providerOutcome?.safeErrorSummary?.slice(
+                      0,
+                      240
+                    ) ?? rawOutput.slice(0, 240),
                 })
               : undefined;
           const parseDisposition =
@@ -16426,6 +16591,10 @@ export function useMeetingAssistant() {
           };
           const metadata = {
             ...scheduledMetadata,
+            ...formatRuntimeInferenceProviderOutcomeForTrace(
+              settlement.result?.providerOutcome,
+              "taxonomyAdjudication"
+            ),
             ...terminalNoAnswerMetadata,
             taxonomyAdjudicationBudgetStartsBefore:
               settlement.budget.startsBefore,
@@ -20472,6 +20641,14 @@ export function useMeetingAssistant() {
                 selectedProvider: selectedAIProvider,
                 recentTranscript,
                 signal: analysisController.signal,
+                executionIdentity: {
+                  requestId: `screen-preflight:${observation.id}`,
+                  executionPlanId: observation.id,
+                  sessionId: analysisContextState.sessionId,
+                  runtimeEpoch: runtimeEpochRef.current,
+                  logicalQuestionUnitId: observation.id,
+                  logicalQuestionRevision: 0,
+                },
                 trace: {
                   onRequest: (input) => {
                     traceStoreRef.current.recordInput(
@@ -20517,6 +20694,18 @@ export function useMeetingAssistant() {
                   onFirstToken: () => {
                     traceStoreRef.current.updateMetadata(trace.id, {
                       screenPreflightFirstTokenAt: Date.now(),
+                    });
+                  },
+                  onTerminal: (outcome) => {
+                    traceStoreRef.current.updateMetadata(trace.id, {
+                      screenPreflightProviderOutcomeStatus: outcome.status,
+                      screenPreflightProviderFailureClass:
+                        outcome.failureClass,
+                      screenPreflightProviderAttemptId: outcome.attemptId,
+                      screenPreflightProviderRetryable: outcome.retryable,
+                      screenPreflightProviderOutcomeFinal: outcome.final,
+                      screenPreflightProviderAttemptDisposition:
+                        outcome.disposition,
                     });
                   },
                   onComplete: (output) => {
@@ -22101,6 +22290,28 @@ export function useMeetingAssistant() {
               screenWhiteboardFormatPreference,
             signal: analysisController.signal,
             requestOptions: screenModelRequestOptions,
+            executionIdentity: {
+              requestId: `screen-solve:${observation.id}`,
+              executionPlanId:
+                screenCurrentQuestionSettlement?.settlementId ??
+                screenExecutionContextState.activeMeetingTask?.id ??
+                observation.id,
+              modelId: readSelectedProviderModelId(
+                screenModelRoute.selectedProvider
+              ),
+              sessionId: screenExecutionContextState.sessionId,
+              runtimeEpoch: runtimeEpochRef.current,
+              logicalQuestionUnitId:
+                screenCurrentQuestionSettlement?.logicalQuestionUnitId ??
+                screenExecutionContextState.activeMeetingTask?.parent
+                  .sourceQuestionUnitId ??
+                observation.id,
+              logicalQuestionRevision:
+                screenCurrentQuestionSettlement?.revision ??
+                screenExecutionContextState.activeMeetingTask?.parent
+                  .sourceQuestionRevision ??
+                0,
+            },
             trace: {
               onRequest: (input) => {
                 const modelRequestStartedAt = Date.now();
@@ -22180,6 +22391,19 @@ export function useMeetingAssistant() {
                   }),
                 });
               },
+              onTerminal: (outcome) => {
+                traceStoreRef.current.updateMetadata(trace.id, {
+                  providerOutcomeStatus: outcome.status,
+                  providerFailureClass: outcome.failureClass,
+                  providerAttemptId: outcome.attemptId,
+                  providerAttemptNumber: outcome.attemptNumber,
+                  providerMaxAttempts: outcome.maxAttempts,
+                  providerRetryable: outcome.retryable,
+                  providerOutcomeFinal: outcome.final,
+                  providerAttemptDisposition: outcome.disposition,
+                  providerRequestId: outcome.requestId,
+                });
+              },
               onComplete: (output) => {
                 screenModelCompletedAt = Date.now();
                 traceStoreRef.current.updateMetadata(trace.id, {
@@ -22209,6 +22433,9 @@ export function useMeetingAssistant() {
                   });
                 }
               },
+            },
+            onPartialReset: () => {
+              clearScreenStagedPartial("provider-attempt-reset");
             },
             onPartialContent: (partialContent) => {
               screenStagedChunkCount += 1;
@@ -26221,6 +26448,19 @@ export function useMeetingAssistant() {
                 provider: modelRoute.provider,
                 selectedProvider: modelRoute.selectedProvider,
                 signal: abortController.signal,
+                executionIdentity: {
+                  requestId: correctionOwnedOperationId,
+                  executionPlanId: lease.operationId,
+                  modelId: readSelectedProviderModelId(
+                    modelRoute.selectedProvider
+                  ),
+                  sessionId: lease.sessionId,
+                  runtimeEpoch: lease.runtimeEpoch,
+                  logicalQuestionUnitId:
+                    adjudicationRequest.logicalQuestionUnitId,
+                  logicalQuestionRevision:
+                    adjudicationRequest.logicalQuestionUnitRevision,
+                },
                 onFirstToken: (at) => {
                   traceStoreRef.current.updateMetadata(
                     repairTrace.id,
@@ -26322,6 +26562,10 @@ export function useMeetingAssistant() {
                     requestResult.providerDisposition,
                   parseDisposition:
                     requestResult.parseDisposition,
+                  ...formatRuntimeInferenceProviderOutcomeForTrace(
+                    requestResult.providerOutcome,
+                    "correctionOwnedAdjudication"
+                  ),
                   truncated:
                     requestResult.rawOutput.length >
                     TAXONOMY_ADJUDICATION_MAX_OUTPUT_CHARS,

@@ -1,4 +1,7 @@
-import { fetchAIResponse } from "@/lib/functions/ai-response.function";
+import {
+  fetchAIResponseEvents,
+} from "@/lib/functions/ai-response.function";
+import type { AIResponseExecutionIdentityInput } from "../functions/ai-response-events.js";
 import type { TYPE_PROVIDER } from "@/types";
 import type { SelectedProviderState } from "./types.js";
 import {
@@ -6,7 +9,7 @@ import {
   type TaxonomyAdjudicationRequest,
 } from "./taxonomy-adjudication.js";
 import {
-  consumeTaxonomyAdjudicationResponse,
+  consumeTypedTaxonomyAdjudicationResponse,
   type TaxonomyAdjudicationRequestResult,
 } from "./taxonomy-adjudication-response.js";
 import { getRuntimeInferenceOperationDefinition } from "./runtime-inference.js";
@@ -24,10 +27,11 @@ export async function requestTaxonomyAdjudication(input: {
   provider: TYPE_PROVIDER | undefined;
   selectedProvider: SelectedProviderState;
   signal: AbortSignal;
+  executionIdentity?: AIResponseExecutionIdentityInput;
   onFirstToken?: (at: number) => void;
 }): Promise<TaxonomyAdjudicationRequestResult> {
   const prompts = buildTaxonomyAdjudicationPrompts(input.request);
-  const responseStream = fetchAIResponse({
+  const responseEvents = fetchAIResponseEvents({
     provider: input.provider,
     selectedProvider: input.selectedProvider,
     systemPrompt: prompts.systemPrompt,
@@ -38,10 +42,19 @@ export async function requestTaxonomyAdjudication(input: {
       timeoutMs: TAXONOMY_ADJUDICATION_TIMEOUT_MS,
       maxOutputTokens: TAXONOMY_ADJUDICATION_MAX_OUTPUT_TOKENS,
     },
+    executionIdentity: {
+      ...input.executionIdentity,
+      logicalQuestionUnitId:
+        input.executionIdentity?.logicalQuestionUnitId ??
+        input.request.logicalQuestionUnitId,
+      logicalQuestionRevision:
+        input.executionIdentity?.logicalQuestionRevision ??
+        input.request.logicalQuestionUnitRevision,
+    },
   });
-  return consumeTaxonomyAdjudicationResponse({
+  return consumeTypedTaxonomyAdjudicationResponse({
     request: input.request,
-    responseStream,
+    responseEvents,
     signal: input.signal,
     onFirstToken: input.onFirstToken,
   });

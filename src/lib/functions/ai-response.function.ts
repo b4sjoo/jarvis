@@ -20,6 +20,7 @@ import {
   type AIResponseAttemptIdentity,
   type AIResponseEvent,
   type AIResponseExecutionIdentity,
+  type AIResponseExecutionIdentityInput,
   type AIResponseRetryPolicy,
 } from "./ai-response-events.js";
 
@@ -27,6 +28,7 @@ export type {
   AIResponseEvent,
   AIResponseAttemptIdentity,
   AIResponseExecutionIdentity,
+  AIResponseExecutionIdentityInput,
   AIResponseFailureClass,
   AIResponseRetryPolicy,
   AIResponseTerminalOutcome,
@@ -38,16 +40,6 @@ export interface AIResponseRequestOptions {
   maxOutputTokens?: number;
   retryPolicy?: AIResponseRetryPolicy;
   isExecutionCurrent?: (identity: AIResponseAttemptIdentity) => boolean;
-}
-
-export interface AIResponseExecutionIdentityInput {
-  requestId?: string;
-  executionPlanId?: string;
-  modelId?: string;
-  sessionId?: string;
-  runtimeEpoch?: number;
-  logicalQuestionUnitId?: string;
-  logicalQuestionRevision?: number;
 }
 
 export type AIResponseParams = {

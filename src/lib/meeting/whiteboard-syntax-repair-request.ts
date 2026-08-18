@@ -1,4 +1,7 @@
-import { fetchAIResponse } from "@/lib/functions/ai-response.function";
+import {
+  fetchAIResponseEvents,
+} from "@/lib/functions/ai-response.function";
+import type { AIResponseExecutionIdentityInput } from "../functions/ai-response-events.js";
 import type { TYPE_PROVIDER } from "@/types";
 import type { SelectedProviderState } from "./types.js";
 import {
@@ -9,8 +12,8 @@ import {
   type WhiteboardSyntaxRepairRequest,
   type WhiteboardSyntaxRepairRequestResult,
 } from "./whiteboard-syntax-repair.js";
-import { classifyTaxonomyAdjudicationProviderOutput } from "./taxonomy-adjudication-response.js";
 import { getRuntimeInferenceOperationDefinition } from "./runtime-inference.js";
+import { consumeRuntimeInferenceResponse } from "./runtime-inference-response.js";
 
 const WHITEBOARD_REPAIR_OPERATION =
   getRuntimeInferenceOperationDefinition("whiteboard-syntax-repair");
@@ -20,10 +23,11 @@ export async function requestWhiteboardSyntaxRepair(input: {
   provider: TYPE_PROVIDER | undefined;
   selectedProvider: SelectedProviderState;
   signal: AbortSignal;
+  executionIdentity?: AIResponseExecutionIdentityInput;
   onFirstToken?: (at: number) => void;
 }): Promise<WhiteboardSyntaxRepairRequestResult> {
   const prompts = buildWhiteboardSyntaxRepairPrompts(input.request);
-  const responseStream = fetchAIResponse({
+  const responseEvents = fetchAIResponseEvents({
     provider: input.provider,
     selectedProvider: input.selectedProvider,
     systemPrompt: prompts.systemPrompt,
@@ -34,27 +38,16 @@ export async function requestWhiteboardSyntaxRepair(input: {
       timeoutMs: WHITEBOARD_REPAIR_OPERATION.timeoutMs,
       maxOutputTokens: WHITEBOARD_REPAIR_OPERATION.maxOutputTokens,
     },
+    executionIdentity: input.executionIdentity,
   });
-
-  let rawOutput = "";
-  let firstTokenAt: number | undefined;
-  for await (const chunk of responseStream) {
-    if (input.signal.aborted) break;
-    if (firstTokenAt === undefined && chunk) {
-      firstTokenAt = Date.now();
-      input.onFirstToken?.(firstTokenAt);
-    }
-    rawOutput += chunk;
-    if (rawOutput.length > WHITEBOARD_SYNTAX_REPAIR_MAX_RAW_OUTPUT_CHARS) {
-      throw new Error("Whiteboard syntax repair output exceeded limit");
-    }
-  }
-  if (input.signal.aborted) {
-    throw new DOMException("Whiteboard syntax repair aborted", "AbortError");
-  }
-
-  const providerDisposition =
-    classifyTaxonomyAdjudicationProviderOutput(rawOutput);
+  const providerResponse = await consumeRuntimeInferenceResponse({
+    responseEvents,
+    signal: input.signal,
+    operationLabel: "Whiteboard syntax repair",
+    onFirstToken: input.onFirstToken,
+    maxOutputChars: WHITEBOARD_SYNTAX_REPAIR_MAX_RAW_OUTPUT_CHARS,
+  });
+  const { rawOutput, providerDisposition } = providerResponse;
   const parsed =
     providerDisposition === "completed-with-content"
       ? parseWhiteboardSyntaxRepairOutput(rawOutput, input.request)
@@ -66,15 +59,12 @@ export async function requestWhiteboardSyntaxRepair(input: {
               : "non-json-output",
         } satisfies WhiteboardSyntaxRepairParseResult);
   return {
-    rawOutput,
+    ...providerResponse,
     parsed,
-    providerDisposition,
     parseDisposition: parsed.ok
       ? "valid-json"
       : providerDisposition === "completed-with-content"
         ? parsed.reason
         : `not-run-${providerDisposition}`,
-    firstTokenAt,
-    completedAt: Date.now(),
   };
 }

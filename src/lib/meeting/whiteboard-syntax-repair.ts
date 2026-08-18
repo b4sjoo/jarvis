@@ -3,6 +3,7 @@ import {
   fingerprintWhiteboardRenderCandidate,
 } from "./whiteboard-artifact.js";
 import type { RuntimeInferenceRuntimeJob } from "./runtime-inference-runtime.js";
+import type { AIResponseTerminalOutcome } from "../functions/ai-response-events.js";
 
 export const WHITEBOARD_SYNTAX_REPAIR_PROMPT_VERSION =
   "whiteboard-syntax-repair-v2";
@@ -91,6 +92,7 @@ export interface WhiteboardSyntaxRepairRequestResult {
     | "provider-error-content"
     | "provider-auth-error";
   parseDisposition: string;
+  providerOutcome?: Readonly<AIResponseTerminalOutcome>;
   firstTokenAt?: number;
   completedAt: number;
 }

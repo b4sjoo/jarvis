@@ -21,6 +21,10 @@ import type {
   PreparationRuntimeBrief,
   PreparationStrategy,
 } from "../preparation/index.js";
+import type {
+  AIResponseExecutionIdentityInput,
+  AIResponseTerminalOutcome,
+} from "../functions/ai-response-events.js";
 
 export type TranscriptSpeaker = "them" | "me" | "unknown";
 
@@ -1370,6 +1374,7 @@ export interface MeetingAdvisorRequest {
   history?: Message[];
   signal?: AbortSignal;
   requestOptions?: MeetingModelRequestOptions;
+  executionIdentity?: AIResponseExecutionIdentityInput;
   trace?: MeetingModelTraceCallbacks;
 }
 
@@ -1391,6 +1396,7 @@ export interface MeetingModelTraceCallbacks {
     requestOptions?: MeetingModelRequestOptions;
   }) => void;
   onFirstToken?: () => void;
+  onTerminal?: (outcome: Readonly<AIResponseTerminalOutcome>) => void;
   onComplete?: (output: string) => void;
 }
 
