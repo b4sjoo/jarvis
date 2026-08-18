@@ -15600,6 +15600,7 @@ export function useMeetingAssistant() {
               request,
               disposition: finalDisposition,
               candidate: parsedValue,
+              parseResult: parsed,
             }),
             ...formatCurrentQuestionSettlementForTrace(
               settlementPreview

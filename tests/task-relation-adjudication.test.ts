@@ -15,6 +15,7 @@ import {
   decideNarrowVoiceRelationRelease,
   decideTaskRelationAdjudicationEligibility,
   deriveRuntimeTaskRelationFromAtomicDecision,
+  formatTaskRelationAdjudicationForTrace,
   parseTaskRelationAdjudicationOutput,
   settleNarrowVoiceTypeRelation,
 } from "../src/lib/meeting/task-relation-adjudication.js";
@@ -263,6 +264,92 @@ test("strictly parses grounded follow-up and rejects broader authority", () => {
       ok: false,
       reason: "invalid-parent-evidence",
       errorKind: "evidence",
+      evidenceSpansValid: false,
+    }
+  );
+});
+
+test("normalizes only the known singular parent evidence alias and records it", () => {
+  const request = buildTaskRelationAdjudicationRequest({
+    logicalQuestionUnit: unit(
+      "How would Redis support the URL shortener lookup path?"
+    ),
+    activeMeetingTask: activeTask(),
+  });
+  const parsed = parseTaskRelationAdjudicationOutput(
+    JSON.stringify(
+      atomicOutput({
+        dependency: "parent-dependent",
+        continuationShape: "bounded-detour",
+        currentQuestionEvidenceSpans: ["Redis"],
+        parentEvidenceSpans: undefined,
+        parentEvidenceSpan: "RAG system for trip planning",
+      })
+    ),
+    request
+  );
+
+  assert.equal(parsed.ok, true);
+  assert.equal(parsed.ok ? parsed.value.relation : undefined, "child-probe");
+  assert.deepEqual(
+    parsed.ok ? parsed.value.parentEvidenceSpans : undefined,
+    ["RAG system for trip planning"]
+  );
+  assert.equal(parsed.ok ? parsed.schemaAliasApplied : undefined, true);
+  const trace = formatTaskRelationAdjudicationForTrace({
+    mode: "shadow",
+    request,
+    candidate: parsed.ok ? parsed.value : undefined,
+    parseResult: parsed,
+  });
+  assert.equal(trace.taskRelationAdjudicationSchemaAliasApplied, true);
+  assert.equal(
+    trace.taskRelationAdjudicationSchemaAliasSourceField,
+    "parentEvidenceSpan"
+  );
+  assert.equal(
+    trace.taskRelationAdjudicationSchemaAliasCanonicalField,
+    "parentEvidenceSpans"
+  );
+});
+
+test("rejects conflicting or malformed parent evidence aliases", () => {
+  const request = buildTaskRelationAdjudicationRequest({
+    logicalQuestionUnit: unit(
+      "How would this retrieval design handle fresh documents?"
+    ),
+    activeMeetingTask: activeTask(),
+  });
+  const valid = atomicOutput();
+
+  assert.deepEqual(
+    parseTaskRelationAdjudicationOutput(
+      JSON.stringify({
+        ...valid,
+        parentEvidenceSpan: "RAG system for trip planning",
+      }),
+      request
+    ),
+    {
+      ok: false,
+      reason: "conflicting-parent-evidence-fields",
+      errorKind: "schema",
+      evidenceSpansValid: false,
+    }
+  );
+  assert.deepEqual(
+    parseTaskRelationAdjudicationOutput(
+      JSON.stringify({
+        ...valid,
+        parentEvidenceSpans: undefined,
+        parentEvidenceSpan: 42,
+      }),
+      request
+    ),
+    {
+      ok: false,
+      reason: "invalid-parent-evidence-alias",
+      errorKind: "schema",
       evidenceSpansValid: false,
     }
   );

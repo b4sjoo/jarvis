@@ -166,12 +166,16 @@ export type TaskRelationAdjudicationParseResult =
       ok: true;
       value: LlmTaskRelationAdjudication;
       evidenceSpansValid: true;
+      schemaAliasApplied: boolean;
+      schemaAliasSourceField?: "parentEvidenceSpan";
+      schemaAliasCanonicalField?: "parentEvidenceSpans";
     }
   | {
       ok: false;
       reason: string;
       errorKind: "parse" | "schema" | "evidence" | "provider";
       evidenceSpansValid: boolean;
+      schemaAliasApplied?: false;
     };
 
 export interface TaskRelationAdjudicationEligibilityDecision {
@@ -787,7 +791,7 @@ export function buildTaskRelationAdjudicationPrompts(
       "Time proximity, topic overlap, compatible question types, playbook phase, and generated answers are not relationship evidence.",
       "currentQuestionEvidenceSpans must contain one or more exact verbatim substrings from currentQuestion.sourceTurns.",
       "parentEvidenceSpans must contain exact verbatim substrings from source-owned activeParent, activeChild, recentSourceEvidence, recentTransitions, or suspendedParent text fields.",
-      "parent-dependent and resume-suspended-parent require at least one grounded parentEvidenceSpan.",
+      "parent-dependent and resume-suspended-parent require at least one grounded parentEvidenceSpans entry.",
       "Schema: {schemaVersion:2,dependency,continuationShape,returnIntent,switchIntent,standaloneSufficiency,confidence,currentQuestionEvidenceSpans,parentEvidenceSpans,ambiguityReason?}.",
     ].join(" "),
     userMessage: JSON.stringify({
@@ -832,6 +836,14 @@ export function parseTaskRelationAdjudicationOutput(
     return parseFailure("output-is-not-object", "schema");
   }
   const candidate = decoded as Record<string, unknown>;
+  const hasCanonicalParentEvidence = Object.prototype.hasOwnProperty.call(
+    candidate,
+    "parentEvidenceSpans"
+  );
+  const hasParentEvidenceAlias = Object.prototype.hasOwnProperty.call(
+    candidate,
+    "parentEvidenceSpan"
+  );
   const allowedKeys = new Set([
     "schemaVersion",
     "dependency",
@@ -842,10 +854,25 @@ export function parseTaskRelationAdjudicationOutput(
     "confidence",
     "currentQuestionEvidenceSpans",
     "parentEvidenceSpans",
+    "parentEvidenceSpan",
     "ambiguityReason",
   ]);
   if (Object.keys(candidate).some((key) => !allowedKeys.has(key))) {
     return parseFailure("non-relation-field-present", "schema");
+  }
+  if (hasCanonicalParentEvidence && hasParentEvidenceAlias) {
+    return parseFailure(
+      "conflicting-parent-evidence-fields",
+      "schema"
+    );
+  }
+  const normalizedParentEvidence = normalizeParentEvidenceSpans(
+    candidate.parentEvidenceSpans,
+    candidate.parentEvidenceSpan,
+    hasParentEvidenceAlias
+  );
+  if (!normalizedParentEvidence.ok) {
+    return parseFailure(normalizedParentEvidence.reason, "schema");
   }
   if (
     candidate.schemaVersion !==
@@ -894,10 +921,6 @@ export function parseTaskRelationAdjudicationOutput(
       "schema"
     );
   }
-  if (!isEvidenceSpanArray(candidate.parentEvidenceSpans, false)) {
-    return parseFailure("invalid-parent-evidence-spans", "schema");
-  }
-
   const dependency = candidate.dependency;
   const continuationShape = candidate.continuationShape;
   const returnIntent = candidate.returnIntent;
@@ -907,9 +930,9 @@ export function parseTaskRelationAdjudicationOutput(
   const currentQuestionEvidenceSpans = (
     candidate.currentQuestionEvidenceSpans as string[]
   ).map((span) => span.trim());
-  const parentEvidenceSpans = (
-    candidate.parentEvidenceSpans as string[]
-  ).map((span) => span.trim());
+  const parentEvidenceSpans = normalizedParentEvidence.value.map((span) =>
+    span.trim()
+  );
   const currentEvidenceCorpus = request.currentQuestion.sourceTurns
     .map((source) => source.text)
     .join("\n");
@@ -944,6 +967,13 @@ export function parseTaskRelationAdjudicationOutput(
   return {
     ok: true,
     evidenceSpansValid: true,
+    schemaAliasApplied: normalizedParentEvidence.aliasApplied,
+    schemaAliasSourceField: normalizedParentEvidence.aliasApplied
+      ? "parentEvidenceSpan"
+      : undefined,
+    schemaAliasCanonicalField: normalizedParentEvidence.aliasApplied
+      ? "parentEvidenceSpans"
+      : undefined,
     value: {
       schemaVersion: TASK_RELATION_ADJUDICATION_SCHEMA_VERSION,
       relation,
@@ -1052,6 +1082,7 @@ export function formatTaskRelationAdjudicationForTrace(input: {
   request?: TaskRelationAdjudicationRequest;
   disposition?: string;
   candidate?: LlmTaskRelationAdjudication;
+  parseResult?: TaskRelationAdjudicationParseResult;
 }) {
   return {
     taskRelationAdjudicationMode: input.mode,
@@ -1116,6 +1147,16 @@ export function formatTaskRelationAdjudicationForTrace(input: {
       input.candidate?.standalone,
     taskRelationAdjudicationAmbiguityReason:
       input.candidate?.ambiguityReason,
+    taskRelationAdjudicationSchemaAliasApplied:
+      input.parseResult?.schemaAliasApplied ?? false,
+    taskRelationAdjudicationSchemaAliasSourceField:
+      input.parseResult?.ok
+        ? input.parseResult.schemaAliasSourceField
+        : undefined,
+    taskRelationAdjudicationSchemaAliasCanonicalField:
+      input.parseResult?.ok
+        ? input.parseResult.schemaAliasCanonicalField
+        : undefined,
     taskRelationAdjudicationTypeMutationBlocked: true,
     taskRelationAdjudicationActionMutationBlocked: true,
     taskRelationAdjudicationParentMutationBlocked: true,
@@ -1346,6 +1387,36 @@ function isEvidenceSpanArray(value: unknown, requireOne: boolean) {
       (span) => typeof span === "string" && Boolean(span.trim())
     )
   );
+}
+
+function normalizeParentEvidenceSpans(
+  canonicalValue: unknown,
+  aliasValue: unknown,
+  aliasPresent: boolean
+):
+  | { ok: true; value: string[]; aliasApplied: boolean }
+  | { ok: false; reason: string } {
+  if (!aliasPresent) {
+    return isEvidenceSpanArray(canonicalValue, false)
+      ? {
+          ok: true,
+          value: canonicalValue as string[],
+          aliasApplied: false,
+        }
+      : { ok: false, reason: "invalid-parent-evidence-spans" };
+  }
+  if (typeof aliasValue === "string") {
+    return aliasValue.trim()
+      ? { ok: true, value: [aliasValue], aliasApplied: true }
+      : { ok: false, reason: "invalid-parent-evidence-alias" };
+  }
+  return isEvidenceSpanArray(aliasValue, false)
+    ? {
+        ok: true,
+        value: aliasValue as string[],
+        aliasApplied: true,
+      }
+    : { ok: false, reason: "invalid-parent-evidence-alias" };
 }
 
 function allSpansGrounded(spans: string[], corpus: string) {

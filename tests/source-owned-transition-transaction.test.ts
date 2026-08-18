@@ -102,6 +102,75 @@ test("resumes a parent without restarting its phase", () => {
   assert.deepEqual(result.task?.phaseProgress, parent.phaseProgress);
 });
 
+test("attaches a Field Knowledge detour to General SD and resumes the same parent", () => {
+  const parent = makeParent({
+    stableKind: "general-system-design",
+    topic: "Design a URL shortener",
+    playbook: makePlaybook(
+      "general_system_design",
+      "general-system-design",
+      "design_framing"
+    ),
+  });
+  const childCandidate = createSourceOwnedTransitionCandidate({
+    sessionId: "session-a",
+    runtimeEpoch: 3,
+    source: "voice",
+    sourceTurnIds: ["turn-redis"],
+    existingTask: parent,
+    relation: "child-probe",
+    authoritySource: "task-relation-runtime-operation",
+    mutationAuthorized: true,
+    questionType: "field-knowledge",
+    question: "Why would Redis help the lookup path?",
+    subtaskIntent: "concept-probe",
+    now: 100,
+  });
+  assert.ok(childCandidate);
+  const withChild = commitSourceOwnedTransition({
+    candidate: childCandidate,
+    currentTask: parent,
+    currentSessionId: "session-a",
+    currentRuntimeEpoch: 3,
+    now: 110,
+  });
+
+  assert.equal(withChild.mutationApplied, true);
+  assert.equal(withChild.task?.id, parent.id);
+  assert.equal(withChild.task?.stableKind, "general-system-design");
+  assert.equal(withChild.task?.child?.questionType, "field-knowledge");
+  assert.equal(withChild.task?.child?.returnCapsule?.parentId, parent.id);
+
+  const resumeCandidate = createSourceOwnedTransitionCandidate({
+    sessionId: "session-a",
+    runtimeEpoch: 3,
+    source: "voice",
+    sourceTurnIds: ["turn-resume-url-shortener"],
+    existingTask: withChild.task,
+    relation: "resume-parent",
+    authoritySource: "task-relation-runtime-operation",
+    mutationAuthorized: true,
+    questionType: "general-system-design",
+    question: "Return to the URL shortener architecture.",
+    now: 120,
+  });
+  assert.ok(resumeCandidate);
+  const resumed = commitSourceOwnedTransition({
+    candidate: resumeCandidate,
+    currentTask: withChild.task,
+    currentSessionId: "session-a",
+    currentRuntimeEpoch: 3,
+    now: 130,
+  });
+
+  assert.equal(resumed.mutationApplied, true);
+  assert.equal(resumed.task?.id, parent.id);
+  assert.equal(resumed.task?.stableKind, "general-system-design");
+  assert.equal(resumed.task?.child, undefined);
+  assert.equal(resumed.task?.playbookPhase, parent.playbookPhase);
+  assert.deepEqual(resumed.task?.phaseProgress, parent.phaseProgress);
+});
+
 test("resumes a child from its bounded parent capsule", () => {
   const parent = makeParent({
     stableKind: "project-deep-dive",

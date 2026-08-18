@@ -85,7 +85,9 @@ export async function requestTaskRelationAdjudication(input: {
     parseDisposition:
       providerDisposition === "completed-with-content"
         ? parsed.ok
-          ? "valid-json"
+          ? parsed.schemaAliasApplied
+            ? "valid-json-schema-alias"
+            : "valid-json"
           : parsed.reason
         : `not-run-${providerDisposition}`,
     firstTokenAt,
