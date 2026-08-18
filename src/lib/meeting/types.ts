@@ -1983,6 +1983,7 @@ export interface MeetingAssistantState {
   latestReliableSuggestion: AdvisorSuggestion | null;
   partialSuggestion: string;
   answerDelivery: import("./stable-answer").AnswerDeliveryPresentation;
+  generationResult: import("./generation-result-ledger").GenerationResultProjection;
   error: string | null;
   audioStatus: MeetingAudioStatus | null;
   audioInputLiveness: AudioInputLivenessPresentation | null;

@@ -438,7 +438,6 @@ export class MeetingContextManager {
           activeMeetingTask.screen.projectAnchor
             ? `Project anchor: ${activeMeetingTask.screen.projectAnchor}`
             : undefined,
-          activeMeetingTask.screen.content,
         ]
           .filter(Boolean)
           .join("\n")

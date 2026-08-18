@@ -1,4 +1,5 @@
 import { fetchAIResponseEvents } from "@/lib/functions";
+import type { AIResponseTerminalOutcome } from "@/lib/functions/ai-response-events";
 import { Message } from "@/types";
 import {
   AdvisorSuggestion,
@@ -64,6 +65,7 @@ export class AdvisorEngine {
     });
     let accumulated = "";
     let firstTokenSeen = false;
+    const terminalOutcomes: Readonly<AIResponseTerminalOutcome>[] = [];
 
     request.trace?.onRequest?.({
       systemPrompt,
@@ -106,15 +108,22 @@ export class AdvisorEngine {
         }
 
         request.trace?.onTerminal?.(event.outcome);
+        terminalOutcomes.push(Object.freeze({ ...event.outcome }));
         if (!event.outcome.final) {
           accumulated = "";
           yield { type: "partial-reset", requestId: request.requestId };
           continue;
         }
 
-        const result = acceptMeetingAIResponseOutcome(event.outcome);
+        const result = acceptMeetingAIResponseOutcome(
+          event.outcome,
+          terminalOutcomes
+        );
         if (!result.accepted) {
-          throw new MeetingAIResponseOutcomeError(result.outcome);
+          throw new MeetingAIResponseOutcomeError(
+            result.outcome,
+            result.attempts
+          );
         }
         acceptedCandidate = true;
         accumulated = result.candidate.content;

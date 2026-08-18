@@ -103,6 +103,10 @@ test("discards retrying attempt content and accepts only the final attempt", asy
   if (!result.accepted) return;
   assert.equal(result.candidate.content, "final answer");
   assert.equal(result.candidate.outcome.attemptNumber, 2);
+  assert.deepEqual(
+    result.candidate.attempts.map((attempt) => attempt.attemptNumber),
+    [1, 2]
+  );
 });
 
 test("rejects stale success and empty output without parsing either", async () => {

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { MeetingContextManager } from "../src/lib/meeting/context-manager.js";
+import { buildSpeechBiasContext } from "../src/lib/meeting/speech-bias.js";
 import type {
   ActiveInterviewParent,
   ActiveScreenTask,
@@ -125,6 +126,33 @@ test("freezes only later-confirmed Me facts into the advisor snapshot", () => {
       text: "My palpitations have resolved.",
     },
   ]);
+});
+
+test("keeps generated screen answers out of source prompt and speech bias evidence", () => {
+  const manager = new MeetingContextManager();
+  setTestTaskRuntime(manager, {
+    screenAttachment: makeScreenTask({
+      question: "Implement a queue",
+      content: "Answer: Use FAKEGEN as the generated implementation.",
+    }),
+    parent: makeInterviewTask({
+      stableKind: "coding",
+      topic: "Implement a queue",
+      latestUsefulAnswer: "Use FAKEPARENT in the generated answer.",
+    }),
+  });
+
+  const context = manager.buildAdvisorPromptContext();
+  assert.match(context.screenContext, /Implement a queue/);
+  assert.doesNotMatch(context.screenContext, /FAKEGEN/);
+
+  const bias = buildSpeechBiasContext(manager.getState(), []);
+  assert.equal(
+    bias.terms.some((term) =>
+      ["FAKEGEN", "FAKEPARENT"].includes(term.term)
+    ),
+    false
+  );
 });
 
 function makeScreenTask(

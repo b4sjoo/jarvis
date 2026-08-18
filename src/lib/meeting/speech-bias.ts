@@ -7,7 +7,7 @@ import type {
   SpeechNormalizationResult,
 } from "./types";
 import type { PreparationSpeechBiasTerm } from "../preparation/index.js";
-import { createMeetingId } from "./context-manager";
+import { createMeetingId } from "./context-manager.js";
 
 const MAX_BIAS_TERMS = 24;
 const MAX_PROMPT_CHARS = 900;
@@ -107,9 +107,7 @@ export function buildSpeechBiasContext(
     for (const term of extractLikelyTerms(
       [
         activeTask.parent.topic,
-        activeTask.parent.latestUsefulAnswer?.slice(0, 700),
         activeTask.screen?.question,
-        activeTask.screen?.content?.slice(0, 900),
         activeTask.child?.question,
         activeTask.child?.compactSummary,
         activeTask.parent.supportedFactAnchors.join("\n"),

@@ -57,6 +57,7 @@ import {
 import {
   collectMeetingAIResponseCandidate,
   requireMeetingAIResponseCandidate,
+  type MeetingAIResponseCandidate,
 } from "./meeting-ai-response.js";
 
 export type ScreenCaptureTargetType = "active-window" | "current-monitor";
@@ -112,6 +113,7 @@ export interface SolveScreenAnchoredTaskOptions {
   trace?: MeetingModelTraceCallbacks;
   onPartialContent?: (content: string) => void;
   onPartialReset?: () => void;
+  onCandidate?: (candidate: Readonly<MeetingAIResponseCandidate>) => void;
 }
 
 export interface ScreenPreflightResult extends TaskClassifierMetadata {
@@ -363,6 +365,7 @@ export async function solveScreenAnchoredTask({
   trace,
   onPartialContent,
   onPartialReset,
+  onCandidate,
 }: SolveScreenAnchoredTaskOptions) {
   if (!observation.imageBase64) return "";
 
@@ -443,7 +446,9 @@ export async function solveScreenAnchoredTask({
     onPartialReset,
     onTerminal: (outcome) => trace?.onTerminal?.(outcome),
   });
-  const trimmed = requireMeetingAIResponseCandidate(result).content.trim();
+  const candidate = requireMeetingAIResponseCandidate(result);
+  onCandidate?.(candidate);
+  const trimmed = candidate.content.trim();
 
   const output = trimmed === "-" ? "" : trimmed;
   trace?.onComplete?.(output);

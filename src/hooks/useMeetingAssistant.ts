@@ -54,6 +54,10 @@ import {
   AdvisorTaskMutationAuthority,
   AnswerArtifactSection,
   AnswerGenerationLease,
+  GenerationDerivedCommitCoordinator,
+  GenerationResultLedger,
+  MeetingAIResponseCandidate,
+  MeetingAIResponseOutcomeError,
   RuntimeTypeRepairOutputAuthority,
   AnswerDeliveryProgress,
   AdvisorResponseChallengeCoordinator,
@@ -65,6 +69,7 @@ import {
   AdvisorTurnIntentDecision,
   extractInterviewerIntentKeywordEvidence,
   formatInterviewerIntentKeywordEvidenceForTrace,
+  formatGenerationResultLedgerForTrace,
   formatSemanticInterviewerIntentForTrace,
   ActiveMeetingTask,
   ActiveQuestionTermCorrection,
@@ -219,7 +224,6 @@ import {
   isInterviewSessionBriefEmpty,
   normalizeInterviewBriefCompany,
   normalizeInterviewBriefCompanyLock,
-  extractScreenTaskQuestion,
   isShortConfirmationLike,
   buildMeetingAnswerSummary,
   buildModelGenerationIdentityForTrace,
@@ -709,6 +713,82 @@ const NO_MEETING_CONTEXT_MESSAGE =
 const NO_SUGGESTION_MESSAGE = "There is no suggestion to update yet.";
 const NO_ACTIVE_TASK_MESSAGE = "There is no active task to advance yet.";
 
+interface GenerationTaskRuntimeTransition {
+  expectedRevision: number;
+  transition: MeetingTaskRuntimeTransitionKind;
+  reason: string;
+  parent?: ActiveInterviewParent | null;
+  screenAttachment?: ActiveScreenTask | null;
+}
+
+interface PendingGenerationAnswerRevision extends PendingAnswerRevision {
+  resultTaskId: string | null;
+  taskRuntimeRevision: number;
+  taskRuntimeTransition?: GenerationTaskRuntimeTransition;
+}
+
+function prepareGenerationDerivedTaskRuntimeTransition(input: {
+  currentRevision: number;
+  currentParent?: ActiveInterviewParent;
+  currentScreenAttachment?: ActiveScreenTask;
+  transition?: GenerationTaskRuntimeTransition;
+  stable: StableAnswerRevision;
+  commitLatestUsefulAnswer: boolean;
+}): {
+  transition?: GenerationTaskRuntimeTransition;
+  latestUsefulAnswerCommitted: boolean;
+  latestUsefulAnswerChars: number;
+} {
+  if (!input.commitLatestUsefulAnswer) {
+    return {
+      transition: input.transition,
+      latestUsefulAnswerCommitted: false,
+      latestUsefulAnswerChars: 0,
+    };
+  }
+
+  const summary = input.stable.suggestion.meetingAnswer
+    ? buildMeetingAnswerSummary(
+        input.stable.suggestion.meetingAnswer
+      ).text.trim()
+    : "";
+  const transitionOwnsParent =
+    input.transition && input.transition.parent !== undefined;
+  const parent = transitionOwnsParent
+    ? input.transition?.parent ?? undefined
+    : input.currentParent;
+  const usefulAnswerCommit = commitVisibleUsefulAnswerToParent({
+    parent,
+    taskId: input.stable.taskId,
+    summary,
+    committedAt: input.stable.committedAt,
+  });
+  if (!usefulAnswerCommit.committed || !usefulAnswerCommit.parent) {
+    return {
+      transition: input.transition,
+      latestUsefulAnswerCommitted: false,
+      latestUsefulAnswerChars: 0,
+    };
+  }
+
+  return {
+    transition: input.transition
+      ? {
+          ...input.transition,
+          parent: usefulAnswerCommit.parent,
+        }
+      : {
+          expectedRevision: input.currentRevision,
+          transition: "update-parent-context",
+          reason: "generation-result-atomic-commit",
+          parent: usefulAnswerCommit.parent,
+          screenAttachment: input.currentScreenAttachment,
+        },
+    latestUsefulAnswerCommitted: true,
+    latestUsefulAnswerChars: summary.length,
+  };
+}
+
 function submitTaskRuntimeTransition(
   manager: MeetingContextManager,
   input: {
@@ -887,6 +967,7 @@ const INITIAL_STATE: MeetingAssistantState = {
     meSpokenWordEquivalent: 0,
     meAnswerTokenOverlap: 0,
   },
+  generationResult: { disposition: "none" },
   traces: [],
   error: null,
   audioStatus: null,
@@ -1131,7 +1212,7 @@ function buildManualInterviewTypeOverrideContent(
   task: ActiveScreenTask,
   correctedKind: ScreenTaskKind
 ) {
-  const question = task.question || extractScreenTaskQuestion(task.content);
+  const question = task.question;
   return [
     question ? `Question: ${question}` : undefined,
     `Manual interview type correction: treat this active task as ${formatScreenTaskKindLabel(
@@ -1165,7 +1246,7 @@ function applyManualQuestionTypeCorrectionToScreenTask({
     ...task,
     updatedAt: now,
     expiresAt,
-    question: task.question || extractScreenTaskQuestion(task.content),
+    question: task.question,
     kind: correctedType,
     classifier: {
       ...task.classifier,
@@ -2671,6 +2752,12 @@ export function useMeetingAssistant() {
   const responseActionRevisionRef = useRef(0);
   const visibleAnswerRevisionRef = useRef(0);
   const stableAnswerRevisionRef = useRef<StableAnswerRevision | null>(null);
+  const generationResultLedgerRef = useRef(new GenerationResultLedger());
+  const generationDerivedCommitCoordinatorRef = useRef(
+    new GenerationDerivedCommitCoordinator(
+      generationResultLedgerRef.current
+    )
+  );
   const advisorResponseFingerprintCacheRef = useRef(
     new AdvisorResponseFingerprintCache()
   );
@@ -2686,7 +2773,7 @@ export function useMeetingAssistant() {
   const answerDeliveryProgressRef =
     useRef<AnswerDeliveryProgress | null>(null);
   const pendingAnswerRevisionRef =
-    useRef<PendingAnswerRevision | null>(null);
+    useRef<PendingGenerationAnswerRevision | null>(null);
   const pendingAnswerCommitTimerRef = useRef<number | null>(null);
   const microphoneSpeakingRef = useRef(false);
   const screenOperationCoordinatorRef = useRef(
@@ -3461,7 +3548,8 @@ export function useMeetingAssistant() {
       options: {
         clearPrevious?: boolean;
         pendingDisposition?: string;
-        commitLatestUsefulAnswer?: boolean;
+        latestUsefulAnswerCommitted?: boolean;
+        latestUsefulAnswerChars?: number;
       } = {}
     ) => {
       clearPendingAnswerCommitTimer();
@@ -3494,44 +3582,21 @@ export function useMeetingAssistant() {
       }
       pendingAnswerRevisionRef.current = null;
       answerDeliveryProgressRef.current = null;
-      let activeContextState = contextManagerRef.current.getState();
-      if (options.commitLatestUsefulAnswer) {
-        const parent = activeContextState.taskRuntime.parent;
-        const summary = stable.suggestion.meetingAnswer
-          ? buildMeetingAnswerSummary(
-              stable.suggestion.meetingAnswer
-            ).text.trim()
-          : "";
-        const usefulAnswerCommit = commitVisibleUsefulAnswerToParent({
-          parent,
-          taskId: stable.taskId,
-          summary,
-          committedAt: stable.committedAt,
-        });
-        if (usefulAnswerCommit.committed && usefulAnswerCommit.parent) {
-          submitTaskRuntimeTransition(contextManagerRef.current, {
-            transition: "update-parent-context",
-            reason: "visible-useful-answer-committed",
-            parent: usefulAnswerCommit.parent,
-          });
-          activeContextState = contextManagerRef.current.getState();
-          if (stable.suggestion.sourceTraceId) {
-            traceStoreRef.current.updateMetadata(
-              stable.suggestion.sourceTraceId,
-              {
-                latestUsefulAnswerVisibleCommitAuthorized: true,
-                latestUsefulAnswerVisibleCommitRevision: stable.revision,
-                latestUsefulAnswerVisibleCommitChars: summary.length,
-              }
-            );
-            if (activeContextState.activeMeetingTask) {
-              sessionRecordingManagerRef.current?.recordActiveMeetingTaskSnapshot(
-                activeContextState.activeMeetingTask,
-                stable.suggestion.sourceTraceId
-              );
-            }
+      const activeContextState = contextManagerRef.current.getState();
+      if (
+        options.latestUsefulAnswerCommitted &&
+        stable.suggestion.sourceTraceId
+      ) {
+        traceStoreRef.current.updateMetadata(
+          stable.suggestion.sourceTraceId,
+          {
+            latestUsefulAnswerVisibleCommitAuthorized: true,
+            latestUsefulAnswerVisibleCommitAtomic: true,
+            latestUsefulAnswerVisibleCommitRevision: stable.revision,
+            latestUsefulAnswerVisibleCommitChars:
+              options.latestUsefulAnswerChars ?? 0,
           }
-        }
+        );
       }
       const activeMeetingTask = activeContextState.activeMeetingTask;
       const activeParent =
@@ -3589,7 +3654,9 @@ export function useMeetingAssistant() {
         generatedContinuitySourceTraceId:
           generatedContinuityCapsule?.sourceTraceId,
         latestUsefulAnswerVisibleCommitAuthorized:
-          options.commitLatestUsefulAnswer === true,
+          options.latestUsefulAnswerCommitted === true,
+        latestUsefulAnswerVisibleCommitAtomic:
+          options.latestUsefulAnswerCommitted === true,
       });
       scheduleAdvisorResponseConsistencyShadow({
         stable,
@@ -3600,6 +3667,71 @@ export function useMeetingAssistant() {
       clearPendingAnswerCommitTimer,
       scheduleAdvisorResponseConsistencyShadow,
     ]
+  );
+
+  const publishGenerationResultProjection = useCallback(
+    (lease: AnswerGenerationLease, traceId?: string) => {
+      const projection = generationResultLedgerRef.current.project({
+        sessionId: lease.sessionId,
+        runtimeEpoch: lease.runtimeEpoch,
+        logicalQuestionUnitId: lease.logicalQuestionUnitId,
+        logicalQuestionRevision: lease.logicalQuestionRevision,
+        visibleAnswerRevision: visibleAnswerRevisionRef.current,
+      });
+      const entry = generationResultLedgerRef.current.getEntry(lease.id);
+      setState((previous) => ({
+        ...previous,
+        generationResult: projection,
+      }));
+      if (traceId) {
+        traceStoreRef.current.updateMetadata(
+          traceId,
+          formatGenerationResultLedgerForTrace(entry, projection)
+        );
+      }
+      sessionRecordingManagerRef.current?.recordCaptureLifecycle({
+        stage: "generation-result-projected",
+        traceId,
+        taskId: lease.taskId,
+        ...formatGenerationResultLedgerForTrace(entry, projection),
+      });
+      return projection;
+    },
+    []
+  );
+
+  const readGenerationLeaseSnapshot = useCallback(
+    (input: {
+      lease: AnswerGenerationLease;
+      authorizedArtifacts: AnswerArtifactSection[];
+      logicalQuestionUnitId?: string | null;
+      logicalQuestionRevision?: number | null;
+    }) => {
+      const contextState = contextManagerRef.current.getState();
+      const parent = contextState.activeMeetingTask?.parent;
+      return {
+        sessionId: contextState.sessionId,
+        runtimeEpoch: runtimeEpochRef.current,
+        preparationContextRevision:
+          preparationRuntimeContextRef.current.preparationContextRevision,
+        taskId: parent?.id ?? null,
+        taskRevision: parent?.revisions ?? null,
+        logicalQuestionUnitId:
+          input.logicalQuestionUnitId ??
+          logicalQuestionUnitRef.current?.id ??
+          null,
+        logicalQuestionRevision:
+          input.logicalQuestionRevision ??
+          logicalQuestionUnitRef.current?.revision ??
+          null,
+        visibleAnswerRevision: visibleAnswerRevisionRef.current,
+        manualCorrectionRevision: manualCorrectionRevisionRef.current,
+        responseActionRevision: responseActionRevisionRef.current,
+        artifactOwnerId: parent?.id ?? null,
+        authorizedArtifacts: [...input.authorizedArtifacts],
+      };
+    },
+    []
   );
 
   const schedulePendingAnswerCommit = useCallback(
@@ -3733,7 +3865,7 @@ export function useMeetingAssistant() {
       current: previousStableAnswer,
       candidate: pending.suggestion,
       authorizedArtifacts: pending.authorizedArtifacts,
-      taskId: pending.taskId,
+      taskId: pending.resultTaskId,
       logicalQuestionUnitId: pending.logicalQuestionUnitId,
       logicalQuestionRevision: pending.logicalQuestionRevision,
       resetSections: pending.resetSections,
@@ -3741,6 +3873,20 @@ export function useMeetingAssistant() {
       committedAt: now,
     });
     if (!stable) {
+      generationResultLedgerRef.current.recordCandidateValidation({
+        lease: pending.lease,
+        disposition: "rejected",
+        reason: "candidate-invalid-at-release",
+      });
+      generationResultLedgerRef.current.recordCommitDisposition({
+        lease: pending.lease,
+        disposition: "rejected",
+        reason: "candidate-invalid-at-release",
+      });
+      publishGenerationResultProjection(
+        pending.lease,
+        pending.suggestion.sourceTraceId
+      );
       pendingAnswerRevisionRef.current = null;
       pending.disposition = "dropped";
       if (pending.suggestion.sourceTraceId) {
@@ -3795,6 +3941,79 @@ export function useMeetingAssistant() {
         traceId: pending.suggestion.sourceTraceId,
       });
       return "dropped" as const;
+    }
+
+    const pendingTaskRuntimeState =
+      contextManagerRef.current.getTaskRuntimeState();
+    const preparedPendingTransition =
+      prepareGenerationDerivedTaskRuntimeTransition({
+        currentRevision: pendingTaskRuntimeState.revision,
+        currentParent: pendingTaskRuntimeState.parent,
+        currentScreenAttachment:
+          pendingTaskRuntimeState.screenAttachment,
+        transition: pending.taskRuntimeTransition,
+        stable,
+        commitLatestUsefulAnswer:
+          pending.latestUsefulAnswerMutationAuthorized,
+      });
+    const generationCommit =
+      generationDerivedCommitCoordinatorRef.current.commit({
+        lease: pending.lease,
+        leaseAuthorization: authorizeAnswerGenerationLease(
+          pending.lease,
+          readGenerationLeaseSnapshot({
+            lease: pending.lease,
+            authorizedArtifacts: pending.authorizedArtifacts,
+          })
+        ),
+        expectedTaskRuntimeRevision: pending.taskRuntimeRevision,
+        currentTaskRuntimeRevision: pendingTaskRuntimeState.revision,
+        candidateAccepted: true,
+        visibleAnswerRevision: stable.revision,
+        now,
+        apply: () => {
+          if (preparedPendingTransition.transition) {
+            const transition = submitTaskRuntimeTransition(
+              contextManagerRef.current,
+              preparedPendingTransition.transition
+            );
+            if (!transition.authorized) {
+              throw new Error(
+                `Generation task transition rejected: ${transition.reason}`
+              );
+            }
+          }
+          publishStableAnswerRevision(stable, {
+            clearPrevious: pending.resetSections,
+            pendingDisposition: "committed",
+            latestUsefulAnswerCommitted:
+              preparedPendingTransition.latestUsefulAnswerCommitted,
+            latestUsefulAnswerChars:
+              preparedPendingTransition.latestUsefulAnswerChars,
+          });
+        },
+      });
+    publishGenerationResultProjection(
+      pending.lease,
+      pending.suggestion.sourceTraceId
+    );
+    if (!generationCommit.committed) {
+      pendingAnswerRevisionRef.current = null;
+      pending.disposition = "stale";
+      setState((previous) => ({
+        ...previous,
+        answerDelivery: toAnswerDeliveryPresentation({
+          visibleAnswerRevision: visibleAnswerRevisionRef.current,
+        }),
+      }));
+      transitionForceAdviseTarget({
+        logicalQuestionUnitId: pending.logicalQuestionUnitId,
+        logicalQuestionUnitRevision: pending.logicalQuestionRevision,
+        automaticExecutionState: "failed",
+        outcome: `generation-commit-rejected:${generationCommit.reason}`,
+        traceId: pending.suggestion.sourceTraceId,
+      });
+      return "stale" as const;
     }
 
     pending.disposition = "committed";
@@ -3862,12 +4081,6 @@ export function useMeetingAssistant() {
       }
       refreshRecordedCompletedTrace(pending.suggestion.sourceTraceId);
     }
-    publishStableAnswerRevision(stable, {
-      clearPrevious: pending.resetSections,
-      pendingDisposition: pending.disposition,
-      commitLatestUsefulAnswer:
-        pending.latestUsefulAnswerMutationAuthorized,
-    });
     transitionForceAdviseTarget({
       logicalQuestionUnitId: pending.logicalQuestionUnitId,
       logicalQuestionUnitRevision: pending.logicalQuestionRevision,
@@ -3879,6 +4092,8 @@ export function useMeetingAssistant() {
     return "committed" as const;
   }, [
     publishStableAnswerRevision,
+    publishGenerationResultProjection,
+    readGenerationLeaseSnapshot,
     recordQuestionTypeAdjudicationOutcome,
     refreshRecordedCompletedTrace,
     schedulePendingAnswerCommit,
@@ -3892,16 +4107,48 @@ export function useMeetingAssistant() {
       suggestion: AdvisorSuggestion;
       authorizedArtifacts: AnswerArtifactSection[];
       taskId: string | null;
+      resultTaskId: string | null;
       taskRevision: number | null;
       logicalQuestionUnitId: string | null;
       logicalQuestionRevision: number | null;
       resetSections: boolean;
       reason: string;
       latestUsefulAnswerMutationAuthorized: boolean;
+      taskRuntimeRevision: number;
+      taskRuntimeTransition?: PendingGenerationAnswerRevision["taskRuntimeTransition"];
       advisorJobId?: string;
       runtimeTypeRepairOutputAuthority?: RuntimeTypeRepairOutputAuthority;
     }) => {
       const now = Date.now();
+      generationResultLedgerRef.current.recordCandidateValidation({
+        lease: input.lease,
+        disposition: "accepted",
+        reason: "stable-answer-candidate-accepted",
+      });
+      const pendingLedgerEntry =
+        generationDerivedCommitCoordinatorRef.current.markPending({
+          lease: input.lease,
+          leaseAuthorization: authorizeAnswerGenerationLease(
+            input.lease,
+            readGenerationLeaseSnapshot({
+              lease: input.lease,
+              authorizedArtifacts: input.authorizedArtifacts,
+            })
+          ),
+          expectedTaskRuntimeRevision: input.taskRuntimeRevision,
+          currentTaskRuntimeRevision:
+            contextManagerRef.current.getTaskRuntimeState().revision,
+          candidateAccepted: true,
+          reason: input.reason,
+        });
+      publishGenerationResultProjection(
+        input.lease,
+        input.suggestion.sourceTraceId
+      );
+      if (pendingLedgerEntry.commitDisposition !== "pending") {
+        return null;
+      }
+
       const supersededPending = pendingAnswerRevisionRef.current;
       if (supersededPending) {
         supersededPending.disposition = "dropped";
@@ -3956,13 +4203,14 @@ export function useMeetingAssistant() {
           pendingAnswerReason: "superseded-by-newer-pending-answer",
         });
       }
-      const pending: PendingAnswerRevision = {
+      const pending: PendingGenerationAnswerRevision = {
         operationId: createMeetingId("pending_answer"),
         lease: input.lease,
         suggestion: input.suggestion,
         authorizedArtifacts: [...input.authorizedArtifacts],
         baseVisibleAnswerRevision: visibleAnswerRevisionRef.current,
         taskId: input.taskId,
+        resultTaskId: input.resultTaskId,
         taskRevision: input.taskRevision,
         logicalQuestionUnitId: input.logicalQuestionUnitId,
         logicalQuestionRevision: input.logicalQuestionRevision,
@@ -3978,6 +4226,8 @@ export function useMeetingAssistant() {
         advisorJobId: input.advisorJobId,
         runtimeTypeRepairOutputAuthority:
           input.runtimeTypeRepairOutputAuthority,
+        taskRuntimeRevision: input.taskRuntimeRevision,
+        taskRuntimeTransition: input.taskRuntimeTransition,
       };
       pendingAnswerRevisionRef.current = pending;
       transitionForceAdviseTarget({
@@ -4021,6 +4271,8 @@ export function useMeetingAssistant() {
     },
     [
       recordQuestionTypeAdjudicationOutcome,
+      publishGenerationResultProjection,
+      readGenerationLeaseSnapshot,
       refreshRecordedCompletedTrace,
       schedulePendingAnswerCommit,
       transitionForceAdviseTarget,
@@ -5206,6 +5458,7 @@ export function useMeetingAssistant() {
       latestForceAdviseTargetRef.current = undefined;
       clearPendingAnswerCommitTimer();
       stableAnswerRevisionRef.current = null;
+      generationResultLedgerRef.current.clear();
       recentAdvisorContinuityRef.current = [];
       answerDeliveryProgressRef.current = null;
       pendingAnswerRevisionRef.current = null;
@@ -5251,6 +5504,7 @@ export function useMeetingAssistant() {
         latestSuggestion: null,
         latestReliableSuggestion: null,
         partialSuggestion: "",
+        generationResult: { disposition: "none" },
         answerDelivery: toAnswerDeliveryPresentation({
           visibleAnswerRevision: 0,
         }),
@@ -7615,6 +7869,7 @@ export function useMeetingAssistant() {
         answerDelivery: toAnswerDeliveryPresentation({
           visibleAnswerRevision: visibleAnswerRevisionRef.current,
         }),
+        generationResult: { disposition: "none" },
         error: null,
         audioStatus,
         nativeAudioManualRecovery: undefined,
@@ -10027,7 +10282,6 @@ export function useMeetingAssistant() {
           advisorQuestionSemanticEvidenceText,
           promptContext.latestTurn?.text,
         ],
-        codeFenceContent: promptContext.taskRuntime.screenAttachment?.content,
         activeTaskLanguage: promptContext.taskRuntime.screenAttachment?.language,
         preparationLanguage:
           preparationRuntimeReinforcement.programmingLanguage?.value,
@@ -10186,6 +10440,11 @@ export function useMeetingAssistant() {
       artifactOwnerId: generationParent?.id ?? null,
       requestedArtifacts: generationAuthorizedArtifacts,
     });
+    generationResultLedgerRef.current.begin({
+      lease: answerGenerationLease,
+      traceId,
+    });
+    publishGenerationResultProjection(answerGenerationLease, traceId);
     const leaseStartLogicalQuestion =
       readLogicalQuestionAuthorizationTarget().logicalQuestionUnit;
     const leaseStartAuthorization = authorizeAnswerGenerationLease(
@@ -10863,6 +11122,9 @@ export function useMeetingAssistant() {
     }
 
     let finalContent = "";
+    let advisorResponseCandidate:
+      | Readonly<MeetingAIResponseCandidate>
+      | undefined;
     let advisorModelPromptText = "";
     let advisorModelRequestStartedAt: number | undefined;
     let advisorModelFirstContentAt: number | undefined;
@@ -11144,6 +11406,13 @@ export function useMeetingAssistant() {
           continue;
         }
         if (event.type === "candidate") {
+          advisorResponseCandidate = event.candidate;
+          for (const outcome of event.candidate.attempts) {
+            generationResultLedgerRef.current.recordProviderAttempt(
+              answerGenerationLease,
+              outcome
+            );
+          }
           finalContent = event.candidate.content;
           continue;
         }
@@ -11728,39 +11997,27 @@ export function useMeetingAssistant() {
         }
       }
 
-      if (
+      const advisorGenerationRuntimeTransition =
         taskMutationAuthorization.authorized &&
         !responseMutationSuppressed
-      ) {
-        if (
-          !taskBoundaryCommittedBeforeAdvisor &&
-          !sourceOwnedTransitionCommittedBeforeAdvisor &&
-          !manualPhaseAdvanceCommitted
-        ) {
-          recordCommittedPlaybookPhaseTransition({
-            operationId: `phase-auto-${advisorJob.id}`,
-            source: "automatic",
-            before: existingInterviewTask,
-            after: continuity.task,
-            traceId,
-          });
-        }
-        const runtimeTransition = classifyCommittedTaskRuntimeTransition({
-          beforeParent: existingInterviewTask,
-          afterParent: continuity.task,
-          beforeScreen: promptContext.taskRuntime.screenAttachment,
-          afterScreen: nextActiveScreenTask,
-        });
-        if (runtimeTransition) {
-          submitTaskRuntimeTransition(contextManagerRef.current, {
-            transition: runtimeTransition,
-            reason: "advisor-answer-continuity-committed",
-            screenAttachment: nextActiveScreenTask,
-            parent: continuity.task ?? null,
-          });
-        }
-      }
-      contextState = contextManagerRef.current.getState();
+          ? classifyCommittedTaskRuntimeTransition({
+              beforeParent: existingInterviewTask,
+              afterParent: continuity.task,
+              beforeScreen:
+                promptContext.taskRuntime.screenAttachment,
+              afterScreen: nextActiveScreenTask,
+            })
+          : undefined;
+      const advisorGenerationTaskRuntimeTransition =
+        advisorGenerationRuntimeTransition
+          ? {
+              expectedRevision: contextState.taskRuntime.revision,
+              transition: advisorGenerationRuntimeTransition,
+              reason: "advisor-answer-continuity-committed",
+              screenAttachment: nextActiveScreenTask,
+              parent: continuity.task ?? null,
+            }
+          : undefined;
       const transientPersonalStatusCommitMetadata =
         transientPersonalStatusDecision
           ? {
@@ -11871,16 +12128,18 @@ export function useMeetingAssistant() {
         }
       }
 
-      if (traceId && contextState.activeMeetingTask) {
-        sessionRecordingManagerRef.current?.recordActiveMeetingTaskSnapshot(
-          contextState.activeMeetingTask,
-          traceId
-        );
-      }
-
       const latestObservationIds = contextState.screenObservations.map(
         (observation) => observation.id
       );
+      const generatedTaskMetadata = continuity.task
+        ? {
+            taskId: continuity.task.id,
+            parentTaskId: continuity.task.id,
+            childTaskId: continuity.task.child?.id,
+            taskSource: continuity.task.source,
+            questionType: continuity.task.stableKind,
+          }
+        : buildSuggestionTaskMetadata(contextState.activeMeetingTask);
 
       const nextSuggestion = {
         ...advisorEngineRef.current.toSuggestion(
@@ -11888,7 +12147,7 @@ export function useMeetingAssistant() {
           finalContent,
           latestTurn ? [latestTurn.id] : [],
           latestObservationIds,
-          buildSuggestionTaskMetadata(contextState.activeMeetingTask),
+          generatedTaskMetadata,
           parsedMeetingAnswer
         ),
         questionType: responseOwner.questionType,
@@ -11913,20 +12172,12 @@ export function useMeetingAssistant() {
         nextSuggestion.kind === "silent"
           ? undefined
           : attachQuestionLineageToSuggestion(
-              contextState.activeMeetingTask
+              continuity.task || contextState.activeMeetingTask
                 ? promoteQuestionLineage(questionLineage)
                 : questionLineage,
               nextSuggestion
             );
       nextSuggestion.questionLineage = committedQuestionLineage;
-      if (
-        committedQuestionLineage &&
-        adjacentQuestionScopeRef.current?.lineage.questionInstanceId ===
-          committedQuestionLineage.questionInstanceId
-      ) {
-        adjacentQuestionScopeRef.current = null;
-      }
-      currentQuestionLineageRef.current = committedQuestionLineage;
       if (traceId) {
         traceStoreRef.current.updateMetadata(
           traceId,
@@ -11952,13 +12203,16 @@ export function useMeetingAssistant() {
         refreshAuthority: advisorJob.refreshAuthority,
         deliveryLockActive,
       });
-      const nextStableAnswer =
+      const candidateStableAnswer =
         stableAnswerCommitDecision.disposition === "committed"
           ? commitStableAnswerRevision({
               current: previousStableAnswer,
               candidate: nextSuggestion,
               authorizedArtifacts: generationAuthorizedArtifacts,
-              taskId: contextState.activeMeetingTask?.parent.id ?? null,
+              taskId:
+                continuity.task?.id ??
+                contextState.activeMeetingTask?.parent.id ??
+                null,
               logicalQuestionUnitId:
                 advisorJob.logicalQuestionUnit?.id ?? null,
               logicalQuestionRevision:
@@ -11975,6 +12229,10 @@ export function useMeetingAssistant() {
               suggestion: nextSuggestion,
               authorizedArtifacts: generationAuthorizedArtifacts,
               taskId: contextState.activeMeetingTask?.parent.id ?? null,
+              resultTaskId:
+                continuity.task?.id ??
+                contextState.activeMeetingTask?.parent.id ??
+                null,
               taskRevision:
                 contextState.activeMeetingTask?.parent.revisions ?? null,
               logicalQuestionUnitId:
@@ -11986,11 +12244,149 @@ export function useMeetingAssistant() {
               latestUsefulAnswerMutationAuthorized:
                 settledArtifactAuthorization.allowLatestUsefulAnswer &&
                 shouldCommitAdvisorParent,
+              taskRuntimeRevision: contextState.taskRuntime.revision,
+              taskRuntimeTransition:
+                advisorGenerationTaskRuntimeTransition,
               advisorJobId: advisorJob.id,
               runtimeTypeRepairOutputAuthority:
                 advisorJob.runtimeTypeRepairOutputAuthority,
             })
           : null;
+      let nextStableAnswer: StableAnswerRevision | null = null;
+      if (candidateStableAnswer && answerGenerationLease) {
+        generationResultLedgerRef.current.recordCandidateValidation({
+          lease: answerGenerationLease,
+          disposition: "accepted",
+          reason: "unified-answer-candidate-accepted",
+        });
+        const advisorCommitTaskRuntimeState =
+          contextManagerRef.current.getTaskRuntimeState();
+        const preparedAdvisorTransition =
+          prepareGenerationDerivedTaskRuntimeTransition({
+            currentRevision: advisorCommitTaskRuntimeState.revision,
+            currentParent: advisorCommitTaskRuntimeState.parent,
+            currentScreenAttachment:
+              advisorCommitTaskRuntimeState.screenAttachment,
+            transition: advisorGenerationTaskRuntimeTransition,
+            stable: candidateStableAnswer,
+            commitLatestUsefulAnswer:
+              settledArtifactAuthorization.allowLatestUsefulAnswer &&
+              shouldCommitAdvisorParent,
+          });
+        const generationCommit =
+          generationDerivedCommitCoordinatorRef.current.commit({
+            lease: answerGenerationLease,
+            leaseAuthorization: authorizeAnswerGenerationLease(
+              answerGenerationLease,
+              readGenerationLeaseSnapshot({
+                lease: answerGenerationLease,
+                authorizedArtifacts: generationAuthorizedArtifacts,
+              })
+            ),
+            expectedTaskRuntimeRevision:
+              contextState.taskRuntime.revision,
+            currentTaskRuntimeRevision:
+              advisorCommitTaskRuntimeState.revision,
+            candidateAccepted: Boolean(advisorResponseCandidate),
+            visibleAnswerRevision: candidateStableAnswer.revision,
+            apply: () => {
+              if (preparedAdvisorTransition.transition) {
+                const transition = submitTaskRuntimeTransition(
+                  contextManagerRef.current,
+                  preparedAdvisorTransition.transition
+                );
+                if (!transition.authorized) {
+                  throw new Error(
+                    `Generation task transition rejected: ${transition.reason}`
+                  );
+                }
+              }
+              if (
+                !taskBoundaryCommittedBeforeAdvisor &&
+                !sourceOwnedTransitionCommittedBeforeAdvisor &&
+                !manualPhaseAdvanceCommitted
+              ) {
+                recordCommittedPlaybookPhaseTransition({
+                  operationId: `phase-auto-${advisorJob.id}`,
+                  source: "automatic",
+                  before: existingInterviewTask,
+                  after: continuity.task,
+                  traceId,
+                });
+              }
+              contextState = contextManagerRef.current.getState();
+              if (
+                committedQuestionLineage &&
+                adjacentQuestionScopeRef.current?.lineage
+                  .questionInstanceId ===
+                  committedQuestionLineage.questionInstanceId
+              ) {
+                adjacentQuestionScopeRef.current = null;
+              }
+              currentQuestionLineageRef.current = committedQuestionLineage;
+              setState((previous) => ({
+                ...previous,
+                status: activeRef.current
+                  ? "listening"
+                  : returnStatus === "paused"
+                    ? "paused"
+                    : "idle",
+                partialSuggestion: "",
+                interviewSessionContext:
+                  contextState.interviewSessionContext,
+                taskRuntime: contextState.taskRuntime,
+                activeMeetingTask: contextState.activeMeetingTask,
+                currentQuestionLineage: committedQuestionLineage,
+              }));
+              publishStableAnswerRevision(candidateStableAnswer, {
+                clearPrevious: resetVisibleSections,
+                latestUsefulAnswerCommitted:
+                  preparedAdvisorTransition.latestUsefulAnswerCommitted,
+                latestUsefulAnswerChars:
+                  preparedAdvisorTransition.latestUsefulAnswerChars,
+              });
+            },
+          });
+        if (generationCommit.committed) {
+          nextStableAnswer = candidateStableAnswer;
+          contextState = contextManagerRef.current.getState();
+          if (traceId && contextState.activeMeetingTask) {
+            traceStoreRef.current.updateMetadata(traceId, {
+              ...getActiveMeetingTaskTraceMetadata(
+                contextState.activeMeetingTask
+              ),
+              generatedScreenContinuityConsumedAsSourceEvidence: false,
+            });
+            sessionRecordingManagerRef.current?.recordActiveMeetingTaskSnapshot(
+              contextState.activeMeetingTask,
+              traceId
+            );
+          }
+        }
+        publishGenerationResultProjection(answerGenerationLease, traceId);
+      } else if (
+        !pendingAnswer &&
+        answerGenerationLease &&
+        stableAnswerCommitDecision.disposition !== "pending"
+      ) {
+        generationResultLedgerRef.current.recordCandidateValidation({
+          lease: answerGenerationLease,
+          disposition: "rejected",
+          reason:
+            stableAnswerCommitDecision.reason === "authorized"
+              ? "stable-answer-candidate-invalid"
+              : stableAnswerCommitDecision.reason,
+        });
+        generationResultLedgerRef.current.recordCommitDisposition({
+          lease: answerGenerationLease,
+          disposition: "rejected",
+          reason:
+            stableAnswerCommitDecision.reason === "authorized"
+              ? "stable-answer-candidate-invalid"
+              : stableAnswerCommitDecision.reason,
+        });
+        publishGenerationResultProjection(answerGenerationLease, traceId);
+      }
       const committedVisibleAnswer = Boolean(nextStableAnswer);
       const visibleAnswerRevisionAfter =
         nextStableAnswer?.revision ?? visibleAnswerRevisionBefore;
@@ -12048,26 +12444,16 @@ export function useMeetingAssistant() {
             advisorAnswerSufficiencyDecision,
         });
       }
-      setState((previous) => ({
-        ...previous,
-        status: activeRef.current
-          ? "listening"
-          : returnStatus === "paused"
-            ? "paused"
-            : "idle",
-        partialSuggestion: "",
-        interviewSessionContext: contextState.interviewSessionContext,
-        taskRuntime: contextState.taskRuntime,
-        activeMeetingTask: contextState.activeMeetingTask,
-        currentQuestionLineage: committedQuestionLineage,
-      }));
-      if (nextStableAnswer) {
-        publishStableAnswerRevision(nextStableAnswer, {
-          clearPrevious: resetVisibleSections,
-          commitLatestUsefulAnswer:
-            settledArtifactAuthorization.allowLatestUsefulAnswer &&
-            shouldCommitAdvisorParent,
-        });
+      if (!nextStableAnswer) {
+        setState((previous) => ({
+          ...previous,
+          status: activeRef.current
+            ? "listening"
+            : returnStatus === "paused"
+              ? "paused"
+              : "idle",
+          partialSuggestion: "",
+        }));
       }
       const stableAnswerCommitMetadata =
         formatStableAnswerCommitForTrace({
@@ -12221,6 +12607,28 @@ export function useMeetingAssistant() {
         traceStoreRef.current.finishTrace(traceId, "success");
       }
     } catch (error) {
+      if (answerGenerationLease) {
+        if (error instanceof MeetingAIResponseOutcomeError) {
+          for (const outcome of error.attempts) {
+            generationResultLedgerRef.current.recordProviderAttempt(
+              answerGenerationLease,
+              outcome
+            );
+          }
+        }
+        generationResultLedgerRef.current.recordCommitDisposition({
+          lease: answerGenerationLease,
+          disposition: "failed",
+          reason:
+            error instanceof Error && error.name === "AbortError"
+              ? "provider-request-aborted"
+              : "advisor-execution-error",
+        });
+        publishGenerationResultProjection(
+          answerGenerationLease,
+          traceId
+        );
+      }
       rollbackStagedAnswerDelivery(
         error instanceof Error && error.name === "AbortError"
           ? "provider-request-aborted"
@@ -20388,6 +20796,17 @@ export function useMeetingAssistant() {
       let modelStepId: string | undefined;
       let screenModelPromptText = "";
       let screenGenerationLease: AnswerGenerationLease | undefined;
+      let screenResponseCandidate:
+        | Readonly<MeetingAIResponseCandidate>
+        | undefined;
+      let screenGenerationTaskRuntimeRevision: number | undefined;
+      let screenGenerationTaskRuntimeTransition:
+        | PendingGenerationAnswerRevision["taskRuntimeTransition"]
+        | undefined;
+      let screenGenerationContinuityTask:
+        | ActiveInterviewParent
+        | undefined;
+      let screenCandidateStartedNewParent = false;
       let screenGenerationRequestedArtifacts:
         AnswerArtifactSection[] = [];
       let screenPresentationAuthorizedArtifacts:
@@ -22102,6 +22521,8 @@ export function useMeetingAssistant() {
         );
         const screenGenerationContext =
           contextManagerRef.current.getState();
+        screenGenerationTaskRuntimeRevision =
+          screenGenerationContext.taskRuntime.revision;
         const screenGenerationParent =
           screenGenerationContext.activeMeetingTask?.parent;
         screenGenerationLease = createAnswerGenerationLease({
@@ -22132,6 +22553,14 @@ export function useMeetingAssistant() {
           requestedArtifacts:
             screenGenerationRequestedArtifacts,
         });
+        generationResultLedgerRef.current.begin({
+          lease: screenGenerationLease,
+          traceId: trace.id,
+        });
+        publishGenerationResultProjection(
+          screenGenerationLease,
+          trace.id
+        );
         const screenLeaseStartAuthorization =
           authorizeAnswerGenerationLease(screenGenerationLease, {
             sessionId: screenGenerationContext.sessionId,
@@ -22433,6 +22862,15 @@ export function useMeetingAssistant() {
                   });
                 }
               },
+            },
+            onCandidate: (candidate) => {
+              screenResponseCandidate = candidate;
+              for (const outcome of candidate.attempts) {
+                generationResultLedgerRef.current.recordProviderAttempt(
+                  screenGenerationLease!,
+                  outcome
+                );
+              }
             },
             onPartialReset: () => {
               clearScreenStagedPartial("provider-attempt-reset");
@@ -22780,7 +23218,6 @@ export function useMeetingAssistant() {
         screenAnalysisAbortRef.current = null;
 
         contextManagerRef.current.updateScreenObservation(observation.id, {
-          visualSummary: committedScreenTaskContent,
           analysisPromptSource: autoPrompt
             ? "screenshot-auto-prompt"
             : "meeting-default",
@@ -22847,7 +23284,6 @@ export function useMeetingAssistant() {
           const screenLanguage = inferTrustedProgrammingLanguage({
             screenPreflightLanguage: screenPreflight?.programmingLanguage,
             textHints: [screenPreflight?.question, recentTranscript],
-            codeFenceContent: committedScreenTaskContent,
             preparationLanguage:
               screenPreparationRuntime.programmingLanguage?.value,
           });
@@ -23070,6 +23506,9 @@ export function useMeetingAssistant() {
               ? "revise-whiteboard"
               : "preserve",
           });
+          screenGenerationContinuityTask = screenContinuity.task;
+          screenCandidateStartedNewParent =
+            screenContinuity.startedNewParent;
           const previousWhiteboard =
             existingInterviewTask?.whiteboardArtifact;
           const nextWhiteboard = screenContinuity.task?.whiteboardArtifact;
@@ -23123,18 +23562,6 @@ export function useMeetingAssistant() {
               }
             );
           }
-          if (
-            !screenResponseOnlyTaskScope &&
-            !screenSourceTransitionCommittedBeforeModel
-          ) {
-            recordCommittedPlaybookPhaseTransition({
-              operationId: `phase-screen-${trace.id}`,
-              source: "automatic",
-              before: existingInterviewTask,
-              after: screenContinuity.task,
-              traceId: trace.id,
-            });
-          }
           if (!screenResponseOnlyTaskScope) {
             const runtimeTransition =
               classifyCommittedTaskRuntimeTransition({
@@ -23144,18 +23571,16 @@ export function useMeetingAssistant() {
                 afterScreen: activeScreenTask,
               });
             if (runtimeTransition) {
-              submitTaskRuntimeTransition(contextManagerRef.current, {
+              screenGenerationTaskRuntimeTransition = {
+                expectedRevision:
+                  updatedContextState.taskRuntime.revision,
                 transition: runtimeTransition,
                 reason: "screen-answer-continuity-committed",
                 screenAttachment: activeScreenTask,
                 parent: screenContinuity.task ?? null,
-              });
+              };
             }
           }
-          screenStartedNewInterviewParent =
-            screenStartedNewInterviewParent ||
-            screenContinuity.startedNewParent;
-          screenTaskResultCommitted = !screenResponseOnlyTaskScope;
           traceStoreRef.current.updateMetadata(trace.id, {
             activeInterviewParentId: screenContinuity.task?.id,
             activeInterviewParentKind: screenContinuity.task?.stableKind,
@@ -23227,6 +23652,20 @@ export function useMeetingAssistant() {
           }
         );
 
+        const screenGeneratedTaskMetadata =
+          screenGenerationContinuityTask
+            ? {
+                taskId: screenGenerationContinuityTask.id,
+                parentTaskId: screenGenerationContinuityTask.id,
+                childTaskId:
+                  screenGenerationContinuityTask.child?.id,
+                taskSource: screenGenerationContinuityTask.source,
+                questionType:
+                  screenGenerationContinuityTask.stableKind,
+              }
+            : buildSuggestionTaskMetadata(
+                updatedContextState.activeMeetingTask
+              );
         const nextSuggestion: AdvisorSuggestion =
           committedScreenTaskContent.trim()
           ? {
@@ -23237,10 +23676,9 @@ export function useMeetingAssistant() {
               meetingAnswer: parsedScreenMeetingAnswer,
               answerProfile: parsedScreenMeetingAnswer.profile,
               createdAt: Date.now(),
-              ...(screenTaskContextCommitted
-                ? buildSuggestionTaskMetadata(
-                    updatedContextState.activeMeetingTask
-                  )
+              ...(screenTaskContextCommitted ||
+              screenGenerationContinuityTask
+                ? screenGeneratedTaskMetadata
                 : {}),
               questionType: settledScreenTaskKind,
               basedOnTurnIds,
@@ -23260,10 +23698,9 @@ export function useMeetingAssistant() {
               kind: "silent",
               content: "",
               createdAt: Date.now(),
-              ...(screenTaskContextCommitted
-                ? buildSuggestionTaskMetadata(
-                    updatedContextState.activeMeetingTask
-                  )
+              ...(screenTaskContextCommitted ||
+              screenGenerationContinuityTask
+                ? screenGeneratedTaskMetadata
                 : {}),
               questionType: settledScreenTaskKind,
               basedOnTurnIds,
@@ -23312,10 +23749,11 @@ export function useMeetingAssistant() {
           deliveryLockActive: false,
         });
         const screenCommitTaskId =
+          screenGenerationContinuityTask?.id ??
           updatedContextState.activeMeetingTask?.parent.id ??
           previousStableAnswer?.taskId ??
           null;
-        const nextStableAnswer =
+        const candidateStableAnswer =
           screenStableCommitDecision.disposition === "committed"
             ? commitStableAnswerRevision({
                 current: previousStableAnswer,
@@ -23326,10 +23764,158 @@ export function useMeetingAssistant() {
                   screenGenerationLease?.logicalQuestionUnitId ?? null,
                 logicalQuestionRevision:
                   screenGenerationLease?.logicalQuestionRevision ?? null,
-                resetSections: screenStartedNewInterviewParent,
+                resetSections:
+                  screenStartedNewInterviewParent ||
+                  screenCandidateStartedNewParent,
                 revision: visibleAnswerRevisionBefore + 1,
               })
             : null;
+        let nextStableAnswer: StableAnswerRevision | null = null;
+        if (
+          candidateStableAnswer &&
+          screenGenerationLease &&
+          screenGenerationTaskRuntimeRevision !== undefined
+        ) {
+          generationResultLedgerRef.current.recordCandidateValidation({
+            lease: screenGenerationLease,
+            disposition: "accepted",
+            reason: "unified-answer-candidate-accepted",
+          });
+          const screenCommitTaskRuntimeState =
+            contextManagerRef.current.getTaskRuntimeState();
+          const preparedScreenTransition =
+            prepareGenerationDerivedTaskRuntimeTransition({
+              currentRevision: screenCommitTaskRuntimeState.revision,
+              currentParent: screenCommitTaskRuntimeState.parent,
+              currentScreenAttachment:
+                screenCommitTaskRuntimeState.screenAttachment,
+              transition: screenGenerationTaskRuntimeTransition,
+              stable: candidateStableAnswer,
+              commitLatestUsefulAnswer:
+                screenLatestUsefulAnswerMutationAuthorized,
+            });
+          const generationCommit =
+            generationDerivedCommitCoordinatorRef.current.commit({
+              lease: screenGenerationLease,
+              leaseAuthorization: authorizeAnswerGenerationLease(
+                screenGenerationLease,
+                readGenerationLeaseSnapshot({
+                  lease: screenGenerationLease,
+                  authorizedArtifacts:
+                    screenPresentationAuthorizedArtifacts,
+                  logicalQuestionUnitId:
+                    screenGenerationLease.logicalQuestionUnitId,
+                  logicalQuestionRevision:
+                    screenGenerationLease.logicalQuestionRevision,
+                })
+              ),
+              expectedTaskRuntimeRevision:
+                screenGenerationTaskRuntimeRevision,
+              currentTaskRuntimeRevision:
+                screenCommitTaskRuntimeState.revision,
+              candidateAccepted: Boolean(screenResponseCandidate),
+              visibleAnswerRevision: candidateStableAnswer.revision,
+              apply: () => {
+                if (preparedScreenTransition.transition) {
+                  const transition = submitTaskRuntimeTransition(
+                    contextManagerRef.current,
+                    preparedScreenTransition.transition
+                  );
+                  if (!transition.authorized) {
+                    throw new Error(
+                      `Generation task transition rejected: ${transition.reason}`
+                    );
+                  }
+                  screenTaskResultCommitted = true;
+                }
+                if (
+                  !screenResponseOnlyTaskScope &&
+                  !screenSourceTransitionCommittedBeforeModel
+                ) {
+                  recordCommittedPlaybookPhaseTransition({
+                    operationId: `phase-screen-${trace.id}`,
+                    source: "automatic",
+                    before: screenScopePreviousState.taskRuntime.parent,
+                    after: screenGenerationContinuityTask,
+                    traceId: trace.id,
+                  });
+                }
+                screenStartedNewInterviewParent =
+                  screenStartedNewInterviewParent ||
+                  screenCandidateStartedNewParent;
+                updatedContextState =
+                  contextManagerRef.current.getState();
+                currentQuestionLineageRef.current =
+                  screenQuestionLineage;
+                setState((previous) => ({
+                  ...previous,
+                  status: activeRef.current
+                    ? "listening"
+                    : idleReturnStatus,
+                  partialSuggestion: "",
+                  screenObservations:
+                    updatedContextState.screenObservations,
+                  taskRuntime: updatedContextState.taskRuntime,
+                  activeMeetingTask:
+                    updatedContextState.activeMeetingTask,
+                  currentQuestionLineage: screenQuestionLineage,
+                  interviewSessionContext:
+                    updatedContextState.interviewSessionContext,
+                  error: null,
+                }));
+                publishStableAnswerRevision(candidateStableAnswer, {
+                  clearPrevious: screenStartedNewInterviewParent,
+                  latestUsefulAnswerCommitted:
+                    preparedScreenTransition.latestUsefulAnswerCommitted,
+                  latestUsefulAnswerChars:
+                    preparedScreenTransition.latestUsefulAnswerChars,
+                });
+              },
+            });
+          if (generationCommit.committed) {
+            nextStableAnswer = candidateStableAnswer;
+            updatedContextState =
+              contextManagerRef.current.getState();
+            traceStoreRef.current.updateMetadata(trace.id, {
+              ...getActiveMeetingTaskTraceMetadata(
+                updatedContextState.activeMeetingTask
+              ),
+              screenTaskResultCommitted: true,
+              generatedScreenContinuityConsumedAsSourceEvidence: false,
+            });
+            if (updatedContextState.activeMeetingTask) {
+              sessionRecordingManagerRef.current?.recordActiveMeetingTaskSnapshot(
+                updatedContextState.activeMeetingTask,
+                trace.id
+              );
+            }
+          }
+          publishGenerationResultProjection(
+            screenGenerationLease,
+            trace.id
+          );
+        } else if (screenGenerationLease) {
+          generationResultLedgerRef.current.recordCandidateValidation({
+            lease: screenGenerationLease,
+            disposition: "rejected",
+            reason:
+              screenStableCommitDecision.reason === "authorized"
+                ? "stable-answer-candidate-invalid"
+                : screenStableCommitDecision.reason,
+          });
+          generationResultLedgerRef.current.recordCommitDisposition({
+            lease: screenGenerationLease,
+            disposition: "rejected",
+            reason:
+              screenStableCommitDecision.reason === "authorized"
+                ? "stable-answer-candidate-invalid"
+                : screenStableCommitDecision.reason,
+          });
+          publishGenerationResultProjection(
+            screenGenerationLease,
+            trace.id
+          );
+        }
         const screenVisibleAnswerCommitted = Boolean(nextStableAnswer);
         if (
           nextStableAnswer &&
@@ -23427,23 +24013,15 @@ export function useMeetingAssistant() {
             }
           );
         }
-        setState((previous) => ({
-          ...previous,
-          status: activeRef.current ? "listening" : idleReturnStatus,
-          partialSuggestion: "",
-          screenObservations: updatedContextState.screenObservations,
-          taskRuntime: updatedContextState.taskRuntime,
-          activeMeetingTask: updatedContextState.activeMeetingTask,
-          currentQuestionLineage: screenQuestionLineage,
-          interviewSessionContext: updatedContextState.interviewSessionContext,
-          error: null,
-        }));
-        if (nextStableAnswer) {
-          publishStableAnswerRevision(nextStableAnswer, {
-            clearPrevious: screenStartedNewInterviewParent,
-            commitLatestUsefulAnswer:
-              screenLatestUsefulAnswerMutationAuthorized,
-          });
+        if (!nextStableAnswer) {
+          setState((previous) => ({
+            ...previous,
+            status: activeRef.current
+              ? "listening"
+              : idleReturnStatus,
+            partialSuggestion: "",
+            error: null,
+          }));
         }
         const screenStableCommitMetadata =
           formatStableAnswerCommitForTrace({
@@ -23520,6 +24098,28 @@ export function useMeetingAssistant() {
         traceStoreRef.current.finishStep(trace.id, uiStepId, "success");
         traceStoreRef.current.finishTrace(trace.id, "success");
       } catch (error) {
+        if (screenGenerationLease) {
+          if (error instanceof MeetingAIResponseOutcomeError) {
+            for (const outcome of error.attempts) {
+              generationResultLedgerRef.current.recordProviderAttempt(
+                screenGenerationLease,
+                outcome
+              );
+            }
+          }
+          generationResultLedgerRef.current.recordCommitDisposition({
+            lease: screenGenerationLease,
+            disposition: "failed",
+            reason:
+              error instanceof Error && error.name === "AbortError"
+                ? "provider-request-aborted"
+                : "screen-execution-error",
+          });
+          publishGenerationResultProjection(
+            screenGenerationLease,
+            trace.id
+          );
+        }
         analysisController?.abort();
         const ownsCurrentScreenOperation =
           screenAnalysisAbortRef.current === analysisController;
@@ -24434,15 +25034,6 @@ export function useMeetingAssistant() {
               parent: correctedParent,
             });
           }
-        }
-        if (isolatedCorrectedScreenTask?.content) {
-          contextManagerRef.current.updateScreenObservation(
-            isolatedCorrectedScreenTask.observationId,
-            {
-              visualSummary: isolatedCorrectedScreenTask.content,
-              analysisPromptSource: "meeting-default",
-            }
-          );
         }
         const correctedContextState = contextManagerRef.current.getState();
         const correctedActiveTask = correctedContextState.activeMeetingTask;
@@ -29441,7 +30032,7 @@ function buildInterviewParentFromScreenTask(
     parentTaskId: task.id,
     parentQuestionType: kind,
     parentTopic:
-      task.question || extractScreenTaskQuestion(task.content) || "Screen task",
+      task.question || "Screen task",
     finalContent: task.content,
     phase: task.playbook?.phase ?? "follow_up",
     selectedOverlayIds: [],
@@ -29453,7 +30044,7 @@ function buildInterviewParentFromScreenTask(
     id: task.id,
     source: "screen",
     stableKind: kind,
-    topic: task.question || extractScreenTaskQuestion(task.content) || "Screen task",
+    topic: task.question || "Screen task",
     playbook: task.playbook,
     playbookPhase: task.playbook?.phase ?? "follow_up",
     phaseProgress: createInitialPlaybookPhaseProgress(

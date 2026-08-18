@@ -12,6 +12,7 @@ export type MeetingAIResponseProviderDisposition =
 export interface MeetingAIResponseCandidate {
   readonly content: string;
   readonly outcome: Readonly<AIResponseTerminalOutcome>;
+  readonly attempts: readonly Readonly<AIResponseTerminalOutcome>[];
 }
 
 export type MeetingAIResponseCollectionResult =
@@ -23,6 +24,7 @@ export type MeetingAIResponseCollectionResult =
   | {
       readonly accepted: false;
       readonly outcome: Readonly<AIResponseTerminalOutcome>;
+      readonly attempts: readonly Readonly<AIResponseTerminalOutcome>[];
       readonly providerDisposition: Exclude<
         MeetingAIResponseProviderDisposition,
         "completed-with-content"
@@ -40,6 +42,7 @@ export async function collectMeetingAIResponseCandidate(input: {
   const attemptContent = new Map<string, string>();
   let firstContentSeen = false;
   let finalOutcome: Readonly<AIResponseTerminalOutcome> | undefined;
+  const terminalOutcomes: Readonly<AIResponseTerminalOutcome>[] = [];
 
   for await (const event of input.events) {
     if (finalOutcome) {
@@ -64,6 +67,7 @@ export async function collectMeetingAIResponseCandidate(input: {
     }
 
     const outcome = Object.freeze({ ...event.outcome });
+    terminalOutcomes.push(outcome);
     input.onTerminal?.(outcome);
     if (!outcome.final) {
       attemptContent.delete(outcome.attemptId);
@@ -77,13 +81,17 @@ export async function collectMeetingAIResponseCandidate(input: {
     throw new Error("AI response ended without a final outcome");
   }
 
-  const result = acceptMeetingAIResponseOutcome(finalOutcome);
+  const result = acceptMeetingAIResponseOutcome(
+    finalOutcome,
+    terminalOutcomes
+  );
   if (!result.accepted) input.onPartialReset?.(finalOutcome);
   return result;
 }
 
 export function acceptMeetingAIResponseOutcome(
-  outcome: Readonly<AIResponseTerminalOutcome>
+  outcome: Readonly<AIResponseTerminalOutcome>,
+  attempts: readonly Readonly<AIResponseTerminalOutcome>[] = [outcome]
 ): MeetingAIResponseCollectionResult {
   const immutableOutcome = Object.isFrozen(outcome)
     ? outcome
@@ -97,6 +105,13 @@ export function acceptMeetingAIResponseOutcome(
     const candidate = Object.freeze({
       content: immutableOutcome.text,
       outcome: immutableOutcome,
+      attempts: Object.freeze(
+        attempts.map((attempt) =>
+          Object.isFrozen(attempt)
+            ? attempt
+            : Object.freeze({ ...attempt })
+        )
+      ),
     });
     return Object.freeze({
       accepted: true,
@@ -107,6 +122,13 @@ export function acceptMeetingAIResponseOutcome(
   return Object.freeze({
     accepted: false,
     outcome: immutableOutcome,
+    attempts: Object.freeze(
+      attempts.map((attempt) =>
+        Object.isFrozen(attempt)
+          ? attempt
+          : Object.freeze({ ...attempt })
+      )
+    ),
     providerDisposition: classifyMeetingAIResponseOutcome(immutableOutcome),
   });
 }
@@ -128,19 +150,27 @@ export function requireMeetingAIResponseCandidate(
   result: MeetingAIResponseCollectionResult
 ): Readonly<MeetingAIResponseCandidate> {
   if (result.accepted) return result.candidate;
-  throw new MeetingAIResponseOutcomeError(result.outcome);
+  throw new MeetingAIResponseOutcomeError(
+    result.outcome,
+    result.attempts
+  );
 }
 
 export class MeetingAIResponseOutcomeError extends Error {
   readonly outcome: Readonly<AIResponseTerminalOutcome>;
+  readonly attempts: readonly Readonly<AIResponseTerminalOutcome>[];
 
-  constructor(outcome: Readonly<AIResponseTerminalOutcome>) {
+  constructor(
+    outcome: Readonly<AIResponseTerminalOutcome>,
+    attempts: readonly Readonly<AIResponseTerminalOutcome>[] = [outcome]
+  ) {
     super(
       outcome.safeErrorSummary ??
         describeMeetingAIResponseOutcome(outcome)
     );
     this.name = outcome.status === "aborted" ? "AbortError" : "AIResponseError";
     this.outcome = outcome;
+    this.attempts = Object.freeze([...attempts]);
   }
 }
 
