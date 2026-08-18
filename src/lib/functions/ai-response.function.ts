@@ -11,11 +11,43 @@ import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
 import curl2Json from "@bany/curl-to-json";
 import { getResponseSettings, RESPONSE_LENGTHS, LANGUAGES } from "@/lib";
 import { MARKDOWN_FORMATTING_INSTRUCTIONS } from "@/config/constants";
+import {
+  AIResponseEventBuilder,
+  boundAIResponseErrorText,
+  classifyAIResponseHttpFailure,
+  shouldLegacyYieldAIResponseFailure,
+  type AIResponseEvent,
+  type AIResponseFailureClass,
+  type AIResponseTerminalOutcome,
+  type AIResponseTerminalStatus,
+} from "./ai-response-events.js";
+
+export type {
+  AIResponseEvent,
+  AIResponseFailureClass,
+  AIResponseTerminalOutcome,
+  AIResponseTerminalStatus,
+} from "./ai-response-events.js";
 
 export interface AIResponseRequestOptions {
   timeoutMs?: number;
   maxOutputTokens?: number;
 }
+
+type AIResponseParams = {
+  provider: TYPE_PROVIDER | undefined;
+  selectedProvider: {
+    provider: string;
+    variables: Record<string, string>;
+  };
+  systemPrompt?: string;
+  history?: Message[];
+  userMessage: string;
+  imagesBase64?: Array<string | ImageInput>;
+  signal?: AbortSignal;
+  applyResponseSettings?: boolean;
+  requestOptions?: AIResponseRequestOptions;
+};
 
 function buildEnhancedSystemPrompt(
   baseSystemPrompt?: string,
@@ -51,21 +83,14 @@ function buildEnhancedSystemPrompt(
   return prompts.join(" ");
 }
 
-export async function* fetchAIResponse(params: {
-  provider: TYPE_PROVIDER | undefined;
-  selectedProvider: {
-    provider: string;
-    variables: Record<string, string>;
-  };
-  systemPrompt?: string;
-  history?: Message[];
-  userMessage: string;
-  imagesBase64?: Array<string | ImageInput>;
-  signal?: AbortSignal;
-  applyResponseSettings?: boolean;
-  requestOptions?: AIResponseRequestOptions;
-}): AsyncIterable<string> {
+export async function* fetchAIResponseEvents(
+  params: AIResponseParams
+): AsyncIterable<AIResponseEvent> {
   let cleanupRequestSignal = () => {};
+  const providerId =
+    params.provider?.id ?? params.selectedProvider?.provider ?? "unknown";
+  const eventBuilder = new AIResponseEventBuilder(providerId);
+  const terminal = eventBuilder.terminal.bind(eventBuilder);
 
   try {
     const {
@@ -84,6 +109,7 @@ export async function* fetchAIResponse(params: {
 
     // Check if already aborted
     if (requestSignal.signal?.aborted) {
+      yield terminal({ status: "aborted", retryable: false });
       return;
     }
 
@@ -199,15 +225,24 @@ export async function* fetchAIResponse(params: {
         (fetchError instanceof Error && fetchError.name === "AbortError")
       ) {
         if (requestSignal.timedOut()) {
-          throw new Error(
-            `AI request timed out after ${requestOptions?.timeoutMs}ms.`
-          );
+          yield terminal({
+            status: "timed-out",
+            retryable: true,
+            safeErrorSummary: `AI request timed out after ${requestOptions?.timeoutMs}ms.`,
+          });
+        } else {
+          yield terminal({ status: "aborted", retryable: false });
         }
-        return; // Silently return on abort
+        return;
       }
-      yield `Network error during API request: ${
-        fetchError instanceof Error ? fetchError.message : "Unknown error"
-      }`;
+      yield terminal({
+        status: "failed",
+        failureClass: "transport",
+        retryable: true,
+        safeErrorSummary: `Network error during API request: ${
+          fetchError instanceof Error ? fetchError.message : "Unknown error"
+        }`,
+      });
       return;
     }
 
@@ -216,9 +251,17 @@ export async function* fetchAIResponse(params: {
       try {
         errorText = await response.text();
       } catch {}
-      yield `API request failed: ${response.status} ${response.statusText}${
-        errorText ? ` - ${errorText}` : ""
-      }`;
+      const failureClass = classifyAIResponseHttpFailure(response.status);
+      yield terminal({
+        status: "failed",
+        failureClass,
+        retryable:
+          failureClass === "rate-limit" || response.status >= 500,
+        statusCode: response.status,
+        safeErrorSummary: `API request failed: ${response.status} ${response.statusText}${
+          errorText ? ` - ${boundAIResponseErrorText(errorText)}` : ""
+        }`,
+      });
       return;
     }
 
@@ -227,19 +270,38 @@ export async function* fetchAIResponse(params: {
       try {
         json = await response.json();
       } catch (parseError) {
-        yield `Failed to parse non-streaming response: ${
-          parseError instanceof Error ? parseError.message : "Unknown error"
-        }`;
+        yield terminal({
+          status: "failed",
+          failureClass: "provider-response-parse",
+          retryable: false,
+          safeErrorSummary: `Failed to parse non-streaming response: ${
+            parseError instanceof Error ? parseError.message : "Unknown error"
+          }`,
+        });
         return;
       }
+      const candidateContent = getByPath(
+        json,
+        provider?.responseContentPath || ""
+      );
       const content =
-        getByPath(json, provider?.responseContentPath || "") || "";
-      yield content;
+        typeof candidateContent === "string" ? candidateContent : "";
+      if (content) {
+        yield eventBuilder.content(content);
+        yield terminal({ status: "success", retryable: false });
+      } else {
+        yield terminal({ status: "empty", retryable: false });
+      }
       return;
     }
 
     if (!response.body) {
-      yield "Streaming not supported or response body missing";
+      yield terminal({
+        status: "failed",
+        failureClass: "stream-unavailable",
+        retryable: false,
+        safeErrorSummary: "Streaming not supported or response body missing",
+      });
       return;
     }
 
@@ -252,9 +314,13 @@ export async function* fetchAIResponse(params: {
       if (requestSignal.signal?.aborted) {
         reader.cancel();
         if (requestSignal.timedOut()) {
-          throw new Error(
-            `AI request timed out after ${requestOptions?.timeoutMs}ms.`
-          );
+          yield terminal({
+            status: "timed-out",
+            retryable: true,
+            safeErrorSummary: `AI request timed out after ${requestOptions?.timeoutMs}ms.`,
+          });
+        } else {
+          yield terminal({ status: "aborted", retryable: false });
         }
         return;
       }
@@ -269,15 +335,24 @@ export async function* fetchAIResponse(params: {
           (readError instanceof Error && readError.name === "AbortError")
         ) {
           if (requestSignal.timedOut()) {
-            throw new Error(
-              `AI request timed out after ${requestOptions?.timeoutMs}ms.`
-            );
+            yield terminal({
+              status: "timed-out",
+              retryable: true,
+              safeErrorSummary: `AI request timed out after ${requestOptions?.timeoutMs}ms.`,
+            });
+          } else {
+            yield terminal({ status: "aborted", retryable: false });
           }
-          return; // Silently return on abort
+          return;
         }
-        yield `Error reading stream: ${
-          readError instanceof Error ? readError.message : "Unknown error"
-        }`;
+        yield terminal({
+          status: "failed",
+          failureClass: "stream-read",
+          retryable: true,
+          safeErrorSummary: `Error reading stream: ${
+            readError instanceof Error ? readError.message : "Unknown error"
+          }`,
+        });
         return;
       }
       const { done, value } = readResult;
@@ -287,9 +362,13 @@ export async function* fetchAIResponse(params: {
       if (requestSignal.signal?.aborted) {
         reader.cancel();
         if (requestSignal.timedOut()) {
-          throw new Error(
-            `AI request timed out after ${requestOptions?.timeoutMs}ms.`
-          );
+          yield terminal({
+            status: "timed-out",
+            retryable: true,
+            safeErrorSummary: `AI request timed out after ${requestOptions?.timeoutMs}ms.`,
+          });
+        } else {
+          yield terminal({ status: "aborted", retryable: false });
         }
         return;
       }
@@ -309,7 +388,7 @@ export async function* fetchAIResponse(params: {
               provider?.responseContentPath || ""
             );
             if (delta) {
-              yield delta;
+              yield eventBuilder.content(delta);
             }
           } catch (e) {
             // Ignore parsing errors for partial JSON chunks
@@ -317,14 +396,49 @@ export async function* fetchAIResponse(params: {
         }
       }
     }
-  } catch (error) {
-    throw new Error(
-      `Error in fetchAIResponse: ${
-        error instanceof Error ? error.message : "Unknown error"
-      }`
+    yield terminal(
+      eventBuilder.hasContent
+        ? { status: "success", retryable: false }
+        : { status: "empty", retryable: false }
     );
+  } catch (error) {
+    yield terminal({
+      status: "failed",
+      failureClass: "configuration",
+      retryable: false,
+      safeErrorSummary:
+        error instanceof Error ? error.message : "Unknown error",
+    });
   } finally {
     cleanupRequestSignal();
+  }
+}
+
+export async function* fetchAIResponse(
+  params: AIResponseParams
+): AsyncIterable<string> {
+  for await (const event of fetchAIResponseEvents(params)) {
+    if (event.type === "content-delta") {
+      yield event.content;
+      continue;
+    }
+    const outcome = event.outcome;
+    if (
+      outcome.status === "success" ||
+      outcome.status === "empty" ||
+      outcome.status === "aborted"
+    ) {
+      return;
+    }
+    const summary = outcome.safeErrorSummary ?? "Unknown error";
+    if (
+      outcome.status === "timed-out" ||
+      !shouldLegacyYieldAIResponseFailure(outcome.failureClass)
+    ) {
+      throw new Error(`Error in fetchAIResponse: ${summary}`);
+    }
+    yield summary;
+    return;
   }
 }
 
