@@ -10,11 +10,18 @@ export type MeetingMetadataEvaluationErrorKind =
   | "locked-brief-overridden"
   | "other";
 
+export type MeetingMetadataMutationDisposition =
+  | "commit"
+  | "preserve"
+  | "abstain";
+
 export interface MeetingMetadataEvaluationObservation {
   operationObserved: boolean;
   operationId?: string;
   mode?: string;
   disposition?: string;
+  mutationDisposition?: string;
+  mutationOutcome: MeetingMetadataMutationDisposition;
   proposalCompany?: string;
   committedCompany?: string;
   authoritativeCompany?: string;
@@ -35,6 +42,9 @@ export function projectMeetingMetadataEvaluationObservation(
   const mode = readString(metadata.meetingMetadataInferenceMode);
   const disposition = readString(
     metadata.meetingMetadataInferenceDisposition
+  );
+  const mutationDisposition = readString(
+    metadata.meetingMetadataInferenceMutationDisposition
   );
   const proposalCompany = readString(
     metadata.meetingMetadataInferenceProposalCompany
@@ -77,6 +87,13 @@ export function projectMeetingMetadataEvaluationObservation(
     operationId,
     mode,
     disposition,
+    mutationDisposition,
+    mutationOutcome: resolveMeetingMetadataMutationDisposition({
+      mutationDisposition,
+      proposalCompany,
+      committedCompany,
+      appliedToRuntime,
+    }),
     proposalCompany,
     committedCompany,
     authoritativeCompany,
@@ -91,6 +108,22 @@ export function projectMeetingMetadataEvaluationObservation(
     appliedToRuntime,
     overrideOccurred,
   };
+}
+
+export function resolveMeetingMetadataMutationDisposition(input: {
+  mutationDisposition?: string;
+  proposalCompany?: string;
+  committedCompany?: string;
+  appliedToRuntime?: boolean;
+}): MeetingMetadataMutationDisposition {
+  if (
+    input.appliedToRuntime === true ||
+    Boolean(input.committedCompany) ||
+    input.mutationDisposition?.startsWith("committed-")
+  ) {
+    return "commit";
+  }
+  return input.proposalCompany ? "preserve" : "abstain";
 }
 
 export function meetingCompanyLabelsEqual(

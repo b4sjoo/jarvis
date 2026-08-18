@@ -66,6 +66,7 @@ import type {
   MeetingTraceSummary,
   MeetingTraceValueSummary,
   MeetingMetadataEvaluationErrorKind,
+  MeetingMetadataMutationDisposition,
   MemoryEntryEvaluationLabelValue,
   MemoryRetrievalEvaluationSnapshotResolution,
   PreparationArtifactEvaluation,
@@ -5560,7 +5561,11 @@ const TraceHumanEvaluationPanel = ({
   const [projectTrajectoryFixOpen, setProjectTrajectoryFixOpen] =
     useState(false);
   const [meetingMetadataFixOpen, setMeetingMetadataFixOpen] = useState(false);
-  const [expectedMeetingCompany, setExpectedMeetingCompany] = useState("");
+  const [sourceMeetingCompany, setSourceMeetingCompany] = useState("");
+  const [expectedEffectiveMeetingCompany, setExpectedEffectiveMeetingCompany] =
+    useState("");
+  const [expectedMeetingMetadataMutation, setExpectedMeetingMetadataMutation] =
+    useState<MeetingMetadataMutationDisposition>();
   const [meetingMetadataErrorKind, setMeetingMetadataErrorKind] =
     useState<MeetingMetadataEvaluationErrorKind>();
   const [expectedProjectName, setExpectedProjectName] = useState("");
@@ -5999,25 +6004,40 @@ const TraceHumanEvaluationPanel = ({
     recordGroundTruth(fact);
   };
 
-  const recordExpectedMeetingMetadata = (
-    expectedCompany: string | null,
-    errorKind?: MeetingMetadataEvaluationErrorKind
-  ) => {
-    const companyCorrect = meetingCompanyLabelsEqual(
-      expectedCompany,
+  const recordExpectedMeetingMetadata = (input: {
+    sourceCompany: string | null;
+    expectedEffectiveCompany: string | null;
+    expectedMutationDisposition: MeetingMetadataMutationDisposition;
+    errorKind?: MeetingMetadataEvaluationErrorKind;
+  }) => {
+    const sourceCorrect = meetingCompanyLabelsEqual(
+      input.sourceCompany,
+      observedMeetingMetadata.proposalCompany
+    );
+    const effectiveCompanyCorrect = meetingCompanyLabelsEqual(
+      input.expectedEffectiveCompany,
       observedMeetingMetadata.effectiveCompany
     );
-    onUpdateQuestion({ correctedCompany: expectedCompany ?? "" });
+    const mutationCorrect =
+      input.expectedMutationDisposition ===
+      observedMeetingMetadata.mutationOutcome;
+    const metadataCorrect =
+      sourceCorrect && effectiveCompanyCorrect && mutationCorrect;
+    onUpdateQuestion({
+      correctedCompany: input.expectedEffectiveCompany ?? "",
+    });
     onUpdate({
       failureReasons:
-        companyCorrect && !errorKind
+        metadataCorrect && !input.errorKind
           ? failureReasons.filter((reason) => reason !== "wrong-company")
           : Array.from(new Set([...failureReasons, "wrong-company"])),
     });
     recordGroundTruth({
       kind: "expected-meeting-metadata",
-      expectedCompany,
-      errorKind,
+      sourceCompany: input.sourceCompany,
+      expectedEffectiveCompany: input.expectedEffectiveCompany,
+      expectedMutationDisposition: input.expectedMutationDisposition,
+      errorKind: input.errorKind,
     });
     setMeetingMetadataFixOpen(false);
   };
@@ -6584,6 +6604,12 @@ const TraceHumanEvaluationPanel = ({
                   : ""}
               </div>
               <div>
+                mutation: {observedMeetingMetadata.mutationOutcome}
+                {observedMeetingMetadata.mutationDisposition
+                  ? ` (${observedMeetingMetadata.mutationDisposition})`
+                  : ""}
+              </div>
+              <div>
                 applied: {formatObservedBoolean(
                   observedMeetingMetadata.appliedToRuntime
                 )}
@@ -6594,26 +6620,47 @@ const TraceHumanEvaluationPanel = ({
             </div>
             {activeMeetingMetadataFact?.kind ===
             "expected-meeting-metadata" ? (
-              <div className="mt-1 break-words font-mono text-[9px]">
-                expected: {activeMeetingMetadataFact.expectedCompany ?? "unknown"}
-                {activeMeetingMetadataFact.errorKind
-                  ? ` / ${activeMeetingMetadataFact.errorKind}`
-                  : ""}
+              <div className="mt-1 space-y-0.5 break-words font-mono text-[9px]">
+                <div>
+                  source truth: {activeMeetingMetadataFact.sourceCompany ??
+                    "none"}
+                </div>
+                <div>
+                  expected effective: {activeMeetingMetadataFact
+                    .expectedEffectiveCompany ?? "none"}
+                </div>
+                <div>
+                  expected mutation: {activeMeetingMetadataFact
+                    .expectedMutationDisposition ?? "unlabeled"}
+                </div>
+                {activeMeetingMetadataFact.errorKind ? (
+                  <div>failure: {activeMeetingMetadataFact.errorKind}</div>
+                ) : null}
               </div>
             ) : null}
             <div className="mt-2 flex flex-wrap gap-1">
               <Button
                 size="sm"
                 variant={
-                  projectionV2?.verdicts.meetingMetadataTargetCorrect === true
+                  projectionV2?.verdicts.meetingMetadataProposalCorrect ===
+                    true &&
+                  projectionV2?.verdicts.meetingMetadataTargetCorrect ===
+                    true &&
+                  projectionV2?.verdicts.meetingMetadataMutationCorrect ===
+                    true
                     ? "default"
                     : "outline"
                 }
                 className="h-6 px-2 text-[9px]"
                 onClick={() =>
-                  recordExpectedMeetingMetadata(
-                    observedMeetingMetadata.effectiveCompany ?? null
-                  )
+                  recordExpectedMeetingMetadata({
+                    sourceCompany:
+                      observedMeetingMetadata.proposalCompany ?? null,
+                    expectedEffectiveCompany:
+                      observedMeetingMetadata.effectiveCompany ?? null,
+                    expectedMutationDisposition:
+                      observedMeetingMetadata.mutationOutcome,
+                  })
                 }
               >
                 Correct
@@ -6623,26 +6670,54 @@ const TraceHumanEvaluationPanel = ({
                 variant={
                   activeMeetingMetadataFact?.kind ===
                     "expected-meeting-metadata" &&
-                  activeMeetingMetadataFact.expectedCompany === null
+                  activeMeetingMetadataFact.sourceCompany === null
                     ? "default"
                     : "outline"
                 }
                 className="h-6 px-2 text-[9px]"
-                onClick={() => recordExpectedMeetingMetadata(null)}
+                onClick={() => {
+                  setSourceMeetingCompany("");
+                  setExpectedEffectiveMeetingCompany(
+                    activeMeetingMetadataFact?.kind ===
+                    "expected-meeting-metadata"
+                      ? activeMeetingMetadataFact.expectedEffectiveCompany ?? ""
+                      : observedMeetingMetadata.effectiveCompany ?? ""
+                  );
+                  setExpectedMeetingMetadataMutation(
+                    activeMeetingMetadataFact?.kind ===
+                      "expected-meeting-metadata" &&
+                    activeMeetingMetadataFact.expectedMutationDisposition
+                      ? activeMeetingMetadataFact.expectedMutationDisposition
+                      : observedMeetingMetadata.mutationOutcome
+                  );
+                  setMeetingMetadataFixOpen(true);
+                }}
               >
-                Should be unknown
+                No source company
               </Button>
               <Button
                 size="sm"
                 variant={meetingMetadataFixOpen ? "default" : "outline"}
                 className="h-6 px-2 text-[9px]"
                 onClick={() => {
-                  setExpectedMeetingCompany(
+                  setSourceMeetingCompany(
+                    activeMeetingMetadataFact?.kind ===
+                    "expected-meeting-metadata"
+                      ? activeMeetingMetadataFact.sourceCompany ?? ""
+                      : observedMeetingMetadata.proposalCompany ?? ""
+                  );
+                  setExpectedEffectiveMeetingCompany(
+                    activeMeetingMetadataFact?.kind ===
+                    "expected-meeting-metadata"
+                      ? activeMeetingMetadataFact.expectedEffectiveCompany ?? ""
+                      : observedMeetingMetadata.effectiveCompany ?? ""
+                  );
+                  setExpectedMeetingMetadataMutation(
                     activeMeetingMetadataFact?.kind ===
                       "expected-meeting-metadata" &&
-                    activeMeetingMetadataFact.expectedCompany
-                      ? activeMeetingMetadataFact.expectedCompany
-                      : observedMeetingMetadata.effectiveCompany ?? ""
+                    activeMeetingMetadataFact.expectedMutationDisposition
+                      ? activeMeetingMetadataFact.expectedMutationDisposition
+                      : observedMeetingMetadata.mutationOutcome
                   );
                   setMeetingMetadataErrorKind(
                     activeMeetingMetadataFact?.kind ===
@@ -6659,12 +6734,34 @@ const TraceHumanEvaluationPanel = ({
             {meetingMetadataFixOpen ? (
               <div className="mt-2 space-y-2 rounded-sm bg-muted/30 p-2">
                 <Input
-                  value={expectedMeetingCompany}
+                  value={sourceMeetingCompany}
                   onChange={(event) =>
-                    setExpectedMeetingCompany(event.target.value)
+                    setSourceMeetingCompany(event.target.value)
                   }
-                  placeholder="Expected target company"
+                  placeholder="Source company truth (blank = none)"
                   className="h-7 text-[10px]"
+                />
+                <Input
+                  value={expectedEffectiveMeetingCompany}
+                  onChange={(event) =>
+                    setExpectedEffectiveMeetingCompany(event.target.value)
+                  }
+                  placeholder="Expected effective company (blank = none)"
+                  className="h-7 text-[10px]"
+                />
+                <CriticalMomentButtonGroup
+                  label="Expected mutation"
+                  options={[
+                    ["commit", "Commit"],
+                    ["preserve", "Preserve"],
+                    ["abstain", "Abstain"],
+                  ]}
+                  value={expectedMeetingMetadataMutation}
+                  onSelect={(value) =>
+                    setExpectedMeetingMetadataMutation(
+                      value as MeetingMetadataMutationDisposition
+                    )
+                  }
                 />
                 <CriticalMomentButtonGroup
                   label="Failure kind"
@@ -6688,15 +6785,21 @@ const TraceHumanEvaluationPanel = ({
                 <Button
                   size="sm"
                   className="h-6 px-2 text-[9px]"
-                  disabled={!expectedMeetingCompany.trim()}
+                  disabled={!expectedMeetingMetadataMutation}
                   onClick={() =>
-                    recordExpectedMeetingMetadata(
-                      expectedMeetingCompany.trim(),
-                      meetingMetadataErrorKind
-                    )
+                    expectedMeetingMetadataMutation &&
+                    recordExpectedMeetingMetadata({
+                      sourceCompany:
+                        sourceMeetingCompany.trim() || null,
+                      expectedEffectiveCompany:
+                        expectedEffectiveMeetingCompany.trim() || null,
+                      expectedMutationDisposition:
+                        expectedMeetingMetadataMutation,
+                      errorKind: meetingMetadataErrorKind,
+                    })
                   }
                 >
-                  Save company
+                  Save metadata labels
                 </Button>
               </div>
             ) : null}

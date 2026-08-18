@@ -401,11 +401,12 @@ export interface SessionLongitudinalEvaluationReport {
     effectiveTargetPrecision: RateMetric;
     effectiveTargetRecall: RateMetric;
     effectiveTargetAccuracy: RateMetric;
+    mutationAccuracy: RateMetric;
     conflictRate: RateMetric;
     staleRate: RateMetric;
     unauthorizedOverrideCount: number;
     errorKinds: Record<string, number>;
-    denominatorAuthority: "explicit-human-expected-company";
+    denominatorAuthority: "explicit-human-three-fact-metadata";
   };
   whiteboardRenderFunnel: {
     observedCandidates: number;
@@ -769,24 +770,52 @@ export function buildSessionLongitudinalEvaluationReport(
         .map((projection) => [projection.projectionId, projection])
     ).values()
   );
-  const metadataExpectedPositive = meetingMetadataProjections.filter(
+  const metadataSourceLabeled = meetingMetadataProjections.filter(
     (projection) =>
       projection.activeFacts["expected-meeting-metadata"]?.fact.kind ===
         "expected-meeting-metadata" &&
       projection.activeFacts["expected-meeting-metadata"]?.fact
-        .expectedCompany !== null
+        .sourceCompany !== undefined
   );
-  const metadataProposalPositive = meetingMetadataProjections.filter(
+  const metadataSourceExpectedPositive = metadataSourceLabeled.filter(
+    (projection) =>
+      projection.activeFacts["expected-meeting-metadata"]?.fact.kind ===
+        "expected-meeting-metadata" &&
+      projection.activeFacts["expected-meeting-metadata"]?.fact
+        .sourceCompany !== null
+  );
+  const metadataProposalPositive = metadataSourceLabeled.filter(
     (projection) => Boolean(projection.observed?.meetingMetadata?.proposalCompany)
   );
   const metadataProposalTruePositive = metadataProposalPositive.filter(
     (projection) => projection.verdicts.meetingMetadataProposalCorrect === true
   );
-  const metadataTargetPositive = meetingMetadataProjections.filter(
+  const metadataEffectiveLabeled = meetingMetadataProjections.filter(
+    (projection) =>
+      projection.activeFacts["expected-meeting-metadata"]?.fact.kind ===
+        "expected-meeting-metadata" &&
+      projection.activeFacts["expected-meeting-metadata"]?.fact
+        .expectedEffectiveCompany !== undefined
+  );
+  const metadataEffectiveExpectedPositive = metadataEffectiveLabeled.filter(
+    (projection) =>
+      projection.activeFacts["expected-meeting-metadata"]?.fact.kind ===
+        "expected-meeting-metadata" &&
+      projection.activeFacts["expected-meeting-metadata"]?.fact
+        .expectedEffectiveCompany !== null
+  );
+  const metadataTargetPositive = metadataEffectiveLabeled.filter(
     (projection) => Boolean(projection.observed?.meetingMetadata?.effectiveCompany)
   );
   const metadataTargetTruePositive = metadataTargetPositive.filter(
     (projection) => projection.verdicts.meetingMetadataTargetCorrect === true
+  );
+  const metadataMutationLabeled = meetingMetadataProjections.filter(
+    (projection) =>
+      projection.activeFacts["expected-meeting-metadata"]?.fact.kind ===
+        "expected-meeting-metadata" &&
+      projection.activeFacts["expected-meeting-metadata"]?.fact
+        .expectedMutationDisposition !== undefined
   );
   const metadataComparisonTraces = meetingMetadataTraces.filter(
     ({ trace }) =>
@@ -1080,7 +1109,7 @@ export function buildSessionLongitudinalEvaluationReport(
       ),
       proposalRecall: rate(
         metadataProposalTruePositive.length,
-        metadataExpectedPositive.length
+        metadataSourceExpectedPositive.length
       ),
       effectiveTargetPrecision: rate(
         metadataTargetTruePositive.length,
@@ -1088,14 +1117,21 @@ export function buildSessionLongitudinalEvaluationReport(
       ),
       effectiveTargetRecall: rate(
         metadataTargetTruePositive.length,
-        metadataExpectedPositive.length
+        metadataEffectiveExpectedPositive.length
       ),
       effectiveTargetAccuracy: rate(
-        meetingMetadataProjections.filter(
+        metadataEffectiveLabeled.filter(
           (projection) =>
             projection.verdicts.meetingMetadataTargetCorrect === true
         ).length,
-        meetingMetadataProjections.length
+        metadataEffectiveLabeled.length
+      ),
+      mutationAccuracy: rate(
+        metadataMutationLabeled.filter(
+          (projection) =>
+            projection.verdicts.meetingMetadataMutationCorrect === true
+        ).length,
+        metadataMutationLabeled.length
       ),
       conflictRate: rate(
         metadataComparisonTraces.filter(
@@ -1116,7 +1152,7 @@ export function buildSessionLongitudinalEvaluationReport(
         ({ trace }) => trace.meetingMetadata?.overrideOccurred === true
       ).length,
       errorKinds: meetingMetadataErrorKinds,
-      denominatorAuthority: "explicit-human-expected-company",
+      denominatorAuthority: "explicit-human-three-fact-metadata",
     },
     whiteboardRenderFunnel: {
       observedCandidates: whiteboardCandidates.length,
@@ -1726,6 +1762,7 @@ export function renderSessionLongitudinalEvaluationMarkdown(
     `Operations / proposals / committed / abstained / human labeled: ${report.meetingMetadataFunnel.operationsObserved} / ${report.meetingMetadataFunnel.proposalCount} / ${report.meetingMetadataFunnel.committedCount} / ${report.meetingMetadataFunnel.abstentionCount} / ${report.meetingMetadataFunnel.humanLabeled}`,
     `Proposal precision / recall: ${formatRate(report.meetingMetadataFunnel.proposalPrecision)} / ${formatRate(report.meetingMetadataFunnel.proposalRecall)}`,
     `Effective target precision / recall / accuracy: ${formatRate(report.meetingMetadataFunnel.effectiveTargetPrecision)} / ${formatRate(report.meetingMetadataFunnel.effectiveTargetRecall)} / ${formatRate(report.meetingMetadataFunnel.effectiveTargetAccuracy)}`,
+    `Mutation accuracy: ${formatRate(report.meetingMetadataFunnel.mutationAccuracy)}`,
     `Conflict / stale rate: ${formatRate(report.meetingMetadataFunnel.conflictRate)} / ${formatRate(report.meetingMetadataFunnel.staleRate)}`,
     `Unauthorized overrides: ${report.meetingMetadataFunnel.unauthorizedOverrideCount}`,
     `Error kinds: ${formatCountMap(report.meetingMetadataFunnel.errorKinds)}`,

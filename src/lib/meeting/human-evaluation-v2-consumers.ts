@@ -331,6 +331,10 @@ function applyProjectionToQuestionEvaluation(
   const primaryAsk = projection.activeFacts["primary-ask-correction"]?.fact;
   const meetingMetadata =
     projection.activeFacts["expected-meeting-metadata"]?.fact;
+  const expectedEffectiveCompany =
+    meetingMetadata?.kind === "expected-meeting-metadata"
+      ? readExpectedEffectiveMeetingCompany(meetingMetadata)
+      : undefined;
 
   return {
     ...evaluation,
@@ -352,9 +356,9 @@ function applyProjectionToQuestionEvaluation(
       projection.observed?.meetingMetadata?.effectiveCompany ??
       evaluation.company,
     correctedCompany:
-      meetingMetadata?.kind === "expected-meeting-metadata" &&
-      meetingMetadata.expectedCompany !== null
-        ? meetingMetadata.expectedCompany
+      expectedEffectiveCompany !== null &&
+      expectedEffectiveCompany !== undefined
+        ? expectedEffectiveCompany
         : evaluation.correctedCompany,
     expectedRelation:
       settlement?.kind === "expected-task-settlement"
@@ -623,9 +627,14 @@ function readV2Dimension(
   }
   if (dimension === "meetingMetadata") {
     const fact = projection.activeFacts["expected-meeting-metadata"]?.fact;
-    return fact?.kind === "expected-meeting-metadata"
-      ? fact.expectedCompany ?? "__unknown__"
-      : undefined;
+    if (fact?.kind === "expected-meeting-metadata") {
+      const expectedEffectiveCompany =
+        readExpectedEffectiveMeetingCompany(fact);
+      return expectedEffectiveCompany === null
+        ? "__unknown__"
+        : expectedEffectiveCompany;
+    }
+    return undefined;
   }
   return readSimpleV2Fact(projection, dimension);
 }
@@ -745,6 +754,18 @@ function cloneQuestionEvaluation(
     memoryEntryLabels: [...evaluation.memoryEntryLabels],
     missingExpectedMemory: [...evaluation.missingExpectedMemory],
   };
+}
+
+function readExpectedEffectiveMeetingCompany(
+  fact: Extract<
+    HumanGroundTruthFactV2,
+    { kind: "expected-meeting-metadata" }
+  >
+) {
+  if (fact.expectedEffectiveCompany !== undefined) {
+    return fact.expectedEffectiveCompany;
+  }
+  return (fact as { expectedCompany?: string | null }).expectedCompany;
 }
 
 function uniqueStrings(values: Array<string | undefined>) {

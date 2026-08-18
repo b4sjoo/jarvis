@@ -22,6 +22,8 @@ test("projects proposal, authoritative state, and final authority separately", (
     operationId: "metadata_1",
     mode: "shadow",
     disposition: "shadow-observed",
+    mutationDisposition: undefined,
+    mutationOutcome: "preserve",
     proposalCompany: "Google",
     committedCompany: undefined,
     authoritativeCompany: "Amazon",
@@ -46,4 +48,5 @@ test("recognizes a forbidden override without confusing aliases", () => {
   });
   assert.equal(observation.effectiveCompany, "Google");
   assert.equal(observation.overrideOccurred, true);
+  assert.equal(observation.mutationOutcome, "commit");
 });

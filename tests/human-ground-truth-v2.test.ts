@@ -326,7 +326,9 @@ test("scores metadata proposals separately from the effective target company", (
     source: "explicit-ui",
     fact: {
       kind: "expected-meeting-metadata",
-      expectedCompany: "Amazon",
+      sourceCompany: "Amazon",
+      expectedEffectiveCompany: "Amazon",
+      expectedMutationDisposition: "preserve",
       errorKind: "wrong-target-company",
     },
     now: 2,
@@ -340,6 +342,7 @@ test("scores metadata proposals separately from the effective target company", (
       traceHash: "hash_1",
       meetingMetadata: {
         operationObserved: true,
+        mutationOutcome: "preserve",
         proposalCompany: "Google",
         authoritativeCompany: "Amazon",
         effectiveCompany: "Amazon",
@@ -352,6 +355,7 @@ test("scores metadata proposals separately from the effective target company", (
 
   assert.equal(projection.verdicts.meetingMetadataProposalCorrect, false);
   assert.equal(projection.verdicts.meetingMetadataTargetCorrect, true);
+  assert.equal(projection.verdicts.meetingMetadataMutationCorrect, true);
 });
 
 test("treats an explicit unknown company label as valid ground truth", () => {
@@ -362,7 +366,9 @@ test("treats an explicit unknown company label as valid ground truth", () => {
     source: "explicit-ui",
     fact: {
       kind: "expected-meeting-metadata",
-      expectedCompany: null,
+      sourceCompany: null,
+      expectedEffectiveCompany: null,
+      expectedMutationDisposition: "abstain",
     },
     now: 2,
   });
@@ -376,6 +382,7 @@ test("treats an explicit unknown company label as valid ground truth", () => {
       meetingMetadata: {
         operationObserved: true,
         disposition: "shadow-observed",
+        mutationOutcome: "abstain",
         overrideOccurred: false,
       },
     },
@@ -384,6 +391,7 @@ test("treats an explicit unknown company label as valid ground truth", () => {
 
   assert.equal(projection.verdicts.meetingMetadataProposalCorrect, true);
   assert.equal(projection.verdicts.meetingMetadataTargetCorrect, true);
+  assert.equal(projection.verdicts.meetingMetadataMutationCorrect, true);
 });
 
 test("retains same-priority conflicts until an explicit superseding event", () => {
@@ -586,6 +594,21 @@ test("imports only exact legacy expectations", () => {
   assert.ok(
     imported.every((event) => event.provenance.collection === "replay")
   );
+});
+
+test("maps a legacy company label only to expected effective company", () => {
+  const imported = importLegacyQuestionEvaluationV2(
+    createLegacyEvaluation({ correctedCompany: "Amazon" }),
+    "session_1"
+  );
+  const fact = imported.find(
+    (event) => event.fact.kind === "expected-meeting-metadata"
+  )?.fact;
+
+  assert.deepEqual(fact, {
+    kind: "expected-meeting-metadata",
+    expectedEffectiveCompany: "Amazon",
+  });
 });
 
 test("projects the observed runtime tuple from trace metadata", () => {

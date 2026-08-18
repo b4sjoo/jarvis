@@ -55,7 +55,9 @@ test("separates metadata proposal quality from effective company safety", () => 
     source: "explicit-ui",
     fact: {
       kind: "expected-meeting-metadata",
-      expectedCompany: "Amazon",
+      sourceCompany: "Amazon",
+      expectedEffectiveCompany: "Amazon",
+      expectedMutationDisposition: "preserve",
       errorKind: "wrong-target-company",
     },
     now: 1,
@@ -70,6 +72,7 @@ test("separates metadata proposal quality from effective company safety", () => 
       meetingMetadata: {
         operationObserved: true,
         operationId: "metadata_1",
+        mutationOutcome: "preserve",
         proposalCompany: "Google",
         authoritativeCompany: "Amazon",
         effectiveCompany: "Amazon",
@@ -112,6 +115,7 @@ test("separates metadata proposal quality from effective company safety", () => 
   assert.equal(report.meetingMetadataFunnel.proposalRecall.rate, 0);
   assert.equal(report.meetingMetadataFunnel.effectiveTargetPrecision.rate, 1);
   assert.equal(report.meetingMetadataFunnel.effectiveTargetRecall.rate, 1);
+  assert.equal(report.meetingMetadataFunnel.mutationAccuracy.rate, 1);
   assert.equal(report.meetingMetadataFunnel.conflictRate.rate, 1);
   assert.equal(report.meetingMetadataFunnel.unauthorizedOverrideCount, 0);
   assert.deepEqual(report.meetingMetadataFunnel.errorKinds, {

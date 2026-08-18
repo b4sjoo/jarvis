@@ -28,11 +28,12 @@ import {
   projectMeetingMetadataEvaluationObservation,
   type MeetingMetadataEvaluationErrorKind,
   type MeetingMetadataEvaluationObservation,
+  type MeetingMetadataMutationDisposition,
 } from "./meeting-metadata-evaluation.js";
 
 export const HUMAN_GROUND_TRUTH_SCHEMA_VERSION = 2 as const;
 export const HUMAN_EVALUATION_DERIVATION_VERSION =
-  "human-evaluation-v2.6";
+  "human-evaluation-v2.7";
 
 export type HumanGroundTruthConfirmation = "confirmed" | "suggested";
 
@@ -143,7 +144,9 @@ export interface ExpectedProjectTrajectoryFactV2 {
 
 export interface ExpectedMeetingMetadataFactV2 {
   kind: "expected-meeting-metadata";
-  expectedCompany: string | null;
+  sourceCompany?: string | null;
+  expectedEffectiveCompany?: string | null;
+  expectedMutationDisposition?: MeetingMetadataMutationDisposition;
   errorKind?: MeetingMetadataEvaluationErrorKind;
 }
 
@@ -257,6 +260,7 @@ export interface HumanEvaluationProjectionV2 {
     unsupportedFirstPersonClaim?: boolean;
     meetingMetadataProposalCorrect?: boolean;
     meetingMetadataTargetCorrect?: boolean;
+    meetingMetadataMutationCorrect?: boolean;
   };
   conflicts: HumanEvaluationConflictV2[];
   computedAt: number;
@@ -537,19 +541,28 @@ export function deriveHumanEvaluationProjectionV2(input: {
           : undefined,
       meetingMetadataProposalCorrect:
         meetingMetadata?.kind === "expected-meeting-metadata" &&
+        meetingMetadata.sourceCompany !== undefined &&
         input.observed?.meetingMetadata?.operationObserved
           ? meetingCompanyLabelsEqual(
-              meetingMetadata.expectedCompany,
+              meetingMetadata.sourceCompany,
               input.observed.meetingMetadata.proposalCompany
             )
           : undefined,
       meetingMetadataTargetCorrect:
         meetingMetadata?.kind === "expected-meeting-metadata" &&
+        meetingMetadata.expectedEffectiveCompany !== undefined &&
         input.observed?.meetingMetadata?.operationObserved
           ? meetingCompanyLabelsEqual(
-              meetingMetadata.expectedCompany,
+              meetingMetadata.expectedEffectiveCompany,
               input.observed.meetingMetadata.effectiveCompany
             )
+          : undefined,
+      meetingMetadataMutationCorrect:
+        meetingMetadata?.kind === "expected-meeting-metadata" &&
+        meetingMetadata.expectedMutationDisposition !== undefined &&
+        input.observed?.meetingMetadata?.operationObserved
+          ? meetingMetadata.expectedMutationDisposition ===
+            input.observed.meetingMetadata.mutationOutcome
           : undefined,
     },
     conflicts,
@@ -829,7 +842,7 @@ export function importLegacyQuestionEvaluationV2(
         actionId: `legacy:${evaluation.id}:meeting-metadata`,
         fact: {
           kind: "expected-meeting-metadata",
-          expectedCompany: evaluation.correctedCompany,
+          expectedEffectiveCompany: evaluation.correctedCompany,
         },
       })
     );
@@ -1002,10 +1015,20 @@ function normalizeFact(fact: HumanGroundTruthFactV2): HumanGroundTruthFactV2 {
   if (fact.kind === "expected-meeting-metadata") {
     return {
       ...fact,
-      expectedCompany:
-        fact.expectedCompany === null
-          ? null
-          : fact.expectedCompany.trim().slice(0, 240),
+      ...(fact.sourceCompany !== undefined
+        ? {
+            sourceCompany: normalizeOptionalMeetingCompany(
+              fact.sourceCompany
+            ),
+          }
+        : {}),
+      ...(fact.expectedEffectiveCompany !== undefined
+        ? {
+            expectedEffectiveCompany: normalizeOptionalMeetingCompany(
+              fact.expectedEffectiveCompany
+            ),
+          }
+        : {}),
     };
   }
   return fact;
@@ -1418,20 +1441,44 @@ function normalizeStoredFact(
     }
   }
   if (fact.kind === "expected-meeting-metadata") {
-    const expectedCompany =
-      fact.expectedCompany === null
-        ? null
-        : readString(fact.expectedCompany);
+    const legacyExpectedCompany =
+      (fact as { expectedCompany?: unknown }).expectedCompany;
+    const sourceCompany = readNullableString(fact.sourceCompany);
+    const expectedEffectiveCompany = readNullableString(
+      fact.expectedEffectiveCompany !== undefined
+        ? fact.expectedEffectiveCompany
+        : legacyExpectedCompany
+    );
+    const expectedMutationDisposition =
+      normalizeMeetingMetadataMutationDisposition(
+        fact.expectedMutationDisposition
+      );
     const errorKind = normalizeMeetingMetadataErrorKind(fact.errorKind);
-    if (expectedCompany !== undefined) {
+    if (
+      sourceCompany !== undefined ||
+      expectedEffectiveCompany !== undefined ||
+      expectedMutationDisposition !== undefined
+    ) {
       return {
         kind: fact.kind,
-        expectedCompany,
+        sourceCompany,
+        expectedEffectiveCompany,
+        expectedMutationDisposition,
         errorKind,
       };
     }
   }
   return undefined;
+}
+
+function normalizeMeetingMetadataMutationDisposition(
+  value: unknown
+): MeetingMetadataMutationDisposition | undefined {
+  return value === "commit" ||
+    value === "preserve" ||
+    value === "abstain"
+    ? value
+    : undefined;
 }
 
 function normalizeMeetingMetadataErrorKind(
@@ -1629,6 +1676,13 @@ function cleanOptional(value: string | undefined) {
   return trimmed || undefined;
 }
 
+function normalizeOptionalMeetingCompany(
+  value: string | null | undefined
+) {
+  if (value === undefined || value === null) return value;
+  return value.trim().slice(0, 240) || null;
+}
+
 function uniqueStrings(values: Array<string | undefined>) {
   return Array.from(
     new Set(
@@ -1643,6 +1697,10 @@ function readString(value: unknown) {
   return typeof value === "string" && value.trim()
     ? value.trim()
     : undefined;
+}
+
+function readNullableString(value: unknown): string | null | undefined {
+  return value === null ? null : readString(value);
 }
 
 function readStringArray(value: unknown) {
