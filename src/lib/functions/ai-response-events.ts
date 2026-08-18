@@ -16,7 +16,55 @@ export type AIResponseFailureClass =
   | "stream-read"
   | "unexpected";
 
+export type AIResponseAttemptDisposition =
+  | "accepted"
+  | "retrying"
+  | "stale";
+
+export interface AIResponseExecutionIdentity {
+  requestId: string;
+  executionPlanId: string;
+  modelId: string;
+  sessionId: string;
+  runtimeEpoch: number;
+  logicalQuestionUnitId: string;
+  logicalQuestionRevision: number;
+}
+
+export interface AIResponseAttemptIdentity
+  extends AIResponseExecutionIdentity {
+  attemptId: string;
+  attemptNumber: number;
+  maxAttempts: number;
+}
+
+export interface AIResponseRetryPolicy {
+  maxAttempts?: number;
+  retryDelayMs?: number;
+  retryTimeouts?: boolean;
+  retryableFailureClasses?: AIResponseFailureClass[];
+}
+
+export interface NormalizedAIResponseRetryPolicy {
+  maxAttempts: number;
+  retryDelayMs: number;
+  retryTimeouts: boolean;
+  retryableFailureClasses: AIResponseFailureClass[];
+}
+
 export interface AIResponseTerminalOutcome {
+  requestId: string;
+  attemptId: string;
+  executionPlanId: string;
+  modelId: string;
+  sessionId: string;
+  runtimeEpoch: number;
+  logicalQuestionUnitId: string;
+  logicalQuestionRevision: number;
+  attemptNumber: number;
+  maxAttempts: number;
+  final: boolean;
+  disposition: AIResponseAttemptDisposition;
   status: AIResponseTerminalStatus;
   failureClass?: AIResponseFailureClass;
   retryable: boolean;
@@ -36,6 +84,9 @@ export type AIResponseEvent =
       content: string;
       index: number;
       emittedAt: number;
+      requestId: string;
+      attemptId: string;
+      attemptNumber: number;
     }
   | {
       type: "terminal";
@@ -49,19 +100,37 @@ export type AIResponseTerminalInput = Omit<
   | "firstContentAt"
   | "finishedAt"
   | "chunkCount"
+  | "requestId"
+  | "attemptId"
+  | "executionPlanId"
+  | "modelId"
+  | "sessionId"
+  | "runtimeEpoch"
+  | "logicalQuestionUnitId"
+  | "logicalQuestionRevision"
+  | "attemptNumber"
+  | "maxAttempts"
+  | "final"
+  | "disposition"
   | "text"
 >;
 
 export class AIResponseEventBuilder {
   private readonly providerId: string;
+  private readonly identity: AIResponseAttemptIdentity;
   private readonly startedAt: number;
   private firstContentAt?: number;
   private chunkCount = 0;
   private text = "";
   private finished = false;
 
-  constructor(providerId: string, startedAt = Date.now()) {
+  constructor(
+    providerId: string,
+    identity: AIResponseAttemptIdentity,
+    startedAt = Date.now()
+  ) {
     this.providerId = providerId;
+    this.identity = identity;
     this.startedAt = startedAt;
   }
 
@@ -84,6 +153,9 @@ export class AIResponseEventBuilder {
       content,
       index: this.chunkCount,
       emittedAt,
+      requestId: this.identity.requestId,
+      attemptId: this.identity.attemptId,
+      attemptNumber: this.identity.attemptNumber,
     };
   }
 
@@ -105,6 +177,9 @@ export class AIResponseEventBuilder {
       type: "terminal",
       outcome: {
         ...input,
+        ...this.identity,
+        final: true,
+        disposition: "accepted",
         providerId: this.providerId,
         startedAt: this.startedAt,
         firstContentAt: this.firstContentAt,
@@ -114,6 +189,184 @@ export class AIResponseEventBuilder {
       },
     };
   }
+}
+
+export async function* coordinateAIResponseAttempts(input: {
+  identity: AIResponseExecutionIdentity;
+  providerId?: string;
+  retryPolicy?: AIResponseRetryPolicy;
+  signal?: AbortSignal;
+  isExecutionCurrent?: (identity: AIResponseAttemptIdentity) => boolean;
+  runAttempt: (
+    identity: AIResponseAttemptIdentity
+  ) => AsyncIterable<AIResponseEvent>;
+}): AsyncIterable<AIResponseEvent> {
+  const policy = normalizeAIResponseRetryPolicy(input.retryPolicy);
+  for (
+    let attemptNumber = 1;
+    attemptNumber <= policy.maxAttempts;
+    attemptNumber += 1
+  ) {
+    const attemptIdentity = createAIResponseAttemptIdentity(
+      input.identity,
+      attemptNumber,
+      policy.maxAttempts
+    );
+    let terminalSeen = false;
+    let retry = false;
+    try {
+      for await (const event of input.runAttempt(attemptIdentity)) {
+        if (event.type === "content-delta") {
+          yield {
+            ...event,
+            requestId: attemptIdentity.requestId,
+            attemptId: attemptIdentity.attemptId,
+            attemptNumber: attemptIdentity.attemptNumber,
+          };
+          continue;
+        }
+        if (terminalSeen) {
+          throw new Error(
+            "AI response attempt emitted multiple terminal outcomes"
+          );
+        }
+        const outcome = bindAIResponseOutcomeToAttempt(
+          event.outcome,
+          attemptIdentity
+        );
+        const current =
+          input.isExecutionCurrent?.(attemptIdentity) ?? true;
+        terminalSeen = true;
+        if (!current) {
+          yield {
+            type: "terminal",
+            outcome: {
+              ...outcome,
+              final: true,
+              disposition: "stale",
+            },
+          };
+          return;
+        }
+        retry = shouldRetryAIResponseOutcome(outcome, policy);
+        yield {
+          type: "terminal",
+          outcome: {
+            ...outcome,
+            final: !retry,
+            disposition: retry ? "retrying" : "accepted",
+          },
+        };
+      }
+    } catch (error) {
+      if (terminalSeen) throw error;
+      terminalSeen = true;
+      const builder = new AIResponseEventBuilder(
+        input.providerId ?? "unknown",
+        attemptIdentity
+      );
+      yield builder.terminal({
+        status: "failed",
+        failureClass: "unexpected",
+        retryable: false,
+        safeErrorSummary:
+          error instanceof Error
+            ? boundAIResponseErrorText(error.message)
+            : "Unexpected AI response attempt failure",
+      });
+    }
+    if (!terminalSeen) {
+      const builder = new AIResponseEventBuilder(
+        input.providerId ?? "unknown",
+        attemptIdentity
+      );
+      yield builder.terminal({
+        status: "failed",
+        failureClass: "unexpected",
+        retryable: false,
+        safeErrorSummary: "AI response attempt ended without a terminal outcome",
+      });
+      return;
+    }
+    if (!retry) return;
+    const retryReady = await waitForAIResponseRetry(
+      policy.retryDelayMs,
+      input.signal
+    );
+    if (!retryReady) {
+      const abortedIdentity = createAIResponseAttemptIdentity(
+        input.identity,
+        attemptNumber + 1,
+        policy.maxAttempts
+      );
+      const builder = new AIResponseEventBuilder(
+        input.providerId ?? "unknown",
+        abortedIdentity
+      );
+      yield builder.terminal({ status: "aborted", retryable: false });
+      return;
+    }
+  }
+}
+
+export function createAIResponseAttemptIdentity(
+  identity: AIResponseExecutionIdentity,
+  attemptNumber: number,
+  maxAttempts: number
+): AIResponseAttemptIdentity {
+  return {
+    ...identity,
+    attemptId: `${identity.requestId}:attempt:${attemptNumber}:${createAIResponseIdentitySuffix()}`,
+    attemptNumber,
+    maxAttempts,
+  };
+}
+
+export function normalizeAIResponseRetryPolicy(
+  policy: AIResponseRetryPolicy | undefined
+): NormalizedAIResponseRetryPolicy {
+  const requestedAttempts = Number.isFinite(policy?.maxAttempts)
+    ? Math.floor(policy?.maxAttempts ?? 1)
+    : 1;
+  const requestedDelay = Number.isFinite(policy?.retryDelayMs)
+    ? Math.floor(policy?.retryDelayMs ?? 0)
+    : 0;
+  const maxAttempts = Math.max(
+    1,
+    Math.min(3, requestedAttempts)
+  );
+  return {
+    maxAttempts,
+    retryDelayMs: Math.max(0, Math.min(2_000, requestedDelay)),
+    retryTimeouts: policy?.retryTimeouts ?? false,
+    retryableFailureClasses:
+      policy?.retryableFailureClasses ??
+      ["transport", "rate-limit", "provider-http", "stream-read"],
+  };
+}
+
+export function shouldRetryAIResponseOutcome(
+  outcome: AIResponseTerminalOutcome,
+  policy: NormalizedAIResponseRetryPolicy
+) {
+  if (outcome.attemptNumber >= policy.maxAttempts) return false;
+  if (outcome.status === "timed-out") return policy.retryTimeouts;
+  return Boolean(
+    outcome.status === "failed" &&
+      outcome.retryable &&
+      outcome.failureClass &&
+      policy.retryableFailureClasses.includes(outcome.failureClass)
+  );
+}
+
+function bindAIResponseOutcomeToAttempt(
+  outcome: AIResponseTerminalOutcome,
+  identity: AIResponseAttemptIdentity
+): AIResponseTerminalOutcome {
+  return {
+    ...outcome,
+    ...identity,
+  };
 }
 
 export function classifyAIResponseHttpFailure(
@@ -138,4 +391,28 @@ export function shouldLegacyYieldAIResponseFailure(
 
 export function boundAIResponseErrorText(value: string) {
   return value.replace(/\s+/gu, " ").trim().slice(0, 1_000);
+}
+
+async function waitForAIResponseRetry(
+  delayMs: number,
+  signal: AbortSignal | undefined
+) {
+  if (signal?.aborted) return false;
+  if (delayMs <= 0) return true;
+  return new Promise<boolean>((resolve) => {
+    const onAbort = () => {
+      globalThis.clearTimeout(timeoutId);
+      resolve(false);
+    };
+    const timeoutId = globalThis.setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve(true);
+    }, delayMs);
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+function createAIResponseIdentitySuffix() {
+  return globalThis.crypto?.randomUUID?.() ??
+    `${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
 }

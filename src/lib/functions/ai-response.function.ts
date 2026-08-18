@@ -15,16 +15,20 @@ import {
   AIResponseEventBuilder,
   boundAIResponseErrorText,
   classifyAIResponseHttpFailure,
+  coordinateAIResponseAttempts,
   shouldLegacyYieldAIResponseFailure,
+  type AIResponseAttemptIdentity,
   type AIResponseEvent,
-  type AIResponseFailureClass,
-  type AIResponseTerminalOutcome,
-  type AIResponseTerminalStatus,
+  type AIResponseExecutionIdentity,
+  type AIResponseRetryPolicy,
 } from "./ai-response-events.js";
 
 export type {
   AIResponseEvent,
+  AIResponseAttemptIdentity,
+  AIResponseExecutionIdentity,
   AIResponseFailureClass,
+  AIResponseRetryPolicy,
   AIResponseTerminalOutcome,
   AIResponseTerminalStatus,
 } from "./ai-response-events.js";
@@ -32,9 +36,21 @@ export type {
 export interface AIResponseRequestOptions {
   timeoutMs?: number;
   maxOutputTokens?: number;
+  retryPolicy?: AIResponseRetryPolicy;
+  isExecutionCurrent?: (identity: AIResponseAttemptIdentity) => boolean;
 }
 
-type AIResponseParams = {
+export interface AIResponseExecutionIdentityInput {
+  requestId?: string;
+  executionPlanId?: string;
+  modelId?: string;
+  sessionId?: string;
+  runtimeEpoch?: number;
+  logicalQuestionUnitId?: string;
+  logicalQuestionRevision?: number;
+}
+
+export type AIResponseParams = {
   provider: TYPE_PROVIDER | undefined;
   selectedProvider: {
     provider: string;
@@ -47,6 +63,7 @@ type AIResponseParams = {
   signal?: AbortSignal;
   applyResponseSettings?: boolean;
   requestOptions?: AIResponseRequestOptions;
+  executionIdentity?: AIResponseExecutionIdentityInput;
 };
 
 function buildEnhancedSystemPrompt(
@@ -86,10 +103,31 @@ function buildEnhancedSystemPrompt(
 export async function* fetchAIResponseEvents(
   params: AIResponseParams
 ): AsyncIterable<AIResponseEvent> {
+  const identity = resolveAIResponseExecutionIdentity(params);
+  const providerId =
+    params.provider?.id ?? params.selectedProvider?.provider ?? "unknown";
+  yield* coordinateAIResponseAttempts({
+    identity,
+    providerId,
+    retryPolicy: params.requestOptions?.retryPolicy,
+    signal: params.signal,
+    isExecutionCurrent: params.requestOptions?.isExecutionCurrent,
+    runAttempt: (attemptIdentity) =>
+      fetchAIResponseAttemptEvents(params, attemptIdentity),
+  });
+}
+
+async function* fetchAIResponseAttemptEvents(
+  params: AIResponseParams,
+  attemptIdentity: AIResponseAttemptIdentity
+): AsyncIterable<AIResponseEvent> {
   let cleanupRequestSignal = () => {};
   const providerId =
     params.provider?.id ?? params.selectedProvider?.provider ?? "unknown";
-  const eventBuilder = new AIResponseEventBuilder(providerId);
+  const eventBuilder = new AIResponseEventBuilder(
+    providerId,
+    attemptIdentity
+  );
   const terminal = eventBuilder.terminal.bind(eventBuilder);
 
   try {
@@ -417,12 +455,21 @@ export async function* fetchAIResponseEvents(
 export async function* fetchAIResponse(
   params: AIResponseParams
 ): AsyncIterable<string> {
-  for await (const event of fetchAIResponseEvents(params)) {
+  const legacyParams: AIResponseParams = {
+    ...params,
+    requestOptions: {
+      ...params.requestOptions,
+      retryPolicy: { maxAttempts: 1 },
+      isExecutionCurrent: undefined,
+    },
+  };
+  for await (const event of fetchAIResponseEvents(legacyParams)) {
     if (event.type === "content-delta") {
       yield event.content;
       continue;
     }
     const outcome = event.outcome;
+    if (!outcome.final) continue;
     if (
       outcome.status === "success" ||
       outcome.status === "empty" ||
@@ -440,6 +487,51 @@ export async function* fetchAIResponse(
     yield summary;
     return;
   }
+}
+
+function resolveAIResponseExecutionIdentity(
+  params: AIResponseParams
+): AIResponseExecutionIdentity {
+  const requestId =
+    params.executionIdentity?.requestId ?? createAIResponseRequestId();
+  return {
+    requestId,
+    executionPlanId:
+      params.executionIdentity?.executionPlanId ?? requestId,
+    modelId:
+      params.executionIdentity?.modelId ?? inferAIResponseModelId(params),
+    sessionId: params.executionIdentity?.sessionId ?? "unscoped",
+    runtimeEpoch: Math.max(
+      0,
+      Math.floor(params.executionIdentity?.runtimeEpoch ?? 0)
+    ),
+    logicalQuestionUnitId:
+      params.executionIdentity?.logicalQuestionUnitId ?? "unscoped",
+    logicalQuestionRevision: Math.max(
+      0,
+      Math.floor(params.executionIdentity?.logicalQuestionRevision ?? 0)
+    ),
+  };
+}
+
+function inferAIResponseModelId(params: AIResponseParams) {
+  const variables = params.selectedProvider?.variables ?? {};
+  return (
+    variables.MODEL ??
+    variables.MODEL_ID ??
+    variables.model ??
+    variables.modelId ??
+    params.selectedProvider?.provider ??
+    params.provider?.id ??
+    "unknown"
+  );
+}
+
+function createAIResponseRequestId() {
+  const suffix =
+    globalThis.crypto?.randomUUID?.() ??
+    `${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+  return `ai_response_${suffix}`;
 }
 
 function getFirstImageMediaType(images: Array<string | ImageInput>) {
@@ -466,7 +558,7 @@ function createRequestSignal(
   const controller = new AbortController();
   let timedOut = false;
   const abortFromExternalSignal = () => controller.abort();
-  const timeoutId = window.setTimeout(() => {
+  const timeoutId = globalThis.setTimeout(() => {
     timedOut = true;
     controller.abort();
   }, timeoutMs);
@@ -482,7 +574,7 @@ function createRequestSignal(
   return {
     signal: controller.signal,
     cleanup: () => {
-      window.clearTimeout(timeoutId);
+      globalThis.clearTimeout(timeoutId);
       externalSignal?.removeEventListener("abort", abortFromExternalSignal);
     },
     timedOut: () => timedOut,
