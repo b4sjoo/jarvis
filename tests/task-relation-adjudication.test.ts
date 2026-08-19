@@ -834,6 +834,69 @@ test("narrowly releases a grounded same-type manual screen milestone", () => {
 
   assert.equal(decision.authorized, true);
   assert.equal(decision.reason, "authorized");
+  assert.equal(decision.releasedRelation, "new-parent");
+});
+
+test("narrowly releases a grounded same-parent screen follow-up", () => {
+  const candidate = {
+    schemaVersion: 2 as const,
+    relation: "followup-parent" as const,
+    dependency: "parent-dependent" as const,
+    continuationShape: "mainline" as const,
+    returnIntent: "no-resume" as const,
+    switchIntent: "no-explicit-switch" as const,
+    standaloneSufficiency: "insufficient" as const,
+    confidence: 0.98,
+    currentQuestionEvidenceSpans: ["Explain lines 35 through 38"],
+    parentEvidenceSpans: ["Implement an LRU cache"],
+    explicitBinding: false,
+    standalone: false,
+  };
+  const common = {
+    sourceKind: "screen" as const,
+    screenBoundaryPrior: true,
+    currentQuestionType: "coding",
+    activeParentQuestionType: "coding",
+    typeAuthoritySource: "screen-preflight",
+    typeEvidenceAuthorized: true,
+    typeConfidence: 0.99,
+    questionComplete: true,
+    manualCorrectionActive: false,
+    hasActiveChild: false,
+    operationLeaseAuthorized: true,
+    releaseWindowOpen: true,
+    candidate,
+  };
+
+  const decision = decideNarrowScreenRelationRelease(common);
+  assert.equal(decision.authorized, true);
+  assert.equal(decision.reason, "authorized");
+  assert.equal(decision.releasedRelation, "followup-parent");
+
+  for (const invalidCandidate of [
+    { ...candidate, continuationShape: "bounded-detour" as const },
+    { ...candidate, switchIntent: "explicit-switch" as const },
+    {
+      ...candidate,
+      standaloneSufficiency: "sufficient" as const,
+      standalone: true,
+    },
+  ]) {
+    assert.equal(
+      decideNarrowScreenRelationRelease({
+        ...common,
+        candidate: invalidCandidate,
+      }).reason,
+      "candidate-followup-not-bounded"
+    );
+  }
+  assert.equal(
+    decideNarrowScreenRelationRelease({
+      ...common,
+      currentQuestionType: "behavioral",
+    }).reason,
+    "candidate-followup-not-bounded"
+  );
 });
 
 test("narrow screen relation release fails closed on continuity or stale evidence", () => {

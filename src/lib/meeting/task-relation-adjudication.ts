@@ -207,6 +207,7 @@ export type NarrowScreenRelationReleaseReason =
   | "release-window-closed"
   | "candidate-confidence-below-threshold"
   | "candidate-relation-not-new-parent"
+  | "candidate-followup-not-bounded"
   | "candidate-not-parent-independent"
   | "candidate-not-standalone"
   | "candidate-binds-existing-parent";
@@ -220,6 +221,7 @@ export interface NarrowScreenRelationReleaseDecision {
   typeConfidence: number;
   relationConfidence: number;
   minimumConfidence: number;
+  releasedRelation?: "new-parent" | "followup-parent";
 }
 
 export interface NarrowScreenRelationReleaseInput {
@@ -521,6 +523,33 @@ export function decideNarrowScreenRelationRelease(
   if (relationConfidence < SCREEN_RELATION_RELEASE_MIN_CONFIDENCE) {
     return reject("candidate-confidence-below-threshold", true);
   }
+  if (input.candidate.relation === "followup-parent") {
+    const boundedFollowup = Boolean(
+      currentQuestionType === activeParentQuestionType &&
+        input.candidate.dependency === "parent-dependent" &&
+        input.candidate.continuationShape === "mainline" &&
+        input.candidate.returnIntent === "no-resume" &&
+        input.candidate.switchIntent === "no-explicit-switch" &&
+        input.candidate.standaloneSufficiency === "insufficient" &&
+        !input.candidate.standalone &&
+        !input.candidate.explicitBinding &&
+        input.candidate.parentEvidenceSpans.length > 0
+    );
+    if (!boundedFollowup) {
+      return reject("candidate-followup-not-bounded", true);
+    }
+    return {
+      requested: true,
+      authorized: true,
+      reason: "authorized",
+      currentQuestionType,
+      activeParentQuestionType,
+      typeConfidence,
+      relationConfidence,
+      minimumConfidence: SCREEN_RELATION_RELEASE_MIN_CONFIDENCE,
+      releasedRelation: "followup-parent",
+    };
+  }
   if (input.candidate.relation !== "new-parent") {
     return reject("candidate-relation-not-new-parent", true);
   }
@@ -549,6 +578,7 @@ export function decideNarrowScreenRelationRelease(
     typeConfidence,
     relationConfidence,
     minimumConfidence: SCREEN_RELATION_RELEASE_MIN_CONFIDENCE,
+    releasedRelation: "new-parent",
   };
 }
 
@@ -723,6 +753,7 @@ export function formatNarrowScreenRelationReleaseForTrace(
     taskRelationScreenReleaseRelationConfidence:
       decision.relationConfidence,
     taskRelationScreenReleaseMinConfidence: decision.minimumConfidence,
+    taskRelationScreenReleasedRelation: decision.releasedRelation,
   };
 }
 
