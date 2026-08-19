@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   decideAdvisorGenerationAdmission,
+  decideManualScreenAdvisorSupersession,
 } from "../src/lib/meeting/advisor-generation-supersession.js";
 import { createAdvisorTriggerJob } from "../src/lib/meeting/advisor-trigger-job.js";
 import type { AdvisorPromptContext } from "../src/lib/meeting/types.js";
@@ -84,4 +85,94 @@ test("a settled runtime type repair can replace immediately", () => {
 
   assert.equal(decision.action, "replace-with-settled-authority");
   assert.equal(decision.reason, "settled-runtime-repair");
+});
+
+const voiceCandidate = {
+  candidateId: "advisor-job-1",
+  advisorJobId: "advisor-job-1",
+  generationLeaseId: "generation-1",
+  source: "live-turn",
+  sessionId: "session-a",
+  runtimeEpoch: 4,
+  logicalQuestionUnitId: "lqu-1",
+  logicalQuestionRevision: 3,
+};
+
+test("successful manual Screen capture supersedes the matching automatic Voice generation", () => {
+  const decision = decideManualScreenAdvisorSupersession({
+    captureSuccessful: true,
+    candidate: voiceCandidate,
+    candidateStillCurrent: true,
+    currentSessionId: "session-a",
+    currentRuntimeEpoch: 4,
+    recoveryTarget: {
+      logicalQuestionUnitId: "lqu-1",
+      logicalQuestionRevision: 3,
+    },
+  });
+
+  assert.equal(decision.disposition, "supersede-automatic-voice");
+  assert.equal(decision.reason, "same-recovery-target");
+});
+
+test("failed capture and a different recovery target preserve Voice generation", () => {
+  assert.equal(
+    decideManualScreenAdvisorSupersession({
+      captureSuccessful: false,
+      candidate: voiceCandidate,
+      candidateStillCurrent: true,
+      currentSessionId: "session-a",
+      currentRuntimeEpoch: 4,
+      recoveryTarget: {
+        logicalQuestionUnitId: "lqu-1",
+        logicalQuestionRevision: 3,
+      },
+    }).reason,
+    "capture-not-successful"
+  );
+  assert.equal(
+    decideManualScreenAdvisorSupersession({
+      captureSuccessful: true,
+      candidate: voiceCandidate,
+      candidateStillCurrent: true,
+      currentSessionId: "session-a",
+      currentRuntimeEpoch: 4,
+      recoveryTarget: {
+        logicalQuestionUnitId: "lqu-2",
+        logicalQuestionRevision: 1,
+      },
+    }).reason,
+    "logical-question-mismatch"
+  );
+});
+
+test("manual and stale candidates do not receive automatic Screen supersession", () => {
+  assert.equal(
+    decideManualScreenAdvisorSupersession({
+      captureSuccessful: true,
+      candidate: { ...voiceCandidate, source: "manual-correction" },
+      candidateStillCurrent: true,
+      currentSessionId: "session-a",
+      currentRuntimeEpoch: 4,
+      recoveryTarget: {
+        logicalQuestionUnitId: "lqu-1",
+        logicalQuestionRevision: 3,
+      },
+    }).reason,
+    "candidate-is-not-automatic-voice"
+  );
+  assert.equal(
+    decideManualScreenAdvisorSupersession({
+      captureSuccessful: true,
+      candidate: voiceCandidate,
+      candidateStillCurrent: false,
+      currentSessionId: "session-a",
+      currentRuntimeEpoch: 4,
+      recoveryTarget: {
+        logicalQuestionUnitId: "lqu-1",
+        logicalQuestionRevision: 3,
+      },
+    }).reason,
+    "candidate-no-longer-current"
+  );
 });

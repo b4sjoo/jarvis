@@ -403,7 +403,10 @@ import {
   authorizeAdvisorOutputCommit,
   createAdvisorTriggerJob,
   decideAdvisorGenerationAdmission,
+  decideManualScreenAdvisorSupersession,
   formatAdvisorGenerationAdmissionForTrace,
+  formatManualScreenAdvisorSupersessionForTrace,
+  ManualScreenAdvisorSupersessionCandidate,
   authorizeRuntimeCommit,
   authorizeAdvisorTaskMutation,
   buildRuntimeCommitSnapshot,
@@ -4173,6 +4176,7 @@ export function useMeetingAssistant() {
       taskRuntimeRevision: number;
       taskRuntimeTransition?: PendingGenerationAnswerRevision["taskRuntimeTransition"];
       advisorJobId?: string;
+      advisorJobSource?: AdvisorJobSource;
       runtimeTypeRepairOutputAuthority?: RuntimeTypeRepairOutputAuthority;
     }) => {
       const now = Date.now();
@@ -4291,6 +4295,7 @@ export function useMeetingAssistant() {
         latestUsefulAnswerMutationAuthorized:
           input.latestUsefulAnswerMutationAuthorized,
         advisorJobId: input.advisorJobId,
+        advisorJobSource: input.advisorJobSource,
         runtimeTypeRepairOutputAuthority:
           input.runtimeTypeRepairOutputAuthority,
         taskRuntimeRevision: input.taskRuntimeRevision,
@@ -12421,6 +12426,7 @@ export function useMeetingAssistant() {
               taskRuntimeTransition:
                 advisorGenerationTaskRuntimeTransition,
               advisorJobId: advisorJob.id,
+              advisorJobSource: advisorJob.source,
               runtimeTypeRepairOutputAuthority:
                 advisorJob.runtimeTypeRepairOutputAuthority,
             })
@@ -20908,6 +20914,52 @@ export function useMeetingAssistant() {
             logicalQuestionUnitRef.current,
           ],
         });
+      const activeAdvisorAtScreenRequest = activeAdvisorJobRef.current;
+      const activeGenerationAtScreenRequest =
+        activeAdvisorGenerationLeaseRef.current?.advisorJobId ===
+        activeAdvisorAtScreenRequest?.id
+          ? activeAdvisorGenerationLeaseRef.current
+          : undefined;
+      const pendingAnswerAtScreenRequest = pendingAnswerRevisionRef.current;
+      const activeVoiceCandidate = activeAdvisorAtScreenRequest
+        ? {
+            candidateId: activeAdvisorAtScreenRequest.id,
+            advisorJobId: activeAdvisorAtScreenRequest.id,
+            generationLeaseId:
+              activeGenerationAtScreenRequest?.lease.id,
+            source: activeAdvisorAtScreenRequest.source,
+            sessionId: activeAdvisorAtScreenRequest.expectedSessionId,
+            runtimeEpoch:
+              activeAdvisorAtScreenRequest.runtimeCommitToken.runtimeEpoch,
+            logicalQuestionUnitId:
+              activeAdvisorAtScreenRequest.logicalQuestionUnit?.id,
+            logicalQuestionRevision:
+              activeAdvisorAtScreenRequest.logicalQuestionUnit?.revision,
+          }
+        : undefined;
+      const pendingVoiceCandidate = pendingAnswerAtScreenRequest
+        ? {
+            candidateId: pendingAnswerAtScreenRequest.operationId,
+            advisorJobId: pendingAnswerAtScreenRequest.advisorJobId,
+            generationLeaseId: pendingAnswerAtScreenRequest.lease.id,
+            source:
+              pendingAnswerAtScreenRequest.advisorJobSource ?? "unknown",
+            sessionId: pendingAnswerAtScreenRequest.lease.sessionId,
+            runtimeEpoch: pendingAnswerAtScreenRequest.lease.runtimeEpoch,
+            logicalQuestionUnitId:
+              pendingAnswerAtScreenRequest.logicalQuestionUnitId,
+            logicalQuestionRevision:
+              pendingAnswerAtScreenRequest.logicalQuestionRevision,
+          }
+        : undefined;
+      const screenAdvisorSupersessionCandidate:
+        | ManualScreenAdvisorSupersessionCandidate
+        | undefined =
+        activeVoiceCandidate?.source === "live-turn"
+          ? activeVoiceCandidate
+          : pendingVoiceCandidate?.source === "live-turn"
+            ? pendingVoiceCandidate
+            : activeVoiceCandidate ?? pendingVoiceCandidate;
       const screenOperationClaim =
         screenOperationCoordinatorRef.current.claim(
           screenOperationId,
@@ -20927,13 +20979,8 @@ export function useMeetingAssistant() {
       const screenRefreshAuthority = decideRefreshAuthority({
         source: "screen",
       });
-      responseActionRevisionRef.current += 1;
-      const screenResponseActionRevision =
+      let screenResponseActionRevision =
         responseActionRevisionRef.current;
-      cancelActiveAdvisorJob(
-        "screen-capture-started",
-        "cancelled-by-new-job"
-      );
       let screenRuntimeToken = createRuntimeCommitToken({
         operationId: screenOperationId,
         pipeline: "screen",
@@ -20983,6 +21030,7 @@ export function useMeetingAssistant() {
       const returnStatus = state.status;
       const idleReturnStatus = returnStatus === "paused" ? "paused" : "idle";
       let captureStepId: string | undefined;
+      let screenCaptureSucceeded = false;
       let preflightStepId: string | undefined;
       let modelStepId: string | undefined;
       let screenModelPromptText = "";
@@ -21177,7 +21225,18 @@ export function useMeetingAssistant() {
           source,
           previousHash: latestScreenHashRef.current,
         });
-        if (rejectStaleScreenOperation("post-capture")) return;
+        screenCaptureSucceeded = true;
+        const postCaptureAuthorization = readScreenAuthorization();
+        const recoverableParentDrift =
+          !postCaptureAuthorization.authorized &&
+          (postCaptureAuthorization.reason === "parent-presence-mismatch" ||
+            postCaptureAuthorization.reason === "parent-revision-mismatch");
+        if (
+          !postCaptureAuthorization.authorized &&
+          !recoverableParentDrift
+        ) {
+          if (rejectStaleScreenOperation("post-capture")) return;
+        }
         traceStoreRef.current.finishStep(trace.id, captureStepId, "success", {
           changed: observation.changed,
           hash: observation.hash,
@@ -21192,6 +21251,158 @@ export function useMeetingAssistant() {
           trace.id
         );
         options.onCaptured?.();
+
+        const currentActiveAdvisor = activeAdvisorJobRef.current;
+        const currentPendingAnswer = pendingAnswerRevisionRef.current;
+        const recoveryTarget = screenVoiceQuestionCapsule
+          ? {
+              logicalQuestionUnitId: screenVoiceQuestionCapsule.id,
+              logicalQuestionRevision:
+                screenVoiceQuestionCapsule.revision,
+            }
+          : undefined;
+        const candidateLedgerEntry =
+          screenAdvisorSupersessionCandidate?.generationLeaseId
+            ? generationResultLedgerRef.current.getEntry(
+                screenAdvisorSupersessionCandidate.generationLeaseId
+              )
+            : undefined;
+        const currentQuestionMatchesCandidate = Boolean(
+          recoveryTarget &&
+            screenAdvisorSupersessionCandidate &&
+            recoveryTarget.logicalQuestionUnitId ===
+              screenAdvisorSupersessionCandidate.logicalQuestionUnitId &&
+            recoveryTarget.logicalQuestionRevision ===
+              screenAdvisorSupersessionCandidate.logicalQuestionRevision
+        );
+        const explicitAdvisorConflict = Boolean(
+          currentActiveAdvisor &&
+            currentActiveAdvisor.source !== "live-turn" &&
+            currentActiveAdvisor.id !==
+              screenAdvisorSupersessionCandidate?.advisorJobId
+        );
+        const candidateStillCurrent =
+          !explicitAdvisorConflict &&
+          Boolean(
+            screenAdvisorSupersessionCandidate &&
+              (currentActiveAdvisor?.id ===
+                screenAdvisorSupersessionCandidate.advisorJobId ||
+                currentPendingAnswer?.operationId ===
+                  screenAdvisorSupersessionCandidate.candidateId ||
+                currentPendingAnswer?.advisorJobId ===
+                  screenAdvisorSupersessionCandidate.advisorJobId ||
+                (candidateLedgerEntry?.terminalization?.disposition ===
+                  "committed" &&
+                  currentQuestionMatchesCandidate))
+          );
+        const manualScreenSupersession =
+          decideManualScreenAdvisorSupersession({
+            captureSuccessful: true,
+            candidate: screenAdvisorSupersessionCandidate,
+            candidateStillCurrent,
+            currentSessionId:
+              contextManagerRef.current.getState().sessionId,
+            currentRuntimeEpoch: runtimeEpochRef.current,
+            recoveryTarget,
+          });
+        const manualScreenSupersessionMetadata = {
+          ...formatManualScreenAdvisorSupersessionForTrace(
+            manualScreenSupersession
+          ),
+          manualScreenSupersessionCaptureSucceededAt: Date.now(),
+          manualScreenSupersessionRecoverableParentDrift:
+            recoverableParentDrift,
+        };
+        traceStoreRef.current.updateMetadata(
+          trace.id,
+          manualScreenSupersessionMetadata
+        );
+        sessionRecordingManagerRef.current?.recordCaptureLifecycle({
+          stage: "manual-screen-advisor-supersession-settled",
+          traceId: trace.id,
+          ...manualScreenSupersessionMetadata,
+        });
+
+        if (
+          manualScreenSupersession.disposition ===
+          "supersede-automatic-voice"
+        ) {
+          responseActionRevisionRef.current += 1;
+          screenResponseActionRevision =
+            responseActionRevisionRef.current;
+
+          const activeVoiceMatchesTarget = Boolean(
+            currentActiveAdvisor?.source === "live-turn" &&
+              recoveryTarget &&
+              currentActiveAdvisor.logicalQuestionUnit?.id ===
+                recoveryTarget.logicalQuestionUnitId &&
+              currentActiveAdvisor.logicalQuestionUnit.revision ===
+                recoveryTarget.logicalQuestionRevision
+          );
+          if (activeVoiceMatchesTarget) {
+            cancelActiveAdvisorJob(
+              "manual-screen-capture-succeeded",
+              "cancelled-by-new-job",
+              {
+                source: "manual-screen",
+                authority: "human-explicit-capture",
+                targetLogicalQuestionRevision:
+                  recoveryTarget?.logicalQuestionRevision,
+              }
+            );
+          }
+
+          const pendingVoiceMatchesTarget = Boolean(
+            currentPendingAnswer?.advisorJobSource === "live-turn" &&
+              recoveryTarget &&
+              currentPendingAnswer.logicalQuestionUnitId ===
+                recoveryTarget.logicalQuestionUnitId &&
+              currentPendingAnswer.logicalQuestionRevision ===
+                recoveryTarget.logicalQuestionRevision
+          );
+          if (pendingVoiceMatchesTarget && currentPendingAnswer) {
+            terminalizeGenerationLease({
+              lease: currentPendingAnswer.lease,
+              disposition: "superseded",
+              reason: "manual-screen-capture-succeeded",
+              source: "manual-screen",
+              authority: "human-explicit-capture",
+              targetLogicalQuestionRevision:
+                recoveryTarget?.logicalQuestionRevision,
+              candidateFormed: true,
+              traceId: currentPendingAnswer.suggestion.sourceTraceId,
+            });
+            currentPendingAnswer.disposition = "dropped";
+            pendingAnswerRevisionRef.current = null;
+            answerDeliveryProgressRef.current = null;
+            clearPendingAnswerCommitTimer();
+            setState((previous) => ({
+              ...previous,
+              answerDelivery: toAnswerDeliveryPresentation({
+                visibleAnswerRevision: visibleAnswerRevisionRef.current,
+              }),
+            }));
+            if (currentPendingAnswer.suggestion.sourceTraceId) {
+              traceStoreRef.current.updateMetadata(
+                currentPendingAnswer.suggestion.sourceTraceId,
+                {
+                  pendingAnswerDisposition: "dropped",
+                  pendingAnswerReason:
+                    "manual-screen-capture-succeeded",
+                  supersededByScreenTraceId: trace.id,
+                }
+              );
+            }
+          }
+
+          screenRuntimeToken = createRuntimeCommitToken({
+            operationId: screenOperationId,
+            pipeline: "screen",
+            snapshot: readRuntimeCommitSnapshot(),
+          });
+        }
+
+        if (rejectStaleScreenOperation("post-capture-authority")) return;
 
         latestScreenHashRef.current = observation.hash;
         traceStoreRef.current.recordOutput(
@@ -24321,6 +24532,31 @@ export function useMeetingAssistant() {
         traceStoreRef.current.finishStep(trace.id, uiStepId, "success");
         traceStoreRef.current.finishTrace(trace.id, "success");
       } catch (error) {
+        if (!screenCaptureSucceeded) {
+          const failedCaptureSupersession =
+            decideManualScreenAdvisorSupersession({
+              captureSuccessful: false,
+              candidate: screenAdvisorSupersessionCandidate,
+              candidateStillCurrent: true,
+              currentSessionId:
+                contextManagerRef.current.getState().sessionId,
+              currentRuntimeEpoch: runtimeEpochRef.current,
+              recoveryTarget: screenVoiceQuestionCapsule
+                ? {
+                    logicalQuestionUnitId:
+                      screenVoiceQuestionCapsule.id,
+                    logicalQuestionRevision:
+                      screenVoiceQuestionCapsule.revision,
+                  }
+                : undefined,
+            });
+          traceStoreRef.current.updateMetadata(
+            trace.id,
+            formatManualScreenAdvisorSupersessionForTrace(
+              failedCaptureSupersession
+            )
+          );
+        }
         if (screenGenerationLease) {
           if (error instanceof MeetingAIResponseOutcomeError) {
             for (const outcome of error.attempts) {
@@ -24444,6 +24680,7 @@ export function useMeetingAssistant() {
     [
       aiProvider,
       cancelActiveAdvisorJob,
+      clearPendingAnswerCommitTimer,
       flushPendingSentenceCompletion,
       loadMemoryForPrompt,
       recordCommittedPlaybookPhaseTransition,

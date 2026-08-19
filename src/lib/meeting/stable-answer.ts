@@ -70,6 +70,7 @@ export interface PendingAnswerRevision {
   resetSections: boolean;
   latestUsefulAnswerMutationAuthorized: boolean;
   advisorJobId?: string;
+  advisorJobSource?: string;
   runtimeTypeRepairOutputAuthority?: RuntimeTypeRepairOutputAuthority;
 }
 
