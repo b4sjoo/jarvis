@@ -157,7 +157,8 @@ const SCREEN_PREFLIGHT_SYSTEM_PROMPT = [
 
 const SCREEN_TASK_SYSTEM_PROMPT = [
   "You are Jarvis, a private live meeting assistant for a non-native English speaker working as a software engineer.",
-  "The screenshot is the primary source of truth. Recent transcript is only supplemental clarification, modification, or follow-up.",
+  "The screenshot is the primary source of visible facts. When <advisor_evidence_packet> current_question has source voice-lqu, that bounded Voice question is the primary ask and the screenshot is visual evidence for answering it. Otherwise the main visible Screen question is the primary ask.",
+  "Recent transcript outside that bounded current question is only supplemental clarification, modification, or follow-up.",
   "Focus on the visible technical question near the user's active work area. If there are multiple questions or distracting text, choose the question most likely being worked on.",
   "If a cursor-centered horizontal focus band is provided, treat it as the primary visual input for selecting the user's current work area while keeping the full screenshot only as surrounding context.",
   "If the screen shows an open field-knowledge question, give a concise and professional answer the user can say in a meeting.",
@@ -682,7 +683,7 @@ function buildScreenTaskUserMessage({
 
   sections.push(
     "<task>",
-    "Read the screenshot and answer the main visible software-engineering question.",
+    "Resolve the authoritative current question from <advisor_evidence_packet>. If its source is voice-lqu, answer that exact bounded ask using the screenshot as visual evidence. Otherwise answer the main visible software-engineering question.",
     "If a focus band is present, Image 1 is the cursor-centered horizontal focus band and Image 2 is the full active-window context.",
     "If no focus band is present, Image 1 is the full active-window screenshot.",
     "When the focus band is present, first identify the active question, active code region, visible language setting, or UI option from Image 1. Use Image 2 only to recover surrounding context for that selected target.",
@@ -692,7 +693,7 @@ function buildScreenTaskUserMessage({
     "If the focus band contains multiple nearby questions, prefer the text block closest to the cursor position inside the focus band.",
     "If the visible UI or focus band indicates a non-Python language, use that language instead of the Python default.",
     "Use 中文思路 as the first section. It must give the concise Chinese reasoning path the user can glance at first.",
-    "The Answer section must directly answer the selected target in meeting-ready wording; do not say which question you identified, selected, or focused on.",
+    "The Answer section must directly answer the authoritative primary ask in meeting-ready wording; do not say which question you identified, selected, or focused on.",
     "Put supporting details after Answer. Do not put code blocks in Approach; code belongs only in Code.",
     "Follow the natural language response preferences when choosing answer length and explanation language. Do not let those preferences override the selected programming language for code.",
     "Use memory only for stable background knowledge. Do not let memory override visible problem constraints, visible language selection, or spoken follow-up constraints.",

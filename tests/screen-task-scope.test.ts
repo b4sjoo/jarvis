@@ -8,6 +8,8 @@ import {
   resolveAdvisorScreenSourceRead,
   resolveAdvisorRequestModeForScreenScope,
   resolveAdvisorTaskEvidenceSource,
+  resolveManualScreenSourcePacket,
+  formatManualScreenSourcePacketForTrace,
   selectManualScreenVoiceQuestionCapsule,
 } from "../src/lib/meeting/screen-task-scope.js";
 import { MeetingContextManager } from "../src/lib/meeting/context-manager.js";
@@ -349,4 +351,58 @@ test("keeps only the current bounded voice question for manual screen recovery",
     text: "Explain lines 58 through 63.",
     sourceTurnIds: ["turn-58", "turn-63"],
   });
+});
+
+test("binds a Voice LQU as the primary ask and keeps Screen as visual evidence", () => {
+  const packet = resolveManualScreenSourcePacket({
+    voiceQuestion: {
+      logicalQuestionUnitId: "question-current",
+      logicalQuestionRevision: 2,
+      text: "Explain lines 35 through 38.",
+      sourceTurnIds: ["turn-35"],
+    },
+    screenObservationId: "screen-1",
+    screenPreflightQuestion: "Implement the LRU cache.",
+  });
+
+  assert.deepEqual(packet.primaryAsk, {
+    text: "Explain lines 35 through 38.",
+    source: "voice-lqu",
+    sourceTurnIds: ["turn-35"],
+    logicalQuestionUnitId: "question-current",
+    revision: 2,
+    screenObservationId: "screen-1",
+  });
+  assert.equal(packet.visualEvidence.preflightQuestion, "Implement the LRU cache.");
+  assert.equal(packet.sourceOperationAuthority.boundVoicePrimaryAsk, true);
+  assert.deepEqual(
+    formatManualScreenSourcePacketForTrace(packet),
+    {
+      manualScreenPrimaryAskSource: "voice-lqu",
+      manualScreenPrimaryAskChars: 28,
+      manualScreenPrimaryAskSourceTurnIds: ["turn-35"],
+      manualScreenPrimaryAskLogicalQuestionUnitId: "question-current",
+      manualScreenPrimaryAskLogicalQuestionRevision: 2,
+      manualScreenVisualEvidenceObservationId: "screen-1",
+      manualScreenVisualEvidenceQuestionChars: 24,
+      manualScreenSourceOperationAuthority: "manual-screen",
+      manualScreenExplicitCapture: true,
+      manualScreenBoundVoicePrimaryAsk: true,
+    }
+  );
+});
+
+test("uses Screen preflight as the primary ask when no Voice question is bound", () => {
+  const packet = resolveManualScreenSourcePacket({
+    screenObservationId: "screen-2",
+    screenPreflightQuestion: "Design a URL shortener.",
+  });
+
+  assert.deepEqual(packet.primaryAsk, {
+    text: "Design a URL shortener.",
+    source: "screen-preflight",
+    sourceTurnIds: [],
+    screenObservationId: "screen-2",
+  });
+  assert.equal(packet.sourceOperationAuthority.boundVoicePrimaryAsk, false);
 });

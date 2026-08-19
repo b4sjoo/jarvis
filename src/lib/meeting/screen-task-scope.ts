@@ -1,5 +1,6 @@
 import type { AdvisorJobSource } from "./advisor-trigger-job";
 import type {
+  AdvisorCurrentQuestionEvidence,
   AdvisorPromptContext,
   AdvisorRequestMode,
   InterviewTaskRelation,
@@ -78,6 +79,19 @@ export interface ManualScreenVoiceQuestionCapsule {
   sourceTurnIds: string[];
 }
 
+export interface ManualScreenSourcePacket {
+  primaryAsk?: AdvisorCurrentQuestionEvidence;
+  visualEvidence: {
+    screenObservationId: string;
+    preflightQuestion?: string;
+  };
+  sourceOperationAuthority: {
+    source: "manual-screen";
+    explicitCapture: true;
+    boundVoicePrimaryAsk: boolean;
+  };
+}
+
 export function selectManualScreenVoiceQuestionCapsule<
   T extends VoiceQuestionCapsuleCandidate,
 >(input: {
@@ -97,6 +111,72 @@ export function selectManualScreenVoiceQuestionCapsule<
     logicalQuestionRevision: unit.revision,
     text: unit.normalizedText.trim(),
     sourceTurnIds: [...unit.sourceTurnIds],
+  };
+}
+
+export function resolveManualScreenSourcePacket(input: {
+  voiceQuestion?: ManualScreenVoiceQuestionCapsule;
+  screenObservationId: string;
+  screenPreflightQuestion?: string;
+}): ManualScreenSourcePacket {
+  const screenPreflightQuestion =
+    input.screenPreflightQuestion?.trim() || undefined;
+  const primaryAsk: AdvisorCurrentQuestionEvidence | undefined =
+    input.voiceQuestion
+      ? {
+          text: input.voiceQuestion.text,
+          source: "voice-lqu",
+          sourceTurnIds: [...input.voiceQuestion.sourceTurnIds],
+          logicalQuestionUnitId:
+            input.voiceQuestion.logicalQuestionUnitId,
+          revision: input.voiceQuestion.logicalQuestionRevision,
+          screenObservationId: input.screenObservationId,
+        }
+      : screenPreflightQuestion
+        ? {
+            text: screenPreflightQuestion,
+            source: "screen-preflight",
+            sourceTurnIds: [],
+            screenObservationId: input.screenObservationId,
+          }
+        : undefined;
+
+  return {
+    primaryAsk,
+    visualEvidence: {
+      screenObservationId: input.screenObservationId,
+      preflightQuestion: screenPreflightQuestion,
+    },
+    sourceOperationAuthority: {
+      source: "manual-screen",
+      explicitCapture: true,
+      boundVoicePrimaryAsk: Boolean(input.voiceQuestion),
+    },
+  };
+}
+
+export function formatManualScreenSourcePacketForTrace(
+  packet: ManualScreenSourcePacket
+): Record<string, unknown> {
+  return {
+    manualScreenPrimaryAskSource: packet.primaryAsk?.source,
+    manualScreenPrimaryAskChars: packet.primaryAsk?.text.length ?? 0,
+    manualScreenPrimaryAskSourceTurnIds:
+      packet.primaryAsk?.sourceTurnIds ?? [],
+    manualScreenPrimaryAskLogicalQuestionUnitId:
+      packet.primaryAsk?.logicalQuestionUnitId,
+    manualScreenPrimaryAskLogicalQuestionRevision:
+      packet.primaryAsk?.revision,
+    manualScreenVisualEvidenceObservationId:
+      packet.visualEvidence.screenObservationId,
+    manualScreenVisualEvidenceQuestionChars:
+      packet.visualEvidence.preflightQuestion?.length ?? 0,
+    manualScreenSourceOperationAuthority:
+      packet.sourceOperationAuthority.source,
+    manualScreenExplicitCapture:
+      packet.sourceOperationAuthority.explicitCapture,
+    manualScreenBoundVoicePrimaryAsk:
+      packet.sourceOperationAuthority.boundVoicePrimaryAsk,
   };
 }
 

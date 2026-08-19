@@ -657,6 +657,8 @@ import {
   scoreSemanticInterviewerIntentEmbeddings,
   scoreSemanticTaxonomyEmbedding,
   selectManualScreenVoiceQuestionCapsule,
+  resolveManualScreenSourcePacket,
+  formatManualScreenSourcePacketForTrace,
   SemanticTaxonomyRuntime,
   PlaybookPhaseDecision,
   SENTENCE_COMPLETION_BUFFER_MS,
@@ -21639,6 +21641,13 @@ export function useMeetingAssistant() {
             : undefined;
         const screenCurrentQuestionEvidenceText =
           screenPreflight?.question?.trim() ?? "";
+        const screenSourcePacket = resolveManualScreenSourcePacket({
+          voiceQuestion: screenVoiceQuestionCapsule,
+          screenObservationId: observation.id,
+          screenPreflightQuestion: screenCurrentQuestionEvidenceText,
+        });
+        const screenPrimaryAskEvidenceText =
+          screenSourcePacket.primaryAsk?.text ?? "";
         const screenEvidenceText = [
           screenCurrentQuestionEvidenceText,
           observation.captureTarget?.title,
@@ -21724,6 +21733,7 @@ export function useMeetingAssistant() {
         }
         traceStoreRef.current.updateMetadata(trace.id, {
           ...formatTaskTaxonomyAuthorityForTrace(screenTaxonomyDecision),
+          ...formatManualScreenSourcePacketForTrace(screenSourcePacket),
           screenSourceEvidenceChars: screenEvidenceText.length,
         });
         if (
@@ -21744,12 +21754,12 @@ export function useMeetingAssistant() {
           });
         }
         const screenMemoryAskFrame = inferMemoryAskFrameFromScreenPreflight(
-          screenCurrentQuestionEvidenceText,
+          screenPrimaryAskEvidenceText,
           screenPreflight
         );
         const screenMemoryTopicDomain =
           inferMemoryTopicDomainFromScreenPreflight(
-            screenCurrentQuestionEvidenceText,
+            screenPrimaryAskEvidenceText,
             screenPreflight
           );
         let screenPersonalizedGuidance:
@@ -21767,17 +21777,10 @@ export function useMeetingAssistant() {
                     ...screenPreparedCompanyContext,
                   }
                 : contextState.interviewSessionContext,
-              screenCurrentQuestionEvidenceText
+              screenPrimaryAskEvidenceText
             );
           return buildAdvisorEvidencePacket({
-            currentQuestion: screenCurrentQuestionEvidenceText
-              ? {
-                  text: screenCurrentQuestionEvidenceText,
-                  source: "screen-preflight",
-                  sourceTurnIds: [],
-                  screenObservationId: observation.id,
-                }
-              : undefined,
+            currentQuestion: screenSourcePacket.primaryAsk,
             activeMeetingTask: includeParentContinuity
               ? contextState.activeMeetingTask
               : undefined,
@@ -21834,6 +21837,14 @@ export function useMeetingAssistant() {
                 ? {
                     role: "source-metadata" as const,
                     text: "use case: behavioral interview",
+                  }
+                : undefined,
+              screenSourcePacket.sourceOperationAuthority
+                .boundVoicePrimaryAsk &&
+              screenSourcePacket.visualEvidence.preflightQuestion
+                ? {
+                    role: "source-metadata" as const,
+                    text: `screen visual evidence summary: ${screenSourcePacket.visualEvidence.preflightQuestion}`,
                   }
                 : undefined,
               observation.captureTarget?.appName
@@ -22376,7 +22387,7 @@ export function useMeetingAssistant() {
               playbookId: screenRuntimePlaybook?.id,
               playbookPhase: screenPhaseDecision.phase,
               projectAnchor: screenPreflight?.projectAnchor,
-              query: screenCurrentQuestionEvidenceText,
+              query: screenPrimaryAskEvidenceText,
             }
           );
         const screenPlaybookMetadata =
@@ -22645,7 +22656,7 @@ export function useMeetingAssistant() {
           });
         const screenPersonalEvidenceDecision =
           detectPersonalEvidenceRequirement({
-            questionText: screenCurrentQuestionEvidenceText,
+            questionText: screenPrimaryAskEvidenceText,
             questionType: settledScreenQuestionType,
             mode: state.settings.personalEvidenceGuardrailMode,
           });
@@ -22666,13 +22677,13 @@ export function useMeetingAssistant() {
           source: "screen",
           query: screenMemoryQuery,
           currentQuestionEvidenceText:
-            screenCurrentQuestionEvidenceText,
+            screenPrimaryAskEvidenceText,
           diagramDomainContext: screenDiagramDomainContext,
           diagramTopicDomain:
             screenPreflight?.topicDomain ??
             inferMemoryTopicDomainFromQuery(screenDiagramDomainContext.query),
           useCase: inferMemoryUseCaseFromQuery(
-            screenCurrentQuestionEvidenceText
+            screenPrimaryAskEvidenceText
           ),
           questionType: settledScreenQuestionType,
           askFrame: screenMemoryAskFrame,
@@ -22700,7 +22711,7 @@ export function useMeetingAssistant() {
           relation: provisionalScreenTaskRelation,
           requiresProjectBinding: screenRequiresProjectBinding,
           projectAnchor: screenPreflight?.projectAnchor,
-          currentSourceText: screenCurrentQuestionEvidenceText,
+          currentSourceText: screenPrimaryAskEvidenceText,
           sourceObservationIds: [observation.id],
           memoryContext: candidateMemoryContext,
         });
@@ -22802,7 +22813,7 @@ export function useMeetingAssistant() {
         }
         const screenFactAnchorDecision = buildFactAnchorDecision({
           questionType: settledScreenQuestionType,
-          questionText: screenCurrentQuestionEvidenceText,
+          questionText: screenPrimaryAskEvidenceText,
           personalEvidenceGuardrailMode:
             state.settings.personalEvidenceGuardrailMode,
           memoryContext,
@@ -23813,7 +23824,7 @@ export function useMeetingAssistant() {
                   screenPersonalEvidenceDecision.requirement ===
                     "autobiographical-project"),
               projectAnchor: screenPreflight?.projectAnchor,
-              currentSourceText: screenCurrentQuestionEvidenceText,
+              currentSourceText: screenPrimaryAskEvidenceText,
               sourceObservationIds: [observation.id],
               memoryContext: candidateMemoryContext,
             });
