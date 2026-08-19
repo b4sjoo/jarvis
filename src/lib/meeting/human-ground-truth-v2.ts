@@ -597,14 +597,25 @@ export function buildHumanEvaluationObservedSnapshotV2(
   const primaryAsk = readString(
     metadata.primaryAskNormalizedText ?? metadata.logicalQuestionNormalizedText
   );
-  const answerCommitted =
-    readBoolean(metadata.advisorOutputCommittedToUi) ??
-    readBoolean(metadata.screenOutputCommittedToUi);
-  const contextReadScope = normalizeContextReadScope(
-    metadata.settledExecutionPlanContextReadScope
+  const advisorAnswerCommitted = readBoolean(
+    metadata.advisorOutputCommittedToUi
   );
-  const artifactIntent = normalizeArtifactIntentEvaluationFamily(
-    metadata.settledExecutionPlanArtifactIntent
+  const screenAnswerCommitted = readBoolean(
+    metadata.screenOutputCommittedToUi
+  );
+  const answerCommitted =
+    advisorAnswerCommitted === true || screenAnswerCommitted === true
+      ? true
+      : advisorAnswerCommitted ?? screenAnswerCommitted;
+  const contextReadScope = resolveObservedContextReadScope(
+    trace.kind,
+    metadata,
+    answerCommitted
+  );
+  const artifactIntent = resolveObservedArtifactIntent(
+    trace.kind,
+    metadata,
+    answerCommitted
   );
   const projectId = readString(
     metadata.activeMeetingProjectBindingId ??
@@ -664,6 +675,7 @@ function resolveObservedAdvisorOutcome(
 ): HumanEvaluationObservedSnapshotV2["advisorOutcome"] {
   if (
     readBoolean(metadata.advisorOutputCommittedToUi) === true ||
+    readBoolean(metadata.screenOutputCommittedToUi) === true ||
     readBoolean(
       metadata.questionTypeAdjudicationOutcomeVisibleCommitted
     ) === true
@@ -1039,6 +1051,7 @@ function resolveObservedRuntimeAction(
 ): ExpectedAdvisorAction | undefined {
   if (
     readBoolean(metadata.advisorOutputCommittedToUi) === true ||
+    readBoolean(metadata.screenOutputCommittedToUi) === true ||
     readBoolean(metadata.advisorExecutionAuthorized) === true
   ) {
     return "advise";
@@ -1059,6 +1072,73 @@ function resolveObservedRuntimeAction(
     return "ignore";
   }
   return undefined;
+}
+
+function resolveObservedContextReadScope(
+  traceKind: MeetingTrace["kind"],
+  metadata: Record<string, unknown>,
+  answerCommitted: boolean | undefined
+): AdvisorContextReadScope | undefined {
+  const settledScope = normalizeContextReadScope(
+    metadata.settledExecutionPlanContextReadScope
+  );
+  if (settledScope) return settledScope;
+
+  const responseOnlyScope = normalizeContextReadScope(
+    metadata.responseOnlyContextReadScope
+  );
+  if (responseOnlyScope) return responseOnlyScope;
+
+  if (traceKind !== "screen" || answerCommitted !== true) {
+    return undefined;
+  }
+  return readBoolean(metadata.responseOnlyParentReadContextPresent) === true
+    ? "active-parent-read"
+    : "current-only";
+}
+
+function resolveObservedArtifactIntent(
+  traceKind: MeetingTrace["kind"],
+  metadata: Record<string, unknown>,
+  answerCommitted: boolean | undefined
+): SettledAdvisorArtifactIntent | undefined {
+  const plannedIntent = normalizeArtifactIntentEvaluationFamily(
+    metadata.settledExecutionPlanArtifactIntent
+  );
+  if (traceKind !== "screen") return plannedIntent;
+
+  const codeChanged = didArtifactRevisionChange(
+    metadata.previousCodeRevision,
+    metadata.nextCodeRevision
+  );
+  const complexityChanged = didArtifactRevisionChange(
+    metadata.previousComplexityRevision,
+    metadata.nextComplexityRevision
+  );
+  if (codeChanged || complexityChanged) return "revise-code";
+
+  const whiteboardDecision = readString(
+    metadata.answerWhiteboardArtifactDecision
+  );
+  if (
+    whiteboardDecision === "produced" ||
+    whiteboardDecision === "updated"
+  ) {
+    return "revise-whiteboard";
+  }
+
+  if (answerCommitted === true) return "preserve";
+  return plannedIntent;
+}
+
+function didArtifactRevisionChange(
+  previousValue: unknown,
+  nextValue: unknown
+) {
+  const previousRevision = readNumber(previousValue);
+  const nextRevision = readNumber(nextValue);
+  if (nextRevision === undefined) return false;
+  return previousRevision === undefined || previousRevision !== nextRevision;
 }
 
 function resolveObservedParentAction(

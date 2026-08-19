@@ -647,6 +647,78 @@ test("projects the observed runtime tuple from trace metadata", () => {
   assert.match(observed.traceHash, /^\d+:[0-9a-f]+$/);
 });
 
+test("projects committed screen response-only scope and code mutation", () => {
+  const trace = {
+    id: "trace_screen_code",
+    kind: "screen",
+    status: "success",
+    startedAt: 1,
+    steps: [],
+    inputs: [],
+    outputs: [],
+    metadata: {
+      screenOutputCommittedToUi: true,
+      responseOnlyContextReadScope: "active-parent-read",
+      previousCodeRevision: 3,
+      nextCodeRevision: 4,
+      previousComplexityRevision: 2,
+      nextComplexityRevision: 2,
+    },
+  } as MeetingTrace;
+
+  const observed = buildHumanEvaluationObservedSnapshotV2(trace);
+
+  assert.equal(observed.runtimeAction, "advise");
+  assert.equal(observed.advisorOutcome, "visible-committed");
+  assert.equal(observed.contextReadScope, "active-parent-read");
+  assert.equal(observed.artifactIntent, "revise-code");
+});
+
+test("projects a committed screen answer with unchanged artifacts as preserve", () => {
+  const trace = {
+    id: "trace_screen_preserve",
+    kind: "screen",
+    status: "success",
+    startedAt: 1,
+    steps: [],
+    inputs: [],
+    outputs: [],
+    metadata: {
+      advisorOutputCommittedToUi: true,
+      previousCodeRevision: 4,
+      nextCodeRevision: 4,
+      previousComplexityRevision: 2,
+      nextComplexityRevision: 2,
+      answerWhiteboardArtifactDecision: "preserved",
+    },
+  } as MeetingTrace;
+
+  const observed = buildHumanEvaluationObservedSnapshotV2(trace);
+
+  assert.equal(observed.contextReadScope, "current-only");
+  assert.equal(observed.artifactIntent, "preserve");
+});
+
+test("projects a committed screen whiteboard update from the actual decision", () => {
+  const trace = {
+    id: "trace_screen_whiteboard",
+    kind: "screen",
+    status: "success",
+    startedAt: 1,
+    steps: [],
+    inputs: [],
+    outputs: [],
+    metadata: {
+      advisorOutputCommittedToUi: true,
+      answerWhiteboardArtifactDecision: "updated",
+    },
+  } as MeetingTrace;
+
+  const observed = buildHumanEvaluationObservedSnapshotV2(trace);
+
+  assert.equal(observed.artifactIntent, "revise-whiteboard");
+});
+
 test("separates the current-question winner from an unresolved durable parent", () => {
   const trace = {
     id: "trace_response_only_parent",

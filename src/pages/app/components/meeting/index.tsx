@@ -95,7 +95,6 @@ import {
   evaluateTaskSettlementTupleCompatibilityV2,
   guardAsyncUnlisten,
   normalizeCanonicalQuestionType,
-  normalizeArtifactIntentEvaluationFamily,
   meetingCompanyLabelsEqual,
   overlayMeetingAnswerArtifacts,
   projectQuestionTypeObservation,
@@ -5706,13 +5705,10 @@ const TraceHumanEvaluationPanel = ({
     detectedPlaybook === "project_deep_dive" ||
     Boolean(observedProjectId || observedProjectName);
   const observedContextReadScope =
-    typeof trace.metadata?.settledExecutionPlanContextReadScope === "string"
-      ? trace.metadata.settledExecutionPlanContextReadScope
-      : undefined;
+    projectionV2?.observed?.contextReadScope;
   const observedArtifactIntent =
-    normalizeArtifactIntentEvaluationFamily(
-      trace.metadata?.settledExecutionPlanArtifactIntent
-    );
+    projectionV2?.observed?.artifactIntent;
+  const observedRuntimeAction = projectionV2?.observed?.runtimeAction;
   const transientPersonalStatusDomain =
     typeof trace.metadata?.transientPersonalStatusDomain === "string"
       ? (trace.metadata
@@ -6252,13 +6248,7 @@ const TraceHumanEvaluationPanel = ({
           </div>
           <div className="mb-2 font-mono text-[9px] text-muted-foreground">
             observed:{" "}
-            {advisorExecutionAuthorized === true
-              ? "advise"
-              : advisorTurnIntent === "incomplete"
-                ? "buffer"
-                : advisorTurnIntent
-                  ? "ignore / append"
-                  : "unknown"}
+            {observedRuntimeAction ?? "unknown"}
           </div>
           <div className="flex flex-wrap gap-1">
             {(
