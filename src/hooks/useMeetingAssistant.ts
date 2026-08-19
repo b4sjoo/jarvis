@@ -70,6 +70,7 @@ import {
   extractInterviewerIntentKeywordEvidence,
   formatInterviewerIntentKeywordEvidenceForTrace,
   formatGenerationResultLedgerForTrace,
+  generationFailureDispositionFromProviderStatus,
   formatSemanticInterviewerIntentForTrace,
   ActiveMeetingTask,
   ActiveQuestionTermCorrection,
@@ -2756,6 +2757,13 @@ export function useMeetingAssistant() {
   const visibleAnswerRevisionRef = useRef(0);
   const stableAnswerRevisionRef = useRef<StableAnswerRevision | null>(null);
   const generationResultLedgerRef = useRef(new GenerationResultLedger());
+  const activeAdvisorGenerationLeaseRef = useRef<
+    | {
+        advisorJobId: string;
+        lease: AnswerGenerationLease;
+      }
+    | undefined
+  >(undefined);
   const generationDerivedCommitCoordinatorRef = useRef(
     new GenerationDerivedCommitCoordinator(
       generationResultLedgerRef.current
@@ -3703,6 +3711,41 @@ export function useMeetingAssistant() {
     []
   );
 
+  const terminalizeGenerationLease = useCallback(
+    (input: {
+      lease: AnswerGenerationLease;
+      disposition:
+        | "rejected"
+        | "failed"
+        | "timed-out"
+        | "aborted"
+        | "cancelled"
+        | "superseded";
+      reason: string;
+      source: string;
+      authority: string;
+      targetLogicalQuestionRevision?: number;
+      candidateFormed?: boolean;
+      traceId?: string;
+    }) => {
+      const entry = generationResultLedgerRef.current.terminalize({
+        generationLeaseId: input.lease.id,
+        disposition: input.disposition,
+        reason: input.reason,
+        source: input.source,
+        authority: input.authority,
+        targetLogicalQuestionRevision:
+          input.targetLogicalQuestionRevision,
+        candidateFormed: input.candidateFormed,
+      });
+      if (entry) {
+        publishGenerationResultProjection(input.lease, input.traceId);
+      }
+      return entry;
+    },
+    [publishGenerationResultProjection]
+  );
+
   const readGenerationLeaseSnapshot = useCallback(
     (input: {
       lease: AnswerGenerationLease;
@@ -3785,6 +3828,15 @@ export function useMeetingAssistant() {
                           ? "pending-response-action-revision-mismatch"
                           : undefined;
     if (staleReason) {
+      terminalizeGenerationLease({
+        lease: pending.lease,
+        disposition: "rejected",
+        reason: staleReason,
+        source: "pending-answer-release",
+        authority: "answer-generation-lease",
+        candidateFormed: true,
+        traceId: pending.suggestion.sourceTraceId,
+      });
       pendingAnswerRevisionRef.current = null;
       answerDeliveryProgressRef.current = null;
       if (pending.suggestion.sourceTraceId) {
@@ -4100,6 +4152,7 @@ export function useMeetingAssistant() {
     recordQuestionTypeAdjudicationOutcome,
     refreshRecordedCompletedTrace,
     schedulePendingAnswerCommit,
+    terminalizeGenerationLease,
     transitionForceAdviseTarget,
   ]);
   pendingAnswerCommitHandlerRef.current = tryCommitPendingAnswer;
@@ -4154,6 +4207,17 @@ export function useMeetingAssistant() {
 
       const supersededPending = pendingAnswerRevisionRef.current;
       if (supersededPending) {
+        terminalizeGenerationLease({
+          lease: supersededPending.lease,
+          disposition: "superseded",
+          reason: "superseded-by-newer-pending-answer",
+          source: "pending-answer-queue",
+          authority: "newer-generation-candidate",
+          targetLogicalQuestionRevision:
+            input.lease.logicalQuestionRevision ?? undefined,
+          candidateFormed: true,
+          traceId: supersededPending.suggestion.sourceTraceId,
+        });
         supersededPending.disposition = "dropped";
         if (supersededPending.suggestion.sourceTraceId) {
           const supersededTrace = traceStoreRef.current
@@ -4278,6 +4342,7 @@ export function useMeetingAssistant() {
       readGenerationLeaseSnapshot,
       refreshRecordedCompletedTrace,
       schedulePendingAnswerCommit,
+      terminalizeGenerationLease,
       transitionForceAdviseTarget,
     ]
   );
@@ -5178,7 +5243,12 @@ export function useMeetingAssistant() {
         | "replaced-before-execution"
         | "cancelled-by-new-job"
         | "cancelled-by-runtime-boundary" =
-        "cancelled-by-runtime-boundary"
+        "cancelled-by-runtime-boundary",
+      terminalization?: {
+        source?: string;
+        authority?: string;
+        targetLogicalQuestionRevision?: number;
+      }
     ) => {
       const hadPendingTimer = advisorDebounceTimerRef.current !== null;
       if (advisorDebounceTimerRef.current !== null) {
@@ -5197,6 +5267,30 @@ export function useMeetingAssistant() {
       const resolvedOutcome = hadPendingTimer
         ? "replaced-before-execution"
         : outcome;
+      const activeGeneration = activeAdvisorGenerationLeaseRef.current;
+      if (activeGeneration?.advisorJobId === job.id) {
+        terminalizeGenerationLease({
+          lease: activeGeneration.lease,
+          disposition:
+            resolvedOutcome === "cancelled-by-runtime-boundary"
+              ? "cancelled"
+              : "superseded",
+          reason,
+          source:
+            terminalization?.source ?? "advisor-job-cancellation",
+          authority:
+            terminalization?.authority ??
+            (resolvedOutcome === "cancelled-by-runtime-boundary"
+              ? "runtime-boundary"
+              : "newer-advisor-job"),
+          targetLogicalQuestionRevision:
+            terminalization?.targetLogicalQuestionRevision ??
+            logicalQuestionUnitRef.current?.revision,
+          candidateFormed: false,
+          traceId: job.traceId,
+        });
+        activeAdvisorGenerationLeaseRef.current = undefined;
+      }
       if (job.traceId && job.runtimeTypeRepairOutputAuthority) {
         recordQuestionTypeAdjudicationOutcome({
           traceId: job.traceId,
@@ -5259,6 +5353,7 @@ export function useMeetingAssistant() {
       clearPendingAdvisorGenerationSupersession,
       finishRunningAdvisorJobTrace,
       recordQuestionTypeAdjudicationOutcome,
+      terminalizeGenerationLease,
       updateForceAdviseTargetForAdvisorOutcome,
     ]
   );
@@ -5345,6 +5440,23 @@ export function useMeetingAssistant() {
       if (activeAdvisorJobRef.current?.id === job.id) {
         activeAdvisorJobRef.current = null;
       }
+      const activeGeneration = activeAdvisorGenerationLeaseRef.current;
+      if (activeGeneration?.advisorJobId === job.id) {
+        if (outcome !== "committed") {
+          terminalizeGenerationLease({
+            lease: activeGeneration.lease,
+            disposition: outcome === "error" ? "failed" : "rejected",
+            reason:
+              extra.commitAuthorizationReason ??
+              (outcome === "error" ? "advisor-error" : "advisor-suppressed"),
+            source: "advisor-job-release",
+            authority: "advisor-orchestrator",
+            candidateFormed: false,
+            traceId: job.traceId,
+          });
+        }
+        activeAdvisorGenerationLeaseRef.current = undefined;
+      }
       if (
         pendingAdvisorGenerationSupersessionRef.current?.protectedJobId ===
         job.id
@@ -5354,7 +5466,7 @@ export function useMeetingAssistant() {
         }, 0);
       }
     },
-    [recordQuestionTypeAdjudicationOutcome]
+    [recordQuestionTypeAdjudicationOutcome, terminalizeGenerationLease]
   );
 
   const clearPendingConfirmationForRuntimeReset = useCallback((reason: string) => {
@@ -5462,6 +5574,7 @@ export function useMeetingAssistant() {
       clearPendingAnswerCommitTimer();
       stableAnswerRevisionRef.current = null;
       generationResultLedgerRef.current.clear();
+      activeAdvisorGenerationLeaseRef.current = undefined;
       recentAdvisorContinuityRef.current = [];
       answerDeliveryProgressRef.current = null;
       pendingAnswerRevisionRef.current = null;
@@ -8315,6 +8428,15 @@ export function useMeetingAssistant() {
           );
         }
         if (!leaseAuthorization.authorized) {
+          terminalizeGenerationLease({
+            lease: answerGenerationLease,
+            disposition: "rejected",
+            reason: leaseAuthorization.reason,
+            source: "generation-lease-authorization",
+            authority: "answer-generation-lease",
+            candidateFormed: false,
+            traceId,
+          });
           if (activeAdvisorJobRef.current?.id === advisorJob.id) {
             updateForceAdviseTargetForAdvisorOutcome({
               advisorJob,
@@ -10484,6 +10606,10 @@ export function useMeetingAssistant() {
       lease: answerGenerationLease,
       traceId,
     });
+    activeAdvisorGenerationLeaseRef.current = {
+      advisorJobId: advisorJob.id,
+      lease: answerGenerationLease,
+    };
     publishGenerationResultProjection(answerGenerationLease, traceId);
     const leaseStartLogicalQuestion =
       readLogicalQuestionAuthorizationTarget().logicalQuestionUnit;
@@ -12663,18 +12789,25 @@ export function useMeetingAssistant() {
             );
           }
         }
-        generationResultLedgerRef.current.recordCommitDisposition({
+        terminalizeGenerationLease({
           lease: answerGenerationLease,
-          disposition: "failed",
+          disposition:
+            error instanceof MeetingAIResponseOutcomeError
+              ? generationFailureDispositionFromProviderStatus(
+                  error.outcome.status
+                )
+              : error instanceof Error && error.name === "AbortError"
+                ? "aborted"
+                : "failed",
           reason:
             error instanceof Error && error.name === "AbortError"
               ? "provider-request-aborted"
               : "advisor-execution-error",
+          source: "advisor-provider",
+          authority: "provider-terminal-outcome",
+          candidateFormed: false,
+          traceId,
         });
-        publishGenerationResultProjection(
-          answerGenerationLease,
-          traceId
-        );
       }
       rollbackStagedAnswerDelivery(
         error instanceof Error && error.name === "AbortError"
@@ -12838,6 +12971,7 @@ export function useMeetingAssistant() {
     selectedAIProvider,
     state.settings,
     state.status,
+    terminalizeGenerationLease,
     updateForceAdviseTargetForAdvisorOutcome,
   ]);
 
@@ -20970,6 +21104,27 @@ export function useMeetingAssistant() {
           return false;
         }
 
+        if (screenGenerationLease) {
+          const superseded =
+            !decision.authorized &&
+            decision.reason === "pipeline-owner-mismatch";
+          terminalizeGenerationLease({
+            lease: screenGenerationLease,
+            disposition: superseded ? "superseded" : "rejected",
+            reason: decision.authorized
+              ? (leaseAuthorization?.reason ?? "screen-generation-lease-stale")
+              : decision.reason,
+            source: "screen-operation-authorization",
+            authority: superseded
+              ? "newer-screen-operation"
+              : "runtime-commit-boundary",
+            targetLogicalQuestionRevision:
+              currentParent?.sourceQuestionRevision,
+            candidateFormed: Boolean(screenResponseCandidate),
+            traceId: trace.id,
+          });
+        }
+
         analysisController?.abort();
         const runningTrace = traceStoreRef.current
           .getTraces()
@@ -24175,18 +24330,25 @@ export function useMeetingAssistant() {
               );
             }
           }
-          generationResultLedgerRef.current.recordCommitDisposition({
+          terminalizeGenerationLease({
             lease: screenGenerationLease,
-            disposition: "failed",
+            disposition:
+              error instanceof MeetingAIResponseOutcomeError
+                ? generationFailureDispositionFromProviderStatus(
+                    error.outcome.status
+                  )
+                : error instanceof Error && error.name === "AbortError"
+                  ? "aborted"
+                  : "failed",
             reason:
               error instanceof Error && error.name === "AbortError"
                 ? "provider-request-aborted"
                 : "screen-execution-error",
+            source: "screen-provider",
+            authority: "provider-terminal-outcome",
+            candidateFormed: false,
+            traceId: trace.id,
           });
-          publishGenerationResultProjection(
-            screenGenerationLease,
-            trace.id
-          );
         }
         analysisController?.abort();
         const ownsCurrentScreenOperation =
@@ -24297,6 +24459,7 @@ export function useMeetingAssistant() {
       screenshotConfiguration,
       state.settings,
       state.status,
+      terminalizeGenerationLease,
     ]
   );
 

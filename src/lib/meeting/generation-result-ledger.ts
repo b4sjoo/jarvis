@@ -27,7 +27,26 @@ export type GenerationCommitDisposition =
   | "pending"
   | "committed"
   | "rejected"
-  | "failed";
+  | "failed"
+  | "timed-out"
+  | "aborted"
+  | "cancelled"
+  | "superseded";
+
+export type GenerationTerminalDisposition = Exclude<
+  GenerationCommitDisposition,
+  "started" | "pending"
+>;
+
+export interface GenerationResultTerminalization {
+  disposition: GenerationTerminalDisposition;
+  reason: string;
+  source: string;
+  authority: string;
+  targetLogicalQuestionRevision?: number;
+  candidateFormed: boolean;
+  terminalizedAt: number;
+}
 
 export type GenerationResultProjectionDisposition =
   | "none"
@@ -71,6 +90,7 @@ export interface GenerationResultLedgerEntry {
   traceId?: string;
   providerAttempts: GenerationResultProviderAttempt[];
   terminalOutcome?: GenerationResultProviderAttempt;
+  terminalization?: GenerationResultTerminalization;
   candidateValidation: GenerationCandidateValidationDisposition;
   candidateValidationReason?: string;
   commitDisposition: GenerationCommitDisposition;
@@ -121,6 +141,17 @@ interface RecordCommitDispositionInput {
   reason: string;
   visibleAnswerRevision?: number;
   commitDurationMs?: number;
+  now?: number;
+}
+
+interface TerminalizeGenerationInput {
+  generationLeaseId: string;
+  disposition: GenerationTerminalDisposition;
+  reason: string;
+  source: string;
+  authority: string;
+  targetLogicalQuestionRevision?: number;
+  candidateFormed?: boolean;
   now?: number;
 }
 
@@ -176,6 +207,7 @@ export class GenerationResultLedger {
   recordCandidateValidation(input: RecordCandidateValidationInput) {
     const now = input.now ?? Date.now();
     const entry = this.ensure(input.lease, now);
+    if (entry.terminalization) return cloneEntry(entry);
     entry.candidateValidation = input.disposition;
     entry.candidateValidationReason = input.reason;
     entry.updatedAt = now;
@@ -185,12 +217,47 @@ export class GenerationResultLedger {
   recordCommitDisposition(input: RecordCommitDispositionInput) {
     const now = input.now ?? Date.now();
     const entry = this.ensure(input.lease, now);
+    if (entry.terminalization) return cloneEntry(entry);
     entry.commitDisposition = input.disposition;
     entry.commitReason = input.reason;
     entry.visibleAnswerRevision = input.visibleAnswerRevision;
     entry.commitDurationMs = input.commitDurationMs;
     entry.committedAt =
       input.disposition === "committed" ? now : entry.committedAt;
+    if (isTerminalGenerationDisposition(input.disposition)) {
+      entry.terminalization = {
+        disposition: input.disposition,
+        reason: input.reason,
+        source: "commit-disposition",
+        authority: "generation-commit-coordinator",
+        candidateFormed:
+          entry.candidateValidation !== "not-evaluated",
+        terminalizedAt: now,
+      };
+    }
+    entry.updatedAt = now;
+    return cloneEntry(entry);
+  }
+
+  terminalize(input: TerminalizeGenerationInput) {
+    const entry = this.findByLease(input.generationLeaseId);
+    if (!entry) return undefined;
+    if (entry.terminalization) return cloneEntry(entry);
+    const now = input.now ?? Date.now();
+    entry.commitDisposition = input.disposition;
+    entry.commitReason = input.reason;
+    entry.terminalization = {
+      disposition: input.disposition,
+      reason: input.reason,
+      source: input.source,
+      authority: input.authority,
+      targetLogicalQuestionRevision:
+        input.targetLogicalQuestionRevision,
+      candidateFormed:
+        input.candidateFormed ??
+        entry.candidateValidation !== "not-evaluated",
+      terminalizedAt: now,
+    };
     entry.updatedAt = now;
     return cloneEntry(entry);
   }
@@ -331,10 +398,13 @@ export class GenerationDerivedCommitCoordinator {
       };
     }
     const existing = this.ledger.getEntry(input.lease.id);
-    if (existing?.commitDisposition === "committed") {
+    if (existing?.terminalization) {
       return {
         committed: false,
-        reason: "duplicate-generation-commit",
+        reason:
+          existing.commitDisposition === "committed"
+            ? "duplicate-generation-commit"
+            : `generation-already-terminal:${existing.commitDisposition}`,
         leaseAuthorization: authorization.leaseAuthorization,
         entry: existing,
       };
@@ -420,6 +490,18 @@ export function formatGenerationResultLedgerForTrace(
       })
     ),
     generationResultTerminalStatus: entry?.terminalOutcome?.status,
+    generationResultTerminalDisposition:
+      entry?.terminalization?.disposition,
+    generationResultTerminalReason: entry?.terminalization?.reason,
+    generationResultTerminalSource: entry?.terminalization?.source,
+    generationResultTerminalAuthority:
+      entry?.terminalization?.authority,
+    generationResultTerminalTargetLogicalQuestionRevision:
+      entry?.terminalization?.targetLogicalQuestionRevision,
+    generationResultTerminalCandidateFormed:
+      entry?.terminalization?.candidateFormed,
+    generationResultTerminalizedAt:
+      entry?.terminalization?.terminalizedAt,
     generationResultCandidateValidation:
       entry?.candidateValidation,
     generationResultCandidateValidationReason:
@@ -537,7 +619,24 @@ function cloneEntry(
     terminalOutcome: entry.terminalOutcome
       ? { ...entry.terminalOutcome }
       : undefined,
+    terminalization: entry.terminalization
+      ? { ...entry.terminalization }
+      : undefined,
   };
+}
+
+export function isTerminalGenerationDisposition(
+  disposition: GenerationCommitDisposition
+): disposition is GenerationTerminalDisposition {
+  return disposition !== "started" && disposition !== "pending";
+}
+
+export function generationFailureDispositionFromProviderStatus(
+  status: AIResponseTerminalOutcome["status"] | undefined
+): "failed" | "timed-out" | "aborted" {
+  if (status === "timed-out") return "timed-out";
+  if (status === "aborted") return "aborted";
+  return "failed";
 }
 
 function monotonicNow() {

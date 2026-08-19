@@ -264,3 +264,88 @@ test("projects pending and historical entries without deleting origin results", 
   );
   assert.equal(ledger.listEntries().length, 1);
 });
+
+test("terminalizes cancelled and superseded generations exactly once", () => {
+  const ledger = new GenerationResultLedger();
+  const currentLease = lease();
+  ledger.begin({ lease: currentLease });
+  ledger.recordCommitDisposition({
+    lease: currentLease,
+    disposition: "pending",
+    reason: "awaiting-visible-delivery",
+  });
+
+  const terminal = ledger.terminalize({
+    generationLeaseId: currentLease.id,
+    disposition: "superseded",
+    reason: "manual-screen-capture-succeeded",
+    source: "manual-screen",
+    authority: "human-explicit-capture",
+    targetLogicalQuestionRevision: 6,
+  });
+  assert.equal(terminal?.commitDisposition, "superseded");
+  assert.deepEqual(terminal?.terminalization, {
+    disposition: "superseded",
+    reason: "manual-screen-capture-succeeded",
+    source: "manual-screen",
+    authority: "human-explicit-capture",
+    targetLogicalQuestionRevision: 6,
+    candidateFormed: false,
+    terminalizedAt: terminal?.terminalization?.terminalizedAt,
+  });
+  assert.equal(
+    ledger.project({
+      sessionId: "session-1",
+      runtimeEpoch: 2,
+      logicalQuestionUnitId: "question-1",
+      logicalQuestionRevision: 5,
+      visibleAnswerRevision: 6,
+    }).disposition,
+    "historical"
+  );
+
+  ledger.recordCommitDisposition({
+    lease: currentLease,
+    disposition: "committed",
+    reason: "late-provider-completion",
+    visibleAnswerRevision: 7,
+  });
+  assert.equal(
+    ledger.getEntry(currentLease.id)?.commitDisposition,
+    "superseded"
+  );
+});
+
+test("a terminalized generation cannot run its derived commit", () => {
+  const ledger = new GenerationResultLedger();
+  const coordinator = new GenerationDerivedCommitCoordinator(ledger);
+  const currentLease = lease();
+  ledger.begin({ lease: currentLease });
+  ledger.terminalize({
+    generationLeaseId: currentLease.id,
+    disposition: "cancelled",
+    reason: "runtime-boundary",
+    source: "meeting-runtime",
+    authority: "runtime-epoch",
+  });
+  let mutated = false;
+
+  const result = coordinator.commit({
+    lease: currentLease,
+    leaseAuthorization: authorizeAnswerGenerationLease(
+      currentLease,
+      snapshot()
+    ),
+    expectedTaskRuntimeRevision: 10,
+    currentTaskRuntimeRevision: 10,
+    candidateAccepted: true,
+    visibleAnswerRevision: 7,
+    apply: () => {
+      mutated = true;
+    },
+  });
+
+  assert.equal(result.committed, false);
+  assert.equal(result.reason, "generation-already-terminal:cancelled");
+  assert.equal(mutated, false);
+});

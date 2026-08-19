@@ -1032,6 +1032,7 @@ export interface SessionCompactTraceSummary {
     firstVisiblePartialMs?: number;
     durationMs?: number;
     chunkCount?: number;
+    terminalDisposition?: string;
   };
   answer?: {
     contractVersion?: string;
@@ -1205,6 +1206,7 @@ interface SessionModelGenerationAggregate {
   missingFirstVisiblePartialCount: number;
   byRequestOrigin: Record<string, number>;
   byRoute: Record<string, number>;
+  byTerminalDisposition: Record<string, number>;
   firstContentMs: SessionNumberAggregate;
   firstVisiblePartialMs: SessionNumberAggregate;
   durationMs: SessionNumberAggregate;
@@ -5854,6 +5856,10 @@ export function buildCompactTraceSummary({
         metadataSources,
         "modelGenerationChunkCount"
       ),
+      terminalDisposition: readFirstString(
+        metadataSources,
+        "generationResultTerminalDisposition"
+      ),
     },
     answer: {
       contractVersion: readFirstString(
@@ -7139,6 +7145,9 @@ function aggregateModelGeneration(
     ),
     byRoute: countModelGenerationDimension(
       generations.map((generation) => generation.route)
+    ),
+    byTerminalDisposition: countModelGenerationDimension(
+      generations.map((generation) => generation.terminalDisposition)
     ),
     firstContentMs: aggregateNumbers(
       generations.map((generation) => generation.firstContentMs)

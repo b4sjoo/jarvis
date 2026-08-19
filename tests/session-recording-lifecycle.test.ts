@@ -2617,6 +2617,7 @@ test("records compact current-question settlement and execution-plan evidence", 
     missingFirstVisiblePartialCount: 0,
     byRequestOrigin: { advisor: 1 },
     byRoute: { main: 1 },
+    byTerminalDisposition: { unknown: 1 },
     firstContentMs: { count: 1, p50: 250, p90: 250, max: 250 },
     firstVisiblePartialMs: {
       count: 1,
