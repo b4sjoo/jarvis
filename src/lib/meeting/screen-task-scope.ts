@@ -1,6 +1,4 @@
 import type { AdvisorJobSource } from "./advisor-trigger-job";
-import type { ActiveMeetingTask } from "./active-meeting-task.js";
-import type { LogicalQuestionUnit } from "./logical-question-unit.js";
 import type {
   AdvisorPromptContext,
   AdvisorRequestMode,
@@ -8,6 +6,20 @@ import type {
   ScreenObservation,
   ScreenQuestionType,
 } from "./types";
+
+interface ScreenSourceTaskView {
+  parent: { id: string };
+  screen?: { observationId?: string };
+}
+
+interface VoiceQuestionCapsuleCandidate {
+  id: string;
+  revision: number;
+  sessionId: string;
+  runtimeEpoch: number;
+  normalizedText: string;
+  sourceTurnIds: string[];
+}
 
 export type ScreenScopeAction =
   | "keep"
@@ -66,10 +78,12 @@ export interface ManualScreenVoiceQuestionCapsule {
   sourceTurnIds: string[];
 }
 
-export function selectManualScreenVoiceQuestionCapsule(input: {
+export function selectManualScreenVoiceQuestionCapsule<
+  T extends VoiceQuestionCapsuleCandidate,
+>(input: {
   sessionId: string;
   runtimeEpoch: number;
-  candidates: Array<LogicalQuestionUnit | undefined>;
+  candidates: Array<T | undefined>;
 }): ManualScreenVoiceQuestionCapsule | undefined {
   const unit = input.candidates.find(
     (candidate) =>
@@ -86,14 +100,16 @@ export function selectManualScreenVoiceQuestionCapsule(input: {
   };
 }
 
-export function resolveAdvisorScreenSourceRead(input: {
+export function resolveAdvisorScreenSourceRead<
+  T extends ScreenSourceTaskView,
+>(input: {
   mode: AdvisorRequestMode;
   expectedSessionId: string;
   currentSessionId: string;
   expectedRuntimeEpoch: number;
   currentRuntimeEpoch: number;
   expectedParentId?: string;
-  activeMeetingTask?: ActiveMeetingTask;
+  activeMeetingTask?: T;
   screenObservations: ScreenObservation[];
   sourceVoiceTurnIds?: string[];
   providerSupportsImages: boolean;

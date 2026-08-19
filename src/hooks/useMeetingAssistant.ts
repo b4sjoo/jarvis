@@ -21256,9 +21256,10 @@ export function useMeetingAssistant() {
         const currentPendingAnswer = pendingAnswerRevisionRef.current;
         const recoveryTarget = screenVoiceQuestionCapsule
           ? {
-              logicalQuestionUnitId: screenVoiceQuestionCapsule.id,
+              logicalQuestionUnitId:
+                screenVoiceQuestionCapsule.logicalQuestionUnitId,
               logicalQuestionRevision:
-                screenVoiceQuestionCapsule.revision,
+                screenVoiceQuestionCapsule.logicalQuestionRevision,
             }
           : undefined;
         const candidateLedgerEntry =
@@ -21336,7 +21337,7 @@ export function useMeetingAssistant() {
               recoveryTarget &&
               currentActiveAdvisor.logicalQuestionUnit?.id ===
                 recoveryTarget.logicalQuestionUnitId &&
-              currentActiveAdvisor.logicalQuestionUnit.revision ===
+              currentActiveAdvisor.logicalQuestionUnit?.revision ===
                 recoveryTarget.logicalQuestionRevision
           );
           if (activeVoiceMatchesTarget) {
@@ -24544,9 +24545,9 @@ export function useMeetingAssistant() {
               recoveryTarget: screenVoiceQuestionCapsule
                 ? {
                     logicalQuestionUnitId:
-                      screenVoiceQuestionCapsule.id,
+                      screenVoiceQuestionCapsule.logicalQuestionUnitId,
                     logicalQuestionRevision:
-                      screenVoiceQuestionCapsule.revision,
+                      screenVoiceQuestionCapsule.logicalQuestionRevision,
                   }
                 : undefined,
             });
