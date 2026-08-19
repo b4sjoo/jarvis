@@ -1,5 +1,8 @@
 import type { RuntimeInferenceRuntimeJob } from "./runtime-inference-runtime.js";
-import { normalizeInterviewBriefCompany } from "./interview-company.js";
+import {
+  getInterviewCompanyEvidenceAliases,
+  normalizeInterviewBriefCompany,
+} from "./interview-company.js";
 import type {
   MeetingMetadataInferenceMode,
   InterviewTargetCompany,
@@ -221,6 +224,7 @@ export function buildMeetingMetadataInferencePrompts(
       "Return one JSON object only. Do not answer interview questions and do not classify question type, task relation, response intent, phase, artifacts, or candidate facts.",
       "Use only openingEvidence.turns. Treat them as interviewer speech.",
       "A candidate's former employer, customer, vendor, product, cloud service, comparison target, city, country, region, or interview topic is not the target company unless the evidence explicitly identifies the interviewer or hiring process with that organization.",
+      "HackerRank, LeetCode, CodeSignal, and similar coding or interview platforms are tools, not the hiring company, unless the evidence explicitly says the interview is for that platform company.",
       "If the organization is ambiguous or unsupported, return company:null and explain the abstention briefly.",
       "authoritativeCompany is read-only comparison context. Never replace or reinterpret it.",
       "Every evidenceSpans item must be an exact verbatim substring from openingEvidence.turns.",
@@ -331,6 +335,14 @@ export function parseMeetingMetadataInferenceOutput(
   );
   if (!evidenceSpansValid) {
     return parseFailure("invalid-evidence-span", "evidence");
+  }
+  if (
+    company &&
+    !evidenceSpans.some((span) =>
+      evidenceSpanSupportsCompany(span, company)
+    )
+  ) {
+    return parseFailure("company-not-grounded-in-evidence", "evidence");
   }
 
   return {
@@ -587,4 +599,23 @@ function normalizeCompanyValue(value: string) {
     .toLocaleLowerCase()
     .replace(/[^\p{L}\p{N}]+/gu, " ")
     .trim();
+}
+
+function evidenceSpanSupportsCompany(span: string, company: string) {
+  const normalizedSpan = normalizeCompanyEvidenceText(span);
+  return getInterviewCompanyEvidenceAliases(company).some((alias) =>
+    containsNormalizedPhrase(normalizedSpan, alias)
+  );
+}
+
+function normalizeCompanyEvidenceText(value: string) {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9+#.]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function containsNormalizedPhrase(text: string, phrase: string) {
+  return (` ${text} `).includes(` ${phrase} `);
 }

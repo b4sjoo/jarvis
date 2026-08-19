@@ -121,6 +121,24 @@ export function normalizeInterviewBriefCompany(
     : undefined;
 }
 
+export function getInterviewCompanyEvidenceAliases(
+  companyName: string | undefined
+) {
+  const normalizedCompany = normalizeInterviewBriefCompany(companyName);
+  if (!normalizedCompany) return [];
+  const definition = COMPANY_DEFINITIONS.find(
+    (company) => company.normalized === normalizedCompany.normalized
+  );
+  return Array.from(
+    new Set(
+      [companyName, definition?.displayName, ...(definition?.aliases ?? [])]
+        .filter((value): value is string => Boolean(value?.trim()))
+        .map(normalizeForMatching)
+        .filter(Boolean)
+    )
+  );
+}
+
 function normalizeForMatching(value: string) {
   return value
     .toLowerCase()

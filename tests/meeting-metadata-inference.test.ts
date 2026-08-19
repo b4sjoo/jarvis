@@ -96,6 +96,8 @@ test("builds an atomic company-only prompt", () => {
 
   assert.match(prompts.systemPrompt, /which organization/i);
   assert.match(prompts.systemPrompt, /candidate's former employer/i);
+  assert.match(prompts.systemPrompt, /HackerRank/);
+  assert.match(prompts.systemPrompt, /coding or interview platforms/i);
   assert.doesNotMatch(prompts.systemPrompt, /questionType/);
   assert.match(prompts.userMessage, /Oracle/);
   assert.match(prompts.userMessage, /AWS/);
@@ -165,6 +167,47 @@ test("rejects invented evidence and cross-operation fields", () => {
   );
   assert.equal(broad.ok, false);
   if (!broad.ok) assert.equal(broad.reason, "non-metadata-field-present");
+});
+
+test("requires a company proposal to appear in its grounded evidence", () => {
+  const request = requestFrom([
+    turn(
+      "them-1",
+      "We will use HackerRank for the coding exercise. Welcome to today's interview."
+    ),
+  ]);
+  const ungroundedCompany = parseMeetingMetadataInferenceOutput(
+    JSON.stringify({
+      schemaVersion: 1,
+      company: "HackerRank",
+      confidence: 0.99,
+      evidenceSpans: ["Welcome to today's interview"],
+      abstainReason: null,
+    }),
+    request
+  );
+  assert.equal(ungroundedCompany.ok, false);
+  if (!ungroundedCompany.ok) {
+    assert.equal(
+      ungroundedCompany.reason,
+      "company-not-grounded-in-evidence"
+    );
+  }
+
+  const aliasRequest = requestFrom([
+    turn("them-1", "I am the recruiter from AWS."),
+  ]);
+  const canonicalAlias = parseMeetingMetadataInferenceOutput(
+    JSON.stringify({
+      schemaVersion: 1,
+      company: "Amazon",
+      confidence: 0.98,
+      evidenceSpans: ["recruiter from AWS"],
+      abstainReason: null,
+    }),
+    aliasRequest
+  );
+  assert.equal(canonicalAlias.ok, true);
 });
 
 test("lease rejects newer evidence, epochs, and authoritative company changes", () => {
