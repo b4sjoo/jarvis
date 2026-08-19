@@ -12,6 +12,7 @@ import {
   type LongitudinalTraceSummary,
   type LongitudinalTranscriptTurn,
 } from "../src/lib/meeting/session-longitudinal-evaluation.js";
+import { writeDerivedEvaluationProvenance } from "./lib/derived-evaluation-provenance.js";
 import {
   buildTaskRelationAdjudicationReflectionReport,
   type TaskRelationAdjudicationRecordedDecision,
@@ -54,6 +55,13 @@ async function main() {
       "utf8"
     ),
   ]);
+  await writeDerivedEvaluationProvenance({
+    producer: "reflect-session-longitudinal-evaluation",
+    command: "session:longitudinal:reflect",
+    sessionDirectories: options.sessionDirectories,
+    outputDirectory,
+    outputPaths: [path.basename(jsonPath), path.basename(markdownPath)],
+  });
   process.stdout.write(
     `${JSON.stringify(
       {

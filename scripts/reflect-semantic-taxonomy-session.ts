@@ -11,6 +11,7 @@ import {
   loadSessionHumanEvaluationConsumerView,
   writeHumanEvaluationCompatibilityReport,
 } from "./session-human-evaluation-v2.js";
+import { writeDerivedEvaluationProvenance } from "./lib/derived-evaluation-provenance.js";
 
 interface CliOptions {
   sessionDirectories: string[];
@@ -55,6 +56,13 @@ async function main() {
       evaluationView.report,
       evaluationView.materialization
     );
+    await writeDerivedEvaluationProvenance({
+      producer: "reflect-semantic-taxonomy-session",
+      command: "taxonomy:semantic:reflect",
+      sessionDirectories: [sessionDirectory],
+      outputDirectory,
+      outputPaths: ["reflection.json", "reflection.md"],
+    });
     summaries.push({
       sessionDirectory,
       outputDirectory,

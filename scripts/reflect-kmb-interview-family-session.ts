@@ -11,6 +11,7 @@ import type {
   MemoryQuestionType,
   MemoryRetrievalPolicy,
 } from "../src/lib/memory/types.js";
+import { writeDerivedEvaluationProvenance } from "./lib/derived-evaluation-provenance.js";
 
 interface RecordedMemoryRetrieval {
   source?: string;
@@ -104,6 +105,13 @@ async function main() {
     renderMarkdown(report),
     "utf8"
   );
+  await writeDerivedEvaluationProvenance({
+    producer: "reflect-kmb-interview-family-session",
+    command: "memory:family:reflect",
+    sessionDirectories: [sessionDirectory],
+    outputDirectory,
+    outputPaths: ["reflection.json", "reflection.md"],
+  });
   process.stdout.write(
     `${JSON.stringify({ outputDirectory, ...report.metrics }, null, 2)}\n`
   );
