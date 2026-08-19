@@ -4,8 +4,11 @@ import {
   applyAdvisorScreenScopeToPromptContext,
   decideAdvisorScreenScope,
   decideScreenResultScope,
+  formatAdvisorScreenSourceReadForTrace,
+  resolveAdvisorScreenSourceRead,
   resolveAdvisorRequestModeForScreenScope,
   resolveAdvisorTaskEvidenceSource,
+  selectManualScreenVoiceQuestionCapsule,
 } from "../src/lib/meeting/screen-task-scope.js";
 import { MeetingContextManager } from "../src/lib/meeting/context-manager.js";
 import type {
@@ -193,3 +196,157 @@ function makeScreenTask(): ActiveScreenTask {
     basedOnObservationId: "screen-a",
   };
 }
+
+test("attaches only the full screenshot bound to the same parent and runtime", () => {
+  const decision = resolveAdvisorScreenSourceRead({
+    mode: "screen-anchored",
+    expectedSessionId: "session-1",
+    currentSessionId: "session-1",
+    expectedRuntimeEpoch: 4,
+    currentRuntimeEpoch: 4,
+    expectedParentId: "parent-1",
+    activeMeetingTask: {
+      id: "task-1",
+      runtimeRevision: 1,
+      source: "screen",
+      parent: {
+        id: "parent-1",
+        questionType: "coding",
+        topic: "Explain lines 58 through 63",
+        playbookPhase: "implementation_validation",
+        phaseProgress: {},
+        supportedFactAnchors: [],
+        createdAt: 1,
+        updatedAt: 1,
+      },
+      screen: {
+        activeScreenTaskId: "screen-task-1",
+        observationId: "observation-1",
+        basedOnObservationId: "observation-1",
+      },
+    },
+    screenObservations: [
+      {
+        id: "observation-1",
+        capturedAt: 1,
+        source: "hotkey",
+        imageBase64: "full-image",
+        imageMediaType: "image/png",
+        focusImageBase64: "focus-image",
+        changed: true,
+      },
+    ],
+    sourceVoiceTurnIds: ["turn-58-63"],
+    providerSupportsImages: true,
+  });
+
+  assert.equal(decision.disposition, "attached");
+  assert.equal(decision.image?.base64, "full-image");
+  assert.deepEqual(formatAdvisorScreenSourceReadForTrace(decision), {
+    sourceScreenObservationId: "observation-1",
+    sourceScreenParentId: "parent-1",
+    sourceVoiceTurnIds: ["turn-58-63"],
+    sourceReadDisposition: "attached",
+    sourceScreenImageAttached: true,
+  });
+});
+
+test("does not attach a screenshot across parent or runtime boundaries", () => {
+  const base = {
+    mode: "screen-anchored" as const,
+    expectedSessionId: "session-1",
+    currentSessionId: "session-1",
+    expectedRuntimeEpoch: 4,
+    currentRuntimeEpoch: 4,
+    expectedParentId: "parent-2",
+    activeMeetingTask: {
+      id: "task-1",
+      runtimeRevision: 1,
+      source: "screen" as const,
+      parent: {
+        id: "parent-1",
+        questionType: "coding" as const,
+        topic: "LRU cache",
+        playbookPhase: "implementation_validation" as const,
+        phaseProgress: {},
+        supportedFactAnchors: [],
+        createdAt: 1,
+        updatedAt: 1,
+      },
+      screen: {
+        activeScreenTaskId: "screen-task-1",
+        observationId: "observation-1",
+        basedOnObservationId: "observation-1",
+      },
+    },
+    screenObservations: [
+      {
+        id: "observation-1",
+        capturedAt: 1,
+        source: "hotkey" as const,
+        imageBase64: "full-image",
+        changed: true,
+      },
+    ],
+    providerSupportsImages: true,
+  };
+
+  assert.equal(
+    resolveAdvisorScreenSourceRead(base).disposition,
+    "parent-mismatch"
+  );
+  assert.equal(
+    resolveAdvisorScreenSourceRead({
+      ...base,
+      expectedParentId: "parent-1",
+      currentRuntimeEpoch: 5,
+    }).disposition,
+    "runtime-epoch-mismatch"
+  );
+});
+
+test("keeps only the current bounded voice question for manual screen recovery", () => {
+  const capsule = selectManualScreenVoiceQuestionCapsule({
+    sessionId: "session-1",
+    runtimeEpoch: 3,
+    candidates: [
+      {
+        id: "question-old-epoch",
+        revision: 1,
+        sessionId: "session-1",
+        runtimeEpoch: 2,
+        currentTurnId: "turn-old",
+        sourceTurnIds: ["turn-old"],
+        sources: [],
+        normalizedText: "Old question",
+        startedAt: 1,
+        updatedAt: 1,
+        compositionReasons: [],
+        boundaryReason: "new-question",
+        truncated: false,
+      },
+      {
+        id: "question-current",
+        revision: 2,
+        sessionId: "session-1",
+        runtimeEpoch: 3,
+        currentTurnId: "turn-63",
+        sourceTurnIds: ["turn-58", "turn-63"],
+        sources: [],
+        normalizedText: "Explain lines 58 through 63.",
+        startedAt: 2,
+        updatedAt: 3,
+        compositionReasons: ["referential-completion"],
+        boundaryReason: "extended",
+        truncated: false,
+      },
+    ],
+  });
+
+  assert.deepEqual(capsule, {
+    logicalQuestionUnitId: "question-current",
+    logicalQuestionRevision: 2,
+    text: "Explain lines 58 through 63.",
+    sourceTurnIds: ["turn-58", "turn-63"],
+  });
+});

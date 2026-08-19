@@ -66,11 +66,13 @@ export class AdvisorEngine {
     let accumulated = "";
     let firstTokenSeen = false;
     const terminalOutcomes: Readonly<AIResponseTerminalOutcome>[] = [];
+    const sourceImages = request.sourceImages ?? [];
 
     request.trace?.onRequest?.({
       systemPrompt,
       userMessage,
-      imageCount: 0,
+      imageCount: sourceImages.length,
+      imageMediaType: sourceImages[0]?.mediaType,
       providerId: request.provider?.id,
       mode: request.mode,
       responseAction: request.responseAction,
@@ -86,7 +88,7 @@ export class AdvisorEngine {
         systemPrompt,
         history: request.history ?? [],
         userMessage,
-        imagesBase64: [],
+        imagesBase64: sourceImages,
         signal: abortController.signal,
         applyResponseSettings: false,
         requestOptions: request.requestOptions,

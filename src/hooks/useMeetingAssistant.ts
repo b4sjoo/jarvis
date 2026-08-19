@@ -640,16 +640,19 @@ import {
   applyAdvisorScreenScopeToPromptContext,
   decideAdvisorScreenScope,
   decideScreenResultScope,
+  formatAdvisorScreenSourceReadForTrace,
   decideSemanticTaxonomyShadowEligibility,
   decideSemanticTaxonomyUnknownRescue,
   formatScreenScopeDecisionForTrace,
   formatSemanticEmbeddingRuntimeTelemetryForTrace,
   formatSemanticTaxonomyShadowMetadata,
   resolveAdvisorRequestModeForScreenScope,
+  resolveAdvisorScreenSourceRead,
   resolveAdvisorTaskEvidenceSource,
   resolveHybridQuestionType,
   scoreSemanticInterviewerIntentEmbeddings,
   scoreSemanticTaxonomyEmbedding,
+  selectManualScreenVoiceQuestionCapsule,
   SemanticTaxonomyRuntime,
   PlaybookPhaseDecision,
   SENTENCE_COMPLETION_BUFFER_MS,
@@ -10350,6 +10353,43 @@ export function useMeetingAssistant() {
       formatMeetingModelRouteForTrace(advisorModelRoute);
     const advisorModelRequestOptions =
       getMeetingModelRequestOptions(advisorModelRoute);
+    const advisorSourceReadContext = contextManagerRef.current.getState();
+    const advisorScreenSourceRead = resolveAdvisorScreenSourceRead({
+      mode: advisorPromptMode,
+      expectedSessionId: advisorJob.expectedSessionId,
+      currentSessionId: advisorSourceReadContext.sessionId,
+      expectedRuntimeEpoch: advisorJob.runtimeCommitToken.runtimeEpoch,
+      currentRuntimeEpoch: runtimeEpochRef.current,
+      expectedParentId:
+        originalPromptContext.activeMeetingTask?.parent.id ??
+        advisorJob.expectedParentId,
+      activeMeetingTask: originalPromptContext.activeMeetingTask,
+      screenObservations: advisorSourceReadContext.screenObservations,
+      sourceVoiceTurnIds:
+        advisorJob.logicalQuestionUnit?.sourceTurnIds ??
+        promptContext.advisorPromptSourceTurnIds,
+      providerSupportsImages: Boolean(
+        advisorModelRoute.provider?.curl.includes("{{IMAGE}}")
+      ),
+    });
+    const advisorScreenSourceReadMetadata =
+      formatAdvisorScreenSourceReadForTrace(advisorScreenSourceRead);
+    if (traceId) {
+      traceStoreRef.current.updateMetadata(
+        traceId,
+        advisorScreenSourceReadMetadata
+      );
+      const sourceReadStepId = traceStoreRef.current.startStep(
+        traceId,
+        "Advisor source read",
+        advisorScreenSourceReadMetadata
+      );
+      traceStoreRef.current.finishStep(
+        traceId,
+        sourceReadStepId,
+        "success"
+      );
+    }
     const advisorModelGenerationIdentity =
       buildModelGenerationIdentityForTrace({
         requestOrigin: "advisor",
@@ -11229,6 +11269,9 @@ export function useMeetingAssistant() {
         promptContext: advisorModelPromptContext,
         provider: advisorModelRoute.provider,
         selectedProvider: advisorModelRoute.selectedProvider,
+        sourceImages: advisorScreenSourceRead.image
+          ? [advisorScreenSourceRead.image]
+          : [],
         requestOptions: advisorModelRequestOptions,
         executionIdentity: advisorModelExecutionIdentity,
         responseAction: options.responseAction,
@@ -11293,7 +11336,9 @@ export function useMeetingAssistant() {
                     ...advisorModelRouteMetadata,
                     ...phaseNavigationPromptMetadata,
                     ...advisorPromptEnvelopeMetadata,
+                    ...advisorScreenSourceReadMetadata,
                     imageCount: input.imageCount,
+                    imageMediaType: input.imageMediaType,
                   }
                 );
                 sessionRecordingManagerRef.current?.recordModelInput({
@@ -11312,7 +11357,9 @@ export function useMeetingAssistant() {
                     ...advisorModelRouteMetadata,
                     ...phaseNavigationPromptMetadata,
                     ...advisorPromptEnvelopeMetadata,
+                    ...advisorScreenSourceReadMetadata,
                     imageCount: input.imageCount,
+                    imageMediaType: input.imageMediaType,
                   },
                 });
                 advisorStepId = traceStoreRef.current.startStep(
@@ -20717,6 +20764,16 @@ export function useMeetingAssistant() {
     ) => {
       const screenOperationId = createMeetingId("screen_operation");
       const screenOperationRequestedAt = options.requestedAt ?? Date.now();
+      const screenRequestContextState = contextManagerRef.current.getState();
+      const screenVoiceQuestionCapsule =
+        selectManualScreenVoiceQuestionCapsule({
+          sessionId: screenRequestContextState.sessionId,
+          runtimeEpoch: runtimeEpochRef.current,
+          candidates: [
+            activeAdvisorJobRef.current?.logicalQuestionUnit,
+            logicalQuestionUnitRef.current,
+          ],
+        });
       const screenOperationClaim =
         screenOperationCoordinatorRef.current.claim(
           screenOperationId,
@@ -21041,6 +21098,15 @@ export function useMeetingAssistant() {
         const recentTranscript = formatRecentTranscript(
           analysisContextState.transcriptTurns
         );
+        traceStoreRef.current.updateMetadata(trace.id, {
+          sourceVoiceTurnIds: screenVoiceQuestionCapsule?.sourceTurnIds ?? [],
+          sourceVoiceLogicalQuestionUnitId:
+            screenVoiceQuestionCapsule?.logicalQuestionUnitId,
+          sourceVoiceLogicalQuestionRevision:
+            screenVoiceQuestionCapsule?.logicalQuestionRevision,
+          sourceVoiceQuestionChars:
+            screenVoiceQuestionCapsule?.text.length ?? 0,
+        });
         let screenPreflight: ScreenPreflightResult | undefined;
         const shouldRunScreenPreflight = state.settings.screenContextEnabled;
         traceStoreRef.current.updateMetadata(trace.id, {
@@ -22688,7 +22754,9 @@ export function useMeetingAssistant() {
             provider: screenModelRoute.provider,
             selectedProvider: screenModelRoute.selectedProvider,
             recentTranscript: screenResponseOnlyTaskScope
-              ? ""
+              ? screenVoiceQuestionCapsule?.text
+                ? `Them: ${screenVoiceQuestionCapsule.text}`
+                : ""
               : recentTranscript,
             autoPrompt,
             responseConfig: state.settings.response,

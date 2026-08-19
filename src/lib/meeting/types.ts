@@ -1372,6 +1372,10 @@ export interface MeetingAdvisorRequest {
   currentSuggestion?: string;
   clarifyingFeedback?: ClarifyingQuestionFeedback;
   history?: Message[];
+  sourceImages?: Array<{
+    base64: string;
+    mediaType: string;
+  }>;
   signal?: AbortSignal;
   requestOptions?: MeetingModelRequestOptions;
   executionIdentity?: AIResponseExecutionIdentityInput;

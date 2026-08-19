@@ -1,8 +1,11 @@
 import type { AdvisorJobSource } from "./advisor-trigger-job";
+import type { ActiveMeetingTask } from "./active-meeting-task.js";
+import type { LogicalQuestionUnit } from "./logical-question-unit.js";
 import type {
   AdvisorPromptContext,
   AdvisorRequestMode,
   InterviewTaskRelation,
+  ScreenObservation,
   ScreenQuestionType,
 } from "./types";
 
@@ -31,6 +34,144 @@ export interface ScreenScopeDecision {
   durability: ScreenScopeDurability;
   mutationAuthorized: boolean;
   reason: ScreenScopeReason;
+}
+
+export type AdvisorScreenSourceReadDisposition =
+  | "attached"
+  | "not-screen-anchored"
+  | "session-mismatch"
+  | "runtime-epoch-mismatch"
+  | "no-active-parent"
+  | "parent-mismatch"
+  | "no-screen-binding"
+  | "observation-not-found"
+  | "image-unavailable"
+  | "provider-image-unsupported";
+
+export interface AdvisorScreenSourceReadDecision {
+  disposition: AdvisorScreenSourceReadDisposition;
+  sourceScreenObservationId?: string;
+  sourceScreenParentId?: string;
+  sourceVoiceTurnIds: string[];
+  image?: {
+    base64: string;
+    mediaType: string;
+  };
+}
+
+export interface ManualScreenVoiceQuestionCapsule {
+  logicalQuestionUnitId: string;
+  logicalQuestionRevision: number;
+  text: string;
+  sourceTurnIds: string[];
+}
+
+export function selectManualScreenVoiceQuestionCapsule(input: {
+  sessionId: string;
+  runtimeEpoch: number;
+  candidates: Array<LogicalQuestionUnit | undefined>;
+}): ManualScreenVoiceQuestionCapsule | undefined {
+  const unit = input.candidates.find(
+    (candidate) =>
+      candidate?.sessionId === input.sessionId &&
+      candidate.runtimeEpoch === input.runtimeEpoch &&
+      candidate.normalizedText.trim()
+  );
+  if (!unit) return undefined;
+  return {
+    logicalQuestionUnitId: unit.id,
+    logicalQuestionRevision: unit.revision,
+    text: unit.normalizedText.trim(),
+    sourceTurnIds: [...unit.sourceTurnIds],
+  };
+}
+
+export function resolveAdvisorScreenSourceRead(input: {
+  mode: AdvisorRequestMode;
+  expectedSessionId: string;
+  currentSessionId: string;
+  expectedRuntimeEpoch: number;
+  currentRuntimeEpoch: number;
+  expectedParentId?: string;
+  activeMeetingTask?: ActiveMeetingTask;
+  screenObservations: ScreenObservation[];
+  sourceVoiceTurnIds?: string[];
+  providerSupportsImages: boolean;
+}): AdvisorScreenSourceReadDecision {
+  const sourceVoiceTurnIds = Array.from(
+    new Set(input.sourceVoiceTurnIds ?? [])
+  );
+  const result = (
+    disposition: AdvisorScreenSourceReadDisposition,
+    extra: Partial<AdvisorScreenSourceReadDecision> = {}
+  ): AdvisorScreenSourceReadDecision => ({
+    disposition,
+    sourceVoiceTurnIds,
+    ...extra,
+  });
+
+  if (input.mode !== "screen-anchored") {
+    return result("not-screen-anchored");
+  }
+  if (input.expectedSessionId !== input.currentSessionId) {
+    return result("session-mismatch");
+  }
+  if (input.expectedRuntimeEpoch !== input.currentRuntimeEpoch) {
+    return result("runtime-epoch-mismatch");
+  }
+  const task = input.activeMeetingTask;
+  if (!task) return result("no-active-parent");
+  if (input.expectedParentId && input.expectedParentId !== task.parent.id) {
+    return result("parent-mismatch", {
+      sourceScreenParentId: task.parent.id,
+    });
+  }
+  if (!task.screen?.observationId) {
+    return result("no-screen-binding", {
+      sourceScreenParentId: task.parent.id,
+    });
+  }
+  const observation = input.screenObservations.find(
+    (candidate) => candidate.id === task.screen?.observationId
+  );
+  if (!observation) {
+    return result("observation-not-found", {
+      sourceScreenObservationId: task.screen.observationId,
+      sourceScreenParentId: task.parent.id,
+    });
+  }
+  if (!observation.imageBase64) {
+    return result("image-unavailable", {
+      sourceScreenObservationId: observation.id,
+      sourceScreenParentId: task.parent.id,
+    });
+  }
+  if (!input.providerSupportsImages) {
+    return result("provider-image-unsupported", {
+      sourceScreenObservationId: observation.id,
+      sourceScreenParentId: task.parent.id,
+    });
+  }
+  return result("attached", {
+    sourceScreenObservationId: observation.id,
+    sourceScreenParentId: task.parent.id,
+    image: {
+      base64: observation.imageBase64,
+      mediaType: observation.imageMediaType ?? "image/jpeg",
+    },
+  });
+}
+
+export function formatAdvisorScreenSourceReadForTrace(
+  decision: AdvisorScreenSourceReadDecision
+): Record<string, unknown> {
+  return {
+    sourceScreenObservationId: decision.sourceScreenObservationId,
+    sourceScreenParentId: decision.sourceScreenParentId,
+    sourceVoiceTurnIds: decision.sourceVoiceTurnIds,
+    sourceReadDisposition: decision.disposition,
+    sourceScreenImageAttached: Boolean(decision.image),
+  };
 }
 
 export function decideAdvisorScreenScope(input: {
