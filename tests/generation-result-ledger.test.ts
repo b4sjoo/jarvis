@@ -7,6 +7,7 @@ import type {
 } from "../src/lib/meeting/answer-generation-lease.js";
 import { authorizeAnswerGenerationLease } from "../src/lib/meeting/answer-generation-lease.js";
 import {
+  buildGenerationAuthorizationRejection,
   GenerationDerivedCommitCoordinator,
   GenerationResultLedger,
   formatGenerationResultLedgerForTrace,
@@ -313,6 +314,67 @@ test("terminalizes cancelled and superseded generations exactly once", () => {
   assert.equal(
     ledger.getEntry(currentLease.id)?.commitDisposition,
     "superseded"
+  );
+});
+
+test("maps upstream authorization rejection to one generation terminal state", () => {
+  const ledger = new GenerationResultLedger();
+  const currentLease = lease();
+  ledger.begin({ lease: currentLease });
+  const rejection = buildGenerationAuthorizationRejection({
+    lease: currentLease,
+    reason: "logical-question-id-mismatch",
+    source: "logical-question-lease-authorization",
+    authority: "logical-question-lease",
+    targetLogicalQuestionRevision: 6,
+  });
+  assert.ok(rejection);
+
+  const terminal = ledger.terminalize({
+    generationLeaseId: rejection.lease.id,
+    disposition: rejection.disposition,
+    reason: rejection.reason,
+    source: rejection.source,
+    authority: rejection.authority,
+    targetLogicalQuestionRevision:
+      rejection.targetLogicalQuestionRevision,
+    candidateFormed: rejection.candidateFormed,
+    now: 150,
+  });
+  assert.equal(terminal?.commitDisposition, "rejected");
+  assert.deepEqual(terminal?.terminalization, {
+    disposition: "rejected",
+    reason: "logical-question-id-mismatch",
+    source: "logical-question-lease-authorization",
+    authority: "logical-question-lease",
+    targetLogicalQuestionRevision: 6,
+    candidateFormed: false,
+    terminalizedAt: 150,
+  });
+
+  ledger.terminalize({
+    generationLeaseId: currentLease.id,
+    disposition: "committed",
+    reason: "late-provider-completion",
+    source: "provider",
+    authority: "provider-result",
+    now: 160,
+  });
+  assert.equal(
+    ledger.getEntry(currentLease.id)?.commitDisposition,
+    "rejected"
+  );
+});
+
+test("does not fabricate a terminalization before a generation lease exists", () => {
+  assert.equal(
+    buildGenerationAuthorizationRejection({
+      lease: undefined,
+      reason: "runtime-epoch-mismatch",
+      source: "runtime-commit-authorization",
+      authority: "runtime-commit-token",
+    }),
+    undefined
   );
 });
 

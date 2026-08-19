@@ -155,6 +155,32 @@ interface TerminalizeGenerationInput {
   now?: number;
 }
 
+export interface GenerationAuthorizationRejectionInput<
+  TLease extends GenerationResultLease = GenerationResultLease,
+> {
+  lease?: TLease;
+  reason: string;
+  source: string;
+  authority: string;
+  targetLogicalQuestionRevision?: number;
+}
+
+export function buildGenerationAuthorizationRejection<
+  TLease extends GenerationResultLease,
+>(input: GenerationAuthorizationRejectionInput<TLease>) {
+  if (!input.lease) return undefined;
+  return {
+    lease: input.lease,
+    disposition: "rejected" as const,
+    reason: input.reason,
+    source: input.source,
+    authority: input.authority,
+    targetLogicalQuestionRevision:
+      input.targetLogicalQuestionRevision,
+    candidateFormed: false,
+  };
+}
+
 export class GenerationResultLedger {
   private readonly entries: GenerationResultLedgerEntry[] = [];
 

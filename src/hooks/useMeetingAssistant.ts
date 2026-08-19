@@ -70,6 +70,7 @@ import {
   extractInterviewerIntentKeywordEvidence,
   formatInterviewerIntentKeywordEvidenceForTrace,
   formatGenerationResultLedgerForTrace,
+  buildGenerationAuthorizationRejection,
   generationFailureDispositionFromProviderStatus,
   formatSemanticInterviewerIntentForTrace,
   ActiveMeetingTask,
@@ -8234,6 +8235,23 @@ export function useMeetingAssistant() {
         current: readRuntimeCommitSnapshot(),
         currentOperationId: activeAdvisorJobRef.current?.id,
       });
+    const terminalizeAuthorizationRejection = (input: {
+      reason: string;
+      source: string;
+      authority: string;
+      targetLogicalQuestionRevision?: number;
+    }) => {
+      const rejection = buildGenerationAuthorizationRejection({
+        lease: answerGenerationLease,
+        ...input,
+      });
+      if (rejection) {
+        terminalizeGenerationLease({
+          ...rejection,
+          traceId,
+        });
+      }
+    };
     const rejectStaleCommit = (
       stage: string,
       decision = readCommitDecision()
@@ -8245,6 +8263,11 @@ export function useMeetingAssistant() {
         );
       }
       if (!decision.authorized) {
+        terminalizeAuthorizationRejection({
+          reason: decision.reason,
+          source: "runtime-commit-authorization",
+          authority: "runtime-commit-token",
+        });
         if (activeAdvisorJobRef.current?.id === advisorJob.id) {
           updateForceAdviseTargetForAdvisorOutcome({
             advisorJob,
@@ -8292,6 +8315,14 @@ export function useMeetingAssistant() {
           );
         }
         if (!logicalQuestionAuthorization.authorized) {
+          terminalizeAuthorizationRejection({
+            reason: logicalQuestionAuthorization.reason,
+            source: "logical-question-lease-authorization",
+            authority: "logical-question-lease",
+            targetLogicalQuestionRevision:
+              logicalQuestionAuthorizationTarget.logicalQuestionUnit
+                ?.revision,
+          });
           if (activeAdvisorJobRef.current?.id === advisorJob.id) {
             updateForceAdviseTargetForAdvisorOutcome({
               advisorJob,
@@ -8360,6 +8391,13 @@ export function useMeetingAssistant() {
           );
         }
         if (!planAuthorization.authorized) {
+          terminalizeAuthorizationRejection({
+            reason: planAuthorization.reason,
+            source: "settled-execution-plan-authorization",
+            authority: "settled-advisor-execution-plan",
+            targetLogicalQuestionRevision:
+              currentLogicalQuestion?.revision,
+          });
           if (activeAdvisorJobRef.current?.id === advisorJob.id) {
             updateForceAdviseTargetForAdvisorOutcome({
               advisorJob,
