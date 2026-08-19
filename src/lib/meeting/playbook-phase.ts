@@ -451,7 +451,10 @@ export function formatCodingPlaybookPhaseContract(
   }
   return [
     "codingPhaseContract:",
-    "- Restate the input/output and explain the simplest correct baseline, including brute force when useful.",
+    "- Before final code, ask up to three high-yield clarification questions when the callable contract is ambiguous; otherwise state concise assumptions.",
+    "- Establish input/output shape, signature or interface, units, ordering, mutation, duplicate or missing-input behavior, and relevant error semantics.",
+    "- For endpoint or API-shaped tasks, clarify request, response, status/error behavior, state, and dependency failures without treating them as a separate question type.",
+    "- Explain the simplest correct baseline, including brute force when useful.",
     "- Walk through one small example and state the baseline complexity.",
     "- Do not optimize prematurely and do not emit a full Code section in this phase.",
   ].join("\n");
@@ -520,7 +523,7 @@ export function decidePlaybookPhaseProgression(
     };
   }
 
-  const flags = uniqueFlags([
+  const detectedFlags = uniqueFlags([
     ...detectCommonFlags(text),
     ...detectQuestionTypeFlags(
       questionType,
@@ -529,6 +532,27 @@ export function decidePlaybookPhaseProgression(
       input.subtaskIntent
     ),
   ]);
+  const initialCodingParent =
+    questionType === "coding" &&
+    (input.relation === "new-parent" ||
+      (!input.currentPhase && !input.phaseProgress));
+  // A title such as "Implement X" identifies a Coding task, but cannot prove
+  // that baseline reasoning and contract clarification have already happened.
+  const flags = initialCodingParent
+    ? uniqueFlags([
+        ...detectedFlags.filter(
+          (flag) =>
+            flag !== "implementation" &&
+            flag !== "optimized_algorithm" &&
+            flag !== "pseudocode_dry_run" &&
+            flag !== "edge_case_validation"
+        ),
+        "baseline_solution",
+      ])
+    : detectedFlags;
+  const phaseAuthorizedSubtaskIntent = initialCodingParent
+    ? undefined
+    : input.subtaskIntent;
   const requirementState = isSystemDesignQuestionType(questionType)
     ? resolveRequirementState({
         questionType,
@@ -545,7 +569,7 @@ export function decidePlaybookPhaseProgression(
     phaseProgress: input.phaseProgress,
     requirementsReady: requirementState?.requirementsReady,
     flags,
-    subtaskIntent: input.subtaskIntent,
+    subtaskIntent: phaseAuthorizedSubtaskIntent,
     relation: input.relation,
   });
   const action = decideAction({
@@ -564,7 +588,7 @@ export function decidePlaybookPhaseProgression(
       questionType,
       playbookId: input.playbookId,
       phase,
-      subtaskIntent: input.subtaskIntent,
+      subtaskIntent: phaseAuthorizedSubtaskIntent,
     }),
     completedFlags: requirementState
       ? requirementState.requirementsReady
@@ -572,14 +596,19 @@ export function decidePlaybookPhaseProgression(
         : []
       : flags,
     action,
-    reason: buildReason(
-      questionType,
-      currentPhase,
-      phase,
-      flags,
-      input.relation,
-      requirementState
-    ),
+    reason: [
+      buildReason(
+        questionType,
+        currentPhase,
+        phase,
+        flags,
+        input.relation,
+        requirementState
+      ),
+      initialCodingParent ? "initial-coding-parent-baseline-authority" : undefined,
+    ]
+      .filter(Boolean)
+      .join("; "),
     source: "automatic",
     guardStatus: "automatic",
     phaseFrom: currentPhase,

@@ -5,6 +5,7 @@ import {
   decideInterviewerAssumptionAuthorization,
   decideManualNextPhaseTransition,
   decidePlaybookPhaseProgression,
+  formatCodingPlaybookPhaseContract,
   formatPlaybookPhaseDecisionForPrompt,
   formatPlaybookPhaseDecisionForTrace,
 } from "../src/lib/meeting/playbook-phase.js";
@@ -473,6 +474,33 @@ test("starts a coding parent with a spoken baseline and no code artifact", () =>
     formatPlaybookPhaseDecisionForPrompt(decision, undefined),
     /Do not emit a full Code section/
   );
+});
+
+test("generic implement wording cannot skip a new coding parent baseline", () => {
+  const decision = decidePlaybookPhaseProgression({
+    questionType: "coding",
+    playbookId: "coding_algorithm",
+    latestTurnText: "Implement Dasher Payout Calculation.",
+    currentQuestion: "Implement Dasher Payout Calculation.",
+    relation: "new-parent",
+    subtaskIntent: "implementation-probe",
+  });
+
+  assert.equal(decision.phase, "baseline_reasoning");
+  assert.equal(decision.action, "advance");
+  assert.ok(decision.flags.includes("baseline_solution"));
+  assert.ok(!decision.flags.includes("implementation"));
+  assert.deepEqual(decision.requiredArtifacts, ["answer", "complexity"]);
+  assert.match(decision.reason, /initial-coding-parent-baseline-authority/);
+});
+
+test("coding baseline clarifies callable contracts without adding a question subtype", () => {
+  const contract = formatCodingPlaybookPhaseContract("baseline_reasoning");
+
+  assert.match(contract, /up to three high-yield clarification questions/);
+  assert.match(contract, /input\/output shape/);
+  assert.match(contract, /request, response, status\/error behavior/);
+  assert.match(contract, /without treating them as a separate question type/);
 });
 
 test("advances coding from baseline to optimized pseudocode on an optimization ask", () => {
