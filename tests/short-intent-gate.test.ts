@@ -282,6 +282,43 @@ test("strictly parses exact turn-scoped evidence and rejects extra authority", (
   }
 });
 
+test("rejects contradictory response-opportunity decisions and reasons", () => {
+  const request = buildResponseOpportunityRequest({
+    logicalQuestionUnit: logicalQuestionUnit(
+      "Did you use any helper tools to implement this?"
+    ),
+  });
+  const contradictory = parseResponseOpportunityOutput(
+    JSON.stringify({
+      v: 3,
+      d: "n",
+      c: 1,
+      e: [0],
+      r: "ask",
+    }),
+    request
+  );
+  assert.equal(contradictory.ok, false);
+  if (!contradictory.ok) {
+    assert.equal(contradictory.reason, "decision-reason-mismatch");
+    assert.equal(contradictory.errorKind, "schema");
+  }
+
+  for (const valid of [
+    { d: "o", r: "directive" },
+    { d: "n", r: "acknowledgement" },
+    { d: "u", r: "bounded-source-insufficient" },
+  ] as const) {
+    assert.equal(
+      parseResponseOpportunityOutput(
+        JSON.stringify({ v: 3, c: 0.95, e: [0], ...valid }),
+        request
+      ).ok,
+      true
+    );
+  }
+});
+
 test("compact output contract fits its derived provider budget", () => {
   assert.ok(
     RESPONSE_OPPORTUNITY_COMPACT_OUTPUT_WORST_CASE.length <=

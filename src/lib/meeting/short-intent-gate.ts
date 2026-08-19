@@ -55,6 +55,20 @@ const RESPONSE_OPPORTUNITY_REASON_CODES = new Set([
   "answer-to-candidate",
   "bounded-source-insufficient",
 ]);
+const RESPONSE_OPPORTUNITY_OUTPUT_REASON_CODES = new Set([
+  "ask",
+  "directive",
+  "correction",
+  "constraint",
+  "phase-control",
+]);
+const RESPONSE_OPPORTUNITY_NO_OUTPUT_REASON_CODES = new Set([
+  "acknowledgement",
+  "greeting",
+  "closing",
+  "logistics",
+  "answer-to-candidate",
+]);
 
 const RESPONSE_OPPORTUNITY_FALLBACK_ACTION_WORDS = new Set([
   "analyze",
@@ -463,6 +477,16 @@ export function parseResponseOpportunityOutput(
       : candidate.d === "n"
         ? "no-output-request"
         : "unclear";
+  const reasonMatchesDecision =
+    (decision === "output-request" &&
+      RESPONSE_OPPORTUNITY_OUTPUT_REASON_CODES.has(candidate.r)) ||
+    (decision === "no-output-request" &&
+      RESPONSE_OPPORTUNITY_NO_OUTPUT_REASON_CODES.has(candidate.r)) ||
+    (decision === "unclear" &&
+      candidate.r === "bounded-source-insufficient");
+  if (!reasonMatchesDecision) {
+    return parseFailure("decision-reason-mismatch", "schema");
+  }
   return {
     ok: true,
     value: {
