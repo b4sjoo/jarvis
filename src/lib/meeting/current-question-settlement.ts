@@ -505,6 +505,16 @@ export function settleCurrentQuestion(input: {
   };
 }
 
+export function settlementAuthorizesFollowupParentScope(
+  decision: CurrentQuestionSettlementDecision | undefined
+) {
+  return Boolean(
+    decision?.relation === "followup-parent" &&
+      decision.relationMutationAuthorized &&
+      decision.activeParentId
+  );
+}
+
 export function settleCurrentQuestionTerminalNoAnswer(input: {
   currentQuestion: ProvisionalCurrentQuestion;
   candidate?: CurrentQuestionTerminalNoAnswerCandidate;
@@ -738,6 +748,8 @@ export function formatCurrentQuestionSettlementForTrace(
       decision.relationMutationAuthorized,
     currentQuestionSettlementParentMutationAuthorized:
       decision.parentMutationAuthorized,
+    currentQuestionSettlementFollowupParentScopeAuthorized:
+      settlementAuthorizesFollowupParentScope(decision),
     currentQuestionSettlementResponseAuthorized:
       decision.responseAuthorized,
     currentQuestionSettlementConfidence: decision.confidence,

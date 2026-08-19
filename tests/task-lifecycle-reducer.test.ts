@@ -70,7 +70,9 @@ function screen(
   };
 }
 
-function settlement(): CurrentQuestionSettlementDecision {
+function settlement(
+  overrides: Partial<CurrentQuestionSettlementDecision> = {}
+): CurrentQuestionSettlementDecision {
   return {
     settlementId: "settlement-correction",
     logicalQuestionUnitId: "question-a",
@@ -95,6 +97,7 @@ function settlement(): CurrentQuestionSettlementDecision {
     manualCorrectionRevision: 1,
     rejectedProposals: [],
     reasons: ["human-correction-changed-current-question-domain"],
+    ...overrides,
   };
 }
 
@@ -228,6 +231,78 @@ test("atomically replaces a corrected parent under one settled plan", () => {
     currentActiveMeetingTask: reduction.activeMeetingTask,
   });
   assert.equal(postAuthorization.authorized, true);
+});
+
+test("consumes a settled follow-up as one same-parent context update", () => {
+  const beforeParent = parent("coding", {
+    topic: "Implement an LRU cache",
+  });
+  const afterParent = parent("coding", {
+    topic: "Implement an LRU cache",
+    latestUsefulAnswer: "Explain the eviction helper.",
+    revisions: 4,
+    updatedAt: 30,
+  });
+  const beforeScreen = screen("coding");
+  const before = meetingTask(beforeParent, beforeScreen, 3);
+  const after = meetingTask(afterParent, beforeScreen, 4);
+  const followupSettlement = settlement({
+    settlementId: "settlement-followup",
+    relation: "followup-parent",
+    parentMutationAuthorized: false,
+    reasons: [
+      "runtime-relation-settlement",
+      "relation-does-not-create-parent",
+    ],
+  });
+  const plan = buildSettledAdvisorExecutionPlan({
+    settlement: followupSettlement,
+    activeMeetingTask: after,
+    expectedActiveMeetingTask: before,
+    preBoundaryQuestionType: "coding",
+    taskBoundaryCommitted: false,
+    childOwnsResponse: false,
+    providerSnapshot: providers,
+    playbook: playbook(),
+    memoryUseCase: "coding_interview",
+    askFrame: "direct-answer",
+    topicDomain: "backend",
+    sourceQuestion: "Explain the eviction helper.",
+    createdAt: 100,
+  });
+
+  assert.equal(plan.contextReadScope, "active-parent-read");
+  assert.deepEqual(plan.taskMutationPolicy, {
+    kind: "update-parent-context",
+  });
+  const reduction = reduceTaskLifecycleTransaction({
+    transaction: createTaskLifecycleTransaction({
+      plan,
+      manualCorrectionRevision: 1,
+      proposedActiveInterviewTask: afterParent,
+      proposedActiveScreenTask: beforeScreen,
+    }),
+    currentSessionId: "session-a",
+    currentRuntimeEpoch: 4,
+    currentLogicalQuestionUnitId: "question-a",
+    currentLogicalQuestionRevision: 2,
+    currentManualCorrectionRevision: 1,
+    currentTaskRuntimeRevision: 3,
+    currentActiveInterviewTask: beforeParent,
+    currentActiveScreenTask: beforeScreen,
+  });
+
+  assert.equal(reduction.authorized, true);
+  assert.equal(reduction.mutationApplied, true);
+  assert.equal(reduction.reason, "committed");
+  assert.equal(reduction.parentBeforeId, "parent-a");
+  assert.equal(reduction.parentAfterId, "parent-a");
+  assert.equal(reduction.parentAfterRevision, 4);
+  assert.equal(
+    reduction.parent?.latestUsefulAnswer,
+    "Explain the eviction helper."
+  );
+  assert.equal(reduction.screenAttachment?.id, "screen-a");
 });
 
 test("rejects a stale correction revision without changing the parent", () => {

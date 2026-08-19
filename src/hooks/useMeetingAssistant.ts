@@ -438,6 +438,7 @@ import {
   formatRuntimeCommitAuthorizationForTrace,
   formatRuntimeInferenceOperationForTrace,
   formatCurrentQuestionSettlementForTrace,
+  settlementAuthorizesFollowupParentScope,
   formatCurrentQuestionTerminalNoAnswerForTrace,
   formatSettledAdvisorExecutionPlanForTrace,
   formatSourceOwnedTransitionForTrace,
@@ -22294,6 +22295,9 @@ export function useMeetingAssistant() {
           "unknown";
         const screenResponseOnlyTaskScope =
           !screenCurrentQuestionSettlement?.parentMutationAuthorized &&
+          !settlementAuthorizesFollowupParentScope(
+            screenCurrentQuestionSettlement
+          ) &&
           screenTaskRelationDecision.responseOnly &&
           screenSectionHintConsumption.disposition !== "applied"
             ? createResponseOnlyTaskScope({

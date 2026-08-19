@@ -8,6 +8,7 @@ import {
   formatCurrentQuestionTerminalNoAnswerForTrace,
   formatProvisionalCurrentQuestionForTrace,
   resolveCurrentQuestionSettlementDisposition,
+  settlementAuthorizesFollowupParentScope,
   settleCurrentQuestion,
   settleCurrentQuestionTerminalNoAnswer,
   type CurrentQuestionSettlementProposal,
@@ -116,6 +117,63 @@ test("creates a stable versioned provisional question snapshot", () => {
   assert.equal(first.sourceKind, "mixed");
   assert.equal(first.sourceHash, duplicate.sourceHash);
   assert.notEqual(first.sourceHash, revised.sourceHash);
+});
+
+test("authorizes active-parent scope only for a bound settled follow-up", () => {
+  const currentQuestion = createProvisionalCurrentQuestion({
+    logicalQuestionUnit: logicalQuestion(),
+    sourceKind: "screen",
+    sourceObservationIds: ["observation-a"],
+  });
+  const settledFollowup = settleCurrentQuestion({
+    currentQuestion,
+    deterministicProposal: proposal("deterministic-fast-path", {
+      relation: "unknown",
+      relationEvidenceAuthorized: false,
+      expectedParentId: "parent-a",
+      expectedParentRevision: 3,
+    }),
+    llmProposal: proposal("llm-type-repair", {
+      questionType: undefined,
+      typeEvidenceAuthorized: false,
+      relation: "followup-parent",
+      relationEvidenceAuthorized: true,
+      expectedParentId: "parent-a",
+      expectedParentRevision: 3,
+    }),
+    activeParentId: "parent-a",
+    activeParentRevision: 3,
+    manualCorrectionRevision: 0,
+    policy: {
+      allowLlmRelationRepair: true,
+      llmRelationRepairMinConfidence: 0.95,
+      runtimeMutationAuthorized: true,
+      questionComplete: true,
+      commitParent: true,
+    },
+  });
+
+  assert.equal(settledFollowup.relation, "followup-parent");
+  assert.equal(settledFollowup.relationMutationAuthorized, true);
+  assert.equal(settledFollowup.parentMutationAuthorized, false);
+  assert.equal(
+    settlementAuthorizesFollowupParentScope(settledFollowup),
+    true
+  );
+  assert.equal(
+    settlementAuthorizesFollowupParentScope({
+      ...settledFollowup,
+      relationMutationAuthorized: false,
+    }),
+    false
+  );
+  assert.equal(
+    settlementAuthorizesFollowupParentScope({
+      ...settledFollowup,
+      activeParentId: undefined,
+    }),
+    false
+  );
 });
 
 test("settles current-question identity from semantic evidence, not only the terminal ask", () => {
