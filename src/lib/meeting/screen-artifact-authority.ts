@@ -37,11 +37,38 @@ export function resolveScreenGenerationRequestedArtifacts(
   return ARTIFACT_ORDER.filter((artifact) => requested.has(artifact));
 }
 
+export function resolveManualScreenGenerationRequestedArtifacts(input: {
+  requiredArtifacts: readonly AnswerArtifactSection[] | undefined;
+  questionType?: ScreenQuestionType;
+  boundVoicePrimaryAsk: boolean;
+  primaryAskIntent: InterviewSubtaskIntent;
+}): AnswerArtifactSection[] {
+  const phaseArtifacts = resolveScreenGenerationRequestedArtifacts(
+    input.requiredArtifacts
+  );
+  if (
+    !input.boundVoicePrimaryAsk ||
+    normalizeCanonicalQuestionType(input.questionType) !== "coding"
+  ) {
+    return phaseArtifacts;
+  }
+
+  if (input.primaryAskIntent === "implementation-probe") {
+    return ["answer", "code", "complexity"];
+  }
+  if (input.primaryAskIntent === "complexity-probe") {
+    return ["answer", "complexity"];
+  }
+  return ["answer"];
+}
+
 export function resolveManualScreenPlaybookSubtaskIntent(input: {
   questionType?: ScreenQuestionType;
   inferredIntent?: InterviewSubtaskIntent;
+  boundVoicePrimaryAsk?: boolean;
 }): InterviewSubtaskIntent {
-  return normalizeCanonicalQuestionType(input.questionType) === "coding"
+  return normalizeCanonicalQuestionType(input.questionType) === "coding" &&
+    !input.boundVoicePrimaryAsk
     ? "implementation-probe"
     : input.inferredIntent ?? "unknown";
 }
@@ -49,6 +76,8 @@ export function resolveManualScreenPlaybookSubtaskIntent(input: {
 export function authorizeManualScreenPresentationArtifacts(input: {
   requestedArtifacts: readonly AnswerArtifactSection[];
   parsedAnswer: ParsedMeetingAnswer;
+  boundVoicePrimaryAsk?: boolean;
+  primaryAskIntent?: InterviewSubtaskIntent;
 }): ScreenPresentationArtifactAuthorityDecision {
   const codeCandidatePresent = hasMeaningfulArtifact(
     input.parsedAnswer.sections.code
@@ -61,11 +90,21 @@ export function authorizeManualScreenPresentationArtifacts(input: {
   );
   const requested = new Set(input.requestedArtifacts);
   const authorized = new Set<AnswerArtifactSection>(["answer"]);
+  const primaryAskAllowsCode =
+    !input.boundVoicePrimaryAsk ||
+    input.primaryAskIntent === "implementation-probe";
+  const primaryAskAllowsComplexity =
+    !input.boundVoicePrimaryAsk ||
+    input.primaryAskIntent === "implementation-probe" ||
+    input.primaryAskIntent === "complexity-probe";
 
   // A manual screen capture is explicit presentation authority for parsed
-  // coding artifacts. It does not grant task, prompt, or memory ownership.
-  if (codeCandidatePresent) authorized.add("code");
-  if (complexityCandidatePresent) authorized.add("complexity");
+  // coding artifacts only when no narrower Voice ask owns the operation.
+  // It does not grant task, prompt, or memory ownership.
+  if (codeCandidatePresent && primaryAskAllowsCode) authorized.add("code");
+  if (complexityCandidatePresent && primaryAskAllowsComplexity) {
+    authorized.add("complexity");
+  }
   if (requested.has("whiteboard") && whiteboardCandidatePresent) {
     authorized.add("whiteboard");
   }
@@ -83,14 +122,25 @@ export function authorizeManualScreenPresentationArtifacts(input: {
     whiteboardCandidatePresent,
     reason: [
       "manual-screen-result",
+      input.boundVoicePrimaryAsk
+        ? `voice-primary-ask:${input.primaryAskIntent ?? "unknown"}`
+        : "screen-primary-ask",
       codeCandidatePresent ? "code-present" : "code-empty-preserve",
+      codeCandidatePresent && !primaryAskAllowsCode
+        ? "code-blocked-by-primary-ask"
+        : undefined,
       complexityCandidatePresent
         ? "complexity-present"
         : "complexity-empty-preserve",
+      complexityCandidatePresent && !primaryAskAllowsComplexity
+        ? "complexity-blocked-by-primary-ask"
+        : undefined,
       requested.has("whiteboard")
         ? "whiteboard-phase-requested"
         : "whiteboard-not-requested",
-    ].join("; "),
+    ]
+      .filter(Boolean)
+      .join("; "),
   };
 }
 
@@ -108,7 +158,9 @@ export function formatScreenPresentationArtifactAuthorityForTrace(
     .filter((artifact) => artifact !== "answer" && !requested.has(artifact))
     .map((artifact) => `${artifact}:not-requested-by-playbook`);
   const artifactRefreshAuthorized =
-    decision.codeCandidatePresent || decision.complexityCandidatePresent;
+    decision.authorizedArtifacts.includes("code") ||
+    decision.authorizedArtifacts.includes("complexity") ||
+    decision.authorizedArtifacts.includes("whiteboard");
   return {
     screenArtifactAuthoritySource: decision.source,
     screenArtifactAuthorityAuthorized: artifactRefreshAuthorized,

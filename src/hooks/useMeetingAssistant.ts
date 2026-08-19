@@ -285,8 +285,8 @@ import {
   formatInterviewerAssumptionAuthorizationForTrace,
   formatPlaybookPhaseDecisionForTrace,
   resolvePlaybookRequiredArtifacts,
-  resolveScreenGenerationRequestedArtifacts,
   resolveManualScreenPlaybookSubtaskIntent,
+  resolveManualScreenGenerationRequestedArtifacts,
   authorizeManualScreenPresentationArtifacts,
   formatScreenPresentationArtifactAuthorityForTrace,
   formatInterviewPlaybookForTrace,
@@ -22346,9 +22346,12 @@ export function useMeetingAssistant() {
           resolveManualScreenPlaybookSubtaskIntent({
             questionType: settledScreenQuestionType,
             inferredIntent: inferAdvisorSubtaskIntent(
-              screenEvidenceText,
+              screenPrimaryAskEvidenceText,
               readMemoryQuestionType(settledScreenTaskKind) ?? "unknown"
             ),
+            boundVoicePrimaryAsk:
+              screenSourcePacket.sourceOperationAuthority
+                .boundVoicePrimaryAsk,
           });
         const screenPhaseDecision = decidePlaybookPhaseProgression({
           questionType: normalizeQuestionTypeAlias(
@@ -22369,7 +22372,7 @@ export function useMeetingAssistant() {
               : preflightContextState.activeMeetingTask?.parent.phaseProgress ??
                 preflightContextState.taskRuntime.parent?.phaseProgress,
           latestTurnText: recentTranscript,
-          currentQuestion: screenCurrentQuestionEvidenceText,
+          currentQuestion: screenPrimaryAskEvidenceText,
           relation: provisionalScreenTaskRelation,
           subtaskIntent: screenSubtaskIntent,
           askFrame: screenPreflight?.askFrame ?? screenMemoryAskFrame,
@@ -22927,9 +22930,18 @@ export function useMeetingAssistant() {
               MEETING_ADVISOR_PROMPT_CONTRACT_VERSION,
           });
         screenGenerationRequestedArtifacts =
-          resolveScreenGenerationRequestedArtifacts(
-            screenPhaseDecision.requiredArtifacts
-          );
+          resolveManualScreenGenerationRequestedArtifacts({
+            requiredArtifacts: screenPhaseDecision.requiredArtifacts,
+            questionType: settledScreenQuestionType,
+            boundVoicePrimaryAsk:
+              screenSourcePacket.sourceOperationAuthority
+                .boundVoicePrimaryAsk,
+            primaryAskIntent: screenSubtaskIntent,
+          });
+        const screenGenerationPhaseDecision = {
+          ...screenPhaseDecision,
+          requiredArtifacts: screenGenerationRequestedArtifacts,
+        };
         const screenWhiteboardFormatPreference =
           resolveWhiteboardFormatPreference({
             questionType: settledScreenQuestionType,
@@ -22938,12 +22950,12 @@ export function useMeetingAssistant() {
             )
               ? "revise-whiteboard"
               : "none",
-            sourceQuestion: screenCurrentQuestionEvidenceText,
+            sourceQuestion: screenPrimaryAskEvidenceText,
           });
         const screenCapacityEstimationGuardrail =
           resolveCapacityEstimationGuardrail({
             questionType: settledScreenQuestionType,
-            sourceText: screenCurrentQuestionEvidenceText,
+            sourceText: screenPrimaryAskEvidenceText,
           });
         const screenCapacityMetadata =
           formatCapacityEstimationGuardrailForTrace(
@@ -23152,7 +23164,7 @@ export function useMeetingAssistant() {
                 : screenExecutionContextState.interviewSessionContext,
             screenPreflight,
             interviewPlaybook: screenRuntimePlaybook,
-            playbookPhaseDecision: screenPhaseDecision,
+            playbookPhaseDecision: screenGenerationPhaseDecision,
             activeMeetingTask:
               screenResponseOnlyTaskScope
                 ? undefined
@@ -23463,6 +23475,10 @@ export function useMeetingAssistant() {
           authorizeManualScreenPresentationArtifacts({
             requestedArtifacts: screenGenerationRequestedArtifacts,
             parsedAnswer: parsedScreenMeetingAnswer,
+            boundVoicePrimaryAsk:
+              screenSourcePacket.sourceOperationAuthority
+                .boundVoicePrimaryAsk,
+            primaryAskIntent: screenSubtaskIntent,
           });
         screenPresentationAuthorizedArtifacts =
           screenPresentationArtifactAuthority.authorizedArtifacts;
