@@ -315,7 +315,7 @@ const InterviewPreparation = () => {
         className={`grid min-h-[640px] overflow-hidden border ${
           expandedWorkspaceSurface
             ? "grid-cols-1"
-            : "lg:grid-cols-[260px_minmax(0,1fr)_380px]"
+            : "lg:grid-cols-[220px_minmax(0,1fr)] 2xl:grid-cols-[260px_minmax(0,1fr)_380px]"
         }`}
       >
         <section
@@ -378,7 +378,9 @@ const InterviewPreparation = () => {
               ? "hidden"
               : expandedWorkspaceSurface === "conversation"
                 ? "block min-w-0"
-                : `${mobilePanel === "conversation" ? "block" : "hidden"} min-w-0 lg:block`
+                : mobilePanel === "review"
+                  ? "hidden min-w-0 2xl:block"
+                  : `${mobilePanel === "conversation" ? "block" : "hidden"} min-w-0 lg:block`
           }
         >
           {detail ? (
@@ -442,7 +444,7 @@ const InterviewPreparation = () => {
               ? "hidden"
               : expandedWorkspaceSurface === "review"
                 ? "block min-w-0"
-                : `${mobilePanel === "review" ? "block" : "hidden"} border-l lg:block`
+                : `${mobilePanel === "review" ? "block" : "hidden"} min-w-0 border-l 2xl:block`
           }
         >
           <ReviewedStatePanel
@@ -711,17 +713,18 @@ const ProcessWorkspace = ({
           return (
             <div
               key={round.id}
-              className="flex items-stretch border-b last:border-b-0"
+              className={`flex items-stretch border-b last:border-b-0 ${active ? "bg-muted/50" : ""}`}
             >
               <button
                 className="flex min-w-0 flex-1 items-center gap-3 px-4 py-3 text-left hover:bg-muted/60 disabled:cursor-default"
                 onClick={() => onSetActiveRound(round.id)}
                 disabled={active || detail.process.status === "archived"}
+                aria-current={active ? "step" : undefined}
               >
                 {active ? (
-                  <CheckCircle2 className="size-4 shrink-0 text-primary" />
+                  <CheckCircle2 className="size-4 shrink-0 text-foreground" />
                 ) : (
-                  <Circle className="size-4 shrink-0 text-muted-foreground" />
+                  <Circle className="size-4 shrink-0 text-muted-foreground/35" />
                 )}
                 <div className="min-w-0 flex-1">
                   <div className="truncate text-sm font-medium">{round.title}</div>
@@ -735,45 +738,49 @@ const ProcessWorkspace = ({
                     )}
                   </div>
                 </div>
-                <Badge variant="outline">{round.expectedTypePolicy}</Badge>
+                <Badge variant="outline" className="hidden shrink-0 sm:inline-flex">
+                  {round.expectedTypePolicy}
+                </Badge>
               </button>
-              <Button
-                size="icon"
-                variant={current ? "secondary" : "ghost"}
-                className="my-auto mr-1 shrink-0"
-                title={current ? `${round.title} is current` : `Set ${round.title} as current`}
-                disabled={current || detail.process.status === "archived"}
-                onClick={() => onSetCurrentRound(round)}
-              >
-                <Crosshair className="size-4" />
-              </Button>
-              <Button
-                size="icon"
-                variant="ghost"
-                className="my-auto mr-2 shrink-0"
-                title={`Edit ${round.title}`}
-                disabled={detail.process.status === "archived"}
-                onClick={() => onEditRound(round)}
-              >
-                <Pencil className="size-4" />
-              </Button>
-              <Button
-                size="icon"
-                variant="ghost"
-                className="my-auto mr-2 shrink-0"
-                title={
-                  detail.rounds.length <= 1
-                    ? "An interview process must keep one round"
-                    : `Delete ${round.title}`
-                }
-                disabled={
-                  detail.process.status === "archived" ||
-                  detail.rounds.length <= 1
-                }
-                onClick={() => onDeleteRound(round)}
-              >
-                <Trash2 className="size-4" />
-              </Button>
+              <div className="flex shrink-0 items-center pr-1">
+                <Button
+                  size="icon"
+                  variant={current ? "secondary" : "ghost"}
+                  className="shrink-0"
+                  title={current ? `${round.title} is current` : `Set ${round.title} as current`}
+                  disabled={current || detail.process.status === "archived"}
+                  onClick={() => onSetCurrentRound(round)}
+                >
+                  <Crosshair className="size-4" />
+                </Button>
+                <Button
+                  size="icon"
+                  variant="ghost"
+                  className="shrink-0"
+                  title={`Edit ${round.title}`}
+                  disabled={detail.process.status === "archived"}
+                  onClick={() => onEditRound(round)}
+                >
+                  <Pencil className="size-4" />
+                </Button>
+                <Button
+                  size="icon"
+                  variant="ghost"
+                  className="shrink-0"
+                  title={
+                    detail.rounds.length <= 1
+                      ? "An interview process must keep one round"
+                      : `Delete ${round.title}`
+                  }
+                  disabled={
+                    detail.process.status === "archived" ||
+                    detail.rounds.length <= 1
+                  }
+                  onClick={() => onDeleteRound(round)}
+                >
+                  <Trash2 className="size-4" />
+                </Button>
+              </div>
             </div>
           );
         })}
@@ -1408,21 +1415,37 @@ const MobilePanelSelector = ({
   value: MobilePanel;
   onChange: (value: MobilePanel) => void;
 }) => (
-  <div className="grid grid-cols-3 border lg:hidden">
-    {([
-      ["processes", "Processes"],
-      ["conversation", "Workspace"],
-      ["review", "Reviewed"],
-    ] as const).map(([id, label]) => (
+  <>
+    <div className="grid grid-cols-3 border lg:hidden">
+      {([
+        ["processes", "Processes"],
+        ["conversation", "Workspace"],
+        ["review", "Reviewed"],
+      ] as const).map(([id, label]) => (
+        <button
+          key={id}
+          className={`h-9 border-r text-xs last:border-r-0 ${value === id ? "bg-primary text-primary-foreground" : "bg-background"}`}
+          onClick={() => onChange(id)}
+        >
+          {label}
+        </button>
+      ))}
+    </div>
+    <div className="hidden grid-cols-2 border lg:grid 2xl:hidden">
       <button
-        key={id}
-        className={`h-9 border-r text-xs last:border-r-0 ${value === id ? "bg-primary text-primary-foreground" : "bg-background"}`}
-        onClick={() => onChange(id)}
+        className={`h-9 border-r text-xs ${value !== "review" ? "bg-primary text-primary-foreground" : "bg-background"}`}
+        onClick={() => onChange("conversation")}
       >
-        {label}
+        Workspace
       </button>
-    ))}
-  </div>
+      <button
+        className={`h-9 text-xs ${value === "review" ? "bg-primary text-primary-foreground" : "bg-background"}`}
+        onClick={() => onChange("review")}
+      >
+        Reviewed
+      </button>
+    </div>
+  </>
 );
 
 const FilterButton = ({
