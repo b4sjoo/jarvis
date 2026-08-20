@@ -299,6 +299,18 @@ export interface MemoryGeneralEligibilitySummary {
     scopePath: MemoryGeneralScopePath;
   }>;
   rejectedEntryIds: string[];
+  projectScopedEvidence: {
+    evaluatedCount: number;
+    allowedByDiscriminativeAnchorCount: number;
+    rejectedWithGenericOverlapCount: number;
+    samples: Array<{
+      entryId: string;
+      eligible: boolean;
+      discriminativeAnchorMatchCount: number;
+      genericStructuredMatchCount: number;
+      genericContentMatchCount: number;
+    }>;
+  };
 }
 
 export interface MemoryPolicySnapshot {

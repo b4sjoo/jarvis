@@ -77,6 +77,87 @@ test("rejects unrelated project notes before scoring", () => {
   assert.equal(decision.rejectReason, "general-without-positive-scope");
 });
 
+test("rejects Oasis NDJSON memory for an unrelated LRU coding question", () => {
+  const entry = makeEntry({
+    id: "mem_oasis_ndjson_bulk_requirement",
+    type: "field_note",
+    title: "NDJSON requirement for OpenSearch bulk operations",
+    summary:
+      "OpenSearch Bulk API requires newline-delimited JSON so each operation can be processed independently.",
+    content:
+      "The backend server can stream bulk operations and report partial failures per item.",
+    scope: "project",
+    projectId: "oasis",
+    projectName: "Oasis",
+    tags: ["ndjson", "bulk-api", "opensearch", "field-knowledge"],
+    keywords: [
+      "NDJSON",
+      "newline-delimited JSON",
+      "Bulk API",
+      "partial failure",
+      "streaming parser",
+    ],
+  });
+
+  const decision = resolveGeneralMemoryEligibility({
+    entry,
+    familyDecision: resolveMemoryInterviewFamilies(entry),
+    query:
+      "Implement an LRU cache for a backend service and explain the operations.",
+    useCase: "coding_interview",
+  });
+  assert.equal(decision.eligible, false);
+  assert.equal(decision.rejectReason, "general-without-positive-scope");
+  assert.equal(
+    decision.projectScopeEvidence?.discriminativeAnchorMatchCount,
+    0
+  );
+  assert.ok(
+    (decision.projectScopeEvidence?.genericContentMatchCount ?? 0) > 0
+  );
+});
+
+test("allows project-scoped general memory for an exact product or API anchor", () => {
+  const entry = makeEntry({
+    type: "field_note",
+    title: "NDJSON requirement for OpenSearch bulk operations",
+    scope: "project",
+    projectId: "oasis",
+    projectName: "Oasis",
+    tags: ["ndjson", "bulk-api", "opensearch"],
+    keywords: ["NDJSON", "Bulk API"],
+  });
+
+  const decision = decide(
+    entry,
+    "Why does the OpenSearch Bulk API require NDJSON?"
+  );
+  assert.equal(decision.eligible, true);
+  assert.equal(decision.scopePath, "strong-current-question");
+  assert.ok(
+    (decision.projectScopeEvidence?.discriminativeAnchorMatchCount ?? 0) > 0
+  );
+});
+
+test("does not treat generic project metadata as a discriminative anchor", () => {
+  const entry = makeEntry({
+    type: "field_note",
+    title: "Backend API implementation requirement",
+    scope: "project",
+    projectId: "private_service",
+    projectName: "Private Service",
+    tags: ["backend", "api", "field-knowledge"],
+    keywords: ["backend API"],
+  });
+
+  const decision = decide(entry, "Explain the backend API requirement.");
+  assert.equal(decision.eligible, false);
+  assert.equal(
+    decision.projectScopeEvidence?.discriminativeAnchorMatchCount,
+    0
+  );
+});
+
 test("broad model stack and implement tokens cannot authorize general memory", () => {
   const entry = makeEntry({
     type: "field_note",
@@ -133,7 +214,58 @@ test("summarizes bounded scope paths and rejected ids for trace metadata", () =>
       { entryId: "redis", scopePath: "strong-current-question" },
     ],
     rejectedEntryIds: ["unrelated"],
+    projectScopedEvidence: {
+      evaluatedCount: 0,
+      allowedByDiscriminativeAnchorCount: 0,
+      rejectedWithGenericOverlapCount: 0,
+      samples: [],
+    },
   });
+});
+
+test("summarizes discriminative anchors separately from generic overlap", () => {
+  const recorder = createGeneralMemoryEligibilityRecorder();
+  const entry = makeEntry({
+    id: "oasis-note",
+    title: "NDJSON requirement for OpenSearch bulk operations",
+    summary:
+      "OpenSearch Bulk API requires newline-delimited JSON for each operation.",
+    content:
+      "The backend server can stream bulk operations and report partial failures.",
+    scope: "project",
+    projectId: "oasis",
+    projectName: "Oasis",
+    tags: ["ndjson", "bulk-api", "opensearch"],
+    keywords: ["NDJSON", "Bulk API"],
+  });
+  recorder.record(
+    entry.id,
+    decide(
+      entry,
+      "Implement an LRU cache for a backend service and explain the operations."
+    )
+  );
+  recorder.record(
+    entry.id,
+    decide(entry, "Why does the OpenSearch Bulk API require NDJSON?")
+  );
+
+  const evidence = recorder.summary().projectScopedEvidence;
+  assert.equal(evidence.evaluatedCount, 2);
+  assert.equal(evidence.allowedByDiscriminativeAnchorCount, 1);
+  assert.equal(evidence.rejectedWithGenericOverlapCount, 1);
+  assert.equal(evidence.samples[0]?.entryId, "oasis-note");
+  assert.equal(evidence.samples[0]?.eligible, false);
+  assert.equal(evidence.samples[0]?.discriminativeAnchorMatchCount, 0);
+  assert.ok(
+    (evidence.samples[0]?.genericStructuredMatchCount ?? 0) > 0 ||
+      (evidence.samples[0]?.genericContentMatchCount ?? 0) > 0
+  );
+  assert.equal(evidence.samples[1]?.entryId, "oasis-note");
+  assert.equal(evidence.samples[1]?.eligible, true);
+  assert.ok(
+    (evidence.samples[1]?.discriminativeAnchorMatchCount ?? 0) > 0
+  );
 });
 
 function decide(entry: MemoryEntry, query: string) {

@@ -69,6 +69,38 @@ const STOP_TOKENS = new Set([
   "your",
 ]);
 
+const GENERIC_PROJECT_SCOPE_TOKENS = new Set([
+  "api",
+  "backend",
+  "cache",
+  "client",
+  "concept",
+  "database",
+  "endpoint",
+  "failure",
+  "field",
+  "frontend",
+  "guide",
+  "knowledge",
+  "note",
+  "operation",
+  "operations",
+  "pattern",
+  "request",
+  "requirement",
+  "response",
+  "server",
+  "storage",
+  "support",
+  "workflow",
+]);
+
+interface MemoryGeneralProjectScopeEvidence {
+  discriminativeAnchorMatchCount: number;
+  genericStructuredMatchCount: number;
+  genericContentMatchCount: number;
+}
+
 export interface MemoryGeneralEligibilityDecision {
   applies: boolean;
   eligible: boolean;
@@ -78,6 +110,7 @@ export interface MemoryGeneralEligibilityDecision {
     "general-without-positive-scope"
   >;
   evidence: string[];
+  projectScopeEvidence?: MemoryGeneralProjectScopeEvidence;
 }
 
 export function resolveGeneralMemoryEligibility({
@@ -125,13 +158,18 @@ export function resolveGeneralMemoryEligibility({
     };
   }
 
-  const relevance = resolveStrongCurrentQuestionRelevance(entry, query);
+  const relevance = resolveStrongCurrentQuestionRelevance(
+    entry,
+    query,
+    isProjectScopedEntry(entry)
+  );
   if (relevance.strong) {
     return {
       applies: true,
       eligible: true,
       scopePath: "strong-current-question",
       evidence: relevance.evidence,
+      projectScopeEvidence: relevance.projectScopeEvidence,
     };
   }
 
@@ -140,6 +178,7 @@ export function resolveGeneralMemoryEligibility({
     eligible: false,
     rejectReason: "general-without-positive-scope",
     evidence: relevance.evidence,
+    projectScopeEvidence: relevance.projectScopeEvidence,
   };
 }
 
@@ -166,6 +205,9 @@ export function createGeneralMemoryEligibilityRecorder() {
         }
       }
       const rejected = decisions.filter((item) => !item.decision.eligible);
+      const projectScoped = decisions.filter(
+        (item) => item.decision.projectScopeEvidence
+      );
       return {
         evaluatedCount: decisions.length,
         allowedCount: allowed.length,
@@ -177,6 +219,36 @@ export function createGeneralMemoryEligibilityRecorder() {
             : []
         ),
         rejectedEntryIds: rejected.slice(0, 8).map((item) => item.entryId),
+        projectScopedEvidence: {
+          evaluatedCount: projectScoped.length,
+          allowedByDiscriminativeAnchorCount: projectScoped.filter(
+            (item) =>
+              item.decision.eligible &&
+              (item.decision.projectScopeEvidence
+                ?.discriminativeAnchorMatchCount ?? 0) > 0
+          ).length,
+          rejectedWithGenericOverlapCount: projectScoped.filter(
+            (item) =>
+              !item.decision.eligible &&
+              ((item.decision.projectScopeEvidence
+                ?.genericStructuredMatchCount ?? 0) > 0 ||
+                (item.decision.projectScopeEvidence
+                  ?.genericContentMatchCount ?? 0) > 0)
+          ).length,
+          samples: projectScoped.slice(0, 8).map((item) => ({
+            entryId: item.entryId,
+            eligible: item.decision.eligible,
+            discriminativeAnchorMatchCount:
+              item.decision.projectScopeEvidence!
+                .discriminativeAnchorMatchCount,
+            genericStructuredMatchCount:
+              item.decision.projectScopeEvidence!
+                .genericStructuredMatchCount,
+            genericContentMatchCount:
+              item.decision.projectScopeEvidence!
+                .genericContentMatchCount,
+          })),
+        },
       };
     },
   };
@@ -205,9 +277,14 @@ function hasProjectAssociation(entry: MemoryEntry) {
   return Boolean(entry.projectId?.trim() || entry.projectName?.trim());
 }
 
+function isProjectScopedEntry(entry: MemoryEntry) {
+  return entry.scope === "project" || hasProjectAssociation(entry);
+}
+
 function resolveStrongCurrentQuestionRelevance(
   entry: MemoryEntry,
-  query: string
+  query: string,
+  projectScoped: boolean
 ) {
   const queryTokens = meaningfulTokens(query);
   const titleTokens = meaningfulTokens(entry.title);
@@ -220,17 +297,32 @@ function resolveStrongCurrentQuestionRelevance(
   );
   const structuredMatches = intersect(queryTokens, structuredTokens);
   const contentMatches = intersect(queryTokens, contentTokens);
+  const genericStructuredMatches = filterGenericProjectScopeTokens(
+    structuredMatches
+  );
+  const genericContentMatches = filterGenericProjectScopeTokens(contentMatches);
   const exactMetadataSignal = [...entry.tags, ...entry.keywords].some((value) =>
     isExactMetadataSignal(queryTokens, value)
   );
   const exactTitleSignal =
     titleTokens.size >= 2 &&
     [...titleTokens].every((token) => queryTokens.has(token));
-  const strong =
-    exactMetadataSignal ||
-    exactTitleSignal ||
-    structuredMatches.size >= 2 ||
-    contentMatches.size >= 3;
+  const discriminativeAnchorMatchCount = projectScoped
+    ? countDiscriminativeProjectAnchorMatches(entry, queryTokens)
+    : 0;
+  const strong = projectScoped
+    ? discriminativeAnchorMatchCount > 0
+    : exactMetadataSignal ||
+      exactTitleSignal ||
+      structuredMatches.size >= 2 ||
+      contentMatches.size >= 3;
+  const projectScopeEvidence = projectScoped
+    ? {
+        discriminativeAnchorMatchCount,
+        genericStructuredMatchCount: genericStructuredMatches.size,
+        genericContentMatchCount: genericContentMatches.size,
+      }
+    : undefined;
 
   return {
     strong,
@@ -239,8 +331,55 @@ function resolveStrongCurrentQuestionRelevance(
       `contentMatches:${contentMatches.size}`,
       `exactMetadata:${exactMetadataSignal}`,
       `exactTitle:${exactTitleSignal}`,
+      ...(projectScopeEvidence
+        ? [
+            "projectScoped:true",
+            `discriminativeAnchorMatches:${discriminativeAnchorMatchCount}`,
+            `genericStructuredMatches:${genericStructuredMatches.size}`,
+            `genericContentMatches:${genericContentMatches.size}`,
+          ]
+        : []),
     ],
+    projectScopeEvidence,
   };
+}
+
+function filterGenericProjectScopeTokens(tokens: Set<string>) {
+  return new Set(
+    [...tokens].filter((token) => GENERIC_PROJECT_SCOPE_TOKENS.has(token))
+  );
+}
+
+function countDiscriminativeProjectAnchorMatches(
+  entry: MemoryEntry,
+  queryTokens: Set<string>
+) {
+  const signals = new Set(
+    [
+      entry.projectId,
+      entry.projectName,
+      entry.title,
+      ...entry.tags,
+      ...entry.keywords,
+    ]
+      .filter((value): value is string => Boolean(value?.trim()))
+      .map((value) => value.trim().toLowerCase())
+  );
+  let matches = 0;
+  for (const signal of signals) {
+    const tokens = meaningfulTokens(signal);
+    if (
+      !tokens.size ||
+      ![...tokens].some(
+        (token) => !GENERIC_PROJECT_SCOPE_TOKENS.has(token)
+      ) ||
+      !isExactMetadataSignal(queryTokens, signal)
+    ) {
+      continue;
+    }
+    matches += 1;
+  }
+  return matches;
 }
 
 function isExactMetadataSignal(queryTokens: Set<string>, value: string) {
