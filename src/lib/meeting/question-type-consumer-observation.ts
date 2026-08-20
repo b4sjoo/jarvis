@@ -49,6 +49,9 @@ export interface QuestionTypeConsumerObservation {
   priorCompatibility: QuestionTypePriorCompatibility;
   priorUsedAsExecutionGate: boolean;
   committedCurrentQuestionSourceHash?: string;
+  questionTypeQuestionSourceHash?: string;
+  relationQuestionSourceHash?: string;
+  kmbQuestionSourceHash?: string;
   executionPlanQuestionSourceHash?: string;
   promptCurrentQuestionSourceHash?: string;
   sourceConflicts: string[];
@@ -145,6 +148,9 @@ export function buildQuestionTypeConsumerObservation(input: {
   promptContractQuestionType: unknown;
   priorUsedAsExecutionGate?: boolean;
   committedCurrentQuestionSourceHash?: string;
+  questionTypeQuestionSourceHash?: string;
+  relationQuestionSourceHash?: string;
+  kmbQuestionSourceHash?: string;
   executionPlanQuestionSourceHash?: string;
   promptCurrentQuestionSourceHash?: string;
 }): QuestionTypeConsumerObservation {
@@ -185,6 +191,11 @@ export function buildQuestionTypeConsumerObservation(input: {
   const sourceConflicts = resolveQuestionSourceConflicts({
     committedCurrentQuestionSourceHash:
       input.committedCurrentQuestionSourceHash,
+    questionTypeQuestionSourceHash:
+      input.questionTypeQuestionSourceHash,
+    relationQuestionSourceHash:
+      input.relationQuestionSourceHash,
+    kmbQuestionSourceHash: input.kmbQuestionSourceHash,
     executionPlanQuestionSourceHash:
       input.executionPlanQuestionSourceHash,
     promptCurrentQuestionSourceHash:
@@ -283,6 +294,11 @@ export function buildQuestionTypeConsumerObservation(input: {
     priorUsedAsExecutionGate,
     committedCurrentQuestionSourceHash:
       input.committedCurrentQuestionSourceHash,
+    questionTypeQuestionSourceHash:
+      input.questionTypeQuestionSourceHash,
+    relationQuestionSourceHash:
+      input.relationQuestionSourceHash,
+    kmbQuestionSourceHash: input.kmbQuestionSourceHash,
     executionPlanQuestionSourceHash:
       input.executionPlanQuestionSourceHash,
     promptCurrentQuestionSourceHash:
@@ -347,6 +363,15 @@ export function projectQuestionTypeConsumerObservationFromTrace(
     committedCurrentQuestionSourceHash: readOptionalString(
       metadata.committedCurrentQuestionSourceHash
     ),
+    questionTypeQuestionSourceHash: readOptionalString(
+      metadata.questionTypeQuestionSourceHash
+    ),
+    relationQuestionSourceHash: readOptionalString(
+      metadata.relationQuestionSourceHash
+    ),
+    kmbQuestionSourceHash: readOptionalString(
+      metadata.kmbQuestionSourceHash
+    ),
     executionPlanQuestionSourceHash: readOptionalString(
       metadata.executionPlanQuestionSourceHash
     ),
@@ -394,6 +419,11 @@ export function formatQuestionTypeConsumerObservationForTrace(
       observation.promptContractQuestionType,
     committedCurrentQuestionSourceHash:
       observation.committedCurrentQuestionSourceHash,
+    questionTypeQuestionSourceHash:
+      observation.questionTypeQuestionSourceHash,
+    relationQuestionSourceHash:
+      observation.relationQuestionSourceHash,
+    kmbQuestionSourceHash: observation.kmbQuestionSourceHash,
     executionPlanQuestionSourceHash:
       observation.executionPlanQuestionSourceHash,
     promptCurrentQuestionSourceHash:
@@ -408,11 +438,17 @@ export function formatQuestionTypeConsumerObservationForTrace(
 
 function resolveQuestionSourceConflicts(input: {
   committedCurrentQuestionSourceHash?: string;
+  questionTypeQuestionSourceHash?: string;
+  relationQuestionSourceHash?: string;
+  kmbQuestionSourceHash?: string;
   executionPlanQuestionSourceHash?: string;
   promptCurrentQuestionSourceHash?: string;
 }) {
   const hasSourceObservation = Boolean(
     input.committedCurrentQuestionSourceHash ||
+      input.questionTypeQuestionSourceHash ||
+      input.relationQuestionSourceHash ||
+      input.kmbQuestionSourceHash ||
       input.executionPlanQuestionSourceHash ||
       input.promptCurrentQuestionSourceHash
   );
@@ -423,6 +459,34 @@ function resolveQuestionSourceConflicts(input: {
   if (!committed) {
     conflicts.push("committed-question-source-missing");
     return conflicts;
+  }
+  const hasExpandedConsumerObservation = Boolean(
+    input.questionTypeQuestionSourceHash ||
+      input.relationQuestionSourceHash ||
+      input.kmbQuestionSourceHash
+  );
+  if (hasExpandedConsumerObservation) {
+    addQuestionSourceConflict(
+      conflicts,
+      "question-type-question-source-missing",
+      "settlement-vs-question-type-source",
+      input.questionTypeQuestionSourceHash,
+      committed
+    );
+    addQuestionSourceConflict(
+      conflicts,
+      "relation-question-source-missing",
+      "settlement-vs-relation-source",
+      input.relationQuestionSourceHash,
+      committed
+    );
+    addQuestionSourceConflict(
+      conflicts,
+      "kmb-question-source-missing",
+      "settlement-vs-kmb-source",
+      input.kmbQuestionSourceHash,
+      committed
+    );
   }
   if (!input.executionPlanQuestionSourceHash) {
     conflicts.push("execution-plan-question-source-missing");
@@ -435,6 +499,20 @@ function resolveQuestionSourceConflicts(input: {
     conflicts.push("settlement-vs-prompt-source");
   }
   return conflicts;
+}
+
+function addQuestionSourceConflict(
+  conflicts: string[],
+  missingReason: string,
+  mismatchReason: string,
+  candidate: string | undefined,
+  committed: string
+) {
+  if (!candidate) {
+    conflicts.push(missingReason);
+  } else if (candidate !== committed) {
+    conflicts.push(mismatchReason);
+  }
 }
 
 function resolvePriorCompatibility(

@@ -73,6 +73,9 @@ test("projects trace metadata into the Human Evaluation observation contract", (
     artifactPolicyQuestionType: "general-system-design",
     promptContractQuestionType: "general-system-design",
     committedCurrentQuestionSourceHash: "source-a",
+    questionTypeQuestionSourceHash: "source-a",
+    relationQuestionSourceHash: "source-a",
+    kmbQuestionSourceHash: "source-a",
     executionPlanQuestionSourceHash: "source-a",
     promptCurrentQuestionSourceHash: "source-a",
   });
@@ -97,6 +100,9 @@ test("flags a prompt that consumes a different question source than the settleme
     artifactPolicyQuestionType: "coding",
     promptContractQuestionType: "coding",
     committedCurrentQuestionSourceHash: "source-a",
+    questionTypeQuestionSourceHash: "source-a",
+    relationQuestionSourceHash: "source-a",
+    kmbQuestionSourceHash: "source-a",
     executionPlanQuestionSourceHash: "source-a",
     promptCurrentQuestionSourceHash: "source-b",
   });
@@ -107,6 +113,52 @@ test("flags a prompt that consumes a different question source than the settleme
   assert.deepEqual(observation.sourceConflicts, [
     "settlement-vs-prompt-source",
   ]);
+});
+
+test("flags a KMB consumer that retrieves against a different question source", () => {
+  const observation = buildQuestionTypeConsumerObservation({
+    committedCurrentQuestionType: "project-deep-dive",
+    responseOwnerQuestionType: "project-deep-dive",
+    responsePlaybookQuestionType: "project-deep-dive",
+    kmbPolicyQuestionType: "project-deep-dive",
+    factAnchorPolicyQuestionType: "project-deep-dive",
+    modelRouteQuestionType: "project-deep-dive",
+    answerProfileQuestionType: "project-deep-dive",
+    artifactPolicyQuestionType: "project-deep-dive",
+    promptContractQuestionType: "project-deep-dive",
+    committedCurrentQuestionSourceHash: "source-current",
+    questionTypeQuestionSourceHash: "source-current",
+    relationQuestionSourceHash: "source-current",
+    kmbQuestionSourceHash: "source-previous",
+    executionPlanQuestionSourceHash: "source-current",
+    promptCurrentQuestionSourceHash: "source-current",
+  });
+
+  assert.equal(observation.typeCoherent, true);
+  assert.equal(observation.sourceCoherent, false);
+  assert.deepEqual(observation.sourceConflicts, [
+    "settlement-vs-kmb-source",
+  ]);
+});
+
+test("keeps legacy source observations evaluable before expanded consumer hashes", () => {
+  const observation = buildQuestionTypeConsumerObservation({
+    committedCurrentQuestionType: "coding",
+    responseOwnerQuestionType: "coding",
+    responsePlaybookQuestionType: "coding",
+    kmbPolicyQuestionType: "coding",
+    factAnchorPolicyQuestionType: "coding",
+    modelRouteQuestionType: "coding",
+    answerProfileQuestionType: "coding",
+    artifactPolicyQuestionType: "coding",
+    promptContractQuestionType: "coding",
+    committedCurrentQuestionSourceHash: "legacy-source",
+    executionPlanQuestionSourceHash: "legacy-source",
+    promptCurrentQuestionSourceHash: "legacy-source",
+  });
+
+  assert.equal(observation.sourceCoherent, true);
+  assert.deepEqual(observation.sourceConflicts, []);
 });
 
 test("flags any future trace that lets a prior become an execution gate", () => {

@@ -667,6 +667,8 @@ import {
   scoreSemanticTaxonomyEmbedding,
   selectManualScreenVoiceQuestionCapsule,
   decideManualScreenVoiceQuestionBinding,
+  commitManualScreenQuestionPacket,
+  isCommittedManualScreenQuestionPacket,
   resolveManualScreenSourcePacket,
   formatManualScreenVoiceQuestionBindingForTrace,
   formatManualScreenSourcePacketForTrace,
@@ -21794,19 +21796,60 @@ export function useMeetingAssistant() {
             : undefined;
         const screenCurrentQuestionEvidenceText =
           screenPreflight?.question?.trim() ?? "";
-        let screenSourcePacket = resolveManualScreenSourcePacket({
+        const screenFallbackQuestion =
+          screenCurrentQuestionEvidenceText ||
+          observation.captureTarget?.title?.trim() ||
+          "";
+        const candidateScreenSourcePacket = resolveManualScreenSourcePacket({
           voiceQuestion: screenVoiceQuestionCapsule,
           screenObservationId: observation.id,
-          screenPreflightQuestion: screenCurrentQuestionEvidenceText,
+          screenPreflightQuestion: screenFallbackQuestion,
         });
+        const screenRelationLogicalQuestionUnit =
+          buildManualScreenLogicalQuestionUnit({
+            packet: candidateScreenSourcePacket,
+            sessionId: preflightContextState.sessionId,
+            runtimeEpoch: runtimeEpochRef.current,
+            createdAt: observation.capturedAt,
+            transcriptTurns: preflightContextState.transcriptTurns,
+          });
+        const screenCurrentQuestion = screenRelationLogicalQuestionUnit
+          ? createProvisionalCurrentQuestion({
+              logicalQuestionUnit: screenRelationLogicalQuestionUnit,
+              sourceKind:
+                candidateScreenSourcePacket.primaryAsk?.source === "voice-lqu"
+                  ? "mixed"
+                  : "screen",
+              sourceObservationIds: [observation.id],
+            })
+          : undefined;
+        const screenSourcePacket = screenCurrentQuestion
+          ? commitManualScreenQuestionPacket({
+              packet: candidateScreenSourcePacket,
+              sessionId: screenCurrentQuestion.sessionId,
+              runtimeEpoch: screenCurrentQuestion.runtimeEpoch,
+              logicalQuestionUnitId:
+                screenCurrentQuestion.logicalQuestionUnitId,
+              revision: screenCurrentQuestion.revision,
+              sourceHash: screenCurrentQuestion.sourceHash,
+            })
+          : candidateScreenSourcePacket;
+        const screenQuestionIdentity =
+          isCommittedManualScreenQuestionPacket(screenSourcePacket)
+            ? screenSourcePacket.questionIdentity
+            : undefined;
         const screenPrimaryAskEvidenceText =
           screenSourcePacket.primaryAsk?.text ?? "";
-        const screenEvidenceText = [
-          screenCurrentQuestionEvidenceText,
-          observation.captureTarget?.title,
-        ]
-          .filter(Boolean)
-          .join("\n");
+        const screenQuestionOwnedByVoice =
+          screenSourcePacket.primaryAsk?.source === "voice-lqu";
+        const screenEvidenceText = screenQuestionOwnedByVoice
+          ? screenPrimaryAskEvidenceText
+          : [
+              screenPrimaryAskEvidenceText,
+              observation.captureTarget?.title,
+            ]
+              .filter(Boolean)
+              .join("\n");
         const screenSourceFallbackQuestionType =
           inferQuestionTypeDecisionFromText(screenEvidenceText, {
             interviewSessionBrief:
@@ -21814,19 +21857,31 @@ export function useMeetingAssistant() {
               preflightContextState.interviewSessionBrief,
           }).type ?? inferCanonicalQuestionTypeFromText(screenEvidenceText);
         const screenTaxonomyDecision = resolveTaskTaxonomyAuthority({
-          candidates: [
-            {
-              source: "screen-preflight",
-              questionType: screenPreflight?.questionType,
-            },
-            {
-              source: "screen-source-fallback",
-              questionType: screenSourceFallbackQuestionType,
-            },
-            { source: "generated-answer" },
-          ],
+          candidates: screenQuestionOwnedByVoice
+            ? [
+                {
+                  source: "accepted-transcript",
+                  questionType: screenSourceFallbackQuestionType,
+                },
+                {
+                  source: "screen-preflight",
+                  questionType: screenPreflight?.questionType,
+                },
+                { source: "generated-answer" },
+              ]
+            : [
+                {
+                  source: "screen-preflight",
+                  questionType: screenPreflight?.questionType,
+                },
+                {
+                  source: "screen-source-fallback",
+                  questionType: screenSourceFallbackQuestionType,
+                },
+                { source: "generated-answer" },
+              ],
         });
-        const screenQuestionText = screenPreflight?.question?.trim() ?? "";
+        const screenQuestionText = screenPrimaryAskEvidenceText;
         const screenSectionHintConsumption = consumeInterviewSectionHint({
           hint: pendingInterviewSectionHintRef.current,
           questionId: observation.id,
@@ -22050,10 +22105,7 @@ export function useMeetingAssistant() {
             screenEvidencePacket,
             "screen-task"
           );
-        const screenRelationQuestion =
-          screenCurrentQuestionEvidenceText ||
-          observation.captureTarget?.title ||
-          "";
+        const screenRelationQuestion = screenPrimaryAskEvidenceText;
         const screenTransitionParentBefore =
           preflightContextState.taskRuntime.parent ??
           (preflightContextState.activeMeetingTask?.screen &&
@@ -22107,12 +22159,6 @@ export function useMeetingAssistant() {
           screenRelationQuestion.trim() &&
             calculateWordEquivalent(screenRelationQuestion) >= 3
         );
-        let screenRelationLogicalQuestionUnit:
-          | LogicalQuestionUnit
-          | undefined;
-        let screenCurrentQuestion:
-          | ProvisionalCurrentQuestion
-          | undefined;
         let screenDeterministicSettlementProposal:
           | CurrentQuestionSettlementProposal
           | undefined;
@@ -22143,51 +22189,11 @@ export function useMeetingAssistant() {
             preflightContextState.activeMeetingTask?.child
           ),
         } satisfies NarrowScreenRelationReleaseInput;
-        if (screenRelationQuestion.trim()) {
-          if (!screenSourcePacket.primaryAsk) {
-            screenSourcePacket = resolveManualScreenSourcePacket({
-              screenObservationId: observation.id,
-              screenPreflightQuestion: screenRelationQuestion,
-            });
-          }
-          screenRelationLogicalQuestionUnit =
-            buildManualScreenLogicalQuestionUnit({
-              packet: screenSourcePacket,
-              sessionId: preflightContextState.sessionId,
-              runtimeEpoch: runtimeEpochRef.current,
-              createdAt: observation.capturedAt,
-              transcriptTurns: preflightContextState.transcriptTurns,
-            });
-          if (!screenRelationLogicalQuestionUnit) {
-            throw new Error("Screen current-question source is unavailable.");
-          }
-          screenCurrentQuestion = createProvisionalCurrentQuestion({
-            logicalQuestionUnit: screenRelationLogicalQuestionUnit,
-            sourceKind:
-              screenSourcePacket.primaryAsk?.source === "voice-lqu"
-                ? "mixed"
-                : "screen",
-            sourceObservationIds: [observation.id],
-          });
-          if (screenSourcePacket.primaryAsk) {
-            screenSourcePacket = {
-              ...screenSourcePacket,
-              primaryAsk: {
-                ...screenSourcePacket.primaryAsk,
-                sourceHash: screenCurrentQuestion.sourceHash,
-              },
-            };
-            screenEvidencePacket =
-              buildScreenEvidencePacket(preflightContextState);
-            screenMemoryQuery = buildAdvisorEvidenceRetrievalQuery(
-              screenEvidencePacket,
-              "screen-task"
-            );
-            traceStoreRef.current.updateMetadata(
-              trace.id,
-              formatManualScreenSourcePacketForTrace(screenSourcePacket)
-            );
-          }
+        if (
+          screenRelationQuestion.trim() &&
+          screenRelationLogicalQuestionUnit &&
+          screenCurrentQuestion
+        ) {
           screenDeterministicSettlementProposal = {
             source: "deterministic-fast-path",
             sessionId: screenCurrentQuestion.sessionId,
@@ -22644,9 +22650,7 @@ export function useMeetingAssistant() {
             ),
             questionType: settledScreenQuestionType,
             question:
-              screenCurrentQuestionEvidenceText ||
-              observation.captureTarget?.title?.trim() ||
-              "",
+              screenPrimaryAskEvidenceText,
             subtaskIntent: screenSubtaskIntent,
             questionInstanceId: observation.id,
             playbook: screenRuntimePlaybook,
@@ -22850,7 +22854,7 @@ export function useMeetingAssistant() {
               screenPreflight?.projectAnchor;
         const screenDiagramDomainContext =
           buildCurrentTaskDiagramDomainContext({
-            currentQuestion: screenPreflight?.question,
+            currentQuestion: screenPrimaryAskEvidenceText,
             parentTopic:
               screenResponseOnlyTaskScope
                 ? undefined
@@ -23185,6 +23189,12 @@ export function useMeetingAssistant() {
               settledScreenQuestionType,
             committedCurrentQuestionSourceHash:
               screenCurrentQuestionSettlement?.sourceHash,
+            questionTypeQuestionSourceHash:
+              screenQuestionIdentity?.sourceHash,
+            relationQuestionSourceHash:
+              screenCurrentQuestion?.sourceHash,
+            kmbQuestionSourceHash:
+              screenEvidencePacket.currentQuestion?.sourceHash,
             executionPlanQuestionSourceHash:
               screenCurrentQuestionSettlement?.sourceHash,
             promptCurrentQuestionSourceHash:
@@ -23224,13 +23234,15 @@ export function useMeetingAssistant() {
           runtimeEpoch: runtimeEpochRef.current,
           taskId: screenGenerationParent?.id ?? null,
           taskRevision: screenGenerationParent?.revisions ?? null,
-          logicalQuestionUnitId: `screen:${observation.id}`,
-          logicalQuestionRevision: 1,
+          logicalQuestionUnitId:
+            screenQuestionIdentity?.logicalQuestionUnitId ??
+            `screen:${observation.id}`,
+          logicalQuestionRevision:
+            screenQuestionIdentity?.revision ?? 1,
           baseVisibleAnswerRevision:
             visibleAnswerRevisionRef.current,
-          sourceTurnIds: screenGenerationContext.transcriptTurns
-            .slice(-6)
-            .map((turn) => turn.id),
+          sourceTurnIds:
+            screenSourcePacket.primaryAsk?.sourceTurnIds ?? [],
           manualCorrectionRevision:
             manualCorrectionRevisionRef.current,
           responseActionRevision:
@@ -23844,9 +23856,7 @@ export function useMeetingAssistant() {
           }
         );
         const screenQuestionForSufficiency =
-          screenPreflight?.question?.trim() ??
-          observation.captureTarget?.title?.trim() ??
-          "";
+          screenPrimaryAskEvidenceText;
         screenAnswerSufficiencyQuestion = screenQuestionForSufficiency;
         if (screenQuestionForSufficiency) {
           const sufficiencyMeetingContext =
@@ -23855,6 +23865,7 @@ export function useMeetingAssistant() {
             normalizeCanonicalQuestionType(settledScreenTaskKind) ??
             "unknown";
           const screenLogicalQuestionUnit =
+            screenRelationLogicalQuestionUnit ??
             buildScreenAnswerSufficiencyLogicalQuestionUnit({
               observationId: observation.id,
               question: screenQuestionForSufficiency,
@@ -23932,7 +23943,7 @@ export function useMeetingAssistant() {
           .slice(-6)
           .map((turn) => turn.id);
         const requestId = createMeetingId("screen_task");
-        const question = screenPreflight?.question?.trim() ?? "";
+        const question = screenPrimaryAskEvidenceText;
         const screenTaskTopic =
           question || observation.captureTarget?.title?.trim() || undefined;
         traceStoreRef.current.updateMetadata(
@@ -24668,7 +24679,7 @@ export function useMeetingAssistant() {
             {
               questionText:
                 screenAnswerSufficiencyQuestion ||
-                screenCurrentQuestionEvidenceText ||
+                screenPrimaryAskEvidenceText ||
                 screenTaskTopic ||
                 "",
               questionType:

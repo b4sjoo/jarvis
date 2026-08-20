@@ -9,6 +9,7 @@ import {
   resolveAdvisorRequestModeForScreenScope,
   resolveAdvisorTaskEvidenceSource,
   decideManualScreenVoiceQuestionBinding,
+  commitManualScreenQuestionPacket,
   resolveManualScreenSourcePacket,
   formatManualScreenVoiceQuestionBindingForTrace,
   formatManualScreenSourcePacketForTrace,
@@ -392,7 +393,53 @@ test("binds a Voice LQU as the primary ask and keeps Screen as visual evidence",
       manualScreenSourceOperationAuthority: "manual-screen",
       manualScreenExplicitCapture: true,
       manualScreenBoundVoicePrimaryAsk: true,
+      manualScreenQuestionPacketCommitted: false,
+      manualScreenQuestionPacketSessionId: undefined,
+      manualScreenQuestionPacketRuntimeEpoch: undefined,
+      manualScreenQuestionPacketLogicalQuestionUnitId: undefined,
+      manualScreenQuestionPacketLogicalQuestionRevision: undefined,
+      manualScreenQuestionPacketSourceHash: undefined,
     }
+  );
+});
+
+test("commits one immutable identity for Screen recovery consumers", () => {
+  const candidate = resolveManualScreenSourcePacket({
+    voiceQuestion: {
+      logicalQuestionUnitId: "question-current",
+      logicalQuestionRevision: 2,
+      text: "Explain lines 35 through 38.",
+      sourceTurnIds: ["turn-35"],
+    },
+    screenObservationId: "screen-1",
+    screenPreflightQuestion: "Implement the LRU cache.",
+  });
+  const packet = commitManualScreenQuestionPacket({
+    packet: candidate,
+    sessionId: "session-1",
+    runtimeEpoch: 3,
+    logicalQuestionUnitId: "question-current",
+    revision: 2,
+    sourceHash: "source-hash-1",
+  });
+
+  assert.equal(packet.primaryAsk.text, "Explain lines 35 through 38.");
+  assert.equal(packet.primaryAsk.sourceHash, "source-hash-1");
+  assert.equal(
+    packet.visualEvidence.preflightQuestion,
+    "Implement the LRU cache."
+  );
+  assert.deepEqual(packet.questionIdentity, {
+    sessionId: "session-1",
+    runtimeEpoch: 3,
+    logicalQuestionUnitId: "question-current",
+    revision: 2,
+    sourceHash: "source-hash-1",
+  });
+  assert.equal(
+    formatManualScreenSourcePacketForTrace(packet)
+      .manualScreenQuestionPacketCommitted,
+    true
   );
 });
 

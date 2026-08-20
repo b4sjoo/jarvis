@@ -427,6 +427,11 @@ export function buildSettledAdvisorExecutionPlan(input: {
       promptContractQuestionType: responseOwner.questionType,
       committedCurrentQuestionSourceHash:
         input.settlement.sourceHash,
+      questionTypeQuestionSourceHash:
+        input.settlement.sourceHash,
+      relationQuestionSourceHash:
+        input.settlement.sourceHash,
+      kmbQuestionSourceHash: input.settlement.sourceHash,
       executionPlanQuestionSourceHash:
         input.settlement.sourceHash,
       promptCurrentQuestionSourceHash:

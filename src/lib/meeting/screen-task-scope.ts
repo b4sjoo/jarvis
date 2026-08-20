@@ -112,6 +112,18 @@ export interface ManualScreenSourcePacket {
   };
 }
 
+export interface CommittedManualScreenQuestionPacket
+  extends ManualScreenSourcePacket {
+  primaryAsk: AdvisorCurrentQuestionEvidence & { sourceHash: string };
+  questionIdentity: {
+    sessionId: string;
+    runtimeEpoch: number;
+    logicalQuestionUnitId: string;
+    revision: number;
+    sourceHash: string;
+  };
+}
+
 export function selectManualScreenVoiceQuestionCapsule<
   T extends VoiceQuestionCapsuleCandidate,
 >(input: {
@@ -263,9 +275,54 @@ export function resolveManualScreenSourcePacket(input: {
   };
 }
 
+export function commitManualScreenQuestionPacket(input: {
+  packet: ManualScreenSourcePacket;
+  sessionId: string;
+  runtimeEpoch: number;
+  logicalQuestionUnitId: string;
+  revision: number;
+  sourceHash: string;
+}): CommittedManualScreenQuestionPacket {
+  const primaryAsk = input.packet.primaryAsk;
+  if (!primaryAsk?.text.trim() || !input.sourceHash.trim()) {
+    throw new Error("Manual Screen question source is incomplete.");
+  }
+  if (
+    primaryAsk.source === "voice-lqu" &&
+    (primaryAsk.logicalQuestionUnitId !== input.logicalQuestionUnitId ||
+      primaryAsk.revision !== input.revision)
+  ) {
+    throw new Error("Manual Screen Voice question identity changed before commit.");
+  }
+
+  return {
+    ...input.packet,
+    primaryAsk: {
+      ...primaryAsk,
+      sourceHash: input.sourceHash,
+    },
+    questionIdentity: {
+      sessionId: input.sessionId,
+      runtimeEpoch: input.runtimeEpoch,
+      logicalQuestionUnitId: input.logicalQuestionUnitId,
+      revision: input.revision,
+      sourceHash: input.sourceHash,
+    },
+  };
+}
+
+export function isCommittedManualScreenQuestionPacket(
+  packet: ManualScreenSourcePacket | CommittedManualScreenQuestionPacket
+): packet is CommittedManualScreenQuestionPacket {
+  return "questionIdentity" in packet;
+}
+
 export function formatManualScreenSourcePacketForTrace(
-  packet: ManualScreenSourcePacket
+  packet: ManualScreenSourcePacket | CommittedManualScreenQuestionPacket
 ): Record<string, unknown> {
+  const identity = isCommittedManualScreenQuestionPacket(packet)
+    ? packet.questionIdentity
+    : undefined;
   return {
     manualScreenPrimaryAskSource: packet.primaryAsk?.source,
     manualScreenPrimaryAskChars: packet.primaryAsk?.text.length ?? 0,
@@ -287,6 +344,14 @@ export function formatManualScreenSourcePacketForTrace(
       packet.sourceOperationAuthority.explicitCapture,
     manualScreenBoundVoicePrimaryAsk:
       packet.sourceOperationAuthority.boundVoicePrimaryAsk,
+    manualScreenQuestionPacketCommitted: Boolean(identity),
+    manualScreenQuestionPacketSessionId: identity?.sessionId,
+    manualScreenQuestionPacketRuntimeEpoch: identity?.runtimeEpoch,
+    manualScreenQuestionPacketLogicalQuestionUnitId:
+      identity?.logicalQuestionUnitId,
+    manualScreenQuestionPacketLogicalQuestionRevision:
+      identity?.revision,
+    manualScreenQuestionPacketSourceHash: identity?.sourceHash,
   };
 }
 
