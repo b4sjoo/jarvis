@@ -32,6 +32,7 @@ test("gives the advisor a focused ask plus bounded semantic context", () => {
     /Semantic context: add surge pricing explain which components need to change\./
   );
   assert.match(message, /Use Answer focus as the only ask to answer/);
+  assert.match(message, /cover every coordinated ask it contains/);
 });
 
 test("makes the settled Mermaid preference explicit in the system-design contract", () => {

@@ -105,6 +105,49 @@ test("separates the terminal answer focus from bounded semantic evidence", () =>
   }
 });
 
+test("preserves coordinated why and how asks from one substantive turn", () => {
+  const text =
+    "In the OASIS project, why did the OpenSearch Bulk API require NDJSON, and how were per-item partial failures handled?";
+  const result = projectPrimaryAsk({
+    turnId: "turn_oasis_compound_ask",
+    text,
+  });
+
+  assert.equal(result.disposition, "answer-primary-ask");
+  assert.equal(result.reason, "coordinated-primary-asks");
+  assert.equal(
+    result.normalizedPrimaryAsk,
+    "why did the OpenSearch Bulk API require NDJSON, and how were per-item partial failures handled?"
+  );
+  assert.deepEqual(
+    result.primaryAskSpans.map((span) => span.text),
+    [
+      "why did the OpenSearch Bulk API require NDJSON",
+      "how were per-item partial failures handled?",
+    ]
+  );
+  assert.match(result.answerFocusText, /require NDJSON/i);
+  assert.match(result.answerFocusText, /partial failures handled/i);
+  assert.deepEqual(
+    result.setupSpans.map((span) => span.text),
+    ["In the OASIS project,"]
+  );
+});
+
+test("does not widen action-object directives into coordinated ask spans", () => {
+  const result = projectPrimaryAsk({
+    turnId: "turn_action_object",
+    text: "Implement an LRU cache and discuss its complexity.",
+  });
+
+  assert.equal(result.answerFocusText, "discuss its complexity.");
+  assert.equal(result.primaryAskSpans.length, 1);
+  assert.deepEqual(
+    result.objectSpans.map((span) => span.text),
+    ["Implement an LRU cache"]
+  );
+});
+
 test("retains the operation object across technical multi-clause asks", () => {
   const cases = [
     {

@@ -6,6 +6,7 @@ import { isExactLowValueAcknowledgement } from "./advisor-turn-intent.js";
 
 export const PRIMARY_ASK_PROJECTION_SCHEMA_VERSION = 2;
 export const PRIMARY_ASK_SEMANTIC_EVIDENCE_MAX_CHARS = 1_200;
+const MAX_COORDINATED_PRIMARY_ASK_SPANS = 4;
 
 export type PrimaryAskSpeechAct =
   | "question"
@@ -87,7 +88,7 @@ export function projectPrimaryAsk({
   }
 
   const quotedOrFutureExampleSpans: PrimaryAskEvidenceSpan[] = [];
-  const askCandidates: PrimaryAskEvidenceSpan[] = [];
+  let latestAskCandidateGroup: PrimaryAskEvidenceSpan[] = [];
   let futureExampleCarry = 0;
 
   for (const span of sourceSpans) {
@@ -107,15 +108,24 @@ export function projectPrimaryAsk({
       ? extractDirectAskAfterTransition(span, explicitCurrentTransition.end) ??
         extractActionObjectDirectiveSpan(span)
       : extractDirectAskSpan(span) ?? extractActionObjectDirectiveSpan(span);
+    const coordinatedCandidates = extractCoordinatedDirectAskSpans(
+      transitionSpan ?? span
+    );
+    const candidateGroup =
+      coordinatedCandidates.length > 1
+        ? coordinatedCandidates
+        : candidate
+          ? [candidate]
+          : [];
     const negativeFrame = hasQuotedOrFutureFrame(
       transitionSpan?.text ?? span.text
     );
     const currentRecipient = hasCurrentRecipientSignal(
-      candidate?.text ?? span.text
+      candidateGroup.map((item) => item.text).join(" ") || span.text
     );
     const carriedExample =
       futureExampleCarry > 0 &&
-      Boolean(candidate) &&
+      candidateGroup.length > 0 &&
       !currentRecipient &&
       !explicitCurrentTransition;
 
@@ -143,8 +153,8 @@ export function projectPrimaryAsk({
       continue;
     }
 
-    if (candidate) {
-      askCandidates.push(candidate);
+    if (candidateGroup.length > 0) {
+      latestAskCandidateGroup = candidateGroup;
       futureExampleCarry = 0;
       continue;
     }
@@ -154,9 +164,16 @@ export function projectPrimaryAsk({
     }
   }
 
-  const primaryAsk = askCandidates[askCandidates.length - 1];
+  const primaryAsk = latestAskCandidateGroup.at(-1);
   if (primaryAsk) {
-    const primaryAskSpans = [primaryAsk];
+    const primaryAskSpans = latestAskCandidateGroup;
+    const firstPrimaryAsk = primaryAskSpans[0]!;
+    const lastPrimaryAsk = primaryAskSpans[primaryAskSpans.length - 1]!;
+    const normalizedPrimaryAsk =
+      primaryAskSpans.length > 1 &&
+      firstPrimaryAsk.turnId === lastPrimaryAsk.turnId
+        ? normalizeSpace(text.slice(firstPrimaryAsk.start, lastPrimaryAsk.end))
+        : normalizeSpace(primaryAsk.text);
     const setupSpans = collectSetupSpans({
       sourceSpans,
       primaryAskSpans,
@@ -165,14 +182,18 @@ export function projectPrimaryAsk({
     return projection({
       sourceTurnIds: [turnId],
       sourceChars: text.length,
-      speechAct: isDirective(primaryAsk.text) ? "directive" : "question",
-      normalizedPrimaryAsk: normalizeSpace(primaryAsk.text),
+      speechAct: primaryAskSpans.some((span) => isDirective(span.text))
+        ? "directive"
+        : "question",
+      normalizedPrimaryAsk,
       primaryAskSpans,
       setupSpans,
       quotedOrFutureExampleSpans,
       disposition: "answer-primary-ask",
       reason:
-        quotedOrFutureExampleSpans.length > 0
+        primaryAskSpans.length > 1
+          ? "coordinated-primary-asks"
+          : quotedOrFutureExampleSpans.length > 0
           ? "terminal-ask-after-quoted-or-future-examples"
           : setupSpans.length > 0
             ? "terminal-ask-after-setup"
@@ -209,6 +230,62 @@ export function projectPrimaryAsk({
         ? 0.96
         : 0.72,
   });
+}
+
+function extractCoordinatedDirectAskSpans(
+  span: PrimaryAskEvidenceSpan
+): PrimaryAskEvidenceSpan[] {
+  if (hasQuotedOrFutureFrame(span.text)) return [];
+
+  const connectors = Array.from(
+    span.text.matchAll(COORDINATED_ASK_CONNECTOR_PATTERN)
+  ).slice(0, MAX_COORDINATED_PRIMARY_ASK_SPANS - 1);
+  if (!connectors.length) return [];
+
+  const firstConnector = connectors[0]!;
+  const prefix = span.text.slice(0, firstConnector.index!);
+  const prefixHeads = Array.from(prefix.matchAll(DIRECT_ASK_HEAD_PATTERN));
+  const firstHead = prefixHeads[0];
+  if (!firstHead || !isInterrogativeAskHead(firstHead[0])) return [];
+
+  const boundaries = connectors.map((connector) => ({
+    connectorStart: connector.index!,
+    askStart: connector.index! + connector[0].length,
+  }));
+  const ranges = [
+    {
+      start: firstHead.index!,
+      end: boundaries[0]!.connectorStart,
+    },
+    ...boundaries.map((boundary, index) => ({
+      start: boundary.askStart,
+      end:
+        boundaries[index + 1]?.connectorStart ?? span.text.length,
+    })),
+  ];
+  const candidates = ranges
+    .map((range) =>
+      trimSpanRange(
+        span,
+        span.start + range.start,
+        span.start + range.end
+      )
+    )
+    .filter((candidate): candidate is PrimaryAskEvidenceSpan =>
+      Boolean(candidate)
+    );
+
+  if (
+    candidates.length < 2 ||
+    candidates.some(
+      (candidate) =>
+        !isDirectAskText(candidate.text, span.text) ||
+        estimateSpanWordCount(candidate.text) < 2
+    )
+  ) {
+    return [];
+  }
+  return candidates;
 }
 
 export function composePrimaryAskProjection(input: {
@@ -547,6 +624,19 @@ const DIRECT_ASK_PATTERN =
 
 const ACTION_OBJECT_DIRECTIVE_PATTERN =
   /(?:^|(?:\b(?:but|and|so|now|then|okay|alright|right)\b[\s,:-]*))(?<ask>(?:please\s+)?(?:maybe\s+)?(?:let(?:'s| us)\s+)?(?:do|design|build|implement|write|code|solve|create|sketch|add|change|update|modify|revise|redraw|keep)\s+.+)$/iu;
+
+const COORDINATED_ASK_CONNECTOR_PATTERN =
+  /(?:,\s*(?:and|also)\s+|;\s*(?:(?:and|also)\s+)?|\s+(?:and|also)\s+)(?=(?:(?:can|could|would|will|do|does|did|is|are|was|were|have|has|had|should)\s+(?:you|your|this|that|it|there)\b|(?:how|what|why|when|where|which|who|whether)\b))/giu;
+
+function isInterrogativeAskHead(text: string) {
+  return /^(?:(?:can|could|would|will|do|does|did|is|are|was|were|have|has|had|should)\s+(?:you|your|this|that|it|there)\b|(?:how|what|why|when|where|which|who|whether)\b)/iu.test(
+    text.trim()
+  );
+}
+
+function estimateSpanWordCount(text: string) {
+  return text.match(/[\p{L}\p{N}_+#.-]+/gu)?.length ?? 0;
+}
 
 function isDirectAskText(candidate: string, wholeSpan: string) {
   const normalized = normalizeSpace(candidate);
@@ -911,7 +1001,9 @@ function collectSetupSpans({
 
     for (const range of excluded) {
       const setup = trimSpanRange(sourceSpan, cursor, range.start);
-      if (setup) setupSpans.push(setup);
+      if (setup && !isCoordinationOnlySetup(setup.text)) {
+        setupSpans.push(setup);
+      }
       cursor = Math.max(cursor, range.end);
     }
 
@@ -920,9 +1012,22 @@ function collectSetupSpans({
       cursor,
       sourceSpan.end
     );
-    if (trailingSetup) setupSpans.push(trailingSetup);
+    if (
+      trailingSetup &&
+      !isCoordinationOnlySetup(trailingSetup.text)
+    ) {
+      setupSpans.push(trailingSetup);
+    }
   }
   return setupSpans;
+}
+
+function isCoordinationOnlySetup(text: string) {
+  const normalized = normalizeSpace(text)
+    .toLowerCase()
+    .replace(/[,:;.!?。！？—–-]+/gu, "")
+    .trim();
+  return normalized === "and" || normalized === "also";
 }
 
 function trimSpanRange(

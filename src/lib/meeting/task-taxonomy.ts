@@ -625,6 +625,16 @@ export function inferQuestionTypeDecisionFromText(
     /\b(you|your|did|shipped|built|implemented|tested|launched|deployed)\b/.test(
       normalized
     );
+  const hasNamedProjectImplementationFrame =
+    /\b(?:in|within|during|for|on)\s+(?:the\s+)?(?:[a-z0-9][\w+#.-]*\s+){0,5}project\b/.test(
+      normalized
+    ) &&
+    /\b(?:why\s+(?:did|does|is|was|were)|how\s+(?:did|does|was|were)|what\s+(?:did|does|was|were))\b/.test(
+      normalized
+    ) &&
+    /\b(?:require|required|handle|handled|implement|implemented|build|built|design|designed|choose|chose|chosen|select|selected|fail|failed|failure|recover|recovered|retry|retried|validate|validated|deploy|deployed|operate|operated|trade[ -]?off|constraint|decision|architecture|impact)\b/.test(
+      normalized
+    );
 
   if (!hasBehavioralFrame && hasStrongPastProjectFrame) {
     addEvidence("project-deep-dive", 0.95, "past-project-intent");
@@ -637,6 +647,13 @@ export function inferQuestionTypeDecisionFromText(
   }
   if (!hasBehavioralFrame && hasProductionProjectContext) {
     addEvidence("project-deep-dive", 0.86, "production-project-context");
+  }
+  if (!hasBehavioralFrame && hasNamedProjectImplementationFrame) {
+    addEvidence(
+      "project-deep-dive",
+      0.93,
+      "named-project-implementation-frame"
+    );
   }
 
   const hasCodingActionObject =
@@ -923,6 +940,7 @@ export function inferQuestionTypeDecisionFromText(
     hasStrongPastProjectFrame ||
     hasExplicitProjectStackFrame ||
     hasProductionProjectContext ||
+    hasNamedProjectImplementationFrame ||
     hasExactChineseProjectFrame;
   const hasExactSystemDesignFrame =
     hasStrongSystemDesignFrame ||

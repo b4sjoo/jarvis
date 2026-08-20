@@ -422,6 +422,28 @@ test("keeps generic complexity language out of the past-project signal", () => {
   }
 });
 
+test("distinguishes named-project implementation history from standalone concepts", () => {
+  const projectDecision = inferQuestionTypeDecisionFromText(
+    "In the OASIS project, why did the OpenSearch Bulk API require NDJSON, and how were per-item partial failures handled?"
+  );
+  assert.equal(projectDecision.type, "project-deep-dive");
+  assert.ok(
+    projectDecision.evidence.includes("named-project-implementation-frame")
+  );
+
+  for (const question of [
+    "Why does the OpenSearch Bulk API require NDJSON?",
+    "In the OpenSearch project, what is NDJSON?",
+  ]) {
+    const decision = inferQuestionTypeDecisionFromText(question);
+    assert.equal(decision.type, "field-knowledge", question);
+    assert.ok(
+      !decision.evidence.includes("named-project-implementation-frame"),
+      question
+    );
+  }
+});
+
 test("returns evidence and confidence without promoting ambiguous vocabulary", () => {
   const projectDecision = inferQuestionTypeDecisionFromText(
     "What was your specific personal contribution to the stack?"

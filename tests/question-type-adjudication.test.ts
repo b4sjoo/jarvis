@@ -71,6 +71,10 @@ test("builds a bounded type-only request without local classifier evidence", () 
   assert.equal(request.logicalQuestionUnitRevision, 1);
   assert.match(prompts.systemPrompt, /Classify only the question type/i);
   assert.match(prompts.systemPrompt, /Do not decide task relation/i);
+  assert.match(
+    prompts.systemPrompt,
+    /named candidate project.*actual project facts/i
+  );
   assert.doesNotMatch(
     prompts.userMessage,
     /lexical|semantic|activeParent|playbookPhase/i
