@@ -9,6 +9,7 @@ import {
 import {
   createMemoryInterviewFamilyResolutionRecorder,
   formatMemoryInterviewFamilyResolutionForTrace,
+  formatMemoryInterviewTypePriorIsolationForTrace,
 } from "../src/lib/memory/interview-family-telemetry.js";
 import { classifyRuntimeMemoryRole } from "../src/lib/memory/runtime-role.js";
 import type { MemoryEntry } from "../src/lib/memory/types.js";
@@ -51,6 +52,28 @@ test("settled question type overrides a conflicting Brief prior", () => {
       },
     }),
     undefined
+  );
+});
+
+test("reports the forbidden Brief prior gate as an explicit zero invariant", () => {
+  assert.deepEqual(formatMemoryInterviewTypePriorIsolationForTrace([]), {
+    rightFamilyBlockedByPriorCount: 0,
+    memoryPriorUsedAsExecutionGate: false,
+  });
+
+  assert.deepEqual(
+    formatMemoryInterviewTypePriorIsolationForTrace([
+      {
+        reason: "brief-interview-type-blocked",
+        count: 2,
+        sampleEntryIds: ["mem_behavioral_story"],
+        sampleTitles: ["Behavioral story"],
+      },
+    ]),
+    {
+      rightFamilyBlockedByPriorCount: 2,
+      memoryPriorUsedAsExecutionGate: true,
+    }
   );
 });
 

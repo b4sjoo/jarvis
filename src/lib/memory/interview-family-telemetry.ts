@@ -3,7 +3,10 @@ import {
   type MemoryInterviewFamilyEvidence,
   type MemoryInterviewFamilyGateDecision,
 } from "./interview-family.js";
-import type { MemoryInterviewFamilyResolutionTelemetry } from "./types.js";
+import type {
+  MemoryInterviewFamilyResolutionTelemetry,
+  MemoryRejectSummary,
+} from "./types.js";
 
 export function createMemoryInterviewFamilyResolutionRecorder() {
   const records: Array<{
@@ -126,6 +129,19 @@ export function formatMemoryInterviewFamilyResolutionForTrace(
     memoryFamilyPolicyAllowReasons: telemetry.familyPolicyAllowReasons,
     memoryFamilyPolicyRejectReasons: telemetry.familyPolicyRejectReasons,
     memoryInterviewFamilyResolutionSamples: telemetry.samples,
+  };
+}
+
+export function formatMemoryInterviewTypePriorIsolationForTrace(
+  rejectSummary: MemoryRejectSummary[]
+) {
+  const rightFamilyBlockedByPriorCount = rejectSummary
+    .filter((item) => item.reason === "brief-interview-type-blocked")
+    .reduce((total, item) => total + item.count, 0);
+
+  return {
+    rightFamilyBlockedByPriorCount,
+    memoryPriorUsedAsExecutionGate: rightFamilyBlockedByPriorCount > 0,
   };
 }
 

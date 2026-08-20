@@ -11,6 +11,7 @@ import {
   extractRuntimeFactAnchorLabels,
   flushMemoryContextUsage,
   formatMemoryInterviewFamilyResolutionForTrace,
+  formatMemoryInterviewTypePriorIsolationForTrace,
   formatMemoryRetrievalPerformanceForTrace,
   formatMemorySelectionForTrace,
   prewarmMemoryContextSnapshot,
@@ -7727,6 +7728,10 @@ export function useMeetingAssistant() {
           formatMemoryInterviewFamilyResolutionForTrace(
             memoryContext.interviewFamilyResolution
           );
+        const interviewTypePriorIsolationTraceMetadata =
+          formatMemoryInterviewTypePriorIsolationForTrace(
+            memoryContext.rejectSummary
+          );
 
         if (traceId) {
           traceStoreRef.current.recordOutput(
@@ -7764,6 +7769,7 @@ export function useMeetingAssistant() {
               ...diagramOverlayTraceMetadata,
               ...memoryRoleTraceMetadata,
               ...interviewFamilyTraceMetadata,
+              ...interviewTypePriorIsolationTraceMetadata,
               memoryPolicySnapshot: memoryContext.policySnapshot,
               totalChars: memoryContext.totalChars,
               personalEvidenceFilteredEntries,
@@ -7797,6 +7803,7 @@ export function useMeetingAssistant() {
               ...diagramOverlayTraceMetadata,
               ...memoryRoleTraceMetadata,
               ...interviewFamilyTraceMetadata,
+              ...interviewTypePriorIsolationTraceMetadata,
               ...memoryPerformanceTraceMetadata,
               memoryStage,
               personalEvidenceFilteredEntries,
@@ -7829,6 +7836,7 @@ export function useMeetingAssistant() {
             ...diagramOverlayTraceMetadata,
             ...memoryRoleTraceMetadata,
             ...interviewFamilyTraceMetadata,
+            ...interviewTypePriorIsolationTraceMetadata,
             ...memoryPerformanceTraceMetadata,
             memoryPolicySnapshot: memoryContext.policySnapshot,
             totalChars: memoryContext.totalChars,
@@ -7846,6 +7854,7 @@ export function useMeetingAssistant() {
               ...diagramOverlayTraceMetadata,
               ...memoryRoleTraceMetadata,
               ...interviewFamilyTraceMetadata,
+              ...interviewTypePriorIsolationTraceMetadata,
               ...memoryPerformanceTraceMetadata,
             }
           );
