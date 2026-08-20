@@ -272,6 +272,7 @@ export type MemoryRejectReason =
   | "diagram-overlay-domain-blocked"
   | "project-anchor-mismatch"
   | "settled-project-binding-mismatch"
+  | "general-without-positive-scope"
   | "missing-required-tag-hint"
   | "no-retrieval-match"
   | "budget-truncated";
@@ -281,6 +282,23 @@ export interface MemoryRejectSummary {
   count: number;
   sampleEntryIds: string[];
   sampleTitles: string[];
+}
+
+export type MemoryGeneralScopePath =
+  | "explicit-reusable"
+  | "project-compatible"
+  | "strong-current-question";
+
+export interface MemoryGeneralEligibilitySummary {
+  evaluatedCount: number;
+  allowedCount: number;
+  rejectedCount: number;
+  scopePathCounts: Record<MemoryGeneralScopePath, number>;
+  allowedSamples: Array<{
+    entryId: string;
+    scopePath: MemoryGeneralScopePath;
+  }>;
+  rejectedEntryIds: string[];
 }
 
 export interface MemoryPolicySnapshot {
@@ -315,6 +333,7 @@ export interface MemoryRetrievalResult {
   eligibleCount: number;
   rejectedCount: number;
   rejectSummary: MemoryRejectSummary[];
+  generalEligibility?: MemoryGeneralEligibilitySummary;
   interviewFamilyResolution?: MemoryInterviewFamilyResolutionTelemetry;
   overlaySelection?: MemoryOverlaySelectionSummary;
   policySnapshot: MemoryPolicySnapshot;

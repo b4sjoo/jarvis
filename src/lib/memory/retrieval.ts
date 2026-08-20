@@ -5,6 +5,7 @@ import {
 import type {
   MemoryEntry,
   MemoryAskFrame,
+  MemoryGeneralScopePath,
   MemoryInterviewType,
   MemoryOverlaySelectionSummary,
   MemoryPolicySnapshot,
@@ -38,6 +39,10 @@ import {
 } from "./interview-family.js";
 import { createMemoryInterviewFamilyResolutionRecorder } from "./interview-family-telemetry.js";
 import { formatMemoryContext } from "./context-format.js";
+import {
+  createGeneralMemoryEligibilityRecorder,
+  resolveGeneralMemoryEligibility,
+} from "./general-eligibility.js";
 
 const DEFAULT_MAX_ENTRIES = 5;
 const DEFAULT_MAX_CHARS = 6000;
@@ -84,6 +89,9 @@ callbacks: MemoryRetrievalRuntimeCallbacks = {}): Promise<MemoryRetrievalResult>
   const overlayRejectRecorder = createMemoryRejectRecorder();
   const interviewFamilyRecorder =
     createMemoryInterviewFamilyResolutionRecorder();
+  const generalEligibilityRecorder =
+    createGeneralMemoryEligibilityRecorder();
+  const generalScopePaths = new Map<string, MemoryGeneralScopePath>();
   const policySnapshot = buildMemoryPolicySnapshot({
     useCase,
     interviewTypes,
@@ -123,11 +131,29 @@ callbacks: MemoryRetrievalRuntimeCallbacks = {}): Promise<MemoryRetrievalResult>
       useCase,
       interviewTypes,
       questionType,
-      memoryPolicy
+      memoryPolicy,
+      query,
+      projectId,
+      projectAnchor
     );
     if (decision.familyGateDecision) {
       interviewFamilyRecorder.record(entry.id, decision.familyGateDecision);
       interviewFamilyEvaluationMs += decision.familyGateEvaluationMs;
+    }
+    if (decision.generalEligibilityDecision) {
+      generalEligibilityRecorder.record(
+        entry.id,
+        decision.generalEligibilityDecision
+      );
+      if (
+        decision.eligible &&
+        decision.generalEligibilityDecision.scopePath
+      ) {
+        generalScopePaths.set(
+          entry.id,
+          decision.generalEligibilityDecision.scopePath
+        );
+      }
     }
     if (decision.eligible) {
       eligibleEntries.push(entry);
@@ -163,10 +189,12 @@ callbacks: MemoryRetrievalRuntimeCallbacks = {}): Promise<MemoryRetrievalResult>
 
   const alwaysEntries = taggedEntries
     .filter((entry) => entry.injectionMode === "always" || entry.priority === "pinned")
-    .map((entry) => scoreMemoryEntry(entry, queryTokens, scoringContext, true));
+    .map((entry) => scoreMemoryEntry(entry, queryTokens, scoringContext, true))
+    .map((item) => appendGeneralScopeReason(item, generalScopePaths));
   const scoredRetrievalEntries = taggedEntries
     .filter((entry) => entry.injectionMode === "retrieval" && entry.priority !== "pinned")
-    .map((entry) => scoreMemoryEntry(entry, queryTokens, scoringContext, false));
+    .map((entry) => scoreMemoryEntry(entry, queryTokens, scoringContext, false))
+    .map((item) => appendGeneralScopeReason(item, generalScopePaths));
   const retrievalEntries = scoredRetrievalEntries
     .filter((item) => {
       const matched = hasRetrievalMatch(item);
@@ -272,6 +300,7 @@ callbacks: MemoryRetrievalRuntimeCallbacks = {}): Promise<MemoryRetrievalResult>
     eligibleCount: eligibleEntries.length,
     rejectedCount: rejectRecorder.total(),
     rejectSummary: rejectRecorder.summary(),
+    generalEligibility: generalEligibilityRecorder.summary(),
     interviewFamilyResolution,
     overlaySelection: buildMemoryOverlaySelectionSummary(
       budgeted.entries,
@@ -525,7 +554,10 @@ function getEntryEligibilityDecision(
   useCase: MemoryUseCase,
   interviewTypes: MemoryInterviewType[] | undefined,
   questionType: MemoryQuestionType | undefined,
-  memoryPolicy: MemoryRetrievalPolicy | undefined
+  memoryPolicy: MemoryRetrievalPolicy | undefined,
+  query: string,
+  projectId: string | undefined,
+  projectAnchor: string | undefined
 ) {
   if (!entry.enabled) return { eligible: false as const, reason: "disabled" as const };
   if (entry.injectionMode === "manual_only" || entry.injectionMode === "never") {
@@ -567,11 +599,43 @@ function getEntryEligibilityDecision(
     };
   }
 
+  const generalEligibilityDecision = resolveGeneralMemoryEligibility({
+    entry,
+    familyDecision: familyGateDecision.resolution,
+    query,
+    useCase,
+    projectId,
+    projectAnchor: memoryPolicy?.strictProjectAnchor ?? projectAnchor,
+  });
+  if (!generalEligibilityDecision.eligible) {
+    return {
+      eligible: false as const,
+      reason: generalEligibilityDecision.rejectReason!,
+      familyGateDecision,
+      familyGateEvaluationMs,
+      generalEligibilityDecision,
+    };
+  }
+
   return {
     eligible: true as const,
     familyGateDecision,
     familyGateEvaluationMs,
+    generalEligibilityDecision,
   };
+}
+
+function appendGeneralScopeReason(
+  item: RetrievedMemoryEntry,
+  scopePaths: Map<string, MemoryGeneralScopePath>
+) {
+  const scopePath = scopePaths.get(item.entry.id);
+  return scopePath
+    ? {
+        ...item,
+        matchReason: [`generalScope:${scopePath}`, ...item.matchReason],
+      }
+    : item;
 }
 
 interface MemoryScoringContext {

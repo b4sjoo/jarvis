@@ -1,6 +1,7 @@
 export * from "./curated-drafts";
 export * from "./context-format";
 export * from "./diagram-overlay";
+export * from "./general-eligibility";
 export * from "./interview-family";
 export * from "./interview-family-telemetry";
 export * from "./parser";

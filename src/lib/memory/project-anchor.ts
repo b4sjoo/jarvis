@@ -8,8 +8,17 @@ export function isMemoryProjectAnchorCompatible(
   if (!anchor || !isProjectSpecificEntry(entry)) return true;
   if (isGlobalProjectAnchorExemptEntry(entry)) return true;
 
-  const anchorTokens = extractProjectAnchorTokens(anchor);
-  if (!anchorTokens.size) return true;
+  return isMemoryProjectIdentityMatch(entry, anchor);
+}
+
+export function isMemoryProjectIdentityMatch(
+  entry: MemoryEntry,
+  projectIdentity: string | undefined
+) {
+  const identity = projectIdentity?.trim();
+  if (!identity) return false;
+  const anchorTokens = extractProjectAnchorTokens(identity);
+  if (!anchorTokens.size) return false;
 
   const canonicalIdentityText = [entry.projectId, entry.projectName]
     .filter(Boolean)

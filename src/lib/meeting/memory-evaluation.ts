@@ -13,6 +13,7 @@ export function buildMemoryEvaluationTraceMetadata(
   result: MemoryRetrievalResult
 ) {
   return {
+    memoryGeneralEligibility: result.generalEligibility,
     memoryEvaluationSnapshot: {
       version: MEMORY_EVALUATION_SNAPSHOT_VERSION,
       entries: result.entries.map((item) => ({
