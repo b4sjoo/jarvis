@@ -80,11 +80,12 @@ import { projectMeetingMetadataEvaluationObservation } from "./meeting-metadata-
 
 const SESSION_RECORDING_SCHEMA_VERSION = 1;
 const SESSION_RECORDING_INTEGRITY_SCHEMA_VERSION = 1;
-const SESSION_TRACE_SUMMARY_SCHEMA_VERSION = 39;
+const SESSION_TRACE_SUMMARY_SCHEMA_VERSION = 40;
 const SESSION_TRACE_INDEX_SCHEMA_VERSION = 1;
 const MAX_RECORDED_WRITE_FAILURES = 20;
 
 interface SessionRecordingStartOptions {
+  meetingSessionId: string;
   settings: MeetingAssistantSettings;
   interviewSessionBrief?: InterviewSessionBrief;
   interviewSessionContext?: InterviewSessionContext;
@@ -174,6 +175,7 @@ interface ActiveSessionRecording {
   generationId: string;
   phase: "active" | "closing" | "sealed";
   sessionId: string;
+  meetingSessionId: string;
   folderName: string;
   folderPath: string;
   startedAt: number;
@@ -477,6 +479,7 @@ export interface SessionCompactTraceSummary {
   };
   currentQuestionSettlement?: {
     settlementId?: string;
+    meetingSessionId?: string;
     logicalQuestionUnitId?: string;
     logicalQuestionUnitRevision?: number;
     sourceTurnIds: string[];
@@ -1331,6 +1334,7 @@ export class SessionRecordingManager {
       active: true,
       lifecycle: this.lifecycle,
       sessionId: this.activeSession.sessionId,
+      meetingSessionId: this.activeSession.meetingSessionId,
       folderName: this.activeSession.folderName,
       folderPath: this.activeSession.folderPath,
       startedAt: this.activeSession.startedAt,
@@ -1359,6 +1363,7 @@ export class SessionRecordingManager {
         const initialManifest = buildSessionRecordingManifest({
           status: "running",
           sessionId,
+          meetingSessionId: options.meetingSessionId,
           folderName,
           folderPath: undefined,
           startedAt,
@@ -1380,6 +1385,7 @@ export class SessionRecordingManager {
         const manifestBase = buildSessionRecordingManifest({
           status: "running",
           sessionId,
+          meetingSessionId: options.meetingSessionId,
           folderName,
           folderPath,
           startedAt,
@@ -1393,6 +1399,7 @@ export class SessionRecordingManager {
           generationId: createMeetingId("recording_generation"),
           phase: "active",
           sessionId,
+          meetingSessionId: options.meetingSessionId,
           folderName,
           folderPath,
           startedAt,
@@ -1455,6 +1462,7 @@ export class SessionRecordingManager {
         this.emit();
         this.recordEvent("session-started", {
           folderPath,
+          meetingSessionId: options.meetingSessionId,
           privacy: "raw audio omitted",
           evaluationProvenance,
         });
@@ -1505,7 +1513,8 @@ export class SessionRecordingManager {
         const finalReviewIndex = buildSessionTaskReviewIndex(
           session.sessionId,
           Array.from(session.traceSummaries.values()),
-          evaluationView.evaluations
+          evaluationView.evaluations,
+          Array.from(session.humanEvaluationProjectionsV2.values())
         );
         await this.tryFinalizationWrite(
           session,
@@ -2260,7 +2269,8 @@ export class SessionRecordingManager {
     const reviewIndex = buildSessionTaskReviewIndex(
       session.sessionId,
       Array.from(session.traceSummaries.values()),
-      evaluationView.evaluations
+      evaluationView.evaluations,
+      Array.from(session.humanEvaluationProjectionsV2.values())
     );
     this.enqueue(session, async () => {
       await this.writeText(
@@ -2292,7 +2302,7 @@ export class SessionRecordingManager {
 
   recordHumanGroundTruthEventV2(event: HumanGroundTruthEventV2) {
     const session = this.getWritableSession();
-    if (!session || event.sessionId !== session.sessionId) return;
+    if (!session || event.sessionId !== session.meetingSessionId) return;
     if (session.humanGroundTruthEventsV2.has(event.eventId)) return;
 
     session.humanGroundTruthEventsV2.set(event.eventId, event);
@@ -2321,7 +2331,7 @@ export class SessionRecordingManager {
     projection: HumanEvaluationProjectionV2
   ) {
     const session = this.getWritableSession();
-    if (!session || projection.sessionId !== session.sessionId) return;
+    if (!session || projection.sessionId !== session.meetingSessionId) return;
 
     session.humanEvaluationProjectionAttemptCountV2 += 1;
     const materializationRevision =
@@ -2372,7 +2382,8 @@ export class SessionRecordingManager {
     const reviewIndex = buildSessionTaskReviewIndex(
       session.sessionId,
       Array.from(session.traceSummaries.values()),
-      evaluationView.evaluations
+      evaluationView.evaluations,
+      Array.from(session.humanEvaluationProjectionsV2.values())
     );
     this.enqueue(session, async () => {
       await this.writeText(session, snapshotPath, snapshot);
@@ -3882,7 +3893,8 @@ export class SessionRecordingManager {
     const reviewIndex = buildSessionTaskReviewIndex(
       session.sessionId,
       summaries,
-      evaluationView.evaluations
+      evaluationView.evaluations,
+      Array.from(session.humanEvaluationProjectionsV2.values())
     );
 
     this.enqueue(session, async () => {
@@ -4161,6 +4173,7 @@ export function buildSessionRecordingProviderSummary({
 function buildSessionRecordingManifest({
   status,
   sessionId,
+  meetingSessionId,
   folderName,
   folderPath,
   startedAt,
@@ -4172,6 +4185,7 @@ function buildSessionRecordingManifest({
 }: {
   status: "running";
   sessionId: string;
+  meetingSessionId: string;
   folderName: string;
   folderPath?: string;
   startedAt: number;
@@ -4189,6 +4203,7 @@ function buildSessionRecordingManifest({
       note: "Session recordings include text, screenshots, prompts, outputs, memory retrieval, metrics, and human labels. Raw audio is not recorded.",
     },
     sessionId,
+    meetingSessionId,
     folderName,
     folderPath,
     startedAt,
@@ -5177,6 +5192,10 @@ export function buildCompactTraceSummary({
       settlementId: readFirstString(
         metadataSources,
         "currentQuestionSettlementId"
+      ),
+      meetingSessionId: readFirstString(
+        metadataSources,
+        "currentQuestionSettlementSessionId"
       ),
       logicalQuestionUnitId: readFirstString(
         metadataSources,

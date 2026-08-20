@@ -648,12 +648,12 @@ export const MeetingAssistant = ({
           meeting.status === "thinking" &&
           Boolean(meeting.partialSuggestion.trim()),
         traces: meeting.traces,
-        currentSessionId: meeting.sessionRecording.sessionId,
+        currentSessionId: meeting.meetingSessionId,
       }),
     [
       meeting.latestSuggestion,
       meeting.partialSuggestion,
-      meeting.sessionRecording.sessionId,
+      meeting.meetingSessionId,
       meeting.status,
       meeting.traces,
     ]
@@ -2633,6 +2633,12 @@ export const MeetingAssistant = ({
                           title={evaluationTaskId}
                         >
                           task: {evaluationTaskId}
+                        </div>
+                      ) : null}
+                      {answerEvaluationProjectionV2?.semanticInputEventIds
+                        .length ? (
+                        <div className="font-medium text-emerald-600 dark:text-emerald-400">
+                          Evaluation saved for this attempt
                         </div>
                       ) : null}
                     </div>

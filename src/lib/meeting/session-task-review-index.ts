@@ -1,7 +1,7 @@
 import type { MemoryRejectSummary } from "@/lib/memory";
 import type { MeetingTrace, QuestionHumanEvaluation } from "./types";
 
-export const SESSION_TASK_REVIEW_INDEX_SCHEMA_VERSION = 5;
+export const SESSION_TASK_REVIEW_INDEX_SCHEMA_VERSION = 6;
 
 export interface TaskReviewTraceSummary {
   version: number;
@@ -36,6 +36,9 @@ export interface TaskReviewTraceSummary {
   taskMutationAuthorizationReason?: string;
   currentQuestionSettlement?: {
     settlementId?: string;
+    meetingSessionId?: string;
+    logicalQuestionUnitId?: string;
+    sourceHash?: string;
     questionType?: string;
     relation?: string;
     authority?: string;
@@ -102,7 +105,44 @@ export interface SessionTaskReviewIndex {
   sessionId: string;
   savedAt: number;
   taskCount: number;
+  attemptCoverage: SessionAttemptEvaluationCoverage;
   tasks: SessionTaskReviewSummary[];
+}
+
+export type SessionAttemptEvaluationCoverageStatus =
+  | "evaluated"
+  | "unevaluated"
+  | "contaminated";
+
+export interface SessionAttemptEvaluationCoverageEntry {
+  attemptId: string;
+  traceId: string;
+  traceStatus: MeetingTrace["status"];
+  meetingSessionId: string;
+  settlementId: string;
+  logicalQuestionUnitId: string;
+  status: SessionAttemptEvaluationCoverageStatus;
+  reason:
+    | "semantic-label-present"
+    | "no-semantic-label"
+    | "projection-session-mismatch"
+    | "multiple-session-projections";
+}
+
+export interface SessionAttemptEvaluationCoverage {
+  eligibleCount: number;
+  evaluatedCount: number;
+  unevaluatedCount: number;
+  contaminatedCount: number;
+  attempts: SessionAttemptEvaluationCoverageEntry[];
+}
+
+interface AttemptEvaluationProjection {
+  sessionId: string;
+  subject: {
+    attemptId?: string;
+  };
+  semanticInputEventIds: string[];
 }
 
 export interface SessionTaskReviewSummary {
@@ -146,6 +186,7 @@ export interface SessionTaskReviewSummary {
   manualPhaseTransitions: SessionTaskReviewManualPhase[];
   diagramOverlayIds: string[];
   diagramOverlayRejectedCountTotal?: number;
+  attemptCoverage: SessionAttemptEvaluationCoverage;
   humanEvaluation?: SessionTaskReviewHumanEvaluation;
   artifacts: {
     reviewSummaryPath: string;
@@ -185,7 +226,8 @@ export interface SessionTaskReviewHumanEvaluation {
 export function buildSessionTaskReviewIndex(
   sessionId: string,
   traceSummaries: TaskReviewTraceSummary[],
-  questionEvaluations: QuestionHumanEvaluation[]
+  questionEvaluations: QuestionHumanEvaluation[],
+  projections: AttemptEvaluationProjection[] = []
 ): SessionTaskReviewIndex {
   const tracesById = new Map(
     traceSummaries.map((summary) => [summary.traceId, summary])
@@ -219,6 +261,10 @@ export function buildSessionTaskReviewIndex(
     ...Array.from(tracesByTaskId.keys()),
     ...Array.from(evaluationsByTaskId.keys()),
   ]).sort();
+  const attemptCoverage = buildSessionAttemptEvaluationCoverage(
+    traceSummaries,
+    projections
+  );
   const tasks = taskIds
     .map((taskId) =>
       buildSessionTaskReviewSummary({
@@ -226,6 +272,7 @@ export function buildSessionTaskReviewIndex(
         taskId,
         traceSummaries: tracesByTaskId.get(taskId) ?? [],
         questionEvaluations: evaluationsByTaskId.get(taskId) ?? [],
+        attemptCoverage,
       })
     )
     .sort(
@@ -240,6 +287,7 @@ export function buildSessionTaskReviewIndex(
     sessionId,
     savedAt: Date.now(),
     taskCount: tasks.length,
+    attemptCoverage,
     tasks,
   };
 }
@@ -249,11 +297,13 @@ function buildSessionTaskReviewSummary({
   taskId,
   traceSummaries,
   questionEvaluations,
+  attemptCoverage,
 }: {
   sessionId: string;
   taskId: string;
   traceSummaries: TaskReviewTraceSummary[];
   questionEvaluations: QuestionHumanEvaluation[];
+  attemptCoverage: SessionAttemptEvaluationCoverage;
 }): SessionTaskReviewSummary {
   const traces = [...traceSummaries].sort(
     (left, right) => left.startedAt - right.startedAt
@@ -369,6 +419,11 @@ function buildSessionTaskReviewSummary({
       traces.flatMap((trace) => trace.diagramOverlay?.selectedEntryIds ?? [])
     ),
     diagramOverlayRejectedCountTotal,
+    attemptCoverage: summarizeAttemptCoverage(
+      attemptCoverage.attempts.filter((attempt) =>
+        traceIds.includes(attempt.traceId)
+      )
+    ),
     humanEvaluation: questionEvaluations.length
       ? buildSessionTaskReviewHumanEvaluation(questionEvaluations)
       : undefined,
@@ -381,6 +436,98 @@ function buildSessionTaskReviewSummary({
         traces.map((trace) => trace.artifacts.summaryPath)
       ),
     },
+  };
+}
+
+export function buildSessionAttemptEvaluationCoverage(
+  traceSummaries: TaskReviewTraceSummary[],
+  projections: AttemptEvaluationProjection[]
+): SessionAttemptEvaluationCoverage {
+  const projectionsByAttempt = new Map<
+    string,
+    AttemptEvaluationProjection[]
+  >();
+  for (const projection of projections) {
+    const attemptId = projection.subject.attemptId;
+    if (!attemptId) continue;
+    const candidates = projectionsByAttempt.get(attemptId) ?? [];
+    candidates.push(projection);
+    projectionsByAttempt.set(attemptId, candidates);
+  }
+
+  const attempts = traceSummaries.flatMap((trace) => {
+    const settlement = trace.currentQuestionSettlement;
+    if (
+      !settlement?.meetingSessionId ||
+      !settlement.settlementId ||
+      !settlement.logicalQuestionUnitId ||
+      !settlement.sourceHash
+    ) {
+      return [];
+    }
+    const candidates = projectionsByAttempt.get(trace.traceId) ?? [];
+    const candidateSessionIds = uniqueStrings(
+      candidates.map((projection) => projection.sessionId)
+    );
+    const matching = candidates.filter(
+      (projection) =>
+        projection.sessionId === settlement.meetingSessionId
+    );
+    const mismatched = candidates.filter(
+      (projection) =>
+        projection.sessionId !== settlement.meetingSessionId
+    );
+
+    let status: SessionAttemptEvaluationCoverageStatus = "unevaluated";
+    let reason: SessionAttemptEvaluationCoverageEntry["reason"] =
+      "no-semantic-label";
+    if (candidateSessionIds.length > 1) {
+      status = "contaminated";
+      reason = "multiple-session-projections";
+    } else if (mismatched.length > 0) {
+      status = "contaminated";
+      reason = "projection-session-mismatch";
+    } else if (
+      matching.some(
+        (projection) => projection.semanticInputEventIds.length > 0
+      )
+    ) {
+      status = "evaluated";
+      reason = "semantic-label-present";
+    }
+
+    return [
+      {
+        attemptId: trace.traceId,
+        traceId: trace.traceId,
+        traceStatus: trace.status,
+        meetingSessionId: settlement.meetingSessionId,
+        settlementId: settlement.settlementId,
+        logicalQuestionUnitId: settlement.logicalQuestionUnitId,
+        status,
+        reason,
+      } satisfies SessionAttemptEvaluationCoverageEntry,
+    ];
+  });
+
+  return summarizeAttemptCoverage(attempts);
+}
+
+function summarizeAttemptCoverage(
+  attempts: SessionAttemptEvaluationCoverageEntry[]
+): SessionAttemptEvaluationCoverage {
+  return {
+    eligibleCount: attempts.length,
+    evaluatedCount: attempts.filter(
+      (attempt) => attempt.status === "evaluated"
+    ).length,
+    unevaluatedCount: attempts.filter(
+      (attempt) => attempt.status === "unevaluated"
+    ).length,
+    contaminatedCount: attempts.filter(
+      (attempt) => attempt.status === "contaminated"
+    ).length,
+    attempts,
   };
 }
 

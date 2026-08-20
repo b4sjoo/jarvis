@@ -98,6 +98,44 @@ test("binds evaluation to a newer failed screen attempt instead of an old visibl
   );
 });
 
+test("uses runtime meeting identity rather than recording identity for attempt selection", () => {
+  assert.deepEqual(
+    resolveSettledAttemptEvaluationTarget({
+      suggestion: buildSuggestion("suggestion_old", "trace_old"),
+      traces: [
+        buildSettledTrace(
+          "trace_current",
+          "voice",
+          "success",
+          "question_current"
+        ),
+      ],
+      currentSessionId: "session_recording_1",
+    }),
+    {
+      status: "unavailable",
+      traceId: "trace_old",
+      reason: "suggestion-source-trace-missing",
+    }
+  );
+
+  assert.equal(
+    resolveSettledAttemptEvaluationTarget({
+      suggestion: null,
+      traces: [
+        buildSettledTrace(
+          "trace_current",
+          "voice",
+          "success",
+          "question_current"
+        ),
+      ],
+      currentSessionId: "session_1",
+    }).traceId,
+    "trace_current"
+  );
+});
+
 test("keeps a cancelled screen attempt as an independent evaluation target", () => {
   assert.equal(
     resolveSettledAttemptEvaluationTarget({

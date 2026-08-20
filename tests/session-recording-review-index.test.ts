@@ -4,6 +4,10 @@ import {
   buildSessionTaskReviewIndex,
   type TaskReviewTraceSummary,
 } from "../src/lib/meeting/session-task-review-index.js";
+import {
+  createHumanGroundTruthEventV2,
+  deriveHumanEvaluationProjectionV2,
+} from "../src/lib/meeting/human-ground-truth-v2.js";
 import type { QuestionHumanEvaluation } from "../src/lib/meeting/types.js";
 
 test("builds a task-level review index from trace summaries and evaluations", () => {
@@ -277,6 +281,105 @@ test("counts a timeout terminal once and ignores its source evidence", () => {
   assert.equal(parent.sentenceBufferTimeoutCount, 1);
   assert.equal(parent.sentenceBufferAddedLatencyMsTotal, 850);
 });
+
+test("reports evaluated, unevaluated, and cross-session contaminated attempts", () => {
+  const evaluatedTrace = buildAttemptTrace("trace_evaluated");
+  const unevaluatedTrace = buildAttemptTrace("trace_unevaluated");
+  const contaminatedTrace = buildAttemptTrace("trace_contaminated");
+  const evaluatedProjection = buildAttemptProjection({
+    traceId: evaluatedTrace.traceId,
+    sessionId: "meeting_1",
+  });
+  const contaminatedProjection = buildAttemptProjection({
+    traceId: contaminatedTrace.traceId,
+    sessionId: "session_recording_1",
+  });
+
+  const index = buildSessionTaskReviewIndex(
+    "session_recording_1",
+    [evaluatedTrace, unevaluatedTrace, contaminatedTrace],
+    [],
+    [evaluatedProjection, contaminatedProjection]
+  );
+
+  assert.deepEqual(
+    {
+      eligible: index.attemptCoverage.eligibleCount,
+      evaluated: index.attemptCoverage.evaluatedCount,
+      unevaluated: index.attemptCoverage.unevaluatedCount,
+      contaminated: index.attemptCoverage.contaminatedCount,
+    },
+    {
+      eligible: 3,
+      evaluated: 1,
+      unevaluated: 1,
+      contaminated: 1,
+    }
+  );
+  assert.equal(
+    index.attemptCoverage.attempts.find(
+      (attempt) => attempt.traceId === contaminatedTrace.traceId
+    )?.reason,
+    "projection-session-mismatch"
+  );
+});
+
+function buildAttemptTrace(traceId: string): TaskReviewTraceSummary {
+  return {
+    version: 6,
+    sessionId: "session_recording_1",
+    traceId,
+    traceKind: "voice",
+    status: "success",
+    startedAt: 1,
+    endedAt: 2,
+    taskIds: ["task_parent"],
+    primaryTaskId: "task_parent",
+    currentQuestionSettlement: {
+      settlementId: `settlement:${traceId}`,
+      meetingSessionId: "meeting_1",
+      logicalQuestionUnitId: `lqu:${traceId}`,
+      sourceHash: `hash:${traceId}`,
+    },
+    artifacts: {
+      traceExportPath: `traces/${traceId}.json`,
+      summaryPath: `traces/${traceId}/summary.json`,
+    },
+  };
+}
+
+function buildAttemptProjection({
+  traceId,
+  sessionId,
+}: {
+  traceId: string;
+  sessionId: string;
+}) {
+  const subject = {
+    attemptId: traceId,
+    questionId: `question:${traceId}`,
+    taskId: "task_parent",
+    traceIds: [traceId],
+    sourceTurnIds: [`turn:${traceId}`],
+  };
+  const event = createHumanGroundTruthEventV2({
+    sessionId,
+    subject,
+    source: "explicit-ui",
+    sourceTraceId: traceId,
+    fact: {
+      kind: "answer-quality",
+      outcome: "useful",
+      failureReasons: [],
+      expectedContextTurnIds: [],
+    },
+  });
+  return deriveHumanEvaluationProjectionV2({
+    sessionId,
+    subject,
+    events: [event],
+  });
+}
 
 function buildBufferTrace({
   traceId,

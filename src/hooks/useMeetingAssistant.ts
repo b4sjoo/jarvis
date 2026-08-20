@@ -2365,9 +2365,7 @@ export function useMeetingAssistant() {
   ]);
   const refreshCriticalMomentCandidates = useCallback(
     (contextState: MeetingContextState, traces: MeetingTrace[]) => {
-      const sessionId =
-        sessionRecordingManagerRef.current?.getState().sessionId ??
-        contextState.sessionId;
+      const sessionId = contextState.sessionId;
       const currentWindow = buildCriticalMomentCandidates({
         sessionId,
         transcriptTurns: contextState.transcriptTurns,
@@ -6211,6 +6209,7 @@ export function useMeetingAssistant() {
           reason: "session-recording-provider-summary",
         });
       const sessionRecording = await sessionRecordingManagerRef.current?.start({
+        meetingSessionId: contextState.sessionId,
         settings: state.settings,
         interviewSessionBrief: contextState.interviewSessionBrief,
         interviewSessionContext: contextState.interviewSessionContext,
@@ -6728,6 +6727,8 @@ export function useMeetingAssistant() {
           ) ?? activeMeetingTask?.parent.questionType,
         ...patch,
       };
+      const meetingSessionId =
+        contextManagerRef.current.getState().sessionId;
 
       setState((previous) => {
         const humanEvaluations = upsertTraceHumanEvaluation(
@@ -6745,7 +6746,7 @@ export function useMeetingAssistant() {
               buildQuestionEvaluationIdentity(
                 trace,
                 traceEvaluation,
-                previous.sessionRecording.sessionId
+                meetingSessionId
               ),
               buildQuestionEvaluationPatchFromTrace(traceEvaluation)
             )
@@ -6774,6 +6775,8 @@ export function useMeetingAssistant() {
         .getTraces()
         .find((candidate) => candidate.id === traceId);
       if (!trace) return;
+      const meetingSessionId =
+        contextManagerRef.current.getState().sessionId;
 
       setState((previous) => {
         const traceEvaluation = previous.humanEvaluations.find(
@@ -6782,7 +6785,7 @@ export function useMeetingAssistant() {
         const identity = buildQuestionEvaluationIdentity(
           trace,
           traceEvaluation ?? {},
-          previous.sessionRecording.sessionId
+          meetingSessionId
         );
         const questionEvaluations = upsertQuestionHumanEvaluation(
           previous.questionEvaluations,
@@ -6903,10 +6906,7 @@ export function useMeetingAssistant() {
         .find((candidate) => candidate.id === traceId);
       if (!trace) return;
 
-      const recordingState = sessionRecordingManagerRef.current?.getState();
-      const sessionId =
-        recordingState?.sessionId ??
-        contextManagerRef.current.getState().sessionId;
+      const sessionId = contextManagerRef.current.getState().sessionId;
       const evaluation =
         options.evaluation ??
         questionEvaluationsRef.current.find(
@@ -25887,8 +25887,7 @@ export function useMeetingAssistant() {
         const questionEvaluations = upsertQuestionHumanEvaluation(
           state.questionEvaluations,
           {
-            sessionId:
-              state.sessionRecording.sessionId ?? correctedContextState.sessionId,
+            sessionId: correctedContextState.sessionId,
             traceId: correctionTrace.id,
             traceKind: correctionTrace.kind,
             taskId: correctedActiveTask.id,
@@ -26177,7 +26176,6 @@ export function useMeetingAssistant() {
       state.latestSuggestion,
       state.manualQuestionTypeCorrection,
       state.questionEvaluations,
-      state.sessionRecording.sessionId,
       state.settings,
     ]
   );
@@ -27288,9 +27286,7 @@ export function useMeetingAssistant() {
           const questionEvaluations = upsertQuestionHumanEvaluation(
             previous.questionEvaluations,
             {
-              sessionId:
-                previous.sessionRecording.sessionId ??
-                contextState.sessionId,
+              sessionId: contextState.sessionId,
               questionId: `lqu:${correction.logicalQuestionUnitId}`,
               traceId: trace.id,
               traceKind: trace.kind,
@@ -29412,6 +29408,7 @@ export function useMeetingAssistant() {
 
   return {
     ...state,
+    meetingSessionId: contextManagerRef.current.getState().sessionId,
     setupWarnings,
     setPrivacyMode,
     setScreenContextEnabled,

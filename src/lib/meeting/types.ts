@@ -1555,6 +1555,7 @@ export interface MeetingSessionRecordingState {
   lifecycle: "idle" | "starting" | "active" | "closing";
   evaluationProvenance?: HumanEvaluationCollectionProvenance;
   sessionId?: string;
+  meetingSessionId?: string;
   folderName?: string;
   folderPath?: string;
   startedAt?: number;

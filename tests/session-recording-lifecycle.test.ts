@@ -47,6 +47,7 @@ test("serializes concurrent starts into one recording generation", async () => {
 
   assert.equal(native.startCalls().length, 1);
   assert.equal(first.sessionId, second.sessionId);
+  assert.equal(first.meetingSessionId, START_OPTIONS.meetingSessionId);
   assert.equal(manager.getState().lifecycle, "active");
   const initialManifest = JSON.parse(
     stringArg(native.startCalls()[0]!, "manifestPayload")
@@ -58,6 +59,10 @@ test("serializes concurrent starts into one recording generation", async () => {
   assert.equal(
     (initialManifest.build as Record<string, unknown>).gitCommit,
     "unknown"
+  );
+  assert.equal(
+    initialManifest.meetingSessionId,
+    START_OPTIONS.meetingSessionId
   );
 
   await manager.stop("test-complete");
@@ -86,7 +91,7 @@ test("records zero-trace critical moment candidates and reviewed outcomes", asyn
   const native = new ControlledRecordingInvoke();
   const manager = new SessionRecordingManager(undefined, native.invoke);
   const recording = await manager.start(START_OPTIONS);
-  const sessionId = required(recording.sessionId);
+  const sessionId = START_OPTIONS.meetingSessionId;
   const startedAt = Date.now();
   manager.recordTranscriptTurn({
     id: "turn_zero_trace",
@@ -163,7 +168,7 @@ test("records append-only V2 ground truth and derived projection artifacts", asy
   const native = new ControlledRecordingInvoke();
   const manager = new SessionRecordingManager(undefined, native.invoke);
   const recording = await manager.start(START_OPTIONS);
-  const sessionId = required(recording.sessionId);
+  const sessionId = START_OPTIONS.meetingSessionId;
   const subject = {
     questionId: "question_v2",
     traceIds: ["trace_v2"],
@@ -242,7 +247,7 @@ test("suppresses unchanged V2 projection materializations in long sessions", asy
   const native = new ControlledRecordingInvoke();
   const manager = new SessionRecordingManager(undefined, native.invoke);
   const recording = await manager.start(START_OPTIONS);
-  const sessionId = required(recording.sessionId);
+  const sessionId = START_OPTIONS.meetingSessionId;
   const subject = {
     questionId: "question_projection_compaction",
     traceIds: ["trace_projection_compaction", "trace_related"],
@@ -781,7 +786,7 @@ test("records whiteboard validation and recovery artifacts", async () => {
   );
   assert.ok(summaryWrite);
   const summary = parsePayload(summaryWrite);
-  assert.equal(summary.version, 39);
+  assert.equal(summary.version, 40);
   assert.deepEqual(summary.whiteboard, {
     artifactId: "whiteboard_1",
     revision: 1,
@@ -1264,7 +1269,7 @@ test("meeting metadata decisions persist company history and refresh trace summa
         "traces/meeting_metadata_trace/summary.json"
   );
   const summary = parsePayload(summaryWrites[summaryWrites.length - 1]!);
-  assert.equal(summary.version, 39);
+  assert.equal(summary.version, 40);
   assert.deepEqual(summary.meetingMetadata, {
     revision: 7,
     operationId: "metadata_operation_1",
@@ -1819,7 +1824,7 @@ test("compact trace summaries preserve task boundary and cross-domain evidence",
   );
   assert.ok(summaryWrite);
   const summary = parsePayload(summaryWrite);
-  assert.equal(summary.version, 39);
+  assert.equal(summary.version, 40);
   assert.equal(summary.taskRelation, "new-parent");
   assert.equal(summary.logicalQuestionUnitRevision, 3);
   assert.equal(summary.phaseSignal, "assumption-authorized");
@@ -2040,7 +2045,7 @@ test("compact trace summaries preserve bounded STT request evidence", async () =
   );
   assert.ok(summaryWrite);
   const summary = parsePayload(summaryWrite);
-  assert.equal(summary.version, 39);
+  assert.equal(summary.version, 40);
   assert.equal(
     (summary.timingsMs as Record<string, unknown>).stt,
     1_580
@@ -2182,7 +2187,7 @@ test("refreshes compact STT lifecycle evidence after a late provider abort", asy
   );
   assert.ok(summaryWrites.length >= 2);
   const summary = parsePayload(summaryWrites[summaryWrites.length - 1]!);
-  assert.equal(summary.version, 39);
+  assert.equal(summary.version, 40);
   assert.equal(
     (summary.sttRequest as Record<string, unknown>).abortRequested,
     true
@@ -2247,7 +2252,7 @@ test("compact trace summaries preserve hard memory invalidation evidence", async
   );
   assert.ok(summaryWrite);
   const summary = parsePayload(summaryWrite);
-  assert.equal(summary.version, 39);
+  assert.equal(summary.version, 40);
   const memory = summary.memory as Record<string, unknown>;
   assert.equal(memory.authorityRevision, 2);
   assert.equal(memory.invalidationKind, "hard");
@@ -2405,6 +2410,7 @@ test("records compact current-question settlement and execution-plan evidence", 
   manager.recordTrace(
     buildCompletedTrace("trace_settlement", Date.now(), {
       currentQuestionSettlementId: "settlement_a",
+      currentQuestionSettlementSessionId: "session-runtime",
       currentQuestionSettlementUnitId: "question_settlement_unit",
       currentQuestionSettlementRevision: 3,
       currentQuestionSettlementSourceTurnIds: ["turn_a", "turn_b"],
@@ -2540,7 +2546,13 @@ test("records compact current-question settlement and execution-plan evidence", 
   assert.equal(serializedPlan.includes("taskSnapshot"), false);
   assert.equal(serializedPlan.includes("variables"), false);
   const summary = parsePayload(summaryWrite);
-  assert.equal(summary.version, 39);
+  assert.equal(summary.version, 40);
+  assert.equal(
+    (
+      summary.currentQuestionSettlement as Record<string, unknown>
+    ).meetingSessionId,
+    "session-runtime"
+  );
   assert.equal(
     (
       summary.currentQuestionSettlement as Record<string, unknown>
@@ -2725,7 +2737,7 @@ test("records a current-question term correction without copying provider state"
     false
   );
   const summary = parsePayload(summaryWrite);
-  assert.equal(summary.version, 39);
+  assert.equal(summary.version, 40);
   assert.equal(
     summary.manualTermCorrectionId,
     "term_correction_hnsw"
@@ -2896,7 +2908,7 @@ test("records preparation provenance, use receipts, and answer-bound feedback", 
   );
   assert.ok(summaryWrite);
   const summary = parsePayload(summaryWrite);
-  assert.equal(summary.version, 39);
+  assert.equal(summary.version, 40);
   assert.equal(
     summary.preparationContextRevision,
     receipt.preparationContextRevision
@@ -2970,6 +2982,7 @@ test("rejects an artifact receipt that has no recorded snapshot lineage", async 
 });
 
 const START_OPTIONS = {
+  meetingSessionId: "meeting_session_1",
   settings: {
     codingModel: {
       enabled: false,
