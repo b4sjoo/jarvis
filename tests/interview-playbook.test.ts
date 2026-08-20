@@ -84,3 +84,31 @@ test("changes project deep-dive guidance with the committed phase", () => {
     /known limitations/
   );
 });
+
+test("an explicit unknown settlement cannot be reclassified by query or Brief", () => {
+  const playbook = selectInterviewPlaybook({
+    query: "Please implement a queue.",
+    questionType: "unknown",
+    interviewSessionBrief: {
+      targetCompany: "",
+      companyLocked: false,
+      interviewTypes: ["coding"],
+    },
+  });
+
+  assert.equal(playbook, undefined);
+});
+
+test("a compatible active Playbook keeps its committed phase", () => {
+  const initial = selectInterviewPlaybook({
+    questionType: "general-system-design",
+  });
+  const advanced = withInterviewPlaybookPhase(initial, "design_framing");
+  const selected = selectInterviewPlaybook({
+    questionType: "general-system-design",
+    activeTaskPlaybook: advanced,
+  });
+
+  assert.equal(selected?.id, "general_system_design");
+  assert.equal(selected?.phase, "design_framing");
+});

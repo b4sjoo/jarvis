@@ -461,15 +461,17 @@ export function toMemoryUseCaseForQuestionType(
 ): MemoryUseCase {
   if (questionType === "behavioral") return "behavioral_interview";
   if (questionType === "coding") return "coding_interview";
-  if (
-    questionType === "general-system-design" ||
-    questionType === "ai-ml-system-design" ||
-    questionType === "project-deep-dive" ||
-    questionType === "field-knowledge"
-  ) {
-    return defaultUseCase === "behavioral_interview"
-      ? "meeting_assistant"
-      : defaultUseCase;
+  if (questionType === "general-system-design") {
+    return "system_design_interview";
+  }
+  if (questionType === "ai-ml-system-design") {
+    return "aiml_system_design_interview";
+  }
+  if (questionType === "project-deep-dive") {
+    return "project_deep_dive";
+  }
+  if (questionType === "field-knowledge" || questionType === "unknown") {
+    return "meeting_assistant";
   }
   return defaultUseCase;
 }

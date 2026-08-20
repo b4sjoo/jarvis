@@ -35,7 +35,7 @@ test("a concrete Behavioral settlement supersedes a conflicting Brief prior", ()
   assert.equal(decision.disposition, "explicit-family-allow");
 });
 
-test("characterizes unconditional reuse of a stale active Playbook", () => {
+test("a concrete settlement reselects instead of reusing a stale active Playbook", () => {
   const activePlaybook = selectInterviewPlaybook({
     questionType: "coding",
     query: "Implement a queue.",
@@ -46,12 +46,12 @@ test("characterizes unconditional reuse of a stale active Playbook", () => {
     activeTaskPlaybook: activePlaybook,
   });
 
-  assert.equal(selected?.questionType, "coding");
-  assert.equal(selected?.id, "coding_algorithm");
-  assert.equal(selected?.phase, "follow_up");
+  assert.equal(selected?.questionType, "behavioral");
+  assert.equal(selected?.id, "behavioral_story");
+  assert.equal(selected?.phase, "story_selection");
 });
 
-test("characterizes the split between settled route and stale Playbook consumers", () => {
+test("committed response owner keeps route, Playbook, memory, and prompt consumers coherent", () => {
   const task = activeTask("behavioral");
   const stalePlaybook = selectInterviewPlaybook({
     questionType: "coding",
@@ -76,8 +76,18 @@ test("characterizes the split between settled route and stale Playbook consumers
   assert.equal(plan.modelRoute.route, "main");
   assert.equal(plan.promptContract.profile, "compact-spoken");
   assert.equal(plan.memoryPolicy.questionType, "behavioral");
-  assert.equal(plan.playbook?.questionType, "coding");
-  assert.equal(plan.memoryPolicy.retrievalPolicyId, "coding_algorithm");
+  assert.equal(
+    plan.downstreamQuestionTypeAuthority,
+    "committed-settlement"
+  );
+  assert.equal(plan.responsePlaybook?.questionType, "behavioral");
+  assert.equal(plan.playbook?.questionType, "behavioral");
+  assert.equal(
+    plan.responsePlaybookDisposition,
+    "reselected-incompatible-playbook"
+  );
+  assert.equal(plan.memoryPolicy.retrievalPolicyId, "behavioral_story");
+  assert.equal(plan.parentTrajectoryPlaybook, undefined);
 });
 
 function settlement(

@@ -218,6 +218,24 @@ test("maps canonical question types to memory use cases and memory families", ()
       "behavioral_interview",
       "ai-ml-system-design"
     ),
+    "aiml_system_design_interview"
+  );
+  assert.equal(
+    toMemoryUseCaseForQuestionType(
+      "coding_interview",
+      "general-system-design"
+    ),
+    "system_design_interview"
+  );
+  assert.equal(
+    toMemoryUseCaseForQuestionType(
+      "coding_interview",
+      "project-deep-dive"
+    ),
+    "project_deep_dive"
+  );
+  assert.equal(
+    toMemoryUseCaseForQuestionType("coding_interview", "field-knowledge"),
     "meeting_assistant"
   );
   assert.deepEqual(memoryFamiliesForQuestionType("behavioral"), [

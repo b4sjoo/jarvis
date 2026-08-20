@@ -221,7 +221,7 @@ test("response-only plan routes from the current question without exposing paren
   assert.deepEqual(plan.taskMutationPolicy, { kind: "preserve" });
 });
 
-test("same-domain current-only repair retains parent phase without exposing a mutable task snapshot", () => {
+test("same-domain current-only repair keeps parent phase read-only without lending it to the response Playbook", () => {
   const preservedTask = activeTask("general-system-design", {
     playbookPhase: "design_framing",
   });
@@ -259,8 +259,14 @@ test("same-domain current-only repair retains parent phase without exposing a mu
   });
 
   assert.equal(plan.taskSnapshot, undefined);
-  assert.equal(plan.playbookPhase, "design_framing");
-  assert.equal(plan.playbook?.phase, "design_framing");
+  assert.equal(plan.playbookPhase, "requirement_clarification");
+  assert.equal(plan.responsePlaybook?.questionType, "ai-ml-system-design");
+  assert.equal(plan.responsePlaybook?.phase, "requirement_clarification");
+  assert.equal(plan.parentTrajectoryPlaybook, undefined);
+  assert.equal(
+    plan.responseOnlyTaskScope?.readOnlyParentContinuity?.playbookPhase,
+    "design_framing"
+  );
   assert.equal(plan.artifactIntent, "preserve");
   assert.equal(plan.artifactPolicy.allowWhiteboard, false);
   assert.equal(
@@ -268,6 +274,53 @@ test("same-domain current-only repair retains parent phase without exposing a mu
       ?.artifactOwnerParentId,
     preservedTask.parent.id
   );
+});
+
+test("an authorized child owns its response Playbook while the parent Playbook remains read-only", () => {
+  const task: ActiveMeetingTask = {
+    ...activeTask("general-system-design", {
+      playbook: playbook("general-system-design"),
+      playbookPhase: "design_framing",
+    }),
+    child: {
+      id: "child-a",
+      createdAt: 30,
+      updatedAt: 30,
+      questionType: "field-knowledge",
+      relation: "child-probe",
+      intent: "concept-probe",
+      question: "How does consistent hashing work?",
+      basedOnTurnIds: ["turn-child"],
+      basedOnObservationIds: [],
+    },
+  };
+  const plan = buildSettledAdvisorExecutionPlan({
+    settlement: settlement({
+      questionType: "field-knowledge",
+      relation: "child-probe",
+      parentMutationAuthorized: false,
+    }),
+    activeMeetingTask: task,
+    preBoundaryQuestionType: "general-system-design",
+    taskBoundaryCommitted: false,
+    childOwnsResponse: true,
+    providerSnapshot: providers,
+    playbook: playbook("general-system-design"),
+    memoryUseCase: "system_design_interview",
+    askFrame: "direct-answer",
+    topicDomain: "backend",
+    sourceQuestion: "How does consistent hashing work?",
+    subtaskIntent: "concept-probe",
+  });
+
+  assert.equal(plan.responseOwner.source, "authorized-child");
+  assert.equal(plan.responsePlaybook?.questionType, "field-knowledge");
+  assert.equal(plan.responsePlaybook?.id, "aiml_field_knowledge");
+  assert.equal(plan.parentTrajectoryPlaybook?.questionType, "general-system-design");
+  assert.equal(plan.parentTrajectoryPlaybook?.phase, "design_framing");
+  assert.equal(plan.memoryPolicy.retrievalPolicyId, "aiml_field_knowledge");
+  assert.equal(plan.modelRoute.route, "main");
+  assert.equal(plan.artifactPolicy.allowWhiteboard, false);
 });
 
 test("a precommitted runtime boundary remains the creating-parent lifecycle fact when settlement is answer-only", () => {
@@ -597,6 +650,10 @@ test("equivalent settlement inputs produce a stable plan id and compact trace", 
   assert.equal(
     trace.settledExecutionPlanPromptContract,
     "meeting-answer:coding"
+  );
+  assert.equal(
+    trace.settledExecutionPlanDownstreamQuestionTypeAuthority,
+    "committed-settlement"
   );
   assert.equal(trace.settledExecutionPlanResponseIntent, "advise");
   assert.equal(

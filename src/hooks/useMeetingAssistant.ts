@@ -10832,7 +10832,9 @@ export function useMeetingAssistant() {
     });
     if (traceId) {
       const playbookMetadata =
-        formatInterviewPlaybookForTrace(advisorRuntimePlaybook);
+        formatInterviewPlaybookForTrace(
+          settledExecutionPlan?.responsePlaybook ?? advisorRuntimePlaybook
+        );
       traceStoreRef.current.updateMetadata(traceId, {
         ...playbookMetadata,
         ...formatPlaybookPhaseDecisionForTrace(playbookPhaseDecision),
@@ -10859,7 +10861,7 @@ export function useMeetingAssistant() {
           getAdvisorActiveQuestionType(promptContext),
         ...getActiveMeetingTaskTraceMetadata(promptContext.activeMeetingTask),
       });
-      if (advisorRuntimePlaybook) {
+      if (settledExecutionPlan?.responsePlaybook ?? advisorRuntimePlaybook) {
         const playbookStepId = traceStoreRef.current.startStep(
           traceId,
           "Interview playbook selected",
@@ -22419,10 +22421,13 @@ export function useMeetingAssistant() {
           subtaskIntent: screenSubtaskIntent,
           askFrame: screenPreflight?.askFrame ?? screenMemoryAskFrame,
         });
-        const screenRuntimePlaybook = withInterviewPlaybookPhase(
-          screenPlaybook,
-          screenPhaseDecision.phase
-        );
+        const screenRuntimePlaybook =
+          provisionalScreenTaskRelation === "child-probe"
+            ? screenPlaybook
+            : withInterviewPlaybookPhase(
+                screenPlaybook,
+                screenPhaseDecision.phase
+              );
         screenPersonalizedGuidance =
           resolvePreparationPersonalizedGuidance(
             preparationRuntimeContextRef.current,
@@ -22438,6 +22443,19 @@ export function useMeetingAssistant() {
         const screenPlaybookMetadata =
           formatInterviewPlaybookForTrace(screenRuntimePlaybook);
         traceStoreRef.current.updateMetadata(trace.id, {
+          downstreamQuestionTypeAuthority: "committed-settlement",
+          responsePlaybookId: screenRuntimePlaybook?.id,
+          responsePlaybookQuestionType:
+            screenRuntimePlaybook?.questionType,
+          responsePlaybookPhase: screenRuntimePlaybook?.phase,
+          parentTrajectoryPlaybookId:
+            provisionalScreenTaskRelation === "child-probe"
+              ? preflightContextState.activeMeetingTask?.parent.playbook?.id
+              : undefined,
+          parentTrajectoryPlaybookPhase:
+            provisionalScreenTaskRelation === "child-probe"
+              ? preflightContextState.activeMeetingTask?.parent.playbookPhase
+              : undefined,
           ...screenPlaybookMetadata,
           ...formatPlaybookPhaseDecisionForTrace(screenPhaseDecision),
         });
@@ -22940,10 +22958,9 @@ export function useMeetingAssistant() {
           factAnchorMetadata
         );
         const screenUsesCodingModel =
-          settledScreenQuestionType === "coding" ||
-          screenRuntimePlaybook?.id === "coding_algorithm";
+          settledScreenQuestionType === "coding";
         const screenAnswerProfile = resolveMeetingAnswerProfile(
-          settledScreenTaskKind
+          settledScreenQuestionType
         );
         const screenModelRoute = resolveMeetingModelRoute({
           useCodingModel: screenUsesCodingModel,

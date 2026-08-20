@@ -9,6 +9,11 @@ import {
   resolveMeetingAnswerProfile,
 } from "./meeting-answer.js";
 import {
+  isCatalogInterviewPlaybookCompatible,
+  selectCommittedInterviewPlaybookFromCatalog,
+  type CommittedInterviewPlaybookDisposition,
+} from "./interview-playbook-catalog.js";
+import {
   resolveMeetingModelRouteFromSnapshot,
   resolveMeetingResponseOwner,
   type MeetingModelProviderSnapshot,
@@ -25,6 +30,7 @@ import type {
 } from "./response-only-task-scope.js";
 import {
   normalizeCanonicalQuestionType,
+  toMemoryUseCaseForQuestionType,
   type CanonicalQuestionType,
 } from "./task-taxonomy.js";
 import { resolvePlaybookRequiredArtifacts } from "./playbook-phase.js";
@@ -125,7 +131,14 @@ export interface SettledAdvisorExecutionPlan {
   postMutationParentId?: string;
   postMutationParentRevision?: number;
   responseOwner: MeetingResponseOwnerResolution;
+  downstreamQuestionTypeAuthority: "committed-settlement";
   modelRoute: MeetingModelRouteResolution;
+  responsePlaybook?: SelectedInterviewPlaybook;
+  responsePlaybookDisposition:
+    | CommittedInterviewPlaybookDisposition
+    | "transient-personal-status";
+  responsePlaybookCandidateQuestionType?: CanonicalQuestionType;
+  parentTrajectoryPlaybook?: SelectedInterviewPlaybook;
   playbook?: SelectedInterviewPlaybook;
   playbookId?: SelectedInterviewPlaybook["id"];
   playbookPhase?: InterviewPlaybookPhase;
@@ -191,32 +204,14 @@ export function buildSettledAdvisorExecutionPlan(input: {
     !responseOnlyTaskScope && input.activeMeetingTask
     ? cloneActiveMeetingTask(input.activeMeetingTask)
     : undefined;
-  const selectedPlaybook = input.playbook
-    ? cloneSelectedPlaybook(input.playbook)
-    : undefined;
   const readOnlyParentContinuity =
     responseOnlyTaskScope?.readOnlyParentContinuity;
-  const retainedParentPhase =
-    readOnlyParentContinuity?.compatibleWithInferredType
-      ? readOnlyParentContinuity.playbookPhase
-      : undefined;
-  const playbook = selectedPlaybook && retainedParentPhase
-    ? deepFreeze({
-        ...selectedPlaybook,
-        phase: retainedParentPhase,
-      })
-    : selectedPlaybook;
   const transientPersonalStatusDecision =
     input.transientPersonalStatusDecision
       ? cloneTransientPersonalStatusDecision(
           input.transientPersonalStatusDecision
         )
       : undefined;
-  const playbookPhase = transientPersonalStatusDecision
-    ? taskSnapshot?.parent.playbookPhase
-    : retainedParentPhase ??
-      playbook?.phase ??
-      taskSnapshot?.parent.playbookPhase;
   const responseOwner: MeetingResponseOwnerResolution =
     transientPersonalStatusDecision
       ? {
@@ -239,6 +234,58 @@ export function buildSettledAdvisorExecutionPlan(input: {
           taskBoundaryCommitted: input.taskBoundaryCommitted,
           childOwnsResponse: input.childOwnsResponse,
         });
+  const suppliedPlaybook = input.playbook
+    ? cloneSelectedPlaybook(input.playbook)
+    : undefined;
+  const taskPlaybook = taskSnapshot?.parent.playbook
+    ? cloneSelectedPlaybook(taskSnapshot.parent.playbook)
+    : undefined;
+  const suppliedPlaybookCompatible =
+    isCatalogInterviewPlaybookCompatible(
+      suppliedPlaybook,
+      responseOwner.questionType
+    );
+  const responsePlaybookCandidate =
+    suppliedPlaybook ??
+    (isCatalogInterviewPlaybookCompatible(
+      taskPlaybook,
+      responseOwner.questionType
+    )
+      ? taskPlaybook
+      : undefined);
+  const responsePlaybookSelection = transientPersonalStatusDecision
+    ? undefined
+    : selectCommittedInterviewPlaybookFromCatalog({
+        questionType: responseOwner.questionType,
+        query: input.sourceQuestion,
+        askFrame: input.askFrame,
+        topicDomain: input.topicDomain,
+        projectAnchor: input.projectAnchor,
+        confidence: input.settlement.confidence,
+        candidatePlaybook: responsePlaybookCandidate,
+      });
+  const selectedResponsePlaybook = responsePlaybookSelection?.playbook;
+  const phasedResponsePlaybook =
+    selectedResponsePlaybook &&
+    !suppliedPlaybookCompatible &&
+    taskSnapshot &&
+    normalizeCanonicalQuestionType(taskSnapshot.parent.questionType) ===
+      responseOwner.questionType
+      ? withInterviewPlaybookPhase(
+          selectedResponsePlaybook,
+          taskSnapshot.parent.playbookPhase
+        )
+      : selectedResponsePlaybook;
+  const responsePlaybook = phasedResponsePlaybook
+    ? cloneSelectedPlaybook(phasedResponsePlaybook)
+    : undefined;
+  const parentTrajectoryPlaybook =
+    responseOwner.source === "authorized-child" && taskSnapshot
+      ? resolveParentTrajectoryPlaybook(taskSnapshot)
+      : undefined;
+  const playbookPhase = transientPersonalStatusDecision
+    ? taskSnapshot?.parent.playbookPhase
+    : responsePlaybook?.phase;
   const useCodingModel = responseOwner.questionType === "coding";
   const modelRoute = resolveMeetingModelRouteFromSnapshot({
     snapshot: input.providerSnapshot,
@@ -252,7 +299,7 @@ export function buildSettledAdvisorExecutionPlan(input: {
     : resolveMeetingAnswerProfile(responseOwner.questionType);
   const requiredArtifacts = resolvePlaybookRequiredArtifacts({
     questionType: responseOwner.questionType,
-    playbookId: playbook?.id,
+    playbookId: responsePlaybook?.id,
     phase: playbookPhase,
     subtaskIntent: input.subtaskIntent,
   });
@@ -316,16 +363,22 @@ export function buildSettledAdvisorExecutionPlan(input: {
     responseOnlyTaskScope?.preservedParentRevision;
   const postMutationParentId = taskSnapshot?.parent.id;
   const postMutationParentRevision = taskSnapshot?.parent.revisions;
+  const memoryUseCase = transientPersonalStatusDecision
+    ? "meeting_assistant"
+    : toMemoryUseCaseForQuestionType(
+        input.memoryUseCase,
+        responseOwner.questionType
+      );
   const planId = createExecutionPlanId({
     settlementId: input.settlement.settlementId,
     responseOwner,
     modelRoute,
-    playbook,
+    playbook: responsePlaybook,
     expectedParentId,
     expectedParentRevision,
     postMutationParentId,
     postMutationParentRevision,
-    memoryUseCase: input.memoryUseCase,
+    memoryUseCase,
     askFrame: input.askFrame,
     topicDomain: input.topicDomain,
     projectAnchor: input.projectAnchor,
@@ -368,20 +421,29 @@ export function buildSettledAdvisorExecutionPlan(input: {
     postMutationParentId,
     postMutationParentRevision,
     responseOwner,
+    downstreamQuestionTypeAuthority: "committed-settlement",
     modelRoute,
+    responsePlaybook: transientPersonalStatusDecision
+      ? undefined
+      : responsePlaybook,
+    responsePlaybookDisposition: transientPersonalStatusDecision
+      ? "transient-personal-status"
+      : responsePlaybookSelection?.disposition ??
+        "no-playbook-for-unknown-type",
+    responsePlaybookCandidateQuestionType:
+      responsePlaybookSelection?.candidateQuestionType,
+    parentTrajectoryPlaybook,
     playbook: transientPersonalStatusDecision
       ? undefined
-      : playbook,
+      : responsePlaybook,
     playbookId: transientPersonalStatusDecision
       ? undefined
-      : playbook?.id,
+      : responsePlaybook?.id,
     playbookPhase,
     requiredArtifacts,
     memoryPolicy: {
       questionType: responseOwner.questionType,
-      useCase: transientPersonalStatusDecision
-        ? "meeting_assistant"
-        : input.memoryUseCase,
+      useCase: memoryUseCase,
       askFrame: transientPersonalStatusDecision
         ? "unknown"
         : input.askFrame,
@@ -393,7 +455,7 @@ export function buildSettledAdvisorExecutionPlan(input: {
         : input.projectAnchor,
       retrievalPolicyId: transientPersonalStatusDecision
         ? "personal-status-profile-only"
-        : playbook?.memoryPolicy.id,
+        : responsePlaybook?.memoryPolicy.id,
     },
     factAnchorPolicy,
     promptContract: {
@@ -445,7 +507,7 @@ export function rebaseSettledAdvisorExecutionPlanAfterOwnedParentMutation(
       settlementId: rebased.settlementId,
       responseOwner: rebased.responseOwner,
       modelRoute: rebased.modelRoute,
-      playbook: rebased.playbook,
+      playbook: rebased.responsePlaybook ?? rebased.playbook,
       expectedParentId: rebased.expectedParentId,
       expectedParentRevision: rebased.expectedParentRevision,
       postMutationParentId: rebased.postMutationParentId,
@@ -604,11 +666,29 @@ export function formatSettledAdvisorExecutionPlanForTrace(
       plan.postMutationParentRevision,
     settledExecutionPlanResponseOwnerSource:
       plan.responseOwner.source,
+    settledExecutionPlanDownstreamQuestionTypeAuthority:
+      plan.downstreamQuestionTypeAuthority,
     settledExecutionPlanModelRoute: plan.modelRoute.route,
     settledExecutionPlanProviderId:
       plan.modelRoute.resolvedProviderId,
     settledExecutionPlanPlaybookId: plan.playbookId,
     settledExecutionPlanPlaybookPhase: plan.playbookPhase,
+    settledExecutionPlanResponsePlaybookId:
+      plan.responsePlaybook?.id,
+    settledExecutionPlanResponsePlaybookQuestionType:
+      plan.responsePlaybook?.questionType,
+    settledExecutionPlanResponsePlaybookPhase:
+      plan.responsePlaybook?.phase,
+    settledExecutionPlanResponsePlaybookDisposition:
+      plan.responsePlaybookDisposition,
+    settledExecutionPlanResponsePlaybookCandidateQuestionType:
+      plan.responsePlaybookCandidateQuestionType,
+    settledExecutionPlanParentTrajectoryPlaybookId:
+      plan.parentTrajectoryPlaybook?.id,
+    settledExecutionPlanParentTrajectoryPlaybookQuestionType:
+      plan.parentTrajectoryPlaybook?.questionType,
+    settledExecutionPlanParentTrajectoryPlaybookPhase:
+      plan.parentTrajectoryPlaybook?.phase,
     settledExecutionPlanRequiredArtifacts: plan.requiredArtifacts,
     settledExecutionPlanMemoryUseCase: plan.memoryPolicy.useCase,
     settledExecutionPlanMemoryQuestionType:
@@ -793,6 +873,38 @@ function cloneActiveMeetingTask(task: ActiveMeetingTask) {
   return deepFreeze(
     JSON.parse(JSON.stringify(task)) as ActiveMeetingTask
   );
+}
+
+function withInterviewPlaybookPhase(
+  playbook: SelectedInterviewPlaybook | undefined,
+  phase: InterviewPlaybookPhase | undefined
+) {
+  if (!playbook || !phase || playbook.phase === phase) return playbook;
+  return { ...playbook, phase };
+}
+
+function resolveParentTrajectoryPlaybook(
+  task: ActiveMeetingTask
+): SelectedInterviewPlaybook | undefined {
+  const parentQuestionType = normalizeCanonicalQuestionType(
+    task.parent.questionType
+  );
+  if (!parentQuestionType || parentQuestionType === "unknown") {
+    return undefined;
+  }
+  const selection = selectCommittedInterviewPlaybookFromCatalog({
+    questionType: parentQuestionType,
+    query: task.parent.topic,
+    projectAnchor:
+      task.parent.projectBinding?.projectName ??
+      task.parent.projectBinding?.projectId,
+    candidatePlaybook: task.parent.playbook,
+  });
+  const playbook = withInterviewPlaybookPhase(
+    selection.playbook,
+    task.parent.playbookPhase
+  );
+  return playbook ? cloneSelectedPlaybook(playbook) : undefined;
 }
 
 function cloneSelectedPlaybook(playbook: SelectedInterviewPlaybook) {
