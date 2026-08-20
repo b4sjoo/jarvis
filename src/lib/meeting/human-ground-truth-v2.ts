@@ -24,6 +24,10 @@ import {
   type DurableQuestionOwnerMissingReason,
 } from "./question-type-observation.js";
 import {
+  projectQuestionTypeConsumerObservationFromTrace,
+  type QuestionTypeConsumerObservation,
+} from "./question-type-consumer-observation.js";
+import {
   meetingCompanyLabelsEqual,
   projectMeetingMetadataEvaluationObservation,
   type MeetingMetadataEvaluationErrorKind,
@@ -221,6 +225,7 @@ export interface HumanEvaluationObservedSnapshotV2 {
   typeAppliedToParent?: boolean;
   durableOwnerMissing?: boolean;
   durableOwnerMissingReason?: DurableQuestionOwnerMissingReason;
+  questionTypeConsumer?: QuestionTypeConsumerObservation;
   meetingMetadata?: MeetingMetadataEvaluationObservation;
 }
 
@@ -641,6 +646,8 @@ export function buildHumanEvaluationObservedSnapshotV2(
   const meetingMetadata = projectMeetingMetadataEvaluationObservation(
     metadata
   );
+  const questionTypeConsumer =
+    projectQuestionTypeConsumerObservationFromTrace(metadata);
   const traceEvidence = {
     traceId: trace.id,
     questionType,
@@ -659,6 +666,7 @@ export function buildHumanEvaluationObservedSnapshotV2(
     playbookPhase,
     factAnchorState,
     childContinuity,
+    questionTypeConsumer,
     meetingMetadata: meetingMetadata.operationObserved
       ? meetingMetadata
       : undefined,

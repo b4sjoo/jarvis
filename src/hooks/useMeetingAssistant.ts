@@ -415,6 +415,7 @@ import {
   createAdvisorGeneratedContinuityCapsule,
   buildBoundedParentContextHandoff,
   buildCommittedTaskBoundaryParent,
+  buildQuestionTypeConsumerObservation,
   buildSettledAdvisorExecutionPlan,
   commitTaskBoundaryCandidate,
   commitSourceOwnedTransition,
@@ -440,6 +441,7 @@ import {
   formatCurrentQuestionSettlementForTrace,
   settlementAuthorizesFollowupParentScope,
   formatCurrentQuestionTerminalNoAnswerForTrace,
+  formatQuestionTypeConsumerObservationForTrace,
   formatSettledAdvisorExecutionPlanForTrace,
   formatSourceOwnedTransitionForTrace,
   formatTaskBoundaryCandidateForTrace,
@@ -10329,6 +10331,8 @@ export function useMeetingAssistant() {
             taskMutationAuthorization.authorized &&
             sourceOwnedTransitionCommittedBeforeAdvisor,
           providerSnapshot: meetingModelProviderSnapshotRef.current,
+          questionTypePrior:
+            preparationRuntimeReinforcement.questionTypePriorObservation,
           playbook: advisorRuntimePlaybook,
           memoryUseCase: inferMemoryUseCaseFromQuery(
             advisorEvidencePacket.currentQuestion?.text ??
@@ -23011,6 +23015,36 @@ export function useMeetingAssistant() {
               : "none",
             sourceQuestion: screenPrimaryAskEvidenceText,
           });
+        const screenQuestionTypeConsumerObservation =
+          buildQuestionTypeConsumerObservation({
+            prior:
+              screenPreparationRuntime.questionTypePriorObservation,
+            committedCurrentQuestionType:
+              screenCurrentQuestionSettlement?.questionType ??
+              settledScreenQuestionType,
+            responseOwnerQuestionType: settledScreenQuestionType,
+            responsePlaybookQuestionType:
+              screenRuntimePlaybook?.questionType,
+            parentTrajectoryPlaybookQuestionType:
+              provisionalScreenTaskRelation === "child-probe"
+                ? preflightContextState.activeMeetingTask?.parent.playbook
+                    ?.questionType
+                : undefined,
+            parentTrajectoryReadOnly:
+              provisionalScreenTaskRelation === "child-probe",
+            kmbPolicyQuestionType: settledScreenQuestionType,
+            kmbPolicyFamilies:
+              screenRuntimePlaybook?.memoryPolicy.allowedFamilies ?? [],
+            factAnchorPolicyQuestionType:
+              settledScreenQuestionType,
+            modelRouteQuestionType: settledScreenQuestionType,
+            answerProfileQuestionType:
+              settledScreenQuestionType,
+            artifactPolicyQuestionType:
+              settledScreenQuestionType,
+            promptContractQuestionType:
+              settledScreenQuestionType,
+          });
         const screenCapacityEstimationGuardrail =
           resolveCapacityEstimationGuardrail({
             questionType: settledScreenQuestionType,
@@ -23103,6 +23137,9 @@ export function useMeetingAssistant() {
           {
             ...screenModelRouteMetadata,
             ...screenModelGenerationIdentity,
+            ...formatQuestionTypeConsumerObservationForTrace(
+              screenQuestionTypeConsumerObservation
+            ),
             ...formatAnswerGenerationLeaseForTrace(
               screenGenerationLease,
               screenLeaseStartAuthorization,
@@ -27957,6 +27994,11 @@ export function useMeetingAssistant() {
                   childOwnsResponse: false,
                   providerSnapshot:
                     meetingModelProviderSnapshotRef.current,
+                  questionTypePrior:
+                    resolvePreparationRuntimeReinforcement(
+                      preparationRuntimeContextRef.current,
+                      latestContext.interviewSessionBrief
+                    ).questionTypePriorObservation,
                   playbook: correctedPlaybook,
                   memoryUseCase:
                     toMemoryUseCaseForQuestionType(

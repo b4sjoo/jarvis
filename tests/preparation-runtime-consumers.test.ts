@@ -49,6 +49,37 @@ test("disabled and neutral contexts expose no prepared consumer values", () => {
   assert.equal(result.runtimeBrief, undefined);
   assert.deepEqual(result.speechBiasTerms, []);
   assert.equal(result.effectiveInterviewBrief?.targetCompany, "Manual");
+  assert.deepEqual(
+    result.questionTypePriorObservation?.canonicalTypes,
+    ["behavioral"]
+  );
+  assert.equal(
+    result.questionTypePriorObservation?.source,
+    "interview-brief"
+  );
+});
+
+test("preparation type adaptation preserves field knowledge and separates personal logistics policy", () => {
+  const context = createContext();
+  context.projections!.lowImpact.questionTypePrior.value.expectedInterviewTypes = [
+    "field-knowledge",
+    "personal-logistics",
+  ];
+
+  const result = resolvePreparationRuntimeReinforcement(context);
+
+  assert.deepEqual(result.effectiveInterviewBrief?.interviewTypes, []);
+  assert.deepEqual(result.questionTypePriorObservation, {
+    source: "preparation-snapshot",
+    sourceId: "snapshot-1:question-type",
+    rawTypes: ["field-knowledge", "personal-logistics"],
+    canonicalTypes: ["field-knowledge"],
+    policyOnlyTypes: ["personal-logistics"],
+    unsupportedTypes: [],
+    expectedTypePolicy: "restricted",
+    adapterDisposition: "canonical-and-policy",
+    legacyInterviewBriefTypes: [],
+  });
 });
 
 test("prepared speech terms retain high-weight preparation provenance", () => {

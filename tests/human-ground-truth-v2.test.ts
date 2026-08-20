@@ -794,6 +794,57 @@ test("does not treat an authorized child type as a missing durable parent", () =
   assert.equal(observed.durableOwnerMissingReason, undefined);
 });
 
+test("projects type-prior and committed-consumer coherence without another manual label", () => {
+  const trace = {
+    id: "trace_type_consumer",
+    kind: "voice",
+    status: "success",
+    startedAt: 1,
+    steps: [],
+    inputs: [],
+    outputs: [],
+    metadata: {
+      currentQuestionSettlementType: "behavioral",
+      committedCurrentQuestionType: "behavioral",
+      responseOwnerQuestionType: "behavioral",
+      responsePlaybookQuestionType: "behavioral",
+      kmbPolicyQuestionType: "behavioral",
+      kmbPolicyFamilies: ["behavioral"],
+      factAnchorPolicyQuestionType: "behavioral",
+      modelRouteQuestionType: "behavioral",
+      answerProfileQuestionType: "behavioral",
+      artifactPolicyQuestionType: "behavioral",
+      promptContractQuestionType: "behavioral",
+      questionTypePriorSource: "preparation-snapshot",
+      questionTypePriorSourceId: "snapshot-1:question-type-prior",
+      questionTypePriorRawTypes: ["coding", "personal-logistics"],
+      questionTypePriorExpectedTypePolicy: "restricted",
+      priorCompatibility: "conflict",
+      priorUsedAsExecutionGate: false,
+      questionTypeConsumerConflicts: ["prior-vs-committed"],
+      questionTypeConsumerCoherent: false,
+    },
+  } as MeetingTrace;
+
+  const observed = buildHumanEvaluationObservedSnapshotV2(trace);
+
+  assert.deepEqual(observed.questionTypeConsumer?.prior?.canonicalTypes, [
+    "coding",
+  ]);
+  assert.deepEqual(observed.questionTypeConsumer?.prior?.policyOnlyTypes, [
+    "personal-logistics",
+  ]);
+  assert.equal(
+    observed.questionTypeConsumer?.committedCurrentQuestionType,
+    "behavioral"
+  );
+  assert.equal(observed.questionTypeConsumer?.priorCompatibility, "conflict");
+  assert.equal(observed.questionTypeConsumer?.priorUsedAsExecutionGate, false);
+  assert.deepEqual(observed.questionTypeConsumer?.conflicts, [
+    "prior-vs-committed",
+  ]);
+});
+
 function createLegacyEvaluation(
   patch: Partial<QuestionHumanEvaluation>
 ): QuestionHumanEvaluation {

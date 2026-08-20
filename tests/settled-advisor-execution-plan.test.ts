@@ -3,6 +3,7 @@ import test from "node:test";
 import type { ActiveMeetingTask } from "../src/lib/meeting/active-meeting-task.js";
 import type { CurrentQuestionSettlementDecision } from "../src/lib/meeting/current-question-settlement.js";
 import type { MeetingModelProviderSnapshot } from "../src/lib/meeting/meeting-model-route.js";
+import { adaptQuestionTypePrior } from "../src/lib/meeting/question-type-consumer-observation.js";
 import {
   authorizeSettledAdvisorExecutionPlan,
   buildSettledAdvisorExecutionPlan,
@@ -123,6 +124,12 @@ test("builds one immutable coding plan for route, prompt, memory, and artifacts"
     taskBoundaryCommitted: true,
     childOwnsResponse: false,
     providerSnapshot: providers,
+    questionTypePrior: adaptQuestionTypePrior({
+      source: "preparation-snapshot",
+      sourceId: "snapshot-1:question-type-prior",
+      types: ["behavioral"],
+      expectedTypePolicy: "restricted",
+    }),
     playbook: playbook(),
     memoryUseCase: "coding_interview",
     askFrame: "direct-answer",
@@ -620,6 +627,12 @@ test("equivalent settlement inputs produce a stable plan id and compact trace", 
     taskBoundaryCommitted: true,
     childOwnsResponse: false,
     providerSnapshot: providers,
+    questionTypePrior: adaptQuestionTypePrior({
+      source: "preparation-snapshot" as const,
+      sourceId: "snapshot-1:question-type-prior",
+      types: ["behavioral"],
+      expectedTypePolicy: "restricted" as const,
+    }),
     playbook: playbook(),
     memoryUseCase: "coding_interview" as const,
     askFrame: "direct-answer" as const,
@@ -655,6 +668,15 @@ test("equivalent settlement inputs produce a stable plan id and compact trace", 
     trace.settledExecutionPlanDownstreamQuestionTypeAuthority,
     "committed-settlement"
   );
+  assert.deepEqual(trace.questionTypePriorTypes, ["behavioral"]);
+  assert.equal(trace.priorCompatibility, "conflict");
+  assert.equal(trace.priorUsedAsExecutionGate, false);
+  assert.equal(trace.responseOwnerQuestionType, "coding");
+  assert.equal(trace.responsePlaybookQuestionType, "coding");
+  assert.equal(trace.kmbPolicyQuestionType, "coding");
+  assert.deepEqual(trace.questionTypeConsumerConflicts, [
+    "prior-vs-committed",
+  ]);
   assert.equal(trace.settledExecutionPlanResponseIntent, "advise");
   assert.equal(
     trace.settledExecutionPlanContextReadScope,

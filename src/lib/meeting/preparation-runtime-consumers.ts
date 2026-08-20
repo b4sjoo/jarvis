@@ -18,6 +18,11 @@ import type {
   ScreenTaskKind,
   SpeechBiasTerm,
 } from "./types.js";
+import {
+  adaptQuestionTypePrior,
+  type QuestionTypePriorObservation,
+} from "./question-type-consumer-observation.js";
+import { readInterviewBriefType } from "./task-taxonomy.js";
 import type {
   PreparationKmbEvidenceHint,
   PreparationQuestionTypePrior,
@@ -30,6 +35,7 @@ export interface PreparationRuntimeReinforcement {
   effectiveInterviewBrief?: InterviewSessionBrief;
   runtimeBrief?: PreparationRuntimeProjection<PreparationRuntimeBrief>;
   questionTypePrior?: PreparationRuntimeProjection<PreparationQuestionTypePrior>;
+  questionTypePriorObservation?: QuestionTypePriorObservation;
   programmingLanguage?: PreparationRuntimeProjection<string>;
   speechBiasTerms: Array<
     PreparationRuntimeProjection<PreparationSpeechBiasTerm>
@@ -107,19 +113,33 @@ export function resolvePreparationRuntimeReinforcement(
       lowImpact
   );
   if (!enabled || !lowImpact) {
+    const questionTypePriorObservation = fallbackBrief?.interviewTypes.length
+      ? adaptQuestionTypePrior({
+          source: "interview-brief",
+          types: fallbackBrief.interviewTypes,
+        })
+      : undefined;
     return {
       enabled: false,
       effectiveInterviewBrief: fallbackBrief
         ? cloneInterviewBrief(fallbackBrief)
         : undefined,
+      questionTypePriorObservation,
       speechBiasTerms: [],
     };
   }
 
   const runtimeBrief = lowImpact.runtimeBrief.value;
-  const preparedTypes = toInterviewBriefTypes(
-    lowImpact.questionTypePrior.value.expectedInterviewTypes
-  );
+  const questionTypePriorObservation = adaptQuestionTypePrior({
+    source: "preparation-snapshot",
+    sourceId: lowImpact.questionTypePrior.projectionId,
+    types: lowImpact.questionTypePrior.value.expectedInterviewTypes,
+    expectedTypePolicy:
+      lowImpact.questionTypePrior.value.expectedTypePolicy,
+  });
+  const preparedTypes = questionTypePriorObservation.legacyInterviewBriefTypes
+    .map(readInterviewBriefType)
+    .filter((type): type is InterviewBriefType => Boolean(type));
   const targetCompany = runtimeBrief.company?.trim();
   const fallbackTypes = fallbackBrief?.interviewTypes ?? [];
   const effectiveInterviewBrief: InterviewSessionBrief | undefined =
@@ -149,6 +169,7 @@ export function resolvePreparationRuntimeReinforcement(
     effectiveInterviewBrief,
     runtimeBrief: lowImpact.runtimeBrief,
     questionTypePrior: lowImpact.questionTypePrior,
+    questionTypePriorObservation,
     programmingLanguage: lowImpact.programmingLanguage,
     speechBiasTerms: [...lowImpact.speechBiasTerms],
   };
@@ -661,26 +682,6 @@ const SEARCH_STOP_WORDS = new Set([
   "you",
   "your",
 ]);
-
-function toInterviewBriefTypes(
-  types: PreparationQuestionTypePrior["expectedInterviewTypes"]
-): InterviewBriefType[] {
-  const mapped = types
-    .map((type): InterviewBriefType | undefined => {
-      if (type === "general-system-design") return "system-design";
-      if (
-        type === "behavioral" ||
-        type === "coding" ||
-        type === "ai-ml-system-design" ||
-        type === "project-deep-dive"
-      ) {
-        return type;
-      }
-      return undefined;
-    })
-    .filter((type): type is InterviewBriefType => Boolean(type));
-  return Array.from(new Set(mapped));
-}
 
 function cloneInterviewBrief(
   brief: InterviewSessionBrief

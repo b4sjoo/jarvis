@@ -24,6 +24,12 @@ import {
   authorizeResponseArtifactMutation,
   type ResponseArtifactMutationAuthorization,
 } from "./response-artifact-authorization.js";
+import {
+  buildQuestionTypeConsumerObservation,
+  formatQuestionTypeConsumerObservationForTrace,
+  type QuestionTypeConsumerObservation,
+  type QuestionTypePriorObservation,
+} from "./question-type-consumer-observation.js";
 import type {
   AdvisorContextReadScope,
   ResponseOnlyTaskScope,
@@ -132,6 +138,8 @@ export interface SettledAdvisorExecutionPlan {
   postMutationParentRevision?: number;
   responseOwner: MeetingResponseOwnerResolution;
   downstreamQuestionTypeAuthority: "committed-settlement";
+  questionTypePrior?: QuestionTypePriorObservation;
+  questionTypeConsumerObservation: QuestionTypeConsumerObservation;
   modelRoute: MeetingModelRouteResolution;
   responsePlaybook?: SelectedInterviewPlaybook;
   responsePlaybookDisposition:
@@ -181,6 +189,7 @@ export function buildSettledAdvisorExecutionPlan(input: {
   taskBoundaryCommitted: boolean;
   childOwnsResponse: boolean;
   providerSnapshot: MeetingModelProviderSnapshot;
+  questionTypePrior?: QuestionTypePriorObservation;
   playbook?: SelectedInterviewPlaybook;
   memoryUseCase: MemoryUseCase;
   askFrame: TaskAskFrame;
@@ -393,6 +402,24 @@ export function buildSettledAdvisorExecutionPlan(input: {
     transientPersonalStatusDecisionId:
       transientPersonalStatusDecision?.id,
   });
+  const questionTypeConsumerObservation =
+    buildQuestionTypeConsumerObservation({
+      prior: input.questionTypePrior,
+      committedCurrentQuestionType: input.settlement.questionType,
+      responseOwnerQuestionType: responseOwner.questionType,
+      responsePlaybookQuestionType: responsePlaybook?.questionType,
+      parentTrajectoryPlaybookQuestionType:
+        parentTrajectoryPlaybook?.questionType,
+      parentTrajectoryReadOnly: Boolean(parentTrajectoryPlaybook),
+      kmbPolicyQuestionType: responseOwner.questionType,
+      kmbPolicyFamilies:
+        responsePlaybook?.memoryPolicy.allowedFamilies ?? [],
+      factAnchorPolicyQuestionType: responseOwner.questionType,
+      modelRouteQuestionType: responseOwner.questionType,
+      answerProfileQuestionType: responseOwner.questionType,
+      artifactPolicyQuestionType: responseOwner.questionType,
+      promptContractQuestionType: responseOwner.questionType,
+    });
 
   return {
     id: planId,
@@ -422,6 +449,8 @@ export function buildSettledAdvisorExecutionPlan(input: {
     postMutationParentRevision,
     responseOwner,
     downstreamQuestionTypeAuthority: "committed-settlement",
+    questionTypePrior: questionTypeConsumerObservation.prior,
+    questionTypeConsumerObservation,
     modelRoute,
     responsePlaybook: transientPersonalStatusDecision
       ? undefined
@@ -668,6 +697,9 @@ export function formatSettledAdvisorExecutionPlanForTrace(
       plan.responseOwner.source,
     settledExecutionPlanDownstreamQuestionTypeAuthority:
       plan.downstreamQuestionTypeAuthority,
+    ...formatQuestionTypeConsumerObservationForTrace(
+      plan.questionTypeConsumerObservation
+    ),
     settledExecutionPlanModelRoute: plan.modelRoute.route,
     settledExecutionPlanProviderId:
       plan.modelRoute.resolvedProviderId,
