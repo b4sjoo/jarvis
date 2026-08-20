@@ -738,21 +738,31 @@ const ProcessWorkspace = ({
                     )}
                   </div>
                 </div>
-                <Badge variant="outline" className="hidden shrink-0 sm:inline-flex">
-                  {round.expectedTypePolicy}
-                </Badge>
+                {current ? (
+                  <Badge
+                    className="shrink-0 rounded-sm text-[10px]"
+                    aria-label={`${round.title} is the current interview round`}
+                  >
+                    Current
+                  </Badge>
+                ) : null}
               </button>
               <div className="flex shrink-0 items-center pr-1">
-                <Button
-                  size="icon"
-                  variant={current ? "secondary" : "ghost"}
-                  className="shrink-0"
-                  title={current ? `${round.title} is current` : `Set ${round.title} as current`}
-                  disabled={current || detail.process.status === "archived"}
-                  onClick={() => onSetCurrentRound(round)}
-                >
-                  <Crosshair className="size-4" />
-                </Button>
+                <div className="flex size-9 shrink-0 items-center justify-center">
+                  {!current ? (
+                    <Button
+                      size="icon"
+                      variant="ghost"
+                      className="shrink-0"
+                      title={`Set ${round.title} as current`}
+                      aria-label={`Set ${round.title} as current`}
+                      disabled={detail.process.status === "archived"}
+                      onClick={() => onSetCurrentRound(round)}
+                    >
+                      <Crosshair className="size-4" />
+                    </Button>
+                  ) : null}
+                </div>
                 <Button
                   size="icon"
                   variant="ghost"

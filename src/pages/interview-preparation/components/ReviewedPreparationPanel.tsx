@@ -839,7 +839,7 @@ const SnapshotReviewDialog = ({
             Review snapshot{snapshot ? ` v${snapshot.version}` : ""}
           </DialogTitle>
           <DialogDescription>
-            This immutable package is still isolated from Meeting Assistant. Activation only selects the version for future runtime wiring.
+            Activation selects this immutable package for future Meeting Assistant sessions. A session already in progress keeps its pinned version.
           </DialogDescription>
         </DialogHeader>
         {snapshot && (
