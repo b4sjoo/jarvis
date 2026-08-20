@@ -45,10 +45,16 @@ export function buildHumanEvaluationProjectionMaterializationRevisionV2<
 }
 
 export function canRefreshHumanEvaluationProjectionFromTraceV2(
-  projection: { observed?: { traceId: string } },
+  projection: {
+    subject?: { attemptId?: string };
+    observed?: { traceId: string };
+  },
   traceId: string
 ) {
-  return projection.observed?.traceId === traceId;
+  return (
+    projection.subject?.attemptId === traceId ||
+    projection.observed?.traceId === traceId
+  );
 }
 
 export function summarizeHumanEvaluationProjectionMaterializationV2<

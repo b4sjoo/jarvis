@@ -5,6 +5,7 @@ import {
   buildQuestionEvaluationPatchFromTrace,
   persistQuestionHumanEvaluations,
   readQuestionHumanEvaluations,
+  resolveSettledAttemptEvaluationTarget,
   resolveSuggestionQuestionLineage,
   resolveVisibleAnswerEvaluationTarget,
   upsertQuestionHumanEvaluation,
@@ -31,6 +32,29 @@ function buildSuggestion(
   };
 }
 
+function buildSettledTrace(
+  id: string,
+  kind: MeetingTrace["kind"],
+  status: MeetingTrace["status"],
+  questionId: string
+): MeetingTrace {
+  return {
+    id,
+    kind,
+    status,
+    startedAt: 1,
+    steps: [],
+    inputs: [],
+    outputs: [],
+    metadata: {
+      currentQuestionSettlementId: `settlement:${id}`,
+      currentQuestionSettlementUnitId: questionId,
+      currentQuestionSettlementSessionId: "session_1",
+      currentQuestionSettlementSourceHash: `hash:${id}`,
+    },
+  };
+}
+
 test("binds evaluation to the visible answer instead of a newer trace", () => {
   assert.deepEqual(
     resolveVisibleAnswerEvaluationTarget({
@@ -41,6 +65,111 @@ test("binds evaluation to the visible answer instead of a newer trace", () => {
     {
       status: "ready",
       traceId: "trace_answer",
+      reason: "visible-answer-source",
+    }
+  );
+});
+
+test("binds evaluation to a newer failed screen attempt instead of an old visible voice answer", () => {
+  assert.deepEqual(
+    resolveSettledAttemptEvaluationTarget({
+      suggestion: buildSuggestion("suggestion_voice", "trace_voice"),
+      traces: [
+        buildSettledTrace(
+          "trace_screen",
+          "screen",
+          "error",
+          "question_screen"
+        ),
+        buildSettledTrace(
+          "trace_voice",
+          "voice",
+          "success",
+          "question_voice"
+        ),
+      ],
+      currentSessionId: "session_1",
+    }),
+    {
+      status: "trace-only",
+      traceId: "trace_screen",
+      reason: "latest-settled-attempt",
+    }
+  );
+});
+
+test("keeps a cancelled screen attempt as an independent evaluation target", () => {
+  assert.equal(
+    resolveSettledAttemptEvaluationTarget({
+      suggestion: buildSuggestion("suggestion_voice", "trace_voice"),
+      traces: [
+        buildSettledTrace(
+          "trace_screen",
+          "screen",
+          "cancelled",
+          "question_screen"
+        ),
+        buildSettledTrace(
+          "trace_voice",
+          "voice",
+          "success",
+          "question_voice"
+        ),
+      ],
+      currentSessionId: "session_1",
+    }).traceId,
+    "trace_screen"
+  );
+});
+
+test("shows a settled running attempt as pending without falling back", () => {
+  assert.deepEqual(
+    resolveSettledAttemptEvaluationTarget({
+      suggestion: buildSuggestion("suggestion_old", "trace_old"),
+      answerInProgress: true,
+      traces: [
+        buildSettledTrace(
+          "trace_running",
+          "voice",
+          "running",
+          "question_running"
+        ),
+      ],
+      currentSessionId: "session_1",
+    }),
+    {
+      status: "pending",
+      traceId: "trace_running",
+      reason: "settled-attempt-in-progress",
+    }
+  );
+});
+
+test("ignores newer traces that do not yet have a stable settlement", () => {
+  const settled = buildSettledTrace(
+    "trace_settled",
+    "voice",
+    "success",
+    "question_settled"
+  );
+  const unsettled = {
+    ...buildSettledTrace(
+      "trace_unsettled",
+      "screen",
+      "running",
+      "question_unsettled"
+    ),
+    metadata: {},
+  };
+  assert.deepEqual(
+    resolveSettledAttemptEvaluationTarget({
+      suggestion: buildSuggestion("suggestion_settled", "trace_settled"),
+      traces: [unsettled, settled],
+      currentSessionId: "session_1",
+    }),
+    {
+      status: "ready",
+      traceId: "trace_settled",
       reason: "visible-answer-source",
     }
   );

@@ -16,6 +16,7 @@ import type {
   PersonalStatusDomain,
 } from "./types";
 import { normalizeMemoryRetrievalEvaluationSnapshot } from "./memory-evaluation.js";
+import { resolveHumanEvaluationAttemptIdentityV2 } from "./human-evaluation-attempt.js";
 import {
   fromHumanEvalQuestionType,
   normalizeCanonicalQuestionType,
@@ -71,11 +72,59 @@ export interface VisibleAnswerEvaluationTarget {
   traceId?: string;
   reason:
     | "visible-answer-source"
+    | "latest-settled-attempt"
+    | "settled-attempt-in-progress"
     | "latest-trace-without-suggestion"
     | "partial-answer-in-progress"
     | "suggestion-source-trace-missing"
     | "suggestion-source-id-missing"
     | "no-evaluation-target";
+}
+
+export function resolveSettledAttemptEvaluationTarget(input: {
+  suggestion: AdvisorSuggestion | null | undefined;
+  answerInProgress?: boolean;
+  traces: MeetingTrace[];
+  currentSessionId?: string;
+}): VisibleAnswerEvaluationTarget {
+  const attempt = input.traces.find((trace) => {
+    const identity = resolveHumanEvaluationAttemptIdentityV2(trace);
+    return Boolean(
+      identity &&
+        (!input.currentSessionId ||
+          identity.sessionId === input.currentSessionId)
+    );
+  });
+  if (!attempt) {
+    return resolveVisibleAnswerEvaluationTarget({
+      suggestion: input.suggestion,
+      answerInProgress: input.answerInProgress,
+      traces: input.traces,
+      latestTraceId: input.traces[0]?.id,
+    });
+  }
+
+  if (attempt.status === "running") {
+    return {
+      status: "pending",
+      traceId: attempt.id,
+      reason: "settled-attempt-in-progress",
+    };
+  }
+
+  if (input.suggestion?.sourceTraceId === attempt.id) {
+    return {
+      status: "ready",
+      traceId: attempt.id,
+      reason: "visible-answer-source",
+    };
+  }
+
+  return {
+    status: "trace-only",
+    traceId: attempt.id,
+    reason: "latest-settled-attempt",
+  };
 }
 
 export function resolveVisibleAnswerEvaluationTarget(input: {

@@ -764,6 +764,7 @@ export function formatProvisionalCurrentQuestionForTrace(
     currentQuestionSourceKind: question.sourceKind,
     currentQuestionSourceHash: question.sourceHash,
     currentQuestionChars: question.normalizedText.length,
+    currentQuestionPreview: previewCurrentQuestion(question.normalizedText),
     currentQuestionState: "provisional",
   };
 }
@@ -1332,6 +1333,13 @@ function uniqueStrings(values: string[]) {
   return Array.from(
     new Set(values.map((value) => value.trim()).filter(Boolean))
   );
+}
+
+function previewCurrentQuestion(value: string) {
+  const normalized = value.replace(/\s+/g, " ").trim();
+  return normalized.length > 240
+    ? `${normalized.slice(0, 237)}...`
+    : normalized;
 }
 
 function uniqueRejectionReasons(

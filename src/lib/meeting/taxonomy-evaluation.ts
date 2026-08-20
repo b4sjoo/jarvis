@@ -131,6 +131,7 @@ export interface PrivateHumanEvaluationProjectionRecord {
   materializationRevision?: string;
   sessionId?: string;
   subject?: {
+    attemptId?: string;
     questionId?: string;
     traceIds?: string[];
     sourceTurnIds?: string[];
@@ -152,6 +153,7 @@ export type PrivateTaxonomyImportWarningCode =
   | "v2-conflicting-facts"
   | "v2-suggested-type-skipped"
   | "v2-imported-legacy-fallback"
+  | "attempt-subject-missing"
   | "ambiguous-subject-match"
   | "missing-source-turn"
   | "projection-history-fallback"
@@ -461,6 +463,13 @@ export function importPrivateTaxonomySessionCorpus({
     PrivateHumanEvaluationProjectionRecord
   >();
   for (const projection of projections) {
+    if (!projection.subject?.attemptId?.trim()) {
+      warnings.push({
+        code: "attempt-subject-missing",
+        detail: projection.projectionId,
+      });
+      continue;
+    }
     const key = resolvePrivateProjectionSubjectKey(
       projection,
       evaluations

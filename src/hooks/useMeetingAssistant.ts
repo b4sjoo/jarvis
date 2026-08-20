@@ -42,6 +42,8 @@ import {
 } from "@/lib/meeting/meeting-metadata-inference-request";
 import { formatRuntimeInferenceProviderOutcomeForTrace } from "@/lib/meeting/runtime-inference-response";
 import { buildManualScreenLogicalQuestionUnit } from "@/lib/meeting/manual-screen-question-source";
+import { materializeHumanEvaluationAttemptProjectionV2 } from "@/lib/meeting/human-evaluation-attempt-projection";
+import { validateHumanEvaluationAttemptSubjectV2 } from "@/lib/meeting/human-evaluation-attempt";
 import {
   AdvisorEngine,
   buildAdvisorEvidencePacket,
@@ -562,7 +564,6 @@ import {
   appendHumanGroundTruthEventV2,
   buildHumanEvaluationObservedSnapshotV2,
   buildHumanGroundTruthSubjectV2,
-  canRefreshHumanEvaluationProjectionFromTraceV2,
   createHumanGroundTruthEventV2,
   deriveHumanEvaluationProjectionV2,
   findActiveHumanGroundTruthEventV2,
@@ -574,7 +575,6 @@ import {
   type HumanGroundTruthEvaluationTargetV2,
   type HumanGroundTruthSubjectV2,
   type HumanGroundTruthSource,
-  type HumanEvaluationProjectionV2,
   type HumanEvaluationObservedSnapshotV2,
   upsertCriticalMomentEvaluation,
   buildCriticalMomentCandidates,
@@ -3007,49 +3007,21 @@ export function useMeetingAssistant() {
 
   const refreshHumanEvaluationObservedProjectionForTrace = useCallback(
     (trace: MeetingTrace) => {
-      const current = humanEvaluationProjectionsV2Ref.current;
-      const matching = current.filter((projection) =>
-        canRefreshHumanEvaluationProjectionFromTraceV2(
-          projection,
-          trace.id
-        )
-      );
-      if (!matching.length) return;
+      const result = materializeHumanEvaluationAttemptProjectionV2({
+        trace,
+        currentSessionId: contextManagerRef.current.getState().sessionId,
+        events: humanGroundTruthEventsV2Ref.current,
+        projections: humanEvaluationProjectionsV2Ref.current,
+      });
+      if (!result.changed || !result.projection) return;
 
-      const observed = buildHumanEvaluationObservedSnapshotV2(trace);
-      const replacements = new Map<string, HumanEvaluationProjectionV2>();
-      for (const projection of matching) {
-        if (projection.observed?.traceHash === observed.traceHash) continue;
-        const legacyEvaluation = questionEvaluationsRef.current.find(
-          (evaluation) =>
-            evaluation.questionId === projection.subject.questionId ||
-            evaluation.traceIds.some((traceId) =>
-              projection.subject.traceIds.includes(traceId)
-            )
-        );
-        const refreshed = deriveHumanEvaluationProjectionV2({
-          sessionId: projection.sessionId,
-          subject: projection.subject,
-          events: humanGroundTruthEventsV2Ref.current,
-          observed,
-          legacyEvaluation,
-        });
-        replacements.set(projection.projectionId, refreshed);
-      }
-      if (!replacements.size) return;
-
-      const next = current.map(
-        (projection) =>
-          replacements.get(projection.projectionId) ?? projection
-      );
+      const next = result.projections;
       humanEvaluationProjectionsV2Ref.current = next;
       persistHumanEvaluationProjectionsV2(next);
       setHumanEvaluationProjectionsV2(next);
-      for (const projection of replacements.values()) {
-        sessionRecordingManagerRef.current?.recordHumanEvaluationProjectionV2(
-          projection
-        );
-      }
+      sessionRecordingManagerRef.current?.recordHumanEvaluationProjectionV2(
+        result.projection
+      );
     },
     []
   );
@@ -6818,6 +6790,21 @@ export function useMeetingAssistant() {
       observed,
       legacyEvaluation,
     }: CommitHumanGroundTruthInputV2) => {
+      const subjectIdentity = validateHumanEvaluationAttemptSubjectV2({
+        subject,
+        sourceTraceId,
+      });
+      if (!subjectIdentity.valid) {
+        if (sourceTraceId) {
+          traceStoreRef.current.updateMetadata(sourceTraceId, {
+            humanEvaluationSubjectWriteRejected: true,
+            humanEvaluationSubjectWriteRejectReason:
+              subjectIdentity.reason,
+            humanEvaluationSubjectAttemptId: subject.attemptId,
+          });
+        }
+        return;
+      }
       const source = options.source ?? "explicit-ui";
       const sessionEvents = humanGroundTruthEventsV2Ref.current.filter(
         (candidate) => candidate.sessionId === sessionId
@@ -6898,16 +6885,10 @@ export function useMeetingAssistant() {
       const sessionId =
         recordingState?.sessionId ??
         contextManagerRef.current.getState().sessionId;
-      const questionId = readStringFromTraceMetadata(
-        trace.metadata,
-        "questionInstanceId"
-      );
       const evaluation =
         options.evaluation ??
         questionEvaluationsRef.current.find(
-          (candidate) =>
-            candidate.traceIds.includes(traceId) ||
-            (questionId && candidate.questionId === questionId)
+          (candidate) => candidate.traceIds.includes(traceId)
         );
       const derivedSubject = buildHumanGroundTruthSubjectV2({
         trace,
@@ -6916,6 +6897,10 @@ export function useMeetingAssistant() {
       const frozenTarget = options.evaluationTarget;
       const subject = frozenTarget
         ? {
+            attemptId:
+              frozenTarget.attemptId ??
+              frozenTarget.sourceTraceId ??
+              trace.id,
             questionId:
               frozenTarget.questionId ?? derivedSubject.questionId,
             taskId: frozenTarget.taskId ?? derivedSubject.taskId,
@@ -7118,8 +7103,8 @@ export function useMeetingAssistant() {
 
   const recordCompletedTracesForSession = useCallback((traces: MeetingTrace[]) => {
     for (const trace of traces) {
-      if (trace.status === "running") continue;
       refreshHumanEvaluationObservedProjectionForTrace(trace);
+      if (trace.status === "running") continue;
       if (!sessionRecordingManagerRef.current?.canRecordTrace(trace)) continue;
       if (sessionRecordedTraceIdsRef.current.has(trace.id)) continue;
       sessionRecordedTraceIdsRef.current.add(trace.id);
@@ -25961,6 +25946,8 @@ export function useMeetingAssistant() {
             uiSurface: source,
             evaluation,
             evaluationTarget: {
+              attemptId:
+                correctionQuestion.sourceTraceId ?? correctionTrace.id,
               questionId,
               taskId: correctedActiveTask.parent.id,
               logicalQuestionUnitId: correctionLogicalQuestionUnit.id,
@@ -26630,6 +26617,7 @@ export function useMeetingAssistant() {
         repairTraceId: repairTrace.id,
         uiSurface: "meeting-response-actions",
         evaluationTarget: {
+          attemptId: target.presentation.originalTraceId,
           questionId: target.questionLineage.questionInstanceId,
           taskId: activeContextState.activeMeetingTask?.parent.id,
           logicalQuestionUnitId: target.logicalQuestionUnit.id,

@@ -13,6 +13,7 @@ import type {
   InterviewPlaybookPhase,
   InterviewTaskRelation,
   MeetingTrace,
+  MeetingTraceStatus,
   ProjectTrajectoryChildContinuity,
   QuestionHumanEvaluation,
   HumanEvaluationCollectionProvenance,
@@ -37,7 +38,7 @@ import {
 
 export const HUMAN_GROUND_TRUTH_SCHEMA_VERSION = 2 as const;
 export const HUMAN_EVALUATION_DERIVATION_VERSION =
-  "human-evaluation-v2.7";
+  "human-evaluation-v2.8";
 
 export type HumanGroundTruthConfirmation = "confirmed" | "suggested";
 
@@ -50,6 +51,7 @@ export type HumanGroundTruthSource =
   | "imported-legacy";
 
 export interface HumanGroundTruthSubjectV2 {
+  attemptId?: string;
   questionId?: string;
   momentId?: string;
   taskId?: string;
@@ -65,6 +67,7 @@ export interface HumanGroundTruthInteractionV2 {
 }
 
 export interface HumanGroundTruthEvaluationTargetV2 {
+  attemptId?: string;
   questionId?: string;
   taskId?: string;
   logicalQuestionUnitId?: string;
@@ -192,6 +195,7 @@ export interface HumanGroundTruthEventV2 {
 export interface HumanEvaluationObservedSnapshotV2 {
   traceId: string;
   traceHash: string;
+  attemptStatus?: MeetingTraceStatus;
   questionType?: CanonicalQuestionType;
   relation?: InterviewTaskRelation;
   parentAction?: HumanExpectedParentAction;
@@ -650,6 +654,7 @@ export function buildHumanEvaluationObservedSnapshotV2(
     projectQuestionTypeConsumerObservationFromTrace(metadata);
   const traceEvidence = {
     traceId: trace.id,
+    attemptStatus: trace.status,
     questionType,
     relation,
     parentAction,
@@ -750,6 +755,7 @@ export function buildHumanGroundTruthSubjectV2(input: {
 }) {
   const metadata = input.trace.metadata ?? {};
   return normalizeSubject({
+    attemptId: input.trace.id,
     questionId:
       input.evaluation?.questionId ??
       readString(metadata.questionInstanceId) ??
@@ -964,6 +970,13 @@ function subjectsMatch(
   left: HumanGroundTruthSubjectV2,
   right: HumanGroundTruthSubjectV2
 ) {
+  if (left.attemptId || right.attemptId) {
+    return Boolean(
+      left.attemptId &&
+        right.attemptId &&
+        left.attemptId === right.attemptId
+    );
+  }
   if (left.questionId && right.questionId) {
     return left.questionId === right.questionId;
   }
@@ -975,7 +988,8 @@ function subjectsMatch(
 
 function subjectKey(subject: HumanGroundTruthSubjectV2) {
   return fingerprint(
-    subject.questionId ??
+    subject.attemptId ??
+      subject.questionId ??
       subject.momentId ??
       subject.taskId ??
       subject.traceIds.join(":") ??
@@ -990,7 +1004,9 @@ function uniqueFactKinds(events: HumanGroundTruthEventV2[]) {
 function normalizeSubject(
   subject: HumanGroundTruthSubjectV2
 ): HumanGroundTruthSubjectV2 {
+  const attemptId = cleanOptional(subject.attemptId);
   return {
+    ...(attemptId ? { attemptId } : {}),
     questionId: cleanOptional(subject.questionId),
     momentId: cleanOptional(subject.momentId),
     taskId: cleanOptional(subject.taskId),
@@ -1213,6 +1229,7 @@ function normalizeEvent(value: unknown) {
     eventId: value.eventId,
     sessionId: value.sessionId,
     subject: {
+      attemptId: readString(value.subject.attemptId),
       questionId: readString(value.subject.questionId),
       momentId: readString(value.subject.momentId),
       taskId: readString(value.subject.taskId),
@@ -1323,7 +1340,9 @@ function normalizeEvaluationTarget(
   )
     ? Math.max(0, Math.floor(value.logicalQuestionUnitRevision!))
     : undefined;
+  const attemptId = cleanOptional(value.attemptId);
   return {
+    ...(attemptId ? { attemptId } : {}),
     questionId: cleanOptional(value.questionId),
     taskId: cleanOptional(value.taskId),
     logicalQuestionUnitId: cleanOptional(value.logicalQuestionUnitId),
@@ -1345,6 +1364,7 @@ function normalizeStoredEvaluationTarget(
   if (!isRecord(value)) return undefined;
   return normalizeEvaluationTarget(
     {
+      attemptId: readString(value.attemptId),
       questionId: readString(value.questionId),
       taskId: readString(value.taskId),
       logicalQuestionUnitId: readString(value.logicalQuestionUnitId),
@@ -1375,6 +1395,14 @@ function normalizeProjection(value: unknown) {
   const inputEventIds = readStringArray(value.inputEventIds);
   return {
     ...value,
+    subject: normalizeSubject({
+      attemptId: readString(value.subject.attemptId),
+      questionId: readString(value.subject.questionId),
+      momentId: readString(value.subject.momentId),
+      taskId: readString(value.subject.taskId),
+      traceIds: readStringArray(value.subject.traceIds),
+      sourceTurnIds: readStringArray(value.subject.sourceTurnIds),
+    }),
     inputEventIds,
     semanticInputEventIds: Array.isArray(value.semanticInputEventIds)
       ? readStringArray(value.semanticInputEventIds)

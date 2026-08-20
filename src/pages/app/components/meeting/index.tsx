@@ -106,7 +106,7 @@ import {
   resolveCodingArtifactDisplay,
   resolveWhiteboardArtifactDisplay,
   readProjectBindingClarifyingCandidates,
-  resolveVisibleAnswerEvaluationTarget,
+  resolveSettledAttemptEvaluationTarget,
   resolveTraceMemoryEvaluationSnapshot,
   selectPreparationArtifactUseReceiptsForEvaluation,
   stripOuterCodeFence,
@@ -642,18 +642,18 @@ export const MeetingAssistant = ({
   );
   const evaluationTarget = useMemo(
     () =>
-      resolveVisibleAnswerEvaluationTarget({
+      resolveSettledAttemptEvaluationTarget({
         suggestion: meeting.latestSuggestion,
         answerInProgress:
           meeting.status === "thinking" &&
           Boolean(meeting.partialSuggestion.trim()),
         traces: meeting.traces,
-        latestTraceId: latestTrace?.id,
+        currentSessionId: meeting.sessionRecording.sessionId,
       }),
     [
-      latestTrace?.id,
       meeting.latestSuggestion,
       meeting.partialSuggestion,
+      meeting.sessionRecording.sessionId,
       meeting.status,
       meeting.traces,
     ]
@@ -667,19 +667,37 @@ export const MeetingAssistant = ({
       )
     : undefined;
   const answerQuestionEvaluation = evaluationTrace
-    ? meeting.questionEvaluations.find((evaluation) =>
-        evaluation.traceIds.includes(evaluationTrace.id)
+    ? meeting.questionEvaluations.find(
+        (evaluation) =>
+          evaluation.traceIds[0] === evaluationTrace.id ||
+          evaluation.questionId === `trace:${evaluationTrace.id}`
       )
     : undefined;
   const answerEvaluationProjectionV2 = evaluationTrace
     ? meeting.humanEvaluationProjectionsV2.find(
         (projection) =>
-          projection.subject.traceIds.includes(evaluationTrace.id) ||
-          (answerQuestionEvaluation?.questionId &&
-            projection.subject.questionId ===
-              answerQuestionEvaluation.questionId)
+          projection.subject.attemptId === evaluationTrace.id
+      ) ??
+      meeting.humanEvaluationProjectionsV2.find(
+        (projection) =>
+          !projection.subject.attemptId &&
+          projection.observed?.traceId === evaluationTrace.id
       )
     : undefined;
+  const evaluationTaskId =
+    answerEvaluationProjectionV2?.subject.taskId ??
+    (typeof evaluationTrace?.metadata?.activeMeetingTaskId === "string"
+      ? evaluationTrace.metadata.activeMeetingTaskId
+      : typeof evaluationTrace?.metadata?.taskId === "string"
+        ? evaluationTrace.metadata.taskId
+        : undefined);
+  const evaluationQuestionSummary =
+    answerEvaluationProjectionV2?.observed?.primaryAsk ??
+    (typeof evaluationTrace?.metadata?.currentQuestionPreview === "string"
+      ? evaluationTrace.metadata.currentQuestionPreview
+      : typeof evaluationTrace?.metadata?.primaryAskNormalizedText === "string"
+        ? evaluationTrace.metadata.primaryAskNormalizedText
+        : undefined);
   const answerMemoryEvaluationSnapshot =
     resolveTraceMemoryEvaluationSnapshot(evaluationTrace);
   const answerPreparationArtifactUses = useMemo(() => {
@@ -2580,10 +2598,45 @@ export const MeetingAssistant = ({
               evaluationTarget.status !== "none" ? (
                 <section className="min-w-0 overflow-hidden rounded-md border border-border/70 p-3">
                   <div className="mb-2 text-xs font-semibold">
-                    {evaluationTarget.status === "trace-only"
-                      ? "Trace evaluation"
-                      : "Answer evaluation"}
+                    Attempt evaluation
                   </div>
+                  {evaluationTrace ? (
+                    <div className="mb-3 space-y-1 border-b border-border/50 pb-2 text-[10px] text-muted-foreground">
+                      <div className="flex min-w-0 items-center justify-between gap-2">
+                        <span className="font-medium text-foreground">
+                          {evaluationTrace.kind === "screen"
+                            ? "Screen"
+                            : "Voice"}
+                        </span>
+                        <span className="shrink-0 font-mono">
+                          {evaluationTrace.status}
+                          {answerEvaluationProjectionV2?.observed
+                            ?.advisorOutcome
+                            ? ` / ${answerEvaluationProjectionV2.observed.advisorOutcome}`
+                            : ""}
+                        </span>
+                      </div>
+                      {evaluationQuestionSummary ? (
+                        <div className="break-words text-foreground">
+                          {evaluationQuestionSummary}
+                        </div>
+                      ) : null}
+                      <div
+                        className="truncate font-mono"
+                        title={evaluationTrace.id}
+                      >
+                        trace: {evaluationTrace.id}
+                      </div>
+                      {evaluationTaskId ? (
+                        <div
+                          className="truncate font-mono"
+                          title={evaluationTaskId}
+                        >
+                          task: {evaluationTaskId}
+                        </div>
+                      ) : null}
+                    </div>
+                  ) : null}
                   {evaluationTarget.status === "pending" ? (
                     <div className="text-[10px] text-muted-foreground">
                       Evaluation is available after the answer finishes.
@@ -2595,9 +2648,6 @@ export const MeetingAssistant = ({
                     </div>
                   ) : evaluationTrace ? (
                     <>
-                      <div className="mb-2 truncate text-[10px] text-muted-foreground">
-                        Evaluating: {formatTraceTitle(evaluationTrace)}
-                      </div>
                       <TraceHumanEvaluationPanel
                         trace={evaluationTrace}
                         detectedQuestionType={formatDetectedQuestionType(

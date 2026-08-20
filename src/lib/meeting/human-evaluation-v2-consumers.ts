@@ -66,7 +66,8 @@ export interface HumanEvaluationV2CompatibilityReport {
       | "v2-only-projection"
       | "v2-conflicting-facts"
       | "v1-lossy-field"
-      | "observed-runtime-mismatch";
+      | "observed-runtime-mismatch"
+      | "attempt-subject-missing";
     subjectId: string;
     detail: string;
   }>;
@@ -75,6 +76,24 @@ export interface HumanEvaluationV2CompatibilityReport {
 export interface HumanEvaluationV2ConsumerProjection {
   evaluations: QuestionHumanEvaluation[];
   report: HumanEvaluationV2CompatibilityReport;
+}
+
+export function partitionHumanEvaluationProjectionsForPrecisionV2(
+  projections: HumanEvaluationProjectionV2[]
+) {
+  const eligible: HumanEvaluationProjectionV2[] = [];
+  const excluded: HumanEvaluationProjectionV2[] = [];
+  for (const projection of projections) {
+    if (
+      projection.subject.attemptId ||
+      projection.subject.momentId
+    ) {
+      eligible.push(projection);
+    } else {
+      excluded.push(projection);
+    }
+  }
+  return { eligible, excluded };
 }
 
 export function projectHumanEvaluationsForLegacyConsumers(input: {

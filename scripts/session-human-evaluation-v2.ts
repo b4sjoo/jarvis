@@ -1,6 +1,7 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import {
+  partitionHumanEvaluationProjectionsForPrecisionV2,
   projectHumanEvaluationsForLegacyConsumers,
   type HumanEvaluationV2CompatibilityReport,
 } from "../src/lib/meeting/human-evaluation-v2-consumers.js";
@@ -61,12 +62,25 @@ export async function loadSessionHumanEvaluationConsumerView(
       groundTruthEventCount: groundTruthEvents.length,
       recorded: v2Payload.materialization,
     });
+  const precisionPartition =
+    partitionHumanEvaluationProjectionsForPrecisionV2(
+      v2Payload.projections ?? []
+    );
+  const consumerView = projectHumanEvaluationsForLegacyConsumers({
+    evaluations: v1Payload.evaluations ?? [],
+    projections: precisionPartition.eligible,
+  });
+  for (const projection of precisionPartition.excluded) {
+    consumerView.report.warnings.push({
+      code: "attempt-subject-missing",
+      subjectId: projection.projectionId,
+      detail:
+        "Excluded from V2 precision evidence because the question projection has no stable attempt identity.",
+    });
+  }
   return {
-    ...projectHumanEvaluationsForLegacyConsumers({
-      evaluations: v1Payload.evaluations ?? [],
-      projections: v2Payload.projections ?? [],
-    }),
-    projections: v2Payload.projections ?? [],
+    ...consumerView,
+    projections: precisionPartition.eligible,
     materialization,
   };
 }

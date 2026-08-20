@@ -172,6 +172,7 @@ test("prefers confirmed native V2 labels and binds their exact source turns", ()
       {
         projectionId: "projection-1",
         subject: {
+          attemptId: "trace-attempt-1",
           questionId: "question-1",
           sourceTurnIds: ["turn-1", "turn-2"],
         },
@@ -267,6 +268,7 @@ test("deduplicates imported legacy V2 mirrors and skips unresolved V2 labels", (
       {
         projectionId: "projection-suggested",
         subject: {
+          attemptId: "trace-attempt-suggested",
           questionId: "question-suggested",
           sourceTurnIds: ["turn-suggested"],
         },
@@ -289,6 +291,7 @@ test("deduplicates imported legacy V2 mirrors and skips unresolved V2 labels", (
       {
         projectionId: "projection-conflict",
         subject: {
+          attemptId: "trace-attempt-conflict",
           questionId: "question-conflict",
           sourceTurnIds: ["turn-conflict"],
         },
@@ -337,13 +340,13 @@ test("deduplicates imported legacy V2 mirrors and skips unresolved V2 labels", (
   assert.equal(result.examples.length, 1);
   assert.equal(result.examples[0].expectedType, "coding");
   assert.ok(result.examples[0].tags.includes("v1-compatible-label"));
-  assert.equal(result.stats.importedLegacyProjectionCount, 1);
+  assert.equal(result.stats.importedLegacyProjectionCount, 0);
   assert.equal(result.stats.suggestedSkippedCount, 1);
   assert.equal(result.stats.conflictSkippedCount, 1);
   assert.equal(result.stats.importedCount, 1);
   assert.ok(
     result.warnings.some(
-      (warning) => warning.code === "v2-imported-legacy-fallback"
+      (warning) => warning.code === "attempt-subject-missing"
     )
   );
 });

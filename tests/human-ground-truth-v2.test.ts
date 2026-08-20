@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   appendHumanGroundTruthEventV2,
   buildHumanEvaluationObservedSnapshotV2,
+  buildHumanGroundTruthSubjectV2,
   createHumanGroundTruthEventV2,
   deriveHumanEvaluationProjectionV2,
   evaluateTaskSettlementTupleCompatibilityV2,
@@ -14,6 +15,11 @@ import {
   canRefreshHumanEvaluationProjectionFromTraceV2,
   summarizeHumanEvaluationProjectionMaterializationV2,
 } from "../src/lib/meeting/human-evaluation-projection-materialization.js";
+import {
+  resolveHumanEvaluationAttemptIdentityV2,
+  validateHumanEvaluationAttemptSubjectV2,
+} from "../src/lib/meeting/human-evaluation-attempt.js";
+import { materializeHumanEvaluationAttemptProjectionV2 } from "../src/lib/meeting/human-evaluation-attempt-projection.js";
 import type {
   MeetingTrace,
   QuestionHumanEvaluation,
@@ -25,6 +31,221 @@ const SUBJECT = {
   traceIds: ["trace_1"],
   sourceTurnIds: ["turn_1"],
 };
+
+function buildSettledAttemptTrace(input: {
+  id: string;
+  status: MeetingTrace["status"];
+  questionId?: string;
+  questionType?: string;
+}): MeetingTrace {
+  return {
+    id: input.id,
+    kind: "voice",
+    status: input.status,
+    startedAt: 1,
+    steps: [],
+    inputs: [],
+    outputs: [],
+    metadata: {
+      questionInstanceId: input.questionId ?? "question_retry",
+      activeMeetingTaskId: "task_retry",
+      currentQuestionSettlementId: `settlement:${input.id}`,
+      currentQuestionSettlementUnitId: "lqu_retry",
+      currentQuestionSettlementSessionId: "session_retry",
+      currentQuestionSettlementSourceHash: `hash:${input.id}`,
+      currentQuestionSettlementType:
+        input.questionType ?? "general-system-design",
+      currentQuestionSettlementRelation: "new-parent",
+      currentQuestionSettlementParentMutationAuthorized: true,
+      currentQuestionPreview: "Design a reliable service.",
+    },
+  };
+}
+
+test("creates attempt-scoped subjects after settlement identity is stable", () => {
+  const trace = buildSettledAttemptTrace({
+    id: "trace_attempt",
+    status: "error",
+  });
+  assert.deepEqual(resolveHumanEvaluationAttemptIdentityV2(trace), {
+    attemptId: "trace_attempt",
+    sessionId: "session_retry",
+    settlementId: "settlement:trace_attempt",
+    logicalQuestionUnitId: "lqu_retry",
+    sourceHash: "hash:trace_attempt",
+  });
+  assert.equal(
+    buildHumanGroundTruthSubjectV2({ trace }).attemptId,
+    "trace_attempt"
+  );
+});
+
+test("rejects a ground-truth subject that targets a different attempt", () => {
+  assert.deepEqual(
+    validateHumanEvaluationAttemptSubjectV2({
+      subject: {
+        attemptId: "trace_attempt_1",
+        traceIds: ["trace_attempt_1"],
+      },
+      sourceTraceId: "trace_attempt_2",
+    }),
+    {
+      valid: false,
+      reason: "attempt-source-identity-mismatch",
+    }
+  );
+  assert.deepEqual(
+    validateHumanEvaluationAttemptSubjectV2({
+      subject: {
+        attemptId: "trace_attempt_1",
+        traceIds: ["trace_attempt_1"],
+      },
+      sourceTraceId: "trace_attempt_1",
+    }),
+    { valid: true }
+  );
+});
+
+test("keeps labels for repeated attempts on one question independent", () => {
+  const firstSubject = {
+    ...SUBJECT,
+    attemptId: "trace_attempt_1",
+  };
+  const secondSubject = {
+    ...SUBJECT,
+    attemptId: "trace_attempt_2",
+    traceIds: ["trace_attempt_2"],
+  };
+  const first = createHumanGroundTruthEventV2({
+    eventId: "event_attempt_1",
+    sessionId: "session_1",
+    subject: firstSubject,
+    source: "explicit-ui",
+    fact: {
+      kind: "expected-question-type",
+      expectedQuestionType: "behavioral",
+    },
+    now: 1,
+  });
+  const second = createHumanGroundTruthEventV2({
+    eventId: "event_attempt_2",
+    sessionId: "session_1",
+    subject: secondSubject,
+    source: "explicit-ui",
+    fact: {
+      kind: "expected-question-type",
+      expectedQuestionType: "coding",
+    },
+    now: 2,
+  });
+  const events = appendHumanGroundTruthEventV2(
+    appendHumanGroundTruthEventV2([], first),
+    second
+  );
+
+  const firstFact = deriveHumanEvaluationProjectionV2({
+    sessionId: "session_1",
+    subject: firstSubject,
+    events,
+  }).activeFacts["expected-question-type"]?.fact;
+  const secondFact = deriveHumanEvaluationProjectionV2({
+    sessionId: "session_1",
+    subject: secondSubject,
+    events,
+  }).activeFacts["expected-question-type"]?.fact;
+  assert.equal(
+    firstFact?.kind === "expected-question-type"
+      ? firstFact.expectedQuestionType
+      : undefined,
+    "behavioral"
+  );
+  assert.equal(
+    secondFact?.kind === "expected-question-type"
+      ? secondFact.expectedQuestionType
+      : undefined,
+    "coding"
+  );
+});
+
+test("allows a correction to supersede a fact within the same attempt", () => {
+  const subject = {
+    ...SUBJECT,
+    attemptId: "trace_attempt_1",
+  };
+  const first = createHumanGroundTruthEventV2({
+    eventId: "event_attempt_original",
+    sessionId: "session_1",
+    subject,
+    source: "explicit-ui",
+    fact: {
+      kind: "expected-question-type",
+      expectedQuestionType: "behavioral",
+    },
+    now: 1,
+  });
+  const correction = createHumanGroundTruthEventV2({
+    eventId: "event_attempt_correction",
+    sessionId: "session_1",
+    subject,
+    source: "explicit-ui",
+    fact: {
+      kind: "expected-question-type",
+      expectedQuestionType: "coding",
+    },
+    supersedesEventId: first.eventId,
+    now: 2,
+  });
+  const projection = deriveHumanEvaluationProjectionV2({
+    sessionId: "session_1",
+    subject,
+    events: [first, correction],
+  });
+
+  assert.equal(projection.conflicts.length, 0);
+  assert.equal(
+    projection.activeFacts["expected-question-type"]?.eventId,
+    correction.eventId
+  );
+});
+
+test("materializes one projection per failed and successful retry attempt", () => {
+  const failed = buildSettledAttemptTrace({
+    id: "trace_retry_failed",
+    status: "error",
+  });
+  const succeeded = buildSettledAttemptTrace({
+    id: "trace_retry_success",
+    status: "success",
+  });
+  const first = materializeHumanEvaluationAttemptProjectionV2({
+    trace: failed,
+    currentSessionId: "session_retry",
+    events: [],
+    projections: [],
+    now: 2,
+  });
+  const second = materializeHumanEvaluationAttemptProjectionV2({
+    trace: succeeded,
+    currentSessionId: "session_retry",
+    events: [],
+    projections: first.projections,
+    now: 3,
+  });
+
+  assert.equal(first.changed, true);
+  assert.equal(second.changed, true);
+  assert.equal(second.projections.length, 2);
+  assert.deepEqual(
+    second.projections.map((projection) => projection.subject.attemptId),
+    ["trace_retry_failed", "trace_retry_success"]
+  );
+  assert.deepEqual(
+    second.projections.map(
+      (projection) => projection.observed?.attemptStatus
+    ),
+    ["error", "success"]
+  );
+});
 
 test("materializes projections by semantic revision and one observed trace", () => {
   const event = createHumanGroundTruthEventV2({

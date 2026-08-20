@@ -4,7 +4,10 @@ import {
   createHumanGroundTruthEventV2,
   deriveHumanEvaluationProjectionV2,
 } from "../src/lib/meeting/human-ground-truth-v2.js";
-import { projectHumanEvaluationsForLegacyConsumers } from "../src/lib/meeting/human-evaluation-v2-consumers.js";
+import {
+  partitionHumanEvaluationProjectionsForPrecisionV2,
+  projectHumanEvaluationsForLegacyConsumers,
+} from "../src/lib/meeting/human-evaluation-v2-consumers.js";
 import type { QuestionHumanEvaluation } from "../src/lib/meeting/types.js";
 
 test("V2 projections override exact legacy consumer expectations", () => {
@@ -136,6 +139,54 @@ test("V2-only projections produce explicit synthetic consumer rows", () => {
   assert.equal(result.report.v2OnlyProjectionCount, 1);
   assert.equal(result.report.dimensions.answerOutcome.v2Only, 1);
   assert.equal(result.report.warnings[0]?.code, "v2-only-projection");
+});
+
+test("precision consumers exclude legacy question projections without attempt identity", () => {
+  const legacyQuestion = deriveHumanEvaluationProjectionV2({
+    sessionId: "session_legacy",
+    subject: {
+      questionId: "question_legacy",
+      traceIds: ["trace_legacy"],
+      sourceTurnIds: [],
+    },
+    events: [],
+    now: 1,
+  });
+  const currentAttempt = deriveHumanEvaluationProjectionV2({
+    sessionId: "session_current",
+    subject: {
+      attemptId: "trace_current",
+      questionId: "question_current",
+      traceIds: ["trace_current"],
+      sourceTurnIds: [],
+    },
+    events: [],
+    now: 2,
+  });
+  const criticalMoment = deriveHumanEvaluationProjectionV2({
+    sessionId: "session_current",
+    subject: {
+      momentId: "moment_current",
+      traceIds: [],
+      sourceTurnIds: [],
+    },
+    events: [],
+    now: 3,
+  });
+
+  const partition = partitionHumanEvaluationProjectionsForPrecisionV2([
+    legacyQuestion,
+    currentAttempt,
+    criticalMoment,
+  ]);
+  assert.deepEqual(
+    partition.eligible.map((projection) => projection.projectionId),
+    [currentAttempt.projectionId, criticalMoment.projectionId]
+  );
+  assert.deepEqual(
+    partition.excluded.map((projection) => projection.projectionId),
+    [legacyQuestion.projectionId]
+  );
 });
 
 test("reports legacy observed-action drift without overriding the final trace", () => {
