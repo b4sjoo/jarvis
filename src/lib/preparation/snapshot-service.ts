@@ -373,6 +373,7 @@ export function createPreparationSnapshotService(dependencies: {
         contentHash: active.contentHash,
         runtimeCharCount: active.runtimeCharCount,
         warningCount: active.warnings.length,
+        selectionRevision: settledContext.revision,
       });
       return active;
     },
@@ -411,12 +412,24 @@ export function createPreparationSnapshotService(dependencies: {
       if (!deactivated) {
         throw new Error("Snapshot deactivation did not settle.");
       }
-      const remainingActive = await dependencies.snapshots.getActive({
-        processId: input.processId,
-        roundId: input.roundId,
-      });
+      const [remainingActive, settledContext] = await Promise.all([
+        dependencies.snapshots.getActive({
+          processId: input.processId,
+          roundId: input.roundId,
+        }),
+        dependencies.snapshots.getCurrentContext(),
+      ]);
       if (remainingActive) {
         throw new Error("Snapshot deactivation left an active selection behind.");
+      }
+      if (
+        settledContext.processId !== input.processId ||
+        settledContext.roundId !== input.roundId ||
+        settledContext.selectedSnapshotId !== undefined
+      ) {
+        throw new Error(
+          "Snapshot deactivation did not settle the global current context."
+        );
       }
       const updated = await dependencies.snapshots.get(
         input.processId,
@@ -436,6 +449,7 @@ export function createPreparationSnapshotService(dependencies: {
         contentHash: updated.contentHash,
         runtimeCharCount: updated.runtimeCharCount,
         warningCount: updated.warnings.length,
+        selectionRevision: settledContext.revision,
       });
       return updated;
     },

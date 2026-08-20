@@ -106,12 +106,13 @@ const handlePreparationSnapshotEvent = (event: PreparationSnapshotEvent) => {
         : event.name === "Preparation snapshot deactivated"
           ? "snapshot-deactivated"
           : undefined;
-  if (!reason) return;
+  if (!reason || event.selectionRevision === undefined) return;
   publishPreparationSnapshotSelectionChange({
     reason,
     processId: event.processId,
     roundId: event.roundId,
     snapshotId: event.snapshotId,
+    selectionRevision: event.selectionRevision,
     occurredAt: event.timestamp,
   });
 };

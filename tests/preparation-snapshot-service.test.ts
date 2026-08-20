@@ -214,6 +214,7 @@ test("active snapshot can be explicitly deactivated without deleting it", async 
   );
   assert.equal(fixture.events.at(-1)?.action, "deactivated");
   assert.equal(fixture.events.at(-1)?.snapshotId, snapshot.id);
+  assert.equal(fixture.serviceEvents.at(-1)?.selectionRevision, 2);
 
   const reactivated = await fixture.service.activate({
     processId: PROCESS_ID,
@@ -222,6 +223,7 @@ test("active snapshot can be explicitly deactivated without deleting it", async 
   });
   assert.equal(reactivated.status, "active");
   assert.equal(fixture.events.at(-1)?.action, "reactivated");
+  assert.equal(fixture.serviceEvents.at(-1)?.selectionRevision, 3);
 });
 
 test("activating outside the current Round requires explicit switch authority", async () => {

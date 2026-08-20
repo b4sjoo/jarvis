@@ -875,7 +875,8 @@
     ],
     "staticFrontendEmittedEvents": [
       "meeting-focus-action",
-      "meeting-focus-snapshot"
+      "meeting-focus-snapshot",
+      "preparation-snapshot-selection-invalidated"
     ],
     "staticFrontendListenedEvents": [
       "audio-encoding-error",
@@ -890,6 +891,7 @@
       "jarvis-emergency-hide",
       "meeting-focus-action",
       "meeting-focus-snapshot",
+      "preparation-snapshot-selection-invalidated",
       "native-audio-lifecycle",
       "native-audio-liveness",
       "native-audio-segment-dropped",
@@ -968,6 +970,10 @@
         {
           "name": "meeting-focus-snapshot",
           "reason": "Frontend-to-frontend Tauri event connects the main and Focus webviews."
+        },
+        {
+          "name": "preparation-snapshot-selection-invalidated",
+          "reason": "Frontend-to-frontend Tauri event invalidates idle Snapshot previews across Dashboard and Main webviews."
         }
       ],
       "allowedFrontendEventsWithoutNativeListener": [
@@ -978,6 +984,10 @@
         {
           "name": "meeting-focus-snapshot",
           "reason": "Frontend-to-frontend Tauri event connects the main and Focus webviews."
+        },
+        {
+          "name": "preparation-snapshot-selection-invalidated",
+          "reason": "Frontend-to-frontend Tauri event invalidates idle Snapshot previews across Dashboard and Main webviews."
         }
       ],
       "allowedNativeListenersWithoutFrontendEmitter": [

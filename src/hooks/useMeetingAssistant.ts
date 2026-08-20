@@ -2425,6 +2425,7 @@ export function useMeetingAssistant() {
     );
   const preparationContextRevisionRef = useRef(0);
   const preparationPinRequestRef = useRef(0);
+  const latestPreparationSelectionRevisionRef = useRef(0);
   const pinPreparationRuntimeForSession = useCallback(
     async (meetingSessionId: string) => {
       const requestId = preparationPinRequestRef.current + 1;
@@ -2468,6 +2469,10 @@ export function useMeetingAssistant() {
       }
 
       preparationRuntimeContextRef.current = pinnedContext;
+      latestPreparationSelectionRevisionRef.current = Math.max(
+        latestPreparationSelectionRevisionRef.current,
+        pinnedContext.selectionRevision
+      );
       preparationProvenanceLedgerRef.current =
         new PreparationRuntimeProvenanceLedger(pinnedContext);
       setState((previous) => ({
@@ -2658,9 +2663,18 @@ export function useMeetingAssistant() {
     };
 
     hydrateIdlePreparationPreview();
-    const unsubscribe = subscribeToPreparationSnapshotSelectionChanges(() => {
-      hydrateIdlePreparationPreview();
-    });
+    const unsubscribe = subscribeToPreparationSnapshotSelectionChanges(
+      (change) => {
+        const knownRevision = Math.max(
+          latestPreparationSelectionRevisionRef.current,
+          preparationRuntimeContextRef.current.selectionRevision
+        );
+        if (change.selectionRevision <= knownRevision) return;
+        latestPreparationSelectionRevisionRef.current = change.selectionRevision;
+        hydrateIdlePreparationPreview();
+      },
+      hydrateIdlePreparationPreview
+    );
     return () => {
       disposed = true;
       unsubscribe();

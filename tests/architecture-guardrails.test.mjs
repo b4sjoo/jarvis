@@ -88,10 +88,11 @@ test("rejects command registry drift and new dynamic IPC boundaries", () => {
   expectFailure(evaluate({ analysis: dynamicBoundary }), "unregistered dynamic callsite");
 });
 
-test("resolves frontend-only Focus events and wrapped command literals", () => {
+test("resolves registered frontend-only events and wrapped command literals", () => {
   assert.deepEqual(baselineAnalysis.ipc.staticFrontendEmittedEvents, [
     "meeting-focus-action",
     "meeting-focus-snapshot",
+    "preparation-snapshot-selection-invalidated",
   ]);
   assert.equal(
     baselineAnalysis.ipc.wrappedFrontendInvokes.includes(
