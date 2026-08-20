@@ -2,8 +2,9 @@ import { CURATED_MEMORY_DRAFTS } from "@/lib/memory/curated-drafts";
 import { auditMemoryInterviewFamilyNormalization } from "@/lib/memory/interview-family";
 import { parseCuratedMemoryDrafts } from "@/lib/memory/parser";
 import {
-  decodePersistedMemoryInterviewFamilies,
-  encodePersistedMemoryInterviewFamilies,
+  buildPersistedMemoryEntryParameters,
+  hydratePersistedMemoryInterviewFamilies,
+  UPSERT_PERSISTED_MEMORY_ENTRY_SQL,
 } from "@/lib/memory/persistence";
 import {
   invalidateMemoryRetrievalSnapshot,
@@ -216,61 +217,8 @@ export async function rebuildCuratedMemoryIndex(): Promise<MemoryImportSummary> 
 
   for (const entry of entries) {
     await db.execute(
-      `INSERT INTO memory_entries
-        (id, source_ids, type, title, content, summary, scope, project_id,
-         project_name, tags, keywords, priority, enabled, injection_mode,
-         use_cases, interview_families, confidentiality, curation_status, related_entry_ids,
-         evidence_entry_ids, draft_path, created_at, updated_at, last_used_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-       ON CONFLICT(id) DO UPDATE SET
-         source_ids = excluded.source_ids,
-         type = excluded.type,
-         title = excluded.title,
-         content = excluded.content,
-         summary = excluded.summary,
-         scope = excluded.scope,
-         project_id = excluded.project_id,
-         project_name = excluded.project_name,
-         tags = excluded.tags,
-         keywords = excluded.keywords,
-         priority = excluded.priority,
-         enabled = excluded.enabled,
-         injection_mode = excluded.injection_mode,
-         use_cases = excluded.use_cases,
-         interview_families = excluded.interview_families,
-         confidentiality = excluded.confidentiality,
-         curation_status = excluded.curation_status,
-         related_entry_ids = excluded.related_entry_ids,
-         evidence_entry_ids = excluded.evidence_entry_ids,
-         draft_path = excluded.draft_path,
-         updated_at = excluded.updated_at,
-         last_used_at = COALESCE(excluded.last_used_at, memory_entries.last_used_at)`,
-      [
-        entry.id,
-        JSON.stringify(entry.sourceIds),
-        entry.type,
-        entry.title,
-        entry.content,
-        entry.summary ?? null,
-        entry.scope,
-        entry.projectId ?? null,
-        entry.projectName ?? null,
-        JSON.stringify(entry.tags),
-        JSON.stringify(entry.keywords),
-        entry.priority,
-        entry.enabled ? 1 : 0,
-        entry.injectionMode,
-        JSON.stringify(entry.useCases),
-        encodePersistedMemoryInterviewFamilies(entry.interviewFamilies),
-        entry.confidentiality,
-        entry.curationStatus,
-        JSON.stringify(entry.relatedEntryIds),
-        JSON.stringify(entry.evidenceEntryIds),
-        entry.draftPath ?? null,
-        importedAt,
-        importedAt,
-        entry.lastUsedAt ?? null,
-      ]
+      UPSERT_PERSISTED_MEMORY_ENTRY_SQL,
+      buildPersistedMemoryEntryParameters(entry, importedAt)
     );
   }
 
@@ -479,11 +427,8 @@ function mapSourceRow(row: MemorySourceRow): MemorySource {
 }
 
 function mapEntryRow(row: MemoryEntryRow) {
-  const interviewFamilies = decodePersistedMemoryInterviewFamilies(
-    row.interview_families
-  );
-  return {
-    entry: {
+  return hydratePersistedMemoryInterviewFamilies(
+    {
       id: row.id,
       sourceIds: parseJsonArray(row.source_ids),
       type: row.type as MemoryEntry["type"],
@@ -499,7 +444,6 @@ function mapEntryRow(row: MemoryEntryRow) {
       enabled: Boolean(row.enabled),
       injectionMode: row.injection_mode as MemoryEntry["injectionMode"],
       useCases: parseJsonArray(row.use_cases) as MemoryEntry["useCases"],
-      interviewFamilies: interviewFamilies.families,
       confidentiality: row.confidentiality as MemoryEntry["confidentiality"],
       curationStatus: row.curation_status as MemoryEntry["curationStatus"],
       relatedEntryIds: parseJsonArray(row.related_entry_ids),
@@ -509,8 +453,8 @@ function mapEntryRow(row: MemoryEntryRow) {
       updatedAt: row.updated_at,
       lastUsedAt: row.last_used_at ?? undefined,
     } satisfies MemoryEntry,
-    interviewFamiliesStatus: interviewFamilies.status,
-  };
+    row.interview_families
+  );
 }
 
 function mapProjectRow(row: MemoryProjectRow): MemoryProject {
