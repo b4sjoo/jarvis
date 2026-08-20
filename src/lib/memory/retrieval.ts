@@ -242,6 +242,12 @@ callbacks: MemoryRetrievalRuntimeCallbacks = {}): Promise<MemoryRetrievalResult>
     databaseAcquireMs: snapshot.telemetry.databaseAcquireMs,
     databaseReadMs: snapshot.telemetry.databaseReadMs,
     rowMappingMs: snapshot.telemetry.rowMappingMs,
+    persistedInterviewFamiliesExplicitCount:
+      snapshot.telemetry.persistedInterviewFamiliesExplicitCount,
+    persistedInterviewFamiliesMissingCount:
+      snapshot.telemetry.persistedInterviewFamiliesMissingCount,
+    persistedInterviewFamiliesMalformedCount:
+      snapshot.telemetry.persistedInterviewFamiliesMalformedCount,
     policyScoringMs,
     budgetFormattingMs,
     usageEnqueueMs: usageEnqueue.enqueueMs,
@@ -322,6 +328,12 @@ export function formatMemoryRetrievalPerformanceForTrace(
     memoryDatabaseAcquireMs: performance.databaseAcquireMs,
     memoryDatabaseReadMs: performance.databaseReadMs,
     memoryRowMappingMs: performance.rowMappingMs,
+    memoryPersistedInterviewFamiliesExplicitCount:
+      performance.persistedInterviewFamiliesExplicitCount,
+    memoryPersistedInterviewFamiliesMissingCount:
+      performance.persistedInterviewFamiliesMissingCount,
+    memoryPersistedInterviewFamiliesMalformedCount:
+      performance.persistedInterviewFamiliesMalformedCount,
     memoryPolicyScoringMs: performance.policyScoringMs,
     memoryBudgetFormattingMs: performance.budgetFormattingMs,
     memoryUsageEnqueueMs: performance.usageEnqueueMs,

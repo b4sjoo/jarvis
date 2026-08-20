@@ -2,6 +2,10 @@ import { CURATED_MEMORY_DRAFTS } from "@/lib/memory/curated-drafts";
 import { auditMemoryInterviewFamilyNormalization } from "@/lib/memory/interview-family";
 import { parseCuratedMemoryDrafts } from "@/lib/memory/parser";
 import {
+  decodePersistedMemoryInterviewFamilies,
+  encodePersistedMemoryInterviewFamilies,
+} from "@/lib/memory/persistence";
+import {
   invalidateMemoryRetrievalSnapshot,
   type MemorySnapshotLoadResult,
 } from "@/lib/memory/retrieval-runtime";
@@ -50,6 +54,7 @@ interface MemoryEntryRow {
   enabled: number;
   injection_mode: string;
   use_cases: string;
+  interview_families: string | null;
   confidentiality: string;
   curation_status: string;
   related_entry_ids: string;
@@ -140,9 +145,9 @@ export async function rebuildCuratedMemoryIndex(): Promise<MemoryImportSummary> 
       `INSERT INTO memory_entries
         (id, source_ids, type, title, content, summary, scope, project_id,
          project_name, tags, keywords, priority, enabled, injection_mode,
-         use_cases, confidentiality, curation_status, related_entry_ids,
+         use_cases, interview_families, confidentiality, curation_status, related_entry_ids,
          evidence_entry_ids, draft_path, created_at, updated_at, last_used_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         entry.id,
         JSON.stringify(entry.sourceIds),
@@ -159,6 +164,7 @@ export async function rebuildCuratedMemoryIndex(): Promise<MemoryImportSummary> 
         entry.enabled ? 1 : 0,
         entry.injectionMode,
         JSON.stringify(entry.useCases),
+        encodePersistedMemoryInterviewFamilies(entry.interviewFamilies),
         entry.confidentiality,
         entry.curationStatus,
         JSON.stringify(entry.relatedEntryIds),
@@ -208,7 +214,20 @@ export async function loadMemoryEntriesForSnapshot(): Promise<MemorySnapshotLoad
   );
   const databaseReadMs = elapsedMs(readStartedAt);
   const mappingStartedAt = monotonicNow();
-  const entries = rows.map(mapEntryRow);
+  let persistedInterviewFamiliesExplicitCount = 0;
+  let persistedInterviewFamiliesMissingCount = 0;
+  let persistedInterviewFamiliesMalformedCount = 0;
+  const entries = rows.map((row) => {
+    const mapped = mapEntryRow(row);
+    if (mapped.interviewFamiliesStatus === "explicit") {
+      persistedInterviewFamiliesExplicitCount += 1;
+    } else if (mapped.interviewFamiliesStatus === "malformed") {
+      persistedInterviewFamiliesMalformedCount += 1;
+    } else {
+      persistedInterviewFamiliesMissingCount += 1;
+    }
+    return mapped.entry;
+  });
   const rowMappingMs = elapsedMs(mappingStartedAt);
   return {
     entries,
@@ -216,6 +235,9 @@ export async function loadMemoryEntriesForSnapshot(): Promise<MemorySnapshotLoad
       databaseAcquireMs,
       databaseReadMs,
       rowMappingMs,
+      persistedInterviewFamiliesExplicitCount,
+      persistedInterviewFamiliesMissingCount,
+      persistedInterviewFamiliesMalformedCount,
     },
   };
 }
@@ -225,7 +247,7 @@ export async function getEnabledMemoryEntries(): Promise<MemoryEntry[]> {
   const rows = await db.select<MemoryEntryRow[]>(
     "SELECT * FROM memory_entries WHERE enabled = 1"
   );
-  return rows.map(mapEntryRow);
+  return rows.map((row) => mapEntryRow(row).entry);
 }
 
 export async function getMemoryProjects(): Promise<MemoryProject[]> {
@@ -332,31 +354,38 @@ function mapSourceRow(row: MemorySourceRow): MemorySource {
   };
 }
 
-function mapEntryRow(row: MemoryEntryRow): MemoryEntry {
+function mapEntryRow(row: MemoryEntryRow) {
+  const interviewFamilies = decodePersistedMemoryInterviewFamilies(
+    row.interview_families
+  );
   return {
-    id: row.id,
-    sourceIds: parseJsonArray(row.source_ids),
-    type: row.type as MemoryEntry["type"],
-    title: row.title,
-    content: row.content,
-    summary: row.summary ?? undefined,
-    scope: row.scope as MemoryEntry["scope"],
-    projectId: row.project_id ?? undefined,
-    projectName: row.project_name ?? undefined,
-    tags: parseJsonArray(row.tags),
-    keywords: parseJsonArray(row.keywords),
-    priority: row.priority as MemoryEntry["priority"],
-    enabled: Boolean(row.enabled),
-    injectionMode: row.injection_mode as MemoryEntry["injectionMode"],
-    useCases: parseJsonArray(row.use_cases) as MemoryEntry["useCases"],
-    confidentiality: row.confidentiality as MemoryEntry["confidentiality"],
-    curationStatus: row.curation_status as MemoryEntry["curationStatus"],
-    relatedEntryIds: parseJsonArray(row.related_entry_ids),
-    evidenceEntryIds: parseJsonArray(row.evidence_entry_ids),
-    draftPath: row.draft_path ?? undefined,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
-    lastUsedAt: row.last_used_at ?? undefined,
+    entry: {
+      id: row.id,
+      sourceIds: parseJsonArray(row.source_ids),
+      type: row.type as MemoryEntry["type"],
+      title: row.title,
+      content: row.content,
+      summary: row.summary ?? undefined,
+      scope: row.scope as MemoryEntry["scope"],
+      projectId: row.project_id ?? undefined,
+      projectName: row.project_name ?? undefined,
+      tags: parseJsonArray(row.tags),
+      keywords: parseJsonArray(row.keywords),
+      priority: row.priority as MemoryEntry["priority"],
+      enabled: Boolean(row.enabled),
+      injectionMode: row.injection_mode as MemoryEntry["injectionMode"],
+      useCases: parseJsonArray(row.use_cases) as MemoryEntry["useCases"],
+      interviewFamilies: interviewFamilies.families,
+      confidentiality: row.confidentiality as MemoryEntry["confidentiality"],
+      curationStatus: row.curation_status as MemoryEntry["curationStatus"],
+      relatedEntryIds: parseJsonArray(row.related_entry_ids),
+      evidenceEntryIds: parseJsonArray(row.evidence_entry_ids),
+      draftPath: row.draft_path ?? undefined,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+      lastUsedAt: row.last_used_at ?? undefined,
+    } satisfies MemoryEntry,
+    interviewFamiliesStatus: interviewFamilies.status,
   };
 }
 

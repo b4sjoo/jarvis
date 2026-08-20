@@ -4,6 +4,9 @@ export interface MemorySnapshotLoadTimings {
   databaseAcquireMs: number;
   databaseReadMs: number;
   rowMappingMs: number;
+  persistedInterviewFamiliesExplicitCount?: number;
+  persistedInterviewFamiliesMissingCount?: number;
+  persistedInterviewFamiliesMalformedCount?: number;
 }
 
 export interface MemorySnapshotLoadResult {

@@ -386,6 +386,9 @@ export interface MemoryRetrievalPerformance {
   databaseAcquireMs: number;
   databaseReadMs: number;
   rowMappingMs: number;
+  persistedInterviewFamiliesExplicitCount?: number;
+  persistedInterviewFamiliesMissingCount?: number;
+  persistedInterviewFamiliesMalformedCount?: number;
   policyScoringMs: number;
   budgetFormattingMs: number;
   usageEnqueueMs: number;

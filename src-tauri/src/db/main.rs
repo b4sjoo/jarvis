@@ -122,5 +122,12 @@ pub fn migrations() -> Vec<Migration> {
             sql: include_str!("migrations/preparation-global-current-context.sql"),
             kind: MigrationKind::Up,
         },
+        // Migration 18: Preserve curator-authored interview-family metadata
+        Migration {
+            version: 18,
+            description: "add_memory_entry_interview_families",
+            sql: include_str!("migrations/memory-entry-interview-families.sql"),
+            kind: MigrationKind::Up,
+        },
     ]
 }
