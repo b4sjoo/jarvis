@@ -1,7 +1,4 @@
-import {
-  isQuestionTypeCompatibleWithMemoryFamily,
-  normalizeMemoryInterviewTypes,
-} from "../meeting/task-taxonomy.js";
+import { isQuestionTypeCompatibleWithMemoryFamily } from "../meeting/task-taxonomy.js";
 import { isDiagramOverlayMemoryEntry } from "./diagram-overlay.js";
 import type {
   MemoryEntry,
@@ -243,7 +240,6 @@ export function getMemoryInterviewFamilyGateRejectReason({
 
 export function resolveMemoryInterviewFamilyGateDecision({
   entry,
-  interviewTypes,
   questionType,
   memoryPolicy,
 }: {
@@ -266,19 +262,6 @@ export function resolveMemoryInterviewFamilyGateDecision({
   }
 
   let candidates = [...specializedFamilies];
-  const allowedBriefTypes = normalizeAllowedInterviewTypes(interviewTypes);
-  if (allowedBriefTypes) {
-    candidates = candidates.filter((family) => allowedBriefTypes.has(family));
-    if (!candidates.length) {
-      return {
-        rejectReason: "brief-interview-type-blocked",
-        resolution,
-        candidateFamilies: specializedFamilies,
-        matchingFamilies: [],
-        disposition: "brief-interview-type-reject",
-      };
-    }
-  }
 
   if (memoryPolicy?.blockedFamilies?.length) {
     candidates = candidates.filter(
@@ -506,18 +489,6 @@ const FAMILY_ORDER: MemoryInterviewFamily[] = [
 function sortFamilies(values: MemoryInterviewFamily[]) {
   return [...values].sort(
     (left, right) => FAMILY_ORDER.indexOf(left) - FAMILY_ORDER.indexOf(right)
-  );
-}
-
-function normalizeAllowedInterviewTypes(
-  interviewTypes: MemoryInterviewType[] | undefined
-) {
-  const normalized = normalizeMemoryInterviewTypes(interviewTypes);
-  if (!normalized?.length || normalized.includes("mixed")) return undefined;
-  return new Set(
-    normalized.filter(
-      (type): type is MemoryInterviewFamily => type !== "mixed"
-    )
   );
 }
 

@@ -17,7 +17,7 @@ const providers: MeetingModelProviderSnapshot = {
   codingProvider: { provider: "coding", variables: {} },
 };
 
-test("characterizes the legacy Brief veto after a concrete Behavioral settlement", () => {
+test("a concrete Behavioral settlement supersedes a conflicting Brief prior", () => {
   const decision = resolveMemoryInterviewFamilyGateDecision({
     entry: memoryEntry({
       interviewFamilies: ["behavioral"],
@@ -31,8 +31,8 @@ test("characterizes the legacy Brief veto after a concrete Behavioral settlement
     },
   });
 
-  assert.equal(decision.rejectReason, "brief-interview-type-blocked");
-  assert.equal(decision.disposition, "brief-interview-type-reject");
+  assert.equal(decision.rejectReason, undefined);
+  assert.equal(decision.disposition, "explicit-family-allow");
 });
 
 test("characterizes unconditional reuse of a stale active Playbook", () => {

@@ -33,7 +33,28 @@ test("specialized project evidence receives families independently from runtime 
   assert.equal(classifyRuntimeMemoryRole(entry).role, "fact-evidence");
 });
 
-test("specialized fact evidence cannot bypass an incompatible interview family gate", () => {
+test("settled question type overrides a conflicting Brief prior", () => {
+  const entry = makeEntry({
+    type: "personal_story",
+    title: "Behavioral disagreement story",
+    interviewFamilies: ["behavioral"],
+  });
+
+  assert.equal(
+    getMemoryInterviewFamilyGateRejectReason({
+      entry,
+      interviewTypes: ["coding"],
+      questionType: "behavioral",
+      memoryPolicy: {
+        id: "behavioral-only",
+        allowedFamilies: ["behavioral"],
+      },
+    }),
+    undefined
+  );
+});
+
+test("settled type and playbook still block incompatible specialized fact evidence", () => {
   const entry = makeEntry({
     type: "answer_evidence",
     title: "RAG model serving evidence",
@@ -44,8 +65,33 @@ test("specialized fact evidence cannot bypass an incompatible interview family g
       entry,
       interviewTypes: ["behavioral"],
       questionType: "behavioral",
+      memoryPolicy: {
+        id: "behavioral-only",
+        allowedFamilies: ["behavioral"],
+      },
     }),
-    "brief-interview-type-blocked"
+    "playbook-family-blocked"
+  );
+});
+
+test("snapshot-derived type priors cannot veto a settled AI ML question", () => {
+  const entry = makeEntry({
+    type: "interview_framework",
+    title: "RAG system design contract",
+    interviewFamilies: ["ai-ml-system-design"],
+  });
+
+  assert.equal(
+    getMemoryInterviewFamilyGateRejectReason({
+      entry,
+      interviewTypes: ["system-design"],
+      questionType: "ai-ml-system-design",
+      memoryPolicy: {
+        id: "ai-ml-system-design",
+        allowedFamilies: ["ai-ml-system-design"],
+      },
+    }),
+    undefined
   );
 });
 
