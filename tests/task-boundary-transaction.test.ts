@@ -18,6 +18,7 @@ import {
 } from "../src/lib/meeting/runtime-commit-authorization.js";
 import {
   createProvisionalCurrentQuestion,
+  finalizeCurrentQuestionFirstParentSettlement,
   settleCurrentQuestion,
 } from "../src/lib/meeting/current-question-settlement.js";
 import { projectPrimaryAsk } from "../src/lib/meeting/primary-ask-projection.js";
@@ -192,6 +193,44 @@ test("admits the first parent only after type and response opportunity settle on
   });
   assert.equal(pending.authorized, false);
   assert.equal(pending.reason, "response-opportunity-not-authorized");
+
+  const finalSettlement =
+    finalizeCurrentQuestionFirstParentSettlement({
+      currentQuestion,
+      typeOnlySettlement: repairedSettlement,
+    });
+  assert.ok(finalSettlement);
+  assert.notEqual(
+    finalSettlement.settlementId,
+    repairedSettlement.settlementId
+  );
+  assert.equal(finalSettlement.questionType, "general-system-design");
+  assert.equal(finalSettlement.typeAuthoritySource, "llm-type-repair");
+  assert.equal(finalSettlement.relation, "new-parent");
+  assert.equal(
+    finalSettlement.relationAuthoritySource,
+    "deterministic-fast-path"
+  );
+  assert.equal(finalSettlement.action, "answer");
+  assert.equal(finalSettlement.parentMutationAuthorized, true);
+  assert.equal(finalSettlement.responseAuthorized, true);
+  assert.equal(finalSettlement.sourceHash, currentQuestion.sourceHash);
+
+  const candidate = createTaskBoundaryCandidate({
+    logicalQuestionUnit: unit,
+    currentQuestion,
+    settlement: finalSettlement,
+    proposedQuestionType: "unknown",
+    proposedRelation: "unknown",
+    authoritySource: "accepted-transcript",
+    questionComplete: true,
+    mutationAuthorized: true,
+    commitParent: true,
+    now: 100,
+  });
+  assert.ok(candidate);
+  assert.equal(candidate.commitPolicy, "immediate");
+  assert.equal(candidate.settlement?.settlementId, finalSettlement.settlementId);
 });
 
 test("admits a contextual response gate without recomputing its leased source hash", () => {

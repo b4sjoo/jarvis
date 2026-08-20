@@ -275,6 +275,8 @@ export function formatManualScreenSourcePacketForTrace(
       packet.primaryAsk?.logicalQuestionUnitId,
     manualScreenPrimaryAskLogicalQuestionRevision:
       packet.primaryAsk?.revision,
+    manualScreenPrimaryAskSourceHash:
+      packet.primaryAsk?.sourceHash,
     manualScreenVisualEvidenceObservationId:
       packet.visualEvidence.screenObservationId,
     manualScreenVisualEvidenceQuestionChars:

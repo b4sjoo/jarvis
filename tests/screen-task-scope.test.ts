@@ -14,6 +14,7 @@ import {
   formatManualScreenSourcePacketForTrace,
   selectManualScreenVoiceQuestionCapsule,
 } from "../src/lib/meeting/screen-task-scope.js";
+import { buildManualScreenLogicalQuestionUnit } from "../src/lib/meeting/manual-screen-question-source.js";
 import { MeetingContextManager } from "../src/lib/meeting/context-manager.js";
 import type {
   ActiveInterviewParent,
@@ -385,6 +386,7 @@ test("binds a Voice LQU as the primary ask and keeps Screen as visual evidence",
       manualScreenPrimaryAskSourceTurnIds: ["turn-35"],
       manualScreenPrimaryAskLogicalQuestionUnitId: "question-current",
       manualScreenPrimaryAskLogicalQuestionRevision: 2,
+      manualScreenPrimaryAskSourceHash: undefined,
       manualScreenVisualEvidenceObservationId: "screen-1",
       manualScreenVisualEvidenceQuestionChars: 24,
       manualScreenSourceOperationAuthority: "manual-screen",
@@ -499,4 +501,65 @@ test("uses Screen preflight as the primary ask when no Voice question is bound",
     screenObservationId: "screen-2",
   });
   assert.equal(packet.sourceOperationAuthority.boundVoicePrimaryAsk, false);
+});
+
+test("keeps the bound Voice LQU identity while Screen supplies visual evidence", () => {
+  const packet = resolveManualScreenSourcePacket({
+    voiceQuestion: {
+      logicalQuestionUnitId: "question-current",
+      logicalQuestionRevision: 2,
+      text: "Explain lines 35 through 38.",
+      sourceTurnIds: ["turn-35"],
+    },
+    screenObservationId: "screen-voice-recovery",
+    screenPreflightQuestion: "Implement the LRU cache.",
+  });
+  const unit = buildManualScreenLogicalQuestionUnit({
+    packet,
+    sessionId: "session-1",
+    runtimeEpoch: 3,
+    createdAt: 100,
+    transcriptTurns: [
+      {
+        id: "turn-35",
+        speaker: "them",
+        text: "Explain lines 35 through 38.",
+        startedAt: 80,
+        endedAt: 90,
+        isFinal: true,
+        source: "system-audio",
+      },
+    ],
+  });
+
+  assert.ok(unit);
+  assert.equal(unit.id, "question-current");
+  assert.equal(unit.revision, 2);
+  assert.equal(unit.normalizedText, "Explain lines 35 through 38.");
+  assert.deepEqual(unit.sourceTurnIds, ["turn-35"]);
+  assert.equal(unit.sources[0]?.startedAt, 80);
+  assert.equal(unit.boundaryReason, "manual-screen-visual-evidence");
+});
+
+test("gives a Screen-owned milestone its own canonical question identity", () => {
+  const packet = resolveManualScreenSourcePacket({
+    screenObservationId: "screen-new-question",
+    screenPreflightQuestion: "Tell me about a time you disagreed.",
+  });
+  const unit = buildManualScreenLogicalQuestionUnit({
+    packet,
+    sessionId: "session-1",
+    runtimeEpoch: 3,
+    createdAt: 100,
+  });
+
+  assert.ok(unit);
+  assert.equal(
+    unit.id,
+    "screen-answer-sufficiency:screen-new-question"
+  );
+  assert.equal(unit.revision, 1);
+  assert.deepEqual(unit.sourceTurnIds, []);
+  assert.equal(unit.currentTurnId, "screen:screen-new-question");
+  assert.equal(unit.boundaryReason, "visible-screen-question");
 });

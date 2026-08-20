@@ -38,6 +38,9 @@ function settlement(
     revision: 2,
     sessionId: "session-a",
     runtimeEpoch: 4,
+    sourceKind: "voice",
+    sourceTurnIds: ["turn-a"],
+    sourceObservationIds: [],
     sourceHash: "source-a",
     questionType: "coding",
     relation: "new-parent",
@@ -141,6 +144,11 @@ test("builds one immutable coding plan for route, prompt, memory, and artifacts"
 
   assert.equal(plan.responseOwner.questionType, "coding");
   assert.equal(plan.responseOwner.source, "committed-parent");
+  assert.equal(plan.sourceKind, "voice");
+  assert.deepEqual(plan.sourceTurnIds, ["turn-a"]);
+  assert.deepEqual(plan.sourceObservationIds, []);
+  assert.equal(plan.promptCurrentQuestionSourceHash, "source-a");
+  assert.equal(plan.questionTypeConsumerObservation.sourceCoherent, true);
   assert.equal(plan.modelRoute.route, "coding-override");
   assert.equal(plan.promptContract.profile, "coding");
   assert.equal(plan.memoryPolicy.questionType, "coding");
@@ -580,6 +588,41 @@ test("plan authorization rejects stale question, settlement, and parent revision
       "expected-parent-revision-mismatch"
     )
   );
+});
+
+test("plan authorization rejects a prompt built from a different question source", () => {
+  const currentSettlement = settlement();
+  const task = activeTask();
+  const plan = buildSettledAdvisorExecutionPlan({
+    settlement: currentSettlement,
+    activeMeetingTask: task,
+    taskBoundaryCommitted: true,
+    childOwnsResponse: false,
+    providerSnapshot: providers,
+    playbook: playbook(),
+    memoryUseCase: "coding_interview",
+    askFrame: "direct-answer",
+    topicDomain: "backend",
+    promptCurrentQuestionSourceHash: "source-b",
+  });
+  const authorization = authorizeSettledAdvisorExecutionPlan({
+    plan,
+    currentSettlement,
+    currentSessionId: "session-a",
+    currentRuntimeEpoch: 4,
+    currentLogicalQuestionUnitId: "question-a",
+    currentLogicalQuestionRevision: 2,
+    currentSourceHash: "source-a",
+    currentActiveMeetingTask: task,
+  });
+
+  assert.equal(authorization.authorized, false);
+  assert.ok(
+    authorization.rejectionReasons.includes(
+      "prompt-current-question-source-hash-mismatch"
+    )
+  );
+  assert.equal(plan.questionTypeConsumerObservation.sourceCoherent, false);
 });
 
 test("plan authorization fails closed when the current settlement lease is missing", () => {

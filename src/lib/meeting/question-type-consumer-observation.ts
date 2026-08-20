@@ -48,6 +48,12 @@ export interface QuestionTypeConsumerObservation {
   promptContractQuestionType: CanonicalQuestionType;
   priorCompatibility: QuestionTypePriorCompatibility;
   priorUsedAsExecutionGate: boolean;
+  committedCurrentQuestionSourceHash?: string;
+  executionPlanQuestionSourceHash?: string;
+  promptCurrentQuestionSourceHash?: string;
+  sourceConflicts: string[];
+  sourceCoherent: boolean;
+  typeCoherent: boolean;
   conflicts: string[];
   coherent: boolean;
 }
@@ -138,6 +144,9 @@ export function buildQuestionTypeConsumerObservation(input: {
   artifactPolicyQuestionType: unknown;
   promptContractQuestionType: unknown;
   priorUsedAsExecutionGate?: boolean;
+  committedCurrentQuestionSourceHash?: string;
+  executionPlanQuestionSourceHash?: string;
+  promptCurrentQuestionSourceHash?: string;
 }): QuestionTypeConsumerObservation {
   const committedCurrentQuestionType = normalizeType(
     input.committedCurrentQuestionType
@@ -173,6 +182,14 @@ export function buildQuestionTypeConsumerObservation(input: {
     committedCurrentQuestionType
   );
   const conflicts: string[] = [];
+  const sourceConflicts = resolveQuestionSourceConflicts({
+    committedCurrentQuestionSourceHash:
+      input.committedCurrentQuestionSourceHash,
+    executionPlanQuestionSourceHash:
+      input.executionPlanQuestionSourceHash,
+    promptCurrentQuestionSourceHash:
+      input.promptCurrentQuestionSourceHash,
+  });
   const priorUsedAsExecutionGate = Boolean(
     input.priorUsedAsExecutionGate
   );
@@ -247,6 +264,7 @@ export function buildQuestionTypeConsumerObservation(input: {
     );
   }
 
+  const typeConflicts = uniqueStrings(conflicts);
   return {
     prior: input.prior ? cloneQuestionTypePrior(input.prior) : undefined,
     committedCurrentQuestionType,
@@ -263,8 +281,18 @@ export function buildQuestionTypeConsumerObservation(input: {
     promptContractQuestionType,
     priorCompatibility,
     priorUsedAsExecutionGate,
-    conflicts: uniqueStrings(conflicts),
-    coherent: conflicts.length === 0,
+    committedCurrentQuestionSourceHash:
+      input.committedCurrentQuestionSourceHash,
+    executionPlanQuestionSourceHash:
+      input.executionPlanQuestionSourceHash,
+    promptCurrentQuestionSourceHash:
+      input.promptCurrentQuestionSourceHash,
+    sourceConflicts,
+    sourceCoherent: sourceConflicts.length === 0,
+    typeCoherent: typeConflicts.length === 0,
+    conflicts: typeConflicts,
+    coherent:
+      typeConflicts.length === 0 && sourceConflicts.length === 0,
   };
 }
 
@@ -316,6 +344,15 @@ export function projectQuestionTypeConsumerObservationFromTrace(
       metadata.promptContractQuestionType,
     priorUsedAsExecutionGate:
       metadata.priorUsedAsExecutionGate === true,
+    committedCurrentQuestionSourceHash: readOptionalString(
+      metadata.committedCurrentQuestionSourceHash
+    ),
+    executionPlanQuestionSourceHash: readOptionalString(
+      metadata.executionPlanQuestionSourceHash
+    ),
+    promptCurrentQuestionSourceHash: readOptionalString(
+      metadata.promptCurrentQuestionSourceHash
+    ),
   });
 }
 
@@ -355,9 +392,49 @@ export function formatQuestionTypeConsumerObservationForTrace(
       observation.artifactPolicyQuestionType,
     promptContractQuestionType:
       observation.promptContractQuestionType,
+    committedCurrentQuestionSourceHash:
+      observation.committedCurrentQuestionSourceHash,
+    executionPlanQuestionSourceHash:
+      observation.executionPlanQuestionSourceHash,
+    promptCurrentQuestionSourceHash:
+      observation.promptCurrentQuestionSourceHash,
+    questionSourceConsumerConflicts: observation.sourceConflicts,
+    questionSourceConsumerCoherent: observation.sourceCoherent,
+    questionTypeConsumerTypeCoherent: observation.typeCoherent,
     questionTypeConsumerConflicts: observation.conflicts,
     questionTypeConsumerCoherent: observation.coherent,
   };
+}
+
+function resolveQuestionSourceConflicts(input: {
+  committedCurrentQuestionSourceHash?: string;
+  executionPlanQuestionSourceHash?: string;
+  promptCurrentQuestionSourceHash?: string;
+}) {
+  const hasSourceObservation = Boolean(
+    input.committedCurrentQuestionSourceHash ||
+      input.executionPlanQuestionSourceHash ||
+      input.promptCurrentQuestionSourceHash
+  );
+  if (!hasSourceObservation) return [];
+
+  const conflicts: string[] = [];
+  const committed = input.committedCurrentQuestionSourceHash;
+  if (!committed) {
+    conflicts.push("committed-question-source-missing");
+    return conflicts;
+  }
+  if (!input.executionPlanQuestionSourceHash) {
+    conflicts.push("execution-plan-question-source-missing");
+  } else if (input.executionPlanQuestionSourceHash !== committed) {
+    conflicts.push("settlement-vs-execution-plan-source");
+  }
+  if (!input.promptCurrentQuestionSourceHash) {
+    conflicts.push("prompt-current-question-source-missing");
+  } else if (input.promptCurrentQuestionSourceHash !== committed) {
+    conflicts.push("settlement-vs-prompt-source");
+  }
+  return conflicts;
 }
 
 function resolvePriorCompatibility(

@@ -72,6 +72,9 @@ test("projects trace metadata into the Human Evaluation observation contract", (
     answerProfileQuestionType: "general-system-design",
     artifactPolicyQuestionType: "general-system-design",
     promptContractQuestionType: "general-system-design",
+    committedCurrentQuestionSourceHash: "source-a",
+    executionPlanQuestionSourceHash: "source-a",
+    promptCurrentQuestionSourceHash: "source-a",
   });
   const metadata = formatQuestionTypeConsumerObservationForTrace(observation);
   const projected = projectQuestionTypeConsumerObservationFromTrace(metadata);
@@ -79,6 +82,31 @@ test("projects trace metadata into the Human Evaluation observation contract", (
   assert.deepEqual(projected, observation);
   assert.equal(metadata.priorUsedAsExecutionGate, false);
   assert.equal(metadata.questionTypeConsumerCoherent, true);
+  assert.equal(metadata.questionSourceConsumerCoherent, true);
+});
+
+test("flags a prompt that consumes a different question source than the settlement", () => {
+  const observation = buildQuestionTypeConsumerObservation({
+    committedCurrentQuestionType: "coding",
+    responseOwnerQuestionType: "coding",
+    responsePlaybookQuestionType: "coding",
+    kmbPolicyQuestionType: "coding",
+    factAnchorPolicyQuestionType: "coding",
+    modelRouteQuestionType: "coding",
+    answerProfileQuestionType: "coding",
+    artifactPolicyQuestionType: "coding",
+    promptContractQuestionType: "coding",
+    committedCurrentQuestionSourceHash: "source-a",
+    executionPlanQuestionSourceHash: "source-a",
+    promptCurrentQuestionSourceHash: "source-b",
+  });
+
+  assert.equal(observation.typeCoherent, true);
+  assert.equal(observation.sourceCoherent, false);
+  assert.equal(observation.coherent, false);
+  assert.deepEqual(observation.sourceConflicts, [
+    "settlement-vs-prompt-source",
+  ]);
 });
 
 test("flags any future trace that lets a prior become an execution gate", () => {

@@ -159,6 +159,9 @@ export function formatAdvisorEvidencePacketForPrompt(
           typeof packet.currentQuestion.revision === "number"
             ? `revision: ${packet.currentQuestion.revision}`
             : undefined,
+          packet.currentQuestion.sourceHash
+            ? `source_hash: ${packet.currentQuestion.sourceHash}`
+            : undefined,
           packet.currentQuestion.screenObservationId
             ? `screen_observation_id: ${packet.currentQuestion.screenObservationId}`
             : undefined,
@@ -257,6 +260,8 @@ export function formatAdvisorEvidencePacketForTrace(
       packet.currentQuestion?.logicalQuestionUnitId,
     currentQuestionLogicalQuestionRevision:
       packet.currentQuestion?.revision,
+    promptCurrentQuestionSourceHash:
+      packet.currentQuestion?.sourceHash,
     currentQuestionScreenObservationId:
       packet.currentQuestion?.screenObservationId,
     continuityParentTaskId: packet.continuity?.parentTaskId,

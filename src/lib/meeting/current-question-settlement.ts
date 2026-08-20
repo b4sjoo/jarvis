@@ -130,6 +130,9 @@ export interface CurrentQuestionSettlementDecision {
   revision: number;
   sessionId: string;
   runtimeEpoch: number;
+  sourceKind: CurrentQuestionSourceKind;
+  sourceTurnIds: string[];
+  sourceObservationIds: string[];
   sourceHash: string;
   questionType: CanonicalQuestionType;
   relation: CurrentQuestionRelation;
@@ -479,6 +482,11 @@ export function settleCurrentQuestion(input: {
     revision: input.currentQuestion.revision,
     sessionId: input.currentQuestion.sessionId,
     runtimeEpoch: input.currentQuestion.runtimeEpoch,
+    sourceKind: input.currentQuestion.sourceKind,
+    sourceTurnIds: [...input.currentQuestion.sourceTurnIds],
+    sourceObservationIds: [
+      ...input.currentQuestion.sourceObservationIds,
+    ],
     sourceHash: input.currentQuestion.sourceHash,
     questionType: typeSelection.value,
     relation: relationSelection.value,
@@ -502,6 +510,68 @@ export function settleCurrentQuestion(input: {
     manualCorrectionRevision: input.manualCorrectionRevision,
     rejectedProposals,
     reasons,
+  };
+}
+
+export function finalizeCurrentQuestionFirstParentSettlement(input: {
+  currentQuestion: ProvisionalCurrentQuestion;
+  typeOnlySettlement: CurrentQuestionSettlementDecision;
+}): CurrentQuestionSettlementDecision | undefined {
+  const { currentQuestion, typeOnlySettlement } = input;
+  if (
+    typeOnlySettlement.logicalQuestionUnitId !==
+      currentQuestion.logicalQuestionUnitId ||
+    typeOnlySettlement.revision !== currentQuestion.revision ||
+    typeOnlySettlement.sessionId !== currentQuestion.sessionId ||
+    typeOnlySettlement.runtimeEpoch !== currentQuestion.runtimeEpoch ||
+    typeOnlySettlement.sourceHash !== currentQuestion.sourceHash ||
+    typeOnlySettlement.activeParentId !== undefined ||
+    typeOnlySettlement.typeAuthoritySource !== "llm-type-repair" ||
+    !typeOnlySettlement.typeMutationAuthorized ||
+    typeOnlySettlement.relationMutationAuthorized ||
+    typeOnlySettlement.relation !== "unknown" ||
+    !isParentCanonicalQuestionType(typeOnlySettlement.questionType)
+  ) {
+    return undefined;
+  }
+
+  const relation = "new-parent" as const;
+  const action = "answer" as const;
+  const settlementId = createSettlementId({
+    currentQuestion,
+    questionType: typeOnlySettlement.questionType,
+    relation,
+    action,
+    authority: "llm-type-repair",
+    typeAuthoritySource: typeOnlySettlement.typeAuthoritySource,
+    relationAuthoritySource: "deterministic-fast-path",
+    actionAuthoritySource: "deterministic-fast-path",
+    manualCorrectionRevision:
+      typeOnlySettlement.manualCorrectionRevision,
+  });
+
+  return {
+    ...typeOnlySettlement,
+    settlementId,
+    sourceKind: currentQuestion.sourceKind,
+    sourceTurnIds: [...currentQuestion.sourceTurnIds],
+    sourceObservationIds: [...currentQuestion.sourceObservationIds],
+    sourceHash: currentQuestion.sourceHash,
+    relation,
+    action,
+    authority: "llm-type-repair",
+    authoritySource: "accepted-llm-type-first-parent",
+    relationAuthoritySource: "deterministic-fast-path",
+    actionAuthoritySource: "deterministic-fast-path",
+    relationMutationAuthorized: true,
+    parentMutationAuthorized: true,
+    responseAuthorized: true,
+    reasons: uniqueStrings([
+      ...typeOnlySettlement.reasons,
+      "first-parent-relation-deterministically-composed",
+      "parent-mutation-authorized",
+      "response-authorized",
+    ]),
   };
 }
 
@@ -729,6 +799,10 @@ export function formatCurrentQuestionSettlementForTrace(
     currentQuestionSettlementRevision: decision.revision,
     currentQuestionSettlementSessionId: decision.sessionId,
     currentQuestionSettlementRuntimeEpoch: decision.runtimeEpoch,
+    currentQuestionSettlementSourceKind: decision.sourceKind,
+    currentQuestionSettlementSourceTurnIds: decision.sourceTurnIds,
+    currentQuestionSettlementSourceObservationIds:
+      decision.sourceObservationIds,
     currentQuestionSettlementSourceHash: decision.sourceHash,
     currentQuestionSettlementType: decision.questionType,
     currentQuestionSettlementRelation: decision.relation,

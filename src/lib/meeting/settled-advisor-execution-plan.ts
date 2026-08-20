@@ -120,7 +120,11 @@ export interface SettledAdvisorExecutionPlan {
   runtimeEpoch: number;
   logicalQuestionUnitId: string;
   logicalQuestionRevision: number;
+  sourceKind: CurrentQuestionSettlementDecision["sourceKind"];
+  sourceTurnIds: string[];
+  sourceObservationIds: string[];
   sourceHash: string;
+  promptCurrentQuestionSourceHash: string;
   questionType: CurrentQuestionSettlementDecision["questionType"];
   relation: CurrentQuestionRelation;
   taskRelation: InterviewTaskRelation;
@@ -166,6 +170,7 @@ export type SettledAdvisorExecutionPlanRejectionReason =
   | "logical-question-unit-mismatch"
   | "logical-question-revision-mismatch"
   | "source-hash-mismatch"
+  | "prompt-current-question-source-hash-mismatch"
   | "settlement-mismatch"
   | "expected-parent-mismatch"
   | "expected-parent-revision-mismatch"
@@ -203,6 +208,7 @@ export function buildSettledAdvisorExecutionPlan(input: {
   explicitTaskMutationCommand?: TaskLifecycleCommand;
   expectedActiveMeetingTask?: ActiveMeetingTask;
   responseAuthorityId?: string;
+  promptCurrentQuestionSourceHash?: string;
   createdAt?: number;
 }): SettledAdvisorExecutionPlan {
   const relation = toInterviewTaskRelation(input.settlement.relation);
@@ -419,6 +425,13 @@ export function buildSettledAdvisorExecutionPlan(input: {
       answerProfileQuestionType: responseOwner.questionType,
       artifactPolicyQuestionType: responseOwner.questionType,
       promptContractQuestionType: responseOwner.questionType,
+      committedCurrentQuestionSourceHash:
+        input.settlement.sourceHash,
+      executionPlanQuestionSourceHash:
+        input.settlement.sourceHash,
+      promptCurrentQuestionSourceHash:
+        input.promptCurrentQuestionSourceHash ??
+        input.settlement.sourceHash,
     });
 
   return {
@@ -429,7 +442,15 @@ export function buildSettledAdvisorExecutionPlan(input: {
     logicalQuestionUnitId:
       input.settlement.logicalQuestionUnitId,
     logicalQuestionRevision: input.settlement.revision,
+    sourceKind: input.settlement.sourceKind,
+    sourceTurnIds: [...input.settlement.sourceTurnIds],
+    sourceObservationIds: [
+      ...input.settlement.sourceObservationIds,
+    ],
     sourceHash: input.settlement.sourceHash,
+    promptCurrentQuestionSourceHash:
+      input.promptCurrentQuestionSourceHash ??
+      input.settlement.sourceHash,
     questionType: responseOwner.questionType,
     relation: input.settlement.relation,
     taskRelation: relation,
@@ -596,6 +617,13 @@ export function authorizeSettledAdvisorExecutionPlan(input: {
     rejectionReasons.push("source-hash-mismatch");
   }
   if (
+    input.plan.promptCurrentQuestionSourceHash !== input.plan.sourceHash
+  ) {
+    rejectionReasons.push(
+      "prompt-current-question-source-hash-mismatch"
+    );
+  }
+  if (
     !input.currentSettlement ||
     input.plan.settlementId !==
       input.currentSettlement.settlementId
@@ -664,7 +692,13 @@ export function formatSettledAdvisorExecutionPlanForTrace(
       plan.logicalQuestionUnitId,
     settledExecutionPlanLogicalQuestionRevision:
       plan.logicalQuestionRevision,
+    settledExecutionPlanSourceKind: plan.sourceKind,
+    settledExecutionPlanSourceTurnIds: plan.sourceTurnIds,
+    settledExecutionPlanSourceObservationIds:
+      plan.sourceObservationIds,
     settledExecutionPlanSourceHash: plan.sourceHash,
+    promptCurrentQuestionSourceHash:
+      plan.promptCurrentQuestionSourceHash,
     settledExecutionPlanQuestionType: plan.questionType,
     settledExecutionPlanRelation: plan.relation,
     settledExecutionPlanTaskRelation: plan.taskRelation,

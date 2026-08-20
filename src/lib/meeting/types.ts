@@ -1215,6 +1215,7 @@ export interface AdvisorCurrentQuestionEvidence {
   text: string;
   source: AdvisorCurrentQuestionEvidenceSource;
   sourceTurnIds: string[];
+  sourceHash?: string;
   logicalQuestionUnitId?: string;
   revision?: number;
   screenObservationId?: string;

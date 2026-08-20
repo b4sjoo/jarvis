@@ -41,6 +41,7 @@ import {
   type MeetingMetadataInferenceRequestResult,
 } from "@/lib/meeting/meeting-metadata-inference-request";
 import { formatRuntimeInferenceProviderOutcomeForTrace } from "@/lib/meeting/runtime-inference-response";
+import { buildManualScreenLogicalQuestionUnit } from "@/lib/meeting/manual-screen-question-source";
 import {
   AdvisorEngine,
   buildAdvisorEvidencePacket,
@@ -439,6 +440,7 @@ import {
   formatRuntimeCommitAuthorizationForTrace,
   formatRuntimeInferenceOperationForTrace,
   formatCurrentQuestionSettlementForTrace,
+  finalizeCurrentQuestionFirstParentSettlement,
   settlementAuthorizesFollowupParentScope,
   formatCurrentQuestionTerminalNoAnswerForTrace,
   formatQuestionTypeConsumerObservationForTrace,
@@ -9169,6 +9171,13 @@ export function useMeetingAssistant() {
               source: "voice-lqu",
               sourceTurnIds:
                 advisorJob.logicalQuestionUnit.sourceTurnIds,
+              sourceHash:
+                currentQuestionSettlement?.logicalQuestionUnitId ===
+                  advisorJob.logicalQuestionUnit.id &&
+                currentQuestionSettlement.revision ===
+                  advisorJob.logicalQuestionUnit.revision
+                  ? currentQuestionSettlement.sourceHash
+                  : undefined,
               logicalQuestionUnitId:
                 advisorJob.logicalQuestionUnit.id,
               revision: advisorJob.logicalQuestionUnit.revision,
@@ -9395,6 +9404,31 @@ export function useMeetingAssistant() {
       } else {
         currentQuestionSettlementDurationMs = 0;
       }
+      if (llmTypeRepairFirstParentAdmission.authorized) {
+        const finalizedFirstParentSettlement =
+          finalizeCurrentQuestionFirstParentSettlement({
+            currentQuestion: provisionalCurrentQuestion,
+            typeOnlySettlement: currentQuestionSettlement,
+          });
+        if (finalizedFirstParentSettlement) {
+          currentQuestionSettlement = finalizedFirstParentSettlement;
+          advisorTaskSignals = {
+            ...advisorTaskSignals,
+            questionType: currentQuestionSettlement.questionType,
+            questionTypeDecision: undefined,
+            taskRelation: "new-parent",
+            taskRelationAuthorityDecision: undefined,
+            relationEvidenceAuthorized: true,
+            responseOnlyRelation: false,
+            source: "current-question-settlement",
+            reuseActivePlaybook: false,
+            latestTurnTaxonomyBoundaryReason:
+              "current-question-settlement",
+            taxonomyFallbackSuppressed: true,
+            unknownTaskMutationBlocked: false,
+          };
+        }
+      }
       if (!responseMutationSuppressed) {
         currentQuestionSettlementRef.current =
           currentQuestionSettlement;
@@ -9544,6 +9578,11 @@ export function useMeetingAssistant() {
             parentAfter?.questionType ===
               currentQuestionSettlement.questionType
         ),
+        currentQuestionSettlementParentCommandCoherent:
+          !parentCommitted ||
+          (currentQuestionSettlement.relation === "new-parent" &&
+            currentQuestionSettlement.action === "answer" &&
+            currentQuestionSettlement.parentMutationAuthorized),
       };
       traceStoreRef.current.updateMetadata(traceId, metadata);
       sessionRecordingManagerRef.current?.recordCurrentQuestionSettlement({
@@ -9564,44 +9603,30 @@ export function useMeetingAssistant() {
       });
       currentQuestionSettlementRecorded = true;
     };
-    let taskBoundaryCandidate =
-      llmTypeRepairFirstParentAdmission.authorized
-        ? createTaskBoundaryCandidate({
-            logicalQuestionUnit: advisorJob.logicalQuestionUnit,
-            currentQuestion: provisionalCurrentQuestion,
-            proposedQuestionType:
-              llmTypeRepairFirstParentAdmission.command?.type,
-            proposedRelation:
-              llmTypeRepairFirstParentAdmission.proposedRelation,
-            authoritySource: "accepted-llm-type-first-parent",
-            sourceKind: currentQuestionSourceKind,
-            sourceObservationIds:
-              currentQuestionSourceObservationIds,
-            confidence: currentQuestionSettlement?.confidence,
-            questionComplete: true,
-            mutationAuthorized: true,
-            commitParent: true,
-          })
-        : createTaskBoundaryCandidate({
-            logicalQuestionUnit: advisorJob.logicalQuestionUnit,
-            currentQuestion: provisionalCurrentQuestion,
-            settlement: currentQuestionSettlement,
-            proposedQuestionType: advisorTaskSignals.questionType,
-            proposedRelation: advisorTaskSignals.taskRelation,
-            authoritySource: taskBoundaryAuthoritySource,
-            sourceKind: currentQuestionSourceKind,
-            sourceObservationIds:
-              currentQuestionSourceObservationIds,
-            confidence: advisorTaskSignals.openingRoute
-              ? 1
-              : questionTypeDecisionAuthorityConfidence(
-                  advisorTaskSignals.questionTypeDecision
-                ),
-            questionComplete,
-            mutationAuthorized:
-              taskMutationAuthorization.authorized,
-            commitParent,
-          });
+    let taskBoundaryCandidate = createTaskBoundaryCandidate({
+      logicalQuestionUnit: advisorJob.logicalQuestionUnit,
+      currentQuestion: provisionalCurrentQuestion,
+      settlement: currentQuestionSettlement,
+      proposedQuestionType: advisorTaskSignals.questionType,
+      proposedRelation: advisorTaskSignals.taskRelation,
+      authoritySource: llmTypeRepairFirstParentAdmission.authorized
+        ? "accepted-llm-type-first-parent"
+        : taskBoundaryAuthoritySource,
+      sourceKind: currentQuestionSourceKind,
+      sourceObservationIds: currentQuestionSourceObservationIds,
+      confidence: advisorTaskSignals.openingRoute
+        ? 1
+        : questionTypeDecisionAuthorityConfidence(
+            advisorTaskSignals.questionTypeDecision
+          ),
+      questionComplete:
+        llmTypeRepairFirstParentAdmission.authorized || questionComplete,
+      mutationAuthorized:
+        llmTypeRepairFirstParentAdmission.authorized ||
+        taskMutationAuthorization.authorized,
+      commitParent:
+        llmTypeRepairFirstParentAdmission.authorized || commitParent,
+    });
     if (
       !responseMutationSuppressed &&
       taskBoundaryCandidate &&
@@ -10362,6 +10387,8 @@ export function useMeetingAssistant() {
               : undefined,
           responseAuthorityId:
             advisorJob.runtimeTypeRepairOutputAuthority?.id,
+          promptCurrentQuestionSourceHash:
+            advisorEvidencePacket.currentQuestion?.sourceHash,
         });
       }
       if (!responseMutationSuppressed) {
@@ -21746,7 +21773,7 @@ export function useMeetingAssistant() {
             : undefined;
         const screenCurrentQuestionEvidenceText =
           screenPreflight?.question?.trim() ?? "";
-        const screenSourcePacket = resolveManualScreenSourcePacket({
+        let screenSourcePacket = resolveManualScreenSourcePacket({
           voiceQuestion: screenVoiceQuestionCapsule,
           screenObservationId: observation.id,
           screenPreflightQuestion: screenCurrentQuestionEvidenceText,
@@ -22096,19 +22123,50 @@ export function useMeetingAssistant() {
           ),
         } satisfies NarrowScreenRelationReleaseInput;
         if (screenRelationQuestion.trim()) {
+          if (!screenSourcePacket.primaryAsk) {
+            screenSourcePacket = resolveManualScreenSourcePacket({
+              screenObservationId: observation.id,
+              screenPreflightQuestion: screenRelationQuestion,
+            });
+          }
           screenRelationLogicalQuestionUnit =
-            buildScreenAnswerSufficiencyLogicalQuestionUnit({
-              observationId: observation.id,
-              question: screenRelationQuestion,
+            buildManualScreenLogicalQuestionUnit({
+              packet: screenSourcePacket,
               sessionId: preflightContextState.sessionId,
               runtimeEpoch: runtimeEpochRef.current,
               createdAt: observation.capturedAt,
+              transcriptTurns: preflightContextState.transcriptTurns,
             });
+          if (!screenRelationLogicalQuestionUnit) {
+            throw new Error("Screen current-question source is unavailable.");
+          }
           screenCurrentQuestion = createProvisionalCurrentQuestion({
             logicalQuestionUnit: screenRelationLogicalQuestionUnit,
-            sourceKind: "screen",
+            sourceKind:
+              screenSourcePacket.primaryAsk?.source === "voice-lqu"
+                ? "mixed"
+                : "screen",
             sourceObservationIds: [observation.id],
           });
+          if (screenSourcePacket.primaryAsk) {
+            screenSourcePacket = {
+              ...screenSourcePacket,
+              primaryAsk: {
+                ...screenSourcePacket.primaryAsk,
+                sourceHash: screenCurrentQuestion.sourceHash,
+              },
+            };
+            screenEvidencePacket =
+              buildScreenEvidencePacket(preflightContextState);
+            screenMemoryQuery = buildAdvisorEvidenceRetrievalQuery(
+              screenEvidencePacket,
+              "screen-task"
+            );
+            traceStoreRef.current.updateMetadata(
+              trace.id,
+              formatManualScreenSourcePacketForTrace(screenSourcePacket)
+            );
+          }
           screenDeterministicSettlementProposal = {
             source: "deterministic-fast-path",
             sessionId: screenCurrentQuestion.sessionId,
@@ -23104,6 +23162,12 @@ export function useMeetingAssistant() {
               settledScreenQuestionType,
             promptContractQuestionType:
               settledScreenQuestionType,
+            committedCurrentQuestionSourceHash:
+              screenCurrentQuestionSettlement?.sourceHash,
+            executionPlanQuestionSourceHash:
+              screenCurrentQuestionSettlement?.sourceHash,
+            promptCurrentQuestionSourceHash:
+              screenEvidencePacket.currentQuestion?.sourceHash,
           });
         const screenCapacityEstimationGuardrail =
           resolveCapacityEstimationGuardrail({
@@ -28073,6 +28137,8 @@ export function useMeetingAssistant() {
                     resettledScreenTask?.classifier
                       ?.projectAnchor,
                   sourceQuestion: correctedSemanticEvidenceText,
+                  promptCurrentQuestionSourceHash:
+                    settledCorrection.sourceHash,
                   explicitTaskMutationCommand: {
                     kind: "replace-parent",
                     type: correctedType,

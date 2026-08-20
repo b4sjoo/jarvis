@@ -117,6 +117,32 @@ test("creates a stable versioned provisional question snapshot", () => {
   assert.equal(first.sourceKind, "mixed");
   assert.equal(first.sourceHash, duplicate.sourceHash);
   assert.notEqual(first.sourceHash, revised.sourceHash);
+
+  const settlement = settleCurrentQuestion({
+    currentQuestion: first,
+    deterministicProposal: proposal("deterministic-fast-path", {
+      sourceHash: first.sourceHash,
+    }),
+    manualCorrectionRevision: 0,
+    policy: {
+      runtimeMutationAuthorized: true,
+      questionComplete: true,
+      commitParent: true,
+    },
+  });
+  const trace = formatCurrentQuestionSettlementForTrace(settlement);
+
+  assert.equal(settlement.sourceKind, "mixed");
+  assert.deepEqual(settlement.sourceTurnIds, ["turn-a", "turn-b"]);
+  assert.deepEqual(settlement.sourceObservationIds, ["observation-a"]);
+  assert.equal(trace.currentQuestionSettlementSourceKind, "mixed");
+  assert.deepEqual(trace.currentQuestionSettlementSourceTurnIds, [
+    "turn-a",
+    "turn-b",
+  ]);
+  assert.deepEqual(trace.currentQuestionSettlementSourceObservationIds, [
+    "observation-a",
+  ]);
 });
 
 test("authorizes active-parent scope only for a bound settled follow-up", () => {

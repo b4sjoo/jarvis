@@ -158,6 +158,7 @@ test("records evidence roles without copying private Brief text", () => {
       text: "What is consistent hashing?",
       source: "screen-preflight",
       sourceTurnIds: [],
+      sourceHash: "screen-source-a",
       screenObservationId: "screen-a",
     },
     interviewSessionBrief: legacyBrief,
@@ -166,7 +167,12 @@ test("records evidence roles without copying private Brief text", () => {
   const trace = formatAdvisorEvidencePacketForTrace(packet, query);
 
   assert.equal(trace.currentQuestionEvidenceSource, "screen-preflight");
+  assert.equal(trace.promptCurrentQuestionSourceHash, "screen-source-a");
   assert.equal(trace.currentQuestionScreenObservationId, "screen-a");
+  assert.match(
+    formatAdvisorEvidencePacketForPrompt(packet),
+    /source_hash: screen-source-a/
+  );
   assert.equal(trace.rejectedRawBriefFactAnchorCount, 0);
   assert.equal(JSON.stringify(trace).includes(privateNote), false);
 });
