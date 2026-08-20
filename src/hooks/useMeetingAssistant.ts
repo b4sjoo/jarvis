@@ -661,7 +661,9 @@ import {
   scoreSemanticInterviewerIntentEmbeddings,
   scoreSemanticTaxonomyEmbedding,
   selectManualScreenVoiceQuestionCapsule,
+  decideManualScreenVoiceQuestionBinding,
   resolveManualScreenSourcePacket,
+  formatManualScreenVoiceQuestionBindingForTrace,
   formatManualScreenSourcePacketForTrace,
   SemanticTaxonomyRuntime,
   PlaybookPhaseDecision,
@@ -20952,7 +20954,7 @@ export function useMeetingAssistant() {
       const screenOperationId = createMeetingId("screen_operation");
       const screenOperationRequestedAt = options.requestedAt ?? Date.now();
       const screenRequestContextState = contextManagerRef.current.getState();
-      const screenVoiceQuestionCapsule =
+      const screenVoiceQuestionCandidate =
         selectManualScreenVoiceQuestionCapsule({
           sessionId: screenRequestContextState.sessionId,
           runtimeEpoch: runtimeEpochRef.current,
@@ -21007,6 +21009,61 @@ export function useMeetingAssistant() {
           : pendingVoiceCandidate?.source === "live-turn"
             ? pendingVoiceCandidate
             : activeVoiceCandidate ?? pendingVoiceCandidate;
+      const visibleAnswerAtScreenRequest = stableAnswerRevisionRef.current;
+      const visibleAnswerFingerprintContext =
+        visibleAnswerAtScreenRequest?.suggestion.sourceTraceId
+          ? advisorResponseFingerprintContextByTraceRef.current.get(
+              visibleAnswerAtScreenRequest.suggestion.sourceTraceId
+            )
+          : undefined;
+      const unresolvedManualCorrectionTarget =
+        latestManualCorrectionTargetRef.current?.resolvedAt
+          ? undefined
+          : latestManualCorrectionTargetRef.current?.logicalQuestionUnit;
+      const screenVoiceQuestionBinding =
+        decideManualScreenVoiceQuestionBinding({
+          candidate: screenVoiceQuestionCandidate,
+          activeVoiceAttempt:
+            activeVoiceCandidate?.source === "live-turn"
+              ? {
+                  logicalQuestionUnitId:
+                    activeVoiceCandidate.logicalQuestionUnitId,
+                  logicalQuestionRevision:
+                    activeVoiceCandidate.logicalQuestionRevision,
+                }
+              : undefined,
+          pendingVoiceDelivery:
+            pendingVoiceCandidate?.source === "live-turn"
+              ? {
+                  logicalQuestionUnitId:
+                    pendingVoiceCandidate.logicalQuestionUnitId,
+                  logicalQuestionRevision:
+                    pendingVoiceCandidate.logicalQuestionRevision,
+                }
+              : undefined,
+          explicitRecoveryTarget: unresolvedManualCorrectionTarget
+            ? {
+                logicalQuestionUnitId: unresolvedManualCorrectionTarget.id,
+                logicalQuestionRevision:
+                  unresolvedManualCorrectionTarget.revision,
+              }
+            : undefined,
+          visibleAnswer: visibleAnswerAtScreenRequest
+            ? {
+                logicalQuestionUnitId:
+                  visibleAnswerAtScreenRequest.logicalQuestionUnitId,
+                logicalQuestionRevision:
+                  visibleAnswerAtScreenRequest.logicalQuestionRevision,
+              }
+            : undefined,
+          visibleAnswerContextInsufficient:
+            visibleAnswerFingerprintContext?.answerSufficiencyDecision
+              ?.answerStatus === "context-insufficient",
+        });
+      const screenVoiceQuestionCapsule =
+        screenVoiceQuestionBinding.disposition === "bind-voice"
+          ? screenVoiceQuestionBinding.candidate
+          : undefined;
       const screenOperationClaim =
         screenOperationCoordinatorRef.current.claim(
           screenOperationId,
@@ -21051,6 +21108,9 @@ export function useMeetingAssistant() {
           privacyMode: state.settings.privacyMode,
           screenContextEnabled: state.settings.screenContextEnabled,
           ...formatRefreshAuthorityForTrace(screenRefreshAuthority),
+          ...formatManualScreenVoiceQuestionBindingForTrace(
+            screenVoiceQuestionBinding
+          ),
         },
         options.requestedAt
       );

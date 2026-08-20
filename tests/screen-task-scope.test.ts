@@ -8,7 +8,9 @@ import {
   resolveAdvisorScreenSourceRead,
   resolveAdvisorRequestModeForScreenScope,
   resolveAdvisorTaskEvidenceSource,
+  decideManualScreenVoiceQuestionBinding,
   resolveManualScreenSourcePacket,
+  formatManualScreenVoiceQuestionBindingForTrace,
   formatManualScreenSourcePacketForTrace,
   selectManualScreenVoiceQuestionCapsule,
 } from "../src/lib/meeting/screen-task-scope.js";
@@ -390,6 +392,98 @@ test("binds a Voice LQU as the primary ask and keeps Screen as visual evidence",
       manualScreenBoundVoicePrimaryAsk: true,
     }
   );
+});
+
+test("binds the exact active or pending Voice attempt to manual Screen evidence", () => {
+  const candidate = {
+    logicalQuestionUnitId: "question-current",
+    logicalQuestionRevision: 2,
+    text: "Explain lines 35 through 38.",
+    sourceTurnIds: ["turn-35"],
+  };
+
+  assert.equal(
+    decideManualScreenVoiceQuestionBinding({
+      candidate,
+      activeVoiceAttempt: {
+        logicalQuestionUnitId: "question-current",
+        logicalQuestionRevision: 2,
+      },
+    }).reason,
+    "active-voice-attempt"
+  );
+  assert.equal(
+    decideManualScreenVoiceQuestionBinding({
+      candidate,
+      pendingVoiceDelivery: {
+        logicalQuestionUnitId: "question-current",
+        logicalQuestionRevision: 2,
+      },
+    }).disposition,
+    "bind-voice"
+  );
+});
+
+test("keeps a context-insufficient visible Voice answer as a Screen recovery target", () => {
+  const candidate = {
+    logicalQuestionUnitId: "question-current",
+    logicalQuestionRevision: 2,
+    text: "Explain lines 35 through 38.",
+    sourceTurnIds: ["turn-35"],
+  };
+  const decision = decideManualScreenVoiceQuestionBinding({
+    candidate,
+    visibleAnswer: {
+      logicalQuestionUnitId: "question-current",
+      logicalQuestionRevision: 2,
+    },
+    visibleAnswerContextInsufficient: true,
+  });
+
+  assert.equal(decision.disposition, "bind-voice");
+  assert.equal(decision.reason, "context-insufficient-visible-answer");
+});
+
+test("releases an answered Voice LQU before an unrelated Screen question", () => {
+  const candidate = {
+    logicalQuestionUnitId: "behavioral-question",
+    logicalQuestionRevision: 1,
+    text: "Tell me about a time you disagreed with a teammate.",
+    sourceTurnIds: ["turn-behavioral"],
+  };
+  const decision = decideManualScreenVoiceQuestionBinding({
+    candidate,
+    visibleAnswer: {
+      logicalQuestionUnitId: "behavioral-question",
+      logicalQuestionRevision: 1,
+    },
+  });
+
+  assert.equal(decision.disposition, "use-screen");
+  assert.equal(decision.reason, "visible-answer-already-committed");
+  assert.deepEqual(formatManualScreenVoiceQuestionBindingForTrace(decision), {
+    manualScreenVoiceCandidateLogicalQuestionUnitId: "behavioral-question",
+    manualScreenVoiceCandidateLogicalQuestionRevision: 1,
+    manualScreenVoiceCandidateSourceTurnIds: ["turn-behavioral"],
+    manualScreenVoiceCandidateChars: 51,
+    manualScreenVoiceBindingDisposition: "use-screen",
+    manualScreenVoiceBindingReason: "visible-answer-already-committed",
+    manualScreenFinalQuestionOwner: "screen-preflight",
+  });
+});
+
+test("does not bind an idle Voice candidate without recovery authority", () => {
+  const decision = decideManualScreenVoiceQuestionBinding({
+    candidate: {
+      logicalQuestionUnitId: "question-idle",
+      logicalQuestionRevision: 1,
+      text: "Old unresolved question.",
+      sourceTurnIds: ["turn-old"],
+    },
+  });
+
+  assert.equal(decision.disposition, "use-screen");
+  assert.equal(decision.reason, "voice-recovery-not-authorized");
 });
 
 test("uses Screen preflight as the primary ask when no Voice question is bound", () => {

@@ -79,6 +79,26 @@ export interface ManualScreenVoiceQuestionCapsule {
   sourceTurnIds: string[];
 }
 
+export interface ManualScreenVoiceQuestionTarget {
+  logicalQuestionUnitId?: string | null;
+  logicalQuestionRevision?: number | null;
+}
+
+export type ManualScreenVoiceQuestionBindingReason =
+  | "no-voice-candidate"
+  | "active-voice-attempt"
+  | "pending-voice-delivery"
+  | "explicit-recovery-target"
+  | "context-insufficient-visible-answer"
+  | "visible-answer-already-committed"
+  | "voice-recovery-not-authorized";
+
+export interface ManualScreenVoiceQuestionBindingDecision {
+  disposition: "bind-voice" | "use-screen";
+  reason: ManualScreenVoiceQuestionBindingReason;
+  candidate?: ManualScreenVoiceQuestionCapsule;
+}
+
 export interface ManualScreenSourcePacket {
   primaryAsk?: AdvisorCurrentQuestionEvidence;
   visualEvidence: {
@@ -111,6 +131,94 @@ export function selectManualScreenVoiceQuestionCapsule<
     logicalQuestionRevision: unit.revision,
     text: unit.normalizedText.trim(),
     sourceTurnIds: [...unit.sourceTurnIds],
+  };
+}
+
+/**
+ * Manual Screen capture is a new question milestone by default. Voice keeps
+ * ownership only while the exact attempt is unresolved or a committed answer
+ * explicitly reports that nearby evidence is missing.
+ */
+export function decideManualScreenVoiceQuestionBinding(input: {
+  candidate?: ManualScreenVoiceQuestionCapsule;
+  activeVoiceAttempt?: ManualScreenVoiceQuestionTarget;
+  pendingVoiceDelivery?: ManualScreenVoiceQuestionTarget;
+  explicitRecoveryTarget?: ManualScreenVoiceQuestionTarget;
+  visibleAnswer?: ManualScreenVoiceQuestionTarget;
+  visibleAnswerContextInsufficient?: boolean;
+}): ManualScreenVoiceQuestionBindingDecision {
+  const candidate = input.candidate;
+  if (!candidate) {
+    return {
+      disposition: "use-screen",
+      reason: "no-voice-candidate",
+    };
+  }
+
+  if (sameVoiceQuestionTarget(candidate, input.activeVoiceAttempt)) {
+    return {
+      disposition: "bind-voice",
+      reason: "active-voice-attempt",
+      candidate,
+    };
+  }
+  if (sameVoiceQuestionTarget(candidate, input.pendingVoiceDelivery)) {
+    return {
+      disposition: "bind-voice",
+      reason: "pending-voice-delivery",
+      candidate,
+    };
+  }
+  if (sameVoiceQuestionTarget(candidate, input.explicitRecoveryTarget)) {
+    return {
+      disposition: "bind-voice",
+      reason: "explicit-recovery-target",
+      candidate,
+    };
+  }
+
+  const visibleAnswerMatches = sameVoiceQuestionTarget(
+    candidate,
+    input.visibleAnswer
+  );
+  if (visibleAnswerMatches && input.visibleAnswerContextInsufficient) {
+    return {
+      disposition: "bind-voice",
+      reason: "context-insufficient-visible-answer",
+      candidate,
+    };
+  }
+  if (visibleAnswerMatches) {
+    return {
+      disposition: "use-screen",
+      reason: "visible-answer-already-committed",
+      candidate,
+    };
+  }
+
+  return {
+    disposition: "use-screen",
+    reason: "voice-recovery-not-authorized",
+    candidate,
+  };
+}
+
+export function formatManualScreenVoiceQuestionBindingForTrace(
+  decision: ManualScreenVoiceQuestionBindingDecision
+): Record<string, unknown> {
+  return {
+    manualScreenVoiceCandidateLogicalQuestionUnitId:
+      decision.candidate?.logicalQuestionUnitId,
+    manualScreenVoiceCandidateLogicalQuestionRevision:
+      decision.candidate?.logicalQuestionRevision,
+    manualScreenVoiceCandidateSourceTurnIds:
+      decision.candidate?.sourceTurnIds ?? [],
+    manualScreenVoiceCandidateChars:
+      decision.candidate?.text.length ?? 0,
+    manualScreenVoiceBindingDisposition: decision.disposition,
+    manualScreenVoiceBindingReason: decision.reason,
+    manualScreenFinalQuestionOwner:
+      decision.disposition === "bind-voice" ? "voice-lqu" : "screen-preflight",
   };
 }
 
@@ -178,6 +286,17 @@ export function formatManualScreenSourcePacketForTrace(
     manualScreenBoundVoicePrimaryAsk:
       packet.sourceOperationAuthority.boundVoicePrimaryAsk,
   };
+}
+
+function sameVoiceQuestionTarget(
+  candidate: ManualScreenVoiceQuestionCapsule,
+  target: ManualScreenVoiceQuestionTarget | undefined
+) {
+  return Boolean(
+    target &&
+      target.logicalQuestionUnitId === candidate.logicalQuestionUnitId &&
+      target.logicalQuestionRevision === candidate.logicalQuestionRevision
+  );
 }
 
 export function resolveAdvisorScreenSourceRead<
