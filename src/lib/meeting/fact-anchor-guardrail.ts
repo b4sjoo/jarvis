@@ -173,13 +173,27 @@ export function buildFactAnchorDecision({
       questionType,
       mode: personalEvidenceGuardrailMode,
     });
+  const projectFactSensitive = detectProjectFactSensitiveQuestion({
+    questionText,
+    projectAnchor,
+    projectBindingDecision,
+  });
   const requirementResolution = resolveFactAnchorRequirement(
     questionType,
-    personalEvidence
+    personalEvidence,
+    projectFactSensitive
   );
+  const withProjectFactSensitivity = (
+    decision: FactAnchorDecision
+  ): FactAnchorDecision => ({
+    ...decision,
+    projectFactSensitive,
+    projectFactSensitiveTypeMismatch:
+      projectFactSensitive && questionType !== "project-deep-dive",
+  });
   const requiredFor = requirementResolution.requiredFor;
   if (requiredFor === "none") {
-    return {
+    return withProjectFactSensitivity({
       state: "not-required",
       requiredFor,
       supportedAnchorIds: [],
@@ -196,11 +210,11 @@ export function buildFactAnchorDecision({
         personalEvidence.requirement !== "not-required"
           ? "shadow-observed"
           : "none",
-    };
+    });
   }
 
   if (requiredFor === "personal-logistics") {
-    return {
+    return withProjectFactSensitivity({
       ...buildPersonalStatusFactDecision({
         questionText,
         personalEvidence,
@@ -209,7 +223,7 @@ export function buildFactAnchorDecision({
       }),
       requirementSource: requirementResolution.source,
       requirementReason: requirementResolution.reason,
-    };
+    });
   }
 
   if (
@@ -219,7 +233,7 @@ export function buildFactAnchorDecision({
     const candidateTitles = projectBindingDecision.candidates.map(
       (candidate) => candidate.projectName
     );
-    return {
+    return withProjectFactSensitivity({
       state: candidateTitles.length ? "weak-anchor" : "no-anchor",
       requiredFor,
       supportedAnchorIds: [],
@@ -237,7 +251,7 @@ export function buildFactAnchorDecision({
       requirementSource: requirementResolution.source,
       requirementReason: requirementResolution.reason,
       unsupportedClaimRisk: "high",
-    };
+    });
   }
 
   const predicateFamily = inferClaimPredicateFamily(
@@ -281,7 +295,7 @@ export function buildFactAnchorDecision({
   ]);
 
   if (memoryAnchors.length || preparationAnchors.length) {
-    return {
+    return withProjectFactSensitivity({
       state: "strong-anchor",
       requiredFor,
       supportedAnchorIds,
@@ -297,12 +311,12 @@ export function buildFactAnchorDecision({
       requirementSource: requirementResolution.source,
       requirementReason: requirementResolution.reason,
       unsupportedClaimRisk: "guarded",
-    };
+    });
   }
 
   const selectedNonAnchorEntries = memoryContext?.entries.length ?? 0;
   if (selectedNonAnchorEntries > 0) {
-    return {
+    return withProjectFactSensitivity({
       state: "weak-anchor",
       requiredFor,
       supportedAnchorIds: [],
@@ -317,11 +331,11 @@ export function buildFactAnchorDecision({
       requirementSource: requirementResolution.source,
       requirementReason: requirementResolution.reason,
       unsupportedClaimRisk: "high",
-    };
+    });
   }
 
   const projectHint = projectAnchor?.trim();
-  return {
+  return withProjectFactSensitivity({
     state: "no-anchor",
     requiredFor,
     supportedAnchorIds: [],
@@ -337,7 +351,7 @@ export function buildFactAnchorDecision({
     requirementSource: requirementResolution.source,
     requirementReason: requirementResolution.reason,
     unsupportedClaimRisk: "high",
-  };
+  });
 }
 
 export function formatFactAnchorDecisionForPrompt(
@@ -377,6 +391,12 @@ export function formatFactAnchorDecisionForPrompt(
     `Unsupported claim risk: ${decision.unsupportedClaimRisk}`,
     decision.claimPredicateFamily
       ? `Claim predicate family: ${decision.claimPredicateFamily}`
+      : undefined,
+    decision.projectFactSensitive
+      ? "Project fact-sensitive source: true"
+      : undefined,
+    decision.projectFactSensitiveTypeMismatch
+      ? "Project fact-sensitive type mismatch: true"
       : undefined,
     decision.claimSupportDecisions.length
       ? `Allowed claim anchors: ${decision.claimSupportDecisions
@@ -432,6 +452,10 @@ export function formatFactAnchorDecisionForTrace(
     personalEvidenceGuardrailMode: decision.personalEvidence.mode,
     personalEvidenceEnforced: decision.personalEvidence.enforced,
     unsupportedClaimRisk: decision.unsupportedClaimRisk,
+    factAnchorProjectFactSensitive:
+      decision.projectFactSensitive ?? false,
+    projectFactSensitiveTypeMismatch:
+      decision.projectFactSensitiveTypeMismatch ?? false,
     factAnchorClaimPredicateFamily: decision.claimPredicateFamily,
     factAnchorClaimSupportDecisions: decision.claimSupportDecisions,
   };
@@ -439,7 +463,8 @@ export function formatFactAnchorDecisionForTrace(
 
 function resolveFactAnchorRequirement(
   questionType: MemoryQuestionType | undefined,
-  personalEvidence: FactAnchorDecision["personalEvidence"]
+  personalEvidence: FactAnchorDecision["personalEvidence"],
+  projectFactSensitive: boolean
 ): {
   requiredFor: FactAnchorRequiredFor;
   source: NonNullable<FactAnchorDecision["requirementSource"]>;
@@ -473,6 +498,13 @@ function resolveFactAnchorRequirement(
       reason: "explicit-hypothetical-current-question-overrides-parent-type",
     };
   }
+  if (projectFactSensitive) {
+    return {
+      requiredFor: "project-deep-dive",
+      source: "current-question-project-source",
+      reason: "current-question-requests-bound-project-facts",
+    };
+  }
   if (questionType === "behavioral") {
     return {
       requiredFor: "behavioral",
@@ -493,6 +525,28 @@ function resolveFactAnchorRequirement(
     reason: "current-question-does-not-require-personal-fact-evidence",
   };
 }
+
+function detectProjectFactSensitiveQuestion({
+  questionText,
+  projectAnchor,
+  projectBindingDecision,
+}: {
+  questionText?: string;
+  projectAnchor?: string;
+  projectBindingDecision?: ProjectBindingDecision;
+}) {
+  const hasBoundProject = Boolean(
+    projectAnchor?.trim() || projectBindingDecision?.binding
+  );
+  if (!hasBoundProject) return false;
+
+  const text = normalizeEvidenceText(questionText);
+  if (!text) return false;
+  return PROJECT_FACT_SENSITIVE_ASK_PATTERN.test(text);
+}
+
+const PROJECT_FACT_SENSITIVE_ASK_PATTERN =
+  /\b(?:why did|how did|what did|which did|how (?:was|were)|what (?:was|were) the (?:implementation|failure|result|impact|tradeoff)|how (?:the |those |these )?(?:failures?|errors?|incidents?|requests?|items?) (?:were|was) (?:handled|processed|retried|reported|resolved))\b/i;
 
 function buildPersonalStatusFactDecision({
   questionText,

@@ -333,6 +333,54 @@ test("keeps generic medical field knowledge outside the personal fact boundary",
   assert.equal(decision.state, "not-required");
 });
 
+test("keeps a bound-project implementation ask fact-sensitive after a type mismatch", () => {
+  const decision = buildFactAnchorDecision({
+    questionType: "field-knowledge",
+    questionText:
+      "In the OASIS project, why did the Bulk API require NDJSON, and how were per-item failures handled?",
+    projectAnchor: "OASIS",
+    memoryContext: makeMemoryResult([]),
+  });
+
+  assert.equal(decision.requiredFor, "project-deep-dive");
+  assert.equal(
+    decision.requirementSource,
+    "current-question-project-source"
+  );
+  assert.equal(decision.projectFactSensitive, true);
+  assert.equal(decision.projectFactSensitiveTypeMismatch, true);
+  assert.equal(
+    formatFactAnchorDecisionForTrace(decision)
+      .projectFactSensitiveTypeMismatch,
+    true
+  );
+});
+
+test("keeps a standalone concept inside a project context non-fact-dependent", () => {
+  const decision = buildFactAnchorDecision({
+    questionType: "field-knowledge",
+    questionText: "In the OpenSearch project, what is NDJSON?",
+    projectAnchor: "OpenSearch",
+    memoryContext: makeMemoryResult([]),
+  });
+
+  assert.equal(decision.requiredFor, "none");
+  assert.equal(decision.projectFactSensitive, false);
+  assert.equal(decision.projectFactSensitiveTypeMismatch, false);
+});
+
+test("keeps a present-tense project-adjacent why question non-fact-dependent", () => {
+  const decision = buildFactAnchorDecision({
+    questionType: "field-knowledge",
+    questionText: "Why does the OpenSearch Bulk API require NDJSON?",
+    projectAnchor: "OASIS",
+    memoryContext: makeMemoryResult([]),
+  });
+
+  assert.equal(decision.requiredFor, "none");
+  assert.equal(decision.projectFactSensitive, false);
+});
+
 test("does not enforce a hypothetical implementation request", () => {
   const decision = buildFactAnchorDecision({
     questionType: "coding",

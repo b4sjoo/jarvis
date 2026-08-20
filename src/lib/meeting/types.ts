@@ -601,9 +601,12 @@ export interface FactAnchorDecision {
   claimSupportDecisions: ClaimSupportDecision[];
   requirementSource?:
     | "current-question-personal-evidence"
+    | "current-question-project-source"
     | "settled-question-type"
     | "none";
   requirementReason?: string;
+  projectFactSensitive?: boolean;
+  projectFactSensitiveTypeMismatch?: boolean;
 }
 
 export interface ActiveScreenTask {
