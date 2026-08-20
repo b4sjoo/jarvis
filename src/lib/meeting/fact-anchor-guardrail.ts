@@ -398,6 +398,9 @@ export function formatFactAnchorDecisionForPrompt(
     decision.projectFactSensitiveTypeMismatch
       ? "Project fact-sensitive type mismatch: true"
       : undefined,
+    decision.action === "answer-with-anchor"
+      ? "Anchor scope rule: each first-person mechanism, metric, ownership claim, third-party stance, and absolute result must be directly supported by the allowed anchors. A valid anchor ID does not authorize invented surrounding details."
+      : undefined,
     decision.claimSupportDecisions.length
       ? `Allowed claim anchors: ${decision.claimSupportDecisions
           .filter((item) => item.decision === "allow")
@@ -456,6 +459,8 @@ export function formatFactAnchorDecisionForTrace(
       decision.projectFactSensitive ?? false,
     projectFactSensitiveTypeMismatch:
       decision.projectFactSensitiveTypeMismatch ?? false,
+    projectFactSensitiveTypeMismatchCount:
+      decision.projectFactSensitiveTypeMismatch ? 1 : 0,
     factAnchorClaimPredicateFamily: decision.claimPredicateFamily,
     factAnchorClaimSupportDecisions: decision.claimSupportDecisions,
   };

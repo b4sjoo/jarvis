@@ -163,6 +163,26 @@ export function enforceFactAnchorOutput({
         unsupportedAnchorIds,
       });
     }
+    const sanitized = sanitizeAnchoredFactOutput(
+      parsedAnswer,
+      decision,
+      expectedProfile
+    );
+    if (sanitized.sanitizedClaimCount > 0) {
+      return {
+        modelOutputAuthorized: false,
+        commitSource: "sanitized-model-output",
+        reason: "bounded-output-sanitized",
+        effectiveContent: sanitized.effectiveContent,
+        effectiveAnswer: sanitized.effectiveAnswer,
+        reportedDisposition: parsedAnswer.answerDisposition,
+        reportedAnchorIds: parsedAnswer.supportingAnchorIds,
+        unsupportedAnchorIds: [],
+        sanitizedClaimCount: sanitized.sanitizedClaimCount,
+        preservedClaimCount: sanitized.preservedClaimCount,
+        sanitizedSections: sanitized.sanitizedSections,
+      };
+    }
     return authorizeOriginal(parsedAnswer, "matching-authority-contract");
   }
 
@@ -193,6 +213,13 @@ export function formatFactAnchorOutputDecisionForTrace(
     factAnchorSanitizedSections: decision.sanitizedSections,
     factAnchorSafeReplacement:
       decision.commitSource === "safe-replacement",
+    unsupportedFirstPersonHardClaimCount:
+      decision.sanitizedClaimCount,
+    sanitizedHardClaimCount: decision.sanitizedClaimCount,
+    boundedSynthesisCommitCount:
+      decision.commitSource === "sanitized-model-output" ? 1 : 0,
+    wholeAnswerReplacementCount:
+      decision.commitSource === "safe-replacement" ? 1 : 0,
     factAnchorPartialOutputHeld: options.partialOutputHeld ?? false,
   };
 }
@@ -361,6 +388,197 @@ function sanitizeBoundedFactOutput(
   };
 }
 
+function sanitizeAnchoredFactOutput(
+  parsedAnswer: ParsedMeetingAnswer,
+  decision: FactAnchorDecision,
+  expectedProfile: MeetingAnswerProfile | undefined
+) {
+  const reportedAnchorIds = new Set(parsedAnswer.supportingAnchorIds);
+  const supportDecisions = decision.claimSupportDecisions.filter(
+    (item) =>
+      item.decision === "allow" &&
+      item.supportSpan?.trim() &&
+      (!item.anchorId || reportedAnchorIds.has(item.anchorId))
+  );
+  if (!supportDecisions.length) {
+    return {
+      effectiveContent: parsedAnswer.rawContent,
+      effectiveAnswer: parsedAnswer,
+      sanitizedClaimCount: 0,
+      preservedClaimCount: 0,
+      sanitizedSections: [] as string[],
+    };
+  }
+
+  const supportText = supportDecisions
+    .map((item) => item.supportSpan)
+    .filter((value): value is string => Boolean(value))
+    .join(" ");
+  const sections = {
+    ...parsedAnswer.sections,
+    clarifyingOptions: [...parsedAnswer.sections.clarifyingOptions],
+  };
+  let sanitizedClaimCount = 0;
+  let preservedClaimCount = 0;
+  const sanitizedSections: string[] = [];
+
+  for (const section of ["chineseThinking", "answer", "approach"] as const) {
+    const result = sanitizeAnchoredClaimSection(
+      sections[section],
+      supportText
+    );
+    sections[section] = result.text || undefined;
+    sanitizedClaimCount += result.removed;
+    preservedClaimCount += result.preserved;
+    if (result.removed > 0) sanitizedSections.push(section);
+  }
+
+  let sanitizedAnswer: ParsedMeetingAnswer = {
+    ...parsedAnswer,
+    sections,
+    supportingAnchorIds: parsedAnswer.supportingAnchorIds.filter(
+      (anchorId) => decision.supportedAnchorIds.includes(anchorId)
+    ),
+  };
+  if (!hasUsefulBoundedAnswer(sanitizedAnswer)) {
+    sanitizedAnswer = buildSupportedAnchorFallback({
+      parsedAnswer: sanitizedAnswer,
+      supportText,
+      decision,
+    });
+    preservedClaimCount += 1;
+  }
+
+  const effectiveContent = serializeMeetingAnswer(sanitizedAnswer);
+  return {
+    effectiveContent,
+    effectiveAnswer: parseMeetingAnswer(effectiveContent, {
+      expectedProfile,
+    }),
+    sanitizedClaimCount,
+    preservedClaimCount,
+    sanitizedSections,
+  };
+}
+
+function sanitizeAnchoredClaimSection(
+  value: string | undefined,
+  supportText: string
+) {
+  if (!value?.trim()) {
+    return { text: "", removed: 0, preserved: 0 };
+  }
+
+  let removed = 0;
+  let preserved = 0;
+  const lines = value
+    .split(/\n+/)
+    .map((line) => {
+      const units = line.match(/[^.!?。！？]+[.!?。！？]?/gu) ?? [line];
+      const kept = units.filter((unit) => {
+        if (isUnsupportedAnchoredPersonalClaim(unit, supportText)) {
+          removed += 1;
+          return false;
+        }
+        if (unit.trim()) preserved += 1;
+        return Boolean(unit.trim());
+      });
+      return kept.join(" ").trim();
+    })
+    .filter(Boolean);
+
+  return { text: lines.join("\n"), removed, preserved };
+}
+
+function isUnsupportedAnchoredPersonalClaim(
+  value: string,
+  supportText: string
+) {
+  const text = value.trim();
+  if (!FIRST_PERSON_PATTERN.test(text)) return false;
+  if (
+    HYPOTHETICAL_FIRST_PERSON_PATTERN.test(text) ||
+    HYPOTHETICAL_FIRST_PERSON_CHINESE_PATTERN.test(text)
+  ) {
+    return false;
+  }
+
+  const normalizedClaim = normalizeClaimEvidence(text);
+  const normalizedSupport = normalizeClaimEvidence(supportText);
+  if (!normalizedClaim || !normalizedSupport) return false;
+
+  const numbers = normalizedClaim.match(/\b\d[\d,.]*\b/g) ?? [];
+  if (numbers.some((number) => !normalizedSupport.includes(number))) {
+    return true;
+  }
+
+  const hasUnsupportedRole =
+    HIGH_AUTHORITY_ROLE_PATTERN.test(text) &&
+    !HIGH_AUTHORITY_ROLE_PATTERN.test(supportText);
+  if (hasUnsupportedRole) return true;
+
+  const highRiskShape =
+    THIRD_PARTY_STANCE_PATTERN.test(text) ||
+    ABSOLUTE_RESULT_PATTERN.test(text) ||
+    SPECIFIC_MECHANISM_PATTERN.test(text);
+  if (!highRiskShape) return false;
+
+  const claimTokens = extractDistinctiveClaimTokens(normalizedClaim);
+  if (!claimTokens.length) return false;
+  const supportedCount = claimTokens.filter((token) =>
+    normalizedSupport.includes(token)
+  ).length;
+  const requiredCoverage = claimTokens.length <= 3 ? 1 : 0.55;
+  return supportedCount / claimTokens.length < requiredCoverage;
+}
+
+function buildSupportedAnchorFallback({
+  parsedAnswer,
+  supportText,
+  decision,
+}: {
+  parsedAnswer: ParsedMeetingAnswer;
+  supportText: string;
+  decision: FactAnchorDecision;
+}): ParsedMeetingAnswer {
+  const compactSupport = supportText.replace(/\s+/g, " ").trim();
+  return {
+    ...parsedAnswer,
+    sections: {
+      ...parsedAnswer.sections,
+      chineseThinking: "仅保留当前证据直接支持的事实。",
+      answer: compactSupport,
+      approach: undefined,
+      clarifyingQuestion: undefined,
+      clarifyingOptions: [],
+    },
+    answerDisposition: "factual-with-anchor",
+    supportingAnchorIds: parsedAnswer.supportingAnchorIds.filter(
+      (anchorId) => decision.supportedAnchorIds.includes(anchorId)
+    ),
+  };
+}
+
+function extractDistinctiveClaimTokens(value: string) {
+  return Array.from(
+    new Set(
+      value
+        .split(" ")
+        .filter((token) => token.length >= 4)
+        .filter((token) => !CLAIM_SUPPORT_STOP_WORDS.has(token))
+    )
+  );
+}
+
+function normalizeClaimEvidence(value: string) {
+  return value
+    .normalize("NFKC")
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}.,]+/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 function sanitizeBoundedClaimSection(value: string | undefined) {
   if (!value?.trim()) {
     return { text: "", removed: 0, preserved: 0 };
@@ -423,6 +641,39 @@ const HARD_PERSONAL_FACT_PATTERN =
   /\b(?:i|we|my|our)\b.{0,90}\b(?:built|designed|implemented|developed|led|owned|delivered|deployed|launched|used|chose|selected|measured|validated|tested|debugged|fixed|reduced|improved|achieved|saved|collaborated|worked|created|migrated|operated|monitored|decided|responsible)\b|\b(?:my|our)\s+(?:team|project|system|service|role|contribution)\b/i;
 const HARD_PERSONAL_FACT_CHINESE_PATTERN =
   /(?:我|我们|我的|我们的).{0,80}(?:构建|设计|实现|开发|领导|负责|主导|交付|部署|上线|使用|选择|测量|验证|测试|调试|修复|减少|提升|完成|节省|合作|迁移|运维|监控|决定)|(?:我的|我们的)(?:角色|贡献|团队|项目|系统|服务)/u;
+const HIGH_AUTHORITY_ROLE_PATTERN =
+  /\b(?:i|we)\s+(?:personally\s+)?(?:led|owned|drove|managed|directed)|\b(?:my|our)\s+(?:ownership|leadership|responsibility)\b/i;
+const THIRD_PARTY_STANCE_PATTERN =
+  /\b(?:teammate|colleague|manager|stakeholder|partner|team)\b.{0,90}\b(?:wanted|argued|insisted|pushed|refused|opposed|preferred|believed|disagreed)\b/i;
+const ABSOLUTE_RESULT_PATTERN =
+  /\b(?:zero|none|never|always|all|every|without any|no)\b.{0,50}\b(?:downtime|loss|errors?|failures?|regressions?|incidents?|issues?|impact|gap)\b|\b100\s*%/i;
+const SPECIFIC_MECHANISM_PATTERN =
+  /\b(?:i|we)\b.{0,50}\b(?:implemented|built|designed|used|chose|deployed|routed|added|introduced|configured)\b.{0,120}\b(?:using|with|via|through|by|into|to)\b/i;
+const CLAIM_SUPPORT_STOP_WORDS = new Set([
+  "about",
+  "after",
+  "also",
+  "because",
+  "before",
+  "built",
+  "chose",
+  "could",
+  "designed",
+  "during",
+  "implemented",
+  "introduced",
+  "personally",
+  "project",
+  "routed",
+  "system",
+  "their",
+  "there",
+  "these",
+  "those",
+  "through",
+  "using",
+  "would",
+]);
 
 function normalizeChoice(value: string) {
   return value.trim().toLowerCase().replace(/\s+/g, " ");
