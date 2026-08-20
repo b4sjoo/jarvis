@@ -43,11 +43,7 @@ export const MemoryBase = () => {
       setProjects(nextProjects);
       setError(null);
     } catch (refreshError) {
-      setError(
-        refreshError instanceof Error
-          ? refreshError.message
-          : "Failed to load memory index."
-      );
+      setError(formatMemoryError(refreshError, "Failed to load memory index."));
     }
   }, []);
 
@@ -64,9 +60,7 @@ export const MemoryBase = () => {
       await refresh();
     } catch (rebuildError) {
       setError(
-        rebuildError instanceof Error
-          ? rebuildError.message
-          : "Failed to rebuild memory index."
+        formatMemoryError(rebuildError, "Failed to rebuild memory index.")
       );
     } finally {
       setLoading(false);
@@ -208,6 +202,12 @@ export const MemoryBase = () => {
     </section>
   );
 };
+
+function formatMemoryError(error: unknown, fallback: string) {
+  if (error instanceof Error && error.message.trim()) return error.message;
+  if (typeof error === "string" && error.trim()) return error;
+  return fallback;
+}
 
 const MemoryStat = ({
   icon,

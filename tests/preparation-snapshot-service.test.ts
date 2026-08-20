@@ -4,6 +4,7 @@ import { createPreparationProfileSourceFingerprint } from "../src/lib/preparatio
 import {
   createPreparationSnapshotService,
   diffPreparationSnapshots,
+  type PreparationSnapshotEvent,
 } from "../src/lib/preparation/snapshot-service.js";
 import type {
   PreparationExtractionCandidate,
@@ -263,6 +264,23 @@ test("activating outside the current Round requires explicit switch authority", 
   });
 });
 
+test("changing the global current context emits a selection event", async () => {
+  const fixture = createFixture();
+
+  const context = await fixture.service.setCurrentContext({
+    processId: PROCESS_ID,
+    roundId: ROUND_ID,
+  });
+
+  assert.equal(context.processId, PROCESS_ID);
+  assert.equal(context.roundId, ROUND_ID);
+  assert.equal(
+    fixture.serviceEvents.at(-1)?.name,
+    "Preparation current context changed"
+  );
+  assert.equal(fixture.serviceEvents.at(-1)?.selectionRevision, 1);
+});
+
 test("older snapshot can roll back when its pinned authority remains valid", async () => {
   const fixture = createFixture();
   const first = (
@@ -418,6 +436,7 @@ function createFixture() {
   let currentExtraction: PreparationExtractionCandidate | undefined;
   const snapshots: InterviewPreparationSnapshot[] = [];
   const events: PreparationSnapshotActivationEvent[] = [];
+  const serviceEvents: PreparationSnapshotEvent[] = [];
   const repository = snapshotRepository(snapshots, events);
   let id = 0;
   const service = createPreparationSnapshotService({
@@ -429,11 +448,13 @@ function createFixture() {
     getKmbEntries: async () => [],
     now: () => 100 + id,
     createId: () => String(++id),
+    onEvent: (event) => serviceEvents.push(event),
   });
   return {
     statements,
     snapshots,
     events,
+    serviceEvents,
     repository,
     service,
     get profile() {

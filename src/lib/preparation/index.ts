@@ -24,3 +24,4 @@ export * from "./statement-proposal-service.js";
 export * from "./preparation-composition-service.js";
 export * from "./snapshot-types.js";
 export * from "./snapshot-service.js";
+export * from "./snapshot-selection-events.js";

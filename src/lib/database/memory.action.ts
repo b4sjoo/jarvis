@@ -9,6 +9,7 @@ import {
   invalidateMemoryRetrievalSnapshot,
   type MemorySnapshotLoadResult,
 } from "@/lib/memory/retrieval-runtime";
+import { planMemoryRebuildRetention } from "@/lib/memory/rebuild-retention";
 import type {
   MemoryEntry,
   MemoryImportSummary,
@@ -74,6 +75,25 @@ interface MemoryProjectRow {
   updated_at: number;
 }
 
+interface MemoryEntryIdentityRow {
+  id: string;
+  source_ids: string;
+  project_id: string | null;
+}
+
+interface MemorySourceIdentityRow {
+  id: string;
+  project_id: string | null;
+}
+
+interface MemoryIdRow {
+  id: string;
+}
+
+interface SnapshotMemoryEntryLinkRow {
+  entry_id: string;
+}
+
 export async function rebuildCuratedMemoryIndex(): Promise<MemoryImportSummary> {
   const parsedDrafts = parseCuratedMemoryDrafts(CURATED_MEMORY_DRAFTS);
   const sources = dedupeById(parsedDrafts.flatMap((draft) => draft.sources));
@@ -89,15 +109,52 @@ export async function rebuildCuratedMemoryIndex(): Promise<MemoryImportSummary> 
   const importedAt = Date.now();
   const db = await getDatabase();
 
-  await db.execute("DELETE FROM memory_entries");
-  await db.execute("DELETE FROM memory_sources");
-  await db.execute("DELETE FROM memory_projects");
+  const existingEntries = await db.select<MemoryEntryIdentityRow[]>(
+    "SELECT id, source_ids, project_id FROM memory_entries"
+  );
+  const existingSources = await db.select<MemorySourceIdentityRow[]>(
+    "SELECT id, project_id FROM memory_sources"
+  );
+  const existingProjects = await db.select<MemoryIdRow[]>(
+    "SELECT id FROM memory_projects"
+  );
+  const snapshotLinks = await db.select<SnapshotMemoryEntryLinkRow[]>(
+    "SELECT DISTINCT entry_id FROM preparation_snapshot_kmb_entry_links"
+  );
+  const retentionPlan = planMemoryRebuildRetention({
+    currentEntries: entries.map((entry) => ({
+      id: entry.id,
+      sourceIds: entry.sourceIds,
+      projectId: entry.projectId,
+    })),
+    currentSources: sources.map((source) => ({
+      id: source.id,
+      projectId: source.projectId,
+    })),
+    currentProjectIds: projects.map((project) => project.id),
+    existingEntries: existingEntries.map((entry) => ({
+      id: entry.id,
+      sourceIds: parseJsonArray(entry.source_ids),
+      projectId: entry.project_id ?? undefined,
+    })),
+    existingSources: existingSources.map((source) => ({
+      id: source.id,
+      projectId: source.project_id ?? undefined,
+    })),
+    existingProjectIds: existingProjects.map((project) => project.id),
+    snapshotLinkedEntryIds: snapshotLinks.map((link) => link.entry_id),
+  });
 
   for (const project of projects) {
     await db.execute(
       `INSERT INTO memory_projects
         (id, name, scope, entry_count, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?)
+       ON CONFLICT(id) DO UPDATE SET
+         name = excluded.name,
+         scope = excluded.scope,
+         entry_count = excluded.entry_count,
+         updated_at = excluded.updated_at`,
       [
         project.id,
         project.name,
@@ -116,7 +173,24 @@ export async function rebuildCuratedMemoryIndex(): Promise<MemoryImportSummary> 
          original_path, scope, project_id, project_name, confidentiality,
          canonicality, raw_injection_policy, curation_status, checksum,
          draft_path, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(id) DO UPDATE SET
+         title = excluded.title,
+         collection = excluded.collection,
+         source_origin = excluded.source_origin,
+         source_format = excluded.source_format,
+         source_role = excluded.source_role,
+         original_path = excluded.original_path,
+         scope = excluded.scope,
+         project_id = excluded.project_id,
+         project_name = excluded.project_name,
+         confidentiality = excluded.confidentiality,
+         canonicality = excluded.canonicality,
+         raw_injection_policy = excluded.raw_injection_policy,
+         curation_status = excluded.curation_status,
+         checksum = excluded.checksum,
+         draft_path = excluded.draft_path,
+         updated_at = excluded.updated_at`,
       [
         source.id,
         source.title,
@@ -147,7 +221,30 @@ export async function rebuildCuratedMemoryIndex(): Promise<MemoryImportSummary> 
          project_name, tags, keywords, priority, enabled, injection_mode,
          use_cases, interview_families, confidentiality, curation_status, related_entry_ids,
          evidence_entry_ids, draft_path, created_at, updated_at, last_used_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(id) DO UPDATE SET
+         source_ids = excluded.source_ids,
+         type = excluded.type,
+         title = excluded.title,
+         content = excluded.content,
+         summary = excluded.summary,
+         scope = excluded.scope,
+         project_id = excluded.project_id,
+         project_name = excluded.project_name,
+         tags = excluded.tags,
+         keywords = excluded.keywords,
+         priority = excluded.priority,
+         enabled = excluded.enabled,
+         injection_mode = excluded.injection_mode,
+         use_cases = excluded.use_cases,
+         interview_families = excluded.interview_families,
+         confidentiality = excluded.confidentiality,
+         curation_status = excluded.curation_status,
+         related_entry_ids = excluded.related_entry_ids,
+         evidence_entry_ids = excluded.evidence_entry_ids,
+         draft_path = excluded.draft_path,
+         updated_at = excluded.updated_at,
+         last_used_at = COALESCE(excluded.last_used_at, memory_entries.last_used_at)`,
       [
         entry.id,
         JSON.stringify(entry.sourceIds),
@@ -174,6 +271,33 @@ export async function rebuildCuratedMemoryIndex(): Promise<MemoryImportSummary> 
         importedAt,
         entry.lastUsedAt ?? null,
       ]
+    );
+  }
+
+  await disableMemoryEntriesById(
+    db,
+    retentionPlan.disableEntryIds,
+    importedAt
+  );
+  await deleteMemoryRowsById(
+    db,
+    "memory_entries",
+    retentionPlan.deleteEntryIds
+  );
+  await deleteMemoryRowsById(
+    db,
+    "memory_sources",
+    retentionPlan.deleteSourceIds
+  );
+  await deleteMemoryRowsById(
+    db,
+    "memory_projects",
+    retentionPlan.deleteProjectIds
+  );
+
+  if (retentionPlan.disableEntryIds.length) {
+    warnings.push(
+      `Preserved ${retentionPlan.disableEntryIds.length} stale memory entries referenced by Preparation snapshots and disabled them.`
     );
   }
 
@@ -415,5 +539,39 @@ function parseJsonArray(value: string | null | undefined) {
     return Array.isArray(parsed) ? parsed.map(String) : [];
   } catch {
     return [];
+  }
+}
+
+async function disableMemoryEntriesById(
+  db: Awaited<ReturnType<typeof getDatabase>>,
+  ids: string[],
+  updatedAt: number
+) {
+  const chunkSize = 300;
+  for (let index = 0; index < ids.length; index += chunkSize) {
+    const chunk = ids.slice(index, index + chunkSize);
+    const placeholders = chunk.map(() => "?").join(", ");
+    await db.execute(
+      `UPDATE memory_entries
+       SET enabled = 0, updated_at = ?
+       WHERE id IN (${placeholders})`,
+      [updatedAt, ...chunk]
+    );
+  }
+}
+
+async function deleteMemoryRowsById(
+  db: Awaited<ReturnType<typeof getDatabase>>,
+  table: "memory_entries" | "memory_sources" | "memory_projects",
+  ids: string[]
+) {
+  const chunkSize = 300;
+  for (let index = 0; index < ids.length; index += chunkSize) {
+    const chunk = ids.slice(index, index + chunkSize);
+    const placeholders = chunk.map(() => "?").join(", ");
+    await db.execute(
+      `DELETE FROM ${table} WHERE id IN (${placeholders})`,
+      chunk
+    );
   }
 }

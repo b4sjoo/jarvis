@@ -22,7 +22,10 @@ import {
   type MemoryTopicDomain,
   type MemoryUseCase,
 } from "@/lib/memory";
-import { interviewPreparationSnapshotService } from "@/lib/preparation";
+import {
+  interviewPreparationSnapshotService,
+  subscribeToPreparationSnapshotSelectionChanges,
+} from "@/lib/preparation";
 import {
   MEETING_METADATA_INFERENCE_MAX_OUTPUT_CHARS,
   authorizeMeetingMetadataInferenceLease,
@@ -2646,6 +2649,25 @@ export function useMeetingAssistant() {
     );
   }
   const activeRef = useRef(false);
+  useEffect(() => {
+    if (state.status !== "idle") return;
+
+    let disposed = false;
+    const hydrateIdlePreparationPreview = () => {
+      if (disposed || activeRef.current) return;
+      const meetingSessionId = contextManagerRef.current.getState().sessionId;
+      void pinPreparationRuntimeForSession(meetingSessionId);
+    };
+
+    hydrateIdlePreparationPreview();
+    const unsubscribe = subscribeToPreparationSnapshotSelectionChanges(() => {
+      hydrateIdlePreparationPreview();
+    });
+    return () => {
+      disposed = true;
+      unsubscribe();
+    };
+  }, [pinPreparationRuntimeForSession, state.status]);
   const latestScreenHashRef = useRef<string | undefined>(undefined);
   const advisorDebounceTimerRef = useRef<number | null>(null);
   const activeAdvisorJobRef = useRef<AdvisorTriggerJob | null>(null);

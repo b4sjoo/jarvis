@@ -27,7 +27,11 @@ import { retrieveMemoryContext } from "../memory/retrieval";
 import { createPreparationStatementService } from "./statement-service";
 import { createPreparationStatementProposalService } from "./statement-proposal-service";
 import { createPreparationCompositionService } from "./preparation-composition-service";
-import { createPreparationSnapshotService } from "./snapshot-service";
+import {
+  createPreparationSnapshotService,
+  type PreparationSnapshotEvent,
+} from "./snapshot-service";
+import { publishPreparationSnapshotSelectionChange } from "./snapshot-selection-events";
 
 export const preparationWorkspaceService = createPreparationWorkspaceService({
   repository: preparationWorkspaceRepository,
@@ -92,6 +96,26 @@ const writePreparationSemanticTrace = (event: unknown) => {
   }).catch(() => {});
 };
 
+const handlePreparationSnapshotEvent = (event: PreparationSnapshotEvent) => {
+  writePreparationSemanticTrace(event);
+  const reason =
+    event.name === "Preparation current context changed"
+      ? "current-context-changed"
+      : event.name === "Preparation snapshot activated"
+        ? "snapshot-activated"
+        : event.name === "Preparation snapshot deactivated"
+          ? "snapshot-deactivated"
+          : undefined;
+  if (!reason) return;
+  publishPreparationSnapshotSelectionChange({
+    reason,
+    processId: event.processId,
+    roundId: event.roundId,
+    snapshotId: event.snapshotId,
+    occurredAt: event.timestamp,
+  });
+};
+
 export const interviewPreparationStatementProposalService =
   createPreparationStatementProposalService({
     statements: preparationStatementRepository,
@@ -125,7 +149,7 @@ export const interviewPreparationSnapshotService =
     interviewProcesses: interviewProcessRepository,
     materialExtraction: preparationMaterialExtractionRepository,
     getKmbEntries: getMemoryEntries,
-    onEvent: writePreparationSemanticTrace,
+    onEvent: handlePreparationSnapshotEvent,
   });
 
 export const interviewPreparationService = createInterviewProcessService({

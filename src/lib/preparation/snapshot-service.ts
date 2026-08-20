@@ -61,7 +61,8 @@ export interface PreparationSnapshotEvent {
     | "Preparation snapshot compilation finished"
     | "Preparation snapshot compilation failed"
     | "Preparation snapshot activated"
-    | "Preparation snapshot deactivated";
+    | "Preparation snapshot deactivated"
+    | "Preparation current context changed";
   timestamp: number;
   processId: string;
   roundId: string;
@@ -71,6 +72,7 @@ export interface PreparationSnapshotEvent {
   contentHash?: string;
   runtimeCharCount?: number;
   warningCount?: number;
+  selectionRevision?: number;
   durationMs?: number;
   error?: string;
 }
@@ -291,7 +293,16 @@ export function createPreparationSnapshotService(dependencies: {
       if (!settled) {
         throw new Error("The current interview context changed. Review it and try again.");
       }
-      return dependencies.snapshots.getCurrentContext();
+      const updated = await dependencies.snapshots.getCurrentContext();
+      emit({
+        name: "Preparation current context changed",
+        timestamp: updatedAt,
+        processId: input.processId,
+        roundId: input.roundId,
+        snapshotId: updated.selectedSnapshotId,
+        selectionRevision: updated.revision,
+      });
+      return updated;
     },
 
     async activate(input: {
