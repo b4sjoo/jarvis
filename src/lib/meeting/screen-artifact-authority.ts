@@ -90,10 +90,7 @@ export function authorizeManualScreenPresentationArtifacts(input: {
   );
   const requested = new Set(input.requestedArtifacts);
   const authorized = new Set<AnswerArtifactSection>(["answer"]);
-  const primaryAskAllowsCode =
-    !input.boundVoicePrimaryAsk ||
-    input.primaryAskIntent === "implementation-probe";
-  const primaryAskAllowsComplexity =
+  const primaryAskAllowsCodeFamily =
     !input.boundVoicePrimaryAsk ||
     input.primaryAskIntent === "implementation-probe" ||
     input.primaryAskIntent === "complexity-probe";
@@ -101,8 +98,11 @@ export function authorizeManualScreenPresentationArtifacts(input: {
   // A manual screen capture is explicit presentation authority for parsed
   // coding artifacts only when no narrower Voice ask owns the operation.
   // It does not grant task, prompt, or memory ownership.
-  if (codeCandidatePresent && primaryAskAllowsCode) authorized.add("code");
-  if (complexityCandidatePresent && primaryAskAllowsComplexity) {
+  if (
+    (codeCandidatePresent || complexityCandidatePresent) &&
+    primaryAskAllowsCodeFamily
+  ) {
+    authorized.add("code");
     authorized.add("complexity");
   }
   if (requested.has("whiteboard") && whiteboardCandidatePresent) {
@@ -126,14 +126,14 @@ export function authorizeManualScreenPresentationArtifacts(input: {
         ? `voice-primary-ask:${input.primaryAskIntent ?? "unknown"}`
         : "screen-primary-ask",
       codeCandidatePresent ? "code-present" : "code-empty-preserve",
-      codeCandidatePresent && !primaryAskAllowsCode
-        ? "code-blocked-by-primary-ask"
+      codeCandidatePresent && !primaryAskAllowsCodeFamily
+        ? "code-family-blocked-by-primary-ask"
         : undefined,
       complexityCandidatePresent
         ? "complexity-present"
         : "complexity-empty-preserve",
-      complexityCandidatePresent && !primaryAskAllowsComplexity
-        ? "complexity-blocked-by-primary-ask"
+      complexityCandidatePresent && !primaryAskAllowsCodeFamily
+        ? "code-family-blocked-by-primary-ask"
         : undefined,
       requested.has("whiteboard")
         ? "whiteboard-phase-requested"

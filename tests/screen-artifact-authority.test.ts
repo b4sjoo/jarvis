@@ -150,8 +150,7 @@ test("preserves Code and Complexity for a Voice explanation recovery", () => {
   });
 
   assert.deepEqual(decision.authorizedArtifacts, ["answer"]);
-  assert.match(decision.reason, /code-blocked-by-primary-ask/);
-  assert.match(decision.reason, /complexity-blocked-by-primary-ask/);
+  assert.match(decision.reason, /code-family-blocked-by-primary-ask/);
   assert.equal(
     formatScreenPresentationArtifactAuthorityForTrace(decision)
       .screenArtifactAuthorityAuthorized,
@@ -159,7 +158,7 @@ test("preserves Code and Complexity for a Voice explanation recovery", () => {
   );
 });
 
-test("allows only the artifact family explicitly requested by the Voice ask", () => {
+test("authorizes Code and Complexity through one Voice artifact family", () => {
   const parsedAnswer = parseMeetingAnswer(
     [
       "Answer: Update the eviction branch.",
@@ -183,7 +182,11 @@ test("allows only the artifact family explicitly requested by the Voice ask", ()
     primaryAskIntent: "implementation-probe",
   });
 
-  assert.deepEqual(complexity.authorizedArtifacts, ["answer", "complexity"]);
+  assert.deepEqual(complexity.authorizedArtifacts, [
+    "answer",
+    "code",
+    "complexity",
+  ]);
   assert.deepEqual(implementation.authorizedArtifacts, [
     "answer",
     "code",

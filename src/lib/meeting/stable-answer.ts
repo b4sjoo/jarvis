@@ -1,8 +1,9 @@
-import type {
-  AnswerArtifactSection,
-  AnswerGenerationLease,
-  RefreshAuthorityDecision,
-  RuntimeTypeRepairOutputAuthority,
+import {
+  toAnswerArtifactFamily,
+  type AnswerArtifactSection,
+  type AnswerGenerationLease,
+  type RefreshAuthorityDecision,
+  type RuntimeTypeRepairOutputAuthority,
 } from "./answer-generation-lease.js";
 import {
   parseMeetingAnswer,
@@ -110,18 +111,15 @@ export function resolveAuthorizedAnswerArtifacts(input: {
   artifactIntent: SettledAdvisorArtifactIntent;
 }): AnswerArtifactSection[] {
   const authorized: AnswerArtifactSection[] = ["answer"];
+  const codeFamilyRevision =
+    input.artifactIntent === "revise-code" ||
+    input.artifactIntent === "revise-complexity";
   if (
-    input.artifactIntent === "revise-code" &&
-    input.artifactPolicy.allowCode
+    codeFamilyRevision &&
+    (input.artifactPolicy.allowCode ||
+      input.artifactPolicy.allowComplexity)
   ) {
-    authorized.push("code");
-  }
-  if (
-    (input.artifactIntent === "revise-code" ||
-      input.artifactIntent === "revise-complexity") &&
-    input.artifactPolicy.allowComplexity
-  ) {
-    authorized.push("complexity");
+    authorized.push("code", "complexity");
   }
   if (
     input.artifactIntent === "revise-whiteboard" &&
@@ -225,6 +223,18 @@ export function commitStableAnswerRevision(input: {
   };
 }
 
+export function collectStableAnswerMutatedArtifacts(
+  current: StableAnswerRevision | null | undefined,
+  candidate: StableAnswerRevision | null | undefined
+): AnswerArtifactSection[] {
+  if (!candidate) return [];
+  return (["answer", "code", "complexity", "whiteboard"] as const).filter(
+    (artifact) =>
+      candidate.sections[artifact].revision !==
+      (current?.sections[artifact].revision ?? 0)
+  );
+}
+
 export function updateAnswerDeliveryProgress(input: {
   current?: AnswerDeliveryProgress | null;
   stable: StableAnswerRevision;
@@ -315,12 +325,17 @@ export function formatStableAnswerCommitForTrace(input: {
   decision: StableAnswerCommitDecision;
   authorizedArtifacts: AnswerArtifactSection[];
   requestedArtifacts?: AnswerArtifactSection[];
+  candidateMutatedArtifacts?: AnswerArtifactSection[];
   previousCommittedAt?: number;
   now?: number;
 }) {
   const now = input.now ?? Date.now();
   const requested = input.requestedArtifacts ?? [];
-  const authorized = new Set(input.authorizedArtifacts);
+  const candidateMutations =
+    input.candidateMutatedArtifacts ?? requested;
+  const authorizedFamilies = new Set(
+    input.authorizedArtifacts.map(toAnswerArtifactFamily)
+  );
   return {
     stableAnswerCommitDisposition: input.decision.disposition,
     stableAnswerCommitReason: input.decision.reason,
@@ -335,8 +350,12 @@ export function formatStableAnswerCommitForTrace(input: {
     pendingAnswerOperationId: input.pending?.operationId,
     requestedArtifacts: requested,
     authorizedArtifacts: input.authorizedArtifacts,
-    artifactMutationRejectedReasons: requested
-      .filter((artifact) => !authorized.has(artifact))
+    candidateMutatedArtifacts: candidateMutations,
+    artifactMutationRejectedReasons: candidateMutations
+      .filter(
+        (artifact) =>
+          !authorizedFamilies.has(toAnswerArtifactFamily(artifact))
+      )
       .map((artifact) => `${artifact}:not-authorized`),
     stableAnswerRevision: input.stable?.revision,
     answerSectionRevision: input.stable?.sections.answer.revision,

@@ -15,6 +15,8 @@ export type AnswerArtifactSection =
   | "complexity"
   | "whiteboard";
 
+export type AnswerArtifactFamily = "answer" | "code" | "whiteboard";
+
 export type RefreshAuthorityKind =
   | "automatic-substantive"
   | "shadow-fail-open"
@@ -115,6 +117,7 @@ export interface AnswerGenerationLeaseSnapshot {
   responseActionRevision: number;
   artifactOwnerId: string | null;
   authorizedArtifacts: AnswerArtifactSection[];
+  candidateMutatedArtifacts?: AnswerArtifactSection[];
 }
 
 export type AnswerGenerationLeaseAuthorizationReason =
@@ -136,6 +139,8 @@ export interface AnswerGenerationLeaseAuthorization {
   authorized: boolean;
   reason: AnswerGenerationLeaseAuthorizationReason;
   rejectedArtifacts: AnswerArtifactSection[];
+  authorizationBasis: "requested-artifacts" | "candidate-mutations";
+  checkedArtifacts: AnswerArtifactSection[];
 }
 
 export function decideRefreshAuthority(input: {
@@ -454,15 +459,25 @@ export function authorizeAnswerGenerationLease(
     return rejected("artifact-owner-mismatch");
   }
 
-  const authorized = new Set(current.authorizedArtifacts);
-  const rejectedArtifacts = lease.requestedArtifacts.filter(
-    (artifact) => !authorized.has(artifact)
+  const authorizationBasis = current.candidateMutatedArtifacts
+    ? "candidate-mutations"
+    : "requested-artifacts";
+  const authorizedFamilies = new Set(
+    current.authorizedArtifacts.map(toAnswerArtifactFamily)
+  );
+  const artifactsToAuthorize =
+    current.candidateMutatedArtifacts ?? lease.requestedArtifacts;
+  const rejectedArtifacts = artifactsToAuthorize.filter(
+    (artifact) =>
+      !authorizedFamilies.has(toAnswerArtifactFamily(artifact))
   );
   if (rejectedArtifacts.length > 0) {
     return {
       authorized: false,
       reason: "artifact-authority-revoked",
       rejectedArtifacts,
+      authorizationBasis,
+      checkedArtifacts: [...artifactsToAuthorize],
     };
   }
 
@@ -470,7 +485,15 @@ export function authorizeAnswerGenerationLease(
     authorized: true,
     reason: "authorized",
     rejectedArtifacts: [],
+    authorizationBasis,
+    checkedArtifacts: [...artifactsToAuthorize],
   };
+}
+
+export function toAnswerArtifactFamily(
+  artifact: AnswerArtifactSection
+): AnswerArtifactFamily {
+  return artifact === "complexity" ? "code" : artifact;
 }
 
 export function formatRefreshAuthorityForTrace(
@@ -529,6 +552,10 @@ export function formatAnswerGenerationLeaseForTrace(
         : undefined,
     answerGenerationLeaseRejectedArtifacts:
       authorization?.rejectedArtifacts,
+    answerGenerationLeaseAuthorizationBasis:
+      authorization?.authorizationBasis,
+    answerGenerationLeaseCheckedArtifacts:
+      authorization?.checkedArtifacts,
   };
 }
 
@@ -539,5 +566,7 @@ function rejected(
     authorized: false,
     reason,
     rejectedArtifacts: [],
+    authorizationBasis: "requested-artifacts",
+    checkedArtifacts: [],
   };
 }

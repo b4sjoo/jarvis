@@ -875,8 +875,12 @@ function resolveArtifactIntent(input: {
       ? "preserve"
       : "none";
   }
-  if (input.artifactPolicy.allowCode) return "revise-code";
-  if (input.artifactPolicy.allowComplexity) return "revise-complexity";
+  if (
+    input.artifactPolicy.allowCode ||
+    input.artifactPolicy.allowComplexity
+  ) {
+    return "revise-code";
+  }
   if (input.artifactPolicy.allowWhiteboard) return "revise-whiteboard";
   return input.artifactPolicy.allowLatestUsefulAnswer
     ? "preserve"

@@ -691,6 +691,7 @@ import {
   promoteQuestionLineage,
   resolveAdjacentConstraintInheritance,
   resolveInheritedQuestionLineageForTurnIntent,
+  collectStableAnswerMutatedArtifacts,
   commitStableAnswerRevision,
   rebaseAnswerGenerationLeaseAfterOwnedParentMutation,
   isAnswerDeliveryLockActive,
@@ -3776,6 +3777,7 @@ export function useMeetingAssistant() {
     (input: {
       lease: AnswerGenerationLease;
       authorizedArtifacts: AnswerArtifactSection[];
+      candidateMutatedArtifacts?: AnswerArtifactSection[];
       logicalQuestionUnitId?: string | null;
       logicalQuestionRevision?: number | null;
     }) => {
@@ -3801,6 +3803,10 @@ export function useMeetingAssistant() {
         responseActionRevision: responseActionRevisionRef.current,
         artifactOwnerId: parent?.id ?? null,
         authorizedArtifacts: [...input.authorizedArtifacts],
+        candidateMutatedArtifacts:
+          input.candidateMutatedArtifacts === undefined
+            ? undefined
+            : [...input.candidateMutatedArtifacts],
       };
     },
     []
@@ -4045,6 +4051,11 @@ export function useMeetingAssistant() {
           readGenerationLeaseSnapshot({
             lease: pending.lease,
             authorizedArtifacts: pending.authorizedArtifacts,
+            candidateMutatedArtifacts:
+              collectStableAnswerMutatedArtifacts(
+                previousStableAnswer,
+                stable
+              ),
           })
         ),
         expectedTaskRuntimeRevision: pending.taskRuntimeRevision,
@@ -4115,6 +4126,11 @@ export function useMeetingAssistant() {
         },
         authorizedArtifacts: pending.authorizedArtifacts,
         requestedArtifacts: pending.lease.requestedArtifacts,
+        candidateMutatedArtifacts:
+          collectStableAnswerMutatedArtifacts(
+            previousStableAnswer,
+            stable
+          ),
         previousCommittedAt: previousStableAnswer?.committedAt,
         now,
       });
@@ -4203,6 +4219,18 @@ export function useMeetingAssistant() {
       runtimeTypeRepairOutputAuthority?: RuntimeTypeRepairOutputAuthority;
     }) => {
       const now = Date.now();
+      const currentStableAnswer = stableAnswerRevisionRef.current;
+      const previewStableAnswer = commitStableAnswerRevision({
+        current: currentStableAnswer,
+        candidate: input.suggestion,
+        authorizedArtifacts: input.authorizedArtifacts,
+        taskId: input.resultTaskId,
+        logicalQuestionUnitId: input.logicalQuestionUnitId,
+        logicalQuestionRevision: input.logicalQuestionRevision,
+        resetSections: input.resetSections,
+        revision: input.lease.baseVisibleAnswerRevision + 1,
+        committedAt: now,
+      });
       generationResultLedgerRef.current.recordCandidateValidation({
         lease: input.lease,
         disposition: "accepted",
@@ -4216,6 +4244,11 @@ export function useMeetingAssistant() {
             readGenerationLeaseSnapshot({
               lease: input.lease,
               authorizedArtifacts: input.authorizedArtifacts,
+              candidateMutatedArtifacts:
+                collectStableAnswerMutatedArtifacts(
+                  currentStableAnswer,
+                  previewStableAnswer
+                ),
             })
           ),
           expectedTaskRuntimeRevision: input.taskRuntimeRevision,
@@ -12584,6 +12617,11 @@ export function useMeetingAssistant() {
               readGenerationLeaseSnapshot({
                 lease: answerGenerationLease,
                 authorizedArtifacts: generationAuthorizedArtifacts,
+                candidateMutatedArtifacts:
+                  collectStableAnswerMutatedArtifacts(
+                    previousStableAnswer,
+                    candidateStableAnswer
+                  ),
               })
             ),
             expectedTaskRuntimeRevision:
@@ -12766,6 +12804,11 @@ export function useMeetingAssistant() {
           decision: stableAnswerCommitDecision,
           authorizedArtifacts: generationAuthorizedArtifacts,
           requestedArtifacts: answerGenerationLease?.requestedArtifacts,
+          candidateMutatedArtifacts:
+            collectStableAnswerMutatedArtifacts(
+              previousStableAnswer,
+              nextStableAnswer
+            ),
           previousCommittedAt: previousStableAnswer?.committedAt,
         });
       const previousVisibleCode = resetVisibleSections
@@ -24627,6 +24670,11 @@ export function useMeetingAssistant() {
                   lease: screenGenerationLease,
                   authorizedArtifacts:
                     screenPresentationAuthorizedArtifacts,
+                  candidateMutatedArtifacts:
+                    collectStableAnswerMutatedArtifacts(
+                      previousStableAnswer,
+                      candidateStableAnswer
+                    ),
                   logicalQuestionUnitId:
                     screenGenerationLease.logicalQuestionUnitId,
                   logicalQuestionRevision:
@@ -24855,6 +24903,11 @@ export function useMeetingAssistant() {
             authorizedArtifacts: screenPresentationAuthorizedArtifacts,
             requestedArtifacts:
               screenGenerationLease?.requestedArtifacts,
+            candidateMutatedArtifacts:
+              collectStableAnswerMutatedArtifacts(
+                previousStableAnswer,
+                nextStableAnswer
+              ),
             previousCommittedAt: previousStableAnswer?.committedAt,
           });
         traceStoreRef.current.updateMetadata(trace.id, {

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  collectStableAnswerMutatedArtifacts,
   commitStableAnswerRevision,
   decideStableAnswerCommit,
   isAnswerDeliveryLockActive,
@@ -75,7 +76,7 @@ Complexity: O(n squared).`
   assert.equal(second.sections.complexity.revision, 1);
 });
 
-test("does not let code authority silently grant complexity authority", () => {
+test("treats Code and Complexity as one artifact authority family", () => {
   const authorized = resolveAuthorizedAnswerArtifacts({
     artifactPolicy: {
       disposition: "parent-owner-authorized",
@@ -92,7 +93,7 @@ test("does not let code authority silently grant complexity authority", () => {
     artifactIntent: "revise-code",
   });
 
-  assert.deepEqual(authorized, ["answer", "code"]);
+  assert.deepEqual(authorized, ["answer", "code", "complexity"]);
 });
 
 test("does not advance an authorized artifact revision when the candidate omits it", () => {
@@ -131,6 +132,9 @@ Complexity: O(n).`
   assert.equal(second.sections.answer.revision, 2);
   assert.equal(second.sections.code.revision, 1);
   assert.equal(second.sections.complexity.revision, 1);
+  assert.deepEqual(collectStableAnswerMutatedArtifacts(first, second), [
+    "answer",
+  ]);
 });
 
 test("locks delivery after a sufficiently long overlapping me turn", () => {

@@ -298,6 +298,33 @@ test("rejects stale manual actions, task owners, and artifact authority", () => 
   ]);
 });
 
+test("authorizes final commit from actual mutations and treats Complexity as Code family", () => {
+  const lease = buildLease();
+  const current = buildCurrentSnapshot();
+  const answerOnly = authorizeAnswerGenerationLease(lease, {
+    ...current,
+    authorizedArtifacts: ["answer"],
+    candidateMutatedArtifacts: ["answer"],
+  });
+  const complexityThroughCode = authorizeAnswerGenerationLease(lease, {
+    ...current,
+    authorizedArtifacts: ["answer", "code"],
+    candidateMutatedArtifacts: ["answer", "complexity"],
+  });
+  const revokedCodeFamily = authorizeAnswerGenerationLease(lease, {
+    ...current,
+    authorizedArtifacts: ["answer"],
+    candidateMutatedArtifacts: ["answer", "complexity"],
+  });
+
+  assert.equal(answerOnly.authorized, true);
+  assert.equal(answerOnly.authorizationBasis, "candidate-mutations");
+  assert.deepEqual(answerOnly.checkedArtifacts, ["answer"]);
+  assert.equal(complexityThroughCode.authorized, true);
+  assert.equal(revokedCodeFamily.reason, "artifact-authority-revoked");
+  assert.deepEqual(revokedCodeFamily.rejectedArtifacts, ["complexity"]);
+});
+
 test("formats replay-safe lease metadata for stale commits", () => {
   const lease = buildLease();
   const authorization = authorizeAnswerGenerationLease(lease, {
