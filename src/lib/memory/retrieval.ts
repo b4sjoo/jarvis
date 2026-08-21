@@ -42,6 +42,7 @@ import { formatMemoryContext } from "./context-format.js";
 import {
   createGeneralMemoryEligibilityRecorder,
   resolveGeneralMemoryEligibility,
+  resolveMemoryEligibilityQuery,
 } from "./general-eligibility.js";
 
 const DEFAULT_MAX_ENTRIES = 5;
@@ -62,6 +63,7 @@ export interface MemoryRetrievalRuntimeCallbacks {
 export async function retrieveMemoryContext({
   sessionId,
   query,
+  currentQuestionQuery,
   diagramDomainQuery,
   diagramTopicDomain,
   useCase,
@@ -91,6 +93,10 @@ callbacks: MemoryRetrievalRuntimeCallbacks = {}): Promise<MemoryRetrievalResult>
     createMemoryInterviewFamilyResolutionRecorder();
   const generalEligibilityRecorder =
     createGeneralMemoryEligibilityRecorder();
+  const eligibilityQueryDecision = resolveMemoryEligibilityQuery({
+    retrievalQuery: query,
+    currentQuestionQuery,
+  });
   const generalScopePaths = new Map<string, MemoryGeneralScopePath>();
   const policySnapshot = buildMemoryPolicySnapshot({
     useCase,
@@ -103,6 +109,9 @@ callbacks: MemoryRetrievalRuntimeCallbacks = {}): Promise<MemoryRetrievalResult>
     maxEntries,
     maxChars,
     perEntryMaxChars,
+    eligibilityQuerySource: eligibilityQueryDecision.source,
+    eligibilityQueryChars: eligibilityQueryDecision.query.length,
+    retrievalQueryChars: query.length,
   });
   const eligibleEntries: MemoryEntry[] = [];
   const effectiveDiagramDomainQuery =
@@ -132,7 +141,7 @@ callbacks: MemoryRetrievalRuntimeCallbacks = {}): Promise<MemoryRetrievalResult>
       interviewTypes,
       questionType,
       memoryPolicy,
-      query,
+      eligibilityQueryDecision.query,
       projectId,
       projectAnchor
     );
@@ -490,6 +499,9 @@ function buildMemoryPolicySnapshot({
   maxEntries,
   maxChars,
   perEntryMaxChars,
+  eligibilityQuerySource,
+  eligibilityQueryChars,
+  retrievalQueryChars,
 }: {
   useCase: MemoryUseCase;
   interviewTypes?: MemoryInterviewType[];
@@ -501,6 +513,9 @@ function buildMemoryPolicySnapshot({
   maxEntries: number;
   maxChars: number;
   perEntryMaxChars: number;
+  eligibilityQuerySource: "current-question" | "retrieval-query";
+  eligibilityQueryChars: number;
+  retrievalQueryChars: number;
 }): MemoryPolicySnapshot {
   return {
     useCase,
@@ -513,6 +528,9 @@ function buildMemoryPolicySnapshot({
     allowedFamilies: memoryPolicy?.allowedFamilies,
     blockedFamilies: memoryPolicy?.blockedFamilies,
     strictProjectAnchor: memoryPolicy?.strictProjectAnchor,
+    eligibilityQuerySource,
+    eligibilityQueryChars,
+    retrievalQueryChars,
     maxEntries: memoryPolicy?.maxEntries ?? maxEntries,
     maxChars: memoryPolicy?.maxChars ?? maxChars,
     perEntryMaxChars: memoryPolicy?.perEntryMaxChars ?? perEntryMaxChars,

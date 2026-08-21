@@ -7652,6 +7652,7 @@ export function useMeetingAssistant() {
           {
             sessionId: memoryRuntimeSessionId,
             query,
+            currentQuestionQuery: currentQuestionEvidenceText,
             diagramDomainQuery: diagramDomainContext?.query,
             diagramTopicDomain,
             useCase: resolvedUseCase,

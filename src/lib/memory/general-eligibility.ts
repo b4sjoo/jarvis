@@ -113,6 +113,26 @@ export interface MemoryGeneralEligibilityDecision {
   projectScopeEvidence?: MemoryGeneralProjectScopeEvidence;
 }
 
+export function resolveMemoryEligibilityQuery({
+  retrievalQuery,
+  currentQuestionQuery,
+}: {
+  retrievalQuery: string;
+  currentQuestionQuery?: string;
+}) {
+  const boundedCurrentQuestion = currentQuestionQuery?.trim();
+  if (boundedCurrentQuestion) {
+    return {
+      query: boundedCurrentQuestion,
+      source: "current-question" as const,
+    };
+  }
+  return {
+    query: retrievalQuery,
+    source: "retrieval-query" as const,
+  };
+}
+
 export function resolveGeneralMemoryEligibility({
   entry,
   familyDecision,

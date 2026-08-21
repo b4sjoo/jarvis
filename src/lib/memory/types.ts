@@ -234,6 +234,7 @@ export interface MemoryImportSummary {
 export interface MemoryRetrievalRequest {
   sessionId?: string;
   query: string;
+  currentQuestionQuery?: string;
   diagramDomainQuery?: string;
   diagramTopicDomain?: MemoryTopicDomain;
   useCase: MemoryUseCase;
@@ -324,6 +325,9 @@ export interface MemoryPolicySnapshot {
   allowedFamilies?: MemoryInterviewFamily[];
   blockedFamilies?: MemoryInterviewFamily[];
   strictProjectAnchor?: string;
+  eligibilityQuerySource?: "current-question" | "retrieval-query";
+  eligibilityQueryChars?: number;
+  retrievalQueryChars?: number;
   maxEntries: number;
   maxChars: number;
   perEntryMaxChars: number;

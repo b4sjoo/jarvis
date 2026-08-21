@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   createGeneralMemoryEligibilityRecorder,
   resolveGeneralMemoryEligibility,
+  resolveMemoryEligibilityQuery,
 } from "../src/lib/memory/general-eligibility.js";
 import { resolveMemoryInterviewFamilies } from "../src/lib/memory/interview-family.js";
 import type { MemoryEntry } from "../src/lib/memory/types.js";
@@ -114,6 +115,45 @@ test("rejects Oasis NDJSON memory for an unrelated LRU coding question", () => {
   );
   assert.ok(
     (decision.projectScopeEvidence?.genericContentMatchCount ?? 0) > 0
+  );
+});
+
+test("uses only the current question for project-scoped eligibility", () => {
+  const entry = makeEntry({
+    id: "mem_oasis_ndjson_bulk_requirement",
+    type: "field_note",
+    title: "NDJSON requirement for OpenSearch bulk operations",
+    summary: "OpenSearch Bulk API uses newline-delimited JSON.",
+    content: "Each operation can report a partial failure.",
+    scope: "project",
+    projectId: "oasis",
+    projectName: "Oasis",
+    tags: ["ndjson", "bulk-api", "opensearch"],
+    keywords: ["NDJSON", "Bulk API", "partial failure"],
+  });
+  const retrievalQuery = [
+    "Implement an LRU cache with O(1) get and put.",
+    "Preparation guidance: Agentic Memory in OpenSearch ML Commons.",
+  ].join("\n");
+  const bounded = resolveMemoryEligibilityQuery({
+    retrievalQuery,
+    currentQuestionQuery: "Implement an LRU cache with O(1) get and put.",
+  });
+
+  assert.equal(bounded.source, "current-question");
+  assert.equal(decide(entry, bounded.query).eligible, false);
+  assert.equal(decide(entry, retrievalQuery).eligible, true);
+});
+
+test("falls back to the retrieval query when no current question exists", () => {
+  assert.deepEqual(
+    resolveMemoryEligibilityQuery({
+      retrievalQuery: "Why does the OpenSearch Bulk API use NDJSON?",
+    }),
+    {
+      query: "Why does the OpenSearch Bulk API use NDJSON?",
+      source: "retrieval-query",
+    }
   );
 });
 
