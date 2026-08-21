@@ -8407,6 +8407,10 @@ export function useMeetingAssistant() {
           ),
           decision.reason
         );
+        releaseAdvisorJob(advisorJob, "suppressed", {
+          commitAuthorized: false,
+          commitAuthorizationReason: decision.reason,
+        });
         return true;
       }
 
