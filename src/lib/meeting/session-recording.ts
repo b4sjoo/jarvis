@@ -7,7 +7,6 @@ import {
   InterviewSessionContext,
   MeetingAssistantSettings,
   MeetingSessionRecordingState,
-  HumanEvaluationCollectionProvenance,
   MeetingTrace,
   MeetingTraceExportTrigger,
   ManualQuestionTypeCorrection,
@@ -77,6 +76,10 @@ import {
   type PreparationRuntimeProvenanceSnapshot,
 } from "./preparation-runtime-provenance.js";
 import { projectMeetingMetadataEvaluationObservation } from "./meeting-metadata-evaluation.js";
+import {
+  buildSessionEvaluationProvenanceHistoryEntry,
+  buildSessionEvaluationProvenanceRecord,
+} from "./session-evaluation-provenance.js";
 
 const SESSION_RECORDING_SCHEMA_VERSION = 1;
 const SESSION_RECORDING_INTEGRITY_SCHEMA_VERSION = 1;
@@ -90,7 +93,7 @@ interface SessionRecordingStartOptions {
   interviewSessionBrief?: InterviewSessionBrief;
   interviewSessionContext?: InterviewSessionContext;
   providerSummary: SessionRecordingProviderSummary;
-  evaluationProvenance?: HumanEvaluationCollectionProvenance;
+  scriptedValidation?: boolean;
 }
 
 export interface SessionRecordingProviderSummary {
@@ -162,6 +165,7 @@ interface SessionRecordingEvent {
     | "preparation-runtime-context"
     | "preparation-artifact-use"
     | "preparation-artifact-evaluation"
+    | "session-evaluation-provenance"
     | "runtime-reset"
     | "runtime-continued"
     | "error";
@@ -176,6 +180,8 @@ interface ActiveSessionRecording {
   phase: "active" | "closing" | "sealed";
   sessionId: string;
   meetingSessionId: string;
+  runtimeMeetingSessionIds: Set<string>;
+  scriptedValidation: boolean;
   folderName: string;
   folderPath: string;
   startedAt: number;
@@ -1338,8 +1344,9 @@ export class SessionRecordingManager {
       folderName: this.activeSession.folderName,
       folderPath: this.activeSession.folderPath,
       startedAt: this.activeSession.startedAt,
-      evaluationProvenance:
-        this.activeSession.manifestBase.evaluationProvenance,
+      ...(this.activeSession.scriptedValidation
+        ? { scriptedValidation: true as const }
+        : {}),
       eventCount: this.activeSession.eventCount,
       artifactCount: this.activeSession.artifactCount,
       lastError: this.activeSession.lastError,
@@ -1356,8 +1363,7 @@ export class SessionRecordingManager {
 
       try {
         const startedAt = Date.now();
-        const evaluationProvenance =
-          options.evaluationProvenance ?? "organic";
+        const scriptedValidation = options.scriptedValidation === true;
         const sessionId = createMeetingId("session_recording");
         const folderName = buildSessionRecordingFolderName(sessionId, startedAt);
         const initialManifest = buildSessionRecordingManifest({
@@ -1371,7 +1377,7 @@ export class SessionRecordingManager {
           interviewSessionBrief: options.interviewSessionBrief,
           interviewSessionContext: options.interviewSessionContext,
           providerSummary: options.providerSummary,
-          evaluationProvenance,
+          scriptedValidation,
         });
 
         const folderPath = await this.invokeCommand<string>(
@@ -1393,13 +1399,15 @@ export class SessionRecordingManager {
           interviewSessionBrief: options.interviewSessionBrief,
           interviewSessionContext: options.interviewSessionContext,
           providerSummary: options.providerSummary,
-          evaluationProvenance,
+          scriptedValidation,
         });
         const session: ActiveSessionRecording = {
           generationId: createMeetingId("recording_generation"),
           phase: "active",
           sessionId,
           meetingSessionId: options.meetingSessionId,
+          runtimeMeetingSessionIds: new Set([options.meetingSessionId]),
+          scriptedValidation,
           folderName,
           folderPath,
           startedAt,
@@ -1464,8 +1472,15 @@ export class SessionRecordingManager {
           folderPath,
           meetingSessionId: options.meetingSessionId,
           privacy: "raw audio omitted",
-          evaluationProvenance,
+          scriptedValidation,
         });
+        if (scriptedValidation) {
+          this.writeSessionEvaluationProvenance(
+            session,
+            true,
+            "debug-ui"
+          );
+        }
         return this.getState();
       } catch (error) {
         this.lifecycle = "idle";
@@ -1474,6 +1489,21 @@ export class SessionRecordingManager {
         throw error;
       }
     });
+  }
+
+  setScriptedValidation(enabled: boolean) {
+    const session = this.getWritableSession();
+    if (!session || session.scriptedValidation === enabled) {
+      return this.getState();
+    }
+
+    session.scriptedValidation = enabled;
+    this.writeSessionEvaluationProvenance(session, enabled, "debug-ui");
+    this.recordEvent("session-evaluation-provenance", {
+      scriptedValidation: enabled,
+    });
+    this.emit();
+    return this.getState();
   }
 
   async stop(reason = "manual") {
@@ -1591,6 +1621,12 @@ export class SessionRecordingManager {
           closedAt: Date.now(),
           durationMs: endedAt - session.startedAt,
           stopReason: reason,
+          runtimeMeetingSessionIds: Array.from(
+            session.runtimeMeetingSessionIds
+          ).sort(),
+          ...(session.scriptedValidation
+            ? { scriptedValidation: true as const }
+            : {}),
           eventCount: session.eventCount,
           artifactCount: session.artifactCount,
           lastError: session.lastError,
@@ -2302,7 +2338,16 @@ export class SessionRecordingManager {
 
   recordHumanGroundTruthEventV2(event: HumanGroundTruthEventV2) {
     const session = this.getWritableSession();
-    if (!session || event.sessionId !== session.meetingSessionId) return;
+    if (
+      !session ||
+      !this.acceptEvaluationRuntimeSession(
+        session,
+        event.sessionId,
+        event.subject.traceIds
+      )
+    ) {
+      return;
+    }
     if (session.humanGroundTruthEventsV2.has(event.eventId)) return;
 
     session.humanGroundTruthEventsV2.set(event.eventId, event);
@@ -2331,7 +2376,16 @@ export class SessionRecordingManager {
     projection: HumanEvaluationProjectionV2
   ) {
     const session = this.getWritableSession();
-    if (!session || projection.sessionId !== session.meetingSessionId) return;
+    if (
+      !session ||
+      !this.acceptEvaluationRuntimeSession(
+        session,
+        projection.sessionId,
+        projection.subject.traceIds
+      )
+    ) {
+      return;
+    }
 
     session.humanEvaluationProjectionAttemptCountV2 += 1;
     const materializationRevision =
@@ -3797,6 +3851,12 @@ export class SessionRecordingManager {
       startedAt: trace?.startedAt,
     });
     if (!session) return;
+    const runtimeMeetingSessionId = readString(
+      trace?.metadata?.currentQuestionSettlementSessionId
+    );
+    if (runtimeMeetingSessionId) {
+      session.runtimeMeetingSessionIds.add(runtimeMeetingSessionId);
+    }
 
     const now = Date.now();
     const existing = session.traceSessionIndex.get(traceId);
@@ -3851,6 +3911,24 @@ export class SessionRecordingManager {
         traces: Array.from(session.traceSessionIndex.values()),
       });
     });
+  }
+
+  private acceptEvaluationRuntimeSession(
+    session: ActiveSessionRecording,
+    runtimeMeetingSessionId: string,
+    traceIds: string[]
+  ) {
+    if (session.runtimeMeetingSessionIds.has(runtimeMeetingSessionId)) {
+      return true;
+    }
+    const ownedTrace = traceIds.some(
+      (traceId) =>
+        session.recordedTraceIds.has(traceId) ||
+        this.traceGenerationOwners.get(traceId) === session.generationId
+    );
+    if (!ownedTrace) return false;
+    session.runtimeMeetingSessionIds.add(runtimeMeetingSessionId);
+    return true;
   }
 
   private recordCompactTraceSummary(
@@ -3924,6 +4002,36 @@ export class SessionRecordingManager {
         evaluationView.report
       );
       await this.writeTaskReviewIndex(session, reviewIndex);
+    });
+  }
+
+  private writeSessionEvaluationProvenance(
+    session: ActiveSessionRecording,
+    scriptedValidation: boolean,
+    source: "debug-ui" | "reflection-cli"
+  ) {
+    const record = buildSessionEvaluationProvenanceRecord({
+      sessionRecordingId: session.sessionId,
+      scriptedValidation,
+      source,
+    });
+    const history = buildSessionEvaluationProvenanceHistoryEntry({
+      sessionRecordingId: session.sessionId,
+      scriptedValidation,
+      source,
+      now: record.updatedAt,
+    });
+    this.enqueue(session, async () => {
+      await this.writeJson(
+        session,
+        "evaluation/session-provenance.json",
+        record
+      );
+      await this.appendJsonl(
+        session,
+        "evaluation/session-provenance-history.jsonl",
+        history
+      );
     });
   }
 
@@ -4181,7 +4289,7 @@ function buildSessionRecordingManifest({
   interviewSessionBrief,
   interviewSessionContext,
   providerSummary,
-  evaluationProvenance,
+  scriptedValidation,
 }: {
   status: "running";
   sessionId: string;
@@ -4193,7 +4301,7 @@ function buildSessionRecordingManifest({
   interviewSessionBrief?: InterviewSessionBrief;
   interviewSessionContext?: InterviewSessionContext;
   providerSummary: SessionRecordingProviderSummary;
-  evaluationProvenance: HumanEvaluationCollectionProvenance;
+  scriptedValidation: boolean;
 }) {
   return {
     version: SESSION_RECORDING_SCHEMA_VERSION,
@@ -4213,7 +4321,7 @@ function buildSessionRecordingManifest({
     interviewSessionBrief,
     interviewSessionContext,
     providerSummary,
-    evaluationProvenance,
+    ...(scriptedValidation ? { scriptedValidation: true as const } : {}),
   };
 }
 

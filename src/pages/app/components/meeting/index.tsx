@@ -55,7 +55,6 @@ import type {
   MeetingResponseLanguage,
   MeetingResponseLength,
   MeetingSessionRecordingState,
-  HumanEvaluationCollectionProvenance,
   SttEvaluationCaptureState,
   ManualQuestionTypeCorrection,
   MeetingFocusAction,
@@ -1849,12 +1848,10 @@ export const MeetingAssistant = ({
                 nativeAudioFaultFeedback={nativeAudioFaultFeedback}
                 onNativeAudioFaultInject={handleNativeAudioFaultInjection}
                 sessionRecording={meeting.sessionRecording}
-                humanEvaluationCollectionProvenance={
-                  meeting.humanEvaluationCollectionProvenance
-                }
+                scriptedValidation={meeting.scriptedValidation}
                 onSessionRecordingChange={meeting.setSessionRecordingEnabled}
-                onSessionEvaluationProvenanceChange={
-                  meeting.setSessionEvaluationProvenance
+                onSessionScriptedValidationChange={
+                  meeting.setSessionScriptedValidation
                 }
                 sttEvaluationCapture={meeting.sttEvaluationCapture}
                 sttEvaluationCaptureCanEnable={
@@ -3992,9 +3989,9 @@ const ConfigurationsPanel = ({
   nativeAudioFaultFeedback,
   onNativeAudioFaultInject,
   sessionRecording,
-  humanEvaluationCollectionProvenance,
+  scriptedValidation,
   onSessionRecordingChange,
-  onSessionEvaluationProvenanceChange,
+  onSessionScriptedValidationChange,
   sttEvaluationCapture,
   sttEvaluationCaptureCanEnable,
   onSttEvaluationCaptureChange,
@@ -4037,11 +4034,9 @@ const ConfigurationsPanel = ({
     kind: NativeAudioDebugFaultKind
   ) => Promise<void>;
   sessionRecording: MeetingSessionRecordingState;
-  humanEvaluationCollectionProvenance: HumanEvaluationCollectionProvenance;
+  scriptedValidation: boolean;
   onSessionRecordingChange: (enabled: boolean) => void;
-  onSessionEvaluationProvenanceChange: (
-    provenance: HumanEvaluationCollectionProvenance
-  ) => void;
+  onSessionScriptedValidationChange: (enabled: boolean) => void;
   sttEvaluationCapture: SttEvaluationCaptureState;
   sttEvaluationCaptureCanEnable: boolean;
   onSttEvaluationCaptureChange: (enabled: boolean) => void;
@@ -4514,32 +4509,26 @@ const ConfigurationsPanel = ({
                   onCheckedChange={onSessionRecordingChange}
                 />
               </div>
-              <div className="grid grid-cols-2 gap-1">
-                {(
-                  [
-                    ["organic", "Organic"],
-                    ["scripted-validation", "Scripted"],
-                  ] as const
-                ).map(([provenance, label]) => (
-                  <Button
-                    key={provenance}
-                    type="button"
-                    size="sm"
-                    variant={
-                      humanEvaluationCollectionProvenance === provenance
-                        ? "secondary"
-                        : "outline"
+              {debugMode ? (
+                <div className="flex items-center justify-between gap-2 rounded-sm border border-border/50 px-2 py-1.5">
+                  <div className="min-w-0">
+                    <div className="text-[10px] font-medium">
+                      Scripted validation
+                    </div>
+                    <div className="text-[9px] text-muted-foreground">
+                      Excludes automatic interventions from organic metrics
+                    </div>
+                  </div>
+                  <Switch
+                    checked={scriptedValidation}
+                    disabled={
+                      sessionRecording.lifecycle === "starting" ||
+                      sessionRecording.lifecycle === "closing"
                     }
-                    className="h-7 px-2 text-[10px]"
-                    disabled={sessionRecording.lifecycle !== "idle"}
-                    onClick={() =>
-                      onSessionEvaluationProvenanceChange(provenance)
-                    }
-                  >
-                    {label}
-                  </Button>
-                ))}
-              </div>
+                    onCheckedChange={onSessionScriptedValidationChange}
+                  />
+                </div>
+              ) : null}
               {sessionRecording.active ? (
                 <div className="space-y-1 text-[10px] text-muted-foreground">
                   <div className="flex min-w-0 items-center gap-1">

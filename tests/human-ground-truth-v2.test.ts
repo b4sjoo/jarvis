@@ -9,6 +9,7 @@ import {
   evaluateTaskSettlementTupleCompatibilityV2,
   importLegacyQuestionEvaluationV2,
   normalizeArtifactIntentEvaluationFamily,
+  projectHumanGroundTruthEventsForSessionPurposeV2,
 } from "../src/lib/meeting/human-ground-truth-v2.js";
 import {
   buildHumanEvaluationProjectionMaterializationRevisionV2,
@@ -205,6 +206,69 @@ test("allows a correction to supersede a fact within the same attempt", () => {
   assert.equal(
     projection.activeFacts["expected-question-type"]?.eventId,
     correction.eventId
+  );
+});
+
+test("session scripted provenance keeps explicit labels but removes automatic correction truth", () => {
+  const subject = {
+    ...SUBJECT,
+    attemptId: "trace_scripted",
+    traceIds: ["trace_scripted"],
+  };
+  const automatic = createHumanGroundTruthEventV2({
+    eventId: "event_scripted_correction",
+    sessionId: "session_scripted",
+    subject,
+    source: "manual-type-correction",
+    fact: {
+      kind: "expected-question-type",
+      expectedQuestionType: "coding",
+    },
+    now: 1,
+  });
+  const explicit = createHumanGroundTruthEventV2({
+    eventId: "event_scripted_explicit",
+    sessionId: "session_scripted",
+    subject,
+    source: "explicit-ui",
+    fact: {
+      kind: "answer-quality",
+      outcome: "useful",
+      failureReasons: [],
+      expectedContextTurnIds: [],
+    },
+    now: 2,
+  });
+  const scriptedEvents =
+    projectHumanGroundTruthEventsForSessionPurposeV2(
+      [automatic, explicit],
+      true
+    );
+  const scripted = deriveHumanEvaluationProjectionV2({
+    sessionId: "session_scripted",
+    subject,
+    events: scriptedEvents,
+    now: 3,
+  });
+  assert.equal(scripted.activeFacts["expected-question-type"], undefined);
+  assert.equal(
+    scripted.activeFacts["answer-quality"]?.eventId,
+    explicit.eventId
+  );
+  assert.deepEqual(scripted.interventionOnlyEventIds, [automatic.eventId]);
+
+  const organic = deriveHumanEvaluationProjectionV2({
+    sessionId: "session_scripted",
+    subject,
+    events: projectHumanGroundTruthEventsForSessionPurposeV2(
+      scriptedEvents,
+      false
+    ),
+    now: 4,
+  });
+  assert.equal(
+    organic.activeFacts["expected-question-type"]?.eventId,
+    automatic.eventId
   );
 });
 

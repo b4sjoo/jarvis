@@ -403,6 +403,7 @@ async function materializeSession(
       examples,
       indexes,
       integrity: container.inventory.integrity,
+      scriptedValidationOverride: evidence.scriptedValidationOverride,
     })
   );
   for (const warning of evidence.warnings) {
@@ -588,6 +589,7 @@ function materializeHumanCandidates(input: {
   examples: LocalIntentNormalizedExample[];
   indexes: ReturnType<typeof buildSessionExampleIndexes>;
   integrity: CorpusLabelCandidate["sourceIntegrity"];
+  scriptedValidationOverride?: boolean;
 }) {
   const candidates: CorpusLabelCandidate[] = [];
   const superseded = new Set(
@@ -620,7 +622,12 @@ function materializeHumanCandidates(input: {
     if (!match.example) continue;
     const provenance = asObject(record.payload.provenance);
     const source = readString(provenance, "source");
-    const collection = readString(provenance, "collection") ?? "organic";
+    const collection =
+      input.scriptedValidationOverride === undefined
+        ? readString(provenance, "collection") ?? "organic"
+        : input.scriptedValidationOverride
+          ? "scripted-validation"
+          : "organic";
     if (
       collection === "scripted-validation" &&
       source !== "explicit-ui"

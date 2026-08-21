@@ -363,6 +363,27 @@ export function isHumanGroundTruthSemanticEligibleV2(
   );
 }
 
+export function projectHumanGroundTruthEventsForSessionPurposeV2(
+  events: HumanGroundTruthEventV2[],
+  scriptedValidation: boolean
+): HumanGroundTruthEventV2[] {
+  return events.map((event) => {
+    if (event.provenance.source === "imported-legacy") return event;
+    const collection: HumanEvaluationCollectionProvenance = scriptedValidation
+      ? "scripted-validation"
+      : "organic";
+    return event.provenance.collection === collection
+      ? event
+      : {
+          ...event,
+          provenance: {
+            ...event.provenance,
+            collection,
+          },
+        };
+  });
+}
+
 export function findActiveHumanGroundTruthEventV2(
   events: HumanGroundTruthEventV2[],
   subject: HumanGroundTruthSubjectV2,

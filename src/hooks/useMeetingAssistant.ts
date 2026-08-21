@@ -48,6 +48,7 @@ import { formatRuntimeInferenceProviderOutcomeForTrace } from "@/lib/meeting/run
 import { buildManualScreenLogicalQuestionUnit } from "@/lib/meeting/manual-screen-question-source";
 import { materializeHumanEvaluationAttemptProjectionV2 } from "@/lib/meeting/human-evaluation-attempt-projection";
 import { validateHumanEvaluationAttemptSubjectV2 } from "@/lib/meeting/human-evaluation-attempt";
+import { toHumanEvaluationCollectionProvenance } from "@/lib/meeting/session-evaluation-provenance";
 import {
   AdvisorEngine,
   buildAdvisorEvidencePacket,
@@ -2224,15 +2225,9 @@ export function useMeetingAssistant() {
     humanEvaluations: readTraceHumanEvaluations(),
     questionEvaluations: readQuestionHumanEvaluations(),
   }));
-  const [
-    humanEvaluationCollectionProvenance,
-    setHumanEvaluationCollectionProvenance,
-  ] = useState<HumanEvaluationCollectionProvenance>("organic");
-  const humanEvaluationCollectionProvenanceRef = useRef(
-    humanEvaluationCollectionProvenance
-  );
-  humanEvaluationCollectionProvenanceRef.current =
-    humanEvaluationCollectionProvenance;
+  const [scriptedValidation, setScriptedValidation] = useState(false);
+  const scriptedValidationRef = useRef(scriptedValidation);
+  scriptedValidationRef.current = scriptedValidation;
   const [humanGroundTruthEventsV2, setHumanGroundTruthEventsV2] = useState(
     () => readHumanGroundTruthEventsV2()
   );
@@ -6247,8 +6242,7 @@ export function useMeetingAssistant() {
           taxonomyAdjudicationMissingRequiredVariables:
             taxonomyAdjudicationRoute.missingRequiredVariables,
         }),
-        evaluationProvenance:
-          humanEvaluationCollectionProvenanceRef.current,
+        scriptedValidation: scriptedValidationRef.current,
       });
       sessionRecordingManagerRef.current?.recordPreparationRuntimeContext(
         preparationProvenanceLedgerRef.current.getSnapshot()
@@ -6308,6 +6302,8 @@ export function useMeetingAssistant() {
           sessionRecording,
         }));
       }
+      scriptedValidationRef.current = false;
+      setScriptedValidation(false);
     } catch (error) {
       const message =
         error instanceof Error
@@ -6335,13 +6331,19 @@ export function useMeetingAssistant() {
     [startSessionRecording, stopSessionRecording]
   );
 
-  const setSessionEvaluationProvenance = useCallback(
-    (provenance: HumanEvaluationCollectionProvenance) => {
-      if (state.sessionRecording.lifecycle !== "idle") return;
-      setHumanEvaluationCollectionProvenance(provenance);
-    },
-    [state.sessionRecording.lifecycle]
-  );
+  const setSessionScriptedValidation = useCallback((enabled: boolean) => {
+    const lifecycle = sessionRecordingManagerRef.current?.getState().lifecycle;
+    if (lifecycle === "starting" || lifecycle === "closing") return;
+    scriptedValidationRef.current = enabled;
+    setScriptedValidation(enabled);
+    if (lifecycle === "active") {
+      const sessionRecording =
+        sessionRecordingManagerRef.current?.setScriptedValidation(enabled);
+      if (sessionRecording) {
+        setState((previous) => ({ ...previous, sessionRecording }));
+      }
+    }
+  }, []);
 
   const setSttEvaluationCaptureEnabled = useCallback((enabled: boolean) => {
     if (
@@ -6866,9 +6868,11 @@ export function useMeetingAssistant() {
         source,
         collection:
           options.collection ??
-          sessionRecordingManagerRef.current?.getState()
-            .evaluationProvenance ??
-          humanEvaluationCollectionProvenanceRef.current,
+          toHumanEvaluationCollectionProvenance(
+            sessionRecordingManagerRef.current?.getState()
+              .scriptedValidation === true ||
+              scriptedValidationRef.current
+          ),
         confirmation: options.confirmation,
         sourceTraceId,
         repairTraceId: options.repairTraceId,
@@ -7142,15 +7146,17 @@ export function useMeetingAssistant() {
 
   const recordCompletedTracesForSession = useCallback((traces: MeetingTrace[]) => {
     for (const trace of traces) {
+      if (trace.status !== "running") {
+        const manager = sessionRecordingManagerRef.current;
+        if (
+          manager?.canRecordTrace(trace) &&
+          !sessionRecordedTraceIdsRef.current.has(trace.id)
+        ) {
+          sessionRecordedTraceIdsRef.current.add(trace.id);
+          manager.recordTrace(trace, getAutoExportTrigger(trace));
+        }
+      }
       refreshHumanEvaluationObservedProjectionForTrace(trace);
-      if (trace.status === "running") continue;
-      if (!sessionRecordingManagerRef.current?.canRecordTrace(trace)) continue;
-      if (sessionRecordedTraceIdsRef.current.has(trace.id)) continue;
-      sessionRecordedTraceIdsRef.current.add(trace.id);
-      sessionRecordingManagerRef.current?.recordTrace(
-        trace,
-        getAutoExportTrigger(trace)
-      );
     }
   }, [refreshHumanEvaluationObservedProjectionForTrace]);
 
@@ -25283,9 +25289,10 @@ export function useMeetingAssistant() {
 
       const requestedAt = Date.now();
       const correctionEvaluationCollection =
-        sessionRecordingManagerRef.current?.getState()
-          .evaluationProvenance ??
-        humanEvaluationCollectionProvenanceRef.current;
+        toHumanEvaluationCollectionProvenance(
+          sessionRecordingManagerRef.current?.getState()
+            .scriptedValidation === true || scriptedValidationRef.current
+        );
       const correctionModelRoute = resolveManualCorrectionRegenerationRoute({
         snapshot: meetingModelProviderSnapshotRef.current,
         correctedType,
@@ -26560,9 +26567,10 @@ export function useMeetingAssistant() {
     });
     const requestedAt = Date.now();
     const forceAdviseEvaluationCollection =
-      sessionRecordingManagerRef.current?.getState()
-        .evaluationProvenance ??
-      humanEvaluationCollectionProvenanceRef.current;
+      toHumanEvaluationCollectionProvenance(
+        sessionRecordingManagerRef.current?.getState()
+          .scriptedValidation === true || scriptedValidationRef.current
+      );
     const repairingPresentation: ForceAdviseTargetPresentation = {
       ...target.presentation,
       status: "repairing",
@@ -28733,7 +28741,15 @@ export function useMeetingAssistant() {
   useEffect(() => {
     debugModeRef.current = state.settings.debugMode;
     traceStoreRef.current.setDebugEnabled(state.settings.debugMode);
-  }, [state.settings.debugMode]);
+    if (
+      !state.settings.debugMode &&
+      state.sessionRecording.lifecycle === "idle" &&
+      scriptedValidationRef.current
+    ) {
+      scriptedValidationRef.current = false;
+      setScriptedValidation(false);
+    }
+  }, [state.sessionRecording.lifecycle, state.settings.debugMode]);
 
   useEffect(() => {
     semanticTaxonomyModeRef.current = state.settings.semanticTaxonomyMode;
@@ -29457,8 +29473,8 @@ export function useMeetingAssistant() {
     setMicrophoneContextEnabled,
     toggleMicrophoneContext,
     setSessionRecordingEnabled,
-    humanEvaluationCollectionProvenance,
-    setSessionEvaluationProvenance,
+    scriptedValidation,
+    setSessionScriptedValidation,
     setSttEvaluationCaptureEnabled,
     deleteSttEvaluationCapture,
     setResponseConfig,

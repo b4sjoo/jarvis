@@ -5,7 +5,6 @@ import {
   evaluateTaxonomyCorpus,
   importPrivateTaxonomySessionCorpus,
   splitTaxonomyEvaluationCorpus,
-  type PrivateHumanEvaluationProjectionRecord,
   type PrivateQuestionEvaluationRecord,
   type PrivateTranscriptTurnRecord,
   type TaxonomyEvaluationExample,
@@ -15,6 +14,13 @@ import {
   summarizeHumanEvaluationProjectionMaterializationV2,
   type HumanEvaluationProjectionMaterializationStatsV2,
 } from "../src/lib/meeting/human-evaluation-projection-materialization.js";
+import {
+  deriveHumanEvaluationProjectionV2,
+  projectHumanGroundTruthEventsForSessionPurposeV2,
+  type HumanEvaluationProjectionV2,
+  type HumanGroundTruthEventV2,
+} from "../src/lib/meeting/human-ground-truth-v2.js";
+import { readEffectiveSessionEvaluationProvenance } from "./lib/session-evaluation-provenance.js";
 
 interface CliOptions {
   sessionDirectories: string[];
@@ -246,10 +252,10 @@ async function readEvaluationSnapshot(sessionDirectory: string) {
 }
 
 async function readProjectionSnapshot(sessionDirectory: string) {
-  const [snapshot, history, groundTruthEvents] = await Promise.all([
+  const [snapshot, history, groundTruthEvents, evaluationProvenance] = await Promise.all([
     readOptionalJson<{
       sessionId?: string;
-      projections?: PrivateHumanEvaluationProjectionRecord[];
+      projections?: HumanEvaluationProjectionV2[];
       materialization?: HumanEvaluationProjectionMaterializationStatsV2;
     }>(
       path.join(
@@ -258,21 +264,37 @@ async function readProjectionSnapshot(sessionDirectory: string) {
         "projections-v2.json"
       )
     ),
-    readOptionalJsonLines<PrivateHumanEvaluationProjectionRecord>(
+    readOptionalJsonLines<HumanEvaluationProjectionV2>(
       path.join(
         sessionDirectory,
         "human-evaluation",
         "projections-v2.jsonl"
       )
     ),
-    readOptionalJsonLines<unknown>(
+    readOptionalJsonLines<HumanGroundTruthEventV2>(
       path.join(
         sessionDirectory,
         "human-evaluation",
         "ground-truth-v2.jsonl"
       )
     ),
+    readEffectiveSessionEvaluationProvenance(sessionDirectory),
   ]);
+  const effectiveEvents =
+    evaluationProvenance.source === "default"
+      ? groundTruthEvents
+      : projectHumanGroundTruthEventsForSessionPurposeV2(
+          groundTruthEvents,
+          evaluationProvenance.scriptedValidation
+        );
+  const rematerialize = (projection: HumanEvaluationProjectionV2) =>
+    deriveHumanEvaluationProjectionV2({
+      sessionId: projection.sessionId,
+      subject: projection.subject,
+      events: effectiveEvents,
+      observed: projection.observed,
+      now: projection.computedAt,
+    });
   const projectionMaterialization =
     summarizeHumanEvaluationProjectionMaterializationV2({
       currentProjections: snapshot?.projections ?? [],
@@ -283,16 +305,13 @@ async function readProjectionSnapshot(sessionDirectory: string) {
   if (snapshot) {
     return {
       payload: snapshot,
-      projections: snapshot.projections ?? [],
+      projections: (snapshot.projections ?? []).map(rematerialize),
       source: "snapshot" as const,
       projectionMaterialization,
     };
   }
 
-  const latestByProjectionId = new Map<
-    string,
-    PrivateHumanEvaluationProjectionRecord
-  >();
+  const latestByProjectionId = new Map<string, HumanEvaluationProjectionV2>();
   for (const projection of history) {
     if (!projection?.projectionId) continue;
     const previous = latestByProjectionId.get(projection.projectionId);
@@ -303,7 +322,9 @@ async function readProjectionSnapshot(sessionDirectory: string) {
       latestByProjectionId.set(projection.projectionId, projection);
     }
   }
-  const projections = Array.from(latestByProjectionId.values());
+  const projections = Array.from(latestByProjectionId.values()).map(
+    rematerialize
+  );
   return {
     payload: undefined,
     projections,

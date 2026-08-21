@@ -15,6 +15,7 @@ import type {
   CorpusSourceOverlay,
 } from "./local-intent-corpus-schema.js";
 import { sha256, stableJson } from "./local-intent-corpus-utils.js";
+import { readEffectiveSessionEvaluationProvenance } from "./session-evaluation-provenance.js";
 
 export interface SourceTreeFileSnapshot {
   relativePath: string;
@@ -89,6 +90,7 @@ export interface SessionCorpusEvidence {
   settlements: RecordedSettlementEvidence[];
   humanGroundTruth: RecordedHumanEvidence[];
   legacyEvaluations: RecordedHumanEvidence[];
+  scriptedValidationOverride?: boolean;
   warnings: string[];
 }
 
@@ -277,6 +279,8 @@ export async function readSessionCorpusEvidence(
     warnings
   );
   const legacyEvaluations = await readLegacyEvaluations(container, warnings);
+  const evaluationProvenance =
+    await readEffectiveSessionEvaluationProvenance(container.absolutePath);
   return {
     turns: turns.sort((left, right) => left.startedAt - right.startedAt),
     settlements: settlements.sort(
@@ -286,6 +290,10 @@ export async function readSessionCorpusEvidence(
     ),
     humanGroundTruth,
     legacyEvaluations,
+    scriptedValidationOverride:
+      evaluationProvenance.source === "default"
+        ? undefined
+        : evaluationProvenance.scriptedValidation,
     warnings,
   };
 }

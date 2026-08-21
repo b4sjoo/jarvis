@@ -1556,7 +1556,7 @@ export interface MeetingTraceExportRecord {
 export interface MeetingSessionRecordingState {
   active: boolean;
   lifecycle: "idle" | "starting" | "active" | "closing";
-  evaluationProvenance?: HumanEvaluationCollectionProvenance;
+  scriptedValidation?: true;
   sessionId?: string;
   meetingSessionId?: string;
   folderName?: string;

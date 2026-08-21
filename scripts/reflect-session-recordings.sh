@@ -85,7 +85,9 @@ done < <(
   "$NODE_BIN" -e '
     const packageJson = require(process.argv[1]);
     for (const name of Object.keys(packageJson.scripts ?? {})) {
-      if (name.endsWith(":reflect")) process.stdout.write(`${name}\n`);
+      if (name.endsWith(":reflect") && name !== "session:reflect") {
+        process.stdout.write(`${name}\n`);
+      }
     }
   ' "$REPO_ROOT/package.json"
 )

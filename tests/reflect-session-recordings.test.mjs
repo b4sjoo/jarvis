@@ -19,8 +19,8 @@ const scriptPath = path.join(repoRoot, "scripts", "reflect-session-recordings.sh
 const packageJson = JSON.parse(
   await readFile(path.join(repoRoot, "package.json"), "utf8")
 );
-const reflectionCommands = Object.keys(packageJson.scripts).filter((name) =>
-  name.endsWith(":reflect")
+const reflectionCommands = Object.keys(packageJson.scripts).filter(
+  (name) => name.endsWith(":reflect") && name !== "session:reflect"
 );
 
 async function createFixture() {

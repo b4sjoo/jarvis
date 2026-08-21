@@ -11,13 +11,25 @@ import {
   type HumanEvaluationProjectionMaterializationRecordV2,
   type HumanEvaluationProjectionMaterializationStatsV2,
 } from "../src/lib/meeting/human-evaluation-projection-materialization.js";
-import type { HumanEvaluationProjectionV2 } from "../src/lib/meeting/human-ground-truth-v2.js";
+import {
+  deriveHumanEvaluationProjectionV2,
+  projectHumanGroundTruthEventsForSessionPurposeV2,
+  type HumanEvaluationProjectionV2,
+  type HumanGroundTruthEventV2,
+} from "../src/lib/meeting/human-ground-truth-v2.js";
 import type { QuestionHumanEvaluation } from "../src/lib/meeting/types.js";
+import { readEffectiveSessionEvaluationProvenance } from "./lib/session-evaluation-provenance.js";
 
 export async function loadSessionHumanEvaluationConsumerView(
   sessionDirectory: string
 ) {
-  const [v1Payload, v2Payload, projectionHistory, groundTruthEvents] =
+  const [
+    v1Payload,
+    v2Payload,
+    projectionHistory,
+    groundTruthEvents,
+    evaluationProvenance,
+  ] =
     await Promise.all([
       readOptionalJson<{ evaluations?: QuestionHumanEvaluation[] }>(
         path.join(
@@ -47,24 +59,42 @@ export async function loadSessionHumanEvaluationConsumerView(
           "projections-v2.jsonl"
         )
       ),
-      readOptionalJsonLines<unknown>(
+      readOptionalJsonLines<HumanGroundTruthEventV2>(
         path.join(
           sessionDirectory,
           "human-evaluation",
           "ground-truth-v2.jsonl"
         )
       ),
+      readEffectiveSessionEvaluationProvenance(sessionDirectory),
     ]);
+  const recordedProjections = v2Payload.projections ?? [];
+  const effectiveEvents =
+    evaluationProvenance.source === "default"
+      ? groundTruthEvents
+      : projectHumanGroundTruthEventsForSessionPurposeV2(
+          groundTruthEvents,
+          evaluationProvenance.scriptedValidation
+        );
+  const projections = recordedProjections.map((projection) =>
+    deriveHumanEvaluationProjectionV2({
+      sessionId: projection.sessionId,
+      subject: projection.subject,
+      events: effectiveEvents,
+      observed: projection.observed,
+      now: projection.computedAt,
+    })
+  );
   const materialization =
     summarizeHumanEvaluationProjectionMaterializationV2({
-      currentProjections: v2Payload.projections ?? [],
+      currentProjections: projections,
       history: projectionHistory,
       groundTruthEventCount: groundTruthEvents.length,
       recorded: v2Payload.materialization,
     });
   const precisionPartition =
     partitionHumanEvaluationProjectionsForPrecisionV2(
-      v2Payload.projections ?? []
+      projections
     );
   const consumerView = projectHumanEvaluationsForLegacyConsumers({
     evaluations: v1Payload.evaluations ?? [],
@@ -82,6 +112,7 @@ export async function loadSessionHumanEvaluationConsumerView(
     ...consumerView,
     projections: precisionPartition.eligible,
     materialization,
+    evaluationProvenance,
   };
 }
 

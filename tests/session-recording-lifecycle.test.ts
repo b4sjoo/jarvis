@@ -69,22 +69,120 @@ test("serializes concurrent starts into one recording generation", async () => {
   assert.equal(manager.getState().lifecycle, "idle");
 });
 
-test("freezes scripted evaluation provenance in recording state and manifest", async () => {
+test("stores one optional scripted-validation marker without an organic mode", async () => {
   const native = new ControlledRecordingInvoke();
   const manager = new SessionRecordingManager(undefined, native.invoke);
 
   const recording = await manager.start({
     ...START_OPTIONS,
-    evaluationProvenance: "scripted-validation",
+    scriptedValidation: true,
   });
 
-  assert.equal(recording.evaluationProvenance, "scripted-validation");
+  assert.equal(recording.scriptedValidation, true);
   const initialManifest = JSON.parse(
     stringArg(native.startCalls()[0]!, "manifestPayload")
   ) as Record<string, unknown>;
-  assert.equal(initialManifest.evaluationProvenance, "scripted-validation");
+  assert.equal(initialManifest.scriptedValidation, true);
+  assert.equal(initialManifest.evaluationProvenance, undefined);
 
   await manager.stop("test-complete");
+  const provenanceWrites = native.calls.filter(
+    (call) =>
+      call.command === "write_meeting_session_recording_text" &&
+      stringArg(call, "relativePath") ===
+        "evaluation/session-provenance.json"
+  );
+  assert.equal(provenanceWrites.length, 1);
+});
+
+test("updates scripted validation for an active recording without creating a second mode", async () => {
+  const native = new ControlledRecordingInvoke();
+  const manager = new SessionRecordingManager(undefined, native.invoke);
+  const recording = await manager.start(START_OPTIONS);
+
+  assert.equal(recording.scriptedValidation, undefined);
+  assert.equal(manager.setScriptedValidation(true).scriptedValidation, true);
+  manager.setScriptedValidation(true);
+  assert.equal(manager.setScriptedValidation(false).scriptedValidation, undefined);
+
+  await manager.stop("test-complete");
+  const writes = native.calls.filter(
+    (call) =>
+      call.command === "write_meeting_session_recording_text" &&
+      stringArg(call, "relativePath") ===
+        "evaluation/session-provenance-history.jsonl"
+  );
+  assert.equal(writes.length, 2);
+  const finalManifest = native.stoppedManifest(recording.folderName!);
+  assert.equal(finalManifest?.scriptedValidation, undefined);
+});
+
+test("allows one recording to own evaluation attempts from a later runtime meeting session", async () => {
+  const native = new ControlledRecordingInvoke();
+  const manager = new SessionRecordingManager(undefined, native.invoke);
+  const recording = await manager.start(START_OPTIONS);
+  const runtimeSessionId = "meeting_session_after_audio_start";
+  const trace = buildCompletedTrace("trace_runtime_session", Date.now(), {
+    currentQuestionSettlementId: "settlement_runtime_session",
+    currentQuestionSettlementUnitId: "lqu_runtime_session",
+    currentQuestionSettlementSessionId: runtimeSessionId,
+    currentQuestionSettlementSourceHash: "source_runtime_session",
+    currentQuestionSettlementType: "behavioral",
+    currentQuestionSettlementRelation: "new-parent",
+    advisorOutputCommittedToUi: true,
+  });
+  manager.recordTrace(trace, "manual");
+  const subject = {
+    attemptId: trace.id,
+    questionId: "question_runtime_session",
+    traceIds: [trace.id],
+    sourceTurnIds: ["turn_runtime_session"],
+  };
+  const event = createHumanGroundTruthEventV2({
+    eventId: "event_runtime_session",
+    sessionId: runtimeSessionId,
+    subject,
+    source: "explicit-ui",
+    fact: {
+      kind: "answer-quality",
+      outcome: "useful",
+      failureReasons: [],
+      expectedContextTurnIds: [],
+    },
+    now: trace.endedAt,
+  });
+  manager.recordHumanGroundTruthEventV2(event);
+  manager.recordHumanEvaluationProjectionV2(
+    deriveHumanEvaluationProjectionV2({
+      sessionId: runtimeSessionId,
+      subject,
+      events: [event],
+      now: trace.endedAt,
+    })
+  );
+
+  await manager.stop("test-complete");
+  const finalManifest = native.stoppedManifest(recording.folderName!);
+  assert.deepEqual(
+    finalManifest?.runtimeMeetingSessionIds,
+    [START_OPTIONS.meetingSessionId, runtimeSessionId].sort()
+  );
+  assert.ok(
+    native.calls.some(
+      (call) =>
+        call.command === "write_meeting_session_recording_text" &&
+        stringArg(call, "relativePath") ===
+          "human-evaluation/ground-truth-v2.jsonl"
+    )
+  );
+  assert.ok(
+    native.calls.some(
+      (call) =>
+        call.command === "write_meeting_session_recording_text" &&
+        stringArg(call, "relativePath") ===
+          "human-evaluation/projections-v2.json"
+    )
+  );
 });
 
 test("records zero-trace critical moment candidates and reviewed outcomes", async () => {
@@ -3122,6 +3220,10 @@ class ControlledRecordingInvoke {
           },
           preparationRuntimeIntegrity:
             payload.preparationRuntimeIntegrity as Record<string, unknown>,
+          runtimeMeetingSessionIds:
+            payload.runtimeMeetingSessionIds as string[] | undefined,
+          scriptedValidation:
+            payload.scriptedValidation === true ? true : undefined,
         };
       }
     }
