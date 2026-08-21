@@ -317,6 +317,19 @@ export function isCommittedManualScreenQuestionPacket(
   return "questionIdentity" in packet;
 }
 
+export function resolveManualScreenTranscriptContext(
+  packet: ManualScreenSourcePacket
+) {
+  if (
+    !packet.sourceOperationAuthority.boundVoicePrimaryAsk ||
+    packet.primaryAsk?.source !== "voice-lqu" ||
+    !packet.primaryAsk.text.trim()
+  ) {
+    return "";
+  }
+  return `Them: ${packet.primaryAsk.text.trim()}`;
+}
+
 export function formatManualScreenSourcePacketForTrace(
   packet: ManualScreenSourcePacket | CommittedManualScreenQuestionPacket
 ): Record<string, unknown> {

@@ -11,6 +11,7 @@ import {
   decideManualScreenVoiceQuestionBinding,
   commitManualScreenQuestionPacket,
   resolveManualScreenSourcePacket,
+  resolveManualScreenTranscriptContext,
   formatManualScreenVoiceQuestionBindingForTrace,
   formatManualScreenSourcePacketForTrace,
   selectManualScreenVoiceQuestionCapsule,
@@ -548,6 +549,7 @@ test("uses Screen preflight as the primary ask when no Voice question is bound",
     screenObservationId: "screen-2",
   });
   assert.equal(packet.sourceOperationAuthority.boundVoicePrimaryAsk, false);
+  assert.equal(resolveManualScreenTranscriptContext(packet), "");
 });
 
 test("keeps the bound Voice LQU identity while Screen supplies visual evidence", () => {
@@ -586,6 +588,10 @@ test("keeps the bound Voice LQU identity while Screen supplies visual evidence",
   assert.deepEqual(unit.sourceTurnIds, ["turn-35"]);
   assert.equal(unit.sources[0]?.startedAt, 80);
   assert.equal(unit.boundaryReason, "manual-screen-visual-evidence");
+  assert.equal(
+    resolveManualScreenTranscriptContext(packet),
+    "Them: Explain lines 35 through 38."
+  );
 });
 
 test("gives a Screen-owned milestone its own canonical question identity", () => {

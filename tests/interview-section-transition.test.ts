@@ -3,7 +3,9 @@ import test from "node:test";
 import {
   classifyInterviewTransitionTurn,
   consumeInterviewSectionHint,
+  consumeInterviewTaskBoundary,
   createPendingInterviewSectionHint,
+  createPendingInterviewTaskBoundary,
   detectInterviewSectionTransition,
   reconcileInterviewTransitionTurnWithPrimaryAsk,
 } from "../src/lib/meeting/interview-section-transition.js";
@@ -162,4 +164,45 @@ test("lets a concrete conflicting question win and expires stale hints", () => {
   assert.equal(conflict.disposition, "conflicted");
   assert.equal(conflict.effectiveQuestionType, "behavioral");
   assert.equal(expired.disposition, "expired");
+});
+
+test("carries an untyped transition to exactly one later substantive question", () => {
+  const boundary = createPendingInterviewTaskBoundary({
+    sourceTurnId: "turn_transition",
+    sourceText: "Okay, let's move on.",
+    sessionId: "session-a",
+    runtimeEpoch: 3,
+    observedAt: 1_000,
+    id: "boundary-a",
+  });
+  const filler = consumeInterviewTaskBoundary({
+    boundary,
+    questionId: "turn_filler",
+    substantive: false,
+    sessionId: "session-a",
+    runtimeEpoch: 3,
+    now: 2_000,
+  });
+  const applied = consumeInterviewTaskBoundary({
+    boundary: filler.nextBoundary,
+    questionId: "question-next",
+    substantive: true,
+    sessionId: "session-a",
+    runtimeEpoch: 3,
+    now: 3_000,
+  });
+  const consumedAgain = consumeInterviewTaskBoundary({
+    boundary: applied.nextBoundary,
+    questionId: "question-later",
+    substantive: true,
+    sessionId: "session-a",
+    runtimeEpoch: 3,
+    now: 4_000,
+  });
+
+  assert.equal(filler.disposition, "retained");
+  assert.equal(applied.disposition, "applied");
+  assert.equal(applied.boundary?.consumedByQuestionId, "question-next");
+  assert.equal(applied.nextBoundary, undefined);
+  assert.equal(consumedAgain.disposition, "no-boundary");
 });

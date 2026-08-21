@@ -323,7 +323,7 @@ export function decideLlmTypeRepairFirstParentAdmission(input: {
       !unit.truncated &&
       responseOpportunityRequest.sourceSpans.length > 0 &&
       responseOpportunityRequest.sourceSpans.length <= 2 &&
-      (unit.primaryAskProjection?.primaryAskSpans.length ?? 0) <= 1
+      (unit.primaryAskProjection?.primaryAskSpans.length ?? 0) <= 2
   );
   if (!boundedSubstantiveAsk) {
     return firstParentDecision(

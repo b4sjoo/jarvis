@@ -613,10 +613,14 @@ import {
   classifyInterviewTransitionTurn,
   reconcileInterviewTransitionTurnWithPrimaryAsk,
   consumeInterviewSectionHint,
+  consumeInterviewTaskBoundary,
   createPendingInterviewSectionHint,
+  createPendingInterviewTaskBoundary,
   detectInterviewSectionTransition,
   formatInterviewSectionHintForTrace,
+  formatInterviewTaskBoundaryForTrace,
   type PendingInterviewSectionHint,
+  type PendingInterviewTaskBoundary,
   applyInterviewChildProbeTransition,
   commitVisibleUsefulAnswerToParent,
   persistTraceHumanEvaluations,
@@ -672,6 +676,7 @@ import {
   commitManualScreenQuestionPacket,
   isCommittedManualScreenQuestionPacket,
   resolveManualScreenSourcePacket,
+  resolveManualScreenTranscriptContext,
   formatManualScreenVoiceQuestionBindingForTrace,
   formatManualScreenSourcePacketForTrace,
   SemanticTaxonomyRuntime,
@@ -1636,7 +1641,8 @@ interface AdvisorTaskSignals {
     | "semantic-unknown-rescue"
     | "current-question-settlement"
     | "source-owned-phase-control"
-    | "section-hint";
+    | "section-hint"
+    | "explicit-task-boundary";
   taxonomyFallbackSuppressed?: boolean;
   unknownTaskMutationBlocked?: boolean;
 }
@@ -2283,6 +2289,9 @@ export function useMeetingAssistant() {
   >([]);
   const pendingInterviewSectionHintRef = useRef<
     PendingInterviewSectionHint | undefined
+  >(undefined);
+  const pendingInterviewTaskBoundaryRef = useRef<
+    PendingInterviewTaskBoundary | undefined
   >(undefined);
   const cancelledAdvisorTurnIdsRef = useRef(new Set<string>());
   const taskBoundaryCandidateRef = useRef<TaskBoundaryCandidate | undefined>(
@@ -4812,6 +4821,7 @@ export function useMeetingAssistant() {
     answerRevisionByQuestionRef.current.clear();
     playbookPhaseHistoryRef.current = createPlaybookPhaseHistoryState();
     pendingInterviewSectionHintRef.current = undefined;
+    pendingInterviewTaskBoundaryRef.current = undefined;
     cancelledAdvisorTurnIdsRef.current.clear();
     taskBoundaryCandidateRef.current = undefined;
     currentQuestionSettlementRef.current = undefined;
@@ -15940,7 +15950,9 @@ export function useMeetingAssistant() {
       });
       const currentText = request.currentQuestion.text;
       const sourceOwnedCurrentText = turn.text?.trim() || currentText;
-      const explicitTaskSwitch = isTaskSwitchTranscript(currentText);
+      const explicitTaskSwitch =
+        isTaskSwitchTranscript(currentText) ||
+        Boolean(logicalQuestionUnit.taskBoundaryEvidence);
       const crossTypeAuthority =
         decideCrossTypeTaskRelationAuthority({
           activeQuestionType:
@@ -18246,6 +18258,7 @@ export function useMeetingAssistant() {
       intentDecision,
       explicitTaskSwitch = false,
       sectionHint,
+      taskBoundaryEvidence,
       primaryAskProjection,
       commitCanonical = true,
     }: {
@@ -18254,6 +18267,7 @@ export function useMeetingAssistant() {
       intentDecision: AdvisorTurnIntentDecision;
       explicitTaskSwitch?: boolean;
       sectionHint?: PendingInterviewSectionHint;
+      taskBoundaryEvidence?: PendingInterviewTaskBoundary;
       primaryAskProjection?: PrimaryAskProjection;
       commitCanonical?: boolean;
     }) => {
@@ -18305,6 +18319,7 @@ export function useMeetingAssistant() {
         ),
         explicitTaskSwitch,
         sectionHint,
+        taskBoundaryEvidence,
         primaryAskProjection: effectivePrimaryAskProjection,
       });
       if (commitCanonical) {
@@ -19429,8 +19444,19 @@ export function useMeetingAssistant() {
               runtimeEpoch: runtimeEpochRef.current,
               observedAt: turn.endedAt,
             });
+          pendingInterviewTaskBoundaryRef.current = undefined;
         } else if (transitionTurnDecision.detected) {
           pendingInterviewSectionHintRef.current = undefined;
+          pendingInterviewTaskBoundaryRef.current =
+            transitionTurnDecision.disposition === "hint-only"
+              ? createPendingInterviewTaskBoundary({
+                  sourceTurnId: turn.id,
+                  sourceText: turn.text,
+                  sessionId: activeContextState.sessionId,
+                  runtimeEpoch: runtimeEpochRef.current,
+                  observedAt: turn.endedAt,
+                })
+              : undefined;
         }
         traceStoreRef.current.updateMetadata(traceId, {
           ...formatPrimaryAskProjectionForTrace(primaryAskProjection),
@@ -19448,6 +19474,16 @@ export function useMeetingAssistant() {
             pendingInterviewSectionHintRef.current?.expiresAt,
           sectionHintDisposition:
             pendingInterviewSectionHintRef.current?.disposition,
+          explicitTaskBoundaryId:
+            pendingInterviewTaskBoundaryRef.current?.id,
+          explicitTaskBoundarySourceTurnId:
+            pendingInterviewTaskBoundaryRef.current?.sourceTurnId,
+          explicitTaskBoundaryObservedAt:
+            pendingInterviewTaskBoundaryRef.current?.observedAt,
+          explicitTaskBoundaryExpiresAt:
+            pendingInterviewTaskBoundaryRef.current?.expiresAt,
+          explicitTaskBoundaryDisposition:
+            pendingInterviewTaskBoundaryRef.current?.disposition,
           shortConfirmationDetected,
           shortConfirmationDisposition:
             shortConfirmationAdmission.disposition,
@@ -19821,12 +19857,29 @@ export function useMeetingAssistant() {
         });
         pendingInterviewSectionHintRef.current =
           sectionHintConsumption.nextHint;
+        const taskBoundaryConsumption = consumeInterviewTaskBoundary({
+          boundary: pendingInterviewTaskBoundaryRef.current,
+          questionId: turn.id,
+          substantive:
+            logicalQuestionMaterialization.materialize &&
+            turnGate.action === "answer-refresh",
+          sessionId: activeContextState.sessionId,
+          runtimeEpoch: runtimeEpochRef.current,
+          now: turn.endedAt,
+        });
+        pendingInterviewTaskBoundaryRef.current =
+          taskBoundaryConsumption.nextBoundary;
         traceStoreRef.current.updateMetadata(
           traceId,
-          formatRuntimeAxisConflictForTrace(
-            questionTypeAxisConflict,
-            "questionTypeAxis"
-          )
+          {
+            ...formatRuntimeAxisConflictForTrace(
+              questionTypeAxisConflict,
+              "questionTypeAxis"
+            ),
+            ...formatInterviewTaskBoundaryForTrace(
+              taskBoundaryConsumption
+            ),
+          }
         );
         if (sectionHintConsumption.disposition !== "no-hint") {
           const sectionHintMetadata = {
@@ -19849,10 +19902,15 @@ export function useMeetingAssistant() {
                 intentDecision: turnGate,
                 explicitTaskSwitch:
                   transitionTurnDecision.detected ||
-                  sectionHintConsumption.disposition === "applied",
+                  sectionHintConsumption.disposition === "applied" ||
+                  taskBoundaryConsumption.disposition === "applied",
                 sectionHint:
                   sectionHintConsumption.disposition === "applied"
                     ? sectionHintConsumption.hint
+                    : undefined,
+                taskBoundaryEvidence:
+                  taskBoundaryConsumption.disposition === "applied"
+                    ? taskBoundaryConsumption.boundary
                     : undefined,
                 primaryAskProjection,
                 commitCanonical:
@@ -21820,7 +21878,7 @@ export function useMeetingAssistant() {
           screenObservationId: observation.id,
           screenPreflightQuestion: screenFallbackQuestion,
         });
-        const screenRelationLogicalQuestionUnit =
+        const baseScreenRelationLogicalQuestionUnit =
           buildManualScreenLogicalQuestionUnit({
             packet: candidateScreenSourcePacket,
             sessionId: preflightContextState.sessionId,
@@ -21828,6 +21886,31 @@ export function useMeetingAssistant() {
             createdAt: observation.capturedAt,
             transcriptTurns: preflightContextState.transcriptTurns,
           });
+        const screenTaskBoundaryConsumption =
+          consumeInterviewTaskBoundary({
+            boundary: pendingInterviewTaskBoundaryRef.current,
+            questionId: observation.id,
+            substantive: Boolean(
+              baseScreenRelationLogicalQuestionUnit &&
+                !candidateScreenSourcePacket.sourceOperationAuthority
+                  .boundVoicePrimaryAsk
+            ),
+            sessionId: preflightContextState.sessionId,
+            runtimeEpoch: runtimeEpochRef.current,
+            now: observation.capturedAt,
+          });
+        pendingInterviewTaskBoundaryRef.current =
+          screenTaskBoundaryConsumption.nextBoundary;
+        const screenRelationLogicalQuestionUnit =
+          baseScreenRelationLogicalQuestionUnit
+            ? {
+                ...baseScreenRelationLogicalQuestionUnit,
+                taskBoundaryEvidence:
+                  screenTaskBoundaryConsumption.disposition === "applied"
+                    ? screenTaskBoundaryConsumption.boundary
+                    : undefined,
+              }
+            : undefined;
         const screenCurrentQuestion = screenRelationLogicalQuestionUnit
           ? createProvisionalCurrentQuestion({
               logicalQuestionUnit: screenRelationLogicalQuestionUnit,
@@ -21849,6 +21932,11 @@ export function useMeetingAssistant() {
               sourceHash: screenCurrentQuestion.sourceHash,
             })
           : candidateScreenSourcePacket;
+        traceStoreRef.current.updateMetadata(trace.id, {
+          ...formatInterviewTaskBoundaryForTrace(
+            screenTaskBoundaryConsumption
+          ),
+        });
         const screenQuestionIdentity =
           isCommittedManualScreenQuestionPacket(screenSourcePacket)
             ? screenSourcePacket.questionIdentity
@@ -21857,6 +21945,8 @@ export function useMeetingAssistant() {
           screenSourcePacket.primaryAsk?.text ?? "";
         const screenQuestionOwnedByVoice =
           screenSourcePacket.primaryAsk?.source === "voice-lqu";
+        const screenTranscriptContext =
+          resolveManualScreenTranscriptContext(screenSourcePacket);
         const screenEvidenceText = screenQuestionOwnedByVoice
           ? screenPrimaryAskEvidenceText
           : [
@@ -21937,7 +22027,9 @@ export function useMeetingAssistant() {
               screenPreflight?.programmingLanguage,
             textHints: [
               screenPreflight?.question,
-              recentTranscript,
+              screenQuestionOwnedByVoice
+                ? screenPrimaryAskEvidenceText
+                : undefined,
             ],
             activeTaskLanguage:
               preflightContextState.taskRuntime.screenAttachment?.language,
@@ -22579,7 +22671,9 @@ export function useMeetingAssistant() {
               ? undefined
               : preflightContextState.activeMeetingTask?.parent.phaseProgress ??
                 preflightContextState.taskRuntime.parent?.phaseProgress,
-          latestTurnText: recentTranscript,
+          latestTurnText: screenQuestionOwnedByVoice
+            ? screenPrimaryAskEvidenceText
+            : "",
           currentQuestion: screenPrimaryAskEvidenceText,
           relation: provisionalScreenTaskRelation,
           subtaskIntent: screenSubtaskIntent,
@@ -23411,11 +23505,7 @@ export function useMeetingAssistant() {
             observation,
             provider: screenModelRoute.provider,
             selectedProvider: screenModelRoute.selectedProvider,
-            recentTranscript: screenResponseOnlyTaskScope
-              ? screenVoiceQuestionCapsule?.text
-                ? `Them: ${screenVoiceQuestionCapsule.text}`
-                : ""
-              : recentTranscript,
+            recentTranscript: screenTranscriptContext,
             autoPrompt,
             responseConfig: state.settings.response,
             memoryContext: memoryContext?.contextText,
@@ -24012,7 +24102,12 @@ export function useMeetingAssistant() {
             : updatedContextState.taskRuntime.parent;
           const screenLanguage = inferTrustedProgrammingLanguage({
             screenPreflightLanguage: screenPreflight?.programmingLanguage,
-            textHints: [screenPreflight?.question, recentTranscript],
+            textHints: [
+              screenPreflight?.question,
+              screenQuestionOwnedByVoice
+                ? screenPrimaryAskEvidenceText
+                : undefined,
+            ],
             preparationLanguage:
               screenPreparationRuntime.programmingLanguage?.value,
           });
@@ -25243,6 +25338,7 @@ export function useMeetingAssistant() {
       if (!operationClaim.accepted) return;
       manualCorrectionRevisionRef.current += 1;
       pendingInterviewSectionHintRef.current = undefined;
+      pendingInterviewTaskBoundaryRef.current = undefined;
       const correctionRuntimeToken = createRuntimeCommitToken({
         operationId: eventId,
         pipeline: "correction",
@@ -29919,6 +30015,9 @@ function resolveAdvisorTaskSignals(
   fallbackQuery: string,
   logicalQuestionUnit?: LogicalQuestionUnit
 ): AdvisorTaskSignals {
+  const explicitTaskBoundary = Boolean(
+    logicalQuestionUnit?.taskBoundaryEvidence
+  );
   const latestThemText =
     context.latestTurn?.speaker === "them" ? context.latestTurn.text.trim() : "";
   const classifierText =
@@ -29972,7 +30071,8 @@ function resolveAdvisorTaskSignals(
     const latestLooksLikeTask =
       latestUsefulText &&
       (hasQuestionOrTaskSignal(latestUsefulText) ||
-        isTaskSwitchTranscript(latestUsefulText));
+        isTaskSwitchTranscript(latestUsefulText) ||
+        explicitTaskBoundary);
     const taskRelationAuthorityDecision =
       explicitResumeDecision?.relation === "resume-parent" &&
       explicitResumeDecision.relationEvidenceAuthorized
@@ -29981,7 +30081,9 @@ function resolveAdvisorTaskSignals(
             activeQuestionType,
             candidateQuestionType: latestQuestionType,
             currentText: latestUsefulText,
-            explicitTaskSwitch: isTaskSwitchTranscript(latestUsefulText),
+            explicitTaskSwitch:
+              isTaskSwitchTranscript(latestUsefulText) ||
+              explicitTaskBoundary,
           });
     const authorizedNewParent =
       taskRelationAuthorityDecision?.relation === "new-parent" &&
@@ -30011,13 +30113,19 @@ function resolveAdvisorTaskSignals(
           latestQuestionType
         ),
         projectAnchor: latestProjectAnchor,
-        source: openingRoute?.source ?? "latest-turn-new-parent",
+        source:
+          openingRoute?.source ??
+          (explicitTaskBoundary
+            ? "explicit-task-boundary"
+            : "latest-turn-new-parent"),
         reuseActivePlaybook: false,
         openingRoute,
         latestTurnAskFrame: latestAskFrame,
         latestTurnTaxonomyBoundaryReason: openingRoute
           ? "opening-route"
-          : "latest-turn-classified",
+          : explicitTaskBoundary
+            ? "explicit-task-boundary"
+            : "latest-turn-classified",
         taxonomyFallbackSuppressed: false,
         unknownTaskMutationBlocked: false,
       };

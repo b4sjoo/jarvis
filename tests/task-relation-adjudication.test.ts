@@ -134,6 +134,19 @@ function atomicOutput(
   };
 }
 
+function directOutput(
+  overrides: Record<string, unknown> = {}
+): Record<string, unknown> {
+  return {
+    schemaVersion: 3,
+    relation: "followup-parent",
+    confidence: 0.97,
+    currentQuestionEvidenceSpans: ["fresh documents"],
+    parentEvidenceSpans: ["RAG system for trip planning"],
+    ...overrides,
+  };
+}
+
 test("builds a bounded relation-only request without generated or factual context", () => {
   const request = buildTaskRelationAdjudicationRequest({
     logicalQuestionUnit: unit(
@@ -183,7 +196,8 @@ test("builds a bounded relation-only request without generated or factual contex
   assert.deepEqual(request.activeParent.acceptedConstraints, [
     request.recentSourceEvidence[1],
   ]);
-  assert.match(prompts.systemPrompt, /five independent relationship facts/i);
+  assert.match(prompts.systemPrompt, /one canonical relation/i);
+  assert.match(prompts.systemPrompt, /schemaVersion:3/i);
   assert.doesNotMatch(
     prompts.userMessage,
     /questionType|advisor action|memory|whiteboard/i
@@ -263,6 +277,40 @@ test("strictly parses grounded follow-up and rejects broader authority", () => {
     {
       ok: false,
       reason: "invalid-parent-evidence",
+      errorKind: "evidence",
+      evidenceSpansValid: false,
+    }
+  );
+});
+
+test("parses one direct canonical relation without requiring atomic facets", () => {
+  const request = buildTaskRelationAdjudicationRequest({
+    logicalQuestionUnit: unit(
+      "How would this retrieval design handle fresh documents?"
+    ),
+    activeMeetingTask: activeTask(),
+  });
+  const parsed = parseTaskRelationAdjudicationOutput(
+    JSON.stringify(directOutput()),
+    request
+  );
+
+  assert.equal(parsed.ok, true);
+  assert.equal(parsed.ok ? parsed.value.schemaVersion : undefined, 3);
+  assert.equal(parsed.ok ? parsed.value.relation : undefined, "followup-parent");
+  assert.equal(parsed.ok ? parsed.value.dependency : undefined, undefined);
+  assert.deepEqual(
+    parseTaskRelationAdjudicationOutput(
+      JSON.stringify(
+        directOutput({
+          parentEvidenceSpans: [],
+        })
+      ),
+      request
+    ),
+    {
+      ok: false,
+      reason: "parent-evidence-required",
       errorKind: "evidence",
       evidenceSpansValid: false,
     }
@@ -728,7 +776,7 @@ test("narrowly converges authoritative voice type and relation into one parent s
   assert.equal(settlement.parentMutationAuthorized, true);
 });
 
-test("narrow voice relation release fails closed for continuity or binding", () => {
+test("narrow voice relation release fails closed for same-type or non-parent relation", () => {
   const logicalQuestionUnit = unit("Design a notification system");
   const currentQuestion = createProvisionalCurrentQuestion({
     logicalQuestionUnit,
@@ -793,12 +841,12 @@ test("narrow voice relation release fails closed for continuity or binding", () 
       sourceKind: "voice",
       activeParentQuestionType: "coding",
       typeSettlement,
-      candidate: { ...candidate, explicitBinding: true },
+      candidate: { ...candidate, relation: "followup-parent" },
       manualCorrectionActive: false,
       operationLeaseAuthorized: true,
       releaseWindowOpen: true,
     }).reason,
-    "candidate-binds-existing-parent"
+    "candidate-relation-not-new-parent"
   );
 });
 
@@ -873,7 +921,7 @@ test("narrowly releases a grounded same-parent screen follow-up", () => {
   assert.equal(decision.reason, "authorized");
   assert.equal(decision.releasedRelation, "followup-parent");
 
-  for (const invalidCandidate of [
+  for (const legacyFacetVariant of [
     { ...candidate, continuationShape: "bounded-detour" as const },
     { ...candidate, switchIntent: "explicit-switch" as const },
     {
@@ -885,17 +933,24 @@ test("narrowly releases a grounded same-parent screen follow-up", () => {
     assert.equal(
       decideNarrowScreenRelationRelease({
         ...common,
-        candidate: invalidCandidate,
-      }).reason,
-      "candidate-followup-not-bounded"
+        candidate: legacyFacetVariant,
+      }).authorized,
+      true
     );
   }
   assert.equal(
     decideNarrowScreenRelationRelease({
       ...common,
+      candidate: { ...candidate, parentEvidenceSpans: [] },
+    }).reason,
+    "candidate-followup-parent-evidence-missing"
+  );
+  assert.equal(
+    decideNarrowScreenRelationRelease({
+      ...common,
       currentQuestionType: "behavioral",
     }).reason,
-    "candidate-followup-not-bounded"
+    "candidate-followup-parent-evidence-missing"
   );
 });
 
@@ -956,12 +1011,11 @@ test("narrow screen relation release fails closed on continuity or stale evidenc
       ...common,
       candidate: {
         ...candidate,
-        dependency: "parent-dependent",
-        continuationShape: "mainline",
+        relation: "child-probe",
         parentEvidenceSpans: ["coding parent"],
       },
     }).reason,
-    "candidate-not-parent-independent"
+    "candidate-relation-not-new-parent"
   );
   assert.equal(
     decideNarrowScreenRelationRelease({

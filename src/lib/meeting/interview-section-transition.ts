@@ -42,6 +42,26 @@ export interface PendingInterviewSectionHint {
   consumedByQuestionId?: string;
 }
 
+export interface PendingInterviewTaskBoundary {
+  schemaVersion: 1;
+  id: string;
+  sourceTurnId: string;
+  sourceText: string;
+  observedAt: number;
+  expiresAt: number;
+  runtimeEpoch: number;
+  sessionId: string;
+  disposition: "pending" | "applied" | "expired" | "cleared";
+  consumedByQuestionId?: string;
+}
+
+export interface InterviewTaskBoundaryConsumption {
+  disposition: "no-boundary" | "retained" | "applied" | "expired";
+  boundary?: PendingInterviewTaskBoundary;
+  nextBoundary?: PendingInterviewTaskBoundary;
+  reason: string;
+}
+
 export interface InterviewSectionTransitionDetection {
   detected: boolean;
   questionType?: InterviewSectionQuestionType;
@@ -291,6 +311,95 @@ export function createPendingInterviewSectionHint(input: {
     runtimeEpoch: input.runtimeEpoch,
     sessionId: input.sessionId,
     disposition: "pending",
+  };
+}
+
+export function createPendingInterviewTaskBoundary(input: {
+  sourceTurnId: string;
+  sourceText: string;
+  sessionId: string;
+  runtimeEpoch: number;
+  observedAt?: number;
+  id?: string;
+}): PendingInterviewTaskBoundary {
+  const observedAt = input.observedAt ?? Date.now();
+  return {
+    schemaVersion: 1,
+    id: input.id ?? createMeetingId("task_boundary_evidence"),
+    sourceTurnId: input.sourceTurnId,
+    sourceText: input.sourceText.trim().slice(0, 600),
+    observedAt,
+    expiresAt: observedAt + INTERVIEW_SECTION_HINT_TTL_MS,
+    runtimeEpoch: input.runtimeEpoch,
+    sessionId: input.sessionId,
+    disposition: "pending",
+  };
+}
+
+export function consumeInterviewTaskBoundary(input: {
+  boundary?: PendingInterviewTaskBoundary;
+  questionId: string;
+  substantive: boolean;
+  sessionId: string;
+  runtimeEpoch: number;
+  now?: number;
+}): InterviewTaskBoundaryConsumption {
+  const boundary = input.boundary;
+  if (!boundary) {
+    return {
+      disposition: "no-boundary",
+      reason: "no-pending-task-boundary",
+    };
+  }
+  if (
+    boundary.sessionId !== input.sessionId ||
+    boundary.runtimeEpoch !== input.runtimeEpoch
+  ) {
+    return {
+      disposition: "expired",
+      boundary: { ...boundary, disposition: "cleared" },
+      reason: "runtime-or-session-mismatch",
+    };
+  }
+  if ((input.now ?? Date.now()) > boundary.expiresAt) {
+    return {
+      disposition: "expired",
+      boundary: { ...boundary, disposition: "expired" },
+      reason: "task-boundary-expired",
+    };
+  }
+  if (!input.substantive) {
+    return {
+      disposition: "retained",
+      boundary,
+      nextBoundary: boundary,
+      reason: "non-substantive-question-source",
+    };
+  }
+  return {
+    disposition: "applied",
+    boundary: {
+      ...boundary,
+      disposition: "applied",
+      consumedByQuestionId: input.questionId,
+    },
+    reason: "next-substantive-question",
+  };
+}
+
+export function formatInterviewTaskBoundaryForTrace(
+  consumption: InterviewTaskBoundaryConsumption
+): Record<string, unknown> {
+  return {
+    explicitTaskBoundaryDisposition: consumption.disposition,
+    explicitTaskBoundaryReason: consumption.reason,
+    explicitTaskBoundaryId: consumption.boundary?.id,
+    explicitTaskBoundarySourceTurnId:
+      consumption.boundary?.sourceTurnId,
+    explicitTaskBoundaryObservedAt: consumption.boundary?.observedAt,
+    explicitTaskBoundaryExpiresAt: consumption.boundary?.expiresAt,
+    explicitTaskBoundaryConsumedByQuestionId:
+      consumption.boundary?.consumedByQuestionId,
   };
 }
 

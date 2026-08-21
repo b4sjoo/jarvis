@@ -822,12 +822,20 @@ function deriveSemanticEvidence(input: {
   }
 
   const answerFocusSpans = dedupeSpans(input.answerFocusSpans);
+  const semanticAnswerFocusSpans =
+    collapseCoordinatedAnswerFocusSpans(
+      answerFocusSpans,
+      input.answerFocusText
+    );
   const retainedObjectSpans = dedupeSpans(objectSpans);
   const scenarioSpans = retainedObjectSpans.filter((span) =>
     hasScenarioEvidenceSignal(span.text)
   );
   const semanticSpans = sortSpansBySourceOrder(
-    dedupeSpans([...retainedObjectSpans, ...answerFocusSpans]),
+    dedupeSpans([
+      ...retainedObjectSpans,
+      ...semanticAnswerFocusSpans,
+    ]),
     input.sourceTurnIds
   );
   const fullSemanticEvidence = joinSpans(
@@ -859,6 +867,30 @@ function deriveSemanticEvidence(input: {
     semanticEvidenceRetentionReasons: retentionReasons,
     semanticEvidenceDroppedReasons: unique(droppedReasons),
   };
+}
+
+function collapseCoordinatedAnswerFocusSpans(
+  spans: PrimaryAskEvidenceSpan[],
+  answerFocusText: string
+) {
+  if (spans.length < 2) return spans;
+  const first = spans[0];
+  const last = spans[spans.length - 1];
+  if (
+    !first ||
+    !last ||
+    spans.some((span) => span.turnId !== first.turnId)
+  ) {
+    return spans;
+  }
+  return [
+    {
+      turnId: first.turnId,
+      text: answerFocusText,
+      start: first.start,
+      end: last.end,
+    },
+  ];
 }
 
 function trimSemanticSetupSpan(span: PrimaryAskEvidenceSpan) {

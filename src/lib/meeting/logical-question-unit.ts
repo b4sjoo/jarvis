@@ -4,7 +4,10 @@ import type {
   ActiveQuestionTermCorrection,
   TranscriptTurn,
 } from "./types.js";
-import type { PendingInterviewSectionHint } from "./interview-section-transition.js";
+import type {
+  PendingInterviewSectionHint,
+  PendingInterviewTaskBoundary,
+} from "./interview-section-transition.js";
 import {
   composePrimaryAskProjection,
   formatPrimaryAskProjectionForTrace,
@@ -42,6 +45,7 @@ export interface LogicalQuestionUnit {
   boundaryReason: string;
   truncated: boolean;
   sectionHint?: PendingInterviewSectionHint;
+  taskBoundaryEvidence?: PendingInterviewTaskBoundary;
   primaryAskProjection?: PrimaryAskProjection;
   termCorrectionOverlays?: ActiveQuestionTermCorrection[];
 }
@@ -62,6 +66,7 @@ export interface ComposeLogicalQuestionUnitInput {
   committedParentBoundary?: boolean;
   now?: number;
   sectionHint?: PendingInterviewSectionHint;
+  taskBoundaryEvidence?: PendingInterviewTaskBoundary;
   primaryAskProjection?: PrimaryAskProjection;
   terminalNoAnswerBoundary?: {
     logicalQuestionUnitId: string;
@@ -162,6 +167,7 @@ export function composeLogicalQuestionUnit(
         previous!.sources.length + 1 >
           LOGICAL_QUESTION_MAX_PREVIOUS_TURNS + 1),
     sectionHint: input.sectionHint,
+    taskBoundaryEvidence: input.taskBoundaryEvidence,
     primaryAskProjection,
   };
 }
@@ -191,6 +197,11 @@ export function formatLogicalQuestionUnitForTrace(
     sectionHintType: unit.sectionHint?.questionType,
     sectionHintDisposition: unit.sectionHint?.disposition,
     sectionHintSourceTurnId: unit.sectionHint?.sourceTurnId,
+    explicitTaskBoundaryId: unit.taskBoundaryEvidence?.id,
+    explicitTaskBoundarySourceTurnId:
+      unit.taskBoundaryEvidence?.sourceTurnId,
+    explicitTaskBoundaryDisposition:
+      unit.taskBoundaryEvidence?.disposition,
     ...formatPrimaryAskProjectionForTrace(unit.primaryAskProjection),
     primaryAskAnswerFocusText: answerFocusText,
     primaryAskSemanticEvidenceText: semanticEvidenceText,

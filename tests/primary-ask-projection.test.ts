@@ -128,6 +128,10 @@ test("preserves coordinated why and how asks from one substantive turn", () => {
   );
   assert.match(result.answerFocusText, /require NDJSON/i);
   assert.match(result.answerFocusText, /partial failures handled/i);
+  assert.equal(
+    result.semanticEvidenceText,
+    "In the OASIS project, why did the OpenSearch Bulk API require NDJSON, and how were per-item partial failures handled?"
+  );
   assert.deepEqual(
     result.setupSpans.map((span) => span.text),
     ["In the OASIS project,"]

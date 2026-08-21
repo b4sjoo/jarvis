@@ -233,6 +233,86 @@ test("admits the first parent only after type and response opportunity settle on
   assert.equal(candidate.settlement?.settlementId, finalSettlement.settlementId);
 });
 
+test("admits a first parent with two coordinated primary asks", () => {
+  const text =
+    "In Oasis, why did you choose NDJSON and how did you handle per-item failures?";
+  const unit: LogicalQuestionUnit = {
+    ...logicalQuestion(text),
+    sourceTurnIds: ["turn-oasis"],
+    sources: [
+      {
+        turnId: "turn-oasis",
+        text,
+        startedAt: 30,
+        endedAt: 40,
+      },
+    ],
+    primaryAskProjection: projectPrimaryAsk({
+      turnId: "turn-oasis",
+      text,
+    }),
+  };
+  assert.equal(unit.primaryAskProjection?.primaryAskSpans.length, 2);
+  const currentQuestion = createProvisionalCurrentQuestion({
+    logicalQuestionUnit: unit,
+    sourceKind: "voice",
+  });
+  const settlement = settleCurrentQuestion({
+    currentQuestion,
+    llmProposal: {
+      source: "llm-type-repair",
+      sessionId: unit.sessionId,
+      runtimeEpoch: unit.runtimeEpoch,
+      logicalQuestionUnitId: unit.id,
+      revision: unit.revision,
+      sourceHash: currentQuestion.sourceHash,
+      questionType: "project-deep-dive",
+      relation: "unknown",
+      action: "answer",
+      confidence: 0.98,
+      typeEvidenceAuthorized: true,
+      relationEvidenceAuthorized: false,
+      actionEvidenceAuthorized: false,
+    },
+    manualCorrectionRevision: 0,
+    policy: {
+      allowLlmTypeRepair: true,
+      runtimeMutationAuthorized: false,
+      questionComplete: true,
+      commitParent: false,
+    },
+  });
+  const request = buildResponseOpportunityRequest({
+    logicalQuestionUnit: unit,
+  });
+  const decision = decideLlmTypeRepairFirstParentAdmission({
+    logicalQuestionUnit: unit,
+    settlement,
+    hasActiveParent: false,
+    outputAuthorityAuthorized: true,
+    responseOpportunityGate: {
+      operationId: "response-opportunity-oasis",
+      sessionId: unit.sessionId,
+      runtimeEpoch: unit.runtimeEpoch,
+      logicalQuestionUnitId: unit.id,
+      logicalQuestionUnitRevision: unit.revision,
+      sourceHash: request.sourceHash,
+      manualCorrectionRevision: 0,
+      disposition: "output-authorized",
+      reason: "high-confidence-output-request",
+      createdAt: 90,
+      settledAt: 95,
+    },
+  });
+
+  assert.equal(decision.authorized, true);
+  assert.deepEqual(decision.command, {
+    kind: "create-parent",
+    type: "project-deep-dive",
+    topic: text,
+  });
+});
+
 test("admits a contextual response gate without recomputing its leased source hash", () => {
   const text = "Yes, use one million daily active users.";
   const primaryAskProjection = projectPrimaryAsk({
