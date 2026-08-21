@@ -631,6 +631,8 @@ export const MeetingAssistant = ({
       whiteboardArtifactDisplay.whiteboard,
     ]
   );
+  const factGuardrailNotice =
+    meeting.latestSuggestion?.factGuardrailNotice;
   const latestReliableAnswerPreview = useMemo(
     () =>
       formatLatestReliableAnswerPreview(
@@ -1736,6 +1738,7 @@ export const MeetingAssistant = ({
               whiteboardViewKey={whiteboardArtifactDisplay.viewKey}
               hasCorrectableQuestion={hasCorrectableQuestion}
               effectiveQuestionType={effectiveQuestionType}
+              factGuardrailNotice={factGuardrailNotice}
               transientPersonalStatusLabel={
                 transientPersonalStatusLabel
               }
@@ -2078,6 +2081,11 @@ export const MeetingAssistant = ({
                         state={meeting.answerDelivery.state}
                       />
                     </div>
+                    {factGuardrailNotice ? (
+                      <div className="mb-2 rounded-sm border border-amber-500/50 bg-amber-500/10 px-2 py-1.5 text-[11px] font-semibold leading-4 text-amber-900 dark:text-amber-200">
+                        {factGuardrailNotice.message}
+                      </div>
+                    ) : null}
                     <MeetingMarkdownText
                       className={cn(
                         WRAP_TEXT_CLASS,
@@ -2993,6 +3001,7 @@ const FocusModePanel = ({
   whiteboardViewKey,
   hasCorrectableQuestion,
   effectiveQuestionType,
+  factGuardrailNotice,
   transientPersonalStatusLabel,
   answerDeliveryState,
   manualQuestionTypeCorrection,
@@ -3033,6 +3042,7 @@ const FocusModePanel = ({
   whiteboardViewKey?: string;
   hasCorrectableQuestion: boolean;
   effectiveQuestionType?: CanonicalQuestionType;
+  factGuardrailNotice?: AdvisorSuggestion["factGuardrailNotice"];
   transientPersonalStatusLabel?: string;
   answerDeliveryState: AnswerDeliveryPresentation["state"];
   manualQuestionTypeCorrection?: ManualQuestionTypeCorrection;
@@ -3116,6 +3126,11 @@ const FocusModePanel = ({
                 ) : null}
                 <AnswerDeliveryBadge state={answerDeliveryState} />
               </div>
+              {factGuardrailNotice ? (
+                <div className="mb-2 rounded-sm border border-amber-500/50 bg-amber-500/10 px-2 py-1.5 text-[10px] font-semibold leading-4 text-amber-900 dark:text-amber-200">
+                  {factGuardrailNotice.message}
+                </div>
+              ) : null}
               <MeetingMarkdownText
                 className={cn(
                   WRAP_TEXT_CLASS,

@@ -129,9 +129,13 @@ Supporting anchor IDs: mem_parser_fix`),
   assert.match(result.effectiveAnswer.sections.answer ?? "", /fenced JSON/i);
   assert.doesNotMatch(result.effectiveContent, /Answer: -/);
   assert.doesNotMatch(result.effectiveContent, /Which verified project/i);
+  assert.equal(
+    result.visibleNotice?.kind,
+    "rebuilt-from-supported-evidence"
+  );
 });
 
-test("replaces a fact-bound answer that omits authority metadata", () => {
+test("sanitizes a fact-bound answer that omits authority metadata without refusing", () => {
   const result = enforceFactAnchorOutput({
     decision: makeDecision({
       state: "strong-anchor",
@@ -143,20 +147,17 @@ test("replaces a fact-bound answer that omits authority metadata", () => {
   });
 
   assert.equal(result.modelOutputAuthorized, false);
-  assert.equal(result.reason, "missing-answer-disposition");
-  assert.equal(result.commitSource, "safe-replacement");
+  assert.equal(result.reason, "bounded-output-sanitized");
+  assert.equal(result.commitSource, "sanitized-model-output");
+  assert.ok(result.effectiveAnswer.sections.answer);
+  assert.doesNotMatch(result.effectiveContent, /Answer: -/);
   assert.equal(
-    result.effectiveAnswer.answerDisposition,
-    "clarification"
-  );
-  assert.equal(result.effectiveAnswer.sections.answer, undefined);
-  assert.match(
-    result.effectiveAnswer.sections.clarifyingQuestion ?? "",
-    /verified experience/i
+    result.visibleNotice?.kind,
+    "generic-hypothetical-fallback"
   );
 });
 
-test("rejects an unknown or old-parent anchor id", () => {
+test("filters an unknown or old-parent anchor id without refusing", () => {
   const result = enforceFactAnchorOutput({
     decision: makeDecision({
       state: "strong-anchor",
@@ -169,7 +170,7 @@ Supporting anchor IDs: mem_old_parent_project`),
   });
 
   assert.equal(result.modelOutputAuthorized, false);
-  assert.equal(result.reason, "unsupported-anchor-id");
+  assert.equal(result.reason, "bounded-output-sanitized");
   assert.deepEqual(result.unsupportedAnchorIds, [
     "mem_old_parent_project",
   ]);
@@ -189,8 +190,9 @@ Supporting anchor IDs: -`),
   });
 
   assert.equal(result.modelOutputAuthorized, false);
-  assert.equal(result.reason, "unsafe-clarification-shape");
+  assert.equal(result.reason, "bounded-output-sanitized");
   assert.doesNotMatch(result.effectiveContent, /fictional MCP/);
+  assert.ok(result.effectiveAnswer.sections.answer);
 });
 
 test("allows a no-anchor response that contains only a clarification", () => {
@@ -234,10 +236,8 @@ Supporting anchor IDs: -`),
 
   assert.equal(bounded.modelOutputAuthorized, true);
   assert.equal(claimed.modelOutputAuthorized, false);
-  assert.equal(
-    claimed.reason,
-    "unsafe-unanchored-first-person-claim"
-  );
+  assert.equal(claimed.reason, "bounded-output-sanitized");
+  assert.ok(claimed.effectiveAnswer.sections.answer);
 });
 
 test("removes an unsupported personal claim while preserving useful bounded guidance", () => {
@@ -316,6 +316,8 @@ Supporting anchor IDs: -`),
 
   assert.equal(matching.modelOutputAuthorized, true);
   assert.equal(invented.modelOutputAuthorized, false);
+  assert.deepEqual(invented.effectiveAnswer.sections.clarifyingOptions, []);
+  assert.ok(invented.effectiveAnswer.sections.answer);
 });
 
 test("does not gate non-fact-dependent output", () => {
@@ -336,7 +338,7 @@ test("does not gate non-fact-dependent output", () => {
   assert.equal(result.effectiveContent, output.rawContent);
 });
 
-test("turns an empty provider output into a safe fact-bound clarification", () => {
+test("leaves an empty provider output to the generation contract", () => {
   const result = enforceFactAnchorOutput({
     decision: makeDecision({
       state: "no-anchor",
@@ -349,10 +351,38 @@ test("turns an empty provider output into a safe fact-bound clarification", () =
     partialOutputHeld: true,
   });
 
-  assert.equal(result.reason, "incomplete-model-output");
-  assert.equal(result.commitSource, "safe-replacement");
-  assert.equal(trace.factAnchorSafeReplacement, true);
+  assert.equal(result.reason, "generation-contract-deferred");
+  assert.equal(result.commitSource, "model-output");
+  assert.equal(trace.factAnchorSafeReplacement, false);
+  assert.equal(trace.wholeAnswerReplacementCount, 0);
   assert.equal(trace.factAnchorPartialOutputHeld, true);
+});
+
+test("keeps Shadow output byte-for-byte while recording the potential sanitation", () => {
+  const decision = makeDecision({
+    state: "no-anchor",
+    action: "ask-clarification",
+    supportedAnchorIds: [],
+  });
+  decision.personalEvidence = {
+    ...decision.personalEvidence,
+    mode: "shadow",
+    enforced: false,
+  };
+  const output = parseMeetingAnswer(
+    "Answer: I personally implemented an unsupported retry system."
+  );
+  const result = enforceFactAnchorOutput({
+    decision,
+    parsedAnswer: output,
+  });
+
+  assert.equal(result.commitSource, "model-output");
+  assert.equal(result.effectiveContent, output.rawContent);
+  assert.equal(result.reason, "shadow-observed");
+  assert.equal(result.shadowWouldCommitSource, "sanitized-model-output");
+  assert.ok(result.sanitizedClaimCount > 0);
+  assert.equal(result.visibleNotice, undefined);
 });
 
 function makeDecision(

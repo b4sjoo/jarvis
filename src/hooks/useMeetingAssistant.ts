@@ -12492,6 +12492,8 @@ export function useMeetingAssistant() {
           settledArtifactAuthorization.allowComplexity,
         whiteboardArtifactMutationAuthorized:
           settledArtifactAuthorization.allowWhiteboard,
+        factGuardrailNotice:
+          factAnchorOutputDecision.visibleNotice,
         transientPersonalStatus: transientPersonalStatusDecision
           ? {
               domain: transientPersonalStatusDecision.domain,
@@ -24557,6 +24559,8 @@ export function useMeetingAssistant() {
                 screenPresentationAuthorizedArtifacts.includes("complexity"),
               whiteboardArtifactMutationAuthorized:
                 screenPresentationAuthorizedArtifacts.includes("whiteboard"),
+              factGuardrailNotice:
+                screenFactAnchorOutputDecision.visibleNotice,
               presentationArtifactAuthority: "manual-screen",
             }
           : {

@@ -5,6 +5,7 @@ import {
 import type {
   AnswerDisposition,
   FactAnchorDecision,
+  FactGuardrailVisibleNotice,
   MeetingAnswerProfile,
   ParsedMeetingAnswer,
 } from "./types.js";
@@ -27,7 +28,9 @@ export interface FactAnchorOutputDecision {
     | "unsafe-clarification-shape"
     | "unsafe-unanchored-first-person-claim"
     | "bounded-output-sanitized"
-    | "incomplete-model-output";
+    | "incomplete-model-output"
+    | "generation-contract-deferred"
+    | "shadow-observed";
   effectiveContent: string;
   effectiveAnswer: ParsedMeetingAnswer;
   reportedDisposition?: AnswerDisposition;
@@ -36,9 +39,46 @@ export interface FactAnchorOutputDecision {
   sanitizedClaimCount: number;
   preservedClaimCount: number;
   sanitizedSections: string[];
+  visibleNotice?: FactGuardrailVisibleNotice;
+  shadowWouldCommitSource?: Exclude<
+    FactAnchorOutputCommitSource,
+    "model-output"
+  >;
+  fallbackMode?: FactGuardrailVisibleNotice["kind"];
 }
 
 export function enforceFactAnchorOutput({
+  decision,
+  parsedAnswer,
+  expectedProfile,
+}: {
+  decision: FactAnchorDecision | undefined;
+  parsedAnswer: ParsedMeetingAnswer;
+  expectedProfile?: MeetingAnswerProfile;
+}): FactAnchorOutputDecision {
+  const enforcement = enforceFactAnchorOutputInEnforcementMode({
+    decision,
+    parsedAnswer,
+    expectedProfile,
+  });
+  if (!decision || decision.personalEvidence.mode !== "shadow") {
+    return enforcement;
+  }
+  return {
+    ...authorizeOriginal(parsedAnswer, "shadow-observed"),
+    unsupportedAnchorIds: enforcement.unsupportedAnchorIds,
+    sanitizedClaimCount: enforcement.sanitizedClaimCount,
+    preservedClaimCount: enforcement.preservedClaimCount,
+    sanitizedSections: enforcement.sanitizedSections,
+    shadowWouldCommitSource:
+      enforcement.commitSource === "model-output"
+        ? undefined
+        : enforcement.commitSource,
+    fallbackMode: enforcement.fallbackMode,
+  };
+}
+
+function enforceFactAnchorOutputInEnforcementMode({
   decision,
   parsedAnswer,
   expectedProfile,
@@ -61,137 +101,92 @@ export function enforceFactAnchorOutput({
     parsedAnswer.parseStatus === "empty" ||
     parsedAnswer.parseStatus === "partial"
   ) {
-    return replaceWithSafeClarification({
-      decision,
-      parsedAnswer,
-      expectedProfile,
-      reason: "incomplete-model-output",
+    return {
+      ...authorizeOriginal(parsedAnswer, "generation-contract-deferred"),
       unsupportedAnchorIds,
-    });
-  }
-  if (!parsedAnswer.answerDisposition) {
-    return replaceWithSafeClarification({
-      decision,
-      parsedAnswer,
-      expectedProfile,
-      reason: "missing-answer-disposition",
-      unsupportedAnchorIds,
-    });
-  }
-
-  if (
-    decision.state === "weak-anchor" &&
-    decision.action === "answer-with-caveats" &&
-    parsedAnswer.answerDisposition === "bounded-with-caveat"
-  ) {
-    const sanitized = sanitizeBoundedFactOutput(
-      parsedAnswer,
-      expectedProfile
-    );
-    if (
-      sanitized.sanitizedClaimCount === 0 &&
-      unsupportedAnchorIds.length === 0
-    ) {
-      return authorizeOriginal(
-        parsedAnswer,
-        "matching-authority-contract"
-      );
-    }
-    if (hasUsefulBoundedAnswer(sanitized.effectiveAnswer)) {
-      return {
-        modelOutputAuthorized: false,
-        commitSource: "sanitized-model-output",
-        reason: "bounded-output-sanitized",
-        effectiveContent: sanitized.effectiveContent,
-        effectiveAnswer: sanitized.effectiveAnswer,
-        reportedDisposition: parsedAnswer.answerDisposition,
-        reportedAnchorIds: parsedAnswer.supportingAnchorIds,
-        unsupportedAnchorIds,
-        sanitizedClaimCount: sanitized.sanitizedClaimCount,
-        preservedClaimCount: sanitized.preservedClaimCount,
-        sanitizedSections: sanitized.sanitizedSections,
-      };
-    }
-    return replaceWithSafeClarification({
-      decision,
-      parsedAnswer,
-      expectedProfile,
-      reason: "unsafe-unanchored-first-person-claim",
-      unsupportedAnchorIds,
-      sanitizedClaimCount: sanitized.sanitizedClaimCount,
-      preservedClaimCount: sanitized.preservedClaimCount,
-      sanitizedSections: sanitized.sanitizedSections,
-    });
-  }
-
-  if (unsupportedAnchorIds.length > 0) {
-    return replaceWithSafeClarification({
-      decision,
-      parsedAnswer,
-      expectedProfile,
-      reason: "unsupported-anchor-id",
-      unsupportedAnchorIds,
-    });
+    };
   }
 
   if (
     parsedAnswer.answerDisposition === "clarification" ||
     parsedAnswer.answerDisposition === "supported-choices"
   ) {
-    if (isSafeClarifyingDisposition(parsedAnswer, decision)) {
+    if (
+      isSafeClarifyingDisposition(parsedAnswer, decision) &&
+      unsupportedAnchorIds.length === 0
+    ) {
       return authorizeOriginal(parsedAnswer, "matching-authority-contract");
     }
-    return replaceWithSafeClarification({
-      decision,
-      parsedAnswer,
-      expectedProfile,
-      reason: "unsafe-clarification-shape",
-      unsupportedAnchorIds,
-    });
   }
 
+  const unsafeClarifyingShape = Boolean(
+    (parsedAnswer.answerDisposition === "clarification" ||
+      parsedAnswer.answerDisposition === "supported-choices") &&
+      !isSafeClarifyingDisposition(parsedAnswer, decision)
+  );
   if (
     decision.state === "strong-anchor" &&
-    parsedAnswer.answerDisposition === "factual-with-anchor"
+    decision.claimSupportDecisions.length === 0 &&
+    unsupportedAnchorIds.length === 0 &&
+    parsedAnswer.supportingAnchorIds.some((anchorId) =>
+      decision.supportedAnchorIds.includes(anchorId)
+    ) &&
+    !unsafeClarifyingShape
   ) {
-    if (parsedAnswer.supportingAnchorIds.length === 0) {
-      return replaceWithSafeClarification({
-        decision,
-        parsedAnswer,
-        expectedProfile,
-        reason: "missing-supporting-anchor",
-        unsupportedAnchorIds,
-      });
-    }
-    const sanitized = sanitizeAnchoredFactOutput(
-      parsedAnswer,
-      decision,
-      expectedProfile
-    );
-    if (sanitized.sanitizedClaimCount > 0) {
-      return {
-        modelOutputAuthorized: false,
-        commitSource: "sanitized-model-output",
-        reason: "bounded-output-sanitized",
-        effectiveContent: sanitized.effectiveContent,
-        effectiveAnswer: sanitized.effectiveAnswer,
-        reportedDisposition: parsedAnswer.answerDisposition,
-        reportedAnchorIds: parsedAnswer.supportingAnchorIds,
-        unsupportedAnchorIds: [],
-        sanitizedClaimCount: sanitized.sanitizedClaimCount,
-        preservedClaimCount: sanitized.preservedClaimCount,
-        sanitizedSections: sanitized.sanitizedSections,
-      };
-    }
     return authorizeOriginal(parsedAnswer, "matching-authority-contract");
   }
 
-  return replaceWithSafeClarification({
+  const hasSupportedClaimSpans = decision.claimSupportDecisions.some(
+    (support) =>
+      support.decision === "allow" && Boolean(support.supportSpan?.trim())
+  );
+  const sanitized = hasSupportedClaimSpans
+    ? sanitizeAnchoredFactOutput(
+      parsedAnswer,
+      decision,
+      expectedProfile
+    )
+    : sanitizeBoundedFactOutput(parsedAnswer, expectedProfile);
+  if (
+    sanitized.sanitizedClaimCount === 0 &&
+    unsupportedAnchorIds.length === 0 &&
+    !unsafeClarifyingShape
+  ) {
+    return authorizeOriginal(parsedAnswer, "matching-authority-contract");
+  }
+
+  const sanitizedWithFilteredAnchors = filterUnsupportedAnchorIds({
+    parsedAnswer: sanitized.effectiveAnswer,
+    supportedAnchorIds: decision.supportedAnchorIds,
+    expectedProfile,
+  });
+  if (
+    !unsafeClarifyingShape &&
+    hasUsefulBoundedAnswer(sanitizedWithFilteredAnchors.effectiveAnswer)
+  ) {
+    return {
+      modelOutputAuthorized: false,
+      commitSource: "sanitized-model-output",
+      reason: "bounded-output-sanitized",
+      effectiveContent: sanitizedWithFilteredAnchors.effectiveContent,
+      effectiveAnswer: sanitizedWithFilteredAnchors.effectiveAnswer,
+      reportedDisposition: parsedAnswer.answerDisposition,
+      reportedAnchorIds: parsedAnswer.supportingAnchorIds,
+      unsupportedAnchorIds,
+      sanitizedClaimCount: sanitized.sanitizedClaimCount,
+      preservedClaimCount: sanitized.preservedClaimCount,
+      sanitizedSections: sanitized.sanitizedSections,
+    };
+  }
+
+  return buildNonRefusalFallback({
     decision,
     parsedAnswer,
     expectedProfile,
-    reason: "disposition-mismatch",
     unsupportedAnchorIds,
+    sanitizedClaimCount: sanitized.sanitizedClaimCount,
+    preservedClaimCount: sanitized.preservedClaimCount,
+    sanitizedSections: sanitized.sanitizedSections,
   });
 }
 
@@ -212,14 +207,22 @@ export function formatFactAnchorOutputDecisionForTrace(
     factAnchorPreservedClaimCount: decision.preservedClaimCount,
     factAnchorSanitizedSections: decision.sanitizedSections,
     factAnchorSafeReplacement:
-      decision.commitSource === "safe-replacement",
+      false,
+    factAnchorShadowWouldCommitSource:
+      decision.shadowWouldCommitSource,
     unsupportedFirstPersonHardClaimCount:
       decision.sanitizedClaimCount,
     sanitizedHardClaimCount: decision.sanitizedClaimCount,
     boundedSynthesisCommitCount:
       decision.commitSource === "sanitized-model-output" ? 1 : 0,
     wholeAnswerReplacementCount:
-      decision.commitSource === "safe-replacement" ? 1 : 0,
+      0,
+    factGuardrailNoticeShown: Boolean(decision.visibleNotice),
+    factGuardrailCommitMode: decision.fallbackMode,
+    factGuardrailFallbackReason: decision.visibleNotice
+      ? decision.reason
+      : undefined,
+    factGuardrailNoticeKind: decision.visibleNotice?.kind,
     factAnchorPartialOutputHeld: options.partialOutputHeld ?? false,
   };
 }
@@ -243,11 +246,41 @@ function authorizeOriginal(
   };
 }
 
-function replaceWithSafeClarification({
+function filterUnsupportedAnchorIds({
+  parsedAnswer,
+  supportedAnchorIds,
+  expectedProfile,
+}: {
+  parsedAnswer: ParsedMeetingAnswer;
+  supportedAnchorIds: string[];
+  expectedProfile?: MeetingAnswerProfile;
+}) {
+  const allowed = new Set(supportedAnchorIds);
+  const filtered = parsedAnswer.supportingAnchorIds.filter((anchorId) =>
+    allowed.has(anchorId)
+  );
+  const answerDisposition =
+    parsedAnswer.answerDisposition === "factual-with-anchor" &&
+    filtered.length === 0
+      ? "bounded-with-caveat"
+      : parsedAnswer.answerDisposition;
+  const effectiveContent = serializeMeetingAnswer({
+    ...parsedAnswer,
+    answerDisposition,
+    supportingAnchorIds: filtered,
+  });
+  return {
+    effectiveContent,
+    effectiveAnswer: parseMeetingAnswer(effectiveContent, {
+      expectedProfile,
+    }),
+  };
+}
+
+function buildNonRefusalFallback({
   decision,
   parsedAnswer,
   expectedProfile,
-  reason,
   unsupportedAnchorIds,
   sanitizedClaimCount = 0,
   preservedClaimCount = 0,
@@ -256,36 +289,42 @@ function replaceWithSafeClarification({
   decision: FactAnchorDecision;
   parsedAnswer: ParsedMeetingAnswer;
   expectedProfile?: MeetingAnswerProfile;
-  reason: FactAnchorOutputDecision["reason"];
   unsupportedAnchorIds: string[];
   sanitizedClaimCount?: number;
   preservedClaimCount?: number;
   sanitizedSections?: string[];
 }): FactAnchorOutputDecision {
-  const hasVerifiedChoices =
-    decision.action === "offer-supported-choices" &&
-    decision.state === "weak-anchor" &&
-    decision.supportedAnchorTitles.length > 0;
-  const disposition: AnswerDisposition = hasVerifiedChoices
-    ? "supported-choices"
-    : "clarification";
-  const clarifyingQuestion = buildSafeClarifyingQuestion(decision);
-  const clarifyingOptions = hasVerifiedChoices
-    ? decision.supportedAnchorTitles.join(" | ")
-    : "-";
-  const effectiveContent = [
-    "中文思路: 当前生成结果没有通过事实锚点校验。先澄清可验证的经历或个人事实，避免编造。",
-    "Answer: -",
-    `Clarifying question: ${clarifyingQuestion}`,
-    `Clarifying options: ${clarifyingOptions}`,
-    `Answer disposition: ${disposition}`,
-    "Supporting anchor IDs: -",
-  ].join("\n");
+  const supportText = decision.claimSupportDecisions
+    .filter(
+      (support) =>
+        support.decision === "allow" && Boolean(support.supportSpan?.trim())
+    )
+    .map((support) => support.supportSpan?.trim())
+    .filter((value): value is string => Boolean(value))
+    .join(" ");
+  const fallbackMode: FactGuardrailVisibleNotice["kind"] = supportText
+    ? "rebuilt-from-supported-evidence"
+    : "generic-hypothetical-fallback";
+  const fallbackAnswer = supportText
+    ? buildSupportedAnchorFallback({
+        parsedAnswer,
+        supportText,
+        decision,
+      })
+    : buildGenericHypotheticalFallback(parsedAnswer, decision);
+  const effectiveContent = serializeMeetingAnswer(fallbackAnswer);
+  const visibleNotice: FactGuardrailVisibleNotice = {
+    kind: fallbackMode,
+    message:
+      fallbackMode === "rebuilt-from-supported-evidence"
+        ? "事实护栏已重建回答：原始回答中的个人或项目事实缺少足够证据。以下内容仅基于已验证事实与明确假设。"
+        : "事实证据不足：以下为通用或假设性回答，请勿作为真实个人经历逐字陈述。",
+  };
 
   return {
     modelOutputAuthorized: false,
-    commitSource: "safe-replacement",
-    reason,
+    commitSource: "sanitized-model-output",
+    reason: "bounded-output-sanitized",
     effectiveContent,
     effectiveAnswer: parseMeetingAnswer(effectiveContent, {
       expectedProfile,
@@ -296,17 +335,33 @@ function replaceWithSafeClarification({
     sanitizedClaimCount,
     preservedClaimCount,
     sanitizedSections,
+    visibleNotice,
+    fallbackMode,
   };
 }
 
-function buildSafeClarifyingQuestion(decision: FactAnchorDecision) {
-  if (decision.requiredFor === "personal-logistics") {
-    return "Could you confirm the relevant personal detail before I answer?";
-  }
-  if (decision.requiredFor === "behavioral") {
-    return "Which verified experience should I use for this answer?";
-  }
-  return "Which verified project should I use for this answer?";
+function buildGenericHypotheticalFallback(
+  parsedAnswer: ParsedMeetingAnswer,
+  decision: FactAnchorDecision
+): ParsedMeetingAnswer {
+  const closestEvidence = decision.supportedAnchorTitles[0];
+  return {
+    ...parsedAnswer,
+    sections: {
+      ...parsedAnswer.sections,
+      chineseThinking:
+        "当前证据不足以支持原始第一人称细节；保留通用方法，并把未验证内容明确降为假设。",
+      answer: closestEvidence
+        ? `The closest verified example is ${closestEvidence}. I would use only its confirmed context, actions, and outcomes, and present any additional mechanism as a hypothetical improvement rather than as something already implemented.`
+        : "I would answer this as a hypothetical approach: state the relevant constraint, explain the decision and tradeoff, and separate the proposed mechanism from any unverified personal experience or result.",
+      approach:
+        "Use verified facts where available; otherwise keep recommendations explicitly hypothetical and avoid unsupported ownership, metrics, third-party positions, or implementation claims.",
+      clarifyingQuestion: undefined,
+      clarifyingOptions: [],
+    },
+    answerDisposition: "bounded-with-caveat" as AnswerDisposition,
+    supportingAnchorIds: [],
+  };
 }
 
 function isSafeClarifyingDisposition(
@@ -393,12 +448,10 @@ function sanitizeAnchoredFactOutput(
   decision: FactAnchorDecision,
   expectedProfile: MeetingAnswerProfile | undefined
 ) {
-  const reportedAnchorIds = new Set(parsedAnswer.supportingAnchorIds);
   const supportDecisions = decision.claimSupportDecisions.filter(
     (item) =>
       item.decision === "allow" &&
-      item.supportSpan?.trim() &&
-      (!item.anchorId || reportedAnchorIds.has(item.anchorId))
+      item.supportSpan?.trim()
   );
   if (!supportDecisions.length) {
     return {
@@ -433,22 +486,13 @@ function sanitizeAnchoredFactOutput(
     if (result.removed > 0) sanitizedSections.push(section);
   }
 
-  let sanitizedAnswer: ParsedMeetingAnswer = {
+  const sanitizedAnswer: ParsedMeetingAnswer = {
     ...parsedAnswer,
     sections,
     supportingAnchorIds: parsedAnswer.supportingAnchorIds.filter(
       (anchorId) => decision.supportedAnchorIds.includes(anchorId)
     ),
   };
-  if (!hasUsefulBoundedAnswer(sanitizedAnswer)) {
-    sanitizedAnswer = buildSupportedAnchorFallback({
-      parsedAnswer: sanitizedAnswer,
-      supportText,
-      decision,
-    });
-    preservedClaimCount += 1;
-  }
-
   const effectiveContent = serializeMeetingAnswer(sanitizedAnswer);
   return {
     effectiveContent,

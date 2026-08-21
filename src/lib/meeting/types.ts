@@ -1102,6 +1102,13 @@ export interface ClarifyingQuestionInteractionOutcome {
   reason: string;
 }
 
+export interface FactGuardrailVisibleNotice {
+  kind:
+    | "rebuilt-from-supported-evidence"
+    | "generic-hypothetical-fallback";
+  message: string;
+}
+
 export interface AdvisorSuggestion {
   id: string;
   sourceTraceId?: string;
@@ -1122,6 +1129,7 @@ export interface AdvisorSuggestion {
   complexityArtifactRevision?: number;
   presentationArtifactAuthority?:
     import("./screen-artifact-authority.js").ScreenPresentationArtifactAuthoritySource;
+  factGuardrailNotice?: FactGuardrailVisibleNotice;
   basedOnTurnIds: string[];
   basedOnObservationIds: string[];
   confidence: "low" | "medium" | "high";
