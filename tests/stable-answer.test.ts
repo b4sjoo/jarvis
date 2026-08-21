@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  collectStableAnswerMutationDelta,
   collectStableAnswerMutatedArtifacts,
   commitStableAnswerRevision,
   decideStableAnswerCommit,
+  formatStableAnswerCommitForTrace,
   isAnswerDeliveryLockActive,
   resolveAuthorizedAnswerArtifacts,
   updateAnswerDeliveryProgress,
@@ -135,6 +137,98 @@ Complexity: O(n).`
   assert.deepEqual(collectStableAnswerMutatedArtifacts(first, second), [
     "answer",
   ]);
+});
+
+test("separates a cross-owner artifact reset from candidate mutations", () => {
+  const coding = commitStableAnswerRevision({
+    candidate: suggestion(
+      "coding-answer",
+      `Answer: Use a hash map and doubly linked list.
+Code:
+\`\`\`python
+class LRUCache:
+    pass
+\`\`\`
+Complexity: O(1) get and put.`
+    ),
+    authorizedArtifacts: ["answer", "code", "complexity"],
+    taskId: "coding-parent",
+    logicalQuestionUnitId: "coding-question",
+    logicalQuestionRevision: 1,
+  });
+  assert.ok(coding);
+  const behavioral = commitStableAnswerRevision({
+    current: coding,
+    candidate: suggestion(
+      "behavioral-answer",
+      "Answer: I aligned the team around a smaller reversible milestone."
+    ),
+    authorizedArtifacts: ["answer"],
+    taskId: "behavioral-parent",
+    logicalQuestionUnitId: "behavioral-question",
+    logicalQuestionRevision: 1,
+    resetSections: true,
+  });
+  assert.ok(behavioral);
+
+  assert.deepEqual(
+    collectStableAnswerMutationDelta(coding, behavioral, {
+      resetSections: true,
+    }),
+    {
+      candidateMutatedArtifacts: ["answer"],
+      lifecycleResetArtifacts: ["code", "complexity"],
+    }
+  );
+});
+
+test("detects new-owner Code even when its local revision equals the old revision", () => {
+  const first = commitStableAnswerRevision({
+    candidate: suggestion(
+      "coding-one",
+      "Answer: First.\nCode:\n```python\nprint(1)\n```"
+    ),
+    authorizedArtifacts: ["answer", "code"],
+    taskId: "coding-parent-one",
+    logicalQuestionUnitId: "question-one",
+    logicalQuestionRevision: 1,
+  });
+  assert.ok(first);
+  const second = commitStableAnswerRevision({
+    current: first,
+    candidate: suggestion(
+      "coding-two",
+      "Answer: Second.\nCode:\n```python\nprint(2)\n```"
+    ),
+    authorizedArtifacts: ["answer", "code"],
+    taskId: "coding-parent-two",
+    logicalQuestionUnitId: "question-two",
+    logicalQuestionRevision: 1,
+    resetSections: true,
+  });
+  assert.ok(second);
+  assert.equal(first.sections.code.revision, second.sections.code.revision);
+  assert.deepEqual(
+    collectStableAnswerMutatedArtifacts(first, second, {
+      resetSections: true,
+    }),
+    ["answer", "code"]
+  );
+});
+
+test("does not report a stable commit when publication produced no stable or pending answer", () => {
+  const trace = formatStableAnswerCommitForTrace({
+    decision: { disposition: "committed", reason: "authorized" },
+    authorizedArtifacts: ["answer"],
+    requestedArtifacts: ["answer"],
+    candidateMutatedArtifacts: ["answer"],
+    lifecycleResetArtifacts: ["code", "complexity"],
+  });
+
+  assert.equal(trace.stableAnswerCommitDisposition, "rejected");
+  assert.equal(trace.stableAnswerCommitReason, "candidate-not-published");
+  assert.deepEqual(trace.candidateMutatedArtifacts, ["answer"]);
+  assert.deepEqual(trace.lifecycleResetArtifacts, ["code", "complexity"]);
 });
 
 test("locks delivery after a sufficiently long overlapping me turn", () => {

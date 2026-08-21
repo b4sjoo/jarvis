@@ -694,7 +694,7 @@ import {
   promoteQuestionLineage,
   resolveAdjacentConstraintInheritance,
   resolveInheritedQuestionLineageForTurnIntent,
-  collectStableAnswerMutatedArtifacts,
+  collectStableAnswerMutationDelta,
   commitStableAnswerRevision,
   rebaseAnswerGenerationLeaseAfterOwnedParentMutation,
   isAnswerDeliveryLockActive,
@@ -1501,10 +1501,7 @@ function clearActiveTaskState(
     taskRuntime: contextState.taskRuntime,
     activeMeetingTask: contextState.activeMeetingTask,
     partialSuggestion: "",
-    latestSuggestion:
-      isScreenAnchoredSuggestion(previous.latestSuggestion)
-        ? null
-        : previous.latestSuggestion,
+    latestSuggestion: null,
     latestReliableSuggestion: null,
     status:
       previous.status === "thinking"
@@ -4046,6 +4043,11 @@ export function useMeetingAssistant() {
         commitLatestUsefulAnswer:
           pending.latestUsefulAnswerMutationAuthorized,
       });
+    const pendingMutationDelta = collectStableAnswerMutationDelta(
+      previousStableAnswer,
+      stable,
+      { resetSections: pending.resetSections }
+    );
     const generationCommit =
       generationDerivedCommitCoordinatorRef.current.commit({
         lease: pending.lease,
@@ -4055,10 +4057,7 @@ export function useMeetingAssistant() {
             lease: pending.lease,
             authorizedArtifacts: pending.authorizedArtifacts,
             candidateMutatedArtifacts:
-              collectStableAnswerMutatedArtifacts(
-                previousStableAnswer,
-                stable
-              ),
+              pendingMutationDelta.candidateMutatedArtifacts,
           })
         ),
         expectedTaskRuntimeRevision: pending.taskRuntimeRevision,
@@ -4130,10 +4129,9 @@ export function useMeetingAssistant() {
         authorizedArtifacts: pending.authorizedArtifacts,
         requestedArtifacts: pending.lease.requestedArtifacts,
         candidateMutatedArtifacts:
-          collectStableAnswerMutatedArtifacts(
-            previousStableAnswer,
-            stable
-          ),
+          pendingMutationDelta.candidateMutatedArtifacts,
+        lifecycleResetArtifacts:
+          pendingMutationDelta.lifecycleResetArtifacts,
         previousCommittedAt: previousStableAnswer?.committedAt,
         now,
       });
@@ -4234,6 +4232,11 @@ export function useMeetingAssistant() {
         revision: input.lease.baseVisibleAnswerRevision + 1,
         committedAt: now,
       });
+      const previewMutationDelta = collectStableAnswerMutationDelta(
+        currentStableAnswer,
+        previewStableAnswer,
+        { resetSections: input.resetSections }
+      );
       generationResultLedgerRef.current.recordCandidateValidation({
         lease: input.lease,
         disposition: "accepted",
@@ -4248,10 +4251,7 @@ export function useMeetingAssistant() {
               lease: input.lease,
               authorizedArtifacts: input.authorizedArtifacts,
               candidateMutatedArtifacts:
-                collectStableAnswerMutatedArtifacts(
-                  currentStableAnswer,
-                  previewStableAnswer
-                ),
+                previewMutationDelta.candidateMutatedArtifacts,
             })
           ),
           expectedTaskRuntimeRevision: input.taskRuntimeRevision,
@@ -7937,21 +7937,47 @@ export function useMeetingAssistant() {
   );
 
   const clearActiveTask = useCallback(() => {
+    const previousStableAnswer = stableAnswerRevisionRef.current;
+    const previousPendingAnswer = pendingAnswerRevisionRef.current;
     advanceRuntimeEpoch("active-task-cleared");
     clearPendingSentenceCompletionForRuntimeReset("active-task-cleared");
     cancelActiveAdvisorJob("active-task-cleared");
+    clearPendingAnswerCommitTimer();
     screenAnalysisAbortRef.current?.abort();
     screenAnalysisAbortRef.current = null;
+    stableAnswerRevisionRef.current = null;
+    pendingAnswerRevisionRef.current = null;
+    answerDeliveryProgressRef.current = null;
+    currentQuestionLineageRef.current = undefined;
+    logicalQuestionUnitRef.current = undefined;
+    latestManualCorrectionTargetRef.current = undefined;
+    manualCorrectionTargetHistoryRef.current = [];
+    recentAdvisorContinuityRef.current = [];
     submitTaskRuntimeClear(contextManagerRef.current, {
       scope: "all",
       reason: "active-task-cleared",
     });
     latestForceAdviseTargetRef.current = undefined;
+    sessionRecordingManagerRef.current?.recordCaptureLifecycle({
+      stage: "active-task-publication-state-cleared",
+      previousStableTaskId: previousStableAnswer?.taskId,
+      previousStableRevision: previousStableAnswer?.revision,
+      previousPendingOperationId: previousPendingAnswer?.operationId,
+      stableOwnerCleared: Boolean(previousStableAnswer),
+      pendingDeliveryCleared: Boolean(previousPendingAnswer),
+      answerDeliveryProgressCleared: true,
+    });
     const contextState = contextManagerRef.current.getState();
-    setState((previous) => clearActiveTaskState(previous, contextState));
+    setState((previous) => ({
+      ...clearActiveTaskState(previous, contextState),
+      answerDelivery: toAnswerDeliveryPresentation({
+        visibleAnswerRevision: visibleAnswerRevisionRef.current,
+      }),
+    }));
   }, [
     advanceRuntimeEpoch,
     cancelActiveAdvisorJob,
+    clearPendingAnswerCommitTimer,
     clearPendingSentenceCompletionForRuntimeReset,
   ]);
 
@@ -12562,6 +12588,12 @@ export function useMeetingAssistant() {
               revision: visibleAnswerRevisionBefore + 1,
             })
           : null;
+      const advisorCandidateMutationDelta =
+        collectStableAnswerMutationDelta(
+          previousStableAnswer,
+          candidateStableAnswer,
+          { resetSections: resetVisibleSections }
+        );
       const pendingAnswer =
         stableAnswerCommitDecision.disposition === "pending" &&
         answerGenerationLease
@@ -12595,6 +12627,9 @@ export function useMeetingAssistant() {
             })
           : null;
       let nextStableAnswer: StableAnswerRevision | null = null;
+      let advisorGenerationCommit:
+        | { committed: boolean; reason: string }
+        | undefined;
       if (candidateStableAnswer && answerGenerationLease) {
         generationResultLedgerRef.current.recordCandidateValidation({
           lease: answerGenerationLease,
@@ -12615,21 +12650,20 @@ export function useMeetingAssistant() {
               settledArtifactAuthorization.allowLatestUsefulAnswer &&
               shouldCommitAdvisorParent,
           });
+        const advisorLeaseAuthorization =
+          authorizeAnswerGenerationLease(
+            answerGenerationLease,
+            readGenerationLeaseSnapshot({
+              lease: answerGenerationLease,
+              authorizedArtifacts: generationAuthorizedArtifacts,
+              candidateMutatedArtifacts:
+                advisorCandidateMutationDelta.candidateMutatedArtifacts,
+            })
+          );
         const generationCommit =
           generationDerivedCommitCoordinatorRef.current.commit({
             lease: answerGenerationLease,
-            leaseAuthorization: authorizeAnswerGenerationLease(
-              answerGenerationLease,
-              readGenerationLeaseSnapshot({
-                lease: answerGenerationLease,
-                authorizedArtifacts: generationAuthorizedArtifacts,
-                candidateMutatedArtifacts:
-                  collectStableAnswerMutatedArtifacts(
-                    previousStableAnswer,
-                    candidateStableAnswer
-                  ),
-              })
-            ),
+            leaseAuthorization: advisorLeaseAuthorization,
             expectedTaskRuntimeRevision:
               contextState.taskRuntime.revision,
             currentTaskRuntimeRevision:
@@ -12694,6 +12728,17 @@ export function useMeetingAssistant() {
               });
             },
           });
+        advisorGenerationCommit = generationCommit;
+        if (traceId) {
+          traceStoreRef.current.updateMetadata(
+            traceId,
+            formatAnswerGenerationLeaseForTrace(
+              answerGenerationLease,
+              advisorLeaseAuthorization,
+              "final-candidate-commit"
+            )
+          );
+        }
         if (generationCommit.committed) {
           nextStableAnswer = candidateStableAnswer;
           contextState = contextManagerRef.current.getState();
@@ -12800,6 +12845,11 @@ export function useMeetingAssistant() {
               ? "paused"
               : "idle",
           partialSuggestion: "",
+          error:
+            advisorGenerationCommit &&
+            !advisorGenerationCommit.committed
+              ? "Answer generated but could not be published. Try Regenerate."
+              : previous.error,
         }));
       }
       const stableAnswerCommitMetadata =
@@ -12811,10 +12861,9 @@ export function useMeetingAssistant() {
           authorizedArtifacts: generationAuthorizedArtifacts,
           requestedArtifacts: answerGenerationLease?.requestedArtifacts,
           candidateMutatedArtifacts:
-            collectStableAnswerMutatedArtifacts(
-              previousStableAnswer,
-              nextStableAnswer
-            ),
+            advisorCandidateMutationDelta.candidateMutatedArtifacts,
+          lifecycleResetArtifacts:
+            advisorCandidateMutationDelta.lifecycleResetArtifacts,
           previousCommittedAt: previousStableAnswer?.committedAt,
         });
       const previousVisibleCode = resetVisibleSections
@@ -12852,7 +12901,10 @@ export function useMeetingAssistant() {
           ? "visible-answer-committed"
           : pendingAnswer
             ? "answer-update-pending-delivery"
-            : "empty-or-silent-answer",
+            : advisorGenerationCommit &&
+                !advisorGenerationCommit.committed
+              ? `generation-commit-rejected:${advisorGenerationCommit.reason}`
+              : "empty-or-silent-answer",
       });
       const outputCommitMetadata = {
         advisorOutputDisposition: pendingAnswer
@@ -12861,7 +12913,10 @@ export function useMeetingAssistant() {
             ? inferredTurnIntentDecision?.enforcement === "shadow"
               ? "shadow-visible"
               : "committed"
-            : "empty-or-silent",
+            : advisorGenerationCommit &&
+                !advisorGenerationCommit.committed
+              ? "publication-rejected"
+              : "empty-or-silent",
         advisorOutputCommittedToUi: committedVisibleAnswer,
         visibleAnswerChanged:
           committedVisibleAnswer &&
@@ -12927,10 +12982,19 @@ export function useMeetingAssistant() {
           });
         }
       }
-      releaseAdvisorJob(advisorJob, "committed", {
-        commitAuthorized: finalCommitDecision.authorized,
-        commitAuthorizationReason: finalCommitDecision.reason,
-      });
+      const advisorPublicationAccepted = Boolean(
+        committedVisibleAnswer || pendingAnswer
+      );
+      releaseAdvisorJob(
+        advisorJob,
+        advisorPublicationAccepted ? "committed" : "suppressed",
+        {
+          commitAuthorized: advisorPublicationAccepted,
+          commitAuthorizationReason:
+            advisorGenerationCommit?.reason ??
+            stableAnswerCommitDecision.reason,
+        }
+      );
       if (traceId) {
         traceStoreRef.current.finishStep(traceId, advisorStepId, "success", {
           outputChars: finalContent.length,
@@ -24723,7 +24787,19 @@ export function useMeetingAssistant() {
                 revision: visibleAnswerRevisionBefore + 1,
               })
             : null;
+        const screenResetSections =
+          screenStartedNewInterviewParent ||
+          screenCandidateStartedNewParent;
+        const screenCandidateMutationDelta =
+          collectStableAnswerMutationDelta(
+            previousStableAnswer,
+            candidateStableAnswer,
+            { resetSections: screenResetSections }
+          );
         let nextStableAnswer: StableAnswerRevision | null = null;
+        let screenGenerationCommit:
+          | { committed: boolean; reason: string }
+          | undefined;
         if (
           candidateStableAnswer &&
           screenGenerationLease &&
@@ -24747,26 +24823,25 @@ export function useMeetingAssistant() {
               commitLatestUsefulAnswer:
                 screenLatestUsefulAnswerMutationAuthorized,
             });
+          const screenLeaseAuthorization =
+            authorizeAnswerGenerationLease(
+              screenGenerationLease,
+              readGenerationLeaseSnapshot({
+                lease: screenGenerationLease,
+                authorizedArtifacts:
+                  screenPresentationAuthorizedArtifacts,
+                candidateMutatedArtifacts:
+                  screenCandidateMutationDelta.candidateMutatedArtifacts,
+                logicalQuestionUnitId:
+                  screenGenerationLease.logicalQuestionUnitId,
+                logicalQuestionRevision:
+                  screenGenerationLease.logicalQuestionRevision,
+              })
+            );
           const generationCommit =
             generationDerivedCommitCoordinatorRef.current.commit({
               lease: screenGenerationLease,
-              leaseAuthorization: authorizeAnswerGenerationLease(
-                screenGenerationLease,
-                readGenerationLeaseSnapshot({
-                  lease: screenGenerationLease,
-                  authorizedArtifacts:
-                    screenPresentationAuthorizedArtifacts,
-                  candidateMutatedArtifacts:
-                    collectStableAnswerMutatedArtifacts(
-                      previousStableAnswer,
-                      candidateStableAnswer
-                    ),
-                  logicalQuestionUnitId:
-                    screenGenerationLease.logicalQuestionUnitId,
-                  logicalQuestionRevision:
-                    screenGenerationLease.logicalQuestionRevision,
-                })
-              ),
+              leaseAuthorization: screenLeaseAuthorization,
               expectedTaskRuntimeRevision:
                 screenGenerationTaskRuntimeRevision,
               currentTaskRuntimeRevision:
@@ -24830,6 +24905,15 @@ export function useMeetingAssistant() {
                 });
               },
             });
+          screenGenerationCommit = generationCommit;
+          traceStoreRef.current.updateMetadata(
+            trace.id,
+            formatAnswerGenerationLeaseForTrace(
+              screenGenerationLease,
+              screenLeaseAuthorization,
+              "final-candidate-commit"
+            )
+          );
           if (generationCommit.committed) {
             nextStableAnswer = candidateStableAnswer;
             updatedContextState =
@@ -24978,7 +25062,11 @@ export function useMeetingAssistant() {
               ? "listening"
               : idleReturnStatus,
             partialSuggestion: "",
-            error: null,
+            error:
+              screenGenerationCommit &&
+              !screenGenerationCommit.committed
+                ? "Answer generated but could not be published. Try Regenerate."
+                : null,
           }));
         }
         const screenStableCommitMetadata =
@@ -24990,14 +25078,18 @@ export function useMeetingAssistant() {
             requestedArtifacts:
               screenGenerationLease?.requestedArtifacts,
             candidateMutatedArtifacts:
-              collectStableAnswerMutatedArtifacts(
-                previousStableAnswer,
-                nextStableAnswer
-              ),
+              screenCandidateMutationDelta.candidateMutatedArtifacts,
+            lifecycleResetArtifacts:
+              screenCandidateMutationDelta.lifecycleResetArtifacts,
             previousCommittedAt: previousStableAnswer?.committedAt,
           });
         traceStoreRef.current.updateMetadata(trace.id, {
-          screenOperationDisposition: "committed",
+          screenOperationDisposition: screenVisibleAnswerCommitted
+            ? "committed"
+            : "rejected",
+          screenOperationCommitReason:
+            screenGenerationCommit?.reason ??
+            screenStableCommitDecision.reason,
           ...screenStableCommitMetadata,
           parentAuthorizedArtifacts: screenParentAuthorizedArtifacts,
           screenAuthorizedArtifacts:

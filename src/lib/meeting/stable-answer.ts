@@ -89,7 +89,13 @@ export interface StableAnswerCommitDecision {
     | "authorized"
     | "delivery-lock-active"
     | "empty-candidate"
-    | "partial-candidate";
+    | "partial-candidate"
+    | "candidate-not-published";
+}
+
+export interface StableAnswerMutationDelta {
+  candidateMutatedArtifacts: AnswerArtifactSection[];
+  lifecycleResetArtifacts: AnswerArtifactSection[];
 }
 
 const ANSWER_DELIVERY_MIN_WORD_EQUIVALENT = 18;
@@ -225,14 +231,58 @@ export function commitStableAnswerRevision(input: {
 
 export function collectStableAnswerMutatedArtifacts(
   current: StableAnswerRevision | null | undefined,
-  candidate: StableAnswerRevision | null | undefined
+  candidate: StableAnswerRevision | null | undefined,
+  options: { resetSections?: boolean } = {}
 ): AnswerArtifactSection[] {
-  if (!candidate) return [];
-  return (["answer", "code", "complexity", "whiteboard"] as const).filter(
-    (artifact) =>
-      candidate.sections[artifact].revision !==
-      (current?.sections[artifact].revision ?? 0)
-  );
+  return collectStableAnswerMutationDelta(
+    current,
+    candidate,
+    options
+  ).candidateMutatedArtifacts;
+}
+
+export function collectStableAnswerMutationDelta(
+  current: StableAnswerRevision | null | undefined,
+  candidate: StableAnswerRevision | null | undefined,
+  options: { resetSections?: boolean } = {}
+): StableAnswerMutationDelta {
+  if (!candidate) {
+    return {
+      candidateMutatedArtifacts: [],
+      lifecycleResetArtifacts: [],
+    };
+  }
+
+  const artifacts = [
+    "answer",
+    "code",
+    "complexity",
+    "whiteboard",
+  ] as const;
+  const ownerChanged = current?.taskId !== candidate.taskId;
+  if (!current || ownerChanged || options.resetSections) {
+    return {
+      candidateMutatedArtifacts: artifacts.filter(
+        (artifact) => candidate.sections[artifact].revision > 0
+      ),
+      lifecycleResetArtifacts: current
+        ? artifacts.filter(
+            (artifact) =>
+              current.sections[artifact].revision > 0 &&
+              candidate.sections[artifact].revision === 0
+          )
+        : [],
+    };
+  }
+
+  return {
+    candidateMutatedArtifacts: artifacts.filter(
+      (artifact) =>
+        candidate.sections[artifact].revision !==
+        current.sections[artifact].revision
+    ),
+    lifecycleResetArtifacts: [],
+  };
 }
 
 export function updateAnswerDeliveryProgress(input: {
@@ -326,19 +376,28 @@ export function formatStableAnswerCommitForTrace(input: {
   authorizedArtifacts: AnswerArtifactSection[];
   requestedArtifacts?: AnswerArtifactSection[];
   candidateMutatedArtifacts?: AnswerArtifactSection[];
+  lifecycleResetArtifacts?: AnswerArtifactSection[];
   previousCommittedAt?: number;
   now?: number;
 }) {
   const now = input.now ?? Date.now();
   const requested = input.requestedArtifacts ?? [];
+  const publicationProduced = Boolean(input.stable || input.pending);
+  const effectiveDecision: StableAnswerCommitDecision =
+    input.decision.disposition === "committed" && !publicationProduced
+      ? {
+          disposition: "rejected",
+          reason: "candidate-not-published",
+        }
+      : input.decision;
   const candidateMutations =
     input.candidateMutatedArtifacts ?? requested;
   const authorizedFamilies = new Set(
     input.authorizedArtifacts.map(toAnswerArtifactFamily)
   );
   return {
-    stableAnswerCommitDisposition: input.decision.disposition,
-    stableAnswerCommitReason: input.decision.reason,
+    stableAnswerCommitDisposition: effectiveDecision.disposition,
+    stableAnswerCommitReason: effectiveDecision.reason,
     answerDeliveryLockState: input.progress?.lockedAt
       ? input.pending
         ? "update-ready"
@@ -351,6 +410,7 @@ export function formatStableAnswerCommitForTrace(input: {
     requestedArtifacts: requested,
     authorizedArtifacts: input.authorizedArtifacts,
     candidateMutatedArtifacts: candidateMutations,
+    lifecycleResetArtifacts: input.lifecycleResetArtifacts ?? [],
     artifactMutationRejectedReasons: candidateMutations
       .filter(
         (artifact) =>

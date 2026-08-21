@@ -83,7 +83,7 @@ import {
 
 const SESSION_RECORDING_SCHEMA_VERSION = 1;
 const SESSION_RECORDING_INTEGRITY_SCHEMA_VERSION = 1;
-const SESSION_TRACE_SUMMARY_SCHEMA_VERSION = 41;
+const SESSION_TRACE_SUMMARY_SCHEMA_VERSION = 42;
 const SESSION_TRACE_INDEX_SCHEMA_VERSION = 1;
 const MAX_RECORDED_WRITE_FAILURES = 20;
 
@@ -450,6 +450,8 @@ export interface SessionCompactTraceSummary {
   pendingAnswerOperationId?: string;
   requestedArtifacts: string[];
   authorizedArtifacts: string[];
+  candidateMutatedArtifacts: string[];
+  lifecycleResetArtifacts: string[];
   generationRequestedArtifacts: string[];
   parsedArtifacts: string[];
   parentAuthorizedArtifacts: string[];
@@ -1060,6 +1062,7 @@ export interface SessionCompactTraceSummary {
     durationMs?: number;
     chunkCount?: number;
     terminalDisposition?: string;
+    terminalReason?: string;
   };
   answer?: {
     contractVersion?: string;
@@ -5128,6 +5131,14 @@ export function buildCompactTraceSummary({
       metadataSources,
       "authorizedArtifacts"
     ),
+    candidateMutatedArtifacts: readFirstStringList(
+      metadataSources,
+      "candidateMutatedArtifacts"
+    ),
+    lifecycleResetArtifacts: readFirstStringList(
+      metadataSources,
+      "lifecycleResetArtifacts"
+    ),
     generationRequestedArtifacts: readFirstStringList(
       metadataSources,
       "generationRequestedArtifacts"
@@ -6006,6 +6017,10 @@ export function buildCompactTraceSummary({
       terminalDisposition: readFirstString(
         metadataSources,
         "generationResultTerminalDisposition"
+      ),
+      terminalReason: readFirstString(
+        metadataSources,
+        "generationResultTerminalReason"
       ),
     },
     answer: {
