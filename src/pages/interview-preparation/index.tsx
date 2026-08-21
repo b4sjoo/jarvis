@@ -738,18 +738,17 @@ const ProcessWorkspace = ({
                     )}
                   </div>
                 </div>
-                {current ? (
-                  <Badge
-                    className="shrink-0 rounded-sm text-[10px]"
-                    aria-label={`${round.title} is the current interview round`}
-                  >
-                    Current
-                  </Badge>
-                ) : null}
               </button>
               <div className="flex shrink-0 items-center pr-1">
-                <div className="flex size-9 shrink-0 items-center justify-center">
-                  {!current ? (
+                <div className="relative flex size-9 shrink-0 items-center justify-center">
+                  {current ? (
+                    <Badge
+                      className="absolute right-2.5 shrink-0 whitespace-nowrap rounded-sm text-[10px]"
+                      aria-label={`${round.title} is the current interview round`}
+                    >
+                      Current
+                    </Badge>
+                  ) : (
                     <Button
                       size="icon"
                       variant="ghost"
@@ -761,7 +760,7 @@ const ProcessWorkspace = ({
                     >
                       <Crosshair className="size-4" />
                     </Button>
-                  ) : null}
+                  )}
                 </div>
                 <Button
                   size="icon"
