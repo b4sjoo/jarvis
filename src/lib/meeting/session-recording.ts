@@ -83,7 +83,7 @@ import {
 
 const SESSION_RECORDING_SCHEMA_VERSION = 1;
 const SESSION_RECORDING_INTEGRITY_SCHEMA_VERSION = 1;
-const SESSION_TRACE_SUMMARY_SCHEMA_VERSION = 40;
+const SESSION_TRACE_SUMMARY_SCHEMA_VERSION = 41;
 const SESSION_TRACE_INDEX_SCHEMA_VERSION = 1;
 const MAX_RECORDED_WRITE_FAILURES = 20;
 
@@ -301,6 +301,24 @@ export interface SessionCompactTraceSummary {
   askFrame?: string;
   topicDomain?: string;
   projectAnchor?: string;
+  screenPreflightDeadline?: {
+    operationId: string;
+    leaseRevision?: number;
+    startedAt?: number;
+    deadlineAt?: number;
+    providerCompletedAt?: number;
+    parseCompletedAt?: number;
+    committedAt?: number;
+    outcome?: string;
+    fallbackReason?: string;
+    parsedBeforeDeadline?: boolean;
+    committedQuestionType?: string;
+    consumerCoherent?: boolean;
+    consumerConflicts: string[];
+    lateResultObserved?: boolean;
+    lateQuestionType?: string;
+    lateConfidence?: number;
+  };
   playbookId?: string;
   playbookPhase?: string;
   playbookSubtype?: string;
@@ -4614,6 +4632,8 @@ export function buildCompactTraceSummary({
     askFrame: readFirstString(metadataSources, "askFrame"),
     topicDomain: readFirstString(metadataSources, "topicDomain"),
     projectAnchor: readFirstString(metadataSources, "projectAnchor"),
+    screenPreflightDeadline:
+      buildScreenPreflightDeadlineSummary(metadataSources),
     playbookId: readFirstString(metadataSources, "playbookId"),
     playbookPhase:
       readFirstString(metadataSources, "activeMeetingParentPhase") ??
@@ -6203,6 +6223,80 @@ export function buildCompactTraceSummary({
       summaryPath,
     },
     recordedAt: Date.now(),
+  };
+}
+
+function buildScreenPreflightDeadlineSummary(
+  metadataSources: Array<Record<string, unknown>>
+): SessionCompactTraceSummary["screenPreflightDeadline"] {
+  const operationId = readFirstString(
+    metadataSources,
+    "screenPreflightOperationId"
+  );
+  if (!operationId) return undefined;
+
+  return {
+    operationId,
+    leaseRevision: readFirstNumberFromMetadata(
+      metadataSources,
+      "screenPreflightLeaseRevision"
+    ),
+    startedAt: readFirstNumberFromMetadata(
+      metadataSources,
+      "screenPreflightStartedAt"
+    ),
+    deadlineAt: readFirstNumberFromMetadata(
+      metadataSources,
+      "screenPreflightDeadlineAt"
+    ),
+    providerCompletedAt: readFirstNumberFromMetadata(
+      metadataSources,
+      "screenPreflightProviderCompletedAt"
+    ),
+    parseCompletedAt: readFirstNumberFromMetadata(
+      metadataSources,
+      "screenPreflightParseCompletedAt"
+    ),
+    committedAt: readFirstNumberFromMetadata(
+      metadataSources,
+      "screenPreflightCommittedAt"
+    ),
+    outcome: readFirstString(
+      metadataSources,
+      "screenPreflightDeadlineOutcome"
+    ),
+    fallbackReason: readFirstString(
+      metadataSources,
+      "screenPreflightFallbackReason"
+    ),
+    parsedBeforeDeadline: readFirstBoolean(
+      metadataSources,
+      "screenPreflightParsedBeforeDeadline"
+    ),
+    committedQuestionType: readFirstString(
+      metadataSources,
+      "screenPreflightCommittedQuestionType"
+    ),
+    consumerCoherent: readFirstBoolean(
+      metadataSources,
+      "screenPreflightConsumerCoherent"
+    ),
+    consumerConflicts: readFirstStringList(
+      metadataSources,
+      "screenPreflightConsumerConflicts"
+    ),
+    lateResultObserved: readFirstBoolean(
+      metadataSources,
+      "screenPreflightLateResultObserved"
+    ),
+    lateQuestionType: readFirstString(
+      metadataSources,
+      "screenPreflightLateQuestionType"
+    ),
+    lateConfidence: readFirstNumberFromMetadata(
+      metadataSources,
+      "screenPreflightLateConfidence"
+    ),
   };
 }
 

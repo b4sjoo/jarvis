@@ -86,6 +86,13 @@ export interface PreflightScreenObservationOptions {
   signal?: AbortSignal;
   executionIdentity?: AIResponseExecutionIdentityInput;
   trace?: MeetingModelTraceCallbacks;
+  onParsedResult?: (completion: ScreenPreflightParsedCompletion) => void;
+}
+
+export interface ScreenPreflightParsedCompletion {
+  result: ScreenPreflightResult;
+  providerCompletedAt: number;
+  parseCompletedAt: number;
 }
 
 export interface SolveScreenAnchoredTaskOptions {
@@ -280,6 +287,7 @@ export async function preflightScreenObservation({
   signal,
   executionIdentity,
   trace,
+  onParsedResult,
 }: PreflightScreenObservationOptions): Promise<ScreenPreflightResult> {
   if (!observation.imageBase64) return {};
 
@@ -334,8 +342,14 @@ export async function preflightScreenObservation({
     onFirstContent: () => trace?.onFirstToken?.(),
     onTerminal: (outcome) => trace?.onTerminal?.(outcome),
   });
-  const content = requireMeetingAIResponseCandidate(result).content.trim();
+  const candidate = requireMeetingAIResponseCandidate(result);
+  const content = candidate.content.trim();
   const parsed = parseScreenPreflightOutput(content);
+  onParsedResult?.({
+    result: parsed,
+    providerCompletedAt: candidate.outcome.finishedAt,
+    parseCompletedAt: Date.now(),
+  });
   trace?.onComplete?.(content);
 
   return parsed;

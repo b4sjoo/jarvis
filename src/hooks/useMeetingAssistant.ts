@@ -285,6 +285,9 @@ import {
   resolveAuthorizedAnswerArtifacts,
   observeAdvisorResponseConsistency,
   preflightScreenObservation,
+  createScreenPreflightDeadlineArbiter,
+  formatScreenPreflightDeadlineDecisionForTrace,
+  formatScreenPreflightLateResultForTrace,
   selectInterviewPlaybook,
   applyPlaybookPhaseDecisionToProgress,
   createInitialPlaybookPhaseProgress,
@@ -21760,101 +21763,169 @@ export function useMeetingAssistant() {
         });
 
         if (shouldRunScreenPreflight) {
-          try {
-            screenPreflight = await withTimeout(
-              preflightScreenObservation({
-                observation,
-                provider: aiProvider,
-                selectedProvider: selectedAIProvider,
-                recentTranscript,
-                signal: analysisController.signal,
-                executionIdentity: {
-                  requestId: `screen-preflight:${observation.id}`,
-                  executionPlanId: observation.id,
-                  sessionId: analysisContextState.sessionId,
-                  runtimeEpoch: runtimeEpochRef.current,
-                  logicalQuestionUnitId: observation.id,
-                  logicalQuestionRevision: 0,
-                },
-                trace: {
-                  onRequest: (input) => {
-                    traceStoreRef.current.recordInput(
-                      trace.id,
-                      "screen preflight input",
-                      formatTraceModelInput(
-                        input.systemPrompt,
-                        input.userMessage
-                      ),
-                      {
-                        providerId: input.providerId,
-                        mode: input.mode,
-                        imageCount: input.imageCount,
-                        imageMediaType: input.imageMediaType,
-                        imageBase64Stored: false,
-                      }
-                    );
-                    sessionRecordingManagerRef.current?.recordModelInput({
-                      traceId: trace.id,
-                      label: "screen preflight input",
-                      value: formatTraceModelInput(
-                        input.systemPrompt,
-                        input.userMessage
-                      ),
-                      metadata: {
-                        providerId: input.providerId,
-                        mode: input.mode,
-                        imageCount: input.imageCount,
-                        imageMediaType: input.imageMediaType,
-                        imageBase64Stored: false,
-                      },
-                    });
-                    preflightStepId = traceStoreRef.current.startStep(
-                      trace.id,
-                      "Screen preflight",
-                      {
-                        providerId: input.providerId,
-                        imageCount: input.imageCount,
-                        imageMediaType: input.imageMediaType,
-                      }
-                    );
+          const preflightStartedAt = Date.now();
+          let preflightProviderAccepted = false;
+          let preflightFailure: unknown;
+          const preflightDeadlineArbiter =
+            createScreenPreflightDeadlineArbiter<ScreenPreflightResult>({
+              operationId: screenOperationId,
+              leaseRevision: 1,
+              startedAt: preflightStartedAt,
+              timeoutMs: SCREEN_PREFLIGHT_TIMEOUT_MS,
+              onLateResult: (lateResult) => {
+                const metadata =
+                  formatScreenPreflightLateResultForTrace(lateResult);
+                traceStoreRef.current.updateMetadata(trace.id, metadata);
+                sessionRecordingManagerRef.current?.recordCaptureLifecycle({
+                  stage: "screen-preflight-late-result-observed",
+                  traceId: trace.id,
+                  ...metadata,
+                });
+              },
+            });
+          const preflightPromise = preflightScreenObservation({
+            observation,
+            provider: aiProvider,
+            selectedProvider: selectedAIProvider,
+            recentTranscript,
+            signal: analysisController.signal,
+            executionIdentity: {
+              requestId: `screen-preflight:${observation.id}`,
+              executionPlanId: observation.id,
+              sessionId: analysisContextState.sessionId,
+              runtimeEpoch: runtimeEpochRef.current,
+              logicalQuestionUnitId: observation.id,
+              logicalQuestionRevision: 0,
+            },
+            trace: {
+              onRequest: (input) => {
+                traceStoreRef.current.recordInput(
+                  trace.id,
+                  "screen preflight input",
+                  formatTraceModelInput(
+                    input.systemPrompt,
+                    input.userMessage
+                  ),
+                  {
+                    providerId: input.providerId,
+                    mode: input.mode,
+                    imageCount: input.imageCount,
+                    imageMediaType: input.imageMediaType,
+                    imageBase64Stored: false,
+                  }
+                );
+                sessionRecordingManagerRef.current?.recordModelInput({
+                  traceId: trace.id,
+                  label: "screen preflight input",
+                  value: formatTraceModelInput(
+                    input.systemPrompt,
+                    input.userMessage
+                  ),
+                  metadata: {
+                    providerId: input.providerId,
+                    mode: input.mode,
+                    imageCount: input.imageCount,
+                    imageMediaType: input.imageMediaType,
+                    imageBase64Stored: false,
                   },
-                  onFirstToken: () => {
-                    traceStoreRef.current.updateMetadata(trace.id, {
-                      screenPreflightFirstTokenAt: Date.now(),
-                    });
-                  },
-                  onTerminal: (outcome) => {
-                    traceStoreRef.current.updateMetadata(trace.id, {
-                      screenPreflightProviderOutcomeStatus: outcome.status,
-                      screenPreflightProviderFailureClass:
-                        outcome.failureClass,
-                      screenPreflightProviderAttemptId: outcome.attemptId,
-                      screenPreflightProviderRetryable: outcome.retryable,
-                      screenPreflightProviderOutcomeFinal: outcome.final,
-                      screenPreflightProviderAttemptDisposition:
-                        outcome.disposition,
-                    });
-                  },
-                  onComplete: (output) => {
-                    traceStoreRef.current.recordOutput(
-                      trace.id,
-                      "screen preflight raw output",
-                      output
-                    );
-                    if (readScreenAuthorization().authorized) {
-                      sessionRecordingManagerRef.current?.recordModelOutput({
-                        traceId: trace.id,
-                        label: "screen preflight raw output",
-                        value: output,
-                      });
-                    }
-                  },
-                },
-              }),
-              SCREEN_PREFLIGHT_TIMEOUT_MS,
-              "Screen preflight timed out."
+                });
+                preflightStepId = traceStoreRef.current.startStep(
+                  trace.id,
+                  "Screen preflight",
+                  {
+                    providerId: input.providerId,
+                    imageCount: input.imageCount,
+                    imageMediaType: input.imageMediaType,
+                  }
+                );
+              },
+              onFirstToken: () => {
+                traceStoreRef.current.updateMetadata(trace.id, {
+                  screenPreflightFirstTokenAt: Date.now(),
+                });
+              },
+              onTerminal: (outcome) => {
+                if (outcome.final) {
+                  preflightDeadlineArbiter.observeProviderCompletion(
+                    outcome.finishedAt
+                  );
+                  preflightProviderAccepted =
+                    outcome.status === "success" &&
+                    outcome.disposition === "accepted";
+                }
+                traceStoreRef.current.updateMetadata(trace.id, {
+                  screenPreflightProviderOutcomeStatus: outcome.status,
+                  screenPreflightProviderFailureClass:
+                    outcome.failureClass,
+                  screenPreflightProviderAttemptId: outcome.attemptId,
+                  screenPreflightProviderRetryable: outcome.retryable,
+                  screenPreflightProviderOutcomeFinal: outcome.final,
+                  screenPreflightProviderAttemptDisposition:
+                    outcome.disposition,
+                });
+              },
+              onComplete: (output) => {
+                traceStoreRef.current.recordOutput(
+                  trace.id,
+                  "screen preflight raw output",
+                  output
+                );
+                if (readScreenAuthorization().authorized) {
+                  sessionRecordingManagerRef.current?.recordModelOutput({
+                    traceId: trace.id,
+                    label: "screen preflight raw output",
+                    value: output,
+                  });
+                }
+              },
+            },
+            onParsedResult: (completion) => {
+              preflightDeadlineArbiter.observeParsedResult({
+                result: completion.result,
+                providerCompletedAt: completion.providerCompletedAt,
+                parseCompletedAt: completion.parseCompletedAt,
+                canonicalQuestionType:
+                  completion.result.canonicalQuestionType,
+                confidence: completion.result.confidence,
+              });
+            },
+          });
+          void preflightPromise.catch((error) => {
+            preflightFailure = error;
+            preflightDeadlineArbiter.observeFailure(
+              analysisController?.signal.aborted
+                ? "aborted"
+                : preflightProviderAccepted
+                  ? "parse-failure"
+                  : "provider-failure"
             );
-            if (rejectStaleScreenOperation("post-preflight")) return;
+          });
+
+          const preflightResolution =
+            await preflightDeadlineArbiter.waitForDecision();
+          const preflightDeadlineMetadata = {
+            ...formatScreenPreflightDeadlineDecisionForTrace(
+              preflightResolution.decision
+            ),
+            screenPreflightConsumerCoherent: true,
+            screenPreflightConsumerConflicts: [],
+          };
+          traceStoreRef.current.updateMetadata(
+            trace.id,
+            preflightDeadlineMetadata
+          );
+          sessionRecordingManagerRef.current?.recordCaptureLifecycle({
+            stage: "screen-preflight-deadline-committed",
+            traceId: trace.id,
+            ...preflightDeadlineMetadata,
+          });
+
+          if (rejectStaleScreenOperation("post-preflight")) return;
+          if (
+            preflightResolution.decision.outcome === "valid-result" &&
+            preflightResolution.result
+          ) {
+            screenPreflight = preflightResolution.result;
             traceStoreRef.current.finishStep(
               trace.id,
               preflightStepId,
@@ -21884,16 +21955,26 @@ export function useMeetingAssistant() {
               projectAnchor: screenPreflight.projectAnchor,
               classifierConfidence: screenPreflight.confidence,
             });
-          } catch (error) {
-            if (rejectStaleScreenOperation("post-preflight")) return;
+          } else {
+            const fallbackError =
+              preflightFailure instanceof Error
+                ? preflightFailure
+                : new Error(
+                    `Screen preflight committed fallback: ${
+                      preflightResolution.decision.fallbackReason ?? "unknown"
+                    }`
+                  );
             traceStoreRef.current.finishStep(
               trace.id,
               preflightStepId,
               "error",
               undefined,
-              error
+              fallbackError
             );
-            console.warn("Screen preflight failed; continuing without it", error);
+            console.warn(
+              "Screen preflight failed; continuing without it",
+              fallbackError
+            );
           }
         }
 
