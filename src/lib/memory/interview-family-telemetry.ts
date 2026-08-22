@@ -138,10 +138,16 @@ export function formatMemoryInterviewTypePriorIsolationForTrace(
   const rightFamilyBlockedByPriorCount = rejectSummary
     .filter((item) => item.reason === "brief-interview-type-blocked")
     .reduce((total, item) => total + item.count, 0);
+  const unknownSpecializedFamilyBlockedCount = rejectSummary
+    .filter(
+      (item) => item.reason === "unknown-question-type-family-blocked"
+    )
+    .reduce((total, item) => total + item.count, 0);
 
   return {
     rightFamilyBlockedByPriorCount,
     memoryPriorUsedAsExecutionGate: rightFamilyBlockedByPriorCount > 0,
+    unknownSpecializedFamilyBlockedCount,
   };
 }
 

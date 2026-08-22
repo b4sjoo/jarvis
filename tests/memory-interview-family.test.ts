@@ -59,6 +59,7 @@ test("reports the forbidden Brief prior gate as an explicit zero invariant", () 
   assert.deepEqual(formatMemoryInterviewTypePriorIsolationForTrace([]), {
     rightFamilyBlockedByPriorCount: 0,
     memoryPriorUsedAsExecutionGate: false,
+    unknownSpecializedFamilyBlockedCount: 0,
   });
 
   assert.deepEqual(
@@ -73,7 +74,77 @@ test("reports the forbidden Brief prior gate as an explicit zero invariant", () 
     {
       rightFamilyBlockedByPriorCount: 2,
       memoryPriorUsedAsExecutionGate: true,
+      unknownSpecializedFamilyBlockedCount: 0,
     }
+  );
+});
+
+test("blocks specialized families until an Unknown question receives authority", () => {
+  const entry = makeEntry({
+    type: "personal_story",
+    title: "Behavioral ownership story",
+    interviewFamilies: ["behavioral"],
+  });
+
+  assert.equal(
+    getMemoryInterviewFamilyGateRejectReason({
+      entry,
+      questionType: "unknown",
+    }),
+    "unknown-question-type-family-blocked"
+  );
+  assert.equal(
+    getMemoryInterviewFamilyGateRejectReason({
+      entry,
+      questionType: "behavioral",
+      memoryPolicy: {
+        id: "behavioral",
+        allowedFamilies: ["behavioral"],
+      },
+    }),
+    undefined
+  );
+
+  assert.deepEqual(
+    formatMemoryInterviewTypePriorIsolationForTrace([
+      {
+        reason: "unknown-question-type-family-blocked",
+        count: 3,
+        sampleEntryIds: ["mem_story"],
+        sampleTitles: ["Behavioral ownership story"],
+      },
+    ]),
+    {
+      rightFamilyBlockedByPriorCount: 0,
+      memoryPriorUsedAsExecutionGate: false,
+      unknownSpecializedFamilyBlockedCount: 3,
+    }
+  );
+});
+
+test("uses the Field Knowledge playbook family map instead of the Unknown bypass", () => {
+  const systemDesign = makeEntry({
+    title: "Vector retrieval fundamentals",
+    interviewFamilies: ["ai-ml-system-design"],
+  });
+  const behavioral = makeEntry({
+    title: "Behavioral ownership story",
+    interviewFamilies: ["behavioral"],
+  });
+
+  assert.equal(
+    getMemoryInterviewFamilyGateRejectReason({
+      entry: systemDesign,
+      questionType: "field-knowledge",
+    }),
+    undefined
+  );
+  assert.equal(
+    getMemoryInterviewFamilyGateRejectReason({
+      entry: behavioral,
+      questionType: "field-knowledge",
+    }),
+    "behavioral-family-blocked"
   );
 });
 

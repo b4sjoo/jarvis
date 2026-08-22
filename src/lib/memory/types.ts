@@ -268,6 +268,7 @@ export type MemoryRejectReason =
   | "brief-interview-type-blocked"
   | "playbook-family-blocked"
   | "question-type-family-mismatch"
+  | "unknown-question-type-family-blocked"
   | "behavioral-family-blocked"
   | "diagram-overlay-question-type-blocked"
   | "diagram-overlay-domain-blocked"

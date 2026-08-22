@@ -293,9 +293,21 @@ export function resolveMemoryInterviewFamilyGateDecision({
   }
 
   if (
+    questionType === "unknown" &&
+    !memoryPolicy?.allowedFamilies?.length
+  ) {
+    return {
+      rejectReason: "unknown-question-type-family-blocked",
+      resolution,
+      candidateFamilies: specializedFamilies,
+      matchingFamilies: [],
+      disposition: "question-type-family-reject",
+    };
+  }
+
+  if (
     questionType &&
-    questionType !== "unknown" &&
-    questionType !== "field-knowledge"
+    questionType !== "unknown"
   ) {
     const compatible = candidates.filter((family) =>
       isQuestionTypeCompatibleWithMemoryFamily(questionType, family)
