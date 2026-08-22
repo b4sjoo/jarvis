@@ -47,6 +47,69 @@ export interface FactAnchorOutputDecision {
   fallbackMode?: FactGuardrailVisibleNotice["kind"];
 }
 
+export interface FactAnchorStreamingPartialDecision {
+  visibleContent: string;
+  bufferingEnabled: boolean;
+  heldTrailingChars: number;
+  sanitizedClaimCount: number;
+  artifactBoundaryHeld: boolean;
+}
+
+export function shouldBufferFactAnchorStreaming(
+  decision: FactAnchorDecision | undefined
+) {
+  return Boolean(
+    decision &&
+      decision.requiredFor !== "none" &&
+      decision.personalEvidence.mode === "enforcement"
+  );
+}
+
+export function projectFactAnchorStreamingPartial(input: {
+  decision: FactAnchorDecision | undefined;
+  content: string;
+}): FactAnchorStreamingPartialDecision {
+  if (!shouldBufferFactAnchorStreaming(input.decision)) {
+    return {
+      visibleContent: input.content,
+      bufferingEnabled: false,
+      heldTrailingChars: 0,
+      sanitizedClaimCount: 0,
+      artifactBoundaryHeld: false,
+    };
+  }
+
+  const artifactBoundary = findArtifactSectionBoundary(input.content);
+  const answerOnlyContent =
+    artifactBoundary >= 0
+      ? input.content.slice(0, artifactBoundary)
+      : input.content;
+  const completedBoundary = findCompletedSentenceBoundary(answerOnlyContent);
+  if (completedBoundary <= 0) {
+    return {
+      visibleContent: "",
+      bufferingEnabled: true,
+      heldTrailingChars: input.content.length,
+      sanitizedClaimCount: 0,
+      artifactBoundaryHeld: artifactBoundary >= 0,
+    };
+  }
+
+  const completedContent = answerOnlyContent.slice(0, completedBoundary);
+  const supportSpans = collectSelectedSupportSpans(input.decision!);
+  const sanitized = sanitizeCompletedStreamingText(
+    completedContent,
+    supportSpans
+  );
+  return {
+    visibleContent: sanitized.text,
+    bufferingEnabled: true,
+    heldTrailingChars: input.content.length - completedBoundary,
+    sanitizedClaimCount: sanitized.removed,
+    artifactBoundaryHeld: artifactBoundary >= 0,
+  };
+}
+
 export function enforceFactAnchorOutput({
   decision,
   parsedAnswer,
@@ -138,7 +201,7 @@ function enforceFactAnchorOutputInEnforcementMode({
 
   const hasSupportedClaimSpans = decision.claimSupportDecisions.some(
     (support) =>
-      support.decision === "allow" && Boolean(support.supportSpan?.trim())
+      isOutputSupportSpan(support)
   );
   const sanitized = hasSupportedClaimSpans
     ? sanitizeAnchoredFactOutput(
@@ -192,7 +255,10 @@ function enforceFactAnchorOutputInEnforcementMode({
 
 export function formatFactAnchorOutputDecisionForTrace(
   decision: FactAnchorOutputDecision,
-  options: { partialOutputHeld?: boolean } = {}
+  options: {
+    partialOutputHeld?: boolean;
+    auditDurationMs?: number;
+  } = {}
 ): Record<string, unknown> {
   return {
     factAnchorOutputCommitSource: decision.commitSource,
@@ -224,6 +290,11 @@ export function formatFactAnchorOutputDecisionForTrace(
       : undefined,
     factGuardrailNoticeKind: decision.visibleNotice?.kind,
     factAnchorPartialOutputHeld: options.partialOutputHeld ?? false,
+    factAnchorOutputAuditDurationMs: options.auditDurationMs,
+    factAnchorOutputAuditBudgetExceeded: Boolean(
+      options.auditDurationMs !== undefined &&
+        options.auditDurationMs > 25
+    ),
   };
 }
 
@@ -294,14 +365,11 @@ function buildNonRefusalFallback({
   preservedClaimCount?: number;
   sanitizedSections?: string[];
 }): FactAnchorOutputDecision {
-  const supportText = decision.claimSupportDecisions
-    .filter(
-      (support) =>
-        support.decision === "allow" && Boolean(support.supportSpan?.trim())
-    )
-    .map((support) => support.supportSpan?.trim())
-    .filter((value): value is string => Boolean(value))
-    .join(" ");
+  const supportText = [
+    ...new Set(collectSelectedSupportSpans(decision)),
+  ]
+    .join(" ")
+    .slice(0, 1_200);
   const fallbackMode: FactGuardrailVisibleNotice["kind"] = supportText
     ? "rebuilt-from-supported-evidence"
     : "generic-hypothetical-fallback";
@@ -448,10 +516,27 @@ function sanitizeAnchoredFactOutput(
   decision: FactAnchorDecision,
   expectedProfile: MeetingAnswerProfile | undefined
 ) {
-  const supportDecisions = decision.claimSupportDecisions.filter(
+  const eligibleSupportDecisions = decision.claimSupportDecisions.filter(
+    isOutputSupportSpan
+  );
+  const eligibleAnchorIds = new Set(
+    eligibleSupportDecisions
+      .map((item) => item.anchorId)
+      .filter((value): value is string => Boolean(value))
+  );
+  const reportedSupportedAnchorIds = parsedAnswer.supportingAnchorIds.filter(
+    (anchorId) => eligibleAnchorIds.has(anchorId)
+  );
+  const selectedAnchorIds = new Set(
+    reportedSupportedAnchorIds.length
+      ? reportedSupportedAnchorIds
+      : decision.selectedAnchorId
+        ? [decision.selectedAnchorId]
+        : [...eligibleAnchorIds]
+  );
+  const supportDecisions = eligibleSupportDecisions.filter(
     (item) =>
-      item.decision === "allow" &&
-      item.supportSpan?.trim()
+      (!item.anchorId || selectedAnchorIds.has(item.anchorId))
   );
   if (!supportDecisions.length) {
     return {
@@ -463,10 +548,9 @@ function sanitizeAnchoredFactOutput(
     };
   }
 
-  const supportText = supportDecisions
+  const supportSpans = supportDecisions
     .map((item) => item.supportSpan)
-    .filter((value): value is string => Boolean(value))
-    .join(" ");
+    .filter((value): value is string => Boolean(value));
   const sections = {
     ...parsedAnswer.sections,
     clarifyingOptions: [...parsedAnswer.sections.clarifyingOptions],
@@ -478,7 +562,7 @@ function sanitizeAnchoredFactOutput(
   for (const section of ["chineseThinking", "answer", "approach"] as const) {
     const result = sanitizeAnchoredClaimSection(
       sections[section],
-      supportText
+      supportSpans
     );
     sections[section] = result.text || undefined;
     sanitizedClaimCount += result.removed;
@@ -505,9 +589,97 @@ function sanitizeAnchoredFactOutput(
   };
 }
 
+function collectSelectedSupportSpans(decision: FactAnchorDecision) {
+  const eligible = decision.claimSupportDecisions.filter(
+    isOutputSupportSpan
+  );
+  const eligibleAnchorIds = new Set(
+    eligible
+      .map((item) => item.anchorId)
+      .filter((value): value is string => Boolean(value))
+  );
+  const selectedAnchorIds = new Set(
+    decision.selectedAnchorId
+      ? [decision.selectedAnchorId]
+      : decision.supportedAnchorIds.length
+        ? decision.supportedAnchorIds
+        : [...eligibleAnchorIds]
+  );
+  return eligible
+    .filter(
+      (item) =>
+        (!item.anchorId || selectedAnchorIds.has(item.anchorId))
+    )
+    .map((item) => item.supportSpan?.trim())
+    .filter((value): value is string => Boolean(value));
+}
+
+function isOutputSupportSpan(
+  item: FactAnchorDecision["claimSupportDecisions"][number]
+) {
+  return Boolean(
+    item.supportSpan?.trim() &&
+      (item.decision === "allow" ||
+        (item.supportScope === "anchor-evidence" &&
+          item.decision === "needs-clarification"))
+  );
+}
+
+function findArtifactSectionBoundary(content: string) {
+  const match = /(?:^|\n)(?:Code|Complexity|Whiteboard)\s*:/iu.exec(content);
+  return match?.index ?? -1;
+}
+
+function findCompletedSentenceBoundary(content: string) {
+  let boundary = -1;
+  const pattern = /[.!?。！？](?=\s|$)|\n/gu;
+  for (const match of content.matchAll(pattern)) {
+    boundary = (match.index ?? 0) + match[0].length;
+  }
+  return boundary;
+}
+
+function sanitizeCompletedStreamingText(
+  content: string,
+  supportSpans: string[]
+) {
+  let removed = 0;
+  const lines = content
+    .split("\n")
+    .map((line) => {
+      const section = line.match(
+        /^(\s*(?:Chinese thinking|中文思路|Answer|Approach|Clarifying question)\s*:\s*)(.*)$/iu
+      );
+      const prefix = section?.[1] ?? "";
+      const body = section?.[2] ?? line;
+      if (!body.trim()) return "";
+      const units = splitClaimUnits(body);
+      const kept = units.filter((unit) => {
+        const unsupported = supportSpans.length
+          ? isUnsupportedAnchoredPersonalClaim(unit, supportSpans)
+          : isUnsupportedPersonalClaim(unit);
+        if (unsupported) removed += 1;
+        return !unsupported;
+      });
+      const sanitizedBody = kept.join(" ").trim();
+      return sanitizedBody ? `${prefix}${sanitizedBody}` : "";
+    })
+    .filter(Boolean);
+  return { text: lines.join("\n"), removed };
+}
+
+function splitClaimUnits(value: string) {
+  return (
+    value.match(/[^.!?。！？;；]+[.!?。！？;；]?/gu) ?? [value]
+  )
+    .flatMap((unit) => unit.split(/,\s+(?=(?:and|but|while)\b)/iu))
+    .map((unit) => unit.trim())
+    .filter(Boolean);
+}
+
 function sanitizeAnchoredClaimSection(
   value: string | undefined,
-  supportText: string
+  supportSpans: string[]
 ) {
   if (!value?.trim()) {
     return { text: "", removed: 0, preserved: 0 };
@@ -520,7 +692,7 @@ function sanitizeAnchoredClaimSection(
     .map((line) => {
       const units = line.match(/[^.!?。！？]+[.!?。！？]?/gu) ?? [line];
       const kept = units.filter((unit) => {
-        if (isUnsupportedAnchoredPersonalClaim(unit, supportText)) {
+        if (isUnsupportedAnchoredPersonalClaim(unit, supportSpans)) {
           removed += 1;
           return false;
         }
@@ -536,7 +708,7 @@ function sanitizeAnchoredClaimSection(
 
 function isUnsupportedAnchoredPersonalClaim(
   value: string,
-  supportText: string
+  supportSpans: string[]
 ) {
   const text = value.trim();
   if (!FIRST_PERSON_PATTERN.test(text)) return false;
@@ -547,33 +719,45 @@ function isUnsupportedAnchoredPersonalClaim(
     return false;
   }
 
-  const normalizedClaim = normalizeClaimEvidence(text);
-  const normalizedSupport = normalizeClaimEvidence(supportText);
+  return !supportSpans.some((supportSpan) =>
+    anchoredPersonalClaimSupportedBySpan(text, supportSpan)
+  );
+}
+
+function anchoredPersonalClaimSupportedBySpan(
+  claimText: string,
+  supportSpan: string
+) {
+  const normalizedClaim = normalizeClaimEvidence(claimText);
+  const normalizedSupport = normalizeClaimEvidence(supportSpan);
   if (!normalizedClaim || !normalizedSupport) return false;
 
   const numbers = normalizedClaim.match(/\b\d[\d,.]*\b/g) ?? [];
   if (numbers.some((number) => !normalizedSupport.includes(number))) {
-    return true;
+    return false;
+  }
+  if (
+    HIGH_AUTHORITY_ROLE_PATTERN.test(claimText) &&
+    !HIGH_AUTHORITY_ROLE_PATTERN.test(supportSpan)
+  ) {
+    return false;
   }
 
-  const hasUnsupportedRole =
-    HIGH_AUTHORITY_ROLE_PATTERN.test(text) &&
-    !HIGH_AUTHORITY_ROLE_PATTERN.test(supportText);
-  if (hasUnsupportedRole) return true;
-
   const highRiskShape =
-    THIRD_PARTY_STANCE_PATTERN.test(text) ||
-    ABSOLUTE_RESULT_PATTERN.test(text) ||
-    SPECIFIC_MECHANISM_PATTERN.test(text);
-  if (!highRiskShape) return false;
+    HARD_PERSONAL_FACT_PATTERN.test(claimText) ||
+    HARD_PERSONAL_FACT_CHINESE_PATTERN.test(claimText) ||
+    THIRD_PARTY_STANCE_PATTERN.test(claimText) ||
+    ABSOLUTE_RESULT_PATTERN.test(claimText) ||
+    SPECIFIC_MECHANISM_PATTERN.test(claimText);
+  if (!highRiskShape) return true;
 
   const claimTokens = extractDistinctiveClaimTokens(normalizedClaim);
-  if (!claimTokens.length) return false;
+  if (!claimTokens.length) return true;
   const supportedCount = claimTokens.filter((token) =>
     normalizedSupport.includes(token)
   ).length;
   const requiredCoverage = claimTokens.length <= 3 ? 1 : 0.55;
-  return supportedCount / claimTokens.length < requiredCoverage;
+  return supportedCount / claimTokens.length >= requiredCoverage;
 }
 
 function buildSupportedAnchorFallback({

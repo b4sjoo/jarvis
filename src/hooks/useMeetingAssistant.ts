@@ -638,6 +638,8 @@ import {
   buildFactAnchorDecision,
   detectPersonalEvidenceRequirement,
   enforceFactAnchorOutput,
+  projectFactAnchorStreamingPartial,
+  shouldBufferFactAnchorStreaming,
   formatFactAnchorOutputDecisionForTrace,
   formatFactAnchorDecisionForTrace,
   formatTransientPersonalStatusForTrace,
@@ -11515,7 +11517,7 @@ export function useMeetingAssistant() {
         )?.factEvidence,
     });
     const holdAdvisorPartialForFactAnchor =
-      factAnchorDecision.requiredFor !== "none";
+      shouldBufferFactAnchorStreaming(factAnchorDecision);
     if (traceId) {
       const projectBindingMetadata = {
         source: "advisor",
@@ -11964,13 +11966,21 @@ export function useMeetingAssistant() {
           return;
         }
         finalContent = event.accumulated;
+        const factAnchorStreamingPartial =
+          projectFactAnchorStreamingPartial({
+            decision: factAnchorDecision,
+            content: event.accumulated,
+          });
+        const stagedPartialContent =
+          factAnchorStreamingPartial.visibleContent;
         const stagedPartialDecision = decideStagedAnswerPartial({
-          accumulated: event.accumulated,
+          accumulated: stagedPartialContent,
           explicitRequest: stagedAnswerDeliveryExplicitRequest,
           stableAnswerPresent: Boolean(stableAnswerRevisionRef.current),
           guardrailHeld:
             !outputCommitAuthorization.authorized ||
-            holdAdvisorPartialForFactAnchor ||
+            (holdAdvisorPartialForFactAnchor &&
+              !stagedPartialContent.trim()) ||
             !responseOpportunityGenerationAuthorized(),
           visibleStreamStarted: stagedAnswerDeliveryVisible,
         });
@@ -11993,6 +12003,14 @@ export function useMeetingAssistant() {
                       stagedAnswerDeliveryFirstVisiblePartialAt,
                     visibleStreamStarted: true,
                   }),
+                  factAnchorCompletedSentenceBuffering:
+                    factAnchorStreamingPartial.bufferingEnabled,
+                  factAnchorStreamingHeldTrailingChars:
+                    factAnchorStreamingPartial.heldTrailingChars,
+                  factAnchorStreamingSanitizedClaimCount:
+                    factAnchorStreamingPartial.sanitizedClaimCount,
+                  factAnchorStreamingArtifactBoundaryHeld:
+                    factAnchorStreamingPartial.artifactBoundaryHeld,
                   ...formatModelGenerationTimingForTrace({
                     requestStartedAt: advisorModelRequestStartedAt,
                     firstContentAt: advisorModelFirstContentAt,
@@ -12010,7 +12028,7 @@ export function useMeetingAssistant() {
             stagedAnswerDeliveryExplicitRequest;
           setState((previous) => ({
             ...previous,
-            partialSuggestion: event.accumulated,
+            partialSuggestion: stagedPartialContent,
           }));
         }
       }
@@ -12056,6 +12074,7 @@ export function useMeetingAssistant() {
       let parsedMeetingAnswer = parseMeetingAnswer(finalContent, {
         expectedProfile: advisorAnswerProfile,
       });
+      const factAnchorOutputAuditStartedAt = performance.now();
       const factAnchorOutputDecision = enforceFactAnchorOutput({
         decision: factAnchorDecision,
         parsedAnswer: parsedMeetingAnswer,
@@ -12063,6 +12082,8 @@ export function useMeetingAssistant() {
       });
       finalContent = factAnchorOutputDecision.effectiveContent;
       parsedMeetingAnswer = factAnchorOutputDecision.effectiveAnswer;
+      const factAnchorOutputAuditDurationMs =
+        performance.now() - factAnchorOutputAuditStartedAt;
       const whiteboardFormatPolicyDecision =
         applyWhiteboardFormatPolicy({
           whiteboard: parsedMeetingAnswer.sections.whiteboard,
@@ -12096,6 +12117,7 @@ export function useMeetingAssistant() {
       const factAnchorOutputMetadata =
         formatFactAnchorOutputDecisionForTrace(factAnchorOutputDecision, {
           partialOutputHeld: holdAdvisorPartialForFactAnchor,
+          auditDurationMs: factAnchorOutputAuditDurationMs,
         });
       if (traceId) {
         traceStoreRef.current.updateMetadata(
@@ -23629,7 +23651,7 @@ export function useMeetingAssistant() {
             )?.factEvidence,
         });
         const holdScreenPartialForFactAnchor =
-          screenFactAnchorDecision.requiredFor !== "none";
+          shouldBufferFactAnchorStreaming(screenFactAnchorDecision);
         const projectBindingMetadata = {
           source: "screen",
           stage: "pre-model",
@@ -24176,13 +24198,22 @@ export function useMeetingAssistant() {
                 return;
               }
 
+              const factAnchorStreamingPartial =
+                projectFactAnchorStreamingPartial({
+                  decision: screenFactAnchorDecision,
+                  content: partialContent,
+                });
+              const stagedPartialContent =
+                factAnchorStreamingPartial.visibleContent;
               const stagedPartialDecision = decideStagedAnswerPartial({
-                accumulated: partialContent,
+                accumulated: stagedPartialContent,
                 explicitRequest: true,
                 stableAnswerPresent: Boolean(
                   stableAnswerRevisionRef.current
                 ),
-                guardrailHeld: holdScreenPartialForFactAnchor,
+                guardrailHeld:
+                  holdScreenPartialForFactAnchor &&
+                  !stagedPartialContent.trim(),
                 visibleStreamStarted: screenStagedVisible,
               });
               if (stagedPartialDecision.visible) {
@@ -24202,6 +24233,14 @@ export function useMeetingAssistant() {
                           screenStagedFirstVisiblePartialAt,
                         visibleStreamStarted: true,
                       }),
+                      factAnchorCompletedSentenceBuffering:
+                        factAnchorStreamingPartial.bufferingEnabled,
+                      factAnchorStreamingHeldTrailingChars:
+                        factAnchorStreamingPartial.heldTrailingChars,
+                      factAnchorStreamingSanitizedClaimCount:
+                        factAnchorStreamingPartial.sanitizedClaimCount,
+                      factAnchorStreamingArtifactBoundaryHeld:
+                        factAnchorStreamingPartial.artifactBoundaryHeld,
                       ...formatModelGenerationTimingForTrace({
                         requestStartedAt:
                           screenModelRequestStartedAt,
@@ -24218,7 +24257,7 @@ export function useMeetingAssistant() {
                 setState((previous) => ({
                   ...previous,
                   status: "thinking",
-                  partialSuggestion: partialContent,
+                  partialSuggestion: stagedPartialContent,
                 }));
               }
             },
@@ -24260,6 +24299,7 @@ export function useMeetingAssistant() {
         let parsedScreenMeetingAnswer = parseMeetingAnswer(screenTaskContent, {
           expectedProfile: screenAnswerProfile,
         });
+        const screenFactAnchorOutputAuditStartedAt = performance.now();
         const screenFactAnchorOutputDecision = enforceFactAnchorOutput({
           decision: screenFactAnchorDecision,
           parsedAnswer: parsedScreenMeetingAnswer,
@@ -24269,6 +24309,8 @@ export function useMeetingAssistant() {
           screenFactAnchorOutputDecision.effectiveContent;
         parsedScreenMeetingAnswer =
           screenFactAnchorOutputDecision.effectiveAnswer;
+        const screenFactAnchorOutputAuditDurationMs =
+          performance.now() - screenFactAnchorOutputAuditStartedAt;
         const screenWhiteboardFormatPolicyDecision =
           applyWhiteboardFormatPolicy({
             whiteboard:
@@ -24331,6 +24373,7 @@ export function useMeetingAssistant() {
             screenFactAnchorOutputDecision,
             {
               partialOutputHeld: holdScreenPartialForFactAnchor,
+              auditDurationMs: screenFactAnchorOutputAuditDurationMs,
             }
           );
         traceStoreRef.current.updateMetadata(

@@ -576,6 +576,7 @@ export type ClaimPredicateFamily =
 export interface ClaimSupportDecision {
   claimId: string;
   predicateFamily: ClaimPredicateFamily;
+  supportScope?: "question-predicate" | "anchor-evidence";
   anchorId?: string;
   projectCompatible: boolean;
   predicateCompatible: boolean;

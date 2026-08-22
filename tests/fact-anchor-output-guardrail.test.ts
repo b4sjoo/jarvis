@@ -3,6 +3,8 @@ import test from "node:test";
 import {
   enforceFactAnchorOutput,
   formatFactAnchorOutputDecisionForTrace,
+  projectFactAnchorStreamingPartial,
+  shouldBufferFactAnchorStreaming,
 } from "../src/lib/meeting/fact-anchor-output-guardrail.js";
 import { parseMeetingAnswer } from "../src/lib/meeting/meeting-answer.js";
 import type {
@@ -383,6 +385,61 @@ test("keeps Shadow output byte-for-byte while recording the potential sanitation
   assert.equal(result.shadowWouldCommitSource, "sanitized-model-output");
   assert.ok(result.sanitizedClaimCount > 0);
   assert.equal(result.visibleNotice, undefined);
+});
+
+test("streams completed supported sentences while keeping artifacts atomic", () => {
+  const decision = makeDecision({
+    state: "strong-anchor",
+    requiredFor: "project-deep-dive",
+    supportedAnchorIds: ["mem_oasis_bulk"],
+    selectedAnchorId: "mem_oasis_bulk",
+    claimSupportDecisions: [
+      {
+        claimId: "claim:oasis:span-1",
+        predicateFamily: "architecture-decision",
+        supportScope: "anchor-evidence",
+        anchorId: "mem_oasis_bulk",
+        projectCompatible: true,
+        predicateCompatible: false,
+        supportSpanPresent: true,
+        supportSpan:
+          "We used NDJSON request framing and reported Bulk API failures per item.",
+        conflictFree: true,
+        decision: "allow",
+        reason: "project-compatible-anchor-evidence-span",
+      },
+    ],
+  });
+  const partial = projectFactAnchorStreamingPartial({
+    decision,
+    content: `Answer: We used NDJSON request framing and reported failures per item. We implemented retries with jitter.\nCode:\npartial`,
+  });
+
+  assert.equal(shouldBufferFactAnchorStreaming(decision), true);
+  assert.match(partial.visibleContent, /NDJSON request framing/i);
+  assert.doesNotMatch(partial.visibleContent, /retries with jitter/i);
+  assert.doesNotMatch(partial.visibleContent, /Code:/i);
+  assert.equal(partial.sanitizedClaimCount, 1);
+  assert.equal(partial.artifactBoundaryHeld, true);
+});
+
+test("never buffers or changes Shadow streaming output", () => {
+  const decision = makeDecision({
+    state: "strong-anchor",
+    supportedAnchorIds: ["mem_oasis_bulk"],
+  });
+  decision.personalEvidence = {
+    ...decision.personalEvidence,
+    mode: "shadow",
+    enforced: false,
+  };
+  const content = "Answer: We implemented retries with jitter";
+  const partial = projectFactAnchorStreamingPartial({ decision, content });
+
+  assert.equal(shouldBufferFactAnchorStreaming(decision), false);
+  assert.equal(partial.visibleContent, content);
+  assert.equal(partial.bufferingEnabled, false);
+  assert.equal(partial.heldTrailingChars, 0);
 });
 
 function makeDecision(

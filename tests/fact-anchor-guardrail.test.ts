@@ -520,7 +520,7 @@ test("a project binding filters unrelated retrieved fact evidence", () => {
   assert.deepEqual(decision.supportedAnchorTitles, ["Agentic Memory"]);
 });
 
-test("rejects a valid project anchor whose predicate does not support the ask", () => {
+test("keeps coarse predicate mismatch weak while exposing anchor evidence spans", () => {
   const decision = buildFactAnchorDecision({
     questionType: "project-deep-dive",
     questionText:
@@ -566,6 +566,68 @@ test("rejects a valid project anchor whose predicate does not support the ask", 
   assert.equal(
     decision.claimSupportDecisions[0]?.reason,
     "anchor-predicate-does-not-support-current-claim-family"
+  );
+  assert.ok(
+    decision.claimSupportDecisions.some(
+      (item) =>
+        item.supportScope === "anchor-evidence" &&
+        item.decision === "needs-clarification" &&
+        item.anchorId === "mem_agentic_overview"
+    )
+  );
+});
+
+test("exposes every bounded project-compatible span for compound output audit", () => {
+  const decision = buildFactAnchorDecision({
+    questionType: "project-deep-dive",
+    questionText:
+      "Why did the Bulk API require NDJSON, and how were per-item failures handled?",
+    memoryContext: makeMemoryResult([
+      makeRetrievedEntry({
+        entry: makeMemoryEntry({
+          id: "mem_oasis_bulk",
+          type: "project_context",
+          projectId: "oasis",
+          projectName: "OASIS",
+          content:
+            "The Bulk API accepted newline-delimited JSON request framing. BulkResponse::fromXContent parsed the response. Each failed item was reported independently instead of failing the entire batch. Automatic retry, jitter, rebatching, and a DLQ were not implemented by this feature.",
+        }),
+      }),
+    ]),
+    projectBindingDecision: {
+      action: "preserve",
+      binding: {
+        projectId: "oasis",
+        projectName: "OASIS",
+        primaryEntryId: "mem_oasis_bulk",
+        evidenceEntryIds: ["mem_oasis_bulk"],
+        source: "memory",
+        confidence: 0.96,
+        lockedAt: 1,
+        revision: 1,
+        reason: "test-binding",
+      },
+      candidates: [],
+      changed: false,
+      sourceAuthority: "compatible-existing",
+      sourceTurnIds: ["turn_1"],
+      sourceObservationIds: [],
+      topicCompatible: true,
+      bindingRevision: 1,
+      reason: "existing-parent-binding-is-authoritative",
+    },
+  });
+  const evidenceSpans = decision.claimSupportDecisions.filter(
+    (item) => item.supportScope === "anchor-evidence"
+  );
+
+  assert.equal(decision.state, "strong-anchor");
+  assert.ok(evidenceSpans.length >= 3);
+  assert.ok(
+    evidenceSpans.some((item) => /newline-delimited JSON/i.test(item.supportSpan ?? ""))
+  );
+  assert.ok(
+    evidenceSpans.some((item) => /failed item/i.test(item.supportSpan ?? ""))
   );
 });
 

@@ -837,13 +837,21 @@ function evaluateClaimSupport({
     entries,
     projectBindingDecision
   );
-  const decisions = eligibleEntries.map((item) =>
-    evaluateMemoryClaimSupport({
+  const decisions = eligibleEntries.flatMap((item) => {
+    const predicateDecision = evaluateMemoryClaimSupport({
       item,
       binding: projectBindingDecision?.binding,
       predicateFamily,
-    })
-  );
+    });
+    return [
+      predicateDecision,
+      ...evaluateMemoryAnchorEvidenceSpans({
+        item,
+        binding: projectBindingDecision?.binding,
+        predicateFamily,
+      }),
+    ];
+  });
   const evaluatedIds = new Set(
     decisions
       .map((decision) => decision.anchorId)
@@ -857,6 +865,7 @@ function evaluateClaimSupport({
     decisions.push({
       claimId: `claim:${predicateFamily}:${activeAnchor}`,
       predicateFamily,
+      supportScope: "question-predicate",
       anchorId: activeAnchor,
       projectCompatible: false,
       predicateCompatible: false,
@@ -905,6 +914,7 @@ function evaluatePreparationClaimSupport({
     return {
       claimId: `claim:${predicateFamily}:preparation:${item.statementId}`,
       predicateFamily,
+      supportScope: "question-predicate",
       anchorId: item.statementId,
       projectCompatible: true,
       predicateCompatible,
@@ -981,6 +991,7 @@ function evaluateMemoryClaimSupport({
   return {
     claimId: `claim:${predicateFamily}:${entry.id}`,
     predicateFamily,
+    supportScope: "question-predicate",
     anchorId: entry.id,
     projectCompatible,
     predicateCompatible,
@@ -998,6 +1009,44 @@ function evaluateMemoryClaimSupport({
   };
 }
 
+function evaluateMemoryAnchorEvidenceSpans({
+  item,
+  binding,
+  predicateFamily,
+}: {
+  item: RetrievedMemoryEntry;
+  binding?: NonNullable<ProjectBindingDecision["binding"]>;
+  predicateFamily: ClaimPredicateFamily;
+}): ClaimSupportDecision[] {
+  const entry = item.entry;
+  const projectCompatible = binding
+    ? projectIdentityMatchesBinding(
+        entry.projectId,
+        entry.projectName,
+        binding.projectId,
+        binding.projectName
+      )
+    : true;
+  if (!projectCompatible) return [];
+
+  const spans = extractBoundedSupportSpans(
+    item.injectedContent || entry.summary || entry.content
+  );
+  return spans.map((supportSpan, index) => ({
+    claimId: `claim:${predicateFamily}:${entry.id}:evidence:${index + 1}`,
+    predicateFamily,
+    supportScope: "anchor-evidence",
+    anchorId: entry.id,
+    projectCompatible: true,
+    predicateCompatible: false,
+    supportSpanPresent: true,
+    supportSpan,
+    conflictFree: true,
+    decision: "needs-clarification",
+    reason: "project-compatible-anchor-evidence-span",
+  }));
+}
+
 function extractSupportSpan(text: string | undefined, terms: string[]) {
   const compact = (text ?? "").replace(/\s+/g, " ").trim();
   if (compact.length < 12) return undefined;
@@ -1011,6 +1060,31 @@ function extractSupportSpan(text: string | undefined, terms: string[]) {
     hasAnyEvidenceTerm(normalizeEvidenceText(sentence), terms)
   );
   return supportingSentence?.slice(0, 260);
+}
+
+function extractBoundedSupportSpans(text: string | undefined) {
+  const normalized = (text ?? "").replace(/\r\n?/g, "\n").trim();
+  if (normalized.length < 12) return [];
+  const units = normalized
+    .split(/\n+|(?<=[.!?。！？])\s+/u)
+    .map((unit) => unit.replace(/\s+/g, " ").trim())
+    .filter((unit) => unit.length >= 12)
+    .flatMap((unit) => splitBoundedEvidenceUnit(unit, 320));
+  return uniqueStrings(units).slice(0, 16);
+}
+
+function splitBoundedEvidenceUnit(value: string, maxChars: number) {
+  if (value.length <= maxChars) return [value];
+  const chunks: string[] = [];
+  let remaining = value;
+  while (remaining.length > maxChars && chunks.length < 15) {
+    const candidate = remaining.slice(0, maxChars + 1);
+    const splitAt = Math.max(candidate.lastIndexOf(" "), maxChars * 0.6);
+    chunks.push(remaining.slice(0, splitAt).trim());
+    remaining = remaining.slice(splitAt).trim();
+  }
+  if (remaining) chunks.push(remaining.slice(0, maxChars).trim());
+  return chunks.filter(Boolean);
 }
 
 function hasAnyEvidenceTerm(text: string, terms: string[]) {
