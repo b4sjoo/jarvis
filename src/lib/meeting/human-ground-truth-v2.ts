@@ -35,10 +35,11 @@ import {
   type MeetingMetadataEvaluationObservation,
   type MeetingMetadataMutationDisposition,
 } from "./meeting-metadata-evaluation.js";
+import { projectObservedAdvisorAttempt } from "./observed-advisor-outcome.js";
 
 export const HUMAN_GROUND_TRUTH_SCHEMA_VERSION = 2 as const;
 export const HUMAN_EVALUATION_DERIVATION_VERSION =
-  "human-evaluation-v2.8";
+  "human-evaluation-v2.9";
 
 export type HumanGroundTruthConfirmation = "confirmed" | "suggested";
 
@@ -617,26 +618,18 @@ export function buildHumanEvaluationObservedSnapshotV2(
     relation,
     readBoolean(metadata.currentQuestionSettlementParentMutationAuthorized)
   );
-  const runtimeAction = resolveObservedRuntimeAction(metadata);
+  const advisorAttempt = projectObservedAdvisorAttempt(metadata);
+  const runtimeAction = advisorAttempt.runtimeAction;
   const runtimeOperationId = readString(
     metadata.questionTypeAdjudicationOutcomeOperationId ??
       metadata.questionTypeAdjudicationOperationId ??
       metadata.advisorJobId
   );
-  const advisorOutcome = resolveObservedAdvisorOutcome(metadata);
+  const advisorOutcome = advisorAttempt.outcome;
   const primaryAsk = readString(
     metadata.primaryAskNormalizedText ?? metadata.logicalQuestionNormalizedText
   );
-  const advisorAnswerCommitted = readBoolean(
-    metadata.advisorOutputCommittedToUi
-  );
-  const screenAnswerCommitted = readBoolean(
-    metadata.screenOutputCommittedToUi
-  );
-  const answerCommitted =
-    advisorAnswerCommitted === true || screenAnswerCommitted === true
-      ? true
-      : advisorAnswerCommitted ?? screenAnswerCommitted;
+  const answerCommitted = advisorAttempt.answerCommitted;
   const contextReadScope = resolveObservedContextReadScope(
     trace.kind,
     metadata,
@@ -702,72 +695,6 @@ export function buildHumanEvaluationObservedSnapshotV2(
     ...traceEvidence,
     traceHash: fingerprint(stableStringify(traceEvidence)),
   };
-}
-
-function resolveObservedAdvisorOutcome(
-  metadata: Record<string, unknown>
-): HumanEvaluationObservedSnapshotV2["advisorOutcome"] {
-  if (
-    readBoolean(metadata.advisorOutputCommittedToUi) === true ||
-    readBoolean(metadata.screenOutputCommittedToUi) === true ||
-    readBoolean(
-      metadata.questionTypeAdjudicationOutcomeVisibleCommitted
-    ) === true
-  ) {
-    return "visible-committed";
-  }
-  if (
-    readString(metadata.advisorOutputDisposition) === "pending-delivery" ||
-    readBoolean(
-      metadata.questionTypeAdjudicationOutcomeDeliveryPending
-    ) === true
-  ) {
-    return "delivery-pending";
-  }
-  const adjudicationDisposition = readString(
-    metadata.questionTypeAdjudicationOutcomeDisposition
-  );
-  if (
-    adjudicationDisposition === "suppressed" ||
-    adjudicationDisposition === "stale-dropped" ||
-    adjudicationDisposition === "cancelled-by-new-job" ||
-    adjudicationDisposition === "cancelled-by-runtime-boundary" ||
-    adjudicationDisposition === "error"
-  ) {
-    return adjudicationDisposition === "suppressed"
-      ? "suppressed"
-      : adjudicationDisposition;
-  }
-  const advisorJobOutcome = readString(metadata.advisorJobOutcome);
-  if (
-    advisorJobOutcome === "cancelled-by-new-job" ||
-    advisorJobOutcome === "replaced-before-execution"
-  ) {
-    return "cancelled-by-new-job";
-  }
-  if (advisorJobOutcome === "cancelled-by-runtime-boundary") {
-    return "cancelled-by-runtime-boundary";
-  }
-  if (advisorJobOutcome === "stale-commit-rejected") {
-    return "stale-dropped";
-  }
-  if (advisorJobOutcome === "error") return "error";
-  if (
-    readBoolean(metadata.questionTypeAdjudicationOutcomeModelCompleted) ===
-      true ||
-    readString(metadata.advisorOutputDisposition) === "empty-or-silent" ||
-    readString(metadata.advisorOutputDisposition) ===
-      "output-commit-not-authorized"
-  ) {
-    return "model-completed";
-  }
-  if (
-    advisorJobOutcome === "suppressed" ||
-    readBoolean(metadata.advisorExecutionAuthorized) === false
-  ) {
-    return "suppressed";
-  }
-  return undefined;
 }
 
 export function buildHumanGroundTruthSubjectV2(input: {
@@ -1089,34 +1016,6 @@ function normalizeFact(fact: HumanGroundTruthFactV2): HumanGroundTruthFactV2 {
     };
   }
   return fact;
-}
-
-function resolveObservedRuntimeAction(
-  metadata: Record<string, unknown>
-): ExpectedAdvisorAction | undefined {
-  if (
-    readBoolean(metadata.advisorOutputCommittedToUi) === true ||
-    readBoolean(metadata.screenOutputCommittedToUi) === true ||
-    readBoolean(metadata.advisorExecutionAuthorized) === true
-  ) {
-    return "advise";
-  }
-  const action = readString(
-    metadata.turnGateAction ?? metadata.advisorTurnAction
-  );
-  if (action === "append-only" || action === "state-update") {
-    return "append-context";
-  }
-  if (
-    action === "buffer" ||
-    readString(metadata.advisorTurnIntent) === "incomplete"
-  ) {
-    return "buffer";
-  }
-  if (action || readBoolean(metadata.advisorExecutionAuthorized) === false) {
-    return "ignore";
-  }
-  return undefined;
 }
 
 function resolveObservedContextReadScope(

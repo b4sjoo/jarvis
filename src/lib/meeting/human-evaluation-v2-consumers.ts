@@ -408,7 +408,8 @@ function applyProjectionToQuestionEvaluation(
         evaluation.currentQuestionSettlement?.parentMutationCorrect,
     },
     advisorIntent:
-      runtime?.kind === "expected-runtime-action"
+      runtime?.kind === "expected-runtime-action" &&
+      projection.observed?.runtimeAction
         ? buildAdvisorIntentCompatibility(projection, runtime.expectedAction)
         : evaluation.advisorIntent,
     answer:
@@ -460,12 +461,18 @@ function buildAdvisorIntentCompatibility(
   projection: HumanEvaluationProjectionV2,
   expectedAction: AdvisorIntentHumanEvaluation["expectedAction"]
 ): AdvisorIntentHumanEvaluation {
+  const runtimeAction = projection.observed?.runtimeAction;
+  if (!runtimeAction) {
+    throw new Error(
+      "Observed runtime action is required for advisor compatibility"
+    );
+  }
   const observedAction = {
     advise: "advised",
     "append-context": "append-only",
     buffer: "buffered",
     ignore: "suppressed",
-  }[projection.observed?.runtimeAction ?? "ignore"] as
+  }[runtimeAction] as
     AdvisorIntentHumanEvaluation["observedAction"];
   const correct = projection.verdicts.runtimeActionCorrect;
   const verdict =

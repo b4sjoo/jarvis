@@ -17,6 +17,7 @@ import type {
 } from "./types";
 import { normalizeMemoryRetrievalEvaluationSnapshot } from "./memory-evaluation.js";
 import { resolveHumanEvaluationAttemptIdentityV2 } from "./human-evaluation-attempt.js";
+import { projectObservedAdvisorAttempt } from "./observed-advisor-outcome.js";
 import {
   fromHumanEvalQuestionType,
   normalizeCanonicalQuestionType,
@@ -584,8 +585,10 @@ export function buildAdvisorIntentEvaluationFromTrace({
     QuestionHumanEvaluation["advisorIntent"]
   >["source"];
   now?: number;
-}): NonNullable<QuestionHumanEvaluation["advisorIntent"]> {
+}): NonNullable<QuestionHumanEvaluation["advisorIntent"]> | undefined {
   const metadata = trace.metadata ?? {};
+  const observedAttempt = projectObservedAdvisorAttempt(metadata);
+  if (!observedAttempt.runtimeAction) return undefined;
   const executionAuthorized =
     typeof metadata.advisorExecutionAuthorized === "boolean"
       ? metadata.advisorExecutionAuthorized
@@ -598,14 +601,14 @@ export function buildAdvisorIntentEvaluationFromTrace({
     metadata.turnGateAction ?? metadata.advisorTurnAction
   );
   const intent = readOptionalString(metadata.advisorTurnIntent);
-  const observedAction =
-    executionAuthorized === true || outputCommitAuthorized === true
-      ? "advised"
-      : intent === "incomplete"
-        ? "buffered"
-        : turnAction === "append-only" || turnAction === "state-update"
-          ? "append-only"
-          : "suppressed";
+  const observedAction = {
+    advise: "advised",
+    "append-context": "append-only",
+    buffer: "buffered",
+    ignore: "suppressed",
+  }[observedAttempt.runtimeAction] as NonNullable<
+    QuestionHumanEvaluation["advisorIntent"]
+  >["observedAction"];
   const expectedAdvice = expectedAction === "advise";
   const observedAdvice = observedAction === "advised";
   const verdict =

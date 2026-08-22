@@ -1054,6 +1054,9 @@ test("labels an authorized advisor turn as a false positive when advice was not 
         advisorTurnEnforcement: "allow",
         advisorExecutionAuthorized: true,
         advisorOutputCommitAuthorized: true,
+        advisorOutputCommittedToUi: true,
+        generationResultCommitDisposition: "committed",
+        generationResultProjectionDisposition: "current-visible",
         logicalQuestionUnitId: "lqu_1",
         logicalQuestionRevision: 2,
         logicalQuestionSourceTurnIds: ["turn_1", "turn_2"],
@@ -1064,6 +1067,7 @@ test("labels an authorized advisor turn as a false positive when advice was not 
     now: 100,
   });
 
+  assert.ok(evaluation);
   assert.equal(evaluation.verdict, "false-positive");
   assert.equal(evaluation.observedAction, "advised");
   assert.equal(evaluation.failureReason, "advisor-false-positive");
@@ -1093,6 +1097,7 @@ test("labels a suppressed advisor turn as a false negative when advice was expec
     now: 200,
   });
 
+  assert.ok(evaluation);
   assert.equal(evaluation.verdict, "false-negative");
   assert.equal(evaluation.observedAction, "suppressed");
   assert.equal(evaluation.failureReason, "advisor-false-negative");
