@@ -28,7 +28,7 @@ import {
   toScreenTaskKind,
 } from "../src/lib/meeting/task-taxonomy.js";
 
-test("accepts ordered source evidence and rejects generated-answer taxonomy", () => {
+test("keeps Screen fallback type observable but non-authoritative", () => {
   assert.deepEqual(
     resolveTaskTaxonomyAuthority({
       candidates: [
@@ -42,15 +42,31 @@ test("accepts ordered source evidence and rejects generated-answer taxonomy", ()
     }),
     {
       candidateType: "general-system-design",
-      effectiveQuestionType: "general-system-design",
+      effectiveQuestionType: "unknown",
       authoritySource: "screen-source-fallback",
-      mutationAuthorized: true,
-      mutationApplied: true,
-      reason: "authoritative-source-selected",
+      mutationAuthorized: false,
+      mutationApplied: false,
+      reason: "non-authoritative-source-observed",
       generatedAnswerExcluded: true,
       blockedGeneratedAnswerType: "coding",
     }
   );
+});
+
+test("keeps authoritative Screen preflight ahead of fallback evidence", () => {
+  const decision = resolveTaskTaxonomyAuthority({
+    candidates: [
+      { source: "screen-preflight", questionType: "coding" },
+      {
+        source: "screen-source-fallback",
+        questionType: "general-system-design",
+      },
+    ],
+  });
+
+  assert.equal(decision.effectiveQuestionType, "coding");
+  assert.equal(decision.authoritySource, "screen-preflight");
+  assert.equal(decision.mutationAuthorized, true);
 });
 
 test("preserves an existing task when generated output proposes a retype", () => {

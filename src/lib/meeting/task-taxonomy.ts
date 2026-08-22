@@ -101,6 +101,7 @@ export type TaskTaxonomyAuthorityDecisionSource =
 export type TaskTaxonomyAuthorityReason =
   | "authoritative-source-selected"
   | "existing-task-preserved"
+  | "non-authoritative-source-observed"
   | "generated-answer-blocked"
   | "no-authoritative-evidence";
 
@@ -136,6 +137,12 @@ export function resolveTaskTaxonomyAuthority({
       ? undefined
       : normalizedGeneratedAnswerType;
   const generatedAnswerExcluded = Boolean(generatedAnswerCandidate);
+  let observedNonAuthoritativeCandidate:
+    | {
+        source: Extract<TaskTaxonomyAuthoritySource, "screen-source-fallback">;
+        questionType: CanonicalQuestionType;
+      }
+    | undefined;
 
   for (const candidate of candidates) {
     const questionType = normalizeCanonicalQuestionType(candidate.questionType);
@@ -145,6 +152,14 @@ export function resolveTaskTaxonomyAuthority({
     }
 
     if (!questionType || questionType === "unknown") continue;
+
+    if (candidate.source === "screen-source-fallback") {
+      observedNonAuthoritativeCandidate ??= {
+        source: candidate.source,
+        questionType,
+      };
+      continue;
+    }
 
     const existingType = normalizeCanonicalQuestionType(existingQuestionType);
     return {
@@ -167,6 +182,19 @@ export function resolveTaskTaxonomyAuthority({
       mutationAuthorized: false,
       mutationApplied: false,
       reason: "existing-task-preserved",
+      generatedAnswerExcluded,
+      blockedGeneratedAnswerType,
+    };
+  }
+
+  if (observedNonAuthoritativeCandidate) {
+    return {
+      candidateType: observedNonAuthoritativeCandidate.questionType,
+      effectiveQuestionType: "unknown",
+      authoritySource: observedNonAuthoritativeCandidate.source,
+      mutationAuthorized: false,
+      mutationApplied: false,
+      reason: "non-authoritative-source-observed",
       generatedAnswerExcluded,
       blockedGeneratedAnswerType,
     };
