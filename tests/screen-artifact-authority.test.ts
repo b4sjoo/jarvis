@@ -47,6 +47,15 @@ test("treats a manual coding screen as an implementation request", () => {
     }),
     "concept-probe"
   );
+  assert.deepEqual(
+    resolveManualScreenGenerationRequestedArtifacts({
+      requiredArtifacts: ["answer", "complexity"],
+      questionType: "coding",
+      boundVoicePrimaryAsk: false,
+      primaryAskIntent: "implementation-probe",
+    }),
+    ["answer", "code", "complexity"]
+  );
 });
 
 test("bounds generation artifacts to the Voice primary ask", () => {
@@ -88,9 +97,9 @@ test("bounds generation artifacts to the Voice primary ask", () => {
   );
 });
 
-test("grants presentation-only code authority for a parsed manual screen result", () => {
+test("does not let parsed Screen code expand source artifact authority", () => {
   const decision = authorizeManualScreenPresentationArtifacts({
-    requestedArtifacts: ["answer", "complexity"],
+    requestedArtifacts: ["answer", "whiteboard"],
     parsedAnswer: parseMeetingAnswer(
       [
         "Answer: Use a monotonic deque.",
@@ -107,8 +116,7 @@ test("grants presentation-only code authority for a parsed manual screen result"
 
   assert.deepEqual(decision.authorizedArtifacts, [
     "answer",
-    "code",
-    "complexity",
+    "whiteboard",
   ]);
   assert.equal(decision.source, "manual-screen");
   assert.equal(decision.whiteboardCandidatePresent, true);
@@ -117,6 +125,8 @@ test("grants presentation-only code authority for a parsed manual screen result"
       .screenArtifactAuthoritySource,
     "manual-screen"
   );
+  assert.match(decision.reason, /code-not-requested-by-source/);
+  assert.match(decision.reason, /complexity-not-requested-by-source/);
 });
 
 test("preserves empty coding sections and keeps whiteboard phase-controlled", () => {
@@ -150,7 +160,7 @@ test("preserves Code and Complexity for a Voice explanation recovery", () => {
   });
 
   assert.deepEqual(decision.authorizedArtifacts, ["answer"]);
-  assert.match(decision.reason, /code-family-blocked-by-primary-ask/);
+  assert.match(decision.reason, /code-not-requested-by-source/);
   assert.equal(
     formatScreenPresentationArtifactAuthorityForTrace(decision)
       .screenArtifactAuthorityAuthorized,
@@ -182,11 +192,7 @@ test("authorizes Code and Complexity through one Voice artifact family", () => {
     primaryAskIntent: "implementation-probe",
   });
 
-  assert.deepEqual(complexity.authorizedArtifacts, [
-    "answer",
-    "code",
-    "complexity",
-  ]);
+  assert.deepEqual(complexity.authorizedArtifacts, ["answer", "complexity"]);
   assert.deepEqual(implementation.authorizedArtifacts, [
     "answer",
     "code",
