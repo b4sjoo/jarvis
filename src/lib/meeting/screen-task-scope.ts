@@ -88,6 +88,7 @@ export type ManualScreenVoiceQuestionBindingReason =
   | "no-voice-candidate"
   | "active-voice-attempt"
   | "pending-voice-delivery"
+  | "awaiting-visual-evidence-recovery"
   | "explicit-recovery-target"
   | "context-insufficient-visible-answer"
   | "visible-answer-already-committed"
@@ -155,6 +156,7 @@ export function decideManualScreenVoiceQuestionBinding(input: {
   candidate?: ManualScreenVoiceQuestionCapsule;
   activeVoiceAttempt?: ManualScreenVoiceQuestionTarget;
   pendingVoiceDelivery?: ManualScreenVoiceQuestionTarget;
+  awaitingVisualEvidenceTarget?: ManualScreenVoiceQuestionTarget;
   explicitRecoveryTarget?: ManualScreenVoiceQuestionTarget;
   visibleAnswer?: ManualScreenVoiceQuestionTarget;
   visibleAnswerContextInsufficient?: boolean;
@@ -178,6 +180,15 @@ export function decideManualScreenVoiceQuestionBinding(input: {
     return {
       disposition: "bind-voice",
       reason: "pending-voice-delivery",
+      candidate,
+    };
+  }
+  if (
+    sameVoiceQuestionTarget(candidate, input.awaitingVisualEvidenceTarget)
+  ) {
+    return {
+      disposition: "bind-voice",
+      reason: "awaiting-visual-evidence-recovery",
       candidate,
     };
   }
@@ -213,6 +224,55 @@ export function decideManualScreenVoiceQuestionBinding(input: {
     reason: "voice-recovery-not-authorized",
     candidate,
   };
+}
+
+export interface ManualScreenContinuityEvidenceDecision {
+  relation: InterviewTaskRelation;
+  proposedRelation?: InterviewTaskRelation;
+  reason: string;
+  confidence: number;
+  relationEvidenceAuthorized: boolean;
+  responseOnly?: boolean;
+}
+
+/**
+ * Exact recovery may preserve continuity. Project and correction overlap are
+ * useful proposals, but cannot mutate task lifecycle on their own.
+ */
+export function decideManualScreenContinuityEvidence(input: {
+  exactVisualEvidenceRecovery: boolean;
+  projectAnchorMatches: boolean;
+  correctionTermOverlap: number;
+}): ManualScreenContinuityEvidenceDecision | undefined {
+  if (input.exactVisualEvidenceRecovery) {
+    return {
+      relation: "followup-parent",
+      reason: "screen-exact-visual-evidence-recovery",
+      confidence: 1,
+      relationEvidenceAuthorized: true,
+    };
+  }
+  if (input.projectAnchorMatches) {
+    return {
+      relation: "unknown",
+      proposedRelation: "resume-parent",
+      reason: "screen-project-anchor-continuity-proposal-nonauthoritative",
+      confidence: 0.9,
+      relationEvidenceAuthorized: false,
+      responseOnly: true,
+    };
+  }
+  if (input.correctionTermOverlap > 0) {
+    return {
+      relation: "unknown",
+      proposedRelation: "resume-parent",
+      reason: "screen-correction-term-continuity-proposal-nonauthoritative",
+      confidence: 0.86,
+      relationEvidenceAuthorized: false,
+      responseOnly: true,
+    };
+  }
+  return undefined;
 }
 
 export function formatManualScreenVoiceQuestionBindingForTrace(

@@ -14,6 +14,17 @@ export type AnswerSufficiencyStatus =
   | "execution-failure"
   | "unknown";
 
+export type AnswerResolutionState =
+  | "resolved"
+  | "awaiting-evidence"
+  | "failed";
+
+export interface AnswerResolutionProjection {
+  state: AnswerResolutionState;
+  awaitingVisualEvidence: boolean;
+  evidence: string[];
+}
+
 export type AnswerContextDefect =
   | "none"
   | "missing-antecedent"
@@ -238,6 +249,68 @@ export function detectAnswerSufficiencyShadow(
     contextDefect: "none",
     recommendedRepair: "none",
     confidence: 0.35,
+  };
+}
+
+/**
+ * Projects the existing sufficiency reasons into the small runtime contract
+ * used by recovery. This does not grant relation or task mutation authority.
+ */
+export function projectAnswerResolution(input: {
+  decision: AnswerSufficiencyDecision;
+  questionText: string;
+  parsedAnswer: ParsedMeetingAnswer;
+}): AnswerResolutionProjection {
+  const question = normalize(input.questionText);
+  const answer = normalize(collectAnswerText(input.parsedAnswer));
+  const visualReferenceEvidence = matchLabels(
+    question,
+    VISUAL_REFERENCE_PATTERNS
+  );
+  const missingVisualEvidence = matchLabels(
+    answer,
+    MISSING_VISUAL_EVIDENCE_PATTERNS
+  );
+  const awaitingVisualEvidence =
+    visualReferenceEvidence.length > 0 &&
+    missingVisualEvidence.length > 0;
+
+  if (awaitingVisualEvidence) {
+    return {
+      state: "awaiting-evidence",
+      awaitingVisualEvidence: true,
+      evidence: uniqueStrings([
+        ...visualReferenceEvidence,
+        ...missingVisualEvidence,
+      ]),
+    };
+  }
+
+  if (input.decision.answerStatus === "sufficient") {
+    return {
+      state: "resolved",
+      awaitingVisualEvidence: false,
+      evidence: ["answer-sufficient"],
+    };
+  }
+
+  if (
+    input.decision.answerStatus === "context-insufficient" ||
+    input.decision.answerStatus === "clarification-needed" ||
+    input.decision.answerStatus === "fact-anchor-missing" ||
+    input.decision.answerStatus === "legitimate-wait"
+  ) {
+    return {
+      state: "awaiting-evidence",
+      awaitingVisualEvidence: false,
+      evidence: [`answer-${input.decision.answerStatus}`],
+    };
+  }
+
+  return {
+    state: "failed",
+    awaitingVisualEvidence: false,
+    evidence: [`answer-${input.decision.answerStatus}`],
   };
 }
 
@@ -560,6 +633,32 @@ function inferContextDefect(
   return "generic-meta-fallback";
 }
 
+const VISUAL_REFERENCE_PATTERNS: Array<[string, RegExp]> = [
+  [
+    "question-references-code-lines",
+    /\blines?\s+\d+(?:\s*(?:-|–|—|through|to)\s*\d+)?\b|第\s*\d+\s*(?:到|至|-|–|—)\s*\d+\s*行|第\s*\d+\s*行/u,
+  ],
+  [
+    "question-references-visual-code-location",
+    /\b(?:this|that|the highlighted|the selected)\s+(?:function|method|class|block|section|snippet|code)\b|(?:这个|那个|高亮|选中)(?:函数|方法|类|代码块|片段|代码)/u,
+  ],
+  [
+    "question-references-named-code-identifier",
+    /\b(?:function|method|class|variable|identifier|field)\s+[`"']?[a-z_$][\w$.-]*[`"']?/u,
+  ],
+];
+
+const MISSING_VISUAL_EVIDENCE_PATTERNS: Array<[string, RegExp]> = [
+  [
+    "answer-cannot-inspect-visual-evidence",
+    /\b(?:i\s+)?(?:cannot|can't|do not|don't)\s+(?:see|view|access|read|inspect)\s+(?:the\s+|those\s+|these\s+)?(?:code|lines?|screenshot|image|snippet|implementation)\b|\b(?:the\s+)?(?:code|lines?|screenshot|image|snippet)\s+(?:is|are)\s+not\s+(?:visible|available|shown|provided)\b|(?:看不到|无法查看|无法读取|未显示)(?:这些|对应|相关)?(?:代码|行号|截图|图片|片段)/u,
+  ],
+  [
+    "answer-requests-visual-evidence",
+    /\b(?:please\s+)?(?:share|paste|upload|provide|show|send)\s+(?:the\s+|those\s+|these\s+|relevant\s+)?(?:code|lines?|screenshot|image|snippet|implementation)\b|\b(?:i\s+)?need\s+(?:to\s+see\s+)?(?:the\s+|those\s+|these\s+)?(?:code|lines?|screenshot|image|snippet)\b|(?:请|需要)(?:先)?(?:分享|粘贴|上传|提供|展示)(?:对应|相关|这些)?(?:代码|行号|截图|图片|片段)/u,
+  ],
+];
+
 const MISSING_CONTEXT_PATTERNS: Array<[string, RegExp]> = [
   [
     "missing-original-problem",
@@ -585,6 +684,7 @@ const MISSING_CONTEXT_PATTERNS: Array<[string, RegExp]> = [
     "missing-context-zh",
     /(?:没有原题|缺少(?:可执行的)?题目定义|缺少目标|无法写(?:出)?正确(?:的)?(?:脚本|代码)|要先确认原题|没有足够上下文(?:来)?确定)/u,
   ],
+  ...MISSING_VISUAL_EVIDENCE_PATTERNS,
 ];
 
 function matchLabels(

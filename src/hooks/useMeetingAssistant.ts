@@ -224,6 +224,10 @@ import {
   decideStableAnswerCommit,
   decideStagedAnswerPartial,
   detectAnswerSufficiencyShadow,
+  projectAnswerResolution,
+  authorizeAwaitingVisualEvidenceRecovery,
+  createAwaitingVisualEvidenceRecoveryFact,
+  formatAwaitingVisualEvidenceRecoveryForTrace,
   formatDisplayTranscriptForTrace,
   calculateWordEquivalent,
   classifyMeTurn,
@@ -676,6 +680,7 @@ import {
   scoreSemanticTaxonomyEmbedding,
   selectManualScreenVoiceQuestionCapsule,
   decideManualScreenVoiceQuestionBinding,
+  decideManualScreenContinuityEvidence,
   commitManualScreenQuestionPacket,
   isCommittedManualScreenQuestionPacket,
   resolveManualScreenSourcePacket,
@@ -1996,6 +2001,22 @@ interface AdvisorResponseFingerprintSourceContext {
   answerSufficiencyDecision?: AnswerSufficiencyDecision;
 }
 
+interface PendingAnswerResolutionCommitCandidate {
+  sourceKind: "voice" | "screen";
+  traceId: string;
+  sessionId: string;
+  runtimeEpoch: number;
+  logicalQuestionUnitId: string;
+  logicalQuestionRevision: number;
+  answerRevision: number;
+  parentTaskId?: string;
+  parentRevision?: number;
+  sourceHash?: string;
+  sourceTurnIds: string[];
+  manualCorrectionRevision: number;
+  resolution: ReturnType<typeof projectAnswerResolution>;
+}
+
 interface QuestionTypeAdjudicationScheduleHandle {
   enforcementWindowRequested: boolean;
   operationId?: string;
@@ -2285,6 +2306,12 @@ export function useMeetingAssistant() {
   const latestManualCorrectionTargetRef = useRef<
     ManualCorrectionRuntimeTarget | undefined
   >(undefined);
+  const awaitingVisualEvidenceRecoveryRef = useRef<
+    ReturnType<typeof createAwaitingVisualEvidenceRecoveryFact>
+  >(undefined);
+  const pendingAnswerResolutionCommitByTraceRef = useRef(
+    new Map<string, PendingAnswerResolutionCommitCandidate>()
+  );
   const manualCorrectionTargetHistoryRef = useRef<
     ManualCorrectionRuntimeTarget[]
   >([]);
@@ -3179,6 +3206,32 @@ export function useMeetingAssistant() {
     []
   );
 
+  const settleAwaitingVisualEvidenceRecovery = useCallback(
+    (
+      stage: "consumed" | "cancelled",
+      reason: string,
+      traceId?: string
+    ) => {
+      const fact = awaitingVisualEvidenceRecoveryRef.current;
+      if (!fact) return;
+      awaitingVisualEvidenceRecoveryRef.current = undefined;
+      const metadata = formatAwaitingVisualEvidenceRecoveryForTrace(fact, {
+        stage,
+        reason,
+      });
+      if (traceId) {
+        traceStoreRef.current.updateMetadata(traceId, metadata);
+      }
+      sessionRecordingManagerRef.current?.recordCaptureLifecycle({
+        stage: `awaiting-visual-evidence-${stage}`,
+        traceId,
+        taskId: fact.parentTaskId,
+        ...metadata,
+      });
+    },
+    []
+  );
+
   const scheduleAdvisorResponseConsistencyShadow = useCallback(
     ({
       stable,
@@ -3641,6 +3694,73 @@ export function useMeetingAssistant() {
         activeMeetingTask?.parent.id === stable.taskId
           ? activeMeetingTask.parent
           : undefined;
+      const sourceTraceId = stable.suggestion.sourceTraceId;
+      const answerResolutionCandidate = sourceTraceId
+        ? pendingAnswerResolutionCommitByTraceRef.current.get(sourceTraceId)
+        : undefined;
+      if (sourceTraceId) {
+        pendingAnswerResolutionCommitByTraceRef.current.delete(sourceTraceId);
+      }
+      if (
+        answerResolutionCandidate &&
+        answerResolutionCandidate.logicalQuestionUnitId ===
+          stable.logicalQuestionUnitId &&
+        answerResolutionCandidate.logicalQuestionRevision ===
+          stable.logicalQuestionRevision
+      ) {
+        const currentRecovery = awaitingVisualEvidenceRecoveryRef.current;
+        if (
+          answerResolutionCandidate.sourceKind === "voice" &&
+          answerResolutionCandidate.resolution.awaitingVisualEvidence
+        ) {
+          const recovery = createAwaitingVisualEvidenceRecoveryFact({
+            resolution: answerResolutionCandidate.resolution,
+            sessionId: answerResolutionCandidate.sessionId,
+            runtimeEpoch: answerResolutionCandidate.runtimeEpoch,
+            logicalQuestionUnitId:
+              answerResolutionCandidate.logicalQuestionUnitId,
+            logicalQuestionRevision:
+              answerResolutionCandidate.logicalQuestionRevision,
+            answerRevision: answerResolutionCandidate.answerRevision,
+            visibleAnswerRevision: stable.revision,
+            parentTaskId: activeParent?.id,
+            parentRevision: activeParent?.revisions,
+            sourceHash: answerResolutionCandidate.sourceHash,
+            sourceTurnIds: answerResolutionCandidate.sourceTurnIds,
+            manualCorrectionRevision:
+              answerResolutionCandidate.manualCorrectionRevision,
+            createdAt: stable.committedAt,
+          });
+          if (recovery) {
+            awaitingVisualEvidenceRecoveryRef.current = recovery;
+            const metadata = formatAwaitingVisualEvidenceRecoveryForTrace(
+              recovery,
+              { stage: "created", reason: "visible-answer-awaits-visual-evidence" }
+            );
+            if (sourceTraceId) {
+              traceStoreRef.current.updateMetadata(sourceTraceId, metadata);
+            }
+            sessionRecordingManagerRef.current?.recordCaptureLifecycle({
+              stage: "awaiting-visual-evidence-created",
+              traceId: sourceTraceId,
+              taskId: recovery.parentTaskId,
+              ...metadata,
+            });
+          }
+        } else if (
+          currentRecovery &&
+          currentRecovery.logicalQuestionUnitId ===
+            stable.logicalQuestionUnitId &&
+          currentRecovery.logicalQuestionRevision ===
+            stable.logicalQuestionRevision
+        ) {
+          settleAwaitingVisualEvidenceRecovery(
+            "cancelled",
+            `answer-resolution-${answerResolutionCandidate.resolution.state}`,
+            sourceTraceId
+          );
+        }
+      }
       const generatedContinuityCapsule = activeParent
         ? createAdvisorGeneratedContinuityCapsule({
             stable,
@@ -3704,6 +3824,7 @@ export function useMeetingAssistant() {
     [
       clearPendingAnswerCommitTimer,
       scheduleAdvisorResponseConsistencyShadow,
+      settleAwaitingVisualEvidenceRecovery,
     ]
   );
 
@@ -4838,6 +4959,8 @@ export function useMeetingAssistant() {
 
   const advanceRuntimeEpoch = useCallback((reason: string) => {
     const previousEpoch = runtimeEpochRef.current;
+    settleAwaitingVisualEvidenceRecovery("cancelled", reason);
+    pendingAnswerResolutionCommitByTraceRef.current.clear();
     runtimeEpochRef.current += 1;
     screenOperationCoordinatorRef.current.reset();
     semanticTaxonomyEvidenceByTurnRef.current.clear();
@@ -4871,7 +4994,7 @@ export function useMeetingAssistant() {
       previousRuntimeEpoch: previousEpoch,
       runtimeEpoch: runtimeEpochRef.current,
     };
-  }, []);
+  }, [settleAwaitingVisualEvidenceRecovery]);
 
   const recordCommittedPlaybookPhaseTransition = useCallback(
     (input: {
@@ -12097,6 +12220,29 @@ export function useMeetingAssistant() {
           parsedAnswer: parsedMeetingAnswer,
           decision: answerSufficiencyDecision,
         });
+        pendingAnswerResolutionCommitByTraceRef.current.set(traceId, {
+          sourceKind: "voice",
+          traceId,
+          sessionId: sufficiencyMeetingContext.sessionId,
+          runtimeEpoch: runtimeEpochRef.current,
+          logicalQuestionUnitId: advisorJob.logicalQuestionUnit.id,
+          logicalQuestionRevision: advisorJob.logicalQuestionUnit.revision,
+          answerRevision,
+          parentTaskId:
+            sufficiencyMeetingContext.activeMeetingTask?.parent.id,
+          parentRevision:
+            sufficiencyMeetingContext.activeMeetingTask?.parent.revisions,
+          sourceHash:
+            settledExecutionPlan?.sourceHash ??
+            currentQuestionSettlement?.sourceHash,
+          sourceTurnIds: [...advisorJob.logicalQuestionUnit.sourceTurnIds],
+          manualCorrectionRevision: manualCorrectionRevisionRef.current,
+          resolution: projectAnswerResolution({
+            decision: answerSufficiencyDecision,
+            questionText: advisorQuestionAnswerFocusText,
+            parsedAnswer: parsedMeetingAnswer,
+          }),
+        });
       }
 
       let whiteboardRenderValidation:
@@ -12841,6 +12987,9 @@ export function useMeetingAssistant() {
         });
       }
       if (!nextStableAnswer) {
+        if (traceId && !pendingAnswer) {
+          pendingAnswerResolutionCommitByTraceRef.current.delete(traceId);
+        }
         setState((previous) => ({
           ...previous,
           status: activeRef.current
@@ -13489,6 +13638,20 @@ export function useMeetingAssistant() {
       turn: TranscriptTurn;
       intentDecision: AdvisorTurnIntentDecision;
     }) => {
+      const pendingVisualRecovery = awaitingVisualEvidenceRecoveryRef.current;
+      if (
+        pendingVisualRecovery &&
+        (pendingVisualRecovery.logicalQuestionUnitId !==
+          logicalQuestionUnit.id ||
+          pendingVisualRecovery.logicalQuestionRevision !==
+            logicalQuestionUnit.revision)
+      ) {
+        settleAwaitingVisualEvidenceRecovery(
+          "cancelled",
+          "newer-substantive-logical-question",
+          traceId
+        );
+      }
       logicalQuestionUnitRef.current = logicalQuestionUnit;
       const logicalQuestionLease =
         createLogicalQuestionUnitLease(logicalQuestionUnit);
@@ -13535,7 +13698,7 @@ export function useMeetingAssistant() {
       });
       return target;
     },
-    [publishResponseRecoveryTarget]
+    [publishResponseRecoveryTarget, settleAwaitingVisualEvidenceRecovery]
   );
 
   const scheduleResponseOpportunityInference = useCallback(
@@ -21256,6 +21419,35 @@ export function useMeetingAssistant() {
               visibleAnswerAtScreenRequest.suggestion.sourceTraceId
             )
           : undefined;
+      const awaitingVisualEvidenceFact =
+        awaitingVisualEvidenceRecoveryRef.current;
+      const screenRequestParent =
+        screenRequestContextState.activeMeetingTask?.parent;
+      const screenRequestSettlement = currentQuestionSettlementRef.current;
+      const awaitingVisualEvidenceAuthorization =
+        authorizeAwaitingVisualEvidenceRecovery({
+          fact: awaitingVisualEvidenceFact,
+          sessionId: screenRequestContextState.sessionId,
+          runtimeEpoch: runtimeEpochRef.current,
+          logicalQuestionUnitId:
+            screenVoiceQuestionCandidate?.logicalQuestionUnitId,
+          logicalQuestionRevision:
+            screenVoiceQuestionCandidate?.logicalQuestionRevision,
+          visibleAnswerRevision: visibleAnswerAtScreenRequest?.revision,
+          parentTaskId: screenRequestParent?.id,
+          parentRevision: screenRequestParent?.revisions,
+          sourceHash: screenRequestSettlement?.sourceHash,
+          manualCorrectionRevision: manualCorrectionRevisionRef.current,
+        });
+      if (
+        awaitingVisualEvidenceFact &&
+        !awaitingVisualEvidenceAuthorization.authorized
+      ) {
+        settleAwaitingVisualEvidenceRecovery(
+          "cancelled",
+          awaitingVisualEvidenceAuthorization.reason
+        );
+      }
       const unresolvedManualCorrectionTarget =
         latestManualCorrectionTargetRef.current?.resolvedAt
           ? undefined
@@ -21288,6 +21480,16 @@ export function useMeetingAssistant() {
                   unresolvedManualCorrectionTarget.revision,
               }
             : undefined,
+          awaitingVisualEvidenceTarget:
+            awaitingVisualEvidenceAuthorization.authorized &&
+            awaitingVisualEvidenceFact
+              ? {
+                  logicalQuestionUnitId:
+                    awaitingVisualEvidenceFact.logicalQuestionUnitId,
+                  logicalQuestionRevision:
+                    awaitingVisualEvidenceFact.logicalQuestionRevision,
+                }
+              : undefined,
           visibleAnswer: visibleAnswerAtScreenRequest
             ? {
                 logicalQuestionUnitId:
@@ -21304,6 +21506,9 @@ export function useMeetingAssistant() {
         screenVoiceQuestionBinding.disposition === "bind-voice"
           ? screenVoiceQuestionBinding.candidate
           : undefined;
+      const screenExactVisualEvidenceRecovery =
+        screenVoiceQuestionBinding.reason ===
+        "awaiting-visual-evidence-recovery";
       const screenOperationClaim =
         screenOperationCoordinatorRef.current.claim(
           screenOperationId,
@@ -21350,6 +21555,13 @@ export function useMeetingAssistant() {
           ...formatRefreshAuthorityForTrace(screenRefreshAuthority),
           ...formatManualScreenVoiceQuestionBindingForTrace(
             screenVoiceQuestionBinding
+          ),
+          ...formatAwaitingVisualEvidenceRecoveryForTrace(
+            awaitingVisualEvidenceFact,
+            {
+              stage: "authorized",
+              reason: awaitingVisualEvidenceAuthorization.reason,
+            }
           ),
         },
         options.requestedAt
@@ -21597,6 +21809,13 @@ export function useMeetingAssistant() {
           observation,
           trace.id
         );
+        if (screenExactVisualEvidenceRecovery) {
+          settleAwaitingVisualEvidenceRecovery(
+            "consumed",
+            "manual-screen-capture-succeeded",
+            trace.id
+          );
+        }
         options.onCaptured?.();
 
         const currentActiveAdvisor = activeAdvisorJobRef.current;
@@ -22430,6 +22649,8 @@ export function useMeetingAssistant() {
           screenEvidenceText,
           screenPreflight,
           corrections: speechCorrectionsRef.current,
+          exactVisualEvidenceRecovery:
+            screenExactVisualEvidenceRecovery,
         });
         const localScreenTaskRelation =
           screenSectionHintConsumption.disposition === "applied"
@@ -25318,6 +25539,7 @@ export function useMeetingAssistant() {
       scheduleWhiteboardSyntaxRepairShadow,
       publishStableAnswerRevision,
       selectedAIProvider,
+      settleAwaitingVisualEvidenceRecovery,
       screenshotConfiguration,
       state.settings,
       state.status,
@@ -25572,6 +25794,10 @@ export function useMeetingAssistant() {
         );
       if (!operationClaim.accepted) return;
       manualCorrectionRevisionRef.current += 1;
+      settleAwaitingVisualEvidenceRecovery(
+        "cancelled",
+        "manual-question-type-correction"
+      );
       pendingInterviewSectionHintRef.current = undefined;
       pendingInterviewTaskBoundaryRef.current = undefined;
       const correctionRuntimeToken = createRuntimeCommitToken({
@@ -26544,6 +26770,7 @@ export function useMeetingAssistant() {
       recordHumanGroundTruthV2,
       resolveMeetingModelRoute,
       runAdvisor,
+      settleAwaitingVisualEvidenceRecovery,
       state.currentQuestionLineage,
       state.latestSuggestion,
       state.manualQuestionTypeCorrection,
@@ -27758,6 +27985,11 @@ export function useMeetingAssistant() {
       }
 
       manualCorrectionRevisionRef.current += 1;
+      settleAwaitingVisualEvidenceRecovery(
+        "cancelled",
+        "manual-term-correction",
+        trace.id
+      );
       const invalidatedSettlementId =
         currentQuestionSettlementRef.current?.settlementId;
       const invalidatedExecutionPlanId =
@@ -29006,6 +29238,7 @@ export function useMeetingAssistant() {
       cancelActiveAdvisorJob,
       flushPendingSentenceCompletion,
       runAdvisor,
+      settleAwaitingVisualEvidenceRecovery,
       state.latestSuggestion,
     ]
   );
@@ -31303,6 +31536,7 @@ function decideScreenTaskRelation({
   screenEvidenceText,
   screenPreflight,
   corrections,
+  exactVisualEvidenceRecovery,
 }: {
   existingTask?: ActiveInterviewParent;
   taskKind: ScreenTaskKind;
@@ -31310,6 +31544,7 @@ function decideScreenTaskRelation({
   screenEvidenceText: string;
   screenPreflight?: ScreenPreflightResult;
   corrections: SpeechCorrection[];
+  exactVisualEvidenceRecovery: boolean;
 }): {
   relation: InterviewTaskRelation;
   reason: string;
@@ -31336,6 +31571,15 @@ function decideScreenTaskRelation({
       confidence: 0.95,
       relationEvidenceAuthorized: true,
     };
+  }
+
+  const exactRecoveryContinuity = decideManualScreenContinuityEvidence({
+    exactVisualEvidenceRecovery,
+    projectAnchorMatches: false,
+    correctionTermOverlap: 0,
+  });
+  if (exactRecoveryContinuity) {
+    return exactRecoveryContinuity;
   }
 
   if (
@@ -31443,22 +31687,13 @@ function decideScreenTaskRelation({
       )
     : false;
 
-  if (projectAnchorMatches) {
-    return {
-      relation: "resume-parent",
-      reason: "screen-project-anchor-matches-parent",
-      confidence: 0.9,
-      relationEvidenceAuthorized: true,
-    };
-  }
-
-  if (correctionOverlap > 0) {
-    return {
-      relation: "resume-parent",
-      reason: "screen-contains-recent-correction-term",
-      confidence: 0.86,
-      relationEvidenceAuthorized: true,
-    };
+  const weakContinuityProposal = decideManualScreenContinuityEvidence({
+    exactVisualEvidenceRecovery: false,
+    projectAnchorMatches,
+    correctionTermOverlap: correctionOverlap,
+  });
+  if (weakContinuityProposal) {
+    return weakContinuityProposal;
   }
 
   if (semanticSimilarity >= 0.34) {

@@ -4,6 +4,7 @@ import {
   detectAnswerSufficiencyShadow,
   evaluateAnswerContextResolvabilityShadow,
   formatAnswerSufficiencyDecisionForTrace,
+  projectAnswerResolution,
 } from "../src/lib/meeting/answer-sufficiency.js";
 import type { ContextScopeResponseActionResult } from "../src/lib/meeting/context-scope-response-action.js";
 import { parseMeetingAnswer } from "../src/lib/meeting/meeting-answer.js";
@@ -52,6 +53,61 @@ test("a missing-context phrase alone cannot classify a non-substantive turn", ()
 
   assert.equal(decision.answerStatus, "unknown");
   assert.equal(decision.recommendedRepair, "none");
+});
+
+test("projects a line-visibility clarification into awaiting visual evidence", () => {
+  const parsedAnswer = parseMeetingAnswer(
+    "Answer:\nI cannot see lines 46 through 49. Please share the relevant code."
+  );
+  const decision = detectAnswerSufficiencyShadow({
+    operationId: "operation-lines",
+    traceId: "trace-lines",
+    questionId: "question-lines",
+    logicalQuestionUnitId: "lqu-lines",
+    logicalQuestionUnitRevision: 2,
+    answerRevision: 1,
+    questionText: "Can you explain lines 46 through 49?",
+    questionType: "coding",
+    parsedAnswer,
+  });
+  const resolution = projectAnswerResolution({
+    decision,
+    questionText: "Can you explain lines 46 through 49?",
+    parsedAnswer,
+  });
+
+  assert.equal(decision.answerStatus, "context-insufficient");
+  assert.equal(resolution.state, "awaiting-evidence");
+  assert.equal(resolution.awaitingVisualEvidence, true);
+  assert.ok(resolution.evidence.includes("question-references-code-lines"));
+  assert.ok(
+    resolution.evidence.includes("answer-cannot-inspect-visual-evidence")
+  );
+});
+
+test("does not create visual recovery from a generic request for more context", () => {
+  const parsedAnswer = parseMeetingAnswer(
+    "Answer:\nI need the original problem before comparing the algorithms."
+  );
+  const decision = detectAnswerSufficiencyShadow({
+    operationId: "operation-generic",
+    traceId: "trace-generic",
+    questionId: "question-generic",
+    logicalQuestionUnitId: "lqu-generic",
+    logicalQuestionUnitRevision: 1,
+    answerRevision: 1,
+    questionText: "Can you compare the alternatives?",
+    questionType: "coding",
+    parsedAnswer,
+  });
+  const resolution = projectAnswerResolution({
+    decision,
+    questionText: "Can you compare the alternatives?",
+    parsedAnswer,
+  });
+
+  assert.equal(resolution.state, "awaiting-evidence");
+  assert.equal(resolution.awaitingVisualEvidence, false);
 });
 
 test("trace projection carries identities and evidence without answer text", () => {

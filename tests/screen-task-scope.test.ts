@@ -9,6 +9,7 @@ import {
   resolveAdvisorRequestModeForScreenScope,
   resolveAdvisorTaskEvidenceSource,
   decideManualScreenVoiceQuestionBinding,
+  decideManualScreenContinuityEvidence,
   commitManualScreenQuestionPacket,
   resolveManualScreenSourcePacket,
   resolveManualScreenTranscriptContext,
@@ -492,6 +493,56 @@ test("keeps a context-insufficient visible Voice answer as a Screen recovery tar
 
   assert.equal(decision.disposition, "bind-voice");
   assert.equal(decision.reason, "context-insufficient-visible-answer");
+});
+
+test("gives exact visual recovery continuity authority", () => {
+  const candidate = {
+    logicalQuestionUnitId: "question-current",
+    logicalQuestionRevision: 2,
+    text: "Explain lines 35 through 38.",
+    sourceTurnIds: ["turn-35"],
+  };
+  const binding = decideManualScreenVoiceQuestionBinding({
+    candidate,
+    awaitingVisualEvidenceTarget: {
+      logicalQuestionUnitId: "question-current",
+      logicalQuestionRevision: 2,
+    },
+  });
+  const continuity = decideManualScreenContinuityEvidence({
+    exactVisualEvidenceRecovery: true,
+    projectAnchorMatches: false,
+    correctionTermOverlap: 0,
+  });
+
+  assert.equal(binding.disposition, "bind-voice");
+  assert.equal(binding.reason, "awaiting-visual-evidence-recovery");
+  assert.deepEqual(continuity, {
+    relation: "followup-parent",
+    reason: "screen-exact-visual-evidence-recovery",
+    confidence: 1,
+    relationEvidenceAuthorized: true,
+  });
+});
+
+test("keeps project and correction continuity matches non-authoritative", () => {
+  const project = decideManualScreenContinuityEvidence({
+    exactVisualEvidenceRecovery: false,
+    projectAnchorMatches: true,
+    correctionTermOverlap: 0,
+  });
+  const correction = decideManualScreenContinuityEvidence({
+    exactVisualEvidenceRecovery: false,
+    projectAnchorMatches: false,
+    correctionTermOverlap: 1,
+  });
+
+  assert.equal(project?.relation, "unknown");
+  assert.equal(project?.proposedRelation, "resume-parent");
+  assert.equal(project?.relationEvidenceAuthorized, false);
+  assert.equal(correction?.relation, "unknown");
+  assert.equal(correction?.proposedRelation, "resume-parent");
+  assert.equal(correction?.relationEvidenceAuthorized, false);
 });
 
 test("releases an answered Voice LQU before an unrelated Screen question", () => {
