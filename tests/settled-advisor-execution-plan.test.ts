@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 import type { ActiveMeetingTask } from "../src/lib/meeting/active-meeting-task.js";
 import type { CurrentQuestionSettlementDecision } from "../src/lib/meeting/current-question-settlement.js";
@@ -6,7 +7,9 @@ import type { MeetingModelProviderSnapshot } from "../src/lib/meeting/meeting-mo
 import { adaptQuestionTypePrior } from "../src/lib/meeting/question-type-consumer-observation.js";
 import {
   authorizeSettledAdvisorExecutionPlan,
+  buildEffectiveAdvisorSettlementView,
   buildSettledAdvisorExecutionPlan,
+  formatEffectiveAdvisorSettlementViewForTrace,
   formatSettledAdvisorExecutionPlanForTrace,
   rebaseSettledAdvisorExecutionPlanAfterOwnedParentMutation,
 } from "../src/lib/meeting/settled-advisor-execution-plan.js";
@@ -117,6 +120,118 @@ function playbook(
     followUpPolicy: "continue",
   };
 }
+
+test("hides an old project parent behind a committed new-parent settlement", () => {
+  const oldProject = activeTask("project-deep-dive", {
+    id: "parent-oasis",
+    sourceQuestionUnitId: "question-oasis",
+    sourceQuestionRevision: 1,
+    settlementId: "settlement-oasis",
+    projectBinding: {
+      projectId: "oasis",
+      projectName: "Oasis",
+      primaryEntryId: "mem_oasis_ndjson",
+      evidenceEntryIds: ["mem_oasis_ndjson"],
+      source: "memory",
+      confidence: 0.95,
+      lockedAt: 10,
+      revision: 1,
+      reason: "memory candidate",
+      sourceTurnIds: ["turn-oasis"],
+    },
+    playbookPhase: "project_narrative",
+    supportedFactAnchors: ["mem_oasis_ndjson"],
+  });
+  const codingSettlement = settlement({
+    settlementId: "settlement-lru",
+    logicalQuestionUnitId: "question-lru",
+    revision: 1,
+    questionType: "coding",
+    relation: "new-parent",
+    activeParentId: "parent-oasis",
+    activeParentRevision: 3,
+  });
+
+  const view = buildEffectiveAdvisorSettlementView({
+    settlement: codingSettlement,
+    activeMeetingTask: oldProject,
+    taskRuntimeRevision: 8,
+    fallback: {
+      questionType: "project-deep-dive",
+      relation: "unknown",
+      projectAnchor: "Oasis",
+      playbookPhase: "project_narrative",
+    },
+  });
+
+  assert.equal(view.questionType, "coding");
+  assert.equal(view.relation, "new-parent");
+  assert.equal(view.startsNewParent, true);
+  assert.equal(view.parent, undefined);
+  assert.equal(view.projectAnchor, undefined);
+  assert.equal(view.playbookPhase, undefined);
+  assert.deepEqual(view.supportedFactAnchors, []);
+  assert.equal(
+    formatEffectiveAdvisorSettlementViewForTrace(view, {
+      proposedRelation: "unknown",
+      proposedProjectAnchor: "Oasis",
+    }).effectiveAdvisorProjectAnchorConflict,
+    true
+  );
+});
+
+test("keeps the committed project parent visible for a project follow-up", () => {
+  const project = activeTask("project-deep-dive", {
+    id: "parent-oasis",
+    projectBinding: {
+      projectId: "oasis",
+      projectName: "Oasis",
+      primaryEntryId: "mem_oasis_ndjson",
+      evidenceEntryIds: ["mem_oasis_ndjson"],
+      source: "memory",
+      confidence: 0.95,
+      lockedAt: 10,
+      revision: 1,
+      reason: "memory candidate",
+      sourceTurnIds: ["turn-oasis"],
+    },
+    playbookPhase: "architecture_decision",
+    supportedFactAnchors: ["mem_oasis_ndjson"],
+  });
+  const view = buildEffectiveAdvisorSettlementView({
+    settlement: settlement({
+      questionType: "project-deep-dive",
+      relation: "followup-parent",
+      activeParentId: "parent-oasis",
+      activeParentRevision: 3,
+    }),
+    activeMeetingTask: project,
+    taskRuntimeRevision: 9,
+    fallback: {
+      questionType: "unknown",
+      relation: "unknown",
+    },
+  });
+
+  assert.equal(view.parentId, "parent-oasis");
+  assert.equal(view.projectAnchor, "Oasis");
+  assert.equal(view.playbookPhase, "architecture_decision");
+  assert.deepEqual(view.supportedFactAnchors, ["mem_oasis_ndjson"]);
+});
+
+test("keeps raw task relation and project anchor behind the consumer barrier", () => {
+  const hookSource = readFileSync(
+    `${process.cwd()}/src/hooks/useMeetingAssistant.ts`,
+    "utf8"
+  );
+  const marker = "// COMMITTED_SETTLEMENT_CONSUMER_BARRIER";
+  const barrierIndex = hookSource.indexOf(marker);
+  assert.ok(barrierIndex >= 0);
+  const downstream = hookSource.slice(barrierIndex + marker.length);
+
+  assert.equal(downstream.includes("advisorTaskSignals.taskRelation"), false);
+  assert.equal(downstream.includes("advisorTaskSignals.projectAnchor"), false);
+});
 
 test("builds one immutable coding plan for route, prompt, memory, and artifacts", () => {
   const task = activeTask();

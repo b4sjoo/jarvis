@@ -431,6 +431,7 @@ import {
   buildBoundedParentContextHandoff,
   buildCommittedTaskBoundaryParent,
   buildQuestionTypeConsumerObservation,
+  buildEffectiveAdvisorSettlementView,
   buildSettledAdvisorExecutionPlan,
   commitTaskBoundaryCandidate,
   commitSourceOwnedTransition,
@@ -458,6 +459,7 @@ import {
   settlementAuthorizesFollowupParentScope,
   formatCurrentQuestionTerminalNoAnswerForTrace,
   formatQuestionTypeConsumerObservationForTrace,
+  formatEffectiveAdvisorSettlementViewForTrace,
   formatSettledAdvisorExecutionPlanForTrace,
   formatSourceOwnedTransitionForTrace,
   formatTaskBoundaryCandidateForTrace,
@@ -10083,42 +10085,43 @@ export function useMeetingAssistant() {
       error: null,
     }));
 
+    const preSettlementAdvisorFallback = {
+      questionType: advisorTaskSignals.questionType,
+      relation: advisorTaskSignals.taskRelation,
+      projectAnchor: advisorTaskSignals.projectAnchor,
+      playbook: getAdvisorActivePlaybook(promptContext),
+      playbookPhase:
+        promptContext.activeMeetingTask?.parent.playbookPhase ??
+        promptContext.taskRuntime.parent?.playbookPhase,
+    };
     let advisorQuestionType =
       currentQuestionSettlement?.questionType ??
       advisorTaskSignals.questionType;
+    // COMMITTED_SETTLEMENT_CONSUMER_BARRIER
+    let effectiveAdvisorSettlementView =
+      buildEffectiveAdvisorSettlementView({
+        settlement: currentQuestionSettlement,
+        activeMeetingTask: promptContext.activeMeetingTask,
+        taskRuntimeRevision: promptContext.taskRuntime.revision,
+        fallback: preSettlementAdvisorFallback,
+      });
     let advisorAnswerProfile = resolveMeetingAnswerProfile(
       advisorQuestionType
     );
     const advisorAskFrame = advisorTaskSignals.askFrame;
     const advisorTopicDomain = advisorTaskSignals.topicDomain;
-    const advisorProjectAnchor =
+    let advisorProjectAnchor =
       transientPersonalStatusDecision
         ? undefined
-        : advisorTaskSignals.projectAnchor ??
-          (advisorTaskSignals.taskRelation === "new-parent"
-            ? undefined
-            : getAdvisorActiveProjectAnchor(promptContext));
+        : effectiveAdvisorSettlementView.projectAnchor;
     const advisorPlaybook =
       transientPersonalStatusDecision ||
       advisorTaskSignals.openingRoute?.commitParent === false
         ? undefined
-        : advisorTaskSignals.reuseActivePlaybook
-        ? getAdvisorActivePlaybook(promptContext) ??
+        : effectiveAdvisorSettlementView.playbook ??
           selectInterviewPlaybook({
             query: advisorTaskSignals.query,
-            questionType:
-              getAdvisorActiveQuestionType(promptContext) ??
-              advisorQuestionType,
-            askFrame: advisorAskFrame,
-            topicDomain: advisorTopicDomain,
-            projectAnchor: advisorProjectAnchor,
-            classifierConfidence: getAdvisorActiveClassifierConfidence(promptContext),
-            interviewSessionBrief: promptContext.interviewSessionBrief,
-            interviewSessionContext: promptContext.interviewSessionContext,
-          })
-        : selectInterviewPlaybook({
-            query: advisorTaskSignals.query,
-            questionType: advisorQuestionType,
+            questionType: effectiveAdvisorSettlementView.questionType,
             askFrame: advisorAskFrame,
             topicDomain: advisorTopicDomain,
             projectAnchor: advisorProjectAnchor,
@@ -10127,15 +10130,11 @@ export function useMeetingAssistant() {
             interviewSessionContext: promptContext.interviewSessionContext,
           });
     const advisorPhaseQuestionType = normalizeQuestionTypeAlias(
-      (advisorTaskSignals.taskRelation === "followup-parent" ||
-        advisorTaskSignals.taskRelation === "resume-parent" ||
-        advisorTaskSignals.taskRelation === "child-probe") &&
-        getAdvisorActiveQuestionType(promptContext)
-        ? getAdvisorActiveQuestionType(promptContext)
-        : advisorQuestionType
+      effectiveAdvisorSettlementView.parent?.questionType ??
+        effectiveAdvisorSettlementView.questionType
     );
     const startsNewParentForPhase =
-      advisorTaskSignals.taskRelation === "new-parent" &&
+      effectiveAdvisorSettlementView.startsNewParent &&
       advisorTaskMutationDecision.commitParent &&
       taskMutationAuthorization.authorized;
     const preservedPlaybookPhase = startsNewParentForPhase
@@ -10143,8 +10142,7 @@ export function useMeetingAssistant() {
       : responseOnlyTaskScope?.readOnlyParentContinuity
             ?.compatibleWithInferredType
         ? responseOnlyTaskScope.readOnlyParentContinuity.playbookPhase
-        : promptContext.activeMeetingTask?.parent.playbookPhase ??
-        promptContext.taskRuntime.parent?.playbookPhase ??
+        : effectiveAdvisorSettlementView.playbookPhase ??
         advisorPlaybook?.phase ??
         "follow_up";
     const automaticPlaybookPhaseDecision = decidePlaybookPhaseProgression({
@@ -10152,17 +10150,15 @@ export function useMeetingAssistant() {
       playbookId: advisorPlaybook?.id,
       currentPhase: startsNewParentForPhase
         ? advisorPlaybook?.phase
-        : promptContext.activeMeetingTask?.parent.playbookPhase ??
-          promptContext.taskRuntime.parent?.playbookPhase ??
+        : effectiveAdvisorSettlementView.playbookPhase ??
           advisorPlaybook?.phase,
       phaseProgress: startsNewParentForPhase
         ? undefined
-        : promptContext.activeMeetingTask?.parent.phaseProgress ??
-          promptContext.taskRuntime.parent?.phaseProgress,
+        : effectiveAdvisorSettlementView.parent?.phaseProgress,
       latestTurnText: latestTurn?.text,
       currentQuestion:
         advisorEvidencePacket.currentQuestion?.text ?? "",
-      relation: advisorTaskSignals.taskRelation,
+      relation: effectiveAdvisorSettlementView.relation,
       subtaskIntent: advisorTaskSignals.subtaskIntent,
       askFrame: advisorAskFrame ?? getAdvisorActiveAskFrame(promptContext),
       phaseControl: sourceOwnedPhaseControl,
@@ -10286,7 +10282,7 @@ export function useMeetingAssistant() {
       ? undefined
       : withInterviewPlaybookPhase(
           advisorPlaybook ??
-            promptContext.activeMeetingTask?.parent.playbook,
+            effectiveAdvisorSettlementView.playbook,
           playbookPhaseDecision.phase
         );
     let taskBoundaryCommittedBeforeAdvisor = false;
@@ -10411,7 +10407,7 @@ export function useMeetingAssistant() {
       !manualPhaseAdvance &&
       !transientPersonalStatusDecision &&
       !responseMutationSuppressed &&
-      advisorTaskSignals.taskRelation !== "new-parent" &&
+      effectiveAdvisorSettlementView.relation !== "new-parent" &&
       advisorJob.logicalQuestionUnit
     ) {
       const transitionContextBefore =
@@ -10440,7 +10436,7 @@ export function useMeetingAssistant() {
           logicalQuestionRevision:
             advisorJob.logicalQuestionUnit.revision,
           existingTask: transitionParentBefore,
-          relation: advisorTaskSignals.taskRelation,
+          relation: effectiveAdvisorSettlementView.relation,
           authoritySource: taskBoundaryAuthoritySource,
           mutationAuthorized:
             taskMutationAuthorization.authorized,
@@ -10575,6 +10571,37 @@ export function useMeetingAssistant() {
     const sourceOwnedTransitionCommittedBeforeAdvisor =
       sourceOwnedTransitionResult?.candidate.state ===
       "committed";
+    effectiveAdvisorSettlementView =
+      buildEffectiveAdvisorSettlementView({
+        settlement: currentQuestionSettlement,
+        activeMeetingTask: promptContext.activeMeetingTask,
+        taskRuntimeRevision: promptContext.taskRuntime.revision,
+        fallback: preSettlementAdvisorFallback,
+      });
+    advisorProjectAnchor = transientPersonalStatusDecision
+      ? undefined
+      : effectiveAdvisorSettlementView.projectAnchor;
+    let effectiveAdvisorActiveMeetingTask =
+      effectiveAdvisorSettlementView.parentId &&
+      promptContext.activeMeetingTask?.parent.id ===
+        effectiveAdvisorSettlementView.parentId &&
+      promptContext.activeMeetingTask.parent.revisions ===
+        effectiveAdvisorSettlementView.parentRevision
+        ? promptContext.activeMeetingTask
+        : undefined;
+    if (traceId) {
+      traceStoreRef.current.updateMetadata(
+        traceId,
+        formatEffectiveAdvisorSettlementViewForTrace(
+          effectiveAdvisorSettlementView,
+          {
+            proposedRelation: preSettlementAdvisorFallback.relation,
+            proposedProjectAnchor:
+              preSettlementAdvisorFallback.projectAnchor,
+          }
+        )
+      );
+    }
     recordCurrentQuestionSettlement(
       taskBoundaryCommittedBeforeAdvisor ||
         Boolean(options.settledExecutionPlanOverride)
@@ -10587,12 +10614,12 @@ export function useMeetingAssistant() {
           settlement: currentQuestionSettlement,
           activeMeetingTask:
             responseOnlyPreservedTask ??
-            promptContext.activeMeetingTask,
+            effectiveAdvisorActiveMeetingTask,
           preBoundaryQuestionType: preBoundaryResponseOwnerType,
           taskBoundaryCommitted:
             taskBoundaryCommittedBeforeAdvisor,
           childOwnsResponse:
-            advisorTaskSignals.taskRelation === "child-probe" &&
+            effectiveAdvisorSettlementView.relation === "child-probe" &&
             taskMutationAuthorization.authorized &&
             sourceOwnedTransitionCommittedBeforeAdvisor,
           providerSnapshot: meetingModelProviderSnapshotRef.current,
@@ -10706,13 +10733,13 @@ export function useMeetingAssistant() {
       resolveMeetingResponseOwner({
         preBoundaryType: preBoundaryResponseOwnerType,
         postBoundaryParentType:
-          getAdvisorActiveQuestionType(promptContext),
+          effectiveAdvisorSettlementView.parent?.questionType,
         proposedQuestionType: advisorQuestionType,
-        relation: advisorTaskSignals.taskRelation,
+        relation: effectiveAdvisorSettlementView.relation,
         taskBoundaryCommitted:
           taskBoundaryCommittedBeforeAdvisor,
         childOwnsResponse:
-          advisorTaskSignals.taskRelation === "child-probe" &&
+          effectiveAdvisorSettlementView.relation === "child-probe" &&
           taskMutationAuthorization.authorized &&
           sourceOwnedTransitionCommittedBeforeAdvisor,
       });
@@ -10741,7 +10768,7 @@ export function useMeetingAssistant() {
               questionType: responseOwner.questionType,
               taskRelation:
                 settledExecutionPlan?.taskRelation ??
-                advisorTaskSignals.taskRelation,
+                effectiveAdvisorSettlementView.relation,
               playbookId:
                 settledExecutionPlan?.playbookId ??
                 advisorRuntimePlaybook?.id,
@@ -10865,12 +10892,12 @@ export function useMeetingAssistant() {
       logicalQuestionUnitId:
         settledExecutionPlan?.logicalQuestionUnitId ??
         advisorJob.logicalQuestionUnit?.id ??
-        promptContext.activeMeetingTask?.parent.sourceQuestionUnitId ??
+        effectiveAdvisorSettlementView.parent?.sourceQuestionUnitId ??
         "unscoped",
       logicalQuestionRevision:
         settledExecutionPlan?.logicalQuestionRevision ??
         advisorJob.logicalQuestionUnit?.revision ??
-        promptContext.activeMeetingTask?.parent.sourceQuestionRevision ??
+        effectiveAdvisorSettlementView.parent?.sourceQuestionRevision ??
         0,
     };
     generationAuthorizedArtifacts =
@@ -11113,7 +11140,7 @@ export function useMeetingAssistant() {
         askFrame: advisorAskFrame,
         topicDomain: advisorTopicDomain,
         projectAnchor: advisorProjectAnchor,
-        taskRelation: advisorTaskSignals.taskRelation,
+        taskRelation: effectiveAdvisorSettlementView.relation,
         subtaskIntent: advisorTaskSignals.subtaskIntent,
         taskSignalSource: advisorTaskSignals.source,
         ...questionTypeTraceMetadata,
@@ -11128,8 +11155,8 @@ export function useMeetingAssistant() {
         manualPhaseAdvanceCommitted,
         parentTaskId: activeMeetingTaskId,
         parentTaskKind:
-          promptContext.activeMeetingTask?.parent.questionType ??
-          getAdvisorActiveQuestionType(promptContext),
+          effectiveAdvisorSettlementView.parent?.questionType ??
+          effectiveAdvisorSettlementView.questionType,
         ...getActiveMeetingTaskTraceMetadata(promptContext.activeMeetingTask),
       });
       if (settledExecutionPlan?.responsePlaybook ?? advisorRuntimePlaybook) {
@@ -11143,7 +11170,7 @@ export function useMeetingAssistant() {
             askFrame: advisorAskFrame,
             topicDomain: advisorTopicDomain,
             projectAnchor: advisorProjectAnchor,
-            taskRelation: advisorTaskSignals.taskRelation,
+            taskRelation: effectiveAdvisorSettlementView.relation,
             subtaskIntent: advisorTaskSignals.subtaskIntent,
             taskSignalSource: advisorTaskSignals.source,
             ...questionTypeTraceMetadata,
@@ -11175,11 +11202,10 @@ export function useMeetingAssistant() {
       parentTopic:
         transientPersonalStatusDecision
           ? undefined
-          : promptContext.activeMeetingTask?.parent.topic ??
-            promptContext.taskRuntime.parent?.topic,
+          : effectiveAdvisorSettlementView.parent?.topic,
       relation:
         settledExecutionPlan?.taskRelation ??
-        advisorTaskSignals.taskRelation,
+        effectiveAdvisorSettlementView.relation,
     });
     const advisorRequiresProjectBinding =
       advisorTaskSignals.openingRoute?.commitParent !== false &&
@@ -11233,14 +11259,13 @@ export function useMeetingAssistant() {
       personalEvidenceDecision: advisorPersonalEvidenceDecision,
       forceStrictProjectAnchor: Boolean(
         !transientPersonalStatusDecision &&
-        (promptContext.activeMeetingTask?.parent.projectBinding ??
-          promptContext.taskRuntime.parent?.projectBinding) &&
+        effectiveAdvisorSettlementView.parent?.projectBinding &&
           (settledExecutionPlan?.questionType ??
             advisorQuestionType) !== "project-deep-dive" &&
           (settledExecutionPlan?.taskRelation ??
-            advisorTaskSignals.taskRelation) !== "new-parent" &&
+            effectiveAdvisorSettlementView.relation) !== "new-parent" &&
           (settledExecutionPlan?.taskRelation ??
-            advisorTaskSignals.taskRelation) !== "unknown"
+            effectiveAdvisorSettlementView.relation) !== "unknown"
       ),
       runtimeToken: effectiveRuntimeCommitToken,
       currentOperationId: () => activeAdvisorJobRef.current?.id,
@@ -11253,14 +11278,13 @@ export function useMeetingAssistant() {
       existingBinding:
         transientPersonalStatusDecision
           ? undefined
-          : promptContext.activeMeetingTask?.parent.projectBinding ??
-            promptContext.taskRuntime.parent?.projectBinding,
+          : effectiveAdvisorSettlementView.parent?.projectBinding,
       questionType:
         settledExecutionPlan?.questionType ??
         advisorQuestionType,
       relation:
         settledExecutionPlan?.taskRelation ??
-        advisorTaskSignals.taskRelation,
+        effectiveAdvisorSettlementView.relation,
       requiresProjectBinding: advisorRequiresProjectBinding,
       projectAnchor:
         settledExecutionPlan?.memoryPolicy.projectAnchor ??
@@ -11312,6 +11336,24 @@ export function useMeetingAssistant() {
         activeMeetingTask:
           projectBindingContextAfter.activeMeetingTask,
       };
+      effectiveAdvisorSettlementView =
+        buildEffectiveAdvisorSettlementView({
+          settlement: currentQuestionSettlement,
+          activeMeetingTask: promptContext.activeMeetingTask,
+          taskRuntimeRevision: promptContext.taskRuntime.revision,
+          fallback: preSettlementAdvisorFallback,
+        });
+      effectiveAdvisorActiveMeetingTask =
+        effectiveAdvisorSettlementView.parentId &&
+        promptContext.activeMeetingTask?.parent.id ===
+          effectiveAdvisorSettlementView.parentId &&
+        promptContext.activeMeetingTask.parent.revisions ===
+          effectiveAdvisorSettlementView.parentRevision
+          ? promptContext.activeMeetingTask
+          : undefined;
+      advisorProjectAnchor = transientPersonalStatusDecision
+        ? undefined
+        : effectiveAdvisorSettlementView.projectAnchor;
       activeMeetingTaskId = getAdvisorActiveTaskId(promptContext);
       effectiveRuntimeCommitToken = rebaseRuntimeCommitToken({
         token: effectiveRuntimeCommitToken,
@@ -11355,6 +11397,14 @@ export function useMeetingAssistant() {
       }));
       if (traceId) {
         traceStoreRef.current.updateMetadata(traceId, {
+          ...formatEffectiveAdvisorSettlementViewForTrace(
+            effectiveAdvisorSettlementView,
+            {
+              proposedRelation: preSettlementAdvisorFallback.relation,
+              proposedProjectAnchor:
+                preSettlementAdvisorFallback.projectAnchor,
+            }
+          ),
           projectBindingExecutionPlanRebased: Boolean(
             rebasedSettledExecutionPlan
           ),
@@ -11447,8 +11497,7 @@ export function useMeetingAssistant() {
       memoryContext,
       confirmedMeFacts: promptContext.confirmedMeFacts,
       activeFactAnchors:
-        promptContext.activeMeetingTask?.parent.supportedFactAnchors ??
-        promptContext.taskRuntime.parent?.supportedFactAnchors,
+        effectiveAdvisorSettlementView.supportedFactAnchors,
       projectAnchor:
         settledExecutionPlan?.memoryPolicy.projectAnchor ??
         advisorProjectAnchor,
@@ -11512,7 +11561,7 @@ export function useMeetingAssistant() {
     promptContext = {
       ...promptContext,
       activeMeetingTask:
-        promptContext.activeMeetingTask ??
+        effectiveAdvisorActiveMeetingTask ??
         settledExecutionPlan?.taskSnapshot,
       memoryContext: memoryContext?.contextText,
       interviewPlaybook:
@@ -12196,7 +12245,9 @@ export function useMeetingAssistant() {
             currentTurnAction: mapAdvisorTurnActionToSufficiencyAction(
               inferredTurnIntentDecision?.action
             ),
-            relation: advisorTaskSignals.taskRelation,
+            relation:
+              settledExecutionPlan?.taskRelation ??
+              effectiveAdvisorSettlementView.relation,
             meetingContext: sufficiencyMeetingContext,
             basePromptContext: promptContext,
             originalModelPromptText: advisorModelPromptText,
@@ -12277,7 +12328,7 @@ export function useMeetingAssistant() {
           formatWhiteboardRenderValidationForTrace({
             decision: whiteboardRenderValidation,
             before:
-              promptContext.activeMeetingTask?.parent.whiteboardArtifact,
+              effectiveAdvisorSettlementView.parent?.whiteboardArtifact,
           });
         if (traceId) {
           traceStoreRef.current.updateMetadata(
@@ -12318,7 +12369,7 @@ export function useMeetingAssistant() {
           !settledExecutionPlan) &&
         advisorTaskMutationDecision.commitParent &&
         advisorTaskSignals.openingRoute?.commitParent !== false &&
-        (advisorTaskSignals.taskRelation !== "new-parent" ||
+        (effectiveAdvisorSettlementView.relation !== "new-parent" ||
           taskBoundaryCommittedBeforeAdvisor ||
           Boolean(
             responseOpportunityGenerationGateOperationId &&
@@ -12329,7 +12380,7 @@ export function useMeetingAssistant() {
       const continuityRelation: InterviewTaskRelation =
         taskBoundaryCommittedBeforeAdvisor
           ? "followup-parent"
-          : advisorTaskSignals.taskRelation;
+          : effectiveAdvisorSettlementView.relation;
       const outputPhaseDecision =
         taskBoundaryCommittedBeforeAdvisor ||
         sourceOwnedTransitionCommittedBeforeAdvisor ||

@@ -187,6 +187,128 @@ export interface SettledAdvisorExecutionPlanAuthorization {
   rejectionReasons: SettledAdvisorExecutionPlanRejectionReason[];
 }
 
+export interface EffectiveAdvisorSettlementView {
+  source: "committed-settlement" | "pre-settlement-fallback";
+  settlementId?: string;
+  taskRuntimeRevision: number;
+  questionType: CanonicalQuestionType;
+  relation: InterviewTaskRelation;
+  startsNewParent: boolean;
+  parent?: Readonly<ActiveMeetingTask["parent"]>;
+  parentId?: string;
+  parentRevision?: number;
+  projectAnchor?: string;
+  playbook?: SelectedInterviewPlaybook;
+  playbookPhase?: InterviewPlaybookPhase;
+  supportedFactAnchors: string[];
+}
+
+export function buildEffectiveAdvisorSettlementView(input: {
+  settlement?: CurrentQuestionSettlementDecision;
+  activeMeetingTask?: ActiveMeetingTask;
+  taskRuntimeRevision: number;
+  fallback: {
+    questionType: unknown;
+    relation: InterviewTaskRelation;
+    projectAnchor?: string;
+    playbook?: SelectedInterviewPlaybook;
+    playbookPhase?: InterviewPlaybookPhase;
+  };
+}): EffectiveAdvisorSettlementView {
+  const settlement = input.settlement;
+  const questionType = settlement
+    ? settlement.questionType
+    : normalizeCanonicalQuestionType(input.fallback.questionType) ?? "unknown";
+  const relation = settlement
+    ? toInterviewTaskRelation(settlement.relation)
+    : input.fallback.relation;
+  const startsNewParent = Boolean(
+    settlement
+      ? relation === "new-parent" && settlement.parentMutationAuthorized
+      : relation === "new-parent"
+  );
+  const activeParent = input.activeMeetingTask?.parent;
+  const committedNewParentMatches = Boolean(
+    settlement &&
+      startsNewParent &&
+      activeParent?.settlementId === settlement.settlementId &&
+      activeParent.sourceQuestionUnitId === settlement.logicalQuestionUnitId &&
+      activeParent.sourceQuestionRevision === settlement.revision
+  );
+  const parent = settlement
+    ? startsNewParent
+      ? committedNewParentMatches
+        ? activeParent
+        : undefined
+      : settlement.activeParentId &&
+          activeParent?.id !== settlement.activeParentId
+        ? undefined
+        : activeParent
+    : activeParent;
+  const projectAnchor = settlement
+    ? parent?.projectBinding?.projectName ?? parent?.projectBinding?.projectId
+    : input.fallback.projectAnchor ??
+      parent?.projectBinding?.projectName ??
+      parent?.projectBinding?.projectId;
+  const playbook = parent?.playbook ??
+    (settlement ? undefined : input.fallback.playbook);
+  const playbookPhase = parent?.playbookPhase ??
+    (settlement ? undefined : input.fallback.playbookPhase);
+
+  return Object.freeze({
+    source: settlement
+      ? "committed-settlement"
+      : "pre-settlement-fallback",
+    settlementId: settlement?.settlementId,
+    taskRuntimeRevision: input.taskRuntimeRevision,
+    questionType,
+    relation,
+    startsNewParent,
+    parent,
+    parentId: parent?.id,
+    parentRevision: parent?.revisions,
+    projectAnchor,
+    playbook,
+    playbookPhase,
+    supportedFactAnchors: [...(parent?.supportedFactAnchors ?? [])],
+  });
+}
+
+export function formatEffectiveAdvisorSettlementViewForTrace(
+  view: EffectiveAdvisorSettlementView,
+  diagnostics?: {
+    proposedRelation?: InterviewTaskRelation;
+    proposedProjectAnchor?: string;
+  }
+): Record<string, unknown> {
+  return {
+    effectiveAdvisorSettlementViewSource: view.source,
+    effectiveAdvisorSettlementId: view.settlementId,
+    effectiveAdvisorTaskRuntimeRevision: view.taskRuntimeRevision,
+    effectiveAdvisorQuestionType: view.questionType,
+    effectiveAdvisorRelation: view.relation,
+    effectiveAdvisorStartsNewParent: view.startsNewParent,
+    effectiveAdvisorParentId: view.parentId,
+    effectiveAdvisorParentRevision: view.parentRevision,
+    effectiveAdvisorProjectAnchor: view.projectAnchor,
+    effectiveAdvisorPlaybookId: view.playbook?.id,
+    effectiveAdvisorPlaybookPhase: view.playbookPhase,
+    effectiveAdvisorSupportedFactAnchorCount:
+      view.supportedFactAnchors.length,
+    preSettlementProposedRelation: diagnostics?.proposedRelation,
+    preSettlementProposedProjectAnchor:
+      diagnostics?.proposedProjectAnchor,
+    effectiveAdvisorRelationConflict: Boolean(
+      diagnostics?.proposedRelation &&
+        diagnostics.proposedRelation !== view.relation
+    ),
+    effectiveAdvisorProjectAnchorConflict: Boolean(
+      diagnostics?.proposedProjectAnchor &&
+        diagnostics.proposedProjectAnchor !== view.projectAnchor
+    ),
+  };
+}
+
 export function buildSettledAdvisorExecutionPlan(input: {
   settlement: CurrentQuestionSettlementDecision;
   activeMeetingTask?: ActiveMeetingTask;
