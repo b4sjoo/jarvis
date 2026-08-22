@@ -397,7 +397,6 @@ export interface ManualCorrectionParentTransition {
 
 export function decideManualCorrectionScope({
   task,
-  decision,
   lineage,
   latestQuestionText,
   parentQuestionText,
@@ -447,15 +446,18 @@ export function decideManualCorrectionScope({
     currentQuestionIsChild,
   };
 
-  if (decision.target === "resume-parent") {
+  if (currentQuestionRelation === "resume-parent") {
     return {
       ...base,
       scope: "resume-parent",
-      reason: "manual-correction-resumes-parent-from-current-child",
+      reason: "committed-relation-resumes-parent-from-current-child",
     };
   }
 
-  if (decision.target === "child" || currentQuestionIsChild) {
+  if (
+    currentQuestionRelation === "child-probe" ||
+    currentQuestionIsChild
+  ) {
     return {
       ...base,
       scope: "child-retype",
@@ -463,7 +465,7 @@ export function decideManualCorrectionScope({
     };
   }
 
-  if (!task || decision.target === "provisional-question") {
+  if (!task) {
     return {
       ...base,
       scope: "independent-new-parent",
@@ -485,42 +487,21 @@ export function decideManualCorrectionScope({
     };
   }
 
-  if (
-    currentQuestionRelation === "unknown" &&
-    !currentQuestionIsParentOrigin
-  ) {
-    return {
-      ...base,
-      scope: "current-only",
-      reason: `${currentQuestionSource ?? "unknown"}-question-relation-unsettled`,
-    };
-  }
-
-  if (currentQuestionIsParentOrigin || standalone.score < 3) {
+  if (currentQuestionIsParentOrigin) {
     return {
       ...base,
       scope: "same-question-retype",
-      reason: currentQuestionIsParentOrigin
-        ? "current-question-is-active-parent-origin"
-        : "current-question-is-not-standalone-parent-eligible",
-    };
-  }
-
-  if (continuity.score <= 0) {
-    return {
-      ...base,
-      scope: "independent-new-parent",
-      reason: "standalone-question-has-no-parent-domain-continuity",
+      reason: "current-question-is-active-parent-origin",
     };
   }
 
   return {
     ...base,
-    scope: "linked-parent-extension",
+    scope: "current-only",
     reason:
-      continuity.score >= 4
-        ? "standalone-question-explicitly-extends-parent-domain"
-        : "standalone-question-keeps-minimal-conservative-parent-link",
+      currentQuestionRelation === "unknown"
+        ? `${currentQuestionSource ?? "unknown"}-question-relation-unsettled`
+        : "type-correction-parent-mutation-not-authorized",
   };
 }
 

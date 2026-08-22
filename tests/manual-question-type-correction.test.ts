@@ -447,7 +447,7 @@ test("keeps a same-origin screen correction on the existing parent", () => {
   assert.equal(scope.currentQuestionIsParentOrigin, true);
 });
 
-test("splits an independent travel agent from a ride-share parent", () => {
+test("keeps standalone correction current-only without relation authority", () => {
   const task = makeActiveTask({ questionType: "general-system-design" });
   task.parent.topic = "Design a ride-sharing app with location tracking";
   task.parent.startTurnId = "turn_ride_share";
@@ -464,7 +464,8 @@ test("splits an independent travel agent from a ride-share parent", () => {
     classifierConfidence: 0.9,
   });
 
-  assert.equal(scope.scope, "independent-new-parent");
+  assert.equal(scope.scope, "current-only");
+  assert.equal(scope.reason, "type-correction-parent-mutation-not-authorized");
   assert.ok(scope.standaloneTaskScore >= 3);
   assert.ok(scope.continuityScore <= 0);
   assert.ok(
@@ -576,6 +577,7 @@ test("creates a linked parent for a recommendation extension of the same app", (
     latestQuestionText:
       "For this app, design a self-evolving food recommendation agent.",
     classifierConfidence: 0.9,
+    currentQuestionRelation: "new-parent",
   });
 
   assert.equal(scope.scope, "linked-parent-extension");
@@ -610,6 +612,7 @@ test("re-roots an independent correction without old answers, QPS, or artifacts"
     latestQuestionText:
       "Design a self-evolving travel recommendation agent.",
     classifierConfidence: 0.9,
+    currentQuestionRelation: "new-parent",
   });
 
   const transition = buildManualCorrectionParentTransition({
@@ -679,6 +682,7 @@ test("creates a bounded linked handoff without subsystem QPS or generated answer
     lineage,
     latestQuestionText: latestQuestion,
     classifierConfidence: 0.9,
+    currentQuestionRelation: "new-parent",
   });
 
   const transition = buildManualCorrectionParentTransition({
@@ -726,7 +730,7 @@ test("creates a bounded linked handoff without subsystem QPS or generated answer
   assert.equal(transition.parent.whiteboardArtifact, undefined);
 });
 
-test("does not split elliptical follow-ups or adjacent constraints", () => {
+test("keeps elliptical type corrections current-only without relation authority", () => {
   const task = makeActiveTask({ questionType: "general-system-design" });
   task.parent.topic = "Design a ride-sharing app";
   task.parent.startTurnId = "turn_origin";
@@ -746,7 +750,7 @@ test("does not split elliptical follow-ups or adjacent constraints", () => {
       lineage: makeLineage(turnId),
       latestQuestionText: text,
     });
-    assert.equal(scope.scope, "same-question-retype", text);
+    assert.equal(scope.scope, "current-only", text);
     assert.ok(scope.standaloneTaskScore < 3, text);
   }
 });
@@ -781,6 +785,7 @@ test("preserves child retype and resume-parent scopes", () => {
       decision: resumeDecision,
       lineage: makeLineage("turn_child"),
       latestQuestionText: child.question,
+      currentQuestionRelation: "resume-parent",
     }).scope,
     "resume-parent"
   );
