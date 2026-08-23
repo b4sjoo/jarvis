@@ -129,3 +129,19 @@ test("Back response action restores a previous phase without rolling back artifa
   assert.match(instructions, /Do not roll back Code or Whiteboard artifacts/i);
   assert.match(instructions, /Do not create, retype, or re-parent a task/i);
 });
+
+test("does not turn unsupported autobiographical premises into hypothetical implementations", () => {
+  const message = buildAdvisorUserMessage({
+    transcript:
+      "them: Explain how you implemented retries and a DLQ in this project.",
+    screenContext: "",
+    rollingSummary: "",
+    userProfileContext: "",
+    glossaryText: "",
+    taskRuntime: { revision: 0 },
+  });
+
+  assert.match(message, /Unsupported autobiographical-premise rule/);
+  assert.match(message, /do not expand that mechanism into a hypothetical design/i);
+  assert.match(message, /answer the supported portion/i);
+});

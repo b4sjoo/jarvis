@@ -99,6 +99,67 @@ Supporting anchor IDs: mem_oasis_bulk`),
   assert.doesNotMatch(result.effectiveContent, /dead-letter queue/i);
 });
 
+test("removes unsupported clarification choices before they become runtime context", () => {
+  const result = enforceFactAnchorOutput({
+    decision: makeDecision({
+      state: "strong-anchor",
+      requiredFor: "project-deep-dive",
+      supportedAnchorIds: ["mem_oasis_bulk"],
+      claimSupportDecisions: [
+        {
+          claimId: "claim:oasis:implementation",
+          predicateFamily: "architecture-decision",
+          anchorId: "mem_oasis_bulk",
+          projectCompatible: true,
+          predicateCompatible: true,
+          supportSpanPresent: true,
+          supportSpan:
+            "The Oasis implementation parsed Bulk API responses and preserved per-item failure details.",
+          conflictFree: true,
+          decision: "allow",
+          reason: "test-support",
+        },
+      ],
+    }),
+    parsedAnswer: parseMeetingAnswer(`Answer: The Oasis implementation parsed Bulk API responses and preserved per-item failure details.
+Clarifying question: Would you like me to focus on how we handled per-item failure detection in Oasis, or the end-to-end retry and DLQ pipeline design?
+Clarifying options: Per-item failure parsing in Oasis | Downstream retry and DLQ architecture | Both at high level
+Answer disposition: factual-with-anchor
+Supporting anchor IDs: mem_oasis_bulk`),
+  });
+
+  assert.equal(result.commitSource, "sanitized-model-output");
+  assert.match(result.effectiveContent, /per-item failure details/i);
+  assert.equal(result.effectiveAnswer.sections.clarifyingQuestion, undefined);
+  assert.deepEqual(result.effectiveAnswer.sections.clarifyingOptions, []);
+  assert.doesNotMatch(result.effectiveContent, /DLQ/i);
+  assert.ok(result.sanitizedSections.includes("clarifyingQuestion"));
+  assert.ok(result.sanitizedSections.includes("clarifyingOptions"));
+  const trace = formatFactAnchorOutputDecisionForTrace(result);
+  assert.equal(trace.factAnchorClarifyingQuestionSanitized, true);
+  assert.equal(trace.factAnchorClarifyingOptionsSanitized, true);
+  assert.equal(trace.factAnchorEffectiveClarifyingOptionCount, 0);
+});
+
+test("keeps generic source-selection clarification without fact leakage", () => {
+  const result = enforceFactAnchorOutput({
+    decision: makeDecision({
+      state: "no-anchor",
+      requiredFor: "project-deep-dive",
+      action: "ask-clarification",
+    }),
+    parsedAnswer: parseMeetingAnswer(`Clarifying question: Which project should I use?
+Answer disposition: clarification
+Supporting anchor IDs: -`),
+  });
+
+  assert.equal(result.commitSource, "model-output");
+  assert.equal(
+    result.effectiveAnswer.sections.clarifyingQuestion,
+    "Which project should I use?"
+  );
+});
+
 test("audits passive and non-first-person project claims against the same support spans", () => {
   const result = enforceFactAnchorOutput({
     decision: makeDecision({

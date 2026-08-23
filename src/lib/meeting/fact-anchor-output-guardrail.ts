@@ -272,6 +272,12 @@ export function formatFactAnchorOutputDecisionForTrace(
     factAnchorSanitizedClaimCount: decision.sanitizedClaimCount,
     factAnchorPreservedClaimCount: decision.preservedClaimCount,
     factAnchorSanitizedSections: decision.sanitizedSections,
+    factAnchorClarifyingQuestionSanitized:
+      decision.sanitizedSections.includes("clarifyingQuestion"),
+    factAnchorClarifyingOptionsSanitized:
+      decision.sanitizedSections.includes("clarifyingOptions"),
+    factAnchorEffectiveClarifyingOptionCount:
+      decision.effectiveAnswer.sections.clarifyingOptions.length,
     factAnchorSafeReplacement:
       false,
     factAnchorShadowWouldCommitSource:
@@ -495,6 +501,16 @@ function sanitizeBoundedFactOutput(
     preservedClaimCount += result.preserved;
     if (result.removed > 0) sanitizedSections.push(section);
   }
+  const clarification = sanitizeClarifyingSections({
+    question: sections.clarifyingQuestion,
+    options: sections.clarifyingOptions,
+    supportSpans: [],
+  });
+  sections.clarifyingQuestion = clarification.question;
+  sections.clarifyingOptions = clarification.options;
+  sanitizedClaimCount += clarification.removed;
+  preservedClaimCount += clarification.preserved;
+  sanitizedSections.push(...clarification.sanitizedSections);
 
   const sanitizedAnswer: ParsedMeetingAnswer = {
     ...parsedAnswer,
@@ -571,6 +587,16 @@ function sanitizeAnchoredFactOutput(
     preservedClaimCount += result.preserved;
     if (result.removed > 0) sanitizedSections.push(section);
   }
+  const clarification = sanitizeClarifyingSections({
+    question: sections.clarifyingQuestion,
+    options: sections.clarifyingOptions,
+    supportSpans,
+  });
+  sections.clarifyingQuestion = clarification.question;
+  sections.clarifyingOptions = clarification.options;
+  sanitizedClaimCount += clarification.removed;
+  preservedClaimCount += clarification.preserved;
+  sanitizedSections.push(...clarification.sanitizedSections);
 
   const sanitizedAnswer: ParsedMeetingAnswer = {
     ...parsedAnswer,
@@ -830,6 +856,119 @@ function sanitizeBoundedClaimSection(value: string | undefined) {
   return { text: lines.join("\n"), removed, preserved };
 }
 
+function sanitizeClarifyingSections(input: {
+  question: string | undefined;
+  options: ParsedMeetingAnswer["sections"]["clarifyingOptions"];
+  supportSpans: string[];
+}) {
+  const sanitizedSections: string[] = [];
+  let removed = 0;
+  let preserved = 0;
+  const questionAllowed = clarificationTextSupported(
+    input.question,
+    input.supportSpans,
+    "question"
+  );
+  let question = questionAllowed ? input.question?.trim() || undefined : undefined;
+  if (input.question?.trim()) {
+    if (questionAllowed) preserved += 1;
+    else {
+      removed += 1;
+      sanitizedSections.push("clarifyingQuestion");
+    }
+  }
+
+  const concreteOptions = input.options.filter(
+    (option) => !isAggregateClarifyingOption(option.label)
+  );
+  const allowedConcreteOptions = concreteOptions.filter((option) =>
+    clarificationTextSupported(option.label, input.supportSpans, "option")
+  );
+  const concreteOptionRemoved =
+    allowedConcreteOptions.length !== concreteOptions.length;
+  let options = input.options.filter((option) => {
+    if (isAggregateClarifyingOption(option.label)) {
+      return !concreteOptionRemoved;
+    }
+    return allowedConcreteOptions.includes(option);
+  });
+  const removedOptions = input.options.length - options.length;
+  removed += removedOptions;
+  preserved += options.length;
+  if (removedOptions > 0) sanitizedSections.push("clarifyingOptions");
+
+  if (!question || (input.options.length > 0 && options.length < 2)) {
+    if (question) {
+      removed += 1;
+      preserved = Math.max(0, preserved - 1);
+      sanitizedSections.push("clarifyingQuestion");
+    }
+    if (options.length) {
+      removed += options.length;
+      preserved = Math.max(0, preserved - options.length);
+      sanitizedSections.push("clarifyingOptions");
+    }
+    question = undefined;
+    options = [];
+  }
+
+  return {
+    question,
+    options,
+    removed,
+    preserved,
+    sanitizedSections: Array.from(new Set(sanitizedSections)),
+  };
+}
+
+function clarificationTextSupported(
+  value: string | undefined,
+  supportSpans: string[],
+  kind: "question" | "option"
+) {
+  const text = value?.trim();
+  if (!text) return false;
+  if (kind === "question" && isGenericClarifyingQuestion(text)) return true;
+  if (!CLARIFICATION_FACT_BOUND_PATTERN.test(text)) return true;
+  if (!supportSpans.length) return false;
+  const tokens = extractClarificationSupportTokens(text);
+  if (!tokens.length) return true;
+  return supportSpans.some((supportSpan) => {
+    const supportTokens = new Set(extractClarificationSupportTokens(supportSpan));
+    const matched = tokens.filter((token) => supportTokens.has(token)).length;
+    const requiredCoverage = tokens.length <= 3 ? 1 : 0.5;
+    return matched / tokens.length >= requiredCoverage;
+  });
+}
+
+function extractClarificationSupportTokens(value: string) {
+  return Array.from(
+    new Set(
+      normalizeClaimEvidence(value)
+        .split(" ")
+        .map((token) => token.replace(/(?:ing|ed|es|s)$/u, ""))
+        .filter((token) => token.length >= 4)
+        .filter((token) => !CLARIFICATION_SUPPORT_STOP_WORDS.has(token))
+        .filter((token) => !CLAIM_SUPPORT_STOP_WORDS.has(token))
+    )
+  );
+}
+
+function isGenericClarifyingQuestion(value: string) {
+  const text = value.trim();
+  return (
+    /^(?:which|what)\s+(?:project|story|example|part|direction)\b/iu.test(text) ||
+    /^(?:could|can)\s+you\s+clarify\b/iu.test(text) ||
+    /^do\s+you\s+mean\b/iu.test(text)
+  );
+}
+
+function isAggregateClarifyingOption(value: string) {
+  return /^(?:both|all|either|both at (?:a )?high level|all of the above)$/iu.test(
+    value.trim()
+  );
+}
+
 function isUnsupportedUnanchoredFactClaim(value: string) {
   const text = value.trim();
   return requiresFactSupport(text) && !isClearlyHypotheticalClaim(text);
@@ -905,6 +1044,23 @@ const ASSERTIVE_PROJECT_RESULT_PATTERN =
   /\b(?:throughput|latency|drop rate|error rate|failure rate|availability|reliability|cost|costs|performance|accuracy|precision|recall)\b.{0,60}\b(?:improved|increased|decreased|reduced|dropped|rose|reached|achieved|was|were)\b|\b(?:improved|increased|decreased|reduced|eliminated|achieved)\b.{0,60}\b(?:throughput|latency|drop rate|error rate|failure rate|availability|reliability|cost|costs|performance|accuracy|precision|recall)\b/i;
 const ASSERTIVE_PROJECT_CLAIM_CHINESE_PATTERN =
   /(?:项目|系统|服务|功能|实现|流水线|消息|请求|失败|记录).{0,60}(?:已经|已|被).{0,40}(?:实现|构建|部署|路由|重试|写入|解析|处理|重新批处理|移入)|(?:吞吐量|延迟|丢弃率|错误率|失败率|可用性|成本|性能|准确率).{0,40}(?:提升了|降低了|改善了|减少了|达到了)/u;
+const CLARIFICATION_FACT_BOUND_PATTERN =
+  /\b(?:i|we|my|our|project|system|service|feature|implementation|implemented|built|designed|handled|deployed|measured|pipeline|architecture|mechanism|parsing|routing|retry|failure)\b/iu;
+const CLARIFICATION_SUPPORT_STOP_WORDS = new Set([
+  "about",
+  "both",
+  "could",
+  "either",
+  "focus",
+  "high",
+  "level",
+  "option",
+  "part",
+  "please",
+  "should",
+  "which",
+  "would",
+]);
 const CLAIM_SUPPORT_STOP_WORDS = new Set([
   "about",
   "after",
