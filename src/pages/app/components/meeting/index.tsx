@@ -5511,30 +5511,6 @@ function normalizeEvaluationTaskRelation(
   return evaluationTaskRelations.find((candidate) => candidate === value);
 }
 
-function resolveEvaluationParentAction(
-  relation: InterviewTaskRelation | undefined,
-  mutationAuthorized: boolean | undefined
-): HumanExpectedParentAction | undefined {
-  if (!relation) return undefined;
-  if (relation === "new-parent") {
-    return mutationAuthorized === false ? "none" : "create";
-  }
-  if (relation === "child-probe") {
-    return mutationAuthorized === false ? "preserve" : "attach-child";
-  }
-  if (relation === "resume-parent") {
-    return mutationAuthorized === false ? "preserve" : "resume";
-  }
-  if (
-    relation === "followup-parent" ||
-    relation === "logistics" ||
-    relation === "correction"
-  ) {
-    return "preserve";
-  }
-  return mutationAuthorized === false ? "none" : undefined;
-}
-
 const TraceHumanEvaluationPanel = ({
   trace,
   detectedQuestionType,
@@ -7529,32 +7505,26 @@ const TraceHumanEvaluationPanel = ({
                 <Button
                   size="sm"
                   variant={
-                    evaluation?.advisorGateCorrectlySkipped
+                    activeRuntimeFact?.kind === "expected-runtime-action" &&
+                    activeRuntimeFact.expectedAction === "ignore"
                       ? "default"
                       : "outline"
                   }
                   className="h-6 px-2 text-[10px]"
-                  onClick={() => {
-                    updateAdvisorIntentEvaluation("ignore", {
-                      advisorGateCorrectlySkipped: true,
-                      advisorGateShouldAdvise: false,
-                    });
-                  }}
+                  onClick={() => recordExpectedRuntimeAction("ignore")}
                 >
                   Correctly skipped
                 </Button>
                 <Button
                   size="sm"
                   variant={
-                    evaluation?.advisorGateShouldAdvise ? "default" : "outline"
+                    activeRuntimeFact?.kind === "expected-runtime-action" &&
+                    activeRuntimeFact.expectedAction === "advise"
+                      ? "default"
+                      : "outline"
                   }
                   className="h-6 px-2 text-[10px]"
-                  onClick={() => {
-                    updateAdvisorIntentEvaluation("advise", {
-                      advisorGateCorrectlySkipped: false,
-                      advisorGateShouldAdvise: true,
-                    });
-                  }}
+                  onClick={() => recordExpectedRuntimeAction("advise")}
                 >
                   Should advise
                 </Button>
@@ -7565,37 +7535,26 @@ const TraceHumanEvaluationPanel = ({
                 <Button
                   size="sm"
                   variant={
-                    questionEvaluation?.advisorIntent?.expectedAction ===
-                      "advise" &&
-                    questionEvaluation.advisorIntent.verdict === "ok"
+                    activeRuntimeFact?.kind === "expected-runtime-action" &&
+                    activeRuntimeFact.expectedAction === "advise"
                       ? "default"
                       : "outline"
                   }
                   className="h-6 px-2 text-[10px]"
-                  onClick={() => {
-                    updateAdvisorIntentEvaluation("advise", {
-                      advisorGateCorrectlySkipped: false,
-                      advisorGateShouldAdvise: true,
-                    });
-                  }}
+                  onClick={() => recordExpectedRuntimeAction("advise")}
                 >
                   Correctly advised
                 </Button>
                 <Button
                   size="sm"
                   variant={
-                    questionEvaluation?.advisorIntent?.verdict ===
-                    "false-positive"
+                    activeRuntimeFact?.kind === "expected-runtime-action" &&
+                    activeRuntimeFact.expectedAction === "ignore"
                       ? "default"
                       : "outline"
                   }
                   className="h-6 px-2 text-[10px]"
-                  onClick={() => {
-                    updateAdvisorIntentEvaluation("ignore", {
-                      advisorGateCorrectlySkipped: true,
-                      advisorGateShouldAdvise: false,
-                    });
-                  }}
+                  onClick={() => recordExpectedRuntimeAction("ignore")}
                 >
                   Should not advise
                 </Button>
@@ -8543,16 +8502,6 @@ function readStringMetadata(
 ) {
   const value = metadata?.[key];
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
-
-function readNumberMetadata(
-  metadata: Record<string, unknown> | undefined,
-  key: string
-) {
-  const value = metadata?.[key];
-  return typeof value === "number" && Number.isFinite(value)
-    ? value
-    : undefined;
 }
 
 function formatObservedBoolean(value: boolean | undefined) {
