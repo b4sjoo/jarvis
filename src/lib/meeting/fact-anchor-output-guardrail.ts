@@ -278,6 +278,8 @@ export function formatFactAnchorOutputDecisionForTrace(
       decision.shadowWouldCommitSource,
     unsupportedFirstPersonHardClaimCount:
       decision.sanitizedClaimCount,
+    unsupportedAssertiveFactClaimCount:
+      decision.sanitizedClaimCount,
     sanitizedHardClaimCount: decision.sanitizedClaimCount,
     boundedSynthesisCommitCount:
       decision.commitSource === "sanitized-model-output" ? 1 : 0,
@@ -656,8 +658,8 @@ function sanitizeCompletedStreamingText(
       const units = splitClaimUnits(body);
       const kept = units.filter((unit) => {
         const unsupported = supportSpans.length
-          ? isUnsupportedAnchoredPersonalClaim(unit, supportSpans)
-          : isUnsupportedPersonalClaim(unit);
+          ? isUnsupportedAnchoredFactClaim(unit, supportSpans)
+          : isUnsupportedUnanchoredFactClaim(unit);
         if (unsupported) removed += 1;
         return !unsupported;
       });
@@ -672,7 +674,11 @@ function splitClaimUnits(value: string) {
   return (
     value.match(/[^.!?。！？;；]+[.!?。！？;；]?/gu) ?? [value]
   )
-    .flatMap((unit) => unit.split(/,\s+(?=(?:and|but|while)\b)/iu))
+    .flatMap((unit) =>
+      unit.split(
+        /,\s+(?=(?:and|but|while)\s+(?:(?:i|we|my|our|they|the|this|that)\b|(?:failed|successful)?\s*(?:messages?|requests?|systems?|services?|projects?|pipelines?)\b))/iu
+      )
+    )
     .map((unit) => unit.trim())
     .filter(Boolean);
 }
@@ -690,9 +696,9 @@ function sanitizeAnchoredClaimSection(
   const lines = value
     .split(/\n+/)
     .map((line) => {
-      const units = line.match(/[^.!?。！？]+[.!?。！？]?/gu) ?? [line];
+      const units = splitClaimUnits(line);
       const kept = units.filter((unit) => {
-        if (isUnsupportedAnchoredPersonalClaim(unit, supportSpans)) {
+        if (isUnsupportedAnchoredFactClaim(unit, supportSpans)) {
           removed += 1;
           return false;
         }
@@ -706,25 +712,21 @@ function sanitizeAnchoredClaimSection(
   return { text: lines.join("\n"), removed, preserved };
 }
 
-function isUnsupportedAnchoredPersonalClaim(
+function isUnsupportedAnchoredFactClaim(
   value: string,
   supportSpans: string[]
 ) {
   const text = value.trim();
-  if (!FIRST_PERSON_PATTERN.test(text)) return false;
-  if (
-    HYPOTHETICAL_FIRST_PERSON_PATTERN.test(text) ||
-    HYPOTHETICAL_FIRST_PERSON_CHINESE_PATTERN.test(text)
-  ) {
+  if (!requiresFactSupport(text) || isClearlyHypotheticalClaim(text)) {
     return false;
   }
 
   return !supportSpans.some((supportSpan) =>
-    anchoredPersonalClaimSupportedBySpan(text, supportSpan)
+    anchoredFactClaimSupportedBySpan(text, supportSpan)
   );
 }
 
-function anchoredPersonalClaimSupportedBySpan(
+function anchoredFactClaimSupportedBySpan(
   claimText: string,
   supportSpan: string
 ) {
@@ -743,12 +745,7 @@ function anchoredPersonalClaimSupportedBySpan(
     return false;
   }
 
-  const highRiskShape =
-    HARD_PERSONAL_FACT_PATTERN.test(claimText) ||
-    HARD_PERSONAL_FACT_CHINESE_PATTERN.test(claimText) ||
-    THIRD_PARTY_STANCE_PATTERN.test(claimText) ||
-    ABSOLUTE_RESULT_PATTERN.test(claimText) ||
-    SPECIFIC_MECHANISM_PATTERN.test(claimText);
+  const highRiskShape = requiresFactSupport(claimText);
   if (!highRiskShape) return true;
 
   const claimTokens = extractDistinctiveClaimTokens(normalizedClaim);
@@ -817,10 +814,9 @@ function sanitizeBoundedClaimSection(value: string | undefined) {
   const lines = value
     .split(/\n+/)
     .map((line) => {
-      const units =
-        line.match(/[^.!?。！？]+[.!?。！？]?/gu) ?? [line];
+      const units = splitClaimUnits(line);
       const kept = units.filter((unit) => {
-        if (isUnsupportedPersonalClaim(unit)) {
+        if (isUnsupportedUnanchoredFactClaim(unit)) {
           removed += 1;
           return false;
         }
@@ -834,21 +830,41 @@ function sanitizeBoundedClaimSection(value: string | undefined) {
   return { text: lines.join("\n"), removed, preserved };
 }
 
-function isUnsupportedPersonalClaim(value: string) {
+function isUnsupportedUnanchoredFactClaim(value: string) {
   const text = value.trim();
-  if (!FIRST_PERSON_PATTERN.test(text)) return false;
+  return requiresFactSupport(text) && !isClearlyHypotheticalClaim(text);
+}
 
-  const clearlyHypothetical =
-    HYPOTHETICAL_FIRST_PERSON_PATTERN.test(text) ||
-    HYPOTHETICAL_FIRST_PERSON_CHINESE_PATTERN.test(text);
-  const hardPersonalFact =
+function requiresFactSupport(text: string) {
+  const firstPersonClaim = FIRST_PERSON_PATTERN.test(text);
+  const assertiveProjectClaim =
+    ASSERTIVE_PROJECT_ACTION_PATTERN.test(text) ||
+    PASSIVE_PROJECT_ACTION_PATTERN.test(text) ||
+    ASSERTIVE_PROJECT_RESULT_PATTERN.test(text) ||
+    ASSERTIVE_PROJECT_CLAIM_CHINESE_PATTERN.test(text);
+  const quantitativeClaim =
+    /(?:[$%]|\b\d[\d,.]*\b)/.test(text) &&
+    (firstPersonClaim || assertiveProjectClaim);
+
+  return (
     HARD_PERSONAL_FACT_PATTERN.test(text) ||
-    HARD_PERSONAL_FACT_CHINESE_PATTERN.test(text);
-  const quantitativeClaim = /(?:[$%]|\b\d[\d,.]*\b)/.test(text);
+    HARD_PERSONAL_FACT_CHINESE_PATTERN.test(text) ||
+    THIRD_PARTY_STANCE_PATTERN.test(text) ||
+    ABSOLUTE_RESULT_PATTERN.test(text) ||
+    SPECIFIC_MECHANISM_PATTERN.test(text) ||
+    assertiveProjectClaim ||
+    quantitativeClaim ||
+    (firstPersonClaim && !isClearlyHypotheticalClaim(text))
+  );
+}
 
-  if (clearlyHypothetical && !quantitativeClaim) return false;
-
-  return hardPersonalFact || quantitativeClaim || !clearlyHypothetical;
+function isClearlyHypotheticalClaim(text: string) {
+  return (
+    HYPOTHETICAL_FIRST_PERSON_PATTERN.test(text) ||
+    HYPOTHETICAL_FIRST_PERSON_CHINESE_PATTERN.test(text) ||
+    GENERAL_HYPOTHETICAL_PATTERN.test(text) ||
+    GENERAL_HYPOTHETICAL_CHINESE_PATTERN.test(text)
+  );
 }
 
 function hasUsefulBoundedAnswer(parsedAnswer: ParsedMeetingAnswer) {
@@ -865,6 +881,10 @@ const HYPOTHETICAL_FIRST_PERSON_PATTERN =
   /\b(?:i|we)\s+(?:would|could|can|should|might|recommend|suggest|propose|start|focus|frame)\b|\bi'd\s+(?:start|focus|frame|recommend|suggest|propose)\b/i;
 const HYPOTHETICAL_FIRST_PERSON_CHINESE_PATTERN =
   /(?:我|我们)(?:会|可以|应该|建议|倾向于|将会|打算)/u;
+const GENERAL_HYPOTHETICAL_PATTERN =
+  /\b(?:would|could|should|might|may|recommend|suggest|propose|hypothetically|as an improvement|one option|one approach)\b/i;
+const GENERAL_HYPOTHETICAL_CHINESE_PATTERN =
+  /(?:可以|应该|建议|假设|如果|作为改进|一种方案|后续可)/u;
 const HARD_PERSONAL_FACT_PATTERN =
   /\b(?:i|we|my|our)\b.{0,90}\b(?:built|designed|implemented|developed|led|owned|delivered|deployed|launched|used|chose|selected|measured|validated|tested|debugged|fixed|reduced|improved|achieved|saved|collaborated|worked|created|migrated|operated|monitored|decided|responsible)\b|\b(?:my|our)\s+(?:team|project|system|service|role|contribution)\b/i;
 const HARD_PERSONAL_FACT_CHINESE_PATTERN =
@@ -877,6 +897,14 @@ const ABSOLUTE_RESULT_PATTERN =
   /\b(?:zero|none|never|always|all|every|without any|no)\b.{0,50}\b(?:downtime|loss|errors?|failures?|regressions?|incidents?|issues?|impact|gap)\b|\b100\s*%/i;
 const SPECIFIC_MECHANISM_PATTERN =
   /\b(?:i|we)\b.{0,50}\b(?:implemented|built|designed|used|chose|deployed|routed|added|introduced|configured)\b.{0,120}\b(?:using|with|via|through|by|into|to)\b/i;
+const ASSERTIVE_PROJECT_ACTION_PATTERN =
+  /\b(?:(?:the|this|our|my)\s+)?(?:project|system|service|feature|implementation|pipeline|workflow|request|message|failure|record|item)s?\b.{0,80}\b(?:uses?|used|implements?|implemented|builds?|built|deploys?|deployed|routes?|routed|retries|retried|stores?|stored|writes?|wrote|parses?|parsed|handles?|handled|rebatches?|rebatched|sends?|sent|adds?|added|introduces?|introduced|configures?|configured)\b/i;
+const PASSIVE_PROJECT_ACTION_PATTERN =
+  /\b(?:was|were|is|are|has been|have been)\s+(?:automatically\s+)?(?:implemented|built|deployed|routed|retried|stored|written|parsed|handled|rebatched|sent|added|introduced|configured|moved)\b/i;
+const ASSERTIVE_PROJECT_RESULT_PATTERN =
+  /\b(?:throughput|latency|drop rate|error rate|failure rate|availability|reliability|cost|costs|performance|accuracy|precision|recall)\b.{0,60}\b(?:improved|increased|decreased|reduced|dropped|rose|reached|achieved|was|were)\b|\b(?:improved|increased|decreased|reduced|eliminated|achieved)\b.{0,60}\b(?:throughput|latency|drop rate|error rate|failure rate|availability|reliability|cost|costs|performance|accuracy|precision|recall)\b/i;
+const ASSERTIVE_PROJECT_CLAIM_CHINESE_PATTERN =
+  /(?:项目|系统|服务|功能|实现|流水线|消息|请求|失败|记录).{0,60}(?:已经|已|被).{0,40}(?:实现|构建|部署|路由|重试|写入|解析|处理|重新批处理|移入)|(?:吞吐量|延迟|丢弃率|错误率|失败率|可用性|成本|性能|准确率).{0,40}(?:提升了|降低了|改善了|减少了|达到了)/u;
 const CLAIM_SUPPORT_STOP_WORDS = new Set([
   "about",
   "after",

@@ -59,9 +59,9 @@ Supporting anchor IDs: mem_beaglestone`),
   assert.match(result.effectiveContent, /four-week deadline/i);
   assert.doesNotMatch(result.effectiveContent, /teammate wanted/i);
   assert.doesNotMatch(result.effectiveContent, /zero observability/i);
-  assert.equal(result.sanitizedClaimCount, 2);
+  assert.equal(result.sanitizedClaimCount, 3);
   const trace = formatFactAnchorOutputDecisionForTrace(result);
-  assert.equal(trace.unsupportedFirstPersonHardClaimCount, 2);
+  assert.equal(trace.unsupportedFirstPersonHardClaimCount, 3);
   assert.equal(trace.boundedSynthesisCommitCount, 1);
   assert.equal(trace.wholeAnswerReplacementCount, 0);
 });
@@ -97,6 +97,48 @@ Supporting anchor IDs: mem_oasis_bulk`),
   assert.match(result.effectiveContent, /NDJSON request framing/i);
   assert.doesNotMatch(result.effectiveContent, /exponential backoff/i);
   assert.doesNotMatch(result.effectiveContent, /dead-letter queue/i);
+});
+
+test("audits passive and non-first-person project claims against the same support spans", () => {
+  const result = enforceFactAnchorOutput({
+    decision: makeDecision({
+      state: "strong-anchor",
+      requiredFor: "project-deep-dive",
+      supportedAnchorIds: ["mem_oasis_bulk"],
+      claimSupportDecisions: [
+        {
+          claimId: "claim:oasis:implementation",
+          predicateFamily: "architecture-decision",
+          anchorId: "mem_oasis_bulk",
+          projectCompatible: true,
+          predicateCompatible: true,
+          supportSpanPresent: true,
+          supportSpan:
+            "The Oasis implementation used NDJSON request framing and reported Bulk API failures per item.",
+          conflictFree: true,
+          decision: "allow",
+          reason: "test-support",
+        },
+      ],
+    }),
+    parsedAnswer: parseMeetingAnswer(`中文思路: 该项目已经把失败消息移入重试 DLQ 并重新批处理。可以把 DLQ 明确表述为后续改进方案。
+Answer: The Oasis implementation used NDJSON request framing and reported Bulk API failures per item, but failed messages were routed to a retry DLQ and rebatched. Throughput improved and the drop rate decreased.
+Answer disposition: factual-with-anchor
+Supporting anchor IDs: mem_oasis_bulk`),
+  });
+
+  assert.equal(result.commitSource, "sanitized-model-output");
+  assert.match(result.effectiveContent, /NDJSON request framing/i);
+  assert.doesNotMatch(result.effectiveContent, /retry DLQ/i);
+  assert.doesNotMatch(result.effectiveContent, /Throughput improved/i);
+  assert.doesNotMatch(result.effectiveContent, /已经把失败消息/u);
+  assert.match(result.effectiveContent, /后续改进方案/u);
+  assert.ok(result.sanitizedClaimCount >= 3);
+  const trace = formatFactAnchorOutputDecisionForTrace(result);
+  assert.equal(
+    trace.unsupportedAssertiveFactClaimCount,
+    result.sanitizedClaimCount
+  );
 });
 
 test("falls back to verified support instead of refusing the whole anchored answer", () => {
