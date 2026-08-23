@@ -31,6 +31,15 @@ export const LEGACY_TASK_RELATION_ADJUDICATION_SCHEMA_VERSION = 2;
 export const TASK_RELATION_ADJUDICATION_PROMPT_VERSION =
   "task-relation-adjudication-v3-direct";
 export const TASK_RELATION_ADJUDICATION_MAX_OUTPUT_CHARS = 4_096;
+
+export function resolveTaskRelationBudgetSlot(input: {
+  manualCorrectionOwned: boolean;
+  manualCorrectionRevision: number;
+}) {
+  return input.manualCorrectionOwned
+    ? `manual-correction:${input.manualCorrectionRevision}`
+    : "relation";
+}
 export const TASK_RELATION_ADJUDICATION_MAX_PARENT_CHARS = 480;
 export const TASK_RELATION_ADJUDICATION_MAX_SOURCE_EVIDENCE_CHARS = 720;
 export const SCREEN_RELATION_RELEASE_MIN_CONFIDENCE = 0.95;

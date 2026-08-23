@@ -439,6 +439,7 @@ import {
   isRuntimeTaskRelation,
   normalizeTaskRelationAdjudicationMode,
   requestTaskRelationAdjudication,
+  resolveTaskRelationBudgetSlot,
   settleNarrowVoiceTypeRelation,
   isWhiteboardRevisionAuthorized,
   updateWhiteboardArtifactFromAnswer,
@@ -17460,6 +17461,11 @@ export function useMeetingAssistant() {
         }
       );
       const scheduledAt = Date.now();
+      const relationBudgetSlot = resolveTaskRelationBudgetSlot({
+        manualCorrectionOwned,
+        manualCorrectionRevision:
+          manualCorrectionRevisionRef.current,
+      });
       let resolveAdmission:
         | ((
             admission:
@@ -17487,7 +17493,7 @@ export function useMeetingAssistant() {
           operationKind: "task-relation-adjudication",
           sessionId: contextState.sessionId,
           budgetKey: `${logicalQuestionUnit.id}:${logicalQuestionUnit.revision}`,
-          budgetSlot: "relation",
+          budgetSlot: relationBudgetSlot,
           budgetReason: adjudicationReason,
           traceId,
           lease,
@@ -17535,6 +17541,9 @@ export function useMeetingAssistant() {
             taskRelationAdjudicationBudgetLimit: budget.limit,
             taskRelationAdjudicationBudgetRemaining:
               budget.remaining,
+            taskRelationAdjudicationBudgetSlot: budget.slot,
+            taskRelationAdjudicationCorrectionScopedBudget:
+              manualCorrectionOwned,
           };
           traceStoreRef.current.updateMetadata(traceId, metadata);
           stepId = traceStoreRef.current.startStep(

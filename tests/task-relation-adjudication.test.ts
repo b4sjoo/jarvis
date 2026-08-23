@@ -17,6 +17,7 @@ import {
   deriveRuntimeTaskRelationFromAtomicDecision,
   formatTaskRelationAdjudicationForTrace,
   parseTaskRelationAdjudicationOutput,
+  resolveTaskRelationBudgetSlot,
   settleNarrowVoiceTypeRelation,
   type LlmTaskRelationAdjudication,
 } from "../src/lib/meeting/task-relation-adjudication.js";
@@ -45,6 +46,33 @@ function unit(text: string, revision = 1): LogicalQuestionUnit {
     truncated: false,
   };
 }
+
+test("gives each explicit correction revision an independent Relation budget slot", () => {
+  assert.equal(
+    resolveTaskRelationBudgetSlot({
+      manualCorrectionOwned: false,
+      manualCorrectionRevision: 7,
+    }),
+    "relation"
+  );
+  assert.equal(
+    resolveTaskRelationBudgetSlot({
+      manualCorrectionOwned: true,
+      manualCorrectionRevision: 7,
+    }),
+    "manual-correction:7"
+  );
+  assert.notEqual(
+    resolveTaskRelationBudgetSlot({
+      manualCorrectionOwned: true,
+      manualCorrectionRevision: 7,
+    }),
+    resolveTaskRelationBudgetSlot({
+      manualCorrectionOwned: true,
+      manualCorrectionRevision: 8,
+    })
+  );
+});
 
 function activeTask(withChild = false): ActiveMeetingTask {
   return {

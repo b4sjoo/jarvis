@@ -278,6 +278,41 @@ test("isolates quota consumption by operation", async () => {
   ]);
 });
 
+test("isolates one-start quotas by budget slot within the same question", async () => {
+  const runtime = new RuntimeInferenceOperationRuntime<
+    RuntimeInferenceRuntimeJob,
+    string
+  >("task-relation-adjudication");
+  const dispositions: string[] = [];
+  const schedule = (operationId: string, budgetSlot: string) => {
+    runtime.schedule(
+      {
+        job: {
+          ...runtimeJob("task-relation-adjudication", operationId),
+          budgetSlot,
+        },
+        execute: async () => operationId,
+        onSettled: (settlement) =>
+          dispositions.push(settlement.disposition),
+      },
+      0
+    );
+  };
+
+  schedule("correction-7", "manual-correction:7");
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  schedule("correction-8", "manual-correction:8");
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  schedule("correction-8-duplicate", "manual-correction:8");
+  await new Promise((resolve) => setTimeout(resolve, 10));
+
+  assert.deepEqual(dispositions, [
+    "completed",
+    "completed",
+    "budget-exhausted",
+  ]);
+});
+
 test("rejects an operation submitted to the wrong runtime", () => {
   const runtime = new RuntimeInferenceOperationRuntime<
     RuntimeInferenceRuntimeJob,
