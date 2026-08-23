@@ -258,6 +258,8 @@ import {
   authorizeAwaitingVisualEvidenceRecovery,
   createAwaitingVisualEvidenceRecoveryFact,
   formatAwaitingVisualEvidenceRecoveryForTrace,
+  decideVisualRecoveryPostCommitRebase,
+  authorizeVisualRecoveryCommit,
   formatDisplayTranscriptForTrace,
   calculateWordEquivalent,
   classifyMeTurn,
@@ -2053,6 +2055,7 @@ interface PendingAnswerResolutionCommitCandidate {
   answerRevision: number;
   parentTaskId?: string;
   parentRevision?: number;
+  preCommitParentRevision?: number;
   sourceHash?: string;
   adjudicationSourceHash?: string;
   sourceTurnIds: string[];
@@ -3347,19 +3350,27 @@ export function useMeetingAssistant() {
       const activeParent = contextState.activeMeetingTask?.parent;
       const stableAnswer = stableAnswerRevisionRef.current;
       const currentLogicalQuestion = logicalQuestionUnitRef.current;
-      const revisionAuthorized = Boolean(
-        candidate.sourceKind === "voice" &&
-          contextState.sessionId === candidate.sessionId &&
-          runtimeEpochRef.current === candidate.runtimeEpoch &&
-          manualCorrectionRevisionRef.current ===
-            candidate.manualCorrectionRevision &&
-          currentLogicalQuestion?.id === candidate.logicalQuestionUnitId &&
-          currentLogicalQuestion.revision ===
-            candidate.logicalQuestionRevision &&
-          stableAnswer?.revision === candidate.visibleAnswerRevision &&
-          activeParent?.id === candidate.parentTaskId &&
-          activeParent?.revisions === candidate.parentRevision
-      );
+      const revisionAuthorization = authorizeVisualRecoveryCommit({
+        sourceKind: candidate.sourceKind,
+        sessionId: candidate.sessionId,
+        currentSessionId: contextState.sessionId,
+        runtimeEpoch: candidate.runtimeEpoch,
+        currentRuntimeEpoch: runtimeEpochRef.current,
+        manualCorrectionRevision: candidate.manualCorrectionRevision,
+        currentManualCorrectionRevision:
+          manualCorrectionRevisionRef.current,
+        logicalQuestionUnitId: candidate.logicalQuestionUnitId,
+        currentLogicalQuestionUnitId: currentLogicalQuestion?.id,
+        logicalQuestionRevision: candidate.logicalQuestionRevision,
+        currentLogicalQuestionRevision: currentLogicalQuestion?.revision,
+        visibleAnswerRevision: candidate.visibleAnswerRevision,
+        currentVisibleAnswerRevision: stableAnswer?.revision,
+        parentTaskId: candidate.parentTaskId,
+        currentParentTaskId: activeParent?.id,
+        parentRevision: candidate.parentRevision,
+        currentParentRevision: activeParent?.revisions,
+      });
+      const revisionAuthorized = revisionAuthorization.authorized;
       const ledgerTransition = decideAnswerRecoveryLedgerTransition({
         revisionAuthorized,
         answerResolution: answerResolution?.decision,
@@ -3433,6 +3444,8 @@ export function useMeetingAssistant() {
       traceStoreRef.current.updateMetadata(traceId, {
         answerRecoveryPairSettled: true,
         answerRecoveryPairRevisionAuthorized: revisionAuthorized,
+        answerRecoveryPairRevisionAuthorizationReason:
+          revisionAuthorization.reason,
         answerRecoveryPairProposedVisualRecovery: recoveryProposed,
         answerRecoveryPairLedgerTransition: ledgerTransition.action,
         answerRecoveryPairLedgerTransitionReason: ledgerTransition.reason,
@@ -3928,6 +3941,34 @@ export function useMeetingAssistant() {
       ) {
         answerResolutionCandidate.visibleAnswerRevision = stable.revision;
         answerResolutionCandidate.visibleCommittedAt = stable.committedAt;
+        const recoveryRebase = decideVisualRecoveryPostCommitRebase({
+          sourceKind: answerResolutionCandidate.sourceKind,
+          logicalQuestionUnitId:
+            answerResolutionCandidate.logicalQuestionUnitId,
+          logicalQuestionRevision:
+            answerResolutionCandidate.logicalQuestionRevision,
+          parentTaskId: answerResolutionCandidate.parentTaskId,
+          parentRevision: answerResolutionCandidate.parentRevision,
+          stableLogicalQuestionUnitId: stable.logicalQuestionUnitId,
+          stableLogicalQuestionRevision: stable.logicalQuestionRevision,
+          stableTaskId: stable.taskId,
+          activeParentId: activeParent?.id,
+          activeParentRevision: activeParent?.revisions,
+        });
+        if (recoveryRebase.disposition !== "rejected") {
+          answerResolutionCandidate.parentRevision =
+            recoveryRebase.parentRevision;
+        }
+        traceStoreRef.current.updateMetadata(sourceTraceId, {
+          answerRecoveryPreCommitParentRevision:
+            answerResolutionCandidate.preCommitParentRevision,
+          answerRecoveryPostCommitParentRevision:
+            activeParent?.revisions,
+          answerRecoveryParentRevisionRebaseDisposition:
+            recoveryRebase.disposition,
+          answerRecoveryParentRevisionRebaseReason:
+            recoveryRebase.reason,
+        });
         finalizeAnswerRecoveryAdjudication(sourceTraceId);
       } else if (sourceTraceId) {
         pendingAnswerResolutionCommitByTraceRef.current.delete(sourceTraceId);
@@ -13089,6 +13130,8 @@ export function useMeetingAssistant() {
           parentTaskId:
             sufficiencyMeetingContext.activeMeetingTask?.parent.id,
           parentRevision:
+            sufficiencyMeetingContext.activeMeetingTask?.parent.revisions,
+          preCommitParentRevision:
             sufficiencyMeetingContext.activeMeetingTask?.parent.revisions,
           sourceHash:
             settledExecutionPlan?.sourceHash ??
@@ -23136,6 +23179,8 @@ export function useMeetingAssistant() {
               "success",
               {
                 questionChars: screenPreflight.question?.length ?? 0,
+                focusedEvidenceChars:
+                  screenPreflight.focusedEvidenceSummary?.length ?? 0,
                 ...formatQuestionTypeTraceMetadata(
                   screenPreflight.questionType,
                   screenPreflight.rawQuestionType
@@ -23158,6 +23203,8 @@ export function useMeetingAssistant() {
               topicDomain: screenPreflight.topicDomain,
               projectAnchor: screenPreflight.projectAnchor,
               classifierConfidence: screenPreflight.confidence,
+              screenPreflightFocusedEvidenceSummary:
+                screenPreflight.focusedEvidenceSummary,
             });
           } else {
             const fallbackError =
@@ -23217,7 +23264,12 @@ export function useMeetingAssistant() {
               screenObservationId: observation.id,
               voiceQuestion: screenVoiceQuestionBinding.candidate.text,
               screenQuestion: screenFallbackQuestion,
-              screenEvidenceSummary: screenPreflight?.question,
+              screenEvidenceSummary: [
+                screenPreflight?.focusedEvidenceSummary,
+                screenPreflight?.question,
+              ]
+                .filter(Boolean)
+                .join("\n"),
               activeParentObjective:
                 preflightContextState.activeMeetingTask?.parent.topic,
             });
@@ -23233,6 +23285,8 @@ export function useMeetingAssistant() {
           voiceQuestion: screenVoiceQuestionCapsule,
           screenObservationId: observation.id,
           screenPreflightQuestion: screenFallbackQuestion,
+          focusedEvidenceSummary:
+            screenPreflight?.focusedEvidenceSummary,
         });
         const baseScreenRelationLogicalQuestionUnit =
           buildManualScreenLogicalQuestionUnit({
@@ -23512,10 +23566,14 @@ export function useMeetingAssistant() {
                 : undefined,
               screenSourcePacket.sourceOperationAuthority
                 .boundVoicePrimaryAsk &&
-              screenSourcePacket.visualEvidence.preflightQuestion
+              (screenSourcePacket.visualEvidence.focusedEvidenceSummary ||
+                screenSourcePacket.visualEvidence.preflightQuestion)
                 ? {
                     role: "source-metadata" as const,
-                    text: `screen visual evidence summary: ${screenSourcePacket.visualEvidence.preflightQuestion}`,
+                    text: `screen visual evidence summary: ${
+                      screenSourcePacket.visualEvidence.focusedEvidenceSummary ??
+                      screenSourcePacket.visualEvidence.preflightQuestion
+                    }`,
                   }
                 : undefined,
               observation.captureTarget?.appName

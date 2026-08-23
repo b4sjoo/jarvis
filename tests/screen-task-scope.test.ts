@@ -369,6 +369,8 @@ test("binds a Voice LQU as the primary ask and keeps Screen as visual evidence",
     },
     screenObservationId: "screen-1",
     screenPreflightQuestion: "Implement the LRU cache.",
+    focusedEvidenceSummary:
+      "Cursor is on line 35; lines 35 through 38 show the eviction branch.",
   });
 
   assert.deepEqual(packet.primaryAsk, {
@@ -380,6 +382,10 @@ test("binds a Voice LQU as the primary ask and keeps Screen as visual evidence",
     screenObservationId: "screen-1",
   });
   assert.equal(packet.visualEvidence.preflightQuestion, "Implement the LRU cache.");
+  assert.equal(
+    packet.visualEvidence.focusedEvidenceSummary,
+    "Cursor is on line 35; lines 35 through 38 show the eviction branch."
+  );
   assert.equal(packet.sourceOperationAuthority.boundVoicePrimaryAsk, true);
   assert.deepEqual(
     formatManualScreenSourcePacketForTrace(packet),
@@ -392,6 +398,7 @@ test("binds a Voice LQU as the primary ask and keeps Screen as visual evidence",
       manualScreenPrimaryAskSourceHash: undefined,
       manualScreenVisualEvidenceObservationId: "screen-1",
       manualScreenVisualEvidenceQuestionChars: 24,
+      manualScreenFocusedEvidenceChars: 67,
       manualScreenSourceOperationAuthority: "manual-screen",
       manualScreenExplicitCapture: true,
       manualScreenBoundVoicePrimaryAsk: true,

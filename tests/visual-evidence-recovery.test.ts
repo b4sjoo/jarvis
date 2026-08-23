@@ -2,7 +2,9 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   authorizeAwaitingVisualEvidenceRecovery,
+  authorizeVisualRecoveryCommit,
   createAwaitingVisualEvidenceRecoveryFact,
+  decideVisualRecoveryPostCommitRebase,
 } from "../src/lib/meeting/visual-evidence-recovery.js";
 
 const resolution = {
@@ -108,5 +110,79 @@ test("rejects expired or manually corrected recovery", () => {
       now: 500,
     }).reason,
     "manual-correction-revision-mismatch"
+  );
+});
+
+test("rebases recovery authority only across its own same-parent visible commit", () => {
+  const rebased = decideVisualRecoveryPostCommitRebase({
+    sourceKind: "voice",
+    logicalQuestionUnitId: "question-lines",
+    logicalQuestionRevision: 2,
+    parentTaskId: "parent-coding",
+    parentRevision: 5,
+    stableLogicalQuestionUnitId: "question-lines",
+    stableLogicalQuestionRevision: 2,
+    stableTaskId: "parent-coding",
+    activeParentId: "parent-coding",
+    activeParentRevision: 6,
+  });
+  const unrelated = decideVisualRecoveryPostCommitRebase({
+    sourceKind: "voice",
+    logicalQuestionUnitId: "question-lines",
+    logicalQuestionRevision: 2,
+    parentTaskId: "parent-coding",
+    parentRevision: 5,
+    stableLogicalQuestionUnitId: "question-other",
+    stableLogicalQuestionRevision: 2,
+    stableTaskId: "parent-coding",
+    activeParentId: "parent-coding",
+    activeParentRevision: 6,
+  });
+
+  assert.deepEqual(rebased, {
+    disposition: "rebased",
+    reason: "owned-parent-revision-advanced",
+    parentRevision: 6,
+  });
+  assert.deepEqual(unrelated, {
+    disposition: "rejected",
+    reason: "logical-question-mismatch",
+  });
+});
+
+test("reports the exact post-commit recovery authorization facet", () => {
+  const base = {
+    sourceKind: "voice" as const,
+    sessionId: "session-1",
+    currentSessionId: "session-1",
+    runtimeEpoch: 4,
+    currentRuntimeEpoch: 4,
+    manualCorrectionRevision: 1,
+    currentManualCorrectionRevision: 1,
+    logicalQuestionUnitId: "question-lines",
+    currentLogicalQuestionUnitId: "question-lines",
+    logicalQuestionRevision: 2,
+    currentLogicalQuestionRevision: 2,
+    visibleAnswerRevision: 7,
+    currentVisibleAnswerRevision: 7,
+    parentTaskId: "parent-coding",
+    currentParentTaskId: "parent-coding",
+    parentRevision: 6,
+    currentParentRevision: 6,
+  };
+
+  assert.deepEqual(authorizeVisualRecoveryCommit(base), {
+    authorized: true,
+    reason: "authorized",
+  });
+  assert.deepEqual(
+    authorizeVisualRecoveryCommit({
+      ...base,
+      currentParentRevision: 7,
+    }),
+    {
+      authorized: false,
+      reason: "parent-revision-mismatch",
+    }
   );
 });

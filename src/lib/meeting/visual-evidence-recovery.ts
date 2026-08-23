@@ -41,6 +41,140 @@ export interface AwaitingVisualEvidenceRecoveryAuthorization {
     | "manual-correction-revision-mismatch";
 }
 
+export type VisualRecoveryCommitAuthorization =
+  | { authorized: true; reason: "authorized" }
+  | {
+      authorized: false;
+      reason:
+        | "source-not-voice"
+        | "session-mismatch"
+        | "runtime-epoch-mismatch"
+        | "manual-correction-revision-mismatch"
+        | "logical-question-mismatch"
+        | "logical-question-revision-mismatch"
+        | "visible-answer-revision-mismatch"
+        | "parent-mismatch"
+        | "parent-revision-mismatch";
+    };
+
+export function authorizeVisualRecoveryCommit(input: {
+  sourceKind: "voice" | "screen";
+  sessionId: string;
+  currentSessionId: string;
+  runtimeEpoch: number;
+  currentRuntimeEpoch: number;
+  manualCorrectionRevision: number;
+  currentManualCorrectionRevision: number;
+  logicalQuestionUnitId: string;
+  currentLogicalQuestionUnitId?: string;
+  logicalQuestionRevision: number;
+  currentLogicalQuestionRevision?: number;
+  visibleAnswerRevision: number;
+  currentVisibleAnswerRevision?: number;
+  parentTaskId?: string;
+  currentParentTaskId?: string;
+  parentRevision?: number;
+  currentParentRevision?: number;
+}): VisualRecoveryCommitAuthorization {
+  const reject = (
+    reason: Exclude<VisualRecoveryCommitAuthorization, { authorized: true }>["reason"]
+  ): VisualRecoveryCommitAuthorization => ({ authorized: false, reason });
+  if (input.sourceKind !== "voice") return reject("source-not-voice");
+  if (input.sessionId !== input.currentSessionId) {
+    return reject("session-mismatch");
+  }
+  if (input.runtimeEpoch !== input.currentRuntimeEpoch) {
+    return reject("runtime-epoch-mismatch");
+  }
+  if (
+    input.manualCorrectionRevision !== input.currentManualCorrectionRevision
+  ) {
+    return reject("manual-correction-revision-mismatch");
+  }
+  if (input.logicalQuestionUnitId !== input.currentLogicalQuestionUnitId) {
+    return reject("logical-question-mismatch");
+  }
+  if (
+    input.logicalQuestionRevision !== input.currentLogicalQuestionRevision
+  ) {
+    return reject("logical-question-revision-mismatch");
+  }
+  if (input.visibleAnswerRevision !== input.currentVisibleAnswerRevision) {
+    return reject("visible-answer-revision-mismatch");
+  }
+  if (input.parentTaskId !== input.currentParentTaskId) {
+    return reject("parent-mismatch");
+  }
+  if (input.parentRevision !== input.currentParentRevision) {
+    return reject("parent-revision-mismatch");
+  }
+  return { authorized: true, reason: "authorized" };
+}
+
+export type VisualRecoveryPostCommitRebaseDecision =
+  | {
+      disposition: "unchanged" | "rebased";
+      reason: "same-parent-revision" | "owned-parent-revision-advanced";
+      parentRevision: number;
+    }
+  | {
+      disposition: "rejected";
+      reason:
+        | "source-not-voice"
+        | "logical-question-mismatch"
+        | "stable-task-mismatch"
+        | "active-parent-mismatch"
+        | "parent-revision-regressed";
+    };
+
+export function decideVisualRecoveryPostCommitRebase(input: {
+  sourceKind: "voice" | "screen";
+  logicalQuestionUnitId: string;
+  logicalQuestionRevision: number;
+  parentTaskId?: string;
+  parentRevision?: number;
+  stableLogicalQuestionUnitId?: string | null;
+  stableLogicalQuestionRevision?: number | null;
+  stableTaskId?: string | null;
+  activeParentId?: string;
+  activeParentRevision?: number;
+}): VisualRecoveryPostCommitRebaseDecision {
+  if (input.sourceKind !== "voice") {
+    return { disposition: "rejected", reason: "source-not-voice" };
+  }
+  if (
+    input.stableLogicalQuestionUnitId !== input.logicalQuestionUnitId ||
+    input.stableLogicalQuestionRevision !== input.logicalQuestionRevision
+  ) {
+    return { disposition: "rejected", reason: "logical-question-mismatch" };
+  }
+  if (!input.parentTaskId || input.stableTaskId !== input.parentTaskId) {
+    return { disposition: "rejected", reason: "stable-task-mismatch" };
+  }
+  if (input.activeParentId !== input.parentTaskId) {
+    return { disposition: "rejected", reason: "active-parent-mismatch" };
+  }
+  if (
+    input.parentRevision === undefined ||
+    input.activeParentRevision === undefined ||
+    input.activeParentRevision < input.parentRevision
+  ) {
+    return { disposition: "rejected", reason: "parent-revision-regressed" };
+  }
+  if (input.activeParentRevision === input.parentRevision) {
+    return {
+      disposition: "unchanged",
+      reason: "same-parent-revision",
+      parentRevision: input.parentRevision,
+    };
+  }
+  return {
+    disposition: "rebased",
+    reason: "owned-parent-revision-advanced",
+    parentRevision: input.activeParentRevision,
+  };
+}
+
 export function createAwaitingVisualEvidenceRecoveryFact(input: {
   resolution: VisualEvidenceResolutionInput;
   sessionId: string;

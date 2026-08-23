@@ -104,6 +104,7 @@ export interface ManualScreenSourcePacket {
   visualEvidence: {
     screenObservationId: string;
     preflightQuestion?: string;
+    focusedEvidenceSummary?: string;
   };
   sourceOperationAuthority: {
     source: "manual-screen";
@@ -289,9 +290,12 @@ export function resolveManualScreenSourcePacket(input: {
   voiceQuestion?: ManualScreenVoiceQuestionCapsule;
   screenObservationId: string;
   screenPreflightQuestion?: string;
+  focusedEvidenceSummary?: string;
 }): ManualScreenSourcePacket {
   const screenPreflightQuestion =
     input.screenPreflightQuestion?.trim() || undefined;
+  const focusedEvidenceSummary =
+    input.focusedEvidenceSummary?.trim().slice(0, 800) || undefined;
   const primaryAsk: AdvisorCurrentQuestionEvidence | undefined =
     input.voiceQuestion
       ? {
@@ -317,6 +321,7 @@ export function resolveManualScreenSourcePacket(input: {
     visualEvidence: {
       screenObservationId: input.screenObservationId,
       preflightQuestion: screenPreflightQuestion,
+      focusedEvidenceSummary,
     },
     sourceOperationAuthority: {
       source: "manual-screen",
@@ -402,6 +407,8 @@ export function formatManualScreenSourcePacketForTrace(
       packet.visualEvidence.screenObservationId,
     manualScreenVisualEvidenceQuestionChars:
       packet.visualEvidence.preflightQuestion?.length ?? 0,
+    manualScreenFocusedEvidenceChars:
+      packet.visualEvidence.focusedEvidenceSummary?.length ?? 0,
     manualScreenSourceOperationAuthority:
       packet.sourceOperationAuthority.source,
     manualScreenExplicitCapture:

@@ -125,6 +125,7 @@ export interface SolveScreenAnchoredTaskOptions {
 
 export interface ScreenPreflightResult extends TaskClassifierMetadata {
   question?: string;
+  focusedEvidenceSummary?: string;
   programmingLanguage?: string;
   rawQuestionType?: string;
   canonicalQuestionType?: CanonicalQuestionType;
@@ -515,8 +516,9 @@ function buildScreenPreflightUserMessage({
     "<task>",
     "Return JSON only, with no Markdown fences.",
     "Schema:",
-    '{"question": string|null, "questionType": "behavioral"|"coding"|"general-system-design"|"ai-ml-system-design"|"project-deep-dive"|"field-knowledge"|"unknown", "askFrame": "hypothetical-design"|"past-project"|"ambiguous"|"direct-answer"|"unknown", "topicDomain": "ai-ml-infra"|"agentic-ai"|"search"|"backend"|"unknown", "projectAnchor": string|null, "programmingLanguage": string|null, "confidence": number, "isBehavioralInterview": boolean, "amazonLeadershipPrinciple": string|null}',
+    '{"question": string|null, "focusedEvidenceSummary": string|null, "questionType": "behavioral"|"coding"|"general-system-design"|"ai-ml-system-design"|"project-deep-dive"|"field-knowledge"|"unknown", "askFrame": "hypothetical-design"|"past-project"|"ambiguous"|"direct-answer"|"unknown", "topicDomain": "ai-ml-infra"|"agentic-ai"|"search"|"backend"|"unknown", "projectAnchor": string|null, "programmingLanguage": string|null, "confidence": number, "isBehavioralInterview": boolean, "amazonLeadershipPrinciple": string|null}',
     "question: the active visible interview/software-engineering question near the cursor, or null.",
+    "focusedEvidenceSummary: one short literal summary of cursor/focus-adjacent code lines, line numbers, error text, or requested visual evidence. Preserve visible identifiers and ranges. Return null when no such focused evidence is visible.",
     "questionType: classify the question. Use ai-ml-system-design for hypothetical AI/ML infra design such as RAG, model serving, agent memory, evaluation, retrieval, vector search, model routing, or AI platform architecture. Use general-system-design for non-AI backend/system design such as ticket selling, rate limiter, chat, booking, feeds, or storage systems. Use field-knowledge for direct conceptual questions such as 'what is X', 'explain X', 'compare X and Y', or 'what are the tradeoffs of X' when they do not ask to design a system. Use project-deep-dive when the question asks about a project the candidate built, their role, tradeoffs, architecture, impact, or lessons.",
     "askFrame: hypothetical-design for future/imagined design questions; past-project for questions about the candidate's actual past work; ambiguous when it asks both about an existing project and a future improvement; direct-answer for field knowledge, coding, or behavioral questions.",
     "topicDomain: choose agentic-ai for agents, memory, tool use, planning, or agent frameworks; ai-ml-infra for model serving, RAG, vector DB, embeddings, evaluation, data/model pipelines, or ML platforms; search for search/retrieval/ranking systems; backend for general backend systems.",
@@ -814,12 +816,16 @@ function parseScreenPreflightOutput(output: string): ScreenPreflightResult {
   try {
     const parsed = JSON.parse(jsonText) as Record<string, unknown>;
     const question = readOptionalString(parsed.question);
+    const focusedEvidenceSummary = readOptionalString(
+      parsed.focusedEvidenceSummary
+    )?.slice(0, 800);
     const fallbackClassifier = inferTaskClassifierFromText(question ?? output);
     const rawQuestionType = readOptionalString(parsed.questionType);
     const questionType =
       readScreenTaskKind(rawQuestionType) ?? fallbackClassifier.questionType;
     return {
       question,
+      focusedEvidenceSummary,
       rawQuestionType,
       questionType,
       canonicalQuestionType: normalizeCanonicalQuestionType(questionType),
