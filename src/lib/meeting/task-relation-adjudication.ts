@@ -306,6 +306,7 @@ export interface NarrowVoiceRelationReleaseInput {
   candidate?: LlmTaskRelationAdjudication;
   hasActiveChild?: boolean;
   manualCorrectionActive: boolean;
+  manualTypeAuthorityAuthorized?: boolean;
   operationLeaseAuthorized?: boolean;
   releaseWindowOpen?: boolean;
 }
@@ -706,7 +707,11 @@ export function decideNarrowVoiceRelationRelease(
     return reject("type-settlement-missing", true);
   }
   if (
-    input.typeSettlement.typeAuthoritySource !== "llm-type-repair" ||
+    (input.typeSettlement.typeAuthoritySource !== "llm-type-repair" &&
+      !(
+        input.manualTypeAuthorityAuthorized &&
+        input.typeSettlement.typeAuthoritySource === "manual-correction"
+      )) ||
     !input.typeSettlement.typeMutationAuthorized
   ) {
     return reject("type-settlement-not-authoritative", true);

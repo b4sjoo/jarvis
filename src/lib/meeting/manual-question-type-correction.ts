@@ -447,14 +447,6 @@ export function decideManualCorrectionScope({
     currentQuestionIsChild,
   };
 
-  if (decision.target === "current-question") {
-    return {
-      ...base,
-      scope: "current-only",
-      reason: "manual-correction-targets-current-non-parent-question",
-    };
-  }
-
   if (currentQuestionRelation === "resume-parent") {
     return {
       ...base,
@@ -471,6 +463,14 @@ export function decideManualCorrectionScope({
       ...base,
       scope: "child-retype",
       reason: "manual-correction-targets-current-child-question",
+    };
+  }
+
+  if (decision.target === "current-question") {
+    return {
+      ...base,
+      scope: "current-only",
+      reason: "manual-correction-targets-current-non-parent-question",
     };
   }
 

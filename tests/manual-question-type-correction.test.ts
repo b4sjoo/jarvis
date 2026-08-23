@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { ActiveMeetingTask } from "../src/lib/meeting/active-meeting-task.js";
+import { createProvisionalCurrentQuestion } from "../src/lib/meeting/current-question-settlement.js";
 import {
   applyManualQuestionTypeCorrectionToParent,
   buildManualCorrectionParentTransition,
@@ -16,6 +17,7 @@ import {
   ManualCorrectionOperationCoordinator,
   type ManualCorrectionTargetHistoryEntry,
 } from "../src/lib/meeting/manual-question-type-correction.js";
+import { settleManualQuestionTypeCorrection } from "../src/lib/meeting/manual-correction-settlement.js";
 import type {
   ActiveInterviewChild,
   ActiveInterviewParent,
@@ -25,8 +27,134 @@ import type {
 } from "../src/lib/meeting/types.js";
 import type { CanonicalQuestionType } from "../src/lib/meeting/task-taxonomy.js";
 import type { LogicalQuestionUnit } from "../src/lib/meeting/logical-question-unit.js";
+import type { LlmTaskRelationAdjudication } from "../src/lib/meeting/task-relation-adjudication.js";
 
 const now = 1_000;
+
+test("settles manual type authority and relation authority in one correction transaction", () => {
+  const unit = makeLogicalQuestion(
+    "question-general-sd",
+    "turn-general-sd",
+    "Design a food delivery system."
+  );
+  const result = settleManualQuestionTypeCorrection({
+    operationId: "correction-1",
+    currentQuestion: createProvisionalCurrentQuestion({
+      logicalQuestionUnit: unit,
+      sourceKind: "voice",
+    }),
+    correctedType: "general-system-design",
+    activeParentId: "parent-coding",
+    activeParentRevision: 4,
+    activeParentType: "coding",
+    hasActiveChild: false,
+    manualCorrectionRevision: 3,
+    relationCandidate: relationCandidate({ relation: "new-parent" }),
+    relationOperationLeaseAuthorized: true,
+  });
+
+  assert.equal(result.relationRelease?.authorized, true);
+  assert.equal(result.settlement.questionType, "general-system-design");
+  assert.equal(result.settlement.relation, "new-parent");
+  assert.equal(result.settlement.typeAuthoritySource, "manual-correction");
+  assert.equal(result.settlement.relationAuthoritySource, "llm-type-repair");
+  assert.equal(result.settlement.parentMutationAuthorized, true);
+});
+
+test("keeps the current parent when correction-owned relation adjudication abstains", () => {
+  const unit = makeLogicalQuestion(
+    "question-followup",
+    "turn-followup",
+    "Explain the consistency tradeoff."
+  );
+  const result = settleManualQuestionTypeCorrection({
+    operationId: "correction-2",
+    currentQuestion: createProvisionalCurrentQuestion({
+      logicalQuestionUnit: unit,
+      sourceKind: "voice",
+    }),
+    correctedType: "general-system-design",
+    activeParentId: "parent-design",
+    activeParentRevision: 2,
+    activeParentType: "general-system-design",
+    hasActiveChild: false,
+    manualCorrectionRevision: 4,
+    relationCandidate: relationCandidate({
+      relation: "unknown",
+      confidence: 0.7,
+    }),
+    relationOperationLeaseAuthorized: true,
+  });
+
+  assert.equal(result.relationRelease?.authorized, false);
+  assert.equal(result.settlement.questionType, "general-system-design");
+  assert.equal(result.settlement.relation, "unknown");
+  assert.equal(result.settlement.typeMutationAuthorized, true);
+  assert.equal(result.settlement.relationMutationAuthorized, false);
+  assert.equal(result.settlement.parentMutationAuthorized, false);
+});
+
+test("deterministically creates or reseeds a parent only from exact source identity", () => {
+  const unit = makeLogicalQuestion(
+    "question-parent-origin",
+    "turn-parent-origin",
+    "Design a URL shortener."
+  );
+  const result = settleManualQuestionTypeCorrection({
+    operationId: "correction-3",
+    currentQuestion: createProvisionalCurrentQuestion({
+      logicalQuestionUnit: unit,
+      sourceKind: "screen",
+      sourceObservationIds: ["observation-1"],
+    }),
+    correctedType: "general-system-design",
+    activeParentId: "parent-wrong-type",
+    activeParentRevision: 1,
+    activeParentType: "coding",
+    hasActiveChild: false,
+    manualCorrectionRevision: 5,
+    forceNewParentFromSourceIdentity: true,
+  });
+
+  assert.equal(result.settlement.questionType, "general-system-design");
+  assert.equal(result.settlement.relation, "new-parent");
+  assert.equal(
+    result.settlement.relationAuthoritySource,
+    "deterministic-fast-path"
+  );
+  assert.equal(result.settlement.parentMutationAuthorized, true);
+});
+
+test("preserves an exact active child while applying the corrected current type", () => {
+  const unit = makeLogicalQuestion(
+    "question-child",
+    "turn-child",
+    "What does HNSW do?"
+  );
+  const result = settleManualQuestionTypeCorrection({
+    operationId: "correction-4",
+    currentQuestion: createProvisionalCurrentQuestion({
+      logicalQuestionUnit: unit,
+      sourceKind: "voice",
+    }),
+    correctedType: "field-knowledge",
+    activeParentId: "parent-aiml",
+    activeParentRevision: 7,
+    activeParentType: "ai-ml-system-design",
+    hasActiveChild: true,
+    manualCorrectionRevision: 6,
+    preserveActiveChildFromSourceIdentity: true,
+  });
+
+  assert.equal(result.settlement.questionType, "field-knowledge");
+  assert.equal(result.settlement.relation, "child-probe");
+  assert.equal(
+    result.settlement.relationAuthoritySource,
+    "deterministic-fast-path"
+  );
+  assert.equal(result.settlement.relationMutationAuthorized, true);
+  assert.equal(result.settlement.parentMutationAuthorized, false);
+});
 
 test("lets a newer manual correction replace the active operation", () => {
   const coordinator = new ManualCorrectionOperationCoordinator();
@@ -1138,5 +1266,25 @@ function makeLogicalQuestion(
     compositionReasons: ["fresh-substantive-turn"],
     boundaryReason: "fresh-substantive-turn",
     truncated: false,
+  };
+}
+
+function relationCandidate(
+  overrides: Partial<LlmTaskRelationAdjudication> = {}
+): LlmTaskRelationAdjudication {
+  return {
+    schemaVersion: 3,
+    relation: "new-parent",
+    dependency: "parent-independent",
+    continuationShape: "mainline",
+    returnIntent: "no-resume",
+    switchIntent: "explicit-switch",
+    standaloneSufficiency: "sufficient",
+    confidence: 0.98,
+    currentQuestionEvidenceSpans: ["Design a food delivery system."],
+    parentEvidenceSpans: [],
+    explicitBinding: false,
+    standalone: true,
+    ...overrides,
   };
 }
