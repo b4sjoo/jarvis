@@ -17473,9 +17473,10 @@ export function useMeetingAssistant() {
           const latestCommittedSettlement =
             currentQuestionSettlementRef.current;
           const latestQuestionSourceHash =
-            latestCommittedSettlement?.logicalQuestionUnitId ===
+            latestCommittedSettlement &&
+            latestCommittedSettlement.logicalQuestionUnitId ===
               latestLogicalQuestionUnit?.id &&
-            latestCommittedSettlement?.revision ===
+            latestCommittedSettlement.revision ===
               latestLogicalQuestionUnit?.revision
               ? latestCommittedSettlement.sourceHash
               : currentQuestion.sourceHash;
