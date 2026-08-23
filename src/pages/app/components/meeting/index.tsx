@@ -89,7 +89,7 @@ import {
   getActiveMeetingTaskFocusSummary,
   getActiveMeetingTaskId,
   buildMeetingAnswerDisplayModel,
-  buildAdvisorIntentEvaluationFromTrace,
+  buildHumanEvaluationObservedSnapshotV2,
   decideForceAdviseEligibility,
   evaluateTaskSettlementTupleCompatibilityV2,
   guardAsyncUnlisten,
@@ -5710,19 +5710,16 @@ const TraceHumanEvaluationPanel = ({
     "boolean"
       ? trace.metadata.currentQuestionSettlementParentMutationAuthorized
       : undefined;
+  const observedSnapshotV2 = buildHumanEvaluationObservedSnapshotV2(trace);
   const questionTypeObservation = projectQuestionTypeObservation({
     metadata: trace.metadata,
     fallbackCurrentQuestionType: detectedQuestionType,
   });
   const observedQuestionType =
-    questionTypeObservation.observedCurrentQuestionType;
-  const observedRelation = normalizeEvaluationTaskRelation(
-    currentQuestionSettlementRelation
-  );
-  const observedParentAction = resolveEvaluationParentAction(
-    observedRelation,
-    currentQuestionParentMutationAuthorized
-  );
+    observedSnapshotV2.observedCurrentQuestionType ??
+    observedSnapshotV2.questionType;
+  const observedRelation = observedSnapshotV2.relation;
+  const observedParentAction = observedSnapshotV2.parentAction;
   const expectedSettlementCompatibility =
     expectedRelation && expectedParentAction
       ? evaluateTaskSettlementTupleCompatibilityV2({
@@ -5752,39 +5749,27 @@ const TraceHumanEvaluationPanel = ({
   const activeMeetingMetadataFact =
     projectionV2?.activeFacts["expected-meeting-metadata"]?.fact;
   const observedMeetingMetadata =
+    observedSnapshotV2.meetingMetadata ??
     projectMeetingMetadataEvaluationObservation(trace.metadata ?? {});
   const showMeetingMetadataEvaluation =
     observedMeetingMetadata.operationObserved;
-  const observedProjectId =
-    projectionV2?.observed?.projectId ??
-    readStringMetadata(trace.metadata, "activeMeetingProjectBindingId") ??
-    readStringMetadata(trace.metadata, "projectBindingProjectId");
-  const observedProjectName =
-    projectionV2?.observed?.projectName ??
-    readStringMetadata(trace.metadata, "activeMeetingProjectBindingName") ??
-    readStringMetadata(trace.metadata, "projectBindingProjectName");
+  const observedProjectId = observedSnapshotV2.projectId;
+  const observedProjectName = observedSnapshotV2.projectName;
   const observedProjectBindingRevision =
-    projectionV2?.observed?.projectBindingRevision ??
-    readNumberMetadata(
-      trace.metadata,
-      "activeMeetingProjectBindingRevision"
-    ) ??
-    readNumberMetadata(trace.metadata, "projectBindingRevision");
-  const observedProjectPhase = projectionV2?.observed?.playbookPhase;
+    observedSnapshotV2.projectBindingRevision;
+  const observedProjectPhase = observedSnapshotV2.playbookPhase;
   const observedProjectFactAnchorState =
-    projectionV2?.observed?.factAnchorState;
+    observedSnapshotV2.factAnchorState;
   const observedProjectChildContinuity =
-    projectionV2?.observed?.childContinuity;
+    observedSnapshotV2.childContinuity;
   const showProjectTrajectoryEvaluation =
     observedQuestionType === "project-deep-dive" ||
     detectedQuestionType === "project-deep-dive" ||
     detectedPlaybook === "project_deep_dive" ||
     Boolean(observedProjectId || observedProjectName);
-  const observedContextReadScope =
-    projectionV2?.observed?.contextReadScope;
-  const observedArtifactIntent =
-    projectionV2?.observed?.artifactIntent;
-  const observedRuntimeAction = projectionV2?.observed?.runtimeAction;
+  const observedContextReadScope = observedSnapshotV2.contextReadScope;
+  const observedArtifactIntent = observedSnapshotV2.artifactIntent;
+  const observedRuntimeAction = observedSnapshotV2.runtimeAction;
   const transientPersonalStatusDomain =
     typeof trace.metadata?.transientPersonalStatusDomain === "string"
       ? (trace.metadata
@@ -5883,33 +5868,6 @@ const TraceHumanEvaluationPanel = ({
     });
   };
 
-  const updateAdvisorIntentEvaluation = (
-    expectedAction: NonNullable<
-      QuestionHumanEvaluation["advisorIntent"]
-    >["expectedAction"],
-    legacyPatch?: {
-      advisorGateCorrectlySkipped: boolean;
-      advisorGateShouldAdvise: boolean;
-    }
-  ) => {
-    onUpdate(
-      legacyPatch ?? {
-        advisorGateCorrectlySkipped: expectedAction !== "advise",
-        advisorGateShouldAdvise: expectedAction === "advise",
-      }
-    );
-    onUpdateQuestion({
-      advisorIntent: buildAdvisorIntentEvaluationFromTrace({
-        trace,
-        expectedAction,
-        source:
-          expectedAction === "ignore" && advisorExecutionAuthorized === true
-            ? "manual-suppress"
-            : "explicit-human-label",
-      }),
-    });
-  };
-
   const updateAnswerSufficiencyEvaluation = (
     patch: Partial<
       NonNullable<QuestionHumanEvaluation["answerSufficiency"]>
@@ -5993,7 +5951,6 @@ const TraceHumanEvaluationPanel = ({
   const recordExpectedRuntimeAction = (
     expectedAction: "advise" | "append-context" | "buffer" | "ignore"
   ) => {
-    updateAdvisorIntentEvaluation(expectedAction);
     recordGroundTruth({
       kind: "expected-runtime-action",
       expectedAction,
