@@ -20,7 +20,7 @@ test("selects the spoken baseline as the initial coding phase", () => {
   );
   assert.match(
     formatInterviewPlaybookForPrompt(playbook),
-    /Do not optimize prematurely/
+    /do not optimize prematurely/i
   );
 });
 
