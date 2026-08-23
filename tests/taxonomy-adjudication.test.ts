@@ -833,6 +833,8 @@ test("lease authorization drops stale revisions, boundaries, and corrections", (
     logicalQuestionUnit: logicalUnit,
     taskBoundaryEpoch: 11,
     manualCorrectionRevision: 4,
+    sourceSettlementId: "question-source-a",
+    questionSourceHash: "question-hash-a",
     expectedParentId: "parent-a",
     requestedAt: 100,
   });
@@ -842,6 +844,8 @@ test("lease authorization drops stale revisions, boundaries, and corrections", (
     runtimeEpoch: 2,
     logicalQuestionUnit: logicalUnit,
     taskBoundaryEpoch: 11,
+    sourceSettlementId: "question-source-a",
+    questionSourceHash: "question-hash-a",
     manualCorrectionRevision: 4,
     activeParentId: "parent-a",
     activeParentRevision: undefined,
@@ -869,6 +873,16 @@ test("lease authorization drops stale revisions, boundaries, and corrections", (
     {
       authorized: false,
       reason: "manual-correction-revision-mismatch",
+    }
+  );
+  assert.deepEqual(
+    authorizeTaxonomyAdjudicationLease(lease, {
+      ...current,
+      sourceSettlementId: "question-source-b",
+    }),
+    {
+      authorized: false,
+      reason: "source-settlement-mismatch",
     }
   );
 });

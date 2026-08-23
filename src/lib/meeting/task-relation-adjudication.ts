@@ -1,5 +1,6 @@
 import type { ActiveMeetingTask } from "./active-meeting-task.js";
 import {
+  createCurrentQuestionSourceSettlementId,
   settleCurrentQuestion,
   type CurrentQuestionSettlementDecision,
   type CurrentQuestionSettlementProposal,
@@ -9,6 +10,7 @@ import type { LogicalQuestionUnit } from "./logical-question-unit.js";
 import type { RuntimeInferenceRuntimeJob } from "./runtime-inference-runtime.js";
 import { projectPrimaryAsk } from "./primary-ask-projection.js";
 import {
+  hashTaxonomySourceTurnIds,
   projectLogicalQuestionForAdjudication,
   type TaxonomyAdjudicationLease,
   type TaxonomyAdjudicationProjection,
@@ -138,6 +140,8 @@ export interface TaskRelationAdjudicationRequest {
   promptVersion: string;
   logicalQuestionUnitId: string;
   logicalQuestionUnitRevision: number;
+  sourceSettlementId: string;
+  sourceHash: string;
   currentQuestion: TaxonomyAdjudicationProjection;
   activeParent: TaskRelationParentCapsule;
   activeChild?: TaskRelationChildCapsule;
@@ -323,6 +327,7 @@ export function normalizeTaskRelationAdjudicationMode(
 export function buildTaskRelationAdjudicationRequest(input: {
   logicalQuestionUnit: LogicalQuestionUnit;
   activeMeetingTask: ActiveMeetingTask;
+  currentQuestion?: ProvisionalCurrentQuestion;
   recentTurns?: TranscriptTurn[];
 }): TaskRelationAdjudicationRequest {
   const parent = input.activeMeetingTask.parent;
@@ -346,12 +351,28 @@ export function buildTaskRelationAdjudicationRequest(input: {
     input.activeMeetingTask,
     recentSourceEvidence
   );
+  const currentQuestion = input.currentQuestion;
+  const sourceSettlementId = currentQuestion
+    ? createCurrentQuestionSourceSettlementId(currentQuestion)
+    : createCurrentQuestionSourceSettlementId({
+        sessionId: input.logicalQuestionUnit.sessionId,
+        runtimeEpoch: input.logicalQuestionUnit.runtimeEpoch,
+        logicalQuestionUnitId: input.logicalQuestionUnit.id,
+        revision: input.logicalQuestionUnit.revision,
+        sourceTurnIds: input.logicalQuestionUnit.sourceTurnIds,
+      });
 
   return {
     schemaVersion: TASK_RELATION_ADJUDICATION_SCHEMA_VERSION,
     promptVersion: TASK_RELATION_ADJUDICATION_PROMPT_VERSION,
     logicalQuestionUnitId: input.logicalQuestionUnit.id,
     logicalQuestionUnitRevision: input.logicalQuestionUnit.revision,
+    sourceSettlementId,
+    sourceHash:
+      currentQuestion?.sourceHash ??
+      `question_source_turns_${hashTaxonomySourceTurnIds(
+        input.logicalQuestionUnit.sourceTurnIds
+      )}`,
     currentQuestion: projectLogicalQuestionForAdjudication(
       input.logicalQuestionUnit
     ),
@@ -1197,6 +1218,9 @@ export function formatTaskRelationAdjudicationForTrace(input: {
       input.request?.logicalQuestionUnitId,
     taskRelationAdjudicationUnitRevision:
       input.request?.logicalQuestionUnitRevision,
+    taskRelationAdjudicationSourceSettlementId:
+      input.request?.sourceSettlementId,
+    taskRelationAdjudicationSourceHash: input.request?.sourceHash,
     taskRelationAdjudicationInputChars:
       input.request?.currentQuestion.projectedChars,
     taskRelationAdjudicationOriginalChars:

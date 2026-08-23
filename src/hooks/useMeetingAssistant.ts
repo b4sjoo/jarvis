@@ -463,6 +463,7 @@ import {
   buildSettledAdvisorExecutionPlan,
   commitTaskBoundaryCandidate,
   commitSourceOwnedTransition,
+  createCurrentQuestionSourceSettlementId,
   createTaskBoundaryCandidate,
   decideLlmTypeRepairFirstParentAdmission,
   createProvisionalCurrentQuestion,
@@ -17053,9 +17054,16 @@ export function useMeetingAssistant() {
           narrowScreenRelease: initialNarrowScreenRelease,
         }),
       });
+      const currentQuestion =
+        suppliedCurrentQuestion ??
+        createProvisionalCurrentQuestion({
+          logicalQuestionUnit,
+          sourceKind,
+        });
       const request = buildTaskRelationAdjudicationRequest({
         logicalQuestionUnit,
         activeMeetingTask,
+        currentQuestion,
         recentTurns: contextState.transcriptTurns,
       });
       const currentText = request.currentQuestion.text;
@@ -17262,6 +17270,8 @@ export function useMeetingAssistant() {
         taskBoundaryEpoch,
         manualCorrectionRevision:
           manualCorrectionRevisionRef.current,
+        sourceSettlementId: request.sourceSettlementId,
+        questionSourceHash: request.sourceHash,
         expectedParentId: activeParent.id,
         expectedParentRevision: activeParent.revisions,
       });
@@ -17290,6 +17300,10 @@ export function useMeetingAssistant() {
           lease.operationId,
         taskRelationAdjudicationSourceTurnIdsHash:
           lease.sourceTurnIdsHash,
+        taskRelationAdjudicationLeaseSourceSettlementId:
+          lease.sourceSettlementId,
+        taskRelationAdjudicationLeaseQuestionSourceHash:
+          lease.questionSourceHash,
         taskRelationAdjudicationTaskBoundaryEpoch:
           lease.taskBoundaryEpoch,
         taskRelationAdjudicationManualCorrectionRevision:
@@ -17443,6 +17457,28 @@ export function useMeetingAssistant() {
             : latestParent
               ? "followup-parent"
               : "unknown";
+          const latestLogicalQuestionUnit =
+            sourceKind === "screen"
+              ? logicalQuestionUnit
+              : logicalQuestionUnitRef.current;
+          const latestSourceSettlementId = latestLogicalQuestionUnit
+            ? createCurrentQuestionSourceSettlementId({
+                sessionId: latestLogicalQuestionUnit.sessionId,
+                runtimeEpoch: latestLogicalQuestionUnit.runtimeEpoch,
+                logicalQuestionUnitId: latestLogicalQuestionUnit.id,
+                revision: latestLogicalQuestionUnit.revision,
+                sourceTurnIds: latestLogicalQuestionUnit.sourceTurnIds,
+              })
+            : undefined;
+          const latestCommittedSettlement =
+            currentQuestionSettlementRef.current;
+          const latestQuestionSourceHash =
+            latestCommittedSettlement?.logicalQuestionUnitId ===
+              latestLogicalQuestionUnit?.id &&
+            latestCommittedSettlement?.revision ===
+              latestLogicalQuestionUnit?.revision
+              ? latestCommittedSettlement.sourceHash
+              : currentQuestion.sourceHash;
           const authorization =
             authorizeTaxonomyAdjudicationLease(
               runtimeSettlement.job.lease,
@@ -17462,6 +17498,8 @@ export function useMeetingAssistant() {
                   ),
                   relation: latestRelation,
                 }),
+                sourceSettlementId: latestSourceSettlementId,
+                questionSourceHash: latestQuestionSourceHash,
                 manualCorrectionRevision:
                   manualCorrectionRevisionRef.current,
                 activeParentId: latestParent?.id,
@@ -17510,12 +17548,6 @@ export function useMeetingAssistant() {
                   : !parsed?.ok
                     ? "invalid-output"
                     : "shadow-observed";
-          const currentQuestion =
-            suppliedCurrentQuestion ??
-            createProvisionalCurrentQuestion({
-              logicalQuestionUnit,
-              sourceKind,
-            });
           const llmProposal =
             parsedValue && latestParent
               ? createTaskRelationSettlementProposal({
@@ -17620,6 +17652,14 @@ export function useMeetingAssistant() {
               parsed?.evidenceSpansValid ?? false,
             taskRelationAdjudicationLeaseAuthorized:
               authorization.authorized,
+            taskRelationAdjudicationCurrentSourceSettlementId:
+              latestSourceSettlementId,
+            taskRelationAdjudicationCurrentQuestionSourceHash:
+              latestQuestionSourceHash,
+            taskRelationAdjudicationQuestionSourceHashChanged:
+              runtimeSettlement.job.lease.questionSourceHash !== undefined &&
+              runtimeSettlement.job.lease.questionSourceHash !==
+                latestQuestionSourceHash,
             taskRelationAdjudicationStaleReason:
               authorization.authorized
                 ? undefined

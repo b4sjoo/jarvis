@@ -274,6 +274,27 @@ export function createProvisionalCurrentQuestion(input: {
   };
 }
 
+export function createCurrentQuestionSourceSettlementId(
+  question: Pick<
+    ProvisionalCurrentQuestion,
+    | "sessionId"
+    | "runtimeEpoch"
+    | "logicalQuestionUnitId"
+    | "revision"
+    | "sourceTurnIds"
+  >
+) {
+  return `question_source_settlement_${hashStableText(
+    [
+      question.sessionId,
+      question.runtimeEpoch,
+      question.logicalQuestionUnitId,
+      question.revision,
+      uniqueStrings(question.sourceTurnIds).join(","),
+    ].join("|")
+  )}`;
+}
+
 export function decideCurrentQuestionMutationAuthority(input: {
   currentQuestion: ProvisionalCurrentQuestion;
   proposedQuestionType?: unknown;

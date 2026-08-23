@@ -148,11 +148,17 @@ function directOutput(
 }
 
 test("builds a bounded relation-only request without generated or factual context", () => {
+  const logicalQuestionUnit = unit(
+    "How would this retrieval design handle fresh documents?"
+  );
+  const currentQuestion = createProvisionalCurrentQuestion({
+    logicalQuestionUnit,
+    sourceKind: "voice",
+  });
   const request = buildTaskRelationAdjudicationRequest({
-    logicalQuestionUnit: unit(
-      "How would this retrieval design handle fresh documents?"
-    ),
+    logicalQuestionUnit,
     activeMeetingTask: activeTask(),
+    currentQuestion,
     recentTurns: [
       {
         id: "turn-parent",
@@ -187,6 +193,11 @@ test("builds a bounded relation-only request without generated or factual contex
   const serialized = JSON.stringify(request);
 
   assert.equal(request.activeParent.revision, 3);
+  assert.match(
+    request.sourceSettlementId,
+    /^question_source_settlement_/
+  );
+  assert.equal(request.sourceHash, currentQuestion.sourceHash);
   assert.equal(request.recentTransitions.length, 1);
   assert.deepEqual(
     request.recentSourceEvidence.map((item) => item.role),

@@ -270,6 +270,8 @@ export interface TaxonomyAdjudicationLease {
   logicalQuestionUnitId: string;
   logicalQuestionUnitRevision: number;
   sourceTurnIdsHash: string;
+  sourceSettlementId?: string;
+  questionSourceHash?: string;
   taskBoundaryEpoch: number;
   manualCorrectionRevision: number;
   expectedParentId?: string;
@@ -285,6 +287,7 @@ export type TaxonomyAdjudicationLeaseRejectionReason =
   | "logical-unit-id-mismatch"
   | "logical-unit-revision-mismatch"
   | "source-turn-hash-mismatch"
+  | "source-settlement-mismatch"
   | "task-boundary-epoch-mismatch"
   | "manual-correction-revision-mismatch"
   | "expected-parent-mismatch"
@@ -298,6 +301,8 @@ export interface TaxonomyAdjudicationLeaseSnapshot {
   runtimeEpoch: number;
   logicalQuestionUnit?: LogicalQuestionUnit;
   taskBoundaryEpoch: number;
+  sourceSettlementId?: string;
+  questionSourceHash?: string;
   manualCorrectionRevision: number;
   activeParentId?: string;
   activeParentRevision?: number;
@@ -1043,6 +1048,8 @@ export function createTaxonomyAdjudicationLease(input: {
   logicalQuestionUnit: LogicalQuestionUnit;
   taskBoundaryEpoch: number;
   manualCorrectionRevision: number;
+  sourceSettlementId?: string;
+  questionSourceHash?: string;
   expectedParentId?: string;
   expectedParentRevision?: number;
   operationId?: string;
@@ -1057,6 +1064,8 @@ export function createTaxonomyAdjudicationLease(input: {
     sourceTurnIdsHash: hashTaxonomySourceTurnIds(
       input.logicalQuestionUnit.sourceTurnIds
     ),
+    sourceSettlementId: input.sourceSettlementId,
+    questionSourceHash: input.questionSourceHash,
     taskBoundaryEpoch: input.taskBoundaryEpoch,
     manualCorrectionRevision: input.manualCorrectionRevision,
     expectedParentId: input.expectedParentId,
@@ -1092,6 +1101,12 @@ export function authorizeTaxonomyAdjudicationLease(
   }
   if (lease.sourceTurnIdsHash !== hashTaxonomySourceTurnIds(unit.sourceTurnIds)) {
     return reject("source-turn-hash-mismatch");
+  }
+  if (
+    lease.sourceSettlementId !== undefined &&
+    lease.sourceSettlementId !== current.sourceSettlementId
+  ) {
+    return reject("source-settlement-mismatch");
   }
   if (lease.taskBoundaryEpoch !== current.taskBoundaryEpoch) {
     return reject("task-boundary-epoch-mismatch");
