@@ -1,4 +1,5 @@
 import type { RuntimeInferenceRuntimeJob } from "./runtime-inference-runtime.js";
+import { buildRuntimeInferenceModelInput } from "./runtime-inference.js";
 
 export const ANSWER_RECOVERY_ADJUDICATION_SCHEMA_VERSION = 1;
 export const ANSWER_RESOLUTION_PROMPT_VERSION =
@@ -32,6 +33,11 @@ export interface AnswerRecoveryAdjudicationRequest {
   logicalQuestionUnitRevision: number;
   answerRevision: number;
   sourceHash: string;
+  questionText: string;
+  answerText: string;
+}
+
+export interface AnswerRecoverySemanticPayload {
   questionText: string;
   answerText: string;
 }
@@ -140,6 +146,10 @@ export function buildAnswerRecoveryAdjudicationRequest(input: {
 export function buildAnswerRecoveryAdjudicationPrompts(
   request: AnswerRecoveryAdjudicationRequest
 ) {
+  const semanticPayload: AnswerRecoverySemanticPayload = {
+    questionText: request.questionText,
+    answerText: request.answerText,
+  };
   const shared = [
     "Return one JSON object only. Do not answer or rewrite the interview content.",
     "Use only questionText and answerText.",
@@ -164,10 +174,10 @@ export function buildAnswerRecoveryAdjudicationPrompts(
           "Use not-visual for missing requirements, business facts, interviewer choices, personal facts, or information that a screenshot would not directly supply.",
           "Schema: {schemaVersion:1,decision:'visual-required'|'not-visual'|'unclear',questionEvidenceSpans:string[],answerEvidenceSpans:string[],ambiguityReason?:string}.",
         ];
-  return {
+  return buildRuntimeInferenceModelInput({
     systemPrompt: [...operation, ...shared].join(" "),
-    userMessage: JSON.stringify(request),
-  };
+    semanticPayload,
+  });
 }
 
 export function parseAnswerRecoveryAdjudicationOutput(

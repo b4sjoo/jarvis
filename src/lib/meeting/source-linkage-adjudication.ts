@@ -1,4 +1,5 @@
 import type { RuntimeInferenceRuntimeJob } from "./runtime-inference-runtime.js";
+import { buildRuntimeInferenceModelInput } from "./runtime-inference.js";
 
 export const SOURCE_LINKAGE_ADJUDICATION_SCHEMA_VERSION = 1;
 export const SOURCE_LINKAGE_ADJUDICATION_PROMPT_VERSION =
@@ -22,6 +23,12 @@ export interface SourceLinkageAdjudicationRequest {
   screenQuestion: string;
   screenEvidenceSummary?: string;
   activeParentObjective?: string;
+}
+
+export interface SourceLinkageSemanticPayload {
+  voiceQuestion: string;
+  screenQuestion: string;
+  screenEvidenceSummary?: string;
 }
 
 export interface LlmSourceLinkageAdjudication {
@@ -102,8 +109,14 @@ export function buildSourceLinkageAdjudicationRequest(input: {
 export function buildSourceLinkageAdjudicationPrompts(
   request: SourceLinkageAdjudicationRequest
 ) {
-  return {
-    systemPrompt: [
+  const semanticPayload: SourceLinkageSemanticPayload = {
+    voiceQuestion: request.voiceQuestion,
+    screenQuestion: request.screenQuestion,
+    ...(request.screenEvidenceSummary
+      ? { screenEvidenceSummary: request.screenEvidenceSummary }
+      : {}),
+  };
+  const systemPrompt = [
       "Decide one thing only: whether the deliberate screen capture primarily supplies evidence requested by the unresolved voice question or presents an independent current screen question.",
       "Return one JSON object only. Do not answer either question.",
       "Use bind-voice only when both voice and screen evidence show that the screen directly supplies what the voice question requested.",
@@ -113,9 +126,11 @@ export function buildSourceLinkageAdjudicationPrompts(
       "Every evidence span must be an exact verbatim substring from the matching input field.",
       "Do not classify question type, task relation, parent action, playbook phase, memory, or artifact intent.",
       "Schema: {schemaVersion:1,decision:'bind-voice'|'use-screen'|'unclear',voiceEvidenceSpans:string[],screenEvidenceSpans:string[],ambiguityReason?:string}.",
-    ].join(" "),
-    userMessage: JSON.stringify(request),
-  };
+    ].join(" ");
+  return buildRuntimeInferenceModelInput({
+    systemPrompt,
+    semanticPayload,
+  });
 }
 
 export function parseSourceLinkageAdjudicationOutput(

@@ -20,6 +20,16 @@ test("binds a screen only with bilateral grounded evidence", () => {
   const prompts = buildSourceLinkageAdjudicationPrompts(request);
   assert.match(prompts.systemPrompt, /supplies evidence requested/);
   assert.match(prompts.systemPrompt, /Time proximity, topic overlap/);
+  const modelInput = JSON.parse(prompts.userMessage) as Record<string, unknown>;
+  assert.deepEqual(modelInput, {
+    screenEvidenceSummary: "Lines 46 through 49 show the eviction loop.",
+    screenQuestion: "Implement LRU cache",
+    voiceQuestion: "Could you explain lines 46 through 49?",
+  });
+  assert.equal("logicalQuestionUnitId" in modelInput, false);
+  assert.equal("screenObservationId" in modelInput, false);
+  assert.equal("sourceHash" in modelInput, false);
+  assert.equal("activeParentObjective" in modelInput, false);
   const parsed = parseSourceLinkageAdjudicationOutput(
     JSON.stringify({
       schemaVersion: 1,

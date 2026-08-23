@@ -6255,6 +6255,9 @@ export function useMeetingAssistant() {
           }),
           answerRecoveryOperationId: lease.operationId,
           answerRecoveryInputChars: promptText.length,
+          answerRecoverySemanticPayloadDigest:
+            prompts.semanticPayloadDigest,
+          answerRecoveryModelVisibleChars: prompts.modelVisibleChars,
         };
         traceStoreRef.current.updateMetadata(traceId, scheduledMetadata);
         traceStoreRef.current.recordInput(
@@ -6266,6 +6269,8 @@ export function useMeetingAssistant() {
             promptVersion: request.promptVersion,
             schemaVersion: request.schemaVersion,
             behaviorMutationBlocked: true,
+            semanticPayloadDigest: prompts.semanticPayloadDigest,
+            modelVisibleChars: prompts.modelVisibleChars,
           }
         );
         sessionRecordingManagerRef.current?.recordModelInput({
@@ -6278,6 +6283,8 @@ export function useMeetingAssistant() {
             promptVersion: request.promptVersion,
             schemaVersion: request.schemaVersion,
             behaviorMutationBlocked: true,
+            semanticPayloadDigest: prompts.semanticPayloadDigest,
+            modelVisibleChars: prompts.modelVisibleChars,
           },
         });
 
@@ -6553,6 +6560,9 @@ export function useMeetingAssistant() {
         }),
         sourceLinkageOperationId: lease.operationId,
         sourceLinkageInputChars: promptText.length,
+        sourceLinkageSemanticPayloadDigest:
+          prompts.semanticPayloadDigest,
+        sourceLinkageModelVisibleChars: prompts.modelVisibleChars,
       };
       traceStoreRef.current.updateMetadata(traceId, scheduledMetadata);
       traceStoreRef.current.recordInput(
@@ -6564,6 +6574,8 @@ export function useMeetingAssistant() {
           promptVersion: request.promptVersion,
           schemaVersion: request.schemaVersion,
           behaviorMutationBlocked: true,
+          semanticPayloadDigest: prompts.semanticPayloadDigest,
+          modelVisibleChars: prompts.modelVisibleChars,
         }
       );
       sessionRecordingManagerRef.current?.recordModelInput({
@@ -6576,6 +6588,8 @@ export function useMeetingAssistant() {
           promptVersion: request.promptVersion,
           schemaVersion: request.schemaVersion,
           behaviorMutationBlocked: true,
+          semanticPayloadDigest: prompts.semanticPayloadDigest,
+          modelVisibleChars: prompts.modelVisibleChars,
         },
       });
 

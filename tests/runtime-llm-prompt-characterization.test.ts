@@ -239,14 +239,21 @@ test("characterizes envelope leakage in every current runtime LLM prompt", () =>
     ])
   );
 
+  const migratedOperations = new Set([
+    "responseOpportunity",
+    "answerResolution",
+    "evidenceRequirement",
+    "sourceLinkage",
+  ]);
   for (const [name, paths] of Object.entries(leakage)) {
-    if (name === "responseOpportunity") continue;
+    if (migratedOperations.has(name)) continue;
     assert.ok(paths.length > 0, `${name} should remain in the migration ledger`);
   }
   assert.deepEqual(leakage.responseOpportunity, []);
+  assert.deepEqual(leakage.answerResolution, []);
+  assert.deepEqual(leakage.evidenceRequirement, []);
+  assert.deepEqual(leakage.sourceLinkage, []);
   assert.ok(leakage.meetingMetadata.includes("sessionId"));
   assert.ok(leakage.taskRelation.includes("activeParent.parentId"));
-  assert.ok(leakage.answerResolution.includes("answerRevision"));
-  assert.ok(leakage.sourceLinkage.includes("screenObservationId"));
   assert.ok(leakage.answerSufficiency.includes("identity.traceId"));
 });

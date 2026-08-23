@@ -41,6 +41,18 @@ test("keeps answer resolution and visual evidence as independent prompts", () =>
   assert.doesNotMatch(resolutionPrompt.systemPrompt, /visual-required/);
   assert.match(evidencePrompt.systemPrompt, /supplied directly by a screenshot/);
   assert.doesNotMatch(evidencePrompt.systemPrompt, /resolved'\|'unresolved/);
+  const resolutionInput = JSON.parse(resolutionPrompt.userMessage) as Record<
+    string,
+    unknown
+  >;
+  assert.deepEqual(resolutionInput, {
+    answerText: answer,
+    questionText: question,
+  });
+  assert.equal("operationKind" in resolutionInput, false);
+  assert.equal("logicalQuestionUnitId" in resolutionInput, false);
+  assert.equal("answerRevision" in resolutionInput, false);
+  assert.equal("sourceHash" in resolutionInput, false);
 });
 
 test("parses an unresolved answer with grounded paraphrase evidence", () => {
