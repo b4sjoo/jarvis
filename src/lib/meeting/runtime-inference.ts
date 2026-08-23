@@ -38,7 +38,7 @@ export interface RuntimeInferenceContextSnapshot<TPayload> {
   payload: Readonly<TPayload>;
 }
 
-export interface RuntimeInferenceRequest<TInput> {
+export interface RuntimeInferenceEnvelope {
   requestId: string;
   workloadClass: "runtime";
   operationKind: RuntimeInferenceOperationKind;
@@ -48,10 +48,67 @@ export interface RuntimeInferenceRequest<TInput> {
   sessionId: string;
   runtimeEpoch: number;
   operationRevision: number;
-  input: TInput;
+  semanticPayloadDigest: string;
+  modelInputArtifactRef?: string;
   timeoutMs: number;
   maxOutputTokens: number;
 }
+
+export interface RuntimeInferenceInvocation<TSemanticPayload> {
+  envelope: Readonly<RuntimeInferenceEnvelope>;
+  semanticPayload: Readonly<TSemanticPayload>;
+}
+
+export interface RuntimeInferenceModelInput {
+  systemPrompt: string;
+  userMessage: string;
+  semanticPayloadDigest: string;
+  modelVisibleChars: number;
+}
+
+const RUNTIME_ENVELOPE_ONLY_KEYS = new Set([
+  "requestId",
+  "operationId",
+  "operationKind",
+  "workloadClass",
+  "lane",
+  "contextSnapshotId",
+  "contextSnapshotHash",
+  "sessionId",
+  "runtimeEpoch",
+  "operationRevision",
+  "sourceSettlementId",
+  "sourceHash",
+  "outputHash",
+  "semanticPayloadDigest",
+  "modelInputArtifactRef",
+  "promptVersion",
+  "schemaVersion",
+  "timeoutMs",
+  "maxOutputTokens",
+  "quiescenceMs",
+  "budgetKey",
+  "budgetSlot",
+  "budgetReason",
+  "createdAt",
+  "startedAt",
+  "endedAt",
+  "updatedAt",
+  "id",
+  "rev",
+  "v",
+  "turnId",
+  "sourceTurnIds",
+  "omittedSourceTurnIds",
+  "projectionReason",
+  "selectionReason",
+  "sourceScope",
+  "recentEvidenceDiagnostics",
+  "playbookPhase",
+  "manualForceAdvise",
+  "diagramKind",
+  "sttUncertaintyMarkers",
+]);
 
 const DEFINITIONS: Record<
   RuntimeInferenceOperationKind,
@@ -171,17 +228,20 @@ export function createRuntimeInferenceContextSnapshot<
   });
 }
 
-export function createRuntimeInferenceRequest<TInput>(input: {
+export function createRuntimeInferenceInvocation<TSemanticPayload>(input: {
   requestId: string;
   operationKind: RuntimeInferenceOperationKind;
   contextSnapshot: RuntimeInferenceContextSnapshot<object>;
   operationRevision: number;
-  input: TInput;
-}): RuntimeInferenceRequest<TInput> {
+  semanticPayload: TSemanticPayload;
+}): RuntimeInferenceInvocation<TSemanticPayload> {
   const definition = getRuntimeInferenceOperationDefinition(
     input.operationKind
   );
-  return {
+  const semanticPayload = freezeRuntimeSemanticPayload(
+    cloneRuntimeSemanticPayload(input.semanticPayload)
+  );
+  const envelope = Object.freeze({
     requestId: input.requestId,
     workloadClass: "runtime",
     operationKind: input.operationKind,
@@ -191,10 +251,98 @@ export function createRuntimeInferenceRequest<TInput>(input: {
     sessionId: input.contextSnapshot.sessionId,
     runtimeEpoch: input.contextSnapshot.runtimeEpoch,
     operationRevision: input.operationRevision,
-    input: input.input,
+    semanticPayloadDigest: hashRuntimeSemanticPayload(semanticPayload),
     timeoutMs: definition.timeoutMs,
     maxOutputTokens: definition.maxOutputTokens,
+  } satisfies RuntimeInferenceEnvelope);
+  return Object.freeze({
+    envelope,
+    semanticPayload,
+  });
+}
+
+export function buildRuntimeInferenceModelInput<TSemanticPayload>(input: {
+  systemPrompt: string;
+  semanticPayload: TSemanticPayload;
+}): RuntimeInferenceModelInput {
+  const leakage = findRuntimeEnvelopeLeakage(input.semanticPayload);
+  if (leakage.length) {
+    throw new Error(
+      `Runtime semantic payload contains envelope-only fields: ${leakage.join(", ")}`
+    );
+  }
+  const userMessage = serializeRuntimeSemanticPayload(input.semanticPayload);
+  return {
+    systemPrompt: input.systemPrompt,
+    userMessage,
+    semanticPayloadDigest: hashRuntimeSemanticPayload(input.semanticPayload),
+    modelVisibleChars: input.systemPrompt.length + userMessage.length,
   };
+}
+
+export function serializeRuntimeSemanticPayload(value: unknown) {
+  return JSON.stringify(canonicalizeRuntimeSemanticValue(value));
+}
+
+export function hashRuntimeSemanticPayload(value: unknown) {
+  let hash = 2_166_136_261;
+  for (const character of serializeRuntimeSemanticPayload(value)) {
+    hash ^= character.charCodeAt(0);
+    hash = Math.imul(hash, 16_777_619);
+  }
+  return (hash >>> 0).toString(16).padStart(8, "0");
+}
+
+export function findRuntimeEnvelopeLeakage(value: unknown) {
+  const leakedPaths: string[] = [];
+  const visit = (candidate: unknown, path: string) => {
+    if (!candidate || typeof candidate !== "object") return;
+    if (Array.isArray(candidate)) {
+      candidate.forEach((item, index) => visit(item, `${path}[${index}]`));
+      return;
+    }
+    for (const [key, item] of Object.entries(candidate)) {
+      const itemPath = path ? `${path}.${key}` : key;
+      if (isRuntimeEnvelopeOnlyKey(key)) leakedPaths.push(itemPath);
+      visit(item, itemPath);
+    }
+  };
+  visit(value, "");
+  return leakedPaths;
+}
+
+function isRuntimeEnvelopeOnlyKey(key: string) {
+  return (
+    RUNTIME_ENVELOPE_ONLY_KEYS.has(key) ||
+    /(?:Id|Ids|Revision|Hash|Timestamp|TimeoutMs|BudgetMs|Budget)$/u.test(key)
+  );
+}
+
+function canonicalizeRuntimeSemanticValue(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map(canonicalizeRuntimeSemanticValue);
+  }
+  if (!value || typeof value !== "object") return value;
+  return Object.fromEntries(
+    Object.entries(value)
+      .filter(([, item]) => item !== undefined)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, item]) => [key, canonicalizeRuntimeSemanticValue(item)])
+  );
+}
+
+function cloneRuntimeSemanticPayload<T>(value: T): T {
+  return JSON.parse(serializeRuntimeSemanticPayload(value)) as T;
+}
+
+function freezeRuntimeSemanticPayload<T>(value: T): Readonly<T> {
+  if (!value || typeof value !== "object" || Object.isFrozen(value)) {
+    return value as Readonly<T>;
+  }
+  for (const item of Object.values(value)) {
+    freezeRuntimeSemanticPayload(item);
+  }
+  return Object.freeze(value);
 }
 
 export function formatRuntimeInferenceOperationForTrace(

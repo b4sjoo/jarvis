@@ -1,10 +1,14 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  buildRuntimeInferenceModelInput,
   createRuntimeInferenceContextSnapshot,
-  createRuntimeInferenceRequest,
+  createRuntimeInferenceInvocation,
+  findRuntimeEnvelopeLeakage,
   formatRuntimeInferenceOperationForTrace,
   getRuntimeInferenceOperationDefinition,
+  hashRuntimeSemanticPayload,
+  serializeRuntimeSemanticPayload,
 } from "../src/lib/meeting/runtime-inference.js";
 import { RESPONSE_OPPORTUNITY_MAX_OUTPUT_TOKENS } from "../src/lib/meeting/short-intent-gate.js";
 import {
@@ -103,27 +107,92 @@ test("builds immutable shared snapshots and operation-specific requests", () => 
     createdAt: 100,
     payload: { latestTurnId: "turn-a" },
   });
-  const taxonomy = createRuntimeInferenceRequest({
+  const taxonomy = createRuntimeInferenceInvocation({
     requestId: "request-taxonomy",
     operationKind: "taxonomy-adjudication",
     contextSnapshot: snapshot,
     operationRevision: 1,
-    input: { question: "Design a cache." },
+    semanticPayload: { question: "Design a cache." },
   });
-  const metadata = createRuntimeInferenceRequest({
+  const metadata = createRuntimeInferenceInvocation({
     requestId: "request-metadata",
     operationKind: "meeting-metadata-inference",
     contextSnapshot: snapshot,
     operationRevision: 1,
-    input: { company: "Reddit" },
+    semanticPayload: { company: "Reddit" },
   });
 
   assert.equal(Object.isFrozen(snapshot), true);
   assert.equal(Object.isFrozen(snapshot.payload), true);
-  assert.equal(taxonomy.contextSnapshotId, metadata.contextSnapshotId);
-  assert.equal(taxonomy.contextSnapshotHash, metadata.contextSnapshotHash);
-  assert.equal(taxonomy.lane, "critical");
-  assert.equal(metadata.lane, "background");
+  assert.equal(Object.isFrozen(taxonomy), true);
+  assert.equal(Object.isFrozen(taxonomy.envelope), true);
+  assert.equal(Object.isFrozen(taxonomy.semanticPayload), true);
+  assert.equal(
+    taxonomy.envelope.contextSnapshotId,
+    metadata.envelope.contextSnapshotId
+  );
+  assert.equal(
+    taxonomy.envelope.contextSnapshotHash,
+    metadata.envelope.contextSnapshotHash
+  );
+  assert.equal(taxonomy.envelope.lane, "critical");
+  assert.equal(metadata.envelope.lane, "background");
+  assert.equal(
+    taxonomy.envelope.semanticPayloadDigest,
+    hashRuntimeSemanticPayload(taxonomy.semanticPayload)
+  );
+});
+
+test("serializes semantic payloads deterministically", () => {
+  const left = {
+    currentQuestion: { sourceTexts: ["What would you monitor?"] },
+    activeParent: { objective: "Explain reliability.", topic: "Oasis" },
+  };
+  const right = {
+    activeParent: { topic: "Oasis", objective: "Explain reliability." },
+    currentQuestion: { sourceTexts: ["What would you monitor?"] },
+  };
+
+  assert.equal(
+    serializeRuntimeSemanticPayload(left),
+    serializeRuntimeSemanticPayload(right)
+  );
+  assert.equal(hashRuntimeSemanticPayload(left), hashRuntimeSemanticPayload(right));
+});
+
+test("keeps runtime envelope fields out of model-visible semantic payloads", () => {
+  const clean = {
+    sourceSpans: [{ index: 0, text: "Design a cache." }],
+    activeParent: { topic: "Caching" },
+  };
+  assert.deepEqual(findRuntimeEnvelopeLeakage(clean), []);
+
+  const modelInput = buildRuntimeInferenceModelInput({
+    systemPrompt: "Classify one bounded input.",
+    semanticPayload: clean,
+  });
+  assert.equal(modelInput.userMessage.includes("Design a cache."), true);
+  assert.equal(modelInput.semanticPayloadDigest, hashRuntimeSemanticPayload(clean));
+  assert.equal(
+    modelInput.modelVisibleChars,
+    modelInput.systemPrompt.length + modelInput.userMessage.length
+  );
+
+  assert.deepEqual(
+    findRuntimeEnvelopeLeakage({
+      sourceHash: "opaque",
+      nested: { parentRevision: 3, text: "Keep this." },
+    }),
+    ["sourceHash", "nested.parentRevision"]
+  );
+  assert.throws(
+    () =>
+      buildRuntimeInferenceModelInput({
+        systemPrompt: "Classify one bounded input.",
+        semanticPayload: { logicalQuestionUnitId: "question-a", text: "Hi" },
+      }),
+    /envelope-only fields: logicalQuestionUnitId/
+  );
 });
 
 test("isolates quota consumption by operation", async () => {
