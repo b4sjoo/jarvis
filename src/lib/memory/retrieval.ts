@@ -44,6 +44,7 @@ import {
   resolveGeneralMemoryEligibility,
   resolveMemoryEligibilityQuery,
 } from "./general-eligibility.js";
+import { scoreCurrentQuestionRelevance } from "./current-question-ranking.js";
 
 const DEFAULT_MAX_ENTRIES = 5;
 const DEFAULT_MAX_CHARS = 6000;
@@ -174,6 +175,9 @@ callbacks: MemoryRetrievalRuntimeCallbacks = {}): Promise<MemoryRetrievalResult>
     }
   }
   const queryTokens = tokenize(query);
+  const currentQuestionTokens = tokenize(
+    currentQuestionQuery?.trim() || query
+  );
   const scoringContext = {
     useCase,
     projectId,
@@ -182,6 +186,7 @@ callbacks: MemoryRetrievalRuntimeCallbacks = {}): Promise<MemoryRetrievalResult>
     topicDomain,
     projectAnchor,
     query,
+    currentQuestionQuery: currentQuestionQuery?.trim() || query,
   };
 
   const taggedEntries: MemoryEntry[] = [];
@@ -198,11 +203,27 @@ callbacks: MemoryRetrievalRuntimeCallbacks = {}): Promise<MemoryRetrievalResult>
 
   const alwaysEntries = taggedEntries
     .filter((entry) => entry.injectionMode === "always" || entry.priority === "pinned")
-    .map((entry) => scoreMemoryEntry(entry, queryTokens, scoringContext, true))
+    .map((entry) =>
+      scoreMemoryEntry(
+        entry,
+        queryTokens,
+        currentQuestionTokens,
+        scoringContext,
+        true
+      )
+    )
     .map((item) => appendGeneralScopeReason(item, generalScopePaths));
   const scoredRetrievalEntries = taggedEntries
     .filter((entry) => entry.injectionMode === "retrieval" && entry.priority !== "pinned")
-    .map((entry) => scoreMemoryEntry(entry, queryTokens, scoringContext, false))
+    .map((entry) =>
+      scoreMemoryEntry(
+        entry,
+        queryTokens,
+        currentQuestionTokens,
+        scoringContext,
+        false
+      )
+    )
     .map((item) => appendGeneralScopeReason(item, generalScopePaths));
   const retrievalEntries = scoredRetrievalEntries
     .filter((item) => {
@@ -664,11 +685,13 @@ interface MemoryScoringContext {
   topicDomain?: MemoryTopicDomain;
   projectAnchor?: string;
   query: string;
+  currentQuestionQuery: string;
 }
 
 function scoreMemoryEntry(
   entry: MemoryEntry,
   queryTokens: Set<string>,
+  currentQuestionTokens: Set<string>,
   context: MemoryScoringContext,
   always: boolean
 ): RetrievedMemoryEntry {
@@ -796,6 +819,15 @@ function scoreMemoryEntry(
   if (summaryMatches) {
     score += Math.min(summaryMatches * 2, 12);
     matchReason.push(`content:${summaryMatches}`);
+  }
+
+  const currentQuestionBoost = scoreCurrentQuestionRelevance(
+    entry,
+    currentQuestionTokens
+  );
+  if (currentQuestionBoost.score > 0) {
+    score += currentQuestionBoost.score;
+    matchReason.push(`currentQuestion:${currentQuestionBoost.score}`);
   }
 
   return {

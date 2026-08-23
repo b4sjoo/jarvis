@@ -424,6 +424,10 @@ export function buildProjectTopicEvidence({
         alias: string;
       } => Boolean(item.alias)
     );
+  const unmatchedExplicitProject =
+    explicitMatches.length === 0
+      ? extractExplicitProjectName(sourceText)
+      : undefined;
   const terms = tokenizeProjectEvidence(text);
 
   return {
@@ -431,16 +435,19 @@ export function buildProjectTopicEvidence({
     explicitProjectIds: explicitMatches
       .map(({ candidate }) => candidate.projectId)
       .filter((value): value is string => Boolean(value)),
-    explicitProjectNames: explicitMatches.map(
-      ({ candidate }) => candidate.projectName
-    ),
+    explicitProjectNames: [
+      ...explicitMatches.map(({ candidate }) => candidate.projectName),
+      ...(unmatchedExplicitProject ? [unmatchedExplicitProject] : []),
+    ],
     explicitProjectAliases: explicitMatches.map(({ alias }) => alias),
     featureTerms: terms.filter((term) =>
       PROJECT_FEATURE_TERMS.has(term)
     ),
     actionTerms: terms.filter((term) => PROJECT_ACTION_TERMS.has(term)),
     resultTerms: terms.filter((term) => PROJECT_RESULT_TERMS.has(term)),
-    conflictingProjectNames: [],
+    conflictingProjectNames: unmatchedExplicitProject
+      ? candidates.map((candidate) => candidate.projectName)
+      : [],
   };
 }
 
@@ -460,20 +467,44 @@ export function deriveExplicitProjectSelectionFromSource({
   const matches = candidates.filter((candidate) =>
     Boolean(findExplicitProjectAlias(sourceText, candidate))
   );
-  if (matches.length !== 1) return undefined;
+  if (matches.length > 1) return undefined;
   const match = matches[0];
+  const unmatchedExplicitProject = match
+    ? undefined
+    : extractExplicitProjectName(sourceText);
+  if (!match && !unmatchedExplicitProject) return undefined;
 
   return {
     sessionId: "runtime-current-session",
     runtimeEpoch: 0,
     sourceTurnId: sourceTurnIds.at(-1) ?? "current-source",
     sourceObservationId: sourceObservationIds.at(-1),
-    projectId: match.projectId,
-    projectName: match.projectName,
+    projectId: match?.projectId,
+    projectName: match?.projectName ?? unmatchedExplicitProject!,
     authority: "interviewer-explicit",
     actionRevision: 0,
     createdAt: now,
   };
+}
+
+function extractExplicitProjectName(sourceText: string | undefined) {
+  const text = sourceText?.trim();
+  if (!text) return undefined;
+  const matches = Array.from(
+    text.matchAll(
+      /\b((?:[A-Z][A-Za-z0-9._-]*)(?:\s+[A-Z][A-Za-z0-9._-]*){0,2})\s+project\b/g
+    )
+  )
+    .map((match) => match[1]?.trim())
+    .filter((value): value is string => Boolean(value))
+    .filter(
+      (value) =>
+        !new Set(["Current", "New", "Previous", "The", "This", "Your"]).has(
+          value
+        )
+    );
+  const unique = Array.from(new Set(matches));
+  return unique.length === 1 ? unique[0] : undefined;
 }
 
 export function projectBindingMatchesProjectHint(

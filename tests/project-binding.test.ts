@@ -32,6 +32,32 @@ test("binds the only eligible evidence project without a model decision", () => 
   assert.equal(decision.binding?.revision, 1);
 });
 
+test("does not bind a sole conflicting candidate over an explicit project name", () => {
+  const decision = resolveProjectBinding({
+    questionType: "project-deep-dive",
+    relation: "new-parent",
+    currentSourceText:
+      "In your Oasis project, why did you choose NDJSON and how did you handle per-item failures?",
+    sourceTurnIds: ["turn-oasis"],
+    memoryContext: makeMemoryResult([
+      makeEvidence("mem_throttling", "throttling", "Throttling"),
+    ]),
+  });
+
+  assert.equal(decision.action, "needs-selection");
+  assert.equal(decision.binding, undefined);
+  assert.equal(decision.sourceAuthority, "interviewer-explicit");
+  assert.equal(
+    decision.reason,
+    "interviewer-explicit-has-no-eligible-evidence-match"
+  );
+  assert.deepEqual(decision.sourceTurnIds, ["turn-oasis"]);
+  assert.deepEqual(decision.topicEvidence?.explicitProjectNames, ["Oasis"]);
+  assert.deepEqual(decision.topicEvidence?.conflictingProjectNames, [
+    "Throttling",
+  ]);
+});
+
 test("does not treat guidance as a bindable project", () => {
   const decision = resolveProjectBinding({
     questionType: "project-deep-dive",
