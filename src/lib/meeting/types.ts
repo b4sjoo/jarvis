@@ -507,6 +507,7 @@ export interface ExplicitProjectSelection {
 
 export interface ProjectTopicEvidence {
   sourceText: string;
+  deicticReference?: boolean;
   explicitProjectIds: string[];
   explicitProjectNames: string[];
   explicitProjectAliases?: string[];

@@ -61,13 +61,17 @@ export function resolveProjectBinding({
       projectAnchor,
       candidates,
     });
-  const interviewerSelection = deriveExplicitProjectSelectionFromSource({
-    sourceText: currentSourceText,
-    candidates,
-    sourceTurnIds,
-    sourceObservationIds,
-    now,
-  });
+  const deicticProjectReference =
+    topicEvidence.deicticReference === true;
+  const interviewerSelection = deicticProjectReference
+    ? undefined
+    : deriveExplicitProjectSelectionFromSource({
+        sourceText: currentSourceText,
+        candidates,
+        sourceTurnIds,
+        sourceObservationIds,
+        now,
+      });
   const normalizedExplicitSelection = normalizeExplicitProjectSelection({
     selection: explicitProjectSelection,
     explicitSelectionSource,
@@ -169,6 +173,20 @@ export function resolveProjectBinding({
       topicCompatible: false,
       topicEvidence,
       reason: `${authoritativeSelection.authority}-has-no-eligible-evidence-match`,
+    });
+  }
+
+  if (deicticProjectReference && !continuingBinding) {
+    return createProjectBindingDecision({
+      action: "needs-selection",
+      candidates,
+      changed: false,
+      sourceAuthority: "compatible-existing",
+      sourceTurnIds,
+      sourceObservationIds,
+      topicCompatible: false,
+      topicEvidence,
+      reason: "deictic-project-reference-has-no-active-binding",
     });
   }
 
@@ -372,6 +390,8 @@ export function formatProjectBindingDecisionForTrace(
     projectBindingTopicCompatible: decision.topicCompatible,
     projectBindingExplicitAliases:
       decision.topicEvidence?.explicitProjectAliases ?? [],
+    projectBindingDeicticReference:
+      decision.topicEvidence?.deicticReference ?? false,
     projectBindingSourceTurnIds: decision.sourceTurnIds,
     projectBindingSourceObservationIds: decision.sourceObservationIds,
     projectBindingPreviousProjectId: decision.previousBinding?.projectId,
@@ -411,7 +431,10 @@ export function buildProjectTopicEvidence({
   candidates: ProjectBindingCandidate[];
 }): ProjectTopicEvidence {
   const text = [sourceText, projectAnchor].filter(Boolean).join(" ").trim();
-  const explicitMatches = candidates
+  const deicticReference = isDeicticProjectReference(sourceText);
+  const explicitMatches = deicticReference
+    ? []
+    : candidates
     .map((candidate) => ({
       candidate,
       alias: findExplicitProjectAlias(sourceText, candidate),
@@ -425,13 +448,14 @@ export function buildProjectTopicEvidence({
       } => Boolean(item.alias)
     );
   const unmatchedExplicitProject =
-    explicitMatches.length === 0
+    !deicticReference && explicitMatches.length === 0
       ? extractExplicitProjectName(sourceText)
       : undefined;
   const terms = tokenizeProjectEvidence(text);
 
   return {
     sourceText: (sourceText ?? "").trim().slice(0, 700),
+    deicticReference,
     explicitProjectIds: explicitMatches
       .map(({ candidate }) => candidate.projectId)
       .filter((value): value is string => Boolean(value)),
@@ -449,6 +473,19 @@ export function buildProjectTopicEvidence({
       ? candidates.map((candidate) => candidate.projectName)
       : [],
   };
+}
+
+function isDeicticProjectReference(sourceText: string | undefined) {
+  const text = sourceText
+    ?.normalize("NFKC")
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}+#._-]+/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!text) return false;
+  return /\b(?:this|that|current|the same)(?:\s+[\p{L}\p{N}+#._-]+){0,3}\s+project\b/iu.test(
+    text
+  );
 }
 
 export function deriveExplicitProjectSelectionFromSource({

@@ -210,6 +210,68 @@ test("current interviewer project evidence outranks a stale parent binding", () 
   assert.equal(decision.bindingRevision, 3);
 });
 
+test("keeps an active binding for a qualified deictic project reference", () => {
+  const decision = resolveProjectBinding({
+    existingBinding: makeBinding(),
+    questionType: "project-deep-dive",
+    relation: "followup-parent",
+    currentSourceText:
+      "For this OSS project, explain why you used NDJSON.",
+    sourceTurnIds: ["turn-deictic-project"],
+    memoryContext: makeMemoryResult([
+      makeEvidence("mem_agentic", "agentic-memory", "Agentic Memory"),
+      makeEvidence("mem_oasis", "oasis", "Oasis"),
+    ]),
+  });
+
+  assert.equal(decision.action, "preserve");
+  assert.equal(decision.binding?.projectId, "agentic-memory");
+  assert.equal(decision.topicEvidence?.deicticReference, true);
+  assert.deepEqual(decision.topicEvidence?.explicitProjectNames, []);
+  assert.deepEqual(decision.topicEvidence?.conflictingProjectNames, []);
+});
+
+test("does not invent a project identity from a deictic reference without a binding", () => {
+  const decision = resolveProjectBinding({
+    questionType: "project-deep-dive",
+    relation: "new-parent",
+    currentSourceText:
+      "For this OSS project, explain why you used NDJSON.",
+    sourceTurnIds: ["turn-unbound-deictic-project"],
+    memoryContext: makeMemoryResult([
+      makeEvidence("mem_oasis", "oasis", "Oasis"),
+    ]),
+  });
+
+  assert.equal(decision.action, "needs-selection");
+  assert.equal(decision.binding, undefined);
+  assert.equal(
+    decision.reason,
+    "deictic-project-reference-has-no-active-binding"
+  );
+  assert.equal(decision.topicEvidence?.deicticReference, true);
+  assert.deepEqual(decision.topicEvidence?.explicitProjectNames, []);
+});
+
+test("keeps an independently named project switch authoritative", () => {
+  const decision = resolveProjectBinding({
+    existingBinding: makeBinding(),
+    questionType: "project-deep-dive",
+    relation: "followup-parent",
+    currentSourceText:
+      "Now switch to the Oasis project and explain its NDJSON format.",
+    sourceTurnIds: ["turn-named-project-switch"],
+    memoryContext: makeMemoryResult([
+      makeEvidence("mem_agentic", "agentic-memory", "Agentic Memory"),
+      makeEvidence("mem_oasis", "oasis", "Oasis"),
+    ]),
+  });
+
+  assert.equal(decision.action, "rebind");
+  assert.equal(decision.binding?.projectId, "oasis");
+  assert.equal(decision.topicEvidence?.deicticReference, false);
+});
+
 test("a named feature alias binds its canonical evidence project", () => {
   const decision = resolveProjectBinding({
     questionType: "project-deep-dive",
