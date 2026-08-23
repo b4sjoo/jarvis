@@ -9737,7 +9737,6 @@ export function useMeetingAssistant() {
     const committedSettlementAdvisorTaskSignals =
       currentQuestionSettlement?.typeMutationAuthorized &&
       currentQuestionSettlement.relationMutationAuthorized &&
-      currentQuestionSettlement.parentMutationAuthorized &&
       currentQuestionSettlement.action === "answer" &&
       currentQuestionSettlement.questionType !== "unknown" &&
       isRuntimeTaskRelation(currentQuestionSettlement.relation) &&
@@ -19045,21 +19044,20 @@ export function useMeetingAssistant() {
           ? outcome.settlement
           : undefined;
         const latestContext = contextManagerRef.current.getState();
-        const latestParent = latestContext.activeMeetingTask?.parent;
+        const latestTask = latestContext.activeMeetingTask;
+        const latestParent = latestTask?.parent;
         const currentQuestion = createProvisionalCurrentQuestion({
           logicalQuestionUnit: input.logicalQuestionUnit,
-          sourceKind: latestContext.activeMeetingTask?.screen
-            ? "mixed"
-            : "voice",
-          sourceObservationIds: latestContext.activeMeetingTask?.screen
-            ? [latestContext.activeMeetingTask.screen.observationId]
-            : undefined,
+          sourceKind: typeSettlement?.sourceKind ?? "voice",
+          sourceObservationIds:
+            typeSettlement?.sourceObservationIds,
         });
         const voiceRelationRelease = decideNarrowVoiceRelationRelease({
           sourceKind: currentQuestion.sourceKind,
           activeParentQuestionType: latestParent?.questionType,
           typeSettlement,
           candidate: relationOutcome?.candidate,
+          hasActiveChild: Boolean(latestTask?.child),
           manualCorrectionActive: Boolean(
             manualCorrectionOperationCoordinatorRef.current.getActiveOperationId()
           ),
@@ -19068,7 +19066,7 @@ export function useMeetingAssistant() {
           releaseWindowOpen: true,
         });
         const settlementOperationId = outcome?.operationId;
-        const convergedSettlement =
+        const convergenceResult =
           voiceRelationRelease.authorized &&
           settlementOperationId &&
           typeSettlement &&
@@ -19084,7 +19082,11 @@ export function useMeetingAssistant() {
                 manualCorrectionRevision:
                   manualCorrectionRevisionRef.current,
               })
-            : undefined;
+            : {
+                reason: "release-not-authorized" as const,
+                settlement: undefined,
+              };
+        const convergedSettlement = convergenceResult.settlement;
         const settlement = convergedSettlement ?? typeSettlement;
         const releaseEligible = Boolean(
           activeRef.current &&
@@ -19132,6 +19134,8 @@ export function useMeetingAssistant() {
           ),
           runtimeSettlementConverged:
             Boolean(convergedSettlement),
+          runtimeSettlementConvergenceReason:
+            convergenceResult.reason,
           runtimeSettlementOperationId: settlementOperationId,
           runtimeSettlementTypeOperationId: outcome?.operationId,
           runtimeSettlementRelationOperationId:

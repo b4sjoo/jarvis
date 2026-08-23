@@ -18,6 +18,7 @@ import {
   formatTaskRelationAdjudicationForTrace,
   parseTaskRelationAdjudicationOutput,
   settleNarrowVoiceTypeRelation,
+  type LlmTaskRelationAdjudication,
 } from "../src/lib/meeting/task-relation-adjudication.js";
 
 function unit(text: string, revision = 1): LogicalQuestionUnit {
@@ -56,6 +57,9 @@ function activeTask(withChild = false): ActiveMeetingTask {
       topic: "Design a RAG system for trip planning",
       playbookPhase: "design_framing",
       phaseProgress: { design_framing: true },
+      canonicalQuestionSourceTurnIds: ["turn-parent"],
+      startTurnId: "turn-parent",
+      promptTranscriptStartTurnId: "turn-parent",
       projectBinding: {
         projectId: "secret-project",
         projectName: "Secret project",
@@ -257,24 +261,73 @@ test("keeps raw recent interviewer context when no lexical role matches", () => 
     text: "The traffic tends to be bursty around holiday weekends.",
     role: undefined,
     selectionReason: "raw-recent-turn",
+    sourceScope: "parent-scope",
   });
   assert.deepEqual(request.recentTransitions, []);
 });
 
-test("reports a legitimate empty recent evidence window", () => {
+test("uses the current source instead of issuing a context-free relation request", () => {
   const request = buildTaskRelationAdjudicationRequest({
     logicalQuestionUnit: unit("How should we proceed from here?"),
     activeMeetingTask: activeTask(),
     recentTurns: [],
   });
 
-  assert.deepEqual(request.recentSourceEvidence, []);
-  assert.equal(request.recentEvidenceDiagnostics.eligiblePriorTurnCount, 0);
+  assert.equal(request.recentSourceEvidence.length, 1);
   assert.equal(
-    request.recentEvidenceDiagnostics.emptyReason,
-    "no-prior-source-turn"
+    request.recentSourceEvidence[0]?.sourceScope,
+    "current-source-fallback"
   );
+  assert.equal(request.recentEvidenceDiagnostics.eligiblePriorTurnCount, 0);
+  assert.equal(request.recentEvidenceDiagnostics.emptyReason, undefined);
   assert.equal(request.recentEvidenceDiagnostics.falseEmpty, false);
+  assert.equal(
+    request.recentEvidenceDiagnostics.currentSourceFallbackCount,
+    1
+  );
+});
+
+test("caps a missing-parent-boundary fallback to one prior interviewer turn", () => {
+  const task = activeTask();
+  task.parent.canonicalQuestionSourceTurnIds = ["missing-parent-turn"];
+  task.parent.startTurnId = "missing-parent-turn";
+  task.parent.promptTranscriptStartTurnId = "missing-parent-turn";
+  const request = buildTaskRelationAdjudicationRequest({
+    logicalQuestionUnit: unit("How should we proceed from here?"),
+    activeMeetingTask: task,
+    recentTurns: [
+      {
+        id: "old-turn",
+        speaker: "them",
+        text: "This belongs to an older task.",
+        startedAt: 10,
+        endedAt: 20,
+        isFinal: true,
+        source: "system-audio",
+      },
+      {
+        id: "nearest-turn",
+        speaker: "them",
+        text: "Now consider the latest requirement.",
+        startedAt: 30,
+        endedAt: 40,
+        isFinal: true,
+        source: "system-audio",
+      },
+    ],
+  });
+
+  assert.equal(request.recentSourceEvidence.length, 1);
+  assert.equal(request.recentSourceEvidence[0]?.turnId, "nearest-turn");
+  assert.equal(
+    request.recentSourceEvidence[0]?.sourceScope,
+    "cross-boundary-prior-turn"
+  );
+  assert.equal(request.recentEvidenceDiagnostics.parentBoundaryFound, false);
+  assert.equal(
+    request.recentEvidenceDiagnostics.crossBoundarySelectedCount,
+    1
+  );
 });
 
 test("active child relation evidence includes only source-owned question text", () => {
@@ -825,7 +878,7 @@ test("narrowly converges authoritative voice type and relation into one parent s
   });
   assert.equal(release.authorized, true);
 
-  const settlement = settleNarrowVoiceTypeRelation({
+  const convergence = settleNarrowVoiceTypeRelation({
     operationId: "type-operation-a",
     currentQuestion,
     typeSettlement,
@@ -834,6 +887,8 @@ test("narrowly converges authoritative voice type and relation into one parent s
     activeParentRevision: 3,
     manualCorrectionRevision: 0,
   });
+  assert.equal(convergence.reason, "settled");
+  const settlement = convergence.settlement;
   assert.ok(settlement);
   assert.equal(settlement.operationId, "type-operation-a");
   assert.equal(settlement.questionType, "behavioral");
@@ -843,7 +898,69 @@ test("narrowly converges authoritative voice type and relation into one parent s
   assert.equal(settlement.parentMutationAuthorized, true);
 });
 
-test("narrow voice relation release fails closed for same-type or non-parent relation", () => {
+test("reports a source-hash mismatch instead of silently dropping convergence", () => {
+  const logicalQuestionUnit = unit("Design a ride-sharing system");
+  const voiceQuestion = createProvisionalCurrentQuestion({
+    logicalQuestionUnit,
+    sourceKind: "voice",
+  });
+  const mixedQuestion = createProvisionalCurrentQuestion({
+    logicalQuestionUnit,
+    sourceKind: "mixed",
+    sourceObservationIds: ["stale-screen-observation"],
+  });
+  const typeSettlement = settleCurrentQuestion({
+    currentQuestion: voiceQuestion,
+    llmProposal: {
+      source: "llm-type-repair",
+      sessionId: voiceQuestion.sessionId,
+      runtimeEpoch: voiceQuestion.runtimeEpoch,
+      logicalQuestionUnitId: voiceQuestion.logicalQuestionUnitId,
+      revision: voiceQuestion.revision,
+      sourceHash: voiceQuestion.sourceHash,
+      questionType: "general-system-design",
+      relation: "unknown",
+      action: "answer",
+      confidence: 0.99,
+      typeEvidenceAuthorized: true,
+      relationEvidenceAuthorized: false,
+      actionEvidenceAuthorized: true,
+    },
+    manualCorrectionRevision: 0,
+    policy: {
+      allowLlmTypeRepair: true,
+      allowLlmRelationRepair: false,
+      allowLlmActionRepair: false,
+      runtimeMutationAuthorized: false,
+      questionComplete: true,
+      commitParent: false,
+    },
+  });
+  const result = settleNarrowVoiceTypeRelation({
+    operationId: "type-operation-source-mismatch",
+    currentQuestion: mixedQuestion,
+    typeSettlement,
+    relationCandidate: {
+      schemaVersion: 3,
+      relation: "new-parent",
+      confidence: 0.99,
+      currentQuestionEvidenceSpans: ["Design a ride-sharing system"],
+      parentEvidenceSpans: [],
+      dependency: "parent-independent",
+      switchIntent: "explicit-switch",
+      standaloneSufficiency: "sufficient",
+      standalone: true,
+    } satisfies LlmTaskRelationAdjudication,
+    activeParentId: "parent-a",
+    activeParentRevision: 3,
+    manualCorrectionRevision: 0,
+  });
+
+  assert.equal(result.reason, "source-hash-mismatch");
+  assert.equal(result.settlement, undefined);
+});
+
+test("narrow voice relation release accepts grounded same-type and follow-up relations", () => {
   const logicalQuestionUnit = unit("Design a notification system");
   const currentQuestion = createProvisionalCurrentQuestion({
     logicalQuestionUnit,
@@ -891,8 +1008,7 @@ test("narrow voice relation release fails closed for same-type or non-parent rel
     standalone: true,
   };
 
-  assert.equal(
-    decideNarrowVoiceRelationRelease({
+  const sameType = decideNarrowVoiceRelationRelease({
       sourceKind: "voice",
       activeParentQuestionType: "general-system-design",
       typeSettlement,
@@ -900,21 +1016,90 @@ test("narrow voice relation release fails closed for same-type or non-parent rel
       manualCorrectionActive: false,
       operationLeaseAuthorized: true,
       releaseWindowOpen: true,
-    }).reason,
-    "current-type-matches-parent"
-  );
-  assert.equal(
-    decideNarrowVoiceRelationRelease({
+    });
+  assert.equal(sameType.authorized, true);
+  assert.equal(sameType.releasedRelation, "new-parent");
+
+  const followup = decideNarrowVoiceRelationRelease({
       sourceKind: "voice",
-      activeParentQuestionType: "coding",
+      activeParentQuestionType: "general-system-design",
       typeSettlement,
-      candidate: { ...candidate, relation: "followup-parent" },
+      candidate: {
+        ...candidate,
+        relation: "followup-parent",
+        dependency: "parent-dependent",
+        continuationShape: "mainline",
+        switchIntent: "no-explicit-switch",
+        standaloneSufficiency: "insufficient",
+        parentEvidenceSpans: ["the active notification design"],
+        standalone: false,
+      },
       manualCorrectionActive: false,
       operationLeaseAuthorized: true,
       releaseWindowOpen: true,
-    }).reason,
-    "candidate-relation-not-new-parent"
-  );
+    });
+  assert.equal(followup.authorized, true);
+  assert.equal(followup.releasedRelation, "followup-parent");
+});
+
+test("narrow voice relation release rejects ungrounded branch mutations", () => {
+  const logicalQuestionUnit = unit("What about that component?");
+  const currentQuestion = createProvisionalCurrentQuestion({
+    logicalQuestionUnit,
+    sourceKind: "voice",
+  });
+  const typeSettlement = settleCurrentQuestion({
+    currentQuestion,
+    llmProposal: {
+      source: "llm-type-repair",
+      sessionId: currentQuestion.sessionId,
+      runtimeEpoch: currentQuestion.runtimeEpoch,
+      logicalQuestionUnitId: currentQuestion.logicalQuestionUnitId,
+      revision: currentQuestion.revision,
+      sourceHash: currentQuestion.sourceHash,
+      questionType: "field-knowledge",
+      relation: "unknown",
+      action: "answer",
+      confidence: 0.99,
+      typeEvidenceAuthorized: true,
+      relationEvidenceAuthorized: false,
+      actionEvidenceAuthorized: true,
+    },
+    manualCorrectionRevision: 0,
+    policy: {
+      allowLlmTypeRepair: true,
+      allowLlmRelationRepair: false,
+      allowLlmActionRepair: false,
+      runtimeMutationAuthorized: false,
+      questionComplete: true,
+      commitParent: false,
+    },
+  });
+  const decision = decideNarrowVoiceRelationRelease({
+    sourceKind: "voice",
+    activeParentQuestionType: "general-system-design",
+    typeSettlement,
+    candidate: {
+      schemaVersion: 2,
+      relation: "child-probe",
+      dependency: "unclear",
+      continuationShape: "bounded-detour",
+      returnIntent: "no-resume",
+      switchIntent: "no-explicit-switch",
+      standaloneSufficiency: "insufficient",
+      confidence: 0.99,
+      currentQuestionEvidenceSpans: ["that component"],
+      parentEvidenceSpans: [],
+      explicitBinding: false,
+      standalone: false,
+    },
+    manualCorrectionActive: false,
+    operationLeaseAuthorized: true,
+    releaseWindowOpen: true,
+  });
+
+  assert.equal(decision.authorized, false);
+  assert.equal(decision.reason, "candidate-child-evidence-missing");
 });
 
 test("narrowly releases a grounded same-type manual screen milestone", () => {

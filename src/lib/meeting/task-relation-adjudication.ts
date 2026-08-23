@@ -120,6 +120,10 @@ export interface TaskRelationSourceEvidence {
   text: string;
   role?: TaskRelationSourceEvidenceRole;
   selectionReason: "role-hint" | "raw-recent-turn";
+  sourceScope:
+    | "parent-scope"
+    | "cross-boundary-prior-turn"
+    | "current-source-fallback";
 }
 
 export interface TaskRelationRecentEvidenceDiagnostics {
@@ -128,6 +132,10 @@ export interface TaskRelationRecentEvidenceDiagnostics {
   rawFallbackCount: number;
   falseEmpty: boolean;
   emptyReason?: "no-prior-source-turn";
+  parentBoundaryFound: boolean;
+  parentScopedSelectedCount: number;
+  crossBoundarySelectedCount: number;
+  currentSourceFallbackCount: number;
 }
 
 export interface TaskRelationTransitionEvidence {
@@ -269,13 +277,16 @@ export type NarrowVoiceRelationReleaseReason =
   | "type-settlement-missing"
   | "type-settlement-not-authoritative"
   | "current-type-not-parent-eligible"
-  | "current-type-matches-parent"
   | "manual-correction-active"
   | "candidate-missing"
   | "operation-lease-not-authorized"
   | "release-window-closed"
   | "candidate-confidence-below-threshold"
-  | "candidate-relation-not-new-parent";
+  | "candidate-relation-unknown"
+  | "candidate-new-parent-evidence-missing"
+  | "candidate-followup-evidence-missing"
+  | "candidate-child-evidence-missing"
+  | "candidate-resume-evidence-missing";
 
 export interface NarrowVoiceRelationReleaseDecision {
   requested: boolean;
@@ -285,6 +296,7 @@ export interface NarrowVoiceRelationReleaseDecision {
   activeParentQuestionType: CanonicalQuestionType;
   relationConfidence: number;
   minimumConfidence: number;
+  releasedRelation?: RuntimeTaskRelation;
 }
 
 export interface NarrowVoiceRelationReleaseInput {
@@ -292,9 +304,23 @@ export interface NarrowVoiceRelationReleaseInput {
   activeParentQuestionType?: unknown;
   typeSettlement?: CurrentQuestionSettlementDecision;
   candidate?: LlmTaskRelationAdjudication;
+  hasActiveChild?: boolean;
   manualCorrectionActive: boolean;
   operationLeaseAuthorized?: boolean;
   releaseWindowOpen?: boolean;
+}
+
+export type NarrowVoiceTypeRelationSettlementReason =
+  | "settled"
+  | "logical-question-unit-mismatch"
+  | "logical-question-revision-mismatch"
+  | "session-mismatch"
+  | "runtime-epoch-mismatch"
+  | "source-hash-mismatch";
+
+export interface NarrowVoiceTypeRelationSettlementResult {
+  reason: NarrowVoiceTypeRelationSettlementReason;
+  settlement?: CurrentQuestionSettlementDecision;
 }
 
 export type TaskRelationAdjudicationComparisonOutcome =
@@ -332,18 +358,73 @@ export function buildTaskRelationAdjudicationRequest(input: {
 }): TaskRelationAdjudicationRequest {
   const parent = input.activeMeetingTask.parent;
   const child = input.activeMeetingTask.child;
-  const scopedTurns = selectActiveParentSourceTurns({
+  const parentScope = selectActiveParentSourceTurns({
     turns: input.recentTurns ?? [],
     activeMeetingTask: input.activeMeetingTask,
   });
   const excludedTurnIds = new Set(
     input.logicalQuestionUnit.sourceTurnIds
   );
-  const recentEvidenceSelection = selectRecentSourceEvidence({
-    turns: scopedTurns,
+  const parentEvidenceSelection = selectRecentSourceEvidence({
+    turns: parentScope.turns,
     excludedTurnIds,
+    maxTurns: 5,
+    sourceScope: "parent-scope",
   });
-  const recentSourceEvidence = recentEvidenceSelection.evidence;
+  let recentSourceEvidence = parentEvidenceSelection.evidence;
+  let crossBoundarySelectedCount = 0;
+  let currentSourceFallbackCount = 0;
+  const allPriorEvidenceSelection = selectRecentSourceEvidence({
+    turns: input.recentTurns ?? [],
+    excludedTurnIds,
+    maxTurns: 1,
+    sourceScope: "cross-boundary-prior-turn",
+  });
+  if (recentSourceEvidence.length === 0) {
+    recentSourceEvidence = allPriorEvidenceSelection.evidence;
+    crossBoundarySelectedCount = recentSourceEvidence.length;
+  }
+  if (recentSourceEvidence.length === 0) {
+    const currentSource =
+      [...input.logicalQuestionUnit.sources]
+        .reverse()
+        .find((source) => source.text.trim()) ??
+      input.logicalQuestionUnit.sources.at(-1);
+    const text = boundText(
+      currentSource?.text ?? input.logicalQuestionUnit.normalizedText,
+      Math.min(280, TASK_RELATION_ADJUDICATION_MAX_SOURCE_EVIDENCE_CHARS)
+    );
+    if (text) {
+      recentSourceEvidence = [
+        {
+          turnId:
+            currentSource?.turnId ??
+            input.logicalQuestionUnit.currentTurnId,
+          text,
+          selectionReason: "raw-recent-turn",
+          sourceScope: "current-source-fallback",
+        },
+      ];
+      currentSourceFallbackCount = 1;
+    }
+  }
+  const recentEvidenceDiagnostics: TaskRelationRecentEvidenceDiagnostics = {
+    eligiblePriorTurnCount:
+      allPriorEvidenceSelection.diagnostics.eligiblePriorTurnCount,
+    selectedTurnCount: recentSourceEvidence.length,
+    rawFallbackCount: recentSourceEvidence.filter(
+      (item) => item.selectionReason === "raw-recent-turn"
+    ).length,
+    falseEmpty: recentSourceEvidence.length === 0,
+    emptyReason:
+      recentSourceEvidence.length === 0
+        ? "no-prior-source-turn"
+        : undefined,
+    parentBoundaryFound: parentScope.boundaryFound,
+    parentScopedSelectedCount: parentEvidenceSelection.evidence.length,
+    crossBoundarySelectedCount,
+    currentSourceFallbackCount,
+  };
   const recentTransitions = recentSourceEvidence
     .filter((item) => item.role === "transition")
     .map((item) => ({ turnId: item.turnId, text: item.text }));
@@ -386,7 +467,7 @@ export function buildTaskRelationAdjudicationRequest(input: {
       : undefined,
     recentSourceEvidence,
     recentTransitions,
-    recentEvidenceDiagnostics: recentEvidenceSelection.diagnostics,
+    recentEvidenceDiagnostics,
     suspendedParent: child
       ? {
           ...activeParent,
@@ -630,12 +711,6 @@ export function decideNarrowVoiceRelationRelease(
   ) {
     return reject("type-settlement-not-authoritative", true);
   }
-  if (!isParentCanonicalQuestionType(currentQuestionType)) {
-    return reject("current-type-not-parent-eligible", true);
-  }
-  if (currentQuestionType === activeParentQuestionType) {
-    return reject("current-type-matches-parent", true);
-  }
   if (input.manualCorrectionActive) {
     return reject("manual-correction-active", true);
   }
@@ -651,8 +726,49 @@ export function decideNarrowVoiceRelationRelease(
   if (relationConfidence < VOICE_RELATION_RELEASE_MIN_CONFIDENCE) {
     return reject("candidate-confidence-below-threshold", true);
   }
-  if (input.candidate.relation !== "new-parent") {
-    return reject("candidate-relation-not-new-parent", true);
+  const candidate = input.candidate;
+  if (candidate.relation === "unknown") {
+    return reject("candidate-relation-unknown", true);
+  }
+  if (candidate.relation === "new-parent") {
+    if (!isParentCanonicalQuestionType(currentQuestionType)) {
+      return reject("current-type-not-parent-eligible", true);
+    }
+    const sameType = currentQuestionType === activeParentQuestionType;
+    if (
+      sameType &&
+      !(
+        candidate.switchIntent === "explicit-switch" &&
+        candidate.dependency === "parent-independent" &&
+        candidate.standalone === true &&
+        candidate.standaloneSufficiency === "sufficient"
+      )
+    ) {
+      return reject("candidate-new-parent-evidence-missing", true);
+    }
+  } else if (candidate.relation === "followup-parent") {
+    if (
+      candidate.dependency !== "parent-dependent" ||
+      candidate.parentEvidenceSpans.length === 0
+    ) {
+      return reject("candidate-followup-evidence-missing", true);
+    }
+  } else if (candidate.relation === "child-probe") {
+    if (
+      currentQuestionType === "unknown" ||
+      candidate.dependency !== "parent-dependent" ||
+      candidate.parentEvidenceSpans.length === 0
+    ) {
+      return reject("candidate-child-evidence-missing", true);
+    }
+  } else if (candidate.relation === "resume-parent") {
+    if (
+      !input.hasActiveChild ||
+      candidate.returnIntent !== "resume-suspended-parent" ||
+      candidate.parentEvidenceSpans.length === 0
+    ) {
+      return reject("candidate-resume-evidence-missing", true);
+    }
   }
 
   return {
@@ -663,6 +779,7 @@ export function decideNarrowVoiceRelationRelease(
     activeParentQuestionType,
     relationConfidence,
     minimumConfidence: VOICE_RELATION_RELEASE_MIN_CONFIDENCE,
+    releasedRelation: candidate.relation,
   };
 }
 
@@ -674,16 +791,24 @@ export function settleNarrowVoiceTypeRelation(input: {
   activeParentId: string;
   activeParentRevision?: number;
   manualCorrectionRevision: number;
-}): CurrentQuestionSettlementDecision | undefined {
+}): NarrowVoiceTypeRelationSettlementResult {
   if (
     input.typeSettlement.logicalQuestionUnitId !==
-      input.currentQuestion.logicalQuestionUnitId ||
-    input.typeSettlement.revision !== input.currentQuestion.revision ||
-    input.typeSettlement.sessionId !== input.currentQuestion.sessionId ||
-    input.typeSettlement.runtimeEpoch !== input.currentQuestion.runtimeEpoch ||
-    input.typeSettlement.sourceHash !== input.currentQuestion.sourceHash
+    input.currentQuestion.logicalQuestionUnitId
   ) {
-    return undefined;
+    return { reason: "logical-question-unit-mismatch" };
+  }
+  if (input.typeSettlement.revision !== input.currentQuestion.revision) {
+    return { reason: "logical-question-revision-mismatch" };
+  }
+  if (input.typeSettlement.sessionId !== input.currentQuestion.sessionId) {
+    return { reason: "session-mismatch" };
+  }
+  if (input.typeSettlement.runtimeEpoch !== input.currentQuestion.runtimeEpoch) {
+    return { reason: "runtime-epoch-mismatch" };
+  }
+  if (input.typeSettlement.sourceHash !== input.currentQuestion.sourceHash) {
+    return { reason: "source-hash-mismatch" };
   }
 
   const llmProposal: CurrentQuestionSettlementProposal = {
@@ -712,24 +837,27 @@ export function settleNarrowVoiceTypeRelation(input: {
     ],
   };
 
-  return settleCurrentQuestion({
-    operationId: input.operationId,
-    currentQuestion: input.currentQuestion,
-    llmProposal,
-    activeParentId: input.activeParentId,
-    activeParentRevision: input.activeParentRevision,
-    manualCorrectionRevision: input.manualCorrectionRevision,
-    policy: {
-      allowLlmTypeRepair: true,
-      allowLlmRelationRepair: true,
-      allowLlmActionRepair: true,
-      llmTypeRepairMinConfidence: VOICE_RELATION_RELEASE_MIN_CONFIDENCE,
-      llmRelationRepairMinConfidence: VOICE_RELATION_RELEASE_MIN_CONFIDENCE,
-      runtimeMutationAuthorized: true,
-      questionComplete: true,
-      commitParent: true,
-    },
-  });
+  return {
+    reason: "settled",
+    settlement: settleCurrentQuestion({
+      operationId: input.operationId,
+      currentQuestion: input.currentQuestion,
+      llmProposal,
+      activeParentId: input.activeParentId,
+      activeParentRevision: input.activeParentRevision,
+      manualCorrectionRevision: input.manualCorrectionRevision,
+      policy: {
+        allowLlmTypeRepair: true,
+        allowLlmRelationRepair: true,
+        allowLlmActionRepair: true,
+        llmTypeRepairMinConfidence: VOICE_RELATION_RELEASE_MIN_CONFIDENCE,
+        llmRelationRepairMinConfidence: VOICE_RELATION_RELEASE_MIN_CONFIDENCE,
+        runtimeMutationAuthorized: true,
+        questionComplete: true,
+        commitParent: true,
+      },
+    }),
+  };
 }
 
 export function formatNarrowScreenRelationReleaseForTrace(
@@ -764,6 +892,8 @@ export function formatNarrowVoiceRelationReleaseForTrace(
       decision?.relationConfidence,
     taskRelationVoiceReleaseMinConfidence:
       decision?.minimumConfidence,
+    taskRelationVoiceReleasedRelation:
+      decision?.releasedRelation,
   };
 }
 
@@ -1246,6 +1376,8 @@ export function formatTaskRelationAdjudicationForTrace(input: {
       input.request?.recentSourceEvidence.map(
         (item) => item.selectionReason
       ),
+    taskRelationAdjudicationRecentSourceEvidenceScopes:
+      input.request?.recentSourceEvidence.map((item) => item.sourceScope),
     taskRelationAdjudicationEligiblePriorTurnCount:
       input.request?.recentEvidenceDiagnostics.eligiblePriorTurnCount,
     taskRelationAdjudicationRawRecentFallbackCount:
@@ -1254,6 +1386,14 @@ export function formatTaskRelationAdjudicationForTrace(input: {
       input.request?.recentEvidenceDiagnostics.falseEmpty,
     taskRelationAdjudicationRecentEvidenceEmptyReason:
       input.request?.recentEvidenceDiagnostics.emptyReason,
+    taskRelationAdjudicationParentBoundaryFound:
+      input.request?.recentEvidenceDiagnostics.parentBoundaryFound,
+    taskRelationAdjudicationParentScopedEvidenceCount:
+      input.request?.recentEvidenceDiagnostics.parentScopedSelectedCount,
+    taskRelationAdjudicationCrossBoundaryEvidenceCount:
+      input.request?.recentEvidenceDiagnostics.crossBoundarySelectedCount,
+    taskRelationAdjudicationCurrentSourceFallbackCount:
+      input.request?.recentEvidenceDiagnostics.currentSourceFallbackCount,
     taskRelationAdjudicationTransitionCount:
       input.request?.recentTransitions.length,
     taskRelationAdjudicationGeneratedAnswerExcluded: true,
@@ -1330,7 +1470,9 @@ function buildParentCapsule(
       parent.promptTranscriptStartTurnId,
     ]).slice(0, 12),
     acceptedConstraints: recentSourceEvidence.filter(
-      (item) => item.role === "constraint"
+      (item) =>
+        item.role === "constraint" &&
+        item.sourceScope === "parent-scope"
     ),
     sharedScenarioEntities:
       sharedContext?.domainEntities
@@ -1354,28 +1496,33 @@ function selectActiveParentSourceTurns(input: {
   const boundaryIndexes = input.turns
     .map((turn, index) => (boundaryIds.has(turn.id) ? index : -1))
     .filter((index) => index >= 0);
-  const boundaryIndex =
-    boundaryIndexes.length > 0 ? Math.min(...boundaryIndexes) : 0;
-  return input.turns.slice(boundaryIndex);
+  if (boundaryIndexes.length === 0) {
+    return { turns: [] as TranscriptTurn[], boundaryFound: false };
+  }
+  return {
+    turns: input.turns.slice(Math.min(...boundaryIndexes)),
+    boundaryFound: true,
+  };
 }
 
 function selectRecentSourceEvidence(input: {
   turns: TranscriptTurn[];
   excludedTurnIds: Set<string>;
+  maxTurns: number;
+  sourceScope: TaskRelationSourceEvidence["sourceScope"];
 }) {
   const eligibleTurns = input.turns.filter(
     (turn) =>
       turn.speaker === "them" &&
       !input.excludedTurnIds.has(turn.id) &&
       turn.contextFusionStatus !== "duplicate-suppressed" &&
-      turn.contextPromptEligible !== false &&
       Boolean(turn.text.trim())
   );
   const selected: TaskRelationSourceEvidence[] = [];
   let selectedChars = 0;
   for (const turn of [...eligibleTurns].reverse()) {
     if (
-      selected.length >= 5 ||
+      selected.length >= input.maxTurns ||
       selectedChars >=
         TASK_RELATION_ADJUDICATION_MAX_SOURCE_EVIDENCE_CHARS
     ) {
@@ -1392,6 +1539,7 @@ function selectRecentSourceEvidence(input: {
       text,
       role,
       selectionReason: role ? "role-hint" : "raw-recent-turn",
+      sourceScope: input.sourceScope,
     });
     selectedChars += text.length;
   }
