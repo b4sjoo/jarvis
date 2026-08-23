@@ -475,7 +475,7 @@ test("binds the exact active or pending Voice attempt to manual Screen evidence"
   );
 });
 
-test("keeps a context-insufficient visible Voice answer as a Screen recovery target", () => {
+test("does not let a local sufficiency observation bind a committed Voice answer", () => {
   const candidate = {
     logicalQuestionUnitId: "question-current",
     logicalQuestionRevision: 2,
@@ -488,11 +488,10 @@ test("keeps a context-insufficient visible Voice answer as a Screen recovery tar
       logicalQuestionUnitId: "question-current",
       logicalQuestionRevision: 2,
     },
-    visibleAnswerContextInsufficient: true,
   });
 
-  assert.equal(decision.disposition, "bind-voice");
-  assert.equal(decision.reason, "context-insufficient-visible-answer");
+  assert.equal(decision.disposition, "use-screen");
+  assert.equal(decision.reason, "visible-answer-already-committed");
 });
 
 test("gives exact visual recovery continuity authority", () => {

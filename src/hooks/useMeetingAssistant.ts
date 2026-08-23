@@ -49,6 +49,7 @@ import {
   buildAnswerRecoveryAdjudicationPrompts,
   buildAnswerRecoveryAdjudicationRequest,
   createAnswerRecoveryAdjudicationLease,
+  decideAnswerRecoveryLedgerTransition,
   formatAnswerRecoveryAdjudicationForTrace,
   type AnswerRecoveryAdjudicationJob,
   type AnswerRecoveryAdjudicationRequest,
@@ -3351,12 +3352,15 @@ export function useMeetingAssistant() {
           activeParent?.id === candidate.parentTaskId &&
           activeParent?.revisions === candidate.parentRevision
       );
-      const recoveryProposed = Boolean(
-        answerResolution?.decision === "unresolved" &&
-          evidenceRequirement?.decision === "visual-required"
-      );
+      const ledgerTransition = decideAnswerRecoveryLedgerTransition({
+        revisionAuthorized,
+        answerResolution: answerResolution?.decision,
+        evidenceRequirement: evidenceRequirement?.decision,
+      });
+      const recoveryProposed = ledgerTransition.action === "create";
       let recoveryCommitted = false;
-      if (revisionAuthorized && recoveryProposed) {
+      let recoveryCancelled = false;
+      if (recoveryProposed) {
         const recovery = createAwaitingVisualEvidenceRecoveryFact({
           resolution: {
             state: "awaiting-evidence",
@@ -3403,7 +3407,7 @@ export function useMeetingAssistant() {
 
       const existingRecovery = awaitingVisualEvidenceRecoveryRef.current;
       if (
-        !recoveryCommitted &&
+        ledgerTransition.action === "cancel" &&
         existingRecovery?.logicalQuestionUnitId ===
           candidate.logicalQuestionUnitId &&
         existingRecovery.logicalQuestionRevision ===
@@ -3411,11 +3415,10 @@ export function useMeetingAssistant() {
       ) {
         settleAwaitingVisualEvidenceRecovery(
           "cancelled",
-          recoveryProposed
-            ? "answer-recovery-revision-stale"
-            : "answer-recovery-not-visual-unresolved",
+          "answer-recovery-definite-non-recovery",
           traceId
         );
+        recoveryCancelled = true;
       }
 
       candidate.recoveryCommitted = recoveryCommitted;
@@ -3423,7 +3426,12 @@ export function useMeetingAssistant() {
         answerRecoveryPairSettled: true,
         answerRecoveryPairRevisionAuthorized: revisionAuthorized,
         answerRecoveryPairProposedVisualRecovery: recoveryProposed,
-        answerRecoveryPairAppliedToRuntime: recoveryCommitted,
+        answerRecoveryPairLedgerTransition: ledgerTransition.action,
+        answerRecoveryPairLedgerTransitionReason: ledgerTransition.reason,
+        answerRecoveryPairDefinite:
+          ledgerTransition.action !== "preserve",
+        answerRecoveryPairAppliedToRuntime:
+          recoveryCommitted || recoveryCancelled,
         answerRecoveryPairAnswerDecision: answerResolution?.decision,
         answerRecoveryPairEvidenceDecision: evidenceRequirement?.decision,
         answerRecoveryLocalDetectorDecision:
@@ -6306,6 +6314,9 @@ export function useMeetingAssistant() {
             const result = settlement.result;
             const parsed = result?.parsed;
             const parsedValue = parsed?.ok ? parsed.value : undefined;
+            const acceptedValue = authorization.authorized
+              ? parsedValue
+              : undefined;
             const providerDisposition =
               result?.providerDisposition ?? settlement.disposition;
             if (
@@ -6351,23 +6362,25 @@ export function useMeetingAssistant() {
               answerRecoveryProviderDisposition: providerDisposition,
               answerRecoveryParseDisposition: result?.parseDisposition,
               answerRecoveryParseValid: parsed?.ok ?? false,
+              answerRecoveryOutputTruncated:
+                result?.outputTruncated ?? false,
             };
             traceStoreRef.current.updateMetadata(traceId, metadata);
             if (pending) {
               if (request.operationKind === "answer-resolution") {
                 pending.answerResolution =
-                  parsedValue?.decision === "resolved" ||
-                  parsedValue?.decision === "unresolved" ||
-                  parsedValue?.decision === "unclear"
-                    ? (parsedValue as AnswerResolutionAdjudication)
+                  acceptedValue?.decision === "resolved" ||
+                  acceptedValue?.decision === "unresolved" ||
+                  acceptedValue?.decision === "unclear"
+                    ? (acceptedValue as AnswerResolutionAdjudication)
                     : undefined;
                 pending.answerResolutionSettled = true;
               } else {
                 pending.evidenceRequirement =
-                  parsedValue?.decision === "visual-required" ||
-                  parsedValue?.decision === "not-visual" ||
-                  parsedValue?.decision === "unclear"
-                    ? (parsedValue as EvidenceRequirementAdjudication)
+                  acceptedValue?.decision === "visual-required" ||
+                  acceptedValue?.decision === "not-visual" ||
+                  acceptedValue?.decision === "unclear"
+                    ? (acceptedValue as EvidenceRequirementAdjudication)
                     : undefined;
                 pending.evidenceRequirementSettled = true;
               }
@@ -22296,12 +22309,6 @@ export function useMeetingAssistant() {
             ? pendingVoiceCandidate
             : activeVoiceCandidate ?? pendingVoiceCandidate;
       const visibleAnswerAtScreenRequest = stableAnswerRevisionRef.current;
-      const visibleAnswerFingerprintContext =
-        visibleAnswerAtScreenRequest?.suggestion.sourceTraceId
-          ? advisorResponseFingerprintContextByTraceRef.current.get(
-              visibleAnswerAtScreenRequest.suggestion.sourceTraceId
-            )
-          : undefined;
       const awaitingVisualEvidenceFact =
         awaitingVisualEvidenceRecoveryRef.current;
       const screenRequestParent =
@@ -22381,9 +22388,6 @@ export function useMeetingAssistant() {
                   visibleAnswerAtScreenRequest.logicalQuestionRevision,
               }
             : undefined,
-          visibleAnswerContextInsufficient:
-            visibleAnswerFingerprintContext?.answerSufficiencyDecision
-              ?.answerStatus === "context-insufficient",
         });
       const screenVoiceQuestionCapsule =
         screenVoiceQuestionBinding.disposition === "bind-voice"

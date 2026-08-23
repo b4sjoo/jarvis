@@ -5,6 +5,8 @@ import {
   buildAnswerRecoveryAdjudicationPrompts,
   buildAnswerRecoveryAdjudicationRequest,
   createAnswerRecoveryAdjudicationLease,
+  decideAnswerRecoveryLedgerTransition,
+  isAnswerRecoveryOutputTruncated,
   parseAnswerRecoveryAdjudicationOutput,
 } from "../src/lib/meeting/answer-recovery-adjudication.js";
 
@@ -123,6 +125,91 @@ test("rejects ungrounded evidence and definite decisions without evidence", () =
 
   assert.equal(ungrounded.ok, false);
   assert.equal(empty.ok, false);
+});
+
+test("requires a reason-only compact unclear result", () => {
+  const request = buildAnswerRecoveryAdjudicationRequest({
+    operationKind: "answer-resolution",
+    logicalQuestionUnitId: "lqu-1",
+    logicalQuestionUnitRevision: 1,
+    answerRevision: 1,
+    questionText: question,
+    answerText: answer,
+  });
+  assert.ok(request);
+  const valid = parseAnswerRecoveryAdjudicationOutput(
+    JSON.stringify({
+      schemaVersion: 1,
+      decision: "unclear",
+      questionEvidenceSpans: [],
+      answerEvidenceSpans: [],
+      ambiguityReason: "The bounded answer is incomplete.",
+    }),
+    request
+  );
+  const invalid = parseAnswerRecoveryAdjudicationOutput(
+    JSON.stringify({
+      schemaVersion: 1,
+      decision: "unclear",
+      questionEvidenceSpans: ["lines 46 through 49"],
+      answerEvidenceSpans: [],
+      ambiguityReason: "The bounded answer is incomplete.",
+    }),
+    request
+  );
+
+  assert.equal(valid.ok, true);
+  assert.equal(invalid.ok, false);
+});
+
+test("projects only definite current pairs to recovery ledger mutations", () => {
+  assert.deepEqual(
+    decideAnswerRecoveryLedgerTransition({
+      revisionAuthorized: true,
+      answerResolution: "unresolved",
+      evidenceRequirement: "visual-required",
+    }),
+    { action: "create", reason: "definite-visual-recovery" }
+  );
+  assert.deepEqual(
+    decideAnswerRecoveryLedgerTransition({
+      revisionAuthorized: true,
+      answerResolution: "resolved",
+      evidenceRequirement: "not-visual",
+    }),
+    { action: "cancel", reason: "definite-non-recovery" }
+  );
+  assert.deepEqual(
+    decideAnswerRecoveryLedgerTransition({
+      revisionAuthorized: true,
+      answerResolution: "unclear",
+      evidenceRequirement: "visual-required",
+    }),
+    { action: "preserve", reason: "pair-not-definite" }
+  );
+  assert.deepEqual(
+    decideAnswerRecoveryLedgerTransition({
+      revisionAuthorized: false,
+      answerResolution: "resolved",
+      evidenceRequirement: "not-visual",
+    }),
+    { action: "preserve", reason: "revision-not-authorized" }
+  );
+});
+
+test("recognizes a structurally truncated provider response", () => {
+  assert.equal(
+    isAnswerRecoveryOutputTruncated(
+      '{"schemaVersion":1,"decision":"unresolved"'
+    ),
+    true
+  );
+  assert.equal(
+    isAnswerRecoveryOutputTruncated(
+      '{"schemaVersion":1,"decision":"unresolved"}'
+    ),
+    false
+  );
 });
 
 test("lease rejects stale answer and correction revisions", () => {

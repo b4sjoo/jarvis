@@ -90,7 +90,6 @@ export type ManualScreenVoiceQuestionBindingReason =
   | "pending-voice-delivery"
   | "awaiting-visual-evidence-recovery"
   | "explicit-recovery-target"
-  | "context-insufficient-visible-answer"
   | "visible-answer-already-committed"
   | "voice-recovery-not-authorized";
 
@@ -159,7 +158,6 @@ export function decideManualScreenVoiceQuestionBinding(input: {
   awaitingVisualEvidenceTarget?: ManualScreenVoiceQuestionTarget;
   explicitRecoveryTarget?: ManualScreenVoiceQuestionTarget;
   visibleAnswer?: ManualScreenVoiceQuestionTarget;
-  visibleAnswerContextInsufficient?: boolean;
 }): ManualScreenVoiceQuestionBindingDecision {
   const candidate = input.candidate;
   if (!candidate) {
@@ -204,13 +202,6 @@ export function decideManualScreenVoiceQuestionBinding(input: {
     candidate,
     input.visibleAnswer
   );
-  if (visibleAnswerMatches && input.visibleAnswerContextInsufficient) {
-    return {
-      disposition: "bind-voice",
-      reason: "context-insufficient-visible-answer",
-      candidate,
-    };
-  }
   if (visibleAnswerMatches) {
     return {
       disposition: "use-screen",

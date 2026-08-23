@@ -6,6 +6,7 @@ import type {
 } from "../functions/ai-response-events.js";
 import {
   buildAnswerRecoveryAdjudicationPrompts,
+  isAnswerRecoveryOutputTruncated,
   parseAnswerRecoveryAdjudicationOutput,
   type AnswerRecoveryAdjudicationParseResult,
   type AnswerRecoveryAdjudicationRequest,
@@ -23,6 +24,7 @@ export interface AnswerRecoveryAdjudicationRequestResult {
     | "provider-error-content"
     | "provider-auth-error";
   parseDisposition: string;
+  outputTruncated: boolean;
   providerOutcome?: Readonly<AIResponseTerminalOutcome>;
   firstTokenAt?: number;
   completedAt: number;
@@ -71,8 +73,18 @@ export async function requestAnswerRecoveryAdjudication(input: {
     onFirstToken: input.onFirstToken,
   });
   const { rawOutput, providerDisposition } = providerResponse;
+  const outputTruncated =
+    providerDisposition === "completed-with-content" &&
+    isAnswerRecoveryOutputTruncated(rawOutput);
   const parsed =
-    providerDisposition === "completed-with-content"
+    outputTruncated
+      ? ({
+          ok: false,
+          reason: "output-truncated",
+          errorKind: "parse",
+          evidenceSpansValid: false,
+        } satisfies AnswerRecoveryAdjudicationParseResult)
+      : providerDisposition === "completed-with-content"
       ? parseAnswerRecoveryAdjudicationOutput(rawOutput, input.request)
       : ({
           ok: false,
@@ -83,8 +95,11 @@ export async function requestAnswerRecoveryAdjudication(input: {
   return {
     ...providerResponse,
     parsed,
+    outputTruncated,
     parseDisposition:
-      providerDisposition === "completed-with-content"
+      outputTruncated
+        ? "output-truncated"
+        : providerDisposition === "completed-with-content"
         ? parsed.ok
           ? "valid-json"
           : parsed.reason

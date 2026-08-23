@@ -8,6 +8,7 @@ export const EVIDENCE_REQUIREMENT_PROMPT_VERSION =
 export const ANSWER_RECOVERY_MAX_OUTPUT_CHARS = 2_048;
 export const ANSWER_RECOVERY_MAX_QUESTION_CHARS = 1_200;
 export const ANSWER_RECOVERY_MAX_ANSWER_CHARS = 1_800;
+export const ANSWER_RECOVERY_MAX_EVIDENCE_SPAN_CHARS = 160;
 
 export type AnswerRecoveryOperationKind =
   | "answer-resolution"
@@ -54,6 +55,20 @@ export interface EvidenceRequirementAdjudication {
 export type AnswerRecoveryAdjudication =
   | AnswerResolutionAdjudication
   | EvidenceRequirementAdjudication;
+
+export type AnswerRecoveryLedgerTransition =
+  | {
+      action: "create";
+      reason: "definite-visual-recovery";
+    }
+  | {
+      action: "cancel";
+      reason: "definite-non-recovery";
+    }
+  | {
+      action: "preserve";
+      reason: "revision-not-authorized" | "pair-not-definite";
+    };
 
 export type AnswerRecoveryAdjudicationParseResult =
   | {
@@ -129,6 +144,8 @@ export function buildAnswerRecoveryAdjudicationPrompts(
     "Return one JSON object only. Do not answer or rewrite the interview content.",
     "Use only questionText and answerText.",
     "Every evidence span must be an exact verbatim substring of the matching input field.",
+    "For a definite decision, return exactly one question evidence span and one answer evidence span, each no longer than 160 characters.",
+    "For unclear, return empty evidence arrays and one short ambiguityReason. Do not include ambiguityReason for a definite decision.",
     "Use unclear when the bounded evidence does not support a definite decision.",
     "Do not classify question type, task relation, source linkage, parent action, playbook phase, memory, or artifact intent.",
   ];
@@ -201,7 +218,8 @@ export function parseAnswerRecoveryAdjudicationOutput(
   }
   if (
     decoded.ambiguityReason !== undefined &&
-    typeof decoded.ambiguityReason !== "string"
+    (typeof decoded.ambiguityReason !== "string" ||
+      decoded.ambiguityReason.trim().length > 240)
   ) {
     return parseFailure("invalid-ambiguity-reason", "schema");
   }
@@ -219,9 +237,24 @@ export function parseAnswerRecoveryAdjudicationOutput(
   }
   if (
     decoded.decision !== "unclear" &&
-    (questionEvidenceSpans.length === 0 || answerEvidenceSpans.length === 0)
+    (questionEvidenceSpans.length !== 1 || answerEvidenceSpans.length !== 1)
   ) {
     return parseFailure("definite-decision-requires-evidence", "evidence");
+  }
+  if (
+    decoded.decision === "unclear" &&
+    (questionEvidenceSpans.length !== 0 ||
+      answerEvidenceSpans.length !== 0 ||
+      typeof decoded.ambiguityReason !== "string" ||
+      !decoded.ambiguityReason.trim())
+  ) {
+    return parseFailure("unclear-requires-reason-only", "evidence");
+  }
+  if (
+    decoded.decision !== "unclear" &&
+    decoded.ambiguityReason !== undefined
+  ) {
+    return parseFailure("definite-decision-forbids-ambiguity", "schema");
   }
   return {
     ok: true,
@@ -239,6 +272,38 @@ export function parseAnswerRecoveryAdjudicationOutput(
           : undefined,
     } as AnswerRecoveryAdjudication,
   };
+}
+
+export function decideAnswerRecoveryLedgerTransition(input: {
+  revisionAuthorized: boolean;
+  answerResolution?: AnswerResolutionDecision;
+  evidenceRequirement?: EvidenceRequirementDecision;
+}): AnswerRecoveryLedgerTransition {
+  if (!input.revisionAuthorized) {
+    return { action: "preserve", reason: "revision-not-authorized" };
+  }
+  if (
+    !input.answerResolution ||
+    !input.evidenceRequirement ||
+    input.answerResolution === "unclear" ||
+    input.evidenceRequirement === "unclear"
+  ) {
+    return { action: "preserve", reason: "pair-not-definite" };
+  }
+  if (
+    input.answerResolution === "unresolved" &&
+    input.evidenceRequirement === "visual-required"
+  ) {
+    return { action: "create", reason: "definite-visual-recovery" };
+  }
+  return { action: "cancel", reason: "definite-non-recovery" };
+}
+
+export function isAnswerRecoveryOutputTruncated(rawOutput: string) {
+  const trimmed = rawOutput.trim();
+  if (!trimmed) return false;
+  if (trimmed.startsWith("```") && !trimmed.endsWith("```")) return true;
+  return trimmed.startsWith("{") && !trimmed.endsWith("}");
 }
 
 export function createAnswerRecoveryAdjudicationLease(input: {
@@ -362,8 +427,13 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function isEvidenceSpanArray(value: unknown): value is string[] {
   return (
     Array.isArray(value) &&
-    value.length <= 8 &&
-    value.every((span) => typeof span === "string" && Boolean(span.trim()))
+    value.length <= 1 &&
+    value.every(
+      (span) =>
+        typeof span === "string" &&
+        Boolean(span.trim()) &&
+        span.trim().length <= ANSWER_RECOVERY_MAX_EVIDENCE_SPAN_CHARS
+    )
   );
 }
 
