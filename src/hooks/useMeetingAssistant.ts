@@ -86,6 +86,32 @@ import {
   type SourceOwnedSetupCandidate,
 } from "@/lib/meeting/source-owned-semantic-context";
 import {
+  createEffectiveQuestionSourceRecord,
+  EffectiveQuestionSourceLedger,
+  selectOwnerScopedRelationEvidence,
+} from "@/lib/meeting/effective-question-source-ledger";
+import {
+  authorizeTaskRelationSplitLease,
+  authorizeTaskRelationCanonicalPredecessors,
+  buildTaskRelationAffinityPrompts,
+  buildTaskRelationAffinityRequests,
+  buildTaskRelationCanonicalShadowPrompts,
+  buildTaskRelationCanonicalShadowRequest,
+  compareTaskRelationSplitShadow,
+  createTaskRelationSplitLease,
+  type TaskRelationAffinityAdjudication,
+  type TaskRelationAffinityRequest,
+  type TaskRelationCanonicalShadowAdjudication,
+  type TaskRelationCanonicalShadowRequest,
+  type TaskRelationSplitIdentity,
+  type TaskRelationSplitShadowJob,
+} from "@/lib/meeting/task-relation-split-shadow";
+import {
+  requestTaskRelationSplitShadow,
+  type TaskRelationSplitShadowRequestResult,
+} from "@/lib/meeting/task-relation-split-shadow-request";
+import type { TaskRelationAdjudicationRequest } from "@/lib/meeting/task-relation-adjudication";
+import {
   AdvisorEngine,
   buildAdvisorEvidencePacket,
   buildAdvisorEvidenceRetrievalQuery,
@@ -2878,6 +2904,45 @@ export function useMeetingAssistant() {
   const taskRelationAdjudicationCircuitRef = useRef(
     new RuntimeInferenceSessionCircuitBreaker()
   );
+  const taskRelationChildAffinityRuntimeRef = useRef<
+    RuntimeInferenceOperationRuntime<
+      TaskRelationSplitShadowJob<TaskRelationAffinityRequest>,
+      TaskRelationSplitShadowRequestResult
+    > | null
+  >(null);
+  if (taskRelationChildAffinityRuntimeRef.current === null) {
+    taskRelationChildAffinityRuntimeRef.current =
+      new RuntimeInferenceOperationRuntime(
+        "task-relation-child-affinity"
+      );
+  }
+  const taskRelationParentAffinityRuntimeRef = useRef<
+    RuntimeInferenceOperationRuntime<
+      TaskRelationSplitShadowJob<TaskRelationAffinityRequest>,
+      TaskRelationSplitShadowRequestResult
+    > | null
+  >(null);
+  if (taskRelationParentAffinityRuntimeRef.current === null) {
+    taskRelationParentAffinityRuntimeRef.current =
+      new RuntimeInferenceOperationRuntime(
+        "task-relation-parent-affinity"
+      );
+  }
+  const taskRelationCanonicalShadowRuntimeRef = useRef<
+    RuntimeInferenceOperationRuntime<
+      TaskRelationSplitShadowJob<TaskRelationCanonicalShadowRequest>,
+      TaskRelationSplitShadowRequestResult
+    > | null
+  >(null);
+  if (taskRelationCanonicalShadowRuntimeRef.current === null) {
+    taskRelationCanonicalShadowRuntimeRef.current =
+      new RuntimeInferenceOperationRuntime(
+        "task-relation-canonical-shadow"
+      );
+  }
+  const taskRelationSplitShadowCircuitRef = useRef(
+    new RuntimeInferenceSessionCircuitBreaker()
+  );
   const answerResolutionRuntimeRef = useRef<
     RuntimeInferenceOperationRuntime<
       AnswerRecoveryAdjudicationJob,
@@ -2971,6 +3036,9 @@ export function useMeetingAssistant() {
   >([]);
   const latestSourceOwnedSetupRef =
     useRef<SourceOwnedSetupCandidate | undefined>(undefined);
+  const effectiveQuestionSourceLedgerRef = useRef(
+    new EffectiveQuestionSourceLedger()
+  );
   const answerDeliveryProgressRef =
     useRef<AnswerDeliveryProgress | null>(null);
   const pendingAnswerRevisionRef =
@@ -5191,6 +5259,9 @@ export function useMeetingAssistant() {
     meetingMetadataInferenceRuntimeRef.current?.cancelAll("superseded");
     questionTypeAdjudicationRuntimeRef.current?.cancelAll("superseded");
     taskRelationAdjudicationRuntimeRef.current?.cancelAll("superseded");
+    taskRelationChildAffinityRuntimeRef.current?.cancelAll("superseded");
+    taskRelationParentAffinityRuntimeRef.current?.cancelAll("superseded");
+    taskRelationCanonicalShadowRuntimeRef.current?.cancelAll("superseded");
     answerResolutionRuntimeRef.current?.cancelAll("superseded");
     evidenceRequirementRuntimeRef.current?.cancelAll("superseded");
     sourceLinkageAdjudicationRuntimeRef.current?.cancelAll("superseded");
@@ -5209,6 +5280,7 @@ export function useMeetingAssistant() {
     taskBoundaryCandidateRef.current = undefined;
     currentQuestionSettlementRef.current = undefined;
     latestSourceOwnedSetupRef.current = undefined;
+    effectiveQuestionSourceLedgerRef.current.clear();
     settledAdvisorExecutionPlanRef.current = undefined;
     advisorResponseFingerprintCacheRef.current.reset();
     advisorResponseChallengeCoordinatorRef.current.reset();
@@ -11407,6 +11479,22 @@ export function useMeetingAssistant() {
     }
     const effectiveSettlementContextState =
       contextManagerRef.current.getState();
+    const effectiveQuestionSourceRecord =
+      effectiveAdvisorSettlementView.effectiveSettlement &&
+      advisorJob.logicalQuestionUnit
+        ? createEffectiveQuestionSourceRecord({
+            logicalQuestionUnit: advisorJob.logicalQuestionUnit,
+            settlement:
+              effectiveAdvisorSettlementView.effectiveSettlement,
+            activeMeetingTask:
+              effectiveSettlementContextState.activeMeetingTask,
+          })
+        : undefined;
+    if (effectiveQuestionSourceRecord) {
+      effectiveQuestionSourceLedgerRef.current.upsert(
+        effectiveQuestionSourceRecord
+      );
+    }
     const sourceOwnedSetupCandidate = latestSourceOwnedSetupRef.current;
     const sourceOwnedSetupSelection =
       selectSourceOwnedSemanticContext({
@@ -11432,6 +11520,14 @@ export function useMeetingAssistant() {
           sourceOwnedSetupSelection
         )
       );
+      traceStoreRef.current.updateMetadata(traceId, {
+        effectiveQuestionSourceRecordId:
+          effectiveQuestionSourceRecord?.recordId,
+        effectiveQuestionSourceRecordOwnerKind:
+          effectiveQuestionSourceRecord?.owner.kind,
+        effectiveQuestionSourceLedgerSize:
+          effectiveQuestionSourceLedgerRef.current.list().length,
+      });
     }
     advisorProjectAnchor = transientPersonalStatusDecision
       ? undefined
@@ -17117,6 +17213,484 @@ export function useMeetingAssistant() {
     []
   );
 
+  const scheduleTaskRelationSplitShadow = useCallback(
+    ({
+      traceId,
+      taskId,
+      request,
+    }: {
+      traceId: string;
+      taskId?: string;
+      request: TaskRelationAdjudicationRequest;
+    }) => {
+      const evaluationActive =
+        debugModeRef.current ||
+        Boolean(sessionRecordingManagerRef.current?.getState().active);
+      if (!evaluationActive) return;
+      const startedAt = Date.now();
+      const contextState = contextManagerRef.current.getState();
+      const splitRuntimeEpoch = runtimeEpochRef.current;
+      const splitManualCorrectionRevision =
+        manualCorrectionRevisionRef.current;
+      const splitRequests = buildTaskRelationAffinityRequests({
+        request,
+        sessionId: contextState.sessionId,
+        runtimeEpoch: splitRuntimeEpoch,
+        manualCorrectionRevision: splitManualCorrectionRevision,
+      });
+      type AffinityOutcome = {
+        operationId?: string;
+        outputHash?: string;
+        adjudication?: TaskRelationAffinityAdjudication;
+        unavailableReason?: string;
+      };
+      const readCurrentIdentity = (
+        scheduled: TaskRelationSplitIdentity
+      ): TaskRelationSplitIdentity => {
+        const current = contextManagerRef.current.getState();
+        const activeTask = current.activeMeetingTask;
+        return {
+          ...scheduled,
+          sessionId: current.sessionId,
+          runtimeEpoch: runtimeEpochRef.current,
+          parentId: activeTask?.parent.id ?? "",
+          parentRevision: activeTask?.parent.revisions ?? -1,
+          childId: activeTask?.child?.id,
+          manualCorrectionRevision:
+            manualCorrectionRevisionRef.current,
+        };
+      };
+      const runAffinity = (
+        affinityRequest: TaskRelationAffinityRequest | undefined
+      ): Promise<AffinityOutcome> => {
+        if (!affinityRequest) {
+          return Promise.resolve({
+            unavailableReason: "no-active-child",
+          });
+        }
+        const operationKind = affinityRequest.operationKind;
+        const circuit = taskRelationSplitShadowCircuitRef.current.read(
+          operationKind,
+          contextState.sessionId
+        );
+        if (circuit.open) {
+          return Promise.resolve({
+            unavailableReason: "provider-circuit-open",
+          });
+        }
+        const modelRoute = resolveRuntimeInferenceModelRouteFromSnapshot({
+          snapshot: meetingModelProviderSnapshotRef.current,
+          operationKind,
+          reason: "task-relation-split-shadow",
+        });
+        if (!modelRoute.provider) {
+          taskRelationSplitShadowCircuitRef.current.open({
+            operationKind,
+            sessionId: contextState.sessionId,
+            reason: "provider-configuration-error",
+            detail:
+              modelRoute.missingRequiredVariables.length > 0
+                ? `missing:${modelRoute.missingRequiredVariables.join(",")}`
+                : modelRoute.fallbackReason,
+          });
+          return Promise.resolve({
+            unavailableReason: "provider-configuration-error",
+          });
+        }
+        const prompts = buildTaskRelationAffinityPrompts(affinityRequest);
+        const promptText = [prompts.systemPrompt, prompts.userMessage].join(
+          "\n\n"
+        );
+        const lease = createTaskRelationSplitLease({
+          request: affinityRequest,
+        });
+        const prefix =
+          affinityRequest.affinityKind === "child"
+            ? "taskRelationChildAffinity"
+            : "taskRelationParentAffinity";
+        const runtime =
+          affinityRequest.affinityKind === "child"
+            ? taskRelationChildAffinityRuntimeRef.current!
+            : taskRelationParentAffinityRuntimeRef.current!;
+        const baseMetadata = {
+          ...formatRuntimeInferenceOperationForTrace(operationKind),
+          [`${prefix}OperationId`]: lease.operationId,
+          [`${prefix}SemanticPayloadDigest`]:
+            prompts.semanticPayloadDigest,
+          [`${prefix}ModelVisibleChars`]: prompts.modelVisibleChars,
+          [`${prefix}MutationBlocked`]: true,
+        };
+        traceStoreRef.current.updateMetadata(traceId, baseMetadata);
+        traceStoreRef.current.recordInput(
+          traceId,
+          `${affinityRequest.affinityKind} affinity model input`,
+          promptText,
+          baseMetadata
+        );
+        sessionRecordingManagerRef.current?.recordModelInput({
+          traceId,
+          taskId,
+          label: `${affinityRequest.affinityKind} affinity model input`,
+          value: promptText,
+          metadata: baseMetadata,
+        });
+        return new Promise<AffinityOutcome>((resolve) => {
+          let stepId: string | undefined;
+          runtime.schedule({
+            job: {
+              operationId: lease.operationId,
+              operationKind,
+              sessionId: contextState.sessionId,
+              budgetKey: `${request.logicalQuestionUnitId}:${request.logicalQuestionUnitRevision}`,
+              budgetSlot: `split:${splitManualCorrectionRevision}`,
+              budgetReason: "task-relation-split-shadow",
+              traceId,
+              lease,
+              request: affinityRequest,
+            },
+            execute: (job, signal) =>
+              requestTaskRelationSplitShadow({
+                request: job.request,
+                provider: modelRoute.provider,
+                selectedProvider: modelRoute.selectedProvider,
+                signal,
+                executionIdentity: {
+                  requestId: job.operationId,
+                  executionPlanId: job.lease.operationId,
+                  modelId: readSelectedProviderModelId(
+                    modelRoute.selectedProvider
+                  ),
+                  sessionId: job.sessionId,
+                  runtimeEpoch: job.lease.identity.runtimeEpoch,
+                  logicalQuestionUnitId:
+                    job.lease.identity.logicalQuestionUnitId,
+                  logicalQuestionRevision:
+                    job.lease.identity.logicalQuestionUnitRevision,
+                },
+              }),
+            onStarted: (_job, operationStartedAt, budget) => {
+              const metadata = {
+                ...baseMetadata,
+                [`${prefix}StartedAt`]: operationStartedAt,
+                [`${prefix}BudgetRemaining`]: budget.remaining,
+              };
+              traceStoreRef.current.updateMetadata(traceId, metadata);
+              stepId = traceStoreRef.current.startStep(
+                traceId,
+                affinityRequest.affinityKind === "child"
+                  ? "Task relation child affinity shadow"
+                  : "Task relation parent affinity shadow",
+                metadata
+              );
+            },
+            onSettled: (settlement) => {
+              const authorization = authorizeTaskRelationSplitLease(
+                settlement.job.lease,
+                {
+                  currentOperationId: runtime.getCurrentOperationId(),
+                  operationKind,
+                  identity: readCurrentIdentity(
+                    settlement.job.lease.identity
+                  ),
+                  semanticPayloadDigest:
+                    settlement.job.request.semanticPayloadDigest,
+                }
+              );
+              const result = settlement.result;
+              const parsed = result?.parsed;
+              const adjudication =
+                authorization.authorized &&
+                parsed?.ok &&
+                "affinityKind" in parsed.value
+                  ? parsed.value
+                  : undefined;
+              const unavailableReason = !authorization.authorized
+                ? authorization.reason
+                : settlement.disposition !== "completed"
+                  ? settlement.disposition
+                  : !parsed?.ok
+                    ? result?.parseDisposition ?? "invalid-output"
+                    : undefined;
+              const metadata = {
+                ...baseMetadata,
+                ...formatRuntimeInferenceProviderOutcomeForTrace(
+                  result?.providerOutcome,
+                  prefix
+                ),
+                [`${prefix}Disposition`]: adjudication
+                  ? "shadow-observed"
+                  : unavailableReason,
+                [`${prefix}LeaseAuthorized`]: authorization.authorized,
+                [`${prefix}Decision`]: adjudication?.decision,
+                [`${prefix}Confidence`]: adjudication?.confidence,
+                [`${prefix}CurrentEvidenceSpans`]:
+                  adjudication?.currentEvidenceSpans,
+                [`${prefix}BranchEvidenceSpans`]:
+                  adjudication?.branchEvidenceSpans,
+                [`${prefix}OutputHash`]: result?.outputHash,
+                [`${prefix}DurationMs`]: settlement.durationMs,
+              };
+              traceStoreRef.current.updateMetadata(traceId, metadata);
+              if (result?.rawOutput) {
+                sessionRecordingManagerRef.current?.recordModelOutput({
+                  traceId,
+                  taskId,
+                  label: `${affinityRequest.affinityKind} affinity raw output`,
+                  value: result.rawOutput,
+                  metadata,
+                });
+              }
+              if (stepId) {
+                traceStoreRef.current.finishStep(
+                  traceId,
+                  stepId,
+                  settlement.disposition === "error" ? "error" : "success",
+                  metadata,
+                  settlement.error
+                );
+              }
+              resolve({
+                operationId: lease.operationId,
+                outputHash: result?.outputHash,
+                adjudication,
+                unavailableReason,
+              });
+            },
+          });
+        });
+      };
+
+      void Promise.all([
+        runAffinity(splitRequests.child),
+        runAffinity(splitRequests.parent),
+      ]).then(([child, parent]) => {
+        const canonicalRequest = buildTaskRelationCanonicalShadowRequest({
+          request,
+          sessionId: contextState.sessionId,
+          runtimeEpoch: splitRuntimeEpoch,
+          manualCorrectionRevision: splitManualCorrectionRevision,
+          child,
+          parent,
+        });
+        const operationKind = canonicalRequest.operationKind;
+        const circuit = taskRelationSplitShadowCircuitRef.current.read(
+          operationKind,
+          contextState.sessionId
+        );
+        const modelRoute = resolveRuntimeInferenceModelRouteFromSnapshot({
+          snapshot: meetingModelProviderSnapshotRef.current,
+          operationKind,
+          reason: "task-relation-split-canonical-shadow",
+        });
+        if (circuit.open || !modelRoute.provider) {
+          traceStoreRef.current.updateMetadata(traceId, {
+            taskRelationSplitCanonicalDisposition: circuit.open
+              ? "provider-circuit-open"
+              : "provider-configuration-error",
+            taskRelationSplitShadowWallTimeMs: Date.now() - startedAt,
+          });
+          return;
+        }
+        const prompts = buildTaskRelationCanonicalShadowPrompts(
+          canonicalRequest
+        );
+        const promptText = [prompts.systemPrompt, prompts.userMessage].join(
+          "\n\n"
+        );
+        const lease = createTaskRelationSplitLease({
+          request: canonicalRequest,
+        });
+        const baseMetadata = {
+          ...formatRuntimeInferenceOperationForTrace(operationKind),
+          taskRelationSplitCanonicalOperationId: lease.operationId,
+          taskRelationSplitCanonicalSemanticPayloadDigest:
+            prompts.semanticPayloadDigest,
+          taskRelationSplitCanonicalModelVisibleChars:
+            prompts.modelVisibleChars,
+          taskRelationSplitChildPredecessorOperationId:
+            canonicalRequest.childPredecessorOperationId,
+          taskRelationSplitChildPredecessorOutputHash:
+            canonicalRequest.childPredecessorOutputHash,
+          taskRelationSplitParentPredecessorOperationId:
+            canonicalRequest.parentPredecessorOperationId,
+          taskRelationSplitParentPredecessorOutputHash:
+            canonicalRequest.parentPredecessorOutputHash,
+          taskRelationSplitCanonicalMutationBlocked: true,
+        };
+        traceStoreRef.current.updateMetadata(traceId, baseMetadata);
+        traceStoreRef.current.recordInput(
+          traceId,
+          "task relation split canonical model input",
+          promptText,
+          baseMetadata
+        );
+        sessionRecordingManagerRef.current?.recordModelInput({
+          traceId,
+          taskId,
+          label: "task relation split canonical model input",
+          value: promptText,
+          metadata: baseMetadata,
+        });
+        let stepId: string | undefined;
+        taskRelationCanonicalShadowRuntimeRef.current!.schedule({
+          job: {
+            operationId: lease.operationId,
+            operationKind,
+            sessionId: contextState.sessionId,
+            budgetKey: `${request.logicalQuestionUnitId}:${request.logicalQuestionUnitRevision}`,
+            budgetSlot: `split:${splitManualCorrectionRevision}`,
+            budgetReason: "task-relation-split-canonical-shadow",
+            traceId,
+            lease,
+            request: canonicalRequest,
+          },
+          execute: (job, signal) =>
+            requestTaskRelationSplitShadow({
+              request: job.request,
+              provider: modelRoute.provider,
+              selectedProvider: modelRoute.selectedProvider,
+              signal,
+              executionIdentity: {
+                requestId: job.operationId,
+                executionPlanId: job.lease.operationId,
+                modelId: readSelectedProviderModelId(
+                  modelRoute.selectedProvider
+                ),
+                sessionId: job.sessionId,
+                runtimeEpoch: job.lease.identity.runtimeEpoch,
+                logicalQuestionUnitId:
+                  job.lease.identity.logicalQuestionUnitId,
+                logicalQuestionRevision:
+                  job.lease.identity.logicalQuestionUnitRevision,
+              },
+            }),
+          onStarted: (_job, canonicalStartedAt) => {
+            stepId = traceStoreRef.current.startStep(
+              traceId,
+              "Task relation split canonical shadow",
+              {
+                ...baseMetadata,
+                taskRelationSplitCanonicalStartedAt: canonicalStartedAt,
+              }
+            );
+          },
+          onSettled: (settlement) => {
+            const authorization = authorizeTaskRelationSplitLease(
+              settlement.job.lease,
+              {
+                currentOperationId:
+                  taskRelationCanonicalShadowRuntimeRef.current?.getCurrentOperationId(),
+                operationKind,
+                identity: readCurrentIdentity(
+                  settlement.job.lease.identity
+                ),
+                semanticPayloadDigest:
+                  settlement.job.request.semanticPayloadDigest,
+              }
+            );
+            const predecessorAuthorization =
+              authorizeTaskRelationCanonicalPredecessors({
+                request: settlement.job.request,
+                currentChildOperationId:
+                  child.operationId &&
+                  taskRelationChildAffinityRuntimeRef.current?.getCurrentOperationId() ===
+                    child.operationId
+                    ? child.operationId
+                    : undefined,
+                currentChildOutputHash: child.outputHash,
+                currentParentOperationId:
+                  parent.operationId &&
+                  taskRelationParentAffinityRuntimeRef.current?.getCurrentOperationId() ===
+                    parent.operationId
+                    ? parent.operationId
+                    : undefined,
+                currentParentOutputHash: parent.outputHash,
+              });
+            const result = settlement.result;
+            const parsed = result?.parsed;
+            const adjudication: TaskRelationCanonicalShadowAdjudication | undefined =
+              authorization.authorized &&
+              predecessorAuthorization.authorized &&
+              parsed?.ok &&
+              "relation" in parsed.value
+                ? parsed.value
+                : undefined;
+            const trace = traceStoreRef.current
+              .getTraces()
+              .find((candidate) => candidate.id === traceId);
+            const monolithicRelation = isRuntimeTaskRelation(
+              trace?.metadata?.taskRelationAdjudicationCandidateRelation
+            )
+              ? trace?.metadata?.taskRelationAdjudicationCandidateRelation
+              : undefined;
+            const comparison = compareTaskRelationSplitShadow({
+              monolithicRelation,
+              canonicalRelation: adjudication?.relation,
+            });
+            const metadata = {
+              ...baseMetadata,
+              ...formatRuntimeInferenceProviderOutcomeForTrace(
+                result?.providerOutcome,
+                "taskRelationSplitCanonical"
+              ),
+              taskRelationSplitCanonicalDisposition: adjudication
+                ? "shadow-observed"
+                : !authorization.authorized
+                  ? authorization.reason
+                  : !predecessorAuthorization.authorized
+                    ? predecessorAuthorization.reason
+                  : result?.parseDisposition ?? settlement.disposition,
+              taskRelationSplitCanonicalLeaseAuthorized:
+                authorization.authorized,
+              taskRelationSplitCanonicalPredecessorsAuthorized:
+                predecessorAuthorization.authorized,
+              taskRelationSplitCanonicalPredecessorRejectionReason:
+                predecessorAuthorization.authorized
+                  ? undefined
+                  : predecessorAuthorization.reason,
+              taskRelationSplitCanonicalRelation:
+                adjudication?.relation,
+              taskRelationSplitCanonicalConfidence:
+                adjudication?.confidence,
+              taskRelationSplitCanonicalCurrentEvidenceSpans:
+                adjudication?.currentQuestionEvidenceSpans,
+              taskRelationSplitCanonicalParentEvidenceSpans:
+                adjudication?.parentEvidenceSpans,
+              taskRelationSplitCanonicalOutputHash: result?.outputHash,
+              taskRelationSplitCanonicalAvailable:
+                comparison.canonicalAvailable,
+              taskRelationSplitCanonicalDecisionDelta:
+                comparison.canonicalDelta,
+              taskRelationSplitShadowWallTimeMs: Date.now() - startedAt,
+              taskRelationSplitShadowAppliedToRuntime: false,
+            };
+            traceStoreRef.current.updateMetadata(traceId, metadata);
+            refreshRecordedCompletedTrace(traceId);
+            if (result?.rawOutput) {
+              sessionRecordingManagerRef.current?.recordModelOutput({
+                traceId,
+                taskId,
+                label: "task relation split canonical raw output",
+                value: result.rawOutput,
+                metadata,
+              });
+            }
+            if (stepId) {
+              traceStoreRef.current.finishStep(
+                traceId,
+                stepId,
+                settlement.disposition === "error" ? "error" : "success",
+                metadata,
+                settlement.error
+              );
+            }
+          },
+        });
+      });
+    },
+    [refreshRecordedCompletedTrace]
+  );
+
   const scheduleTaskRelationAdjudication = useCallback(
     ({
       turn,
@@ -17214,11 +17788,19 @@ export function useMeetingAssistant() {
           logicalQuestionUnit,
           sourceKind,
         });
+      const ownerEvidenceSelection =
+        selectOwnerScopedRelationEvidence({
+          records: effectiveQuestionSourceLedgerRef.current.list(),
+          currentLogicalQuestionUnit: logicalQuestionUnit,
+          activeMeetingTask,
+          transcriptTurns: contextState.transcriptTurns,
+        });
       const request = buildTaskRelationAdjudicationRequest({
         logicalQuestionUnit,
         activeMeetingTask,
         currentQuestion,
         recentTurns: contextState.transcriptTurns,
+        ownerEvidenceSelection,
       });
       const currentText = request.currentQuestion.text;
       const sourceOwnedCurrentText = turn.text?.trim() || currentText;
@@ -17973,6 +18555,11 @@ export function useMeetingAssistant() {
           );
         },
       }, releaseWindowRequested ? 0 : undefined);
+      scheduleTaskRelationSplitShadow({
+        traceId,
+        taskId: scheduledTaskId,
+        request,
+      });
       return {
         releaseWindowRequested,
         operationId: lease.operationId,
@@ -17980,7 +18567,7 @@ export function useMeetingAssistant() {
         outcome,
       };
     },
-    []
+    [scheduleTaskRelationSplitShadow]
   );
 
   const scheduleTaxonomyAdjudicationShadow = useCallback(
@@ -31357,6 +31944,9 @@ export function useMeetingAssistant() {
       meetingMetadataInferenceRuntimeRef.current?.cancelAll("disposed");
       questionTypeAdjudicationRuntimeRef.current?.cancelAll("disposed");
       taskRelationAdjudicationRuntimeRef.current?.cancelAll("disposed");
+      taskRelationChildAffinityRuntimeRef.current?.cancelAll("disposed");
+      taskRelationParentAffinityRuntimeRef.current?.cancelAll("disposed");
+      taskRelationCanonicalShadowRuntimeRef.current?.cancelAll("disposed");
       answerResolutionRuntimeRef.current?.cancelAll("disposed");
       evidenceRequirementRuntimeRef.current?.cancelAll("disposed");
       sourceLinkageAdjudicationRuntimeRef.current?.cancelAll("disposed");

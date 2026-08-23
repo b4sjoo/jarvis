@@ -9,6 +9,9 @@ export type RuntimeInferenceOperationKind =
   | "meeting-metadata-inference"
   | "whiteboard-syntax-repair"
   | "task-relation-adjudication"
+  | "task-relation-child-affinity"
+  | "task-relation-parent-affinity"
+  | "task-relation-canonical-shadow"
   | "answer-resolution"
   | "evidence-requirement"
   | "source-linkage-adjudication";
@@ -166,6 +169,33 @@ const DEFINITIONS: Record<
     timeoutMs: 3_000,
     maxOutputTokens: 256,
     quiescenceMs: 350,
+    maxStartsPerBudgetSlot: 1,
+  },
+  "task-relation-child-affinity": {
+    workloadClass: "runtime",
+    operationKind: "task-relation-child-affinity",
+    lane: "evaluation",
+    timeoutMs: 1_500,
+    maxOutputTokens: 256,
+    quiescenceMs: 0,
+    maxStartsPerBudgetSlot: 1,
+  },
+  "task-relation-parent-affinity": {
+    workloadClass: "runtime",
+    operationKind: "task-relation-parent-affinity",
+    lane: "evaluation",
+    timeoutMs: 1_500,
+    maxOutputTokens: 256,
+    quiescenceMs: 0,
+    maxStartsPerBudgetSlot: 1,
+  },
+  "task-relation-canonical-shadow": {
+    workloadClass: "runtime",
+    operationKind: "task-relation-canonical-shadow",
+    lane: "evaluation",
+    timeoutMs: 2_000,
+    maxOutputTokens: 256,
+    quiescenceMs: 0,
     maxStartsPerBudgetSlot: 1,
   },
   "answer-resolution": {

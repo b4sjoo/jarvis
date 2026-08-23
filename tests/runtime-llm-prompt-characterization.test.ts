@@ -163,6 +163,16 @@ test("characterizes envelope leakage in every current runtime LLM prompt", () =>
         sourceScope: "parent-scope",
       },
     ],
+    recentBranchEvidence: [],
+    recentParentEvidence: [
+      {
+        turnId: "turn-prior",
+        text: "Availability during failures.",
+        role: "constraint",
+        selectionReason: "role-hint",
+        sourceScope: "parent-scope",
+      },
+    ],
     recentTransitions: [
       { turnId: "turn-transition", text: "Back to the main design." },
     ],
@@ -175,6 +185,12 @@ test("characterizes envelope leakage in every current runtime LLM prompt", () =>
       parentScopedSelectedCount: 1,
       crossBoundarySelectedCount: 0,
       currentSourceFallbackCount: 0,
+      lquSelectedCount: 0,
+      rawSupplementCount: 0,
+      acknowledgementExcludedCount: 0,
+      coveredTurnCount: 0,
+      branchEvidenceCount: 0,
+      parentEvidenceCount: 1,
     },
   };
   const answerRecovery: AnswerRecoveryAdjudicationRequest = {

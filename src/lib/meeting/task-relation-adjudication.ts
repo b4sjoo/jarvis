@@ -129,7 +129,7 @@ export interface TaskRelationSourceEvidence {
   turnId: string;
   text: string;
   role?: TaskRelationSourceEvidenceRole;
-  selectionReason: "role-hint" | "raw-recent-turn";
+  selectionReason: "lqu-projection" | "role-hint" | "raw-recent-turn";
   sourceScope:
     | "parent-scope"
     | "cross-boundary-prior-turn"
@@ -146,6 +146,30 @@ export interface TaskRelationRecentEvidenceDiagnostics {
   parentScopedSelectedCount: number;
   crossBoundarySelectedCount: number;
   currentSourceFallbackCount: number;
+  lquSelectedCount: number;
+  rawSupplementCount: number;
+  acknowledgementExcludedCount: number;
+  coveredTurnCount: number;
+  branchEvidenceCount: number;
+  parentEvidenceCount: number;
+}
+
+export interface TaskRelationOwnerEvidenceInput {
+  sourceId: string;
+  text: string;
+  role?: TaskRelationSourceEvidenceRole;
+  selectionReason: "lqu-projection" | "raw-recent-turn";
+}
+
+export interface TaskRelationOwnerEvidenceSelectionInput {
+  recentBranchEvidence: TaskRelationOwnerEvidenceInput[];
+  recentParentEvidence: TaskRelationOwnerEvidenceInput[];
+  diagnostics: {
+    lquSelectedCount: number;
+    rawSupplementCount: number;
+    acknowledgementExcludedCount: number;
+    coveredTurnCount: number;
+  };
 }
 
 export interface TaskRelationTransitionEvidence {
@@ -164,6 +188,8 @@ export interface TaskRelationAdjudicationRequest {
   activeParent: TaskRelationParentCapsule;
   activeChild?: TaskRelationChildCapsule;
   recentSourceEvidence: TaskRelationSourceEvidence[];
+  recentBranchEvidence: TaskRelationSourceEvidence[];
+  recentParentEvidence: TaskRelationSourceEvidence[];
   recentTransitions: TaskRelationTransitionEvidence[];
   recentEvidenceDiagnostics: TaskRelationRecentEvidenceDiagnostics;
   suspendedParent?: TaskRelationParentCapsule;
@@ -386,6 +412,7 @@ export function buildTaskRelationAdjudicationRequest(input: {
   activeMeetingTask: ActiveMeetingTask;
   currentQuestion?: ProvisionalCurrentQuestion;
   recentTurns?: TranscriptTurn[];
+  ownerEvidenceSelection?: TaskRelationOwnerEvidenceSelectionInput;
 }): TaskRelationAdjudicationRequest {
   const parent = input.activeMeetingTask.parent;
   const child = input.activeMeetingTask.child;
@@ -396,13 +423,39 @@ export function buildTaskRelationAdjudicationRequest(input: {
   const excludedTurnIds = new Set(
     input.logicalQuestionUnit.sourceTurnIds
   );
-  const parentEvidenceSelection = selectRecentSourceEvidence({
-    turns: parentScope.turns,
-    excludedTurnIds,
-    maxTurns: 5,
-    sourceScope: "parent-scope",
-  });
-  let recentSourceEvidence = parentEvidenceSelection.evidence;
+  const ownerEvidenceSelection = input.ownerEvidenceSelection;
+  const recentBranchEvidence = ownerEvidenceSelection
+    ? ownerEvidenceSelection.recentBranchEvidence.map((item) =>
+        toTaskRelationSourceEvidence(item)
+      )
+    : [];
+  const parentEvidenceSelection = ownerEvidenceSelection
+    ? {
+        evidence: ownerEvidenceSelection.recentParentEvidence.map((item) =>
+          toTaskRelationSourceEvidence(item)
+        ),
+        diagnostics: {
+          eligiblePriorTurnCount:
+            ownerEvidenceSelection.recentParentEvidence.length,
+          selectedTurnCount:
+            ownerEvidenceSelection.recentParentEvidence.length,
+          rawFallbackCount:
+            ownerEvidenceSelection.diagnostics.rawSupplementCount,
+          falseEmpty: false,
+          emptyReason: undefined,
+        },
+      }
+    : selectRecentSourceEvidence({
+        turns: parentScope.turns,
+        excludedTurnIds,
+        maxTurns: 5,
+        sourceScope: "parent-scope",
+      });
+  let recentParentEvidence = parentEvidenceSelection.evidence;
+  let recentSourceEvidence = dedupeTaskRelationEvidence([
+    ...recentParentEvidence,
+    ...recentBranchEvidence,
+  ]);
   let crossBoundarySelectedCount = 0;
   let currentSourceFallbackCount = 0;
   const allPriorEvidenceSelection = selectRecentSourceEvidence({
@@ -413,6 +466,7 @@ export function buildTaskRelationAdjudicationRequest(input: {
   });
   if (recentSourceEvidence.length === 0) {
     recentSourceEvidence = allPriorEvidenceSelection.evidence;
+    recentParentEvidence = recentSourceEvidence;
     crossBoundarySelectedCount = recentSourceEvidence.length;
   }
   if (recentSourceEvidence.length === 0) {
@@ -437,6 +491,7 @@ export function buildTaskRelationAdjudicationRequest(input: {
         },
       ];
       currentSourceFallbackCount = 1;
+      recentParentEvidence = recentSourceEvidence;
     }
   }
   const recentEvidenceDiagnostics: TaskRelationRecentEvidenceDiagnostics = {
@@ -455,13 +510,24 @@ export function buildTaskRelationAdjudicationRequest(input: {
     parentScopedSelectedCount: parentEvidenceSelection.evidence.length,
     crossBoundarySelectedCount,
     currentSourceFallbackCount,
+    lquSelectedCount:
+      ownerEvidenceSelection?.diagnostics.lquSelectedCount ?? 0,
+    rawSupplementCount:
+      ownerEvidenceSelection?.diagnostics.rawSupplementCount ??
+      parentEvidenceSelection.diagnostics.rawFallbackCount,
+    acknowledgementExcludedCount:
+      ownerEvidenceSelection?.diagnostics.acknowledgementExcludedCount ?? 0,
+    coveredTurnCount:
+      ownerEvidenceSelection?.diagnostics.coveredTurnCount ?? 0,
+    branchEvidenceCount: recentBranchEvidence.length,
+    parentEvidenceCount: recentParentEvidence.length,
   };
   const recentTransitions = recentSourceEvidence
     .filter((item) => item.role === "transition")
     .map((item) => ({ turnId: item.turnId, text: item.text }));
   const activeParent = buildParentCapsule(
     input.activeMeetingTask,
-    recentSourceEvidence
+    recentParentEvidence
   );
   const currentQuestion = input.currentQuestion;
   const sourceSettlementId = currentQuestion
@@ -497,6 +563,8 @@ export function buildTaskRelationAdjudicationRequest(input: {
         }
       : undefined,
     recentSourceEvidence,
+    recentBranchEvidence,
+    recentParentEvidence,
     recentTransitions,
     recentEvidenceDiagnostics,
     suspendedParent: child
@@ -1410,6 +1478,10 @@ export function formatTaskRelationAdjudicationForTrace(input: {
       input.request?.activeChild?.childId,
     taskRelationAdjudicationRecentSourceEvidenceCount:
       input.request?.recentSourceEvidence.length,
+    taskRelationAdjudicationRecentBranchEvidenceCount:
+      input.request?.recentBranchEvidence.length,
+    taskRelationAdjudicationRecentParentEvidenceCount:
+      input.request?.recentParentEvidence.length,
     taskRelationAdjudicationRecentSourceEvidenceChars:
       input.request?.recentSourceEvidence.reduce(
         (total, item) => total + item.text.length,
@@ -1441,6 +1513,14 @@ export function formatTaskRelationAdjudicationForTrace(input: {
       input.request?.recentEvidenceDiagnostics.crossBoundarySelectedCount,
     taskRelationAdjudicationCurrentSourceFallbackCount:
       input.request?.recentEvidenceDiagnostics.currentSourceFallbackCount,
+    taskRelationAdjudicationLquSelectedEvidenceCount:
+      input.request?.recentEvidenceDiagnostics.lquSelectedCount,
+    taskRelationAdjudicationRawSupplementEvidenceCount:
+      input.request?.recentEvidenceDiagnostics.rawSupplementCount,
+    taskRelationAdjudicationAcknowledgementExcludedCount:
+      input.request?.recentEvidenceDiagnostics.acknowledgementExcludedCount,
+    taskRelationAdjudicationCoveredTurnCount:
+      input.request?.recentEvidenceDiagnostics.coveredTurnCount,
     taskRelationAdjudicationTransitionCount:
       input.request?.recentTransitions.length,
     taskRelationAdjudicationGeneratedAnswerExcluded: true,
@@ -1526,6 +1606,30 @@ function buildParentCapsule(
         ?.slice(0, 8)
         .map((entity) => boundText(entity, 80)) ?? [],
   };
+}
+
+function toTaskRelationSourceEvidence(
+  item: TaskRelationOwnerEvidenceInput
+): TaskRelationSourceEvidence {
+  return {
+    turnId: item.sourceId,
+    text: item.text,
+    role: item.role,
+    selectionReason: item.selectionReason,
+    sourceScope: "parent-scope",
+  };
+}
+
+function dedupeTaskRelationEvidence(
+  evidence: TaskRelationSourceEvidence[]
+) {
+  const seen = new Set<string>();
+  return evidence.filter((item) => {
+    const key = `${item.turnId}:${item.text}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 function selectActiveParentSourceTurns(input: {

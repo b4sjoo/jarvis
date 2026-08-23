@@ -57,6 +57,15 @@ test("registers each atomic runtime operation with an isolated policy", () => {
   const relation = getRuntimeInferenceOperationDefinition(
     "task-relation-adjudication"
   );
+  const childAffinity = getRuntimeInferenceOperationDefinition(
+    "task-relation-child-affinity"
+  );
+  const parentAffinity = getRuntimeInferenceOperationDefinition(
+    "task-relation-parent-affinity"
+  );
+  const canonicalRelation = getRuntimeInferenceOperationDefinition(
+    "task-relation-canonical-shadow"
+  );
   const answerResolution = getRuntimeInferenceOperationDefinition(
     "answer-resolution"
   );
@@ -84,6 +93,12 @@ test("registers each atomic runtime operation with an isolated policy", () => {
   assert.equal(whiteboard.timeoutMs, 3_000);
   assert.equal(whiteboard.maxOutputTokens, 768);
   assert.equal(relation.lane, "critical");
+  assert.equal(childAffinity.lane, "evaluation");
+  assert.equal(parentAffinity.lane, "evaluation");
+  assert.equal(canonicalRelation.lane, "evaluation");
+  assert.equal(childAffinity.timeoutMs, 1_500);
+  assert.equal(parentAffinity.timeoutMs, 1_500);
+  assert.equal(canonicalRelation.timeoutMs, 2_000);
   assert.equal(relation.timeoutMs, 3_000);
   assert.equal(relation.maxOutputTokens, 256);
   assert.equal(answerResolution.lane, "background");
