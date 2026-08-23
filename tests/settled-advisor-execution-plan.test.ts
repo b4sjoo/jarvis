@@ -1074,6 +1074,65 @@ test("freezes an explicit phase advance independently from response and artifact
   });
 });
 
+test("freezes phase-owned Coding artifact authority across Manual Next", () => {
+  const phases = [
+    {
+      phase: "baseline_reasoning" as const,
+      required: ["answer", "code", "complexity"],
+      allowCode: true,
+    },
+    {
+      phase: "optimized_pseudocode" as const,
+      required: ["answer", "complexity"],
+      allowCode: false,
+    },
+    {
+      phase: "implementation_validation" as const,
+      required: ["answer", "code", "complexity"],
+      allowCode: true,
+    },
+  ];
+
+  for (const current of phases) {
+    const codingPlaybook = {
+      ...playbook("coding"),
+      phase: current.phase,
+    };
+    const plan = buildSettledAdvisorExecutionPlan({
+      settlement: settlement({
+        questionType: "coding",
+        relation: "followup-parent",
+        relationMutationAuthorized: false,
+        parentMutationAuthorized: false,
+      }),
+      activeMeetingTask: activeTask("coding", {
+        playbook: codingPlaybook,
+        playbookPhase: current.phase,
+      }),
+      taskBoundaryCommitted: false,
+      childOwnsResponse: false,
+      providerSnapshot: providers,
+      playbook: codingPlaybook,
+      memoryUseCase: "coding_interview",
+      askFrame: "direct-answer",
+      topicDomain: "backend",
+      explicitTaskMutationCommand: {
+        kind: "advance-phase",
+        phase: current.phase,
+      },
+    });
+
+    assert.equal(plan.playbookPhase, current.phase);
+    assert.deepEqual(plan.requiredArtifacts, current.required);
+    assert.equal(plan.artifactPolicy.allowCode, current.allowCode);
+    assert.equal(plan.artifactPolicy.allowComplexity, true);
+    assert.deepEqual(plan.taskMutationPolicy, {
+      kind: "advance-phase",
+      phase: current.phase,
+    });
+  }
+});
+
 test("freezes an authorized bounded recent history read without changing mutation policy", () => {
   const plan = buildSettledAdvisorExecutionPlan({
     settlement: settlement({

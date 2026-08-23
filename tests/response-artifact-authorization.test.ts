@@ -186,3 +186,41 @@ test("separates ordinary coding follow-ups from implementation and complexity mu
   assert.equal(complexity.allowCode, false);
   assert.equal(complexity.allowComplexity, true);
 });
+
+test("uses the committed Coding phase as artifact authority without a subtype", () => {
+  const base = {
+    parentTaskId: "parent-coding",
+    parentQuestionType: "coding",
+    responseOwnerQuestionType: "coding",
+    responseOwnerSource: "committed-parent" as const,
+    relation: "followup-parent" as const,
+  };
+  const baseline = authorizeResponseArtifactMutation({
+    ...base,
+    codingPhase: "baseline_reasoning",
+    requiredArtifacts: ["answer", "code", "complexity"],
+  });
+  const pseudocode = authorizeResponseArtifactMutation({
+    ...base,
+    codingPhase: "optimized_pseudocode",
+    requiredArtifacts: ["answer", "complexity"],
+  });
+  const implementation = authorizeResponseArtifactMutation({
+    ...base,
+    codingPhase: "implementation_validation",
+    requiredArtifacts: ["answer", "code", "complexity"],
+  });
+
+  assert.deepEqual(
+    [baseline.allowCode, baseline.allowComplexity],
+    [true, true]
+  );
+  assert.deepEqual(
+    [pseudocode.allowCode, pseudocode.allowComplexity],
+    [false, true]
+  );
+  assert.deepEqual(
+    [implementation.allowCode, implementation.allowComplexity],
+    [true, true]
+  );
+});

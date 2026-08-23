@@ -591,6 +591,7 @@ export function buildSettledAdvisorExecutionPlan(input: {
     responseOwnerSource: responseOwner.source,
     relation,
     subtaskIntent: input.subtaskIntent,
+    codingPhase: playbookPhase,
     requiredArtifacts,
     creatingParent: input.taskBoundaryCommitted,
     readOnlyParentContinuity: Boolean(readOnlyParentContinuity),

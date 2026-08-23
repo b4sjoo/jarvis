@@ -13438,6 +13438,9 @@ export function useMeetingAssistant() {
           responseOwnerSource: responseOwner.source,
           relation: continuityRelation,
           subtaskIntent: advisorTaskSignals.subtaskIntent,
+          codingPhase:
+            settledExecutionPlan?.playbookPhase ??
+            advisorRuntimePlaybook?.phase,
           requiredArtifacts:
             settledExecutionPlan?.requiredArtifacts ??
             playbookPhaseDecision.requiredArtifacts ??
@@ -26423,6 +26426,7 @@ export function useMeetingAssistant() {
                 !existingInterviewTask &&
                 screenRelationDecision.relation === "new-parent",
               subtaskIntent: screenSubtaskIntent,
+              codingPhase: screenPhaseDecision.phase,
             });
           screenParentAuthorizedArtifacts = [
             "answer",

@@ -6,6 +6,7 @@ import {
   type CanonicalQuestionType,
 } from "./task-taxonomy.js";
 import type {
+  InterviewPlaybookPhase,
   InterviewSubtaskIntent,
   InterviewTaskRelation,
 } from "./types.js";
@@ -40,6 +41,7 @@ export function authorizeResponseArtifactMutation(input: {
   responseOwnerSource: MeetingResponseOwnerSource;
   relation: InterviewTaskRelation;
   subtaskIntent?: InterviewSubtaskIntent;
+  codingPhase?: InterviewPlaybookPhase;
   requiredArtifacts?: AnswerArtifactSection[];
   creatingParent?: boolean;
   readOnlyParentContinuity?: boolean;
@@ -177,6 +179,7 @@ export function authorizeResponseArtifactMutation(input: {
         ? resolveCodingArtifactAuthority({
             creatingParent: input.creatingParent,
             subtaskIntent: input.subtaskIntent,
+            codingPhase: input.codingPhase,
           })
         : { allowCode: false, allowComplexity: false };
     return {
@@ -231,6 +234,7 @@ export function formatResponseArtifactAuthorizationForTrace(
 function resolveCodingArtifactAuthority(input: {
   creatingParent?: boolean;
   subtaskIntent?: InterviewSubtaskIntent;
+  codingPhase?: InterviewPlaybookPhase;
 }) {
   if (input.creatingParent) {
     return { allowCode: true, allowComplexity: true };
@@ -240,6 +244,16 @@ function resolveCodingArtifactAuthority(input: {
   }
   if (input.subtaskIntent === "complexity-probe") {
     return { allowCode: false, allowComplexity: true };
+  }
+
+  if (input.codingPhase === "optimized_pseudocode") {
+    return { allowCode: false, allowComplexity: true };
+  }
+  if (
+    input.codingPhase === "baseline_reasoning" ||
+    input.codingPhase === "implementation_validation"
+  ) {
+    return { allowCode: true, allowComplexity: true };
   }
 
   return { allowCode: false, allowComplexity: false };
