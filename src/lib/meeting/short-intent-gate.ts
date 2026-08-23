@@ -11,11 +11,14 @@ import {
   buildResponseOpportunityRequest,
   createResponseOpportunityContextCapsule,
   hashResponseOpportunityEvidence,
+  projectResponseOpportunitySemanticPayload,
   type ResponseOpportunityRequest,
   type ResponseOpportunityContextCapsule,
+  type ResponseOpportunitySemanticPayload,
   type ResponseOpportunitySourceSpan,
 } from "./response-opportunity-contract.js";
 import type { RuntimeInferenceRuntimeJob } from "./runtime-inference-runtime.js";
+import { buildRuntimeInferenceModelInput } from "./runtime-inference.js";
 import { calculateWordEquivalent } from "./transcript-fusion.js";
 
 export {
@@ -29,8 +32,10 @@ export {
   buildResponseOpportunityRequest,
   createResponseOpportunityContextCapsule,
   hashResponseOpportunityEvidence,
+  projectResponseOpportunitySemanticPayload,
   type ResponseOpportunityRequest,
   type ResponseOpportunityContextCapsule,
+  type ResponseOpportunitySemanticPayload,
   type ResponseOpportunitySourceSpan,
 };
 export const RESPONSE_OPPORTUNITY_SESSION_START_LIMIT = 120;
@@ -274,16 +279,16 @@ export function resolveResponseOpportunityExecutionMode(
 export function buildResponseOpportunityPrompts(
   request: ResponseOpportunityRequest
 ) {
-  return {
-    systemPrompt: [
+  const semanticPayload = projectResponseOpportunitySemanticPayload(request);
+  const systemPrompt = [
       "Decide one thing only: whether the interviewer-owned source evidence currently asks the candidate for an output that Jarvis should help produce.",
       "Return one JSON object only. Do not answer the interview content.",
       "Use output-request for a question, directive, requested explanation, requested design or code, correction that requires a revised answer, constraint on an active answer, or an explicit phase-control instruction.",
       "Use no-output-request for greetings, acknowledgements, closings, logistics, or information supplied in response to the candidate's own question when the interviewer does not ask anything back.",
       "Use unclear when the bounded source is incomplete or does not support either conclusion.",
-      ...(request.contextCapsule
+      ...(semanticPayload.pendingClarification
         ? [
-            "The pendingClarification capsule is read-only context from Jarvis's last stable answer. A short confirmation, constraint, or permission that resolves it is an output-request because Jarvis should continue the existing answer. Do not infer any other task state from the capsule.",
+            "The pendingClarification summary is read-only context from Jarvis's last stable, output-authorized answer. A short confirmation, constraint, or permission that resolves it is an output-request because Jarvis should continue the existing answer. Do not infer any other task state from the summary.",
           ]
         : []),
       "Do not classify question type, task relation, parent, evidence mode, context scope, playbook phase, or artifact intent.",
@@ -291,9 +296,11 @@ export function buildResponseOpportunityPrompts(
       "d means o=output-request, n=no-output-request, u=unclear. c is confidence from 0 to 1.",
       "e contains only zero-based indexes into sourceSpans; never copy source text or turn IDs into the output.",
       "r must be exactly one of: ask,directive,correction,constraint,phase-control,acknowledgement,greeting,closing,logistics,answer-to-candidate,bounded-source-insufficient.",
-    ].join(" "),
-    userMessage: JSON.stringify(request),
-  };
+    ].join(" ");
+  return buildRuntimeInferenceModelInput({
+    systemPrompt,
+    semanticPayload,
+  });
 }
 
 export function parseResponseOpportunityOutput(

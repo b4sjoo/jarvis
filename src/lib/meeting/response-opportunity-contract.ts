@@ -40,12 +40,23 @@ export interface ResponseOpportunityRequest {
 export interface ResponseOpportunityContextCapsule {
   pendingClarification: {
     summary: string;
+    supportStatus: "final-output-authorized";
     logicalQuestionUnitId?: string;
     logicalQuestionUnitRevision?: number;
     parentId?: string;
     playbookPhase?: string;
     createdAt: number;
     unresolved: true;
+  };
+}
+
+export interface ResponseOpportunitySemanticPayload {
+  sourceSpans: Array<{
+    index: number;
+    text: string;
+  }>;
+  pendingClarification?: {
+    summary: string;
   };
 }
 
@@ -119,6 +130,7 @@ export function createResponseOpportunityContextCapsule(input: {
   return {
     pendingClarification: {
       summary,
+      supportStatus: "final-output-authorized",
       ...(input.logicalQuestionUnitId
         ? { logicalQuestionUnitId: input.logicalQuestionUnitId }
         : {}),
@@ -136,6 +148,24 @@ export function createResponseOpportunityContextCapsule(input: {
       createdAt: input.createdAt,
       unresolved: true,
     },
+  };
+}
+
+export function projectResponseOpportunitySemanticPayload(
+  request: ResponseOpportunityRequest
+): ResponseOpportunitySemanticPayload {
+  return {
+    sourceSpans: request.sourceSpans.map((span, index) => ({
+      index,
+      text: span.text,
+    })),
+    ...(request.contextCapsule
+      ? {
+          pendingClarification: {
+            summary: request.contextCapsule.pendingClarification.summary,
+          },
+        }
+      : {}),
   };
 }
 

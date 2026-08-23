@@ -181,6 +181,18 @@ test("builds a bounded LQU-only request and preserves the terminal tail", () => 
   assert.equal("contextCapsule" in request, false);
   assert.match(prompts.systemPrompt, /one thing only/i);
   assert.match(prompts.systemPrompt, /Do not classify question type/i);
+  const modelInput = JSON.parse(prompts.userMessage) as {
+    sourceSpans: Array<{ index: number; text: string }>;
+  };
+  assert.deepEqual(
+    modelInput.sourceSpans.map((span) => span.index),
+    [0, 1]
+  );
+  assert.equal(modelInput.sourceSpans[0].text, "Earlier bounded source");
+  assert.equal("logicalQuestionUnitId" in modelInput, false);
+  assert.equal("sourceHash" in modelInput, false);
+  assert.equal("turnId" in modelInput.sourceSpans[0], false);
+  assert.equal("manualForceAdvise" in modelInput, false);
 });
 
 test("adds a bounded pending-clarification capsule without widening output authority", () => {
@@ -218,10 +230,24 @@ test("adds a bounded pending-clarification capsule without widening output autho
     request.contextCapsule?.pendingClarification.unresolved,
     true
   );
+  assert.equal(
+    request.contextCapsule?.pendingClarification.supportStatus,
+    "final-output-authorized"
+  );
   assert.notEqual(request.sourceHash, withoutCapsule.sourceHash);
-  assert.match(prompts.systemPrompt, /pendingClarification capsule/);
+  assert.match(prompts.systemPrompt, /pendingClarification summary/);
   assert.match(prompts.systemPrompt, /read-only context/);
   assert.match(prompts.systemPrompt, /Do not classify question type/);
+  const modelInput = JSON.parse(prompts.userMessage) as {
+    pendingClarification: { summary: string };
+  };
+  assert.equal(
+    modelInput.pendingClarification.summary,
+    request.contextCapsule?.pendingClarification.summary
+  );
+  assert.deepEqual(Object.keys(modelInput.pendingClarification), ["summary"]);
+  assert.equal(prompts.userMessage.includes("parent-design"), false);
+  assert.equal(prompts.userMessage.includes("requirement_clarification"), false);
 });
 
 test("omits a resolved or empty clarification capsule", () => {

@@ -96,6 +96,7 @@ test("characterizes envelope leakage in every current runtime LLM prompt", () =>
     contextCapsule: {
       pendingClarification: {
         summary: "Should I focus on monitoring?",
+        supportStatus: "final-output-authorized",
         logicalQuestionUnitId: "question-prior",
         logicalQuestionUnitRevision: 1,
         parentId: "parent-a",
@@ -239,9 +240,10 @@ test("characterizes envelope leakage in every current runtime LLM prompt", () =>
   );
 
   for (const [name, paths] of Object.entries(leakage)) {
+    if (name === "responseOpportunity") continue;
     assert.ok(paths.length > 0, `${name} should remain in the migration ledger`);
   }
-  assert.ok(leakage.responseOpportunity.includes("sourceHash"));
+  assert.deepEqual(leakage.responseOpportunity, []);
   assert.ok(leakage.meetingMetadata.includes("sessionId"));
   assert.ok(leakage.taskRelation.includes("activeParent.parentId"));
   assert.ok(leakage.answerResolution.includes("answerRevision"));

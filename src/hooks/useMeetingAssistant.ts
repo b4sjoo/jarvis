@@ -14681,6 +14681,8 @@ export function useMeetingAssistant() {
         ),
         responseOpportunityPendingClarificationChars:
           request.contextCapsule?.pendingClarification.summary.length,
+        responseOpportunityPendingClarificationSupportStatus:
+          request.contextCapsule?.pendingClarification.supportStatus,
         responseOpportunityPendingClarificationLogicalQuestionUnitId:
           request.contextCapsule?.pendingClarification
             .logicalQuestionUnitId,
@@ -14822,6 +14824,10 @@ export function useMeetingAssistant() {
         responseOpportunityPromptVersion: request.promptVersion,
         responseOpportunitySchemaVersion: request.schemaVersion,
         responseOpportunityInputChars: promptText.length,
+        responseOpportunitySemanticPayloadDigest:
+          prompts.semanticPayloadDigest,
+        responseOpportunityModelVisibleChars:
+          prompts.modelVisibleChars,
         responseOpportunityModelId: readSelectedProviderModelId(
           modelRoute.selectedProvider
         ),
@@ -14835,6 +14841,8 @@ export function useMeetingAssistant() {
           operationId: lease.operationId,
           requestHash,
           responseOpportunityOnly: true,
+          semanticPayloadDigest: prompts.semanticPayloadDigest,
+          modelVisibleChars: prompts.modelVisibleChars,
           typeRelationParentMutationBlocked: true,
         }
       );
@@ -14847,6 +14855,8 @@ export function useMeetingAssistant() {
           operationId: lease.operationId,
           requestHash,
           responseOpportunityOnly: true,
+          semanticPayloadDigest: prompts.semanticPayloadDigest,
+          modelVisibleChars: prompts.modelVisibleChars,
           typeRelationParentMutationBlocked: true,
         },
       });
