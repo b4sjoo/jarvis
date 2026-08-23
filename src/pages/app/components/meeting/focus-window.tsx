@@ -281,9 +281,7 @@ function MeetingFocusControlsWindow({
         ? `Corrected: ${formatFocusQuestionType(
             activeCorrection.correctedType
           )} · retry failed`
-        : `Question: ${effectiveTypeLabel}${
-            snapshot.questionTypeCorrected ? " · corrected" : ""
-          }`;
+        : `Q: ${effectiveTypeLabel}`;
   const parentTypeLabel = formatFocusQuestionType(
     snapshot.parentQuestionType
   );
@@ -386,10 +384,10 @@ function MeetingFocusControlsWindow({
               <Loader2Icon className="mr-1 h-3 w-3 shrink-0 animate-spin" />
             ) : null}
             <span className="truncate">
-              {typeStatusLabel} · Parent: {parentTypeLabel}
+              {typeStatusLabel} · P: {parentTypeLabel}
             </span>
           </Badge>
-          <div className="flex min-w-0 flex-wrap gap-1.5">
+          <div className="flex min-w-0 flex-nowrap gap-1.5">
             {interviewBriefTypeOptions.map((option) => {
               const selected = hasCorrectableQuestion
                 ? toCanonicalFocusQuestionType(option.id) ===
@@ -400,7 +398,7 @@ function MeetingFocusControlsWindow({
                   key={option.id}
                   size="sm"
                   variant={selected ? "default" : "outline"}
-                  className="h-8 min-w-[88px] shrink-0 px-3 text-[10px]"
+                  className="h-8 min-w-[72px] shrink-0 px-2 text-[10px]"
                   title={option.label}
                   onClick={() => updateInterviewTypes(option.id)}
                 >
@@ -417,7 +415,7 @@ function MeetingFocusControlsWindow({
                     ? "default"
                     : "outline"
                 }
-                className="h-8 min-w-[88px] shrink-0 px-3 text-[10px]"
+                className="h-8 min-w-[72px] shrink-0 px-2 text-[10px]"
                 title="Field knowledge"
                 onClick={() =>
                   sendFocusAction({
