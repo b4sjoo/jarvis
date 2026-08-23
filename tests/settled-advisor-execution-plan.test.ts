@@ -219,6 +219,117 @@ test("keeps the committed project parent visible for a project follow-up", () =>
   assert.deepEqual(view.supportedFactAnchors, ["mem_oasis_ndjson"]);
 });
 
+test("projects active-parent abstention before downstream consumers", () => {
+  const task = activeTask("general-system-design");
+  const view = buildEffectiveAdvisorSettlementView({
+    settlement: settlement({
+      questionType: "unknown",
+      relation: "unknown",
+      typeMutationAuthorized: false,
+      relationMutationAuthorized: false,
+      parentMutationAuthorized: false,
+      activeParentId: task.parent.id,
+      activeParentRevision: task.parent.revisions,
+    }),
+    activeMeetingTask: task,
+    taskRuntimeRevision: 4,
+    fallback: {
+      questionType: "unknown",
+      relation: "unknown",
+    },
+  });
+
+  assert.equal(view.rawQuestionType, "unknown");
+  assert.equal(view.rawRelation, "unknown");
+  assert.equal(view.questionType, "general-system-design");
+  assert.equal(view.relation, "followup-parent");
+  assert.equal(view.nullHypothesisApplied, true);
+  assert.equal(view.nullHypothesisReason, "active-parent-preserved");
+  assert.equal(view.effectiveSettlement?.questionType, "general-system-design");
+  assert.equal(view.effectiveSettlement?.relation, "followup-parent");
+  assert.equal(view.effectiveSettlement?.relationMutationAuthorized, false);
+});
+
+test("projects active-child abstention without attaching another child", () => {
+  const task: ActiveMeetingTask = {
+    ...activeTask("general-system-design"),
+    child: {
+      id: "child-a",
+      createdAt: 30,
+      updatedAt: 30,
+      questionType: "field-knowledge",
+      relation: "child-probe",
+      intent: "concept-probe",
+      question: "Explain consistent hashing.",
+      basedOnTurnIds: ["turn-child"],
+      basedOnObservationIds: [],
+    },
+  };
+  const view = buildEffectiveAdvisorSettlementView({
+    settlement: settlement({
+      questionType: "unknown",
+      relation: "unknown",
+      typeMutationAuthorized: false,
+      relationMutationAuthorized: false,
+      parentMutationAuthorized: false,
+      activeParentId: task.parent.id,
+      activeParentRevision: task.parent.revisions,
+    }),
+    activeMeetingTask: task,
+    taskRuntimeRevision: 5,
+    fallback: {
+      questionType: "unknown",
+      relation: "unknown",
+    },
+  });
+
+  assert.equal(view.questionType, "field-knowledge");
+  assert.equal(view.relation, "child-probe");
+  assert.equal(view.nullHypothesisReason, "active-child-preserved");
+  assert.equal(view.effectiveSettlement?.relationMutationAuthorized, false);
+});
+
+test("keeps a response-only active-parent read inside the immutable plan", () => {
+  const preservedTask = activeTask("ai-ml-system-design");
+  const responseOnlySettlement = settlement({
+    questionType: "coding",
+    relation: "followup-parent",
+    relationAuthoritySource: "provisional",
+    relationMutationAuthorized: false,
+    parentMutationAuthorized: false,
+  });
+  const responseOnlyTaskScope = createResponseOnlyTaskScope({
+    logicalQuestionUnitId: responseOnlySettlement.logicalQuestionUnitId,
+    revision: responseOnlySettlement.revision,
+    sourceQuestion: "Implement a standalone stack.",
+    sourceTurnIds: ["turn-a"],
+    inferredType: "coding",
+    relationDisposition: "ambiguous",
+    preservedParent: preservedTask,
+    contextReadScope: "active-parent-read",
+    now: 100,
+  });
+  const plan = buildSettledAdvisorExecutionPlan({
+    settlement: responseOnlySettlement,
+    activeMeetingTask: preservedTask,
+    preBoundaryQuestionType: "ai-ml-system-design",
+    taskBoundaryCommitted: false,
+    childOwnsResponse: false,
+    providerSnapshot: providers,
+    playbook: playbook(),
+    memoryUseCase: "coding_interview",
+    askFrame: "direct-answer",
+    topicDomain: "backend",
+    responseOnlyTaskScope,
+    createdAt: 100,
+  });
+
+  assert.equal(plan.taskSnapshot?.parent.id, preservedTask.parent.id);
+  assert.equal(plan.contextReadScope, "active-parent-read");
+  assert.deepEqual(plan.taskMutationPolicy, { kind: "preserve" });
+  assert.equal(plan.artifactIntent, "preserve");
+});
+
 test("keeps raw task relation and project anchor behind the consumer barrier", () => {
   const hookSource = readFileSync(
     `${process.cwd()}/src/hooks/useMeetingAssistant.ts`,

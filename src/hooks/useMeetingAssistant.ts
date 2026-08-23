@@ -388,12 +388,12 @@ import {
   createResponseOpportunityContextCapsule,
   createResponseOpportunityLease,
   createResponseOpportunityProposal,
-  decideResponseOpportunityFailureFallback,
   decideResponseOpportunityLocalRoute,
   decideResponseOpportunityRelease,
   formatResponseOpportunityLocalDecisionForTrace,
   resolveResponseOpportunityExecutionMode,
   formatResponseOpportunityProposalForTrace,
+  resolveResponseOpportunityEffectiveCommand,
   requestResponseOpportunity,
   QuestionTypeAdjudicationJob,
   QuestionTypeAdjudicationOutcomeDisposition,
@@ -9110,17 +9110,17 @@ export function useMeetingAssistant() {
         );
       return responseOpportunityGenerationGate;
     };
+    const responseOpportunityEffectiveCommand = () =>
+      resolveResponseOpportunityEffectiveCommand(
+        refreshResponseOpportunityGenerationGate()
+      );
     const responseOpportunityGenerationAuthorized = () =>
       !responseOpportunityGenerationGateOperationId ||
-      refreshResponseOpportunityGenerationGate()?.disposition ===
-        "output-authorized";
+      responseOpportunityEffectiveCommand() === "output-authorized";
     const responseOpportunityGenerationTerminallySuppressed = () => {
-      const disposition =
-        refreshResponseOpportunityGenerationGate()?.disposition;
       return (
-        disposition === "output-suppressed" ||
-        disposition === "unresolved" ||
-        disposition === "stale"
+        responseOpportunityEffectiveCommand() ===
+        "preserve-stable-answer"
       );
     };
     if (traceId && responseOpportunityGenerationGateOperationId) {
@@ -9940,7 +9940,14 @@ export function useMeetingAssistant() {
         preservedParent: responseOnlyPreservedTask,
         proposedRelation:
           advisorTaskSignals.taskRelationAuthorityDecision
-            ?.proposedRelation,
+            ?.proposedRelation ??
+          (llmTypeOnlySettlement
+            ? responseOnlyPreservedTask?.child
+              ? "child-probe"
+              : responseOnlyPreservedTask
+                ? "followup-parent"
+                : undefined
+            : advisorTaskSignals.taskRelation),
       });
     const boundedRecentHistoryDecision =
       decideBoundedRecentHistoryRead({
@@ -10024,7 +10031,7 @@ export function useMeetingAssistant() {
               currentQuestionSettlement?.questionType ?? "unknown",
             relationDisposition: "ambiguous",
             preservedParent: responseOnlyPreservedTask,
-            contextReadScope: "current-only",
+            contextReadScope: responseOnlyBaseContextReadScope,
           })
         : undefined) ??
       (advisorTaskSignals.responseOnlyRelation &&
@@ -10808,10 +10815,16 @@ export function useMeetingAssistant() {
     let effectiveAdvisorSettlementView =
       buildEffectiveAdvisorSettlementView({
         settlement: currentQuestionSettlement,
-        activeMeetingTask: promptContext.activeMeetingTask,
+        activeMeetingTask:
+          responseOnlyPreservedTask ??
+          originalPromptContext.activeMeetingTask ??
+          promptContext.activeMeetingTask,
         taskRuntimeRevision: promptContext.taskRuntime.revision,
         fallback: preSettlementAdvisorFallback,
+        preserveCurrentBranchOnAbstention:
+          !transientPersonalStatusDecision,
       });
+    advisorQuestionType = effectiveAdvisorSettlementView.questionType;
     let advisorAnswerProfile = resolveMeetingAnswerProfile(
       advisorQuestionType
     );
@@ -11281,9 +11294,15 @@ export function useMeetingAssistant() {
     effectiveAdvisorSettlementView =
       buildEffectiveAdvisorSettlementView({
         settlement: currentQuestionSettlement,
-        activeMeetingTask: promptContext.activeMeetingTask,
+        activeMeetingTask:
+          contextManagerRef.current.getState().activeMeetingTask ??
+          responseOnlyPreservedTask ??
+          originalPromptContext.activeMeetingTask ??
+          promptContext.activeMeetingTask,
         taskRuntimeRevision: promptContext.taskRuntime.revision,
         fallback: preSettlementAdvisorFallback,
+        preserveCurrentBranchOnAbstention:
+          !transientPersonalStatusDecision,
       });
     advisorProjectAnchor = transientPersonalStatusDecision
       ? undefined
@@ -11318,7 +11337,9 @@ export function useMeetingAssistant() {
     if (currentQuestionSettlement) {
       if (!settledExecutionPlan) {
         settledExecutionPlan = buildSettledAdvisorExecutionPlan({
-          settlement: currentQuestionSettlement,
+          settlement:
+            effectiveAdvisorSettlementView.effectiveSettlement ??
+            currentQuestionSettlement,
           activeMeetingTask:
             responseOnlyPreservedTask ??
             effectiveAdvisorActiveMeetingTask,
@@ -11404,6 +11425,11 @@ export function useMeetingAssistant() {
             currentQuestionSettlementAppliedToResponse:
               settledExecutionPlan.questionType ===
               currentQuestionSettlement.questionType,
+            currentQuestionEffectiveSettlementAppliedToResponse:
+              settledExecutionPlan.questionType ===
+                effectiveAdvisorSettlementView.questionType &&
+              settledExecutionPlan.taskRelation ===
+                effectiveAdvisorSettlementView.relation,
           };
         traceStoreRef.current.updateMetadata(
           traceId,
@@ -14595,10 +14621,6 @@ export function useMeetingAssistant() {
         logicalQuestionUnit,
         contextCapsule,
       });
-      const failureFallback = decideResponseOpportunityFailureFallback({
-        text: turn.text,
-        decision: originalDecision,
-      });
       const budgetKey = [
         logicalQuestionUnit.id,
         logicalQuestionUnit.revision,
@@ -14616,27 +14638,18 @@ export function useMeetingAssistant() {
         : undefined;
       const settleGenerationGateUnresolved = (reason: string) => {
         if (!generationGate) return;
-        const fallbackAuthorized = failureFallback.authorized;
         const settled =
           responseOpportunityGenerationGateRef.current.settle({
             operationId: generationGate.operationId,
-            disposition: fallbackAuthorized
-              ? "output-authorized"
-              : "unresolved",
-            reason: fallbackAuthorized
-              ? `failure-fallback:${failureFallback.reason}`
-              : reason,
+            disposition: "output-authorized",
+            reason: `local-output-authority-preserved:${reason}`,
           });
         traceStoreRef.current.updateMetadata(traceId, {
           ...formatResponseOpportunityGenerationGateForTrace(settled),
           responseOpportunityGenerationCandidateState:
-            fallbackAuthorized
-              ? "response-authority-granted"
-              : "response-authority-denied",
-          responseOpportunityFailureFallbackAuthorized:
-            fallbackAuthorized,
-          responseOpportunityFailureFallbackReason:
-            failureFallback.reason,
+            "response-authority-granted",
+          responseOpportunityLocalAuthorityPreserved: true,
+          responseOpportunityEffectiveReason: reason,
         });
       };
       const baseMetadata: Record<string, unknown> = {
@@ -14672,10 +14685,6 @@ export function useMeetingAssistant() {
           logicalQuestionUnit.revision,
         responseOpportunityDecisionApplied: false,
         responseOpportunityExecutionMode: executionMode,
-        responseOpportunityFailureFallbackAuthorized:
-          failureFallback.authorized,
-        responseOpportunityFailureFallbackReason:
-          failureFallback.reason,
         ...formatResponseOpportunityGenerationGateForTrace(
           generationGate
         ),
@@ -14950,20 +14959,19 @@ export function useMeetingAssistant() {
           const releaseUnresolved =
             !releaseDecision ||
             releaseDecision.generationDisposition === "unresolved";
-          const failureFallbackApplied =
+          const localAuthorityPreserved =
             authorization.authorized &&
             speculative &&
-            releaseUnresolved &&
-            failureFallback.authorized;
+            releaseUnresolved;
           const generationGateDisposition = !authorization.authorized
             ? "stale"
-            : failureFallbackApplied
+            : localAuthorityPreserved
               ? "output-authorized"
               : releaseDecision?.generationDisposition ?? "unresolved";
           const generationGateReason = !authorization.authorized
             ? authorization.reason
-            : failureFallbackApplied
-              ? `failure-fallback:${failureFallback.reason}`
+            : localAuthorityPreserved
+              ? "local-output-authority-preserved:runtime-abstention"
               : releaseDecision?.reason ??
                 result?.parseDisposition ??
                 settlement.disposition;
@@ -15029,8 +15037,8 @@ export function useMeetingAssistant() {
             responseOpportunityEvidenceSpans:
               parsedValue?.evidenceSpans,
             responseOpportunityDecisionApplied: decisionApplied,
-            responseOpportunityFailureFallbackApplied:
-              failureFallbackApplied,
+            responseOpportunityLocalAuthorityPreserved:
+              localAuthorityPreserved,
             responseOpportunityReleased:
               authoritative && (releaseDecision?.released ?? false),
             responseOpportunityShadowObserved: !authoritative,

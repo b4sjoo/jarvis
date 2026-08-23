@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { ResponseOpportunityGenerationGateCoordinator } from "../src/lib/meeting/response-opportunity-generation-gate.js";
+import {
+  ResponseOpportunityGenerationGateCoordinator,
+  resolveResponseOpportunityEffectiveCommand,
+} from "../src/lib/meeting/response-opportunity-generation-gate.js";
 
 function lease(operationId = "operation-a") {
   return {
@@ -58,7 +61,7 @@ test("waits for settlement and rejects a late second outcome", async () => {
   );
 });
 
-test("makes superseded and timed-out generations unresolved", async () => {
+test("preserves local authority on wait timeout and rejects superseded work", async () => {
   const coordinator = new ResponseOpportunityGenerationGateCoordinator();
   coordinator.create(lease("operation-old"));
   const staleWait = coordinator.wait("operation-old", 100);
@@ -67,6 +70,17 @@ test("makes superseded and timed-out generations unresolved", async () => {
 
   coordinator.create(lease("operation-timeout"));
   const timedOut = await coordinator.wait("operation-timeout", 1);
-  assert.equal(timedOut.disposition, "unresolved");
-  assert.equal(timedOut.reason, "generation-gate-wait-timeout");
+  assert.equal(timedOut.disposition, "output-authorized");
+  assert.equal(
+    timedOut.reason,
+    "local-output-authority-preserved:gate-wait-timeout"
+  );
+  assert.equal(
+    resolveResponseOpportunityEffectiveCommand(timedOut),
+    "output-authorized"
+  );
+  assert.equal(
+    resolveResponseOpportunityEffectiveCommand(await staleWait),
+    "preserve-stable-answer"
+  );
 });

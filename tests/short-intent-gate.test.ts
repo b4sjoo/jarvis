@@ -14,7 +14,6 @@ import {
   createResponseOpportunityLease,
   createResponseOpportunityContextCapsule,
   createResponseOpportunityProposal,
-  decideResponseOpportunityFailureFallback,
   decideResponseOpportunityLocalRoute,
   decideResponseOpportunityRelease,
   parseResponseOpportunityOutput,
@@ -349,37 +348,6 @@ test("accepts fenced compact provider output and rejects truncation", () => {
   );
   assert.equal(truncated.ok, false);
   if (!truncated.ok) assert.equal(truncated.reason, "invalid-json");
-});
-
-test("fails open only for explicit task actions with a concrete object", () => {
-  const explicit = decideAdvisorTurnIntent(
-    "Please refine the architecture with multi-region failover.",
-    { hasActiveTask: true }
-  );
-  assert.deepEqual(
-    decideResponseOpportunityFailureFallback({
-      text: "Please refine the architecture with multi-region failover.",
-      decision: explicit,
-    }),
-    {
-      authorized: true,
-      reason: "explicit-task-action-with-object",
-    }
-  );
-
-  const metaCheck = decideAdvisorTurnIntent("Did you get my question?", {
-    hasActiveTask: true,
-  });
-  assert.deepEqual(
-    decideResponseOpportunityFailureFallback({
-      text: "Did you get my question?",
-      decision: metaCheck,
-    }),
-    {
-      authorized: false,
-      reason: "automatic-authority-not-concrete",
-    }
-  );
 });
 
 test("response-opportunity lease is independent of parent and type state", () => {

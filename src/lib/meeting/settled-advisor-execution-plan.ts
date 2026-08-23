@@ -190,9 +190,16 @@ export interface SettledAdvisorExecutionPlanAuthorization {
 export interface EffectiveAdvisorSettlementView {
   source: "committed-settlement" | "pre-settlement-fallback";
   settlementId?: string;
+  rawQuestionType: CanonicalQuestionType;
+  rawRelation: InterviewTaskRelation;
   taskRuntimeRevision: number;
   questionType: CanonicalQuestionType;
   relation: InterviewTaskRelation;
+  nullHypothesisApplied: boolean;
+  nullHypothesisReason?:
+    | "active-child-preserved"
+    | "active-parent-preserved";
+  effectiveSettlement?: Readonly<CurrentQuestionSettlementDecision>;
   startsNewParent: boolean;
   parent?: Readonly<ActiveMeetingTask["parent"]>;
   parentId?: string;
@@ -214,14 +221,61 @@ export function buildEffectiveAdvisorSettlementView(input: {
     playbook?: SelectedInterviewPlaybook;
     playbookPhase?: InterviewPlaybookPhase;
   };
+  preserveCurrentBranchOnAbstention?: boolean;
 }): EffectiveAdvisorSettlementView {
   const settlement = input.settlement;
-  const questionType = settlement
+  const rawQuestionType = settlement
     ? settlement.questionType
     : normalizeCanonicalQuestionType(input.fallback.questionType) ?? "unknown";
-  const relation = settlement
+  const rawRelation = settlement
     ? toInterviewTaskRelation(settlement.relation)
     : input.fallback.relation;
+  const activeTask = input.activeMeetingTask;
+  const preserveCurrentBranch =
+    input.preserveCurrentBranchOnAbstention !== false;
+  const activeResponseOwnerType = normalizeCanonicalQuestionType(
+    activeTask?.child?.questionType ?? activeTask?.parent.questionType
+  );
+  const questionType =
+    preserveCurrentBranch &&
+    rawQuestionType === "unknown" &&
+    activeResponseOwnerType
+      ? activeResponseOwnerType
+      : rawQuestionType;
+  const relation =
+    preserveCurrentBranch && rawRelation === "unknown"
+      ? activeTask?.child
+        ? "child-probe"
+        : activeTask?.parent
+          ? "followup-parent"
+          : rawRelation
+      : rawRelation;
+  const nullHypothesisApplied =
+    questionType !== rawQuestionType || relation !== rawRelation;
+  const nullHypothesisReason = nullHypothesisApplied
+    ? activeTask?.child
+      ? "active-child-preserved"
+      : "active-parent-preserved"
+    : undefined;
+  const effectiveSettlement = settlement
+    ? Object.freeze({
+        ...settlement,
+        questionType,
+        relation,
+        activeParentId: nullHypothesisApplied
+          ? activeTask?.parent.id
+          : settlement.activeParentId,
+        activeParentRevision: nullHypothesisApplied
+          ? activeTask?.parent.revisions
+          : settlement.activeParentRevision,
+        reasons: nullHypothesisApplied
+          ? [
+              ...settlement.reasons,
+              `eventual-resolution:${nullHypothesisReason}`,
+            ]
+          : [...settlement.reasons],
+      })
+    : undefined;
   const startsNewParent = Boolean(
     settlement
       ? relation === "new-parent" && settlement.parentMutationAuthorized
@@ -240,7 +294,9 @@ export function buildEffectiveAdvisorSettlementView(input: {
       ? committedNewParentMatches
         ? activeParent
         : undefined
-      : settlement.activeParentId &&
+      : nullHypothesisApplied
+        ? activeParent
+        : settlement.activeParentId &&
           activeParent?.id !== settlement.activeParentId
         ? undefined
         : activeParent
@@ -260,9 +316,14 @@ export function buildEffectiveAdvisorSettlementView(input: {
       ? "committed-settlement"
       : "pre-settlement-fallback",
     settlementId: settlement?.settlementId,
+    rawQuestionType,
+    rawRelation,
     taskRuntimeRevision: input.taskRuntimeRevision,
     questionType,
     relation,
+    nullHypothesisApplied,
+    nullHypothesisReason,
+    effectiveSettlement,
     startsNewParent,
     parent,
     parentId: parent?.id,
@@ -284,9 +345,15 @@ export function formatEffectiveAdvisorSettlementViewForTrace(
   return {
     effectiveAdvisorSettlementViewSource: view.source,
     effectiveAdvisorSettlementId: view.settlementId,
+    effectiveAdvisorRawQuestionType: view.rawQuestionType,
+    effectiveAdvisorRawRelation: view.rawRelation,
     effectiveAdvisorTaskRuntimeRevision: view.taskRuntimeRevision,
     effectiveAdvisorQuestionType: view.questionType,
     effectiveAdvisorRelation: view.relation,
+    effectiveAdvisorNullHypothesisApplied:
+      view.nullHypothesisApplied,
+    effectiveAdvisorNullHypothesisReason:
+      view.nullHypothesisReason,
     effectiveAdvisorStartsNewParent: view.startsNewParent,
     effectiveAdvisorParentId: view.parentId,
     effectiveAdvisorParentRevision: view.parentRevision,
@@ -337,8 +404,13 @@ export function buildSettledAdvisorExecutionPlan(input: {
   const responseOnlyTaskScope = input.responseOnlyTaskScope
     ? cloneResponseOnlyTaskScope(input.responseOnlyTaskScope)
     : undefined;
+  const responseOnlyReadsActiveBranch = Boolean(
+    responseOnlyTaskScope &&
+      responseOnlyTaskScope.contextReadScope !== "current-only"
+  );
   const taskSnapshot =
-    !responseOnlyTaskScope && input.activeMeetingTask
+    (!responseOnlyTaskScope || responseOnlyReadsActiveBranch) &&
+    input.activeMeetingTask
     ? cloneActiveMeetingTask(input.activeMeetingTask)
     : undefined;
   const readOnlyParentContinuity =

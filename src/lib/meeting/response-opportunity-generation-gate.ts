@@ -16,6 +16,10 @@ export type ResponseOpportunityGenerationDisposition =
   | "unresolved"
   | "stale";
 
+export type ResponseOpportunityEffectiveCommand =
+  | "output-authorized"
+  | "preserve-stable-answer";
+
 export interface ResponseOpportunityGenerationGateSnapshot {
   operationId: string;
   sessionId: string;
@@ -140,8 +144,8 @@ export class ResponseOpportunityGenerationGateCoordinator {
       const timeout = setTimeout(() => {
         const timedOut = this.settle({
           operationId,
-          disposition: "unresolved",
-          reason: "generation-gate-wait-timeout",
+          disposition: "output-authorized",
+          reason: "local-output-authority-preserved:gate-wait-timeout",
         });
         complete(timedOut ?? missingGateSnapshot(operationId));
       }, Math.max(0, timeoutMs));
@@ -174,6 +178,8 @@ export class ResponseOpportunityGenerationGateCoordinator {
 export function formatResponseOpportunityGenerationGateForTrace(
   snapshot: ResponseOpportunityGenerationGateSnapshot | undefined
 ) {
+  const effectiveCommand =
+    resolveResponseOpportunityEffectiveCommand(snapshot);
   return {
     responseOpportunityGenerationGateOperationId:
       snapshot?.operationId,
@@ -182,7 +188,24 @@ export function formatResponseOpportunityGenerationGateForTrace(
     responseOpportunityGenerationGateReason: snapshot?.reason,
     responseOpportunityGenerationGateCreatedAt: snapshot?.createdAt,
     responseOpportunityGenerationGateSettledAt: snapshot?.settledAt,
+    responseOpportunityTransientDisposition: snapshot?.disposition,
+    responseOpportunityEffectiveCommand: effectiveCommand,
+    responseOpportunityEffectiveAuthoritySource:
+      effectiveCommand === "output-authorized"
+        ? "existing-local-output-authority"
+        : effectiveCommand === "preserve-stable-answer"
+          ? "state-preservation-null-hypothesis"
+          : undefined,
   };
+}
+
+export function resolveResponseOpportunityEffectiveCommand(
+  snapshot: ResponseOpportunityGenerationGateSnapshot | undefined
+): ResponseOpportunityEffectiveCommand | undefined {
+  if (!snapshot || snapshot.disposition === "pending") return undefined;
+  return snapshot.disposition === "output-authorized"
+    ? "output-authorized"
+    : "preserve-stable-answer";
 }
 
 function cloneSnapshot(

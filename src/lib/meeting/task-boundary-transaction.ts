@@ -17,6 +17,7 @@ import {
 import type {
   ResponseOpportunityGenerationGateSnapshot,
 } from "./response-opportunity-generation-gate.js";
+import { resolveResponseOpportunityEffectiveCommand } from "./response-opportunity-generation-gate.js";
 import { buildResponseOpportunityRequest } from "./response-opportunity-contract.js";
 import {
   applyPlaybookPhaseDecisionToProgress,
@@ -310,7 +311,10 @@ export function decideLlmTypeRepairFirstParentAdmission(input: {
   const responseOpportunityRequest = buildResponseOpportunityRequest({
     logicalQuestionUnit: unit,
   });
-  if (responseOpportunity.disposition !== "output-authorized") {
+  if (
+    resolveResponseOpportunityEffectiveCommand(responseOpportunity) !==
+    "output-authorized"
+  ) {
     return firstParentDecision(
       false,
       "response-opportunity-not-authorized",

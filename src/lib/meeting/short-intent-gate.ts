@@ -70,62 +70,6 @@ const RESPONSE_OPPORTUNITY_NO_OUTPUT_REASON_CODES = new Set([
   "answer-to-candidate",
 ]);
 
-const RESPONSE_OPPORTUNITY_FALLBACK_ACTION_WORDS = new Set([
-  "analyze",
-  "analyse",
-  "build",
-  "calculate",
-  "code",
-  "compare",
-  "create",
-  "debug",
-  "describe",
-  "design",
-  "discuss",
-  "draw",
-  "estimate",
-  "explain",
-  "find",
-  "fix",
-  "give",
-  "implement",
-  "optimize",
-  "optimise",
-  "provide",
-  "refine",
-  "show",
-  "solve",
-  "store",
-  "stored",
-  "tell",
-  "update",
-  "walk",
-  "write",
-]);
-const RESPONSE_OPPORTUNITY_FALLBACK_STOP_WORDS = new Set([
-  "a",
-  "an",
-  "and",
-  "can",
-  "could",
-  "for",
-  "how",
-  "is",
-  "me",
-  "of",
-  "please",
-  "should",
-  "that",
-  "the",
-  "this",
-  "to",
-  "we",
-  "what",
-  "where",
-  "would",
-  "you",
-]);
-
 export type ResponseOpportunityLocalDisposition =
   | "deterministic-no-output"
   | "deterministic-output"
@@ -142,14 +86,6 @@ export interface ResponseOpportunityLocalDecision {
   wordEquivalent: number;
   decision: ResponseOpportunityDecision;
   runtimeReviewRequired: boolean;
-}
-
-export interface ResponseOpportunityFailureFallbackDecision {
-  authorized: boolean;
-  reason:
-    | "explicit-phase-control"
-    | "explicit-task-action-with-object"
-    | "automatic-authority-not-concrete";
 }
 
 export interface LlmResponseOpportunityDecision {
@@ -333,47 +269,6 @@ export function resolveResponseOpportunityExecutionMode(
   return decision.disposition === "runtime-required"
     ? "authoritative"
     : "speculative-authoritative";
-}
-
-export function decideResponseOpportunityFailureFallback(input: {
-  text: string;
-  decision: AdvisorTurnIntentDecision;
-}): ResponseOpportunityFailureFallbackDecision {
-  if (input.decision.phaseControl) {
-    return { authorized: true, reason: "explicit-phase-control" };
-  }
-
-  const normalized = input.text
-    .toLowerCase()
-    .replace(/[^a-z0-9+#.\s-]/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-  const explicitTaskAction =
-    /\b(?:analy[sz]e|build|calculate|code|compare|create|debug|describe|design|discuss|draw|estimate|explain|find|fix|give|implement|optimi[sz]e|provide|refine|show|solve|store|stored|tell|update|walk|write)\b/.test(
-      normalized
-    );
-  const objectTokens = normalized
-    .split(" ")
-    .filter(Boolean)
-    .filter(
-      (token) =>
-        !RESPONSE_OPPORTUNITY_FALLBACK_STOP_WORDS.has(token) &&
-        !RESPONSE_OPPORTUNITY_FALLBACK_ACTION_WORDS.has(token)
-    );
-  if (
-    input.decision.executionAuthorized &&
-    explicitTaskAction &&
-    objectTokens.length >= 2
-  ) {
-    return {
-      authorized: true,
-      reason: "explicit-task-action-with-object",
-    };
-  }
-  return {
-    authorized: false,
-    reason: "automatic-authority-not-concrete",
-  };
 }
 
 export function buildResponseOpportunityPrompts(

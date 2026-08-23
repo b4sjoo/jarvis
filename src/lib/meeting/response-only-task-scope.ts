@@ -102,6 +102,16 @@ export function resolveResponseOnlyContextReadScope(input: {
 }): AdvisorContextReadScope {
   if (!input.preservedParent) return "current-only";
   if (
+    input.preservedParent.child &&
+    (input.proposedRelation === undefined ||
+      input.proposedRelation === "unknown" ||
+      input.proposedRelation === "child-probe")
+  ) {
+    return "active-child-read";
+  }
+  if (
+    input.proposedRelation === undefined ||
+    input.proposedRelation === "unknown" ||
     input.proposedRelation === "followup-parent" ||
     input.proposedRelation === "child-probe" ||
     input.proposedRelation === "resume-parent"
