@@ -1,4 +1,5 @@
 import type { RuntimeInferenceRuntimeJob } from "./runtime-inference-runtime.js";
+import { buildRuntimeInferenceModelInput } from "./runtime-inference.js";
 import {
   getInterviewCompanyEvidenceAliases,
   normalizeInterviewBriefCompany,
@@ -218,30 +219,27 @@ export function buildMeetingMetadataInferenceRequest(input: {
 export function buildMeetingMetadataInferencePrompts(
   request: MeetingMetadataInferenceRequest
 ) {
-  return {
-    systemPrompt: [
+  const semanticPayload = {
+    openingEvidence: request.openingEvidence.turns.map((turn, index) => ({
+      index,
+      text: turn.text,
+    })),
+    ...(request.authoritativeCompany
+      ? { authoritativeCompany: { value: request.authoritativeCompany.value } }
+      : {}),
+  };
+  const systemPrompt = [
       "Infer one meeting metadata field: which organization, if any, is conducting this interview.",
       "Return one JSON object only. Do not answer interview questions and do not classify question type, task relation, response intent, phase, artifacts, or candidate facts.",
-      "Use only openingEvidence.turns. Treat them as interviewer speech.",
+      "Use only openingEvidence. Treat each indexed item as interviewer speech.",
       "A candidate's former employer, customer, vendor, product, cloud service, comparison target, city, country, region, or interview topic is not the target company unless the evidence explicitly identifies the interviewer or hiring process with that organization.",
       "HackerRank, LeetCode, CodeSignal, and similar coding or interview platforms are tools, not the hiring company, unless the evidence explicitly says the interview is for that platform company.",
       "If the organization is ambiguous or unsupported, return company:null and explain the abstention briefly.",
       "authoritativeCompany is read-only comparison context. Never replace or reinterpret it.",
-      "Every evidenceSpans item must be an exact verbatim substring from openingEvidence.turns.",
+      "Every evidenceSpans item must be an exact verbatim substring from openingEvidence text.",
       "Schema: {schemaVersion:1,company:string|null,confidence:number,evidenceSpans:string[],abstainReason:string|null}.",
-    ].join(" "),
-    userMessage: JSON.stringify({
-      schemaVersion: request.schemaVersion,
-      promptVersion: request.promptVersion,
-      sessionId: request.sessionId,
-      operationRevision: request.operationRevision,
-      openingEvidence: {
-        turns: request.openingEvidence.turns,
-        omittedTurnCount: request.openingEvidence.omittedTurnCount,
-      },
-      authoritativeCompany: request.authoritativeCompany ?? null,
-    }),
-  };
+    ].join(" ");
+  return buildRuntimeInferenceModelInput({ systemPrompt, semanticPayload });
 }
 
 export function parseMeetingMetadataInferenceOutput(

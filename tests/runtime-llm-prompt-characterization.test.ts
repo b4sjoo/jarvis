@@ -58,7 +58,7 @@ function parseUserMessage(value: string) {
   return JSON.parse(value) as unknown;
 }
 
-test("characterizes envelope leakage in every current runtime LLM prompt", () => {
+test("keeps envelope fields out of every runtime LLM prompt", () => {
   const taxonomy: TaxonomyAdjudicationRequest = {
     schemaVersion: 2,
     promptVersion: "taxonomy-adjudication-v3-compact",
@@ -255,22 +255,7 @@ test("characterizes envelope leakage in every current runtime LLM prompt", () =>
     ])
   );
 
-  const migratedOperations = new Set([
-    "responseOpportunity",
-    "answerResolution",
-    "evidenceRequirement",
-    "sourceLinkage",
-    "taskRelation",
-  ]);
   for (const [name, paths] of Object.entries(leakage)) {
-    if (migratedOperations.has(name)) continue;
-    assert.ok(paths.length > 0, `${name} should remain in the migration ledger`);
+    assert.deepEqual(paths, [], `${name} leaked runtime envelope fields`);
   }
-  assert.deepEqual(leakage.responseOpportunity, []);
-  assert.deepEqual(leakage.answerResolution, []);
-  assert.deepEqual(leakage.evidenceRequirement, []);
-  assert.deepEqual(leakage.sourceLinkage, []);
-  assert.deepEqual(leakage.taskRelation, []);
-  assert.ok(leakage.meetingMetadata.includes("sessionId"));
-  assert.ok(leakage.answerSufficiency.includes("identity.traceId"));
 });

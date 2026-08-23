@@ -6960,6 +6960,9 @@ export function useMeetingAssistant() {
         whiteboardRepairPromptVersion: request.promptVersion,
         whiteboardRepairSchemaVersion: request.schemaVersion,
         whiteboardRepairInputChars: promptText.length,
+        whiteboardRepairSemanticPayloadDigest:
+          prompts.semanticPayloadDigest,
+        whiteboardRepairModelVisibleChars: prompts.modelVisibleChars,
         whiteboardRepairDeterministicSanitation:
           validation.sanitationDisposition,
         whiteboardRepairDeterministicSanitationChanges:
@@ -6983,6 +6986,8 @@ export function useMeetingAssistant() {
           operationId: lease.operationId,
           inputChars: promptText.length,
           behaviorMutationBlocked: true,
+          semanticPayloadDigest: prompts.semanticPayloadDigest,
+          modelVisibleChars: prompts.modelVisibleChars,
         }
       );
       sessionRecordingManagerRef.current?.recordModelInput({
@@ -6995,6 +7000,8 @@ export function useMeetingAssistant() {
           schemaVersion: request.schemaVersion,
           operationId: lease.operationId,
           behaviorMutationBlocked: true,
+          semanticPayloadDigest: prompts.semanticPayloadDigest,
+          modelVisibleChars: prompts.modelVisibleChars,
         },
       });
 
@@ -15615,6 +15622,10 @@ export function useMeetingAssistant() {
         meetingMetadataInferencePromptVersion: request.promptVersion,
         meetingMetadataInferenceSchemaVersion: request.schemaVersion,
         meetingMetadataInferenceInputChars: promptText.length,
+        meetingMetadataInferenceSemanticPayloadDigest:
+          prompts.semanticPayloadDigest,
+        meetingMetadataInferenceModelVisibleChars:
+          prompts.modelVisibleChars,
         meetingMetadataInferenceModelId: readSelectedProviderModelId(
           modelRoute.selectedProvider
         ),
@@ -15630,6 +15641,8 @@ export function useMeetingAssistant() {
           metadataOnly: true,
           runtimeMutationBlocked: true,
           targetCompanyMutationApplied: false,
+          semanticPayloadDigest: prompts.semanticPayloadDigest,
+          modelVisibleChars: prompts.modelVisibleChars,
         }
       );
       sessionRecordingManagerRef.current?.recordModelInput({
@@ -15643,6 +15656,8 @@ export function useMeetingAssistant() {
           metadataOnly: true,
           runtimeMutationBlocked: true,
           targetCompanyMutationApplied: false,
+          semanticPayloadDigest: prompts.semanticPayloadDigest,
+          modelVisibleChars: prompts.modelVisibleChars,
         },
       });
 
@@ -16792,6 +16807,10 @@ export function useMeetingAssistant() {
           request.schemaVersion,
         questionTypeAdjudicationRequestHash: requestHash,
         questionTypeAdjudicationPromptChars: promptText.length,
+        questionTypeAdjudicationSemanticPayloadDigest:
+          prompts.semanticPayloadDigest,
+        questionTypeAdjudicationModelVisibleChars:
+          prompts.modelVisibleChars,
         questionTypeAdjudicationOperationId:
           lease.operationId,
         questionTypeAdjudicationRuntimeSessionId:
@@ -16827,6 +16846,8 @@ export function useMeetingAssistant() {
           operationId: lease.operationId,
           typeOnly: true,
           behaviorMutationBlocked: true,
+          semanticPayloadDigest: prompts.semanticPayloadDigest,
+          modelVisibleChars: prompts.modelVisibleChars,
         }
       );
       sessionRecordingManagerRef.current?.recordModelInput({
@@ -16841,6 +16862,8 @@ export function useMeetingAssistant() {
           operationId: lease.operationId,
           typeOnly: true,
           behaviorMutationBlocked: true,
+          semanticPayloadDigest: prompts.semanticPayloadDigest,
+          modelVisibleChars: prompts.modelVisibleChars,
         },
       });
 
@@ -18824,6 +18847,10 @@ export function useMeetingAssistant() {
         interviewerIntentLlmRequestHash: adjudicationRequestHash,
         taxonomyAdjudicationInputChars: adjudicationPromptText.length,
         interviewerIntentLlmInputChars: adjudicationPromptText.length,
+        taxonomyAdjudicationSemanticPayloadDigest:
+          adjudicationPrompts.semanticPayloadDigest,
+        taxonomyAdjudicationModelVisibleChars:
+          adjudicationPrompts.modelVisibleChars,
         taxonomyAdjudicationScheduledTaskId: scheduledTaskId,
         interviewerIntentLlmScheduledTaskId: scheduledTaskId,
         interviewerIntentLlmProviderId: modelRoute.resolvedProviderId,
@@ -18864,6 +18891,9 @@ export function useMeetingAssistant() {
           requestHash: adjudicationRequestHash,
           inputChars: adjudicationPromptText.length,
           candidateEvidenceExcluded: true,
+          semanticPayloadDigest:
+            adjudicationPrompts.semanticPayloadDigest,
+          modelVisibleChars: adjudicationPrompts.modelVisibleChars,
         }
       );
       sessionRecordingManagerRef.current?.recordModelInput({
@@ -18877,6 +18907,9 @@ export function useMeetingAssistant() {
           requestHash: adjudicationRequestHash,
           inputChars: adjudicationPromptText.length,
           candidateEvidenceExcluded: true,
+          semanticPayloadDigest:
+            adjudicationPrompts.semanticPayloadDigest,
+          modelVisibleChars: adjudicationPrompts.modelVisibleChars,
         },
       });
 
@@ -30267,6 +30300,8 @@ export function useMeetingAssistant() {
               promptVersion: adjudicationRequest.promptVersion,
               schemaVersion: adjudicationRequest.schemaVersion,
               inputChars: promptText.length,
+              semanticPayloadDigest: prompts.semanticPayloadDigest,
+              modelVisibleChars: prompts.modelVisibleChars,
             }
           );
           sessionRecordingManagerRef.current?.recordModelInput({
@@ -30280,6 +30315,8 @@ export function useMeetingAssistant() {
               promptVersion: adjudicationRequest.promptVersion,
               schemaVersion: adjudicationRequest.schemaVersion,
               inputChars: promptText.length,
+              semanticPayloadDigest: prompts.semanticPayloadDigest,
+              modelVisibleChars: prompts.modelVisibleChars,
             },
           });
 

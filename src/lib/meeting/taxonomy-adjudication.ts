@@ -16,6 +16,7 @@ import {
   type CanonicalQuestionType,
   type QuestionTypeInferenceDecision,
 } from "./task-taxonomy.js";
+import { buildRuntimeInferenceModelInput } from "./runtime-inference.js";
 
 export const TAXONOMY_ADJUDICATION_SCHEMA_VERSION = 2;
 export const TAXONOMY_ADJUDICATION_OUTPUT_CONTRACT_VERSION = 3;
@@ -630,7 +631,6 @@ function buildTaxonomyAdjudicationSourceCatalog(
     }
   }
   append("p", request.activeParent?.topic);
-  append("p", request.activeParent?.playbookPhase);
   for (const entity of request.activeParent?.sharedScenarioEntities ?? []) {
     append("p", entity);
   }
@@ -648,26 +648,14 @@ export function buildTaxonomyAdjudicationPrompts(
 ) {
   const canonicalQuestionTypes = CANONICAL_QUESTION_TYPES.join(", ");
   const sourceCatalog = buildTaxonomyAdjudicationSourceCatalog(request);
-  const packet = {
-    v: TAXONOMY_ADJUDICATION_OUTPUT_CONTRACT_VERSION,
-    id: request.logicalQuestionUnitId,
-    rev: request.logicalQuestionUnitRevision,
-    lang: request.sourceLanguage,
-    stt: request.sttUncertaintyMarkers,
-    parent: request.activeParent
-      ? {
-          qt: request.activeParent.questionType,
-          rev: request.activeParent.revision,
-        }
-      : undefined,
+  const semanticPayload = {
     sources: sourceCatalog.map((source) => ({
       i: source.index,
       k: source.kind,
       t: source.text,
     })),
   };
-  return {
-    systemPrompt: [
+  const systemPrompt = [
       "You independently classify one bounded interviewer utterance for Jarvis.",
       "Return one compact JSON object only. Never answer the interview question and never copy source text into the output.",
       "Use only the indexed source catalog. Source kinds are q=current interviewer question-unit text, p=active parent context, c=latest candidate correction, s=section hint, b=preparation prior, w=task-switch evidence.",
@@ -686,9 +674,8 @@ export function buildTaxonomyAdjudicationPrompts(
       "Use full enum values but compact keys. Example answer: {\"v\":3,\"sa\":\"directive\",\"qt\":\"general-system-design\",\"rel\":\"new-parent\",\"em\":\"hypothetical-design\",\"act\":\"answer\",\"pa\":[0],\"ev\":[0],\"st\":true,\"cf\":0.96,\"rc\":\"clear\"}.",
       "Example filler: {\"v\":3,\"sa\":\"acknowledgement\",\"qt\":\"unknown\",\"rel\":\"none\",\"em\":\"unknown\",\"act\":\"ignore\",\"pa\":[],\"ev\":[0],\"st\":false,\"cf\":0.98,\"rc\":\"clear\"}.",
       "Schema: {v:3,sa,qt,rel,em,act,pa:number[],ev:number[],st:boolean,cf:number,rc}.",
-    ].join(" "),
-    userMessage: JSON.stringify(packet),
-  };
+    ].join(" ");
+  return buildRuntimeInferenceModelInput({ systemPrompt, semanticPayload });
 }
 
 export function parseTaxonomyAdjudicationOutput(

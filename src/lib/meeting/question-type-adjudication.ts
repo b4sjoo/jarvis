@@ -14,6 +14,7 @@ import type {
   ProvisionalCurrentQuestion,
 } from "./current-question-settlement.js";
 import type { RuntimeInferenceRuntimeJob } from "./runtime-inference-runtime.js";
+import { buildRuntimeInferenceModelInput } from "./runtime-inference.js";
 import type { RuntimeAxisConflictDecision } from "./runtime-axis-conflict.js";
 import type { TaxonomyAdjudicationLease } from "./taxonomy-adjudication.js";
 import type { MeetingQuestionTypeAdjudicationMode } from "./types.js";
@@ -406,12 +407,16 @@ export function decideQuestionTypeAdjudicationEligibility(input: {
 export function buildQuestionTypeAdjudicationPrompts(
   request: QuestionTypeAdjudicationRequest
 ) {
-  return {
-    systemPrompt: [
+  const semanticPayload = {
+    question: {
+      sourceTexts: request.question.sourceTurns.map((source) => source.text),
+    },
+  };
+  const systemPrompt = [
       "Classify only the question type of one bounded interviewer question for Jarvis.",
       "Return one JSON object only. Do not answer the interview question.",
       "Do not decide task relation, parent or child status, response action, playbook phase, evidence mode, or meeting metadata.",
-      "Use only question.sourceTurns. Ignore quoted examples and classify the current primary or terminal ask.",
+      "Use only question.sourceTexts. Ignore quoted examples and classify the current primary or terminal ask.",
       "Allowed questionType values: behavioral, coding, general-system-design, ai-ml-system-design, project-deep-dive, field-knowledge, unknown.",
       "behavioral asks for a past personal situation or action.",
       "coding asks to implement, write, debug, or analyze code or an algorithm.",
@@ -421,23 +426,10 @@ export function buildQuestionTypeAdjudicationPrompts(
       "A question about why a named candidate project made a concrete implementation choice, or how that project handled failures, depends on actual project facts and is project-deep-dive even when it mentions a technical concept.",
       "field-knowledge asks for a factual or conceptual explanation that can be answered independently of what the candidate actually implemented in a project.",
       "Use unknown for logistics, compensation, scheduling, filler, incomplete content, or genuine ambiguity.",
-      "evidenceSpans must contain one or more exact verbatim substrings from question.sourceTurns.",
+      "evidenceSpans must contain one or more exact verbatim substrings from question.sourceTexts.",
       "Schema: {schemaVersion:1,questionType,confidence,evidenceSpans,ambiguityReason?}.",
-    ].join(" "),
-    userMessage: JSON.stringify({
-      schemaVersion: request.schemaVersion,
-      promptVersion: request.promptVersion,
-      logicalQuestionUnitId: request.logicalQuestionUnitId,
-      logicalQuestionUnitRevision:
-        request.logicalQuestionUnitRevision,
-      question: {
-        sourceTurns: request.question.sourceTurns,
-        omittedSourceTurnIds:
-          request.question.omittedSourceTurnIds,
-        projectionReason: request.question.projectionReason,
-      },
-    }),
-  };
+    ].join(" ");
+  return buildRuntimeInferenceModelInput({ systemPrompt, semanticPayload });
 }
 
 export function parseQuestionTypeAdjudicationOutput(

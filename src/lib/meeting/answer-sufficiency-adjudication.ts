@@ -5,6 +5,7 @@ import type {
   AnswerSufficiencyStatus,
 } from "./answer-sufficiency.js";
 import { createMeetingId } from "./context-manager.js";
+import { buildRuntimeInferenceModelInput } from "./runtime-inference.js";
 
 export const ANSWER_SUFFICIENCY_ADJUDICATION_SCHEMA_VERSION = 1;
 export const ANSWER_SUFFICIENCY_ADJUDICATION_PROMPT_VERSION =
@@ -158,17 +159,23 @@ export function buildAnswerSufficiencyAdjudicationRequest(input: {
 export function buildAnswerSufficiencyAdjudicationPrompts(
   request: AnswerSufficiencyAdjudicationRequest
 ) {
-  return {
-    systemPrompt: [
+  const semanticPayload = {
+    questionText: request.questionText,
+    answerText: request.answerText,
+    artifactState: request.artifactState,
+    ...(request.nearbySourceContext
+      ? { nearbySourceContext: request.nearbySourceContext }
+      : {}),
+  };
+  const systemPrompt = [
       "Judge whether one Jarvis answer sufficiently addresses its bounded current question.",
       "Return one JSON object only. Do not rewrite or improve the answer.",
       "Distinguish context insufficiency from a legitimate wait, a useful clarification, and an otherwise sufficient answer.",
       "Use only the supplied question, answer, artifact state, and nearby source-owned context.",
       "Evidence spans must be verbatim substrings of the supplied question, answer, or nearby source context.",
       "Schema: {schemaVersion:1,answerStatus,contextDefect,recommendedRepair,evidenceSpans,confidence,ambiguityReason?}.",
-    ].join(" "),
-    userMessage: JSON.stringify(request),
-  };
+    ].join(" ");
+  return buildRuntimeInferenceModelInput({ systemPrompt, semanticPayload });
 }
 
 export function parseAnswerSufficiencyAdjudicationOutput(

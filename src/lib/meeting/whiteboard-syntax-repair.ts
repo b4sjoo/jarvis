@@ -4,6 +4,7 @@ import {
 } from "./whiteboard-artifact.js";
 import type { RuntimeInferenceRuntimeJob } from "./runtime-inference-runtime.js";
 import type { AIResponseTerminalOutcome } from "../functions/ai-response-events.js";
+import { buildRuntimeInferenceModelInput } from "./runtime-inference.js";
 
 export const WHITEBOARD_SYNTAX_REPAIR_PROMPT_VERSION =
   "whiteboard-syntax-repair-v2";
@@ -157,15 +158,12 @@ export function buildWhiteboardSyntaxRepairPrompts(
     "mermaid must contain Mermaid source without a Markdown fence.",
     "asciiFallback must be a concise readable text diagram of the same graph.",
   ].join("\n");
-  const userMessage = JSON.stringify({
-    promptVersion: request.promptVersion,
-    schemaVersion: request.schemaVersion,
+  const semanticPayload = {
     parserError: request.input.parserError,
     parserContext: request.input.parserContext,
-    diagramKind: request.input.diagramKind,
     mermaid: request.input.mermaid,
-  });
-  return { systemPrompt, userMessage };
+  };
+  return buildRuntimeInferenceModelInput({ systemPrompt, semanticPayload });
 }
 
 function extractParserContext(mermaid: string, parserError: string) {
