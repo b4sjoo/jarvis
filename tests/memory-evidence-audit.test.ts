@@ -101,3 +101,45 @@ test("reports missing sources, links, and guidance that looks like personal evid
   assert.ok(codes.includes("missing-related-entry"));
   assert.ok(codes.includes("guidance-contains-first-person-claim"));
 });
+
+test("rejects query-independent negative prompts in advisor-visible memory", () => {
+  const draft = parseCuratedMemoryDraft(
+    {
+      path: "negative-prompt.md",
+      content: `
+\`\`\`yaml
+sources:
+  - id: source_project
+    title: Project source
+    collection: project_docs
+    sourceRole: working_summary
+    scope: project
+    projectId: project-a
+    projectName: Project A
+    curationStatus: curated
+\`\`\`
+
+\`\`\`yaml
+- id: evidence_project
+  sourceId: source_project
+  type: implementation_note
+  title: Project implementation
+  content: Implemented per-item parsing. Do not claim a DLQ or retry queue.
+  scope: project
+  projectId: project-a
+  projectName: Project A
+  enabled: true
+  curationStatus: curated
+\`\`\`
+`,
+    },
+    1
+  );
+  const report = auditCuratedMemoryEvidence({ drafts: [draft], now: 2 });
+
+  assert.ok(
+    report.issues.some(
+      (issue) => issue.code === "query-independent-negative-prompt"
+    )
+  );
+});

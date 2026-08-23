@@ -19,6 +19,7 @@ export type KmbEvidenceAuditIssueCode =
   | "project-evidence-missing-project"
   | "runtime-role-eligibility-drift"
   | "guidance-contains-first-person-claim"
+  | "query-independent-negative-prompt"
   | "project-coverage-gap";
 
 export interface KmbEvidenceAuditIssue {
@@ -75,6 +76,9 @@ const COVERAGE_PATTERNS: Record<ProjectEvidenceQuestionFamily, RegExp> = {
 const FIRST_PERSON_CLAIM =
   /\b(?:I|my|we|our)\s+(?:implemented|built|created|designed|owned|led|delivered|fixed|debugged|migrated|reduced|improved)\b|(?:我|我们)(?:实现|开发|设计|负责|主导|交付|修复|迁移|降低|改进)/iu;
 
+const QUERY_INDEPENDENT_NEGATIVE_PROMPT =
+  /\b(?:does not claim|do not claim|must not claim|avoid claiming|without claiming|do not say)\b/iu;
+
 export function auditCuratedMemoryEvidence(input: {
   drafts: ParsedMemoryDraft[];
   now?: number;
@@ -128,6 +132,16 @@ export function auditCuratedMemoryEvidence(input: {
         entryId: entry.id,
         projectId: entry.projectId,
         detail: "Guidance contains first-person implementation wording.",
+      });
+    }
+    if (QUERY_INDEPENDENT_NEGATIVE_PROMPT.test(entry.content)) {
+      issues.push({
+        code: "query-independent-negative-prompt",
+        severity: "error",
+        entryId: entry.id,
+        projectId: entry.projectId,
+        detail:
+          "Advisor-visible content contains an editorial denylist instead of a positive evidence boundary.",
       });
     }
 
