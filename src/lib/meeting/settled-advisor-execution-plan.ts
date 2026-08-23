@@ -366,6 +366,9 @@ export function buildSettledAdvisorExecutionPlan(input: {
           postBoundaryParentType: responseOnlyTaskScope
             ? undefined
             : taskSnapshot?.parent.questionType,
+          activeChildType: responseOnlyTaskScope
+            ? undefined
+            : taskSnapshot?.child?.questionType,
           proposedQuestionType: input.settlement.questionType,
           relation,
           taskBoundaryCommitted: input.taskBoundaryCommitted,
@@ -489,6 +492,7 @@ export function buildSettledAdvisorExecutionPlan(input: {
     transientPersonalStatusDecision,
     sourceQuestion: input.sourceQuestion,
     explicitCommand: input.explicitTaskMutationCommand,
+    activeChildId: taskSnapshot?.child?.id,
   });
   const expectedParentId =
     input.expectedActiveMeetingTask?.parent.id ??
@@ -975,7 +979,10 @@ function resolveContextReadScope(input: {
   if (input.responseOnlyTaskScope) {
     return input.responseOnlyTaskScope.contextReadScope;
   }
-  if (input.relation === "child-probe" && input.taskSnapshot?.child) {
+  if (
+    input.taskSnapshot?.child &&
+    (input.relation === "child-probe" || input.relation === "unknown")
+  ) {
     return "active-child-read";
   }
   if (input.taskSnapshot) return "active-parent-read";
@@ -1017,6 +1024,7 @@ function resolveTaskMutationPolicy(input: {
   transientPersonalStatusDecision?: TransientPersonalStatusDecision;
   sourceQuestion?: string;
   explicitCommand?: TaskLifecycleCommand;
+  activeChildId?: string;
 }): TaskLifecycleCommand {
   if (
     input.responseOnlyTaskScope ||
@@ -1036,6 +1044,7 @@ function resolveTaskMutationPolicy(input: {
     input.relation === "child-probe" &&
     input.settlement.relationMutationAuthorized
   ) {
+    if (input.activeChildId) return { kind: "preserve" };
     return {
       kind: "attach-child",
       type: input.settlement.questionType,

@@ -19,6 +19,8 @@ export * from "./advisor-generation-supersession";
 export * from "./answer-generation-lease";
 export * from "./adjacent-question-constraint";
 export * from "./active-meeting-task";
+export * from "./answer-recovery-adjudication";
+export * from "./source-linkage-adjudication";
 export * from "./capacity-estimation-guardrail";
 export * from "./active-question-term-correction";
 export * from "./clarifying-options";

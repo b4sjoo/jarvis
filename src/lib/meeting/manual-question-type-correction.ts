@@ -397,6 +397,7 @@ export interface ManualCorrectionParentTransition {
 
 export function decideManualCorrectionScope({
   task,
+  decision,
   lineage,
   latestQuestionText,
   parentQuestionText,
@@ -445,6 +446,14 @@ export function decideManualCorrectionScope({
     currentQuestionIsParentOrigin,
     currentQuestionIsChild,
   };
+
+  if (decision.target === "current-question") {
+    return {
+      ...base,
+      scope: "current-only",
+      reason: "manual-correction-targets-current-non-parent-question",
+    };
+  }
 
   if (currentQuestionRelation === "resume-parent") {
     return {
@@ -727,8 +736,9 @@ export function decideManualQuestionTypeCorrection(
     if (!task.child) {
       return {
         ...base,
-        noOp: true,
-        reason: "non-parent-correction-requires-active-child",
+        noOp: false,
+        reason: "manual-correction-targets-current-non-parent-question",
+        target: "current-question",
       };
     }
 
@@ -769,8 +779,9 @@ export function decideProvisionalQuestionTypeCorrection(
   if (!isParentCanonicalQuestionType(correctedType)) {
     return {
       ...base,
-      noOp: true,
-      reason: "provisional-correction-requires-parent-type",
+      noOp: false,
+      reason: "manual-correction-keeps-provisional-question-current-only",
+      target: "current-question",
     };
   }
 
@@ -826,6 +837,8 @@ export function applyManualQuestionTypeCorrectionToParent({
   if (decision.target === "provisional-question") {
     return parent;
   }
+
+  if (decision.target === "current-question") return parent;
 
   if (!isParentCanonicalQuestionType(decision.correctedType)) return parent;
 

@@ -451,6 +451,52 @@ test("an authorized child owns its response Playbook while the parent Playbook r
   assert.equal(plan.memoryPolicy.retrievalPolicyId, "aiml_field_knowledge");
   assert.equal(plan.modelRoute.route, "main");
   assert.equal(plan.artifactPolicy.allowWhiteboard, false);
+  assert.equal(plan.contextReadScope, "active-child-read");
+  assert.deepEqual(plan.taskMutationPolicy, { kind: "preserve" });
+});
+
+test("relation abstention preserves the active child response owner and read scope", () => {
+  const task: ActiveMeetingTask = {
+    ...activeTask("general-system-design", {
+      playbook: playbook("general-system-design"),
+      playbookPhase: "design_framing",
+    }),
+    child: {
+      id: "child-hnsw",
+      createdAt: 30,
+      updatedAt: 30,
+      questionType: "field-knowledge",
+      relation: "child-probe",
+      intent: "concept-probe",
+      question: "How does HNSW work?",
+      basedOnTurnIds: ["turn-child"],
+      basedOnObservationIds: [],
+    },
+  };
+  const plan = buildSettledAdvisorExecutionPlan({
+    settlement: settlement({
+      questionType: "unknown",
+      relation: "unknown",
+      typeMutationAuthorized: false,
+      relationMutationAuthorized: false,
+      parentMutationAuthorized: false,
+    }),
+    activeMeetingTask: task,
+    preBoundaryQuestionType: "field-knowledge",
+    taskBoundaryCommitted: false,
+    childOwnsResponse: false,
+    providerSnapshot: providers,
+    memoryUseCase: "meeting_assistant",
+    askFrame: "direct-answer",
+    topicDomain: "search",
+    sourceQuestion: "Why does it need multiple layers?",
+  });
+
+  assert.equal(plan.responseOwner.source, "active-child-preserved");
+  assert.equal(plan.responseOwner.questionType, "field-knowledge");
+  assert.equal(plan.contextReadScope, "active-child-read");
+  assert.deepEqual(plan.taskMutationPolicy, { kind: "preserve" });
+  assert.equal(plan.taskSnapshot?.child?.id, "child-hnsw");
 });
 
 test("a precommitted runtime boundary remains the creating-parent lifecycle fact when settlement is answer-only", () => {

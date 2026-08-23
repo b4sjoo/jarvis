@@ -53,6 +53,15 @@ test("registers each atomic runtime operation with an isolated policy", () => {
   const relation = getRuntimeInferenceOperationDefinition(
     "task-relation-adjudication"
   );
+  const answerResolution = getRuntimeInferenceOperationDefinition(
+    "answer-resolution"
+  );
+  const evidenceRequirement = getRuntimeInferenceOperationDefinition(
+    "evidence-requirement"
+  );
+  const sourceLinkage = getRuntimeInferenceOperationDefinition(
+    "source-linkage-adjudication"
+  );
 
   assert.equal(taxonomy.lane, "critical");
   assert.equal(taxonomy.quiescenceMs, 450);
@@ -73,6 +82,13 @@ test("registers each atomic runtime operation with an isolated policy", () => {
   assert.equal(relation.lane, "critical");
   assert.equal(relation.timeoutMs, 3_000);
   assert.equal(relation.maxOutputTokens, 256);
+  assert.equal(answerResolution.lane, "background");
+  assert.equal(answerResolution.timeoutMs, 1_500);
+  assert.equal(answerResolution.maxOutputTokens, 128);
+  assert.equal(evidenceRequirement.lane, "background");
+  assert.equal(evidenceRequirement.timeoutMs, 1_500);
+  assert.equal(sourceLinkage.lane, "critical");
+  assert.equal(sourceLinkage.timeoutMs, 1_500);
   assert.equal(relation.quiescenceMs, 350);
 });
 

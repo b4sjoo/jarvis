@@ -834,6 +834,7 @@ export type ManualQuestionTypeCorrectionTarget =
   | "parent"
   | "child"
   | "resume-parent"
+  | "current-question"
   | "provisional-question";
 
 export type ManualQuestionTypeCorrectionTargetSource =

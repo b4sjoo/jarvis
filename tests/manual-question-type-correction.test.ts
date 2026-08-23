@@ -250,7 +250,7 @@ test("treats selecting the effective question type as a no-op", () => {
   assert.equal(decision.target, undefined);
 });
 
-test("promotes an unknown provisional question only to a parent type", () => {
+test("promotes a provisional question to a parent type or current-only field knowledge", () => {
   const coding = decideProvisionalQuestionTypeCorrection("coding");
   assert.equal(coding.noOp, false);
   assert.equal(coding.target, "provisional-question");
@@ -259,10 +259,34 @@ test("promotes an unknown provisional question only to a parent type", () => {
 
   const fieldKnowledge =
     decideProvisionalQuestionTypeCorrection("field-knowledge");
-  assert.equal(fieldKnowledge.noOp, true);
+  assert.equal(fieldKnowledge.noOp, false);
+  assert.equal(fieldKnowledge.target, "current-question");
   assert.equal(
     fieldKnowledge.reason,
-    "provisional-correction-requires-parent-type"
+    "manual-correction-keeps-provisional-question-current-only"
+  );
+});
+
+test("keeps a field-knowledge correction current-only without retyping a parent", () => {
+  const task = makeActiveTask({ questionType: "coding" });
+  const decision = decideManualQuestionTypeCorrection(
+    task,
+    "field-knowledge"
+  );
+  const scope = decideManualCorrectionScope({
+    task,
+    decision,
+    lineage: makeLineage("turn-field"),
+    latestQuestionText: "What does LRU stand for?",
+    currentQuestionRelation: "unknown",
+  });
+
+  assert.equal(decision.noOp, false);
+  assert.equal(decision.target, "current-question");
+  assert.equal(scope.scope, "current-only");
+  assert.equal(
+    scope.reason,
+    "manual-correction-targets-current-non-parent-question"
   );
 });
 

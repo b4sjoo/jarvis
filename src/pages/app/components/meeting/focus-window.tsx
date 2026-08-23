@@ -408,6 +408,28 @@ function MeetingFocusControlsWindow({
                 </Button>
               );
             })}
+            {hasCorrectableQuestion ? (
+              <Button
+                key="field-knowledge"
+                size="sm"
+                variant={
+                  snapshot.effectiveQuestionType === "field-knowledge"
+                    ? "default"
+                    : "outline"
+                }
+                className="h-8 min-w-[88px] shrink-0 px-3 text-[10px]"
+                title="Field knowledge"
+                onClick={() =>
+                  sendFocusAction({
+                    type: "correct-question-type",
+                    correctedType: "field-knowledge",
+                    source: "focus-mode",
+                  })
+                }
+              >
+                Field
+              </Button>
+            ) : null}
           </div>
           <Button
             key={snapshot.audioControl.action}

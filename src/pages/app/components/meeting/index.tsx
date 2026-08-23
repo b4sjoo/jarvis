@@ -352,6 +352,24 @@ const concreteInterviewBriefTypes = interviewBriefTypeOptions
   .map((option) => option.id)
   .filter((type): type is Exclude<InterviewBriefType, "mixed"> => type !== "mixed");
 
+const currentQuestionTypeOptions: Array<{
+  id: CanonicalQuestionType;
+  label: string;
+  shortLabel: string;
+}> = [
+  ...interviewBriefTypeOptions.flatMap((option) => {
+    const canonicalType = normalizeCanonicalQuestionType(option.id);
+    return canonicalType
+      ? [{ ...option, id: canonicalType }]
+      : [];
+  }),
+  {
+    id: "field-knowledge",
+    label: "Field knowledge",
+    shortLabel: "Field",
+  },
+];
+
 function toggleInterviewBriefType(
   currentTypes: InterviewBriefType[],
   type: InterviewBriefType,
@@ -3456,10 +3474,8 @@ const CurrentQuestionTypeControl = ({
 
   return (
     <div className="flex min-w-0 flex-wrap items-center gap-1">
-      {interviewBriefTypeOptions.map((option) => {
-        const canonicalType = normalizeCanonicalQuestionType(option.id);
-        if (!canonicalType) return null;
-        const selected = canonicalType === effectiveType;
+      {currentQuestionTypeOptions.map((option) => {
+        const selected = option.id === effectiveType;
 
         return (
           <Button
@@ -3471,7 +3487,7 @@ const CurrentQuestionTypeControl = ({
               compact && "h-6 min-w-[64px] shrink-0 px-1.5"
             )}
             title={`Correct the current question to ${option.label}`}
-            onClick={() => onCorrect(canonicalType)}
+            onClick={() => onCorrect(option.id)}
           >
             {option.shortLabel}
           </Button>

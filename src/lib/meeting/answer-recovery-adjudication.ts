@@ -1,0 +1,392 @@
+import type { RuntimeInferenceRuntimeJob } from "./runtime-inference-runtime.js";
+
+export const ANSWER_RECOVERY_ADJUDICATION_SCHEMA_VERSION = 1;
+export const ANSWER_RESOLUTION_PROMPT_VERSION =
+  "answer-resolution-adjudication-v1";
+export const EVIDENCE_REQUIREMENT_PROMPT_VERSION =
+  "evidence-requirement-adjudication-v1";
+export const ANSWER_RECOVERY_MAX_OUTPUT_CHARS = 2_048;
+export const ANSWER_RECOVERY_MAX_QUESTION_CHARS = 1_200;
+export const ANSWER_RECOVERY_MAX_ANSWER_CHARS = 1_800;
+
+export type AnswerRecoveryOperationKind =
+  | "answer-resolution"
+  | "evidence-requirement";
+
+export type AnswerResolutionDecision =
+  | "resolved"
+  | "unresolved"
+  | "unclear";
+
+export type EvidenceRequirementDecision =
+  | "visual-required"
+  | "not-visual"
+  | "unclear";
+
+export interface AnswerRecoveryAdjudicationRequest {
+  schemaVersion: 1;
+  promptVersion: string;
+  operationKind: AnswerRecoveryOperationKind;
+  logicalQuestionUnitId: string;
+  logicalQuestionUnitRevision: number;
+  answerRevision: number;
+  sourceHash: string;
+  questionText: string;
+  answerText: string;
+}
+
+export interface AnswerResolutionAdjudication {
+  schemaVersion: 1;
+  decision: AnswerResolutionDecision;
+  questionEvidenceSpans: string[];
+  answerEvidenceSpans: string[];
+  ambiguityReason?: string;
+}
+
+export interface EvidenceRequirementAdjudication {
+  schemaVersion: 1;
+  decision: EvidenceRequirementDecision;
+  questionEvidenceSpans: string[];
+  answerEvidenceSpans: string[];
+  ambiguityReason?: string;
+}
+
+export type AnswerRecoveryAdjudication =
+  | AnswerResolutionAdjudication
+  | EvidenceRequirementAdjudication;
+
+export type AnswerRecoveryAdjudicationParseResult =
+  | {
+      ok: true;
+      value: AnswerRecoveryAdjudication;
+      evidenceSpansValid: true;
+    }
+  | {
+      ok: false;
+      reason: string;
+      errorKind: "parse" | "schema" | "evidence" | "provider";
+      evidenceSpansValid: false;
+    };
+
+export interface AnswerRecoveryAdjudicationLease {
+  operationId: string;
+  operationKind: AnswerRecoveryOperationKind;
+  sessionId: string;
+  runtimeEpoch: number;
+  logicalQuestionUnitId: string;
+  logicalQuestionUnitRevision: number;
+  answerRevision: number;
+  sourceHash: string;
+  manualCorrectionRevision: number;
+  createdAt: number;
+}
+
+export interface AnswerRecoveryAdjudicationJob
+  extends RuntimeInferenceRuntimeJob {
+  traceId: string;
+  lease: AnswerRecoveryAdjudicationLease;
+  request: AnswerRecoveryAdjudicationRequest;
+}
+
+export function buildAnswerRecoveryAdjudicationRequest(input: {
+  operationKind: AnswerRecoveryOperationKind;
+  logicalQuestionUnitId: string;
+  logicalQuestionUnitRevision: number;
+  answerRevision: number;
+  questionText: string;
+  answerText: string;
+}): AnswerRecoveryAdjudicationRequest | undefined {
+  const questionText = boundText(
+    input.questionText,
+    ANSWER_RECOVERY_MAX_QUESTION_CHARS
+  );
+  const answerText = boundText(
+    input.answerText,
+    ANSWER_RECOVERY_MAX_ANSWER_CHARS
+  );
+  if (!questionText || !answerText) return undefined;
+  const promptVersion =
+    input.operationKind === "answer-resolution"
+      ? ANSWER_RESOLUTION_PROMPT_VERSION
+      : EVIDENCE_REQUIREMENT_PROMPT_VERSION;
+  return {
+    schemaVersion: ANSWER_RECOVERY_ADJUDICATION_SCHEMA_VERSION,
+    promptVersion,
+    operationKind: input.operationKind,
+    logicalQuestionUnitId: input.logicalQuestionUnitId,
+    logicalQuestionUnitRevision: input.logicalQuestionUnitRevision,
+    answerRevision: input.answerRevision,
+    sourceHash: hashAnswerRecoverySource(questionText, answerText),
+    questionText,
+    answerText,
+  };
+}
+
+export function buildAnswerRecoveryAdjudicationPrompts(
+  request: AnswerRecoveryAdjudicationRequest
+) {
+  const shared = [
+    "Return one JSON object only. Do not answer or rewrite the interview content.",
+    "Use only questionText and answerText.",
+    "Every evidence span must be an exact verbatim substring of the matching input field.",
+    "Use unclear when the bounded evidence does not support a definite decision.",
+    "Do not classify question type, task relation, source linkage, parent action, playbook phase, memory, or artifact intent.",
+  ];
+  const operation =
+    request.operationKind === "answer-resolution"
+      ? [
+          "Decide one thing only: whether answerText resolves the substantive request in questionText.",
+          "Use resolved when the requested substance is actually provided.",
+          "Use unresolved when the answer explicitly defers the substance, lacks required information, or asks for evidence before it can answer.",
+          "A correct admission that evidence is missing is unresolved, not a failed answer.",
+          "Schema: {schemaVersion:1,decision:'resolved'|'unresolved'|'unclear',questionEvidenceSpans:string[],answerEvidenceSpans:string[],ambiguityReason?:string}.",
+        ]
+      : [
+          "Decide one thing only: whether the missing information described by answerText can be supplied directly by a screenshot or other visible screen evidence.",
+          "Use visual-required for missing code, line ranges, diagrams, screenshots, visible errors, or other screen-local evidence.",
+          "Use not-visual for missing requirements, business facts, interviewer choices, personal facts, or information that a screenshot would not directly supply.",
+          "Schema: {schemaVersion:1,decision:'visual-required'|'not-visual'|'unclear',questionEvidenceSpans:string[],answerEvidenceSpans:string[],ambiguityReason?:string}.",
+        ];
+  return {
+    systemPrompt: [...operation, ...shared].join(" "),
+    userMessage: JSON.stringify(request),
+  };
+}
+
+export function parseAnswerRecoveryAdjudicationOutput(
+  rawOutput: string,
+  request: AnswerRecoveryAdjudicationRequest
+): AnswerRecoveryAdjudicationParseResult {
+  const trimmed = stripJsonFence(rawOutput.trim());
+  if (!trimmed) return parseFailure("empty-output", "parse");
+  if (trimmed.length > ANSWER_RECOVERY_MAX_OUTPUT_CHARS) {
+    return parseFailure("output-too-large", "parse");
+  }
+  let decoded: unknown;
+  try {
+    decoded = JSON.parse(trimmed);
+  } catch {
+    return parseFailure("invalid-json", "parse");
+  }
+  if (!isRecord(decoded)) {
+    return parseFailure("output-is-not-object", "schema");
+  }
+  const allowedKeys = new Set([
+    "schemaVersion",
+    "decision",
+    "questionEvidenceSpans",
+    "answerEvidenceSpans",
+    "ambiguityReason",
+  ]);
+  if (Object.keys(decoded).some((key) => !allowedKeys.has(key))) {
+    return parseFailure("unexpected-field", "schema");
+  }
+  if (decoded.schemaVersion !== ANSWER_RECOVERY_ADJUDICATION_SCHEMA_VERSION) {
+    return parseFailure("unsupported-schema-version", "schema");
+  }
+  const decisionValid =
+    request.operationKind === "answer-resolution"
+      ? decoded.decision === "resolved" ||
+        decoded.decision === "unresolved" ||
+        decoded.decision === "unclear"
+      : decoded.decision === "visual-required" ||
+        decoded.decision === "not-visual" ||
+        decoded.decision === "unclear";
+  if (!decisionValid) return parseFailure("invalid-decision", "schema");
+  if (
+    !isEvidenceSpanArray(decoded.questionEvidenceSpans) ||
+    !isEvidenceSpanArray(decoded.answerEvidenceSpans)
+  ) {
+    return parseFailure("invalid-evidence-spans", "schema");
+  }
+  if (
+    decoded.ambiguityReason !== undefined &&
+    typeof decoded.ambiguityReason !== "string"
+  ) {
+    return parseFailure("invalid-ambiguity-reason", "schema");
+  }
+  const questionEvidenceSpans = decoded.questionEvidenceSpans.map((span) =>
+    span.trim()
+  );
+  const answerEvidenceSpans = decoded.answerEvidenceSpans.map((span) =>
+    span.trim()
+  );
+  if (
+    !allSpansGrounded(questionEvidenceSpans, request.questionText) ||
+    !allSpansGrounded(answerEvidenceSpans, request.answerText)
+  ) {
+    return parseFailure("ungrounded-evidence-span", "evidence");
+  }
+  if (
+    decoded.decision !== "unclear" &&
+    (questionEvidenceSpans.length === 0 || answerEvidenceSpans.length === 0)
+  ) {
+    return parseFailure("definite-decision-requires-evidence", "evidence");
+  }
+  return {
+    ok: true,
+    evidenceSpansValid: true,
+    value: {
+      schemaVersion: ANSWER_RECOVERY_ADJUDICATION_SCHEMA_VERSION,
+      decision: decoded.decision as
+        | AnswerResolutionDecision
+        | EvidenceRequirementDecision,
+      questionEvidenceSpans,
+      answerEvidenceSpans,
+      ambiguityReason:
+        typeof decoded.ambiguityReason === "string"
+          ? decoded.ambiguityReason.trim()
+          : undefined,
+    } as AnswerRecoveryAdjudication,
+  };
+}
+
+export function createAnswerRecoveryAdjudicationLease(input: {
+  sessionId: string;
+  runtimeEpoch: number;
+  request: AnswerRecoveryAdjudicationRequest;
+  manualCorrectionRevision: number;
+  createdAt?: number;
+}): AnswerRecoveryAdjudicationLease {
+  return {
+    operationId: [
+      input.request.operationKind,
+      input.sessionId,
+      input.runtimeEpoch,
+      input.request.logicalQuestionUnitId,
+      input.request.logicalQuestionUnitRevision,
+      input.request.answerRevision,
+      input.request.sourceHash,
+      input.manualCorrectionRevision,
+    ].join(":"),
+    operationKind: input.request.operationKind,
+    sessionId: input.sessionId,
+    runtimeEpoch: input.runtimeEpoch,
+    logicalQuestionUnitId: input.request.logicalQuestionUnitId,
+    logicalQuestionUnitRevision: input.request.logicalQuestionUnitRevision,
+    answerRevision: input.request.answerRevision,
+    sourceHash: input.request.sourceHash,
+    manualCorrectionRevision: input.manualCorrectionRevision,
+    createdAt: input.createdAt ?? Date.now(),
+  };
+}
+
+export function authorizeAnswerRecoveryAdjudicationLease(
+  lease: AnswerRecoveryAdjudicationLease,
+  current: {
+    currentOperationId?: string;
+    sessionId: string;
+    runtimeEpoch: number;
+    logicalQuestionUnitId: string;
+    logicalQuestionUnitRevision: number;
+    answerRevision: number;
+    sourceHash: string;
+    manualCorrectionRevision: number;
+  }
+): { authorized: true } | { authorized: false; reason: string } {
+  const reject = (reason: string) => ({ authorized: false as const, reason });
+  if (lease.operationId !== current.currentOperationId) {
+    return reject("operation-id-mismatch");
+  }
+  if (lease.sessionId !== current.sessionId) return reject("session-mismatch");
+  if (lease.runtimeEpoch !== current.runtimeEpoch) {
+    return reject("runtime-epoch-mismatch");
+  }
+  if (lease.logicalQuestionUnitId !== current.logicalQuestionUnitId) {
+    return reject("logical-question-mismatch");
+  }
+  if (
+    lease.logicalQuestionUnitRevision !== current.logicalQuestionUnitRevision
+  ) {
+    return reject("logical-question-revision-mismatch");
+  }
+  if (lease.answerRevision !== current.answerRevision) {
+    return reject("answer-revision-mismatch");
+  }
+  if (lease.sourceHash !== current.sourceHash) return reject("source-mismatch");
+  if (lease.manualCorrectionRevision !== current.manualCorrectionRevision) {
+    return reject("manual-correction-revision-mismatch");
+  }
+  return { authorized: true };
+}
+
+export function formatAnswerRecoveryAdjudicationForTrace(input: {
+  request: AnswerRecoveryAdjudicationRequest;
+  disposition: string;
+  candidate?: AnswerRecoveryAdjudication;
+  leaseAuthorized?: boolean;
+  staleReason?: string;
+  durationMs?: number;
+  queueWaitMs?: number;
+}) {
+  return {
+    answerRecoveryOperationKind: input.request.operationKind,
+    answerRecoveryPromptVersion: input.request.promptVersion,
+    answerRecoverySchemaVersion: input.request.schemaVersion,
+    answerRecoveryLogicalQuestionUnitId:
+      input.request.logicalQuestionUnitId,
+    answerRecoveryLogicalQuestionRevision:
+      input.request.logicalQuestionUnitRevision,
+    answerRecoveryAnswerRevision: input.request.answerRevision,
+    answerRecoverySourceHash: input.request.sourceHash,
+    answerRecoveryDisposition: input.disposition,
+    answerRecoveryDecision: input.candidate?.decision,
+    answerRecoveryQuestionEvidenceSpans:
+      input.candidate?.questionEvidenceSpans,
+    answerRecoveryAnswerEvidenceSpans: input.candidate?.answerEvidenceSpans,
+    answerRecoveryAmbiguityReason: input.candidate?.ambiguityReason,
+    answerRecoveryLeaseAuthorized: input.leaseAuthorized,
+    answerRecoveryStaleReason: input.staleReason,
+    answerRecoveryDurationMs: input.durationMs,
+    answerRecoveryQueueWaitMs: input.queueWaitMs,
+    answerRecoveryAppliedToRuntime: false,
+  };
+}
+
+function parseFailure(
+  reason: string,
+  errorKind: "parse" | "schema" | "evidence" | "provider"
+): AnswerRecoveryAdjudicationParseResult {
+  return { ok: false, reason, errorKind, evidenceSpansValid: false };
+}
+
+function stripJsonFence(value: string) {
+  const fenced = value.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
+  return fenced?.[1]?.trim() ?? value;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function isEvidenceSpanArray(value: unknown): value is string[] {
+  return (
+    Array.isArray(value) &&
+    value.length <= 8 &&
+    value.every((span) => typeof span === "string" && Boolean(span.trim()))
+  );
+}
+
+function allSpansGrounded(spans: string[], corpus: string) {
+  return spans.every((span) => corpus.includes(span));
+}
+
+function boundText(text: string, maxChars: number) {
+  const trimmed = text.replace(/\s+/g, " ").trim();
+  if (trimmed.length <= maxChars) return trimmed;
+  const marker = " ... ";
+  const remaining = Math.max(2, maxChars - marker.length);
+  const head = Math.floor(remaining / 2);
+  return `${trimmed.slice(0, head)}${marker}${trimmed.slice(
+    -(remaining - head)
+  )}`;
+}
+
+function hashAnswerRecoverySource(questionText: string, answerText: string) {
+  let hash = 2_166_136_261;
+  for (const character of `${questionText}\u001f${answerText}`) {
+    hash ^= character.charCodeAt(0);
+    hash = Math.imul(hash, 16_777_619);
+  }
+  return (hash >>> 0).toString(16).padStart(8, "0");
+}

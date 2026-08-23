@@ -69,6 +69,7 @@ export interface RuntimeInferenceModelRouteResolution {
 export type MeetingResponseOwnerSource =
   | "committed-parent"
   | "authorized-child"
+  | "active-child-preserved"
   | "canonical-parent"
   | "current-question"
   | "transient-personal-status";
@@ -84,6 +85,7 @@ export interface MeetingResponseOwnerResolution {
 export function resolveMeetingResponseOwner(input: {
   preBoundaryType?: unknown;
   postBoundaryParentType?: unknown;
+  activeChildType?: unknown;
   proposedQuestionType?: unknown;
   relation: InterviewTaskRelation;
   taskBoundaryCommitted: boolean;
@@ -95,6 +97,8 @@ export function resolveMeetingResponseOwner(input: {
     normalizeCanonicalQuestionType(input.postBoundaryParentType) ?? undefined;
   const proposedQuestionType =
     normalizeCanonicalQuestionType(input.proposedQuestionType) ?? "unknown";
+  const activeChildType =
+    normalizeCanonicalQuestionType(input.activeChildType) ?? undefined;
 
   if (input.taskBoundaryCommitted && postBoundaryParentType) {
     return {
@@ -114,6 +118,15 @@ export function resolveMeetingResponseOwner(input: {
     return {
       questionType: proposedQuestionType,
       source: "authorized-child",
+      preBoundaryType,
+      relation: input.relation,
+    };
+  }
+
+  if (input.relation === "unknown" && activeChildType) {
+    return {
+      questionType: activeChildType,
+      source: "active-child-preserved",
       preBoundaryType,
       relation: input.relation,
     };

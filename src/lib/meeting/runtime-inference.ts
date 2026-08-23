@@ -8,7 +8,10 @@ export type RuntimeInferenceOperationKind =
   | "response-opportunity-inference"
   | "meeting-metadata-inference"
   | "whiteboard-syntax-repair"
-  | "task-relation-adjudication";
+  | "task-relation-adjudication"
+  | "answer-resolution"
+  | "evidence-requirement"
+  | "source-linkage-adjudication";
 
 export type RuntimeInferenceLane =
   | "critical"
@@ -106,6 +109,33 @@ const DEFINITIONS: Record<
     timeoutMs: 3_000,
     maxOutputTokens: 256,
     quiescenceMs: 350,
+    maxStartsPerBudgetSlot: 1,
+  },
+  "answer-resolution": {
+    workloadClass: "runtime",
+    operationKind: "answer-resolution",
+    lane: "background",
+    timeoutMs: 1_500,
+    maxOutputTokens: 128,
+    quiescenceMs: 0,
+    maxStartsPerBudgetSlot: 1,
+  },
+  "evidence-requirement": {
+    workloadClass: "runtime",
+    operationKind: "evidence-requirement",
+    lane: "background",
+    timeoutMs: 1_500,
+    maxOutputTokens: 128,
+    quiescenceMs: 0,
+    maxStartsPerBudgetSlot: 1,
+  },
+  "source-linkage-adjudication": {
+    workloadClass: "runtime",
+    operationKind: "source-linkage-adjudication",
+    lane: "critical",
+    timeoutMs: 1_500,
+    maxOutputTokens: 128,
+    quiescenceMs: 0,
     maxStartsPerBudgetSlot: 1,
   },
 };
