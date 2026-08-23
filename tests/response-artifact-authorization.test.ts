@@ -67,8 +67,8 @@ test("allows a coding child to update only the code cache", () => {
   assert.equal(decision.allowWhiteboard, false);
 });
 
-test("phase requirements prevent a new coding parent from publishing code early", () => {
-  const baseline = authorizeResponseArtifactMutation({
+test("coding parent artifact authority follows the settled required artifact set", () => {
+  const answerOnly = authorizeResponseArtifactMutation({
     parentQuestionType: "coding",
     responseOwnerQuestionType: "coding",
     responseOwnerSource: "current-question",
@@ -85,8 +85,8 @@ test("phase requirements prevent a new coding parent from publishing code early"
     requiredArtifacts: ["answer", "code", "complexity"],
   });
 
-  assert.equal(baseline.allowCode, false);
-  assert.equal(baseline.allowComplexity, true);
+  assert.equal(answerOnly.allowCode, false);
+  assert.equal(answerOnly.allowComplexity, true);
   assert.equal(implementation.allowCode, true);
   assert.equal(implementation.allowComplexity, true);
 });
