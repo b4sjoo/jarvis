@@ -54,6 +54,16 @@ function buildSettledAttemptTrace(input: {
       currentQuestionSettlementUnitId: "lqu_retry",
       currentQuestionSettlementSessionId: "session_retry",
       currentQuestionSettlementSourceHash: `hash:${input.id}`,
+      effectiveCurrentQuestionSettlementMaterialized: true,
+      effectiveCurrentQuestionSettlementId: `settlement:${input.id}`,
+      effectiveCurrentQuestionSettlementUnitId: "lqu_retry",
+      effectiveCurrentQuestionSettlementSessionId: "session_retry",
+      effectiveCurrentQuestionSettlementSourceHash: `hash:${input.id}`,
+      effectiveCurrentQuestionSettlementQuestionType:
+        input.questionType ?? "general-system-design",
+      effectiveCurrentQuestionSettlementRelation: "new-parent",
+      effectiveCurrentQuestionSettlementParentMutationAuthorized: true,
+      effectiveCurrentQuestionContextReadScope: "current-only",
       currentQuestionSettlementType:
         input.questionType ?? "general-system-design",
       currentQuestionSettlementRelation: "new-parent",
@@ -930,6 +940,51 @@ test("projects the observed runtime tuple from trace metadata", () => {
   assert.equal(observed.contextReadScope, "active-parent-read");
   assert.equal(observed.artifactIntent, "revise-whiteboard");
   assert.match(observed.traceHash, /^\d+:[0-9a-f]+$/);
+});
+
+test("uses the effective settlement while retaining raw abstention diagnostics", () => {
+  const trace = buildSettledAttemptTrace({
+    id: "trace_effective_followup",
+    status: "success",
+    questionType: "project-deep-dive",
+  });
+  trace.metadata = {
+    ...trace.metadata,
+    currentQuestionSettlementType: "unknown",
+    currentQuestionSettlementRelation: "unknown",
+    currentQuestionSettlementParentMutationAuthorized: false,
+    effectiveCurrentQuestionSettlementQuestionType: "project-deep-dive",
+    effectiveCurrentQuestionSettlementRelation: "followup-parent",
+    effectiveCurrentQuestionSettlementParentMutationAuthorized: false,
+    effectiveCurrentQuestionContextReadScope: "active-parent-read",
+  };
+
+  const observed = buildHumanEvaluationObservedSnapshotV2(trace);
+  assert.equal(observed.questionType, "project-deep-dive");
+  assert.equal(observed.relation, "followup-parent");
+  assert.equal(observed.parentAction, "preserve");
+  assert.equal(observed.contextReadScope, "active-parent-read");
+});
+
+test("delays attempt materialization until an effective settlement exists", () => {
+  const trace = buildSettledAttemptTrace({
+    id: "trace_raw_only",
+    status: "running",
+  });
+  delete trace.metadata?.effectiveCurrentQuestionSettlementId;
+  delete trace.metadata?.effectiveCurrentQuestionSettlementUnitId;
+  delete trace.metadata?.effectiveCurrentQuestionSettlementSessionId;
+  delete trace.metadata?.effectiveCurrentQuestionSettlementSourceHash;
+
+  const result = materializeHumanEvaluationAttemptProjectionV2({
+    trace,
+    currentSessionId: "session_retry",
+    events: [],
+    projections: [],
+  });
+  assert.equal(result.changed, false);
+  assert.equal(result.reason, "settlement-incomplete");
+  assert.equal(result.projection, undefined);
 });
 
 test("projects committed screen response-only scope and code mutation", () => {

@@ -38,7 +38,8 @@ export function projectQuestionTypeObservation(input: {
   const metadata = input.metadata ?? {};
   const observedCurrentQuestionType = normalizeCanonicalQuestionType(
     readString(
-      metadata.currentQuestionSettlementType ??
+      metadata.effectiveCurrentQuestionSettlementQuestionType ??
+        metadata.currentQuestionSettlementType ??
         metadata.settledExecutionPlanQuestionType ??
         metadata.canonicalQuestionType ??
         input.fallbackCurrentQuestionType ??

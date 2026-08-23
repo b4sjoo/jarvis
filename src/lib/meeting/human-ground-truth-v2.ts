@@ -609,14 +609,18 @@ export function buildHumanEvaluationObservedSnapshotV2(
   const questionType =
     questionTypeObservation.observedCurrentQuestionType;
   const relation = normalizeRelation(
-    metadata.currentQuestionSettlementRelation ??
+    metadata.effectiveCurrentQuestionSettlementRelation ??
+      metadata.currentQuestionSettlementRelation ??
       metadata.settledExecutionPlanTaskRelation ??
       metadata.taskRelation ??
       metadata.relationToActiveTask
   );
   const parentAction = resolveObservedParentAction(
     relation,
-    readBoolean(metadata.currentQuestionSettlementParentMutationAuthorized)
+    readBoolean(
+      metadata.effectiveCurrentQuestionSettlementParentMutationAuthorized ??
+        metadata.currentQuestionSettlementParentMutationAuthorized
+    )
   );
   const advisorAttempt = projectObservedAdvisorAttempt(metadata);
   const runtimeAction = advisorAttempt.runtimeAction;
@@ -1024,7 +1028,8 @@ function resolveObservedContextReadScope(
   answerCommitted: boolean | undefined
 ): AdvisorContextReadScope | undefined {
   const settledScope = normalizeContextReadScope(
-    metadata.settledExecutionPlanContextReadScope
+    metadata.effectiveCurrentQuestionContextReadScope ??
+      metadata.settledExecutionPlanContextReadScope
   );
   if (settledScope) return settledScope;
 
@@ -1556,7 +1561,8 @@ function resolveObservedChildContinuity(
 ): ProjectTrajectoryChildContinuity | undefined {
   const transitionKind = readString(metadata.sourceTransitionKind);
   const relation = readString(
-    metadata.currentQuestionSettlementRelation ??
+    metadata.effectiveCurrentQuestionSettlementRelation ??
+      metadata.currentQuestionSettlementRelation ??
       metadata.sourceTransitionRelation ??
       metadata.taskRelation
   );
@@ -1568,7 +1574,11 @@ function resolveObservedChildContinuity(
   }
   if (
     transitionKind === "child-probe" ||
-    relation === "child-probe" ||
+    (relation === "child-probe" &&
+      readString(
+        metadata.effectiveCurrentQuestionSettlementChildId ??
+          metadata.activeMeetingChildId
+      )) ||
     readString(metadata.activeMeetingChildId)
   ) {
     return "child-attached";

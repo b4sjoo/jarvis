@@ -66,6 +66,34 @@ test("excludes generated guidance from the retrieval query", () => {
   assert.doesNotMatch(query, /Invented Microsoft MCP/);
 });
 
+test("adds source-owned setup to the prompt without widening KMB retrieval", () => {
+  const setup = "The reliability tradeoff is consistency versus availability.";
+  const packet = buildAdvisorEvidencePacket({
+    currentQuestion: {
+      text: "How would you reason about it?",
+      source: "voice-lqu",
+      sourceTurnIds: ["turn-ask"],
+    },
+    sourceOwnedSemanticContext: {
+      text: setup,
+      sourceTurnIds: ["turn-setup"],
+      parentId: "parent-oasis",
+      parentRevision: 4,
+      retentionReason: "same-parent-adjacent-setup",
+    },
+  });
+
+  const prompt = formatAdvisorEvidencePacketForPrompt(packet);
+  const query = buildAdvisorEvidenceRetrievalQuery(packet, "live");
+  const trace = formatAdvisorEvidencePacketForTrace(packet, query);
+  assert.match(prompt, /source_owned_semantic_context/);
+  assert.match(prompt, /consistency versus availability/);
+  assert.match(prompt, /cannot create another ask/i);
+  assert.doesNotMatch(query, /consistency versus availability/);
+  assert.equal(trace.sourceOwnedSemanticContextPresent, true);
+  assert.deepEqual(trace.sourceOwnedSemanticContextTurnIds, ["turn-setup"]);
+});
+
 test("keeps bounded generated continuity out of retrieval and marks it as non-authoritative", () => {
   const generatedText =
     "The prior option trades write latency for stronger consistency.";

@@ -51,6 +51,11 @@ function buildSettledTrace(
       currentQuestionSettlementUnitId: questionId,
       currentQuestionSettlementSessionId: "session_1",
       currentQuestionSettlementSourceHash: `hash:${id}`,
+      effectiveCurrentQuestionSettlementMaterialized: true,
+      effectiveCurrentQuestionSettlementId: `settlement:${id}`,
+      effectiveCurrentQuestionSettlementUnitId: questionId,
+      effectiveCurrentQuestionSettlementSessionId: "session_1",
+      effectiveCurrentQuestionSettlementSourceHash: `hash:${id}`,
     },
   };
 }

@@ -4,6 +4,7 @@ import type { ActiveMeetingTask } from "./active-meeting-task.js";
 import type {
   CurrentQuestionRelation,
   CurrentQuestionSettlementDecision,
+  EffectiveCurrentQuestionSettlement,
 } from "./current-question-settlement.js";
 import {
   resolveMeetingAnswerProfile,
@@ -198,8 +199,11 @@ export interface EffectiveAdvisorSettlementView {
   nullHypothesisApplied: boolean;
   nullHypothesisReason?:
     | "active-child-preserved"
-    | "active-parent-preserved";
-  effectiveSettlement?: Readonly<CurrentQuestionSettlementDecision>;
+    | "active-parent-preserved"
+    | "deliberate-screen-milestone"
+    | "no-parent-current-question";
+  effectiveSettlement?: Readonly<EffectiveCurrentQuestionSettlement>;
+  contextReadScope: AdvisorContextReadScope;
   startsNewParent: boolean;
   parent?: Readonly<ActiveMeetingTask["parent"]>;
   parentId?: string;
@@ -244,22 +248,37 @@ export function buildEffectiveAdvisorSettlementView(input: {
       : rawQuestionType;
   const relation =
     preserveCurrentBranch && rawRelation === "unknown"
-      ? activeTask?.child
-        ? "child-probe"
-        : activeTask?.parent
-          ? "followup-parent"
-          : rawRelation
+      ? settlement?.sourceKind === "screen"
+        ? "new-parent"
+        : activeTask?.child
+          ? "child-probe"
+          : activeTask?.parent
+            ? "followup-parent"
+            : "new-parent"
       : rawRelation;
   const nullHypothesisApplied =
     questionType !== rawQuestionType || relation !== rawRelation;
   const nullHypothesisReason = nullHypothesisApplied
-    ? activeTask?.child
-      ? "active-child-preserved"
-      : "active-parent-preserved"
+    ? settlement?.sourceKind === "screen" && rawRelation === "unknown"
+      ? "deliberate-screen-milestone"
+      : activeTask?.child
+        ? "active-child-preserved"
+        : activeTask?.parent
+          ? "active-parent-preserved"
+          : "no-parent-current-question"
     : undefined;
   const effectiveSettlement = settlement
     ? Object.freeze({
         ...settlement,
+        effective: true as const,
+        effectiveRevision: input.taskRuntimeRevision,
+        rawQuestionType,
+        rawRelation,
+        nullHypothesisApplied,
+        nullHypothesisReason,
+        effectiveParentId: activeTask?.parent.id,
+        effectiveParentRevision: activeTask?.parent.revisions,
+        effectiveChildId: activeTask?.child?.id,
         questionType,
         relation,
         activeParentId: nullHypothesisApplied
@@ -282,6 +301,12 @@ export function buildEffectiveAdvisorSettlementView(input: {
       : relation === "new-parent"
   );
   const activeParent = input.activeMeetingTask?.parent;
+  const contextReadScope: AdvisorContextReadScope =
+    relation === "child-probe" && activeTask?.child
+      ? "active-child-read"
+      : relation !== "new-parent" && activeTask?.parent
+        ? "active-parent-read"
+        : "current-only";
   const committedNewParentMatches = Boolean(
     settlement &&
       startsNewParent &&
@@ -324,6 +349,7 @@ export function buildEffectiveAdvisorSettlementView(input: {
     nullHypothesisApplied,
     nullHypothesisReason,
     effectiveSettlement,
+    contextReadScope,
     startsNewParent,
     parent,
     parentId: parent?.id,
@@ -354,6 +380,45 @@ export function formatEffectiveAdvisorSettlementViewForTrace(
       view.nullHypothesisApplied,
     effectiveAdvisorNullHypothesisReason:
       view.nullHypothesisReason,
+    effectiveCurrentQuestionSettlementMaterialized: Boolean(
+      view.effectiveSettlement
+    ),
+    effectiveCurrentQuestionSettlementId:
+      view.effectiveSettlement?.settlementId,
+    effectiveCurrentQuestionSettlementRevision:
+      view.effectiveSettlement?.effectiveRevision,
+    effectiveCurrentQuestionSettlementSourceHash:
+      view.effectiveSettlement?.sourceHash,
+    effectiveCurrentQuestionSettlementSessionId:
+      view.effectiveSettlement?.sessionId,
+    effectiveCurrentQuestionSettlementUnitId:
+      view.effectiveSettlement?.logicalQuestionUnitId,
+    effectiveCurrentQuestionSettlementUnitRevision:
+      view.effectiveSettlement?.revision,
+    effectiveCurrentQuestionSettlementQuestionType:
+      view.effectiveSettlement?.questionType,
+    effectiveCurrentQuestionSettlementRelation:
+      view.effectiveSettlement?.relation,
+    effectiveCurrentQuestionSettlementParentMutationAuthorized:
+      view.effectiveSettlement?.parentMutationAuthorized,
+    effectiveCurrentQuestionSettlementParentId:
+      view.effectiveSettlement?.effectiveParentId,
+    effectiveCurrentQuestionSettlementParentRevision:
+      view.effectiveSettlement?.effectiveParentRevision,
+    effectiveCurrentQuestionSettlementChildId:
+      view.effectiveSettlement?.effectiveChildId,
+    effectiveCurrentQuestionContextReadScope:
+      view.contextReadScope,
+    effectiveCurrentQuestionRawQuestionType:
+      view.effectiveSettlement?.rawQuestionType,
+    effectiveCurrentQuestionRawRelation:
+      view.effectiveSettlement?.rawRelation,
+    unresolvedAtConsumerBarrier: Boolean(
+      view.effectiveSettlement &&
+        (view.effectiveSettlement.relation === "unknown" ||
+          (view.effectiveSettlement.questionType === "unknown" &&
+            view.effectiveSettlement.effectiveParentId))
+    ),
     effectiveAdvisorStartsNewParent: view.startsNewParent,
     effectiveAdvisorParentId: view.parentId,
     effectiveAdvisorParentRevision: view.parentRevision,

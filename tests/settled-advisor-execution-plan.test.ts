@@ -248,6 +248,10 @@ test("projects active-parent abstention before downstream consumers", () => {
   assert.equal(view.effectiveSettlement?.questionType, "general-system-design");
   assert.equal(view.effectiveSettlement?.relation, "followup-parent");
   assert.equal(view.effectiveSettlement?.relationMutationAuthorized, false);
+  assert.equal(view.effectiveSettlement?.effective, true);
+  assert.equal(view.effectiveSettlement?.effectiveRevision, 4);
+  assert.equal(view.effectiveSettlement?.rawRelation, "unknown");
+  assert.equal(view.contextReadScope, "active-parent-read");
 });
 
 test("projects active-child abstention without attaching another child", () => {
@@ -287,6 +291,37 @@ test("projects active-child abstention without attaching another child", () => {
   assert.equal(view.relation, "child-probe");
   assert.equal(view.nullHypothesisReason, "active-child-preserved");
   assert.equal(view.effectiveSettlement?.relationMutationAuthorized, false);
+  assert.equal(view.effectiveSettlement?.effectiveChildId, "child-a");
+  assert.equal(view.contextReadScope, "active-child-read");
+});
+
+test("materializes deliberate Screen abstention as a non-mutating milestone", () => {
+  const task = activeTask("coding");
+  const raw = settlement({
+    questionType: "behavioral",
+    relation: "unknown",
+    sourceKind: "screen",
+    relationMutationAuthorized: false,
+    parentMutationAuthorized: false,
+  });
+  const view = buildEffectiveAdvisorSettlementView({
+    settlement: raw,
+    activeMeetingTask: task,
+    taskRuntimeRevision: 7,
+    fallback: {
+      questionType: "behavioral",
+      relation: "unknown",
+    },
+  });
+
+  assert.equal(view.rawRelation, "unknown");
+  assert.equal(view.relation, "new-parent");
+  assert.equal(view.startsNewParent, false);
+  assert.equal(view.contextReadScope, "current-only");
+  assert.equal(
+    view.nullHypothesisReason,
+    "deliberate-screen-milestone"
+  );
 });
 
 test("keeps a response-only active-parent read inside the immutable plan", () => {

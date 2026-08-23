@@ -80,6 +80,12 @@ import { materializeHumanEvaluationAttemptProjectionV2 } from "@/lib/meeting/hum
 import { validateHumanEvaluationAttemptSubjectV2 } from "@/lib/meeting/human-evaluation-attempt";
 import { toHumanEvaluationCollectionProvenance } from "@/lib/meeting/session-evaluation-provenance";
 import {
+  createSourceOwnedSetupCandidate,
+  formatSourceOwnedSemanticContextSelectionForTrace,
+  selectSourceOwnedSemanticContext,
+  type SourceOwnedSetupCandidate,
+} from "@/lib/meeting/source-owned-semantic-context";
+import {
   AdvisorEngine,
   buildAdvisorEvidencePacket,
   buildAdvisorEvidenceRetrievalQuery,
@@ -171,6 +177,7 @@ import {
   ManualQuestionTypeCorrectionSource,
   CurrentQuestionSettlementDecision,
   CurrentQuestionSettlementDisposition,
+  AdvisorSourceOwnedSemanticContext,
   ResponseOnlyTaskScope,
   ResponseOpportunityGenerationGateCoordinator,
   LogicalQuestionUnit,
@@ -2962,6 +2969,8 @@ export function useMeetingAssistant() {
   const recentAdvisorContinuityRef = useRef<
     AdvisorGeneratedContinuityCapsule[]
   >([]);
+  const latestSourceOwnedSetupRef =
+    useRef<SourceOwnedSetupCandidate | undefined>(undefined);
   const answerDeliveryProgressRef =
     useRef<AnswerDeliveryProgress | null>(null);
   const pendingAnswerRevisionRef =
@@ -5199,6 +5208,7 @@ export function useMeetingAssistant() {
     cancelledAdvisorTurnIdsRef.current.clear();
     taskBoundaryCandidateRef.current = undefined;
     currentQuestionSettlementRef.current = undefined;
+    latestSourceOwnedSetupRef.current = undefined;
     settledAdvisorExecutionPlanRef.current = undefined;
     advisorResponseFingerprintCacheRef.current.reset();
     advisorResponseChallengeCoordinatorRef.current.reset();
@@ -10180,6 +10190,9 @@ export function useMeetingAssistant() {
       advisorScreenScopeDecision
     );
     let advisorEvidencePacket = buildAdvisorEvidencePacket({});
+    let advisorSourceOwnedSemanticContext:
+      | AdvisorSourceOwnedSemanticContext
+      | undefined;
     let advisorRetrievalQuery = "";
     let includePreparedProgrammingLanguage = false;
     let preparationPersonalizedGuidance:
@@ -10212,6 +10225,8 @@ export function useMeetingAssistant() {
               revision: advisorJob.logicalQuestionUnit.revision,
             }
           : undefined,
+        sourceOwnedSemanticContext:
+          advisorSourceOwnedSemanticContext,
         activeMeetingTask: transientPersonalStatusDecision
           ? undefined
           : promptContext.activeMeetingTask,
@@ -11382,6 +11397,42 @@ export function useMeetingAssistant() {
         preserveCurrentBranchOnAbstention:
           !transientPersonalStatusDecision,
       });
+    if (effectiveAdvisorSettlementView.effectiveSettlement) {
+      currentQuestionSettlement =
+        effectiveAdvisorSettlementView.effectiveSettlement;
+      if (!responseMutationSuppressed) {
+        currentQuestionSettlementRef.current =
+          effectiveAdvisorSettlementView.effectiveSettlement;
+      }
+    }
+    const effectiveSettlementContextState =
+      contextManagerRef.current.getState();
+    const sourceOwnedSetupCandidate = latestSourceOwnedSetupRef.current;
+    const sourceOwnedSetupSelection =
+      selectSourceOwnedSemanticContext({
+        candidate: sourceOwnedSetupCandidate,
+        sessionId: effectiveSettlementContextState.sessionId,
+        runtimeEpoch: runtimeEpochRef.current,
+        logicalQuestionUnit: advisorJob.logicalQuestionUnit,
+        activeMeetingTask:
+          effectiveSettlementContextState.activeMeetingTask,
+        transcriptTurns:
+          effectiveSettlementContextState.transcriptTurns,
+      });
+    advisorSourceOwnedSemanticContext =
+      sourceOwnedSetupSelection.context;
+    if (sourceOwnedSetupSelection.consumeCandidate) {
+      latestSourceOwnedSetupRef.current = undefined;
+    }
+    if (traceId) {
+      traceStoreRef.current.updateMetadata(
+        traceId,
+        formatSourceOwnedSemanticContextSelectionForTrace(
+          sourceOwnedSetupCandidate,
+          sourceOwnedSetupSelection
+        )
+      );
+    }
     advisorProjectAnchor = transientPersonalStatusDecision
       ? undefined
       : effectiveAdvisorSettlementView.projectAnchor;
@@ -11443,7 +11494,7 @@ export function useMeetingAssistant() {
           contextReadScopeOverride:
             boundedRecentHistoryDecision.authorized
               ? "bounded-recent-history"
-              : undefined,
+              : effectiveAdvisorSettlementView.contextReadScope,
           transientPersonalStatusDecision,
           sourceQuestion:
             advisorQuestionSemanticEvidenceText,
@@ -20675,6 +20726,25 @@ export function useMeetingAssistant() {
           turnId: turn.id,
           text: turn.text,
         });
+        const sourceOwnedSetupCandidate =
+          createSourceOwnedSetupCandidate({
+            turn,
+            sessionId: activeContextState.sessionId,
+            runtimeEpoch: runtimeEpochRef.current,
+            activeMeetingTask: activeContextState.activeMeetingTask,
+          });
+        if (sourceOwnedSetupCandidate) {
+          latestSourceOwnedSetupRef.current = sourceOwnedSetupCandidate;
+          traceStoreRef.current.updateMetadata(traceId, {
+            sourceOwnedSetupCandidateStored: true,
+            sourceOwnedSetupCandidateTurnId:
+              sourceOwnedSetupCandidate.turnId,
+            sourceOwnedSetupCandidateSpeechAct:
+              sourceOwnedSetupCandidate.speechAct,
+            sourceOwnedSetupCandidateParentId:
+              sourceOwnedSetupCandidate.parentId,
+          });
+        }
         const projectedAnswerFocusText = primaryAskAnswerFocusText(
           primaryAskProjection,
           turn.text

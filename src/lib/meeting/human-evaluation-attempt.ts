@@ -20,13 +20,17 @@ export function resolveHumanEvaluationAttemptIdentityV2(
   trace: HumanEvaluationAttemptTraceLike
 ): HumanEvaluationAttemptIdentityV2 | undefined {
   const metadata = trace.metadata ?? {};
-  const sessionId = readString(metadata.currentQuestionSettlementSessionId);
-  const settlementId = readString(metadata.currentQuestionSettlementId);
+  const sessionId = readString(
+    metadata.effectiveCurrentQuestionSettlementSessionId
+  );
+  const settlementId = readString(
+    metadata.effectiveCurrentQuestionSettlementId
+  );
   const logicalQuestionUnitId = readString(
-    metadata.currentQuestionSettlementUnitId
+    metadata.effectiveCurrentQuestionSettlementUnitId
   );
   const sourceHash = readString(
-    metadata.currentQuestionSettlementSourceHash
+    metadata.effectiveCurrentQuestionSettlementSourceHash
   );
   if (!sessionId || !settlementId || !logicalQuestionUnitId || !sourceHash) {
     return undefined;

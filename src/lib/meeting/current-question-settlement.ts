@@ -159,6 +159,23 @@ export interface CurrentQuestionSettlementDecision {
   reasons: string[];
 }
 
+export interface EffectiveCurrentQuestionSettlement
+  extends CurrentQuestionSettlementDecision {
+  effective: true;
+  effectiveRevision: number;
+  rawQuestionType: CanonicalQuestionType;
+  rawRelation: CurrentQuestionRelation;
+  nullHypothesisApplied: boolean;
+  nullHypothesisReason?:
+    | "active-child-preserved"
+    | "active-parent-preserved"
+    | "deliberate-screen-milestone"
+    | "no-parent-current-question";
+  effectiveParentId?: string;
+  effectiveParentRevision?: number;
+  effectiveChildId?: string;
+}
+
 export function selectCommittedSettlementForLogicalQuestionUnit(input: {
   settlement?: CurrentQuestionSettlementDecision;
   logicalQuestionUnit?: Pick<LogicalQuestionUnit, "id" | "revision">;
