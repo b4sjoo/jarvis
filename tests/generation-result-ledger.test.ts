@@ -227,6 +227,81 @@ test("rejects stale or invalid generations before any mutation", () => {
   }
 });
 
+test("records a typed task-transition rejection without publishing", () => {
+  const ledger = new GenerationResultLedger();
+  const coordinator = new GenerationDerivedCommitCoordinator(ledger);
+  const currentLease = lease({ id: "lease-transition-rejection" });
+  ledger.begin({ lease: currentLease });
+  let published = false;
+
+  const result = coordinator.commitStaged({
+    lease: currentLease,
+    leaseAuthorization: authorizeAnswerGenerationLease(
+      currentLease,
+      snapshot()
+    ),
+    expectedTaskRuntimeRevision: 10,
+    currentTaskRuntimeRevision: 10,
+    candidateAccepted: true,
+    visibleAnswerRevision: 7,
+    transition: {
+      kind: "update-parent-context",
+      apply: () => ({
+        authorized: false,
+        reason: "revision-mismatch",
+      }),
+    },
+    publish: () => {
+      published = true;
+    },
+  });
+
+  assert.equal(result.committed, false);
+  assert.equal(
+    result.reason,
+    "task-transition-rejected:revision-mismatch"
+  );
+  assert.equal(published, false);
+  assert.deepEqual(result.entry.applyFailure, {
+    stage: "task-transition",
+    reason: "task-transition-rejected:revision-mismatch",
+    transitionKind: "update-parent-context",
+    expectedTaskRuntimeRevision: 10,
+    currentTaskRuntimeRevision: 10,
+  });
+});
+
+test("records a bounded publication exception after an authorized transition", () => {
+  const ledger = new GenerationResultLedger();
+  const coordinator = new GenerationDerivedCommitCoordinator(ledger);
+  const currentLease = lease({ id: "lease-publication-exception" });
+  ledger.begin({ lease: currentLease });
+
+  const result = coordinator.commitStaged({
+    lease: currentLease,
+    leaseAuthorization: authorizeAnswerGenerationLease(
+      currentLease,
+      snapshot()
+    ),
+    expectedTaskRuntimeRevision: 12,
+    currentTaskRuntimeRevision: 12,
+    candidateAccepted: true,
+    visibleAnswerRevision: 7,
+    publish: () => {
+      throw new TypeError("publication state unavailable\nprivate detail omitted");
+    },
+  });
+
+  assert.equal(result.committed, false);
+  assert.equal(result.reason, "stable-answer-publication-exception");
+  assert.equal(result.entry.applyFailure?.stage, "stable-answer-publication");
+  assert.equal(result.entry.applyFailure?.errorClass, "TypeError");
+  assert.equal(
+    result.entry.applyFailure?.safeErrorSummary,
+    "publication state unavailable private detail omitted"
+  );
+});
+
 test("projects pending and historical entries without deleting origin results", () => {
   const ledger = new GenerationResultLedger();
   const first = lease();

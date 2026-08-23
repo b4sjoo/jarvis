@@ -100,6 +100,26 @@ export interface GenerationResultLedgerEntry {
   updatedAt: number;
   committedAt?: number;
   commitDurationMs?: number;
+  applyFailure?: GenerationDerivedApplyFailure;
+}
+
+export type GenerationDerivedApplyStage =
+  | "task-transition"
+  | "stable-answer-publication";
+
+export interface GenerationDerivedApplyFailure {
+  stage: GenerationDerivedApplyStage;
+  reason: string;
+  transitionKind?: string;
+  expectedTaskRuntimeRevision: number;
+  currentTaskRuntimeRevision: number;
+  errorClass?: string;
+  safeErrorSummary?: string;
+}
+
+export interface GenerationDerivedTaskTransitionResult {
+  authorized: boolean;
+  reason: string;
 }
 
 export interface GenerationResultProjection {
@@ -141,6 +161,7 @@ interface RecordCommitDispositionInput {
   reason: string;
   visibleAnswerRevision?: number;
   commitDurationMs?: number;
+  applyFailure?: GenerationDerivedApplyFailure;
   now?: number;
 }
 
@@ -248,6 +269,9 @@ export class GenerationResultLedger {
     entry.commitReason = input.reason;
     entry.visibleAnswerRevision = input.visibleAnswerRevision;
     entry.commitDurationMs = input.commitDurationMs;
+    entry.applyFailure = input.applyFailure
+      ? { ...input.applyFailure }
+      : entry.applyFailure;
     entry.committedAt =
       input.disposition === "committed" ? now : entry.committedAt;
     if (isTerminalGenerationDisposition(input.disposition)) {
@@ -470,6 +494,144 @@ export class GenerationDerivedCommitCoordinator {
       };
     }
   }
+
+  commitStaged<T>(input: {
+    lease: GenerationResultLease;
+    leaseAuthorization: GenerationLeaseAuthorization;
+    expectedTaskRuntimeRevision: number;
+    currentTaskRuntimeRevision: number;
+    candidateAccepted: boolean;
+    visibleAnswerRevision: number;
+    transition?: {
+      kind: string;
+      apply: () => GenerationDerivedTaskTransitionResult;
+    };
+    publish: () => T;
+    now?: number;
+  }): GenerationDerivedCommitResult<T> {
+    const authorization = authorizeGenerationDerivedCommit(input);
+    if (!authorization.authorized) {
+      const entry = this.ledger.recordCommitDisposition({
+        lease: input.lease,
+        disposition: "rejected",
+        reason: authorization.reason,
+        now: input.now,
+      });
+      return {
+        committed: false,
+        reason: authorization.reason,
+        leaseAuthorization: authorization.leaseAuthorization,
+        entry,
+      };
+    }
+    const existing = this.ledger.getEntry(input.lease.id);
+    if (existing?.terminalization) {
+      return {
+        committed: false,
+        reason:
+          existing.commitDisposition === "committed"
+            ? "duplicate-generation-commit"
+            : `generation-already-terminal:${existing.commitDisposition}`,
+        leaseAuthorization: authorization.leaseAuthorization,
+        entry: existing,
+      };
+    }
+
+    const startedAt = monotonicNow();
+    if (input.transition) {
+      let transitionResult: GenerationDerivedTaskTransitionResult;
+      try {
+        transitionResult = input.transition.apply();
+      } catch (error) {
+        return this.recordStagedApplyFailure({
+          input,
+          startedAt,
+          stage: "task-transition",
+          reason: "task-transition-exception",
+          transitionKind: input.transition.kind,
+          error,
+        });
+      }
+      if (!transitionResult.authorized) {
+        return this.recordStagedApplyFailure({
+          input,
+          startedAt,
+          stage: "task-transition",
+          reason: `task-transition-rejected:${transitionResult.reason}`,
+          transitionKind: input.transition.kind,
+          disposition: "rejected",
+        });
+      }
+    }
+
+    try {
+      const value = input.publish();
+      const entry = this.ledger.recordCommitDisposition({
+        lease: input.lease,
+        disposition: "committed",
+        reason: "authorized",
+        visibleAnswerRevision: input.visibleAnswerRevision,
+        commitDurationMs: Math.max(0, monotonicNow() - startedAt),
+        now: input.now,
+      });
+      return {
+        committed: true,
+        reason: "authorized",
+        leaseAuthorization: authorization.leaseAuthorization,
+        value,
+        entry,
+      };
+    } catch (error) {
+      return this.recordStagedApplyFailure({
+        input,
+        startedAt,
+        stage: "stable-answer-publication",
+        reason: "stable-answer-publication-exception",
+        error,
+      });
+    }
+  }
+
+  private recordStagedApplyFailure<T>(input: {
+    input: {
+      lease: GenerationResultLease;
+      leaseAuthorization: GenerationLeaseAuthorization;
+      expectedTaskRuntimeRevision: number;
+      currentTaskRuntimeRevision: number;
+      now?: number;
+    };
+    startedAt: number;
+    stage: GenerationDerivedApplyStage;
+    reason: string;
+    transitionKind?: string;
+    error?: unknown;
+    disposition?: "rejected" | "failed";
+  }): GenerationDerivedCommitResult<T> {
+    const applyFailure: GenerationDerivedApplyFailure = {
+      stage: input.stage,
+      reason: input.reason,
+      transitionKind: input.transitionKind,
+      expectedTaskRuntimeRevision:
+        input.input.expectedTaskRuntimeRevision,
+      currentTaskRuntimeRevision:
+        input.input.currentTaskRuntimeRevision,
+      ...safeApplyError(input.error),
+    };
+    const entry = this.ledger.recordCommitDisposition({
+      lease: input.input.lease,
+      disposition: input.disposition ?? "failed",
+      reason: input.reason,
+      commitDurationMs: Math.max(0, monotonicNow() - input.startedAt),
+      applyFailure,
+      now: input.input.now,
+    });
+    return {
+      committed: false,
+      reason: input.reason,
+      leaseAuthorization: input.input.leaseAuthorization,
+      entry,
+    };
+  }
 }
 
 export function generationResultLedgerKey(
@@ -537,6 +699,18 @@ export function formatGenerationResultLedgerForTrace(
     generationResultVisibleAnswerRevision:
       entry?.visibleAnswerRevision,
     generationResultCommitDurationMs: entry?.commitDurationMs,
+    generationResultApplyFailureStage: entry?.applyFailure?.stage,
+    generationResultApplyFailureReason: entry?.applyFailure?.reason,
+    generationResultApplyFailureTransitionKind:
+      entry?.applyFailure?.transitionKind,
+    generationResultApplyFailureExpectedTaskRuntimeRevision:
+      entry?.applyFailure?.expectedTaskRuntimeRevision,
+    generationResultApplyFailureCurrentTaskRuntimeRevision:
+      entry?.applyFailure?.currentTaskRuntimeRevision,
+    generationResultApplyFailureErrorClass:
+      entry?.applyFailure?.errorClass,
+    generationResultApplyFailureSafeErrorSummary:
+      entry?.applyFailure?.safeErrorSummary,
     generationResultProjectionDisposition:
       projection?.disposition,
   };
@@ -648,6 +822,20 @@ function cloneEntry(
     terminalization: entry.terminalization
       ? { ...entry.terminalization }
       : undefined,
+    applyFailure: entry.applyFailure
+      ? { ...entry.applyFailure }
+      : undefined,
+  };
+}
+
+function safeApplyError(error: unknown) {
+  if (!error) return {};
+  const errorClass =
+    error instanceof Error ? error.name || "Error" : typeof error;
+  const message = error instanceof Error ? error.message : String(error);
+  return {
+    errorClass: errorClass.slice(0, 80),
+    safeErrorSummary: message.replace(/\s+/gu, " ").trim().slice(0, 240),
   };
 }
 

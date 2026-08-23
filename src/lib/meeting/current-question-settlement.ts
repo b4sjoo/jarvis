@@ -159,6 +159,22 @@ export interface CurrentQuestionSettlementDecision {
   reasons: string[];
 }
 
+export function selectCommittedSettlementForLogicalQuestionUnit(input: {
+  settlement?: CurrentQuestionSettlementDecision;
+  logicalQuestionUnit?: Pick<LogicalQuestionUnit, "id" | "revision">;
+}) {
+  const { settlement, logicalQuestionUnit } = input;
+  if (
+    !settlement ||
+    !logicalQuestionUnit ||
+    settlement.logicalQuestionUnitId !== logicalQuestionUnit.id ||
+    settlement.revision !== logicalQuestionUnit.revision
+  ) {
+    return undefined;
+  }
+  return settlement;
+}
+
 export type CurrentQuestionTerminalNoAnswerDisposition =
   | "terminal-no-answer"
   | "operation-not-authorized"

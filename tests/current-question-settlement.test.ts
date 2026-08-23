@@ -11,6 +11,7 @@ import {
   settlementAuthorizesFollowupParentScope,
   settleCurrentQuestion,
   settleCurrentQuestionTerminalNoAnswer,
+  selectCommittedSettlementForLogicalQuestionUnit,
   type CurrentQuestionSettlementProposal,
 } from "../src/lib/meeting/current-question-settlement.js";
 import type { LogicalQuestionUnit } from "../src/lib/meeting/logical-question-unit.js";
@@ -933,5 +934,30 @@ test("settlement IDs are deterministic and trace metadata carries proposal rejec
   assert.deepEqual(
     trace.currentQuestionSettlementRejectedProposals,
     first.rejectedProposals
+  );
+});
+
+test("reuses committed source identity only for the exact response-action LQU", () => {
+  const settlement = settle();
+
+  assert.equal(
+    selectCommittedSettlementForLogicalQuestionUnit({
+      settlement,
+      logicalQuestionUnit: {
+        id: settlement.logicalQuestionUnitId,
+        revision: settlement.revision,
+      },
+    }),
+    settlement
+  );
+  assert.equal(
+    selectCommittedSettlementForLogicalQuestionUnit({
+      settlement,
+      logicalQuestionUnit: {
+        id: settlement.logicalQuestionUnitId,
+        revision: settlement.revision + 1,
+      },
+    }),
+    undefined
   );
 });

@@ -498,6 +498,7 @@ import {
   rebaseRuntimeCommitToken,
   rebaseRuntimeCommitTokenAfterOwnedParentMutation,
   resolveCurrentQuestionSettlementDisposition,
+  selectCommittedSettlementForLogicalQuestionUnit,
   reduceTaskLifecycleTransaction,
   settleCurrentQuestion,
   settleCurrentQuestionTerminalNoAnswer,
@@ -814,7 +815,12 @@ function prepareGenerationDerivedTaskRuntimeTransition(input: {
 } {
   if (!input.commitLatestUsefulAnswer) {
     return {
-      transition: input.transition,
+      transition: input.transition
+        ? {
+            ...input.transition,
+            expectedRevision: input.currentRevision,
+          }
+        : undefined,
       latestUsefulAnswerCommitted: false,
       latestUsefulAnswerChars: 0,
     };
@@ -848,6 +854,7 @@ function prepareGenerationDerivedTaskRuntimeTransition(input: {
     transition: input.transition
       ? {
           ...input.transition,
+          expectedRevision: input.currentRevision,
           parent: usefulAnswerCommit.parent,
         }
       : {
@@ -4334,7 +4341,7 @@ export function useMeetingAssistant() {
       { resetSections: pending.resetSections }
     );
     const generationCommit =
-      generationDerivedCommitCoordinatorRef.current.commit({
+      generationDerivedCommitCoordinatorRef.current.commitStaged({
         lease: pending.lease,
         leaseAuthorization: authorizeAnswerGenerationLease(
           pending.lease,
@@ -4350,18 +4357,17 @@ export function useMeetingAssistant() {
         candidateAccepted: true,
         visibleAnswerRevision: stable.revision,
         now,
-        apply: () => {
-          if (preparedPendingTransition.transition) {
-            const transition = submitTaskRuntimeTransition(
-              contextManagerRef.current,
-              preparedPendingTransition.transition
-            );
-            if (!transition.authorized) {
-              throw new Error(
-                `Generation task transition rejected: ${transition.reason}`
-              );
+        transition: preparedPendingTransition.transition
+          ? {
+              kind: preparedPendingTransition.transition.transition,
+              apply: () =>
+                submitTaskRuntimeTransition(
+                  contextManagerRef.current,
+                  preparedPendingTransition.transition!
+                ),
             }
-          }
+          : undefined,
+        publish: () => {
           publishStableAnswerRevision(stable, {
             clearPrevious: pending.resetSections,
             pendingDisposition: "committed",
@@ -13682,7 +13688,7 @@ export function useMeetingAssistant() {
             })
           );
         const generationCommit =
-          generationDerivedCommitCoordinatorRef.current.commit({
+          generationDerivedCommitCoordinatorRef.current.commitStaged({
             lease: answerGenerationLease,
             leaseAuthorization: advisorLeaseAuthorization,
             expectedTaskRuntimeRevision:
@@ -13691,18 +13697,17 @@ export function useMeetingAssistant() {
               advisorCommitTaskRuntimeState.revision,
             candidateAccepted: Boolean(advisorResponseCandidate),
             visibleAnswerRevision: candidateStableAnswer.revision,
-            apply: () => {
-              if (preparedAdvisorTransition.transition) {
-                const transition = submitTaskRuntimeTransition(
-                  contextManagerRef.current,
-                  preparedAdvisorTransition.transition
-                );
-                if (!transition.authorized) {
-                  throw new Error(
-                    `Generation task transition rejected: ${transition.reason}`
-                  );
+            transition: preparedAdvisorTransition.transition
+              ? {
+                  kind: preparedAdvisorTransition.transition.transition,
+                  apply: () =>
+                    submitTaskRuntimeTransition(
+                      contextManagerRef.current,
+                      preparedAdvisorTransition.transition!
+                    ),
                 }
-              }
+              : undefined,
+            publish: () => {
               if (
                 !taskBoundaryCommittedBeforeAdvisor &&
                 !sourceOwnedTransitionCommittedBeforeAdvisor &&
@@ -26022,7 +26027,7 @@ export function useMeetingAssistant() {
               })
             );
           const generationCommit =
-            generationDerivedCommitCoordinatorRef.current.commit({
+            generationDerivedCommitCoordinatorRef.current.commitStaged({
               lease: screenGenerationLease,
               leaseAuthorization: screenLeaseAuthorization,
               expectedTaskRuntimeRevision:
@@ -26031,19 +26036,22 @@ export function useMeetingAssistant() {
                 screenCommitTaskRuntimeState.revision,
               candidateAccepted: Boolean(screenResponseCandidate),
               visibleAnswerRevision: candidateStableAnswer.revision,
-              apply: () => {
-                if (preparedScreenTransition.transition) {
-                  const transition = submitTaskRuntimeTransition(
-                    contextManagerRef.current,
-                    preparedScreenTransition.transition
-                  );
-                  if (!transition.authorized) {
-                    throw new Error(
-                      `Generation task transition rejected: ${transition.reason}`
-                    );
+              transition: preparedScreenTransition.transition
+                ? {
+                    kind: preparedScreenTransition.transition.transition,
+                    apply: () => {
+                      const result = submitTaskRuntimeTransition(
+                        contextManagerRef.current,
+                        preparedScreenTransition.transition!
+                      );
+                      if (result.authorized) {
+                        screenTaskResultCommitted = true;
+                      }
+                      return result;
+                    },
                   }
-                  screenTaskResultCommitted = true;
-                }
+                : undefined,
+              publish: () => {
                 if (
                   !screenResponseOnlyTaskScope &&
                   !screenSourceTransitionCommittedBeforeModel
@@ -28775,6 +28783,11 @@ export function useMeetingAssistant() {
           activeMeetingTask: meetingContext.activeMeetingTask,
         });
         const operationId = createMeetingId("response_scope");
+        const committedSettlement =
+          selectCommittedSettlementForLogicalQuestionUnit({
+            settlement: currentQuestionSettlementRef.current,
+            logicalQuestionUnit,
+          });
         const promptContextOverride: AdvisorPromptContext = {
           ...selection.promptContext,
           responseActionContextScope: {
@@ -28806,6 +28819,7 @@ export function useMeetingAssistant() {
             resolveCurrentSuggestionQuestionLineage(),
           logicalQuestionUnit,
           promptContextOverride,
+          currentQuestionSettlementOverride: committedSettlement,
         });
         return;
       }
