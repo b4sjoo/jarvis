@@ -92,6 +92,64 @@ test("matching native speech start grants one bounded continuation extension", (
   });
 });
 
+test("keeps a strong incomplete fragment open for a 2.7 second continuation gap", () => {
+  const decision = decideSentenceCompletionContinuation({
+    pending: {
+      source: "system-audio",
+      heldAt: 2_000,
+      firstHeldAt: 2_000,
+      extensionUsed: false,
+      nativeCaptureSessionId: "capture-1",
+      nativeCaptureGeneration: 4,
+      nativeSegmentSequence: 11,
+      nativeCapturedAtMs: 1_900,
+    },
+    speechStart: {
+      source: "system-audio",
+      captureSessionId: "capture-1",
+      captureGeneration: 4,
+      candidateSegmentSequence: 12,
+      occurredAtMs: 4_700,
+    },
+    now: 4_750,
+  });
+
+  assert.deepEqual(decision, {
+    authorized: true,
+    reason: "matching-native-speech-start",
+    deadlineAt: 6_000,
+    extensionBudgetMs: 1_250,
+    absoluteDeadlineAt: 6_000,
+  });
+});
+
+test("still rejects continuation after the enlarged initial window", () => {
+  const decision = decideSentenceCompletionContinuation({
+    pending: {
+      source: "system-audio",
+      heldAt: 2_000,
+      firstHeldAt: 2_000,
+      extensionUsed: false,
+      nativeCaptureSessionId: "capture-1",
+      nativeCaptureGeneration: 4,
+      nativeSegmentSequence: 11,
+    },
+    speechStart: {
+      source: "system-audio",
+      captureSessionId: "capture-1",
+      captureGeneration: 4,
+      candidateSegmentSequence: 12,
+      occurredAtMs: 5_300,
+    },
+    now: 5_320,
+  });
+
+  assert.equal(decision.authorized, false);
+  if (!decision.authorized) {
+    assert.equal(decision.reason, "speech-start-after-initial-deadline");
+  }
+});
+
 test("continuation extension rejects mismatched identity and absolute timeout", () => {
   const basePending = {
     source: "system-audio",
