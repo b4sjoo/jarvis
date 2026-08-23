@@ -30,7 +30,6 @@ export const TASK_RELATION_ADJUDICATION_PROMPT_VERSION =
   "task-relation-adjudication-v3-direct";
 export const TASK_RELATION_ADJUDICATION_MAX_OUTPUT_CHARS = 4_096;
 export const TASK_RELATION_ADJUDICATION_MAX_PARENT_CHARS = 480;
-export const TASK_RELATION_ADJUDICATION_MAX_TRANSITION_CHARS = 600;
 export const TASK_RELATION_ADJUDICATION_MAX_SOURCE_EVIDENCE_CHARS = 720;
 export const SCREEN_RELATION_RELEASE_MIN_CONFIDENCE = 0.95;
 export const VOICE_RELATION_RELEASE_MIN_CONFIDENCE = 0.95;
@@ -117,7 +116,16 @@ export type TaskRelationSourceEvidenceRole =
 export interface TaskRelationSourceEvidence {
   turnId: string;
   text: string;
-  role: TaskRelationSourceEvidenceRole;
+  role?: TaskRelationSourceEvidenceRole;
+  selectionReason: "role-hint" | "raw-recent-turn";
+}
+
+export interface TaskRelationRecentEvidenceDiagnostics {
+  eligiblePriorTurnCount: number;
+  selectedTurnCount: number;
+  rawFallbackCount: number;
+  falseEmpty: boolean;
+  emptyReason?: "no-prior-source-turn";
 }
 
 export interface TaskRelationTransitionEvidence {
@@ -135,6 +143,7 @@ export interface TaskRelationAdjudicationRequest {
   activeChild?: TaskRelationChildCapsule;
   recentSourceEvidence: TaskRelationSourceEvidence[];
   recentTransitions: TaskRelationTransitionEvidence[];
+  recentEvidenceDiagnostics: TaskRelationRecentEvidenceDiagnostics;
   suspendedParent?: TaskRelationParentCapsule;
 }
 
@@ -325,14 +334,14 @@ export function buildTaskRelationAdjudicationRequest(input: {
   const excludedTurnIds = new Set(
     input.logicalQuestionUnit.sourceTurnIds
   );
-  const recentSourceEvidence = selectRecentSourceEvidence({
+  const recentEvidenceSelection = selectRecentSourceEvidence({
     turns: scopedTurns,
     excludedTurnIds,
   });
-  const recentTransitions = selectRecentTransitionEvidence({
-    turns: scopedTurns,
-    excludedTurnIds,
-  });
+  const recentSourceEvidence = recentEvidenceSelection.evidence;
+  const recentTransitions = recentSourceEvidence
+    .filter((item) => item.role === "transition")
+    .map((item) => ({ turnId: item.turnId, text: item.text }));
   const activeParent = buildParentCapsule(
     input.activeMeetingTask,
     recentSourceEvidence
@@ -356,6 +365,7 @@ export function buildTaskRelationAdjudicationRequest(input: {
       : undefined,
     recentSourceEvidence,
     recentTransitions,
+    recentEvidenceDiagnostics: recentEvidenceSelection.diagnostics,
     suspendedParent: child
       ? {
           ...activeParent,
@@ -1208,6 +1218,18 @@ export function formatTaskRelationAdjudicationForTrace(input: {
       input.request?.recentSourceEvidence.map((item) => item.turnId),
     taskRelationAdjudicationRecentSourceEvidenceRoles:
       input.request?.recentSourceEvidence.map((item) => item.role),
+    taskRelationAdjudicationRecentSourceEvidenceSelectionReasons:
+      input.request?.recentSourceEvidence.map(
+        (item) => item.selectionReason
+      ),
+    taskRelationAdjudicationEligiblePriorTurnCount:
+      input.request?.recentEvidenceDiagnostics.eligiblePriorTurnCount,
+    taskRelationAdjudicationRawRecentFallbackCount:
+      input.request?.recentEvidenceDiagnostics.rawFallbackCount,
+    taskRelationAdjudicationRecentEvidenceFalseEmpty:
+      input.request?.recentEvidenceDiagnostics.falseEmpty,
+    taskRelationAdjudicationRecentEvidenceEmptyReason:
+      input.request?.recentEvidenceDiagnostics.emptyReason,
     taskRelationAdjudicationTransitionCount:
       input.request?.recentTransitions.length,
     taskRelationAdjudicationGeneratedAnswerExcluded: true,
@@ -1317,35 +1339,53 @@ function selectRecentSourceEvidence(input: {
   turns: TranscriptTurn[];
   excludedTurnIds: Set<string>;
 }) {
+  const eligibleTurns = input.turns.filter(
+    (turn) =>
+      turn.speaker === "them" &&
+      !input.excludedTurnIds.has(turn.id) &&
+      turn.contextFusionStatus !== "duplicate-suppressed" &&
+      turn.contextPromptEligible !== false &&
+      Boolean(turn.text.trim())
+  );
   const selected: TaskRelationSourceEvidence[] = [];
   let selectedChars = 0;
-  for (const turn of [...input.turns].reverse()) {
+  for (const turn of [...eligibleTurns].reverse()) {
     if (
-      selected.length >= 3 ||
+      selected.length >= 5 ||
       selectedChars >=
         TASK_RELATION_ADJUDICATION_MAX_SOURCE_EVIDENCE_CHARS
     ) {
       break;
     }
-    if (
-      turn.speaker !== "them" ||
-      input.excludedTurnIds.has(turn.id) ||
-      turn.contextFusionStatus === "duplicate-suppressed" ||
-      turn.contextPromptEligible === false
-    ) {
-      continue;
-    }
     const role = classifySourceEvidenceRole(turn);
-    if (!role) continue;
     const remaining =
       TASK_RELATION_ADJUDICATION_MAX_SOURCE_EVIDENCE_CHARS -
       selectedChars;
     const text = boundText(turn.text, Math.min(280, remaining));
     if (!text) continue;
-    selected.unshift({ turnId: turn.id, text, role });
+    selected.unshift({
+      turnId: turn.id,
+      text,
+      role,
+      selectionReason: role ? "role-hint" : "raw-recent-turn",
+    });
     selectedChars += text.length;
   }
-  return selected;
+  return {
+    evidence: selected,
+    diagnostics: {
+      eligiblePriorTurnCount: eligibleTurns.length,
+      selectedTurnCount: selected.length,
+      rawFallbackCount: selected.filter(
+        (item) => item.selectionReason === "raw-recent-turn"
+      ).length,
+      falseEmpty: eligibleTurns.length > 0 && selected.length === 0,
+      emptyReason:
+        eligibleTurns.length === 0
+          ? ("no-prior-source-turn" as const)
+          : undefined,
+    },
+  };
 }
 
 function classifySourceEvidenceRole(
@@ -1368,36 +1408,6 @@ function classifySourceEvidenceRole(
     return "question";
   }
   return undefined;
-}
-
-function selectRecentTransitionEvidence(input: {
-  turns: TranscriptTurn[];
-  excludedTurnIds: Set<string>;
-}) {
-  const selected: TaskRelationTransitionEvidence[] = [];
-  let selectedChars = 0;
-  for (const turn of [...input.turns].reverse()) {
-    if (
-      selected.length >= 3 ||
-      selectedChars >= TASK_RELATION_ADJUDICATION_MAX_TRANSITION_CHARS
-    ) {
-      break;
-    }
-    if (
-      turn.speaker !== "them" ||
-      input.excludedTurnIds.has(turn.id) ||
-      !hasTransitionEvidence(turn.text)
-    ) {
-      continue;
-    }
-    const remaining =
-      TASK_RELATION_ADJUDICATION_MAX_TRANSITION_CHARS - selectedChars;
-    const text = boundText(turn.text, Math.min(240, remaining));
-    if (!text) continue;
-    selected.unshift({ turnId: turn.id, text });
-    selectedChars += text.length;
-  }
-  return selected;
 }
 
 function hasTransitionEvidence(text: string) {

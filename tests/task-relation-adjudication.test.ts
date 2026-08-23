@@ -192,6 +192,8 @@ test("builds a bounded relation-only request without generated or factual contex
     request.recentSourceEvidence.map((item) => item.role),
     ["question", "constraint", "transition"]
   );
+  assert.equal(request.recentEvidenceDiagnostics.falseEmpty, false);
+  assert.equal(request.recentEvidenceDiagnostics.rawFallbackCount, 0);
   assert.equal(request.activeChild, undefined);
   assert.deepEqual(request.activeParent.acceptedConstraints, [
     request.recentSourceEvidence[1],
@@ -208,6 +210,60 @@ test("builds a bounded relation-only request without generated or factual contex
   );
   assert.match(serialized, /support fresh travel content/i);
   assert.match(serialized, /10 million users/i);
+});
+
+test("keeps raw recent interviewer context when no lexical role matches", () => {
+  const request = buildTaskRelationAdjudicationRequest({
+    logicalQuestionUnit: unit("How should we proceed from here?"),
+    activeMeetingTask: activeTask(),
+    recentTurns: [
+      {
+        id: "turn-parent",
+        speaker: "them",
+        text: "Design a RAG system for trip planning.",
+        startedAt: 10,
+        endedAt: 20,
+        isFinal: true,
+        source: "system-audio",
+      },
+      {
+        id: "turn-raw",
+        speaker: "them",
+        text: "The traffic tends to be bursty around holiday weekends.",
+        startedAt: 30,
+        endedAt: 40,
+        isFinal: true,
+        source: "system-audio",
+      },
+    ],
+  });
+
+  assert.equal(request.recentEvidenceDiagnostics.eligiblePriorTurnCount, 2);
+  assert.equal(request.recentEvidenceDiagnostics.falseEmpty, false);
+  assert.equal(request.recentEvidenceDiagnostics.rawFallbackCount, 1);
+  assert.deepEqual(request.recentSourceEvidence.at(-1), {
+    turnId: "turn-raw",
+    text: "The traffic tends to be bursty around holiday weekends.",
+    role: undefined,
+    selectionReason: "raw-recent-turn",
+  });
+  assert.deepEqual(request.recentTransitions, []);
+});
+
+test("reports a legitimate empty recent evidence window", () => {
+  const request = buildTaskRelationAdjudicationRequest({
+    logicalQuestionUnit: unit("How should we proceed from here?"),
+    activeMeetingTask: activeTask(),
+    recentTurns: [],
+  });
+
+  assert.deepEqual(request.recentSourceEvidence, []);
+  assert.equal(request.recentEvidenceDiagnostics.eligiblePriorTurnCount, 0);
+  assert.equal(
+    request.recentEvidenceDiagnostics.emptyReason,
+    "no-prior-source-turn"
+  );
+  assert.equal(request.recentEvidenceDiagnostics.falseEmpty, false);
 });
 
 test("active child relation evidence includes only source-owned question text", () => {
