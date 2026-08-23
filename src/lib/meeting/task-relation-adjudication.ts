@@ -8,6 +8,7 @@ import {
 } from "./current-question-settlement.js";
 import type { LogicalQuestionUnit } from "./logical-question-unit.js";
 import type { RuntimeInferenceRuntimeJob } from "./runtime-inference-runtime.js";
+import { buildRuntimeInferenceModelInput } from "./runtime-inference.js";
 import { projectPrimaryAsk } from "./primary-ask-projection.js";
 import {
   hashTaxonomySourceTurnIds,
@@ -166,6 +167,26 @@ export interface TaskRelationAdjudicationRequest {
   recentTransitions: TaskRelationTransitionEvidence[];
   recentEvidenceDiagnostics: TaskRelationRecentEvidenceDiagnostics;
   suspendedParent?: TaskRelationParentCapsule;
+}
+
+export interface TaskRelationSemanticPayload {
+  currentQuestion: {
+    sourceTexts: string[];
+  };
+  activeParent: {
+    topic: string;
+    objective: string;
+    acceptedConstraints: string[];
+    sharedScenarioEntities: string[];
+  };
+  activeChild?: {
+    question: string;
+  };
+  recentEvidence: Array<{
+    index: number;
+    text: string;
+    role?: TaskRelationSourceEvidenceRole;
+  }>;
 }
 
 export interface TaskRelationAdjudicationJob
@@ -943,8 +964,36 @@ export function compareTaskRelationAdjudication(input: {
 export function buildTaskRelationAdjudicationPrompts(
   request: TaskRelationAdjudicationRequest
 ) {
-  return {
-    systemPrompt: [
+  const semanticPayload: TaskRelationSemanticPayload = {
+    currentQuestion: {
+      sourceTexts: request.currentQuestion.sourceTurns.map(
+        (source) => source.text
+      ),
+    },
+    activeParent: {
+      topic: request.activeParent.topic,
+      objective: request.activeParent.compactObjective,
+      acceptedConstraints: request.activeParent.acceptedConstraints.map(
+        (item) => item.text
+      ),
+      sharedScenarioEntities: [
+        ...request.activeParent.sharedScenarioEntities,
+      ],
+    },
+    ...(request.activeChild
+      ? {
+          activeChild: {
+            question: request.activeChild.question,
+          },
+        }
+      : {}),
+    recentEvidence: request.recentSourceEvidence.map((item, index) => ({
+      index,
+      text: item.text,
+      ...(item.role ? { role: item.role } : {}),
+    })),
+  };
+  const systemPrompt = [
       "Classify only the relationship between one bounded interviewer question and the supplied active interview parent.",
       "Return one JSON object only. Do not answer the interview question.",
       "Do not classify question type, choose an advisor action, mutate a parent, advance a playbook phase, select memory, or generate an artifact.",
@@ -956,31 +1005,15 @@ export function buildTaskRelationAdjudicationPrompts(
       "Use unknown when the evidence cannot distinguish these relations. Do not force continuity from timing or topic overlap.",
       "Pronouns and deictic references such as this, that, it, the design, how would it change, or continue normally require parent evidence.",
       "Time proximity, topic overlap, compatible question types, playbook phase, and generated answers are not relationship evidence.",
-      "currentQuestionEvidenceSpans must contain one or more exact verbatim substrings from currentQuestion.sourceTurns.",
-      "parentEvidenceSpans must contain exact verbatim substrings from source-owned activeParent, activeChild, recentSourceEvidence, recentTransitions, or suspendedParent text fields.",
+      "currentQuestionEvidenceSpans must contain one or more exact verbatim substrings from currentQuestion.sourceTexts.",
+      "parentEvidenceSpans must contain exact verbatim substrings from activeParent, activeChild, or recentEvidence text fields.",
       "followup-parent, child-probe, and resume-parent require at least one grounded parentEvidenceSpans entry.",
       "Schema: {schemaVersion:3,relation,confidence,currentQuestionEvidenceSpans,parentEvidenceSpans,ambiguityReason?}.",
-    ].join(" "),
-    userMessage: JSON.stringify({
-      schemaVersion: request.schemaVersion,
-      promptVersion: request.promptVersion,
-      logicalQuestionUnitId: request.logicalQuestionUnitId,
-      logicalQuestionUnitRevision:
-        request.logicalQuestionUnitRevision,
-      currentQuestion: {
-        sourceTurns: request.currentQuestion.sourceTurns,
-        omittedSourceTurnIds:
-          request.currentQuestion.omittedSourceTurnIds,
-        projectionReason:
-          request.currentQuestion.projectionReason,
-      },
-      activeParent: request.activeParent,
-      activeChild: request.activeChild,
-      recentSourceEvidence: request.recentSourceEvidence,
-      recentTransitions: request.recentTransitions,
-      suspendedParent: request.suspendedParent,
-    }),
-  };
+    ].join(" ");
+  return buildRuntimeInferenceModelInput({
+    systemPrompt,
+    semanticPayload,
+  });
 }
 
 export function parseTaskRelationAdjudicationOutput(

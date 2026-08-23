@@ -17451,6 +17451,10 @@ export function useMeetingAssistant() {
         taskRelationAdjudicationRequestHash: requestHash,
         taskRelationAdjudicationPromptChars:
           promptText.length,
+        taskRelationAdjudicationSemanticPayloadDigest:
+          prompts.semanticPayloadDigest,
+        taskRelationAdjudicationModelVisibleChars:
+          prompts.modelVisibleChars,
         taskRelationAdjudicationOperationId:
           lease.operationId,
         taskRelationAdjudicationSourceTurnIdsHash:
@@ -17485,6 +17489,8 @@ export function useMeetingAssistant() {
           operationId: lease.operationId,
           relationOnly: true,
           behaviorMutationBlocked: true,
+          semanticPayloadDigest: prompts.semanticPayloadDigest,
+          modelVisibleChars: prompts.modelVisibleChars,
         }
       );
       sessionRecordingManagerRef.current?.recordModelInput({
@@ -17499,6 +17505,8 @@ export function useMeetingAssistant() {
           operationId: lease.operationId,
           relationOnly: true,
           behaviorMutationBlocked: true,
+          semanticPayloadDigest: prompts.semanticPayloadDigest,
+          modelVisibleChars: prompts.modelVisibleChars,
         },
       });
 

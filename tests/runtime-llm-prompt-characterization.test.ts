@@ -244,6 +244,7 @@ test("characterizes envelope leakage in every current runtime LLM prompt", () =>
     "answerResolution",
     "evidenceRequirement",
     "sourceLinkage",
+    "taskRelation",
   ]);
   for (const [name, paths] of Object.entries(leakage)) {
     if (migratedOperations.has(name)) continue;
@@ -253,7 +254,7 @@ test("characterizes envelope leakage in every current runtime LLM prompt", () =>
   assert.deepEqual(leakage.answerResolution, []);
   assert.deepEqual(leakage.evidenceRequirement, []);
   assert.deepEqual(leakage.sourceLinkage, []);
+  assert.deepEqual(leakage.taskRelation, []);
   assert.ok(leakage.meetingMetadata.includes("sessionId"));
-  assert.ok(leakage.taskRelation.includes("activeParent.parentId"));
   assert.ok(leakage.answerSufficiency.includes("identity.traceId"));
 });

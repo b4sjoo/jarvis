@@ -247,6 +247,20 @@ test("builds a bounded relation-only request without generated or factual contex
     prompts.userMessage,
     /questionType|advisor action|memory|whiteboard/i
   );
+  const modelInput = JSON.parse(prompts.userMessage) as Record<string, unknown>;
+  assert.equal("logicalQuestionUnitId" in modelInput, false);
+  assert.equal("sourceSettlementId" in modelInput, false);
+  assert.equal("sourceHash" in modelInput, false);
+  assert.equal("recentEvidenceDiagnostics" in modelInput, false);
+  assert.equal("recentTransitions" in modelInput, false);
+  assert.equal(
+    JSON.stringify(modelInput).includes("parent-a"),
+    false
+  );
+  assert.equal(
+    JSON.stringify(modelInput).includes("turn-parent"),
+    false
+  );
   assert.doesNotMatch(
     serialized,
     /private generated answer|older private generated answer|private-fact-anchor|secret-project|graph TD/i
