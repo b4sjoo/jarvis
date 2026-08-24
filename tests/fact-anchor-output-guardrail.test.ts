@@ -99,6 +99,79 @@ Supporting anchor IDs: mem_oasis_bulk`),
   assert.doesNotMatch(result.effectiveContent, /dead-letter queue/i);
 });
 
+test("preserves a supported negative boundary in both language sections", () => {
+  const result = enforceFactAnchorOutput({
+    decision: makeDecision({
+      state: "strong-anchor",
+      requiredFor: "project-deep-dive",
+      supportedAnchorIds: ["mem_oasis_bulk"],
+      claimSupportDecisions: [
+        {
+          claimId: "claim:oasis:implementation",
+          predicateFamily: "architecture-decision",
+          anchorId: "mem_oasis_bulk",
+          projectCompatible: true,
+          predicateCompatible: true,
+          supportSpanPresent: true,
+          supportSpan:
+            "The verified Oasis implementation generated NDJSON and preserved per-item Bulk API failures.",
+          conflictFree: true,
+          decision: "allow",
+          reason: "test-support",
+        },
+      ],
+    }),
+    parsedAnswer: parseMeetingAnswer(`中文思路: 我们没有实现 retry queue 或 DLQ；已验证范围是 NDJSON 与逐项失败解析。
+Answer: I did not implement a retry queue or DLQ; the verified scope was NDJSON generation and per-item failure parsing.
+Answer disposition: factual-with-anchor
+Supporting anchor IDs: mem_oasis_bulk`),
+  });
+
+  assert.match(result.effectiveContent, /did not implement/i);
+  assert.match(result.effectiveContent, /没有实现/u);
+  assert.equal(result.bilingualClaimSetCoherent, true);
+  assert.ok(result.boundaryClaimPreservedCount >= 2);
+  assert.equal(result.hypotheticalOnlyAfterSanitize, false);
+});
+
+test("rebuilds both language sections when sanitation leaves only a hypothetical offer", () => {
+  const result = enforceFactAnchorOutput({
+    decision: makeDecision({
+      state: "strong-anchor",
+      requiredFor: "project-deep-dive",
+      supportedAnchorIds: ["mem_oasis_bulk"],
+      claimSupportDecisions: [
+        {
+          claimId: "claim:oasis:implementation",
+          predicateFamily: "architecture-decision",
+          anchorId: "mem_oasis_bulk",
+          projectCompatible: true,
+          predicateCompatible: true,
+          supportSpanPresent: true,
+          supportSpan:
+            "The verified Oasis implementation generated NDJSON and preserved per-item Bulk API failures.",
+          conflictFree: true,
+          decision: "allow",
+          reason: "test-support",
+        },
+      ],
+    }),
+    parsedAnswer: parseMeetingAnswer(`中文思路: 我们没有实现 retry queue 或 DLQ。
+Answer: I would add retry queues, jitter, and a DLQ as future improvements.
+Answer disposition: factual-with-anchor
+Supporting anchor IDs: mem_oasis_bulk`),
+  });
+
+  assert.equal(result.hypotheticalOnlyAfterSanitize, true);
+  assert.equal(result.bilingualClaimSetCoherent, true);
+  assert.match(result.effectiveContent, /verified implementation scope/i);
+  assert.match(result.effectiveContent, /已验证的实现范围/u);
+  assert.equal(
+    result.visibleNotice?.kind,
+    "rebuilt-from-supported-evidence"
+  );
+});
+
 test("removes unsupported clarification choices before they become runtime context", () => {
   const result = enforceFactAnchorOutput({
     decision: makeDecision({

@@ -39,6 +39,9 @@ export interface FactAnchorOutputDecision {
   sanitizedClaimCount: number;
   preservedClaimCount: number;
   sanitizedSections: string[];
+  bilingualClaimSetCoherent: boolean;
+  hypotheticalOnlyAfterSanitize: boolean;
+  boundaryClaimPreservedCount: number;
   visibleNotice?: FactGuardrailVisibleNotice;
   shadowWouldCommitSource?: Exclude<
     FactAnchorOutputCommitSource,
@@ -210,22 +213,44 @@ function enforceFactAnchorOutputInEnforcementMode({
       expectedProfile
     )
     : sanitizeBoundedFactOutput(parsedAnswer, expectedProfile);
+  const initialBilingualCoherence =
+    hasCoherentBilingualBoundaryClaims(sanitized.effectiveAnswer);
   if (
     sanitized.sanitizedClaimCount === 0 &&
     unsupportedAnchorIds.length === 0 &&
-    !unsafeClarifyingShape
+    !unsafeClarifyingShape &&
+    initialBilingualCoherence
   ) {
-    return authorizeOriginal(parsedAnswer, "matching-authority-contract");
+    return {
+      ...authorizeOriginal(parsedAnswer, "matching-authority-contract"),
+      bilingualClaimSetCoherent: true,
+      boundaryClaimPreservedCount:
+        sanitized.boundaryClaimPreservedCount,
+    };
   }
 
+  const hypotheticalOnlyAfterSanitize = Boolean(
+    hasSupportedClaimSpans &&
+      isHypotheticalOnlyAnswer(sanitized.effectiveAnswer)
+  );
+  const bilingualCoherentBeforeRebuild = initialBilingualCoherence;
+  const effectiveClaimAnswer =
+    hasSupportedClaimSpans &&
+    (!bilingualCoherentBeforeRebuild || hypotheticalOnlyAfterSanitize)
+      ? rebuildCoherentBilingualClaimSet({
+          parsedAnswer: sanitized.effectiveAnswer,
+          decision,
+        })
+      : sanitized.effectiveAnswer;
   const sanitizedWithFilteredAnchors = filterUnsupportedAnchorIds({
-    parsedAnswer: sanitized.effectiveAnswer,
+    parsedAnswer: effectiveClaimAnswer,
     supportedAnchorIds: decision.supportedAnchorIds,
     expectedProfile,
   });
   if (
     !unsafeClarifyingShape &&
-    hasUsefulBoundedAnswer(sanitizedWithFilteredAnchors.effectiveAnswer)
+    hasUsefulBoundedAnswer(sanitizedWithFilteredAnchors.effectiveAnswer) &&
+    !hypotheticalOnlyAfterSanitize
   ) {
     return {
       modelOutputAuthorized: false,
@@ -239,6 +264,12 @@ function enforceFactAnchorOutputInEnforcementMode({
       sanitizedClaimCount: sanitized.sanitizedClaimCount,
       preservedClaimCount: sanitized.preservedClaimCount,
       sanitizedSections: sanitized.sanitizedSections,
+      bilingualClaimSetCoherent: hasCoherentBilingualBoundaryClaims(
+        sanitizedWithFilteredAnchors.effectiveAnswer
+      ),
+      hypotheticalOnlyAfterSanitize,
+      boundaryClaimPreservedCount:
+        sanitized.boundaryClaimPreservedCount,
     };
   }
 
@@ -250,6 +281,12 @@ function enforceFactAnchorOutputInEnforcementMode({
     sanitizedClaimCount: sanitized.sanitizedClaimCount,
     preservedClaimCount: sanitized.preservedClaimCount,
     sanitizedSections: sanitized.sanitizedSections,
+    bilingualClaimSetCoherent: hasCoherentBilingualBoundaryClaims(
+      effectiveClaimAnswer
+    ),
+    hypotheticalOnlyAfterSanitize,
+    boundaryClaimPreservedCount:
+      sanitized.boundaryClaimPreservedCount,
   });
 }
 
@@ -272,6 +309,12 @@ export function formatFactAnchorOutputDecisionForTrace(
     factAnchorSanitizedClaimCount: decision.sanitizedClaimCount,
     factAnchorPreservedClaimCount: decision.preservedClaimCount,
     factAnchorSanitizedSections: decision.sanitizedSections,
+    factAnchorBilingualClaimSetCoherent:
+      decision.bilingualClaimSetCoherent,
+    factAnchorHypotheticalOnlyAfterSanitize:
+      decision.hypotheticalOnlyAfterSanitize,
+    factAnchorBoundaryClaimPreservedCount:
+      decision.boundaryClaimPreservedCount,
     factAnchorClarifyingQuestionSanitized:
       decision.sanitizedSections.includes("clarifyingQuestion"),
     factAnchorClarifyingOptionsSanitized:
@@ -322,6 +365,9 @@ function authorizeOriginal(
     sanitizedClaimCount: 0,
     preservedClaimCount: 0,
     sanitizedSections: [],
+    bilingualClaimSetCoherent: true,
+    hypotheticalOnlyAfterSanitize: false,
+    boundaryClaimPreservedCount: 0,
   };
 }
 
@@ -364,6 +410,9 @@ function buildNonRefusalFallback({
   sanitizedClaimCount = 0,
   preservedClaimCount = 0,
   sanitizedSections = [],
+  bilingualClaimSetCoherent = true,
+  hypotheticalOnlyAfterSanitize = false,
+  boundaryClaimPreservedCount = 0,
 }: {
   decision: FactAnchorDecision;
   parsedAnswer: ParsedMeetingAnswer;
@@ -372,6 +421,9 @@ function buildNonRefusalFallback({
   sanitizedClaimCount?: number;
   preservedClaimCount?: number;
   sanitizedSections?: string[];
+  bilingualClaimSetCoherent?: boolean;
+  hypotheticalOnlyAfterSanitize?: boolean;
+  boundaryClaimPreservedCount?: number;
 }): FactAnchorOutputDecision {
   const supportText = [
     ...new Set(collectSelectedSupportSpans(decision)),
@@ -382,11 +434,13 @@ function buildNonRefusalFallback({
     ? "rebuilt-from-supported-evidence"
     : "generic-hypothetical-fallback";
   const fallbackAnswer = supportText
-    ? buildSupportedAnchorFallback({
-        parsedAnswer,
-        supportText,
-        decision,
-      })
+    ? hypotheticalOnlyAfterSanitize
+      ? rebuildCoherentBilingualClaimSet({ parsedAnswer, decision })
+      : buildSupportedAnchorFallback({
+          parsedAnswer,
+          supportText,
+          decision,
+        })
     : buildGenericHypotheticalFallback(parsedAnswer, decision);
   const effectiveContent = serializeMeetingAnswer(fallbackAnswer);
   const visibleNotice: FactGuardrailVisibleNotice = {
@@ -411,6 +465,9 @@ function buildNonRefusalFallback({
     sanitizedClaimCount,
     preservedClaimCount,
     sanitizedSections,
+    bilingualClaimSetCoherent,
+    hypotheticalOnlyAfterSanitize,
+    boundaryClaimPreservedCount,
     visibleNotice,
     fallbackMode,
   };
@@ -526,6 +583,7 @@ function sanitizeBoundedFactOutput(
     sanitizedClaimCount,
     preservedClaimCount,
     sanitizedSections,
+    boundaryClaimPreservedCount: 0,
   };
 }
 
@@ -563,6 +621,7 @@ function sanitizeAnchoredFactOutput(
       sanitizedClaimCount: 0,
       preservedClaimCount: 0,
       sanitizedSections: [] as string[],
+      boundaryClaimPreservedCount: 0,
     };
   }
 
@@ -575,6 +634,7 @@ function sanitizeAnchoredFactOutput(
   };
   let sanitizedClaimCount = 0;
   let preservedClaimCount = 0;
+  let boundaryClaimPreservedCount = 0;
   const sanitizedSections: string[] = [];
 
   for (const section of ["chineseThinking", "answer", "approach"] as const) {
@@ -585,6 +645,7 @@ function sanitizeAnchoredFactOutput(
     sections[section] = result.text || undefined;
     sanitizedClaimCount += result.removed;
     preservedClaimCount += result.preserved;
+    boundaryClaimPreservedCount += result.boundaryPreserved;
     if (result.removed > 0) sanitizedSections.push(section);
   }
   const clarification = sanitizeClarifyingSections({
@@ -614,6 +675,7 @@ function sanitizeAnchoredFactOutput(
     sanitizedClaimCount,
     preservedClaimCount,
     sanitizedSections,
+    boundaryClaimPreservedCount,
   };
 }
 
@@ -714,16 +776,22 @@ function sanitizeAnchoredClaimSection(
   supportSpans: string[]
 ) {
   if (!value?.trim()) {
-    return { text: "", removed: 0, preserved: 0 };
+    return { text: "", removed: 0, preserved: 0, boundaryPreserved: 0 };
   }
 
   let removed = 0;
   let preserved = 0;
+  let boundaryPreserved = 0;
   const lines = value
     .split(/\n+/)
     .map((line) => {
       const units = splitClaimUnits(line);
       const kept = units.filter((unit) => {
+        if (isSupportedNegativeBoundaryClaim(unit, supportSpans)) {
+          preserved += 1;
+          boundaryPreserved += 1;
+          return true;
+        }
         if (isUnsupportedAnchoredFactClaim(unit, supportSpans)) {
           removed += 1;
           return false;
@@ -735,7 +803,12 @@ function sanitizeAnchoredClaimSection(
     })
     .filter(Boolean);
 
-  return { text: lines.join("\n"), removed, preserved };
+  return {
+    text: lines.join("\n"),
+    removed,
+    preserved,
+    boundaryPreserved,
+  };
 }
 
 function isUnsupportedAnchoredFactClaim(
@@ -750,6 +823,67 @@ function isUnsupportedAnchoredFactClaim(
   return !supportSpans.some((supportSpan) =>
     anchoredFactClaimSupportedBySpan(text, supportSpan)
   );
+}
+
+function isSupportedNegativeBoundaryClaim(
+  value: string,
+  supportSpans: string[]
+) {
+  return Boolean(
+    supportSpans.length > 0 &&
+      NEGATIVE_IMPLEMENTATION_BOUNDARY_PATTERN.test(value)
+  );
+}
+
+function hasCoherentBilingualBoundaryClaims(
+  parsedAnswer: ParsedMeetingAnswer
+) {
+  const chinese = parsedAnswer.sections.chineseThinking?.trim();
+  const english = parsedAnswer.sections.answer?.trim();
+  if (!chinese || !english) return true;
+  return (
+    NEGATIVE_IMPLEMENTATION_BOUNDARY_PATTERN.test(chinese) ===
+    NEGATIVE_IMPLEMENTATION_BOUNDARY_PATTERN.test(english)
+  );
+}
+
+function isHypotheticalOnlyAnswer(parsedAnswer: ParsedMeetingAnswer) {
+  const claims = [
+    parsedAnswer.sections.answer,
+    parsedAnswer.sections.approach,
+  ]
+    .filter((value): value is string => Boolean(value?.trim()))
+    .flatMap(splitClaimUnits);
+  return claims.length > 0 && claims.every(isClearlyHypotheticalClaim);
+}
+
+function rebuildCoherentBilingualClaimSet(input: {
+  parsedAnswer: ParsedMeetingAnswer;
+  decision: FactAnchorDecision;
+}): ParsedMeetingAnswer {
+  const supportText = Array.from(
+    new Set(collectSelectedSupportSpans(input.decision))
+  )
+    .join(" ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 1_000);
+  if (!supportText) return input.parsedAnswer;
+  return {
+    ...input.parsedAnswer,
+    sections: {
+      ...input.parsedAnswer.sections,
+      chineseThinking: `已验证的实现范围是：${supportText}。我们没有实现其余缺少证据的机制，只能把它们作为未来方案讨论。`,
+      answer: `The verified implementation scope was ${supportText} I did not implement the other unsupported mechanisms as part of that verified scope; I would discuss them only as possible future improvements.`,
+      approach: undefined,
+      clarifyingQuestion: undefined,
+      clarifyingOptions: [],
+    },
+    answerDisposition: "factual-with-anchor",
+    supportingAnchorIds: input.parsedAnswer.supportingAnchorIds.filter(
+      (anchorId) => input.decision.supportedAnchorIds.includes(anchorId)
+    ),
+  };
 }
 
 function anchoredFactClaimSupportedBySpan(
@@ -1024,6 +1158,8 @@ const GENERAL_HYPOTHETICAL_PATTERN =
   /\b(?:would|could|should|might|may|recommend|suggest|propose|hypothetically|as an improvement|one option|one approach)\b/i;
 const GENERAL_HYPOTHETICAL_CHINESE_PATTERN =
   /(?:可以|应该|建议|假设|如果|作为改进|一种方案|后续可)/u;
+const NEGATIVE_IMPLEMENTATION_BOUNDARY_PATTERN =
+  /\b(?:i|we)\s+(?:did\s+not|didn['’]?t|have\s+not|haven['’]?t|never)\s+(?:implement|build|deploy|use|add|create|ship)\b|(?:我|我们)(?:没有|未|并未|从未)(?:实现|构建|部署|使用|加入|创建|上线)/iu;
 const HARD_PERSONAL_FACT_PATTERN =
   /\b(?:i|we|my|our)\b.{0,90}\b(?:built|designed|implemented|developed|led|owned|delivered|deployed|launched|used|chose|selected|measured|validated|tested|debugged|fixed|reduced|improved|achieved|saved|collaborated|worked|created|migrated|operated|monitored|decided|responsible)\b|\b(?:my|our)\s+(?:team|project|system|service|role|contribution)\b/i;
 const HARD_PERSONAL_FACT_CHINESE_PATTERN =

@@ -143,3 +143,156 @@ sources:
     )
   );
 });
+
+test("requires autobiographical templates to link anchor-eligible evidence", () => {
+  const draft = parseCuratedMemoryDraft(
+    {
+      path: "template-closure.md",
+      content: `
+\`\`\`yaml
+sources:
+  - id: source_profile
+    title: Profile
+    collection: profiles
+    sourceRole: promotion_doc
+    scope: global
+    curationStatus: curated
+\`\`\`
+
+\`\`\`yaml
+- id: story_template
+  sourceId: source_profile
+  type: answer_template
+  title: Behavioral story selector
+  content: Use these story anchors when a behavioral question is visible.
+  scope: global
+  enabled: true
+  curationStatus: curated
+  evidenceEntryIds: []
+\`\`\`
+`,
+    },
+    1
+  );
+  const report = auditCuratedMemoryEvidence({ drafts: [draft], now: 2 });
+
+  assert.ok(
+    report.issues.some((issue) => issue.code === "template-evidence-empty")
+  );
+  assert.deepEqual(report.templateReferenceClosure, [
+    {
+      templateEntryId: "story_template",
+      evidenceEntryIds: [],
+      anchorEligibleEntryIds: [],
+      complete: false,
+    },
+  ]);
+});
+
+test("closes the behavioral selector over fact anchors and golden queries", () => {
+  const draft = parseCuratedMemoryDraft(
+    {
+      path: "behavioral-golden.md",
+      content: `
+\`\`\`yaml
+sources:
+  - id: source_profile
+    title: Profile
+    collection: profiles
+    sourceRole: promotion_doc
+    scope: global
+    curationStatus: curated
+\`\`\`
+
+\`\`\`yaml
+- id: mem_behavioral_story_selector
+  sourceId: source_profile
+  type: answer_template
+  title: Behavioral interview story selector
+  content: Use these story anchors for cost, automation, ambiguity, and customer resource leakage.
+  scope: global
+  enabled: true
+  injectionMode: always
+  useCases: [behavioral_interview]
+  curationStatus: curated
+  evidenceEntryIds: [mem_aos_test_account_cleanup, mem_mlcommons_automated_model_interface, mem_agentic_memory_llm_decisioning, mem_managed_semantic_delete_cleanup]
+\`\`\`
+
+\`\`\`yaml
+- id: mem_aos_test_account_cleanup
+  sourceId: source_profile
+  type: personal_story
+  title: Inactive test cluster cleanup
+  content: Removed more than 400 inactive test resources and saved over 30000 per month.
+  summary: Reduced operational waste and recurring cost.
+  scope: global
+  tags: [cost, waste, cleanup]
+  keywords: [inactive test resources, cost savings]
+  enabled: true
+  useCases: [behavioral_interview]
+  curationStatus: curated
+\`\`\`
+
+\`\`\`yaml
+- id: mem_mlcommons_automated_model_interface
+  sourceId: source_profile
+  type: answer_evidence
+  title: Automated model interface generation
+  content: Automated repetitive manual integration setup with generated interfaces.
+  scope: global
+  tags: [automation, model-interface]
+  keywords: [manual model integration, generated interfaces]
+  enabled: true
+  useCases: [behavioral_interview]
+  curationStatus: curated
+\`\`\`
+
+\`\`\`yaml
+- id: mem_agentic_memory_llm_decisioning
+  sourceId: source_profile
+  type: answer_evidence
+  title: Agentic Memory two-phase decisioning
+  content: Resolved architecture ambiguity with separate fact extraction and memory decision phases.
+  scope: global
+  tags: [agentic-memory, architecture, ambiguity]
+  keywords: [two-phase, fact extraction, memory decisioning]
+  enabled: true
+  useCases: [behavioral_interview]
+  curationStatus: curated
+\`\`\`
+
+\`\`\`yaml
+- id: mem_managed_semantic_delete_cleanup
+  sourceId: source_profile
+  type: answer_evidence
+  title: Semantic search resource cleanup
+  content: Prevented customer resource leakage by cleaning up orphaned semantic search pipelines.
+  scope: global
+  tags: [customer, resource-leakage, cleanup]
+  keywords: [orphaned pipelines, semantic search]
+  enabled: true
+  useCases: [behavioral_interview]
+  curationStatus: curated
+\`\`\`
+`,
+    },
+    1
+  );
+  const report = auditCuratedMemoryEvidence({ drafts: [draft], now: 2 });
+
+  assert.equal(report.templateReferenceClosure[0]?.complete, true);
+  assert.equal(report.behavioralGoldenQueries.length, 4);
+  assert.ok(
+    report.behavioralGoldenQueries.every(
+      (golden) =>
+        golden.expectedAnchorReachable &&
+        golden.topRankedAnchorId === golden.expectedAnchorId
+    )
+  );
+  assert.equal(
+    report.issues.some(
+      (issue) => issue.code === "behavioral-golden-anchor-unreachable"
+    ),
+    false
+  );
+});

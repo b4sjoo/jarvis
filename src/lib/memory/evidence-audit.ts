@@ -20,6 +20,13 @@ export type KmbEvidenceAuditIssueCode =
   | "runtime-role-eligibility-drift"
   | "guidance-contains-first-person-claim"
   | "query-independent-negative-prompt"
+  | "template-evidence-empty"
+  | "template-evidence-ineligible"
+  | "template-evidence-disabled"
+  | "template-evidence-family-mismatch"
+  | "template-evidence-source-stale"
+  | "template-evidence-budget-exceeded"
+  | "behavioral-golden-anchor-unreachable"
   | "project-coverage-gap";
 
 export interface KmbEvidenceAuditIssue {
@@ -40,6 +47,22 @@ export interface KmbProjectEvidenceCoverage {
   missingFamilies: ProjectEvidenceQuestionFamily[];
 }
 
+export interface KmbTemplateReferenceClosure {
+  templateEntryId: string;
+  evidenceEntryIds: string[];
+  anchorEligibleEntryIds: string[];
+  complete: boolean;
+}
+
+export interface KmbBehavioralGoldenQueryCoverage {
+  id: string;
+  expectedSelectorId: string;
+  expectedAnchorId: string;
+  topRankedAnchorId?: string;
+  expectedAnchorRank?: number;
+  expectedAnchorReachable: boolean;
+}
+
 export type ProjectEvidenceQuestionFamily =
   | "architecture-choice"
   | "implementation-contribution"
@@ -58,6 +81,8 @@ export interface KmbEvidenceAuditReport {
   issueCounts: Record<"error" | "warning", number>;
   issues: KmbEvidenceAuditIssue[];
   projects: KmbProjectEvidenceCoverage[];
+  templateReferenceClosure: KmbTemplateReferenceClosure[];
+  behavioralGoldenQueries: KmbBehavioralGoldenQueryCoverage[];
 }
 
 const COVERAGE_PATTERNS: Record<ProjectEvidenceQuestionFamily, RegExp> = {
@@ -78,6 +103,43 @@ const FIRST_PERSON_CLAIM =
 
 const QUERY_INDEPENDENT_NEGATIVE_PROMPT =
   /\b(?:does not claim|do not claim|must not claim|avoid claiming|without claiming|do not say)\b/iu;
+
+const AUTOBIOGRAPHICAL_TEMPLATE =
+  /\b(?:behavioral (?:interview )?story selector|story anchors?|interview pitch|opening pack|personal narrative)\b/iu;
+
+const MAX_TEMPLATE_EVIDENCE_LINKS = 6;
+const BEHAVIORAL_GOLDEN_TOP_K = 4;
+
+export const BEHAVIORAL_EVIDENCE_GOLDEN_QUERIES = [
+  {
+    id: "cost-waste",
+    query:
+      "Tell me about a time you eliminated operational waste and saved significant cost from inactive test resources.",
+    expectedSelectorId: "mem_behavioral_story_selector",
+    expectedAnchorId: "mem_aos_test_account_cleanup",
+  },
+  {
+    id: "manual-overhead",
+    query:
+      "Tell me about a repetitive manual model integration task you automated with generated interfaces.",
+    expectedSelectorId: "mem_behavioral_story_selector",
+    expectedAnchorId: "mem_mlcommons_automated_model_interface",
+  },
+  {
+    id: "architecture-ambiguity",
+    query:
+      "Describe an ambiguous Agentic Memory architecture decision involving two-phase fact extraction and memory decisioning.",
+    expectedSelectorId: "mem_behavioral_story_selector",
+    expectedAnchorId: "mem_agentic_memory_llm_decisioning",
+  },
+  {
+    id: "customer-resource-leakage",
+    query:
+      "Tell me about preventing customer resource leakage by cleaning up orphaned semantic search pipelines.",
+    expectedSelectorId: "mem_behavioral_story_selector",
+    expectedAnchorId: "mem_managed_semantic_delete_cleanup",
+  },
+] as const;
 
 export function auditCuratedMemoryEvidence(input: {
   drafts: ParsedMemoryDraft[];
@@ -190,6 +252,16 @@ export function auditCuratedMemoryEvidence(input: {
       });
     }
   }
+  const templateReferenceClosure = auditTemplateReferenceClosure({
+    entries,
+    entryIndex,
+    sourceIndex,
+    issues,
+  });
+  const behavioralGoldenQueries = auditBehavioralGoldenQueries({
+    entryIndex,
+    issues,
+  });
 
   return {
     schemaVersion: KMB_EVIDENCE_AUDIT_SCHEMA_VERSION,
@@ -205,6 +277,8 @@ export function auditCuratedMemoryEvidence(input: {
     },
     issues: issues.sort(compareIssues),
     projects,
+    templateReferenceClosure,
+    behavioralGoldenQueries,
   };
 }
 
@@ -218,6 +292,8 @@ export function renderKmbEvidenceAuditMarkdown(
     `- Sources / entries: ${report.sourceCount} / ${report.entryCount}`,
     `- Fact-evidence / guidance / template / overlay: ${report.roleCounts["fact-evidence"]} / ${report.roleCounts.guidance} / ${report.roleCounts.template} / ${report.roleCounts.overlay}`,
     `- Anchor eligible: ${report.anchorEligibleCount}`,
+    `- Autobiographical template closure: ${report.templateReferenceClosure.filter((item) => item.complete).length} / ${report.templateReferenceClosure.length}`,
+    `- Behavioral golden queries reachable: ${report.behavioralGoldenQueries.filter((item) => item.expectedAnchorReachable).length} / ${report.behavioralGoldenQueries.length}`,
     `- Errors / warnings: ${report.issueCounts.error} / ${report.issueCounts.warning}`,
     "",
     "## Projects",
@@ -227,6 +303,24 @@ export function renderKmbEvidenceAuditMarkdown(
     ...report.projects.map(
       (project) =>
         `| ${project.projectName ?? project.projectId} | ${project.entryIds.length} | ${project.factEvidenceEntryIds.length} | ${project.missingFamilies.join(", ") || "-"} |`
+    ),
+    "",
+    "## Template Reference Closure",
+    "",
+    "| Template | Evidence | Anchor eligible | Complete |",
+    "| --- | --- | --- | --- |",
+    ...report.templateReferenceClosure.map(
+      (item) =>
+        `| ${item.templateEntryId} | ${item.evidenceEntryIds.join(", ") || "-"} | ${item.anchorEligibleEntryIds.join(", ") || "-"} | ${item.complete ? "yes" : "no"} |`
+    ),
+    "",
+    "## Behavioral Golden Queries",
+    "",
+    "| Query | Expected anchor | Rank | Top anchor | Reachable |",
+    "| --- | --- | ---: | --- | --- |",
+    ...report.behavioralGoldenQueries.map(
+      (item) =>
+        `| ${item.id} | ${item.expectedAnchorId} | ${item.expectedAnchorRank ?? "-"} | ${item.topRankedAnchorId ?? "-"} | ${item.expectedAnchorReachable ? "yes" : "no"} |`
     ),
     "",
     "## Issues",
@@ -240,6 +334,217 @@ export function renderKmbEvidenceAuditMarkdown(
     "",
   ];
   return `${lines.join("\n")}\n`;
+}
+
+function auditTemplateReferenceClosure(input: {
+  entries: MemoryEntry[];
+  entryIndex: Map<string, MemoryEntry>;
+  sourceIndex: Map<string, MemorySource>;
+  issues: KmbEvidenceAuditIssue[];
+}) {
+  return input.entries
+    .filter(isAutobiographicalTemplate)
+    .map((template) => {
+      if (!template.evidenceEntryIds.length) {
+        input.issues.push({
+          code: "template-evidence-empty",
+          severity: "error",
+          entryId: template.id,
+          detail:
+            "Autobiographical template has no linked fact evidence.",
+        });
+      }
+      if (template.evidenceEntryIds.length > MAX_TEMPLATE_EVIDENCE_LINKS) {
+        input.issues.push({
+          code: "template-evidence-budget-exceeded",
+          severity: "error",
+          entryId: template.id,
+          detail: `Template links ${template.evidenceEntryIds.length} evidence entries; the bounded closure budget is ${MAX_TEMPLATE_EVIDENCE_LINKS}.`,
+        });
+      }
+
+      const anchorEligibleEntryIds: string[] = [];
+      for (const evidenceId of template.evidenceEntryIds) {
+        const evidence = input.entryIndex.get(evidenceId);
+        if (!evidence) continue;
+        const role = classifyRuntimeMemoryRole(evidence);
+        if (!role.anchorEligible) {
+          input.issues.push({
+            code: "template-evidence-ineligible",
+            severity: "error",
+            entryId: template.id,
+            detail: `Linked entry ${evidenceId} is not anchor-eligible fact evidence.`,
+          });
+          continue;
+        }
+        anchorEligibleEntryIds.push(evidenceId);
+        if (!evidence.enabled) {
+          input.issues.push({
+            code: "template-evidence-disabled",
+            severity: "error",
+            entryId: template.id,
+            detail: `Linked evidence ${evidenceId} is disabled.`,
+          });
+        }
+        if (!evidence.useCases.includes("behavioral_interview")) {
+          input.issues.push({
+            code: "template-evidence-family-mismatch",
+            severity: "error",
+            entryId: template.id,
+            detail: `Linked evidence ${evidenceId} is not eligible for behavioral interview retrieval.`,
+          });
+        }
+        if (
+          evidence.curationStatus === "stale" ||
+          evidence.sourceIds.some((sourceId) => {
+            const source = input.sourceIndex.get(sourceId);
+            return (
+              source?.curationStatus === "stale" ||
+              source?.canonicality === "stale"
+            );
+          })
+        ) {
+          input.issues.push({
+            code: "template-evidence-source-stale",
+            severity: "error",
+            entryId: template.id,
+            detail: `Linked evidence ${evidenceId} is stale or depends on a stale source.`,
+          });
+        }
+      }
+
+      const issueCodes = new Set(
+        input.issues
+          .filter((issue) => issue.entryId === template.id)
+          .map((issue) => issue.code)
+      );
+      const complete =
+        anchorEligibleEntryIds.length > 0 &&
+        ![
+          "template-evidence-empty",
+          "template-evidence-ineligible",
+          "template-evidence-disabled",
+          "template-evidence-family-mismatch",
+          "template-evidence-source-stale",
+          "template-evidence-budget-exceeded",
+          "missing-evidence-entry",
+        ].some((code) => issueCodes.has(code as KmbEvidenceAuditIssueCode));
+      return {
+        templateEntryId: template.id,
+        evidenceEntryIds: [...template.evidenceEntryIds],
+        anchorEligibleEntryIds,
+        complete,
+      } satisfies KmbTemplateReferenceClosure;
+    })
+    .sort((left, right) =>
+      left.templateEntryId.localeCompare(right.templateEntryId)
+    );
+}
+
+function auditBehavioralGoldenQueries(input: {
+  entryIndex: Map<string, MemoryEntry>;
+  issues: KmbEvidenceAuditIssue[];
+}) {
+  return BEHAVIORAL_EVIDENCE_GOLDEN_QUERIES.flatMap((golden) => {
+    const selector = input.entryIndex.get(golden.expectedSelectorId);
+    if (!selector) return [];
+    const ranked = (selector?.evidenceEntryIds ?? [])
+      .map((entryId) => input.entryIndex.get(entryId))
+      .filter((entry): entry is MemoryEntry => Boolean(entry?.enabled))
+      .filter((entry) => classifyRuntimeMemoryRole(entry).anchorEligible)
+      .map((entry) => ({
+        entry,
+        score: scoreBehavioralGoldenEvidence(golden.query, entry),
+      }))
+      .sort(
+        (left, right) =>
+          right.score - left.score || left.entry.id.localeCompare(right.entry.id)
+      );
+    const expectedIndex = ranked.findIndex(
+      (item) => item.entry.id === golden.expectedAnchorId
+    );
+    const expectedAnchorRank = expectedIndex >= 0 ? expectedIndex + 1 : undefined;
+    const expectedAnchorReachable = Boolean(
+      selector?.enabled &&
+        expectedAnchorRank &&
+        expectedAnchorRank <= BEHAVIORAL_GOLDEN_TOP_K &&
+        ranked[expectedIndex]!.score > 0
+    );
+    if (!expectedAnchorReachable) {
+      input.issues.push({
+        code: "behavioral-golden-anchor-unreachable",
+        severity: "error",
+        entryId: golden.expectedSelectorId,
+        detail: `${golden.id} cannot reach expected anchor ${golden.expectedAnchorId} within linked top-${BEHAVIORAL_GOLDEN_TOP_K}.`,
+      });
+    }
+    return [{
+      id: golden.id,
+      expectedSelectorId: golden.expectedSelectorId,
+      expectedAnchorId: golden.expectedAnchorId,
+      topRankedAnchorId: ranked[0]?.entry.id,
+      expectedAnchorRank,
+      expectedAnchorReachable,
+    } satisfies KmbBehavioralGoldenQueryCoverage];
+  });
+}
+
+function isAutobiographicalTemplate(entry: MemoryEntry) {
+  if (entry.type !== "answer_template") return false;
+  return (
+    FIRST_PERSON_CLAIM.test(entry.content) ||
+    AUTOBIOGRAPHICAL_TEMPLATE.test(
+      [entry.title, entry.summary, entry.tags.join(" "), entry.content]
+        .filter(Boolean)
+        .join(" ")
+    )
+  );
+}
+
+function scoreBehavioralGoldenEvidence(query: string, entry: MemoryEntry) {
+  const queryTokens = tokenizeAuditText(query);
+  const titleMatches = countAuditTokenOverlap(
+    queryTokens,
+    tokenizeAuditText(entry.title)
+  );
+  const tagMatches = countAuditTokenOverlap(
+    queryTokens,
+    tokenizeAuditText(entry.tags.join(" "))
+  );
+  const keywordMatches = countAuditTokenOverlap(
+    queryTokens,
+    tokenizeAuditText(entry.keywords.join(" "))
+  );
+  const contentMatches = countAuditTokenOverlap(
+    queryTokens,
+    tokenizeAuditText(
+      [entry.summary, entry.content.slice(0, 600)].filter(Boolean).join(" ")
+    )
+  );
+  return (
+    titleMatches * 8 +
+    tagMatches * 10 +
+    keywordMatches * 6 +
+    Math.min(contentMatches * 2, 12)
+  );
+}
+
+function tokenizeAuditText(value: string) {
+  return new Set(
+    value
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, " ")
+      .split(/\s+/)
+      .filter((token) => token.length > 2)
+  );
+}
+
+function countAuditTokenOverlap(left: Set<string>, right: Set<string>) {
+  let count = 0;
+  for (const token of right) {
+    if (left.has(token)) count += 1;
+  }
+  return count;
 }
 
 function auditEntryLinks(
