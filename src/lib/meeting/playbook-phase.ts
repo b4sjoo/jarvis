@@ -440,6 +440,7 @@ export function formatCodingPlaybookPhaseContract(
       "- Explain the baseline bottleneck, then the optimized data structure, state, or invariant.",
       "- Give clear pseudocode, boundary conditions, one spoken dry run, and exact target complexity.",
       "- Preserve the existing baseline Code artifact; do not replace it with partial pseudocode or an empty Code section.",
+      formatCodingSolutionManifestContract("optimized"),
     ].join("\n");
   }
   if (normalizedPhase === "implementation_validation") {
@@ -448,6 +449,7 @@ export function formatCodingPlaybookPhaseContract(
       "- Emit a complete runnable implementation in the selected programming language.",
       "- Keep Answer concise and spoken; put implementation only in Code.",
       "- Include exact Complexity, key edge cases, and validation or debugging guidance.",
+      formatCodingSolutionManifestContract("optimized"),
     ].join("\n");
   }
   return [
@@ -458,6 +460,17 @@ export function formatCodingPlaybookPhaseContract(
     "- Explain the simplest correct baseline, including brute force when useful.",
     "- Walk through one small example and state the baseline complexity.",
     "- Emit the simplest complete correct implementation in Code under the stated assumptions; do not optimize prematurely.",
+    formatCodingSolutionManifestContract("baseline"),
+  ].join("\n");
+}
+
+function formatCodingSolutionManifestContract(
+  visibleCandidate: "baseline" | "optimized"
+) {
+  return [
+    "- Before writing the visible solution, distinguish the simplest correct baseline from an optimized candidate. They may be identical only when the constraints make the simplest solution optimal.",
+    `- Append one hidden <CODING_SOLUTION_MANIFEST> JSON object at the very end with version=1, baseline {approach,dataStructures,time,space}, optimized {approach,dataStructures,time,space}, sameSolution, a short reason, and visibleCandidate='${visibleCandidate}'.`,
+    "- Do not expose or discuss the manifest in the visible Answer, Approach, Code, or Complexity sections.",
   ].join("\n");
 }
 

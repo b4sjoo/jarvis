@@ -114,6 +114,7 @@ export interface SolveScreenAnchoredTaskOptions {
   factAnchorDecision?: FactAnchorDecision;
   projectBindingDecision?: ProjectBindingDecision;
   whiteboardFormatPreference?: WhiteboardFormatPreference;
+  codingSolutionManifestContext?: string;
   signal?: AbortSignal;
   requestOptions?: MeetingModelRequestOptions;
   executionIdentity?: AIResponseExecutionIdentityInput;
@@ -375,6 +376,7 @@ export async function solveScreenAnchoredTask({
   factAnchorDecision,
   projectBindingDecision,
   whiteboardFormatPreference,
+  codingSolutionManifestContext,
   signal,
   requestOptions,
   executionIdentity,
@@ -412,6 +414,7 @@ export async function solveScreenAnchoredTask({
     factAnchorDecision,
     projectBindingDecision,
     whiteboardFormatPreference,
+    codingSolutionManifestContext,
   });
   const imageInputs = buildScreenTaskImageInputs(observation);
 
@@ -588,6 +591,7 @@ function buildScreenTaskUserMessage({
   factAnchorDecision,
   projectBindingDecision,
   whiteboardFormatPreference,
+  codingSolutionManifestContext,
 }: {
   observation: ScreenObservation;
   recentTranscript?: string;
@@ -605,6 +609,7 @@ function buildScreenTaskUserMessage({
   factAnchorDecision?: FactAnchorDecision;
   projectBindingDecision?: ProjectBindingDecision;
   whiteboardFormatPreference?: WhiteboardFormatPreference;
+  codingSolutionManifestContext?: string;
 }) {
   const runtimePlaybook = withInterviewPlaybookPhase(
     interviewPlaybook,
@@ -662,6 +667,9 @@ function buildScreenTaskUserMessage({
       activeMeetingTask
     ),
     "</playbook_phase_state>",
+    "<coding_solution_manifest_context>",
+    codingSolutionManifestContext || "No cached Coding solution manifest.",
+    "</coding_solution_manifest_context>",
     "<capacity_estimation_guardrail>",
     formatCapacityEstimationGuardrailForPrompt(
       capacityEstimationGuardrail

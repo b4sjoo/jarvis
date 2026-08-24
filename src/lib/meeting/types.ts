@@ -1211,6 +1211,7 @@ export interface AdvisorPromptContext {
   responseActionContextScope?: AdvisorContextScopeSnapshot;
   advisorEvidencePacket?: AdvisorEvidencePacket;
   whiteboardFormatPreference?: import("./whiteboard-format-policy.js").WhiteboardFormatPreference;
+  codingSolutionManifestContext?: string;
 }
 
 export type AdvisorCurrentQuestionEvidenceSource =

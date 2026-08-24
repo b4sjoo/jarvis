@@ -78,6 +78,13 @@ import { formatRuntimeInferenceProviderOutcomeForTrace } from "@/lib/meeting/run
 import { buildManualScreenLogicalQuestionUnit } from "@/lib/meeting/manual-screen-question-source";
 import { settleManualQuestionTypeCorrection } from "@/lib/meeting/manual-correction-settlement";
 import {
+  extractCodingSolutionManifest,
+  formatCodingSolutionManifestForPrompt,
+  formatCodingSolutionManifestForTrace,
+  validateCodingSolutionManifestPhase,
+  type CodingSolutionManifest,
+} from "@/lib/meeting/coding-solution-manifest";
+import {
   formatVisibleAnswerResponseActionTargetForTrace,
   resolveVisibleAnswerResponseActionTarget,
 } from "@/lib/meeting/response-action-target";
@@ -3045,6 +3052,9 @@ export function useMeetingAssistant() {
   const responseActionRevisionRef = useRef(0);
   const visibleAnswerRevisionRef = useRef(0);
   const stableAnswerRevisionRef = useRef<StableAnswerRevision | null>(null);
+  const codingSolutionManifestCacheRef = useRef(
+    new Map<string, CodingSolutionManifest>()
+  );
   const generationResultLedgerRef = useRef(new GenerationResultLedger());
   const activeAdvisorGenerationLeaseRef = useRef<
     | {
@@ -6030,6 +6040,7 @@ export function useMeetingAssistant() {
       latestForceAdviseTargetRef.current = undefined;
       clearPendingAnswerCommitTimer();
       stableAnswerRevisionRef.current = null;
+      codingSolutionManifestCacheRef.current.clear();
       generationResultLedgerRef.current.clear();
       activeAdvisorGenerationLeaseRef.current = undefined;
       recentAdvisorContinuityRef.current = [];
@@ -9222,6 +9233,7 @@ export function useMeetingAssistant() {
     screenAnalysisAbortRef.current?.abort();
     screenAnalysisAbortRef.current = null;
     stableAnswerRevisionRef.current = null;
+    codingSolutionManifestCacheRef.current.clear();
     pendingAnswerRevisionRef.current = null;
     answerDeliveryProgressRef.current = null;
     currentQuestionLineageRef.current = undefined;
@@ -12039,6 +12051,17 @@ export function useMeetingAssistant() {
           taskMutationAuthorization.authorized &&
           sourceOwnedTransitionCommittedBeforeAdvisor,
       });
+    const codingSolutionManifestKey =
+      responseOwner.questionType === "coding"
+        ? effectiveAdvisorSettlementView.parentId ??
+          activeMeetingTaskId ??
+          advisorJob.logicalQuestionUnit?.id
+        : undefined;
+    const cachedCodingSolutionManifest = codingSolutionManifestKey
+      ? codingSolutionManifestCacheRef.current.get(
+          codingSolutionManifestKey
+        )
+      : undefined;
     const advisorUsesCodingModel =
       responseOwner.questionType === "coding";
     const advisorProgrammingLanguage =
@@ -12934,8 +12957,18 @@ export function useMeetingAssistant() {
           currentSuggestion: options.currentSuggestion,
         })
       : undefined;
-    const advisorModelPromptContext =
-      phaseNavigationPrompt?.promptContext ?? baseAdvisorModelPromptContext;
+    const advisorModelPromptContext = {
+      ...(phaseNavigationPrompt?.promptContext ??
+        baseAdvisorModelPromptContext),
+      ...(responseOwner.questionType === "coding"
+        ? {
+            codingSolutionManifestContext:
+              formatCodingSolutionManifestForPrompt(
+                cachedCodingSolutionManifest
+              ),
+          }
+        : {}),
+    };
     const advisorModelCurrentSuggestion = phaseNavigationPrompt
       ? phaseNavigationPrompt.currentSuggestion
       : options.currentSuggestion;
@@ -13522,6 +13555,51 @@ export function useMeetingAssistant() {
       if (rejectStaleCommit("final-commit", finalCommitDecision)) {
         rollbackStagedAnswerDelivery("stale-final-commit");
         return;
+      }
+
+      const codingManifestExtraction =
+        responseOwner.questionType === "coding"
+          ? extractCodingSolutionManifest(finalContent)
+          : undefined;
+      const codingManifestPhaseDecision = codingManifestExtraction
+        ? validateCodingSolutionManifestPhase({
+            phase:
+              settledExecutionPlan?.playbookPhase ??
+              advisorRuntimePlaybook?.phase,
+            extraction: codingManifestExtraction,
+          })
+        : undefined;
+      if (codingManifestExtraction) {
+        finalContent = codingManifestExtraction.displayContent;
+        if (
+          codingManifestPhaseDecision?.authorized &&
+          codingManifestExtraction.manifest &&
+          codingSolutionManifestKey
+        ) {
+          codingSolutionManifestCacheRef.current.set(
+            codingSolutionManifestKey,
+            codingManifestExtraction.manifest
+          );
+        } else if (!codingManifestPhaseDecision?.authorized) {
+          generationAuthorizedArtifacts =
+            generationAuthorizedArtifacts.filter(
+              (artifact) =>
+                artifact !== "code" && artifact !== "complexity"
+            );
+        }
+        if (traceId) {
+          traceStoreRef.current.updateMetadata(traceId, {
+            ...formatCodingSolutionManifestForTrace({
+              extraction: codingManifestExtraction,
+              phaseDecision: codingManifestPhaseDecision,
+              cacheHit: Boolean(cachedCodingSolutionManifest),
+            }),
+            codingSolutionManifestCacheKey:
+              codingSolutionManifestKey,
+            codingSolutionManifestArtifactMutationSuppressed:
+              !codingManifestPhaseDecision?.authorized,
+          });
+        }
       }
 
       let parsedMeetingAnswer = parseMeetingAnswer(finalContent, {
@@ -14237,11 +14315,11 @@ export function useMeetingAssistant() {
         ),
         questionType: responseOwner.questionType,
         codeArtifactMutationAuthorized:
-          settledArtifactAuthorization.allowCode,
+          generationAuthorizedArtifacts.includes("code"),
         complexityArtifactMutationAuthorized:
-          settledArtifactAuthorization.allowComplexity,
+          generationAuthorizedArtifacts.includes("complexity"),
         whiteboardArtifactMutationAuthorized:
-          settledArtifactAuthorization.allowWhiteboard,
+          generationAuthorizedArtifacts.includes("whiteboard"),
         factGuardrailNotice:
           factAnchorOutputDecision.visibleNotice,
         transientPersonalStatus: transientPersonalStatusDecision
@@ -26148,6 +26226,16 @@ export function useMeetingAssistant() {
           screenGenerationContext.taskRuntime.revision;
         const screenGenerationParent =
           screenGenerationContext.activeMeetingTask?.parent;
+        const screenCodingManifestKey = screenUsesCodingModel
+          ? screenGenerationParent?.id ??
+            screenQuestionIdentity?.logicalQuestionUnitId ??
+            `screen:${observation.id}`
+          : undefined;
+        const cachedScreenCodingManifest = screenCodingManifestKey
+          ? codingSolutionManifestCacheRef.current.get(
+              screenCodingManifestKey
+            )
+          : undefined;
         screenGenerationLease = createAnswerGenerationLease({
           sessionId: screenGenerationContext.sessionId,
           runtimeEpoch: runtimeEpochRef.current,
@@ -26310,7 +26398,7 @@ export function useMeetingAssistant() {
             })
           );
         };
-        const screenTaskContent = await withTimeout(
+        let screenTaskContent = await withTimeout(
           solveScreenAnchoredTask({
             observation,
             provider: screenModelRoute.provider,
@@ -26343,6 +26431,11 @@ export function useMeetingAssistant() {
             projectBindingDecision: screenProjectBindingDecision,
             whiteboardFormatPreference:
               screenWhiteboardFormatPreference,
+            codingSolutionManifestContext: screenUsesCodingModel
+              ? formatCodingSolutionManifestForPrompt(
+                  cachedScreenCodingManifest
+                )
+              : undefined,
             signal: analysisController.signal,
             requestOptions: screenModelRequestOptions,
             executionIdentity: {
@@ -26616,6 +26709,48 @@ export function useMeetingAssistant() {
         if (rejectStaleScreenOperation("post-model")) {
           clearScreenStagedPartial("stale-post-model");
           return;
+        }
+
+        const screenCodingManifestExtraction = screenUsesCodingModel
+          ? extractCodingSolutionManifest(screenTaskContent)
+          : undefined;
+        const screenCodingManifestPhaseDecision =
+          screenCodingManifestExtraction
+            ? validateCodingSolutionManifestPhase({
+                phase: screenGenerationPhaseDecision.phase,
+                extraction: screenCodingManifestExtraction,
+              })
+            : undefined;
+        if (screenCodingManifestExtraction) {
+          screenTaskContent =
+            screenCodingManifestExtraction.displayContent;
+          if (
+            screenCodingManifestPhaseDecision?.authorized &&
+            screenCodingManifestExtraction.manifest &&
+            screenCodingManifestKey
+          ) {
+            codingSolutionManifestCacheRef.current.set(
+              screenCodingManifestKey,
+              screenCodingManifestExtraction.manifest
+            );
+          } else if (!screenCodingManifestPhaseDecision?.authorized) {
+            screenGenerationRequestedArtifacts =
+              screenGenerationRequestedArtifacts.filter(
+                (artifact) =>
+                  artifact !== "code" && artifact !== "complexity"
+              );
+          }
+          traceStoreRef.current.updateMetadata(trace.id, {
+            ...formatCodingSolutionManifestForTrace({
+              extraction: screenCodingManifestExtraction,
+              phaseDecision: screenCodingManifestPhaseDecision,
+              cacheHit: Boolean(cachedScreenCodingManifest),
+            }),
+            codingSolutionManifestCacheKey:
+              screenCodingManifestKey,
+            codingSolutionManifestArtifactMutationSuppressed:
+              !screenCodingManifestPhaseDecision?.authorized,
+          });
         }
 
         let parsedScreenMeetingAnswer = parseMeetingAnswer(screenTaskContent, {
@@ -29538,6 +29673,7 @@ export function useMeetingAssistant() {
       if (currentAnswerUsedDisabledPreparation) {
         clearPendingAnswerCommitTimer();
         stableAnswerRevisionRef.current = null;
+        codingSolutionManifestCacheRef.current.clear();
         pendingAnswerRevisionRef.current = null;
         answerDeliveryProgressRef.current = null;
         recentAdvisorContinuityRef.current = [];

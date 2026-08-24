@@ -169,6 +169,10 @@ export function buildAdvisorUserMessage(
       context.activeMeetingTask
     ),
     "</playbook_phase_state>",
+    "<coding_solution_manifest_context>",
+    context.codingSolutionManifestContext ||
+      "No cached Coding solution manifest.",
+    "</coding_solution_manifest_context>",
     "<capacity_estimation_guardrail>",
     formatCapacityEstimationGuardrailForPrompt(
       capacityEstimationGuardrail
