@@ -14,9 +14,10 @@ export interface AwaitingVisualEvidenceRecoveryFact {
   logicalQuestionRevision: number;
   answerRevision: number;
   visibleAnswerRevision: number;
-  parentTaskId: string;
-  parentRevision: number;
+  parentTaskId?: string;
+  parentRevision?: number;
   sourceHash: string;
+  sourceSettlementId?: string;
   sourceTurnIds: string[];
   manualCorrectionRevision: number;
   createdAt: number;
@@ -37,7 +38,6 @@ export interface AwaitingVisualEvidenceRecoveryAuthorization {
     | "visible-answer-revision-mismatch"
     | "parent-mismatch"
     | "parent-revision-mismatch"
-    | "source-hash-mismatch"
     | "manual-correction-revision-mismatch";
 }
 
@@ -186,6 +186,7 @@ export function createAwaitingVisualEvidenceRecoveryFact(input: {
   parentTaskId?: string | null;
   parentRevision?: number | null;
   sourceHash?: string | null;
+  sourceSettlementId?: string | null;
   sourceTurnIds?: string[];
   manualCorrectionRevision: number;
   createdAt?: number;
@@ -197,9 +198,6 @@ export function createAwaitingVisualEvidenceRecoveryFact(input: {
     input.resolution.state !== "awaiting-evidence" ||
     !input.resolution.awaitingVisualEvidence ||
     !input.logicalQuestionUnitId.trim() ||
-    !parentTaskId ||
-    input.parentRevision === undefined ||
-    input.parentRevision === null ||
     !sourceHash
   ) {
     return undefined;
@@ -222,9 +220,11 @@ export function createAwaitingVisualEvidenceRecoveryFact(input: {
     logicalQuestionRevision: input.logicalQuestionRevision,
     answerRevision: input.answerRevision,
     visibleAnswerRevision: input.visibleAnswerRevision,
-    parentTaskId,
-    parentRevision: input.parentRevision,
+    parentTaskId: parentTaskId || undefined,
+    parentRevision:
+      input.parentRevision === null ? undefined : input.parentRevision,
     sourceHash,
+    sourceSettlementId: input.sourceSettlementId?.trim() || undefined,
     sourceTurnIds: uniqueStrings(input.sourceTurnIds ?? []),
     manualCorrectionRevision: input.manualCorrectionRevision,
     createdAt,
@@ -242,7 +242,6 @@ export function authorizeAwaitingVisualEvidenceRecovery(input: {
   visibleAnswerRevision?: number | null;
   parentTaskId?: string | null;
   parentRevision?: number | null;
-  sourceHash?: string | null;
   manualCorrectionRevision: number;
   now?: number;
 }): AwaitingVisualEvidenceRecoveryAuthorization {
@@ -272,14 +271,14 @@ export function authorizeAwaitingVisualEvidenceRecovery(input: {
       reason: "visible-answer-revision-mismatch",
     };
   }
-  if (input.parentTaskId !== fact.parentTaskId) {
+  if (fact.parentTaskId && input.parentTaskId !== fact.parentTaskId) {
     return { authorized: false, reason: "parent-mismatch" };
   }
-  if (input.parentRevision !== fact.parentRevision) {
+  if (
+    fact.parentRevision !== undefined &&
+    input.parentRevision !== fact.parentRevision
+  ) {
     return { authorized: false, reason: "parent-revision-mismatch" };
-  }
-  if (input.sourceHash !== fact.sourceHash) {
-    return { authorized: false, reason: "source-hash-mismatch" };
   }
   if (input.manualCorrectionRevision !== fact.manualCorrectionRevision) {
     return {
@@ -311,6 +310,8 @@ export function formatAwaitingVisualEvidenceRecoveryForTrace(
     awaitingVisualEvidenceRecoveryParentTaskId: fact?.parentTaskId,
     awaitingVisualEvidenceRecoveryParentRevision: fact?.parentRevision,
     awaitingVisualEvidenceRecoverySourceHash: fact?.sourceHash,
+    awaitingVisualEvidenceRecoverySourceSettlementId:
+      fact?.sourceSettlementId,
     awaitingVisualEvidenceRecoverySourceTurnIds: fact?.sourceTurnIds ?? [],
     awaitingVisualEvidenceRecoveryEvidence: fact?.evidence ?? [],
     awaitingVisualEvidenceRecoveryExpiresAt: fact?.expiresAt,

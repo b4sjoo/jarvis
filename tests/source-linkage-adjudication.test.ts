@@ -3,6 +3,8 @@ import test from "node:test";
 import {
   buildSourceLinkageAdjudicationPrompts,
   buildSourceLinkageAdjudicationRequest,
+  authorizeSourceLinkageAdjudicationLease,
+  createSourceLinkageAdjudicationLease,
   parseSourceLinkageAdjudicationOutput,
 } from "../src/lib/meeting/source-linkage-adjudication.js";
 
@@ -11,6 +13,8 @@ test("binds a screen only with bilateral grounded evidence", () => {
     logicalQuestionUnitId: "lqu-lines",
     logicalQuestionUnitRevision: 2,
     screenObservationId: "screen-1",
+    voiceSourceHash: "voice-source-1",
+    sourceSettlementId: "voice-settlement-1",
     voiceQuestion: "Could you explain lines 46 through 49?",
     screenQuestion: "Implement LRU cache",
     screenEvidenceSummary: "Lines 46 through 49 show the eviction loop.",
@@ -49,6 +53,7 @@ test("uses an independent screen question without voice evidence", () => {
     logicalQuestionUnitId: "lqu-old",
     logicalQuestionUnitRevision: 1,
     screenObservationId: "screen-2",
+    voiceSourceHash: "voice-source-2",
     voiceQuestion: "Could you explain the current code?",
     screenQuestion: "Tell me about a time you disagreed with a teammate.",
   });
@@ -74,6 +79,7 @@ test("rejects linkage without the required source evidence", () => {
     logicalQuestionUnitId: "lqu-lines",
     logicalQuestionUnitRevision: 1,
     screenObservationId: "screen-3",
+    voiceSourceHash: "voice-source-3",
     voiceQuestion: "Could you explain lines 46 through 49?",
     screenQuestion: "Implement LRU cache",
   });
@@ -99,4 +105,59 @@ test("rejects linkage without the required source evidence", () => {
 
   assert.equal(missingBilateral.ok, false);
   assert.equal(ungrounded.ok, false);
+});
+
+test("validates Voice and Screen as a cross-source transition", () => {
+  const request = buildSourceLinkageAdjudicationRequest({
+    logicalQuestionUnitId: "lqu-lines",
+    logicalQuestionUnitRevision: 2,
+    screenObservationId: "screen-1",
+    voiceSourceHash: "voice-source-1",
+    sourceSettlementId: "voice-settlement-1",
+    voiceQuestion: "Could you explain lines 46 through 49?",
+    screenQuestion: "Implement LRU cache",
+    screenEvidenceSummary: "Lines 46 through 49 show the eviction loop.",
+  });
+  assert.ok(request);
+  const lease = createSourceLinkageAdjudicationLease({
+    sessionId: "session-1",
+    runtimeEpoch: 3,
+    request,
+    manualCorrectionRevision: 1,
+  });
+  const transition = {
+    operationKind: "source-linkage-adjudication" as const,
+    sessionId: "session-1",
+    runtimeEpoch: 3,
+    operationRevision: 2,
+    from: {
+      logicalQuestionUnitId: "lqu-lines",
+      logicalQuestionRevision: 2,
+      sourceHash: "voice-source-1",
+      correctionRevision: 1,
+    },
+    to: {
+      evidenceId: "screen-1",
+      evidenceHash: request.screenEvidenceHash,
+      correctionRevision: 1,
+    },
+    sourceSettlementId: "voice-settlement-1",
+  };
+
+  assert.equal(
+    authorizeSourceLinkageAdjudicationLease(lease, {
+      currentOperationId: lease.operationId,
+      transition,
+    }).authorized,
+    true
+  );
+  const stale = authorizeSourceLinkageAdjudicationLease(lease, {
+    currentOperationId: lease.operationId,
+    transition: {
+      ...transition,
+      to: { ...transition.to, evidenceId: "screen-newer" },
+    },
+  });
+  assert.equal(stale.authorized, false);
+  assert.deepEqual(stale.mismatchedFacets, ["transition-to-evidence"]);
 });

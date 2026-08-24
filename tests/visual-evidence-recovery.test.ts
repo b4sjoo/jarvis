@@ -41,7 +41,6 @@ test("authorizes only the exact next visual-evidence transaction", () => {
     visibleAnswerRevision: 7,
     parentTaskId: "parent-coding",
     parentRevision: 3,
-    sourceHash: "source-lines",
     manualCorrectionRevision: 0,
     now: 500,
   });
@@ -54,7 +53,6 @@ test("authorizes only the exact next visual-evidence transaction", () => {
     visibleAnswerRevision: 7,
     parentTaskId: "parent-coding",
     parentRevision: 3,
-    sourceHash: "source-lines",
     manualCorrectionRevision: 0,
     now: 500,
   });
@@ -93,7 +91,6 @@ test("rejects expired or manually corrected recovery", () => {
     visibleAnswerRevision: 7,
     parentTaskId: "parent-coding",
     parentRevision: 3,
-    sourceHash: "source-lines",
   };
   assert.equal(
     authorizeAwaitingVisualEvidenceRecovery({
@@ -110,6 +107,39 @@ test("rejects expired or manually corrected recovery", () => {
       now: 500,
     }).reason,
     "manual-correction-revision-mismatch"
+  );
+});
+
+test("allows a pre-answer recovery fact before a parent exists", () => {
+  const fact = createAwaitingVisualEvidenceRecoveryFact({
+    resolution,
+    sessionId: "session-1",
+    runtimeEpoch: 4,
+    logicalQuestionUnitId: "question-lines",
+    logicalQuestionRevision: 1,
+    answerRevision: 0,
+    visibleAnswerRevision: 2,
+    sourceHash: "voice-source",
+    sourceSettlementId: "voice-settlement",
+    manualCorrectionRevision: 0,
+    createdAt: 100,
+  });
+
+  assert.ok(fact);
+  assert.equal(fact.parentTaskId, undefined);
+  assert.equal(fact.sourceSettlementId, "voice-settlement");
+  assert.equal(
+    authorizeAwaitingVisualEvidenceRecovery({
+      fact,
+      sessionId: "session-1",
+      runtimeEpoch: 4,
+      logicalQuestionUnitId: "question-lines",
+      logicalQuestionRevision: 1,
+      visibleAnswerRevision: 2,
+      manualCorrectionRevision: 0,
+      now: 200,
+    }).authorized,
+    true
   );
 });
 

@@ -1,5 +1,12 @@
 import type { RuntimeInferenceRuntimeJob } from "./runtime-inference-runtime.js";
 import { buildRuntimeInferenceModelInput } from "./runtime-inference.js";
+import {
+  formatRuntimeInferenceValidationForTrace,
+  getRuntimeInferenceValidationDefinition,
+  validateCrossSourceTransitionLease,
+  type CrossSourceTransitionLease,
+  type RuntimeInferenceValidationFacet,
+} from "./runtime-inference-validation.js";
 
 export const SOURCE_LINKAGE_ADJUDICATION_SCHEMA_VERSION = 1;
 export const SOURCE_LINKAGE_ADJUDICATION_PROMPT_VERSION =
@@ -19,6 +26,9 @@ export interface SourceLinkageAdjudicationRequest {
   logicalQuestionUnitRevision: number;
   screenObservationId: string;
   sourceHash: string;
+  voiceSourceHash: string;
+  sourceSettlementId?: string;
+  screenEvidenceHash: string;
   voiceQuestion: string;
   screenQuestion: string;
   screenEvidenceSummary?: string;
@@ -52,15 +62,10 @@ export type SourceLinkageAdjudicationParseResult =
       evidenceSpansValid: false;
     };
 
-export interface SourceLinkageAdjudicationLease {
+export interface SourceLinkageAdjudicationLease
+  extends CrossSourceTransitionLease {
   operationId: string;
-  sessionId: string;
-  runtimeEpoch: number;
-  logicalQuestionUnitId: string;
-  logicalQuestionUnitRevision: number;
-  screenObservationId: string;
-  sourceHash: string;
-  manualCorrectionRevision: number;
+  requestSourceHash: string;
   createdAt: number;
 }
 
@@ -75,6 +80,8 @@ export function buildSourceLinkageAdjudicationRequest(input: {
   logicalQuestionUnitId: string;
   logicalQuestionUnitRevision: number;
   screenObservationId: string;
+  voiceSourceHash: string;
+  sourceSettlementId?: string;
   voiceQuestion: string;
   screenQuestion: string;
   screenEvidenceSummary?: string;
@@ -82,23 +89,38 @@ export function buildSourceLinkageAdjudicationRequest(input: {
 }): SourceLinkageAdjudicationRequest | undefined {
   const voiceQuestion = boundText(input.voiceQuestion);
   const screenQuestion = boundText(input.screenQuestion);
-  if (!voiceQuestion || !screenQuestion || !input.screenObservationId.trim()) {
+  const voiceSourceHash = input.voiceSourceHash.trim();
+  if (
+    !voiceQuestion ||
+    !screenQuestion ||
+    !input.screenObservationId.trim() ||
+    !voiceSourceHash
+  ) {
     return undefined;
   }
   const screenEvidenceSummary = boundText(input.screenEvidenceSummary ?? "");
   const activeParentObjective = boundText(input.activeParentObjective ?? "");
+  const screenObservationId = input.screenObservationId.trim();
+  const screenEvidenceHash = hashValues([
+    screenObservationId,
+    screenQuestion,
+    screenEvidenceSummary,
+  ]);
   return {
     schemaVersion: SOURCE_LINKAGE_ADJUDICATION_SCHEMA_VERSION,
     promptVersion: SOURCE_LINKAGE_ADJUDICATION_PROMPT_VERSION,
     logicalQuestionUnitId: input.logicalQuestionUnitId,
     logicalQuestionUnitRevision: input.logicalQuestionUnitRevision,
-    screenObservationId: input.screenObservationId.trim(),
+    screenObservationId,
     sourceHash: hashValues([
       voiceQuestion,
       screenQuestion,
       screenEvidenceSummary,
       activeParentObjective,
     ]),
+    voiceSourceHash,
+    sourceSettlementId: input.sourceSettlementId?.trim() || undefined,
+    screenEvidenceHash,
     voiceQuestion,
     screenQuestion,
     screenEvidenceSummary: screenEvidenceSummary || undefined,
@@ -233,24 +255,39 @@ export function createSourceLinkageAdjudicationLease(input: {
   manualCorrectionRevision: number;
   createdAt?: number;
 }): SourceLinkageAdjudicationLease {
+  const transition: CrossSourceTransitionLease = {
+    operationKind: "source-linkage-adjudication",
+    sessionId: input.sessionId,
+    runtimeEpoch: input.runtimeEpoch,
+    operationRevision: input.request.logicalQuestionUnitRevision,
+    from: {
+      logicalQuestionUnitId: input.request.logicalQuestionUnitId,
+      logicalQuestionRevision:
+        input.request.logicalQuestionUnitRevision,
+      sourceHash: input.request.voiceSourceHash,
+      correctionRevision: input.manualCorrectionRevision,
+    },
+    to: {
+      evidenceId: input.request.screenObservationId,
+      evidenceHash: input.request.screenEvidenceHash,
+      correctionRevision: input.manualCorrectionRevision,
+    },
+    sourceSettlementId: input.request.sourceSettlementId,
+  };
   return {
     operationId: [
       "source_linkage",
       input.sessionId,
       input.runtimeEpoch,
-      input.request.logicalQuestionUnitId,
-      input.request.logicalQuestionUnitRevision,
-      input.request.screenObservationId,
-      input.request.sourceHash,
+      transition.from.logicalQuestionUnitId,
+      transition.from.logicalQuestionRevision,
+      transition.from.sourceHash,
+      transition.to.evidenceId,
+      transition.to.evidenceHash,
       input.manualCorrectionRevision,
     ].join(":"),
-    sessionId: input.sessionId,
-    runtimeEpoch: input.runtimeEpoch,
-    logicalQuestionUnitId: input.request.logicalQuestionUnitId,
-    logicalQuestionUnitRevision: input.request.logicalQuestionUnitRevision,
-    screenObservationId: input.request.screenObservationId,
-    sourceHash: input.request.sourceHash,
-    manualCorrectionRevision: input.manualCorrectionRevision,
+    ...transition,
+    requestSourceHash: input.request.sourceHash,
     createdAt: input.createdAt ?? Date.now(),
   };
 }
@@ -259,39 +296,33 @@ export function authorizeSourceLinkageAdjudicationLease(
   lease: SourceLinkageAdjudicationLease,
   current: {
     currentOperationId?: string;
-    sessionId: string;
-    runtimeEpoch: number;
-    logicalQuestionUnitId: string;
-    logicalQuestionUnitRevision: number;
-    screenObservationId: string;
-    sourceHash: string;
-    manualCorrectionRevision: number;
+    transition: CrossSourceTransitionLease;
   }
-): { authorized: true } | { authorized: false; reason: string } {
-  const reject = (reason: string) => ({ authorized: false as const, reason });
+):
+  | { authorized: true; mismatchedFacets: [] }
+  | {
+      authorized: false;
+      reason: string;
+      mismatchedFacets: RuntimeInferenceValidationFacet[];
+    } {
+  const reject = (
+    reason: string,
+    mismatchedFacets: RuntimeInferenceValidationFacet[] = []
+  ) => ({
+    authorized: false as const,
+    reason,
+    mismatchedFacets,
+  });
   if (lease.operationId !== current.currentOperationId) {
     return reject("operation-id-mismatch");
   }
-  if (lease.sessionId !== current.sessionId) return reject("session-mismatch");
-  if (lease.runtimeEpoch !== current.runtimeEpoch) {
-    return reject("runtime-epoch-mismatch");
-  }
-  if (lease.logicalQuestionUnitId !== current.logicalQuestionUnitId) {
-    return reject("logical-question-mismatch");
-  }
-  if (
-    lease.logicalQuestionUnitRevision !== current.logicalQuestionUnitRevision
-  ) {
-    return reject("logical-question-revision-mismatch");
-  }
-  if (lease.screenObservationId !== current.screenObservationId) {
-    return reject("screen-observation-mismatch");
-  }
-  if (lease.sourceHash !== current.sourceHash) return reject("source-mismatch");
-  if (lease.manualCorrectionRevision !== current.manualCorrectionRevision) {
-    return reject("manual-correction-revision-mismatch");
-  }
-  return { authorized: true };
+  const validation = validateCrossSourceTransitionLease({
+    lease,
+    current: current.transition,
+  });
+  return validation.authorized
+    ? { authorized: true, mismatchedFacets: [] }
+    : reject("cross-source-transition-mismatch", validation.mismatchedFacets);
 }
 
 export function formatSourceLinkageAdjudicationForTrace(input: {
@@ -300,6 +331,9 @@ export function formatSourceLinkageAdjudicationForTrace(input: {
   candidate?: LlmSourceLinkageAdjudication;
   leaseAuthorized?: boolean;
   staleReason?: string;
+  validationMismatchedFacets?: RuntimeInferenceValidationFacet[];
+  mode?: "shadow" | "enforcement";
+  appliedToRuntime?: boolean;
   durationMs?: number;
   queueWaitMs?: number;
 }) {
@@ -312,6 +346,9 @@ export function formatSourceLinkageAdjudicationForTrace(input: {
       input.request.logicalQuestionUnitRevision,
     sourceLinkageScreenObservationId: input.request.screenObservationId,
     sourceLinkageSourceHash: input.request.sourceHash,
+    sourceLinkageVoiceSourceHash: input.request.voiceSourceHash,
+    sourceLinkageScreenEvidenceHash: input.request.screenEvidenceHash,
+    sourceLinkageSourceSettlementId: input.request.sourceSettlementId,
     sourceLinkageDisposition: input.disposition,
     sourceLinkageDecision: input.candidate?.decision,
     sourceLinkageVoiceEvidenceSpans:
@@ -321,10 +358,27 @@ export function formatSourceLinkageAdjudicationForTrace(input: {
     sourceLinkageAmbiguityReason: input.candidate?.ambiguityReason,
     sourceLinkageLeaseAuthorized: input.leaseAuthorized,
     sourceLinkageStaleReason: input.staleReason,
+    sourceLinkageValidationMismatchedFacets:
+      input.validationMismatchedFacets ?? [],
     sourceLinkageDurationMs: input.durationMs,
     sourceLinkageQueueWaitMs: input.queueWaitMs,
-    sourceLinkageAppliedToRuntime: false,
-    sourceLinkageMode: "shadow",
+    sourceLinkageAppliedToRuntime: input.appliedToRuntime ?? false,
+    sourceLinkageMode: input.mode ?? "shadow",
+    ...formatRuntimeInferenceValidationForTrace({
+      definition: getRuntimeInferenceValidationDefinition(
+        "source-linkage-adjudication"
+      ),
+      result:
+        input.leaseAuthorized === undefined
+          ? undefined
+          : {
+              authorized: input.leaseAuthorized,
+              reason: input.leaseAuthorized
+                ? "authorized"
+                : "identity-mismatch",
+              mismatchedFacets: input.validationMismatchedFacets ?? [],
+            },
+    }),
   };
 }
 

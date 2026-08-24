@@ -48,8 +48,8 @@ import {
   authorizeAnswerRecoveryAdjudicationLease,
   buildAnswerRecoveryAdjudicationPrompts,
   buildAnswerRecoveryAdjudicationRequest,
+  buildVisualEvidenceCheckRequest,
   createAnswerRecoveryAdjudicationLease,
-  decideAnswerRecoveryLedgerTransition,
   formatAnswerRecoveryAdjudicationForTrace,
   type AnswerRecoveryAdjudicationJob,
   type AnswerRecoveryAdjudicationRequest,
@@ -66,6 +66,7 @@ import {
   buildSourceLinkageAdjudicationRequest,
   createSourceLinkageAdjudicationLease,
   formatSourceLinkageAdjudicationForTrace,
+  type LlmSourceLinkageAdjudication,
   type SourceLinkageAdjudicationJob,
   type SourceLinkageAdjudicationRequest,
 } from "@/lib/meeting/source-linkage-adjudication";
@@ -2100,12 +2101,25 @@ interface PendingAnswerResolutionCommitCandidate {
   manualCorrectionRevision: number;
   localResolution: ReturnType<typeof projectAnswerResolution>;
   answerResolution?: AnswerResolutionAdjudication;
-  evidenceRequirement?: EvidenceRequirementAdjudication;
   answerResolutionSettled: boolean;
-  evidenceRequirementSettled: boolean;
   visibleAnswerRevision?: number;
   visibleCommittedAt?: number;
-  recoveryCommitted?: boolean;
+}
+
+interface VisualEvidenceCheckRuntimeOutcome {
+  disposition: string;
+  request?: AnswerRecoveryAdjudicationRequest;
+  candidate?: EvidenceRequirementAdjudication;
+  operationId?: string;
+  leaseAuthorized: boolean;
+}
+
+interface SourceLinkageRuntimeOutcome {
+  disposition: string;
+  candidate?: LlmSourceLinkageAdjudication;
+  operationId?: string;
+  leaseAuthorized: boolean;
+  validationMismatchedFacets: string[];
 }
 
 interface QuestionTypeAdjudicationScheduleHandle {
@@ -3431,16 +3445,13 @@ export function useMeetingAssistant() {
         pendingAnswerResolutionCommitByTraceRef.current.get(traceId);
       if (
         !candidate ||
-        candidate.recoveryCommitted ||
         !candidate.answerResolutionSettled ||
-        !candidate.evidenceRequirementSettled ||
         candidate.visibleAnswerRevision === undefined
       ) {
         return;
       }
 
       const answerResolution = candidate.answerResolution;
-      const evidenceRequirement = candidate.evidenceRequirement;
       const contextState = contextManagerRef.current.getState();
       const activeParent = contextState.activeMeetingTask?.parent;
       const stableAnswer = stableAnswerRevisionRef.current;
@@ -3465,91 +3476,14 @@ export function useMeetingAssistant() {
         parentRevision: candidate.parentRevision,
         currentParentRevision: activeParent?.revisions,
       });
-      const revisionAuthorized = revisionAuthorization.authorized;
-      const ledgerTransition = decideAnswerRecoveryLedgerTransition({
-        revisionAuthorized,
-        answerResolution: answerResolution?.decision,
-        evidenceRequirement: evidenceRequirement?.decision,
-      });
-      const recoveryProposed = ledgerTransition.action === "create";
-      let recoveryCommitted = false;
-      let recoveryCancelled = false;
-      if (recoveryProposed) {
-        const recovery = createAwaitingVisualEvidenceRecoveryFact({
-          resolution: {
-            state: "awaiting-evidence",
-            awaitingVisualEvidence: true,
-            evidence: Array.from(
-              new Set([
-                ...(answerResolution?.questionEvidenceSpans ?? []),
-                ...(answerResolution?.answerEvidenceSpans ?? []),
-                ...(evidenceRequirement?.questionEvidenceSpans ?? []),
-                ...(evidenceRequirement?.visualEvidenceSpans ?? []),
-              ])
-            ),
-          },
-          sessionId: candidate.sessionId,
-          runtimeEpoch: candidate.runtimeEpoch,
-          logicalQuestionUnitId: candidate.logicalQuestionUnitId,
-          logicalQuestionRevision: candidate.logicalQuestionRevision,
-          answerRevision: candidate.answerRevision,
-          visibleAnswerRevision: candidate.visibleAnswerRevision,
-          parentTaskId: candidate.parentTaskId,
-          parentRevision: candidate.parentRevision,
-          sourceHash: candidate.sourceHash,
-          sourceTurnIds: candidate.sourceTurnIds,
-          manualCorrectionRevision: candidate.manualCorrectionRevision,
-          createdAt: candidate.visibleCommittedAt,
-        });
-        if (recovery) {
-          awaitingVisualEvidenceRecoveryRef.current = recovery;
-          recoveryCommitted = true;
-          const recoveryMetadata =
-            formatAwaitingVisualEvidenceRecoveryForTrace(recovery, {
-              stage: "created",
-              reason: "runtime-answer-resolution-awaits-visual-evidence",
-            });
-          traceStoreRef.current.updateMetadata(traceId, recoveryMetadata);
-          sessionRecordingManagerRef.current?.recordCaptureLifecycle({
-            stage: "awaiting-visual-evidence-created",
-            traceId,
-            taskId: recovery.parentTaskId,
-            ...recoveryMetadata,
-          });
-        }
-      }
-
-      const existingRecovery = awaitingVisualEvidenceRecoveryRef.current;
-      if (
-        ledgerTransition.action === "cancel" &&
-        existingRecovery?.logicalQuestionUnitId ===
-          candidate.logicalQuestionUnitId &&
-        existingRecovery.logicalQuestionRevision ===
-          candidate.logicalQuestionRevision
-      ) {
-        settleAwaitingVisualEvidenceRecovery(
-          "cancelled",
-          "answer-recovery-definite-non-recovery",
-          traceId
-        );
-        recoveryCancelled = true;
-      }
-
-      candidate.recoveryCommitted = recoveryCommitted;
       traceStoreRef.current.updateMetadata(traceId, {
-        answerRecoveryPairSettled: true,
-        answerRecoveryPairRevisionAuthorized: revisionAuthorized,
-        answerRecoveryPairRevisionAuthorizationReason:
+        answerResolutionObservationSettled: true,
+        answerResolutionObservationRevisionAuthorized:
+          revisionAuthorization.authorized,
+        answerResolutionObservationRevisionAuthorizationReason:
           revisionAuthorization.reason,
-        answerRecoveryPairProposedVisualRecovery: recoveryProposed,
-        answerRecoveryPairLedgerTransition: ledgerTransition.action,
-        answerRecoveryPairLedgerTransitionReason: ledgerTransition.reason,
-        answerRecoveryPairDefinite:
-          ledgerTransition.action !== "preserve",
-        answerRecoveryPairAppliedToRuntime:
-          recoveryCommitted || recoveryCancelled,
-        answerRecoveryPairAnswerDecision: answerResolution?.decision,
-        answerRecoveryPairEvidenceDecision: evidenceRequirement?.decision,
+        answerResolutionObservationDecision: answerResolution?.decision,
+        answerResolutionObservationAppliedToRuntime: false,
         answerRecoveryLocalDetectorDecision:
           candidate.localResolution.state,
         answerRecoveryLocalDetectorVisual:
@@ -3557,7 +3491,7 @@ export function useMeetingAssistant() {
       });
       pendingAnswerResolutionCommitByTraceRef.current.delete(traceId);
     },
-    [settleAwaitingVisualEvidenceRecovery]
+    []
   );
 
   const scheduleAdvisorResponseConsistencyShadow = useCallback(
@@ -6257,6 +6191,275 @@ export function useMeetingAssistant() {
     []
   );
 
+  const scheduleQuestionOnlyVisualEvidenceCheck = useCallback(
+    (input: {
+      traceId?: string;
+      taskId?: string;
+      logicalQuestionUnit: LogicalQuestionUnit;
+      questionSourceHash: string;
+      questionText: string;
+      screenQuestion?: string;
+      screenEvidenceSummary?: string;
+      codeArtifactSummary?: string;
+    }): Promise<VisualEvidenceCheckRuntimeOutcome> | undefined => {
+      const request = buildVisualEvidenceCheckRequest({
+        logicalQuestionUnitId: input.logicalQuestionUnit.id,
+        logicalQuestionUnitRevision: input.logicalQuestionUnit.revision,
+        questionSourceHash: input.questionSourceHash,
+        questionText: input.questionText,
+        screenQuestion: input.screenQuestion,
+        screenEvidenceSummary: input.screenEvidenceSummary,
+        codeArtifactSummary: input.codeArtifactSummary,
+      });
+      if (!request) return undefined;
+      const contextState = contextManagerRef.current.getState();
+      const circuit = answerRecoveryCircuitRef.current.read(
+        request.operationKind,
+        contextState.sessionId
+      );
+      if (circuit.open) {
+        if (input.traceId) {
+          traceStoreRef.current.updateMetadata(input.traceId, {
+            ...formatRuntimeInferenceOperationForTrace(
+              request.operationKind
+            ),
+            ...formatRuntimeInferenceCircuitForTrace(circuit),
+            ...formatAnswerRecoveryAdjudicationForTrace({
+              request,
+              disposition: "provider-circuit-open",
+            }),
+          });
+        }
+        return Promise.resolve({
+          disposition: "provider-circuit-open",
+          request,
+          leaseAuthorized: false,
+        });
+      }
+      const modelRoute = resolveRuntimeInferenceModelRouteFromSnapshot({
+        snapshot: meetingModelProviderSnapshotRef.current,
+        operationKind: request.operationKind,
+        reason: "pre-advisor-question-only-visual-evidence",
+      });
+      const routeMetadata =
+        formatRuntimeInferenceModelRouteForTrace(modelRoute);
+      if (!modelRoute.provider) {
+        answerRecoveryCircuitRef.current.open({
+          operationKind: request.operationKind,
+          sessionId: contextState.sessionId,
+          reason: "provider-configuration-error",
+          detail:
+            modelRoute.missingRequiredVariables.length > 0
+              ? `missing:${modelRoute.missingRequiredVariables.join(",")}`
+              : modelRoute.fallbackReason,
+        });
+        if (input.traceId) {
+          traceStoreRef.current.updateMetadata(input.traceId, {
+            ...formatRuntimeInferenceOperationForTrace(
+              request.operationKind
+            ),
+            ...routeMetadata,
+            ...formatAnswerRecoveryAdjudicationForTrace({
+              request,
+              disposition: "provider-configuration-error",
+            }),
+          });
+        }
+        return Promise.resolve({
+          disposition: "provider-configuration-error",
+          request,
+          leaseAuthorized: false,
+        });
+      }
+      const lease = createAnswerRecoveryAdjudicationLease({
+        sessionId: contextState.sessionId,
+        runtimeEpoch: runtimeEpochRef.current,
+        request,
+        manualCorrectionRevision: manualCorrectionRevisionRef.current,
+      });
+      const prompts = buildAnswerRecoveryAdjudicationPrompts(request);
+      const promptText = [prompts.systemPrompt, prompts.userMessage].join(
+        "\n\n"
+      );
+      const scheduledMetadata = {
+        ...formatRuntimeInferenceOperationForTrace(request.operationKind),
+        ...routeMetadata,
+        ...formatAnswerRecoveryAdjudicationForTrace({
+          request,
+          disposition: "scheduled",
+        }),
+        visualEvidenceCheckOperationId: lease.operationId,
+        visualEvidenceCheckStartedBeforeAdvisor: true,
+        visualEvidenceCheckSemanticPayloadDigest:
+          prompts.semanticPayloadDigest,
+        visualEvidenceCheckModelVisibleChars: prompts.modelVisibleChars,
+      };
+      if (input.traceId) {
+        traceStoreRef.current.updateMetadata(
+          input.traceId,
+          scheduledMetadata
+        );
+        traceStoreRef.current.recordInput(
+          input.traceId,
+          "question-only visual evidence model input",
+          promptText,
+          scheduledMetadata
+        );
+        sessionRecordingManagerRef.current?.recordModelInput({
+          traceId: input.traceId,
+          taskId: input.taskId,
+          label: "question-only visual evidence model input",
+          value: promptText,
+          metadata: scheduledMetadata,
+        });
+      }
+
+      return new Promise<VisualEvidenceCheckRuntimeOutcome>((resolve) => {
+        let stepId: string | undefined;
+        evidenceRequirementRuntimeRef.current!.schedule({
+          job: {
+            operationId: lease.operationId,
+            operationKind: request.operationKind,
+            sessionId: contextState.sessionId,
+            budgetKey: `${request.logicalQuestionUnitId}:${request.logicalQuestionUnitRevision}`,
+            budgetSlot: "question-only",
+            budgetReason: "pre-advisor-question-only-visual-evidence",
+            traceId: input.traceId ?? lease.operationId,
+            lease,
+            request,
+          },
+          execute: (job, signal) =>
+            requestAnswerRecoveryAdjudication({
+              request: job.request,
+              provider: modelRoute.provider,
+              selectedProvider: modelRoute.selectedProvider,
+              signal,
+              executionIdentity: {
+                requestId: job.operationId,
+                executionPlanId: job.lease.operationId,
+                modelId: readSelectedProviderModelId(
+                  modelRoute.selectedProvider
+                ),
+                sessionId: job.sessionId,
+                runtimeEpoch: job.lease.runtimeEpoch,
+                logicalQuestionUnitId:
+                  job.request.logicalQuestionUnitId,
+                logicalQuestionRevision:
+                  job.request.logicalQuestionUnitRevision,
+              },
+            }),
+          onStarted: (_job, startedAt, budget) => {
+            if (!input.traceId) return;
+            const metadata = {
+              ...scheduledMetadata,
+              visualEvidenceCheckStartedAt: startedAt,
+              visualEvidenceCheckBudgetRemaining: budget.remaining,
+            };
+            traceStoreRef.current.updateMetadata(input.traceId, metadata);
+            stepId = traceStoreRef.current.startStep(
+              input.traceId,
+              "Question-only visual evidence check",
+              metadata
+            );
+          },
+          onSettled: (settlement) => {
+            const currentQuestion = logicalQuestionUnitRef.current;
+            const authorization = authorizeAnswerRecoveryAdjudicationLease(
+              settlement.job.lease,
+              {
+                currentOperationId:
+                  evidenceRequirementRuntimeRef.current?.getCurrentOperationId(),
+                sessionId:
+                  contextManagerRef.current.getState().sessionId,
+                runtimeEpoch: runtimeEpochRef.current,
+                logicalQuestionUnitId: currentQuestion?.id ?? "",
+                logicalQuestionUnitRevision:
+                  currentQuestion?.revision ?? -1,
+                answerRevision: 0,
+                sourceHash: request.sourceHash,
+                manualCorrectionRevision:
+                  manualCorrectionRevisionRef.current,
+              }
+            );
+            const result = settlement.result;
+            const parsed = result?.parsed;
+            const parsedValue =
+              authorization.authorized &&
+              parsed?.ok &&
+              "visualEvidenceSpans" in parsed.value
+                ? parsed.value
+                : undefined;
+            const providerDisposition =
+              result?.providerDisposition ?? settlement.disposition;
+            const disposition =
+              settlement.disposition !== "completed"
+                ? settlement.disposition
+                : !authorization.authorized
+                  ? "stale"
+                  : providerDisposition !== "completed-with-content"
+                    ? providerDisposition
+                    : !parsed?.ok
+                      ? "invalid-output"
+                      : "candidate-accepted";
+            const metadata = {
+              ...scheduledMetadata,
+              ...formatRuntimeInferenceProviderOutcomeForTrace(
+                result?.providerOutcome,
+                "visualEvidenceCheck"
+              ),
+              ...formatAnswerRecoveryAdjudicationForTrace({
+                request,
+                disposition,
+                candidate: parsedValue,
+                leaseAuthorized: authorization.authorized,
+                staleReason: authorization.authorized
+                  ? undefined
+                  : authorization.reason,
+                durationMs: settlement.durationMs,
+                queueWaitMs: settlement.queueWaitMs,
+              }),
+              visualEvidenceCheckCompletedBeforeAdvisor: true,
+              visualEvidenceCheckParseDisposition:
+                result?.parseDisposition,
+            };
+            if (input.traceId) {
+              traceStoreRef.current.updateMetadata(
+                input.traceId,
+                metadata
+              );
+              if (result?.rawOutput) {
+                sessionRecordingManagerRef.current?.recordModelOutput({
+                  traceId: input.traceId,
+                  taskId: input.taskId,
+                  label: "question-only visual evidence raw output",
+                  value: result.rawOutput,
+                  metadata,
+                });
+              }
+              if (stepId) {
+                traceStoreRef.current.finishStep(
+                  input.traceId,
+                  stepId,
+                  settlement.disposition === "error" ? "error" : "success",
+                  metadata,
+                  settlement.error
+                );
+              }
+            }
+            resolve({
+              disposition,
+              request,
+              candidate: parsedValue,
+              operationId: lease.operationId,
+              leaseAuthorized: authorization.authorized,
+            });
+          },
+        });
+      });
+    },
+    []
+  );
+
   const scheduleAnswerRecoveryAdjudications = useCallback(
     ({
       traceId,
@@ -6284,12 +6487,8 @@ export function useMeetingAssistant() {
           });
           const pending =
             pendingAnswerResolutionCommitByTraceRef.current.get(traceId);
-          if (pending) {
-            if (request.operationKind === "answer-resolution") {
-              pending.answerResolutionSettled = true;
-            } else {
-              pending.evidenceRequirementSettled = true;
-            }
+          if (pending && request.operationKind === "answer-resolution") {
+            pending.answerResolutionSettled = true;
             finalizeAnswerRecoveryAdjudication(traceId);
           }
           continue;
@@ -6325,12 +6524,8 @@ export function useMeetingAssistant() {
           });
           const pending =
             pendingAnswerResolutionCommitByTraceRef.current.get(traceId);
-          if (pending) {
-            if (request.operationKind === "answer-resolution") {
-              pending.answerResolutionSettled = true;
-            } else {
-              pending.evidenceRequirementSettled = true;
-            }
+          if (pending && request.operationKind === "answer-resolution") {
+            pending.answerResolutionSettled = true;
             finalizeAnswerRecoveryAdjudication(traceId);
           }
           continue;
@@ -6530,15 +6725,6 @@ export function useMeetingAssistant() {
                     ? (acceptedValue as AnswerResolutionAdjudication)
                     : undefined;
                 pending.answerResolutionSettled = true;
-              } else {
-                pending.evidenceRequirement =
-                  acceptedValue?.decision === "visual-sufficient" ||
-                  acceptedValue?.decision === "visual-missing" ||
-                  acceptedValue?.decision === "not-visual" ||
-                  acceptedValue?.decision === "unclear"
-                    ? (acceptedValue as EvidenceRequirementAdjudication)
-                    : undefined;
-                pending.evidenceRequirementSettled = true;
               }
             }
             if (result?.rawOutput) {
@@ -6579,20 +6765,23 @@ export function useMeetingAssistant() {
     [finalizeAnswerRecoveryAdjudication]
   );
 
-  const scheduleSourceLinkageAdjudicationShadow = useCallback(
+  const scheduleSourceLinkageAdjudication = useCallback(
     ({
       traceId,
       taskId,
       request,
+      runtimeReleaseRequested = false,
     }: {
       traceId: string;
       taskId?: string;
       request: SourceLinkageAdjudicationRequest;
-    }) => {
+      runtimeReleaseRequested?: boolean;
+    }): Promise<SourceLinkageRuntimeOutcome> | undefined => {
       const evaluationActive =
         debugModeRef.current ||
         Boolean(sessionRecordingManagerRef.current?.getState().active);
-      if (!evaluationActive) return;
+      if (!evaluationActive && !runtimeReleaseRequested) return;
+      const mode = runtimeReleaseRequested ? "enforcement" : "shadow";
       const contextState = contextManagerRef.current.getState();
       const circuit = sourceLinkageAdjudicationCircuitRef.current.read(
         "source-linkage-adjudication",
@@ -6605,9 +6794,13 @@ export function useMeetingAssistant() {
           ),
           ...formatRuntimeInferenceCircuitForTrace(circuit),
           sourceLinkageDisposition: "provider-circuit-open",
-          sourceLinkageMode: "shadow",
+          sourceLinkageMode: mode,
         });
-        return;
+        return Promise.resolve({
+          disposition: "provider-circuit-open",
+          leaseAuthorized: false,
+          validationMismatchedFacets: [],
+        });
       }
       const modelRoute = resolveRuntimeInferenceModelRouteFromSnapshot({
         snapshot: meetingModelProviderSnapshotRef.current,
@@ -6636,9 +6829,13 @@ export function useMeetingAssistant() {
             opened.newlyOpened
           ),
           sourceLinkageDisposition: "provider-configuration-error",
-          sourceLinkageMode: "shadow",
+          sourceLinkageMode: mode,
         });
-        return;
+        return Promise.resolve({
+          disposition: "provider-configuration-error",
+          leaseAuthorized: false,
+          validationMismatchedFacets: [],
+        });
       }
       const lease = createSourceLinkageAdjudicationLease({
         sessionId: contextState.sessionId,
@@ -6658,6 +6855,7 @@ export function useMeetingAssistant() {
         ...formatSourceLinkageAdjudicationForTrace({
           request,
           disposition: "scheduled",
+          mode,
         }),
         sourceLinkageOperationId: lease.operationId,
         sourceLinkageInputChars: promptText.length,
@@ -6694,135 +6892,177 @@ export function useMeetingAssistant() {
         },
       });
 
-      let stepId: string | undefined;
-      sourceLinkageAdjudicationRuntimeRef.current!.schedule({
-        job: {
-          operationId: lease.operationId,
-          operationKind: "source-linkage-adjudication",
-          sessionId: contextState.sessionId,
-          budgetKey: request.screenObservationId,
-          budgetSlot: `${request.logicalQuestionUnitId}:${request.logicalQuestionUnitRevision}`,
-          budgetReason: "ambiguous-manual-screen-source-linkage-shadow",
-          traceId,
-          lease,
-          request,
-        },
-        execute: (job, signal) =>
-          requestSourceLinkageAdjudication({
-            request: job.request,
-            provider: modelRoute.provider,
-            selectedProvider: modelRoute.selectedProvider,
-            signal,
-            executionIdentity: {
-              requestId: job.operationId,
-              executionPlanId: job.lease.operationId,
-              modelId: readSelectedProviderModelId(
-                modelRoute.selectedProvider
-              ),
-              sessionId: job.sessionId,
-              runtimeEpoch: job.lease.runtimeEpoch,
-              logicalQuestionUnitId:
-                job.request.logicalQuestionUnitId,
-              logicalQuestionRevision:
-                job.request.logicalQuestionUnitRevision,
-            },
-          }),
-        onStarted: (_job, startedAt, budget) => {
-          const metadata = {
-            ...scheduledMetadata,
-            sourceLinkageStartedAt: startedAt,
-            sourceLinkageBudgetStartsBefore: budget.startsBefore,
-            sourceLinkageBudgetStartsAfter: budget.startsAfter,
-            sourceLinkageBudgetRemaining: budget.remaining,
-          };
-          traceStoreRef.current.updateMetadata(traceId, metadata);
-          stepId = traceStoreRef.current.startStep(
+      return new Promise<SourceLinkageRuntimeOutcome>((resolve) => {
+        let stepId: string | undefined;
+        sourceLinkageAdjudicationRuntimeRef.current!.schedule({
+          job: {
+            operationId: lease.operationId,
+            operationKind: "source-linkage-adjudication",
+            sessionId: contextState.sessionId,
+            budgetKey: request.screenObservationId,
+            budgetSlot: `${request.logicalQuestionUnitId}:${request.logicalQuestionUnitRevision}`,
+            budgetReason: runtimeReleaseRequested
+              ? "manual-screen-source-linkage-release"
+              : "ambiguous-manual-screen-source-linkage-shadow",
             traceId,
-            "Source linkage adjudication shadow",
-            metadata
-          );
-        },
-        onSettled: (settlement) => {
-          const latestContext = contextManagerRef.current.getState();
-          const latestObservation = latestContext.screenObservations.at(-1);
-          const currentLogicalQuestion = logicalQuestionUnitRef.current;
-          const authorization = authorizeSourceLinkageAdjudicationLease(
-            settlement.job.lease,
-            {
-              currentOperationId:
-                sourceLinkageAdjudicationRuntimeRef.current?.getCurrentOperationId(),
-              sessionId: latestContext.sessionId,
-              runtimeEpoch: runtimeEpochRef.current,
-              logicalQuestionUnitId: currentLogicalQuestion?.id ?? "",
-              logicalQuestionUnitRevision:
-                currentLogicalQuestion?.revision ?? -1,
-              screenObservationId: latestObservation?.id ?? "",
-              sourceHash: request.sourceHash,
-              manualCorrectionRevision: manualCorrectionRevisionRef.current,
-            }
-          );
-          const result = settlement.result;
-          const parsed = result?.parsed;
-          const candidate = parsed?.ok ? parsed.value : undefined;
-          const providerDisposition =
-            result?.providerDisposition ?? settlement.disposition;
-          const disposition =
-            settlement.disposition !== "completed"
-              ? settlement.disposition
-              : !authorization.authorized
-                ? "stale"
-                : providerDisposition !== "completed-with-content"
-                  ? providerDisposition
-                  : !parsed?.ok
-                    ? "invalid-output"
-                    : "shadow-observed";
-          const metadata = {
-            ...scheduledMetadata,
-            ...formatRuntimeInferenceProviderOutcomeForTrace(
-              result?.providerOutcome,
-              "sourceLinkage"
-            ),
-            ...formatSourceLinkageAdjudicationForTrace({
-              request,
-              disposition,
-              candidate,
-              leaseAuthorized: authorization.authorized,
-              staleReason: authorization.authorized
-                ? undefined
-                : authorization.reason,
-              durationMs: settlement.durationMs,
-              queueWaitMs: settlement.queueWaitMs,
+            lease,
+            request,
+          },
+          execute: (job, signal) =>
+            requestSourceLinkageAdjudication({
+              request: job.request,
+              provider: modelRoute.provider,
+              selectedProvider: modelRoute.selectedProvider,
+              signal,
+              executionIdentity: {
+                requestId: job.operationId,
+                executionPlanId: job.lease.operationId,
+                modelId: readSelectedProviderModelId(
+                  modelRoute.selectedProvider
+                ),
+                sessionId: job.sessionId,
+                runtimeEpoch: job.lease.runtimeEpoch,
+                logicalQuestionUnitId:
+                  job.request.logicalQuestionUnitId,
+                logicalQuestionRevision:
+                  job.request.logicalQuestionUnitRevision,
+              },
             }),
-            sourceLinkageProviderDisposition: providerDisposition,
-            sourceLinkageParseDisposition: result?.parseDisposition,
-            sourceLinkageParseValid: parsed?.ok ?? false,
-          };
-          traceStoreRef.current.updateMetadata(traceId, metadata);
-          if (result?.rawOutput) {
-            traceStoreRef.current.recordOutput(
+          onStarted: (_job, startedAt, budget) => {
+            const metadata = {
+              ...scheduledMetadata,
+              sourceLinkageStartedAt: startedAt,
+              sourceLinkageBudgetStartsBefore: budget.startsBefore,
+              sourceLinkageBudgetStartsAfter: budget.startsAfter,
+              sourceLinkageBudgetRemaining: budget.remaining,
+            };
+            traceStoreRef.current.updateMetadata(traceId, metadata);
+            stepId = traceStoreRef.current.startStep(
               traceId,
-              "source linkage adjudication raw output",
-              result.rawOutput,
+              runtimeReleaseRequested
+                ? "Source linkage adjudication release"
+                : "Source linkage adjudication shadow",
               metadata
             );
-            sessionRecordingManagerRef.current?.recordModelOutput({
-              traceId,
-              taskId,
-              label: "source linkage adjudication raw output",
-              value: result.rawOutput,
-              metadata,
-            });
-          }
-          if (stepId) {
-            traceStoreRef.current.finishStep(
-              traceId,
-              stepId,
-              settlement.disposition === "error" ? "error" : "success",
-              metadata,
-              settlement.error
+          },
+          onSettled: (settlement) => {
+            const latestContext = contextManagerRef.current.getState();
+            const latestObservation = latestContext.screenObservations.at(-1);
+            const authorization = authorizeSourceLinkageAdjudicationLease(
+              settlement.job.lease,
+              {
+                currentOperationId:
+                  sourceLinkageAdjudicationRuntimeRef.current?.getCurrentOperationId(),
+                transition: {
+                  operationKind: "source-linkage-adjudication",
+                  sessionId: latestContext.sessionId,
+                  runtimeEpoch: runtimeEpochRef.current,
+                  operationRevision:
+                    request.logicalQuestionUnitRevision,
+                  from: {
+                    logicalQuestionUnitId:
+                      request.logicalQuestionUnitId,
+                    logicalQuestionRevision:
+                      request.logicalQuestionUnitRevision,
+                    sourceHash: request.voiceSourceHash,
+                    correctionRevision:
+                      manualCorrectionRevisionRef.current,
+                  },
+                  to: {
+                    evidenceId: latestObservation?.id ?? "",
+                    evidenceHash:
+                      latestObservation?.id === request.screenObservationId
+                        ? request.screenEvidenceHash
+                        : "",
+                    correctionRevision:
+                      manualCorrectionRevisionRef.current,
+                  },
+                  sourceSettlementId: request.sourceSettlementId,
+                },
+              }
             );
-          }
-        },
+            const result = settlement.result;
+            const parsed = result?.parsed;
+            const candidate = parsed?.ok ? parsed.value : undefined;
+            const providerDisposition =
+              result?.providerDisposition ?? settlement.disposition;
+            const disposition =
+              settlement.disposition !== "completed"
+                ? settlement.disposition
+                : !authorization.authorized
+                  ? "stale"
+                  : providerDisposition !== "completed-with-content"
+                    ? providerDisposition
+                    : !parsed?.ok
+                    ? "invalid-output"
+                      : runtimeReleaseRequested
+                        ? "release-candidate"
+                        : "shadow-observed";
+            const metadata = {
+              ...scheduledMetadata,
+              ...formatRuntimeInferenceProviderOutcomeForTrace(
+                result?.providerOutcome,
+                "sourceLinkage"
+              ),
+              ...formatSourceLinkageAdjudicationForTrace({
+                request,
+                disposition,
+                candidate,
+                leaseAuthorized: authorization.authorized,
+                staleReason: authorization.authorized
+                  ? undefined
+                  : authorization.reason,
+                validationMismatchedFacets:
+                  authorization.mismatchedFacets,
+                durationMs: settlement.durationMs,
+                queueWaitMs: settlement.queueWaitMs,
+                mode,
+                appliedToRuntime: Boolean(
+                  runtimeReleaseRequested &&
+                    authorization.authorized &&
+                    candidate &&
+                    candidate.decision !== "unclear"
+                ),
+              }),
+              sourceLinkageProviderDisposition: providerDisposition,
+              sourceLinkageParseDisposition: result?.parseDisposition,
+              sourceLinkageParseValid: parsed?.ok ?? false,
+            };
+            traceStoreRef.current.updateMetadata(traceId, metadata);
+            if (result?.rawOutput) {
+              traceStoreRef.current.recordOutput(
+                traceId,
+                "source linkage adjudication raw output",
+                result.rawOutput,
+                metadata
+              );
+              sessionRecordingManagerRef.current?.recordModelOutput({
+                traceId,
+                taskId,
+                label: "source linkage adjudication raw output",
+                value: result.rawOutput,
+                metadata,
+              });
+            }
+            if (stepId) {
+              traceStoreRef.current.finishStep(
+                traceId,
+                stepId,
+                settlement.disposition === "error" ? "error" : "success",
+                metadata,
+                settlement.error
+              );
+            }
+            resolve({
+              disposition,
+              candidate: authorization.authorized ? candidate : undefined,
+              operationId: lease.operationId,
+              leaseAuthorized: authorization.authorized,
+              validationMismatchedFacets:
+                authorization.mismatchedFacets,
+            });
+          },
+        });
       });
     },
     []
@@ -9795,6 +10035,39 @@ export function useMeetingAssistant() {
       getLogicalQuestionSemanticEvidenceText(
         advisorJob.logicalQuestionUnit
       );
+    const visualEvidenceQuestion = advisorJob.logicalQuestionUnit
+      ? createProvisionalCurrentQuestion({
+          logicalQuestionUnit: advisorJob.logicalQuestionUnit,
+          sourceKind: promptContext.activeMeetingTask?.screen
+            ? "mixed"
+            : "voice",
+          sourceObservationIds: promptContext.activeMeetingTask?.screen
+            ? [promptContext.activeMeetingTask.screen.observationId]
+            : [],
+        })
+      : undefined;
+    const visualEvidenceCheckStartedAt = Date.now();
+    const visualEvidenceCheckPromise =
+      advisorJob.source === "live-turn" &&
+      advisorJob.logicalQuestionUnit &&
+      visualEvidenceQuestion &&
+      advisorQuestionAnswerFocusText
+        ? scheduleQuestionOnlyVisualEvidenceCheck({
+            traceId,
+            taskId: promptContext.activeMeetingTask?.id,
+            logicalQuestionUnit: advisorJob.logicalQuestionUnit,
+            questionSourceHash:
+              currentQuestionSettlement?.sourceHash ??
+              visualEvidenceQuestion.sourceHash,
+            questionText: advisorQuestionAnswerFocusText,
+            screenQuestion:
+              promptContext.activeMeetingTask?.screen?.question,
+            screenEvidenceSummary:
+              promptContext.activeMeetingTask?.screen
+                ? promptContext.screenContext
+                : undefined,
+          })
+        : undefined;
     const advisorTaskFallbackQuery =
       advisorQuestionSemanticEvidenceText ||
       (promptContext.latestTurn?.speaker === "them"
@@ -12739,6 +13012,150 @@ export function useMeetingAssistant() {
       }
     }
 
+    let visualEvidenceCheckOutcome:
+      | VisualEvidenceCheckRuntimeOutcome
+      | undefined;
+    if (visualEvidenceCheckPromise) {
+      const elapsedMs = Math.max(
+        0,
+        Date.now() - visualEvidenceCheckStartedAt
+      );
+      const remainingMs = Math.max(
+        0,
+        1_500 - elapsedMs
+      );
+      if (remainingMs > 0) {
+        try {
+          visualEvidenceCheckOutcome = await withTimeout(
+            visualEvidenceCheckPromise,
+            remainingMs,
+            "Question-only visual evidence check deadline expired."
+          );
+        } catch (error) {
+          if (traceId) {
+            traceStoreRef.current.updateMetadata(traceId, {
+              visualEvidenceCheckDisposition: "deadline-expired",
+              visualEvidenceCheckWaitMs: Math.max(
+                0,
+                Date.now() - visualEvidenceCheckStartedAt
+              ),
+              visualEvidenceCheckError:
+                error instanceof Error ? error.message : String(error),
+            });
+          }
+        }
+      }
+    }
+    if (
+      visualEvidenceCheckOutcome?.leaseAuthorized &&
+      visualEvidenceCheckOutcome.candidate?.decision === "visual-missing" &&
+      advisorJob.logicalQuestionUnit &&
+      visualEvidenceQuestion
+    ) {
+      const visualContext = contextManagerRef.current.getState();
+      const visualParent = visualContext.activeMeetingTask?.parent;
+      const recovery = createAwaitingVisualEvidenceRecoveryFact({
+        resolution: {
+          state: "awaiting-evidence",
+          awaitingVisualEvidence: true,
+          evidence: [
+            ...visualEvidenceCheckOutcome.candidate.questionEvidenceSpans,
+            ...visualEvidenceCheckOutcome.candidate.visualEvidenceSpans,
+          ],
+        },
+        sessionId: visualContext.sessionId,
+        runtimeEpoch: runtimeEpochRef.current,
+        logicalQuestionUnitId: advisorJob.logicalQuestionUnit.id,
+        logicalQuestionRevision: advisorJob.logicalQuestionUnit.revision,
+        answerRevision: 0,
+        visibleAnswerRevision:
+          stableAnswerRevisionRef.current?.revision ??
+          visibleAnswerRevisionRef.current,
+        parentTaskId: visualParent?.id,
+        parentRevision: visualParent?.revisions,
+        sourceHash: visualEvidenceQuestion.sourceHash,
+        sourceSettlementId: currentQuestionSettlement?.settlementId,
+        sourceTurnIds: advisorJob.logicalQuestionUnit.sourceTurnIds,
+        manualCorrectionRevision:
+          manualCorrectionRevisionRef.current,
+      });
+      if (recovery) {
+        awaitingVisualEvidenceRecoveryRef.current = recovery;
+      }
+      const localContent = [
+        "中文思路:",
+        "- 当前问题依赖尚未提供的屏幕证据。先请求对应截图或代码行，避免猜测。",
+        "",
+        "Answer:",
+        "Please share the relevant screenshot or code lines so I can answer this precisely.",
+      ].join("\n");
+      const localParsedAnswer = parseMeetingAnswer(localContent);
+      const localSuggestion = {
+        ...advisorEngineRef.current.toSuggestion(
+          requestId,
+          localContent,
+          advisorJob.logicalQuestionUnit.sourceTurnIds,
+          [],
+          buildSuggestionTaskMetadata(visualContext.activeMeetingTask),
+          localParsedAnswer
+        ),
+        questionType: responseOwner.questionType,
+        sourceTraceId: traceId,
+      };
+      setState((previous) => ({
+        ...previous,
+        ...withLatestReliableSuggestion(previous, localSuggestion),
+        status: activeRef.current
+          ? "listening"
+          : returnStatus === "paused"
+            ? "paused"
+            : "idle",
+        partialSuggestion: "",
+        error: null,
+      }));
+      recordCurrentQuestionSettlement();
+      updateForceAdviseTargetForAdvisorOutcome({
+        advisorJob,
+        status: "already-advised",
+        outcome: "question-only-visual-evidence-request",
+      });
+      releaseAdvisorJob(advisorJob, "committed", {
+        commitAuthorized: true,
+        commitAuthorizationReason:
+          "question-only-visual-evidence-request",
+      });
+      if (traceId) {
+        const metadata = {
+          ...formatAwaitingVisualEvidenceRecoveryForTrace(recovery, {
+            stage: "created",
+            reason: "question-only-visual-missing",
+          }),
+          visualEvidenceCheckWaitMs: Math.max(
+            0,
+            Date.now() - visualEvidenceCheckStartedAt
+          ),
+          visualEvidenceCheckAppliedToRuntime: Boolean(recovery),
+          advisorModelStarted: false,
+          advisorOutputCommittedToUi: true,
+        };
+        traceStoreRef.current.updateMetadata(traceId, metadata);
+        traceStoreRef.current.recordOutput(
+          traceId,
+          "question-only visual evidence request",
+          localContent,
+          metadata
+        );
+        sessionRecordingManagerRef.current?.recordCaptureLifecycle({
+          stage: "question-only-visual-evidence-request",
+          traceId,
+          taskId: visualParent?.id,
+          ...metadata,
+        });
+        traceStoreRef.current.finishTrace(traceId, "success");
+      }
+      return;
+    }
+
     try {
       for await (const event of advisorEngineRef.current.streamSuggestion({
         requestId,
@@ -13318,7 +13735,6 @@ export function useMeetingAssistant() {
           localResolution,
           adjudicationSourceHash: answerResolutionRequest?.sourceHash,
           answerResolutionSettled: !answerResolutionRequest,
-          evidenceRequirementSettled: true,
         };
         pendingAnswerResolutionCommitByTraceRef.current.set(
           traceId,
@@ -14463,6 +14879,7 @@ export function useMeetingAssistant() {
     releaseAdvisorJob,
     resolveMeetingModelRoute,
     scheduleAnswerRecoveryAdjudications,
+    scheduleQuestionOnlyVisualEvidenceCheck,
     scheduleWhiteboardSyntaxRepairShadow,
     selectedAIProvider,
     state.settings,
@@ -23157,7 +23574,6 @@ export function useMeetingAssistant() {
         awaitingVisualEvidenceRecoveryRef.current;
       const screenRequestParent =
         screenRequestContextState.activeMeetingTask?.parent;
-      const screenRequestSettlement = currentQuestionSettlementRef.current;
       const awaitingVisualEvidenceAuthorization =
         authorizeAwaitingVisualEvidenceRecovery({
           fact: awaitingVisualEvidenceFact,
@@ -23170,7 +23586,6 @@ export function useMeetingAssistant() {
           visibleAnswerRevision: visibleAnswerAtScreenRequest?.revision,
           parentTaskId: screenRequestParent?.id,
           parentRevision: screenRequestParent?.revisions,
-          sourceHash: screenRequestSettlement?.sourceHash,
           manualCorrectionRevision: manualCorrectionRevisionRef.current,
         });
       if (
@@ -23233,11 +23648,11 @@ export function useMeetingAssistant() {
               }
             : undefined,
         });
-      const screenVoiceQuestionCapsule =
+      let screenVoiceQuestionCapsule =
         screenVoiceQuestionBinding.disposition === "bind-voice"
           ? screenVoiceQuestionBinding.candidate
           : undefined;
-      const screenExactVisualEvidenceRecovery =
+      let screenExactVisualEvidenceRecovery =
         screenVoiceQuestionBinding.reason ===
         "awaiting-visual-evidence-recovery";
       const screenOperationClaim =
@@ -24028,14 +24443,37 @@ export function useMeetingAssistant() {
           screenVoiceQuestionBinding.candidate &&
           screenFallbackQuestion
         ) {
+          const voiceCandidate = screenVoiceQuestionBinding.candidate;
+          const committedVoiceSettlement =
+            currentQuestionSettlementRef.current?.logicalQuestionUnitId ===
+              voiceCandidate.logicalQuestionUnitId &&
+            currentQuestionSettlementRef.current?.revision ===
+              voiceCandidate.logicalQuestionRevision
+              ? currentQuestionSettlementRef.current
+              : undefined;
+          const recoveryVoiceFact =
+            awaitingVisualEvidenceFact?.logicalQuestionUnitId ===
+              voiceCandidate.logicalQuestionUnitId &&
+            awaitingVisualEvidenceFact.logicalQuestionRevision ===
+              voiceCandidate.logicalQuestionRevision
+              ? awaitingVisualEvidenceFact
+              : undefined;
+          const voiceSourceHash =
+            recoveryVoiceFact?.sourceHash ??
+            committedVoiceSettlement?.sourceHash;
           const sourceLinkageRequest =
-            buildSourceLinkageAdjudicationRequest({
+            voiceSourceHash
+              ? buildSourceLinkageAdjudicationRequest({
               logicalQuestionUnitId:
-                screenVoiceQuestionBinding.candidate.logicalQuestionUnitId,
+                voiceCandidate.logicalQuestionUnitId,
               logicalQuestionUnitRevision:
-                screenVoiceQuestionBinding.candidate.logicalQuestionRevision,
+                voiceCandidate.logicalQuestionRevision,
               screenObservationId: observation.id,
-              voiceQuestion: screenVoiceQuestionBinding.candidate.text,
+              voiceSourceHash,
+              sourceSettlementId:
+                recoveryVoiceFact?.sourceSettlementId ??
+                committedVoiceSettlement?.settlementId,
+              voiceQuestion: voiceCandidate.text,
               screenQuestion: screenFallbackQuestion,
               screenEvidenceSummary: [
                 screenPreflight?.focusedEvidenceSummary,
@@ -24045,13 +24483,53 @@ export function useMeetingAssistant() {
                 .join("\n"),
               activeParentObjective:
                 preflightContextState.activeMeetingTask?.parent.topic,
-            });
+                })
+              : undefined;
           if (sourceLinkageRequest) {
-            scheduleSourceLinkageAdjudicationShadow({
+            const sourceLinkageOutcomePromise =
+              scheduleSourceLinkageAdjudication({
               traceId: trace.id,
               taskId: preflightContextState.activeMeetingTask?.id,
               request: sourceLinkageRequest,
-            });
+                runtimeReleaseRequested: true,
+              });
+            if (sourceLinkageOutcomePromise) {
+              try {
+                const sourceLinkageOutcome = await withTimeout(
+                  sourceLinkageOutcomePromise,
+                  1_500,
+                  "Source linkage release window expired."
+                );
+                if (
+                  sourceLinkageOutcome.leaseAuthorized &&
+                  sourceLinkageOutcome.candidate?.decision === "bind-voice"
+                ) {
+                  screenVoiceQuestionCapsule = voiceCandidate;
+                  screenExactVisualEvidenceRecovery = true;
+                  if (recoveryVoiceFact) {
+                    settleAwaitingVisualEvidenceRecovery(
+                      "consumed",
+                      "source-linkage-bound-screen-evidence"
+                    );
+                  }
+                  traceStoreRef.current.updateMetadata(trace.id, {
+                    sourceLinkageAppliedToRuntime: true,
+                    sourceLinkageBoundVoiceLogicalQuestionUnitId:
+                      voiceCandidate.logicalQuestionUnitId,
+                    sourceLinkageBoundVoiceLogicalQuestionRevision:
+                      voiceCandidate.logicalQuestionRevision,
+                    manualScreenVoiceBindingOverriddenBySourceLinkage: true,
+                  });
+                }
+              } catch (error) {
+                traceStoreRef.current.updateMetadata(trace.id, {
+                  sourceLinkageAppliedToRuntime: false,
+                  sourceLinkageReleaseDisposition: "deadline-expired",
+                  sourceLinkageReleaseError:
+                    error instanceof Error ? error.message : String(error),
+                });
+              }
+            }
           }
         }
         const candidateScreenSourcePacket = resolveManualScreenSourcePacket({
@@ -24748,6 +25226,47 @@ export function useMeetingAssistant() {
             });
           }
         }
+        // SCREEN_COMMITTED_SETTLEMENT_CONSUMER_BARRIER
+        const effectiveScreenSettlementView =
+          buildEffectiveAdvisorSettlementView({
+            settlement: screenCurrentQuestionSettlement,
+            activeMeetingTask:
+              contextManagerRef.current.getState().activeMeetingTask ??
+              preflightContextState.activeMeetingTask,
+            taskRuntimeRevision:
+              contextManagerRef.current.getState().taskRuntime.revision,
+            fallback: {
+              questionType: screenMemoryQuestionType,
+              relation: localScreenTaskRelation,
+              projectAnchor: screenPreflight?.projectAnchor,
+            },
+            preserveCurrentBranchOnAbstention: true,
+          });
+        if (effectiveScreenSettlementView.effectiveSettlement) {
+          screenCurrentQuestionSettlement = {
+            ...effectiveScreenSettlementView.effectiveSettlement,
+            reasons: [
+              ...effectiveScreenSettlementView.effectiveSettlement.reasons,
+            ],
+            rejectedProposals: [
+              ...effectiveScreenSettlementView.effectiveSettlement
+                .rejectedProposals,
+            ],
+          };
+        }
+        traceStoreRef.current.updateMetadata(trace.id, {
+          ...formatEffectiveAdvisorSettlementViewForTrace(
+            effectiveScreenSettlementView,
+            {
+              proposedRelation:
+                screenTaskRelationDecision.proposedRelation,
+              proposedProjectAnchor: screenPreflight?.projectAnchor,
+            }
+          ),
+          screenConsumerBarrierApplied: Boolean(
+            effectiveScreenSettlementView.effectiveSettlement
+          ),
+        });
         if (screenCurrentQuestionSettlement) {
           currentQuestionSettlementRef.current =
             screenCurrentQuestionSettlement;
@@ -27370,7 +27889,7 @@ export function useMeetingAssistant() {
       recordPreparationPromptGuidanceUses,
       readRuntimeCommitSnapshot,
       resolveMeetingModelRoute,
-      scheduleSourceLinkageAdjudicationShadow,
+      scheduleSourceLinkageAdjudication,
       scheduleTaskRelationAdjudication,
       scheduleWhiteboardSyntaxRepairShadow,
       publishStableAnswerRevision,

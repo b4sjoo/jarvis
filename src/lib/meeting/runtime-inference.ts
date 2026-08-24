@@ -210,7 +210,7 @@ const DEFINITIONS: Record<
   "evidence-requirement": {
     workloadClass: "runtime",
     operationKind: "evidence-requirement",
-    lane: "background",
+    lane: "critical",
     timeoutMs: 1_500,
     maxOutputTokens: 256,
     quiescenceMs: 0,
@@ -221,7 +221,7 @@ const DEFINITIONS: Record<
     operationKind: "source-linkage-adjudication",
     lane: "critical",
     timeoutMs: 1_500,
-    maxOutputTokens: 128,
+    maxOutputTokens: 256,
     quiescenceMs: 0,
     maxStartsPerBudgetSlot: 1,
   },
