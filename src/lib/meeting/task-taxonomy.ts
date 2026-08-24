@@ -14,6 +14,53 @@ export type CanonicalQuestionType =
   | "field-knowledge"
   | "unknown";
 
+export const QUESTION_TYPE_TOPOLOGY_CAPABILITY_VERSION = 1;
+
+export interface QuestionTypeTopologyCapability {
+  canCreateParent: boolean;
+  allowedChildTypes: readonly CanonicalQuestionType[];
+}
+
+export type ParentEligibleCanonicalQuestionType = Exclude<
+  CanonicalQuestionType,
+  "field-knowledge" | "unknown"
+>;
+
+function defineQuestionTypeTopologyCapability(
+  canCreateParent: boolean,
+  allowedChildTypes: readonly CanonicalQuestionType[]
+): QuestionTypeTopologyCapability {
+  return Object.freeze({
+    canCreateParent,
+    allowedChildTypes: Object.freeze([...allowedChildTypes]),
+  });
+}
+
+const QUESTION_TYPE_TOPOLOGY_CAPABILITIES: Readonly<
+  Record<CanonicalQuestionType, QuestionTypeTopologyCapability>
+> = {
+  behavioral: defineQuestionTypeTopologyCapability(true, []),
+  coding: defineQuestionTypeTopologyCapability(true, []),
+  "general-system-design": defineQuestionTypeTopologyCapability(true, [
+    "field-knowledge",
+    "coding",
+  ]),
+  "ai-ml-system-design": defineQuestionTypeTopologyCapability(true, [
+    "field-knowledge",
+    "coding",
+  ]),
+  "project-deep-dive": defineQuestionTypeTopologyCapability(true, [
+    "field-knowledge",
+    "coding",
+  ]),
+  "field-knowledge": defineQuestionTypeTopologyCapability(
+    // Task 184 enables standalone Field Knowledge parents in a later slice.
+    false,
+    []
+  ),
+  unknown: defineQuestionTypeTopologyCapability(false, []),
+};
+
 export type TransitionalQuestionType = "ambiguous" | "non-question";
 
 export type LegacyQuestionTypeAlias = "system-design";
@@ -372,13 +419,33 @@ export function areCompatibleParentContinuityTypes(
   );
 }
 
-export function isParentCanonicalQuestionType(type: CanonicalQuestionType) {
+export function isParentCanonicalQuestionType(
+  type: CanonicalQuestionType
+): type is ParentEligibleCanonicalQuestionType {
+  return canQuestionTypeCreateParent(type);
+}
+
+export function getQuestionTypeTopologyCapability(
+  type: CanonicalQuestionType
+): QuestionTypeTopologyCapability {
+  return QUESTION_TYPE_TOPOLOGY_CAPABILITIES[type];
+}
+
+export function canQuestionTypeCreateParent(
+  type: CanonicalQuestionType
+): type is ParentEligibleCanonicalQuestionType {
+  return getQuestionTypeTopologyCapability(type).canCreateParent;
+}
+
+export function canParentQuestionTypeOwnChild(
+  parentType: CanonicalQuestionType,
+  childType: CanonicalQuestionType
+) {
   return (
-    type === "behavioral" ||
-    type === "coding" ||
-    type === "general-system-design" ||
-    type === "ai-ml-system-design" ||
-    type === "project-deep-dive"
+    parentType !== childType &&
+    getQuestionTypeTopologyCapability(parentType).allowedChildTypes.includes(
+      childType
+    )
   );
 }
 

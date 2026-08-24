@@ -3,6 +3,8 @@ import test from "node:test";
 import {
   areCompatibleQuestionTypes,
   buildQuestionTypeKeywordView,
+  canParentQuestionTypeOwnChild,
+  canQuestionTypeCreateParent,
   canQuestionTypeDecisionOverrideParent,
   decideLatestTurnTaxonomyBoundary,
   fromHumanEvalQuestionType,
@@ -11,6 +13,7 @@ import {
   fromScreenTaskKind,
   inferCanonicalQuestionTypeFromText,
   inferQuestionTypeDecisionFromText,
+  getQuestionTypeTopologyCapability,
   isParentCanonicalQuestionType,
   isQuestionTypeCompatibleWithMemoryFamily,
   memoryFamiliesForQuestionType,
@@ -18,6 +21,7 @@ import {
   normalizeInterviewBriefTypes,
   normalizeMemoryInterviewTypes,
   normalizeQuestionTypeAlias,
+  QUESTION_TYPE_TOPOLOGY_CAPABILITY_VERSION,
   readInterviewBriefType,
   readSingleConcreteInterviewTypeOverride,
   resolveTaskTaxonomyAuthority,
@@ -301,6 +305,83 @@ test("identifies parent-eligible canonical task types", () => {
   assert.equal(isParentCanonicalQuestionType("coding"), true);
   assert.equal(isParentCanonicalQuestionType("field-knowledge"), false);
   assert.equal(isParentCanonicalQuestionType("unknown"), false);
+});
+
+test("defines one complete question-type topology capability matrix", () => {
+  assert.equal(QUESTION_TYPE_TOPOLOGY_CAPABILITY_VERSION, 1);
+  assert.deepEqual(
+    {
+      behavioral: getQuestionTypeTopologyCapability("behavioral"),
+      coding: getQuestionTypeTopologyCapability("coding"),
+      generalSystemDesign: getQuestionTypeTopologyCapability(
+        "general-system-design"
+      ),
+      aiMlSystemDesign: getQuestionTypeTopologyCapability(
+        "ai-ml-system-design"
+      ),
+      projectDeepDive: getQuestionTypeTopologyCapability(
+        "project-deep-dive"
+      ),
+      fieldKnowledge: getQuestionTypeTopologyCapability("field-knowledge"),
+      unknown: getQuestionTypeTopologyCapability("unknown"),
+    },
+    {
+      behavioral: { canCreateParent: true, allowedChildTypes: [] },
+      coding: { canCreateParent: true, allowedChildTypes: [] },
+      generalSystemDesign: {
+        canCreateParent: true,
+        allowedChildTypes: ["field-knowledge", "coding"],
+      },
+      aiMlSystemDesign: {
+        canCreateParent: true,
+        allowedChildTypes: ["field-knowledge", "coding"],
+      },
+      projectDeepDive: {
+        canCreateParent: true,
+        allowedChildTypes: ["field-knowledge", "coding"],
+      },
+      fieldKnowledge: { canCreateParent: false, allowedChildTypes: [] },
+      unknown: { canCreateParent: false, allowedChildTypes: [] },
+    }
+  );
+  assert.equal(canQuestionTypeCreateParent("project-deep-dive"), true);
+  assert.equal(canQuestionTypeCreateParent("field-knowledge"), false);
+});
+
+test("allows only bounded cross-type children and rejects same-type children", () => {
+  const parentTypes = [
+    "behavioral",
+    "coding",
+    "general-system-design",
+    "ai-ml-system-design",
+    "project-deep-dive",
+    "field-knowledge",
+    "unknown",
+  ] as const;
+
+  for (const type of parentTypes) {
+    assert.equal(canParentQuestionTypeOwnChild(type, type), false);
+  }
+  assert.equal(
+    canParentQuestionTypeOwnChild("general-system-design", "field-knowledge"),
+    true
+  );
+  assert.equal(
+    canParentQuestionTypeOwnChild("ai-ml-system-design", "coding"),
+    true
+  );
+  assert.equal(
+    canParentQuestionTypeOwnChild("project-deep-dive", "field-knowledge"),
+    true
+  );
+  assert.equal(
+    canParentQuestionTypeOwnChild("behavioral", "field-knowledge"),
+    false
+  );
+  assert.equal(
+    canParentQuestionTypeOwnChild("coding", "field-knowledge"),
+    false
+  );
 });
 
 test("infers canonical question type from lightweight text signals", () => {

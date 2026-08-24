@@ -1,4 +1,5 @@
 import {
+  canParentQuestionTypeOwnChild,
   isParentCanonicalQuestionType,
   normalizeCanonicalQuestionType,
   type CanonicalQuestionType,
@@ -117,8 +118,7 @@ export function decideCrossTypeTaskRelationAuthority(input: {
   );
   if (
     bindingEvidence.length > 0 &&
-    parentCanOwnBoundedChild(activeQuestionType) &&
-    isBoundedChildType(candidateQuestionType)
+    canParentQuestionTypeOwnChild(activeQuestionType, candidateQuestionType)
   ) {
     return {
       relation: "child-probe",
@@ -130,8 +130,7 @@ export function decideCrossTypeTaskRelationAuthority(input: {
   }
 
   if (
-    parentCanOwnBoundedChild(activeQuestionType) &&
-    isBoundedChildType(candidateQuestionType)
+    canParentQuestionTypeOwnChild(activeQuestionType, candidateQuestionType)
   ) {
     return {
       relation: "unknown",
@@ -242,23 +241,11 @@ export function formatTaskRelationAuthorityForTrace(
   };
 }
 
-function parentCanOwnBoundedChild(type: CanonicalQuestionType) {
-  return (
-    type === "ai-ml-system-design" ||
-    type === "general-system-design" ||
-    type === "project-deep-dive"
-  );
-}
-
 function isDesignParentType(type: CanonicalQuestionType) {
   return (
     type === "general-system-design" ||
     type === "ai-ml-system-design"
   );
-}
-
-function isBoundedChildType(type: CanonicalQuestionType) {
-  return type === "field-knowledge" || type === "coding";
 }
 
 function findEvidenceSpans(text: string, patterns: RegExp[]) {
