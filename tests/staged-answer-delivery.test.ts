@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   decideStagedAnswerPartial,
   hasDisplayableMeetingSection,
+  projectStagedAnswerOnlyContent,
 } from "../src/lib/meeting/staged-answer-delivery.js";
 
 test("explicit generation keeps the stable answer until a valid section has content", () => {
@@ -76,4 +77,27 @@ test("automatic generation retains the previous stable-answer policy", () => {
 test("displayable section detection ignores a bare heading", () => {
   assert.equal(hasDisplayableMeetingSection("Answer:\n"), false);
   assert.equal(hasDisplayableMeetingSection("Answer:\nSure."), true);
+});
+
+test("allows an authorized automatic Voice Answer after a complete section", () => {
+  const decision = decideStagedAnswerPartial({
+    accumulated: "Answer:\nUse a hash map and linked list.",
+    explicitRequest: false,
+    automaticVoiceAuthorized: true,
+    stableAnswerPresent: true,
+    guardrailHeld: false,
+    visibleStreamStarted: false,
+  });
+
+  assert.equal(decision.visible, true);
+  assert.equal(decision.startsVisibleStream, true);
+});
+
+test("keeps artifacts out of staged Answer content", () => {
+  assert.equal(
+    projectStagedAnswerOnlyContent(
+      "Answer:\nExplain the invariant.\n\nCode:\n```ts\nreturn value;\n```"
+    ),
+    "Answer:\nExplain the invariant."
+  );
 });

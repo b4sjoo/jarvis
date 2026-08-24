@@ -27,9 +27,13 @@ export interface StableAnswerSectionRevision {
 
 export interface StableAnswerRevision {
   revision: number;
+  sessionId?: string;
+  runtimeEpoch?: number;
   taskId: string | null;
   logicalQuestionUnitId: string | null;
   logicalQuestionRevision: number | null;
+  questionSourceHash?: string;
+  settlementId?: string;
   suggestion: AdvisorSuggestion;
   sections: Record<AnswerArtifactSection, StableAnswerSectionRevision>;
   committedAt: number;
@@ -62,6 +66,10 @@ export interface PendingAnswerRevision {
   taskRevision: number | null;
   logicalQuestionUnitId: string | null;
   logicalQuestionRevision: number | null;
+  sessionId?: string;
+  runtimeEpoch?: number;
+  questionSourceHash?: string;
+  settlementId?: string;
   manualCorrectionRevision: number;
   responseActionRevision: number;
   queuedAt: number;
@@ -143,6 +151,10 @@ export function commitStableAnswerRevision(input: {
   taskId: string | null;
   logicalQuestionUnitId: string | null;
   logicalQuestionRevision: number | null;
+  sessionId?: string;
+  runtimeEpoch?: number;
+  questionSourceHash?: string;
+  settlementId?: string;
   resetSections?: boolean;
   revision?: number;
   committedAt?: number;
@@ -209,9 +221,14 @@ export function commitStableAnswerRevision(input: {
 
   return {
     revision,
+    sessionId: input.sessionId ?? current?.sessionId,
+    runtimeEpoch: input.runtimeEpoch ?? current?.runtimeEpoch,
     taskId: input.taskId,
     logicalQuestionUnitId: input.logicalQuestionUnitId,
     logicalQuestionRevision: input.logicalQuestionRevision,
+    questionSourceHash:
+      input.questionSourceHash ?? current?.questionSourceHash,
+    settlementId: input.settlementId ?? current?.settlementId,
     suggestion: {
       ...input.candidate,
       content,
@@ -228,6 +245,7 @@ export function commitStableAnswerRevision(input: {
     committedAt: now,
   };
 }
+
 
 export function collectStableAnswerMutatedArtifacts(
   current: StableAnswerRevision | null | undefined,

@@ -77,6 +77,10 @@ import {
 import { formatRuntimeInferenceProviderOutcomeForTrace } from "@/lib/meeting/runtime-inference-response";
 import { buildManualScreenLogicalQuestionUnit } from "@/lib/meeting/manual-screen-question-source";
 import { settleManualQuestionTypeCorrection } from "@/lib/meeting/manual-correction-settlement";
+import {
+  formatVisibleAnswerResponseActionTargetForTrace,
+  resolveVisibleAnswerResponseActionTarget,
+} from "@/lib/meeting/response-action-target";
 import { materializeHumanEvaluationAttemptProjectionV2 } from "@/lib/meeting/human-evaluation-attempt-projection";
 import { validateHumanEvaluationAttemptSubjectV2 } from "@/lib/meeting/human-evaluation-attempt";
 import { toHumanEvaluationCollectionProvenance } from "@/lib/meeting/session-evaluation-provenance";
@@ -291,6 +295,7 @@ import {
   decideRefreshAuthority,
   decideStableAnswerCommit,
   decideStagedAnswerPartial,
+  projectStagedAnswerOnlyContent,
   detectAnswerSufficiencyShadow,
   projectAnswerResolution,
   authorizeAwaitingVisualEvidenceRecovery,
@@ -4317,6 +4322,10 @@ export function useMeetingAssistant() {
       taskId: pending.resultTaskId,
       logicalQuestionUnitId: pending.logicalQuestionUnitId,
       logicalQuestionRevision: pending.logicalQuestionRevision,
+      sessionId: pending.sessionId,
+      runtimeEpoch: pending.runtimeEpoch,
+      questionSourceHash: pending.questionSourceHash,
+      settlementId: pending.settlementId,
       resetSections: pending.resetSections,
       revision: pending.baseVisibleAnswerRevision + 1,
       committedAt: now,
@@ -4571,6 +4580,10 @@ export function useMeetingAssistant() {
       taskRevision: number | null;
       logicalQuestionUnitId: string | null;
       logicalQuestionRevision: number | null;
+      sessionId?: string;
+      runtimeEpoch?: number;
+      questionSourceHash?: string;
+      settlementId?: string;
       resetSections: boolean;
       reason: string;
       latestUsefulAnswerMutationAuthorized: boolean;
@@ -4589,6 +4602,10 @@ export function useMeetingAssistant() {
         taskId: input.resultTaskId,
         logicalQuestionUnitId: input.logicalQuestionUnitId,
         logicalQuestionRevision: input.logicalQuestionRevision,
+        sessionId: input.sessionId,
+        runtimeEpoch: input.runtimeEpoch,
+        questionSourceHash: input.questionSourceHash,
+        settlementId: input.settlementId,
         resetSections: input.resetSections,
         revision: input.lease.baseVisibleAnswerRevision + 1,
         committedAt: now,
@@ -4705,6 +4722,10 @@ export function useMeetingAssistant() {
         taskRevision: input.taskRevision,
         logicalQuestionUnitId: input.logicalQuestionUnitId,
         logicalQuestionRevision: input.logicalQuestionRevision,
+        sessionId: input.sessionId,
+        runtimeEpoch: input.runtimeEpoch,
+        questionSourceHash: input.questionSourceHash,
+        settlementId: input.settlementId,
         manualCorrectionRevision: manualCorrectionRevisionRef.current,
         responseActionRevision: responseActionRevisionRef.current,
         queuedAt: now,
@@ -9636,6 +9657,25 @@ export function useMeetingAssistant() {
         );
       }
       if (!decision.authorized) {
+        if (advisorJob.source === "response-action") {
+          const actionLabel =
+            options.responseAction === "enhance-context"
+              ? "Enhance"
+              : options.responseAction === "narrow-context"
+                ? "Narrow"
+                : "Response action";
+          setState((previous) => ({
+            ...previous,
+            error: `${actionLabel} target changed before execution. Try the action again.`,
+          }));
+          if (traceId) {
+            traceStoreRef.current.updateMetadata(traceId, {
+              responseActionTerminalStage: "pre-execution-identity",
+              responseActionTerminalReason: decision.reason,
+              responseActionVisibleRejection: true,
+            });
+          }
+        }
         terminalizeAuthorizationRejection({
           reason: decision.reason,
           source: "runtime-commit-authorization",
@@ -12921,6 +12961,13 @@ export function useMeetingAssistant() {
     let advisorModelCompletedAt: number | undefined;
     const stagedAnswerDeliveryExplicitRequest =
       advisorJob.source !== "live-turn";
+    const automaticVoiceStreamingAuthorized = () =>
+      advisorJob.source === "live-turn" &&
+      advisorJob.refreshAuthority.authorized &&
+      inferredTurnIntentDecision?.action === "answer-refresh" &&
+      inferredTurnIntentDecision.executionAuthorized &&
+      outputCommitAuthorization.authorized &&
+      responseOpportunityGenerationAuthorized();
     let stagedAnswerDeliveryChunkCount = 0;
     let stagedAnswerDeliveryFirstChunkAt: number | undefined;
     let stagedAnswerDeliveryFirstVisiblePartialAt: number | undefined;
@@ -12937,6 +12984,8 @@ export function useMeetingAssistant() {
           traceId,
           formatStagedAnswerDeliveryForTrace({
             explicitRequest: stagedAnswerDeliveryExplicitRequest,
+            automaticVoiceAuthorized:
+              automaticVoiceStreamingAuthorized(),
             chunkCount: stagedAnswerDeliveryChunkCount,
             firstChunkAt: stagedAnswerDeliveryFirstChunkAt,
             firstVisiblePartialAt:
@@ -13369,11 +13418,15 @@ export function useMeetingAssistant() {
             decision: factAnchorDecision,
             content: event.accumulated,
           });
-        const stagedPartialContent =
-          factAnchorStreamingPartial.visibleContent;
+        const stagedPartialContent = projectStagedAnswerOnlyContent(
+          factAnchorStreamingPartial.visibleContent
+        );
+        const automaticVoiceAuthorized =
+          automaticVoiceStreamingAuthorized();
         const stagedPartialDecision = decideStagedAnswerPartial({
           accumulated: stagedPartialContent,
           explicitRequest: stagedAnswerDeliveryExplicitRequest,
+          automaticVoiceAuthorized,
           stableAnswerPresent: Boolean(stableAnswerRevisionRef.current),
           guardrailHeld:
             !outputCommitAuthorization.authorized ||
@@ -13395,6 +13448,7 @@ export function useMeetingAssistant() {
                   ...formatStagedAnswerDeliveryForTrace({
                     explicitRequest:
                       stagedAnswerDeliveryExplicitRequest,
+                    automaticVoiceAuthorized,
                     chunkCount: stagedAnswerDeliveryChunkCount,
                     firstChunkAt: stagedAnswerDeliveryFirstChunkAt,
                     firstVisiblePartialAt:
@@ -13423,7 +13477,8 @@ export function useMeetingAssistant() {
           }
           stagedAnswerDeliveryVisible =
             stagedAnswerDeliveryVisible ||
-            stagedAnswerDeliveryExplicitRequest;
+            stagedAnswerDeliveryExplicitRequest ||
+            automaticVoiceAuthorized;
           setState((previous) => ({
             ...previous,
             partialSuggestion: stagedPartialContent,
@@ -14249,6 +14304,10 @@ export function useMeetingAssistant() {
                 advisorJob.logicalQuestionUnit?.id ?? null,
               logicalQuestionRevision:
                 advisorJob.logicalQuestionUnit?.revision ?? null,
+              sessionId: contextState.sessionId,
+              runtimeEpoch: runtimeEpochRef.current,
+              questionSourceHash: currentQuestionSettlement?.sourceHash,
+              settlementId: currentQuestionSettlement?.settlementId,
               resetSections: resetVisibleSections,
               revision: visibleAnswerRevisionBefore + 1,
             })
@@ -14277,6 +14336,10 @@ export function useMeetingAssistant() {
                 advisorJob.logicalQuestionUnit?.id ?? null,
               logicalQuestionRevision:
                 advisorJob.logicalQuestionUnit?.revision ?? null,
+              sessionId: contextState.sessionId,
+              runtimeEpoch: runtimeEpochRef.current,
+              questionSourceHash: currentQuestionSettlement?.sourceHash,
+              settlementId: currentQuestionSettlement?.settlementId,
               resetSections: resetVisibleSections,
               reason: stableAnswerCommitDecision.reason,
               latestUsefulAnswerMutationAuthorized:
@@ -14671,6 +14734,8 @@ export function useMeetingAssistant() {
           ...outputCommitMetadata,
           ...formatStagedAnswerDeliveryForTrace({
             explicitRequest: stagedAnswerDeliveryExplicitRequest,
+            automaticVoiceAuthorized:
+              automaticVoiceStreamingAuthorized(),
             chunkCount: stagedAnswerDeliveryChunkCount,
             firstChunkAt: stagedAnswerDeliveryFirstChunkAt,
             firstVisiblePartialAt:
@@ -26459,8 +26524,9 @@ export function useMeetingAssistant() {
                   decision: screenFactAnchorDecision,
                   content: partialContent,
                 });
-              const stagedPartialContent =
-                factAnchorStreamingPartial.visibleContent;
+              const stagedPartialContent = projectStagedAnswerOnlyContent(
+                factAnchorStreamingPartial.visibleContent
+              );
               const stagedPartialDecision = decideStagedAnswerPartial({
                 accumulated: stagedPartialContent,
                 explicitRequest: true,
@@ -27357,6 +27423,12 @@ export function useMeetingAssistant() {
                   screenGenerationLease?.logicalQuestionUnitId ?? null,
                 logicalQuestionRevision:
                   screenGenerationLease?.logicalQuestionRevision ?? null,
+                sessionId: updatedContextState.sessionId,
+                runtimeEpoch: runtimeEpochRef.current,
+                questionSourceHash:
+                  screenCurrentQuestionSettlement?.sourceHash,
+                settlementId:
+                  screenCurrentQuestionSettlement?.settlementId,
                 resetSections:
                   screenStartedNewInterviewParent ||
                   screenCandidateStartedNewParent,
@@ -30142,21 +30214,39 @@ export function useMeetingAssistant() {
         responseAction === "enhance-context"
       ) {
         const meetingContext = contextManagerRef.current.getState();
-        const logicalQuestionUnit =
-          resolveResponseActionLogicalQuestionUnit({
+        const targetDecision =
+          resolveVisibleAnswerResponseActionTarget({
+            stableAnswer: stableAnswerRevisionRef.current,
             currentLogicalQuestionUnit:
               logicalQuestionUnitRef.current,
             meetingContext,
             runtimeEpoch: runtimeEpochRef.current,
-            preferScreen: isScreenAnchoredSuggestion(
-              state.latestSuggestion
-            ),
           });
-        if (!logicalQuestionUnit) {
+        const responseActionTrace = traceStoreRef.current.startTrace(
+          stableAnswerRevisionRef.current?.suggestion.taskSource === "screen"
+            ? "screen"
+            : "voice",
+          {
+            source: "advisor-response-action",
+            responseAction,
+            ...formatVisibleAnswerResponseActionTargetForTrace(
+              targetDecision
+            ),
+          }
+        );
+        const logicalQuestionUnit = targetDecision.logicalQuestionUnit;
+        if (!targetDecision.authorized || !logicalQuestionUnit) {
+          traceStoreRef.current.finishTrace(
+            responseActionTrace.id,
+            "cancelled",
+            targetDecision.reason
+          );
           setState((previous) => ({
             ...previous,
             error:
-              "There is no source-owned current question to regenerate.",
+              responseAction === "enhance-context"
+                ? "Enhance target changed. Use the latest visible answer and try again."
+                : "Narrow target changed. Use the latest visible answer and try again.",
           }));
           return;
         }
@@ -30176,6 +30266,41 @@ export function useMeetingAssistant() {
             settlement: currentQuestionSettlementRef.current,
             logicalQuestionUnit,
           });
+        if (
+          targetDecision.sourceHash &&
+          committedSettlement?.sourceHash !== targetDecision.sourceHash
+        ) {
+          traceStoreRef.current.updateMetadata(responseActionTrace.id, {
+            ...formatVisibleAnswerResponseActionTargetForTrace(
+              targetDecision
+            ),
+            responseActionTerminalStage: "pre-execution-identity",
+            responseActionTerminalReason: "source-hash-mismatch",
+            responseActionVisibleRejection: true,
+          });
+          traceStoreRef.current.finishTrace(
+            responseActionTrace.id,
+            "cancelled",
+            "source-hash-mismatch"
+          );
+          setState((previous) => ({
+            ...previous,
+            error:
+              responseAction === "enhance-context"
+                ? "Enhance target changed. Use the latest visible answer and try again."
+                : "Narrow target changed. Use the latest visible answer and try again.",
+          }));
+          return;
+        }
+        traceStoreRef.current.updateMetadata(responseActionTrace.id, {
+          ...formatVisibleAnswerResponseActionTargetForTrace(
+            targetDecision
+          ),
+          responseActionResolvedSettlementId:
+            committedSettlement?.settlementId,
+          responseActionResolvedSettlementSourceHash:
+            committedSettlement?.sourceHash,
+        });
         const promptContextOverride: AdvisorPromptContext = {
           ...selection.promptContext,
           responseActionContextScope: {
@@ -30202,6 +30327,7 @@ export function useMeetingAssistant() {
           mode: "response-action",
           responseAction,
           advisorJobSource: "response-action",
+          traceId: responseActionTrace.id,
           taskMutationAuthority: "preserve-parent",
           questionLineage:
             resolveCurrentSuggestionQuestionLineage(),

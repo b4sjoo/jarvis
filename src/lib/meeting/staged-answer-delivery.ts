@@ -18,6 +18,7 @@ const MEETING_SECTION_PATTERN =
 export function decideStagedAnswerPartial(input: {
   accumulated: string;
   explicitRequest: boolean;
+  automaticVoiceAuthorized?: boolean;
   stableAnswerPresent: boolean;
   guardrailHeld: boolean;
   visibleStreamStarted: boolean;
@@ -30,7 +31,9 @@ export function decideStagedAnswerPartial(input: {
     };
   }
 
-  if (!input.explicitRequest) {
+  const streamingAuthorized =
+    input.explicitRequest || input.automaticVoiceAuthorized === true;
+  if (!streamingAuthorized) {
     return input.stableAnswerPresent
       ? {
           visible: false,
@@ -73,8 +76,16 @@ export function hasDisplayableMeetingSection(value: string) {
   return match[1].replace(/[`*_#>-]/g, "").trim().length >= 4;
 }
 
+export function projectStagedAnswerOnlyContent(value: string) {
+  const artifactBoundary =
+    /(?:^|\n)\s*(?:Code|Complexity|Whiteboard)\s*:/gim;
+  const match = artifactBoundary.exec(value);
+  return (match ? value.slice(0, match.index) : value).trimEnd();
+}
+
 export function formatStagedAnswerDeliveryForTrace(input: {
   explicitRequest: boolean;
+  automaticVoiceAuthorized?: boolean;
   chunkCount: number;
   firstChunkAt?: number;
   firstVisiblePartialAt?: number;
@@ -83,6 +94,8 @@ export function formatStagedAnswerDeliveryForTrace(input: {
 }) {
   return {
     stagedAnswerDeliveryExplicitRequest: input.explicitRequest,
+    stagedAnswerDeliveryAutomaticVoiceAuthorized:
+      input.automaticVoiceAuthorized ?? false,
     stagedAnswerDeliveryChunkCount: input.chunkCount,
     stagedAnswerDeliveryFirstChunkAt: input.firstChunkAt,
     stagedAnswerDeliveryFirstVisiblePartialAt: input.firstVisiblePartialAt,
