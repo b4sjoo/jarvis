@@ -2,6 +2,7 @@ import { calculateWordEquivalent } from "./transcript-fusion.js";
 import { decideSentenceCompletion } from "./sentence-completion-buffer.js";
 import { inferExplicitProgrammingLanguageFromText } from "./programming-language.js";
 import { classifyAdjacentConstraintKinds } from "./adjacent-question-constraint.js";
+import { isExplicitMeetingLogisticsTranscript } from "./meeting-logistics.js";
 import type { PlaybookPhaseControlEvidence } from "./playbook-phase.js";
 
 export type AdvisorTurnIntent =
@@ -720,15 +721,6 @@ function canonicalizeAcknowledgement(text: string) {
     return words.slice(0, words.length / 2).join(" ");
   }
   return acousticFamily;
-}
-
-export function isExplicitMeetingLogisticsTranscript(text: string) {
-  const normalized = normalizeAdvisorTurnText(text);
-  return /\b(one second|just a second|hold on|wait a second|take a look|share my screen|sharing my screen|start our interview|start the interview|let s start|let us start|let me search|let me think|let me check)\b/i.test(
-    normalized
-  ) || /等一下|稍等|我看一下|我想一下|我分享屏幕|开始面试|开始吧/.test(
-    normalized
-  );
 }
 
 function isMeetingLogistics(normalized: string) {

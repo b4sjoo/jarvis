@@ -842,6 +842,18 @@ test("narrowly releases a grounded cross-type manual screen boundary", () => {
   assert.equal(
     decideNarrowScreenRelationRelease({
       ...common,
+      firstBatchRelease: {
+        authorized: true,
+        relation: "new-parent",
+        confidence: 0.98,
+        reason: "different-parent-type-independent",
+      },
+    }).authorized,
+    true
+  );
+  assert.equal(
+    decideNarrowScreenRelationRelease({
+      ...common,
       candidate: {
         ...candidate,
         parentEvidenceSpans: [
@@ -919,6 +931,41 @@ test("narrowly converges authoritative voice type and relation into one parent s
     releaseWindowOpen: true,
   });
   assert.equal(release.authorized, true);
+  const affinityRelease = decideNarrowVoiceRelationRelease({
+    sourceKind: "voice",
+    activeParentQuestionType: "coding",
+    typeSettlement,
+    manualCorrectionActive: false,
+    operationLeaseAuthorized: true,
+    releaseWindowOpen: true,
+    firstBatchRelease: {
+      authorized: true,
+      relation: "new-parent",
+      confidence: 0.98,
+      reason: "different-parent-type-independent",
+    },
+  });
+  assert.equal(affinityRelease.authorized, true);
+  assert.equal(affinityRelease.releasedRelation, "new-parent");
+  const affinityBlocked = decideNarrowVoiceRelationRelease({
+    sourceKind: "voice",
+    activeParentQuestionType: "coding",
+    typeSettlement,
+    candidate,
+    manualCorrectionActive: false,
+    operationLeaseAuthorized: true,
+    releaseWindowOpen: true,
+    firstBatchRelease: {
+      authorized: false,
+      confidence: 0.99,
+      reason: "same-type-independent-shadow",
+    },
+  });
+  assert.equal(affinityBlocked.authorized, false);
+  assert.equal(
+    affinityBlocked.reason,
+    "first-batch-release-not-authorized"
+  );
 
   const convergence = settleNarrowVoiceTypeRelation({
     operationId: "type-operation-a",

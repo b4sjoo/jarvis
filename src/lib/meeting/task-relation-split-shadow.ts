@@ -5,6 +5,7 @@ import {
 } from "./runtime-inference.js";
 import type { RuntimeInferenceRuntimeJob } from "./runtime-inference-runtime.js";
 import type {
+  LlmTaskRelationAdjudication,
   RuntimeTaskRelation,
   TaskRelationAdjudicationRequest,
   TaskRelationSourceEvidenceRole,
@@ -197,6 +198,8 @@ export interface FirstBatchRelationReleaseDecision {
   childAffinityConfidence?: number;
   parentAffinityDecision?: ParentAffinityDecision;
   parentAffinityConfidence?: number;
+  currentEvidenceSpans: string[];
+  parentEvidenceSpans: string[];
 }
 
 export function decideFirstBatchRelationRelease(input: {
@@ -230,6 +233,14 @@ export function decideFirstBatchRelationRelease(input: {
       | ParentAffinityDecision
       | undefined,
     parentAffinityConfidence: parentAffinity?.confidence,
+    currentEvidenceSpans: uniqueEvidenceSpans([
+      ...(childAffinity?.currentEvidenceSpans ?? []),
+      ...(parentAffinity?.currentEvidenceSpans ?? []),
+    ]),
+    parentEvidenceSpans: uniqueEvidenceSpans([
+      ...(childAffinity?.branchEvidenceSpans ?? []),
+      ...(parentAffinity?.branchEvidenceSpans ?? []),
+    ]),
     minimumConfidence: FIRST_BATCH_RELATION_RELEASE_MIN_CONFIDENCE,
   };
   const decide = (
@@ -385,6 +396,28 @@ export function decideFirstBatchRelationRelease(input: {
   });
 }
 
+export function projectFirstBatchRelationAdjudication(
+  decision: FirstBatchRelationReleaseDecision
+): LlmTaskRelationAdjudication | undefined {
+  if (
+    !decision.authorized ||
+    !decision.relation ||
+    decision.currentEvidenceSpans.length === 0
+  ) {
+    return undefined;
+  }
+  return {
+    schemaVersion: 3,
+    relation: decision.relation,
+    confidence: decision.confidence,
+    currentQuestionEvidenceSpans: [...decision.currentEvidenceSpans],
+    parentEvidenceSpans:
+      decision.relation === "new-parent"
+        ? []
+        : [...decision.parentEvidenceSpans],
+  };
+}
+
 export function formatFirstBatchRelationReleaseForTrace(
   decision: FirstBatchRelationReleaseDecision | undefined
 ) {
@@ -412,6 +445,10 @@ export function formatFirstBatchRelationReleaseForTrace(
     taskRelationFirstBatchParentAffinityConfidence:
       decision.parentAffinityConfidence,
   };
+}
+
+function uniqueEvidenceSpans(values: string[]) {
+  return Array.from(new Set(values.filter(Boolean)));
 }
 
 export type TaskRelationCanonicalShadowParseResult =

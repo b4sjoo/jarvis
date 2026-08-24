@@ -99,6 +99,10 @@ import {
   buildTaskRelationCanonicalShadowRequest,
   compareTaskRelationSplitShadow,
   createTaskRelationSplitLease,
+  decideFirstBatchRelationRelease,
+  formatFirstBatchRelationReleaseForTrace,
+  projectFirstBatchRelationAdjudication,
+  type FirstBatchRelationReleaseDecision,
   type TaskRelationAffinityAdjudication,
   type TaskRelationAffinityRequest,
   type TaskRelationCanonicalShadowAdjudication,
@@ -2119,6 +2123,19 @@ interface TaskRelationAdjudicationScheduleHandle {
     queueWaitMs: number;
   } | undefined>;
   outcome: Promise<TaskRelationAdjudicationRuntimeOutcome>;
+  affinityOutcome?: Promise<TaskRelationSplitAffinityOutcome>;
+}
+
+interface TaskRelationSplitAffinityResult {
+  operationId?: string;
+  outputHash?: string;
+  adjudication?: TaskRelationAffinityAdjudication;
+  unavailableReason?: string;
+}
+
+interface TaskRelationSplitAffinityOutcome {
+  child: TaskRelationSplitAffinityResult;
+  parent: TaskRelationSplitAffinityResult;
 }
 
 interface RuntimeAdjudicationScheduleHandle {
@@ -17244,15 +17261,17 @@ export function useMeetingAssistant() {
       traceId,
       taskId,
       request,
+      runtimeReleaseRequested = false,
     }: {
       traceId: string;
       taskId?: string;
       request: TaskRelationAdjudicationRequest;
-    }) => {
+      runtimeReleaseRequested?: boolean;
+    }): Promise<TaskRelationSplitAffinityOutcome> | undefined => {
       const evaluationActive =
         debugModeRef.current ||
         Boolean(sessionRecordingManagerRef.current?.getState().active);
-      if (!evaluationActive) return;
+      if (!evaluationActive && !runtimeReleaseRequested) return;
       const startedAt = Date.now();
       const contextState = contextManagerRef.current.getState();
       const splitRuntimeEpoch = runtimeEpochRef.current;
@@ -17264,12 +17283,6 @@ export function useMeetingAssistant() {
         runtimeEpoch: splitRuntimeEpoch,
         manualCorrectionRevision: splitManualCorrectionRevision,
       });
-      type AffinityOutcome = {
-        operationId?: string;
-        outputHash?: string;
-        adjudication?: TaskRelationAffinityAdjudication;
-        unavailableReason?: string;
-      };
       const readCurrentIdentity = (
         scheduled: TaskRelationSplitIdentity
       ): TaskRelationSplitIdentity => {
@@ -17288,7 +17301,7 @@ export function useMeetingAssistant() {
       };
       const runAffinity = (
         affinityRequest: TaskRelationAffinityRequest | undefined
-      ): Promise<AffinityOutcome> => {
+      ): Promise<TaskRelationSplitAffinityResult> => {
         if (!affinityRequest) {
           return Promise.resolve({
             unavailableReason: "no-active-child",
@@ -17360,7 +17373,7 @@ export function useMeetingAssistant() {
           value: promptText,
           metadata: baseMetadata,
         });
-        return new Promise<AffinityOutcome>((resolve) => {
+        return new Promise<TaskRelationSplitAffinityResult>((resolve) => {
           let stepId: string | undefined;
           runtime.schedule({
             job: {
@@ -17486,10 +17499,11 @@ export function useMeetingAssistant() {
         });
       };
 
-      void Promise.all([
+      const affinityOutcome = Promise.all([
         runAffinity(splitRequests.child),
         runAffinity(splitRequests.parent),
-      ]).then(([child, parent]) => {
+      ]).then(([child, parent]) => ({ child, parent }));
+      void affinityOutcome.then(({ child, parent }) => {
         const canonicalRequest = buildTaskRelationCanonicalShadowRequest({
           request,
           sessionId: contextState.sessionId,
@@ -17713,6 +17727,7 @@ export function useMeetingAssistant() {
           },
         });
       });
+      return affinityOutcome;
     },
     [refreshRecordedCompletedTrace]
   );
@@ -18575,16 +18590,18 @@ export function useMeetingAssistant() {
           );
         },
       }, releaseWindowRequested ? 0 : undefined);
-      scheduleTaskRelationSplitShadow({
+      const affinityOutcome = scheduleTaskRelationSplitShadow({
         traceId,
         taskId: scheduledTaskId,
         request,
+        runtimeReleaseRequested: releaseWindowRequested,
       });
       return {
         releaseWindowRequested,
         operationId: lease.operationId,
         admission,
         outcome,
+        affinityOutcome,
       };
     },
     [scheduleTaskRelationSplitShadow]
@@ -19812,6 +19829,7 @@ export function useMeetingAssistant() {
       const dispatchAdvisor = (
         outcome: QuestionTypeAdjudicationRuntimeOutcome | undefined,
         relationOutcome: TaskRelationAdjudicationRuntimeOutcome | undefined,
+        affinityOutcome: TaskRelationSplitAffinityOutcome | undefined,
         waitDisposition: string
       ) => {
         if (advisorReleased) return;
@@ -19835,17 +19853,43 @@ export function useMeetingAssistant() {
           sourceObservationIds:
             typeSettlement?.sourceObservationIds,
         });
+        const firstBatchRelationRelease = typeSettlement
+          ? decideFirstBatchRelationRelease({
+              currentQuestionType: typeSettlement.questionType,
+              activeParentQuestionType: latestParent?.questionType,
+              hasActiveChild: Boolean(latestTask?.child),
+              childAffinity: affinityOutcome?.child.adjudication,
+              parentAffinity: affinityOutcome?.parent.adjudication,
+            })
+          : undefined;
+        const releasedRelationCandidate = firstBatchRelationRelease
+          ? projectFirstBatchRelationAdjudication(
+              firstBatchRelationRelease
+            )
+          : undefined;
+        const affinityLeaseAuthorized = Boolean(
+          affinityOutcome?.parent.adjudication &&
+            (!latestTask?.child || affinityOutcome.child.adjudication)
+        );
         const voiceRelationRelease = decideNarrowVoiceRelationRelease({
           sourceKind: currentQuestion.sourceKind,
           activeParentQuestionType: latestParent?.questionType,
           typeSettlement,
           candidate: relationOutcome?.candidate,
+          firstBatchRelease: firstBatchRelationRelease
+            ? {
+                authorized: firstBatchRelationRelease.authorized,
+                relation: firstBatchRelationRelease.relation,
+                confidence: firstBatchRelationRelease.confidence,
+                reason: firstBatchRelationRelease.reason,
+              }
+            : undefined,
           hasActiveChild: Boolean(latestTask?.child),
           manualCorrectionActive: Boolean(
             manualCorrectionOperationCoordinatorRef.current.getActiveOperationId()
           ),
           operationLeaseAuthorized:
-            relationOutcome?.operationLeaseAuthorized,
+            affinityLeaseAuthorized,
           releaseWindowOpen: true,
         });
         const settlementOperationId = outcome?.operationId;
@@ -19853,13 +19897,13 @@ export function useMeetingAssistant() {
           voiceRelationRelease.authorized &&
           settlementOperationId &&
           typeSettlement &&
-          relationOutcome?.candidate &&
+          releasedRelationCandidate &&
           latestParent
             ? settleNarrowVoiceTypeRelation({
                 operationId: settlementOperationId,
                 currentQuestion,
                 typeSettlement,
-                relationCandidate: relationOutcome.candidate,
+                relationCandidate: releasedRelationCandidate,
                 activeParentId: latestParent.id,
                 activeParentRevision: latestParent.revisions,
                 manualCorrectionRevision:
@@ -19915,6 +19959,9 @@ export function useMeetingAssistant() {
           ...formatNarrowVoiceRelationReleaseForTrace(
             voiceRelationRelease
           ),
+          ...formatFirstBatchRelationReleaseForTrace(
+            firstBatchRelationRelease
+          ),
           runtimeSettlementConverged:
             Boolean(convergedSettlement),
           runtimeSettlementConvergenceReason:
@@ -19922,8 +19969,10 @@ export function useMeetingAssistant() {
           runtimeSettlementOperationId: settlementOperationId,
           runtimeSettlementTypeOperationId: outcome?.operationId,
           runtimeSettlementRelationOperationId:
+            affinityOutcome?.parent.operationId ??
             relationOutcome?.operationId,
           runtimeSettlementRelationCandidate:
+            releasedRelationCandidate?.relation ??
             relationOutcome?.candidate?.relation,
         };
         const releaseTaskId =
@@ -20026,8 +20075,13 @@ export function useMeetingAssistant() {
       let settledRelationOutcome:
         | TaskRelationAdjudicationRuntimeOutcome
         | undefined;
+      let settledAffinityOutcome:
+        | TaskRelationSplitAffinityOutcome
+        | undefined;
       let typeSettled = false;
-      let relationSettled = !relationWindowRequested;
+      let affinitySettled =
+        !relationWindowRequested ||
+        !taskRelationHandle?.affinityOutcome;
       let responseOpportunitySettled =
         !responseOpportunityGateOperationId ||
         responseOpportunityGate?.disposition !== "pending";
@@ -20038,6 +20092,7 @@ export function useMeetingAssistant() {
           dispatchAdvisor(
             settledTypeOutcome,
             settledRelationOutcome,
+            settledAffinityOutcome,
             "settled-without-repair-fail-open"
           );
           return;
@@ -20050,10 +20105,11 @@ export function useMeetingAssistant() {
         ) {
           return;
         }
-        if (!relationSettled) return;
+        if (!affinitySettled) return;
         dispatchAdvisor(
           settledTypeOutcome,
           settledRelationOutcome,
+          settledAffinityOutcome,
           relationWindowRequested
             ? "type-and-relation-settled-before-deadline"
             : "type-settled-and-released-before-deadline"
@@ -20064,6 +20120,7 @@ export function useMeetingAssistant() {
         dispatchAdvisor(
           settledTypeOutcome,
           settledRelationOutcome,
+          settledAffinityOutcome,
           "deadline-expired-fail-open"
         );
       }, QUESTION_TYPE_ENFORCEMENT_WAIT_BUDGET_MS);
@@ -20137,8 +20194,6 @@ export function useMeetingAssistant() {
           (outcome) => {
             if (!advisorReleased) {
               settledRelationOutcome = outcome;
-              relationSettled = true;
-              releaseWhenSettled();
               return;
             }
 
@@ -20165,11 +20220,21 @@ export function useMeetingAssistant() {
               ...metadata,
             });
           },
-          () => {
-            relationSettled = true;
-            releaseWhenSettled();
-          }
+          () => undefined
         );
+        if (taskRelationHandle.affinityOutcome) {
+          void taskRelationHandle.affinityOutcome.then(
+            (outcome) => {
+              settledAffinityOutcome = outcome;
+              affinitySettled = true;
+              releaseWhenSettled();
+            },
+            () => {
+              affinitySettled = true;
+              releaseWhenSettled();
+            }
+          );
+        }
       }
       if (
         responseOpportunityGateOperationId &&
@@ -24413,6 +24478,9 @@ export function useMeetingAssistant() {
         let screenRelationAdmissionWaitMs = 0;
         let screenRelationExecutionWaitMs = 0;
         let screenRelationSettlementWaitDisposition = "not-awaited";
+        let screenFirstBatchRelationRelease:
+          | FirstBatchRelationReleaseDecision
+          | undefined;
         const narrowScreenReleaseInput = {
           sourceKind: "screen" as const,
           screenBoundaryPrior: true,
@@ -24536,13 +24604,16 @@ export function useMeetingAssistant() {
             );
             waitStage = "execution";
             const executionStartedAt = Date.now();
-            const outcome = admission
+            const affinityPromise =
+              taskRelationAdjudicationHandle.affinityOutcome ??
+              Promise.resolve(undefined);
+            const affinityOutcome = admission
               ? await withTimeout(
-                  taskRelationAdjudicationHandle.outcome,
+                  affinityPromise,
                   SCREEN_RELATION_RELEASE_WAIT_BUDGET_MS,
                   "Screen relation release execution window expired."
                 )
-              : await taskRelationAdjudicationHandle.outcome;
+              : await affinityPromise;
             screenRelationExecutionWaitMs = Math.max(
               0,
               Date.now() - executionStartedAt
@@ -24550,12 +24621,40 @@ export function useMeetingAssistant() {
             if (rejectStaleScreenOperation("post-relation-settlement")) {
               return;
             }
+            screenFirstBatchRelationRelease =
+              decideFirstBatchRelationRelease({
+                currentQuestionType: screenMemoryQuestionType,
+                activeParentQuestionType:
+                  preflightContextState.activeMeetingTask?.parent
+                    .questionType,
+                hasActiveChild: Boolean(
+                  preflightContextState.activeMeetingTask?.child
+                ),
+                childAffinity: affinityOutcome?.child.adjudication,
+                parentAffinity: affinityOutcome?.parent.adjudication,
+              });
+            const releasedRelationCandidate =
+              projectFirstBatchRelationAdjudication(
+                screenFirstBatchRelationRelease
+              );
+            const affinityLeaseAuthorized = Boolean(
+              affinityOutcome?.parent.adjudication &&
+                (!preflightContextState.activeMeetingTask?.child ||
+                  affinityOutcome.child.adjudication)
+            );
             const releaseDecision =
               decideNarrowScreenRelationRelease({
                 ...narrowScreenReleaseInput,
-                candidate: outcome.candidate,
+                firstBatchRelease: {
+                  authorized:
+                    screenFirstBatchRelationRelease.authorized,
+                  relation: screenFirstBatchRelationRelease.relation,
+                  confidence:
+                    screenFirstBatchRelationRelease.confidence,
+                  reason: screenFirstBatchRelationRelease.reason,
+                },
                 operationLeaseAuthorized:
-                  outcome.operationLeaseAuthorized,
+                  affinityLeaseAuthorized,
                 releaseWindowOpen: true,
               });
             screenRelationSettlementWaitMs = Math.max(
@@ -24568,13 +24667,13 @@ export function useMeetingAssistant() {
                 : "settled-without-release";
             if (
               releaseDecision.authorized &&
-              outcome.candidate &&
+              releasedRelationCandidate &&
               preflightContextState.activeMeetingTask?.parent
             ) {
               const llmRelationProposal =
                 createTaskRelationSettlementProposal({
                   currentQuestion: screenCurrentQuestion,
-                  adjudication: outcome.candidate,
+                  adjudication: releasedRelationCandidate,
                   expectedParentId:
                     preflightContextState.activeMeetingTask.parent.id,
                   expectedParentRevision:
@@ -24582,7 +24681,7 @@ export function useMeetingAssistant() {
                 });
               screenCurrentQuestionSettlement = settleCurrentQuestion({
                 operationId:
-                  outcome.operationId ??
+                  affinityOutcome?.parent.operationId ??
                   taskRelationAdjudicationHandle.operationId,
                 currentQuestion: screenCurrentQuestion,
                 deterministicProposal:
@@ -24608,6 +24707,9 @@ export function useMeetingAssistant() {
             traceStoreRef.current.updateMetadata(trace.id, {
               ...formatNarrowScreenRelationReleaseForTrace(
                 releaseDecision
+              ),
+              ...formatFirstBatchRelationReleaseForTrace(
+                screenFirstBatchRelationRelease
               ),
               taskRelationAdjudicationWaitBudgetMs:
                 SCREEN_RELATION_RELEASE_WAIT_BUDGET_MS,

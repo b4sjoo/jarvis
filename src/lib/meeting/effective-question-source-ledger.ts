@@ -1,5 +1,5 @@
 import type { ActiveMeetingTask } from "./active-meeting-task.js";
-import { isExplicitMeetingLogisticsTranscript } from "./advisor-turn-intent.js";
+import { isExplicitMeetingLogisticsTranscript } from "./meeting-logistics.js";
 import type { EffectiveCurrentQuestionSettlement } from "./current-question-settlement.js";
 import {
   getLogicalQuestionSemanticEvidenceText,
