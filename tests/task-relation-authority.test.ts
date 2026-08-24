@@ -64,7 +64,7 @@ test("an explicit architecture revision remains an authorized design-parent foll
   );
 });
 
-test("an explicit task switch authorizes a new parent relation", () => {
+test("an explicit task switch is evidence only and cannot mutate the parent", () => {
   const decision = decideCrossTypeTaskRelationAuthority({
     activeQuestionType: "general-system-design",
     candidateQuestionType: "coding",
@@ -73,12 +73,13 @@ test("an explicit task switch authorizes a new parent relation", () => {
     explicitTaskSwitch: true,
   });
 
-  assert.equal(decision?.relation, "new-parent");
-  assert.equal(decision?.disposition, "authorized");
-  assert.equal(decision?.relationEvidenceAuthorized, true);
+  assert.equal(decision?.relation, "unknown");
+  assert.equal(decision?.proposedRelation, "new-parent");
+  assert.equal(decision?.disposition, "response-only");
+  assert.equal(decision?.relationEvidenceAuthorized, false);
 });
 
-test("an explicit same-type task switch authorizes a new parent", () => {
+test("an explicit same-type task switch still requires semantic settlement", () => {
   const decision = decideCrossTypeTaskRelationAuthority({
     activeQuestionType: "coding",
     candidateQuestionType: "coding",
@@ -86,12 +87,13 @@ test("an explicit same-type task switch authorizes a new parent", () => {
     explicitTaskSwitch: true,
   });
 
-  assert.equal(decision?.relation, "new-parent");
-  assert.equal(decision?.disposition, "authorized");
-  assert.equal(decision?.relationEvidenceAuthorized, true);
+  assert.equal(decision?.relation, "unknown");
+  assert.equal(decision?.proposedRelation, "new-parent");
+  assert.equal(decision?.disposition, "response-only");
+  assert.equal(decision?.relationEvidenceAuthorized, false);
 });
 
-test("an explicit request for another owned project starts a new project parent", () => {
+test("an explicit request for another owned project is strong evidence only", () => {
   const decision = decideCrossTypeTaskRelationAuthority({
     activeQuestionType: "project-deep-dive",
     candidateQuestionType: "project-deep-dive",
@@ -99,10 +101,11 @@ test("an explicit request for another owned project starts a new project parent"
       "Can you tell me about another backend system or service you've owned where consistency was critical?",
   });
 
-  assert.equal(decision?.relation, "new-parent");
-  assert.equal(decision?.disposition, "authorized");
-  assert.equal(decision?.relationEvidenceAuthorized, true);
-  assert.equal(decision?.reason, "explicit-project-switch");
+  assert.equal(decision?.relation, "unknown");
+  assert.equal(decision?.proposedRelation, "new-parent");
+  assert.equal(decision?.disposition, "response-only");
+  assert.equal(decision?.relationEvidenceAuthorized, false);
+  assert.equal(decision?.reason, "explicit-project-switch-evidence-only");
   assert.match(decision?.evidenceSpans[0] ?? "", /another backend system/i);
 });
 
@@ -128,7 +131,7 @@ test("an explicit switch to a non-parent type uses response-only scope", () => {
   assert.equal(decision?.relation, "unknown");
   assert.equal(decision?.proposedRelation, "new-parent");
   assert.equal(decision?.disposition, "response-only");
-  assert.equal(decision?.relationEvidenceAuthorized, true);
+  assert.equal(decision?.relationEvidenceAuthorized, false);
 });
 
 test("cross-type parent classification alone cannot create a new parent", () => {
@@ -149,8 +152,6 @@ test("ordinary active-parent text remains response-only", () => {
     hasLatestUsefulText: true,
     hasActiveChild: false,
     explicitResume: false,
-    correction: false,
-    logistics: false,
     broadResumeProposal: true,
   });
 
@@ -165,8 +166,6 @@ test("broad similarity cannot resume an active parent from a child", () => {
     hasLatestUsefulText: true,
     hasActiveChild: true,
     explicitResume: false,
-    correction: false,
-    logistics: false,
     broadResumeProposal: true,
   });
 
@@ -176,28 +175,16 @@ test("broad similarity cannot resume an active parent from a child", () => {
   assert.equal(decision?.reason, "broad-resume-proposal-nonauthoritative");
 });
 
-test("explicit resume and correction retain relation authority", () => {
+test("only an explicit parent resume retains local relation authority", () => {
   const resume = decideActiveParentTaskRelationAuthority({
     hasLatestUsefulText: true,
     hasActiveChild: true,
     explicitResume: true,
-    correction: false,
-    logistics: false,
-    broadResumeProposal: false,
-  });
-  const correction = decideActiveParentTaskRelationAuthority({
-    hasLatestUsefulText: true,
-    hasActiveChild: false,
-    explicitResume: false,
-    correction: true,
-    logistics: false,
     broadResumeProposal: false,
   });
 
   assert.equal(resume?.relation, "resume-parent");
   assert.equal(resume?.relationEvidenceAuthorized, true);
-  assert.equal(correction?.relation, "correction");
-  assert.equal(correction?.relationEvidenceAuthorized, true);
 });
 
 test("explicit resume detection uses the source-owned transition wording", () => {
@@ -209,6 +196,11 @@ test("explicit resume detection uses the source-owned transition wording", () =>
   );
   assert.equal(
     isExplicitResumeParentTranscript("What metrics would you use?"),
+    false
+  );
+  assert.equal(isExplicitResumeParentTranscript("Continue."), false);
+  assert.equal(
+    isExplicitResumeParentTranscript("How would you evaluate it?"),
     false
   );
 });

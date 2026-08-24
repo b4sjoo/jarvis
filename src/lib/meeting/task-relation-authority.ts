@@ -49,34 +49,24 @@ export function decideCrossTypeTaskRelationAuthority(input: {
     projectSwitchEvidence.length > 0
   ) {
     return {
-      relation: "new-parent",
-      disposition: "authorized",
-      relationEvidenceAuthorized: true,
-      reason: "explicit-project-switch",
+      relation: "unknown",
+      proposedRelation: "new-parent",
+      disposition: "response-only",
+      relationEvidenceAuthorized: false,
+      reason: "explicit-project-switch-evidence-only",
       evidenceSpans: projectSwitchEvidence,
     };
   }
 
   if (input.explicitTaskSwitch) {
-    if (!isParentCanonicalQuestionType(candidateQuestionType)) {
-      return {
-        relation: "unknown",
-        proposedRelation: "new-parent",
-        disposition: "response-only",
-        relationEvidenceAuthorized: true,
-        reason: "explicit-task-switch-nonparent-response-only",
-        evidenceSpans: findEvidenceSpans(
-          input.currentText,
-          EXPLICIT_TASK_SWITCH_PATTERNS
-        ),
-      };
-    }
-
     return {
-      relation: "new-parent",
-      disposition: "authorized",
-      relationEvidenceAuthorized: true,
-      reason: "explicit-task-switch",
+      relation: "unknown",
+      proposedRelation: "new-parent",
+      disposition: "response-only",
+      relationEvidenceAuthorized: false,
+      reason: isParentCanonicalQuestionType(candidateQuestionType)
+        ? "explicit-task-switch-evidence-only"
+        : "explicit-task-switch-nonparent-response-only",
       evidenceSpans: findEvidenceSpans(
         input.currentText,
         EXPLICIT_TASK_SWITCH_PATTERNS
@@ -158,8 +148,6 @@ export function decideActiveParentTaskRelationAuthority(input: {
   hasLatestUsefulText: boolean;
   hasActiveChild: boolean;
   explicitResume: boolean;
-  correction: boolean;
-  logistics: boolean;
   broadResumeProposal: boolean;
 }): TaskRelationAuthorityDecision | undefined {
   if (!input.hasLatestUsefulText) return undefined;
@@ -170,26 +158,6 @@ export function decideActiveParentTaskRelationAuthority(input: {
       disposition: "authorized",
       relationEvidenceAuthorized: true,
       reason: "explicit-resume-parent",
-      evidenceSpans: [],
-    };
-  }
-
-  if (input.correction) {
-    return {
-      relation: "correction",
-      disposition: "authorized",
-      relationEvidenceAuthorized: true,
-      reason: "explicit-constraint-or-correction",
-      evidenceSpans: [],
-    };
-  }
-
-  if (input.logistics) {
-    return {
-      relation: "logistics",
-      disposition: "authorized",
-      relationEvidenceAuthorized: true,
-      reason: "explicit-meeting-logistics",
       evidenceSpans: [],
     };
   }
@@ -219,10 +187,18 @@ export function isExplicitResumeParentTranscript(text: string) {
   if (!normalized) return false;
 
   return (
-    /\b(back to|return to|go back to|continue|resume|for the original question|for the previous question|for the system we discussed)\b/i.test(
+    /\b(?:back|return|go back)\s+to\s+(?:the\s+)?(?:original|previous|main|parent)\s+(?:question|task|design|architecture|system|project|topic)\b/i.test(
       normalized
     ) ||
-    /回到|继续刚才|刚才那个系统|刚才的问题|恢复主线/.test(text)
+    /\b(?:back|return|go back)\s+to\s+(?:the\s+)?(?:original|previous|main|parent)(?:\s+[\p{L}\p{N}-]+){1,4}\s+(?:question|task|design|architecture|system|project|topic)\b/iu.test(
+      normalized
+    ) ||
+    /\bresume\s+(?:the\s+)?(?:original|previous|main|parent)\s+(?:question|task|design|architecture|system|project|topic)\b/i.test(
+      normalized
+    ) ||
+    /回到(?:原来|之前|刚才|主线|父任务).{0,8}(?:问题|任务|设计|架构|系统|项目|话题)|恢复(?:原来|之前|刚才|主线).{0,8}(?:问题|任务|设计|架构|系统|项目|话题)?/.test(
+      text
+    )
   );
 }
 

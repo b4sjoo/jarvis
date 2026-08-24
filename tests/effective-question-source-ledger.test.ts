@@ -144,7 +144,7 @@ test("records only source-owned effective LQU projections", () => {
   assert.equal(ledger.list().length, 1);
 });
 
-test("selects LQU-first branch and parent evidence without acknowledgement", () => {
+test("selects LQU-first evidence without acknowledgement or logistics", () => {
   const records: EffectiveQuestionSourceRecord[] = [
     {
       recordId: "record-parent",
@@ -184,6 +184,23 @@ test("selects LQU-first branch and parent evidence without acknowledgement", () 
       },
       settledAt: 36,
     },
+    {
+      recordId: "record-logistics",
+      sessionId: "session-a",
+      runtimeEpoch: 3,
+      logicalQuestionUnitId: "lqu-logistics",
+      logicalQuestionRevision: 1,
+      sourceHash: "hash-logistics",
+      sourceTurnIds: ["turn-logistics"],
+      text: "Give me a second while I share my screen.",
+      startedAt: 40,
+      updatedAt: 45,
+      speechAct: "logistics",
+      disposition: "append-setup",
+      relation: "followup-parent",
+      owner: { kind: "parent-mainline", parentId: "parent-rag" },
+      settledAt: 46,
+    },
   ];
   const current = unit(
     "lqu-current",
@@ -201,6 +218,7 @@ test("selects LQU-first branch and parent evidence without acknowledgement", () 
       turn("turn-child-root", "Explain HNSW.", 20),
       turn("turn-child-detail", "How does efSearch affect recall?", 30),
       turn("turn-ack", "Mm-hmm.", 40),
+      turn("turn-logistics", "Give me a second while I share my screen.", 45),
       turn("turn-current", current.normalizedText, 60),
     ],
   });
@@ -215,5 +233,6 @@ test("selects LQU-first branch and parent evidence without acknowledgement", () 
   );
   assert.equal(selection.diagnostics.lquSelectedCount, 2);
   assert.equal(selection.diagnostics.acknowledgementExcludedCount, 1);
+  assert.equal(selection.diagnostics.logisticsExcludedCount, 1);
   assert.equal(selection.diagnostics.rawSupplementCount, 0);
 });

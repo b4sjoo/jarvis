@@ -1,4 +1,5 @@
 import type { ActiveMeetingTask } from "./active-meeting-task.js";
+import { isExplicitMeetingLogisticsTranscript } from "./advisor-turn-intent.js";
 import {
   createCurrentQuestionSourceSettlementId,
   settleCurrentQuestion,
@@ -149,6 +150,7 @@ export interface TaskRelationRecentEvidenceDiagnostics {
   lquSelectedCount: number;
   rawSupplementCount: number;
   acknowledgementExcludedCount: number;
+  logisticsExcludedCount: number;
   coveredTurnCount: number;
   branchEvidenceCount: number;
   parentEvidenceCount: number;
@@ -168,6 +170,7 @@ export interface TaskRelationOwnerEvidenceSelectionInput {
     lquSelectedCount: number;
     rawSupplementCount: number;
     acknowledgementExcludedCount: number;
+    logisticsExcludedCount: number;
     coveredTurnCount: number;
   };
 }
@@ -441,6 +444,10 @@ export function buildTaskRelationAdjudicationRequest(input: {
             ownerEvidenceSelection.recentParentEvidence.length,
           rawFallbackCount:
             ownerEvidenceSelection.diagnostics.rawSupplementCount,
+          acknowledgementExcludedCount:
+            ownerEvidenceSelection.diagnostics.acknowledgementExcludedCount,
+          logisticsExcludedCount:
+            ownerEvidenceSelection.diagnostics.logisticsExcludedCount,
           falseEmpty: false,
           emptyReason: undefined,
         },
@@ -479,7 +486,7 @@ export function buildTaskRelationAdjudicationRequest(input: {
       currentSource?.text ?? input.logicalQuestionUnit.normalizedText,
       Math.min(280, TASK_RELATION_ADJUDICATION_MAX_SOURCE_EVIDENCE_CHARS)
     );
-    if (text) {
+    if (text && !isExcludedRecentRelationEvidenceText(text)) {
       recentSourceEvidence = [
         {
           turnId:
@@ -516,7 +523,11 @@ export function buildTaskRelationAdjudicationRequest(input: {
       ownerEvidenceSelection?.diagnostics.rawSupplementCount ??
       parentEvidenceSelection.diagnostics.rawFallbackCount,
     acknowledgementExcludedCount:
-      ownerEvidenceSelection?.diagnostics.acknowledgementExcludedCount ?? 0,
+      ownerEvidenceSelection?.diagnostics.acknowledgementExcludedCount ??
+      parentEvidenceSelection.diagnostics.acknowledgementExcludedCount,
+    logisticsExcludedCount:
+      ownerEvidenceSelection?.diagnostics.logisticsExcludedCount ??
+      parentEvidenceSelection.diagnostics.logisticsExcludedCount,
     coveredTurnCount:
       ownerEvidenceSelection?.diagnostics.coveredTurnCount ?? 0,
     branchEvidenceCount: recentBranchEvidence.length,
@@ -1519,6 +1530,8 @@ export function formatTaskRelationAdjudicationForTrace(input: {
       input.request?.recentEvidenceDiagnostics.rawSupplementCount,
     taskRelationAdjudicationAcknowledgementExcludedCount:
       input.request?.recentEvidenceDiagnostics.acknowledgementExcludedCount,
+    taskRelationAdjudicationLogisticsExcludedCount:
+      input.request?.recentEvidenceDiagnostics.logisticsExcludedCount,
     taskRelationAdjudicationCoveredTurnCount:
       input.request?.recentEvidenceDiagnostics.coveredTurnCount,
     taskRelationAdjudicationTransitionCount:
@@ -1662,13 +1675,34 @@ function selectRecentSourceEvidence(input: {
   maxTurns: number;
   sourceScope: TaskRelationSourceEvidence["sourceScope"];
 }) {
-  const eligibleTurns = input.turns.filter(
-    (turn) =>
-      turn.speaker === "them" &&
-      !input.excludedTurnIds.has(turn.id) &&
-      turn.contextFusionStatus !== "duplicate-suppressed" &&
-      Boolean(turn.text.trim())
-  );
+  let acknowledgementExcludedCount = 0;
+  let logisticsExcludedCount = 0;
+  const eligibleTurns = input.turns.filter((turn) => {
+    if (
+      turn.speaker !== "them" ||
+      input.excludedTurnIds.has(turn.id) ||
+      turn.contextFusionStatus === "duplicate-suppressed" ||
+      !turn.text.trim()
+    ) {
+      return false;
+    }
+    const speechAct = projectPrimaryAsk({
+      turnId: turn.id,
+      text: turn.text,
+    }).speechAct;
+    if (speechAct === "acknowledgement") {
+      acknowledgementExcludedCount += 1;
+      return false;
+    }
+    if (
+      speechAct === "logistics" ||
+      isExplicitMeetingLogisticsTranscript(turn.text)
+    ) {
+      logisticsExcludedCount += 1;
+      return false;
+    }
+    return true;
+  });
   const selected: TaskRelationSourceEvidence[] = [];
   let selectedChars = 0;
   for (const turn of [...eligibleTurns].reverse()) {
@@ -1702,6 +1736,8 @@ function selectRecentSourceEvidence(input: {
       rawFallbackCount: selected.filter(
         (item) => item.selectionReason === "raw-recent-turn"
       ).length,
+      acknowledgementExcludedCount,
+      logisticsExcludedCount,
       falseEmpty: eligibleTurns.length > 0 && selected.length === 0,
       emptyReason:
         eligibleTurns.length === 0
@@ -1709,6 +1745,18 @@ function selectRecentSourceEvidence(input: {
           : undefined,
     },
   };
+}
+
+function isExcludedRecentRelationEvidenceText(text: string) {
+  const speechAct = projectPrimaryAsk({
+    turnId: "relation-evidence-filter",
+    text,
+  }).speechAct;
+  return (
+    speechAct === "acknowledgement" ||
+    speechAct === "logistics" ||
+    isExplicitMeetingLogisticsTranscript(text)
+  );
 }
 
 function classifySourceEvidenceRole(

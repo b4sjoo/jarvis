@@ -17849,13 +17849,7 @@ export function useMeetingAssistant() {
               hasActiveChild: Boolean(activeMeetingTask.child),
               explicitResume: Boolean(
                 activeMeetingTask.child &&
-                  isResumeParentTranscript(sourceOwnedCurrentText)
-              ),
-              correction: hasConstraintOrCorrectionSignal(
-                currentText
-              ),
-              logistics: isMeetingLogisticsTranscript(
-                normalizeTranscriptForGate(currentText)
+                  isExplicitResumeParentTranscript(sourceOwnedCurrentText)
               ),
               broadResumeProposal: false,
             });
@@ -32504,8 +32498,6 @@ function resolveAdvisorTaskSignals(
           explicitResumeText &&
           isExplicitResumeParentTranscript(explicitResumeText)
       ),
-      correction: false,
-      logistics: false,
       broadResumeProposal: false,
     });
     const latestParentKind = normalizeInterviewParentKind(latestQuestionType);
@@ -32677,17 +32669,7 @@ function resolveAdvisorTaskSignals(
         hasActiveChild,
         explicitResume: Boolean(
           latestUsefulText &&
-            isResumeParentTranscript(latestUsefulText)
-        ),
-        correction: Boolean(
-          latestUsefulText &&
-            hasConstraintOrCorrectionSignal(latestUsefulText)
-        ),
-        logistics: Boolean(
-          latestUsefulText &&
-            isMeetingLogisticsTranscript(
-              normalizeTranscriptForGate(latestUsefulText)
-            )
+            isExplicitResumeParentTranscript(latestUsefulText)
         ),
         broadResumeProposal: Boolean(
           latestUsefulText &&
@@ -32962,20 +32944,6 @@ function buildFocusedAdvisorTaskQuery(
     .slice(-4000);
 }
 
-function isResumeParentTranscript(text: string) {
-  const normalized = normalizeTranscriptForGate(text);
-  if (!normalized) return false;
-
-  return (
-    /\b(back to|return to|go back to|continue|resume|for this system|for this design|for the original question|for the previous question|for the system we discussed|how would you evaluate|how do you measure|what metrics|what logs|observability)\b/i.test(
-      normalized
-    ) ||
-    /回到|继续刚才|刚才那个系统|刚才的问题|这个系统|这个设计|怎么评估|什么指标|哪些日志|可观测/.test(
-      text
-    )
-  );
-}
-
 function inferAdvisorSubtaskIntent(
   text: string,
   questionType: MemoryQuestionType
@@ -33031,7 +32999,7 @@ function buildStateUpdatedInterviewTask(
       : undefined,
     revisions: task.revisions + 1,
     child:
-      task.child && isResumeParentTranscript(turn.text)
+      task.child && isExplicitResumeParentTranscript(turn.text)
         ? undefined
         : task.child,
   };
@@ -34210,19 +34178,6 @@ function hasQuestionOrTaskSignal(text: string) {
     ) ||
     /请|怎么|如何|为什么|解释|设计|实现|写一个|比较|估算/.test(text) ||
     /\b(system design|design a|design an|leetcode|algorithm|coding question|behavioral question)\b/i.test(
-      normalized
-    )
-  );
-}
-
-function isMeetingLogisticsTranscript(normalized: string) {
-  if (!normalized) return false;
-
-  return (
-    /\b(let me|i ll|i will|give me|one second|just a second|hold on|wait a second|give me a second|give me some time|take a look|share my screen|sharing my screen|open the screen|start our interview|start the interview|time to start|let s start|let us start|let me search|let me think|let me check)\b/i.test(
-      normalized
-    ) ||
-    /等一下|稍等|我看一下|我想一下|我分享屏幕|开始面试|开始吧/.test(
       normalized
     )
   );

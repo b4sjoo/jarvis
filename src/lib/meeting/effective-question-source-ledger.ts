@@ -1,4 +1,5 @@
 import type { ActiveMeetingTask } from "./active-meeting-task.js";
+import { isExplicitMeetingLogisticsTranscript } from "./advisor-turn-intent.js";
 import type { EffectiveCurrentQuestionSettlement } from "./current-question-settlement.js";
 import {
   getLogicalQuestionSemanticEvidenceText,
@@ -49,6 +50,7 @@ export interface OwnerScopedRelationEvidenceSelection {
     lquSelectedCount: number;
     rawSupplementCount: number;
     acknowledgementExcludedCount: number;
+    logisticsExcludedCount: number;
     coveredTurnCount: number;
     branchEvidenceCount: number;
     parentEvidenceCount: number;
@@ -143,17 +145,24 @@ export function selectOwnerScopedRelationEvidence(input: {
   const childId = activeMeetingTask.child?.id;
   const currentTurnIds = new Set(currentLogicalQuestionUnit.sourceTurnIds);
   let acknowledgementExcludedCount = 0;
-  const eligibleRecords = input.records.filter((record) => {
-    if (
-      record.sessionId !== currentLogicalQuestionUnit.sessionId ||
-      record.runtimeEpoch !== currentLogicalQuestionUnit.runtimeEpoch ||
-      record.logicalQuestionUnitId === currentLogicalQuestionUnit.id ||
-      record.owner.parentId !== parentId
-    ) {
-      return false;
-    }
+  let logisticsExcludedCount = 0;
+  const ownedRecords = input.records.filter(
+    (record) =>
+      record.sessionId === currentLogicalQuestionUnit.sessionId &&
+      record.runtimeEpoch === currentLogicalQuestionUnit.runtimeEpoch &&
+      record.logicalQuestionUnitId !== currentLogicalQuestionUnit.id &&
+      record.owner.parentId === parentId
+  );
+  const eligibleRecords = ownedRecords.filter((record) => {
     if (record.speechAct === "acknowledgement") {
       acknowledgementExcludedCount += 1;
+      return false;
+    }
+    if (
+      record.speechAct === "logistics" ||
+      isExplicitMeetingLogisticsTranscript(record.text)
+    ) {
+      logisticsExcludedCount += 1;
       return false;
     }
     return true;
@@ -174,6 +183,7 @@ export function selectOwnerScopedRelationEvidence(input: {
     [
       ...recentBranchEvidence.flatMap((item) => item.sourceTurnIds),
       ...recentParentEvidence.flatMap((item) => item.sourceTurnIds),
+      ...ownedRecords.flatMap((record) => record.sourceTurnIds),
       ...(activeMeetingTask.parent.canonicalQuestionSourceTurnIds ?? []),
       activeMeetingTask.parent.startTurnId,
       activeMeetingTask.parent.promptTranscriptStartTurnId,
@@ -209,6 +219,13 @@ export function selectOwnerScopedRelationEvidence(input: {
       acknowledgementExcludedCount += 1;
       return false;
     }
+    if (
+      projection.speechAct === "logistics" ||
+      isExplicitMeetingLogisticsTranscript(turn.text)
+    ) {
+      logisticsExcludedCount += 1;
+      return false;
+    }
     return true;
   });
   const branchRaw = childId && childBoundaryIndex >= 0
@@ -242,6 +259,7 @@ export function selectOwnerScopedRelationEvidence(input: {
         rawSupplementCount,
       rawSupplementCount,
       acknowledgementExcludedCount,
+      logisticsExcludedCount,
       coveredTurnCount: coveredTurnIds.size,
       branchEvidenceCount: recentBranchEvidence.length,
       parentEvidenceCount: recentParentEvidence.length,
