@@ -15,6 +15,7 @@ import {
   createAblatedCanonicalRelationRequest,
   createShuffledCanonicalRelationRequest,
   createTaskRelationSplitLease,
+  decideFirstBatchRelationRelease,
   hashTaskRelationSplitOutput,
   parseTaskRelationAffinityOutput,
   parseTaskRelationCanonicalShadowOutput,
@@ -313,3 +314,126 @@ test("exposes ablation and shuffle as causal harness variants", () => {
     }
   );
 });
+
+test("releases only the approved no-parent and parent-without-child matrix", () => {
+  const parentRelated = affinity("parent", "related", 0.97);
+  const parentIndependent = affinity("parent", "independent", 0.98);
+
+  assert.equal(
+    decideFirstBatchRelationRelease({
+      currentQuestionType: "coding",
+      hasActiveChild: false,
+    }).relation,
+    "new-parent"
+  );
+  assert.equal(
+    decideFirstBatchRelationRelease({
+      currentQuestionType: "field-knowledge",
+      hasActiveChild: false,
+    }).responseOnly,
+    true
+  );
+  assert.equal(
+    decideFirstBatchRelationRelease({
+      currentQuestionType: "general-system-design",
+      activeParentQuestionType: "general-system-design",
+      hasActiveChild: false,
+      parentAffinity: parentRelated,
+    }).relation,
+    "followup-parent"
+  );
+  assert.equal(
+    decideFirstBatchRelationRelease({
+      currentQuestionType: "field-knowledge",
+      activeParentQuestionType: "general-system-design",
+      hasActiveChild: false,
+      parentAffinity: parentRelated,
+    }).relation,
+    "child-probe"
+  );
+  assert.equal(
+    decideFirstBatchRelationRelease({
+      currentQuestionType: "coding",
+      activeParentQuestionType: "behavioral",
+      hasActiveChild: false,
+      parentAffinity: parentIndependent,
+    }).relation,
+    "new-parent"
+  );
+  assert.equal(
+    decideFirstBatchRelationRelease({
+      currentQuestionType: "field-knowledge",
+      activeParentQuestionType: "behavioral",
+      hasActiveChild: false,
+      parentAffinity: parentIndependent,
+    }).responseOnly,
+    true
+  );
+});
+
+test("releases only resume-parent while an active child exists", () => {
+  const released = decideFirstBatchRelationRelease({
+    currentQuestionType: "ai-ml-system-design",
+    activeParentQuestionType: "ai-ml-system-design",
+    hasActiveChild: true,
+    childAffinity: affinity("child", "unrelated", 0.97),
+    parentAffinity: affinity("parent", "related", 0.98),
+  });
+  const childFollowup = decideFirstBatchRelationRelease({
+    currentQuestionType: "field-knowledge",
+    activeParentQuestionType: "ai-ml-system-design",
+    hasActiveChild: true,
+    childAffinity: affinity("child", "related", 0.99),
+    parentAffinity: affinity("parent", "related", 0.99),
+  });
+
+  assert.equal(released.relation, "resume-parent");
+  assert.equal(released.authorized, true);
+  assert.equal(childFollowup.authorized, false);
+  assert.equal(
+    childFollowup.reason,
+    "active-child-combination-not-released"
+  );
+});
+
+test("keeps uncertain affinity in Shadow and flags only the review band", () => {
+  const possibleError = decideFirstBatchRelationRelease({
+    currentQuestionType: "coding",
+    activeParentQuestionType: "behavioral",
+    hasActiveChild: false,
+    parentAffinity: affinity("parent", "independent", 0.92),
+  });
+  const lowConfidence = decideFirstBatchRelationRelease({
+    currentQuestionType: "coding",
+    activeParentQuestionType: "behavioral",
+    hasActiveChild: false,
+    parentAffinity: affinity("parent", "independent", 0.82),
+  });
+  const sameTypeIndependent = decideFirstBatchRelationRelease({
+    currentQuestionType: "coding",
+    activeParentQuestionType: "coding",
+    hasActiveChild: false,
+    parentAffinity: affinity("parent", "independent", 0.99),
+  });
+
+  assert.equal(possibleError.authorized, false);
+  assert.equal(possibleError.possibleRelationError, true);
+  assert.equal(lowConfidence.possibleRelationError, false);
+  assert.equal(sameTypeIndependent.authorized, false);
+  assert.equal(sameTypeIndependent.reason, "same-type-independent-shadow");
+});
+
+function affinity(
+  kind: "child" | "parent",
+  decision: "related" | "unrelated" | "independent" | "unclear",
+  confidence: number
+) {
+  return {
+    schemaVersion: 1 as const,
+    affinityKind: kind,
+    decision,
+    confidence,
+    currentEvidenceSpans: decision === "unclear" ? [] : ["current"],
+    branchEvidenceSpans: decision === "related" ? ["branch"] : [],
+  };
+}

@@ -9,10 +9,19 @@ import type {
   TaskRelationAdjudicationRequest,
   TaskRelationSourceEvidenceRole,
 } from "./task-relation-adjudication.js";
+import {
+  areCompatibleParentContinuityTypes,
+  canParentQuestionTypeOwnChild,
+  canQuestionTypeCreateParent,
+  normalizeCanonicalQuestionType,
+  type CanonicalQuestionType,
+} from "./task-taxonomy.js";
 
 export const TASK_RELATION_AFFINITY_SCHEMA_VERSION = 1;
 export const TASK_RELATION_CANONICAL_SHADOW_SCHEMA_VERSION = 3;
 export const TASK_RELATION_SPLIT_MAX_OUTPUT_CHARS = 2_048;
+export const FIRST_BATCH_RELATION_RELEASE_MIN_CONFIDENCE = 0.95;
+export const FIRST_BATCH_RELATION_POSSIBLE_ERROR_MIN_CONFIDENCE = 0.9;
 export const TASK_RELATION_CHILD_AFFINITY_PROMPT_VERSION =
   "task-relation-child-affinity-v1";
 export const TASK_RELATION_PARENT_AFFINITY_PROMPT_VERSION =
@@ -157,6 +166,252 @@ export interface TaskRelationCanonicalShadowAdjudication {
   currentQuestionEvidenceSpans: string[];
   parentEvidenceSpans: string[];
   ambiguityReason?: string;
+}
+
+export type FirstBatchRelationReleaseReason =
+  | "no-parent-parent-eligible"
+  | "no-parent-response-only"
+  | "same-type-parent-related"
+  | "allowed-child-parent-related"
+  | "different-parent-type-independent"
+  | "nonparent-type-independent-response-only"
+  | "active-child-resume-parent"
+  | "affinity-missing"
+  | "affinity-unclear"
+  | "affinity-below-release-threshold"
+  | "same-type-independent-shadow"
+  | "parent-related-type-incompatible"
+  | "active-child-combination-not-released";
+
+export interface FirstBatchRelationReleaseDecision {
+  authorized: boolean;
+  relation?: Exclude<RuntimeTaskRelation, "unknown">;
+  responseOnly: boolean;
+  reason: FirstBatchRelationReleaseReason;
+  confidence: number;
+  minimumConfidence: number;
+  possibleRelationError: boolean;
+  currentQuestionType: CanonicalQuestionType;
+  activeParentQuestionType?: CanonicalQuestionType;
+  childAffinityDecision?: ChildAffinityDecision;
+  childAffinityConfidence?: number;
+  parentAffinityDecision?: ParentAffinityDecision;
+  parentAffinityConfidence?: number;
+}
+
+export function decideFirstBatchRelationRelease(input: {
+  currentQuestionType: unknown;
+  activeParentQuestionType?: unknown;
+  hasActiveChild: boolean;
+  childAffinity?: TaskRelationAffinityAdjudication;
+  parentAffinity?: TaskRelationAffinityAdjudication;
+}): FirstBatchRelationReleaseDecision {
+  const currentQuestionType =
+    normalizeCanonicalQuestionType(input.currentQuestionType) ?? "unknown";
+  const activeParentQuestionType = normalizeCanonicalQuestionType(
+    input.activeParentQuestionType
+  );
+  const childAffinity =
+    input.childAffinity?.affinityKind === "child"
+      ? input.childAffinity
+      : undefined;
+  const parentAffinity =
+    input.parentAffinity?.affinityKind === "parent"
+      ? input.parentAffinity
+      : undefined;
+  const base = {
+    currentQuestionType,
+    activeParentQuestionType,
+    childAffinityDecision: childAffinity?.decision as
+      | ChildAffinityDecision
+      | undefined,
+    childAffinityConfidence: childAffinity?.confidence,
+    parentAffinityDecision: parentAffinity?.decision as
+      | ParentAffinityDecision
+      | undefined,
+    parentAffinityConfidence: parentAffinity?.confidence,
+    minimumConfidence: FIRST_BATCH_RELATION_RELEASE_MIN_CONFIDENCE,
+  };
+  const decide = (
+    decision: Omit<
+      FirstBatchRelationReleaseDecision,
+      keyof typeof base
+    >
+  ): FirstBatchRelationReleaseDecision => ({ ...base, ...decision });
+
+  if (!activeParentQuestionType) {
+    return canQuestionTypeCreateParent(currentQuestionType)
+      ? decide({
+          authorized: true,
+          relation: "new-parent",
+          responseOnly: false,
+          reason: "no-parent-parent-eligible",
+          confidence: 1,
+          possibleRelationError: false,
+        })
+      : decide({
+          authorized: false,
+          responseOnly: true,
+          reason: "no-parent-response-only",
+          confidence: 1,
+          possibleRelationError: false,
+        });
+  }
+
+  if (!parentAffinity) {
+    return decide({
+      authorized: false,
+      responseOnly: false,
+      reason: "affinity-missing",
+      confidence: 0,
+      possibleRelationError: false,
+    });
+  }
+  const parentConfidence = parentAffinity.confidence;
+  const childConfidence = childAffinity?.confidence ?? 1;
+  const confidence = Math.min(parentConfidence, childConfidence);
+  const possibleRelationError =
+    confidence >= FIRST_BATCH_RELATION_POSSIBLE_ERROR_MIN_CONFIDENCE &&
+    confidence < FIRST_BATCH_RELATION_RELEASE_MIN_CONFIDENCE;
+  if (
+    parentAffinity.decision === "unclear" ||
+    childAffinity?.decision === "unclear"
+  ) {
+    return decide({
+      authorized: false,
+      responseOnly: false,
+      reason: "affinity-unclear",
+      confidence,
+      possibleRelationError,
+    });
+  }
+  if (confidence < FIRST_BATCH_RELATION_RELEASE_MIN_CONFIDENCE) {
+    return decide({
+      authorized: false,
+      responseOnly: false,
+      reason: "affinity-below-release-threshold",
+      confidence,
+      possibleRelationError,
+    });
+  }
+
+  if (input.hasActiveChild) {
+    if (
+      childAffinity?.decision === "unrelated" &&
+      parentAffinity.decision === "related" &&
+      areCompatibleParentContinuityTypes(
+        currentQuestionType,
+        activeParentQuestionType
+      )
+    ) {
+      return decide({
+        authorized: true,
+        relation: "resume-parent",
+        responseOnly: false,
+        reason: "active-child-resume-parent",
+        confidence,
+        possibleRelationError: false,
+      });
+    }
+    return decide({
+      authorized: false,
+      responseOnly: false,
+      reason: "active-child-combination-not-released",
+      confidence,
+      possibleRelationError: false,
+    });
+  }
+
+  if (parentAffinity.decision === "related") {
+    if (currentQuestionType === activeParentQuestionType) {
+      return decide({
+        authorized: true,
+        relation: "followup-parent",
+        responseOnly: false,
+        reason: "same-type-parent-related",
+        confidence,
+        possibleRelationError: false,
+      });
+    }
+    if (
+      canParentQuestionTypeOwnChild(
+        activeParentQuestionType,
+        currentQuestionType
+      )
+    ) {
+      return decide({
+        authorized: true,
+        relation: "child-probe",
+        responseOnly: false,
+        reason: "allowed-child-parent-related",
+        confidence,
+        possibleRelationError: false,
+      });
+    }
+    return decide({
+      authorized: false,
+      responseOnly: false,
+      reason: "parent-related-type-incompatible",
+      confidence,
+      possibleRelationError: false,
+    });
+  }
+
+  if (currentQuestionType === activeParentQuestionType) {
+    return decide({
+      authorized: false,
+      responseOnly: false,
+      reason: "same-type-independent-shadow",
+      confidence,
+      possibleRelationError: false,
+    });
+  }
+  if (canQuestionTypeCreateParent(currentQuestionType)) {
+    return decide({
+      authorized: true,
+      relation: "new-parent",
+      responseOnly: false,
+      reason: "different-parent-type-independent",
+      confidence,
+      possibleRelationError: false,
+    });
+  }
+  return decide({
+    authorized: false,
+    responseOnly: true,
+    reason: "nonparent-type-independent-response-only",
+    confidence,
+    possibleRelationError: false,
+  });
+}
+
+export function formatFirstBatchRelationReleaseForTrace(
+  decision: FirstBatchRelationReleaseDecision | undefined
+) {
+  if (!decision) return {};
+  return {
+    taskRelationFirstBatchReleaseAuthorized: decision.authorized,
+    taskRelationFirstBatchReleasedRelation: decision.relation,
+    taskRelationFirstBatchResponseOnly: decision.responseOnly,
+    taskRelationFirstBatchReleaseReason: decision.reason,
+    taskRelationFirstBatchReleaseConfidence: decision.confidence,
+    taskRelationFirstBatchReleaseMinimumConfidence:
+      decision.minimumConfidence,
+    taskRelationFirstBatchPossibleError:
+      decision.possibleRelationError,
+    taskRelationFirstBatchCurrentQuestionType:
+      decision.currentQuestionType,
+    taskRelationFirstBatchActiveParentQuestionType:
+      decision.activeParentQuestionType,
+    taskRelationFirstBatchChildAffinity:
+      decision.childAffinityDecision,
+    taskRelationFirstBatchChildAffinityConfidence:
+      decision.childAffinityConfidence,
+    taskRelationFirstBatchParentAffinity:
+      decision.parentAffinityDecision,
+    taskRelationFirstBatchParentAffinityConfidence:
+      decision.parentAffinityConfidence,
+  };
 }
 
 export type TaskRelationCanonicalShadowParseResult =
