@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  buildCompactTraceSummary,
   SessionRecordingManager,
   type SessionRecordingInvoke,
 } from "../src/lib/meeting/session-recording.js";
@@ -884,7 +885,7 @@ test("records whiteboard validation and recovery artifacts", async () => {
   );
   assert.ok(summaryWrite);
   const summary = parsePayload(summaryWrite);
-  assert.equal(summary.version, 42);
+  assert.equal(summary.version, 43);
   assert.deepEqual(summary.whiteboard, {
     artifactId: "whiteboard_1",
     revision: 1,
@@ -1382,7 +1383,7 @@ test("meeting metadata decisions persist company history and refresh trace summa
         "traces/meeting_metadata_trace/summary.json"
   );
   const summary = parsePayload(summaryWrites[summaryWrites.length - 1]!);
-  assert.equal(summary.version, 42);
+  assert.equal(summary.version, 43);
   assert.deepEqual(summary.meetingMetadata, {
     revision: 7,
     operationId: "metadata_operation_1",
@@ -1937,7 +1938,7 @@ test("compact trace summaries preserve task boundary and cross-domain evidence",
   );
   assert.ok(summaryWrite);
   const summary = parsePayload(summaryWrite);
-  assert.equal(summary.version, 42);
+  assert.equal(summary.version, 43);
   assert.equal(summary.taskRelation, "new-parent");
   assert.equal(summary.logicalQuestionUnitRevision, 3);
   assert.equal(summary.phaseSignal, "assumption-authorized");
@@ -2158,7 +2159,7 @@ test("compact trace summaries preserve bounded STT request evidence", async () =
   );
   assert.ok(summaryWrite);
   const summary = parsePayload(summaryWrite);
-  assert.equal(summary.version, 42);
+  assert.equal(summary.version, 43);
   assert.equal(
     (summary.timingsMs as Record<string, unknown>).stt,
     1_580
@@ -2300,7 +2301,7 @@ test("refreshes compact STT lifecycle evidence after a late provider abort", asy
   );
   assert.ok(summaryWrites.length >= 2);
   const summary = parsePayload(summaryWrites[summaryWrites.length - 1]!);
-  assert.equal(summary.version, 42);
+  assert.equal(summary.version, 43);
   assert.equal(
     (summary.sttRequest as Record<string, unknown>).abortRequested,
     true
@@ -2365,7 +2366,7 @@ test("compact trace summaries preserve hard memory invalidation evidence", async
   );
   assert.ok(summaryWrite);
   const summary = parsePayload(summaryWrite);
-  assert.equal(summary.version, 42);
+  assert.equal(summary.version, 43);
   const memory = summary.memory as Record<string, unknown>;
   assert.equal(memory.authorityRevision, 2);
   assert.equal(memory.invalidationKind, "hard");
@@ -2552,6 +2553,26 @@ test("records compact current-question settlement and execution-plan evidence", 
       currentQuestionSettlementDurationMs: 1.25,
       currentQuestionSettlementLlmWaitMs: 0,
       currentQuestionSettlementLlmWaitDisposition: "not-awaited",
+      effectiveCurrentQuestionSettlementMaterialized: true,
+      effectiveCurrentQuestionSettlementId: "settlement_a",
+      effectiveCurrentQuestionSettlementRevision: 4,
+      effectiveCurrentQuestionSettlementSourceHash: "source_hash_a",
+      effectiveCurrentQuestionSettlementSessionId: "session-runtime",
+      effectiveCurrentQuestionSettlementUnitId: "question_settlement_unit",
+      effectiveCurrentQuestionSettlementUnitRevision: 3,
+      effectiveCurrentQuestionSettlementQuestionType:
+        "general-system-design",
+      effectiveCurrentQuestionSettlementRelation: "new-parent",
+      effectiveCurrentQuestionSettlementParentMutationAuthorized: true,
+      effectiveCurrentQuestionSettlementParentId: "parent_after",
+      effectiveCurrentQuestionSettlementParentRevision: 1,
+      effectiveCurrentQuestionRawQuestionType: "general-system-design",
+      effectiveCurrentQuestionRawRelation: "new-parent",
+      effectiveCurrentQuestionContextReadScope: "active-parent-read",
+      effectiveAdvisorNullHypothesisApplied: false,
+      unresolvedAtConsumerBarrier: false,
+      activeMeetingParentQuestionType: "general-system-design",
+      promptCurrentQuestionSourceHash: "source_hash_a",
       settledExecutionPlanId: "plan_a",
       settledExecutionPlanSettlementId: "settlement_a",
       settledExecutionPlanQuestionType: "general-system-design",
@@ -2659,7 +2680,13 @@ test("records compact current-question settlement and execution-plan evidence", 
   assert.equal(serializedPlan.includes("taskSnapshot"), false);
   assert.equal(serializedPlan.includes("variables"), false);
   const summary = parsePayload(summaryWrite);
-  assert.equal(summary.version, 42);
+  assert.equal(summary.version, 43);
+  assert.equal(
+    (
+      summary.rawCurrentQuestionProposal as Record<string, unknown>
+    ).relation,
+    "new-parent"
+  );
   assert.equal(
     (
       summary.currentQuestionSettlement as Record<string, unknown>
@@ -2690,6 +2717,9 @@ test("records compact current-question settlement and execution-plan evidence", 
       parent: true,
     }
   );
+  assert.equal(summary.currentQuestionSettlementIncomplete, false);
+  assert.equal(summary.summarySettlementCoherent, true);
+  assert.deepEqual(summary.summarySettlementConflicts, []);
   assert.equal(
     (summary.settledExecutionPlan as Record<string, unknown>).modelRoute,
     "main"
@@ -2774,6 +2804,78 @@ test("records compact current-question settlement and execution-plan evidence", 
   await manager.stop("test-complete");
 });
 
+test("compact summaries keep raw unknown proposals separate from resolved settlements", () => {
+  const summary = buildCompactTraceSummary({
+    sessionId: "recording-session",
+    trace: buildCompletedTrace("resolved_summary_trace", 100, {
+      currentQuestionSettlementId: "raw_settlement",
+      currentQuestionSettlementSessionId: "runtime-session",
+      currentQuestionSettlementUnitId: "logical_1",
+      currentQuestionSettlementRevision: 2,
+      currentQuestionSettlementSourceHash: "source_hash_1",
+      currentQuestionSettlementType: "field-knowledge",
+      currentQuestionSettlementRelation: "unknown",
+      effectiveCurrentQuestionSettlementMaterialized: true,
+      effectiveCurrentQuestionSettlementId: "effective_settlement",
+      effectiveCurrentQuestionSettlementRevision: 3,
+      effectiveCurrentQuestionSettlementSessionId: "runtime-session",
+      effectiveCurrentQuestionSettlementUnitId: "logical_1",
+      effectiveCurrentQuestionSettlementUnitRevision: 2,
+      effectiveCurrentQuestionSettlementSourceHash: "source_hash_1",
+      effectiveCurrentQuestionSettlementQuestionType: "field-knowledge",
+      effectiveCurrentQuestionSettlementRelation: "followup-parent",
+      effectiveCurrentQuestionSettlementParentMutationAuthorized: false,
+      effectiveCurrentQuestionSettlementParentId: "parent_1",
+      effectiveCurrentQuestionSettlementParentRevision: 4,
+      effectiveCurrentQuestionRawQuestionType: "field-knowledge",
+      effectiveCurrentQuestionRawRelation: "unknown",
+      effectiveCurrentQuestionContextReadScope: "active-parent-read",
+      effectiveAdvisorNullHypothesisApplied: true,
+      effectiveAdvisorNullHypothesisReason: "preserve-active-parent",
+      unresolvedAtConsumerBarrier: false,
+      settledExecutionPlanSettlementId: "effective_settlement",
+      settledExecutionPlanQuestionType: "field-knowledge",
+      settledExecutionPlanRelation: "followup-parent",
+      promptCurrentQuestionSourceHash: "source_hash_1",
+    }),
+    trigger: "manual",
+    traceExportPath: "traces/resolved_summary_trace/trace.json",
+    summaryPath: "traces/resolved_summary_trace/summary.json",
+  });
+
+  assert.equal(summary.rawCurrentQuestionProposal?.relation, "unknown");
+  assert.equal(summary.currentQuestionSettlement?.relation, "followup-parent");
+  assert.equal(summary.currentQuestionSettlement?.rawRelation, "unknown");
+  assert.equal(summary.currentQuestionSettlement?.nullHypothesisApplied, true);
+  assert.equal(summary.currentQuestionSettlementIncomplete, false);
+  assert.equal(summary.summarySettlementCoherent, true);
+  assert.deepEqual(summary.summarySettlementConflicts, []);
+});
+
+test("compact summaries mark raw-only settlement proposals incomplete", () => {
+  const summary = buildCompactTraceSummary({
+    sessionId: "recording-session",
+    trace: buildCompletedTrace("incomplete_summary_trace", 100, {
+      currentQuestionSettlementId: "raw_settlement",
+      currentQuestionSettlementSessionId: "runtime-session",
+      currentQuestionSettlementUnitId: "logical_1",
+      currentQuestionSettlementRevision: 2,
+      currentQuestionSettlementSourceHash: "source_hash_1",
+      currentQuestionSettlementType: "field-knowledge",
+      currentQuestionSettlementRelation: "unknown",
+    }),
+    trigger: "manual",
+    traceExportPath: "traces/incomplete_summary_trace/trace.json",
+    summaryPath: "traces/incomplete_summary_trace/summary.json",
+  });
+
+  assert.equal(summary.rawCurrentQuestionProposal?.relation, "unknown");
+  assert.equal(summary.currentQuestionSettlement, undefined);
+  assert.equal(summary.currentQuestionSettlementIncomplete, true);
+  assert.equal(summary.summarySettlementCoherent, false);
+  assert.deepEqual(summary.summarySettlementConflicts, []);
+});
+
 test("records a current-question term correction without copying provider state", async () => {
   const native = new ControlledRecordingInvoke();
   const manager = new SessionRecordingManager(undefined, native.invoke);
@@ -2850,7 +2952,7 @@ test("records a current-question term correction without copying provider state"
     false
   );
   const summary = parsePayload(summaryWrite);
-  assert.equal(summary.version, 42);
+  assert.equal(summary.version, 43);
   assert.equal(
     summary.manualTermCorrectionId,
     "term_correction_hnsw"
@@ -3021,7 +3123,7 @@ test("records preparation provenance, use receipts, and answer-bound feedback", 
   );
   assert.ok(summaryWrite);
   const summary = parsePayload(summaryWrite);
-  assert.equal(summary.version, 42);
+  assert.equal(summary.version, 43);
   assert.equal(
     summary.preparationContextRevision,
     receipt.preparationContextRevision

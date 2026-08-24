@@ -83,7 +83,7 @@ import {
 
 const SESSION_RECORDING_SCHEMA_VERSION = 1;
 const SESSION_RECORDING_INTEGRITY_SCHEMA_VERSION = 1;
-const SESSION_TRACE_SUMMARY_SCHEMA_VERSION = 42;
+const SESSION_TRACE_SUMMARY_SCHEMA_VERSION = 43;
 const SESSION_TRACE_INDEX_SCHEMA_VERSION = 1;
 const MAX_RECORDED_WRITE_FAILURES = 20;
 
@@ -270,6 +270,58 @@ interface SessionTraceIndexEntry {
   traceStartedAt?: number;
   traceEndedAt?: number;
   traceDurationMs?: number;
+}
+
+export interface SessionCurrentQuestionProposalSummary {
+  settlementId?: string;
+  meetingSessionId?: string;
+  logicalQuestionUnitId?: string;
+  logicalQuestionUnitRevision?: number;
+  sourceTurnIds: string[];
+  sourceObservationIds: string[];
+  sourceHash?: string;
+  questionType?: string;
+  relation?: string;
+  action?: string;
+  evidenceMode?: string;
+  authority?: string;
+  authoritySource?: string;
+  typeAuthoritySource?: string;
+  relationAuthoritySource?: string;
+  actionAuthoritySource?: string;
+  typeMutationAuthorized?: boolean;
+  relationMutationAuthorized?: boolean;
+  parentMutationAuthorized?: boolean;
+  responseAuthorized?: boolean;
+  disposition?: string;
+  parentBeforeId?: string;
+  parentBeforeType?: string;
+  parentAfterId?: string;
+  parentAfterType?: string;
+  typeAppliedToResponse?: boolean;
+  typeAppliedToSettlement?: boolean;
+  typeAppliedToParent?: boolean;
+  manualCorrectionRevision?: number;
+  rejectedProposalCount?: number;
+  reasons: string[];
+  durationMs?: number;
+  llmWaitMs?: number;
+  llmWaitDisposition?: string;
+}
+
+export interface SessionEffectiveCurrentQuestionSettlementSummary
+  extends SessionCurrentQuestionProposalSummary {
+  materialized: true;
+  effectiveRevision?: number;
+  rawQuestionType?: string;
+  rawRelation?: string;
+  effectiveParentId?: string;
+  effectiveParentRevision?: number;
+  effectiveChildId?: string;
+  contextReadScope?: string;
+  nullHypothesisApplied?: boolean;
+  nullHypothesisReason?: string;
+  unresolvedAtConsumerBarrier: boolean;
 }
 
 export interface SessionCompactTraceSummary {
@@ -503,42 +555,11 @@ export interface SessionCompactTraceSummary {
     parentAfterId?: string;
     parentAfterType?: string;
   };
-  currentQuestionSettlement?: {
-    settlementId?: string;
-    meetingSessionId?: string;
-    logicalQuestionUnitId?: string;
-    logicalQuestionUnitRevision?: number;
-    sourceTurnIds: string[];
-    sourceObservationIds: string[];
-    sourceHash?: string;
-    questionType?: string;
-    relation?: string;
-    action?: string;
-    evidenceMode?: string;
-    authority?: string;
-    authoritySource?: string;
-    typeAuthoritySource?: string;
-    relationAuthoritySource?: string;
-    actionAuthoritySource?: string;
-    typeMutationAuthorized?: boolean;
-    relationMutationAuthorized?: boolean;
-    parentMutationAuthorized?: boolean;
-    responseAuthorized?: boolean;
-    disposition?: string;
-    parentBeforeId?: string;
-    parentBeforeType?: string;
-    parentAfterId?: string;
-    parentAfterType?: string;
-    typeAppliedToResponse?: boolean;
-    typeAppliedToSettlement?: boolean;
-    typeAppliedToParent?: boolean;
-    manualCorrectionRevision?: number;
-    rejectedProposalCount?: number;
-    reasons: string[];
-    durationMs?: number;
-    llmWaitMs?: number;
-    llmWaitDisposition?: string;
-  };
+  rawCurrentQuestionProposal?: SessionCurrentQuestionProposalSummary;
+  currentQuestionSettlement?: SessionEffectiveCurrentQuestionSettlementSummary;
+  currentQuestionSettlementIncomplete?: boolean;
+  summarySettlementCoherent?: boolean;
+  summarySettlementConflicts?: string[];
   currentQuestionTerminalNoAnswer?: {
     disposition?: string;
     authorized?: boolean;
@@ -4581,6 +4602,21 @@ export function buildCompactTraceSummary({
     metadataSources,
     "modelGenerationFirstVisiblePartialAt"
   );
+  const rawCurrentQuestionProposal =
+    buildRawCurrentQuestionProposalSummary(metadataSources);
+  const currentQuestionSettlement =
+    buildEffectiveCurrentQuestionSettlementSummary({
+      metadataSources,
+      rawProposal: rawCurrentQuestionProposal,
+    });
+  const summarySettlementConflicts =
+    collectSummarySettlementConflicts({
+      metadataSources,
+      settlement: currentQuestionSettlement,
+    });
+  const currentQuestionSettlementIncomplete = Boolean(
+    rawCurrentQuestionProposal && !currentQuestionSettlement
+  );
 
   return {
     version: SESSION_TRACE_SUMMARY_SCHEMA_VERSION,
@@ -5327,147 +5363,15 @@ export function buildCompactTraceSummary({
       parentAfterId: readFirstString(metadataSources, "parentAfterId"),
       parentAfterType: readFirstString(metadataSources, "parentAfterType"),
     },
-    currentQuestionSettlement: {
-      settlementId: readFirstString(
-        metadataSources,
-        "currentQuestionSettlementId"
-      ),
-      meetingSessionId: readFirstString(
-        metadataSources,
-        "currentQuestionSettlementSessionId"
-      ),
-      logicalQuestionUnitId: readFirstString(
-        metadataSources,
-        "currentQuestionSettlementUnitId"
-      ),
-      logicalQuestionUnitRevision:
-        readFirstNumberFromMetadata(
-          metadataSources,
-          "currentQuestionSettlementRevision"
-        ),
-      sourceTurnIds: readFirstStringList(
-        metadataSources,
-        "currentQuestionSettlementSourceTurnIds"
-      ),
-      sourceObservationIds: readFirstStringList(
-        metadataSources,
-        "currentQuestionSettlementSourceObservationIds"
-      ),
-      sourceHash: readFirstString(
-        metadataSources,
-        "currentQuestionSettlementSourceHash"
-      ),
-      questionType: readFirstString(
-        metadataSources,
-        "currentQuestionSettlementType"
-      ),
-      relation: readFirstString(
-        metadataSources,
-        "currentQuestionSettlementRelation"
-      ),
-      action: readFirstString(
-        metadataSources,
-        "currentQuestionSettlementAction"
-      ),
-      evidenceMode: readFirstString(
-        metadataSources,
-        "currentQuestionSettlementEvidenceMode"
-      ),
-      authority: readFirstString(
-        metadataSources,
-        "currentQuestionSettlementAuthority"
-      ),
-      authoritySource: readFirstString(
-        metadataSources,
-        "currentQuestionSettlementAuthoritySource"
-      ),
-      typeAuthoritySource: readFirstString(
-        metadataSources,
-        "currentQuestionSettlementTypeAuthoritySource"
-      ),
-      relationAuthoritySource: readFirstString(
-        metadataSources,
-        "currentQuestionSettlementRelationAuthoritySource"
-      ),
-      actionAuthoritySource: readFirstString(
-        metadataSources,
-        "currentQuestionSettlementActionAuthoritySource"
-      ),
-      typeMutationAuthorized: readFirstBoolean(
-        metadataSources,
-        "currentQuestionSettlementTypeMutationAuthorized"
-      ),
-      relationMutationAuthorized: readFirstBoolean(
-        metadataSources,
-        "currentQuestionSettlementRelationMutationAuthorized"
-      ),
-      parentMutationAuthorized: readFirstBoolean(
-        metadataSources,
-        "currentQuestionSettlementParentMutationAuthorized"
-      ),
-      responseAuthorized: readFirstBoolean(
-        metadataSources,
-        "currentQuestionSettlementResponseAuthorized"
-      ),
-      disposition: readFirstString(
-        metadataSources,
-        "currentQuestionSettlementDisposition"
-      ),
-      parentBeforeId: readFirstString(
-        metadataSources,
-        "currentQuestionSettlementParentBeforeId"
-      ),
-      parentBeforeType: readFirstString(
-        metadataSources,
-        "currentQuestionSettlementParentBeforeType"
-      ),
-      parentAfterId: readFirstString(
-        metadataSources,
-        "currentQuestionSettlementParentAfterId"
-      ),
-      parentAfterType: readFirstString(
-        metadataSources,
-        "currentQuestionSettlementParentAfterType"
-      ),
-      typeAppliedToResponse: readFirstBoolean(
-        metadataSources,
-        "currentQuestionSettlementAppliedToResponse"
-      ),
-      typeAppliedToSettlement: readFirstBoolean(
-        metadataSources,
-        "currentQuestionSettlementAppliedToSettlement"
-      ),
-      typeAppliedToParent: readFirstBoolean(
-        metadataSources,
-        "currentQuestionSettlementAppliedToParent"
-      ),
-      manualCorrectionRevision:
-        readFirstNumberFromMetadata(
-          metadataSources,
-          "currentQuestionSettlementManualCorrectionRevision"
-        ),
-      rejectedProposalCount:
-        readFirstObjectListLength(
-          metadataSources,
-          "currentQuestionSettlementRejectedProposals"
-        ),
-      reasons: readFirstStringList(
-        metadataSources,
-        "currentQuestionSettlementReasons"
-      ),
-      durationMs: readFirstNumberFromMetadata(
-        metadataSources,
-        "currentQuestionSettlementDurationMs"
-      ),
-      llmWaitMs: readFirstNumberFromMetadata(
-        metadataSources,
-        "currentQuestionSettlementLlmWaitMs"
-      ),
-      llmWaitDisposition: readFirstString(
-        metadataSources,
-        "currentQuestionSettlementLlmWaitDisposition"
-      ),
-    },
+    rawCurrentQuestionProposal,
+    currentQuestionSettlement,
+    currentQuestionSettlementIncomplete,
+    summarySettlementCoherent: currentQuestionSettlement
+      ? summarySettlementConflicts.length === 0
+      : rawCurrentQuestionProposal
+        ? false
+        : undefined,
+    summarySettlementConflicts,
     currentQuestionTerminalNoAnswer:
       buildCurrentQuestionTerminalNoAnswerTraceSummary(metadataSources),
     settledExecutionPlan: {
@@ -8302,6 +8206,312 @@ function buildProjectTrajectoryTraceSummary(
         "sourceTransitionReturnCapsuleProjectBindingRevision"
       ),
   };
+}
+
+function buildRawCurrentQuestionProposalSummary(
+  metadataSources: Record<string, unknown>[]
+): SessionCurrentQuestionProposalSummary | undefined {
+  const summary: SessionCurrentQuestionProposalSummary = {
+    settlementId: readFirstString(
+      metadataSources,
+      "currentQuestionSettlementId"
+    ),
+    meetingSessionId: readFirstString(
+      metadataSources,
+      "currentQuestionSettlementSessionId"
+    ),
+    logicalQuestionUnitId: readFirstString(
+      metadataSources,
+      "currentQuestionSettlementUnitId"
+    ),
+    logicalQuestionUnitRevision: readFirstNumberFromMetadata(
+      metadataSources,
+      "currentQuestionSettlementRevision"
+    ),
+    sourceTurnIds: readFirstStringList(
+      metadataSources,
+      "currentQuestionSettlementSourceTurnIds"
+    ),
+    sourceObservationIds: readFirstStringList(
+      metadataSources,
+      "currentQuestionSettlementSourceObservationIds"
+    ),
+    sourceHash: readFirstString(
+      metadataSources,
+      "currentQuestionSettlementSourceHash"
+    ),
+    questionType: readFirstString(
+      metadataSources,
+      "currentQuestionSettlementType"
+    ),
+    relation: readFirstString(
+      metadataSources,
+      "currentQuestionSettlementRelation"
+    ),
+    action: readFirstString(
+      metadataSources,
+      "currentQuestionSettlementAction"
+    ),
+    evidenceMode: readFirstString(
+      metadataSources,
+      "currentQuestionSettlementEvidenceMode"
+    ),
+    authority: readFirstString(
+      metadataSources,
+      "currentQuestionSettlementAuthority"
+    ),
+    authoritySource: readFirstString(
+      metadataSources,
+      "currentQuestionSettlementAuthoritySource"
+    ),
+    typeAuthoritySource: readFirstString(
+      metadataSources,
+      "currentQuestionSettlementTypeAuthoritySource"
+    ),
+    relationAuthoritySource: readFirstString(
+      metadataSources,
+      "currentQuestionSettlementRelationAuthoritySource"
+    ),
+    actionAuthoritySource: readFirstString(
+      metadataSources,
+      "currentQuestionSettlementActionAuthoritySource"
+    ),
+    typeMutationAuthorized: readFirstBoolean(
+      metadataSources,
+      "currentQuestionSettlementTypeMutationAuthorized"
+    ),
+    relationMutationAuthorized: readFirstBoolean(
+      metadataSources,
+      "currentQuestionSettlementRelationMutationAuthorized"
+    ),
+    parentMutationAuthorized: readFirstBoolean(
+      metadataSources,
+      "currentQuestionSettlementParentMutationAuthorized"
+    ),
+    responseAuthorized: readFirstBoolean(
+      metadataSources,
+      "currentQuestionSettlementResponseAuthorized"
+    ),
+    disposition: readFirstString(
+      metadataSources,
+      "currentQuestionSettlementDisposition"
+    ),
+    parentBeforeId: readFirstString(
+      metadataSources,
+      "currentQuestionSettlementParentBeforeId"
+    ),
+    parentBeforeType: readFirstString(
+      metadataSources,
+      "currentQuestionSettlementParentBeforeType"
+    ),
+    parentAfterId: readFirstString(
+      metadataSources,
+      "currentQuestionSettlementParentAfterId"
+    ),
+    parentAfterType: readFirstString(
+      metadataSources,
+      "currentQuestionSettlementParentAfterType"
+    ),
+    typeAppliedToResponse: readFirstBoolean(
+      metadataSources,
+      "currentQuestionSettlementAppliedToResponse"
+    ),
+    typeAppliedToSettlement: readFirstBoolean(
+      metadataSources,
+      "currentQuestionSettlementAppliedToSettlement"
+    ),
+    typeAppliedToParent: readFirstBoolean(
+      metadataSources,
+      "currentQuestionSettlementAppliedToParent"
+    ),
+    manualCorrectionRevision: readFirstNumberFromMetadata(
+      metadataSources,
+      "currentQuestionSettlementManualCorrectionRevision"
+    ),
+    rejectedProposalCount: readFirstObjectListLength(
+      metadataSources,
+      "currentQuestionSettlementRejectedProposals"
+    ),
+    reasons: readFirstStringList(
+      metadataSources,
+      "currentQuestionSettlementReasons"
+    ),
+    durationMs: readFirstNumberFromMetadata(
+      metadataSources,
+      "currentQuestionSettlementDurationMs"
+    ),
+    llmWaitMs: readFirstNumberFromMetadata(
+      metadataSources,
+      "currentQuestionSettlementLlmWaitMs"
+    ),
+    llmWaitDisposition: readFirstString(
+      metadataSources,
+      "currentQuestionSettlementLlmWaitDisposition"
+    ),
+  };
+  return summary.settlementId ||
+    summary.logicalQuestionUnitId ||
+    summary.questionType ||
+    summary.relation ||
+    summary.sourceHash
+    ? summary
+    : undefined;
+}
+
+function buildEffectiveCurrentQuestionSettlementSummary(input: {
+  metadataSources: Record<string, unknown>[];
+  rawProposal?: SessionCurrentQuestionProposalSummary;
+}): SessionEffectiveCurrentQuestionSettlementSummary | undefined {
+  const { metadataSources, rawProposal } = input;
+  const settlementId = readFirstString(
+    metadataSources,
+    "effectiveCurrentQuestionSettlementId"
+  );
+  const questionType = readFirstString(
+    metadataSources,
+    "effectiveCurrentQuestionSettlementQuestionType"
+  );
+  const relation = readFirstString(
+    metadataSources,
+    "effectiveCurrentQuestionSettlementRelation"
+  );
+  const materialized =
+    readFirstBoolean(
+      metadataSources,
+      "effectiveCurrentQuestionSettlementMaterialized"
+    ) === true || Boolean(settlementId && questionType && relation);
+  if (!materialized || !settlementId) return undefined;
+
+  const effectiveParentId = readFirstString(
+    metadataSources,
+    "effectiveCurrentQuestionSettlementParentId"
+  );
+  const unresolvedAtConsumerBarrier =
+    readFirstBoolean(metadataSources, "unresolvedAtConsumerBarrier") ??
+    relation === "unknown";
+  return {
+    ...(rawProposal ?? {
+      sourceTurnIds: [],
+      sourceObservationIds: [],
+      reasons: [],
+    }),
+    materialized: true,
+    settlementId,
+    meetingSessionId:
+      readFirstString(
+        metadataSources,
+        "effectiveCurrentQuestionSettlementSessionId"
+      ) ?? rawProposal?.meetingSessionId,
+    logicalQuestionUnitId:
+      readFirstString(
+        metadataSources,
+        "effectiveCurrentQuestionSettlementUnitId"
+      ) ?? rawProposal?.logicalQuestionUnitId,
+    logicalQuestionUnitRevision:
+      readFirstNumberFromMetadata(
+        metadataSources,
+        "effectiveCurrentQuestionSettlementUnitRevision"
+      ) ?? rawProposal?.logicalQuestionUnitRevision,
+    sourceHash:
+      readFirstString(
+        metadataSources,
+        "effectiveCurrentQuestionSettlementSourceHash"
+      ) ?? rawProposal?.sourceHash,
+    questionType,
+    relation,
+    parentMutationAuthorized:
+      readFirstBoolean(
+        metadataSources,
+        "effectiveCurrentQuestionSettlementParentMutationAuthorized"
+      ) ?? rawProposal?.parentMutationAuthorized,
+    parentAfterId: effectiveParentId ?? rawProposal?.parentAfterId,
+    parentAfterType:
+      readFirstString(metadataSources, "activeMeetingParentQuestionType") ??
+      rawProposal?.parentAfterType,
+    effectiveRevision: readFirstNumberFromMetadata(
+      metadataSources,
+      "effectiveCurrentQuestionSettlementRevision"
+    ),
+    rawQuestionType:
+      readFirstString(
+        metadataSources,
+        "effectiveCurrentQuestionRawQuestionType"
+      ) ?? rawProposal?.questionType,
+    rawRelation:
+      readFirstString(
+        metadataSources,
+        "effectiveCurrentQuestionRawRelation"
+      ) ?? rawProposal?.relation,
+    effectiveParentId,
+    effectiveParentRevision: readFirstNumberFromMetadata(
+      metadataSources,
+      "effectiveCurrentQuestionSettlementParentRevision"
+    ),
+    effectiveChildId: readFirstString(
+      metadataSources,
+      "effectiveCurrentQuestionSettlementChildId"
+    ),
+    contextReadScope: readFirstString(
+      metadataSources,
+      "effectiveCurrentQuestionContextReadScope"
+    ),
+    nullHypothesisApplied: readFirstBoolean(
+      metadataSources,
+      "effectiveAdvisorNullHypothesisApplied"
+    ),
+    nullHypothesisReason: readFirstString(
+      metadataSources,
+      "effectiveAdvisorNullHypothesisReason"
+    ),
+    unresolvedAtConsumerBarrier,
+  };
+}
+
+function collectSummarySettlementConflicts(input: {
+  metadataSources: Record<string, unknown>[];
+  settlement?: SessionEffectiveCurrentQuestionSettlementSummary;
+}) {
+  const { metadataSources, settlement } = input;
+  if (!settlement) return [];
+  const conflicts: string[] = [];
+  compareSummarySettlementField(
+    settlement.settlementId,
+    readFirstString(metadataSources, "settledExecutionPlanSettlementId"),
+    "execution-plan-settlement-id",
+    conflicts
+  );
+  compareSummarySettlementField(
+    settlement.questionType,
+    readFirstString(metadataSources, "settledExecutionPlanQuestionType"),
+    "execution-plan-question-type",
+    conflicts
+  );
+  compareSummarySettlementField(
+    settlement.relation,
+    readFirstString(metadataSources, "settledExecutionPlanRelation"),
+    "execution-plan-relation",
+    conflicts
+  );
+  compareSummarySettlementField(
+    settlement.sourceHash,
+    readFirstString(metadataSources, "promptCurrentQuestionSourceHash") ??
+      readFirstString(metadataSources, "committedCurrentQuestionSourceHash"),
+    "prompt-question-source-hash",
+    conflicts
+  );
+  if (settlement.unresolvedAtConsumerBarrier) {
+    conflicts.push("unresolved-at-consumer-barrier");
+  }
+  return conflicts;
+}
+
+function compareSummarySettlementField(
+  expected: string | undefined,
+  observed: string | undefined,
+  conflict: string,
+  conflicts: string[]
+) {
+  if (expected && observed && expected !== observed) conflicts.push(conflict);
 }
 
 function buildProjectTrajectoryJoinKey(input: {
