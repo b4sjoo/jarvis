@@ -278,7 +278,7 @@ test("rejects same-type and unsupported child attachments without mutation", () 
   assert.equal(unsupported.state.parent?.child, undefined);
 });
 
-test("rejects a parent type that has not been admitted by the topology matrix", () => {
+test("admits a childless Field Knowledge parent", () => {
   const fieldKnowledgeParent = {
     ...parent(),
     stableKind: "field-knowledge",
@@ -294,10 +294,45 @@ test("rejects a parent type that has not been admitted by the topology matrix", 
     },
   });
 
+  assert.equal(result.authorized, true);
+  assert.equal(result.reason, "committed");
+  assert.equal(result.state.revision, 1);
+  assert.equal(result.state.parent?.stableKind, "field-knowledge");
+});
+
+test("rejects every child attachment under a Field Knowledge parent", () => {
+  const fieldKnowledgeParent = {
+    ...parent(),
+    stableKind: "field-knowledge",
+  } as ActiveInterviewParent;
+  const state = reduceMeetingTaskRuntimeMutation({
+    state: createMeetingTaskRuntimeState(),
+    mutation: {
+      id: "mutation-field-parent",
+      kind: "commit-transition",
+      transition: "create-parent",
+      reason: "standalone-field-knowledge",
+      parent: fieldKnowledgeParent,
+    },
+  }).state;
+  const result = reduceMeetingTaskRuntimeMutation({
+    state,
+    mutation: {
+      id: "mutation-field-child",
+      kind: "commit-transition",
+      transition: "attach-child",
+      reason: "field-parent-must-remain-childless",
+      parent: {
+        ...fieldKnowledgeParent,
+        revisions: 2,
+        child: child("coding"),
+      },
+    },
+  });
+
   assert.equal(result.authorized, false);
-  assert.equal(result.reason, "parent-type-not-allowed");
-  assert.equal(result.state.revision, 0);
-  assert.equal(result.state.parent, undefined);
+  assert.equal(result.reason, "child-type-not-allowed");
+  assert.equal(result.state.parent?.child, undefined);
 });
 
 function parent(

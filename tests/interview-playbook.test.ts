@@ -24,6 +24,16 @@ test("selects the spoken baseline as the initial coding phase", () => {
   );
 });
 
+test("selects the concept playbook for a standalone Field Knowledge parent", () => {
+  const playbook = selectInterviewPlaybook({
+    query: "How does HNSW efSearch affect recall and latency?",
+    questionType: "field-knowledge",
+  });
+
+  assert.equal(playbook?.id, "aiml_field_knowledge");
+  assert.equal(playbook?.phase, "concept_explanation");
+});
+
 test("changes the coding output contract with the committed phase", () => {
   const baseline = selectInterviewPlaybook({
     query: "Implement insertion sort for a linked list.",

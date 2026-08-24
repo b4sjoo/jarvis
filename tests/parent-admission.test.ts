@@ -66,6 +66,18 @@ test("allows a clear technical question to reseed only a provisional parent", ()
   );
 });
 
+test("admits a standalone Field Knowledge question as a durable parent", () => {
+  const admission = decideParentAdmission({
+    relation: "new-parent",
+    questionType: "field-knowledge",
+    mutationAuthorized: true,
+  });
+
+  assert.equal(admission.action, "create-parent");
+  assert.equal(admission.durable, true);
+  assert.equal(admission.mutationAuthorized, true);
+});
+
 function makeParent(
   patch: Partial<ActiveInterviewParent> = {}
 ): ActiveInterviewParent {

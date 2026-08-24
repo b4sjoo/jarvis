@@ -176,6 +176,7 @@ export type FirstBatchRelationReleaseReason =
   | "allowed-child-parent-related"
   | "different-parent-type-independent"
   | "nonparent-type-independent-response-only"
+  | "bounded-child-parent-independent-response-only"
   | "active-child-resume-parent"
   | "affinity-missing"
   | "affinity-unclear"
@@ -378,6 +379,20 @@ export function decideFirstBatchRelationRelease(input: {
     });
   }
   if (canQuestionTypeCreateParent(currentQuestionType)) {
+    if (
+      canParentQuestionTypeOwnChild(
+        activeParentQuestionType,
+        currentQuestionType
+      )
+    ) {
+      return decide({
+        authorized: false,
+        responseOnly: true,
+        reason: "bounded-child-parent-independent-response-only",
+        confidence,
+        possibleRelationError: false,
+      });
+    }
     return decide({
       authorized: true,
       relation: "new-parent",

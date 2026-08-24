@@ -54,6 +54,15 @@ export function decideInterviewTaskContinuityBranch(input: {
   }
 
   if (!input.hasExistingParent) {
+    if (
+      input.relation !== "new-parent" &&
+      input.relation !== "unknown"
+    ) {
+      return {
+        branch: "preserve",
+        reason: `relation-${input.relation}-requires-existing-parent`,
+      };
+    }
     return {
       branch: "new-parent",
       reason: "no-existing-parent",

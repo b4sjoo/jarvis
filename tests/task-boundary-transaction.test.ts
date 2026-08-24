@@ -635,7 +635,7 @@ test("a precommitted parent re-roots prompt transcript at its first source turn"
   assert.match(prompt.transcript, /delivery service/);
 });
 
-test("abstains from precommitting follow-ups and non-parent task types", () => {
+test("abstains from follow-ups but precommits parent-eligible Field Knowledge", () => {
   const followup = createTaskBoundaryCandidate({
     logicalQuestionUnit: logicalQuestion(),
     proposedQuestionType: "general-system-design",
@@ -658,7 +658,8 @@ test("abstains from precommitting follow-ups and non-parent task types", () => {
   });
 
   assert.equal(followup?.mutationDisposition, "abstained-non-boundary-relation");
-  assert.equal(fieldKnowledge?.mutationDisposition, "abstained-non-parent-type");
+  assert.equal(fieldKnowledge?.mutationDisposition, "commit-before-advisor");
+  assert.equal(fieldKnowledge?.mutationAuthority.parentMutationAuthorized, true);
 });
 
 test("keeps a complete unknown question provisional and blocks parent mutation", () => {

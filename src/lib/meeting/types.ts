@@ -329,7 +329,7 @@ export type ScreenTaskKind = ScreenQuestionType | LegacyQuestionTypeAlias;
 
 export type ParentQuestionType = Exclude<
   CanonicalQuestionType,
-  "field-knowledge" | "unknown"
+  "unknown"
 >;
 
 export type TaskAskFrame =

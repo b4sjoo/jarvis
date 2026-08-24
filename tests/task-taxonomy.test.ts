@@ -303,7 +303,7 @@ test("maps canonical values to boundary types", () => {
 test("identifies parent-eligible canonical task types", () => {
   assert.equal(isParentCanonicalQuestionType("behavioral"), true);
   assert.equal(isParentCanonicalQuestionType("coding"), true);
-  assert.equal(isParentCanonicalQuestionType("field-knowledge"), false);
+  assert.equal(isParentCanonicalQuestionType("field-knowledge"), true);
   assert.equal(isParentCanonicalQuestionType("unknown"), false);
 });
 
@@ -340,12 +340,12 @@ test("defines one complete question-type topology capability matrix", () => {
         canCreateParent: true,
         allowedChildTypes: ["field-knowledge", "coding"],
       },
-      fieldKnowledge: { canCreateParent: false, allowedChildTypes: [] },
+      fieldKnowledge: { canCreateParent: true, allowedChildTypes: [] },
       unknown: { canCreateParent: false, allowedChildTypes: [] },
     }
   );
   assert.equal(canQuestionTypeCreateParent("project-deep-dive"), true);
-  assert.equal(canQuestionTypeCreateParent("field-knowledge"), false);
+  assert.equal(canQuestionTypeCreateParent("field-knowledge"), true);
 });
 
 test("allows only bounded cross-type children and rejects same-type children", () => {

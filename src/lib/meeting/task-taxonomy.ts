@@ -23,7 +23,7 @@ export interface QuestionTypeTopologyCapability {
 
 export type ParentEligibleCanonicalQuestionType = Exclude<
   CanonicalQuestionType,
-  "field-knowledge" | "unknown"
+  "unknown"
 >;
 
 function defineQuestionTypeTopologyCapability(
@@ -54,8 +54,7 @@ const QUESTION_TYPE_TOPOLOGY_CAPABILITIES: Readonly<
     "coding",
   ]),
   "field-knowledge": defineQuestionTypeTopologyCapability(
-    // Task 184 enables standalone Field Knowledge parents in a later slice.
-    false,
+    true,
     []
   ),
   unknown: defineQuestionTypeTopologyCapability(false, []),

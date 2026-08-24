@@ -378,7 +378,7 @@ test("treats selecting the effective question type as a no-op", () => {
   assert.equal(decision.target, undefined);
 });
 
-test("promotes a provisional question to a parent type or current-only field knowledge", () => {
+test("promotes every parent-eligible provisional question", () => {
   const coding = decideProvisionalQuestionTypeCorrection("coding");
   assert.equal(coding.noOp, false);
   assert.equal(coding.target, "provisional-question");
@@ -388,14 +388,14 @@ test("promotes a provisional question to a parent type or current-only field kno
   const fieldKnowledge =
     decideProvisionalQuestionTypeCorrection("field-knowledge");
   assert.equal(fieldKnowledge.noOp, false);
-  assert.equal(fieldKnowledge.target, "current-question");
+  assert.equal(fieldKnowledge.target, "provisional-question");
   assert.equal(
     fieldKnowledge.reason,
-    "manual-correction-keeps-provisional-question-current-only"
+    "manual-correction-promotes-provisional-question"
   );
 });
 
-test("keeps a field-knowledge correction current-only without retyping a parent", () => {
+test("keeps an unsettled Field Knowledge correction current-only", () => {
   const task = makeActiveTask({ questionType: "coding" });
   const decision = decideManualQuestionTypeCorrection(
     task,
@@ -410,11 +410,11 @@ test("keeps a field-knowledge correction current-only without retyping a parent"
   });
 
   assert.equal(decision.noOp, false);
-  assert.equal(decision.target, "current-question");
+  assert.equal(decision.target, "parent");
   assert.equal(scope.scope, "current-only");
   assert.equal(
     scope.reason,
-    "manual-correction-targets-current-non-parent-question"
+    "unknown-question-relation-unsettled"
   );
 });
 

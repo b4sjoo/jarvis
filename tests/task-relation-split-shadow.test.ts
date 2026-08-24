@@ -330,8 +330,8 @@ test("releases only the approved no-parent and parent-without-child matrix", () 
     decideFirstBatchRelationRelease({
       currentQuestionType: "field-knowledge",
       hasActiveChild: false,
-    }).responseOnly,
-    true
+    }).relation,
+    "new-parent"
   );
   assert.equal(
     decideFirstBatchRelationRelease({
@@ -366,9 +366,35 @@ test("releases only the approved no-parent and parent-without-child matrix", () 
       activeParentQuestionType: "behavioral",
       hasActiveChild: false,
       parentAffinity: parentIndependent,
-    }).responseOnly,
-    true
+    }).relation,
+    "new-parent"
   );
+  const blockedLongParent = decideFirstBatchRelationRelease({
+    currentQuestionType: "field-knowledge",
+    activeParentQuestionType: "general-system-design",
+    hasActiveChild: false,
+    parentAffinity: parentIndependent,
+  });
+  assert.equal(blockedLongParent.authorized, false);
+  assert.equal(blockedLongParent.responseOnly, true);
+  assert.equal(
+    blockedLongParent.reason,
+    "bounded-child-parent-independent-response-only"
+  );
+  for (const activeParentQuestionType of [
+    "general-system-design",
+    "ai-ml-system-design",
+    "project-deep-dive",
+  ] as const) {
+    const blocked = decideFirstBatchRelationRelease({
+      currentQuestionType: "field-knowledge",
+      activeParentQuestionType,
+      hasActiveChild: false,
+      parentAffinity: parentIndependent,
+    });
+    assert.equal(blocked.authorized, false);
+    assert.equal(blocked.responseOnly, true);
+  }
 });
 
 test("releases only resume-parent while an active child exists", () => {
