@@ -16,6 +16,8 @@ import type {
   WhiteboardArtifact,
 } from "./types";
 import {
+  canParentQuestionTypeOwnChild,
+  canQuestionTypeCreateParent,
   isParentCanonicalQuestionType,
   normalizeCanonicalQuestionType,
 } from "./task-taxonomy.js";
@@ -158,7 +160,9 @@ export interface MeetingTaskRuntimeMutationResult {
     | "committed"
     | "preserved"
     | "revision-mismatch"
-    | "invalid-transition";
+    | "invalid-transition"
+    | "parent-type-not-allowed"
+    | "child-type-not-allowed";
 }
 
 export function createMeetingTaskRuntimeState(): MeetingTaskRuntimeState {
@@ -829,7 +833,7 @@ function applyRuntimeMutation(
 ): {
   changed: boolean;
   patch: Partial<MeetingTaskRuntimeState>;
-  rejectionReason?: "invalid-transition";
+  rejectionReason?: RuntimeTransitionRejectionReason;
 } {
   if (mutation.kind === "commit-transition") {
     const parent =
@@ -840,19 +844,18 @@ function applyRuntimeMutation(
       mutation.screenAttachment === undefined
         ? state.screenAttachment
         : mutation.screenAttachment ?? undefined;
-    if (
-      !isValidRuntimeTransition({
-        transition: mutation.transition,
-        beforeParent: state.parent,
-        afterParent: parent,
-        beforeScreen: state.screenAttachment,
-        afterScreen: screenAttachment,
-      })
-    ) {
+    const rejectionReason = validateRuntimeTransition({
+      transition: mutation.transition,
+      beforeParent: state.parent,
+      afterParent: parent,
+      beforeScreen: state.screenAttachment,
+      afterScreen: screenAttachment,
+    });
+    if (rejectionReason) {
       return {
         changed: false,
         patch: {},
-        rejectionReason: "invalid-transition",
+        rejectionReason,
       };
     }
     return {
@@ -914,38 +917,61 @@ function applyRuntimeMutation(
   };
 }
 
-function isValidRuntimeTransition(input: {
+type RuntimeTransitionRejectionReason =
+  | "invalid-transition"
+  | "parent-type-not-allowed"
+  | "child-type-not-allowed";
+
+function validateRuntimeTransition(input: {
   transition: MeetingTaskRuntimeTransitionKind;
   beforeParent?: ActiveInterviewParent;
   afterParent?: ActiveInterviewParent;
   beforeScreen?: ActiveScreenTask;
   afterScreen?: ActiveScreenTask;
-}) {
+}): RuntimeTransitionRejectionReason | undefined {
   const { transition, beforeParent, afterParent } = input;
   if (transition === "create-parent") {
-    return Boolean(
-      !beforeParent &&
-        afterParent &&
-        afterParent.revisions >= 1
-    );
+    if (beforeParent || !afterParent || afterParent.revisions < 1) {
+      return "invalid-transition";
+    }
+    return isRuntimeParentTypeAllowed(afterParent)
+      ? undefined
+      : "parent-type-not-allowed";
   }
   if (transition === "replace-parent") {
-    return Boolean(
-      beforeParent &&
-        afterParent &&
-        (beforeParent.id !== afterParent.id ||
-          beforeParent.stableKind !== afterParent.stableKind) &&
-        afterParent.revisions >= 1
-    );
+    if (
+      !beforeParent ||
+      !afterParent ||
+      (beforeParent.id === afterParent.id &&
+        beforeParent.stableKind === afterParent.stableKind) ||
+      afterParent.revisions < 1
+    ) {
+      return "invalid-transition";
+    }
+    return isRuntimeParentTypeAllowed(afterParent)
+      ? undefined
+      : "parent-type-not-allowed";
   }
   if (transition === "attach-child") {
-    return Boolean(
-      beforeParent &&
-        afterParent &&
-        beforeParent.id === afterParent.id &&
-        afterParent.child &&
-        afterParent.revisions === beforeParent.revisions + 1
+    if (
+      !beforeParent ||
+      !afterParent ||
+      beforeParent.id !== afterParent.id ||
+      beforeParent.stableKind !== afterParent.stableKind ||
+      !afterParent.child ||
+      afterParent.revisions !== beforeParent.revisions + 1
+    ) {
+      return "invalid-transition";
+    }
+    const parentType = normalizeCanonicalQuestionType(afterParent.stableKind);
+    const childType = normalizeCanonicalQuestionType(
+      afterParent.child.questionType
     );
+    return parentType &&
+      childType &&
+      canParentQuestionTypeOwnChild(parentType, childType)
+      ? undefined
+      : "child-type-not-allowed";
   }
   if (transition === "resume-parent") {
     return Boolean(
@@ -954,7 +980,9 @@ function isValidRuntimeTransition(input: {
         beforeParent.id === afterParent.id &&
         !afterParent.child &&
         afterParent.revisions === beforeParent.revisions + 1
-    );
+    )
+      ? undefined
+      : "invalid-transition";
   }
   if (transition === "advance-phase") {
     return Boolean(
@@ -963,7 +991,9 @@ function isValidRuntimeTransition(input: {
         beforeParent.id === afterParent.id &&
         beforeParent.playbookPhase !== afterParent.playbookPhase &&
         afterParent.revisions === beforeParent.revisions + 1
-    );
+    )
+      ? undefined
+      : "invalid-transition";
   }
   if (transition === "update-parent-context") {
     return Boolean(
@@ -972,7 +1002,9 @@ function isValidRuntimeTransition(input: {
           afterParent &&
           beforeParent.id === afterParent.id &&
           afterParent.revisions >= beforeParent.revisions)
-    );
+    )
+      ? undefined
+      : "invalid-transition";
   }
   return Boolean(
     input.beforeScreen?.id !== input.afterScreen?.id ||
@@ -981,7 +1013,14 @@ function isValidRuntimeTransition(input: {
       input.beforeScreen?.expiresAt !== input.afterScreen?.expiresAt ||
       input.beforeParent?.id !== input.afterParent?.id ||
       input.beforeParent?.revisions !== input.afterParent?.revisions
-  );
+  )
+    ? undefined
+    : "invalid-transition";
+}
+
+function isRuntimeParentTypeAllowed(parent: ActiveInterviewParent) {
+  const parentType = normalizeCanonicalQuestionType(parent.stableKind);
+  return Boolean(parentType && canQuestionTypeCreateParent(parentType));
 }
 
 function cloneRuntimeValue<T>(value: T): T {

@@ -189,6 +189,117 @@ test("accepts a semantic phase command and rejects a mislabeled transition", () 
   assert.equal(rejected.state.parent?.playbookPhase, "requirement_clarification");
 });
 
+test("allows only topology-compatible child attachments", () => {
+  const state = reduceMeetingTaskRuntimeMutation({
+    state: createMeetingTaskRuntimeState(),
+    mutation: {
+      id: "mutation-seed",
+      kind: "commit-transition",
+      transition: "create-parent",
+      reason: "seed",
+      parent: parent(),
+    },
+  }).state;
+  const accepted = reduceMeetingTaskRuntimeMutation({
+    state,
+    mutation: {
+      id: "mutation-child",
+      kind: "commit-transition",
+      transition: "attach-child",
+      reason: "bounded-concept-probe",
+      parent: parent({
+        revisions: 2,
+        child: child("field-knowledge"),
+      }),
+    },
+  });
+
+  assert.equal(accepted.authorized, true);
+  assert.equal(accepted.mutationApplied, true);
+  assert.equal(accepted.state.parent?.child?.questionType, "field-knowledge");
+});
+
+test("rejects same-type and unsupported child attachments without mutation", () => {
+  const generalDesignState = reduceMeetingTaskRuntimeMutation({
+    state: createMeetingTaskRuntimeState(),
+    mutation: {
+      id: "mutation-seed-design",
+      kind: "commit-transition",
+      transition: "create-parent",
+      reason: "seed",
+      parent: parent(),
+    },
+  }).state;
+  const sameType = reduceMeetingTaskRuntimeMutation({
+    state: generalDesignState,
+    mutation: {
+      id: "mutation-same-type-child",
+      kind: "commit-transition",
+      transition: "attach-child",
+      reason: "invalid-same-type-child",
+      parent: parent({
+        revisions: 2,
+        child: child("general-system-design"),
+      }),
+    },
+  });
+  const behavioralState = reduceMeetingTaskRuntimeMutation({
+    state: createMeetingTaskRuntimeState(),
+    mutation: {
+      id: "mutation-seed-behavioral",
+      kind: "commit-transition",
+      transition: "create-parent",
+      reason: "seed",
+      parent: parent({ stableKind: "behavioral" }),
+    },
+  }).state;
+  const unsupported = reduceMeetingTaskRuntimeMutation({
+    state: behavioralState,
+    mutation: {
+      id: "mutation-unsupported-child",
+      kind: "commit-transition",
+      transition: "attach-child",
+      reason: "invalid-behavioral-child",
+      parent: parent({
+        stableKind: "behavioral",
+        revisions: 2,
+        child: child("field-knowledge"),
+      }),
+    },
+  });
+
+  assert.equal(sameType.authorized, false);
+  assert.equal(sameType.reason, "child-type-not-allowed");
+  assert.equal(sameType.state.revision, generalDesignState.revision);
+  assert.equal(sameType.state.parent?.child, undefined);
+  assert.equal(unsupported.authorized, false);
+  assert.equal(unsupported.reason, "child-type-not-allowed");
+  assert.equal(unsupported.state.revision, behavioralState.revision);
+  assert.equal(unsupported.state.parent?.child, undefined);
+});
+
+test("rejects a parent type that has not been admitted by the topology matrix", () => {
+  const fieldKnowledgeParent = {
+    ...parent(),
+    stableKind: "field-knowledge",
+  } as unknown as ActiveInterviewParent;
+  const result = reduceMeetingTaskRuntimeMutation({
+    state: createMeetingTaskRuntimeState(),
+    mutation: {
+      id: "mutation-field-parent",
+      kind: "commit-transition",
+      transition: "create-parent",
+      reason: "unreleased-field-parent",
+      parent: fieldKnowledgeParent,
+    },
+  });
+
+  assert.equal(result.authorized, false);
+  assert.equal(result.reason, "parent-type-not-allowed");
+  assert.equal(result.state.revision, 0);
+  assert.equal(result.state.parent, undefined);
+});
+
 function parent(
   overrides: Partial<ActiveInterviewParent> = {}
 ): ActiveInterviewParent {
@@ -221,5 +332,21 @@ function screen(
     basedOnTurnIds: [],
     basedOnObservationId: "observation-1",
     ...overrides,
+  };
+}
+
+function child(
+  questionType: NonNullable<ActiveInterviewParent["child"]>["questionType"]
+): NonNullable<ActiveInterviewParent["child"]> {
+  return {
+    id: `child-${questionType}`,
+    createdAt: 2,
+    updatedAt: 3,
+    questionType,
+    relation: "child-probe",
+    intent: "concept-probe",
+    question: "Bounded follow-up",
+    basedOnTurnIds: ["turn-child"],
+    basedOnObservationIds: [],
   };
 }
