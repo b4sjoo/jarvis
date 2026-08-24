@@ -1,11 +1,11 @@
 import type { RuntimeInferenceRuntimeJob } from "./runtime-inference-runtime.js";
 import { buildRuntimeInferenceModelInput } from "./runtime-inference.js";
 
-export const ANSWER_RECOVERY_ADJUDICATION_SCHEMA_VERSION = 1;
+export const ANSWER_RECOVERY_ADJUDICATION_SCHEMA_VERSION = 2;
 export const ANSWER_RESOLUTION_PROMPT_VERSION =
   "answer-resolution-adjudication-v1";
 export const EVIDENCE_REQUIREMENT_PROMPT_VERSION =
-  "evidence-requirement-adjudication-v1";
+  "visual-evidence-check-v2-question-only";
 export const ANSWER_RECOVERY_MAX_OUTPUT_CHARS = 2_048;
 export const ANSWER_RECOVERY_MAX_QUESTION_CHARS = 1_200;
 export const ANSWER_RECOVERY_MAX_ANSWER_CHARS = 1_800;
@@ -21,29 +21,54 @@ export type AnswerResolutionDecision =
   | "unclear";
 
 export type EvidenceRequirementDecision =
-  | "visual-required"
+  | "visual-sufficient"
+  | "visual-missing"
   | "not-visual"
   | "unclear";
 
-export interface AnswerRecoveryAdjudicationRequest {
-  schemaVersion: 1;
-  promptVersion: string;
-  operationKind: AnswerRecoveryOperationKind;
+interface AnswerRecoveryRequestIdentity {
+  schemaVersion: 2;
   logicalQuestionUnitId: string;
   logicalQuestionUnitRevision: number;
   answerRevision: number;
   sourceHash: string;
   questionText: string;
+}
+
+export interface AnswerResolutionAdjudicationRequest
+  extends AnswerRecoveryRequestIdentity {
+  promptVersion: typeof ANSWER_RESOLUTION_PROMPT_VERSION;
+  operationKind: "answer-resolution";
   answerText: string;
 }
 
-export interface AnswerRecoverySemanticPayload {
+export interface VisualEvidenceCheckRequest
+  extends AnswerRecoveryRequestIdentity {
+  promptVersion: typeof EVIDENCE_REQUIREMENT_PROMPT_VERSION;
+  operationKind: "evidence-requirement";
+  screenQuestion?: string;
+  screenEvidenceSummary?: string;
+  codeArtifactSummary?: string;
+}
+
+export type AnswerRecoveryAdjudicationRequest =
+  | AnswerResolutionAdjudicationRequest
+  | VisualEvidenceCheckRequest;
+
+export interface AnswerResolutionSemanticPayload {
   questionText: string;
   answerText: string;
 }
 
+export interface VisualEvidenceCheckSemanticPayload {
+  questionText: string;
+  screenQuestion?: string;
+  screenEvidenceSummary?: string;
+  codeArtifactSummary?: string;
+}
+
 export interface AnswerResolutionAdjudication {
-  schemaVersion: 1;
+  schemaVersion: 2;
   decision: AnswerResolutionDecision;
   questionEvidenceSpans: string[];
   answerEvidenceSpans: string[];
@@ -51,10 +76,10 @@ export interface AnswerResolutionAdjudication {
 }
 
 export interface EvidenceRequirementAdjudication {
-  schemaVersion: 1;
+  schemaVersion: 2;
   decision: EvidenceRequirementDecision;
   questionEvidenceSpans: string[];
-  answerEvidenceSpans: string[];
+  visualEvidenceSpans: string[];
   ambiguityReason?: string;
 }
 
@@ -110,7 +135,7 @@ export interface AnswerRecoveryAdjudicationJob
 }
 
 export function buildAnswerRecoveryAdjudicationRequest(input: {
-  operationKind: AnswerRecoveryOperationKind;
+  operationKind: "answer-resolution";
   logicalQuestionUnitId: string;
   logicalQuestionUnitRevision: number;
   answerRevision: number;
@@ -126,14 +151,10 @@ export function buildAnswerRecoveryAdjudicationRequest(input: {
     ANSWER_RECOVERY_MAX_ANSWER_CHARS
   );
   if (!questionText || !answerText) return undefined;
-  const promptVersion =
-    input.operationKind === "answer-resolution"
-      ? ANSWER_RESOLUTION_PROMPT_VERSION
-      : EVIDENCE_REQUIREMENT_PROMPT_VERSION;
   return {
     schemaVersion: ANSWER_RECOVERY_ADJUDICATION_SCHEMA_VERSION,
-    promptVersion,
-    operationKind: input.operationKind,
+    promptVersion: ANSWER_RESOLUTION_PROMPT_VERSION,
+    operationKind: "answer-resolution",
     logicalQuestionUnitId: input.logicalQuestionUnitId,
     logicalQuestionUnitRevision: input.logicalQuestionUnitRevision,
     answerRevision: input.answerRevision,
@@ -143,39 +164,99 @@ export function buildAnswerRecoveryAdjudicationRequest(input: {
   };
 }
 
+export function buildVisualEvidenceCheckRequest(input: {
+  logicalQuestionUnitId: string;
+  logicalQuestionUnitRevision: number;
+  questionSourceHash: string;
+  questionText: string;
+  screenQuestion?: string;
+  screenEvidenceSummary?: string;
+  codeArtifactSummary?: string;
+}): VisualEvidenceCheckRequest | undefined {
+  const questionText = boundText(
+    input.questionText,
+    ANSWER_RECOVERY_MAX_QUESTION_CHARS
+  );
+  const questionSourceHash = input.questionSourceHash.trim();
+  if (!questionText || !questionSourceHash) return undefined;
+  const screenQuestion = optionalBoundText(input.screenQuestion);
+  const screenEvidenceSummary = optionalBoundText(
+    input.screenEvidenceSummary
+  );
+  const codeArtifactSummary = optionalBoundText(input.codeArtifactSummary);
+  return {
+    schemaVersion: ANSWER_RECOVERY_ADJUDICATION_SCHEMA_VERSION,
+    promptVersion: EVIDENCE_REQUIREMENT_PROMPT_VERSION,
+    operationKind: "evidence-requirement",
+    logicalQuestionUnitId: input.logicalQuestionUnitId,
+    logicalQuestionUnitRevision: input.logicalQuestionUnitRevision,
+    answerRevision: 0,
+    sourceHash: hashAnswerRecoverySource(
+      questionSourceHash,
+      [questionText, screenQuestion, screenEvidenceSummary, codeArtifactSummary]
+        .filter(Boolean)
+        .join("\n")
+    ),
+    questionText,
+    screenQuestion,
+    screenEvidenceSummary,
+    codeArtifactSummary,
+  };
+}
+
 export function buildAnswerRecoveryAdjudicationPrompts(
   request: AnswerRecoveryAdjudicationRequest
 ) {
-  const semanticPayload: AnswerRecoverySemanticPayload = {
-    questionText: request.questionText,
-    answerText: request.answerText,
-  };
   const shared = [
     "Return one JSON object only. Do not answer or rewrite the interview content.",
-    "Use only questionText and answerText.",
     "Every evidence span must be an exact verbatim substring of the matching input field.",
-    "For a definite decision, return exactly one question evidence span and one answer evidence span, each no longer than 160 characters.",
     "For unclear, return empty evidence arrays and one short ambiguityReason. Do not include ambiguityReason for a definite decision.",
     "Use unclear when the bounded evidence does not support a definite decision.",
     "Do not classify question type, task relation, source linkage, parent action, playbook phase, memory, or artifact intent.",
   ];
-  const operation =
-    request.operationKind === "answer-resolution"
-      ? [
+  if (request.operationKind === "answer-resolution") {
+    const semanticPayload: AnswerResolutionSemanticPayload = {
+      questionText: request.questionText,
+      answerText: request.answerText,
+    };
+    return buildRuntimeInferenceModelInput({
+      systemPrompt: [
           "Decide one thing only: whether answerText resolves the substantive request in questionText.",
+          "Use only questionText and answerText.",
           "Use resolved when the requested substance is actually provided.",
           "Use unresolved when the answer explicitly defers the substance, lacks required information, or asks for evidence before it can answer.",
           "A correct admission that evidence is missing is unresolved, not a failed answer.",
-          "Schema: {schemaVersion:1,decision:'resolved'|'unresolved'|'unclear',questionEvidenceSpans:string[],answerEvidenceSpans:string[],ambiguityReason?:string}.",
-        ]
-      : [
-          "Decide one thing only: whether the missing information described by answerText can be supplied directly by a screenshot or other visible screen evidence.",
-          "Use visual-required for missing code, line ranges, diagrams, screenshots, visible errors, or other screen-local evidence.",
-          "Use not-visual for missing requirements, business facts, interviewer choices, personal facts, or information that a screenshot would not directly supply.",
-          "Schema: {schemaVersion:1,decision:'visual-required'|'not-visual'|'unclear',questionEvidenceSpans:string[],answerEvidenceSpans:string[],ambiguityReason?:string}.",
-        ];
+          "For a definite decision, return exactly one question evidence span and one answer evidence span, each no longer than 160 characters.",
+          "Schema: {schemaVersion:2,decision:'resolved'|'unresolved'|'unclear',questionEvidenceSpans:string[],answerEvidenceSpans:string[],ambiguityReason?:string}.",
+          ...shared,
+        ].join(" "),
+      semanticPayload,
+    });
+  }
+  const semanticPayload: VisualEvidenceCheckSemanticPayload = {
+    questionText: request.questionText,
+    ...(request.screenQuestion
+      ? { screenQuestion: request.screenQuestion }
+      : {}),
+    ...(request.screenEvidenceSummary
+      ? { screenEvidenceSummary: request.screenEvidenceSummary }
+      : {}),
+    ...(request.codeArtifactSummary
+      ? { codeArtifactSummary: request.codeArtifactSummary }
+      : {}),
+  };
   return buildRuntimeInferenceModelInput({
-    systemPrompt: [...operation, ...shared].join(" "),
+    systemPrompt: [
+      "Decide one thing only: whether questionText requires visible evidence and whether the supplied bounded visual evidence covers it.",
+      "Do not inspect, predict, or evaluate any model answer.",
+      "Use visual-missing when the question requires code lines, a diagram, screenshot content, a visible error, cursor focus, or UI state and the supplied evidence does not cover it.",
+      "Use visual-sufficient only when screenQuestion, screenEvidenceSummary, or codeArtifactSummary directly covers the requested visible evidence.",
+      "Use not-visual for conceptual, requirement, business-fact, interviewer-choice, or personal-fact questions that visible evidence would not directly answer.",
+      "For visual-sufficient, return one questionEvidenceSpans item and one visualEvidenceSpans item.",
+      "For visual-missing or not-visual, return one questionEvidenceSpans item and an empty visualEvidenceSpans array.",
+      "Schema: {schemaVersion:2,decision:'visual-sufficient'|'visual-missing'|'not-visual'|'unclear',questionEvidenceSpans:string[],visualEvidenceSpans:string[],ambiguityReason?:string}.",
+      ...shared,
+    ].join(" "),
     semanticPayload,
   });
 }
@@ -198,11 +279,15 @@ export function parseAnswerRecoveryAdjudicationOutput(
   if (!isRecord(decoded)) {
     return parseFailure("output-is-not-object", "schema");
   }
+  const evidenceField =
+    request.operationKind === "answer-resolution"
+      ? "answerEvidenceSpans"
+      : "visualEvidenceSpans";
   const allowedKeys = new Set([
     "schemaVersion",
     "decision",
     "questionEvidenceSpans",
-    "answerEvidenceSpans",
+    evidenceField,
     "ambiguityReason",
   ]);
   if (Object.keys(decoded).some((key) => !allowedKeys.has(key))) {
@@ -216,13 +301,14 @@ export function parseAnswerRecoveryAdjudicationOutput(
       ? decoded.decision === "resolved" ||
         decoded.decision === "unresolved" ||
         decoded.decision === "unclear"
-      : decoded.decision === "visual-required" ||
+      : decoded.decision === "visual-sufficient" ||
+        decoded.decision === "visual-missing" ||
         decoded.decision === "not-visual" ||
         decoded.decision === "unclear";
   if (!decisionValid) return parseFailure("invalid-decision", "schema");
   if (
     !isEvidenceSpanArray(decoded.questionEvidenceSpans) ||
-    !isEvidenceSpanArray(decoded.answerEvidenceSpans)
+    !isEvidenceSpanArray(decoded[evidenceField])
   ) {
     return parseFailure("invalid-evidence-spans", "schema");
   }
@@ -236,25 +322,39 @@ export function parseAnswerRecoveryAdjudicationOutput(
   const questionEvidenceSpans = decoded.questionEvidenceSpans.map((span) =>
     span.trim()
   );
-  const answerEvidenceSpans = decoded.answerEvidenceSpans.map((span) =>
+  const secondaryEvidenceSpans = decoded[evidenceField].map((span) =>
     span.trim()
   );
+  const secondaryCorpus =
+    request.operationKind === "answer-resolution"
+      ? request.answerText
+      : [
+          request.screenQuestion,
+          request.screenEvidenceSummary,
+          request.codeArtifactSummary,
+        ]
+          .filter(Boolean)
+          .join("\n");
   if (
     !allSpansGrounded(questionEvidenceSpans, request.questionText) ||
-    !allSpansGrounded(answerEvidenceSpans, request.answerText)
+    !allSpansGrounded(secondaryEvidenceSpans, secondaryCorpus)
   ) {
     return parseFailure("ungrounded-evidence-span", "evidence");
   }
+  const secondaryEvidenceRequired =
+    request.operationKind === "answer-resolution" ||
+    decoded.decision === "visual-sufficient";
   if (
     decoded.decision !== "unclear" &&
-    (questionEvidenceSpans.length !== 1 || answerEvidenceSpans.length !== 1)
+    (questionEvidenceSpans.length !== 1 ||
+      secondaryEvidenceSpans.length !== (secondaryEvidenceRequired ? 1 : 0))
   ) {
     return parseFailure("definite-decision-requires-evidence", "evidence");
   }
   if (
     decoded.decision === "unclear" &&
     (questionEvidenceSpans.length !== 0 ||
-      answerEvidenceSpans.length !== 0 ||
+      secondaryEvidenceSpans.length !== 0 ||
       typeof decoded.ambiguityReason !== "string" ||
       !decoded.ambiguityReason.trim())
   ) {
@@ -266,22 +366,33 @@ export function parseAnswerRecoveryAdjudicationOutput(
   ) {
     return parseFailure("definite-decision-forbids-ambiguity", "schema");
   }
-  return {
-    ok: true,
-    evidenceSpansValid: true,
-    value: {
-      schemaVersion: ANSWER_RECOVERY_ADJUDICATION_SCHEMA_VERSION,
-      decision: decoded.decision as
-        | AnswerResolutionDecision
-        | EvidenceRequirementDecision,
-      questionEvidenceSpans,
-      answerEvidenceSpans,
-      ambiguityReason:
-        typeof decoded.ambiguityReason === "string"
-          ? decoded.ambiguityReason.trim()
-          : undefined,
-    } as AnswerRecoveryAdjudication,
-  };
+  const ambiguityReason =
+    typeof decoded.ambiguityReason === "string"
+      ? decoded.ambiguityReason.trim()
+      : undefined;
+  return request.operationKind === "answer-resolution"
+    ? {
+        ok: true,
+        evidenceSpansValid: true,
+        value: {
+          schemaVersion: ANSWER_RECOVERY_ADJUDICATION_SCHEMA_VERSION,
+          decision: decoded.decision as AnswerResolutionDecision,
+          questionEvidenceSpans,
+          answerEvidenceSpans: secondaryEvidenceSpans,
+          ambiguityReason,
+        },
+      }
+    : {
+        ok: true,
+        evidenceSpansValid: true,
+        value: {
+          schemaVersion: ANSWER_RECOVERY_ADJUDICATION_SCHEMA_VERSION,
+          decision: decoded.decision as EvidenceRequirementDecision,
+          questionEvidenceSpans,
+          visualEvidenceSpans: secondaryEvidenceSpans,
+          ambiguityReason,
+        },
+      };
 }
 
 export function decideAnswerRecoveryLedgerTransition(input: {
@@ -302,7 +413,7 @@ export function decideAnswerRecoveryLedgerTransition(input: {
   }
   if (
     input.answerResolution === "unresolved" &&
-    input.evidenceRequirement === "visual-required"
+    input.evidenceRequirement === "visual-missing"
   ) {
     return { action: "create", reason: "definite-visual-recovery" };
   }
@@ -394,6 +505,14 @@ export function formatAnswerRecoveryAdjudicationForTrace(input: {
   durationMs?: number;
   queueWaitMs?: number;
 }) {
+  const answerEvidenceSpans =
+    input.candidate && "answerEvidenceSpans" in input.candidate
+      ? input.candidate.answerEvidenceSpans
+      : undefined;
+  const visualEvidenceSpans =
+    input.candidate && "visualEvidenceSpans" in input.candidate
+      ? input.candidate.visualEvidenceSpans
+      : undefined;
   return {
     answerRecoveryOperationKind: input.request.operationKind,
     answerRecoveryPromptVersion: input.request.promptVersion,
@@ -408,7 +527,8 @@ export function formatAnswerRecoveryAdjudicationForTrace(input: {
     answerRecoveryDecision: input.candidate?.decision,
     answerRecoveryQuestionEvidenceSpans:
       input.candidate?.questionEvidenceSpans,
-    answerRecoveryAnswerEvidenceSpans: input.candidate?.answerEvidenceSpans,
+    answerRecoveryAnswerEvidenceSpans: answerEvidenceSpans,
+    answerRecoveryVisualEvidenceSpans: visualEvidenceSpans,
     answerRecoveryAmbiguityReason: input.candidate?.ambiguityReason,
     answerRecoveryLeaseAuthorized: input.leaseAuthorized,
     answerRecoveryStaleReason: input.staleReason,
@@ -460,6 +580,11 @@ function boundText(text: string, maxChars: number) {
   return `${trimmed.slice(0, head)}${marker}${trimmed.slice(
     -(remaining - head)
   )}`;
+}
+
+function optionalBoundText(value: string | undefined) {
+  const text = boundText(value ?? "", ANSWER_RECOVERY_MAX_ANSWER_CHARS);
+  return text || undefined;
 }
 
 function hashAnswerRecoverySource(questionText: string, answerText: string) {

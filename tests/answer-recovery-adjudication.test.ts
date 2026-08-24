@@ -4,6 +4,7 @@ import {
   authorizeAnswerRecoveryAdjudicationLease,
   buildAnswerRecoveryAdjudicationPrompts,
   buildAnswerRecoveryAdjudicationRequest,
+  buildVisualEvidenceCheckRequest,
   createAnswerRecoveryAdjudicationLease,
   decideAnswerRecoveryLedgerTransition,
   isAnswerRecoveryOutputTruncated,
@@ -14,7 +15,7 @@ const question = "Could you please explain lines 46 through 49?";
 const answer =
   "I don't have those lines visible. Please paste or read out lines 46 through 49.";
 
-test("keeps answer resolution and visual evidence as independent prompts", () => {
+test("keeps post-answer resolution separate from question-only visual evidence", () => {
   const resolution = buildAnswerRecoveryAdjudicationRequest({
     operationKind: "answer-resolution",
     logicalQuestionUnitId: "lqu-1",
@@ -23,23 +24,22 @@ test("keeps answer resolution and visual evidence as independent prompts", () =>
     questionText: question,
     answerText: answer,
   });
-  const evidence = buildAnswerRecoveryAdjudicationRequest({
-    operationKind: "evidence-requirement",
+  const evidence = buildVisualEvidenceCheckRequest({
     logicalQuestionUnitId: "lqu-1",
     logicalQuestionUnitRevision: 2,
-    answerRevision: 3,
+    questionSourceHash: "question-source-1",
     questionText: question,
-    answerText: answer,
   });
 
   assert.ok(resolution);
   assert.ok(evidence);
-  assert.equal(resolution.sourceHash, evidence.sourceHash);
+  assert.notEqual(resolution.sourceHash, evidence.sourceHash);
   const resolutionPrompt = buildAnswerRecoveryAdjudicationPrompts(resolution);
   const evidencePrompt = buildAnswerRecoveryAdjudicationPrompts(evidence);
   assert.match(resolutionPrompt.systemPrompt, /resolves the substantive request/);
   assert.doesNotMatch(resolutionPrompt.systemPrompt, /visual-required/);
-  assert.match(evidencePrompt.systemPrompt, /supplied directly by a screenshot/);
+  assert.match(evidencePrompt.systemPrompt, /requires visible evidence/);
+  assert.doesNotMatch(evidencePrompt.userMessage, /don.t have those lines/i);
   assert.doesNotMatch(evidencePrompt.systemPrompt, /resolved'\|'unresolved/);
   const resolutionInput = JSON.parse(resolutionPrompt.userMessage) as Record<
     string,
@@ -67,7 +67,7 @@ test("parses an unresolved answer with grounded paraphrase evidence", () => {
   assert.ok(request);
   const parsed = parseAnswerRecoveryAdjudicationOutput(
     JSON.stringify({
-      schemaVersion: 1,
+      schemaVersion: 2,
       decision: "unresolved",
       questionEvidenceSpans: ["lines 46 through 49"],
       answerEvidenceSpans: ["I don't have those lines visible"],
@@ -79,22 +79,20 @@ test("parses an unresolved answer with grounded paraphrase evidence", () => {
   assert.equal(parsed.ok ? parsed.value.decision : undefined, "unresolved");
 });
 
-test("parses visual-required independently from answer resolution", () => {
-  const request = buildAnswerRecoveryAdjudicationRequest({
-    operationKind: "evidence-requirement",
+test("parses visual-missing without reading an answer", () => {
+  const request = buildVisualEvidenceCheckRequest({
     logicalQuestionUnitId: "lqu-1",
     logicalQuestionUnitRevision: 1,
-    answerRevision: 1,
+    questionSourceHash: "question-source-1",
     questionText: question,
-    answerText: answer,
   });
   assert.ok(request);
   const parsed = parseAnswerRecoveryAdjudicationOutput(
     JSON.stringify({
-      schemaVersion: 1,
-      decision: "visual-required",
+      schemaVersion: 2,
+      decision: "visual-missing",
       questionEvidenceSpans: ["lines 46 through 49"],
-      answerEvidenceSpans: ["paste or read out lines 46 through 49"],
+      visualEvidenceSpans: [],
     }),
     request
   );
@@ -102,7 +100,34 @@ test("parses visual-required independently from answer resolution", () => {
   assert.equal(parsed.ok, true);
   assert.equal(
     parsed.ok ? parsed.value.decision : undefined,
-    "visual-required"
+    "visual-missing"
+  );
+});
+
+test("requires grounded visual evidence for visual-sufficient", () => {
+  const request = buildVisualEvidenceCheckRequest({
+    logicalQuestionUnitId: "lqu-1",
+    logicalQuestionUnitRevision: 1,
+    questionSourceHash: "question-source-1",
+    questionText: question,
+    screenQuestion: "Explain lines 46 through 49",
+    screenEvidenceSummary: "Lines 46 through 49 show the eviction branch.",
+  });
+  assert.ok(request);
+  const parsed = parseAnswerRecoveryAdjudicationOutput(
+    JSON.stringify({
+      schemaVersion: 2,
+      decision: "visual-sufficient",
+      questionEvidenceSpans: ["lines 46 through 49"],
+      visualEvidenceSpans: ["Lines 46 through 49"],
+    }),
+    request
+  );
+
+  assert.equal(parsed.ok, true);
+  assert.equal(
+    parsed.ok ? parsed.value.decision : undefined,
+    "visual-sufficient"
   );
 });
 
@@ -118,7 +143,7 @@ test("rejects ungrounded evidence and definite decisions without evidence", () =
   assert.ok(request);
   const ungrounded = parseAnswerRecoveryAdjudicationOutput(
     JSON.stringify({
-      schemaVersion: 1,
+      schemaVersion: 2,
       decision: "unresolved",
       questionEvidenceSpans: ["the highlighted function"],
       answerEvidenceSpans: ["I don't have those lines visible"],
@@ -127,7 +152,7 @@ test("rejects ungrounded evidence and definite decisions without evidence", () =
   );
   const empty = parseAnswerRecoveryAdjudicationOutput(
     JSON.stringify({
-      schemaVersion: 1,
+      schemaVersion: 2,
       decision: "unresolved",
       questionEvidenceSpans: [],
       answerEvidenceSpans: [],
@@ -151,7 +176,7 @@ test("requires a reason-only compact unclear result", () => {
   assert.ok(request);
   const valid = parseAnswerRecoveryAdjudicationOutput(
     JSON.stringify({
-      schemaVersion: 1,
+      schemaVersion: 2,
       decision: "unclear",
       questionEvidenceSpans: [],
       answerEvidenceSpans: [],
@@ -161,7 +186,7 @@ test("requires a reason-only compact unclear result", () => {
   );
   const invalid = parseAnswerRecoveryAdjudicationOutput(
     JSON.stringify({
-      schemaVersion: 1,
+      schemaVersion: 2,
       decision: "unclear",
       questionEvidenceSpans: ["lines 46 through 49"],
       answerEvidenceSpans: [],
@@ -179,7 +204,7 @@ test("projects only definite current pairs to recovery ledger mutations", () => 
     decideAnswerRecoveryLedgerTransition({
       revisionAuthorized: true,
       answerResolution: "unresolved",
-      evidenceRequirement: "visual-required",
+      evidenceRequirement: "visual-missing",
     }),
     { action: "create", reason: "definite-visual-recovery" }
   );
@@ -195,7 +220,7 @@ test("projects only definite current pairs to recovery ledger mutations", () => 
     decideAnswerRecoveryLedgerTransition({
       revisionAuthorized: true,
       answerResolution: "unclear",
-      evidenceRequirement: "visual-required",
+      evidenceRequirement: "visual-missing",
     }),
     { action: "preserve", reason: "pair-not-definite" }
   );

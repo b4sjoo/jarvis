@@ -3484,7 +3484,7 @@ export function useMeetingAssistant() {
                 ...(answerResolution?.questionEvidenceSpans ?? []),
                 ...(answerResolution?.answerEvidenceSpans ?? []),
                 ...(evidenceRequirement?.questionEvidenceSpans ?? []),
-                ...(evidenceRequirement?.answerEvidenceSpans ?? []),
+                ...(evidenceRequirement?.visualEvidenceSpans ?? []),
               ])
             ),
           },
@@ -6532,7 +6532,8 @@ export function useMeetingAssistant() {
                 pending.answerResolutionSettled = true;
               } else {
                 pending.evidenceRequirement =
-                  acceptedValue?.decision === "visual-required" ||
+                  acceptedValue?.decision === "visual-sufficient" ||
+                  acceptedValue?.decision === "visual-missing" ||
                   acceptedValue?.decision === "not-visual" ||
                   acceptedValue?.decision === "unclear"
                     ? (acceptedValue as EvidenceRequirementAdjudication)
@@ -13295,16 +13296,6 @@ export function useMeetingAssistant() {
             questionText: advisorQuestionAnswerFocusText,
             answerText: recoveryAnswerText,
           });
-        const evidenceRequirementRequest =
-          buildAnswerRecoveryAdjudicationRequest({
-            operationKind: "evidence-requirement",
-            logicalQuestionUnitId: advisorJob.logicalQuestionUnit.id,
-            logicalQuestionUnitRevision:
-              advisorJob.logicalQuestionUnit.revision,
-            answerRevision,
-            questionText: advisorQuestionAnswerFocusText,
-            answerText: recoveryAnswerText,
-          });
         const pendingRecoveryCandidate: PendingAnswerResolutionCommitCandidate = {
           sourceKind: "voice",
           traceId,
@@ -13327,7 +13318,7 @@ export function useMeetingAssistant() {
           localResolution,
           adjudicationSourceHash: answerResolutionRequest?.sourceHash,
           answerResolutionSettled: !answerResolutionRequest,
-          evidenceRequirementSettled: !evidenceRequirementRequest,
+          evidenceRequirementSettled: true,
         };
         pendingAnswerResolutionCommitByTraceRef.current.set(
           traceId,
@@ -13335,7 +13326,6 @@ export function useMeetingAssistant() {
         );
         const recoveryRequests = [
           answerResolutionRequest,
-          evidenceRequirementRequest,
         ].filter(
           (request): request is AnswerRecoveryAdjudicationRequest =>
             Boolean(request)

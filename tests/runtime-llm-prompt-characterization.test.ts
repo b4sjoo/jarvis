@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   buildAnswerRecoveryAdjudicationPrompts,
+  buildVisualEvidenceCheckRequest,
   type AnswerRecoveryAdjudicationRequest,
 } from "../src/lib/meeting/answer-recovery-adjudication.js";
 import {
@@ -187,15 +188,15 @@ test("keeps envelope fields out of every runtime LLM prompt", () => {
       currentSourceFallbackCount: 0,
       lquSelectedCount: 0,
       rawSupplementCount: 0,
-    acknowledgementExcludedCount: 0,
-    logisticsExcludedCount: 0,
+      acknowledgementExcludedCount: 0,
+      logisticsExcludedCount: 0,
       coveredTurnCount: 0,
       branchEvidenceCount: 0,
       parentEvidenceCount: 1,
     },
   };
   const answerRecovery: AnswerRecoveryAdjudicationRequest = {
-    schemaVersion: 1,
+    schemaVersion: 2,
     promptVersion: "answer-resolution-adjudication-v1",
     operationKind: "answer-resolution",
     logicalQuestionUnitId: "question-current",
@@ -240,11 +241,14 @@ test("keeps envelope fields out of every runtime LLM prompt", () => {
     whiteboard: buildWhiteboardSyntaxRepairPrompts(whiteboard),
     taskRelation: buildTaskRelationAdjudicationPrompts(relation),
     answerResolution: buildAnswerRecoveryAdjudicationPrompts(answerRecovery),
-    evidenceRequirement: buildAnswerRecoveryAdjudicationPrompts({
-      ...answerRecovery,
-      promptVersion: "evidence-requirement-adjudication-v1",
-      operationKind: "evidence-requirement",
-    }),
+    evidenceRequirement: buildAnswerRecoveryAdjudicationPrompts(
+      buildVisualEvidenceCheckRequest({
+        logicalQuestionUnitId: "question-current",
+        logicalQuestionUnitRevision: 2,
+        questionSourceHash: "question-source",
+        questionText: "Explain lines 35 through 38.",
+      })!
+    ),
     sourceLinkage: buildSourceLinkageAdjudicationPrompts(sourceLinkage),
     answerSufficiency:
       buildAnswerSufficiencyAdjudicationPrompts(answerSufficiency),
