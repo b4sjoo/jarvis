@@ -387,6 +387,18 @@ function applyProjectionToQuestionEvaluation(
       settlement?.kind === "expected-task-settlement"
         ? settlement.expectedParentAction
         : evaluation.expectedParentAction,
+    expectedParentId:
+      settlement?.kind === "expected-task-settlement"
+        ? settlement.expectedParentId
+        : evaluation.expectedParentId,
+    expectedBranchId:
+      settlement?.kind === "expected-task-settlement"
+        ? settlement.expectedBranchId
+        : evaluation.expectedBranchId,
+    expectedContextOwnerId:
+      settlement?.kind === "expected-task-settlement"
+        ? settlement.expectedContextOwnerId
+        : evaluation.expectedContextOwnerId,
     relation: projection.observed?.relation ?? evaluation.relation,
     classification:
       projection.verdicts.questionTypeCorrect === undefined
@@ -406,6 +418,18 @@ function applyProjectionToQuestionEvaluation(
       parentMutationCorrect:
         projection.verdicts.parentActionCorrect ??
         evaluation.currentQuestionSettlement?.parentMutationCorrect,
+      parentIdentityCorrect:
+        projection.verdicts.parentIdentityCorrect ??
+        evaluation.currentQuestionSettlement?.parentIdentityCorrect,
+      branchIdentityCorrect:
+        projection.verdicts.branchIdentityCorrect ??
+        evaluation.currentQuestionSettlement?.branchIdentityCorrect,
+      contextOwnerCorrect:
+        projection.verdicts.contextOwnerCorrect ??
+        evaluation.currentQuestionSettlement?.contextOwnerCorrect,
+      settlementCorrect:
+        projection.verdicts.taskSettlementCorrect ??
+        evaluation.currentQuestionSettlement?.settlementCorrect,
     },
     advisorIntent:
       runtime?.kind === "expected-runtime-action" &&

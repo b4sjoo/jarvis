@@ -85,6 +85,9 @@ export interface ExpectedTaskSettlementFactV2 {
   expectedQuestionType: CanonicalQuestionType;
   expectedRelation: InterviewTaskRelation;
   expectedParentAction: HumanExpectedParentAction;
+  expectedParentId?: string;
+  expectedBranchId?: string;
+  expectedContextOwnerId?: string;
 }
 
 export interface TaskSettlementTupleCompatibilityV2 {
@@ -200,6 +203,10 @@ export interface HumanEvaluationObservedSnapshotV2 {
   questionType?: CanonicalQuestionType;
   relation?: InterviewTaskRelation;
   parentAction?: HumanExpectedParentAction;
+  settledParentId?: string;
+  settledChildId?: string;
+  settledBranchId?: string;
+  contextOwnerId?: string;
   runtimeAction?: ExpectedAdvisorAction;
   runtimeOperationId?: string;
   advisorOutcome?:
@@ -260,6 +267,10 @@ export interface HumanEvaluationProjectionV2 {
     questionTypeCorrect?: boolean;
     relationCorrect?: boolean;
     parentActionCorrect?: boolean;
+    parentIdentityCorrect?: boolean;
+    branchIdentityCorrect?: boolean;
+    contextOwnerCorrect?: boolean;
+    taskSettlementCorrect?: boolean;
     answerOutcome?: AnswerQualityFactV2["outcome"];
     contextReadScopeCorrect?: boolean;
     artifactIntentCorrect?: boolean;
@@ -337,6 +348,19 @@ export function evaluateTaskSettlementTupleCompatibilityV2(input: {
     reason: compatible
       ? undefined
       : `${input.relation} normally requires ${recommendedParentAction}, not ${input.parentAction}.`,
+  };
+}
+
+export function freezeObservedTaskOwnerIdentityV2(
+  observed: HumanEvaluationObservedSnapshotV2 | undefined
+): Pick<
+  ExpectedTaskSettlementFactV2,
+  "expectedParentId" | "expectedBranchId" | "expectedContextOwnerId"
+> {
+  return {
+    expectedParentId: observed?.settledParentId,
+    expectedBranchId: observed?.settledBranchId,
+    expectedContextOwnerId: observed?.contextOwnerId,
   };
 }
 
@@ -482,6 +506,50 @@ export function deriveHumanEvaluationProjectionV2(input: {
       : typeOnly?.kind === "expected-question-type"
         ? typeOnly.expectedQuestionType
         : undefined;
+  const parentIdentityCorrect =
+    settlement?.kind === "expected-task-settlement"
+      ? compareExpectedIdentity(
+          settlement.expectedParentId,
+          input.observed?.settledParentId
+        )
+      : undefined;
+  const branchIdentityCorrect =
+    settlement?.kind === "expected-task-settlement"
+      ? compareExpectedIdentity(
+          settlement.expectedBranchId,
+          input.observed?.settledBranchId
+        )
+      : undefined;
+  const contextOwnerCorrect =
+    settlement?.kind === "expected-task-settlement"
+      ? compareExpectedIdentity(
+          settlement.expectedContextOwnerId,
+          input.observed?.contextOwnerId
+        )
+      : undefined;
+  const relationCorrect =
+    settlement?.kind === "expected-task-settlement" &&
+    input.observed?.relation
+      ? settlement.expectedRelation === input.observed.relation
+      : undefined;
+  const parentActionCorrect =
+    settlement?.kind === "expected-task-settlement" &&
+    input.observed?.parentAction
+      ? settlement.expectedParentAction === input.observed.parentAction
+      : undefined;
+  const identityVerdicts = [
+    parentIdentityCorrect,
+    branchIdentityCorrect,
+    contextOwnerCorrect,
+  ].filter((value): value is boolean => value !== undefined);
+  const taskSettlementCorrect =
+    relationCorrect !== undefined &&
+    parentActionCorrect !== undefined &&
+    identityVerdicts.length > 0
+      ? relationCorrect &&
+        parentActionCorrect &&
+        identityVerdicts.every(Boolean)
+      : undefined;
 
   return {
     schemaVersion: 2,
@@ -511,15 +579,13 @@ export function deriveHumanEvaluationProjectionV2(input: {
           ? expectedQuestionType === input.observed.questionType
           : undefined,
       relationCorrect:
-        settlement?.kind === "expected-task-settlement" &&
-        input.observed?.relation
-          ? settlement.expectedRelation === input.observed.relation
-          : undefined,
+        relationCorrect,
       parentActionCorrect:
-        settlement?.kind === "expected-task-settlement" &&
-        input.observed?.parentAction
-          ? settlement.expectedParentAction === input.observed.parentAction
-          : undefined,
+        parentActionCorrect,
+      parentIdentityCorrect,
+      branchIdentityCorrect,
+      contextOwnerCorrect,
+      taskSettlementCorrect,
       answerOutcome:
         answer?.kind === "answer-quality" ? answer.outcome : undefined,
       contextReadScopeCorrect:
@@ -644,6 +710,30 @@ export function buildHumanEvaluationObservedSnapshotV2(
     metadata,
     answerCommitted
   );
+  const settledParentId = readString(
+    metadata.effectiveCurrentQuestionSettlementParentId ??
+      metadata.activeMeetingParentId ??
+      metadata.currentQuestionSettlementParentAfterId
+  );
+  const settledChildId = readString(
+    metadata.effectiveCurrentQuestionSettlementChildId ??
+      metadata.activeMeetingChildId
+  );
+  const settledBranchId =
+    relation === "child-probe" && settledChildId
+      ? settledChildId
+      : settledParentId;
+  const sourceQuestionOwnerId = readString(
+    metadata.effectiveCurrentQuestionSettlementUnitId ??
+      metadata.currentQuestionSettlementUnitId ??
+      metadata.logicalQuestionUnitId
+  );
+  const contextOwnerId =
+    contextReadScope === "active-child-read"
+      ? settledChildId
+      : contextReadScope === "active-parent-read"
+        ? settledParentId
+        : sourceQuestionOwnerId;
   const projectId = readString(
     metadata.activeMeetingProjectBindingId ??
       metadata.projectBindingProjectId
@@ -676,6 +766,10 @@ export function buildHumanEvaluationObservedSnapshotV2(
     questionType,
     relation,
     parentAction,
+    settledParentId,
+    settledChildId,
+    settledBranchId,
+    contextOwnerId,
     runtimeAction,
     runtimeOperationId,
     advisorOutcome,
@@ -778,6 +872,9 @@ export function importLegacyQuestionEvaluationV2(
           expectedQuestionType,
           expectedRelation: evaluation.expectedRelation,
           expectedParentAction: evaluation.expectedParentAction,
+          expectedParentId: evaluation.expectedParentId,
+          expectedBranchId: evaluation.expectedBranchId,
+          expectedContextOwnerId: evaluation.expectedContextOwnerId,
         },
       })
     );
@@ -953,6 +1050,13 @@ function uniqueFactKinds(events: HumanGroundTruthEventV2[]) {
   return Array.from(new Set(events.map((event) => event.fact.kind)));
 }
 
+function compareExpectedIdentity(
+  expected: string | undefined,
+  observed: string | undefined
+) {
+  return expected ? observed === expected : undefined;
+}
+
 function normalizeSubject(
   subject: HumanGroundTruthSubjectV2
 ): HumanGroundTruthSubjectV2 {
@@ -968,6 +1072,14 @@ function normalizeSubject(
 }
 
 function normalizeFact(fact: HumanGroundTruthFactV2): HumanGroundTruthFactV2 {
+  if (fact.kind === "expected-task-settlement") {
+    return {
+      ...fact,
+      expectedParentId: cleanOptional(fact.expectedParentId),
+      expectedBranchId: cleanOptional(fact.expectedBranchId),
+      expectedContextOwnerId: cleanOptional(fact.expectedContextOwnerId),
+    };
+  }
   if (fact.kind === "expected-artifact-intent") {
     const expectedIntent = normalizeArtifactIntentEvaluationFamily(
       fact.expectedIntent
@@ -1392,6 +1504,11 @@ function normalizeStoredFact(
         expectedQuestionType,
         expectedRelation,
         expectedParentAction,
+        expectedParentId: readString(fact.expectedParentId),
+        expectedBranchId: readString(fact.expectedBranchId),
+        expectedContextOwnerId: readString(
+          fact.expectedContextOwnerId
+        ),
       };
     }
   }

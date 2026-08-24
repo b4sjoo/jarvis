@@ -86,11 +86,11 @@ function task(): ActiveMeetingTask {
   };
 }
 
-function request() {
+function request(
+  text = "Back to the RAG system, how should we monitor freshness?"
+) {
   return buildTaskRelationAdjudicationRequest({
-    logicalQuestionUnit: unit(
-      "Back to the RAG system, how should we monitor freshness?"
-    ),
+    logicalQuestionUnit: unit(text),
     activeMeetingTask: task(),
     recentTurns: [
       {
@@ -420,6 +420,68 @@ test("releases only resume-parent while an active child exists", () => {
     childFollowup.reason,
     "active-child-combination-not-released"
   );
+});
+
+test("active-child harness reaches child continuation and parent resume contracts", () => {
+  const childFollowupRequest = request(
+    "Within HNSW, how does efSearch affect recall?"
+  );
+  const childFollowupSplit = buildTaskRelationAffinityRequests({
+    request: childFollowupRequest,
+    sessionId: "session-a",
+    runtimeEpoch: 4,
+    manualCorrectionRevision: 2,
+  });
+  assert.equal(childFollowupSplit.child?.identity.childId, "child-hnsw");
+  const childRelated = parseTaskRelationAffinityOutput(
+    JSON.stringify({
+      schemaVersion: 1,
+      decision: "related",
+      confidence: 0.99,
+      currentEvidenceSpans: ["efSearch"],
+      childEvidenceSpans: ["Explain HNSW and efSearch."],
+    }),
+    childFollowupSplit.child!
+  );
+  assert.equal(childRelated.ok ? childRelated.value.decision : undefined, "related");
+
+  const resumeRequest = request();
+  const resumeSplit = buildTaskRelationAffinityRequests({
+    request: resumeRequest,
+    sessionId: "session-a",
+    runtimeEpoch: 4,
+    manualCorrectionRevision: 2,
+  });
+  const childUnrelated = parseTaskRelationAffinityOutput(
+    JSON.stringify({
+      schemaVersion: 1,
+      decision: "unrelated",
+      confidence: 0.98,
+      currentEvidenceSpans: ["Back to the RAG system"],
+      childEvidenceSpans: [],
+    }),
+    resumeSplit.child!
+  );
+  const parentRelated = parseTaskRelationAffinityOutput(
+    JSON.stringify({
+      schemaVersion: 1,
+      decision: "related",
+      confidence: 0.99,
+      currentEvidenceSpans: ["monitor freshness"],
+      parentEvidenceSpans: ["Documents change continuously"],
+    }),
+    resumeSplit.parent
+  );
+  const released = decideFirstBatchRelationRelease({
+    currentQuestionType: "ai-ml-system-design",
+    activeParentQuestionType: "ai-ml-system-design",
+    hasActiveChild: true,
+    childAffinity: childUnrelated.ok ? childUnrelated.value : undefined,
+    parentAffinity: parentRelated.ok ? parentRelated.value : undefined,
+  });
+
+  assert.equal(released.authorized, true);
+  assert.equal(released.relation, "resume-parent");
 });
 
 test("keeps uncertain affinity in Shadow and flags only the review band", () => {

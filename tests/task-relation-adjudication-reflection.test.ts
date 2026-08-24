@@ -141,6 +141,73 @@ test("preserves lineage, parse validity, and production applicability for branch
   );
 });
 
+test("aggregates split relation results and active-child owner identity", () => {
+  const expected = evaluation(
+    "evaluation_split_resume",
+    "trace_split_resume",
+    "resume-parent",
+    "resume"
+  );
+  expected.expectedParentId = "parent_design";
+  expected.expectedBranchId = "parent_design";
+  expected.expectedContextOwnerId = "parent_design";
+  const report = buildTaskRelationAdjudicationReflectionReport({
+    decisions: [
+      decision("trace_split_resume", "operation_split_resume", {
+        taskRelationAdjudicationParentId: "parent_design",
+        taskRelationAdjudicationActiveChildId: "child_hnsw",
+        taskRelationChildAffinityDecision: "unrelated",
+        taskRelationChildAffinityConfidence: 0.98,
+        taskRelationParentAffinityDecision: "related",
+        taskRelationParentAffinityConfidence: 0.99,
+        taskRelationSplitCanonicalRelation: "resume-parent",
+        taskRelationSplitCanonicalConfidence: 0.98,
+        taskRelationFirstBatchReleasedRelation: "resume-parent",
+        effectiveCurrentQuestionSettlementRelation: "resume-parent",
+        effectiveCurrentQuestionSettlementParentId: "parent_design",
+        effectiveCurrentQuestionSettlementChildId: undefined,
+        effectiveCurrentQuestionContextReadScope: "active-parent-read",
+        taskRelationAdjudicationDisposition: "shadow-observed",
+      }),
+    ],
+    evaluations: [expected],
+  });
+
+  assert.deepEqual(report.metrics.splitCanonicalAccuracy, {
+    numerator: 1,
+    denominator: 1,
+    rate: 1,
+  });
+  assert.deepEqual(report.metrics.firstBatchReleaseAccuracy, {
+    numerator: 1,
+    denominator: 1,
+    rate: 1,
+  });
+  assert.equal(report.metrics.childAffinityAvailable, 1);
+  assert.equal(report.metrics.parentAffinityAvailable, 1);
+  assert.equal(report.metrics.activeChildOperations, 1);
+  assert.deepEqual(report.metrics.activeChildAffinityCoverage, {
+    numerator: 1,
+    denominator: 1,
+    rate: 1,
+  });
+  assert.deepEqual(report.metrics.parentIdentityAccuracy, {
+    numerator: 1,
+    denominator: 1,
+    rate: 1,
+  });
+  assert.deepEqual(report.metrics.branchIdentityAccuracy, {
+    numerator: 1,
+    denominator: 1,
+    rate: 1,
+  });
+  assert.deepEqual(report.metrics.contextOwnerAccuracy, {
+    numerator: 1,
+    denominator: 1,
+    rate: 1,
+  });
+});
+
 function decision(
   traceId: string,
   operationId: string,

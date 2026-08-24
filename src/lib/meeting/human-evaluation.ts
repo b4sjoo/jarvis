@@ -407,6 +407,12 @@ export function upsertQuestionHumanEvaluation(
     expectedParentAction:
       normalizeExpectedParentAction(patch.expectedParentAction) ??
       existing?.expectedParentAction,
+    expectedParentId:
+      patch.expectedParentId ?? existing?.expectedParentId,
+    expectedBranchId:
+      patch.expectedBranchId ?? existing?.expectedBranchId,
+    expectedContextOwnerId:
+      patch.expectedContextOwnerId ?? existing?.expectedContextOwnerId,
     expectedContextTurnIds:
       patch.expectedContextTurnIds !== undefined
         ? uniqueStrings(patch.expectedContextTurnIds)
@@ -839,6 +845,11 @@ function normalizeQuestionHumanEvaluation(
     expectedParentAction: normalizeExpectedParentAction(
       candidate.expectedParentAction
     ),
+    expectedParentId: readOptionalString(candidate.expectedParentId),
+    expectedBranchId: readOptionalString(candidate.expectedBranchId),
+    expectedContextOwnerId: readOptionalString(
+      candidate.expectedContextOwnerId
+    ),
     expectedContextTurnIds: Array.isArray(candidate.expectedContextTurnIds)
       ? uniqueStrings(candidate.expectedContextTurnIds.map(readOptionalString))
       : [],
@@ -1163,6 +1174,22 @@ function normalizeCurrentQuestionSettlementEvaluation(
     parentMutationCorrect:
       typeof candidate.parentMutationCorrect === "boolean"
         ? candidate.parentMutationCorrect
+        : undefined,
+    parentIdentityCorrect:
+      typeof candidate.parentIdentityCorrect === "boolean"
+        ? candidate.parentIdentityCorrect
+        : undefined,
+    branchIdentityCorrect:
+      typeof candidate.branchIdentityCorrect === "boolean"
+        ? candidate.branchIdentityCorrect
+        : undefined,
+    contextOwnerCorrect:
+      typeof candidate.contextOwnerCorrect === "boolean"
+        ? candidate.contextOwnerCorrect
+        : undefined,
+    settlementCorrect:
+      typeof candidate.settlementCorrect === "boolean"
+        ? candidate.settlementCorrect
         : undefined,
     responseAuthorizationCorrect:
       typeof candidate.responseAuthorizationCorrect === "boolean"

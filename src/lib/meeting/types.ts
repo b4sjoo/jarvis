@@ -1864,6 +1864,10 @@ export interface CurrentQuestionSettlementHumanEvaluation {
   questionTypeCorrect?: boolean;
   relationCorrect?: boolean;
   parentMutationCorrect?: boolean;
+  parentIdentityCorrect?: boolean;
+  branchIdentityCorrect?: boolean;
+  contextOwnerCorrect?: boolean;
+  settlementCorrect?: boolean;
   responseAuthorizationCorrect?: boolean;
   expectedDisposition?:
     | "domain-resolved-provisional"
@@ -1955,6 +1959,9 @@ export interface QuestionHumanEvaluation {
   relation?: string;
   expectedRelation?: InterviewTaskRelation;
   expectedParentAction?: HumanExpectedParentAction;
+  expectedParentId?: string;
+  expectedBranchId?: string;
+  expectedContextOwnerId?: string;
   expectedContextTurnIds?: string[];
   correctedRelation?: string;
   primaryAskCorrect?: boolean;

@@ -18020,6 +18020,18 @@ export function useMeetingAssistant() {
                 [`${prefix}DurationMs`]: settlement.durationMs,
               };
               traceStoreRef.current.updateMetadata(traceId, metadata);
+              const recordedMetadata =
+                traceStoreRef.current
+                  .getTraces()
+                  .find((candidate) => candidate.id === traceId)?.metadata ??
+                metadata;
+              sessionRecordingManagerRef.current?.recordTaskRelationAdjudicationDecision(
+                {
+                  traceId,
+                  taskId,
+                  metadata: recordedMetadata,
+                }
+              );
               if (result?.rawOutput) {
                 sessionRecordingManagerRef.current?.recordModelOutput({
                   traceId,
@@ -18255,6 +18267,18 @@ export function useMeetingAssistant() {
               taskRelationSplitShadowAppliedToRuntime: false,
             };
             traceStoreRef.current.updateMetadata(traceId, metadata);
+            const recordedMetadata =
+              traceStoreRef.current
+                .getTraces()
+                .find((candidate) => candidate.id === traceId)?.metadata ??
+              metadata;
+            sessionRecordingManagerRef.current?.recordTaskRelationAdjudicationDecision(
+              {
+                traceId,
+                taskId,
+                metadata: recordedMetadata,
+              }
+            );
             refreshRecordedCompletedTrace(traceId);
             if (result?.rawOutput) {
               sessionRecordingManagerRef.current?.recordModelOutput({
@@ -19135,7 +19159,11 @@ export function useMeetingAssistant() {
             {
               traceId,
               taskId: scheduledTaskId,
-              metadata,
+              metadata:
+                traceStoreRef.current
+                  .getTraces()
+                  .find((candidate) => candidate.id === traceId)?.metadata ??
+                metadata,
             }
           );
         },
@@ -20534,6 +20562,17 @@ export function useMeetingAssistant() {
           taskId: releaseTaskId,
           ...metadata,
         });
+        sessionRecordingManagerRef.current?.recordTaskRelationAdjudicationDecision(
+          {
+            traceId: input.traceId,
+            taskId: releaseTaskId,
+            metadata:
+              traceStoreRef.current
+                .getTraces()
+                .find((candidate) => candidate.id === input.traceId)
+                ?.metadata ?? metadata,
+          }
+        );
         recordQuestionTypeAdjudicationOutcome({
           traceId: input.traceId,
           taskId: releaseTaskId,
@@ -25369,6 +25408,17 @@ export function useMeetingAssistant() {
             });
           }
         }
+        sessionRecordingManagerRef.current?.recordTaskRelationAdjudicationDecision(
+          {
+            traceId: trace.id,
+            taskId: preflightContextState.activeMeetingTask?.id,
+            metadata:
+              traceStoreRef.current
+                .getTraces()
+                .find((candidate) => candidate.id === trace.id)?.metadata ??
+              {},
+          }
+        );
         // SCREEN_COMMITTED_SETTLEMENT_CONSUMER_BARRIER
         const effectiveScreenSettlementView =
           buildEffectiveAdvisorSettlementView({

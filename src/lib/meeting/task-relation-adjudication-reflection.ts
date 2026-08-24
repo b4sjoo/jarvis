@@ -28,11 +28,22 @@ export interface TaskRelationAdjudicationReflectionRow {
   parentId?: string;
   parentRevision?: number;
   activeChildId?: string;
+  observedParentId?: string;
+  observedChildId?: string;
+  observedBranchId?: string;
+  observedContextOwnerId?: string;
   sourceTurnIds: string[];
   disposition?: string;
   deterministicRelation?: InterviewTaskRelation;
   candidateRelation?: InterviewTaskRelation;
   candidateConfidence?: number;
+  childAffinityDecision?: "related" | "unrelated" | "unclear";
+  childAffinityConfidence?: number;
+  parentAffinityDecision?: "related" | "independent" | "unclear";
+  parentAffinityConfidence?: number;
+  splitCanonicalRelation?: InterviewTaskRelation;
+  splitCanonicalConfidence?: number;
+  firstBatchReleasedRelation?: InterviewTaskRelation;
   parseAttempted: boolean;
   parseValid?: boolean;
   evidenceSpansValid?: boolean;
@@ -44,8 +55,16 @@ export interface TaskRelationAdjudicationReflectionRow {
   expectedQuestionType?: string;
   expectedRelation?: InterviewTaskRelation;
   expectedParentAction?: HumanExpectedParentAction;
+  expectedParentId?: string;
+  expectedBranchId?: string;
+  expectedContextOwnerId?: string;
   deterministicCorrect?: boolean;
   candidateCorrect?: boolean;
+  splitCanonicalCorrect?: boolean;
+  firstBatchReleaseCorrect?: boolean;
+  parentIdentityCorrect?: boolean;
+  branchIdentityCorrect?: boolean;
+  contextOwnerCorrect?: boolean;
   contextOutcome?: "correct" | "contaminated" | "missing";
   stale: boolean;
   mutationApplied: boolean;
@@ -77,7 +96,19 @@ export interface TaskRelationAdjudicationReflectionReport {
     labeled: number;
     llmAccuracy: TaskRelationRateMetric;
     deterministicAccuracy: TaskRelationRateMetric;
+    splitCanonicalAccuracy: TaskRelationRateMetric;
+    firstBatchReleaseAccuracy: TaskRelationRateMetric;
     newParentPrecision: TaskRelationRateMetric;
+    splitNewParentPrecision: TaskRelationRateMetric;
+    childAffinityAvailable: number;
+    parentAffinityAvailable: number;
+    splitCanonicalAvailable: number;
+    firstBatchReleaseAvailable: number;
+    activeChildOperations: number;
+    activeChildAffinityCoverage: TaskRelationRateMetric;
+    parentIdentityAccuracy: TaskRelationRateMetric;
+    branchIdentityAccuracy: TaskRelationRateMetric;
+    contextOwnerAccuracy: TaskRelationRateMetric;
     falseParent: number;
     falseChild: number;
     falseResume: number;
@@ -119,8 +150,23 @@ export function buildTaskRelationAdjudicationReflectionReport(input: {
     );
     const expectedRelation = evaluation?.expectedRelation;
     const expectedParentAction = evaluation?.expectedParentAction;
+    const expectedParentId = evaluation?.expectedParentId;
+    const expectedBranchId = evaluation?.expectedBranchId;
+    const expectedContextOwnerId = evaluation?.expectedContextOwnerId;
     const candidateConfidence = readNumber(
       metadata.taskRelationAdjudicationConfidence
+    );
+    const childAffinityDecision = normalizeChildAffinity(
+      metadata.taskRelationChildAffinityDecision
+    );
+    const parentAffinityDecision = normalizeParentAffinity(
+      metadata.taskRelationParentAffinityDecision
+    );
+    const splitCanonicalRelation = normalizeRelation(
+      metadata.taskRelationSplitCanonicalRelation
+    );
+    const firstBatchReleasedRelation = normalizeRelation(
+      metadata.taskRelationFirstBatchReleasedRelation
     );
     const parseDisposition = readString(
       metadata.taskRelationAdjudicationParseDisposition
@@ -149,6 +195,40 @@ export function buildTaskRelationAdjudicationReflectionReport(input: {
     const activeChildId = readString(
       metadata.taskRelationAdjudicationActiveChildId
     );
+    const observedParentId = readString(
+      metadata.effectiveCurrentQuestionSettlementParentId ??
+        metadata.currentQuestionSettlementParentAfterId ??
+        metadata.activeMeetingParentId ??
+        metadata.taskRelationAdjudicationParentId
+    );
+    const observedChildId = readString(
+      metadata.effectiveCurrentQuestionSettlementChildId ??
+        metadata.activeMeetingChildId ??
+        metadata.taskRelationAdjudicationActiveChildId
+    );
+    const effectiveRelation = normalizeRelation(
+      metadata.effectiveCurrentQuestionSettlementRelation ??
+        metadata.settledExecutionPlanTaskRelation ??
+        metadata.currentQuestionSettlementRelation
+    );
+    const observedBranchId =
+      effectiveRelation === "child-probe" && observedChildId
+        ? observedChildId
+        : observedParentId;
+    const contextReadScope = readString(
+      metadata.effectiveCurrentQuestionContextReadScope ??
+        metadata.responseOnlyContextReadScope
+    );
+    const observedContextOwnerId =
+      contextReadScope === "active-child-read"
+        ? observedChildId
+        : contextReadScope === "active-parent-read"
+          ? observedParentId
+          : readString(
+              metadata.effectiveCurrentQuestionSettlementUnitId ??
+                metadata.currentQuestionSettlementUnitId ??
+                metadata.logicalQuestionUnitId
+            );
     const productionApplicability = deriveProductionApplicability({
       candidateRelation,
       semanticValidity,
@@ -179,6 +259,10 @@ export function buildTaskRelationAdjudicationReflectionReport(input: {
         metadata.taskRelationAdjudicationParentRevision
       ),
       activeChildId,
+      observedParentId,
+      observedChildId,
+      observedBranchId,
+      observedContextOwnerId,
       sourceTurnIds: readStringArray(
         metadata.taskRelationAdjudicationRecentSourceEvidenceTurnIds
       ),
@@ -188,6 +272,19 @@ export function buildTaskRelationAdjudicationReflectionReport(input: {
       deterministicRelation,
       candidateRelation,
       candidateConfidence,
+      childAffinityDecision,
+      childAffinityConfidence: readNumber(
+        metadata.taskRelationChildAffinityConfidence
+      ),
+      parentAffinityDecision,
+      parentAffinityConfidence: readNumber(
+        metadata.taskRelationParentAffinityConfidence
+      ),
+      splitCanonicalRelation,
+      splitCanonicalConfidence: readNumber(
+        metadata.taskRelationSplitCanonicalConfidence
+      ),
+      firstBatchReleasedRelation,
       parseAttempted,
       parseValid,
       evidenceSpansValid,
@@ -205,6 +302,9 @@ export function buildTaskRelationAdjudicationReflectionReport(input: {
         evaluation?.questionType,
       expectedRelation,
       expectedParentAction,
+      expectedParentId,
+      expectedBranchId,
+      expectedContextOwnerId,
       deterministicCorrect:
         deterministicRelation && expectedRelation
           ? deterministicRelation === expectedRelation
@@ -213,6 +313,23 @@ export function buildTaskRelationAdjudicationReflectionReport(input: {
         candidateRelation && expectedRelation
           ? candidateRelation === expectedRelation
           : undefined,
+      splitCanonicalCorrect:
+        splitCanonicalRelation && expectedRelation
+          ? splitCanonicalRelation === expectedRelation
+          : undefined,
+      firstBatchReleaseCorrect:
+        firstBatchReleasedRelation && expectedRelation
+          ? firstBatchReleasedRelation === expectedRelation
+          : undefined,
+      parentIdentityCorrect: expectedParentId
+        ? observedParentId === expectedParentId
+        : undefined,
+      branchIdentityCorrect: expectedBranchId
+        ? observedBranchId === expectedBranchId
+        : undefined,
+      contextOwnerCorrect: expectedContextOwnerId
+        ? observedContextOwnerId === expectedContextOwnerId
+        : undefined,
       contextOutcome,
       stale,
       mutationApplied:
@@ -228,6 +345,12 @@ export function buildTaskRelationAdjudicationReflectionReport(input: {
   const deterministicLabeledRows = labeledRows.filter(
     (row) => row.deterministicRelation
   );
+  const splitCanonicalLabeledRows = labeledRows.filter(
+    (row) => row.splitCanonicalRelation
+  );
+  const firstBatchReleaseLabeledRows = labeledRows.filter(
+    (row) => row.firstBatchReleasedRelation
+  );
   const comparisonRows = rows.filter(
     (row) =>
       row.comparisonEligible &&
@@ -236,6 +359,19 @@ export function buildTaskRelationAdjudicationReflectionReport(input: {
   );
   const newParentRows = llmLabeledRows.filter(
     (row) => row.candidateRelation === "new-parent"
+  );
+  const splitNewParentRows = splitCanonicalLabeledRows.filter(
+    (row) => row.splitCanonicalRelation === "new-parent"
+  );
+  const activeChildRows = rows.filter((row) => row.activeChildId);
+  const parentIdentityRows = rows.filter(
+    (row) => row.parentIdentityCorrect !== undefined
+  );
+  const branchIdentityRows = rows.filter(
+    (row) => row.branchIdentityCorrect !== undefined
+  );
+  const contextOwnerRows = rows.filter(
+    (row) => row.contextOwnerCorrect !== undefined
   );
   const unmatchedEvaluations = input.evaluations
     .filter(
@@ -277,9 +413,52 @@ export function buildTaskRelationAdjudicationReflectionReport(input: {
           .length,
         deterministicLabeledRows.length
       ),
+      splitCanonicalAccuracy: rate(
+        splitCanonicalLabeledRows.filter(
+          (row) => row.splitCanonicalCorrect
+        ).length,
+        splitCanonicalLabeledRows.length
+      ),
+      firstBatchReleaseAccuracy: rate(
+        firstBatchReleaseLabeledRows.filter(
+          (row) => row.firstBatchReleaseCorrect
+        ).length,
+        firstBatchReleaseLabeledRows.length
+      ),
       newParentPrecision: rate(
         newParentRows.filter((row) => row.candidateCorrect).length,
         newParentRows.length
+      ),
+      splitNewParentPrecision: rate(
+        splitNewParentRows.filter((row) => row.splitCanonicalCorrect).length,
+        splitNewParentRows.length
+      ),
+      childAffinityAvailable: rows.filter((row) => row.childAffinityDecision)
+        .length,
+      parentAffinityAvailable: rows.filter((row) => row.parentAffinityDecision)
+        .length,
+      splitCanonicalAvailable: rows.filter(
+        (row) => row.splitCanonicalRelation
+      ).length,
+      firstBatchReleaseAvailable: rows.filter(
+        (row) => row.firstBatchReleasedRelation
+      ).length,
+      activeChildOperations: activeChildRows.length,
+      activeChildAffinityCoverage: rate(
+        activeChildRows.filter((row) => row.childAffinityDecision).length,
+        activeChildRows.length
+      ),
+      parentIdentityAccuracy: rate(
+        parentIdentityRows.filter((row) => row.parentIdentityCorrect).length,
+        parentIdentityRows.length
+      ),
+      branchIdentityAccuracy: rate(
+        branchIdentityRows.filter((row) => row.branchIdentityCorrect).length,
+        branchIdentityRows.length
+      ),
+      contextOwnerAccuracy: rate(
+        contextOwnerRows.filter((row) => row.contextOwnerCorrect).length,
+        contextOwnerRows.length
       ),
       falseParent: countFalseRelation(rows, "new-parent"),
       falseChild: countFalseRelation(rows, "child-probe"),
@@ -321,7 +500,13 @@ export function renderTaskRelationAdjudicationReflectionMarkdown(
     `- Deterministic/LLM agreement: ${formatRate(metrics.deterministicAgreement)}`,
     `- LLM accuracy: ${formatRate(metrics.llmAccuracy)}`,
     `- Deterministic accuracy: ${formatRate(metrics.deterministicAccuracy)}`,
+    `- Split Canonical accuracy: ${formatRate(metrics.splitCanonicalAccuracy)}`,
+    `- First-batch release accuracy: ${formatRate(metrics.firstBatchReleaseAccuracy)}`,
     `- New-parent precision: ${formatRate(metrics.newParentPrecision)}`,
+    `- Split new-parent precision: ${formatRate(metrics.splitNewParentPrecision)}`,
+    `- Child / Parent / Canonical available: ${metrics.childAffinityAvailable} / ${metrics.parentAffinityAvailable} / ${metrics.splitCanonicalAvailable}`,
+    `- Active-child affinity coverage: ${formatRate(metrics.activeChildAffinityCoverage)}`,
+    `- Parent / branch / context-owner identity accuracy: ${formatRate(metrics.parentIdentityAccuracy)} / ${formatRate(metrics.branchIdentityAccuracy)} / ${formatRate(metrics.contextOwnerAccuracy)}`,
     `- False parent / child / resume: ${metrics.falseParent} / ${metrics.falseChild} / ${metrics.falseResume}`,
     `- Context loss / contamination: ${metrics.contextLoss} / ${metrics.contextContamination}`,
     `- Stale: ${metrics.stale}`,
@@ -331,12 +516,12 @@ export function renderTaskRelationAdjudicationReflectionMarkdown(
     "",
     "## Rows",
     "",
-    "| Trace | Deterministic | LLM | Expected | Outcome | Disposition |",
-    "| --- | --- | --- | --- | --- | --- |",
+    "| Trace | Deterministic | Monolithic | Split | Released | Expected | Owner | Disposition |",
+    "| --- | --- | --- | --- | --- | --- | --- | --- |",
   ];
   for (const row of report.rows) {
     lines.push(
-      `| ${row.traceId} | ${row.deterministicRelation ?? "-"} | ${row.candidateRelation ?? "-"} | ${row.expectedRelation ?? "-"} | ${row.comparisonOutcome ?? "-"} | ${row.disposition ?? "-"} |`
+      `| ${row.traceId} | ${row.deterministicRelation ?? "-"} | ${row.candidateRelation ?? "-"} | ${row.splitCanonicalRelation ?? "-"} | ${row.firstBatchReleasedRelation ?? "-"} | ${row.expectedRelation ?? "-"} | ${formatIdentityVerdict(row)} | ${row.disposition ?? "-"} |`
     );
   }
   return `${lines.join("\n")}\n`;
@@ -439,6 +624,28 @@ function normalizeRelation(
     value === "unknown"
     ? value
     : undefined;
+}
+
+function normalizeChildAffinity(value: unknown) {
+  return value === "related" || value === "unrelated" || value === "unclear"
+    ? value
+    : undefined;
+}
+
+function normalizeParentAffinity(value: unknown) {
+  return value === "related" || value === "independent" || value === "unclear"
+    ? value
+    : undefined;
+}
+
+function formatIdentityVerdict(row: TaskRelationAdjudicationReflectionRow) {
+  const values = [
+    row.parentIdentityCorrect,
+    row.branchIdentityCorrect,
+    row.contextOwnerCorrect,
+  ].filter((value): value is boolean => value !== undefined);
+  if (!values.length) return "-";
+  return values.every(Boolean) ? "correct" : "wrong";
 }
 
 function deriveSemanticValidity(input: {

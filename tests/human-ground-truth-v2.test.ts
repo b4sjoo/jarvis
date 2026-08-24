@@ -7,6 +7,7 @@ import {
   createHumanGroundTruthEventV2,
   deriveHumanEvaluationProjectionV2,
   evaluateTaskSettlementTupleCompatibilityV2,
+  freezeObservedTaskOwnerIdentityV2,
   importLegacyQuestionEvaluationV2,
   normalizeArtifactIntentEvaluationFamily,
   projectHumanGroundTruthEventsForSessionPurposeV2,
@@ -964,6 +965,66 @@ test("uses the effective settlement while retaining raw abstention diagnostics",
   assert.equal(observed.relation, "followup-parent");
   assert.equal(observed.parentAction, "preserve");
   assert.equal(observed.contextReadScope, "active-parent-read");
+});
+
+test("does not pass settlement when relation is right but parent owner is wrong", () => {
+  const trace = buildSettledAttemptTrace({
+    id: "trace_wrong_parent",
+    status: "success",
+    questionType: "behavioral",
+  });
+  trace.metadata = {
+    ...trace.metadata,
+    effectiveCurrentQuestionSettlementRelation: "followup-parent",
+    effectiveCurrentQuestionSettlementParentMutationAuthorized: false,
+    effectiveCurrentQuestionSettlementParentId: "parent_coding",
+    effectiveCurrentQuestionContextReadScope: "active-parent-read",
+  };
+  const observed = buildHumanEvaluationObservedSnapshotV2(trace);
+  const event = createHumanGroundTruthEventV2({
+    sessionId: "session_retry",
+    subject: SUBJECT,
+    source: "explicit-ui",
+    fact: {
+      kind: "expected-task-settlement",
+      expectedQuestionType: "behavioral",
+      expectedRelation: "followup-parent",
+      expectedParentAction: "preserve",
+      expectedParentId: "parent_behavioral",
+      expectedBranchId: "parent_behavioral",
+      expectedContextOwnerId: "parent_behavioral",
+    },
+  });
+  const projection = deriveHumanEvaluationProjectionV2({
+    sessionId: "session_retry",
+    subject: SUBJECT,
+    events: [event],
+    observed,
+  });
+
+  assert.equal(projection.verdicts.relationCorrect, true);
+  assert.equal(projection.verdicts.parentActionCorrect, true);
+  assert.equal(projection.verdicts.parentIdentityCorrect, false);
+  assert.equal(projection.verdicts.branchIdentityCorrect, false);
+  assert.equal(projection.verdicts.contextOwnerCorrect, false);
+  assert.equal(projection.verdicts.taskSettlementCorrect, false);
+});
+
+test("freezes owner identity when the user confirms the observed settlement", () => {
+  assert.deepEqual(
+    freezeObservedTaskOwnerIdentityV2({
+      traceId: "trace_1",
+      traceHash: "hash_1",
+      settledParentId: "parent_1",
+      settledBranchId: "child_1",
+      contextOwnerId: "child_1",
+    }),
+    {
+      expectedParentId: "parent_1",
+      expectedBranchId: "child_1",
+      expectedContextOwnerId: "child_1",
+    }
+  );
 });
 
 test("delays attempt materialization until an effective settlement exists", () => {

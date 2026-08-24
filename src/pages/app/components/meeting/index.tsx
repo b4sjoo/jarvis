@@ -92,6 +92,7 @@ import {
   buildHumanEvaluationObservedSnapshotV2,
   decideForceAdviseEligibility,
   evaluateTaskSettlementTupleCompatibilityV2,
+  freezeObservedTaskOwnerIdentityV2,
   guardAsyncUnlisten,
   normalizeCanonicalQuestionType,
   meetingCompanyLabelsEqual,
@@ -6087,6 +6088,7 @@ const TraceHumanEvaluationPanel = ({
       correctedQuestionType: observedQuestionType,
       expectedRelation: observedRelation,
       expectedParentAction: observedParentAction,
+      ...freezeObservedTaskOwnerIdentityV2(observedSnapshotV2),
       currentQuestionSettlement: {
         questionTypeCorrect: true,
         relationCorrect: true,
@@ -6098,6 +6100,7 @@ const TraceHumanEvaluationPanel = ({
       expectedQuestionType: observedQuestionType,
       expectedRelation: observedRelation,
       expectedParentAction: observedParentAction,
+      ...freezeObservedTaskOwnerIdentityV2(observedSnapshotV2),
     });
     setTaskFixOpen(false);
   };
