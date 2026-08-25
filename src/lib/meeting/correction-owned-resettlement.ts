@@ -3,6 +3,8 @@ import {
   settleCurrentQuestion,
   type CurrentQuestionRelation,
   type CurrentQuestionSettlementDecision,
+  type CurrentQuestionSettlementProposal,
+  type ProvisionalCurrentQuestion,
 } from "./current-question-settlement.js";
 import type { LogicalQuestionUnit } from "./logical-question-unit.js";
 import {
@@ -12,10 +14,20 @@ import {
   type QuestionTypeInferenceDecision,
 } from "./task-taxonomy.js";
 import type { LlmTaxonomyAdjudication } from "./taxonomy-adjudication.js";
-import {
-  createQuestionTypeSettlementProposal,
-  type LlmQuestionTypeAdjudication,
-} from "./question-type-adjudication.js";
+
+interface CorrectionOwnedQuestionTypeCandidate {
+  schemaVersion: 1;
+  questionType: CanonicalQuestionType;
+  confidence: number;
+  evidenceSpans: string[];
+  ambiguityReason?: string;
+  fieldCodingScores?: {
+    codingScore: number;
+    fieldKnowledgeScore: number;
+    unknownScore: number;
+    codingMajorityMargin: number;
+  };
+}
 
 interface CorrectionParentOrigin {
   sourceQuestionUnitId?: string;
@@ -289,7 +301,7 @@ export function resolveCorrectionOwnedResettlement(input: {
 
 export function resolveCorrectionOwnedTypeResettlement(input: {
   logicalQuestionUnit: LogicalQuestionUnit;
-  adjudication?: LlmQuestionTypeAdjudication;
+  adjudication?: CorrectionOwnedQuestionTypeCandidate;
   operationAuthorized: boolean;
   operationAuthorizationReason?: string;
   activeParentId?: string;
@@ -331,7 +343,7 @@ export function resolveCorrectionOwnedTypeResettlement(input: {
   });
   const settlement = settleCurrentQuestion({
     currentQuestion,
-    llmProposal: createQuestionTypeSettlementProposal({
+    llmProposal: createCorrectionOwnedTypeSettlementProposal({
       currentQuestion,
       adjudication,
       expectedParentId: input.activeParentId,
@@ -398,6 +410,35 @@ export function resolveCorrectionOwnedTypeResettlement(input: {
     confidence: adjudication.confidence,
     reason: "human-correction-changed-current-question-domain",
     settlement,
+  };
+}
+
+function createCorrectionOwnedTypeSettlementProposal(input: {
+  currentQuestion: ProvisionalCurrentQuestion;
+  adjudication: CorrectionOwnedQuestionTypeCandidate;
+  expectedParentId?: string;
+  expectedParentRevision?: number;
+}): CurrentQuestionSettlementProposal {
+  return {
+    source: "llm-type-repair",
+    sessionId: input.currentQuestion.sessionId,
+    runtimeEpoch: input.currentQuestion.runtimeEpoch,
+    logicalQuestionUnitId: input.currentQuestion.logicalQuestionUnitId,
+    revision: input.currentQuestion.revision,
+    sourceHash: input.currentQuestion.sourceHash,
+    questionType: input.adjudication.questionType,
+    relation: "unknown",
+    confidence: input.adjudication.confidence,
+    typeEvidenceAuthorized: true,
+    relationEvidenceAuthorized: false,
+    actionEvidenceAuthorized: false,
+    expectedParentId: input.expectedParentId,
+    expectedParentRevision: input.expectedParentRevision,
+    reasons: [
+      "question-type-runtime-operation",
+      "relation-authority-withheld",
+      "parent-mutation-withheld",
+    ],
   };
 }
 
