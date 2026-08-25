@@ -134,7 +134,7 @@ Supporting anchor IDs: mem_oasis_bulk`),
   assert.equal(result.hypotheticalOnlyAfterSanitize, false);
 });
 
-test("rebuilds both language sections when sanitation leaves only a hypothetical offer", () => {
+test("keeps model-owned bilingual wording when sanitation leaves a safe hypothetical offer", () => {
   const result = enforceFactAnchorOutput({
     decision: makeDecision({
       state: "strong-anchor",
@@ -163,13 +163,12 @@ Supporting anchor IDs: mem_oasis_bulk`),
   });
 
   assert.equal(result.hypotheticalOnlyAfterSanitize, true);
-  assert.equal(result.bilingualClaimSetCoherent, true);
-  assert.match(result.effectiveContent, /verified implementation scope/i);
-  assert.match(result.effectiveContent, /已验证的实现范围/u);
-  assert.equal(
-    result.visibleNotice?.kind,
-    "rebuilt-from-supported-evidence"
-  );
+  assert.equal(result.bilingualClaimSetCoherent, false);
+  assert.match(result.effectiveContent, /I would add retry queues/i);
+  assert.match(result.effectiveContent, /没有实现 retry queue/u);
+  assert.doesNotMatch(result.effectiveContent, /verified implementation scope/i);
+  assert.doesNotMatch(result.effectiveContent, /已验证的实现范围/u);
+  assert.equal(result.visibleNotice, undefined);
 });
 
 test("removes unsupported clarification choices before they become runtime context", () => {
@@ -311,6 +310,51 @@ Supporting anchor IDs: mem_parser_fix`),
     result.visibleNotice?.kind,
     "rebuilt-from-supported-evidence"
   );
+});
+
+test("deduplicates overlapping evidence without truncating the fallback claim", () => {
+  const result = enforceFactAnchorOutput({
+    decision: makeDecision({
+      state: "strong-anchor",
+      requiredFor: "project-deep-dive",
+      supportedAnchorIds: ["mem_oasis_bulk"],
+      claimSupportDecisions: [
+        {
+          claimId: "claim:oasis:short",
+          predicateFamily: "architecture-decision",
+          anchorId: "mem_oasis_bulk",
+          projectCompatible: true,
+          predicateCompatible: true,
+          supportSpanPresent: true,
+          supportSpan: "The Oasis implementation generated NDJSON.",
+          conflictFree: true,
+          decision: "allow",
+          reason: "test-support",
+        },
+        {
+          claimId: "claim:oasis:complete",
+          predicateFamily: "architecture-decision",
+          anchorId: "mem_oasis_bulk",
+          projectCompatible: true,
+          predicateCompatible: true,
+          supportSpanPresent: true,
+          supportSpan:
+            "The Oasis implementation generated NDJSON and preserved per-item Bulk API failures.",
+          conflictFree: true,
+          decision: "allow",
+          reason: "test-support",
+        },
+      ],
+    }),
+    parsedAnswer: parseMeetingAnswer(`Answer: I implemented retries, jitter, and a DLQ with zero failures.
+Answer disposition: factual-with-anchor
+Supporting anchor IDs: mem_oasis_bulk`),
+  });
+
+  const answer = result.effectiveAnswer.sections.answer ?? "";
+  assert.equal(answer.match(/generated NDJSON/gi)?.length, 1);
+  assert.match(answer, /per-item Bulk API failures\./);
+  assert.equal(result.visibleNotice?.kind, "rebuilt-from-supported-evidence");
 });
 
 test("sanitizes a fact-bound answer that omits authority metadata without refusing", () => {

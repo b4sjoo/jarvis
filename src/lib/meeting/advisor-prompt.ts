@@ -445,6 +445,7 @@ function buildMeetingAnswerContractInstructions(
     "Supporting anchor IDs: for factual-with-anchor, list only the exact supported anchor IDs from <fact_anchor_guardrail> that the answer actually uses, separated by '|'. For every other disposition, output '-'. Never invent, shorten, or translate an anchor ID.",
     "Bounded synthesis rule: when disposition is bounded-with-caveat, keep the useful general method, tradeoff analysis, or explicitly hypothetical recommendation. Omit unsupported first-person implementation facts, metrics, ownership, outcomes, and named mechanisms instead of refusing the entire answer.",
     "Unsupported autobiographical-premise rule: when a past-project or behavioral question asks how the candidate implemented a named mechanism that is absent from eligible fact evidence, do not expand that mechanism into a hypothetical design. Briefly correct the verified implementation boundary, answer the supported portion, and use a supported clarification or choice only when the interviewer must choose between the existing implementation and a future proposal.",
+    "Bilingual boundary rule: 中文思路 and Answer must express the same implemented-versus-not-implemented boundary in their own language. Do not put raw English evidence text into 中文思路, and do not let Answer turn a Chinese non-implementation boundary into an implementation claim or an unsupported refusal.",
   ];
 
   if (profile === "coding") {

@@ -233,15 +233,7 @@ function enforceFactAnchorOutputInEnforcementMode({
     hasSupportedClaimSpans &&
       isHypotheticalOnlyAnswer(sanitized.effectiveAnswer)
   );
-  const bilingualCoherentBeforeRebuild = initialBilingualCoherence;
-  const effectiveClaimAnswer =
-    hasSupportedClaimSpans &&
-    (!bilingualCoherentBeforeRebuild || hypotheticalOnlyAfterSanitize)
-      ? rebuildCoherentBilingualClaimSet({
-          parsedAnswer: sanitized.effectiveAnswer,
-          decision,
-        })
-      : sanitized.effectiveAnswer;
+  const effectiveClaimAnswer = sanitized.effectiveAnswer;
   const sanitizedWithFilteredAnchors = filterUnsupportedAnchorIds({
     parsedAnswer: effectiveClaimAnswer,
     supportedAnchorIds: decision.supportedAnchorIds,
@@ -249,8 +241,7 @@ function enforceFactAnchorOutputInEnforcementMode({
   });
   if (
     !unsafeClarifyingShape &&
-    hasUsefulBoundedAnswer(sanitizedWithFilteredAnchors.effectiveAnswer) &&
-    !hypotheticalOnlyAfterSanitize
+    hasUsefulBoundedAnswer(sanitizedWithFilteredAnchors.effectiveAnswer)
   ) {
     return {
       modelOutputAuthorized: false,
@@ -425,22 +416,16 @@ function buildNonRefusalFallback({
   hypotheticalOnlyAfterSanitize?: boolean;
   boundaryClaimPreservedCount?: number;
 }): FactAnchorOutputDecision {
-  const supportText = [
-    ...new Set(collectSelectedSupportSpans(decision)),
-  ]
-    .join(" ")
-    .slice(0, 1_200);
+  const supportText = buildBoundedSupportText(decision, 1_200);
   const fallbackMode: FactGuardrailVisibleNotice["kind"] = supportText
     ? "rebuilt-from-supported-evidence"
     : "generic-hypothetical-fallback";
   const fallbackAnswer = supportText
-    ? hypotheticalOnlyAfterSanitize
-      ? rebuildCoherentBilingualClaimSet({ parsedAnswer, decision })
-      : buildSupportedAnchorFallback({
-          parsedAnswer,
-          supportText,
-          decision,
-        })
+    ? buildSupportedAnchorFallback({
+        parsedAnswer,
+        supportText,
+        decision,
+      })
     : buildGenericHypotheticalFallback(parsedAnswer, decision);
   const effectiveContent = serializeMeetingAnswer(fallbackAnswer);
   const visibleNotice: FactGuardrailVisibleNotice = {
@@ -857,35 +842,6 @@ function isHypotheticalOnlyAnswer(parsedAnswer: ParsedMeetingAnswer) {
   return claims.length > 0 && claims.every(isClearlyHypotheticalClaim);
 }
 
-function rebuildCoherentBilingualClaimSet(input: {
-  parsedAnswer: ParsedMeetingAnswer;
-  decision: FactAnchorDecision;
-}): ParsedMeetingAnswer {
-  const supportText = Array.from(
-    new Set(collectSelectedSupportSpans(input.decision))
-  )
-    .join(" ")
-    .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, 1_000);
-  if (!supportText) return input.parsedAnswer;
-  return {
-    ...input.parsedAnswer,
-    sections: {
-      ...input.parsedAnswer.sections,
-      chineseThinking: `已验证的实现范围是：${supportText}。我们没有实现其余缺少证据的机制，只能把它们作为未来方案讨论。`,
-      answer: `The verified implementation scope was ${supportText} I did not implement the other unsupported mechanisms as part of that verified scope; I would discuss them only as possible future improvements.`,
-      approach: undefined,
-      clarifyingQuestion: undefined,
-      clarifyingOptions: [],
-    },
-    answerDisposition: "factual-with-anchor",
-    supportingAnchorIds: input.parsedAnswer.supportingAnchorIds.filter(
-      (anchorId) => input.decision.supportedAnchorIds.includes(anchorId)
-    ),
-  };
-}
-
 function anchoredFactClaimSupportedBySpan(
   claimText: string,
   supportSpan: string
@@ -942,6 +898,34 @@ function buildSupportedAnchorFallback({
       (anchorId) => decision.supportedAnchorIds.includes(anchorId)
     ),
   };
+}
+
+function buildBoundedSupportText(
+  decision: FactAnchorDecision,
+  maxChars: number
+) {
+  const selected: string[] = [];
+  const normalizedSelected: string[] = [];
+  for (const span of collectSelectedSupportSpans(decision)) {
+    for (const unit of splitClaimUnits(span)) {
+      const compact = unit.replace(/\s+/g, " ").trim();
+      const normalized = normalizeClaimEvidence(compact).replace(/[.,]/g, "");
+      if (!compact || !normalized) continue;
+      if (normalizedSelected.some((existing) => existing.includes(normalized))) {
+        continue;
+      }
+      for (let index = normalizedSelected.length - 1; index >= 0; index -= 1) {
+        if (!normalized.includes(normalizedSelected[index])) continue;
+        normalizedSelected.splice(index, 1);
+        selected.splice(index, 1);
+      }
+      const nextLength = selected.join(" ").length + compact.length + 1;
+      if (nextLength > maxChars) continue;
+      selected.push(compact);
+      normalizedSelected.push(normalized);
+    }
+  }
+  return selected.join(" ");
 }
 
 function extractDistinctiveClaimTokens(value: string) {
