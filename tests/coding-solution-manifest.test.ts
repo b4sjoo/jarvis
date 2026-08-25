@@ -36,7 +36,7 @@ test("extracts a hidden bounded manifest from visible meeting content", () => {
   assert.equal(extraction.manifest?.optimized.time, "O(n)");
 });
 
-test("authorizes manifest candidates according to the committed phase", () => {
+test("observes manifest candidates without authorizing phase-owned artifacts", () => {
   const extraction = extractCodingSolutionManifest(
     `Answer:\nBaseline.\n<CODING_SOLUTION_MANIFEST>${JSON.stringify(
       manifest
@@ -52,7 +52,8 @@ test("authorizes manifest candidates according to the committed phase", () => {
   });
 
   assert.equal(baseline.authorized, true);
-  assert.equal(baseline.codeMutationAuthorized, true);
+  assert.equal(baseline.codeMutationAuthorized, false);
+  assert.equal(baseline.observationOnly, true);
   assert.equal(implementation.authorized, false);
   assert.equal(
     implementation.reason,
@@ -74,7 +75,8 @@ test("allows a complete optimized fallback during baseline reasoning", () => {
 
   assert.equal(decision.authorized, true);
   assert.equal(decision.reason, "optimized-fallback-authorized");
-  assert.equal(decision.codeMutationAuthorized, true);
+  assert.equal(decision.codeMutationAuthorized, false);
+  assert.equal(decision.observationOnly, true);
 });
 
 test("rejects a same-solution manifest with contradictory complexity", () => {

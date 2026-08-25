@@ -44,6 +44,7 @@ export interface CodingSolutionManifestPhaseDecision {
   expectedVisibleCandidate: "baseline" | "optimized";
   actualVisibleCandidate?: "baseline" | "optimized";
   codeMutationAuthorized: boolean;
+  observationOnly: true;
 }
 
 export function extractCodingSolutionManifest(
@@ -90,6 +91,7 @@ export function validateCodingSolutionManifestPhase(input: {
       expectedVisibleCandidate,
       actualVisibleCandidate,
       codeMutationAuthorized: false,
+      observationOnly: true,
     };
   }
   if (!manifestCandidatesAreCoherent(input.extraction.manifest)) {
@@ -100,6 +102,7 @@ export function validateCodingSolutionManifestPhase(input: {
       expectedVisibleCandidate,
       actualVisibleCandidate,
       codeMutationAuthorized: false,
+      observationOnly: true,
     };
   }
   if (
@@ -112,7 +115,8 @@ export function validateCodingSolutionManifestPhase(input: {
       phase,
       expectedVisibleCandidate,
       actualVisibleCandidate,
-      codeMutationAuthorized: true,
+      codeMutationAuthorized: false,
+      observationOnly: true,
     };
   }
   if (actualVisibleCandidate !== expectedVisibleCandidate) {
@@ -126,6 +130,7 @@ export function validateCodingSolutionManifestPhase(input: {
       expectedVisibleCandidate,
       actualVisibleCandidate,
       codeMutationAuthorized: false,
+      observationOnly: true,
     };
   }
   return {
@@ -134,9 +139,8 @@ export function validateCodingSolutionManifestPhase(input: {
     phase,
     expectedVisibleCandidate,
     actualVisibleCandidate,
-    codeMutationAuthorized:
-      phase === "baseline_reasoning" ||
-      phase === "implementation_validation",
+    codeMutationAuthorized: false,
+    observationOnly: true,
   };
 }
 
@@ -198,6 +202,8 @@ export function formatCodingSolutionManifestForTrace(input: {
       input.phaseDecision?.expectedVisibleCandidate,
     codingSolutionManifestCodeMutationAuthorized:
       input.phaseDecision?.codeMutationAuthorized,
+    codingSolutionManifestObservationOnly:
+      input.phaseDecision?.observationOnly ?? true,
     codingSolutionManifestCacheHit: input.cacheHit ?? false,
   };
 }

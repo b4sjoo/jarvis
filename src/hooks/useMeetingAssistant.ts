@@ -13616,12 +13616,6 @@ export function useMeetingAssistant() {
             codingSolutionManifestKey,
             codingManifestExtraction.manifest
           );
-        } else if (!codingManifestPhaseDecision?.authorized) {
-          generationAuthorizedArtifacts =
-            generationAuthorizedArtifacts.filter(
-              (artifact) =>
-                artifact !== "code" && artifact !== "complexity"
-            );
         }
         if (traceId) {
           traceStoreRef.current.updateMetadata(traceId, {
@@ -13632,8 +13626,7 @@ export function useMeetingAssistant() {
             }),
             codingSolutionManifestCacheKey:
               codingSolutionManifestKey,
-            codingSolutionManifestArtifactMutationSuppressed:
-              !codingManifestPhaseDecision?.authorized,
+            codingSolutionManifestObservationOnly: true,
           });
         }
       }
@@ -26857,12 +26850,6 @@ export function useMeetingAssistant() {
               screenCodingManifestKey,
               screenCodingManifestExtraction.manifest
             );
-          } else if (!screenCodingManifestPhaseDecision?.authorized) {
-            screenGenerationRequestedArtifacts =
-              screenGenerationRequestedArtifacts.filter(
-                (artifact) =>
-                  artifact !== "code" && artifact !== "complexity"
-              );
           }
           traceStoreRef.current.updateMetadata(trace.id, {
             ...formatCodingSolutionManifestForTrace({
@@ -26872,8 +26859,7 @@ export function useMeetingAssistant() {
             }),
             codingSolutionManifestCacheKey:
               screenCodingManifestKey,
-            codingSolutionManifestArtifactMutationSuppressed:
-              !screenCodingManifestPhaseDecision?.authorized,
+            codingSolutionManifestObservationOnly: true,
           });
         }
 
