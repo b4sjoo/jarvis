@@ -20493,6 +20493,7 @@ export function useMeetingAssistant() {
           ? decideFirstBatchRelationRelease({
               currentQuestionType: typeSettlement.questionType,
               activeParentQuestionType: latestParent?.questionType,
+              activeChildQuestionType: latestTask?.child?.questionType,
               hasActiveChild: Boolean(latestTask?.child),
               childAffinity: affinityOutcome?.child.adjudication,
               parentAffinity: affinityOutcome?.parent.adjudication,
@@ -25335,6 +25336,9 @@ export function useMeetingAssistant() {
                 activeParentQuestionType:
                   preflightContextState.activeMeetingTask?.parent
                     .questionType,
+                activeChildQuestionType:
+                  preflightContextState.activeMeetingTask?.child
+                    ?.questionType,
                 hasActiveChild: Boolean(
                   preflightContextState.activeMeetingTask?.child
                 ),

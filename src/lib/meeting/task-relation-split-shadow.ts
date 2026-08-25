@@ -183,6 +183,7 @@ export type FirstBatchRelationReleaseReason =
   | "affinity-below-release-threshold"
   | "same-type-independent-shadow"
   | "parent-related-type-incompatible"
+  | "active-child-preserve-child"
   | "active-child-combination-not-released";
 
 export interface FirstBatchRelationReleaseDecision {
@@ -195,6 +196,7 @@ export interface FirstBatchRelationReleaseDecision {
   possibleRelationError: boolean;
   currentQuestionType: CanonicalQuestionType;
   activeParentQuestionType?: CanonicalQuestionType;
+  activeChildQuestionType?: CanonicalQuestionType;
   childAffinityDecision?: ChildAffinityDecision;
   childAffinityConfidence?: number;
   parentAffinityDecision?: ParentAffinityDecision;
@@ -206,6 +208,7 @@ export interface FirstBatchRelationReleaseDecision {
 export function decideFirstBatchRelationRelease(input: {
   currentQuestionType: unknown;
   activeParentQuestionType?: unknown;
+  activeChildQuestionType?: unknown;
   hasActiveChild: boolean;
   childAffinity?: TaskRelationAffinityAdjudication;
   parentAffinity?: TaskRelationAffinityAdjudication;
@@ -214,6 +217,9 @@ export function decideFirstBatchRelationRelease(input: {
     normalizeCanonicalQuestionType(input.currentQuestionType) ?? "unknown";
   const activeParentQuestionType = normalizeCanonicalQuestionType(
     input.activeParentQuestionType
+  );
+  const activeChildQuestionType = normalizeCanonicalQuestionType(
+    input.activeChildQuestionType
   );
   const childAffinity =
     input.childAffinity?.affinityKind === "child"
@@ -226,6 +232,7 @@ export function decideFirstBatchRelationRelease(input: {
   const base = {
     currentQuestionType,
     activeParentQuestionType,
+    activeChildQuestionType,
     childAffinityDecision: childAffinity?.decision as
       | ChildAffinityDecision
       | undefined,
@@ -308,6 +315,21 @@ export function decideFirstBatchRelationRelease(input: {
   }
 
   if (input.hasActiveChild) {
+    if (
+      childAffinity?.decision === "related" &&
+      parentAffinity.decision === "related" &&
+      activeChildQuestionType &&
+      currentQuestionType === activeChildQuestionType
+    ) {
+      return decide({
+        authorized: true,
+        relation: "child-probe",
+        responseOnly: false,
+        reason: "active-child-preserve-child",
+        confidence,
+        possibleRelationError: false,
+      });
+    }
     if (
       childAffinity?.decision === "unrelated" &&
       parentAffinity.decision === "related" &&
@@ -452,6 +474,8 @@ export function formatFirstBatchRelationReleaseForTrace(
       decision.currentQuestionType,
     taskRelationFirstBatchActiveParentQuestionType:
       decision.activeParentQuestionType,
+    taskRelationFirstBatchActiveChildQuestionType:
+      decision.activeChildQuestionType,
     taskRelationFirstBatchChildAffinity:
       decision.childAffinityDecision,
     taskRelationFirstBatchChildAffinityConfidence:
@@ -565,6 +589,7 @@ export function buildTaskRelationAffinityPrompts(
         "For related, return exactly one currentEvidenceSpans item and one childEvidenceSpans item copied verbatim from matching fields.",
         "For unrelated, return exactly one currentEvidenceSpans item and an empty childEvidenceSpans array.",
         "For unclear, return empty evidence arrays and one short ambiguityReason.",
+        "Every evidence span must be a non-empty exact substring of at most 180 characters. Select a shorter identifying clause instead of copying a long question.",
         "Schema: {schemaVersion:1,decision:'related'|'unrelated'|'unclear',confidence:number,currentEvidenceSpans:string[],childEvidenceSpans:string[],ambiguityReason?:string}.",
       ].join(" ")
     : [
@@ -578,6 +603,7 @@ export function buildTaskRelationAffinityPrompts(
         "For related, return exactly one currentEvidenceSpans item and one parentEvidenceSpans item copied verbatim from matching fields.",
         "For independent, return exactly one currentEvidenceSpans item and an empty parentEvidenceSpans array.",
         "For unclear, return empty evidence arrays and one short ambiguityReason.",
+        "Every evidence span must be a non-empty exact substring of at most 180 characters. Select a shorter identifying clause instead of copying a long question.",
         "Schema: {schemaVersion:1,decision:'related'|'independent'|'unclear',confidence:number,currentEvidenceSpans:string[],parentEvidenceSpans:string[],ambiguityReason?:string}.",
       ].join(" ");
   return buildRuntimeInferenceModelInput({

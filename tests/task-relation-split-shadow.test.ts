@@ -142,6 +142,8 @@ test("builds clean child and parent affinity prompts", () => {
   }
   assert.match(childPrompt.systemPrompt, /active child question/i);
   assert.match(parentPrompt.systemPrompt, /active parent objective/i);
+  assert.match(childPrompt.systemPrompt, /at most 180 characters/i);
+  assert.match(parentPrompt.systemPrompt, /shorter identifying clause/i);
 });
 
 test("parses grounded affinity decisions with operation-specific evidence", () => {
@@ -406,10 +408,11 @@ test("releases only the approved no-parent and parent-without-child matrix", () 
   }
 });
 
-test("releases only resume-parent while an active child exists", () => {
+test("releases active-child continuation and parent resume without a new relation", () => {
   const released = decideFirstBatchRelationRelease({
     currentQuestionType: "ai-ml-system-design",
     activeParentQuestionType: "ai-ml-system-design",
+    activeChildQuestionType: "field-knowledge",
     hasActiveChild: true,
     childAffinity: affinity("child", "unrelated", 0.97),
     parentAffinity: affinity("parent", "related", 0.98),
@@ -417,6 +420,7 @@ test("releases only resume-parent while an active child exists", () => {
   const childFollowup = decideFirstBatchRelationRelease({
     currentQuestionType: "field-knowledge",
     activeParentQuestionType: "ai-ml-system-design",
+    activeChildQuestionType: "field-knowledge",
     hasActiveChild: true,
     childAffinity: affinity("child", "related", 0.99),
     parentAffinity: affinity("parent", "related", 0.99),
@@ -424,10 +428,11 @@ test("releases only resume-parent while an active child exists", () => {
 
   assert.equal(released.relation, "resume-parent");
   assert.equal(released.authorized, true);
-  assert.equal(childFollowup.authorized, false);
+  assert.equal(childFollowup.authorized, true);
+  assert.equal(childFollowup.relation, "child-probe");
   assert.equal(
     childFollowup.reason,
-    "active-child-combination-not-released"
+    "active-child-preserve-child"
   );
 });
 
