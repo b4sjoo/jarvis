@@ -55,6 +55,7 @@ import {
   type AnswerRecoveryAdjudicationRequest,
   type AnswerResolutionAdjudication,
   type EvidenceRequirementAdjudication,
+  shouldRunQuestionOnlyVisualEvidenceCheck,
 } from "@/lib/meeting/answer-recovery-adjudication";
 import {
   requestAnswerRecoveryAdjudication,
@@ -10115,7 +10116,7 @@ export function useMeetingAssistant() {
       : undefined;
     const visualEvidenceCheckStartedAt = Date.now();
     const visualEvidenceCheckPromise =
-      advisorJob.source === "live-turn" &&
+      shouldRunQuestionOnlyVisualEvidenceCheck(advisorJob.source) &&
       advisorJob.logicalQuestionUnit &&
       visualEvidenceQuestion &&
       advisorQuestionAnswerFocusText

@@ -9,11 +9,29 @@ import {
   decideAnswerRecoveryLedgerTransition,
   isAnswerRecoveryOutputTruncated,
   parseAnswerRecoveryAdjudicationOutput,
+  shouldRunQuestionOnlyVisualEvidenceCheck,
 } from "../src/lib/meeting/answer-recovery-adjudication.js";
 
 const question = "Could you please explain lines 46 through 49?";
 const answer =
   "I don't have those lines visible. Please paste or read out lines 46 through 49.";
+
+test("runs the question-only visual lease for automatic and manual recovery sources", () => {
+  for (const source of [
+    "live-turn",
+    "manual-correction",
+    "force-advise",
+    "regenerate",
+  ] as const) {
+    assert.equal(shouldRunQuestionOnlyVisualEvidenceCheck(source), true);
+  }
+  for (const source of [
+    "response-action",
+    "clarifying-answer",
+  ] as const) {
+    assert.equal(shouldRunQuestionOnlyVisualEvidenceCheck(source), false);
+  }
+});
 
 test("keeps post-answer resolution separate from question-only visual evidence", () => {
   const resolution = buildAnswerRecoveryAdjudicationRequest({
