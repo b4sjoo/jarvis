@@ -90,6 +90,9 @@ const TRANSITION_FRAME =
 const ACKNOWLEDGEMENT_PREFIX =
   /^(?:(?:okay|ok|right|great|good|looks good|sounds good|all right|yeah)[,.! ]+)+/iu;
 
+const NEGATED_TRANSITION_PREFIX =
+  /(?:\b(?:not(?: yet)?|never|don't|do not|cannot|can't|won't|shouldn't)\s*$|(?:不要|别|不再)\s*$)/iu;
+
 const TRANSITION_ONLY_TOKENS = new Set([
   "a",
   "about",
@@ -184,9 +187,20 @@ export function classifyInterviewTransitionTurn(
     };
   }
 
+  if (isNegatedTransition(normalized, transitionMatch.index)) {
+    return {
+      detected: false,
+      disposition: "none",
+      reason: "negated-transition-frame",
+    };
+  }
+
   const suffix = normalized
     .slice(transitionMatch.index + transitionMatch[0].length)
-    .replace(/\b(?:to|with|some|the|a|our|maybe)\b/giu, " ")
+    .replace(
+      /\b(?:to|with|some|the|a|our|maybe)\b|(?:进入|到|一些)/giu,
+      " "
+    )
     .replace(/[^\p{L}\p{N}+#]+/gu, " ")
     .trim();
   const prefix = normalized.slice(0, transitionMatch.index).trim();
@@ -204,12 +218,16 @@ export function classifyInterviewTransitionTurn(
       suffix
     ) && substantiveTokens.length >= 2;
   const hasLeadingTaskPayload = SOURCE_OWNED_TASK_FRAME.test(prefix);
+  const hasSubstantiveResidual =
+    substantiveTokens.length > 0 &&
+    !isCanonicalSectionOnlyResidual(suffix);
 
   if (
     hasQuestionMarker ||
     hasInterrogativeClause ||
     hasTaskPayload ||
-    hasLeadingTaskPayload
+    hasLeadingTaskPayload ||
+    hasSubstantiveResidual
   ) {
     return {
       detected: true,
@@ -220,7 +238,9 @@ export function classifyInterviewTransitionTurn(
           ? "transition-with-interrogative-clause"
           : hasLeadingTaskPayload
             ? "transition-with-leading-task-payload"
-            : "transition-with-task-payload",
+            : hasTaskPayload
+              ? "transition-with-task-payload"
+              : "transition-with-substantive-residual",
     };
   }
 
@@ -253,11 +273,19 @@ export function detectInterviewSectionTransition(
   text: string
 ): InterviewSectionTransitionDetection {
   const normalized = normalize(text);
-  if (!TRANSITION_FRAME.test(normalized)) {
+  const transitionMatch = normalized.match(TRANSITION_FRAME);
+  if (!transitionMatch || transitionMatch.index === undefined) {
     return {
       detected: false,
       confidence: 0,
       reason: "no-immediate-transition-frame",
+    };
+  }
+  if (isNegatedTransition(normalized, transitionMatch.index)) {
+    return {
+      detected: false,
+      confidence: 0,
+      reason: "negated-transition-frame",
     };
   }
   if (DEFERRED_OR_RETROSPECTIVE_FRAME.test(normalized)) {
@@ -283,6 +311,23 @@ export function detectInterviewSectionTransition(
     confidence: 0.98,
     reason: "explicit-immediate-section-transition",
   };
+}
+
+function isNegatedTransition(normalized: string, transitionIndex: number) {
+  return NEGATED_TRANSITION_PREFIX.test(
+    normalized.slice(Math.max(0, transitionIndex - 48), transitionIndex)
+  );
+}
+
+function isCanonicalSectionOnlyResidual(suffix: string) {
+  let residual = suffix;
+  for (const { pattern } of SECTION_PATTERNS) {
+    residual = residual.replace(pattern, " ");
+  }
+  return !residual
+    .replace(/\b(?:questions?|section|topic|task)\b|(?:环节|部分)/giu, " ")
+    .replace(/[^\p{L}\p{N}+#]+/gu, " ")
+    .trim();
 }
 
 export function createPendingInterviewSectionHint(input: {

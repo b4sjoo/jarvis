@@ -27,10 +27,31 @@ test("routes a transition that already contains a complete question", () => {
     "Okay, looks good. So let's move on to the next question. This question is maybe some system design questions, but in this task, we will need you to design a food delivery app like Uber Eats or DoorDash. How will you begin with that?",
     "Now please design a ride-sharing system. Start with requirements and provide a high-level infrastructure whiteboard.",
     "Design a distributed cache. Start with requirements.",
+    "Let's start with the simplest correct solution.",
+    "We are going to use Python.",
   ]) {
     const decision = classifyInterviewTransitionTurn(text);
     assert.equal(decision.detected, true, text);
     assert.equal(decision.disposition, "complete-question", text);
+  }
+});
+
+test("does not manufacture positive transition evidence from negation", () => {
+  for (const text of [
+    "Let us not move on to coding questions.",
+    "We should not move on to behavioral questions yet.",
+    "不要进入下一题。",
+  ]) {
+    assert.deepEqual(classifyInterviewTransitionTurn(text), {
+      detected: false,
+      disposition: "none",
+      reason: "negated-transition-frame",
+    });
+    assert.deepEqual(detectInterviewSectionTransition(text), {
+      detected: false,
+      confidence: 0,
+      reason: "negated-transition-frame",
+    });
   }
 });
 
