@@ -10,6 +10,7 @@ import {
   decideManualQuestionTypeCorrection,
   decideManualCorrectionScope,
   decideProvisionalQuestionTypeCorrection,
+  hasManualQuestionTypeCorrectionPresentationTarget,
   markManualCorrectionTargetResolved,
   resolveManualCorrectionTarget,
   selectManualCorrectionTargetFromHistory,
@@ -426,6 +427,69 @@ test("promotes every parent-eligible provisional question", () => {
   assert.equal(
     fieldKnowledge.reason,
     "manual-correction-promotes-provisional-question"
+  );
+});
+
+test("shows correction controls for a canonical current question without a parent", () => {
+  const lineage = {
+    questionInstanceId: "lqu:question-current",
+    questionOriginTraceId: "trace-current",
+    sourceSuggestionId: "suggestion-current",
+    identityState: "canonical" as const,
+  };
+
+  assert.equal(
+    hasManualQuestionTypeCorrectionPresentationTarget({
+      hasActiveTask: false,
+      currentQuestionLineage: lineage,
+      latestSuggestion: {
+        id: "suggestion-current",
+        questionLineage: lineage,
+      },
+    }),
+    true
+  );
+  assert.equal(
+    hasManualQuestionTypeCorrectionPresentationTarget({
+      hasActiveTask: false,
+      currentQuestionLineage: lineage,
+      latestSuggestion: {
+        id: "suggestion-newer",
+        questionLineage: {
+          ...lineage,
+          sourceSuggestionId: "suggestion-newer",
+          questionInstanceId: "lqu:question-newer",
+        },
+      },
+    }),
+    true
+  );
+});
+
+test("hides correction controls when no current source-owned question exists", () => {
+  assert.equal(
+    hasManualQuestionTypeCorrectionPresentationTarget({
+      hasActiveTask: false,
+      latestSuggestion: {
+        id: "suggestion-current",
+      },
+    }),
+    false
+  );
+  assert.equal(
+    hasManualQuestionTypeCorrectionPresentationTarget({
+      hasActiveTask: false,
+      currentQuestionLineage: {
+        questionInstanceId: "lqu:question-old",
+        questionOriginTraceId: "trace-old",
+        sourceSuggestionId: "suggestion-old",
+        identityState: "canonical",
+      },
+      latestSuggestion: {
+        id: "suggestion-current",
+      },
+    }),
+    false
   );
 });
 

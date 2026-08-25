@@ -317,6 +317,25 @@ export type ManualCorrectionTargetResolution =
     }
   | { source: "none"; reason: string };
 
+export function hasManualQuestionTypeCorrectionPresentationTarget(input: {
+  hasActiveTask: boolean;
+  currentQuestionLineage?: QuestionInstanceLineage;
+  latestSuggestion?: Pick<AdvisorSuggestion, "id" | "questionLineage"> | null;
+}) {
+  if (input.hasActiveTask) return true;
+  const suggestion = input.latestSuggestion;
+  if (!suggestion) return false;
+  const lineage =
+    suggestion.questionLineage ?? input.currentQuestionLineage;
+  if (!lineage?.sourceSuggestionId) return false;
+  return (
+    lineage.sourceSuggestionId === suggestion.id &&
+    (!suggestion.questionLineage ||
+      suggestion.questionLineage.questionInstanceId ===
+        lineage.questionInstanceId)
+  );
+}
+
 export function resolveManualCorrectionTarget(input: {
   activeTask?: ActiveMeetingTask;
   currentQuestionLineage?: QuestionInstanceLineage;

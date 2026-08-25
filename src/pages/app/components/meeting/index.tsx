@@ -88,6 +88,7 @@ import {
   buildClarifyingOptionDisplayModel,
   getActiveMeetingTaskFocusSummary,
   getActiveMeetingTaskId,
+  hasManualQuestionTypeCorrectionPresentationTarget,
   buildMeetingAnswerDisplayModel,
   buildHumanEvaluationObservedSnapshotV2,
   decideForceAdviseEligibility,
@@ -518,14 +519,12 @@ export const MeetingAssistant = ({
     ]
   );
   const hasActiveMeetingTask = Boolean(meeting.activeMeetingTask);
-  const hasProvisionalQuestion = Boolean(
-    meeting.currentQuestionLineage?.identityState === "provisional" &&
-      meeting.currentQuestionLineage.sourceSuggestionId &&
-      meeting.currentQuestionLineage.sourceSuggestionId ===
-        meeting.latestSuggestion?.id
-  );
   const hasCorrectableQuestion =
-    hasActiveMeetingTask || hasProvisionalQuestion;
+    hasManualQuestionTypeCorrectionPresentationTarget({
+      hasActiveTask: hasActiveMeetingTask,
+      currentQuestionLineage: meeting.currentQuestionLineage,
+      latestSuggestion: meeting.latestSuggestion,
+    });
   const hasActiveMeetingScreenContext = Boolean(meeting.activeMeetingTask?.screen);
   const activeParentTaskId =
     getActiveMeetingTaskId(meeting.activeMeetingTask) ?? "";
