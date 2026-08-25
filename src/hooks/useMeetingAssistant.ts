@@ -17227,6 +17227,10 @@ export function useMeetingAssistant() {
       logicalQuestionUnit,
       lexical,
       questionTypeAxisConflict,
+      automaticQuestionType,
+      sourceKind = "voice",
+      sourceObservationIds = [],
+      authorizationLogicalQuestionUnit,
     }: {
       turn: Pick<TranscriptTurn, "speaker">;
       traceId: string;
@@ -17236,31 +17240,46 @@ export function useMeetingAssistant() {
       questionTypeAxisConflict?: RuntimeAxisConflictDecision<
         CanonicalQuestionType
       >;
+      automaticQuestionType?: CanonicalQuestionType;
+      sourceKind?: "voice" | "screen" | "mixed";
+      sourceObservationIds?: string[];
+      authorizationLogicalQuestionUnit?: LogicalQuestionUnit;
     }): QuestionTypeAdjudicationScheduleHandle | undefined => {
       if (!logicalQuestionUnit) return undefined;
       const contextState = contextManagerRef.current.getState();
       const settings = taxonomyAdjudicationSettingsRef.current;
       const mode = settings.questionTypeMode;
-      const request = buildQuestionTypeAdjudicationRequest({
-        logicalQuestionUnit,
-      });
+      const localQuestionType =
+        normalizeCanonicalQuestionType(
+          automaticQuestionType ?? lexical.type
+        ) ?? "unknown";
       const manualAuthorityConflict = Boolean(
         manualCorrectionOperationCoordinatorRef.current.getActiveOperationId()
       );
+      const mandatoryFieldKnowledgeReview = Boolean(
+        localQuestionType === "field-knowledge" &&
+          !manualAuthorityConflict
+      );
+      const request = buildQuestionTypeAdjudicationRequest({
+        logicalQuestionUnit,
+        reviewScope: mandatoryFieldKnowledgeReview
+          ? "field-vs-coding"
+          : "full",
+      });
       const eligibility = decideQuestionTypeAdjudicationEligibility({
-        mode,
+        mode: mandatoryFieldKnowledgeReview ? "enforcement" : mode,
         speaker: turn.speaker,
         projection: request.question,
         lexical,
         manualCorrectionActive: manualAuthorityConflict,
         turnGateAction,
         sameAxisConflict: questionTypeAxisConflict,
+        mandatoryFieldKnowledgeReview,
       });
-      const localQuestionType =
-        normalizeCanonicalQuestionType(lexical.type) ?? "unknown";
       const sourceOwnedSubstantive =
         turnGateAction === "answer-refresh" && request.question.safe;
       const effectiveQuestionTypeMode =
+        mandatoryFieldKnowledgeReview ||
         eligibility.executionMode === "enforcement-window"
           ? "enforcement"
           : "shadow";
@@ -17283,6 +17302,7 @@ export function useMeetingAssistant() {
             manualAuthorityConflict,
             operationLeaseAuthorized: false,
             advisorReleaseWindowOpen: true,
+            reviewScope: request.reviewScope,
           }),
         }),
       });
@@ -17309,11 +17329,14 @@ export function useMeetingAssistant() {
           "questionTypeAxis"
         ),
         questionTypeAdjudicationLocalType:
-          lexical.type ?? "unknown",
+          localQuestionType,
         questionTypeAdjudicationLocalCertainty:
           lexical.certainty,
         questionTypeAdjudicationBehaviorMutationBlocked: true,
         questionTypeAdjudicationAppliedToRuntime: false,
+        questionTypeAdjudicationReviewScope: request.reviewScope,
+        questionTypeAdjudicationMandatoryFieldReview:
+          mandatoryFieldKnowledgeReview,
       };
       traceStoreRef.current.updateMetadata(traceId, baseMetadata);
       if (!eligibility.eligible) {
@@ -17581,7 +17604,9 @@ export function useMeetingAssistant() {
                 questionTypeAdjudicationRuntimeRef.current?.getCurrentOperationId(),
               sessionId: latestContext.sessionId,
               runtimeEpoch: runtimeEpochRef.current,
-              logicalQuestionUnit: logicalQuestionUnitRef.current,
+              logicalQuestionUnit:
+                authorizationLogicalQuestionUnit ??
+                logicalQuestionUnitRef.current,
               taskBoundaryEpoch: hashTaxonomyTaskBoundary({
                 parentId: latestParent?.id,
                 questionType: latestParentQuestionType,
@@ -17631,7 +17656,8 @@ export function useMeetingAssistant() {
                     : "shadow-observed";
           const currentQuestion = createProvisionalCurrentQuestion({
             logicalQuestionUnit,
-            sourceKind: "voice",
+            sourceKind,
+            sourceObservationIds,
           });
           const llmProposal = parsedValue
             ? createQuestionTypeSettlementProposal({
@@ -17675,6 +17701,7 @@ export function useMeetingAssistant() {
             ),
             operationLeaseAuthorized: authorization.authorized,
             advisorReleaseWindowOpen: true,
+            reviewScope: request.reviewScope,
           });
           const effectiveDisposition = enforcement.authorized
             ? "enforcement-authorized"
@@ -17752,7 +17779,7 @@ export function useMeetingAssistant() {
               Boolean(
                 parsedValue &&
                   parsedValue.questionType !==
-                    (lexical.type ?? "unknown")
+                    localQuestionType
               ),
             questionTypeAdjudicationPreviewType:
               settlementPreview?.questionType,
@@ -24853,12 +24880,15 @@ export function useMeetingAssistant() {
             ]
               .filter(Boolean)
               .join("\n");
-        const screenSourceFallbackQuestionType =
+        const screenSourceFallbackQuestionTypeDecision =
           inferQuestionTypeDecisionFromText(screenEvidenceText, {
             interviewSessionBrief:
               screenPreparationRuntime.effectiveInterviewBrief ??
               preflightContextState.interviewSessionBrief,
-          }).type ?? inferCanonicalQuestionTypeFromText(screenEvidenceText);
+          });
+        const screenSourceFallbackQuestionType =
+          screenSourceFallbackQuestionTypeDecision.type ??
+          inferCanonicalQuestionTypeFromText(screenEvidenceText);
         const screenTaxonomyDecision = resolveTaskTaxonomyAuthority({
           candidates: screenQuestionOwnedByVoice
             ? [
@@ -24913,10 +24943,64 @@ export function useMeetingAssistant() {
             ...sectionHintMetadata,
           });
         }
-        const screenMemoryQuestionType =
+        let screenMemoryQuestionType =
           screenSectionHintConsumption.disposition === "applied"
             ? screenSectionHintConsumption.effectiveQuestionType
             : screenTaxonomyDecision.effectiveQuestionType;
+        let screenFieldKnowledgeReviewSettlement:
+          | CurrentQuestionSettlementDecision
+          | undefined;
+        if (
+          screenMemoryQuestionType === "field-knowledge" &&
+          screenRelationLogicalQuestionUnit &&
+          screenCurrentQuestion
+        ) {
+          const fieldReviewStartedAt = Date.now();
+          const fieldReview = scheduleQuestionTypeAdjudication({
+            turn: { speaker: "them" },
+            traceId: trace.id,
+            turnGateAction: "answer-refresh",
+            logicalQuestionUnit: screenRelationLogicalQuestionUnit,
+            lexical: screenSourceFallbackQuestionTypeDecision,
+            automaticQuestionType: "field-knowledge",
+            sourceKind: screenCurrentQuestion.sourceKind,
+            sourceObservationIds: [observation.id],
+            authorizationLogicalQuestionUnit:
+              screenRelationLogicalQuestionUnit,
+          });
+          if (fieldReview?.enforcementWindowRequested) {
+            try {
+              const outcome = await withTimeout(
+                fieldReview.outcome,
+                QUESTION_TYPE_ENFORCEMENT_WAIT_BUDGET_MS,
+                "Screen Field Knowledge review window expired."
+              );
+              if (outcome.enforcement.authorized && outcome.settlement) {
+                screenFieldKnowledgeReviewSettlement = outcome.settlement;
+                screenMemoryQuestionType = outcome.settlement.questionType;
+              }
+              traceStoreRef.current.updateMetadata(trace.id, {
+                screenFieldKnowledgeReviewDisposition: outcome.disposition,
+                screenFieldKnowledgeReviewApplied: Boolean(
+                  screenFieldKnowledgeReviewSettlement
+                ),
+                screenFieldKnowledgeReviewQuestionType:
+                  screenFieldKnowledgeReviewSettlement?.questionType,
+                screenFieldKnowledgeReviewDurationMs:
+                  Date.now() - fieldReviewStartedAt,
+              });
+            } catch (error) {
+              traceStoreRef.current.updateMetadata(trace.id, {
+                screenFieldKnowledgeReviewDisposition: "deadline-expired",
+                screenFieldKnowledgeReviewApplied: false,
+                screenFieldKnowledgeReviewDurationMs:
+                  Date.now() - fieldReviewStartedAt,
+                screenFieldKnowledgeReviewError:
+                  error instanceof Error ? error.message : String(error),
+              });
+            }
+          }
+        }
         const taskKind =
           normalizeScreenQuestionType(screenMemoryQuestionType) ?? "unknown";
         const screenProgrammingLanguage =
@@ -25150,22 +25234,25 @@ export function useMeetingAssistant() {
             : screenTaskRelationDecision.relationEvidenceAuthorized ??
               localScreenTaskRelation !== "unknown";
         const screenTypeEvidenceAuthorized = Boolean(
-          screenSectionHintConsumption.disposition === "applied" ||
+          screenFieldKnowledgeReviewSettlement?.typeMutationAuthorized ||
+            screenSectionHintConsumption.disposition === "applied" ||
             (screenTaxonomyDecision.mutationAuthorized &&
               screenMemoryQuestionType !== "unknown")
         );
         const screenTypeAuthoritySource =
-          screenSectionHintConsumption.disposition === "applied"
+          screenFieldKnowledgeReviewSettlement?.typeAuthoritySource ??
+          (screenSectionHintConsumption.disposition === "applied"
             ? "interview-section-hint"
-            : screenTaxonomyDecision.authoritySource;
+            : screenTaxonomyDecision.authoritySource);
         const screenTypeConfidence =
-          screenSectionHintConsumption.disposition === "applied"
+          screenFieldKnowledgeReviewSettlement?.confidence ??
+          (screenSectionHintConsumption.disposition === "applied"
             ? 1
             : screenTaxonomyDecision.authoritySource === "screen-preflight"
               ? screenPreflight?.confidence ?? 0
               : screenTaxonomyDecision.mutationAuthorized
                 ? 0.95
-                : 0;
+                : 0);
         const screenQuestionComplete = Boolean(
           screenRelationQuestion.trim() &&
             calculateWordEquivalent(screenRelationQuestion) >= 3

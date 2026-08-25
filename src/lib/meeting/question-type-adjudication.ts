@@ -21,7 +21,7 @@ import type { MeetingQuestionTypeAdjudicationMode } from "./types.js";
 
 export const QUESTION_TYPE_ADJUDICATION_SCHEMA_VERSION = 1;
 export const QUESTION_TYPE_ADJUDICATION_PROMPT_VERSION =
-  "question-type-adjudication-v1";
+  "question-type-adjudication-v2";
 export const QUESTION_TYPE_ADJUDICATION_MAX_OUTPUT_CHARS = 2_048;
 export const QUESTION_TYPE_ENFORCEMENT_MIN_CONFIDENCE = 0.95;
 export const QUESTION_TYPE_ENFORCEMENT_WAIT_BUDGET_MS = 1_200;
@@ -31,6 +31,7 @@ export interface QuestionTypeAdjudicationRequest {
   promptVersion: string;
   logicalQuestionUnitId: string;
   logicalQuestionUnitRevision: number;
+  reviewScope?: "full" | "field-vs-coding";
   question: TaxonomyAdjudicationProjection;
 }
 
@@ -83,6 +84,7 @@ export type QuestionTypeEnforcementReason =
   | "operation-lease-not-authorized"
   | "candidate-missing"
   | "candidate-type-unknown"
+  | "field-knowledge-requires-narrow-review"
   | "candidate-confidence-below-threshold"
   | "settlement-type-mutation-not-authorized"
   | "advisor-release-window-closed";
@@ -283,12 +285,14 @@ export function normalizeQuestionTypeAdjudicationMode(
 
 export function buildQuestionTypeAdjudicationRequest(input: {
   logicalQuestionUnit: LogicalQuestionUnit;
+  reviewScope?: QuestionTypeAdjudicationRequest["reviewScope"];
 }): QuestionTypeAdjudicationRequest {
   return {
     schemaVersion: QUESTION_TYPE_ADJUDICATION_SCHEMA_VERSION,
     promptVersion: QUESTION_TYPE_ADJUDICATION_PROMPT_VERSION,
     logicalQuestionUnitId: input.logicalQuestionUnit.id,
     logicalQuestionUnitRevision: input.logicalQuestionUnit.revision,
+    reviewScope: input.reviewScope ?? "full",
     question: projectLogicalQuestionForAdjudication(
       input.logicalQuestionUnit
     ),
@@ -303,6 +307,7 @@ export function decideQuestionTypeAdjudicationEligibility(input: {
   manualCorrectionActive: boolean;
   turnGateAction: string;
   sameAxisConflict?: RuntimeAxisConflictDecision<CanonicalQuestionType>;
+  mandatoryFieldKnowledgeReview?: boolean;
 }): QuestionTypeAdjudicationEligibilityDecision {
   const wordEquivalent = estimateWordEquivalents(
     input.projection.text
@@ -318,7 +323,9 @@ export function decideQuestionTypeAdjudicationEligibility(input: {
     wordEquivalent,
     sentenceCount,
   });
-  if (input.mode === "off") return skip("question-type-operation-off");
+  if (input.mode === "off" && !input.mandatoryFieldKnowledgeReview) {
+    return skip("question-type-operation-off");
+  }
   if (input.speaker !== "them") return skip("speaker-is-not-interviewer");
   if (!input.projection.safe) return skip("unsafe-question-projection");
   if (wordEquivalent < 3) {
@@ -346,6 +353,16 @@ export function decideQuestionTypeAdjudicationEligibility(input: {
     return shadowObservation("non-answer-turn-shadow-observation", [
       `turn-gate:${input.turnGateAction || "unknown"}`,
     ]);
+  }
+  if (input.mandatoryFieldKnowledgeReview) {
+    return {
+      eligible: true,
+      reason: "field-knowledge-review-required",
+      triggerReasons: ["automatic-field-knowledge-proposal"],
+      executionMode: "enforcement-window",
+      wordEquivalent,
+      sentenceCount,
+    };
   }
   if (input.mode === "shadow") {
     return shadowObservation("operation-shadow-observation", [
@@ -412,7 +429,20 @@ export function buildQuestionTypeAdjudicationPrompts(
       sourceTexts: request.question.sourceTurns.map((source) => source.text),
     },
   };
-  const systemPrompt = [
+  const systemPrompt = request.reviewScope === "field-vs-coding"
+    ? [
+        "Review one automatic Field Knowledge proposal for Jarvis.",
+        "Return one JSON object only. Do not answer the interview question.",
+        "Classify only whether the current request asks the candidate to solve, implement, debug, trace, or analyze code or an algorithm, versus explain an independently answerable technical concept.",
+        "Allowed questionType values: coding, field-knowledge, unknown.",
+        "Use coding for implementation, debugging, algorithm derivation, complexity-driven solution work, or requests whose expected deliverable is code or pseudocode.",
+        "Use field-knowledge only for a factual or conceptual explanation that does not require producing or repairing a solution.",
+        "Use unknown when the bounded evidence cannot distinguish the two.",
+        "Do not decide task relation, parent or child status, response action, playbook phase, evidence mode, or meeting metadata.",
+        "evidenceSpans must contain one or more exact verbatim substrings from question.sourceTexts.",
+        "Schema: {schemaVersion:1,questionType,confidence,evidenceSpans,ambiguityReason?}.",
+      ].join(" ")
+    : [
       "Classify only the question type of one bounded interviewer question for Jarvis.",
       "Return one JSON object only. Do not answer the interview question.",
       "Do not decide task relation, parent or child status, response action, playbook phase, evidence mode, or meeting metadata.",
@@ -428,7 +458,7 @@ export function buildQuestionTypeAdjudicationPrompts(
       "Use unknown for logistics, compensation, scheduling, filler, incomplete content, or genuine ambiguity.",
       "evidenceSpans must contain one or more exact verbatim substrings from question.sourceTexts.",
       "Schema: {schemaVersion:1,questionType,confidence,evidenceSpans,ambiguityReason?}.",
-    ].join(" ");
+      ].join(" ");
   return buildRuntimeInferenceModelInput({ systemPrompt, semanticPayload });
 }
 
@@ -470,6 +500,14 @@ export function parseQuestionTypeAdjudicationOutput(
   }
   if (!isCanonicalQuestionType(candidate.questionType)) {
     return parseFailure("invalid-question-type", "schema");
+  }
+  if (
+    request.reviewScope === "field-vs-coding" &&
+    candidate.questionType !== "coding" &&
+    candidate.questionType !== "field-knowledge" &&
+    candidate.questionType !== "unknown"
+  ) {
+    return parseFailure("question-type-outside-review-scope", "schema");
   }
   if (
     typeof candidate.confidence !== "number" ||
@@ -564,6 +602,7 @@ export function decideQuestionTypeEnforcement(input: {
   manualAuthorityConflict: boolean;
   operationLeaseAuthorized: boolean;
   advisorReleaseWindowOpen: boolean;
+  reviewScope?: QuestionTypeAdjudicationRequest["reviewScope"];
   minimumConfidence?: number;
 }): QuestionTypeEnforcementDecision {
   const localQuestionType =
@@ -601,6 +640,12 @@ export function decideQuestionTypeEnforcement(input: {
   if (!input.candidate) return reject("candidate-missing");
   if (proposedQuestionType === "unknown") {
     return reject("candidate-type-unknown");
+  }
+  if (
+    proposedQuestionType === "field-knowledge" &&
+    input.reviewScope !== "field-vs-coding"
+  ) {
+    return reject("field-knowledge-requires-narrow-review");
   }
   if (confidence < minimumConfidence) {
     return reject("candidate-confidence-below-threshold");

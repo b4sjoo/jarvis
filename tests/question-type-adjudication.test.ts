@@ -68,6 +68,7 @@ test("builds a bounded type-only request without local classifier evidence", () 
   const prompts = buildQuestionTypeAdjudicationPrompts(request);
 
   assert.equal(request.schemaVersion, 1);
+  assert.equal(request.reviewScope, "full");
   assert.equal(request.logicalQuestionUnitRevision, 1);
   assert.match(prompts.systemPrompt, /Classify only the question type/i);
   assert.match(prompts.systemPrompt, /Do not decide task relation/i);
@@ -79,6 +80,137 @@ test("builds a bounded type-only request without local classifier evidence", () 
     prompts.userMessage,
     /lexical|semantic|activeParent|playbookPhase/i
   );
+});
+
+test("builds and enforces a narrow Field Knowledge versus Coding review", () => {
+  const request = buildQuestionTypeAdjudicationRequest({
+    logicalQuestionUnit: unit(
+      "Implement an LRU cache and analyze its time complexity."
+    ),
+    reviewScope: "field-vs-coding",
+  });
+  const prompts = buildQuestionTypeAdjudicationPrompts(request);
+  assert.match(prompts.systemPrompt, /automatic Field Knowledge proposal/i);
+  assert.match(prompts.systemPrompt, /coding, field-knowledge, unknown/i);
+  assert.doesNotMatch(prompts.systemPrompt, /behavioral asks/i);
+
+  assert.equal(
+    parseQuestionTypeAdjudicationOutput(
+      JSON.stringify({
+        schemaVersion: 1,
+        questionType: "coding",
+        confidence: 0.97,
+        evidenceSpans: ["Implement an LRU cache"],
+      }),
+      request
+    ).ok,
+    true
+  );
+  assert.deepEqual(
+    parseQuestionTypeAdjudicationOutput(
+      JSON.stringify({
+        schemaVersion: 1,
+        questionType: "general-system-design",
+        confidence: 0.98,
+        evidenceSpans: ["LRU cache"],
+      }),
+      request
+    ),
+    {
+      ok: false,
+      reason: "question-type-outside-review-scope",
+      errorKind: "schema",
+      evidenceSpansValid: false,
+    }
+  );
+});
+
+test("keeps a full-scope Field Knowledge result observational", () => {
+  const base = {
+    mode: "enforcement" as const,
+    localQuestionType: "unknown",
+    candidate: {
+      schemaVersion: 1 as const,
+      questionType: "field-knowledge" as const,
+      confidence: 0.99,
+      evidenceSpans: ["explain HNSW"],
+    },
+    settlement: settleCurrentQuestion({
+      currentQuestion: createProvisionalCurrentQuestion({
+        logicalQuestionUnit: unit("Please explain HNSW."),
+        sourceKind: "voice",
+      }),
+      llmProposal: createQuestionTypeSettlementProposal({
+        currentQuestion: createProvisionalCurrentQuestion({
+          logicalQuestionUnit: unit("Please explain HNSW."),
+          sourceKind: "voice",
+        }),
+        adjudication: {
+          schemaVersion: 1,
+          questionType: "field-knowledge",
+          confidence: 0.99,
+          evidenceSpans: ["explain HNSW"],
+        },
+      }),
+      manualCorrectionRevision: 0,
+      policy: {
+        allowLlmTypeRepair: true,
+        runtimeMutationAuthorized: true,
+        questionComplete: true,
+        commitParent: false,
+      },
+    }),
+    sourceOwnedSubstantive: true,
+    manualAuthorityConflict: false,
+    operationLeaseAuthorized: true,
+    advisorReleaseWindowOpen: true,
+  };
+
+  assert.equal(
+    decideQuestionTypeEnforcement({ ...base, reviewScope: "full" }).reason,
+    "field-knowledge-requires-narrow-review"
+  );
+  assert.equal(
+    decideQuestionTypeEnforcement({
+      ...base,
+      reviewScope: "field-vs-coding",
+    }).authorized,
+    true
+  );
+});
+
+test("requires automatic Field Knowledge review even when broad adjudication is off", () => {
+  const request = buildQuestionTypeAdjudicationRequest({
+    logicalQuestionUnit: unit("Implement an LRU cache."),
+    reviewScope: "field-vs-coding",
+  });
+  const lexical = inferQuestionTypeDecisionFromText(
+    "Explain how an LRU cache should be implemented."
+  );
+  const required = decideQuestionTypeAdjudicationEligibility({
+    mode: "off",
+    speaker: "them",
+    projection: request.question,
+    lexical,
+    manualCorrectionActive: false,
+    turnGateAction: "answer-refresh",
+    mandatoryFieldKnowledgeReview: true,
+  });
+  assert.equal(required.eligible, true);
+  assert.equal(required.executionMode, "enforcement-window");
+  assert.equal(required.reason, "field-knowledge-review-required");
+
+  const manual = decideQuestionTypeAdjudicationEligibility({
+    mode: "off",
+    speaker: "them",
+    projection: request.question,
+    lexical,
+    manualCorrectionActive: true,
+    turnGateAction: "answer-refresh",
+    mandatoryFieldKnowledgeReview: true,
+  });
+  assert.equal(manual.executionMode, "shadow-observation");
+  assert.equal(manual.reason, "manual-correction-shadow-observation");
 });
 
 test("strictly parses grounded type output and rejects broader authority", () => {
