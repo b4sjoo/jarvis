@@ -839,7 +839,16 @@ function anchoredFactClaimSupportedBySpan(
   if (!normalizedClaim || !normalizedSupport) return false;
 
   const numbers = normalizedClaim.match(/\b\d[\d,.]*\b/g) ?? [];
-  if (numbers.some((number) => !normalizedSupport.includes(number))) {
+  const supportNumbers = new Set(
+    (normalizedSupport.match(/\b\d[\d,.]*\b/g) ?? []).map(
+      normalizeNumericClaimToken
+    )
+  );
+  if (
+    numbers.some(
+      (number) => !supportNumbers.has(normalizeNumericClaimToken(number))
+    )
+  ) {
     return false;
   }
   if (
@@ -854,11 +863,17 @@ function anchoredFactClaimSupportedBySpan(
 
   const claimTokens = extractDistinctiveClaimTokens(normalizedClaim);
   if (!claimTokens.length) return true;
-  const supportedCount = claimTokens.filter((token) =>
-    normalizedSupport.includes(token)
-  ).length;
-  const requiredCoverage = claimTokens.length <= 3 ? 1 : 0.55;
-  return supportedCount / claimTokens.length >= requiredCoverage;
+  const supportTokens = new Set(
+    normalizedSupport
+      .split(" ")
+      .map(normalizeClaimToken)
+      .filter(Boolean)
+  );
+  return claimTokens.every((token) => supportTokens.has(token));
+}
+
+function normalizeNumericClaimToken(value: string) {
+  return value.replace(/[,.]/g, "");
 }
 
 function buildSupportedAnchorFallback({
@@ -921,10 +936,15 @@ function extractDistinctiveClaimTokens(value: string) {
     new Set(
       value
         .split(" ")
+        .map(normalizeClaimToken)
         .filter((token) => token.length >= 4)
         .filter((token) => !CLAIM_SUPPORT_STOP_WORDS.has(token))
     )
   );
+}
+
+function normalizeClaimToken(value: string) {
+  return value.replace(/[.,]/g, "");
 }
 
 function normalizeClaimEvidence(value: string) {

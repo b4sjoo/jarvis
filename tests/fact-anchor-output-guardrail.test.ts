@@ -136,6 +136,39 @@ Supporting anchor IDs: mem_oasis_bulk`),
   assert.doesNotMatch(result.effectiveContent, /dead-letter queue/i);
 });
 
+test("requires exact numeric and distinctive-token support", () => {
+  const result = enforceFactAnchorOutput({
+    decision: makeDecision({
+      state: "strong-anchor",
+      requiredFor: "project-deep-dive",
+      supportedAnchorIds: ["mem_scale"],
+      claimSupportDecisions: [
+        {
+          claimId: "claim:scale:mem_scale",
+          predicateFamily: "impact-lessons",
+          anchorId: "mem_scale",
+          projectCompatible: true,
+          predicateCompatible: true,
+          supportSpanPresent: true,
+          supportSpan:
+            "I designed distributed cache consistency for 100 requests per second.",
+          conflictFree: true,
+          decision: "allow",
+          reason: "test-support",
+        },
+      ],
+    }),
+    parsedAnswer: parseMeetingAnswer(`Answer: I designed distributed cache consistency and rebatching for 10 requests per second.
+Answer disposition: factual-with-anchor
+Supporting anchor IDs: mem_scale`),
+  });
+
+  assert.equal(result.modelOutputAuthorized, false);
+  assert.doesNotMatch(result.effectiveContent, /10 requests/i);
+  assert.doesNotMatch(result.effectiveContent, /rebatching/i);
+  assert.match(result.effectiveContent, /100 requests/i);
+});
+
 test("preserves a supported negative boundary in both language sections", () => {
   const result = enforceFactAnchorOutput({
     decision: makeDecision({
