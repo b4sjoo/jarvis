@@ -106,6 +106,7 @@ const EXPECTED_PROFILE_SECTIONS: Record<MeetingAnswerProfile, string[]> = {
 };
 
 const DEFAULT_SUMMARY_MAX_CHARS = 1000;
+const MEETING_ANSWER_LINE_INDENT = "[^\\S\\n]*";
 
 export interface MeetingAnswerSummaryDecision {
   text: string;
@@ -256,13 +257,19 @@ export function readMeetingAnswerSection(content: string, labels: string[]) {
   );
   const labelLinePattern = buildSectionLabelLinePattern(labelPattern);
   const boundaryLinePattern = buildSectionLabelLinePattern(boundaryPattern);
+  const searchable = maskMeetingAnswerCodeFences(content);
   const pattern = new RegExp(
-    `(?:^|\\n)\\s*${labelLinePattern}([\\s\\S]*?)(?=\\n\\s*${boundaryLinePattern}|$)`,
+    `(?:^|\\n)${MEETING_ANSWER_LINE_INDENT}${labelLinePattern}([\\s\\S]*?)(?=\\n${MEETING_ANSWER_LINE_INDENT}${boundaryLinePattern}|$)`,
     "i"
   );
-  const match = pattern.exec(content);
+  const match = pattern.exec(searchable);
 
-  return sanitizeMeetingAnswerSection(match?.[1] ?? "");
+  if (!match || match.index === undefined) return "";
+  const sectionLength = match[1]?.length ?? 0;
+  const sectionStart = match.index + match[0].length - sectionLength;
+  return sanitizeMeetingAnswerSection(
+    content.slice(sectionStart, sectionStart + sectionLength)
+  );
 }
 
 export function sanitizeMeetingAnswerSection(value: string) {
@@ -515,12 +522,16 @@ function expectedMissingSections(
 
 function findRecognizedMeetingAnswerLabels(content: string) {
   const recognized: string[] = [];
+  const searchable = maskMeetingAnswerCodeFences(content);
 
   for (const definition of MEETING_ANSWER_SECTION_DEFINITIONS) {
     const labelPattern = definition.labels.map(escapeRegExp).join("|");
     const linePattern = buildSectionLabelLinePattern(labelPattern);
-    const pattern = new RegExp(`(?:^|\\n)\\s*${linePattern}`, "i");
-    if (pattern.test(content)) recognized.push(definition.canonicalLabel);
+    const pattern = new RegExp(
+      `(?:^|\\n)${MEETING_ANSWER_LINE_INDENT}${linePattern}`,
+      "i"
+    );
+    if (pattern.test(searchable)) recognized.push(definition.canonicalLabel);
   }
 
   return Array.from(new Set(recognized));
@@ -531,7 +542,12 @@ function hasTrailingEmptySection(content: string) {
     "|"
   );
   const linePattern = buildSectionLabelLinePattern(boundaryPattern);
-  return new RegExp(`(?:^|\\n)\\s*${linePattern}\\s*$`, "i").test(content);
+  return new RegExp(
+    `(?:^|\\n)${MEETING_ANSWER_LINE_INDENT}${linePattern}${MEETING_ANSWER_LINE_INDENT}$`,
+    "i"
+  ).test(
+    maskMeetingAnswerCodeFences(content)
+  );
 }
 
 function hasUnclosedCodeFence(content: string) {
@@ -540,11 +556,30 @@ function hasUnclosedCodeFence(content: string) {
 
 function buildSectionLabelLinePattern(labelPattern: string) {
   const emphasis = "(?:\\*\\*|__)?";
+  const horizontalSpace = "[^\\S\\n]*";
   const prefix = `(?:#{1,6}\\s*)?(?:[-*]\\s*)?${emphasis}`;
   const label = `(?:${labelPattern})(?:\\s*\\([^\\n:：)]*\\))?`;
-  const separator = `(?:\\s*[:：]\\s*${emphasis}\\s*|${emphasis}\\s*[:：]\\s*|${emphasis}\\s*(?:\\n|$))`;
+  const separator = `(?:${horizontalSpace}[:：]${horizontalSpace}${emphasis}${horizontalSpace}|${emphasis}${horizontalSpace}[:：]${horizontalSpace}|${emphasis}${horizontalSpace}(?:\\n|$))`;
 
   return `${prefix}${label}${separator}`;
+}
+
+function maskMeetingAnswerCodeFences(content: string) {
+  const masked = content.split("");
+  const fence = String.fromCharCode(96).repeat(3);
+  let inFence = false;
+  for (let index = 0; index < content.length; index += 1) {
+    if (content.startsWith(fence, index)) {
+      masked[index] = " ";
+      masked[index + 1] = " ";
+      masked[index + 2] = " ";
+      inFence = !inFence;
+      index += 2;
+      continue;
+    }
+    if (inFence && content[index] !== "\n") masked[index] = " ";
+  }
+  return masked.join("");
 }
 
 function extractFirstCodeFence(value: string) {

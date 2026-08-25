@@ -57,6 +57,24 @@ Clarifying options: -`,
   assert.equal(parsed.parsedAt, 42);
 });
 
+test("does not treat section-like labels inside fenced code as boundaries", () => {
+  const parsed = parseMeetingAnswer(`Answer: Explain the parser result.
+Code:
+\`\`\`python
+label = "Answer: still code"
+# Approach: this comment remains code
+print("Complexity: O(1)")
+\`\`\`
+Complexity: O(n) time and O(1) space.`);
+
+  assert.equal(parsed.sections.answer, "Explain the parser result.");
+  assert.match(parsed.sections.code ?? "", /Answer: still code/);
+  assert.match(parsed.sections.code ?? "", /Approach: this comment remains code/);
+  assert.match(parsed.sections.code ?? "", /Complexity: O\(1\)/);
+  assert.equal(parsed.sections.complexity, "O(n) time and O(1) space.");
+  assert.deepEqual(parsed.recognizedLabels, ["Answer", "Code", "Complexity"]);
+});
+
 test("recovers a fenced code block misplaced in Approach", () => {
   const parsed = parseMeetingAnswer(`Answer: Use a stack.
 Approach: Explain the invariant.
