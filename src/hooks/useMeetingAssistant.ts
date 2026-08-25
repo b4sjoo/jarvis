@@ -21810,7 +21810,7 @@ export function useMeetingAssistant() {
             turn,
             contextManagerRef.current.getState().transcriptTurns
           );
-          if (duplicateDecision.confidence !== "low") {
+          if (duplicateDecision.suppress) {
             turn.contextPromptEligible = false;
             turn.contextFusionStatus = "duplicate-suppressed";
             turn.relatedTurnIds = duplicateDecision.matchedTurn?.id
