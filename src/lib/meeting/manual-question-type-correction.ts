@@ -190,6 +190,26 @@ export function selectManualCorrectionTargetFromHistory<
   const ordered = [...input.history].sort(
     (left, right) => right.updatedAt - left.updatedAt
   );
+  const preferred =
+    ordered.find(
+      (candidate) =>
+        candidate.targetKind === "substantive" &&
+        candidate.logicalQuestionUnit.id ===
+          input.preferredLogicalQuestionUnitId &&
+        candidate.logicalQuestionUnit.revision ===
+          input.preferredLogicalQuestionRevision
+    ) ??
+    (input.latestCanonical?.targetKind === "substantive" &&
+    input.latestCanonical.logicalQuestionUnit.id ===
+      input.preferredLogicalQuestionUnitId &&
+    input.latestCanonical.logicalQuestionUnit.revision ===
+      input.preferredLogicalQuestionRevision
+      ? input.latestCanonical
+      : undefined);
+  if (preferred) {
+    return { target: preferred, reason: "preferred-visible-question" };
+  }
+
   const unresolved = ordered.find(
     (candidate) =>
       candidate.targetKind === "substantive" && !candidate.resolvedAt
@@ -212,18 +232,6 @@ export function selectManualCorrectionTargetFromHistory<
       target: latestSubstantive,
       reason: "latest-response-only-substantive",
     };
-  }
-
-  const preferred = ordered.find(
-    (candidate) =>
-      candidate.targetKind === "substantive" &&
-      candidate.logicalQuestionUnit.id ===
-        input.preferredLogicalQuestionUnitId &&
-      candidate.logicalQuestionUnit.revision ===
-        input.preferredLogicalQuestionRevision
-  );
-  if (preferred) {
-    return { target: preferred, reason: "preferred-visible-question" };
   }
 
   if (latestSubstantive) {

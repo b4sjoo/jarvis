@@ -27,6 +27,7 @@ import { cn } from "@/lib/utils";
 import { invoke } from "@tauri-apps/api/core";
 import { emit, listen } from "@tauri-apps/api/event";
 import {
+  AlertCircleIcon,
   BrainIcon,
   CheckIcon,
   ClockIcon,
@@ -271,17 +272,17 @@ function MeetingFocusControlsWindow({
   const correctionRunning =
     activeCorrection?.status === "pending" ||
     activeCorrection?.regenerationStatus === "running";
+  const correctionFailed =
+    activeCorrection?.status === "failed" ||
+    activeCorrection?.regenerationStatus === "failed" ||
+    activeCorrection?.regenerationStatus === "cancelled";
   const typeStatusLabel = snapshot.transientPersonalStatusLabel
     ? snapshot.transientPersonalStatusLabel
     : correctionRunning
       ? `Correcting to ${formatFocusQuestionType(
           activeCorrection.correctedType
         )}...`
-      : activeCorrection?.regenerationStatus === "failed"
-        ? `Corrected: ${formatFocusQuestionType(
-            activeCorrection.correctedType
-          )} · retry failed`
-        : `Q: ${effectiveTypeLabel}`;
+      : `Q: ${effectiveTypeLabel}`;
   const parentTypeLabel = formatFocusQuestionType(
     snapshot.parentQuestionType
   );
@@ -300,6 +301,9 @@ function MeetingFocusControlsWindow({
       ? `durable owner missing: ${
           snapshot.durableOwnerMissingReason ?? "unresolved"
         }`
+      : undefined,
+    correctionFailed
+      ? `correction failed: ${activeCorrection?.error ?? "retry available"}`
       : undefined,
   ]
     .filter(Boolean)
@@ -387,6 +391,15 @@ function MeetingFocusControlsWindow({
               {typeStatusLabel} · P: {parentTypeLabel}
             </span>
           </Badge>
+          {correctionFailed ? (
+            <span
+              className="flex shrink-0"
+              aria-label="Question type correction failed"
+              title={activeCorrection?.error ?? "Question type correction failed"}
+            >
+              <AlertCircleIcon className="h-4 w-4 text-destructive" />
+            </span>
+          ) : null}
           <div className="flex min-w-0 flex-nowrap gap-1.5">
             {interviewBriefTypeOptions.map((option) => {
               const selected = hasCorrectableQuestion
@@ -398,7 +411,7 @@ function MeetingFocusControlsWindow({
                   key={option.id}
                   size="sm"
                   variant={selected ? "default" : "outline"}
-                  className="h-8 min-w-[72px] shrink-0 px-2 text-[10px]"
+                  className="h-8 min-w-[64px] shrink-0 px-1.5 text-[10px]"
                   title={option.label}
                   onClick={() => updateInterviewTypes(option.id)}
                 >
@@ -415,7 +428,7 @@ function MeetingFocusControlsWindow({
                     ? "default"
                     : "outline"
                 }
-                className="h-8 min-w-[72px] shrink-0 px-2 text-[10px]"
+                className="h-8 min-w-[64px] shrink-0 px-1.5 text-[10px]"
                 title="Field knowledge"
                 onClick={() =>
                   sendFocusAction({

@@ -336,6 +336,40 @@ test("falls back to the visible answered question after unresolved targets resol
   assert.equal(selection.target?.resolvedAt, 30);
 });
 
+test("prefers the explicitly clicked current question over an older unresolved target", () => {
+  const oldUnresolved: ManualCorrectionTargetHistoryEntry = {
+    logicalQuestionUnit: makeLogicalQuestion(
+      "question-old",
+      "turn-old",
+      "Design a RAG system."
+    ),
+    updatedAt: 10,
+    targetKind: "substantive",
+  };
+  const clicked: ManualCorrectionTargetHistoryEntry = {
+    logicalQuestionUnit: makeLogicalQuestion(
+      "question-clicked",
+      "turn-clicked",
+      "Explain HNSW."
+    ),
+    updatedAt: 20,
+    targetKind: "substantive",
+  };
+
+  const selection = selectManualCorrectionTargetFromHistory({
+    history: [oldUnresolved, clicked],
+    latestCanonical: clicked,
+    preferredLogicalQuestionUnitId: clicked.logicalQuestionUnit.id,
+    preferredLogicalQuestionRevision: clicked.logicalQuestionUnit.revision,
+  });
+
+  assert.equal(selection.reason, "preferred-visible-question");
+  assert.equal(
+    selection.target?.logicalQuestionUnit.id,
+    clicked.logicalQuestionUnit.id
+  );
+});
+
 test("always terminalizes an applied correction after stale completion authorization", () => {
   assert.deepEqual(
     decideManualCorrectionTerminalState({

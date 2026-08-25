@@ -28224,9 +28224,9 @@ export function useMeetingAssistant() {
           history: manualCorrectionTargetHistoryRef.current,
           latestCanonical: latestManualCorrectionTargetRef.current,
           preferredLogicalQuestionUnitId:
-            stableAnswerRevisionRef.current?.logicalQuestionUnitId,
+            clickedCorrectionTarget?.logicalQuestionUnit.id,
           preferredLogicalQuestionRevision:
-            stableAnswerRevisionRef.current?.logicalQuestionRevision,
+            clickedCorrectionTarget?.logicalQuestionUnit.revision,
         });
       const latestCanonicalTarget = correctionTargetSelection.target;
       const skippedCorrectionTargets = latestCanonicalTarget
